@@ -168,7 +168,8 @@ def _safe_url(url: Optional[str]) -> str:
 
 def send(business: Dict[str, Any], kind: str, *, title: str, body: str = "",
          url: str = "/my", contact_ids: Optional[Iterable[str]] = None,
-         ref_id: Optional[str] = None, sent_by: Optional[str] = None) -> int:
+         ref_id: Optional[str] = None, sent_by: Optional[str] = None,
+         tag: Optional[str] = None) -> int:
     """Send one note of `kind` to the church's members (or to
     `contact_ids`). Returns how many phones it reached. Quietly 0 when
     push isn't set up, the church hasn't switched this kind on, or `ref_id`
@@ -176,13 +177,13 @@ def send(business: Dict[str, Any], kind: str, *, title: str, body: str = "",
     the thing it's about."""
     try:
         return _send(business, kind, title=title, body=body, url=url,
-                     contact_ids=contact_ids, ref_id=ref_id, sent_by=sent_by)
+                     contact_ids=contact_ids, ref_id=ref_id, sent_by=sent_by, tag=tag)
     except Exception:
         logger.warning("member push send failed", exc_info=True)
         return 0
 
 
-def _send(business, kind, *, title, body, url, contact_ids, ref_id, sent_by) -> int:
+def _send(business, kind, *, title, body, url, contact_ids, ref_id, sent_by, tag=None) -> int:
     import push_notifications as pn
     biz_id = str(business.get("id") or "")
     if kind not in KIND_KEYS or not biz_id or not ready():
@@ -217,7 +218,10 @@ def _send(business, kind, *, title, body, url, contact_ids, ref_id, sent_by) -> 
             f"/member_push_prefs?business_id=eq.{biz_id}&contact_id=in.({','.join(people[i:i + 150])})"
             f"&select=contact_id,off") or []
     muted = {str(r["contact_id"]) for r in off_rows if kind in (r.get("off") or [])}
-    payload = {"title": title, "body": body, "url": url, "tag": f"{kind}-{ref_id or ''}"[:60]}
+    # One tag per chat (or per thing): a busy chat replaces its own note
+    # on the lock screen instead of stacking twenty.
+    payload = {"title": title, "body": body, "url": url,
+               "tag": (tag or f"{kind}-{ref_id or ''}")[:60]}
     reached = 0
     for s in subs:
         if str(s["contact_id"]) in muted:
@@ -438,3 +442,173 @@ def announce(business_id: str, body: Dict[str, Any], user: AuthedUser = Depends(
     reached = send(biz, "announcements", title=title, body=text, url=_safe_url(body.get("url")),
                    ref_id=str(uuid.uuid4()), sent_by=str(user.id))
     return {"ok": True, "reached": reached}
+
+
+# ─── automatic notes ─────────────────────────────────────────────────
+# Each runs off the request that caused it (a thread) or on the sweep, and
+# says THAT something happened, never what was written: a lock screen is
+# not private (a teen's phone, a shared tablet).
+
+def _later(fn, *args, **kwargs) -> None:
+    import threading
+
+    def run():
+        try:
+            fn(*args, **kwargs)
+        except Exception:
+            logger.warning("member push hook failed", exc_info=True)
+
+    threading.Thread(target=run, daemon=True).start()
+
+
+def chat_recipients(t: Dict[str, Any], acc: Dict[str, Any], sender_id: str,
+                    parts: Optional[List[Dict[str, Any]]]) -> List[str]:
+    """Who hears about a new message: the other side of a direct chat, or
+    the group's members with messaging on. Never the sender, never someone
+    who declined the chat or muted it."""
+    sender_id = str(sender_id)
+    state = {str(p.get("contact_id")): p for p in (parts or [])}
+    folks = acc.get("people") or {}
+    if t.get("kind") == "direct":
+        other = acc.get("other") or {}
+        ids = [str(other["id"])] if other.get("id") else []
+    else:
+        ids = [i for i in folks if folks[i].get("enabled")]
+    out = []
+    for i in ids:
+        p = state.get(i) or {}
+        if i == sender_id or p.get("muted") or p.get("state") == "declined":
+            continue
+        out.append(i)
+    return out
+
+
+def tell_chat(business: Dict[str, Any], t: Dict[str, Any], acc: Dict[str, Any],
+              sender_id: str) -> None:
+    """After a delivered message (member_portal_messaging.send)."""
+    if "messages" not in church_kinds(business.get("settings")):
+        return
+    _later(_tell_chat, business, t, acc, sender_id)
+
+
+def _tell_chat(business, t, acc, sender_id) -> None:
+    import member_portal_messaging as mpm
+    parts = mpm.participants(business["id"], t["id"])
+    who = chat_recipients(t, acc, sender_id, parts)
+    if not who:
+        return
+    title = "New message"
+    if t.get("kind") != "direct" and t.get("group_id"):
+        g = sb_clients.sb_get_as_service(
+            f"/groups?id=eq.{t['group_id']}&business_id=eq.{business['id']}&select=name&limit=1") or []
+        if g and g[0].get("name"):
+            title = f"New message in {g[0]['name']}"
+    send(business, "messages", title=title, body="Open the app to read it.",
+         url=f"/my/messages/{t['id']}", contact_ids=who, tag=f"chat-{t['id']}")
+
+
+def tell_prayed(business_id: str, contact_id: Optional[str], request_id: str) -> None:
+    """A request was marked prayed (private_care.update_request). Only the
+    person who asked hears, and only that it happened."""
+    if not contact_id:
+        return
+
+    def run():
+        rows = sb_clients.sb_get_as_service(
+            f"/businesses?id=eq.{business_id}&select=id,name,settings&limit=1") or []
+        if rows:
+            send(rows[0], "prayer", title="Someone prayed for you",
+                 body=f"{rows[0].get('name') or 'Your church'} prayed for your request.",
+                 url="/my/prayer", contact_ids=[str(contact_id)], ref_id=f"prayed:{request_id}",
+                 tag="prayer")
+
+    _later(run)
+
+
+# ─── the sweep: new sermons, tomorrow's events ───────────────────────
+
+SERMON_WINDOW_HOURS = 36
+SERMON_RECENT_DAYS = 14
+REMIND_HOURS = range(16, 20)    # the afternoon before, on the church's clock
+
+
+def sweep_tick() -> Dict[str, int]:
+    """Every 15 minutes (kmj_intake_automation, leader-locked)."""
+    out = {"sermons": 0, "events": 0}
+    if not ready():
+        return out
+    rows = sb_clients.sb_get_as_service(
+        "/businesses?or=(settings->member_portal->notifications->>sermons.eq.true,"
+        "settings->member_portal->notifications->>events.eq.true)"
+        "&select=id,name,settings,owner_id&limit=500") or []
+    for biz in rows:
+        kinds = church_kinds(biz.get("settings"))
+        try:
+            if "sermons" in kinds:
+                out["sermons"] += _sweep_sermons(biz)
+            if "events" in kinds:
+                out["events"] += _sweep_events(biz)
+        except Exception:
+            logger.warning("member push sweep failed for one church", exc_info=True)
+    return out
+
+
+def _sweep_sermons(biz: Dict[str, Any], now: Optional[datetime] = None) -> int:
+    """The newest published sermon, once, if it is new. Only the newest:
+    a library imported in one go is not 400 notifications."""
+    now = now or datetime.now(timezone.utc)
+    since = (now - timedelta(hours=SERMON_WINDOW_HOURS)).isoformat()
+    rows = sb_clients.sb_get_as_service(
+        f"/sermons?business_id=eq.{biz['id']}&published=is.true&created_at=gte.{quote(since, safe='')}"
+        f"&select=id,title,speaker,preached_on,created_at&order=created_at.desc&limit=1") or []
+    if not rows:
+        return 0
+    s = rows[0]
+    day = str(s.get("preached_on") or "")[:10]
+    if day:
+        try:
+            if (now.date() - datetime.fromisoformat(day).date()).days > SERMON_RECENT_DAYS:
+                return 0           # an old message added late, not a new one
+        except ValueError:
+            pass
+    title = " ".join(str(s.get("title") or "A new message").split())
+    return send(biz, "sermons", title=f"New: {title}", body=str(s.get("speaker") or ""),
+                url=f"/my/sermons/{s['id']}", ref_id=f"sermon:{s['id']}")
+
+
+def _sweep_events(biz: Dict[str, Any], now: Optional[datetime] = None) -> int:
+    """The afternoon before: everyone who said yes to something tomorrow."""
+    import business_marketing
+    import events_rsvp_router as er
+    import member_portal_church as mpc
+    now = now or datetime.now(timezone.utc)
+    local = now.astimezone(business_marketing.business_tz(biz))
+    if local.hour not in REMIND_HOURS:
+        return 0
+    tomorrow = (local.date() + timedelta(days=1)).isoformat()
+    mods = mpc._roster_modules(biz["id"])
+    if not mods:
+        return 0
+    by_mod: Dict[str, List[Dict[str, Any]]] = {}
+    entries: Dict[str, Dict[str, Any]] = {}
+    for m in mods:
+        rows = sb_clients.sb_get_as_service(
+            f"/module_entries?module_id=eq.{m['id']}&business_id=eq.{biz['id']}&status=eq.active"
+            f"&select=id,module_id,data&order=created_at.desc&limit=200") or []
+        by_mod[str(m["id"])] = rows
+        entries.update({str(r["id"]): r for r in rows})
+    fields = {str(m["id"]): er.resolve_fields(m.get("archetype_params")) for m in mods}
+    sent = 0
+    for o in er.build_occasions(mods, by_mod, today=local.date(), include=lambda d, f: True):
+        if o.get("date") != tomorrow:
+            continue
+        f = fields.get(str(o.get("module_id")))
+        entry = entries.get(str(o.get("entry_id"))) or {}
+        signups = er.read_signups(entry.get("data") or {}, f["signups_field"]) if f else []
+        ids = [str(x["contact_id"]) for x in signups
+               if x.get("contact_id") and (x.get("status") or "yes") == "yes"]
+        if ids:
+            sent += send(biz, "events", title=f"Tomorrow: {o.get('title') or 'an event'}",
+                         body="You said you're coming. See you there.", url="/my/events",
+                         contact_ids=ids, ref_id=f"event:{o.get('entry_id')}:{tomorrow}")
+    return sent

@@ -259,3 +259,177 @@ def test_going_live_sends_one_live_note(monkeypatch):
     live_router._tell_members_live(BIZ, {"id": "sess-9", "title": "Sunday service"})
     assert calls == [("live", {"title": "Love City Church is live", "body": "Sunday service",
                                "url": "/my/live", "ref_id": "sess-9"})]
+
+
+# ─── automatic notes (messages, prayer, sermons, events) ─────────────
+
+class _Now:
+    """threading.Thread stand-in that runs the target at once."""
+    def __init__(self, target, daemon=None):
+        self.target = target
+
+    def start(self):
+        self.target()
+
+
+def test_chat_recipients_skip_sender_declined_muted_and_messaging_off():
+    direct = {"id": "t1", "kind": "direct"}
+    acc = {"other": {"id": "b"}, "people": {}}
+    assert mp.chat_recipients(direct, acc, "a", [{"contact_id": "b", "state": "active"}]) == ["b"]
+    assert mp.chat_recipients(direct, acc, "a", [{"contact_id": "b", "state": "declined"}]) == []
+    assert mp.chat_recipients(direct, acc, "a", [{"contact_id": "b", "muted": True}]) == []
+    group = {"id": "t2", "kind": "group", "group_id": "g1"}
+    acc = {"people": {"a": {"enabled": True}, "b": {"enabled": True}, "c": {"enabled": False},
+                      "d": {"enabled": True}}}
+    assert sorted(mp.chat_recipients(group, acc, "a", [{"contact_id": "d", "muted": True}])) == ["b"]
+
+
+def test_a_new_message_says_only_that_one_arrived(wired, monkeypatch):
+    import threading
+    import member_portal_messaging as mpm
+    sent, use = wired
+    fake = use(FakeSB(subs=[sub("b"), sub("c")]))
+    orig = fake.sb_get_as_service
+    fake.sb_get_as_service = lambda path: [{"name": "Youth"}] if path.startswith("/groups") else orig(path)
+    monkeypatch.setattr(threading, "Thread", _Now)
+    monkeypatch.setattr(mpm, "participants", lambda biz, tid: [])
+    t = {"id": "t9", "kind": "group", "group_id": "g1"}
+    acc = {"people": {"a": {"enabled": True}, "b": {"enabled": True}, "c": {"enabled": True}}}
+    mp.tell_chat(church(messages=True), t, acc, "a")
+    assert sorted(c for c, _, _ in sent) == ["b", "c"]
+    assert sent[0][1] == {"title": "New message in Youth", "body": "Open the app to read it.",
+                          "url": "/my/messages/t9", "tag": "chat-t9"}
+    sent.clear()
+    mp.tell_chat(church(), t, acc, "a")          # messages not switched on by the church
+    assert sent == []
+
+
+def test_the_member_who_asked_hears_the_church_prayed(wired, monkeypatch):
+    import threading
+    sent, use = wired
+    fake = use(FakeSB(subs=[sub("asker"), sub("other")]))
+    orig = fake.sb_get_as_service
+    fake.sb_get_as_service = lambda path: [church(prayer=True)] if path.startswith("/businesses") else orig(path)
+    monkeypatch.setattr(threading, "Thread", _Now)
+    mp.tell_prayed(BIZ, "asker", "req-1")
+    assert [c for c, _, _ in sent] == ["asker"]
+    assert sent[0][1]["title"] == "Someone prayed for you" and sent[0][1]["url"] == "/my/prayer"
+    assert "req-1" not in str(sent[0][1])        # nothing of the request itself
+    sent.clear()
+    mp.tell_prayed(BIZ, None, "req-2")
+    assert sent == []
+
+
+def test_marking_prayed_tells_the_asker_once(monkeypatch):
+    import private_care as pc
+    calls = []
+    monkeypatch.setattr(mp, "tell_prayed", lambda *a: calls.append(a))
+    state = {"prayed_at": None}
+    rid = "11111111-1111-1111-1111-111111111111"
+    biz = "22222222-2222-2222-2222-222222222222"
+
+    class SB:
+        def sb_get_as_service(self, path):
+            return [{"id": rid, "status": "new", "prayed_at": state["prayed_at"],
+                     "contact_id": "asker", "assigned_to": None}]
+
+        def sb_patch_as_service(self, path, body):
+            if "prayed_at" in body:
+                state["prayed_at"] = body["prayed_at"]
+            return [{"id": rid, **body}]
+
+    monkeypatch.setattr(pc, "sb_clients", SB())
+    pc.update_request(biz, rid, prayed=True)
+    assert calls == [(biz, "asker", rid)]
+    pc.update_request(biz, rid, prayed=True)     # already prayed: no second note
+    pc.update_request(biz, rid, status="reviewed")
+    assert len(calls) == 1
+
+
+def test_the_newest_recent_sermon_is_announced_once(wired, monkeypatch):
+    from datetime import datetime, timezone
+    calls = []
+    monkeypatch.setattr(mp, "send", lambda biz, kind, **kw: calls.append((kind, kw)) or 2)
+    now = datetime(2026, 10, 14, 15, 0, tzinfo=timezone.utc)
+
+    class SB:
+        rows = []
+
+        def sb_get_as_service(self, path):
+            assert "order=created_at.desc&limit=1" in path and "published=is.true" in path
+            return self.rows
+
+    fake = SB()
+    monkeypatch.setattr(mp, "sb_clients", fake)
+    fake.rows = [{"id": "s1", "title": "To the Future", "speaker": "Pastor Kevin", "preached_on": "2026-10-11"}]
+    assert mp._sweep_sermons(church(sermons=True), now=now) == 2
+    assert calls == [("sermons", {"title": "New: To the Future", "body": "Pastor Kevin",
+                                  "url": "/my/sermons/s1", "ref_id": "sermon:s1"})]
+    fake.rows = [{"id": "s0", "title": "Old", "preached_on": "2025-01-05"}]   # an old one added late
+    assert mp._sweep_sermons(church(sermons=True), now=now) == 0
+    fake.rows = []
+    assert mp._sweep_sermons(church(sermons=True), now=now) == 0
+
+
+def test_event_reminders_go_the_afternoon_before_to_yes_answers(wired, monkeypatch):
+    from datetime import datetime, timezone
+    from zoneinfo import ZoneInfo
+    import business_marketing
+    import events_rsvp_router as er
+    import member_portal_church as mpc
+    calls = []
+    monkeypatch.setattr(mp, "send", lambda biz, kind, **kw: calls.append((kind, kw)) or 1)
+    monkeypatch.setattr(business_marketing, "business_tz", lambda biz: ZoneInfo("America/Detroit"))
+    monkeypatch.setattr(mpc, "_roster_modules", lambda biz: [{"id": "m1", "archetype_params": {}}])
+
+    class SB:
+        def sb_get_as_service(self, path):
+            return [{"id": "e1", "module_id": "m1", "data": {}}]
+
+    monkeypatch.setattr(mp, "sb_clients", SB())
+    monkeypatch.setattr(er, "resolve_fields", lambda params: {"signups_field": "signups"})
+    monkeypatch.setattr(er, "build_occasions", lambda mods, by, today=None, include=None: [
+        {"entry_id": "e1", "module_id": "m1", "title": "Fall Picnic", "date": "2026-10-15"},
+        {"entry_id": "e1", "module_id": "m1", "title": "Later", "date": "2026-10-20"}])
+    monkeypatch.setattr(er, "read_signups", lambda data, field: [
+        {"contact_id": "a", "status": "yes"}, {"contact_id": "b", "status": "no"},
+        {"contact_id": "c"}, {"name": "No record", "status": "yes"}])
+    # 2026-10-14 17:30 in Detroit = 21:30 UTC: inside the afternoon window.
+    afternoon = datetime(2026, 10, 14, 21, 30, tzinfo=timezone.utc)
+    assert mp._sweep_events(church(events=True), now=afternoon) == 1
+    kind, kw = calls[0]
+    assert kind == "events" and kw["contact_ids"] == ["a", "c"]
+    assert kw["title"] == "Tomorrow: Fall Picnic" and kw["ref_id"] == "event:e1:2026-10-15"
+    calls.clear()
+    # 09:00 in Detroit: not the afternoon, nothing goes.
+    morning = datetime(2026, 10, 14, 13, 0, tzinfo=timezone.utc)
+    assert mp._sweep_events(church(events=True), now=morning) == 0
+    assert calls == []
+
+
+def test_the_sweep_only_reads_churches_with_a_clock_kind_on(wired, monkeypatch):
+    seen = []
+
+    class SB:
+        def sb_get_as_service(self, path):
+            seen.append(path)
+            return [church(sermons=True),
+                    {"id": "bad", "settings": {"member_portal": {"notifications": {"events": True}}}}]
+
+    def broken(biz):
+        raise RuntimeError("one church broke")
+
+    monkeypatch.setattr(mp, "sb_clients", SB())
+    monkeypatch.setattr(mp, "_sweep_sermons", lambda biz: 1)
+    monkeypatch.setattr(mp, "_sweep_events", broken)
+    assert mp.sweep_tick() == {"sermons": 1, "events": 0}
+    assert "notifications->>sermons.eq.true" in seen[0] and "notifications->>events.eq.true" in seen[0]
+
+
+def test_the_hooks_are_wired_where_things_happen():
+    import inspect
+    import member_portal_messaging as mpm
+    src = inspect.getsource(mpm.send)
+    assert 'if status_ == "delivered":' in src and "member_push.tell_chat(" in src
+    auto = open("kmj_intake_automation.py", encoding="utf-8").read()
+    assert 'g("member_push_sweep", _member_push.sweep_tick)' in auto
