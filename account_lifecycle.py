@@ -163,6 +163,8 @@ BUSINESS_CHILD_TABLES: List[str] = [
     "ministry_care_notes", "ministry_care_requests", "ministry_gift_history",
     # Who was at each occasion; before module_entries and contacts.
     "attendance", "attendance_headcounts",
+    # Which days of the reading plan each member has read; before contacts.
+    "reading_progress",
     # Families and children: notes, pickups and children before their
     # household, and the household's adult links before contacts.
     "child_checkins",
