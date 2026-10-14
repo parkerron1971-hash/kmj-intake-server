@@ -2409,7 +2409,8 @@ def _capture_contact_from_form(business_id: str, name: str, email: str,
             select="id,name,phone,metadata,updated_at", strict=True)
         new_contact = existing is None
         now_iso = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-        entry = {"at": now_iso, "message": message, "phone": phone_raw}
+        entry = {"at": now_iso, "name": name, "email": email,
+                 "message": message, "phone": phone_raw}
         if form:
             entry.update(form=form, fields=fields or {})
         for attempt in range(3):

@@ -227,3 +227,19 @@ def test_repeated_write_conflicts_fail_without_email(env):
     env.patch_result = []
     assert submit(env).status_code == 503
     assert len(env.patches) == 3 and not env.mail
+
+
+def test_email_and_raw_phone_kept_when_matching_an_existing_person(env):
+    env.existing = [{"id": "person", "name": "Dana Rivers", "phone": "+15550000000", "metadata": {}}]
+    assert submit(env, phone="555-123-4567 ext 32").json()["ok"] is True
+    entry = env.patches[0][1]["metadata"]["website_form_messages"][-1]
+    assert entry["name"] == "Dana Rivers"
+    assert entry["email"] == "Dana@example.org"
+    assert entry["phone"] == "555-123-4567 ext 32"
+
+
+def test_public_email_override_cannot_redirect_private_prayer(env, monkeypatch):
+    monkeypatch.setattr(brand_engine, "_sb_get", lambda p: [{"site_config": {
+        "sections": {"contact": {"email": "public@example.org"}}}}])
+    assert submit(env, form="prayer_request", to="visitor@example.org").json()["ok"] is True
+    assert env.mail[0]["to"] == ["pastor@church.org"]
