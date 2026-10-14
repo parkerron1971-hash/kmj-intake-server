@@ -87,6 +87,7 @@
     var kind = form.getAttribute('data-church-form');
     var note = form.querySelector('[data-form-note]');
     var button = form.querySelector('[type="submit"]');
+    var pendingPayload = '', pendingId = '';
     function say(text, tone) { note.textContent = text; note.className = 'form-note' + (tone ? ' ' + tone : ''); }
 
     // Ready. Until this line runs the button stays disabled and the page
@@ -102,6 +103,12 @@
       if (form.elements.website && form.elements.website.value) return; // the hidden field only bots fill in
       var payload = toPayload(kind, form, fieldValues(form));
       if (payload.message.length > MAX_MESSAGE) { say(TOO_LONG, 'err'); return; }
+      var fingerprint = JSON.stringify(payload);
+      if (fingerprint !== pendingPayload) {
+        pendingPayload = fingerprint;
+        pendingId = crypto.randomUUID();
+      }
+      payload.submission_id = pendingId;
       button.disabled = true;
       say('Sending…');
       fetch(ENDPOINT, {
@@ -115,7 +122,8 @@
         // Every failure keeps the visitor's words for another attempt.
         .then(function (r) {
           return r.json().catch(function () { return {}; }).then(function (body) {
-            if (r.ok && body && body.ok === true) { form.reset(); say(THANKS[kind] || 'Thank you. It’s sent.', 'ok'); }
+            if (r.ok && body && body.ok === true) { form.reset(); pendingPayload = ''; pendingId = ''; say(THANKS[kind] || 'Thank you. It’s sent.', 'ok'); }
+            else if (r.status === 400) say(body.error || TOO_LONG, 'err');
             else if (r.status === 429) say(BUSY, 'err');
             else say(r.ok ? NOT_DELIVERED : FAILED, 'err');
           });

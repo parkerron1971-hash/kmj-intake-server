@@ -514,10 +514,13 @@ def test_a_form_only_says_thank_you_when_the_endpoint_says_ok(browser, pages):
     assert "ok" in note.get_attribute("class") and "praying with you" in note.text_content()
     assert page.input_value("#pr-request") == ""
     sent = page.evaluate("window.__sent")
+    assert len({item["body"]["submission_id"] for item in sent}) == 1
     assert sent[-1]["body"]["form"] == "prayer_request"
     assert sent[-1]["body"]["fields"]["request"].startswith("Please pray")
     assert sent[-1]["body"]["fields"]["follow_up"] is False
     assert "Please pray for my mother" in sent[-1]["body"]["message"]
+    _send_prayer(page, {"status": 200, "body": {"ok": True}})
+    assert page.evaluate("window.__sent.at(-1).body.submission_id") != sent[-1]["body"]["submission_id"]
     ctx.close()
 
 
@@ -635,4 +638,16 @@ def test_structured_forms_succeed_when_saved_without_notification(browser, pages
     assert validate(payload)["fields"] == expected
     assert "to" not in payload and "recipient" not in payload
     assert CHURCH_BUSINESS_ID in sent[0]["url"]
+    ctx.close()
+
+
+def test_validation_error_is_shown_as_text_and_keeps_answers(browser, pages):
+    ctx = _context(browser, pages)
+    ctx.add_init_script(FETCH_STUB)
+    page = ctx.new_page()
+    page.goto(ORIGIN + "connect")
+    note = _send_prayer(page, {"status": 400, "body": {"ok": False, "error": "<b>Check your answer</b>"}})
+    assert note.text_content() == "<b>Check your answer</b>"
+    assert note.locator("b").count() == 0
+    assert page.input_value("#pr-request").startswith("Please pray")
     ctx.close()

@@ -1,5 +1,14 @@
 """Website form contract. Limits are documented in docs/WEBSITE_FORMS.md."""
 from typing import Any, Dict
+import hashlib
+import json
+import uuid
+
+PLAIN_TEXT_LIMIT = 100_000
+HISTORY_LIMIT = 10
+APP_URL = "https://mysolutionist.app"
+# Kevin can opt in later; default notices never carry private content.
+PRAYER_EMAIL_INCLUDE_CONTENT = False
 
 TEXT_LIMITS = {"name": 200, "email": 200, "phone": 40, "message": 5000}
 FIELD_LIMITS = {
@@ -17,9 +26,10 @@ def _text(value: Any, label: str, maximum: int) -> str:
 
 
 def validate(body: Dict[str, Any]) -> Dict[str, Any]:
-    data = {key: _text(body.get(key) or "", key, limit)
-            for key, limit in TEXT_LIMITS.items()}
     kind = _text(body.get("form") or "", "form", 80).replace("-", "_")
+    church = kind in ("connect_card", "prayer_request")
+    data = {key: _text(body.get(key) or "", key, limit if church else PLAIN_TEXT_LIMIT)
+            for key, limit in TEXT_LIMITS.items()}
     # Unrecognized form labels used to be ignored; keep plain callers working.
     fields = body.get("fields", {})
     if not isinstance(fields, dict):
@@ -32,11 +42,13 @@ def validate(body: Dict[str, Any]) -> Dict[str, Any]:
     clean = {}
     for key, value in fields.items():
         if key not in allowed:
-            raise ValueError(f"Unknown field: {key}.")
+            raise ValueError("Unknown structured field.")
         if key == "interests":
             if not isinstance(value, list) or len(value) > 20:
                 raise ValueError("interests must be a list of at most 20 items.")
             clean[key] = [_text(v, "interest", 120) for v in value]
+            if any(not v for v in clean[key]):
+                raise ValueError("Interests must not be empty.")
         elif key == "follow_up":
             if not isinstance(value, bool):
                 raise ValueError("follow_up must be true or false.")
@@ -52,7 +64,8 @@ def validate(body: Dict[str, Any]) -> Dict[str, Any]:
         raise ValueError("A prayer request is required.")
     if not data["message"] and not clean:
         raise ValueError("A message is required.")
-    data.update(form=kind, fields=clean)
+    data.update(form=kind, fields=clean,
+                submission_id=_text(body.get("submission_id") or "", "submission_id", 80))
     return data
 
 
@@ -60,10 +73,77 @@ def notification_text(data: Dict[str, Any]) -> str:
     lines = [data["message"]] if data["message"] else []
     if data["phone"]:
         lines.append("Phone: " + data["phone"])
-    for key, value in data["fields"].items():
+    for key, value in ({} if data["message"] else data["fields"]).items():
         if isinstance(value, list):
             value = ", ".join(value)
         elif isinstance(value, bool):
             value = "Yes" if value else "No"
         lines.append(f"{key.replace('_', ' ').capitalize()}: {value}")
     return "\n".join(lines)
+
+
+def receipt_id(business_id: str, data: Dict[str, Any]) -> str:
+    """Scope retry identity to both tenant and answers, never a visitor's key alone.
+
+    Updated forms send a fresh submission_id per deliberate submission. Legacy
+    callers coalesce identical payloads; changing an answer produces a new receipt.
+    """
+    encoded = json.dumps([business_id, data], sort_keys=True, ensure_ascii=False)
+    digest = hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, "website-form:" + digest))
+
+
+def stored_row(table: str, row_id: str, business_id: str):
+    from urllib.parse import quote
+    import sb_clients
+    rows = sb_clients.sb_get_as_service(
+        f"/{table}?id=eq.{quote(row_id, safe='')}&business_id=eq.{quote(business_id, safe='')}&limit=1")
+    if not isinstance(rows, list):
+        raise RuntimeError(f"{table} receipt lookup failed")
+    return rows[0] if rows else None
+
+
+def store_once(table: str, row: Dict[str, Any]):
+    """Primary-key conflict means retry: never overwrite an edited note/status.
+
+    Check the scoped row after a conflict; an unconfirmed write can retry safely.
+    A returned id is required before acknowledging storage.
+    """
+    import sb_clients
+    rows = sb_clients.sb_post_as_service(
+        "/" + table, row, prefer="resolution=ignore-duplicates,return=representation")
+    if isinstance(rows, list) and rows and rows[0].get("id"):
+        return rows[0]
+    if rows == []:
+        existing = stored_row(table, row["id"], row["business_id"])
+        if existing and existing.get("id"):
+            return existing
+    raise RuntimeError(f"{table} write did not confirm storage")
+
+
+def save_prayer(business_id: str, data: Dict[str, Any], receipt: str):
+    return store_once("ministry_care_requests", {
+        "id": receipt, "business_id": business_id, "form_id": None, "status": "new",
+        "submission": {
+            "name": data["name"], "email": data["email"], "phone": data["phone"],
+            "prayer_request": data["fields"].get("request") or data["message"],
+            "message": data["message"], "fields": data["fields"],
+            "follow_up": data["fields"].get("follow_up", False),
+            "confidential": "yes", "source": "website prayer request",
+        },
+    })
+
+
+def alert_church(business_id: str, kind: str, receipt: str):
+    """Only generic text enters the shared notification feed; no person or answers."""
+    prayer = kind == "prayer_request"
+    return store_once("chief_notifications", {
+        "id": str(uuid.uuid5(uuid.UUID(receipt), "notification")),
+        "business_id": business_id, "type": "urgent_alert", "priority": "normal",
+        "status": "unread", "title": "New prayer request" if prayer else "New connect card",
+        "body": ("A new prayer request is waiting in Prayer & care" if prayer else
+                 "A new connect card is waiting in Members. Open the person's Notes to read it."),
+        "suggested_action": "Open forms" if prayer else "Open Members",
+        "action_payload": {"type": "navigate", "tab": "build" if prayer else "operate",
+                           "sub": "intake-forms" if prayer else "contacts"},
+    })

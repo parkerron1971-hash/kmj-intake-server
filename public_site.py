@@ -2386,36 +2386,47 @@ def _record_website_sms_consent(business_id: str, phone_raw: str,
 def _capture_contact_from_form(business_id: str, name: str, email: str,
                                phone_raw: str, message: str,
                                attribution: Optional[Dict[str, Any]] = None,
-                               form: str = "", fields: Optional[Dict[str, Any]] = None
-                               ) -> Optional[str]:
-    """Store every accepted answer before success. Churches use these same
-    contacts as Members. Never evict earlier messages or truncate answers.
-    A conditional update prevents concurrent forms from losing one another.
-    Scoring/events are optional, and run only after storage is confirmed.
+                               form: str = "", fields: Optional[Dict[str, Any]] = None,
+                               submission_id: str = "") -> Optional[str]:
+    """Bound recent metadata; retain each complete submission in an immutable event.
+    Conditional updates protect concurrent cards, and receipt ids make retries safe.
+    Called in a worker thread, including the synchronous database operations.
     """
     import urllib.parse
+    import uuid
     import lead_attribution
     import lead_identity
     import sb_clients
+    import website_forms
     from sms_service import normalize_phone
 
     contact_id = None
     email_clean = email.strip().lower()
     phone = normalize_phone(phone_raw)
-    source = "website connect card" if form == "connect_card" else "website_contact_form"
+    source = "website_contact_form"
+    data = {"name": name, "email": email, "phone": phone_raw, "message": message,
+            "form": form, "fields": fields or {}, "submission_id": submission_id}
+    receipt = website_forms.receipt_id(business_id, data)
     try:
+        previous = website_forms.stored_row("events", receipt, business_id)
+        if previous and previous.get("contact_id"):
+            return previous["contact_id"]
         existing = lead_identity.find(
             business_id, email=email_clean, phone=phone, name=name,
             select="id,name,phone,metadata,updated_at", strict=True)
         new_contact = existing is None
         now_iso = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-        entry = {"at": now_iso, "name": name, "email": email,
-                 "message": message, "phone": phone_raw}
+        entry = {"id": receipt, "at": now_iso, "name": name[:200], "email": email[:200],
+                 "message": message[:1000], "phone": phone_raw[:40]}
         if form:
             entry.update(form=form, fields=fields or {})
         for attempt in range(3):
             meta = dict((existing or {}).get("metadata") or {})
-            meta["website_form_messages"] = list(meta.get("website_form_messages") or []) + [entry]
+            history = list(meta.get("website_form_messages") or [])
+            if any(item.get("id") == receipt for item in history if isinstance(item, dict)):
+                contact_id = existing["id"]
+                break  # a previous attempt stored the contact but not its note
+            meta["website_form_messages"] = (history + [entry])[-website_forms.HISTORY_LIMIT:]
             if form == "connect_card":
                 meta["website_connect_card"] = dict(fields or {}, source=source)
             if existing:
@@ -2428,17 +2439,18 @@ def _capture_contact_from_form(business_id: str, name: str, email: str,
                 if phone and not str(existing.get("phone") or "").strip():
                     patch["phone"] = phone
                 saved = sb_clients.sb_patch_as_service(path + "&updated_at=" + guard, patch)
-                if isinstance(saved, list) and saved:
+                if isinstance(saved, list) and saved and saved[0].get("id"):
                     contact_id = cid
                     break
                 if saved != []:
-                    return None  # storage failure; not a concurrency conflict
+                    raise RuntimeError("contact update did not confirm storage")
                 rows = sb_clients.sb_get_as_service(path + "&select=id,name,phone,metadata,updated_at&limit=1")
                 if not isinstance(rows, list) or not rows:
-                    return None
+                    raise RuntimeError("contact conflict reload failed")
                 existing = rows[0]
             else:
-                saved = sb_clients.sb_post_as_service("/contacts", {
+                saved = website_forms.store_once("contacts", {
+                    "id": str(uuid.uuid5(uuid.UUID(receipt), "contact")),
                     "business_id": business_id, "name": name,
                     "email": email_clean, "phone": phone or None,
                     "status": "lead", "source": source,
@@ -2446,52 +2458,34 @@ def _capture_contact_from_form(business_id: str, name: str, email: str,
                     "attribution": attribution or None,
                     "metadata": meta, "last_interaction": now_iso,
                 })
-                if isinstance(saved, list) and saved and saved[0].get("id"):
-                    contact_id = saved[0]["id"]
+                contact_id = saved["id"]
                 break
-    except Exception:
-        logger.warning("[contact-submit] contact storage failed biz=%s", business_id[:8])
-        return None
-    if not contact_id:
-        return None
-    # A connect card asks the church to connect personally, not to score
-    # somebody's faith interests or start automated outreach.
-    if form == "connect_card":
-        # The Members screen reads contact_note events in its Notes tab; it
-        # does not display website_form_messages metadata. Require this write
-        # too, so success means the church can actually read all the answers.
-        import website_forms
-        note = "Website connect card\nName: " + name + "\nEmail: " + email + "\n"
-        note += website_forms.notification_text({
-            "message": message, "phone": phone_raw, "fields": fields or {},
+        if not contact_id:
+            raise RuntimeError("contact update conflicts exhausted")
+        # Full text belongs in its own row, not an ever-growing contact blob.
+        event_data = dict(data, new_contact=new_contact, message_preview=message[:160],
+                          **lead_attribution.event_fields(attribution))
+        if form == "connect_card":
+            event_data["note"] = ("Website connect card\nName: " + name + "\nEmail: " + email + "\n"
+                                  + website_forms.notification_text(data))
+        website_forms.store_once("events", {
+            "id": receipt, "business_id": business_id, "contact_id": contact_id,
+            "event_type": "contact_note" if form == "connect_card" else "contact_form_submitted",
+            "source": source, "data": event_data,
         })
-        try:
-            saved_note = sb_clients.sb_post_as_service("/events", {
-                "business_id": business_id, "contact_id": contact_id,
-                "event_type": "contact_note", "source": source,
-                "data": {"note": note, "form": form, "fields": fields or {}},
-            })
-            if not isinstance(saved_note, list) or not saved_note or not saved_note[0].get("id"):
-                return None
-        except Exception:
-            logger.warning("[contact-submit] connect card note storage failed biz=%s", business_id[:8])
-            return None
-        return contact_id
+    except Exception as exc:
+        print(f"[contact-submit] contact/note storage failed biz={business_id[:8]}: {exc!r}", flush=True)
+        return None
+    if form == "connect_card":
+        return contact_id  # no lead scoring or automated outreach for church cards
     try:
-        import event_spine
-        event_spine.emit(
-            "contact_form_submitted", business_id,
-            dict({"name": name, "email": email_clean,
-                  "message_preview": message[:160], "new_contact": new_contact},
-                 **lead_attribution.event_fields(attribution)),
-            contact_id=contact_id, source="website_contact_form")
         import lead_scoring
         lead_scoring.score_in_background(
             business_id, contact_id,
             {"name": name, "email": email_clean, "phone": phone, "message": message},
-            source="website_contact_form", email=email_clean, phone=phone)
-    except Exception:
-        logger.warning("[contact-submit] optional contact processing failed biz=%s", business_id[:8])
+            source=source, email=email_clean, phone=phone)
+    except Exception as exc:
+        print(f"[contact-submit] optional contact processing failed biz={business_id[:8]}: {exc!r}", flush=True)
     return contact_id
 
 
@@ -2518,40 +2512,58 @@ async def contact_submit_endpoint(business_id: str, body: Dict[str, Any], reques
     name, email, message = data["name"], data["email"], data["message"]
     kind, fields = data["form"], data["fields"]
     church_form = kind in ("connect_card", "prayer_request")
+    receipt = website_forms.receipt_id(business_id, data)
+    stored = False
     try:
         if kind == "prayer_request":
-            # No contacts, consent, attribution, events, scoring or auto-replies.
-            from private_care import save_submission
-            save_submission(business_id, None, {
-                "name": name, "email": email, "phone": data["phone"],
-                "prayer_request": fields.get("request") or message,
-                "message": message, "fields": fields,
-                "follow_up": fields.get("follow_up", False),
-                "confidential": "yes", "source": "website prayer request",
-            })
+            # No contacts, consent, attribution, lead events or scoring.
+            await asyncio.to_thread(website_forms.save_prayer, business_id, data, receipt)
+            stored = True
         else:
             import lead_attribution
+            # Connect-card attribution is intentionally omitted: ministry interest
+            # must not enter marketing analytics or automated lead workflows.
             attribution = lead_attribution.capture(request, body) if not church_form else None
-            kwargs = {"attribution": attribution}
-            if kind:
-                kwargs.update(form=kind, fields=fields)
-            if not _capture_contact_from_form(
-                    business_id, name, email, data["phone"], message, **kwargs):
-                return failure(503, "Your submission could not be fully saved. Please try again.")
-    except Exception:
-        logger.warning("[contact-submit] submission storage failed biz=%s", business_id[:8])
+            stored = bool(await asyncio.to_thread(
+                _capture_contact_from_form, business_id, name, email, data["phone"], message,
+                attribution=attribution, form=kind, fields=fields,
+                submission_id=data["submission_id"]))
+            if not stored:
+                raise RuntimeError("contact capture did not confirm storage")
+    except Exception as exc:
+        print(f"[contact-submit] submission storage failed biz={business_id[:8]}: {exc!r}", flush=True)
+    if church_form and not stored:
         return failure(503, "Your submission could not be fully saved. Please try again.")
 
-    if not church_form and body.get("sms_consent") is True and data["phone"]:
-        _record_website_sms_consent(business_id, data["phone"], name)
+    if stored and not church_form:
+        try:
+            # The nudge schedules work on this loop; synchronous storage ran off it.
+            import chief_agent
+            chief_agent.nudge(business_id, "contact_form_submitted")
+        except Exception as exc:
+            print(f"[contact-submit] optional lead nudge failed: {exc!r}", flush=True)
 
-    # From here on storage succeeded. Notification problems must not ask the
-    # visitor to resubmit a request that is already in Solutionist.
-    notification_failed = {"ok": True, "notification_sent": False}
+    if church_form:
+        try:
+            await asyncio.to_thread(website_forms.alert_church, business_id, kind, receipt)
+        except Exception as exc:
+            # The saved request remains readable; never ask the visitor to repeat it.
+            print(f"[contact-submit] in-app alert failed biz={business_id[:8]}: {exc!r}", flush=True)
+    if stored and not church_form and body.get("sms_consent") is True and data["phone"]:
+        await asyncio.to_thread(_record_website_sms_consent, business_id, data["phone"], name)
+
+    def outcome(sent):
+        if not stored:
+            # Older published scripts cannot be repaired server-side. Preserve
+            # their email safety net, while honest clients still see a failure.
+            return failure(503, "Your submission could not be fully saved. Please try again.")
+        return {"ok": True, "notification_sent": sent}
+
+    notification_failed = outcome(False)
     message = website_forms.notification_text(data)
     try:
         from brand_engine import get_bundle, _sb_get as be_get
-        bundle = get_bundle(business_id) or {}
+        bundle = await asyncio.to_thread(get_bundle, business_id) or {}
     except Exception as e:
         logger.warning(f"[contact-submit] get_bundle failed for {business_id}: {e}")
         bundle = {}
@@ -2563,7 +2575,7 @@ async def contact_submit_endpoint(business_id: str, body: Dict[str, Any], reques
     site_contact_email = None
     if be_get is not None:
         try:
-            site_rows = be_get(
+            site_rows = await asyncio.to_thread(be_get,
                 f"/business_sites?business_id=eq.{business_id}&select=site_config&limit=1"
             ) or []
             site_cfg = (site_rows[0].get("site_config") if site_rows else {}) or {}
@@ -2587,7 +2599,7 @@ async def contact_submit_endpoint(business_id: str, body: Dict[str, Any], reques
         try:
             import sb_clients
             from urllib.parse import quote
-            businesses = sb_clients.sb_get_as_service(
+            businesses = await asyncio.to_thread(sb_clients.sb_get_as_service,
                 f"/businesses?id=eq.{quote(business_id, safe='')}&select=settings&limit=1")
             settings = businesses[0].get("settings") if isinstance(businesses, list) and businesses else {}
             target_email = _business_public_email(settings)
@@ -2607,7 +2619,7 @@ async def contact_submit_endpoint(business_id: str, body: Dict[str, Any], reques
     safe_message = _esc(message).replace("\n", "<br>")
 
     title = {"connect_card": "Connect card", "prayer_request": "Private prayer request"}.get(kind, "Contact form submission")
-    subject = f"[{business_name}] {title} from {name}"
+    subject = f"[{business_name}] {title} from {name}"[:200]
     html_body = (
         f"<h2>{title}</h2>"
         f"<p><strong>From:</strong> {safe_name} (&lt;{safe_email}&gt;)</p>"
@@ -2617,6 +2629,17 @@ async def contact_submit_endpoint(business_id: str, body: Dict[str, Any], reques
         f'<p style="font-size:0.85em;color:#666;">Sent via your {_esc(business_name)} website.</p>'
     )
 
+    private_notice = kind == "prayer_request" and not website_forms.PRAYER_EMAIL_INCLUDE_CONTENT
+    if private_notice:
+        subject = f"[{business_name}] New prayer request"[:200]
+        html_body = ('<p>A new prayer request is waiting in Prayer &amp; care.</p>'
+                     f'<p><a href="{website_forms.APP_URL}">Open Solutionist</a>, then open '
+                     'Client Forms → Private prayer and care requests.</p>')
+    mail = {"from": "noreply@mysolutionist.app", "to": [target_email],
+            "subject": subject, "html": html_body}
+    if not private_notice:
+        mail["reply_to"] = email
+
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             r = await client.post(
@@ -2625,23 +2648,17 @@ async def contact_submit_endpoint(business_id: str, body: Dict[str, Any], reques
                     "Authorization": f"Bearer {resend_api_key}",
                     "Content-Type": "application/json",
                 },
-                json={
-                    "from": "noreply@mysolutionist.app",
-                    "to": [target_email],
-                    "reply_to": email,
-                    "subject": subject,
-                    "html": html_body,
-                },
+                json=mail,
             )
         if 200 <= r.status_code < 300:
-            return {"ok": True, "notification_sent": True}
+            return outcome(True)
         logger.warning("[contact-submit] notification rejected status=%s", r.status_code)
         return notification_failed
     except httpx.HTTPError as e:
-        logger.warning("[contact-submit] notification network failure")
+        print(f"[contact-submit] notification network failure: {e!r}", flush=True)
         return notification_failed
     except Exception as e:
-        logger.warning("[contact-submit] notification failure")
+        print(f"[contact-submit] notification failure: {e!r}", flush=True)
         return notification_failed
 
 

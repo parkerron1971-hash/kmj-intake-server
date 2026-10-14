@@ -149,10 +149,12 @@ def _capture(body_email="Visitor@Example.com", phone="", message="Hello!",
 
     def fake_get(path):
         gets.append(path)
-        return get_results.pop(0) if get_results else []
+        return (get_results.pop(0) if get_results else []) if path.startswith("/contacts?") else []
 
     def fake_post(path, payload, prefer="return=representation"):
         posts.append((path, payload))
+        if path == "/events":
+            events.append(payload)
         if post_result is not None:
             return post_result
         return [{"id": "new-c-1"}]
@@ -224,7 +226,7 @@ def test_repeat_submission_dedups_by_email():
 def test_email_match_is_scoped_to_the_business_and_case_insensitive():
     _capture()
     _, gets, _, _, _ = _capture()
-    lookup = gets[0]
+    lookup = next(path for path in gets if path.startswith("/contacts?"))
     assert "business_id=eq.biz-1" in lookup
     assert "email=ilike." in lookup
 
@@ -232,7 +234,7 @@ def test_email_match_is_scoped_to_the_business_and_case_insensitive():
 def test_email_lookup_escapes_like_wildcards():
     """jo_n@x.com must not match joan@x.com — '_' is a LIKE wildcard."""
     _, gets, _, _, _ = _capture(body_email="jo_n@x.com")
-    assert "%5C_" in gets[0]        # url-encoded backslash-underscore
+    assert "%5C_" in next(path for path in gets if path.startswith("/contacts?"))        # url-encoded backslash-underscore
 
 
 def test_falls_back_to_phone_match_when_email_unknown():
