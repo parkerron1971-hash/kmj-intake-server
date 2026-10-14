@@ -33,6 +33,7 @@
   | Remainder (non-deductible kinds) | 33 | about $1,445 | |
 
   Over half of the money is entered by hand. Staff record cash, check and app gifts in Subsplash, some under a "Loose cash" donor. Online processing is only about $1,800 a month.
+- **Fees Love City actually pays: 2.99% + 30¢ per Visa/Mastercard gift**, checked against real gifts (a $103.39 gift paid $3.39), and 1% on ACH. That is Subsplash's **non-exclusive** tier (support article 9101519). The 2.30% tier needs an Exclusive Partnership agreement, so Love City has no exclusivity clause holding its giving. Nearly every card giver ticks "cover the fee" (18 of the last 19), so givers, not the church, pay most of the $552.
 - **Recurring: 0 active.** Only 11 recurring gifts have ever existed, all canceled, the last in March 2026. **Nobody has a gift to re-create**, so the move campaign becomes "give here now". Statements also need the hand-entered gifts, so the importer must carry every method, not just card.
 - **Last 30 days:** 20 gifts from 13 givers, $964.20.
 - **Funds:** Tithes, Offering, Building Fund.
@@ -507,7 +508,7 @@ Already decided 2026-10-14: getting off Subsplash is the goal. Others on the tea
 
 **Giving fees** (support art. 9101519):
 
-| Payment | Non-exclusive | Exclusive partner (and Subsplash One) |
+| Payment | Giving Only / non-exclusive | Exclusive partnership |
 |---|---|---|
 | Visa and Mastercard | 2.99% + $0.30 | 2.30% + $0.30 |
 | Amex and premium cards | 3.50% + $0.30 | 3.50% + $0.30 |
