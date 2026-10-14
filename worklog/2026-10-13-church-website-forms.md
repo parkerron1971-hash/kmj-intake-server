@@ -113,3 +113,13 @@ for it to merge before rebasing, reading its migration on main, and running care
 inbox tests with these tests. No private_care.py or care SQL edits, live database
 writes, or push during this wait. The current overlap check found no other
 conflict (including new #1416); repeat the full check immediately before push.
+
+
+Coordination stop: the subsequent full diff-content check (beyond filenames)
+found new PR #1416 at ff9cc4ce adds ministry_care_requests reads in church_reads.py
+(selecting status, created_at and prayed_at) and related fixture tests. It has no
+direct file overlap with #1409 and no SQL/schema writes, but is another care-table
+dependency outside KAI's explicit #1414 exception. Stopped and reported before
+rebase/push. #1414 remains open. Fixes are committed locally; final rebase,
+main-migration compatibility check, combined care-inbox tests and CI remain
+pending coordination. No private_care.py or care-inbox SQL changes.
