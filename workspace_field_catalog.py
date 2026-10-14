@@ -288,6 +288,23 @@ CATALOG: Dict[str, Dict[str, Any]] = {
         "computed_at": "timestamp",
     }, label="Named figures"),
 
+    # A church's first-time guests nobody has reached since. Not a
+    # relation -- a PROVIDER (church_reads.first_time_guests): "nobody
+    # has reached them" is a join across attendance, texts and logged
+    # activity that no single table can say. contacts.status was the
+    # first attempt at this and nothing ever set it to "first_time".
+    "first_time_guests": _src("attendance", {
+        "id": "string",
+        "business_id": "string",
+        "contact_id": "string",
+        "name": "string",
+        "occasion": "string",
+        "detail": "string",
+        "came_back": "int",
+        "first_visit_at": "timestamp",
+    }, label="First-time guests not yet reached",
+       provider="church_reads"),
+
     # Package / retainer balances. There is no `id` and no `*_cents`
     # here: the table is keyed on (business, contact, kind) and `balance`
     # is already in whole units of `unit` -- sessions, hours or currency,

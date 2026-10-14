@@ -78,21 +78,18 @@
       "rationale": "The gap a calendar cannot show. Sorted by how long they have been waiting, because the second week is when a first-time guest decides.",
       "bindings": {
         "items": {
-          "source": "contacts",
+          "source": "first_time_guests",
           "scope": "business",
-          "filter": {
-            "status": "first_time"
-          },
           "fields": {
             "id": "id",
             "title": "name",
             "age_days": {
-              "column": "created_at",
+              "column": "first_visit_at",
               "derive": "days_since"
             },
-            "subtitle": "source"
+            "subtitle": "detail"
           },
-          "order": "created_at.asc",
+          "order": "first_visit_at.asc",
           "limit": 20
         }
       },
