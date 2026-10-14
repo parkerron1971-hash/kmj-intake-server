@@ -1036,6 +1036,31 @@ padding-top:14px;border-top:1px solid var(--border);}}
         go.disabled = false;
       }});
   }});
+  // A link can fill the form in, so a giver moving a recurring gift over
+  // taps their own link and checks it:
+  //   /give?amount=50&frequency=monthly&fund=Building&cover_fee=1
+  // Nothing is submitted; the giver still presses Give. No name or email
+  // rides in the link: they type those (or Stripe asks).
+  (function() {{
+    var a = parseFloat(q.get('amount') || '');
+    if (a >= 1 && a <= 25000) {{
+      cents = Math.round(a * 100);
+      var match = null;
+      amts.forEach(function(b) {{ if (parseInt(b.getAttribute('data-cents'), 10) === cents) match = b; }});
+      if (match) match.classList.add('on');
+      else custom.value = (cents / 100).toFixed(cents % 100 ? 2 : 0);
+    }}
+    var f = q.get('frequency');
+    freqBtns.forEach(function(b) {{ if (b.getAttribute('data-freq') === f) b.click(); }});
+    var fund = (q.get('fund') || '').toLowerCase(), sel = document.getElementById('gv-fund');
+    if (fund && sel) {{
+      for (var i = 0; i < sel.options.length; i++) {{
+        var o = sel.options[i];
+        if (o.value.toLowerCase() === fund || o.textContent.toLowerCase() === fund) sel.value = o.value;
+      }}
+    }}
+    if (q.get('cover_fee') === '1') feeBox.checked = true;
+  }})();
   label();
 }})();
 </script>
