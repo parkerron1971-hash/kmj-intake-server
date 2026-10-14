@@ -893,7 +893,7 @@ def _handle_subscription_deleted(sub: Dict[str, Any]) -> None:
     if not business_id:
         return
     try:
-        from giving_router import fund_label
+        from giving_router import fund_label, frequency_word
         label = fund_label(md.get("fund"))
         sb_clients.sb_post_as_service("/chief_notifications", {
             "business_id": business_id,
@@ -901,7 +901,8 @@ def _handle_subscription_deleted(sub: Dict[str, Any]) -> None:
             "title": "A recurring gift ended",
             # Sensitivity: no giver name — individual giving stays on
             # the Donors report + statements surfaces.
-            "body": (f"A monthly gift{f' of ${amount:,.2f}' if amount else ''} "
+            "body": (f"A {frequency_word(md.get('frequency'))} gift"
+                     f"{f' of ${amount:,.2f}' if amount else ''} "
                      f"to the {label} was cancelled. Past gifts stay on the books."),
             "status": "unread",
             "data": {"kind": "recurring_gift_ended",

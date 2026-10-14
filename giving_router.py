@@ -104,7 +104,37 @@ DEFAULT_FUNDS = ["General"]
 # silently stops firing. Pinned by test_online_giving.
 RESTRICTED_CATEGORY = "restricted"
 
-_FREQUENCIES = ("once", "monthly")
+_FREQUENCIES = ("once", "weekly", "biweekly", "monthly")
+
+# How each recurring frequency repeats in Stripe: (interval, interval_count).
+# "Twice a month" (1st and 15th) has no Stripe interval, so it isn't
+# offered; every two weeks is the honest nearest.
+RECURRING = {"weekly": ("week", 1), "biweekly": ("week", 2), "monthly": ("month", 1)}
+_FREQUENCY_WORDS = {"weekly": "weekly", "biweekly": "every-two-weeks", "monthly": "monthly"}
+
+# "Cover the fee": the gift is grossed up so the church receives the
+# amount the giver chose. Stripe's standard US card price; a church's own
+# rate (or a bank payment, 0.8% capped at $5) can be lower, which is why
+# the page says "about".
+CARD_FEE_PERCENT = 0.029
+CARD_FEE_FIXED_CENTS = 30
+
+
+def frequency_word(frequency: Optional[str]) -> str:
+    """'weekly' | 'every-two-weeks' | 'monthly' — the words receipts,
+    notes and notifications use. Anything unknown reads as monthly, the
+    only recurring gift that existed before."""
+    return _FREQUENCY_WORDS.get(str(frequency or "").lower(), "monthly")
+
+
+def covered_fee_cents(amount_cents: int) -> int:
+    """What to add so the church nets `amount_cents` after the card fee."""
+    import math
+    amount_cents = int(amount_cents or 0)
+    if amount_cents <= 0:
+        return 0
+    gross = math.ceil((amount_cents + CARD_FEE_FIXED_CENTS) / (1 - CARD_FEE_PERCENT))
+    return gross - amount_cents
 
 
 # ─── Small helpers ───────────────────────────────────────────────────
@@ -346,8 +376,9 @@ async def public_giving_checkout(
 ) -> Dict[str, Any]:
     """Anonymous: create the Stripe Checkout session for a gift.
 
-    Body: { amount_cents: int, fund?: str, frequency?: 'once'|'monthly',
-            name?: str, email?: str }
+    Body: { amount_cents: int, fund?: str,
+            frequency?: 'once'|'weekly'|'biweekly'|'monthly',
+            cover_fee?: bool, name?: str, email?: str }
     Returns { ok, url } — the Stripe-hosted payment page.
     """
     # Rate limit FIRST — before any read or write (pinned in tests).
@@ -373,16 +404,17 @@ async def public_giving_checkout(
 
     frequency = str(body.get("frequency") or "once").strip().lower()
     if frequency not in _FREQUENCIES:
-        raise HTTPException(400, "frequency must be 'once' or 'monthly'")
+        raise HTTPException(400, "frequency must be once, weekly, biweekly or monthly")
+    fee_cents = covered_fee_cents(amount_cents) if body.get("cover_fee") is True else 0
 
     giver_name = str(body.get("name") or "").strip()[:120]
     giver_email = str(body.get("email") or "").strip().lower()[:200]
     if giver_email and ("@" not in giver_email or "." not in giver_email):
         raise HTTPException(400, "that email doesn't look right")
-    if frequency == "monthly" and not giver_email:
+    if frequency in RECURRING and not giver_email:
         # Stripe needs an email to create the subscription customer, and
         # a recurring giver with no identity could never be attributed.
-        raise HTTPException(400, "email is required for monthly giving")
+        raise HTTPException(400, "email is required for a recurring gift")
 
     # ── Resolve slug → business ──
     sites = sb_clients.sb_get_as_service(
@@ -429,7 +461,9 @@ async def public_giving_checkout(
             fund=fund,
             fund_label=fund_label(fund),
             fund_kind="restricted" if is_designated(fund) else "general",
-            monthly=(frequency == "monthly"),
+            monthly=(frequency in RECURRING),
+            frequency=frequency,
+            cover_fee_cents=fee_cents,
             giver_name=giver_name or None,
             giver_email=giver_email or None,
             success_url=f"{canonical}?thanks=1",
@@ -499,6 +533,7 @@ def record_gift(
     stripe_ref: str,
     recurring: bool = False,
     received_at: Optional[str] = None,
+    frequency: Optional[str] = None,
 ) -> Optional[str]:
     """Turn a completed Stripe gift payment into the PAID invoices row
     every downstream giving surface reads. Returns the invoice id (or
@@ -537,8 +572,9 @@ def record_gift(
     label = fund_label(fund)
     amount = round(amount_cents / 100.0, 2)
     description = f"Gift — {label}"
+    every = frequency_word(frequency) if recurring else ""
     notes = (f"Online gift · {label}"
-             + (" · monthly" if recurring else "")
+             + (f" · {every}" if recurring else "")
              + (f" · {giver_email}" if giver_email else ""))
 
     payload: Dict[str, Any] = {
@@ -570,7 +606,7 @@ def record_gift(
         return None
     invoice_id = created[0].get("id")
     logger.info(f"[giving] recorded gift ${amount:,.2f} ({label}"
-                f"{', monthly' if recurring else ''}) biz={business_id[:8]} "
+                f"{', ' + every if recurring else ''}) biz={business_id[:8]} "
                 f"as {invoice_number}")
 
     # ── Spine event + operator notification (fail-soft) ──
@@ -593,7 +629,7 @@ def record_gift(
             "business_id": business_id,
             "type": "success",
             "title": f"Gift received — ${amount:,.2f}",
-            "body": (f"A {'monthly ' if recurring else ''}gift to the "
+            "body": (f"A {every + ' ' if recurring else ''}gift to the "
                      f"{label} just arrived online."),
             "status": "unread",
             "data": {"kind": "gift_received", "invoice_id": invoice_id,
@@ -606,7 +642,8 @@ def record_gift(
     if giver_email:
         _schedule_gift_receipt(
             business_id, giver_email=giver_email, giver_name=giver_name,
-            amount=amount, fund_display=label, recurring=recurring)
+            amount=amount, fund_display=label, recurring=recurring,
+            every=every or "monthly")
     return invoice_id
 
 
@@ -672,6 +709,7 @@ def record_gift_from_cycle(inv: Dict[str, Any]) -> Optional[str]:
         giver_email=(md.get("giver_email") or inv.get("customer_email") or "").lower(),
         stripe_ref=str(ref),
         recurring=True,
+        frequency=md.get("frequency") or "monthly",
         received_at=_stripe_time((inv.get("status_transitions") or {}).get("paid_at") or inv.get("created")),
     )
 
@@ -681,14 +719,16 @@ def record_gift_from_cycle(inv: Dict[str, Any]) -> Optional[str]:
 
 def _schedule_gift_receipt(business_id: str, *, giver_email: str,
                            giver_name: str, amount: float,
-                           fund_display: str, recurring: bool) -> None:
+                           fund_display: str, recurring: bool,
+                           every: str = "monthly") -> None:
     """Fire-and-forget the receipt email when an event loop is running
     (the webhook path); never blocks or raises."""
     try:
         loop = asyncio.get_running_loop()
         loop.create_task(send_gift_receipt(
             business_id, giver_email=giver_email, giver_name=giver_name,
-            amount=amount, fund_display=fund_display, recurring=recurring))
+            amount=amount, fund_display=fund_display, recurring=recurring,
+            every=every))
     except RuntimeError:
         # No running loop (sync test context) — skip rather than build
         # bespoke threading for an opportunistic email.
@@ -699,7 +739,8 @@ def _schedule_gift_receipt(business_id: str, *, giver_email: str,
 
 async def send_gift_receipt(business_id: str, *, giver_email: str,
                             giver_name: str, amount: float,
-                            fund_display: str, recurring: bool) -> None:
+                            fund_display: str, recurring: bool,
+                            every: str = "monthly") -> None:
     """The per-gift contemporaneous written acknowledgment (IRS Pub
     1771): organization name, amount, date, and the goods-and-services
     declaration — reusing giving_statements' exact language so the
@@ -715,8 +756,8 @@ async def send_gift_receipt(business_id: str, *, giver_email: str,
         org = (rows[0].get("name") if rows else "") or "the organization"
         today = _now_iso()[:10]
         first = (giver_name or "").strip().split(" ")[0] or "Friend"
-        monthly_line = ("\nThis is a recurring monthly gift. Each month's "
-                        "gift will appear on your year-end statement.\n"
+        monthly_line = (f"\nThis is a recurring {every} gift. Each one "
+                        "will appear on your year-end statement.\n"
                         if recurring else "")
         body = (
             f"Dear {first},\n\n"
@@ -786,7 +827,7 @@ def render_give_page(
         logo_url = (brand.get("logo_url") or brand.get("logo") or "").strip()
 
     title = f"Give — {name}"
-    description = message or f"Give online to {name}. Secure one-time and monthly giving."
+    description = message or f"Give online to {name}. Secure one-time, weekly and monthly giving."
     css_vars = _brand_css_vars(business)
 
     preset_btns = "".join(
@@ -847,8 +888,12 @@ color:var(--text-primary);cursor:pointer;min-height:48px;}}
 text-transform:uppercase;color:var(--text-muted);margin:14px 0 6px;}}
 .gv-input{{width:100%;padding:12px 14px;font-size:16px;border:1.5px solid var(--border);
 border-radius:12px;background:transparent;color:var(--text-primary);min-height:48px;}}
-.gv-freq{{display:grid;grid-template-columns:1fr 1fr;gap:0;border:1.5px solid var(--border);
+.gv-freq{{display:grid;grid-template-columns:repeat(4,1fr);gap:0;border:1.5px solid var(--border);
 border-radius:12px;overflow:hidden;margin-top:4px;}}
+@media (max-width:420px){{.gv-freq{{grid-template-columns:1fr 1fr;}}}}
+.gv-cover{{display:flex;align-items:flex-start;gap:10px;margin-top:14px;font-size:14px;
+line-height:1.45;color:var(--text-secondary);cursor:pointer;min-height:44px;}}
+.gv-cover input{{width:20px;height:20px;margin:1px 0 0;flex:none;accent-color:var(--accent);}}
 .gv-freq button{{padding:12px 0;font-size:14px;font-weight:600;border:0;background:transparent;
 color:var(--text-secondary);cursor:pointer;min-height:46px;font-family:var(--font-body);}}
 .gv-freq button.on{{background:var(--accent);color:#fff;}}
@@ -886,10 +931,14 @@ padding-top:14px;border-top:1px solid var(--border);}}
            class="gv-input" placeholder="Other amount ($)">
     {fund_block}
     <label class="gv-label">Frequency</label>
-    <div class="gv-freq">
-      <button type="button" id="gv-once" class="on">One time</button>
-      <button type="button" id="gv-monthly">Monthly</button>
+    <div class="gv-freq" role="group" aria-label="How often">
+      <button type="button" data-freq="once" class="on" aria-pressed="true">One time</button>
+      <button type="button" data-freq="weekly" aria-pressed="false">Weekly</button>
+      <button type="button" data-freq="biweekly" aria-pressed="false">Every 2 weeks</button>
+      <button type="button" data-freq="monthly" aria-pressed="false">Monthly</button>
     </div>
+    <label class="gv-cover"><input type="checkbox" id="gv-fee">
+      <span id="gv-fee-txt">Add a little to cover the processing fee, so your whole gift arrives</span></label>
     <label class="gv-label" for="gv-nm">Name <span style="text-transform:none;font-weight:400">(optional)</span></label>
     <input type="text" id="gv-nm" class="gv-input" autocomplete="name" maxlength="120">
     <label class="gv-label" for="gv-em">Email <span style="text-transform:none;font-weight:400">(for your receipt)</span></label>
@@ -907,7 +956,15 @@ padding-top:14px;border-top:1px solid var(--border);}}
 (function() {{
   var API = {api_origin!r};
   var SLUG = {slug!r};
-  var cents = 0, monthly = false;
+  var cents = 0, freq = 'once';
+  var EVERY = {{once: '', weekly: ' weekly', biweekly: ' every 2 weeks', monthly: ' monthly'}};
+  var feeBox = document.getElementById('gv-fee');
+  var feeTxt = document.getElementById('gv-fee-txt');
+  var feeDefault = feeTxt.textContent;
+  // Same arithmetic as the server (giving_router.covered_fee_cents).
+  function fee(c) {{ return c > 0 ? Math.ceil((c + 30) / (1 - 0.029)) - c : 0; }}
+  function money(c) {{ return '$' + (c / 100).toLocaleString(undefined,
+    {{minimumFractionDigits: (c % 100 ? 2 : 0), maximumFractionDigits: 2}}); }}
   var q = new URLSearchParams(location.search);
   if (q.get('thanks')) document.getElementById('gv-thanks').classList.add('show');
   if (q.get('canceled')) document.getElementById('gv-canceled').classList.add('show');
@@ -916,10 +973,13 @@ padding-top:14px;border-top:1px solid var(--border);}}
   var go = document.getElementById('gv-go');
   var err = document.getElementById('gv-err');
   function label() {{
-    var d = cents > 0 ? '$' + (cents / 100).toLocaleString(undefined,
-      {{minimumFractionDigits: (cents % 100 ? 2 : 0)}}) : '';
-    go.textContent = d ? ('Give ' + d + (monthly ? ' monthly' : '')) : 'Give';
+    var add = feeBox.checked ? fee(cents) : 0;
+    feeTxt.textContent = cents > 0
+      ? 'Add about ' + money(fee(cents)) + ' to cover the processing fee, so your whole gift arrives'
+      : feeDefault;
+    go.textContent = cents > 0 ? ('Give ' + money(cents + add) + EVERY[freq]) : 'Give';
   }}
+  feeBox.addEventListener('change', label);
   amts.forEach(function(b) {{
     b.addEventListener('click', function() {{
       amts.forEach(function(x) {{ x.classList.remove('on'); }});
@@ -934,20 +994,22 @@ padding-top:14px;border-top:1px solid var(--border);}}
     cents = Math.round(parseFloat(custom.value || '0') * 100) || 0;
     label();
   }});
-  var onceBtn = document.getElementById('gv-once');
-  var moBtn = document.getElementById('gv-monthly');
-  onceBtn.addEventListener('click', function() {{
-    monthly = false; onceBtn.classList.add('on'); moBtn.classList.remove('on'); label();
-  }});
-  moBtn.addEventListener('click', function() {{
-    monthly = true; moBtn.classList.add('on'); onceBtn.classList.remove('on'); label();
+  var freqBtns = document.querySelectorAll('.gv-freq button');
+  freqBtns.forEach(function(b) {{
+    b.addEventListener('click', function() {{
+      freq = b.getAttribute('data-freq');
+      freqBtns.forEach(function(x) {{
+        var on = x === b; x.classList.toggle('on', on); x.setAttribute('aria-pressed', on ? 'true' : 'false');
+      }});
+      label();
+    }});
   }});
   document.getElementById('gv-form').addEventListener('submit', function(ev) {{
     ev.preventDefault();
     err.classList.remove('show');
     if (cents < 100) {{ err.textContent = 'Please choose an amount ($1 minimum).'; err.classList.add('show'); return; }}
     var email = document.getElementById('gv-em').value.trim();
-    if (monthly && !email) {{ err.textContent = 'Monthly giving needs an email so we can send your receipts.'; err.classList.add('show'); return; }}
+    if (freq !== 'once' && !email) {{ err.textContent = 'A recurring gift needs an email so we can send your receipts.'; err.classList.add('show'); return; }}
     var fundSel = document.getElementById('gv-fund');
     go.disabled = true;
     fetch(API + '/public/giving/' + SLUG + '/checkout', {{
@@ -956,7 +1018,8 @@ padding-top:14px;border-top:1px solid var(--border);}}
       body: JSON.stringify({{
         amount_cents: cents,
         fund: fundSel ? fundSel.value : undefined,
-        frequency: monthly ? 'monthly' : 'once',
+        frequency: freq,
+        cover_fee: feeBox.checked,
         name: document.getElementById('gv-nm').value.trim() || undefined,
         email: email || undefined
       }})

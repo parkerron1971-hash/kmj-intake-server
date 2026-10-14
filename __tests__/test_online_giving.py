@@ -520,3 +520,104 @@ def test_patch_refused_outside_nonprofit_family(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         giving_router.patch_giving_config(BIZ, {"enabled": True}, user)
     assert exc.value.status_code == 409
+
+
+# ─── 11. Weekly / every two weeks, and covering the fee ──────────────
+
+def _gift_form(**over):
+    from stripe_checkout_helpers import _giving_checkout_form
+    kw = dict(amount_cents=5000, fund_display="General Fund", monthly=False,
+              success_url="s", cancel_url="c", gift_id="g", business_id=BIZ,
+              fund="General", fund_kind="general", giver_email="a@example.com")
+    kw.update(over)
+    return _giving_checkout_form(**kw)
+
+
+@pytest.mark.parametrize("freq,interval,count", [
+    ("weekly", "week", None), ("biweekly", "week", "2"), ("monthly", "month", None)])
+def test_recurring_frequencies_become_subscriptions(freq, interval, count):
+    form = _gift_form(frequency=freq)
+    assert form["mode"] == "subscription"
+    assert form["line_items[0][price_data][recurring][interval]"] == interval
+    assert form.get("line_items[0][price_data][recurring][interval_count]") == (int(count) if count else None)
+    assert form["subscription_data[metadata][frequency]"] == freq
+
+
+def test_older_callers_passing_monthly_still_get_monthly():
+    form = _gift_form(monthly=True)
+    assert form["mode"] == "subscription"
+    assert form["metadata[frequency]"] == "monthly"
+
+
+def test_an_unknown_frequency_is_refused_by_the_form():
+    with pytest.raises(ValueError):
+        _gift_form(frequency="twice_monthly")
+
+
+def test_the_fee_is_its_own_line_and_repeats_with_the_gift():
+    form = _gift_form(frequency="weekly", cover_fee_cents=176)
+    assert form["line_items[1][price_data][unit_amount]"] == 176
+    assert form["line_items[1][price_data][product_data][name]"] == "Processing fee you covered"
+    assert form["line_items[1][price_data][recurring][interval]"] == "week"
+    assert form["subscription_data[metadata][covered_fee_cents]"] == 176
+    one = _gift_form(cover_fee_cents=176)
+    assert one["mode"] == "payment" and "line_items[1][price_data][recurring][interval]" not in one
+
+
+def test_covered_fee_leaves_the_church_the_chosen_amount():
+    for gift in (100, 2500, 5000, 100000):
+        add = giving_router.covered_fee_cents(gift)
+        total = gift + add
+        net = total - round(total * giving_router.CARD_FEE_PERCENT) - giving_router.CARD_FEE_FIXED_CENTS
+        assert net >= gift and net - gift <= 2
+    assert giving_router.covered_fee_cents(0) == 0
+
+
+def _checkout(monkeypatch, body, ip):
+    fake = FakeSB(business=_church())
+    monkeypatch.setattr(giving_router, "sb_clients", fake)
+    monkeypatch.setattr(giving_router, "_give_rate", {})
+    captured = {}
+
+    class StubAdapter:
+        async def create_giving_checkout(self, biz, **kwargs):
+            captured.update(kwargs)
+            return {"url": "https://checkout.stripe.com/c/pay_y"}
+
+    import payments_core
+    monkeypatch.setattr(payments_core, "provider_for", lambda biz: StubAdapter())
+    asyncio.run(giving_router.public_giving_checkout("first-light", body, _request(ip)))
+    return captured
+
+
+def test_checkout_passes_frequency_and_fee(monkeypatch):
+    got = _checkout(monkeypatch, {"amount_cents": 5000, "frequency": "biweekly",
+                                  "email": "b@example.com", "cover_fee": True}, "5.5.5.5")
+    assert got["frequency"] == "biweekly" and got["monthly"] is True
+    assert got["cover_fee_cents"] == giving_router.covered_fee_cents(5000)
+    got = _checkout(monkeypatch, {"amount_cents": 5000}, "6.6.6.6")
+    assert got["frequency"] == "once" and got["cover_fee_cents"] == 0 and got["monthly"] is False
+
+
+def test_only_a_real_true_covers_the_fee(monkeypatch):
+    got = _checkout(monkeypatch, {"amount_cents": 5000, "cover_fee": "yes"}, "7.7.7.7")
+    assert got["cover_fee_cents"] == 0
+
+
+def test_a_weekly_cycle_is_recorded_and_worded_as_weekly(fake_sb):
+    inv = _stripe_cycle_invoice("in_wk")
+    inv["subscription_details"]["metadata"]["frequency"] = "weekly"
+    giving_router.record_gift_from_cycle(inv)
+    assert "weekly" in fake_sb._posted("/invoices")[0]["notes"]
+    note = fake_sb._posted("/chief_notifications")[0]
+    assert note["body"].startswith("A weekly gift")
+
+
+def test_give_page_offers_four_frequencies_and_the_fee_box():
+    html = giving_router.render_give_page(
+        _church(), "https://first-light.mysolutionist.app/give",
+        "first-light", api_origin="https://api.example")
+    for f in ("once", "weekly", "biweekly", "monthly"):
+        assert f'data-freq="{f}"' in html
+    assert 'id="gv-fee"' in html and "cover_fee: feeBox.checked" in html
+    assert "Every 2 weeks" in html
