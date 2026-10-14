@@ -741,6 +741,8 @@ def render_me(biz: Dict[str, Any], site, *, me: Dict[str, Any], people: List[Dic
         statement = (f'<a class="mp-go mp-go-2" href="/my/statement?year={year}">{ui.icon("doc", 16)}'
                      f'{year} statement</a>')
     give = f'<a class="mp-go" href="{_e(give_url)}">{ui.icon("heart", 16)}Give</a>' if give_url else ""
+    manage = ('<p style="margin:12px 0 0"><a class="mp-link" href="/my/gifts">'
+              'Change, pause or stop a recurring gift</a></p>' if give_url else "")
     buttons = f'<div class="mb-give-row">{give}{statement}</div>' if give and statement else (
         f'<div style="margin-top:14px">{give or statement}</div>' if (give or statement) else "")
     switch = ('<form method="post" action="/my/person"><input type="hidden" name="cid" value="">'
@@ -759,6 +761,7 @@ def render_me(biz: Dict[str, Any], site, *, me: Dict[str, Any], people: List[Dic
   <nav class="mp-years" aria-label="Year">{years}</nav>
   {giving}
   {buttons}
+  {manage}
 </section>
 <h2 class="mp-sect">My church life</h2>
 <ul class="mb-list">
@@ -922,6 +925,13 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
         return _page(mpc.render_details(biz, site, request, full))
     from giving_router import giving_is_active
     give_url = "/give" if giving_is_active(biz) else ""
+    # A giver's own recurring gifts (member_portal_gifts.py).
+    if sub == "/my/gifts":
+        import member_portal_gifts as mpg
+        full = await asyncio.to_thread(mpc.load_me, biz["id"], me["id"]) or me
+        mine = await mpg.recurring_gifts(biz, full.get("email") or "")
+        return _page(mpg.render_gifts(biz, site, request, full, mine, give_url),
+                     503 if mine is None else 200)
     # Live, inside the app (member_portal_live.py).
     if sub in ("/my/live", "/my/live/feed"):
         import live_router as lr
