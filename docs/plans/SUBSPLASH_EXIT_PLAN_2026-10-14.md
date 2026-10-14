@@ -13,12 +13,55 @@
 ## 0. Progress (first session, 2026-10-14)
 
 **Step 0 facts (Kevin, from the Dev Desk):**
-- The contract renews at the start of the year. It auto-renews and is billed month to month. Written cancellation is due about **Dec 1, 2026**, so aim to have everything moved and the notice ready by mid-November. The exact renewal date on the billing page is still unconfirmed.
+- The contract renews at the start of the year. It auto-renews and is billed month to month.
 - Love City uses "pretty much all" Subsplash products.
-- 20–30 monthly recurring givers.
+- 20–30 people give every month. The Subsplash read below shows they give by hand each time; none has a recurring gift.
 - No podcast feed, so the feed move is dropped.
 
+**Read from Love City's Subsplash dashboard (2026-10-14, signed in as the church, read only; Kevin's go-ahead from the Dev Desk):**
+- **Contract renews December 30, 2026** (Settings → Subscription). Subsplash's help page says to cancel through the Client Success Manager "at least 30 days prior to the renewal date", so the **written notice must land by Nov 30, 2026**. Plan to send it mid-November.
+- **Cost:** "Giving + Subsplash One 250" at $263.89 a month, charged on the last day of each month, plus Pulpit AI Standard at $53.10 a month, billed separately. About $317 a month, or $3,800 a year.
+- **Giving, Jan 1 – Oct 14, 2026:** 733 gifts, $35,882.59 gross, 119 givers.
+
+  | Method | Gifts | Gross | Fees |
+  |---|---|---|---|
+  | Card | 287 | $16,731.23 | $551.65 (3.3%) |
+  | ACH | 3 | $124.24 | $1.24 |
+  | Cash | 151 | $5,407.56 | $0 |
+  | Check | 35 | $3,262.00 | $0 |
+  | Other (PayPal, Zelle, Cash App) | 224 | $8,912.70 | $0 |
+  | Remainder (non-deductible kinds) | 33 | about $1,445 | |
+
+  Over half of the money is entered by hand. Staff record cash, check and app gifts in Subsplash, some under a "Loose cash" donor. Online processing is only about $1,800 a month.
+- **Recurring: 0 active.** Only 11 recurring gifts have ever existed, all canceled, the last in March 2026. **Nobody has a gift to re-create**, so the move campaign becomes "give here now". Statements also need the hand-entered gifts, so the importer must carry every method, not just card.
+- **Last 30 days:** 20 gifts from 13 givers, $964.20.
+- **Funds:** Tithes, Offering, Building Fund.
+- **People:** 590, plus 31 possible duplicates flagged by Subsplash. The people list has an Export button.
+- **Media:** 469 items in 54 series, 886 GB of 977 GB used (807 GB video, 79 GB audio). Hosting that much video ourselves is not the plan; sermons come from YouTube or Facebook links (D4).
+- **The Subsplash app:** 1,108 downloads, 35,228 launches and 119,345 page views, all time. Members will lose a store app that gets real use, so the installable member page (step 3) needs an announcement plan.
+- **Not yet downloaded:** the people and 2026 gifts exports. Downloading members' data to the laptop is Kevin's yes. He was asked on 2026-10-14.
+
 **Found:** Love City's Solutionist workspace is empty. It has no Stripe connected, giving is off, 0 people, no texting number and no member page turned on. Steps 2 and 7 wait on that setup.
+
+**Helcim as a church-only second processor (Kevin asked, 2026-10-14). Advice: no, not now.**
+- **Price:** Helcim is interchange plus 0.50% + 25¢ online. Its Recurring add-on is +0.4%, and ACH is 0.5% + 25¢ capped at $6. On Love City's roughly $1,800 a month of card gifts that saves about $5 a month over Stripe's standard 2.9% + 30¢. Stripe's nonprofit rate (about 2.2% + 30¢, for 80%+ donation volume and tax-exempt documents) saves more.
+- **Build:** `payments_core.py` already has the per-business adapter seam (`provider_for`), so it's possible. A Helcim adapter would still need all of this, about 2–3 weeks to reach parity, plus a second processor to run for good:
+  - partner-token signup and the `connectedAccount` webhook that delivers each church's API token, with encrypted token storage
+  - HelcimPay.js on `/give`
+  - our own weekly/biweekly scheduling
+  - a poller, because only `cardTransaction` webhooks are documented (no subscription, ACH settlement or return events)
+  - a replacement for `/my/gifts`
+  - refunds
+  - processor-aware fee math (`covered_fee_cents` hardcodes 2.9% + 30¢)
+- **Risks:**
+  - no sandbox for partner signup
+  - no per-transaction platform fee, only an undisclosed revenue share
+  - the acceptable use policy bars "unregistered charities", which is ambiguous for churches
+  - reviews mention held funds and sudden closures
+- **Better levers:**
+  - Love City applies for Stripe's nonprofit rate.
+  - Nudge bank giving: $1.20 vs $4.65 on a $150 gift.
+  - Revisit Helcim if church volume reaches $100k+ a month.
 
 **Shipped (backend PRs; frontend in brackets):**
 
@@ -43,13 +86,14 @@
 
 **Waiting on Kevin:**
 1. Does Love City have its own Stripe account? Online giving, statements and the recurring-giver move all need one connected (Operate → Giving → Connect Stripe, signed in as the church).
-2. From Subsplash: the people list, 2026 giving history, and the recurring givers list. These feed the D3 importer, which isn't built yet because the export format is unseen, and the move campaign.
+2. Yes to downloading two Subsplash exports to the laptop: the people list (590) and the 2026 gifts (733). They feed the D3 importer, which isn't built yet because the export format is unseen. The recurring givers list is empty, so it isn't needed.
 3. Open decision 1 (member notifications) gates push in step 3.
 4. A texting number of Love City's own (a paid line) for text GIVE and member texts.
 
 **Still to build:**
-- the giving-history importer (D3, after a sample export)
-- the recurring-giver move campaign (sending each giver their #1425 link from the church's own email and number, and tracking who moved; every send is Kevin's yes)
+- the giving-history importer (D3, after a sample export). It carries every method (card, ACH, cash, check, other) and the funds, so statements are whole.
+- the "give here now" campaign to the 119 givers of 2026, with no recurring gifts to re-create. It sends from the church's own email and number, using #1425 links, and tracks who gave on the new page. Every send is Kevin's yes.
+- nothing new for hand entry: staff record cash, check and other gifts through the existing `POST /giving/{business_id}/records` (methods cash/check/bank_transfer/other). Over half of Love City's giving arrives that way, so show the church this on day one.
 - sermon import (Love City's YouTube or Facebook, not scraping Subsplash) and audio upload (D4)
 - push (after decision 1)
 - prayer from live chat into Care (step 5)
