@@ -356,6 +356,9 @@ from member_portal import router as member_portal_router
 app.include_router(member_portal_router)
 from member_portal_church import router as member_portal_church_router
 app.include_router(member_portal_church_router)
+# A giver changes, pauses or stops their own recurring gift (POST /my/gifts).
+from member_portal_gifts import router as member_portal_gifts_router
+app.include_router(member_portal_gifts_router)
 # The church's Bible reading plan: staff choose it (/church/reading-plans),
 # members tick their days (POST /my/reading).
 from reading_plans import router as reading_plans_router
