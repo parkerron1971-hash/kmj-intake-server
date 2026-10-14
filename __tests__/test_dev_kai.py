@@ -26,7 +26,9 @@ class _Owner:
     id = "owner-1"
 
 
-DEVICE = {"id": "dev-1", "name": "Solution Space", "last_seen_at": _ago(5), "revoked": False,
+# Seen "just now" is stamped when a test wires it (see _wire), not when this
+# file loads: the full suite runs for minutes, long enough to read as offline.
+DEVICE = {"id": "dev-1", "name": "Solution Space", "revoked": False,
           "agents": ["claude", "codex", "kai-v1"], "kai_state": None, "kai_watch_until": None}
 
 E1 = "11111111-1111-4111-8111-111111111111"
@@ -107,6 +109,9 @@ async def _device_ok(_c, _authorization, _agents=None):
 
 
 def _wire(monkeypatch, device=DEVICE, messages=()):
+    if device:
+        device = dict(device)
+        device.setdefault("last_seen_at", _ago(5))
     fake = Fake(device, messages)
     monkeypatch.setattr(dev_kai, "_sb_get", fake.get)
     monkeypatch.setattr(dev_kai, "_sb_patch", fake.patch)
