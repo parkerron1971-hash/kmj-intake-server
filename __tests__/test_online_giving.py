@@ -779,3 +779,127 @@ def test_wallet_domains_endpoint_is_owner_only_and_needs_stripe(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         giving_router.register_wallet_domains(BIZ, SimpleNamespace(id="u1"))
     assert exc.value.status_code == 409
+# ─── 13. The payment form opens inside the give page ─────────────────
+
+def _keys(monkeypatch, secret="sk_live_abc", publishable="pk_live_xyz"):
+    monkeypatch.setenv("STRIPE_SECRET_KEY", secret)
+    if publishable is None:
+        monkeypatch.delenv("STRIPE_PUBLISHABLE_KEY", raising=False)
+    else:
+        monkeypatch.setenv("STRIPE_PUBLISHABLE_KEY", publishable)
+
+
+@pytest.mark.parametrize("secret,publishable,expected", [
+    ("sk_live_abc", "pk_live_xyz", "pk_live_xyz"),
+    ("rk_live_abc", "pk_live_xyz", "pk_live_xyz"),
+    ("sk_test_abc", "pk_test_xyz", "pk_test_xyz"),
+    ("sk_live_abc", "pk_test_xyz", ""),          # the other mode can't open a live session
+    ("sk_test_abc", "pk_live_xyz", ""),
+    ("sk_live_abc", None, ""),                   # unset: Give keeps redirecting
+    ("sk_live_abc", "pk_live_x</script>", ""),   # malformed never reaches the page
+])
+def test_publishable_key_only_when_it_matches_the_secret_mode(monkeypatch, secret, publishable, expected):
+    from stripe_checkout_helpers import embedded_checkout_publishable_key
+    _keys(monkeypatch, secret, publishable)
+    assert embedded_checkout_publishable_key() == expected
+
+
+def test_embedded_form_uses_return_url_not_success_or_cancel():
+    form = _gift_form(embedded=True, success_url="https://x/give?thanks=1")
+    assert form["ui_mode"] == "embedded"
+    assert form["return_url"] == "https://x/give?thanks=1"
+    # Stripe rejects success_url/cancel_url on an embedded session.
+    assert "success_url" not in form and "cancel_url" not in form
+    # The webhook contract is unchanged.
+    assert form["metadata[source_type]"] == "gift"
+    assert form["payment_intent_data[metadata][source_type]"] == "gift"
+    plain = _gift_form()
+    assert "ui_mode" not in plain and plain["success_url"] == "s" and plain["cancel_url"] == "c"
+
+
+def test_embedded_request_pins_the_api_version_that_knows_embedded():
+    from stripe_checkout_helpers import (_giving_checkout_headers,
+                                         EMBEDDED_CHECKOUT_STRIPE_VERSION)
+    # 2026-03-25.dahlia renamed ui_mode 'embedded' to 'embedded_page' and
+    # rejects the old value, so a default-version upgrade must not reach it.
+    assert _giving_checkout_headers("acct_1", True) == {
+        "Stripe-Account": "acct_1", "Stripe-Version": EMBEDDED_CHECKOUT_STRIPE_VERSION}
+    assert EMBEDDED_CHECKOUT_STRIPE_VERSION < "2026-03-25"
+    assert _giving_checkout_headers("acct_1", False) == {"Stripe-Account": "acct_1"}
+
+
+def _embedded_checkout(monkeypatch, body, ip, session):
+    fake = FakeSB(business=_church())
+    monkeypatch.setattr(giving_router, "sb_clients", fake)
+    monkeypatch.setattr(giving_router, "_give_rate", {})
+    captured = {}
+
+    class StubAdapter:
+        async def create_giving_checkout(self, biz, **kwargs):
+            captured.update(kwargs)
+            return session
+
+    import payments_core
+    monkeypatch.setattr(payments_core, "provider_for", lambda biz: StubAdapter())
+    out = asyncio.run(giving_router.public_giving_checkout("first-light", body, _request(ip)))
+    return out, captured
+
+
+def test_checkout_returns_the_client_secret_when_the_page_embeds(monkeypatch):
+    _keys(monkeypatch)
+    out, got = _embedded_checkout(
+        monkeypatch, {"amount_cents": 5000, "embedded": True}, "8.1.1.1",
+        {"id": "cs_1", "client_secret": "cs_1_secret_abc"})
+    assert out == {"ok": True, "embedded": True, "client_secret": "cs_1_secret_abc"}
+    assert got["embedded"] is True
+    assert got["success_url"].endswith("/give?thanks=1")
+
+
+def test_checkout_redirects_when_the_key_is_missing_or_not_asked(monkeypatch):
+    _keys(monkeypatch, publishable=None)
+    out, got = _embedded_checkout(
+        monkeypatch, {"amount_cents": 5000, "embedded": True}, "8.2.2.2",
+        {"url": "https://checkout.stripe.com/c/pay_z"})
+    assert out == {"ok": True, "url": "https://checkout.stripe.com/c/pay_z"}
+    assert got["embedded"] is False
+    _keys(monkeypatch)
+    out, got = _embedded_checkout(
+        monkeypatch, {"amount_cents": 5000, "embedded": "yes"}, "8.3.3.3",
+        {"url": "https://checkout.stripe.com/c/pay_z"})
+    assert got["embedded"] is False and out["url"].startswith("https://checkout.stripe.com/")
+
+
+def test_embedded_checkout_without_a_secret_is_an_error(monkeypatch):
+    _keys(monkeypatch)
+    with pytest.raises(HTTPException) as exc:
+        _embedded_checkout(monkeypatch, {"amount_cents": 5000, "embedded": True}, "8.4.4.4",
+                           {"id": "cs_2"})
+    assert exc.value.status_code == 502
+
+
+def test_give_page_loads_stripe_and_opens_the_form_in_place_with_a_key(monkeypatch):
+    _keys(monkeypatch)
+    html = giving_router.render_give_page(
+        _church(), "https://first-light.mysolutionist.app/give",
+        "first-light", api_origin="https://api.example")
+    assert '<script src="https://js.stripe.com/v3/"></script>' in html
+    assert 'var EMBED = {"pk": "pk_live_xyz", "acct": "acct_123"};' in html
+    assert 'id="gv-pay"' in html and 'id="gv-back"' in html
+    assert "createEmbeddedCheckoutPage || stripe.initEmbeddedCheckout" in html
+    assert "embedded: embedOn() || undefined" in html
+    assert "right on this page" in html
+    # A page that can't open the form still falls back to the redirect.
+    assert "location.href = res.j.url" in html
+
+
+def test_give_page_without_a_key_or_account_keeps_the_redirect(monkeypatch):
+    _keys(monkeypatch, publishable=None)
+    html = giving_router.render_give_page(
+        _church(), "https://x/give", "x", api_origin="https://api.example")
+    assert "js.stripe.com" not in html and "var EMBED = null;" in html
+    assert "finish securely on our payment page" in html
+    _keys(monkeypatch)
+    html = giving_router.render_give_page(
+        _church(stripe_account_id="not-an-account"), "https://x/give", "x",
+        api_origin="https://api.example")
+    assert "js.stripe.com" not in html and "var EMBED = null;" in html
