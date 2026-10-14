@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Dict
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 
 # Routes owned by API/portal handlers before the site catch-all, compliance
@@ -40,3 +40,67 @@ def secondary_pages(site_config: Any) -> Dict[str, str]:
         if isinstance(html, str) and html.strip():
             result[pid] = html
     return result
+
+
+# A hand-built site's old addresses: build.py REDIRECTS, stored by site_sync
+# as site_config.manual_redirects and answered with a 301 only where the
+# site would otherwise 404. An old path is lowercase segments, or ends in
+# "/*" for everything under it. A target is "/" or one of the site's own
+# pages, with an optional ?query and #anchor: never another host.
+MAX_REDIRECTS = 100
+_REDIRECT_FROM_RE = re.compile(r"/[a-z0-9-]+(?:/[a-z0-9-]+)*(?:/\*)?")
+_REDIRECT_TO_RE = re.compile(r"/([a-z0-9-]*)(\?[a-z0-9=&-]*)?(#[a-z0-9-]+)?")
+# Hosted pages that answer before a site's redirects are looked at.
+_HOSTED_PATHS = frozenset({"book", "give", "events", "sermons", "store"})
+# Reserved paths redirected anyway, ahead of the API route that owns them
+# (public_site.LegacyApiPathRedirect): old links to a church's /live page.
+API_SHADOWED_REDIRECTS = frozenset({"/live"})
+
+
+def redirect_target_ok(target: Any) -> bool:
+    return isinstance(target, str) and _REDIRECT_TO_RE.fullmatch(target) is not None
+
+
+def clean_redirects(redirects: Any, page_ids: Iterable[str]) -> Tuple[Dict[str, str], List[Tuple[Any, str]]]:
+    """The redirects site_sync installs, and (old path, reason) for each
+    one it skips. page_ids are the pages being installed, home included."""
+    if redirects is None:
+        return {}, []
+    if not isinstance(redirects, dict):
+        return {}, [("REDIRECTS", "redirects must be a dict")]
+    pages = {p for p in page_ids if p != "home"}
+    kept: Dict[str, str] = {}
+    skipped: List[Tuple[Any, str]] = []
+    for old, to in redirects.items():
+        if not isinstance(old, str) or _REDIRECT_FROM_RE.fullmatch(old) is None:
+            skipped.append((old, "redirect from an invalid path"))
+            continue
+        first = old.split("/")[1]
+        if old[1:] in pages:
+            skipped.append((old, "redirect from a page the site serves"))
+        elif old not in API_SHADOWED_REDIRECTS and (first in RESERVED_PAGE_IDS or first in _HOSTED_PATHS):
+            skipped.append((old, "redirect from a path another handler answers"))
+        elif not redirect_target_ok(to) or _REDIRECT_TO_RE.fullmatch(to).group(1) not in pages | {""}:
+            skipped.append((old, f"redirect to {to!r}, not one of the site's pages"))
+        elif len(kept) >= MAX_REDIRECTS:
+            skipped.append((old, f"redirect cap {MAX_REDIRECTS} reached"))
+        else:
+            kept[old] = to
+    return kept, skipped
+
+
+def manual_redirect(site_config: Any, path: Any) -> Optional[str]:
+    """Where a hand-built site sends this old address, or None. An exact
+    entry wins; otherwise the longest "/x/*" entry that the path is under."""
+    if not isinstance(site_config, dict) or site_config.get("html_source") != "manual":
+        return None
+    redirects = site_config.get("manual_redirects")
+    if not isinstance(redirects, dict) or not isinstance(path, str):
+        return None
+    p = path.rstrip("/").lower() or "/"
+    to = redirects.get(p)
+    if to is None:
+        under = [old for old in redirects
+                 if isinstance(old, str) and old.endswith("/*") and p.startswith(old[:-1])]
+        to = redirects.get(max(under, key=len)) if under else None
+    return to if redirect_target_ok(to) else None

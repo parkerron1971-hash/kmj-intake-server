@@ -314,3 +314,102 @@ def test_every_shipped_build_has_only_servable_pages_within_the_cap():
         for pid, html in pages.items():
             assert valid_page_id(pid) and pid not in RESERVED_PAGE_IDS, (build.SLUG, pid)
             assert isinstance(html, str) and html.strip(), (build.SLUG, pid)
+
+
+def _church(redirects, pages=None):
+    m = _mod(pages or {"home": "home", "visit": "visit", "connect": "connect"}, slug="church")
+    if redirects is not None:
+        m.REDIRECTS = redirects
+    return m
+
+
+def test_redirects_install_with_the_pages_and_then_stay_current(monkeypatch):
+    redirects = {"/i-m-new": "/visit", "/prayer-request": "/connect#prayer",
+                 "/volunteer": "/connect?interest=serve#connect-card", "/media/*": "/", "/live": "/visit"}
+    row = {"id": "row-1", "business_id": "biz-1", "site_config": {}}
+    db = _wire(monkeypatch, [row])
+    assert site_sync.sync_site(_church(redirects)) == "installed"
+    body = db.patches[0][1]
+    assert body["site_config"]["manual_redirects"] == redirects
+    row.update(body)
+    db.patches.clear()
+    assert site_sync.sync_site(_church(redirects)) == "current"
+    assert db.patches == []
+
+
+def test_unusable_redirects_are_skipped_and_printed(monkeypatch, capsys):
+    bad = {"/Old": "/visit", "/two words": "/visit", "/visit": "/connect", "/give": "/visit",
+           "/sermons/*": "/visit", "/team": "/visit", "/live/*": "/visit", "/off": "https://evil.example/",
+           "/off2": "//evil.example", "/off3": "/missing", "/off4": "/home", "/off5": None, 7: "/visit"}
+    db = _wire(monkeypatch, [{"id": "row-1", "business_id": "biz-1", "site_config": {}}])
+    assert site_sync.sync_site(_church({**bad, "/fine": "/visit"})) == "installed"
+    assert db.patches[0][1]["site_config"]["manual_redirects"] == {"/fine": "/visit"}
+    out = capsys.readouterr().out
+    for old in bad:
+        assert repr(old) in out, old
+
+
+def test_redirects_that_arent_a_dict_install_nothing(monkeypatch, capsys):
+    db = _wire(monkeypatch, [{"id": "row-1", "business_id": "biz-1", "site_config": {}}])
+    assert site_sync.sync_site(_church([("/old", "/visit")])) == "installed"
+    assert "manual_redirects" not in db.patches[0][1]["site_config"]
+    assert "redirects must be a dict" in capsys.readouterr().out
+
+
+def test_a_change_to_the_redirects_alone_updates_the_row_without_a_browser_check(monkeypatch):
+    import threading
+    import site_check
+    pages = {"home": "home", "visit": "visit", "connect": "connect"}
+    stored = {"html_source": "manual", "manual_hash": site_sync.content_hash(pages),
+              "site_pages": list(pages), "generated_pages": {"visit": "visit", "connect": "connect"},
+              "manual_redirects": {"/old": "/visit"}}
+    timers = []
+
+    class _Timer:
+        def __init__(self, *args, **kwargs):
+            timers.append(args)
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(threading, "Timer", _Timer)
+    monkeypatch.setattr(site_check, "enabled", lambda: True)
+    db = _wire(monkeypatch, [{"id": "row-1", "business_id": "biz-1", "site_config": dict(stored)}])
+    assert site_sync.sync_site(_church({"/old": "/connect"}, pages)) == "updated"
+    assert db.patches[0][1]["site_config"]["manual_redirects"] == {"/old": "/connect"}
+    assert timers == []
+    # A page change still gets its check.
+    assert site_sync.sync_site(_church({"/old": "/visit"}, {**pages, "visit": "new visit"})) == "updated"
+    assert len(timers) == 1
+
+
+def test_dropping_the_redirects_takes_them_out_of_the_row(monkeypatch):
+    pages = {"home": "home", "visit": "visit", "connect": "connect"}
+    stored = {"html_source": "manual", "manual_hash": site_sync.content_hash(pages),
+              "site_pages": list(pages), "generated_pages": {"visit": "visit", "connect": "connect"},
+              "manual_redirects": {"/old": "/visit"}}
+    db = _wire(monkeypatch, [{"id": "row-1", "business_id": "biz-1", "site_config": stored}])
+    assert site_sync.sync_site(_church(None, pages)) == "updated"
+    assert "manual_redirects" not in db.patches[0][1]["site_config"]
+
+
+def test_kmj_declares_no_redirects_and_its_row_never_gets_any(monkeypatch):
+    kmj = next(m for m in site_sync.discover() if m.SLUG == "kmj-creative-solutions")
+    assert not hasattr(kmj, "REDIRECTS")
+    row = {"id": "row-1", "business_id": kmj.BUSINESS_ID, "site_config": {}}
+    db = _wire(monkeypatch, [row])
+    assert site_sync.sync_site(kmj) == "installed"
+    assert "manual_redirects" not in db.patches[0][1]["site_config"]
+    row.update(db.patches[0][1])
+    db.patches.clear()
+    assert site_sync.sync_site(kmj) == "current"
+    assert db.patches == []
+
+
+def test_every_shipped_builds_redirects_install_without_a_skip():
+    from site_page_helpers import clean_redirects
+    for build in site_sync.discover():
+        redirects = getattr(build, "REDIRECTS", None)
+        if redirects is not None:
+            kept, skipped = clean_redirects(redirects, build.render_pages())
+            assert skipped == [] and kept == redirects, (build.SLUG, skipped)

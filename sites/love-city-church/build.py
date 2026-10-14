@@ -33,6 +33,9 @@ Build-time tokens (filled here):
                            silhouette (mark-solid.svg)
   {{API_BASE}} {{BUSINESS_ID}} and the outside links in LINKS
 
+REDIRECTS maps the old site's addresses to these pages (site_sync stores
+them with the pages).
+
 Scripts: site.js (the phone menu) goes on every page; forms.js (the one
 place the connect card and prayer request are submitted) goes on any page
 with a data-church-form.
@@ -96,6 +99,52 @@ LINKS = {
     "SUBSPLASH_GIVE": "https://subsplash.com/u/-7MJWGR/give?embed=true",
     "SUBSPLASH_GIVE_PAGE": "https://subsplash.com/u/cityofloveministries/give",
     "SERMON_LIBRARY": "https://subsplash.com/u/cityofloveministries/media",
+}
+
+# The old SnapPages site's addresses (its sitemap, and the sermon library
+# under /media), each sent where that content lives now. site_sync stores
+# them; public_site answers each with a 301 wherever the site would
+# otherwise 404 (/live, an API path, through public_site's
+# LegacyApiPathRedirect). Old forms land on the connect card with the same
+# interest ticked. /my-love-nation, the old members-only page, has no home
+# here and stays a 404.
+REDIRECTS = {
+    "/mission-and-vision": "/about",
+    "/our-senior-leadership": "/about#pastors",
+    "/what-we-believe": "/beliefs",
+    "/i-m-new": "/visit",
+    "/welcomehome": "/visit",
+    "/services-and-events": "/events",
+    "/citynewsletter": "/events",
+    "/awards": "/events",
+    "/harvestdinner": "/events",
+    "/bible-reading-group-signup": "/events",
+    "/media": "/sermons",
+    "/media/*": "/sermons",
+    "/subsplash-media": "/sermons",
+    "/live": "/watch",
+    "/connect-with-us": "/connect#connect-card",
+    "/booking": "/connect#connect-card",
+    "/prayer-request": "/connect#prayer",
+    "/membership-form-update": "/connect?interest=membership#connect-card",
+    "/baptism": "/connect?interest=baptism#connect-card",
+    "/membercare": "/connect?interest=pastoral-care#connect-card",
+    "/volunteer": "/connect?interest=serve#connect-card",
+    "/ministryworks": "/connect?interest=serve#connect-card",
+    "/city-serve": "/connect?interest=serve#connect-card",
+    "/ns-sign-up": "/connect?interest=next-step#connect-card",
+    "/next-step-ministry-training": "/ministries#training-title",
+    "/leaderschool": "/ministries#training-title",
+    "/missions": "/ministries#love-works",
+    "/children": "/ministries",
+    "/preschool": "/ministries",
+    "/students": "/ministries",
+    "/young-adults": "/ministries",
+    "/men": "/ministries",
+    "/women": "/ministries",
+    "/small-groups": "/ministries",
+    "/small-groups-20-groups": "/ministries",
+    "/small-groups-less-than-20-groups": "/ministries",
 }
 
 SERVE_TIME_TOKENS = {"BUSINESS_EMAIL", "PRODUCTS_SECTION", "GALLERY_SECTION", "TESTIMONIALS_SECTION"}

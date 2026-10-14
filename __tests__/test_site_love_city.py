@@ -323,6 +323,58 @@ def test_every_page_path_reaches_the_church_site_through_the_real_routers(build,
             f"{path} on {hosts}: {r.status_code} {r.text[:120]}"
 
 
+def test_every_old_address_has_a_home_and_installs_cleanly(build, pages):
+    from site_page_helpers import clean_redirects
+    kept, skipped = clean_redirects(build.REDIRECTS, pages)
+    assert skipped == [] and kept == build.REDIRECTS
+    # The old paths the domain runbook names (risk R5).
+    for old, new in {"/what-we-believe": "/beliefs", "/mission-and-vision": "/about",
+                     "/connect-with-us": "/connect", "/prayer-request": "/connect",
+                     "/volunteer": "/connect", "/i-m-new": "/visit", "/welcomehome": "/visit",
+                     "/services-and-events": "/events", "/media": "/sermons",
+                     "/subsplash-media": "/sermons", "/live": "/watch"}.items():
+        assert build.REDIRECTS[old].split("?")[0].split("#")[0] == new, old
+
+
+def test_every_redirect_anchor_and_ticked_interest_exists(build, pages):
+    for old, new in build.REDIRECTS.items():
+        page = new.split("?")[0].split("#")[0].strip("/") or "home"
+        if "#" in new:
+            assert f'id="{new.split("#", 1)[1]}"' in pages[page], f"{old} -> {new}"
+        if "interest=" in new:
+            interest = new.split("interest=", 1)[1].split("#")[0]
+            assert f'data-interest="{interest}"' in pages[page], f"{old} -> {new}"
+
+
+@pytest.mark.parametrize("hosts", CHURCH_HOSTS.values(), ids=CHURCH_HOSTS.keys())
+def test_every_old_address_reaches_the_church_site_or_its_live_redirect(build, real_app, hosts, monkeypatch):
+    """No API route may answer an old address before the church site does,
+    except /live, which the redirect layer answers ahead of the API."""
+    from fastapi.responses import HTMLResponse
+    from fastapi.testclient import TestClient
+    import public_site
+
+    async def site(name, path="/"):
+        return HTMLResponse(f"church-site {path}")
+
+    async def row(client, path):
+        return [{"site_config": {"html_source": "manual", "manual_redirects": build.REDIRECTS}}]
+    monkeypatch.setattr(public_site, "_serve_site_by_slug", site)
+    monkeypatch.setattr(public_site, "_serve_site_by_custom_domain", site)
+    monkeypatch.setattr(public_site, "_check_rate", lambda *a, **k: True)
+    monkeypatch.setattr(public_site, "_sb", row)
+
+    client = TestClient(real_app, follow_redirects=False)
+    for old in build.REDIRECTS:
+        path = old.replace("/*", "/page/2")
+        r = client.get(path, headers=hosts)
+        if old == "/live":
+            assert (r.status_code, r.headers.get("location")) == (301, "/watch"), r.text[:120]
+        else:
+            assert (r.status_code, r.text) == (200, f"church-site {path}"), \
+                f"{path} on {hosts}: {r.status_code} {r.text[:120]}"
+
+
 CHURCH_BUSINESS_ID = "009e9a2c-3e81-4bfc-a92a-205a8806aa99"
 
 
@@ -380,6 +432,7 @@ def test_the_churchs_own_row_installs_once_then_stays_current(pages, monkeypatch
     cfg = body["site_config"]
     assert cfg["html_source"] == "manual" and cfg["site_pages"][0] == "home"
     assert set(cfg["site_pages"]) <= set(pages)
+    assert cfg["manual_redirects"] == _church_mod().REDIRECTS
     # What was there before is kept, so the install can be undone.
     assert cfg["manual_backup"]["html_content"] == "<html>the row Giving made</html>"
 

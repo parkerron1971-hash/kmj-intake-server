@@ -187,6 +187,12 @@ app.add_middleware(GZipMiddleware, minimum_size=1024)
 # and strips Accept-Encoding before gzip decides. See sse_middleware.py.
 from sse_middleware import NoGzipForStreams
 app.add_middleware(NoGzipForStreams)
+# An old link to a hand-built site's /live page (GET /live is an API route
+# ahead of the site catch-all): a 301 to the site's own page, only for an
+# unauthenticated GET on a practitioner host whose site maps that path.
+# Every other request passes straight through. See public_site.py.
+from public_site import LegacyApiPathRedirect
+app.add_middleware(LegacyApiPathRedirect)
 # Guarantee CORS headers on ALL error responses (500/404/422/unhandled) — an
 # unhandled exception escapes CORSMiddleware otherwise, masking every error as
 # a browser CORS block. See cors_error_handlers.py.

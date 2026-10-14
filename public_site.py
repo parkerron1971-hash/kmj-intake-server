@@ -34,7 +34,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
-from site_page_helpers import secondary_pages
+from site_page_helpers import API_SHADOWED_REDIRECTS, manual_redirect, secondary_pages
 
 
 def _brand_footer_html(business_id: str) -> str:
@@ -6896,6 +6896,14 @@ async def _serve_site_by_slug(slug: str, path: str = "/") -> HTMLResponse:
                     headers={"X-Solutionist-Source": "module-composer-multipage",
                              **_PUBLIC_SITE_EDGE_CACHE_HEADERS})
 
+        # A hand-built site's old addresses (build.py REDIRECTS). Checked
+        # here, where the site would otherwise 404, so a redirect never
+        # shadows a page, a hosted door or the news feed.
+        _old_to = manual_redirect(_cfg, normalized_path) if _manual else None
+        if _old_to:
+            return RedirectResponse(url=_old_to, status_code=301,
+                                    headers={**_PUBLIC_SITE_EDGE_CACHE_HEADERS})
+
         # ─── Real 404 for anything else ────────────────────────────
         # Every unknown path used to return the home page with a 200.
         if normalized_path != "/":
@@ -7042,6 +7050,12 @@ async def _serve_site_by_custom_domain(domain: str, path: str = "/") -> HTMLResp
                     content=_page_html, media_type="text/html",
                     headers={"X-Solutionist-Source": "module-composer-multipage",
                              **_PUBLIC_SITE_EDGE_CACHE_HEADERS})
+
+        # A hand-built site's old addresses, as on the subdomain path.
+        _old_to = manual_redirect(_cfg, _norm) if _manual else None
+        if _old_to:
+            return RedirectResponse(url=_old_to, status_code=301,
+                                    headers={**_PUBLIC_SITE_EDGE_CACHE_HEADERS})
 
         if _norm != "/":
             return await _render_not_found(client, slug, biz_id, domain)
@@ -7440,6 +7454,61 @@ async def _platform_page_or_site(request: Request, render):
     if inspect.isawaitable(html):
         html = await html
     return HTMLResponse(content=html, media_type="text/html")
+
+
+# ─── Old site links that an API route would answer first ─────────────
+# GET /live is the authenticated live-stream API (live_router), registered
+# ahead of every site route, so an old link to a church's /live page got a
+# 401 JSON on the church's own domain. Routing can't ask the host first,
+# so this ASGI layer does, for that path alone. It answers only an
+# unauthenticated GET or HEAD of a path in API_SHADOWED_REDIRECTS, on a
+# practitioner host (_site_host: never the API or platform hosts), whose
+# hand-built site maps that path in its redirects. Everything else passes
+# through untouched, including every API call (those carry a bearer token
+# and a business_id), and so does any failure here.
+class LegacyApiPathRedirect:
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if (scope.get("type") == "http" and scope.get("method") in ("GET", "HEAD")
+                and (scope.get("path") or "").rstrip("/") in API_SHADOWED_REDIRECTS):
+            try:
+                response = await _api_shadowed_redirect(Request(scope))
+            except Exception as e:
+                print(f"[legacy-redirect] passed through: {e}", flush=True)
+                response = None
+            if response is not None:
+                await response(scope, receive, send)
+                return
+        await self.app(scope, receive, send)
+
+
+async def _api_shadowed_redirect(request: Request) -> Optional[Response]:
+    """The 301 for an old link on a hand-built site, or None to let the
+    request reach its API route as before."""
+    if request.headers.get("authorization") or "business_id" in request.query_params:
+        return None
+    site_host = _site_host(request)
+    if site_host is None:
+        return None
+    kind, name = site_host
+    if kind == "slug":
+        if not re.fullmatch(r"[a-z0-9-]+", name) or not _check_rate(name):
+            return None
+        path = f"/business_sites?slug=eq.{name}"
+    else:
+        domain = name[4:] if name.startswith("www.") else name
+        if not re.fullmatch(r"[a-z0-9.-]+", domain):
+            return None
+        path = f"/business_sites?site_config->>custom_domain=eq.{domain}"
+    async with httpx.AsyncClient() as client:
+        rows = await _sb(client, path + "&order=updated_at.desc&limit=1&select=site_config")
+    cfg = (rows[0].get("site_config") if rows else None) or {}
+    to = manual_redirect(cfg, request.url.path)  # hand-built sites only
+    if not to:
+        return None
+    return RedirectResponse(url=to, status_code=301, headers={**_PUBLIC_SITE_EDGE_CACHE_HEADERS})
 
 
 # ─── The platform's own news feed ─────────────────────────────────────
