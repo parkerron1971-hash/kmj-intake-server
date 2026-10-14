@@ -705,3 +705,17 @@ def test_a_refund_from_another_account_leaves_the_gift_alone(fake_sb, monkeypatc
     _post_event(monkeypatch, {"id": "evt_ref2", "type": "charge.refunded",
                               "account": "acct_123", "data": {"object": charge}})
     assert any(p.get("refund_amount_cents") == 5000 for _, p in fake_sb.patches)
+
+
+# ─── 12. A link fills the give page in (the recurring-giver move) ─────
+
+def test_give_page_reads_amount_frequency_fund_and_fee_from_its_link():
+    html = giving_router.render_give_page(
+        _church(), "https://first-light.mysolutionist.app/give",
+        "first-light", api_origin="https://api.example")
+    for key in ("q.get('amount')", "q.get('frequency')", "q.get('fund')", "q.get('cover_fee') === '1'"):
+        assert key in html
+    # Nothing personal rides in the link, and nothing is submitted for them.
+    assert "q.get('email')" not in html and "q.get('name')" not in html
+    prefill = html[html.index("A link can fill the form in"):]
+    assert "fetch(" not in prefill.split("label();")[0]
