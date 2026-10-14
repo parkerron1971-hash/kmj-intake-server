@@ -779,6 +779,8 @@ def test_wallet_domains_endpoint_is_owner_only_and_needs_stripe(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         giving_router.register_wallet_domains(BIZ, SimpleNamespace(id="u1"))
     assert exc.value.status_code == 409
+
+
 # ─── 13. The payment form opens inside the give page ─────────────────
 
 def _keys(monkeypatch, secret="sk_live_abc", publishable="pk_live_xyz"):
