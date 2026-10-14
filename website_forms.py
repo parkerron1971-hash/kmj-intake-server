@@ -28,8 +28,12 @@ def _text(value: Any, label: str, maximum: int) -> str:
 def validate(body: Dict[str, Any]) -> Dict[str, Any]:
     kind = _text(body.get("form") or "", "form", 80).replace("-", "_")
     church = kind in ("connect_card", "prayer_request")
-    data = {key: _text(body.get(key) or "", key, limit if church else PLAIN_TEXT_LIMIT)
-            for key, limit in TEXT_LIMITS.items()}
+    data = {}
+    for key, limit in TEXT_LIMITS.items():
+        value = body.get(key) or ""
+        if not church and isinstance(value, str):
+            value = value[:PLAIN_TEXT_LIMIT if key == "message" else limit]
+        data[key] = _text(value, key, limit if church or key != "message" else PLAIN_TEXT_LIMIT)
     # Unrecognized form labels used to be ignored; keep plain callers working.
     fields = body.get("fields", {})
     if not isinstance(fields, dict):
@@ -85,9 +89,12 @@ def notification_text(data: Dict[str, Any]) -> str:
 def receipt_id(business_id: str, data: Dict[str, Any]) -> str:
     """Scope retry identity to both tenant and answers, never a visitor's key alone.
 
-    Updated forms send a fresh submission_id per deliberate submission. Legacy
-    callers coalesce identical payloads; changing an answer produces a new receipt.
+    Updated forms send a fresh submission_id per deliberate submission. Without
+    a key, identical answers cannot distinguish a retry from a new submission;
+    preserve each legacy submission rather than silently dropping later messages.
     """
+    if not data.get("submission_id"):
+        return str(uuid.uuid4())
     encoded = json.dumps([business_id, data], sort_keys=True, ensure_ascii=False)
     digest = hashlib.sha256(encoded.encode("utf-8")).hexdigest()
     return str(uuid.uuid5(uuid.NAMESPACE_URL, "website-form:" + digest))
@@ -134,16 +141,20 @@ def save_prayer(business_id: str, data: Dict[str, Any], receipt: str):
     })
 
 
-def alert_church(business_id: str, kind: str, receipt: str):
-    """Only generic text enters the shared notification feed; no person or answers."""
+async def alert_church(business_id: str, kind: str, receipt: str):
+    """Use the notification preference gate, retaining atomic retry identity."""
+    import httpx
+    from notification_engine import create_urgent_alert
     prayer = kind == "prayer_request"
-    return store_once("chief_notifications", {
-        "id": str(uuid.uuid5(uuid.UUID(receipt), "notification")),
-        "business_id": business_id, "type": "urgent_alert", "priority": "normal",
-        "status": "unread", "title": "New prayer request" if prayer else "New connect card",
-        "body": ("A new prayer request is waiting in Prayer & care" if prayer else
-                 "A new connect card is waiting in Members. Open the person's Notes to read it."),
-        "suggested_action": "Open forms" if prayer else "Open Members",
-        "action_payload": {"type": "navigate", "tab": "build" if prayer else "operate",
-                           "sub": "intake-forms" if prayer else "contacts"},
-    })
+    async with httpx.AsyncClient() as client:
+        return await create_urgent_alert(
+            client, business_id,
+            "New prayer request" if prayer else "New connect card",
+            ("A new prayer request is waiting in Prayer & care" if prayer else
+             "A new connect card is waiting in Members. Open the person's Notes to read it."),
+            notification_id=str(uuid.uuid5(uuid.UUID(receipt), "notification")),
+            priority="normal",
+            suggested_action="Open forms" if prayer else "Open Members",
+            action_payload={"type": "navigate", "tab": "build" if prayer else "operate",
+                            "sub": "intake-forms" if prayer else "contacts"},
+        )

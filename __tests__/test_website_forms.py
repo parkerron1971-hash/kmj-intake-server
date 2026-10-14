@@ -20,10 +20,11 @@ def env(monkeypatch):
     state = SimpleNamespace(posts=[], patches=[], mail=[], events=[], scores=[],
                             existing=[], post_result=[{"id": "saved"}],
                             patch_result=[{"id": "saved"}], mail_status=200,
-                            mail_error=False, consents=[])
+                            mail_error=False, consents=[], business_type="ministry",
+                            notifications={})
     def get(path):
         if path.startswith("/businesses?"):
-            return [{"settings": {"email_domain": {"status": "verified", "domain": "church.org",
+            return [{"type": state.business_type, "settings": {"notifications": state.notifications, "email_domain": {"status": "verified", "domain": "church.org",
                                                        "from_local_part": "pastor"}}}]
         return copy.deepcopy(state.existing) if path.startswith("/contacts?") else []
     def post(path, payload, **kw):
@@ -44,6 +45,13 @@ def env(monkeypatch):
             if state.mail_error:
                 raise httpx.ConnectError("offline")
             return SimpleNamespace(status_code=state.mail_status)
+    import asyncio
+    import notification_engine
+    async def notification_sb(client, method, path, body=None, **kwargs):
+        if method == "GET":
+            return await asyncio.to_thread(sb_clients.sb_get_as_service, path)
+        return await asyncio.to_thread(sb_clients.sb_post_as_service, path, body, **kwargs)
+    monkeypatch.setattr(notification_engine, "_sb", notification_sb)
     monkeypatch.setattr(sb_clients, "sb_get_as_service", get)
     monkeypatch.setattr(sb_clients, "sb_post_as_service", post)
     monkeypatch.setattr(sb_clients, "sb_patch_as_service", patch)
@@ -142,22 +150,28 @@ def test_legacy_prayer_message_also_stays_private(env):
 def test_no_ok_or_notification_when_insert_fails(env, kind, result):
     env.post_result = result
     response = submit(env, form=kind)
-    assert response.status_code == 503 and response.json()["ok"] is False
-    assert response.json()["error"] and not env.scores
-    assert bool(env.mail) is (not kind)
+    if kind:
+        assert response.status_code == 503 and response.json()["ok"] is False
+        assert response.json()["error"] and not env.mail
+    else:
+        assert response.status_code == 200
+        assert response.json() == {"ok": True, "stored": False, "notification_sent": True}
+        assert len(env.mail) == 1
+    assert not env.scores
 
 
 def test_failed_update_does_not_acknowledge_an_existing_contact(env):
     env.existing = [{"id": "person", "name": "Dana Rivers", "metadata": {}}]
     env.patch_result = None
     response = submit(env)
-    assert response.status_code == 503 and response.json()["ok"] is False
+    assert response.status_code == 200
+    assert response.json() == {"ok": True, "stored": False, "notification_sent": True}
     assert len(env.mail) == 1
 
 
 def test_lookup_failure_does_not_create_duplicate(env, monkeypatch):
     monkeypatch.setattr(sb_clients, "sb_get_as_service", lambda p: None)
-    assert submit(env).status_code == 503
+    assert submit(env).json() == {"ok": True, "stored": False, "notification_sent": True}
     assert not env.posts and len(env.mail) == 1
 
 
@@ -238,7 +252,7 @@ def test_concurrent_form_retries_without_losing_either_message(env, monkeypatch)
 def test_repeated_write_conflicts_still_notify_for_plain_forms(env):
     env.existing = [{"id": "person", "name": "Dana Rivers", "updated_at": "before", "metadata": {}}]
     env.patch_result = []
-    assert submit(env).status_code == 503
+    assert submit(env).json() == {"ok": True, "stored": False, "notification_sent": True}
     assert len(env.patches) == 3 and len(env.mail) == 1
 
 
@@ -262,7 +276,7 @@ def test_public_email_override_cannot_redirect_private_prayer(env, monkeypatch):
 def test_no_recipient_still_returns_success_after_storage(env, monkeypatch, kind):
     monkeypatch.setattr(brand_engine, "get_bundle", lambda b: {"business": {"name": "Love City Church"}})
     monkeypatch.setattr(brand_engine, "_sb_get", lambda p: [{"site_config": {}}])
-    monkeypatch.setattr(sb_clients, "sb_get_as_service", lambda p: [{"settings": {}}] if p.startswith("/businesses?") else [])
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", lambda p: [{"type": "ministry", "settings": {}}] if p.startswith("/businesses?") else [])
     monkeypatch.delenv("DEFAULT_CONTACT_FALLBACK_EMAIL", raising=False)
     fields = {"request": "Please pray for us", "follow_up": True} if kind == "prayer_request" else {"notes": "Please connect with us"}
     args = {"form": kind, "fields": fields} if kind else {}
@@ -313,20 +327,26 @@ def test_connect_card_requires_a_readable_member_note_before_success(env, monkey
 
 
 @pytest.mark.parametrize("field,value", [
-    ("name", "N" * 250), ("email", "e" * 240 + "@example.org"),
+    ("name", "N" * 250), ("email", "visitor@example.org" + "e" * 240),
     ("phone", "1" * 60), ("message", "A long letter. " * 1500 + "End."),
 ], ids=["name", "email", "phone", "message"])
-def test_plain_over_church_limits_is_saved_whole_and_emailed(env, field, value):
+def test_plain_identity_is_cut_but_long_message_is_kept(env, field, value):
     assert submit(env, **{field: value}).json()["ok"] is True
     event = next(row for path, row in env.posts if path == "/events")
-    assert event["data"][field] == value
-    assert value in env.mail[0]["html"]
+    expected = value[:{"name": 200, "email": 200, "phone": 40, "message": 100000}[field]]
+    assert event["data"][field] == expected
+    assert expected in env.mail[0]["html"]
+    if field in ("name", "email"):
+        assert len(env.posts[0][1][field]) <= 200
     assert len(env.mail[0]["subject"]) <= 200
 
 
-def test_plain_hard_cap_is_explicit(env):
-    response = submit(env, message="x" * 100001)
-    assert response.status_code == 400 and not env.posts and not env.mail
+def test_plain_hard_cap_truncates_instead_of_rejecting(env):
+    response = submit(env, message="x" * 100000 + "CUT_THIS")
+    assert response.status_code == 200
+    event = next(row for path, row in env.posts if path == "/events")
+    assert event["data"]["message"] == "x" * 100000
+    assert "CUT_THIS" not in env.mail[0]["html"]
 
 
 def test_connect_answers_appear_once_in_note_and_email(env):
@@ -372,7 +392,8 @@ def test_storage_exception_reaches_stdout_with_exception(env, monkeypatch, capsy
         raise RuntimeError("database offline for test")
     monkeypatch.setattr(sb_clients, "sb_get_as_service", broken)
     response = submit(env)
-    assert response.status_code == 503 and len(env.mail) == 1
+    assert response.status_code == 200 and response.json()["stored"] is False
+    assert len(env.mail) == 1
     assert "RuntimeError('database offline for test')" in capsys.readouterr().out
 
 
@@ -509,3 +530,97 @@ def test_plain_lead_nudge_stays_on_event_loop_after_threaded_storage(env, monkey
     assert submit(env, form="connect_card").json()["ok"]
     assert submit(env, form="prayer_request").json()["ok"]
     assert len(calls) == 1
+
+
+@pytest.mark.parametrize("mode", ["http", "network", "configuration"])
+def test_plain_storage_and_notification_failure_returns_503(env, monkeypatch, mode):
+    env.post_result = None
+    if mode == "http": env.mail_status = 503
+    if mode == "network": env.mail_error = True
+    if mode == "configuration": monkeypatch.delenv("RESEND_API_KEY")
+    response = submit(env)
+    assert response.status_code == 503 and response.json()["ok"] is False
+
+
+@pytest.mark.parametrize("kind", ["connect_card", "prayer_request"])
+@pytest.mark.parametrize("business_type", ["ministry", "church", "marketing", "nonprofit", None])
+def test_church_forms_require_canonical_ministry_business(env, kind, business_type):
+    env.business_type = business_type
+    response = submit(env, form=kind)
+    if business_type in ("ministry", "church"):
+        assert response.status_code == 200 and response.json()["ok"]
+    else:
+        assert response.status_code == 400 and not response.json()["ok"]
+        assert not env.posts and not env.patches and not env.mail
+
+
+@pytest.mark.parametrize("result", [None, []])
+def test_church_business_lookup_failure_never_writes_or_emails(env, monkeypatch, result):
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", lambda path: result)
+    response = submit(env, form="prayer_request")
+    assert response.status_code == (503 if result is None else 400)
+    assert not env.posts and not env.mail
+
+
+@pytest.mark.parametrize("kind", ["connect_card", "prayer_request"])
+@pytest.mark.parametrize("key", ["urgent_alerts", "urgent_alerts_enabled"])
+def test_church_alert_honors_opt_out_without_losing_submission(env, kind, key):
+    env.notifications[key] = False
+    response = submit(env, form=kind)
+    assert response.status_code == 200 and response.json()["ok"]
+    assert env.posts and not any(path == "/chief_notifications" for path, row in env.posts)
+    assert len(env.mail) == 1
+
+
+def test_legacy_identical_message_is_a_new_receipt_and_updates_interaction(env, durable_db):
+    assert submit(env).json()["ok"]
+    contact = next(iter(durable_db.tables["contacts"].values()))
+    contact["last_interaction"] = "2026-09-01T12:00:00Z"
+    assert submit(env).json()["ok"]
+    assert len(durable_db.tables["contacts"]) == 1
+    assert len(durable_db.tables["events"]) == 2
+    assert len(contact["metadata"]["website_form_messages"]) == 2
+    assert contact["last_interaction"] != "2026-09-01T12:00:00Z"
+
+
+def test_plain_keyed_retry_keeps_single_event_and_history(env, durable_db):
+    assert submit(env, submission_id="plain-retry").json()["ok"]
+    assert submit(env, submission_id="plain-retry").json()["ok"]
+    assert len(durable_db.tables["events"]) == 1
+    contact = next(iter(durable_db.tables["contacts"].values()))
+    assert len(contact["metadata"]["website_form_messages"]) == 1
+
+
+def test_notification_transport_uses_atomic_insert_and_scoped_retry_read(monkeypatch):
+    import asyncio
+    import json
+    import notification_engine
+    monkeypatch.setattr(sb_clients, "sb_service_role", lambda: "test-service-key")
+    monkeypatch.setattr(notification_engine, "_supabase_url", lambda: "https://db.test")
+    seen = []
+    saved = {}
+    def handler(request):
+        seen.append(request)
+        if request.url.path.endswith("/businesses"):
+            return httpx.Response(200, json=[{"settings": {}}])
+        if request.method == "POST":
+            assert request.headers["prefer"] == "resolution=ignore-duplicates,return=representation"
+            payload = json.loads(request.content)
+            if saved:
+                return httpx.Response(200, json=[])
+            saved.update(payload)
+            return httpx.Response(200, json=[payload])
+        assert request.url.params["business_id"] == "eq.church-1"
+        assert request.url.params["id"] == "eq." + saved["id"]
+        return httpx.Response(200, json=[saved])
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            for _ in range(2):
+                result = await notification_engine.create_urgent_alert(
+                    client, "church-1", "New prayer request", "Open Prayer & care",
+                    notification_id="af724f0e-5656-41c6-a7cb-a832f86ccf12")
+                assert result["id"] == saved["id"]
+                saved["status"] = "read"
+            assert result["status"] == "read"
+    asyncio.run(run())
+    assert len(seen) == 5 and saved["status"] == "read"

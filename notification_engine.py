@@ -96,7 +96,8 @@ def _anthropic_key(): return os.environ.get("ANTHROPIC_API_KEY", "")
 # HELPERS
 # ═══════════════════════════════════════════════════════════════════════
 
-async def _sb(client: httpx.AsyncClient, method: str, path: str, body=None):
+async def _sb(client: httpx.AsyncClient, method: str, path: str, body=None, *,
+              prefer: str = "return=representation"):
     """Service-role Supabase call.
 
     LEDGER STAGE 0 (2026-08-03): this used the ANON key, which meant every
@@ -121,7 +122,7 @@ async def _sb(client: httpx.AsyncClient, method: str, path: str, body=None):
         "apikey": key,
         "Authorization": f"Bearer {key}",
         "Content-Type": "application/json",
-        "Prefer": "return=representation",
+        "Prefer": prefer,
     }
     resp = await client.request(method, url, headers=headers,
                                 content=json.dumps(body) if body else None,
@@ -276,7 +277,17 @@ async def _dedup_key_exists(client, biz_id: str, dedup_key: str, hours: int = UR
 
 async def _insert_notification(client, biz_id: str, payload: Dict) -> Optional[Dict]:
     payload = {**payload, "business_id": biz_id}
-    inserted = await _sb(client, "POST", "/chief_notifications", payload)
+    if payload.get("id"):
+        # Receipt-backed notifications must not duplicate or reset a read alert.
+        inserted = await _sb(client, "POST", "/chief_notifications", payload,
+                             prefer="resolution=ignore-duplicates,return=representation")
+        if inserted == []:
+            from urllib.parse import quote
+            inserted = await _sb(client, "GET",
+                f"/chief_notifications?id=eq.{quote(str(payload['id']), safe='')}"
+                f"&business_id=eq.{quote(biz_id, safe='')}&limit=1")
+    else:
+        inserted = await _sb(client, "POST", "/chief_notifications", payload)
     if inserted and isinstance(inserted, list) and inserted:
         return inserted[0]
     # Surface the failure so it doesn't silently turn into "created:false"
@@ -619,10 +630,12 @@ async def create_urgent_alert(
     related_module_id: Optional[str] = None,
     related_session_id: Optional[str] = None,
     dedup_hours: Optional[int] = None,
+    notification_id: Optional[str] = None,
 ) -> Optional[Dict]:
     """Create an urgent_alert notification. Other agents import + call this.
     Honors a per-business urgent_alerts_enabled setting and dedups on
-    dedup_key within URGENT_DEDUP_HOURS.
+    dedup_key within URGENT_DEDUP_HOURS. A stable notification_id also makes
+    receipt-backed alerts atomic across retries, without resetting read status.
 
     `dedup_hours` widens that window for alerts about a STANDING
     condition rather than a moment. A hot lead arriving is an event and
@@ -645,6 +658,7 @@ async def create_urgent_alert(
         payload_extra["dedup_key"] = dedup_key
 
     return await _insert_notification(client, business_id, {
+        **({"id": notification_id, "status": "unread"} if notification_id else {}),
         "type": "urgent_alert",
         "title": title[:200],
         "body": body[:2000],

@@ -88,3 +88,28 @@ queries are preserved with map values authoritative, and multi-site fixtures
 check host selection. 870 site/redirect/API-related tests plus eight additional
 Authorization/spoofed-host and query-duplicate probes passed. No changes were
 made to #1410's branch. Neither PR is to be merged in this session.
+
+
+Follow-up review fixes (2026-10-14): plain forms now cut name/email to 200,
+phone to 40 and message to 100,000 characters. Only message gets the larger
+limit; church validation remains strict. Accepted fallback email after a plain
+storage failure returns 200 with ok:true, stored:false, notification_sent:true;
+503 remains when neither copy succeeds. Added a browser retry-key fallback for
+missing crypto/randomUUID and tested both cases in Chromium.
+
+Church form kinds require the canonical ministry vertical. Content-free alerts
+now use notification_engine.create_urgent_alert, honoring urgent_alerts opt-out.
+An optional stable notification ID preserves atomic insert-only retry behavior
+without resetting read alerts; existing notification callers retain their path.
+Legacy callers without a submission key get a fresh receipt per request so a
+later identical message updates interaction and creates its own event. Keyed
+retries still deduplicate contact history, notes, care rows and alerts.
+
+Before rebasing, 538 site tests and 487 endpoint/dependency tests passed; the
+subsequent notification transport regression brought the standalone form suite
+to 95 passing tests. No browser tests skipped. JavaScript syntax and diff checks
+passed. #1410 is merged. Open #1414 is KAI's approved overlap exception; waiting
+for it to merge before rebasing, reading its migration on main, and running care
+inbox tests with these tests. No private_care.py or care SQL edits, live database
+writes, or push during this wait. The current overlap check found no other
+conflict (including new #1416); repeat the full check immediately before push.

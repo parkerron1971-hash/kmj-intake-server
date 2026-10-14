@@ -2387,7 +2387,7 @@ def _capture_contact_from_form(business_id: str, name: str, email: str,
                                phone_raw: str, message: str,
                                attribution: Optional[Dict[str, Any]] = None,
                                form: str = "", fields: Optional[Dict[str, Any]] = None,
-                               submission_id: str = "") -> Optional[str]:
+                               submission_id: str = "", receipt: Optional[str] = None) -> Optional[str]:
     """Bound recent metadata; retain each complete submission in an immutable event.
     Conditional updates protect concurrent cards, and receipt ids make retries safe.
     Called in a worker thread, including the synchronous database operations.
@@ -2406,7 +2406,7 @@ def _capture_contact_from_form(business_id: str, name: str, email: str,
     source = "website_contact_form"
     data = {"name": name, "email": email, "phone": phone_raw, "message": message,
             "form": form, "fields": fields or {}, "submission_id": submission_id}
-    receipt = website_forms.receipt_id(business_id, data)
+    receipt = receipt or website_forms.receipt_id(business_id, data)
     try:
         previous = website_forms.stored_row("events", receipt, business_id)
         if previous and previous.get("contact_id"):
@@ -2512,6 +2512,22 @@ async def contact_submit_endpoint(business_id: str, body: Dict[str, Any], reques
     name, email, message = data["name"], data["email"], data["message"]
     kind, fields = data["form"], data["fields"]
     church_form = kind in ("connect_card", "prayer_request")
+    church_business = {}
+    if church_form:
+        try:
+            import sb_clients
+            import vertical_registry
+            from urllib.parse import quote
+            businesses = await asyncio.to_thread(sb_clients.sb_get_as_service,
+                f"/businesses?id=eq.{quote(business_id, safe='')}&select=type,settings&limit=1")
+            if not isinstance(businesses, list):
+                raise RuntimeError("business lookup failed")
+            church_business = businesses[0] if businesses else {}
+            if vertical_registry.resolve(church_business.get("type")) != "ministry":
+                return failure(400, "Church forms are available only for ministry businesses.")
+        except Exception as exc:
+            print(f"[contact-submit] ministry lookup failed biz={business_id[:8]}: {exc!r}", flush=True)
+            return failure(503, "Your submission could not be saved. Please try again.")
     receipt = website_forms.receipt_id(business_id, data)
     stored = False
     try:
@@ -2527,7 +2543,7 @@ async def contact_submit_endpoint(business_id: str, body: Dict[str, Any], reques
             stored = bool(await asyncio.to_thread(
                 _capture_contact_from_form, business_id, name, email, data["phone"], message,
                 attribution=attribution, form=kind, fields=fields,
-                submission_id=data["submission_id"]))
+                submission_id=data["submission_id"], receipt=receipt))
             if not stored:
                 raise RuntimeError("contact capture did not confirm storage")
     except Exception as exc:
@@ -2545,7 +2561,7 @@ async def contact_submit_endpoint(business_id: str, body: Dict[str, Any], reques
 
     if church_form:
         try:
-            await asyncio.to_thread(website_forms.alert_church, business_id, kind, receipt)
+            await website_forms.alert_church(business_id, kind, receipt)
         except Exception as exc:
             # The saved request remains readable; never ask the visitor to repeat it.
             print(f"[contact-submit] in-app alert failed biz={business_id[:8]}: {exc!r}", flush=True)
@@ -2554,8 +2570,9 @@ async def contact_submit_endpoint(business_id: str, body: Dict[str, Any], reques
 
     def outcome(sent):
         if not stored:
-            # Older published scripts cannot be repaired server-side. Preserve
-            # their email safety net, while honest clients still see a failure.
+            if sent:
+                return {"ok": True, "stored": False, "notification_sent": True}
+            # Neither storage nor the legacy email safety net retained a copy.
             return failure(503, "Your submission could not be fully saved. Please try again.")
         return {"ok": True, "notification_sent": sent}
 
@@ -2596,15 +2613,7 @@ async def contact_submit_endpoint(business_id: str, body: Dict[str, Any], reques
     if church_form:
         # Match the manual site's verified sender; never use a public override,
         # visitor-supplied recipient, or the platform fallback for private care.
-        try:
-            import sb_clients
-            from urllib.parse import quote
-            businesses = await asyncio.to_thread(sb_clients.sb_get_as_service,
-                f"/businesses?id=eq.{quote(business_id, safe='')}&select=settings&limit=1")
-            settings = businesses[0].get("settings") if isinstance(businesses, list) and businesses else {}
-            target_email = _business_public_email(settings)
-        except Exception:
-            target_email = ""
+        target_email = _business_public_email(church_business.get("settings"))
 
     if not target_email:
         return notification_failed

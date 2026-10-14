@@ -106,7 +106,9 @@
       var fingerprint = JSON.stringify(payload);
       if (fingerprint !== pendingPayload) {
         pendingPayload = fingerprint;
-        pendingId = crypto.randomUUID();
+        pendingId = (window.crypto && typeof window.crypto.randomUUID === "function")
+          ? window.crypto.randomUUID()
+          : Date.now().toString(36) + "-" + Math.random().toString(36).slice(2);
       }
       payload.submission_id = pendingId;
       button.disabled = true;

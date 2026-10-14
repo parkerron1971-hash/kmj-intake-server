@@ -651,3 +651,28 @@ def test_validation_error_is_shown_as_text_and_keeps_answers(browser, pages):
     assert note.locator("b").count() == 0
     assert page.input_value("#pr-request").startswith("Please pray")
     ctx.close()
+
+
+@pytest.mark.parametrize("missing", ["randomUUID", "crypto"])
+def test_form_submission_without_random_uuid(browser, pages, missing):
+    ctx = _context(browser, pages)
+    ctx.add_init_script(FETCH_STUB)
+    ctx.add_init_script("Object.defineProperty(" +
+                        ("window.crypto, 'randomUUID'" if missing == "randomUUID" else "window, 'crypto'") +
+                        ", {value: undefined});")
+    page = ctx.new_page()
+    page.goto(ORIGIN + "connect")
+    errors = []
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    failed = {"status": 503, "body": {"ok": False}}
+    _send_prayer(page, failed)
+    _send_prayer(page, failed)
+    sent = page.evaluate("window.__sent")
+    key = sent[0]["body"]["submission_id"]
+    assert key and len(key) <= 80 and sent[1]["body"]["submission_id"] == key
+    note = _send_prayer(page, {"status": 200, "body": {"ok": True, "notification_sent": False}})
+    assert "Thank you" in note.text_content()
+    _send_prayer(page, failed)
+    assert page.evaluate("window.__sent.at(-1).body.submission_id") != key
+    assert not errors
+    ctx.close()
