@@ -216,3 +216,251 @@ def test_pages_carry_override_targets_and_no_leftover_facts(built_pages):
         assert "data-override-target=" in html, name
         assert "(555)" not in html and "kmjcreative.co" not in html, name
         assert "$25" not in html and "Tues" not in html, name
+
+
+CUSTOM_PAGE_IDS = ["visit", "about", "beliefs", "sermons", "give", "ministries", "events", "connect", "watch"]
+
+
+@pytest.fixture
+def custom_manual_site(monkeypatch):
+    pages = {pid: '<html><head></head><body>' + PAGE.replace("home.hero.lead", pid + ".hero.lead")
+             + f'<nav><a href="/{pid}">{pid}</a></nav></body></html>' for pid in CUSTOM_PAGE_IDS}
+    row = {"slug": "church", "business_id": "biz-1", "html_content": "HOME",
+           "site_config": {"html_source": "manual", "site_pages": ["home"] + CUSTOM_PAGE_IDS,
+                           "generated_pages": pages, "custom_domain": "church.example"}}
+
+    async def fake_sb(client, path):
+        if path.startswith("/business_sites?"):
+            return [row]
+        if path.startswith("/businesses?"):
+            return [{"settings": VERIFIED}]
+        return []
+
+    monkeypatch.setattr(public_site, "_sb", fake_sb)
+    monkeypatch.setattr(public_site, "_check_rate", lambda slug: True)
+    monkeypatch.setattr(public_site, "_inject_brand_meta", lambda html, biz: html)
+    monkeypatch.setattr("agents.override_system.override_resolver.resolve_html_overrides",
+                        lambda html, biz: html.replace(">old lead<", ">custom page edited<"))
+    return row
+
+
+@pytest.mark.parametrize("pid", CUSTOM_PAGE_IDS)
+@pytest.mark.parametrize("custom_domain", [False, True])
+def test_every_custom_page_serves_on_both_public_hosts(monkeypatch, custom_manual_site, pid, custom_domain):
+    import asyncio
+    calls = []
+
+    async def augment(client, biz, slug, html, custom_domain=None, page_path="", manual=False):
+        calls.append((page_path, manual))
+        html = public_site._apply_manual_source(html, biz, VERIFIED) if manual else html
+        return public_site._inject_canonical(html, slug, custom_domain, page_path)
+
+    monkeypatch.setattr(public_site, "_augment_html", augment)
+    serve = public_site._serve_site_by_custom_domain if custom_domain else public_site._serve_site_by_slug
+    response = asyncio.run(serve("church.example" if custom_domain else "church", "/" + pid + "/"))
+    body = response.body.decode()
+    assert response.status_code == 200
+    assert response.headers["X-Solutionist-Source"] == "manual-site"
+    assert calls == [("/" + pid, True)]
+    assert 'href="https://church.example/' + pid + '"' in body
+    assert "custom page edited" in body and "kevin@kmjcreate.com" in body
+
+
+@pytest.mark.parametrize("pid", CUSTOM_PAGE_IDS)
+def test_preview_serves_custom_page_with_overrides_and_its_own_canonical(custom_manual_site, pid):
+    import asyncio
+    response = asyncio.run(public_site.get_site_page_html("church", pid))
+    body = response.body.decode()
+    assert response.status_code == 200
+    assert response.headers["X-Solutionist-Source"] == "manual-site"
+    assert "custom page edited" in body and "kevin@kmjcreate.com" in body
+    assert 'href="https://church.example/' + pid + '"' in body
+    assert 'href="/public/site/church/' + pid + '"' in body
+
+
+@pytest.mark.parametrize("custom_domain", [False, True])
+@pytest.mark.parametrize("pid,handler", [("give", "_serve_give_page"), ("events", "_serve_events_page"),
+                                        ("book", "_serve_booking_page"), ("store", "_serve_store_page")])
+def test_hosted_pages_still_serve_when_no_manual_page_claims_path(monkeypatch, custom_manual_site, custom_domain, pid, handler):
+    import asyncio
+    custom_manual_site["site_config"]["generated_pages"].pop(pid, None)
+
+    async def hosted(*args, **kwargs):
+        return public_site.HTMLResponse("hosted " + pid)
+
+    monkeypatch.setattr(public_site, handler, hosted)
+    serve = public_site._serve_site_by_custom_domain if custom_domain else public_site._serve_site_by_slug
+    response = asyncio.run(serve("church.example" if custom_domain else "church", "/" + pid))
+    assert response.body.decode() == "hosted " + pid
+
+
+@pytest.mark.parametrize("custom_domain", [False, True])
+def test_custom_manual_routes_respect_offline_and_unknown_path(monkeypatch, custom_manual_site, custom_domain):
+    import asyncio
+
+    async def missing(*args, **kwargs):
+        return public_site.HTMLResponse("missing", status_code=404)
+
+    async def offline(*args, **kwargs):
+        return public_site.HTMLResponse("offline")
+
+    monkeypatch.setattr(public_site, "_render_not_found", missing)
+    monkeypatch.setattr(public_site, "_render_offline_page", offline)
+    serve = public_site._serve_site_by_custom_domain if custom_domain else public_site._serve_site_by_slug
+    host = "church.example" if custom_domain else "church"
+    assert asyncio.run(serve(host, "/unknown")).status_code == 404
+    custom_manual_site["site_config"]["offline"] = True
+    assert asyncio.run(serve(host, "/visit")).body.decode() == "offline"
+
+
+@pytest.mark.parametrize("host", ["church.mysolutionist.app", "church.example"])
+def test_composed_pages_keep_main_routes_through_the_real_app(monkeypatch, custom_manual_site, host):
+    import no_card_trial
+    import site_check
+    import sb_clients
+    from fastapi.testclient import TestClient
+    from kmj_intake_automation import app
+
+    cfg = custom_manual_site["site_config"]
+    cfg.update(html_source="module-composer", offer_page={"path": "/saturday-shave-club"},
+               generated_pages={"about": "<html>ABOUT</html>", "offer": "<html><head></head><body>OFFER</body></html>",
+                                "faq": "<html>STALE FAQ</html>", "give": "<html>STALE GIVE</html>"})
+
+    async def visible(*args):
+        return False
+
+    async def augment(client, biz, slug, html, **kwargs):
+        return public_site._inject_canonical(html, slug, kwargs.get("custom_domain"), kwargs.get("page_path", ""))
+
+    async def missing(*args):
+        return public_site.HTMLResponse("missing", status_code=404)
+
+    async def hosted(*args):
+        return public_site.HTMLResponse("HOSTED GIVING")
+
+    monkeypatch.setattr(no_card_trial, "site_hidden", visible)
+    monkeypatch.setattr(public_site, "_augment_html", augment)
+    monkeypatch.setattr(public_site, "_render_not_found", missing)
+    monkeypatch.setattr(public_site, "_serve_give_page", hosted)
+    monkeypatch.setattr(public_site, "secondary_pages", lambda cfg: pytest.fail("composed pages must use main's routing"))
+    with_client = TestClient(app, base_url="https://" + host)
+    try:
+        assert with_client.get("/about").status_code == 200
+        assert with_client.get("/offer").status_code == 404
+        assert with_client.get("/faq").status_code == 404
+        offer = with_client.get("/saturday-shave-club")
+        assert offer.status_code == 200 and "OFFER" in offer.text
+        assert 'href="https://church.example/saturday-shave-club"' in offer.text
+        assert with_client.get("/give").text == "HOSTED GIVING"
+    finally:
+        with_client.close()
+    xml = public_site._site_sitemap_xml("church", cfg, "church.example")
+    assert "https://church.example/saturday-shave-club</loc>" in xml
+    assert "/offer</loc>" not in xml and "/faq</loc>" not in xml and "/give</loc>" not in xml
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", lambda path: [custom_manual_site])
+    monkeypatch.setattr(site_check, "secondary_pages", lambda cfg: pytest.fail("composed check must use main's paths"))
+    assert site_check.site_pages("biz-1")[1] == [
+        "https://church.example/", "https://church.example/about", "https://church.example/saturday-shave-club"]
+
+
+@pytest.mark.parametrize("custom_domain", [False, True])
+def test_manual_sermon_index_and_hosted_detail_paths_have_explicit_owners(monkeypatch, custom_manual_site, custom_domain):
+    import asyncio
+    import no_card_trial
+    sermon_id = "b25fcb29-0837-4f7c-9d9a-2bfbcaf0bdee"
+    hosted_paths = []
+
+    async def visible(*args):
+        return False
+
+    async def augment(client, biz, slug, html, **kwargs):
+        assert kwargs["manual"] is True
+        return "MANUAL SERMON INDEX"
+
+    async def hosted(client, biz, slug, path):
+        hosted_paths.append(path)
+        return public_site.HTMLResponse("HOSTED SERMON DETAIL")
+
+    monkeypatch.setattr(no_card_trial, "site_hidden", visible)
+    monkeypatch.setattr(public_site, "_augment_html", augment)
+    monkeypatch.setattr(public_site, "_serve_sermons_page", hosted)
+    serve = public_site._serve_site_by_custom_domain if custom_domain else public_site._serve_site_by_slug
+    host = "church.example" if custom_domain else "church"
+    assert asyncio.run(serve(host, "/sermons")).body.decode() == "MANUAL SERMON INDEX"
+    assert asyncio.run(serve(host, "/sermons/" + sermon_id)).body.decode() == "HOSTED SERMON DETAIL"
+    assert hosted_paths == ["/sermons/" + sermon_id]
+    xml = public_site._site_sitemap_xml("church", custom_manual_site["site_config"], "church.example")
+    assert xml.count("<loc>https://church.example/sermons</loc>") == 1
+
+
+def test_manual_custom_preview_preserves_pv_gate_and_fallback(monkeypatch, custom_manual_site):
+    import asyncio
+    import no_card_trial
+    seen = []
+
+    async def blocked(client, biz, pv):
+        seen.append((biz, pv))
+        return pv != "team-token"
+
+    async def offline(*args, **kwargs):
+        assert kwargs["coming_soon"] is True
+        return public_site.HTMLResponse("COMING SOON")
+
+    async def home(slug, pv):
+        return public_site.HTMLResponse("HOME " + pv)
+
+    monkeypatch.setattr(no_card_trial, "preview_blocked", blocked)
+    monkeypatch.setattr(public_site, "_render_offline_page", offline)
+    assert asyncio.run(public_site.get_site_page_html("church", "visit")).body.decode() == "COMING SOON"
+    allowed = asyncio.run(public_site.get_site_page_html("church", "visit", "team-token"))
+    assert allowed.headers["X-Solutionist-Source"] == "manual-site"
+    monkeypatch.setattr(public_site, "get_site_html", home)
+    assert asyncio.run(public_site.get_site_page_html("church", "missing", "team-token")).body.decode() == "HOME team-token"
+    assert seen == [("biz-1", None), ("biz-1", "team-token"), ("biz-1", "team-token")]
+
+
+@pytest.mark.parametrize("custom_domain", [False, True])
+def test_manual_page_cannot_bypass_no_card_public_gate(monkeypatch, custom_manual_site, custom_domain):
+    import asyncio
+    import no_card_trial
+
+    async def hidden(*args):
+        return True
+
+    async def offline(*args, **kwargs):
+        assert kwargs["coming_soon"] is True
+        return public_site.HTMLResponse("COMING SOON")
+
+    monkeypatch.setattr(no_card_trial, "site_hidden", hidden)
+    monkeypatch.setattr(public_site, "_render_offline_page", offline)
+    serve = public_site._serve_site_by_custom_domain if custom_domain else public_site._serve_site_by_slug
+    assert asyncio.run(serve("church.example" if custom_domain else "church", "/sermons")).body.decode() == "COMING SOON"
+
+
+@pytest.mark.parametrize("source,offer_href", [
+    ("module-composer", "/saturday-shave-club"),
+    ("manual", "/public/site/acme/saturday-shave-club"),
+])
+def test_home_preview_keeps_main_composed_offer_link_and_rewrites_manual_link(
+        monkeypatch, custom_manual_site, source, offer_href):
+    import asyncio
+    from unittest.mock import AsyncMock
+
+    custom_manual_site["html_content"] = (
+        '<html><head></head><body><nav class="sxm-header-pagenav">'
+        '<a href="/about">About</a><a href="/saturday-shave-club">Club</a>'
+        '</nav></body></html>')
+    cfg = custom_manual_site["site_config"]
+    cfg.update(html_source=source, offer_page={"path": "/saturday-shave-club"})
+    page_id = "offer" if source == "module-composer" else "saturday-shave-club"
+    cfg["generated_pages"][page_id] = "OFFER"
+    monkeypatch.setattr(public_site, "_use_smart_sites", lambda site: False)
+    monkeypatch.setattr("no_card_trial.preview_blocked", AsyncMock(return_value=False))
+
+    response = asyncio.run(public_site.get_site_html("acme"))
+    body = response.body.decode()
+    assert response.status_code == 200
+    assert f'href="{offer_href}"' in body
+    assert 'href="/public/site/acme/about"' in body
+    if source == "module-composer":
+        assert 'href="/public/site/acme/saturday-shave-club"' not in body

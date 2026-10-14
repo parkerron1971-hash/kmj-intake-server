@@ -196,3 +196,16 @@ def test_both_serve_paths_pass_the_custom_domain_into_augment():
     for fn in (ps._serve_site_by_slug, ps._serve_site_by_custom_domain):
         src = inspect.getsource(fn)
         assert "custom_domain=" in src, f"{fn.__name__} drops custom_domain"
+
+
+def test_sitemap_includes_all_custom_pages_in_site_order_without_duplicate_doors(monkeypatch):
+    import offering_profiles
+    import xml.etree.ElementTree as ET
+    monkeypatch.setattr(offering_profiles, "business_state", lambda biz: {"booking_enabled": True})
+    ids = ["home", "visit", "about", "beliefs", "sermons", "give", "ministries", "events", "connect", "watch", "book"]
+    cfg = {"html_source": "manual", "_business_id": "biz-1", "site_pages": ids,
+           "generated_pages": {pid: "page" for pid in reversed(ids[1:])}}
+    cfg["generated_pages"].update({"../bad": "bad", "empty": " ", "bad-type": None})
+    xml = ps._site_sitemap_xml("church", cfg, "church.example")
+    locs = [e.text for e in ET.fromstring(xml).iter() if e.tag.endswith("loc")]
+    assert locs == ["https://church.example" + ("/" if p == "home" else "/" + p) for p in ids]

@@ -34,6 +34,8 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
+from site_page_helpers import secondary_pages
+
 
 def _brand_footer_html(business_id: str) -> str:
     """Return a small footer block (copyright + legal disclaimers) sourced
@@ -358,9 +360,8 @@ def _public_origin(slug: str, custom_domain: Optional[str] = None) -> str:
     return f"https://{cd}" if cd else f"https://{slug}.mysolutionist.app"
 
 
-# Findability bundle (2026-08-02). Secondary pages of a composed
-# multi-page site are stored in site_config.generated_pages keyed by
-# page_id; these are the clean public paths that map onto them.
+# Composed sites keep these clean paths plus their configured offer path.
+# Hand-built sites use their validated stored page IDs instead.
 _SITE_PAGE_PATHS = {"/about": "about", "/services": "services", "/contact": "contact"}
 
 
@@ -368,6 +369,8 @@ def _preview_page_id(cfg: Dict[str, Any], page_path: str) -> str:
     """The Studio previews a page by its id (/public/site/{slug}/offer)
     and a visitor's link by its path (/six-week-wheel-course); both reach
     the offer page."""
+    if _is_manual_source(cfg):
+        return page_path if page_path in secondary_pages(cfg) else "home"
     import studio_page_types
     p = (page_path or "").strip("/")
     if p == "offer" or _site_page_id(cfg, "/" + p) == "offer":
@@ -406,6 +409,22 @@ def _rewrite_nav_for_preview(html: str, slug: str,
     """
     if not html:
         return html
+    if _is_manual_source(cfg):
+        base = f"/public/site/{slug}"
+        paths = {"/": base}
+        paths.update({f"/{pid}": f"{base}/{pid}" for pid in secondary_pages(cfg)})
+
+        def rewrite_link(match):
+            quote, path, suffix = match.group(1, 2, 3)
+            target = paths.get(path.rstrip("/") or "/")
+            return f"href={quote}{target}{suffix or ''}{quote}" if target else match.group(0)
+
+        out = re.sub(r"href=([\"'])(/[^\"'?#]*)([?#][^\"']*)?\1",
+                     rewrite_link, html)
+        # Unclaimed transactional doors still use their public handlers.
+        for sub in _ALWAYS_WINS_PATHS:
+            out = out.replace(f'href="{sub}"', f'href="https://{slug}.mysolutionist.app{sub}"')
+        return out
     out = html
     # Cross-page nav (multi-page sites only).
     if "sxm-header-pagenav" in html:
@@ -461,14 +480,17 @@ def _site_sitemap_xml(slug: str, cfg: Dict[str, Any],
     origin = _public_origin(slug, custom_domain)
     urls: List[str] = [origin + "/"]
 
-    pages = cfg.get("generated_pages")
-    if isinstance(pages, dict):
-        for path, page_id in _SITE_PAGE_PATHS.items():
-            if (pages.get(page_id) or "").strip():
-                urls.append(origin + path)
-        _offer = cfg.get("offer_page") if isinstance(cfg.get("offer_page"), dict) else {}
-        if _offer.get("path") and (pages.get("offer") or "").strip():
-            urls.append(origin + _offer["path"])
+    if _is_manual_source(cfg):
+        urls.extend(origin + "/" + pid for pid in secondary_pages(cfg))
+    else:
+        pages = cfg.get("generated_pages")
+        if isinstance(pages, dict):
+            for path, page_id in _SITE_PAGE_PATHS.items():
+                if (pages.get(page_id) or "").strip():
+                    urls.append(origin + path)
+            _offer = cfg.get("offer_page") if isinstance(cfg.get("offer_page"), dict) else {}
+            if _offer.get("path") and (pages.get("offer") or "").strip():
+                urls.append(origin + _offer["path"])
 
     # News, listed only once something has been written — an archive
     # page reading "nothing posted yet" is a real URL but not one worth
@@ -488,7 +510,7 @@ def _site_sitemap_xml(slug: str, cfg: Dict[str, Any],
         urls.append(origin + "/book")
 
     body = "".join(
-        f"\n  <url><loc>{u}</loc><changefreq>weekly</changefreq></url>" for u in urls)
+        f"\n  <url><loc>{u}</loc><changefreq>weekly</changefreq></url>" for u in dict.fromkeys(urls))
     return ('<?xml version="1.0" encoding="UTF-8"?>\n'
             '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
             f'{body}\n</urlset>\n')
@@ -1666,7 +1688,7 @@ async def get_site_html(slug: str, pv: Optional[str] = None):
         )
         # Preview base only — keeps the studio iframe navigable now that
         # the stored nav is root-relative for the real site.
-        html = _rewrite_nav_for_preview(html, slug)
+        html = _rewrite_nav_for_preview(html, slug, site.get("site_config") if manual else None)
         return HTMLResponse(
             content=html,
             status_code=200,
@@ -1856,7 +1878,6 @@ async def get_site_page_html(slug: str, page_path: str, pv: Optional[str] = None
     shadows it. Unknown sub-paths or single-page sites fall back to home."""
     if not _check_rate(slug):
         raise HTTPException(429, "Rate limit exceeded")
-    import studio_page_types
     async with httpx.AsyncClient() as client:
         sites = await _sb(client,
             f"/business_sites?slug=eq.{slug}&order=updated_at.desc&limit=1"
@@ -1870,7 +1891,8 @@ async def get_site_page_html(slug: str, page_path: str, pv: Optional[str] = None
         if await no_card_trial.preview_blocked(client, biz_id, pv):
             return await _render_offline_page(client, biz_id, coming_soon=True)
         cfg = sites[0].get("site_config") or {}
-        pages = cfg.get("generated_pages") if isinstance(cfg.get("generated_pages"), dict) else {}
+        pages = (secondary_pages(cfg) if _is_manual_source(cfg) else
+                 cfg.get("generated_pages") if isinstance(cfg.get("generated_pages"), dict) else {})
         page_id = _preview_page_id(cfg, page_path)
         html = (pages or {}).get(page_id) or ""
         if not html:
@@ -6742,10 +6764,23 @@ async def _serve_site_by_slug(slug: str, path: str = "/") -> HTMLResponse:
             return await _render_offline_page(client, biz_id, coming_soon=True)
 
         # ─── Phase D.2.1 — hosted booking page routing ─────────────
-        # /book always serves the booking page (overrides MySite for
-        # the booking sub-path). / redirects to /book when the site
+        # /book serves the hosted booking page unless a manual page
+        # claims it. / redirects to /book when the site
         # has no MySite html_content (booking_only row).
         normalized_path = path.rstrip("/") or "/"
+        # An explicit hand-built page owns its path, including /give
+        # and /events. Only the bare /sermons path is claimed; sermon
+        # detail pages remain hosted and link back to this manual index.
+        manual_page = (secondary_pages(_cfg).get(normalized_path[1:])
+                       if _is_manual_source(_cfg) else None)
+        if manual_page:
+            html = await _augment_html(
+                client, biz_id, slug, manual_page,
+                custom_domain=_cfg.get("custom_domain"), page_path=normalized_path, manual=True)
+            return HTMLResponse(
+                content=html, media_type="text/html",
+                headers={"X-Solutionist-Source": "manual-site",
+                         **_PUBLIC_SITE_EDGE_CACHE_HEADERS})
         if normalized_path == "/book":
             return await _serve_booking_page(client, biz_id, slug)
         # Online giving — /give serves the hosted give page (same
@@ -6850,16 +6885,15 @@ async def _serve_site_by_slug(slug: str, path: str = "/") -> HTMLResponse:
         _manual = _is_manual_source(_cfg)
         _pages = _cfg.get("generated_pages")
         _page_id = _site_page_id(_cfg, normalized_path)
-        if _page_id and isinstance(_pages, dict):
+        if not _manual and _page_id and isinstance(_pages, dict):
             _page_html = (_pages.get(_page_id) or "").strip()
             if _page_html:
                 _page_html = await _augment_html(
                     client, biz_id, slug, _page_html,
-                    custom_domain=_cd, page_path=normalized_path, manual=_manual)
+                    custom_domain=_cd, page_path=normalized_path)
                 return HTMLResponse(
                     content=_page_html, media_type="text/html",
-                    headers={"X-Solutionist-Source": "manual-site" if _manual
-                             else "module-composer-multipage",
+                    headers={"X-Solutionist-Source": "module-composer-multipage",
                              **_PUBLIC_SITE_EDGE_CACHE_HEADERS})
 
         # ─── Real 404 for anything else ────────────────────────────
@@ -6921,6 +6955,19 @@ async def _serve_site_by_custom_domain(domain: str, path: str = "/") -> HTMLResp
         # Academy subpaths work on custom domains too (parity with the
         # subdomain path).
         _norm = path.rstrip("/") or "/"
+        # An explicit hand-built page owns its path, including /give
+        # and /events. Only the bare /sermons path is claimed; sermon
+        # detail pages remain hosted and link back to this manual index.
+        manual_page = (secondary_pages(_cfg).get(_norm[1:])
+                       if _is_manual_source(_cfg) else None)
+        if manual_page:
+            html = await _augment_html(
+                client, biz_id, slug, manual_page,
+                custom_domain=domain, page_path=_norm, manual=True)
+            return HTMLResponse(
+                content=html, media_type="text/html",
+                headers={"X-Solutionist-Source": "manual-site",
+                         **_PUBLIC_SITE_EDGE_CACHE_HEADERS})
         if _norm == "/academy" or _norm.startswith("/academy/"):
             return await _serve_academy(client, biz_id, _norm, standalone=False)
         # Online giving works on custom domains too — a church that
@@ -6985,16 +7032,15 @@ async def _serve_site_by_custom_domain(domain: str, path: str = "/") -> HTMLResp
         _manual = _is_manual_source(_cfg)
         _pages = _cfg.get("generated_pages")
         _page_id = _site_page_id(_cfg, _norm)
-        if _page_id and isinstance(_pages, dict):
+        if not _manual and _page_id and isinstance(_pages, dict):
             _page_html = (_pages.get(_page_id) or "").strip()
             if _page_html:
                 _page_html = await _augment_html(
                     client, biz_id, slug, _page_html,
-                    custom_domain=domain, page_path=_norm, manual=_manual)
+                    custom_domain=domain, page_path=_norm)
                 return HTMLResponse(
                     content=_page_html, media_type="text/html",
-                    headers={"X-Solutionist-Source": "manual-site" if _manual
-                             else "module-composer-multipage",
+                    headers={"X-Solutionist-Source": "module-composer-multipage",
                              **_PUBLIC_SITE_EDGE_CACHE_HEADERS})
 
         if _norm != "/":

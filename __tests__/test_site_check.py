@@ -217,3 +217,59 @@ def test_job_runner_dispatches_site_check(monkeypatch):
     out = chief_jobs._execute_kind("site_check", "biz-1", {"reason": "chief", "vision": False}, "job-1")
     assert seen == {"biz": "biz-1", "reason": "chief", "vision": False}
     assert out["summary"] == "All clear"
+
+
+def test_checks_every_custom_page_in_site_order(monkeypatch):
+    import sb_clients
+    ids = ["home", "visit", "about", "beliefs", "sermons", "give",
+           "ministries", "events", "connect", "watch"]
+    row = {"slug": "church", "html_content": "home", "site_config": {
+        "html_source": "manual", "site_pages": ids,
+        "generated_pages": {pid: "page" for pid in reversed(ids[1:])}}}
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", lambda p: [row])
+    assert site_check.site_pages("biz-1")[1] == [
+        "https://church.mysolutionist.app" + ("/" if p == "home" else "/" + p) for p in ids]
+
+
+@pytest.mark.parametrize("reason,expected", [("deploy", 4), ("manual", 20)])
+def test_deploy_checks_bound_browser_and_vision_work_but_manual_checks_keep_all_pages(monkeypatch, reason, expected):
+    row = {"id": "row-1", "slug": "church", "html_content": "home", "site_config": {
+        "html_source": "manual", "site_pages": ["home"] + [f"page-{n}" for n in range(19)],
+        "generated_pages": {f"page-{n}": "page" for n in range(19)}}}
+    _wire(monkeypatch, row, [])
+    inspected, visions = [], []
+
+    def inspect(urls, **kwargs):
+        inspected.extend(urls)
+        return [{"url": u, "widths": {}, "shots": {}} for u in urls]
+
+    monkeypatch.setattr(site_check, "inspect_pages", inspect)
+    monkeypatch.setattr(site_check, "vision_findings", lambda page, biz: visions.append(page["url"]) or [])
+    report = site_check.run("biz-1", reason=reason, vision=True)
+    assert report["ok"] and len(inspected) == expected
+    assert inspected[0] == "https://church.mysolutionist.app/"
+    assert visions == inspected
+    assert [p["url"] for p in report["pages"]] == inspected
+    if reason == "deploy":
+        assert report["page_limit"] == site_check.DEPLOY_PAGE_LIMIT
+        assert report["pages_available"] == 20
+    else:
+        assert "page_limit" not in report
+
+
+def test_composed_deploy_check_keeps_every_main_page_including_offer(monkeypatch):
+    row = {"id": "row-1", "slug": "acme", "html_content": "home", "site_config": {
+        "html_source": "module-composer", "offer_page": {"path": "/club"},
+        "generated_pages": {pid: "page" for pid in ("about", "services", "contact", "offer", "faq")}}}
+    _wire(monkeypatch, row, [])
+    inspected = []
+
+    def inspect(urls, **kwargs):
+        inspected.extend(urls)
+        return [{"url": u, "widths": {}, "shots": {}} for u in urls]
+
+    monkeypatch.setattr(site_check, "inspect_pages", inspect)
+    report = site_check.run("biz-1", reason="deploy", vision=False)
+    assert report["ok"] and "page_limit" not in report
+    assert inspected == ["https://acme.mysolutionist.app" + p
+                         for p in ("/", "/about", "/services", "/contact", "/club")]

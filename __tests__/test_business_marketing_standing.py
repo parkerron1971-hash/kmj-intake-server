@@ -171,6 +171,8 @@ def m(c, monkeypatch):
     monkeypatch.setattr(sb_clients, 'sb_post_as_service', service_post)
     monkeypatch.setattr(audit_log, 'record', lambda bid, **kw: c.audit.append({'business_id': bid, **kw}) or True)
     monkeypatch.setattr(sp, '_now', lambda: c.now)
+    # The sender must share the fake week's clock, not expire it as real time passes.
+    monkeypatch.setattr(d, 'now', lambda: c.now)
     c.client.app.include_router(sp.router)
     return c
 
