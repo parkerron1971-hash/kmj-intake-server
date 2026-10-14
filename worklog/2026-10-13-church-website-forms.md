@@ -74,3 +74,17 @@ syntax and git diff --check passed. Full CI is required before handing back.
 
 Final targeted rerun after preserving the plain-contact lead wakeup on the event
 loop: 138 passed. Church forms still never wake the lead agent.
+
+Rebase/re-review (2026-10-14): rebased #1409 cleanly onto origin/main 72a75323,
+including W10's photo PR #1411 (b2a2ae02) and the Subsplash exit plan #1412.
+Read the photo worklog; no site/form conflicts needed manual resolution.
+Range-diff confirms all four implementation commits retained their patches.
+All site suites and form/lead/ministry/event/notification regressions passed:
+749 tests, including real Chromium, no skips. JavaScript syntax and diff checks
+passed. A temporary merge with #1410 at ac56fee4 is conflict-free.
+
+Read-only re-review of #1410: the API-interception layer is removed, visitor
+queries are preserved with map values authoritative, and multi-site fixtures
+check host selection. 870 site/redirect/API-related tests plus eight additional
+Authorization/spoofed-host and query-duplicate probes passed. No changes were
+made to #1410's branch. Neither PR is to be merged in this session.
