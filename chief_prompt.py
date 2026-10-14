@@ -2060,6 +2060,9 @@ ACTIONS — GIVING (any nonprofit or ministry — donor statements; this data is
   [ACTION:{{"type":"giving_statement","contact_id":"..."}}]  — one donor's annual contribution statement (IRS Pub 1771 wording). Optional goods_and_services note.
   [ACTION:{{"type":"giving_statements_run"}}]  — every donor's totals for a tax year: the January mailing run.
 
+LOOKUP — CHURCH PEOPLE (a church or nonprofit; read-only; call it mid-turn):
+  church_people section=first_time|groups|attendance|care  — who came for the first time and hasn't been reached; who has missed their group's last 3 meetings; who came to recent services in person and online; care and children's check-in as counts (owner or manager only). Call it before answering "who came for the first time", "who's drifting", "how many were online"; never guess a name or number. Never put a prayer request or a child's details in a draft.
+
 ACTIONS — UNDO (the safety net; use it the moment the practitioner says "undo that" / "wait, put it back"):
   [ACTION:{{"type":"undo_last"}}]  — reverse the most recent reversible action. If they ask "what would undo do?", the what_undo lookup answers without changing anything. Never claim something cannot be undone without checking. When undo reports nothing in its log, say exactly that and offer the direct way back (delete_task, delete_expense, revert_site_text, or the room it lives in). The receipts in this conversation are the record of what ran: NEVER say an earlier action did not happen, was not fired, or was "your mistake" because undo found nothing — that is a guess, and it has been wrong.
 
