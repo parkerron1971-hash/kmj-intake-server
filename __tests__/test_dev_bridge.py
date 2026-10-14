@@ -489,3 +489,111 @@ class TestKevinsPhone:
         monkeypatch.setattr(push_notifications, "push_enabled", lambda: True)
         monkeypatch.setattr(platform_watchdog, "_owner_user_id", boom)
         assert _run(dev_bridge._tell_kevin(None, {"id": "t-9"}, "T", "B")) == 0
+
+
+# ─── Handing a session to the phone (2026-10-14) ─────────────────────────
+
+class TestHandoff:
+    def test_handing_off_shows_the_screen_says_so_and_tells_the_phone(self, monkeypatch):
+        fake = _wire(monkeypatch, [dict(DESKTOP, notes=[
+            {"from": "session", "at": _ago(60), "text": "older screen"}])])
+        sent = _pushes(monkeypatch)
+        got = _run(dev_bridge.bridge_handoff("t-desk", dev_bridge.HandoffBody(
+            screen="> Run the tests?", doing="Editing dev_bridge.py", state="needs-you"),
+            authorization="Bearer x"))
+        assert got == {"ok": True, "pushed": 1}
+        notes = fake.rows["t-desk"]["notes"]
+        # The screen replaces the one before it; the hand-off line follows.
+        assert [n["from"] for n in notes] == ["session", "device"]
+        assert notes[0]["text"] == "> Run the tests?"
+        assert notes[1]["kind"] == "handoff"
+        assert notes[1]["text"] == "Handed to your phone: Editing dev_bridge.py"
+        assert sent[0][1] == "kmj-intake-server — on your phone"
+        assert sent[0][2].startswith("Editing dev_bridge.py It's waiting on your answer.")
+
+    def test_a_session_a_sweep_closed_is_live_again_once_handed_off(self, monkeypatch):
+        fake = _wire(monkeypatch, [dict(DESKTOP, status="done", finished_at=_ago(30))])
+        _pushes(monkeypatch)
+        _run(dev_bridge.bridge_handoff("t-desk", dev_bridge.HandoffBody(), authorization="Bearer x"))
+        assert fake.rows["t-desk"]["status"] == "working"
+        assert fake.rows["t-desk"]["finished_at"] is None
+
+    def test_another_desktops_session_is_not_this_ones_to_hand_off(self, monkeypatch):
+        _wire(monkeypatch, [dict(DESKTOP, device_id="dev-2")])
+        sent = _pushes(monkeypatch)
+        with pytest.raises(dev_bridge.HTTPException) as e:
+            _run(dev_bridge.bridge_handoff("t-desk", dev_bridge.HandoffBody(), authorization="Bearer x"))
+        assert e.value.status_code == 409
+        assert sent == []
+
+    def test_live_screens_replace_each_other_and_never_buzz(self, monkeypatch):
+        # A dispatched task keeps every screen it stops on — but the screens
+        # of a handed-off session, sent as it works, replace one another.
+        fake = _wire(monkeypatch, [dict(WORKING, notes=[])])
+        sent = _pushes(monkeypatch)
+        for text in ("working one", "working two"):
+            _run(dev_bridge.bridge_status("t-working", dev_bridge.StatusBody(
+                status="working", note=text, sender="session", away=True, live=True,
+                state="working"), authorization="Bearer x"))
+        notes = fake.rows["t-working"]["notes"]
+        assert [n["text"] for n in notes] == ["working two"]
+        assert notes[0]["state"] == "working"
+        assert sent == []
+
+    @pytest.mark.parametrize("state,title,lead", [
+        ("needs-you", "kmj-intake-server — needs you", "It's waiting on your answer."),
+        ("ready", "kmj-intake-server — your turn", "It finished its turn."),
+        (None, "kmj-intake-server — your turn", "It stopped: finished, or waiting on you."),
+    ])
+    def test_the_lock_screen_says_which_kind_of_quiet(self, monkeypatch, state, title, lead):
+        fake = _wire(monkeypatch, [DESKTOP])
+        sent = _pushes(monkeypatch)
+        _run(dev_bridge.bridge_status("t-desk", dev_bridge.StatusBody(
+            status="working", note="screen", sender="session", away=True, state=state),
+            authorization="Bearer x"))
+        assert sent[0][1] == title and sent[0][2].startswith(lead)
+        assert fake.rows["t-desk"]["notes"][-1].get("state") == state
+
+
+class TestReplyKeys:
+    def test_an_answer_to_a_prompt_rides_the_poll_as_a_key(self, monkeypatch):
+        fake = _wire(monkeypatch, [dict(DESKTOP, notes=[])])
+        _run(dev_bridge.add_owner_note("t-desk", dev_bridge.NoteBody(text="Yes", keys="1"), _Owner()))
+        assert fake.rows["t-desk"]["notes"][-1]["keys"] == "1"
+        got = _run(dev_bridge.bridge_queue(authorization="Bearer x"))
+        assert got["followups"][0]["notes"][0]["keys"] == "1"
+        assert got["followups"][0]["notes"][0]["text"] == "Yes"
+
+    def test_a_plain_reply_carries_no_key(self, monkeypatch):
+        _wire(monkeypatch, [dict(DESKTOP, notes=[])])
+        _run(dev_bridge.add_owner_note("t-desk", dev_bridge.NoteBody(text="Ship it"), _Owner()))
+        got = _run(dev_bridge.bridge_queue(authorization="Bearer x"))
+        assert "keys" not in got["followups"][0]["notes"][0]
+
+    def test_only_the_menu_keys_are_allowed(self, monkeypatch):
+        _wire(monkeypatch, [DESKTOP])
+        with pytest.raises(dev_bridge.HTTPException) as e:
+            _run(dev_bridge.add_owner_note("t-desk", dev_bridge.NoteBody(text="x", keys="ctrl+c"), _Owner()))
+        assert e.value.status_code == 422
+
+    def test_a_closed_session_has_no_prompt_to_answer(self, monkeypatch):
+        fake = _wire(monkeypatch, [dict(DESKTOP, status="done", notes=[])])
+        with pytest.raises(dev_bridge.HTTPException) as e:
+            _run(dev_bridge.add_owner_note("t-desk", dev_bridge.NoteBody(text="Yes", keys="1"), _Owner()))
+        assert e.value.status_code == 409
+        assert fake.rows["t-desk"]["notes"] == []
+        assert fake.rows["t-desk"]["status"] == "done"
+
+
+class TestKaiCapability:
+    def test_a_build_that_carries_kai_says_so_on_its_poll(self, monkeypatch):
+        _wire(monkeypatch, [])
+        seen = []
+
+        async def device(_c, _authorization, agents=None):
+            seen.append(agents)
+            return {"id": "dev-1", "name": "Solution Space"}
+        monkeypatch.setattr(dev_bridge, "_require_device", device)
+        _run(dev_bridge.bridge_queue(authorization="Bearer x", agents="claude,codex",
+                                     capabilities="workbench-v1,kai-v1,unknown-v9"))
+        assert seen == [["claude", "codex", "workbench-v1", "kai-v1"]]
