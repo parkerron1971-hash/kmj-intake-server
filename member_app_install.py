@@ -17,9 +17,10 @@ an install prompt (Android, desktop Chrome/Edge), the three steps on an
 iPhone (Share, then Add to Home Screen). Hidden once installed or
 dismissed.
 
-What this deliberately does NOT do: push notifications. Notifying members
-is Kevin's open decision 1 in the Subsplash exit plan; the service worker
-has no push handler until he says yes. Store apps (Capacitor) are wave 3.
+Notifications: Kevin said yes to open decision 1 (2026-10-14). The
+service worker shows a push and opens its /my link on a tap; who gets
+what, and the church's and member's switches, live in member_push.py.
+Store apps (Capacitor) are wave 3.
 """
 from __future__ import annotations
 
@@ -106,7 +107,8 @@ def icon_png(biz: Dict[str, Any], site: Optional[Dict[str, Any]], size: int) -> 
 
 # Network-first for every request it handles; the only thing it keeps is
 # the offline page. Member pages are personal and change by the minute, so
-# nothing else is cached. No push handler (see the module docstring).
+# nothing else is cached. A push shows title + body and opens its /my link
+# (member_push.py chooses the words; nothing private reaches a lock screen).
 SW_JS = """// The member app's service worker (member_app_install.py).
 const OFFLINE = '/my/offline';
 const CACHE = 'member-offline-v1';
@@ -121,6 +123,27 @@ self.addEventListener('activate', (e) => {
 self.addEventListener('fetch', (e) => {
   if (e.request.mode !== 'navigate') return;
   e.respondWith(fetch(e.request).catch(() => caches.match(OFFLINE)));
+});
+self.addEventListener('push', (e) => {
+  let d = {};
+  try { d = e.data ? e.data.json() : {}; } catch (err) { d = {}; }
+  // Only this app's own pages: /my, /my/..., /my?..., /my#...
+  const ok = typeof d.url === 'string' && d.url.indexOf('/my') === 0 &&
+    (d.url.length === 3 || '/?#'.indexOf(d.url.charAt(3)) !== -1);
+  const url = ok ? d.url : '/my';
+  e.waitUntil(self.registration.showNotification(d.title || 'Your church', {
+    body: d.body || '', icon: '/my/icon-192.png', badge: '/my/icon-192.png',
+    tag: d.tag || 'church', data: {url}}));
+});
+self.addEventListener('notificationclick', (e) => {
+  e.notification.close();
+  const url = (e.notification.data && e.notification.data.url) || '/my';
+  e.waitUntil(self.clients.matchAll({type: 'window', includeUncontrolled: true}).then((wins) => {
+    for (const w of wins) {
+      if (new URL(w.url).pathname.startsWith('/my') && 'focus' in w) { w.navigate(url); return w.focus(); }
+    }
+    return self.clients.openWindow(url);
+  }));
 });
 """
 
