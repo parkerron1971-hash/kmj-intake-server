@@ -663,7 +663,8 @@ def _live_card(live: Dict[str, Any]) -> str:
 
 
 def render_home(biz: Dict[str, Any], site, *, me: Dict[str, Any], occasions, groups, library,
-                give_url: str, flash: str = "", live: Optional[Dict[str, Any]] = None) -> str:
+                give_url: str, flash: str = "", live: Optional[Dict[str, Any]] = None,
+                reading: str = "") -> str:
     """Home: a greeting with the date, the next gathering (or, while the
     church is live, a Live now card), four quick ways in (Give is the one
     filled button), the latest message, this person's week, then what
@@ -693,6 +694,7 @@ var e=document.querySelector('[data-first]');if(e){e.textContent='';e.append(g+'
 {flash}
 {_live_card(live) if live else mpc.next_card(occasions)}
 <nav class="mb-quick" aria-label="Quick actions">{''.join(quick)}</nav>
+{reading}
 {mai.install_card(biz.get('name') or '')}
 {mps.latest_card(library, pal)}
 {mpc.week_cards(occasions, groups)}
@@ -985,6 +987,13 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
             gifts = None
         return _page(render_me(biz, site, me=me, people=sess["people"], year=year, gifts=gifts,
                                give_url=give_url, this_year=this_year, flash=mpc._flash(request)))
+    # The church's reading plan (reading_plans.py, member_portal_reading.py).
+    import reading_plans as rp
+    import member_portal_reading as mpr
+    if sub == "/my/reading":
+        plan = rp.current(biz)
+        done = await asyncio.to_thread(rp.read_days, biz["id"], me["id"], plan) if plan else set()
+        return _page(mpr.render_page(biz, site, request, me, done), 503 if done is None else 200)
     if sub != "/my":
         return RedirectResponse("/my", status_code=303, headers=_SECURE_HEADERS)
     import live_router as lr
@@ -993,8 +1002,12 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
         asyncio.to_thread(mpc.groups_for, biz["id"], me),
         asyncio.to_thread(mps.load_library, biz["id"]),
         asyncio.to_thread(lr.current, biz["id"]))
+    today = rp.today_for(biz)
+    done = (await asyncio.to_thread(rp.read_days, biz["id"], me["id"], rp.current(biz))
+            if today else None)
     return _page(render_home(biz, site, me=me, occasions=occ, groups=groups, library=lib,
-                             give_url=give_url, flash=mpc._flash(request), live=live))
+                             give_url=give_url, flash=mpc._flash(request) or mpr._flash(request),
+                             live=live, reading=mpr.home_card(today, done)))
 
 
 # ─── POST ────────────────────────────────────────────────────────────
