@@ -252,7 +252,25 @@ def live_start(body: StartIn, user: AuthedUser = Depends(require_user)):
         if again:
             raise HTTPException(409, "You're already live. End that service first.")
         raise HTTPException(503, "Going live didn't save. Please try again.")
+    _tell_members_live(biz, rows[0])
     return {"ok": True, "live": {**rows[0], "embed": stream_embed(url), "here": 0}}
+
+
+def _tell_members_live(biz: str, row: Dict[str, Any]) -> None:
+    """Members who turned "Live now" on hear about it, once per service,
+    off the request (member_push.py checks the church's switch)."""
+    import threading
+
+    def run():
+        import member_push
+        church = sb_clients.sb_get_as_service(
+            f"/businesses?id=eq.{biz}&select=id,name,settings&limit=1") or []
+        if church:
+            member_push.send(church[0], "live", title=f"{church[0].get('name') or 'Church'} is live",
+                             body=row.get("title") or "Tap to watch", url="/my/live",
+                             ref_id=str(row.get("id")))
+
+    threading.Thread(target=run, daemon=True).start()
 
 
 @router.patch("/live/{sid}")

@@ -54,12 +54,20 @@ def test_every_asset_is_served_with_its_type():
     assert I.serve_asset(BIZ, None, "/my/icon-999.png") is None
 
 
-def test_the_service_worker_never_caches_pages_and_has_no_push():
+def test_the_service_worker_never_caches_pages():
     assert "fetch(e.request).catch" in I.SW_JS          # network first
     assert "caches.match(OFFLINE)" in I.SW_JS           # only the offline page
     assert "e.request.mode !== 'navigate'" in I.SW_JS   # leaves other requests alone
-    for word in ("push", "showNotification", "PushManager"):
-        assert word not in I.SW_JS
+
+
+def test_the_service_worker_shows_a_push_and_only_opens_member_pages():
+    # Kevin said yes to member notifications (2026-10-14); member_push.py
+    # decides who gets what.
+    assert "self.addEventListener('push'" in I.SW_JS
+    assert "showNotification" in I.SW_JS and "notificationclick" in I.SW_JS
+    # A push can only open this app's own pages, never another site.
+    assert "d.url.indexOf('/my') === 0" in I.SW_JS
+    assert "const url = ok ? d.url : '/my';" in I.SW_JS
 
 
 def test_head_tags_link_the_manifest_and_iphone_icon():

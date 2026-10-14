@@ -359,6 +359,10 @@ from member_portal import router as member_portal_router
 app.include_router(member_portal_router)
 from member_portal_church import router as member_portal_church_router
 app.include_router(member_portal_church_router)
+# Notifications on members' phones: /my/push/*, /my/notifications and the
+# staff announcement (member_push.py). BEFORE public_site_router.
+from member_push import router as member_push_router
+app.include_router(member_push_router)
 # A giver changes, pauses or stops their own recurring gift (POST /my/gifts).
 from member_portal_gifts import router as member_portal_gifts_router
 app.include_router(member_portal_gifts_router)
