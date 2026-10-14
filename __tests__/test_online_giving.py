@@ -88,6 +88,15 @@ class ExplodingSB:
         raise AssertionError(f"sb_clients.{name} called before rate limit")
 
 
+@pytest.fixture(autouse=True)
+def wallet_domain_calls(monkeypatch):
+    """Turning giving on registers wallet domains with Stripe on a thread.
+    No test here may reach Stripe, so the scheduler only records."""
+    calls = []
+    monkeypatch.setattr(giving_router, "_schedule_wallet_domains", calls.append)
+    return calls
+
+
 @pytest.fixture
 def fake_sb(monkeypatch):
     fake = FakeSB()
@@ -719,3 +728,54 @@ def test_give_page_reads_amount_frequency_fund_and_fee_from_its_link():
     assert "q.get('email')" not in html and "q.get('name')" not in html
     prefill = html[html.index("A link can fill the form in"):]
     assert "fetch(" not in prefill.split("label();")[0]
+
+
+# ─── 14. Apple Pay / Google Pay domains on the church's account ──────
+
+def test_turning_giving_on_registers_wallet_domains(monkeypatch, wallet_domain_calls):
+    fake = FakeSB(business=_church(owner_id="u1"))
+    monkeypatch.setattr(giving_router, "sb_clients", fake)
+    monkeypatch.setattr(giving_router, "ensure_business_site",
+                        lambda biz: ({"slug": "first-light"}, False))
+    user = SimpleNamespace(id="u1", email="pastor@example.com")
+    giving_router.patch_giving_config(BIZ, {"funds": ["General"]}, user)
+    assert wallet_domain_calls == []                      # a fund edit isn't a switch-on
+    giving_router.patch_giving_config(BIZ, {"enabled": True}, user)
+    assert [b["id"] for b in wallet_domain_calls] == [BIZ]
+    giving_router.patch_giving_config(BIZ, {"enabled": False}, user)
+    assert len(wallet_domain_calls) == 1
+
+
+def test_no_stripe_account_no_wallet_domains(monkeypatch, wallet_domain_calls):
+    fake = FakeSB(business=_church(owner_id="u1", stripe_account_id=None))
+    monkeypatch.setattr(giving_router, "sb_clients", fake)
+    monkeypatch.setattr(giving_router, "ensure_business_site",
+                        lambda biz: ({"slug": "first-light"}, False))
+    giving_router.patch_giving_config(BIZ, {"enabled": True},
+                                      SimpleNamespace(id="u1", email="p@example.com"))
+    assert wallet_domain_calls == []
+
+
+def test_wallet_domains_endpoint_is_owner_only_and_needs_stripe(monkeypatch):
+    import payment_domains
+    seen = {}
+
+    def fake_register(acct, domains):
+        seen["acct"], seen["domains"] = acct, domains
+        return {d: "registered" for d in domains}
+
+    monkeypatch.setattr(payment_domains, "register_give_domains", fake_register)
+    fake = FakeSB(business=_church(owner_id="u1"))
+    monkeypatch.setattr(giving_router, "sb_clients", fake)
+    with pytest.raises(HTTPException) as exc:
+        giving_router.register_wallet_domains(BIZ, SimpleNamespace(id="someone-else"))
+    assert exc.value.status_code == 403 and not seen
+
+    out = giving_router.register_wallet_domains(BIZ, SimpleNamespace(id="u1"))
+    assert out["ok"] and seen["acct"] == "acct_123"
+    assert seen["domains"] == ["first-light.mysolutionist.app"]
+
+    fake.business = _church(owner_id="u1", stripe_account_id=None)
+    with pytest.raises(HTTPException) as exc:
+        giving_router.register_wallet_domains(BIZ, SimpleNamespace(id="u1"))
+    assert exc.value.status_code == 409

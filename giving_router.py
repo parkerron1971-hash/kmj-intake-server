@@ -364,7 +364,55 @@ def patch_giving_config(
         f"/businesses?id=eq.{business_id}", {"settings": settings},
     )
     biz = {**biz, "settings": settings}
+    if body.get("enabled") is True and biz.get("stripe_account_id"):
+        _schedule_wallet_domains(biz)
     return _config_payload(biz, site)
+
+
+# ─── Apple Pay / Google Pay on the give page's own domains ──────────
+
+
+def _wallet_domain_sites(business_id: str) -> List[Dict[str, Any]]:
+    return sb_clients.sb_get_as_service(
+        f"/business_sites?business_id=eq.{business_id}"
+        f"&select=slug,custom_domain:site_config->>custom_domain"
+    ) or []
+
+
+def _register_wallet_domains(biz: Dict[str, Any]) -> Dict[str, str]:
+    import payment_domains
+    out = payment_domains.register_for_business(biz, _wallet_domain_sites(str(biz["id"])))
+    logger.info(f"[giving] wallet domains biz={str(biz['id'])[:8]}: {out}")
+    return out
+
+
+def _schedule_wallet_domains(biz: Dict[str, Any]) -> None:
+    """Off the request: turning giving on shouldn't wait on one Stripe
+    call per domain, and a failure here only hides the wallet buttons."""
+    import threading
+
+    def run():
+        try:
+            _register_wallet_domains(biz)
+        except Exception as e:
+            logger.warning(f"[giving] wallet domains biz={str(biz.get('id'))[:8]} failed: {e}")
+
+    threading.Thread(target=run, daemon=True).start()
+
+
+@router.post("/giving/{business_id}/wallet-domains")
+def register_wallet_domains(
+    business_id: str,
+    user: AuthedUser = Depends(require_user),
+) -> Dict[str, Any]:
+    """Register the give page's addresses (platform subdomain, custom
+    domain and its www) on the church's Stripe account, so Apple Pay and
+    Google Pay show inside the page. Turning giving on does this already;
+    re-run it after connecting a custom domain. Safe to repeat."""
+    biz = _require_owner(business_id, user)
+    if not biz.get("stripe_account_id"):
+        raise HTTPException(409, "connect Stripe first")
+    return {"ok": True, "domains": _register_wallet_domains(biz)}
 
 
 # ─── Public checkout endpoint ────────────────────────────────────────
