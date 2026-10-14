@@ -847,13 +847,29 @@ dl, dd { margin: 0; }
 .pantry-verse { font-stretch: 112%; font-weight: 700; }
 @media (min-width: 900px) { .pantry-grid { grid-template-columns: 5fr 7fr; gap: 56px; align-items: start; } }
 .min-list { border-top: 3px solid var(--ink); }
-.min { display: grid; gap: 10px; padding: 28px 0; border-bottom: 1px solid var(--rule); }
+/* Every ministry shows one of the church's own photos, all the same shape:
+   under its name on a phone, beside its name and words on a wide screen. */
+.min {
+  display: grid; gap: 10px; padding: 28px 0; border-bottom: 1px solid var(--rule);
+  grid-template-areas: "name" "photo" "body";
+}
 .min-name {
+  grid-area: name;
   font-stretch: 70%; font-weight: 850; text-transform: uppercase; line-height: 0.95;
   font-size: clamp(2.2rem, 1.6rem + 2.4vw, 3.6rem);
 }
+.min-photo { grid-area: photo; aspect-ratio: 3 / 2; max-width: 34em; margin: 6px 0 10px; }
+.min-body { grid-area: body; }
 .min-body p { max-width: 34em; }
-@media (min-width: 900px) { .min { grid-template-columns: 5fr 7fr; gap: 40px; padding: 40px 0; } }
+@media (min-width: 900px) {
+  .min {
+    grid-template-columns: 7fr 5fr; grid-template-rows: auto 1fr;
+    grid-template-areas: "name photo" "body photo";
+    column-gap: 56px; row-gap: 16px; padding: 40px 0;
+  }
+  .min-photo { max-width: none; margin: 0; }
+}
+.training-photo { aspect-ratio: 2 / 1; margin: 8px 0 48px; }
 .training-grid { display: grid; gap: 56px; }
 .course { border-top: 3px solid var(--love); padding-top: 16px; }
 .course .poster { color: var(--on-ink); }
@@ -863,6 +879,7 @@ dl, dd { margin: 0; }
 @media (min-width: 900px) { .training-grid { grid-template-columns: 1fr 1fr; gap: 64px; } }
 .serve-grid { display: grid; gap: 40px; align-items: start; }
 .serve-note { color: var(--muted); }
+.serve-photo { aspect-ratio: 3 / 2; margin-bottom: 24px; }
 .teams { display: flex; flex-wrap: wrap; gap: 10px; }
 .teams li {
   border: 2px solid var(--ink); padding: 8px 14px;
