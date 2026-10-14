@@ -8,6 +8,12 @@ desk and Chief can ask the same question and get the same answer.
 
     first_time_guests(business_id)  who came for the first time and has
                                     not been reached since
+    group_drift(business_id)        each group's last weeks, and who has
+                                    stopped coming
+    services(business_id)           who came to each recent service, in
+                                    person and online
+    care_counts(business_id)        the care inbox and children's check-in
+                                    as numbers only (callers gate it)
 
 Every function returns None when a read failed (an outage) and a list
 when it worked, so a caller can tell "nobody" from "couldn't look".
@@ -199,3 +205,216 @@ def first_time_guests(business_id: str, *, days: int = FIRST_VISIT_WINDOW_DAYS,
 
     out.sort(key=lambda r: r["first_visit_at"])
     return out[:max(1, int(limit))]
+
+
+# ─── groups ──────────────────────────────────────────────────────────
+
+# A member has drifted when their group met this many times in a row
+# without them. Three is about a month for a weekly group: long enough
+# not to flag a holiday, short enough that a call still lands.
+DRIFT_MISSED = 3
+GROUP_WINDOW_WEEKS = 12
+_CHUNK = 100
+
+
+def _chunks(ids: List[str]) -> List[List[str]]:
+    ids = sorted({str(i) for i in ids if i})
+    return [ids[i:i + _CHUNK] for i in range(0, len(ids), _CHUNK)]
+
+
+def _get_in(path: str, column: str, ids: List[str]) -> Optional[List[Dict[str, Any]]]:
+    """`path` + `&<column>=in.(...)`, in chunks short enough for a URL."""
+    out: List[Dict[str, Any]] = []
+    for chunk in _chunks(ids):
+        rows = _get(f"{path}&{column}=in.({','.join(chunk)})")
+        if rows is None:
+            return None
+        out += rows
+    return out
+
+
+def _names(biz: str, contact_ids: List[str]) -> Optional[Dict[str, str]]:
+    if not contact_ids:
+        return {}
+    rows = _get_in(f"/contacts?business_id=eq.{biz}&select=id,name", "id", contact_ids)
+    if rows is None:
+        return None
+    return {str(r["id"]): " ".join(str(r.get("name") or "").split()) or "Someone"
+            for r in rows if r.get("id")}
+
+
+def group_drift(business_id: str, *, missed: int = DRIFT_MISSED,
+                now: Optional[datetime] = None) -> Optional[Dict[str, Any]]:
+    """Each active group's last few weeks, and who has stopped coming.
+
+    Drifting = in the group since before its last `missed` meetings and at
+    none of them. A group that has met fewer times than that in the window
+    says nothing about anyone yet, so it flags nobody.
+
+        {"groups": [{id, name, members, meetings, last_met, average}],
+         "drifting": [{contact_id, name, group, last_came, missed}]}
+    """
+    now = now or datetime.now(timezone.utc)
+    biz = str(business_id)
+    since = (now - timedelta(weeks=GROUP_WINDOW_WEEKS)).date().isoformat()
+
+    groups = _get(f"/groups?business_id=eq.{biz}&active=is.true"
+                  "&select=id,name&order=name.asc&limit=200")
+    if groups is None:
+        return None
+    if not groups:
+        return {"groups": [], "drifting": []}
+    members = _get(f"/group_members?business_id=eq.{biz}"
+                   "&select=group_id,contact_id,joined_on&limit=10000")
+    meetings = _get(f"/group_meetings?business_id=eq.{biz}&met_on=gte.{since}"
+                    "&select=id,group_id,met_on&order=met_on.desc&limit=2000")
+    if members is None or meetings is None:
+        return None
+    present = _get_in(f"/group_meeting_attendance?business_id=eq.{biz}"
+                      "&select=meeting_id,contact_id", "meeting_id",
+                      [m["id"] for m in meetings])
+    if present is None:
+        return None
+
+    came: Dict[str, set] = {}
+    for p in present:
+        came.setdefault(str(p.get("meeting_id")), set()).add(str(p.get("contact_id")))
+
+    out_groups: List[Dict[str, Any]] = []
+    drifting: List[Dict[str, Any]] = []
+    for g in groups:
+        gid = str(g["id"])
+        roster = [m for m in members if str(m.get("group_id")) == gid]
+        met = [m for m in meetings if str(m.get("group_id")) == gid]  # newest first
+        recent = met[:4]
+        average = (round(sum(len(came.get(str(m["id"]), ())) for m in recent) / len(recent), 1)
+                   if recent else None)
+        out_groups.append({"id": gid, "name": g.get("name") or "A group",
+                           "members": len(roster), "meetings": len(met),
+                           "last_met": met[0]["met_on"] if met else None,
+                           "average": average})
+        if len(met) < missed:
+            continue
+        last = met[:missed]
+        oldest = str(last[-1]["met_on"])
+        for m in roster:
+            cid = str(m.get("contact_id"))
+            if str(m.get("joined_on") or "") >= oldest:
+                continue  # joined during the run; not drifting yet
+            if any(cid in came.get(str(x["id"]), ()) for x in last):
+                continue
+            last_came = next((x["met_on"] for x in met if cid in came.get(str(x["id"]), ())), None)
+            drifting.append({"contact_id": cid, "group": g.get("name") or "A group",
+                             "last_came": last_came, "missed": missed})
+
+    names = _names(biz, [d["contact_id"] for d in drifting])
+    if names is None:
+        return None
+    for d in drifting:
+        d["name"] = names.get(d["contact_id"], "Someone")
+    drifting.sort(key=lambda d: (d["last_came"] or "", d["name"]))
+    return {"groups": out_groups, "drifting": drifting}
+
+
+# ─── services ────────────────────────────────────────────────────────
+
+SERVICE_WINDOW_WEEKS = 8
+
+
+def services(business_id: str, *, weeks: int = SERVICE_WINDOW_WEEKS,
+             now: Optional[datetime] = None) -> Optional[List[Dict[str, Any]]]:
+    """Who came to each recent service or event, newest first.
+
+    Named check-ins split in person / online ("I'm here" from the live
+    page checks a member in as online), first-timers among them, and the
+    headcounts the team counted by area (the people nobody checks in by
+    name). Children are NOT here: their check-in is care-level data.
+
+        [{entry_id, title, date, in_person, online, first_time,
+          headcount, areas: {area: count}}]
+    """
+    now = now or datetime.now(timezone.utc)
+    biz = str(business_id)
+    cutoff = _iso(now - timedelta(weeks=max(1, int(weeks))))
+    rows = _get(f"/attendance?business_id=eq.{biz}&checked_in_at=gte.{cutoff}"
+                "&select=entry_id,method,first_time,checked_in_at&limit=20000")
+    counts = _get(f"/attendance_headcounts?business_id=eq.{biz}&updated_at=gte.{cutoff}"
+                  "&select=entry_id,area,count,updated_at&limit=2000")
+    if rows is None or counts is None:
+        return None
+    by: Dict[str, Dict[str, Any]] = {}
+
+    def slot(entry_id: str, at: Optional[datetime]) -> Dict[str, Any]:
+        s = by.setdefault(entry_id, {"entry_id": entry_id, "in_person": 0, "online": 0,
+                                     "first_time": 0, "headcount": 0, "areas": {},
+                                     "_at": at})
+        if at and (s["_at"] is None or at < s["_at"]):
+            s["_at"] = at
+        return s
+
+    for r in rows:
+        s = slot(str(r.get("entry_id")), _parse(r.get("checked_in_at")))
+        s["online" if r.get("method") == "online" else "in_person"] += 1
+        if r.get("first_time"):
+            s["first_time"] += 1
+    for c in counts:
+        s = slot(str(c.get("entry_id")), _parse(c.get("updated_at")))
+        n = int(c.get("count") or 0)
+        s["areas"][str(c.get("area") or "Counted")] = n
+        s["headcount"] += n
+    if not by:
+        return []
+    entries = _get_in(f"/module_entries?business_id=eq.{biz}&select=id,data", "id", list(by))
+    titles = {str(e.get("id")): _occasion_title(e) for e in (entries or [])}
+    out = []
+    for s in by.values():
+        at = s.pop("_at")
+        s["title"] = titles.get(s["entry_id"], "a service")
+        s["date"] = at.date().isoformat() if at else None
+        out.append(s)
+    out.sort(key=lambda s: s["date"] or "", reverse=True)
+    return out
+
+
+# ─── care and children (counts only) ─────────────────────────────────
+
+def care_counts(business_id: str, *, now: Optional[datetime] = None
+                ) -> Optional[Dict[str, Any]]:
+    """The Prayer & care inbox and children's check-in as NUMBERS.
+
+    Never a request's words, a requester's name or a child's name: this
+    feeds Chief, and Chief writes drafts. The caller decides who may see
+    even this much (owner or manager).
+    """
+    now = now or datetime.now(timezone.utc)
+    biz = str(business_id)
+    reqs = _get(f"/ministry_care_requests?business_id=eq.{biz}"
+                f"&created_at=gte.{_iso(now - timedelta(days=90))}"
+                "&select=status,created_at,prayed_at&limit=5000")
+    kids = _get(f"/child_checkins?business_id=eq.{biz}"
+                f"&checked_in_at=gte.{_iso(now - timedelta(weeks=SERVICE_WINDOW_WEEKS))}"
+                "&select=entry_id,checked_in_at&limit=20000")
+    if reqs is None or kids is None:
+        return None
+    by_status = {"new": 0, "reviewed": 0, "closed": 0}
+    oldest_new: Optional[datetime] = None
+    prayed = 0
+    for r in reqs:
+        st = str(r.get("status") or "new")
+        by_status[st] = by_status.get(st, 0) + 1
+        if r.get("prayed_at"):
+            prayed += 1
+        at = _parse(r.get("created_at"))
+        if st == "new" and at and (oldest_new is None or at < oldest_new):
+            oldest_new = at
+    per_day: Dict[str, int] = {}
+    for k in kids:
+        at = _parse(k.get("checked_in_at"))
+        if at:
+            per_day[at.date().isoformat()] = per_day.get(at.date().isoformat(), 0) + 1
+    return {
+        "care": {**by_status, "prayed": prayed,
+                 "oldest_new_days": (now - oldest_new).days if oldest_new else None},
+        "children_checked_in": [{"date": d, "children": n}
+                                for d, n in sorted(per_day.items(), reverse=True)],
+    }

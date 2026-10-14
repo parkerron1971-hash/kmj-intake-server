@@ -169,7 +169,13 @@ def test_the_exposed_read_verbs_and_nothing_else():
     # waits for the owner's OK, and on request link click/visit/lead counts.
     # campaign_status's class; no customer data. Every desk write is the
     # owner's on a chat turn and stays off; there is no approve verb.
-    assert len(tools) == 38, (
+    # 39 (10/14, Subsplash exit): church_people reads a church's own
+    # attendance and groups: first-time guests not yet reached (names,
+    # contact ids), members who missed their group's last 3 meetings,
+    # in-person/online counts. contact_deep_dive's class. Its care section
+    # (counts only) is refused without a signed-in owner/manager on the
+    # turn, which an outside caller never has.
+    assert len(tools) == 39, (
         f"agent-facing surface changed: {sorted(tools)}. If a verb was "
         "added, decide whether an outside caller should see it, give it a "
         "TOOL_SCHEMAS entry, and update this count on purpose.")
@@ -599,6 +605,9 @@ SILENT_TOOLS = {
     # anywhere), so the result names the place in words instead.
     "marketing_desk",
     "responsibility_status",  # status only: never offer a generic retry of mixed work
+    # church_people (10/14): the next step is a call or a text to a person,
+    # which Chief drafts in chat with the practitioner; no verb here.
+    "church_people",
 }
 
 
