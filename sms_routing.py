@@ -142,6 +142,42 @@ async def agreed_under_own_name(client: httpx.AsyncClient, business_id: str, pho
 STOP_WORDS = {"STOP", "STOPALL", "UNSUBSCRIBE", "CANCEL", "END", "QUIT"}
 START_WORDS = {"START", "YES", "JOIN", "UNSTOP"}
 HELP_WORDS = {"HELP", "INFO"}
+# Text-to-give on a church's OWN number (Subsplash exit, step 2). Never on
+# the shared number: there a word belongs to one business at a time, and
+# Subsplash's shared 1-888 GIVE line is exactly what we don't copy.
+GIVE_WORDS = {"GIVE", "GIVING", "TITHE", "DONATE", "OFFERING"}
+
+
+def is_give_word(body: str) -> bool:
+    """'give', 'GIVE!', ' Tithe. ' — one word, punctuation ignored."""
+    words = re.sub(r"[^A-Za-z ]", " ", body or "").split()
+    return len(words) == 1 and words[0].upper() in GIVE_WORDS
+
+
+def give_link(business_id: str, phone: str) -> Optional[Dict[str, str]]:
+    """{name, url} for the reply to GIVE on a business's own number, or None when it
+    shouldn't answer: giving isn't on (no give page to send), the texter
+    has opted out of this business, or a read failed. Sync; call it in a
+    thread."""
+    import sb_clients
+    import giving_router
+    import business_marketing_links as links
+    rows = sb_clients.sb_get_as_service(
+        f"/businesses?id=eq.{business_id}&select=id,name,type,settings,stripe_account_id&limit=1")
+    if not rows or not giving_router.giving_is_active(rows[0]):
+        return None
+    out = sb_clients.sb_get_as_service(
+        f"/sms_opt_outs?phone=eq.{_pq(phone)}&business_id=eq.{business_id}&select=phone&limit=1")
+    if out is None or out:
+        return None
+    try:
+        site = links.site_for(business_id)
+    except Exception:
+        return None
+    if not site:
+        return None
+    name = (rows[0].get("name") or "").strip() or "the church"
+    return {"name": name, "url": f"{links.origin(site)}/give"}
 RESERVED_WORDS = STOP_WORDS | START_WORDS | HELP_WORDS
 
 KEYWORD_RE = re.compile(r"^[A-Z0-9]{3,20}$")
@@ -350,6 +386,23 @@ async def route_inbound(
                     f"{os.environ.get('SUPPORT_EMAIL', 'kmjcreativesolution@gmail.com')} for help. "
                     f"Msg & data rates may apply. Reply STOP to opt out."
                 )}
+            if is_give_word(body):
+                link = await asyncio.to_thread(give_link, business_id, phone)
+                if link:
+                    # Same sender rule as HELP: under the platform's brand
+                    # until the church texts under its own registered name.
+                    own_name = await own_registration(client, business_id)
+                    reply = ((f"{link['name']}: Thank you for giving!" if own_name else
+                              f"{sender_brand()}: Thank you for giving to {link['name']}!")
+                             + f" Give securely here:\n{link['url']}\nReply STOP to opt out.")
+                    logger.info(f"[ROUTE] GIVE from {phone} on biz {business_id[:8]}'s own number")
+                    await _bind(client, phone, business_id)
+                    await _ensure_contact(client, business_id, phone)
+                    await record_inbound_sms(
+                        client, from_number=phone, text=body,
+                        provider_id=provider_id, media=media, business_id=business_id,
+                    )
+                    return {"action": "give_link", "business_id": business_id, "reply": reply}
             logger.info(f"[ROUTE] own-number {phone} → biz {business_id[:8]} (direct)")
             await _bind(client, phone, business_id)
             await _ensure_contact(client, business_id, phone)
