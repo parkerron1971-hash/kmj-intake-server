@@ -162,6 +162,18 @@ def test_designated_rubric_not_lookup_table():
     assert giving_router.fund_label("") == "General Fund"
 
 
+def test_tithes_and_offerings_are_the_general_fund():
+    # A church's Sunday giving is unrestricted, whatever it's called.
+    for name in ("Tithes", "tithe", "Offering", "Offerings", "Tithes & Offerings",
+                 "Tithes Fund", "General Fund", "  OFFERING  "):
+        assert giving_router.is_designated(name) is False, name
+    for name in ("Building Fund", "Missions", "Youth Camp", "Benevolence"):
+        assert giving_router.is_designated(name) is True, name
+    assert giving_router.fund_label("Tithes") == "Tithes"
+    assert giving_router.fund_label("Offering") == "Offering"
+    assert giving_router.fund_label("General") == "General Fund"
+
+
 def test_designated_gift_lands_as_restricted_paid_invoice(fake_sb):
     giving_router.record_gift(
         BIZ, amount_cents=5000, fund="Building",
