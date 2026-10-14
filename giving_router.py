@@ -69,7 +69,9 @@ from __future__ import annotations
 
 import asyncio
 import html as _html_mod
+import json
 import logging
+import re
 import time
 import urllib.parse
 import uuid
@@ -378,8 +380,11 @@ async def public_giving_checkout(
 
     Body: { amount_cents: int, fund?: str,
             frequency?: 'once'|'weekly'|'biweekly'|'monthly',
-            cover_fee?: bool, name?: str, email?: str }
-    Returns { ok, url } — the Stripe-hosted payment page.
+            cover_fee?: bool, name?: str, email?: str, embedded?: bool }
+    Returns { ok, url } — the Stripe-hosted payment page — or, when the
+    page asked for embedded and the platform's publishable key is set,
+    { ok, embedded: true, client_secret } for the form that mounts
+    inside the give page.
     """
     # Rate limit FIRST — before any read or write (pinned in tests).
     # The trusted (last) hop, not the first: this creates Stripe sessions
@@ -451,7 +456,11 @@ async def public_giving_checkout(
     gift_id = str(uuid.uuid4())
 
     from payments_core import provider_for
+    from stripe_checkout_helpers import embedded_checkout_publishable_key
     adapter = provider_for(biz)
+    embedded = (body.get("embedded") is True
+                and getattr(adapter, "id", "stripe") == "stripe"
+                and bool(embedded_checkout_publishable_key()))
     try:
         session = await adapter.create_giving_checkout(
             biz,
@@ -468,6 +477,7 @@ async def public_giving_checkout(
             giver_email=giver_email or None,
             success_url=f"{canonical}?thanks=1",
             cancel_url=f"{canonical}?canceled=1",
+            embedded=embedded,
         )
     except HTTPException:
         raise
@@ -475,6 +485,11 @@ async def public_giving_checkout(
         logger.warning(f"[giving] checkout create failed biz={str(biz['id'])[:8]}: {e}")
         raise HTTPException(502, "we couldn't start the payment — please try again")
 
+    if embedded:
+        secret = (session or {}).get("client_secret")
+        if not secret:
+            raise HTTPException(502, "we couldn't start the payment — please try again")
+        return {"ok": True, "embedded": True, "client_secret": secret}
     url = (session or {}).get("url")
     if not url:
         raise HTTPException(502, "we couldn't start the payment — please try again")
@@ -830,6 +845,21 @@ def render_give_page(
     description = message or f"Give online to {name}. Secure one-time, weekly and monthly giving."
     css_vars = _brand_css_vars(business)
 
+    # The payment form mounts inside this page (embedded Checkout on the
+    # church's own Stripe account) once the platform's publishable key is
+    # set. Without it, Give sends the giver to checkout.stripe.com and
+    # back, as before.
+    from payments_core import provider_for
+    from stripe_checkout_helpers import embedded_checkout_publishable_key
+    pk = embedded_checkout_publishable_key()
+    acct = str(business.get("stripe_account_id") or "")
+    embed = bool(pk and re.fullmatch(r"acct_[A-Za-z0-9]+", acct)
+                 and provider_for(business).id == "stripe")
+    embed_json = json.dumps({"pk": pk, "acct": acct}) if embed else "null"
+    stripe_js = '<script src="https://js.stripe.com/v3/"></script>' if embed else ""
+    pay_note = ("Your payment is handled securely by Stripe, right on this page."
+                if embed else "You'll finish securely on our payment page.")
+
     preset_btns = "".join(
         f'<button type="button" class="gv-amt" data-cents="{p * 100}">${p:,}</button>'
         for p in presets)
@@ -866,6 +896,7 @@ def render_give_page(
 <meta property="og:type" content="website">
 {og_image_html}
 {_brand_font_links(business)}
+{stripe_js}
 <style>{css_vars}</style>
 <style>
 html,body{{margin:0;padding:0;font-family:var(--font-body);color:var(--text-primary);
@@ -910,6 +941,9 @@ font-size:14px;line-height:1.5;border:1px solid var(--border);}}
 .gv-footer{{text-align:center;font-size:11px;color:var(--text-muted);margin-top:28px;
 padding-top:14px;border-top:1px solid var(--border);}}
 .gv-footer a{{color:var(--text-muted);text-decoration:none;}}
+.gv-back{{background:none;border:0;padding:10px 0;margin-bottom:6px;font-size:14px;font-weight:600;
+color:var(--text-secondary);cursor:pointer;min-height:44px;font-family:var(--font-body);}}
+.gv-pay{{border-radius:16px;overflow:hidden;}}
 </style>
 </head>
 <body>
@@ -945,9 +979,11 @@ padding-top:14px;border-top:1px solid var(--border);}}
     <input type="email" id="gv-em" class="gv-input" autocomplete="email" maxlength="200">
     <button type="submit" class="gv-give" id="gv-go">Give</button>
     <div class="gv-error" id="gv-err"></div>
-    <p class="gv-note">You'll finish securely on our payment page.
+    <p class="gv-note">{pay_note}
     Add your email to receive a receipt and your year-end giving statement.</p>
   </form>
+  <button type="button" class="gv-back" id="gv-back" hidden>&larr; Change my gift</button>
+  <div class="gv-pay" id="gv-pay" hidden></div>
   <footer class="gv-footer">
     Powered by <a href="https://mysolutionist.app/" target="_blank" rel="noopener">Solutionist</a>
   </footer>
@@ -972,6 +1008,33 @@ padding-top:14px;border-top:1px solid var(--border);}}
   var custom = document.getElementById('gv-custom');
   var go = document.getElementById('gv-go');
   var err = document.getElementById('gv-err');
+  // Embedded Checkout: {{pk, acct}} when the payment form can open on
+  // this page, else null (Give redirects to Stripe's page instead).
+  var EMBED = {embed_json};
+  var form = document.getElementById('gv-form');
+  var payBox = document.getElementById('gv-pay');
+  var back = document.getElementById('gv-back');
+  var checkout = null, noEmbed = false;
+  function embedOn() {{ return !!(EMBED && window.Stripe && !noEmbed); }}
+  function showForm() {{
+    if (checkout) {{ try {{ checkout.destroy(); }} catch (e) {{}} checkout = null; }}
+    payBox.hidden = true; back.hidden = true; form.hidden = false; go.disabled = false;
+  }}
+  back.addEventListener('click', showForm);
+  function mount(secret) {{
+    try {{
+      var stripe = window.Stripe(EMBED.pk, {{stripeAccount: EMBED.acct}});
+      // Stripe.js renamed initEmbeddedCheckout to createEmbeddedCheckoutPage (2026-03-25).
+      var make = stripe.createEmbeddedCheckoutPage || stripe.initEmbeddedCheckout;
+      return make.call(stripe, {{fetchClientSecret: function() {{ return Promise.resolve(secret); }}}})
+        .then(function(c) {{
+          checkout = c;
+          form.hidden = true; back.hidden = false; payBox.hidden = false;
+          c.mount('#gv-pay');
+          back.scrollIntoView({{block: 'start'}});
+        }});
+    }} catch (e) {{ return Promise.reject(e); }}
+  }}
   function label() {{
     var add = feeBox.checked ? fee(cents) : 0;
     feeTxt.textContent = cents > 0
@@ -1021,10 +1084,20 @@ padding-top:14px;border-top:1px solid var(--border);}}
         frequency: freq,
         cover_fee: feeBox.checked,
         name: document.getElementById('gv-nm').value.trim() || undefined,
-        email: email || undefined
+        email: email || undefined,
+        embedded: embedOn() || undefined
       }})
     }}).then(function(r) {{ return r.json().then(function(j) {{ return {{ok: r.ok, j: j}}; }}); }})
       .then(function(res) {{
+        if (res.ok && res.j && res.j.client_secret) {{
+          mount(res.j.client_secret).catch(function() {{
+            // Next press uses Stripe's own page instead.
+            noEmbed = true; showForm();
+            err.textContent = "The payment form didn't load. Please press Give again.";
+            err.classList.add('show');
+          }});
+          return;
+        }}
         if (res.ok && res.j && res.j.url) {{ location.href = res.j.url; return; }}
         err.textContent = (res.j && res.j.detail) || 'Something went wrong — please try again.';
         err.classList.add('show');
