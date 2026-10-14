@@ -104,10 +104,11 @@ LINKS = {
 # The old SnapPages site's addresses (its sitemap, and the sermon library
 # under /media), each sent where that content lives now. site_sync stores
 # them; public_site answers each with a 301 wherever the site would
-# otherwise 404 (/live, an API path, through public_site's
-# LegacyApiPathRedirect). Old forms land on the connect card with the same
-# interest ticked. /my-love-nation, the old members-only page, has no home
-# here and stays a 404.
+# otherwise 404, keeping the visitor's own ?utm_… parameters. Old forms land
+# on the connect card with the same interest ticked. /my-love-nation, the
+# old members-only page, has no home here and stays a 404. /live is not
+# here: GET /live is an API route ahead of the site, and redirecting it
+# safely needs the Worker to vouch for the host (see the worklog).
 REDIRECTS = {
     "/mission-and-vision": "/about",
     "/our-senior-leadership": "/about#pastors",
@@ -122,7 +123,6 @@ REDIRECTS = {
     "/media": "/sermons",
     "/media/*": "/sermons",
     "/subsplash-media": "/sermons",
-    "/live": "/watch",
     "/connect-with-us": "/connect#connect-card",
     "/booking": "/connect#connect-card",
     "/prayer-request": "/connect#prayer",

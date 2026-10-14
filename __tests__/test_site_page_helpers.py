@@ -98,8 +98,8 @@ def test_clean_redirects_keeps_good_entries_in_order_and_names_every_skip():
                  "/visit": "/watch", "/news": "/visit", "/book": "/visit", "/my/*": "/visit",
                  "/old": "/nowhere", "/old2": "/home"}
     kept, skipped = clean_redirects(redirects, ["home", "visit", "watch"])
-    assert list(kept) == ["/b-old", "/live", "/a-old", "/x/*"]
-    assert [old for old, _ in skipped] == ["/visit", "/news", "/book", "/my/*", "/old", "/old2"]
+    assert list(kept) == ["/b-old", "/a-old", "/x/*"]
+    assert [old for old, _ in skipped] == ["/live", "/visit", "/news", "/book", "/my/*", "/old", "/old2"]
 
 
 def test_clean_redirects_caps_the_map():
@@ -108,7 +108,30 @@ def test_clean_redirects_caps_the_map():
     assert len(kept) == MAX_REDIRECTS and len(skipped) == 3
 
 
-def test_only_live_is_redirected_ahead_of_its_api_route():
-    from site_page_helpers import API_SHADOWED_REDIRECTS, RESERVED_PAGE_IDS
-    assert API_SHADOWED_REDIRECTS == {"/live"}
-    assert {p[1:] for p in API_SHADOWED_REDIRECTS} <= RESERVED_PAGE_IDS
+@pytest.mark.parametrize("old", ["/live", "/live/*", "/group-live", "/my"])
+def test_a_path_an_api_route_answers_first_is_never_installed(old):
+    """GET /live is the live-stream API, ahead of the site. Only the Worker
+    could vouch that a request came from the site's own host, so no
+    redirect may claim such a path."""
+    from site_page_helpers import clean_redirects
+    kept, skipped = clean_redirects({old: "/watch"}, ["home", "watch"])
+    assert kept == {} and skipped == [(old, "redirect from a path another handler answers")]
+
+
+@pytest.mark.parametrize("target,query,location", [
+    ("/beliefs", "", "/beliefs"),
+    ("/beliefs", "utm_source=facebook&utm_medium=social", "/beliefs?utm_source=facebook&utm_medium=social"),
+    ("/beliefs", "fbclid=IwAR0x&ref=", "/beliefs?fbclid=IwAR0x&ref="),
+    ("/connect#prayer", "utm_source=bulletin", "/connect?utm_source=bulletin#prayer"),
+    # Both name a parameter: the map's value wins, the visitor's others stay.
+    ("/connect?interest=serve#connect-card", "interest=youth&utm_campaign=fall",
+     "/connect?interest=serve&utm_campaign=fall#connect-card"),
+    ("/connect?interest=serve#connect-card", "", "/connect?interest=serve#connect-card"),
+    # The visitor's query is only ever a query: it can't change the path or
+    # the host, and it is re-encoded on the way out.
+    ("/beliefs", "next=//evil.example&x=%0d%0aSet-Cookie:a", "/beliefs?next=%2F%2Fevil.example&x=%0D%0ASet-Cookie%3Aa"),
+    ("/", "a=1#frag", "/?a=1%23frag"),
+])
+def test_a_redirect_keeps_the_visitors_query_and_the_maps_values_win(target, query, location):
+    from site_page_helpers import with_visitor_query
+    assert with_visitor_query(target, query) == location

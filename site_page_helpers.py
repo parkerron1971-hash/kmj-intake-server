@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import re
 from typing import Any, Dict, Iterable, List, Optional, Tuple
+from urllib.parse import parse_qsl, urlencode
 
 
 # Routes owned by API/portal handlers before the site catch-all, compliance
@@ -46,15 +47,14 @@ def secondary_pages(site_config: Any) -> Dict[str, str]:
 # as site_config.manual_redirects and answered with a 301 only where the
 # site would otherwise 404. An old path is lowercase segments, or ends in
 # "/*" for everything under it. A target is "/" or one of the site's own
-# pages, with an optional ?query and #anchor: never another host.
+# pages, with an optional ?query and #anchor: never another host. A path an
+# API route answers first (/live) is refused: only the Worker could vouch
+# that a request came from the site's own host, and nothing checks that yet.
 MAX_REDIRECTS = 100
 _REDIRECT_FROM_RE = re.compile(r"/[a-z0-9-]+(?:/[a-z0-9-]+)*(?:/\*)?")
 _REDIRECT_TO_RE = re.compile(r"/([a-z0-9-]*)(\?[a-z0-9=&-]*)?(#[a-z0-9-]+)?")
 # Hosted pages that answer before a site's redirects are looked at.
 _HOSTED_PATHS = frozenset({"book", "give", "events", "sermons", "store"})
-# Reserved paths redirected anyway, ahead of the API route that owns them
-# (public_site.LegacyApiPathRedirect): old links to a church's /live page.
-API_SHADOWED_REDIRECTS = frozenset({"/live"})
 
 
 def redirect_target_ok(target: Any) -> bool:
@@ -78,7 +78,7 @@ def clean_redirects(redirects: Any, page_ids: Iterable[str]) -> Tuple[Dict[str, 
         first = old.split("/")[1]
         if old[1:] in pages:
             skipped.append((old, "redirect from a page the site serves"))
-        elif old not in API_SHADOWED_REDIRECTS and (first in RESERVED_PAGE_IDS or first in _HOSTED_PATHS):
+        elif first in RESERVED_PAGE_IDS or first in _HOSTED_PATHS:
             skipped.append((old, "redirect from a path another handler answers"))
         elif not redirect_target_ok(to) or _REDIRECT_TO_RE.fullmatch(to).group(1) not in pages | {""}:
             skipped.append((old, f"redirect to {to!r}, not one of the site's pages"))
@@ -104,3 +104,20 @@ def manual_redirect(site_config: Any, path: Any) -> Optional[str]:
                  if isinstance(old, str) and old.endswith("/*") and p.startswith(old[:-1])]
         to = redirects.get(max(under, key=len)) if under else None
     return to if redirect_target_ok(to) else None
+
+
+def with_visitor_query(target: str, query: Any) -> str:
+    """The redirect target with the visitor's own query string kept
+    (utm_source, fbclid and the like), so a campaign link still counts
+    after the move. Where both name a parameter, the target's value wins.
+    The path and #anchor stay the target's, so the result never leaves
+    the site."""
+    if not isinstance(query, str) or not query:
+        return target
+    rest, hash_, anchor = target.partition("#")
+    path, _, own_query = rest.partition("?")
+    own = parse_qsl(own_query, keep_blank_values=True)
+    named = {key for key, _ in own}
+    theirs = [(k, v) for k, v in parse_qsl(query, keep_blank_values=True) if k not in named]
+    pairs = own + theirs
+    return path + ("?" + urlencode(pairs) if pairs else "") + hash_ + anchor

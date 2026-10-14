@@ -325,7 +325,7 @@ def _church(redirects, pages=None):
 
 def test_redirects_install_with_the_pages_and_then_stay_current(monkeypatch):
     redirects = {"/i-m-new": "/visit", "/prayer-request": "/connect#prayer",
-                 "/volunteer": "/connect?interest=serve#connect-card", "/media/*": "/", "/live": "/visit"}
+                 "/volunteer": "/connect?interest=serve#connect-card", "/media/*": "/"}
     row = {"id": "row-1", "business_id": "biz-1", "site_config": {}}
     db = _wire(monkeypatch, [row])
     assert site_sync.sync_site(_church(redirects)) == "installed"
@@ -339,7 +339,8 @@ def test_redirects_install_with_the_pages_and_then_stay_current(monkeypatch):
 
 def test_unusable_redirects_are_skipped_and_printed(monkeypatch, capsys):
     bad = {"/Old": "/visit", "/two words": "/visit", "/visit": "/connect", "/give": "/visit",
-           "/sermons/*": "/visit", "/team": "/visit", "/live/*": "/visit", "/off": "https://evil.example/",
+           "/sermons/*": "/visit", "/team": "/visit", "/live": "/visit", "/live/*": "/visit",
+           "/off": "https://evil.example/",
            "/off2": "//evil.example", "/off3": "/missing", "/off4": "/home", "/off5": None, 7: "/visit"}
     db = _wire(monkeypatch, [{"id": "row-1", "business_id": "biz-1", "site_config": {}}])
     assert site_sync.sync_site(_church({**bad, "/fine": "/visit"})) == "installed"

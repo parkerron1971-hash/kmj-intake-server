@@ -309,7 +309,7 @@ def test_every_page_path_reaches_the_church_site_through_the_real_routers(build,
     from fastapi.testclient import TestClient
     import public_site
 
-    async def site(name, path="/"):
+    async def site(name, path="/", **kwargs):
         return HTMLResponse(f"church-site {path}")
     monkeypatch.setattr(public_site, "_serve_site_by_slug", site)
     monkeypatch.setattr(public_site, "_serve_site_by_custom_domain", site)
@@ -332,8 +332,11 @@ def test_every_old_address_has_a_home_and_installs_cleanly(build, pages):
                      "/connect-with-us": "/connect", "/prayer-request": "/connect",
                      "/volunteer": "/connect", "/i-m-new": "/visit", "/welcomehome": "/visit",
                      "/services-and-events": "/events", "/media": "/sermons",
-                     "/subsplash-media": "/sermons", "/live": "/watch"}.items():
+                     "/subsplash-media": "/sermons"}.items():
         assert build.REDIRECTS[old].split("?")[0].split("#")[0] == new, old
+    # GET /live is an API route ahead of the site. Redirecting it needs the
+    # Worker to vouch for the host first (worklog follow-up).
+    assert "/live" not in build.REDIRECTS
 
 
 def test_every_redirect_anchor_and_ticked_interest_exists(build, pages):
@@ -347,32 +350,25 @@ def test_every_redirect_anchor_and_ticked_interest_exists(build, pages):
 
 
 @pytest.mark.parametrize("hosts", CHURCH_HOSTS.values(), ids=CHURCH_HOSTS.keys())
-def test_every_old_address_reaches_the_church_site_or_its_live_redirect(build, real_app, hosts, monkeypatch):
+def test_every_old_address_reaches_the_church_site(build, real_app, hosts, monkeypatch):
     """No API route may answer an old address before the church site does,
-    except /live, which the redirect layer answers ahead of the API."""
+    so every entry in the map can actually be served."""
     from fastapi.responses import HTMLResponse
     from fastapi.testclient import TestClient
     import public_site
 
-    async def site(name, path="/"):
+    async def site(name, path="/", **kwargs):
         return HTMLResponse(f"church-site {path}")
-
-    async def row(client, path):
-        return [{"site_config": {"html_source": "manual", "manual_redirects": build.REDIRECTS}}]
     monkeypatch.setattr(public_site, "_serve_site_by_slug", site)
     monkeypatch.setattr(public_site, "_serve_site_by_custom_domain", site)
     monkeypatch.setattr(public_site, "_check_rate", lambda *a, **k: True)
-    monkeypatch.setattr(public_site, "_sb", row)
 
     client = TestClient(real_app, follow_redirects=False)
     for old in build.REDIRECTS:
         path = old.replace("/*", "/page/2")
         r = client.get(path, headers=hosts)
-        if old == "/live":
-            assert (r.status_code, r.headers.get("location")) == (301, "/watch"), r.text[:120]
-        else:
-            assert (r.status_code, r.text) == (200, f"church-site {path}"), \
-                f"{path} on {hosts}: {r.status_code} {r.text[:120]}"
+        assert (r.status_code, r.text) == (200, f"church-site {path}"), \
+            f"{path} on {hosts}: {r.status_code} {r.text[:120]}"
 
 
 CHURCH_BUSINESS_ID = "009e9a2c-3e81-4bfc-a92a-205a8806aa99"
