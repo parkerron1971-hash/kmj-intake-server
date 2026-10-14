@@ -166,7 +166,8 @@ def statements_mail_plan(business_id: str, year: int, user: AuthedUser = Depends
 async def statements_mail_send(business_id: str, year: int, body: Dict[str, Any],
                                user: AuthedUser = Depends(require_user)):
     from giving_records import require_finance
-    await asyncio.to_thread(require_finance, _uuid(business_id), user)
+    # Called directly (not via to_thread) so the access sweep can see it.
+    require_finance(_uuid(business_id), user)
     if (body or {}).get("confirm") is not True:
         raise HTTPException(400, "Confirm to send the statements")
     return await send_batch(business_id, year, str((body or {}).get("goods_and_services") or ""))
