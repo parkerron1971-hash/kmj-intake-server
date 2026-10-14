@@ -279,7 +279,7 @@ def test_endpoint_captures_contact_even_when_email_is_unconfigured():
     # THE LEAD ARC PR 6: the endpoint also hands over where they came
     # from. Positional args unchanged; attribution rides as a keyword.
     assert "attribution" in captured[0][1]
-    assert res["ok"] is False       # email leg unconfigured, capture done
+    assert res == {"ok": True, "notification_sent": False}
 
 
 def test_rate_limit_blocks_before_any_db_write():
@@ -288,11 +288,10 @@ def test_rate_limit_blocks_before_any_db_write():
     with mock.patch.object(public_site, "_check_contact_rate",
                            return_value=False), \
          mock.patch.object(public_site, "_capture_contact_from_form") as cap:
-        with pytest.raises(HTTPException) as exc:
-            asyncio.run(public_site.contact_submit_endpoint(
-                "biz-1", {"name": "V", "email": "v@x.com", "message": "hi"},
-                _fake_request()))
-    assert exc.value.status_code == 429
+        response = asyncio.run(public_site.contact_submit_endpoint(
+            "biz-1", {"name": "V", "email": "v@x.com", "message": "hi"},
+            _fake_request()))
+    assert response.status_code == 429
     cap.assert_not_called()
 
 

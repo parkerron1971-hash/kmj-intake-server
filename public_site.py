@@ -2385,164 +2385,150 @@ def _record_website_sms_consent(business_id: str, phone_raw: str,
 
 def _capture_contact_from_form(business_id: str, name: str, email: str,
                                phone_raw: str, message: str,
-                               attribution: Optional[Dict[str, Any]] = None
+                               attribution: Optional[Dict[str, Any]] = None,
+                               form: str = "", fields: Optional[Dict[str, Any]] = None
                                ) -> Optional[str]:
-    """Find-or-create the contact for a website contact-form submission
-    (outbound-integrity, 2026-07-31). Before this, a visitor who filled
-    the composed site's contact form ONLY produced a notification email —
-    zero rows in /contacts or /events. The lead evaporated the moment the
-    operator archived the email.
-
-    Dedup: match by email (case-insensitive, LIKE wildcards escaped) or,
-    failing that, by normalized phone — always WITHIN business_id. Found
-    contacts get last_interaction bumped and the message appended to
-    metadata; new ones are created as status='lead' mirroring
-    intake_endpoint / booking_widget conventions.
-
-    Anonymous public endpoint → service-role client only (same client
-    this file already uses), and the caller's rate limiting runs BEFORE
-    this so it cannot become a spam-amplification vector. Best-effort by
-    contract: never raises, never blocks the notification email.
+    """Store every accepted answer before success. Churches use these same
+    contacts as Members. Never evict earlier messages or truncate answers.
+    A conditional update prevents concurrent forms from losing one another.
+    Scoring/events are optional, and run only after storage is confirmed.
     """
+    import urllib.parse
+    import lead_attribution
+    import lead_identity
+    import sb_clients
+    from sms_service import normalize_phone
+
+    contact_id = None
+    email_clean = email.strip().lower()
+    phone = normalize_phone(phone_raw)
+    source = "website connect card" if form == "connect_card" else "website_contact_form"
     try:
-        import urllib.parse
-
-        import lead_attribution
-        import sb_clients
-        from sms_service import normalize_phone
-
-        email_clean = (email or "").strip().lower()
-        phone = normalize_phone(str(phone_raw or ""))
-        now_iso = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-
-        # THE ONE DEDUPE RULE (lead_identity). This block used to be
-        # the best of four different implementations; it is the only
-        # one now, and every door shares it — including the name guard
-        # that keeps two people at one household address out of a
-        # single record.
-        import lead_identity
         existing = lead_identity.find(
             business_id, email=email_clean, phone=phone, name=name,
-            select="id,name,phone,metadata")
-
-        msg_entry = {"at": now_iso, "message": (message or "")[:1000]}
-        if existing:
-            contact_id = existing["id"]
-            meta = existing.get("metadata") or {}
-            msgs = list(meta.get("website_form_messages") or [])
-            msgs.append(msg_entry)
-            meta["website_form_messages"] = msgs[-10:]
-            patch: Dict[str, Any] = {"last_interaction": now_iso, "metadata": meta}
-            if phone and not str(existing.get("phone") or "").strip():
-                patch["phone"] = phone
-            sb_clients.sb_patch_as_service(
-                f"/contacts?id=eq.{contact_id}&business_id=eq.{business_id}", patch)
-        else:
-            created = sb_clients.sb_post_as_service("/contacts", {
-                "business_id": business_id,
-                "name": name,
-                "email": email_clean or None,
-                "phone": phone or None,
-                "status": "lead",
-                "source": "website_contact_form",
-                "source_detail": lead_attribution.detail_for(attribution),
-                "attribution": attribution or None,
-                "metadata": {"website_form_messages": [msg_entry]},
-                "last_interaction": now_iso,
-            })
-            if not isinstance(created, list) or not created:
-                logger.warning(
-                    f"[contact-submit] contact create failed biz={business_id[:8]} "
-                    f"— see preceding sb_clients log line")
-                return None
-            contact_id = created[0]["id"]
-
+            select="id,name,phone,metadata,updated_at", strict=True)
+        new_contact = existing is None
+        now_iso = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        entry = {"at": now_iso, "message": message, "phone": phone_raw}
+        if form:
+            entry.update(form=form, fields=fields or {})
+        for attempt in range(3):
+            meta = dict((existing or {}).get("metadata") or {})
+            meta["website_form_messages"] = list(meta.get("website_form_messages") or []) + [entry]
+            if form == "connect_card":
+                meta["website_connect_card"] = dict(fields or {}, source=source)
+            if existing:
+                cid = existing["id"]
+                path = (f"/contacts?id=eq.{urllib.parse.quote(str(cid), safe='')}"
+                        f"&business_id=eq.{urllib.parse.quote(business_id, safe='')}")
+                stamp = existing.get("updated_at")
+                guard = ("eq." + urllib.parse.quote(str(stamp), safe='')) if stamp else "is.null"
+                patch = {"last_interaction": now_iso, "updated_at": now_iso, "metadata": meta}
+                if phone and not str(existing.get("phone") or "").strip():
+                    patch["phone"] = phone
+                saved = sb_clients.sb_patch_as_service(path + "&updated_at=" + guard, patch)
+                if isinstance(saved, list) and saved:
+                    contact_id = cid
+                    break
+                if saved != []:
+                    return None  # storage failure; not a concurrency conflict
+                rows = sb_clients.sb_get_as_service(path + "&select=id,name,phone,metadata,updated_at&limit=1")
+                if not isinstance(rows, list) or not rows:
+                    return None
+                existing = rows[0]
+            else:
+                saved = sb_clients.sb_post_as_service("/contacts", {
+                    "business_id": business_id, "name": name,
+                    "email": email_clean, "phone": phone or None,
+                    "status": "lead", "source": source,
+                    "source_detail": lead_attribution.detail_for(attribution),
+                    "attribution": attribution or None,
+                    "metadata": meta, "last_interaction": now_iso,
+                })
+                if isinstance(saved, list) and saved and saved[0].get("id"):
+                    contact_id = saved[0]["id"]
+                break
+    except Exception:
+        logger.warning("[contact-submit] contact storage failed biz=%s", business_id[:8])
+        return None
+    if not contact_id:
+        return None
+    # A connect card asks the church to connect personally, not to score
+    # somebody's faith interests or start automated outreach.
+    if form == "connect_card":
+        return contact_id
+    try:
         import event_spine
         event_spine.emit(
             "contact_form_submitted", business_id,
             dict({"name": name, "email": email_clean,
-                  "message_preview": (message or "")[:160],
-                  "new_contact": existing is None},
+                  "message_preview": message[:160], "new_contact": new_contact},
                  **lead_attribution.event_fields(attribution)),
             contact_id=contact_id, source="website_contact_form")
-
-        # Score it, on a worker thread. Until this landed, a lead from
-        # the composed site's own contact form carried a null lead_score
-        # forever, which made it invisible to the hot-lead alert, the
-        # Hot Leads list, Chief's briefing and the proposal agent — all
-        # four gate on that column. Backgrounded because a visitor is
-        # waiting on this request and nothing in it reads the score.
         import lead_scoring
         lead_scoring.score_in_background(
             business_id, contact_id,
-            {"name": name, "email": email_clean, "phone": phone,
-             "message": message},
+            {"name": name, "email": email_clean, "phone": phone, "message": message},
             source="website_contact_form", email=email_clean, phone=phone)
-        return contact_id
-    except Exception as e:
-        logger.warning(f"[contact-submit] contact capture failed: {e}")
-        return None
+    except Exception:
+        logger.warning("[contact-submit] optional contact processing failed biz=%s", business_id[:8])
+    return contact_id
 
 
 @router.post("/sites/{business_id}/contact-submit")
 async def contact_submit_endpoint(business_id: str, body: Dict[str, Any], request: Request):
-    """Capture a contact-form submission as a lead + notify via Resend.
+    """Durably store a public submission, then notify its server-chosen recipient.
 
-    Body: { name, email, message, phone?, sms_consent? }. Rate-limited
-    per client IP at 5/min. Returns {ok: true} on success or {ok: false,
-    error: str} on email service failure (so the front-end form shows a
-    graceful message rather than crashing).
-
-    Lead capture: every valid submission finds-or-creates the contact
-    (dedup by email/phone within the business) and drops a
-    contact_form_submitted event on the spine — see
-    _capture_contact_from_form. The notification email is unchanged.
-
-    sms_consent (Arc 1): the composed-site contact form shows an
-    UNCHECKED opt-in checkbox + optional phone field when the platform
-    is SMS-capable; a checked box with a usable phone is recorded in
-    sms_consents (source='website_contact') — the A2P audit trail.
+    Optional form/fields add connect cards and private prayer requests.
+    See docs/WEBSITE_FORMS.md for limits and response semantics.
     """
-    # trusted_client_ip, not request.client.host: behind Railway the
-    # socket peer is the PROXY, so every visitor to every published site
-    # shared ONE bucket and the sixth contact-form submission
-    # platform-wide in a minute was refused. A limiter that drops real
-    # leads is worse than no limiter. rate_limit exists for exactly this
-    # and intake_endpoint already uses it.
+    from fastapi.responses import JSONResponse
+    import website_forms
     import rate_limit
-    client_ip = rate_limit.trusted_client_ip(request)
-    if not _check_contact_rate(client_ip):
-        raise HTTPException(429, "Too many submissions. Please try again later.")
 
-    body = body or {}
-    name = (body.get("name") or "").strip()[:200]
-    email = (body.get("email") or "").strip()[:200]
-    message = (body.get("message") or "").strip()[:5000]
+    def failure(status, error):
+        return JSONResponse(status_code=status, content={"ok": False, "error": error})
 
-    if not name or not email or not message:
-        raise HTTPException(400, "Missing required fields")
-    if "@" not in email or "." not in email:
-        raise HTTPException(400, "Invalid email")
+    if not _check_contact_rate(rate_limit.trusted_client_ip(request)):
+        return failure(429, "Too many submissions. Please try again later.")
+    try:
+        data = website_forms.validate(body or {})
+    except ValueError as exc:
+        return failure(400, str(exc))
+    name, email, message = data["name"], data["email"], data["message"]
+    kind, fields = data["form"], data["fields"]
+    church_form = kind in ("connect_card", "prayer_request")
+    try:
+        if kind == "prayer_request":
+            # No contacts, consent, attribution, events, scoring or auto-replies.
+            from private_care import save_submission
+            save_submission(business_id, None, {
+                "name": name, "email": email, "phone": data["phone"],
+                "prayer_request": fields.get("request") or message,
+                "message": message, "fields": fields,
+                "follow_up": fields.get("follow_up", False),
+                "confidential": "yes", "source": "website prayer request",
+            })
+        else:
+            import lead_attribution
+            attribution = lead_attribution.capture(request, body) if not church_form else None
+            kwargs = {"attribution": attribution}
+            if kind:
+                kwargs.update(form=kind, fields=fields)
+            if not _capture_contact_from_form(
+                    business_id, name, email, data["phone"], message, **kwargs):
+                return failure(503, "Your submission could not be saved. Please try again.")
+    except Exception:
+        logger.warning("[contact-submit] submission storage failed biz=%s", business_id[:8])
+        return failure(503, "Your submission could not be saved. Please try again.")
 
-    # SMS opt-in audit (best-effort; recorded once the submission is
-    # valid, independent of email-delivery outcome).
-    if body.get("sms_consent") is True and str(body.get("phone") or "").strip():
-        _record_website_sms_consent(business_id, str(body.get("phone"))[:40], name)
+    if not church_form and body.get("sms_consent") is True and data["phone"]:
+        _record_website_sms_consent(business_id, data["phone"], name)
 
-    # Lead capture (outbound-integrity, 2026-07-31): the submission
-    # becomes/updates a contact + a timeline event BEFORE the email leg,
-    # so the visitor exists in /contacts even if Resend hiccups. The rate
-    # limit above already gated this write; best-effort by contract.
-    # Where they came from. Read SERVER-SIDE off the Referer header —
-    # this form is emitted by four different renderers plus whatever the
-    # builder's LLM writes, so anything requiring the client to
-    # cooperate would be partially deployed forever.
-    import lead_attribution
-    attribution = lead_attribution.capture(request, body)
-    _capture_contact_from_form(
-        business_id, name, email, str(body.get("phone") or ""), message,
-        attribution=attribution)
-
+    # From here on storage succeeded. Notification problems must not ask the
+    # visitor to resubmit a request that is already in Solutionist.
+    notification_failed = {"ok": True, "notification_sent": False}
+    message = website_forms.notification_text(data)
     try:
         from brand_engine import get_bundle, _sb_get as be_get
         bundle = get_bundle(business_id) or {}
@@ -2575,21 +2561,35 @@ async def contact_submit_endpoint(business_id: str, body: Dict[str, Any], reques
     )
     business_name = (bundle.get("business") or {}).get("name") or "Your Site"
 
+    if church_form:
+        # Match the manual site's verified sender; never use a public override,
+        # visitor-supplied recipient, or the platform fallback for private care.
+        try:
+            import sb_clients
+            from urllib.parse import quote
+            businesses = sb_clients.sb_get_as_service(
+                f"/businesses?id=eq.{quote(business_id, safe='')}&select=settings&limit=1")
+            settings = businesses[0].get("settings") if isinstance(businesses, list) and businesses else {}
+            target_email = _business_public_email(settings)
+        except Exception:
+            target_email = ""
+
     if not target_email:
-        return {"ok": False, "error": "No contact email configured for this site."}
+        return notification_failed
 
     resend_api_key = os.environ.get("RESEND_API_KEY")
     if not resend_api_key:
-        return {"ok": False, "error": "Email service not configured."}
+        return notification_failed
 
     # Escape user-provided strings before injecting into HTML
     safe_name = _esc(name)
     safe_email = _esc(email)
     safe_message = _esc(message).replace("\n", "<br>")
 
-    subject = f"[{business_name}] Contact form submission from {name}"[:200]
+    title = {"connect_card": "Connect card", "prayer_request": "Private prayer request"}.get(kind, "Contact form submission")
+    subject = f"[{business_name}] {title} from {name}"
     html_body = (
-        f"<h2>New contact form submission</h2>"
+        f"<h2>{title}</h2>"
         f"<p><strong>From:</strong> {safe_name} (&lt;{safe_email}&gt;)</p>"
         f"<p><strong>Message:</strong></p>"
         f'<p style="white-space:pre-wrap;">{safe_message}</p>'
@@ -2614,15 +2614,15 @@ async def contact_submit_endpoint(business_id: str, body: Dict[str, Any], reques
                 },
             )
         if 200 <= r.status_code < 300:
-            return {"ok": True}
-        logger.warning(f"[contact-submit] Resend {r.status_code}: {r.text[:200]}")
-        return {"ok": False, "error": "Email service error."}
+            return {"ok": True, "notification_sent": True}
+        logger.warning("[contact-submit] notification rejected status=%s", r.status_code)
+        return notification_failed
     except httpx.HTTPError as e:
-        logger.warning(f"[contact-submit] HTTPError sending to {target_email}: {e}")
-        return {"ok": False, "error": "Network error."}
+        logger.warning("[contact-submit] notification network failure")
+        return notification_failed
     except Exception as e:
-        logger.warning(f"[contact-submit] unexpected: {e}")
-        return {"ok": False, "error": "Unexpected error."}
+        logger.warning("[contact-submit] notification failure")
+        return notification_failed
 
 
 # ─── Pass 3.7c: Studio-spirit decoration generation pipeline ───────────
