@@ -359,6 +359,12 @@ app.include_router(member_portal_church_router)
 # A giver changes, pauses or stops their own recurring gift (POST /my/gifts).
 from member_portal_gifts import router as member_portal_gifts_router
 app.include_router(member_portal_gifts_router)
+# The church's Bible reading plan: staff choose it (/church/reading-plans),
+# members tick their days (POST /my/reading).
+from reading_plans import router as reading_plans_router
+app.include_router(reading_plans_router)
+from member_portal_reading import router as member_portal_reading_router
+app.include_router(member_portal_reading_router)
 # Families and children (households, children, pickups, care notes) —
 # server-only tables, seat-checked here. Kevin, 2026-09-29.
 from kids_router import router as kids_router
