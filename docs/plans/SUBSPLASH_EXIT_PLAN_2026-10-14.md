@@ -10,6 +10,55 @@
 
 ---
 
+## 0. Progress (first session, 2026-10-14)
+
+**Step 0 facts (Kevin, from the Dev Desk):**
+- The contract renews at the start of the year. It auto-renews and is billed month to month. Written cancellation is due about **Dec 1, 2026**, so aim to have everything moved and the notice ready by mid-November. The exact renewal date on the billing page is still unconfirmed.
+- Love City uses "pretty much all" Subsplash products.
+- 20–30 monthly recurring givers.
+- No podcast feed, so the feed move is dropped.
+
+**Found:** Love City's Solutionist workspace is empty. It has no Stripe connected, giving is off, 0 people, no texting number and no member page turned on. Steps 2 and 7 wait on that setup.
+
+**Shipped (backend PRs; frontend in brackets):**
+
+| Step | What | PRs |
+|---|---|---|
+| 1 | First-time guests nobody has reached: `church_reads`, `GET /church/first-time-guests`, ministry layout provider; Home's care list puts them first | #1413 [FE #1216] |
+| 1 | Care inbox acts: reviewed/closed, prayed, private notes (`ministry_care_notes`) | #1414 |
+| 1 | A prayer request can be handed to a teammate, who sees only that one (Kevin: "others should be able to see prayer request") | #1417 [FE #1217] |
+| 1 | Chief reads the church: `church_people` (first_time / groups / attendance / care counts, care owner-or-manager only) | #1416 |
+| 1 | Marketing FAQ no longer says churches aren't the right fit | #1415 |
+| 1 | Site forms → Care: Codex's #1409. Follow-up review posted on the PR (one must-fix: plain-form name/email/phone stored up to 100k chars) | #1409 (not mine) |
+| 2 | Gift webhooks only record gifts from the church's own Stripe account | #1418 |
+| 2 | Weekly / every-2-weeks giving and "cover the processing fee" | #1419 |
+| 2 | Text GIVE (also GIVING, TITHE, DONATE, OFFERING) to the church's own number → its give page | #1420 |
+| 2 | A give link fills the page in (`?amount=&frequency=&fund=&cover_fee=1`), for each recurring giver's move link | #1425 |
+| 2 | Email every giver their year-end statement (`giving_statement_sends`, finance seats, explicit confirm) | #1421 [FE branch `statements-email-ui`, opens after #1421 deploys] |
+| 2 | Givers change, pause or stop their own recurring gift and update the card (`/my/gifts`) | #1424 |
+| 3 | The member page installs like an app: manifest, icons, service worker (no push), install card | #1422 |
+| 6 | Bible reading plans: 4 computed plans, Home card, `/my/reading`, staff choose in Settings | #1423 [FE #1218] |
+
+**Migrations applied 2026-10-14** (all in `docs/MIGRATIONS.md`): care-inbox-actions, care-assign, giving-statement-sends, reading-progress. The church tables from 9/29–10/02 were verified live and recorded.
+
+**Waiting on Kevin:**
+1. Does Love City have its own Stripe account? Online giving, statements and the recurring-giver move all need one connected (Operate → Giving → Connect Stripe, signed in as the church).
+2. From Subsplash: the people list, 2026 giving history, and the recurring givers list. These feed the D3 importer, which isn't built yet because the export format is unseen, and the move campaign.
+3. Open decision 1 (member notifications) gates push in step 3.
+4. A texting number of Love City's own (a paid line) for text GIVE and member texts.
+
+**Still to build:**
+- the giving-history importer (D3, after a sample export)
+- the recurring-giver move campaign (sending each giver their #1425 link from the church's own email and number, and tracking who moved; every send is Kevin's yes)
+- sermon import (Love City's YouTube or Facebook, not scraping Subsplash) and audio upload (D4)
+- push (after decision 1)
+- prayer from live chat into Care (step 5)
+- swap the four `LINKS` in `sites/love-city-church/build.py` once giving is live
+
+**Found along the way, not fixed:** booking, order, invoice and product checkouts trust `metadata` without checking the Connect account, the same gap #1418 closed for gifts. It needs its own careful PR.
+
+---
+
 ## 1. Read this first
 
 **What Love City uses Subsplash for.** Love City pays for several Subsplash products:
@@ -222,7 +271,7 @@ Every send in this step is Kevin's yes. Nothing goes to members without it.
 5. **Publish a church price on the website?** *Recommendation: yes, with month to month in big letters.*
 6. **2026 year-end statements:** import Subsplash history and send one statement from Solutionist? *Recommendation: yes.*
 
-Already decided 2026-10-14: getting off Subsplash is the goal.
+Already decided 2026-10-14: getting off Subsplash is the goal. Others on the team should be able to see prayer requests (built as: the owner hands a request to a teammate, who then sees that one).
 
 ---
 
