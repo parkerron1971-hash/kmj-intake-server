@@ -21,6 +21,15 @@ Practitioner-facing Connect onboarding + the Stripe webhook receiver:
        Owner-gated. Returns connection state + Stripe-side account
        summary (charges_enabled, payouts_enabled, requirements).
 
+  POST /payments/stripe-connect/create-account
+       Owner-gated. A business with no Stripe account gets its own one
+       made (full Stripe Dashboard; Stripe owns verification and
+       losses), saved like an OAuth connection.
+
+  POST /payments/stripe-connect/account-session
+       Owner-gated. A short-lived secret for Stripe's onboarding form
+       inside the app, plus the platform publishable key it runs on.
+
   POST /payments/stripe/webhook
        Stripe-initiated. Verifies Stripe-Signature, dispatches the 9
        subscribed events. PR 1 lands signature verification + the
@@ -43,7 +52,10 @@ from fastapi.responses import JSONResponse, RedirectResponse
 import ledger_unlock
 import sb_clients
 from auth_supabase import AuthedUser, require_user
+from stripe_checkout_helpers import embedded_checkout_publishable_key
 from stripe_connect_helpers import (
+    create_full_dashboard_account,
+    create_onboarding_session,
     deauthorize_account,
     exchange_oauth_code,
     fetch_account,
@@ -301,6 +313,7 @@ async def stripe_connect_status(
             "ok": True,
             "connected": False,
             "live_mode": is_live_mode(),
+            "embedded_signup": bool(embedded_checkout_publishable_key()),
         }
 
     # Stripe-side state. Wrapped — if Stripe is down we still report
@@ -325,7 +338,97 @@ async def stripe_connect_status(
         "email": account.get("email"),
         "country": account.get("country"),
         "default_currency": account.get("default_currency"),
+        "embedded_signup": bool(embedded_checkout_publishable_key()),
     }
+
+
+# ─── Signing up for Stripe inside Solutionist (2026-10-14) ───────────
+# Kevin: "can sign up for the first time through the system?" The OAuth
+# button sends a business to stripe.com; these two endpoints let Stripe's
+# own form run inside the app instead. Both need the platform's
+# publishable key (STRIPE_PUBLISHABLE_KEY, the same switch as the give
+# page's embedded payment form). Without it the app shows only the
+# Connect button, as before.
+
+
+@router.post("/stripe-connect/create-account")
+async def stripe_connect_create_account(
+    payload: Dict[str, Any],
+    user: AuthedUser = Depends(require_user),
+) -> Dict[str, Any]:
+    """Body: { business_id }. Returns { ok, stripe_account_id }."""
+    business_id = (payload or {}).get("business_id")
+    if not business_id:
+        raise HTTPException(400, "business_id required")
+    biz = _require_owner(str(business_id), user)
+
+    from financial_policy import require_operational_write
+    require_operational_write(str(business_id))
+
+    if biz.get("stripe_account_id"):
+        raise HTTPException(409, "stripe account already connected")
+    if not embedded_checkout_publishable_key():
+        raise HTTPException(503, "Stripe setup inside Solutionist isn't switched on yet")
+
+    site_url = ""
+    sites = sb_clients.sb_get_as_service(
+        f"/business_sites?business_id=eq.{business_id}&select=slug"
+        f"&order=updated_at.desc&limit=1") or []
+    if sites and sites[0].get("slug"):
+        from business_sites_helpers import PUBLIC_DOMAIN
+        site_url = f"https://{sites[0]['slug']}.{PUBLIC_DOMAIN}"
+    try:
+        account = await create_full_dashboard_account(
+            business_id=str(business_id),
+            business_name=str(biz.get("name") or ""),
+            email=str(getattr(user, "email", "") or ""),
+            url=site_url,
+        )
+    except Exception as e:
+        logger.warning(f"stripe account create failed for biz={str(business_id)[:8]}: {e}")
+        raise HTTPException(502, "Stripe couldn't start your account. Try again in a moment.")
+    acct = (account or {}).get("id")
+    if not acct:
+        raise HTTPException(502, "Stripe couldn't start your account. Try again in a moment.")
+
+    # Only fills an empty column: an OAuth connection that landed in the
+    # meantime is never overwritten.
+    sb_clients.sb_patch_as_service(
+        f"/businesses?id=eq.{business_id}&stripe_account_id=is.null",
+        {"stripe_account_id": acct},
+    )
+    logger.info(f"stripe account created in-app: biz={str(business_id)[:8]} acct={acct}")
+    return {"ok": True, "stripe_account_id": acct}
+
+
+@router.post("/stripe-connect/account-session")
+async def stripe_connect_account_session(
+    payload: Dict[str, Any],
+    user: AuthedUser = Depends(require_user),
+) -> Dict[str, Any]:
+    """Body: { business_id }. Returns { ok, client_secret, publishable_key }
+    for Stripe's onboarding form. It also finishes "Stripe needs more
+    info" later, on any account Stripe lets the platform open it for."""
+    business_id = (payload or {}).get("business_id")
+    if not business_id:
+        raise HTTPException(400, "business_id required")
+    biz = _require_owner(str(business_id), user)
+    acct = biz.get("stripe_account_id")
+    if not acct:
+        raise HTTPException(409, "set up or connect Stripe first")
+    pk = embedded_checkout_publishable_key()
+    if not pk:
+        raise HTTPException(503, "Stripe setup inside Solutionist isn't switched on yet")
+    try:
+        session = await create_onboarding_session(acct)
+    except Exception as e:
+        logger.warning(f"account session failed for biz={str(business_id)[:8]}: {e}")
+        raise HTTPException(502, "Stripe's form can't open for this account here. "
+                                 "Use the Stripe Dashboard instead.")
+    secret = (session or {}).get("client_secret")
+    if not secret:
+        raise HTTPException(502, "Stripe's form can't open right now. Try again in a moment.")
+    return {"ok": True, "client_secret": secret, "publishable_key": pk}
 
 
 # ─── Webhook ─────────────────────────────────────────────────────────

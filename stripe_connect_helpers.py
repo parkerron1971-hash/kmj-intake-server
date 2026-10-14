@@ -179,6 +179,87 @@ async def deauthorize_account(stripe_account_id: str) -> Dict[str, Any]:
     return resp.json()
 
 
+# ─── Signing up for Stripe inside Solutionist (2026-10-14) ───────────
+# A business with no Stripe account gets one created for it, and
+# Stripe's own onboarding form (Connect embedded components) collects
+# the rest inside the app. The account gets the full Stripe Dashboard,
+# pays its own Stripe fees, and Stripe owns verification and payment
+# losses: the same responsibilities as an account made on stripe.com
+# and connected by OAuth. The platform doesn't take on a payment
+# facilitator's liability.
+#
+# Both calls pin a Stripe-Version that has controller properties and
+# Account Sessions, because this module otherwise runs at the
+# platform's default version, which may predate them.
+SIGNUP_STRIPE_VERSION = "2025-03-31.basil"
+
+
+def _full_dashboard_account_form(
+    *, business_id: str, business_name: str = "", email: str = "", url: str = "",
+) -> Dict[str, Any]:
+    """The POST /v1/accounts form. Pure, so tests pin the controller
+    contract: full dashboard, fees paid by the account, losses on
+    Stripe. No country and no capabilities, so the owner picks the
+    country in Stripe's form and Stripe requests that country's
+    capabilities."""
+    form: Dict[str, Any] = {
+        "controller[stripe_dashboard][type]": "full",
+        "controller[fees][payer]": "account",
+        "controller[losses][payments]": "stripe",
+        "metadata[business_id]": business_id,
+    }
+    if email:
+        form["email"] = email
+    if business_name:
+        form["business_profile[name]"] = business_name[:100]
+    if url:
+        form["business_profile[url]"] = url
+    return form
+
+
+async def create_full_dashboard_account(
+    *, business_id: str, business_name: str = "", email: str = "", url: str = "",
+) -> Dict[str, Any]:
+    """Create the business its own Stripe account. The idempotency key
+    covers a double press or a retry after our own save failed: the
+    same request within 24 hours returns the same account, never a
+    second one."""
+    form = _full_dashboard_account_form(
+        business_id=business_id, business_name=business_name, email=email, url=url)
+    digest = hashlib.sha256(urlencode(sorted(form.items())).encode()).hexdigest()[:16]
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+        resp = await client.post(
+            f"{STRIPE_API_BASE}/accounts",
+            data=form,
+            auth=(_secret_key(), ""),
+            headers={"Stripe-Version": SIGNUP_STRIPE_VERSION,
+                     "Idempotency-Key": f"solutionist-signup-{business_id}-{digest}"},
+        )
+    if resp.status_code >= 400:
+        logger.warning(f"accounts create failed: {resp.status_code} {resp.text[:300]}")
+        raise RuntimeError(f"stripe account create failed: {resp.status_code} {resp.text[:200]}")
+    return resp.json()
+
+
+async def create_onboarding_session(stripe_account_id: str) -> Dict[str, Any]:
+    """POST /v1/account_sessions with the account_onboarding component.
+    The client_secret it returns is what Stripe's form in the app runs
+    on; it is short-lived, and the app asks for a fresh one when needed."""
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+        resp = await client.post(
+            f"{STRIPE_API_BASE}/account_sessions",
+            data={"account": stripe_account_id,
+                  "components[account_onboarding][enabled]": "true"},
+            auth=(_secret_key(), ""),
+            headers={"Stripe-Version": SIGNUP_STRIPE_VERSION},
+        )
+    if resp.status_code >= 400:
+        logger.warning(f"account_sessions failed for {stripe_account_id}: "
+                       f"{resp.status_code} {resp.text[:300]}")
+        raise RuntimeError(f"stripe account session failed: {resp.status_code} {resp.text[:200]}")
+    return resp.json()
+
+
 # ─── Webhook signature verification ──────────────────────────────────
 
 
