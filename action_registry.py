@@ -248,6 +248,16 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
                               sensitive=True),
     "giving_statements_run": _r("every donor's giving totals for a tax year — the January "
                                 "mailing list. Read-only", sensitive=True),
+    # A church's people, read-only (Subsplash exit step 1): first-time
+    # guests nobody has reached, who is drifting from their group, and
+    # in-person/online attendance. Names, dates and counts from attendance
+    # and groups; the same class as contact_deep_dive and list_projects.
+    # Its `care` part (care inbox + children's check-in, counts only) is
+    # refused unless the chat's signed-in user is the owner or a manager,
+    # so an outside caller, which has no turn user, never gets it.
+    "church_people":       _r("first-time guests, group drift and attendance from "
+                              "church_reads; care counts gated to owner/manager. "
+                              "Writes nothing"),
 
     # ── UI directives ────────────────────────────────────────────────
     # Verified: pass-throughs the frontend acts on. No persistence.
