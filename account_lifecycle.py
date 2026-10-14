@@ -159,7 +159,8 @@ EXPORT_EXCLUDED: Dict[str, str] = {
 BUSINESS_CHILD_TABLES: List[str] = [
     # Owner-only account export includes private care and finance history.
     # Erase children before their business, contact and invoice records.
-    "ministry_care_requests", "ministry_gift_history",
+    # A request's private notes go before the request.
+    "ministry_care_notes", "ministry_care_requests", "ministry_gift_history",
     # Who was at each occasion; before module_entries and contacts.
     "attendance", "attendance_headcounts",
     # Families and children: notes, pickups and children before their
@@ -643,7 +644,7 @@ _IMPORT_SKIP = {
     # Private archives retain original contact/form/invoice identifiers; the
     # generic importer cannot safely remap them or recreate audit evidence.
     # They remain in the owner archive and are explicitly reported as skipped.
-    "ministry_care_requests", "ministry_gift_history",
+    "ministry_care_notes", "ministry_care_requests", "ministry_gift_history",
     "chief_errand_events", "chief_errands",  # never restore execution authority or private frames
     "connected_agents", "agent_assignments",  # execution authority must never be restored from a file
     # Preserve the archive, but never restore paid job state, publication
