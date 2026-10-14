@@ -766,41 +766,47 @@ async def intake_health():
 @router.get("/intake/private-care/{business_id}")
 def private_care_requests(business_id: str, user: AuthedUser = Depends(require_user)):
     import private_care
-    private_care.require_owner(business_id, user)
-    return private_care.list_requests(business_id)
+    caller = private_care.care_access(business_id, user)
+    return private_care.list_requests(business_id, caller)
 
 
 class CareRequestPatch(BaseModel):
     status: Optional[str] = None
     prayed: Optional[bool] = None
+    # A teammate's user id, or null to take the request back. Absent means
+    # "leave it as it is", which is why the handler reads the set fields.
+    assigned_to: Optional[str] = None
 
 
 class CareNoteIn(BaseModel):
     body: str
 
 
-# The inbox's actions. Owner only, like the read: the browser has no grant
+# The inbox's actions. The owner acts on every request; a teammate only on
+# one handed to them (private_care.care_access). The browser has no grant
 # on either table, so these are the only way in.
 @router.patch("/intake/private-care/{business_id}/{request_id}")
 def private_care_update(business_id: str, request_id: str, body: CareRequestPatch,
                         user: AuthedUser = Depends(require_user)):
     import private_care
-    private_care.require_owner(business_id, user)
-    return private_care.update_request(business_id, request_id,
-                                       status=body.status, prayed=body.prayed)
+    caller = private_care.care_access(business_id, user)
+    extra = ({"assigned_to": body.assigned_to}
+             if "assigned_to" in body.model_fields_set else {})
+    return private_care.update_request(business_id, request_id, status=body.status,
+                                       prayed=body.prayed, caller=caller, **extra)
 
 
 @router.post("/intake/private-care/{business_id}/{request_id}/notes")
 def private_care_add_note(business_id: str, request_id: str, body: CareNoteIn,
                           user: AuthedUser = Depends(require_user)):
     import private_care
-    private_care.require_owner(business_id, user)
-    return private_care.add_note(business_id, request_id, body.body, str(user.id))
+    caller = private_care.care_access(business_id, user)
+    return private_care.add_note(business_id, request_id, body.body, str(user.id), caller)
 
 
 @router.delete("/intake/private-care/{business_id}/notes/{note_id}")
 def private_care_delete_note(business_id: str, note_id: str,
                              user: AuthedUser = Depends(require_user)):
     import private_care
-    private_care.require_owner(business_id, user)
-    return private_care.delete_note(business_id, note_id)
+    caller = private_care.care_access(business_id, user)
+    return private_care.delete_note(business_id, note_id, caller)
