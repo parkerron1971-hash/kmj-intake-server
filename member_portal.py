@@ -554,7 +554,7 @@ def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
     signed_in = tab is not None
     # Giving is one tap from every screen (Kevin, 2026-09-30).
     from giving_router import giving_is_active
-    give = (f'<a class="mb-give mp-noprint" href="/give" aria-label="Give">{ui.icon("heart", 18)}<span>Give</span></a>'
+    give = (f'<a class="mb-give mp-noprint" href="/my/give" aria-label="Give">{ui.icon("heart", 18)}<span>Give</span></a>'
             if signed_in and giving_is_active(biz) else "")
     import member_portal_messaging as mpm
     chat = (f'<a class="mb-chat-link mp-noprint" href="/my/messages" aria-label="Messages">{ui.icon("chat", 19)}</a>'
@@ -585,6 +585,53 @@ def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
 {mai.REGISTER_JS}
 </body>
 </html>"""
+
+
+GIVE_CSS = """
+.gv-shell{max-width:560px;padding:calc(6px + env(safe-area-inset-top,0px)) 20px 48px;}
+.gv-card{border:1px solid var(--mb-line);background:var(--mb-surface);border-radius:24px;padding:18px;}
+.gv-label{color:var(--text-muted);}
+.gv-grid{gap:8px;}
+.gv-amt{border:1px solid var(--mb-line);background:var(--mb-surface-2);border-radius:16px;font-family:var(--mb-display);
+  font-size:22px;font-stretch:80%;font-weight:800;min-height:56px;}
+.gv-amt.on{background:var(--text-primary);color:var(--surface);border-color:transparent;}
+.gv-input{border:1px solid var(--mb-line);background:var(--input-surface);border-radius:16px;min-height:52px;}
+.gv-input option{background:#222;color:#fff;}
+.gv-freq{border:1px solid var(--mb-line);border-radius:15px;background:var(--mb-surface-2);padding:4px;gap:4px;}
+.gv-freq button{border-radius:11px;color:var(--text-secondary);}
+.gv-freq button.on{background:var(--mb-fill);color:var(--mb-on-fill);}
+.gv-cover input{accent-color:var(--accent);}
+.gv-give{background:var(--mb-fill);color:var(--mb-on-fill);border-radius:17px;min-height:56px;font-family:var(--font-body);}
+.gv-error{color:var(--error);}
+.gv-banner{border-color:var(--mb-soft-line);background:var(--mb-soft);color:var(--text-primary);border-radius:16px;}
+.gv-msg{color:var(--text-secondary);}
+.gv-back,.gv-note,.gv-footer,.gv-footer a{color:var(--text-muted);}
+.gv-footer{border-color:var(--mb-line);}
+"""
+
+
+def render_give(biz: Dict[str, Any], site, me: Dict[str, Any], *, preview: bool = False) -> str:
+    """Give, inside the member app: the give page's own form and payment
+    (giving_router.render_give_page), in the app's look, with a way back
+    and the member's name and email filled in. In the owner's preview,
+    Give is refused (nothing is charged)."""
+    import member_app_ui as ui
+    import public_site
+    from business_sites_helpers import PUBLIC_DOMAIN
+    from giving_router import render_give_page
+    from public_form_theme import css_vars, resolve_theme
+    theme = resolve_theme(biz, site)
+    slug = str((site or {}).get("slug") or "")
+    name = (biz.get("name") or "").strip() or "the church"
+    top = (f'<a class="mb-back" href="/my">{ui.icon("back", 16)}Back</a>'
+           f'<div class="mb-lt" style="margin-top:6px"><h1>Give</h1></div>'
+           f'<p class="mp-muted" style="margin:0 0 16px">To {_e(name)}. Thank you for your generosity.</p>')
+    if preview:
+        top += ('<p class="mp-flash mp-ok" role="status">This is a preview, so Give won\'t charge anything.</p>')
+    head = (ui.FONTS + f"<style>{css_vars(theme)}</style><style>{ui.css(biz, theme)}</style><style>{GIVE_CSS}</style>")
+    return render_give_page(biz, f"https://{slug}.{PUBLIC_DOMAIN}/give", slug, api_origin=public_site._EMBED_ORIGIN,
+                            app={"head": head, "top": top, "name": me.get("name") or "",
+                                 "email": me.get("email") or "", "preview": preview})
 
 
 def render_unavailable(biz: Dict[str, Any], site=None) -> str:
@@ -1007,7 +1054,14 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
         off = await asyncio.to_thread(member_push.turned_off, biz["id"], me["id"])
         return _page(member_push.render_page(biz, site, request, me, off))
     from giving_router import giving_is_active
-    give_url = "/give" if giving_is_active(biz) else ""
+    # Giving opens inside the app (2026-10-14): /my/give is the give
+    # page's own form in the app's look, the member's name and email filled.
+    give_url = "/my/give" if giving_is_active(biz) else ""
+    if sub == "/my/give":
+        if not give_url:
+            return RedirectResponse("/my", status_code=303, headers=_SECURE_HEADERS)
+        full = await asyncio.to_thread(mpc.load_me, biz["id"], me["id"]) or me
+        return _page(render_give(biz, site, full, preview=preview))
     # A giver's own recurring gifts (member_portal_gifts.py).
     if sub == "/my/gifts":
         import member_portal_gifts as mpg

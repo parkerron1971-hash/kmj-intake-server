@@ -431,6 +431,24 @@ def register_wallet_domains(
     return {"ok": True, "domains": _register_wallet_domains(biz)}
 
 
+def app_return_base(slug: str, site_config: Optional[Dict[str, Any]], origin: str) -> str:
+    """Where a gift made inside the member app (/my/give) comes back to:
+    the church's own address the member is on, so their sign-in cookie is
+    there. The page's Origin is used only when it IS one of the church's
+    addresses (its custom domain, with or without www., or its
+    mysolutionist.app address); anything else gets the mysolutionist.app
+    address. Never an address a caller made up."""
+    from urllib.parse import urlparse
+    home = f"{slug}.{PUBLIC_DOMAIN}"
+    hosts = {home}
+    dom = str((site_config or {}).get("custom_domain") or "").strip().lower()
+    if dom:
+        bare = dom[4:] if dom.startswith("www.") else dom
+        hosts |= {bare, f"www.{bare}"}
+    host = (urlparse(origin or "").hostname or "").lower()
+    return f"https://{host if host in hosts else home}"
+
+
 # ─── Public checkout endpoint ────────────────────────────────────────
 
 
@@ -442,7 +460,10 @@ async def public_giving_checkout(
 
     Body: { amount_cents: int, fund?: str,
             frequency?: 'once'|'weekly'|'biweekly'|'monthly',
-            cover_fee?: bool, name?: str, email?: str, embedded?: bool }
+            cover_fee?: bool, name?: str, email?: str, embedded?: bool,
+            return_to?: 'app' }
+    `return_to: 'app'` (the member app's give screen) brings the giver
+    back to /my/give on the church address they're on (app_return_base).
     Returns { ok, url } — the Stripe-hosted payment page — or, when the
     page asked for embedded and the platform's publishable key is set,
     { ok, embedded: true, client_secret } for the form that mounts
@@ -486,7 +507,7 @@ async def public_giving_checkout(
     # ── Resolve slug → business ──
     sites = sb_clients.sb_get_as_service(
         f"/business_sites?slug=eq.{urllib.parse.quote(slug, safe='')}"
-        f"&order=updated_at.desc&limit=1&select=business_id,slug"
+        f"&order=updated_at.desc&limit=1&select=business_id,slug,site_config"
     ) or []
     if not sites:
         raise HTTPException(404, "not found")
@@ -515,6 +536,9 @@ async def public_giving_checkout(
         fund = funds[0]
 
     canonical = f"https://{sites[0].get('slug') or slug}.{PUBLIC_DOMAIN}/give"
+    if body.get("return_to") == "app":
+        canonical = app_return_base(sites[0].get("slug") or slug, sites[0].get("site_config"),
+                                    request.headers.get("origin") or "") + "/my/give"
     gift_id = str(uuid.uuid4())
 
     from payments_core import provider_for
@@ -889,10 +913,17 @@ def render_give_page(
     slug: str,
     *,
     api_origin: str,
+    app: Optional[Dict[str, Any]] = None,
 ) -> str:
     """The public give page. Mobile-first by design — congregants give
     from phones: single column, ≤480px shell, 44px+ touch targets,
-    16px inputs (no iOS zoom), no horizontal scroll at any width."""
+    16px inputs (no iOS zoom), no horizontal scroll at any width.
+
+    `app` puts the same form inside the member app (/my/give, Kevin's
+    phone design 2026-10-14): {"head": the app's fonts and stylesheet,
+    "top": its header, "name"/"email": the signed-in member's (the app's
+    pages are never cached), "preview": the owner's preview, where Give
+    is refused}. The payment itself is unchanged."""
     name = (business.get("name") or "").strip() or "Give"
     cfg = giving_settings(business.get("settings"))
     funds = configured_funds(cfg)
@@ -937,6 +968,10 @@ def render_give_page(
     logo_html = (f'<img class="gv-logo" src="{_esc(logo_url)}" alt="{_esc(name)} logo">'
                  if logo_url else "")
     message_html = (f'<p class="gv-msg">{_esc(message)}</p>' if message else "")
+    app = app or None
+    header_html = (app["top"] + message_html if app else
+                   f'<header class="gv-header">{logo_html}<h1 class="gv-name">{_esc(name)}</h1>'
+                   f'<p class="gv-title">Give</p>{message_html}</header>')
     # Precomputed (not a nested f-string) so the module parses on every
     # Python the deploy target might run.
     og_image_html = ""
@@ -1007,15 +1042,11 @@ padding-top:14px;border-top:1px solid var(--border);}}
 color:var(--text-secondary);cursor:pointer;min-height:44px;font-family:var(--font-body);}}
 .gv-pay{{border-radius:16px;overflow:hidden;}}
 </style>
+{app["head"] if app else ""}
 </head>
 <body>
 <main class="gv-shell">
-  <header class="gv-header">
-    {logo_html}
-    <h1 class="gv-name">{_esc(name)}</h1>
-    <p class="gv-title">Give</p>
-    {message_html}
-  </header>
+  {header_html}
   <div id="gv-thanks" class="gv-banner">Thank you — your gift has been received.
   If you shared your email, a receipt is on its way.</div>
   <div id="gv-canceled" class="gv-banner">No gift was made. You're welcome to
@@ -1036,9 +1067,9 @@ color:var(--text-secondary);cursor:pointer;min-height:44px;font-family:var(--fon
     <label class="gv-cover"><input type="checkbox" id="gv-fee">
       <span id="gv-fee-txt">Add a little to cover the processing fee, so your whole gift arrives</span></label>
     <label class="gv-label" for="gv-nm">Name <span style="text-transform:none;font-weight:400">(optional)</span></label>
-    <input type="text" id="gv-nm" class="gv-input" autocomplete="name" maxlength="120">
+    <input type="text" id="gv-nm" class="gv-input" autocomplete="name" maxlength="120" value="{_esc((app or {}).get('name') or '')}">
     <label class="gv-label" for="gv-em">Email <span style="text-transform:none;font-weight:400">(for your receipt)</span></label>
-    <input type="email" id="gv-em" class="gv-input" autocomplete="email" maxlength="200">
+    <input type="email" id="gv-em" class="gv-input" autocomplete="email" maxlength="200" value="{_esc((app or {}).get('email') or '')}">
     <button type="submit" class="gv-give" id="gv-go">Give</button>
     <div class="gv-error" id="gv-err"></div>
     <p class="gv-note">{pay_note}
@@ -1073,6 +1104,9 @@ color:var(--text-secondary);cursor:pointer;min-height:44px;font-family:var(--fon
   // Embedded Checkout: {{pk, acct}} when the payment form can open on
   // this page, else null (Give redirects to Stripe's page instead).
   var EMBED = {embed_json};
+  // Inside the member app: come back to /my/give; in the owner's preview
+  // nothing is charged.
+  var APP = {json.dumps(bool(app))}, PREVIEW = {json.dumps(bool((app or {}).get("preview")))};
   var form = document.getElementById('gv-form');
   var payBox = document.getElementById('gv-pay');
   var back = document.getElementById('gv-back');
@@ -1132,6 +1166,7 @@ color:var(--text-secondary);cursor:pointer;min-height:44px;font-family:var(--fon
   document.getElementById('gv-form').addEventListener('submit', function(ev) {{
     ev.preventDefault();
     err.classList.remove('show');
+    if (PREVIEW) {{ err.textContent = "This is a preview, so nothing is charged."; err.classList.add('show'); return; }}
     if (cents < 100) {{ err.textContent = 'Please choose an amount ($1 minimum).'; err.classList.add('show'); return; }}
     var email = document.getElementById('gv-em').value.trim();
     if (freq !== 'once' && !email) {{ err.textContent = 'A recurring gift needs an email so we can send your receipts.'; err.classList.add('show'); return; }}
@@ -1147,7 +1182,8 @@ color:var(--text-secondary);cursor:pointer;min-height:44px;font-family:var(--fon
         cover_fee: feeBox.checked,
         name: document.getElementById('gv-nm').value.trim() || undefined,
         email: email || undefined,
-        embedded: embedOn() || undefined
+        embedded: embedOn() || undefined,
+        return_to: APP ? 'app' : undefined
       }})
     }}).then(function(r) {{ return r.json().then(function(j) {{ return {{ok: r.ok, j: j}}; }}); }})
       .then(function(res) {{
