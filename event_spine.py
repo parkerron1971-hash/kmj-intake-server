@@ -174,7 +174,8 @@ EVENT_CATALOG: Dict[str, Dict[str, Any]] = {
     # ── Workflow / lifecycle ─────────────────────────────────────
     "contact_form_submitted": {
         "source": "public_site contact_submit_endpoint (composed-site contact form)",
-        "payload": ["name", "email", "message_preview", "new_contact"],
+        "payload": ["name", "email", "phone", "message", "message_preview", "new_contact"],
+        "legacy": True,  # durable receipt written directly with a retry-safe id
     },
     # 2026-09-04: bookings reached the rules engine (rules_engine.on_event)
     # and the practitioner's notification, but never the spine — so the

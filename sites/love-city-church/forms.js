@@ -2,16 +2,14 @@
   // The ONE place this site's forms are sent from. Every form is marked
   // data-church-form="<kind>" and holds plainly named fields.
   //
-  // For now every kind posts to the platform's website contact endpoint,
-  // which takes {name, email, phone, message}: the fields it has no slot
-  // for are written into the message as "Question: answer" lines. When the
-  // church's own endpoint exists, rewire ENDPOINT and toPayload() here; the
-  // pages don't change. The recipient is set on the server, never here.
+  // Both forms use the shared endpoint. Structured answers are stored in
+  // Solutionist; the readable message also preserves the questions as shown.
+  // The recipient is resolved only on the server.
   var ENDPOINT = '{{API_BASE}}/sites/{{BUSINESS_ID}}/contact-submit';
 
-  // The endpoint keeps the first 5,000 characters of the message. Every
-  // field's maxlength keeps a full card well under that; this check makes
-  // sure nothing is ever cut off without the visitor knowing.
+  // The endpoint rejects messages above 5,000 characters. The field limits
+  // keep a full card below that; this check catches an oversized message
+  // before sending and keeps every answer in the form.
   var MAX_MESSAGE = 5000;
 
   var TITLES = { 'connect-card': 'Connect card', 'prayer-request': 'Prayer request' };
@@ -59,6 +57,11 @@
   function toPayload(kind, form, v) {
     var own = { first_name: 1, last_name: 1, email: 1, phone: 1 };
     var lines = [TITLES[kind] || kind];
+    var fields = {};
+    Object.keys(v).forEach(function (k) {
+      if (k !== 'email' && k !== 'phone') fields[k] = v[k];
+    });
+    if (kind === 'prayer-request') fields.follow_up = !!v.follow_up;
     Object.keys(v).forEach(function (k) {
       if (own[k]) return;
       lines.push(question(form, k) + ': ' + (Array.isArray(v[k]) ? v[k].join(', ') : v[k]));
@@ -68,7 +71,8 @@
       email: v.email || '',
       phone: v.phone || '',
       message: lines.join('\n'),
-      form: kind
+      form: kind.replace(/-/g, '_'),
+      fields: fields
     };
   }
 
@@ -83,6 +87,7 @@
     var kind = form.getAttribute('data-church-form');
     var note = form.querySelector('[data-form-note]');
     var button = form.querySelector('[type="submit"]');
+    var pendingPayload = '', pendingId = '';
     function say(text, tone) { note.textContent = text; note.className = 'form-note' + (tone ? ' ' + tone : ''); }
 
     // Ready. Until this line runs the button stays disabled and the page
@@ -98,6 +103,14 @@
       if (form.elements.website && form.elements.website.value) return; // the hidden field only bots fill in
       var payload = toPayload(kind, form, fieldValues(form));
       if (payload.message.length > MAX_MESSAGE) { say(TOO_LONG, 'err'); return; }
+      var fingerprint = JSON.stringify(payload);
+      if (fingerprint !== pendingPayload) {
+        pendingPayload = fingerprint;
+        pendingId = (window.crypto && typeof window.crypto.randomUUID === "function")
+          ? window.crypto.randomUUID()
+          : Date.now().toString(36) + "-" + Math.random().toString(36).slice(2);
+      }
+      payload.submission_id = pendingId;
       button.disabled = true;
       say('Sending…');
       fetch(ENDPOINT, {
@@ -105,12 +118,14 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       })
-        // Only {ok: true} means it arrived. A 200 can still carry
-        // {ok: false} (the notification failed), so anything short of ok
-        // keeps the visitor's words in the form and tells them to retry.
+        // Only {ok: true} means the submission is stored in Solutionist.
+        // notification_sent:false still succeeds: no recipient or an email
+        // failure must not make a visitor resend an already-saved request.
+        // Every failure keeps the visitor's words for another attempt.
         .then(function (r) {
           return r.json().catch(function () { return {}; }).then(function (body) {
-            if (r.ok && body && body.ok === true) { form.reset(); say(THANKS[kind] || 'Thank you. It’s sent.', 'ok'); }
+            if (r.ok && body && body.ok === true) { form.reset(); pendingPayload = ''; pendingId = ''; say(THANKS[kind] || 'Thank you. It’s sent.', 'ok'); }
+            else if (r.status === 400) say(body.error || TOO_LONG, 'err');
             else if (r.status === 429) say(BUSY, 'err');
             else say(r.ok ? NOT_DELIVERED : FAILED, 'err');
           });
