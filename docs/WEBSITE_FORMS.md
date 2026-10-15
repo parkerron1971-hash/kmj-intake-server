@@ -63,14 +63,19 @@ opt into retry deduplication. Different answers or businesses never share a rece
 Concurrent distinct first-time visitors may still produce duplicate contacts;
 the existing schema permits shared household emails. No migration is needed.
 
-Prayer requests use ministry_care_requests and its existing owner-only Prayer &
-care reader. They never write contacts, SMS consent or lead events, capture
+Prayer requests use ministry_care_requests and the existing Prayer & care inbox.
+The owner sees all requests; active teammates see only requests assigned to them.
+Prayer submissions never write contacts, SMS consent or lead events, capture
 attribution, score leads, enter marketing/autopilot, or send visitor auto-replies.
+The insert uses status new, form_id null and a private submission object.
+created_at uses the table default; contact_id, prayed_at, status_changed_at,
+updated_at and assignment fields remain null until a church action changes them.
+Chief's church_reads receives status/date counts only, never prayer text or identity.
 Connect cards intentionally omit attribution, lead scoring and automatic lead
 events, keeping ministry interests out of marketing analytics and outreach.
 
 After church storage, a content-free chief_notifications alert points to Members
-or Client Forms (the owner-only private-care panel). It contains no submitted
+or Client Forms (the private-care panel). It contains no submitted
 name, email, phone or answers. The notification engine honors urgent_alerts
 preferences, including opt-out, before inserting the immutable alert. Alert
 failures reach Railway logs without

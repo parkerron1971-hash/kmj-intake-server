@@ -294,24 +294,93 @@ def test_no_recipient_still_returns_success_after_storage(env, monkeypatch, kind
         assert row["metadata"]["website_form_messages"][0]["message"] == "Hello"
 
 
-def test_saved_prayer_is_readable_only_by_the_church_owner(env, monkeypatch):
+def test_website_prayer_reaches_care_inbox_and_church_counts(env, monkeypatch):
+    """Use the actual website insert with the merged care and Chief readers.
+
+    Emulate SQL defaults and PostgREST projection/scope, never a live database.
+    """
+    from datetime import datetime, timezone
+    from urllib.parse import urlsplit, parse_qs
+    import church_reads
     import intake_endpoint
+    import private_care
     from fastapi import HTTPException
+    biz = "11111111-1111-1111-1111-111111111111"
+    owner = "22222222-2222-2222-2222-222222222222"
+    teammate = "33333333-3333-3333-3333-333333333333"
+    outsider = "44444444-4444-4444-4444-444444444444"
+    body = {"name": "Dana Rivers", "email": "dana@example.org", "phone": "5551234567",
+            "form": "prayer_request", "message": "A private request",
+            "fields": {"request": "A private request", "follow_up": True},
+            "submission_id": "care-integration"}
     monkeypatch.setattr(public_site, "_business_public_email", lambda s: "")
-    assert submit(env, form="prayer_request", fields={"request": "A private request"}).json()["ok"] is True
-    record = dict(env.posts[0][1], id="request-1")
+    response = env.client.post(f"/sites/{biz}/contact-submit", json=body)
+    assert response.json() == {"ok": True, "notification_sent": False}
+    path, inserted = env.posts[0]
+    assert path == "/ministry_care_requests"
+    assert set(inserted) == {"id", "business_id", "form_id", "status", "submission"}
+    assert inserted["business_id"] == biz and inserted["status"] == "new"
+    assert inserted["form_id"] is None
+    # Base schema supplies created_at; #1414 and #1417 add nullable fields.
+    row = dict(inserted, created_at="2026-10-12T15:00:00+00:00", contact_id=None,
+               prayed_at=None, status_changed_at=None, updated_at=None,
+               assigned_to=None, assigned_at=None, assigned_by=None)
+    calls = []
     def get(path):
-        assert "business_id=eq.church-1" in path or "id=eq.church-1" in path
-        if path.startswith("/businesses?"):
-            return [{"id": "church-1", "owner_id": "church-owner"}]
-        assert path.startswith("/ministry_care_requests?")
-        return [record]
+        calls.append(path)
+        url = urlsplit(path)
+        query = parse_qs(url.query)
+        table = url.path.lstrip("/")
+        if table == "businesses":
+            assert query["id"] == ["eq." + biz]
+            return [{"id": biz, "owner_id": owner}]
+        assert query["business_id"] == ["eq." + biz]
+        if table == "business_users":
+            rows = [{"user_id": teammate, "role": "member", "invited_email": "team@example.org"}]
+            if "user_id" in query:
+                rows = [r for r in rows if query["user_id"] == ["eq." + r["user_id"]]]
+            return rows
+        if table != "ministry_care_requests":
+            assert table in ("ministry_care_notes", "child_checkins")
+            return []
+        for key in ("id", "assigned_to"):
+            if key in query and query[key] != ["eq." + str(row.get(key))]:
+                return []
+        if "created_at" in query:
+            cutoff = datetime.fromisoformat(query["created_at"][0][4:])
+            if datetime.fromisoformat(row["created_at"]) < cutoff:
+                return []
+        return [{key: copy.deepcopy(row.get(key)) for key in query["select"][0].split(",")}]
+    def patch(path, payload):
+        assert f"id=eq.{row['id']}" in path and f"business_id=eq.{biz}" in path
+        row.update(payload)
+        return [copy.deepcopy(row)]
     monkeypatch.setattr(sb_clients, "sb_get_as_service", get)
-    result = intake_endpoint.private_care_requests("church-1", SimpleNamespace(id="church-owner"))
-    assert result["requests"][0]["submission"]["prayer_request"] == "A private request"
+    monkeypatch.setattr(sb_clients, "sb_patch_as_service", patch)
+    owner_inbox = intake_endpoint.private_care_requests(biz, SimpleNamespace(id=owner))
+    assert owner_inbox["actions"] and owner_inbox["scope"] == "all"
+    request = owner_inbox["requests"][0]
+    assert request["submission"] == inserted["submission"]
+    assert request["status"] == "new" and request["prayed_at"] is None and request["notes"] == []
+    assert intake_endpoint.private_care_requests(biz, SimpleNamespace(id=teammate))["requests"] == []
     with pytest.raises(HTTPException) as denied:
-        intake_endpoint.private_care_requests("church-1", SimpleNamespace(id="other-owner"))
+        intake_endpoint.private_care_requests(biz, SimpleNamespace(id=outsider))
     assert denied.value.status_code == 403
+    now = datetime(2026, 10, 14, 15, 0, tzinfo=timezone.utc)
+    calls.clear()
+    counts = church_reads.care_counts(biz, now=now)
+    assert counts["care"] == {"new": 1, "reviewed": 0, "closed": 0,
+                               "prayed": 0, "oldest_new_days": 2}
+    assert "select=status,created_at,prayed_at" in calls[0]
+    assert not any(secret in str(counts) for secret in ("Dana", "dana@example.org", "A private request"))
+    # A website row is actionable and may be shared through the existing owner gate.
+    private_care.update_request(biz, row["id"], status="reviewed", assigned_to=teammate,
+                                caller=private_care.CareCaller(owner, True))
+    assigned = intake_endpoint.private_care_requests(biz, SimpleNamespace(id=teammate))
+    assert assigned["scope"] == "assigned" and len(assigned["requests"]) == 1
+    assert assigned["requests"][0]["submission"]["prayer_request"] == "A private request"
+    assert church_reads.care_counts(biz, now=now)["care"] == {
+        "new": 0, "reviewed": 1, "closed": 0, "prayed": 0, "oldest_new_days": None}
 
 
 @pytest.mark.parametrize("result", [None, [], [{}]])

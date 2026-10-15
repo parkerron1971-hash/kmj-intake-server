@@ -123,3 +123,31 @@ dependency outside KAI's explicit #1414 exception. Stopped and reported before
 rebase/push. #1414 remains open. Fixes are committed locally; final rebase,
 main-migration compatibility check, combined care-inbox tests and CI remain
 pending coordination. No private_care.py or care-inbox SQL changes.
+
+
+Coordination cleared and latest-main verification (2026-10-14): KAI explicitly
+cleared #1416's read-only care-table access and authorized pushing the committed
+fixes before rebasing. Pushed a29b025f, then found #1414 (130ae5d4) and #1416
+(080153ef) both merged. Rebased cleanly onto origin/main c5eebe30, which also
+includes #1417's assignment flow and subsequent member work. No conflicts.
+No new overlapping backend/frontend worklog entries were present; read current
+care code and migrations directly.
+
+Read APPLY-2026-10-14-care-inbox-actions.sql from main, plus the base care,
+member contact-link, and care-assignment migrations. Our insert remains valid:
+UUID id/business, null form_id, JSON submission and status new; created_at has
+its existing now() default. The added timestamps and assignment columns, along
+with contact_id, are nullable. No schema or care-inbox production files changed.
+
+Replaced the old owner-reader fixture test with an integration regression using
+an actual website prayer insert and both merged readers, with SQL defaults and
+scoped/projected reads modeled in memory. The owner sees the full private request;
+a teammate sees nothing until the owner assigns it, then sees that request.
+The row can be marked reviewed; church_reads returns the correct new/reviewed
+counts and age, without any prayer text or identity. No live requests or writes.
+Combined care-inbox, church-read, form, endpoint, Love City, manual-site and
+ministry/member tests: 310 passed, no skips. The broader combined run passed
+1,187 tests across all site suites and the affected care/form/notification/lead
+backends, with no skips. JavaScript syntax and diff checks passed. Final open-PR
+file and care-table diff checks found no uncleared overlap. Required CI will
+run on the pushed head; no merge is authorized in this session.
