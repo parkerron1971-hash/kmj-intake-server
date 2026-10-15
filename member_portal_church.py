@@ -66,6 +66,7 @@ DONE = {
     "blocked": "Blocked. They can't message you, and they aren't told.",
     "reported": "Thanks. The church's safety officers will look at it. The sender isn't told who reported it.",
     "welcome_msgs": "Welcome to messaging.",
+    "group_interest": "Thanks. The church office knows you'd like to join a group and can reach out when one starts.",
 }
 ERRORS = {
     "full": "That one is full now.",
@@ -446,6 +447,8 @@ def _group_card(g: Dict[str, Any], action: str, pal: Dict[str, str], pool: Optio
         used.add(pic)
     badge = ('<span class="mb-live-badge"><span class="mb-live-dot" aria-hidden="true"></span>Meeting now</span>'
              if action == "leave" and (g.get("live") or {}).get("status") == "live" else "")
+    import member_app_samples as samples
+    badge += ui.sample_tag() if samples.is_sample(g) else ""
     if pic:
         band = f'<div class="mb-gcard-cov">{ui.photo(pic)}{badge}<h3 id="{title_id}">{_e(g.get("name") or "")}</h3></div>'
     else:
@@ -515,16 +518,20 @@ def render_groups(biz, site, request: Request, data: Optional[Dict[str, List[Dic
         body = (f'<section class="mb-soon">{ui.gen_art("G")}<div class="mb-soon-in"><span class="mb-kick">Starting soon</span>'
                 f'<h2>Groups are coming</h2><p>Small groups at {church} will show up here: when they meet, who leads them, '
                 f'and a way to join.</p></div></section>'
-                f'<p class="mp-muted" style="margin-top:14px">Want to be in one? Ask the church office what\'s starting soon.</p>'
-                f'<div class="mb-pair"><a class="mp-go" href="/my/events">{ui.icon("calendar", 16)}What\'s coming up</a>'
-                f'<a class="mp-go mp-go-2" href="/my/prayer">{ui.icon("pray", 16)}Prayer</a></div>')
+                f'<form method="post" action="/my/groups/interest" style="margin-top:16px">'
+                f'<button class="mp-go" type="submit">{ui.icon("users", 18)}I\'d like to join a group</button></form>'
+                f'<p class="mp-muted" style="margin-top:10px;text-align:center">The church office hears from you and can reach out '
+                f'when a group starts.</p>')
     else:
         used: set = set()
         mine = "".join(_group_card(g, "leave", pal, pool, used) for g in data["mine"]) or \
             '<p class="mp-muted">You\'re not in a group yet. Find one below.</p>'
         open_ = "".join(_group_card(g, "join", pal, pool, used) for g in data["open"]) or \
             '<p class="mp-muted">No groups are taking new people right now. Ask the church office what\'s starting soon.</p>'
-        body = (f'<section aria-labelledby="mp-mine-h"><h2 id="mp-mine-h" class="mp-sect">My groups</h2>{mine}</section>'
+        import member_app_samples as samples
+        hint = (ui.sample_hint(samples.WHERE["groups"])
+                if any(samples.is_sample(g) for g in data["mine"] + data["open"]) else "")
+        body = (f'{hint}<section aria-labelledby="mp-mine-h"><h2 id="mp-mine-h" class="mp-sect">My groups</h2>{mine}</section>'
                 f'<section aria-labelledby="mp-open-h"><h2 id="mp-open-h" class="mp-sect">Find a group</h2>{open_}</section>')
     return _shell(biz, site, "Groups", f"""
 <div class="mb-lt"><h1>Groups</h1></div>
@@ -594,8 +601,11 @@ def occasion_card(o: Dict[str, Any], back: str, level: int = 2) -> str:
         actions.append(f'<form method="post" action="/my/rsvp">{hidden}<input type="hidden" name="action" value="cant">'
                        f'<button class="mp-link" type="submit" {about}>Can\'t make it</button></form>')
     h = "h3" if level == 3 else "h2"
+    import member_app_samples as samples
+    import member_app_ui as ui
+    sample = ui.sample_tag() if samples.is_sample(o) else ""
     return f"""<article class="mp-card mp-occ" aria-labelledby="{title_id}">
-  <p class="mp-when">{_e(o.get('date_label') or '')}</p>
+  <p class="mp-when">{_e(o.get('date_label') or '')}{sample}</p>
   <{h} id="{title_id}">{_e(o.get('title') or '')}</{h}>
   {f'<p class="mp-muted">{facts_html}</p>' if facts_html else ''}
   {_status_line(o)}
@@ -612,7 +622,9 @@ def render_events(biz, site, request: Request, occasions: Optional[List[Dict[str
     elif not occasions:
         body = '<p class="mp-muted">Nothing is on the calendar yet. Check back soon.</p>'
     else:
-        body = "".join(occasion_card(o, "/my/events") for o in occasions)
+        import member_app_samples as samples
+        hint = ui.sample_hint(samples.WHERE["events"]) if any(samples.is_sample(o) for o in occasions) else ""
+        body = hint + "".join(occasion_card(o, "/my/events") for o in occasions)
     return _shell(biz, site, "Coming up", f"""
 <a class="mb-back" href="/my">{ui.icon('back', 16)}Home</a>
 <h1>Coming up</h1>
@@ -707,6 +719,9 @@ def next_card(occasions: Optional[List[Dict[str, Any]]], today: Optional[date] =
         return ""
     eid = _e(o.get("entry_id"))
     title_id = f"mb-next-{eid}"
+    import member_app_samples as samples
+    sample = ui.sample_tag() if samples.is_sample(o) else ""
+    hint = ui.sample_hint(samples.WHERE["events"]) if sample else ""
     answer = _my_answer(o)
     mine = o.get("mine") or {}
     where = " · ".join(_e(x) for x in (o.get("date_label") or "", o.get("location") or "") if x)
@@ -733,9 +748,9 @@ def next_card(occasions: Optional[List[Dict[str, Any]]], today: Optional[date] =
                 f'<button class="mp-go" type="submit" aria-describedby="{title_id}">I\'m coming</button></form>{details}</div>')
     return (f'<section class="mb-next" aria-labelledby="{title_id}"><div class="mb-next-top">'
             f'<span class="mb-datebox" aria-hidden="true"><span>{d.strftime("%a")}</span><b>{d.day}</b><span>{d.strftime("%b")}</span></span>'
-            f'<span class="mb-what"><span class="mb-kick">Next gathering · {_e(_in_days(d, today or date.today()))}</span>'
+            f'<span class="mb-what"><span class="mb-kick">Next gathering · {_e(_in_days(d, today or date.today()))}{sample}</span>'
             f'<strong id="{title_id}">{_e(o.get("title"))}</strong><span>{where}</span>{acts}</span></div>'
-            f'{going}{foot}</section>')
+            f'{going}{foot}{hint}</section>')
 
 
 def week_cards(occasions: Optional[List[Dict[str, Any]]],
@@ -750,13 +765,18 @@ def week_cards(occasions: Optional[List[Dict[str, Any]]],
     import member_app_photos as photos
     from member_portal import _e
 
+    import member_app_samples as samples
     used = {avoid}
+    any_sample = False
 
-    def cov(key: str, title: str, label: str) -> str:
+    def cov(key: str, title: str, label: str, item: Dict[str, Any]) -> str:
+        nonlocal any_sample
         pic = photos.pick(pool or [], key, used)
         used.add(pic)
         art = ui.cover(pic, key, pal, title) if pal else ""
-        return f'<span class="mb-wk-cov">{art}<span class="mb-wk-d">{_e(label)}</span></span>'
+        tag = ui.sample_tag() if samples.is_sample(item) else ""
+        any_sample = any_sample or bool(tag)
+        return f'<span class="mb-wk-cov">{art}{tag}<span class="mb-wk-d">{_e(label)}</span></span>'
     cards = []
     for o in (occasions or []):
         answer = _my_answer(o)
@@ -764,7 +784,7 @@ def week_cards(occasions: Optional[List[Dict[str, Any]]],
         if not answer or not d:
             continue
         day = f"{d.strftime('%a')} {d.day}"
-        cards.append(f'<a class="mb-wk" href="/my/events">{cov(str(o.get("entry_id")), o.get("title") or "", day)}'
+        cards.append(f'<a class="mb-wk" href="/my/events">{cov(str(o.get("entry_id")), o.get("title") or "", day, o)}'
                      f'<span class="mb-wk-b"><strong>{_e(o.get("title"))}</strong>'
                      f'<span class="mb-wk-s">{_e(o.get("location") or o.get("date_label") or "")}</span>'
                      f'<span class="mb-chip">{ui.icon("check", 12)}{_e(answer)}</span></span></a>')
@@ -773,7 +793,7 @@ def week_cards(occasions: Optional[List[Dict[str, Any]]],
     for g in (groups or {}).get("mine", [])[:3]:
         led = ", ".join(g.get("leaders") or [])
         href = f"/my/groups/live/{_e(g['live']['id'])}" if g.get("live") else "/my/groups"
-        cards.append(f'<a class="mb-wk" href="{href}">{cov(str(g.get("id")), g.get("name") or "", g.get("kind") or "Group")}'
+        cards.append(f'<a class="mb-wk" href="{href}">{cov(str(g.get("id")), g.get("name") or "", g.get("kind") or "Group", g)}'
                      f'<span class="mb-wk-b"><strong>{_e(g.get("name"))}</strong>'
                      f'<span class="mb-wk-s">{_e(g.get("meets") or g.get("location") or "")}</span>'
                      f'{f"<span class=mb-wk-s>Led by {_e(led)}</span>" if led and g.get("role") != "leader" else ""}'
@@ -782,7 +802,8 @@ def week_cards(occasions: Optional[List[Dict[str, Any]]],
                      f'</span></a>')
     if not cards:
         return ""
-    return (f'<section aria-labelledby="mb-week"><h2 id="mb-week" class="mp-sect">Your week</h2>'
+    hint = ui.sample_hint(samples.WHERE["week"]) if any_sample else ""
+    return (f'<section aria-labelledby="mb-week"><h2 id="mb-week" class="mp-sect">Your week</h2>{hint}'
             f'<div class="mb-week">{"".join(cards)}</div></section>')
 
 
@@ -911,6 +932,42 @@ async def details(request: Request):
             if new and new != claims["em"]:
                 mp._set_session(resp, mp.mint_session(biz["id"], new, str(me["id"])))
     return resp
+
+
+def save_group_interest(business_id: str, me: Dict[str, Any]) -> bool:
+    """A member at a church with no groups yet says they'd like to join
+    one. It lands in Prayer & care (ministry_care_requests), the inbox the
+    office already works from, once per person while it's still new."""
+    have = sb_clients.sb_get_as_service(
+        f"/ministry_care_requests?business_id=eq.{quote(str(business_id), safe='')}"
+        f"&contact_id=eq.{quote(str(me['id']), safe='')}&status=eq.new"
+        f"&submission->>kind=eq.group_interest&select=id&limit=1")
+    if isinstance(have, list) and have:
+        return True
+    rows = sb_clients.sb_post_as_service("/ministry_care_requests", {
+        "business_id": str(business_id), "form_id": None, "contact_id": str(me["id"]), "status": "new",
+        "submission": {
+            "name": (me.get("name") or "").strip(), "email": me.get("email") or "", "phone": me.get("phone") or "",
+            "prayer_request": "I'd like to join a group. Please let me know when one starts.",
+            "confidential": "no", "source": "Member page", "kind": "group_interest",
+        },
+    })
+    return isinstance(rows, list) and bool(rows)
+
+
+@router.post("/my/groups/interest", include_in_schema=False)
+async def group_interest(request: Request):
+    import asyncio
+    church, me, unavailable = await _signed_in(request)
+    if unavailable:
+        return _back("/my/groups", err="preview" if unavailable == "preview" else "error")
+    if not me:
+        return _back("/my")
+    if not _allowed(church, me):
+        return _back("/my/groups", err="slow")
+    full = await asyncio.to_thread(load_me, church["business"]["id"], me["id"]) or me
+    ok = await asyncio.to_thread(save_group_interest, church["business"]["id"], full)
+    return _back("/my/groups", **({"done": "group_interest"} if ok else {"err": "error"}))
 
 
 @router.post("/my/groups", include_in_schema=False)

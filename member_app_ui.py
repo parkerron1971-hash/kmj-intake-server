@@ -233,6 +233,16 @@ def cover(url: str, key: Any, pal: Dict[str, str], title: str, kick: str = "") -
     return poster(key, pal, title, kick, cls="mb-cover")
 
 
+def sample_tag() -> str:
+    """'Sample' on something only the owner's preview shows."""
+    return '<span class="mb-sample">Sample</span>'
+
+
+def sample_hint(text: str) -> str:
+    """Where the owner adds the real thing (member_app_samples.WHERE)."""
+    return f'<p class="mb-hint">{icon("plus", 14)}<span>{escape(text)}</span></p>'
+
+
 def initials(name: Any) -> str:
     """'Ana Rivers' → AR; 'Rivers of Living Water' → RL (small lowercase
     words like 'of' are skipped)."""
@@ -397,7 +407,7 @@ p{line-height:1.55;margin:0 0 12px;}
   margin:30px 0 12px;display:flex;justify-content:space-between;align-items:baseline;gap:10px;}
 .mp-sect a{letter-spacing:0;text-transform:none;font-size:13px;color:var(--text-secondary);text-decoration:none;font-weight:600;}
 
-.mb-mcard{display:block;border-radius:26px;overflow:hidden;background:var(--mb-surface);border:1px solid var(--mb-line);text-decoration:none;color:var(--text-primary);}
+.mb-mcard{position:relative;display:block;border-radius:26px;overflow:hidden;background:var(--mb-surface);border:1px solid var(--mb-line);text-decoration:none;color:var(--text-primary);}
 .mb-mcard .mb-art{border-radius:0;}
 .mb-mcard-b{display:block;padding:14px 16px 16px;}
 .mb-msg-title{font-family:var(--mb-display);font-stretch:84%;font-size:20px;font-weight:800;margin:0 0 3px;line-height:1.15;}
@@ -692,6 +702,18 @@ details.mb-each summary::-webkit-details-marker{display:none;}
   font-size:15px;font-weight:800;letter-spacing:.14em;text-transform:uppercase;}
 .mb-si h1{font-size:clamp(50px,15vw,62px);font-stretch:66%;line-height:.88;margin:0;}
 
+/* samples, in the owner's preview only (member_app_samples) */
+.mb-sample{display:inline-flex;align-items:center;padding:3px 8px;border-radius:7px;font-family:var(--font-body);font-size:10px;font-weight:800;
+  letter-spacing:.14em;text-transform:uppercase;color:#fff;background:rgba(0,0,0,.55);border:1px dashed rgba(255,255,255,.6);
+  vertical-align:middle;line-height:1.3;}
+.mb-wk-cov .mb-sample,.mb-gcard-cov .mb-sample,.mb-mcard .mb-sample{position:absolute;left:10px;top:10px;z-index:5;}
+.mp-sect .mb-sample,.mb-kick .mb-sample,.mp-when .mb-sample,h1 .mb-sample{position:static;margin-left:8px;color:var(--accent);background:transparent;
+  border-color:var(--accent);letter-spacing:.12em;}
+.mb-hint{display:flex;align-items:center;gap:8px;margin:0 0 12px;padding:9px 12px;border-radius:12px;font-size:12.5px;line-height:1.35;
+  color:var(--accent);border:1px dashed $accent50;background:$accent08;}
+.mb-hint .mb-ic{flex:none;}
+.mb-next .mb-hint{margin:14px 0 0;}
+
 /* the floating tab bar */
 .mb-nav{position:fixed;z-index:20;bottom:calc(12px + env(safe-area-inset-bottom,0px));left:max(12px,env(safe-area-inset-left,0px));
   right:max(12px,env(safe-area-inset-right,0px));max-width:520px;margin:0 auto;height:66px;padding:5px;border-radius:33px;
@@ -730,7 +752,7 @@ def css(biz: Dict[str, Any], theme: Dict[str, Any]) -> str:
         on_fill=p["on_fill"], soft=_rgba(p["accent"], .16), soft_line=_rgba(p["accent"], .34), nav_bg=_rgba(p["ground"], .74),
         ptint=p["ptint"], glow=p["glow"], glow55=_rgba(p["glow"], .55), glow85=_rgba(p["glow"], .85), glow42=_rgba(p["glow"], .42),
         accent20=_rgba(p["accent"], .20), accent24=_rgba(p["accent"], .24), accent28=_rgba(p["accent"], .28),
-        accent50=_rgba(p["accent"], .50), grain=GRAIN, ground86=_rgba(p["ground"], .86), ground78=_rgba(p["ground"], .78),
+        accent50=_rgba(p["accent"], .50), accent08=_rgba(p["accent"], .08), grain=GRAIN, ground86=_rgba(p["ground"], .86), ground78=_rgba(p["ground"], .78),
         ground25=_rgba(p["ground"], .25), ground40=_rgba(p["ground"], .40), ground55=_rgba(p["ground"], .55),
         ground92=_rgba(p["ground"], .92), surface84=_rgba(p["surface"], .84), text08=_rgba(p["text"], .08),
         text10=_rgba(p["text"], .10), text11=_rgba(p["text"], .11), text12=_rgba(p["text"], .12), text14=_rgba(p["text"], .14),

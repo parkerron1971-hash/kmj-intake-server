@@ -100,9 +100,12 @@ def latest_card(lib: Optional[Dict[str, Any]], pal: Dict[str, str], *, heading: 
     kick = f"Series · {part}" if series and part else ("Series" if series else "Latest message")
     href = f"/my/sermons/{_e(s['id'])}"
     art = ui.poster(_key(lib, s), pal, series or s.get("title") or "", kick, play=True)
+    import member_app_samples as samples
+    sample = samples.is_sample(s)
+    hint = ui.sample_hint(samples.WHERE["sermons"]) if sample else ""
     return f"""<section aria-labelledby="mb-latest">
-  <h2 class="mp-sect">Latest message <a href="/my/sermons">All sermons</a></h2>
-  <a class="mb-mcard" href="{href}">{art}<span class="mb-mcard-b">
+  <h2 class="mp-sect">Latest message <a href="/my/sermons">All sermons</a></h2>{hint}
+  <a class="mb-mcard" href="{href}">{art}{ui.sample_tag() if sample else ''}<span class="mb-mcard-b">
   <{heading} class="mb-msg-title" id="mb-latest">{_e(s.get('title'))}</{heading}>
   <span class="mb-meta">{meta(s)}</span></span></a>
 </section>"""
@@ -152,7 +155,9 @@ def render_library(biz, site, who, lib: Optional[Dict[str, Any]], series_id: str
                   f'{len(by_series[sid])} message{"" if len(by_series[sid]) == 1 else "s"}{" · Now" if i == 0 else ""}',
                   tag="a", cls="mb-tall", attrs=f'href="/my/sermons?series={_e(sid)}"')
         for i, sid in enumerate(order))
-    parts = ['<div class="mb-lt"><h1>Sermons</h1></div>', latest_card(lib, pal)]
+    import member_app_samples as samples
+    sample = samples.is_sample(lib["sermons"][0])
+    parts = [f'<div class="mb-lt"><h1>Sermons{ui.sample_tag() if sample else ""}</h1></div>', latest_card(lib, pal)]
     if shelf:
         parts.append(f'<h2 class="mp-sect">All series</h2><div class="mb-shelf">{shelf}</div>')
     if loose:
@@ -186,7 +191,9 @@ def render_sermon(biz, site, who, lib: Optional[Dict[str, Any]], sermon_id: str,
         player = ui.poster(_key(lib, s), pal, series or s.get("title") or "", tag="div") + player
     eyebrow = " · ".join(x for x in (series, _part(lib, s)) if x) or "Message"
     give = f'<a class="mp-go mp-go-2" href="{_e(give_url)}">{ui.icon("heart", 16)}Give</a>' if give_url else ""
-    parts = [f'<a class="mb-back" href="{"/my/sermons?series=" + _e(sid) if series else "/my/sermons"}">'
+    import member_app_samples as samples
+    parts = [ui.sample_hint("A sample message. " + samples.WHERE["sermons"]) if samples.is_sample(s) else ""]
+    parts += [f'<a class="mb-back" href="{"/my/sermons?series=" + _e(sid) if series else "/my/sermons"}">'
              f'{ui.icon("back", 16)}{_e(series or "All sermons")}</a>',
              f'<div class="mb-player">{player}</div>',
              f'<p class="mp-when" style="margin-top:18px">{_e(eyebrow)}</p>',
