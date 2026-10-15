@@ -18,12 +18,12 @@ def _on(monkeypatch, messages=False, giving=False):
     monkeypatch.setattr(giving_router, "giving_is_active", lambda b: giving)
 
 
-def test_sign_in_is_the_open_door_and_still_a_plain_form(monkeypatch):
+def test_sign_in_is_the_church_photo_and_still_a_plain_form(monkeypatch):
     _on(monkeypatch)
     page = mp.render_signin(BIZ, None)
-    assert '<body class="si">' in page and 'class="si-door"' in page and 'class="mb-top"' not in page
-    # one accessible headline; the animated letters are hidden from readers
-    assert '<span class="mp-sr">Welcome home.</span>' in page and 'class="si-w" aria-hidden="true"' in page
+    assert '<body class="si">' in page and 'class="si-photo"' in page and 'class="mb-top"' not in page
+    # one accessible headline; the styled one is hidden from readers
+    assert '<span class="mp-sr">Welcome home.</span>' in page and 'Welcome<br><em>home.</em>' in page
     # the form posts what it always posted, and reads right without script:
     # the email/mobile switch starts hidden and the label covers both
     form = page[page.index('<form class="mp-form si-form"'):]
@@ -34,27 +34,19 @@ def test_sign_in_is_the_open_door_and_still_a_plain_form(monkeypatch):
     assert page.count('class="mp-foot') == 0 and "Powered by Solutionist" in page
 
 
-def test_the_chips_by_the_door_name_only_what_the_church_has_on(monkeypatch):
-    _on(monkeypatch)
-    off = sg._chips(BIZ)
-    assert "Messages" not in off and ">Give<" not in off and off.count('class="si-chip"') == 4
-    _on(monkeypatch, messages=True, giving=True)
-    on = sg._chips(BIZ)
-    assert on.index("Messages") < on.index(">Give<") and on.count('class="si-chip"') == 4
 
 
 def test_a_church_with_no_photos_gets_leaded_glass_in_its_colours(monkeypatch):
     import member_app_photos as photos
     _on(monkeypatch)
     page = mp.render_signin(BIZ, None)
-    assert 'class="si-glass"' in page and "<img" not in page.split('class="si-door"')[1].split("</div>")[0]
+    top = page.split('class="si-photo"')[1].split("</div>")[0]
+    assert 'class="si-glass"' in top and "<img" not in top
     monkeypatch.setattr(photos, "photos", lambda b, s: ["https://cdn.example/a.jpg", "https://cdn.example/b.jpg"])
     page = mp.render_signin(BIZ, None)
     assert 'class="si-glass"' not in page
-    # the door and the room around it are the same photo
-    door = re.search(r'class="si-arch"[^>]*>.*?src="([^"]+)"', page, re.S).group(1)
-    room = re.search(r'class="si-bg"[^>]*>.*?src="([^"]+)"', page, re.S).group(1)
-    assert door == room
+    src = re.search(r'class="si-photo"[^>]*>.*?src="([^"]+)"', page, re.S).group(1)
+    assert src.startswith("https://cdn.example/")
 
 
 def test_an_error_keeps_what_was_typed(monkeypatch):
@@ -87,7 +79,7 @@ def test_the_resend_wait_matches_the_server():
     assert rate_limit._LIMITS["member_code_email_minute"] == (1, 60)
 
 
-def test_the_pages_before_sign_in_stand_in_the_same_room():
+def test_the_pages_before_sign_in_share_the_look():
     for page, words in ((mp.render_unavailable(BIZ, None), "This page isn't open yet"),
                         (mp.render_signin_paused(BIZ, None), "Sign-in is paused"),
                         (mp.render_try_again(BIZ, None), "We couldn't open your page just now"),
@@ -105,7 +97,8 @@ def test_who_is_signing_in_offers_each_person():
 def test_every_colour_in_the_stylesheet_is_filled_in():
     css = sg.css(BIZ, {"accent": "#F4AE3D"})
     assert "$" not in css and "rgba(" in css
-    assert sg._Tokens({"accent": "#102030"})["accent_20"] == "rgba(16,32,48,0.2)"
+    import member_app_ui as ui
+    assert ui._Tokens({"accent": "#102030"})["accent_20"] == "rgba(16,32,48,0.2)"
 
 
 def test_the_door_holds_still_for_reduced_motion():

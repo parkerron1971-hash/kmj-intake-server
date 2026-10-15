@@ -325,7 +325,7 @@ def test_right_code_signs_in_once_with_a_host_cookie(fake):
     assert "domain=" not in cookie
     assert _verify(c, code).status_code == 400           # single use
     home = c.get("/my")
-    assert "Hi, Ana" in home.text
+    assert "Hi, <em>Ana.</em>" in home.text
     # Giving lives on Me (member app, 2026-09-30).
     assert "$50.00" in c.get("/my/me").text
 
@@ -335,7 +335,7 @@ def test_one_person_per_email(fake):
     # moment a second record shares the address, and no code is sent to it.
     c = _client()
     _verify(c, _ask(c, fake))
-    assert "Hi, Ana" in c.get("/my").text
+    assert "Hi, <em>Ana.</em>" in c.get("/my").text
     fake.contacts.append({"id": "c2", "business_id": BIZ, "name": "Ben Rivers", "email": "ANA@example.com"})
     page = c.get("/my")
     assert "Send my code" in page.text and "Ben Rivers" not in page.text
@@ -364,7 +364,7 @@ def test_another_churchs_member_is_not_on_this_list(fake):
 def test_session_ends_when_the_record_changes(fake):
     c = _client()
     _verify(c, _ask(c, fake))
-    assert "Hi, Ana" in c.get("/my").text
+    assert "Hi, <em>Ana.</em>" in c.get("/my").text
     fake.contacts[0]["email"] = "new@example.com"
     assert "Send my code" in c.get("/my").text
 
@@ -492,7 +492,7 @@ def test_a_member_already_signed_in_stays_in_while_paused(fake, monkeypatch):
     c = _client()
     _verify(c, _ask(c, fake))
     _paused(monkeypatch)
-    assert "Hi, Ana" in c.get("/my").text
+    assert "Hi, <em>Ana.</em>" in c.get("/my").text
 
 
 def test_owner_pauses_sign_in_without_moving_the_epoch(monkeypatch):
@@ -518,3 +518,54 @@ def test_owner_pauses_sign_in_without_moving_the_epoch(monkeypatch):
     assert stored["settings"]["giving"] == {"enabled": True}
     out = mp.patch_member_portal_config(BIZ, {"sign_in": True}, user)
     assert out["sign_in"] is True and stored["settings"]["member_portal"]["epoch"] == 7
+
+
+def test_owner_picks_the_base_and_home_tiles(monkeypatch):
+    # "Member App, Top Tier" (2026-10-15): the church picks black, dark
+    # gray, light gray or white; its own colour is the accent.
+    from types import SimpleNamespace
+    stored = {"settings": {"member_portal": {"enabled": True, "epoch": 7}, "giving": {"enabled": True}}}
+    monkeypatch.setattr(mp, "_require_owner", lambda b, u: {**_biz(), "settings": dict(stored["settings"])})
+    import business_sites_helpers
+    monkeypatch.setattr(business_sites_helpers, "ensure_business_site",
+                        lambda biz: ({"slug": "first-light", "site_config": {}}, False))
+    monkeypatch.setattr(mp.sb_clients, "sb_get_as_service", lambda p: [{"settings": dict(stored["settings"])}])
+
+    def _patch(path, body):
+        stored["settings"] = body["settings"]
+        return [{"id": BIZ}]
+    monkeypatch.setattr(mp.sb_clients, "sb_patch_as_service", _patch)
+    user = SimpleNamespace(id="owner")
+    for bad in ({"base": "purple"}, {"base": None}, {"tiles": "nope"}):
+        with pytest.raises(mp.HTTPException) as e:
+            mp.patch_member_portal_config(BIZ, bad, user)
+        assert e.value.status_code == 400
+    out = mp.patch_member_portal_config(BIZ, {"base": "white", "tiles": [
+        {"title": "City Store", "href": "https://lovecity.printify.me/"}, {"title": "x", "href": "javascript:1"}]}, user)
+    assert out["base"] == "white" and [t["title"] for t in out["tiles"]] == ["City Store"]
+    assert {"key": "charcoal", "label": "Dark gray"} in out["bases"]
+    cfg = stored["settings"]["member_portal"]
+    assert cfg["base"] == "white" and cfg["epoch"] == 7 and cfg["enabled"] is True
+    assert stored["settings"]["giving"] == {"enabled": True}
+
+
+def test_the_logo_and_series_art_come_from_the_churchs_own_site(tmp_path, monkeypatch):
+    import member_app_photos as ph
+    from PIL import Image
+    d = tmp_path / "grace" / "assets"
+    d.mkdir(parents=True)
+    for name, fill in (("logo.png", (255, 255, 255, 255)), ("logo-ink.png", (20, 10, 30, 255))):
+        im = Image.new("RGBA", (40, 40), (0, 0, 0, 0))
+        for x in range(10, 30):
+            for y in range(10, 30):
+                im.putpixel((x, y), fill)
+        im.save(d / name)
+    (d / "series-to-the-future.webp").write_bytes(b"x" * 30000)
+    monkeypatch.setattr(ph, "SITES_DIR", tmp_path)
+    ph._site_files.cache_clear()
+    ph._lum.cache_clear()
+    site = {"slug": "grace"}
+    assert ph.wordmark(site).endswith("/logo.png")                       # light, for a dark base
+    assert ph.wordmark(site, light=False).endswith("/logo-ink.png")      # dark, for a light base
+    assert ph.series_art(site, "To the Future!").endswith("/series-to-the-future.webp")
+    assert ph.series_art(site, "Spread Love") == "" and ph.series_art(None, "x") == ""

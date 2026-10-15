@@ -131,7 +131,7 @@ def test_the_owner_opens_the_app_as_a_member_with_a_banner(fake):
     assert r.status_code == 303 and r.headers["location"] == "/my"
     assert pv.PREVIEW_COOKIE.lower() in r.headers["set-cookie"].lower()
     home = c.get("/my").text
-    assert "Hi, Ana" in home and "<strong>Preview</strong>" in home and "Ana Rivers" in home
+    assert "Hi, <em>Ana.</em>" in home and "<strong>Preview</strong>" in home and "Ana Rivers" in home
     assert "End preview" in home
 
 

@@ -14,11 +14,13 @@ stock:
      photo.
 
 A church with neither gets the generated art (member_app_ui), so every
-screen still looks finished. The app tones every photo to the church's
-colour in CSS, so mixed photos read as one set.
+screen still looks finished. The app shows every photo in black and
+white (CSS), so mixed photos read as one set.
 
-The wordmark: a hand-built site's assets/logo.* when it is LIGHT (the app
-is dark), measured once per file.
+The wordmark: a hand-built site's light assets/logo.* on a dark base, its
+dark logo-ink.* on a light one, measured once per file. Series art: a
+site's assets/series-<name>.* (it keeps its colour; photos go black and
+white, member_app_ui).
 """
 from __future__ import annotations
 
@@ -130,6 +132,14 @@ def welcome(pool: List[str]) -> str:
     return rest[0] if rest else pool[0]
 
 
+def pick_for(pool: List[str], words: Tuple[str, ...], key: Any, avoid: Any = "") -> str:
+    """A photo whose file name fits the card (a prayer tile, a praying
+    photo), else a stable one (pick). `avoid` as in pick."""
+    skip = {avoid} if isinstance(avoid, str) else set(avoid or ())
+    found = _by_words([u for u in pool if u not in skip], words)
+    return found or pick(pool, key, avoid)
+
+
 def pick(pool: List[str], key: Any, avoid: Any = "") -> str:
     """A stable photo for one card (an event, a group). `avoid` is a photo,
     or several, already on the screen. '' with no photos."""
@@ -141,10 +151,37 @@ def pick(pool: List[str], key: Any, avoid: Any = "") -> str:
     return choices[n % len(choices)]
 
 
-@lru_cache(maxsize=64)
 def _is_light(path: str) -> bool:
-    """True when a logo's visible pixels are light enough to sit on the
-    dark app. Unreadable or opaque-background files count as not light."""
+    """True when a logo's visible pixels are light enough to sit on a
+    dark base."""
+    v = _lum(path)
+    return v is not None and v >= 0.7
+
+
+def wordmark(site: Optional[Dict[str, Any]], light: bool = True) -> str:
+    """A hand-built site's logo for the app's top bar and sign-in: a light
+    one for a dark base (light=True), a dark one for a light base. ''
+    when the site has none that reads on that base."""
+    d = _site_dir(site)
+    if d is None:
+        return ""
+    names = ("logo.webp", "logo.png") if light else ("logo-ink.webp", "logo-dark.webp", "logo-ink.png",
+                                                     "logo-dark.png", "logo.webp", "logo.png")
+    for name in names:
+        p = d / name
+        if not p.is_file():
+            continue
+        v = _lum(str(p))
+        if v is not None and (v >= 0.7 if light else v <= 0.4):
+            return f"/public/site-assets/{quote(str(site['slug']), safe='')}/{name}"
+    return ""
+
+
+@lru_cache(maxsize=64)
+def _lum(path: str) -> Optional[float]:
+    """How light a logo's visible pixels are (0 black … 1 white), measured
+    once per file. None for an unreadable file or one with an opaque
+    background (it would sit on the app as a box)."""
     try:
         from PIL import Image
         with Image.open(path) as im:
@@ -152,22 +189,28 @@ def _is_light(path: str) -> bool:
             im.thumbnail((160, 160))
             px = [p for p in im.getdata() if p[3] > 128]
         if not px or len(px) > 0.9 * im.width * im.height:
-            return False
-        lum = sum(0.2126 * r + 0.7152 * g + 0.0722 * b for r, g, b, _ in px) / (255 * len(px))
-        return lum >= 0.7
+            return None
+        return sum(0.2126 * r + 0.7152 * g + 0.0722 * b for r, g, b, _ in px) / (255 * len(px))
     except Exception:
         logger.info("member app: logo %s could not be measured", Path(path).name)
-        return False
+        return None
 
 
-def wordmark(site: Optional[Dict[str, Any]]) -> str:
-    """A hand-built site's light logo, for the app's header and sign-in.
-    '' when there isn't one that reads on the dark app."""
+def _slug(text: str) -> str:
+    import re
+    return re.sub(r"[^a-z0-9]+", "-", str(text or "").lower()).strip("-")
+
+
+def series_art(site: Optional[Dict[str, Any]], title: str) -> str:
+    """A hand-built site's own art for a sermon series:
+    assets/series-<the series' name>.webp (Love City's "To the Future" is
+    series-to-the-future.webp). '' when there's none."""
     d = _site_dir(site)
-    if d is None:
+    want = _slug(title)
+    if d is None or not want:
         return ""
-    for name in ("logo.webp", "logo.png"):
-        p = d / name
-        if p.is_file() and _is_light(str(p)):
-            return f"/public/site-assets/{quote(str(site['slug']), safe='')}/{name}"
+    for name, _size in _site_files(str(d)):
+        stem, _, ext = name.rpartition(".")
+        if stem.lower() == f"series-{want}" and f".{ext.lower()}" in PHOTO_EXT:
+            return f"/public/site-assets/{quote(str(site['slug']), safe='')}/{quote(name)}"
     return ""

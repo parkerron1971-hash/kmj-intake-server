@@ -79,27 +79,37 @@ def render_live(biz, site, request: Request, me: Dict[str, Any], cur: Optional[D
     from member_portal import _e, _shell, palette_for
     flash = mpc._flash(request)
     if cur is None:
-        body = '<h1>Live</h1><p class="mp-err" role="alert">Live couldn\'t load just now. Please try again in a moment.</p>'
-        return _shell(biz, site, "Live", body, tab="live", who=me)
+        body = ('<div class="mb-lt"><h1>Live</h1></div><p class="mp-err" role="alert">Live couldn\'t load just now. '
+                'Please try again in a moment.</p>')
+        return _shell(biz, site, "Live", body, tab="live", who=me, back=("/my/sermons", "Watch"))
     if not cur:
         # Between services: a designed screen (the church's photo or its
         # art), then what's next, the latest message, the verse, prayer.
         import member_app_photos as photos
         import member_portal as mp
         import member_portal_bible as mpb
-        nxt = mpc.next_card(occasions)
+        nxt = ""
+        first = (occasions or [None])[0]
+        d = mpc._day((first or {}).get("date") or "")
+        if first and d:
+            from datetime import date
+            soon = mpc._in_days(d, date.today())
+            when = soon if soon in ("Today", "Tomorrow") else f"{d.strftime('%A')} · {soon}"
+            nxt = (f'<a class="mb-row" href="/my/events"><span class="mb-row-ic">{ui.icon("calendar", 21)}</span>'
+                   f'<span class="mb-row-t"><strong>{_e(first.get("title"))}</strong><span>{_e(when)}</span></span>'
+                   f'{ui.icon("chevron", 18)}</a>')
         pool = photos.photos(biz, site)
         pic = photos.pick(pool, "live", avoid=photos.hero(pool))
         art = ui.photo(pic) if pic else ui.gen_art("Live")
         church = _e(biz.get("name") or "the church")
         body = f"""<section class="mb-offair">{art}<div><span class="mb-kick">Live</span><h1>Between services</h1>
-<p class="mp-muted" style="margin:0"><strong>No service is live right now.</strong> When {church} goes live, it plays right here, with a chat for the church.</p></div></section>
+<p style="margin:0"><strong>No service is live right now.</strong> When {church} goes live, it plays right here, with a chat for the church.</p></div></section>
 {flash}
-{('<h2 class="mp-sect">Next service</h2>' + nxt) if nxt else ''}
-{mps.latest_card(library, palette_for(biz, site))}
+{(ui.section("Next service") + nxt) if nxt else ''}
+{mps.latest_card(library, palette_for(biz, site), pool=pool, used={pic}, site=site)}
 {mpb.verse_card(mpb.prefs(request)[0])}
 {mp.prayer_card()}"""
-        return _shell(biz, site, "Live", body, tab="live", who=me)
+        return _shell(biz, site, "Live", body, tab="live", who=me, back=("/my/sermons", "Watch"))
     src = lr.stream_embed(cur.get("stream_url") or "")
     if src:
         player = (f'<div class="mb-video"><iframe src="{_e(src)}" title="{_e(cur.get("title"))}" allowfullscreen '
@@ -132,11 +142,11 @@ def render_live(biz, site, request: Request, me: Dict[str, Any], cur: Optional[D
 {flash}
 <div class="mb-live-actions">{here_html}
   <a class="mp-go mp-go-2" href="/my/prayer">{ui.icon('pray', 16)}Ask for prayer</a></div>
-<h2 class="mp-sect">Chat</h2>
+{ui.section("Chat")}
 <ul class="mb-chat" id="mb-chat" aria-live="polite" aria-label="Chat">{''.join(_bubble(m) for m in rows)}{empty}</ul>
 {compose}"""
     script = _poll_script(int(cur.get("chat_version") or 0))
-    return _shell(biz, site, "Live", body, tab="live", who=me, script=script)
+    return _shell(biz, site, "Live", body, tab="live", who=me, script=script, back=("/my/sermons", "Watch"))
 
 
 def _poll_script(v: int) -> str:

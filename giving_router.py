@@ -1081,6 +1081,7 @@ color:var(--text-secondary);cursor:pointer;min-height:44px;font-family:var(--fon
     Powered by <a href="https://mysolutionist.app/" target="_blank" rel="noopener">Solutionist</a>
   </footer>
 </main>
+{(app or {}).get("foot", "")}
 <script>
 (function() {{
   var API = {api_origin!r};

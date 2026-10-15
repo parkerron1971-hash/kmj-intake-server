@@ -333,15 +333,16 @@ def _gate(biz, site, me, why: str) -> str:
         "no_birthdate": "Messaging needs your birthdate on your record. Ask the church office to add it.",
         "not_enabled": "Ask the church office to turn on messaging for you.",
     }.get(why, "Messaging isn't available to you right now.")
-    return _shell(biz, site, "Messages", f"""<h1>Messages</h1>
-<div class="mp-card"><p class="mp-muted" style="margin:0">{text}</p></div>""", tab="me", who=me)
+    import member_portal_church as mpc
+    return _shell(biz, site, "Messages", f"""<div class="mb-lt"><h1>Connect</h1></div>{mpc.connect_tabs(biz, "messages")}
+<div class="mp-card" style="margin-top:16px"><p class="mp-muted" style="margin:0">{text}</p></div>""", tab="connect", who=me)
 
 
 def render_guidelines(biz, site, me) -> str:
     from member_portal import _e, _shell
     teen = rules.is_teen(me)
-    return _shell(biz, site, "Messages", f"""<h1>Before you start</h1>
-<div class="mp-card mb-guide">
+    return _shell(biz, site, "Messages", f"""<div class="mb-lt"><h1>Before you start</h1></div>
+<div class="mp-card mb-guide" style="margin-top:12px">
 <p><strong>{_e(biz.get('name') or 'Our church')}'s messaging is for encouraging one another.</strong></p>
 <ul class="mb-guide-list">
   <li>Be kind. No harassment, threats, or sexual content.</li>
@@ -354,7 +355,7 @@ def render_guidelines(biz, site, me) -> str:
   <li>If you or someone else is in danger, call 911. For a mental health crisis, call or text {CRISIS_LINE}.</li>
 </ul>
 <form method="post" action="/my/messages/guidelines"><button class="mp-go" type="submit">I agree</button></form>
-</div>""", tab="me", who=me)
+</div>""", tab="connect", who=me, back=("/my/groups", "Connect"))
 
 
 def render_inbox(biz, site, request, me, rows, requests, family, groups_open) -> str:
@@ -367,24 +368,24 @@ def render_inbox(biz, site, request, me, rows, requests, family, groups_open) ->
         return (f'<li><a href="/my/messages/{_e(r["id"])}"><span class="mb-thumb mb-chat-av">{icon}</span>'
                 f'<span class="mb-list-text"><strong>{_e(r["title"])}</strong><span>{_e(r["preview"])}</span></span>{badge}</a></li>')
     req = "".join(row(r) for r in requests)
-    body = [f'<div class="mb-lt"><h1>Messages</h1></div>{mpc._flash(request)}']
+    body = [f'<div class="mb-lt"><h1>Connect</h1></div>{mpc.connect_tabs(biz, "messages")}{mpc._flash(request)}']
     if req:
-        body.append(f'<h2 class="mp-sect">Requests</h2><ul class="mb-list mb-cards">{req}</ul>')
-    body.append('<h2 class="mp-sect">Chats</h2>')
+        body.append(f'{ui.section("Requests")}<ul class="mb-list mb-cards">{req}</ul>')
+    body.append(ui.section("Chats"))
     body.append(f'<ul class="mb-list mb-cards">{"".join(row(r) for r in rows)}</ul>' if rows else
                 '<div class="mp-card"><p class="mp-muted" style="margin:0">No chats yet. Open one from a group, '
                 'or start one with someone below.</p></div>')
     if groups_open:
-        body.append('<h2 class="mp-sect">Start a chat</h2><ul class="mb-list mb-cards">' + "".join(
+        body.append(ui.section("Start a chat") + '<ul class="mb-list mb-cards">' + "".join(
             f'<li><a href="/my/messages/to/{_e(p["id"])}"><span class="mb-thumb mb-chat-av">{_e(ui.initials(p["name"]))}</span>'
             f'<span class="mb-list-text"><strong>{_e(first_and_initial(p["name"]))}</strong><span>{_e(p["why"])}</span></span>'
             f'{ui.icon("chevron", 16)}</a></li>' for p in groups_open) + '</ul>')
     if family:
-        body.append('<h2 class="mp-sect">Your teens</h2><ul class="mb-list mb-cards">' + "".join(
+        body.append(ui.section("Your teens") + '<ul class="mb-list mb-cards">' + "".join(
             f'<li><a href="/my/messages/family/{_e(t["id"])}"><span class="mb-thumb mb-chat-av">{_e(ui.initials(t["name"]))}</span>'
             f'<span class="mb-list-text"><strong>{_e(t["name"])}</strong><span>Read their chats</span></span>{ui.icon("chevron", 16)}</a></li>'
             for t in family) + '</ul>')
-    return _shell(biz, site, "Messages", "".join(body), tab="me", who=me)
+    return _shell(biz, site, "Messages", "".join(body), tab="messages", who=me)
 
 
 def _bubble(m: Dict[str, Any], me_id: str, names: Dict[str, str], *, reportable: bool) -> str:
@@ -445,10 +446,10 @@ def render_chat(biz, site, request, me, t, acc, msgs, looks, *, title: str, view
     script = _poll_script(t["id"], len(msgs)) if not parent else ""
     # A chat fills the screen and its box sits at the foot, so the tab
     # bar steps aside (bar=False); Back returns to Messages.
-    return _shell(biz, site, title, f"""<div class="mb-thread"><a class="mb-back" href="/my/messages">{ui.icon('back', 16)}Messages</a>
-<h1 style="margin-top:6px">{_e(title)}</h1>{mpc._flash(request)}{note}
+    return _shell(biz, site, title, f"""<div class="mb-thread"><div class="mb-lt"><h1 style="font-size:28px">{_e(title)}</h1></div>
+{mpc._flash(request)}{note}
 <ul class="mb-chat" id="mb-chat" aria-live="polite" aria-label="Messages">{body_msgs}</ul>
-{actions}{compose}</div>""", tab="me", who=me, script=script, bar=False)
+{actions}{compose}</div>""", tab="messages", who=me, script=script, bar=False, back=("/my/messages", "Messages"))
 
 
 def _poll_script(tid: str, count: int) -> str:
@@ -713,10 +714,9 @@ def _family_page(request, biz, site, me, teen_id: str):
         f'<li><a href="/my/messages/{_e(r["id"])}"><span class="mb-thumb mb-chat-av">{ui.icon("users", 18) if r["kind"] == "group" else _e(ui.initials(r["title"]))}</span>'
         f'<span class="mb-list-text"><strong>{_e(r["title"])}</strong><span>{_e(r["preview"])}</span></span>{ui.icon("chevron", 16)}</a></li>'
         for r in chats) or '<li class="mp-muted" style="padding:12px 0">No chats yet.</li>'
-    return _shell(biz, site, "Messages", f"""<a class="mb-back" href="/my/messages">{ui.icon('back', 16)}Messages</a>
-<h1>{_e(teen['name'])}'s chats</h1>
+    return _shell(biz, site, "Messages", f"""<div class="mb-lt"><h1>{_e(teen['name'])}'s chats</h1></div>
 <p class="mp-muted">As their linked parent you can read all of {_e(teen['name'].split(' ')[0])}'s chats. They're told you can.</p>
-<ul class="mb-list mb-cards">{items}</ul>""", tab="me", who=me), 200
+<ul class="mb-list mb-cards">{items}</ul>""", tab="messages", who=me, back=("/my/messages", "Messages")), 200
 
 
 def _feed(business_id: str, me_id: str, tid: str) -> Dict[str, Any]:

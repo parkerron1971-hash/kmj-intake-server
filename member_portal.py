@@ -540,25 +540,27 @@ def palette_for(biz: Dict[str, Any], site: Optional[Dict[str, Any]]) -> Dict[str
 def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
            body: str, *, script: str = "", tab: Optional[str] = None,
            who: Optional[Dict[str, Any]] = None, bare: bool = False, bar: bool = True,
-           door: bool = False) -> str:
-    """Every member page. Signed-in pages pass `tab` (the bottom bar's
-    current tab) and `who` (their avatar, which opens Me); the sign-in
-    pages pass neither and get no bar. `bare` leaves the header out (the
-    sign-in pages, whose photo carries the church's name); `bar=False`
-    keeps the header but drops the tab bar (a chat, whose box sits at the
-    foot of the screen). `door` is a page before sign-in, in the front
-    door's look (member_app_signin), which draws its own header and foot.
-    The look is member_app_ui's."""
+           door: bool = False, back: Optional[Tuple[str, str]] = None) -> str:
+    """Every member page. Signed-in pages pass `tab` (the page's place in
+    the tab bar: home, watch, bible, give, connect — the older names map
+    over) and `who` (their picture, top right, which opens Me); the
+    sign-in pages pass neither and get no bar. `back` = (href, label) puts
+    a back link at the top left (else Home shows the church's logo there).
+    The page's title moves into the bar as its large title scrolls away.
+    `bare` leaves the bar at the top out; `bar=False` keeps it but drops the
+    tab bar (a chat, whose box sits at the foot of the screen). `door` is a
+    page before sign-in (member_app_signin), which draws its own top and
+    foot. The look is member_app_ui's."""
     import member_app_ui as ui
     import member_app_install as mai
     import member_app_photos as photos
     import member_app_signin as sg
-    from public_form_theme import resolve_theme, css_vars, font_links
+    from public_form_theme import resolve_theme, css_vars
     theme = resolve_theme(biz, site)
     name = (biz.get("name") or "").strip() or "Your church"
     logo = theme.get("logo_url") or ""
     mark = f'<img src="{_e(logo)}" alt="">' if logo else _e(ui.initials(name))
-    word = "" if logo else photos.wordmark(site)
+    word = "" if logo else photos.wordmark(site, light=ui.palette(biz, theme)["dark"])
     brand = (f'<img class="mb-wordmark" src="{_e(word)}" alt="{_e(name)}">' if word else
              f'<span class="mb-mark" aria-hidden="true">{mark}</span><p class="mp-church">{_e(name)}</p>')
     # Me lives on the profile picture (Kevin, 10/02: the Bible took a tab).
@@ -566,35 +568,49 @@ def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
     avatar = (f'<a class="mb-avatar mp-noprint" href="/my/me" aria-label="Me"{here}>{_e(ui.initials(who.get("name")))}</a>'
               if who else "")
     signed_in = tab is not None
-    # Giving is one tap from every screen (Kevin, 2026-09-30).
-    from giving_router import giving_is_active
-    give = (f'<a class="mb-give mp-noprint" href="/my/give" aria-label="Give">{ui.icon("heart", 18)}<span>Give</span></a>'
-            if signed_in and giving_is_active(biz) else "")
+    if back is None and not (bare or door):
+        # A page's own back link moves up into the bar.
+        m = re.search(r'<a class="mb-back" href="([^"]*)"[^>]*>(.*?)</a>', body, re.S)
+        if m:
+            import html as _html
+            back = (_html.unescape(m.group(1)), _html.unescape(re.sub(r"<[^>]+>", "", m.group(2)).strip()))
+            body = body[:m.start()] + body[m.end():]
     import member_portal_messaging as mpm
     chat = (f'<a class="mb-chat-link mp-noprint" href="/my/messages" aria-label="Messages">{ui.icon("chat", 19)}</a>'
-            if signed_in and mpm.turned_on(biz) else "")
+            if signed_in and mpm.turned_on(biz) and tab not in ("messages", "connect", "groups") else "")
+    if back:
+        left = f'<a class="mb-back" href="{_e(back[0])}">{ui.icon("back", 24)}{_e(back[1])}</a>'
+    elif tab == "home":
+        left = f'<a class="mb-brand" href="/my">{brand}</a>'
+    else:
+        left = ""
+    top = "" if bare or door else (
+        f'<header class="mb-top"><div class="mb-top-l">{left}</div>'
+        f'<span class="mb-top-t" aria-hidden="true">{_e(title)}</span>'
+        f'<span class="mb-top-right">{chat}{avatar}</span></header>')
+    from giving_router import giving_is_active
+    pal = ui.palette(biz, theme)
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="robots" content="noindex, nofollow">
-<meta name="theme-color" content="{ui.palette(biz, theme)['ground']}">
+<meta name="theme-color" content="{pal['bg']}">
 {mai.head_tags(biz)}
 <title>{_e(title)} — {_e(name)}</title>
 {ui.FONTS}
-{font_links(theme)}
 <style>{css_vars(theme)}</style>
 <style>{ui.css(biz, theme)}</style>
 {f'<style>{sg.css(biz, theme)}</style>' if door else ''}
 </head>
 <body{' class="si"' if door else ''}>
-{'' if bare or door else f'<header class="mb-top"><a class="mb-brand" href="/my">{brand}</a><span class="mb-top-right">{give}{chat}{avatar}</span></header>'}
+{top}
 <main class="mp-shell{' mb-has-nav' if signed_in and bar else ''}{' mb-bare' if bare or door else ''}">
   {body}
   {'' if door else f'<footer class="mp-foot mp-noprint">Your page at {_e(name)} · Powered by Solutionist</footer>'}
 </main>
-{ui.nav(tab) if signed_in and bar else ''}
+{ui.nav(tab, give=giving_is_active(biz)) if signed_in and bar else ''}
 {'' if bare or door else ui.SCROLL_JS}
 {script}
 {mai.REGISTER_JS}
@@ -603,33 +619,37 @@ def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
 
 
 GIVE_CSS = """
-.gv-shell{max-width:560px;padding:calc(6px + env(safe-area-inset-top,0px)) 20px 48px;}
-.gv-card{border:1px solid var(--mb-line);background:var(--mb-surface);border-radius:24px;padding:18px;}
-.gv-label{color:var(--text-muted);}
-.gv-grid{gap:8px;}
-.gv-amt{border:1px solid var(--mb-line);background:var(--mb-surface-2);border-radius:16px;font-family:var(--mb-display);
-  font-size:22px;font-stretch:80%;font-weight:800;min-height:56px;}
-.gv-amt.on{background:var(--text-primary);color:var(--surface);border-color:transparent;}
-.gv-input{border:1px solid var(--mb-line);background:var(--input-surface);border-radius:16px;min-height:52px;}
-.gv-input option{background:#222;color:#fff;}
-.gv-freq{border:1px solid var(--mb-line);border-radius:15px;background:var(--mb-surface-2);padding:4px;gap:4px;}
-.gv-freq button{border-radius:11px;color:var(--text-secondary);}
-.gv-freq button.on{background:var(--mb-fill);color:var(--mb-on-fill);}
-.gv-cover input{accent-color:var(--accent);}
-.gv-give{background:var(--mb-fill);color:var(--mb-on-fill);border-radius:17px;min-height:56px;font-family:var(--font-body);}
+.gv-shell{max-width:600px;padding:calc(8px + env(safe-area-inset-top,0px)) 20px calc(118px + env(safe-area-inset-bottom,0px));}
+.gv-card{border:0;background:transparent;border-radius:0;padding:0;box-shadow:none;}
+.gv-label{display:block;color:var(--fg3);font-size:12.5px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;margin:24px 0 10px;}
+.gv-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(68px,1fr));gap:8px;}
+.gv-amt{border:0;background:var(--s1);border-radius:14px;font-family:var(--mb-ui);font-size:20px;font-weight:700;letter-spacing:-.03em;
+  min-height:58px;color:var(--fg);font-variant-numeric:tabular-nums;}
+.gv-amt.on{background:var(--fg);color:var(--bg);}
+.gv-input{border:1px solid transparent;background:var(--s1);border-radius:14px;min-height:54px;color:var(--fg);font-family:var(--mb-ui);font-size:16px;margin-top:8px;}
+.gv-input:focus{outline:none;border-color:var(--acc);box-shadow:0 0 0 4px var(--mb-soft);}
+.gv-input option{background:var(--s1);color:var(--fg);}
+.gv-freq{border:0;border-radius:12px;background:var(--s1);padding:3px;gap:3px;}
+.gv-freq button{border-radius:9px;color:var(--fg2);font-family:var(--mb-ui);min-height:38px;padding:0;font-size:13.5px;}
+.gv-freq button.on{background:var(--s3);color:var(--fg);}
+.gv-cover{margin-top:16px;color:var(--fg2);font-size:14.5px;}
+.gv-cover input{accent-color:var(--acc-fill);}
+.gv-give{background:var(--acc-fill);color:var(--on-acc);border-radius:16px;min-height:56px;font-family:var(--mb-ui);font-size:16.5px;font-weight:650;
+  letter-spacing:-.01em;margin-top:22px;}
 .gv-error{color:var(--error);}
-.gv-banner{border-color:var(--mb-soft-line);background:var(--mb-soft);color:var(--text-primary);border-radius:16px;}
-.gv-msg{color:var(--text-secondary);}
-.gv-back,.gv-note,.gv-footer,.gv-footer a{color:var(--text-muted);}
-.gv-footer{border-color:var(--mb-line);}
+.gv-banner{border:0;background:var(--s1);color:var(--fg);border-radius:14px;}
+.gv-msg{color:var(--fg2);}
+.gv-note{color:var(--fg3);}
+.gv-back{color:var(--acc);font-family:var(--mb-ui);}
+.gv-footer{display:none;}
 """
 
 
 def render_give(biz: Dict[str, Any], site, me: Dict[str, Any], *, preview: bool = False) -> str:
-    """Give, inside the member app: the give page's own form and payment
-    (giving_router.render_give_page), in the app's look, with a way back
-    and the member's name and email filled in. In the owner's preview,
-    Give is refused (nothing is charged)."""
+    """Give, a tab of the member app: the give page's own form and
+    payment (giving_router.render_give_page), in the app's look, with the
+    member's name and email filled in and the tab bar under it. In the
+    owner's preview, Give is refused (nothing is charged)."""
     import member_app_ui as ui
     import public_site
     from business_sites_helpers import PUBLIC_DOMAIN
@@ -638,15 +658,18 @@ def render_give(biz: Dict[str, Any], site, me: Dict[str, Any], *, preview: bool 
     theme = resolve_theme(biz, site)
     slug = str((site or {}).get("slug") or "")
     name = (biz.get("name") or "").strip() or "the church"
-    top = (f'<a class="mb-back" href="/my">{ui.icon("back", 16)}Back</a>'
-           f'<div class="mb-lt" style="margin-top:6px"><h1>Give</h1></div>'
-           f'<p class="mp-muted" style="margin:0 0 16px">To {_e(name)}. Thank you for your generosity.</p>')
+    top = (f'<div class="mb-lt"><h1>Give</h1></div>'
+           f'<p class="mb-sub" style="margin:0 0 4px">To {_e(name)}. Thank you for your generosity.</p>'
+           f'<a class="mb-row" href="/my/me#mp-giving" style="margin:16px 0 0"><span class="mb-row-ic">{ui.icon("doc", 20)}</span>'
+           f'<span class="mb-row-t"><strong>Your giving</strong><span>This year, each gift and your statement</span></span>'
+           f'{ui.icon("chevron", 18)}</a>')
     if preview:
-        top += ('<p class="mp-flash mp-ok" role="status">This is a preview, so Give won\'t charge anything.</p>')
+        top += '<p class="mp-flash mp-ok" role="status">This is a preview, so Give won\'t charge anything.</p>'
     head = (ui.FONTS + f"<style>{css_vars(theme)}</style><style>{ui.css(biz, theme)}</style><style>{GIVE_CSS}</style>")
     return render_give_page(biz, f"https://{slug}.{PUBLIC_DOMAIN}/give", slug, api_origin=public_site._EMBED_ORIGIN,
                             app={"head": head, "top": top, "name": me.get("name") or "",
-                                 "email": me.get("email") or "", "preview": preview})
+                                 "email": me.get("email") or "", "preview": preview,
+                                 "foot": ui.nav("give")})
 
 
 def _door_page(biz: Dict[str, Any], site, title: str, *, icon: str, heading: str, body: str,
@@ -708,35 +731,28 @@ def render_choose(biz: Dict[str, Any], site, people: List[Dict[str, Any]]) -> st
 anyone who reads it can see each of these people's giving. Choose yourself.</p>""", actions=sg.people_list(people))
 
 
-def _live_card(live: Dict[str, Any]) -> str:
-    """While the church is live: the one thing Home leads with."""
-    import member_app_ui as ui
-    return (f'<a class="mb-next mb-live-now" href="/my/live"><span class="mb-what"><span class="mb-live-badge">'
-            f'<span class="mb-live-dot" aria-hidden="true"></span>Live now</span><strong>{_e(live.get("title"))}</strong>'
-            f'<span>Watch and chat with your church</span></span>{ui.icon("chevron", 18)}</a>')
-
-
 def prayer_card() -> str:
     import member_app_ui as ui
     return (f'<a class="mb-pray" href="/my/prayer"><span class="mb-pray-ic">{ui.icon("pray", 22)}</span>'
-            f'<span><strong>How can we pray for you?</strong><span>It goes privately to the pastor.</span></span></a>')
+            f'<span><strong>How can we pray for you?</strong><span>It goes privately to the pastors.</span></span>'
+            f'{ui.icon("chevron", 18)}</a>')
 
 
 def render_home(biz: Dict[str, Any], site, *, me: Dict[str, Any], occasions, groups, library,
                 give_url: str, flash: str = "", live: Optional[Dict[str, Any]] = None,
                 reading: str = "", bible: str = "kjv", where: Optional[Tuple[str, int]] = None) -> str:
-    """Home (Kevin approved the phone design 2026-10-14): the church's own
-    photo with the greeting written on it, the next gathering (or, while
-    the church is live, a Live now card) in a glass card over the photo's
-    foot, quick ways in (Give is the one filled button), the verse of the
-    day, the reading plan or a chapter to read, the latest message, this
-    person's week, what they haven't answered yet, and prayer.
+    """Home ("Member App, Top Tier", Kevin approved 2026-10-15): the
+    greeting, the next gathering on the church's own photo (a Live now card
+    while the church is live; the church itself when nothing is on the
+    calendar), four quick ways in, the latest message (its art, the title
+    under it, as members know from Subsplash), the verse of the day,
+    today's reading, the church's own tiles, this week, and prayer.
 
     Nothing here ever says "nothing yet": a block with nothing in it is
     left out, and the verse, the Bible and prayer always have something.
     The greeting and date are set by the phone's own clock (the server
     can't know the member's time of day); without script it reads
-    "Hi, Ana"."""
+    "Hi, Ana."."""
     import member_app_ui as ui
     import member_app_photos as photos
     import member_portal_bible as mpb
@@ -747,40 +763,36 @@ def render_home(biz: Dict[str, Any], site, *, me: Dict[str, Any], occasions, gro
     pal = palette_for(biz, site)
     pool = photos.photos(biz, site)
     hero_pic = photos.hero(pool)
+    used = {hero_pic}
     hello = first_name(me.get("name") or "") or "there"
-    lead = _live_card(live) if live else mpc.next_card(occasions)
-    art = ui.photo(hero_pic, eager=True) if hero_pic else ui.gen_art(biz.get("name") or "")
-    has_events = bool(occasions)
-    has_groups = bool(groups and (groups.get("mine") or groups.get("open")))
-    quick = []
-    if give_url:
-        quick.append(f'<a class="mb-main" href="{_e(give_url)}"><span>{ui.icon("heart", 22)}</span>Give</a>')
-    quick.append(f'<a href="/my/prayer"><span>{ui.icon("pray", 22)}</span>Prayer</a>')
-    quick.append(f'<a href="/my/events"><span>{ui.icon("calendar", 22)}</span>Events</a>' if has_events else
-                 f'<a href="/my/bible"><span>{ui.icon("book", 22)}</span>Bible</a>')
-    quick.append(f'<a href="/my/groups"><span>{ui.icon("users", 22)}</span>Groups</a>' if has_groups else
-                 f'<a href="/my/live"><span>{ui.icon("live", 22)}</span>Live</a>')
+    church = (biz.get("name") or "").strip() or "Your church"
+    hero = (mpc.live_hero(live, hero_pic, church) if live else
+            mpc.next_card(occasions, pic=hero_pic, church=church) or mpc.church_hero(hero_pic, church))
+    quick = (f'<a href="/my/prayer">{ui.icon("pray", 24)}Prayer</a>'
+             f'<a href="/my/events">{ui.icon("calendar", 24)}Events</a>'
+             f'<a href="/my/groups">{ui.icon("users", 24)}Groups</a>'
+             f'<a href="/my/live">{ui.icon("live", 24)}Live</a>')
     script = """<script>(function(){var d=new Date(),h=d.getHours();
 var g=h<12?'Good morning':(h<17?'Good afternoon':'Good evening');
 var t=document.querySelector('.mb-date');if(t){t.textContent=d.toLocaleDateString(undefined,{weekday:'long',month:'long',day:'numeric'});}
-var e=document.querySelector('[data-first]');if(e){e.textContent='';e.append(g+',',document.createElement('br'),e.getAttribute('data-first')+'.');}
+var e=document.querySelector('[data-first]');if(e){var em=document.createElement('em');em.textContent=e.getAttribute('data-first')+'.';
+e.textContent='';e.append(g+', ',em);}
 })();</script>"""
-    first = (occasions or [{}])[0].get("entry_id") if lead and not live else ""
-    read = reading or ('<h2 class="mp-sect">Read today</h2>' + mpb.continue_card(where, bible))
-    coming = mpc.coming_up(occasions, skip=str(first or "")) if occasions != [] else ""
+    first = str(((occasions or [{}])[0] or {}).get("entry_id") or "") if hero and not live and occasions else ""
+    read = reading or (ui.section("Read today", "/my/bible", "Bible") + mpb.continue_card(where, bible))
     return _shell(biz, site, "Home", f"""
-<section class="mb-hero{' mb-over' if lead else ''}">{art}<div class="mb-hero-in"><p class="mb-date" aria-hidden="true"></p>
-<h1 class="mb-hello" data-first="{_e(hello)}">Hi, {_e(hello)}</h1></div></section>
-{lead}
-<nav class="mb-quick" aria-label="Quick actions">{''.join(quick)}</nav>
+<div class="mb-hello-wrap"><p class="mb-date" aria-hidden="true"></p>
+<h1 class="mb-hello" data-first="{_e(hello)}">Hi, <em>{_e(hello)}.</em></h1></div>
+{hero}
+<nav class="mb-quick" aria-label="Quick ways in">{quick}</nav>
 {flash}
+{mps.latest_card(library, pal, pool=pool, used=used, site=site)}
 {mpb.verse_card(bible)}
 {read}
-{mai.install_card(biz.get('name') or '')}
+{mpc.home_tiles(biz, site, pool, used)}
+{mpc.week_cards(occasions, groups, pal=pal, pool=pool, used=used, skip=first)}
+{mai.install_card(church)}
 {member_push.home_card(biz)}
-{mps.latest_card(library, pal)}
-{mpc.week_cards(occasions, groups, pal=pal, pool=pool, avoid=hero_pic)}
-{coming}
 {prayer_card()}""", tab="home", who=me, script=script)
 
 
@@ -806,67 +818,68 @@ def _month_bars(gifts: List[Dict[str, Any]], year: int, this_year: int) -> str:
 def render_me(biz: Dict[str, Any], site, *, me: Dict[str, Any], people: List[Dict[str, Any]],
               year: int, gifts: Optional[List[Dict[str, Any]]], give_url: str,
               this_year: int, flash: str = "") -> str:
-    """Me: this person's giving (a year's total, month by month, each gift
-    and the statement), then the ways to look after their own record."""
+    """Me: who's signed in, their giving (a year's total, month by month,
+    each gift and the statement), then the ways to look after their own
+    record, and sign out."""
     import member_portal_messaging as mpm
     import member_push
     msgs_on = mpm.turned_on(biz)
     notes_on = bool(member_push.church_kinds(biz.get("settings"))) and member_push.ready()
     import member_app_ui as ui
     years = "".join(
-        f'<a href="/my/me?year={y}"{" aria-current=\"page\"" if y == year else ""}>{y}</a>'
+        f'<a href="/my/me?year={y}#mp-giving"{" aria-current=\"page\"" if y == year else ""}>{y}</a>'
         for y in range(this_year, this_year - 4, -1))
     statement = ""
+    bars = ""
     if gifts is None:
         giving = ('<p class="mp-err" role="alert">Your giving couldn\'t load just now. Your gifts are safe — '
                   'please try again in a moment.</p>')
     elif not gifts:
-        giving = f'<p class="mp-muted" style="margin-top:10px">No gifts recorded for {year}.</p>'
+        giving = f'<p class="mp-muted" style="margin:0">No gifts recorded for {year}.</p>'
     else:
         total = sum(g["amount"] for g in gifts)
         items = "".join(
             f'<li><span>{_e(_day(g["date"]))} · {_e(g["fund"])}{" (refunded)" if g["refunded"] else ""}</span>'
             f'<span>{money(g["amount"])}</span></li>' for g in gifts)
-        giving = (f'<p class="mp-muted" style="margin:10px 0 0">Given in {year}</p><p class="mp-total">{money(total)}</p>'
-                  f'{_month_bars(gifts, year, this_year)}'
-                  f'<details class="mb-each"><summary>See each gift ({len(gifts)})</summary><ul class="mp-gifts">{items}</ul></details>')
-        statement = (f'<a class="mp-go mp-go-2" href="/my/statement?year={year}">{ui.icon("doc", 16)}'
-                     f'{year} statement</a>')
-    give = f'<a class="mp-go" href="{_e(give_url)}">{ui.icon("heart", 16)}Give</a>' if give_url else ""
-    manage = ('<p style="margin:12px 0 0"><a class="mp-link" href="/my/gifts">'
-              'Change, pause or stop a recurring gift</a></p>' if give_url else "")
-    buttons = f'<div class="mb-give-row">{give}{statement}</div>' if give and statement else (
-        f'<div style="margin-top:14px">{give or statement}</div>' if (give or statement) else "")
+        bars = _month_bars(gifts, year, this_year)
+        giving = (f'<details class="mb-each"><summary>See each gift ({len(gifts)})</summary><ul class="mp-gifts">{items}</ul></details>')
+        statement = (f'<a class="mp-go mp-go-2" href="/my/statement?year={year}" aria-label="{year} statement">'
+                     f'{ui.icon("doc", 16)}Statement</a>')
+    total_html = (f'<p class="mp-total">{money(sum(g["amount"] for g in gifts))}</p>' if gifts else "")
+    give = f'<a class="mp-go" href="{_e(give_url)}">{ui.icon("give", 17)}Give</a>' if give_url else ""
+    buttons = (f'<div class="mb-give-row">{give}{statement}</div>' if give and statement else
+               (f'<div style="margin-top:14px">{give or statement}</div>' if (give or statement) else ""))
     switch = ('<form method="post" action="/my/person"><input type="hidden" name="cid" value="">'
               '<button class="mp-link" type="submit">Not you? Choose someone else in your household</button></form>'
               if len(people) > 1 else "")
     link = lambda href, ic, title, sub: (
-        f'<li><a href="{href}"><span class="mb-list-ic">{ui.icon(ic, 18)}</span><span class="mb-list-text"><strong>{title}</strong>'
+        f'<li><a href="{href}"><span class="mb-list-ic">{ui.icon(ic, 17)}</span><span class="mb-list-text"><strong>{title}</strong>'
         f'<span>{sub}</span></span>{ui.icon("chevron", 16)}</a></li>')
+    recurring = link('/my/gifts', 'give', 'Recurring gifts', 'Change, pause or stop one') if give_url else ''
     return _shell(biz, site, "Me", f"""
 <div class="mb-profile"><span class="mb-avatar" aria-hidden="true">{_e(ui.initials(me.get('name')))}</span>
-  <span><h1>{_e(me.get('name') or 'Me')}</h1>
-  <span class="mp-muted">Your page at {_e(biz.get('name') or 'the church')}</span></span></div>
+  <h1>{_e(me.get('name') or 'Me')}</h1>
+  <span class="mp-muted">{_e(me.get('email') or '')}{' · ' if me.get('email') else ''}{_e(biz.get('name') or 'the church')}</span></div>
 {flash}
-<h2 class="mp-sect" id="mp-giving">My giving</h2>
-<section class="mp-card" aria-labelledby="mp-giving">
-  <nav class="mp-years" aria-label="Year">{years}</nav>
+<section class="mb-give-card" aria-labelledby="mp-giving">
+  <div class="mb-give-top"><div><span class="mb-kick" id="mp-giving">Your giving · {year}</span>{total_html}</div>{bars}</div>
+  <nav class="mp-years" aria-label="Year" style="margin-top:14px">{years}</nav>
   {giving}
   {buttons}
-  {manage}
 </section>
-<h2 class="mp-sect">My church life</h2>
-<ul class="mb-list mb-cards">
+{ui.section('Your church life')}
+<ul class="mb-list mb-cards" style="--inset:60px">
   {link('/my/events', 'calendar', 'Coming up', 'Say you&#x27;re coming, or sign up to serve')}
   {link('/my/groups', 'users', 'My groups', 'Your groups, and ones you can join')}
-  {link('/my/prayer', 'lock', 'Prayer', 'A private request to the pastor')}
-  {link('/my/details', 'user', 'My details', 'Phone and mailing address')}
   {link('/my/messages', 'chat', 'Messages', 'Your chats and group chats') if msgs_on else ''}
+  {link('/my/prayer', 'pray', 'Prayer', 'A private request to the pastors')}
+  {recurring}
   {link('/my/notifications', 'bell', 'Notifications', 'What this app tells you about') if notes_on else ''}
+  {link('/my/details', 'user', 'My details', 'Phone and mailing address')}
 </ul>
-<div class="mp-noprint" style="margin-top:12px">{switch}
-<form method="post" action="/my/signout"><button class="mp-link" type="submit">Sign out</button></form></div>""",
-                  tab="me")
+<div class="mp-noprint" style="margin-top:8px">{switch}
+<form method="post" action="/my/signout"><button class="mb-signout" type="submit">Sign out</button></form></div>""",
+                  tab="me", who=me, back=("/my", "Home"))
 
 
 def render_statement(biz: Dict[str, Any], site, stmt: Dict[str, Any],
@@ -1087,8 +1100,14 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
         import member_portal_bible as mpb
         if not rest:
             series = str(request.query_params.get("series") or "")
+            # Watch leads with live, or the next gathering.
+            import live_router as lr
+            live, occ = await asyncio.gather(asyncio.to_thread(lr.current, biz["id"]),
+                                             asyncio.to_thread(mpc.upcoming_for, biz["id"], me))
+            occ = fill(occ, "occasions")
             return _page(mps.render_library(biz, site, me, lib, series if UUID_RE.match(series) else "",
-                                            bible=mpb.prefs(request)[0]),
+                                            bible=mpb.prefs(request)[0], live=live or None,
+                                            next_occ=(occ or [None])[0]),
                          200 if lib is not None else 503)
         page = (mps.render_sermon(biz, site, me, lib, rest, give_url, bible=mpb.prefs(request)[0])
                 if UUID_RE.match(rest) else None)
@@ -1357,7 +1376,27 @@ def _config_payload(biz: Dict[str, Any], site: Dict[str, Any]) -> Dict[str, Any]
         # the church can switch on, whether it is, and whether this
         # server can send at all.
         "notifications": _notifications_payload(biz),
+        # The app's base (black, dark gray, light gray, white; the
+        # church's colour is the accent) and its own Home tiles.
+        "base": _ui_base(biz),
+        "bases": [{"key": k, "label": v} for k, v in _ui_labels().items()],
+        "tiles": _tiles_of(biz),
     }
+
+
+def _ui_base(biz: Dict[str, Any]) -> str:
+    import member_app_ui as ui
+    return ui.base_of(biz)
+
+
+def _ui_labels() -> Dict[str, str]:
+    import member_app_ui as ui
+    return dict(ui.BASE_LABELS)
+
+
+def _tiles_of(biz: Dict[str, Any]) -> List[Dict[str, str]]:
+    import member_portal_church as mpc
+    return mpc.clean_tiles(portal_settings(biz.get("settings")).get("tiles")) or []
 
 
 def _notifications_payload(biz: Dict[str, Any]) -> Dict[str, Any]:
@@ -1408,7 +1447,9 @@ def create_member_preview(business_id: str, body: Dict[str, Any], user: AuthedUs
 def patch_member_portal_config(business_id: str, body: Dict[str, Any],
                                user: AuthedUser = Depends(require_user)):
     """Owner-gated. Body: { enabled?: bool, sign_in?: bool, sign_out_all?: true,
-    notifications?: {kind: bool} } (the kinds are member_push.KINDS).
+    notifications?: {kind: bool}, base?: "black"|"charcoal"|"gray"|"white",
+    tiles?: [{title, sub, href, photo}] } (the kinds are member_push.KINDS;
+    tiles are checked by member_portal_church.clean_tiles).
 
     Turning the page ON, or "sign everyone out", moves the epoch to now:
     every session issued before it ends (a page switched off and on again
@@ -1422,13 +1463,22 @@ def patch_member_portal_config(business_id: str, body: Dict[str, Any],
     if "sign_in" in body and not isinstance(body.get("sign_in"), bool):
         raise HTTPException(400, "sign_in must be true or false")
     sign_out_all = body.get("sign_out_all") is True
+    import member_app_ui as ui
+    import member_portal_church as mpc
+    if "base" in body and body.get("base") not in ui.BASES:
+        raise HTTPException(400, "base must be black, charcoal, gray or white")
+    tiles = None
+    if "tiles" in body:
+        tiles = mpc.clean_tiles(body.get("tiles"))
+        if tiles is None:
+            raise HTTPException(400, "tiles must be a list")
     switches = None
     if "notifications" in body:
         import member_push
         switches = member_push.clean_switches(body.get("notifications"))
     biz = _require_owner(business_id, user)
     site, _ = ensure_business_site(biz)
-    if "enabled" in body or "sign_in" in body or sign_out_all or switches is not None:
+    if "enabled" in body or "sign_in" in body or sign_out_all or switches is not None or "base" in body or tiles is not None:
         import vertical_family
         import vertical_scope
         if want and not (vertical_family.is_nonprofit_like(biz.get("type"))
@@ -1452,6 +1502,10 @@ def patch_member_portal_config(business_id: str, body: Dict[str, Any],
             cfg["epoch"] = int(time.time())
         if switches is not None:
             cfg["notifications"] = {**(cfg.get("notifications") or {}), **switches}
+        if "base" in body:
+            cfg["base"] = body["base"]
+        if tiles is not None:
+            cfg["tiles"] = tiles
         settings["member_portal"] = cfg
         saved = sb_clients.sb_patch_as_service(
             f"/businesses?id=eq.{quote(str(business_id), safe='')}", {"settings": settings})
