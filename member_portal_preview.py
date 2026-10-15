@@ -136,7 +136,7 @@ def load_contact(business_id: str, contact_id: str):
     (or is gone), None when the read failed."""
     rows = sb_clients.sb_get_as_service(
         f"/contacts?id=eq.{quote(str(contact_id), safe='')}&business_id=eq.{quote(str(business_id), safe='')}"
-        f"&select=id,name,email,phone&limit=1")
+        f"&select=id,name,email,phone,birthdate,photo:metadata->member_photo&limit=1")
     if not isinstance(rows, list):
         return None
     return rows[0] if rows else False

@@ -296,7 +296,7 @@ def contacts_for_email(business_id: str, email: str) -> Optional[List[Dict[str, 
     rows = sb_clients.sb_get_as_service(
         f"/contacts?business_id=eq.{quote(str(business_id), safe='')}"
         f"&email=ilike.{quote(pattern, safe='')}"
-        f"&select=id,name,email&order=created_at.asc&limit={MAX_HOUSEHOLD + 1}")
+        f"&select=id,name,email,birthdate,photo:metadata->member_photo&order=created_at.asc&limit={MAX_HOUSEHOLD + 1}")
     if not isinstance(rows, list):
         return None
     return [r for r in rows if isinstance(r, dict) and norm_email(r.get("email")) == em]
@@ -313,7 +313,7 @@ def contacts_for_phone(business_id: str, phone: str) -> Optional[List[Dict[str, 
     rows = sb_clients.sb_get_as_service(
         f"/contacts?business_id=eq.{quote(str(business_id), safe='')}"
         f"&phone=like.{quote('*' + '*'.join(digits) + '*', safe='')}"
-        f"&select=id,name,email,phone&order=created_at.asc&limit=20")
+        f"&select=id,name,email,phone,birthdate,photo:metadata->member_photo&order=created_at.asc&limit=20")
     if not isinstance(rows, list):
         return None
     return [r for r in rows if isinstance(r, dict) and _last10(r.get("phone")) == digits]
@@ -565,8 +565,12 @@ def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
              f'<span class="mb-mark" aria-hidden="true">{mark}</span><p class="mp-church">{_e(name)}</p>')
     # Me lives on the profile picture (Kevin, 10/02: the Bible took a tab).
     here = ' aria-current="page"' if tab == "me" else ""
-    avatar = (f'<a class="mb-avatar mp-noprint" href="/my/me" aria-label="Me"{here}>{_e(ui.initials(who.get("name")))}</a>'
-              if who else "")
+    import member_photos as ph
+    mine = ph.src(who) if who else ""
+    avatar = ((f'<a class="mb-avatar has-photo mp-noprint" href="/my/me" aria-label="Me"{here}>'
+               f'<img src="{_e(mine)}" alt=""></a>') if mine else
+              (f'<a class="mb-avatar mp-noprint" href="/my/me" aria-label="Me"{here}>{_e(ui.initials(who.get("name")))}</a>')
+              ) if who else ""
     signed_in = tab is not None
     if back is None and not (bare or door):
         # A page's own back link moves up into the bar.
@@ -886,10 +890,30 @@ def render_me(biz: Dict[str, Any], site, *, me: Dict[str, Any], people: List[Dic
         f'<li><a href="{href}"><span class="mb-list-ic">{ui.icon(ic, 17)}</span><span class="mb-list-text"><strong>{title}</strong>'
         f'<span>{sub}</span></span>{ui.icon("chevron", 16)}</a></li>')
     recurring = link('/my/gifts', 'give', 'Recurring gifts', 'Change, pause or stop one') if give_url else ''
+    import member_photos as ph
+    import member_messaging_rules as rules
+    has = bool(ph.of(me))
+    age = rules.age(me.get("birthdate"))
+    seen = ("Only your parents and the church staff see it." if age is not None and age < 18 else
+            "Members you message and the church staff see it." if age is not None else
+            "The church staff see it, so they know who you are.")
+    remove = ('<form method="post" action="/my/photo/remove" class="mp-noprint"><button class="mp-link" type="submit" '
+              'style="padding:0;min-height:32px">Remove photo</button></form>' if has else "")
+    photo = f"""<form class="mb-photo" method="post" action="/my/photo" enctype="multipart/form-data">
+  <label class="mb-photo-pick" for="mb-photo-in">{ph.avatar(me, show=True)}<span class="mb-photo-badge" aria-hidden="true">{ui.icon('camera', 15)}</span>
+  <span class="mp-sr">{'Change your photo' if has else 'Add a photo of you'}</span></label>
+  <input class="mp-sr" id="mb-photo-in" type="file" name="photo" accept="image/jpeg,image/png,image/webp,image/*">
+  <noscript><button class="mp-link" type="submit">Save photo</button></noscript>
+</form>"""
+    script = """<script>(function(){var i=document.getElementById('mb-photo-in');if(!i)return;
+i.addEventListener('change',function(){if(!i.files||!i.files.length)return;var n=document.getElementById('mb-photo-note');
+if(n){n.textContent='Saving your photo\u2026';}i.form.submit();});})();</script>"""
     return _shell(biz, site, "Me", f"""
-<div class="mb-profile"><span class="mb-avatar" aria-hidden="true">{_e(ui.initials(me.get('name')))}</span>
+<div class="mb-profile">{photo}
   <h1>{_e(me.get('name') or 'Me')}</h1>
-  <span class="mp-muted">{_e(me.get('email') or '')}{' · ' if me.get('email') else ''}{_e(biz.get('name') or 'the church')}</span></div>
+  <span class="mp-muted">{_e(me.get('email') or '')}{' · ' if me.get('email') else ''}{_e(biz.get('name') or 'the church')}</span>
+  <p class="mb-photo-note" id="mb-photo-note" role="status">{'Tap your photo to change it. ' if has else 'Tap to add a photo of you. '}{seen}</p>
+  {remove}</div>
 {flash}
 <section class="mb-give-card" aria-labelledby="mp-giving">
   <div class="mb-give-top"><div><span class="mb-kick" id="mp-giving">Your giving · {year}</span>{total_html}</div>{bars}</div>
@@ -909,7 +933,7 @@ def render_me(biz: Dict[str, Any], site, *, me: Dict[str, Any], people: List[Dic
 </ul>
 <div class="mp-noprint" style="margin-top:8px">{switch}
 <form method="post" action="/my/signout"><button class="mb-signout" type="submit">Sign out</button></form></div>""",
-                  tab="me", who=me, back=("/my", "Home"))
+                  tab="me", who=me, back=("/my", "Home"), script=script)
 
 
 def render_statement(biz: Dict[str, Any], site, stmt: Dict[str, Any],
@@ -1025,6 +1049,19 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
 
     def fill(found, kind):
         return samples.fill(found, kind, preview)
+    if sub.startswith("/my/photo/"):
+        import member_photos as ph
+        from fastapi.responses import Response
+        cid = sub[len("/my/photo/"):]
+        if not UUID_RE.match(cid):
+            return Response(status_code=404, headers=_SECURE_HEADERS)
+        link = await asyncio.to_thread(ph.link_for, biz["id"], cid, str(me["id"]))
+        if link is None:
+            return Response(status_code=503, headers=_SECURE_HEADERS)
+        if not link:
+            return Response(status_code=404, headers=_SECURE_HEADERS)
+        return RedirectResponse(link, status_code=302,
+                                headers={**_SECURE_HEADERS, "Cache-Control": "private, max-age=600"})
     if sub == "/my/statement":
         import giving_statements
         gs = (biz.get("settings") or {}).get("giving") or {}

@@ -80,7 +80,7 @@ def people(business_id: str, ids: Iterable[str]) -> Optional[Dict[str, Dict[str,
     for i in range(0, len(chunks), 150):
         part = ",".join(chunks[i:i + 150])
         c = sb_clients.sb_get_as_service(
-            f"/contacts?business_id=eq.{_q(business_id)}&id=in.({part})&select=id,name,birthdate")
+            f"/contacts?business_id=eq.{_q(business_id)}&id=in.({part})&select=id,name,birthdate,photo:metadata->member_photo")
         m = sb_clients.sb_get_as_service(
             f"/msg_members?business_id=eq.{_q(business_id)}&contact_id=in.({part})&select=contact_id,enabled,guidelines_at")
         if not isinstance(c, list) or not isinstance(m, list):
@@ -89,6 +89,7 @@ def people(business_id: str, ids: Iterable[str]) -> Optional[Dict[str, Dict[str,
         for r in c:
             extra = mm.get(str(r["id"]), {})
             out[str(r["id"])] = {"id": str(r["id"]), "name": r.get("name") or "", "birthdate": r.get("birthdate"),
+                                 "photo": r.get("photo"),
                                  "enabled": bool(extra.get("enabled")), "guidelines_at": extra.get("guidelines_at")}
     return out
 
@@ -365,6 +366,8 @@ def render_inbox(biz, site, request, me, rows, requests, family, groups_open) ->
     def row(r):
         badge = f'<span class="mb-unread" aria-label="{r["unread"]} unread">{r["unread"]}</span>' if r["unread"] else ""
         icon = ui.icon("users", 18) if r["kind"] == "group" else _e(ui.initials(r["title"]))
+        if r.get("photo"):
+            icon = f'<img src="{_e(r["photo"])}" alt="" loading="lazy">'
         return (f'<li><a href="/my/messages/{_e(r["id"])}"><span class="mb-thumb mb-chat-av">{icon}</span>'
                 f'<span class="mb-list-text"><strong>{_e(r["title"])}</strong><span>{_e(r["preview"])}</span></span>{badge}</a></li>')
     req = "".join(row(r) for r in requests)
@@ -382,21 +385,26 @@ def render_inbox(biz, site, request, me, rows, requests, family, groups_open) ->
             f'{ui.icon("chevron", 16)}</a></li>' for p in groups_open) + '</ul>')
     if family:
         body.append(ui.section("Your teens") + '<ul class="mb-list mb-cards">' + "".join(
-            f'<li><a href="/my/messages/family/{_e(t["id"])}"><span class="mb-thumb mb-chat-av">{_e(ui.initials(t["name"]))}</span>'
+            f'<li><a href="/my/messages/family/{_e(t["id"])}"><span class="mb-thumb mb-chat-av">{_teen_face(t)}</span>'
             f'<span class="mb-list-text"><strong>{_e(t["name"])}</strong><span>Read their chats</span></span>{ui.icon("chevron", 16)}</a></li>'
             for t in family) + '</ul>')
     return _shell(biz, site, "Messages", "".join(body), tab="messages", who=me)
 
 
-def _bubble(m: Dict[str, Any], me_id: str, names: Dict[str, str], *, reportable: bool) -> str:
+def _bubble(m: Dict[str, Any], me_id: str, names: Dict[str, str], *, reportable: bool,
+            folks: Optional[Dict[str, Dict[str, Any]]] = None) -> str:
     from member_portal import _e
+    import member_photos as ph
     mine = str(m.get("sender_contact_id")) == str(me_id)
     who = "" if mine else f'<span class="mb-msg-who">{_e(names.get(str(m.get("sender_contact_id")), "Someone"))}</span>'
+    if not mine and folks is not None:
+        sender = folks.get(str(m.get("sender_contact_id"))) or {}
+        who = ph.avatar(sender, show=ph.shown_to_members(sender), cls="mb-msg-av") + who
     held = '<span class="mb-msg-held">Held for review. Only you can see it.</span>' if m["status"] == "held" else ""
     report = (f'<form method="post" action="/my/messages/report" class="mb-report"><input type="hidden" name="message_id" '
               f'value="{_e(m["id"])}"><button type="submit" class="mb-report-btn">Report</button></form>'
               if reportable and not mine and m["status"] == "delivered" else "")
-    return (f'<li class="mb-msg{" mb-mine" if mine else ""}" data-id="{_e(m["id"])}">{who}'
+    return (f'<li class="mb-msg{" mb-mine" if mine else ""}{" has-av" if not mine and folks is not None else ""}" data-id="{_e(m["id"])}">{who}'
             f'<span class="mb-msg-body">{_e(m["body"])}</span>{held}{report}</li>')
 
 
@@ -417,7 +425,8 @@ def render_chat(biz, site, request, me, t, acc, msgs, looks, *, title: str, view
     if looks:
         notices.append("A church safety officer reviewed this chat on " + _days(x["created_at"] for x in looks) + ".")
     note = "".join(f'<p class="mb-chat-note mp-muted">{n}</p>' for n in notices)
-    body_msgs = "".join(_bubble(m, me["id"], names, reportable=not parent) for m in msgs) or \
+    body_msgs = "".join(_bubble(m, me["id"], names, reportable=not parent,
+                                folks=folks if t["kind"] == "group" else None) for m in msgs) or \
         '<li class="mb-chat-empty mp-muted">No messages yet.</li>'
     actions = ""
     compose = ""
@@ -525,7 +534,10 @@ def inbox_rows(business_id: str, me_id: str) -> Optional[Tuple[List[Dict[str, An
             title = gname.get(str(t["group_id"]), "Group")
         else:
             title = first_and_initial((folks.get(other_of.get(tid, "")) or {}).get("name"))
-        row = {"id": tid, "kind": t["kind"], "title": title, "preview": preview, "unread": unread}
+        import member_photos as ph
+        other = folks.get(other_of.get(tid, "")) or {}
+        photo = ph.src(other) if t["kind"] != "group" and ph.shown_to_members(other) else ""
+        row = {"id": tid, "kind": t["kind"], "title": title, "preview": preview, "unread": unread, "photo": photo}
         (requests if (read.get(tid) or {}).get("state") == "requested" else chats).append(row)
     return chats, requests
 
@@ -621,6 +633,16 @@ async def serve(request: Request, biz, site, me, sub: str):
     return await asyncio.to_thread(_chat_page, request, biz, site, full, rest)
 
 
+def _teen_face(t: Dict[str, Any]) -> str:
+    """A linked parent sees their teen's photo (member_photos: parents and
+    staff only); initials otherwise."""
+    import member_app_ui as ui
+    import member_photos as ph
+    from member_portal import _e
+    url = ph.src(t)
+    return f'<img src="{_e(url)}" alt="" loading="lazy">' if url else _e(ui.initials(t.get("name")))
+
+
 def _my_teens(business_id: str, me_id: str) -> Optional[List[Dict[str, Any]]]:
     links = guardians(business_id, [me_id])
     if links is None:
@@ -629,7 +651,8 @@ def _my_teens(business_id: str, me_id: str) -> Optional[List[Dict[str, Any]]]:
     folks = people(business_id, teens)
     if folks is None:
         return None
-    return [{"id": t, "name": folks[t]["name"]} for t in teens if t in folks and rules.is_teen(folks[t])]
+    return [{"id": t, "name": folks[t]["name"], "photo": folks[t].get("photo")}
+            for t in teens if t in folks and rules.is_teen(folks[t])]
 
 
 def _open_target(business_id: str, me: Dict[str, Any], kind: str, target: str):
