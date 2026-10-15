@@ -259,6 +259,18 @@ def test_a_trade_link_lands_on_its_trade_and_keeps_the_campaign_tags():
         assert f"'{key}'" in html, key
 
 
+def test_the_sample_people_are_labeled_not_real():
+    """Kevin, 2026-10-15: the photos are stock models, so every made-up name
+    and business says so right beside it, and the tag that points at the
+    person in the photo names the role, never the made-up name."""
+    html = mp.render_home()
+    assert "not a real person" in html and '<span class="fx">Fictional</span>' in html
+    assert "Stock photo · a model" in html and "Stock photos of models, not customers" in html
+    assert "is a fictional business" in html and "Fictional business · " in html
+    assert "a sample customer" not in html
+    assert "g.f ? g.t.replace(t.owner, cap(ROLE[t.id])) : g.t" in html
+
+
 # ─── 5. the shell carries on ─────────────────────────────────────────
 
 def test_the_shell_carries_the_pixel_the_beacon_and_the_flyer_styles(monkeypatch):
