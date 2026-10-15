@@ -151,3 +151,23 @@ ministry/member tests: 310 passed, no skips. The broader combined run passed
 backends, with no skips. JavaScript syntax and diff checks passed. Final open-PR
 file and care-table diff checks found no uncleared overlap. Required CI will
 run on the pushed head; no merge is authorized in this session.
+
+
+Merge lane (2026-10-15): KAI relayed Kevin's explicit approval to squash-merge
+#1409 without --admin and retain the branch, after rebase/CI/overlap checks.
+Verified every follow-up item in 869e9e50: plain limits/truncation at
+website_forms.py:13,35 (must-fix and nit 4); accepted fallback-email success at
+public_site.py:2573 (should-fix 1); randomUUID fallback at
+sites/love-city-church/forms.js:109 (should-fix 2); canonical ministry gate at
+public_site.py:2526 (nit 1); create_urgent_alert at website_forms.py:150 and its
+urgent_alerts preference gate at notification_engine.py:649 (nit 2); fresh
+unkeyed receipts at website_forms.py:96 (nit 3).
+
+Main advanced by #1439 to 9be2b4f1. Rebased cleanly; range-diff confirms all eight
+prior patches are unchanged. The requested form, endpoint, care-inbox,
+church-reads, Love City, manual-site and ministry/member regressions passed
+310 tests, no skips. JavaScript syntax and diff checks passed. Every open PR's
+files and care-table diff was checked; #1440 and #1441 also have no overlap.
+CI, squash merge and source-only production verification follow this commit;
+report their exact hashes/results in the PR description and final handoff.
+Do not submit live forms: Kevin will perform the test submissions himself.
