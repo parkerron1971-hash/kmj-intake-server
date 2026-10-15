@@ -303,7 +303,7 @@ def test_empty_sermons_and_groups_get_a_designed_page_not_an_empty_list():
 
 def test_sign_in_leads_with_the_church_and_a_chat_drops_the_tab_bar():
     page = mp.render_signin(_biz(), None)
-    assert 'class="mb-si"' in page and "Welcome<br>home." in page and 'class="mb-top"' not in page
+    assert 'class="si-door"' in page and "Welcome home." in page and 'class="mb-top"' not in page
     chat = mp._shell(_biz(), None, "Chat", "<p>x</p>", tab="me", who=ME, bar=False)
     assert 'aria-label="Main"' not in chat and 'class="mb-top"' in chat
 

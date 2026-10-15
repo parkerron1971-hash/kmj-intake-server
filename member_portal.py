@@ -539,16 +539,20 @@ def palette_for(biz: Dict[str, Any], site: Optional[Dict[str, Any]]) -> Dict[str
 
 def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
            body: str, *, script: str = "", tab: Optional[str] = None,
-           who: Optional[Dict[str, Any]] = None, bare: bool = False, bar: bool = True) -> str:
+           who: Optional[Dict[str, Any]] = None, bare: bool = False, bar: bool = True,
+           door: bool = False) -> str:
     """Every member page. Signed-in pages pass `tab` (the bottom bar's
     current tab) and `who` (their avatar, which opens Me); the sign-in
     pages pass neither and get no bar. `bare` leaves the header out (the
     sign-in pages, whose photo carries the church's name); `bar=False`
     keeps the header but drops the tab bar (a chat, whose box sits at the
-    foot of the screen). The look is member_app_ui's."""
+    foot of the screen). `door` is a page before sign-in, in the front
+    door's look (member_app_signin), which draws its own header and foot.
+    The look is member_app_ui's."""
     import member_app_ui as ui
     import member_app_install as mai
     import member_app_photos as photos
+    import member_app_signin as sg
     from public_form_theme import resolve_theme, css_vars, font_links
     theme = resolve_theme(biz, site)
     name = (biz.get("name") or "").strip() or "Your church"
@@ -582,15 +586,16 @@ def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
 {font_links(theme)}
 <style>{css_vars(theme)}</style>
 <style>{ui.css(biz, theme)}</style>
+{f'<style>{sg.css(biz, theme)}</style>' if door else ''}
 </head>
-<body>
-{'' if bare else f'<header class="mb-top"><a class="mb-brand" href="/my">{brand}</a><span class="mb-top-right">{give}{chat}{avatar}</span></header>'}
-<main class="mp-shell{' mb-has-nav' if signed_in and bar else ''}{' mb-bare' if bare else ''}">
+<body{' class="si"' if door else ''}>
+{'' if bare or door else f'<header class="mb-top"><a class="mb-brand" href="/my">{brand}</a><span class="mb-top-right">{give}{chat}{avatar}</span></header>'}
+<main class="mp-shell{' mb-has-nav' if signed_in and bar else ''}{' mb-bare' if bare or door else ''}">
   {body}
-  <footer class="mp-foot mp-noprint">Your page at {_e(name)} · Powered by Solutionist</footer>
+  {'' if door else f'<footer class="mp-foot mp-noprint">Your page at {_e(name)} · Powered by Solutionist</footer>'}
 </main>
 {ui.nav(tab) if signed_in and bar else ''}
-{'' if bare else ui.SCROLL_JS}
+{'' if bare or door else ui.SCROLL_JS}
 {script}
 {mai.REGISTER_JS}
 </body>
@@ -644,97 +649,63 @@ def render_give(biz: Dict[str, Any], site, me: Dict[str, Any], *, preview: bool 
                                  "email": me.get("email") or "", "preview": preview})
 
 
+def _door_page(biz: Dict[str, Any], site, title: str, *, icon: str, heading: str, body: str,
+               actions: str = "") -> str:
+    """A page before sign-in with one thing to say, in the front door's
+    look (member_app_signin.status_body)."""
+    import member_app_signin as sg
+    from public_form_theme import resolve_theme
+    return _shell(biz, site, title, sg.status_body(biz, site, resolve_theme(biz, site), icon=icon, title=heading,
+                                                   body=body, actions=actions), door=True)
+
+
 def render_unavailable(biz: Dict[str, Any], site=None) -> str:
-    return _shell(biz, site, "Not available", """
-<div class="mp-card"><h1>This page isn't open yet</h1>
-<p class="mp-muted">Member sign-in isn't turned on for this church. If you were expecting it, ask the church office.</p></div>""")
+    return _door_page(biz, site, "Not available", icon="lock", heading="This page isn't open yet", body="""
+<p>Member sign-in isn't turned on for this church. If you were expecting it, ask the church office.</p>""")
 
 
 def render_signin_paused(biz: Dict[str, Any], site=None) -> str:
-    return _shell(biz, site, "Sign-in paused", f"""
-<div class="mp-card"><h1>Sign-in is paused for now</h1>
-<p class="mp-muted">{_e(biz.get('name') or 'The church')} has paused new sign-ins to this page, so no code will be sent.
+    return _door_page(biz, site, "Sign-in paused", icon="clock", heading="Sign-in is paused for now", body=f"""
+<p>{_e(biz.get('name') or 'The church')} has paused new sign-ins to this page, so no code will be sent.
 If you're already signed in on another phone or computer, you're still in there.</p>
-<p class="mp-muted">Ask the church office when it's back on.</p></div>""")
-
-
-def _welcome_art(biz: Dict[str, Any], site) -> str:
-    """The sign-in screen's top: the church's own photo (or art made from
-    its colours) with its logo, or its name when there's no logo that
-    reads on the dark app."""
-    import member_app_ui as ui
-    import member_app_photos as photos
-    name = (biz.get("name") or "").strip() or "Your church"
-    pic = photos.welcome(photos.photos(biz, site))
-    art = ui.photo(pic, eager=True) if pic else ui.gen_art(name)
-    word = photos.wordmark(site)
-    brand = (f'<img class="mb-si-logo" src="{_e(word)}" alt="{_e(name)}">' if word else
-             f'<p class="mb-si-name">{_e(name)}</p>')
-    return f'<section class="mb-si">{art}{brand}<h1>Welcome<br>home.</h1></section>'
+<p>Ask the church office when it's back on.</p>""")
 
 
 def render_signin(biz: Dict[str, Any], site=None, *, error: str = "", email: str = "") -> str:
-    err = f'<p class="mp-err" role="alert">{_e(error)}</p>' if error else ""
-    return _shell(biz, site, "Sign in", f"""
-{_welcome_art(biz, site)}
-<p class="mp-muted" style="margin-top:12px">Your page at {_e(biz.get('name') or 'the church')}: messages, your groups, what's coming up and your giving.
-Sign in with the email or mobile number the church has for you. We'll send a 6-digit code. There's no password to remember.</p>
-<form class="mp-form" method="post" action="/my/code">
-  <label for="mp-email">Email or mobile number</label>
-  <input class="mp-input" id="mp-email" name="email" type="text" autocomplete="username" autocapitalize="off" spellcheck="false" required value="{_e(email)}">
-  {err}
-  <button class="mp-go" type="submit">Send my code</button>
-</form>""", bare=True)
+    """The front door (member_app_signin): the church's photo in an open
+    doorway, "Welcome home.", and the form in a sheet below."""
+    import member_app_signin as sg
+    from public_form_theme import resolve_theme
+    return _shell(biz, site, "Sign in", sg.signin_body(biz, site, resolve_theme(biz, site), error=error, email=email),
+                  script=sg.SIGNIN_JS, door=True)
 
 
 def render_code(biz: Dict[str, Any], site=None, *, email: str, error: str = "") -> str:
-    import member_app_ui as ui
-    err = f'<p class="mp-err" role="alert">{_e(error)}</p>' if error else ""
-    texted = is_phone(email)
-    return _shell(biz, site, "Enter your code", f"""
-<a class="mb-back" href="/my" style="margin-top:calc(12px + env(safe-area-inset-top,0px))">{ui.icon('back', 16)}Back</a>
-<h1 class="mb-hello" style="margin:14px 0 12px">Check your {'texts' if texted else 'email'}</h1>
-<p class="mp-muted">If <strong>{_e(show_ident(email))}</strong> is on {_e(biz.get('name') or 'the church')}'s list, a 6-digit code is on its way{' by text' if texted else ''}. It works for 10 minutes.</p>
-<form class="mp-form" method="post" action="/my/verify">
-  <input type="hidden" name="email" value="{_e(email)}">
-  <label for="mp-code">6-digit code</label>
-  <input class="mp-input mp-code" id="mp-code" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]*" maxlength="7" required autofocus>
-  {err}
-  <button class="mp-go" type="submit">Sign in</button>
-</form>
-<form method="post" action="/my/code" class="mp-noprint">
-  <input type="hidden" name="email" value="{_e(email)}">
-  <p class="mp-muted" style="margin-top:14px">Nothing arrived? {'Give it a minute' if texted else 'Check spam'}, or <button class="mp-link" type="submit">send a new code</button>.
-  Still nothing? Ask the church office which {'number' if texted else 'email'} they have for you.</p>
-</form>
-<p class="mp-muted"><a href="/my">Use a different email or number</a></p>""", bare=True)
+    import member_app_signin as sg
+    return _shell(biz, site, "Enter your code",
+                  sg.code_body(biz, site, email=email, shown=show_ident(email), texted=is_phone(email), error=error),
+                  script=sg.CODE_JS, door=True)
 
 
 def render_try_again(biz: Dict[str, Any], site=None) -> str:
-    return _shell(biz, site, "Try again", """
-<div class="mp-card"><h1>We couldn't open your page just now</h1>
-<p class="mp-muted">Nothing is wrong with your account. Please try again in a moment.</p>
-<p><a class="mp-go" href="/my">Try again</a></p></div>""")
+    return _door_page(biz, site, "Try again", icon="refresh", heading="We couldn't open your page just now", body="""
+<p>Nothing is wrong with your account. Please try again in a moment.</p>""",
+                      actions='<a class="mp-go si-go" href="/my">Try again</a>')
 
 
 def render_shared_address(biz: Dict[str, Any], site=None) -> str:
-    return _shell(biz, site, "Ask the church office", f"""
-<div class="mp-card"><h1>This email is on more than one person's record</h1>
-<p class="mp-muted">To keep everyone's giving private, each person signs in with their own email, so this one can't be used.
-Ask {_e(biz.get('name') or 'the church office')} to put your own email on your record, then sign in with that.</p>
-<p><a class="mp-link" href="/my">Back</a></p></div>""")
+    return _door_page(biz, site, "Ask the church office", icon="users",
+                      heading="This email is on more than one person's record", body=f"""
+<p>To keep everyone's giving private, each person signs in with their own email, so this one can't be used.
+Ask {_e(biz.get('name') or 'the church office')} to put your own email on your record, then sign in with that.</p>""",
+                      actions='<a class="mp-go mp-go-2" href="/my">Back</a>')
 
 
 def render_choose(biz: Dict[str, Any], site, people: List[Dict[str, Any]]) -> str:
-    buttons = "".join(
-        f'<form method="post" action="/my/person"><input type="hidden" name="cid" value="{_e(p["id"])}">'
-        f'<button class="mp-person" type="submit">{_e(p.get("name") or "Someone in your household")}</button></form>'
-        for p in people)
-    return _shell(biz, site, "Who's signing in?", f"""
-<h1>Who's signing in?</h1>
-<p class="mp-muted">This email is on more than one person's record at {_e(biz.get('name') or 'the church')}, so
-anyone who reads it can see each of these people's giving. Choose yourself.</p>
-<div class="mp-row">{buttons}</div>""")
+    import member_app_signin as sg
+    return _door_page(biz, site, "Who's signing in?", icon="users", heading="Who's signing in?", body=f"""
+<p>This email is on more than one person's record at {_e(biz.get('name') or 'the church')}, so
+anyone who reads it can see each of these people's giving. Choose yourself.</p>""", actions=sg.people_list(people))
 
 
 def _live_card(live: Dict[str, Any]) -> str:
