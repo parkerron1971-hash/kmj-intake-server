@@ -271,6 +271,11 @@
       "name": "uncredentialed URL host",
       "input": "https://aB3dE6gH9jK2mN5pQ8sT1vW4yZ7cF0iL.example.com/path",
       "expected": "https://aB3dE6gH9jK2mN5pQ8sT1vW4yZ7cF0iL.example.com/path"
+    },
+    {
+      "name": "UUID with high entropy",
+      "input": "12345678-90ab-4cde-8f12-34567890abcd",
+      "expected": "12345678-90ab-4cde-8f12-34567890abcd"
     }
   ]
 }

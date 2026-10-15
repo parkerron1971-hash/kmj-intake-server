@@ -36,3 +36,18 @@ def test_failure_never_returns_raw_text(monkeypatch):
     monkeypatch.setattr(dev_redact, 'text', broken)
     with pytest.raises(RuntimeError):
         dev_kai._entry_row(dev_kai.KaiEntry(id='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',kind='kai',text='secret'), 'd')
+
+
+def test_repeated_sensitive_name_is_linear_and_redacts_when_assigned():
+    # This used to take over one second at 16 KB and grows quadratically.
+    # A large delimiter-free name and an assignment exercise both paths.
+    value='auth'*40000
+    assert dev_redact.text(value)==value
+    assert dev_redact.text(value+'=hidden')==value+'=[redacted:assignment]'
+
+
+def test_uuid_survives_kai_metadata_and_insert_layer():
+    value='12345678-90ab-4cde-8f12-34567890abcd'
+    row=dev_kai._entry_row(dev_kai.KaiEntry(id=value,kind='tool',meta={'card':value}),value)
+    assert dev_redact.deep(row)['device_id']==value
+    assert dev_redact.deep(row)['meta']['card']==value

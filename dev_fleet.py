@@ -141,11 +141,11 @@ async def fleet_screen_put(key: str, body: ScreenBody, authorization: Optional[s
     key = session_key(key)
     if len(body.text) > 16000:
         raise HTTPException(413, 'Screen exceeds 16,000 characters')
-    text = dev_redact.text(body.text)
-    # Redaction may expand a short secret. Keep the final stored text within the cap.
-    text = '\n'.join(text.splitlines()[-120:])[-12000:]
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
         device = await _require_device(c, authorization)
+        text = dev_redact.text(body.text)
+        # Redaction can expand a short secret; bound the final stored screen.
+        text = '\n'.join(text.splitlines()[-120:])[-12000:]
         result = await store.rpc(c, 'dev_fleet_screen', {'p_device': device['id'], 'p_key': key,
             'p_rev': body.rev, 'p_text': text, 'p_state': body.state,
             'p_at': body.at.isoformat() if body.at else store.z(store.now())})

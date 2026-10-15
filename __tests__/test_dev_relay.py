@@ -43,7 +43,9 @@ def test_failed_storage_purge_preserves_pointer_for_retry(relay,monkeypatch):
     relay.tables['dev_cards']=[{'id':D1,'expires_at':store.z(relay.stamp-timedelta(days=1)),'object_path':'retry-me'}]
     async def fail(*a):raise HTTPException(502,'storage failed')
     monkeypatch.setattr(dev_cards,'_remove_objects',fail)
-    with pytest.raises(HTTPException):run(store.dev_relay_purge())
+    relay.tables['dev_alerts']=[{'id':'old','created_at':store.z(relay.stamp-timedelta(days=31))}]
+    run(store.dev_relay_purge())
+    assert relay.tables['dev_alerts']==[]
     assert relay.tables['dev_cards'][0]['object_path']=='retry-me'
 
 
@@ -75,3 +77,29 @@ def test_jobs_are_leader_gated_and_no_a2_jobs():
     assert 'g("dev_relay_purge", dev_relay_purge)' in source
     assert 'g("dev_alert_digest_tick", dev_alert_digest_tick)' in source
     assert 'g("dev_watch_tick"' not in source
+
+
+def test_one_bad_card_does_not_starve_later_cards(relay,monkeypatch):
+    expired=store.z(relay.stamp-timedelta(days=1))
+    relay.tables['dev_cards']=[{'id':D1,'expires_at':expired,'object_path':'bad'},
+                               {'id':D2,'expires_at':expired,'object_path':'good'}]
+    async def remove(c,paths):
+        if 'bad' in paths:raise HTTPException(502,'transient')
+        return await relay.remove(c,paths)
+    monkeypatch.setattr(dev_cards,'_remove_objects',remove)
+    run(store.dev_relay_purge())
+    assert [r['id'] for r in relay.tables['dev_cards']]==[D1]
+    assert relay.removed==['good']
+
+
+def test_unpair_reports_cleanup_failure_but_token_is_already_revoked(relay,monkeypatch):
+    import dev_bridge
+    from uuid import UUID
+    relay.tables['dev_cards']=[{'id':D1,'device_id':D1,'object_path':'bad'}]
+    async def fail(*a):raise HTTPException(502,'transient')
+    monkeypatch.setattr(dev_cards,'_remove_objects',fail)
+    with pytest.raises(HTTPException) as e:run(dev_bridge.revoke_device(UUID(D1),None))
+    assert e.value.status_code==502
+    with pytest.raises(HTTPException) as e:run(dev_bridge._require_device(None,'Bearer one'))
+    assert e.value.status_code==401
+    assert relay.tables['dev_cards'][0]['object_path']=='bad'

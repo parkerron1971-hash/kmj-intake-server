@@ -2,6 +2,7 @@
 import hashlib
 import io
 import json
+import logging
 import re
 import warnings
 from datetime import timedelta
@@ -21,6 +22,7 @@ from dev_bridge import HTTP_TIMEOUT, _require_device
 from lead_admin import require_owner
 
 router = APIRouter(tags=['dev-bridge'], route_class=store.BoundedRoute)
+logger = logging.getLogger('dev_cards')
 BUCKET = 'dev-desk'
 _IMAGE = {'PNG': ('image/png', 'png'), 'JPEG': ('image/jpeg', 'jpg'),
           'WEBP': ('image/webp', 'webp'), 'GIF': ('image/gif', 'gif')}
@@ -220,9 +222,20 @@ async def card_get(id: str, _owner=Depends(require_owner)):
         return {'ok': True, 'card': await shown(c, rows[0])}
 
 
-async def purge_cards(c, filters):
+async def purge_cards(c, filters, *, strict=False):
     rows = await store.all_rows(c, 'dev_cards', {**filters, 'select': 'id,object_path,thumb_path', 'order': 'id'})
+    removed = 0
+    failed = 0
     for row in rows:
-        await _remove_objects(c, [row[k] for k in ('object_path', 'thumb_path') if row.get(k)])
-        await store.delete(c, 'dev_cards', {'id': f"eq.{row['id']}"})
-    return len(rows)
+        try:
+            await _remove_objects(c, [row[k] for k in ('object_path', 'thumb_path') if row.get(k)])
+            await store.delete(c, 'dev_cards', {'id': f"eq.{row['id']}"})
+            removed += 1
+        except Exception:
+            failed += 1
+            # Keep the pointer for retry, but never let one bad object starve
+            # unrelated cards or the remaining retention stages.
+            logger.warning('Card purge failed for %s; retained for retry', row['id'])
+    if failed and strict:
+        raise HTTPException(502, "Device revoked; some card objects need a cleanup retry")
+    return removed

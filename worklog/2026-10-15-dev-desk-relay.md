@@ -33,7 +33,7 @@ PGlite script applies the migration twice and checks actual RPC behavior, RLS,
 revocation and restrictive storage access; CI runs that script using its existing
 PGlite dependency. No test connects to production.
 
-Local final validation: 212 tests passed across bridge, KAI, fleet, cards,
+Local final validation: 218 tests passed across bridge, KAI, fleet, cards,
 alerts, redaction, retention, shared rate limits and dispatched local work. The disposable SQL check
 passed; syntax and whitespace checks passed. Full GitHub test check pending.
 
@@ -42,3 +42,12 @@ round-trips, device metadata spoofing and revocation during an upload. GitHub
 push protection initially flagged synthetic repeated-character Stripe fixtures;
 replaced them with explicitly fake short values before the first successful push.
 No protection bypass was used. PR #1448 is open for Claude Code review.
+
+Automated-review follow-up: the 90-day KAI-message retention is intentional per
+M-3 section 3.6 and the brief, and permanently deletes older conversation history.
+It is now explicit in the PR. Card purge failures retain their pointer and no
+longer starve later cards or alert/KAI retention; unpair still reports incomplete
+cleanup after revoking the token. Screen redaction authenticates first. Valid
+UUIDs survive entropy redaction, including KAI card/device references. Replaced
+the overlapping assignment regex: the reported auth-repeat case took 1.13 s at
+16 KB before, versus 0.032 s at 160 KB after, with new regressions.

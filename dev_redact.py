@@ -9,7 +9,9 @@ from collections import Counter
 
 KEEP = frozenset('id ids at key task_id rev kind state status sender agent owner handle since card_id sha256 created_at screen_rev'.split())
 _SENSITIVE = r'(?:secret|token|passw(?:or)?d|pwd|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|auth|credential|cookie|session[_-]?key|dsn|database_url|connection[_-]?string|webhook[_-]?url|service[_-]?role)'
-_NAME = r'[\w.-]*' + _SENSITIVE + r'[\w.-]*'
+# Look ahead for a sensitive component, then consume the name once. Two
+# overlapping greedy runs around the component are quadratic on authauth...
+_NAME = r'(?=[\w.-]*' + _SENSITIVE + r')[\w.-]+'
 _TOKENS = re.compile(
     r'\b(?:sk-(?:ant-|proj-)?[\w-]{20,}|(?:sk|rk)_(?:live|test)_[\w-]+|whsec_[\w-]+'
     r'|gh[pousr]_[\w]+|github_pat_[\w]+|glpat-[\w-]+|xox[abprs]-[\w-]+'
@@ -70,6 +72,8 @@ def text(value: str) -> str:
         token_start = max(value.rfind(' ', 0, m.start()), value.rfind('\n', 0, m.start())) + 1
         prefix = value[token_start:m.start()]
         if before in ('/', '\\', '.') or after in ('/', '\\', '.') or '://' in prefix or re.search(r'[A-Za-z]:\\', prefix):
+            return s
+        if re.fullmatch(r'[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}', s):
             return s
         if re.fullmatch(r'[a-fA-F0-9]+', s):
             return s

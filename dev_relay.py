@@ -98,7 +98,7 @@ async def purge_device(c, device_id):
     await delete(c, 'dev_fleet_sessions', {'device_id': f'eq.{device_id}'})
     await patch(c, 'dev_bridge_devices', {'id': f'eq.{device_id}'},
                 {'fleet_watch': None, 'fleet_open_until': None})
-    await purge_cards(c, {'device_id': f'eq.{device_id}'})
+    await purge_cards(c, {'device_id': f'eq.{device_id}'}, strict=True)
 
 
 async def dev_relay_purge():

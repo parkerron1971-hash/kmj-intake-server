@@ -129,3 +129,10 @@ def test_every_owner_route_is_gated_and_device_routes_require_token():
         for path,method in paths:
             assert client.request(method,path,json={}).status_code==403
         assert client.post('/dev-bridge/fleet',json={'sessions':[]}).status_code==401
+
+
+def test_screen_auth_runs_before_redaction(relay,monkeypatch):
+    def unexpected(_):raise AssertionError('redaction ran before authentication')
+    monkeypatch.setattr(f.dev_redact,'text',unexpected)
+    with pytest.raises(HTTPException) as e:screen(auth=None)
+    assert e.value.status_code==401
