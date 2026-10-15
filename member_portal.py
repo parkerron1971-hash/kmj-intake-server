@@ -101,7 +101,11 @@ _SECURE_HEADERS = {
     "Expires": "0",
     "X-Frame-Options": "DENY",
     "Content-Security-Policy": "frame-ancestors 'none'",
-    "Referrer-Policy": "no-referrer",
+    # same-origin, not no-referrer: under no-referrer a browser sends a
+    # same-origin form post with Origin: null, which _same_origin refuses,
+    # so "Send my code" answered {"detail":"Not allowed"} (Kevin,
+    # 2026-10-15). Other sites still get no referrer at all.
+    "Referrer-Policy": "same-origin",
 }
 
 UUID_RE = re.compile(r"^[0-9a-fA-F-]{36}$")
@@ -471,8 +475,14 @@ def _same_origin(request: Request) -> bool:
     import public_site
     host = (public_site.public_host(request) or "").split(":")[0].lower()
     origin = request.headers.get("origin")
+    if origin == "null":
+        # A page still open from before the referrer fix posts with Origin:
+        # null; the browser's own Sec-Fetch-Site (which a page can't set)
+        # says whether it came from this very address. Another church's
+        # address is "same-site", never "same-origin".
+        return (request.headers.get("sec-fetch-site") or "").lower() == "same-origin"
     if origin is not None:
-        return origin != "null" and (urlparse(origin).hostname or "").lower() == host
+        return (urlparse(origin).hostname or "").lower() == host
     referer = request.headers.get("referer")
     if referer:
         return (urlparse(referer).hostname or "").lower() == host
