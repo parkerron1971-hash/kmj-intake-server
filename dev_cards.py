@@ -1,4 +1,5 @@
 """Validated device uploads to a private bucket; signed owner-only reads."""
+import asyncio
 import hashlib
 import io
 import json
@@ -173,21 +174,21 @@ async def card_upload(meta: str = Form(...), file: Optional[UploadFile] = File(N
         if thumb and not file:
             raise HTTPException(422, 'A thumbnail needs an original')
         card_id = str(uuid4())
-        row = {**dev_redact.deep(info.model_dump()), 'url': url, 'id': card_id, 'device_id': device['id'],
+        row = {**(await asyncio.to_thread(dev_redact.deep, info.model_dump())), 'url': url, 'id': card_id, 'device_id': device['id'],
                'created_at': store.z(store.now()), 'expires_at': store.z(store.now()+timedelta(days=30))}
         objects = []
         if file:
             data = await _read(file, 8 * 1024 * 1024)
-            data, mime, ext, w, h = _file(data, file.content_type, file.filename)
+            data, mime, ext, w, h = await asyncio.to_thread(_file, data, file.content_type, file.filename)
             if info.kind in ('image', 'screenshot', 'preview') and not mime.startswith('image/'):
                 raise HTTPException(415, 'This card requires an image')
             row.update(mime=mime, bytes=len(data), width=w, height=h, sha256=hashlib.sha256(data).hexdigest(),
-                       filename=dev_redact.text((file.filename or 'file').replace('\\', '/').split('/')[-1])[:120],
+                       filename=(await dev_redact.text_async((file.filename or 'file').replace('\\', '/').split('/')[-1]))[:120],
                        object_path=f"{device['id']}/{card_id}/original.{ext}")
             objects.append((row['object_path'], data, mime))
         if thumb:
             data = await _read(thumb, 300 * 1024)
-            mime, _, w, _ = _image(data)
+            mime, _, w, _ = await asyncio.to_thread(_image, data)
             if mime != 'image/jpeg' or w > 480:
                 raise HTTPException(415, 'Thumbnail must be JPEG and at most 480 px wide')
             row['thumb_path'] = f"{device['id']}/{card_id}/thumb.jpg"

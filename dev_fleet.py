@@ -121,8 +121,9 @@ async def fleet_sync(body: FleetBody, authorization: Optional[str] = Header(None
         device = await _require_device(c, authorization)
         if not await asyncio.to_thread(rate_limit.allow_strict, 'dev_fleet', device['id']):
             raise HTTPException(429, 'Fleet write limit', headers={'Retry-After': '60'})
+        rows = await asyncio.to_thread(lambda: [_row(s) for s in body.sessions])
         result = await store.rpc(c, 'dev_fleet_sync', {'p_device': device['id'], 'p_full': body.full,
-                                                    'p_sessions': [_row(s) for s in body.sessions]})
+                                                    'p_sessions': rows})
         if result.get('error'):
             raise HTTPException(result['error'], 'Fleet capacity or device unavailable')
         rows = await store.get(c, 'dev_bridge_devices', {'id': f"eq.{device['id']}",
@@ -144,7 +145,7 @@ async def fleet_screen_put(key: str, body: ScreenBody, authorization: Optional[s
         raise HTTPException(413, 'Screen exceeds 16,000 characters')
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
         device = await _require_device(c, authorization)
-        text = dev_redact.text(body.text)
+        text = await dev_redact.text_async(body.text)
         # Redaction can expand a short secret; bound the final stored screen.
         text = '\n'.join(text.splitlines()[-120:])[-12000:]
         result = await store.rpc(c, 'dev_fleet_screen', {'p_device': device['id'], 'p_key': key,

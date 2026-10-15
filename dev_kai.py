@@ -25,6 +25,7 @@ Auth: /platform/dev-desk/kai* is owner-only (require_owner) like the rest of
 the Dev Desk; /dev-bridge/kai/* takes the paired device's token.
 """
 
+import asyncio
 import logging
 import dev_redact
 from datetime import datetime, timedelta, timezone
@@ -83,11 +84,13 @@ def _missing(e: HTTPException) -> HTTPException:
 
 
 async def _insert(c: httpx.AsyncClient, rows: List[Dict[str, Any]], *,
-                  skip_known: bool = False) -> List[Dict[str, Any]]:
+                  skip_known: bool = False, owner_instruction: bool = False) -> List[Dict[str, Any]]:
     """Insert messages and return the rows that are new. With skip_known, a
     row whose id is already stored is left alone and not returned — the
     desktop re-sends its recent line whenever it reconnects."""
-    rows = [dev_redact.deep(r) for r in rows]
+    # Only the authenticated say endpoint opts out for Kevin's text.
+    keep = dev_redact.KEEP | {"text"} if owner_instruction else dev_redact.KEEP
+    rows = await asyncio.to_thread(dev_redact.deep, rows, keep=keep)
     prefer = "return=representation"
     if skip_known:
         prefer += ",resolution=ignore-duplicates"
@@ -194,7 +197,7 @@ async def kai_thread(since: Optional[str] = None, _owner=Depends(require_owner))
 async def kai_say(body: KaiSayBody, _owner=Depends(require_owner)):
     """Kevin, from his phone. It waits here until the desktop types it into
     KAI; if Solution Space is closed, KAI gets it when it opens."""
-    text = dev_redact.text((body.text or "").strip())[:_TEXT_MAX]
+    text = (body.text or "").strip()[:_TEXT_MAX]
     if not text:
         raise HTTPException(422, "Nothing to send.")
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
@@ -203,7 +206,7 @@ async def kai_say(body: KaiSayBody, _owner=Depends(require_owner)):
         rows = await _insert(c, [{
             "kind": "you", "via": "phone", "text": text, "spoken": bool(body.spoken),
             "device_id": device["id"] if device else None, "at": now, "updated_at": now,
-        }])
+        }], owner_instruction=True)
         await _watch(c)
     return {"ok": True, "message": _shown(rows[0]) if rows else None,
             "desktop": _desktop(device)}
@@ -354,7 +357,8 @@ async def kai_mirror(body: KaiLineBody, authorization: Optional[str] = Header(No
     reconnect stores nothing twice and tells Kevin nothing twice."""
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
         device = await _require_device(c, authorization)
-        rows = [r for r in (_entry_row(e, device["id"]) for e in body.entries[:_LINE_MAX]) if r]
+        rows = await asyncio.to_thread(lambda: [r for r in
+            (_entry_row(e, device["id"]) for e in body.entries[:_LINE_MAX]) if r])
         stored = await _insert(c, rows, skip_known=True) if rows else []
         try:
             me = await _sb_get(c, "dev_bridge_devices", {
@@ -363,7 +367,7 @@ async def kai_mirror(body: KaiLineBody, authorization: Optional[str] = Header(No
             raise _missing(e)
         before = (me[0] if me else {})
         previous = before.get("kai_state") or {}
-        state = _clean_state(body.state) if body.state is not None else dict(previous)
+        state = await asyncio.to_thread(_clean_state, body.state) if body.state is not None else dict(previous)
         pushed = await _tell(c, previous, state, stored, _parse(before.get("kai_watch_until")))
         if body.state is not None or pushed:
             await _sb_patch(c, "dev_bridge_devices", {"id": f"eq.{device['id']}"},

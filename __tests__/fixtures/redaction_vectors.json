@@ -1,281 +1,83 @@
 {
+  "about": "Shared redaction vectors for M-3 §3.5. Solution Space (electron/redact.js) and the backend (dev_redact.py) must both turn every input into its expect. Copy this file to kmj-intake-server/__tests__/fixtures/redaction_vectors.json; a change to either rule set changes this file. Vectors with desktop_only are known-value checks: those values never leave the PC, so the server skips them. Each match becomes [redacted:<kind>]; URL credentials become [redacted]. Key names are kept.",
   "version": 1,
-  "rules": "M-3 §3.5; known-value collection is desktop-only",
   "vectors": [
-    {
-      "name": "plain",
-      "input": "npm test",
-      "expected": "npm test"
-    },
-    {
-      "name": "uuid",
-      "input": "a8f654eb-3289-4af3-b87a-91c9ccbb7abc",
-      "expected": "a8f654eb-3289-4af3-b87a-91c9ccbb7abc"
-    },
-    {
-      "name": "sha",
-      "input": "0123456789abcdef0123456789abcdef01234567",
-      "expected": "0123456789abcdef0123456789abcdef01234567"
-    },
-    {
-      "name": "path",
-      "input": "C:\\Users\\Kevin\\my-project\\src\\index.ts",
-      "expected": "C:\\Users\\Kevin\\my-project\\src\\index.ts"
-    },
-    {
-      "name": "url",
-      "input": "https://example.com/a?q=hello",
-      "expected": "https://example.com/a?q=hello"
-    },
-    {
-      "name": "pem",
-      "input": "before\n-----BEGIN RSA PRIVATE KEY-----\nabc\ndef\n-----END RSA PRIVATE KEY-----\nafter",
-      "expected": "before\n[redacted:private-key]\nafter"
-    },
-    {
-      "name": "header",
-      "input": "Authorization: Bearer abcdef",
-      "expected": "Authorization: [redacted:header]"
-    },
-    {
-      "name": "bearer",
-      "input": "use Bearer abcdefghijk now",
-      "expected": "use Bearer [redacted:token] now"
-    },
-    {
-      "name": "basic",
-      "input": "Basic dXNlcjpwYXNz",
-      "expected": "Basic [redacted:token]"
-    },
-    {
-      "name": "credentials",
-      "input": "https://user:password@example.com",
-      "expected": "https://user:[redacted]@example.com"
-    },
-    {
-      "name": "query",
-      "input": "https://e.test?token=abc&x=2&X-Amz-Signature=xyz#end",
-      "expected": "https://e.test?token=[redacted:query]&x=2&X-Amz-Signature=[redacted:query]#end"
-    },
-    {
-      "name": "assignment",
-      "input": "export API_KEY=hello-secret",
-      "expected": "export API_KEY=[redacted:assignment]"
-    },
-    {
-      "name": "json",
-      "input": "{\"password\": \"hello world\"}",
-      "expected": "{\"password\": \"[redacted:assignment]\"}"
-    },
-    {
-      "name": "powershell",
-      "input": "$env:CLIENT_SECRET = 'hello world'",
-      "expected": "$env:CLIENT_SECRET = '[redacted:assignment]'"
-    },
-    {
-      "name": "set",
-      "input": "set DATABASE_URL=postgres://a:b@db",
-      "expected": "set DATABASE_URL=[redacted:assignment]"
-    },
-    {
-      "name": "docker",
-      "input": "-e SECRET=hello",
-      "expected": "-e SECRET=[redacted:assignment]"
-    },
-    {
-      "name": "flag",
-      "input": "--token hello --password=world",
-      "expected": "--token [redacted:assignment] --password=[redacted:assignment]"
-    },
-    {
-      "name": "env",
-      "input": "A=hello\nB=world\nC=123\n",
-      "expected": "A=[redacted:env]\nB=[redacted:env]\nC=[redacted:env]\n"
-    },
-    {
-      "name": "entropy",
-      "input": "aB3dE6gH9jK2mN5pQ8sT1vW4yZ7cF0iL",
-      "expected": "[redacted:entropy]"
-    },
-    {
-      "name": "low entropy",
-      "input": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-      "expected": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-    },
-    {
-      "name": "safe long path",
-      "input": "C:\\work\\aB3dE6gH9jK2mN5pQ8sT1vW4yZ7cF0iL\\file.txt",
-      "expected": "C:\\work\\aB3dE6gH9jK2mN5pQ8sT1vW4yZ7cF0iL\\file.txt"
-    },
-    {
-      "name": "sk-ant-",
-      "input": "sk-ant-aaaaaaaaaaaaaaaaaaaaaaaa",
-      "expected": "[redacted:token]"
-    },
-    {
-      "name": "sk-proj-",
-      "input": "sk-proj-aaaaaaaaaaaaaaaaaaaaaaaa",
-      "expected": "[redacted:token]"
-    },
-    {
-      "name": "sk-",
-      "input": "sk-aaaaaaaaaaaaaaaaaaaaaaaa",
-      "expected": "[redacted:token]"
-    },
-    {
-      "name": "sk_live_",
-      "input": "sk_live_FAKE",
-      "expected": "[redacted:token]"
-    },
-    {
-      "name": "sk_test_",
-      "input": "sk_test_FAKE",
-      "expected": "[redacted:token]"
-    },
-    {
-      "name": "rk_live_",
-      "input": "rk_live_FAKE",
-      "expected": "[redacted:token]"
-    },
-    {
-      "name": "rk_test_",
-      "input": "rk_test_FAKE",
-      "expected": "[redacted:token]"
-    },
-    {
-      "name": "whsec_",
-      "input": "whsec_aaaaaaaaaaaaaaaaaaaaaaaa",
-      "expected": "[redacted:token]"
-    },
-    {
-      "name": "ghp_",
-      "input": "ghp_aaaaaaaaaaaaaaaaaaaaaaaa",
-      "expected": "[redacted:token]"
-    },
-    {
-      "name": "gho_",
-      "input": "gho_aaaaaaaaaaaaaaaaaaaaaaaa",
-      "expected": "[redacted:token]"
-    },
-    {
-      "name": "ghu_",
-      "input": "ghu_aaaaaaaaaaaaaaaaaaaaaaaa",
-      "expected": "[redacted:token]"
-    },
-    {
-      "name": "ghs_",
-      "input": "ghs_aaaaaaaaaaaaaaaaaaaaaaaa",
-      "expected": "[redacted:token]"
-    },
-    {
-      "name": "ghr_",
-      "input": "ghr_aaaaaaaaaaaaaaaaaaaaaaaa",
-      "expected": "[redacted:token]"
-    },
-    {
-      "name": "github_pat_",
-      "input": "github_pat_aaaaaaaaaaaaaaaaaaaaaaaa",
-      "expected": "[redacted:token]"
-    },
-    {
-      "name": "glpat-",
-      "input": "glpat-aaaaaaaaaaaaaaaaaaaaaaaa",
-      "expected": "[redacted:token]"
-    },
-    {
-      "name": "xoxb-",
-      "input": "xoxb-aaaaaaaaaaaaaaaaaaaaaaaa",
-      "expected": "[redacted:token]"
-    },
-    {
-      "name": "ya29.",
-      "input": "ya29.aaaaaaaaaaaaaaaaaaaaaaaa",
-      "expected": "[redacted:token]"
-    },
-    {
-      "name": "npm_",
-      "input": "npm_aaaaaaaaaaaaaaaaaaaaaaaa",
-      "expected": "[redacted:token]"
-    },
-    {
-      "name": "re_",
-      "input": "re_aaaaaaaaaaaaaaaaaaaaaaaa",
-      "expected": "[redacted:token]"
-    },
-    {
-      "name": "xai-",
-      "input": "xai-aaaaaaaaaaaaaaaaaaaaaaaa",
-      "expected": "[redacted:token]"
-    },
-    {
-      "name": "AKIAA",
-      "input": "AKIAAAAAAAAAAAAAAAAA",
-      "expected": "[redacted:token]"
-    },
-    {
-      "name": "ASIAA",
-      "input": "ASIAAAAAAAAAAAAAAAAA",
-      "expected": "[redacted:token]"
-    },
-    {
-      "name": "AIzaa",
-      "input": "AIzaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-      "expected": "[redacted:token]"
-    },
-    {
-      "name": "SKaaa",
-      "input": "SKaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-      "expected": "[redacted:token]"
-    },
-    {
-      "name": "SG.ab",
-      "input": "SG.abc.def",
-      "expected": "[redacted:token]"
-    },
-    {
-      "name": "eyJab",
-      "input": "eyJabc.eyJdef.ghi",
-      "expected": "[redacted:token]"
-    },
-    {
-      "name": "Proxy-Authorization",
-      "input": "Proxy-Authorization: abc def",
-      "expected": "Proxy-Authorization: [redacted:header]"
-    },
-    {
-      "name": "X-Api-Key",
-      "input": "X-Api-Key: abc def",
-      "expected": "X-Api-Key: [redacted:header]"
-    },
-    {
-      "name": "Api-Key",
-      "input": "Api-Key: abc def",
-      "expected": "Api-Key: [redacted:header]"
-    },
-    {
-      "name": "Cookie",
-      "input": "Cookie: abc def",
-      "expected": "Cookie: [redacted:header]"
-    },
-    {
-      "name": "Set-Cookie",
-      "input": "Set-Cookie: abc def",
-      "expected": "Set-Cookie: [redacted:header]"
-    },
-    {
-      "name": "escaped JSON quote",
-      "input": "{\"password\": \"part\\\"still-secret\"}",
-      "expected": "{\"password\": \"[redacted:assignment]\"}"
-    },
-    {
-      "name": "uncredentialed URL host",
-      "input": "https://aB3dE6gH9jK2mN5pQ8sT1vW4yZ7cF0iL.example.com/path",
-      "expected": "https://aB3dE6gH9jK2mN5pQ8sT1vW4yZ7cF0iL.example.com/path"
-    },
-    {
-      "name": "UUID with high entropy",
-      "input": "12345678-90ab-4cde-8f12-34567890abcd",
-      "expected": "12345678-90ab-4cde-8f12-34567890abcd"
-    }
+    { "rule": 1, "name": "known value from a project .env, in prose", "desktop_only": true, "known": ["k9-Example-Known-Secret"], "input": "deploy used k9-Example-Known-Secret today", "expect": "deploy used [redacted:known] today" },
+    { "rule": 1, "name": "known values, longest first", "desktop_only": true, "known": ["abcdefgh12", "abcdefgh12345678"], "input": "x abcdefgh12345678 y abcdefgh12 z", "expect": "x [redacted:known] y [redacted:known] z" },
+    { "rule": 1, "name": "known value inside a longer word", "desktop_only": true, "known": ["plainword99"], "input": "prefix-plainword99-suffix", "expect": "prefix-[redacted:known]-suffix" },
+
+    { "rule": 2, "name": "PEM private key block", "input": "key:\n-----BEGIN PRIVATE KEY-----\nMIIBVgIBADANBgkqhkiG9w0BAQEFAASCAUAwggE8AgEAAkEA\nq7BFUlSGFHZ1yd7\n-----END PRIVATE KEY-----\ndone", "expect": "key:\n[redacted:private-key]\ndone" },
+    { "rule": 2, "name": "OpenSSH private key block", "input": "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAA\n-----END OPENSSH PRIVATE KEY-----", "expect": "[redacted:private-key]" },
+    { "rule": 2, "name": "PEM block cut off before its END line", "input": "-----BEGIN EC PRIVATE KEY-----\nMHcCAQEEIBkg4LVWM9nuwNSk3yByxZpYRTBnVJk5\n", "expect": "[redacted:private-key]" },
+
+    { "rule": 3, "name": "Authorization header line", "input": "Authorization: Bearer abc.def", "expect": "Authorization: [redacted:header]" },
+    { "rule": 3, "name": "X-Api-Key header inside curl", "input": "curl -H \"X-Api-Key: 9f8e7d6c5b4a\" https://api.example.com/v1", "expect": "curl -H \"X-Api-Key: [redacted:header]\" https://api.example.com/v1" },
+    { "rule": 3, "name": "Set-Cookie header", "input": "Set-Cookie: sid=abc123; HttpOnly", "expect": "Set-Cookie: [redacted:header]" },
+    { "rule": 3, "name": "Proxy-Authorization, any case", "input": "proxy-authorization: Basic dXNlcjpwYXNz", "expect": "proxy-authorization: [redacted:header]" },
+
+    { "rule": 4, "name": "Bearer token in prose", "input": "fetch with Bearer eyJhbGciOiJub25lIn0abc and go", "expect": "fetch with Bearer [redacted:token] and go" },
+    { "rule": 4, "name": "Basic token", "input": "sent Basic dXNlcjpwYXNzd29yZA== upstream", "expect": "sent Basic [redacted:token] upstream" },
+    { "rule": 4, "name": "the words Basic and bearer in prose stay", "input": "Basic configuration is done; the bearer of news arrived.", "expect": "Basic configuration is done; the bearer of news arrived." },
+
+    { "rule": 5, "name": "Anthropic key", "input": "key sk-ant-api03-Xy7dPq2LmN9vB4kR8sT1uW6zA3cE5gH0 end", "expect": "key [redacted:token] end" },
+    { "rule": 5, "name": "OpenAI project key", "input": "OPENAI sk-proj-Ab12Cd34Ef56Gh78Ij90Kl end", "expect": "OPENAI [redacted:token] end" },
+    { "rule": 5, "name": "sk- key of 20+ characters", "input": "use sk-Ab12Cd34Ef56Gh78Ij90Kl12 now", "expect": "use [redacted:token] now" },
+    { "rule": 5, "name": "Stripe live and restricted test keys", "input": "sk_live_51Hx9Q2eZvKYlo2C and <<stripe-restricted-test>>4eC39HqLyjWDarjtT1zdp7dc", "expect": "[redacted:token] and [redacted:token]" },
+    { "rule": 5, "name": "Stripe webhook secret", "input": "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw", "expect": "[redacted:token]" },
+    { "rule": 5, "name": "GitHub tokens", "input": "ghp_16C7e42F292c6912E7710c838347Ae178B4a gho_16C7e42F292c6912E7710c838347Ae178B4a ghs_16C7e42F292c6912E7710c838347Ae178B4a", "expect": "[redacted:token] [redacted:token] [redacted:token]" },
+    { "rule": 5, "name": "GitHub fine-grained token", "input": "github_pat_11ABCDEFG0123456789_abcdefghijklmnopqrstuvwxyz", "expect": "[redacted:token]" },
+    { "rule": 5, "name": "GitLab token", "input": "<<gitlab>>xxxxXXXX1234yyyyZZZZ", "expect": "[redacted:token]" },
+    { "rule": 5, "name": "Slack bot token", "input": "xoxb-123456789012-abcdefABCDEF slack", "expect": "[redacted:token] slack" },
+    { "rule": 5, "name": "AWS access key ids", "input": "AKIAIOSFODNN7EXAMPLE and ASIAY34FZKBOKMUTVV7A", "expect": "[redacted:token] and [redacted:token]" },
+    { "rule": 5, "name": "Google API key", "input": "maps AIzaSyDdI0hCZtE6vySjMm-WEfRq3CPzqKqqsHI done", "expect": "maps [redacted:token] done" },
+    { "rule": 5, "name": "Google OAuth access token", "input": "ya29.a0AfH6SMBx3Qe7Lk9pZr2Tq", "expect": "[redacted:token]" },
+    { "rule": 5, "name": "npm token", "input": "npm_ABCdef1234567890GHIjkl0987654321mn", "expect": "[redacted:token]" },
+    { "rule": 5, "name": "SendGrid key", "input": "<<sendgrid>>ngeVfQFYQlKU0ufo8x5d1A.TwL2iGABf9DHoTf-09kqeF8tAmbihYzrnopKc-1s5cr", "expect": "[redacted:token]" },
+    { "rule": 5, "name": "Resend key", "input": "mail re_123abcDEF456ghiJKL789 ok", "expect": "mail [redacted:token] ok" },
+    { "rule": 5, "name": "xAI key", "input": "xai-AbCdEfGhIjKlMnOpQrStUv01", "expect": "[redacted:token]" },
+    { "rule": 5, "name": "Twilio API key sid", "input": "<<twilio>>0123456789abcdef0123456789abcdef", "expect": "[redacted:token]" },
+    { "rule": 5, "name": "JWT", "input": "jwt eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U", "expect": "jwt [redacted:token]" },
+    { "rule": 5, "name": "sk- inside a word is not a key", "input": "run the multitask-runner-for-everything-here script", "expect": "run the multitask-runner-for-everything-here script" },
+
+    { "rule": 6, "name": "database URL password", "input": "postgres://app:Pa55w0rd@db.internal:5432/main", "expect": "postgres://app:[redacted]@db.internal:5432/main" },
+    { "rule": 6, "name": "git remote with a token", "input": "https://user:tok3n@github.com/owner/repo.git", "expect": "https://user:[redacted]@github.com/owner/repo.git" },
+    { "rule": 6, "name": "api_key query parameter", "input": "https://api.example.com/v1/items?limit=5&api_key=abc123def456&sort=asc", "expect": "https://api.example.com/v1/items?limit=5&api_key=[redacted]&sort=asc" },
+    { "rule": 6, "name": "signed storage link", "input": "https://bucket.s3.amazonaws.com/a.png?X-Amz-Credential=AKIA2026%2Fus&X-Amz-Signature=9f8e7d6c", "expect": "https://bucket.s3.amazonaws.com/a.png?X-Amz-Credential=[redacted]&X-Amz-Signature=[redacted]" },
+    { "rule": 6, "name": "OAuth code in a callback", "input": "https://example.com/callback?code=4/0AY0e-g7&state=xyz", "expect": "https://example.com/callback?code=[redacted]&state=xyz" },
+
+    { "rule": 7, "name": "JSON password", "input": "{\"password\": \"hunter22\", \"name\": \"Kevin\"}", "expect": "{\"password\": \"[redacted:secret]\", \"name\": \"Kevin\"}" },
+    { "rule": 7, "name": "JSON client_secret, short value", "input": "{\"client_secret\":\"abc\"}", "expect": "{\"client_secret\":\"[redacted:secret]\"}" },
+    { "rule": 7, "name": "PowerShell env assignment", "input": "$env:STRIPE_SECRET = 'whatever123'", "expect": "$env:STRIPE_SECRET = '[redacted:secret]'" },
+    { "rule": 7, "name": "export of a URL with credentials", "input": "export DATABASE_URL=postgres://u:p@h/db", "expect": "export DATABASE_URL=[redacted:secret]" },
+    { "rule": 7, "name": "cmd set", "input": "set API_KEY=abcd1234", "expect": "set API_KEY=[redacted:secret]" },
+    { "rule": 7, "name": "docker -e, other variables stay", "input": "docker run -e SUPABASE_SERVICE_ROLE_KEY=eyJabc -e PORT=8080 img", "expect": "docker run -e SUPABASE_SERVICE_ROLE_KEY=[redacted:secret] -e PORT=8080 img" },
+    { "rule": 7, "name": "--token v after a bare flag", "input": "gh auth login --with-token --token abcd1234efgh", "expect": "gh auth login --with-token --token [redacted:secret]" },
+    { "rule": 7, "name": "--password=v", "input": "mytool --password=letmein99 --verbose", "expect": "mytool --password=[redacted:secret] --verbose" },
+    { "rule": 7, "name": "YAML key: v", "input": "  db_password: correcthorse", "expect": "  db_password: [redacted:secret]" },
+    { "rule": 7, "name": "auth_token in a query-like string", "input": "auth_token=abc&x=1", "expect": "auth_token=[redacted:secret]&x=1" },
+    { "rule": 7, "name": "Author is not auth", "input": "Author: Kevin McClain", "expect": "Author: Kevin McClain" },
+    { "rule": 7, "name": "booleans and variable references stay", "input": "token=true TOKEN=$GITHUB_TOKEN secret: null", "expect": "token=true TOKEN=$GITHUB_TOKEN secret: null" },
+
+    { "rule": 8, "name": "three NAME=value lines", "input": "NODE_ENV=production\nPORT=3000\nAPP_NAME=bench", "expect": "NODE_ENV=[redacted:env]\nPORT=[redacted:env]\nAPP_NAME=[redacted:env]" },
+    { "rule": 8, "name": "a comment inside the run", "input": "A=1\n# note\nB=2\nC=3", "expect": "A=[redacted:env]\n# note\nB=[redacted:env]\nC=[redacted:env]" },
+    { "rule": 8, "name": "two lines are not a dump", "input": "A=1\nB=2", "expect": "A=1\nB=2" },
+    { "rule": 8, "name": "a blank line breaks the run", "input": "A=1\nB=2\n\nC=3", "expect": "A=1\nB=2\n\nC=3" },
+    { "rule": 8, "name": "a sensitive line keeps its own kind", "input": "API_KEY=abc123\nX=1\nY=2", "expect": "API_KEY=[redacted:secret]\nX=[redacted:env]\nY=[redacted:env]" },
+    { "rule": 8, "name": "terminal-indented env output", "input": "  ⎿  FOO=a\n     BAR=b\n     BAZ=c", "expect": "  ⎿  FOO=[redacted:env]\n     BAR=[redacted:env]\n     BAZ=[redacted:env]" },
+    { "rule": 8, "name": "code with spaces around = stays", "input": "count = 0\ntotal = 1\nname = 2", "expect": "count = 0\ntotal = 1\nname = 2" },
+
+    { "rule": 9, "name": "random high-entropy run", "input": "random aB3dE5gH7jK9mN1pQ3sT5vX7zA9cE1gI3kM5 end", "expect": "random [redacted:entropy] end" },
+    { "rule": 9, "name": "path segment stays", "input": "C:\\Users\\kmccl\\x\\aB3dE5gH7jK9mN1pQ3sT5vX7zA9cE1gI3kM5\\file.txt", "expect": "C:\\Users\\kmccl\\x\\aB3dE5gH7jK9mN1pQ3sT5vX7zA9cE1gI3kM5\\file.txt" },
+    { "rule": 9, "name": "URL path stays", "input": "https://cdn.example.com/assets/aB3dE5gH7jK9mN1pQ3sT5vX7zA9cE1gI3kM5.js", "expect": "https://cdn.example.com/assets/aB3dE5gH7jK9mN1pQ3sT5vX7zA9cE1gI3kM5.js" },
+    { "rule": 9, "name": "file name stays", "input": "saved aB3dE5gH7jK9mN1pQ3sT5vX7zA9cE1gI3kM5.png", "expect": "saved aB3dE5gH7jK9mN1pQ3sT5vX7zA9cE1gI3kM5.png" },
+    { "rule": 9, "name": "long CamelCase name stays", "input": "DevDeskFleetCardsAlertsWorktree2026", "expect": "DevDeskFleetCardsAlertsWorktree2026" },
+
+    { "rule": 0, "name": "git SHA stays", "input": "commit 3f2a1b4c5d6e7f8091a2b3c4d5e6f708192a3b4c", "expect": "commit 3f2a1b4c5d6e7f8091a2b3c4d5e6f708192a3b4c" },
+    { "rule": 0, "name": "sha256 stays", "input": "sha256 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08", "expect": "sha256 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08" },
+    { "rule": 0, "name": "uuids stay", "input": "task 3f2a1b4c-5d6e-4f80-91a2-b3c4d5e6f708 session s-3f2a1b4c-5d6e-4f80-91a2-b3c4d5e6f708", "expect": "task 3f2a1b4c-5d6e-4f80-91a2-b3c4d5e6f708 session s-3f2a1b4c-5d6e-4f80-91a2-b3c4d5e6f708" },
+    { "rule": 0, "name": "Windows path stays", "input": "C:\\Users\\kmccl\\AppData\\Roaming\\solution-space\\briefs\\kai-f2f25621-d7a8-4261-bd75-64c109c0a960-1792079042995.md", "expect": "C:\\Users\\kmccl\\AppData\\Roaming\\solution-space\\briefs\\kai-f2f25621-d7a8-4261-bd75-64c109c0a960-1792079042995.md" },
+    { "rule": 0, "name": "a command stays", "input": "npm test && npm run typecheck", "expect": "npm test && npm run typecheck" },
+    { "rule": 0, "name": "URL without credentials stays", "input": "see https://github.com/owner/repo/pull/42?tab=files#diff", "expect": "see https://github.com/owner/repo/pull/42?tab=files#diff" },
+    { "rule": 0, "name": "plain prose stays", "input": "W3 finished its turn. It said: \"Tests pass; the token refresh is fixed and ready for review.\"", "expect": "W3 finished its turn. It said: \"Tests pass; the token refresh is fixed and ready for review.\"" }
   ]
 }

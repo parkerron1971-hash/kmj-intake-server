@@ -2,12 +2,12 @@
 title: Dev Desk fleet, private cards and owner alerts (M-3 a1)
 date: 2026-10-15
 agent: Codex (GPT-6)
-asked: "KAI brief: build M-3 backend a1; push a PR, wait for test, do not merge or apply SQL"
-status: waiting on review
+asked: "KAI: build M-3 a1, fix review, encode four test values, then squash-merge when green and verify Railway/readiness; Kevin applied SQL"
+status: in progress
 prs: [kmj-intake-server#1448]
-migrations: ["supabase/APPLY-2026-10-15-dev-desk-relay.sql (pending; Kevin applies manually)"]
-left_undone: ["Claude Code review", "Kevin applies the migration before deployment", "a2 watches/checkers/netguard and desktop-offline jobs"]
-decisions: ["Router additions mount through the existing dev_kai router; entry-point edits are only two startup job registrations", "Only stop for overlapping PRs opened or updated in the last seven days, per KAI", "No production calls, migration application, or merge", "CI dedupe retains hash-only tombstones after the 30-day inbox expires"]
+migrations: ["supabase/APPLY-2026-10-15-dev-desk-relay.sql (applied and verified by Kevin, confirmed by KAI)"]
+left_undone: ["a2 watches/checkers/netguard and desktop-offline jobs"]
+decisions: ["Router additions mount through the existing dev_kai router; entry-point edits are only two startup job registrations", "Only stop for overlapping PRs opened or updated in the last seven days, per KAI", "KAI authorized squash merge after green CI and production deployment/readiness verification; Kevin applied the migration", "CI dedupe retains hash-only tombstones after the 30-day inbox expires"]
 related: [2026-10-14-dev-desk-kai-and-handoff.md]
 ---
 Read both repositories' worklogs and the full M-3 design. Rebased the assigned
@@ -54,3 +54,40 @@ the overlapping assignment regex: the reported auth-repeat case took 1.13 s at
 
 The fleet shared limiter also runs off the event loop, matching alert budgets,
 so its synchronous PostgREST call cannot stall other live relay requests.
+
+
+Claude Code review fixes requested by KAI: copied the desktop fixture verbatim
+from fleet-relay-and-show-tool commit 288904f (Git blob
+a5ed5ba0dc74e0bdeac68b9368eb8a86b14d9a42; SHA-256 checked against the source).
+All 65 server vectors compare exactly using expect; three desktop-only known
+value vectors are skipped. Marker kinds now match the desktop. Fixed token
+prose, auth name boundaries, trivial values, session UUIDs, adjacent flags,
+quote termination, incomplete PEM blocks and terminal/comment-prefixed env runs.
+
+Kevin's bridge notes and authenticated kai_say instructions retain their text
+through storage. Session/device/dev notes, handoff and ordinary screens, KAI's
+own line, fleet state and cards remain redacted. Large text (4 KB+) and bulk
+fleet/KAI/card processing run in asyncio.to_thread before truncation/storage.
+The 16,000-dash regression takes about 6 ms locally (previously reported 14 s).
+Tests also cover nested assignments, threaded failure propagation and the real
+KAI insert layer, including no desktop opt-in to the instruction exception.
+
+Review-fix validation: 247 focused tests passed, three desktop-only vectors
+skipped, including test_dev_bridge.py and test_dev_kai.py. Whitespace checks
+passed. The new GitHub test run is pending push; its final result will be
+recorded in PR #1448. No additional migration/startup edits, SQL application,
+or merge. The prior full CI run passed 15,958 tests.
+
+KAI confirmed Kevin applied and verified the production migration. Authorized
+release once green: fetch/rebase main as needed, rerun tests, squash-merge
+without admin override and keep the branch, then verify Railway and readiness.
+At KAI's direction, encoded only the four blocked fake prefixes (Stripe
+restricted test, GitLab, SendGrid, Twilio); the test loader reconstructs them.
+A SHA-256 regression proves the decoded fixture is byte-identical to the desktop
+source. No push-protection bypass requested or used. Amend the unpushed review
+commit so the literal fixture values do not remain in pushed history.
+
+Release validation: 248 focused tests passed and three desktop-only cases
+skipped, including the decoded-fixture checksum. Updated only our migration
+ledger row to reflect Kevin's confirmed application. Final CI and deployment
+results will be recorded on PR #1448 after release.

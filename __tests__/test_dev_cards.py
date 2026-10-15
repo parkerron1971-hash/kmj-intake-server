@@ -70,7 +70,7 @@ def test_text_and_json_redacted_and_download_name(relay,monkeypatch):
     create(upload(b'use sk-ant-'+b'a'*30,'notes.md','text/markdown'))
     create(upload(b'{"token":"short-secret"}','config.json','application/json'))
     payloads=[data for data,mime in relay.uploads.values()]
-    assert payloads==[b'use [redacted:token]',b'{"token": "[redacted:assignment]"}']
+    assert payloads==[b'use [redacted:token]',b'{"token": "[redacted:secret]"}']
     assert calls[0][2]['download_as']=='notes.md'
 
 
@@ -144,3 +144,21 @@ def test_revocation_during_upload_cleans_late_objects(relay,monkeypatch):
     with pytest.raises(HTTPException) as e:create(upload(b'hello'))
     assert e.value.status_code==409
     assert not relay.uploads
+
+
+def test_card_redaction_runs_off_event_loop(relay, monkeypatch):
+    import threading
+    import dev_redact
+    signed(monkeypatch)
+    main_thread = threading.get_ident()
+    seen = []
+    original = dev_redact.text
+
+    def checked(value):
+        if 'card-private-value' in value:
+            seen.append(threading.get_ident())
+        return original(value)
+    monkeypatch.setattr(dev_redact, 'text', checked)
+    create(upload(b'token=card-private-value\n' * 200))
+    assert seen and all(t != main_thread for t in seen)
+    assert all(b'card-private-value' not in data for data, mime in relay.uploads.values())

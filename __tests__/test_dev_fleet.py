@@ -103,9 +103,9 @@ def test_delete_and_revoke_are_scoped_and_token_stops(relay):
 
 
 def test_string_caps_redaction_and_write_rate(relay,monkeypatch):
-    sync([session(project='p'*100,last='API_KEY=hello',approval=f.Approval(id=1,what='Bearer abc'))])
+    sync([session(project='p'*100,last='API_KEY=hello',approval=f.Approval(id=1,what='Bearer abcd1234efgh'))])
     row=relay.tables['dev_fleet_sessions'][0]
-    assert len(row['project'])==80 and row['last']=='API_KEY=[redacted:assignment]'
+    assert len(row['project'])==80 and row['last']=='API_KEY=[redacted:secret]'
     assert row['approval']['what']=='Bearer [redacted:token]'
     monkeypatch.setattr(f.rate_limit,'allow_strict',lambda *a,**kw:False)
     with pytest.raises(HTTPException) as e:sync([])

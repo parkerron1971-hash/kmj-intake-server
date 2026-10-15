@@ -83,7 +83,7 @@ class Fake:
             if self._match(r, params):
                 r.update(body)
 
-    async def insert(self, _c, rows, *, skip_known=False):
+    async def insert(self, _c, rows, *, skip_known=False, owner_instruction=False):
         out = []
         for r in rows:
             r = dict(r)
@@ -299,3 +299,26 @@ class TestTellingKevin:
         got = _run(dev_kai.kai_handoff(authorization="Bearer x"))
         assert got == {"ok": True, "pushed": 1}
         assert fake.pushes[0][2] == "studio:platform-dev-desk:kai"
+
+
+def test_kevin_instructions_survive_real_insert_but_kai_line_is_redacted(monkeypatch):
+    import httpx
+    real_insert = dev_kai._insert
+    fake = _wire(monkeypatch)
+    monkeypatch.setattr(dev_kai, '_insert', real_insert)
+    monkeypatch.setattr(dev_kai, '_service_headers', lambda: {})
+
+    async def post(client, url, *, headers, json):
+        rows = await fake.insert(client, json, skip_known='ignore-duplicates' in headers['Prefer'])
+        return httpx.Response(201, json=rows)
+    monkeypatch.setattr(httpx.AsyncClient, 'post', post)
+    raw = 'Use --token abcd1234efgh'
+    got = _run(dev_kai.kai_say(dev_kai.KaiSayBody(text=raw), _Owner()))
+    assert got['message']['text'] == raw
+    _run(dev_kai.kai_mirror(dev_kai.KaiLineBody(entries=[_entry(E1, 'kai', raw)]),
+                           authorization='Bearer x'))
+    assert fake.messages[E1]['text'] == 'Use --token [redacted:secret]'
+    # A desktop entry cannot opt into the owner-instruction exception.
+    _run(dev_kai.kai_mirror(dev_kai.KaiLineBody(entries=[_entry(E2, 'you', raw)]),
+                           authorization='Bearer x'))
+    assert fake.messages[E2]['text'] == 'Use --token [redacted:secret]'
