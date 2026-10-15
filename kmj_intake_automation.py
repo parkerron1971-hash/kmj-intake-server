@@ -367,6 +367,9 @@ app.include_router(member_photos_router)
 # office's leader approvals. BEFORE public_site_router.
 from member_spaces import router as member_spaces_router
 app.include_router(member_spaces_router)
+# The Kids space: a leader's pickup check and release, and lessons.
+from member_spaces_kids import router as member_spaces_kids_router
+app.include_router(member_spaces_kids_router)
 # Notifications on members' phones: /my/push/*, /my/notifications and the
 # staff announcement (member_push.py). BEFORE public_site_router.
 from member_push import router as member_push_router

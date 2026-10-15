@@ -622,7 +622,7 @@ def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
   {body}
   {'' if door else f'<footer class="mp-foot mp-noprint">Your page at {_e(name)} · Powered by Solutionist</footer>'}
 </main>
-{ui.nav(tab, space=space) if signed_in and bar else ''}
+{ui.nav(tab, space=space, kids_parent=bool(ctx.get("kids_parent"))) if signed_in and bar else ''}
 {'' if bare or door else ui.SCROLL_JS}
 {script}
 {mai.REGISTER_JS}
@@ -1222,6 +1222,9 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
         plan = rp.current(biz)
         done = await asyncio.to_thread(rp.read_days, biz["id"], me["id"], plan) if plan else set()
         return _page(mpr.render_page(biz, site, request, me, done), 503 if done is None else 200)
+    if sub.startswith("/my/kids/"):
+        import member_spaces_kids as mk
+        return await mk.serve(request, church, me, sub)
     if sub != "/my":
         return RedirectResponse("/my", status_code=303, headers=_SECURE_HEADERS)
     import live_router as lr
@@ -1240,6 +1243,9 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
     bible, where = mpb.prefs(request)
     import member_spaces as msp
     ctx = msp.CURRENT.get() or {}
+    if ctx.get("space") == "kids":
+        import member_spaces_kids as mk
+        return await mk.home(request, church, me, occ, mpc._flash(request) or mpr._flash(request))
     if ctx.get("space") == "youth":
         posts = await asyncio.to_thread(msp.posts, biz["id"], "youth")
         return _page(msp.render_youth_home(

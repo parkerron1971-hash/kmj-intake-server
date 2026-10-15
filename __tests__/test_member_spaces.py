@@ -65,13 +65,13 @@ def test_a_leader_switches_only_to_spaces_they_lead(people):
     assert ctx["space"] == "church" and ctx["leader"] == {} and ctx["options"] == ["church"]
 
 
-def test_kids_waits_for_its_own_change(people, monkeypatch):
+def test_kids_has_a_switch_of_its_own(people, monkeypatch):
     people["parent"] = True
     people["leaders"]["a1"] = {"kids": {**YOUTH_ROW, "space": "kids"}}
-    assert "kids" not in msp.resolve(BIZ, ADULT, "kids")["options"]
-    monkeypatch.setattr(msp, "KIDS_READY", True)
     ctx = msp.resolve(BIZ, ADULT, "kids")
     assert ctx["space"] == "kids" and ctx["kids_parent"] is True and ctx["options"] == ["church", "kids"]
+    monkeypatch.setattr(msp, "KIDS_READY", False)
+    assert "kids" not in msp.resolve(BIZ, ADULT, "kids")["options"]
 
 
 def test_children_under_13_never_sign_in_themselves(monkeypatch):
