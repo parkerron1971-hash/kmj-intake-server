@@ -4,7 +4,7 @@ date: 2026-10-14
 agent: Claude Code (Claude Opus 5.5)
 asked: "ok the direction is good... this will work. ship to live"
 status: shipped
-prs: [kmj-intake-server#PENDING]
+prs: [kmj-intake-server#1439]
 migrations: []
 left_undone: ["real customer photos replace the stock stand-ins in static/home/ (Kevin's shoot)", "a support phone line, if Kevin wants one printed beside the contact address"]
 decisions: ["the hero shows the S, never a person: a sample customer must not read as the company's owner", "the S holds still; rings, light and the message pulse move around it", "sample customers are diverse and the pastor is shown in his church", "every price, credit, seat count and trial phrase reads the live dials; the plan table is _COMPARE_GROUPS with the gate map", "HOME_EDITION=v2 brings the second edition back without a deploy"]
