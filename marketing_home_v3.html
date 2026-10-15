@@ -193,7 +193,6 @@ ol,ul{list-style:none}
 .s3d .sh{fill:url(#sshine);opacity:.38}
 .s3d .o{fill:none;stroke:#fff;stroke-width:5;stroke-linejoin:miter;stroke-opacity:.95}
 .s3d.hit svg{filter:drop-shadow(0 0 30px rgba(34,211,238,1)) drop-shadow(0 0 70px rgba(124,92,255,.95)) drop-shadow(0 24px 40px rgba(0,0,0,.55))}
-.core-cap{position:absolute;z-index:3;left:2px;bottom:-6px;color:var(--dim-n);font-size:10px;letter-spacing:.14em;text-transform:uppercase}
 @keyframes draw{to{stroke-dashoffset:0}}
 .portal{position:relative;z-index:2;width:100%;aspect-ratio:4/5;border-radius:32px;isolation:isolate}
 .portal-frame{position:absolute;inset:0;border-radius:inherit;overflow:hidden;background:#11131a;box-shadow:0 70px 140px -40px rgba(0,0,0,.95),0 0 160px -30px rgba(124,92,255,.8)}
@@ -1183,7 +1182,6 @@ body{margin:0}
       <div class="s3d" id="s3d" aria-hidden="true"></div>
       <div class="ask" id="ask"></div>
       <div class="chief-card glass" id="chiefCard"></div>
-      <span class="core-cap mono">Fictional business · <span id="coreBiz">Fade &amp; Co.</span></span>
     </div>
   </div>
 
@@ -1819,7 +1817,6 @@ function renderHero(animate) {
   ask.innerHTML = `<div class="h"><span class="src">${ico(SRC[t.ask.src] || 'chat')}${esc(t.ask.src)}</span><span>${esc(t.ask.who)}</span><span class="tm">${t.ask.t}</span></div><p>${esc(t.ask.msg)}</p>`;
   if (animate && !RM.matches) { ask.classList.remove('enter'); void ask.offsetWidth; ask.classList.add('enter'); }
   undone = false; renderChiefCard(animate);
-  $('#coreBiz').textContent = t.biz;
   $$('#heroChips .chip').forEach((b) => b.setAttribute('aria-pressed', b.dataset.id === t.id));
   $$('#tkTrack .tkp').forEach((b) => b.setAttribute('aria-pressed', b.dataset.id === t.id));
   typeTo(t.word);
