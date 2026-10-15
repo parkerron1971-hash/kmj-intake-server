@@ -248,6 +248,25 @@ def test_cross_site_post_is_refused(fake):
     assert r.status_code == 403 and not fake.mailed
 
 
+def test_the_page_lets_its_own_forms_say_where_they_came_from(fake):
+    # Under Referrer-Policy: no-referrer a browser posts a same-origin form
+    # with Origin: null, and every sign-in was refused "Not allowed".
+    r = _client().get("/my")
+    assert r.headers["referrer-policy"] == "same-origin"
+
+
+def test_a_null_origin_counts_only_when_the_browser_says_same_origin(fake):
+    c = _client()
+    ok = c.post("/my/code", data={"email": "ana@example.com"},
+                headers={"origin": "null", "sec-fetch-site": "same-origin"})
+    assert ok.status_code == 200 and len(fake.mailed) == 1
+    for site in ("same-site", "cross-site", "none", ""):
+        r = c.post("/my/code", data={"email": "ana@example.com"},
+                   headers={"origin": "null", "sec-fetch-site": site})
+        assert r.status_code == 403
+    assert len(fake.mailed) == 1
+
+
 # ─── 4. the code ─────────────────────────────────────────────────────
 
 
