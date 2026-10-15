@@ -26,6 +26,7 @@ the Dev Desk; /dev-bridge/kai/* takes the paired device's token.
 """
 
 import logging
+import dev_redact
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 from uuid import UUID
@@ -86,6 +87,7 @@ async def _insert(c: httpx.AsyncClient, rows: List[Dict[str, Any]], *,
     """Insert messages and return the rows that are new. With skip_known, a
     row whose id is already stored is left alone and not returned — the
     desktop re-sends its recent line whenever it reconnects."""
+    rows = [dev_redact.deep(r) for r in rows]
     prefer = "return=representation"
     if skip_known:
         prefer += ",resolution=ignore-duplicates"
@@ -180,17 +182,19 @@ async def kai_thread(since: Optional[str] = None, _owner=Depends(require_owner))
             rows = await _sb_get(c, "dev_kai_messages", params)
         except HTTPException as e:
             raise _missing(e)
+        from dev_cards import card_map
+        cards = await card_map(c, rows)
     if not cursor:
         rows.reverse()
     return {"ok": True, "messages": [_shown(m) for m in rows],
-            "desktop": _desktop(device), "now": _now()}
+            "desktop": _desktop(device), "now": _now(), "cards": cards}
 
 
 @router.post("/platform/dev-desk/kai/say")
 async def kai_say(body: KaiSayBody, _owner=Depends(require_owner)):
     """Kevin, from his phone. It waits here until the desktop types it into
     KAI; if Solution Space is closed, KAI gets it when it opens."""
-    text = (body.text or "").strip()[:_TEXT_MAX]
+    text = dev_redact.text((body.text or "").strip())[:_TEXT_MAX]
     if not text:
         raise HTTPException(422, "Nothing to send.")
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
@@ -317,11 +321,12 @@ def _entry_row(e: KaiEntry, device_id: str) -> Optional[Dict[str, Any]]:
     meta = {k: v for k, v in (e.meta or {}).items()
             if isinstance(v, (str, int, float, bool)) and len(str(v)) <= 300}
     return {"id": eid, "device_id": device_id, "kind": e.kind, "via": "desktop",
-            "text": (e.text or "")[:_TEXT_MAX], "spoken": bool(e.spoken),
-            "at": _z(at), "updated_at": _now(), "meta": meta or None}
+            "text": dev_redact.text(e.text or "")[:_TEXT_MAX], "spoken": bool(e.spoken),
+            "at": _z(at), "updated_at": _now(), "meta": dev_redact.deep(meta) or None}
 
 
 def _clean_state(state: Dict[str, Any]) -> Dict[str, Any]:
+    state = dev_redact.deep(state)
     approvals = []
     for a in (state.get("approvals") or [])[:_APPROVALS_MAX]:
         if not isinstance(a, dict):
@@ -409,3 +414,13 @@ async def kai_handoff(authorization: Optional[str] = Header(None)):
                                    "Pick up where you left off. Tap the mic to talk.",
                                    nav=NAV, tag="kai")
     return {"ok": True, "pushed": pushed}
+
+
+# M-3 relay routes share this already-mounted Dev Desk router. Keep the
+# application entry point limited to scheduler registrations.
+from dev_fleet import router as fleet_router
+from dev_cards import router as cards_router
+from dev_alerts import router as alerts_router
+router.include_router(fleet_router)
+router.include_router(cards_router)
+router.include_router(alerts_router)

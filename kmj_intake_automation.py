@@ -1379,6 +1379,13 @@ async def startup():
     scheduler.add_job(scheduler_lock.renew_tick, "interval",
                       seconds=scheduler_lock.RENEW_SEC, id="scheduler_lease_renew")
     g = scheduler_lock.gate
+    # M-3 a1: watches and desktop-offline checks follow in a2.
+    from dev_alerts import dev_alert_digest_tick
+    from dev_relay import dev_relay_purge
+    scheduler.add_job(g("dev_alert_digest_tick", dev_alert_digest_tick), "interval",
+                      minutes=5, id="dev_alert_digest_tick")
+    scheduler.add_job(g("dev_relay_purge", dev_relay_purge), "interval",
+                      hours=1, id="dev_relay_purge")
     scheduler.add_job(g("followup_check", check_followup_sequences),
                       "interval", hours=1, id="followup_check")
     # LGS Phase 3: drain the workflow_runs queue (Fork 7 — in-process cron, not a

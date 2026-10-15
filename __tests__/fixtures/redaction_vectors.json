@@ -1,0 +1,276 @@
+{
+  "version": 1,
+  "rules": "M-3 §3.5; known-value collection is desktop-only",
+  "vectors": [
+    {
+      "name": "plain",
+      "input": "npm test",
+      "expected": "npm test"
+    },
+    {
+      "name": "uuid",
+      "input": "a8f654eb-3289-4af3-b87a-91c9ccbb7abc",
+      "expected": "a8f654eb-3289-4af3-b87a-91c9ccbb7abc"
+    },
+    {
+      "name": "sha",
+      "input": "0123456789abcdef0123456789abcdef01234567",
+      "expected": "0123456789abcdef0123456789abcdef01234567"
+    },
+    {
+      "name": "path",
+      "input": "C:\\Users\\Kevin\\my-project\\src\\index.ts",
+      "expected": "C:\\Users\\Kevin\\my-project\\src\\index.ts"
+    },
+    {
+      "name": "url",
+      "input": "https://example.com/a?q=hello",
+      "expected": "https://example.com/a?q=hello"
+    },
+    {
+      "name": "pem",
+      "input": "before\n-----BEGIN RSA PRIVATE KEY-----\nabc\ndef\n-----END RSA PRIVATE KEY-----\nafter",
+      "expected": "before\n[redacted:private-key]\nafter"
+    },
+    {
+      "name": "header",
+      "input": "Authorization: Bearer abcdef",
+      "expected": "Authorization: [redacted:header]"
+    },
+    {
+      "name": "bearer",
+      "input": "use Bearer abcdefghijk now",
+      "expected": "use Bearer [redacted:token] now"
+    },
+    {
+      "name": "basic",
+      "input": "Basic dXNlcjpwYXNz",
+      "expected": "Basic [redacted:token]"
+    },
+    {
+      "name": "credentials",
+      "input": "https://user:password@example.com",
+      "expected": "https://user:[redacted]@example.com"
+    },
+    {
+      "name": "query",
+      "input": "https://e.test?token=abc&x=2&X-Amz-Signature=xyz#end",
+      "expected": "https://e.test?token=[redacted:query]&x=2&X-Amz-Signature=[redacted:query]#end"
+    },
+    {
+      "name": "assignment",
+      "input": "export API_KEY=hello-secret",
+      "expected": "export API_KEY=[redacted:assignment]"
+    },
+    {
+      "name": "json",
+      "input": "{\"password\": \"hello world\"}",
+      "expected": "{\"password\": \"[redacted:assignment]\"}"
+    },
+    {
+      "name": "powershell",
+      "input": "$env:CLIENT_SECRET = 'hello world'",
+      "expected": "$env:CLIENT_SECRET = '[redacted:assignment]'"
+    },
+    {
+      "name": "set",
+      "input": "set DATABASE_URL=postgres://a:b@db",
+      "expected": "set DATABASE_URL=[redacted:assignment]"
+    },
+    {
+      "name": "docker",
+      "input": "-e SECRET=hello",
+      "expected": "-e SECRET=[redacted:assignment]"
+    },
+    {
+      "name": "flag",
+      "input": "--token hello --password=world",
+      "expected": "--token [redacted:assignment] --password=[redacted:assignment]"
+    },
+    {
+      "name": "env",
+      "input": "A=hello\nB=world\nC=123\n",
+      "expected": "A=[redacted:env]\nB=[redacted:env]\nC=[redacted:env]\n"
+    },
+    {
+      "name": "entropy",
+      "input": "aB3dE6gH9jK2mN5pQ8sT1vW4yZ7cF0iL",
+      "expected": "[redacted:entropy]"
+    },
+    {
+      "name": "low entropy",
+      "input": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "expected": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "name": "safe long path",
+      "input": "C:\\work\\aB3dE6gH9jK2mN5pQ8sT1vW4yZ7cF0iL\\file.txt",
+      "expected": "C:\\work\\aB3dE6gH9jK2mN5pQ8sT1vW4yZ7cF0iL\\file.txt"
+    },
+    {
+      "name": "sk-ant-",
+      "input": "sk-ant-aaaaaaaaaaaaaaaaaaaaaaaa",
+      "expected": "[redacted:token]"
+    },
+    {
+      "name": "sk-proj-",
+      "input": "sk-proj-aaaaaaaaaaaaaaaaaaaaaaaa",
+      "expected": "[redacted:token]"
+    },
+    {
+      "name": "sk-",
+      "input": "sk-aaaaaaaaaaaaaaaaaaaaaaaa",
+      "expected": "[redacted:token]"
+    },
+    {
+      "name": "sk_live_",
+      "input": "sk_live_FAKE",
+      "expected": "[redacted:token]"
+    },
+    {
+      "name": "sk_test_",
+      "input": "sk_test_FAKE",
+      "expected": "[redacted:token]"
+    },
+    {
+      "name": "rk_live_",
+      "input": "rk_live_FAKE",
+      "expected": "[redacted:token]"
+    },
+    {
+      "name": "rk_test_",
+      "input": "rk_test_FAKE",
+      "expected": "[redacted:token]"
+    },
+    {
+      "name": "whsec_",
+      "input": "whsec_aaaaaaaaaaaaaaaaaaaaaaaa",
+      "expected": "[redacted:token]"
+    },
+    {
+      "name": "ghp_",
+      "input": "ghp_aaaaaaaaaaaaaaaaaaaaaaaa",
+      "expected": "[redacted:token]"
+    },
+    {
+      "name": "gho_",
+      "input": "gho_aaaaaaaaaaaaaaaaaaaaaaaa",
+      "expected": "[redacted:token]"
+    },
+    {
+      "name": "ghu_",
+      "input": "ghu_aaaaaaaaaaaaaaaaaaaaaaaa",
+      "expected": "[redacted:token]"
+    },
+    {
+      "name": "ghs_",
+      "input": "ghs_aaaaaaaaaaaaaaaaaaaaaaaa",
+      "expected": "[redacted:token]"
+    },
+    {
+      "name": "ghr_",
+      "input": "ghr_aaaaaaaaaaaaaaaaaaaaaaaa",
+      "expected": "[redacted:token]"
+    },
+    {
+      "name": "github_pat_",
+      "input": "github_pat_aaaaaaaaaaaaaaaaaaaaaaaa",
+      "expected": "[redacted:token]"
+    },
+    {
+      "name": "glpat-",
+      "input": "glpat-aaaaaaaaaaaaaaaaaaaaaaaa",
+      "expected": "[redacted:token]"
+    },
+    {
+      "name": "xoxb-",
+      "input": "xoxb-aaaaaaaaaaaaaaaaaaaaaaaa",
+      "expected": "[redacted:token]"
+    },
+    {
+      "name": "ya29.",
+      "input": "ya29.aaaaaaaaaaaaaaaaaaaaaaaa",
+      "expected": "[redacted:token]"
+    },
+    {
+      "name": "npm_",
+      "input": "npm_aaaaaaaaaaaaaaaaaaaaaaaa",
+      "expected": "[redacted:token]"
+    },
+    {
+      "name": "re_",
+      "input": "re_aaaaaaaaaaaaaaaaaaaaaaaa",
+      "expected": "[redacted:token]"
+    },
+    {
+      "name": "xai-",
+      "input": "xai-aaaaaaaaaaaaaaaaaaaaaaaa",
+      "expected": "[redacted:token]"
+    },
+    {
+      "name": "AKIAA",
+      "input": "AKIAAAAAAAAAAAAAAAAA",
+      "expected": "[redacted:token]"
+    },
+    {
+      "name": "ASIAA",
+      "input": "ASIAAAAAAAAAAAAAAAAA",
+      "expected": "[redacted:token]"
+    },
+    {
+      "name": "AIzaa",
+      "input": "AIzaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "expected": "[redacted:token]"
+    },
+    {
+      "name": "SKaaa",
+      "input": "SKaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "expected": "[redacted:token]"
+    },
+    {
+      "name": "SG.ab",
+      "input": "SG.abc.def",
+      "expected": "[redacted:token]"
+    },
+    {
+      "name": "eyJab",
+      "input": "eyJabc.eyJdef.ghi",
+      "expected": "[redacted:token]"
+    },
+    {
+      "name": "Proxy-Authorization",
+      "input": "Proxy-Authorization: abc def",
+      "expected": "Proxy-Authorization: [redacted:header]"
+    },
+    {
+      "name": "X-Api-Key",
+      "input": "X-Api-Key: abc def",
+      "expected": "X-Api-Key: [redacted:header]"
+    },
+    {
+      "name": "Api-Key",
+      "input": "Api-Key: abc def",
+      "expected": "Api-Key: [redacted:header]"
+    },
+    {
+      "name": "Cookie",
+      "input": "Cookie: abc def",
+      "expected": "Cookie: [redacted:header]"
+    },
+    {
+      "name": "Set-Cookie",
+      "input": "Set-Cookie: abc def",
+      "expected": "Set-Cookie: [redacted:header]"
+    },
+    {
+      "name": "escaped JSON quote",
+      "input": "{\"password\": \"part\\\"still-secret\"}",
+      "expected": "{\"password\": \"[redacted:assignment]\"}"
+    },
+    {
+      "name": "uncredentialed URL host",
+      "input": "https://aB3dE6gH9jK2mN5pQ8sT1vW4yZ7cF0iL.example.com/path",
+      "expected": "https://aB3dE6gH9jK2mN5pQ8sT1vW4yZ7cF0iL.example.com/path"
+    }
+  ]
+}

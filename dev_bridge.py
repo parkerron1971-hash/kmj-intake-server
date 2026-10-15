@@ -26,6 +26,7 @@ session working the task can post its result.
 
 import asyncio
 import hashlib
+import dev_redact
 import logging
 import ntpath
 import os
@@ -108,13 +109,14 @@ async def _get_task(c: httpx.AsyncClient, task_id: str) -> Dict[str, Any]:
 
 async def _append_note(c: httpx.AsyncClient, task: Dict[str, Any],
                        sender: str, text: str, extra: Optional[Dict[str, Any]] = None) -> None:
+    text = dev_redact.text(text)
     if _is_work(task):
         from chief_local_work import db
         await db('POST', '/rpc/chief_work_note', {'task_id': task['id'], 'note': {
             'id': str(uuid4()), 'from': sender, 'text': text[:4000], 'at': _now()}})
         return
     notes = list(task.get("notes") or [])
-    notes.append({"from": sender, "text": text[:4000], "at": _now(), **(extra or {})})
+    notes.append({"from": sender, "text": dev_redact.text(text)[:4000], "at": _now(), **(extra or {})})
     await _sb_patch(c, "dev_tasks", {"id": f"eq.{task['id']}"},
                     {"notes": notes, "updated_at": _now()})
 
@@ -804,7 +806,7 @@ async def _put_screen(c: httpx.AsyncClient, task: Dict[str, Any], text: str,
     one another instead of piling up: the thread keeps the newest screen
     between two things anyone said, which is all the panel shows anyway."""
     notes = list(task.get("notes") or [])
-    screen = {"from": "session", "text": text[:4000], "at": _now()}
+    screen = {"from": "session", "text": dev_redact.text(text)[:4000], "at": _now()}
     # What the session's hooks say it is doing, so the phone can offer the
     # answers to a prompt it is stopped on.
     if state in _SCREEN_STATES:
@@ -993,7 +995,7 @@ async def bridge_handoff(task_id: str, body: HandoffBody,
                 or (task.get("origin") == "desktop" and task.get("device_id") != device["id"])):
             raise HTTPException(409, "That session isn't one this desktop can hand off.")
         notes = list(task.get("notes") or [])
-        screen = (body.screen or "").strip()
+        screen = dev_redact.text((body.screen or "").strip())
         if screen:
             shown = {"from": "session", "text": screen[:4000], "at": _now()}
             if notes and notes[-1].get("from") == "session":
@@ -1067,3 +1069,16 @@ async def bridge_report(task_id: str, body: ReportBody):
         except Exception as e:
             logger.warning(f"ticket walk-back failed for {task_id}: {e}")
     return {"ok": True, "told_the_practitioner": told}
+
+
+@router.post("/platform/dev-desk/devices/{id}/revoke")
+async def revoke_device(id: UUID, _owner=Depends(require_owner)):
+    """Disable the token first; storage failures can be retried safely."""
+    import dev_relay as store
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
+        rows = await store.patch(c, "dev_bridge_devices", {"id": f"eq.{id}"},
+                                 {"revoked": True, "fleet_watch": None, "fleet_open_until": None})
+        if not rows:
+            raise HTTPException(404, "No such device")
+        await store.purge_device(c, str(id))
+    return {"ok": True}

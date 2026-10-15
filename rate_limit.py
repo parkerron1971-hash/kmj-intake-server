@@ -133,8 +133,16 @@ _LIMITS: Dict[str, Tuple[int, int]] = {
     "station_pair": (int(os.environ.get("RL_STATION_PAIR_PER_10MIN", "10")), 600),
     "station_pin": (int(os.environ.get("RL_STATION_PIN_PER_15MIN", "6")), 900),
     "station_self_find": (int(os.environ.get("RL_STATION_SELF_PER_10MIN", "40")), 600),
-    # Live chat (member_portal_live.py), per member: a lively service, not
-    # a flood. "I'm here" rides member_action.
+    # Dev Desk relay: strict shared windows; screen cadence also uses a DB lock.
+    "dev_fleet": (60, 60),
+    "dev_screen": (1, 1.5),
+    "dev_alert_push": (20, 3600),
+    "dev_alert_source": (6, 600),
+    "dev_kai_notify": (6, 3600),
+    "dev_alert_digest": (1, 900),
+    "dev_alert_email": (1, 1800),
+    "dev_watch_run": (6, 60),
+    # Live chat, per member; "I'm here" rides member_action.
     "live_chat": (int(os.environ.get("RL_LIVE_CHAT_PER_MIN", "8")), 60),
 }
 _DEFAULT = (60, 60)
@@ -176,11 +184,13 @@ def client_ip(request) -> str:
         return "unknown"
 
 
-def _check(bucket: str, key: str) -> bool:
+def _check(bucket: str, key: str, max_requests: Optional[int] = None) -> bool:
     """The window arithmetic, with no error handling. RAISES on trouble —
     the two public wrappers below decide what a failure means, and they
     disagree on purpose."""
     max_req, window = _LIMITS.get(bucket, _DEFAULT)
+    if max_requests is not None:
+        max_req = max(1, int(max_requests))
     now = time.time()
     bkey = (bucket, key or "unknown")
     b = _buckets.get(bkey)
@@ -235,13 +245,15 @@ def shared_enabled() -> bool:
     return (os.environ.get("RATE_LIMIT_SHARED") or "on").strip().lower() != "off"
 
 
-def _shared_take(bucket: str, key: str) -> Optional[bool]:
+def _shared_take(bucket: str, key: str, max_requests: Optional[int] = None) -> Optional[bool]:
     """True/False from the shared window, or None when it could not
     decide (disabled, unavailable, unexpected shape)."""
     global _shared_ok
     if not shared_enabled() or not _shared_ok:
         return None
     max_req, window = _LIMITS.get(bucket, _DEFAULT)
+    if max_requests is not None:
+        max_req = max(1, int(max_requests))
     try:
         import sb_clients
         out = sb_clients.sb_post_as_service(_SHARED_RPC, {
@@ -293,7 +305,7 @@ def purge_shared(older_than_sec: int = 86400) -> int:
         return 0
 
 
-def allow_strict(bucket: str, key: str) -> bool:
+def allow_strict(bucket: str, key: str, *, max_requests: Optional[int] = None) -> bool:
     """`allow`, but FAIL-CLOSED — and, since 2026-09-04, shared across
     replicas.
 
@@ -312,10 +324,10 @@ def allow_strict(bucket: str, key: str) -> bool:
     the shared window cannot decide, the local answer stands.
     """
     try:
-        local = _check(bucket, key)
+        local = _check(bucket, key) if max_requests is None else _check(bucket, key, max_requests)
         if not local:
             return False
-        shared = _shared_take(bucket, key)
+        shared = _shared_take(bucket, key) if max_requests is None else _shared_take(bucket, key, max_requests)
         return local if shared is None else shared
     except Exception:
         return False
