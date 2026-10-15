@@ -182,3 +182,28 @@ def test_default_settings_are_complete():
     s=a.Settings()
     assert s.tz=='America/New_York' and s.quiet.start=='22:00' and s.quiet.end=='07:00'
     assert s.sources['worker_finished']=='inbox' and s.email_fallback=='urgent'
+
+
+def test_settings_round_trip_through_owner_http_route(relay,monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    async def upsert(c,method,table,params=None,body=None,**kw):
+        assert method=='POST' and table=='dev_alert_settings'
+        relay.tables[table]=[body]
+        return [body]
+    monkeypatch.setattr(store,'db',upsert)
+    app=FastAPI();app.include_router(a.router)
+    app.dependency_overrides[a.require_owner]=lambda:object()
+    saved=a.Settings(tz='UTC',quiet=a.Quiet(start='09:00',end='17:00'),
+                     limits=a.Limits(per_hour=25,per_source_10min=7)).model_dump()
+    with TestClient(app) as client:
+        response=client.put('/platform/dev-desk/alerts/settings',json=saved)
+        assert response.status_code==200 and response.json()['settings']==saved
+        assert client.get('/platform/dev-desk/alerts/settings').json()['settings']==saved
+        assert client.put('/platform/dev-desk/alerts/settings',json={**saved,'tz':'invalid'}).status_code==422
+
+
+def test_device_cannot_claim_server_urgent_privileges(relay):
+    body=a.AlertsBody(alerts=[a.Alert(key='worker',source='worker_needs_you',title='Need input',level='urgent')])
+    run(a.alerts_raise(body,'Bearer one'))
+    assert relay.tables['dev_alerts'][0]['level']=='warn'

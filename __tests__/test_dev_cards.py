@@ -116,3 +116,31 @@ def test_revoke_deletes_only_own_cards_and_storage(relay,monkeypatch):
     assert len(relay.uploads)==1 and next(iter(relay.uploads)).startswith(D2+'/')
     with pytest.raises(HTTPException) as e:create(kind='link',url='https://example.com')
     assert e.value.status_code==401
+
+
+def test_real_multipart_route_and_total_body_cap(relay,monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    signed(monkeypatch)
+    app=FastAPI();app.include_router(cards.router)
+    with TestClient(app) as client:
+        response=client.post('/dev-bridge/cards',headers={'authorization':'Bearer one'},
+            data={'meta':json.dumps({'kind':'image','title':'A picture','device_id':D2})},
+            files={'file':('misnamed.jpg',image(),'image/jpeg'),
+                   'thumb':('thumb.jpg',image('JPEG'),'image/jpeg')})
+        assert response.status_code==200 and response.json()['card']['mime']=='image/png'
+        assert relay.tables['dev_cards'][0]['device_id']==D1
+        response=client.post('/dev-bridge/cards',headers={'authorization':'Bearer one'},
+            data={'meta':json.dumps({'kind':'file'})},files={'file':('large.txt',b'x'*(11*1024*1024),'text/plain')})
+        assert response.status_code==413
+
+
+def test_revocation_during_upload_cleans_late_objects(relay,monkeypatch):
+    async def upload_then_revoke(c,path,data,mime):
+        relay.uploads[path]=(data,mime)
+        # Revoke purges the row while the network upload is in flight.
+        relay.tables['dev_cards']=[]
+    monkeypatch.setattr(cards,'_upload',upload_then_revoke)
+    with pytest.raises(HTTPException) as e:create(upload(b'hello'))
+    assert e.value.status_code==409
+    assert not relay.uploads

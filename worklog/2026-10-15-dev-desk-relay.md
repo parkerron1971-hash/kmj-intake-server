@@ -3,8 +3,8 @@ title: Dev Desk fleet, private cards and owner alerts (M-3 a1)
 date: 2026-10-15
 agent: Codex (GPT-6)
 asked: "KAI brief: build M-3 backend a1; push a PR, wait for test, do not merge or apply SQL"
-status: in progress
-prs: []
+status: waiting on review
+prs: [kmj-intake-server#1448]
 migrations: ["supabase/APPLY-2026-10-15-dev-desk-relay.sql (pending; Kevin applies manually)"]
 left_undone: ["Claude Code review", "Kevin applies the migration before deployment", "a2 watches/checkers/netguard and desktop-offline jobs"]
 decisions: ["Router additions mount through the existing dev_kai router; entry-point edits are only two startup job registrations", "Only stop for overlapping PRs opened or updated in the last seven days, per KAI", "No production calls, migration application, or merge", "CI dedupe retains hash-only tombstones after the 30-day inbox expires"]
@@ -33,6 +33,12 @@ PGlite script applies the migration twice and checks actual RPC behavior, RLS,
 revocation and restrictive storage access; CI runs that script using its existing
 PGlite dependency. No test connects to production.
 
-Local focused validation: 193 tests passed across bridge, KAI, fleet, cards,
-alerts, redaction, retention and shared rate limits. The disposable SQL check
+Local final validation: 212 tests passed across bridge, KAI, fleet, cards,
+alerts, redaction, retention, shared rate limits and dispatched local work. The disposable SQL check
 passed; syntax and whitespace checks passed. Full GitHub test check pending.
+
+HTTP tests additionally exercise real multipart parsing/body caps, owner settings
+round-trips, device metadata spoofing and revocation during an upload. GitHub
+push protection initially flagged synthetic repeated-character Stripe fixtures;
+replaced them with explicitly fake short values before the first successful push.
+No protection bypass was used. PR #1448 is open for Claude Code review.
