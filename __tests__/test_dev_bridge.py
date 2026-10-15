@@ -597,3 +597,11 @@ class TestKaiCapability:
         _run(dev_bridge.bridge_queue(authorization="Bearer x", agents="claude,codex",
                                      capabilities="workbench-v1,kai-v1,unknown-v9"))
         assert seen == [["claude", "codex", "workbench-v1", "kai-v1"]]
+
+
+def test_handoff_screen_still_redacts(monkeypatch):
+    fake = _wire(monkeypatch, [dict(DESKTOP, notes=[])])
+    _pushes(monkeypatch)
+    _run(dev_bridge.bridge_handoff("t-desk", dev_bridge.HandoffBody(
+        screen="Use --token abcd1234efgh"), authorization="Bearer x"))
+    assert fake.rows["t-desk"]["notes"][0]["text"] == "Use --token [redacted:secret]"
