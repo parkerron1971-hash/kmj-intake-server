@@ -7321,6 +7321,33 @@ async def asset_mark_png():
 # product itself in its default theme doing the work, voiced. Web encode
 # (~6.8MB) of the Remotion render in my-video/src/System. Range-aware,
 # because a phone will not play a <video> whose server ignores Range.
+# The home page's photos (third edition, 2026-10-14): the sample
+# practitioners in Who it's for and the scenes beside them. Stock photos,
+# served off disk from static/home/. The name is pattern-checked and must
+# resolve inside that folder, so the path can never leave it.
+_STATIC_HOME = _pathlib.Path(__file__).resolve().parent / "static" / "home"
+_HOME_ASSET_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}\.jpg$")
+
+
+def _home_asset_path(name: str) -> Optional[_pathlib.Path]:
+    if not _HOME_ASSET_RE.match(name or ""):
+        return None
+    fp = _STATIC_HOME / name
+    try:
+        fp.resolve().relative_to(_STATIC_HOME.resolve())
+    except ValueError:
+        return None
+    return fp if fp.is_file() else None
+
+
+@router.get("/assets/home/{name}", include_in_schema=False)
+async def asset_home_photo(name: str):
+    fp = _home_asset_path(name)
+    if fp is None:
+        raise HTTPException(404, "asset not found")
+    return _FileResponse(str(fp), media_type="image/jpeg", headers=_BRAND_CACHE_HEADERS)
+
+
 @router.get("/assets/film.mp4", include_in_schema=False)
 async def asset_film(request: Request):
     return _brand_file_ranged(request, "solutionist-film.mp4", "video/mp4")
