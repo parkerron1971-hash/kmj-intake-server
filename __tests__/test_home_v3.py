@@ -266,7 +266,9 @@ def test_the_sample_people_are_labeled_not_real():
     html = mp.render_home()
     assert "not a real person" in html and '<span class="fx">Fictional</span>' in html
     assert "Stock photo · a model" in html and "Stock photos of models, not customers" in html
-    assert "is a fictional business" in html and "Fictional business · " in html
+    assert "is a fictional business" in html
+    # 2026-10-15: the hero has no photo, so it carries no "Fictional business" caption
+    assert "Fictional business · " not in html and 'id="coreBiz"' not in html
     assert "a sample customer" not in html
     assert "g.f ? g.t.replace(t.owner, cap(ROLE[t.id])) : g.t" in html
 
