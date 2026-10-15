@@ -184,6 +184,9 @@ BUSINESS_CHILD_TABLES: List[str] = [
     # their chats; links and switches before contacts.
     "msg_reports", "msg_staff_views", "msg_messages", "msg_participants", "msg_blocks", "msg_threads",
     "msg_guardians", "msg_members", "msg_safety_officers",
+    # Youth and Kids spaces: leaders' posts and the office's leader
+    # approvals (with background-check dates); before contacts.
+    "space_posts", "space_leaders",
     "child_care_notes", "household_pickups", "children", "household_adults", "households",
     "chief_errand_events", "chief_errands",  # preserve history; events before errands
     "agent_assignments",      # before connected_agents (foreign key)
@@ -695,6 +698,9 @@ _IMPORT_SKIP = {
     # officers are team logins, not records.
     "msg_threads", "msg_participants", "msg_messages", "msg_blocks", "msg_reports", "msg_staff_views",
     "msg_guardians", "msg_members", "msg_safety_officers",
+    # Youth and Kids leaders and their posts cite contacts by id; same
+    # reason. A restored church approves its leaders again.
+    "space_leaders", "space_posts",
     # A texting number belongs to the provider account that bought it;
     # a restored business provisions its own. Auditor links and push
     # subscriptions are credentials and devices, not records. The
