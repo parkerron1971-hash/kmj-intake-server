@@ -947,6 +947,13 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
         return _page(render_choose(biz, site, sess["people"]))
     me, this_year = sess["me"], date.today().year
     year = _year_arg(request, this_year)
+    # The owner's preview fills what the church hasn't added yet with
+    # tagged samples (member_app_samples); a member never sees one.
+    import member_app_samples as samples
+    preview = bool(sess.get("preview"))
+
+    def fill(found, kind):
+        return samples.fill(found, kind, preview)
     if sub == "/my/statement":
         import giving_statements
         gs = (biz.get("settings") or {}).get("giving") or {}
@@ -965,7 +972,7 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
     import member_portal_church as mpc
     import member_portal_sermons as mps
     if sub == "/my/events":
-        occ = await asyncio.to_thread(mpc.upcoming_for, biz["id"], me)
+        occ = fill(await asyncio.to_thread(mpc.upcoming_for, biz["id"], me), "occasions")
         return _page(mpc.render_events(biz, site, request, occ, who=me))
     if sub == "/my/prayer":
         return _page(mpc.render_prayer(biz, site, request, who=me))
@@ -988,7 +995,7 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
         html, status = mgl.render_meeting(biz, site, me, s, g, m)
         return _page(html, status)
     if sub == "/my/groups":
-        data = await asyncio.to_thread(mpc.groups_for, biz["id"], me)
+        data = fill(await asyncio.to_thread(mpc.groups_for, biz["id"], me), "groups")
         return _page(mpc.render_groups(biz, site, request, data, who=me))
     if sub == "/my/details":
         full = await asyncio.to_thread(mpc.load_me, biz["id"], me["id"])
@@ -1031,6 +1038,7 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
         if cur == {}:
             occ, lib = await asyncio.gather(asyncio.to_thread(mpc.upcoming_for, biz["id"], me),
                                             asyncio.to_thread(mps.load_library, biz["id"]))
+            occ, lib = fill(occ, "occasions"), fill(lib, "library")
         return _page(mpl.render_live(biz, site, request, me, cur, occasions=occ, library=lib),
                      503 if cur is None else 200)
     # The Bible (member_portal_bible.py).
@@ -1039,7 +1047,7 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
         return await mpb.serve(request, biz, site, me, sub)
     # Sermons, inside the app (member_portal_sermons.py).
     if sub == "/my/sermons" or sub.startswith("/my/sermons/"):
-        lib = await asyncio.to_thread(mps.load_library, biz["id"])
+        lib = fill(await asyncio.to_thread(mps.load_library, biz["id"]), "library")
         rest = sub[len("/my/sermons"):].strip("/")
         import member_portal_bible as mpb
         if not rest:
@@ -1078,6 +1086,9 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
     today = rp.today_for(biz)
     done = (await asyncio.to_thread(rp.read_days, biz["id"], me["id"], rp.current(biz))
             if today else None)
+    occ, groups, lib = fill(occ, "occasions"), fill(groups, "groups"), fill(lib, "library")
+    if preview and not today:
+        today, done = samples.plan_today(), set()
     import member_portal_bible as mpb
     bible, where = mpb.prefs(request)
     return _page(render_home(biz, site, me=me, occasions=occ, groups=groups, library=lib,

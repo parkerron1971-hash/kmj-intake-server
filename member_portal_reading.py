@@ -58,8 +58,12 @@ def home_card(today: Optional[Dict[str, Any]], done: Optional[set]) -> str:
         buttons += f'<span class="mb-chip">{ui.icon("check", 12)}Read today</span>'
     else:
         buttons += _tick_form(today["day"], False, "Mark as read", "/my")
+    import member_app_samples as samples
+    sample = samples.is_sample(today)
+    head = (f'<h2 class="mp-sect">Reading plan{ui.sample_tag()}</h2>{ui.sample_hint(samples.WHERE["plan"])}' if sample else
+            '<h2 class="mp-sect">Reading plan <a href="/my/reading">See the plan</a></h2>')
     return f"""
-<h2 class="mp-sect">Reading plan <a href="/my/reading">See the plan</a></h2>
+{head}
 <section class="mb-plan mb-reading" aria-labelledby="mb-reading-h">
   {ui.ring(today['day'], today['of'])}
   <div class="mb-plan-b"><span class="mp-muted" style="font-size:12.5px">{_e(today['title'])} · Today's reading · Day {today['day']} of {today['of']}</span>
