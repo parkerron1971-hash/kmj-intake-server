@@ -363,6 +363,10 @@ app.include_router(member_portal_church_router)
 # staff view. BEFORE public_site_router.
 from member_photos import router as member_photos_router
 app.include_router(member_photos_router)
+# Church, Youth and Kids spaces (member_spaces.py): leaders' posts and the
+# office's leader approvals. BEFORE public_site_router.
+from member_spaces import router as member_spaces_router
+app.include_router(member_spaces_router)
 # Notifications on members' phones: /my/push/*, /my/notifications and the
 # staff announcement (member_push.py). BEFORE public_site_router.
 from member_push import router as member_push_router
