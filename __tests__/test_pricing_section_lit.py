@@ -58,9 +58,10 @@ def test_the_strip_reads_the_live_count(monkeypatch):
     assert "subscription_plan=in.(price_f,price_fa,price_old)" in seen[0] and "active,trialing,past_due" in seen[0], (
         "seats sold at the retired founder price still count")
     price = pricing_config.tier_price_cents()["founder"] // 100
-    # Kevin, 2026-09-22: the strip is the founding ticket; seven taken, so seat 08 is next
-    assert 'class="fst-strip' in seg and f"<b>${price}<small>/mo</small></b>" in seg
-    assert f"{pricing_config.founder_credits():,}</b> AI actions a month" in seg
+    # 2026-10-14 (third edition): the strip is one line under the cards, the
+    # founding ticket rides in the flyer; seven taken, so seat 08 is next
+    assert f"Professional for ${price} a month" in seg
+    assert f"{pricing_config.founder_credits():,} AI actions a month" in seg
     assert 'href="/start?plan=founder"' in seg and "Claim seat 08" in seg
     assert "locked while you hold it" in seg
     # cached: a second render does not hit the database again
@@ -149,10 +150,13 @@ def test_the_grabber_and_the_headline(monkeypatch):
     import stripe_billing
     monkeypatch.setattr(stripe_billing, "_founder_price_ids", lambda: [])
     seg = _pricing(mp.render_home())
-    assert "Chief works while you work" in seg and "every plan, from day one" in seg
-    assert "A chief of staff who never clocks out" in seg
+    # 2026-10-14 (third edition, Kevin's approved design): the headline is
+    # "Every plan is the whole product", and the higher cards list what they
+    # ADD, so the write key is said once, on Professional, where its gate opens
+    assert "Every plan is <b>the whole product.</b>" in seg
+    assert "The tiers change how much Chief does for you each month" in seg
     assert "Priced for one person running the whole thing" not in seg
-    assert "Connect your own AI, read-only" in seg and seg.count("Your own AI can keep records here") == 2
+    assert "Connect your own AI, read-only" in seg and seg.count("Your own AI can keep records here") == 1
 
 
 def test_legacy_founder_seats_count_but_do_not_route_or_grant(monkeypatch):

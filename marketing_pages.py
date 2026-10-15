@@ -2623,13 +2623,19 @@ def _plan_compare_section_html() -> str:
 
 
 def render_home() -> str:
-    """The home page: the second edition (marketing_home_v2, 2026-09-11),
-    Kevin's cut-by-cut concept built into the site. The first edition
-    stays below as render_home_v1 for reference and for the pieces the
-    new page still borrows (_founder_strip_html, _price_cards_html,
-    _COMPARE_GROUPS, SHELL_TEMPLATE's analytics)."""
-    import marketing_home_v2
-    return marketing_home_v2.render_home_v2()
+    """The home page: the third edition (marketing_home_v3, 2026-10-14),
+    the design Kevin approved pass by pass and shipped with "ship to live".
+    The second edition (marketing_home_v2, 2026-09-11) stays importable and
+    comes back with HOME_EDITION=v2, a Railway value rather than a deploy, in
+    case the new page has to step aside. The first edition stays below as
+    render_home_v1 for the pieces the newer pages still borrow
+    (_founder_strip_html, _price_cards_html, _COMPARE_GROUPS, SHELL_TEMPLATE's
+    analytics)."""
+    if (os.environ.get("HOME_EDITION") or "").strip().lower() == "v2":
+        import marketing_home_v2
+        return marketing_home_v2.render_home_v2()
+    import marketing_home_v3
+    return marketing_home_v3.render_home_v3()
 
 
 def render_home_v1() -> str:

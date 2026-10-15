@@ -40,6 +40,9 @@ import pricing_config
 @pytest.fixture(autouse=True)
 def _no_founder(monkeypatch):
     import stripe_billing
+    # 2026-10-14: the third edition is the home now (test_home_v3); this
+    # edition stays the rollback (HOME_EDITION=v2), and these keep it whole.
+    monkeypatch.setenv("HOME_EDITION", "v2")
     monkeypatch.setitem(mp._FOUNDER_CACHE, "taken", None)
     monkeypatch.setattr(stripe_billing, "_founder_price_ids", lambda: [])
     monkeypatch.delenv("CHIEF_MODEL_DEEP", raising=False)
