@@ -149,10 +149,12 @@ def _capture(body_email="Visitor@Example.com", phone="", message="Hello!",
 
     def fake_get(path):
         gets.append(path)
-        return get_results.pop(0) if get_results else []
+        return (get_results.pop(0) if get_results else []) if path.startswith("/contacts?") else []
 
     def fake_post(path, payload, prefer="return=representation"):
         posts.append((path, payload))
+        if path == "/events":
+            events.append(payload)
         if post_result is not None:
             return post_result
         return [{"id": "new-c-1"}]
@@ -224,7 +226,7 @@ def test_repeat_submission_dedups_by_email():
 def test_email_match_is_scoped_to_the_business_and_case_insensitive():
     _capture()
     _, gets, _, _, _ = _capture()
-    lookup = gets[0]
+    lookup = next(path for path in gets if path.startswith("/contacts?"))
     assert "business_id=eq.biz-1" in lookup
     assert "email=ilike." in lookup
 
@@ -232,7 +234,7 @@ def test_email_match_is_scoped_to_the_business_and_case_insensitive():
 def test_email_lookup_escapes_like_wildcards():
     """jo_n@x.com must not match joan@x.com — '_' is a LIKE wildcard."""
     _, gets, _, _, _ = _capture(body_email="jo_n@x.com")
-    assert "%5C_" in gets[0]        # url-encoded backslash-underscore
+    assert "%5C_" in next(path for path in gets if path.startswith("/contacts?"))        # url-encoded backslash-underscore
 
 
 def test_falls_back_to_phone_match_when_email_unknown():
@@ -279,7 +281,7 @@ def test_endpoint_captures_contact_even_when_email_is_unconfigured():
     # THE LEAD ARC PR 6: the endpoint also hands over where they came
     # from. Positional args unchanged; attribution rides as a keyword.
     assert "attribution" in captured[0][1]
-    assert res["ok"] is False       # email leg unconfigured, capture done
+    assert res == {"ok": True, "notification_sent": False}
 
 
 def test_rate_limit_blocks_before_any_db_write():
@@ -288,11 +290,10 @@ def test_rate_limit_blocks_before_any_db_write():
     with mock.patch.object(public_site, "_check_contact_rate",
                            return_value=False), \
          mock.patch.object(public_site, "_capture_contact_from_form") as cap:
-        with pytest.raises(HTTPException) as exc:
-            asyncio.run(public_site.contact_submit_endpoint(
-                "biz-1", {"name": "V", "email": "v@x.com", "message": "hi"},
-                _fake_request()))
-    assert exc.value.status_code == 429
+        response = asyncio.run(public_site.contact_submit_endpoint(
+            "biz-1", {"name": "V", "email": "v@x.com", "message": "hi"},
+            _fake_request()))
+    assert response.status_code == 429
     cap.assert_not_called()
 
 

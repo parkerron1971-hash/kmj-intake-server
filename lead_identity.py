@@ -132,9 +132,14 @@ class Resolution:
 
 
 def find(business_id: str, *, email: Any = None, phone: Any = None,
-         name: Any = None, select: str = "id,name,email,phone,metadata"
+         name: Any = None, select: str = "id,name,email,phone,metadata",
+         strict: bool = False
          ) -> Optional[Dict[str, Any]]:
-    """The existing contact for this person, or None. Never raises.
+    """The existing contact for this person, or None.
+
+    strict=True raises on lookup failure, so durable public form capture never
+    mistakes an unavailable database for a new person. Other callers keep the
+    historical best-effort behavior.
 
     Email first, then phone. Always WITHIN business_id — the same human
     is legitimately a separate contact of two different businesses, and
@@ -159,7 +164,10 @@ def find(business_id: str, *, email: Any = None, phone: Any = None,
             rows = sb_clients.sb_get_as_service(
                 f"/contacts?business_id=eq.{business_id}"
                 f"&email=ilike.{urllib.parse.quote(_escaped(email_clean), safe='')}"
-                f"&select={select}&limit=5") or []
+                f"&select={select}&limit=5")
+            if strict and not isinstance(rows, list):
+                raise RuntimeError("Contact lookup unavailable")
+            rows = rows or []
             for row in rows:
                 if not _rejected(row):
                     return dict(row, _matched_on="email")
@@ -168,11 +176,16 @@ def find(business_id: str, *, email: Any = None, phone: Any = None,
             rows = sb_clients.sb_get_as_service(
                 f"/contacts?business_id=eq.{business_id}"
                 f"&phone=eq.{urllib.parse.quote(phone_clean, safe='')}"
-                f"&select={select}&limit=5") or []
+                f"&select={select}&limit=5")
+            if strict and not isinstance(rows, list):
+                raise RuntimeError("Contact lookup unavailable")
+            rows = rows or []
             for row in rows:
                 if not _rejected(row):
                     return dict(row, _matched_on="phone")
     except Exception as e:
+        if strict:
+            raise
         logger.warning("[lead_identity] lookup failed for %s: %s",
                        business_id[:8], e)
     return None
