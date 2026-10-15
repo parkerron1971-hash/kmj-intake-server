@@ -4,7 +4,7 @@ date: 2026-10-15
 agent: Claude Code (Claude Opus 5.5)
 asked: "add the count-only backend route the church Operate overview's Prayer & care card needs (Kevin approved)"
 status: waiting on Kevin
-prs: [kmj-intake-server#TBD]
+prs: [kmj-intake-server#1453]
 migrations: []
 left_undone: ["Frontend: wire the Operate overview's Prayer & care card to GET /church/care-counts (solutionist-studio worklog 2026-10-15-church-room-overviews.md)"]
 decisions: ["Owner and staff only: business_access('manager') admits owner, admin and manager, the same set as Chief's _CARE_ROLES; member, viewer, accountant collaborators and strangers get business_access's 404", "Numbers only, in a fixed shape: {care: {new, reviewed, closed, prayed, oldest_new_days}, window_days: 90}; the route names its keys so a new status or field cannot leak", "The care half of care_counts is now church_reads.care_request_counts; the route never reads child_checkins; Chief's care_counts output and query order are unchanged", "A failed read is a 503 with a plain sentence, never zeros"]
