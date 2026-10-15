@@ -307,15 +307,15 @@ def test_watch_leads_with_live_then_the_latest_series_and_every_message():
 
 
 def test_give_is_a_tab_when_the_church_takes_gifts(monkeypatch):
+    # Kevin, 2026-10-15: Give stays at the bottom like the design, gifts
+    # in the app or not.
     import giving_router
-    monkeypatch.setattr(giving_router, "giving_is_active", lambda b: True)
-    page = mp._shell(_biz("#0B2146"), None, "Groups", "<p>x</p>", tab="groups", who=ME)
-    nav = page[page.index('aria-label="Main"'):]
-    assert 'href="/my/give"' in nav and "repeat(5,1fr)" in page
+    for active in (True, False):
+        monkeypatch.setattr(giving_router, "giving_is_active", lambda b, a=active: a)
+        page = mp._shell(_biz("#0B2146"), None, "Groups", "<p>x</p>", tab="groups", who=ME)
+        nav = page[page.index('aria-label="Main"'):]
+        assert 'href="/my/give"' in nav and "repeat(5,1fr)" in page
     assert 'href="/my/give"' not in mp.render_signin(_biz(), None)        # not before sign-in
-    monkeypatch.setattr(giving_router, "giving_is_active", lambda b: False)
-    off = mp._shell(_biz(), None, "Groups", "<p>x</p>", tab="groups", who=ME)
-    assert 'href="/my/give"' not in off and "repeat(4,1fr)" in off      # four tabs, none that leads nowhere
 
 
 def test_the_bar_is_home_watch_bible_give_connect_and_me_is_the_picture(monkeypatch):
@@ -372,3 +372,19 @@ def test_a_page_back_link_moves_into_the_bar():
     top = page[page.index('class="mb-top"'):page.index("</header>")]
     assert 'href="/my/bible?x=1&amp;y=2"' in top and "Bible</a>" in top
     assert page.count('class="mb-back"') == 1
+
+
+def test_before_online_giving_the_give_tab_says_how_to_give(tmp_path, monkeypatch):
+    import member_app_photos as ph
+    page = mp.render_give_off(_biz(), None, ME)
+    assert "<h1>Give</h1>" in page and "In person" in page and 'href="/my/me#mp-giving"' in page
+    assert 'href="/give"' not in page and "Sample" not in page              # no site page to send them to
+    assert 'class="mb-tab" href="/my/give" aria-current="page"' in page
+    (tmp_path / "grace" / "assets").mkdir(parents=True)
+    (tmp_path / "grace" / "give.html").write_text("<p>give</p>")
+    monkeypatch.setattr(ph, "SITES_DIR", tmp_path)
+    ph._site_files.cache_clear()
+    own = mp.render_give_off(_biz(), {"slug": "grace"}, ME)
+    assert 'href="/give"' in own and "Give online" in own                  # the church's own give page
+    preview = mp.render_give_off(_biz(), None, ME, preview=True)
+    assert "Operate, Payments" in preview

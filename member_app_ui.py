@@ -313,8 +313,9 @@ def segmented(items: Tuple[Tuple[str, str, str], ...], current: str, label: str)
 
 
 def nav(active: Optional[str], *, give: bool = True) -> str:
-    """The tab bar. `give` is False for a church with no online giving:
-    the bar keeps four tabs rather than one that leads nowhere."""
+    """The tab bar. Give is always there (Kevin, 2026-10-15): before the
+    church takes gifts in the app, it says how to give
+    (member_portal.render_give_off)."""
     cur_tab = TAB_OF.get(active or "", "")
     items = []
     for key, href, label, paths in TABS:

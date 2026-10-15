@@ -588,7 +588,6 @@ def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
         f'<header class="mb-top"><div class="mb-top-l">{left}</div>'
         f'<span class="mb-top-t" aria-hidden="true">{_e(title)}</span>'
         f'<span class="mb-top-right">{chat}{avatar}</span></header>')
-    from giving_router import giving_is_active
     pal = ui.palette(biz, theme)
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -610,7 +609,7 @@ def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
   {body}
   {'' if door else f'<footer class="mp-foot mp-noprint">Your page at {_e(name)} · Powered by Solutionist</footer>'}
 </main>
-{ui.nav(tab, give=giving_is_active(biz)) if signed_in and bar else ''}
+{ui.nav(tab) if signed_in and bar else ''}
 {'' if bare or door else ui.SCROLL_JS}
 {script}
 {mai.REGISTER_JS}
@@ -729,6 +728,37 @@ def render_choose(biz: Dict[str, Any], site, people: List[Dict[str, Any]]) -> st
     return _door_page(biz, site, "Who's signing in?", icon="users", heading="Who's signing in?", body=f"""
 <p>This email is on more than one person's record at {_e(biz.get('name') or 'the church')}, so
 anyone who reads it can see each of these people's giving. Choose yourself.</p>""", actions=sg.people_list(people))
+
+
+def render_give_off(biz: Dict[str, Any], site, me: Dict[str, Any], *, preview: bool = False) -> str:
+    """The Give tab before the church takes gifts in the app: the church's
+    own giving page when its site has one (a hand-built site's give.html —
+    Love City's still holds its Subsplash form), giving in person, and the
+    member's own giving so far (gifts imported or recorded by the office).
+    The owner's preview says where online giving is switched on."""
+    import member_app_ui as ui
+    import member_app_photos as photos
+    church = (biz.get("name") or "").strip() or "the church"
+    pool = photos.photos(biz, site)
+    pic = photos.pick_for(pool, ("giv", "basket", "offering", "worship", "service"), "give")
+    art = ui.photo(pic, eager=True) if pic else ui.gen_art(church)
+    online = photos.has_site_page(site, "give")
+    action = (f'<div class="mb-hero-row"><a class="mp-go" href="/give">{ui.icon("give", 18)}Give online</a></div>'
+              if online else "")
+    lead = ("Give online on our website, or in person at any service." if online
+            else "Give in person at any service. Giving in the app is on its way.")
+    hint = (ui.sample_hint("Online giving isn't on yet. Turn it on in Operate, Payments, and this tab takes gifts "
+                           "right in the app, with the member's name and email filled in.") if preview else "")
+    body = f"""<div class="mb-lt"><h1>Give</h1></div>
+<p class="mb-sub" style="margin:0 0 16px">To {_e(church)}. Thank you for your generosity.</p>
+{hint}
+<section class="mb-hero" aria-labelledby="mb-give-h" style="aspect-ratio:350/300">{art}<div class="mb-hero-in">
+<span class="mb-when">Ways to give</span><h2 id="mb-give-h">Every gift matters</h2><p>{_e(lead)}</p>{action}</div></section>
+<a class="mb-row" href="/my/me#mp-giving"><span class="mb-row-ic">{ui.icon("doc", 20)}</span>
+<span class="mb-row-t"><strong>Your giving</strong><span>This year, each gift and your statement</span></span>{ui.icon("chevron", 18)}</a>
+<div class="mb-row" style="cursor:default"><span class="mb-row-ic">{ui.icon("heart", 20)}</span>
+<span class="mb-row-t"><strong>In person</strong><span>During any service at {_e(church)}</span></span></div>"""
+    return _shell(biz, site, "Give", body, tab="give", who=me)
 
 
 def prayer_card() -> str:
@@ -1053,7 +1083,9 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
     give_url = "/my/give" if giving_is_active(biz) else ""
     if sub == "/my/give":
         if not give_url:
-            return RedirectResponse("/my", status_code=303, headers=_SECURE_HEADERS)
+            # Give is always a tab (Kevin, 2026-10-15): before online
+            # giving is on, it says how to give instead.
+            return _page(render_give_off(biz, site, me, preview=preview))
         full = await asyncio.to_thread(mpc.load_me, biz["id"], me["id"]) or me
         return _page(render_give(biz, site, full, preview=preview))
     # A giver's own recurring gifts (member_portal_gifts.py).
