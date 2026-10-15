@@ -206,7 +206,7 @@ def test_give_is_one_tap_from_every_signed_in_screen(monkeypatch):
     import giving_router
     monkeypatch.setattr(giving_router, "giving_is_active", lambda b: True)
     page = mp._shell(_biz("#0B2146"), None, "Groups", "<p>x</p>", tab="groups", who=ME)
-    assert 'class="mb-give mp-noprint" href="/give" aria-label="Give"' in page
+    assert 'class="mb-give mp-noprint" href="/my/give" aria-label="Give"' in page
     assert 'aria-label="Give"' not in mp.render_signin(_biz(), None)     # not before sign-in
     monkeypatch.setattr(giving_router, "giving_is_active", lambda b: False)
     assert 'aria-label="Give"' not in mp._shell(_biz(), None, "Groups", "<p>x</p>", tab="groups", who=ME)

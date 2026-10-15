@@ -917,3 +917,26 @@ def test_give_page_without_a_key_or_account_keeps_the_redirect(monkeypatch):
         _church(stripe_account_id="not-an-account"), "https://x/give", "x",
         api_origin="https://api.example")
     assert "js.stripe.com" not in html and "var EMBED = null;" in html
+
+
+def test_a_gift_from_the_member_app_comes_back_to_the_app(monkeypatch):
+    _keys(monkeypatch)
+    fake = FakeSB(business=_church())
+    monkeypatch.setattr(giving_router, "sb_clients", fake)
+    monkeypatch.setattr(giving_router, "_give_rate", {})
+    captured = {}
+
+    class StubAdapter:
+        async def create_giving_checkout(self, biz, **kwargs):
+            captured.update(kwargs)
+            return {"id": "cs_1", "url": "https://checkout.stripe.com/x"}
+
+    import payments_core
+    monkeypatch.setattr(payments_core, "provider_for", lambda biz: StubAdapter())
+    home = f"https://first-light.{giving_router.PUBLIC_DOMAIN}"
+    for origin in (home, "https://evil.example"):
+        req = SimpleNamespace(headers={"origin": origin}, client=SimpleNamespace(host="8.9.9.9"))
+        asyncio.run(giving_router.public_giving_checkout(
+            "first-light", {"amount_cents": 5000, "return_to": "app"}, req))
+        assert captured["success_url"] == f"{home}/my/give?thanks=1"
+        assert captured["cancel_url"] == f"{home}/my/give?canceled=1"
