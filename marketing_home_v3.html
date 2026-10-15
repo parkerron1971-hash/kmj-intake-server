@@ -341,6 +341,7 @@ ol,ul{list-style:none}
 .av{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;background:var(--grad);color:#fff;font:600 14px/1 var(--display);flex:none}
 .tr-card .bz{font:600 15px/1.2 var(--display);letter-spacing:-.01em}
 .tr-card .ow{font-size:12.5px;color:var(--mut-n)}
+.tr-card .fx{display:inline-block;margin-left:8px;padding:3px 7px;border-radius:999px;font:500 9.5px/1 var(--mono);letter-spacing:.1em;text-transform:uppercase;color:#D9D0FF;background:rgba(124,92,255,.18);border:1px solid rgba(124,92,255,.45);vertical-align:2px}
 .tr-card .k{display:flex;align-items:baseline;gap:10px;margin-top:14px;padding-top:12px;border-top:1px solid var(--hair-n)}
 .tr-card .kv{font:600 30px/1 var(--display);letter-spacing:-.035em;font-variant-numeric:tabular-nums}
 .tr-card .kl{font-size:12.5px;color:var(--mut-n);line-height:1.35}
@@ -1182,7 +1183,7 @@ body{margin:0}
       <div class="s3d" id="s3d" aria-hidden="true"></div>
       <div class="ask" id="ask"></div>
       <div class="chief-card glass" id="chiefCard"></div>
-      <span class="core-cap mono">Sample business · <span id="coreBiz">Fade &amp; Co.</span></span>
+      <span class="core-cap mono">Fictional business · <span id="coreBiz">Fade &amp; Co.</span></span>
     </div>
   </div>
 
@@ -1215,14 +1216,14 @@ body{margin:0}
             <div class="portal-frame" id="portalFrame">
               <div class="scan" id="scan"></div>
               <div class="tags" id="tags"></div>
-              <span class="sample mono">Sample customer</span>
+              <span class="sample mono">Stock photo · a model</span>
             </div>
             <figcaption class="sr" id="portalCap"></figcaption>
           </figure>
           <div class="kpi-float glass" id="kpiFloat"></div>
           <div class="tr-card glass" id="trCard"></div>
         </div>
-        <p class="tr-cap mono"><span id="trCapL">Sample business</span><span>Sample businesses, stock photos</span></p>
+        <p class="tr-cap mono"><span id="trCapL">Fade &amp; Co. is a fictional business</span><span>Stock photos of models, not customers</span></p>
       </div>
     </div>
   </div>
@@ -1862,6 +1863,7 @@ T.forEach((t, i) => {
   im.style.objectPosition = t.pPos; im.dataset.id = t.id;
   frame.insertBefore(im, frame.firstChild);
 });
+const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 const ROLE = { barber: 'the owner', law: 'the attorney', build: 'the owner', coach: 'the coach', consult: 'the founder', ministry: 'senior pastor', nonprofit: 'the director' };
 function renderTrades(animate) {
   const t = cur;
@@ -1880,12 +1882,12 @@ function renderTrades(animate) {
     } else if (on) on.classList.remove('prev');
   }
   $('#portalCap').textContent = t.pAlt;
-  $('#tags').innerHTML = t.tags.map((g) => `<span class="tag${g.f ? ' flip' : ''}" style="left:${g.x}%;top:${g.y}%"><i class="d"></i><i class="ln"></i><span class="lb">${esc(g.t)}</span></span>`).join('');
+  $('#tags').innerHTML = t.tags.map((g) => `<span class="tag${g.f ? ' flip' : ''}" style="left:${g.x}%;top:${g.y}%"><i class="d"></i><i class="ln"></i><span class="lb">${esc(g.f ? g.t.replace(t.owner, cap(ROLE[t.id])) : g.t)}</span></span>`).join('');
   $('#kpiFloat').innerHTML = `<div class="l">${esc(t.kpi.l)}</div><div class="v">${esc(t.kpi.v)}</div><div class="s">${esc(t.kpi.s)}</div>${spark(t.kpi.sp)}`;
   const k = t.m.kpis[1];
-  $('#trCard').innerHTML = `<div class="top"><span class="av">${t.biz.charAt(0)}</span><div><div class="bz">${esc(t.biz)}</div><div class="ow">${esc(t.owner)}, ${ROLE[t.id]} · a sample customer</div></div></div>
+  $('#trCard').innerHTML = `<div class="top"><span class="av">${t.biz.charAt(0)}</span><div><div class="bz">${esc(t.biz)}<span class="fx">Fictional</span></div><div class="ow">${esc(t.owner)}, ${ROLE[t.id]} · not a real person</div></div></div>
     <div class="k"><span class="kv">${esc(k[1])}</span><span class="kl">${esc(k[0])}<br>${esc(k[2])}</span></div>`;
-  $('#trCapL').textContent = `${t.biz} · sample customer`;
+  $('#trCapL').textContent = `${t.biz} is a fictional business`;
 }
 
 /* ---------- how it works: the console ---------- */

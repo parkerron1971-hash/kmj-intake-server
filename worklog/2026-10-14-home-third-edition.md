@@ -17,3 +17,9 @@ side from the dials and the gate map; the flyer, pixel, analytics, structured da
 the second edition's. Photos are stock stand-ins in `static/home/`, served by `/assets/home/{name}` (pattern-checked,
 cannot leave the folder); the film is the live `/assets/film.mp4`. `render_home()` serves the third edition unless
 `HOME_EDITION=v2`. Tests: `__tests__/test_home_v3.py`; the second edition's tests now pin it as the rollback.
+
+2026-10-15 follow-up (Kevin: "say not real person or something next to the fake name and business"): the photos are
+Unsplash free-license stock, which covers copyright but not the likeness of the people in them (Unsplash terms, section
+5). So every made-up name now reads "not a real person", each business carries a Fictional tag and the caption
+"is a fictional business", the photo says "Stock photo · a model", and the tag pointing at the person names the role
+rather than the made-up name. The design source and the build script were changed with it, so a rebuild keeps the labels.
