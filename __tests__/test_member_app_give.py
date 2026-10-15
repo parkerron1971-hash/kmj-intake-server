@@ -1,13 +1,19 @@
 """Giving inside the member app (/my/give, Kevin's phone design
 2026-10-14): the give page's own form in the app's look, and a gift made
 there comes back to the app on the church address the member is on."""
-import os
+import pytest
 
-os.environ.setdefault("SUPABASE_URL", "https://example.supabase.co")
-os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test")
+import giving_router as gr
+import member_portal as mp
 
-import giving_router as gr  # noqa: E402
-import member_portal as mp  # noqa: E402
+
+@pytest.fixture(autouse=True)
+def _env(monkeypatch):
+    # Set per test and put back after: a module-level default would leak
+    # into other files' collection (test_product_files_private decides at
+    # import whether to call the live bucket).
+    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "test")
 
 BIZ = {"id": "b1", "name": "First Light", "type": "ministry", "stripe_account_id": "acct_123",
        "settings": {"brand_kit": {"colors": {"primary": "#0B2146"}},
