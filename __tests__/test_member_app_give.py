@@ -58,4 +58,4 @@ def test_every_give_button_in_the_app_opens_the_app_screen(monkeypatch):
     import giving_router
     monkeypatch.setattr(giving_router, "giving_is_active", lambda b: True)
     page = mp._shell(BIZ, None, "Home", "<p>x</p>", tab="home", who=ME)
-    assert 'href="/my/give" aria-label="Give"' in page and 'href="/give"' not in page
+    assert 'class="mb-tab" href="/my/give"' in page and 'href="/give"' not in page      # Give is a tab

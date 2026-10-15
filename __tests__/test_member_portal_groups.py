@@ -120,7 +120,7 @@ def test_member_sees_their_groups_and_open_ones_only(fake):
 def test_the_page_names_no_other_members(fake):
     html = mpc.render_groups({"name": "First Light"}, None, _req(), mpc.groups_for(BIZ, ME))
     assert "Led by Marcus" in html and "Rivers" not in html and "Secret" not in html
-    assert "You lead this group." in html
+    assert "You lead this group" in html
     # A leader is not offered "Leave" for the group they lead.
     assert html.count('value="leave"') == 1
 

@@ -1,5 +1,5 @@
-"""The member app (Broadcast look, tinted to each church's brand,
-2026-09-30): the palette, Home, Sermons, Me, and the bar."""
+"""The member app ("Member App, Top Tier", 2026-10-15: a neutral base with
+the church colour as the accent): the palette, Home, Watch, Me, and the bar."""
 import colorsys
 from datetime import date
 
@@ -49,24 +49,8 @@ def _lib():
 # ─── the palette: dark, tinted to the church's own brand ─────────────
 
 
-def test_the_ground_carries_each_brands_own_hue():
-    red, green, navy = _pal("#C8102E"), _pal("#2F8F5B"), _pal("#0B2146")
-    assert abs(_hue(red["ground"]) - _hue("#C8102E")) < 12 or abs(_hue(red["ground"]) - _hue("#C8102E")) > 348
-    assert abs(_hue(green["ground"]) - _hue("#2F8F5B")) < 12
-    assert abs(_hue(navy["ground"]) - _hue("#0B2146")) < 12
-    assert red["ground"] != green["ground"] != navy["ground"]        # not the same blue for everyone
-    for p in (red, green, navy, _pal()):
-        assert luminance(p["ground"]) < 0.02                         # still a dark app
-        assert contrast(p["text"], p["ground"]) >= 12
-        assert contrast(p["muted"], p["ground"]) >= 4.5
-        assert contrast(p["dim"], p["ground"]) >= 3
 
 
-def test_a_church_with_no_colour_gets_a_warm_neutral():
-    p = ui.palette({"id": "b1", "settings": {}}, {"accent": "#555555"})
-    assert ui.brand_colour({"id": "b1", "settings": {}}, {"accent": "#555555"}) is None
-    r, g, b = (int(p["ground"][i:i + 2], 16) for i in (1, 3, 5))
-    assert r >= b                                                    # warm, not blue
 
 
 def test_a_dark_accent_is_lightened_in_its_own_hue_not_replaced():
@@ -82,7 +66,7 @@ def test_poster_colours_are_stable_per_series():
     p = _pal("#0B2146", "#F4AE3D")
     assert ui.poster_colours(K, p) == ui.poster_colours(K, p)
     art = ui.poster(K, p, "Kingdom <Order>", "Series")
-    assert "Kingdom &lt;Order&gt;" in art and 'class="mb-art-ghost" aria-hidden="true">K<' in art
+    assert "Kingdom &lt;Order&gt;" in art and 'class="mb-art-kick">Series<' in art
 
 
 def test_the_bar_marks_the_current_tab_and_sign_in_has_none():
@@ -106,23 +90,11 @@ ROLES = [{"id": "greet", "label": "Greeter", "needed": 2, "filled": 1, "full": F
 def test_the_next_card_says_how_soon_and_my_answer():
     occ = [_occ("e1", "Sunday Worship", {"status": "yes", "role": "greet"}, roles=ROLES)]
     card = mpc.next_card(occ, today=date(2026, 9, 30))
-    assert "Sunday Worship" in card and "in 4 days" in card and "Serving: Greeter" in card
+    assert "Sunday Worship" in card and "In 4 days" in card and "Serving: Greeter" in card
     assert "Tomorrow" in mpc.next_card(occ, today=date(2026, 10, 3))
     assert mpc.next_card(None) == "" and mpc.next_card([]) == ""
 
 
-def test_your_week_is_mine_and_never_names_other_members():
-    occ = [_occ("e1", "Sunday Worship", {"status": "yes", "role": "greet"}, roles=ROLES),
-           _occ("e2", "Picnic", {"status": "no"}), _occ("e3", "Prayer night")]
-    groups = {"mine": [{"id": "g1", "name": "Tuesday Night Group", "kind": "Small group", "meets": "Tuesdays 7 pm",
-                        "location": "", "leaders": ["Marcus"], "role": "member"},
-                       {"id": "g2", "name": "Greeters", "kind": "Serving team", "meets": "Sundays",
-                        "location": "", "leaders": ["Ana"], "role": "leader"}], "open": []}
-    week = mpc.week_cards(occ, groups)
-    assert "Sunday Worship" in week and "Serving: Greeter" in week and "Tuesday Night Group" in week
-    assert "Led by Marcus" in week and "You lead" in week
-    assert "Picnic" not in week and "Prayer night" not in week
-    assert mpc.week_cards([], {"mine": [], "open": []}) == ""
 
 
 def test_coming_up_offers_only_what_i_havent_answered():
@@ -136,15 +108,14 @@ def test_coming_up_offers_only_what_i_havent_answered():
 
 def test_home_leads_with_the_greeting_next_and_latest_message():
     page = mp.render_home(_biz("#0B2146"), None, me=ME, occasions=[_occ("e1", "Sunday Worship")],
-                          groups={"mine": [], "open": []}, library=_lib(), give_url="/give")
+                          groups={"mine": [], "open": []}, library=_lib(), give_url="/my/give")
     body = page[page.index("<body>"):]
-    assert "Hi, Ana" in body and 'data-first="Ana"' in body
-    assert 'class="mb-main" href="/give"' in body
-    assert "God&#x27;s order for families" in body and "Pastor Ana · 1 Corinthians 11:3" in body
-    assert body.index('class="mb-next"') < body.index('class="mb-quick"') < body.index('id="mb-latest"')
+    assert "Hi, <em>Ana.</em>" in body and 'data-first="Ana"' in body
+    assert "God&#x27;s order for families" in body and "Kingdom Order · Pastor Ana · September 27, 2026" in body
+    assert body.index('class="mb-hero"') < body.index('class="mb-quick"') < body.index('id="mb-latest"')
     empty = mp.render_home(_biz(), None, me=ME, occasions=[], groups=None, library=None, give_url="")
     empty = empty[empty.index("<body>"):]
-    assert "Latest message" not in empty and 'href="/give"' not in empty and 'class="mb-main"' not in empty
+    assert "Latest message" not in empty and "Welcome home" in empty     # the church itself leads
 
 
 # ─── Me ──────────────────────────────────────────────────────────────
@@ -166,17 +137,12 @@ def test_me_shows_the_year_month_by_month_with_give_and_statement():
 # ─── Sermons ─────────────────────────────────────────────────────────
 
 
-def test_the_shelf_shows_series_posters_and_loose_messages():
-    page = mps.render_library(_biz("#0B2146"), None, ME, _lib())
-    assert f'href="/my/sermons?series={K}"' in page and "1 message · Now" in page
-    assert "More messages" in page and "Deliverance" in page and "mb-tall" in page
-    assert 'href="/my/sermons" aria-current' in page
 
 
 def test_a_failed_read_is_said_never_no_messages():
     page = mps.render_library(_biz(), None, ME, None)
     assert "couldn't load" in page and "No messages" not in page
-    assert "No messages are posted yet" in mps.render_library(_biz(), None, ME, {"sermons": [], "series": []})
+    assert "Messages are on the way" in mps.render_library(_biz(), None, ME, {"sermons": [], "series": []})
 
 
 def test_one_series_and_one_message():
@@ -186,7 +152,7 @@ def test_one_series_and_one_message():
     assert 'class="mb-video"' in msg and "youtube-nocookie.com/embed/abc123" in msg
     assert 'referrerpolicy="strict-origin-when-cross-origin"' in msg
     assert f'data-share="/sermons/{S1}"' in msg and 'href="/give"' in msg
-    assert "For your group this week" in msg and "Order is love." in msg
+    assert "Talk it over this week" in msg and "Order is love." in msg
     assert mps.render_sermon(_biz(), None, ME, _lib(), "44444444-4444-4444-4444-444444444444") is None
     bare = mps.render_sermon(_biz(), None, ME, _lib(), S2)
     assert "isn't posted yet" in bare and 'class="mb-art' in bare and 'href="/give"' not in bare
@@ -202,25 +168,8 @@ def test_only_published_messages_are_loaded(monkeypatch):
     assert mps.load_library("b1") is None
 
 
-def test_give_is_one_tap_from_every_signed_in_screen(monkeypatch):
-    import giving_router
-    monkeypatch.setattr(giving_router, "giving_is_active", lambda b: True)
-    page = mp._shell(_biz("#0B2146"), None, "Groups", "<p>x</p>", tab="groups", who=ME)
-    assert 'class="mb-give mp-noprint" href="/my/give" aria-label="Give"' in page
-    assert 'aria-label="Give"' not in mp.render_signin(_biz(), None)     # not before sign-in
-    monkeypatch.setattr(giving_router, "giving_is_active", lambda b: False)
-    assert 'aria-label="Give"' not in mp._shell(_biz(), None, "Groups", "<p>x</p>", tab="groups", who=ME)
 
 
-def test_the_bar_is_home_sermons_bible_groups_live_and_me_is_the_picture():
-    # Kevin, 10/02: the Bible took a tab; Live moved to the end; Me is the
-    # profile picture at the top.
-    page = mp._shell(_biz(), None, "Live", "<p>x</p>", tab="live", who=ME)
-    nav = page[page.index('aria-label="Main"'):]
-    order = [nav.index(f'href="{h}"') for h in ("/my", "/my/sermons", "/my/bible", "/my/groups", "/my/live")]
-    assert order == sorted(order) and 'href="/my/live" aria-current="page"' in nav and "/my/me" not in nav
-    me = mp._shell(_biz(), None, "Me", "<p>x</p>", tab="me", who=ME)
-    assert 'href="/my/me" aria-label="Me" aria-current="page">AR<' in me
 
 
 # ─── the phone design (Kevin approved "Member App, Next Level", 2026-10-14) ──
@@ -273,7 +222,7 @@ def test_the_next_card_offers_im_coming_and_counts_without_names():
     occ = [{**_occ("e1", "Sunday Worship"), "attending": 38}]
     card = mpc.next_card(occ, today=date(2026, 10, 1))
     assert 'action="/my/rsvp"' in card and 'value="coming"' in card and "I'm coming" in card
-    assert "38 people are coming" in card and "Sunday, October 4" in card
+    assert "38 people are coming" in card and "Sunday, October 4 · Sanctuary" in card and "In 3 days" in card
     mine = mpc.next_card([{**_occ("e1", "Sunday Worship", {"status": "yes"}), "attending": 38}], today=date(2026, 10, 1))
     assert "You and 37 others are coming" in mine and "You&#x27;re coming" in mine and 'value="coming"' not in mine
 
@@ -283,15 +232,11 @@ def test_a_new_church_home_has_no_empty_blocks_and_always_something_to_read():
                           library={"sermons": [], "series": []}, give_url="")
     body = page[page.index("<body>"):]
     assert "Verse of the day" in body and "Start with John 1" in body and "How can we pray for you?" in body
-    assert "Nothing is on the calendar" not in body and "Coming up" not in body and "Latest message" not in body
-    assert 'href="/my/bible"><span>' in body and 'href="/my/live"><span>' in body   # tiles that lead somewhere
+    assert "Nothing is on the calendar" not in body and "Latest message" not in body and "This week" not in body
+    quick = body[body.index('class="mb-quick"'):]
+    assert 'href="/my/prayer"' in quick and 'href="/my/live"' in quick     # tiles that lead somewhere
 
 
-def test_home_skips_the_next_occasion_in_coming_up():
-    occ = [_occ("e1", "Sunday Worship"), _occ("e2", "Prayer night")]
-    page = mp.render_home(_biz(), None, me=ME, occasions=occ, groups=None, library=None, give_url="")
-    coming = page[page.index('id="mp-coming"'):]
-    assert "Prayer night" in coming and "Sunday Worship" not in coming
 
 
 def test_empty_sermons_and_groups_get_a_designed_page_not_an_empty_list():
@@ -303,7 +248,7 @@ def test_empty_sermons_and_groups_get_a_designed_page_not_an_empty_list():
 
 def test_sign_in_leads_with_the_church_and_a_chat_drops_the_tab_bar():
     page = mp.render_signin(_biz(), None)
-    assert 'class="mb-si"' in page and "Welcome<br>home." in page and 'class="mb-top"' not in page
+    assert 'class="si-first"' in page and "Welcome home." in page and 'class="mb-top"' not in page
     chat = mp._shell(_biz(), None, "Chat", "<p>x</p>", tab="me", who=ME, bar=False)
     assert 'aria-label="Main"' not in chat and 'class="mb-top"' in chat
 
@@ -311,3 +256,119 @@ def test_sign_in_leads_with_the_church_and_a_chat_drops_the_tab_bar():
 def _req():
     from starlette.requests import Request
     return Request({"type": "http", "query_string": b"", "headers": [], "path": "/my/groups"})
+
+
+def test_the_base_is_neutral_and_the_church_colour_is_the_accent():
+    # Kevin, 2026-10-15: "colors being the church site should be an accent
+    # and we have the primary pick black, white, or gray".
+    for base, b in ui.BASES.items():
+        for brand in ("#C8102E", "#2F8F5B", "#0B2146", "#C2125F"):
+            biz = {"id": "b1", "settings": {"brand_kit": {"colors": {"primary": brand}}, "member_portal": {"base": base}}}
+            p = ui.palette(biz, {})
+            assert p["ground"] == b["bg"] and p["base"] == base           # the same neutral for every church
+            assert contrast(p["text"], p["ground"]) >= 12
+            assert contrast(p["muted"], p["ground"]) >= 4.5 and contrast(p["dim"], p["ground"]) >= 4.5
+            assert contrast(p["accent"], p["ground"]) >= 4.5                # the church colour, readable
+            assert abs(_hue(p["accent"]) - _hue(brand)) < 15 or abs(_hue(p["accent"]) - _hue(brand)) > 345
+            assert contrast(p["on_fill"], p["fill"]) >= 4.5
+    assert ui.palette(_biz("#C8102E"), {})["base"] == "black"              # the default, and Love City's pick
+    odd = {"id": "b1", "settings": {"member_portal": {"base": "purple"}}}
+    assert ui.base_of(odd) == "black"
+
+
+def test_a_church_with_no_colour_gets_a_neutral_accent():
+    p = ui.palette({"id": "b1", "settings": {}}, {"accent": "#555555"})
+    assert ui.brand_colour({"id": "b1", "settings": {}}, {"accent": "#555555"}) is None
+    r, g, b = (int(p["accent"][i:i + 2], 16) for i in (1, 3, 5))
+    assert max(r, g, b) - min(r, g, b) < 12                               # gray, not a made-up colour
+
+
+def test_this_week_shows_whats_on_and_never_names_other_members():
+    occ = [_occ("e1", "Sunday Worship", {"status": "yes", "role": "greet"}, roles=ROLES),
+           _occ("e2", "Picnic", {"status": "no"}), _occ("e3", "Prayer night")]
+    groups = {"mine": [{"id": "g1", "name": "Tuesday Night Group", "kind": "Small group", "meets": "Tuesdays 7 pm",
+                        "location": "", "leaders": ["Marcus"], "role": "member"},
+                       {"id": "g2", "name": "Greeters", "kind": "Serving team", "meets": "Sundays",
+                        "location": "", "leaders": ["Ana"], "role": "leader"}], "open": []}
+    week = mpc.week_cards(occ, groups)
+    assert "Sunday Worship" in week and "Serving: Greeter" in week and "Tuesday Night Group" in week
+    assert "Led by Marcus" in week and "You lead" in week and "Prayer night" in week
+    assert 'href="/my/events">Calendar<' in week                          # the section's "See all"
+    assert mpc.week_cards([], {"mine": [], "open": []}) == ""
+
+
+def test_watch_leads_with_live_then_the_latest_series_and_every_message():
+    page = mps.render_library(_biz("#0B2146"), None, ME, _lib())
+    assert f'href="/my/sermons?series={K}"' in page and "1 message" in page
+    assert "All messages" in page and "Deliverance" in page and "Next live" in page
+    assert 'href="/my/sermons" aria-current' in page                      # the Watch tab
+    live = mps.render_library(_biz(), None, ME, _lib(), live={"id": "s1", "title": "Sunday <Worship>"})
+    assert 'class="mb-livecard is-live"' in live and "Sunday &lt;Worship&gt;" in live
+
+
+def test_give_is_a_tab_when_the_church_takes_gifts(monkeypatch):
+    import giving_router
+    monkeypatch.setattr(giving_router, "giving_is_active", lambda b: True)
+    page = mp._shell(_biz("#0B2146"), None, "Groups", "<p>x</p>", tab="groups", who=ME)
+    nav = page[page.index('aria-label="Main"'):]
+    assert 'href="/my/give"' in nav and "repeat(5,1fr)" in page
+    assert 'href="/my/give"' not in mp.render_signin(_biz(), None)        # not before sign-in
+    monkeypatch.setattr(giving_router, "giving_is_active", lambda b: False)
+    off = mp._shell(_biz(), None, "Groups", "<p>x</p>", tab="groups", who=ME)
+    assert 'href="/my/give"' not in off and "repeat(4,1fr)" in off      # four tabs, none that leads nowhere
+
+
+def test_the_bar_is_home_watch_bible_give_connect_and_me_is_the_picture(monkeypatch):
+    # The Subsplash app's five tabs, in plainer words (Kevin approved
+    # "Member App, Top Tier", 2026-10-15). Live sits under Watch; Me is
+    # the picture at the top.
+    import giving_router
+    monkeypatch.setattr(giving_router, "giving_is_active", lambda b: True)
+    page = mp._shell(_biz(), None, "Live", "<p>x</p>", tab="live", who=ME)
+    nav = page[page.index('aria-label="Main"'):]
+    order = [nav.index(f'href="{h}"') for h in ("/my", "/my/sermons", "/my/bible", "/my/give", "/my/groups")]
+    assert order == sorted(order) and 'href="/my/sermons" aria-current="page"' in nav and "/my/me" not in nav
+    assert "/my/live" not in nav
+    me = mp._shell(_biz(), None, "Me", "<p>x</p>", tab="me", who=ME)
+    assert 'href="/my/me" aria-label="Me" aria-current="page">AR<' in me
+
+
+def test_this_week_skips_the_gathering_home_leads_with():
+    occ = [_occ("e1", "Sunday Worship"), _occ("e2", "Prayer night")]
+    page = mp.render_home(_biz(), None, me=ME, occasions=occ, groups=None, library=None, give_url="")
+    week = page[page.index('id="mb-week"'):]
+    assert "Prayer night" in week and "Sunday Worship" not in week
+
+
+def test_the_churchs_own_tiles_lead_home_and_are_checked():
+    tiles = mpc.clean_tiles([
+        {"title": "Fast & Prayer Live", "sub": "Weeknights 6 AM", "href": "/watch"},
+        {"title": "City Store", "href": "https://lovecity.printify.me/", "photo": "https://cdn.example/s.jpg"},
+        {"title": "", "href": "/x"}, {"title": "Bad", "href": "javascript:alert(1)"},
+        {"title": "Also bad", "href": "//evil.example"}, "nope",
+        {"title": "Odd photo", "href": "/", "photo": "javascript:x"}])
+    assert [t["title"] for t in tiles] == ["Fast & Prayer Live", "City Store", "Odd photo"]
+    assert tiles[2]["photo"] == "" and mpc.clean_tiles("x") is None
+    biz = {**_biz(), "name": "Love City Church", "settings": {"member_portal": {"tiles": tiles}}}
+    html = mpc.home_tiles(biz, None, [])
+    assert "At Love City" in html and "Fast &amp; Prayer Live" in html
+    assert 'href="https://lovecity.printify.me/" target="_blank" rel="noopener"' in html
+    default = mpc.home_tiles(_biz(), None, [])
+    assert 'href="/my/groups"' in default and 'href="/my/events"' in default and 'href="/my/prayer"' in default
+
+
+def test_connect_puts_groups_and_messages_under_one_title(monkeypatch):
+    import member_portal_messaging as mpm
+    monkeypatch.setattr(mpm, "turned_on", lambda b: True)
+    g = mpc.render_groups(_biz(), None, _req(), {"mine": [], "open": []}, who=ME)
+    assert "<h1>Connect</h1>" in g and 'href="/my/groups" aria-current="page"' in g and 'href="/my/messages"' in g
+    monkeypatch.setattr(mpm, "turned_on", lambda b: False)
+    assert 'class="mb-seg"' not in mpc.render_groups(_biz(), None, _req(), {"mine": [], "open": []}, who=ME)
+
+
+def test_a_page_back_link_moves_into_the_bar():
+    page = mp._shell(_biz(), None, "Chapter", '<a class="mb-back" href="/my/bible?x=1&amp;y=2"><svg></svg>Bible</a><p>text</p>',
+                     tab="bible", who=ME)
+    top = page[page.index('class="mb-top"'):page.index("</header>")]
+    assert 'href="/my/bible?x=1&amp;y=2"' in top and "Bible</a>" in top
+    assert page.count('class="mb-back"') == 1

@@ -151,7 +151,7 @@ def test_a_known_number_is_texted_and_signs_in(fake):
     assert phone == "+15550102030" and fake.codes[-1]["email"] == "+15550102030"
     v = c.post("/my/verify", data={"email": "+15550102030", "code": code}, headers=ORIGIN, follow_redirects=False)
     assert v.status_code == 303
-    assert "Hi, Ana" in c.get("/my").text
+    assert "Hi, <em>Ana.</em>" in c.get("/my").text
 
 
 def test_an_unknown_number_gets_the_same_page_and_nothing(fake):

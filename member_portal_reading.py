@@ -43,7 +43,7 @@ def _tick_form(day: int, read: bool, label: str, back: str) -> str:
     return (f'<form method="post" action="/my/reading" style="display:inline">'
             f'<input type="hidden" name="day" value="{day}"><input type="hidden" name="read" value="{"no" if read else "yes"}">'
             f'<input type="hidden" name="back" value="{back}">'
-            f'<button class="mp-go{" mp-go-2" if read else ""}" type="submit">{label}</button></form>')
+            f'<button class="mp-go mp-go-2" type="submit">{label}</button></form>')
 
 
 def home_card(today: Optional[Dict[str, Any]], done: Optional[set]) -> str:
