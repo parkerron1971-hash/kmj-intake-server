@@ -320,11 +320,15 @@ def contacts_for_phone(business_id: str, phone: str) -> Optional[List[Dict[str, 
 
 
 def contacts_for_ident(business_id: str, ident: str) -> Optional[List[Dict[str, Any]]]:
-    """The people an email or a mobile number belongs to at this church."""
+    """The people an email or a mobile number belongs to at this church.
+    A child under 13 is never one of them: kids come in through a parent's
+    Kids space (member_spaces; Kevin, 2026-10-15), so a child's record gets
+    no code and no session, and a parent who shares an address with their
+    child can still sign in."""
+    import member_spaces as msp
     ident = norm_ident(ident)
-    if is_phone(ident):
-        return contacts_for_phone(business_id, ident)
-    return contacts_for_email(business_id, ident)
+    rows = contacts_for_phone(business_id, ident) if is_phone(ident) else contacts_for_email(business_id, ident)
+    return None if rows is None else [r for r in rows if not msp.is_child(r)]
 
 
 def failures_today(business_id: str, email: str) -> Optional[int]:
@@ -582,17 +586,22 @@ def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
     import member_portal_messaging as mpm
     chat = (f'<a class="mb-chat-link mp-noprint" href="/my/messages" aria-label="Messages">{ui.icon("chat", 19)}</a>'
             if signed_in and mpm.turned_on(biz) and tab not in ("messages", "connect", "groups") else "")
+    import member_spaces as msp
+    ctx = (msp.CURRENT.get() or {}) if signed_in else {}
+    space = ctx.get("space") or "church"
     if back:
         left = f'<a class="mb-back" href="{_e(back[0])}">{ui.icon("back", 24)}{_e(back[1])}</a>'
     elif tab == "home":
-        left = f'<a class="mb-brand" href="/my">{brand}</a>'
+        left = msp.switcher(ctx, name) or (
+            f'<a class="mb-brand" href="/my"><span class="y-mark"><b>{_e(ui.initials(name))}</b>Youth</span></a>'
+            if space == "youth" else f'<a class="mb-brand" href="/my">{brand}</a>')
     else:
         left = ""
     top = "" if bare or door else (
         f'<header class="mb-top"><div class="mb-top-l">{left}</div>'
         f'<span class="mb-top-t" aria-hidden="true">{_e(title)}</span>'
         f'<span class="mb-top-right">{chat}{avatar}</span></header>')
-    pal = ui.palette(biz, theme)
+    pal = ui.palette(biz, theme, space)
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -604,16 +613,16 @@ def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
 <title>{_e(title)} — {_e(name)}</title>
 {ui.FONTS}
 <style>{css_vars(theme)}</style>
-<style>{ui.css(biz, theme)}</style>
+<style>{ui.css(biz, theme, space)}</style>
 {f'<style>{sg.css(biz, theme)}</style>' if door else ''}
 </head>
-<body{' class="si"' if door else ''}>
+<body{' class="si"' if door else (' class="sp-' + space + '"' if space != "church" else '')}>
 {top}
 <main class="mp-shell{' mb-has-nav' if signed_in and bar else ''}{' mb-bare' if bare or door else ''}">
   {body}
   {'' if door else f'<footer class="mp-foot mp-noprint">Your page at {_e(name)} · Powered by Solutionist</footer>'}
 </main>
-{ui.nav(tab) if signed_in and bar else ''}
+{ui.nav(tab, space=space) if signed_in and bar else ''}
 {'' if bare or door else ui.SCROLL_JS}
 {script}
 {mai.REGISTER_JS}
@@ -1006,6 +1015,12 @@ async def serve(request: Request, path: str) -> HTMLResponse:
     if sub == "/my/offline":
         return _page(mai.render_offline(biz, site))
     sess = await asyncio.to_thread(_session_for, request, church)
+    if sess and sess.get("me") and not sess.get("unavailable"):
+        # Church, Youth or Kids (member_spaces): a teen is always in Youth;
+        # anyone else in the space they switched to, if it's theirs.
+        import member_spaces as msp
+        ctx = await asyncio.to_thread(msp.resolve, biz["id"], sess["me"], request.cookies.get(msp.COOKIE) or "")
+        msp.CURRENT.set(ctx)
     resp = await _serve_page(request, church, sess, sub)
     if sess and sess.get("preview") and isinstance(resp, HTMLResponse):
         import member_portal_preview as pv
@@ -1049,6 +1064,15 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
 
     def fill(found, kind):
         return samples.fill(found, kind, preview)
+    if sub == "/my/space":
+        import member_spaces as msp
+        ctx = msp.CURRENT.get() or {}
+        to = str(request.query_params.get("to") or "")
+        resp = RedirectResponse("/my", status_code=303, headers=_SECURE_HEADERS)
+        if to in (ctx.get("options") or []):
+            resp.set_cookie(msp.COOKIE, to, max_age=SESSION_TTL_SECONDS, path=COOKIE_PATH, httponly=True,
+                            secure=True, samesite="lax")
+        return resp
     if sub.startswith("/my/photo/"):
         import member_photos as ph
         from fastapi.responses import Response
@@ -1214,6 +1238,14 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
         today, done = samples.plan_today(), set()
     import member_portal_bible as mpb
     bible, where = mpb.prefs(request)
+    import member_spaces as msp
+    ctx = msp.CURRENT.get() or {}
+    if ctx.get("space") == "youth":
+        posts = await asyncio.to_thread(msp.posts, biz["id"], "youth")
+        return _page(msp.render_youth_home(
+            biz, site, me=me, occasions=occ, groups=groups, youth_posts=posts,
+            reading=mpr.home_card(today, done), bible=bible, leader=(ctx.get("leader") or {}).get("youth"),
+            flash=mpc._flash(request) or mpr._flash(request)))
     return _page(render_home(biz, site, me=me, occasions=occ, groups=groups, library=lib,
                              give_url=give_url, flash=mpc._flash(request) or mpr._flash(request),
                              live=live, reading=mpr.home_card(today, done), bible=bible, where=where))
@@ -1450,7 +1482,14 @@ def _config_payload(biz: Dict[str, Any], site: Dict[str, Any]) -> Dict[str, Any]
         "base": _ui_base(biz),
         "bases": [{"key": k, "label": v} for k, v in _ui_labels().items()],
         "tiles": _tiles_of(biz),
+        # Youth's colour (member_spaces): volt green unless the church picks one.
+        "youth_color": _youth_colour(biz),
     }
+
+
+def _youth_colour(biz: Dict[str, Any]) -> str:
+    import member_spaces as msp
+    return msp.youth_colour(biz)
 
 
 def _ui_base(biz: Dict[str, Any]) -> str:
@@ -1517,7 +1556,8 @@ def patch_member_portal_config(business_id: str, body: Dict[str, Any],
                                user: AuthedUser = Depends(require_user)):
     """Owner-gated. Body: { enabled?: bool, sign_in?: bool, sign_out_all?: true,
     notifications?: {kind: bool}, base?: "black"|"charcoal"|"gray"|"white",
-    tiles?: [{title, sub, href, photo}] } (the kinds are member_push.KINDS;
+    tiles?: [{title, sub, href, photo}], youth_color?: "#rrggbb" | "" }
+    (the kinds are member_push.KINDS;
     tiles are checked by member_portal_church.clean_tiles).
 
     Turning the page ON, or "sign everyone out", moves the epoch to now:
@@ -1536,6 +1576,9 @@ def patch_member_portal_config(business_id: str, body: Dict[str, Any],
     import member_portal_church as mpc
     if "base" in body and body.get("base") not in ui.BASES:
         raise HTTPException(400, "base must be black, charcoal, gray or white")
+    if "youth_color" in body and not (body.get("youth_color") in ("", None)
+                                      or re.fullmatch(r"#[0-9a-fA-F]{6}", str(body.get("youth_color")))):
+        raise HTTPException(400, "youth_color must be a colour like #d4ff3a")
     tiles = None
     if "tiles" in body:
         tiles = mpc.clean_tiles(body.get("tiles"))
@@ -1547,7 +1590,8 @@ def patch_member_portal_config(business_id: str, body: Dict[str, Any],
         switches = member_push.clean_switches(body.get("notifications"))
     biz = _require_owner(business_id, user)
     site, _ = ensure_business_site(biz)
-    if "enabled" in body or "sign_in" in body or sign_out_all or switches is not None or "base" in body or tiles is not None:
+    if ("enabled" in body or "sign_in" in body or sign_out_all or switches is not None or "base" in body
+            or tiles is not None or "youth_color" in body):
         import vertical_family
         import vertical_scope
         if want and not (vertical_family.is_nonprofit_like(biz.get("type"))
@@ -1573,6 +1617,11 @@ def patch_member_portal_config(business_id: str, body: Dict[str, Any],
             cfg["notifications"] = {**(cfg.get("notifications") or {}), **switches}
         if "base" in body:
             cfg["base"] = body["base"]
+        if "youth_color" in body:
+            if body.get("youth_color"):
+                cfg["youth_color"] = str(body["youth_color"]).lower()
+            else:
+                cfg.pop("youth_color", None)
         if tiles is not None:
             cfg["tiles"] = tiles
         settings["member_portal"] = cfg

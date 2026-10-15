@@ -371,7 +371,11 @@ def render_inbox(biz, site, request, me, rows, requests, family, groups_open) ->
         return (f'<li><a href="/my/messages/{_e(r["id"])}"><span class="mb-thumb mb-chat-av">{icon}</span>'
                 f'<span class="mb-list-text"><strong>{_e(r["title"])}</strong><span>{_e(r["preview"])}</span></span>{badge}</a></li>')
     req = "".join(row(r) for r in requests)
-    body = [f'<div class="mb-lt"><h1>Connect</h1></div>{mpc.connect_tabs(biz, "messages")}{mpc._flash(request)}']
+    import member_spaces as msp
+    youth = (msp.CURRENT.get() or {}).get("youth")
+    head = ('<div class="mb-lt"><h1>Chats</h1></div>' + msp.safety_banner() if youth else
+            f'<div class="mb-lt"><h1>Connect</h1></div>{mpc.connect_tabs(biz, "messages")}')
+    body = [f'{head}{mpc._flash(request)}']
     if req:
         body.append(f'{ui.section("Requests")}<ul class="mb-list mb-cards">{req}</ul>')
     body.append(ui.section("Chats"))

@@ -70,6 +70,15 @@ TABS = (
      '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/>'
      '<path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/>'),
 )
+# Youth's bar (member_spaces): its chats and its crew where Church has Give
+# and Connect.
+YOUTH_TABS = (
+    TABS[0], TABS[1], TABS[2],
+    ("chats", "/my/messages", "Chats", '<path d="M21 12a8 8 0 0 1-11.6 7.1L4 20.5l1.4-4.9A8 8 0 1 1 21 12z"/>'),
+    ("crew", "/my/groups", "Crew", TABS[4][3]),
+)
+YOUTH_TAB_OF = {"home": "home", "watch": "watch", "sermons": "watch", "live": "watch", "bible": "bible",
+                "messages": "chats", "chats": "chats", "groups": "crew", "connect": "crew", "crew": "crew"}
 # Which tab a page belongs under.
 TAB_OF = {"home": "home", "watch": "watch", "sermons": "watch", "live": "watch", "bible": "bible",
           "give": "give", "connect": "connect", "groups": "connect", "messages": "connect"}
@@ -170,15 +179,20 @@ def _readable_on(c: str, bg: str, dark: bool, need: float = 4.5) -> str:
     return out
 
 
-def palette(biz: Dict[str, Any], theme: Dict[str, Any]) -> Dict[str, Any]:
+def palette(biz: Dict[str, Any], theme: Dict[str, Any], space: str = "church") -> Dict[str, Any]:
     """The page's colours: the church's base, and its colour as the accent.
     `accent` is for words and icons (4.5:1 on the base); `fill` is the
     button colour, with `on_fill` the words on it (white when they read,
-    else near-black, as on gold)."""
-    name = base_of(biz)
+    else near-black, as on gold). Youth (member_spaces) sits on black with
+    its own colour, volt green unless the church picked one."""
+    if space == "youth":
+        import member_spaces
+        name, brand = "black", member_spaces.youth_colour(biz)
+    else:
+        name, brand = base_of(biz), None
     b = BASES[name]
     bg, dark = b["bg"], b["dark"]
-    brand = brand_colour(biz, theme) or ("#e8e8ec" if dark else "#1c1c1e")
+    brand = brand or brand_colour(biz, theme) or ("#e8e8ec" if dark else "#1c1c1e")
     fill = brand
     if dark and contrast(fill, bg) < 2.2:
         fill = _readable_on(fill, bg, True, 2.2)
@@ -313,13 +327,14 @@ def segmented(items: Tuple[Tuple[str, str, str], ...], current: str, label: str)
     return f'<nav class="mb-seg" aria-label="{escape(label)}">{"".join(out)}</nav>'
 
 
-def nav(active: Optional[str], *, give: bool = True) -> str:
+def nav(active: Optional[str], *, give: bool = True, space: str = "church") -> str:
     """The tab bar. Give is always there (Kevin, 2026-10-15): before the
     church takes gifts in the app, it says how to give
-    (member_portal.render_give_off)."""
-    cur_tab = TAB_OF.get(active or "", "")
+    (member_portal.render_give_off). Youth has its own bar."""
+    tabs, of = (YOUTH_TABS, YOUTH_TAB_OF) if space == "youth" else (TABS, TAB_OF)
+    cur_tab = of.get(active or "", "")
     items = []
-    for key, href, label, paths in TABS:
+    for key, href, label, paths in tabs:
         if key == "give" and not give:
             continue
         cur = ' aria-current="page"' if key == cur_tab else ""
@@ -871,10 +886,105 @@ td.n,th.n{text-align:right;font-variant-numeric:tabular-nums;}
   .mp-shell{max-width:none;padding:0;} .mp-card{background:#fff;} th,td{border-color:#999;} .mp-muted{color:#333;}}""")
 
 
-def css(biz: Dict[str, Any], theme: Dict[str, Any]) -> str:
+def css(biz: Dict[str, Any], theme: Dict[str, Any], space: str = "church") -> str:
     """The member app's stylesheet. The mp-* classes the older renderers
-    use keep working through the same tokens."""
-    p = palette(biz, theme)
+    use keep working through the same tokens. Youth adds its loud type and
+    its pieces (member_spaces)."""
+    import member_spaces
+    p = palette(biz, theme, space)
     tokens = _Tokens({k: v for k, v in p.items() if isinstance(v, str)})
     tokens["scheme"] = "dark" if p["dark"] else "light"
-    return _CSS.substitute(tokens)
+    church = palette(biz, theme)
+    tokens["church_dot"], tokens["on_church_dot"] = church["fill"], church["on_fill"]
+    tokens["youth_dot"] = member_spaces.youth_colour(biz)
+    tokens["hot"] = palette({**biz, "settings": {**(biz.get("settings") or {}), "member_portal": {"base": "black"}}},
+                            theme)["accent"]
+    out = _CSS.substitute(tokens) + _SPACES_CSS.substitute(tokens)
+    if space == "youth":
+        out += _YOUTH_CSS.substitute(tokens)
+    return out
+
+
+# The switcher (Church · Youth · Kids), for anyone with more than one space.
+_SPACES_CSS = Template("""
+.mb-spaces{position:relative;}
+.mb-switch{display:inline-flex;align-items:center;gap:8px;height:40px;padding:0 12px 0 5px;border-radius:999px;background:var(--s1);
+  font-weight:650;font-size:15px;cursor:pointer;list-style:none;color:var(--fg);}
+.mb-switch::-webkit-details-marker{display:none;}
+.mb-switch .mb-ic{color:var(--fg3);}
+.mb-switch i,.mb-sp i{width:30px;height:30px;border-radius:50%;display:grid;place-items:center;font-style:normal;font-weight:750;font-size:12px;flex:none;}
+.mb-sp-church i{background:$church_dot;color:$on_church_dot;}
+.mb-sp-youth i{background:$youth_dot;color:#0b0b0c;}
+.mb-sp-kids i{background:#ffc93c;color:#2b1d0e;}
+.mb-spaces-menu{position:absolute;left:-4px;top:48px;z-index:40;width:min(340px,calc(100vw - 32px));padding:8px 8px 10px;border-radius:24px;
+  background:#1b1b1e;color:#f5f5f7;box-shadow:0 24px 50px rgba(0,0,0,.55);}
+.mb-sp-h{margin:6px 10px 8px;font-size:12px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:#8b8b92;}
+.mb-sp{display:flex;align-items:center;gap:12px;padding:10px;border-radius:16px;color:#f5f5f7;text-decoration:none;}
+.mb-sp[aria-current]{background:#2a2a2e;}
+.mb-sp i{width:44px;height:44px;border-radius:14px;font-size:14px;}
+.mb-sp b{display:block;font-size:16px;letter-spacing:-.015em;}
+.mb-sp small{display:block;font-size:12.5px;color:#a8a8ae;}
+.mb-sp .mb-sp-lead{margin-left:auto;background:$youth_dot;color:#111;}
+.mb-sp-note{margin:8px 10px 2px;font-size:12px;color:#8b8b92;line-height:1.4;}
+.mb-sp-lead{display:inline-flex;align-items:center;height:20px;padding:0 7px;border-radius:999px;background:var(--acc-fill);color:var(--on-acc);
+  font-size:10px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;flex:none;}
+.mb-spaces[open]>.mb-switch{box-shadow:0 0 0 2px var(--acc);}
+""")
+
+
+# Youth: black, its own colour, loud type, stickers (Kevin approved the
+# concept 2026-10-15).
+_YOUTH_CSS = Template("""
+body.sp-youth{--hot:$hot;}
+.sp-youth h1,.sp-youth .mb-lt h1{text-transform:uppercase;font-weight:800;letter-spacing:-.045em;}
+.y-mark{display:inline-flex;align-items:center;gap:8px;font-weight:800;font-size:15px;letter-spacing:.14em;text-transform:uppercase;color:var(--fg);}
+.y-mark b{background:var(--acc-fill);color:var(--on-acc);padding:3px 7px;border-radius:7px;letter-spacing:.04em;font-size:13px;}
+.y-hello{font-size:44px;font-weight:800;letter-spacing:-.05em;line-height:.92;text-transform:uppercase;margin:6px 0 16px;}
+.y-hello span{color:var(--acc);}
+.y-hero{position:relative;isolation:isolate;border-radius:26px;overflow:hidden;aspect-ratio:350/360;color:#fff;transform:rotate(-.8deg);margin:4px 2px 0;}
+.y-hero>.mb-ph,.y-hero>.mb-gen{position:absolute;inset:0;z-index:-2;}
+.y-hero>.mb-ph img{filter:grayscale(1) contrast(1.25);}
+.y-hero::after{content:"";position:absolute;inset:0;z-index:-1;background:linear-gradient(180deg,transparent 30%,rgba(0,0,0,.88));}
+.y-hero-in{position:absolute;left:0;right:0;bottom:0;padding:20px;}
+.y-when{font-weight:800;font-size:13px;letter-spacing:.1em;text-transform:uppercase;color:var(--acc);}
+.y-hero h2{font-size:40px;font-weight:800;letter-spacing:-.05em;line-height:.9;text-transform:uppercase;margin:8px 0 6px;color:#fff;}
+.y-hero p{margin:0;color:rgba(255,255,255,.8);font-size:14px;}
+.y-go{display:flex;align-items:center;gap:12px;margin-top:14px;flex-wrap:wrap;}
+.y-go form{margin:0;}
+.y-btn{display:inline-flex;align-items:center;gap:8px;min-height:48px;padding:0 20px;border:0;border-radius:14px;background:var(--acc-fill);color:var(--on-acc);
+  font:inherit;font-weight:800;font-size:15px;text-transform:uppercase;letter-spacing:.04em;box-shadow:4px 4px 0 var(--hot);cursor:pointer;}
+.y-count{font-size:13.5px;color:rgba(255,255,255,.88);}
+.y-in{display:inline-flex;align-items:center;gap:6px;height:40px;padding:0 14px;border-radius:12px;background:rgba(255,255,255,.16);color:#fff;
+  font-weight:800;text-transform:uppercase;font-size:13px;letter-spacing:.04em;}
+.y-card{flex:none;width:150px;min-height:150px;border-radius:18px;padding:14px;display:flex;flex-direction:column;justify-content:space-between;
+  color:#fff;text-decoration:none;scroll-snap-align:start;}
+.y-card small{font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;opacity:.85;}
+.y-card b{font-size:19px;font-weight:800;letter-spacing:-.03em;line-height:1;text-transform:uppercase;}
+.y-crew{display:block;margin:0 0 10px;padding:16px;border-radius:22px;background:var(--s1);border:1.5px solid var(--s3);color:var(--fg);text-decoration:none;}
+.y-lab{font-size:11.5px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;color:var(--acc);}
+.y-crew h3{margin:4px 0 2px;font-size:22px;font-weight:800;letter-spacing:-.03em;text-transform:uppercase;}
+.y-crew p{margin:0;color:var(--fg2);font-size:13.5px;}
+.y-crew .y-led{margin-top:4px;}
+.y-post{padding:14px 16px;border-radius:20px;background:var(--s1);margin:0 0 10px;border-left:4px solid var(--acc);}
+.y-post-who{display:flex;align-items:center;gap:8px;margin:0 0 4px;font-weight:700;font-size:14px;}
+.y-post-t{margin-left:auto;font-weight:500;font-size:12px;color:var(--fg3);}
+.y-post-b{margin:0;font-size:15.5px;line-height:1.4;white-space:pre-line;}
+.y-post-x{margin:4px 0 0;}
+.y-post-x .mp-link{padding:0;min-height:30px;font-size:13px;color:var(--fg3);}
+.y-compose{display:flex;flex-direction:column;gap:8px;margin:18px 0 0;padding:16px;border-radius:22px;background:var(--s1);}
+.y-compose label{font-size:12px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;color:var(--acc);}
+.y-compose .mp-input{background:var(--bg);min-height:90px;}
+.y-compose .y-btn{align-self:flex-start;}
+.y-fine{margin:0;font-size:12.5px;color:var(--fg3);}
+.y-tools{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px;}
+.y-tools a{display:flex;flex-direction:column;gap:6px;min-height:106px;padding:14px;border-radius:20px;background:var(--s1);color:var(--fg);text-decoration:none;}
+.y-tools a .mb-ic{color:var(--acc);}
+.y-tools b{font-size:15px;line-height:1.2;}
+.y-tools span{font-size:12.5px;color:var(--fg2);}
+.y-safe{display:flex;gap:10px;align-items:flex-start;margin:16px 0 0;padding:12px 14px;border-radius:14px;background:$fill_08;border:1px solid $fill_30;
+  font-size:13px;color:var(--fg);}
+.y-safe .mb-ic{color:var(--acc);flex:none;margin-top:1px;}
+.y-talk{margin-top:12px;}
+.sp-youth .mb-tab[aria-current]{color:var(--acc);}
+@media (prefers-reduced-motion:reduce){.y-hero{transform:none;}}
+""")

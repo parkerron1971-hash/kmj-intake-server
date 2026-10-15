@@ -54,6 +54,8 @@ DONE = {
     "details": "Your details are saved.",
     "photo": "Your photo is saved.",
     "photo_removed": "Your photo is removed.",
+    "posted": "Posted to Youth.",
+    "post_removed": "Your post is removed.",
     "joined": "You're in. The group's leader will see you on the list.",
     "left": "You've left that group.",
     "here": "Thanks for joining us. You're counted as here today.",
@@ -88,6 +90,10 @@ ERRORS = {
     "photo_bad": "That file isn't a photo we can use. Choose a JPG, PNG or WebP under 12 MB.",
     "photo_no": "That picture can't be used as your photo. Choose another.",
     "photo_busy": "Photos can't be checked just now, so nothing was saved. Please try again in a minute.",
+    "not_leader": "Only leaders the church office approved can post to Youth.",
+    "empty_post": "Write your post first.",
+    "post_no": "That post can't go out as written. Change it, or talk to the church office.",
+    "post_busy": "Posts can't be checked just now, so nothing went out. Please try again in a minute.",
     "not_live": "The service isn't live right now.",
     "chat_closed": "The chat is closed right now.",
     "muted": "The host has paused your chat for this service.",
@@ -270,7 +276,7 @@ def member_rsvp(business_id: str, me: Dict[str, Any], entry_id: str, action: str
 # ─── Prayer and details ──────────────────────────────────────────────
 
 
-def save_prayer(business_id: str, me: Dict[str, Any], text: str, confidential: bool) -> bool:
+def save_prayer(business_id: str, me: Dict[str, Any], text: str, confidential: bool, youth: bool = False) -> bool:
     text = (text or "").strip()[:PRAYER_MAX]
     rows = sb_clients.sb_post_as_service("/ministry_care_requests", {
         "business_id": str(business_id), "form_id": None, "contact_id": str(me["id"]),
@@ -279,7 +285,7 @@ def save_prayer(business_id: str, me: Dict[str, Any], text: str, confidential: b
             "name": (me.get("name") or "").strip(), "email": me.get("email") or "",
             "phone": me.get("phone") or "", "prayer_request": text,
             "confidential": "yes" if confidential else "no",
-            "source": "Member page",
+            "source": "Member page, Youth" if youth else "Member page",
         },
     })
     return isinstance(rows, list) and bool(rows)
@@ -649,11 +655,14 @@ def render_events(biz, site, request: Request, occasions: Optional[List[Dict[str
 def render_prayer(biz, site, request: Request, who: Optional[Dict[str, Any]] = None) -> str:
     from member_portal import _e, _shell
     church = _e(biz.get("name") or "the church")
+    youth = request.query_params.get("for") == "youth"
+    heading = "Talk to a youth leader" if youth else "How can we pray for you?"
     return _shell(biz, site, "Prayer", f"""
-<div class="mb-lt"><h1>How can we pray for you?</h1></div>
+<div class="mb-lt"><h1>{heading}</h1></div>
 <p class="mb-sub" style="margin-bottom:18px">Your request goes privately to the pastors at {church}. It isn't posted anywhere or shared with other members.</p>
 {_flash(request)}
 <form class="mp-form" method="post" action="/my/prayer">
+  {'<input type="hidden" name="for" value="youth">' if youth else ''}
   <label class="mp-sr" for="mp-prayer">Your prayer request</label>
   <textarea class="mp-input mp-text" id="mp-prayer" name="request" rows="7" maxlength="{PRAYER_MAX}" placeholder="Your prayer request" required></textarea>
   <label class="mp-check" style="margin:6px 0 8px"><input type="checkbox" name="confidential" value="yes"> Keep this between me and the pastor</label>
@@ -916,7 +925,7 @@ async def prayer(request: Request):
         return _back("/my/prayer", err="slow")
     full = await asyncio.to_thread(load_me, church["business"]["id"], me["id"]) or me
     ok = await asyncio.to_thread(save_prayer, church["business"]["id"], full, text,
-                                 str(form.get("confidential") or "") == "yes")
+                                 str(form.get("confidential") or "") == "yes", str(form.get("for") or "") == "youth")
     return _back("/my", done="prayer") if ok else _back("/my/prayer", err="error")
 
 

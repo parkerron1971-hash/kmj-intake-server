@@ -79,8 +79,9 @@ def _is_photo(name: str, size: int) -> bool:
             and not any(w in low for w in NOT_PHOTOS))
 
 
-def photos(biz: Dict[str, Any], site: Optional[Dict[str, Any]]) -> List[str]:
-    """The church's photo URLs, best first. [] when it has none."""
+def photos(biz: Dict[str, Any], site: Optional[Dict[str, Any]], limit: Optional[int] = MAX_PHOTOS) -> List[str]:
+    """The church's photo URLs, best first. [] when it has none. `limit`
+    None is every one (named() looks past the first MAX_PHOTOS)."""
     out: List[str] = []
     lib = (((biz or {}).get("settings") or {}).get("media_library") or {})
     gallery = lib.get("gallery") if isinstance(lib, dict) else None
@@ -102,7 +103,14 @@ def photos(biz: Dict[str, Any], site: Optional[Dict[str, Any]]) -> List[str]:
         if u not in seen:
             seen.add(u)
             uniq.append(u)
-    return uniq[:MAX_PHOTOS]
+    return uniq if limit is None else uniq[:limit]
+
+
+def named(biz: Dict[str, Any], site: Optional[Dict[str, Any]], words: Tuple[str, ...]) -> str:
+    """The church's photo whose file name says it shows this (a Youth
+    space's 'youth-fellowship'), among ALL its photos, not just the first
+    MAX_PHOTOS; '' when none does."""
+    return _by_words(photos(biz, site, limit=None), words) or ""
 
 
 def _by_words(pool: List[str], words: Tuple[str, ...]) -> Optional[str]:

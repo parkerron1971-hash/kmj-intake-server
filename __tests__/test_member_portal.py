@@ -547,6 +547,16 @@ def test_owner_picks_the_base_and_home_tiles(monkeypatch):
     cfg = stored["settings"]["member_portal"]
     assert cfg["base"] == "white" and cfg["epoch"] == 7 and cfg["enabled"] is True
     assert stored["settings"]["giving"] == {"enabled": True}
+    # Youth's colour (member_spaces): volt green unless the church picks one.
+    assert out["youth_color"] == "#d4ff3a"
+    for bad in ({"youth_color": "green"}, {"youth_color": "#12345"}, {"youth_color": "#123456;x"}):
+        with pytest.raises(mp.HTTPException) as e:
+            mp.patch_member_portal_config(BIZ, bad, user)
+        assert e.value.status_code == 400
+    out = mp.patch_member_portal_config(BIZ, {"youth_color": "#FF3D81"}, user)
+    assert out["youth_color"] == "#ff3d81" and stored["settings"]["member_portal"]["youth_color"] == "#ff3d81"
+    out = mp.patch_member_portal_config(BIZ, {"youth_color": ""}, user)
+    assert out["youth_color"] == "#d4ff3a" and "youth_color" not in stored["settings"]["member_portal"]
 
 
 def test_the_logo_and_series_art_come_from_the_churchs_own_site(tmp_path, monkeypatch):
