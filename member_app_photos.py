@@ -196,6 +196,13 @@ def _lum(path: str) -> Optional[float]:
         return None
 
 
+def has_site_page(site: Optional[Dict[str, Any]], page: str) -> bool:
+    """True when a hand-built site has its own page by this name
+    (sites/<slug>/<page>.html, served at /<page>)."""
+    d = _site_dir(site)
+    return bool(d is not None and page.isidentifier() and (d.parent / f"{page}.html").is_file())
+
+
 def _slug(text: str) -> str:
     import re
     return re.sub(r"[^a-z0-9]+", "-", str(text or "").lower()).strip("-")
