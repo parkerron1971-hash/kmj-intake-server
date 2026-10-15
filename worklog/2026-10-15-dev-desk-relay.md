@@ -51,3 +51,6 @@ cleanup after revoking the token. Screen redaction authenticates first. Valid
 UUIDs survive entropy redaction, including KAI card/device references. Replaced
 the overlapping assignment regex: the reported auth-repeat case took 1.13 s at
 16 KB before, versus 0.032 s at 160 KB after, with new regressions.
+
+The fleet shared limiter also runs off the event loop, matching alert budgets,
+so its synchronous PostgREST call cannot stall other live relay requests.

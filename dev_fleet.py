@@ -1,4 +1,5 @@
 """Device-owned latest session state; owner-only Workers and screen reads."""
+import asyncio
 import json
 from datetime import datetime, timedelta
 from typing import Literal, Optional
@@ -118,7 +119,7 @@ async def fleet_sync(body: FleetBody, authorization: Optional[str] = Header(None
         raise HTTPException(422, 'Duplicate session key')
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
         device = await _require_device(c, authorization)
-        if not rate_limit.allow_strict('dev_fleet', device['id']):
+        if not await asyncio.to_thread(rate_limit.allow_strict, 'dev_fleet', device['id']):
             raise HTTPException(429, 'Fleet write limit', headers={'Retry-After': '60'})
         result = await store.rpc(c, 'dev_fleet_sync', {'p_device': device['id'], 'p_full': body.full,
                                                     'p_sessions': [_row(s) for s in body.sessions]})
