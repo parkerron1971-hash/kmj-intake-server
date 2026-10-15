@@ -55,17 +55,16 @@ def home_card(today: Optional[Dict[str, Any]], done: Optional[set]) -> str:
     read = bool(done) and today["day"] in done
     buttons = f'<a class="mp-go" href="{_e(today["href"])}">{ui.icon("doc", 16)}Read it</a>'
     if read:
-        below = (f'<p class="mp-muted" style="margin:10px 0 0">{ui.icon("check", 14)} Read today. '
-                 f'<a class="mp-link" href="/my/reading">See the plan</a></p>')
+        buttons += f'<span class="mb-chip">{ui.icon("check", 12)}Read today</span>'
     else:
         buttons += _tick_form(today["day"], False, "Mark as read", "/my")
-        below = f'<p style="margin:10px 0 0"><a class="mp-link" href="/my/reading">{_e(today["title"])}</a></p>'
     return f"""
-<section class="mp-card mb-reading" aria-labelledby="mb-reading-h">
-  <p class="mp-muted" style="margin:0">Today's reading · Day {today['day']} of {today['of']}</p>
-  <h2 id="mb-reading-h" class="mp-sect" style="margin:4px 0 10px">{_e(today['label'])}</h2>
-  <div class="mb-give-row">{buttons}</div>
-  {below}
+<h2 class="mp-sect">Reading plan <a href="/my/reading">See the plan</a></h2>
+<section class="mb-plan mb-reading" aria-labelledby="mb-reading-h">
+  {ui.ring(today['day'], today['of'])}
+  <div class="mb-plan-b"><span class="mp-muted" style="font-size:12.5px">{_e(today['title'])} · Today's reading · Day {today['day']} of {today['of']}</span>
+  <strong id="mb-reading-h">{_e(today['label'])}</strong>
+  <div class="mb-plan-acts">{buttons}</div></div>
 </section>"""
 
 

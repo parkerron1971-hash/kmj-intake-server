@@ -221,3 +221,93 @@ def test_the_bar_is_home_sermons_bible_groups_live_and_me_is_the_picture():
     assert order == sorted(order) and 'href="/my/live" aria-current="page"' in nav and "/my/me" not in nav
     me = mp._shell(_biz(), None, "Me", "<p>x</p>", tab="me", who=ME)
     assert 'href="/my/me" aria-label="Me" aria-current="page">AR<' in me
+
+
+# ─── the phone design (Kevin approved "Member App, Next Level", 2026-10-14) ──
+
+
+def test_buttons_carry_white_text_in_the_churchs_own_hue_and_gold_stays_light():
+    red = _pal("#C8102E", "#C8102E")
+    assert red["on_fill"] == "#FFFFFF" and contrast("#FFFFFF", red["fill"]) >= 4.5
+    assert contrast(red["fill"], red["ground"]) >= 3                  # the button still stands off the ground
+    gold = _pal("#0B2146", "#F4AE3D")
+    assert gold["fill"] == gold["accent"] and contrast(gold["on_fill"], gold["fill"]) >= 4.5
+
+
+def test_the_stylesheet_fills_every_token():
+    css = ui.css(_biz("#0B2146"), {"accent": "#F4AE3D"})
+    assert "$" not in css and "--mb-fill:" in css and ".mb-nav{position:fixed" in css
+
+
+def test_photos_are_the_churchs_own_and_never_logos_or_series_art(tmp_path, monkeypatch):
+    import member_app_photos as ph
+    d = tmp_path / "grace" / "assets"
+    d.mkdir(parents=True)
+    for name, size in (("service-wide.webp", 40000), ("logo.webp", 40000), ("series-hope.webp", 40000),
+                       ("family.webp", 40000), ("tiny.webp", 500)):
+        (d / name).write_bytes(b"x" * size)
+    monkeypatch.setattr(ph, "SITES_DIR", tmp_path)
+    ph._site_files.cache_clear()
+    biz = {"settings": {"media_library": {"gallery": [
+        {"url": "https://cdn.example/a.jpg", "sort_order": 2},
+        {"url": "https://cdn.example/hidden.jpg", "show_on_website": False},
+        {"url": "http://insecure.example/b.jpg"}]}}}
+    pool = ph.photos(biz, {"slug": "grace"})
+    assert pool == ["https://cdn.example/a.jpg", "/public/site-assets/grace/family.webp",
+                    "/public/site-assets/grace/service-wide.webp"]
+    assert ph.hero(pool).endswith("service-wide.webp") and ph.welcome(pool).endswith("family.webp")
+    assert ph.pick(pool, "k1") == ph.pick(pool, "k1")                  # stable
+    assert ph.pick(pool, "k1", set(pool[:2])) == pool[2]               # never twice on one screen
+    assert ph.photos({}, {"slug": "../etc"}) == [] and ph.photos({}, None) == []
+
+
+def test_the_verse_of_the_day_is_real_scripture_and_changes_daily():
+    import member_portal_bible as mpb
+    a, b = mpb.verse_of_day("kjv", date(2026, 10, 14)), mpb.verse_of_day("kjv", date(2026, 10, 15))
+    assert a and b and a["label"] != b["label"] and a["href"].startswith("/my/bible/")
+    card = mpb.verse_card("web", date(2026, 10, 14))
+    assert "Verse of the day" in card and "WEB" in card and "Read the chapter" in card
+
+
+def test_the_next_card_offers_im_coming_and_counts_without_names():
+    occ = [{**_occ("e1", "Sunday Worship"), "attending": 38}]
+    card = mpc.next_card(occ, today=date(2026, 10, 1))
+    assert 'action="/my/rsvp"' in card and 'value="coming"' in card and "I'm coming" in card
+    assert "38 people are coming" in card and "Sunday, October 4" in card
+    mine = mpc.next_card([{**_occ("e1", "Sunday Worship", {"status": "yes"}), "attending": 38}], today=date(2026, 10, 1))
+    assert "You and 37 others are coming" in mine and "You&#x27;re coming" in mine and 'value="coming"' not in mine
+
+
+def test_a_new_church_home_has_no_empty_blocks_and_always_something_to_read():
+    page = mp.render_home(_biz(), None, me=ME, occasions=[], groups={"mine": [], "open": []},
+                          library={"sermons": [], "series": []}, give_url="")
+    body = page[page.index("<body>"):]
+    assert "Verse of the day" in body and "Start with John 1" in body and "How can we pray for you?" in body
+    assert "Nothing is on the calendar" not in body and "Coming up" not in body and "Latest message" not in body
+    assert 'href="/my/bible"><span>' in body and 'href="/my/live"><span>' in body   # tiles that lead somewhere
+
+
+def test_home_skips_the_next_occasion_in_coming_up():
+    occ = [_occ("e1", "Sunday Worship"), _occ("e2", "Prayer night")]
+    page = mp.render_home(_biz(), None, me=ME, occasions=occ, groups=None, library=None, give_url="")
+    coming = page[page.index('id="mp-coming"'):]
+    assert "Prayer night" in coming and "Sunday Worship" not in coming
+
+
+def test_empty_sermons_and_groups_get_a_designed_page_not_an_empty_list():
+    s = mps.render_library(_biz(), None, ME, {"sermons": [], "series": []})
+    assert "Messages are on the way" in s and 'href="/my/live"' in s and "Verse of the day" in s
+    g = mpc.render_groups(_biz(), None, _req(), {"mine": [], "open": []}, who=ME)
+    assert "Groups are coming" in g and "Find a group" not in g
+
+
+def test_sign_in_leads_with_the_church_and_a_chat_drops_the_tab_bar():
+    page = mp.render_signin(_biz(), None)
+    assert 'class="mb-si"' in page and "Welcome<br>home." in page and 'class="mb-top"' not in page
+    chat = mp._shell(_biz(), None, "Chat", "<p>x</p>", tab="me", who=ME, bar=False)
+    assert 'aria-label="Main"' not in chat and 'class="mb-top"' in chat
+
+
+def _req():
+    from starlette.requests import Request
+    return Request({"type": "http", "query_string": b"", "headers": [], "path": "/my/groups"})

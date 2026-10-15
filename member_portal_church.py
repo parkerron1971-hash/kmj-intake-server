@@ -434,11 +434,23 @@ def member_leave(business_id: str, me: Dict[str, Any], group_id: str) -> Tuple[b
     return (True, "left") if ok else (False, "error")
 
 
-def _group_card(g: Dict[str, Any], action: str, pal: Dict[str, str]) -> str:
+def _group_card(g: Dict[str, Any], action: str, pal: Dict[str, str], pool: Optional[List[str]] = None,
+                used: Optional[set] = None) -> str:
     import member_app_ui as ui
+    import member_app_photos as photos
     from member_portal import _e
     gid = _e(g["id"])
     title_id = f"mp-grp-{gid}"
+    pic = photos.pick(pool or [], g["id"], used or ())
+    if used is not None and pic:
+        used.add(pic)
+    badge = ('<span class="mb-live-badge"><span class="mb-live-dot" aria-hidden="true"></span>Meeting now</span>'
+             if action == "leave" and (g.get("live") or {}).get("status") == "live" else "")
+    if pic:
+        band = f'<div class="mb-gcard-cov">{ui.photo(pic)}{badge}<h3 id="{title_id}">{_e(g.get("name") or "")}</h3></div>'
+    else:
+        band = (f'<div class="mb-gcard-cov">{ui.poster(g["id"], pal, g.get("name") or "", g.get("kind") or "", tag="div", cls="mb-band", title_tag="h3", title_id=title_id)}'
+                f'{badge}</div>')
     facts = " · ".join(_e(x) for x in (g.get("meets"), g.get("location")) if x)
     leaders = g.get("leaders") or []
     led = f'<p class="mp-muted">Led by {_e(", ".join(leaders))}</p>' if leaders else ""
@@ -473,34 +485,49 @@ def _group_card(g: Dict[str, Any], action: str, pal: Dict[str, str]) -> str:
         button = (f'<form method="post" action="/my/groups"><input type="hidden" name="group_id" value="{gid}">'
                   f'<input type="hidden" name="action" value="leave">'
                   f'<button class="mp-link" type="submit" aria-describedby="{title_id}">Leave this group</button></form>')
-    return f"""<article class="mp-card mp-occ" aria-labelledby="{title_id}">
-  {ui.poster(g['id'], pal, g.get('name') or '', g.get('kind') or '', tag='div', cls='mb-band', title_tag='h3', title_id=title_id)}
+    return f"""<article class="mp-card mp-occ mb-gcard" aria-labelledby="{title_id}">
+  {band}
+  <div class="mb-gcard-b">
   {f'<p class="mp-muted">{facts}</p>' if facts else ''}
   {led}{about}{you}
   <div class="mp-actions">{meet}{button}</div>
+  </div>
 </article>"""
 
 
 def render_groups(biz, site, request: Request, data: Optional[Dict[str, List[Dict[str, Any]]]],
                   who: Optional[Dict[str, Any]] = None) -> str:
+    import member_app_ui as ui
+    import member_app_photos as photos
     import member_portal_messaging as mpm
-    from member_portal import _shell, palette_for
+    from member_portal import _e, _shell, palette_for
     pal = palette_for(biz, site)
+    pool = photos.photos(biz, site)
     if data is not None:
         on = mpm.turned_on(biz)
         for g in data["mine"]:
             g["chat_on"] = on
     if data is None:
         body = '<p class="mp-err" role="alert">Groups couldn\'t load just now. Please try again in a moment.</p>'
+    elif not data["mine"] and not data["open"]:
+        # Nothing to belong to yet: a designed page, never an empty list.
+        church = _e(biz.get("name") or "the church")
+        body = (f'<section class="mb-soon">{ui.gen_art("G")}<div class="mb-soon-in"><span class="mb-kick">Starting soon</span>'
+                f'<h2>Groups are coming</h2><p>Small groups at {church} will show up here: when they meet, who leads them, '
+                f'and a way to join.</p></div></section>'
+                f'<p class="mp-muted" style="margin-top:14px">Want to be in one? Ask the church office what\'s starting soon.</p>'
+                f'<div class="mb-pair"><a class="mp-go" href="/my/events">{ui.icon("calendar", 16)}What\'s coming up</a>'
+                f'<a class="mp-go mp-go-2" href="/my/prayer">{ui.icon("pray", 16)}Prayer</a></div>')
     else:
-        mine = "".join(_group_card(g, "leave", pal) for g in data["mine"]) or \
+        used: set = set()
+        mine = "".join(_group_card(g, "leave", pal, pool, used) for g in data["mine"]) or \
             '<p class="mp-muted">You\'re not in a group yet. Find one below.</p>'
-        open_ = "".join(_group_card(g, "join", pal) for g in data["open"]) or \
+        open_ = "".join(_group_card(g, "join", pal, pool, used) for g in data["open"]) or \
             '<p class="mp-muted">No groups are taking new people right now. Ask the church office what\'s starting soon.</p>'
         body = (f'<section aria-labelledby="mp-mine-h"><h2 id="mp-mine-h" class="mp-sect">My groups</h2>{mine}</section>'
                 f'<section aria-labelledby="mp-open-h"><h2 id="mp-open-h" class="mp-sect">Find a group</h2>{open_}</section>')
     return _shell(biz, site, "Groups", f"""
-<h1>Groups</h1>
+<div class="mb-lt"><h1>Groups</h1></div>
 <p class="mp-muted">Smaller circles to belong to: small groups, serving teams and classes.</p>
 {_flash(request)}
 {body}""", tab="groups", who=who)
@@ -666,9 +693,10 @@ def _my_answer(o: Dict[str, Any]) -> str:
 
 
 def next_card(occasions: Optional[List[Dict[str, Any]]], today: Optional[date] = None) -> str:
-    """The first thing on the calendar: day, what, where, how soon, and
-    their answer. '' when nothing is coming (or the read failed; Coming up
-    says so)."""
+    """The first thing on the calendar, as Home's glass card: the date,
+    what, where, how soon, how many are coming (a number, never names),
+    and their answer — or "I'm coming" right here. '' when nothing is
+    coming (or the read failed; Coming up says so)."""
     import member_app_ui as ui
     from member_portal import _e
     if not occasions:
@@ -677,58 +705,99 @@ def next_card(occasions: Optional[List[Dict[str, Any]]], today: Optional[date] =
     d = _day(o.get("date") or "")
     if not d:
         return ""
-    facts = " · ".join(x for x in (o.get("location") or "", _in_days(d, today or date.today())) if x)
+    eid = _e(o.get("entry_id"))
+    title_id = f"mb-next-{eid}"
     answer = _my_answer(o)
-    chip = f'<span class="mb-chip">{ui.icon("check", 12)}{_e(answer)}</span>' if answer else ""
-    return (f'<a class="mb-next" href="/my/events" aria-label="Next: {_e(o.get("title"))}, {_e(o.get("date_label"))}">'
-            f'<span class="mb-when" aria-hidden="true"><span>{d.strftime("%a")}</span><b>{d.day}</b></span>'
-            f'<span class="mb-what"><strong>{_e(o.get("title"))}</strong><span>{_e(facts)}</span>{chip}</span></a>')
+    mine = o.get("mine") or {}
+    where = " · ".join(_e(x) for x in (o.get("date_label") or "", o.get("location") or "") if x)
+    count = int(o.get("attending") or 0)
+    if answer and count >= 2:
+        going = f"You and {count - 1} other{'' if count == 2 else 's'} are coming"
+    elif not answer and count >= 2:
+        going = f"{count} people are coming"
+    else:
+        going = ""
+    going = f'<p class="mb-count">{ui.icon("users", 16)}<span>{going}</span></p>' if going else ""
+    details = f'<a class="mp-go mp-go-2" href="/my/events" aria-describedby="{title_id}">See details</a>'
+    if answer:
+        label = "You're coming" if answer == "Going" else answer
+        acts = f'<span class="mb-chip">{ui.icon("check", 12)}{_e(label)}</span>'
+        foot = f'<div class="mb-next-acts">{details}</div>'
+    elif o.get("full"):
+        acts, foot = '<span class="mb-chip">Full</span>', f'<div class="mb-next-acts">{details}</div>'
+    else:
+        acts = ('<span class="mb-chip">You said you can\'t make it</span>' if mine.get("status") == "no" else "")
+        foot = (f'<div class="mb-next-acts"><form method="post" action="/my/rsvp">'
+                f'<input type="hidden" name="entry_id" value="{eid}"><input type="hidden" name="back" value="/my">'
+                f'<input type="hidden" name="action" value="coming">'
+                f'<button class="mp-go" type="submit" aria-describedby="{title_id}">I\'m coming</button></form>{details}</div>')
+    return (f'<section class="mb-next" aria-labelledby="{title_id}"><div class="mb-next-top">'
+            f'<span class="mb-datebox" aria-hidden="true"><span>{d.strftime("%a")}</span><b>{d.day}</b><span>{d.strftime("%b")}</span></span>'
+            f'<span class="mb-what"><span class="mb-kick">Next gathering · {_e(_in_days(d, today or date.today()))}</span>'
+            f'<strong id="{title_id}">{_e(o.get("title"))}</strong><span>{where}</span>{acts}</span></div>'
+            f'{going}{foot}</section>')
 
 
 def week_cards(occasions: Optional[List[Dict[str, Any]]],
-               groups: Optional[Dict[str, List[Dict[str, Any]]]]) -> str:
+               groups: Optional[Dict[str, List[Dict[str, Any]]]], *,
+               pal: Optional[Dict[str, str]] = None, pool: Optional[List[str]] = None, avoid: str = "") -> str:
     """'Your week', a row of cards to swipe: what this person said yes to
-    (or serves at), then their groups and when they meet. No faces or
-    member names — a member never sees who else is in a group, only its
+    (or serves at), then their groups and when they meet. Each card wears
+    one of the church's photos (or a poster) when `pal` is given. No faces
+    or member names — a member never sees who else is in a group, only its
     leaders' first names. '' when there is nothing of theirs."""
     import member_app_ui as ui
+    import member_app_photos as photos
     from member_portal import _e
+
+    used = {avoid}
+
+    def cov(key: str, title: str, label: str) -> str:
+        pic = photos.pick(pool or [], key, used)
+        used.add(pic)
+        art = ui.cover(pic, key, pal, title) if pal else ""
+        return f'<span class="mb-wk-cov">{art}<span class="mb-wk-d">{_e(label)}</span></span>'
     cards = []
     for o in (occasions or []):
         answer = _my_answer(o)
         d = _day(o.get("date") or "")
         if not answer or not d:
             continue
-        cards.append(f'<a class="mb-wk" href="/my/events"><span class="mb-wk-d">{d.strftime("%a")} {d.day}</span>'
-                     f'<strong>{_e(o.get("title"))}</strong>'
+        day = f"{d.strftime('%a')} {d.day}"
+        cards.append(f'<a class="mb-wk" href="/my/events">{cov(str(o.get("entry_id")), o.get("title") or "", day)}'
+                     f'<span class="mb-wk-b"><strong>{_e(o.get("title"))}</strong>'
                      f'<span class="mb-wk-s">{_e(o.get("location") or o.get("date_label") or "")}</span>'
-                     f'<span class="mb-chip">{ui.icon("check", 12)}{_e(answer)}</span></a>')
+                     f'<span class="mb-chip">{ui.icon("check", 12)}{_e(answer)}</span></span></a>')
         if len(cards) == 3:
             break
     for g in (groups or {}).get("mine", [])[:3]:
         led = ", ".join(g.get("leaders") or [])
         href = f"/my/groups/live/{_e(g['live']['id'])}" if g.get("live") else "/my/groups"
-        cards.append(f'<a class="mb-wk" href="{href}"><span class="mb-wk-d">{_e(g.get("kind") or "Group")}</span>'
-                     f'<strong>{_e(g.get("name"))}</strong>'
+        cards.append(f'<a class="mb-wk" href="{href}">{cov(str(g.get("id")), g.get("name") or "", g.get("kind") or "Group")}'
+                     f'<span class="mb-wk-b"><strong>{_e(g.get("name"))}</strong>'
                      f'<span class="mb-wk-s">{_e(g.get("meets") or g.get("location") or "")}</span>'
                      f'{f"<span class=mb-wk-s>Led by {_e(led)}</span>" if led and g.get("role") != "leader" else ""}'
                      f'{"<span class=mb-chip>You lead</span>" if g.get("role") == "leader" and not g.get("live") else ""}'
-                     f'{"<span class=mb-chip><span class=mb-live-dot aria-hidden=true></span>Live now</span>" if g.get("live") else ""}</a>')
+                     f'{"<span class=mb-chip><span class=mb-live-dot aria-hidden=true></span>Live now</span>" if g.get("live") else ""}'
+                     f'</span></a>')
     if not cards:
         return ""
     return (f'<section aria-labelledby="mb-week"><h2 id="mb-week" class="mp-sect">Your week</h2>'
             f'<div class="mb-week">{"".join(cards)}</div></section>')
 
 
-def coming_up(occasions: Optional[List[Dict[str, Any]]]) -> str:
+def coming_up(occasions: Optional[List[Dict[str, Any]]], skip: str = "") -> str:
     """The next two occasions this person hasn't answered, with the same
-    actions as the Coming up page."""
+    actions as the Coming up page. `skip` is the one Home's next card
+    already shows; with it, nothing left to answer leaves the section out."""
     if occasions is None:
         body = '<p class="mp-err" role="alert">What\'s coming up couldn\'t load just now.</p>'
     else:
-        open_ = [o for o in occasions if not o.get("mine")]
+        open_ = [o for o in occasions if not o.get("mine") and not (skip and str(o.get("entry_id")) == skip)]
         if not occasions:
             body = '<p class="mp-muted">Nothing is on the calendar yet.</p>'
+        elif not open_ and skip:
+            return ""
         elif not open_:
             body = '<p class="mp-muted">You\'ve answered everything on the calendar. <a href="/my/events">See it all</a></p>'
         else:

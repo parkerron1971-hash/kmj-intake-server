@@ -99,22 +99,21 @@ def latest_card(lib: Optional[Dict[str, Any]], pal: Dict[str, str], *, heading: 
     part = _part(lib, s)
     kick = f"Series · {part}" if series and part else ("Series" if series else "Latest message")
     href = f"/my/sermons/{_e(s['id'])}"
-    art = ui.poster(_key(lib, s), pal, series or s.get("title") or "", kick, tag="a", play=True,
-                    attrs=f'href="{href}" aria-hidden="true" tabindex="-1"')
+    art = ui.poster(_key(lib, s), pal, series or s.get("title") or "", kick, play=True)
     return f"""<section aria-labelledby="mb-latest">
   <h2 class="mp-sect">Latest message <a href="/my/sermons">All sermons</a></h2>
-  {art}
-  <{heading} class="mb-msg-title" id="mb-latest"><a href="{href}">{_e(s.get('title'))}</a></{heading}>
-  <p class="mb-meta">{meta(s)}</p>
+  <a class="mb-mcard" href="{href}">{art}<span class="mb-mcard-b">
+  <{heading} class="mb-msg-title" id="mb-latest">{_e(s.get('title'))}</{heading}>
+  <span class="mb-meta">{meta(s)}</span></span></a>
 </section>"""
 
 
-def render_library(biz, site, who, lib: Optional[Dict[str, Any]], series_id: str = "") -> str:
+def render_library(biz, site, who, lib: Optional[Dict[str, Any]], series_id: str = "", bible: str = "kjv") -> str:
     import member_app_ui as ui
     from member_portal import _e, _shell, palette_for
     pal = palette_for(biz, site)
     if lib is None:
-        body = ('<h1>Sermons</h1><p class="mp-err" role="alert">Sermons couldn\'t load just now. '
+        body = ('<div class="mb-lt"><h1>Sermons</h1></div><p class="mp-err" role="alert">Sermons couldn\'t load just now. '
                 'Please try again in a moment.</p>')
         return _shell(biz, site, "Sermons", body, tab="sermons", who=who)
     titles = _titles(lib)
@@ -127,11 +126,20 @@ def render_library(biz, site, who, lib: Optional[Dict[str, Any]], series_id: str
 <div style="margin-top:8px">{ui.poster(series_id, pal, titles[series_id], count, tag="div", title_tag="h1")}</div>
 {f'<p class="mb-text" style="margin-top:14px">{_e(about)}</p>' if about else ''}
 <h2 class="mp-sect">Messages</h2>
-{f'<ul class="mb-list">{rows}</ul>' if rows else '<p class="mp-muted">No messages in this series are posted yet.</p>'}"""
+{f'<ul class="mb-list mb-cards">{rows}</ul>' if rows else '<p class="mp-muted">No messages in this series are posted yet.</p>'}"""
         return _shell(biz, site, titles[series_id], body, tab="sermons", who=who)
     if not lib["sermons"]:
-        body = ('<h1>Sermons</h1><div class="mp-card"><p class="mp-muted">No messages are posted yet. '
-                'When the church posts one, it shows up here.</p></div>')
+        # Nothing posted yet: a designed page with something useful on
+        # it, never an empty list.
+        import member_portal_bible as mpb
+        church = _e(biz.get("name") or "the church")
+        body = (f'<div class="mb-lt"><h1>Sermons</h1></div>'
+                f'<section class="mb-soon">{ui.gen_art("S")}<div class="mb-soon-in"><span class="mb-kick">Coming soon</span>'
+                f'<h2>Messages are on the way</h2><p>No messages are posted yet. When {church} posts one, it shows up here, '
+                f'ready to watch or listen, with the scripture and notes.</p></div></section>'
+                f'<div class="mb-pair"><a class="mp-go" href="/my/live">{ui.icon("live", 16)}Watch live</a>'
+                f'<a class="mp-go mp-go-2" href="/my/bible">{ui.icon("book", 16)}Open the Bible</a></div>'
+                f'{mpb.verse_card(bible)}')
         return _shell(biz, site, "Sermons", body, tab="sermons", who=who)
     by_series: Dict[str, List[Dict[str, Any]]] = {}
     loose: List[Dict[str, Any]] = []
@@ -144,12 +152,12 @@ def render_library(biz, site, who, lib: Optional[Dict[str, Any]], series_id: str
                   f'{len(by_series[sid])} message{"" if len(by_series[sid]) == 1 else "s"}{" · Now" if i == 0 else ""}',
                   tag="a", cls="mb-tall", attrs=f'href="/my/sermons?series={_e(sid)}"')
         for i, sid in enumerate(order))
-    parts = ['<h1>Sermons</h1>', latest_card(lib, pal)]
+    parts = ['<div class="mb-lt"><h1>Sermons</h1></div>', latest_card(lib, pal)]
     if shelf:
         parts.append(f'<h2 class="mp-sect">All series</h2><div class="mb-shelf">{shelf}</div>')
     if loose:
         parts.append(f'<h2 class="mp-sect">{"More messages" if shelf else "All messages"}</h2>'
-                     f'<ul class="mb-list">{"".join(_row(s, lib, pal) for s in loose)}</ul>')
+                     f'<ul class="mb-list mb-cards">{"".join(_row(s, lib, pal) for s in loose)}</ul>')
     return _shell(biz, site, "Sermons", "".join(parts), tab="sermons", who=who)
 
 
