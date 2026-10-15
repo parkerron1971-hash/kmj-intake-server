@@ -54,6 +54,11 @@ BASES: Dict[str, Dict[str, Any]] = {
               "fg": "#0b0b0c", "fg2": "#55555c", "fg3": "#6b6b72", "dark": False},
 }
 BASE_LABELS = {"black": "Black", "charcoal": "Dark gray", "gray": "Light gray", "white": "White"}
+# Kids (member_spaces_kids): cream, warm ink, an orange accent; sunshine,
+# sky, coral, grass and grape in its pieces. Not a base a church picks.
+KIDS_BASE: Dict[str, Any] = {"bg": "#fff8ec", "s1": "#ffffff", "s2": "#fbefd9", "s3": "#f0dfbd", "line": "#f1e3c7",
+                             "fg": "#2b1d0e", "fg2": "#65533f", "fg3": "#7a6650", "dark": False}
+KIDS_ACCENT = "#f28c28"
 DEFAULT_BASE = "black"
 
 TABS = (
@@ -79,6 +84,17 @@ YOUTH_TABS = (
 )
 YOUTH_TAB_OF = {"home": "home", "watch": "watch", "sermons": "watch", "live": "watch", "bible": "bible",
                 "messages": "chats", "chats": "chats", "groups": "crew", "connect": "crew", "crew": "crew"}
+# Kids' bar (member_spaces_kids): its stories, its Sundays and the family.
+# A leader who isn't a parent gets the first three, Home called Room.
+KIDS_TABS = (
+    ("home", "/my", "Kids", '<path d="m12 2.5 2.9 5.9 6.6 1-4.8 4.6 1.1 6.5L12 17.4l-5.9 3.1 1.1-6.5-4.8-4.6 6.6-1z"/>'),
+    TABS[1],
+    ("stories", "/my/kids/stories", "Stories", TABS[2][3]),
+    ("sundays", "/my/kids/sundays", "Sundays", '<rect x="3" y="4" width="18" height="18" rx="3"/><path d="M16 2v4M8 2v4M3 10h18"/>'),
+    ("family", "/my/kids/family", "Family", TABS[4][3]),
+)
+KIDS_TAB_OF = {"home": "home", "watch": "watch", "sermons": "watch", "live": "watch", "stories": "stories",
+               "sundays": "sundays", "family": "family"}
 # Which tab a page belongs under.
 TAB_OF = {"home": "home", "watch": "watch", "sermons": "watch", "live": "watch", "bible": "bible",
           "give": "give", "connect": "connect", "groups": "connect", "messages": "connect"}
@@ -118,6 +134,7 @@ ICONS = {
     "out": '<path d="M7 17 17 7M8 7h9v9"/>',
     "home": '<path d="M3 21h18M5 21V8l7-5 7 5v13"/><path d="M10 21v-6h4v6"/>',
     "down": '<path d="m6 9 6 6 6-6"/>',
+    "star": '<path d="m12 2.5 2.9 5.9 6.6 1-4.8 4.6 1.1 6.5L12 17.4l-5.9 3.1 1.1-6.5-4.8-4.6 6.6-1z"/>',
     "camera": '<path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3z"/><circle cx="12" cy="13" r="3.5"/>',
 }
 
@@ -188,9 +205,12 @@ def palette(biz: Dict[str, Any], theme: Dict[str, Any], space: str = "church") -
     if space == "youth":
         import member_spaces
         name, brand = "black", member_spaces.youth_colour(biz)
+        b = BASES[name]
+    elif space == "kids":
+        name, brand, b = "kids", KIDS_ACCENT, KIDS_BASE
     else:
         name, brand = base_of(biz), None
-    b = BASES[name]
+        b = BASES[name]
     bg, dark = b["bg"], b["dark"]
     brand = brand or brand_colour(biz, theme) or ("#e8e8ec" if dark else "#1c1c1e")
     fill = brand
@@ -327,11 +347,19 @@ def segmented(items: Tuple[Tuple[str, str, str], ...], current: str, label: str)
     return f'<nav class="mb-seg" aria-label="{escape(label)}">{"".join(out)}</nav>'
 
 
-def nav(active: Optional[str], *, give: bool = True, space: str = "church") -> str:
+def nav(active: Optional[str], *, give: bool = True, space: str = "church", kids_parent: bool = True) -> str:
     """The tab bar. Give is always there (Kevin, 2026-10-15): before the
     church takes gifts in the app, it says how to give
-    (member_portal.render_give_off). Youth has its own bar."""
-    tabs, of = (YOUTH_TABS, YOUTH_TAB_OF) if space == "youth" else (TABS, TAB_OF)
+    (member_portal.render_give_off). Youth and Kids have their own bars;
+    a Kids leader who isn't a parent gets Room, Watch and Stories."""
+    if space == "youth":
+        tabs, of = YOUTH_TABS, YOUTH_TAB_OF
+    elif space == "kids":
+        tabs, of = KIDS_TABS, KIDS_TAB_OF
+        if not kids_parent:
+            tabs = ((tabs[0][0], tabs[0][1], "Room", tabs[0][3]),) + tabs[1:3]
+    else:
+        tabs, of = TABS, TAB_OF
     cur_tab = of.get(active or "", "")
     items = []
     for key, href, label, paths in tabs:
@@ -349,7 +377,8 @@ def nav(active: Optional[str], *, give: bool = True, space: str = "church") -> s
 FONTS = ('<link rel="preconnect" href="https://fonts.googleapis.com">'
          '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'
          '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400..800'
-         '&amp;family=Newsreader:ital,opsz,wght@0,6..72,400..600;1,6..72,400..600&amp;display=swap">')
+         '&amp;family=Newsreader:ital,opsz,wght@0,6..72,400..600;1,6..72,400..600'
+         '&amp;family=Fredoka:wght@500..700&amp;display=swap">')
 
 # The bar at the top turns solid once the page scrolls under it, and the
 # page's title moves into it when the large title has scrolled away.
@@ -902,6 +931,8 @@ def css(biz: Dict[str, Any], theme: Dict[str, Any], space: str = "church") -> st
     out = _CSS.substitute(tokens) + _SPACES_CSS.substitute(tokens)
     if space == "youth":
         out += _YOUTH_CSS.substitute(tokens)
+    elif space == "kids":
+        out += _KIDS_CSS.substitute(tokens)
     return out
 
 
@@ -987,4 +1018,150 @@ body.sp-youth{--hot:$hot;}
 .y-talk{margin-top:12px;}
 .sp-youth .mb-tab[aria-current]{color:var(--acc);}
 @media (prefers-reduced-motion:reduce){.y-hero{transform:none;}}
+""")
+
+# Kids (member_spaces_kids): a cream base, sunshine and sky, Fredoka for
+# the big words (Kevin approved the concept 2026-10-15). Kids mode is the
+# child's own screen: sky blue, big tiles, no bar, a hold-to-leave button.
+_KIDS_CSS = Template("""
+body.sp-kids{--k-sun:#ffc83d;--k-sky:#4cc3ff;--k-coral:#ff6b6b;--k-grass:#3cc47c;--k-grape:#7c5cff;--k-ink:#2b1d0e;--k-skyink:#0a6f9e;}
+.sp-kids h1,.sp-kids h2,.sp-kids h3,.sp-kids .mb-lt h1,.sp-kids .mb-sh h2,.sp-kids .mb-top-t{font-family:"Fredoka",var(--mb-ui);letter-spacing:-.01em;}
+.sp-kids .mb-lt h1{font-weight:700;}
+.k-hello{font-size:38px;font-weight:700;line-height:1.02;margin:6px 0 14px;}
+.k-hello span{color:var(--acc);}
+.k-h2{font-size:22px;font-weight:700;margin:22px 0 10px;}
+.k-chips{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 16px;}
+.k-chip{display:inline-flex;align-items:center;gap:8px;height:46px;padding:0 16px 0 6px;border-radius:999px;background:var(--s1);
+  border:2px solid var(--s3);font-weight:650;font-size:15px;}
+.k-dot{width:36px;height:36px;border-radius:50%;display:grid;place-items:center;font-family:"Fredoka",var(--mb-ui);font-weight:700;
+  font-size:16px;color:#fff;flex:none;}
+.k-c0{background:var(--k-coral);}.k-c1{background:var(--k-grass);}.k-c2{background:var(--k-grape);}
+.k-c3{background:var(--k-sky);color:#08304a;}.k-c4{background:#f28c28;}
+.k-pass{position:relative;isolation:isolate;overflow:hidden;border-radius:28px;background:var(--k-sun);color:var(--k-ink);padding:20px;margin:0 0 14px;}
+.k-pass::after{content:"";position:absolute;z-index:-1;right:-70px;top:-70px;width:200px;height:200px;border-radius:50%;background:rgba(255,255,255,.3);}
+.k-kick{margin:0;font-size:12px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;}
+.k-sky{color:var(--k-skyink);}
+.k-pass h2{font-size:28px;font-weight:700;margin:6px 0 4px;}
+.k-pass p{margin:0;font-size:14.5px;line-height:1.45;}
+.k-pass .k-when{font-weight:700;margin-bottom:6px;}
+.k-code{display:flex;gap:8px;margin:12px 0 10px;}
+.k-code b{width:58px;height:70px;border-radius:16px;background:#fff;display:grid;place-items:center;font-family:"Fredoka",var(--mb-ui);
+  font-size:40px;font-weight:700;color:var(--k-ink);box-shadow:0 3px 0 rgba(43,29,14,.12);}
+.k-in{list-style:none;margin:14px 0 0;padding:6px 14px;border-radius:18px;background:#fff;}
+.k-in li{display:flex;justify-content:space-between;gap:10px;padding:8px 0;font-size:14.5px;}
+.k-in li+li{border-top:1px solid #f3e6cc;}
+.k-in li span{color:#65533f;text-align:right;}
+.k-card{display:block;border-radius:24px;background:var(--s1);padding:18px;margin:0 0 14px;box-shadow:0 2px 0 var(--s3);color:var(--fg);text-decoration:none;}
+.k-card h3{font-size:24px;font-weight:700;margin:4px 0 6px;}
+.k-body{margin:0;font-size:15.5px;line-height:1.5;color:var(--fg);white-space:pre-line;}
+.k-ref{color:var(--fg2);white-space:nowrap;}
+.k-verse{margin:14px 0 4px;padding:14px 16px;border-radius:16px;background:#fdf0d9;font-family:"Newsreader",Georgia,serif;font-style:italic;
+  font-size:19px;line-height:1.35;color:var(--k-ink);}
+.k-verse cite{display:block;margin-top:6px;font-family:var(--mb-ui);font-style:normal;font-size:13px;color:#65533f;}
+.k-sub{margin:14px 0 4px;font-weight:700;font-size:15px;}
+.k-qs{margin:0;padding-left:22px;font-size:15px;line-height:1.55;}
+.k-link{display:inline-flex;margin-top:12px;font-weight:700;color:var(--acc);}
+.k-play{display:flex;align-items:center;gap:14px;padding:18px;border-radius:24px;background:var(--k-sky);color:#08304a;text-decoration:none;
+  margin:0 0 14px;box-shadow:0 4px 0 #2aa3dd;}
+.k-play .mb-ic{flex:none;}
+.k-play b{display:block;font-family:"Fredoka",var(--mb-ui);font-size:23px;font-weight:700;}
+.k-play small{display:block;font-size:13.5px;line-height:1.35;}
+.k-band{display:flex;align-items:center;gap:10px;padding:14px 18px;border-radius:20px;background:#dcf5e6;color:#17663b;margin:0 0 12px;font-size:15px;}
+.k-band b{margin-left:auto;font-family:"Fredoka",var(--mb-ui);font-size:20px;}
+.k-roster{border-radius:24px;background:var(--s1);overflow:hidden;margin:0 0 6px;box-shadow:0 2px 0 var(--s3);}
+.k-row{display:flex;align-items:center;gap:12px;padding:12px 16px;}
+.k-row+.k-row{border-top:1px solid var(--line);}
+.k-row>span:not(.k-dot):not(.k-flag){min-width:0;}
+.k-row b{display:block;font-size:16px;}
+.k-row small{display:block;font-size:13px;color:var(--fg2);}
+.k-flag{margin-left:auto;padding:5px 10px;border-radius:999px;font-size:12.5px;font-weight:700;font-style:normal;max-width:48%;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap;flex:none;}
+.k-allergy{background:#ffe1e1;color:#a3191f;}
+.k-ready{background:#dcf5e6;color:#17663b;}
+.k-office{background:#fff0c7;color:#7a4e00;}
+.k-gone{background:var(--s2);color:var(--fg2);}
+.k-empty{margin:4px 0 14px;padding:16px;border-radius:20px;background:var(--s1);color:var(--fg2);font-size:14.5px;}
+.k-pick{display:flex;gap:10px;margin:0 0 16px;}
+.k-pick .mp-input{flex:1;min-width:0;text-transform:uppercase;letter-spacing:.24em;font-weight:700;font-size:20px;background:var(--s1);}
+.k-pick .mp-input::placeholder{text-transform:none;letter-spacing:normal;font-weight:500;font-size:16px;}
+.k-btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:52px;padding:0 22px;border:0;border-radius:16px;
+  background:var(--k-ink);color:#fff;font:inherit;font-weight:700;font-size:16px;cursor:pointer;text-decoration:none;}
+.k-form{display:flex;flex-direction:column;gap:8px;padding:18px;border-radius:24px;background:var(--s1);margin:0 0 16px;box-shadow:0 2px 0 var(--s3);}
+.k-form>label{font-size:13.5px;font-weight:700;color:var(--fg2);margin-top:4px;}
+.k-form .mp-input{background:var(--bg);}
+.k-form .k-btn{align-self:flex-start;margin-top:6px;}
+.k-fine{font-size:13px;color:var(--fg2);margin:8px 0 0;line-height:1.45;}
+.k-who{display:flex;flex-direction:column;gap:8px;margin:8px 0 4px;}
+.k-who label{display:flex;align-items:center;gap:12px;min-height:52px;padding:8px 14px;border-radius:14px;background:var(--s2);font-size:15.5px;color:var(--fg);}
+.k-who label span{color:var(--fg2);font-size:13.5px;}
+.k-who input{width:22px;height:22px;accent-color:var(--k-ink);flex:none;}
+.k-who .k-flag{max-width:40%;}
+.k-safe{display:flex;gap:10px;align-items:flex-start;margin:16px 0 0;padding:12px 14px;border-radius:14px;background:#fff3d6;font-size:13px;color:var(--fg);}
+.k-safe .mb-ic{color:#9a6200;flex:none;margin-top:1px;}
+.k-stop{background:#ffe1e1;}
+.k-stop .mb-ic{color:#a3191f;}
+.k-day{margin:0 0 12px;padding:14px 16px;border-radius:20px;background:var(--s1);}
+.k-day h2{font-size:17px;font-weight:700;margin:0 0 6px;}
+.k-day ul,.k-list{list-style:none;margin:0;padding:0;}
+.k-day li,.k-list li{display:flex;justify-content:space-between;gap:12px;padding:7px 0;font-size:14.5px;}
+.k-day li span,.k-list li span{color:var(--fg2);text-align:right;}
+.k-list{padding:6px 16px;border-radius:20px;background:var(--s1);}
+.k-list li+li{border-top:1px solid var(--line);}
+.k-kid{display:flex;gap:14px;align-items:flex-start;}
+.k-kid h3{font-size:21px;margin:2px 0 0;}
+.k-kid .k-fine{margin:2px 0 0;}
+.k-al{margin:10px 0 0;display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:14.5px;}
+.k-al .k-flag{margin:0;max-width:none;}
+.sp-kids .mb-tab[aria-current]{color:var(--acc);}
+.sp-kids .mp-flash{border-radius:16px;}
+
+/* Kids mode: the child's screen */
+body.k-mode{background:#4cc3ff;color:#0b2540;}
+body.k-mode .mp-foot{display:none;}
+.k-mode main.mp-shell{padding:calc(18px + env(safe-area-inset-top,0px)) 20px calc(110px + env(safe-area-inset-bottom,0px));}
+.k-mode-in{position:relative;isolation:isolate;}
+.k-mode-in::before{content:"";position:fixed;z-index:-1;right:-90px;top:-90px;width:260px;height:260px;border-radius:50%;background:#ffc83d;}
+.k-mode-in::after{content:"";position:fixed;z-index:-1;left:-80px;bottom:120px;width:180px;height:180px;border-radius:50%;background:#ff6b6b;opacity:.9;}
+.k-stars{display:inline-flex;align-items:center;gap:6px;height:42px;padding:0 18px;border-radius:999px;background:#fff;margin:0;
+  font-family:"Fredoka",var(--mb-ui);font-weight:700;font-size:17px;color:#0b2540;}
+.k-stars span:first-child{color:#f2a100;}
+.k-mode h1{font-family:"Fredoka",var(--mb-ui);font-size:48px;font-weight:700;color:#fff;margin:16px 0 2px;letter-spacing:-.01em;
+  text-shadow:0 3px 0 rgba(8,48,74,.18);text-transform:none;}
+.k-lead{margin:0;font-size:17px;font-weight:600;color:#0b2540;}
+.k-tiles{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:20px;}
+.k-tile{min-height:156px;border:0;border-radius:28px;padding:18px;text-align:left;display:flex;flex-direction:column;justify-content:flex-end;gap:4px;
+  color:#fff;font:inherit;box-shadow:0 6px 0 rgba(8,48,74,.18);cursor:pointer;text-decoration:none;}
+.k-tile.wide{grid-column:1/-1;min-height:140px;}
+.k-tile b{font-family:"Fredoka",var(--mb-ui);font-size:23px;font-weight:700;line-height:1.05;}
+.k-tile small{font-size:13.5px;font-weight:600;opacity:.92;}
+.k-coral{background:#ff6b6b;}.k-grass{background:#2fb36e;}.k-grape{background:#7c5cff;}.k-sun{background:#ffc83d;color:#2b1d0e;}
+.k-panel{margin-top:18px;padding:20px;border-radius:28px;background:#fff;color:#2b1d0e;box-shadow:0 6px 0 rgba(8,48,74,.18);}
+.k-panel h2{font-family:"Fredoka",var(--mb-ui);font-size:28px;font-weight:700;margin:10px 0 10px;}
+.k-back{border:0;background:#eef7fd;color:#0b2540;border-radius:999px;min-height:44px;padding:0 18px;font:inherit;font-weight:700;font-size:16px;cursor:pointer;}
+.k-tell{font-size:21px;line-height:1.5;margin:0 0 16px;}
+.k-big{display:flex;align-items:center;justify-content:center;width:100%;min-height:60px;border:0;border-radius:20px;background:#ff6b6b;color:#fff;
+  font-family:"Fredoka",var(--mb-ui);font-size:21px;font-weight:700;cursor:pointer;box-shadow:0 4px 0 #d94b4b;}
+.k-versegame{font-family:"Fredoka",var(--mb-ui);font-size:26px;line-height:1.5;margin:0 0 6px;}
+.k-blank{color:#2fb36e;}
+.k-blank.done{color:#2b1d0e;background:#dcf5e6;border-radius:8px;padding:0 4px;}
+.k-panel cite{display:block;font-style:normal;font-size:14px;color:#65533f;margin-bottom:14px;}
+.k-chipset{display:flex;flex-wrap:wrap;gap:10px;margin:8px 0 0;}
+.k-wchip{min-height:52px;padding:0 18px;border:0;border-radius:16px;background:#ffc83d;color:#2b1d0e;font-family:"Fredoka",var(--mb-ui);
+  font-size:21px;font-weight:700;cursor:pointer;box-shadow:0 4px 0 #e0a800;}
+.k-wchip:disabled{opacity:.3;box-shadow:none;}
+.k-wchip.no{animation:k-shake .35s;}
+@keyframes k-shake{25%{transform:translateX(-6px);}75%{transform:translateX(6px);}}
+.k-yay{font-family:"Fredoka",var(--mb-ui);font-size:26px;font-weight:700;color:#2fb36e;margin:16px 0 0;}
+.k-canvas{display:block;width:100%;aspect-ratio:4/3;border-radius:20px;background:#fff;border:3px dashed #cfe9f8;touch-action:none;}
+.k-crayons{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin:12px 0;}
+.k-crayon{width:44px;height:44px;border-radius:50%;border:3px solid #fff;box-shadow:0 0 0 2px #e6e0d6;cursor:pointer;}
+.k-crayon[aria-pressed=true]{box-shadow:0 0 0 3px #2b1d0e;}
+.k-clear{margin-left:auto;border:0;background:#f3efe8;color:#2b1d0e;border-radius:999px;min-height:44px;padding:0 16px;font:inherit;font-weight:700;cursor:pointer;}
+.k-hold{position:fixed;left:50%;bottom:calc(18px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);z-index:50;overflow:hidden;
+  border:0;border-radius:999px;min-height:48px;padding:0 22px;background:#0b2540;color:#fff;font:inherit;font-weight:700;font-size:14.5px;
+  white-space:nowrap;cursor:pointer;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;touch-action:none;}
+.k-hold span{position:relative;z-index:1;}
+.k-hold::before{content:"";position:absolute;inset:0;width:0;background:#ff6b6b;}
+.k-hold.on::before{width:100%;transition:width 3s linear;}
+@media (prefers-reduced-motion:reduce){.k-wchip.no{animation:none;}}
 """)

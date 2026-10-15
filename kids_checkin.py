@@ -317,7 +317,10 @@ def do_lookup(biz: str, entry: Dict[str, Any], raw_code: str, manager: bool) -> 
 
 
 def do_release(biz: str, entry: Dict[str, Any], raw_code: str, checkin_ids: List[str], released_to: str,
-               manager: bool, by_user: Optional[str]) -> Dict[str, Any]:
+               manager: bool, by_user: Optional[str], by_contact: Optional[str] = None) -> Dict[str, Any]:
+    """`by_user` is a team login; `by_contact` an approved Kids leader
+    releasing from the member app (member_spaces_kids), recorded as
+    released_by_contact."""
     code = _code(raw_code)
     waiting = {str(r["id"]): r for r in _waiting(biz, entry["id"], code)}
     ids = [_uuid(i, "check-in") for i in checkin_ids]
@@ -335,7 +338,8 @@ def do_release(biz: str, entry: Dict[str, Any], raw_code: str, checkin_ids: List
     rows = sb_clients.sb_patch_as_service(
         f"/child_checkins?business_id=eq.{biz}&entry_id=eq.{entry['id']}&code=eq.{code}"
         f"&id=in.({_in(ids)})&checked_out_at=is.null",
-        {"checked_out_at": _now(), "checked_out_by": by_user, "released_to": to})
+        {"checked_out_at": _now(), "checked_out_by": by_user, "released_to": to,
+         **({"released_by_contact": by_contact} if by_contact else {})})
     if rows is None:
         raise HTTPException(503, "That didn't save. Nobody was released — try again.")
     if len(rows) != len(ids):
