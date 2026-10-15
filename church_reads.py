@@ -12,6 +12,9 @@ desk and Chief can ask the same question and get the same answer.
                                     stopped coming
     services(business_id)           who came to each recent service, in
                                     person and online
+    care_request_counts(business_id)
+                                    the Prayer & care inbox alone, as
+                                    numbers only (callers gate it)
     care_counts(business_id)        the care inbox and children's check-in
                                     as numbers only (callers gate it)
 
@@ -378,23 +381,29 @@ def services(business_id: str, *, weeks: int = SERVICE_WINDOW_WEEKS,
 
 # ─── care and children (counts only) ─────────────────────────────────
 
-def care_counts(business_id: str, *, now: Optional[datetime] = None
-                ) -> Optional[Dict[str, Any]]:
-    """The Prayer & care inbox and children's check-in as NUMBERS.
+# How far back the care numbers look. A request older than this is out of
+# every count, the oldest-waiting one included.
+CARE_WINDOW_DAYS = 90
 
-    Never a request's words, a requester's name or a child's name: this
-    feeds Chief, and Chief writes drafts. The caller decides who may see
-    even this much (owner or manager).
+
+def care_request_counts(business_id: str, *, now: Optional[datetime] = None
+                        ) -> Optional[Dict[str, Any]]:
+    """The Prayer & care inbox as NUMBERS, and nothing else.
+
+        {new, reviewed, closed, prayed, oldest_new_days}
+
+    Reads status and two timestamps per request; never the submission, a
+    name, a contact or an id. No children's data. None when the read
+    failed. The caller decides who may see even this much (owner or
+    manager): the Operate overview's card through GET /church/care-counts,
+    and Chief through care_counts below.
     """
     now = now or datetime.now(timezone.utc)
     biz = str(business_id)
     reqs = _get(f"/ministry_care_requests?business_id=eq.{biz}"
-                f"&created_at=gte.{_iso(now - timedelta(days=90))}"
+                f"&created_at=gte.{_iso(now - timedelta(days=CARE_WINDOW_DAYS))}"
                 "&select=status,created_at,prayed_at&limit=5000")
-    kids = _get(f"/child_checkins?business_id=eq.{biz}"
-                f"&checked_in_at=gte.{_iso(now - timedelta(weeks=SERVICE_WINDOW_WEEKS))}"
-                "&select=entry_id,checked_in_at&limit=20000")
-    if reqs is None or kids is None:
+    if reqs is None:
         return None
     by_status = {"new": 0, "reviewed": 0, "closed": 0}
     oldest_new: Optional[datetime] = None
@@ -407,14 +416,35 @@ def care_counts(business_id: str, *, now: Optional[datetime] = None
         at = _parse(r.get("created_at"))
         if st == "new" and at and (oldest_new is None or at < oldest_new):
             oldest_new = at
+    return {**by_status, "prayed": prayed,
+            "oldest_new_days": (now - oldest_new).days if oldest_new else None}
+
+
+def care_counts(business_id: str, *, now: Optional[datetime] = None
+                ) -> Optional[Dict[str, Any]]:
+    """The Prayer & care inbox and children's check-in as NUMBERS.
+
+    Never a request's words, a requester's name or a child's name: this
+    feeds Chief, and Chief writes drafts. The caller decides who may see
+    even this much (owner or manager).
+    """
+    now = now or datetime.now(timezone.utc)
+    biz = str(business_id)
+    # Both reads run, in this order, whether or not the first one failed,
+    # as they did before the care half became its own function.
+    care = care_request_counts(biz, now=now)
+    kids = _get(f"/child_checkins?business_id=eq.{biz}"
+                f"&checked_in_at=gte.{_iso(now - timedelta(weeks=SERVICE_WINDOW_WEEKS))}"
+                "&select=entry_id,checked_in_at&limit=20000")
+    if care is None or kids is None:
+        return None
     per_day: Dict[str, int] = {}
     for k in kids:
         at = _parse(k.get("checked_in_at"))
         if at:
             per_day[at.date().isoformat()] = per_day.get(at.date().isoformat(), 0) + 1
     return {
-        "care": {**by_status, "prayed": prayed,
-                 "oldest_new_days": (now - oldest_new).days if oldest_new else None},
+        "care": care,
         "children_checked_in": [{"date": d, "children": n}
                                 for d, n in sorted(per_day.items(), reverse=True)],
     }
