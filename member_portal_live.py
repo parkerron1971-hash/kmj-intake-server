@@ -82,13 +82,23 @@ def render_live(biz, site, request: Request, me: Dict[str, Any], cur: Optional[D
         body = '<h1>Live</h1><p class="mp-err" role="alert">Live couldn\'t load just now. Please try again in a moment.</p>'
         return _shell(biz, site, "Live", body, tab="live", who=me)
     if not cur:
+        # Between services: a designed screen (the church's photo or its
+        # art), then what's next, the latest message, the verse, prayer.
+        import member_app_photos as photos
+        import member_portal as mp
+        import member_portal_bible as mpb
         nxt = mpc.next_card(occasions)
-        body = f"""<h1>Live</h1>{flash}
-<div class="mp-card mb-offair"><span class="mb-live-dot mb-off" aria-hidden="true"></span>
-  <span><strong>No service is live right now.</strong><br><span class="mp-muted">When the church goes live, it plays right here, with the chat.</span></span></div>
+        pool = photos.photos(biz, site)
+        pic = photos.pick(pool, "live", avoid=photos.hero(pool))
+        art = ui.photo(pic) if pic else ui.gen_art("Live")
+        church = _e(biz.get("name") or "the church")
+        body = f"""<section class="mb-offair">{art}<div><span class="mb-kick">Live</span><h1>Between services</h1>
+<p class="mp-muted" style="margin:0"><strong>No service is live right now.</strong> When {church} goes live, it plays right here, with a chat for the church.</p></div></section>
+{flash}
 {('<h2 class="mp-sect">Next service</h2>' + nxt) if nxt else ''}
 {mps.latest_card(library, palette_for(biz, site))}
-<a class="mb-prayer-link" href="/my/prayer">{ui.icon('lock', 18)}<span>Need prayer? Send it privately to the pastor.</span>{ui.icon('chevron', 16)}</a>"""
+{mpb.verse_card(mpb.prefs(request)[0])}
+{mp.prayer_card()}"""
         return _shell(biz, site, "Live", body, tab="live", who=me)
     src = lr.stream_embed(cur.get("stream_url") or "")
     if src:
@@ -113,7 +123,7 @@ def render_live(biz, site, request: Request, me: Dict[str, Any], cur: Optional[D
                    '<label class="mp-sr" for="mb-say">Message</label>'
                    '<input class="mp-input" id="mb-say" name="body" maxlength="500" autocomplete="off" '
                    'placeholder="Say something kind…" required>'
-                   f'<button class="mp-go" type="submit" aria-label="Send">{ui.icon("chevron", 18)}</button></form>'
+                   f'<button class="mp-go" type="submit" aria-label="Send">{ui.icon("send", 18)}</button></form>'
                    '<p class="mb-chat-err mp-err" id="mb-chat-err" role="alert" hidden></p>')
     empty = '' if rows else '<li class="mb-chat-empty mp-muted">No messages yet. Say hello.</li>'
     body = f"""<div class="mb-player">{player}</div>
@@ -121,7 +131,7 @@ def render_live(biz, site, request: Request, me: Dict[str, Any], cur: Optional[D
   <h1 style="margin:6px 0 0">{_e(cur.get('title'))}</h1></div>
 {flash}
 <div class="mb-live-actions">{here_html}
-  <a class="mp-go mp-go-2" href="/my/prayer">{ui.icon('lock', 16)}Ask for prayer</a></div>
+  <a class="mp-go mp-go-2" href="/my/prayer">{ui.icon('pray', 16)}Ask for prayer</a></div>
 <h2 class="mp-sect">Chat</h2>
 <ul class="mb-chat" id="mb-chat" aria-live="polite" aria-label="Chat">{''.join(_bubble(m) for m in rows)}{empty}</ul>
 {compose}"""

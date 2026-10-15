@@ -367,20 +367,20 @@ def render_inbox(biz, site, request, me, rows, requests, family, groups_open) ->
         return (f'<li><a href="/my/messages/{_e(r["id"])}"><span class="mb-thumb mb-chat-av">{icon}</span>'
                 f'<span class="mb-list-text"><strong>{_e(r["title"])}</strong><span>{_e(r["preview"])}</span></span>{badge}</a></li>')
     req = "".join(row(r) for r in requests)
-    body = [f"<h1>Messages</h1>{mpc._flash(request)}"]
+    body = [f'<div class="mb-lt"><h1>Messages</h1></div>{mpc._flash(request)}']
     if req:
-        body.append(f'<h2 class="mp-sect">Requests</h2><ul class="mb-list">{req}</ul>')
+        body.append(f'<h2 class="mp-sect">Requests</h2><ul class="mb-list mb-cards">{req}</ul>')
     body.append('<h2 class="mp-sect">Chats</h2>')
-    body.append(f'<ul class="mb-list">{"".join(row(r) for r in rows)}</ul>' if rows else
+    body.append(f'<ul class="mb-list mb-cards">{"".join(row(r) for r in rows)}</ul>' if rows else
                 '<div class="mp-card"><p class="mp-muted" style="margin:0">No chats yet. Open one from a group, '
                 'or start one with someone below.</p></div>')
     if groups_open:
-        body.append('<h2 class="mp-sect">Start a chat</h2><ul class="mb-list">' + "".join(
+        body.append('<h2 class="mp-sect">Start a chat</h2><ul class="mb-list mb-cards">' + "".join(
             f'<li><a href="/my/messages/to/{_e(p["id"])}"><span class="mb-thumb mb-chat-av">{_e(ui.initials(p["name"]))}</span>'
             f'<span class="mb-list-text"><strong>{_e(first_and_initial(p["name"]))}</strong><span>{_e(p["why"])}</span></span>'
             f'{ui.icon("chevron", 16)}</a></li>' for p in groups_open) + '</ul>')
     if family:
-        body.append('<h2 class="mp-sect">Your teens</h2><ul class="mb-list">' + "".join(
+        body.append('<h2 class="mp-sect">Your teens</h2><ul class="mb-list mb-cards">' + "".join(
             f'<li><a href="/my/messages/family/{_e(t["id"])}"><span class="mb-thumb mb-chat-av">{_e(ui.initials(t["name"]))}</span>'
             f'<span class="mb-list-text"><strong>{_e(t["name"])}</strong><span>Read their chats</span></span>{ui.icon("chevron", 16)}</a></li>'
             for t in family) + '</ul>')
@@ -429,7 +429,7 @@ def render_chat(biz, site, request, me, t, acc, msgs, looks, *, title: str, view
             compose = (f'<form class="mb-compose" method="post" action="/my/messages/{_e(t["id"])}/send" id="mb-compose">'
                        '<label class="mp-sr" for="mb-say">Message</label>'
                        f'<input class="mp-input" id="mb-say" name="body" maxlength="{BODY_MAX}" autocomplete="off" placeholder="Write a message…" required>'
-                       f'<button class="mp-go" type="submit" aria-label="Send">{ui.icon("chevron", 18)}</button></form>'
+                       f'<button class="mp-go" type="submit" aria-label="Send">{ui.icon("send", 18)}</button></form>'
                        '<p class="mb-chat-err mp-err" id="mb-chat-err" role="alert" hidden></p>')
         else:
             reason = {"two_adults": "This chat opens once two adult leaders of the group can message.",
@@ -443,16 +443,18 @@ def render_chat(biz, site, request, me, t, acc, msgs, looks, *, title: str, view
             actions += (f'<div class="mb-chat-tools"><form method="post" action="/my/messages/{_e(t["id"])}/block">'
                         f'<button class="mp-link" type="submit">Block {_e(first_and_initial(acc["other"]["name"]))}</button></form></div>')
     script = _poll_script(t["id"], len(msgs)) if not parent else ""
-    return _shell(biz, site, title, f"""<a class="mb-back" href="/my/messages">{ui.icon('back', 16)}Messages</a>
+    # A chat fills the screen and its box sits at the foot, so the tab
+    # bar steps aside (bar=False); Back returns to Messages.
+    return _shell(biz, site, title, f"""<div class="mb-thread"><a class="mb-back" href="/my/messages">{ui.icon('back', 16)}Messages</a>
 <h1 style="margin-top:6px">{_e(title)}</h1>{mpc._flash(request)}{note}
 <ul class="mb-chat" id="mb-chat" aria-live="polite" aria-label="Messages">{body_msgs}</ul>
-{actions}{compose}""", tab="me", who=me, script=script)
+{actions}{compose}</div>""", tab="me", who=me, script=script, bar=False)
 
 
 def _poll_script(tid: str, count: int) -> str:
     """Send without leaving the page; reload when something new arrives."""
     return f"""<script>(function(){{var box=document.getElementById('mb-chat'),f=document.getElementById('mb-compose'),
-err=document.getElementById('mb-chat-err'),n={json.dumps(count)};if(box)box.scrollTop=box.scrollHeight;
+err=document.getElementById('mb-chat-err'),n={json.dumps(count)};if(box){{box.scrollTop=box.scrollHeight;window.scrollTo(0,document.documentElement.scrollHeight);}}
 function poll(){{fetch('/my/messages/feed/{tid}',{{credentials:'same-origin',headers:{{'Accept':'application/json'}}}})
 .then(function(r){{return r.json();}}).then(function(d){{if(d&&typeof d.count==='number'&&d.count!==n)location.reload();}}).catch(function(){{}});}}
 setInterval(poll,{POLL_MS});
@@ -714,7 +716,7 @@ def _family_page(request, biz, site, me, teen_id: str):
     return _shell(biz, site, "Messages", f"""<a class="mb-back" href="/my/messages">{ui.icon('back', 16)}Messages</a>
 <h1>{_e(teen['name'])}'s chats</h1>
 <p class="mp-muted">As their linked parent you can read all of {_e(teen['name'].split(' ')[0])}'s chats. They're told you can.</p>
-<ul class="mb-list">{items}</ul>""", tab="me", who=me), 200
+<ul class="mb-list mb-cards">{items}</ul>""", tab="me", who=me), 200
 
 
 def _feed(business_id: str, me_id: str, tid: str) -> Dict[str, Any]:

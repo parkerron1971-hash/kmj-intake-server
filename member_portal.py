@@ -529,17 +529,24 @@ def palette_for(biz: Dict[str, Any], site: Optional[Dict[str, Any]]) -> Dict[str
 
 def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
            body: str, *, script: str = "", tab: Optional[str] = None,
-           who: Optional[Dict[str, Any]] = None) -> str:
+           who: Optional[Dict[str, Any]] = None, bare: bool = False, bar: bool = True) -> str:
     """Every member page. Signed-in pages pass `tab` (the bottom bar's
     current tab) and `who` (their avatar, which opens Me); the sign-in
-    pages pass neither and get no bar. The look is member_app_ui's."""
+    pages pass neither and get no bar. `bare` leaves the header out (the
+    sign-in pages, whose photo carries the church's name); `bar=False`
+    keeps the header but drops the tab bar (a chat, whose box sits at the
+    foot of the screen). The look is member_app_ui's."""
     import member_app_ui as ui
     import member_app_install as mai
+    import member_app_photos as photos
     from public_form_theme import resolve_theme, css_vars, font_links
     theme = resolve_theme(biz, site)
     name = (biz.get("name") or "").strip() or "Your church"
     logo = theme.get("logo_url") or ""
     mark = f'<img src="{_e(logo)}" alt="">' if logo else _e(ui.initials(name))
+    word = "" if logo else photos.wordmark(site)
+    brand = (f'<img class="mb-wordmark" src="{_e(word)}" alt="{_e(name)}">' if word else
+             f'<span class="mb-mark" aria-hidden="true">{mark}</span><p class="mp-church">{_e(name)}</p>')
     # Me lives on the profile picture (Kevin, 10/02: the Bible took a tab).
     here = ' aria-current="page"' if tab == "me" else ""
     avatar = (f'<a class="mb-avatar mp-noprint" href="/my/me" aria-label="Me"{here}>{_e(ui.initials(who.get("name")))}</a>'
@@ -561,17 +568,19 @@ def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
 <meta name="theme-color" content="{ui.palette(biz, theme)['ground']}">
 {mai.head_tags(biz)}
 <title>{_e(title)} — {_e(name)}</title>
+{ui.FONTS}
 {font_links(theme)}
 <style>{css_vars(theme)}</style>
 <style>{ui.css(biz, theme)}</style>
 </head>
 <body>
-<main class="mp-shell{' mb-has-nav' if signed_in else ''}">
-  <header class="mb-top"><span class="mb-brand"><span class="mb-mark" aria-hidden="true">{mark}</span><p class="mp-church">{_e(name)}</p></span><span class="mb-top-right">{give}{chat}{avatar}</span></header>
+{'' if bare else f'<header class="mb-top"><a class="mb-brand" href="/my">{brand}</a><span class="mb-top-right">{give}{chat}{avatar}</span></header>'}
+<main class="mp-shell{' mb-has-nav' if signed_in and bar else ''}{' mb-bare' if bare else ''}">
   {body}
   <footer class="mp-foot mp-noprint">Your page at {_e(name)} · Powered by Solutionist</footer>
 </main>
-{ui.nav(tab) if signed_in else ''}
+{ui.nav(tab) if signed_in and bar else ''}
+{'' if bare else ui.SCROLL_JS}
 {script}
 {mai.REGISTER_JS}
 </body>
@@ -592,27 +601,44 @@ If you're already signed in on another phone or computer, you're still in there.
 <p class="mp-muted">Ask the church office when it's back on.</p></div>""")
 
 
+def _welcome_art(biz: Dict[str, Any], site) -> str:
+    """The sign-in screen's top: the church's own photo (or art made from
+    its colours) with its logo, or its name when there's no logo that
+    reads on the dark app."""
+    import member_app_ui as ui
+    import member_app_photos as photos
+    name = (biz.get("name") or "").strip() or "Your church"
+    pic = photos.welcome(photos.photos(biz, site))
+    art = ui.photo(pic, eager=True) if pic else ui.gen_art(name)
+    word = photos.wordmark(site)
+    brand = (f'<img class="mb-si-logo" src="{_e(word)}" alt="{_e(name)}">' if word else
+             f'<p class="mb-si-name">{_e(name)}</p>')
+    return f'<section class="mb-si">{art}{brand}<h1>Welcome<br>home.</h1></section>'
+
+
 def render_signin(biz: Dict[str, Any], site=None, *, error: str = "", email: str = "") -> str:
     err = f'<p class="mp-err" role="alert">{_e(error)}</p>' if error else ""
     return _shell(biz, site, "Sign in", f"""
-<h1>Welcome</h1>
-<p class="mp-muted">Your page at {_e(biz.get('name') or 'the church')}: messages, your groups, what's coming up and your giving.
-Sign in with the email or mobile number the church has for you. We'll send a 6-digit code — there's no password to remember.</p>
-<form class="mp-card mp-form" method="post" action="/my/code">
+{_welcome_art(biz, site)}
+<p class="mp-muted" style="margin-top:12px">Your page at {_e(biz.get('name') or 'the church')}: messages, your groups, what's coming up and your giving.
+Sign in with the email or mobile number the church has for you. We'll send a 6-digit code. There's no password to remember.</p>
+<form class="mp-form" method="post" action="/my/code">
   <label for="mp-email">Email or mobile number</label>
   <input class="mp-input" id="mp-email" name="email" type="text" autocomplete="username" autocapitalize="off" spellcheck="false" required value="{_e(email)}">
   {err}
   <button class="mp-go" type="submit">Send my code</button>
-</form>""")
+</form>""", bare=True)
 
 
 def render_code(biz: Dict[str, Any], site=None, *, email: str, error: str = "") -> str:
+    import member_app_ui as ui
     err = f'<p class="mp-err" role="alert">{_e(error)}</p>' if error else ""
     texted = is_phone(email)
     return _shell(biz, site, "Enter your code", f"""
-<h1>Check your {'texts' if texted else 'email'}</h1>
+<a class="mb-back" href="/my" style="margin-top:calc(12px + env(safe-area-inset-top,0px))">{ui.icon('back', 16)}Back</a>
+<h1 class="mb-hello" style="margin:14px 0 12px">Check your {'texts' if texted else 'email'}</h1>
 <p class="mp-muted">If <strong>{_e(show_ident(email))}</strong> is on {_e(biz.get('name') or 'the church')}'s list, a 6-digit code is on its way{' by text' if texted else ''}. It works for 10 minutes.</p>
-<form class="mp-card mp-form" method="post" action="/my/verify">
+<form class="mp-form" method="post" action="/my/verify">
   <input type="hidden" name="email" value="{_e(email)}">
   <label for="mp-code">6-digit code</label>
   <input class="mp-input mp-code" id="mp-code" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]*" maxlength="7" required autofocus>
@@ -621,10 +647,10 @@ def render_code(biz: Dict[str, Any], site=None, *, email: str, error: str = "") 
 </form>
 <form method="post" action="/my/code" class="mp-noprint">
   <input type="hidden" name="email" value="{_e(email)}">
-  <p class="mp-muted">Nothing arrived? {'Give it a minute' if texted else 'Check spam'}, or <button class="mp-link" type="submit">send a new code</button>.
+  <p class="mp-muted" style="margin-top:14px">Nothing arrived? {'Give it a minute' if texted else 'Check spam'}, or <button class="mp-link" type="submit">send a new code</button>.
   Still nothing? Ask the church office which {'number' if texted else 'email'} they have for you.</p>
 </form>
-<p class="mp-muted"><a href="/my">Use a different email or number</a></p>""")
+<p class="mp-muted"><a href="/my">Use a different email or number</a></p>""", bare=True)
 
 
 def render_try_again(biz: Dict[str, Any], site=None) -> str:
@@ -657,50 +683,77 @@ anyone who reads it can see each of these people's giving. Choose yourself.</p>
 def _live_card(live: Dict[str, Any]) -> str:
     """While the church is live: the one thing Home leads with."""
     import member_app_ui as ui
-    return (f'<a class="mb-next mb-live-now" href="/my/live"><span class="mb-live-badge"><span class="mb-live-dot" '
-            f'aria-hidden="true"></span>Live now</span><span class="mb-what"><strong>{_e(live.get("title"))}</strong>'
+    return (f'<a class="mb-next mb-live-now" href="/my/live"><span class="mb-what"><span class="mb-live-badge">'
+            f'<span class="mb-live-dot" aria-hidden="true"></span>Live now</span><strong>{_e(live.get("title"))}</strong>'
             f'<span>Watch and chat with your church</span></span>{ui.icon("chevron", 18)}</a>')
+
+
+def prayer_card() -> str:
+    import member_app_ui as ui
+    return (f'<a class="mb-pray" href="/my/prayer"><span class="mb-pray-ic">{ui.icon("pray", 22)}</span>'
+            f'<span><strong>How can we pray for you?</strong><span>It goes privately to the pastor.</span></span></a>')
 
 
 def render_home(biz: Dict[str, Any], site, *, me: Dict[str, Any], occasions, groups, library,
                 give_url: str, flash: str = "", live: Optional[Dict[str, Any]] = None,
-                reading: str = "") -> str:
-    """Home: a greeting with the date, the next gathering (or, while the
-    church is live, a Live now card), four quick ways in (Give is the one
-    filled button), the latest message, this person's week, then what
-    they haven't answered yet. The greeting and date are set by the
-    phone's own clock (the server can't know the member's time of day);
-    without script it reads "Hi, Ana"."""
+                reading: str = "", bible: str = "kjv", where: Optional[Tuple[str, int]] = None) -> str:
+    """Home (Kevin approved the phone design 2026-10-14): the church's own
+    photo with the greeting written on it, the next gathering (or, while
+    the church is live, a Live now card) in a glass card over the photo's
+    foot, quick ways in (Give is the one filled button), the verse of the
+    day, the reading plan or a chapter to read, the latest message, this
+    person's week, what they haven't answered yet, and prayer.
+
+    Nothing here ever says "nothing yet": a block with nothing in it is
+    left out, and the verse, the Bible and prayer always have something.
+    The greeting and date are set by the phone's own clock (the server
+    can't know the member's time of day); without script it reads
+    "Hi, Ana"."""
     import member_app_ui as ui
+    import member_app_photos as photos
+    import member_portal_bible as mpb
     import member_portal_church as mpc
     import member_portal_sermons as mps
     import member_app_install as mai
     import member_push
     pal = palette_for(biz, site)
+    pool = photos.photos(biz, site)
+    hero_pic = photos.hero(pool)
     hello = first_name(me.get("name") or "") or "there"
+    lead = _live_card(live) if live else mpc.next_card(occasions)
+    art = ui.photo(hero_pic, eager=True) if hero_pic else ui.gen_art(biz.get("name") or "")
+    has_events = bool(occasions)
+    has_groups = bool(groups and (groups.get("mine") or groups.get("open")))
     quick = []
     if give_url:
-        quick.append(f'<a class="mb-main" href="{_e(give_url)}"><span>{ui.icon("heart")}</span>Give</a>')
-    quick.append(f'<a href="/my/prayer"><span>{ui.icon("lock")}</span>Prayer</a>')
-    quick.append(f'<a href="/my/events"><span>{ui.icon("calendar")}</span>Events</a>')
-    quick.append(f'<a href="/my/groups"><span>{ui.icon("users")}</span>Groups</a>')
+        quick.append(f'<a class="mb-main" href="{_e(give_url)}"><span>{ui.icon("heart", 22)}</span>Give</a>')
+    quick.append(f'<a href="/my/prayer"><span>{ui.icon("pray", 22)}</span>Prayer</a>')
+    quick.append(f'<a href="/my/events"><span>{ui.icon("calendar", 22)}</span>Events</a>' if has_events else
+                 f'<a href="/my/bible"><span>{ui.icon("book", 22)}</span>Bible</a>')
+    quick.append(f'<a href="/my/groups"><span>{ui.icon("users", 22)}</span>Groups</a>' if has_groups else
+                 f'<a href="/my/live"><span>{ui.icon("live", 22)}</span>Live</a>')
     script = """<script>(function(){var d=new Date(),h=d.getHours();
 var g=h<12?'Good morning':(h<17?'Good afternoon':'Good evening');
 var t=document.querySelector('.mb-date');if(t){t.textContent=d.toLocaleDateString(undefined,{weekday:'long',month:'long',day:'numeric'});}
-var e=document.querySelector('[data-first]');if(e){e.textContent='';e.append(g+',',document.createElement('br'),e.getAttribute('data-first'));}
+var e=document.querySelector('[data-first]');if(e){e.textContent='';e.append(g+',',document.createElement('br'),e.getAttribute('data-first')+'.');}
 })();</script>"""
+    first = (occasions or [{}])[0].get("entry_id") if lead and not live else ""
+    read = reading or ('<h2 class="mp-sect">Read today</h2>' + mpb.continue_card(where, bible))
+    coming = mpc.coming_up(occasions, skip=str(first or "")) if occasions != [] else ""
     return _shell(biz, site, "Home", f"""
-<p class="mb-date" aria-hidden="true"></p>
-<h1 class="mb-hello" data-first="{_e(hello)}">Hi, {_e(hello)}</h1>
-{flash}
-{_live_card(live) if live else mpc.next_card(occasions)}
+<section class="mb-hero{' mb-over' if lead else ''}">{art}<div class="mb-hero-in"><p class="mb-date" aria-hidden="true"></p>
+<h1 class="mb-hello" data-first="{_e(hello)}">Hi, {_e(hello)}</h1></div></section>
+{lead}
 <nav class="mb-quick" aria-label="Quick actions">{''.join(quick)}</nav>
-{reading}
+{flash}
+{mpb.verse_card(bible)}
+{read}
 {mai.install_card(biz.get('name') or '')}
 {member_push.home_card(biz)}
 {mps.latest_card(library, pal)}
-{mpc.week_cards(occasions, groups)}
-{mpc.coming_up(occasions)}""", tab="home", who=me, script=script)
+{mpc.week_cards(occasions, groups, pal=pal, pool=pool, avoid=hero_pic)}
+{coming}
+{prayer_card()}""", tab="home", who=me, script=script)
 
 
 def _month_bars(gifts: List[Dict[str, Any]], year: int, this_year: int) -> str:
@@ -775,7 +828,7 @@ def render_me(biz: Dict[str, Any], site, *, me: Dict[str, Any], people: List[Dic
   {manage}
 </section>
 <h2 class="mp-sect">My church life</h2>
-<ul class="mb-list">
+<ul class="mb-list mb-cards">
   {link('/my/events', 'calendar', 'Coming up', 'Say you&#x27;re coming, or sign up to serve')}
   {link('/my/groups', 'users', 'My groups', 'Your groups, and ones you can join')}
   {link('/my/prayer', 'lock', 'Prayer', 'A private request to the pastor')}
@@ -988,11 +1041,12 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
     if sub == "/my/sermons" or sub.startswith("/my/sermons/"):
         lib = await asyncio.to_thread(mps.load_library, biz["id"])
         rest = sub[len("/my/sermons"):].strip("/")
+        import member_portal_bible as mpb
         if not rest:
             series = str(request.query_params.get("series") or "")
-            return _page(mps.render_library(biz, site, me, lib, series if UUID_RE.match(series) else ""),
+            return _page(mps.render_library(biz, site, me, lib, series if UUID_RE.match(series) else "",
+                                            bible=mpb.prefs(request)[0]),
                          200 if lib is not None else 503)
-        import member_portal_bible as mpb
         page = (mps.render_sermon(biz, site, me, lib, rest, give_url, bible=mpb.prefs(request)[0])
                 if UUID_RE.match(rest) else None)
         if page is None:
@@ -1024,9 +1078,11 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
     today = rp.today_for(biz)
     done = (await asyncio.to_thread(rp.read_days, biz["id"], me["id"], rp.current(biz))
             if today else None)
+    import member_portal_bible as mpb
+    bible, where = mpb.prefs(request)
     return _page(render_home(biz, site, me=me, occasions=occ, groups=groups, library=lib,
                              give_url=give_url, flash=mpc._flash(request) or mpr._flash(request),
-                             live=live, reading=mpr.home_card(today, done)))
+                             live=live, reading=mpr.home_card(today, done), bible=bible, where=where))
 
 
 # ─── POST ────────────────────────────────────────────────────────────

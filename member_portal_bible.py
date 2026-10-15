@@ -16,6 +16,7 @@ scriptures link here (member_portal_sermons.py).
 from __future__ import annotations
 
 import re
+from datetime import date
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import quote
 
@@ -92,6 +93,67 @@ def _range(raw: str, last: int) -> Optional[Tuple[int, int]]:
     return a, max(a, min(b, last))
 
 
+# ─── the verse of the day (Home, and Sermons and Live when they're empty) ──
+# One a day for every member, from a fixed list of well-loved verses, so
+# Home always has something worth reading on day one. The date picks it.
+
+VERSES = (
+    "1 John 4:19", "Psalm 118:24", "Lamentations 3:22-23", "Isaiah 40:31", "Philippians 4:6-7",
+    "Proverbs 3:5-6", "Romans 8:28", "Joshua 1:9", "Matthew 11:28", "John 3:16", "Psalm 23:1",
+    "Jeremiah 29:11", "2 Corinthians 5:17", "Galatians 2:20", "Ephesians 2:8-9", "Hebrews 11:1",
+    "Psalm 46:1", "Isaiah 41:10", "Romans 12:2", "Micah 6:8", "John 14:27", "Psalm 37:4",
+    "Matthew 5:14", "1 Peter 5:7", "James 1:5", "Psalm 119:105", "Romans 15:13", "Colossians 3:23",
+    "Zephaniah 3:17", "John 15:5", "Psalm 34:8", "2 Timothy 1:7", "Hebrews 13:8", "Matthew 6:33",
+    "Psalm 139:14", "Romans 5:8", "Nehemiah 8:10", "Psalm 27:1", "Isaiah 26:3", "John 8:12",
+    "Galatians 5:22-23", "Psalm 121:1-2", "Proverbs 16:3", "Ephesians 3:20", "John 10:10",
+    "Psalm 51:10", "1 Thessalonians 5:16-18", "Psalm 91:1", "Matthew 28:20", "Isaiah 43:2",
+    "Deuteronomy 31:8", "Psalm 16:11", "John 11:25", "Colossians 3:15", "Psalm 100:4",
+    "2 Corinthians 12:9", "1 John 1:9", "Revelation 21:4", "Romans 8:38-39", "Psalm 145:18",
+)
+
+
+def verse_of_day(tr: str, today: Optional[date] = None) -> Optional[Dict[str, str]]:
+    """{'html', 'label', 'href'} for today's verse in this translation, or
+    None when none of the list can be read (the card is then left out)."""
+    today = today or date.today()
+    for i in range(len(VERSES)):
+        refs = bt.find_refs(VERSES[(today.toordinal() + i) % len(VERSES)], tr)
+        if not refs:
+            continue
+        ref = refs[0][2]
+        found = bt.verses(ref, tr)
+        if not found:
+            continue
+        return {"html": " ".join(_verse_html(t, tr) for _, _, t in found),
+                "label": ref.label(), "href": f"{ref.href()}#v{ref.start or 1}"}
+    return None
+
+
+def verse_card(tr: str, today: Optional[date] = None) -> str:
+    import member_app_ui as ui
+    from member_portal import _e
+    v = verse_of_day(tr, today)
+    if not v:
+        return ""
+    return (f'<section class="mb-verse" aria-labelledby="mb-verse-h"><span class="mb-kick" id="mb-verse-h">Verse of the day</span>'
+            f'<blockquote>{v["html"]}</blockquote><div class="mb-verse-foot"><span>{_e(v["label"])} · '
+            f'{_e(bt.TRANSLATIONS[tr]["short"])}</span><a href="{_e(v["href"])}">Read the chapter{ui.icon("chevron", 14)}</a>'
+            f'</div></section>')
+
+
+def continue_card(where: Optional[Tuple[str, int]], tr: str) -> str:
+    """Keep reading where they stopped, or a first chapter to start with."""
+    import member_app_ui as ui
+    from member_portal import _e
+    code, ch = where if where else ("JOH", 1)
+    title = f"Keep reading {where_label(code, ch)}" if where else "Start with John 1"
+    sub = (f"Pick up where you stopped · {bt.TRANSLATIONS[tr]['short']}" if where
+           else "A good first book. About five minutes a chapter.")
+    return (f'<a class="mb-reading-card" href="/my/bible/{bt.slug(code)}/{ch}"><span class="mb-book" aria-hidden="true">'
+            f'{_e(bt.NAME[code][:1])}</span><span class="mb-list-text"><strong>{_e(title)}</strong><span>{_e(sub)}</span></span>'
+            f'{ui.icon("chevron", 18)}</a>')
+
+
 def _switch(tr: str, here: str) -> str:
     """KJV | WEB — a plain link per translation, back to this page."""
     from member_portal import _e
@@ -107,12 +169,6 @@ def _switch(tr: str, here: str) -> str:
 def render_home(biz, site, me, tr: str, where, *, query: str = "", missed: bool = False) -> str:
     import member_app_ui as ui
     from member_portal import _e, _shell
-    cont = ""
-    if where:
-        code, ch = where
-        cont = (f'<a class="mb-next bb-cont" href="/my/bible/{bt.slug(code)}/{ch}"><span class="mb-list-text">'
-                f'<span class="mp-sect" style="margin:0">Keep reading</span><strong>{_e(where_label(code, ch))}</strong></span>'
-                f'{ui.icon("chevron", 18)}</a>')
     err = ('<p class="mp-err" role="alert">We couldn\'t find that passage. Try something like John 3:16 or Psalm 23.</p>'
            if missed else "")
 
@@ -120,15 +176,17 @@ def render_home(biz, site, me, tr: str, where, *, query: str = "", missed: bool 
         return "".join(f'<li><a href="/my/bible/{bt.slug(c)}">{_e(bt.NAME[c])}</a></li>' for c in codes)
     old = [c for c, _, _ in bt.BOOKS if c in bt.OLD_TESTAMENT]
     new = [c for c, _, _ in bt.BOOKS if c not in bt.OLD_TESTAMENT]
-    return _shell(biz, site, "Bible", f"""<div class="bb-head"><h1>Bible</h1>{_switch(tr, "/my/bible")}</div>
+    return _shell(biz, site, "Bible", f"""<div class="mb-lt"><h1>Bible</h1>{_switch(tr, "/my/bible")}</div>
 <form class="bb-go" method="get" action="/my/bible" role="search">
   <label class="mp-sr" for="bb-q">Go to a passage</label>
   <input class="mp-input" id="bb-q" name="q" value="{_e(query)}" maxlength="60" placeholder="Go to… John 3:16" autocomplete="off" enterkeyhint="go">
-  <button class="mp-go" type="submit" aria-label="Go">{ui.icon("chevron", 18)}</button>
+  <button class="mp-go" type="submit" aria-label="Go">{ui.icon("search", 18)}</button>
 </form>{err}
-{cont}
-<h2 class="mp-sect">Old Testament</h2><ul class="bb-books">{books(old)}</ul>
+{verse_card(tr)}
+<h2 class="mp-sect">{'Keep reading' if where else 'Start here'}</h2>
+{continue_card(where, tr)}
 <h2 class="mp-sect">New Testament</h2><ul class="bb-books">{books(new)}</ul>
+<h2 class="mp-sect">Old Testament</h2><ul class="bb-books">{books(old)}</ul>
 <p class="mp-muted bb-src">{_e(bt.TRANSLATIONS[tr]["name"])} · public domain</p>""", tab="bible", who=me)
 
 
