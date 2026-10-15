@@ -56,6 +56,9 @@ DONE = {
     "photo_removed": "Your photo is removed.",
     "posted": "Posted to Youth.",
     "post_removed": "Your post is removed.",
+    "released": "Released. They're on their way home.",
+    "lesson_posted": "Lesson posted. Parents see it now.",
+    "lesson_removed": "Your lesson is removed.",
     "joined": "You're in. The group's leader will see you on the list.",
     "left": "You've left that group.",
     "here": "Thanks for joining us. You're counted as here today.",
@@ -94,6 +97,10 @@ ERRORS = {
     "empty_post": "Write your post first.",
     "post_no": "That post can't go out as written. Change it, or talk to the church office.",
     "post_busy": "Posts can't be checked just now, so nothing went out. Please try again in a minute.",
+    "not_kids_leader": "Only Kids leaders the church office approved can do that.",
+    "lesson_incomplete": "Add a title and what they learned.",
+    "lesson_link": "A video link has to start with https://",
+    "lesson_room": "Choose one of the rooms you lead.",
     "not_live": "The service isn't live right now.",
     "chat_closed": "The chat is closed right now.",
     "muted": "The host has paused your chat for this service.",
@@ -879,7 +886,8 @@ async def _signed_in(request: Request):
 
 def _back(target: str, **q: str) -> RedirectResponse:
     from member_portal import _SECURE_HEADERS
-    allowed = ("/my", "/my/me", "/my/events", "/my/prayer", "/my/details", "/my/groups", "/my/live", "/my/messages")
+    allowed = ("/my", "/my/me", "/my/events", "/my/prayer", "/my/details", "/my/groups", "/my/live", "/my/messages",
+               "/my/kids/stories", "/my/kids/sundays", "/my/kids/family")
     if target not in allowed and not re.fullmatch(r"/my/(groups/live|messages)/[0-9a-f-]{36}", target):
         target = "/my"
     qs = "&".join(f"{k}={v}" for k, v in q.items())

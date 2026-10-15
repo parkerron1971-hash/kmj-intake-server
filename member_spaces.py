@@ -52,10 +52,10 @@ SPACES = ("church", "youth", "kids")
 COOKIE = "sol_space"
 POST_MAX = 600
 YOUTH_DEFAULT_COLOUR = "#d4ff3a"
+# The Kids space (member_spaces_kids): a parent's family, the Sunday
+# pass, Kids mode, and a Kids leader's room. On since its pages shipped.
+KIDS_READY = True
 # Events and groups that read as Youth's.
-# The Kids space arrives in the next change (its pages, check-in pass and
-# Kids mode); until then the switcher offers Church and Youth.
-KIDS_READY = False
 YOUTH_RE = re.compile(r"\b(youth|teens?|students?|next ?gen|middle school|high school)\b", re.I)
 
 # The page being drawn: its space ('church' | 'youth' | 'kids') and who
