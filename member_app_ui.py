@@ -109,6 +109,7 @@ ICONS = {
     "out": '<path d="M7 17 17 7M8 7h9v9"/>',
     "home": '<path d="M3 21h18M5 21V8l7-5 7 5v13"/><path d="M10 21v-6h4v6"/>',
     "down": '<path d="m6 9 6 6 6-6"/>',
+    "camera": '<path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3z"/><circle cx="12" cy="13" r="3.5"/>',
 }
 
 
@@ -394,6 +395,8 @@ p{line-height:1.5;margin:0 0 12px;}
 .mb-avatar{width:40px;height:40px;flex:none;border-radius:50%;display:grid;place-items:center;font-weight:650;font-size:14px;
   text-decoration:none;color:var(--fg);background:var(--s2);letter-spacing:-.01em;}
 .mb-avatar[aria-current]{box-shadow:0 0 0 2px var(--bg),0 0 0 4px var(--acc);}
+.mb-avatar img,.mb-chat-av img,.mb-msg-av img{width:100%;height:100%;object-fit:cover;border-radius:50%;display:block;}
+.mb-avatar.has-photo,.mb-msg-av.has-photo{background:var(--s2);overflow:hidden;}
 .mb-back{display:inline-flex;align-items:center;gap:2px;min-height:44px;margin-left:-8px;padding-right:8px;color:var(--acc);text-decoration:none;
   font-size:17px;letter-spacing:-.015em;}
 .mb-back .mb-ic{width:24px;height:24px;}
@@ -690,6 +693,9 @@ label{font-size:14px;font-weight:600;color:var(--fg2);}
 .mb-host .mb-msg-who{color:var(--acc);}
 .mb-msg-body{font-size:16px;line-height:1.35;overflow-wrap:anywhere;}
 .mb-msg-held{font-size:12px;font-style:italic;opacity:.85;}
+.mb-msg.has-av{position:relative;margin-left:38px;}
+.mb-msg-av{position:absolute;left:-38px;bottom:0;width:30px;height:30px;border-radius:50%;display:grid;place-items:center;
+  font-size:11px;font-weight:650;background:var(--s2);color:var(--fg);}
 .mb-chat-empty{align-self:center;margin:auto 0;font-size:14px;}
 .mb-compose{display:flex;gap:8px;margin-top:10px;align-items:center;}
 .mb-compose .mp-input{flex:1;min-width:0;min-height:44px;border-radius:22px;padding:0 18px;background:var(--bg);box-shadow:inset 0 0 0 1px var(--line);}
@@ -800,6 +806,12 @@ label{font-size:14px;font-weight:600;color:var(--fg2);}
 .mb-profile .mb-avatar{width:88px;height:88px;font-size:30px;font-weight:650;background:var(--acc-fill);color:var(--on-acc);box-shadow:none;}
 .mb-profile h1{font-size:26px;margin:14px 0 2px;}
 .mb-profile .mp-muted{font-size:14.5px;}
+.mb-photo{margin:0;}
+.mb-photo-pick{position:relative;display:block;cursor:pointer;border-radius:50%;}
+.mb-photo-pick:focus-within{outline:2px solid var(--focus);outline-offset:4px;}
+.mb-photo-badge{position:absolute;right:-2px;bottom:-2px;width:32px;height:32px;border-radius:50%;display:grid;place-items:center;
+  background:var(--fg);color:var(--bg);box-shadow:0 0 0 3px var(--bg);}
+.mb-photo-note{margin:10px 0 2px;font-size:13px;color:var(--fg3);max-width:300px;}
 .mp-total{font-size:34px;font-weight:720;letter-spacing:-.04em;font-variant-numeric:tabular-nums;line-height:1;margin:4px 0 0;}
 .mb-give-card{background:var(--s1);border-radius:var(--r-md);padding:18px;margin-top:24px;}
 .mb-give-top{display:flex;align-items:flex-end;justify-content:space-between;flex-wrap:wrap;gap:12px;}
