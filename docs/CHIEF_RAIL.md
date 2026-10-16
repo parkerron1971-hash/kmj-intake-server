@@ -60,9 +60,14 @@ turns only), on a worker thread:
    - `failed`: neither. A read that did not return every row proves
      nothing, whatever it says.
 6. **Compare** (`compare`) with what Chief said, against a **strict
-   grammar of supported claims**. Every sentence of the reply that carries
-   a figure (an amount or a clock time) must parse whole into claims of a
-   supported shape. Each claim binds its figure to:
+   grammar of supported claims**. Every sentence of the reply must parse
+   whole into claims of a supported shape, or be on a short whitelist of
+   harmless text. The whitelist covers an offer that is a question ("Want me
+   to send reminders?"), "here's the breakdown", "hope that helps". A
+   sentence with no figure is still a claim: "All invoices are paid.",
+   "Maria owes nothing.", "She has cancelled." and "Your calendar is clear"
+   are each checked or kept out of agreement, never skipped. Each claim
+   binds its figure to:
    - a subject: one client, matched in any case against the business's
      whole contact list; "she"/"he" when there is one client in play; or
      the business;
@@ -83,7 +88,17 @@ turns only), on a worker thread:
    - "You have $300 overdue", when nothing is overdue, differs;
    - "Maria paid $100 on INV-0001", when INV-0001 is open, differs;
    - "Maria is next on Saturday, October 18", when Oct 18 is a Sunday,
-     differs, because every part of a day phrase must hold at once.
+     differs, because every part of a day phrase must hold at once;
+   - "$300 across 2 overdue invoices" is an overdue claim: the count keeps
+     its qualifier;
+   - a due date or an age said with a client's total binds only when that
+     total is one invoice, and is unverified otherwise;
+   - a service named for the next session must be its title.
+
+   Supported statements with no figure are checked the same way: "Maria
+   hasn't paid", "Nothing is overdue", "Nobody owes you", "Nothing is booked
+   tomorrow", "Maria has nothing booked". When the rail found nothing, a
+   reply agrees only when such a statement checks out.
 
    **Anything outside the grammar is `unverified`, never agreement.** That
    covers "each", "both", "respectively", "except", "isn't booked", "was due
@@ -97,11 +112,16 @@ turns only), on a worker thread:
 
    The tests hold this as a property.
    `test_no_false_reply_is_ever_scored_as_agreement` and its calendar twin
-   generate 3,789 replies across client (any case, unknown, pronoun),
+   generate 6,169 replies across client (any case, unknown, pronoun),
    wording, status, amount or time, day (combined weekday and date phrases
-   included) and word order. Not one false reply scores `agrees` or
-   `partial`, and at least 80% of true ones do. Today it is 83 to 90%; the
-   rest are `unverified`.
+   included) and word order. Every true reply is also tried with a sentence
+   after it, in two kinds:
+   - a contradiction ("All invoices are paid.", "Nothing is booked
+     tomorrow."), which must stop agreement;
+   - a harmless offer, which must not.
+
+   Not one false reply scores `agrees` or `partial`, and at least 80% of
+   true ones do. Today it is 83 to 90%; the rest are `unverified`.
 
    The grammar grows from what Chief actually says: the practice rows'
    `unverified` share shows which shapes to add next. A shape is added only

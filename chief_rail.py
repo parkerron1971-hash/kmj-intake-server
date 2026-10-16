@@ -491,7 +491,8 @@ def _compose_schedule(q: Question, rec: Records, tz) -> Answer:
         claims.append({"time": f"{local.hour:02d}:{local.minute:02d}", "client": who or None,
                        "date": local.date().isoformat(), "title": title})
     today = rec.today.isoformat() if rec.today else None
-    facts: Dict[str, Any] = {"claims": claims, "count": len(rec.sessions), "today": today}
+    facts: Dict[str, Any] = {"claims": claims, "count": len(rec.sessions), "today": today,
+                             "client": (rec.contact or {}).get("name")}
     if q.form == "day":
         if len(rec.sessions) > MAX_DAY_SESSIONS:
             raise _Leave("too_long")
@@ -542,11 +543,6 @@ _WALL = re.compile(r"couldn['’]t (?:verify|confirm)|could not (?:verify|confir
 # "$100, then…": a comma after the figure ends it; only ",000" continues it.
 _DOLLARS = re.compile(r"\$\s?(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d{1,2}))?(?!\d|,\d)")
 _CLOCK_SAID = re.compile(r"\b(\d{1,2})(?::(\d{2}))?\s*([ap])\.?\s?m\b\.?|\b(noon|midday)\b", re.I)
-_NONE_SAID = re.compile(
-    r"\b(?:no one|nobody|nothing|none|zero|no (?:open|unpaid|outstanding|overdue|sent|invoices?|"
-    r"sessions?|appointments?|bookings?)|(?:don'?t|do not) (?:have|see) any|(?:aren'?t|are not) any|"
-    r"(?:isn'?t|is not) anything|(?:all|fully) (?:paid|caught up|clear)|clear calendar|"
-    r"calendar is (?:clear|empty|open))\b", re.I)
 _OWES_SAID = re.compile(r"\b(?:still owes?|owes?|owed|owing|has(?:n'?t| not) paid|not (?:yet )?paid|"
                         r"unpaid|outstanding|overdue|balance of|is due)\b", re.I)
 _PAID_SAID = re.compile(r"\b(?:has paid|already paid|paid (?:in full|invoice|on|you|it|that|her|his|their|"
@@ -582,7 +578,8 @@ _WD = r"(?:mon|tues|wednes|thurs|fri|satur|sun)day"
 _DAY = r"(?P<day>today|tomorrow|tonight|(?:on )?(?:" + _WD + r"(?:,? " + _MD + r")?|" + _MD + r"))"
 _DUE = r"(?:,? due (?:on )?(?P<due>" + _MD + r"))"
 _OD = r"(?:,? (?P<od>\d+) days? (?:overdue|late|past due))"
-_CNT = r"(?: (?:across|on|from|over) (?P<cnt>" + _NUMW + r") (?:sent |open |unpaid |outstanding |overdue )*invoices?)"
+_CNT = (r"(?: (?:across|on|from|over) (?P<cnt>" + _NUMW + r") "
+        r"(?P<cntq>(?:sent |open |unpaid |outstanding |overdue )*)invoices?)")
 _TIME = r"(?P<time>\d{1,2}(?::\d{2})? ?(?:am|pm|a\.m\.|p\.m\.)|noon)"
 _TITLE = r"(?P<title>[a-z][a-z' &-]{1,40}?)"
 _LEAD = r"(?:(?:in total|altogether|overall|all told),? )?"
@@ -628,8 +625,29 @@ _MONEY_SHAPES = [(kind, re.compile(_g(rx))) for kind, rx in [
 # them ("Maria hasn't paid, she owes $450").
 _MONEY_STATEMENTS = [(kind, re.compile(_g(rx))) for kind, rx in [
     ("client owed", r"{NAME} (?:still )?(?:hasn't|has not|hasn't yet) paid(?: yet| you)?"),
-    ("business owed", r"(?:neither|nobody|no one|none of them) (?:has|have) paid(?: yet| you)?"),
-    ("business owed", r"nothing (?:has been|was) paid(?: yet)?"),
+    # About payments, which only one of is ever read: never settled here.
+    ("business paid", r"(?:neither|nobody|no one|none of them) (?:has|have) paid(?: yet| you)?"),
+    ("business paid", r"nothing (?:has been|was) paid(?: yet)?"),
+    ("none owed", r"(?:no one|nobody) owes you(?: anything| money)?"),
+    ("none owed", r"you(?:'re| are) (?:not owed anything|owed nothing)"),
+    ("none owed", r"(?:there are|you have) no (?:sent,? )?(?:unpaid|open|outstanding) invoices"),
+    ("none owed", r"nothing is (?:owed|outstanding)"),
+    ("none overdue", r"nothing is overdue"),
+    ("none overdue", r"(?:there are|you have) no overdue invoices"),
+    ("none overdue", r"no invoices? (?:is|are) overdue"),
+    ("none overdue", r"you(?:'re| are) all caught up"),
+    ("client none", r"{NAME} owes (?:you )?nothing"),
+    ("client none", r"{NAME} (?:doesn't|does not) owe (?:you )?anything"),
+    ("client none", r"{NAME} is (?:all )?paid up"),
+    ("client none", r"{NAME} has no (?:open|unpaid|outstanding) invoices"),
+]]
+_SCHEDULE_STATEMENTS = [(kind, re.compile(_g(rx))) for kind, rx in [
+    ("none booked", r"nothing(?:'s| is) (?:booked|scheduled|on (?:your|the) calendar)(?: {DAY})?"),
+    ("none booked", r"you have (?:no (?:sessions|appointments|bookings)|nothing)(?: booked| scheduled)?(?: {DAY})?"),
+    ("none booked", r"(?:your )?calendar is (?:clear|empty|open)(?: {DAY})?"),
+    ("none booked", r"no (?:sessions|appointments|bookings)(?: booked)? {DAY}"),
+    ("client none booked", r"{NAME} has nothing booked(?: ahead)?"),
+    ("client none booked", r"{NAME} (?:isn't|is not) booked(?: ahead)?"),
 ]]
 _SCHEDULE_SHAPES = [(kind, re.compile(_g(rx))) for kind, rx in [
     ("session", r"{NAME} (?:is )?(?:at|@) {TIME}(?: {DAY})?(?: for (?:a |an |the |her |his |their )?{TITLE})?"),
@@ -655,11 +673,29 @@ _LEAD_FILLER = re.compile(
     r"^(?:(?:yes|yeah|yep|no|nope|right|correct|okay|ok|well|not yet|not quite|good news|heads up)[,:!—–-]+\s*|"
     r"(?:so|then|also|plus|and|just|currently|right now|as of today|not yet)\s+)+")
 _TAIL_FILLER = re.compile(r"(?:,?\s+(?:right now|so far|as of today|currently|for now|yet))+$")
-# A part with no figure is a harmless aside only when it says nothing about
-# anyone's money or calendar.
-_RISKY = re.compile(r"\b(?:not|no|never|none|nothing|nobody|except|but|only|each|both|all|every|either|neither|"
-                    r"paid|pay|owe|owes|owed|overdue|due|unpaid|outstanding|booked|cancel\w*|moved|"
-                    r"reschedul\w*|she|he|they|her|him|them)\b|n't\b|\$|\d")
+# The only text that may go unchecked: what asserts nothing about anyone's
+# money or calendar. A whitelist: "All invoices are paid." and "She has
+# cancelled." carry no figure and are still claims.
+_HARMLESS = re.compile(
+    r"(?:here(?:'s| is| are) (?:the |a |your |a quick )?(?:breakdown|summary|rundown|list|update|picture|details|recap)"
+    r"|(?:here's |here is )?where (?:things|it|you) stands?"
+    r"|(?:a )?(?:quick |short )?(?:update|summary|breakdown|rundown|recap)"
+    r"|hope (?:that|this) helps|happy to help|you're welcome|just say the word|good news|great question"
+    r"|let me know if you (?:need|want) anything(?: else)?"
+    r"|not yet|yes|yeah|yep|no|nope|sure|of course|absolutely|got it|okay|ok)")
+# A question that only offers to do something ("Want me to send Tasha a
+# reminder?"), with no figure in it.
+_OFFER = re.compile(r"(?:want me to|would you like(?: me)? to|do you want(?: me)? to|should i|shall i|can i|"
+                    r"could i|need me to|anything else)\b[^$\d]*")
+
+
+def _harmless(sentence: str) -> bool:
+    t = _norm(sentence)
+    if not t:
+        return True
+    if sentence.strip().endswith("?") and _OFFER.fullmatch(t):
+        return True
+    return bool(_HARMLESS.fullmatch(t))
 _NUMWORD = {w: i for i, w in enumerate("zero one two three four five six seven eight nine ten eleven twelve".split())}
 
 
@@ -734,6 +770,8 @@ def _md_iso(text: Optional[str], year: int) -> Optional[Tuple[int, int]]:
 
 def _claim_of(kind: str, m: "re.Match") -> Dict[str, Any]:
     g = m.groupdict()
+    if "overdue" in (g.get("cntq") or "") and kind.endswith(" owed"):
+        kind = kind[:-len(" owed")] + " overdue"     # "...across 2 overdue invoices"
     return {"kind": kind, "name": g.get("name"), "amt": _cents(g["amt"].replace(",", "")) if g.get("amt") else None,
             "inv": _inv_key(g.get("inv")), "cnt": _num(g.get("cnt")), "ccl": _num(g.get("ccl")),
             "due": g.get("due"), "od": int(g["od"]) if g.get("od") else None, "pdate": g.get("pdate"),
@@ -791,7 +829,7 @@ def _one(text: str, shapes, statements, ctx) -> Optional[List[Dict[str, Any]]]:
         m = rx.fullmatch(t)
         if m:
             return [_claim_of(kind, m)]
-    return None if _RISKY.search(t) else []
+    return [] if _HARMLESS.fullmatch(t) else None
 
 
 def _resolve(name: Optional[str], people: Dict[str, set], default: Optional[str]) -> Optional[str]:
@@ -814,6 +852,12 @@ def _check_money(c: Dict[str, Any], L: Dict[str, Any], people, default, year) ->
     """'ok', 'differs' or 'unverified' for one money claim against the read."""
     kind, amt = c["kind"], c["amt"]
     invoices = L["invoices"]
+    if kind == "none owed":
+        return "ok" if L["sent_count"] == 0 else "differs"
+    if kind == "none overdue":
+        return "ok" if L["over_count"] == 0 else "differs"
+    if kind == "business paid":
+        return "unverified"
     if kind == "business owed":
         if amt != L["owed_total"] or (c["cnt"] is not None and c["cnt"] != L["sent_count"]) \
                 or (c["ccl"] is not None and c["ccl"] != len(L["clients"])):
@@ -851,6 +895,10 @@ def _check_money(c: Dict[str, Any], L: Dict[str, Any], people, default, year) ->
     if not covered:
         return "unverified"
     open_ = [i for i in mine if i["status"] == "open"]
+    if kind == "client none":
+        return "differs" if open_ else "ok"
+    if kind == "client owed" and amt is None:       # "Maria hasn't paid"
+        return "ok" if open_ else "differs"
     if kind == "client overdue":
         open_ = [i for i in open_ if i["days_overdue"] > 0]
         totals = L["clients"].get(who, {})
@@ -860,7 +908,14 @@ def _check_money(c: Dict[str, Any], L: Dict[str, Any], people, default, year) ->
         whole = totals.get("owed")
     if amt is not None and amt == whole and not c["inv"]:
         n = totals.get("n_over" if kind == "client overdue" else "n")
-        return "ok" if c["cnt"] is None or c["cnt"] == n else "differs"
+        if c["cnt"] is not None and c["cnt"] != n:
+            return "differs"
+        if c["due"] is None and c["od"] is None:
+            return "ok"
+        # A due date or an age belongs to one invoice. Said with a client's
+        # total, it binds only when that total IS one invoice.
+        if not (len(open_) == 1 and open_[0]["amount"] == amt):
+            return "unverified"
     matches = [i for i in open_ if amt is None or i["amount"] == amt]
     if not matches or (c["cnt"] is not None and c["cnt"] != 1):
         return "differs"
@@ -913,6 +968,12 @@ def _day_dates(text: Optional[str], today: date) -> Optional[set]:
     return dates
 
 
+def _title_fits(said: str, session: Dict[str, Any]) -> bool:
+    """Every word said of the service is a word of the session's title."""
+    words = set(re.findall(r"[a-z]+", said or "")) - {"a", "an", "the", "for", "her", "his", "their"}
+    return words <= set(re.findall(r"[a-z]+", (session.get("title") or "").lower()))
+
+
 def _time24(text: str) -> Optional[str]:
     got = times_said(text or "")
     return got[0] if len(got) == 1 else None
@@ -920,6 +981,20 @@ def _time24(text: str) -> Optional[str]:
 
 def _check_session(c: Dict[str, Any], q: Question, facts: Dict[str, Any], people, default, today) -> str:
     sessions = facts.get("claims") or []
+    if c["kind"] == "none booked":
+        if q.form == "day":
+            days = _day_dates(c.get("day"), today)
+            if days is not None and facts.get("day") not in days:
+                return "unverified"
+            return "ok" if facts.get("count") == 0 else "differs"
+        if c.get("day"):
+            return "unverified"
+        return "ok" if not sessions else "differs"
+    if c["kind"] == "client none booked":
+        who = _resolve(c.get("name"), people, default)
+        if q.form != "client_next" or who is None or who != facts.get("client"):
+            return "unverified"
+        return "ok" if not sessions else "differs"
     if c["kind"] == "count":
         if q.form != "day":
             return "unverified"
@@ -946,6 +1021,8 @@ def _check_session(c: Dict[str, Any], q: Question, facts: Dict[str, Any], people
             return "unverified"
         if who is not None and nxt["client"] != who:
             return "differs"
+        if c.get("title") and not _title_fits(c["title"], nxt):
+            return "unverified"
         c["_session"] = t
         return "ok"
     who = _resolve(c.get("name"), people, default)
@@ -968,10 +1045,8 @@ def _check_session(c: Dict[str, Any], q: Question, facts: Dict[str, Any], people
             return "differs"
     if days is not None and not any(s["date"] in days for s in at):
         return "differs"
-    if c.get("title"):
-        words = set(re.findall(r"[a-z]+", c["title"])) - {"a", "an", "the", "for"}
-        if not any(words <= set(re.findall(r"[a-z]+", (s["title"] or "").lower())) for s in at):
-            return "unverified"
+    if c.get("title") and not any(_title_fits(c["title"], s) for s in at):
+        return "unverified"
     c["_session"] = t
     return "ok"
 
@@ -1012,28 +1087,29 @@ def compare(q: Question, answer: Answer, reply: str) -> Tuple[str, Dict[str, Any
     else:
         names = {s["client"] for s in facts.get("claims") or [] if s.get("client")}
         one = facts.get("claims") or []
-        default = one[0]["client"] if len(one) == 1 else None
+        default = one[0]["client"] if len(one) == 1 else facts.get("client")
     people = _known_people(names | set(facts.get("contacts") or []) | ({default} if default else set()))
-    shapes, statements = (_MONEY_SHAPES, _MONEY_STATEMENTS) if money else (_SCHEDULE_SHAPES, [])
+    shapes, statements = ((_MONEY_SHAPES, _MONEY_STATEMENTS) if money
+                          else (_SCHEDULE_SHAPES, _SCHEDULE_STATEMENTS))
     held: List[str] = []
-    if said and "|" in reply:
+    checked = 0
+    if "|" in reply:
         flag("unverified", "table")
     for sentence in _SENTENCE.split(reply):
-        figures = amounts_said(sentence) if money else times_said(sentence)
-        if not figures:
+        if not sentence.strip() or _harmless(sentence):
             continue
         claims = _parse(sentence, shapes, statements, None, {})
         if claims is None:
             flag("unverified", f"not a supported shape: {_norm(sentence)[:80]}")
             continue
         for c in claims:
-            if money and c["amt"] is None:
-                continue        # a statement with no figure: the yes/no check reads it
             verdict = (_check_money(c, facts.get("ledger") or {}, people, default, today.year) if money
                        else _check_session(c, q, facts, people, default, today))
             if verdict != "ok":
-                flag(verdict, f"{c['kind']} {c.get('amt') or c.get('time') or c.get('cnt')}: {verdict}")
-            elif money:
+                flag(verdict, f"{c['kind']} {c.get('amt') or c.get('time') or c.get('cnt') or ''}: {verdict}")
+                continue
+            checked += 1
+            if money and c["amt"]:
                 held.append(c["amt"])
             elif c.get("_session"):
                 held.append(c["_session"])
@@ -1045,16 +1121,14 @@ def compare(q: Question, answer: Answer, reply: str) -> Tuple[str, Dict[str, Any
             if (pol == "owes" and paid and not owes) or (pol == "paid" and owes and not paid):
                 flag("differs", "yes/no")
     worst = _worst(problems)
-    if answer.empty:
-        if worst:
-            return worst, detail
-        if said:
-            return "differs", detail
-        return ("agrees" if _NONE_SAID.search(reply) else "silent"), detail
     if worst:
         return worst, detail
-    if not said:
-        return "silent", detail
+    if answer.empty:
+        # Nothing to report, and every claim Chief made checked out against
+        # a read that holds nothing ("Nothing is booked tomorrow").
+        return ("agrees" if checked else "silent"), detail
+    if not held:
+        return ("partial" if checked else "silent"), detail
     if money:
         covered = any(set(h) <= set(held) for h in facts.get("headline") or [])
     else:

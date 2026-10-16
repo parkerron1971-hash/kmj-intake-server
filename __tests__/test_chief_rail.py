@@ -250,7 +250,9 @@ def _money_answer(message="How much am I owed?", rows=OPEN, **kw):
 
 @pytest.mark.parametrize("reply, outcome", [
     ("You're owed $1,950 across three invoices, and $1,650 of it is overdue.", "agrees"),
-    ("Tasha owes you $1,200.00, the biggest balance.", "partial"),
+    ("Tasha owes you $1,200.00.", "partial"),
+    # "the biggest balance" is a ranking, not a supported claim.
+    ("Tasha owes you $1,200.00, the biggest balance.", "unverified"),
     ("You're owed $2,100 right now.", "differs"),
     ("I couldn't verify your invoices right now.", "withheld"),
     ("Want me to pull up the invoices page?", "silent"),
@@ -280,6 +282,26 @@ def test_amounts_are_read_however_the_sentence_runs_on():
 # Codex's re-check of bec9df2: Maria owes $100, Tasha $200.
 TWO = [_invoice(51, 100, "sent", "2099-01-01", "Maria Lopez", "c1"),
        _invoice(52, 200, "sent", "2099-01-01", "Tasha Green", "c2")]
+
+
+def _with_tails(replies, bad, good):
+    """Each reply, and each TRUE one again with a sentence after it: one
+    that contradicts the records (then false) or a harmless offer (still
+    true). A figure-free sentence is a claim like any other."""
+    for reply, true in replies:
+        yield reply, true
+        if true:
+            for tail in bad:
+                yield f"{reply} {tail}", False
+            for tail in good:
+                yield f"{reply} {tail}", True
+
+
+MONEY_BAD_TAILS = ["All invoices are paid.", "Maria owes nothing.", "You have 99 invoices.",
+                   "Nothing is outstanding.", "Tasha is all paid up."]
+MONEY_GOOD_TAILS = ["Want me to send reminders?", "Hope that helps!"]
+CALENDAR_BAD_TAILS = ["Nothing is booked tomorrow.", "Your calendar is clear.", "You have 5 appointments tomorrow."]
+CALENDAR_GOOD_TAILS = ["Want me to send a reminder?", "Here's the rundown."]
 
 
 def _sweep_replies():
@@ -327,7 +349,7 @@ def test_no_false_reply_is_ever_scored_as_agreement():
     q, a = _money_answer("How much am I owed?", TWO)
     a.facts["contacts"] = [c["name"] for c in CONTACTS]      # as practice() supplies them
     wrong, true_agreed, true_total = [], 0, 0
-    for reply, true in _sweep_replies():
+    for reply, true in _with_tails(_sweep_replies(), MONEY_BAD_TAILS, MONEY_GOOD_TAILS):
         outcome = rail.compare(q, a, reply)[0]
         if true:
             true_total += 1
@@ -364,6 +386,18 @@ TRUE_CONTROLS = [
 ]
 
 
+NEVER_AGREE += [
+    # A sentence with no figure is still a claim.
+    "You're owed $300. All invoices are paid.", "You're owed $300. Maria owes nothing.",
+    "You're owed $300. You have 99 invoices.", "You're owed $300. Your books are clear.",
+    # A count keeps its qualifier.
+    "You're owed $300 across 2 overdue invoices.", "You're owed $300. Maria owes $100 across 1 overdue invoice.",
+    # A client's total binds no due date or age it doesn't have.
+    "You're owed $300. Maria owes $100, due Jan 2, 99 days overdue.",
+    "You're owed $300. Maria owes $100, 3 days overdue.",
+]
+
+
 @pytest.mark.parametrize("reply", NEVER_AGREE)
 def test_unsupported_or_false_constructions_never_agree(reply):
     q, a = _money_answer("How much am I owed?", TWO)
@@ -392,6 +426,36 @@ def test_a_payment_is_bound_to_its_invoice():
     for reply in ("Maria paid $100 on INV-0009 and still owes $100 on INV-0001.",
                   "Maria paid invoice INV-0009, $100, and still owes $100 on INV-0001."):
         assert rail.compare(q, a, reply)[0] == "agrees", (reply, rail.compare(q, a, reply))
+
+
+def test_a_sentence_with_no_time_is_still_held_to_the_calendar():
+    rec = rail.Records(sessions=SESSIONS[:1], window="next booked", today=TODAY)
+    q, a, _ = _say("When is my next appointment?", rec)
+    a.facts["contacts"] = [c["name"] for c in CONTACTS]
+    for reply in ("Maria is booked at 10am tomorrow. She has cancelled.",
+                  "Maria is booked at 10am tomorrow. Nothing is booked.",
+                  # The title is checked on the next session too.
+                  "Your next appointment is massage with Maria tomorrow at 10am."):
+        assert rail.compare(q, a, reply)[0] not in ("agrees", "partial"), (reply, rail.compare(q, a, reply))
+    assert rail.compare(q, a, "Your next appointment is haircut with Maria tomorrow at 10am.")[0] == "agrees"
+    q, a = _day_answer()
+    a.facts["contacts"] = [c["name"] for c in CONTACTS]
+    assert rail.compare(q, a, "Maria at 10am and Tasha at 12:30pm. You have 3 appointments tomorrow.")[0] == "differs"
+    assert rail.compare(q, a, "Maria at 10am and Tasha at 12:30pm. Want me to send reminders?")[0] == "agrees"
+
+
+def test_nothing_to_report_agrees_only_with_a_checked_none():
+    q, a = _money_answer("Any overdue invoices?", [OPEN[1]])
+    assert a.empty
+    assert rail.compare(q, a, "Nothing is overdue.")[0] == "agrees"
+    assert rail.compare(q, a, "Nothing is overdue. Hope that helps!")[0] == "agrees"
+    assert rail.compare(q, a, "Want me to check again later?")[0] == "silent"
+    assert rail.compare(q, a, "Nothing is overdue. Maria owes nothing.")[0] == "differs"
+    rec = rail.Records(sessions=[], label="tomorrow", window="x", day_iso="2026-10-17", today=TODAY)
+    q, a, _ = _say("What do I have tomorrow?", rec)
+    assert rail.compare(q, a, "Nothing is booked tomorrow.")[0] == "agrees"
+    assert rail.compare(q, a, "Your calendar is clear tomorrow.")[0] == "agrees"
+    assert rail.compare(q, a, "You have two appointments tomorrow.")[0] == "differs"
 
 
 def test_a_booking_said_not_to_be_is_never_agreement():
@@ -435,7 +499,7 @@ def test_no_false_calendar_reply_is_ever_scored_as_agreement(one_session):
         q, a = _day_answer()
     a.facts["contacts"] = [c["name"] for c in CONTACTS]      # as practice() supplies them
     wrong, true_agreed, true_total = [], 0, 0
-    for reply, true in _calendar_sweep(one_session):
+    for reply, true in _with_tails(_calendar_sweep(one_session), CALENDAR_BAD_TAILS, CALENDAR_GOOD_TAILS):
         outcome = rail.compare(q, a, reply)[0]
         if true:
             true_total += 1
@@ -458,17 +522,19 @@ def test_no_false_calendar_reply_is_ever_scored_as_agreement(one_session):
     # Said right, a total said as a total, and names in lower case, agree.
     ("You're owed $300 in total: Maria owes $100 and Tasha owes $200.", "agrees"),
     ("You're owed $300. maria owes $100, tasha owes $200.", "agrees"),
-    ("Neither has paid yet: you're owed $300, Maria $100 and Tasha $200.", "agrees"),
+    ("You're owed $300, Maria $100 and Tasha $200.", "agrees"),
+    # Who has paid is about payments, and only the latest is ever read.
+    ("Neither has paid yet: you're owed $300, Maria $100 and Tasha $200.", "unverified"),
     # Codex's focused re-check of 1fdc2ed.
     # Maria's own total is $100.
     ("Maria owes $300 in total.", "differs"),
     # Paid and owed in one breath: not a supported shape.
     ("You've been paid the outstanding $300.", "unverified"),
     ("You have been paid, $300 across 2 invoices.", "unverified"),
-    # Paid and owed in their own clauses still read right.
-    ("Nothing has been paid yet, you're owed $300: Maria $100 and Tasha $200.", "agrees"),
+    ("Nothing has been paid yet, you're owed $300: Maria $100 and Tasha $200.", "unverified"),
+    ("Nobody has paid, so you're owed $300 in total.", "unverified"),
     # Nothing contradicted, but "who owes me?" wants each client too.
-    ("Nobody has paid, so you're owed $300 in total.", "partial"),
+    ("You're owed $300 in total.", "partial"),
 ])
 def test_a_figure_is_held_to_its_client_and_to_whether_it_was_paid(reply, outcome):
     q, a = _money_answer("Who owes me?", TWO)
@@ -506,7 +572,8 @@ def test_calendar_replies_are_compared_by_time_client_and_day():
     assert rail.compare(q, a, "Maria at 10am and Tasha at 3pm.")[0] == "differs"
     assert rail.compare(q, a, "Tasha at 10am and Maria at 12:30pm.")[0] == "differs"      # swapped
     assert rail.compare(q, a, "You have 3 appointments tomorrow: Maria at 10am, Tasha at 12:30pm.")[0] == "differs"
-    assert rail.compare(q, a, "Your calendar is clear tomorrow.")[0] == "silent"
+    # Two sessions are booked: "clear" is a claim, and a false one.
+    assert rail.compare(q, a, "Your calendar is clear tomorrow.")[0] == "differs"
 
 
 def test_the_next_session_is_held_to_its_client_and_day():
