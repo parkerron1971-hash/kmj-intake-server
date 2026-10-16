@@ -20,6 +20,11 @@ os.environ.setdefault("SITE_V2_VISION_LOOP", "off")
 # only mode in which they can assert anything.
 os.environ.setdefault("LEAD_SCORING_MODE", "off")
 
+# The rail's practice (chief_rail) reads records on a worker thread after
+# every streamed Chief turn. Same rule as lead scoring: off here; its own
+# tests call it directly with the reads faked.
+os.environ.setdefault("CHIEF_RAIL", "off")
+
 
 # Chief's per-turn state lives in contextvars that a real turn resets at
 # its start and that a test which calls the door or the tool loop

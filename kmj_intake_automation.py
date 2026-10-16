@@ -679,6 +679,9 @@ app.include_router(platform_chief_authority_router)
 # Chief's two-track reply: first-token SLO + routing mix (2026-09-25). Owner-only.
 from chief_fast_track import router as chief_routing_router
 app.include_router(chief_routing_router)
+# The rail's practice record: records-only answers vs Chief's, per shelf (2026-10-16). Owner-only.
+from chief_rail import router as chief_rail_router
+app.include_router(chief_rail_router)
 # Time to first audio on a call: the app's per-turn report + the owner's stats (2026-09-25).
 from voice_metrics import router as voice_metrics_router
 app.include_router(voice_metrics_router)
