@@ -412,6 +412,62 @@ def test_plain_true_replies_still_agree(reply):
     assert rail.compare(q, a, reply)[0] == "agrees", rail.compare(q, a, reply)
 
 
+def _balance_answer(rows):
+    q, a = _money_answer("How much does Maria owe me?", rows, contact=MARIA)
+    a.facts["contacts"] = [c["name"] for c in CONTACTS]
+    return q, a
+
+
+def test_a_balance_and_an_invoice_are_never_checked_as_each_other():
+    # Codex's review of f35200e. Two $100 invoices: her balance is $200.
+    q, a = _balance_answer([_invoice(1, 100, "sent", "2099-01-01", "Maria Lopez", "c1"),
+                            _invoice(2, 100, "sent", "2099-01-01", "Maria Lopez", "c1")])
+    for reply in ("Maria's balance is $100.", "Maria owes $100 in total.", "Maria owes $100.",
+                  "Maria owes $100 on INV-0001 and $100 on INV-0001."):     # one invoice, said twice
+        assert rail.compare(q, a, reply)[0] not in ("agrees", "partial"), (reply, rail.compare(q, a, reply))
+    for reply in ("Maria's balance is $200.", "Maria owes $200 across 2 invoices.",
+                  "Maria owes $100 on INV-0001 and $100 on INV-0002."):
+        assert rail.compare(q, a, reply)[0] == "agrees", (reply, rail.compare(q, a, reply))
+    # $100 and $200 invoices: her balance is $300, and no invoice is $300.
+    q, a = _balance_answer([_invoice(1, 100, "sent", "2099-01-01", "Maria Lopez", "c1"),
+                            _invoice(2, 200, "sent", "2099-01-01", "Maria Lopez", "c1")])
+    for reply in ("Maria's $300 invoice is unpaid.", "Maria's balance is $100. Maria owes $200 on INV-0002.",
+                  "Maria's balance is $100."):
+        assert rail.compare(q, a, reply)[0] not in ("agrees", "partial"), (reply, rail.compare(q, a, reply))
+    for reply in ("Maria owes $300.", "Maria's balance is $300.",
+                  "Maria owes $100 on INV-0001 and $200 on INV-0002.", "Maria owes $100 and $200."):
+        assert rail.compare(q, a, reply)[0] == "agrees", (reply, rail.compare(q, a, reply))
+    # One invoice of two, said as one: true, but not the whole answer.
+    assert rail.compare(q, a, "Maria owes $200 on INV-0002.")[0] == "partial"
+
+
+@pytest.mark.parametrize("amounts", [(100, 100), (100, 200), (150,)])
+def test_no_false_balance_or_invoice_reply_agrees(amounts):
+    """Every reply about one client's money, with its truth: her balance
+    (said as a balance, "in total", or bare), one invoice (by amount or
+    number), or a list of invoices (each must be a different one)."""
+    from collections import Counter
+    rows = [_invoice(n + 1, amt, "sent", "2099-01-01", "Maria Lopez", "c1") for n, amt in enumerate(amounts)]
+    q, a = _balance_answer(rows)
+    total = sum(amounts)
+    held = Counter(amounts)
+    replies = []
+    for x in sorted({50, 100, 150, 200, 300, total}):
+        replies += [(f"Maria's balance is ${x}.", x == total), (f"Maria owes ${x} in total.", x == total),
+                    (f"Maria owes ${x}.", x == total), (f"Maria has ${x} outstanding.", x == total),
+                    (f"Maria's ${x} invoice is unpaid.", x in held)]
+        for n, amt in enumerate(amounts):
+            replies.append((f"Maria owes ${x} on INV-{n + 1:04d}.", x == amt))
+        for y in (50, 100, 200):
+            replies.append((f"Maria owes ${x} and ${y}.", not (Counter([x, y]) - held)))
+    wrong = []
+    for reply, true in replies:
+        outcome = rail.compare(q, a, reply)[0]
+        if not true and outcome in ("agrees", "partial"):
+            wrong.append((reply, outcome))
+    assert not wrong, wrong
+
+
 def test_a_payment_is_bound_to_its_invoice():
     # Maria: INV-0001 open for $100; INV-0009 paid $100 on Oct 1.
     paid = [_invoice(9, 100, "paid", "2026-10-01", "Maria Lopez", "c1", paid_at="2026-10-01T16:00:00+00:00")]
@@ -549,7 +605,10 @@ def test_did_pay_compares_the_yes_or_no_and_every_open_invoice():
     assert rail.compare(q, a, "Not yet: Maria owes $450 and $300.")[0] == "agrees"
     assert rail.compare(q, a, "Not yet, she owes $750 across 2 invoices.")[0] == "agrees"
     # One of her two open invoices left out.
-    assert rail.compare(q, a, "Not yet, Maria still owes $450.")[0] == "partial"
+    # "Maria still owes $450" is her balance said as $450; it is $750.
+    assert rail.compare(q, a, "Not yet, Maria still owes $450.")[0] == "differs"
+    # One of her invoices, said as one, is true but not the whole answer.
+    assert rail.compare(q, a, "Not yet, Maria still owes $450 on INV-0012.")[0] == "partial"
 
 
 def test_empty_answers_agree_only_with_an_empty_reply():

@@ -93,7 +93,16 @@ turns only), on a worker thread:
      its qualifier;
    - a due date or an age said with a client's total binds only when that
      total is one invoice, and is unverified otherwise;
-   - a service named for the next session must be its title.
+   - a service named for the next session must be its title;
+   - **a claim keeps its scope.** A balance ("Maria's balance is $100",
+     "owes $100 in total", or a bare "Maria owes $100") is checked only
+     against her whole balance. An invoice ("Maria's $100 invoice", "$100
+     on INV-0001", or each amount in "Maria owes $450 and $300") is checked
+     only against one invoice. Each invoice proves one claim, so with two
+     $100 invoices, "Maria's balance is $100" differs, and her balance is
+     the $200 or both invoices said. Whether the answer was said in full is
+     judged by what each claim proved (which invoice, whose whole amount),
+     never by matching numbers.
 
    Supported statements with no figure are checked the same way: "Maria
    hasn't paid", "Nothing is overdue", "Nobody owes you", "Nothing is booked

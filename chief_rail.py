@@ -593,33 +593,42 @@ def _g(s: str) -> str:
 
 # (what the claim says, its shape). "item" shapes only follow another
 # claim in the same sentence, and take its subject and status.
-_MONEY_SHAPES = [(kind, re.compile(_g(rx))) for kind, rx in [
-    ("business owed", r"{LEAD}(?:you're|you are) (?:still )?owed {AMT}(?: in total| total| overall| altogether| in all)?{CNT}?"
-                      r"(?: from (?P<ccl>{NUMW}) clients?)?"),
-    ("business owed", r"{LEAD}(?:your )?clients owe you {AMT}(?: in total| altogether| in all)?{CNT}?"),
-    ("business owed", r"{LEAD}{AMT} is (?:still )?(?:outstanding|owed to you|unpaid|owed)(?: in total| in all)?{CNT}?"),
-    ("business owed", r"(?:you have|there's|there is) {AMT} (?:outstanding|unpaid|owed to you|in (?:unpaid|open|sent) invoices){CNT}?"),
-    ("business owed", r"sent and unpaid: (?P<cnt>{NUMW}) invoices?,? {AMT}(?: in total)?"),
-    ("business overdue", r"{AMT} (?:of (?:it|that) )?is overdue{CNT}?"),
-    ("business overdue", r"(?P<cnt>{NUMW}) (?:of (?:those|them|these|your) )?(?:invoices? )?(?:are|is) overdue,? {AMT}(?: in total)?"),
-    ("business overdue", r"(?:you have )?(?P<cnt>{NUMW}) overdue invoices?,? {AMT}(?: in total)?"),
-    ("business overdue", r"you have {AMT} overdue{CNT}?"),
-    ("client owed", r"{NAME} (?:still )?owes(?: you)? {AMT}(?: in total)?(?:{CNT}| (?:on|for) (?:invoice )?{INV})?{DUE}?{OD}?"),
-    ("client owed", r"{NAME} (?:still )?(?:hasn't|has not)(?: yet)? paid(?: you)?(?: her| his| their| the)? {AMT}(?: yet)?"
-                    r"(?: (?:on|for) (?:invoice )?{INV})?"),
-    ("client owed", r"{NAME}'s {AMT} (?:invoice )?(?:{INV} )?is (?:still )?(?:unpaid|outstanding|open|due|owed)"),
-    ("client owed", r"{NAME}'s invoice {INV} (?:for|of) {AMT} is (?:still )?(?:unpaid|outstanding|open)"),
-    ("client owed", r"{NAME}(?:'s balance is| has a balance of) {AMT}"),
-    ("client owed", r"{NAME} has {AMT} (?:outstanding|open|unpaid|still due)(?: in total)?{CNT}?"),
-    ("client overdue", r"{NAME} (?:has|is) {AMT} overdue{CNT}?"),
-    ("client overdue", r"{NAME}'s {AMT} (?:invoice )?(?:{INV} )?is overdue{OD}?"),
-    ("client paid", r"{NAME} (?:has )?paid(?: you)? {AMT}(?: in full)?(?: (?:on|for) (?:invoice )?{INV})?(?:,? on (?P<pdate>{MD}))?"),
-    ("client paid", r"{NAME} (?:has )?paid (?:invoice )?{INV},? {AMT},?(?: on (?P<pdate>{MD}))?"),
-    ("item client", r"{NAME},? {AMT}(?: \((?P<cnt>{NUMW}) invoices?\))?"),
+# (what the claim says, its scope, its shape). The scope is part of the
+# meaning: "Maria's balance is $100" is about all she owes, "Maria's $100
+# invoice" about one invoice, and neither is ever checked as the other.
+#   total    the business's or one client's whole amount
+#   invoice  one invoice
+#   bare     "Maria owes $100": her whole balance, unless amounts follow it
+#            in the sentence ("Maria owes $450 and $300"), then each is one
+#            invoice. A "total" word, a count or an invoice number settles it.
+#   item     an amount that follows another claim: one invoice
+_MONEY_SHAPES = [(kind, scope, re.compile(_g(rx))) for kind, scope, rx in [
+    ("business owed", "total", r"{LEAD}(?:you're|you are) (?:still )?owed {AMT}(?: in total| total| overall| altogether| in all)?{CNT}?"
+                               r"(?: from (?P<ccl>{NUMW}) clients?)?"),
+    ("business owed", "total", r"{LEAD}(?:your )?clients owe you {AMT}(?: in total| altogether| in all)?{CNT}?"),
+    ("business owed", "total", r"{LEAD}{AMT} is (?:still )?(?:outstanding|owed to you|unpaid|owed)(?: in total| in all)?{CNT}?"),
+    ("business owed", "total", r"(?:you have|there's|there is) {AMT} (?:outstanding|unpaid|owed to you|in (?:unpaid|open|sent) invoices){CNT}?"),
+    ("business owed", "total", r"sent and unpaid: (?P<cnt>{NUMW}) invoices?,? {AMT}(?: in total)?"),
+    ("business overdue", "total", r"{AMT} (?:of (?:it|that) )?is overdue{CNT}?"),
+    ("business overdue", "total", r"(?P<cnt>{NUMW}) (?:of (?:those|them|these|your) )?(?:invoices? )?(?:are|is) overdue,? {AMT}(?: in total)?"),
+    ("business overdue", "total", r"(?:you have )?(?P<cnt>{NUMW}) overdue invoices?,? {AMT}(?: in total)?"),
+    ("business overdue", "total", r"you have {AMT} overdue{CNT}?"),
+    ("client owed", "bare", r"{NAME} (?:still )?owes(?: you)? {AMT}(?P<tot> in total)?(?:{CNT}| (?:on|for) (?:invoice )?{INV})?{DUE}?{OD}?"),
+    ("client owed", "invoice", r"{NAME} (?:still )?(?:hasn't|has not)(?: yet)? paid(?: you)?(?: her| his| their| the)? {AMT}(?: yet)?"
+                               r"(?: (?:on|for) (?:invoice )?{INV})?"),
+    ("client owed", "bare", r"{NAME}'s {AMT} (?P<invw>invoice )?(?:{INV} )?is (?:still )?(?:unpaid|outstanding|open|due|owed)"),
+    ("client owed", "invoice", r"{NAME}'s invoice {INV} (?:for|of) {AMT} is (?:still )?(?:unpaid|outstanding|open)"),
+    ("client owed", "total", r"{NAME}(?:'s balance is| has a balance of) {AMT}"),
+    ("client owed", "total", r"{NAME} has {AMT} (?:outstanding|open|unpaid|still due)(?: in total)?{CNT}?"),
+    ("client overdue", "total", r"{NAME} (?:has|is) {AMT} overdue{CNT}?"),
+    ("client overdue", "bare", r"{NAME}'s {AMT} (?P<invw>invoice )?(?:{INV} )?is overdue{OD}?"),
+    ("client paid", "invoice", r"{NAME} (?:has )?paid(?: you)? {AMT}(?: in full)?(?: (?:on|for) (?:invoice )?{INV})?(?:,? on (?P<pdate>{MD}))?"),
+    ("client paid", "invoice", r"{NAME} (?:has )?paid (?:invoice )?{INV},? {AMT},?(?: on (?P<pdate>{MD}))?"),
+    ("item client", "total", r"{NAME},? {AMT}(?: \((?P<cnt>{NUMW}) invoices?\))?"),
     # The same client, a new verb: "...and still owes $100 on INV-0001".
-    ("item owes", r"(?:still )?owes(?: you)? {AMT}(?: in total)?(?:{CNT}| (?:on|for) (?:invoice )?{INV})?{DUE}?{OD}?"),
-    ("item paid", r"(?:has )?paid(?: you)? {AMT}(?: in full)?(?: (?:on|for) (?:invoice )?{INV})?(?:,? on (?P<pdate>{MD}))?"),
-    ("item amount", r"{AMT}(?: (?:on|for) (?:invoice )?{INV})?{DUE}?{OD}?"),
+    ("item owes", "bare", r"(?:still )?owes(?: you)? {AMT}(?P<tot> in total)?(?:{CNT}| (?:on|for) (?:invoice )?{INV})?{DUE}?{OD}?"),
+    ("item paid", "invoice", r"(?:has )?paid(?: you)? {AMT}(?: in full)?(?: (?:on|for) (?:invoice )?{INV})?(?:,? on (?P<pdate>{MD}))?"),
+    ("item amount", "item", r"{AMT}(?: (?:on|for) (?:invoice )?{INV})?{DUE}?{OD}?"),
 ]]
 # Claims with no figure that still set who and what for the parts after
 # them ("Maria hasn't paid, she owes $450").
@@ -809,12 +818,20 @@ def _one(text: str, shapes, statements, ctx) -> Optional[List[Dict[str, Any]]]:
     t = _norm(text)
     if not t:
         return []
-    for kind, rx in shapes:
+    for entry in shapes:
+        kind, rx = entry[0], entry[-1]
         if kind.startswith("item") and ctx is None:
             continue
         m = rx.fullmatch(t)
         if m:
             c = _claim_of(kind, m)
+            c["scope"] = entry[1] if len(entry) == 3 else None
+            g = m.groupdict()
+            if c["scope"] == "bare":
+                if g.get("tot") or c["cnt"] is not None:
+                    c["scope"] = "total"
+                elif c["inv"] or g.get("invw"):
+                    c["scope"] = "invoice"
             if kind == "item client":       # "Tasha $200": a client, the status before it
                 c["kind"] = "client " + ctx["kind"].split(" ", 1)[1]
             elif kind == "item amount":     # "and $300": the subject and status before it
@@ -848,85 +865,126 @@ def _resolve(name: Optional[str], people: Dict[str, set], default: Optional[str]
     return next(iter(common)) if len(common) == 1 else None
 
 
-def _check_money(c: Dict[str, Any], L: Dict[str, Any], people, default, year) -> str:
-    """'ok', 'differs' or 'unverified' for one money claim against the read."""
-    kind, amt = c["kind"], c["amt"]
+def _check_money(c: Dict[str, Any], L: Dict[str, Any], people, default, year,
+                 used: set) -> Tuple[str, Optional[tuple]]:
+    """(verdict, what it proved) for one money claim against the read.
+
+    The verdict is 'ok', 'differs' or 'unverified'. What it proved is
+    'total', 'over_total', ('client', who), ('client_over', who) or
+    ('inv', index). A whole amount is checked only as a whole and an
+    invoice only as an invoice. Each invoice proves one claim (`used`), so
+    two "$100" claims need two $100 invoices."""
+    kind, amt, scope = c["kind"], c["amt"], c.get("scope")
     invoices = L["invoices"]
     if kind == "none owed":
-        return "ok" if L["sent_count"] == 0 else "differs"
+        return ("ok" if L["sent_count"] == 0 else "differs"), None
     if kind == "none overdue":
-        return "ok" if L["over_count"] == 0 else "differs"
+        return ("ok" if L["over_count"] == 0 else "differs"), None
     if kind == "business paid":
-        return "unverified"
-    if kind == "business owed":
-        if amt != L["owed_total"] or (c["cnt"] is not None and c["cnt"] != L["sent_count"]) \
-                or (c["ccl"] is not None and c["ccl"] != len(L["clients"])):
-            return "differs"
-        return "ok"
-    if kind == "business overdue":
-        if L["over_count"] == 0 or amt != L["over_total"] \
-                or (c["cnt"] is not None and c["cnt"] != L["over_count"]):
-            return "differs"
-        return "ok"
+        return "unverified", None
+    if kind in ("business owed", "business overdue"):
+        if scope != "total":
+            return "unverified", None
+        if kind == "business owed":
+            ok = amt == L["owed_total"] and (c["cnt"] is None or c["cnt"] == L["sent_count"]) \
+                and (c["ccl"] is None or c["ccl"] == len(L["clients"]))
+            return ("ok", "total") if ok else ("differs", None)
+        ok = L["over_count"] > 0 and amt == L["over_total"] and (c["cnt"] is None or c["cnt"] == L["over_count"])
+        return ("ok", "over_total") if ok else ("differs", None)
     who = _resolve(c.get("name"), people, default)
     if who is None:
-        return "unverified"
+        return "unverified", None
     covered = L["covers"] == "all" or L["covers"] == who
-    mine = [i for i in invoices if i["client"] == who]
-    if c["inv"]:
-        hit = [i for i in invoices if i["number"] == c["inv"]]
-        if not hit:
-            return "unverified" if (kind == "client paid" or not covered) else "differs"
-        mine = [i for i in hit if i["client"] == who]
-        if not mine:
-            return "differs"
     if kind == "client paid":
-        paid = [i for i in mine if i["status"] == "paid" and (amt is None or i["amount"] == amt)]
-        if not paid:
-            # Only the latest payment is read; an open invoice named as
-            # paid is false, anything else can't be told.
-            return "differs" if c["inv"] and any(i["status"] != "paid" for i in mine) else "unverified"
+        cands = [k for k, i in enumerate(invoices) if i["client"] == who and i["status"] == "paid"
+                 and i["amount"] == amt and (not c["inv"] or i["number"] == c["inv"]) and k not in used]
         if c["pdate"]:
             md = _md_iso(c["pdate"], year)
-            if md and not any(i["paid_date"] and (int(i["paid_date"][5:7]), int(i["paid_date"][8:10])) == md
-                              for i in paid):
-                return "differs"
-        return "ok"
+            cands = [k for k in cands if invoices[k]["paid_date"] and md
+                     and (int(invoices[k]["paid_date"][5:7]), int(invoices[k]["paid_date"][8:10])) == md]
+        if cands:
+            return "ok", ("inv", cands[0])
+        # Only the latest payment is read. An invoice named as paid that the
+        # read holds open is false; anything else can't be told.
+        named = [i for i in invoices if c["inv"] and i["number"] == c["inv"]]
+        if named and any(i["client"] == who and i["status"] != "paid" for i in named):
+            return "differs", None
+        return "unverified", None
     if not covered:
-        return "unverified"
-    open_ = [i for i in mine if i["status"] == "open"]
+        return "unverified", None
+    open_ = [(k, i) for k, i in enumerate(invoices) if i["client"] == who and i["status"] == "open"]
     if kind == "client none":
-        return "differs" if open_ else "ok"
+        return ("differs" if open_ else "ok"), None
     if kind == "client owed" and amt is None:       # "Maria hasn't paid"
-        return "ok" if open_ else "differs"
-    if kind == "client overdue":
-        open_ = [i for i in open_ if i["days_overdue"] > 0]
+        return ("ok" if open_ else "differs"), None
+    over = kind == "client overdue"
+    if over:
+        open_ = [(k, i) for k, i in open_ if i["days_overdue"] > 0]
+    if scope == "total":
         totals = L["clients"].get(who, {})
-        whole = totals.get("over") if totals.get("n_over") else None
-    else:
-        totals = L["clients"].get(who, {})
-        whole = totals.get("owed")
-    if amt is not None and amt == whole and not c["inv"]:
-        n = totals.get("n_over" if kind == "client overdue" else "n")
-        if c["cnt"] is not None and c["cnt"] != n:
-            return "differs"
-        if c["due"] is None and c["od"] is None:
-            return "ok"
-        # A due date or an age belongs to one invoice. Said with a client's
-        # total, it binds only when that total IS one invoice.
-        if not (len(open_) == 1 and open_[0]["amount"] == amt):
-            return "unverified"
-    matches = [i for i in open_ if amt is None or i["amount"] == amt]
-    if not matches or (c["cnt"] is not None and c["cnt"] != 1):
-        return "differs"
+        whole = (totals.get("over") if totals.get("n_over") else None) if over else totals.get("owed")
+        n = totals.get("n_over" if over else "n")
+        if amt != whole or (c["cnt"] is not None and c["cnt"] != n):
+            return "differs", None
+        if c["due"] is not None or c["od"] is not None:
+            # A due date or an age belongs to one invoice: said with a whole
+            # amount, it binds only when that whole is one invoice.
+            if len(open_) != 1:
+                return "unverified", None
+            if not _dates_fit(c, open_[0][1], year):
+                return "differs", None
+        return "ok", (("client_over" if over else "client"), who)
+    if scope != "invoice":
+        return "unverified", None
+    cands = [(k, i) for k, i in open_ if i["amount"] == amt and (not c["inv"] or i["number"] == c["inv"])]
+    if c["inv"] and not any(i["number"] == c["inv"] for i in invoices):
+        return "unverified", None                   # an invoice this read doesn't hold
+    if not cands or (c["cnt"] is not None and c["cnt"] != 1):
+        return "differs", None
+    cands = [(k, i) for k, i in cands if _dates_fit(c, i, year)]
+    if not cands:
+        return "differs", None
+    free = [k for k, _ in cands if k not in used]
+    if not free:
+        return "differs", None                      # said twice, held once
+    return "ok", ("inv", free[0])
+
+
+def _dates_fit(c: Dict[str, Any], inv: Dict[str, Any], year: int) -> bool:
     if c["due"]:
         md = _md_iso(c["due"], year)
-        matches = [i for i in matches if i["due"] and md and (int(i["due"][5:7]), int(i["due"][8:10])) == md]
-        if not matches:
-            return "differs"
-    if c["od"] is not None and not any(i["days_overdue"] == c["od"] for i in matches):
-        return "differs"
-    return "ok"
+        if not (md and inv["due"] and (int(inv["due"][5:7]), int(inv["due"][8:10])) == md):
+            return False
+    return c["od"] is None or inv["days_overdue"] == c["od"]
+
+
+def _money_covered(q: Question, facts: Dict[str, Any], proved: set) -> bool:
+    """Did Chief's checked claims say the whole answer? By what each claim
+    proved (an invoice, a client's whole amount), never by matching
+    numbers: two $100 invoices need both said, or their $200."""
+    L = facts.get("ledger") or {}
+    invoices = L.get("invoices", [])
+
+    def whole(who, over=False):
+        if (("client_over" if over else "client"), who) in proved:
+            return True
+        mine = [k for k, i in enumerate(invoices) if i["client"] == who and i["status"] == "open"
+                and (not over or i["days_overdue"] > 0)]
+        return bool(mine) and all(("inv", k) in proved for k in mine)
+
+    if q.form == "owed_total":
+        return "total" in proved
+    if q.form == "who_owes":
+        return "total" in proved and all(whole(w) for w in L.get("clients", {}))
+    if q.form == "overdue":
+        return "over_total" in proved and all(whole(w, True) for w, v in L.get("clients", {}).items()
+                                              if v.get("n_over"))
+    who = facts.get("client")
+    if any(i["client"] == who and i["status"] == "open" for i in invoices):
+        return whole(who)
+    if q.form == "did_pay":
+        return any(p[0] == "inv" and invoices[p[1]]["status"] == "paid" for p in proved if isinstance(p, tuple))
+    return False
 
 
 def _day_dates(text: Optional[str], today: date) -> Optional[set]:
@@ -1092,6 +1150,8 @@ def compare(q: Question, answer: Answer, reply: str) -> Tuple[str, Dict[str, Any
     shapes, statements = ((_MONEY_SHAPES, _MONEY_STATEMENTS) if money
                           else (_SCHEDULE_SHAPES, _SCHEDULE_STATEMENTS))
     held: List[str] = []
+    proved: set = set()
+    used: set = set()
     checked = 0
     if "|" in reply:
         flag("unverified", "table")
@@ -1102,13 +1162,25 @@ def compare(q: Question, answer: Answer, reply: str) -> Tuple[str, Dict[str, Any
         if claims is None:
             flag("unverified", f"not a supported shape: {_norm(sentence)[:80]}")
             continue
+        for k, c in enumerate(claims):
+            if c.get("scope") == "bare":
+                listed = any(d.get("scope") == "item" and d.get("name") == c.get("name") for d in claims[k + 1:])
+                c["scope"] = "invoice" if listed else "total"
+            elif c.get("scope") == "item":
+                c["scope"] = "invoice"
         for c in claims:
-            verdict = (_check_money(c, facts.get("ledger") or {}, people, default, today.year) if money
-                       else _check_session(c, q, facts, people, default, today))
+            if money:
+                verdict, proof = _check_money(c, facts.get("ledger") or {}, people, default, today.year, used)
+            else:
+                verdict, proof = _check_session(c, q, facts, people, default, today), None
             if verdict != "ok":
                 flag(verdict, f"{c['kind']} {c.get('amt') or c.get('time') or c.get('cnt') or ''}: {verdict}")
                 continue
             checked += 1
+            if proof is not None:
+                proved.add(proof)
+                if proof[0] == "inv":
+                    used.add(proof[1])
             if money and c["amt"]:
                 held.append(c["amt"])
             elif c.get("_session"):
@@ -1130,7 +1202,7 @@ def compare(q: Question, answer: Answer, reply: str) -> Tuple[str, Dict[str, Any
     if not held:
         return ("partial" if checked else "silent"), detail
     if money:
-        covered = any(set(h) <= set(held) for h in facts.get("headline") or [])
+        covered = _money_covered(q, facts, proved)
     else:
         covered = {s["time"] for s in facts.get("claims") or []} <= set(held)
     return ("agrees" if covered else "partial"), detail
