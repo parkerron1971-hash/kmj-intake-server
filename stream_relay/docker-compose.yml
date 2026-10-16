@@ -1,0 +1,29 @@
+# The stream relay on one droplet. Host networking so MediaMTX and the
+# agent talk over 127.0.0.1 and the firewall (ufw) governs the one public
+# port, 1935. Both restart on their own after a crash or a reboot.
+services:
+  mediamtx:
+    image: bluenviron/mediamtx:1.9.3
+    network_mode: host
+    restart: unless-stopped
+    volumes:
+      - ./mediamtx.yml:/mediamtx.yml:ro
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "5"}
+
+  agent:
+    build:
+      context: .
+      dockerfile: agent/Dockerfile
+    network_mode: host
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      # Recordings in progress and the remembered destinations survive a
+      # restart of the agent, so a mid-service restart resumes the same file.
+      - /var/relay:/var/relay
+    depends_on: [mediamtx]
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "5"}

@@ -1,0 +1,46 @@
+# MediaMTX for the stream relay (bluenviron/mediamtx:1.9.3; every key here
+# is checked against that version's reference mediamtx.yml).
+#
+# Public:  RTMP on :1935 — the one door a church's streaming software uses.
+# Private: everything else listens on 127.0.0.1 only, and the firewall
+#          (setup/cloud-init.yaml) opens nothing but 22 and 1935.
+#
+# Who may publish is decided by the relay agent (agent/relay_agent.py,
+# POST /auth), which asks the backend about the stream key. Reads are
+# allowed only from this machine: our own ffmpeg copies. Nobody watches
+# from the relay; members watch from R2.
+
+logLevel: info
+logDestinations: [stdout]
+readTimeout: 10s
+writeTimeout: 10s
+
+authMethod: http
+authHTTPAddress: http://127.0.0.1:9100/auth
+authHTTPExclude:
+- action: api
+- action: metrics
+- action: pprof
+
+# The agent polls this to see which streams are up.
+api: yes
+apiAddress: 127.0.0.1:9997
+metrics: no
+pprof: no
+playback: no
+
+# Our own ffmpeg copies read the stream here, over TCP, on this machine.
+rtsp: yes
+protocols: [tcp]
+rtspAddress: 127.0.0.1:8554
+
+rtmp: yes
+rtmpAddress: :1935
+rtmpEncryption: "no"
+
+hls: no
+webrtc: no
+srt: no
+
+paths:
+  all_others:
