@@ -2,7 +2,7 @@
 title: Church stream relay, and Codex's review fixes
 date: 2026-10-16
 agent: Claude Code (Claude Opus 5.5)
-asked: "lets fix and build now" (Kevin); then KAI: "Fix every must-fix in all three PRs, each reproduced first by a test, plus quick should-fix items"
+asked: 'Kevin: "lets fix and build now"; then KAI: "Fix every must-fix in all three PRs, each reproduced first by a test, plus quick should-fix items"'
 status: waiting on Codex re-check
 prs: [kmj-intake-server#1460, kmj-intake-server#1461, solutionist-studio#1236]
 migrations: [supabase/APPLY-2026-10-16-stream-relay.sql (applied), supabase/APPLY-2026-10-16-stream-relay-heartbeat.sql (NOT applied; Kevin applies)]
