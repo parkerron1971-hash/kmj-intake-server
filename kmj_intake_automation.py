@@ -697,6 +697,11 @@ app.include_router(dev_bridge_router)
 # + /dev-bridge/kai/* (device token).
 from dev_kai import router as dev_kai_router
 app.include_router(dev_kai_router)
+# The ops desk (2026-10-15): Kevin's lanes, week, phone calendar, scorecard
+# and KAI's line. /ops/calendar/{token}.ics is public; it must stay above
+# the public_site_router catch-all.
+from ops_desk import router as ops_desk_router
+app.include_router(ops_desk_router)
 from chief_local_work import router as chief_local_work_router
 app.include_router(chief_local_work_router)
 from creative_director import router as creative_director_router, business_router as creative_director_business_router
@@ -1476,6 +1481,11 @@ async def startup():
             import unfinished_work as _unfinished
             scheduler.add_job(g("unfinished_work", _unfinished.watch_tick), "cron",
                               hour=13, minute=0, id="unfinished_work")
+            # Scope keeper (ops desk) — 10:30 UTC, before KAI's morning prep
+            # and Kevin's 7:30 queue, so Today and the brief read it fresh.
+            import ops_desk as _ops_desk
+            scheduler.add_job(g("scope_keeper", _ops_desk.keeper_tick), "cron",
+                              hour=10, minute=30, id="scope_keeper")
             import money_auditor as _money
             scheduler.add_job(g("money_auditor", _money.audit_tick), "cron",
                               hour=10, minute=0, id="money_auditor")

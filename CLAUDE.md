@@ -76,6 +76,14 @@ list with what breaks without each. The load-bearing ones:
 `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_ANON`,
 `ANTHROPIC_API_KEY`, `PLATFORM_OWNER_EMAIL`.
 
+## Lanes (every build session)
+
+Kevin runs the company alone, so how much gets built at once is capped
+(`docs/OPERATIONS.md`, Mission Control → Build → Plan). **Fix** needs no
+slot. A new feature must be one of the two items in **Build**. If it
+isn't, ask Kevin or file it in **Try** instead of building it. At most
+three build sessions run at a time. Features switch on on Thursdays.
+
 ## Work log (every session, Claude Code and Codex)
 
 - **Before building**, read `worklog/` in BOTH repos (this one and

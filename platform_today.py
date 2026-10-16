@@ -127,7 +127,12 @@ def classify_finding(g: Dict[str, Any]) -> Dict[str, Any]:
         "action": {"label": "Ask Chief why",
                    "chief": f"Explain this {agent} finding and what I should do: {title}"},
     }
-    if "missing env keys" in low or "not configured" in low:
+    if agent == "scope_keeper":
+        # The ops desk's own rules (ops_desk.keeper_findings): the fix is a
+        # move on the Plan page, not a question for Chief.
+        item.update(source="Scope keeper", room="build", tone="blue",
+                    action={"label": "Open Plan", "nav": "platform-plan"})
+    elif "missing env keys" in low or "not configured" in low:
         item.update(parked=True, tone="blue",
                     detail="A setup item, not a fault. It waits here until you want it.",
                     action={"label": "Set up", "nav": "platform-health"})
@@ -397,7 +402,9 @@ async def platform_today(owner=Depends(require_owner)):
     return data
 
 
-async def build_today(owner) -> Dict[str, Any]:
+async def build_today(owner, with_ops: bool = True) -> Dict[str, Any]:
+    """with_ops=False is the ops desk reading Today for its scorecard: the
+    desk's own block would be read twice, so it is left out."""
     import platform_console as pc
     now = datetime.now(timezone.utc)
     owner_id = str(getattr(owner, "id", "") or "")
@@ -432,6 +439,10 @@ async def build_today(owner) -> Dict[str, Any]:
             _guard("traffic", lambda: _traffic(owner), failed, None),
             _guard("coupons", _coupons, failed, None),
         )
+
+    ops = None
+    if with_ops:
+        ops = await _guard("ops", _ops_block, failed, None)
 
     anchors = await _guard("anchors", lambda: asyncio.to_thread(_anchor_health), failed, None)
     spend = await _guard("spend", lambda: asyncio.to_thread(_spend), failed, None)
@@ -533,6 +544,17 @@ async def build_today(owner) -> Dict[str, Any]:
                 "action": {"label": "Open Ledger Anchors", "nav": "platform-anchors"},
             })
 
+    late = [t for t in (ops or {}).get("due") or [] if t.get("late")]
+    if late:
+        n = len(late)
+        needs.append({
+            "id": "ops:late", "kind": "task", "source": "Plan",
+            "title": f"{_word(n) if n <= 10 else n} of your tasks {'is' if n == 1 else 'are'} past due",
+            "detail": "; ".join((t.get("title") or "")[:60] for t in late[:3]),
+            "lanes": ["systems"], "room": "build", "tone": "amber", "seen": 1, "count": n,
+            "action": {"label": "Open Plan", "nav": "platform-plan"},
+        })
+
     groups, stale = group_findings(findings_rows or [], now)
     parked: List[Dict[str, Any]] = []
     for g in groups:
@@ -605,8 +627,15 @@ async def build_today(owner) -> Dict[str, Any]:
         "running": running,
         "shipped": ships,
         "coverage": coverage(),
+        "ops": ops,
         "sources_failed": sorted(set(failed)),
     }
+
+
+async def _ops_block() -> Optional[Dict[str, Any]]:
+    import ops_desk
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
+        return await ops_desk.today_block(c)
 
 
 async def _traffic(owner) -> Dict[str, Any]:

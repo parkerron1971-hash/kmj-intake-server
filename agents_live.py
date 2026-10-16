@@ -63,6 +63,8 @@ AGENTS: List[Dict[str, Any]] = [
      "job": "Secrets, access rules, keys and backups"},
     {"id": "customer_health", "name": "Customer health", "source": "backend", "kind": "AI · drafts only",
      "job": "Businesses that stalled or went quiet"},
+    {"id": "scope_keeper", "name": "Scope keeper", "source": "backend", "kind": "watcher",
+     "job": "The scorecard, the lanes and the first hire's signals"},
     {"id": "unfinished_work", "name": "Unfinished work", "source": "backend", "kind": "watcher",
      "job": "Open PRs, pending migrations, work left undone"},
     {"id": "trial_expiry", "name": "Trial expiry", "source": "backend", "kind": "system",
@@ -81,6 +83,7 @@ BACKEND_RUN = {
     "chief_quality": ("chief_quality", "quality_tick"),
     "customer_health": ("customer_health", "health_tick"),
     "unfinished_work": ("unfinished_work", "watch_tick"),
+    "scope_keeper": ("ops_desk", "keeper_tick"),
     "trial_expiry": ("trial_expiry", "expire_tick"),
     "hermes": ("hermes_agent", "hermes_tick"),
 }
