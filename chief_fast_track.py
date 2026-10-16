@@ -729,6 +729,15 @@ class TwoTrack:
                 chief_models.lane_for_chat(getattr(self.req, "mode", "") or "",
                                            getattr(self.req, "client_surface", "") or ""))
         route_ledger.finish(self.rec)
+        if ok and (self.turn_started or self.passive):
+            # The rail's practice (chief_rail): with the reply already out,
+            # read the same records fresh and note whether an answer from
+            # the records alone would have said the same. Never shown.
+            try:
+                import chief_rail
+                chief_rail.after_turn(self.req, self.user_id, self.c, payload, rec=self.rec)
+            except Exception as e:  # pragma: no cover — practice never costs a reply
+                print(f"[rail] practice hook failed: {type(e).__name__}", flush=True)
 
     def final_payload(self) -> Dict[str, Any]:
         """The fast lane's (or the cache's) answer, in /chat's shape."""

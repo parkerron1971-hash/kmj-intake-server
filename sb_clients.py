@@ -474,12 +474,34 @@ async def sb_as_anon(
 
 # ─── Sync API (httpx.Client) — matches brand_engine._sb_get / _sb_patch ──
 
+def redacted_path(path: str) -> str:
+    """The path with every filter VALUE hidden. The table, the columns and
+    the operators stay, which is what reading a failure needs; a typed
+    name, an email or an amount in a filter never reaches the log."""
+    base, _, query = (path or "").partition("?")
+    if not query:
+        return base
+    shown = []
+    for part in query.split("&"):
+        key, _, value = part.partition("=")
+        if key in ("select", "order", "limit", "offset"):
+            shown.append(part)
+        else:
+            op = value.split(".", 1)[0] if "." in value else ""
+            shown.append(f"{key}={op}.…" if op else f"{key}=…")
+    return base + "?" + "&".join(shown)
+
+
 def _sync_request(
     method: str,
     path: str,
     headers: Dict[str, str],
     body: Any = None,
+    *,
+    redact: bool = False,
 ) -> Optional[Any]:
+    """`redact`: a failure logs the path with its filter values hidden, the
+    status, and no response body (PostgREST errors echo the failing row)."""
     url = f"{sb_url()}/rest/v1{path}"
     try:
         with httpx.Client(timeout=HTTP_TIMEOUT) as client:
@@ -490,12 +512,19 @@ def _sync_request(
                     method, url, headers=headers, content=json.dumps(body),
                 )
     except httpx.HTTPError as e:
-        logger.warning(f"sb_clients sync {method} {path} transport error: {e}")
+        if redact:
+            logger.warning(f"sb_clients sync {method} {redacted_path(path)} transport error: "
+                           f"{type(e).__name__}")
+        else:
+            logger.warning(f"sb_clients sync {method} {path} transport error: {e}")
         return None
     if resp.status_code >= 400:
-        logger.warning(
-            f"sb_clients sync {method} {path}: {resp.status_code} {resp.text[:300]}"
-        )
+        if redact:
+            logger.warning(f"sb_clients sync {method} {redacted_path(path)}: {resp.status_code}")
+        else:
+            logger.warning(
+                f"sb_clients sync {method} {path}: {resp.status_code} {resp.text[:300]}"
+            )
         return None
     text = resp.text
     return json.loads(text) if text else None
@@ -549,9 +578,10 @@ def sb_delete_as_user(path: str, user_jwt: str) -> bool:
     return _sync_delete(path, sb_headers_user(user_jwt, prefer=None))
 
 
-def sb_get_as_service(path: str) -> Optional[Any]:
-    """RLS-bypassing sync GET. Server-initiated paths only."""
-    return _sync_request("GET", path, sb_headers_service())
+def sb_get_as_service(path: str, *, redact: bool = False) -> Optional[Any]:
+    """RLS-bypassing sync GET. Server-initiated paths only. `redact` keeps
+    filter values and error bodies out of the failure log."""
+    return _sync_request("GET", path, sb_headers_service(), redact=redact)
 
 
 def sb_patch_as_service(path: str, body: Dict[str, Any]) -> Optional[Any]:
@@ -563,9 +593,12 @@ def sb_post_as_service(
     path: str,
     body: Dict[str, Any],
     prefer: Optional[str] = "return=representation",
+    *,
+    redact: bool = False,
 ) -> Optional[Any]:
-    """RLS-bypassing sync POST. Server-initiated paths only."""
-    return _sync_request("POST", path, sb_headers_service(prefer=prefer), body)
+    """RLS-bypassing sync POST. Server-initiated paths only. `redact` keeps
+    filter values and error bodies out of the failure log."""
+    return _sync_request("POST", path, sb_headers_service(prefer=prefer), body, redact=redact)
 
 
 def sb_delete_as_service(path: str) -> bool:
