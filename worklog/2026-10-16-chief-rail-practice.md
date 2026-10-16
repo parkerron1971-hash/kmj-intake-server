@@ -5,8 +5,8 @@ agent: Claude Code (Claude Opus 5.5)
 asked: "start" (build step 1 of the Instinct Layer brief: two shelves, invisible, across all businesses)
 status: in progress
 prs: [kmj-intake-server#1462]
-migrations: [supabase/APPLY-2026-10-16-chief-rail-practice.sql (pending)]
-left_undone: ["Apply the migration", "Read a week of practice rows (GET /platform/rail/stats or scripts/rail_practice_report.py) before any live step", "Live step (not built): answer the shapes that graduate from the rail, KMJ first, Chief unchanged otherwise"]
+migrations: [supabase/APPLY-2026-10-16-chief-rail-practice.sql (applied 2026-10-16)]
+left_undone: ["Read a week of practice rows (GET /platform/rail/stats or scripts/rail_practice_report.py) before any live step", "Live step (not built): answer the shapes that graduate from the rail, KMJ first, Chief unchanged otherwise"]
 decisions: ["Practice only: nothing the rail writes is ever shown", "Runs after the reply on a worker thread, full turns only, at most 3 at once; no model calls", "Owner only: a service-role owner_id check before any read; collaborators are skipped, not logged", "An answer counts as proved only by chief_truth.fast_lane against the rows in the answer check's own shapes, or by an empty read that returned every row", "Chief's definitions: owed = sent and unpaid, drafts apart; overdue = sent and past due; days on the business clock", "Too long (over 6 clients, 8 sessions, 4 of a client's invoices), unnamed clients, ambiguous names and 'Friday' on a Friday are left to Chief"]
 related: [2026-10-11-layer-two-foundation.md, 2026-10-11-business-brain.md]
 ---
