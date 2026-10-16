@@ -6,8 +6,8 @@ asked: "'start': build step 1 of the Instinct Layer brief (two shelves, invisibl
 status: in progress
 prs: [kmj-intake-server#1462]
 migrations: [supabase/APPLY-2026-10-16-chief-rail-practice.sql (table applied 2026-10-16; business foreign key pending a re-run)]
-left_undone: ["Re-run the migration file so the business foreign key lands (the auto-mode classifier refused the editor run as Production Deploy)", "Read a week of practice rows (GET /platform/rail/stats or scripts/rail_practice_report.py) before any live step", "Live step (not built): answer the shapes that graduate from the rail, KMJ first, Chief unchanged otherwise"]
-decisions: ["Practice only: nothing the rail writes is ever shown", "Runs after the reply on a worker thread, full turns only, at most 3 at once; no model calls", "Owner only: a service-role owner_id check before any read; collaborators are skipped, not logged", "An answer counts as proved only by chief_truth.fast_lane against the rows in the answer check's own shapes, or by an empty read that returned every row", "Chief's definitions: owed = sent and unpaid, drafts apart; overdue = sent and past due; days on the business clock", "Too long (over 6 clients, 8 sessions, 4 of a client's invoices), unnamed clients, ambiguous names and 'Friday' on a Friday are left to Chief"]
+left_undone: ["Set CHIEF_RAIL=practice on Railway on a Thursday (the rail ships off)", "Re-run the migration file so the business foreign key lands (the auto-mode classifier refused the editor run as Production Deploy)", "Read a week of practice rows (GET /platform/rail/stats or scripts/rail_practice_report.py) before any live step", "Live step (not built): answer the shapes that graduate from the rail, KMJ first, Chief unchanged otherwise"]
+decisions: ["Practice only: nothing the rail writes is ever shown", "Off unless CHIEF_RAIL=practice exactly (Codex review W11)", "Compared claim by claim (amount with its client, count, day); agreement counts proved answers only", "Dollars only; aged on the business date; rows kept 90 days and cascade with the business; failure logs redacted", "Runs after the reply on a worker thread, full turns only, at most 3 at once; no model calls", "Owner only: a service-role owner_id check before any read; collaborators are skipped, not logged", "An answer counts as proved only by chief_truth.fast_lane against the rows in the answer check's own shapes, or by an empty read that returned every row", "Chief's definitions: owed = sent and unpaid, drafts apart; overdue = sent and past due; days on the business clock", "Too long (over 6 clients, 8 sessions, 4 of a client's invoices), unnamed clients, ambiguous names and 'Friday' on a Friday are left to Chief"]
 related: [2026-10-11-layer-two-foundation.md, 2026-10-11-business-brain.md]
 ---
 Kevin's layer two picture (the librarian should not have to fetch every
@@ -31,3 +31,12 @@ quality and speed first, and cost second.
 Read docs/CHIEF_RAIL.md before building the live step. Codex's draft #1406
 (an offline CPU model for appointment-request intents) is a related idea,
 not wired in; no file overlap.
+
+Codex's review (W11, 2026-10-16, kai/reviews/chief-instinct-1462-review.md)
+asked for eight changes, all made in this PR. The switch now fails closed.
+Failure logs hide filter values and error bodies (`sb_clients.redacted_path`,
+`redact=True`). Rows are kept 90 days and cascade with their business. Only
+dollars are taken. A client's read is every open invoice plus their last
+payment. Invoices are aged on the business date. Chief's reply is compared
+claim by claim. Agreement counts proved answers only. Its probe script, re-run
+against the fix, now shows each issue closed.

@@ -28,7 +28,9 @@ Shelves today: money (who owes, how much is owed, what is overdue, did a
 client pay) and schedule (a day's sessions, the next session, a client's
 next session). Anything else is declined, and the reason is counted.
 
-Switch: CHIEF_RAIL=off stops it. Unset (the default) is practice.
+Switch: only CHIEF_RAIL=practice turns it on; unset, empty or anything else
+is off. Rows are kept RETENTION_DAYS (prune_tick, daily) and go with their
+business (a cascading foreign key).
 """
 from __future__ import annotations
 
@@ -61,12 +63,13 @@ MAX_OPEN_INVOICES = 39
 MAX_CLIENT_LINES = 6
 MAX_DAY_SESSIONS = 8
 MAX_CLIENT_OPEN = 4
+RETENTION_DAYS = 90
 
 
 def mode() -> str:
-    """practice (the default) or off."""
-    v = (os.environ.get("CHIEF_RAIL") or "practice").strip().lower()
-    return "off" if v in ("off", "0", "false", "no") else "practice"
+    """'practice' only when CHIEF_RAIL says exactly that; anything else,
+    unset included, is 'off'. A deploy without the variable reads nothing."""
+    return "practice" if (os.environ.get("CHIEF_RAIL") or "").strip().lower() == "practice" else "off"
 
 
 # ─── The question ────────────────────────────────────────────────────
@@ -196,7 +199,7 @@ def read_question(message: str) -> Tuple[Optional[Question], str, Optional[str]]
 
 # ─── Saying it ───────────────────────────────────────────────────────
 
-def _money(v: float) -> str:
+def _money(v: Decimal) -> str:
     return f"${v:,.2f}"
 
 
@@ -232,11 +235,22 @@ def _day(v: Any) -> Optional[date]:
         return None
 
 
+def _dec(v: Any) -> Decimal:
+    try:
+        return Decimal(str(v if v is not None else 0)).quantize(Decimal("0.01"))
+    except (InvalidOperation, ValueError):
+        return Decimal("0.00")
+
+
+def _cents(v: Any) -> str:
+    return str(_dec(v))
+
+
 @dataclass
 class Answer:
     text: str
     sources: Dict[str, Dict[str, Any]]
-    facts: Dict[str, Any]
+    facts: Dict[str, Any]           # claims (what each figure belongs to), headline sets, counts
     empty: bool = False             # nothing to report: the read itself is the proof
 
 
@@ -247,6 +261,7 @@ class Records:
     ok: bool = True
     why: str = ""
     complete: bool = True
+    today: Optional[date] = None    # the business's date when it read
     open_invoices: List[Dict[str, Any]] = field(default_factory=list)   # Chief's row shape
     paid_invoices: List[Dict[str, Any]] = field(default_factory=list)
     sessions: List[Dict[str, Any]] = field(default_factory=list)
@@ -256,7 +271,7 @@ class Records:
     day_iso: str = ""
 
 
-def _open_sources(rows: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+def _open_sources(rows: List[Dict[str, Any]], complete: bool) -> Dict[str, Dict[str, Any]]:
     """The open invoices exactly as Chief's answer check sees them
     (evidence_for_review): the rows, and the totals Chief computes from
     them. The rail's own sums must agree with Chief's for a sentence to
@@ -265,9 +280,9 @@ def _open_sources(rows: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
     if not rows:
         return {}
     return {
-        "context:open_invoices": {"kind": "context", "complete": True,
+        "context:open_invoices": {"kind": "context", "complete": complete,
                                   "text": json.dumps(rows, default=str, ensure_ascii=False)},
-        "context:invoice_summary": {"kind": "context", "complete": True,
+        "context:invoice_summary": {"kind": "context", "complete": complete,
                                     "text": json.dumps(chief._invoice_summary_lines(rows),
                                                        ensure_ascii=False)},
     }
@@ -277,51 +292,63 @@ def _sent(rows):
     return [r for r in rows if (r.get("status") or "draft") != "draft"]
 
 
+def _total(rows) -> Decimal:
+    return sum((_dec(r.get("total")) for r in rows), Decimal("0.00"))
+
+
 def _by_client(rows):
     out: Dict[str, Dict[str, Any]] = {}
     for r in rows:
-        c = out.setdefault(r.get("client") or "", {"owed": 0.0, "n": 0, "over": 0.0, "n_over": 0})
-        c["owed"] += float(r.get("total") or 0)
+        c = out.setdefault(r.get("client") or "", {"owed": Decimal("0.00"), "n": 0,
+                                                   "over": Decimal("0.00"), "n_over": 0})
+        c["owed"] += _dec(r.get("total"))
         c["n"] += 1
         if (r.get("days_overdue") or 0) > 0:
-            c["over"] += float(r.get("total") or 0)
+            c["over"] += _dec(r.get("total"))
             c["n_over"] += 1
     return sorted(out.items(), key=lambda kv: (-kv[1]["owed"], kv[0]))
 
 
-def _known_amounts(rows: List[Dict[str, Any]], paid: List[Dict[str, Any]]) -> List[str]:
-    """Every amount the records hold: each invoice, each client's sums, the
-    totals. A figure Chief says that is not one of these came from nowhere."""
-    vals = set()
+def _claim(amount, what, client=None, count=None, noun="invoice"):
+    return {"amount": _cents(amount), "what": what, "client": client or None,
+            "count": count, "noun": noun}
+
+
+def _money_claims(rows: List[Dict[str, Any]], paid: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Every amount the records hold and what it belongs to: each invoice
+    (its client), each client's sums (with how many invoices), the totals
+    (with their counts). A figure Chief says that is none of these came
+    from nowhere; one said next to the wrong client is the wrong fact."""
     sent = _sent(rows)
-    for r in list(rows) + list(paid):
-        vals.add(float(r.get("total") or 0))
-    for _, c in _by_client(sent):
-        vals.update((c["owed"], c["over"]))
     over = [r for r in sent if (r.get("days_overdue") or 0) > 0]
     drafts = [r for r in rows if (r.get("status") or "draft") == "draft"]
-    for group in (sent, over, drafts, rows):
-        vals.add(sum(float(r.get("total") or 0) for r in group))
-    return sorted(_cents(v) for v in vals)
-
-
-def _cents(v: Any) -> str:
-    try:
-        return str(Decimal(str(v)).quantize(Decimal("0.01")))
-    except (InvalidOperation, ValueError):
-        return ""
+    out = [_claim(r.get("total"), "invoice", r.get("client"), 1) for r in rows]
+    out += [_claim(r.get("total"), "paid", r.get("client"), 1) for r in paid]
+    for name, c in _by_client(sent):
+        out.append(_claim(c["owed"], "client_owed", name, c["n"]))
+        if c["n_over"]:
+            out.append(_claim(c["over"], "client_over", name, c["n_over"]))
+    out.append(_claim(_total(sent), "owed_total", None, len(sent)))
+    out.append(_claim(_total(over), "over_total", None, len(over)))
+    if drafts:
+        out.append(_claim(_total(drafts), "draft_total", None, len(drafts)))
+    return out
 
 
 def _owe_line(name: str, r: Dict[str, Any]) -> str:
     num = r.get("number")
     on = f"on invoice {num}" if num and num != "(no number)" else "on an invoice"
-    line = f"{name} owes {_money(float(r.get('total') or 0))} {on}"
+    line = f"{name} owes {_money(_dec(r.get('total')))} {on}"
     due = _day(r.get("due_date"))
     if due:
         line += f", due {_md(due)}"
     if (r.get("days_overdue") or 0) > 0:
         line += f", {_plural(int(r['days_overdue']), 'day')} overdue"
     return line + "."
+
+
+class _Leave(Exception):
+    """This one is Chief's: the reason is the decline reason."""
 
 
 def compose(q: Question, rec: Records, tz) -> Tuple[Optional[Answer], str]:
@@ -335,20 +362,15 @@ def compose(q: Question, rec: Records, tz) -> Tuple[Optional[Answer], str]:
         return None, str(e)
 
 
-class _Leave(Exception):
-    """This one is Chief's: the reason is the decline reason."""
-
-
-def _compose_money(q: Question, rec: Records, tz) -> Optional[Answer]:
+def _compose_money(q: Question, rec: Records, tz) -> Answer:
     rows = rec.open_invoices
     sent = _sent(rows)
     over = [r for r in sent if (r.get("days_overdue") or 0) > 0]
     drafts = [r for r in rows if (r.get("status") or "draft") == "draft"]
-    owed = sum(float(r.get("total") or 0) for r in sent)
-    over_sum = sum(float(r.get("total") or 0) for r in over)
-    facts: Dict[str, Any] = {"known": _known_amounts(rows, rec.paid_invoices)}
+    owed, over_sum = _total(sent), _total(over)
+    facts: Dict[str, Any] = {"claims": _money_claims(rows, rec.paid_invoices)}
     lines: List[str] = []
-    sources = _open_sources(rows)
+    sources = _open_sources(rows, rec.complete)
 
     if q.form in ("who_owes", "owed_total", "overdue"):
         if any(not r.get("client") or r.get("client") == "(no client)" for r in sent):
@@ -359,19 +381,19 @@ def _compose_money(q: Question, rec: Records, tz) -> Optional[Answer]:
                 raise _Leave("too_long")
             if not sent:
                 return Answer("Nobody owes you right now: there are no sent, unpaid invoices.",
-                              sources, {**facts, "headline": [], "count": 0}, empty=True)
+                              sources, {**facts, "headline": []}, empty=True)
             lines.append(f"You're owed {_money(owed)} across {_plural(len(sent), 'sent invoice')}.")
             for name, c in clients:
                 line = f"{name} owes {_money(c['owed'])} across {_plural(c['n'], 'invoice')}"
                 if c["n_over"]:
                     line += f", {_money(c['over'])} of it overdue"
                 lines.append(line + ".")
-            facts.update(headline=[_cents(owed)] + [_cents(c["owed"]) for _, c in clients],
-                         count=len(clients))
+            facts.update(headline=[[_cents(owed)] + [_cents(c["owed"]) for _, c in clients]],
+                         clients=len(clients))
         elif q.form == "owed_total":
             if not sent:
                 return Answer("You're owed nothing right now: there are no sent, unpaid invoices.",
-                              sources, {**facts, "headline": [], "count": 0}, empty=True)
+                              sources, {**facts, "headline": []}, empty=True)
             lines.append(f"You're owed {_money(owed)} across {_plural(len(sent), 'sent invoice')}.")
             if over:
                 verb = "is" if len(over) == 1 else "are"
@@ -379,12 +401,12 @@ def _compose_money(q: Question, rec: Records, tz) -> Optional[Answer]:
                              f"{verb} overdue, {_money(over_sum)} in total.")
             if drafts:
                 lines.append(f"You also have {_plural(len(drafts), 'draft')}, "
-                             f"{_money(sum(float(r.get('total') or 0) for r in drafts))}, not yet sent.")
-            facts.update(headline=[_cents(owed)], count=len(sent))
+                             f"{_money(_total(drafts))}, not yet sent.")
+            facts.update(headline=[[_cents(owed)]], clients=len(_by_client(sent)))
         else:
             if not over:
-                return Answer("Nothing is overdue right now.", sources,
-                              {**facts, "headline": [], "count": 0}, empty=True)
+                return Answer("Nothing is overdue right now.", sources, {**facts, "headline": []},
+                              empty=True)
             clients = _by_client(over)
             if len(clients) > MAX_CLIENT_LINES:
                 raise _Leave("too_long")
@@ -392,23 +414,21 @@ def _compose_money(q: Question, rec: Records, tz) -> Optional[Answer]:
             lines.append(f"{_plural(len(over), 'invoice')} {verb} overdue, {_money(over_sum)} in total.")
             for name, c in clients:
                 lines.append(f"{name} has {_money(c['over'])} overdue.")
-            facts.update(headline=[_cents(over_sum)] + [_cents(c["over"]) for _, c in clients],
-                         count=len(over))
+            facts.update(headline=[[_cents(over_sum)] + [_cents(c["over"]) for _, c in clients]],
+                         clients=len(clients))
         return Answer(" ".join(lines), sources, facts)
 
-    # did_pay / client_balance: one client's invoices.
+    # did_pay / client_balance: one client's open invoices, and their last payment.
     name = (rec.contact or {}).get("name") or ""
-    mine = sent
-    if len(mine) > MAX_CLIENT_OPEN:
-        raise _Leave("too_long")
-    paid = sorted(rec.paid_invoices, key=lambda r: str(r.get("paid_at") or ""), reverse=True)
-    for r in sorted(mine, key=lambda r: str(r.get("due_date") or "9999")):
+    mine = sorted(sent, key=lambda r: str(r.get("due_date") or "9999"))
+    paid = rec.paid_invoices[:1]
+    for r in mine:
         lines.append(_owe_line(name, r))
     if q.form == "did_pay" and paid:
         p = paid[0]
         num = p.get("number")
-        line = f"{name} paid invoice {num}, {_money(float(p.get('total') or 0))}" if num \
-            else f"{name} paid an invoice of {_money(float(p.get('total') or 0))}"
+        line = (f"{name} paid invoice {num}, {_money(_dec(p.get('total')))}" if num
+                else f"{name} paid an invoice of {_money(_dec(p.get('total')))}")
         at = _instant(p.get("paid_at"))
         if at:
             line += f", on {_md(at.astimezone(tz).date())}"
@@ -416,12 +436,16 @@ def _compose_money(q: Question, rec: Records, tz) -> Optional[Answer]:
     if paid:
         sources["rail:paid_invoices"] = {
             "kind": "record", "complete": True,
-            "text": json.dumps([{"record": "invoice", **r} for r in paid[:3]], default=str,
-                               ensure_ascii=False)}
-    polarity = "owes" if mine else ("paid" if paid else "none")
-    facts.update(polarity=polarity, count=len(mine),
-                 headline=[_cents(r.get("total")) for r in mine]
-                 + ([_cents(paid[0].get("total"))] if q.form == "did_pay" and paid and not mine else []))
+            "text": json.dumps([{"record": "invoice", **r} for r in paid], default=str, ensure_ascii=False)}
+    if mine:
+        # Every open invoice said, or the client's total for them.
+        headline = [[_cents(r.get("total")) for r in mine], [_cents(_total(mine))]]
+    elif q.form == "did_pay" and paid:
+        headline = [[_cents(paid[0].get("total"))]]
+    else:
+        headline = []
+    facts.update(polarity="owes" if mine else ("paid" if paid else "none"), headline=headline,
+                 client=name or None)
     if not lines:
         text = (f"{name} owes you nothing right now: there are no sent, unpaid invoices for them."
                 if q.form == "client_balance" or paid else f"{name} has no sent invoices on file.")
@@ -446,27 +470,29 @@ def _session_sources(rec: Records) -> Dict[str, Dict[str, Any]]:
     return out
 
 
-def _compose_schedule(q: Question, rec: Records, tz) -> Optional[Answer]:
+def _compose_schedule(q: Question, rec: Records, tz) -> Answer:
     sources = _session_sources(rec)
-    times = []
+    claims = []
     for s in rec.sessions:
-        at = _instant(s.get("scheduled_for"))
-        if at:
-            local = at.astimezone(tz)
-            times.append(f"{local.hour:02d}:{local.minute:02d}")
-    facts: Dict[str, Any] = {"times": times, "count": len(rec.sessions)}
+        title, who, local = _session_parts(s, tz)
+        if local is None:
+            raise _Leave("bad_time")
+        claims.append({"time": f"{local.hour:02d}:{local.minute:02d}", "client": who or None,
+                       "date": local.date().isoformat(), "title": title})
+    today = rec.today.isoformat() if rec.today else None
+    facts: Dict[str, Any] = {"claims": claims, "count": len(rec.sessions), "today": today}
     if q.form == "day":
         if len(rec.sessions) > MAX_DAY_SESSIONS:
             raise _Leave("too_long")
+        facts["day"] = rec.day_iso
         if not rec.sessions:
             return Answer(f"Nothing is booked {rec.label}.", sources, facts, empty=True)
         lines = [f"You have {_plural(len(rec.sessions), 'session')} {rec.label}."]
-        for s in rec.sessions:
-            title, who, local = _session_parts(s, tz)
-            if local is None:
-                raise _Leave("bad_time")
-            what = f"{title} with {who}" if title and who else (title or who or "A session")
-            lines.append(f"{_clock(local)}: {what}.")
+        for c in claims:
+            what = (f"{c['title']} with {c['client']}" if c["title"] and c["client"]
+                    else (c["title"] or c["client"] or "A session"))
+            h, m = map(int, c["time"].split(":"))
+            lines.append(f"{_clock(datetime(2000, 1, 1, h, m))}: {what}.")
         return Answer(" ".join(lines), sources, facts)
     if not rec.sessions:
         name = (rec.contact or {}).get("name")
@@ -474,9 +500,7 @@ def _compose_schedule(q: Question, rec: Records, tz) -> Optional[Answer]:
                 else "Nothing is booked ahead on your calendar.")
         return Answer(text, sources, facts, empty=True)
     title, who, local = _session_parts(rec.sessions[0], tz)
-    if local is None:
-        raise _Leave("bad_time")
-    facts["times"] = times[:1]
+    facts["claims"] = claims[:1]
     if q.form == "client_next":
         name = (rec.contact or {}).get("name") or ""
         text = (f"{name} is booked for {title} on {_when(local)}." if title
@@ -489,9 +513,12 @@ def _compose_schedule(q: Question, rec: Records, tz) -> Optional[Answer]:
 def prove(answer: Answer, rec: Records, tz) -> Tuple[str, List[str]]:
     """How the answer is proved: 'prover' (chief_truth's free check passed
     every sentence against the records), 'empty_read' (nothing to report,
-    and the read was the whole list), or 'failed'."""
+    and the read was the whole list), or 'failed'. A read that did not
+    return every row proves nothing."""
+    if not rec.complete:
+        return "failed", []
     if answer.empty:
-        return ("empty_read", []) if rec.complete else ("failed", [])
+        return "empty_read", []
     import chief_truth
     cited = chief_truth.fast_lane(answer.text, answer.sources, tz)
     return ("prover", list(cited)) if cited is not None else ("failed", [])
@@ -513,6 +540,27 @@ _OWES_SAID = re.compile(r"\b(?:still owes?|owes?|owed|owing|has(?:n'?t| not) pai
 _PAID_SAID = re.compile(r"\b(?:has paid|already paid|paid (?:in full|invoice|on|you|it|that|her|his|their|"
                         r"the)|(?:she|he|they) paid|payment (?:came|went) (?:in|through)|marked (?:as )?paid|"
                         r"is paid)\b", re.I)
+_NUMBER_WORDS = {w: i for i, w in enumerate(
+    "zero one two three four five six seven eight nine ten eleven twelve".split())}
+_COUNT_SAID = re.compile(
+    r"\b(\d+|%s)\s+(?:[a-z]+\s+)?(invoices?|bills?|sessions?|appointments?|bookings?|clients?|"
+    r"customers?|people)\b" % "|".join(_NUMBER_WORDS), re.I)
+_MONTHS = {m: i + 1 for i, m in enumerate(
+    "jan feb mar apr may jun jul aug sep oct nov dec".split())}
+_DATE_SAID = re.compile(r"\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?\s+(\d{1,2})\b", re.I)
+_WEEKDAY_SAID = re.compile(r"\b(%s|today|tomorrow|tonight)\b" % "|".join(_DAY_NAMES), re.I)
+_SEGMENT = re.compile(r",\s+|;\s*|\s+(?:and|but|while|plus)\s+|\s+[–—-]\s+", re.I)
+_SENTENCE = re.compile(r"(?<=[.!?])\s+|\n+")
+# Capitalised words in a reply that are not a person: the business's own
+# nouns, and the calendar (chief_truth's list covers the common words).
+_NOT_PEOPLE = frozenset("""
+invoice invoices inv total totals balance balances overdue payment payments paid unpaid session
+sessions appointment appointments booking bookings calendar schedule client clients customer
+customers draft drafts am pm noon your you you're yes no not nothing nobody none next upcoming
+""".split())
+
+# Outcome order, worst first: what one reply is, when its parts disagree.
+_SEVERITY = ("differs", "unverified")
 
 
 def amounts_said(text: str) -> List[str]:
@@ -534,57 +582,225 @@ def times_said(text: str) -> List[str]:
     return sorted(out)
 
 
+def _counts_said(text: str) -> List[Tuple[int, str]]:
+    out = []
+    for n, noun in _COUNT_SAID.findall(text or ""):
+        num = int(n) if n.isdigit() else _NUMBER_WORDS[n.lower()]
+        noun = noun.lower()
+        kind = ("invoice" if noun.startswith(("invoice", "bill")) else
+                "client" if noun.startswith(("client", "customer", "people")) else "session")
+        out.append((num, kind))
+    return out
+
+
+def _people_said(text: str, known: Dict[str, str]) -> Tuple[set, bool]:
+    """(the known clients this text names, whether it names anyone else).
+    `known` maps each lowercased name word to its client's full name."""
+    import chief_truth
+    named, stranger = set(), False
+    for w in chief_truth._fast_lane_names(text or ""):
+        low = w.lower().replace("’", "'").rstrip("'s") if w.lower().endswith("'s") else w.lower()
+        # chief_truth already drops weekdays, months and common words.
+        if w.isupper() or low in _NOT_PEOPLE:
+            continue
+        if low in known:
+            named.add(known[low])
+        else:
+            stranger = True
+    return named, stranger
+
+
+def _days_said(text: str, today: Optional[date]) -> set:
+    """The dates a text names: a month and day, a weekday (the next one),
+    today, tomorrow."""
+    out = set()
+    for mon, d in _DATE_SAID.findall(text or ""):
+        if today:
+            try:
+                out.add(date(today.year, _MONTHS[mon.lower()[:3]], int(d)).isoformat())
+            except ValueError:
+                pass
+    for w in _WEEKDAY_SAID.findall(text or ""):
+        w = w.lower()
+        if not today:
+            continue
+        if w in ("today", "tonight"):
+            out.add(today.isoformat())
+        elif w == "tomorrow":
+            out.add((today + timedelta(days=1)).isoformat())
+        else:
+            ahead = (_DAY_NAMES.index(w) - today.weekday()) % 7
+            out.add((today + timedelta(days=ahead)).isoformat())
+            out.add((today + timedelta(days=ahead or 7)).isoformat())
+    return out
+
+
 def compare(q: Question, answer: Answer, reply: str) -> Tuple[str, Dict[str, Any]]:
     """Did Chief say what the records say? (outcome, detail). Pure.
 
-    agrees   Chief said the rail's headline and nothing the records lack
-    partial  everything Chief said is in the records, but not the headline
-    differs  Chief said a figure, time or yes/no the records contradict
-    withheld Chief's reply was walled ("I couldn't verify…")
-    silent   Chief said no figure at all (a question back, a hedge)"""
+    Every figure, time and count Chief said is held to the record it
+    belongs to, together with the client and the day it was said next to.
+
+    agrees     the rail's headline, and nothing the records contradict
+    partial    nothing contradicted, but not all of the headline
+    differs    a figure, time, count, client, day or yes/no the records contradict
+    unverified figures said next to someone the records don't name, or in a
+               table: they can't be held to a record, so they don't count as agreement
+    withheld   Chief's reply was walled
+    silent     Chief said no figure at all (a question back, a hedge)"""
     reply = reply or ""
     if _WALL.search(reply):
         return "withheld", {}
-    facts = answer.facts
     if q.shelf == MONEY:
-        said = amounts_said(reply)
-        known = set(facts.get("known") or [])
-        unknown = [a for a in said if a not in known]
-        detail = {"said": said, "unknown": unknown}
-        if answer.empty:
-            if said:
-                return "differs", detail
-            return ("agrees" if _NONE_SAID.search(reply) else "silent"), detail
-        if unknown:
-            return "differs", detail
-        pol = facts.get("polarity")
-        if pol in ("owes", "paid"):
-            owes, paid = bool(_OWES_SAID.search(reply)), bool(_PAID_SAID.search(reply))
-            detail["polarity_said"] = ("both" if owes and paid else "owes" if owes
-                                       else "paid" if paid else None)
-            if (pol == "owes" and paid and not owes) or (pol == "paid" and owes and not paid):
-                return "differs", detail
-        if not said:
-            return "silent", detail
-        head = facts.get("headline") or []
-        return ("agrees" if head and head[0] in said else "partial"), detail
-    said = times_said(reply)
-    want = list(facts.get("times") or [])
-    detail = {"said": said}
+        return _compare_money(answer, reply)
+    return _compare_schedule(q, answer, reply)
+
+
+def _known_people(names) -> Dict[str, str]:
+    out: Dict[str, str] = {}
+    for full in names:
+        for w in re.findall(r"[A-Za-z][A-Za-z'’-]*", full or ""):
+            out[w.lower()] = full
+    return out
+
+
+def _worst(problems: List[str]) -> Optional[str]:
+    for o in _SEVERITY:
+        if o in problems:
+            return o
+    return None
+
+
+def _compare_money(answer: Answer, reply: str) -> Tuple[str, Dict[str, Any]]:
+    facts = answer.facts
+    claims = facts.get("claims") or []
+    known = {c["amount"] for c in claims}
+    people = _known_people({c["client"] for c in claims if c["client"]} | {facts.get("client") or ""})
+    counts = {"invoice": {c["count"] for c in claims if c["count"] is not None},
+              "client": {facts.get("clients")} if facts.get("clients") is not None else set()}
+    said = amounts_said(reply)
+    detail: Dict[str, Any] = {"said": said, "problems": []}
+    problems: List[str] = []
+
+    def flag(outcome, why):
+        problems.append(outcome)
+        detail["problems"].append(why)
+
+    if said and "|" in reply:
+        flag("unverified", "table")
+    for sentence in _SENTENCE.split(reply):
+        last_named: set = set()
+        for part in _SEGMENT.split(sentence):
+            named, stranger = _people_said(part, people)
+            if named:
+                last_named = named
+            elif not stranger:
+                named = last_named
+            amts = amounts_said(part)
+            stated = _counts_said(part)
+            for a in amts:
+                if a not in known:
+                    flag("differs", f"unknown amount {a}")
+                    continue
+                cands = [c for c in claims if c["amount"] == a]
+                if named:
+                    cands = [c for c in cands if c["client"] in named or c["client"] is None]
+                    if not cands:
+                        flag("differs", f"{a} said for the wrong client")
+                        continue
+                elif stranger and all(c["client"] for c in cands):
+                    flag("unverified", f"{a} said next to someone else")
+                    continue
+                inv = [n for n, kind in stated if kind == "invoice"]
+                if inv and len(amts) == 1 and not any(c["count"] in inv for c in cands
+                                                      if c["count"] is not None):
+                    flag("differs", f"{a} said with the wrong invoice count")
+            for n, kind in stated:
+                if kind in counts and counts[kind] and n not in counts[kind]:
+                    flag("differs", f"count {n} {kind}")
     if answer.empty:
-        if said:
-            return "differs", detail
+        worst = _worst(problems) or ("differs" if said else None)
+        if worst:
+            return worst, detail
         return ("agrees" if _NONE_SAID.search(reply) else "silent"), detail
-    if q.form != "day":
-        if not said:
-            return "silent", detail
-        return ("agrees" if want and want[0] in said else "differs"), detail
-    extra = [t for t in said if t not in want]
-    if extra:
-        return "differs", {**detail, "unknown": extra}
-    if said and set(want) <= set(said):
-        return "agrees", detail
-    return ("partial" if said else "silent"), detail
+    pol = facts.get("polarity")
+    if pol in ("owes", "paid"):
+        owes, paid = bool(_OWES_SAID.search(reply)), bool(_PAID_SAID.search(reply))
+        detail["polarity_said"] = "both" if owes and paid else "owes" if owes else "paid" if paid else None
+        if (pol == "owes" and paid and not owes) or (pol == "paid" and owes and not paid):
+            flag("differs", "yes/no")
+    worst = _worst(problems)
+    if worst:
+        return worst, detail
+    if not said:
+        return "silent", detail
+    covered = any(set(h) <= set(said) for h in facts.get("headline") or [])
+    return ("agrees" if covered else "partial"), detail
+
+
+def _compare_schedule(q: Question, answer: Answer, reply: str) -> Tuple[str, Dict[str, Any]]:
+    facts = answer.facts
+    claims = facts.get("claims") or []
+    today = _day(facts.get("today"))
+    people = _known_people({c["client"] for c in claims if c["client"]}
+                           | {w for c in claims for w in [c["title"]] if w})
+    said = times_said(reply)
+    detail: Dict[str, Any] = {"said": said, "problems": []}
+    problems: List[str] = []
+
+    def flag(outcome, why):
+        problems.append(outcome)
+        detail["problems"].append(why)
+
+    if said and "|" in reply:
+        flag("unverified", "table")
+    for sentence in _SENTENCE.split(reply):
+        last_named: set = set()
+        last_days: set = set()
+        for part in _SEGMENT.split(sentence):
+            named, stranger = _people_said(part, people)
+            if named:
+                last_named = named
+            elif not stranger:
+                named = last_named
+            days = _days_said(part, today)
+            if days:
+                last_days = days
+            else:
+                days = last_days
+            for t in times_said(part):
+                cands = [c for c in claims if c["time"] == t]
+                if not cands:
+                    flag("differs", f"time {t} not on the calendar")
+                    continue
+                if named:
+                    cands = [c for c in cands if c["client"] in named or c["title"] in named
+                             or c["client"] is None]
+                    if not cands:
+                        flag("differs", f"{t} said for the wrong client")
+                        continue
+                elif stranger and all(c["client"] for c in cands):
+                    flag("unverified", f"{t} said next to someone else")
+                    continue
+                if days and not any(c["date"] in days for c in cands):
+                    flag("differs", f"{t} said on the wrong day")
+            for n, kind in _counts_said(part):
+                if kind == "session" and q.form == "day" and n != facts.get("count"):
+                    flag("differs", f"count {n}")
+            if q.form == "day" and facts.get("day") and days and facts["day"] not in days \
+                    and (times_said(part) or _counts_said(part)):
+                flag("differs", "wrong day")
+    worst = _worst(problems)
+    if answer.empty:
+        if worst or said:
+            return (worst or "differs"), detail
+        return ("agrees" if _NONE_SAID.search(reply) else "silent"), detail
+    if worst:
+        return worst, detail
+    if not said:
+        return "silent", detail
+    want = {c["time"] for c in claims}
+    return ("agrees" if want <= set(said) else "partial"), detail
 
 
 # ─── Reading ─────────────────────────────────────────────────────────
@@ -593,8 +809,10 @@ _UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{1
 
 
 def _get(path: str) -> Optional[List[Dict[str, Any]]]:
+    """A service-role read whose failure log hides the filter values (a
+    typed client name rides in the contact search) and the error body."""
     import sb_clients
-    rows = sb_clients.sb_get_as_service(path)
+    rows = sb_clients.sb_get_as_service(path, redact=True)
     if not isinstance(rows, list) or any(not isinstance(r, dict) for r in rows):
         return None
     return rows
@@ -652,17 +870,34 @@ def _contact(bid: str, typed: str) -> Tuple[Optional[Dict[str, Any]], str]:
     return hits[0], ""
 
 
-def _chief_rows(rows: List[Dict[str, Any]], client: Optional[str] = None) -> List[Dict[str, Any]]:
-    import chief_of_staff as chief
-    return chief._with_days_overdue([{
-        "id": r.get("id"),
-        "number": r.get("invoice_number") or "(no number)",
-        "client": client or (((r.get("contacts") or {}).get("name")
-                              if isinstance(r.get("contacts"), dict) else None) or "(no client)"),
-        "total": float(r.get("total") or 0),
-        "status": r.get("status") or "draft",
-        "due_date": r.get("due_date") or "",
-    } for r in rows])
+def _usd(rows: List[Dict[str, Any]]) -> bool:
+    """Every amount here is in dollars. The rail says "$" and adds amounts
+    up; another currency, or a mix, is left to Chief."""
+    return all(str(r.get("currency") or "usd").strip().lower() == "usd" for r in rows)
+
+
+def _chief_rows(rows: List[Dict[str, Any]], today: date, client: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Invoice rows in the shape Chief's answer check reads them, aged on
+    the BUSINESS's date: at 02:00 UTC it is still yesterday in Detroit, and
+    an invoice due yesterday there is not overdue yet."""
+    out = []
+    for r in rows:
+        status = r.get("status") or "draft"
+        days = 0
+        due = _day(r.get("due_date"))
+        if due and status != "draft":
+            days = max(0, (today - due).days)
+        out.append({
+            "id": r.get("id"),
+            "number": r.get("invoice_number") or "(no number)",
+            "client": client or (((r.get("contacts") or {}).get("name")
+                                  if isinstance(r.get("contacts"), dict) else None) or "(no client)"),
+            "total": float(_dec(r.get("total"))),
+            "status": status,
+            "due_date": r.get("due_date") or "",
+            "days_overdue": days,
+        })
+    return out
 
 
 def _iso(at: datetime) -> str:
@@ -672,7 +907,8 @@ def _iso(at: datetime) -> str:
 def read(q: Question, bid: str, tz, *, now: Optional[datetime] = None) -> Records:
     """The one read each question shape needs. Fresh every time."""
     now = now or datetime.now(timezone.utc)
-    rec = Records()
+    today = now.astimezone(tz).date()
+    rec = Records(today=today)
     if q.name:
         rec.contact, why = _contact(bid, q.name)
         if rec.contact is None:
@@ -680,33 +916,43 @@ def read(q: Question, bid: str, tz, *, now: Optional[datetime] = None) -> Record
     cid = (rec.contact or {}).get("id")
     if q.shelf == MONEY:
         if cid:
-            rows = _get(f"/invoices?business_id=eq.{bid}&contact_id=eq.{cid}&status=neq.cancelled"
-                        f"&select=id,invoice_number,total,status,due_date,paid_at"
-                        f"&order=created_at.desc&limit=50")
-            if rows is None:
-                return Records(ok=False, why="read_failed")
-            rec.complete = len(rows) < 50
             name = rec.contact.get("name")
-            rec.open_invoices = _chief_rows(
-                [r for r in rows if r.get("status") in ("sent", "viewed", "overdue")], name)
+            # Every open invoice of theirs (a short list, or it is Chief's),
+            # and only their latest payment: no page of history can hide an
+            # older unpaid one.
+            rows = _get(f"/invoices?business_id=eq.{bid}&contact_id=eq.{cid}"
+                        f"&status=in.(sent,viewed,overdue)"
+                        f"&select=id,invoice_number,total,status,due_date,currency"
+                        f"&order=due_date.asc.nullslast&limit={MAX_CLIENT_OPEN + 1}")
+            paid = (_get(f"/invoices?business_id=eq.{bid}&contact_id=eq.{cid}&status=eq.paid"
+                         f"&select=invoice_number,total,paid_at,due_date,currency"
+                         f"&order=paid_at.desc.nullslast&limit=1") if q.form == "did_pay" else [])
+            if rows is None or paid is None:
+                return Records(ok=False, why="read_failed")
+            if len(rows) > MAX_CLIENT_OPEN:
+                return Records(ok=False, why="too_long")
+            if not _usd(rows + paid):
+                return Records(ok=False, why="currency")
+            rec.open_invoices = _chief_rows(rows, today, name)
             rec.paid_invoices = [{"number": r.get("invoice_number"), "client": name,
-                                  "total": float(r.get("total") or 0), "status": "paid",
+                                  "total": float(_dec(r.get("total"))), "status": "paid",
                                   "paid_at": r.get("paid_at"), "due_date": r.get("due_date") or ""}
-                                 for r in rows if r.get("status") == "paid"]
+                                 for r in paid]
         else:
             rows = _get(f"/invoices?business_id=eq.{bid}&status=in.(draft,sent,viewed,overdue)"
-                        f"&select=id,invoice_number,total,status,due_date,contact_id,contacts(name)"
+                        f"&select=id,invoice_number,total,status,due_date,currency,contact_id,contacts(name)"
                         f"&order=due_date.asc.nullslast&limit={MAX_OPEN_INVOICES + 1}")
             if rows is None:
                 return Records(ok=False, why="read_failed")
             if len(rows) > MAX_OPEN_INVOICES:
                 return Records(ok=False, why="too_many_rows")
-            rec.open_invoices = _chief_rows(rows)
+            if not _usd(rows):
+                return Records(ok=False, why="currency")
+            rec.open_invoices = _chief_rows(rows, today)
         return rec
     select = "&select=id,title,scheduled_for,contact_id,contacts(name)&order=scheduled_for.asc"
     base = f"/sessions?business_id=eq.{bid}&status=eq.scheduled"
     if q.form == "day":
-        today = now.astimezone(tz).date()
         if q.day == "today":
             day, rec.label = today, "today"
         elif q.day == "tomorrow":
@@ -730,6 +976,8 @@ def read(q: Question, bid: str, tz, *, now: Optional[datetime] = None) -> Record
     if rows is None:
         return Records(ok=False, why="read_failed")
     rec.sessions = rows
+    # The day's read is every session that day when it came back under its
+    # limit; the next session is one row, ordered, so it is whole.
     rec.complete = len(rows) < limit or q.form != "day"
     return rec
 
@@ -745,7 +993,7 @@ def after_turn(req: Any, user_id: str, complexity: Any, payload: Any, *, rec: An
     """Called once a full Chief turn has answered (chief_fast_track.TwoTrack.finish).
     Returns at once; the practice runs on its own thread. Never raises."""
     try:
-        if mode() == "off" or not isinstance(payload, dict):
+        if mode() != "practice" or not isinstance(payload, dict):
             return
         message = str(getattr(req, "message", "") or "")
         if (getattr(req, "image_ids", None) or (getattr(req, "mode", None) or "") not in ("", "chief")
@@ -835,7 +1083,8 @@ def practice(job: Dict[str, Any], *, now: Optional[datetime] = None) -> Optional
     if row["chief_wrote"]:
         detail = {**detail, "note": "chief also changed something"}
     row.update(took=True, proof=proof, proof_sources=cited, rail_answer=answer.text[:600],
-               rail_facts={k: v for k, v in answer.facts.items() if k != "known"},
+               rail_facts={"headline": answer.facts.get("headline"), "count": answer.facts.get("count"),
+                           "polarity": answer.facts.get("polarity")},
                outcome=outcome, outcome_detail=detail,
                rail_ms=int((time.perf_counter() - started) * 1000))
     return row
@@ -847,7 +1096,9 @@ def _write(row: Dict[str, Any]) -> None:
         return
     try:
         import sb_clients
-        ok = bool(sb_clients.sb_post_as_service(f"/{TABLE}", row))
+        # redact: a refused insert's error body echoes the failing row,
+        # rail_answer and all.
+        ok = bool(sb_clients.sb_post_as_service(f"/{TABLE}", row, redact=True))
     except Exception:
         ok = False
     if not ok:
@@ -856,6 +1107,18 @@ def _write(row: Dict[str, Any]) -> None:
             _table_missing_logged = True
             print("[rail] chief_rail_practice write failed: is "
                   "supabase/APPLY-2026-10-16-chief-rail-practice.sql applied?", flush=True)
+
+
+def prune_tick() -> int:
+    """Daily (scheduler_lock.gate): practice rows older than RETENTION_DAYS
+    go. rail_answer names clients, so the record is kept only as long as
+    a graduation decision needs it."""
+    import sb_clients
+    cut = (datetime.now(timezone.utc) - timedelta(days=RETENTION_DAYS)).isoformat().replace("+00:00", "Z")
+    ok = sb_clients.sb_delete_as_service(f"/{TABLE}?created_at=lt.{quote(cut, safe='')}")
+    print(f"[rail] practice rows older than {RETENTION_DAYS} days pruned: {'ok' if ok else 'failed'}",
+          flush=True)
+    return 1 if ok else 0
 
 
 # ─── The owner's view ────────────────────────────────────────────────
@@ -868,33 +1131,52 @@ def _pct(vals: List[int], p: float) -> Optional[int]:
     return int(vals[min(k, len(vals)) - 1])
 
 
+_COMPARED = ("agrees", "partial", "differs", "unverified")
+
+
+def _agreement(outcomes: Dict[str, int]) -> Optional[float]:
+    compared = sum(outcomes.get(k, 0) for k in _COMPARED)
+    return round(100.0 * outcomes.get("agrees", 0) / compared, 1) if compared else None
+
+
 def summarize(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Practice rows → what a graduation decision needs, per shelf."""
+    """Practice rows → what a graduation decision needs, per shelf and per
+    form. Agreement counts PROVED answers only: an answer the prover
+    refused is no evidence, however well it matched Chief."""
     out: Dict[str, Any] = {}
     for r in rows:
         s = out.setdefault(r.get("shelf") or "none", {
-            "asked": 0, "took": 0, "proved": 0, "declined": {}, "outcomes": {}, "forms": {},
-            "chief_cost_cents_on_took": 0.0, "rail_ms": [], "chief_ms": [], "walls_the_rail_answered": 0})
+            "asked": 0, "took": 0, "proved": 0, "proof_failed": 0, "declined": {}, "outcomes": {},
+            "forms": {}, "chief_cost_cents_on_took": 0.0, "rail_ms": [], "chief_ms": [],
+            "walls_the_rail_answered": 0})
         s["asked"] += 1
         if not r.get("took"):
             why = r.get("decline_reason") or "?"
             s["declined"][why] = s["declined"].get(why, 0) + 1
             continue
         s["took"] += 1
-        s["forms"][r.get("form") or "?"] = s["forms"].get(r.get("form") or "?", 0) + 1
-        proved = r.get("proof") in ("prover", "empty_read")
-        s["proved"] += 1 if proved else 0
-        o = r.get("outcome") or "?"
-        s["outcomes"][o] = s["outcomes"].get(o, 0) + 1
+        f = s["forms"].setdefault(r.get("form") or "?", {"took": 0, "proved": 0, "proof_failed": 0,
+                                                         "outcomes": {}})
+        f["took"] += 1
         s["chief_cost_cents_on_took"] += float(r.get("chief_cost_cents") or 0)
-        if proved and o == "withheld":
-            s["walls_the_rail_answered"] += 1
         for k in ("rail_ms", "chief_ms"):
             if isinstance(r.get(k), (int, float)):
                 s[k].append(r[k])
+        if r.get("proof") not in ("prover", "empty_read"):
+            s["proof_failed"] += 1
+            f["proof_failed"] += 1
+            continue
+        s["proved"] += 1
+        f["proved"] += 1
+        o = r.get("outcome") or "?"
+        s["outcomes"][o] = s["outcomes"].get(o, 0) + 1
+        f["outcomes"][o] = f["outcomes"].get(o, 0) + 1
+        if o == "withheld":
+            s["walls_the_rail_answered"] += 1
     for s in out.values():
-        compared = sum(s["outcomes"].get(k, 0) for k in ("agrees", "partial", "differs"))
-        s["agreement_pct"] = round(100.0 * s["outcomes"].get("agrees", 0) / compared, 1) if compared else None
+        s["agreement_pct"] = _agreement(s["outcomes"])
+        for f in s["forms"].values():
+            f["agreement_pct"] = _agreement(f["outcomes"])
         s["chief_cost_cents_on_took"] = round(s["chief_cost_cents_on_took"], 2)
         for k in ("rail_ms", "chief_ms"):
             vals = s.pop(k)
@@ -909,11 +1191,11 @@ def _require_owner_dep():
 
 @router.get("/platform/rail/stats")
 async def rail_stats(days: int = 7, _owner: Any = Depends(_require_owner_dep())):
-    """The rail's practice record, per shelf. Owner only. Counts, shares and
-    timings; no answers, names or ids."""
+    """The rail's practice record, per shelf and form. Owner only. Counts,
+    shares and timings; no answers, names or ids."""
     import asyncio
     import sb_clients
-    days = max(1, min(int(days or 7), 90))
+    days = max(1, min(int(days or 7), RETENTION_DAYS))
     since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat().replace("+00:00", "Z")
     rows: List[Dict[str, Any]] = []
     try:

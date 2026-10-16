@@ -5,8 +5,9 @@ two should fetch the book so the librarian doesn't have to, the way crypto
 layer twos cut cost while raising quality. The design brief is "The Instinct
 Layer" (artifact Stx24uZHBXG1RS2ir61LTZ). The rail is its middle tier.
 
-**Status: practice mode only.** The rail never answers anyone. It watches,
-answers privately, and keeps score.
+**Status: practice mode only, and off until switched on.** The rail never
+answers anyone. When `CHIEF_RAIL=practice` is set, it watches, answers
+privately, and keeps score.
 
 ## The idea in one example
 
@@ -40,8 +41,15 @@ turns only), on a worker thread:
 3. **Read fresh** (`read`): one exact query per shape, scoped to the
    business. Never a saved answer.
 4. **Compose** (`compose`): only what the read returned, one invoice or one
-   session per sentence. Too long (more than 6 clients, 8 sessions or 4 of a
-   client's invoices) or an unnamed client: left to Chief.
+   session per sentence. These are left to Chief:
+   - too long: more than 6 clients, 8 sessions or 4 of a client's open
+     invoices;
+   - an unnamed client;
+   - any amount not in dollars (a mix included).
+
+   Invoices are aged on the business's own date, not UTC's. At 02:00 UTC it
+   is still yesterday in Detroit, so an invoice due yesterday there is not
+   overdue yet.
 5. **Prove** (`prove`):
    - `prover`: every sentence passes `chief_truth.fast_lane` against the
      rows, shaped exactly as Chief's answer check sees them. Totals are
@@ -49,10 +57,19 @@ turns only), on a worker thread:
      and Chief's sums must agree.
    - `empty_read`: "Nothing is booked tomorrow" is proved by the read itself.
      The read returned every matching row, and there were none.
-   - `failed`: neither.
-6. **Compare** (`compare`) with what Chief said:
-   - money: dollar amounts, plus the yes or no for "did X pay";
-   - calendar: clock times.
+   - `failed`: neither. A read that did not return every row proves
+     nothing, whatever it says.
+6. **Compare** (`compare`) with what Chief said, claim by claim. Every
+   amount, time and count Chief said is held to the record it belongs to,
+   together with the client and the day it was said next to:
+   - "$1,200" said next to Maria, when $1,200 is Tasha's, differs;
+   - "$200 across 99 invoices" differs on the count;
+   - "Tasha is next on Sunday at 10am", when Maria is next on Saturday,
+     differs.
+
+   Each sentence is cut at its commas and "and"s, and a part that names no
+   one carries the name its sentence last used. Money also compares the yes
+   or no of "did X pay".
 
    The outcomes:
 
@@ -60,12 +77,16 @@ turns only), on a worker thread:
    |---|---|
    | `agrees` | Chief said the rail's headline and nothing the records lack |
    | `partial` | everything Chief said is in the records, but not the headline |
-   | `differs` | Chief said a figure, time or yes/no the records contradict |
+   | `differs` | Chief said a figure, time, count, client, day or yes/no the records contradict |
+   | `unverified` | a client's figure said next to someone the records don't name, or in a table: it can't be held to a record |
    | `withheld` | Chief's reply was walled |
    | `silent` | Chief said no figure (a question back, a hedge) |
 
 7. **Keep one row** in `chief_rail_practice`, and print one `[rail]` line
-   (counts and labels, no content).
+   (counts and labels, no content). A failed read or insert logs the path
+   with its filter values hidden and no error body
+   (`sb_clients.redacted_path`): a typed client name rides in the contact
+   search, and PostgREST errors echo the failing row.
 
 Records questions off the shelves (the front desk's `kind=lookup`) are kept
 too, as declines, so coverage can be measured.
@@ -92,9 +113,11 @@ taken: `chief_availability` already answers them from the records.
 
 ## Reading the record
 
-- `GET /platform/rail/stats?days=7` (platform owner only): per shelf, the
-  questions asked, taken and proved, the outcomes, the decline reasons,
-  Chief's cost on the questions the rail took, and the time each side took.
+- `GET /platform/rail/stats?days=7` (platform owner only): per shelf and
+  per form, the questions asked, taken and proved, the outcomes, the
+  decline reasons, Chief's cost on the questions the rail took, and the
+  time each side took. **Agreement counts proved answers only.** A refused
+  proof is listed as `proof_failed` and never raises the percentage.
 - `railway run python -X utf8 scripts/rail_practice_report.py 7`: the same
   summary from a terminal.
 
@@ -104,7 +127,8 @@ These are the Kahneman–Klein conditions from the brief:
 
 - a regular question shape asked many times;
 - at least 100 practice answers;
-- at least 99 in 100 compared answers `agrees`;
+- at least 99 in 100 compared, proved answers `agrees` (`partial`,
+  `differs` and `unverified` all count against it);
 - every `differs` read by a person.
 
 When Chief's walled answers (`withheld`) had a proved rail answer, that
@@ -121,9 +145,17 @@ goes first.
 
 ## Switch
 
-`CHIEF_RAIL=off` stops the rail. Unset means practice. The table is
-`supabase/APPLY-2026-10-16-chief-rail-practice.sql`. Without it, the rail
-prints one warning and backs off for ten minutes at a time.
+Only `CHIEF_RAIL=practice` turns the rail on. Unset, empty or any other
+value is off, so a deploy without the variable reads nothing. Features
+switch on on Thursdays: set it then, on purpose.
+
+The table is `supabase/APPLY-2026-10-16-chief-rail-practice.sql`. Without
+it, the rail prints one warning and backs off for ten minutes at a time.
+
+Rows are kept 90 days (`chief_rail.prune_tick`, daily at 08:45 UTC, behind
+`scheduler_lock.gate`). A foreign key deletes them with their business. The
+account export leaves them out (`account_lifecycle.EXPORT_EXCLUDED`): they
+are tuning data derived from records the export already carries.
 
 ## Cost
 

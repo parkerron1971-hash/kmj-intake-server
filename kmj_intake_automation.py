@@ -1496,6 +1496,10 @@ async def startup():
             import member_portal_messaging as _msgs
             scheduler.add_job(g("msg_retention", _msgs.retention_tick), "cron",
                               hour=8, minute=30, id="msg_retention")
+            # The rail's practice rows (chief_rail) are kept 90 days.
+            import chief_rail as _rail
+            scheduler.add_job(g("rail_practice_retention", _rail.prune_tick), "cron",
+                              hour=8, minute=45, id="rail_practice_retention")
             # Members' notifications that come from a clock, not a click: a
             # new sermon, and tomorrow's events (member_push.sweep_tick).
             import member_push as _member_push
