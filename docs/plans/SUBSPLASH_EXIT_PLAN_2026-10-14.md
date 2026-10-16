@@ -107,9 +107,14 @@
 - the "give here now" campaign to the 119 givers of 2026, with no recurring gifts to re-create. It sends from the church's own email and number, using #1425 links, and tracks who gave on the new page. Every send is Kevin's yes.
 - nothing new for hand entry: staff record cash, check and other gifts through the existing `POST /giving/{business_id}/records` (methods cash/check/bank_transfer/other). Over half of Love City's giving arrives that way, so show the church this on day one.
 - sermon import (Love City's YouTube or Facebook, not scraping Subsplash) and audio upload (D4)
-- notification triggers for messages, sermons, events and prayer (announcements and live are done)
+- ~~notification triggers~~ **Done.** Messages, sermons, events and prayer are wired in `member_push` (tell_chat, tell_prayed, the sweep). On 2026-10-15 Youth and Kids were added: a youth leader's post, a child checked in, a child picked up (and by whom), and a room's lesson.
 - prayer from live chat into Care (step 5)
-- swap the four `LINKS` in `sites/love-city-church/build.py` once giving is live
+- ~~swap the giving `LINKS`~~ **Done 2026-10-15 (#1455).** Kevin turned giving on, and lovecityc.com/give now carries our form inside the site's own design (slots filled at serve time). `SUBSPLASH_LATEST` and `SERMON_LIBRARY` remain until sermons move (D4). Love City streams on Facebook, so where sermons live from now on is Kevin's call.
+
+**Also shipped 2026-10-15 (member app):**
+- the "top tier" redesign (#1447, FE #1226), with Give always a tab (#1449)
+- member profile photos (#1450, FE #1229)
+- Youth and Kids spaces (#1452, #1454, FE #1231). Teens 13–17 land in Youth. Parents get a Kids side with the live pickup code and Kids mode. Approved leaders get room tools.
 
 **Found along the way, not fixed:** booking, order, invoice and product checkouts trust `metadata` without checking the Connect account, the same gap #1418 closed for gifts. It needs its own careful PR.
 
