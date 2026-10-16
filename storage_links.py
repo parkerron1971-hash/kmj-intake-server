@@ -41,6 +41,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from typing import Optional
 from urllib.parse import quote
 
@@ -115,6 +116,70 @@ def upload_refusal(status_code: int, body: str) -> str:
     if code == "415" or "mime type" in text:
         return UPLOAD_WRONG_TYPE
     return UPLOAD_UNREACHABLE
+
+
+# ── Where a service-role write may land ──────────────────────────────
+#
+# The service role skips storage's per-business policy, so the object
+# key is the only thing keeping a write inside the caller's business.
+# A key glued together from request strings let an admin of one
+# business replace another's file: "../<other id>/existing.png#" in a
+# slot name, normalised by httpx, became a write to the other folder
+# (Codex review of #1464, 2026-10-16). So a key is built only from the
+# canonical business UUID plus a plain file name, and the writers refuse
+# anything else before they send a byte.
+
+UPLOAD_UNSAFE_PATH = ("We couldn't file that upload under your business, so "
+                      "nothing was saved. That's not your file — it's been logged.")
+
+_BUSINESS_UUID = re.compile(
+    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+# One name, one dot, a picture extension. No separators, no dot
+# segments, no %, ?, # or backslash: nothing a URL parser can reinterpret.
+# Always fullmatch: `$` would let a trailing newline through.
+_OBJECT_NAME = re.compile(
+    r"[A-Za-z0-9_][A-Za-z0-9_-]{0,119}\.(png|jpg|jpeg|webp|avif|gif|ico)")
+
+
+_UPLOAD_CODES = {
+    UPLOAD_NOT_CONFIGURED: "storage_not_configured",
+    UPLOAD_REFUSED: "storage_refused",
+    UPLOAD_TOO_LARGE: "storage_too_large",
+    UPLOAD_WRONG_TYPE: "storage_wrong_type",
+    UPLOAD_UNREACHABLE: "storage_unreachable",
+    UPLOAD_UNSAFE_PATH: "unsafe_path",
+}
+
+
+def upload_code(words: str) -> str:
+    """The short code that goes with one of the UPLOAD_* sentences."""
+    return _UPLOAD_CODES.get(words, "storage_unreachable")
+
+
+def canonical_business_id(value) -> Optional[str]:
+    """The business id as a lowercase dashed UUID, or None."""
+    s = str(value or "").strip().lower()
+    return s if _BUSINESS_UUID.fullmatch(s) else None
+
+
+def business_object_key(business_id, name: str, prefix: str = "") -> str:
+    """`<prefix><business uuid>/<name>`, or ValueError. The one way a
+    server-side writer names a storage object."""
+    biz = canonical_business_id(business_id)
+    if not biz:
+        raise ValueError(f"not a business id: {str(business_id)[:60]!r}")
+    if not _OBJECT_NAME.fullmatch(name or ""):
+        raise ValueError(f"unsafe object name: {str(name)[:60]!r}")
+    return f"{prefix}{biz}/{name}"
+
+
+def is_business_object_key(path: str, prefix: str = "") -> bool:
+    """True only for a key business_object_key could have built."""
+    if not isinstance(path, str) or not path.startswith(prefix):
+        return False
+    biz, sep, name = path[len(prefix):].partition("/")
+    return bool(sep) and canonical_business_id(biz) == biz \
+        and bool(_OBJECT_NAME.fullmatch(name))
 
 
 def _finish(base: str, payload: dict, download_as: Optional[str]) -> Optional[str]:

@@ -25,6 +25,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import time
 from typing import Any, Dict, Optional, Tuple
 
@@ -269,13 +270,22 @@ def _upload_site_image_debug(
       no_supabase_env       SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY missing
       http_error            Supabase returned >= 400 (body excerpt included)
       http_exception        network/timeout failure
+      unsafe_path           storage_path is not `<business uuid>/<plain name>`;
+                            nothing was sent
 
     Service role, not anon: since the 2026-08-09 write lockdown the only
     site_images insert policy is `authenticated` plus a business check,
     which anon fails ("new row violates row-level security policy").
-    Every caller checks ownership before it gets here.
+    The service role skips that business check, so the key is the only
+    fence: every caller checks access first, and this refuses any key
+    that is not one business folder plus a plain file name (a request
+    string like "../<other id>/x.png#" would otherwise land in another
+    business's folder).
     """
     import storage_links
+    if not storage_links.is_business_object_key(storage_path):
+        logger.warning(f"[dalle] refused unsafe site_images key {str(storage_path)[:120]!r}")
+        return {"status": "unsafe_path"}
     base = os.environ.get("SUPABASE_URL", "").rstrip("/")
     if not base or not storage_links.has_service_key():
         return {"status": "no_supabase_env"}
@@ -311,6 +321,8 @@ def upload_failure_words(debug: Dict[str, Any]) -> str:
     """What the practitioner reads for a failed _upload_site_image_debug."""
     import storage_links
     status = debug.get("status")
+    if status == "unsafe_path":
+        return storage_links.UPLOAD_UNSAFE_PATH
     if status == "no_supabase_env":
         return storage_links.UPLOAD_NOT_CONFIGURED
     if status == "http_error":
@@ -339,6 +351,25 @@ def _upload_site_image(
     return None
 
 
+# Slot names are identifiers (SLOT_DEFINITIONS keys, data-slot values the
+# builder emits). Anything else never reaches a storage key.
+_SAFE_SLOT_NAME = re.compile(r"[A-Za-z0-9_]{1,60}")
+
+
+def _rehost_key(business_id: str, slot_name: str, suffix: str = "") -> Optional[str]:
+    """`<business uuid>/<slot>_<unix>[_<suffix>].png`, or None when the
+    slot name or business id can't make a safe key."""
+    import storage_links
+    if not isinstance(slot_name, str) or not _SAFE_SLOT_NAME.fullmatch(slot_name):
+        return None
+    suffix_part = f"_{suffix}" if suffix else ""
+    try:
+        return storage_links.business_object_key(
+            business_id, f"{slot_name}_{int(time.time())}{suffix_part}.png")
+    except ValueError:
+        return None
+
+
 def download_and_rehost(
     openai_url: str,
     business_id: str,
@@ -354,6 +385,10 @@ def download_and_rehost(
 
     DALL-E always returns PNG; we hard-code image/png content-type."""
     if not openai_url:
+        return None
+    storage_path = _rehost_key(business_id, slot_name, suffix)
+    if not storage_path:
+        logger.warning(f"[dalle] refused rehost for unsafe slot name {str(slot_name)[:80]!r}")
         return None
     try:
         with httpx.Client(timeout=60.0) as client:
@@ -373,9 +408,6 @@ def download_and_rehost(
         logger.warning("[dalle] OpenAI URL returned empty body")
         return None
 
-    ts = int(time.time())
-    suffix_part = f"_{suffix}" if suffix else ""
-    storage_path = f"{business_id}/{slot_name}_{ts}{suffix_part}.png"
     public_url = _upload_site_image(storage_path, image_bytes, "image/png")
     if not public_url:
         return None
@@ -407,7 +439,11 @@ def generate_dalle_image_debug(
       openai_no_data             response had no items
       openai_no_url              first item missing url field
       rehost_failed              download or Supabase upload failed
+      unsafe_slot_name           slot name / business id can't make a safe
+                                 storage key; refused before any spend
     """
+    if not _rehost_key(business_id, slot_name):
+        return {"status": "unsafe_slot_name"}
     api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
         return {"status": "no_api_key"}
@@ -539,6 +575,10 @@ def generate_dalle_image(
     even if can_dalle_generate was checked moments earlier — so two
     concurrent invocations can't both squeeze under the cap.
     """
+    if not _rehost_key(business_id, slot_name):
+        # Before the paid call: the image could never be stored anyway.
+        logger.warning(f"[dalle] refused generation for unsafe slot name {str(slot_name)[:80]!r}")
+        return None
     api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
         logger.warning("[dalle] OPENAI_API_KEY not set; aborting")

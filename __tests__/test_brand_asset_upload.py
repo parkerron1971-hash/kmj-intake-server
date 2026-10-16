@@ -20,17 +20,51 @@ in agents/slot_system/dalle_client.py were missed.
 The fake below answers the way live storage does: the anon key gets the
 exact refusal above, the service-role key gets 200. So these tests fail
 on the old code for the real reason, not a mocked-up one.
+
+SECOND ROUND (Codex review, same day): with the service role the bytes
+and the route are the only gates left, so the upload now judges the file
+by its bytes (a script-bearing SVG or a text file called logo.png is
+refused before storage), and the route is tested whole — signed out,
+strangers, seats and owners — with every permitted write landing under
+the caller's own business.
 """
+import io
+from types import SimpleNamespace
+
 import httpx
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from PIL import Image
 
 import brand_engine
+import brand_engine_router
+import business_users_router
+import sb_clients
 import storage_links
+from auth_supabase import require_user
 from agents.slot_system import dalle_client
 
 LOVE_CITY = "009e9a2c-3e81-4bfc-a92a-205a8806aa99"
-PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
-WEBP = b"RIFF\x00\x00\x00\x00WEBPVP8 " + b"\x00" * 64
+OTHER_BIZ = "12773842-3cc6-41a7-9094-b8606e3f7549"
+
+
+def _image(fmt: str, size=(64, 64), **save) -> bytes:
+    buf = io.BytesIO()
+    Image.new("RGBA" if fmt in ("PNG", "WEBP", "ICO") else "RGB", size,
+              (200, 40, 90, 255)[: 4 if fmt in ("PNG", "WEBP", "ICO") else 3]).save(buf, fmt, **save)
+    return buf.getvalue()
+
+
+PNG = _image("PNG")
+WEBP = _image("WEBP")
+JPEG = _image("JPEG")
+GIF = _image("GIF")
+ICO = _image("ICO", size=(32, 32))
+BMP = _image("BMP")
+ACTIVE_SVG = (b'<?xml version="1.0"?><svg xmlns="http://www.w3.org/2000/svg" '
+              b'onload="alert(document.cookie)"><script>alert(1)</script></svg>')
+TEXT_AS_PNG = b"<html><script>alert(1)</script></html>"
 
 RLS_REFUSAL = ('{"statusCode":"403","error":"Unauthorized",'
                '"message":"new row violates row-level security policy"}')
@@ -140,31 +174,90 @@ def test_a_refusal_reads_as_ours_not_theirs(monkeypatch, env, business):
     assert res["error"] == storage_links.UPLOAD_REFUSED
     assert "row-level" not in res["error"]
     assert res["error"] != "Storage upload failed"
-    assert "patch" not in business, "nothing is saved to the brand when storage refused"
+    assert "path" not in business, "nothing is saved to the brand when storage refused"
 
 
 def test_storage_out_of_reach_says_try_again(monkeypatch, env, business):
     _storage(monkeypatch, "down")
     res = brand_engine.upload_asset(LOVE_CITY, "primary", PNG, "logo.png", "image/png")
-    assert res == {"ok": False, "error": storage_links.UPLOAD_UNREACHABLE}
+    assert res == {"ok": False, "code": "storage_unreachable",
+                   "error": storage_links.UPLOAD_UNREACHABLE}
 
 
 def test_a_missing_service_key_is_named_not_attempted(monkeypatch, env, business):
     monkeypatch.delenv("SUPABASE_SERVICE_ROLE_KEY")
     storage = _storage(monkeypatch)
     res = brand_engine.upload_asset(LOVE_CITY, "primary", PNG, "logo.png", "image/png")
-    assert res == {"ok": False, "error": storage_links.UPLOAD_NOT_CONFIGURED}
+    assert res == {"ok": False, "code": "storage_not_configured",
+                   "error": storage_links.UPLOAD_NOT_CONFIGURED}
     assert storage.posts == [], "an anon fallback would only earn the same refusal"
 
 
-def test_the_checks_before_storage_speak_plainly(env, business):
+def test_the_checks_before_storage_speak_plainly(monkeypatch, env, business):
+    storage = _storage(monkeypatch)
     big = brand_engine.upload_asset(LOVE_CITY, "favicon", b"x" * (2 * 1024 * 1024),
                                     "icon.png", "image/png")
     assert big["error"].startswith("That file is over the 1 MB limit")
-    pdf = brand_engine.upload_asset(LOVE_CITY, "primary", b"%PDF", "logo.pdf", "application/pdf")
-    assert "isn't an image" in pdf["error"]
-    bmp = brand_engine.upload_asset(LOVE_CITY, "primary", PNG, "logo.bmp", "image/bmp")
-    assert bmp["error"].startswith(".bmp files can't be used here")
+    pdf = brand_engine.upload_asset(LOVE_CITY, "primary", b"%PDF-1.7", "logo.pdf", "application/pdf")
+    assert pdf["error"] == brand_engine.ASSET_NOT_IMAGE
+    bmp = brand_engine.upload_asset(LOVE_CITY, "primary", BMP, "logo.bmp", "image/bmp")
+    assert bmp["error"] == brand_engine.ASSET_NOT_IMAGE
+    empty = brand_engine.upload_asset(LOVE_CITY, "primary", b"", "logo.png", "image/png")
+    assert empty["error"] == brand_engine.ASSET_EMPTY
+    assert storage.posts == []
+
+
+# ── The bytes decide, not the name or the declared type ─────────────
+
+@pytest.mark.parametrize("data,mime,ext", [
+    (PNG, "image/png", "png"), (JPEG, "image/jpeg", "jpg"), (WEBP, "image/webp", "webp"),
+    (GIF, "image/gif", "gif"), (ICO, "image/x-icon", "ico"),
+])
+def test_a_real_picture_is_stored_as_what_it_is(monkeypatch, env, business, data, mime, ext):
+    storage = _storage(monkeypatch)
+    # Declared as something else entirely: the bytes win.
+    res = brand_engine.upload_asset(LOVE_CITY, "primary", data, "whatever.txt", "text/plain")
+    assert res["ok"] is True, res
+    assert res["url"].endswith(f".{ext}")
+    assert storage.posts[0]["headers"]["Content-Type"] == mime
+
+
+def test_a_script_bearing_svg_is_refused_before_storage(monkeypatch, env, business):
+    storage = _storage(monkeypatch)
+    res = brand_engine.upload_asset(LOVE_CITY, "primary", ACTIVE_SVG, "logo.svg", "image/svg+xml")
+    assert res == {"ok": False, "code": "svg_refused", "error": brand_engine.ASSET_SVG}
+    assert storage.posts == []
+    assert "path" not in business
+
+
+@pytest.mark.parametrize("data", [
+    TEXT_AS_PNG,                                   # a page called logo.png
+    b"\x89PNG\r\n\x1a\n" + b"\x00" * 64,           # a PNG signature and nothing real
+    PNG[:40],                                      # a truncated PNG
+    b"\xff\xd8\xff" + b"<script>alert(1)</script>",
+])
+def test_non_picture_bytes_labelled_png_are_refused(monkeypatch, env, business, data):
+    storage = _storage(monkeypatch)
+    res = brand_engine.upload_asset(LOVE_CITY, "primary", data, "logo.png", "image/png")
+    assert res["ok"] is False and res["code"] == "not_an_image", res
+    assert storage.posts == []
+
+
+def test_an_upload_lands_under_the_canonical_business_folder(monkeypatch, env, business):
+    storage = _storage(monkeypatch)
+    res = brand_engine.upload_asset(LOVE_CITY.upper(), "primary", PNG, "logo.png", "image/png")
+    assert res["ok"] is True, res
+    assert f"/business-assets/brand/{LOVE_CITY}/primary-" in storage.posts[0]["url"]
+    assert business["path"] == f"/businesses?id=eq.{LOVE_CITY}"
+
+
+@pytest.mark.parametrize("business_id", [f"{LOVE_CITY}/../{OTHER_BIZ}", "not-a-uuid", ""])
+def test_a_business_id_that_is_not_a_plain_uuid_never_reaches_storage(monkeypatch, env, business,
+                                                                      business_id):
+    storage = _storage(monkeypatch)
+    res = brand_engine.upload_asset(business_id, "primary", PNG, "logo.png", "image/png")
+    assert res["ok"] is False and res["code"] == "no_business", res
+    assert storage.posts == []
 
 
 # ── storage_links.upload_refusal reads storage's own status ─────────
@@ -205,3 +298,102 @@ def test_site_images_without_a_service_key_say_so(monkeypatch, env):
     up = dalle_client._upload_site_image_debug(f"{LOVE_CITY}/x.png", PNG, "image/png")
     assert up == {"status": "no_supabase_env"}
     assert dalle_client.upload_failure_words(up) == storage_links.UPLOAD_NOT_CONFIGURED
+
+
+# ── The route, whole: who may upload, and where it lands ────────────
+#
+# Codex (2026-10-16): the tests above call upload_asset directly and so
+# skip authentication and the access check. These go through
+# POST /brand/asset/upload with the real assert_access over a
+# two-business fake database.
+
+OWNER, ADMIN, MEMBER, VIEWER, STRANGER = "u-owner", "u-admin", "u-member", "u-viewer", "u-stranger"
+SEATS = {OWNER: "owner", ADMIN: "admin", MEMBER: "member", VIEWER: "viewer"}
+
+
+def _two_businesses(path, *a, **kw):
+    if path.startswith("/businesses?id=eq."):
+        biz = path.split("id=eq.", 1)[1].split("&", 1)[0]
+        owner = {LOVE_CITY: OWNER, OTHER_BIZ: "u-other-owner"}.get(biz)
+        return [{"id": biz, "owner_id": owner}] if owner else []
+    return []
+
+
+@pytest.fixture
+def brand_route(monkeypatch, env, business):
+    storage = _storage(monkeypatch)
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", _two_businesses)
+    monkeypatch.setattr(business_users_router, "role_of",
+                        lambda biz, uid: SEATS.get(str(uid)) if biz == LOVE_CITY else None)
+    bare = FastAPI()                       # the real sign-in check
+    bare.include_router(brand_engine_router.router)
+    app = FastAPI()
+    app.include_router(brand_engine_router.router)
+    who = {"id": OWNER}
+    app.dependency_overrides[require_user] = (
+        lambda: SimpleNamespace(id=who["id"], email=None, role="authenticated"))
+    signed_in, signed_out = TestClient(app), TestClient(bare)
+
+    def post(user, business_id=LOVE_CITY, data=PNG, variant="primary", name="logo.png",
+             mime="image/png"):
+        client = signed_out if user is None else signed_in
+        who["id"] = user
+        return client.post("/brand/asset/upload",
+                           data={"business_id": business_id, "variant": variant},
+                           files={"file": (name, data, mime)})
+    post.storage = storage
+    post.saved = business
+    return post
+
+
+def test_signed_out_is_refused_and_nothing_is_written(brand_route):
+    r = brand_route(None)
+    assert r.status_code == 401, r.text
+    assert brand_route.storage.posts == []
+
+
+@pytest.mark.parametrize("user", [STRANGER, VIEWER, MEMBER])
+def test_anyone_below_admin_is_refused_and_nothing_is_written(brand_route, user):
+    r = brand_route(user)
+    assert r.status_code == 404, r.text          # same answer as "no such business"
+    assert brand_route.storage.posts == []
+    assert "path" not in brand_route.saved
+
+
+@pytest.mark.parametrize("user", [OWNER, ADMIN])
+def test_an_owner_or_admin_uploads_into_their_own_business(brand_route, user):
+    r = brand_route(user)
+    assert r.status_code == 200, r.text
+    [post] = brand_route.storage.posts
+    assert post["url"].startswith(
+        f"https://sb.test/storage/v1/object/business-assets/brand/{LOVE_CITY}/primary-")
+    assert brand_route.saved["path"] == f"/businesses?id=eq.{LOVE_CITY}"
+
+
+@pytest.mark.parametrize("business_id", [OTHER_BIZ, f"{LOVE_CITY}/../{OTHER_BIZ}",
+                                         f"{LOVE_CITY}&id=eq.{OTHER_BIZ}", "not-a-uuid"])
+def test_an_admin_cannot_aim_the_upload_at_another_business(brand_route, business_id):
+    r = brand_route(ADMIN, business_id=business_id)
+    assert r.status_code == 404, r.text
+    assert brand_route.storage.posts == []
+
+
+def test_a_refused_file_comes_back_as_plain_words_with_a_code(brand_route):
+    r = brand_route(OWNER, data=ACTIVE_SVG, name="logo.svg", mime="image/svg+xml")
+    assert r.status_code == 400, r.text
+    assert r.json() == {"detail": brand_engine.ASSET_SVG, "code": "svg_refused"}
+    assert brand_route.storage.posts == []
+
+
+def test_a_storage_refusal_through_the_route_is_ours_not_theirs(monkeypatch, brand_route):
+    _storage(monkeypatch, "refuse")
+    r = brand_route(OWNER)
+    assert r.status_code == 502, r.text
+    assert r.json() == {"detail": storage_links.UPLOAD_REFUSED, "code": "storage_refused"}
+
+
+def test_an_oversized_file_is_refused_from_a_bounded_read(brand_route):
+    r = brand_route(OWNER, variant="favicon", data=PNG + b"\x00" * (2 * 1024 * 1024))
+    assert r.status_code == 400, r.text
+    assert r.json()["code"] == "too_large"
+    assert brand_route.storage.posts == []
