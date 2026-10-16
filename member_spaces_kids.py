@@ -966,7 +966,11 @@ async def lesson_post(request: Request):
         return mpc._back("/my/kids/stories", err="post_no")
     rows = await asyncio.to_thread(sb_clients.sb_post_as_service, "/space_posts", {
         "business_id": str(biz_id), "space": "kids", "kind": "lesson", **lesson, "posted_by": str(me["id"])})
-    return mpc._back("/my/kids/stories", **({"done": "lesson_posted"} if isinstance(rows, list) and rows else {"err": "error"}))
+    if not (isinstance(rows, list) and rows):
+        return mpc._back("/my/kids/stories", err="error")
+    import member_push
+    member_push.tell_kids_lesson(church["business"], str(rows[0].get("id") or ""), lesson["room"], lesson["title"])
+    return mpc._back("/my/kids/stories", done="lesson_posted")
 
 
 @router.post("/my/kids/lesson/remove", include_in_schema=False)
