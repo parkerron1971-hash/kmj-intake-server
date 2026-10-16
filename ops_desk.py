@@ -374,6 +374,11 @@ class OpsRefusal(Exception):
         self.message = message
 
 
+def _short(title: Any, n: int = 60) -> str:
+    t = str(title or "").strip()
+    return t if len(t) <= n else t[: n - 1].rstrip() + "…"
+
+
 def door_missing(door: Optional[Dict[str, Any]]) -> List[str]:
     d = door if isinstance(door, dict) else {}
     return [q for k, q in DOOR if len(str(d.get(k) or "").strip()) < 2]
@@ -435,7 +440,7 @@ def apply_change(before: Dict[str, Any], change: Dict[str, Any], build_active: L
     if entering and status_after in ACTIVE:
         others = [t for t in build_active if t.get("id") != before.get("id")]
         if len(others) >= BUILD_SLOTS:
-            names = " and ".join(f"“{t.get('title')}”" for t in others[:BUILD_SLOTS])
+            names = " and ".join(f"“{_short(t.get('title'))}”" for t in others[:BUILD_SLOTS])
             raise OpsRefusal(409, f"Both Build slots are taken by {names}. Finish one, or move it back "
                                   "to Try, first.")
         missing = door_missing(door_after)
@@ -868,7 +873,6 @@ async def write_task(c: httpx.AsyncClient, before: Dict[str, Any], change: Dict[
         out = rows[0] if rows else {**before, **row}
     else:
         out = await _insert(c, "platform_ops_tasks", row)
-    _score_cache["at"] = 0.0
     return out
 
 
@@ -945,16 +949,31 @@ async def gather(c: httpx.AsyncClient, settings: Dict[str, Any], tasks: List[Dic
     }
 
 
+def own_inputs(settings: Dict[str, Any], tasks: List[Dict[str, Any]], now: datetime) -> Dict[str, Any]:
+    """The inputs the desk owns: its tasks, lanes, Kevin's hours and the
+    history. Always read fresh, so a task moved or hours logged shows at
+    once without paying for the outside reads again."""
+    tz = zone(settings.get("tz"))
+    hours = (settings.get("hours") or {}).get(week_key(now.astimezone(tz).date()))
+    return {"tasks": tasks, "lanes": lanes_view(tasks, now, tz),
+            "hours": float(hours) if isinstance(hours, (int, float)) else None,
+            "history": settings.get("history") or {}}
+
+
 async def scorecard(c: httpx.AsyncClient, settings: Dict[str, Any], tasks: List[Dict[str, Any]],
                     force: bool = False) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-    """(scorecard, inputs), cached five minutes per replica. A derived read,
-    so a replica disagreeing for a few minutes costs nothing."""
-    if not force and _score_cache["data"] and time.time() - _score_cache["at"] < SCORE_CACHE_S:
-        return _score_cache["data"], _score_cache["inputs"]
+    """(scorecard, inputs). The outside reads (Today, tickets, alerts, Chief,
+    costs, GitHub) are cached five minutes per replica: a derived read, so a
+    replica a few minutes behind costs nothing. The desk's own inputs are
+    always fresh (own_inputs)."""
     now = datetime.now(timezone.utc)
-    inputs = await gather(c, settings, tasks, now)
+    cached = _score_cache["inputs"]
+    if force or not cached or time.time() - _score_cache["at"] >= SCORE_CACHE_S:
+        cached = await gather(c, settings, tasks, now)
+        _score_cache.update(at=time.time(), inputs=cached)
+    inputs = {**cached, **own_inputs(settings, tasks, now)}
     data = compose_scorecard(inputs, now, zone(settings.get("tz")))
-    _score_cache.update(at=time.time(), data=data, inputs=inputs)
+    _score_cache["data"] = data
     return data, inputs
 
 
@@ -1134,7 +1153,6 @@ async def ops_hours(body: HoursIn, _owner=Depends(require_owner)):
         # Keep a year of weeks.
         hours = dict(sorted(hours.items())[-53:])
         await save_settings(c, {"hours": hours})
-    _score_cache["at"] = 0.0
     return {"ok": True, "week": week, "hours": hours[week]}
 
 

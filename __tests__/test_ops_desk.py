@@ -440,3 +440,39 @@ def test_hours_are_logged_by_week(fake):
     out = _run(od.ops_hours(od.HoursIn(hours=13.25, week="2026-W43")))
     assert out == {"ok": True, "week": "2026-W43", "hours": 13.2}
     assert fake.settings["hours"]["2026-W43"] == 13.2
+
+
+# ─── Follow-ups from the Plan page (FE #1235) ─────────────────────────
+
+def test_the_full_slots_refusal_fits_the_apps_error_line():
+    long1 = {"id": "b1", "title": "A" * 200}
+    long2 = {"id": "b2", "title": "B" * 200}
+    with pytest.raises(od.OpsRefusal) as e:
+        od.apply_change({}, {"title": "Third", "lane": "build", "door": DOOR}, [long1, long2], "kevin", NOW)
+    assert len(e.value.message) <= 240 and "…" in e.value.message
+
+
+def test_a_write_rereads_only_the_desks_own_numbers(monkeypatch):
+    gathered = []
+
+    async def gather(_c, settings, tasks, now):
+        gathered.append(now)
+        return {"queue": [], "tickets": [], "pages": [], "chief": None, "spend_7d_cents": None,
+                "mrr_cents": None, "paying": 3, "prs": {"backend": 1, "frontend": 2},
+                "tickets_14d": 0, "tasks": tasks, "lanes": od.lanes_view(tasks, now, NY),
+                "hours": None, "history": {}}
+    monkeypatch.setattr(od, "gather", gather)
+    monkeypatch.setattr(od, "_score_cache", {"at": 0.0, "data": None, "inputs": None})
+    settings = {"tz": "America/New_York", "hours": {}}
+    first, _ = _run(od.scorecard(None, settings, []))
+    assert _metric(first, "hours")["value"] is None
+    # Kevin logs hours and a task goes late: shown at once, outside reads not repeated.
+    week = od.week_key(datetime.now(timezone.utc).astimezone(NY).date())
+    late = [{"id": "t", "title": "Late one", "status": "open", "holder": "kevin", "lane": "ops", "due_on": "2020-01-01"}]
+    second, _ = _run(od.scorecard(None, {**settings, "hours": {week: 12}}, late))
+    assert len(gathered) == 1
+    assert _metric(second, "hours")["value"] == 12.0
+    assert _metric(second, "overdue")["value"] == 1
+    assert _metric(second, "prs")["value"] == 3
+    _run(od.scorecard(None, settings, [], force=True))
+    assert len(gathered) == 2
