@@ -1,21 +1,24 @@
 """A booking's calendar copy follows the booking.
 
-Every booking has one calendar copy: a `sessions` row whose notes carry
-[booking:{id}]. The calendar, Chief's upcoming-sessions context and the SMS
-reminder sweep all read sessions, not bookings, so a booking without a live
-copy is gone from the calendar and is never reminded.
+Every booking is meant to have one calendar copy: a `sessions` row whose
+notes carry [booking:{id}]. The SMS reminder sweep, Chief's upcoming-sessions
+context and the no-show fee button read sessions, not bookings.
 
 The bug (live on main until 2026-10-16): Chief's reschedule_booking
 cancelled the old copy and asked _mirror_booking_session for a new one. The
 mirror's "already mirrored?" check counted the copy it had just cancelled,
-so it wrote nothing. The moved booking was left with no live copy, and the
-10-minute sync tick could never put one back, because it asks the same
-mirror.
+so it wrote nothing, and the 10-minute sync tick, asking the same mirror,
+never put one back. Behind it, a bigger one: production's sessions table
+refuses session_type 'booking', so no booking has ever had a copy at all.
+APPLY-2026-10-16-booking-calendar-copies.sql allows it and adds
+public.booking_session_sync, which every path now calls (Codex's review of
+#1465 is reproduced at the bottom of this file).
 
 These tests run the real booking helpers against a small in-memory
-PostgREST (the filters these paths use: eq, neq, like, order, limit),
-including the database trigger that keeps module_entries.appointment_at
-in step with data.
+PostgREST with production's sessions constraints, the trigger that keeps
+module_entries.appointment_at in step with data, and a reference copy of
+booking_session_sync (test_booking_session_sync_sql.py runs the SQL itself
+on a real Postgres). FakeDB.applied=False is production before the APPLY.
 """
 from __future__ import annotations
 
@@ -39,6 +42,7 @@ _REAL_PATCH = sb_clients.sb_patch_as_service
 BIZ = {"id": "biz1", "name": "Fade Lab"}
 OLD = "2026-11-04T14:00:00Z"
 NEW = "2026-11-06T16:00:00Z"
+LATER = "2026-11-09T10:00:00Z"
 CLIENT = "Maria Lopez"
 
 # Production's sessions_session_type_check (read 2026-10-16). 'booking' is
@@ -370,14 +374,14 @@ def test_the_sync_tick_gives_a_moved_booking_its_copy_back(db):
     assert _live_times(db) == [NEW]
 
 
-def test_a_failed_read_never_writes_a_copy(db):
-    """A failed read is not "no copy": writing one then is how duplicates
-    start."""
-    entry = _book(db)
-    db.fail.add(("GET", "sessions"))
-    before = len(db.tables["sessions"])
-    bwr._mirror_booking_session("biz1", dict(entry))
-    assert len(db.tables["sessions"]) == before
+def test_a_failed_booking_read_writes_nothing(db):
+    """A failed read is never "no booking": nothing is synced on a guess."""
+    _book(db)
+    db.fail.add(("GET", "module_entries"))
+    rpcs = len([c for c in db.calls if c[0] == "RPC"])
+    assert bwr.sync_booking_session("biz1", "bk1")["result"] == "failed"
+    assert len([c for c in db.calls if c[0] == "RPC"]) == rpcs
+    assert _live_times(db) == [OLD]
 
 
 def test_a_cancelled_copy_at_the_bookings_own_time_stays_cancelled(db):
@@ -410,7 +414,7 @@ def test_the_same_moment_written_another_way_is_not_a_move(db):
     db.copies()[0]["scheduled_for"] = "2026-11-06T16:00:00+00:00"
     db.tables["module_entries"][0]["data"]["appointment_at"] = NEW
     before = len(db.tables["sessions"])
-    assert bwr.sync_booking_session("biz1", db.tables["module_entries"][0])
+    assert bwr.sync_booking_session("biz1", "bk1")["result"] == "ok"
     assert len(db.tables["sessions"]) == before
 
 
@@ -421,11 +425,12 @@ def test_a_copy_whose_time_cant_be_read_is_never_taken_for_the_new_time(db):
     assert _live_times(db) == [NEW]
 
 
-def test_the_mirror_writes_nothing_on_a_time_it_cant_read(db):
+def test_a_booking_whose_time_cant_be_read_gets_no_copy(db):
+    """No copy on a guess, and the sync says it failed (the old copy stays)."""
     entry = _book(db)
-    db.copies()[0].update(status="cancelled", scheduled_for="sometime soon")
-    bwr._mirror_booking_session("biz1", dict(entry))
-    assert _live_times(db) == []
+    entry["data"]["appointment_at"] = "sometime soon"
+    assert bwr.sync_booking_session("biz1", "bk1")["result"] == "failed"
+    assert _live_times(db) == [OLD]
 
 
 def test_the_new_copy_keeps_the_practitioners_notes(db):
@@ -465,21 +470,6 @@ def test_old_duplicate_copies_collapse_to_one(db):
     assert entry["data"]["appointment_at"] == NEW
 
 
-def test_two_moves_at_once_still_leave_one_copy(db):
-    """Two runs that both find no copy at the new time both write one; each
-    re-reads afterwards and keeps the same one (the lowest id)."""
-    entry = _book(db)
-    moved = {**entry, "data": {**entry["data"], "appointment_at": NEW}}
-
-    def other_run_lands_first(table, row):
-        if table == "sessions":
-            assert bwr.sync_booking_session("biz1", dict(moved))
-
-    db.before_insert = other_run_lands_first
-    assert bwr.sync_booking_session("biz1", dict(moved))
-    assert _live_times(db) == [NEW]
-
-
 # ─── when the calendar can't be written: said, logged, never lost ─────
 
 def _assert_no_names(capsys, caplog):
@@ -492,34 +482,35 @@ def _assert_no_names(capsys, caplog):
 def test_a_failed_calendar_write_is_said_and_logged_without_names(db, capsys, caplog):
     caplog.set_level("DEBUG")
     _book(db)
-    db.fail.add(("POST", "sessions"))
+    db.fail.add(("RPC", "booking_session_sync"))
     out = _reschedule()
 
-    # The booking moved, and Chief says the calendar didn't follow.
+    # The booking moved, and Chief says its reminder didn't follow.
     assert db.tables["module_entries"][0]["data"]["appointment_at"] == NEW
     assert not out.get("failed")
-    assert out["calendar_updated"] is False
-    assert "couldn't move it on your calendar" in out["result"]
+    assert out["calendar_updated"] is False and out["calendar_copy"] == "failed"
+    assert "couldn't move its reminder" in out["result"]
     # The old copy is left live rather than none at all.
     assert _live_times(db) == [OLD]
     _assert_no_names(capsys, caplog)
 
 
-def test_a_failed_calendar_read_writes_nothing_and_is_said(db, capsys, caplog):
-    caplog.set_level("DEBUG")
-    _book(db)
-    db.fail.add(("GET", "sessions"))
-    posts = len([c for c in db.calls if c[0] == "POST"])
-    out = _reschedule()
-    assert out["calendar_updated"] is False
-    assert "couldn't move it on your calendar" in out["result"]
-    assert len([c for c in db.calls if c[0] == "POST"]) == posts
-    _assert_no_names(capsys, caplog)
+def test_a_stale_read_is_read_again(db):
+    """The caller's copy of the booking is out of date: the function
+    answers 'stale', and the sync reads the booking again."""
+    entry = _book(db)
+    stale = {**entry, "data": {**entry["data"], "appointment_at": NEW}}
+    entry["data"]["appointment_at"] = LATER          # moved again since
+    FakeDB._trigger("module_entries", entry)
+    out = bwr.sync_booking_session("biz1", "bk1", stale)
+    assert out["result"] == "ok"
+    assert _live_times(db) == [LATER]
+    assert len([c for c in db.calls if c[0] == "GET" and c[1] == "module_entries"]) == 1
 
 
 def test_asking_again_after_a_failure_fixes_the_calendar(db):
     _book(db)
-    db.fail.add(("POST", "sessions"))
+    db.fail.add(("RPC", "booking_session_sync"))
     _reschedule()
     db.fail.clear()
     out = _reschedule()
@@ -549,12 +540,12 @@ def test_cancel_takes_the_copy_off_the_calendar(db):
 def test_cancel_says_when_the_copy_is_still_on_the_calendar(db, capsys, caplog):
     caplog.set_level("DEBUG")
     _book(db)
-    db.fail.add(("PATCH", "sessions"))
+    db.fail.add(("RPC", "booking_session_sync"))
     out = cba._cancel_booking_sync(BIZ, {"booking_id": "bk1"})
     assert db.tables["module_entries"][0]["status"] == "cancelled"
     assert not out.get("failed")
     assert out["calendar_updated"] is False
-    assert "couldn't take it off your calendar" in out["result"]
+    assert "couldn't clear its reminder" in out["result"]
     _assert_no_names(capsys, caplog)
 
 
@@ -696,10 +687,10 @@ def test_removing_a_booking_says_when_the_copy_stays(chief_sb, db, capsys, caplo
     import asyncio
     caplog.set_level("DEBUG")
     _book(db)
-    db.fail.add(("PATCH", "sessions"))
+    db.fail.add(("RPC", "booking_session_sync"))
     out = asyncio.run(chief_sb.handle_delete_module_entry(None, BIZ, {"entry_id": "bk1"}))
     assert out["result"].startswith("deleted")
-    assert "couldn't take it off your calendar" in out["result"]
+    assert "couldn't clear its reminder" in out["result"]
     _assert_no_names(capsys, caplog)
 
 
@@ -738,7 +729,6 @@ def test_removing_another_row_never_touches_the_calendar(chief_sb, db):
 
 import asyncio  # noqa: E402
 
-LATER = "2026-11-09T10:00:00Z"
 
 
 def _soon(hours: int) -> str:
@@ -1018,7 +1008,7 @@ def test_cancelling_a_series_says_how_many_copies_stayed(db, capsys):
     out = booking_series.cancel_series("biz1", "series1", from_iso="2026-11-01T00:00:00Z")
     assert out["cancelled"] == 2
     assert out["calendar_not_cleared"] == 2
-    assert "2 may still show" in out["summary"]
+    assert "couldn't clear the reminder for 2 of them" in out["summary"]
     printed = capsys.readouterr().out
     assert printed.count("[series] calendar copy not cleared") == 2
     assert "Maria" not in printed
@@ -1138,3 +1128,48 @@ def test_before_the_apply_file_nothing_is_written_and_nothing_false_is_said(db, 
     assert "couldn't" not in cancel["result"]
     assert db.tables["sessions"] == []
     assert "calendar copy not updated" not in capsys.readouterr().out
+
+
+# ─── the database call: "not installed yet" is not a failure ──────────
+
+def test_the_rpc_call_tells_a_missing_function_from_a_failure(monkeypatch, caplog):
+    """PGRST202 (PostgREST's "no such function") means the APPLY file isn't
+    in: copies are off. Anything else is a failure. Neither logs the
+    arguments, which can hold a client's name."""
+    caplog.set_level("DEBUG")
+    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "test-service-key")
+    answers = []
+
+    class Client:
+        def __init__(self, *a, **k):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def post(self, url, **k):
+            return answers.pop(0)
+
+    class R:
+        def __init__(self, status, text):
+            self.status_code, self.text = status, text
+
+        def json(self):
+            import json
+            return json.loads(self.text)
+
+    monkeypatch.setattr(sb_clients.httpx, "Client", Client)
+    args = {"p_business_id": "biz1", "p_booking_id": "bk1", "p_row": {"title": CLIENT}}
+    answers[:] = [R(404, '{"code":"PGRST202","message":"Could not find the function",'
+                         '"details":"Searched for (Maria Lopez)"}'),
+                  R(500, "Maria Lopez upstream error"),
+                  R(200, '{"ok":true,"state":"live"}')]
+    assert sb_clients.sb_rpc_as_service("booking_session_sync", args) == (None, "PGRST202")
+    assert sb_clients.sb_rpc_as_service("booking_session_sync", args) == (None, "500")
+    assert sb_clients.sb_rpc_as_service("booking_session_sync", args) == (
+        {"ok": True, "state": "live"}, None)
+    assert "Maria" not in caplog.text

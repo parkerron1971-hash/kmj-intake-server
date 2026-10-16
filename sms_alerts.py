@@ -58,6 +58,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
@@ -307,6 +308,51 @@ def _in_send_window(now_local: Optional[datetime] = None) -> bool:
     return QUIET_SEND_START_HOUR <= now_local.hour < QUIET_SEND_END_HOUR
 
 
+_BOOKING_MARKER = re.compile(r"\[booking:([^\]\s]+)\]")
+
+
+async def _booking_copy_is_current(client: httpx.AsyncClient,
+                                   session: Dict[str, Any]) -> bool:
+    """A booking's calendar copy (a session whose notes carry
+    [booking:{id}]) is reminded only while it IS the booking: the booking
+    is active, at this copy's time, and this is its one live copy (the
+    oldest at that time, should a failed write ever leave two). Read just
+    before each send, not from the sweep's first read, so a move or a
+    cancel that lands mid-sweep is seen.
+
+    Before this (Codex's review of #1465): a move whose cleanup failed left
+    two live copies, and the sweep texted the client twice, for two
+    different times; a cancelled booking whose copy wasn't cleared was
+    reminded anyway. A failed read sends nothing: the next hourly pass tries
+    again while the 22-26 hour window is open. A session that isn't a
+    booking's copy is always current."""
+    m = _BOOKING_MARKER.search(str(session.get("notes") or ""))
+    if not m:
+        return True
+    booking_id, biz_id = m.group(1), session.get("business_id")
+    from availability_engine import booking_instant
+    from booking_widget_router import _booking_session_time
+    rows = await _sb_get(
+        client,
+        f"/module_entries?id=eq.{booking_id}&business_id=eq.{biz_id}"
+        f"&select=status,data,appointment_at&limit=1",
+    )
+    if not rows or rows[0].get("status") != "active":
+        return False
+    at = booking_instant(_booking_session_time(rows[0]))
+    if at is None or at != booking_instant(session.get("scheduled_for")):
+        return False
+    live = await _sb_get(
+        client,
+        f"/sessions?business_id=eq.{biz_id}&notes=like.*[booking:{booking_id}]*"
+        f"&status=eq.scheduled&select=id,scheduled_for"
+        f"&order=created_at.asc,id.asc&limit=20",
+    )
+    first = next((r for r in (live or [])
+                  if booking_instant(r.get("scheduled_for")) == at), None)
+    return bool(first) and str(first.get("id")) == str(session.get("id"))
+
+
 async def reminder_sweep() -> Dict[str, int]:
     """Hourly job (kmj_intake_automation, hermes pattern).
 
@@ -320,7 +366,7 @@ async def reminder_sweep() -> Dict[str, int]:
     job); returns counters for logs + tests."""
     stats = {"sent": 0, "failed": 0, "deduped": 0, "skipped_no_consent": 0,
              "skipped_optout": 0, "skipped_quiet": 0, "skipped_no_phone": 0,
-             "skipped_toggled_off": 0}
+             "skipped_toggled_off": 0, "skipped_not_current": 0}
     try:
         if not alerts_enabled():
             logger.info("[ALERT] reminder sweep skipped — SMS_ALERTS_ENABLED off")
@@ -340,7 +386,7 @@ async def reminder_sweep() -> Dict[str, int]:
                 client,
                 f"/sessions?scheduled_for=gte.{lo}&scheduled_for=lte.{hi}"
                 f"&status=eq.scheduled&contact_id=not.is.null"
-                f"&select=id,business_id,contact_id,scheduled_for,title,session_type"
+                f"&select=id,business_id,contact_id,scheduled_for,title,session_type,notes"
                 f"&order=scheduled_for.asc&limit=500",
             ) or []
             if not sessions:
@@ -421,6 +467,17 @@ async def reminder_sweep() -> Dict[str, int]:
                     stats["skipped_no_phone"] += 1
                     continue
 
+                # Last, right before the send: a booking's copy must still
+                # be that booking, as it stands now.
+                try:
+                    current = await _booking_copy_is_current(client, s)
+                except Exception as e:
+                    logger.warning(f"[ALERT] booking check failed: {type(e).__name__}")
+                    current = False
+                if not current:
+                    stats["skipped_not_current"] += 1
+                    continue
+
                 own = await own_registration(client, biz["id"])
                 body = reminder_text(biz.get("name") or "the business",
                                      parts["day"], parts["time"], own_name=bool(own))
@@ -459,6 +516,7 @@ async def reminder_sweep() -> Dict[str, int]:
         f"skipped_optout={stats['skipped_optout']} "
         f"skipped_quiet={stats['skipped_quiet']} "
         f"skipped_no_phone={stats['skipped_no_phone']} "
-        f"skipped_toggled_off={stats['skipped_toggled_off']}"
+        f"skipped_toggled_off={stats['skipped_toggled_off']} "
+        f"skipped_not_current={stats['skipped_not_current']}"
     )
     return stats

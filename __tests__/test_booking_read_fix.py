@@ -589,9 +589,9 @@ def test_chief_create_refuses_a_booking_stored_in_data(monkeypatch, no_outside_c
 def _reschedule(monkeypatch, fake):
     patches = []
     _use(monkeypatch, fake)
-    monkeypatch.setattr(bwr, "_mirror_booking_session", lambda *a, **k: None)
+    monkeypatch.setattr(bwr, "sync_booking_session", lambda *a, **k: {"result": "ok"})
     monkeypatch.setattr(sb_clients, "sb_patch_as_service",
-                        lambda p, b: patches.append((p, b)) or [{"id": "bk1"}])
+                        lambda p, b, **k: patches.append((p, b)) or [{"id": "bk1"}])
     monkeypatch.setattr(cba, "_find_booking", lambda b, a: {"booking": {
         "id": "bk1", "status": "active",
         "data": {"appointment_at": "2027-03-01T14:00:00Z", "duration_min_at_booking": 60,

@@ -23,7 +23,7 @@ import sb_clients
 def _postgrest_like(rows_for_module_entries):
     seen = []
 
-    def fake_get(path):
+    def fake_get(path, **_k):
         seen.append(path)
         if "+" in path.split("?", 1)[-1]:
             return None  # what a 22007 400 looks like to the caller
@@ -62,5 +62,6 @@ def test_booking_session_sync_queries_are_readable(monkeypatch):
     monkeypatch.setattr(sb_clients, "sb_patch_as_service", lambda *a, **k: None)
     asyncio.run(bwr.booking_session_sync_tick())
     entry_reads = [p for p in seen if p.startswith("/module_entries")]
-    assert len(entry_reads) == 2, entry_reads
+    # One read per module: every upcoming booking, active or not, is synced.
+    assert len(entry_reads) == 1, entry_reads
     assert all("+" not in p.split("?", 1)[-1] for p in entry_reads)

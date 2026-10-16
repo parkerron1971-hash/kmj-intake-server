@@ -6286,9 +6286,9 @@ async def handle_update_module_entry(client, biz, action) -> Dict:
     if not updated:
         return _fail("update_module_entry", "update failed")
 
-    # A booking whose time moved takes its calendar copy with it.
-    from chief_booking_actions import entry_time_moved
-    calendar_miss = await entry_time_moved(
+    # A booking's calendar copy follows the booking.
+    from chief_booking_actions import entry_changed
+    calendar_miss = await entry_changed(
         biz["id"], {"id": entry_id, "module_id": existing.get("module_id"),
                     "data": merged}, existing.get("data") or {})
 

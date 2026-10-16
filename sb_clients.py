@@ -51,7 +51,7 @@ import contextvars
 import json
 import logging
 import os
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 import httpx
 
@@ -606,6 +606,32 @@ def sb_post_as_service(
 def sb_delete_as_service(path: str) -> bool:
     """RLS-bypassing sync DELETE. Server-initiated paths only."""
     return _sync_delete(path, sb_headers_service(prefer=None))
+
+
+def sb_rpc_as_service(fn: str, args: Dict[str, Any]) -> Tuple[Optional[Any], Optional[str]]:
+    """RLS-bypassing sync call of a database function, for a caller that must
+    tell "this function isn't installed yet" (its APPLY file not applied)
+    from a failure. Returns (result, None) on success, else (None, code):
+    PostgREST's error code (PGRST202 is "no such function"), else the HTTP
+    status, or "transport". The failure log names the function and the code
+    only: an error can echo the arguments, and they can hold a name."""
+    url = f"{sb_url()}/rest/v1/rpc/{fn}"
+    try:
+        with httpx.Client(timeout=HTTP_TIMEOUT) as client:
+            resp = client.post(url, headers=sb_headers_service(),
+                               content=json.dumps(args))
+    except httpx.HTTPError as e:
+        logger.warning(f"sb_clients rpc {fn} transport error: {type(e).__name__}")
+        return None, "transport"
+    if resp.status_code >= 400:
+        try:
+            code = str((resp.json() or {}).get("code") or resp.status_code)
+        except ValueError:
+            code = str(resp.status_code)
+        logger.warning(f"sb_clients rpc {fn}: {resp.status_code} {code}")
+        return None, code
+    text = resp.text
+    return (json.loads(text) if text else None), None
 
 
 def sb_get_as_anon(path: str) -> Optional[Any]:

@@ -456,14 +456,17 @@ def cancel_series(
         data["series_cancelled"] = True
         if reason:
             data["cancellation_reason"] = str(reason)[:500]
+        # Redacted: data holds the client's name, and a PostgREST error
+        # echoes the failing row into the log.
         updated = sb_clients.sb_patch_as_service(
-            f"/module_entries?id=eq.{r['id']}&business_id=eq.{business_id}",
-            {"status": "cancelled", "data": data})
+            f"/module_entries?id=eq.{r['id']}&business_id=eq.{business_id}"
+            f"&status=eq.active",
+            {"status": "cancelled", "data": data}, redact=True)
         if not updated:
             continue
         cancelled += 1
-        # Free the mirrored session immediately (the 10-min sync tick
-        # backstops this, but the calendar is being looked at NOW). A copy
+        # Clear its calendar copy now (the 10-min sync tick backstops this,
+        # and a cancelled booking's copy is never reminded meanwhile). A copy
         # that couldn't be cleared is counted and said, not swallowed.
         if not cancel_booking_sessions(business_id, r["id"]):
             still_on_calendar += 1
@@ -476,9 +479,11 @@ def cancel_series(
         summary += (f" {detached} rescheduled one{'s' if detached != 1 else ''} "
                     f"kept their own time.")
     if still_on_calendar:
-        summary += (f" {still_on_calendar} may still show on your calendar for about "
-                    f"10 minutes — I couldn't clear "
-                    f"{'them' if still_on_calendar != 1 else 'it'} just now.")
+        summary += (f" I couldn't clear the reminder for {still_on_calendar} of them "
+                    f"just now. No reminder goes out for a cancelled booking, and "
+                    f"{'they' if still_on_calendar != 1 else 'it'} should clear on "
+                    f"{'their' if still_on_calendar != 1 else 'its'} own within "
+                    f"about 10 minutes.")
     return {"ok": True, "cancelled": cancelled, "skipped_detached": detached,
             "calendar_not_cleared": still_on_calendar, "summary": summary}
 

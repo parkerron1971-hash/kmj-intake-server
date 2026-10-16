@@ -76,15 +76,23 @@ _CALENDAR_UNREAD_MOVE = ("I couldn't check your calendar just now, so I left "
                          "that booking where it was — try again in a moment.")
 
 # The booking itself changed, but its calendar copy (the sessions row the
-# calendar, Chief's context and reminders read) didn't follow. The change
-# is real, so these are added to a success, never swallowed. Asking again
-# is safe: the calendar step is idempotent.
-_CALENDAR_COPY_NOT_MOVED = ("But I couldn't move it on your calendar just now, so "
-                            "your calendar may still show the old time. Ask me to "
-                            "move it again and I'll fix the calendar.")
-_CALENDAR_COPY_NOT_CLEARED = ("But I couldn't take it off your calendar just now. "
-                              "It should clear on its own within about 10 minutes; "
-                              "if it doesn't, remove it from the calendar.")
+# reminder sweep, Chief's upcoming-sessions context and the no-show button
+# read) didn't follow. The practitioner's calendar draws the booking itself,
+# so what is behind is the reminder. The change is real, so these are added
+# to a success, never swallowed. The sync tick repairs it within 10
+# minutes, asking again repairs it now, and a copy that doesn't match its
+# booking is never sent a reminder (sms_alerts checks before each send).
+_CALENDAR_COPY_NOT_MOVED = ("But I couldn't move its reminder just now. It should "
+                            "catch up on its own within about 10 minutes; if it "
+                            "doesn't, ask me to move it again.")
+_CALENDAR_COPY_NOT_CLEARED = ("But I couldn't clear its reminder just now. No reminder "
+                              "goes out for a cancelled booking, and it should clear "
+                              "on its own within about 10 minutes.")
+# sessions.contact_id is NOT NULL: a booking with no client contact (one
+# made by hand) has no copy, so no reminder. Said, never papered over by
+# making up a contact (KAI, 2026-10-16).
+_NO_CLIENT_NO_REMINDER = ("It has no client contact linked, so no reminder text "
+                          "goes out for it.")
 
 
 def _log_calendar_miss(verb: str, business_id: str, booking_id: Any) -> None:
@@ -456,6 +464,7 @@ def _reschedule_booking_sync(biz: Dict[str, Any], action: Dict[str, Any]) -> Dic
     from booking_widget_router import (
         SlotCheckFailed, _check_slot_available, sync_booking_session,
     )
+    from availability_engine import booking_instant
 
     business_id = biz["id"]
 
@@ -503,28 +512,36 @@ def _reschedule_booking_sync(biz: Dict[str, Any], action: Dict[str, Any]) -> Dic
     if data.get("series_id"):
         data["series_detached"] = True
 
-    # Falsy, not `is None`: sb_patch_as_service returns None on a transport/HTTP
-    # error AND [] when the filter matched no rows (a stale id, or a booking
-    # belonging to another business). Both mean "nothing moved" — treating []
-    # as success would report a reschedule that never happened.
+    # sb_patch_as_service returns None on a transport/HTTP error and [] when
+    # the filter matched no row. Neither is a move; treating [] as success
+    # would report a reschedule that never happened. The write lands only
+    # while the booking is still active, so [] means a cancel landed since
+    # the read above, and the cancel wins. Redacted: data holds the client's
+    # name, and a PostgREST error echoes the failing row.
     updated = sb_clients.sb_patch_as_service(
-        f"/module_entries?id=eq.{booking['id']}&business_id=eq.{business_id}",
-        {"data": data})
+        f"/module_entries?id=eq.{booking['id']}&business_id=eq.{business_id}"
+        f"&status=eq.active",
+        {"data": data}, redact=True)
+    if updated == []:
+        return _fail("reschedule_booking",
+                     "That booking isn't active anymore, so I left it as it was.")
     if not updated:
         return _fail("reschedule_booking",
                      "I couldn't move that booking just now — try again in a moment.")
 
-    # Move the calendar copy too: exactly one live copy, at the new time.
+    # Its calendar copy follows: one live copy, at the booking's time as it
+    # stands in the database (a move that landed after this one wins).
     # Until 2026-10-16 this cancelled the old copy and asked
     # _mirror_booking_session for a new one, whose dedupe counted the copy
-    # it had just cancelled. The booking was left with no copy: gone from
-    # the calendar, never reminded. sync_booking_session is the shared
-    # move path and is safe to retry. The time comes from the data just
-    # written, not the row read before the move.
-    calendar_ok = sync_booking_session(
-        business_id, {**booking, "data": data, "appointment_at": new_when})
-    if not calendar_ok:
+    # it had just cancelled. sync_booking_session is the shared path, one
+    # booking at a time, and safe to repeat.
+    sync = sync_booking_session(business_id, booking["id"],
+                                {**booking, **updated[0], "data": data})
+    calendar = sync["result"]
+    if calendar == "failed":
         _log_calendar_miss("reschedule_booking", business_id, booking["id"])
+    since = sync.get("appointment_at")
+    moved_again = bool(since and booking_instant(since) != booking_instant(new_when))
 
     who = data.get("customer_name") or data.get("name") or "Booking"
     also_busy = _outside_busy_at(business_id, new_when, duration)
@@ -535,10 +552,15 @@ def _reschedule_booking_sync(biz: Dict[str, Any], action: Dict[str, Any]) -> Dic
                   + (". This one now stands on its own — weekly-series changes "
                      "won't move it again." if data.get("series_detached") else "")
                   + (f". {_OUTSIDE_HEADS_UP}" if also_busy else "")
-                  + ("" if calendar_ok else f". {_CALENDAR_COPY_NOT_MOVED}"),
+                  + (f". It has been moved again since, to {_pretty(since)}"
+                     if moved_again else "")
+                  + (f". {_CALENDAR_COPY_NOT_MOVED}" if calendar == "failed" else "")
+                  + (f". {_NO_CLIENT_NO_REMINDER}" if calendar == "no_contact" else ""),
         "label": str(who),
         "outside_calendar_busy": also_busy,
-        "calendar_updated": calendar_ok,
+        "calendar_updated": calendar != "failed",
+        "calendar_copy": calendar,
+        "session_id": sync.get("session_id"),
         "booking_id": booking["id"],
         "appointment_at": new_when,
         "nav": _nav_calendar(),
@@ -569,18 +591,21 @@ def _cancel_booking_sync(biz: Dict[str, Any], action: Dict[str, Any]) -> Dict[st
         data["cancellation_reason"] = str(action["reason"])[:500]
 
     # Falsy, not `is None` — see the note in _reschedule_booking_sync. A
-    # cancel that matched nothing must not report "cancelled".
+    # cancel that matched nothing must not report "cancelled". Only while
+    # still active (a second cancel finds it already done), and redacted.
     updated = sb_clients.sb_patch_as_service(
-        f"/module_entries?id=eq.{booking['id']}&business_id=eq.{business_id}",
-        {"status": "cancelled", "data": data})
+        f"/module_entries?id=eq.{booking['id']}&business_id=eq.{business_id}"
+        f"&status=eq.active",
+        {"status": "cancelled", "data": data}, redact=True)
+    if updated == []:
+        return _fail("cancel_booking", "That booking is already cancelled.")
     if not updated:
         return _fail("cancel_booking",
                      "I couldn't cancel that just now — try again in a moment.")
 
-    # Free the calendar immediately. booking_session_sync_tick backstops this
-    # every 10 minutes, but the practitioner is looking at the calendar NOW,
-    # and a copy still live there can be sent a reminder. A write that
-    # failed is said, not swallowed.
+    # Clear its calendar copy now. booking_session_sync_tick backstops this
+    # every 10 minutes, and sms_alerts never reminds a cancelled booking's
+    # copy meanwhile. A write that failed is said, not swallowed.
     from booking_widget_router import cancel_booking_sessions
     calendar_ok = cancel_booking_sessions(business_id, booking["id"])
     if not calendar_ok:
@@ -626,13 +651,6 @@ def _session_row(business_id: str, session_id: str) -> Optional[List[Dict[str, A
         f"&select=id,notes,status&limit=1", redact=True)
 
 
-def _live_copy_id(business_id: str, booking_id: str) -> Optional[str]:
-    from booking_widget_router import _booking_copies
-    rows = _booking_copies(business_id, booking_id) or []
-    live = [r for r in rows if r.get("status") == "scheduled"]
-    return live[0].get("id") if live else None
-
-
 def _session_edit_sync(biz: Dict[str, Any], session_id: str,
                        patch: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     business_id = biz["id"]
@@ -669,15 +687,16 @@ def _session_edit_sync(biz: Dict[str, Any], session_id: str,
         return res
 
     # The rest of the edit (notes, title, duration) lands on the copy that
-    # is live now: after a move that is the new one.
+    # is live now: after a move that is the new one (the sync names it). If
+    # the copy didn't move, the one being edited is still the live one.
     rest = {k: v for k, v in patch.items()
             if k != "scheduled_for" and not (k == "status" and v == "cancelled")}
-    target = session_id if cancels else _live_copy_id(business_id, booking_id)
-    res["session_id"] = target or session_id
+    target = session_id if cancels else (res.get("session_id") or session_id)
+    res["session_id"] = target
     if rest:
-        done = (sb_clients.sb_patch_as_service(
-                    f"/sessions?id=eq.{target}&business_id=eq.{business_id}",
-                    rest, redact=True) if target else None)
+        done = sb_clients.sb_patch_as_service(
+            f"/sessions?id=eq.{target}&business_id=eq.{business_id}",
+            rest, redact=True)
         if not done:
             _log_calendar_miss("update_session", business_id, booking_id)
             res["result"] += " I couldn't save the other changes to it just now — ask me again."
@@ -694,30 +713,34 @@ async def route_session_edit(client, biz, session_id: str,
     return await asyncio.to_thread(_session_edit_sync, biz, session_id, patch)
 
 
-def _entry_time_moved_sync(business_id: str, entry: Dict[str, Any],
-                           before: Dict[str, Any]) -> Optional[str]:
-    from booking_widget_router import _booking_copies, sync_booking_session
+def _entry_changed_sync(business_id: str, entry: Dict[str, Any],
+                        before: Dict[str, Any]) -> Optional[str]:
+    from booking_widget_router import sync_booking_session
     after = entry.get("data") or {}
-    if all(after.get(k) == before.get(k) for k in _TIME_KEYS):
+    # A row with no booking time, before or after, is not a booking. Any
+    # other row is synced on every edit, not only when its time changed:
+    # repeating an edit after a calendar miss is how the practitioner asks
+    # for the repair (Codex, P2-4), and a sync with nothing to do writes
+    # nothing. The database call reads the booking itself, so a cancelled
+    # or deleted booking never gets a copy back (P1-3), and a row outside a
+    # booking module is left alone.
+    if not any(after.get(k) or before.get(k) for k in _TIME_KEYS):
         return None
-    # Only a booking has calendar copies, so the copies say whether this
-    # row is one. None of them: nothing on the calendar to move (a booking
-    # not mirrored yet gets its copy from the sync tick, at the new time).
-    copies = _booking_copies(business_id, entry.get("id"))
-    if copies == []:
-        return None
-    if copies is not None and sync_booking_session(business_id, entry):
-        return None
-    _log_calendar_miss("update_module_entry", business_id, entry.get("id"))
-    return _CALENDAR_COPY_NOT_MOVED
+    calendar = sync_booking_session(business_id, entry.get("id"))["result"]
+    if calendar == "failed":
+        _log_calendar_miss("update_module_entry", business_id, entry.get("id"))
+        return _CALENDAR_COPY_NOT_MOVED
+    if calendar == "no_contact" and any(after.get(k) != before.get(k) for k in _TIME_KEYS):
+        return _NO_CLIENT_NO_REMINDER
+    return None
 
 
-async def entry_time_moved(business_id: str, entry: Dict[str, Any],
-                           before: Dict[str, Any]) -> Optional[str]:
-    """update_module_entry changed a row's data. When the row is a booking
-    and its time moved, its calendar copy follows. Returns a sentence for
-    the practitioner when the calendar couldn't be updated, else None."""
-    return await asyncio.to_thread(_entry_time_moved_sync, business_id, entry, before)
+async def entry_changed(business_id: str, entry: Dict[str, Any],
+                        before: Dict[str, Any]) -> Optional[str]:
+    """update_module_entry changed a row's data. When the row is a booking,
+    its calendar copy is brought in line with it. Returns a sentence for the
+    practitioner when that couldn't be done, else None."""
+    return await asyncio.to_thread(_entry_changed_sync, business_id, entry, before)
 
 
 async def entry_removed(business_id: str, entry: Dict[str, Any]) -> Optional[str]:

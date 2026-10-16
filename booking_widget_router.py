@@ -1561,19 +1561,6 @@ def _booking_session_time(entry: Dict[str, Any]) -> Optional[str]:
             or d.get("scheduled_for") or entry.get("appointment_at"))
 
 
-def _same_instant(a: Any, b: Any) -> Optional[bool]:
-    """Do two stored times name the same moment? A session's scheduled_for
-    comes back as '+00:00' and a booking's time is often 'Z' or a bare date,
-    so the strings are not compared. None when either can't be read: the
-    mirror then writes nothing (never a copy on a guess), and a move never
-    takes it for a copy already at the new time."""
-    from availability_engine import booking_instant
-    ia, ib = booking_instant(a), booking_instant(b)
-    if ia is None or ib is None:
-        return None
-    return ia == ib
-
-
 def _booking_session_row(business_id: str, entry: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """The sessions row that is a booking's calendar copy, or None when the
     booking has no id or no time."""
@@ -1605,141 +1592,106 @@ def _booking_session_row(business_id: str, entry: Dict[str, Any]) -> Optional[Di
     }
 
 
-def _booking_copies(business_id: str, entry_id: Any) -> Optional[List[Dict[str, Any]]]:
-    """Every session carrying this booking's marker, in id order, or None
-    when the read failed. A failed read is never "no copy": that is how a
-    second copy gets written. Redacted: a session's notes can hold a
-    client's name, and PostgREST errors echo the row."""
-    rows = sb_clients.sb_get_as_service(
-        f"/sessions?business_id=eq.{business_id}"
-        f"&notes=like.*{_booking_marker(entry_id)}*"
-        f"&select=id,status,scheduled_for,notes&order=id.asc&limit=50",
+def _booking_for_sync(business_id: str, booking_id: Any) -> Optional[List[Dict[str, Any]]]:
+    """The booking as it is now, or None when the read failed. Redacted:
+    data holds the client's name, and a PostgREST error can echo it."""
+    return sb_clients.sb_get_as_service(
+        f"/module_entries?id=eq.{booking_id}&business_id=eq.{business_id}"
+        f"&select=id,status,data,appointment_at,duration_min_at_booking&limit=1",
         redact=True)
-    return rows if isinstance(rows, list) else None
+
+
+def sync_booking_session(business_id: str, booking_id: Any,
+                         entry: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Bring a booking's calendar copy in line with the booking as it stands
+    in the database now: one live copy at its time while it is active, none
+    once it isn't. Every path that creates, moves, cancels or removes a
+    booking calls this, and so does the 10-minute sync tick.
+
+    The work is one database call, public.booking_session_sync
+    (APPLY-2026-10-16-booking-calendar-copies.sql). It locks the booking,
+    so syncs of one booking never interleave (Codex's review of #1465).
+    It reads the booking it locked, not the caller's copy, so a late or
+    repeated call can't bring back an old time. It runs whole or not at
+    all. `entry`, when given, is the caller's fresh read: it saves a read,
+    and the function answers 'stale' if it is out of date, so this reads
+    again (three tries).
+
+    Returns {"result": ..., "session_id": ..., "appointment_at": ...}:
+      "ok"          the copies match the booking (or there is nothing to do)
+      "no_contact"  the booking has no client contact, so it has no copy
+                    (sessions.contact_id is NOT NULL; no contact is made up)
+      "off"         copies aren't switched on: the APPLY file isn't in yet
+                    (before it, sessions refuses session_type 'booking'),
+                    so there is nothing to keep in step
+      "failed"      a read or the call failed; the tick tries again
+    Never raises."""
+    try:
+        for _ in range(3):
+            if entry is None:
+                rows = _booking_for_sync(business_id, booking_id)
+                if rows is None:
+                    return {"result": "failed"}
+                if not rows:
+                    return {"result": "ok"}
+                entry = rows[0]
+            row = (_booking_session_row(business_id, entry)
+                   if entry.get("status") == "active" else None)
+            out, code = sb_clients.sb_rpc_as_service("booking_session_sync", {
+                "p_business_id": business_id, "p_booking_id": str(booking_id),
+                "p_row": row})
+            if code == "PGRST202":
+                return {"result": "off"}
+            if not isinstance(out, dict):
+                return {"result": "failed"}
+            if out.get("state") == "stale":
+                entry = None
+                continue
+            result = ("no_contact" if out.get("state") == "no_contact"
+                      else "ok" if out.get("ok") else "failed")
+            return {"result": result, "session_id": out.get("session_id"),
+                    "appointment_at": out.get("appointment_at")}
+        return {"result": "failed"}
+    except Exception as e:  # pragma: no cover
+        logger.warning(f"booking->session sync failed: {type(e).__name__}")
+        return {"result": "failed"}
 
 
 def _mirror_booking_session(business_id: str, entry: Dict[str, Any]) -> None:
     """ONE CALENDAR (Kevin's ruling, 2026-07-10): every booking mirrors
-    into sessions — the calendar spine that CalendarView, Chief's
-    upcoming-sessions context, AND the SMS reminder sweep all read.
-    Before this, widget bookings lived only in module_entries: invisible
-    on the calendar, never SMS-reminded (the Arc 11 'sessions linkage'
-    queue item, finally built). A [booking:{entry_id}] marker in notes
-    links the pair — idempotent, and the sync tick uses it to cancel
-    the session when the booking is cancelled. Fail-soft: a mirror
-    hiccup never breaks the booking itself.
+    into sessions — the calendar spine that Chief's upcoming-sessions
+    context, the no-show fee button AND the SMS reminder sweep read. A
+    [booking:{entry_id}] marker in notes links the pair. Fail-soft: a
+    mirror hiccup never breaks the booking itself, and the sync tick
+    tries again within 10 minutes.
 
-    What counts as "already mirrored": any copy that isn't cancelled, or a
-    cancelled copy at the booking's own time (someone cancelled that copy;
-    it is not put back). A cancelled copy at ANOTHER time is what a move
-    leaves behind, not a copy of this time, so it doesn't count. Until
-    2026-10-16 it did: Chief's reschedule cancelled the old copy, this
-    check found it, and the booking never had a calendar copy again —
-    gone from the calendar and from reminders. Counting it out lets the
-    sync tick give those bookings their copy back. A failed read writes
-    nothing (the tick tries again in 10 minutes)."""
-    try:
-        row = _booking_session_row(business_id, entry)
-        if row is None:
-            return
-        copies = _booking_copies(business_id, entry.get("id"))
-        if copies is None:
-            return
-        if any(c.get("status") != "cancelled"
-               or _same_instant(c.get("scheduled_for"), row["scheduled_for"]) is not False
-               for c in copies):
-            return
-        sb_clients.sb_post_as_service("/sessions", row, redact=True)
-    except Exception as e:  # pragma: no cover
-        logger.warning(f"booking->session mirror failed soft: {type(e).__name__}")
-
-
-def sync_booking_session(business_id: str, entry: Dict[str, Any]) -> bool:
-    """After a booking MOVES, make its calendar copy follow: exactly one
-    live (scheduled) session with its marker, at the booking's time.
-
-    Shared by every path that moves a booking (Chief's reschedule_booking,
-    update_module_entry and update_session). The old copy is not moved in
-    place: SMS reminders are de-duplicated per session id, so a copy that
-    was already reminded for its old time would never be reminded for its
-    new one. So a moved booking gets a new copy at the new time (carrying
-    the old live copy's notes), and only then are the stale copies
-    cancelled, so a failure part-way never leaves the booking with no copy.
-
-    Idempotent, and safe to run twice at once. A retry finds the copy at the
-    new time and writes nothing new. Two runs that both create a copy each
-    re-read afterwards and keep the same one (the lowest id at the new
-    time), so they agree. Copies that are completed or no_show are history
-    and are left alone.
-
-    Returns True when the calendar now matches the booking, False when a
-    read or write failed (the caller says so out loud). Never raises."""
-    try:
-        from availability_engine import booking_instant
-        row = _booking_session_row(business_id, entry)
-        if row is None or booking_instant(row["scheduled_for"]) is None:
-            return False
-        copies = _booking_copies(business_id, entry.get("id"))
-        if copies is None:
-            return False
-        live = [c for c in copies if c.get("status") == "scheduled"]
-        if not any(_same_instant(c.get("scheduled_for"), row["scheduled_for"])
-                   for c in live):
-            marker = _booking_marker(entry.get("id"))
-            prior = next((c for c in reversed(live)
-                          if marker in str(c.get("notes") or "")), None)
-            if prior:
-                row["notes"] = prior.get("notes")
-            created = sb_clients.sb_post_as_service("/sessions", row, redact=True)
-            if not (isinstance(created, list) and created):
-                return False
-            copies = _booking_copies(business_id, entry.get("id"))
-            if copies is None:
-                return False
-            live = [c for c in copies if c.get("status") == "scheduled"]
-        keep = next((c for c in live
-                     if _same_instant(c.get("scheduled_for"), row["scheduled_for"])), None)
-        if keep is None:
-            return False
-        ok = True
-        for c in live:
-            if c.get("id") == keep.get("id"):
-                continue
-            done = sb_clients.sb_patch_as_service(
-                f"/sessions?id=eq.{c['id']}&business_id=eq.{business_id}"
-                f"&status=eq.scheduled",
-                {"status": "cancelled"}, redact=True)
-            if done is None:
-                ok = False
-        return ok
-    except Exception as e:  # pragma: no cover
-        logger.warning(f"booking->session sync failed: {type(e).__name__}")
-        return False
+    Until 2026-10-16 this never wrote a copy in production: it wrote
+    session_type 'booking', which sessions_session_type_check refused, and
+    the refusal only reached a logger nobody reads. The APPLY file allows
+    the type; until it is in, sync_booking_session answers "off"."""
+    if not entry.get("id"):
+        return
+    if sync_booking_session(business_id, entry["id"], entry)["result"] == "failed":
+        print(f"[booking] calendar copy not written biz={business_id} "
+              f"booking={entry['id']} (the sync tick retries)", flush=True)
 
 
 def cancel_booking_sessions(business_id: str, entry_id: Any) -> bool:
-    """A booking was cancelled or removed: cancel its live calendar copies.
-    True when none is left live (including when there never was one),
-    False when the write failed. The sync tick backstops this every 10
-    minutes, but the practitioner is looking at the calendar now, and the
-    reminder sweep reads it too."""
-    try:
-        done = sb_clients.sb_patch_as_service(
-            f"/sessions?business_id=eq.{business_id}"
-            f"&notes=like.*{_booking_marker(entry_id)}*&status=eq.scheduled",
-            {"status": "cancelled"}, redact=True)
-        return done is not None
-    except Exception as e:  # pragma: no cover
-        logger.warning(f"booking->session cancel failed: {type(e).__name__}")
-        return False
+    """A booking was cancelled or removed: its live copies are cancelled
+    (by the same sync: an inactive booking keeps none). True when none is
+    left live, False when that failed. The sync tick backstops this every
+    10 minutes, and a cancelled booking's copy is never sent a reminder in
+    the meantime (sms_alerts checks the booking before each send)."""
+    return sync_booking_session(business_id, entry_id)["result"] != "failed"
 
 
 async def booking_session_sync_tick() -> None:
     """One-calendar reconciler (leader-gated, every 10 min; kill switch
-    BOOKING_SESSION_SYNC=off). Backstops every booking-creation path the
-    inline mirror doesn't see (Chief's create_module_entry, the module
-    UI, imports): future active bookings get their session; cancelled
-    bookings cancel their mirrored session by marker."""
+    BOOKING_SESSION_SYNC=off). Every upcoming booking, active or not, is
+    synced: an active one gets its one copy at its time (backstopping every
+    path that writes a booking without asking, like the module UI and
+    imports, and repairing any sync that failed), and a cancelled one loses
+    its copies. Stops at once while copies are switched off."""
     import asyncio as _asyncio
     import os as _os
     if (_os.environ.get("BOOKING_SESSION_SYNC") or "on").lower() == "off":
@@ -1751,28 +1703,32 @@ async def booking_session_sync_tick() -> None:
         mods = sb_clients.sb_get_as_service(
             "/custom_modules?archetype=eq.booking_calendar&is_active=eq.true"
             "&select=id,business_id&limit=500") or []
+        missed = 0
         for m in mods:
             mid, biz_id = m.get("id"), m.get("business_id")
             if not mid or not biz_id:
                 continue
-            # Forward mirror: future active bookings.
             rows = sb_clients.sb_get_as_service(
-                f"/module_entries?module_id=eq.{mid}&status=eq.active"
-                f"&appointment_at=gte.{now}&select=*&limit=100") or []
+                f"/module_entries?module_id=eq.{mid}&business_id=eq.{biz_id}"
+                f"&appointment_at=gte.{now}"
+                f"&select=id,status,data,appointment_at,duration_min_at_booking"
+                f"&order=appointment_at.asc&limit=200", redact=True) or []
             for entry in rows:
-                _mirror_booking_session(biz_id, entry)
-            # Cancel sync: non-active future bookings whose mirrored
-            # session is still scheduled.
-            gone = sb_clients.sb_get_as_service(
-                f"/module_entries?module_id=eq.{mid}&status=neq.active"
-                f"&appointment_at=gte.{now}&select=id&limit=100") or []
-            for entry in gone:
-                cancel_booking_sessions(biz_id, entry.get("id"))
+                if not entry.get("id"):
+                    continue
+                result = sync_booking_session(biz_id, entry["id"], entry)["result"]
+                if result == "off":
+                    return
+                if result == "failed":
+                    missed += 1
+        if missed:
+            print(f"[booking-sync] {missed} calendar copies not updated; "
+                  f"retrying next tick", flush=True)
 
     try:
         await _asyncio.to_thread(_sync)
     except Exception as e:  # pragma: no cover
-        logger.warning(f"[booking-sync] tick failed: {e}")
+        logger.warning(f"[booking-sync] tick failed: {type(e).__name__}")
 
 
 def _create_appointment(
