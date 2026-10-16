@@ -584,9 +584,11 @@ def sb_get_as_service(path: str, *, redact: bool = False) -> Optional[Any]:
     return _sync_request("GET", path, sb_headers_service(), redact=redact)
 
 
-def sb_patch_as_service(path: str, body: Dict[str, Any]) -> Optional[Any]:
-    """RLS-bypassing sync PATCH. Server-initiated paths only."""
-    return _sync_request("PATCH", path, sb_headers_service(), body)
+def sb_patch_as_service(path: str, body: Dict[str, Any], *,
+                        redact: bool = False) -> Optional[Any]:
+    """RLS-bypassing sync PATCH. Server-initiated paths only. `redact` keeps
+    filter values and error bodies out of the failure log."""
+    return _sync_request("PATCH", path, sb_headers_service(), body, redact=redact)
 
 
 def sb_post_as_service(

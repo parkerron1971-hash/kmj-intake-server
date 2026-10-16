@@ -440,9 +440,12 @@ def cancel_series(
         return {"ok": True, "cancelled": 0, "skipped_detached": 0,
                 "summary": "No upcoming sessions in that series — nothing to cancel."}
 
+    from booking_widget_router import cancel_booking_sessions
+
     now_iso = datetime.now(timezone.utc).isoformat()
     cancelled = 0
     detached = 0
+    still_on_calendar = 0
     for r in rows:
         data = dict(r.get("data") or {})
         if data.get("series_detached"):
@@ -460,23 +463,24 @@ def cancel_series(
             continue
         cancelled += 1
         # Free the mirrored session immediately (the 10-min sync tick
-        # backstops this, but the calendar is being looked at NOW).
-        try:
-            marker = f"[booking:{r['id']}]"
-            sb_clients.sb_patch_as_service(
-                f"/sessions?business_id=eq.{business_id}"
-                f"&notes=like.*{marker}*&status=eq.scheduled",
-                {"status": "cancelled"})
-        except Exception as e:
-            logger.warning(f"[series] session cancel failed soft: {e}")
+        # backstops this, but the calendar is being looked at NOW). A copy
+        # that couldn't be cleared is counted and said, not swallowed.
+        if not cancel_booking_sessions(business_id, r["id"]):
+            still_on_calendar += 1
+            print(f"[series] calendar copy not cleared biz={business_id} "
+                  f"booking={r['id']}", flush=True)
 
     summary = (f"Cancelled {cancelled} upcoming "
                f"session{'s' if cancelled != 1 else ''}. Past sessions are untouched.")
     if detached:
         summary += (f" {detached} rescheduled one{'s' if detached != 1 else ''} "
                     f"kept their own time.")
+    if still_on_calendar:
+        summary += (f" {still_on_calendar} may still show on your calendar for about "
+                    f"10 minutes — I couldn't clear "
+                    f"{'them' if still_on_calendar != 1 else 'it'} just now.")
     return {"ok": True, "cancelled": cancelled, "skipped_detached": detached,
-            "summary": summary}
+            "calendar_not_cleared": still_on_calendar, "summary": summary}
 
 
 # ─── Router endpoints (operator-side, authed, member+) ────────────────

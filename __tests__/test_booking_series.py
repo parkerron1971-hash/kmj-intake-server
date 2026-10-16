@@ -254,7 +254,7 @@ def test_cancel_series_future_only_and_detached_survive(monkeypatch):
     import sb_clients
     monkeypatch.setattr(sb_clients, "sb_get_as_service", _get)
     monkeypatch.setattr(sb_clients, "sb_patch_as_service",
-                        lambda p, b: patches.append((p, b)) or [{"id": "x"}])
+                        lambda p, b, **k: patches.append((p, b)) or [{"id": "x"}])
 
     res = bs.cancel_series("biz1", "sid-1", from_iso="2027-04-10T00:00:00Z")
 
@@ -293,7 +293,7 @@ def test_reschedule_detaches_a_series_occurrence_but_keeps_the_stamp(monkeypatch
                  "duration_min_at_booking": 60}}})
     patches = []
     monkeypatch.setattr(sb_clients, "sb_patch_as_service",
-                        lambda p, b: patches.append((p, b)) or [{"id": "bk2"}])
+                        lambda p, b, **k: patches.append((p, b)) or [{"id": "bk2"}])
     monkeypatch.setattr(sb_clients, "sb_get_as_service",
                         lambda p: [{"id": "bk2", "data": {}}])
 
