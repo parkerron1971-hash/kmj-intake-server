@@ -145,26 +145,36 @@ def build_with_loop(
     410 retirement message — there is nothing to compose onto.
     """
     import site_composer
+    import storage_links
+    # Access gate (mirrors /composer/rationale), before EITHER engine can
+    # build: both overwrite the live site and fill its picture slots via
+    # service role. The legacy branch used to skip it and build onto any
+    # business_id it was handed (Codex re-check of #1464, 2026-10-16).
+    # Seat-access arc (7/31 matrix, Kevin-approved): owner passes, and
+    # so does an active MEMBER+ team seat — site builds are everyday
+    # operator work. Anyone else still 403s inside require_role. A run
+    # without a business_id persists nothing, so there is nothing to check.
+    business_id = None
+    if req.business_id:
+        business_id = storage_links.canonical_business_id(req.business_id)
+        if not business_id:
+            raise HTTPException(status_code=404, detail="business not found")
+        site_composer._require_owner(business_id, str(session.user.id))
+
     if not site_composer.legacy_site_engines_enabled():
-        if not req.business_id:
+        if not business_id:
             return JSONResponse(status_code=410, content={
                 "error": "This build engine was retired — sites are composed "
                          "by the Module Composer. POST /composer/compose instead."})
-        # Access gate (mirrors /composer/rationale): the reroute runs a
-        # full LLM compose that overwrites the live site via service role.
-        # Seat-access arc (7/31 matrix, Kevin-approved): owner passes, and
-        # so does an active MEMBER+ team seat — site builds are everyday
-        # operator work. Anyone else still 403s inside require_role.
-        site_composer._require_owner(req.business_id, str(session.user.id))
         import billing_limits
-        billing_limits.require_units(req.business_id)
+        billing_limits.require_units(business_id)
         logger.warning(
             "[director.build-with-loop] DEPRECATED path hit — rerouting to "
-            f"the Module Composer for business {req.business_id[:8]} "
+            f"the Module Composer for business {business_id[:8]} "
             "(frontend: DesignDNAPanel Generate)")
         try:
             result = site_composer.compose_site(
-                req.business_id, brief_notes=req.description or "")
+                business_id, brief_notes=req.description or "")
         except HTTPException:
             raise
         except Exception as e:
@@ -191,7 +201,7 @@ def build_with_loop(
             vocab_id=req.vocab_id,
             max_attempts=req.max_attempts,
             include_html=req.include_html,
-            business_id=req.business_id,
+            business_id=business_id,
         )
     except Exception as e:
         logger.warning(

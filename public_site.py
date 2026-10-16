@@ -3916,7 +3916,14 @@ async def generate_html_endpoint(business_id: str, user: AuthedUser = Depends(re
     only .bak snapshots of decorationGen mention neighboring endpoints).
     The Builder-Agent pipeline this drove is superseded by the Module
     Composer end to end.
+
+    Owner-gated before the flag check, like smart-enable and
+    promote-alternative: with LEGACY_SITE_ENGINES on, the build below
+    rewrites the site row via service role, and it used to do that for
+    any signed-in caller (found beside Codex's re-check of #1464,
+    2026-10-16).
     """
+    _require_business_owner(business_id, user)
     import site_composer as _sc
     if not _sc.legacy_site_engines_enabled():
         return JSONResponse(status_code=410, content={

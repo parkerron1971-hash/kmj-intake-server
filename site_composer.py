@@ -5722,6 +5722,9 @@ async def drop_upload(business_id: str = FormField(...),
         raise HTTPException(400, "That photo is over 10 MB. Try a smaller copy.")
     verified = upload_images.verified_image(data, ("jpeg", "png", "webp", "avif"))
     if not verified:
+        if upload_images.sniff(data) == "avif" and not upload_images.can_decode("avif"):
+            raise HTTPException(400, "AVIF photos can't be read here right now. "
+                                     "Save it as a JPG or PNG and try again.")
         raise HTTPException(400, "That file isn't a photo we can read. "
                                  "Use a JPG, PNG, WebP or AVIF.")
     mime, ext = verified

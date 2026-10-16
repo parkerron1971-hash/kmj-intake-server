@@ -397,3 +397,60 @@ def test_an_oversized_file_is_refused_from_a_bounded_read(brand_route):
     assert r.status_code == 400, r.text
     assert r.json()["code"] == "too_large"
     assert brand_route.storage.posts == []
+
+
+# ── Pictures that don't decode (Codex re-check, 2026-10-16) ──────────
+#
+# img.verify() checks structure, not pixels, so a JPEG missing its last
+# bytes was stored. Now a picture is stored only once it decodes, every
+# frame of it, within a pixel budget.
+
+def _noisy(fmt: str, size=(96, 96), frames=1) -> bytes:
+    import os
+    shots = [Image.frombytes("RGB", size, os.urandom(size[0] * size[1] * 3))
+             for _ in range(frames)]
+    if fmt == "GIF":
+        shots = [s.convert("P") for s in shots]
+    buf = io.BytesIO()
+    if frames > 1:
+        shots[0].save(buf, fmt, save_all=True, append_images=shots[1:])
+    else:
+        shots[0].save(buf, fmt)
+    return buf.getvalue()
+
+
+NOISY_JPEG, NOISY_WEBP, NOISY_GIF = _noisy("JPEG"), _noisy("WEBP"), _noisy("GIF", frames=4)
+
+
+def _png_claiming(width: int, height: int) -> bytes:
+    """A real PNG whose header (with a valid CRC) claims width x height."""
+    import struct
+    import zlib
+    png = bytearray(PNG)
+    png[16:24] = struct.pack(">II", width, height)
+    png[29:33] = struct.pack(">I", zlib.crc32(bytes(png[12:29])))
+    return bytes(png)
+
+
+@pytest.mark.parametrize("data,name,mime", [
+    *[(NOISY_JPEG[:-cut], "logo.jpg", "image/jpeg") for cut in (2, 10, 30, 50)],
+    (NOISY_WEBP[:-40], "logo.webp", "image/webp"),
+    (NOISY_GIF[:-200], "logo.gif", "image/gif"),            # last frame cut short
+    (_png_claiming(9000, 9000), "logo.png", "image/png"),   # 81 MP claimed, not decoded
+], ids=["jpeg-2", "jpeg-10", "jpeg-30", "jpeg-50", "webp", "gif-frame", "png-81mp"])
+def test_a_picture_that_does_not_decode_is_refused_and_nothing_is_written(
+        brand_route, data, name, mime):
+    r = brand_route(OWNER, data=data, name=name, mime=mime)
+    assert r.status_code == 400, r.text
+    assert r.json() == {"detail": brand_engine.ASSET_NOT_IMAGE, "code": "not_an_image"}
+    assert brand_route.storage.posts == []
+    assert "path" not in brand_route.saved
+
+
+@pytest.mark.parametrize("data,ext", [(NOISY_JPEG, "jpg"), (NOISY_WEBP, "webp"),
+                                      (NOISY_GIF, "gif")], ids=["jpeg", "webp", "gif-4-frames"])
+def test_a_whole_picture_still_uploads(brand_route, data, ext):
+    r = brand_route(OWNER, data=data)
+    assert r.status_code == 200, r.text
+    [post] = brand_route.storage.posts
+    assert post["url"].endswith(f".{ext}")
