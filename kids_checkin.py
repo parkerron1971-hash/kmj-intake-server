@@ -243,6 +243,12 @@ async def do_checkin(biz: str, entry: Dict[str, Any], household_id: str, childre
         saved = sb_clients.sb_post_as_service("/child_checkins", new_rows)
         if not isinstance(saved, list) or len(saved) != len(new_rows):
             raise HTTPException(503, "The check-in didn't save. Nobody was checked in — try again.")
+        # The family's adults hear it on their phones (the church's "kids"
+        # switch and their own; never the code). In the background.
+        import member_push
+        member_push.tell_kids_in(biz, str(fam["id"]), str(entry["id"]), [
+            {"child_id": r["child_id"], "first_name": kids[r["child_id"]].get("first_name") or "",
+             "room": r.get("room") or ""} for r in new_rows])
 
     rows = _get(f"/child_checkins?business_id=eq.{biz}&entry_id=eq.{entry['id']}"
                 f"&child_id=in.({_in(list(wanted))})&select=*&order=checked_in_at.asc")
@@ -345,6 +351,10 @@ def do_release(biz: str, entry: Dict[str, Any], raw_code: str, checkin_ids: List
     if len(rows) != len(ids):
         # Someone else released one of them a moment ago.
         raise HTTPException(409, "Someone else just released one of these children. Look the code up again.")
+    # Who took them home, on the family's phones at once (member_push).
+    import member_push
+    member_push.tell_kids_out(biz, household_id, [c.get("first_name") or "" for c in children], to,
+                              [str(r["id"]) for r in rows])
     return {"released": [r["id"] for r in rows], "released_to": to}
 
 

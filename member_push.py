@@ -60,7 +60,12 @@ KINDS = (
     ("sermons", "New sermons", "When a new message is posted"),
     ("events", "Event reminders", "The day before something you said you'd come to"),
     ("prayer", "Prayer", "When the church has prayed for your request"),
+    # Youth and Kids (member_spaces, Kevin 2026-10-15): only the people each
+    # is for see its box (visible_kinds) — teens and youth leaders; parents.
+    ("youth", "Youth", "When a youth leader posts"),
+    ("kids", "Kids check-in", "When your child is checked in or picked up, and their weekly lesson"),
 )
+SPACE_KINDS = ("youth", "kids")
 KIND_KEYS = tuple(k for k, _, _ in KINDS)
 DAILY_ANNOUNCEMENTS = 3
 TITLE_MAX, BODY_MAX = 60, 180
@@ -74,6 +79,19 @@ def church_kinds(settings: Optional[Dict[str, Any]]) -> Set[str]:
     if not isinstance(cfg, dict):
         return set()
     return {k for k in KIND_KEYS if cfg.get(k) is True}
+
+
+def visible_kinds(ctx: Optional[Dict[str, Any]]) -> Set[str]:
+    """The kinds a member has a box for: everything, except Youth for
+    anyone who isn't a teen or a youth leader, and Kids for anyone who
+    isn't a parent of a child on record (member_spaces.resolve's ctx)."""
+    ctx = ctx or {}
+    out = set(KIND_KEYS) - set(SPACE_KINDS)
+    if ctx.get("youth") or "youth" in (ctx.get("leader") or {}):
+        out.add("youth")
+    if ctx.get("kids_parent"):
+        out.add("kids")
+    return out
 
 
 def clean_switches(raw: Any) -> Dict[str, bool]:
@@ -302,9 +320,17 @@ async def my_notifications_save(request: Request):
     if not _allowed(church, me):
         return _back("/my/notifications", err="slow")
     form = await request.form()
-    offered = church_kinds(church["business"].get("settings"))
-    off = {k for k in offered if str(form.get(f"k_{k}") or "") != "on"}
-    ok = await asyncio.to_thread(save_turned_off, church["business"]["id"], me["id"], off)
+    import member_spaces as msp
+    biz_id = church["business"]["id"]
+    ctx = await asyncio.to_thread(msp.resolve, biz_id, me, "")
+    shown = church_kinds(church["business"].get("settings")) & visible_kinds(ctx)
+    before = await asyncio.to_thread(turned_off, biz_id, me["id"])
+    if before is None:
+        return _back("/my/notifications", err="error")
+    # A box this person wasn't shown keeps its old choice (a member who
+    # becomes a parent later still hears about their child).
+    off = (before - shown) | {k for k in shown if str(form.get(f"k_{k}") or "") != "on"}
+    ok = await asyncio.to_thread(save_turned_off, biz_id, me["id"], off)
     return _back("/my/notifications", **({"done": "notifications"} if ok else {"err": "error"}))
 
 
@@ -312,7 +338,9 @@ def render_page(biz: Dict[str, Any], site: Optional[Dict[str, Any]], request: Re
                 me: Dict[str, Any], off: Optional[Set[str]]) -> str:
     from html import escape
     from member_portal import _shell
-    offered = [k for k in KINDS if k[0] in church_kinds(biz.get("settings"))]
+    import member_spaces as msp
+    mine = visible_kinds(msp.CURRENT.get() or {})
+    offered = [k for k in KINDS if k[0] in church_kinds(biz.get("settings")) and k[0] in mine]
     flash = ""
     q = request.query_params
     if q.get("done") == "notifications":
@@ -523,6 +551,142 @@ def tell_prayed(business_id: str, contact_id: Optional[str], request_id: str) ->
                  tag="prayer")
 
     _later(run)
+
+
+# ─── Youth and Kids (member_spaces) ──────────────────────────────────
+# Kevin, 2026-10-15. A youth leader's post reaches teens and youth
+# leaders. A child checked in, a child picked up (and by whom), and a
+# room's weekly lesson reach the child's household adults. The pickup
+# code never goes on a lock screen: it's in the app's Kids side, and in
+# the text kids_checkin sends.
+
+def _q(v: Any) -> str:
+    return quote(str(v), safe="")
+
+
+def _business(business_id: str) -> Optional[Dict[str, Any]]:
+    rows = sb_clients.sb_get_as_service(
+        f"/businesses?id=eq.{_q(business_id)}&select=id,name,settings&limit=1")
+    return rows[0] if rows else None
+
+
+def _names(first_names: List[str]) -> str:
+    n = [x for x in first_names if x] or ["Your child"]
+    return n[0] if len(n) == 1 else ", ".join(n[:-1]) + f" and {n[-1]}"
+
+
+def household_adults(business_id: str, household_ids: Iterable[str]) -> List[str]:
+    ids = sorted({str(h) for h in household_ids if h})
+    if not ids:
+        return []
+    rows = sb_clients.sb_get_as_service(
+        f"/household_adults?business_id=eq.{_q(business_id)}&household_id=in.({','.join(_q(i) for i in ids)})"
+        f"&select=contact_id") or []
+    return sorted({str(r["contact_id"]) for r in rows})
+
+
+def tell_youth_post(business: Dict[str, Any], post_id: str, author: Dict[str, Any]) -> None:
+    """After a leader's post to Youth (member_spaces.youth_post)."""
+    if "youth" not in church_kinds(business.get("settings")):
+        return
+    _later(_tell_youth_post, business, post_id, author)
+
+
+def _tell_youth_post(business, post_id, author) -> None:
+    import member_spaces as msp
+    biz_id = str(business["id"])
+    me = str((author or {}).get("id") or "")
+    subs = sb_clients.sb_get_as_service(f"/{_TABLE}?business_id=eq.{_q(biz_id)}&select=contact_id&limit=5000") or []
+    ids = sorted({str(s["contact_id"]) for s in subs} - {me})
+    if not ids:
+        return
+    teens: Set[str] = set()
+    for i in range(0, len(ids), 150):
+        rows = sb_clients.sb_get_as_service(
+            f"/contacts?business_id=eq.{_q(biz_id)}&id=in.({','.join(ids[i:i + 150])})&select=id,birthdate") or []
+        teens |= {str(r["id"]) for r in rows if msp.is_youth(r)}
+    leaders = sb_clients.sb_get_as_service(
+        f"/space_leaders?business_id=eq.{_q(biz_id)}&space=eq.youth&select=contact_id") or []
+    who = (teens | ({str(l["contact_id"]) for l in leaders} & set(ids))) - {me}
+    if not who:
+        return
+    first = str((author or {}).get("name") or "").split(" ")[0] or "A youth leader"
+    send(business, "youth", title="Youth", body=f"New post from {first}. Open the app to see it.",
+         url="/my/space?to=youth", contact_ids=sorted(who), ref_id=f"youth-post:{post_id}", tag="youth")
+
+
+def tell_kids_in(business_id: str, household_id: str, entry_id: str,
+                 kids: List[Dict[str, Any]]) -> None:
+    """After children are checked in (kids_checkin.do_checkin, every way:
+    team, station, kiosk). kids: [{child_id, first_name, room}]."""
+    if not kids:
+        return
+    _later(_tell_kids_in, business_id, household_id, entry_id, kids)
+
+
+def _tell_kids_in(business_id, household_id, entry_id, kids) -> None:
+    business = _business(business_id)
+    if not business or "kids" not in church_kinds(business.get("settings")):
+        return
+    who = household_adults(business_id, [household_id])
+    if not who:
+        return
+    many = len(kids) > 1
+    rooms = sorted({str(k.get("room") or "").strip() for k in kids if str(k.get("room") or "").strip()})
+    where = (" and ".join(rooms) + ". ") if rooms else ""
+    send(business, "kids", title=f"{_names([k.get('first_name') for k in kids])} {'are' if many else 'is'} checked in",
+         body=f"{where}Your pickup code is in the app.", url="/my/space?to=kids", contact_ids=who,
+         ref_id=f"kids-in:{entry_id}:{','.join(sorted(str(k['child_id']) for k in kids))}",
+         tag=f"kids-{household_id}")
+
+
+def tell_kids_out(business_id: str, household_id: str, first_names: List[str], released_to: str,
+                  checkin_ids: List[str]) -> None:
+    """After children are released (kids_checkin.do_release): who took
+    them home, so a parent knows at once if it wasn't them."""
+    if not checkin_ids:
+        return
+    _later(_tell_kids_out, business_id, household_id, first_names, released_to, checkin_ids)
+
+
+def _tell_kids_out(business_id, household_id, first_names, released_to, checkin_ids) -> None:
+    business = _business(business_id)
+    if not business or "kids" not in church_kinds(business.get("settings")):
+        return
+    who = household_adults(business_id, [household_id])
+    if not who:
+        return
+    import member_spaces_kids as mk
+    mk.set_zone(business)
+    at = mk._hm(datetime.now(timezone.utc).isoformat())
+    many = len(first_names) > 1
+    send(business, "kids", title=f"{_names(first_names)} {'were' if many else 'was'} picked up",
+         body=f"By {released_to} at {at}." if released_to else f"At {at}.", url="/my/space?to=kids",
+         contact_ids=who, ref_id=f"kids-out:{','.join(sorted(str(i) for i in checkin_ids))}",
+         tag=f"kids-{household_id}")
+
+
+def tell_kids_lesson(business: Dict[str, Any], post_id: str, room: str, title: str) -> None:
+    """After a Kids leader posts a lesson (member_spaces_kids.lesson_post):
+    the parents of children in that room ('' = every room)."""
+    if "kids" not in church_kinds(business.get("settings")):
+        return
+    _later(_tell_kids_lesson, business, post_id, room, title)
+
+
+def _tell_kids_lesson(business, post_id, room, title) -> None:
+    biz_id = str(business["id"])
+    kids = sb_clients.sb_get_as_service(
+        f"/children?business_id=eq.{_q(biz_id)}&active=eq.true&select=household_id,room&limit=5000") or []
+    want = str(room or "").strip().casefold()
+    homes = {str(k["household_id"]) for k in kids
+             if not want or str(k.get("room") or "").strip().casefold() == want}
+    who = household_adults(biz_id, homes)
+    if not who:
+        return
+    send(business, "kids", title=f"This week in {room}" if room else "This week in Kids",
+         body=f"{title}. See what they learned.", url="/my/space?to=kids", contact_ids=who,
+         ref_id=f"kids-lesson:{post_id}", tag="kids-lesson")
 
 
 # ─── the sweep: new sermons, tomorrow's events ───────────────────────

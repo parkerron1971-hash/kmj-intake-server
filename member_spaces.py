@@ -363,7 +363,11 @@ async def youth_post(request: Request):
         return mpc._back("/my", err="post_no")
     rows = await asyncio.to_thread(sb_clients.sb_post_as_service, "/space_posts", {
         "business_id": str(biz_id), "space": "youth", "kind": "post", "body": text, "posted_by": str(me["id"])})
-    return mpc._back("/my", **({"done": "posted"} if isinstance(rows, list) and rows else {"err": "error"}))
+    if not (isinstance(rows, list) and rows):
+        return mpc._back("/my", err="error")
+    import member_push
+    member_push.tell_youth_post(church["business"], str(rows[0].get("id") or ""), me)
+    return mpc._back("/my", done="posted")
 
 
 @router.post("/my/youth/post/remove", include_in_schema=False)
