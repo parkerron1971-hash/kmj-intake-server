@@ -50,11 +50,11 @@ def video_embed_src(url: str) -> str:
     if p.scheme != "https":
         return ""
     # A recording or live stream from our own relay plays in our own
-    # player page on the media host (stream_relay/player.html).
+    # player page, which decides per request who may watch it.
     import stream_relay_router
-    own = stream_relay_router.is_media_playlist(u)
+    own = stream_relay_router.watch_session(u)
     if own:
-        return stream_relay_router.player_src(own)
+        return stream_relay_router.watch_url(own)
     host = (p.hostname or "").lower().removeprefix("www.").removeprefix("m.")
     path = p.path or ""
     if host in ("youtube.com", "youtube-nocookie.com"):

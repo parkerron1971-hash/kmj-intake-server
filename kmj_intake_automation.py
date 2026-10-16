@@ -1502,6 +1502,11 @@ async def startup():
             import member_push as _member_push
             scheduler.add_job(g("member_push_sweep", _member_push.sweep_tick), "interval",
                               minutes=15, id="member_push_sweep")
+            # A church stream the relay stopped reporting is closed, never left
+            # "live" in the member app or reused next Sunday (stream_relay_router).
+            import stream_relay_router as _stream_relay
+            scheduler.add_job(g("stream_relay_sweep", _stream_relay.sweep_stale), "interval",
+                              minutes=10, id="stream_relay_sweep")
             # App-granted trials end on their own, like Stripe trials do.
             import trial_expiry as _trial_expiry
             scheduler.add_job(g("trial_expiry", _trial_expiry.expire_tick), "interval",
