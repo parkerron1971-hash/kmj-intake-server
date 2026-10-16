@@ -940,3 +940,105 @@ def test_a_gift_from_the_member_app_comes_back_to_the_app(monkeypatch):
             "first-light", {"amount_cents": 5000, "return_to": "app"}, req))
         assert captured["success_url"] == f"{home}/my/give?thanks=1"
         assert captured["cancel_url"] == f"{home}/my/give?canceled=1"
+
+
+# ─── The form on a church's own hand-built give page ─────────────────
+# Kevin, 2026-10-15: "update the website giving as well" — Love City's
+# own /give page carries this form instead of Subsplash's.
+
+PAGE = ("<main><div class=\"give-embed\"><!--solutionist:give-form--><p>fallback form</p>"
+        "<!--/solutionist:give-form--></div><ul><!--solutionist:give-funds--><li>Old fund</li>"
+        "<!--/solutionist:give-funds--></ul></main>")
+
+
+def test_a_hand_built_give_page_carries_the_form_while_giving_is_on(monkeypatch):
+    _keys(monkeypatch)
+    html = giving_router.fill_give_slots(PAGE, _church(), "first-light", api_origin="https://api.example")
+    assert "<!--solutionist:" not in html and "<!--/solutionist:" not in html
+    assert 'id="gv-form"' in html and "fallback form" not in html and "<html" not in html
+    assert '<div class="gv-embed">' in html and ".gv-embed{--accent:" in html and ":root{" not in html
+    assert "var APP = false, PREVIEW = false, SITE = true;" in html
+    assert "return_to: APP ? 'app' : (SITE ? 'site' : undefined)" in html
+    assert 'var EMBED = {"pk": "pk_live_xyz", "acct": "acct_123"};' in html and "js.stripe.com" in html
+    assert ('<li><span class="fund-name">General Fund</span></li><li><span class="fund-name">Building Fund</span></li>'
+            '<li><span class="fund-name">Missions Fund</span></li>') in html and "Old fund" not in html
+
+
+def test_a_hand_built_give_page_without_online_giving(monkeypatch):
+    _keys(monkeypatch)
+    off = _church(settings={"giving": {"enabled": False}})
+    html = giving_router.fill_give_slots(PAGE, off, "first-light", api_origin="https://api.example")
+    assert "Online giving is paused right now." in html and 'id="gv-form"' not in html
+    assert "<li>Old fund</li>" in html and "<!--solutionist:" not in html     # the site's own list stays
+    # A failed read is not "paused": each slot keeps the page's own fallback.
+    html = giving_router.fill_give_slots(PAGE, None, "first-light", api_origin="https://api.example")
+    assert "<p>fallback form</p>" in html and "paused" not in html and "<!--/solutionist:" not in html
+    monkeypatch.setattr(giving_router, "render_give_embed", lambda *a, **k: 1 / 0)
+    html = giving_router.fill_give_slots(PAGE, _church(), "first-light", api_origin="https://api.example")
+    assert "<p>fallback form</p>" in html and "<li>Old fund</li>" in html
+    assert giving_router.fill_give_slots("<p>no slots</p>", _church(), "x", api_origin="a") == "<p>no slots</p>"
+
+
+def test_a_gift_from_the_churchs_own_give_page_comes_back_to_it(monkeypatch):
+    _keys(monkeypatch)
+
+    class SiteSB(FakeSB):
+        def sb_get_as_service(self, path):
+            if path.startswith("/business_sites?"):
+                return [{"business_id": BIZ, "slug": "first-light", "site_config": {"custom_domain": "firstlight.org"}}]
+            return super().sb_get_as_service(path)
+    monkeypatch.setattr(giving_router, "sb_clients", SiteSB(business=_church()))
+    monkeypatch.setattr(giving_router, "_give_rate", {})
+    captured = {}
+
+    class StubAdapter:
+        async def create_giving_checkout(self, biz, **kwargs):
+            captured.update(kwargs)
+            return {"id": "cs_1", "url": "https://checkout.stripe.com/x"}
+
+    import payments_core
+    monkeypatch.setattr(payments_core, "provider_for", lambda biz: StubAdapter())
+    home = f"https://first-light.{giving_router.PUBLIC_DOMAIN}"
+    for origin, back in (("https://firstlight.org", "https://firstlight.org"),
+                         ("https://www.firstlight.org", "https://www.firstlight.org"),
+                         ("https://evil.example", home)):
+        req = SimpleNamespace(headers={"origin": origin}, client=SimpleNamespace(host="8.9.9.9"))
+        asyncio.run(giving_router.public_giving_checkout(
+            "first-light", {"amount_cents": 5000, "return_to": "site"}, req))
+        assert captured["success_url"] == f"{back}/give?thanks=1"
+        assert captured["cancel_url"] == f"{back}/give?canceled=1"
+
+
+def test_love_city_gives_on_its_own_page():
+    import importlib.util
+    from pathlib import Path
+    here = Path(__file__).resolve().parent.parent / "sites" / "love-city-church"
+    give = (here / "give.html").read_text(encoding="utf-8")
+    assert "<!--solutionist:give-form-->" in give and "<!--/solutionist:give-form-->" in give
+    assert "<!--solutionist:give-funds-->" in give and "subsplash" not in give.lower()
+    spec = importlib.util.spec_from_file_location("lc_build_give", here / "build.py")
+    build = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(build)
+    assert not any("GIVE" in k for k in build.LINKS)
+    page = build.render_pages()["give"]
+    assert "<!--solutionist:give-form-->" in page                            # the build keeps the slot
+
+
+def test_public_site_fills_give_slots_only_on_a_page_that_has_them(monkeypatch):
+    import public_site
+    reads = []
+
+    async def read(client, path):
+        reads.append(path)
+        return [_church()]
+    monkeypatch.setattr(public_site, "_sb_service", read)
+    out = asyncio.run(public_site._fill_give_slots(None, BIZ, "first-light", "<p>about us</p>"))
+    assert out == "<p>about us</p>" and reads == []
+    out = asyncio.run(public_site._fill_give_slots(None, BIZ, "first-light", PAGE))
+    assert len(reads) == 1 and "stripe_account_id" in reads[0] and 'id="gv-form"' in out
+
+    async def broken(client, path):
+        raise RuntimeError("down")
+    monkeypatch.setattr(public_site, "_sb_service", broken)
+    out = asyncio.run(public_site._fill_give_slots(None, BIZ, "first-light", PAGE))
+    assert "<p>fallback form</p>" in out and "<!--solutionist:" not in out

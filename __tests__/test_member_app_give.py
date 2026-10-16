@@ -38,7 +38,8 @@ def test_the_app_give_screen_is_the_same_form_in_the_apps_look():
     assert 'id="gv-form"' in page and "/public/giving/" in page                       # the same payment path
     assert 'href="/my"' in page and ">Give</h1>" in page and "--mb-fill:" in page        # the app's header and look
     assert 'value="Ana &lt;Rivers&gt;"' in page and 'value="ana@example.com"' in page   # filled in, escaped
-    assert "var APP = true, PREVIEW = false" in page and "return_to: APP ? 'app' : undefined" in page
+    assert "var APP = true, PREVIEW = false, SITE = false" in page
+    assert "return_to: APP ? 'app' : (SITE ? 'site' : undefined)" in page
     assert "won't charge" not in page
 
 

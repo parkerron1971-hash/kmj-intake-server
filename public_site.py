@@ -1920,6 +1920,7 @@ async def get_site_page_html(slug: str, page_path: str, pv: Optional[str] = None
                 if biz_id else []) or []
             html = _apply_manual_source(
                 html, biz_id, (biz_rows[0].get("settings") if biz_rows else {}) or {})
+            html = await _fill_give_slots(client, biz_id, slug, html)
         # page_path makes this page canonical to ITSELF. Without it every
         # secondary page claimed to be the home page, telling Google the
         # site has one page and three duplicates. The clean-path handlers
@@ -5715,6 +5716,25 @@ MARKETING_HTML = """<!DOCTYPE html>
 </html>"""
 
 
+async def _fill_give_slots(client: httpx.AsyncClient, biz_id: Optional[str], slug: str, html: str) -> str:
+    """A hand-built page's give slots (giving_router.fill_give_slots): the
+    church's own give page carries the give form while online giving is
+    on (Kevin, 2026-10-15). Only pages that mark a slot pay for the read;
+    a failed read keeps the page's own fallback."""
+    if not html or "<!--solutionist:give-" not in html:
+        return html
+    from giving_router import fill_give_slots
+    try:
+        rows = (await _sb_service(
+            client, f"/businesses?id=eq.{biz_id}&select=id,name,type,settings,stripe_account_id&limit=1")
+            if biz_id else None)
+    except Exception as e:
+        logger.info(f"[manual-site] give slots: business read failed: {e}")
+        rows = None
+    business = rows[0] if isinstance(rows, list) and rows else None
+    return fill_give_slots(html, business, slug, api_origin=_EMBED_ORIGIN)
+
+
 async def _augment_html(client: httpx.AsyncClient, biz_id: Optional[str], slug: str, html: str,
                         custom_domain: Optional[str] = None,
                         page_path: str = "",
@@ -5757,6 +5777,7 @@ async def _augment_html(client: httpx.AsyncClient, biz_id: Optional[str], slug: 
                 brand_color = bc
     if manual:
         html = _apply_manual_source(html, biz_id, biz_settings)
+        html = await _fill_give_slots(client, biz_id, slug, html)
     html = _inject_canonical(html, slug, custom_domain, page_path)
     # Pass 3: activate the Pass 2.5a `_brand_head_meta_tags` helper for
     # legacy sites too — favicons + OG + Twitter Cards now render for
