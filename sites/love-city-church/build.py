@@ -70,7 +70,7 @@ PAGES = {
     "sermons": ("Sermons | Love City Church",
                 "Watch the latest message and every sermon series from the Love City Experience."),
     "give": ("Give | Love City Church",
-             "Give online to tithes, offering, the building fund, youth ministry, and love and care."),
+             "Give online to Love City Church: tithes, offering, outreach and the youth department."),
     "ministries": ("Ministries | Love City Church",
                    "Love Works Food Pantry, youth, Sisters in the City, pastoral care, Next Step, Leaderschool, and ways to serve."),
     "events": ("Events | Love City Church",
@@ -96,8 +96,6 @@ LINKS = {
     "FACEBOOK_URL": "https://www.facebook.com/lovecitynation/",
     "STORE_URL": "https://lovecity.printify.me/",
     "SUBSPLASH_LATEST": "https://subsplash.com/u/-7MJWGR/media/embed/d/*",
-    "SUBSPLASH_GIVE": "https://subsplash.com/u/-7MJWGR/give?embed=true",
-    "SUBSPLASH_GIVE_PAGE": "https://subsplash.com/u/cityofloveministries/give",
     "SERMON_LIBRARY": "https://subsplash.com/u/cityofloveministries/media",
 }
 

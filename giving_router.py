@@ -461,9 +461,11 @@ async def public_giving_checkout(
     Body: { amount_cents: int, fund?: str,
             frequency?: 'once'|'weekly'|'biweekly'|'monthly',
             cover_fee?: bool, name?: str, email?: str, embedded?: bool,
-            return_to?: 'app' }
+            return_to?: 'app' | 'site' }
     `return_to: 'app'` (the member app's give screen) brings the giver
-    back to /my/give on the church address they're on (app_return_base).
+    back to /my/give on the church address they're on (app_return_base);
+    'site' (a hand-built site's own give page) brings them back to /give
+    there.
     Returns { ok, url } — the Stripe-hosted payment page — or, when the
     page asked for embedded and the platform's publishable key is set,
     { ok, embedded: true, client_secret } for the form that mounts
@@ -536,9 +538,13 @@ async def public_giving_checkout(
         fund = funds[0]
 
     canonical = f"https://{sites[0].get('slug') or slug}.{PUBLIC_DOMAIN}/give"
-    if body.get("return_to") == "app":
+    if body.get("return_to") in ("app", "site"):
+        # The member app's give screen, or a hand-built site's own give
+        # page (render_give_embed): back to it on the church address the
+        # giver is on.
         canonical = app_return_base(sites[0].get("slug") or slug, sites[0].get("site_config"),
-                                    request.headers.get("origin") or "") + "/my/give"
+                                    request.headers.get("origin") or "") + (
+            "/my/give" if body.get("return_to") == "app" else "/give")
     gift_id = str(uuid.uuid4())
 
     from payments_core import provider_for
@@ -907,147 +913,11 @@ def _brand_font_links(business: Dict[str, Any]) -> str:
     return _font_links(_brand_kit(business))
 
 
-def render_give_page(
-    business: Dict[str, Any],
-    canonical_url: str,
-    slug: str,
-    *,
-    api_origin: str,
-    app: Optional[Dict[str, Any]] = None,
-) -> str:
-    """The public give page. Mobile-first by design — congregants give
-    from phones: single column, ≤480px shell, 44px+ touch targets,
-    16px inputs (no iOS zoom), no horizontal scroll at any width.
-
-    `app` puts the same form inside the member app (/my/give, Kevin's
-    phone design 2026-10-14): {"head": the app's fonts and stylesheet,
-    "top": its header, "name"/"email": the signed-in member's (the app's
-    pages are never cached), "preview": the owner's preview, where Give
-    is refused}. The payment itself is unchanged."""
-    name = (business.get("name") or "").strip() or "Give"
-    cfg = giving_settings(business.get("settings"))
-    funds = configured_funds(cfg)
-    presets = preset_amounts(cfg)
-    message = (cfg.get("message") or "").strip()
-    brand = (business.get("settings") or {}).get("brand_kit") or {}
-    logo_url = ""
-    if isinstance(brand, dict):
-        logo_url = (brand.get("logo_url") or brand.get("logo") or "").strip()
-
-    title = f"Give — {name}"
-    description = message or f"Give online to {name}. Secure one-time, weekly and monthly giving."
-    css_vars = _brand_css_vars(business)
-
-    # The payment form mounts inside this page (embedded Checkout on the
-    # church's own Stripe account) once the platform's publishable key is
-    # set. Without it, Give sends the giver to checkout.stripe.com and
-    # back, as before.
-    from payments_core import provider_for
-    from stripe_checkout_helpers import embedded_checkout_publishable_key
-    pk = embedded_checkout_publishable_key()
-    acct = str(business.get("stripe_account_id") or "")
-    embed = bool(pk and re.fullmatch(r"acct_[A-Za-z0-9]+", acct)
-                 and provider_for(business).id == "stripe")
-    embed_json = json.dumps({"pk": pk, "acct": acct}) if embed else "null"
-    stripe_js = '<script src="https://js.stripe.com/v3/"></script>' if embed else ""
-    pay_note = ("Your payment is handled securely by Stripe, right on this page."
-                if embed else "You'll finish securely on our payment page.")
-
-    preset_btns = "".join(
-        f'<button type="button" class="gv-amt" data-cents="{p * 100}">${p:,}</button>'
-        for p in presets)
-
-    fund_block = ""
-    if len(funds) > 1:
-        opts = "".join(f'<option value="{_esc(f)}">{_esc(fund_label(f))}</option>'
-                       for f in funds)
-        fund_block = (
-            '<label class="gv-label" for="gv-fund">Designate my gift to</label>'
-            f'<select id="gv-fund" class="gv-input">{opts}</select>')
-
-    logo_html = (f'<img class="gv-logo" src="{_esc(logo_url)}" alt="{_esc(name)} logo">'
-                 if logo_url else "")
-    message_html = (f'<p class="gv-msg">{_esc(message)}</p>' if message else "")
-    app = app or None
-    header_html = (app["top"] + message_html if app else
-                   f'<header class="gv-header">{logo_html}<h1 class="gv-name">{_esc(name)}</h1>'
-                   f'<p class="gv-title">Give</p>{message_html}</header>')
-    # Precomputed (not a nested f-string) so the module parses on every
-    # Python the deploy target might run.
-    og_image_html = ""
-    if logo_url:
-        og_image_html = (f'<meta property="og:image" content="{_esc(logo_url)}">'
-                         f'<link rel="icon" href="{_esc(logo_url)}">')
-
-    return f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>{_esc(title)}</title>
-<meta name="description" content="{_esc(description)}">
-<link rel="canonical" href="{_esc(canonical_url)}">
-<meta property="og:title" content="{_esc(title)}">
-<meta property="og:description" content="{_esc(description)}">
-<meta property="og:url" content="{_esc(canonical_url)}">
-<meta property="og:type" content="website">
-{og_image_html}
-{_brand_font_links(business)}
-{stripe_js}
-<style>{css_vars}</style>
-<style>
-html,body{{margin:0;padding:0;font-family:var(--font-body);color:var(--text-primary);
-background:var(--surface);min-height:100vh;}}
-*{{box-sizing:border-box;}}
-.gv-shell{{max-width:480px;margin:0 auto;padding:28px 16px 48px;}}
-.gv-header{{text-align:center;margin-bottom:22px;}}
-.gv-logo{{max-width:88px;max-height:88px;display:block;margin:0 auto 12px;}}
-.gv-name{{font-family:var(--font-heading);font-size:24px;font-weight:700;margin:0;}}
-.gv-title{{font-family:var(--font-heading);font-size:15px;font-weight:600;
-color:var(--text-secondary);margin:6px 0 0;letter-spacing:.06em;text-transform:uppercase;}}
-.gv-msg{{font-size:14px;color:var(--text-secondary);margin:10px 0 0;line-height:1.5;}}
-.gv-card{{border:1px solid var(--border);border-radius:16px;padding:20px 16px;}}
-.gv-grid{{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-bottom:12px;}}
-.gv-amt{{padding:14px 0;font-size:17px;font-weight:700;font-family:var(--font-body);
-border:1.5px solid var(--border);border-radius:12px;background:transparent;
-color:var(--text-primary);cursor:pointer;min-height:48px;}}
-.gv-amt.on{{border-color:var(--accent);background:var(--accent);color:#fff;}}
-.gv-label{{display:block;font-size:11px;font-weight:700;letter-spacing:.08em;
-text-transform:uppercase;color:var(--text-muted);margin:14px 0 6px;}}
-.gv-input{{width:100%;padding:12px 14px;font-size:16px;border:1.5px solid var(--border);
-border-radius:12px;background:transparent;color:var(--text-primary);min-height:48px;}}
-.gv-freq{{display:grid;grid-template-columns:repeat(4,1fr);gap:0;border:1.5px solid var(--border);
-border-radius:12px;overflow:hidden;margin-top:4px;}}
-@media (max-width:420px){{.gv-freq{{grid-template-columns:1fr 1fr;}}}}
-.gv-cover{{display:flex;align-items:flex-start;gap:10px;margin-top:14px;font-size:14px;
-line-height:1.45;color:var(--text-secondary);cursor:pointer;min-height:44px;}}
-.gv-cover input{{width:20px;height:20px;margin:1px 0 0;flex:none;accent-color:var(--accent);}}
-.gv-freq button{{padding:12px 0;font-size:14px;font-weight:600;border:0;background:transparent;
-color:var(--text-secondary);cursor:pointer;min-height:46px;font-family:var(--font-body);}}
-.gv-freq button.on{{background:var(--accent);color:#fff;}}
-.gv-give{{width:100%;margin-top:18px;padding:16px 0;font-size:17px;font-weight:700;
-border:0;border-radius:12px;background:var(--accent);color:#fff;cursor:pointer;
-min-height:52px;font-family:var(--font-body);}}
-.gv-give:disabled{{opacity:.55;cursor:default;}}
-.gv-note{{font-size:12px;color:var(--text-muted);margin-top:12px;line-height:1.5;text-align:center;}}
-.gv-banner{{display:none;margin-bottom:16px;padding:14px 16px;border-radius:12px;
-font-size:14px;line-height:1.5;border:1px solid var(--border);}}
-.gv-banner.show{{display:block;}}
-.gv-error{{display:none;margin-top:10px;font-size:13px;color:#b3261e;}}
-.gv-error.show{{display:block;}}
-.gv-footer{{text-align:center;font-size:11px;color:var(--text-muted);margin-top:28px;
-padding-top:14px;border-top:1px solid var(--border);}}
-.gv-footer a{{color:var(--text-muted);text-decoration:none;}}
-.gv-back{{background:none;border:0;padding:10px 0;margin-bottom:6px;font-size:14px;font-weight:600;
-color:var(--text-secondary);cursor:pointer;min-height:44px;font-family:var(--font-body);}}
-.gv-pay{{border-radius:16px;overflow:hidden;}}
-</style>
-{app["head"] if app else ""}
-</head>
-<body>
-<main class="gv-shell">
-  {header_html}
-  <div id="gv-thanks" class="gv-banner">Thank you — your gift has been received.
+def _give_body(preset_btns: str, fund_block: str, pay_note: str, name: str = "", email: str = "") -> str:
+    """The give form's markup: the thank-you and no-gift notes, the form,
+    "Change my gift", and the box the payment form mounts in. Shared by
+    the give page and a hand-built site's own give page."""
+    return f"""  <div id="gv-thanks" class="gv-banner">Thank you — your gift has been received.
   If you shared your email, a receipt is on its way.</div>
   <div id="gv-canceled" class="gv-banner">No gift was made. You're welcome to
   try again whenever you're ready.</div>
@@ -1067,9 +937,9 @@ color:var(--text-secondary);cursor:pointer;min-height:44px;font-family:var(--fon
     <label class="gv-cover"><input type="checkbox" id="gv-fee">
       <span id="gv-fee-txt">Add a little to cover the processing fee, so your whole gift arrives</span></label>
     <label class="gv-label" for="gv-nm">Name <span style="text-transform:none;font-weight:400">(optional)</span></label>
-    <input type="text" id="gv-nm" class="gv-input" autocomplete="name" maxlength="120" value="{_esc((app or {}).get('name') or '')}">
+    <input type="text" id="gv-nm" class="gv-input" autocomplete="name" maxlength="120" value="{_esc(name)}">
     <label class="gv-label" for="gv-em">Email <span style="text-transform:none;font-weight:400">(for your receipt)</span></label>
-    <input type="email" id="gv-em" class="gv-input" autocomplete="email" maxlength="200" value="{_esc((app or {}).get('email') or '')}">
+    <input type="email" id="gv-em" class="gv-input" autocomplete="email" maxlength="200" value="{_esc(email)}">
     <button type="submit" class="gv-give" id="gv-go">Give</button>
     <div class="gv-error" id="gv-err"></div>
     <p class="gv-note">{pay_note}
@@ -1077,12 +947,15 @@ color:var(--text-secondary);cursor:pointer;min-height:44px;font-family:var(--fon
   </form>
   <button type="button" class="gv-back" id="gv-back" hidden>&larr; Change my gift</button>
   <div class="gv-pay" id="gv-pay" hidden></div>
-  <footer class="gv-footer">
-    Powered by <a href="https://mysolutionist.app/" target="_blank" rel="noopener">Solutionist</a>
-  </footer>
-</main>
-{(app or {}).get("foot", "")}
-<script>
+"""
+
+
+def _give_script(*, api_origin: str, slug: str, embed_json: str, app: bool = False,
+                 preview: bool = False, site: bool = False) -> str:
+    """The give form's behaviour (amounts, frequency, the fee, embedded
+    Checkout). `app`: inside the member app; `site`: on a church's own
+    hand-built give page."""
+    return f"""<script>
 (function() {{
   var API = {api_origin!r};
   var SLUG = {slug!r};
@@ -1106,8 +979,9 @@ color:var(--text-secondary);cursor:pointer;min-height:44px;font-family:var(--fon
   // this page, else null (Give redirects to Stripe's page instead).
   var EMBED = {embed_json};
   // Inside the member app: come back to /my/give; in the owner's preview
-  // nothing is charged.
-  var APP = {json.dumps(bool(app))}, PREVIEW = {json.dumps(bool((app or {}).get("preview")))};
+  // nothing is charged. On a church's own hand-built give page (SITE):
+  // come back to that page, on the address the giver is on.
+  var APP = {json.dumps(app)}, PREVIEW = {json.dumps(preview)}, SITE = {json.dumps(site)};
   var form = document.getElementById('gv-form');
   var payBox = document.getElementById('gv-pay');
   var back = document.getElementById('gv-back');
@@ -1184,7 +1058,7 @@ color:var(--text-secondary);cursor:pointer;min-height:44px;font-family:var(--fon
         name: document.getElementById('gv-nm').value.trim() || undefined,
         email: email || undefined,
         embedded: embedOn() || undefined,
-        return_to: APP ? 'app' : undefined
+        return_to: APP ? 'app' : (SITE ? 'site' : undefined)
       }})
     }}).then(function(r) {{ return r.json().then(function(j) {{ return {{ok: r.ok, j: j}}; }}); }})
       .then(function(res) {{
@@ -1236,8 +1110,273 @@ color:var(--text-secondary);cursor:pointer;min-height:44px;font-family:var(--fon
   label();
 }})();
 </script>
-</body>
+"""
+
+
+def render_give_page(
+    business: Dict[str, Any],
+    canonical_url: str,
+    slug: str,
+    *,
+    api_origin: str,
+    app: Optional[Dict[str, Any]] = None,
+) -> str:
+    """The public give page. Mobile-first by design — congregants give
+    from phones: single column, ≤480px shell, 44px+ touch targets,
+    16px inputs (no iOS zoom), no horizontal scroll at any width.
+
+    `app` puts the same form inside the member app (/my/give, Kevin's
+    phone design 2026-10-14): {"head": the app's fonts and stylesheet,
+    "top": its header, "name"/"email": the signed-in member's (the app's
+    pages are never cached), "preview": the owner's preview, where Give
+    is refused}. The payment itself is unchanged."""
+    name = (business.get("name") or "").strip() or "Give"
+    cfg = giving_settings(business.get("settings"))
+    funds = configured_funds(cfg)
+    presets = preset_amounts(cfg)
+    message = (cfg.get("message") or "").strip()
+    brand = (business.get("settings") or {}).get("brand_kit") or {}
+    logo_url = ""
+    if isinstance(brand, dict):
+        logo_url = (brand.get("logo_url") or brand.get("logo") or "").strip()
+
+    title = f"Give — {name}"
+    description = message or f"Give online to {name}. Secure one-time, weekly and monthly giving."
+    css_vars = _brand_css_vars(business)
+
+    # The payment form mounts inside this page (embedded Checkout on the
+    # church's own Stripe account) once the platform's publishable key is
+    # set. Without it, Give sends the giver to checkout.stripe.com and
+    # back, as before.
+    from payments_core import provider_for
+    from stripe_checkout_helpers import embedded_checkout_publishable_key
+    pk = embedded_checkout_publishable_key()
+    acct = str(business.get("stripe_account_id") or "")
+    embed = bool(pk and re.fullmatch(r"acct_[A-Za-z0-9]+", acct)
+                 and provider_for(business).id == "stripe")
+    embed_json = json.dumps({"pk": pk, "acct": acct}) if embed else "null"
+    stripe_js = '<script src="https://js.stripe.com/v3/"></script>' if embed else ""
+    pay_note = ("Your payment is handled securely by Stripe, right on this page."
+                if embed else "You'll finish securely on our payment page.")
+
+    preset_btns = "".join(
+        f'<button type="button" class="gv-amt" data-cents="{p * 100}">${p:,}</button>'
+        for p in presets)
+
+    fund_block = ""
+    if len(funds) > 1:
+        opts = "".join(f'<option value="{_esc(f)}">{_esc(fund_label(f))}</option>'
+                       for f in funds)
+        fund_block = (
+            '<label class="gv-label" for="gv-fund">Designate my gift to</label>'
+            f'<select id="gv-fund" class="gv-input">{opts}</select>')
+
+    logo_html = (f'<img class="gv-logo" src="{_esc(logo_url)}" alt="{_esc(name)} logo">'
+                 if logo_url else "")
+    message_html = (f'<p class="gv-msg">{_esc(message)}</p>' if message else "")
+    app = app or None
+    header_html = (app["top"] + message_html if app else
+                   f'<header class="gv-header">{logo_html}<h1 class="gv-name">{_esc(name)}</h1>'
+                   f'<p class="gv-title">Give</p>{message_html}</header>')
+    # Precomputed (not a nested f-string) so the module parses on every
+    # Python the deploy target might run.
+    og_image_html = ""
+    if logo_url:
+        og_image_html = (f'<meta property="og:image" content="{_esc(logo_url)}">'
+                         f'<link rel="icon" href="{_esc(logo_url)}">')
+
+    body_html = _give_body(preset_btns, fund_block, pay_note,
+                           (app or {}).get("name") or "", (app or {}).get("email") or "")
+    script_html = _give_script(api_origin=api_origin, slug=slug, embed_json=embed_json, app=bool(app),
+                               preview=bool((app or {}).get("preview")))
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{_esc(title)}</title>
+<meta name="description" content="{_esc(description)}">
+<link rel="canonical" href="{_esc(canonical_url)}">
+<meta property="og:title" content="{_esc(title)}">
+<meta property="og:description" content="{_esc(description)}">
+<meta property="og:url" content="{_esc(canonical_url)}">
+<meta property="og:type" content="website">
+{og_image_html}
+{_brand_font_links(business)}
+{stripe_js}
+<style>{css_vars}</style>
+<style>
+html,body{{margin:0;padding:0;font-family:var(--font-body);color:var(--text-primary);
+background:var(--surface);min-height:100vh;}}
+*{{box-sizing:border-box;}}
+.gv-shell{{max-width:480px;margin:0 auto;padding:28px 16px 48px;}}
+.gv-header{{text-align:center;margin-bottom:22px;}}
+.gv-logo{{max-width:88px;max-height:88px;display:block;margin:0 auto 12px;}}
+.gv-name{{font-family:var(--font-heading);font-size:24px;font-weight:700;margin:0;}}
+.gv-title{{font-family:var(--font-heading);font-size:15px;font-weight:600;
+color:var(--text-secondary);margin:6px 0 0;letter-spacing:.06em;text-transform:uppercase;}}
+.gv-msg{{font-size:14px;color:var(--text-secondary);margin:10px 0 0;line-height:1.5;}}
+.gv-card{{border:1px solid var(--border);border-radius:16px;padding:20px 16px;}}
+.gv-grid{{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-bottom:12px;}}
+.gv-amt{{padding:14px 0;font-size:17px;font-weight:700;font-family:var(--font-body);
+border:1.5px solid var(--border);border-radius:12px;background:transparent;
+color:var(--text-primary);cursor:pointer;min-height:48px;}}
+.gv-amt.on{{border-color:var(--accent);background:var(--accent);color:#fff;}}
+.gv-label{{display:block;font-size:11px;font-weight:700;letter-spacing:.08em;
+text-transform:uppercase;color:var(--text-muted);margin:14px 0 6px;}}
+.gv-input{{width:100%;padding:12px 14px;font-size:16px;border:1.5px solid var(--border);
+border-radius:12px;background:transparent;color:var(--text-primary);min-height:48px;}}
+.gv-freq{{display:grid;grid-template-columns:repeat(4,1fr);gap:0;border:1.5px solid var(--border);
+border-radius:12px;overflow:hidden;margin-top:4px;}}
+@media (max-width:420px){{.gv-freq{{grid-template-columns:1fr 1fr;}}}}
+.gv-cover{{display:flex;align-items:flex-start;gap:10px;margin-top:14px;font-size:14px;
+line-height:1.45;color:var(--text-secondary);cursor:pointer;min-height:44px;}}
+.gv-cover input{{width:20px;height:20px;margin:1px 0 0;flex:none;accent-color:var(--accent);}}
+.gv-freq button{{padding:12px 0;font-size:14px;font-weight:600;border:0;background:transparent;
+color:var(--text-secondary);cursor:pointer;min-height:46px;font-family:var(--font-body);}}
+.gv-freq button.on{{background:var(--accent);color:#fff;}}
+.gv-give{{width:100%;margin-top:18px;padding:16px 0;font-size:17px;font-weight:700;
+border:0;border-radius:12px;background:var(--accent);color:#fff;cursor:pointer;
+min-height:52px;font-family:var(--font-body);}}
+.gv-give:disabled{{opacity:.55;cursor:default;}}
+.gv-note{{font-size:12px;color:var(--text-muted);margin-top:12px;line-height:1.5;text-align:center;}}
+.gv-banner{{display:none;margin-bottom:16px;padding:14px 16px;border-radius:12px;
+font-size:14px;line-height:1.5;border:1px solid var(--border);}}
+.gv-banner.show{{display:block;}}
+.gv-error{{display:none;margin-top:10px;font-size:13px;color:#b3261e;}}
+.gv-error.show{{display:block;}}
+.gv-footer{{text-align:center;font-size:11px;color:var(--text-muted);margin-top:28px;
+padding-top:14px;border-top:1px solid var(--border);}}
+.gv-footer a{{color:var(--text-muted);text-decoration:none;}}
+.gv-back{{background:none;border:0;padding:10px 0;margin-bottom:6px;font-size:14px;font-weight:600;
+color:var(--text-secondary);cursor:pointer;min-height:44px;font-family:var(--font-body);}}
+.gv-pay{{border-radius:16px;overflow:hidden;}}
+</style>
+{app["head"] if app else ""}
+</head>
+<body>
+<main class="gv-shell">
+  {header_html}
+{body_html}  <footer class="gv-footer">
+    Powered by <a href="https://mysolutionist.app/" target="_blank" rel="noopener">Solutionist</a>
+  </footer>
+</main>
+{(app or {}).get("foot", "")}
+{script_html}</body>
 </html>"""
+
+
+# ─── The form on a church's own hand-built give page ─────────────────
+# Kevin, 2026-10-15: "update the website giving as well". A hand-built
+# site (site_config.html_source == "manual", e.g. sites/love-city-church)
+# owns /give, so the hosted give page above never shows there. Its own
+# give page marks where the form goes, and the server fills it when the
+# page is served (public_site._augment_html):
+#   <!--solutionist:give-form-->fallback<!--/solutionist:give-form-->
+#       the form, while online giving is on; else a short paused note.
+#   <!--solutionist:give-funds-->fallback<!--/solutionist:give-funds-->
+#       one <li> per fund the church set, while giving is on; else the
+#       site's own list stays.
+# The site styles the form through --gv-* variables on its wrapper; the
+# church's brand colours are the defaults.
+GIVE_FORM_SLOT = re.compile(r"<!--solutionist:give-form-->.*?<!--/solutionist:give-form-->", re.S)
+GIVE_FUNDS_SLOT = re.compile(r"<!--solutionist:give-funds-->.*?<!--/solutionist:give-funds-->", re.S)
+
+_GIVE_EMBED_CSS = """
+.gv-embed{font-family:inherit;color:var(--gv-ink,var(--text-primary));}
+.gv-embed *{box-sizing:border-box;}
+.gv-embed .gv-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-bottom:12px;}
+.gv-embed .gv-amt{padding:14px 0;font:inherit;font-size:18px;font-weight:700;border:1.5px solid var(--gv-line,var(--border));
+  border-radius:var(--gv-radius,12px);background:transparent;color:inherit;cursor:pointer;min-height:52px;}
+.gv-embed .gv-amt.on{border-color:var(--gv-accent,var(--accent));background:var(--gv-accent,var(--accent));color:var(--gv-on-accent,#fff);}
+.gv-embed .gv-label{display:block;font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;
+  color:var(--gv-muted,var(--text-muted));margin:16px 0 6px;}
+.gv-embed .gv-input{width:100%;padding:12px 14px;font:inherit;font-size:16px;border:1.5px solid var(--gv-line,var(--border));
+  border-radius:var(--gv-radius,12px);background:var(--gv-field,transparent);color:inherit;min-height:50px;}
+.gv-embed .gv-freq{display:grid;grid-template-columns:repeat(4,1fr);border:1.5px solid var(--gv-line,var(--border));
+  border-radius:var(--gv-radius,12px);overflow:hidden;margin-top:4px;}
+@media (max-width:480px){.gv-embed .gv-freq{grid-template-columns:1fr 1fr;}}
+.gv-embed .gv-freq button{padding:12px 4px;font:inherit;font-size:14px;font-weight:600;border:0;background:transparent;
+  color:var(--gv-muted,var(--text-secondary));cursor:pointer;min-height:48px;}
+.gv-embed .gv-freq button.on{background:var(--gv-accent,var(--accent));color:var(--gv-on-accent,#fff);}
+.gv-embed .gv-cover{display:flex;align-items:flex-start;gap:10px;margin-top:16px;font-size:15px;line-height:1.45;
+  color:var(--gv-muted,var(--text-secondary));cursor:pointer;min-height:44px;}
+.gv-embed .gv-cover input{width:20px;height:20px;margin:1px 0 0;flex:none;accent-color:var(--gv-accent,var(--accent));}
+.gv-embed .gv-give{width:100%;margin-top:20px;padding:16px 0;font:inherit;font-size:18px;font-weight:700;border:0;
+  border-radius:var(--gv-radius,12px);background:var(--gv-accent,var(--accent));color:var(--gv-on-accent,#fff);cursor:pointer;min-height:56px;}
+.gv-embed .gv-give:disabled{opacity:.55;cursor:default;}
+.gv-embed .gv-note{font-size:13px;color:var(--gv-muted,var(--text-muted));margin:12px 0 0;line-height:1.5;}
+.gv-embed .gv-banner{display:none;margin-bottom:16px;padding:14px 16px;border-radius:var(--gv-radius,12px);font-size:15px;
+  line-height:1.5;border:1.5px solid var(--gv-accent,var(--accent));}
+.gv-embed .gv-banner.show{display:block;}
+.gv-embed .gv-error{display:none;margin-top:10px;font-size:14px;color:#b3261e;}
+.gv-embed .gv-error.show{display:block;}
+.gv-embed .gv-back{background:none;border:0;padding:10px 0;margin-bottom:6px;font:inherit;font-size:15px;font-weight:600;
+  color:var(--gv-muted,var(--text-secondary));cursor:pointer;min-height:44px;}
+.gv-embed .gv-pay{border-radius:var(--gv-radius,12px);overflow:hidden;}
+"""
+
+
+def render_give_embed(business: Dict[str, Any], slug: str, *, api_origin: str) -> str:
+    """The give form alone, for a church's own hand-built give page: no
+    page around it, its styles scoped to .gv-embed, the brand's colours
+    as defaults (a site overrides them with --gv-* on its wrapper), and a
+    gift that comes back to this page on the address the giver is on
+    (return_to 'site'). Same amounts, funds, fee cover, frequencies and
+    embedded Checkout as the hosted page."""
+    cfg = giving_settings(business.get("settings"))
+    funds = configured_funds(cfg)
+    presets = preset_amounts(cfg)
+    from payments_core import provider_for
+    from stripe_checkout_helpers import embedded_checkout_publishable_key
+    pk = embedded_checkout_publishable_key()
+    acct = str(business.get("stripe_account_id") or "")
+    embed = bool(pk and re.fullmatch(r"acct_[A-Za-z0-9]+", acct) and provider_for(business).id == "stripe")
+    embed_json = json.dumps({"pk": pk, "acct": acct}) if embed else "null"
+    stripe_js = '<script src="https://js.stripe.com/v3/"></script>' if embed else ""
+    pay_note = ("Your payment is handled securely by Stripe, right on this page."
+                if embed else "You'll finish securely on our payment page.")
+    preset_btns = "".join(f'<button type="button" class="gv-amt" data-cents="{p * 100}">${p:,}</button>'
+                          for p in presets)
+    fund_block = ""
+    if len(funds) > 1:
+        opts = "".join(f'<option value="{_esc(f)}">{_esc(fund_label(f))}</option>' for f in funds)
+        fund_block = ('<label class="gv-label" for="gv-fund">Designate my gift to</label>'
+                      f'<select id="gv-fund" class="gv-input">{opts}</select>')
+    brand_vars = _brand_css_vars(business).replace(":root{", ".gv-embed{", 1)
+    return (f'<div class="gv-embed">{stripe_js}<style>{brand_vars}{_GIVE_EMBED_CSS}</style>'
+            f'{_give_body(preset_btns, fund_block, pay_note)}'
+            f'{_give_script(api_origin=api_origin, slug=slug, embed_json=embed_json, site=True)}</div>')
+
+
+def fill_give_slots(html: str, business: Optional[Dict[str, Any]], slug: str, *, api_origin: str) -> str:
+    """Fill a hand-built page's give slots (see GIVE_FORM_SLOT). Never
+    leaves a slot's markers behind, and never blanks the page: any trouble,
+    or `business` None (it couldn't be read), keeps each slot's own
+    fallback — a failed read is not "giving is paused"."""
+    if not html or "<!--solutionist:give-" not in html:
+        return html
+
+    def keep_inner(m: "re.Match[str]") -> str:
+        inner = m.group(0)
+        return inner[inner.index("-->") + 3:inner.rindex("<!--/")]
+    try:
+        if business is None:
+            raise LookupError("business unread")
+        if giving_is_active(business):
+            form = render_give_embed(business, slug, api_origin=api_origin)
+            funds = configured_funds(giving_settings(business.get("settings")))
+            items = "".join(f'<li><span class="fund-name">{_esc(fund_label(f))}</span></li>' for f in funds)
+            html = GIVE_FORM_SLOT.sub(lambda m: form, html)
+            return GIVE_FUNDS_SLOT.sub(lambda m: items, html)
+        paused = ('<div class="gv-paused"><p><strong>Online giving is paused right now.</strong></p>'
+                  '<p>You can give in person at any service. Thank you for your generosity.</p></div>')
+        html = GIVE_FORM_SLOT.sub(lambda m: paused, html)
+        return GIVE_FUNDS_SLOT.sub(keep_inner, html)
+    except Exception as e:
+        logger.warning(f"[giving] give slots fell back for {slug}: {e}")
+        html = GIVE_FORM_SLOT.sub(keep_inner, html)
+        return GIVE_FUNDS_SLOT.sub(keep_inner, html)
 
 
 def render_giving_unavailable_page(business: Dict[str, Any],

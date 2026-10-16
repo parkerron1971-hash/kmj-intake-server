@@ -816,8 +816,16 @@ dl, dd { margin: 0; }
 .give-now { padding-top: 0; }
 .give-grid { display: grid; gap: 40px; align-items: start; }
 .give-copy p:not(.lead) { color: var(--muted); }
-.give-embed { background: #fff; border: 2px solid var(--ink); min-height: 760px; }
-.give-embed iframe { width: 100%; height: 760px; border: 0; display: block; }
+/* The give form (giving_router.render_give_embed), in the site's own
+   colours and square corners. */
+.give-embed {
+  background: #fff; border: 2px solid var(--ink); padding: clamp(20px, 4vw, 36px);
+  --gv-accent: var(--love); --gv-ink: var(--ink); --gv-muted: var(--muted);
+  --gv-line: var(--rule); --gv-field: #fff; --gv-radius: 0;
+}
+.give-embed .gv-give { letter-spacing: .01em; }
+.give-fallback, .gv-paused p { margin: 0 0 8px; color: var(--muted); }
+.gv-paused strong { color: var(--ink); }
 @media (min-width: 900px) { .give-grid { grid-template-columns: 5fr 7fr; gap: 64px; } }
 .fund-list { border-top: 1px solid var(--rule-on-ink); }
 .fund-list li {
