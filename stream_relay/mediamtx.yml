@@ -1,14 +1,23 @@
 # MediaMTX for the stream relay (bluenviron/mediamtx:1.9.3; every key here
 # is checked against that version's reference mediamtx.yml).
 #
-# Public:  RTMP on :1935 — the one door a church's streaming software uses.
+# Public:  RTMPS on :443 — the one door a church's streaming software uses.
+#          Encrypted only ("strict"): there is no plain RTMP listener, so a
+#          stream key never crosses the internet in the clear.
 # Private: everything else listens on 127.0.0.1 only, and the firewall
-#          (setup/cloud-init.yaml) opens nothing but 22 and 1935.
+#          (setup/cloud-init.yaml) opens nothing but 22, 80 (certificate
+#          renewals) and 443.
+#
+# A church streams to rtmps://stream.<domain>:443/live with the key
+# `<stream id>?key=<secret>`. The path MediaMTX sees, logs and lists is
+# live/<stream id> — not a secret. The secret arrives as the query, which
+# MediaMTX passes to the agent's /auth and never writes to its log
+# (checked against 1.9.3: __tests__/test_stream_relay_mediamtx.py).
 #
 # Who may publish is decided by the relay agent (agent/relay_agent.py,
-# POST /auth), which asks the backend about the stream key. Reads are
-# allowed only from this machine: our own ffmpeg copies. Nobody watches
-# from the relay; members watch from R2.
+# POST /auth), which asks the backend about the key. Reads are allowed
+# only from this machine: our own ffmpeg copies. Nobody watches from the
+# relay; members watch through the backend's signed links to R2.
 
 logLevel: info
 logDestinations: [stdout]
@@ -22,7 +31,8 @@ authHTTPExclude:
 - action: metrics
 - action: pprof
 
-# The agent polls this to see which streams are up.
+# The agent polls this to see who is publishing (and their key, from the
+# query), and to disconnect a publisher whose key the backend refused.
 api: yes
 apiAddress: 127.0.0.1:9997
 metrics: no
@@ -35,8 +45,13 @@ protocols: [tcp]
 rtspAddress: 127.0.0.1:8554
 
 rtmp: yes
-rtmpAddress: :1935
-rtmpEncryption: "no"
+rtmpEncryption: "strict"
+rtmpsAddress: :443
+# Let's Encrypt's certificate for stream.<domain>, copied here by
+# setup/install-cert.sh. MediaMTX reloads it on its own when it changes,
+# so a renewal never interrupts a service.
+rtmpServerKey: /tls/privkey.pem
+rtmpServerCert: /tls/fullchain.pem
 
 hls: no
 webrtc: no
@@ -44,3 +59,6 @@ srt: no
 
 paths:
   all_others:
+    # A second publisher with a valid key for the same church replaces the
+    # first (one writer per church; a new key takes over at once).
+    overridePublisher: yes

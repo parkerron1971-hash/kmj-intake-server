@@ -1,21 +1,44 @@
 """relay_agent.py — the stream relay's brain, beside MediaMTX on the droplet.
 
-A church's streaming software sends one stream to rtmp://stream.<domain>/live
-with its stream key. MediaMTX receives it; this agent does everything else:
+A church's streaming software sends one stream to
+rtmps://stream.<domain>:443/live with its stream key, `<stream id>?key=<secret>`.
+MediaMTX receives it on the path live/<stream id> (not a secret: MediaMTX
+logs paths) and hands the secret only to this agent, in the auth request's
+query. The agent does everything else:
 
   * decides who may stream (MediaMTX asks POST /auth; the backend knows the
-    keys, and a key seen before keeps working if the backend is down on a
-    Sunday morning);
-  * notices a stream come up (it polls MediaMTX's local API), asks the
-    backend where copies go, and starts one ffmpeg per destination
-    (YouTube, Facebook) plus one that writes HLS for the member app. All
-    copies are `-c copy`: nothing is re-encoded, so a $6 droplet carries it;
-  * uploads the HLS segments and playlist to Cloudflare R2 as they are
-    written, so members watch live from R2 (no cost per viewer);
+    keys). A key the backend confirmed in the last OFFLINE_GRANT_S keeps
+    working while the backend can't be reached, so a Sunday doesn't depend
+    on Railway — but never past that window, and never once the backend
+    has said no;
+  * notices a stream come up (MediaMTX's local API lists publishers and
+    their query), and starts one ffmpeg per destination (YouTube, Facebook)
+    plus one that writes HLS for the member app. All copies are `-c copy`:
+    nothing is re-encoded, so a $6 droplet carries it;
+  * tells the backend every BEAT_S that the stream is still up (the
+    heartbeat). Each answer says whether the key is still good — a replaced
+    key, or streaming switched off, cuts the stream at once — and where
+    copies go now, so a removed or changed YouTube/Facebook key stops or
+    moves its copy within a minute;
+  * uploads the HLS segments and playlist to the PRIVATE R2 bucket as they
+    are written; members watch through the backend's signed links;
   * waits GRACE_S after a stream drops before calling it over: a church
     whose internet blinks reconnects into the SAME recording;
-  * then closes the playlist, uploads it, and tells the backend the service
-    ended, which makes the sermon draft.
+  * then finishes the recording — closes the playlist, uploads it, tells
+    the backend — and keeps trying until the backend says it is saved.
+
+Every recording ("run") has its own folder, streams/<stream id>/<run id>/,
+and a journal (run.json) there. A restarted agent reads the journals: a
+recording waiting out its grace is picked up (and finished if the church
+never comes back), and a finish in progress carries on. A folder belongs
+to exactly one run, so a finish never touches the next stream's files.
+
+Limits, so one church can't fill the disk or the box for everyone: at most
+MAX_STREAMS at once; no new stream when free disk is under DISK_RESERVE_GB;
+a recording stops (the copies to YouTube/Facebook keep going) past
+MAX_RECORD_S, when its not-yet-uploaded backlog passes SPOOL_MAX_GB, or
+while the disk is nearly full; a publisher sending more than
+MAX_INGEST_MBPS for half a minute is disconnected.
 
 Pure helpers sit at the top and import nothing outside the standard library,
 so __tests__/test_stream_relay_agent.py can test them without aiohttp/boto3.
@@ -23,6 +46,7 @@ so __tests__/test_stream_relay_agent.py can test them without aiohttp/boto3.
 from __future__ import annotations
 
 import asyncio
+import collections
 import hashlib
 import json
 import logging
@@ -30,40 +54,52 @@ import os
 import re
 import shutil
 import time
+import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Deque, Dict, List, Optional, Tuple
+from urllib.parse import parse_qs
 
 log = logging.getLogger("relay")
 
-KEY_RE = re.compile(r"^[A-Za-z0-9_-]{16,64}$")
+STREAM_ID_RE = re.compile(r"^[0-9a-f]{20}$")
+SECRET_RE = re.compile(r"^[A-Za-z0-9_-]{32,64}$")
+RUN_ID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 LOCAL_IPS = {"127.0.0.1", "::1"}
 SEGMENT_SECONDS = 4
 PLAYLIST = "index.m3u8"
+JOURNAL = "run.json"
+REFUSED = (400, 401, 403, 404, 422)
+CONN_KINDS = ("rtmpsconns", "rtmpconns")
 
 
 # ─── pure helpers ────────────────────────────────────────────────────
 
 
-def key_from_path(path: Any) -> Optional[str]:
-    """'live/<key>' → the key, or None for any other path."""
-    m = re.match(r"^live/([^/]+)$", str(path or ""))
-    if m and KEY_RE.match(m.group(1)):
-        return m.group(1)
-    return None
+def stream_id_from_path(path: Any) -> Optional[str]:
+    """'live/<stream id>' → the stream id, or None for any other path."""
+    m = re.match(r"^live/([0-9a-f]{20})$", str(path or ""))
+    return m.group(1) if m else None
 
 
-def auth_decision(req: Dict[str, Any]) -> Tuple[str, Optional[str]]:
+def key_from_query(query: Any) -> Optional[str]:
+    """The secret from the stream key's query (`key=<secret>`), or None."""
+    vals = parse_qs(str(query or ""), keep_blank_values=False).get("key") or []
+    return vals[0] if len(vals) == 1 and SECRET_RE.match(vals[0]) else None
+
+
+def auth_decision(req: Dict[str, Any]) -> Tuple[str, Optional[Tuple[str, str]]]:
     """What to do with one MediaMTX auth request.
 
-    ('check', key)  publish: ask the backend about this key
-    ('allow', None) a read from this machine (our own ffmpeg copies)
-    ('deny', None)  everything else: nobody watches from the relay itself
+    ('check', (stream id, key))  publish: ask the backend about this key
+    ('allow', None)              a read from this machine (our own ffmpeg copies)
+    ('deny', None)               everything else: nobody watches from the relay itself
     """
     action = str(req.get("action") or "")
     ip = str(req.get("ip") or "")
     if action == "publish":
-        key = key_from_path(req.get("path"))
-        return ("check", key) if key else ("deny", None)
+        sid = stream_id_from_path(req.get("path"))
+        key = key_from_query(req.get("query"))
+        return ("check", (sid, key)) if sid and key else ("deny", None)
     if action in ("read", "playback") and ip in LOCAL_IPS:
         return ("allow", None)
     return ("deny", None)
@@ -114,30 +150,37 @@ def finalize_playlist(text: str) -> str:
 
 
 def object_headers(name: str) -> Tuple[str, str]:
-    """(Content-Type, Cache-Control) for an upload. Segments never change;
-    the playlist changes every few seconds while live."""
+    """(Content-Type, Cache-Control) for an upload. The bucket is private:
+    viewers fetch through signed links, so nothing is cached as public.
+    Segments never change; the playlist changes every few seconds."""
     if name.endswith(".ts"):
-        return "video/mp2t", "public, max-age=31536000, immutable"
+        return "video/mp2t", "private, max-age=31536000, immutable"
     if name.endswith(".m3u8"):
-        return "application/vnd.apple.mpegurl", "public, max-age=2"
-    if name.endswith(".html"):
-        return "text/html; charset=utf-8", "public, max-age=300"
-    return "application/octet-stream", "public, max-age=60"
+        return "application/vnd.apple.mpegurl", "private, no-cache"
+    return "application/octet-stream", "private, no-cache"
 
 
-def backoff(attempt: int) -> float:
-    return float(min(30, 2 ** max(0, attempt)))
+def backoff(attempt: int, cap: float = 30) -> float:
+    return float(min(cap, 2 ** max(0, attempt)))
 
 
 def redact(text: str) -> str:
-    """No stream key in a log line: ours (live/<key>) or a platform's."""
-    text = re.sub(r"(rtmps?://[^\s/]+(?::\d+)?/[^\s/]+/)[^\s]+", r"\g<1><key>", text or "")
-    return re.sub(r"(rtsp://[^\s/]+/live/)[^\s]+", r"\g<1><key>", text)
+    """No stream key in a log line: ours (`key=<secret>`) or a platform's."""
+    text = re.sub(r"(key=)[^&\s'\"]+", r"\g<1><key>", text or "")
+    return re.sub(r"(rtmps?://[^\s/]+(?::\d+)?/[^\s/]+/)[^\s]+", r"\g<1><key>", text)
 
 
 def key_id(key: str) -> str:
-    """A short, non-reversible name for a key (logs, folders, the cache)."""
+    """A short, non-reversible name for a key (the cache's file names)."""
     return hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
+
+
+def ingest_mbps(samples: Deque[Tuple[float, int]]) -> float:
+    """Megabits per second over the samples (time, bytes received so far)."""
+    if len(samples) < 2:
+        return 0.0
+    (t0, b0), (t1, b1) = samples[0], samples[-1]
+    return (b1 - b0) * 8 / 1e6 / (t1 - t0) if t1 > t0 and b1 >= b0 else 0.0
 
 
 # ─── config ──────────────────────────────────────────────────────────
@@ -157,7 +200,13 @@ class Config:
         self.work = Path(e("WORK_DIR") or "/var/relay")
         self.grace = float(e("GRACE_S") or 600)
         self.listen = e("AGENT_ADDR") or "127.0.0.1:9100"
-        self.player = Path(e("PLAYER_HTML") or "/app/player.html")
+        self.beat_s = float(e("BEAT_S") or 60)
+        self.offline_s = float(e("OFFLINE_GRANT_S") or 8 * 86400)
+        self.max_streams = int(e("MAX_STREAMS") or 4)
+        self.reserve = int(float(e("DISK_RESERVE_GB") or 2) * 1e9)
+        self.spool_max = int(float(e("SPOOL_MAX_GB") or 6) * 1e9)
+        self.max_record_s = float(e("MAX_RECORD_S") or 6 * 3600)
+        self.max_mbps = float(e("MAX_INGEST_MBPS") or 25)
 
     def missing(self) -> List[str]:
         need = {"BACKEND_URL": self.backend, "STREAM_RELAY_SECRET": self.secret,
@@ -166,39 +215,138 @@ class Config:
         return [k for k, v in need.items() if not v]
 
 
-# ─── one church's stream ─────────────────────────────────────────────
+# ─── one recording, one church's stream, one copy ────────────────────
+
+
+class Run:
+    """One recording, which is one session on the backend. Its folder is
+    its own and never reused; run.json says where it stands."""
+
+    def __init__(self, work: Path, stream_id: str, run_id: Optional[str] = None) -> None:
+        self.stream_id = stream_id
+        self.run_id = run_id or str(uuid.uuid4())
+        self.dir = work / "streams" / stream_id / self.run_id
+        self.state = "recording"                        # recording | finishing
+        self.session_id: Optional[str] = None
+        self.playlist_path: Optional[str] = None
+        # Only until the backend has given this run a session (it may be
+        # down on a Sunday): the finish needs it to ask for one.
+        self.key: Optional[str] = None
+        self.created = time.time()
+        self.bytes = 0
+        self.stopped = ""                               # why recording stopped early, if it did
+        self.uploaded: Dict[str, int] = {}              # name -> size
+        self.playlist_sig = ""
+
+    def save(self) -> None:
+        self.dir.mkdir(parents=True, exist_ok=True)
+        data = {"run_id": self.run_id, "stream_id": self.stream_id, "state": self.state,
+                "session_id": self.session_id, "playlist_path": self.playlist_path,
+                "key": None if self.session_id else self.key,
+                "created": self.created, "bytes": self.bytes, "stopped": self.stopped}
+        tmp = self.dir / (JOURNAL + ".tmp")
+        tmp.write_text(json.dumps(data))
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, self.dir / JOURNAL)
+
+    @classmethod
+    def load(cls, work: Path, path: Path) -> Optional["Run"]:
+        try:
+            data = json.loads(path.read_text())
+        except (OSError, ValueError):
+            return None
+        sid, rid = str(data.get("stream_id") or ""), str(data.get("run_id") or "")
+        if not STREAM_ID_RE.match(sid) or not RUN_ID_RE.match(rid) or path.parent.name != rid:
+            return None
+        run = cls(work, sid, rid)
+        run.state = "finishing" if data.get("state") == "finishing" else "recording"
+        run.session_id = data.get("session_id") or None
+        run.playlist_path = data.get("playlist_path") or None
+        run.key = data.get("key") or None
+        run.created = float(data.get("created") or time.time())
+        run.bytes = int(data.get("bytes") or 0)
+        run.stopped = str(data.get("stopped") or "")
+        return run
+
+    def seconds(self) -> float:
+        pl = self.dir / PLAYLIST
+        try:
+            return playlist_seconds(pl.read_text()) if pl.exists() else 0.0
+        except OSError:
+            return 0.0
+
+    def backlog(self) -> int:
+        """Bytes written here and not yet uploaded."""
+        total = 0
+        for f in self.dir.glob("seg_*.ts"):
+            try:
+                size = f.stat().st_size
+            except OSError:
+                continue
+            if self.uploaded.get(f.name) != size:
+                total += size
+        return total
+
+
+class Copy:
+    """One ffmpeg we keep running (the HLS writer, or a copy to a platform)
+    until it is stopped."""
+
+    def __init__(self, name: str, url: str = "") -> None:
+        self.name = name
+        self.url = url
+        self.stopped = False
+        self.proc: Optional[asyncio.subprocess.Process] = None
+        self.task: Optional[asyncio.Task] = None
+        self.tail: Deque[str] = collections.deque(maxlen=5)
+
+    def stop(self) -> None:
+        self.stopped = True
+        if self.proc is not None and self.proc.returncode is None:
+            try:
+                self.proc.terminate()
+            except ProcessLookupError:
+                pass
 
 
 class Live:
-    def __init__(self, key: str, work: Path) -> None:
-        self.key = key
-        self.kid = key_id(key)
-        self.started = time.time()
-        # One folder per church, not per start: an agent restarted mid-
-        # service finds the playlist and appends instead of starting over
-        # (which would overwrite the first half's segments in R2).
-        self.dir = work / "streams" / self.kid
-        self.info: Optional[Dict[str, Any]] = None      # from the backend's /started
+    """One church's stream while it is up, or waiting out its grace."""
+
+    def __init__(self, stream_id: str, run: Run) -> None:
+        self.stream_id = stream_id
+        self.run = run
+        self.key: Optional[str] = None                  # from MediaMTX's API; memory only
+        self.conn: Optional[Tuple[str, str]] = None     # (kind, id): who to disconnect
+        self.up = False
+        self.down_since: Optional[float] = time.time()
+        self.revoked = False
+        self.bad_key: Optional[str] = None              # the key the backend refused (memory only)
+        self.next_kick = 0.0
+        self.last_beat = 0.0
+        self.beating = False
         self.dests: List[Dict[str, str]] = []
-        self.up = True
-        self.down_since: Optional[float] = None
-        self.runs = 0                                   # HLS writer starts (resume after the first)
-        self.gen = 0                                    # bumped per (re)start: an old copy never doubles up
-        self.tasks: List[asyncio.Task] = []
-        self.procs: Dict[str, asyncio.subprocess.Process] = {}
-        self.uploaded: Dict[str, int] = {}              # name -> size
-        self.playlist_sig = ""
-        self.bytes = 0
+        self.hls: Optional[Copy] = None
+        self.fwd: Dict[str, Copy] = {}
+        self.rate: Deque[Tuple[float, int]] = collections.deque(maxlen=31)
+        self.uploader: Optional[asyncio.Task] = None
+
+
+# ─── the agent ───────────────────────────────────────────────────────
 
 
 class Agent:
     def __init__(self, cfg: Config) -> None:
         self.cfg = cfg
         self.lives: Dict[str, Live] = {}
+        self.finishing: Dict[str, asyncio.Task] = {}    # run id -> its finish
         self.cache_dir = cfg.work / "cache"
         self.cache_dir.mkdir(parents=True, exist_ok=True)
+        (cfg.work / "streams").mkdir(parents=True, exist_ok=True)
         self.http = None
         self.s3 = None
+        self.recovered = False
+        self.born = time.time()
+        self.next_limits = 0.0
 
     # ── the backend ──
 
@@ -212,243 +360,448 @@ class Agent:
             log.warning("backend %s failed: %s", path, type(e).__name__)
             return 0, {}
 
+    # Keys the backend confirmed, for when it can't be reached. Named by a
+    # hash of the key; holds the stream id and where copies go.
+
     def _cache_path(self, key: str) -> Path:
         return self.cache_dir / f"{key_id(key)}.json"
 
-    def remember(self, key: str, dests: List[Dict[str, str]]) -> None:
+    def remember(self, key: str, stream_id: str, dests: List[Dict[str, str]]) -> None:
         p = self._cache_path(key)
-        p.write_text(json.dumps({"seen": time.time(), "dests": dests}))
-        os.chmod(p, 0o600)
+        tmp = p.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"seen": time.time(), "stream_id": stream_id, "dests": dests}))
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, p)
 
-    def recall(self, key: str) -> Optional[Dict[str, Any]]:
+    def recall(self, key: str, stream_id: str) -> Optional[Dict[str, Any]]:
         try:
             data = json.loads(self._cache_path(key).read_text())
         except (OSError, ValueError):
             return None
-        return data if time.time() - float(data.get("seen") or 0) < 30 * 86400 else None
+        fresh = time.time() - float(data.get("seen") or 0) < self.cfg.offline_s
+        return data if fresh and data.get("stream_id") == stream_id else None
 
-    def forget(self, key: str) -> None:
+    def forget(self, key: Optional[str]) -> None:
+        if not key:
+            return
         try:
             self._cache_path(key).unlink()
         except OSError:
             pass
 
-    async def may_publish(self, key: str) -> bool:
-        status, _ = await self.backend("/stream-relay/relay/verify", {"key": key})
+    async def may_publish(self, stream_id: str, key: str) -> bool:
+        status, data = await self.backend("/stream-relay/relay/verify", {"stream_id": stream_id, "key": key})
         if status == 200:
-            if not self.recall(key):
-                self.remember(key, [])
+            self.remember(key, stream_id, list(data.get("destinations") or []))
             return True
-        if status in (401, 403, 404):
+        if status in REFUSED:
             self.forget(key)
             return False
-        # The backend can't answer (0 / 5xx): a key that streamed here in the
-        # last 30 days keeps working, so Sunday doesn't depend on Railway.
-        return self.recall(key) is not None
+        # The backend can't answer (0 / 5xx): a key it confirmed within the
+        # offline window keeps working, so Sunday doesn't depend on Railway.
+        return self.recall(key, stream_id) is not None
+
+    def free_disk(self) -> int:
+        return shutil.disk_usage(self.cfg.work).free
+
+    def refusal(self, stream_id: str) -> str:
+        """Why a NEW stream can't start now ('' when it can). A church
+        already here (reconnecting within its grace) is always let back."""
+        if stream_id in self.lives:
+            return ""
+        if sum(1 for lv in self.lives.values() if lv.up) >= self.cfg.max_streams:
+            return f"already carrying {self.cfg.max_streams} streams"
+        if self.free_disk() < self.cfg.reserve:
+            return "the disk is nearly full"
+        return ""
 
     # ── MediaMTX ──
 
-    async def ready_keys(self) -> Optional[set]:
+    async def publishers(self) -> Optional[Dict[str, Dict[str, Any]]]:
+        """{stream id: {key, conn, bytes}} for every publisher MediaMTX has
+        now, or None when its API can't be read (then nothing changes)."""
+        out: Dict[str, Dict[str, Any]] = {}
+        for kind in CONN_KINDS:
+            try:
+                async with self.http.get(f"{self.cfg.mtx_api}/v3/{kind}/list", timeout=5) as r:
+                    if r.status == 404:      # that listener is switched off
+                        continue
+                    if r.status != 200:
+                        return None
+                    data = await r.json(content_type=None)
+            except Exception as e:
+                log.warning("mediamtx api: %s", type(e).__name__)
+                return None
+            for item in data.get("items") or []:
+                sid = stream_id_from_path(item.get("path"))
+                if sid and item.get("state") == "publish":
+                    out[sid] = {"key": key_from_query(item.get("query")), "conn": (kind, str(item.get("id"))),
+                                "bytes": int(item.get("bytesReceived") or 0)}
+        return out
+
+    async def kick(self, live: Live) -> None:
+        if not live.conn:
+            return
+        kind, cid = live.conn
         try:
-            async with self.http.get(f"{self.cfg.mtx_api}/v3/paths/list", timeout=5) as r:
-                data = await r.json()
+            async with self.http.post(f"{self.cfg.mtx_api}/v3/{kind}/kick/{cid}", timeout=5) as r:
+                log.warning("%s disconnected (%s)", live.stream_id, r.status)
         except Exception as e:
-            log.warning("mediamtx api: %s", type(e).__name__)
-            return None
-        keys = set()
-        for item in data.get("items") or []:
-            k = key_from_path(item.get("name"))
-            if k and item.get("ready"):
-                keys.add(k)
-        return keys
+            log.warning("%s kick failed: %s", live.stream_id, type(e).__name__)
+
+    # ── startup: pick up where the last agent left off ──
+
+    def recover(self) -> None:
+        runs = [r for r in (Run.load(self.cfg.work, p) for p in (self.cfg.work / "streams").glob(f"*/*/{JOURNAL}")) if r]
+        runs.sort(key=lambda r: r.created)
+        for run in runs:
+            if run.state == "recording" and run.stream_id in self.lives:
+                old = self.lives.pop(run.stream_id).run     # two open runs: only the newest goes on
+                self.end_run(old)
+            if run.state == "finishing":
+                self.end_run(run)
+                continue
+            live = Live(run.stream_id, run)                 # down since now: the grace starts again
+            self.lives[run.stream_id] = live
+            live.uploader = asyncio.create_task(self.uploader(run))
+            log.info("%s: picked up recording %s", run.stream_id, run.run_id)
+        self.recovered = True
 
     # ── the loop ──
 
     async def tick(self) -> None:
-        ready = await self.ready_keys()
-        if ready is None:
+        pubs = await self.publishers()
+        if pubs is None:
             return
         now = time.time()
-        for key in ready:
-            live = self.lives.get(key)
-            if live is None:
-                await self.begin(key)
-            elif not live.up:
-                log.info("%s back after %.0fs: same recording", live.kid, now - (live.down_since or now))
+        for sid, p in pubs.items():
+            live = self.lives.get(sid) or self.begin(sid)
+            if live.conn != p["conn"]:
+                live.rate.clear()
+            live.conn = p["conn"]
+            live.rate.append((now, p["bytes"]))
+            if live.revoked:
+                if p["key"] and p["key"] != live.bad_key:
+                    live.revoked, live.bad_key, live.up = False, None, False   # back on a new key
+                else:
+                    if now >= live.next_kick:                  # still there on the refused key
+                        live.next_kick = now + 10
+                        await self.kick(live)
+                    continue
+            if p["key"]:
+                live.key = p["key"]
+            if not live.up:
+                if live.down_since is not None and live.run.created < now - 1:
+                    log.info("%s back after %.0fs: same recording", sid, now - live.down_since)
                 live.up, live.down_since = True, None
+                if not live.dests and live.key:
+                    live.dests = list((self.recall(live.key, sid) or {}).get("dests") or [])
                 self.start_writers(live)
-            elif live.info is None:
-                await self.ask_started(live)
-        for key, live in list(self.lives.items()):
-            if live.up and key not in ready:
-                log.info("%s dropped; waiting %ss before calling it over", live.kid, int(self.cfg.grace))
+                live.last_beat = 0.0
+        for sid, live in list(self.lives.items()):
+            if live.up and sid not in pubs:
+                log.info("%s dropped; waiting %ss before calling it over", sid, int(self.cfg.grace))
                 live.up, live.down_since = False, now
+                self.stop_writers(live)
             elif not live.up and now - (live.down_since or now) >= self.cfg.grace:
-                # Off the loop: reporting the end may wait on Railway, and
-                # other churches' streams must not wait with it.
-                self.lives.pop(key, None)
-                asyncio.create_task(self.finish(live))
+                self.lives.pop(sid, None)
+                self.stop_writers(live)
+                self.end_run(live.run)
+        for live in list(self.lives.values()):
+            if live.key and not live.beating and now - live.last_beat >= self.cfg.beat_s:
+                live.last_beat, live.beating = now, True
+                asyncio.create_task(self.beat(live))
+        if now >= self.next_limits:
+            self.next_limits = now + 10
+            await self.enforce_limits(now)
 
-    async def begin(self, key: str) -> None:
-        live = Live(key, self.cfg.work)
-        self.lives[key] = live
-        log.info("%s is live", live.kid)
-        await self.ask_started(live)
-        self.claim_dir(live)
-        if live.info is None:
-            cached = self.recall(key) or {}
-            live.dests = list(cached.get("dests") or [])
-            log.warning("%s: backend unreachable, forwarding to %d remembered destination(s)",
-                        live.kid, len(live.dests))
-        self.start_writers(live)
-        live.tasks.append(asyncio.create_task(self.uploader(live)))
+    def begin(self, stream_id: str) -> Live:
+        run = Run(self.cfg.work, stream_id)
+        run.save()
+        live = Live(stream_id, run)
+        self.lives[stream_id] = live
+        live.uploader = asyncio.create_task(self.uploader(run))
+        log.info("%s is live (recording %s)", stream_id, run.run_id)
+        return live
 
-    async def ask_started(self, live: Live) -> None:
-        status, data = await self.backend("/stream-relay/relay/started", {"key": live.key})
-        if status == 200 and data.get("session_id"):
-            first = live.info is None and not live.procs
-            live.info = data
-            marker = live.dir / "session.txt"
-            if live.dir.exists() and not marker.exists():
-                marker.write_text(str(data["session_id"]))
-            new = list(data.get("destinations") or [])
-            self.remember(live.key, new)
-            if not first and {d["url"] for d in new} != {d["url"] for d in live.dests}:
-                live.dests = new
-                for d in new:   # destinations learned late start now
-                    if f"fwd:{d['name']}" not in live.procs:
-                        live.tasks.append(asyncio.create_task(self.supervise(
-                            live, live.gen, f"fwd:{d['name']}", forward_cmd(self.src(live), d["url"]))))
-            else:
-                live.dests = new
+    async def beat(self, live: Live) -> None:
+        """Tell the backend we still carry this stream; act on its answer."""
+        try:
+            run, key = live.run, live.key
+            if not key:
+                return
+            status, data = await self.backend("/stream-relay/relay/started", {
+                "stream_id": live.stream_id, "key": key, "run_id": run.run_id,
+                "recorded_s": int(run.seconds()), "bytes": run.bytes})
+            if live.run is not run:
+                return
+            if status == 200 and data.get("session_id"):
+                if run.session_id != data["session_id"]:
+                    run.session_id, run.playlist_path = data["session_id"], data.get("playlist_path")
+                    run.save()
+                dests = list(data.get("destinations") or [])
+                self.remember(key, live.stream_id, dests)
+                self.reconcile(live, dests)
+            elif status == 409:
+                self.split(live, data.get("detail") if isinstance(data.get("detail"), dict) else {})
+            elif status in REFUSED:
+                log.warning("%s: the backend refused this stream's key (%s); disconnecting", live.stream_id, status)
+                self.forget(key)
+                live.revoked, live.bad_key, live.key = True, key, None
+                live.next_kick = time.time() + 10
+                self.stop_writers(live)
+                await self.kick(live)
+            elif run.session_id is None and run.key != key:
+                run.key = key                           # the backend is down: the finish will need it
+                run.save()
+        finally:
+            live.beating = False
 
-    def claim_dir(self, live: Live) -> None:
-        """Use the church's folder for this session. A folder left by a
-        DIFFERENT session (its end never reached the backend) is moved
-        aside, kept, and not appended to."""
-        marker = live.dir / "session.txt"
-        sid = str((live.info or {}).get("session_id") or "")
-        if live.dir.exists() and sid and marker.exists() and marker.read_text().strip() != sid:
-            live.dir.rename(live.dir.with_name(f"{live.kid}-orphan-{int(time.time())}"))
-        live.dir.mkdir(parents=True, exist_ok=True)
-        if sid and not marker.exists():
-            marker.write_text(sid)
+    def reconcile(self, live: Live, dests: List[Dict[str, str]]) -> None:
+        """Copies go exactly where the backend says now: a removed one stops,
+        a changed one restarts on its new key, a new one starts."""
+        want = {d["name"]: d["url"] for d in dests if d.get("name") and d.get("url")}
+        live.dests = dests
+        for name, c in list(live.fwd.items()):
+            if want.get(name) != c.url:
+                c.stop()
+                live.fwd.pop(name, None)
+                log.info("%s: copy to %s stopped (%s)", live.stream_id, name, "changed" if name in want else "removed")
+        if live.up and not live.revoked:
+            for name, url in want.items():
+                if name not in live.fwd:
+                    self.start_copy(live, name, url)
+
+    def split(self, live: Live, detail: Dict[str, Any]) -> None:
+        """The backend closed this run's session (we were silent too long):
+        finish that recording and carry on in a new one."""
+        old = live.run
+        if not old.session_id and detail.get("session_id"):
+            old.session_id, old.playlist_path = detail["session_id"], detail.get("playlist_path")
+        if live.hls:
+            live.hls.stop()
+            live.hls = None
+        self.end_run(old)
+        live.run = Run(self.cfg.work, live.stream_id)
+        live.run.save()
+        live.uploader = asyncio.create_task(self.uploader(live.run))
+        if live.up and not live.revoked:
+            self.start_hls(live)
+        live.last_beat = 0.0
+        log.warning("%s: the backend had closed recording %s; continuing in %s",
+                    live.stream_id, old.run_id, live.run.run_id)
+
+    # ── the copies ──
 
     def src(self, live: Live) -> str:
-        return f"{self.cfg.mtx_rtsp}/live/{live.key}"
+        return f"{self.cfg.mtx_rtsp}/live/{live.stream_id}"
 
     def start_writers(self, live: Live) -> None:
-        resume = live.runs > 0 or (live.dir / PLAYLIST).exists()
-        live.runs += 1
-        live.gen += 1
-        live.tasks = [t for t in live.tasks if not t.done()]
-        live.tasks.append(asyncio.create_task(self.supervise(
-            live, live.gen, "hls", hls_cmd(self.src(live), str(live.dir), resume), resume_after=True)))
+        self.start_hls(live)
         for d in live.dests:
-            live.tasks.append(asyncio.create_task(self.supervise(
-                live, live.gen, f"fwd:{d['name']}", forward_cmd(self.src(live), d["url"]))))
+            if d.get("name") and d.get("url") and d["name"] not in live.fwd:
+                self.start_copy(live, d["name"], d["url"])
 
-    def _current(self, live: Live, gen: int) -> bool:
-        return live.up and live.gen == gen and self.lives.get(live.key) is live
+    def start_hls(self, live: Live) -> None:
+        run = live.run
+        if run.stopped or (live.hls and not live.hls.stopped):
+            return
+        run.dir.mkdir(parents=True, exist_ok=True)
+        c = Copy("hls")
+        live.hls = c
+        c.task = asyncio.create_task(self.supervise(live.stream_id, c, lambda: hls_cmd(
+            self.src(live), str(run.dir), resume=(run.dir / PLAYLIST).exists())))
 
-    async def supervise(self, live: Live, gen: int, name: str, cmd: List[str],
-                        resume_after: bool = False) -> None:
-        """Run one copy for as long as the stream is up; restart it with a
-        growing pause if it falls over (a platform hiccup, a bad key). A
-        copy from before a reconnect stops itself (`gen`), so YouTube never
-        gets two."""
+    def start_copy(self, live: Live, name: str, url: str) -> None:
+        c = Copy(name, url)
+        live.fwd[name] = c
+        cmd = forward_cmd(self.src(live), url)
+        c.task = asyncio.create_task(self.supervise(live.stream_id, c, lambda: cmd))
+
+    def stop_writers(self, live: Live) -> None:
+        if live.hls:
+            live.hls.stop()
+            live.hls = None
+        for c in live.fwd.values():
+            c.stop()
+        live.fwd.clear()
+
+    async def supervise(self, sid: str, c: Copy, make_cmd: Callable[[], List[str]]) -> None:
+        """Run one copy until it is stopped; restart it with a growing pause
+        if it falls over (a platform hiccup, a bad key). stderr is read as
+        it comes and only its last lines are kept."""
         attempt = 0
-        while self._current(live, gen):
+        while not c.stopped:
             started = time.time()
-            proc = await asyncio.create_subprocess_exec(
-                *cmd, stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.PIPE)
-            live.procs[name] = proc
-            _, err = await proc.communicate()
-            if live.procs.get(name) is proc:
-                live.procs.pop(name, None)
-            if not self._current(live, gen):
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    *make_cmd(), stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.PIPE)
+            except OSError as e:
+                log.error("%s %s could not start: %s", sid, c.name, type(e).__name__)
                 return
-            tail = (err or b"").decode("utf-8", "replace").strip().splitlines()[-1:] or [""]
-            log.warning("%s %s exited %s: %s", live.kid, name, proc.returncode,
-                        redact(tail[0].replace(live.key, "<key>"))[:200])
+            c.proc = proc
+            if c.stopped:
+                c.stop()
+            buf = b""
+            while True:
+                chunk = await proc.stderr.read(4096)
+                if not chunk:
+                    break
+                buf = (buf + chunk)[-2048:]
+                lines = buf.split(b"\n")
+                buf = lines.pop()
+                for ln in lines:
+                    if ln.strip():
+                        c.tail.append(ln.decode("utf-8", "replace").strip()[:300])
+            await proc.wait()
+            if c.stopped:
+                return
+            last = c.tail[-1] if c.tail else ""
+            log.warning("%s %s exited %s: %s", sid, c.name, proc.returncode, redact(last)[:200])
             attempt = 0 if time.time() - started > 60 else attempt + 1
             await asyncio.sleep(backoff(attempt))
-            if resume_after:
-                cmd = hls_cmd(self.src(live), str(live.dir), resume=True)
 
-    async def uploader(self, live: Live) -> None:
-        while self.lives.get(live.key) is live:
+    # ── limits ──
+
+    async def enforce_limits(self, now: float) -> None:
+        free = self.free_disk()
+        for live in list(self.lives.values()):
+            run = live.run
+            if live.up and ingest_mbps(live.rate) > self.cfg.max_mbps and len(live.rate) >= 30:
+                log.error("%s: sending %.0f Mbps (limit %.0f); disconnecting", live.stream_id,
+                          ingest_mbps(live.rate), self.cfg.max_mbps)
+                live.rate.clear()
+                await self.kick(live)
+            reason = ""
+            if free < self.cfg.reserve // 2:
+                reason = "disk"
+            elif now - run.created > self.cfg.max_record_s:
+                reason = "length"
+            elif run.backlog() > self.cfg.spool_max:
+                reason = "backlog"
+            if reason and not run.stopped:
+                run.stopped = reason
+                run.save()
+                if live.hls:
+                    live.hls.stop()
+                    live.hls = None
+                log.error("%s: recording %s stopped (%s); copies to YouTube/Facebook continue",
+                          live.stream_id, run.run_id, reason)
+            elif run.stopped == "disk" and free > self.cfg.reserve and now - run.created <= self.cfg.max_record_s:
+                run.stopped = ""
+                run.save()
+                if live.up and not live.revoked:
+                    self.start_hls(live)
+                log.warning("%s: disk has room again; recording resumed", live.stream_id)
+
+    # ── uploads ──
+
+    async def uploader(self, run: Run) -> None:
+        while run.state == "recording":
             try:
-                await self.upload_new(live)
+                await self.upload_new(run)
             except Exception as e:
-                log.warning("%s upload: %s", live.kid, type(e).__name__)
+                log.warning("%s upload: %s", run.stream_id, type(e).__name__)
             await asyncio.sleep(1)
 
-    async def upload_new(self, live: Live, final: bool = False) -> None:
-        if live.info is None:
-            return    # no session yet: segments wait on disk
-        prefix = live.info["playlist_path"].rsplit("/", 1)[0]
-        for f in sorted(live.dir.glob("seg_*.ts")):
+    async def upload_new(self, run: Run, final: bool = False) -> None:
+        if not run.playlist_path:
+            return    # no session yet: segments wait on disk (the limits watch how many)
+        prefix = run.playlist_path.rsplit("/", 1)[0]
+        for f in sorted(run.dir.glob("seg_*.ts")):
             size = f.stat().st_size
-            if live.uploaded.get(f.name) == size:
+            if run.uploaded.get(f.name) == size:
                 if time.time() - f.stat().st_mtime > 120:
                     f.unlink(missing_ok=True)   # uploaded long ago: free the disk
                 continue
             await self.put(f"{prefix}/{f.name}", f.read_bytes())
-            live.uploaded[f.name] = size
-            live.bytes += size
-        pl = live.dir / PLAYLIST
+            run.uploaded[f.name] = size
+            run.bytes += size
+        pl = run.dir / PLAYLIST
         if pl.exists():
             text = pl.read_text()
             if final:
                 text = finalize_playlist(text)
             sig = hashlib.sha256(text.encode()).hexdigest()
-            if sig != live.playlist_sig:
+            if sig != run.playlist_sig:
                 await self.put(f"{prefix}/{PLAYLIST}", text.encode())
-                live.playlist_sig = sig
+                run.playlist_sig = sig
+                run.save()
 
     async def put(self, name: str, body: bytes) -> None:
         ctype, cache = object_headers(name)
         await asyncio.get_running_loop().run_in_executor(None, lambda: self.s3.put_object(
             Bucket=self.cfg.r2_bucket, Key=name, Body=body, ContentType=ctype, CacheControl=cache))
 
-    async def finish(self, live: Live) -> None:
-        """The stream didn't come back: close the recording and tell the backend."""
-        for p in list(live.procs.values()):
-            if p.returncode is None:
-                p.terminate()
-        for t in live.tasks:
-            t.cancel()
-        await asyncio.gather(*live.tasks, return_exceptions=True)
-        for _ in range(30):   # Railway may be down too: keep the recording until it's safe
-            if live.info is None:
-                await self.ask_started(live)
-            if live.info is not None:
-                try:
-                    await self.upload_new(live, final=True)
-                except Exception as e:
-                    log.warning("%s final upload: %s", live.kid, type(e).__name__)
-                    await asyncio.sleep(10)
-                    continue
-                pl = live.dir / PLAYLIST
-                seconds = playlist_seconds(pl.read_text()) if pl.exists() else 0.0
-                status, data = await self.backend("/stream-relay/relay/ended", {
-                    "session_id": live.info["session_id"], "duration_s": int(seconds), "bytes": live.bytes})
-                if status == 200:
-                    log.info("%s ended: %.0f min, sermon draft %s", live.kid, seconds / 60,
-                             "made" if data.get("sermon_id") else "not made")
-                    shutil.rmtree(live.dir, ignore_errors=True)
-                    return
-            await asyncio.sleep(60)
-        kept = live.dir.with_name(f"{live.kid}-unreported-{int(time.time())}")
-        try:
-            live.dir.rename(kept)
-        except OSError:
-            kept = live.dir
-        log.error("%s: could not report the end; recording kept in %s", live.kid, kept)
+    # ── the end of a recording ──
 
-    # ── the auth door MediaMTX calls ──
+    def end_run(self, run: Run) -> None:
+        if run.run_id in self.finishing:
+            return
+        run.state = "finishing"
+        run.save()
+        self.finishing[run.run_id] = asyncio.create_task(self.finish(run))
+
+    async def finish(self, run: Run) -> None:
+        """Close the recording and tell the backend, until it has it. Only
+        this run's own folder is ever removed."""
+        attempt = 0
+        try:
+            while True:
+                if not run.session_id:
+                    if not run.key:
+                        self.keep(run, "no session and no key to ask for one")
+                        return
+                    status, data = await self.backend("/stream-relay/relay/started", {
+                        "stream_id": run.stream_id, "key": run.key, "run_id": run.run_id,
+                        "recorded_s": int(run.seconds()), "bytes": run.bytes})
+                    detail = data.get("detail") if isinstance(data.get("detail"), dict) else {}
+                    if status == 200 and data.get("session_id"):
+                        run.session_id, run.playlist_path = data["session_id"], data.get("playlist_path")
+                        run.save()
+                    elif status == 409 and detail.get("session_id"):
+                        run.session_id, run.playlist_path = detail["session_id"], detail.get("playlist_path")
+                        run.save()
+                    elif status in REFUSED:
+                        self.keep(run, f"the backend refused its key ({status})")
+                        return
+                if run.session_id:
+                    try:
+                        await self.upload_new(run, final=True)
+                    except Exception as e:
+                        log.warning("%s final upload: %s", run.stream_id, type(e).__name__)
+                    else:
+                        status, data = await self.backend("/stream-relay/relay/ended", {
+                            "session_id": run.session_id, "duration_s": int(run.seconds()), "bytes": run.bytes})
+                        if status == 200:
+                            log.info("%s ended: %.0f min, sermon draft %s", run.stream_id, run.seconds() / 60,
+                                     "made" if data.get("sermon_id") else "not made")
+                            shutil.rmtree(run.dir, ignore_errors=True)
+                            try:
+                                run.dir.parent.rmdir()    # the church's folder, if nothing else is in it
+                            except OSError:
+                                pass
+                            return
+                        if status in (400, 404):
+                            self.keep(run, f"the backend doesn't know its session ({status})")
+                            return
+                attempt += 1
+                await asyncio.sleep(backoff(attempt, cap=600))
+        finally:
+            self.finishing.pop(run.run_id, None)
+
+    def keep(self, run: Run, why: str) -> None:
+        """A recording that can never be reported is moved aside, kept."""
+        dest = self.cfg.work / "unreported" / run.run_id
+        try:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            run.dir.rename(dest)
+        except OSError:
+            dest = run.dir
+        log.error("%s: recording %s kept in %s: %s", run.stream_id, run.run_id, dest, why)
+
+    # ── the doors MediaMTX and deploy.sh use ──
 
     async def handle_auth(self, request):
         from aiohttp import web
@@ -456,22 +809,26 @@ class Agent:
             req = await request.json()
         except Exception:
             return web.Response(status=400)
-        verdict, key = auth_decision(req)
+        verdict, cred = auth_decision(req)
         if verdict == "allow":
             return web.Response(status=200)
-        if verdict == "check" and key and await self.may_publish(key):
-            return web.Response(status=200)
+        if verdict == "check" and cred:
+            sid, key = cred
+            why = self.refusal(sid)
+            if why:
+                log.warning("%s: not taking a new stream: %s", sid, why)
+                return web.Response(status=401)
+            if await self.may_publish(sid, key):
+                return web.Response(status=200)
         return web.Response(status=401)
 
     async def handle_health(self, request):
         from aiohttp import web
-        return web.json_response({"ok": True, "live": len(self.lives)})
-
-    async def upload_player(self) -> None:
-        try:
-            await self.put("player.html", self.cfg.player.read_bytes())
-        except Exception as e:
-            log.warning("player upload: %s", type(e).__name__)
+        return web.json_response({"ok": True, "recovered": self.recovered,
+                                  "live": sum(1 for lv in self.lives.values() if lv.up),
+                                  "waiting": sum(1 for lv in self.lives.values() if not lv.up),
+                                  "finishing": len(self.finishing),
+                                  "uptime_s": int(time.time() - self.born)})
 
     async def run(self) -> None:
         import aiohttp
@@ -484,6 +841,7 @@ class Agent:
         self.s3 = boto3.client("s3", endpoint_url=self.cfg.r2_endpoint, region_name="auto",
                                aws_access_key_id=self.cfg.r2_key,
                                aws_secret_access_key=self.cfg.r2_secret)
+        self.recover()
         app = web.Application()
         app.router.add_post("/auth", self.handle_auth)
         app.router.add_get("/health", self.handle_health)
@@ -491,7 +849,6 @@ class Agent:
         await runner.setup()
         host, port = self.cfg.listen.rsplit(":", 1)
         await web.TCPSite(runner, host, int(port)).start()
-        await self.upload_player()
         log.info("relay agent up on %s", self.cfg.listen)
         while True:
             try:
