@@ -2,7 +2,7 @@
 title: Love City's Watch page plays the YouTube live stream
 date: 2026-10-16
 agent: Claude Code (Claude Opus 5.5)
-asked: "Love City will stream through Solutionist's relay to BOTH YouTube and Facebook... update Love City's website Watch page" (Kevin's decision, via KAI)
+asked: "Love City will stream through Solutionist's relay to BOTH YouTube and Facebook; update Love City's website Watch page (Kevin's decision, via KAI)"
 status: waiting on Kevin
 prs: [kmj-intake-server#1463]
 migrations: []
