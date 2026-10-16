@@ -272,6 +272,34 @@ def test_an_amount_said_for_the_wrong_client_differs():
     assert rail.compare(q, a, "You're owed $1,950. Jordan owes $1,200.")[0] == "unverified"
 
 
+def test_amounts_are_read_however_the_sentence_runs_on():
+    assert rail.amounts_said("Maria $100, Tasha $1,200, and $50.") == ["100.00", "1200.00", "50.00"]
+    assert rail.amounts_said("$1,950.00 in total; $12.5 more") == ["12.50", "1950.00"]
+
+
+# Codex's re-check of bec9df2: Maria owes $100, Tasha $200.
+TWO = [_invoice(51, 100, "sent", "2099-01-01", "Maria Lopez", "c1"),
+       _invoice(52, 200, "sent", "2099-01-01", "Tasha Green", "c2")]
+
+
+@pytest.mark.parametrize("reply, outcome", [
+    # The business's $300 is not Maria's.
+    ("Maria owes $300 across 2 invoices.", "differs"),
+    # Both invoices are unpaid; nothing was paid.
+    ("You have been paid $300 across 2 invoices.", "differs"),
+    ("Maria paid $100.", "differs"),
+    # A swapped pair in lower case is still swapped.
+    ("maria owes $200 and tasha owes $100.", "differs"),
+    # Said right, a total said as a total, and names in lower case, agree.
+    ("You're owed $300 in total: Maria owes $100 and Tasha owes $200.", "agrees"),
+    ("You're owed $300. maria owes $100, tasha owes $200.", "agrees"),
+    ("Neither has paid yet: you're owed $300, Maria $100 and Tasha $200.", "agrees"),
+])
+def test_a_figure_is_held_to_its_client_and_to_whether_it_was_paid(reply, outcome):
+    q, a = _money_answer("Who owes me?", TWO)
+    assert rail.compare(q, a, reply)[0] == outcome, rail.compare(q, a, reply)
+
+
 def test_did_pay_compares_the_yes_or_no_and_every_open_invoice():
     q, a = _money_answer("Did Maria pay?", [], paid=PAID, contact=MARIA)
     assert rail.compare(q, a, "Yes, Maria paid $250 on October 3.")[0] == "agrees"
@@ -345,8 +373,9 @@ def reads(monkeypatch):
         for prefix, rows in data.items():
             if path.startswith(prefix):
                 if prefix == "/contacts?":
-                    want = unquote(re.search(r"name=ilike\.([^&]*)", path).group(1)).strip("*").split("*")
-                    return [c for c in rows if all(w in c["name"].lower() for w in want)]
+                    offset = int(re.search(r"offset=(\d+)", path).group(1))
+                    limit = int(re.search(r"limit=(\d+)", path).group(1))
+                    return rows[offset:offset + limit]
                 if prefix == "/invoices?":
                     return _filtered(rows, path)
                 return rows
@@ -390,6 +419,17 @@ def test_a_client_is_found_by_first_or_last_name_and_only_when_it_is_one(reads):
     reads.data["/contacts?"] = CONTACTS + [{"id": "c9", "name": "Maria Ortiz"}]
     row = rail.practice(_job("Did Maria pay?"), now=NOW)
     assert not row["took"] and row["decline_reason"] == "name_ambiguous"
+    # The typed name never leaves the process: no read carries it.
+    assert not any("maria" in unquote(p).lower() for p in reads.seen)
+
+
+def test_a_name_search_past_five_thousand_contacts_is_chiefs(reads):
+    reads.data["/contacts?"] = [{"id": f"x{n}", "name": f"Person {n}"} for n in range(5000)]
+    row = rail.practice(_job("Did Maria pay?"), now=NOW)
+    assert not row["took"] and row["decline_reason"] == "too_many_contacts"
+    reads.data["/contacts?"] = [{"id": f"x{n}", "name": f"Person {n}"} for n in range(2500)] + CONTACTS
+    row = rail.practice(_job("Did Maria pay?", reply="Not yet: Maria owes $450 and $300."), now=NOW)
+    assert row["took"] and row["outcome"] == "agrees"
 
 
 def test_a_long_paid_history_cannot_hide_an_older_unpaid_invoice(reads):
@@ -453,47 +493,55 @@ def test_a_turn_that_changed_something_is_marked(reads):
 
 # ─── Nothing personal reaches the logs ───────────────────────────────
 
-class _Resp:
-    def __init__(self, status, text):
-        self.status_code, self.text = status, text
+SECRETS = ("reviewperson", "privacysentinel", "4,321", "4321")
 
 
-class _Client:
-    def __init__(self, resp):
-        self.resp = resp
-
-    def __call__(self, *a, **k):
-        return self
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *a):
-        return False
-
-    def request(self, *a, **k):
-        if isinstance(self.resp, Exception):
-            raise self.resp
-        return self.resp
-
-
-@pytest.mark.parametrize("resp", [
-    _Resp(500, 'failing row contains (Reviewperson Privacysentinel, $4,321.00)'),
-    __import__("httpx").ConnectError("boom at https://x/rest/v1/contacts?name=ilike.*reviewperson*"),
-])
-def test_failed_reads_and_inserts_log_no_names_or_content(monkeypatch, caplog, resp):
+def _real_http(monkeypatch, handler):
+    """The REAL httpx.Client (its own request logging included) on an
+    in-memory transport: nothing leaves the machine."""
+    import httpx
     import sb_clients
-    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+    real = httpx.Client
+    monkeypatch.setenv("SUPABASE_URL", "https://example.invalid")
     monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "service-key")
-    monkeypatch.setattr(sb_clients.httpx, "Client", _Client(resp))
-    with caplog.at_level(logging.DEBUG):
-        assert rail._contact(BIZ, "reviewperson privacysentinel") == (None, "read_failed")
-        rail._skip_db_until = 0.0
+    monkeypatch.setattr(sb_clients.httpx, "Client",
+                        lambda *a, **k: real(*a, **{**k, "transport": httpx.MockTransport(handler)}))
+    rail._skip_db_until = 0.0
+
+
+@pytest.mark.parametrize("status", [200, 500])
+def test_no_name_or_amount_reaches_any_log_with_the_real_http_client(monkeypatch, caplog, status):
+    import httpx
+    urls = []
+
+    def handler(request):
+        urls.append(str(request.url))
+        if status == 500:
+            return httpx.Response(500, text="failing row contains (Reviewperson Privacysentinel, $4,321.00)")
+        if request.url.path.endswith("/contacts"):
+            return httpx.Response(200, json=[{"id": "c7", "name": "Reviewperson Privacysentinel"}])
+        return httpx.Response(201, json=[{"id": "r1"}])
+    _real_http(monkeypatch, handler)
+    with caplog.at_level(logging.DEBUG):          # HTTPX logs each request URL at INFO
+        found = rail._contact(BIZ, "reviewperson privacysentinel")
         rail._write({"rail_answer": "Reviewperson Privacysentinel owes $4,321.00.", "business_id": BIZ})
-    logged = caplog.text.lower()
-    assert "contacts?business_id=eq.…&name=ilike.…" in caplog.text
-    for secret in ("reviewperson", "privacysentinel", "4,321", "4321"):
-        assert secret not in logged
+    assert found == ((None, "read_failed") if status == 500
+                     else ({"id": "c7", "name": "Reviewperson Privacysentinel"}, ""))
+    assert "HTTP Request" in caplog.text            # the transport's own logger was listened to
+    assert urls and not any(s in unquote(u).lower() for u in urls for s in SECRETS)
+    for secret in SECRETS:
+        assert secret not in caplog.text.lower()
+
+
+def test_a_transport_failure_logs_the_shape_not_the_values(monkeypatch, caplog):
+    import httpx
+
+    def handler(request):
+        raise httpx.ConnectError(f"boom at {request.url}")
+    _real_http(monkeypatch, handler)
+    with caplog.at_level(logging.DEBUG):
+        assert rail._get(f"/invoices?business_id=eq.{BIZ}&contact_id=eq.c1&select=id") is None
+    assert "/invoices?business_id=eq.…&contact_id=eq.…&select=id transport error: ConnectError" in caplog.text
 
 
 def test_redacted_paths_keep_the_shape_and_hide_the_values():

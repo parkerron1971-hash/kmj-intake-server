@@ -85,8 +85,11 @@ turns only), on a worker thread:
 7. **Keep one row** in `chief_rail_practice`, and print one `[rail]` line
    (counts and labels, no content). A failed read or insert logs the path
    with its filter values hidden and no error body
-   (`sb_clients.redacted_path`): a typed client name rides in the contact
-   search, and PostgREST errors echo the failing row.
+   (`sb_clients.redacted_path`), because PostgREST errors echo the failing
+   row. A typed client name never goes into any URL: the business's
+   contacts are read by its id alone, up to 5,000, and the name is matched
+   in the process. HTTPX logs every request URL at INFO, so a name in a
+   query string would reach the logs even when nothing failed.
 
 Records questions off the shelves (the front desk's `kind=lookup`) are kept
 too, as declines, so coverage can be measured.

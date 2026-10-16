@@ -64,6 +64,8 @@ MAX_CLIENT_LINES = 6
 MAX_DAY_SESSIONS = 8
 MAX_CLIENT_OPEN = 4
 RETENTION_DAYS = 90
+CONTACT_PAGE = 1000          # PostgREST's usual row cap
+CONTACT_PAGES = 5            # past 5,000 contacts a name search is Chief's
 
 
 def mode() -> str:
@@ -528,7 +530,8 @@ def prove(answer: Answer, rec: Records, tz) -> Tuple[str, List[str]]:
 
 _WALL = re.compile(r"couldn['’]t (?:verify|confirm)|could not (?:verify|confirm)|"
                    r"^No action ran in this request|^Your request came through\. I couldn", re.I)
-_DOLLARS = re.compile(r"\$\s?(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d{1,2}))?(?![\d,])")
+# "$100, then…": a comma after the figure ends it; only ",000" continues it.
+_DOLLARS = re.compile(r"\$\s?(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d{1,2}))?(?!\d|,\d)")
 _CLOCK_SAID = re.compile(r"\b(\d{1,2})(?::(\d{2}))?\s*([ap])\.?\s?m\b\.?|\b(noon|midday)\b", re.I)
 _NONE_SAID = re.compile(
     r"\b(?:no one|nobody|nothing|none|zero|no (?:open|unpaid|outstanding|overdue|sent|invoices?|"
@@ -549,6 +552,12 @@ _MONTHS = {m: i + 1 for i, m in enumerate(
     "jan feb mar apr may jun jul aug sep oct nov dec".split())}
 _DATE_SAID = re.compile(r"\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?\s+(\d{1,2})\b", re.I)
 _WEEKDAY_SAID = re.compile(r"\b(%s|today|tomorrow|tonight)\b" % "|".join(_DAY_NAMES), re.I)
+_TOTAL_CUE = re.compile(r"\b(?:total|in all|altogether|all together|overall|combined|of your|"
+                        r"everyone|everybody|all (?:of )?(?:your )?clients)\b", re.I)
+_PAID_PART = re.compile(r"(?<![-\w])(?:paid|received|collected|came in|cleared)\b", re.I)
+_NOT_PAID_PART = re.compile(r"\bunpaid\b|\b(?:not|n't|never|yet to be|still to be)\b[\w\s]{0,12}\bpaid\b", re.I)
+_OWED_KINDS = ("invoice", "client_owed", "client_over", "owed_total", "over_total", "draft_total")
+_TOTAL_KINDS = ("owed_total", "over_total", "draft_total")
 _SEGMENT = re.compile(r",\s+|;\s*|\s+(?:and|but|while|plus)\s+|\s+[–—-]\s+", re.I)
 _SENTENCE = re.compile(r"(?<=[.!?])\s+|\n+")
 # Capitalised words in a reply that are not a person: the business's own
@@ -597,9 +606,14 @@ def _people_said(text: str, known: Dict[str, str]) -> Tuple[set, bool]:
     """(the known clients this text names, whether it names anyone else).
     `known` maps each lowercased name word to its client's full name."""
     import chief_truth
+
+    def base(w):
+        low = w.lower().replace("’", "'")
+        return low[:-2] if low.endswith("'s") else low
+
     named, stranger = set(), False
     for w in chief_truth._fast_lane_names(text or ""):
-        low = w.lower().replace("’", "'").rstrip("'s") if w.lower().endswith("'s") else w.lower()
+        low = base(w)
         # chief_truth already drops weekdays, months and common words.
         if w.isupper() or low in _NOT_PEOPLE:
             continue
@@ -607,6 +621,12 @@ def _people_said(text: str, known: Dict[str, str]) -> Tuple[set, bool]:
             named.add(known[low])
         else:
             stranger = True
+    # A client typed in lower case ("maria owes $1,200") is still a client.
+    for w in re.findall(r"[A-Za-z][A-Za-z'’]*", text or ""):
+        low = base(w)
+        if w[0].islower() and low in known and low not in chief_truth._NOT_NAMES \
+                and low not in _NOT_PEOPLE and len(low) > 2:
+            named.add(known[low])
     return named, stranger
 
 
@@ -698,16 +718,27 @@ def _compare_money(answer: Answer, reply: str) -> Tuple[str, Dict[str, Any]]:
                 named = last_named
             amts = amounts_said(part)
             stated = _counts_said(part)
+            said_paid = bool(_PAID_PART.search(part)) and not _NOT_PAID_PART.search(part)
+            said_owed = bool(_OWES_SAID.search(part))
             for a in amts:
                 if a not in known:
                     flag("differs", f"unknown amount {a}")
                     continue
                 cands = [c for c in claims if c["amount"] == a]
                 if named:
-                    cands = [c for c in cands if c["client"] in named or c["client"] is None]
+                    # A client's figure is theirs: the business's total is
+                    # evidence only where the reply says it is a total.
+                    cands = [c for c in cands if c["client"] in named
+                             or (c["what"] in _TOTAL_KINDS and _TOTAL_CUE.search(part))]
                     if not cands:
                         flag("differs", f"{a} said for the wrong client")
                         continue
+                if said_paid and not said_owed and not any(c["what"] == "paid" for c in cands):
+                    flag("differs", f"{a} said as paid, the records have it owed")
+                    continue
+                if said_owed and not said_paid and not any(c["what"] in _OWED_KINDS for c in cands):
+                    flag("differs", f"{a} said as owed, the records have it paid")
+                    continue
                 elif stranger and all(c["client"] for c in cands):
                     flag("unverified", f"{a} said next to someone else")
                     continue
@@ -845,12 +876,24 @@ def _tz(biz: Dict[str, Any]):
 
 def _contact(bid: str, typed: str) -> Tuple[Optional[Dict[str, Any]], str]:
     """The one contact a typed name means, or (None, why). One word matches
-    a first or last name; more words must be the name's start."""
+    a first or last name; more words must be the name's start.
+
+    The name is matched HERE, never sent: the business's contact list is
+    read by its id alone. A name in a query string reaches every logger on
+    the way (HTTPX logs each request URL at INFO), and a log is the wrong
+    place for a client's name."""
     words = typed.split()
-    pattern = quote("*" + typed.replace(" ", "*") + "*", safe="*")
-    rows = _get(f"/contacts?business_id=eq.{bid}&name=ilike.{pattern}&select=id,name&limit=25")
-    if rows is None:
-        return None, "read_failed"
+    rows: List[Dict[str, Any]] = []
+    for page in range(CONTACT_PAGES):
+        got = _get(f"/contacts?business_id=eq.{bid}&select=id,name&order=id.asc"
+                   f"&limit={CONTACT_PAGE}&offset={page * CONTACT_PAGE}")
+        if got is None:
+            return None, "read_failed"
+        rows += got
+        if len(got) < CONTACT_PAGE:
+            break
+    else:
+        return None, "too_many_contacts"
 
     def fits(name: str) -> bool:
         parts = re.sub(r"[^a-z' -]", "", name.lower()).split()
@@ -865,7 +908,7 @@ def _contact(bid: str, typed: str) -> Tuple[Optional[Dict[str, Any]], str]:
     hits = exact or hits
     if not hits:
         return None, "name_not_found"
-    if len(hits) > 1 or len(rows) >= 25:
+    if len(hits) > 1:
         return None, "name_ambiguous"
     return hits[0], ""
 
