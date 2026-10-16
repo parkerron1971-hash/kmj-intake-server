@@ -4,7 +4,7 @@ date: 2026-10-16
 agent: Claude Code (Claude Opus 5.5)
 asked: "KAI brief (Fix lane): when Chief reschedules a booking, its calendar copy is cancelled and never recreated — reproduce, fix with exactly one copy at the new time, idempotent, failures said out loud with no names in logs; check the other Chief booking verbs"
 status: in progress
-prs: [kmj-intake-server#TBD]
+prs: [kmj-intake-server#1465]
 migrations: []
 left_undone:
   - "Codex cross-review (kai/reviews/), then merge on green. Not merged here."
