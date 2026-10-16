@@ -38,6 +38,7 @@ This module is the one place that knows how. Nothing here composes a
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 from typing import Optional
@@ -72,6 +73,48 @@ def service_headers() -> dict:
     """
     key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
     return {"apikey": key, "Authorization": f"Bearer {key}"}
+
+
+def has_service_key() -> bool:
+    return bool(os.environ.get("SUPABASE_SERVICE_ROLE_KEY", ""))
+
+
+# What a practitioner reads when a storage write does not land. The raw
+# answer ("new row violates row-level security policy", a bare 400) is
+# for the log; the person uploading a logo needs to know whether it was
+# their file or us, and what to do next.
+UPLOAD_NOT_CONFIGURED = ("File storage isn't set up on our side yet, so nothing "
+                         "can be saved. That's not your file — it's been logged.")
+UPLOAD_REFUSED = ("Our file storage turned the upload away. That's a problem "
+                  "on our side, not your file — it's been logged. Try again "
+                  "in a few minutes.")
+UPLOAD_TOO_LARGE = "That file is bigger than storage accepts. Try a smaller copy."
+UPLOAD_WRONG_TYPE = "Storage doesn't accept that kind of file. Try a PNG or JPG."
+UPLOAD_UNREACHABLE = "We couldn't reach file storage just now. Try again in a minute."
+
+
+def upload_refusal(status_code: int, body: str) -> str:
+    """Plain words for a refused storage write.
+
+    Storage answers most refusals as HTTP 400 and puts the real status
+    in the JSON body — the RLS refusal behind the 2026-10 logo bug came
+    back as `400 {"statusCode":"403", ...}` — so the body is read first.
+    """
+    code = str(status_code)
+    text = (body or "").lower()
+    try:
+        parsed = json.loads(body or "")
+        if isinstance(parsed, dict) and parsed.get("statusCode"):
+            code = str(parsed["statusCode"])
+    except Exception:  # noqa: BLE001 — a non-JSON body keeps the HTTP code
+        pass
+    if code in ("401", "403") or "row-level security" in text:
+        return UPLOAD_REFUSED
+    if code == "413" or "maximum allowed size" in text or "too large" in text:
+        return UPLOAD_TOO_LARGE
+    if code == "415" or "mime type" in text:
+        return UPLOAD_WRONG_TYPE
+    return UPLOAD_UNREACHABLE
 
 
 def _finish(base: str, payload: dict, download_as: Optional[str]) -> Optional[str]:

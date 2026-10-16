@@ -5712,12 +5712,16 @@ async def drop_upload(business_id: str = FormField(...),
     if len(data) > _DROP_UPLOAD_MAX:
         raise HTTPException(400, "image too large (10 MB max)")
     import time as _time
-    from agents.slot_system.dalle_client import _upload_site_image
+    from agents.slot_system.dalle_client import (
+        _upload_site_image_debug, upload_failure_words)
     safe_slot = re.sub(r"[^a-zA-Z0-9_-]", "_", slot)[:60]
     path = f"{business_id}/drop_{safe_slot}_{int(_time.time())}.{ext}"
-    url = _upload_site_image(path, data, file.content_type or "image/jpeg")
+    up = _upload_site_image_debug(path, data, file.content_type or "image/jpeg")
+    url = up.get("url") if up.get("status") == "ok" else None
     if not url:
-        raise HTTPException(502, "storage upload failed — try again")
+        logger.warning("drop upload %s: %s %s %s", path, up.get("status"),
+                       up.get("http_status"), (up.get("body_excerpt") or "")[:200])
+        raise HTTPException(502, upload_failure_words(up))
     fill = drop_fill(DropFillBody(business_id=business_id, slot=slot,
                                   url=url), session)
     return {**fill, "url": url}

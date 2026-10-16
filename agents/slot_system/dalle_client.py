@@ -266,18 +266,22 @@ def _upload_site_image_debug(
 
     Status values:
       ok                    payload includes url
-      no_supabase_env       SUPABASE_URL or SUPABASE_ANON missing
+      no_supabase_env       SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY missing
       http_error            Supabase returned >= 400 (body excerpt included)
       http_exception        network/timeout failure
+
+    Service role, not anon: since the 2026-08-09 write lockdown the only
+    site_images insert policy is `authenticated` plus a business check,
+    which anon fails ("new row violates row-level security policy").
+    Every caller checks ownership before it gets here.
     """
+    import storage_links
     base = os.environ.get("SUPABASE_URL", "").rstrip("/")
-    anon = os.environ.get("SUPABASE_ANON", "")
-    if not base or not anon:
+    if not base or not storage_links.has_service_key():
         return {"status": "no_supabase_env"}
     url = f"{base}/storage/v1/object/{SITE_IMAGES_BUCKET}/{storage_path}"
     headers = {
-        "apikey": anon,
-        "Authorization": f"Bearer {anon}",
+        **storage_links.service_headers(),
         "Content-Type": content_type or "application/octet-stream",
         "x-upsert": "true",
     }
@@ -301,6 +305,18 @@ def _upload_site_image_debug(
         "status": "ok",
         "url": _site_image_storage_url(storage_path),
     }
+
+
+def upload_failure_words(debug: Dict[str, Any]) -> str:
+    """What the practitioner reads for a failed _upload_site_image_debug."""
+    import storage_links
+    status = debug.get("status")
+    if status == "no_supabase_env":
+        return storage_links.UPLOAD_NOT_CONFIGURED
+    if status == "http_error":
+        return storage_links.upload_refusal(
+            int(debug.get("http_status") or 0), debug.get("body_excerpt") or "")
+    return storage_links.UPLOAD_UNREACHABLE
 
 
 def _upload_site_image(

@@ -39,6 +39,7 @@ import httpx
 
 import brand_dna
 import llm_call
+import storage_links
 import untrusted_text
 
 logger = logging.getLogger("brand_engine")
@@ -1927,19 +1928,25 @@ _ALLOWED_ASSET_EXTS = {"png", "jpg", "jpeg", "svg", "webp", "gif", "ico"}
 _STORAGE_BUCKET = "business-assets"
 
 
-def _storage_upload(storage_path: str, file_bytes: bytes, content_type: str) -> Optional[str]:
-    """POST raw bytes to Supabase Storage REST. Returns the public URL on
-    success, None on failure. Uses the same anon key the rest of the
-    codebase uses; the bucket's RLS policy must allow uploads (existing
-    permissive policy on business-assets does)."""
+def _storage_upload(
+    storage_path: str, file_bytes: bytes, content_type: str,
+) -> Tuple[Optional[str], Optional[str]]:
+    """POST raw bytes to Supabase Storage REST. Returns (public_url, None)
+    on success, (None, plain-words reason) on failure.
+
+    Service role, not anon. The 2026-08-09 write lockdown left
+    business-assets with one insert policy — `authenticated` plus a
+    business check — and anon fails it: every logo upload since then
+    came back "new row violates row-level security policy". The route
+    runs `assert_access(business_id, user, "admin")` before this, which
+    is the access check; storage just has to accept the bytes."""
     base = _sb_url()
-    if not base:
-        logger.warning("storage_upload: SUPABASE_URL not configured")
-        return None
+    if not base or not storage_links.has_service_key():
+        logger.error("storage_upload: SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY not configured")
+        return None, storage_links.UPLOAD_NOT_CONFIGURED
     url = f"{base}/storage/v1/object/{_STORAGE_BUCKET}/{storage_path}"
     headers = {
-        "apikey": _sb_anon(),
-        "Authorization": f"Bearer {_sb_anon()}",
+        **storage_links.service_headers(),
         "Content-Type": content_type or "application/octet-stream",
         # `x-upsert: true` lets re-uploading the same path replace the object.
         "x-upsert": "true",
@@ -1949,12 +1956,12 @@ def _storage_upload(storage_path: str, file_bytes: bytes, content_type: str) -> 
             r = client.post(url, content=file_bytes, headers=headers)
         if r.status_code >= 400:
             logger.warning(f"storage upload {storage_path}: {r.status_code} {r.text[:200]}")
-            return None
+            return None, storage_links.upload_refusal(r.status_code, r.text)
     except httpx.HTTPError as e:
         logger.warning(f"storage upload {storage_path} failed: {e}")
-        return None
+        return None, storage_links.UPLOAD_UNREACHABLE
     # Public URL — bucket has public read RLS already in place.
-    return f"{base}/storage/v1/object/public/{_STORAGE_BUCKET}/{storage_path}"
+    return f"{base}/storage/v1/object/public/{_STORAGE_BUCKET}/{storage_path}", None
 
 
 def upload_asset(
@@ -1975,22 +1982,24 @@ def upload_asset(
     if len(file_bytes) > max_size:
         return {
             "ok": False,
-            "error": f"File exceeds {ASSET_VARIANTS[variant]['max_size_mb']}MB limit",
+            "error": (f"That file is over the {ASSET_VARIANTS[variant]['max_size_mb']} MB "
+                      "limit for this spot. Try a smaller copy."),
         }
 
     if not (content_type or "").startswith("image/"):
-        return {"ok": False, "error": f"Content type must be an image, got {content_type}"}
+        return {"ok": False, "error": "That isn't an image file. Use a PNG, JPG, WebP or SVG."}
 
     ext = (filename.rsplit(".", 1)[-1] if "." in (filename or "") else "png").lower()
     if ext not in _ALLOWED_ASSET_EXTS:
-        return {"ok": False, "error": f"Unsupported file extension: {ext}"}
+        return {"ok": False, "error": (f".{ext} files can't be used here. "
+                                       "Use a PNG, JPG, WebP, SVG, GIF or ICO.")}
 
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
     storage_path = f"brand/{business_id}/{variant}-{timestamp}.{ext}"
 
-    public_url = _storage_upload(storage_path, file_bytes, content_type)
+    public_url, refusal = _storage_upload(storage_path, file_bytes, content_type)
     if not public_url:
-        return {"ok": False, "error": "Storage upload failed"}
+        return {"ok": False, "error": refusal or storage_links.UPLOAD_UNREACHABLE}
 
     # Update brand_kit.assets[variant] in the businesses row.
     business = _safe_get_one("businesses", "id", business_id)
@@ -2013,7 +2022,7 @@ def upload_asset(
         {"settings": settings, "updated_at": datetime.now(timezone.utc).isoformat()},
     )
     if res is None:
-        return {"ok": False, "error": "Database update failed"}
+        return {"ok": False, "error": "The file saved, but it couldn't be attached to your brand. Try again."}
 
     invalidate_bundle_cache(business_id)   # new logo/favicon must show now
     return {"ok": True, "url": public_url, "variant": variant}
