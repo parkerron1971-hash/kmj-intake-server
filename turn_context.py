@@ -78,6 +78,24 @@ def note_main_call(*, model: Optional[str] = None, lane: Optional[str] = None,
             info[key] = _s(value)
 
 
+def claim_charge() -> bool:
+    """Whether this call is the one that carries the turn's price.
+
+    A Chief message is charged once, however many model calls it takes
+    (tool rounds, a fallback, an embedded draft). The first caller in a
+    turn claims the charge; every later caller gets False. setdefault on
+    the shared per-turn dict is one atomic step, so two calls racing in
+    the same turn cannot both claim it, and child tasks and executor
+    copies of the context share the same dict, so they see the claim.
+
+    Outside a turn there is nothing to share a price with: True."""
+    info = _INFO.get()
+    if info is None or not turn_id():
+        return True
+    mine = object()
+    return info.setdefault("charged", mine) is mine
+
+
 def note_brain(version: Any = None, fingerprint: Optional[str] = None) -> None:
     """The business brain this turn acted with (business_brain.stamp)."""
     info = _INFO.get()

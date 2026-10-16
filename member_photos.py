@@ -214,8 +214,10 @@ async def screen(business_id: str, webp: bytes) -> str:
     }
     try:
         async with httpx.AsyncClient() as client:
+            # Member-side safety checks are a platform cost: they never draw on
+            # the church's Chief allowance (units=0), only on our bill.
             resp = await llm_call.apost(client, payload, timeout=15, task="member_photo_screen",
-                                        business_id=str(business_id))
+                                        business_id=str(business_id), units=0)
         if resp.status_code != 200:
             raise ScreenUnavailable(f"http {resp.status_code}")
         body = resp.json()

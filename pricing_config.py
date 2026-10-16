@@ -228,7 +228,48 @@ def sourcing_search() -> int:
 
 
 def chat_price() -> int:
-    """One Chief turn.
+    """One Chief MESSAGE, however many model calls it takes.
+
+    WHY 20, AND PER MESSAGE (2026-10-16)
+
+    Until now the meter charged this price per model CALL (api_usage
+    rows on CHAT_TURN_ENDPOINTS), not per message. A message that used
+    a tool round, fell back, or drafted an email was charged two or
+    three times; a call that failed was charged as if it had answered;
+    and the answer check rode along at 1 credit a call. So a message
+    cost a varying 13-37 credits while the website divided the tank by
+    12 and promised "about 250 conversations".
+
+    Measured from production on 2026-10-16, last 14 days, the 14 Chief
+    messages that carry a turn id:
+
+        credits charged   median 15    mean 19.6   p90 26
+        main-model calls  mean 1.50 per message
+        real cost         median 13.8c  mean 24.8c  p90 51.4c
+
+    and on 2026-10-07, 199 messages: median 16.2c, mean 21.5c.
+
+    The price is now written onto the turn's FIRST chat row and every
+    other call in the turn is 0 (api_usage_logger._priced_units), so a
+    message is exactly this many credits. 20 is revenue-neutral with
+    what customers were actually charged on average (19.6), and it
+    makes the website's "about N conversations" (tank / this) true:
+    150 / 375 / 875 for Starter / Professional / Solutionist.
+
+    What it does NOT fix: worst-case economics. At 21.5c a message, a
+    customer who spends the whole tank on chat costs 40.8% / 54% / 63%
+    of Starter / Professional / Practice revenue. The old 40% ceiling
+    only held because MEASURED_CHAT_COST_CENTS was a stale per-CALL
+    7.37c. Per-message pricing at 12 would have made it 68% / 90% /
+    105%. Practice reaches 40% at this price when a message costs about
+    13.7c: that is the Chief cost plan's lever (the cold-start cache
+    rewrite is most of the mean), not this dial.
+
+    BILLING_ENFORCE is on in production as of 2026-10-16, so this is
+    the number customers' allowances are drawn down by.
+
+    THE HISTORY BELOW is the per-call era, kept because its reasoning
+    (the identity, why not fix Practice alone) still holds per message.
 
     RAISED 1 -> 8, then 8 -> 12, both on 2026-08-10, against measured
     data rather than the estimate it shipped on. This module says opening defaults get refined
@@ -310,7 +351,33 @@ def chat_price() -> int:
     production, so allowances are recorded and not enforced. This is
     positioning for the day that flips, which is the safe moment to do it.
     """
-    return _dial("CHAT_PRICE", "PRICE_", 12)
+    return _dial("CHAT_PRICE", "PRICE_", 20)
+
+
+def call_price() -> int:
+    """One Chief model call made OUTSIDE a chat message, priced per call.
+
+    The same /chief/backend label is written by ~25 features that call
+    Chief's model directly with no chat turn around them (agents, plans,
+    strategy, assignments, the growth engine). They were priced per call
+    at the old chat price, 12, and 2026-10-16 did not mean to reprice
+    them: moving chat_price to 20 per MESSAGE would otherwise have raised
+    each of them by two thirds without anyone deciding it. This dial keeps
+    them where they were. It is the endpoint-table price; a chat message
+    is priced by chat_price() at write time instead."""
+    return _dial("CALL_PRICE", "PRICE_", 12)
+
+
+# The endpoints a Chief message's own model calls log under. Inside a
+# turn, the first successful row among these carries chat_price() and
+# the rest carry 0; a failed one is always 0
+# (api_usage_logger._priced_units). Outside a turn they fall back to the
+# endpoint table (call_price()), as before.
+CHAT_TURN_ENDPOINTS = frozenset({
+    "/chief/backend",
+    "/chief/backend-fallback",
+    "/chief/draft",
+})
 
 
 def concierge_price() -> int:
@@ -409,10 +476,13 @@ def trial_credits_no_card() -> int:
       · a site build is charged 1,000-1,300 credits and costs ~$1.69-3.25
         of AI, so 500 can never pay for one — the build is in this trial
         ONLY because trial_build_free() makes the FIRST one free;
-      · a Chief turn is chat_price() (12) credits and costs ~8.2c on
-        average, so the rest is ~41 turns, ~$3.40 of AI;
+      · a Chief turn was 12 credits a call and cost ~8.2c on average,
+        so the rest was ~41 calls, ~$3.40 of AI. Since 2026-10-16 a
+        message is chat_price() (20) credits, all of its calls together,
+        and costs ~21.5c on average: 25 messages, ~$5.40 of AI;
       · setup work a new business triggers on its own costs 0 credits.
-    Worst case per no-card signup is therefore ~$6-7 of AI, against
+    Worst case per no-card signup is therefore ~$8-9 of AI (it was
+    ~$6-7 by the per-call reckoning, which undercounted a message), against
     ~$10 for the card trial. Real new businesses spent 0-264 credits in
     their first week; one heavy user spent 956, and would meet the
     add-a-card wall around day three, which is the point of it."""
@@ -444,12 +514,22 @@ def no_card_free_workspace() -> bool:
 
 # ─── Does the tank pay for itself? ───────────────────────────────────
 
-# Measured from api_usage over 640 real Chief turns, 2026-07-23..08-10.
+# What one Chief MESSAGE costs us, all of its model calls together (the
+# main calls, tool rounds, fallback and the answer check). Measured from
+# api_usage on 2026-10-07 over 199 real messages: median 16.2c, mean
+# 21.5c, p90 51c. A 14-message sample on 2026-10-16 read median 13.8c,
+# mean 24.8c. The mean is used: the worst case is a whole tank, and a
+# tank pays for the cold starts too.
+#
+# Until 2026-10-16 this was 7.37c, a per-CALL figure from 640 calls
+# (2026-07-23..08-10). It went with the per-call price and is wrong for
+# a per-message one; see chat_price().
+#
 # A constant rather than a live query on purpose: this is a PRICING
 # input, and a price that silently re-derives itself from yesterday's
 # traffic is a price nobody can reason about. Re-measure deliberately
 # and move the number deliberately.
-MEASURED_CHAT_COST_CENTS = 7.37
+MEASURED_CHAT_COST_CENTS = 21.5
 
 
 def chat_tank_economics(cost_cents: Optional[float] = None) -> Dict[str, Dict[str, float]]:
@@ -553,11 +633,15 @@ def unit_weights() -> Dict[str, int]:
         # DEFAULT_WEIGHT — the exact quote-vs-charge divergence that PR
         # claimed to close. Explicit now, at the same value, so the dial
         # reaches the endpoint it names.
-        "/chief/backend": chat_price(),
-        "/chief/backend-fallback": chat_price(),   # backup brain, same turn
-        "/chief/draft": chat_price(),
-        "/ai/proxy": chat_price(),
-        "/composer/coach/turn": chat_price(),
+        # Since 2026-10-16 these are the PER-CALL price (call_price) for
+        # calls made outside a chat message. Inside a chat message the
+        # row is priced at write time instead: chat_price() once, then 0
+        # (api_usage_logger._priced_units), so this table never sees it.
+        "/chief/backend": call_price(),
+        "/chief/backend-fallback": call_price(),   # backup brain, same turn
+        "/chief/draft": call_price(),
+        "/ai/proxy": call_price(),
+        "/composer/coach/turn": call_price(),
         # Chief's REASONING sub-calls inside a single turn — the
         # practitioner asked one question and must not pay three times.
         "/chief/action-reasoner": 0,
@@ -586,7 +670,7 @@ def unit_weights() -> Dict[str, int]:
         # without units and the price_list display value.
         "/sourcing/search": sourcing_search(),
         "/concierge/reply": concierge_price(),
-        "/composer/coach/turn": chat_price(),
+        "/composer/coach/turn": call_price(),
 
         # ── Build internals: FREE. The marker carries the whole bill. ──
         # Charging these too would double-bill every build.
@@ -816,6 +900,7 @@ def snapshot() -> Dict[str, object]:
             "doc_gen": doc_gen(),
             "sourcing_search": sourcing_search(),
             "chat": chat_price(),
+            "chief_call": call_price(),
             "concierge": concierge_price(),
             "premium_voice": premium_voice_price(),
         },

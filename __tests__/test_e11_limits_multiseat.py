@@ -45,6 +45,7 @@ def _pin_chat_price(monkeypatch):
     covered by test_chat_repricing.py.
     """
     monkeypatch.setenv("PRICE_CHAT_PRICE", "1")
+    monkeypatch.setenv("PRICE_CALL_PRICE", "1")   # the per-call twin (2026-10-16)
 
 
 
@@ -290,7 +291,7 @@ def test_build_marker_weights(fake, monkeypatch):
                 + 0 * 6              # build internals
                 + pc.hero_regen()    # hero refresh
                 + 1                  # /ai/proxy -> DEFAULT_WEIGHT
-                + pc.chat_price())   # chat turn
+                + pc.call_price())   # a Chief call outside a chat turn
     assert um.weighted_usage_this_month("b1") == expected
     assert um.weight_for("/composer/compose") == pc.build_base()
     assert um.weight_for("/composer/atelier") == pc.section_rewrite()
