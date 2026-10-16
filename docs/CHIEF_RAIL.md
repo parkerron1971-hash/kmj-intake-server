@@ -67,18 +67,45 @@ turns only), on a worker thread:
    - "Tasha is next on Sunday at 10am", when Maria is next on Saturday,
      differs.
 
-   Each sentence is cut at its commas and "and"s, and a part that names no
-   one carries the name its sentence last used. Money also compares the yes
-   or no of "did X pay".
+   **Each sentence is resolved whole before any figure in it is checked.**
+   It is cut into parts at its commas, colons and "and"s. Each part gets a
+   subject and a status:
+   - **Subject.** In order: the client it names (in any case, against the
+     business's whole contact list); the client a pronoun stands for (the
+     one last named, or the one client asked about); the business, when it
+     says so ("you're owed", "in total"). A part with none takes the
+     nearest part's that has one.
+   - **Status.** Paid, owed, both, or negated ("doesn't owe"). Each "paid"
+     is read with only the negation in front of it, so "the previously
+     unpaid $300 has now been paid" says both. A part with no status takes
+     the sentence's, when the sentence has exactly one.
+
+   Then each figure is checked:
+   - a contradiction that doesn't depend on who it is about (paid against
+     owed, a wrong day) is `differs`;
+   - a sentence naming anyone the records don't hold is `unverified`;
+   - so is a total said next to one client, paid and owed at once, a
+     negated status, an unresolved pronoun, or a table;
+   - a stated business subject must be one of the business's totals.
+
+   **Unresolved never counts as agreement.** Money also compares the yes or
+   no of "did X pay". The tests hold this as a property:
+   `test_no_false_reply_is_ever_scored_as_agreement` and its calendar twin
+   generate 2,319 replies across client (any case, unknown, pronoun),
+   wording, status, amount or time, day and word order. Not one false reply
+   scores `agrees` or `partial`, and every true one does.
+
+   The known limit: a lower-case name the business has no contact for
+   reads as an ordinary word.
 
    The outcomes:
 
    | Outcome | Meaning |
    |---|---|
-   | `agrees` | Chief said the rail's headline and nothing the records lack |
-   | `partial` | everything Chief said is in the records, but not the headline |
+   | `agrees` | Chief said the rail's headline, and every claim resolved and true |
+   | `partial` | every claim resolved and true, but not all of the headline |
    | `differs` | Chief said a figure, time, count, client, day or yes/no the records contradict |
-   | `unverified` | a client's figure said next to someone the records don't name, or in a table: it can't be held to a record |
+   | `unverified` | a claim that can't be resolved (someone the records don't hold, a total next to one client, paid and owed at once, a table): never agreement |
    | `withheld` | Chief's reply was walled |
    | `silent` | Chief said no figure (a question back, a hedge) |
 

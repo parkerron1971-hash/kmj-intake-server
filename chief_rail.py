@@ -268,6 +268,7 @@ class Records:
     paid_invoices: List[Dict[str, Any]] = field(default_factory=list)
     sessions: List[Dict[str, Any]] = field(default_factory=list)
     contact: Optional[Dict[str, Any]] = None
+    contact_names: Optional[List[str]] = None    # every contact's name, when read
     window: str = ""                # what the session read covered, in words
     label: str = ""                 # "tomorrow" / "on Friday, Oct 17"
     day_iso: str = ""
@@ -554,9 +555,20 @@ _DATE_SAID = re.compile(r"\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|de
 _WEEKDAY_SAID = re.compile(r"\b(%s|today|tomorrow|tonight)\b" % "|".join(_DAY_NAMES), re.I)
 _TOTAL_CUE = re.compile(r"\b(?:total|in all|altogether|all together|overall|combined|of your|"
                         r"everyone|everybody|all (?:of )?(?:your )?clients)\b", re.I)
-_PAID_PART = re.compile(r"(?<![-\w])(?:paid|received|collected|came in|cleared)\b", re.I)
-_NOT_PAID_PART = re.compile(r"\bunpaid\b|\b(?:not|n't|never|neither|nobody|no one|none|yet to be|still to be)\b"
-                            r"[\w\s]{0,12}\bpaid\b", re.I)
+# The business as the subject: "you're owed", "you have", "in total".
+_BUSINESS_SUBJECT = re.compile(r"\b(?:you(?:'re|’re| are)? (?:still )?owed|you have|you've|you’ve|"
+                               r"your (?:total|clients|customers|books|balance)|in total|altogether|"
+                               r"overall|combined|across (?:all|everyone)|everyone|everybody)\b", re.I)
+_PRONOUN = re.compile(r"\b(?:she|he|they|her|him|them|his|hers|their)\b", re.I)
+# Each "paid" is read with whatever negates it, and only that: "the
+# previously unpaid $300 has now been paid" says paid AND owed.
+_PAID_WORD = re.compile(r"(?<![-\w])(?:paid|received|collected|came in|cleared|settled)\b", re.I)
+# "n't" sits inside its word ("doesn't", "hasn't"), so it has no boundary
+# before it.
+_NEGATION_BEFORE = re.compile(r"(?:\b(?:not|never|neither|nobody|no one|none|nothing|no longer|yet to be|"
+                              r"still to be)\b|n['’]t\b)[\w\s'’]{0,14}$", re.I)
+_OWED_WORD = re.compile(r"(?<![-\w])(?:owes?|owed|owing|unpaid|outstanding|overdue|due|open|pending|"
+                        r"unsettled|balance)\b", re.I)
 _OWED_KINDS = ("invoice", "client_owed", "client_over", "owed_total", "over_total", "draft_total")
 _TOTAL_KINDS = ("owed_total", "over_total", "draft_total")
 _SEGMENT = re.compile(r",\s+|;\s*|\s+(?:and|but|while|plus)\s+|\s+[–—-]\s+", re.I)
@@ -566,11 +578,25 @@ _SEGMENT = re.compile(r",\s+|;\s*|\s+(?:and|but|while|plus)\s+|\s+[–—-]\s+",
 _SEGMENT_MONEY = re.compile(r",\s+|;\s*|:\s+|\s+(?:and|but|while|plus)\s+|\s+[–—-]\s+", re.I)
 _SENTENCE = re.compile(r"(?<=[.!?])\s+|\n+")
 # Capitalised words in a reply that are not a person: the business's own
-# nouns, and the calendar (chief_truth's list covers the common words).
+# nouns, the calendar, and how sentences start (chief_truth's list covers
+# the most common words).
 _NOT_PEOPLE = frozenset("""
 invoice invoices inv total totals balance balances overdue payment payments paid unpaid session
 sessions appointment appointments booking bookings calendar schedule client clients customer
 customers draft drafts am pm noon your you you're yes no not nothing nobody none next upcoming
+neither both all every each most some any also just still only great good right sure okay ok
+here there it its they we our us heads note looks so then quick reminder dollars usd
+chief solutionist stripe square paypal venmo zelle cashapp quickbooks plaid
+you've you'll you'd i'm i've i'll i'd we're we've we'll that's there's here's it's let's what's
+thanks thank unfortunately currently altogether together overall combined between across of
+including plus meanwhile however otherwise besides separately earlier later recently outstanding
+open pending owed due sent nope yep already remaining remember will shall do does did is are was
+were has have had everyone everybody someone anyone either second finally lastly update summary
+breakdown bottom line money cash revenue income deposit deposits check card biggest largest
+smallest oldest newest highest lowest least more less again since while once until because
+alright absolutely definitely honestly basically actually apparently hopefully luckily sadly
+mostly roughly about around almost nearly exactly great good happy sounds looks right last first
+from after before when if and but or with for at by in on to as up out over under also both
 """.split())
 
 # Outcome order, worst first: what one reply is, when its parts disagree.
@@ -607,32 +633,62 @@ def _counts_said(text: str) -> List[Tuple[int, str]]:
     return out
 
 
-def _people_said(text: str, known: Dict[str, str]) -> Tuple[set, bool]:
+def _base(w: str) -> str:
+    low = w.lower().replace("’", "'")
+    return low[:-2] if low.endswith("'s") else low
+
+
+def _people_said(text: str, known: Dict[str, set]) -> Tuple[set, bool]:
     """(the known clients this text names, whether it names anyone else).
-    `known` maps each lowercased name word to its client's full name."""
+
+    `known` maps each lowercased name word to the clients it belongs to.
+    A client's name counts in any case ("MARIA", "maria").
+
+    Someone else is any capitalised word (or one in capitals, four letters
+    or more) that is no client and no common word, wherever it stands:
+    "Jordan at 10am" is a person the records don't hold. The words
+    sentences start with ("Overall,", "Currently", "You've") are common
+    words (_NOT_PEOPLE), so an ordinary reply is not held up; an unusual
+    one is unresolved, which keeps it out of agreement, never in."""
     import chief_truth
-
-    def base(w):
-        low = w.lower().replace("’", "'")
-        return low[:-2] if low.endswith("'s") else low
-
     named, stranger = set(), False
-    for w in chief_truth._fast_lane_names(text or ""):
-        low = base(w)
-        # chief_truth already drops weekdays, months and common words.
-        if w.isupper() or low in _NOT_PEOPLE:
+    words = list(re.finditer(r"[A-Za-z][A-Za-z'’]*", text or ""))
+    for k, m in enumerate(words):
+        w = m.group(0)
+        low = _base(w)
+        if low in known and len(low) > 2 and low not in chief_truth._NOT_NAMES and low not in _NOT_PEOPLE:
+            named |= known[low]
             continue
-        if low in known:
-            named.add(known[low])
-        else:
-            stranger = True
-    # A client typed in lower case ("maria owes $1,200") is still a client.
-    for w in re.findall(r"[A-Za-z][A-Za-z'’]*", text or ""):
-        low = base(w)
-        if w[0].islower() and low in known and low not in chief_truth._NOT_NAMES \
-                and low not in _NOT_PEOPLE and len(low) > 2:
-            named.add(known[low])
+        if not w[0].isupper() or (w.isupper() and len(low) <= 3):
+            continue        # lower case, or INV / USD / AM
+        if low in known or low in _NOT_PEOPLE or low in chief_truth._NOT_NAMES or len(low) < 2:
+            continue
+        stranger = True
     return named, stranger
+
+
+def _status_of(text: str) -> Optional[str]:
+    """What a part says of its amounts: 'paid', 'owed', 'both' (it says
+    each, so which is unresolved), 'negated' ("doesn't owe": not a status
+    the records can confirm), or None."""
+    paid = owed = negated = False
+    for m in _PAID_WORD.finditer(text or ""):
+        if _NEGATION_BEFORE.search(text[:m.start()]):
+            owed = True             # "hasn't paid", "neither has paid"
+        else:
+            paid = True
+    for m in _OWED_WORD.finditer(text or ""):
+        word = m.group(0).lower()
+        if word != "unpaid" and _NEGATION_BEFORE.search(text[:m.start()]) \
+                and not re.search(r"\b(?:still|yet)\b[\w\s'’]{0,6}$", text[:m.start()], re.I):
+            negated = True          # "doesn't owe", "no longer outstanding"
+        else:
+            owed = True
+    if negated:
+        return "negated"
+    if paid and owed:
+        return "both"
+    return "paid" if paid else "owed" if owed else None
 
 
 def _days_said(text: str, today: Optional[date]) -> set:
@@ -663,14 +719,17 @@ def _days_said(text: str, today: Optional[date]) -> set:
 def compare(q: Question, answer: Answer, reply: str) -> Tuple[str, Dict[str, Any]]:
     """Did Chief say what the records say? (outcome, detail). Pure.
 
-    Every figure, time and count Chief said is held to the record it
-    belongs to, together with the client and the day it was said next to.
+    Each sentence is resolved WHOLE before any figure in it is checked:
+    who each part is about and what it says of its amounts (paid, owed).
+    Then every amount, time and count is held to the record it belongs to.
+    Anything the sentence leaves unresolved is kept out of agreement.
 
-    agrees     the rail's headline, and nothing the records contradict
-    partial    nothing contradicted, but not all of the headline
+    agrees     the rail's headline, and every claim resolved and true
+    partial    every claim resolved and true, but not all of the headline
     differs    a figure, time, count, client, day or yes/no the records contradict
-    unverified figures said next to someone the records don't name, or in a
-               table: they can't be held to a record, so they don't count as agreement
+    unverified a claim that can't be resolved: someone the records don't
+               hold, a total that could be one client's or everyone's, paid
+               and owed at once, a table. Never agreement.
     withheld   Chief's reply was walled
     silent     Chief said no figure at all (a question back, a hedge)"""
     reply = reply or ""
@@ -681,11 +740,11 @@ def compare(q: Question, answer: Answer, reply: str) -> Tuple[str, Dict[str, Any
     return _compare_schedule(q, answer, reply)
 
 
-def _known_people(names) -> Dict[str, str]:
-    out: Dict[str, str] = {}
+def _known_people(names) -> Dict[str, set]:
+    out: Dict[str, set] = {}
     for full in names:
         for w in re.findall(r"[A-Za-z][A-Za-z'’-]*", full or ""):
-            out[w.lower()] = full
+            out.setdefault(w.lower(), set()).add(full)
     return out
 
 
@@ -696,11 +755,63 @@ def _worst(problems: List[str]) -> Optional[str]:
     return None
 
 
+def _sentences(reply: str, splitter, people: Dict[str, set], *, default_client: Optional[str] = None,
+               today: Optional[date] = None):
+    """Each sentence of a reply, resolved whole. Yields one dict per part:
+    its text; `subject` (a set of clients, or 'business', or None when it
+    can't be told); `status`; `days`; and `stranger` (the SENTENCE names
+    someone the records don't hold).
+
+    A part's own subject is, in order: the client it names; the client a
+    pronoun stands for (the one last named in the reply, or the one client
+    asked about; unresolved otherwise); the business, when it says so
+    ("you're owed", "in total"). A part with none takes the nearest part's
+    that has one, before it first, then after. With none in the sentence
+    the subject is the business, unstated ('business?'), which any of the
+    records' figures can be. A stated business ('business') must be held
+    to a business total. A part with no status of its own takes the
+    sentence's, when the sentence has exactly one."""
+    last_client: set = {default_client} if default_client else set()
+    for sentence in _SENTENCE.split(reply or ""):
+        parts = [p for p in splitter.split(sentence) if p.strip()]
+        info = []
+        for p in parts:
+            named, stranger = _people_said(p, people)
+            if named:
+                own = named
+            elif _PRONOUN.search(p):
+                own = set(last_client) if len(last_client) == 1 else "unresolved"
+            elif _BUSINESS_SUBJECT.search(p):
+                own = "business"
+            else:
+                own = None
+            info.append({"text": p, "named": named, "stranger": stranger, "own_status": _status_of(p),
+                         "own_subject": own, "own_days": _days_said(p, today)})
+        stranger = any(i["stranger"] for i in info)
+        statuses = {i["own_status"] for i in info if i["own_status"]}
+        whole = (None if not statuses else next(iter(statuses)) if len(statuses) == 1 else "both")
+        order = lambda k: list(range(k - 1, -1, -1)) + list(range(k + 1, len(info)))
+        for k, i in enumerate(info):
+            subject = i["own_subject"] or next(
+                (info[j]["own_subject"] for j in order(k) if info[j]["own_subject"]), "business?")
+            if subject == "unresolved":
+                subject = None
+            days = i["own_days"] or next(
+                (info[j]["own_days"] for j in list(range(k - 1, -1, -1)) + list(range(k + 1, len(info)))
+                 if info[j]["own_days"]), set())
+            yield {"text": i["text"], "subject": subject, "status": i["own_status"] or whole,
+                   "days": days, "stranger": stranger}
+        named_here = set().union(*(i["named"] for i in info)) if info else set()
+        if named_here:
+            last_client = named_here
+
+
 def _compare_money(answer: Answer, reply: str) -> Tuple[str, Dict[str, Any]]:
     facts = answer.facts
     claims = facts.get("claims") or []
     known = {c["amount"] for c in claims}
-    people = _known_people({c["client"] for c in claims if c["client"]} | {facts.get("client") or ""})
+    people = _known_people({c["client"] for c in claims if c["client"]} | {facts.get("client") or ""}
+                           | set(facts.get("contacts") or []))
     counts = {"invoice": {c["count"] for c in claims if c["count"] is not None},
               "client": {facts.get("clients")} if facts.get("clients") is not None else set()}
     said = amounts_said(reply)
@@ -713,64 +824,66 @@ def _compare_money(answer: Answer, reply: str) -> Tuple[str, Dict[str, Any]]:
 
     if said and "|" in reply:
         flag("unverified", "table")
-    for sentence in _SENTENCE.split(reply):
-        # Who a part is about, and whether it says paid or owed, carry to
-        # the parts after it that don't say: "You have been paid, $300
-        # across 2 invoices" says paid about the $300.
-        last_named: set = set()
-        last_status: Optional[str] = None
-        for part in _SEGMENT_MONEY.split(sentence):
-            named, stranger = _people_said(part, people)
-            if named:
-                last_named = named
-            elif not stranger:
-                named = last_named
-            paid_cue = bool(_PAID_PART.search(part)) and not _NOT_PAID_PART.search(part)
-            owed_cue = bool(_OWES_SAID.search(part))
-            status = "both" if paid_cue and owed_cue else "paid" if paid_cue else "owed" if owed_cue else None
-            if status:
-                last_status = status
+    for part in _sentences(reply, _SEGMENT_MONEY, people, default_client=facts.get("client")):
+        amts = amounts_said(part["text"])
+        stated = _counts_said(part["text"])
+        for a in amts:
+            if a not in known:
+                flag("differs", f"unknown amount {a}")
+                continue
+            cands = [c for c in claims if c["amount"] == a]
+            # Whoever it is about, an amount the records only have owed,
+            # said as paid (or the other way round), is wrong.
+            if part["status"] == "paid" and not any(c["what"] == "paid" for c in cands):
+                flag("differs", f"{a} said as paid, the records have it owed")
+                continue
+            if part["status"] == "owed" and not any(c["what"] in _OWED_KINDS for c in cands):
+                flag("differs", f"{a} said as owed, the records have it paid")
+                continue
+            if part["stranger"]:
+                flag("unverified", f"{a} said in a sentence about someone the records don't hold")
+                continue
+            subject = part["subject"]
+            if subject is None:
+                flag("unverified", f"{a}: who it belongs to is unclear")
+                continue
+            if subject == "business":
+                # Said of the business ("you're owed", "in total"): one of
+                # its totals, or, asked about one client, that client's own.
+                totals = [c for c in cands if c["what"] in _TOTAL_KINDS
+                          or (facts.get("client") and c["client"] == facts["client"])]
+                if not totals:
+                    flag("unverified", f"{a}: one client's figure said as the business's")
+                    continue
+                cands = totals
+            elif subject == "business?":
+                pass            # no subject stated: any of the records' figures
             else:
-                status = last_status
-            amts = amounts_said(part)
-            stated = _counts_said(part)
-            for a in amts:
-                if a not in known:
-                    flag("differs", f"unknown amount {a}")
+                mine = [c for c in cands if c["client"] in subject]
+                if not mine:
+                    if _TOTAL_CUE.search(part["text"]) and any(c["what"] in _TOTAL_KINDS for c in cands):
+                        flag("unverified", f"{a}: a total said next to a client")
+                    else:
+                        flag("differs", f"{a} said for the wrong client")
                     continue
-                cands = [c for c in claims if c["amount"] == a]
-                if named:
-                    # A client's figure is theirs alone. The business's total
-                    # next to a client's name ("Maria owes $300 in total")
-                    # could be hers or everyone's: unresolved, never agreement.
-                    mine = [c for c in cands if c["client"] in named]
-                    if not mine:
-                        if _TOTAL_CUE.search(part) and any(c["what"] in _TOTAL_KINDS for c in cands):
-                            flag("unverified", f"{a}: a total said next to a client")
-                        else:
-                            flag("differs", f"{a} said for the wrong client")
-                        continue
-                    cands = mine
-                elif stranger and all(c["client"] for c in cands):
-                    flag("unverified", f"{a} said next to someone else")
-                    continue
-                if status == "both":
-                    # "paid the outstanding $300": which is it? Unresolved.
-                    flag("unverified", f"{a} said as both paid and owed")
-                    continue
-                if status == "paid" and not any(c["what"] == "paid" for c in cands):
-                    flag("differs", f"{a} said as paid, the records have it owed")
-                    continue
-                if status == "owed" and not any(c["what"] in _OWED_KINDS for c in cands):
-                    flag("differs", f"{a} said as owed, the records have it paid")
-                    continue
-                inv = [n for n, kind in stated if kind == "invoice"]
-                if inv and len(amts) == 1 and not any(c["count"] in inv for c in cands
-                                                      if c["count"] is not None):
-                    flag("differs", f"{a} said with the wrong invoice count")
-            for n, kind in stated:
-                if kind in counts and counts[kind] and n not in counts[kind]:
-                    flag("differs", f"count {n} {kind}")
+                cands = mine
+            status = part["status"]
+            if status in ("both", "negated"):
+                flag("unverified", f"{a}: paid or owed is unresolved ({status})")
+                continue
+            if status == "paid" and not any(c["what"] == "paid" for c in cands):
+                flag("differs", f"{a} said as paid, the records have it owed")
+                continue
+            if status == "owed" and not any(c["what"] in _OWED_KINDS for c in cands):
+                flag("differs", f"{a} said as owed, the records have it paid")
+                continue
+            inv = [n for n, kind in stated if kind == "invoice"]
+            if inv and len(amts) == 1 and not any(c["count"] in inv for c in cands
+                                                  if c["count"] is not None):
+                flag("differs", f"{a} said with the wrong invoice count")
+        for n, kind in stated:
+            if kind in counts and counts[kind] and n not in counts[kind]:
+                flag("differs", f"count {n} {kind}")
     if answer.empty:
         worst = _worst(problems) or ("differs" if said else None)
         if worst:
@@ -796,7 +909,8 @@ def _compare_schedule(q: Question, answer: Answer, reply: str) -> Tuple[str, Dic
     claims = facts.get("claims") or []
     today = _day(facts.get("today"))
     people = _known_people({c["client"] for c in claims if c["client"]}
-                           | {w for c in claims for w in [c["title"]] if w})
+                           | {w for c in claims for w in [c["title"]] if w}
+                           | set(facts.get("contacts") or []))
     said = times_said(reply)
     detail: Dict[str, Any] = {"said": said, "problems": []}
     problems: List[str] = []
@@ -807,42 +921,40 @@ def _compare_schedule(q: Question, answer: Answer, reply: str) -> Tuple[str, Dic
 
     if said and "|" in reply:
         flag("unverified", "table")
-    for sentence in _SENTENCE.split(reply):
-        last_named: set = set()
-        last_days: set = set()
-        for part in _SEGMENT.split(sentence):
-            named, stranger = _people_said(part, people)
-            if named:
-                last_named = named
-            elif not stranger:
-                named = last_named
-            days = _days_said(part, today)
-            if days:
-                last_days = days
-            else:
-                days = last_days
-            for t in times_said(part):
-                cands = [c for c in claims if c["time"] == t]
+    one = claims[0]["client"] if len(claims) == 1 else None
+    for part in _sentences(reply, _SEGMENT, people, default_client=one, today=today):
+        days = part["days"]
+        for t in times_said(part["text"]):
+            cands = [c for c in claims if c["time"] == t]
+            if not cands:
+                flag("differs", f"time {t} not on the calendar")
+                continue
+            # Whoever it is about, a time on a day the calendar doesn't have
+            # it is wrong.
+            if days and not any(c["date"] in days for c in cands):
+                flag("differs", f"{t} said on the wrong day")
+                continue
+            if part["stranger"]:
+                flag("unverified", f"{t} said in a sentence about someone the records don't hold")
+                continue
+            subject = part["subject"]
+            if subject is None:
+                flag("unverified", f"{t}: who it is with is unclear")
+                continue
+            if subject not in ("business", "business?"):
+                cands = [c for c in cands if c["client"] in subject or c["title"] in subject
+                         or c["client"] is None]
                 if not cands:
-                    flag("differs", f"time {t} not on the calendar")
+                    flag("differs", f"{t} said for the wrong client")
                     continue
-                if named:
-                    cands = [c for c in cands if c["client"] in named or c["title"] in named
-                             or c["client"] is None]
-                    if not cands:
-                        flag("differs", f"{t} said for the wrong client")
-                        continue
-                elif stranger and all(c["client"] for c in cands):
-                    flag("unverified", f"{t} said next to someone else")
-                    continue
-                if days and not any(c["date"] in days for c in cands):
-                    flag("differs", f"{t} said on the wrong day")
-            for n, kind in _counts_said(part):
-                if kind == "session" and q.form == "day" and n != facts.get("count"):
-                    flag("differs", f"count {n}")
-            if q.form == "day" and facts.get("day") and days and facts["day"] not in days \
-                    and (times_said(part) or _counts_said(part)):
-                flag("differs", "wrong day")
+            if days and not any(c["date"] in days for c in cands):
+                flag("differs", f"{t} said on the wrong day")
+        for n, kind in _counts_said(part["text"]):
+            if kind == "session" and q.form == "day" and n != facts.get("count"):
+                flag("differs", f"count {n}")
+        if q.form == "day" and facts.get("day") and days and facts["day"] not in days \
+                and (times_said(part["text"]) or _counts_said(part["text"])):
+            flag("differs", "wrong day")
     worst = _worst(problems)
     if answer.empty:
         if worst or said:
@@ -896,15 +1008,9 @@ def _tz(biz: Dict[str, Any]):
         return timezone.utc
 
 
-def _contact(bid: str, typed: str) -> Tuple[Optional[Dict[str, Any]], str]:
-    """The one contact a typed name means, or (None, why). One word matches
-    a first or last name; more words must be the name's start.
-
-    The name is matched HERE, never sent: the business's contact list is
-    read by its id alone. A name in a query string reaches every logger on
-    the way (HTTPX logs each request URL at INFO), and a log is the wrong
-    place for a client's name."""
-    words = typed.split()
+def _contacts(bid: str) -> Tuple[Optional[List[Dict[str, Any]]], str]:
+    """Every contact of the business (id, name), read by its id alone, or
+    (None, why): a failed page, or 5,000 contacts or more."""
     rows: List[Dict[str, Any]] = []
     for page in range(CONTACT_PAGES):
         got = _get(f"/contacts?business_id=eq.{bid}&select=id,name&order=id.asc"
@@ -913,9 +1019,24 @@ def _contact(bid: str, typed: str) -> Tuple[Optional[Dict[str, Any]], str]:
             return None, "read_failed"
         rows += got
         if len(got) < CONTACT_PAGE:
-            break
-    else:
-        return None, "too_many_contacts"
+            return rows, ""
+    return None, "too_many_contacts"
+
+
+def _contact(bid: str, typed: str, rows: Optional[List[Dict[str, Any]]] = None
+             ) -> Tuple[Optional[Dict[str, Any]], str]:
+    """The one contact a typed name means, or (None, why). One word matches
+    a first or last name; more words must be the name's start.
+
+    The name is matched HERE, never sent: the business's contact list is
+    read by its id alone. A name in a query string reaches every logger on
+    the way (HTTPX logs each request URL at INFO), and a log is the wrong
+    place for a client's name."""
+    words = typed.split()
+    if rows is None:
+        rows, why = _contacts(bid)
+        if rows is None:
+            return None, why
 
     def fits(name: str) -> bool:
         parts = re.sub(r"[^a-z' -]", "", name.lower()).split()
@@ -975,7 +1096,11 @@ def read(q: Question, bid: str, tz, *, now: Optional[datetime] = None) -> Record
     today = now.astimezone(tz).date()
     rec = Records(today=today)
     if q.name:
-        rec.contact, why = _contact(bid, q.name)
+        rows, why = _contacts(bid)
+        if rows is None:
+            return Records(ok=False, why=why)
+        rec.contact_names = [str(r.get("name")) for r in rows if r.get("name")]
+        rec.contact, why = _contact(bid, q.name, rows)
         if rec.contact is None:
             return Records(ok=False, why=why)
     cid = (rec.contact or {}).get("id")
@@ -1144,6 +1269,13 @@ def practice(job: Dict[str, Any], *, now: Optional[datetime] = None) -> Optional
         row.update(decline_reason=why, rail_ms=int((time.perf_counter() - started) * 1000))
         return row
     proof, cited = prove(answer, rec, tz)
+    # Who else the business deals with, so a reply that puts a figure next
+    # to another client ("tasha at 10am", in any case) is held to her.
+    names = rec.contact_names
+    if names is None:
+        rows, _ = _contacts(job["bid"])
+        names = [str(r.get("name")) for r in rows or [] if r.get("name")]
+    answer.facts["contacts"] = names
     outcome, detail = compare(q, answer, job.get("reply") or "")
     if row["chief_wrote"]:
         detail = {**detail, "note": "chief also changed something"}

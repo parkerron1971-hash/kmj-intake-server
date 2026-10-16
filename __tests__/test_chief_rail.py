@@ -282,6 +282,100 @@ TWO = [_invoice(51, 100, "sent", "2099-01-01", "Maria Lopez", "c1"),
        _invoice(52, 200, "sent", "2099-01-01", "Tasha Green", "c2")]
 
 
+def _sweep_replies():
+    """Replies built from parts, each with its truth against TWO (Maria
+    owes $100, Tasha owes $200, both unpaid; the business is owed $300).
+    Yields (reply, true?)."""
+    people = [("Maria", "M"), ("MARIA", "M"), ("maria", "M"), ("Maria Lopez", "M"),
+              ("Tasha", "T"), ("TASHA GREEN", "T"), ("tasha", "T"), ("Jordan", "?"), ("She", "?")]
+    owes = {"M": "100", "T": "200"}
+    owed_forms = ["{s} owes ${a}.", "{s} still owes ${a}.", "{s} owes ${a} in total.",
+                  "{s} hasn't paid ${a}.", "{s}'s ${a} is still unpaid.", "${a}, {s}'s balance.",
+                  "{s} has ${a} outstanding.", "Not yet: {s} owes ${a}."]
+    paid_forms = ["{s} paid ${a}.", "{s} has paid ${a}.", "{s} paid ${a} in full.", "{s}'s ${a} is paid.",
+                  "{s}'s previously unpaid ${a} has now been paid.", "${a} from {s}, paid in full.",
+                  "{s} settled the outstanding ${a}.", "{s} cleared ${a}, nothing is outstanding."]
+    negated = ["{s} doesn't owe ${a}.", "{s} no longer owes ${a}."]
+    for s, who in people:
+        for a in ("100", "200", "300"):
+            truth_owed = who in owes and owes[who] == a
+            for f in owed_forms:
+                yield f.format(s=s, a=a), truth_owed
+            for f in paid_forms + negated:
+                yield f.format(s=s, a=a), False        # nothing is paid
+    business_owed = ["You're owed ${a}.", "You're owed ${a} in total.", "Overall, you're owed ${a}.",
+                     "Altogether your clients owe you ${a}.", "In total, ${a} is outstanding."]
+    business_paid = ["You've been paid ${a}.", "You have been paid, ${a} across 2 invoices.",
+                     "${a}, paid in full.", "You've collected ${a}.", "You've been paid the outstanding ${a}.",
+                     "The previously unpaid ${a} has now been paid."]
+    for a in ("100", "200", "300"):
+        for f in business_owed:
+            yield f.format(a=a), a == "300"
+        for f in business_paid:
+            yield f.format(a=a), False
+    # Two clauses: true only when both are.
+    for (s1, w1), (s2, w2) in [(("Maria", "M"), ("Tasha", "T")), (("maria", "M"), ("tasha", "T")),
+                               (("Tasha", "T"), ("Maria", "M"))]:
+        for a1, a2 in (("100", "200"), ("200", "100"), ("100", "100"), ("300", "200")):
+            ok = owes[w1] == a1 and owes[w2] == a2
+            yield f"{s1} owes ${a1} and {s2} owes ${a2}.", ok
+            yield f"{s1} owes ${a1}, {s2} ${a2}.", ok
+            yield f"You're owed $300: {s1} owes ${a1} and {s2} owes ${a2}.", ok
+
+
+def test_no_false_reply_is_ever_scored_as_agreement():
+    q, a = _money_answer("How much am I owed?", TWO)
+    a.facts["contacts"] = [c["name"] for c in CONTACTS]      # as practice() supplies them
+    wrong, true_agreed, true_total = [], 0, 0
+    for reply, true in _sweep_replies():
+        outcome = rail.compare(q, a, reply)[0]
+        if true:
+            true_total += 1
+            true_agreed += outcome in ("agrees", "partial")
+        elif outcome in ("agrees", "partial"):
+            wrong.append((reply, outcome))
+    assert not wrong, wrong[:20]
+    # And it is not simply refusing everything: most true replies still read as true.
+    assert true_agreed >= 0.8 * true_total, (true_agreed, true_total)
+
+
+def _calendar_sweep(one_session: bool):
+    """(reply, true?) against SESSIONS (Maria 10:00 AM, Tasha 12:30 PM,
+    both Saturday Oct 17, which is tomorrow), or only Maria's."""
+    booked = {"M": "10am"} if one_session else {"M": "10am", "T": "12:30pm"}
+    people = [("Maria", "M"), ("MARIA", "M"), ("maria", "M"), ("Tasha", "T"), ("tasha", "T"),
+              ("Jordan", "?"), ("She", "M" if one_session else "?")]
+    days = [("", True), (" tomorrow", True), (" on Saturday", True), (" on Oct 17", True),
+            (" on Sunday", False), (" on Oct 18", False)]
+    forms = ["{s} is at {t}{d}.", "{s} at {t}{d}.", "{t}{d}: {s}.", "{s}, {t}{d}.", "{t}{d} with {s}.",
+             "{s} is booked for {t}{d}.", "Next up{d}, {s} at {t}."]
+    for s, who in people:
+        for t in ("10am", "12:30pm", "3pm"):
+            for d, day_ok in days:
+                for f in forms:
+                    yield f.format(s=s, t=t, d=d), (booked.get(who) == t and day_ok)
+
+
+@pytest.mark.parametrize("one_session", [False, True])
+def test_no_false_calendar_reply_is_ever_scored_as_agreement(one_session):
+    if one_session:
+        rec = rail.Records(sessions=SESSIONS[:1], window="next booked", today=TODAY)
+        q, a, _ = _say("When is my next appointment?", rec)
+    else:
+        q, a = _day_answer()
+    a.facts["contacts"] = [c["name"] for c in CONTACTS]      # as practice() supplies them
+    wrong, true_agreed, true_total = [], 0, 0
+    for reply, true in _calendar_sweep(one_session):
+        outcome = rail.compare(q, a, reply)[0]
+        if true:
+            true_total += 1
+            true_agreed += outcome in ("agrees", "partial")
+        elif outcome in ("agrees", "partial"):
+            wrong.append((reply, outcome))
+    assert not wrong, wrong[:20]
+    assert true_agreed >= 0.8 * true_total, (true_agreed, true_total)
+
+
 @pytest.mark.parametrize("reply, outcome", [
     # The business's $300 is not Maria's.
     ("Maria owes $300 across 2 invoices.", "differs"),
