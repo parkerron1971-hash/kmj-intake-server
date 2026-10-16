@@ -2,7 +2,7 @@
 title: Logo uploads fixed — brand assets and site images write to storage as the service role
 date: 2026-10-16
 agent: Claude Code (Claude Opus 5.5)
-asked: "Kevin uploads a logo and keeps getting 'storage upload failed' … find the cause and fix it fast" (KAI brief, Love City Church)
+asked: "Kevin uploads a logo and keeps getting 'storage upload failed' … find the cause and fix it fast (KAI brief, Love City Church)"
 status: waiting on Kevin
 prs: [kmj-intake-server#1464, solutionist-studio#1238]
 migrations: []
