@@ -1308,6 +1308,19 @@ AGENT_REGISTRY: List[Dict[str, Any]] = [
         "writes_to": "GitHub issue `unfinished-work`, platform_agent_runs, platform_changelog",
     },
     {
+        "id": "scope_keeper",
+        "name": "Scope keeper",
+        "kind": "watcher",
+        "beat": "Every morning before your queue: the scorecard (queue age, tickets, night "
+                "alerts, Chief's errors, AI spend against revenue, Build slots, switches left "
+                "off, your late tasks, open PRs, paying businesses, your hours) and the first "
+                "hire's signals, saved for the Friday read. Flags a Build item parked three "
+                "weeks, a switch past its decide-by date, and two hiring signals held for two "
+                "weeks. Never moves anything.",
+        "schedule": "daily 10:30 UTC",
+        "writes_to": "platform_ops_settings.history, platform_agent_runs, platform_changelog",
+    },
+    {
         "id": "money_auditor",
         "name": "Money auditor",
         "kind": "watcher",
@@ -1426,6 +1439,13 @@ async def run_customer_health_now(_owner=Depends(require_owner)):
     """Manual pass from the console — same as the morning schedule."""
     from customer_health import health_tick
     return await health_tick()
+
+
+@router.post("/agents/scope-keeper/run")
+async def run_scope_keeper_now(_owner=Depends(require_owner)):
+    """Manual pass from the console — same as the morning schedule."""
+    from ops_desk import keeper_tick
+    return await keeper_tick()
 
 
 @router.post("/agents/unfinished-work/run")
