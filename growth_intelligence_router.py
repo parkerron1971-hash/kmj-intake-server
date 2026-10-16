@@ -19,7 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field
 import sb_clients
 from auth_supabase import AuthedUser, require_user
 from growth_intelligence import report, normalize_bookings
-from growth_words import re_say, voice_of
+from growth_words import giving_is_private, re_say, voice_of
 
 router = APIRouter(prefix="/growth-intelligence", tags=["growth-intelligence"])
 
@@ -101,8 +101,7 @@ async def authorize(client, business_id, user, write=False):
     if not rows:
         raise HTTPException(404, "Business not found")
     if str(rows[0].get("owner_id")) != str(user.id):
-        import vertical_family
-        if vertical_family.is_nonprofit_like(rows[0].get("type")):
+        if giving_is_private(rows[0].get("type")):
             # A church's or nonprofit's money here is its giving, read per
             # person: the finance roles' (owner, admin, accountant), as its
             # books, bank and reports already are (require_ministry_finance).

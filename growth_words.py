@@ -17,6 +17,7 @@ driver labels here are the ones the page shows.
 """
 from __future__ import annotations
 
+import vertical_family
 import vertical_registry
 
 DRIVER_KEYS = {
@@ -38,9 +39,22 @@ WARNINGS = {
 
 
 def voice_of(business_type: str | None) -> str:
-    """'church', 'nonprofit' or 'business'."""
+    """'church', 'nonprofit' or 'business'. The registry's aliases (a
+    "pastor" is a ministry) and the accounting family (a "congregation"
+    is nonprofit-like) both count, so nothing that reads as giving falls
+    through to the business voice."""
     key = vertical_registry.resolve(business_type or "")
-    return "church" if key == "ministry" else "nonprofit" if key == "nonprofit" else "business"
+    if key == "ministry":
+        return "church"
+    if key == "nonprofit" or vertical_family.is_nonprofit_like(business_type):
+        return "nonprofit"
+    return "business"
+
+
+def giving_is_private(business_type: str | None) -> bool:
+    """The one test for both the words and the finance gate: whatever this
+    report calls giving is read per person by finance roles only."""
+    return voice_of(business_type) != "business"
 
 
 def re_say(report: dict, voice: str) -> dict:

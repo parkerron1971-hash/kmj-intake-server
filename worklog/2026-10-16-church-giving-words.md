@@ -2,7 +2,7 @@
 title: The growth report in a church's and a nonprofit's words, and kept to their finance roles
 date: 2026-10-16
 agent: Claude Code (Claude Opus 5.5)
-asked: "fix the entire health area … I want this to make sense" — the backend half Kevin agreed to with the frontend's Giving health (solutionist-studio#1239)
+asked: 'fix the entire health area … I want this to make sense — the backend half Kevin agreed to with the frontend Giving health (solutionist-studio#1239)'
 status: in progress
 prs: [kmj-intake-server (this PR), solutionist-studio#1239]
 migrations: []

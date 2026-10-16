@@ -49,8 +49,17 @@ def said(r):
 
 
 def test_voice_of_resolves_churches_nonprofits_and_everyone_else():
-    assert [voice_of(t) for t in ('church', 'ministry', 'Church', 'nonprofit', 'coach', None, '')] == \
-        ['church', 'church', 'church', 'nonprofit', 'business', 'business', 'business']
+    assert [voice_of(t) for t in ('church', 'ministry', 'Church', 'pastor', 'nonprofit', 'coach', None, '')] == \
+        ['church', 'church', 'church', 'church', 'nonprofit', 'business', 'business', 'business']
+
+
+def test_one_test_decides_the_words_and_the_gate():
+    # A "pastor" reads as a ministry in the registry but is not in the
+    # accounting family's set: it must still be gated, not only reworded.
+    from growth_words import giving_is_private
+    for t in ('pastor', 'church', 'congregation', 'nonprofit', 'coach', None):
+        assert giving_is_private(t) == (voice_of(t) != 'business'), t
+    assert giving_is_private('pastor') and not giving_is_private('coach')
 
 
 def test_business_voice_keeps_every_word_and_every_number():
@@ -107,6 +116,14 @@ def test_a_church_report_is_its_finance_roles(monkeypatch):
     assert roles == [], 'a church never falls back to the any-seat rule'
 
 
+def test_a_pastor_typed_business_is_gated_too(monkeypatch):
+    church_business(monkeypatch, 'pastor')
+    finance_only(monkeypatch)
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(api.authorize(None, BID, SimpleNamespace(id='member-seat')))
+    assert exc.value.status_code == 403
+
+
 def test_a_business_report_keeps_its_team_rule(monkeypatch):
     import sys, types
     church_business(monkeypatch, 'coach')
@@ -137,13 +154,28 @@ def test_chief_reads_a_church_report_in_its_words(monkeypatch):
     token = as_turn('owner')
     try:
         r = asyncio.run(chief.handle_growth_report(None, CHURCH, {'section': 'drivers'}))
+        care = asyncio.run(chief.handle_growth_report(None, CHURCH, {'section': 'client_health'}))
     finally:
         chief_of_staff._TURN_USER_ID.reset(token)
     assert not r.get('failed'), r
     assert r['data']['voice'] == 'church' and 'never buyers' in r['data']['vocabulary']
     assert [d['label'] for d in r['data']['drivers']][0] == 'New givers'
-    care = asyncio.run(chief.handle_growth_report(None, CHURCH, {'section': 'client_health'}))
     assert 'attendance' in care['data']['church_note']
+
+
+def test_no_person_in_the_call_reads_no_giving(monkeypatch):
+    # After a turn the id is reset to "" (chief_of_staff); a job or task
+    # outside a signed-in turn is refused, as church_people refuses care.
+    served(monkeypatch)
+    import chief_of_staff
+    token = as_turn('')
+    try:
+        read = asyncio.run(chief.handle_growth_report(None, CHURCH, {'section': 'drivers'}))
+    finally:
+        chief_of_staff._TURN_USER_ID.reset(token)
+    assert read['failed'] and 'data' not in read
+    business = asyncio.run(chief.handle_growth_report(None, {'id': BID, 'type': 'coach'}, {'section': 'drivers'}))
+    assert not business.get('failed'), 'a business report keeps working without a person in the call'
 
 
 def test_chief_refuses_a_church_report_to_a_seat_without_finance(monkeypatch):

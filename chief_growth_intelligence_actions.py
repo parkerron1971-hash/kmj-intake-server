@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 from fastapi import HTTPException
 from growth_intelligence_router import load_report, save_record, SaveRecord
+from growth_words import giving_is_private
 
 # A church's care list is measured by attendance on its own page; the
 # report's client-health lists count days since a recorded contact, which
@@ -17,14 +18,16 @@ CHURCH_CARE_NOTE = ("For a church, Who's drifting (Grow, Health) is read from at
 def giving_reader(biz):
     """A church's or nonprofit's growth report is its giving, read per
     person: the person in this turn must hold a finance role (owner, admin,
-    accountant), as on the page. A run with no person in it (a scheduled
-    job) acts for the owner."""
-    import vertical_family
-    if not vertical_family.is_nonprofit_like(biz.get('type')):
+    accountant), as on the page. A call with no person in it is refused,
+    as church_people refuses care numbers: nothing outside a signed-in
+    turn reads giving."""
+    if not giving_is_private(biz.get('type')):
         return True
     from chief_of_staff import _TURN_USER_ID
     user_id = _TURN_USER_ID.get()
-    if not user_id or str(user_id) == str(biz.get('owner_id')):
+    if not user_id:
+        return False
+    if str(user_id) == str(biz.get('owner_id')):
         return True
     from giving_records import require_finance
     try:
