@@ -94,6 +94,13 @@ LINKS = {
     "MAPS_URL": f"https://www.google.com/maps/dir/?api=1&amp;destination={_ADDRESS_Q}",
     "MAPS_EMBED": f"https://www.google.com/maps?q={_ADDRESS_Q}&amp;output=embed",
     "FACEBOOK_URL": "https://www.facebook.com/lovecitynation/",
+    # The church's YouTube channel, where every service streams live. The
+    # live embed plays whatever the channel has live now (one stream at a
+    # time); between services it has nothing to show, so site.js only
+    # loads it during a gathering or when a visitor asks for it.
+    "YOUTUBE_URL": "https://www.youtube.com/@lovecitychurch",
+    "YOUTUBE_LIVE_URL": "https://www.youtube.com/@lovecitychurch/live",
+    "YOUTUBE_LIVE_EMBED": "https://www.youtube-nocookie.com/embed/live_stream?channel=UCb5vWtszeeCfdI98_mZFSrg",
     "STORE_URL": "https://lovecity.printify.me/",
     "SUBSPLASH_LATEST": "https://subsplash.com/u/-7MJWGR/media/embed/d/*",
     "SERMON_LIBRARY": "https://subsplash.com/u/cityofloveministries/media",

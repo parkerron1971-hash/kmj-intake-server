@@ -204,18 +204,46 @@
   // ---- Events: mark today in the week ----
   if (today !== null) each('[data-week] [data-day="' + today + '"]', function (d) { d.classList.add('today'); });
 
+  // Only Sunday names the building: Thursday is "Mid-week Bible study"
+  // and nothing more (Kevin's wording), never tied to an address.
+  var gatherings = [
+    { day: 0, start: 11 * 60, length: 150, what: 'Sunday service', at: '11am', where: ' at 1084 Allen Ave' },
+    { day: 4, start: 18 * 60, length: 90, what: 'Mid-week Bible study', at: '6pm', where: '' }
+  ];
+
+  // ---- Watch: from 15 minutes before a gathering until it ends, the
+  // player is the church's YouTube live stream; the rest of the week it's
+  // the latest message, since the live player has nothing to show between
+  // services. "Open the live player" brings the stream in any time (a
+  // special service); without script it opens YouTube's live page. ----
+  var player = document.querySelector('[data-live-player]');
+  if (player) {
+    var goLive = function () {
+      var frame = player.querySelector('iframe');
+      var src = player.getAttribute('data-live-src');
+      if (!frame || !src || player.classList.contains('is-live')) return;
+      frame.src = src;
+      frame.title = 'Love City Church live stream';
+      player.classList.add('is-live');
+      var label = player.querySelector('[data-live-label]');
+      if (label) label.textContent = 'Live from Love City';
+      each('[data-live-wait]', function (w) { w.hidden = false; });
+      each('[data-live-open]', function (a) { a.hidden = true; });
+    };
+    each('[data-live-open]', function (a) {
+      a.addEventListener('click', function (e) { e.preventDefault(); goLive(); });
+    });
+    if (today !== null && gatherings.some(function (g) {
+      return g.day === today && now >= g.start - 15 && now < g.start + g.length;
+    })) goLive();
+  }
+
   // ---- The next gathering. A service is "happening now" for its usual
   // length. ----
   var next = document.querySelector('[data-next]');
   if (next && today !== null) {
     try {
       var names = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-      // Only Sunday names the building: Thursday is "Mid-week Bible study"
-      // and nothing more (Kevin's wording), never tied to an address.
-      var gatherings = [
-        { day: 0, start: 11 * 60, length: 150, what: 'Sunday service', at: '11am', where: ' at 1084 Allen Ave' },
-        { day: 4, start: 18 * 60, length: 90, what: 'Mid-week Bible study', at: '6pm', where: '' }
-      ];
       var text = '', best = null;
       gatherings.forEach(function (g) {
         if (g.day === today && now >= g.start && now < g.start + g.length) text = 'Happening now: ' + g.what + g.where;
