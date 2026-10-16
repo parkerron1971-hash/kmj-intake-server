@@ -753,9 +753,11 @@ class Agent:
                     if not run.key:
                         self.keep(run, "no session and no key to ask for one")
                         return
+                    # `ending`: the service is over; the backend opens no live
+                    # service and sends members no "live now" after the fact.
                     status, data = await self.backend("/stream-relay/relay/started", {
                         "stream_id": run.stream_id, "key": run.key, "run_id": run.run_id,
-                        "recorded_s": int(run.seconds()), "bytes": run.bytes})
+                        "recorded_s": int(run.seconds()), "bytes": run.bytes, "ending": True})
                     detail = data.get("detail") if isinstance(data.get("detail"), dict) else {}
                     if status == 200 and data.get("session_id"):
                         run.session_id, run.playlist_path = data["session_id"], data.get("playlist_path")

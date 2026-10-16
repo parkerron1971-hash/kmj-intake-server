@@ -436,6 +436,9 @@ def test_a_recording_made_while_the_backend_was_down_still_gets_its_session(tmp_
         await a.tick()
         await settle()
         assert h.said("ended")[0]["session_id"] == SESSION and not run_.dir.exists()
+        asked_at_end = h.said("started")[-1]
+        assert asked_at_end["ending"] is True and asked_at_end["key"] == KEY   # no "live now" after the fact
+        assert all("ending" not in b for b in h.said("started")[:-1])
     run(go())
 
 
