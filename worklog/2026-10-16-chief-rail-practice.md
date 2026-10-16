@@ -2,7 +2,7 @@
 title: The rail, practice mode — money and calendar lookups answered privately from the records, proved, and compared with Chief
 date: 2026-10-16
 agent: Claude Code (Claude Opus 5.5)
-asked: "start" (build step 1 of the Instinct Layer brief: two shelves, invisible, across all businesses)
+asked: "'start': build step 1 of the Instinct Layer brief (two shelves, invisible, across all businesses)"
 status: in progress
 prs: [kmj-intake-server#1462]
 migrations: [supabase/APPLY-2026-10-16-chief-rail-practice.sql (applied 2026-10-16)]

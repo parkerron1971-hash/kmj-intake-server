@@ -45,6 +45,18 @@ create table if not exists public.chief_rail_practice (
   rail_ms           integer
 );
 
+-- Rows go with their business: rail_answer carries a client's name and an
+-- amount, so a deleted business leaves none behind. Added this way so the
+-- same file brings an already-created table up to date.
+do $$
+begin
+  if not exists (select 1 from pg_constraint where conname = 'chief_rail_practice_business_fk') then
+    alter table public.chief_rail_practice
+      add constraint chief_rail_practice_business_fk
+      foreign key (business_id) references public.businesses(id) on delete cascade;
+  end if;
+end $$;
+
 create index if not exists chief_rail_practice_created_idx
   on public.chief_rail_practice (created_at desc);
 create index if not exists chief_rail_practice_shelf_idx
@@ -58,6 +70,7 @@ revoke all on table public.chief_rail_practice from anon, authenticated;
 --   select count(*) from pg_policies where tablename = 'chief_rail_practice';               -- 0
 --   select has_table_privilege('authenticated', 'public.chief_rail_practice', 'select');    -- false
 --   select has_table_privilege('anon', 'public.chief_rail_practice', 'select');             -- false
+--   select confdeltype from pg_constraint where conname = 'chief_rail_practice_business_fk'; -- c
 --
 -- A week in (what graduation reads):
 --   select shelf, form, outcome, proof, count(*), round(avg(chief_cost_cents), 2) as chief_cents
