@@ -294,6 +294,17 @@ TWO = [_invoice(51, 100, "sent", "2099-01-01", "Maria Lopez", "c1"),
     ("You're owed $300 in total: Maria owes $100 and Tasha owes $200.", "agrees"),
     ("You're owed $300. maria owes $100, tasha owes $200.", "agrees"),
     ("Neither has paid yet: you're owed $300, Maria $100 and Tasha $200.", "agrees"),
+    # Codex's focused re-check of 1fdc2ed.
+    # "in total" next to Maria: hers, or everyone's? Unresolved, not agreement.
+    ("Maria owes $300 in total.", "unverified"),
+    # Paid and owed in one breath: unresolved.
+    ("You've been paid the outstanding $300.", "unverified"),
+    # A comma doesn't free the $300 from "paid".
+    ("You have been paid, $300 across 2 invoices.", "differs"),
+    # Paid and owed in their own clauses still read right.
+    ("Nothing has been paid yet, you're owed $300: Maria $100 and Tasha $200.", "agrees"),
+    # Nothing contradicted, but "who owes me?" wants each client too.
+    ("Nobody has paid, so you're owed $300 in total.", "partial"),
 ])
 def test_a_figure_is_held_to_its_client_and_to_whether_it_was_paid(reply, outcome):
     q, a = _money_answer("Who owes me?", TWO)

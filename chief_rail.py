@@ -65,7 +65,7 @@ MAX_DAY_SESSIONS = 8
 MAX_CLIENT_OPEN = 4
 RETENTION_DAYS = 90
 CONTACT_PAGE = 1000          # PostgREST's usual row cap
-CONTACT_PAGES = 5            # past 5,000 contacts a name search is Chief's
+CONTACT_PAGES = 5            # at 5,000 contacts or more a name search is Chief's
 
 
 def mode() -> str:
@@ -555,10 +555,15 @@ _WEEKDAY_SAID = re.compile(r"\b(%s|today|tomorrow|tonight)\b" % "|".join(_DAY_NA
 _TOTAL_CUE = re.compile(r"\b(?:total|in all|altogether|all together|overall|combined|of your|"
                         r"everyone|everybody|all (?:of )?(?:your )?clients)\b", re.I)
 _PAID_PART = re.compile(r"(?<![-\w])(?:paid|received|collected|came in|cleared)\b", re.I)
-_NOT_PAID_PART = re.compile(r"\bunpaid\b|\b(?:not|n't|never|yet to be|still to be)\b[\w\s]{0,12}\bpaid\b", re.I)
+_NOT_PAID_PART = re.compile(r"\bunpaid\b|\b(?:not|n't|never|neither|nobody|no one|none|yet to be|still to be)\b"
+                            r"[\w\s]{0,12}\bpaid\b", re.I)
 _OWED_KINDS = ("invoice", "client_owed", "client_over", "owed_total", "over_total", "draft_total")
 _TOTAL_KINDS = ("owed_total", "over_total", "draft_total")
 _SEGMENT = re.compile(r",\s+|;\s*|\s+(?:and|but|while|plus)\s+|\s+[–—-]\s+", re.I)
+# Money also splits at a colon ("You're owed $300 in total: Maria owes
+# $100"). A calendar line keeps its colon: "10:00 AM: Haircut with Maria"
+# is one claim about Maria.
+_SEGMENT_MONEY = re.compile(r",\s+|;\s*|:\s+|\s+(?:and|but|while|plus)\s+|\s+[–—-]\s+", re.I)
 _SENTENCE = re.compile(r"(?<=[.!?])\s+|\n+")
 # Capitalised words in a reply that are not a person: the business's own
 # nouns, and the calendar (chief_truth's list covers the common words).
@@ -709,38 +714,55 @@ def _compare_money(answer: Answer, reply: str) -> Tuple[str, Dict[str, Any]]:
     if said and "|" in reply:
         flag("unverified", "table")
     for sentence in _SENTENCE.split(reply):
+        # Who a part is about, and whether it says paid or owed, carry to
+        # the parts after it that don't say: "You have been paid, $300
+        # across 2 invoices" says paid about the $300.
         last_named: set = set()
-        for part in _SEGMENT.split(sentence):
+        last_status: Optional[str] = None
+        for part in _SEGMENT_MONEY.split(sentence):
             named, stranger = _people_said(part, people)
             if named:
                 last_named = named
             elif not stranger:
                 named = last_named
+            paid_cue = bool(_PAID_PART.search(part)) and not _NOT_PAID_PART.search(part)
+            owed_cue = bool(_OWES_SAID.search(part))
+            status = "both" if paid_cue and owed_cue else "paid" if paid_cue else "owed" if owed_cue else None
+            if status:
+                last_status = status
+            else:
+                status = last_status
             amts = amounts_said(part)
             stated = _counts_said(part)
-            said_paid = bool(_PAID_PART.search(part)) and not _NOT_PAID_PART.search(part)
-            said_owed = bool(_OWES_SAID.search(part))
             for a in amts:
                 if a not in known:
                     flag("differs", f"unknown amount {a}")
                     continue
                 cands = [c for c in claims if c["amount"] == a]
                 if named:
-                    # A client's figure is theirs: the business's total is
-                    # evidence only where the reply says it is a total.
-                    cands = [c for c in cands if c["client"] in named
-                             or (c["what"] in _TOTAL_KINDS and _TOTAL_CUE.search(part))]
-                    if not cands:
-                        flag("differs", f"{a} said for the wrong client")
+                    # A client's figure is theirs alone. The business's total
+                    # next to a client's name ("Maria owes $300 in total")
+                    # could be hers or everyone's: unresolved, never agreement.
+                    mine = [c for c in cands if c["client"] in named]
+                    if not mine:
+                        if _TOTAL_CUE.search(part) and any(c["what"] in _TOTAL_KINDS for c in cands):
+                            flag("unverified", f"{a}: a total said next to a client")
+                        else:
+                            flag("differs", f"{a} said for the wrong client")
                         continue
-                if said_paid and not said_owed and not any(c["what"] == "paid" for c in cands):
-                    flag("differs", f"{a} said as paid, the records have it owed")
-                    continue
-                if said_owed and not said_paid and not any(c["what"] in _OWED_KINDS for c in cands):
-                    flag("differs", f"{a} said as owed, the records have it paid")
-                    continue
+                    cands = mine
                 elif stranger and all(c["client"] for c in cands):
                     flag("unverified", f"{a} said next to someone else")
+                    continue
+                if status == "both":
+                    # "paid the outstanding $300": which is it? Unresolved.
+                    flag("unverified", f"{a} said as both paid and owed")
+                    continue
+                if status == "paid" and not any(c["what"] == "paid" for c in cands):
+                    flag("differs", f"{a} said as paid, the records have it owed")
+                    continue
+                if status == "owed" and not any(c["what"] in _OWED_KINDS for c in cands):
+                    flag("differs", f"{a} said as owed, the records have it paid")
                     continue
                 inv = [n for n, kind in stated if kind == "invoice"]
                 if inv and len(amts) == 1 and not any(c["count"] in inv for c in cands

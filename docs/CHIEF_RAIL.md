@@ -87,7 +87,8 @@ turns only), on a worker thread:
    with its filter values hidden and no error body
    (`sb_clients.redacted_path`), because PostgREST errors echo the failing
    row. A typed client name never goes into any URL: the business's
-   contacts are read by its id alone, up to 5,000, and the name is matched
+   contacts are read by its id alone (fewer than 5,000; at 5,000 or more
+   the question is Chief's), and the name is matched
    in the process. HTTPX logs every request URL at INFO, so a name in a
    query string would reach the logs even when nothing failed.
 
