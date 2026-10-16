@@ -19,6 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field
 import sb_clients
 from auth_supabase import AuthedUser, require_user
 from growth_intelligence import report, normalize_bookings
+from growth_words import re_say, voice_of
 
 router = APIRouter(prefix="/growth-intelligence", tags=["growth-intelligence"])
 
@@ -96,12 +97,20 @@ async def db(client, method, path, body=None):
 
 async def authorize(client, business_id, user, write=False):
     bid = str(UUID(str(business_id)))
-    rows = await db(client, "GET", f"/businesses?id=eq.{bid}&select=id,owner_id,settings&limit=1")
+    rows = await db(client, "GET", f"/businesses?id=eq.{bid}&select=id,owner_id,settings,type&limit=1")
     if not rows:
         raise HTTPException(404, "Business not found")
     if str(rows[0].get("owner_id")) != str(user.id):
-        from business_users_router import require_role
-        await asyncio.to_thread(require_role, bid, user.id, "member" if write else "viewer")
+        import vertical_family
+        if vertical_family.is_nonprofit_like(rows[0].get("type")):
+            # A church's or nonprofit's money here is its giving, read per
+            # person: the finance roles' (owner, admin, accountant), as its
+            # books, bank and reports already are (require_ministry_finance).
+            from giving_records import require_finance
+            await asyncio.to_thread(require_finance, bid, user)
+        else:
+            from business_users_router import require_role
+            await asyncio.to_thread(require_role, bid, user.id, "member" if write else "viewer")
     return rows[0]
 
 
@@ -122,7 +131,7 @@ def unpack(row):
     return {**row["data"], "id": row["id"], "revision": row["revision"]}
 
 
-async def load_report(client, bid, period="mtd", comparison="previous", start=None, end=None):
+async def load_report(client, bid, period="mtd", comparison="previous", start=None, end=None, business_type=None):
     bid = str(UUID(str(bid)))
     names = ["contacts", "invoices", "sessions", "campaigns", "growth_records", "growth_events"]
     results = await asyncio.gather(*(all_rows(client, name, bid) for name in names))
@@ -147,7 +156,8 @@ async def load_report(client, bid, period="mtd", comparison="previous", start=No
         raise HTTPException(422, "Check the reporting dates, comparison and timezone.") from exc
     result["preferences"] = prefs or {"timezone": "UTC", "currency": "USD", "weekly_hours": None}
     result["records"] = {kind: [unpack(r) for r in records if r["kind"] == kind] for kind in ("actions", "costs", "attributions")}
-    return result
+    # A church's or nonprofit's report in its own words (growth_words).
+    return re_say(result, voice_of(business_type))
 
 
 async def validate_links(client, bid, kind, data):
@@ -223,8 +233,9 @@ async def get_report(business_id: UUID, period: Literal["mtd", "qtd", "ytd", "30
                      comparison: Literal["previous", "year"] = "previous", start: Optional[date] = None, end: Optional[date] = None,
                      user: AuthedUser = Depends(require_user)):
     async with httpx.AsyncClient() as client:
-        await authorize(client, business_id, user)
-        return await load_report(client, str(business_id), period, comparison, str(start) if start else None, str(end) if end else None)
+        business = await authorize(client, business_id, user)
+        return await load_report(client, str(business_id), period, comparison, str(start) if start else None, str(end) if end else None,
+                                 business_type=business.get("type"))
 
 
 @router.post("/{kind}")

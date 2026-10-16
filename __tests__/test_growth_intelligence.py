@@ -297,7 +297,7 @@ def test_native_chief_growth_read_and_write_use_registered_handlers(monkeypatch)
     assert 'save_growth_record' in {t['name'] for t in ctl.write_tool_definitions()}
     r = report(data(), PREFS, now=NOW)
     r.update(records={'actions':[],'costs':[],'attributions':[]}, preferences=PREFS)
-    async def load(*args): return r
+    async def load(*args, **kwargs): return r
     monkeypatch.setattr(chief,'load_report',load)
     saved=[]
     async def save(client,bid,kind,req):

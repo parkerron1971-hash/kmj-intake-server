@@ -1,6 +1,37 @@
 """Chief and the Growth UI share the same measurements, validation and writes."""
+from types import SimpleNamespace
+
 from fastapi import HTTPException
 from growth_intelligence_router import load_report, save_record, SaveRecord
+
+# A church's care list is measured by attendance on its own page; the
+# report's client-health lists count days since a recorded contact, which
+# an imported membership has none of (2026-10-16).
+CHURCH_CARE_NOTE = ("For a church, Who's drifting (Grow, Health) is read from attendance: a regular checked in at three "
+                    "or more of the eight gatherings before the last three and at none of the last three, or a group "
+                    "member who missed the group's last three meetings. These lists count days since a recorded contact, "
+                    "which imported members do not have; do not present them as the church's drifting list, and never "
+                    "rank people by what they give when talking about care.")
+
+
+def giving_reader(biz):
+    """A church's or nonprofit's growth report is its giving, read per
+    person: the person in this turn must hold a finance role (owner, admin,
+    accountant), as on the page. A run with no person in it (a scheduled
+    job) acts for the owner."""
+    import vertical_family
+    if not vertical_family.is_nonprofit_like(biz.get('type')):
+        return True
+    from chief_of_staff import _TURN_USER_ID
+    user_id = _TURN_USER_ID.get()
+    if not user_id or str(user_id) == str(biz.get('owner_id')):
+        return True
+    from giving_records import require_finance
+    try:
+        require_finance(biz['id'], SimpleNamespace(id=user_id))
+        return True
+    except HTTPException:
+        return False
 
 
 def recall_view(report, action):
@@ -73,9 +104,18 @@ def recall_view(report, action):
 
 
 async def handle_growth_report(client, biz, action):
+    if not giving_reader(biz):
+        return {'type': 'growth_report', 'label': 'Giving is for the finance roles', 'failed': True,
+                'result': "Giving is kept to the owner, admins and the accountant. Say so plainly; give no figures or names."}
     try:
-        result = await load_report(client, biz['id'], action.get('period', 'mtd'), action.get('comparison', 'previous'), action.get('start'), action.get('end'))
-        result = recall_view(result, action)
+        report = await load_report(client, biz['id'], action.get('period', 'mtd'), action.get('comparison', 'previous'), action.get('start'), action.get('end'),
+                                   business_type=biz.get('type'))
+        result = recall_view(report, action)
+        voice = report.get('voice', 'business')
+        if voice != 'business':
+            result.update(voice=voice, vocabulary=report['vocabulary'])
+        if voice == 'church' and action.get('section') == 'client_health':
+            result['church_note'] = CHURCH_CARE_NOTE
         return {'type': 'growth_report', 'label': 'Growth intelligence', 'result': 'Growth report recalled from current records',
                 'data': result, 'growth_section': action.get('section', 'drivers'),
                 'nav': {'tab': 'grow', 'sub': 'retention' if action.get('section') in ('retention', 'client_health') else 'dashboard'}}
@@ -85,6 +125,9 @@ async def handle_growth_report(client, biz, action):
 
 
 async def handle_save_growth_record(client, biz, action):
+    if not giving_reader(biz):
+        return {'type': 'save_growth_record', 'label': 'Giving is for the finance roles', 'failed': True,
+                'result': "Giving records are kept to the owner, admins and the accountant. Nothing was saved."}
     try:
         payload = {k: action[k] for k in ('data', 'id', 'revision', 'request_id') if k in action}
         if isinstance(payload.get('data'), dict):
