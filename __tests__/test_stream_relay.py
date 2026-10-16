@@ -478,11 +478,28 @@ def test_a_new_run_closes_the_old_runs_session_first(db, ready):
 
 
 def test_a_run_whose_session_was_closed_is_told_to_start_over(db, ready):
+    """The 409 names the closed session, so the relay can still upload
+    that recording's last part and report its end."""
     c = _app()
     full = _key(c)
     sid = _start(c, full).json()["session_id"]
     _end(c, sid)
-    assert _start(c, full).status_code == 409
+    r = _start(c, full)
+    assert r.status_code == 409
+    assert r.json()["detail"]["session_id"] == sid
+    assert r.json()["detail"]["playlist_path"] == f"live/{BIZ}/{sid}/index.m3u8"
+
+
+def test_a_session_asked_for_only_at_the_end_never_tells_members_its_live(db, ready):
+    """The backend was down for the whole service: the relay asks for a
+    session as it finishes. No live service, no "live now" alert after
+    the fact; the draft is still made."""
+    c = _app()
+    full = _key(c)
+    r = _start(c, full, ending=True)
+    assert r.status_code == 200
+    assert db.t["live_sessions"] == [] and db.t.get("told", []) == []
+    assert _end(c, r.json()["session_id"]).status_code == 200 and len(db.t["sermons"]) == 1
 
 
 def test_a_session_the_relay_stopped_reporting_is_swept(db, ready):

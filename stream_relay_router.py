@@ -34,7 +34,7 @@ The relay's side (the shared secret in X-Relay-Secret; fails closed, and
 answers 403 while streaming is switched off):
 
   POST  /stream-relay/relay/verify      {stream_id, key}  — may this key stream? where copies go
-  POST  /stream-relay/relay/started     {stream_id, key, run_id, recorded_s?, bytes?}
+  POST  /stream-relay/relay/started     {stream_id, key, run_id, recorded_s?, bytes?, ending?}
         The stream is up, AND the relay's heartbeat (every minute while it
         is): opens or repairs the session and its live service, records
         that the relay still holds it, and returns where copies go now (so
@@ -760,6 +760,9 @@ class StartIn(VerifyIn):
     run_id: str = Field(min_length=36, max_length=36)
     recorded_s: int = Field(default=0, ge=0, le=7 * 24 * 3600)
     bytes: int = Field(default=0, ge=0)
+    # The relay is finishing a recording it made while we were down, and
+    # only needs its session: no live service, no "live now" after the fact.
+    ending: bool = False
 
 
 class EndedIn(BaseModel):
@@ -816,7 +819,8 @@ def relay_started(body: StartIn, x_relay_secret: Optional[str] = Header(default=
         s = None
     if s is None:
         s = _open_session(biz, sid)
-    _ensure_live_service(biz, s)
+    if not body.ending:
+        _ensure_live_service(biz, s)
     _beat(sid, body.recorded_s, body.bytes)
     return {
         "ok": True,
@@ -833,8 +837,10 @@ def _open_session(biz: str, sid: str) -> Dict[str, Any]:
         raise HTTPException(503, "read failed")
     if old:
         # This run's session was already closed (by the sweep, after the
-        # relay went quiet too long). The relay starts a new run.
-        raise HTTPException(409, "session ended")
+        # relay went quiet too long). The relay finishes that recording
+        # under the session named here and starts a new run.
+        raise HTTPException(409, {"error": "session ended", "session_id": sid,
+                                  "playlist_path": old.get("playlist_path") or playlist_path(biz, sid)})
     made = sb_clients.sb_post_as_service("/stream_sessions", {
         "id": sid, "business_id": biz, "status": "live", "playlist_path": playlist_path(biz, sid),
         "last_seen_at": now_iso()})
