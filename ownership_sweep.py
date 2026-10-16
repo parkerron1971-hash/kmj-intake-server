@@ -74,6 +74,10 @@ HINTS = (
     # the caller never supplies it. Refuses (401) on an unknown, removed
     # or re-paired token.
     "station_from_token",
+    # The stream relay (stream_relay_router.py): the relay server never
+    # names a business. It comes from the stream key's own row, and an
+    # unknown or replaced key is refused (403), behind the relay's secret.
+    "church_from_stream_key",
 )
 
 BIZ_PARAMS = ("business_id", "biz", "biz_id", "businessId")

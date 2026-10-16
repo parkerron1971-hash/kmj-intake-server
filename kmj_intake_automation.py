@@ -404,6 +404,10 @@ from live_router import router as live_router
 app.include_router(live_router)
 from member_portal_live import router as member_portal_live_router
 app.include_router(member_portal_live_router)
+# Our own stream relay: the church streams once to our server, which passes
+# copies to YouTube/Facebook and records to R2 (Kevin, 2026-10-16).
+from stream_relay_router import router as stream_relay_router
+app.include_router(stream_relay_router)
 # Live group meetings (video) — a group's approved leaders host from the
 # member app. Kevin, 2026-09-29.
 from member_portal_group_live import router as member_portal_group_live_router
