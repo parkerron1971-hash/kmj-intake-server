@@ -339,6 +339,73 @@ def test_no_false_reply_is_ever_scored_as_agreement():
     assert true_agreed >= 0.8 * true_total, (true_agreed, true_total)
 
 
+# Codex's review of 0b66f20: constructions that are not supported shapes,
+# or say something false, never agree. Maria owes $100, Tasha $200, both
+# unpaid and not due until 2099; the business is owed $300.
+NEVER_AGREE = [
+    # Plural and distributive subjects
+    "You're owed $300. Maria & Tasha each owe $100.", "You're owed $300. Maria and Tasha both owe $200.",
+    "You're owed $300. Both owe $100.", "You're owed $300. Maria and Tasha owe $200 and $100 respectively.",
+    "Maria owes $100. They both owe $100. You're owed $300.", "You're owed $300. She owes $200.",
+    # Overdue is not owed
+    "You're owed $300, all overdue.", "You have $300 overdue.", "You're owed $300. Maria has $100 overdue.",
+    "You're owed $300. Maria's $100 was due yesterday.",
+    # Negation and its exceptions
+    "You're owed $300. Maria hasn't paid anything except $100.", "You're owed $300. Maria doesn't owe $100.",
+    "You're not owed $300.", "You aren't owed $300.",
+    # Ranges, scales, precision, approximation
+    "The balance is $100–$300.", "The balance is $100 to $300.", "You're owed $300–$400.",
+    "You're owed about $300.", "You're owed $300k.", "You're owed $300.009.", "You're owed $300 million.",
+]
+TRUE_CONTROLS = [
+    "You're owed $300. Maria owes $100 and Tasha owes $200.",
+    "You're owed $300. Maria hasn't paid $100 and Tasha hasn't paid $200.",
+    "You're owed $300. Maria has not yet paid her $100.",
+]
+
+
+@pytest.mark.parametrize("reply", NEVER_AGREE)
+def test_unsupported_or_false_constructions_never_agree(reply):
+    q, a = _money_answer("How much am I owed?", TWO)
+    a.facts["contacts"] = [c["name"] for c in CONTACTS]
+    assert rail.compare(q, a, reply)[0] not in ("agrees", "partial"), rail.compare(q, a, reply)
+
+
+@pytest.mark.parametrize("reply", TRUE_CONTROLS)
+def test_plain_true_replies_still_agree(reply):
+    q, a = _money_answer("How much am I owed?", TWO)
+    a.facts["contacts"] = [c["name"] for c in CONTACTS]
+    assert rail.compare(q, a, reply)[0] == "agrees", rail.compare(q, a, reply)
+
+
+def test_a_payment_is_bound_to_its_invoice():
+    # Maria: INV-0001 open for $100; INV-0009 paid $100 on Oct 1.
+    paid = [_invoice(9, 100, "paid", "2026-10-01", "Maria Lopez", "c1", paid_at="2026-10-01T16:00:00+00:00")]
+    q, a = _money_answer("Did Maria pay?", [_invoice(1, 100, "sent", "2099-01-01", "Maria Lopez", "c1")],
+                         paid=paid, contact=MARIA)
+    a.facts["contacts"] = [c["name"] for c in CONTACTS]
+    for reply in ("Maria paid $100 on INV-0001 and still owes $100.",
+                  "Maria has made a partial payment of $100 on INV-0001 and still owes $100.",
+                  "Maria paid half of invoice INV-0001, $100, and still owes $100.",
+                  "Maria paid $100 toward invoice INV-0001 and still owes $100."):
+        assert rail.compare(q, a, reply)[0] not in ("agrees", "partial"), (reply, rail.compare(q, a, reply))
+    for reply in ("Maria paid $100 on INV-0009 and still owes $100 on INV-0001.",
+                  "Maria paid invoice INV-0009, $100, and still owes $100 on INV-0001."):
+        assert rail.compare(q, a, reply)[0] == "agrees", (reply, rail.compare(q, a, reply))
+
+
+def test_a_booking_said_not_to_be_is_never_agreement():
+    rec = rail.Records(sessions=SESSIONS[:1], window="next booked", today=TODAY)
+    q, a, _ = _say("When is my next appointment?", rec)
+    a.facts["contacts"] = [c["name"] for c in CONTACTS]
+    for reply in ("Maria isn't booked at 10am tomorrow.", "Maria and Tasha are both booked at 10am tomorrow.",
+                  "Tasha is next on Sunday, Oct 18 at 10am.", "Maria is next on Sunday, Oct 18 at 10am.",
+                  # Saturday is Oct 17; "Saturday, October 18" is no date.
+                  "Maria is next on Saturday, October 18 at 10am.", "Maria is next at 10am on October 18."):
+        assert rail.compare(q, a, reply)[0] not in ("agrees", "partial"), (reply, rail.compare(q, a, reply))
+    assert rail.compare(q, a, "Maria is booked at 10am tomorrow.")[0] == "agrees"
+
+
 def _calendar_sweep(one_session: bool):
     """(reply, true?) against SESSIONS (Maria 10:00 AM, Tasha 12:30 PM,
     both Saturday Oct 17, which is tomorrow), or only Maria's."""
@@ -346,7 +413,10 @@ def _calendar_sweep(one_session: bool):
     people = [("Maria", "M"), ("MARIA", "M"), ("maria", "M"), ("Tasha", "T"), ("tasha", "T"),
               ("Jordan", "?"), ("She", "M" if one_session else "?")]
     days = [("", True), (" tomorrow", True), (" on Saturday", True), (" on Oct 17", True),
-            (" on Sunday", False), (" on Oct 18", False)]
+            (" on Saturday, Oct 17", True), (" tomorrow, Oct 17", True),
+            (" on Sunday", False), (" on Oct 18", False),
+            # A phrase whose parts disagree is no date at all.
+            (" on Saturday, Oct 18", False), (" on Sunday, Oct 17", False), (" tomorrow, Oct 18", False)]
     forms = ["{s} is at {t}{d}.", "{s} at {t}{d}.", "{t}{d}: {s}.", "{s}, {t}{d}.", "{t}{d} with {s}.",
              "{s} is booked for {t}{d}.", "Next up{d}, {s} at {t}."]
     for s, who in people:
@@ -379,9 +449,10 @@ def test_no_false_calendar_reply_is_ever_scored_as_agreement(one_session):
 @pytest.mark.parametrize("reply, outcome", [
     # The business's $300 is not Maria's.
     ("Maria owes $300 across 2 invoices.", "differs"),
-    # Both invoices are unpaid; nothing was paid.
-    ("You have been paid $300 across 2 invoices.", "differs"),
-    ("Maria paid $100.", "differs"),
+    # Nothing was paid that the read can see; only the latest payment is
+    # ever read, so a payment claim it doesn't hold is unresolved.
+    ("You have been paid $300 across 2 invoices.", "unverified"),
+    ("Maria paid $100.", "unverified"),
     # A swapped pair in lower case is still swapped.
     ("maria owes $200 and tasha owes $100.", "differs"),
     # Said right, a total said as a total, and names in lower case, agree.
@@ -389,12 +460,11 @@ def test_no_false_calendar_reply_is_ever_scored_as_agreement(one_session):
     ("You're owed $300. maria owes $100, tasha owes $200.", "agrees"),
     ("Neither has paid yet: you're owed $300, Maria $100 and Tasha $200.", "agrees"),
     # Codex's focused re-check of 1fdc2ed.
-    # "in total" next to Maria: hers, or everyone's? Unresolved, not agreement.
-    ("Maria owes $300 in total.", "unverified"),
-    # Paid and owed in one breath: unresolved.
+    # Maria's own total is $100.
+    ("Maria owes $300 in total.", "differs"),
+    # Paid and owed in one breath: not a supported shape.
     ("You've been paid the outstanding $300.", "unverified"),
-    # A comma doesn't free the $300 from "paid".
-    ("You have been paid, $300 across 2 invoices.", "differs"),
+    ("You have been paid, $300 across 2 invoices.", "unverified"),
     # Paid and owed in their own clauses still read right.
     ("Nothing has been paid yet, you're owed $300: Maria $100 and Tasha $200.", "agrees"),
     # Nothing contradicted, but "who owes me?" wants each client too.

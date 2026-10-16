@@ -59,53 +59,63 @@ turns only), on a worker thread:
      The read returned every matching row, and there were none.
    - `failed`: neither. A read that did not return every row proves
      nothing, whatever it says.
-6. **Compare** (`compare`) with what Chief said, claim by claim. Every
-   amount, time and count Chief said is held to the record it belongs to,
-   together with the client and the day it was said next to:
-   - "$1,200" said next to Maria, when $1,200 is Tasha's, differs;
-   - "$200 across 99 invoices" differs on the count;
-   - "Tasha is next on Sunday at 10am", when Maria is next on Saturday,
-     differs.
+6. **Compare** (`compare`) with what Chief said, against a **strict
+   grammar of supported claims**. Every sentence of the reply that carries
+   a figure (an amount or a clock time) must parse whole into claims of a
+   supported shape. Each claim binds its figure to:
+   - a subject: one client, matched in any case against the business's
+     whole contact list; "she"/"he" when there is one client in play; or
+     the business;
+   - a status: owed, overdue, paid, booked;
+   - where said, an invoice number, a count, a due date, days overdue, a
+     payment date or a day.
 
-   **Each sentence is resolved whole before any figure in it is checked.**
-   It is cut into parts at its commas, colons and "and"s. Each part gets a
-   subject and a status:
-   - **Subject.** In order: the client it names (in any case, against the
-     business's whole contact list); the client a pronoun stands for (the
-     one last named, or the one client asked about); the business, when it
-     says so ("you're owed", "in total"). A part with none takes the
-     nearest part's that has one.
-   - **Status.** Paid, owed, both, or negated ("doesn't owe"). Each "paid"
-     is read with only the negation in front of it, so "the previously
-     unpaid $300 has now been paid" says both. A part with no status takes
-     the sentence's, when the sentence has exactly one.
+   The parser splits a sentence at a comma, colon, semicolon or "and" only
+   where both sides are supported claims. A short "and $300" or "Tasha
+   $200" takes the subject and status of the claim before it, and "...and
+   still owes $100 on INV-0001" takes its client.
 
-   Then each figure is checked:
-   - a contradiction that doesn't depend on who it is about (paid against
-     owed, a wrong day) is `differs`;
-   - a sentence naming anyone the records don't hold is `unverified`;
-   - so is a total said next to one client, paid and owed at once, a
-     negated status, an unresolved pronoun, or a table;
-   - a stated business subject must be one of the business's totals.
+   Each claim is then checked against what the read holds (the ledger:
+   every invoice with its number, client, amount, status, due date, days
+   overdue and payment date; each client's balance; the totals):
+   - "$1,200" said as Maria's, when $1,200 is Tasha's, differs;
+   - "$300 across 99 invoices" differs on the count;
+   - "You have $300 overdue", when nothing is overdue, differs;
+   - "Maria paid $100 on INV-0001", when INV-0001 is open, differs;
+   - "Maria is next on Saturday, October 18", when Oct 18 is a Sunday,
+     differs, because every part of a day phrase must hold at once.
 
-   **Unresolved never counts as agreement.** Money also compares the yes or
-   no of "did X pay". The tests hold this as a property:
+   **Anything outside the grammar is `unverified`, never agreement.** That
+   covers "each", "both", "respectively", "except", "isn't booked", "was due
+   yesterday", a range ("$100–$300"), "$300k", "$300 million", "$300.009",
+   "about $300", a table, and a pronoun with no single client in play. Some
+   claims the read can't settle are `unverified` too: a payment other than
+   the latest (only the latest is read), or a client whose invoices this
+   read didn't cover.
+
+   Money also compares the yes or no of "did X pay".
+
+   The tests hold this as a property.
    `test_no_false_reply_is_ever_scored_as_agreement` and its calendar twin
-   generate 2,319 replies across client (any case, unknown, pronoun),
-   wording, status, amount or time, day and word order. Not one false reply
-   scores `agrees` or `partial`, and every true one does.
+   generate 3,789 replies across client (any case, unknown, pronoun),
+   wording, status, amount or time, day (combined weekday and date phrases
+   included) and word order. Not one false reply scores `agrees` or
+   `partial`, and at least 80% of true ones do. Today it is 83 to 90%; the
+   rest are `unverified`.
 
-   The known limit: a lower-case name the business has no contact for
-   reads as an ordinary word.
+   The grammar grows from what Chief actually says: the practice rows'
+   `unverified` share shows which shapes to add next. A shape is added only
+   with its own true and false tests. The known limit: a lower-case name
+   the business has no contact for reads as an ordinary word.
 
    The outcomes:
 
    | Outcome | Meaning |
    |---|---|
-   | `agrees` | Chief said the rail's headline, and every claim resolved and true |
-   | `partial` | every claim resolved and true, but not all of the headline |
-   | `differs` | Chief said a figure, time, count, client, day or yes/no the records contradict |
-   | `unverified` | a claim that can't be resolved (someone the records don't hold, a total next to one client, paid and owed at once, a table): never agreement |
+   | `agrees` | Chief said the rail's headline, and every claim is supported and true |
+   | `partial` | every claim supported and true, but not all of the headline |
+   | `differs` | a supported claim the records contradict (figure, count, client, status, invoice, day, yes/no) |
+   | `unverified` | a figure in a sentence the grammar doesn't cover, or a claim the read can't settle: never agreement |
    | `withheld` | Chief's reply was walled |
    | `silent` | Chief said no figure (a question back, a hedge) |
 
