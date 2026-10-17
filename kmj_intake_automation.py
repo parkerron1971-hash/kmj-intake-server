@@ -359,6 +359,10 @@ from member_portal import router as member_portal_router
 app.include_router(member_portal_router)
 from member_portal_church import router as member_portal_church_router
 app.include_router(member_portal_church_router)
+# The Lead tab's actions (member_portal_lead.py): a leader answers an
+# invitation, logs a conversation, marks a step, hands someone back.
+from member_portal_lead import router as member_portal_lead_router
+app.include_router(member_portal_lead_router)
 # Members' profile photos (member_photos.py): POST /my/photo and the
 # staff view. BEFORE public_site_router.
 from member_photos import router as member_photos_router
@@ -1583,6 +1587,16 @@ async def startup():
                               "interval", hours=1, id="notif_unanswered_leads")
         except Exception as e:
             print(f"   [warn] notification engine jobs not scheduled: {e}")
+    # Leaders & follow-up (2026-10-17): a church's card handed to a leader
+    # is told to them, and a late step climbs the ladder (nudge, pastors,
+    # "hand them on?"). Every 10 minutes so a new card reaches its leader
+    # soon; each message is sent once (church_follow_up.sweep).
+    try:
+        import church_follow_up as _cfu
+        scheduler.add_job(g("church_follow_up_sweep", _cfu.sweep), "interval", minutes=10,
+                          id="church_follow_up_sweep")
+    except Exception as e:
+        print(f"   [warn] church follow-up sweep not scheduled: {e}")
     # THE LEAD ARC PR 4 (2026-08-14) — the first-response clock.
     #
     # Nothing measured how long a lead waited before anyone answered.
