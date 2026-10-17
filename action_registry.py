@@ -392,6 +392,7 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
     "reschedule_booking":     _w("A", "moves an appointment; sends nothing, same as cancel"),
     "inspect_course": _r("owner-scoped course and lesson content; includes private answer keys"),
     "save_course_content": _w("A", "atomically authors course lessons, workbooks, quizzes and live details; published course edits are student-visible"),
+    "save_lesson_slides": _w("A", "saves one lesson's slide deck (replaces it); published-course slides are student-visible and show on a presenting TV"),
     "create_course":          _w("A", "atomically creates a draft course and complete lessons"),
     "create_growth_objective": _w("A", "materializes an objective plus its modules/workflows/"
                                        "milestones — a lot of rows, all ordinary records"),

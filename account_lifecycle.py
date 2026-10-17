@@ -98,6 +98,7 @@ HTTP_TIMEOUT = httpx.Timeout(connect=10.0, read=60.0, write=30.0, pool=10.0)
 # belong here with a reason.
 
 EXPORT_EXCLUDED: Dict[str, str] = {
+    "academy_present_sessions": "a class presenting right now: a short-lived TV code and a copy of the slides without teacher notes (the deck itself is exported in academy_decks); expires within hours; cascade on business deletion",
     "chief_rail_practice": "the rail's practice record (chief_rail.py): a records-only answer next to Chief's, for deciding which question shapes may skip the full turn; platform tuning data, derived from records the export already carries; cascade on business deletion",
     "chief_reflection_runs": "nightly brain-pass run log (status, tokens, cost); operations metadata, not the business's content; the digest it wrote is exported in business_brain_versions; cascade on business deletion",
     "square_booking_sync": "temporary Square appointment copies; reconnect and opt in to sync; cascade through square_connections",
@@ -349,7 +350,9 @@ BUSINESS_CHILD_TABLES: List[str] = [
     "support_tickets",
     "workflows",
     "workflow_definitions",
-    # Academy — lessons/enrollments reference courses.
+    # Academy — lessons/enrollments reference courses; a lesson's edited
+    # slides reference the lesson.
+    "academy_decks",
     "academy_lessons",
     "academy_enrollments",
     "academy_courses",
@@ -660,6 +663,9 @@ _IMPORT_SKIP = {
     # They remain in the owner archive and are explicitly reported as skipped.
     "ministry_care_notes", "ministry_care_requests", "ministry_gift_history",
     "giving_statement_sends",  # a send log: a restore must not claim statements went out
+    # A deck is keyed by its lesson's original id, which the importer re-mints;
+    # restored lessons rebuild their slides from the lesson text instead.
+    "academy_decks",
     # Members' phones are devices, not records (like push_subscriptions);
     # the send log must not claim a restored church already notified anyone.
     "member_push_subscriptions", "member_push_prefs", "member_push_sends",

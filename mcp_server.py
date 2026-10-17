@@ -221,7 +221,7 @@ def _obj(props: Dict[str, Any], required: Optional[List[str]] = None) -> Dict[st
     return schema
 
 
-from chief_academy_actions import READ_SCHEMA as ACADEMY_READ_SCHEMA, WRITE_SCHEMA as ACADEMY_WRITE_SCHEMA
+from chief_academy_actions import READ_SCHEMA as ACADEMY_READ_SCHEMA, WRITE_SCHEMA as ACADEMY_WRITE_SCHEMA, SLIDES_WRITE_SCHEMA as ACADEMY_SLIDES_SCHEMA
 from chief_growth_intelligence_actions import READ_SCHEMA as GROWTH_READ_SCHEMA, WRITE_SCHEMA as GROWTH_WRITE_SCHEMA
 
 from booking_rehearsal import READ_SCHEMA as BOOKING_REHEARSAL_SCHEMA
@@ -590,6 +590,7 @@ WRITE_TOOL_SCHEMAS: Dict[str, Tuple[str, Dict[str, Any]]] = {
         _obj({"url": {"type": "string", "description": "Public website/page URL supplied by the user or their verified business site. A path or fragment can target the relevant page/section."},
               "include_logo": {"type": "boolean", "description": "Defaults true. False for screenshot-only captures."}}, ["url"])),
     "save_course_content": ACADEMY_WRITE_SCHEMA,
+    "save_lesson_slides": ACADEMY_SLIDES_SCHEMA,
     "save_growth_record": GROWTH_WRITE_SCHEMA,
     # ── people ───────────────────────────────────────────────────────
     "create_contact": (
