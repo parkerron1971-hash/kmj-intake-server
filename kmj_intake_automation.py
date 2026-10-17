@@ -365,6 +365,10 @@ app.include_router(member_portal_church_router)
 # invitation, logs a conversation, marks a step, hands someone back.
 from member_portal_lead import router as member_portal_lead_router
 app.include_router(member_portal_lead_router)
+# Sunday check-in (member_portal_checkin.py): POST /my/here, a member
+# counts their family "at church" or "watching online". BEFORE public_site.
+from member_portal_checkin import router as member_portal_checkin_router
+app.include_router(member_portal_checkin_router)
 # Members' profile photos (member_photos.py): POST /my/photo and the
 # staff view. BEFORE public_site_router.
 from member_photos import router as member_photos_router
@@ -1599,6 +1603,15 @@ async def startup():
                           id="church_follow_up_sweep")
     except Exception as e:
         print(f"   [warn] church follow-up sweep not scheduled: {e}")
+    # Sunday check-in (2026-10-17): from two days before, each church's
+    # coming service has its occasion in Services & Events, so the Kids
+    # kiosk and Attendance find it on Sunday morning (church_checkin.sweep).
+    try:
+        import church_checkin as _cck
+        scheduler.add_job(g("church_checkin_sweep", _cck.sweep), "interval", hours=1,
+                          id="church_checkin_sweep")
+    except Exception as e:
+        print(f"   [warn] church check-in sweep not scheduled: {e}")
     # THE LEAD ARC PR 4 (2026-08-14) — the first-response clock.
     #
     # Nothing measured how long a lead waited before anyone answered.
