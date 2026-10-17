@@ -5994,15 +5994,33 @@ async def _serve_form_page(client, biz_id: Optional[str], slug: str, form_id: st
         f"/intake_forms?id=eq.{fid}&business_id=eq.{biz_id}&is_active=eq.true"
         "&select=id,business_id,name,fields,settings,form_type&limit=1",
     )
+    # A switched-off form still answers its link with the business's own
+    # page (render_closed_page): a website button may point here.
+    paused = False
+    if not rows:
+        rows = await _sb_service(
+            client,
+            f"/intake_forms?id=eq.{fid}&business_id=eq.{biz_id}&is_active=eq.false"
+            "&select=id,business_id,name,settings&limit=1",
+        )
+        paused = True
     if not rows:
         raise HTTPException(404, "form not found")
     biz_rows = await _sb_service(
         client, f"/businesses?id=eq.{biz_id}&select=id,name,type,settings&limit=1")
     if not biz_rows:
         raise HTTPException(404, "business not found")
-    from form_page_renderer import render_form_page
+    from form_page_renderer import render_closed_page, render_form_page
     from public_form_theme import SITE_SELECT
     site_rows = await _sb_service(client, f"/business_sites?business_id=eq.{biz_id}&status=eq.published&select={SITE_SELECT}&limit=1") or []
+    if paused:
+        return HTMLResponse(
+            content=render_closed_page(
+                biz_rows[0], rows[0],
+                canonical_url=f"https://{slug}.mysolutionist.app{_FORM_PAGE_PREFIX}{fid}",
+                site=site_rows[0] if site_rows else None),
+            status_code=404, media_type="text/html",
+            headers={**_PUBLIC_SITE_NO_STORE_HEADERS})
     from chief_host import FALLBACK_BASE
     html = render_form_page(
         biz_rows[0], rows[0],

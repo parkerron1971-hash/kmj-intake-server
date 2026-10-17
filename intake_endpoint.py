@@ -726,6 +726,15 @@ async def public_form_page(form_id: str, request: Request):
             f"/intake_forms?id=eq.{fid}&is_active=eq.true"
             "&select=id,business_id,name,fields,settings,form_type&limit=1")
         form = forms[0] if forms else None
+        # A switched-off form still answers its link with the business's own
+        # page (render_closed_page): a website button may point here.
+        paused = False
+        if not form:
+            forms = await supabase_request(
+                client, "GET",
+                f"/intake_forms?id=eq.{fid}&is_active=eq.false"
+                "&select=id,business_id,name,settings&limit=1")
+            form, paused = (forms[0] if forms else None), True
         if not form:
             raise HTTPException(status_code=404, detail="Form not found")
         from public_form_theme import SITE_SELECT
@@ -736,9 +745,14 @@ async def public_form_page(form_id: str, request: Request):
         business = businesses[0] if businesses else None
         if not business:
             raise HTTPException(status_code=404, detail="Business not found")
-    from form_page_renderer import render_form_page
+    from form_page_renderer import render_closed_page, render_form_page
     from chief_form_actions import public_form_url
     canonical = await asyncio.to_thread(public_form_url, str(form["business_id"]), fid)
+    if paused:
+        return HTMLResponse(content=render_closed_page(business, form, canonical_url=canonical,
+                                                       site=site_rows[0] if site_rows else None),
+                            status_code=404, media_type="text/html",
+                            headers={"Cache-Control": "no-store"})
     # Behind Railway's proxy request.base_url says http://; a browser
     # will not POST from an https page to an http address (mixed
     # content), so the submit url is pinned to https on the same host.
