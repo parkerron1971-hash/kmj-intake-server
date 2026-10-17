@@ -404,10 +404,17 @@ def test_an_oversized_file_is_refused_from_a_bounded_read(brand_route):
 # img.verify() checks structure, not pixels, so a JPEG missing its last
 # bytes was stored. Now a picture is stored only once it decodes, every
 # frame of it, within a pixel budget.
+#
+# The noise is seeded, so every run cuts the same bytes. JPEGs are cut by
+# 10 or more, never 2: 2 bytes is only the end marker, and about one noisy
+# JPEG in twenty still decodes whole without it (99 of 2000), a whole
+# picture rather than a broken one. With fresh noise each run, that case
+# failed CI now and then (PR #1468, 2026-10-17).
 
 def _noisy(fmt: str, size=(96, 96), frames=1) -> bytes:
-    import os
-    shots = [Image.frombytes("RGB", size, os.urandom(size[0] * size[1] * 3))
+    import random
+    noise = random.Random(f"{fmt}-{frames}")
+    shots = [Image.frombytes("RGB", size, noise.randbytes(size[0] * size[1] * 3))
              for _ in range(frames)]
     if fmt == "GIF":
         shots = [s.convert("P") for s in shots]
@@ -433,11 +440,11 @@ def _png_claiming(width: int, height: int) -> bytes:
 
 
 @pytest.mark.parametrize("data,name,mime", [
-    *[(NOISY_JPEG[:-cut], "logo.jpg", "image/jpeg") for cut in (2, 10, 30, 50)],
+    *[(NOISY_JPEG[:-cut], "logo.jpg", "image/jpeg") for cut in (10, 30, 50)],
     (NOISY_WEBP[:-40], "logo.webp", "image/webp"),
     (NOISY_GIF[:-200], "logo.gif", "image/gif"),            # last frame cut short
     (_png_claiming(9000, 9000), "logo.png", "image/png"),   # 81 MP claimed, not decoded
-], ids=["jpeg-2", "jpeg-10", "jpeg-30", "jpeg-50", "webp", "gif-frame", "png-81mp"])
+], ids=["jpeg-10", "jpeg-30", "jpeg-50", "webp", "gif-frame", "png-81mp"])
 def test_a_picture_that_does_not_decode_is_refused_and_nothing_is_written(
         brand_route, data, name, mime):
     r = brand_route(OWNER, data=data, name=name, mime=mime)
