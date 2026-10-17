@@ -365,8 +365,9 @@ def cards(business_id: str, *, now: Optional[datetime] = None) -> Optional[Dict[
                    "&select=contact_id,created_at,form:data->>form&order=created_at.desc&limit=5000")
     submits = R._get(f"/events?business_id=eq.{biz}&event_type=eq.form_submit&created_at=gte.{since}"
                      "&select=contact_id,created_at,form_id:data->>form_id&order=created_at.desc&limit=5000")
+    # Newest first, like the two reads above: past the cap, the oldest go.
     care = R._get(f"/ministry_care_requests?business_id=eq.{biz}&created_at=gte.{since}"
-                  "&select=form_id,created_at,source:submission->>source&limit=5000")
+                  "&select=form_id,created_at,source:submission->>source&order=created_at.desc&limit=5000")
     if sites is None or notes is None or submits is None or care is None:
         return None
 
