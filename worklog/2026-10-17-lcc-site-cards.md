@@ -4,7 +4,7 @@ date: 2026-10-17
 agent: Claude Code (Claude Opus 5.5)
 asked: 'After the Forms & classes build made Love City''s Baptism and Serve with us cards: "yes point the website buttons at the new cards."'
 status: in progress
-prs: []
+prs: [kmj-intake-server#1468]
 migrations: []
 left_undone:
   - "After deploy: open lovecityc.com/ministries and follow both buttons to their cards"
