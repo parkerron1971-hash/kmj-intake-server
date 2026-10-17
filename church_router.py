@@ -178,6 +178,10 @@ def leaders(business_id: str = Query(...),
                                           "status", "invited_at", "answered_at")} for r in rows],
         "role_labels": church_follow_up.ROLE_LABELS,
         "teams": team_names,
+        # Each card's path as the engine runs it, so the page shows exactly
+        # what happens (steps and their days, and the late ladder).
+        "paths": church_follow_up.PATHS,
+        "late_ladder": [{"days": d, "level": lvl, "kind": k} for d, lvl, k in church_follow_up.LATE_LADDER],
     }
 
 
