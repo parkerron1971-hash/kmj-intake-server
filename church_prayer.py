@@ -365,8 +365,9 @@ async def sweep(now: Optional[datetime] = None) -> Dict[str, int]:
     now = now or _now()
     stats = {"told": 0, "nudged": 0, "overseer_told": 0, "next_up": 0}
     rows = await asyncio.to_thread(
-        _rows, "/ministry_care_requests?leader_contact_id=not.is.null&leader_prayed_at=is.null"
-               f"&or=(leader_told_at.is.null,leader_due_at.lt.{_q(_iso(now))})&select=business_id,{_SEL}&limit=500")
+        _rows, "/ministry_care_requests?leader_contact_id=not.is.null&leader_prayed_at=is.null&leader_late_level=lt.3"
+               f"&or=(leader_told_at.is.null,leader_due_at.lt.{_q(_iso(now))})&select=business_id,{_SEL}"
+               "&order=leader_due_at.asc&limit=500")
     if not rows:
         return stats
     by_biz: Dict[str, List[Dict[str, Any]]] = {}
@@ -446,20 +447,27 @@ async def _sweep_church(biz_id: str, items: List[Dict[str, Any]], now: datetime,
             else:
                 target_role, target = None, []
             late = "a day" if kind == "overseer_told" else "three days"
-            for p in target:
-                await cfu._email(biz, p.get("email") or "", p.get("name") or "",
-                                 f"A prayer request has waited {late}",
-                                 cfu._mail_html([f"{html.escape(who)}’s prayer request has waited {late} with "
-                                                 f"{html.escape(leader['name'] if leader else 'the prayer team')}. "
-                                                 + ("Hand it to someone else in Prayer & care?" if kind == "next_up" else
-                                                    "They answer to you.")], "", ""),
-                                 f"prayer-{kind}-{rid}-{r.get('leader_due_at')}-{p['contact_id']}")
+            # The rung is climbed only when the person above was told (one
+            # email went out, or no one above has an email to send to) and
+            # the office's alert stands; otherwise the next sweep tries again.
+            mailable = [p for p in target if p.get("email")]
+            sent_any = not mailable
+            for p in mailable:
+                ok = await cfu._email(biz, p["email"], p.get("name") or "",
+                                      f"A prayer request has waited {late}",
+                                      cfu._mail_html([f"{html.escape(who)}’s prayer request has waited {late} with "
+                                                      f"{html.escape(leader['name'] if leader else 'the prayer team')}. "
+                                                      + ("Hand it to someone else in Prayer & care?" if kind == "next_up" else
+                                                         "They answer to you.")], "", ""),
+                                      f"prayer-{kind}-{rid}-{r.get('leader_due_at')}-{p['contact_id']}")
+                sent_any = sent_any or ok
             names = ", ".join(p["name"] for p in target) or "no one above them"
-            delivered = await cfu._office_alert(
+            alerted = await cfu._office_alert(
                 biz_id, "A prayer request is waiting" if kind == "overseer_told" else "Hand a prayer request to someone else?",
                 f"{who}’s request has waited {late} with {leader['name'] if leader else 'the prayer team'}. "
                 f"Told: {names}{' (' + target_role['title'] + ')' if target_role else ''}.",
                 f"prayer-{kind}-{rid}-{r.get('leader_due_at')}", None)
+            delivered = bool(alerted and sent_any)
         if not delivered:
             continue
         await asyncio.to_thread(sb_clients.sb_patch_as_service,

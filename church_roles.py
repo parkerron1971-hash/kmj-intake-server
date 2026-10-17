@@ -852,10 +852,16 @@ def archive_role(business_id: str, role_id: str) -> Dict[str, Any]:
         if not ok:
             raise HTTPException(503, "That didn’t save. Try again.")
         return {"deleted": True}
-    # Roles that answered to it now answer to whoever it answered to.
-    up = _rows(f"/church_role_defs?id=eq.{_q(rid)}&select=reports_to&limit=1") or [{}]
-    sb_clients.sb_patch_as_service(f"/church_role_defs?business_id=eq.{_q(biz)}&reports_to=eq.{_q(rid)}",
-                                   {"reports_to": up[0].get("reports_to"), "updated_at": _iso(_now())})
+    # Roles that answered to it now answer to whoever it answered to. A
+    # read or a write that failed stops the archive: the roles under it
+    # must never be cut off the chain by a blip.
+    up = _rows(f"/church_role_defs?id=eq.{_q(rid)}&business_id=eq.{_q(biz)}&select=reports_to&limit=1")
+    if not up:
+        raise HTTPException(503, "That couldn’t be checked. Try again in a moment.")
+    moved = sb_clients.sb_patch_as_service(f"/church_role_defs?business_id=eq.{_q(biz)}&reports_to=eq.{_q(rid)}",
+                                           {"reports_to": up[0].get("reports_to"), "updated_at": _iso(_now())})
+    if not isinstance(moved, list):
+        raise HTTPException(503, "That didn’t save. Nothing was changed — try again.")
     out = sb_clients.sb_patch_as_service(f"/church_role_defs?id=eq.{_q(rid)}&business_id=eq.{_q(biz)}",
                                          {"status": "archived", "updated_at": _iso(_now())})
     if not isinstance(out, list) or not out:

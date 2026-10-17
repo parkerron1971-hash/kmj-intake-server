@@ -1276,8 +1276,13 @@ async def _sweep_church(biz_id: str, items: List[Dict[str, Any]], now: datetime,
             rung_role, rung_people = above[min(n, len(above) - 1)] if above else (None, [])
             top = bool(rung_role and rung_role["job"] == "senior")
             late = "a day" if kind == "overseer_told" else "three days"
-            for p in rung_people:
-                await _email(biz, p.get("email") or "", p.get("name") or "",
+            # Climbed only when someone above was told (an email went out,
+            # or nobody above has one to send to) and the office's alert
+            # stands; a failed send is tried again next sweep.
+            mailable = [p for p in rung_people if p.get("email")]
+            sent_any = not mailable
+            for p in mailable:
+                ok = await _email(biz, p.get("email") or "", p.get("name") or "",
                              f"{pname} hasn’t been reached" if kind == "overseer_told" else f"Hand {pname} to someone else?",
                              _mail_html([f"{html.escape(pname)} ({html.escape(r.get('card_name') or 'a card')}) is {late} past "
                                          f"<b>{html.escape(step_title)}</b>. {html.escape(who)} has them"
@@ -1285,18 +1290,20 @@ async def _sweep_church(biz_id: str, items: List[Dict[str, Any]], now: datetime,
                                          + (" Hand them to someone else on the Follow-up board?" if kind == "next_up" and top else "")],
                                         "", ""),
                              f"cfu-{kind}-{fid}-{r.get('due_at')}-{p['contact_id']}")
+                sent_any = sent_any or ok
             told_names = ", ".join(p["name"] for p in rung_people)
             label = f" ({rung_role['title']})" if rung_role else ""
             if kind == "overseer_told":
-                delivered = await _office_alert(biz_id, f"{pname} hasn’t been reached",
-                                                f"A day past “{step_title}”. {who} has them. Told: "
-                                                f"{told_names or 'no one above them'}{label}.",
-                                                f"church-fu-late-{fid}-{r.get('due_at')}", pid)
+                alerted = await _office_alert(biz_id, f"{pname} hasn’t been reached",
+                                              f"A day past “{step_title}”. {who} has them. Told: "
+                                              f"{told_names or 'no one above them'}{label}.",
+                                              f"church-fu-late-{fid}-{r.get('due_at')}", pid)
             else:
-                delivered = await _office_alert(biz_id, f"Hand {pname} to someone else?",
-                                                f"Three days past “{step_title}” with {who}. Told: "
-                                                f"{told_names or 'no one above them'}{label}.",
-                                                f"church-fu-reassign-{fid}-{r.get('due_at')}", pid)
+                alerted = await _office_alert(biz_id, f"Hand {pname} to someone else?",
+                                              f"Three days past “{step_title}” with {who}. Told: "
+                                              f"{told_names or 'no one above them'}{label}.",
+                                              f"church-fu-reassign-{fid}-{r.get('due_at')}", pid)
+            delivered = bool(alerted and sent_any)
         if not delivered:
             continue  # the rung is climbed when its message goes out; next sweep tries again
         await asyncio.to_thread(_patch, biz_id, fid, {"late_level": level})

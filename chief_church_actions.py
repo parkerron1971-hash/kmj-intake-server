@@ -127,6 +127,13 @@ async def handle_church_people(client, biz, action) -> Dict[str, Any]:
     lines: List[str] = []
 
     if section == "leaders":
+        # The same seats as Leaders & roles itself (owner, admin, manager).
+        role = await asyncio.to_thread(_caller_role, business_id)
+        if role not in _CARE_ROLES:
+            return {"type": "church_people", "section": "leaders",
+                    "result": "refused: the church's leaders and roles are for its owner or a manager. "
+                              "Say so plainly; do not guess who leads what.",
+                    "label": "Leaders & roles are owner or manager only", "nav": None}
         import church_roles
         got = await asyncio.to_thread(church_roles.chief_lines, biz)
         if got is None:
@@ -178,6 +185,9 @@ async def handle_draft_church_role(client, biz, action) -> Dict[str, Any]:
     import church_follow_up
     if not church_follow_up.is_church(biz):
         return _fail("draft_church_role", "roles are for churches")
+    role = await asyncio.to_thread(_caller_role, business_id)
+    if role not in _CARE_ROLES:
+        return _fail("draft_church_role", "only the church's owner or a manager can draft a role")
     title = " ".join(str(action.get("title") or "").split())[:80]
     if not title:
         return _fail("draft_church_role", "name the role to draft")

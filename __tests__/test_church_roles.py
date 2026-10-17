@@ -451,8 +451,9 @@ def test_chief_reads_the_roles_and_never_fills_the_library_itself(db):
     assert "Never repeat a prayer request's words" in joined
 
 
-def test_chiefs_draft_action_says_it_is_a_draft(db):
+def test_chiefs_draft_action_says_it_is_a_draft(db, monkeypatch):
     import chief_church_actions as cca
+    monkeypatch.setattr(cca, "_caller_role", lambda biz: "owner")
     cr.ensure_library(CHURCH)
     out = asyncio.run(cca.handle_draft_church_role(None, CHURCH, {"type": "draft_church_role", "title": "Church Mother"}))
     assert out["label"] == "Drafted “Church Mother”" and "hands nobody anything until the owner saves it" in out["result"]
@@ -524,3 +525,56 @@ def test_a_member_seat_reads_and_changes_no_roles(office, db):
     assert office.post(f"/church/roles?business_id={BIZ}", json={"title": "X", "job": "care"}).status_code == 404
     assert office.post(f"/church/type?business_id={BIZ}", json={"type": "baptist"}).status_code == 404
     assert db.t["church_role_defs"] == []
+
+
+@pytest.mark.parametrize("seat", ["member", "viewer", None])
+def test_chief_gives_the_leaders_and_drafts_only_to_the_seats_the_page_allows(db, monkeypatch, seat):
+    """Review of #1477: the same seats as Leaders & roles (owner, admin,
+    manager). An outside agent has no seat at all."""
+    import chief_church_actions as cca
+    monkeypatch.setattr(cca, "_caller_role", lambda biz: seat)
+    out = asyncio.run(cca.handle_church_people(None, CHURCH, {"section": "leaders"}))
+    assert out["result"].startswith("refused") and "Kevin" not in out["result"]
+    out = asyncio.run(cca.handle_draft_church_role(None, CHURCH, {"type": "draft_church_role", "title": "Church Mother"}))
+    assert out.get("failed") and db.t["church_role_defs"] == []
+
+
+def test_a_failed_read_never_cuts_the_roles_below_off_the_chain(db, monkeypatch):
+    """Review of #1477: archiving reads who the role answered to; a read
+    that fails stops it instead of setting everyone below to no one."""
+    cr.ensure_library(CHURCH)
+    d = _defs(db)
+    real = sb_clients.sb_get_as_service
+    monkeypatch.setattr(sb_clients, "sb_get_as_service",
+                        lambda p, **k: None if p.startswith(f"/church_role_defs?id=eq.{d['intercessor_leader']['id']}&business_id")
+                        and "select=reports_to" in p else real(p))
+    with pytest.raises(Exception) as e:
+        cr.archive_role(BIZ, d["intercessor_leader"]["id"])
+    assert e.value.status_code == 503
+    assert _defs(db)["intercessors"]["reports_to"] == d["intercessor_leader"]["id"]
+    assert _defs(db)["intercessor_leader"]["status"] == "active"
+
+
+def test_a_late_step_climbs_only_when_the_person_above_was_told(db, monkeypatch):
+    """Review of #1477: the office's alert alone isn't the rung; the email
+    to the role above has to go out too, or the next sweep tries again."""
+    cr.ensure_library(CHURCH)
+    f = cfu.on_intake_form(CHURCH, SERVE, {"team": "Hospitality Team"}, DANA)
+    down = {"robert": True}
+
+    async def email(biz, to, name, subject, body, key):
+        return not (down["robert"] and to.startswith("robert"))
+
+    async def alert(biz_id, title, body, key, person):
+        return True
+    monkeypatch.setattr(cfu, "_email", email)
+    monkeypatch.setattr(cfu, "_office_alert", alert)
+    asyncio.run(cfu.sweep())
+    row = next(r for r in db.t["church_follow_ups"] if r["id"] == f["id"])
+    due = cfu._parse(row["due_at"])
+    asyncio.run(cfu.sweep(now=due + timedelta(hours=1)))
+    asyncio.run(cfu.sweep(now=due + timedelta(days=1, hours=1)))
+    assert row["late_level"] == 1, "Robert's email failed: not climbed"
+    down["robert"] = False
+    asyncio.run(cfu.sweep(now=due + timedelta(days=1, hours=2)))
+    assert row["late_level"] == 2

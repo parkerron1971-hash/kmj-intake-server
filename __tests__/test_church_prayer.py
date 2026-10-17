@@ -306,3 +306,27 @@ def test_i_prayed_and_pass_it_on_from_the_lead_tab(lead, prayer):
     lead.who["me"] = {"id": KEISHA, "name": "Keisha Morgan"}
     r = lead.post("/my/lead/prayer/prayed", data={"rid": two["id"]}, follow_redirects=False)
     assert r.headers["location"] == "/my/lead", "someone who leads nothing can't act at all"
+
+
+
+def test_a_prayer_rung_climbs_only_when_the_pastor_was_emailed(prayer, monkeypatch):
+    """Review of #1477, item 2."""
+    down = {"on": True}
+
+    async def email(biz, to, name, subject, body, key):
+        return not (down["on"] and to.startswith("kevin"))
+
+    async def alert(biz_id, title, body, key, person):
+        return True
+    monkeypatch.setattr(cfu, "_email", email)
+    monkeypatch.setattr(cfu, "_office_alert", alert)
+    row = cp.on_new(BIZ, _request(prayer))
+    due = cfu._parse(row["leader_due_at"])
+    asyncio.run(cp.sweep())
+    asyncio.run(cp.sweep(due + timedelta(hours=1)))
+    asyncio.run(cp.sweep(due + timedelta(days=1, hours=1)))
+    saved = prayer.t["ministry_care_requests"][-1]
+    assert saved["leader_late_level"] == 1
+    down["on"] = False
+    asyncio.run(cp.sweep(due + timedelta(days=1, hours=2)))
+    assert saved["leader_late_level"] == 2
