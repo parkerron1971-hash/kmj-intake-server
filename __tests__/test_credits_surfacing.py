@@ -36,6 +36,7 @@ def _pin_chat_price(monkeypatch):
     covered by test_chat_repricing.py.
     """
     monkeypatch.setenv("PRICE_CHAT_PRICE", "1")
+    monkeypatch.setenv("PRICE_CALL_PRICE", "1")   # the per-call twin (2026-10-16)
 
 
 

@@ -122,10 +122,12 @@ def test_the_words_come_from_the_dials(monkeypatch):
     assert words[1].startswith(f"about {mp._about(credits['professional'] // per):,} conversations") and "Chief works between them" in words[1]
     assert "three site builds" in words[2]
     assert "Chief works between them" not in words[0]
-    assert mp._credits_in_words(3000, chief_works=False) == "about 250 conversations, or a site build and 200"
+    # 2026-10-16: a conversation is a MESSAGE at 20 credits (was a model
+    # call at 12, which made "about 250" roughly twice the truth).
+    assert mp._credits_in_words(3000, chief_works=False) == "about 150 conversations, or a site build and 100"
     # 2026-09-11: no dash-joined sentences on the site (Kevin); a comma carries the clause
-    assert mp._credits_in_words(7500, chief_works=True) == "about 625 conversations, or a site build and 575, and Chief works between them"
-    assert mp._credits_in_words(17500, chief_works=True, builds=3) == "about 1,450 conversations, or three site builds and 1,300, and Chief works between them"
+    assert mp._credits_in_words(7500, chief_works=True) == "about 375 conversations, or a site build and 325, and Chief works between them"
+    assert mp._credits_in_words(17500, chief_works=True, builds=3) == "about 875 conversations, or three site builds and 775, and Chief works between them"
 
 
 # ─── 4. the annual figure ────────────────────────────────────────────

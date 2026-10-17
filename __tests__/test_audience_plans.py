@@ -119,8 +119,10 @@ def test_audience_credits_flow_through():
 def test_audience_plan_clears_the_chat_floor_and_the_trial(plan):
     cents = pricing_config.audience_price_cents()[plan]
     credits = pricing_config.audience_credits()[plan]
-    # Same line test_chat_repricing holds the public ladder to.
-    assert pricing_config.chat_price() * (cents / credits) >= 18.43
+    # At or under the 40% target per MESSAGE (21.5c / 0.40 = 53.75c of
+    # credit per message). Until 2026-10-16 this read 18.43, the per-CALL
+    # 7.37c line; these plans clear the honest per-message line anyway.
+    assert pricing_config.chat_price() * (cents / credits) >=         pricing_config.MEASURED_CHAT_COST_CENTS / 0.40
     assert credits > pricing_config.trial_credits()
 
 

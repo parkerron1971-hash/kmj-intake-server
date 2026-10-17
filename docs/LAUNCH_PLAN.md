@@ -17,7 +17,7 @@ paid beta; what remains is configuration, operations, and polish.
 ## 2. The money machine (tiers + pay-as-you-go)
 
 **Model (docs/pricing_model.md):** subscription floor + metered overage.
-- Starter $79/mo → 3,000 credits (about 250 conversations)
+- Starter $79/mo → 3,000 credits (about 150 conversations: since 2026-10-16 a Chief message is 20 credits, charged once per message; it was 12 per model call)
 - Professional $149/mo (2026-09-04; was $199) → 7,500 credits
 - Solutionist (plan key `practice`) $299/mo (2026-09-04; was $399) → 17,500 credits
 - 2× bill promise: overage can never exceed the tier price itself.

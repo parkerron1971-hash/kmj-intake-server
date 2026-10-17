@@ -99,8 +99,10 @@ def db(monkeypatch):
 # ─── The promise: a site AND a conversation ──────────────────────────
 
 # Measured in production on 2026-10-03 (api_usage, last 30 days): a Chief
-# turn costs 8.23c on average; the three builds on record cost $1.69,
-# $2.88 and $3.25 of AI and were charged 1,000-1,300 credits.
+# model CALL costs 8.23c on average; the three builds on record cost
+# $1.69, $2.88 and $3.25 of AI and were charged 1,000-1,300 credits.
+# Since 2026-10-16 chat is priced per MESSAGE, so the worst case is
+# priced per message too: pricing_config.MEASURED_CHAT_COST_CENTS (21.5c).
 CHAT_COST_CENTS_2026_10 = 8.23
 BUILD_COST_CENTS_MAX = 325
 BUILD_CREDITS_SMALLEST_REAL = 1000
@@ -120,15 +122,22 @@ def test_five_hundred_credits_could_never_pay_for_a_build():
 
 
 def test_with_the_free_build_the_tank_is_a_real_conversation():
+    """25 messages at 20 each. The old floor (40) counted model calls at
+    12; a message averaged 19.6 credits under that meter, so a no-card
+    trial already bought about 25 messages. Per-message pricing makes
+    that number exact rather than smaller."""
     turns = pc.trial_credits_no_card() / pc.chat_price()
-    assert turns >= 40, f"only {turns:.0f} Chief turns after the build"
+    assert turns >= 25, f"only {turns:.0f} Chief messages after the build"
 
 
 def test_the_worst_case_cost_of_a_no_card_signup_is_bounded():
     """Every credit on chat, plus the dearest build on record."""
     turns = pc.trial_credits_no_card() / pc.chat_price()
-    worst_cents = turns * CHAT_COST_CENTS_2026_10 + BUILD_COST_CENTS_MAX
-    assert worst_cents < 800, f"${worst_cents / 100:.2f} per no-card signup"
+    worst_cents = turns * pc.MEASURED_CHAT_COST_CENTS + BUILD_COST_CENTS_MAX
+    # $8.63 today. The old $8.00 bound was met only on paper: it priced
+    # 41 calls at 8.23c, while those credits really bought ~25 messages
+    # at ~21.5c each.
+    assert worst_cents < 900, f"${worst_cents / 100:.2f} per no-card signup"
 
 
 def test_a_card_unlocks_the_rest_of_the_full_tank():

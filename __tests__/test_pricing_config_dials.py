@@ -85,6 +85,14 @@ def test_opening_defaults_are_kevins_ruling(monkeypatch):
     build's implied 0.333c per credit. At 1 credit a turn, a Starter
     spending their whole tank on conversation cost $221 against $79 paid.
 
+    It moved again on 2026-10-16, and changed what it counts: chat_price
+    is now 20 per MESSAGE, charged once however many model calls the
+    message takes (api_usage_logger._priced_units). Per call, a message
+    had been charged 13-37 credits, 19.6 on average, so 20 is what
+    customers were already paying, now the same every time. The old
+    per-call 12 lives on as call_price() for the features that call
+    Chief's model outside a chat message, so they did not move.
+
     Everything else here is untouched. If a second number moves, it gets
     a paragraph too — a defaults test that is edited silently stops being
     a record of anything."""
@@ -106,7 +114,8 @@ def test_opening_defaults_are_kevins_ruling(monkeypatch):
     assert pc.small_edit() == 40
     assert pc.hero_regen() == 30
     assert pc.doc_gen() == 40
-    assert pc.chat_price() == 12         # 1 -> 8 -> 12, both on 2026-08-10
+    assert pc.chat_price() == 20         # 1 -> 8 -> 12 per call (08-10), 20 per message (10-16)
+    assert pc.call_price() == 12         # the per-call price, kept for non-chat calls
     assert pc.chat_daily_soft_ceiling() == 250
 
 
@@ -381,14 +390,28 @@ def test_chat_price_reaches_the_actual_chat_endpoint(monkeypatch):
     list they are charged'. It wasn't: /chief/backend — the real Chief
     chat endpoint — had no key, so it fell to DEFAULT_WEIGHT while
     price_list() quoted chat_price(). Moving the dial moved the quote
-    and not the charge."""
+    and not the charge.
+
+    Since 2026-10-16 a chat message is priced at write time: the turn's
+    first chat row carries chat_price(), so the quote and the charge
+    still agree. The endpoint table holds call_price(), the per-call
+    price for Chief model calls made outside a chat message."""
     monkeypatch.setenv("PRICE_CHAT_PRICE", "7")
+    monkeypatch.setenv("PRICE_CALL_PRICE", "5")
     pc = _reload_config()
     import usage_metering as um
     importlib.reload(um)
-    assert pc.unit_weights()["/chief/backend"] == 7
-    assert um.weight_for("/chief/backend") == 7
+    import api_usage_logger as ul
+    import turn_context
+    tokens = turn_context.set_turn("req-quote")
+    try:
+        charged = ul._priced_units("/chief/backend", True, None)
+    finally:
+        turn_context.reset(tokens)
+    assert charged == 7                          # a message: the quoted price
     assert um.price_list()["chat"] == 7          # quote and charge agree
+    assert pc.unit_weights()["/chief/backend"] == 5
+    assert um.weight_for("/chief/backend") == 5  # a call outside a message
 
 
 def test_one_chief_turn_bills_once_not_per_sub_call():
