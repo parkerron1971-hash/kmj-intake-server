@@ -258,16 +258,16 @@ def test_two_holders_share_the_work_the_lighter_one_first():
 
 # ─── The late ladder ──────────────────────────────────────────────────
 
-def test_the_late_ladder_nudges_then_tells_the_pastors_then_asks_to_hand_on():
+def test_the_late_ladder_nudges_then_climbs_the_chain():
     due = datetime(2026, 10, 16, 12, tzinfo=timezone.utc)
     row = {"status": "open", "due_at": due.isoformat(), "late_level": 0}
     assert cfu.late_step(row, due - timedelta(hours=1)) is None
     assert cfu.late_step(row, due + timedelta(hours=1)) == (1, "nudged")
-    assert cfu.late_step(dict(row, late_level=1), due + timedelta(days=1, hours=1)) == (2, "pastors_told")
+    assert cfu.late_step(dict(row, late_level=1), due + timedelta(days=1, hours=1)) == (2, "overseer_told")
     assert cfu.late_step(dict(row, late_level=2), due + timedelta(days=2)) is None
-    assert cfu.late_step(dict(row, late_level=2), due + timedelta(days=3, hours=1)) == (3, "reassign_asked")
+    assert cfu.late_step(dict(row, late_level=2), due + timedelta(days=3, hours=1)) == (3, "next_up")
     # A sweep that missed days takes the highest rung only: one message, not three.
-    assert cfu.late_step(row, due + timedelta(days=5)) == (3, "reassign_asked")
+    assert cfu.late_step(row, due + timedelta(days=5)) == (3, "next_up")
     assert cfu.late_step(dict(row, status="done"), due + timedelta(days=5)) is None
 
 
@@ -451,20 +451,44 @@ def test_the_sweep_tells_the_leader_once_and_the_office_when_there_is_no_one(db,
     assert len(outbox["email"]) == 1 and len(outbox["alert"]) == 1, "each told once"
 
 
-def test_the_sweep_climbs_the_ladder_one_message_per_rung(db, outbox):
+def test_the_sweep_climbs_the_leaders_own_chain_one_message_per_rung(db, outbox):
+    """Canvas board 5: a Hospitality sign-up late with Tasha goes to the
+    Welcome Team lead (Hospitality is under that role) a day late, and three
+    days late one more step up: the Associate Pastor holds no one, so it's
+    passed over to the Lead Pastor, who is asked to hand them on."""
+    import church_roles
+    church_roles.ensure_library({"id": BIZ, "name": "Love City Church"})   # the office opened Leaders & roles
     f = _open(db)
     asyncio.run(cfu.sweep())                       # told
     row = db.t["church_follow_ups"][0]
     due = cfu._parse(row["due_at"])
-    for days, want in ((0, "nudged"), (1, "pastors_told"), (3, "reassign_asked")):
+    for days, want in ((0, "nudged"), (1, "overseer_told"), (3, "next_up")):
         asyncio.run(cfu.sweep(now=due + timedelta(days=days, hours=1)))
-        assert row["late_level"] == {"nudged": 1, "pastors_told": 2, "reassign_asked": 3}[want]
-    subjects = [s for _, s, _ in outbox["email"]]
-    assert subjects == ["Dana Rivers is yours to follow up", "Dana Rivers is waiting to hear from you",
-                        "Dana Rivers hasn’t been reached"]          # the nudge to Tasha, then the pastor
+        assert row["late_level"] == {"nudged": 1, "overseer_told": 2, "next_up": 3}[want]
+    sent = [(to, s) for to, s, _ in outbox["email"]]
+    assert sent == [("tasha@example.com", "Dana Rivers is yours to follow up"),
+                    ("tasha@example.com", "Dana Rivers is waiting to hear from you"),
+                    ("robert@example.com", "Dana Rivers hasn’t been reached"),
+                    ("kevin@example.com", "Hand Dana Rivers to someone else?")]
     assert [t for t, _ in outbox["alert"]] == ["Dana Rivers hasn’t been reached", "Hand Dana Rivers to someone else?"]
     kinds = [n["kind"] for n in db.t["church_follow_up_notes"] if n["follow_up_id"] == f["id"]]
-    assert kinds.count("nudged") == kinds.count("pastors_told") == kinds.count("reassign_asked") == 1
+    assert kinds.count("nudged") == kinds.count("overseer_told") == kinds.count("next_up") == 1
+    told = next(n["body"] for n in db.t["church_follow_up_notes"] if n["kind"] == "overseer_told")
+    assert "Robert Hayes" in told
+
+
+def test_before_the_library_is_filled_a_late_step_goes_to_the_pastor(db, outbox):
+    """A church that never opened Leaders & roles has only the first
+    version's roles, none answering to another: a day late, the pastor."""
+    _open(db)
+    asyncio.run(cfu.sweep())
+    row = db.t["church_follow_ups"][0]
+    due = cfu._parse(row["due_at"])
+    asyncio.run(cfu.sweep(now=due + timedelta(hours=1)))
+    asyncio.run(cfu.sweep(now=due + timedelta(days=1, hours=1)))
+    assert row["late_level"] == 2
+    assert [(to, s) for to, s, _ in outbox["email"]][-1] == ("kevin@example.com", "Dana Rivers hasn’t been reached")
+    assert db.t.get("church_role_defs", []) == [], "a card never fills the library"
 
 
 def test_a_failed_email_is_not_recorded_as_said_and_is_tried_again(db, outbox, monkeypatch):
@@ -512,7 +536,7 @@ def test_a_sweep_that_cannot_read_the_roles_sends_nothing(db, outbox, monkeypatc
 def test_removing_a_leaders_last_role_returns_their_people_to_the_office(db, outbox):
     f = _open(db)
     tasha_role = next(r for r in db.t["church_leader_roles"] if r["contact_id"] == TASHA)
-    assert cfu.remove_role(BIZ, tasha_role["id"]) == {"returned": 1}
+    assert cfu.remove_role(BIZ, tasha_role["id"]) == {"returned": 1, "prayer_returned": 0}
     row = cfu._one(BIZ, f["id"])
     assert row["leader_contact_id"] is None and row["leader_told_at"] is None
     assert "no longer leads" in row["reason"]
@@ -580,7 +604,9 @@ def test_asking_a_member_to_lead_emails_them_once(office, db):
     assert again.json()["already"] is True and office.sent == ["Dana Rivers"]
     leaders = office.get(f"/church/leaders?business_id={BIZ}").json()
     assert leaders["teams"] == ["Youth Ministry (YWD)", "Hospitality Team", "Graphic and web design"]
-    assert "care_team" not in leaders["role_labels"], "a role that does nothing yet is not offered"
+    team = next(r for r in leaders["roles"] if r["key"] == "team_leader")
+    assert [(h["name"], h["status"], h["scope"]) for h in team["holders"] if h["name"] == "Dana Rivers"] == \
+        [("Dana Rivers", "invited", "Hospitality Team")]
 
 
 def test_a_role_must_be_one_we_know_and_a_team_leader_names_the_team(office):

@@ -7,12 +7,22 @@ group?" and "how many were online Sunday?" had no answer but a guess.
 One read verb, `church_people`, answers them from church_reads — the same
 functions the Home desk reads, so Chief and the desk never disagree.
 
-    section = first_time | groups | attendance | care   (default: overview)
+    section = first_time | groups | attendance | care | leaders   (default: overview)
 
 `care` is the one gated part: the Prayer & care inbox and children's
 check-in, as COUNTS only (never a request's words or a child's name), and
 only for the owner or a manager. Anywhere the caller isn't known — an
 outside agent, a background run — it is refused, not guessed.
+
+`leaders` is the role library (church_roles, Kevin 2026-10-17: "helps chief
+know the role and what information each role should get"): the church
+type, each role's title, job, who holds it, who it answers to, what it is
+handed and its definition, and which teams have no leader. Leaders' names
+only; never a prayer request, a card's answers or giving.
+
+`draft_church_role` writes one thing: a DRAFT role the owner asked for
+("add a Church Mother role"). A draft hands nobody anything until the owner
+saves it on Leaders & roles.
 
 Handlers return `result` AND `label` per the house contract.
 """
@@ -23,7 +33,7 @@ from typing import Any, Dict, List, Optional
 
 import church_reads
 
-SECTIONS = ("overview", "first_time", "groups", "attendance", "care")
+SECTIONS = ("overview", "first_time", "groups", "attendance", "care", "leaders")
 _CARE_ROLES = {"owner", "admin", "manager"}
 
 
@@ -116,6 +126,14 @@ async def handle_church_people(client, biz, action) -> Dict[str, Any]:
 
     lines: List[str] = []
 
+    if section == "leaders":
+        import church_roles
+        got = await asyncio.to_thread(church_roles.chief_lines, biz)
+        if got is None:
+            return _fail("church_people", "the church's roles couldn't be read right now")
+        return {"type": "church_people", "section": "leaders", "result": "\n".join(got),
+                "label": "Leaders & roles"}
+
     if section == "care":
         role = await asyncio.to_thread(_caller_role, business_id)
         if role not in _CARE_ROLES:
@@ -149,3 +167,32 @@ async def handle_church_people(client, biz, action) -> Dict[str, Any]:
              "groups": "Groups", "attendance": "Attendance"}[section]
     return {"type": "church_people", "section": section,
             "result": "\n".join(lines), "label": label}
+
+
+async def handle_draft_church_role(client, biz, action) -> Dict[str, Any]:
+    """Chief drafts a role the owner asked for. Nothing changes until the
+    owner saves it on Leaders & roles; the receipt says so and opens it."""
+    business_id = str(biz.get("id") or "")
+    if not business_id:
+        return _fail("draft_church_role", "no business on record")
+    import church_follow_up
+    if not church_follow_up.is_church(biz):
+        return _fail("draft_church_role", "roles are for churches")
+    title = " ".join(str(action.get("title") or "").split())[:80]
+    if not title:
+        return _fail("draft_church_role", "name the role to draft")
+    import church_roles
+    from fastapi import HTTPException
+    try:
+        row = await asyncio.to_thread(church_roles.chief_draft, biz, title, str(action.get("job") or ""),
+                                      str(action.get("definition") or ""))
+    except HTTPException as e:
+        return _fail("draft_church_role", str(e.detail))
+    job = church_roles.JOBS.get(row.get("job") or "", {}).get("label", "")
+    return {"type": "draft_church_role", "role_id": str(row.get("id") or ""),
+            "result": (f"Drafted the role “{row.get('title')}” on the {job} job, answering to the senior role. "
+                       f"Its definition: {row.get('definition') or ''} It hands nobody anything until the owner "
+                       "saves it on Operate → Leaders & roles, where they can change the job, the definition and "
+                       "who it answers to."),
+            "label": f"Drafted “{row.get('title')}”",
+            "nav": {"tab": "operate", "sub": "leaders"}}

@@ -190,8 +190,10 @@ BUSINESS_CHILD_TABLES: List[str] = [
     # approvals (with background-check dates); before contacts.
     "space_posts", "space_leaders",
     # Leaders & follow-up: notes before their follow-up; follow-ups and
-    # the leaders' roles before contacts.
+    # the leaders' roles before contacts. The role library (each role's
+    # title, job and chain) and its settings name no contact.
     "church_follow_up_notes", "church_follow_ups", "church_leader_roles",
+    "church_role_defs", "church_role_settings",
     "child_care_notes", "household_pickups", "children", "household_adults", "households",
     "chief_errand_events", "chief_errands",  # preserve history; events before errands
     "agent_assignments",      # before connected_agents (foreign key)
@@ -713,7 +715,10 @@ _IMPORT_SKIP = {
     "space_leaders", "space_posts",
     # Leaders & follow-up cite people (the person, the leader) and each
     # other by id; same reason. A restored church names its leaders again.
+    # Its roles cite each other (the chain) and a class by id; a restored
+    # church's library fills again the first time Leaders & roles opens.
     "church_follow_up_notes", "church_follow_ups", "church_leader_roles",
+    "church_role_defs", "church_role_settings",
     # A texting number belongs to the provider account that bought it;
     # a restored business provisions its own. Auditor links and push
     # subscriptions are credentials and devices, not records. The

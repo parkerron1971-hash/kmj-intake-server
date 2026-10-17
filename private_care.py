@@ -18,6 +18,10 @@ STATUSES = ("new", "reviewed", "closed")
 NOTE_MAX = 4000
 _FIELDS = ("id,created_at,status,submission,contact_id,prayed_at,status_changed_at,"
            "assigned_to,assigned_at")
+# How a request went through the prayer team (church_prayer,
+# APPLY-2026-10-17-church-role-library.sql): read with the rest when the
+# columns are there, and left out (the list still loads) when they aren't.
+_PRAYER_FIELDS = ",prayer_team,wants_call,needs_pastor,leader_contact_id,leader_role,leader_prayed_at,leader_noted_at"
 _LEGACY_FIELDS = "id,created_at,status,submission"
 
 def needs_private_care(form, data):
@@ -30,12 +34,17 @@ def needs_private_care(form, data):
             or any(str(k).lower() in ("prayer_request", "pastoral_care") and v for k, v in data.items()))
 
 def save_submission(business_id, form_id, data):
+    """A private care form. A form that asks "may our prayer team pray with
+    you?" (a field named prayer_team) shares the request when the person
+    said yes; everything else stays with the owner, as always."""
+    import church_prayer
     rows = sb_clients.sb_post_as_service("/ministry_care_requests", {
         "business_id": business_id, "form_id": form_id, "submission": data,
-        "status": "new",
+        "status": "new", **church_prayer.consent_columns(data or {}),
     })
     if not isinstance(rows, list) or not rows:
         raise HTTPException(503, "Your private request could not be saved. Please retry.")
+    church_prayer.on_new(str(business_id), rows[0])
     return {"success": True, "contact_id": None, "queued": False,
             "private": True, "message": "Your request was saved privately for the ministry owner."}
 
@@ -117,7 +126,10 @@ def list_requests(business_id: str, caller: Optional[CareCaller] = None) -> Dict
     base = f"/ministry_care_requests?business_id=eq.{biz}&order=created_at.desc&limit=100"
     if mine:
         base += f"&assigned_to=eq.{_uuid(caller.user_id, 'user')}"
-    rows = sb_clients.sb_get_as_service(f"{base}&select={_FIELDS}")
+    rows = sb_clients.sb_get_as_service(f"{base}&select={_FIELDS}{_PRAYER_FIELDS}")
+    prayer = isinstance(rows, list)
+    if not prayer:
+        rows = sb_clients.sb_get_as_service(f"{base}&select={_FIELDS}")
     if not isinstance(rows, list):
         if mine:
             # Without the assignment column nothing can have been handed
@@ -140,6 +152,13 @@ def list_requests(business_id: str, caller: Optional[CareCaller] = None) -> Dict
         for n in found if isinstance(found, list) else []:
             notes.setdefault(str(n.get("request_id")), []).append(
                 {k: n.get(k) for k in ("id", "body", "created_at", "author_id")})
+    if prayer:
+        # Who on the prayer team has it, and whether they prayed and wrote.
+        try:
+            import church_prayer
+            rows = church_prayer.office_fields(rows, biz)
+        except Exception:
+            pass
     return {"requests": [dict(r, notes=notes.get(str(r.get("id")), [])) for r in rows],
             "actions": True, "scope": "assigned" if mine else "all",
             "team": [] if mine else _team(biz)}

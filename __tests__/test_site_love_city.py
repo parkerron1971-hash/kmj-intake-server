@@ -547,11 +547,16 @@ def _context(browser, pages, **kw):
     return ctx
 
 
-def _send_prayer(page, response):
+SHARE_TEAM = '[name="share"][value="Our prayer team may pray over this with me"]'
+SHARE_PASTORS = '[name="share"][value="Keep this with the pastors only"]'
+
+
+def _send_prayer(page, response, share=SHARE_TEAM):
     page.evaluate("r => { window.__respond = r; }", response)
     page.fill("#pr-request", "Please pray for my mother's surgery on Friday.")
     page.fill("#pr-first", "Ann")
     page.fill("#pr-email", "ann@example.org")
+    page.check(share)                       # "Who prays with you?" is required
     page.click('[data-church-form="prayer-request"] button[type="submit"]')
     note = page.locator('[data-church-form="prayer-request"] [data-form-note]')
     page.wait_for_function("el => el.textContent && el.textContent !== 'Sending…'", arg=note.element_handle())
@@ -670,7 +675,8 @@ def test_structured_forms_succeed_when_saved_without_notification(browser, pages
         page.check("#pr-follow")
         note = _send_prayer(page, response)
         expected = {"request": "Please pray for my mother's surgery on Friday.",
-                    "first_name": "Ann", "follow_up": True}
+                    "first_name": "Ann", "follow_up": True,
+                    "share": "Our prayer team may pray over this with me"}
         empty_field = "#pr-request"
     else:
         page.evaluate("r => { window.__respond = r; }", response)

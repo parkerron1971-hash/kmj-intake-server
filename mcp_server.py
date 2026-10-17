@@ -343,11 +343,14 @@ TOOL_SCHEMAS: Dict[str, Tuple[str, Dict[str, Any]]] = {
         "last 3 meetings. section=attendance: each recent service's named "
         "check-ins in person and online, first-timers and counted heads. "
         "section=care: Prayer & care and children's check-in as counts only, "
-        "for the owner or a manager. Default overview = first_time + groups "
-        "+ attendance. Call it before answering any of these; never estimate.",
+        "for the owner or a manager. section=leaders: the church's roles "
+        "(each its title on a job), who holds each, who each answers to, what "
+        "each is handed, and which teams have no leader. Default overview = "
+        "first_time + groups + attendance. Call it before answering any of "
+        "these; never estimate.",
         _obj({"section": {
             "type": "string",
-            "enum": ["overview", "first_time", "groups", "attendance", "care"],
+            "enum": ["overview", "first_time", "groups", "attendance", "care", "leaders"],
             "description": "Which part. Default overview."}})),
     "sms_status": (
         "Whether texting is actually working for this business: the keyword "

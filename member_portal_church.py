@@ -283,19 +283,29 @@ def member_rsvp(business_id: str, me: Dict[str, Any], entry_id: str, action: str
 # ─── Prayer and details ──────────────────────────────────────────────
 
 
-def save_prayer(business_id: str, me: Dict[str, Any], text: str, confidential: bool, youth: bool = False) -> bool:
+def save_prayer(business_id: str, me: Dict[str, Any], text: str, confidential: bool, youth: bool = False,
+                wants_call: bool = False) -> bool:
+    """A prayer request from the member page. `confidential` keeps it with
+    the pastors; otherwise the person agreed to share it with the prayer
+    team (church_prayer hands it to a member who leads prayer). A youth
+    request is always the pastors'."""
+    import church_prayer
     text = (text or "").strip()[:PRAYER_MAX]
+    submission = {
+        "name": (me.get("name") or "").strip(), "email": me.get("email") or "",
+        "phone": me.get("phone") or "", "prayer_request": text,
+        "confidential": "yes" if confidential or youth else "no",
+        "source": "Member page, Youth" if youth else "Member page",
+    }
     rows = sb_clients.sb_post_as_service("/ministry_care_requests", {
         "business_id": str(business_id), "form_id": None, "contact_id": str(me["id"]),
-        "status": "new",
-        "submission": {
-            "name": (me.get("name") or "").strip(), "email": me.get("email") or "",
-            "phone": me.get("phone") or "", "prayer_request": text,
-            "confidential": "yes" if confidential else "no",
-            "source": "Member page, Youth" if youth else "Member page",
-        },
+        "status": "new", "submission": submission,
+        **church_prayer.consent_columns(submission, share=not (confidential or youth), wants_call=wants_call),
     })
-    return isinstance(rows, list) and bool(rows)
+    if isinstance(rows, list) and rows:
+        church_prayer.on_new(str(business_id), rows[0])
+        return True
+    return False
 
 
 def load_me(business_id: str, contact_id: str) -> Optional[Dict[str, Any]]:
@@ -666,14 +676,19 @@ def render_prayer(biz, site, request: Request, who: Optional[Dict[str, Any]] = N
     heading = "Talk to a youth leader" if youth else "How can we pray for you?"
     return _shell(biz, site, "Prayer", f"""
 <div class="mb-lt"><h1>{heading}</h1></div>
-<p class="mb-sub" style="margin-bottom:18px">Your request goes privately to the pastors at {church}. It isn't posted anywhere or shared with other members.</p>
+<p class="mb-sub" style="margin-bottom:18px">{'Your request goes privately to the pastors at ' + church + '. It isn’t posted anywhere or shared with other members.' if youth else 'The pastors at ' + church + ' see every request. If you choose, our prayer team prays over it with you too. Nothing is ever posted.'}</p>
 {_flash(request)}
 <form class="mp-form" method="post" action="/my/prayer">
   {'<input type="hidden" name="for" value="youth">' if youth else ''}
   <label class="mp-sr" for="mp-prayer">Your prayer request</label>
   <textarea class="mp-input mp-text" id="mp-prayer" name="request" rows="7" maxlength="{PRAYER_MAX}" placeholder="Your prayer request" required></textarea>
-  <label class="mp-check" style="margin:6px 0 8px"><input type="checkbox" name="confidential" value="yes"> Keep this between me and the pastor</label>
-  <button class="mp-go" type="submit">Send privately</button>
+  {'' if youth else '''<fieldset class="mp-choice" style="border:0;padding:0;margin:10px 0 4px">
+    <legend style="font-weight:600;margin-bottom:6px">Who prays with you?</legend>
+    <label class="mp-check" style="margin:4px 0"><input type="radio" name="share" value="team" required> Our prayer team may pray over this with you</label>
+    <label class="mp-check" style="margin:4px 0"><input type="radio" name="share" value="pastors"> Keep this with the pastors only</label>
+  </fieldset>
+  <label class="mp-check" style="margin:6px 0 8px"><input type="checkbox" name="wants_call" value="yes"> I’d like someone to call me</label>'''}
+  <button class="mp-go" type="submit">Send</button>
 </form>""", tab="home", who=who, back=("/my", "Home"))
 
 
@@ -932,8 +947,11 @@ async def prayer(request: Request):
     if not _allowed(church, me):
         return _back("/my/prayer", err="slow")
     full = await asyncio.to_thread(load_me, church["business"]["id"], me["id"]) or me
+    # Shared with the prayer team only when they chose it; an older form
+    # (or none chosen) stays with the pastors.
     ok = await asyncio.to_thread(save_prayer, church["business"]["id"], full, text,
-                                 str(form.get("confidential") or "") == "yes", str(form.get("for") or "") == "youth")
+                                 str(form.get("share") or "") != "team", str(form.get("for") or "") == "youth",
+                                 str(form.get("wants_call") or "") == "yes")
     return _back("/my", done="prayer") if ok else _back("/my/prayer", err="error")
 
 

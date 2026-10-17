@@ -5,19 +5,24 @@ and assign them to a person to be able to work on. Leader, minister etc...
 chief … assigned them properly … inserted into a workflow so no person
 gets left behind." Design canvas LG4Q97HqtEM4ByyXmmSrCP; "build it".
 
-    a member holds a role ............ church_leader_roles
+    a member holds a role ............ church_leader_roles (the role is the
+                                       church's own: church_roles, its title
+                                       on a job)
     a card comes in .................. on_intake_form / on_connect_card
-      → Chief picks the leader ....... choose() — the roles and the answers
+      → Chief picks the leader ....... choose() — the church's roles, what
+                                       each job takes, and the answers
       → a follow-up with a path ...... church_follow_ups (steps + a clock)
     the leader works it .............. leader_* (member page, Lead tab)
     the office sees it all ........... board / reassign / office_note
     nobody waits ..................... sweep(): tell the leader, then on the
-                                       day a nudge, a day late the pastors,
-                                       three days late "hand them on?"
+                                       day a nudge, a day late the role they
+                                       answer to, three days late one more
+                                       step up (the chain, church_roles)
 
 Chief assigns on its own (Kevin's pick over suggest-and-confirm): the rules
 are the church's roles and what the person wrote. It never reads a prayer
-request: private care forms stop in intake before they reach here.
+request: private care forms stop in intake before they reach here (prayer
+shared with the prayer team is church_prayer's).
 
 The tables are server-only (APPLY-2026-10-17-church-leaders.sql); this
 module is the one door to them, through the service role, always scoped
@@ -39,9 +44,9 @@ import sb_clients
 
 logger = logging.getLogger(__name__)
 
-# Roles a member can hold today. care_team and class_teacher are in the
-# table's check for what comes next (prayer handed to leaders; classes
-# told who finished a path) and are not offered until they do something.
+# The four roles of the first version. A church's roles are now its own
+# (church_roles: its title on a job); these are the names its holders'
+# keys fall back to before its library is filled.
 ROLE_LABELS: Dict[str, str] = {
     "pastor": "Pastor",
     "baptism_minister": "Baptism minister",
@@ -88,8 +93,11 @@ PATHS: Dict[str, List[Dict[str, Any]]] = {
     ],
 }
 
-# The late ladder: (days past due, level, note kind).
-LATE_LADDER = ((0, 1, "nudged"), (1, 2, "pastors_told"), (3, 3, "reassign_asked"))
+# The late ladder: (days past due, level, note kind). On the day the leader
+# is reminded; a day late the role they answer to is told; three days late
+# one more step up (Kevin, 2026-10-17: "up the chain"). An empty role is
+# passed over, and at the top the senior role is asked to hand them on.
+LATE_LADDER = ((0, 1, "nudged"), (1, 2, "overseer_told"), (3, 3, "next_up"))
 
 # Answers that are who they are, not what they said: the contact holds those.
 _IDENTITY = re.compile(r"^(your )?(full |first |last )?(name|e-?mail( address)?|phone( number)?|mobile|website)$")
@@ -238,6 +246,48 @@ def _holders(roles: Iterable[Dict[str, Any]], role: str, load: Dict[str, int],
     return sorted(found, key=lambda r: (load.get(str(r["contact_id"]), 0), _norm(r.get("name") or "")))
 
 
+_PASTOR_ASK = re.compile(r"talk (with|to) a pastor|pastoral care")
+# Whole words only: "Hospitality Team" is a team, not a hospital.
+_CARE_NEED = re.compile(r"\b(hospital|hospitali[sz]ed|in the hospital|surgery|sick|illness|cancer|grief|grieving|"
+                        r"funeral|bereaved|bereavement|meal|meals|homebound|shut[- ]?in|benevolence|"
+                        r"need food|visit me)\b")
+
+
+def stream_for(kind: str, answers: List[Dict[str, str]]) -> Tuple[str, str]:
+    """(stream, why): what a card asks for, in the words the reason uses.
+    Asking for a pastor comes first. A Baptism, Serve or Plan your visit
+    card is its own kind. On a connect card (or a card with no kind) a care
+    need, in the person's words, comes before the card's kind; anything
+    else is what no one else holds."""
+    text = " · ".join(_norm(a["a"]) for a in answers)
+    if _PASTOR_ASK.search(text):
+        return "pastor_ask", ("They asked to talk with a pastor." if "pastoral care" not in text
+                              else "They asked for pastoral care.")
+    if kind in ("baptism", "serve", "visit"):
+        return kind, ""
+    if _CARE_NEED.search(text):
+        return "care_need", "Their card mentions a care need."
+    if kind == "connect":
+        return "connect", ""
+    return "leftover", "Cards without their own leader go to the senior pastor."
+
+
+def _effective_defs(all_defs: Optional[List[Dict[str, Any]]], roles: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """The church's roles, plus the first version's four for any key its
+    holders carry that its library doesn't have yet (a church whose page
+    was never opened still routes as it did)."""
+    import church_roles as cr
+    out = list(all_defs or [])
+    have = {d["key"] for d in out}
+    for k in sorted({str(r.get("role") or "") for r in roles}):
+        if k and k not in have and k in cr.LEGACY:
+            leg = cr.LEGACY[k]
+            out.append({"id": f"legacy:{k}", "key": k, "title": leg["title"], "job": leg["job"],
+                        "covers": leg["covers"], "reports_to": None, "oversees_teams": [],
+                        "handles": cr.clean_handles(leg["job"], leg["handles"]), "sees": [], "status": "active"})
+    return out
+
+
 def _team_answer(answers: List[Dict[str, str]]) -> str:
     for a in answers:
         q = _norm(a["q"])
@@ -246,44 +296,96 @@ def _team_answer(answers: List[Dict[str, str]]) -> str:
     return ""
 
 
+_STREAM_WORDS = {"baptism": "Baptism cards", "visit": "Plan your visit cards", "connect": "Connect cards",
+                 "pastor_ask": "Those", "care_need": "Care needs"}
+
+
 def choose(kind: str, answers: List[Dict[str, str]], roles: List[Dict[str, Any]],
-           load: Optional[Dict[str, int]] = None) -> Dict[str, Any]:
-    """{leader: role row or None, role, reason}. The reason is said to the
-    leader and shown to the office, so it names what decided it."""
+           load: Optional[Dict[str, int]] = None, all_defs: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+    """{leader: holder row or None, role: its key, reason}. The church's own
+    roles decide: the ones whose job takes what the card asks for (its
+    stream), the holder with the fewest open follow-ups first. A team's
+    sign-up goes to its leader, else the role with the team under it, else
+    up the chain. Nobody for it: the senior role, else the office. The
+    reason is said to the leader and shown to the office, so it names what
+    decided it."""
+    import church_roles as cr
     load = load or {}
-    text = " · ".join(_norm(a["a"]) for a in answers)
-    pastors = _holders(roles, "pastor", load)
+    defs = _effective_defs(all_defs, roles)
+    held = [r for r in roles if r.get("status") == "active"]
+    stream, why = stream_for(kind, answers)
 
-    def to(rows: List[Dict[str, Any]], role: str, reason: str) -> Dict[str, Any]:
-        return {"leader": rows[0], "role": role, "reason": reason}
+    def best(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        return sorted(rows, key=lambda r: (load.get(str(r["contact_id"]), 0), _norm(r.get("name") or "")))
 
-    def fallback(why: str) -> Dict[str, Any]:
-        if pastors:
-            return to(pastors, "pastor", f"{why} It’s with {pastors[0].get('name') or 'the pastor'} until someone is named.")
-        return {"leader": None, "role": "", "reason": f"{why} No one is named Pastor yet, so it’s with the office."}
+    def to(rows: List[Dict[str, Any]], reason: str) -> Dict[str, Any]:
+        pick = best(rows)[0]
+        return {"leader": pick, "role": pick["role"], "reason": reason}
 
-    if re.search(r"talk (with|to) a pastor", text) or "pastoral care" in text:
-        why = "They asked to talk with a pastor." if "pastor" in text and "pastoral care" not in text else "They asked for pastoral care."
-        return to(pastors, "pastor", why) if pastors else fallback(why)
-    if kind == "baptism":
-        rows = _holders(roles, "baptism_minister", load)
-        return to(rows, "baptism_minister", "Baptism cards go to the baptism minister.") if rows else \
-            fallback("No one holds the baptism minister role yet.")
-    if kind == "serve":
+    seniors = [d for d in defs if d["job"] == "senior" and d.get("status", "active") == "active"]
+    top = [r for r in held if r["role"] in {d["key"] for d in seniors}]
+    senior_title = seniors[0]["title"] if seniors else "Pastor"
+
+    def fallback(said: str) -> Dict[str, Any]:
+        if top:
+            return to(top, f"{said} It’s with {best(top)[0].get('name') or 'the pastor'} until someone is named.")
+        return {"leader": None, "role": "",
+                "reason": f"{said} No one is named {senior_title} yet, so it’s with the office."}
+
+    def takers(s: str, team: str = "") -> List[Tuple[Dict[str, Any], List[Dict[str, Any]]]]:
+        out = []
+        for d in defs:
+            if d.get("status", "active") != "active" or s not in (d.get("handles") or []):
+                continue
+            if s == "serve" and d.get("covers") == "team":
+                rows = [r for r in held if r["role"] == d["key"] and _norm(r.get("scope") or "") == _norm(team)]
+            elif s == "serve":
+                if not any(_norm(t) == _norm(team) for t in d.get("oversees_teams") or []):
+                    continue
+                rows = [r for r in held if r["role"] == d["key"]]
+            else:
+                rows = [r for r in held if r["role"] == d["key"]]
+            if rows:
+                out.append((d, rows))
+        return out
+
+    if stream == "serve":
         team = _team_answer(answers)
         if not team:
             return fallback("They didn’t pick a team.")
-        rows = _holders(roles, "team_leader", load, scope=team)
-        if rows:
-            return to(rows, "team_leader", f"They picked {team}, and {first_name(rows[0].get('name') or '')} leads it.")
+        leads = [t for t in takers("serve", team) if t[0].get("covers") == "team"]
+        if leads:
+            rows = [r for _d, rs in leads for r in rs]
+            return to(rows, f"They picked {team}, and {first_name(best(rows)[0].get('name') or '')} leads it.")
+        over = takers("serve", team)
+        if over:
+            d, rows = over[0]
+            return to(rows, f"They picked {team}, which has no leader yet; it’s under the {d['title']}.")
+        team_role = next((d for d in defs if d.get("covers") == "team" and d["job"] == "team"), None)
+        up = cr.chain_above(team_role, defs,
+                            cr.active_holders(held), team=team) if team_role else []
+        up = [(d, rows) for d, rows in up if d["job"] != "senior"]
+        if up:
+            d, rows = up[0]
+            return to(rows, f"{team} has no leader yet, so it goes to the {d['title']}.")
         return fallback(f"{team} has no leader yet.")
-    if kind in ("visit", "connect"):
-        rows = _holders(roles, "welcome_lead", load)
-        what = "Plan your visit cards" if kind == "visit" else "Connect cards"
-        return to(rows, "welcome_lead", f"{what} go to the Welcome Team lead.") if rows else \
-            fallback("No one holds the Welcome Team lead role yet.")
-    return to(pastors, "pastor", "Cards without their own leader go to the pastor.") if pastors else \
-        {"leader": None, "role": "", "reason": "No one is named Pastor yet, so it’s with the office."}
+    if stream == "leftover":
+        return to(top, why) if top else {"leader": None, "role": "",
+                                         "reason": f"No one is named {senior_title} yet, so it’s with the office."}
+    found = takers(stream)
+    if found:
+        # The role made for this (handling the fewest streams) before a
+        # broader one: a Baptism minister before Ministers who also take
+        # pastor requests, a Welcome Team lead before a pastor.
+        word = stream.split("_")[0][:6]
+        found.sort(key=lambda t: (t[0]["job"] == "senior", len(t[0].get("handles") or []),
+                                  word not in (t[0]["key"] + " " + t[0]["title"].casefold())))
+        d, rows = found[0]
+        if stream == "pastor_ask":
+            return to(rows, why)
+        what = _STREAM_WORDS.get(stream, "Those")
+        return to(rows, f"{why} {what} go to the {d['title']}." if why else f"{what} go to the {d['title']}.")
+    return fallback(why or f"No one holds a role that takes {_STREAM_WORDS.get(stream, 'these').lower()} yet.")
 
 
 # ─── Reads ────────────────────────────────────────────────────────────
@@ -304,7 +406,7 @@ def roles(business_id: str) -> Optional[List[Dict[str, Any]]]:
     """Every role row, with the member's name, email and phone."""
     biz = str(business_id)
     rows = _rows(f"/church_leader_roles?business_id=eq.{_q(biz)}&status=neq.declined"
-                 "&select=id,contact_id,role,scope,status,invited_at,answered_at&order=invited_at.asc")
+                 "&select=id,contact_id,role,scope,status,invited_at,answered_at,term_ends_at&order=invited_at.asc")
     if rows is None:
         return None
     people = _contacts(biz, (r["contact_id"] for r in rows))
@@ -396,11 +498,15 @@ def start(business_id: str, contact_id: str, *, card_key: str, card_name: str, k
             _note(biz, str(open_one[0]["id"]), "chief", "note",
                   "Filled in the card again." + (f" {said}" if said else ""))
             return None
-        all_roles, load = roles(biz), _load(biz)
-        if all_roles is None or load is None:
+        # The church's roles as they stand. A card never fills the library
+        # (the office's first visit to Leaders & roles does); before then
+        # the first version's roles its holders carry decide, as they did.
+        import church_roles as cr
+        all_roles, load, all_defs = roles(biz), _load(biz), cr.defs(biz)
+        if all_roles is None or load is None or all_defs is None:
             logger.warning("church follow-up skipped: roles could not be read (business %s)", biz[:8])
             return None
-        pick = choose(kind, answers, all_roles, load)
+        pick = choose(kind, answers, all_roles, load, all_defs)
         steps = PATHS.get(kind) or PATHS["general"]
         now = _now()
         leader = pick["leader"]
@@ -557,8 +663,13 @@ def board(business_id: str, *, done_days: int = 30) -> Optional[Dict[str, Any]]:
     notes = _notes_for(biz, [str(r["id"]) for r in rows])
     if people is None or notes is None:
         return None
+    import church_roles as cr
+    all_defs = cr.defs(biz) or []
     role_of = {r["contact_id"]: r["role"] for r in all_roles if r["status"] == "active"}
     items = [_view(r, people, notes.get(str(r["id"]), []), role_of, now) for r in rows]
+    for i in items:
+        if i["leader"]:
+            i["leader"]["role_title"] = cr.title_of(i["leader"]["role"], all_defs)
     live = [i for i in items if i["status"] in ("open", "handed_back")]
     load: Dict[str, Dict[str, Any]] = {}
     for r in all_roles:
@@ -566,7 +677,7 @@ def board(business_id: str, *, done_days: int = 30) -> Optional[Dict[str, Any]]:
             continue
         e = load.setdefault(r["contact_id"], {"contact_id": r["contact_id"], "name": r["name"],
                                               "initials": initials(r["name"]), "roles": [], "open": 0})
-        e["roles"].append({"role": r["role"], "label": ROLE_LABELS.get(r["role"], r["role"]), "scope": r["scope"]})
+        e["roles"].append({"role": r["role"], "label": cr.title_of(r["role"], all_defs), "scope": r["scope"]})
     for i in live:
         if i["leader"] and i["leader"]["id"] in load and i["status"] == "open":
             load[i["leader"]["id"]]["open"] += 1
@@ -644,20 +755,54 @@ def close(business_id: str, follow_up_id: str, *, by_user: str, by_name: str = "
 
 # ─── Roles ────────────────────────────────────────────────────────────
 
+def _role_def(biz: str, role: str) -> Dict[str, Any]:
+    """The church's role a request names, by its id or its key."""
+    import church_roles as cr
+    all_defs = cr.defs(biz, with_drafts=True)
+    if all_defs is None:
+        raise HTTPException(503, "That couldn’t be checked. Try again in a moment.")
+    d = next((x for x in all_defs if x["id"] == str(role) or x["key"] == str(role)), None)
+    if not d and str(role) in cr.LEGACY:
+        leg = cr.LEGACY[str(role)]
+        d = {"id": "", "key": leg["key"], "title": leg["title"], "job": leg["job"], "covers": leg["covers"],
+             "definition": cr.definition_for(leg["job"], leg["title"]), "status": "active",
+             "term_months": None, "needs_class": None, "reports_to": None}
+    if not d:
+        raise HTTPException(400, "That isn’t one of your roles")
+    d["reports_to_title"] = next((x["title"] for x in all_defs if x["id"] == d.get("reports_to")), "")
+    return d
+
+
 def add_role(business_id: str, contact_id: str, role: str, scope: str = "", *, by_user: str) -> Dict[str, Any]:
-    """Ask a member to take a role. It starts 'invited'; the member says
-    yes on their member page. A declined role asked again is asked again."""
+    """Ask a member to take a role (the church's role, by id or key). It
+    starts 'invited'; the member says yes on their member page. A declined
+    role asked again is asked again."""
     biz, cid = _uid(business_id, "business"), _uid(contact_id, "member")
-    if role not in ROLE_LABELS:
-        raise HTTPException(400, "That isn’t one of the roles")
-    scope = _plain(scope)[:120] if role == "team_leader" else ""
-    if role == "team_leader" and not scope:
+    d = _role_def(biz, role)
+    if d.get("status") == "draft":
+        raise HTTPException(400, "That role is a draft. Save it first.")
+    if d["job"] == "office":
+        raise HTTPException(400, "Office roles work with an office login. Give one in Settings → Team.")
+    if d["job"] == "kids":
+        raise HTTPException(400, "Kids and youth leaders are approved on Kids check-in, with their background check.")
+    role = d["key"]
+    scope = _plain(scope)[:120] if d.get("covers") == "team" else ""
+    if d.get("covers") == "team" and not scope:
         raise HTTPException(400, "Pick the team they’ll lead")
     people = _contacts(biz, [cid])
     if people is None:
         raise HTTPException(503, "That couldn’t be checked. Try again in a moment.")
     if cid not in people:
         raise HTTPException(400, "That person isn’t one of your members")
+    if d.get("needs_class"):
+        done = _rows(f"/academy_enrollments?business_id=eq.{_q(biz)}&contact_id=eq.{_q(cid)}"
+                     f"&course_id=eq.{_q(d['needs_class'])}&completed_at=not.is.null&select=id&limit=1")
+        if done is None:
+            raise HTTPException(503, "That couldn’t be checked. Try again in a moment.")
+        if not done:
+            course = _rows(f"/academy_courses?id=eq.{_q(d['needs_class'])}&select=title&limit=1") or [{}]
+            raise HTTPException(400, f"{first_name(people[cid]['name'])} hasn’t finished "
+                                     f"{_plain(course[0].get('title')) or 'the class this role needs'} yet")
     had = _rows(f"/church_leader_roles?business_id=eq.{_q(biz)}&contact_id=eq.{_q(cid)}&role=eq.{_q(role)}"
                 f"&scope=eq.{_q(scope)}&select=*&limit=1")
     if had is None:
@@ -675,36 +820,54 @@ def add_role(business_id: str, contact_id: str, role: str, scope: str = "", *, b
             "status": "invited", "invited_by": by_user, "invited_at": now})
     if not isinstance(rows, list) or not rows:
         raise HTTPException(503, "That didn’t save. Try again.")
-    return {**rows[0], "person": people[cid]}
+    return {**rows[0], "person": people[cid], "def": d}
 
 
 def role_name(role_row: Dict[str, Any]) -> str:
     """What someone is asked to lead, as a sentence says it: "the
-    Hospitality Team", "the Youth Ministry (YWD) team", "Welcome Team lead"."""
+    Hospitality Team", "the Youth Ministry (YWD) team", "Intercessor
+    leader"."""
     scope = _plain(role_row.get("scope"))
-    if role_row.get("role") == "team_leader" and scope:
+    d = role_row.get("def") or {}
+    if (d.get("covers") == "team" or role_row.get("role") == "team_leader") and scope:
         return f"the {scope}" if re.search(r"\bteam\b", scope, re.I) else f"the {scope} team"
-    return ROLE_LABELS.get(role_row.get("role"), "a leader")
+    return d.get("title") or role_row.get("label") or ROLE_LABELS.get(role_row.get("role"), "a leader")
+
+
+def _ask_line(d: Dict[str, Any], what: str, church: str) -> str:
+    """"Will you be Love City's Intercessor leader?" / "Will you lead the
+    Hospitality Team at Love City?" """
+    if d.get("covers") == "team":
+        return f"Will you lead {what} at {church}?"
+    return f"Will you be {church}’s {what}?"
 
 
 async def send_invite(business: Dict[str, Any], role_row: Dict[str, Any]) -> bool:
-    """Email the member that they were asked to lead. Their member page
-    (Lead tab) is where they say yes; they sign in there with a code."""
+    """Email the member that they were asked to lead, with what the role is
+    (its definition, in the church's words) and who they'd answer to.
+    Their member page (Lead tab) is where they say yes, with a code."""
     import asyncio
+    import church_roles as cr
     person = role_row.get("person") or {}
     if not person.get("email"):
         return False
     origin = await asyncio.to_thread(site_origin, str(business["id"]))
     church = _plain(business.get("name")) or "your church"
+    d = role_row.get("def") or {}
     what = role_name(role_row)
-    return await _email(business, person["email"], person.get("name") or "",
-                        f"Will you lead {what} at {church}?",
-                        _mail_html([f"Hi {html.escape(first_name(person.get('name') or ''))},",
-                                    f"{html.escape(church)} asked you to lead <b>{html.escape(what)}</b>.",
-                                    "Say yes on your member page and a Lead tab appears: the people Chief hands to "
-                                    "you, what they wrote on their card, and the next step for each. You sign in "
-                                    "the same way as always, with a code."],
-                                   f"{origin}/my/lead" if origin else "", "See the invitation"),
+    job = cr.JOBS.get(d.get("job") or "", {})
+    lines = [f"Hi {html.escape(first_name(person.get('name') or ''))},",
+             f"{html.escape(church)} asked you to {'lead' if d.get('covers') == 'team' else 'be their'} "
+             f"<b>{html.escape(what)}</b>."]
+    if d.get("definition"):
+        lines.append(f"<i>{html.escape(d['definition'])}</i>")
+    if job:
+        lines.append(f"You’d get: {html.escape(job['gets'])} You’d never see: {html.escape(job['never'])}")
+    if d.get("reports_to_title"):
+        lines.append(f"You’d answer to the {html.escape(d['reports_to_title'])}.")
+    lines.append("Say yes on your member page and a Lead tab appears. You sign in the same way as always, with a code.")
+    return await _email(business, person["email"], person.get("name") or "", _ask_line(d, what, church),
+                        _mail_html(lines, f"{origin}/my/lead" if origin else "", "See the invitation"),
                         f"cfu-invite-{role_row.get('id')}-{role_row.get('invited_at')}")
 
 
@@ -734,7 +897,15 @@ def remove_role(business_id: str, role_id: str) -> Dict[str, Any]:
             {"leader_contact_id": None, "leader_role": "", "leader_told_at": None, "status": "open",
              "reason": f"{who} no longer leads, so they’re with the office.", "updated_at": _iso(_now())})
         _note(biz, str(f["id"]), "chief", "reassigned", f"{who} no longer leads. Back with the office.")
-    return {"returned": len(mine)}
+    # Prayer they hadn't prayed over yet goes back to Prayer & care too.
+    prayers = _rows(f"/ministry_care_requests?business_id=eq.{_q(biz)}&leader_contact_id=eq.{_q(lid)}"
+                    "&leader_prayed_at=is.null&select=id") or []
+    for p in prayers:
+        sb_clients.sb_patch_as_service(
+            f"/ministry_care_requests?id=eq.{_q(p['id'])}&business_id=eq.{_q(biz)}",
+            {"leader_contact_id": None, "leader_role": "", "leader_told_at": None, "leader_due_at": None,
+             "leader_late_level": 0, "updated_at": _iso(_now())})
+    return {"returned": len(mine), "prayer_returned": len(prayers)}
 
 
 # ─── The leader (their member page) ───────────────────────────────────
@@ -745,17 +916,37 @@ def roles_for(business_id: str, contact_id: str) -> Optional[List[Dict[str, Any]
                  "&status=in.(invited,active)&select=id,role,scope,status,invited_at&order=invited_at.asc")
     if rows is None:
         return None
-    return [{**r, "id": str(r["id"]), "label": ROLE_LABELS.get(r["role"], r["role"]), "scope": r.get("scope") or ""}
-            for r in rows]
+    import church_roles as cr
+    all_defs = cr.defs(str(business_id)) or []
+    by = cr.by_key(all_defs)
+    ids = {d["id"]: d for d in all_defs}
+    out = []
+    for r in rows:
+        d = by.get(r["role"]) or {}
+        up = ids.get(d.get("reports_to") or "") if d else None
+        out.append({**r, "id": str(r["id"]), "label": cr.title_of(r["role"], all_defs), "scope": r.get("scope") or "",
+                    "job": d.get("job") or (cr.LEGACY.get(r["role"]) or {}).get("job") or "",
+                    "definition": d.get("definition") or "", "covers": d.get("covers") or "church",
+                    "handles": d.get("handles") or [], "reports_to_title": up["title"] if up else "",
+                    "term_months": d.get("term_months")})
+    return out
 
 
 def answer_invite(business_id: str, contact_id: str, role_id: str, yes: bool) -> bool:
+    """Yes or not now. A yes to a role with a term starts the term today."""
     rid = _uid(role_id, "role")
-    now = _iso(_now())
+    now = _now()
+    patch: Dict[str, Any] = {"status": "active" if yes else "declined", "answered_at": _iso(now), "updated_at": _iso(now)}
+    if yes:
+        held = _rows(f"/church_leader_roles?id=eq.{_q(rid)}&business_id=eq.{_q(business_id)}&select=role&limit=1") or []
+        if held:
+            import church_roles as cr
+            d = cr.by_key(cr.defs(str(business_id)) or []).get(held[0]["role"]) or {}
+            if d.get("term_months"):
+                patch["term_ends_at"] = _iso(now + timedelta(days=round(30.44 * int(d["term_months"]))))
     rows = sb_clients.sb_patch_as_service(
         f"/church_leader_roles?id=eq.{_q(rid)}&business_id=eq.{_q(business_id)}&contact_id=eq.{_q(contact_id)}"
-        "&status=eq.invited",
-        {"status": "active" if yes else "declined", "answered_at": now, "updated_at": now})
+        "&status=eq.invited", patch)
     return isinstance(rows, list) and bool(rows)
 
 
@@ -910,26 +1101,60 @@ async def sweep(now: Optional[datetime] = None) -> Dict[str, int]:
         when there is no one to hand it to;
       · someone at "Reach out" who has had an email or text from the
         church since they were handed on moves on by themselves;
-      · a late follow-up climbs the ladder: the leader is nudged on the
-        day, the pastors are told a day late, and three days late the
-        office is asked to hand them to someone else."""
+      · a late follow-up climbs the leader's chain: they're reminded on
+        the day, the role they answer to is told a day late, and three
+        days late one more step up, with the office asked to hand them on;
+      · a leader whose term ended is the office's to ask again (once);
+      · prayer handed to a member who leads gets the same (church_prayer)."""
     import asyncio
     now = now or _now()
-    stats = {"told": 0, "office": 0, "reached": 0, "nudged": 0, "pastors_told": 0, "reassign_asked": 0}
+    stats = {"told": 0, "office": 0, "reached": 0, "nudged": 0, "overseer_told": 0, "next_up": 0, "terms": 0}
     rows = await asyncio.to_thread(
         _rows, "/church_follow_ups?status=eq.open"
                f"&or=(leader_told_at.is.null,due_at.lt.{_q(_iso(now))},step.eq.0)&select=*&limit=500")
-    if not rows:
-        return stats
     by_biz: Dict[str, List[Dict[str, Any]]] = {}
-    for r in rows:
+    for r in rows or []:
         by_biz.setdefault(str(r["business_id"]), []).append(r)
     for biz_id, items in by_biz.items():
         try:
             await _sweep_church(biz_id, items, now, stats)
         except Exception:
             logger.warning("church follow-up sweep failed for business %s", biz_id[:8], exc_info=True)
+    try:
+        stats["terms"] = await _sweep_terms(now)
+    except Exception:
+        logger.warning("church role terms sweep failed", exc_info=True)
+    try:
+        import church_prayer
+        stats["prayer"] = await church_prayer.sweep(now)
+    except Exception:
+        logger.warning("church prayer sweep failed", exc_info=True)
     return stats
+
+
+async def _sweep_terms(now: datetime) -> int:
+    """A leader whose term ended: the office is asked, once, whether to ask
+    them again. The role stays theirs until someone changes it."""
+    import asyncio
+    import church_roles as cr
+    rows = await asyncio.to_thread(
+        _rows, f"/church_leader_roles?status=eq.active&term_ends_at=lt.{_q(_iso(now))}&term_told_at=is.null"
+               "&select=id,business_id,contact_id,role,scope&limit=200") or []
+    n = 0
+    for r in rows:
+        biz_id = str(r["business_id"])
+        people = await asyncio.to_thread(_contacts, biz_id, [str(r["contact_id"])]) or {}
+        name = (people.get(str(r["contact_id"])) or {}).get("name") or "A leader"
+        title = cr.title_of(r["role"], await asyncio.to_thread(cr.defs, biz_id) or [])
+        ok = await _office_alert(biz_id, f"{name}’s term as {title} has ended",
+                                 "Ask them again, or name someone new on Leaders & roles. Nothing changes until you do.",
+                                 f"church-role-term-{r['id']}", str(r["contact_id"]))
+        if ok:
+            await asyncio.to_thread(sb_clients.sb_patch_as_service,
+                                    f"/church_leader_roles?id=eq.{_q(r['id'])}&business_id=eq.{_q(biz_id)}",
+                                    {"term_told_at": _iso(now)})
+            n += 1
+    return n
 
 
 async def _sweep_church(biz_id: str, items: List[Dict[str, Any]], now: datetime, stats: Dict[str, int]) -> None:
@@ -939,11 +1164,15 @@ async def _sweep_church(biz_id: str, items: List[Dict[str, Any]], now: datetime,
         return
     biz = bizs[0]
     ids = {str(r["contact_id"]) for r in items} | {str(r["leader_contact_id"]) for r in items if r.get("leader_contact_id")}
+    import church_roles as cr
     all_roles = await asyncio.to_thread(roles, biz_id)
-    if all_roles is None:
-        return  # the pastors can't be named today; next sweep
-    pastors = [r for r in all_roles if r["status"] == "active" and r["role"] == "pastor"]
-    people = await asyncio.to_thread(_contacts, biz_id, ids | {p["contact_id"] for p in pastors})
+    all_defs = await asyncio.to_thread(cr.defs, biz_id)
+    if all_roles is None or all_defs is None:
+        return  # the chain can't be read today; next sweep
+    held = cr.active_holders(all_roles)
+    defs = _effective_defs(all_defs, all_roles)
+    dmap = cr.by_key(defs)
+    people = await asyncio.to_thread(_contacts, biz_id, ids)
     if people is None:
         return
     origin = await asyncio.to_thread(site_origin, biz_id)
@@ -1031,29 +1260,49 @@ async def _sweep_church(biz_id: str, items: List[Dict[str, Any]], now: datetime,
                 delivered = await _office_alert(biz_id, f"{pname} is due today",
                                                 f"“{step_title}” is due. {leader['name'] + ' has them, with no email on file' if leader else 'No one has them'}.",
                                                 f"church-fu-due-{fid}-{r.get('due_at')}", pid)
-        elif kind == "pastors_told":
+        told_names = ""
+        if kind in ("overseer_told", "next_up"):
+            # Up the leader's own chain: a day late, the role they answer to;
+            # three days late, one more step up. An empty role is passed
+            # over; with no one above, the senior role is asked to hand them
+            # on. No leader at all: the senior role from the start.
             who = leader["name"] if leader else "No one"
-            for p in pastors:
-                pc = people.get(p["contact_id"]) or {}
-                if p["contact_id"] == lid:
-                    continue
-                await _email(biz, pc.get("email") or "", pc.get("name") or "", f"{pname} hasn’t been reached",
-                             _mail_html([f"{html.escape(pname)} ({html.escape(r.get('card_name') or 'a card')}) is a day past "
-                                         f"<b>{html.escape(step_title)}</b>. {html.escape(who)} has them."], "", ""),
-                             f"cfu-pastors-{fid}-{r.get('due_at')}-{p['contact_id']}")
-            delivered = await _office_alert(biz_id, f"{pname} hasn’t been reached",
-                                            f"A day past “{step_title}”. {who} has them.",
-                                            f"church-fu-late-{fid}-{r.get('due_at')}", pid)
-        elif kind == "reassign_asked":
-            delivered = await _office_alert(biz_id, f"Hand {pname} to someone else?",
-                                            f"Three days past “{step_title}” with {leader['name'] if leader else 'no one'}.",
-                                            f"church-fu-reassign-{fid}-{r.get('due_at')}", pid)
+            role = dmap.get(r.get("leader_role") or "") if leader else None
+            team = next((h.get("scope") or "" for h in all_roles
+                         if h["contact_id"] == lid and h["role"] == (r.get("leader_role") or "")), "")
+            above = cr.chain_above(role, defs, held,
+                                   team=team, skip={lid} if lid else ())
+            n = 0 if kind == "overseer_told" else 1
+            rung_role, rung_people = above[min(n, len(above) - 1)] if above else (None, [])
+            top = bool(rung_role and rung_role["job"] == "senior")
+            late = "a day" if kind == "overseer_told" else "three days"
+            for p in rung_people:
+                await _email(biz, p.get("email") or "", p.get("name") or "",
+                             f"{pname} hasn’t been reached" if kind == "overseer_told" else f"Hand {pname} to someone else?",
+                             _mail_html([f"{html.escape(pname)} ({html.escape(r.get('card_name') or 'a card')}) is {late} past "
+                                         f"<b>{html.escape(step_title)}</b>. {html.escape(who)} has them"
+                                         + (f", and answers to you." if kind == "overseer_told" else ".")
+                                         + (" Hand them to someone else on the Follow-up board?" if kind == "next_up" and top else "")],
+                                        "", ""),
+                             f"cfu-{kind}-{fid}-{r.get('due_at')}-{p['contact_id']}")
+            told_names = ", ".join(p["name"] for p in rung_people)
+            label = f" ({rung_role['title']})" if rung_role else ""
+            if kind == "overseer_told":
+                delivered = await _office_alert(biz_id, f"{pname} hasn’t been reached",
+                                                f"A day past “{step_title}”. {who} has them. Told: "
+                                                f"{told_names or 'no one above them'}{label}.",
+                                                f"church-fu-late-{fid}-{r.get('due_at')}", pid)
+            else:
+                delivered = await _office_alert(biz_id, f"Hand {pname} to someone else?",
+                                                f"Three days past “{step_title}” with {who}. Told: "
+                                                f"{told_names or 'no one above them'}{label}.",
+                                                f"church-fu-reassign-{fid}-{r.get('due_at')}", pid)
         if not delivered:
             continue  # the rung is climbed when its message goes out; next sweep tries again
         await asyncio.to_thread(_patch, biz_id, fid, {"late_level": level})
         await asyncio.to_thread(_note, biz_id, fid, "chief", kind, {
             "nudged": f"Nudged {leader['name'] if leader else 'the office'}: {step_title} is due.",
-            "pastors_told": "A day late. Told the pastors.",
-            "reassign_asked": "Three days late. Asked the office to hand them to someone else.",
+            "overseer_told": f"A day late. Told {told_names or 'the office'}.",
+            "next_up": f"Three days late. Told {told_names or 'the office'}, and asked the office to hand them on.",
         }[kind])
-        stats[kind] += 1
+        stats[kind] = stats.get(kind, 0) + 1
