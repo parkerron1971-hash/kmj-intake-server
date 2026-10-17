@@ -144,9 +144,11 @@ jobs:
       - name: Run test suite
         # Controller fixtures use real Chromium with local route responses only.
         # No supplier, model or paid service is contacted.
+        # One worker per core; each test file stays on one worker, so its
+        # module fixtures build once and its tests keep their order.
         run: |
           python -m playwright install --with-deps chromium
-          pytest -q __tests__ agents --maxfail=10
+          pytest -q -n auto --dist loadfile __tests__ agents --maxfail=10 --durations=10
           python scripts/chief_computer_sabotage.py
 
       - uses: actions/setup-node@v4
