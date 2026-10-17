@@ -5387,6 +5387,15 @@ async def handle_update_session(client, biz, action) -> Dict:
     if not patch:
         return _fail("update_session", "no fields to update")
 
+    # A booking's calendar copy is never moved or cancelled on its own: the
+    # booking would keep its old time (open to a double-book at the new
+    # one) and lose its place on the calendar. Its time and its cancel go
+    # through the booking verbs, which move both together.
+    from chief_booking_actions import route_session_edit
+    routed = await route_session_edit(client, biz, session_id, patch)
+    if routed is not None:
+        return routed
+
     try:
         await _sb(client, "PATCH", f"/sessions?id=eq.{session_id}", patch)
     except Exception as e:
@@ -6277,9 +6286,15 @@ async def handle_update_module_entry(client, biz, action) -> Dict:
     if not updated:
         return _fail("update_module_entry", "update failed")
 
+    # A booking's calendar copy follows the booking.
+    from chief_booking_actions import entry_changed
+    calendar_miss = await entry_changed(
+        biz["id"], {"id": entry_id, "module_id": existing.get("module_id"),
+                    "data": merged}, existing.get("data") or {})
+
     return {
         "type": "update_module_entry",
-        "result": "updated",
+        "result": "updated" + (f". {calendar_miss}" if calendar_miss else ""),
         "label": "📦 Solution entry updated",
         "entry_id": entry_id,
         "nav": _nav("build"),
@@ -6299,9 +6314,14 @@ async def handle_delete_module_entry(client, biz, action) -> Dict:
     if not rows:
         return _fail("delete_module_entry", "delete failed (entry not found?)")
 
+    # A removed booking leaves the calendar now, not at the next sync tick.
+    from chief_booking_actions import entry_removed
+    calendar_miss = await entry_removed(
+        biz["id"], {**(rows[0] if isinstance(rows[0], dict) else {}), "id": entry_id})
+
     return {
         "type": "delete_module_entry",
-        "result": "deleted",
+        "result": "deleted" + (f". {calendar_miss}" if calendar_miss else ""),
         "label": "📦 Solution entry removed",
         "entry_id": entry_id,
     }

@@ -195,7 +195,7 @@ def test_reschedule_writes_time_into_data_not_the_column(monkeypatch):
     import sb_clients
 
     monkeypatch.setattr(bwr, "_check_slot_available", lambda b, w, d, **k: True)
-    monkeypatch.setattr(bwr, "_mirror_booking_session", lambda b, e: None)
+    monkeypatch.setattr(bwr, "sync_booking_session", lambda *a, **k: {"result": "ok"})
     monkeypatch.setattr(cba, "_find_booking", lambda b, a: {"booking": {
         "id": "bk1", "status": "active", "module_id": "mod1",
         "data": {"appointment_at": "2026-08-04T14:00:00Z", "customer_name": "Maria",
@@ -203,7 +203,7 @@ def test_reschedule_writes_time_into_data_not_the_column(monkeypatch):
     }})
     patches = []
     monkeypatch.setattr(sb_clients, "sb_patch_as_service",
-                        lambda p, b: patches.append((p, b)) or [{"id": "bk1"}])
+                        lambda p, b, **k: patches.append((p, b)) or [{"id": "bk1"}])
     monkeypatch.setattr(sb_clients, "sb_get_as_service", lambda p: [{"id": "bk1", "data": {}}])
 
     out = cba._reschedule_booking_sync(BIZ, {
@@ -218,28 +218,30 @@ def test_reschedule_writes_time_into_data_not_the_column(monkeypatch):
 
 
 def test_reschedule_reports_failure_when_nothing_matched(monkeypatch):
-    """PostgREST returns [] when the filter matches no rows — a stale id, or a
-    booking owned by another business. That is NOT a successful move."""
+    """PostgREST returns [] when the filter matches no rows: the booking was
+    cancelled or removed since it was read (the write only lands on an
+    active booking in this business). That is NOT a successful move."""
     import booking_widget_router as bwr
     import sb_clients
     monkeypatch.setattr(bwr, "_check_slot_available", lambda b, w, d, **k: True)
     monkeypatch.setattr(cba, "_find_booking", lambda b, a: {"booking": {
         "id": "bk1", "status": "active", "data": {"customer_name": "Maria"}}})
-    monkeypatch.setattr(sb_clients, "sb_patch_as_service", lambda p, b: [])
+    monkeypatch.setattr(sb_clients, "sb_patch_as_service", lambda p, b, **k: [])
 
     out = cba._reschedule_booking_sync(BIZ, {
         "booking_id": "bk1", "new_appointment_at": "2026-08-06T16:00:00Z"})
-    assert "couldn't move" in out["result"]
+    assert out["failed"] and "isn't active anymore" in out["result"]
+    assert "moved to" not in out["result"]
 
 
 def test_cancel_reports_failure_when_nothing_matched(monkeypatch):
     import sb_clients
     monkeypatch.setattr(cba, "_find_booking", lambda b, a: {"booking": {
         "id": "bk1", "status": "active", "data": {}}})
-    monkeypatch.setattr(sb_clients, "sb_patch_as_service", lambda p, b: [])
+    monkeypatch.setattr(sb_clients, "sb_patch_as_service", lambda p, b, **k: [])
 
     out = cba._cancel_booking_sync(BIZ, {"booking_id": "bk1"})
-    assert "couldn't cancel" in out["result"]
+    assert out["failed"] and "already cancelled" in out["result"]
 
 
 def test_reschedule_refuses_a_taken_slot(monkeypatch):
@@ -249,7 +251,7 @@ def test_reschedule_refuses_a_taken_slot(monkeypatch):
     monkeypatch.setattr(cba, "_find_booking", lambda b, a: {"booking": {
         "id": "bk1", "status": "active", "data": {"customer_name": "Maria"}}})
     monkeypatch.setattr(sb_clients, "sb_patch_as_service",
-                        lambda p, b: pytest.fail("must not write when the slot is taken"))
+                        lambda p, b, **k: pytest.fail("must not write when the slot is taken"))
 
     out = cba._reschedule_booking_sync(BIZ, {
         "booking_id": "bk1", "new_appointment_at": "2026-08-06T16:00:00Z"})
@@ -264,14 +266,18 @@ def test_reschedule_needs_a_new_time():
 # ─── cancel_booking ───────────────────────────────────────────────────
 
 def test_cancel_sets_status_and_frees_the_session(monkeypatch):
+    import booking_widget_router as bwr
     import sb_clients
+    freed = []
+    monkeypatch.setattr(bwr, "cancel_booking_sessions",
+                        lambda biz, bid: freed.append(bid) or True)
     monkeypatch.setattr(cba, "_find_booking", lambda b, a: {"booking": {
         "id": "bk1", "status": "active",
         "data": {"appointment_at": "2026-08-04T14:00:00Z", "customer_name": "Maria"},
     }})
     patches = []
     monkeypatch.setattr(sb_clients, "sb_patch_as_service",
-                        lambda p, b: patches.append((p, b)) or [{"id": "bk1"}])
+                        lambda p, b, **k: patches.append((p, b)) or [{"id": "bk1"}])
 
     out = cba._cancel_booking_sync(BIZ, {"booking_id": "bk1", "reason": "travelling"})
 
@@ -279,9 +285,9 @@ def test_cancel_sets_status_and_frees_the_session(monkeypatch):
     entry_patch = next(b for p, b in patches if "module_entries" in p)
     assert entry_patch["status"] == "cancelled"
     assert entry_patch["data"]["cancellation_reason"] == "travelling"
-    # The mirrored session is cancelled in the same breath — the sync tick
+    # The calendar copy is cleared in the same breath — the sync tick
     # backstops it, but the practitioner is looking at the calendar now.
-    assert any("sessions" in p and b.get("status") == "cancelled" for p, b in patches)
+    assert freed == ["bk1"]
 
 
 def test_cancel_is_idempotent(monkeypatch):
@@ -289,7 +295,7 @@ def test_cancel_is_idempotent(monkeypatch):
     monkeypatch.setattr(cba, "_find_booking", lambda b, a: {"booking": {
         "id": "bk1", "status": "cancelled", "data": {}}})
     monkeypatch.setattr(sb_clients, "sb_patch_as_service",
-                        lambda p, b: pytest.fail("must not re-cancel"))
+                        lambda p, b, **k: pytest.fail("must not re-cancel"))
     out = cba._cancel_booking_sync(BIZ, {"booking_id": "bk1"})
     assert "already cancelled" in out["result"]
 

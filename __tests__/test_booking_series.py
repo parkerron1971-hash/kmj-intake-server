@@ -251,10 +251,14 @@ def test_cancel_series_future_only_and_detached_survive(monkeypatch):
              "data": {"series_id": "sid-1", "series_detached": True}},
         ]
 
+    import booking_widget_router as bwr
     import sb_clients
+    freed = []
     monkeypatch.setattr(sb_clients, "sb_get_as_service", _get)
     monkeypatch.setattr(sb_clients, "sb_patch_as_service",
-                        lambda p, b: patches.append((p, b)) or [{"id": "x"}])
+                        lambda p, b, **k: patches.append((p, b)) or [{"id": "x"}])
+    monkeypatch.setattr(bwr, "cancel_booking_sessions",
+                        lambda biz, bid: freed.append(bid) or True)
 
     res = bs.cancel_series("biz1", "sid-1", from_iso="2027-04-10T00:00:00Z")
 
@@ -266,8 +270,8 @@ def test_cancel_series_future_only_and_detached_survive(monkeypatch):
     assert "status=eq.active" in q
     # Only the attached row was cancelled; its mirrored session freed too.
     entry_patches = [p for p, b in patches if "module_entries" in p]
-    assert entry_patches == ["/module_entries?id=eq.bk2&business_id=eq.biz1"]
-    assert any("sessions" in p and "bk2" in p for p, b in patches)
+    assert entry_patches == ["/module_entries?id=eq.bk2&business_id=eq.biz1&status=eq.active"]
+    assert freed == ["bk2"]
     assert "Past sessions are untouched" in res["summary"]
 
 
@@ -293,7 +297,7 @@ def test_reschedule_detaches_a_series_occurrence_but_keeps_the_stamp(monkeypatch
                  "duration_min_at_booking": 60}}})
     patches = []
     monkeypatch.setattr(sb_clients, "sb_patch_as_service",
-                        lambda p, b: patches.append((p, b)) or [{"id": "bk2"}])
+                        lambda p, b, **k: patches.append((p, b)) or [{"id": "bk2"}])
     monkeypatch.setattr(sb_clients, "sb_get_as_service",
                         lambda p: [{"id": "bk2", "data": {}}])
 

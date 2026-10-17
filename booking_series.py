@@ -440,9 +440,12 @@ def cancel_series(
         return {"ok": True, "cancelled": 0, "skipped_detached": 0,
                 "summary": "No upcoming sessions in that series — nothing to cancel."}
 
+    from booking_widget_router import cancel_booking_sessions
+
     now_iso = datetime.now(timezone.utc).isoformat()
     cancelled = 0
     detached = 0
+    still_on_calendar = 0
     for r in rows:
         data = dict(r.get("data") or {})
         if data.get("series_detached"):
@@ -453,30 +456,36 @@ def cancel_series(
         data["series_cancelled"] = True
         if reason:
             data["cancellation_reason"] = str(reason)[:500]
+        # Redacted: data holds the client's name, and a PostgREST error
+        # echoes the failing row into the log.
         updated = sb_clients.sb_patch_as_service(
-            f"/module_entries?id=eq.{r['id']}&business_id=eq.{business_id}",
-            {"status": "cancelled", "data": data})
+            f"/module_entries?id=eq.{r['id']}&business_id=eq.{business_id}"
+            f"&status=eq.active",
+            {"status": "cancelled", "data": data}, redact=True)
         if not updated:
             continue
         cancelled += 1
-        # Free the mirrored session immediately (the 10-min sync tick
-        # backstops this, but the calendar is being looked at NOW).
-        try:
-            marker = f"[booking:{r['id']}]"
-            sb_clients.sb_patch_as_service(
-                f"/sessions?business_id=eq.{business_id}"
-                f"&notes=like.*{marker}*&status=eq.scheduled",
-                {"status": "cancelled"})
-        except Exception as e:
-            logger.warning(f"[series] session cancel failed soft: {e}")
+        # Clear its calendar copy now (the 10-min sync tick backstops this,
+        # and a cancelled booking's copy is never reminded meanwhile). A copy
+        # that couldn't be cleared is counted and said, not swallowed.
+        if not cancel_booking_sessions(business_id, r["id"]):
+            still_on_calendar += 1
+            print(f"[series] calendar copy not cleared biz={business_id} "
+                  f"booking={r['id']}", flush=True)
 
     summary = (f"Cancelled {cancelled} upcoming "
                f"session{'s' if cancelled != 1 else ''}. Past sessions are untouched.")
     if detached:
         summary += (f" {detached} rescheduled one{'s' if detached != 1 else ''} "
                     f"kept their own time.")
+    if still_on_calendar:
+        summary += (f" I couldn't clear the reminder for {still_on_calendar} of them "
+                    f"just now. No reminder goes out for a cancelled booking, and "
+                    f"{'they' if still_on_calendar != 1 else 'it'} should clear on "
+                    f"{'their' if still_on_calendar != 1 else 'its'} own within "
+                    f"about 10 minutes.")
     return {"ok": True, "cancelled": cancelled, "skipped_detached": detached,
-            "summary": summary}
+            "calendar_not_cleared": still_on_calendar, "summary": summary}
 
 
 # ─── Router endpoints (operator-side, authed, member+) ────────────────

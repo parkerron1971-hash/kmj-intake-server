@@ -700,14 +700,14 @@ def test_chief_reschedules_onto_an_outside_busy_time_and_says_so(db, monkeypatch
     import sb_clients
     _busy_1430(db)
     cba, _ = _chief_booking_env(monkeypatch)
-    monkeypatch.setattr(bw, "_mirror_booking_session", lambda b, e: None)
+    monkeypatch.setattr(bw, "sync_booking_session", lambda *a, **k: {"result": "ok"})
     monkeypatch.setattr(cba, "_find_booking", lambda b, a: {"booking": {
         "id": "bk1", "status": "active",
         "data": {"appointment_at": "2026-09-14T18:00:00Z", "customer_name": "Jane",
                  "duration_min_at_booking": 60}}})
     moved = []
     monkeypatch.setattr(sb_clients, "sb_patch_as_service",
-                        lambda p, b: moved.append(p) or [{"id": "bk1"}])
+                        lambda p, b, **k: moved.append(p) or [{"id": "bk1"}])
     out = cba._reschedule_booking_sync({"id": BIZ}, {
         "booking_id": "bk1", "new_appointment_at": "2026-09-14T14:30:00Z"})
     assert any("module_entries" in p for p in moved)
