@@ -20,3 +20,7 @@ decoded whole without it (the 10, 30 and 50-byte cuts: 0 of 2000; WebP
 minus 40 and GIF minus 200: 0 of 300). The upload check is right to take
 such a file, since every pixel is there. The test now cuts 10, 30 and 50
 bytes from seeded noise.
+
+Its twin in test_storage_path_confinement.py (test_drop_refuses_a_truncated_jpeg[2],
+the site-image drop) failed this PR's own first CI run the same way: 54 of
+1000 fresh 128px JPEGs decoded whole without their end marker. Same fix.

@@ -400,11 +400,16 @@ def test_slot_upload_takes_only_defined_slots(slot_upload):
 # signature alone whenever this Pillow couldn't decode AVIF, so
 # `ftypavif` followed by anything was stored as image/avif. A picture is
 # now stored only after it decodes, within a pixel budget.
+#
+# Seeded noise, and cuts of 10 bytes or more: a 2-byte cut is only the
+# end marker, and about one noisy JPEG in twenty still decodes whole
+# without it, which failed CI now and then (2026-10-17).
 
 def _noisy_jpeg(size=(128, 128)) -> bytes:
-    import os
+    import random
     buf = io.BytesIO()
-    Image.frombytes("RGB", size, os.urandom(size[0] * size[1] * 3)).save(buf, "JPEG")
+    noise = random.Random("jpeg")
+    Image.frombytes("RGB", size, noise.randbytes(size[0] * size[1] * 3)).save(buf, "JPEG")
     return buf.getvalue()
 
 
@@ -433,7 +438,7 @@ REAL_AVIF = _avif()
 needs_avif = pytest.mark.skipif(REAL_AVIF is None, reason="this Pillow can't write AVIF")
 
 
-@pytest.mark.parametrize("cut", [2, 10, 30, 50])
+@pytest.mark.parametrize("cut", [10, 30, 50])
 def test_drop_refuses_a_truncated_jpeg(drop, cut):
     r = drop(OWNER_A, data=NOISY_JPEG[:-cut])
     assert r.status_code == 400, r.text
