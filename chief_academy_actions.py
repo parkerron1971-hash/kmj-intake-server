@@ -82,7 +82,8 @@ SLIDE = obj({
     "tiles": {"type": "array", "maxItems": 6, "items": obj({"label": _SHORT, "text": _LINE, "ref": _SHORT,
                                                             "icon": {"type": "string", "enum": SLIDE_ICONS}}, ["label", "text"])},
     "columns": obj({"left_label": _SHORT, "right_label": _SHORT,
-                    "rows": {"type": "array", "maxItems": 8, "items": obj({"left": _LINE, "right": _LINE}, ["left", "right"])}},
+                    "rows": {"type": "array", "maxItems": 8, "items": obj({"left": _LINE, "right": _LINE}, ["left", "right"])},
+                    "paired": {"type": "boolean", "description": "True when each row reads left to right (lie, then truth); false for two separate lists side by side."}},
                    ["left_label", "right_label", "rows"]),
     "steps": {"type": "array", "minItems": 2, "maxItems": 5, "items": obj({"label": _SHORT, "ref": _SHORT, "note": _LINE}, ["label"])},
     "quote": obj({"text": {"type": "string", "maxLength": 900, "description": "Empty for scripture: the real verse text is filled in. Otherwise copied exactly from the lesson."},
@@ -94,6 +95,7 @@ SLIDE = obj({
     "image": obj({"url": {"type": "string", "maxLength": 600}, "alt": _LINE}, ["url"]),
     "template": {"type": "string", "enum": PICTURE_TEMPLATES, "description": "How a picture sits on the slide."},
     "tone": {"type": "string", "enum": ["dark", "light", "accent"]},
+    "mark": {"type": "string", "maxLength": 4, "description": "The big quiet number on a title slide, e.g. 01."},
     "notes": {"type": "string", "maxLength": 2000, "description": "The teacher's private notes; never shown to students or on the TV."},
 }, ["id", "layout"])
 SLIDES_WRITE_SCHEMA = (
