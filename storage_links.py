@@ -38,8 +38,10 @@ This module is the one place that knows how. Nothing here composes a
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
+import re
 from typing import Optional
 from urllib.parse import quote
 
@@ -72,6 +74,112 @@ def service_headers() -> dict:
     """
     key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
     return {"apikey": key, "Authorization": f"Bearer {key}"}
+
+
+def has_service_key() -> bool:
+    return bool(os.environ.get("SUPABASE_SERVICE_ROLE_KEY", ""))
+
+
+# What a practitioner reads when a storage write does not land. The raw
+# answer ("new row violates row-level security policy", a bare 400) is
+# for the log; the person uploading a logo needs to know whether it was
+# their file or us, and what to do next.
+UPLOAD_NOT_CONFIGURED = ("File storage isn't set up on our side yet, so nothing "
+                         "can be saved. That's not your file — it's been logged.")
+UPLOAD_REFUSED = ("Our file storage turned the upload away. That's a problem "
+                  "on our side, not your file — it's been logged. Try again "
+                  "in a few minutes.")
+UPLOAD_TOO_LARGE = "That file is bigger than storage accepts. Try a smaller copy."
+UPLOAD_WRONG_TYPE = "Storage doesn't accept that kind of file. Try a PNG or JPG."
+UPLOAD_UNREACHABLE = "We couldn't reach file storage just now. Try again in a minute."
+
+
+def upload_refusal(status_code: int, body: str) -> str:
+    """Plain words for a refused storage write.
+
+    Storage answers most refusals as HTTP 400 and puts the real status
+    in the JSON body — the RLS refusal behind the 2026-10 logo bug came
+    back as `400 {"statusCode":"403", ...}` — so the body is read first.
+    """
+    code = str(status_code)
+    text = (body or "").lower()
+    try:
+        parsed = json.loads(body or "")
+        if isinstance(parsed, dict) and parsed.get("statusCode"):
+            code = str(parsed["statusCode"])
+    except Exception:  # noqa: BLE001 — a non-JSON body keeps the HTTP code
+        pass
+    if code in ("401", "403") or "row-level security" in text:
+        return UPLOAD_REFUSED
+    if code == "413" or "maximum allowed size" in text or "too large" in text:
+        return UPLOAD_TOO_LARGE
+    if code == "415" or "mime type" in text:
+        return UPLOAD_WRONG_TYPE
+    return UPLOAD_UNREACHABLE
+
+
+# ── Where a service-role write may land ──────────────────────────────
+#
+# The service role skips storage's per-business policy, so the object
+# key is the only thing keeping a write inside the caller's business.
+# A key glued together from request strings let an admin of one
+# business replace another's file: "../<other id>/existing.png#" in a
+# slot name, normalised by httpx, became a write to the other folder
+# (Codex review of #1464, 2026-10-16). So a key is built only from the
+# canonical business UUID plus a plain file name, and the writers refuse
+# anything else before they send a byte.
+
+UPLOAD_UNSAFE_PATH = ("We couldn't file that upload under your business, so "
+                      "nothing was saved. That's not your file — it's been logged.")
+
+_BUSINESS_UUID = re.compile(
+    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+# One name, one dot, a picture extension. No separators, no dot
+# segments, no %, ?, # or backslash: nothing a URL parser can reinterpret.
+# Always fullmatch: `$` would let a trailing newline through.
+_OBJECT_NAME = re.compile(
+    r"[A-Za-z0-9_][A-Za-z0-9_-]{0,119}\.(png|jpg|jpeg|webp|avif|gif|ico)")
+
+
+_UPLOAD_CODES = {
+    UPLOAD_NOT_CONFIGURED: "storage_not_configured",
+    UPLOAD_REFUSED: "storage_refused",
+    UPLOAD_TOO_LARGE: "storage_too_large",
+    UPLOAD_WRONG_TYPE: "storage_wrong_type",
+    UPLOAD_UNREACHABLE: "storage_unreachable",
+    UPLOAD_UNSAFE_PATH: "unsafe_path",
+}
+
+
+def upload_code(words: str) -> str:
+    """The short code that goes with one of the UPLOAD_* sentences."""
+    return _UPLOAD_CODES.get(words, "storage_unreachable")
+
+
+def canonical_business_id(value) -> Optional[str]:
+    """The business id as a lowercase dashed UUID, or None."""
+    s = str(value or "").strip().lower()
+    return s if _BUSINESS_UUID.fullmatch(s) else None
+
+
+def business_object_key(business_id, name: str, prefix: str = "") -> str:
+    """`<prefix><business uuid>/<name>`, or ValueError. The one way a
+    server-side writer names a storage object."""
+    biz = canonical_business_id(business_id)
+    if not biz:
+        raise ValueError(f"not a business id: {str(business_id)[:60]!r}")
+    if not _OBJECT_NAME.fullmatch(name or ""):
+        raise ValueError(f"unsafe object name: {str(name)[:60]!r}")
+    return f"{prefix}{biz}/{name}"
+
+
+def is_business_object_key(path: str, prefix: str = "") -> bool:
+    """True only for a key business_object_key could have built."""
+    if not isinstance(path, str) or not path.startswith(prefix):
+        return False
+    biz, sep, name = path[len(prefix):].partition("/")
+    return bool(sep) and canonical_business_id(biz) == biz \
+        and bool(_OBJECT_NAME.fullmatch(name))
 
 
 def _finish(base: str, payload: dict, download_as: Optional[str]) -> Optional[str]:
