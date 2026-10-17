@@ -6543,6 +6543,10 @@ async def handle_save_course_content(client, biz, action) -> Dict:
     from chief_academy_actions import handle_save_course_content as handler
     return await handler(client, biz, action)
 
+async def handle_save_lesson_slides(client, biz, action) -> Dict:
+    from chief_academy_actions import handle_save_lesson_slides as handler
+    return await handler(client, biz, action)
+
 
 async def handle_enroll_student(client, biz, action) -> Dict:
     """Enroll an existing contact into a course, by course_id or a
@@ -12085,6 +12089,7 @@ ACTION_HANDLERS = {
     "create_course":         handle_create_course,
     "inspect_course":        handle_inspect_course,
     "save_course_content":   handle_save_course_content,
+    "save_lesson_slides":    handle_save_lesson_slides,
     "enroll_student":        handle_enroll_student,
     "remember":              handle_remember,
     "save_note":             handle_save_note,
