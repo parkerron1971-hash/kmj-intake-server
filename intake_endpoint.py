@@ -577,6 +577,17 @@ async def submit_intake(req: IntakeSubmission, request: Request):
             "source": "intake_form",
         })
 
+        # ── 4a. A church's card becomes someone's job ──────────────────
+        # Chief hands the person to the leader whose role the card and
+        # the answers name, with the path's first step and its clock
+        # (church_follow_up). Never blocks the submission.
+        try:
+            import church_follow_up
+            await asyncio.to_thread(church_follow_up.on_intake_form, business,
+                                    dict(form_config, id=req.form_id), submission_data, contact_id)
+        except Exception as e:
+            logger.warning(f"[intake] church follow-up skipped: {type(e).__name__}")
+
         # ── 4b. Route to custom module(s) ─────────────────────────────
         # Two paths:
         #   settings.linked_module_id  → every submission creates one module entry

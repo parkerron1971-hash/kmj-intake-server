@@ -9,6 +9,11 @@ church_router.py — the church office's read-only questions about people.
                                                  in (the website's own and the
                                                  app's forms) and what came in
                                                  on each (owner and staff)
+    GET /church/follow-ups?business_id=          Leaders & follow-up: everyone
+        POST …/{id}/reassign | note | step | close   a card handed to a leader
+    GET|POST /church/leaders, DELETE …/{role_id}  who holds which role
+                                                 (church_follow_up; owner and
+                                                 staff)
 
 First-time guests: any active seat may read (the same rule as the
 attendance table itself). Care counts: the owner and staff only, see
@@ -19,12 +24,16 @@ waiting for a call or how many prayer requests are new.
 from __future__ import annotations
 
 import uuid
-from typing import Any, Dict
+from typing import Any, Dict, Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
 
 import church_cards
+import church_follow_up
 import church_reads
+import sb_clients
+from auth_supabase import UserSession
 from business_access import business_access
 
 router = APIRouter(prefix="/church", tags=["church"])
@@ -81,6 +90,123 @@ def care_counts(business_id: str = Query(...),
                  "oldest_new_days": int(oldest) if oldest is not None else None},
         "window_days": church_reads.CARE_WINDOW_DAYS,
     }
+
+
+class _Reassign(BaseModel):
+    leader_contact_id: Optional[str] = None
+
+
+class _Note(BaseModel):
+    text: str = Field(..., max_length=2000)
+    pastors_only: bool = False
+
+
+class _Role(BaseModel):
+    contact_id: str
+    role: str
+    scope: str = Field("", max_length=120)
+
+
+def _who(session: UserSession) -> Tuple[str, str]:
+    user = session.user
+    meta = getattr(user, "user_metadata", None) or {}
+    name = (meta.get("full_name") or meta.get("name") or getattr(user, "email", "") or "The office")
+    return str(user.id), str(name)[:120]
+
+
+@router.get("/follow-ups")
+def follow_ups(business_id: str = Query(...),
+               biz: Dict[str, Any] = Depends(business_access(CARE_MIN_ROLE))):
+    """The Follow-up board: everyone a card handed to someone, where they
+    are on their path, and every note (church_follow_up.board)."""
+    out = church_follow_up.board(_uuid(business_id))
+    if out is None:
+        raise HTTPException(503, "Follow-up couldn't be loaded. Try again in a moment.")
+    return out
+
+
+@router.post("/follow-ups/{follow_up_id}/reassign")
+def follow_up_reassign(follow_up_id: str, body: _Reassign, business_id: str = Query(...),
+                       biz: Dict[str, Any] = Depends(business_access(CARE_MIN_ROLE)),
+                       session: UserSession = Depends(sb_clients.authed_request)):
+    uid, name = _who(session)
+    church_follow_up.reassign(_uuid(business_id), follow_up_id, body.leader_contact_id, by_user=uid, by_name=name)
+    return {"ok": True}
+
+
+@router.post("/follow-ups/{follow_up_id}/note")
+def follow_up_note(follow_up_id: str, body: _Note, business_id: str = Query(...),
+                   biz: Dict[str, Any] = Depends(business_access(CARE_MIN_ROLE)),
+                   session: UserSession = Depends(sb_clients.authed_request)):
+    uid, name = _who(session)
+    note = church_follow_up.office_note(_uuid(business_id), follow_up_id, body.text,
+                                        pastors_only=body.pastors_only, by_user=uid, by_name=name)
+    return {"ok": True, "note_id": str(note.get("id") or "")}
+
+
+@router.post("/follow-ups/{follow_up_id}/step")
+def follow_up_step(follow_up_id: str, business_id: str = Query(...),
+                   biz: Dict[str, Any] = Depends(business_access(CARE_MIN_ROLE)),
+                   session: UserSession = Depends(sb_clients.authed_request)):
+    uid, name = _who(session)
+    row = church_follow_up.advance(_uuid(business_id), follow_up_id, author_kind="office",
+                                   author_user_id=uid, author_name=name)
+    return {"ok": True, "step": row.get("step"), "status": row.get("status")}
+
+
+@router.post("/follow-ups/{follow_up_id}/close")
+def follow_up_close(follow_up_id: str, business_id: str = Query(...),
+                    biz: Dict[str, Any] = Depends(business_access(CARE_MIN_ROLE)),
+                    session: UserSession = Depends(sb_clients.authed_request)):
+    uid, name = _who(session)
+    church_follow_up.close(_uuid(business_id), follow_up_id, by_user=uid, by_name=name)
+    return {"ok": True}
+
+
+@router.get("/leaders")
+def leaders(business_id: str = Query(...),
+            biz: Dict[str, Any] = Depends(business_access(CARE_MIN_ROLE))):
+    """Leaders & roles: who holds which role (invited or active), the
+    roles a member can hold, and the teams a team leader can lead (the
+    choices on the church's Serve card)."""
+    bid = _uuid(business_id)
+    rows, team_names = church_follow_up.roles(bid), church_follow_up.teams(bid)
+    if rows is None or team_names is None:
+        raise HTTPException(503, "Your leaders couldn't be loaded. Try again in a moment.")
+    return {
+        "roles": [{k: r.get(k) for k in ("id", "contact_id", "name", "email", "phone", "role", "scope",
+                                          "status", "invited_at", "answered_at")} for r in rows],
+        "role_labels": church_follow_up.ROLE_LABELS,
+        "teams": team_names,
+        # Each card's path as the engine runs it, so the page shows exactly
+        # what happens (steps and their days, and the late ladder).
+        "paths": church_follow_up.PATHS,
+        "late_ladder": [{"days": d, "level": lvl, "kind": k} for d, lvl, k in church_follow_up.LATE_LADDER],
+    }
+
+
+@router.post("/leaders")
+async def leader_add(body: _Role, business_id: str = Query(...),
+                     biz: Dict[str, Any] = Depends(business_access(CARE_MIN_ROLE)),
+                     session: UserSession = Depends(sb_clients.authed_request)):
+    """Ask a member to take a role. They get an email with a link to their
+    member page, where they say yes; the Lead tab appears then."""
+    import asyncio
+    uid, _name = _who(session)
+    row = await asyncio.to_thread(church_follow_up.add_role, _uuid(business_id), body.contact_id,
+                                  body.role, body.scope, by_user=uid)
+    emailed = False
+    if not row.get("already"):
+        emailed = await church_follow_up.send_invite(biz, row)
+    return {"ok": True, "id": str(row.get("id") or ""), "status": row.get("status"),
+            "already": bool(row.get("already")), "emailed": emailed}
+
+
+@router.delete("/leaders/{role_id}")
+def leader_remove(role_id: str, business_id: str = Query(...),
+                  biz: Dict[str, Any] = Depends(business_access(CARE_MIN_ROLE))):
+    out = church_follow_up.remove_role(_uuid(business_id), role_id)
+    return {"ok": True, "returned_to_office": int(out.get("returned") or 0)}
 
 
 @router.get("/cards")

@@ -97,7 +97,10 @@ KIDS_TAB_OF = {"home": "home", "watch": "watch", "sermons": "watch", "live": "wa
                "sundays": "sundays", "family": "family"}
 # Which tab a page belongs under.
 TAB_OF = {"home": "home", "watch": "watch", "sermons": "watch", "live": "watch", "bible": "bible",
-          "give": "give", "connect": "connect", "groups": "connect", "messages": "connect"}
+          "give": "give", "connect": "connect", "groups": "connect", "messages": "connect", "lead": "lead"}
+# A member who holds a church role (church_follow_up) gets a sixth tab:
+# the people Chief hands them (member_portal_lead).
+LEAD_TAB = ("lead", "/my/lead", "Lead", '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/>')
 
 ICONS = {
     "heart": '<path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7z"/>',
@@ -347,11 +350,14 @@ def segmented(items: Tuple[Tuple[str, str, str], ...], current: str, label: str)
     return f'<nav class="mb-seg" aria-label="{escape(label)}">{"".join(out)}</nav>'
 
 
-def nav(active: Optional[str], *, give: bool = True, space: str = "church", kids_parent: bool = True) -> str:
+def nav(active: Optional[str], *, give: bool = True, space: str = "church", kids_parent: bool = True,
+        lead: bool = False) -> str:
     """The tab bar. Give is always there (Kevin, 2026-10-15): before the
     church takes gifts in the app, it says how to give
     (member_portal.render_give_off). Youth and Kids have their own bars;
-    a Kids leader who isn't a parent gets Room, Watch and Stories."""
+    a Kids leader who isn't a parent gets Room, Watch and Stories. A
+    church leader (lead=True) gets Lead last. On a wide screen the bar is
+    a rail down the left (Kevin, 2026-10-17: a desktop view too)."""
     if space == "youth":
         tabs, of = YOUTH_TABS, YOUTH_TAB_OF
     elif space == "kids":
@@ -359,7 +365,7 @@ def nav(active: Optional[str], *, give: bool = True, space: str = "church", kids
         if not kids_parent:
             tabs = ((tabs[0][0], tabs[0][1], "Room", tabs[0][3]),) + tabs[1:3]
     else:
-        tabs, of = TABS, TAB_OF
+        tabs, of = (TABS + (LEAD_TAB,) if lead else TABS), TAB_OF
     cur_tab = of.get(active or "", "")
     items = []
     for key, href, label, paths in tabs:
@@ -899,6 +905,11 @@ td.n,th.n{text-align:right;font-variant-numeric:tabular-nums;}
 @media (min-width:600px){.mb-hero{aspect-ratio:16/10;}}
 @media (min-width:600px){.mb-nav{left:50%;right:auto;width:560px;margin-left:-280px;bottom:14px;border-radius:24px;padding-bottom:4px;
   box-shadow:0 18px 40px rgba(0,0,0,.35),0 0 0 .5px var(--hair);}}
+@media (min-width:1100px){.mb-nav{top:0;bottom:0;left:0;right:auto;width:92px;margin-left:0;border-radius:0;display:flex;
+  flex-direction:column;justify-content:center;align-items:center;gap:6px;padding:24px 8px;box-shadow:.5px 0 0 var(--hair);}
+  .mb-tab{width:76px;min-height:60px;justify-content:center;border-radius:16px;padding-top:0;}
+  .mb-tab[aria-current]{background:var(--s1);}
+  .mp-shell.mb-has-nav{padding-bottom:48px;}}
 
 .mp-go:focus-visible,.mp-input:focus-visible,.mp-link:focus-visible,.mp-person:focus-visible,.mp-years a:focus-visible,.mb-tab:focus-visible,
 .mb-quick a:focus-visible,.mb-list a:focus-visible,.mb-ev:focus-visible,.mb-art:focus-visible,.mb-hero:focus-visible,.mb-back:focus-visible,

@@ -622,7 +622,7 @@ def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
   {body}
   {'' if door else f'<footer class="mp-foot mp-noprint">Your page at {_e(name)} · Powered by Solutionist</footer>'}
 </main>
-{ui.nav(tab, space=space, kids_parent=bool(ctx.get("kids_parent"))) if signed_in and bar else ''}
+{ui.nav(tab, space=space, kids_parent=bool(ctx.get("kids_parent")), lead=bool(ctx.get("lead"))) if signed_in and bar else ''}
 {'' if bare or door else ui.SCROLL_JS}
 {script}
 {mai.REGISTER_JS}
@@ -1020,6 +1020,12 @@ async def serve(request: Request, path: str) -> HTMLResponse:
         # anyone else in the space they switched to, if it's theirs.
         import member_spaces as msp
         ctx = await asyncio.to_thread(msp.resolve, biz["id"], sess["me"], request.cookies.get(msp.COOKIE) or "")
+        # A member who holds a church role (or is asked to) gets the Lead
+        # tab (member_portal_lead). The owner's preview never does.
+        import church_follow_up as cfu
+        if ctx.get("space", "church") == "church" and not sess.get("preview") and cfu.is_church(biz):
+            mine = await asyncio.to_thread(cfu.roles_for, biz["id"], str(sess["me"]["id"]))
+            ctx = dict(ctx, lead=bool(mine))
         msp.CURRENT.set(ctx)
     resp = await _serve_page(request, church, sess, sub)
     if sess and sess.get("preview") and isinstance(resp, HTMLResponse):
@@ -1108,6 +1114,13 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
         return _page(mpc.render_events(biz, site, request, occ, who=me))
     if sub == "/my/prayer":
         return _page(mpc.render_prayer(biz, site, request, who=me))
+    if (sub == "/my/lead" or sub.startswith("/my/lead/")) and not preview:
+        import church_follow_up as cfu
+        import member_portal_lead as mpl
+        if not cfu.is_church(biz):
+            return RedirectResponse("/my", status_code=303, headers=_SECURE_HEADERS)
+        html, status = await mpl.serve(request, biz, site, me, sub)
+        return _page(html, status)
     if sub == "/my/messages" or sub.startswith("/my/messages/"):
         import member_portal_messaging as mpm
         out = await mpm.serve(request, biz, site, me, sub)

@@ -2478,7 +2478,14 @@ def _capture_contact_from_form(business_id: str, name: str, email: str,
         print(f"[contact-submit] contact/note storage failed biz={business_id[:8]}: {exc!r}", flush=True)
         return None
     if form == "connect_card":
-        return contact_id  # no lead scoring or automated outreach for church cards
+        # No lead scoring or automated outreach for church cards: a person
+        # follows up instead. Chief hands them to a leader (church_follow_up).
+        try:
+            import church_follow_up
+            church_follow_up.on_connect_card(business_id, contact_id, data, receipt or "")
+        except Exception as exc:
+            print(f"[contact-submit] church follow-up skipped biz={business_id[:8]}: {type(exc).__name__}", flush=True)
+        return contact_id
     try:
         import lead_scoring
         lead_scoring.score_in_background(
