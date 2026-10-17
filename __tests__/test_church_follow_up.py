@@ -313,6 +313,18 @@ def test_a_failed_save_never_breaks_the_card(db, monkeypatch):
     assert cfu.on_intake_form({"id": BIZ, "type": "ministry"}, BAPTISM, {"faith": "Yes"}, MARCUS) is None
 
 
+def test_a_failed_read_never_misassigns_or_lets_a_duplicate_through(db, monkeypatch):
+    real = sb_clients.sb_get_as_service
+
+    def failing(table):
+        return lambda path, **k: None if path.startswith(f"/{table}") else real(path, **k)
+    for table in ("church_leader_roles", "church_follow_ups"):
+        monkeypatch.setattr(sb_clients, "sb_get_as_service", failing(table))
+        assert cfu.on_intake_form({"id": BIZ, "type": "ministry"}, BAPTISM, {"faith": "Yes"}, MARCUS) is None
+        assert cfu.on_connect_card(BIZ, MARCUS, {"fields": {}}, "r-1") is None
+    assert db.t["church_follow_ups"] == [] and db.t["church_follow_up_notes"] == []
+
+
 # ─── The leader ───────────────────────────────────────────────────────
 
 def _open(db, form=SERVE, person=DANA, **said):
@@ -422,6 +434,7 @@ def outbox(monkeypatch):
 
     async def alert(biz_id, title, body, key, person):
         sent["alert"].append((title, key))
+        return True
     monkeypatch.setattr(cfu, "_email", email)
     monkeypatch.setattr(cfu, "_office_alert", alert)
     return sent
@@ -452,6 +465,68 @@ def test_the_sweep_climbs_the_ladder_one_message_per_rung(db, outbox):
     assert [t for t, _ in outbox["alert"]] == ["Dana Rivers hasn’t been reached", "Hand Dana Rivers to someone else?"]
     kinds = [n["kind"] for n in db.t["church_follow_up_notes"] if n["follow_up_id"] == f["id"]]
     assert kinds.count("nudged") == kinds.count("pastors_told") == kinds.count("reassign_asked") == 1
+
+
+def test_a_failed_email_is_not_recorded_as_said_and_is_tried_again(db, outbox, monkeypatch):
+    f = _open(db)
+    down = {"on": True}
+    sent = outbox["email"]
+
+    async def email(biz, to, name, subject, body, key):
+        if down["on"]:
+            return False
+        sent.append((to, subject, key))
+        return True
+    monkeypatch.setattr(cfu, "_email", email)
+    asyncio.run(cfu.sweep())
+    row = db.t["church_follow_ups"][0]
+    assert row.get("leader_told_at") is None and sent == []
+    due = cfu._parse(row["due_at"])
+    asyncio.run(cfu.sweep(now=due + timedelta(hours=1)))
+    assert row.get("late_level", 0) == 0, "a nudge that didn’t go out is not a rung climbed"
+    down["on"] = False
+    asyncio.run(cfu.sweep(now=due + timedelta(hours=2)))
+    assert row["leader_told_at"] and row["late_level"] == 1
+    assert [s for _, s, _ in sent] == ["Dana Rivers is yours to follow up", "Dana Rivers is waiting to hear from you"]
+    assert [n["kind"] for n in db.t["church_follow_up_notes"] if n["follow_up_id"] == f["id"]].count("nudged") == 1
+
+
+def test_a_leader_with_no_email_is_the_offices_to_tell(db, outbox):
+    for c in db.t["contacts"]:
+        if c["id"] == TASHA:
+            c["email"] = ""
+    _open(db)
+    asyncio.run(cfu.sweep())
+    assert outbox["email"] == []
+    assert [t for t, _ in outbox["alert"]] == ["Tell Tasha Williams about Dana Rivers"]
+    assert db.t["church_follow_ups"][0].get("leader_told_at")
+
+
+def test_a_sweep_that_cannot_read_the_roles_sends_nothing(db, outbox, monkeypatch):
+    _open(db)
+    monkeypatch.setattr(cfu, "roles", lambda *_: None)
+    asyncio.run(cfu.sweep())
+    assert outbox["email"] == [] and outbox["alert"] == [] and db.t["church_follow_ups"][0].get("leader_told_at") is None
+
+
+def test_removing_a_leaders_last_role_returns_their_people_to_the_office(db, outbox):
+    f = _open(db)
+    tasha_role = next(r for r in db.t["church_leader_roles"] if r["contact_id"] == TASHA)
+    assert cfu.remove_role(BIZ, tasha_role["id"]) == {"returned": 1}
+    row = cfu._one(BIZ, f["id"])
+    assert row["leader_contact_id"] is None and row["leader_told_at"] is None
+    assert "no longer leads" in row["reason"]
+    asyncio.run(cfu.sweep())
+    assert [t for t, _ in outbox["alert"]] == ["Dana Rivers has no one yet"]
+
+
+def test_a_finished_follow_up_cannot_be_closed_over(db):
+    f = _open(db)
+    for _ in range(3):
+        cfu.leader_advance(BIZ, {"id": TASHA, "name": "Tasha Williams"}, f["id"])
+    with pytest.raises(Exception) as e:
+        cfu.close(BIZ, f["id"], by_user=OWNER)
+    assert getattr(e.value, "status_code", None) == 400 and cfu._one(BIZ, f["id"])["status"] == "done"
 
 
 def test_an_email_from_the_church_after_the_hand_off_finishes_reach_out(db, outbox):

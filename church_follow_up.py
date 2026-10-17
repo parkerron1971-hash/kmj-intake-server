@@ -373,21 +373,34 @@ def start(business_id: str, contact_id: str, *, card_key: str, card_name: str, k
     saved. Never raises: a card is saved whether or not this works."""
     biz, cid = str(business_id), str(contact_id)
     try:
+        # Every read here decides something, so a read that failed stops the
+        # hand-off rather than reading as "nothing there": a Supabase blip
+        # must never hand a card to the office as "no pastor named", nor let
+        # a second follow-up through. The card itself is already saved.
         if source_event:
             had = _rows(f"/church_follow_ups?business_id=eq.{_q(biz)}&source_event=eq.{_q(source_event)}&select=id&limit=1")
+            if had is None:
+                logger.warning("church follow-up skipped: duplicate check failed (business %s)", biz[:8])
+                return None
             if had:
                 return None
         # The same person filling in the same card again while someone is
         # already on it: one follow-up, with what they wrote this time.
         open_one = _rows(f"/church_follow_ups?business_id=eq.{_q(biz)}&contact_id=eq.{_q(cid)}"
                          f"&card_key=eq.{_q(card_key[:80])}&status=in.(open,handed_back)&select=id&limit=1")
+        if open_one is None:
+            logger.warning("church follow-up skipped: open check failed (business %s)", biz[:8])
+            return None
         if open_one:
             said = "; ".join(f"{a['q']} {a['a']}" for a in answers)[:1500]
             _note(biz, str(open_one[0]["id"]), "chief", "note",
                   "Filled in the card again." + (f" {said}" if said else ""))
             return None
-        all_roles = roles(biz) or []
-        pick = choose(kind, answers, all_roles, _load(biz) or {})
+        all_roles, load = roles(biz), _load(biz)
+        if all_roles is None or load is None:
+            logger.warning("church follow-up skipped: roles could not be read (business %s)", biz[:8])
+            return None
+        pick = choose(kind, answers, all_roles, load)
         steps = PATHS.get(kind) or PATHS["general"]
         now = _now()
         leader = pick["leader"]
@@ -622,7 +635,8 @@ def office_note(business_id: str, follow_up_id: str, text: str, *, pastors_only:
 
 def close(business_id: str, follow_up_id: str, *, by_user: str, by_name: str = "") -> Dict[str, Any]:
     biz, fid = _uid(business_id, "business"), _uid(follow_up_id, "follow-up")
-    _one(biz, fid)
+    if _one(biz, fid).get("status") in ("done", "closed"):
+        raise HTTPException(400, "This one is already finished")
     out = _patch(biz, fid, {"status": "closed", "done_at": _iso(_now())})
     _note(biz, fid, "office", "done", "Closed by the office.", author_user_id=by_user, author_name=by_name)
     return out
@@ -694,10 +708,33 @@ async def send_invite(business: Dict[str, Any], role_row: Dict[str, Any]) -> boo
                         f"cfu-invite-{role_row.get('id')}-{role_row.get('invited_at')}")
 
 
-def remove_role(business_id: str, role_id: str) -> None:
+def remove_role(business_id: str, role_id: str) -> Dict[str, Any]:
+    """Take a role away. Someone who no longer leads anything can't open
+    their Lead tab, so the people handed to them go back to the office
+    (the sweep alerts it), never left with a leader who can't reach them."""
     biz, rid = _uid(business_id, "business"), _uid(role_id, "role")
+    row = _rows(f"/church_leader_roles?id=eq.{_q(rid)}&business_id=eq.{_q(biz)}&select=contact_id&limit=1")
+    if row is None:
+        raise HTTPException(503, "That couldn’t be checked. Try again in a moment.")
     if not sb_clients.sb_delete_as_service(f"/church_leader_roles?id=eq.{_q(rid)}&business_id=eq.{_q(biz)}"):
         raise HTTPException(503, "That didn’t save. Try again.")
+    if not row:
+        return {"returned": 0}
+    lid = str(row[0]["contact_id"])
+    still = _rows(f"/church_leader_roles?business_id=eq.{_q(biz)}&contact_id=eq.{_q(lid)}&status=eq.active&select=id&limit=1")
+    if still is None or still:
+        return {"returned": 0}
+    mine = _rows(f"/church_follow_ups?business_id=eq.{_q(biz)}&leader_contact_id=eq.{_q(lid)}"
+                 "&status=in.(open,handed_back)&select=id") or []
+    people = _contacts(biz, [lid]) or {}
+    who = (people.get(lid) or {}).get("name") or "Their leader"
+    for f in mine:
+        sb_clients.sb_patch_as_service(
+            f"/church_follow_ups?id=eq.{_q(f['id'])}&business_id=eq.{_q(biz)}",
+            {"leader_contact_id": None, "leader_role": "", "leader_told_at": None, "status": "open",
+             "reason": f"{who} no longer leads, so they’re with the office.", "updated_at": _iso(_now())})
+        _note(biz, str(f["id"]), "chief", "reassigned", f"{who} no longer leads. Back with the office.")
+    return {"returned": len(mine)}
 
 
 # ─── The leader (their member page) ───────────────────────────────────
@@ -850,7 +887,10 @@ async def _email(biz: Dict[str, Any], to_email: str, to_name: str, subject: str,
         return False
 
 
-async def _office_alert(biz_id: str, title: str, body: str, key: str, person_id: Optional[str]) -> None:
+async def _office_alert(biz_id: str, title: str, body: str, key: str, person_id: Optional[str]) -> bool:
+    """True when the office's alert was raised (or already stands: it is
+    deduplicated on `key`); False when it could not be, so the caller
+    tries again on the next sweep instead of recording it as said."""
     try:
         import httpx
         import notification_engine
@@ -858,8 +898,10 @@ async def _office_alert(biz_id: str, title: str, body: str, key: str, person_id:
             await notification_engine.create_urgent_alert(
                 client, biz_id, title, body, dedup_key=key, dedup_hours=24 * 7,
                 suggested_action="Open the Follow-up board", related_contact_id=person_id)
+        return True
     except Exception:
         logger.warning("church follow-up office alert failed for business %s", biz_id[:8], exc_info=True)
+        return False
 
 
 async def sweep(now: Optional[datetime] = None) -> Dict[str, int]:
@@ -897,7 +939,9 @@ async def _sweep_church(biz_id: str, items: List[Dict[str, Any]], now: datetime,
         return
     biz = bizs[0]
     ids = {str(r["contact_id"]) for r in items} | {str(r["leader_contact_id"]) for r in items if r.get("leader_contact_id")}
-    all_roles = await asyncio.to_thread(roles, biz_id) or []
+    all_roles = await asyncio.to_thread(roles, biz_id)
+    if all_roles is None:
+        return  # the pastors can't be named today; next sweep
     pastors = [r for r in all_roles if r["status"] == "active" and r["role"] == "pastor"]
     people = await asyncio.to_thread(_contacts, biz_id, ids | {p["contact_id"] for p in pastors})
     if people is None:
@@ -941,34 +985,52 @@ async def _sweep_church(biz_id: str, items: List[Dict[str, Any]], now: datetime,
         steps = r.get("steps") or []
         step = int(r.get("step") or 0)
         step_title = steps[step]["title"] if step < len(steps) else ""
+        pid = str(r["contact_id"])
+        # Said only once it was said: a leader is "told" when their email
+        # went out, or — with no leader, or none we can email — when the
+        # office's alert was raised. A failed send is tried again next sweep.
         if not r.get("leader_told_at"):
-            if leader:
-                await _email(biz, leader.get("email") or "", leader["name"],
-                             f"{pname} is yours to follow up",
-                             _mail_html([f"Hi {html.escape(first_name(leader['name']))},",
-                                         f"{html.escape(pname)} filled in the <b>{html.escape(r.get('card_name') or 'card')}</b> "
-                                         f"at {html.escape(church)}, and Chief handed them to you. {html.escape(r.get('reason') or '')}",
-                                         f"First step: <b>{html.escape(step_title)}</b>, "
-                                         f"{html.escape((steps[step] if step < len(steps) else {}).get('rule') or '')}."],
-                                        lead_link, "Open your Lead tab"),
-                             f"cfu-told-{fid}")
-                stats["told"] += 1
+            if leader and leader.get("email"):
+                told = await _email(biz, leader["email"], leader["name"],
+                                    f"{pname} is yours to follow up",
+                                    _mail_html([f"Hi {html.escape(first_name(leader['name']))},",
+                                                f"{html.escape(pname)} filled in the <b>{html.escape(r.get('card_name') or 'card')}</b> "
+                                                f"at {html.escape(church)}, and Chief handed them to you. {html.escape(r.get('reason') or '')}",
+                                                f"First step: <b>{html.escape(step_title)}</b>, "
+                                                f"{html.escape((steps[step] if step < len(steps) else {}).get('rule') or '')}."],
+                                               lead_link, "Open your Lead tab"),
+                                    f"cfu-told-{fid}")
+                stats["told"] += int(told)
+            elif leader:
+                told = await _office_alert(biz_id, f"Tell {leader['name']} about {pname}",
+                                           f"Chief handed {pname} ({r.get('card_name') or 'a card'}) to {leader['name']}, "
+                                           "who has no email on file, so they haven’t been told.",
+                                           f"church-fu-noemail-{fid}", pid)
+                stats["office"] += int(told)
             else:
-                await _office_alert(biz_id, f"{pname} has no one yet",
-                                    f"{r.get('card_name') or 'A card'}: {r.get('reason') or ''}",
-                                    f"church-fu-none-{fid}", str(r["contact_id"]))
-                stats["office"] += 1
-            await asyncio.to_thread(_patch, biz_id, fid, {"leader_told_at": _iso(now)})
+                told = await _office_alert(biz_id, f"{pname} has no one yet",
+                                           f"{r.get('card_name') or 'A card'}: {r.get('reason') or ''}",
+                                           f"church-fu-none-{fid}", pid)
+                stats["office"] += int(told)
+            if told:
+                await asyncio.to_thread(_patch, biz_id, fid, {"leader_told_at": _iso(now)})
         rung = late_step(r, now)
         if not rung:
             continue
         level, kind = rung
-        if kind == "nudged" and leader:
-            await _email(biz, leader.get("email") or "", leader["name"], f"{pname} is waiting to hear from you",
-                         _mail_html([f"Hi {html.escape(first_name(leader['name']))},",
-                                     f"<b>{html.escape(step_title)}</b> for {html.escape(pname)} is due today. "
-                                     "When you’ve talked, jot a quick note on your Lead tab."], lead_link, "Open your Lead tab"),
-                         f"cfu-nudge-{fid}-{r.get('due_at')}")
+        delivered = True
+        if kind == "nudged":
+            if leader and leader.get("email"):
+                delivered = await _email(biz, leader["email"], leader["name"], f"{pname} is waiting to hear from you",
+                                         _mail_html([f"Hi {html.escape(first_name(leader['name']))},",
+                                                     f"<b>{html.escape(step_title)}</b> for {html.escape(pname)} is due today. "
+                                                     "When you’ve talked, jot a quick note on your Lead tab."],
+                                                    lead_link, "Open your Lead tab"),
+                                         f"cfu-nudge-{fid}-{r.get('due_at')}")
+            else:
+                delivered = await _office_alert(biz_id, f"{pname} is due today",
+                                                f"“{step_title}” is due. {leader['name'] + ' has them, with no email on file' if leader else 'No one has them'}.",
+                                                f"church-fu-due-{fid}-{r.get('due_at')}", pid)
         elif kind == "pastors_told":
             who = leader["name"] if leader else "No one"
             for p in pastors:
@@ -979,13 +1041,15 @@ async def _sweep_church(biz_id: str, items: List[Dict[str, Any]], now: datetime,
                              _mail_html([f"{html.escape(pname)} ({html.escape(r.get('card_name') or 'a card')}) is a day past "
                                          f"<b>{html.escape(step_title)}</b>. {html.escape(who)} has them."], "", ""),
                              f"cfu-pastors-{fid}-{r.get('due_at')}-{p['contact_id']}")
-            await _office_alert(biz_id, f"{pname} hasn’t been reached",
-                                f"A day past “{step_title}”. {who} has them.", f"church-fu-late-{fid}-{r.get('due_at')}",
-                                str(r["contact_id"]))
+            delivered = await _office_alert(biz_id, f"{pname} hasn’t been reached",
+                                            f"A day past “{step_title}”. {who} has them.",
+                                            f"church-fu-late-{fid}-{r.get('due_at')}", pid)
         elif kind == "reassign_asked":
-            await _office_alert(biz_id, f"Hand {pname} to someone else?",
-                                f"Three days past “{step_title}” with {leader['name'] if leader else 'no one'}.",
-                                f"church-fu-reassign-{fid}-{r.get('due_at')}", str(r["contact_id"]))
+            delivered = await _office_alert(biz_id, f"Hand {pname} to someone else?",
+                                            f"Three days past “{step_title}” with {leader['name'] if leader else 'no one'}.",
+                                            f"church-fu-reassign-{fid}-{r.get('due_at')}", pid)
+        if not delivered:
+            continue  # the rung is climbed when its message goes out; next sweep tries again
         await asyncio.to_thread(_patch, biz_id, fid, {"late_level": level})
         await asyncio.to_thread(_note, biz_id, fid, "chief", kind, {
             "nudged": f"Nudged {leader['name'] if leader else 'the office'}: {step_title} is due.",

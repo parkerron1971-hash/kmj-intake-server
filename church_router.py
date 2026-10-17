@@ -205,8 +205,8 @@ async def leader_add(body: _Role, business_id: str = Query(...),
 @router.delete("/leaders/{role_id}")
 def leader_remove(role_id: str, business_id: str = Query(...),
                   biz: Dict[str, Any] = Depends(business_access(CARE_MIN_ROLE))):
-    church_follow_up.remove_role(_uuid(business_id), role_id)
-    return {"ok": True}
+    out = church_follow_up.remove_role(_uuid(business_id), role_id)
+    return {"ok": True, "returned_to_office": int(out.get("returned") or 0)}
 
 
 @router.get("/cards")

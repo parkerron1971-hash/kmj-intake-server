@@ -17,6 +17,7 @@ decisions:
   - "A logged conversation that reached them (Talked, Left a message), or an email/text from the church after the hand-off, finishes Reach out"
   - "Late ladder: on the day the leader is nudged, a day late the pastors are emailed and the office alerted, three days late the office is asked to hand them on; one message per rung"
   - "On a screen 1100px and wider the member app's tab bar is a rail down the left (all member pages)"
+  - "Review fixes: a leader is 'told' and a rung 'climbed' only when the email or office alert went out (else the next sweep tries again); a leader with no email is the office's to tell; any failed read in start() stops the hand-off instead of reading as 'no pastor'; removing someone's last role returns their people to the office; a finished follow-up can't be closed over"
 related: [2026-10-17-lcc-site-cards.md, 2026-10-16-church-cards.md]
 ---
 Kevin wanted every card to reach a named person, with Chief doing the
