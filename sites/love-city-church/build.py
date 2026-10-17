@@ -32,6 +32,7 @@ Build-time tokens (filled here):
                            CSS mask; {{MARK_SOLID_MASK}} its filled
                            silhouette (mark-solid.svg)
   {{API_BASE}} {{BUSINESS_ID}} and the outside links in LINKS
+  {{CARD_<NAME>}}          the address of one of the church's cards in CARDS
 
 REDIRECTS maps the old site's addresses to these pages (site_sync stores
 them with the pages).
@@ -97,6 +98,17 @@ LINKS = {
     "STORE_URL": "https://lovecity.printify.me/",
     "SUBSPLASH_LATEST": "https://subsplash.com/u/-7MJWGR/media/embed/d/*",
     "SERMON_LIBRARY": "https://subsplash.com/u/cityofloveministries/media",
+}
+
+# The church's own cards, made in the app (Build → Forms & classes → Cards;
+# intake_forms rows of BUSINESS_ID). Each answers on the site's own address,
+# lovecityc.com and the subdomain alike; a card switched off in the app
+# shows its "not open right now" page there, never an error. A visitor's
+# answers land on that card, and the Next steps road counts them.
+_CARD = "/public/widget/form/"
+CARDS = {
+    "CARD_BAPTISM": _CARD + "d5354342-8c59-4ec6-96be-31fffe2b676c",
+    "CARD_SERVE": _CARD + "18cf072d-f804-4890-9562-a1d5e7b86af3",
 }
 
 # The old SnapPages site's addresses (its sitemap, and the sermon library
@@ -233,6 +245,7 @@ def render_pages(inline: bool = False) -> dict:
     refs = {token: _asset_ref(name, inline) for token, name in _assets().items()}
     refs.update(_mark_refs())
     refs.update(LINKS)
+    refs.update(CARDS)
     refs.update({"API_BASE": API_BASE, "BUSINESS_ID": BUSINESS_ID})
     return {p: assemble(p, parts, refs) for p in PAGES}
 

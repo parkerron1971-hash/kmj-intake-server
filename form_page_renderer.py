@@ -59,10 +59,84 @@ def _field_html(f: Dict[str, Any]) -> str:
     return f'<div class="field">{lab}{ctl}</div>'
 
 
+# The page shell both documents share: the brand header, the heading and its
+# lead, the footer. A plain string, so its braces are CSS braces.
+_SHELL_CSS = """*{box-sizing:border-box}
+body{margin:0;background:var(--surface);color:var(--text-primary);font-family:var(--font-body);line-height:1.5}
+main{max-width:1280px;margin:0 auto;padding:32px clamp(20px,5vw,64px) 48px}
+.site-header{display:flex;justify-content:space-between;align-items:center;gap:24px;min-height:56px}
+.brand{display:flex;align-items:center;gap:14px;min-width:0}
+.brand-logo{display:block;width:auto;max-width:160px;max-height:64px;object-fit:contain}
+.brand:has(.brand-logo) .biz{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+.back{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--text-primary);text-decoration:none;white-space:nowrap;min-height:44px;display:inline-flex;align-items:center;gap:10px}
+.back:hover{text-decoration:underline;text-underline-offset:5px}
+.back:focus-visible,button:focus-visible{outline:2px solid var(--focus);outline-offset:4px}
+.kicker{font-size:12px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:var(--text-secondary);margin:0 0 20px}
+@media(max-width:767px){main{padding:24px 20px 32px}.site-header{gap:12px}.brand-logo{max-width:124px;max-height:52px}.back{font-size:10px;letter-spacing:.03em}}
+.biz{font-size:.85rem;letter-spacing:.06em;text-transform:uppercase;color:var(--text-muted);margin:0 0 8px}
+h1{font-family:var(--font-heading);font-size:clamp(2.2rem,4.8vw,4.5rem);font-weight:800;letter-spacing:-.035em;line-height:1.03;margin:0 0 24px;overflow-wrap:anywhere}
+.lead{color:var(--text-secondary);font-size:18px;line-height:1.6;max-width:42ch;margin:0}
+footer{margin-top:36px;font-size:.8rem;color:var(--text-muted)}
+"""
+
+
+def _brand(business: Dict[str, Any], theme: Dict[str, Any], canonical_url: str):
+    """(business name, the website's home address or '', the logo <img> or '').
+    The way home exists only when the page wears the website's own style."""
+    name = (business.get("name") or "").strip() or "Contact"
+    canonical = urlsplit(safe_url(canonical_url))
+    home_url = f'{canonical.scheme}://{canonical.netloc}/' if theme['source']=='website' and canonical.netloc else ''
+    logo = f'<img class="brand-logo" src="{_esc(theme["logo_url"])}" alt="{_esc(name)}">' if theme['logo_url'] else ''
+    return name, home_url, logo
+
+
+def render_closed_page(business: Dict[str, Any], form: Dict[str, Any], *,
+                       canonical_url: str, site=None) -> str:
+    """The page a switched-off form's link shows. A website button can point
+    at a form; when the owner switches that form off, the visitor still
+    lands on the business's own page, told plainly, with the way back."""
+    form_name = (form.get("name") or "").strip() or "This form"
+    settings = form.get("settings") if isinstance(form.get("settings"), dict) else {}
+    theme = resolve_theme(business, site, settings)
+    name, home_url, logo = _brand(business, theme, canonical_url)
+    home = (f'<a class="home" href="{_esc(home_url)}" target="_top">Back to {_esc(name)}</a>'
+            if home_url else '')
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{_esc(form_name)} — {_esc(name)}</title>
+<meta name="robots" content="noindex">
+{font_links(theme)}
+<style>
+{theme_css(theme)}
+{_SHELL_CSS}
+.closed{{max-width:640px;margin-top:80px}}
+.home{{display:inline-flex;align-items:center;justify-content:center;min-height:56px;padding:16px 24px;margin-top:32px;font-weight:700;letter-spacing:.04em;color:var(--accent-text);background:var(--accent);border-radius:var(--radius);text-decoration:none}}
+.home:hover{{background:var(--accent-hover)}}
+.home:focus-visible{{outline:2px solid var(--focus);outline-offset:4px}}
+@media(max-width:767px){{.closed{{margin-top:44px}}.home{{display:flex;width:100%}}}}
+</style>
+</head>
+<body data-style-source="{theme['source']}">
+<main>
+<header class="site-header"><div class="brand">{logo}<p class="biz">{_esc(name)}</p></div></header>
+<section class="closed" aria-labelledby="closed-heading">
+<p class="kicker">Not open right now</p>
+<h1 id="closed-heading">{_esc(form_name)}</h1>
+<p class="lead">This form isn’t taking answers right now. Please check back soon.</p>
+{home}
+<footer>Powered by The Solutionist System</footer>
+</section>
+</main>
+</body>
+</html>"""
+
+
 def render_form_page(business: Dict[str, Any], form: Dict[str, Any], *,
                      submit_url: str, canonical_url: str, site=None, embedded=False) -> str:
     """The complete HTML document for one active client form."""
-    name = (business.get("name") or "").strip() or "Contact"
     form_name = (form.get("name") or "").strip() or "Get in touch"
     settings = form.get("settings") if isinstance(form.get("settings"), dict) else {}
     description = str(settings.get("description") or "").strip()
@@ -71,6 +145,7 @@ def render_form_page(business: Dict[str, Any], form: Dict[str, Any], *,
     fields_html = "".join(_field_html(f) for f in fields)
     theme = resolve_theme(business, site, settings)
     css_vars = theme_css(theme)
+    name, home_url, logo = _brand(business, theme, canonical_url)
     from event_form_details import is_event, details_html
     registration = is_event(form)
     event_html = details_html(form)
@@ -80,10 +155,7 @@ def render_form_page(business: Dict[str, Any], form: Dict[str, Any], *,
     if event_html:
         introduction = 'Complete the details below to register.'
     required_note = '<p class="required-note">* Required fields</p>' if any(f.get('required') for f in fields) else ''
-    canonical = urlsplit(safe_url(canonical_url))
-    home_url = f'{canonical.scheme}://{canonical.netloc}/' if theme['source']=='website' and canonical.netloc else ''
-    logo = f'<img class="brand-logo" src="{_esc(theme["logo_url"])}" alt="{_esc(name)}">' if theme['logo_url'] else ''
-    back = f'<a class="back" href="{_esc(home_url)}" target="_top">Back to website <span aria-hidden="true">↗</span></a>' if home_url else ''
+    back =f'<a class="back" href="{_esc(home_url)}" target="_top">Back to website <span aria-hidden="true">↗</span></a>' if home_url else ''
     payload = {"form_id": str(form.get("id") or ""),
                "business_id": str(form.get("business_id") or business.get("id") or "")}
     return f"""<!DOCTYPE html>
@@ -98,32 +170,19 @@ def render_form_page(business: Dict[str, Any], form: Dict[str, Any], *,
 {font_links(theme)}
 <style>
 {css_vars}
-*{{box-sizing:border-box}}
-body{{margin:0;background:var(--surface);color:var(--text-primary);font-family:var(--font-body);line-height:1.5}}
+{_SHELL_CSS}
 /* Layout follows the converted two-column registration reference; live
    website tokens replace its raster backdrop, invented logo and fixed copy.
    Intrinsic rows retain every real field at every viewport width. */
-main{{max-width:1280px;margin:0 auto;padding:32px clamp(20px,5vw,64px) 48px}}
-.site-header{{display:flex;justify-content:space-between;align-items:center;gap:24px;min-height:56px}}
-.brand{{display:flex;align-items:center;gap:14px;min-width:0}}
-.brand-logo{{display:block;width:auto;max-width:160px;max-height:64px;object-fit:contain}}
-.brand:has(.brand-logo) .biz{{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}}
-.back{{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--text-primary);text-decoration:none;white-space:nowrap;min-height:44px;display:inline-flex;align-items:center;gap:10px}}
-.back:hover{{text-decoration:underline;text-underline-offset:5px}}
-.back:focus-visible,button:focus-visible{{outline:2px solid var(--focus);outline-offset:4px}}
 .form-layout{{display:grid;grid-template-columns:minmax(0,1.08fr) minmax(0,1fr);gap:clamp(40px,7vw,100px);align-items:start;margin-top:80px}}
 .intro,.form-panel{{min-width:0}}
-.kicker{{font-size:12px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:var(--text-secondary);margin:0 0 20px}}
 .required-note{{font-size:12px;color:var(--text-secondary);margin:0 0 24px}}
-@media(max-width:767px){{main{{padding:24px 20px 32px}}.form-layout{{grid-template-columns:minmax(0,1fr);gap:32px;margin-top:44px}}.site-header{{gap:12px}}.brand-logo{{max-width:124px;max-height:52px}}.back{{font-size:10px;letter-spacing:.03em}}}}
+@media(max-width:767px){{.form-layout{{grid-template-columns:minmax(0,1fr);gap:32px;margin-top:44px}}}}
 body[data-embedded=true] main{{max-width:640px;padding:24px 20px}}
 body[data-embedded=true] .site-header{{display:none}}
 body[data-embedded=true] .form-layout{{display:block;margin-top:0}}
 body[data-embedded=true] .intro{{margin-bottom:28px}}
 body[data-embedded=true] h1{{font-size:clamp(1.6rem,5vw,2.3rem)}}
-.biz{{font-size:.85rem;letter-spacing:.06em;text-transform:uppercase;color:var(--text-muted);margin:0 0 8px}}
-h1{{font-family:var(--font-heading);font-size:clamp(2.2rem,4.8vw,4.5rem);font-weight:800;letter-spacing:-.035em;line-height:1.03;margin:0 0 24px;overflow-wrap:anywhere}}
-.lead{{color:var(--text-secondary);font-size:18px;line-height:1.6;max-width:42ch;margin:0}}
 .event-details{{margin-top:32px}}
 .event-details h2{{font-size:12px;letter-spacing:.14em;text-transform:uppercase;margin:0 0 24px}}
 .event-details dl{{margin:0}}
@@ -152,7 +211,6 @@ button[disabled]{{opacity:.6;cursor:wait}}
 .done{{display:none;padding:22px;border:1px solid var(--border);border-radius:var(--radius);background:var(--input-surface)}}
 .done h2{{font-family:var(--font-heading);margin:0 0 8px;font-size:1.25rem}}
 .err{{display:none;color:var(--error);margin:12px 0 0}}
-footer{{margin-top:36px;font-size:.8rem;color:var(--text-muted)}}
 </style>
 </head>
 <body data-style-source="{theme['source']}" data-embedded="{str(bool(embedded)).lower()}">

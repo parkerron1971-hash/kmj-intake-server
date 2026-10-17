@@ -276,11 +276,27 @@ def test_home_marks_its_own_menu_link_as_the_current_page(pages):
 def test_every_internal_link_lands_on_a_page_the_site_builds(build, pages):
     for name, page in pages.items():
         for href in re.findall(r'href="(/[^"]*)"', page):
+            if href in build.CARDS.values():
+                continue  # one of the church's cards (next tests)
             path = href.split("#")[0].split("?")[0].strip("/")
             assert path == "" or path in build.PAGES, f"{name}: {href}"
             if "#" in href and path:
                 anchor = href.split("#", 1)[1]
                 assert f'id="{anchor}"' in pages[path], f"{name}: {href} has no target"
+
+
+CARD_RE = re.compile(r"/public/widget/form/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+
+
+def test_the_ministry_buttons_open_the_churchs_own_cards(build, pages):
+    """'I want to be baptized' and 'I want to serve' open the Baptism and
+    Serve with us cards made in the app, where the Next steps road counts
+    the answers, instead of the connect card with a box ticked."""
+    assert build.CARDS and all(CARD_RE.fullmatch(href) for href in build.CARDS.values())
+    page = pages["ministries"]
+    assert f'href="{build.CARDS["CARD_BAPTISM"]}">I want to be baptized</a>' in page
+    assert f'href="{build.CARDS["CARD_SERVE"]}">I want to serve</a>' in page
+    assert "interest=baptism" not in page and "interest=serve" not in page
 
 
 # Both ways a visitor reaches the church: its platform subdomain, and its
@@ -321,6 +337,48 @@ def test_every_page_path_reaches_the_church_site_through_the_real_routers(build,
         r = client.get(path, headers=hosts)
         assert (r.status_code, r.text) == (200, f"church-site {path}"), \
             f"{path} on {hosts}: {r.status_code} {r.text[:120]}"
+
+
+@pytest.mark.parametrize("hosts", CHURCH_HOSTS.values(), ids=CHURCH_HOSTS.keys())
+def test_every_card_button_opens_its_card_or_its_closed_page(build, pages, real_app, hosts, monkeypatch):
+    """A card button, through the real routers on both church addresses,
+    opens that card. Switched off in the app, the same link shows the
+    card's closed page with the way back to lovecityc.com, never the JSON
+    "Form not found" a visitor saw before. Only the reads are stubbed."""
+    from fastapi.testclient import TestClient
+    import chief_form_actions
+    import intake_endpoint
+    import public_site
+
+    live = {"on": True}
+
+    async def db(client, method, path, body=None):
+        if path.startswith("/intake_forms"):
+            if ("is_active=eq.true" in path) != live["on"]:
+                return []
+            return [{"id": path.split("id=eq.", 1)[1].split("&", 1)[0], "business_id": build.BUSINESS_ID,
+                     "name": "Baptism", "fields": [{"name": "name", "label": "Your name"}], "settings": {}}]
+        if path.startswith("/businesses"):
+            return [{"id": build.BUSINESS_ID, "name": "Love City Church", "type": "church", "settings": {}}]
+        if path.startswith("/business_sites"):
+            return [{"business_id": build.BUSINESS_ID, "slug": build.SLUG, "status": "published",
+                     "html_content": pages["home"]}]
+        return []
+    monkeypatch.setattr(intake_endpoint, "supabase_request", db)
+    monkeypatch.setattr(chief_form_actions, "public_form_url",
+                        lambda b, f: f"https://lovecityc.com/public/widget/form/{f}")
+    monkeypatch.setattr(public_site, "_check_rate", lambda *a, **k: True)
+
+    client = TestClient(real_app)
+    for href in build.CARDS.values():
+        live["on"] = True
+        r = client.get(href, headers=hosts)
+        assert r.status_code == 200 and 'id="client-form"' in r.text, f"{href} on {hosts}: {r.status_code}"
+        live["on"] = False
+        r = client.get(href, headers=hosts)
+        assert r.status_code == 404 and r.headers["content-type"].startswith("text/html"), href
+        assert "isn’t taking answers right now" in r.text and 'id="client-form"' not in r.text
+        assert 'href="https://lovecityc.com/"' in r.text and "Back to Love City Church" in r.text
 
 
 def test_every_old_address_has_a_home_and_installs_cleanly(build, pages):
