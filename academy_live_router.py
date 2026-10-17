@@ -3,6 +3,13 @@
 Access RPCs deliberately run as the caller (or enrollment-link anon), NEVER as
 service role. Only after that check may this module perform privileged writes.
 No request payloads, tokens, provider errors, or credentials are logged here.
+
+The room (2026-10-17): the lobby opens 15 minutes before a class starts; the
+class's chat, questions and answers to a question slide are kept
+(academy_live_messages) and reach the room from here, never from a
+participant, so a message a student sends can be held for the teacher and an
+answer is only ever seen by the teaching team until a teacher puts it on
+screen without a name.
 """
 from __future__ import annotations
 
@@ -22,9 +29,22 @@ import sb_clients
 
 router = APIRouter(prefix="/academy-live", tags=["academy-live"])
 UUID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.I)
-ACTIONS = {"status", "start", "join", "end", "allow", "listen", "remove"}
-CONTROLS = {"allow", "listen", "remove"}
+ACTIONS = {"status", "start", "join", "end", "allow", "listen", "remove", "lower",
+           "post", "history", "moderate", "roster"}
+CONTROLS = {"allow", "listen", "remove", "lower"}
+TEACHER_ACTIONS = {"start", "end", "allow", "listen", "remove", "lower", "moderate", "roster"}
+# Things a student may do while the class is live or its lobby is open.
+ROOM_ACTIONS = {"join", "post", "history"}
+KINDS = {"chat", "question", "answer"}
+MODERATION = {"hide", "show", "pin", "unpin", "answered", "onscreen", "offscreen"}
+SLIDE_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")
+# A student's message carrying a link waits for the teacher.
+LINK_RE = re.compile(r"https?://|www\.|\b[a-z0-9-]+\.(?:com|net|org|io|co|app|ly|me|xyz|info|biz|gg|tv|link|site)\b", re.I)
+LOBBY = timedelta(minutes=15)
+MAX_BODY = 1000
+TOPIC_MESSAGE, TOPIC_UPDATE = "class.msg", "class.upd"
 NO_STORE = {"Cache-Control": "no-store"}
+MESSAGE_FIELDS = "id,identity,display_name,teacher,kind,body,slide_id,status,pinned,answered_at,onscreen_at,created_at"
 
 
 class LiveError(Exception):
@@ -59,27 +79,61 @@ def parse_input(raw):
         raise LiveError(400, "Invalid request.") from None
     if not isinstance(value, dict) or not isinstance(value.get("action"), str) or value["action"] not in ACTIONS:
         raise LiveError(400, "Unknown classroom action.")
+    action = value["action"]
     for field in ("session_id", "portal_token"):
         item = value.get(field)
-        required = field == "session_id" and value["action"] != "status"
+        required = field == "session_id" and action != "status"
         if (required or item is not None) and (not isinstance(item, str) or not UUID_RE.fullmatch(item)):
             raise LiveError(400, "Choose a valid class and classroom link.")
-    if value["action"] in CONTROLS:
+    if action in CONTROLS:
         target = value.get("identity")
         if not isinstance(target, str) or not target.startswith("student_") or not UUID_RE.fullmatch(target[8:]):
             raise LiveError(400, "Choose a student in this class.")
+    out = {k: value.get(k) for k in ("action", "session_id", "portal_token", "identity")}
+    if action == "post":
+        kind, body, slide = value.get("kind"), value.get("body"), value.get("slide_id")
+        if kind not in KINDS:
+            raise LiveError(400, "Choose chat, a question or an answer.")
+        if not isinstance(body, str) or not body.strip():
+            raise LiveError(400, "Write something first.")
+        if len(body.strip()) > MAX_BODY:
+            raise LiveError(400, f"Keep it under {MAX_BODY} characters.")
+        if kind == "answer" and (not isinstance(slide, str) or not SLIDE_RE.fullmatch(slide)):
+            raise LiveError(400, "Answer the question on the screen.")
+        out.update(kind=kind, body=body.strip(), slide_id=slide if kind == "answer" else None)
+    if action == "moderate":
+        message, op = value.get("message_id"), value.get("op")
+        if not isinstance(message, str) or not UUID_RE.fullmatch(message) or op not in MODERATION:
+            raise LiveError(400, "Choose a message and what to do with it.")
+        out.update(message_id=message, op=op)
     # Never trust client-supplied role, permission, room, or business fields.
-    return {k: value.get(k) for k in ("action", "session_id", "portal_token", "identity")}
+    return out
+
+
+def when(value):
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+
+
+def lobby_open(access, now=None):
+    """A scheduled class's room opens 15 minutes early and stays open through its planned time."""
+    starts = when(access.get("starts_at"))
+    if access.get("status") != "scheduled" or starts is None:
+        return False
+    now = now or datetime.now(timezone.utc)
+    return starts - LOBBY <= now <= starts + timedelta(minutes=access.get("duration_minutes") or 60)
 
 
 def authorize(action, access):
-    if action != "join" and access.get("teacher") is not True:
+    if action in TEACHER_ACTIONS and access.get("teacher") is not True:
         raise LiveError(403, "Only your teaching team can manage this class.")
     if action == "end" and access["status"] == "ended":
         return
     if access["status"] in ("ended", "cancelled"):
         raise LiveError(409, "This class has ended or was cancelled.")
-    if action == "join" and access["status"] != "live":
+    if action in ROOM_ACTIONS and access["status"] != "live" and not lobby_open(access):
         raise LiveError(409, "Your teacher has not started this class yet.")
     if action in CONTROLS and access["status"] != "live":
         raise LiveError(409, "Start the class first.")
@@ -93,8 +147,11 @@ async def db(client, method, path, body=None, *, caller=None, prefer="return=rep
         if caller:
             raise LiveError(403, "This classroom is unavailable for your account or class link.")
         # Postgres P0001 is the explicit block/throttle exception, not an outage.
-        if path == "/rpc/academy_live_token_claim" and res.json().get("code") == "P0001":
-            raise LiveError(429, "Please wait a few seconds and try joining again.")
+        if path in ("/rpc/academy_live_token_claim", "/rpc/academy_live_post"):
+            detail = res.json() if res.content else {}
+            if detail.get("code") == "P0001":
+                raise LiveError(429, detail.get("message") if path.endswith("_post") and detail.get("message")
+                                else "Please wait a few seconds and try joining again.")
         raise LiveError(503, "Class data is unavailable. Please retry or contact your school.")
     return res.json() if res.content else None
 
@@ -130,7 +187,10 @@ def mint_token(access):
                  can_publish=access["can_publish"], can_subscribe=True, can_publish_data=True,
                  can_publish_sources=sources, can_update_own_metadata=True)).to_jwt())
     return {"server_url": url, "participant_token": token, **{k: access[k] for k in
-            ("teacher", "session_id", "title", "mode")}}
+            ("teacher", "session_id", "title", "mode")},
+            # What the room shows: the lobby's clock, the lesson, who is teaching.
+            **{k: access.get(k) for k in ("identity", "name", "status", "starts_at", "duration_minutes",
+                                           "lesson_id", "teacher_name", "business_type", "course_id")}}
 
 
 def provider():
@@ -144,6 +204,148 @@ async def delete_room(rooms, name):
     except api.TwirpError as exc:
         if exc.code != "not_found":
             raise
+
+
+def room_metadata(access):
+    return json.dumps({"title": access["title"], "mode": access["mode"], "status": "live"})
+
+
+async def open_room(rooms, access, live=False):
+    """Create the class's room (or find it open). Metadata is set only once the class is live,
+    so a lobby join can never put a started class back into its lobby."""
+    await rooms.create_room(api.CreateRoomRequest(name=access["room_name"],
+        max_participants=access["max_participants"], empty_timeout=120, departure_timeout=60,
+        **({"metadata": room_metadata(access)} if live else {})))
+    if live:
+        await rooms.update_room_metadata(api.UpdateRoomMetadataRequest(
+            room=access["room_name"], metadata=room_metadata(access)))
+
+
+async def send(rooms, access, topic, payload, to=None):
+    await rooms.send_data(api.SendDataRequest(room=access["room_name"],
+        data=json.dumps(payload, separators=(",", ":")).encode("utf-8"),
+        kind=api.DataPacket.Kind.RELIABLE, destination_identities=list(to or []), topic=topic))
+
+
+async def teachers_in_room(rooms, access):
+    try:
+        found = await rooms.list_participants(api.ListParticipantsRequest(room=access["room_name"]))
+    except api.TwirpError as exc:
+        if exc.code == "not_found":
+            return []
+        raise
+    return [p.identity for p in found.participants if p.identity.startswith("teacher_")]
+
+
+# ─── What each person may see of a message ───────────────────────────
+def full_view(row):
+    return {k: row.get(k) for k in MESSAGE_FIELDS.split(",")}
+
+
+def anonymous_answer(row):
+    return {"id": row["id"], "kind": "answer", "body": row["body"], "slide_id": row.get("slide_id"),
+            "onscreen_at": row.get("onscreen_at"), "created_at": row.get("created_at")}
+
+
+def visible_to(row, access):
+    """The message as this person may see it, or None."""
+    if access.get("teacher") is True:
+        return full_view(row)
+    mine = row.get("identity") == access["identity"]
+    if row.get("kind") == "answer":
+        if mine:
+            return full_view(row)
+        return anonymous_answer(row) if row.get("onscreen_at") else None
+    if row.get("status") == "shown" or (mine and row.get("status") == "held"):
+        return full_view(row)
+    return None
+
+
+async def deliver(access, row):
+    """Send a new message to whoever may see it. A failed delivery keeps the message
+    (it is already saved and arrives with the history on the next join)."""
+    public = row.get("kind") != "answer" and row.get("status") == "shown"
+    try:
+        async with provider() as live:
+            if public:
+                await send(live.room, access, TOPIC_MESSAGE, {"type": "msg", "message": full_view(row)})
+            else:
+                teachers = await teachers_in_room(live.room, access)
+                if teachers:
+                    await send(live.room, access, TOPIC_MESSAGE, {"type": "msg", "message": full_view(row)}, teachers)
+        return True
+    except Exception:
+        return False
+
+
+async def post_message(client, input, access):
+    teacher = access.get("teacher") is True
+    held = not teacher and input["kind"] != "answer" and bool(LINK_RE.search(input["body"]))
+    row = await db(client, "POST", "/rpc/academy_live_post", {
+        "p_session": access["session_id"], "p_identity": access["identity"], "p_name": access.get("name"),
+        "p_teacher": teacher, "p_kind": input["kind"], "p_body": input["body"],
+        "p_slide": input.get("slide_id"), "p_held": held})
+    delivered = await deliver(access, row)
+    return {"message": full_view(row), "held": row.get("status") == "held", "delivered": delivered}
+
+
+async def history(client, access):
+    rows = await db(client, "GET", "/academy_live_messages?session_id=eq." + access["session_id"]
+                    + "&select=" + MESSAGE_FIELDS + "&order=created_at.desc&limit=400")
+    seen = [v for v in (visible_to(r, access) for r in reversed(rows or [])) if v]
+    return {"messages": seen}
+
+
+async def moderate(client, input, access):
+    path = "/academy_live_messages?id=eq." + input["message_id"] + "&session_id=eq." + access["session_id"]
+    found = await db(client, "GET", path + "&select=" + MESSAGE_FIELDS)
+    if not found:
+        raise LiveError(404, "That message is no longer in this class.")
+    row, op = found[0], input["op"]
+    if op == "answered" and row["kind"] != "question":
+        raise LiveError(400, "Only a question can be marked answered.")
+    if op in ("onscreen", "offscreen") and row["kind"] != "answer":
+        raise LiveError(400, "Only an answer goes on the screen.")
+    if op in ("pin", "show") and row["kind"] == "answer":
+        raise LiveError(400, "Put an answer on the screen instead.")
+    now = datetime.now(timezone.utc).isoformat()
+    change = {"hide": {"status": "hidden", "pinned": False}, "show": {"status": "shown"},
+              "pin": {"status": "shown", "pinned": True}, "unpin": {"pinned": False},
+              "answered": {"answered_at": now}, "onscreen": {"onscreen_at": now},
+              "offscreen": {"onscreen_at": None}}[op]
+    if op == "pin":
+        await db(client, "PATCH", "/academy_live_messages?session_id=eq." + access["session_id"] + "&pinned=is.true",
+                 {"pinned": False}, prefer="return=minimal")
+    updated = await db(client, "PATCH", path + "&select=" + MESSAGE_FIELDS, change)
+    row = updated[0] if updated else {**row, **change}
+    event = {"hide": {"type": "hide", "id": row["id"]},
+             "show": {"type": "msg", "message": full_view(row)},
+             "pin": {"type": "pin", "message": full_view(row)},
+             "unpin": {"type": "pin", "message": None, "id": row["id"]},
+             "answered": {"type": "answered", "id": row["id"], "at": row.get("answered_at")},
+             "onscreen": {"type": "onscreen", "message": anonymous_answer(row)},
+             "offscreen": {"type": "offscreen", "id": row["id"]}}[op]
+    try:
+        async with provider() as live:
+            await send(live.room, access, TOPIC_UPDATE, event)
+    except Exception:
+        pass  # saved; the room reads it with the history on reconnect
+    return {"message": full_view(row)}
+
+
+async def roster(client, access):
+    enrolled = await db(client, "GET", "/academy_enrollments?select=id,contact_id&course_id=eq." + access["course_id"]
+                        + "&business_id=eq." + access["business_id"] + "&status=in.(active,completed)"
+                        + "&order=enrolled_at.asc&limit=500") or []
+    names = {}
+    contacts = sorted({e["contact_id"] for e in enrolled if e.get("contact_id")})
+    for i in range(0, len(contacts), 80):
+        chunk = contacts[i:i + 80]
+        for c in await db(client, "GET", "/contacts?select=id,name&business_id=eq." + access["business_id"]
+                          + "&id=in.(" + ",".join(chunk) + ")") or []:
+            names[c["id"]] = (c.get("name") or "").strip()
+    return {"students": [{"identity": "student_" + e["id"], "name": names.get(e.get("contact_id")) or "Student"}
+                         for e in enrolled]}
 
 
 async def run_action(client, input, authorization):
@@ -160,6 +362,14 @@ async def run_action(client, input, authorization):
         raise LiveError(503, "Live classes are being connected. Please try again later.")
     access = await access_for(client, input, authorization)
     authorize(action, access)
+    if action == "post":
+        return await post_message(client, input, access)
+    if action == "history":
+        return await history(client, access)
+    if action == "moderate":
+        return await moderate(client, input, access)
+    if action == "roster":
+        return await roster(client, access)
     if action == "join":
         await db(client, "POST", "/rpc/academy_live_token_claim",
                  {"p_session": access["session_id"], "p_identity": access["identity"]})
@@ -167,14 +377,15 @@ async def run_action(client, input, authorization):
         # listen-only change observed here is reflected in the signed token.
         access = await access_for(client, input, authorization)
         authorize(action, access)
+        if access["status"] != "live":
+            async with provider() as live:
+                await open_room(live.room, access)
         return mint_token(access)
     async with provider() as live:
         rooms = live.room
         session_path = "/academy_live_sessions?id=eq." + access["session_id"]
         if action == "start":
-            await rooms.create_room(api.CreateRoomRequest(name=access["room_name"],
-                max_participants=access["max_participants"], empty_timeout=120, departure_timeout=60,
-                metadata=json.dumps({"title": access["title"], "mode": access["mode"]})))
+            await open_room(rooms, access, live=True)
             await db(client, "PATCH", session_path + "&status=eq.scheduled",
                      {"status": "live", "started_at": datetime.now(timezone.utc).isoformat()})
             try:
@@ -196,6 +407,14 @@ async def run_action(client, input, authorization):
                             + "&course_id=eq." + access["course_id"] + "&business_id=eq." + access["business_id"] + "&limit=1")
         if not enrolled:
             raise LiveError(403, "That student does not belong to this class.")
+        if action == "lower":
+            try:
+                await rooms.update_participant(api.UpdateParticipantRequest(room=access["room_name"], identity=target,
+                    attributes={"hand_raised": "false"}))
+            except api.TwirpError as exc:
+                if exc.code != "not_found":
+                    raise
+            return {"ok": True}
         publish = action == "allow"
         await db(client, "POST", "/academy_live_members?on_conflict=session_id,identity",
                  {"session_id": access["session_id"], "identity": target,
@@ -209,9 +428,11 @@ async def run_action(client, input, authorization):
                     raise
         else:
             try:
+                # Inviting someone to speak also lowers their hand.
                 await rooms.update_participant(api.UpdateParticipantRequest(room=access["room_name"], identity=target,
                     permission=api.ParticipantPermission(can_publish=publish, can_subscribe=True, can_publish_data=True,
-                        can_publish_sources=[api.TrackSource.CAMERA, api.TrackSource.MICROPHONE] if publish else [])))
+                        can_publish_sources=[api.TrackSource.CAMERA, api.TrackSource.MICROPHONE] if publish else []),
+                    **({"attributes": {"hand_raised": "false"}} if publish else {})))
             except api.TwirpError as exc:
                 # The persisted permission also applies when the student rejoins.
                 if exc.code != "not_found":
@@ -222,7 +443,7 @@ async def run_action(client, input, authorization):
 @router.post("")
 async def live_action(request: Request):
     try:
-        input = parse_input(await bounded_body(request, 4096))
+        input = parse_input(await bounded_body(request, 8192))
         async with httpx.AsyncClient() as client:
             result = await asyncio.wait_for(run_action(client, input, request.headers.get("authorization")), timeout=22)
         return JSONResponse(result, headers=NO_STORE)
