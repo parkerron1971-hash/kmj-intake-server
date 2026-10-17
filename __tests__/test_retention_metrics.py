@@ -78,7 +78,7 @@ def test_chief_recall_uses_same_summary_and_pages_the_complete_followup_list(mon
     assert len(page["rows"]) == 5 and page["next_offset"] == 10
     assert page["rows"] == r["retention_health"]["at_risk"][5:10]
     assert "at_risk" not in page["summary"]
-    async def load(*args): return r
+    async def load(*args, **kwargs): return r
     monkeypatch.setattr(chief, "load_report", load)
     result = asyncio.run(chief.handle_growth_report(None, {"id": "business"}, {"section": "client_health"}))
     assert result["nav"] == {"tab": "grow", "sub": "retention"}
