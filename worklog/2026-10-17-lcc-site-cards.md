@@ -3,11 +3,10 @@ title: Love City's "I want to be baptized" and "I want to serve" open the church
 date: 2026-10-17
 agent: Claude Code (Claude Opus 5.5)
 asked: 'After the Forms & classes build made Love City''s Baptism and Serve with us cards: "yes point the website buttons at the new cards."'
-status: in progress
+status: shipped
 prs: [kmj-intake-server#1468]
 migrations: []
 left_undone:
-  - "After deploy: open lovecityc.com/ministries and follow both buttons to their cards"
   - "The old SnapPages addresses /baptism and /volunteer (and /ministryworks, /city-serve) still land on the connect card with the box ticked: clean_redirects only allows the site's own pages as targets"
 decisions:
   - "The card addresses live in build.py CARDS as build-time tokens ({{CARD_BAPTISM}}, {{CARD_SERVE}}), relative, so lovecityc.com and the subdomain both work"
