@@ -34,6 +34,44 @@ def test_site_domain_route_passes_the_same_published_style(monkeypatch):
     response=asyncio.run(public_site._serve_form_page(None,'biz-1','example','f1'))
     assert '--accent: #D4A72C' in response.body.decode()
 
+def test_a_switched_off_form_shows_its_closed_page_on_the_site_address(monkeypatch):
+    import public_site
+    paths=[]
+    async def db(client,path):
+        paths.append(path)
+        if path.startswith('/intake_forms'):return [] if 'is_active=eq.true' in path else [FORM]
+        if path.startswith('/business_sites'):return [SITE]
+        return [BIZ]
+    monkeypatch.setattr(public_site,'_sb_service',db)
+    response=asyncio.run(public_site._serve_form_page(None,'biz-1','example','f1'))
+    body=response.body.decode()
+    assert response.status_code==404 and 'Workshop registration' in body
+    assert 'isn’t taking answers right now' in body and '<form' not in body and 'intake/submit' not in body
+    assert 'href="https://example.mysolutionist.app/"' in body and '--accent: #D4A72C' in body
+    # Still only this business's own form.
+    assert all('business_id=eq.biz-1' in p for p in paths if p.startswith('/intake_forms'))
+
+def test_a_form_that_does_not_exist_is_still_not_found(monkeypatch):
+    import pytest
+    from fastapi import HTTPException
+    import intake_endpoint,public_site
+    async def none_site(client,path):return []
+    async def none_api(client,method,path,body=None):return []
+    monkeypatch.setattr(public_site,'_sb_service',none_site)
+    monkeypatch.setattr(intake_endpoint,'supabase_request',none_api)
+    with pytest.raises(HTTPException) as site:
+        asyncio.run(public_site._serve_form_page(None,'biz-1','example','nope'))
+    req=SimpleNamespace(url=SimpleNamespace(hostname='api.example',port=None),query_params={})
+    with pytest.raises(HTTPException) as api:
+        asyncio.run(intake_endpoint.public_form_page('nope',req))
+    assert site.value.status_code==api.value.status_code==404
+
+def test_the_closed_page_without_a_website_has_no_way_home():
+    from form_page_renderer import render_closed_page
+    body=render_closed_page(BIZ,{**FORM,'name':'<b>Trip</b>'},canonical_url='https://api.example/public/widget/form/f1')
+    assert '&lt;b&gt;Trip&lt;/b&gt;' in body and '<b>Trip' not in body
+    assert 'class="home"' not in body and 'Not open right now' in body
+
 def test_registration_and_confirmation_share_the_website_theme():
     rendered=render_form_page(BIZ,FORM,site=SITE,submit_url='https://api.example/intake/submit',canonical_url='https://example.mysolutionist.app/public/widget/form/f1')
     assert 'Register</button>' in rendered and 'fonts.googleapis.com/css2?' in rendered

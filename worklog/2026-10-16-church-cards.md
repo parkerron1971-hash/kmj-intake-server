@@ -3,11 +3,10 @@ title: A church's cards — the website's own connect card and prayer request, a
 date: 2026-10-16
 agent: Claude Code (Claude Opus 5.5)
 asked: 'On the Forms & classes redesign canvas (Love City Church): "redesign is good. give an easy way for people to function and make things happen. awesome build this."'
-status: in progress
+status: shipped
 prs: [kmj-intake-server#1467, solutionist-studio#1241]
 migrations: []
-left_undone:
-  - "Merge #1467 first, then solutionist-studio#1241; check Love City's Forms page shows its website Connect card and Prayer request"
+left_undone: []
 decisions:
   - "Website cards are read from the published pages (html_content + site_config.generated_pages), never stored twice: a <form data-church-form> is the card, its labels and legends are its questions"
   - "Counts come from the rows each door already writes (events contact_note/form_submit, ministry_care_requests); no new table"
