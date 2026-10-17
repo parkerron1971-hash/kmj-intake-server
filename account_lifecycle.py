@@ -111,6 +111,13 @@ EXPORT_EXCLUDED: Dict[str, str] = {
     "business_card_connections": "encrypted third-party OAuth credentials and card preferences; never portable, cascade on business deletion",
     "business_secrets": "encrypted browser credentials; never exported, cascade on business deletion",
     "checkin_stations": "check-in station device tokens and PIN hashes; credentials, never portable — a restored church pairs its tablets again; cascade on business deletion",
+    # The stream relay (stream_relay_router.py). The church's stream key is
+    # a hash and its YouTube/Facebook keys are ciphertext under this
+    # deployment's key: credentials, useless anywhere else. The session
+    # rows are the relay's run log; each recording's link travels with
+    # the sermon it became, which IS exported.
+    "church_streams": "stream key hash and encrypted YouTube/Facebook stream keys; credentials, never portable — a restored church makes a new key; cascade on business deletion",
+    "stream_sessions": "the stream relay's run log (when, how long, where the recording is); the recording's link is exported with its sermon; cascade on business deletion",
     # The practitioner's other calendar. The feed link is a credential
     # (it reads their whole calendar), and the busy blocks are re-derived
     # from it on every sync; both cascade with the business.
