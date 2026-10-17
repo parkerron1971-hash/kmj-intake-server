@@ -11,9 +11,12 @@ church_router.py — the church office's read-only questions about people.
                                                  on each (owner and staff)
     GET /church/follow-ups?business_id=          Leaders & follow-up: everyone
         POST …/{id}/reassign | note | step | close   a card handed to a leader
-    GET|POST /church/leaders, DELETE …/{role_id}  who holds which role
-                                                 (church_follow_up; owner and
+    GET|POST /church/leaders, DELETE …/{role_id}  the role library and who
+                                                 holds which role (church_roles,
+                                                 church_follow_up; owner and
                                                  staff)
+    POST /church/roles, PATCH|DELETE …/{id}      make, change, archive a role
+    POST /church/type                            the church type, and its titles
 
 First-time guests: any active seat may read (the same rule as the
 attendance table itself). Care counts: the owner and staff only, see
@@ -24,7 +27,7 @@ waiting for a call or how many prayer requests are new.
 from __future__ import annotations
 
 import uuid
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -32,6 +35,7 @@ from pydantic import BaseModel, Field
 import church_cards
 import church_follow_up
 import church_reads
+import church_roles
 import sb_clients
 from auth_supabase import UserSession
 from business_access import business_access
@@ -102,9 +106,32 @@ class _Note(BaseModel):
 
 
 class _Role(BaseModel):
+    """Ask someone to take a role: `role_id` (the church's role), or the
+    first version's `role` key."""
     contact_id: str
-    role: str
+    role_id: str = ""
+    role: str = ""
     scope: str = Field("", max_length=120)
+
+
+class _RoleDef(BaseModel):
+    """A role in the library: the church's title on a job (church_roles)."""
+    title: Optional[str] = Field(None, max_length=80)
+    job: Optional[str] = Field(None, max_length=20)
+    definition: Optional[str] = Field(None, max_length=1200)
+    covers: Optional[str] = Field(None, max_length=10)
+    reports_to: Optional[str] = None
+    oversees_teams: Optional[List[str]] = Field(None, max_length=40)
+    handles: Optional[List[str]] = Field(None, max_length=12)
+    sees: Optional[List[str]] = Field(None, max_length=8)
+    term_months: Optional[int] = Field(None, ge=0, le=120)
+    needs_class: Optional[str] = None
+    status: Optional[str] = Field(None, max_length=10)
+
+
+class _Type(BaseModel):
+    type: str = Field(..., max_length=20)
+    add: List[str] = Field(default_factory=list, max_length=40)
 
 
 def _who(session: UserSession) -> Tuple[str, str]:
@@ -166,35 +193,79 @@ def follow_up_close(follow_up_id: str, business_id: str = Query(...),
 @router.get("/leaders")
 def leaders(business_id: str = Query(...),
             biz: Dict[str, Any] = Depends(business_access(CARE_MIN_ROLE))):
-    """Leaders & roles: who holds which role (invited or active), the
-    roles a member can hold, and the teams a team leader can lead (the
-    choices on the church's Serve card)."""
-    bid = _uuid(business_id)
-    rows, team_names = church_follow_up.roles(bid), church_follow_up.teams(bid)
-    if rows is None or team_names is None:
+    """Leaders & roles: the church's role library (each role its title on a
+    job, with who holds it and who it answers to), its church type and the
+    titles each type uses, its teams, groups, Kids leaders and office
+    logins, and each card's path as the engine runs it. The first read
+    fills a church's library (church_roles.ensure_library)."""
+    out = church_roles.library(biz)
+    if out is None:
         raise HTTPException(503, "Your leaders couldn't be loaded. Try again in a moment.")
-    return {
-        "roles": [{k: r.get(k) for k in ("id", "contact_id", "name", "email", "phone", "role", "scope",
-                                          "status", "invited_at", "answered_at")} for r in rows],
-        "role_labels": church_follow_up.ROLE_LABELS,
-        "teams": team_names,
-        # Each card's path as the engine runs it, so the page shows exactly
-        # what happens (steps and their days, and the late ladder).
-        "paths": church_follow_up.PATHS,
-        "late_ladder": [{"days": d, "level": lvl, "kind": k} for d, lvl, k in church_follow_up.LATE_LADDER],
-    }
+    return out
+
+
+def _role_out(biz: Dict[str, Any], role_id: str) -> Dict[str, Any]:
+    lib = church_roles.library(biz)
+    found = next((r for r in (lib or {}).get("roles") or [] if r["id"] == str(role_id)), None)
+    return found or {"id": str(role_id)}
+
+
+@router.post("/roles")
+def role_create(body: _RoleDef, business_id: str = Query(...),
+                biz: Dict[str, Any] = Depends(business_access(CARE_MIN_ROLE)),
+                session: UserSession = Depends(sb_clients.authed_request)):
+    """Make a role: the church's own title on one of the jobs."""
+    uid, _name = _who(session)
+    if church_roles.ensure_library(biz) is None:
+        raise HTTPException(503, "Your roles couldn't be loaded. Try again in a moment.")
+    row = church_roles.create_role(biz, body.model_dump(exclude_none=True), by_user=uid)
+    return {"ok": True, "role": _role_out(biz, row["id"])}
+
+
+@router.patch("/roles/{role_id}")
+def role_update(role_id: str, body: _RoleDef, business_id: str = Query(...),
+                biz: Dict[str, Any] = Depends(business_access(CARE_MIN_ROLE))):
+    changes = body.model_dump(exclude_unset=True)
+    row = church_roles.update_role(_uuid(business_id), role_id, changes)
+    return {"ok": True, "role": _role_out(biz, row["id"])}
+
+
+@router.delete("/roles/{role_id}")
+def role_archive(role_id: str, business_id: str = Query(...),
+                 biz: Dict[str, Any] = Depends(business_access(CARE_MIN_ROLE))):
+    """Archive a role (a draft is deleted). Refused while people hold it."""
+    return {"ok": True, **church_roles.archive_role(_uuid(business_id), role_id)}
+
+
+@router.post("/type")
+def church_type(body: _Type, business_id: str = Query(...),
+                biz: Dict[str, Any] = Depends(business_access(CARE_MIN_ROLE)),
+                session: UserSession = Depends(sb_clients.authed_request)):
+    """The church's type (its tradition), and the type's titles to add."""
+    uid, _name = _who(session)
+    out = church_roles.set_type(biz, body.type, body.add, by_user=uid)
+    st = out["settings"]
+    tkey = st.get("church_type") or body.type
+    return {"ok": True, "added": out["added"],
+            "church_type": {"key": tkey, "label": church_roles.TYPES[tkey]["label"],
+                            "guessed": st.get("guessed_type") or tkey, "reason": st.get("guess_reason") or "",
+                            "set_by": st.get("set_by") or "owner"}}
 
 
 @router.post("/leaders")
 async def leader_add(body: _Role, business_id: str = Query(...),
                      biz: Dict[str, Any] = Depends(business_access(CARE_MIN_ROLE)),
                      session: UserSession = Depends(sb_clients.authed_request)):
-    """Ask a member to take a role. They get an email with a link to their
-    member page, where they say yes; the Lead tab appears then."""
+    """Ask a member to take a role. They get an email with what the role is
+    and a link to their member page, where they say yes; the Lead tab
+    appears then."""
     import asyncio
     uid, _name = _who(session)
+    which = body.role_id or body.role
+    if not which:
+        raise HTTPException(400, "Pick the role")
     row = await asyncio.to_thread(church_follow_up.add_role, _uuid(business_id), body.contact_id,
-                                  body.role, body.scope, by_user=uid)
+                                  which, body.scope, by_user=uid)
     emailed = False
     if not row.get("already"):
         emailed = await church_follow_up.send_invite(biz, row)

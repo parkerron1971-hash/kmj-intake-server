@@ -8,14 +8,20 @@ side (design canvas LG4Q97HqtEM4ByyXmmSrCP, boards 3-6).
 
     GET  /my/lead                 my people (and an invitation to answer)
     GET  /my/lead/<follow_up_id>  one person: the card, the path, the notes
+    GET  /my/lead/prayer          prayer requests handed to me (role library,
+                                  canvas BKNqVVNiyxfAGAa7UAVWUC board 7)
     POST /my/lead/answer          yes or not now to a role
     POST /my/lead/note            log a conversation
     POST /my/lead/step            mark the current step done
     POST /my/lead/handback        hand them back to the office
+    POST /my/lead/prayer/prayed | note | pass   I prayed, send a note, pass on
 
 A leader only ever sees the follow-ups handed to them (church_follow_up
 checks every read and write against leader_contact_id), and never another
-person's pastors-only note. The owner's preview reads and never writes.
+person's pastors-only note. Prayer: only requests the person shared with the
+prayer team and that were handed to them (church_prayer), a first name, and
+how to reach them only when they asked for a call. The owner's preview reads
+and never writes.
 """
 from __future__ import annotations
 
@@ -42,12 +48,17 @@ DONE = {
     "back": "Handed back to the office.",
     "yes": "You’re leading now. People Chief hands to you show up here.",
     "no": "Got it. Nothing changes for you.",
+    "prayed": "Thank you for praying.",
+    "noted": "Your note is on its way.",
+    "passed": "Passed on. They’ll pray over it today.",
 }
 ERRORS = {
     "error": "That didn’t save. Please try again.",
     "slow": "That was a lot at once. Wait a moment, then try again.",
     "preview": "This is a preview. Nothing is saved.",
     "gone": "That person isn’t handed to you anymore.",
+    "prayer_gone": "That request isn’t handed to you anymore.",
+    "noemail": "They left no email, so a note can’t be sent.",
 }
 
 LEAD_CSS = """
@@ -134,6 +145,29 @@ body:has(.ld-wide) .mb-top,body:has(.ld-wide) .mp-shell{max-width:1180px;}
 .ld-back summary{list-style:none;cursor:pointer;}
 .ld-back summary::-webkit-details-marker{display:none;}
 .ld-back[open] summary{margin-bottom:10px;}
+.ld-seg{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px;padding:4px;border-radius:14px;background:var(--s1);margin:0 0 16px;max-width:420px;}
+.ld-seg a{display:flex;align-items:center;justify-content:center;min-height:42px;border-radius:10px;font-size:14.5px;font-weight:600;
+  color:var(--fg2);text-decoration:none;}
+.ld-seg a[aria-current]{background:var(--s3);color:var(--fg);}
+.ld-prs{display:grid;grid-template-columns:minmax(0,1fr);gap:12px;max-width:760px;}
+@media (min-width:1000px){.ld-prs{grid-template-columns:repeat(2,minmax(0,1fr));max-width:none;}}
+.ld-pr{background:var(--s1);border-radius:var(--r-lg);padding:16px;display:flex;flex-direction:column;gap:10px;}
+.ld-pr-who{display:flex;align-items:center;gap:12px;}
+.ld-pr-who .t{display:flex;flex-direction:column;min-width:0;flex:1;}
+.ld-pr-who .t b{font-size:16px;font-weight:650;}
+.ld-pr-who .t small{font-size:12.5px;color:var(--fg3);}
+.ld-pr-text{margin:0;font-family:var(--mb-serif);font-size:19px;line-height:1.4;white-space:pre-line;}
+.ld-pr-tags{display:flex;flex-wrap:wrap;gap:6px;}
+.ld-pr-acts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;}
+.ld-pr-acts form{display:contents;}
+.ld-pr-acts .ld-btn,.ld-pr-acts .ld-ghost{min-height:46px;font-size:14.5px;}
+.ld-pr-acts .ld-said{display:flex;align-items:center;justify-content:center;gap:6px;min-height:46px;border-radius:999px;
+  background:rgba(95,208,138,.12);color:#5fd08a;font-weight:650;font-size:14.5px;}
+.ld-pr .ld-quiet{margin:0;}
+.ld-pass{display:flex;gap:8px;flex-wrap:wrap;align-items:center;}
+.ld-pass select{flex:1 1 180px;min-height:44px;border-radius:12px;border:.5px solid var(--line);background:var(--s2);color:var(--fg);
+  padding:0 12px;font:inherit;font-size:15px;}
+.ld-pass .ld-ghost{width:auto;padding:0 18px;}
 """
 
 
@@ -221,21 +255,100 @@ def chief_line(items: List[Dict[str, Any]], biz: Dict[str, Any], now: Optional[d
 
 
 def _role_text(r: Dict[str, Any]) -> str:
-    if r.get("role") == "team_leader" and r.get("scope"):
-        return f"Team leader · {r['scope']}"
-    return r.get("label") or cfu.ROLE_LABELS.get(r.get("role"), "Leader")
+    label = r.get("label") or cfu.ROLE_LABELS.get(r.get("role"), "Leader")
+    if (r.get("covers") == "team" or r.get("role") == "team_leader") and r.get("scope"):
+        return f"{label} · {r['scope']}"
+    return label
+
+
+def _is_prayer(r: Dict[str, Any]) -> bool:
+    return r.get("job") == "prayer" or any(h in (r.get("handles") or []) for h in ("prayer_shared", "prayer_passed"))
 
 
 def _invite_card(r: Dict[str, Any], church: str) -> str:
-    what = cfu.role_name(r)
+    """The invitation (canvas board 8): what the role is, in the church's
+    words, what they'd get and never see, and who they'd answer to."""
+    import church_roles as cr
+    team = r.get("covers") == "team" or (r.get("role") == "team_leader" and bool(r.get("scope")))
+    what = cfu.role_name({**r, "def": {"title": r.get("label"), "covers": "team" if team else r.get("covers")}})
+    job = cr.JOBS.get(r.get("job") or "") or {}
+    rows = []
+    if job:
+        rows.append(f'<div><dt>You’ll get</dt><dd>{_e(job["gets"])}</dd></div>')
+        rows.append(f'<div><dt>You’ll see</dt><dd>{_e(job["sees"])}</dd></div>')
+        rows.append(f'<div><dt>You’ll never see</dt><dd>{_e(job["never"])}</dd></div>')
+    if r.get("reports_to_title"):
+        rows.append(f'<div><dt>You answer to</dt><dd>The {_e(r["reports_to_title"])}. If something waits a day, '
+                    f'they hear about it.</dd></div>')
+    ask = (f'Will you lead <em>{_e(what)}</em>?' if team else f'Will you be {_e(church)}’s <em>{_e(what)}</em>?')
     return (f'<section class="ld-invite" aria-label="An invitation">'
-            f'<h2>Will you lead <em>{_e(what)}</em>?</h2>'
-            f'<p>{_e(church)} asked. Say yes and the people Chief hands to you show up here, with what they wrote '
-            f'and the next step for each. You only see the people handed to you, never giving or prayer requests.</p>'
-            f'<form method="post" action="/my/lead/answer" class="ld-two">'
+            f'<h2>{ask}</h2>'
+            + (f'<p>{_e(r["definition"])}</p>' if r.get("definition") else
+               f'<p>{_e(church)} asked. Say yes and the people Chief hands to you show up here.</p>')
+            + (f'<dl class="ld-ans">{"".join(rows)}</dl>' if rows else "")
+            + f'<form method="post" action="/my/lead/answer" class="ld-two">'
             f'<input type="hidden" name="role_id" value="{_e(r["id"])}">'
             f'<button class="ld-btn" type="submit" name="answer" value="yes">Yes, I’ll lead</button>'
-            f'<button class="ld-ghost" type="submit" name="answer" value="no">Not now</button></form></section>')
+            f'<button class="ld-ghost" type="submit" name="answer" value="no">Not right now</button></form>'
+            f'<p class="ld-quiet">Saying no is fine. The church is told kindly, and nothing else changes for you.</p></section>')
+
+
+def _prayer_card(p: Dict[str, Any], biz: Dict[str, Any], targets: List[Dict[str, Any]], now: datetime) -> str:
+    from member_app_ui import icon
+    church = (biz.get("name") or "Your church").strip()
+    due = due_label({"due_at": p.get("due_at")}, biz, now)
+    tags = ['<span class="ld-tag">Shared with the prayer team</span>']
+    if p.get("wants_call"):
+        tags.append('<span class="ld-tag">Wants a call</span>')
+    acts = []
+    rid = _e(p["id"])
+    if p.get("prayed_at"):
+        acts.append(f'<span class="ld-said">{icon("check", 15)}Prayed today</span>')
+    else:
+        acts.append(f'<form method="post" action="/my/lead/prayer/prayed"><input type="hidden" name="rid" value="{rid}">'
+                    f'<button class="ld-btn" type="submit">I prayed</button></form>')
+    if p.get("noted_at"):
+        acts.append(f'<span class="ld-said">{icon("check", 15)}Note sent</span>')
+    elif p.get("email_ok"):
+        acts.append(f'<form method="post" action="/my/lead/prayer/note"><input type="hidden" name="rid" value="{rid}">'
+                    f'<button class="ld-ghost" type="submit">Send a note</button></form>')
+    phone = re.sub(r"[^\d+]", "", p.get("phone") or "")
+    if phone:
+        acts.append(f'<a class="ld-ghost" href="tel:{_e(phone)}">{icon("phone", 16)}Call {_e(p["first"])}</a>')
+    passing = ""
+    if targets and not p.get("prayed_at"):
+        opts = "".join(f'<option value="{_e(t["contact_id"])}">{_e(t["name"])}</option>' for t in targets)
+        passing = (f'<form method="post" action="/my/lead/prayer/pass" class="ld-pass"><input type="hidden" name="rid" value="{rid}">'
+                   f'<label class="mp-sr" for="ld-pass-{rid}">Pass it to</label>'
+                   f'<select id="ld-pass-{rid}" name="to">{opts}</select>'
+                   f'<button class="ld-ghost" type="submit">Pass it on</button></form>')
+    note_line = (f'<p class="ld-quiet">A note says: “We prayed for you today. {_e(church)} is with you.” Never their words.</p>'
+                 if p.get("email_ok") and not p.get("noted_at") else "")
+    return (f'<section class="ld-pr" aria-label="{_e(p["first"])}">'
+            f'<div class="ld-pr-who"><span class="ld-av" aria-hidden="true">{_e((p["first"] or "?")[:1].upper())}</span>'
+            f'<span class="t"><b>{_e(p["first"])}</b><small>{_e(_day(p.get("created_at"), biz))} · {_e(p.get("source") or "")}</small></span>'
+            f'<span class="{due["cls"]}">{_e(due["text"]) if not p.get("prayed_at") else ""}</span></div>'
+            f'<p class="ld-pr-text">{_e(p["text"])}</p>'
+            f'<div class="ld-pr-tags">{"".join(tags)}</div>'
+            f'<div class="ld-pr-acts">{"".join(acts)}</div>{passing}{note_line}</section>')
+
+
+def _prayer_body(pv: Optional[Dict[str, Any]], biz: Dict[str, Any], targets: List[Dict[str, Any]], now: datetime) -> str:
+    from member_app_ui import icon
+    if pv is None:
+        return '<p class="mp-err" role="alert">Your prayer requests couldn’t load just now. Please try again in a moment.</p>'
+    reqs = pv.get("requests") or []
+    waiting = sum(1 for p in reqs if not p.get("prayed_at"))
+    head = (f'<div class="ld-chief"><small>{icon("star", 12)}From Chief</small><p>'
+            + (_e(f"{waiting} {'request is' if waiting == 1 else 'requests are'} waiting for prayer.") if waiting else
+               "Nothing is waiting. When someone shares a request with the prayer team, it shows up here.")
+            + '</p></div>')
+    cards = "".join(_prayer_card(p, biz, targets, now) for p in reqs)
+    done = pv.get("prayed_30") or 0
+    return (head + (f'<div class="ld-prs" style="margin-top:12px">{cards}</div>' if cards else "")
+            + (f'<div class="ld-done" style="margin-top:12px">{icon("check", 16)}<span><b>{done} prayed over</b> this month.</span></div>' if done else "")
+            + f'<p class="ld-quiet" style="margin-top:12px">{icon("lock", 14)}<span>Never here: requests kept for the pastors, '
+              f'giving, or anyone’s whole record. Anything about someone in danger goes straight to the pastor.</span></p>')
 
 
 def _person_link(i: Dict[str, Any], biz: Dict[str, Any], current: str, now: datetime, *, auto: bool = False) -> str:
@@ -328,7 +441,9 @@ def _file(i: Dict[str, Any], biz: Dict[str, Any], me: Dict[str, Any]) -> str:
 
 
 def render(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], my_roles: List[Dict[str, Any]],
-           view: Optional[Dict[str, Any]], selected: str = "", *, now: Optional[datetime] = None) -> str:
+           view: Optional[Dict[str, Any]], selected: str = "", *, now: Optional[datetime] = None,
+           prayer: Optional[Dict[str, Any]] = None, tab: str = "people",
+           targets: Optional[List[Dict[str, Any]]] = None) -> str:
     from member_portal import _shell
     now = now or datetime.now(timezone.utc)
     church = (biz.get("name") or "Your church").strip()
@@ -342,6 +457,21 @@ def render(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], my_r
     head = (f'<header class="ld-head"><h1 class="ld-hello">Lead, <em>{_e(first)}</em></h1>'
             f'<div class="ld-roles">{"".join(f"<span class=ld-role>{_e(_role_text(r))}</span>" for r in active)}</div></header>')
     invites = "".join(_invite_card(r, church) for r in invited)
+    prays = any(_is_prayer(r) for r in active) or bool((prayer or {}).get("requests"))
+    people = any(not _is_prayer(r) for r in active) or bool((view or {}).get("follow_ups"))
+    if active and prays and (tab == "prayer" or not people):
+        waiting = sum(1 for p in (prayer or {}).get("requests") or [] if not p.get("prayed_at"))
+        seg = (f'<nav class="ld-seg" aria-label="Lead"><a href="/my/lead">People</a>'
+               f'<a href="/my/lead/prayer" aria-current="page">Prayer{f" · {waiting}" if waiting else ""}</a></nav>'
+               if people else "")
+        body = f'{flash}{head}{invites}{seg}{_prayer_body(prayer, biz, targets or [], now)}'
+        return _shell(biz, site, "Prayer", f'<style>{LEAD_CSS}</style><div class="ld-wide">{body}</div>', tab="lead", who=me)
+    seg = ""
+    if active and prays:
+        waiting = sum(1 for p in (prayer or {}).get("requests") or [] if not p.get("prayed_at"))
+        seg = (f'<nav class="ld-seg" aria-label="Lead"><a href="/my/lead" aria-current="page">People</a>'
+               f'<a href="/my/lead/prayer">Prayer{f" · {waiting}" if waiting else ""}</a></nav>')
+    head = head + seg
     if not active:
         body = (f'{flash}{head}{invites}' if invites else
                 f'{flash}{head}<section class="ld-card"><p>You don’t lead anything at {_e(church)} yet. When the church '
@@ -374,24 +504,34 @@ def render(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], my_r
 
 
 async def serve(request: Request, biz: Dict[str, Any], site, me: Dict[str, Any], sub: str):
-    """GET /my/lead and /my/lead/<id>: (html, status)."""
+    """GET /my/lead, /my/lead/prayer and /my/lead/<id>: (html, status)."""
+    import church_prayer
     selected = sub[len("/my/lead/"):] if sub.startswith("/my/lead/") else ""
+    tab = "prayer" if selected == "prayer" else "people"
+    if tab == "prayer":
+        selected = ""
     if selected and not _FID.match(selected):
         return render(biz, site, request, me, [], None), 404
     my_roles = await asyncio.to_thread(cfu.roles_for, biz["id"], str(me["id"]))
     if my_roles is None:
         return render(biz, site, request, me, [{"status": "active", "role": "", "label": ""}], None), 503
-    view = None
+    view = prayer = None
+    targets: List[Dict[str, Any]] = []
     if any(r["status"] == "active" for r in my_roles):
         view = await asyncio.to_thread(cfu.leader_view, biz["id"], str(me["id"]))
-    return render(biz, site, request, me, my_roles, view, selected), 200 if view is not None or not my_roles else 503
+        prayer = await asyncio.to_thread(church_prayer.leader_prayers, biz["id"], str(me["id"]))
+        if any(_is_prayer(r) for r in my_roles if r["status"] == "active"):
+            targets = await asyncio.to_thread(church_prayer.pass_targets, biz["id"], me) or []
+    html_out = render(biz, site, request, me, my_roles, view, selected, prayer=prayer, tab=tab, targets=targets)
+    ok = (prayer is not None) if tab == "prayer" else (view is not None)
+    return html_out, 200 if ok or not my_roles else 503
 
 
 # ─── POST ─────────────────────────────────────────────────────────────
 
 def _go(target: str, **q: str) -> RedirectResponse:
     from member_portal import _SECURE_HEADERS
-    if target != "/my/lead" and not re.fullmatch(r"/my/lead/[0-9a-fA-F-]{36}", target):
+    if target not in ("/my/lead", "/my/lead/prayer") and not re.fullmatch(r"/my/lead/[0-9a-fA-F-]{36}", target):
         target = "/my/lead"
     qs = "&".join(f"{k}={v}" for k, v in q.items())
     return RedirectResponse(f"{target}?{qs}" if qs else target, status_code=303, headers=_SECURE_HEADERS)
@@ -479,3 +619,50 @@ async def step(request: Request):
 @router.post("/my/lead/handback", include_in_schema=False)
 async def handback(request: Request):
     return await _act(request, "handback")
+
+
+async def _pray(request: Request, what: str):
+    """I prayed, send a note, pass it on: only for a request handed to
+    this member (church_prayer checks every one against leader_contact_id)."""
+    import church_prayer
+    church, me, err = await _leader(request)
+    here = "/my/lead/prayer"
+    if err:
+        return _go(here, err=err)
+    if not me:
+        return _go("/my") if not church else _go("/my/lead")
+    if not _allowed(church, me):
+        return _go(here, err="slow")
+    form = await request.form()
+    rid = str(form.get("rid") or "")
+    biz = church["business"]
+    try:
+        if what == "prayed":
+            await asyncio.to_thread(church_prayer.prayed, biz["id"], me, rid)
+            return _go(here, done="prayed")
+        if what == "note":
+            await church_prayer.send_note(biz, me, rid)
+            return _go(here, done="noted")
+        await asyncio.to_thread(church_prayer.pass_on, biz["id"], me, rid, str(form.get("to") or ""))
+        return _go(here, done="passed")
+    except HTTPException as e:
+        if e.status_code == 404:
+            return _go(here, err="prayer_gone")
+        if e.status_code == 400 and what == "note":
+            return _go(here, err="noemail")
+        return _go(here, err="error")
+
+
+@router.post("/my/lead/prayer/prayed", include_in_schema=False)
+async def prayer_prayed(request: Request):
+    return await _pray(request, "prayed")
+
+
+@router.post("/my/lead/prayer/note", include_in_schema=False)
+async def prayer_note(request: Request):
+    return await _pray(request, "note")
+
+
+@router.post("/my/lead/prayer/pass", include_in_schema=False)
+async def prayer_pass(request: Request):
+    return await _pray(request, "pass")

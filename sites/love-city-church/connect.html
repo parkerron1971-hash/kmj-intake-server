@@ -107,6 +107,11 @@
         <div class="field"><label for="pr-email">Email <span class="req">required</span></label><input id="pr-email" name="email" type="email" autocomplete="email" maxlength="200" required></div>
         <div class="field"><label for="pr-phone">Phone</label><input id="pr-phone" name="phone" type="tel" autocomplete="tel" maxlength="40"></div>
       </div>
+      <fieldset class="choices">
+        <legend>Who prays with you? <span class="req">required</span></legend>
+        <label><input type="radio" name="share" value="Our prayer team may pray over this with me" required> Our prayer team may pray over this with you</label>
+        <label><input type="radio" name="share" value="Keep this with the pastors only"> Keep this with the pastors only</label>
+      </fieldset>
       <label class="check"><input type="checkbox" name="follow_up" value="Yes" id="pr-follow"> Please follow up with me</label>
       <div class="hp" aria-hidden="true"><label for="pr-website">Website</label><input id="pr-website" name="website" type="text" tabindex="-1" autocomplete="off"></div>
       <p class="form-fallback" id="pr-fallback" data-form-fallback>This form sends with JavaScript, which is turned off or hasn’t loaded. You can still reach us on <a href="{{FACEBOOK_URL}}">Facebook</a>, or join us for Sunday service at 11am at 1084 Allen Ave.</p>

@@ -320,7 +320,11 @@ def test_website_prayer_reaches_care_inbox_and_church_counts(env, monkeypatch):
     assert response.json() == {"ok": True, "notification_sent": False}
     path, inserted = env.posts[0]
     assert path == "/ministry_care_requests"
-    assert set(inserted) == {"id", "business_id", "form_id", "status", "submission"}
+    assert set(inserted) == {"id", "business_id", "form_id", "status", "submission",
+                             "prayer_team", "wants_call", "needs_pastor"}
+    # No "Who prays with you?" answer: it stays with the pastors. Asking to
+    # be followed up is asking for a call (church_prayer.consent_columns).
+    assert (inserted["prayer_team"], inserted["wants_call"], inserted["needs_pastor"]) == (False, True, False)
     assert inserted["business_id"] == biz and inserted["status"] == "new"
     assert inserted["form_id"] is None
     # Base schema supplies created_at; #1414 and #1417 add nullable fields.

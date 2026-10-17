@@ -124,7 +124,12 @@
         // Every failure keeps the visitor's words for another attempt.
         .then(function (r) {
           return r.json().catch(function () { return {}; }).then(function (body) {
-            if (r.ok && body && body.ok === true) { form.reset(); pendingPayload = ''; pendingId = ''; say(THANKS[kind] || 'Thank you. It’s sent.', 'ok'); }
+            if (r.ok && body && body.ok === true) {
+              // A request kept for the pastors is thanked as theirs.
+              var pastorsOnly = kind === 'prayer-request' && /pastors only/i.test((payload.fields && payload.fields.share) || '');
+              form.reset(); pendingPayload = ''; pendingId = '';
+              say(pastorsOnly ? 'Thank you. Your request is with our pastors, and we are praying with you.' : (THANKS[kind] || 'Thank you. It’s sent.'), 'ok');
+            }
             else if (r.status === 400) say(body.error || TOO_LONG, 'err');
             else if (r.status === 429) say(BUSY, 'err');
             else say(r.ok ? NOT_DELIVERED : FAILED, 'err');

@@ -256,8 +256,15 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
     # refused unless the chat's signed-in user is the owner or a manager,
     # so an outside caller, which has no turn user, never gets it.
     "church_people":       _r("first-time guests, group drift and attendance from "
-                              "church_reads; care counts gated to owner/manager. "
+                              "church_reads; care counts gated to owner/manager; "
+                              "the role library (titles, jobs, who holds them, "
+                              "the chain; leaders' names only) from church_roles. "
                               "Writes nothing"),
+    # The owner asks Chief for a role ("add a Church Mother role"). It is
+    # saved as a DRAFT: routing ignores drafts, so it hands nobody anything
+    # until the owner saves it on Leaders & roles; discarding it deletes it.
+    "draft_church_role":   _w("A", "creates one draft role in church_role_defs; "
+                                   "inert until the owner saves it; discard deletes it"),
 
     # ── UI directives ────────────────────────────────────────────────
     # Verified: pass-throughs the frontend acts on. No persistence.
