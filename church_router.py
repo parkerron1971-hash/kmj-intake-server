@@ -5,6 +5,10 @@ church_router.py — the church office's read-only questions about people.
                                                  nobody has reached out since
     GET /church/care-counts?business_id=         the Prayer & care inbox as
                                                  numbers (owner and staff)
+    GET /church/cards?business_id=               every card a guest can fill
+                                                 in (the website's own and the
+                                                 app's forms) and what came in
+                                                 on each (owner and staff)
 
 First-time guests: any active seat may read (the same rule as the
 attendance table itself). Care counts: the owner and staff only, see
@@ -19,6 +23,7 @@ from typing import Any, Dict
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
+import church_cards
 import church_reads
 from business_access import business_access
 
@@ -76,3 +81,17 @@ def care_counts(business_id: str = Query(...),
                  "oldest_new_days": int(oldest) if oldest is not None else None},
         "window_days": church_reads.CARE_WINDOW_DAYS,
     }
+
+
+@router.get("/cards")
+def cards(business_id: str = Query(...),
+          biz: Dict[str, Any] = Depends(business_access(CARE_MIN_ROLE))):
+    """The Forms page's cards: the ones written into the church's website,
+    with their questions, and how many came in on each card and intake form
+    in the last 90 days. Who filled in a card is the office's to see (owner
+    and staff, the same seats as the care numbers); a private card is
+    numbers only. See church_cards."""
+    out = church_cards.cards(_uuid(business_id))
+    if out is None:
+        raise HTTPException(503, "Your cards couldn't be loaded. Try again in a moment.")
+    return out
