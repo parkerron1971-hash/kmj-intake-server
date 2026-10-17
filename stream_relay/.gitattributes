@@ -1,0 +1,3 @@
+# deploy.sh copies these files from the working copy to a Linux droplet:
+# keep them LF everywhere, Windows checkouts included.
+* text=auto eol=lf
