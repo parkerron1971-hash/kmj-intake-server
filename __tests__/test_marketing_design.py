@@ -30,7 +30,7 @@ COPY = {'headline': 'Take a founding seat', 'line': 'The Professional plan, lock
 # ── layouts ───────────────────────────────────────────────────────────
 
 @pytest.mark.parametrize('play', sorted(e.PLAYS))
-@pytest.mark.parametrize('hero', [None, str(uuid4())])
+@pytest.mark.parametrize('hero', [None, str(uuid4())], ids=['no-hero', 'hero'])
 def test_every_play_has_a_valid_flyer_inside_the_canvas(play, hero):
     layout = composer.Layout.model_validate(d.flyer_layout(play, COPY, hero_id=hero))
     assert (layout.width, layout.height) == (1080, 1350)

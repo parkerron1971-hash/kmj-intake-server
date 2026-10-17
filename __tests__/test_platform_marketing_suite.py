@@ -265,7 +265,13 @@ ROUTES = [('GET', '/suite/engine', None), ('GET', '/suite/ideas/next-slot', None
           ('POST', '/suite/engine/run', None), ('GET', '/suite/preview', None), ('GET', '/drain', None)]
 
 
-@pytest.mark.parametrize('method,path,body', ROUTES, ids=[r[1] for r in ROUTES])
+def _route_id(route) -> str:
+    """The path with a post's id written {id}: every test process names the
+    test the same (pytest-xdist refuses workers that collect different tests)."""
+    return re.sub(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', '{id}', route[1])
+
+
+@pytest.mark.parametrize('method,path,body', ROUTES, ids=[_route_id(r) for r in ROUTES])
 def test_every_route_is_the_platform_owners_alone(mc, method, path, body):
     for who, email in ((api.OWNER, 'owner@fadestreet.com'), (KEVIN, 'not-kevin@example.com'), (KEVIN, None)):
         mc.user, mc.email = who, email                              # a tenant owner, or anyone else
@@ -275,7 +281,7 @@ def test_every_route_is_the_platform_owners_alone(mc, method, path, body):
 
 
 @pytest.mark.parametrize('method,path,body', [r for r in ROUTES if r[1] != '/drain'],
-                         ids=[r[1] for r in ROUTES if r[1] != '/drain'])
+                         ids=[_route_id(r) for r in ROUTES if r[1] != '/drain'])
 def test_the_suite_desk_refuses_plainly_until_it_is_switched_on_and_named(mc, monkeypatch, method, path, body):
     switch(monkeypatch, on=False)
     r = hit(mc, method, path, body)

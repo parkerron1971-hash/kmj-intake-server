@@ -18,3 +18,12 @@ and the storage checks 39 s. The job now runs the suite with one worker
 per core. Each test file stays on one worker, so a file's module fixtures
 (the real app, the rendered site) build once and its tests keep the
 order they were written in. The PR's own CI run is the measurement.
+
+The first parallel run stopped at collection. pytest-xdist requires every
+worker to collect the same tests, and six tests built their names from
+values made fresh in each process: a uuid4() in test_image_posting,
+test_chief_post_clip and test_marketing_design, the current time in
+test_chief_weather, and post ids in two test_platform_marketing_suite
+route lists. Each now has fixed names; the values themselves stay as they
+were. Collecting all 16,471 tests under two hash seeds now gives the same
+list.
