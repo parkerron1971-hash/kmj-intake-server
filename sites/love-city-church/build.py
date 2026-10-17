@@ -114,8 +114,10 @@ CARDS = {
 # The old SnapPages site's addresses (its sitemap, and the sermon library
 # under /media), each sent where that content lives now. site_sync stores
 # them; public_site answers each with a 301 wherever the site would
-# otherwise 404, keeping the visitor's own ?utm_… parameters. Old forms land
-# on the connect card with the same interest ticked. /my-love-nation, the
+# otherwise 404, keeping the visitor's own ?utm_… parameters. An old form
+# lands on the church's card for it when there is one (CARDS: baptism and
+# the three serving sign-ups), else on the connect card with the same
+# interest ticked. /my-love-nation, the
 # old members-only page, has no home here and stays a 404. /live is not
 # here: GET /live is an API route ahead of the site, and redirecting it
 # safely needs the Worker to vouch for the host (see the worklog).
@@ -137,11 +139,11 @@ REDIRECTS = {
     "/booking": "/connect#connect-card",
     "/prayer-request": "/connect#prayer",
     "/membership-form-update": "/connect?interest=membership#connect-card",
-    "/baptism": "/connect?interest=baptism#connect-card",
+    "/baptism": CARDS["CARD_BAPTISM"],
     "/membercare": "/connect?interest=pastoral-care#connect-card",
-    "/volunteer": "/connect?interest=serve#connect-card",
-    "/ministryworks": "/connect?interest=serve#connect-card",
-    "/city-serve": "/connect?interest=serve#connect-card",
+    "/volunteer": CARDS["CARD_SERVE"],
+    "/ministryworks": CARDS["CARD_SERVE"],
+    "/city-serve": CARDS["CARD_SERVE"],
     "/ns-sign-up": "/connect?interest=next-step#connect-card",
     "/next-step-ministry-training": "/ministries#training-title",
     "/leaderschool": "/ministries#training-title",

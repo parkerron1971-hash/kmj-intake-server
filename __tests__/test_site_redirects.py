@@ -45,10 +45,12 @@ def custom_domain(domain):
 CHURCH = {"subdomain": subdomain("church"), "custom-domain": custom_domain("church.example")}
 NEIGHBOR = {"subdomain": subdomain("neighbor"), "custom-domain": custom_domain("neighbor.example")}
 
+CARD = "/public/widget/form/d5354342-8c59-4ec6-96be-31fffe2b676c"
 REDIRECTS = {
     "/what-we-believe": "/beliefs",
     "/prayer-request": "/connect#prayer",
     "/volunteer": "/connect?interest=serve#connect-card",
+    "/baptism": CARD,               # an old sign-up page, now a card in the app
     "/media": "/sermons",
     "/media/*": "/sermons",
 }
@@ -135,6 +137,8 @@ def _moved(r):
     ("/What-We-Believe/", "/beliefs"),
     ("/prayer-request", "/connect#prayer"),
     ("/volunteer", "/connect?interest=serve#connect-card"),
+    ("/baptism", CARD),
+    ("/Baptism/", CARD),
     ("/media/", "/sermons"),
     ("/media/page/2/", "/sermons"),
     ("/media/5np8j7s/love-city-experience-11-00am-10-11-26", "/sermons"),
@@ -158,6 +162,8 @@ def test_an_old_address_gets_a_301_to_its_new_page(app, db, hosts, old, new):
      "/connect?interest=serve&utm_source=email#connect-card"),
     # The visitor's query can't change where the redirect goes.
     ("/what-we-believe?next=//evil.example", "/beliefs?next=%2F%2Fevil.example"),
+    ("/baptism?utm_source=bulletin", CARD + "?utm_source=bulletin"),
+    ("/baptism?next=//evil.example", CARD + "?next=%2F%2Fevil.example"),
 ])
 def test_a_redirect_keeps_the_visitors_query(app, db, hosts, old, new):
     assert _moved(_client(app).get(old, headers=hosts)) == (301, new)
@@ -206,7 +212,9 @@ def test_a_composed_site_ignores_redirects(app, db, hosts):
 
 
 @pytest.mark.parametrize("target", ["https://evil.example/", "//evil.example", "/\\evil.example",
-                                    "/connect?next=https://evil.example", "javascript:alert(1)"])
+                                    "/connect?next=https://evil.example", "javascript:alert(1)",
+                                    "//evil.example" + CARD, CARD + "/x", CARD + "?next=//evil.example",
+                                    "/public/widget/form/../../evil", CARD.upper()])
 def test_a_stored_target_that_would_leave_the_site_is_never_followed(app, db, target):
     db.rows["church"]["site_config"]["manual_redirects"]["/old"] = target
     r = _client(app).get("/old", headers=CHURCH["subdomain"])

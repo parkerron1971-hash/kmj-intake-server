@@ -388,10 +388,15 @@ def test_every_old_address_has_a_home_and_installs_cleanly(build, pages):
     # The old paths the domain runbook names (risk R5).
     for old, new in {"/what-we-believe": "/beliefs", "/mission-and-vision": "/about",
                      "/connect-with-us": "/connect", "/prayer-request": "/connect",
-                     "/volunteer": "/connect", "/i-m-new": "/visit", "/welcomehome": "/visit",
+                     "/i-m-new": "/visit", "/welcomehome": "/visit",
                      "/services-and-events": "/events", "/media": "/sermons",
                      "/subsplash-media": "/sermons"}.items():
         assert build.REDIRECTS[old].split("?")[0].split("#")[0] == new, old
+    # The old sign-up pages open the church's cards, the same ones the
+    # Ministries buttons open.
+    for old, card in {"/baptism": "CARD_BAPTISM", "/volunteer": "CARD_SERVE",
+                      "/ministryworks": "CARD_SERVE", "/city-serve": "CARD_SERVE"}.items():
+        assert build.REDIRECTS[old] == build.CARDS[card], old
     # GET /live is an API route ahead of the site. Redirecting it needs the
     # Worker to vouch for the host first (worklog follow-up).
     assert "/live" not in build.REDIRECTS

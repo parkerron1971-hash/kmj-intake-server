@@ -47,18 +47,31 @@ def secondary_pages(site_config: Any) -> Dict[str, str]:
 # as site_config.manual_redirects and answered with a 301 only where the
 # site would otherwise 404. An old path is lowercase segments, or ends in
 # "/*" for everything under it. A target is "/" or one of the site's own
-# pages, with an optional ?query and #anchor: never another host. A path an
-# API route answers first (/live) is refused: only the Worker could vouch
-# that a request came from the site's own host, and nothing checks that yet.
+# pages, with an optional ?query and #anchor, or one of its forms' pages
+# (/public/widget/form/<id>, the address an old sign-up page moved to when
+# it became a card in the app): never another host. A path an API route
+# answers first (/live) is refused: only the Worker could vouch that a
+# request came from the site's own host, and nothing checks that yet.
 MAX_REDIRECTS = 100
 _REDIRECT_FROM_RE = re.compile(r"/[a-z0-9-]+(?:/[a-z0-9-]+)*(?:/\*)?")
 _REDIRECT_TO_RE = re.compile(r"/([a-z0-9-]*)(\?[a-z0-9=&-]*)?(#[a-z0-9-]+)?")
+_REDIRECT_TO_FORM_RE = re.compile(
+    r"/public/widget/form/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 # Hosted pages that answer before a site's redirects are looked at.
 _HOSTED_PATHS = frozenset({"book", "give", "events", "sermons", "store"})
 
 
 def redirect_target_ok(target: Any) -> bool:
-    return isinstance(target, str) and _REDIRECT_TO_RE.fullmatch(target) is not None
+    return isinstance(target, str) and (_REDIRECT_TO_RE.fullmatch(target) is not None
+                                        or _REDIRECT_TO_FORM_RE.fullmatch(target) is not None)
+
+
+def _lands_on_the_site(target: Any, pages: set) -> bool:
+    """A target one of these pages (or home) answers, or a form page."""
+    if not redirect_target_ok(target):
+        return False
+    page = _REDIRECT_TO_RE.fullmatch(target)
+    return page is None or page.group(1) in pages | {""}
 
 
 def clean_redirects(redirects: Any, page_ids: Iterable[str]) -> Tuple[Dict[str, str], List[Tuple[Any, str]]]:
@@ -80,7 +93,7 @@ def clean_redirects(redirects: Any, page_ids: Iterable[str]) -> Tuple[Dict[str, 
             skipped.append((old, "redirect from a page the site serves"))
         elif first in RESERVED_PAGE_IDS or first in _HOSTED_PATHS:
             skipped.append((old, "redirect from a path another handler answers"))
-        elif not redirect_target_ok(to) or _REDIRECT_TO_RE.fullmatch(to).group(1) not in pages | {""}:
+        elif not _lands_on_the_site(to, pages):
             skipped.append((old, f"redirect to {to!r}, not one of the site's pages"))
         elif len(kept) >= MAX_REDIRECTS:
             skipped.append((old, f"redirect cap {MAX_REDIRECTS} reached"))
