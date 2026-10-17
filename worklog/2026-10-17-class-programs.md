@@ -28,3 +28,6 @@ Database only; Course Studio and the classroom call these directly.
   program, its tracks and finish title.
 - `academy_classroom.program` via `academy_classroom_program`; the class's
   teacher is its track's teacher when it has one.
+- `account_lifecycle.py`: `academy_programs` is exported with the business
+  and skipped on import (its tracks are keyed by the original course ids;
+  the shelf offers the program again from the classes' series names).
