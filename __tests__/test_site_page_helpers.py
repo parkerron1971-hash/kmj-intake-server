@@ -102,6 +102,20 @@ def test_clean_redirects_keeps_good_entries_in_order_and_names_every_skip():
     assert [old for old, _ in skipped] == ["/live", "/visit", "/news", "/book", "/my/*", "/old", "/old2"]
 
 
+def test_an_old_sign_up_page_may_land_on_one_of_the_sites_forms():
+    from site_page_helpers import clean_redirects, manual_redirect
+    card = "/public/widget/form/d5354342-8c59-4ec6-96be-31fffe2b676c"
+    redirects = {"/baptism": card, "/a": card + "/x", "/b": card + "?next=//evil.example",
+                 "/c": "/public/widget/form/not-a-form", "/d": card.upper(),
+                 "/e": "/public/widget/form/../../evil", "/f": "//evil.example" + card}
+    kept, skipped = clean_redirects(redirects, ["home", "visit"])
+    assert kept == {"/baptism": card}
+    assert [old for old, _ in skipped] == ["/a", "/b", "/c", "/d", "/e", "/f"]
+    cfg = {"html_source": "manual", "manual_redirects": redirects}
+    assert manual_redirect(cfg, "/baptism") == card
+    assert [old for old in redirects if manual_redirect(cfg, old)] == ["/baptism"]
+
+
 def test_clean_redirects_caps_the_map():
     from site_page_helpers import MAX_REDIRECTS, clean_redirects
     kept, skipped = clean_redirects({f"/old-{n}": "/" for n in range(MAX_REDIRECTS + 3)}, ["home"])
