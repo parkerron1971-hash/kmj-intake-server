@@ -2,7 +2,7 @@
 title: A church's cards — the website's own connect card and prayer request, and what came in on each (GET /church/cards)
 date: 2026-10-16
 agent: Claude Code (Claude Opus 5.5)
-asked: "redesign is good. give an easy way for people to function and make things happen. awesome build this." (the Forms & classes redesign canvas, Love City Church)
+asked: 'On the Forms & classes redesign canvas (Love City Church): "redesign is good. give an easy way for people to function and make things happen. awesome build this."'
 status: in progress
 prs: [kmj-intake-server#1467, solutionist-studio#1241]
 migrations: []
