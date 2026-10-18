@@ -127,6 +127,13 @@ _LIMITS: Dict[str, Tuple[int, int]] = {
     "member_verify": (int(os.environ.get("RL_MEMBER_VERIFY_PER_10MIN", "60")), 600),
     # A signed-in member's writes (RSVP, prayer, details), per person.
     "member_action": (int(os.environ.get("RL_MEMBER_ACTION_PER_HOUR", "30")), 3600),
+    # Joining a free class from its public page (academy_join.py) mails a
+    # class link, so the same shape as member sign-in: per network
+    # (generous: a church lobby is one address), then per business +
+    # address a one-minute cooldown and a daily ceiling.
+    "class_join_ip": (int(os.environ.get("RL_CLASS_JOIN_PER_HOUR", "60")), 3600),
+    "class_join_email_minute": (1, 60),
+    "class_join_email_day": (int(os.environ.get("RL_CLASS_JOIN_EMAIL_PER_DAY", "6")), 86400),
     # Check-in stations (kids_station.py), all strict: pairing codes per
     # network, PIN tries per station, and mobile-number lookups per
     # self check-in kiosk — so neither a code nor a family can be guessed.
