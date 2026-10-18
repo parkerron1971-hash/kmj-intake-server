@@ -197,6 +197,11 @@ BUSINESS_CHILD_TABLES: List[str] = [
     # Sunday check-in's service (day, time, how long it stays open): no
     # contact, nothing it cites; a restored church keeps its Sunday.
     "church_checkin_settings",
+    # Shepherding: touches and who-shepherds-whom before the families and
+    # contacts they cite; the proposal, "Not a family" and the settings
+    # name no row a foreign key holds.
+    "church_shepherd_touches", "church_shepherds", "church_shepherd_drafts", "church_family_dismissals",
+    "church_shepherd_settings",
     "child_care_notes", "household_pickups", "children", "household_adults", "households",
     "chief_errand_events", "chief_errands",  # preserve history; events before errands
     "agent_assignments",      # before connected_agents (foreign key)
@@ -728,6 +733,11 @@ _IMPORT_SKIP = {
     # church's library fills again the first time Leaders & roles opens.
     "church_follow_up_notes", "church_follow_ups", "church_leader_roles",
     "church_role_defs", "church_role_settings",
+    # Shepherding cites families and shepherds by id, a proposal cites
+    # families and members by id, and "Not a family" is a hash of member
+    # ids; same reason. A restored church keeps its shepherding settings
+    # and asks Chief for families and a proposal again.
+    "church_shepherd_touches", "church_shepherds", "church_shepherd_drafts", "church_family_dismissals",
     # A texting number belongs to the provider account that bought it;
     # a restored business provisions its own. Auditor links and push
     # subscriptions are credentials and devices, not records. The

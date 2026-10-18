@@ -17,6 +17,13 @@ church_router.py — the church office's read-only questions about people.
                                                  staff)
     POST /church/roles, PATCH|DELETE …/{id}      make, change, archive a role
     POST /church/type                            the church type, and its titles
+    GET /church/families/suggestions, POST …/accept | accept-sure | dismiss
+                                                 Chief's guess at who lives
+                                                 together (church_families)
+    GET /church/shepherding, PUT …/settings, POST …/propose | approve | move,
+        GET|PATCH|DELETE …/proposal, GET …/family/{id}
+                                                 every member family's
+                                                 shepherd (church_shepherding)
 
 First-time guests: any active seat may read (the same rule as the
 attendance table itself). Care counts: the owner and staff only, see
@@ -26,6 +33,7 @@ waiting for a call or how many prayer requests are new.
 """
 from __future__ import annotations
 
+import asyncio
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -34,9 +42,11 @@ from pydantic import BaseModel, Field
 
 import church_cards
 import church_checkin
+import church_families
 import church_follow_up
 import church_reads
 import church_roles
+import church_shepherding
 import sb_clients
 from auth_supabase import UserSession
 from business_access import business_access
@@ -323,3 +333,154 @@ def checkin_put(body: _Checkin, business_id: str = Query(...),
     uid, _name = _who(session)
     church_checkin.save_settings(biz, body.model_dump(exclude_unset=True), uid)
     return church_checkin.overview(biz)
+
+
+# ─── Families and shepherding (church_families, church_shepherding) ───
+#
+# Kevin, 2026-10-17: every member family has a shepherd, a pastor or an
+# elder; visitors stay with Welcome (canvas 31su6kdYmYecH5b2NxjBJN). Chief
+# suggests families and proposes who shepherds whom; nothing is saved or
+# sent until the office approves. The office's seats only (owner and staff,
+# the same as Leaders & roles).
+
+class _FamilyAccept(BaseModel):
+    key: Optional[str] = Field(None, max_length=20)
+    name: str = Field(..., max_length=120)
+    adults: List[str] = Field(default_factory=list, max_length=20)
+    children: List[str] = Field(default_factory=list, max_length=20)
+
+
+class _FamilyKey(BaseModel):
+    key: str = Field(..., max_length=20)
+
+
+class _ShepSettings(BaseModel):
+    ministers: Optional[bool] = None
+    cap: Optional[int] = Field(None, ge=1, le=40)
+    lead_cap: Optional[int] = Field(None, ge=1, le=40)
+
+
+class _DraftMove(BaseModel):
+    unit: str = Field(..., max_length=40)
+    shepherd_contact_id: Optional[str] = None
+
+
+class _FamilyMove(BaseModel):
+    household_id: str
+    shepherd_contact_id: Optional[str] = None
+
+
+@router.get("/families/suggestions")
+def family_suggestions(business_id: str = Query(...),
+                       biz: Dict[str, Any] = Depends(business_access(CARE_MIN_ROLE))):
+    """Families: who Chief thinks lives together, from members not yet in a
+    family. Nothing is saved until the office accepts one."""
+    out = church_families.suggestions(_uuid(business_id))
+    if out is None:
+        raise HTTPException(503, "Your members couldn't be loaded. Try again in a moment.")
+    return out
+
+
+@router.post("/families/accept")
+def family_accept(body: _FamilyAccept, business_id: str = Query(...),
+                  biz: Dict[str, Any] = Depends(business_access(CARE_MIN_ROLE))):
+    made = church_families.accept(_uuid(business_id), body.model_dump())
+    return {"ok": True, "household_id": made["household_id"]}
+
+
+@router.post("/families/accept-sure")
+def family_accept_sure(business_id: str = Query(...),
+                       biz: Dict[str, Any] = Depends(business_access(CARE_MIN_ROLE))):
+    return {"ok": True, "made": church_families.accept_sure(_uuid(business_id))}
+
+
+@router.post("/families/dismiss")
+def family_dismiss(body: _FamilyKey, business_id: str = Query(...),
+                   biz: Dict[str, Any] = Depends(business_access(CARE_MIN_ROLE))):
+    church_families.dismiss(_uuid(business_id), body.key)
+    return {"ok": True}
+
+
+@router.get("/shepherding")
+def shepherding(business_id: str = Query(...), biz: Dict[str, Any] = Depends(business_access(CARE_MIN_ROLE))):
+    """Operate → Follow-up → Shepherding: who shepherds, the families each
+    has, who is waiting, and the visitors who stay with Welcome."""
+    out = church_shepherding.overview(biz)
+    if out is None:
+        raise HTTPException(503, "Shepherding couldn't be loaded. Try again in a moment.")
+    return out
+
+
+@router.put("/shepherding/settings")
+def shepherding_settings(body: _ShepSettings, business_id: str = Query(...),
+                         biz: Dict[str, Any] = Depends(business_access(CARE_MIN_ROLE)),
+                         session: UserSession = Depends(sb_clients.authed_request)):
+    uid, _name = _who(session)
+    return {"ok": True, "settings": church_shepherding.save_settings(
+        _uuid(business_id), body.model_dump(exclude_unset=True), uid)}
+
+
+@router.post("/shepherding/propose")
+def shepherding_propose(business_id: str = Query(...),
+                        biz: Dict[str, Any] = Depends(business_access(CARE_MIN_ROLE)),
+                        session: UserSession = Depends(sb_clients.authed_request)):
+    """Chief's proposal for every family waiting for a shepherd, keeping the
+    office's own moves. Saved as a draft; nothing is sent."""
+    uid, _name = _who(session)
+    return church_shepherding.propose(biz, uid)
+
+
+@router.get("/shepherding/proposal")
+def shepherding_proposal(business_id: str = Query(...),
+                         biz: Dict[str, Any] = Depends(business_access(CARE_MIN_ROLE))):
+    return church_shepherding.proposal(biz)
+
+
+@router.patch("/shepherding/proposal")
+def shepherding_proposal_move(body: _DraftMove, business_id: str = Query(...),
+                              biz: Dict[str, Any] = Depends(business_access(CARE_MIN_ROLE)),
+                              session: UserSession = Depends(sb_clients.authed_request)):
+    uid, _name = _who(session)
+    return church_shepherding.move_in_draft(biz, body.unit, body.shepherd_contact_id, uid)
+
+
+@router.delete("/shepherding/proposal")
+def shepherding_proposal_discard(business_id: str = Query(...),
+                                 biz: Dict[str, Any] = Depends(business_access(CARE_MIN_ROLE))):
+    church_shepherding.discard(biz)
+    return {"ok": True}
+
+
+@router.post("/shepherding/approve")
+async def shepherding_approve(business_id: str = Query(...),
+                              biz: Dict[str, Any] = Depends(business_access(CARE_MIN_ROLE)),
+                              session: UserSession = Depends(sb_clients.authed_request)):
+    """Write the proposal and email each shepherd their families, once."""
+    uid, _name = _who(session)
+    out = await asyncio.to_thread(church_shepherding.approve, biz, uid)
+    told = 0
+    if out["gained"]:
+        told = await church_shepherding.tell_shepherds(biz, out["gained"], out["ctx"],
+                                                       church_shepherding._iso(church_shepherding._now()))
+    return {"ok": True, "placed": out["placed"], "told": told, "failed": out["failed"]}
+
+
+@router.post("/shepherding/move")
+async def shepherding_move(body: _FamilyMove, business_id: str = Query(...),
+                           biz: Dict[str, Any] = Depends(business_access(CARE_MIN_ROLE)),
+                           session: UserSession = Depends(sb_clients.authed_request)):
+    """Give one family to another shepherd (they get an email), or back to
+    waiting."""
+    uid, _name = _who(session)
+    out = await asyncio.to_thread(church_shepherding.move, biz, body.household_id, body.shepherd_contact_id, uid)
+    if out["changed"] and out["shepherd"]:
+        await church_shepherding.tell_new_shepherd(biz, out["shepherd"], out["name"], out["ctx"])
+    return {"ok": True}
+
+
+@router.get("/shepherding/family/{household_id}")
+def shepherding_family(household_id: str, business_id: str = Query(...),
+                       biz: Dict[str, Any] = Depends(business_access(CARE_MIN_ROLE))):
+    """A family's shepherd and touches with their notes, for the office.
+    The family never reads these."""
+    return church_shepherding.office_family(biz, household_id)
