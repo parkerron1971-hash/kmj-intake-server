@@ -4,7 +4,7 @@ date: 2026-10-18
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin: "fix and retest" (after a Haiku 5.5 vs Sonnet replay of the answer check, to see whether the check can move to the cheaper model)'
 status: shipped
-prs: [kmj-intake-server#TBD]
+prs: [kmj-intake-server#1489]
 migrations: []
 left_undone:
   - "The review lane stays on Sonnet. Moving it (CHIEF_MODEL_REVIEW=claude-haiku-5-5, CHIEF_REVIEW_THINKING=low) is Kevin's call; how fast Sonnet is on the same 25 answers was not measured"
