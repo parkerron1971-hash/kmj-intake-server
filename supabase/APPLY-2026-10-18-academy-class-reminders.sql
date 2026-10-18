@@ -19,6 +19,15 @@
 --                                 their name, email and class link); null
 --                                 when someone else claimed it first or it
 --                                 no longer qualifies. Service role only.
+--   academy_live_reminder_release(session)
+--                                 un-marks a night whose emails all failed
+--                                 (a send outage), so the next sweep tries
+--                                 again; the emails' idempotency keys keep a
+--                                 retry from reaching anyone twice. Service
+--                                 role only.
+--   academy_live_sessions_remind_again
+--                                 a night moved to another time is reminded
+--                                 again, at its new time.
 --
 -- Idempotent. Rehearsed with a rollback probe; applied by hand like every
 -- APPLY file.
@@ -50,5 +59,24 @@ begin
 end $$;
 revoke all on function public.academy_live_reminder_claim(uuid) from public, anon, authenticated;
 grant execute on function public.academy_live_reminder_claim(uuid) to service_role;
+
+create or replace function public.academy_live_reminder_release(p_session uuid)
+returns void language sql security definer set search_path to 'public', 'pg_temp' as $$
+  update public.academy_live_sessions set reminded_at = null where id = p_session and status = 'scheduled'
+$$;
+revoke all on function public.academy_live_reminder_release(uuid) from public, anon, authenticated;
+grant execute on function public.academy_live_reminder_release(uuid) to service_role;
+
+create or replace function public.academy_live_sessions_remind_again()
+returns trigger language plpgsql set search_path to 'public', 'pg_temp' as $$
+begin
+  if new.starts_at is distinct from old.starts_at then
+    new.reminded_at := null;
+  end if;
+  return new;
+end $$;
+drop trigger if exists academy_live_sessions_remind_again on public.academy_live_sessions;
+create trigger academy_live_sessions_remind_again before update of starts_at on public.academy_live_sessions
+  for each row execute function public.academy_live_sessions_remind_again();
 
 commit;

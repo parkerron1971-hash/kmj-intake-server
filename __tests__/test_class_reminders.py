@@ -7,6 +7,7 @@ reminders on, active students only, service-only) was rehearsed on
 production in a rolled-back transaction; see docs/MIGRATIONS.md.
 """
 import asyncio
+import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -63,7 +64,8 @@ STUDENTS = [{"enrollment_id": "e1", "contact_id": "k1", "token": "t1", "name": "
 @pytest.fixture
 def world(monkeypatch):
     w = {"nights": [NIGHT], "claim": {"session_id": "s1", "course_id": "c1", "students": STUDENTS}, "gets": [], "claims": [],
-         "emails": [], "pushes": [], "business": [{"id": BIZ, "name": "Love City Church", "type": "church", "settings": {}}]}
+         "emails": [], "pushes": [], "released": [],
+         "business": [{"id": BIZ, "name": "Love City Church", "type": "church", "settings": {}, "owner_id": "o1"}]}
     import sb_clients
 
     def get(path, *a, **k):
@@ -75,6 +77,9 @@ def world(monkeypatch):
         return []
 
     def post(path, body=None, *a, **k):
+        if path == "/rpc/academy_live_reminder_release":
+            w["released"].append(body["p_session"])
+            return None
         assert path == "/rpc/academy_live_reminder_claim"
         w["claims"].append(body["p_session"])
         return w["claim"]
@@ -133,6 +138,32 @@ def test_one_failed_email_doesnt_stop_the_rest(world, monkeypatch):
     monkeypatch.setattr(ar, "_email", flaky)
     out = asyncio.run(ar.sweep_tick(NOW))
     assert sent == ["e2", "e3"] and out["phones"] == 1
+    assert world["released"] == [], "some went out: the night stays reminded"
+
+
+def test_a_send_outage_unmarks_the_night_so_the_next_tick_tries_again(world, monkeypatch):
+    async def down(*a, **k):
+        raise RuntimeError("resend down")
+    monkeypatch.setattr(ar, "_email", down)
+    out = asyncio.run(ar.sweep_tick(NOW))
+    assert world["released"] == ["s1"] and out["emails"] == 0 and out["released"] == 1
+
+
+def test_a_clock_that_cant_be_read_is_never_guessed(world, monkeypatch):
+    monkeypatch.setattr(ar, "_zone", lambda b: None)
+    asyncio.run(ar.sweep_tick(NOW))
+    assert world["claims"] == [], "no night is claimed on a fallback clock"
+
+
+def test_the_clock_is_read_strictly(monkeypatch):
+    import sb_clients
+    biz = {"id": BIZ, "owner_id": "o1", "settings": {}}
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", lambda path, *a, **k: None)
+    assert ar._zone(biz) is None, "a failed profile read is no clock, not the platform's"
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", lambda path, *a, **k: [{"timezone": "America/Chicago"}])
+    assert ar._zone(biz) == "America/Chicago"
+    biz["settings"] = {"availability": {"timezone": "America/New_York"}}
+    assert ar._zone(biz) in ("America/New_York", "America/Chicago")
 
 
 def test_the_real_email_goes_to_the_student_with_their_class_link(monkeypatch):
@@ -160,5 +191,8 @@ def test_class_nights_is_a_kind_the_church_switches_on_and_the_sweep_is_schedule
     assert "grant execute on function public.academy_live_reminder_claim(uuid) to service_role;" in sql
     assert "ls.reminded_at is null and ls.status = 'scheduled'" in sql and "c.status = 'published' and c.remind_live" in sql
     assert "e.status = 'active'" in sql
+    assert "grant execute on function public.academy_live_reminder_release(uuid) to service_role;" in sql
+    assert re.search(r"if new\.starts_at is distinct from old\.starts_at then\s+new\.reminded_at := null;", sql), \
+        "a night moved to another time is reminded again"
     boot = (ROOT / "kmj_intake_automation.py").read_text(encoding="utf-8")
     assert 'g("academy_class_reminders", _academy_reminders.sweep_tick)' in boot

@@ -15,6 +15,7 @@ decisions:
   - "Email for every kind of business (any student, any live class); the push is the church member app's own Class nights kind, under the church's switch and each member's choice"
   - "On by default for every class (Kevin's yes), with an off switch per class in Course setup (the next FE PR); no class nights were scheduled anywhere when it went live"
   - "Only active students of a published class; a dropped student or a cancelled night never hears"
+  - "Review on #1497: the business and its clock are read strictly before a night is claimed (a failed read is skipped, never a fallback clock); a night whose emails all failed is un-marked (academy_live_reminder_release) so the next tick retries, the idempotency keys keeping anyone from a second copy; a night moved to another time is reminded again (trigger)"
 related: [2026-10-18-church-member-classes.md]
 ---
 - `academy_reminders.py`: `due` (when, in the business's clock),

@@ -98,8 +98,8 @@ async def sweep_tick(now: Optional[datetime] = None) -> Dict[str, int]:
     nights = await asyncio.to_thread(_due_nights, now)
     if not nights:
         return out
-    zones: Dict[str, str] = {}
     businesses: Dict[str, Optional[Dict[str, Any]]] = {}
+    zones: Dict[str, Optional[str]] = {}
     for n in nights:
         course = n.get("academy_courses") or {}
         biz = str(course.get("business_id") or "")
@@ -107,19 +107,19 @@ async def sweep_tick(now: Optional[datetime] = None) -> Dict[str, int]:
             starts = datetime.fromisoformat(str(n["starts_at"]).replace("Z", "+00:00"))
         except (KeyError, ValueError):
             continue
-        if biz not in zones:
-            zones[biz] = await asyncio.to_thread(_zone, biz)
-        when = due(starts, now, zones[biz])
-        if not when:
-            continue
-        # The business before the claim: a night is never marked reminded
-        # when nobody could be told (it's tried again next tick).
+        # The business and its clock before anything is claimed: a night is
+        # never marked reminded on a guessed clock or with nobody told; it is
+        # simply tried again next tick.
         if biz not in businesses:
             rows = await asyncio.to_thread(sb_clients.sb_get_as_service,
-                                           f"/businesses?id=eq.{biz}&select=id,name,type,settings&limit=1")
+                                           f"/businesses?id=eq.{biz}&select=id,name,type,settings,owner_id&limit=1")
             businesses[biz] = rows[0] if rows else None
-        business = businesses[biz]
-        if not business:
+            zones[biz] = await asyncio.to_thread(_zone, businesses[biz]) if businesses[biz] else None
+        business, tz = businesses[biz], zones[biz]
+        if not business or not tz:
+            continue
+        when = due(starts, now, tz)
+        if not when:
             continue
         claimed = await asyncio.to_thread(sb_clients.sb_post_as_service, "/rpc/academy_live_reminder_claim",
                                           {"p_session": n["id"]})
@@ -129,12 +129,22 @@ async def sweep_tick(now: Optional[datetime] = None) -> Dict[str, int]:
         lesson = (n.get("academy_lessons") or {}).get("title") if isinstance(n.get("academy_lessons"), dict) else None
         night = " · ".join(x for x in (n.get("title"), lesson) if x)
         students = claimed["students"]
+        sent = failed = 0
         for s in students:
             try:
                 if await _email(business, str(course.get("title") or "your class"), night, when, s, str(n["id"])):
-                    out["emails"] += 1
+                    sent += 1
             except Exception as e:  # noqa: BLE001
+                failed += 1
                 logger.warning(f"[class-reminders] email failed: {type(e).__name__}")
+        out["emails"] += sent
+        if failed and not sent:
+            # A send outage (every email failed): un-mark the night so the
+            # next tick tries again. The idempotency keys keep a retry from
+            # reaching anyone twice; the push has its own once-only key.
+            await asyncio.to_thread(sb_clients.sb_post_as_service, "/rpc/academy_live_reminder_release",
+                                    {"p_session": n["id"]})
+            out["released"] = out.get("released", 0) + 1
         out["phones"] += await asyncio.to_thread(_push, business, str(course.get("title") or "Class"), night, when,
                                                  students, str(n["id"]))
     if out["nights"]:
@@ -142,12 +152,26 @@ async def sweep_tick(now: Optional[datetime] = None) -> Dict[str, int]:
     return out
 
 
-def _zone(business_id: str) -> str:
+def _zone(business: Dict[str, Any]) -> Optional[str]:
+    """The business's clock, by outside_calendar.business_timezone's chain
+    (availability, then the owner's profile, then the platform's), but
+    strict: a failed read is None, never a fallback clock."""
     try:
-        from outside_calendar import business_timezone
-        return business_timezone(business_id)
-    except Exception:  # noqa: BLE001
-        return "UTC"
+        from availability import BusinessAvailability
+        from availability_engine import resolved_tz_name
+        av = BusinessAvailability.from_settings_dict(((business.get("settings") or {}) if isinstance(
+            business.get("settings"), dict) else {}).get("availability"))
+        practitioner_tz = None
+        if business.get("owner_id"):
+            prof = sb_clients.sb_get_as_service(
+                f"/practitioner_profiles?owner_id=eq.{business['owner_id']}&select=timezone&limit=1")
+            if prof is None:
+                return None
+            practitioner_tz = ((prof[0].get("timezone") or "").strip() or None) if prof else None
+        return resolved_tz_name(av, practitioner_tz)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[class-reminders] clock unread: {type(e).__name__}")
+        return None
 
 
 async def _email(business: Dict[str, Any], course_title: str, night: str, when: str,
