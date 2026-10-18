@@ -323,3 +323,75 @@ def test_the_teacher_reads_the_file_as_themselves(app, monkeypatch):
 async def _signed(client, bucket, path, ttl=0, download_as=None):
     assert bucket == aw.BUCKET and ttl == aw.SIGNED_TTL
     return f"https://signed/{path}"
+
+
+# ─── Files nothing points at ─────────────────────────────────────────
+
+class _Storage:
+    def __init__(self, status=200):
+        self.status, self.deleted = status, []
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+    async def request(self, method, url, headers=None, json=None, timeout=None):
+        assert method == "DELETE" and url.endswith(f"/storage/v1/object/{aw.BUCKET}")
+        self.deleted.append(list(json["prefixes"]))
+        return type("R", (), {"status_code": self.status, "text": "no"})()
+
+
+@pytest.fixture
+def sweep(monkeypatch):
+    store = _Storage()
+    monkeypatch.setattr(aw.httpx, "AsyncClient", lambda *a, **k: store)
+    monkeypatch.setattr(aw.storage_links, "has_service_key", lambda: True)
+    monkeypatch.setenv("SUPABASE_URL", "https://db.example")
+    return store
+
+
+def _orphans(monkeypatch, names, said=""):
+    asked = []
+
+    async def rpc(client, name, body):
+        asked.append((name, body))
+        return (None, said) if said else (names, "")
+    monkeypatch.setattr(aw, "_rpc", rpc)
+    return asked
+
+
+def test_files_nothing_points_at_are_deleted_in_batches(sweep, monkeypatch):
+    names = [aw.object_path(TARGET, "jpg") for _ in range(230)]
+    asked = _orphans(monkeypatch, names + ["notes.txt", "../other/x.jpg", None])
+    assert asyncio.run(aw.sweep_tick()) == 230
+    assert asked == [("academy_work_orphans", {"p_limit": aw.SWEEP_BATCH})]
+    assert [len(c) for c in sweep.deleted] == [100, 100, 30]
+    assert sum(sweep.deleted, []) == names, "only names in the one stored shape"
+
+
+def test_a_failed_list_or_delete_deletes_nothing_more(sweep, monkeypatch):
+    _orphans(monkeypatch, None, said="failed")
+    assert asyncio.run(aw.sweep_tick()) == 0 and sweep.deleted == []
+    _orphans(monkeypatch, [aw.object_path(TARGET, "pdf") for _ in range(150)])
+    sweep.status = 500
+    assert asyncio.run(aw.sweep_tick()) == 0
+    assert len(sweep.deleted) == 1, "stops at the first refusal"
+
+
+def test_no_storage_key_means_no_sweep(monkeypatch):
+    monkeypatch.setattr(aw.storage_links, "has_service_key", lambda: False)
+    asked = _orphans(monkeypatch, [aw.object_path(TARGET, "jpg")])
+    assert asyncio.run(aw.sweep_tick()) == 0 and asked == []
+
+
+def test_the_sweep_lists_only_old_files_in_the_one_shape_for_the_service_role():
+    sql = (ROOT / "supabase/APPLY-2026-10-18-academy-work-sweep.sql").read_text(encoding="utf-8")
+    assert aw._PATH.pattern in sql, "the same pattern as the column's check"
+    assert "o.created_at < now() - interval '1 day'" in sql, "an upload in flight is never an orphan"
+    assert "not exists (select 1 from public.academy_item_work w where w.file_path = o.name)" in sql
+    assert "revoke all on function public.academy_work_orphans(int) from public, anon, authenticated;" in sql
+    assert "grant execute on function public.academy_work_orphans(int) to service_role;" in sql
+    boot = (ROOT / "kmj_intake_automation.py").read_text(encoding="utf-8")
+    assert 'g("academy_work_sweep", _academy_work.sweep_tick)' in boot

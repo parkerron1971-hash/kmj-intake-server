@@ -27,6 +27,10 @@ policy would have checked is checked here or in the database first:
     token, so academy_item_work's teacher-read policy decides, not this code.
 
 Classmates never see a file, even on homework shared with the class.
+
+Once a day sweep_tick deletes the files nothing points at any more: those of
+a deleted homework, student or class, and one stored whose attach never
+landed (academy_work_orphans; APPLY-2026-10-18-academy-work-sweep.sql).
 """
 from __future__ import annotations
 
@@ -365,3 +369,39 @@ async def _signed(client: httpx.AsyncClient, row: Optional[Dict[str, Any]]) -> D
     if not url:
         raise HTTPException(502, "That file didn't open. Try again in a moment.")
     return {"url": url, "file_name": row.get("file_name"), "file_type": row.get("file_type")}
+
+
+# ─── Files nothing points at ─────────────────────────────────────────
+
+SWEEP_BATCH = 500  # a day's worth and then some; the rest wait for tomorrow
+_SWEEP_CHUNK = 100
+
+
+async def sweep_tick() -> int:
+    """Delete the files no homework points at any more (a day old or more,
+    so an upload in flight is never one). Returns how many were deleted."""
+    if not storage_links.has_service_key() or not _base():
+        return 0
+    removed = 0
+    async with httpx.AsyncClient() as client:
+        names, said = await _rpc(client, "academy_work_orphans", {"p_limit": SWEEP_BATCH})
+        if said:
+            logger.warning("academy-work sweep: %s", said)
+            return 0
+        paths = [n for n in (names if isinstance(names, list) else []) if isinstance(n, str) and _PATH.fullmatch(n)]
+        for i in range(0, len(paths), _SWEEP_CHUNK):
+            chunk = paths[i:i + _SWEEP_CHUNK]
+            try:
+                r = await client.request("DELETE", f"{_base()}/storage/v1/object/{BUCKET}",
+                                         headers={**storage_links.service_headers(), "Content-Type": "application/json"},
+                                         json={"prefixes": chunk}, timeout=httpx.Timeout(60.0))
+            except Exception as e:  # noqa: BLE001
+                logger.warning("academy-work sweep: %s", type(e).__name__)
+                break
+            if r.status_code >= 400:
+                logger.warning("academy-work sweep: %s %s", r.status_code, r.text[:200])
+                break
+            removed += len(chunk)
+    if removed:
+        logger.info("academy-work sweep: deleted %d files nothing pointed at", removed)
+    return removed
