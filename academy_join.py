@@ -138,8 +138,8 @@ def next_class_line(business_id: str, course_id: str) -> str:
 def release_note(business_id: str, course: Dict[str, Any]) -> str:
     """The class page's one line on how lessons open: all at once, one a
     week from the day you join, or together from the class's start date
-    (academy_courses.opens_from, in the business's time zone). Sync
-    (worker thread)."""
+    (academy_courses.opens_from, in the zone it was set in, else the
+    business's). Sync (worker thread)."""
     drip = course.get("drip_mode") or "none"
     if drip not in ("weekly", "custom"):
         return "Everything is available the moment you join."
@@ -152,8 +152,11 @@ def release_note(business_id: str, course: Dict[str, Any]) -> str:
                 else "Material unlocks on a guided schedule after you join.")
     try:
         from zoneinfo import ZoneInfo
-        from outside_calendar import business_timezone
-        local = start.astimezone(ZoneInfo(business_timezone(business_id)))
+        zone = course.get("opens_tz")
+        if not zone:
+            from outside_calendar import business_timezone
+            zone = business_timezone(business_id)
+        local = start.astimezone(ZoneInfo(zone))
     except Exception as e:
         logger.info(f"[class-join] time zone skipped: {type(e).__name__}")
         local = start

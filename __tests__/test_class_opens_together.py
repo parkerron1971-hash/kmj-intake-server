@@ -59,11 +59,30 @@ def test_its_own_schedule_counts_each_lessons_days_from_the_start_date():
     assert ps._learn_unlock("custom", 1, 7, JOINED_TODAY, started) is not None
 
 
+def test_six_pm_stays_six_pm_after_daylight_saving_ends(monkeypatch):
+    # Thursdays 6 PM in Chicago from Oct 22: week 3 (Nov 5) opens at 6 PM CST,
+    # which is midnight UTC, not 11 PM.
+    class Then(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 10, 1, tzinfo=timezone.utc)
+
+    monkeypatch.setattr(ps, "datetime", Then)
+    week3 = ps._learn_unlock("weekly", 2, 0, "2026-10-01T00:00:00+00:00",
+                             "2026-10-22T23:00:00+00:00", "America/Chicago")
+    assert week3.astimezone(timezone.utc) == datetime(2026, 11, 6, 0, 0, tzinfo=timezone.utc)
+    without_zone = ps._learn_unlock("weekly", 2, 0, "2026-10-01T00:00:00+00:00", "2026-10-22T23:00:00+00:00")
+    assert without_zone == datetime(2026, 11, 5, 23, 0, tzinfo=timezone.utc)
+
+
 def test_the_database_rule_says_the_same():
     sql = (ROOT / "supabase" / "APPLY-2026-10-18-academy-opens-from.sql").read_text(encoding="utf-8")
     assert "add column if not exists opens_from timestamptz" in sql
+    assert "add column if not exists opens_tz text" in sql
     assert "create or replace function public.academy_lesson_unlock" in sql
     assert "p_course.drip_mode in ('weekly', 'custom') and p_course.opens_from is not null" in sql
+    assert "at time zone coalesce(p_course.opens_tz, 'UTC')" in sql
+    assert "create trigger academy_course_tz_check" in sql
 
 
 # ─── The class page's line ───────────────────────────────────────────
@@ -85,6 +104,14 @@ def test_once_it_has_started_the_page_invites_people_to_catch_up(monkeypatch):
     note = aj.release_note(BIZ, {"drip_mode": "weekly", "opens_from": "2020-10-22T23:00:00+00:00"})
     assert note == ("One lesson a week, together, since Thursday, October 22. "
                     "Join now and the weeks so far are open to catch up.")
+
+
+def test_the_page_uses_the_zone_the_class_was_set_in(monkeypatch):
+    monkeypatch.setitem(sys.modules, "outside_calendar",
+                        types.SimpleNamespace(business_timezone=lambda biz: "America/Chicago"))
+    note = aj.release_note(BIZ, {"drip_mode": "weekly", "opens_from": "2030-10-24T23:00:00+00:00",
+                                 "opens_tz": "America/New_York"})
+    assert "October 24 at 7 PM" in note
 
 
 def test_the_other_ways_read_as_they_did():

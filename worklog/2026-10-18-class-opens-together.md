@@ -13,9 +13,10 @@ decisions:
   - "Kevin's pick: one a week counts from the class's start date for a class with dates; someone who joins late finds the weeks already past open"
   - "No start date keeps the old rule: lessons count from the day each person joins"
   - "All at once ignores a start date; a custom schedule counts each lesson's days from it"
+  - "Weeks are added on the clock of the zone the start was set in (opens_tz), so 6 PM stays 6 PM after daylight saving; a zone Postgres doesn't know is refused when saved"
 related: [2026-10-17-class-self-join.md, 2026-10-17-class-student-side.md]
 ---
-- `supabase/APPLY-2026-10-18-academy-opens-from.sql`: `academy_courses.opens_from`;
+- `supabase/APPLY-2026-10-18-academy-opens-from.sql`: `academy_courses.opens_from` and `opens_tz` (checked by a trigger);
   `academy_lesson_unlock` (the one rule the classroom, slides, journal, work
   and finishing a lesson already share) counts from it.
 - `public_site._learn_unlock` takes the start date (the older /learn pages);
@@ -23,6 +24,6 @@ related: [2026-10-17-class-self-join.md, 2026-10-17-class-student-side.md]
   `academy_join.release_note`: "One lesson a week, together, from Thursday,
   October 22 at 6 PM." in the business's time zone, or "since … Join now and
   the weeks so far are open to catch up." once it has started.
-- `__tests__/test_class_opens_together.py` (10), sabotage-checked (6 fail with
-  the start date ignored); the database half rehearsed on production in a
+- `__tests__/test_class_opens_together.py` (12), sabotage-checked (6 fail with
+  the start date ignored, the daylight saving one with the zone ignored); the database half rehearsed on production in a
   rolled-back transaction (see docs/MIGRATIONS.md).
