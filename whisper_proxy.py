@@ -175,6 +175,11 @@ class FeaturedVoice:
 INWORLD_VOICES = {
     "grace": FeaturedVoice("misty-lemon-6417__design-voice-b82f90e7", "Grace",
                            "warm, steady woman — reassuring, unhurried", 1.1),
+    # Kevin, 2026-10-17: "want to see it in real time to see if it was
+    # better" — the same Grace at 1.0x, side by side in the picker, until
+    # he keeps one speed and the other row goes.
+    "grace-normal": FeaturedVoice("misty-lemon-6417__design-voice-b82f90e7", "Grace (normal speed)",
+                                  "the same Grace, a little slower", 1.0),
     "elijah": FeaturedVoice("misty-lemon-6417__design-voice-b40ecacd", "Elijah",
                             "warm, steady man — a rich, low voice", 1.1),
     "jessica": FeaturedVoice("Jessica", "Jessica",

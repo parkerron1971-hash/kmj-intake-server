@@ -156,6 +156,20 @@ def test_grace_reaches_inworld_with_her_voice_speed_and_flash(env):
     assert not _openai_sent()
 
 
+def test_grace_at_normal_speed_is_the_same_voice_slower(env):
+    _speak({"text": "Hello there.", "voice": "iw:grace-normal"})
+    body = _inworld_sent()[0]["json"]
+    assert body["voiceId"] == wp.INWORLD_VOICES["grace"].voice_id
+    assert body["audioConfig"]["speakingRate"] == 1.0
+
+
+def test_two_speeds_of_one_voice_never_share_a_kept_phrase(env):
+    _speak({"text": "On it.", "voice": "iw:grace"})
+    _Client.sent = []
+    _speak({"text": "On it.", "voice": "iw:grace-normal"})
+    assert _inworld_sent(), "1.0x must not be served the 1.1x audio from memory"
+
+
 def test_stock_voices_speak_at_normal_speed(env):
     _speak({"text": "Hello there.", "voice": "iw:jessica"})
     body = _inworld_sent()[0]["json"]
@@ -229,8 +243,8 @@ def test_text_longer_than_inworld_takes_speaks_whole_as_nova(env):
 
 def test_picker_lists_featured_voices_by_slug_only(env):
     out = asyncio.run(wp.list_tts_voices(request=object()))["voices"]
-    assert [v["id"] for v in out] == ["iw:grace", "iw:elijah", "iw:jessica", "iw:reed"]
-    assert [v["label"] for v in out] == ["Grace", "Elijah", "Jessica", "Reed"]
+    assert [v["id"] for v in out] == ["iw:grace", "iw:grace-normal", "iw:elijah", "iw:jessica", "iw:reed"]
+    assert [v["label"] for v in out] == ["Grace", "Grace (normal speed)", "Elijah", "Jessica", "Reed"]
     flat = json.dumps(out)
     assert "design-voice" not in flat and "misty-lemon" not in flat
 
