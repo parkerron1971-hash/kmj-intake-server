@@ -4,7 +4,7 @@ date: 2026-10-18
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-10-17: drifting judged on Sundays only (never giving), any attendance counts, nobody flagged in the first month ("yes. i like plan"); the late chain applied to shepherds; the Chief section and Monday brief (canvas 31su6kdYmYecH5b2NxjBJN boards 4-5). Round 2 of the shepherding build, after round 1 (#1485) went live'
 status: in progress
-prs: [kmj-intake-server PR pending]
+prs: [kmj-intake-server#1486]
 migrations: [supabase/APPLY-2026-10-18-shepherding-signals.sql]
 left_undone:
   - "The office screens for round 2 (drift numbers, the rhythm panel, the no-Sundays-yet card, move rows in the proposal) are the frontend PR built against the same contract"
