@@ -1615,6 +1615,16 @@ async def startup():
                           id="church_checkin_sweep")
     except Exception as e:
         print(f"   [warn] church check-in sweep not scheduled: {e}")
+    # Shepherding, round 2 (2026-10-18): a care need reaches the family's
+    # shepherd within the hour; on Monday morning (the church's clock)
+    # drifting families, the chain a week with no reach climbs, birthdays
+    # and the Lead Pastor's brief. Each email once (church_shepherd_signals).
+    try:
+        import church_shepherd_signals as _css
+        scheduler.add_job(g("church_shepherd_sweep", _css.sweep), "interval", hours=1,
+                          id="church_shepherd_sweep")
+    except Exception as e:
+        print(f"   [warn] church shepherding sweep not scheduled: {e}")
     # THE LEAD ARC PR 4 (2026-08-14) — the first-response clock.
     #
     # Nothing measured how long a lead waited before anyone answered.

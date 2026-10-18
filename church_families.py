@@ -195,11 +195,18 @@ def _dismissed(biz: str) -> Optional[Set[str]]:
 # ─── the guess ────────────────────────────────────────────────────────
 
 def _family_name(rows: List[Dict[str, Any]]) -> str:
+    """'The Carter family'. Where one record has the name typed all one case
+    ("mcbride") and another as written ("McBride"), the written one wins."""
     names: List[str] = []
     for r in rows:
         s = surname(r)
-        if s and s.casefold() not in {n.casefold() for n in names}:
+        if not s:
+            continue
+        same = next((i for i, n in enumerate(names) if n.casefold() == s.casefold()), None)
+        if same is None:
             names.append(s)
+        elif _cased(s.lower()) == names[same] and s != names[same]:
+            names[same] = s  # "Mcbride" (guessed casing) gives way to "McBride" (as written)
     if not names:
         return "A family"
     return f"The {' and '.join(names[:2])} family"

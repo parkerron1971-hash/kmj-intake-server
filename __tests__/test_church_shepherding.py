@@ -389,7 +389,7 @@ def test_approving_writes_every_family_and_emails_each_shepherd_once(db, mail):
     marcus = next(m for m in mail if m["to"] == "marcus@example.com")
     assert "Kevin McCloud asked you to shepherd" in marcus["subject"]
     assert "https://lovecityc.com/my/lead/families" in marcus["body"] and "never shown to you" in marcus["body"]
-    assert "Sunday" not in marcus["body"], "round 1 promises nothing about missed Sundays"
+    assert "misses three Sundays, you’ll hear first" in marcus["body"], "round 2 watches Sundays, so it says so"
     after = shep.overview(BUSINESS)
     assert after["counts"]["waiting"] == 0 and after["counts"]["placed"] == out["placed"]
     assert after["families_empty"] is False and after["draft"] is None

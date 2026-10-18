@@ -7,7 +7,8 @@ group?" and "how many were online Sunday?" had no answer but a guess.
 One read verb, `church_people`, answers them from church_reads — the same
 functions the Home desk reads, so Chief and the desk never disagree.
 
-    section = first_time | groups | attendance | care | leaders   (default: overview)
+    section = first_time | groups | attendance | care | leaders | shepherding
+              (default: overview)
 
 `care` is the one gated part: the Prayer & care inbox and children's
 check-in, as COUNTS only (never a request's words or a child's name), and
@@ -20,9 +21,18 @@ type, each role's title, job, who holds it, who it answers to, what it is
 handed and its definition, and which teams have no leader. Leaders' names
 only; never a prayer request, a card's answers or giving.
 
+`shepherding` (owner/manager only, like `care`; Kevin 2026-10-17, canvas
+31su6kdYmYecH5b2NxjBJN board 5) is who shepherds whom, who's drifting
+(three Sundays missed; never giving) and who hasn't been reached, from
+church_shepherd_signals — the same reads Operate → Shepherding shows. With
+`name`, one family or person: their shepherd, last touch and drift. Never a
+note's words; a child is a first name and an age.
+
 `draft_church_role` writes one thing: a DRAFT role the owner asked for
 ("add a Church Mother role"). A draft hands nobody anything until the owner
-saves it on Leaders & roles.
+saves it on Leaders & roles. `draft_shepherd_moves` likewise writes moves
+into the shepherding proposal; nothing moves and no shepherd is told until
+the office approves it on Shepherding.
 
 Handlers return `result` AND `label` per the house contract.
 """
@@ -33,7 +43,7 @@ from typing import Any, Dict, List, Optional
 
 import church_reads
 
-SECTIONS = ("overview", "first_time", "groups", "attendance", "care", "leaders")
+SECTIONS = ("overview", "first_time", "groups", "attendance", "care", "leaders", "shepherding")
 _CARE_ROLES = {"owner", "admin", "manager"}
 
 
@@ -141,6 +151,22 @@ async def handle_church_people(client, biz, action) -> Dict[str, Any]:
         return {"type": "church_people", "section": "leaders", "result": "\n".join(got),
                 "label": "Leaders & roles"}
 
+    if section == "shepherding":
+        role = await asyncio.to_thread(_caller_role, business_id)
+        if role not in _CARE_ROLES:
+            return {"type": "church_people", "section": "shepherding",
+                    "result": "refused: shepherding (who shepherds whom, who's drifting) is for the church's owner "
+                              "or a manager. Say so plainly; do not guess.",
+                    "label": "Shepherding is owner or manager only", "nav": None}
+        import church_shepherd_signals
+        name = " ".join(str(action.get("name") or "").split())[:80]
+        got = await asyncio.to_thread(church_shepherd_signals.chief_lines, biz, name)
+        if got is None:
+            return _fail("church_people", "shepherding couldn't be read right now")
+        return {"type": "church_people", "section": "shepherding", "result": "\n".join(got),
+                "label": f"Shepherding: {name}" if name else "Shepherding",
+                "nav": {"tab": "operate", "sub": "shepherding"}}
+
     if section == "care":
         role = await asyncio.to_thread(_caller_role, business_id)
         if role not in _CARE_ROLES:
@@ -174,6 +200,44 @@ async def handle_church_people(client, biz, action) -> Dict[str, Any]:
              "groups": "Groups", "attendance": "Attendance"}[section]
     return {"type": "church_people", "section": section,
             "result": "\n".join(lines), "label": label}
+
+
+async def handle_draft_shepherd_moves(client, biz, action) -> Dict[str, Any]:
+    """Chief drafts the moves the owner asked for ("give both Johnsons to
+    Pastor Andre"). They wait in the proposal on Shepherding; nothing moves
+    and no shepherd is told until the office approves it."""
+    business_id = str(biz.get("id") or "")
+    if not business_id:
+        return _fail("draft_shepherd_moves", "no business on record")
+    import church_follow_up
+    if not church_follow_up.is_church(biz):
+        return _fail("draft_shepherd_moves", "shepherding is for churches")
+    role = await asyncio.to_thread(_caller_role, business_id)
+    if role not in _CARE_ROLES:
+        return _fail("draft_shepherd_moves", "only the church's owner or a manager can draft shepherding moves")
+    raw = action.get("moves")
+    if isinstance(raw, dict):
+        raw = [raw]
+    if not raw and (action.get("family") or action.get("to")):
+        raw = [{"family": action.get("family"), "to": action.get("to")}]
+    moves = [m for m in (raw or []) if isinstance(m, dict)]
+    if not moves:
+        return _fail("draft_shepherd_moves", "say which family goes to which shepherd")
+    import church_shepherding
+    from fastapi import HTTPException
+    try:
+        out = await asyncio.to_thread(church_shepherding.draft_moves, biz, moves, None)
+    except HTTPException as e:
+        return _fail("draft_shepherd_moves", str(e.detail))
+    over = out["over"]
+    warn = (" " + "; ".join(f"{o['name']} would hold {o['count']}, over the {o['cap']} set" for o in over)
+            + ". Approving says that's fine.") if over else ""
+    return {"type": "draft_shepherd_moves",
+            "result": ("Drafted: " + "; ".join(out["done"]) + ". Nothing changes and no one is told until the owner "
+                       "approves it on Operate → Follow-up → Shepherding (the proposal), where they can change any row."
+                       + warn),
+            "label": f"Drafted {len(out['done'])} {'move' if len(out['done']) == 1 else 'moves'}",
+            "nav": {"tab": "operate", "sub": "shepherding"}}
 
 
 async def handle_draft_church_role(client, biz, action) -> Dict[str, Any]:

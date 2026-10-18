@@ -565,6 +565,8 @@ FAM_CSS = """
 .ld-kin .acts{display:flex;gap:6px;}
 .ld-kin .acts a{display:grid;place-items:center;width:44px;height:44px;border-radius:50%;background:var(--s2);color:var(--fg);}
 .ld-tags{display:flex;flex-wrap:wrap;gap:6px;}
+.ld-tag.ld-late{color:#ff8a5c;}
+.ld-news{align-items:flex-start;}
 """
 
 
@@ -604,7 +606,11 @@ def _seg(tab: str, people: bool, prays: bool, waiting: int, fams: int) -> str:
 
 def _fam_link(f: Dict[str, Any], biz: Dict[str, Any]) -> str:
     import church_shepherding as shep
-    if f.get("reached") and f.get("last_touch_kind"):
+    import church_shepherd_signals as sig
+    if f.get("drifting"):
+        seen = sig._day(f.get("last_seen"))
+        sub = "Missed three Sundays" + (f" · last here {sig.label(seen)}" if seen else "")
+    elif f.get("reached") and f.get("last_touch_kind"):
         sub = f"{shep.KINDS.get(f['last_touch_kind'], 'Reached')} {_day(f.get('last_touch_at'), biz)}"
     else:
         sub = _ago(f.get("days"))
@@ -626,13 +632,21 @@ def _families_body(fv: Optional[Dict[str, Any]], biz: Dict[str, Any], church: st
     if not fv.get("shepherd"):
         return (f'<section class="ld-card"><p>You don’t shepherd any families at {_e(church)}. When the pastor gives '
                 f'you some, they show up here.</p><p><a href="/my/lead">Back to Lead</a></p></section>')
+    import church_shepherd_signals as sig
     fams = fv["families"]
-    need = [f for f in fams if not f["reached"]]
-    done = sorted((f for f in fams if f["reached"]), key=lambda f: f["days"] if f["days"] is not None else 0)
-    n, x = len(fams), len(done)
+    # Drifting families stay at the top until they're back at church.
+    need = [f for f in fams if f.get("drifting") or not f["reached"]]
+    done = sorted((f for f in fams if f["reached"] and not f.get("drifting")),
+                  key=lambda f: f["days"] if f["days"] is not None else 0)
+    n, x = len(fams), sum(1 for f in fams if f["reached"])
     days = int(fv.get("rhythm_days") or 30)
     if not fams:
         line = "No families are yours yet. When the pastor gives you some, they show up here."
+    elif need and need[0].get("drifting"):
+        f = need[0]
+        seen = sig._day(f.get("last_seen"))
+        line = (f"{f['name']} has missed three Sundays" + (f"; they were last here {sig.label(seen)}" if seen else "")
+                + ". A call this week?" + (f" {len(need) - 1} more to reach." if len(need) > 1 else ""))
     elif need:
         f = need[0]
         when = "hasn’t been reached yet" if f["days"] is None else f"was last reached {f['days']} days ago"
@@ -692,9 +706,19 @@ def _family_body(fam: Dict[str, Any], biz: Dict[str, Any], me: Dict[str, Any]) -
         f'{" · Asked for a pastor" if t.get("needs_pastor") else ""}</span></div>'
         f'{"<p>" + _e(t["note"]) + "</p>" if t.get("note") else ""}</li>' for t in touches)
     since = _day(fam.get("since"), biz)
+    import church_shepherd_signals as sig
+    extras = fam.get("extras")
+    sunday = sig.tag_for(extras)
+    tags = (f'<span class="ld-tag{" ld-late" if (extras or {}).get("drifting") else ""}">{_e(sunday)}</span>' if sunday else "")
+    tags += f'<span class="ld-tag">{_e(_ago(days))}</span>'
+    if extras is None:
+        news = '<p class="ld-quiet">Their Sundays and any care news couldn’t load just now. Try again in a moment.</p>'
+    else:
+        news = "".join(f'<p class="ld-quiet ld-news">{icon("heart", 14)}<span>{_e(x)}</span></p>' for x in extras["lines"])
     return f"""<div class="ld-fams"><div class="ld-person"><span class="ld-av" aria-hidden="true">{_e(shep.family_initial(fam['name']))}</span>
 <div><h2>{_e(fam['name'])}</h2><small>{_e(f'Yours since {since}' if since else 'Yours to shepherd')}</small></div></div>
-<div class="ld-tags"><span class="ld-tag">{_e(_ago(days))}</span></div>
+<div class="ld-tags">{tags}</div>
+{news}
 <section class="ld-card" aria-label="The family"><h3>The family</h3><ul class="ld-kin">{''.join(kin)}</ul></section>
 <section class="ld-card" aria-label="Log a touch"><h3>Log a touch</h3>
 <form method="post" action="/my/lead/family/{hid}/touch">
@@ -752,6 +776,8 @@ async def serve_families(request: Request, biz: Dict[str, Any], site, me: Dict[s
         return render_families(biz, site, request, me, my_roles, fv, gone=True), 404
     if fam is None:
         return render_families(biz, site, request, me, my_roles, None), 503
+    import church_shepherd_signals as sig
+    fam["extras"] = await asyncio.to_thread(sig.family_extras, biz, fam)
     return render_families(biz, site, request, me, my_roles, fv, fam), 200
 
 
