@@ -1642,6 +1642,15 @@ async def startup():
                           hour=9, minute=15, id="academy_work_sweep")
     except Exception as e:
         print(f"   [warn] homework file sweep not scheduled: {e}")
+    # Class-night reminders: a few hours before each live class, its students
+    # by email and a church's member app by its "Class nights" notification
+    # (academy_reminders.sweep_tick; each night once).
+    try:
+        import academy_reminders as _academy_reminders
+        scheduler.add_job(g("academy_class_reminders", _academy_reminders.sweep_tick), "interval",
+                          minutes=15, id="academy_class_reminders")
+    except Exception as e:
+        print(f"   [warn] class reminders not scheduled: {e}")
     # THE LEAD ARC PR 4 (2026-08-14) — the first-response clock.
     #
     # Nothing measured how long a lead waited before anyone answered.

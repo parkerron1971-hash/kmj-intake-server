@@ -59,6 +59,9 @@ KINDS = (
     ("messages", "New messages", "When someone writes to you or a group you're in"),
     ("sermons", "New sermons", "When a new message is posted"),
     ("events", "Event reminders", "The day before something you said you'd come to"),
+    # Class nights (academy_reminders.py): a few hours before a live class
+    # the member is in; the evening before for a morning one.
+    ("classes", "Class nights", "A few hours before a class you're in meets"),
     ("prayer", "Prayer", "When the church has prayed for your request"),
     # Youth and Kids (member_spaces, Kevin 2026-10-15): only the people each
     # is for see its box (visible_kinds) — teens and youth leaders; parents.
