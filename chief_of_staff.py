@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import functools
 import uuid
 import json
 import logging
@@ -1405,16 +1406,20 @@ def _refusal_fallback_model(model: Optional[str]) -> Optional[str]:
     return fb
 
 
-async def _call_claude(*args, **kwargs) -> str:
+def _without_tone_notes(call):
     """Every Chief model call. A voice turn that asked for tone notes
     (chief_tone) gets its answer back without them: the notes are kept
     for the speech of the reply's tail, and nothing downstream — action
     parsing, the answer check, the reply on file — ever reads one."""
-    import chief_tone
-    return chief_tone.take(await _call_claude_once(*args, **kwargs))
+    @functools.wraps(call)
+    async def wrapped(*args, **kwargs):
+        import chief_tone
+        return chief_tone.take(await call(*args, **kwargs))
+    return wrapped
 
 
-async def _call_claude_once(client: httpx.AsyncClient, system: str, messages: List[Dict],
+@_without_tone_notes
+async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Dict],
                        max_tokens: int = 1600,
                        enable_web_search: bool = True,
                        business_id: Optional[str] = None,

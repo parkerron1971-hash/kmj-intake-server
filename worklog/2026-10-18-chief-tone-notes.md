@@ -27,9 +27,10 @@ routine replies plain, open with one note, and change at most once, as
 `[breathe] [steady]` where good news turns to bad.
 
 Where the notes go:
-- `chief_of_staff._call_claude` is now a wrapper over `_call_claude_once`
-  that hands back every answer without notes (`chief_tone.take`) and
-  records the tagged answer on the turn's `ToneTurn`, which the streaming
+- `chief_of_staff._call_claude` is decorated (`_without_tone_notes`, with
+  `functools.wraps`, so the tests that read its source still read the
+  body): every answer comes back without notes (`chief_tone.take`), and the
+  tagged answer is recorded on the turn's `ToneTurn`, which the streaming
   endpoint sets before the turn starts.
 - `_SentenceStreamer` strips each sentence before the prover and before
   `sent` (so stitching is unchanged), and emits the tagged sentence; a note
@@ -52,7 +53,7 @@ Tests: `__tests__/test_chief_tone_notes.py` (32): strip parity sentence by
 sentence vs whole, the streamer and the stream endpoint end to end, the tail,
 the bridge, the proxy's model choice, the cap, the fallback, and who gets the
 rules. With the stripping and the model switch reverted, 6 fail. The stream,
-bridge, Inworld and PCM suites pass (207 with the new file).
+bridge, Inworld and PCM suites pass (207 with the new file), and all 72 test files that touch `_call_claude` (1,264).
 
 The judgment, measured: `scripts/chief_tone_eval.py --live`, thirty spoken
 questions on a fictional coaching business (half routine, half with news),

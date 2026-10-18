@@ -98,12 +98,13 @@ def test_a_toned_turn_records_the_notes_and_reads_on_without_them(toned):
     assert toned.records == [REPLY]
 
 
-def test_every_model_call_hands_back_the_words(toned, monkeypatch):
-    async def once(*a, **k):
+def test_every_model_call_hands_back_the_words(toned):
+    async def call(*a, **k):
         return REPLY
-    monkeypatch.setattr(chief, "_call_claude_once", once)
-    assert asyncio.run(chief._call_claude(None, "", [])) == CLEAN
+    assert asyncio.run(chief._without_tone_notes(call)(None, "", [])) == CLEAN
     assert toned.records == [REPLY]
+    # The live call is wrapped the same way.
+    assert chief._call_claude.__wrapped__.__name__ == "_call_claude"
 
 
 SESSIONS = {"context:sessions": {"kind": "context", "complete": False, "text": json.dumps([

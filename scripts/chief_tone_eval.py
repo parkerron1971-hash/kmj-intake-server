@@ -128,7 +128,7 @@ async def main(out_path, only):
         for cid, message, kind, ok in CASES:
             if only and cid not in only:
                 continue
-            raw = await chief._call_claude_once(
+            raw = await chief._call_claude(
                 client, system, [{"role": "user", "content": message}], model=model,
                 max_tokens=chief_models.max_tokens_for("voice", model=model),
                 effort=chief_models.effort_for("voice", model=model), enable_web_search=False)
