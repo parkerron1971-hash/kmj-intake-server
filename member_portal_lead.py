@@ -15,13 +15,21 @@ side (design canvas LG4Q97HqtEM4ByyXmmSrCP, boards 3-6).
     POST /my/lead/step            mark the current step done
     POST /my/lead/handback        hand them back to the office
     POST /my/lead/prayer/prayed | note | pass   I prayed, send a note, pass on
+    GET  /my/lead/families        the families a pastor or elder shepherds
+                                  (church_shepherding; canvas
+                                  31su6kdYmYecH5b2NxjBJN boards 6-7)
+    GET  /my/lead/family/<id>     one family: who's in it, log a touch
+    POST /my/lead/family/<id>/touch   a call, a visit, a text or a talk at
+                                  church, and "needs a pastor"
 
 A leader only ever sees the follow-ups handed to them (church_follow_up
 checks every read and write against leader_contact_id), and never another
 person's pastors-only note. Prayer: only requests the person shared with the
 prayer team and that were handed to them (church_prayer), a first name, and
-how to reach them only when they asked for a call. The owner's preview reads
-and never writes.
+how to reach them only when they asked for a call. A shepherd sees only
+the families given to them: the adults by name, a child by first name and
+age, never giving, prayer kept for the pastors or a child's care notes. The
+owner's preview reads and never writes.
 """
 from __future__ import annotations
 
@@ -51,6 +59,9 @@ DONE = {
     "prayed": "Thank you for praying.",
     "noted": "Your note is on its way.",
     "passed": "Passed on. They’ll pray over it today.",
+    "touched": "Saved. The pastors can read it.",
+    "pastor": "Saved. The Lead Pastor has been told.",
+    "pastor_unsent": "Saved, but no pastor could be emailed. Please tell the office.",
 }
 ERRORS = {
     "error": "That didn’t save. Please try again.",
@@ -59,6 +70,7 @@ ERRORS = {
     "gone": "That person isn’t handed to you anymore.",
     "prayer_gone": "That request isn’t handed to you anymore.",
     "noemail": "They left no email, so a note can’t be sent.",
+    "family_gone": "That family isn’t yours to shepherd anymore.",
 }
 
 LEAD_CSS = """
@@ -145,7 +157,7 @@ body:has(.ld-wide) .mb-top,body:has(.ld-wide) .mp-shell{max-width:1180px;}
 .ld-back summary{list-style:none;cursor:pointer;}
 .ld-back summary::-webkit-details-marker{display:none;}
 .ld-back[open] summary{margin-bottom:10px;}
-.ld-seg{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px;padding:4px;border-radius:14px;background:var(--s1);margin:0 0 16px;max-width:420px;}
+.ld-seg{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(0,1fr);gap:4px;padding:4px;border-radius:14px;background:var(--s1);margin:0 0 16px;max-width:420px;}
 .ld-seg a{display:flex;align-items:center;justify-content:center;min-height:42px;border-radius:10px;font-size:14.5px;font-weight:600;
   color:var(--fg2);text-decoration:none;}
 .ld-seg a[aria-current]{background:var(--s3);color:var(--fg);}
@@ -443,7 +455,7 @@ def _file(i: Dict[str, Any], biz: Dict[str, Any], me: Dict[str, Any]) -> str:
 def render(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], my_roles: List[Dict[str, Any]],
            view: Optional[Dict[str, Any]], selected: str = "", *, now: Optional[datetime] = None,
            prayer: Optional[Dict[str, Any]] = None, tab: str = "people",
-           targets: Optional[List[Dict[str, Any]]] = None) -> str:
+           targets: Optional[List[Dict[str, Any]]] = None, fams: int = 0) -> str:
     from member_portal import _shell
     now = now or datetime.now(timezone.utc)
     church = (biz.get("name") or "Your church").strip()
@@ -461,16 +473,13 @@ def render(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], my_r
     people = any(not _is_prayer(r) for r in active) or bool((view or {}).get("follow_ups"))
     if active and prays and (tab == "prayer" or not people):
         waiting = sum(1 for p in (prayer or {}).get("requests") or [] if not p.get("prayed_at"))
-        seg = (f'<nav class="ld-seg" aria-label="Lead"><a href="/my/lead">People</a>'
-               f'<a href="/my/lead/prayer" aria-current="page">Prayer{f" · {waiting}" if waiting else ""}</a></nav>'
-               if people else "")
+        seg = _seg("prayer", people, True, waiting, fams)
         body = f'{flash}{head}{invites}{seg}{_prayer_body(prayer, biz, targets or [], now)}'
         return _shell(biz, site, "Prayer", f'<style>{LEAD_CSS}</style><div class="ld-wide">{body}</div>', tab="lead", who=me)
     seg = ""
-    if active and prays:
+    if active:
         waiting = sum(1 for p in (prayer or {}).get("requests") or [] if not p.get("prayed_at"))
-        seg = (f'<nav class="ld-seg" aria-label="Lead"><a href="/my/lead" aria-current="page">People</a>'
-               f'<a href="/my/lead/prayer">Prayer{f" · {waiting}" if waiting else ""}</a></nav>')
+        seg = _seg("people", True, prays, waiting, fams)
     head = head + seg
     if not active:
         body = (f'{flash}{head}{invites}' if invites else
@@ -506,7 +515,10 @@ def render(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], my_r
 async def serve(request: Request, biz: Dict[str, Any], site, me: Dict[str, Any], sub: str):
     """GET /my/lead, /my/lead/prayer and /my/lead/<id>: (html, status)."""
     import church_prayer
+    import church_shepherding as shep
     selected = sub[len("/my/lead/"):] if sub.startswith("/my/lead/") else ""
+    if selected == "families" or selected.startswith("family/"):
+        return await serve_families(request, biz, site, me, selected)
     tab = "prayer" if selected == "prayer" else "people"
     if tab == "prayer":
         selected = ""
@@ -517,21 +529,238 @@ async def serve(request: Request, biz: Dict[str, Any], site, me: Dict[str, Any],
         return render(biz, site, request, me, [{"status": "active", "role": "", "label": ""}], None), 503
     view = prayer = None
     targets: List[Dict[str, Any]] = []
+    fams = 0
     if any(r["status"] == "active" for r in my_roles):
+        fv = await asyncio.to_thread(shep.my_families, biz["id"], str(me["id"]))
+        fams = len((fv or {}).get("families") or [])
         view = await asyncio.to_thread(cfu.leader_view, biz["id"], str(me["id"]))
         prayer = await asyncio.to_thread(church_prayer.leader_prayers, biz["id"], str(me["id"]))
         if any(_is_prayer(r) for r in my_roles if r["status"] == "active"):
             targets = await asyncio.to_thread(church_prayer.pass_targets, biz["id"], me) or []
-    html_out = render(biz, site, request, me, my_roles, view, selected, prayer=prayer, tab=tab, targets=targets)
+    html_out = render(biz, site, request, me, my_roles, view, selected, prayer=prayer, tab=tab, targets=targets,
+                      fams=fams)
     ok = (prayer is not None) if tab == "prayer" else (view is not None)
     return html_out, 200 if ok or not my_roles else 503
+
+
+# ─── Shepherding: the families a pastor or elder shepherds ────────────
+#
+# Canvas 31su6kdYmYecH5b2NxjBJN, boards 6-7. Only the family's current
+# shepherd sees a family (church_shepherding checks every read and write);
+# a child is a first name and an age; never giving, prayer kept for the
+# pastors, or a child's care notes.
+
+FAM_CSS = """
+.ld-month{gap:8px;}
+.ld-month b{font-family:var(--mb-serif);font-size:30px;font-weight:500;line-height:1;}
+.ld-bar{height:8px;border-radius:999px;background:var(--s3);overflow:hidden;}
+.ld-bar i{display:block;height:100%;background:var(--mb-fill);border-radius:999px;}
+.ld-fams{display:flex;flex-direction:column;gap:10px;max-width:760px;}
+.ld-kin{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:10px;}
+.ld-kin li{display:flex;align-items:center;gap:12px;min-height:44px;}
+.ld-kin .ld-av{width:40px;height:40px;font-size:13px;}
+.ld-kin .t{display:flex;flex-direction:column;flex:1;min-width:0;}
+.ld-kin .t b{font-size:15.5px;font-weight:650;}
+.ld-kin .t small{font-size:12.5px;color:var(--fg3);}
+.ld-kin .acts{display:flex;gap:6px;}
+.ld-kin .acts a{display:grid;place-items:center;width:44px;height:44px;border-radius:50%;background:var(--s2);color:var(--fg);}
+.ld-tags{display:flex;flex-wrap:wrap;gap:6px;}
+"""
+
+
+def _and(names: List[str]) -> str:
+    names = [n for n in names if n]
+    if len(names) <= 1:
+        return names[0] if names else ""
+    return ", ".join(names[:-1]) + " and " + names[-1]
+
+
+def _ago(days: Optional[int]) -> str:
+    if days is None:
+        return "Not reached yet"
+    if days <= 0:
+        return "Reached today"
+    if days == 1:
+        return "Last reached yesterday"
+    return f"Last reached {days} days ago"
+
+
+def _seg(tab: str, people: bool, prays: bool, waiting: int, fams: int) -> str:
+    """People | Prayer | Families: only the ones this leader has, and only
+    when there is more than one."""
+    tabs = []
+    if people:
+        tabs.append(("people", "/my/lead", "People"))
+    if prays:
+        tabs.append(("prayer", "/my/lead/prayer", f"Prayer · {waiting}" if waiting else "Prayer"))
+    if fams:
+        tabs.append(("families", "/my/lead/families", f"Families · {fams}"))
+    if len(tabs) < 2:
+        return ""
+    here = ' aria-current="page"'
+    links = "".join(f'<a href="{href}"{here if key == tab else ""}>{_e(label)}</a>' for key, href, label in tabs)
+    return f'<nav class="ld-seg" aria-label="Lead">{links}</nav>'
+
+
+def _fam_link(f: Dict[str, Any], biz: Dict[str, Any]) -> str:
+    import church_shepherding as shep
+    if f.get("reached") and f.get("last_touch_kind"):
+        sub = f"{shep.KINDS.get(f['last_touch_kind'], 'Reached')} {_day(f.get('last_touch_at'), biz)}"
+    else:
+        sub = _ago(f.get("days"))
+    size = int(f.get("size") or 0)
+    return (f'<a class="ld-p" href="/my/lead/family/{_e(f["household_id"])}">'
+            f'<span class="ld-av" aria-hidden="true">{_e(shep.family_initial(f["name"]))}</span>'
+            f'<span class="t"><b>{_e(f["name"])}</b><small>{_e(sub)}</small></span>'
+            f'<span class="ld-due">{size} {"person" if size == 1 else "people"}</span></a>')
+
+
+def _notes_line(chain: List[str]) -> str:
+    return f"{_and(chain)} can read your notes." if chain else "The church office can read your notes."
+
+
+def _families_body(fv: Optional[Dict[str, Any]], biz: Dict[str, Any], church: str) -> str:
+    from member_app_ui import icon
+    if fv is None:
+        return '<p class="mp-err" role="alert">Your families couldn’t load just now. Please try again in a moment.</p>'
+    if not fv.get("shepherd"):
+        return (f'<section class="ld-card"><p>You don’t shepherd any families at {_e(church)}. When the pastor gives '
+                f'you some, they show up here.</p><p><a href="/my/lead">Back to Lead</a></p></section>')
+    fams = fv["families"]
+    need = [f for f in fams if not f["reached"]]
+    done = sorted((f for f in fams if f["reached"]), key=lambda f: f["days"] if f["days"] is not None else 0)
+    n, x = len(fams), len(done)
+    days = int(fv.get("rhythm_days") or 30)
+    if not fams:
+        line = "No families are yours yet. When the pastor gives you some, they show up here."
+    elif need:
+        f = need[0]
+        when = "hasn’t been reached yet" if f["days"] is None else f"was last reached {f['days']} days ago"
+        line = f"{f['name']} {when}. A call this week?" + (f" {len(need) - 1} more to reach." if len(need) > 1 else "")
+    else:
+        line = f"Every family heard from you in the last {days} days. Thank you."
+    pct = round(100 * x / n) if n else 0
+    out = (f'<div class="ld-fams"><div class="ld-chief"><small>{icon("star", 12)}From Chief</small><p>{_e(line)}</p></div>'
+           + (f'<section class="ld-card ld-month" aria-label="Reached"><h2>Reached in the last {days} days</h2>'
+              f'<b>{x} of {n}</b><div class="ld-bar" role="img" aria-label="{x} of {n} reached">'
+              f'<i style="width:{pct}%"></i></div></section>' if fams else ""))
+    if need:
+        out += (f'<div class="mb-sh"><h2>They need you first</h2><span>{len(need)}</span></div>'
+                + "".join(_fam_link(f, biz) for f in need))
+    if done:
+        out += (f'<div class="mb-sh"><h2>Reached lately</h2><span>{len(done)}</span></div>'
+                + "".join(_fam_link(f, biz) for f in done))
+    out += (f'<p class="ld-quiet">{icon("lock", 14)}<span>Never here: giving, prayer kept for the pastors, or a '
+            f'child’s care notes. {_e(_notes_line(fv.get("chain") or []))}</span></p></div>')
+    return out
+
+
+def _family_body(fam: Dict[str, Any], biz: Dict[str, Any], me: Dict[str, Any]) -> str:
+    import church_shepherding as shep
+    from member_app_ui import icon
+    hid = _e(fam["household_id"])
+    kin = []
+    for p in fam["people"]:
+        acts = []
+        phone = re.sub(r"[^\d+]", "", p.get("phone") or "")
+        first = cfu.first_name(p["name"])
+        if phone:
+            acts.append(f'<a href="tel:{_e(phone)}" aria-label="Call {_e(first)}">{icon("phone", 18)}</a>')
+            acts.append(f'<a href="sms:{_e(phone)}" aria-label="Text {_e(first)}">{icon("chat", 18)}</a>')
+        if p.get("email"):
+            acts.append(f'<a href="mailto:{_e(p["email"])}" aria-label="Email {_e(first)}">{icon("mail", 18)}</a>')
+        kin.append(f'<li><span class="ld-av" aria-hidden="true">{_e(p["initials"])}</span>'
+                   f'<span class="t"><b>{_e(p["name"])}</b><small>{_e(p["tag"])}</small></span>'
+                   f'{"<span class=acts>" + "".join(acts) + "</span>" if acts else ""}</li>')
+    touches = fam.get("touches") or []
+    last = touches[0] if touches else None
+    days = None
+    if last:
+        at = cfu._parse(last.get("at"))
+        days = (datetime.now(timezone.utc) - at).days if at else None
+    chips = "".join(
+        f'<label><input type="radio" name="kind" value="{k}"{" checked" if k == "call" else ""}><span>{_e(v)}</span></label>'
+        for k, v in shep.KINDS.items())
+    lead = _and(fam.get("lead") or [])
+    pastor = (f'<label class="ld-check"><input type="checkbox" name="needs_pastor" value="yes">'
+              f'<span>Needs a pastor <small class="ld-quiet" style="display:inline">· goes to {_e(lead)} at once</small></span></label>'
+              if lead else "")
+    me_id = str(me["id"])
+    before = "".join(
+        f'<li><div class="ld-by"><b>{_e("You" if t.get("by_contact_id") == me_id else t.get("by") or "A shepherd")}</b>'
+        f'<span>{_e(_day(t.get("at"), biz))}</span><span class="ld-tag">{_e(shep.KINDS.get(t.get("kind"), "Reached"))}'
+        f'{" · Asked for a pastor" if t.get("needs_pastor") else ""}</span></div>'
+        f'{"<p>" + _e(t["note"]) + "</p>" if t.get("note") else ""}</li>' for t in touches)
+    since = _day(fam.get("since"), biz)
+    return f"""<div class="ld-fams"><div class="ld-person"><span class="ld-av" aria-hidden="true">{_e(shep.family_initial(fam['name']))}</span>
+<div><h2>{_e(fam['name'])}</h2><small>{_e(f'Yours since {since}' if since else 'Yours to shepherd')}</small></div></div>
+<div class="ld-tags"><span class="ld-tag">{_e(_ago(days))}</span></div>
+<section class="ld-card" aria-label="The family"><h3>The family</h3><ul class="ld-kin">{''.join(kin)}</ul></section>
+<section class="ld-card" aria-label="Log a touch"><h3>Log a touch</h3>
+<form method="post" action="/my/lead/family/{hid}/touch">
+<fieldset class="ld-chips"><legend>How did you reach them?</legend>{chips}</fieldset>
+<p><label class="mp-sr" for="ld-touch-{hid}">A note, for you and the pastors</label>
+<textarea class="ld-ta" id="ld-touch-{hid}" name="note" maxlength="2000" placeholder="A note, for you and the pastors. How are they doing?"></textarea></p>
+{pastor}
+<button class="ld-btn" type="submit">Save</button></form></section>
+{f'<section class="ld-card" aria-label="Before"><h3>Before</h3><ul class="ld-notes">{before}</ul></section>' if before else ''}
+<p class="ld-quiet">{icon("lock", 14)}<span>Never here: their giving, prayer kept for the pastors, or the children’s care notes. {_e(_notes_line(fam.get('chain') or []))}</span></p></div>"""
+
+
+def render_families(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], my_roles: List[Dict[str, Any]],
+                    fv: Optional[Dict[str, Any]], fam: Optional[Dict[str, Any]] = None, *, gone: bool = False) -> str:
+    """/my/lead/families and /my/lead/family/<id>."""
+    from member_portal import _shell
+    church = (biz.get("name") or "Your church").strip()
+    done = DONE.get(request.query_params.get("done") or "")
+    err = ERRORS.get(request.query_params.get("err") or "")
+    flash = (f'<p class="mp-err mp-flash" role="alert">{_e(err)}</p>' if err else
+             f'<p class="mp-ok mp-flash" role="status">{_e(done)}</p>' if done else "")
+    active = [r for r in my_roles if r.get("status") == "active"]
+    css = f"<style>{LEAD_CSS}{FAM_CSS}</style>"
+    if fam is not None or gone:
+        body = (_family_body(fam, biz, me) if fam is not None else
+                f'<section class="ld-card"><p>{_e(ERRORS["family_gone"])}</p>'
+                f'<p><a href="/my/lead/families">Back to your families</a></p></section>')
+        return _shell(biz, site, fam["name"] if fam else "Your families", f'{css}<div class="ld-wide">{flash}{body}</div>',
+                      tab="lead", who=me, back=("/my/lead/families", "Your families"))
+    head = (f'<header class="ld-head"><h1 class="ld-hello">Your families, <em>this month</em></h1>'
+            f'<div class="ld-roles">{"".join(f"<span class=ld-role>{_e(_role_text(r))}</span>" for r in active)}</div></header>')
+    count = len((fv or {}).get("families") or [])
+    seg = _seg("families", any(not _is_prayer(r) for r in active), any(_is_prayer(r) for r in active), 0, count)
+    body = f'{flash}{head}{seg}{_families_body(fv, biz, church)}'
+    return _shell(biz, site, "Your families", f'{css}<div class="ld-wide">{body}</div>', tab="lead", who=me)
+
+
+async def serve_families(request: Request, biz: Dict[str, Any], site, me: Dict[str, Any], selected: str):
+    """GET /my/lead/families and /my/lead/family/<id>: (html, status)."""
+    import church_shepherding as shep
+    my_roles = await asyncio.to_thread(cfu.roles_for, biz["id"], str(me["id"]))
+    if my_roles is None:
+        return render_families(biz, site, request, me, [], None), 503
+    active = any(r["status"] == "active" for r in my_roles)
+    fv = (await asyncio.to_thread(shep.my_families, biz["id"], str(me["id"])) if active
+          else {"shepherd": False, "families": []})
+    if selected == "families":
+        return render_families(biz, site, request, me, my_roles, fv), 200 if fv is not None else 503
+    hid = selected[len("family/"):]
+    if not active or not _FID.match(hid):
+        return render_families(biz, site, request, me, my_roles, fv, gone=True), 404
+    try:
+        fam = await asyncio.to_thread(shep.family_for, biz["id"], str(me["id"]), hid)
+    except HTTPException:
+        return render_families(biz, site, request, me, my_roles, fv, gone=True), 404
+    if fam is None:
+        return render_families(biz, site, request, me, my_roles, None), 503
+    return render_families(biz, site, request, me, my_roles, fv, fam), 200
 
 
 # ─── POST ─────────────────────────────────────────────────────────────
 
 def _go(target: str, **q: str) -> RedirectResponse:
     from member_portal import _SECURE_HEADERS
-    if target not in ("/my/lead", "/my/lead/prayer") and not re.fullmatch(r"/my/lead/[0-9a-fA-F-]{36}", target):
+    if (target not in ("/my/lead", "/my/lead/prayer", "/my/lead/families")
+            and not re.fullmatch(r"/my/lead/(family/)?[0-9a-fA-F-]{36}", target)):
         target = "/my/lead"
     qs = "&".join(f"{k}={v}" for k, v in q.items())
     return RedirectResponse(f"{target}?{qs}" if qs else target, status_code=303, headers=_SECURE_HEADERS)
@@ -666,3 +895,33 @@ async def prayer_note(request: Request):
 @router.post("/my/lead/prayer/pass", include_in_schema=False)
 async def prayer_pass(request: Request):
     return await _pray(request, "pass")
+
+
+@router.post("/my/lead/family/{household_id}/touch", include_in_schema=False)
+async def family_touch(household_id: str, request: Request):
+    """A call, a visit, a text or a talk at church, logged by the family's
+    shepherd (church_shepherding checks it is theirs). "Needs a pastor"
+    emails the Lead Pastor at once, never another member."""
+    import church_shepherding as shep
+    church, me, err = await _leader(request)
+    hid = household_id if _FID.match(household_id or "") else ""
+    here = f"/my/lead/family/{hid}" if hid else "/my/lead/families"
+    if err:
+        return _go(here, err=err)
+    if not me:
+        return _go("/my") if not church else _go("/my/lead")
+    if not _allowed(church, me):
+        return _go(here, err="slow")
+    if not hid:
+        return _go("/my/lead/families", err="family_gone")
+    form = await request.form()
+    biz = church["business"]
+    try:
+        logged = await asyncio.to_thread(shep.log_touch, biz["id"], me, hid, str(form.get("kind") or "call"),
+                                         str(form.get("note") or ""), str(form.get("needs_pastor") or "") == "yes")
+    except HTTPException as e:
+        return _go("/my/lead/families", err="family_gone") if e.status_code == 404 else _go(here, err="error")
+    if logged["needs_pastor"]:
+        told = await shep.tell_pastor(biz, me, logged)
+        return _go(here, done="pastor" if told else "pastor_unsent")
+    return _go(here, done="touched")
