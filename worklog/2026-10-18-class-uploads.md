@@ -17,6 +17,7 @@ decisions:
   - "Path <business>/<course>/<enrollment>-<item>-<random>.<ext>, built only from ids the database returned; the database refuses any other; account deletion's one-level descent finds it"
   - "Rate limits per class link (hashed: the limiter's shared table never holds a link) and a wide per-IP ceiling, so a class on one church Wi-Fi isn't one budget"
   - "The teacher's read goes through their own token (academy_item_work's teacher-read policy), then a 15-minute signed link"
+  - "Review on #1493: the body is parsed only after the link and the item are checked (and a body that says it is over 50 MB is refused unread); a lost attach reply is asked about before the file is deleted, and when it can't be asked the file stays; a failed teacher read is a 502, never 'No file here'"
 related: [2026-10-18-class-schedule.md, 2026-10-18-class-discussions.md]
 ---
 - `academy_work.py`: `classify` (bytes to kind, the photo re-save), the
@@ -26,8 +27,10 @@ related: [2026-10-18-class-schedule.md, 2026-10-18-class-discussions.md]
 - `account_lifecycle.py`: `academy-work` in `STORAGE_BUCKETS`.
 - `supabase/APPLY-2026-10-18-academy-uploads.sql` (+ docs/MIGRATIONS.md):
   rehearsed with a rollback probe, applied, verified.
-- `__tests__/test_class_uploads.py` (28): EXIF location gone and photo
+- `__tests__/test_class_uploads.py` (32): EXIF location gone and photo
   upright (fails if EXIF is passed through: rehearsed), sizes, HEIC, the
   bytes not the browser, the path, refusals before a byte is stored, a
   refused file deleted again, the replaced file deleted, the limiter keeps a
-  hash, the teacher read with their own token.
+  hash, the teacher read with their own token; the link checked before the
+  body is read (fails if parsed first: rehearsed), a lost reply never deletes
+  a kept file.

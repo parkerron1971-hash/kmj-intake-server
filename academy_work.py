@@ -40,7 +40,7 @@ import secrets
 from typing import Any, Dict, Optional, Tuple
 
 import httpx
-from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 import storage_links
 from auth_supabase import UserSession, require_user_session
@@ -249,25 +249,57 @@ def _ids(*values: str) -> None:
 
 # ─── Routes ──────────────────────────────────────────────────────────
 
+# What a multipart envelope adds around the file (boundaries, part headers).
+_ENVELOPE = 64 * 1024
+
+
+async def _the_file(request: Request):
+    """The one file in the form, parsed only now (after the checks)."""
+    try:
+        form = await request.form(max_files=1, max_fields=1)
+    except Exception:  # noqa: BLE001 — not a form, or more than one file
+        raise HTTPException(400, WORDS["unknown"])
+    file = form.get("file")
+    if not hasattr(file, "read"):
+        await form.close()
+        raise HTTPException(400, WORDS["empty"])
+    return form, file
+
+
 @router.post("/academy-work/{token}/{item_id}")
-async def upload_work(token: str, item_id: str, request: Request, file: UploadFile = File(...)) -> Dict[str, Any]:
+async def upload_work(token: str, item_id: str, request: Request) -> Dict[str, Any]:
+    # Everything that can turn an upload away is asked BEFORE the body is
+    # read: the ids, the limits, the size it says it is, and the link and the
+    # item (review of #1493: reading first let a made-up link make the server
+    # take 50 MB a request).
     _ids(token, item_id)
     import rate_limit
     _limit("academy_work_upload", _link_key(token))
     _limit("academy_work_upload_ip", rate_limit.trusted_client_ip(request))
-    blob = b""
-    while True:
-        chunk = await file.read(1024 * 1024)
-        if not chunk:
-            break
-        blob += chunk
-        if len(blob) > READ_CAP:
-            raise HTTPException(413, WORDS["too_big"])
+    try:
+        declared = int(request.headers.get("content-length") or 0)
+    except ValueError:
+        declared = 0
+    if declared > READ_CAP + _ENVELOPE:
+        raise HTTPException(413, WORDS["too_big"])
     async with httpx.AsyncClient() as client:
         target, said = await _rpc(client, "academy_item_file_target", {"p_token": token, "p_item": item_id})
         if not target:
             raise _refuse(said)
-        found, words = await asyncio.to_thread(classify, blob, file.content_type or "", bool(target.get("photo_only")))
+        form, file = await _the_file(request)
+        try:
+            blob = b""
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                blob += chunk
+                if len(blob) > READ_CAP:
+                    raise HTTPException(413, WORDS["too_big"])
+            declared_type, filename = file.content_type or "", file.filename or ""
+        finally:
+            await form.close()
+        found, words = await asyncio.to_thread(classify, blob, declared_type, bool(target.get("photo_only")))
         if not found:
             raise HTTPException(400, words)
         data, mime, ext = found
@@ -279,9 +311,18 @@ async def upload_work(token: str, item_id: str, request: Request, file: UploadFi
         refused = await _store(client, path, data, mime)
         if refused:
             raise HTTPException(502, refused)
-        name = display_name(file.filename or "", ext)
+        name = display_name(filename, ext)
         attached, said = await _rpc(client, "academy_item_attach", {"p_token": token, "p_item": item_id, "p_path": path,
                                                                     "p_name": name, "p_type": mime, "p_size": len(data)})
+        if not attached and said == "failed":
+            # No answer isn't a no: the database may have kept it and the reply
+            # been lost. Ask before deleting, and when even that can't be
+            # asked, leave the file (a stray file beats a row pointing at nothing).
+            mine, again = await _rpc(client, "academy_item_my_file", {"p_token": token, "p_item": item_id})
+            if (mine or {}).get("file_path") == path:
+                attached = {"file_name": mine.get("file_name"), "file_type": mine.get("file_type"), "file_size": len(data)}
+            elif again:
+                raise HTTPException(502, "That didn't save. Try again in a moment.")
         if not attached:
             await _remove(client, path)
             raise _refuse(said)
@@ -310,6 +351,8 @@ async def teacher_work_file(work_id: str, session: UserSession = Depends(require
     rows = await asyncio.to_thread(sb_clients.sb_get_as_user,
                                    f"/academy_item_work?id=eq.{work_id}&select=file_path,file_name,file_type&limit=1",
                                    session.token)
+    if rows is None:  # the read failed: never "No file here" for a file that's there
+        raise HTTPException(502, "That file didn't open. Try again in a moment.")
     async with httpx.AsyncClient() as client:
         return await _signed(client, (rows or [None])[0])
 

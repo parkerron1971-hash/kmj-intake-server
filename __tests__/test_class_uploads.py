@@ -203,6 +203,72 @@ def test_the_link_and_the_item_are_checked_before_a_byte_is_stored(app, said, st
     assert not calls.stored
 
 
+def test_a_made_up_link_never_gets_its_body_read(app, monkeypatch):
+    client, calls = app
+    read = []
+    real = aw._the_file
+
+    async def watched(request):
+        read.append(1)
+        return await real(request)
+
+    monkeypatch.setattr(aw, "_the_file", watched)
+    calls.answers["academy_item_file_target"] = "Classroom unavailable"
+    assert _post(client, _jpeg()).status_code == 404
+    assert not read, "the link is checked before the body is parsed"
+    monkeypatch.setattr(aw, "READ_CAP", 1000)
+    calls.rpc.clear()
+    r = _post(client, b"%PDF-1.7\n" + b"0" * (200 * 1024), "big.pdf", "application/pdf")
+    assert r.status_code == 413 and not calls.rpc, "a body that says it is too big is turned away before anything"
+
+
+def test_a_lost_reply_never_deletes_a_file_the_database_kept(app):
+    client, calls = app
+    calls.answers["academy_item_attach"] = "failed"
+    kept = {}
+
+    async def rpc(client_, name, body):
+        calls.rpc.append((name, body))
+        if name == "academy_item_attach":
+            kept["path"] = body["p_path"]
+            return None, "failed"
+        if name == "academy_item_my_file":
+            return {"file_path": kept["path"], "file_name": "a.jpg", "file_type": "image/jpeg"}, ""
+        return TARGET, ""
+
+    aw_rpc = aw._rpc
+    try:
+        aw._rpc = rpc
+        r = _post(client, _jpeg())
+        assert r.status_code == 200 and calls.removed == [None], "kept, so not deleted"
+    finally:
+        aw._rpc = aw_rpc
+
+
+@pytest.mark.parametrize("mine, again, status, deleted", [
+    (None, "", 502, True),          # the database answered: nothing kept, so the file goes
+    (None, "failed", 502, False),   # no answer at all: the file stays rather than risk a row with no file
+])
+def test_a_lost_reply_asks_before_deleting(app, mine, again, status, deleted):
+    client, calls = app
+
+    async def rpc(client_, name, body):
+        calls.rpc.append((name, body))
+        if name == "academy_item_attach":
+            return None, "failed"
+        if name == "academy_item_my_file":
+            return mine, again
+        return TARGET, ""
+
+    aw_rpc = aw._rpc
+    try:
+        aw._rpc = rpc
+        assert _post(client, _jpeg()).status_code == status
+        assert (calls.stored[0][0] in calls.removed) is deleted
+    finally:
+        aw._rpc = aw_rpc
+
+
 def test_a_photo_homework_turns_a_pdf_away(app):
     client, calls = app
     calls.answers["academy_item_file_target"] = {**TARGET, "photo_only": True}
@@ -250,6 +316,8 @@ def test_the_teacher_reads_the_file_as_themselves(app, monkeypatch):
     assert seen == [(f"/academy_item_work?id=eq.{work}&select=file_path,file_name,file_type&limit=1", "teacher-jwt")]
     monkeypatch.setattr(sb_clients, "sb_get_as_user", lambda path, jwt: [])
     assert client.get(f"/academy-work-file/{work}").status_code == 404, "not their class: the policy shows nothing"
+    monkeypatch.setattr(sb_clients, "sb_get_as_user", lambda path, jwt: None)
+    assert client.get(f"/academy-work-file/{work}").status_code == 502, "a failed read never says there's no file"
 
 
 async def _signed(client, bucket, path, ttl=0, download_as=None):
