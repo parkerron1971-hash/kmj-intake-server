@@ -74,6 +74,8 @@ DONE = {
     "reported": "Thanks. The church's safety officers will look at it. The sender isn't told who reported it.",
     "welcome_msgs": "Welcome to messaging.",
     "group_interest": "Thanks. The church office knows you'd like to join a group and can reach out when one starts.",
+    "class_joined": "You're in. Your class is below, and your teacher sees you on the list.",
+    "class_already": "You're already in that class. It's below.",
 }
 ERRORS = {
     "full": "That one is full now.",
@@ -88,6 +90,8 @@ ERRORS = {
     "group_full": "That group is full now. Ask the church office about the next one.",
     "group_closed": "That group isn't taking new people right now.",
     "group_gone": "That group isn't running any more.",
+    "class_closed": "That class isn't taking sign-ups right now.",
+    "class_dropped": "That class can't be joined again here. The church office can add you back.",
     "leader": "You lead this group, so to step down, talk to the church office.",
     "preview": "This is a preview, so nothing is saved.",
     "photo_bad": "That file isn't a photo we can use. Choose a JPG, PNG or WebP under 12 MB.",
@@ -901,7 +905,7 @@ async def _signed_in(request: Request):
 
 def _back(target: str, **q: str) -> RedirectResponse:
     from member_portal import _SECURE_HEADERS
-    allowed = ("/my", "/my/me", "/my/events", "/my/prayer", "/my/details", "/my/groups", "/my/live", "/my/messages",
+    allowed = ("/my", "/my/me", "/my/events", "/my/prayer", "/my/details", "/my/groups", "/my/classes", "/my/live", "/my/messages",
                "/my/kids/stories", "/my/kids/sundays", "/my/kids/family")
     if target not in allowed and not re.fullmatch(r"/my/(groups/live|messages)/[0-9a-f-]{36}", target):
         target = "/my"
@@ -1044,14 +1048,20 @@ async def groups(request: Request):
 
 
 def connect_tabs(biz, current: str) -> str:
-    """Connect's two pages under one title: Groups, and Messages when the
-    church has messaging on ('' without it: Connect is then just groups)."""
+    """Connect's pages under one title: Groups; Classes when the church has
+    a published class (member_portal_classes.TAB, set for this request);
+    Messages when the church has messaging on. '' when Groups is alone."""
     import member_app_ui as ui
+    import member_portal_classes as mcl
     import member_portal_messaging as mpm
-    if not mpm.turned_on(biz):
+    tabs = [("groups", "/my/groups", "Groups")]
+    if mcl.TAB.get():
+        tabs.append(("classes", "/my/classes", "Classes"))
+    if mpm.turned_on(biz):
+        tabs.append(("messages", "/my/messages", "Messages"))
+    if len(tabs) == 1:
         return ""
-    return ui.segmented((("groups", "/my/groups", "Groups"), ("messages", "/my/messages", "Messages")),
-                        current, "Connect")
+    return ui.segmented(tuple(tabs), current, "Connect")
 
 
 def live_hero(live: Dict[str, Any], pic: str, church: str) -> str:

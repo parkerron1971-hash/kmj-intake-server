@@ -28,6 +28,7 @@ WHERE = {
     "groups": "Add groups in Operate, People, Groups, and members find and join them here.",
     "week": "A member's own events and groups show here once they say they're coming or join one.",
     "plan": "Choose a Bible reading plan in Settings, Member page, and members read along here.",
+    "classes": "Publish a class in Build, Forms & classes, and members see it here and join with one tap.",
 }
 
 # Stable ids (the member app only opens ids shaped like these).
@@ -54,6 +55,8 @@ def fill(found: Any, kind: str, preview: bool) -> Any:
         return groups()
     if kind == "library" and isinstance(found, dict) and not found.get("sermons"):
         return library()
+    if kind == "classes" and isinstance(found, dict) and not (found.get("mine") or found.get("open") or found.get("programs")):
+        return classes(found.get("tz") or "UTC")
     return found
 
 
@@ -129,3 +132,33 @@ def library(today: Optional[date] = None) -> Dict[str, List[Dict[str, Any]]]:
 def plan_today() -> Dict[str, Any]:
     return {"day": 12, "of": 30, "label": "Psalm 23", "title": "30 Days in the Psalms",
             "href": "/my/bible/psalms/23", "sample": True}
+
+
+_CL = ("5a000000-0000-4000-8000-0000000000f1", "5a000000-0000-4000-8000-0000000000f2",
+       "5a000000-0000-4000-8000-0000000000f3", "5a000000-0000-4000-8000-0000000000f4",
+       "5a000000-0000-4000-8000-0000000000f5")
+
+
+def classes(tz: str = "UTC") -> Dict[str, Any]:
+    """Connect › Classes in the preview: a class the member is in (meeting
+    in two days), its program's road, and one to join."""
+    from datetime import datetime, timezone
+    soon = (datetime.now(timezone.utc) + timedelta(days=2)).replace(minute=0, second=0, microsecond=0).isoformat()
+    later = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
+    token = "5a000000-0000-4000-8000-0000000000fe"
+    mine = [{"course_id": _CL[0], "title": "Foundations: Week by Week", "status": "active", "token": token,
+             "certificate": None, "done": 1, "total": 4, "program": "Next Steps", "position": 0, "teacher": "Pastor James",
+             "next": {"starts_at": soon, "minutes": 75, "live": False, "title": "Week 2", "lesson": "The Word"},
+             "sample": True}]
+    programs = [{"id": _CL[4], "title": "Next Steps", "finish_title": "Graduation night", "finish_at": None, "sample": True,
+                 "tracks": [
+                     {"course_id": _CL[0], "title": "Foundations: Week by Week", "teacher": "Pastor James",
+                      "starts_at": soon, "state": "now", "token": token},
+                     {"course_id": _CL[1], "title": "Growing in Prayer", "teacher": None, "starts_at": later,
+                      "state": "open", "token": None},
+                     {"course_id": _CL[2], "title": "Finding Your Place to Serve", "teacher": None, "starts_at": None,
+                      "state": "later", "token": None}]}]
+    open_ = [{"course_id": _CL[3], "title": "New Members Class", "about": "Who we are, what we believe, and how to get "
+              "connected. Four short lessons you can take at your own pace.", "lessons": 4, "program": None,
+              "position": None, "teacher": None, "starts_at": None, "opens_from": None, "drip": "none", "sample": True}]
+    return {"mine": mine, "programs": programs, "open": open_, "tz": tz}
