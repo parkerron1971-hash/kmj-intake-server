@@ -6620,7 +6620,7 @@ async def _serve_academy(client, biz_id, path: str, standalone: bool,
                 if price else "")
             cards += f"""
   <a class="card" href="{_esc(course_href(c["id"]))}">
-    <h2>{_esc(c.get("title") or "Course")}</h2>
+    <h2>{_esc(c.get("title") or ("Class" if church else "Course"))}</h2>
     <p class="muted">{_esc((c.get("description") or "")[:160])}</p>
     <div class="ac-lines"><b>{_esc(lines[0])}</b><span class="muted">{_esc(lines[1])}</span>{f'<span class="muted">{_esc(lines[2])}</span>' if lines[2] else ''}</div>
     <div class="meta muted">
@@ -6630,7 +6630,9 @@ async def _serve_academy(client, biz_id, path: str, standalone: bool,
     </div>
   </a>"""
         empty = "" if courses else (
-            '<p class="muted" style="margin-top:30px">New courses are on the way &mdash; check back soon.</p>')
+            '<p class="muted" style="margin-top:30px">'
+            + ("New classes are on the way" if church else "New courses are on the way")
+            + ' &mdash; check back soon.</p>')
         main_link = (
             f'<a class="back" style="color:{accent}" href="{_esc(main_href)}">&larr; {safe_biz}</a>'
             if main_href else "")
