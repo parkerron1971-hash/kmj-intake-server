@@ -581,10 +581,11 @@ def discard(biz: Dict[str, Any]) -> None:
         raise HTTPException(503, "That didn't go through. Try again in a moment.")
 
 
-def _make_home(b: str, ctx: Dict[str, Any], cid: str) -> Optional[str]:
+def _make_home(b: str, ctx: Dict[str, Any], cid: str, taken: Optional[Set[str]]) -> Optional[str]:
     """A family of one, for a member in no family, when they are given a
-    shepherd. None when they joined a family since (or a write failed)."""
-    taken = cf.in_families(b)
+    shepherd. None when they joined a family since (or a write failed).
+    `taken` is everyone already in a family, read once per approval; the
+    new adult is added to it."""
     if taken is None or cid in taken or cid not in ctx["members"]:
         return None
     made = sb_clients.sb_post_as_service("/households", {"business_id": b,
@@ -597,6 +598,7 @@ def _make_home(b: str, ctx: Dict[str, Any], cid: str) -> Optional[str]:
     if not isinstance(linked, list) or not linked:
         sb_clients.sb_delete_as_service(f"/households?id=eq.{_q(hid)}&business_id=eq.{_q(b)}")
         return None
+    taken.add(cid)
     return hid
 
 
@@ -622,12 +624,15 @@ def approve(biz: Dict[str, Any], by_user: Optional[str]) -> Dict[str, Any]:
     gained: Dict[str, List[str]] = {}
     placed = failed = 0
     left: List[Dict[str, Any]] = []
+    taken: Optional[Set[str]] = None
     for r in rows:
         s = r.get("shepherd_contact_id")
         u = by_unit.get(r["unit"])
         if not s or not u or s not in ctx["shepherds"] or _own(ctx, s, u):
             continue
-        hid = u["household_id"] or _make_home(b, ctx, u["contact_id"])
+        if not u["household_id"] and taken is None:
+            taken = cf.in_families(b)
+        hid = u["household_id"] or _make_home(b, ctx, u["contact_id"], taken)
         if hid and _assign(b, hid, s, by_user, r.get("why") or ""):
             placed += 1
             gained.setdefault(s, []).append(u["name"])
