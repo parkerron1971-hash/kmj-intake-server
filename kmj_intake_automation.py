@@ -1630,6 +1630,15 @@ async def startup():
                           id="church_shepherd_sweep")
     except Exception as e:
         print(f"   [warn] church shepherding sweep not scheduled: {e}")
+    # Homework files nothing points at any more (a deleted homework, student
+    # or class; an attach that never landed) leave the private bucket once a
+    # day (academy_work.sweep_tick).
+    try:
+        import academy_work as _academy_work
+        scheduler.add_job(g("academy_work_sweep", _academy_work.sweep_tick), "cron",
+                          hour=9, minute=15, id="academy_work_sweep")
+    except Exception as e:
+        print(f"   [warn] homework file sweep not scheduled: {e}")
     # THE LEAD ARC PR 4 (2026-08-14) — the first-response clock.
     #
     # Nothing measured how long a lead waited before anyone answered.
