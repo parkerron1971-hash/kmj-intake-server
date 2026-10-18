@@ -15608,9 +15608,9 @@ async def chief_chat(
             lane = chief_models.lane_for_chat(req.mode or "", req.client_surface or "")
             if lane == "voice":
                 system = system + chief_models.VOICE_DELIVERY_BLOCK
-                system = system + await _tone_notes_block(req, client, biz)
                 # After the delivery block, in the uncached tail with it.
                 system = system + _spoken_opener_block(req.spoken_opener)
+                system = system + await _tone_notes_block(req, client, biz)
             # The phone's Ask · Do · Build dial — any lane, uncached tail.
             system = system + _intent_block(req.intent)
             # Every writer follows the same latest conversational direction;
