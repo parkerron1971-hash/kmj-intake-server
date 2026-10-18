@@ -324,6 +324,9 @@ from academy_live_router import router as academy_live_router
 app.include_router(academy_live_router)
 from academy_slides_router import router as academy_slides_router
 app.include_router(academy_slides_router)
+# Joining a free class from its public page (POST <class page>/join).
+from academy_join import router as academy_join_router
+app.include_router(academy_join_router)
 app.include_router(module_spec_router)
 app.include_router(module_check_router)
 # Phase C.1 — Bookings archetype

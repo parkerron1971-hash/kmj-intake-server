@@ -261,13 +261,39 @@ def paragraphs_html(text: str) -> str:
     return "".join(out)
 
 
+def _ink_on(hex_colour: str) -> str:
+    """Near-black on a pale colour, white on anything else."""
+    h = hex_colour.lstrip("#")
+    if len(h) == 3:
+        h = "".join(c * 2 for c in h)
+    try:
+        r, g, b = (int(h[i:i + 2], 16) / 255 for i in (0, 2, 4))
+    except ValueError:
+        return "#ffffff"
+    lin = [c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4 for c in (r, g, b)]
+    return "#111827" if 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2] > 0.45 else "#ffffff"
+
+
+def cta_html(label: str, url: str, primary: str) -> str:
+    """One button in the brand colour, as a table so Outlook draws it."""
+    e = _html.escape
+    return (
+        '<table role="presentation" cellpadding="0" cellspacing="0" style="margin:4px 0 24px;">'
+        f'<tr><td style="border-radius:10px;background:{e(primary)};">'
+        f'<a href="{e(url)}" style="display:inline-block;padding:14px 28px;font-family:Arial,Helvetica,sans-serif;'
+        f'font-size:16px;font-weight:700;line-height:1;color:{_ink_on(primary)};text-decoration:none;border-radius:10px;">'
+        f'{e(label)}</a></td></tr></table>')
+
+
 def render_html(message: str, *, business_name: str, brand: Dict[str, Any],
                 sig: Optional[Dict[str, Any]] = None, disclaimer: str = "",
-                unsubscribe_url: Optional[str] = None, preheader: str = "") -> str:
+                unsubscribe_url: Optional[str] = None, preheader: str = "",
+                cta: Optional[Tuple[str, str]] = None) -> str:
     """The email. One 600px column, the brand colour as a rule at the
     top and on links, the logo or a wordmark, the message in real
     paragraphs, the signature as the block the practitioner designed,
-    and a footer that says who sent it and how to stop."""
+    and a footer that says who sent it and how to stop. `cta` is an
+    optional (label, url) button under the message."""
     e = _html.escape
     primary = brand.get("primary") or DEFAULT_ACCENT
     name = e(business_name or "")
@@ -303,6 +329,7 @@ def render_html(message: str, *, business_name: str, brand: Dict[str, Any],
 <tr><td style="padding:28px 36px 8px;font-family:Arial,Helvetica,sans-serif;">{header_inner}</td></tr>
 <tr><td style="padding:16px 36px 8px;font-family:Arial,Helvetica,sans-serif;">
 {paragraphs_html(message)}
+{cta_html(cta[0], cta[1], primary) if cta else ""}
 {sig_block}
 {disc_block}
 </td></tr>

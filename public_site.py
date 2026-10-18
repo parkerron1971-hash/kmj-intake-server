@@ -6431,8 +6431,9 @@ async def _serve_academy(client, biz_id, path: str, standalone: bool,
             client,
             f"/academy_courses?id=eq.{course_id}&business_id=eq.{biz_id}"
             f"&status=eq.published&limit=1"
-            f"&select=id,title,description,drip_mode,product_id") or []
+            f"&select=id,title,description,drip_mode,product_id,self_join") or []
         if crows:
+            import academy_join
             course = crows[0]
             lessons = await _sb_service(
                 client,
@@ -6441,6 +6442,10 @@ async def _serve_academy(client, biz_id, path: str, standalone: bool,
                 f"&select=title,duration_minutes,lesson_type") or []
             price_html = ""
             product_id = course.get("product_id")
+            # Free and open (phase 4b): people join themselves, and their
+            # class link comes by email (academy_join.py).
+            if academy_join.join_open({**course, "status": "published"}):
+                price_html = academy_join.join_box(f"{course_href(course['id'])}/join", accent)
             if product_id:
                 prows = await _sb_service(
                     client,
@@ -6467,6 +6472,7 @@ async def _serve_academy(client, biz_id, path: str, standalone: bool,
   </div>"""
             total_min = sum(int(l.get("duration_minutes") or 0) for l in lessons)
             runtime = _academy_fmt_runtime(total_min)
+            next_live = await asyncio.to_thread(academy_join.next_class_line, str(biz_id), course_id)
             drip = course.get("drip_mode") or "none"
             drip_note = (
                 "New material unlocks each week after you join." if drip == "weekly"
@@ -6481,7 +6487,7 @@ async def _serve_academy(client, biz_id, path: str, standalone: bool,
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>{_esc(course.get("title") or "Course")} &mdash; {safe_biz}</title>
-<style>{_ACADEMY_CSS}</style>{skin_head}<style>{mode_css}</style></head>
+<style>{_ACADEMY_CSS}{academy_join.JOIN_CSS}</style>{skin_head}<style>{mode_css}</style></head>
 <body><div class="wrap">
   <a class="back" style="color:{accent}" href="{_esc(catalog_href)}">&larr; All courses</a>
   <div style="height:26px"></div>
@@ -6493,6 +6499,7 @@ async def _serve_academy(client, biz_id, path: str, standalone: bool,
     {f'<span>&middot; {_esc(runtime)}</span>' if runtime else ''}
     <span>&middot; {_esc(drip_note)}</span>
   </div>
+  {f'<p class="next-live" style="color:{accent}">Next live class: {_esc(next_live)}</p>' if next_live else ''}
   {price_html}
   <div class="lessons">{lesson_rows}</div>
   <div class="foot muted">Powered by The Solutionist System</div>
@@ -6507,7 +6514,7 @@ async def _serve_academy(client, biz_id, path: str, standalone: bool,
             client,
             f"/academy_courses?business_id=eq.{biz_id}&status=eq.published"
             f"&order=created_at.desc&limit=50"
-            f"&select=id,title,description,product_id") or []
+            f"&select=id,title,description,product_id,self_join") or []
         lesson_stats: Dict[str, Dict[str, int]] = {}
         price_by_product: Dict[str, str] = {}
         if courses:
@@ -6533,6 +6540,8 @@ async def _serve_academy(client, biz_id, path: str, standalone: bool,
             s = lesson_stats.get(c["id"], {"n": 0, "min": 0})
             runtime = _academy_fmt_runtime(s["min"])
             price = price_by_product.get(c.get("product_id") or "")
+            if not price and c.get("self_join") is not False and not c.get("product_id"):
+                price = "Free"
             price_pill = (
                 f'<span class="pill" style="background:{accent}1a;color:{accent}">{_esc(price)}</span>'
                 if price else "")
