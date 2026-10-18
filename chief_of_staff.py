@@ -562,6 +562,11 @@ class _SentenceStreamer:
         self._review_tasks = set()
         self._review_calls = 0
         self._blocked = False
+        # A turn that asked for tone notes (chief_tone): each sentence is
+        # checked and recorded without them, and goes out with them.
+        import chief_tone
+        self._tone = chief_tone.turn_enabled()
+        self._tone_carry = ""
         self.open = prover is not None and sink is not None
         from chief_invoice_readout import invoice_display_request
         # A pure display turn will speak the actual returned rows. Do not let
@@ -599,6 +604,17 @@ class _SentenceStreamer:
             if not m:
                 break
             sentence, self._buf = self._buf[:m.end()], self._buf[m.end():]
+            speech = None
+            if self._tone:
+                import chief_tone
+                speech = chief_tone.speech(self._tone_carry + sentence)
+                sentence = chief_tone.strip(sentence)
+                if speech and not sentence.strip():
+                    # Notes on a line of their own go with the next words.
+                    self._tone_carry = " ".join(
+                        f"[{n}]" for n in chief_tone.notes_in(speech)) + " "
+                    continue
+                self._tone_carry = ""
             import chief_speech_boundary as _speech
             if _speech.internal_scaffolding(sentence, self._message):
                 # Factual review cannot approve authoring instructions for
@@ -608,7 +624,8 @@ class _SentenceStreamer:
                 return
             import chief_truth as _truth
             accepted = not sentence.strip() or _truth.streamable_sentence(self._prover, sentence)
-            candidate = {"sentence": sentence, "accepted": True if accepted else None}
+            candidate = {"sentence": sentence, "speech": speech,
+                         "accepted": True if accepted else None}
             prefix = self.text + "".join(p["sentence"] for p in self._pending) + sentence
             self._pending.append(candidate)
             if not accepted:
@@ -632,7 +649,7 @@ class _SentenceStreamer:
                 self.close()
                 return
             self._pending.pop(0)
-            self._emit(candidate["sentence"])
+            self._emit(candidate["sentence"], candidate.get("speech"))
 
     async def _check(self, prefix: str, candidate) -> None:
         try:
@@ -649,9 +666,9 @@ class _SentenceStreamer:
         candidate["accepted"] = accepted is True
         self._release_checked()
 
-    def _emit(self, text: str) -> None:
+    def _emit(self, text: str, speech: Optional[str] = None) -> None:
         try:
-            self._sink(PROSE_PREFIX + text)
+            self._sink(PROSE_PREFIX + (speech or text))
             self.sent.append(text)
         except Exception:
             self.close()
@@ -745,6 +762,12 @@ def _stream_piece_events(piece: str, filt: "_ActionTagFilter") -> List[Dict[str,
         return [{"type": "step", **body}]
     if isinstance(piece, str) and piece.startswith(PROSE_PREFIX):
         txt = piece[len(PROSE_PREFIX):]
+        import chief_tone
+        speech = chief_tone.speech(txt)
+        if speech:
+            # A toned sentence: the words for the screen, the notes for the voice.
+            txt = chief_tone.strip(txt)
+            return [{"type": "delta", "text": txt, "checked": True, "speech": speech}] if txt else []
         return [{"type": "delta", "text": txt, "checked": True}] if txt else []
     txt = filt.feed(piece)
     return [{"type": "delta", "text": txt}] if txt else []
@@ -1382,7 +1405,16 @@ def _refusal_fallback_model(model: Optional[str]) -> Optional[str]:
     return fb
 
 
-async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Dict],
+async def _call_claude(*args, **kwargs) -> str:
+    """Every Chief model call. A voice turn that asked for tone notes
+    (chief_tone) gets its answer back without them: the notes are kept
+    for the speech of the reply's tail, and nothing downstream — action
+    parsing, the answer check, the reply on file — ever reads one."""
+    import chief_tone
+    return chief_tone.take(await _call_claude_once(*args, **kwargs))
+
+
+async def _call_claude_once(client: httpx.AsyncClient, system: str, messages: List[Dict],
                        max_tokens: int = 1600,
                        enable_web_search: bool = True,
                        business_id: Optional[str] = None,
@@ -14423,6 +14455,9 @@ class ChatRequest(BaseModel):
     # ("Let me take a look.") — the reply continues from it instead of
     # opening with a second acknowledgement. Voice surface only.
     spoken_opener: Optional[str] = None
+    # The voice speaking this reply can change its tone (a featured
+    # voice), so Chief may mark how it should sound (chief_tone).
+    tone_notes: Optional[bool] = None
     # The phone composer's Ask · Do · Build dial (Chief Go, 9/23). A
     # closed set — anything else is ignored — so it steers the turn
     # without ever carrying free text into the prompt.
@@ -14481,6 +14516,23 @@ def _spoken_opener_block(opener: Optional[str]) -> str:
         "check\", \"one moment\", \"good question\"). Your first sentence is "
         "the substance."
     )
+
+
+async def _tone_notes_block(req, client, biz) -> str:
+    """The tone-notes rules for a spoken turn (chief_tone), or "". Only the
+    streaming endpoint can carry notes to the voice, only a featured voice
+    can perform them, and CHIEF_TONE_NOTES decides who hears them."""
+    import chief_tone
+    turn = chief_tone.TURN.get()
+    if turn is None or not getattr(req, "tone_notes", None):
+        return ""
+    mode = chief_tone.mode()
+    if mode == "off":
+        return ""
+    if mode == "owner" and not await _is_platform_owner_biz(client, biz):
+        return ""
+    turn.enabled = True
+    return chief_tone.PROMPT_BLOCK
 
 
 def _is_greeting(msg: str) -> bool:
@@ -15551,6 +15603,7 @@ async def chief_chat(
             lane = chief_models.lane_for_chat(req.mode or "", req.client_surface or "")
             if lane == "voice":
                 system = system + chief_models.VOICE_DELIVERY_BLOCK
+                system = system + await _tone_notes_block(req, client, biz)
                 # After the delivery block, in the uncached tail with it.
                 system = system + _spoken_opener_block(req.spoken_opener)
             # The phone's Ask · Do · Build dial — any lane, uncached tail.
@@ -16210,6 +16263,11 @@ async def chief_chat_stream(
         except Exception:
             pass
 
+    import chief_tone
+    # Notes this turn's model answers carried (chief_tone): the part of
+    # the reply that did not stream is said with them too.
+    tone_turn = chief_tone.ToneTurn()
+
     import chief_fast_track
     try:
         track = chief_fast_track.plan(req, user_session)
@@ -16225,6 +16283,7 @@ async def chief_chat_stream(
         if turn is not None:
             return turn
         token = _STREAM_SINK.set(_sink)
+        tone_token = chief_tone.TURN.set(tone_turn)
         bound = track.bind_turn_context() if track is not None else []
         try:
             # create_task snapshots the current context, so the sink rides
@@ -16242,6 +16301,7 @@ async def chief_chat_stream(
         finally:
             for _var, _tok in reversed(bound):
                 _var.reset(_tok)
+            chief_tone.TURN.reset(tone_token)
             _STREAM_SINK.reset(token)
         return turn
 
@@ -16250,6 +16310,10 @@ async def chief_chat_stream(
 
     def _evt(obj: Dict[str, Any]) -> str:
         return "data: " + json.dumps(jsonable_encoder(obj)) + "\n\n"
+
+    def _with_speech(ev: Dict[str, Any], final: str, start: int) -> Dict[str, Any]:
+        speech = chief_tone.tail_speech(final, start, tone_turn)
+        return {**ev, "speech": speech} if speech else ev
 
     async def _events():
         try:
@@ -16373,9 +16437,11 @@ async def chief_chat_stream(
                         payload = {**payload, "response": final_text}
                         rest = final_text[len(already):]
                         if rest:
-                            yield _evt({"type": "delta", "text": rest})
+                            yield _evt(_with_speech({"type": "delta", "text": rest},
+                                                    final_text, len(already)))
                     else:
-                        yield _evt(_shown({"type": "delta", "text": final_text}))
+                        yield _evt(_shown(_with_speech({"type": "delta", "text": final_text},
+                                                       final_text, 0)))
                 if lead:
                     # The reply on file is the reply as it was shown.
                     payload = {**payload, "response": chief_fast_track.join_reply(

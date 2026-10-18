@@ -139,6 +139,10 @@ MODEL_PRICING_CENTS: Dict[str, tuple[float, float]] = {
     # $10 on the Creator plan; priced at the higher card so the meter
     # never reads low.
     "inworld-tts-2-flash": (1500.0, 0.0),
+    # Inworld TTS-2 — the tone model a featured voice speaks on when Chief
+    # marks a reply with a tone note (chief_tone, 2026-10-18). $25 / 1M
+    # characters On-Demand; the notes themselves count as characters.
+    "inworld-tts-2":     (2500.0, 0.0),
     # ── Other providers ──
     # Kimi K3 (Moonshot; site_llm stages, vision_grader): $3 / $15 per MTok,
     # cache hits $0.30 (0.1x). Moonshot's own pricing page was unreachable on
