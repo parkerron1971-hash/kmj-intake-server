@@ -311,6 +311,11 @@ def overview(biz: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     draft = _rows(f"/church_shepherd_drafts?business_id=eq.{_q(b)}&select=rows,made_at&limit=1")
     if ctx is None or visitors is None or draft is None:
         return None
+    import church_shepherd_signals as sig
+    signals = sig.office_view(biz, ctx)
+    if signals is None:
+        return None
+    drift_of = signals["by_household"]
     st = ctx["settings"]
     holders = ctx["holders"]
     roles = [{"role_id": r["def"]["id"], "key": r["def"]["key"], "title": r["def"]["title"], "job": r["def"]["job"],
@@ -323,7 +328,8 @@ def overview(biz: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                if wd else None)
     cards: Dict[str, Dict[str, Any]] = {
         cid: {"contact_id": cid, "name": s["name"], "initials": s["initials"], "role": s["role"], "lead": s["lead"],
-              "cap": s["cap"], "held": 0, "reached": 0, "families": []} for cid, s in ctx["shepherds"].items()}
+              "cap": s["cap"], "held": 0, "reached": 0, "drifting": 0, "families": []}
+        for cid, s in ctx["shepherds"].items()}
     waiting, placed, reached = [], 0, 0
     households = sum(1 for u in ctx["units"] if u["household_id"])
     for u in ctx["units"]:
@@ -339,9 +345,13 @@ def overview(biz: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         c = cards[s]
         c["held"] += 1
         c["reached"] += 1 if hit else 0
+        dr = drift_of.get(hid)
+        c["drifting"] += 1 if dr else 0
         c["families"].append({"household_id": hid, "name": u["name"], "size": u["size"],
                               "since": ctx["assigned"][hid].get("assigned_at"),
-                              "last_touch_at": t.get("created_at"), "last_touch_kind": t.get("kind")})
+                              "last_touch_at": t.get("created_at"), "last_touch_kind": t.get("kind"),
+                              "drifting_since": dr["since"] if dr else None,
+                              "last_seen": dr["last_seen"] if dr else None})
     d = draft[0] if draft else None
     return {
         "settings": st,
@@ -350,10 +360,12 @@ def overview(biz: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         "welcome": welcome,
         "counts": {"members": len(ctx["members"]), "units": len(ctx["units"]), "households": households,
                    "singles": len(ctx["units"]) - households, "placed": placed, "waiting": len(waiting),
-                   "visitors": len(visitors), "reached": reached},
+                   "visitors": len(visitors), "reached": reached, "drifting": len(signals["drifting"]),
+                   "not_reached_60": signals["not_reached_60"], "sundays_recorded": signals["sundays_recorded"]},
         "families_empty": households == 0,
         "shepherds": list(cards.values()),
         "waiting": waiting,
+        "drifting": signals["drifting"],
         "draft": {"made_at": d.get("made_at"), "rows": len(d.get("rows") or [])} if d else None,
     }
 
@@ -422,7 +434,8 @@ def _draft(biz: str) -> Optional[Dict[str, Any]]:
 
 def _save_draft(biz: str, rows: List[Dict[str, Any]], by_user: Optional[str], made_at: Optional[str] = None) -> str:
     stamp = made_at or _iso(_now())
-    keep = [{k: r.get(k) for k in ("unit", "shepherd_contact_id", "reason", "why", "moved")} for r in rows]
+    keep = [{k: r.get(k) for k in ("unit", "shepherd_contact_id", "reason", "why", "moved", "from_shepherd_contact_id")}
+            for r in rows]
     saved = sb_clients.sb_post_as_service("/church_shepherd_drafts?on_conflict=business_id",
                                           {"business_id": biz, "rows": keep, "made_at": stamp, "made_by": by_user},
                                           prefer="return=representation,resolution=merge-duplicates")
@@ -445,30 +458,44 @@ def _view(ctx: Dict[str, Any], rows: List[Dict[str, Any]], made_at: Optional[str
         if not u:
             continue
         s = r.get("shepherd_contact_id")
+        frm = r.get("from_shepherd_contact_id") or None
         if s and s in count:
             count[s] += 1
+        if frm and frm in count:
+            count[frm] -= 1
         out_rows.append({"unit": u["unit"], "name": u["name"], "size": u["size"],
                          "shepherd_contact_id": s if s in ctx["shepherds"] else None,
                          "reason": r.get("reason") if s in ctx["shepherds"] or not s else "wait",
                          "why": r.get("why") if s in ctx["shepherds"] or not s else _wait_why(ctx),
-                         "moved": bool(r.get("moved"))})
-    out_rows.sort(key=lambda r: r["name"].casefold())
+                         "moved": bool(r.get("moved")),
+                         "from_shepherd_contact_id": frm})
+    out_rows.sort(key=lambda r: (not r["from_shepherd_contact_id"], r["name"].casefold()))
     sheps = [{"contact_id": cid, "name": s["name"], "initials": s["initials"], "role": s["role"], "lead": s["lead"],
               "cap": s["cap"], "count": count.get(cid, 0)} for cid, s in ctx["shepherds"].items()]
     return {"proposal": {
         "made_at": made_at,
         "shepherds": sheps,
         "rows": out_rows,
-        "waiting": sum(1 for r in out_rows if not r["shepherd_contact_id"]),
+        "waiting": sum(1 for r in out_rows if not r["shepherd_contact_id"] and not r["from_shepherd_contact_id"]),
         "over": [{"contact_id": s["contact_id"], "name": s["name"], "count": s["count"], "cap": s["cap"]}
                  for s in sheps if s["count"] > s["cap"]],
     }}
 
 
+def _move_still_valid(ctx: Dict[str, Any], r: Dict[str, Any]) -> bool:
+    """A drafted move of a placed family stands while the family is still
+    with the shepherd it moves from."""
+    frm = r.get("from_shepherd_contact_id")
+    u = next((x for x in ctx["units"] if x["unit"] == r.get("unit")), None)
+    return bool(frm and u and _placed(ctx, u) == frm)
+
+
 def _current_rows(ctx: Dict[str, Any], stored: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """The stored rows still waiting, then anyone who started waiting since."""
+    """The drafted moves that still stand, the stored rows still waiting,
+    then anyone who started waiting since."""
     waiting = {u["unit"] for u in waiting_units(ctx)}
-    rows = [dict(r) for r in stored if r.get("unit") in waiting]
+    rows = [dict(r) for r in stored if r.get("from_shepherd_contact_id") and _move_still_valid(ctx, r)]
+    rows += [dict(r) for r in stored if not r.get("from_shepherd_contact_id") and r.get("unit") in waiting]
     have = {r["unit"] for r in rows}
     for u in waiting_units(ctx):
         if u["unit"] not in have:
@@ -487,6 +514,18 @@ def build(ctx: Dict[str, Any], ties: Dict[Tuple[str, str], str], zips: Dict[str,
     kept: Set[str] = set()
     for r in prior:
         u = by_unit.get(r.get("unit"))
+        if r.get("from_shepherd_contact_id"):
+            # A move Chief or the office drafted for a placed family: kept
+            # while it still stands.
+            s = r.get("shepherd_contact_id")
+            if not _move_still_valid(ctx, r) or (s and (s not in sheps or _own(ctx, s, u))):
+                continue
+            rows.append(dict(r))
+            frm = r["from_shepherd_contact_id"]
+            load_[frm] = load_.get(frm, 0) - 1
+            if s:
+                load_[s] += 1
+            continue
         if not r.get("moved") or not u or _placed(ctx, u):
             continue
         s = r.get("shepherd_contact_id")
@@ -571,7 +610,10 @@ def move_in_draft(biz: Dict[str, Any], unit: str, shepherd: Optional[str], by_us
     s = _uid(shepherd, "shepherd") if shepherd else None
     if s:
         _check_shepherd(ctx, s, u)
-    row.update({"shepherd_contact_id": s, "reason": "moved", "why": "You chose", "moved": True})
+    if s and row.get("from_shepherd_contact_id") == s:
+        rows = [r for r in rows if r is not row]  # moved back where it is: no move at all
+    else:
+        row.update({"shepherd_contact_id": s, "reason": "moved", "why": "You chose", "moved": True})
     _save_draft(b, rows, by_user, d.get("made_at"))
     return _view(ctx, rows, d.get("made_at"))
 
@@ -625,9 +667,19 @@ def approve(biz: Dict[str, Any], by_user: Optional[str]) -> Dict[str, Any]:
     placed = failed = 0
     left: List[Dict[str, Any]] = []
     taken: Optional[Set[str]] = None
+    handed: List[Tuple[List[str], str]] = []
     for r in rows:
         s = r.get("shepherd_contact_id")
         u = by_unit.get(r["unit"])
+        if r.get("from_shepherd_contact_id") and not s and u and u["household_id"]:
+            # A drafted move back to waiting.
+            if sb_clients.sb_delete_as_service(
+                    f"/church_shepherds?household_id=eq.{_q(u['household_id'])}&business_id=eq.{_q(b)}"):
+                placed += 1
+            else:
+                failed += 1
+                left.append(r)
+            continue
         if not s or not u or s not in ctx["shepherds"] or _own(ctx, s, u):
             continue
         if not u["household_id"] and taken is None:
@@ -636,9 +688,11 @@ def approve(biz: Dict[str, Any], by_user: Optional[str]) -> Dict[str, Any]:
         if hid and _assign(b, hid, s, by_user, r.get("why") or ""):
             placed += 1
             gained.setdefault(s, []).append(u["name"])
+            handed.append((u["people"], ctx["shepherds"][s]["name"]))
         else:
             failed += 1
             left.append(r)
+    welcome_handoff(b, ctx, handed)
     if left:
         _save_draft(b, left, by_user, d.get("made_at"))
     else:
@@ -667,7 +721,100 @@ def move(biz: Dict[str, Any], household_id: str, shepherd: Optional[str], by_use
         return {"changed": False, "shepherd": ctx["shepherds"][s], "name": u["name"], "ctx": ctx}
     if not _assign(b, hid, s, by_user, "Moved by the office"):
         raise HTTPException(503, "That didn't save. Try again in a moment.")
+    welcome_handoff(b, ctx, [(u["people"], ctx["shepherds"][s]["name"])])
     return {"changed": True, "shepherd": ctx["shepherds"][s], "name": u["name"], "ctx": ctx}
+
+
+def welcome_handoff(b: str, ctx: Dict[str, Any], handed: List[Tuple[List[str], str]]) -> int:
+    """A new member's Welcome card, while it is still open, is told who
+    shepherds them now: one note the Welcome leader sees. Best-effort."""
+    import church_follow_up as cfu
+    people = {p: name for ids, name in handed for p in ids}
+    if not people:
+        return 0
+    try:
+        welcome = {d["key"] for d in ctx["defs"] if d.get("job") == "welcome"}
+        if not welcome:
+            return 0
+        rows = _rows(f"/church_follow_ups?business_id=eq.{_q(b)}&status=in.(open,handed_back)"
+                     f"&contact_id=in.({','.join(_q(i) for i in sorted(people))})&select=id,contact_id,leader_role&limit=500")
+        n = 0
+        for f in rows or []:
+            if f.get("leader_role") in welcome:
+                if cfu._note(b, str(f["id"]), "chief", "note", f"Now shepherded by {people[str(f['contact_id'])]}."):
+                    n += 1
+        return n
+    except Exception:
+        logger.info("shepherding: welcome hand-off note skipped", exc_info=True)
+        return 0
+
+
+def _match_shepherd(ctx: Dict[str, Any], query: str) -> List[str]:
+    import church_shepherd_signals as sig
+    q = sig.norm_name(query)
+    if not q:
+        return []
+    exact = [cid for cid, s in ctx["shepherds"].items() if sig.norm_name(s["name"]) == q]
+    if exact:
+        return exact
+    return [cid for cid, s in ctx["shepherds"].items() if q in sig.norm_name(s["name"]).split(" ")]
+
+
+def draft_moves(biz: Dict[str, Any], moves: List[Dict[str, Any]], by_user: Optional[str]) -> Dict[str, Any]:
+    """Chief drafts moves the office asked for ("give both Johnsons to
+    Pastor Andre"): each becomes a row in the proposal (a move of a placed
+    family carries the shepherd it moves from). Nothing moves and nobody is
+    told until the office approves on Shepherding. Raises 400 with a
+    question when a name is ambiguous or unknown."""
+    import church_shepherd_signals as sig
+    b = str(biz["id"])
+    if not moves:
+        raise HTTPException(400, "Say which family goes to which shepherd.")
+    if len(moves) > 40:
+        raise HTTPException(400, "That's more than 40 moves at once. Ask for a proposal on Shepherding instead.")
+    ctx = load(b)
+    d = _draft(b)
+    if ctx is None or d is None:
+        raise _unavailable()
+    rows = _current_rows(ctx, (d or {}).get("rows") or [])
+    by_unit = {r["unit"]: r for r in rows}
+    done: List[str] = []
+    for m in moves:
+        fam_q, to_q = _plain((m or {}).get("family"))[:80], _plain((m or {}).get("to"))[:80]
+        if not fam_q or not to_q:
+            raise HTTPException(400, "Each move needs a family and the shepherd it goes to.")
+        found = sig._family_matches(ctx, fam_q)
+        if not found:
+            raise HTTPException(400, f"No member family matches “{fam_q}”. Which family do you mean?")
+        if len(found) > 1 and not any(sig.norm_name(u["name"]) == sig.norm_name(fam_q) for u in found):
+            raise HTTPException(400, f"“{fam_q}” could be {', '.join(u['name'] for u in found[:6])}. Which one?")
+        if len(found) > 1:
+            found = [u for u in found if sig.norm_name(u["name"]) == sig.norm_name(fam_q)][:1]
+        u = found[0]
+        if sig.norm_name(to_q) in ("waiting", "nobody", "no one"):
+            s = None
+        else:
+            hits = _match_shepherd(ctx, to_q)
+            if not hits:
+                raise HTTPException(400, f"“{to_q}” isn't one of the shepherds (pastors and elders who said yes).")
+            if len(hits) > 1:
+                raise HTTPException(400, f"“{to_q}” could be {', '.join(ctx['shepherds'][h]['name'] for h in hits)}. Which one?")
+            s = hits[0]
+            _check_shepherd(ctx, s, u)
+        frm = _placed(ctx, u)
+        if frm and frm == s:
+            done.append(f"{u['name']} already has {ctx['shepherds'][s]['name']}; nothing to move")
+            by_unit.pop(u["unit"], None)
+            continue
+        row = {"unit": u["unit"], "shepherd_contact_id": s, "reason": "moved", "why": "You asked Chief",
+               "moved": True, "from_shepherd_contact_id": frm}
+        by_unit[u["unit"]] = row
+        to_name = ctx["shepherds"][s]["name"] if s else "waiting"
+        done.append(f"{u['name']}: {ctx['shepherds'][frm]['name'] + ' → ' if frm else ''}{to_name}")
+    rows = list(by_unit.values())
+    stamp = _save_draft(b, rows, by_user, (d or {}).get("made_at"))
+    view = _view(ctx, rows, stamp)["proposal"]
+    return {"done": done, "over": view["over"], "proposal": view}
 
 
 # ─── a family's record ────────────────────────────────────────────────
@@ -739,9 +886,14 @@ def office_family(biz: Dict[str, Any], household_id: str) -> Dict[str, Any]:
         sid = str(who[0]["shepherd_contact_id"])
         row = _rows(f"/contacts?id=eq.{_q(sid)}&business_id=eq.{_q(b)}&select=id,name&limit=1") or []
         shep = {"contact_id": sid, "name": _plain(row[0].get("name")) if row else "Someone"}
+    import church_shepherd_signals as sig
+    extras = sig.family_extras(biz, {"household_id": hid})
+    if extras is None:
+        raise _unavailable("That family")
     return {"household_id": hid, "name": _plain(home[0].get("name")) or "A family", "shepherd": shep,
             "people": [{"name": p["name"], "kind": p["kind"], "age": p["age"]} for p in people],
-            "touches": [{k: t[k] for k in ("at", "kind", "note", "needs_pastor", "by")} for t in touches]}
+            "touches": [{k: t[k] for k in ("at", "kind", "note", "needs_pastor", "by")} for t in touches],
+            "drifting": extras["drifting"], "lines": extras["lines"]}
 
 
 # ─── the shepherd's side (member_portal_lead) ─────────────────────────
@@ -805,8 +957,11 @@ def my_families(biz_id: str, me_id: str, *, now: Optional[datetime] = None) -> O
         kids = _rows(f"/children?business_id=eq.{_q(b)}&household_id=in.({inn})&select=household_id,active&limit=5000")
         touches = _rows(f"/church_shepherd_touches?business_id=eq.{_q(b)}&household_id=in.({inn})"
                         "&select=household_id,kind,created_at&order=created_at.desc&limit=5000")
-        if any(x is None for x in (homes, adults, kids, touches)):
+        drift = _rows(f"/church_shepherd_signals?business_id=eq.{_q(b)}&household_id=in.({inn})&kind=eq.drift"
+                      "&resolved_at=is.null&select=household_id,started_on,last_seen&limit=500")
+        if any(x is None for x in (homes, adults, kids, touches, drift)):
             return None
+        drifting = {str(x["household_id"]): x for x in drift}
         size: Dict[str, int] = {}
         for a in adults:
             size[str(a["household_id"])] = size.get(str(a["household_id"]), 0) + 1
@@ -825,9 +980,12 @@ def my_families(biz_id: str, me_id: str, *, now: Optional[datetime] = None) -> O
                              "since": since.get(hid), "last_touch_at": t.get("created_at"),
                              "last_touch_kind": t.get("kind"),
                              "days": (now - at).days if at else None,
-                             "reached": bool(at and now - at <= timedelta(days=mctx["settings"]["rhythm_days"]))})
-    # Never reached first, then the longest since; the reached after.
-    families.sort(key=lambda f: (f["reached"], f["days"] is not None, -(f["days"] or 0), f["name"].casefold()))
+                             "reached": bool(at and now - at <= timedelta(days=mctx["settings"]["rhythm_days"])),
+                             "drifting": bool(drifting.get(hid)),
+                             "last_seen": (drifting.get(hid) or {}).get("last_seen")})
+    # Drifting first, then never reached, then the longest since; the reached after.
+    families.sort(key=lambda f: (f["reached"], not f["drifting"], f["days"] is not None, -(f["days"] or 0),
+                                 f["name"].casefold()))
     return {"shepherd": True, "families": families, "rhythm_days": mctx["settings"]["rhythm_days"],
             "chain": _chain(mctx, me_id),
             "lead": [_plain(h.get("name")) for h in _lead_names(mctx, me_id)]}
@@ -917,7 +1075,8 @@ async def tell_shepherds(biz: Dict[str, Any], gained: Dict[str, List[str]], ctx:
         more = f"<br>and {n - 2} more" if n > 2 else ""
         lines = [f"{html.escape(cfu.first_name(s['name']))}, {html.escape(asker)} asked you to shepherd "
                  f"{'this family' if n == 1 else 'these families'} at {html.escape(church)}:{listed}{more}",
-                 "Reach each one once a month: a call, a visit, a text or a real talk at church.",
+                 "Reach each one once a month: a call, a visit, a text or a real talk at church. "
+                 "When someone misses three Sundays, you’ll hear first.",
                  "Their giving and their private prayer requests are never shown to you."]
         body = cfu._mail_html(lines, f"{origin}/my/lead/families" if origin else "", "Open your families")
         if await cfu._email(biz, s["email"], s["name"], subject, body, f"shep-{biz['id']}-{sid}-{stamp}"):
@@ -933,7 +1092,8 @@ async def tell_new_shepherd(biz: Dict[str, Any], shepherd: Dict[str, Any], famil
     origin = cfu.site_origin(str(biz["id"]))
     lines = [f"{html.escape(cfu.first_name(shepherd['name']))}, {html.escape(asker)} asked you to shepherd "
              f"{html.escape(_the(family))} at {html.escape(_plain(biz.get('name')) or 'your church')}.",
-             "Reach them once a month: a call, a visit, a text or a real talk at church.",
+             "Reach them once a month: a call, a visit, a text or a real talk at church. "
+             "When they miss three Sundays, you’ll hear first.",
              "Their giving and their private prayer requests are never shown to you."]
     body = cfu._mail_html(lines, f"{origin}/my/lead/families" if origin else "", "Open your families")
     return await cfu._email(biz, shepherd["email"], shepherd["name"], f"{asker} asked you to shepherd {_the(family)}",

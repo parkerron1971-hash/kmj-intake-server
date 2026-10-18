@@ -258,13 +258,20 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
     "church_people":       _r("first-time guests, group drift and attendance from "
                               "church_reads; care counts gated to owner/manager; "
                               "the role library (titles, jobs, who holds them, "
-                              "the chain; leaders' names only) from church_roles. "
-                              "Writes nothing"),
+                              "the chain; leaders' names only) from church_roles; "
+                              "shepherding (who shepherds whom, drifting, not "
+                              "reached) gated to owner/manager. Writes nothing"),
     # The owner asks Chief for a role ("add a Church Mother role"). It is
     # saved as a DRAFT: routing ignores drafts, so it hands nobody anything
     # until the owner saves it on Leaders & roles; discarding it deletes it.
     "draft_church_role":   _w("A", "creates one draft role in church_role_defs; "
                                    "inert until the owner saves it; discard deletes it"),
+    # The owner asks Chief to move families between shepherds ("give both
+    # Johnsons to Pastor Andre"). The moves wait in the shepherding
+    # proposal: nothing is reassigned and no shepherd is emailed until the
+    # office approves it on Shepherding; discarding the proposal drops them.
+    "draft_shepherd_moves": _w("A", "writes moves into church_shepherd_drafts; inert "
+                                    "until the office approves on Shepherding; discard drops them"),
 
     # ── UI directives ────────────────────────────────────────────────
     # Verified: pass-throughs the frontend acts on. No persistence.
