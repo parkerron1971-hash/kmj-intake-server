@@ -4,7 +4,7 @@ date: 2026-10-18
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin: "...discussions, projects, etc... share with me on how that looks" - then "I''m happy with it. build it" for the approved Class Schedule design (step 3 of 4)'
 status: shipped
-prs: [kmj-intake-server#TBD]
+prs: [kmj-intake-server#1490]
 migrations: [supabase/APPLY-2026-10-18-academy-discussions.sql (applied)]
 left_undone:
   - "The Schedule tab's discussion and project sheets, students answering and saying Amen, and the presenter's Show on the TV are the solutionist-studio PR that follows"
