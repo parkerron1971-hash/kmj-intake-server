@@ -4,7 +4,7 @@ date: 2026-10-18
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin: "a schedule that can be created where the teacher can set lessons, live sessions, homework that could be beyond the visual" - then "I''m happy with it. build it" for the approved Class Schedule design (step 2 of 4)'
 status: shipped
-prs: [kmj-intake-server#TBD]
+prs: [kmj-intake-server#1488]
 migrations: [supabase/APPLY-2026-10-18-academy-schedule.sql (applied)]
 left_undone:
   - "The teacher's Schedule tab, homework kinds, students' This week and Add to my calendar are the solutionist-studio PR that follows"
