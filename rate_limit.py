@@ -151,6 +151,13 @@ _LIMITS: Dict[str, Tuple[int, int]] = {
     "dev_watch_run": (6, 60),
     # Live chat, per member; "I'm here" rides member_action.
     "live_chat": (int(os.environ.get("RL_LIVE_CHAT_PER_MIN", "8")), 60),
+    # Homework handed in as a file, by the class link (academy_work.py):
+    # per link (hashed), so a whole class on one church Wi-Fi isn't one
+    # budget; and a wide per-IP ceiling beside it. Opening a file is a
+    # signed link, per link or per teacher. Strict.
+    "academy_work_upload": (int(os.environ.get("RL_ACADEMY_WORK_UPLOAD_PER_HOUR", "30")), 3600),
+    "academy_work_upload_ip": (int(os.environ.get("RL_ACADEMY_WORK_UPLOAD_IP_PER_HOUR", "300")), 3600),
+    "academy_work_file": (int(os.environ.get("RL_ACADEMY_WORK_FILE_PER_10MIN", "60")), 600),
 }
 _DEFAULT = (60, 60)
 

@@ -445,7 +445,9 @@ USER_CHILD_TABLES: List[str] = [
 # ("{business_id}/{offering_id}/…"), which _delete_storage_objects
 # handles by descending one folder level.
 STORAGE_BUCKETS: List[str] = ["image-originals", "business-assets", "business-documents",
-                              "product-files", "program-media", "video-studio"]
+                              "product-files", "program-media", "video-studio",
+                              # Students' homework files: "{business_id}/{course_id}/…".
+                              "academy-work"]
 
 
 def _service_headers() -> Dict[str, str]:
