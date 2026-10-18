@@ -134,6 +134,11 @@ MODEL_PRICING_CENTS: Dict[str, tuple[float, float]] = {
     # API card reads $0.05 per 1k characters ($50 / 1M) for Flash/Turbo; if
     # the account pays that card rather than plan credits, both rows are 2x low.
     "eleven_flash_v2_5": (2500.0, 0.0),
+    # Inworld TTS-2 Flash — the featured voices (whisper_proxy
+    # INWORLD_VOICES, 2026-10-17). $15 / 1M characters pay-as-you-go,
+    # $10 on the Creator plan; priced at the higher card so the meter
+    # never reads low.
+    "inworld-tts-2-flash": (1500.0, 0.0),
     # ── Other providers ──
     # Kimi K3 (Moonshot; site_llm stages, vision_grader): $3 / $15 per MTok,
     # cache hits $0.30 (0.1x). Moonshot's own pricing page was unreachable on
@@ -290,7 +295,7 @@ _PROVIDER_PREFIXES = (
     ("claude", "anthropic"), ("anthropic", "anthropic"),
     ("gpt-", "openai"), ("text-embedding", "openai"), ("tts-", "openai"),
     ("whisper", "openai"), ("dall-e", "openai"), ("o1", "openai"), ("o3", "openai"), ("o4", "openai"),
-    ("eleven", "elevenlabs"), ("kimi", "moonshot"), ("moonshot", "moonshot"),
+    ("eleven", "elevenlabs"), ("inworld", "inworld"), ("kimi", "moonshot"), ("moonshot", "moonshot"),
 )
 
 
