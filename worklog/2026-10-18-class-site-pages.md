@@ -4,7 +4,7 @@ date: 2026-10-18
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin: "where can i see the layout of how people can choose a class" - then "I''m happy with it. build it" for the approved Class Schedule design (step 4 of 4)'
 status: shipped
-prs: [kmj-intake-server#TBD]
+prs: [kmj-intake-server#1491]
 migrations: []
 left_undone:
   - "The member app's Classes (board 13 of the Class Experience canvas) is phase 5"
