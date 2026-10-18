@@ -1123,6 +1123,15 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
             return RedirectResponse("/my", status_code=303, headers=_SECURE_HEADERS)
         html, status = await mpl.serve(request, biz, site, me, sub)
         return _page(html, status)
+    if sub in ("/my/groups", "/my/classes", "/my/messages") or sub.startswith("/my/messages/"):
+        # Connect's Classes tab: when the church has a published class, or
+        # in the owner's preview (member_portal_classes).
+        import member_portal_classes as mcl
+        mcl.TAB.set(preview or await asyncio.to_thread(mcl.classes_on, biz["id"]))
+    if sub == "/my/classes":
+        import member_portal_classes as mcl
+        data = fill(await asyncio.to_thread(mcl.classes_for, biz["id"], me), "classes")
+        return _page(mcl.render_classes(biz, site, request, data, who=me))
     if sub == "/my/messages" or sub.startswith("/my/messages/"):
         import member_portal_messaging as mpm
         out = await mpm.serve(request, biz, site, me, sub)

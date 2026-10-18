@@ -369,6 +369,9 @@ from member_portal import router as member_portal_router
 app.include_router(member_portal_router)
 from member_portal_church import router as member_portal_church_router
 app.include_router(member_portal_church_router)
+# Classes in the church member app: one-tap join (GET /my/classes is member_portal.serve's).
+from member_portal_classes import router as member_classes_router
+app.include_router(member_classes_router)
 # The Lead tab's actions (member_portal_lead.py): a leader answers an
 # invitation, logs a conversation, marks a step, hands someone back.
 from member_portal_lead import router as member_portal_lead_router

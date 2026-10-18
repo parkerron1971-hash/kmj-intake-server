@@ -382,7 +382,9 @@ async def send_class_link(course: Dict[str, Any], name: str, email: str,
         idempotency_key=f"class-link-{outcome.get('enrollment_id')}-{int(time.time() // 60)}")
 
 
-async def tell_owner(course: Dict[str, Any], outcome: Dict[str, Any]) -> None:
+async def tell_owner(course: Dict[str, Any], outcome: Dict[str, Any], came_from: str = "page") -> None:
+    """came_from: "page" (the class page's form) or "app" (one tap in the
+    church member app, member_portal_classes)."""
     import httpx
     from notification_engine import create_urgent_alert
     who = outcome.get("known_as") or "Someone"
@@ -393,7 +395,8 @@ async def tell_owner(course: Dict[str, Any], outcome: Dict[str, Any]) -> None:
         if outcome.get("state") == "joined":
             await create_urgent_alert(
                 client, str(course["business_id"]), f"{who} joined {title}",
-                "They signed up on the class page, and their class link went to their email.",
+                ("They joined from your church app, where their class is waiting for them." if came_from == "app"
+                 else "They signed up on the class page, and their class link went to their email."),
                 notification_id=str(uuid.uuid5(uuid.UUID(enrollment), "class-joined")),
                 priority="normal", suggested_action="Open Classes", action_payload=payload,
                 related_contact_id=outcome.get("contact_id"))
