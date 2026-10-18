@@ -2133,6 +2133,22 @@ def _fast_lane_names(sentence):
             if w[0].isupper() and w.lower().replace('’', "'") not in _NOT_NAMES]
 
 
+def _record_names(names):
+    """Names as a record spells them, for matching against one. "Monica's
+    $1,200 invoice is overdue" is about Monica, and her invoice row says
+    "Monica Walton", never "Monica's": kept whole, the possessive matched no
+    record, and a true claim was held as "claim number 1200 is not in the
+    quote" whenever the reviewer quoted her status instead of her total
+    (2026-10-18 replay, the review on Haiku 5.5). A contraction left over
+    ("Let's", "Here's") is not a name at all."""
+    out = []
+    for n in names:
+        key = re.sub(r"'s?$", '', n.lower().replace('’', "'"))
+        if key and key not in _NOT_NAMES:
+            out.append(key)
+    return out
+
+
 def _record_items(text):
     """A record's smallest units: each element of a JSON list, else each
     line. A calendar is one source holding every appointment; matched as a
@@ -2366,7 +2382,7 @@ class _SentenceProver:
         return self._corroborates(figure, claim_text)
 
     def _corroborates(self, figure, claim_text):
-        names = [n.lower() for n in _fast_lane_names(claim_text)]
+        names = _record_names(_fast_lane_names(claim_text))
         keywords = _state_keywords(claim_text)
         if not names and not keywords:
             return False
@@ -2418,8 +2434,8 @@ class _SentenceProver:
             keywords = _state_keywords(sentence)
             if not keywords:
                 return False, None
-        names = [n.lower() for n in _fast_lane_names(sentence)
-                 if not (stream and n.lower().replace('’', "'") in _STREAM_OPENERS)]
+        names = _record_names([n for n in _fast_lane_names(sentence)
+                               if not (stream and n.lower().replace('’', "'") in _STREAM_OPENERS)])
         if not figures:
             # Nothing to check it against. "Your busiest day is Tuesday."
             # and "Tasha prefers mornings." are claims with no figure in
