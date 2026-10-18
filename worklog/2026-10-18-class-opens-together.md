@@ -4,7 +4,7 @@ date: 2026-10-18
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin: "when we are building the class from scratch, it should be allowed to be select 1 lesson per week or all the lessons released at once" - then "I''m happy with it. build it" for the approved Class Schedule design (step 1 of 4)'
 status: shipped
-prs: [kmj-intake-server#TBD]
+prs: [kmj-intake-server#1487]
 migrations: [supabase/APPLY-2026-10-18-academy-opens-from.sql (applied)]
 left_undone:
   - "Asking it when a class is started, and the together choice in Course setup, are the solutionist-studio PR that follows"
