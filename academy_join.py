@@ -135,6 +135,35 @@ def next_class_line(business_id: str, course_id: str) -> str:
         return ""
 
 
+def release_note(business_id: str, course: Dict[str, Any]) -> str:
+    """The class page's one line on how lessons open: all at once, one a
+    week from the day you join, or together from the class's start date
+    (academy_courses.opens_from, in the business's time zone). Sync
+    (worker thread)."""
+    drip = course.get("drip_mode") or "none"
+    if drip not in ("weekly", "custom"):
+        return "Everything is available the moment you join."
+    try:
+        start = datetime.fromisoformat(str(course.get("opens_from") or "").replace("Z", "+00:00"))
+    except ValueError:
+        start = None
+    if start is None:
+        return ("New material unlocks each week after you join." if drip == "weekly"
+                else "Material unlocks on a guided schedule after you join.")
+    try:
+        from zoneinfo import ZoneInfo
+        from outside_calendar import business_timezone
+        local = start.astimezone(ZoneInfo(business_timezone(business_id)))
+    except Exception as e:
+        logger.info(f"[class-join] time zone skipped: {type(e).__name__}")
+        local = start
+    pace = "One lesson a week, together" if drip == "weekly" else "Lessons open together on the class’s own schedule"
+    if start > datetime.now(timezone.utc):
+        return f"{pace}, from {_clock(local)}."
+    return (f"{pace}, since {local.strftime('%A, %B')} {local.day}. "
+            "Join now and the weeks so far are open to catch up.")
+
+
 # ─── The answers ─────────────────────────────────────────────────────
 
 async def _look(business_id: str) -> Tuple[str, str, str]:
