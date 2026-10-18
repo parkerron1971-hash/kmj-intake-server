@@ -367,6 +367,8 @@ def test_the_email_is_in_plain_words_with_one_button(monkeypatch):
     assert f'href="https://system.mysolutionist.app/classroom/{TOKEN}"' in body and "Open your class" in body
     assert "Hi Dana," in body and "The next class is Thursday, October 22 at 7 PM." in body
     assert "background:#C2125F" in body
+    # the stranger's line comes after the button, small
+    assert body.index("Open your class") < body.index("you can ignore this email")
 
 
 def test_the_link_again_email_says_so():

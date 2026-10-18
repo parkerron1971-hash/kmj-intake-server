@@ -69,7 +69,7 @@ def _digest(email: str) -> str:
 # ─── The form, on the class page and on the answers below ───────────
 
 JOIN_CSS = """
-  .join { align-items: flex-end; }
+  .join { align-items: center; }
   .join-copy { flex: 1 1 180px; }
   .join-fields { flex: 2 1 380px; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
   .join-fields label { display: flex; flex-direction: column; gap: 5px; font-size: 12.5px; font-weight: 600; }
@@ -310,10 +310,13 @@ def class_link_email(biz_name: str, course_title: str, first: str, link: str,
             else f"You’re in {course_title} with {biz_name}.")
     when = f" The next class is {when_line}." if when_line else ""
     message = (f"Hi {first},\n\n" if first else "Hi,\n\n") + lead + when + (
-        "\n\nKeep this email. The button below opens your class on any phone or computer, any time."
-        "\n\nIf you didn’t sign up, you can ignore this email.")
+        "\n\nKeep this email. The button below opens your class on any phone or computer, any time.")
     subject = f"Your link to {course_title}" if again else f"You’re in: {course_title}"
     return subject, message, lead
+
+
+# Under the button and the signature, small: the one line for a stranger.
+NOT_YOU = "If you didn’t sign up for this class, you can ignore this email."
 
 
 async def send_class_link(course: Dict[str, Any], name: str, email: str,
@@ -334,7 +337,7 @@ async def send_class_link(course: Dict[str, Any], name: str, email: str,
     html = email_layout.render_html(
         message, business_name=biz_name, brand=email_layout.brand_of(settings),
         sig=email_layout.signature_of(settings), unsubscribe_url=email_sender._unsubscribe_url(email),
-        preheader=preheader, cta=("Open your class", link))
+        preheader=preheader, cta=("Open your class", link), disclaimer=NOT_YOU)
     reply_to = None
     try:
         reply_to = email_sender.build_routed_reply_to(biz, outcome.get("contact_id"))
