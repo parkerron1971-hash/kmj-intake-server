@@ -356,11 +356,13 @@ BUSINESS_CHILD_TABLES: List[str] = [
     "workflows",
     "workflow_definitions",
     # Academy — lessons/enrollments reference courses; a lesson's edited
-    # slides reference the lesson.
+    # slides reference the lesson. A program (The Making) is the business's
+    # own series of classes; its tracks are rows keyed by course id.
     "academy_decks",
     "academy_lessons",
     "academy_enrollments",
     "academy_courses",
+    "academy_programs",
     "bank_accounts",
     "bank_transactions",
     "plaid_accounts",
@@ -671,6 +673,10 @@ _IMPORT_SKIP = {
     # A deck is keyed by its lesson's original id, which the importer re-mints;
     # restored lessons rebuild their slides from the lesson text instead.
     "academy_decks",
+    # A program's tracks are keyed by the original course ids, which the
+    # importer re-mints; the shelf offers the program again from the
+    # classes' series names ("The Making: …") after a restore.
+    "academy_programs",
     # Members' phones are devices, not records (like push_subscriptions);
     # the send log must not claim a restored church already notified anyone.
     "member_push_subscriptions", "member_push_prefs", "member_push_sends",
