@@ -6431,7 +6431,7 @@ async def _serve_academy(client, biz_id, path: str, standalone: bool,
             client,
             f"/academy_courses?id=eq.{course_id}&business_id=eq.{biz_id}"
             f"&status=eq.published&limit=1"
-            f"&select=id,title,description,drip_mode,product_id,self_join") or []
+            f"&select=id,title,description,drip_mode,opens_from,opens_tz,product_id,self_join") or []
         if crows:
             import academy_join
             course = crows[0]
@@ -6473,11 +6473,7 @@ async def _serve_academy(client, biz_id, path: str, standalone: bool,
             total_min = sum(int(l.get("duration_minutes") or 0) for l in lessons)
             runtime = _academy_fmt_runtime(total_min)
             next_live = await asyncio.to_thread(academy_join.next_class_line, str(biz_id), course_id)
-            drip = course.get("drip_mode") or "none"
-            drip_note = (
-                "New material unlocks each week after you join." if drip == "weekly"
-                else "Material unlocks on a guided schedule after you join." if drip == "custom"
-                else "Everything is available the moment you join.")
+            drip_note = await asyncio.to_thread(academy_join.release_note, str(biz_id), course)
             lesson_rows = "".join(
                 f'<div class="lesson"><span class="n">{i + 1}</span>'
                 f'<span class="t">{_esc(l.get("title") or "Lesson")}</span>'
@@ -6661,17 +6657,27 @@ def _learn_content_html(text: str) -> str:
     return "".join(f"<p>{p}</p>" for p in paras)
 
 
-def _learn_unlock(drip_mode: str, idx: int, drip_offset_days: int, enrolled_at: str):
-    """Datetime when lesson idx unlocks, or None if already available."""
+def _learn_unlock(drip_mode: str, idx: int, drip_offset_days: int, enrolled_at: str,
+                  opens_from: Optional[str] = None, opens_tz: Optional[str] = None):
+    """Datetime when lesson idx unlocks, or None if already available.
+    A class that runs together counts from its opens_from, on the clock of
+    its opens_tz (6 PM stays 6 PM across daylight saving); everyone else
+    from the day they joined. academy_lesson_unlock says the same."""
     if drip_mode not in ("weekly", "custom"):
         return None
     days = idx * 7 if drip_mode == "weekly" else max(0, int(drip_offset_days or 0))
-    if days <= 0:
+    if days <= 0 and not opens_from:
         return None
     try:
-        base = datetime.fromisoformat((enrolled_at or "").replace("Z", "+00:00"))
+        base = datetime.fromisoformat((opens_from or enrolled_at or "").replace("Z", "+00:00"))
     except Exception:
         return None
+    if opens_from and opens_tz:
+        try:
+            from zoneinfo import ZoneInfo
+            base = base.astimezone(ZoneInfo(opens_tz))  # aware + timedelta keeps the wall clock
+        except Exception:
+            pass
     when = base + timedelta(days=days)
     return when if when > datetime.now(timezone.utc) else None
 
@@ -6691,7 +6697,7 @@ async def _learn_load(client, token: str):
     crows = await _sb_service(
         client,
         f"/academy_courses?id=eq.{enr['course_id']}&limit=1"
-        f"&select=id,title,description,drip_mode") or []
+        f"&select=id,title,description,drip_mode,opens_from,opens_tz") or []
     if not crows:
         return None
     lessons = await _sb_service(
@@ -6743,7 +6749,7 @@ async def _serve_learner(path: str) -> HTMLResponse:
                 return RedirectResponse(url=home_href, status_code=303)
             lesson = lessons[idx]
             locked = _learn_unlock(drip_mode, idx, lesson.get("drip_offset_days") or 0,
-                                   enr.get("enrolled_at") or "")
+                                   enr.get("enrolled_at") or "", course.get("opens_from"), course.get("opens_tz"))
             if locked:
                 return RedirectResponse(url=home_href, status_code=303)
             is_done = bool(progress.get(lesson_id))
@@ -6803,7 +6809,7 @@ async def _serve_learner(path: str) -> HTMLResponse:
         rows = ""
         for i, l in enumerate(lessons):
             locked = _learn_unlock(drip_mode, i, l.get("drip_offset_days") or 0,
-                                   enr.get("enrolled_at") or "")
+                                   enr.get("enrolled_at") or "", course.get("opens_from"), course.get("opens_tz"))
             is_done = bool(progress.get(l["id"]))
             check = (f'<span class="check" style="background:{accent};border-color:{accent}">&#10003;</span>'
                      if is_done else '<span class="check"></span>')
@@ -8059,7 +8065,7 @@ async def learner_mark(token: str, request: Request):
             return RedirectResponse(url=back, status_code=303)
         if _learn_unlock(course.get("drip_mode") or "none", idx,
                          lessons[idx].get("drip_offset_days") or 0,
-                         enr.get("enrolled_at") or ""):
+                         enr.get("enrolled_at") or "", course.get("opens_from"), course.get("opens_tz")):
             return RedirectResponse(url=f"/learn/{token}", status_code=303)
         patch: Dict[str, Any] = {}
         if kind == "homework":
