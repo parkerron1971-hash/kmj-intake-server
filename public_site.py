@@ -7997,6 +7997,11 @@ async def subdomain_catch_all(request: Request, path: str):
     if request_path == "/my" or request_path.startswith("/my/"):
         import member_portal
         return await member_portal.serve(request, request_path)
+    # Sunday check-in's short address, for the code on the welcome slide
+    # (member_portal_checkin.py): the member's own page does the rest.
+    if request_path.rstrip("/") == "/here":
+        return RedirectResponse(url="/my/here", status_code=302,
+                                headers={**_PUBLIC_SITE_NO_STORE_HEADERS, "Referrer-Policy": "no-referrer"})
 
     slug = extract_slug_from_host(request)
     if slug:

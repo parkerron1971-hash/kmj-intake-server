@@ -551,6 +551,10 @@ async def self_checkin(body: SelfCheckinIn, x_station_token: Optional[str] = Hea
     entry = _station_occasion(st, body.entry_id)
     result = await do_checkin(biz, entry, found["family"]["id"], [(c, "") for c in body.child_ids],
                               found["adult"]["id"], True, "self", None, False, station_id=st["id"])
+    # The kiosk stays for children (Kevin, 2026-10-17), but the parent who
+    # checked them in was at church too (church_checkin; never fails this).
+    import church_checkin
+    church_checkin.count_kids_parent(biz, str(entry["id"]), found["adult"])
     # The kiosk prints the tags, so it needs names, rooms and allergies —
     # never who dropped them off or any flag beyond the allergy.
     for c in result["checkins"]:

@@ -783,7 +783,8 @@ def prayer_card() -> str:
 
 def render_home(biz: Dict[str, Any], site, *, me: Dict[str, Any], occasions, groups, library,
                 give_url: str, flash: str = "", live: Optional[Dict[str, Any]] = None,
-                reading: str = "", bible: str = "kjv", where: Optional[Tuple[str, int]] = None) -> str:
+                reading: str = "", bible: str = "kjv", where: Optional[Tuple[str, int]] = None,
+                checkin: str = "") -> str:
     """Home ("Member App, Top Tier", Kevin approved 2026-10-15): the
     greeting, the next gathering on the church's own photo (a Live now card
     while the church is live; the church itself when nothing is on the
@@ -826,6 +827,7 @@ e.textContent='';e.append(g+', ',em);}
     return _shell(biz, site, "Home", f"""
 <div class="mb-hello-wrap"><p class="mb-date" aria-hidden="true"></p>
 <h1 class="mb-hello" data-first="{_e(hello)}">Hi, <em>{_e(hello)}.</em></h1></div>
+{checkin}
 {hero}
 <nav class="mb-quick" aria-label="Quick ways in">{quick}</nav>
 {flash}
@@ -1238,6 +1240,13 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
     if sub.startswith("/my/kids/"):
         import member_spaces_kids as mk
         return await mk.serve(request, church, me, sub)
+    # Sunday check-in (member_portal_checkin.py): the code on the welcome
+    # slide opens the church's /here, which lands here.
+    if sub == "/my/here":
+        import church_checkin as cc
+        import member_portal_checkin as mpk
+        c = await asyncio.to_thread(cc.card, biz, me)
+        return _page(mpk.render_page(biz, site, request, me, c), 503 if c.get("state") == "error" else 200)
     if sub != "/my":
         return RedirectResponse("/my", status_code=303, headers=_SECURE_HEADERS)
     import live_router as lr
@@ -1265,9 +1274,20 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
             biz, site, me=me, occasions=occ, groups=groups, youth_posts=posts,
             reading=mpr.home_card(today, done), bible=bible, leader=(ctx.get("leader") or {}).get("youth"),
             flash=mpc._flash(request) or mpr._flash(request)))
+    # While Sunday check-in is open its card leads Home (church_checkin).
+    checkin = ""
+    import church_follow_up as cfu
+    if cfu.is_church(biz):
+        import church_checkin as cc
+        import member_portal_checkin as mpk
+        try:
+            checkin = mpk.home_card(await asyncio.to_thread(cc.card, biz, me), request)
+        except Exception:
+            logger.warning("member home: check-in card skipped", exc_info=True)
     return _page(render_home(biz, site, me=me, occasions=occ, groups=groups, library=lib,
                              give_url=give_url, flash=mpc._flash(request) or mpr._flash(request),
-                             live=live, reading=mpr.home_card(today, done), bible=bible, where=where))
+                             live=live, reading=mpr.home_card(today, done), bible=bible, where=where,
+                             checkin=checkin))
 
 
 # ─── POST ────────────────────────────────────────────────────────────

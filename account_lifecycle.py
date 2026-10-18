@@ -194,6 +194,9 @@ BUSINESS_CHILD_TABLES: List[str] = [
     # title, job and chain) and its settings name no contact.
     "church_follow_up_notes", "church_follow_ups", "church_leader_roles",
     "church_role_defs", "church_role_settings",
+    # Sunday check-in's service (day, time, how long it stays open): no
+    # contact, nothing it cites; a restored church keeps its Sunday.
+    "church_checkin_settings",
     "child_care_notes", "household_pickups", "children", "household_adults", "households",
     "chief_errand_events", "chief_errands",  # preserve history; events before errands
     "agent_assignments",      # before connected_agents (foreign key)

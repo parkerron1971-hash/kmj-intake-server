@@ -183,3 +183,4 @@ jobs:
           node __tests__/square_booking_sync_db.mjs
           node __tests__/church_leaders_db.mjs
           node __tests__/church_role_library_db.mjs
+          node __tests__/sunday_checkin_db.mjs

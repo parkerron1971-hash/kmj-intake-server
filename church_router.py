@@ -33,6 +33,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 import church_cards
+import church_checkin
 import church_follow_up
 import church_reads
 import church_roles
@@ -292,3 +293,33 @@ def cards(business_id: str = Query(...),
     if out is None:
         raise HTTPException(503, "Your cards couldn't be loaded. Try again in a moment.")
     return out
+
+
+# ─── Sunday check-in (church_checkin) ──────────────────────────────────
+
+class _Checkin(BaseModel):
+    enabled: Optional[bool] = None
+    weekday: Optional[int] = Field(None, ge=0, le=6)
+    start_time: Optional[str] = Field(None, max_length=5)
+    timezone: Optional[str] = Field(None, max_length=64)
+    opens_before_min: Optional[int] = Field(None, ge=0, le=240)
+    closes_after_min: Optional[int] = Field(None, ge=30, le=720)
+    title: Optional[str] = Field(None, max_length=80)
+
+
+@router.get("/checkin")
+def checkin_get(business_id: str = Query(...), biz: Dict[str, Any] = Depends(business_access())):
+    """Attendance's Sunday check-in panel: the church's service, the member
+    link for the welcome-slide code, and this week's count by how people
+    were counted. Any seat that reads attendance reads this."""
+    return church_checkin.overview(biz)
+
+
+@router.put("/checkin")
+def checkin_put(body: _Checkin, business_id: str = Query(...),
+                biz: Dict[str, Any] = Depends(business_access(CARE_MIN_ROLE)),
+                session: UserSession = Depends(sb_clients.authed_request)):
+    """Turn Sunday check-in on or off, and set the service it opens for."""
+    uid, _name = _who(session)
+    church_checkin.save_settings(biz, body.model_dump(exclude_unset=True), uid)
+    return church_checkin.overview(biz)
