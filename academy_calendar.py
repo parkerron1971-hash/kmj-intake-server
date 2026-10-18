@@ -102,7 +102,9 @@ def build_ics(title: str, token: str, sessions: List[Dict[str, Any]], items: Lis
             due = _when(it.get("due_at"))
             if not due:
                 continue
-            lines += _event(f"due-{it.get('id')}", due - timedelta(minutes=30), due, f"Due: {it.get('title') or 'Homework'}",
+            what = (f"Discussion closes: {it.get('title') or 'Discussion'}" if it.get("kind") == "discussion"
+                    else f"Due: {it.get('title') or 'Homework'}")
+            lines += _event(f"due-{it.get('id')}", due - timedelta(minutes=30), due, what,
                             now, description=(it.get("details") or "") + ("\n\n" if it.get("details") else "") + link, url=link)
     lines.append("END:VCALENDAR")
     return "\r\n".join(_fold(line) for line in lines) + "\r\n"
