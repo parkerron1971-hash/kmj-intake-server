@@ -137,6 +137,16 @@ def test_the_class_list_leads_with_the_program_and_says_when_each_meets(monkeypa
     _save("class-list.html", page)
 
 
+
+def test_a_church_with_nothing_published_yet_says_classes(monkeypatch):
+    _fake(monkeypatch, {"/businesses": [{"type": "ministry"}]})
+    page = asyncio.run(ps._serve_academy(None, BIZ, "/academy", standalone=False)).body.decode()
+    assert "New classes are on the way" in page and "New courses" not in page
+    _fake(monkeypatch, {"/businesses": [{"type": "coaching"}]})
+    page = asyncio.run(ps._serve_academy(None, BIZ, "/academy", standalone=False)).body.decode()
+    assert "New courses are on the way" in page
+
+
 def _save(name, html):
     out = os.environ.get("ACADEMY_SITE_OUT")
     if out:
