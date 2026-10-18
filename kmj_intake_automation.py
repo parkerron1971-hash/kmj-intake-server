@@ -330,6 +330,8 @@ app.include_router(academy_join_router)
 # A class on the student's own calendar (GET /academy-calendar/<class link>.ics).
 from academy_calendar import router as academy_calendar_router
 app.include_router(academy_calendar_router)
+from academy_work import router as academy_work_router
+app.include_router(academy_work_router)
 app.include_router(module_spec_router)
 app.include_router(module_check_router)
 # Phase C.1 — Bookings archetype
