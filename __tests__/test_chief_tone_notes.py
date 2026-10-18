@@ -259,6 +259,31 @@ def test_past_the_monthly_cap_notes_drop_and_flash_speaks(tone_env, monkeypatch)
     assert body["text"] == "Monica paid. [breathe] Two are out."
 
 
+def test_the_cap_reads_the_month_it_is_counting(monkeypatch):
+    # The real counter, not a stand-in: a "+00:00" month start reads as a
+    # space in the query string and PostgREST answers 400 (measured
+    # 2026-10-18), which would leave the cap at zero forever.
+    paths = []
+
+    def get(path, **k):
+        paths.append(path)
+        return [{"input_tokens": 1500}, {"input_tokens": 500}]
+    monkeypatch.setattr(wp.sb_clients, "sb_get_as_service", get)
+    monkeypatch.setattr(wp, "_TONE_CHARS_CACHE", {"at": 0.0, "month": "", "chars": 0})
+    assert wp._tone_chars_this_month() == 2000
+    assert "+" not in paths[0] and "T00:00:00Z" in paths[0]
+    assert "model=eq.inworld-tts-2&" in paths[0]
+
+
+def test_a_failed_read_keeps_the_last_count_instead_of_zero(monkeypatch):
+    month_key, _ = wp._month_bounds()
+    monkeypatch.setattr(wp, "_TONE_CHARS_CACHE", {"at": 0.0, "month": month_key, "chars": 250000})
+    monkeypatch.setattr(wp.sb_clients, "sb_get_as_service", lambda path, **k: None)
+    monkeypatch.setattr(wp, "INWORLD_TONE_MONTHLY_CHARS", 200000)
+    assert wp._tone_chars_this_month() == 250000
+    assert wp._tone_allowed() is False
+
+
 def test_every_other_voice_reads_the_words_alone(tone_env):
     _speak({"text": "[pleased] Monica paid. [breathe] [steady] Two are out.", "voice": "nova"})
     assert _openai_sent()[0]["json"]["input"] == "Monica paid. Two are out."

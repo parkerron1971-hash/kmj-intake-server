@@ -10,6 +10,7 @@ left_undone:
   - "CHIEF_TONE_NOTES is off. Kevin listens to the sample (artifact HnQSSu2p23i9vLLxUPNAH4) and says owner (his own calls first) or on (everyone with a featured voice)"
   - "The What's New entry goes in with the switch to on for everyone; nothing a practitioner sees or hears changes before then"
   - "The plain /agents/chief/chat endpoint never asks for notes: only the streaming endpoint can carry them to the voice"
+  - "FOUND, NOT FIXED: the ElevenLabs per-business monthly cap (_el_chars_this_month) builds its month start with \"+00:00\"; PostgREST reads the + as a space and answers 400 (measured 2026-10-18), the read is taken as zero rows, so that cap has never tripped. Fixing it starts enforcing a live limit, so it is Kevin's call"
 decisions:
   - "Chief writes five fixed notes ([pleased] [proud] [gentle] [steady] [breathe]); the speech proxy maps them to the Inworld steering Kevin picked by ear (\"say upbeat and pleased\", \"say upbeat and proud\", a breath with steady)"
   - "A note is never a word downstream: every Chief model answer is stripped in _call_claude (chief_tone.take); the streamer checks sentences without notes and sends them beside the words as a delta's `speech`"
@@ -42,6 +43,10 @@ Where the notes go:
   the tone it has.
 - `chief_voice_bridge` compares the preview and the main sentences by their
   words, and a note on a sentence it leaves out moves to the next one.
+- The cap counts with a "...T00:00:00Z" month start and treats a failed read
+  as a failed read (the last count stands), not as zero rows: the PR's review
+  caught the "+00:00" form 400ing, measured live (5,094 Flash characters this
+  month read back through the real function after the fix).
 - `whisper_proxy`: tone notes go to Inworld only. `_inworld_text` speaks each
   run of words through `normalize_for_speech` and puts the steering back
   between them; OpenAI and ElevenLabs get the words alone. A tone-model miss

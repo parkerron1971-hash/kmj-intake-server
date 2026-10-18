@@ -456,8 +456,14 @@ _TONE_CHARS_CACHE: dict = {"at": 0.0, "month": "", "chars": 0}
 def _tone_chars_this_month() -> int:
     """Characters every business spoke on the tone model this month, from
     the api_usage rows its pieces write. Cached like the ElevenLabs count,
-    bumped locally between reads; a failed read keeps the last count."""
-    month_key, month_start = _month_bounds()
+    bumped locally between reads; a failed read keeps the last count.
+
+    The month starts at "...T00:00:00Z", never "+00:00": a raw "+" in a
+    query string reads as a space, PostgREST answers 400, and a failed read
+    taken as no rows would let the cap never trip (measured 2026-10-18).
+    One row per spoken piece: the cap trips around a thousand rows, far
+    inside the row limit."""
+    month_key, _ = _month_bounds()
     now = time.time()
     c = _TONE_CHARS_CACHE
     if c["month"] == month_key and now - c["at"] < _EL_CHARS_TTL_S:
@@ -465,7 +471,9 @@ def _tone_chars_this_month() -> int:
     try:
         rows = sb_clients.sb_get_as_service(
             f"/api_usage?endpoint=eq./ai/tts&model=eq.{INWORLD_TONE_MODEL}"
-            f"&created_at=gte.{month_start}&select=input_tokens&limit=10000") or []
+            f"&created_at=gte.{month_key}-01T00:00:00Z&select=input_tokens&limit=10000")
+        if rows is None:
+            raise RuntimeError("api_usage read failed")
         chars = sum(int(r.get("input_tokens") or 0) for r in rows)
     except Exception as e:
         logger.warning(f"tone-note usage read failed (fail-open): {e}")
