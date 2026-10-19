@@ -106,7 +106,7 @@ def latest_card(lib: Optional[Dict[str, Any]], pal: Dict[str, str], *, heading: 
     from sermons_public import day_label
     when = day_label(s.get("preached_on"))
     sub = " · ".join(x for x in (sub, _e(when)) if x)
-    return f"""<section aria-labelledby="mb-latest">
+    return f"""<section class="h-violet" aria-labelledby="mb-latest">
   {ui.section("Latest message", "/my/sermons", "See all")}{hint}
   <a class="mb-mtile" href="{href}"><span class="mb-mtile-art">{_art(lib, s, pal, site, pool, used)}
   <span class="mb-play" aria-hidden="true">{ui.icon("play", 18)}</span>{ui.sample_tag() if sample else ''}</span>
@@ -148,8 +148,8 @@ def render_library(biz, site, who, lib: Optional[Dict[str, Any]], series_id: str
         # it, never an empty list.
         import member_portal_bible as mpb
         church = _e(biz.get("name") or "the church")
-        pic = photos.pick(pool, "sermons-coming")
-        art = ui.photo(pic) if pic else ui.gen_art("S")
+        pic, look = photos.choose(biz, "watch", pool)
+        art = ui.picture(pic, look, "messages", night=True)
         body = (f'{head}{live_card(live, next_occ)}'
                 f'<section class="mb-soon" style="margin-top:12px">{art}<div class="mb-soon-in"><span class="mb-kick">Coming soon</span>'
                 f'<h2>Messages are on the way</h2><p>When {church} posts a message, it shows up here, '
@@ -255,8 +255,9 @@ def render_sermon(biz, site, who, lib: Optional[Dict[str, Any]], sermon_id: str,
 def _art(lib: Dict[str, Any], s: Dict[str, Any], pal: Dict[str, str], site=None,
          pool: Optional[List[str]] = None, used: Optional[set] = None) -> str:
     """A message's picture: its series' own art from the church's site
-    (in colour), else one of the church's photos with the series name on
-    it, else a generated poster."""
+    (in colour), else a photo named for the series with the series name on
+    it, else a generated poster in the church's colour. Never a photo picked
+    by chance (Kevin, 2026-10-19)."""
     import member_app_ui as ui
     import member_app_photos as photos
     series = _titles(lib).get(str(s.get("series_id") or ""), "")
@@ -264,7 +265,7 @@ def _art(lib: Dict[str, Any], s: Dict[str, Any], pal: Dict[str, str], site=None,
     own = photos.series_art(site, series) if series else ""
     if own:
         return ui.art(own)
-    pic = photos.pick(pool or [], _key(lib, s), used or ()) if pool else ""
+    pic = photos.by_name(pool or [], name, used or ()) if pool else ""
     if pic:
         if used is not None:
             used.add(pic)

@@ -14,8 +14,17 @@ stock:
      photo.
 
 A church with neither gets the generated art (member_app_ui), so every
-screen still looks finished. The app shows every photo in black and
-white (CSS), so mixed photos read as one set.
+screen still looks finished.
+
+Which photo goes where (Kevin, 2026-10-19: "so that it's not random
+pictures and if they build an area they can have a default picture until
+they have replace it"): choose() takes the picture the church put on that
+spot (settings.member_portal.pictures, with its look: colour, black and
+white, or washed in the church colour), else one of its photos whose file
+name names the thing (supper-house.webp on Supper House), else nothing,
+and the screen draws the spot's default picture (member_app_ui.default_art).
+Home and sign-in fall back to the church's own best photo by name (hero,
+welcome). Nothing is picked by chance any more.
 
 The wordmark: a hand-built site's light assets/logo.* on a dark base, its
 dark logo-ink.* on a light one, measured once per file. Series art: a
@@ -138,6 +147,69 @@ def welcome(pool: List[str]) -> str:
         return found
     rest = [u for u in pool if u != hero(pool)]
     return rest[0] if rest else pool[0]
+
+
+LOOKS = ("colour", "bw", "church")
+# Words too common to say what a picture shows.
+_STOP = {"the", "and", "with", "for", "our", "your", "night", "day", "sunday", "monday", "tuesday", "wednesday",
+         "thursday", "friday", "saturday", "service", "meeting", "church", "this", "week", "time", "group"}
+
+
+def assigned(biz: Dict[str, Any], key: str) -> Optional[Dict[str, str]]:
+    """The picture the church put on one spot: {"url", "look"}, or
+    {"url": ""} when it chose the default picture there. None when it
+    hasn't chosen."""
+    cfg = (((biz or {}).get("settings") or {}).get("member_portal") or {})
+    pics = cfg.get("pictures") if isinstance(cfg, dict) else None
+    got = pics.get(key) if isinstance(pics, dict) else None
+    if not isinstance(got, dict):
+        return None
+    url = str(got.get("url") or "")
+    if url and not good_url(url):
+        return None
+    look = got.get("look") if got.get("look") in LOOKS else "colour"
+    return {"url": url, "look": look}
+
+
+def good_url(url: str) -> bool:
+    """A picture the app may show: https, or one of a hand-built site's own
+    assets."""
+    import re
+    return bool(re.fullmatch(r"https://[^\s<>\"']{1,500}", url)
+                or re.fullmatch(r"/public/site-assets/[\w.-]+/[\w.%-]+", url))
+
+
+def by_name(pool: List[str], title: Any, avoid: Any = ()) -> str:
+    """One of the church's photos whose file name says it shows this
+    (a "Supper House" card gets supper-house.webp). '' when none does."""
+    import re
+    skip = {avoid} if isinstance(avoid, str) else set(avoid or ())
+    words = [w for w in re.findall(r"[a-z]{4,}", str(title or "").lower()) if w not in _STOP]
+    if not words:
+        return ""
+    return _by_words([u for u in pool if u not in skip], tuple(words)) or ""
+
+
+def choose(biz: Dict[str, Any], key: str, pool: List[str], *, title: Any = "", words: Tuple[str, ...] = (),
+           fallback: str = "", look: str = "bw", used: Optional[set] = None) -> Tuple[str, str]:
+    """(url, look) for one spot on a screen; ('', '') means draw the spot's
+    default picture. The church's own choice wins, then a photo named for
+    the thing (its title, or `words`), then `fallback` (Home's and
+    sign-in's best photo). `used` keeps one photo off two cards of a
+    screen, except where the church chose it."""
+    got = assigned(biz, key)
+    if got is not None:
+        if got["url"] and used is not None:
+            used.add(got["url"])
+        return (got["url"], got["look"]) if got["url"] else ("", "")
+    taken = used or set()
+    pic = by_name(pool, title, taken) if title else ""
+    if not pic and words:
+        pic = _by_words([u for u in pool if u not in taken], words) or ""
+    pic = pic or fallback
+    if pic and used is not None:
+        used.add(pic)
+    return (pic, look) if pic else ("", "")
 
 
 def pick_for(pool: List[str], words: Tuple[str, ...], key: Any, avoid: Any = "") -> str:

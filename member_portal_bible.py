@@ -154,6 +154,19 @@ def continue_card(where: Optional[Tuple[str, int]], tr: str) -> str:
             f'{ui.icon("chevron", 18)}</a>')
 
 
+def continue_row(where: Optional[Tuple[str, int]], tr: str) -> str:
+    """The same, as a row in Home's Today card."""
+    import member_app_ui as ui
+    from member_portal import _e
+    code, ch = where if where else ("JOH", 1)
+    title = f"Keep reading {where_label(code, ch)}" if where else "Start with John 1"
+    sub = (f"Pick up where you stopped · {bt.TRANSLATIONS[tr]['short']}" if where
+           else "A good first book. About five minutes a chapter.")
+    return (f'<a class="mb-trow h-gold" href="/my/bible/{bt.slug(code)}/{ch}"><span class="mb-book" aria-hidden="true">'
+            f'{_e(bt.NAME[code][:1])}</span><span class="mb-trow-t"><small>{"Keep reading" if where else "Start here"}</small>'
+            f'<strong>{_e(title)}</strong><span>{_e(sub)}</span></span>{ui.icon("chevron", 18)}</a>')
+
+
 def _switch(tr: str, here: str) -> str:
     """KJV | WEB — a plain link per translation, back to this page."""
     from member_portal import _e

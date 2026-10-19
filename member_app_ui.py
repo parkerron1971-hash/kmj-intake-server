@@ -61,6 +61,31 @@ KIDS_BASE: Dict[str, Any] = {"bg": "#fff8ec", "s1": "#ffffff", "s2": "#fbefd9", 
 KIDS_ACCENT = "#f28c28"
 DEFAULT_BASE = "black"
 
+# The colour family (Kevin, 2026-10-19: "it only have two colors. this
+# experience need to have accent to it"; approved on the "Member App, Round
+# Three" canvas). The church's colour still owns every main button; each
+# part of the app wears one of these beside it: gold for the Word (Bible,
+# the verse, reading plans), teal for people (Connect, groups, serving),
+# violet for listening (Watch, messages, youth), coral for dates (events,
+# this week, kids). Each has a fill, the words on it, an ink that reads
+# on a dark base and one that reads on a light base, and a deep surface
+# for each. A family colour within FAMILY_NEAR of the church's own steps
+# aside and takes the church colour. settings.member_portal.colours =
+# "church" turns the family off (every hue is the church's).
+FAMILY: Dict[str, Dict[str, Any]] = {
+    "gold": {"hue": 42, "fill": "#E3A92B", "on": "#1A1205", "ink_d": "#F4C04E", "ink_l": "#8A5A00",
+             "deep_d": "#251C09", "deep_l": "#FBF1D9"},
+    "teal": {"hue": 172, "fill": "#17A894", "on": "#03211D", "ink_d": "#4FD8C4", "ink_l": "#0A7566",
+             "deep_d": "#08241F", "deep_l": "#DDF3EE"},
+    "violet": {"hue": 250, "fill": "#6D57E8", "on": "#FFFFFF", "ink_d": "#A99BFF", "ink_l": "#5440D0",
+               "deep_d": "#16122E", "deep_l": "#ECE9FF"},
+    "coral": {"hue": 20, "fill": "#F07A43", "on": "#2A1206", "ink_d": "#FF9D6B", "ink_l": "#A9471A",
+              "deep_d": "#2A1409", "deep_l": "#FDE8DD"},
+}
+FAMILY_NEAR = 35       # degrees of hue
+# Which family colour a page's tab wears (home and give wear the church's).
+TAB_HUE = {"watch": "violet", "bible": "gold", "connect": "teal"}
+
 TABS = (
     ("home", "/my", "Home", '<path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"/>'),
     ("watch", "/my/sermons", "Watch",
@@ -223,8 +248,8 @@ def palette(biz: Dict[str, Any], theme: Dict[str, Any], space: str = "church") -
         fill = _readable_on(fill, bg, False, 1.35)
     on_fill = "#FFFFFF" if contrast("#FFFFFF", fill) >= 4.5 else "#0B0B0C"
     accent = _readable_on(brand, bg, dark)
-    h = _hls(brand)[0]
-    return {
+    h, _l, s = _hls(brand)
+    out = {
         "base": name, "dark": dark, "bg": bg, "s1": b["s1"], "s2": b["s2"], "s3": b["s3"], "line": b["line"],
         "fg": b["fg"], "fg2": b["fg2"], "fg3": b["fg3"],
         # the older names, which other parts still read
@@ -232,7 +257,22 @@ def palette(biz: Dict[str, Any], theme: Dict[str, Any], space: str = "church") -
         "tint": brand, "glow": _hex(h, 0.42, 0.5), "ptint": _hex(h, 0.42, 0.3),
         "accent": accent, "on_accent": readable(accent), "fill": fill, "on_fill": on_fill,
         "error": "#FF6B5E" if dark else "#C5221F", "on_white": _readable_on(brand, "#FFFFFF", False),
+        # the church colour's own deep surface: one on this base, one always dark (under white words on art)
+        "deep": _hex(h, 0.10, min(s, 0.6)) if dark else _hex(h, 0.95, min(s, 0.75)),
+        "night": _hex(h, 0.10, min(s, 0.6)),
+        "lit": _readable_on(brand, "#000000", True),
     }
+    one = (((biz or {}).get("settings") or {}).get("member_portal") or {}).get("colours") == "church"
+    for slot, f in FAMILY.items():
+        near = abs((h * 360 - f["hue"] + 180) % 360 - 180) < FAMILY_NEAR and s >= 0.25
+        if one or near:
+            out.update({slot: fill, f"{slot}_on": on_fill, f"{slot}_ink": accent, f"{slot}_deep": out["deep"],
+                        f"{slot}_night": out["night"], f"{slot}_lit": out["lit"]})
+        else:
+            out.update({slot: f["fill"], f"{slot}_on": f["on"], f"{slot}_ink": f["ink_d" if dark else "ink_l"],
+                        f"{slot}_deep": f["deep_d" if dark else "deep_l"], f"{slot}_night": f["deep_d"],
+                        f"{slot}_lit": f["ink_d"]})
+    return out
 
 
 def accent_for(biz: Dict[str, Any], theme: Dict[str, Any]) -> str:
@@ -269,12 +309,71 @@ def poster(key: Any, pal: Dict[str, str], title: str, kick: str = "", *, tag: st
             f'{play_html}{kick_html}<{title_tag} class="mb-art-title"{tid}>{t}</{title_tag}></{tag}>')
 
 
-def photo(url: str, cls: str = "", *, eager: bool = False) -> str:
-    """One of the church's photos, in black and white (CSS). Decorative:
-    the card around it carries the words."""
+def photo(url: str, cls: str = "", *, eager: bool = False, look: str = "bw") -> str:
+    """One of the church's photos in the look the church picked for it:
+    colour, black and white, or washed in the church colour (CSS).
+    Decorative: the card around it carries the words."""
     load = 'fetchpriority="high"' if eager else 'loading="lazy"'
-    return (f'<span class="mb-ph {cls}" aria-hidden="true"><img src="{escape(url, quote=True)}" alt="" '
+    look = look if look in ("colour", "bw", "church") else "bw"
+    return (f'<span class="mb-ph is-{look} {cls}" aria-hidden="true"><img src="{escape(url, quote=True)}" alt="" '
             f'{load} decoding="async"></span>')
+
+
+# Default pictures (approved board 5, "Nothing random. Your photos, or your
+# colours."): one per kind of space, in its family colour, until the church
+# puts a photo there. kind: (family hue or "brand", icon paths, pattern).
+_RINGS = ''.join(f'<circle cx="250" cy="40" r="{r}"/>' for r in (40, 75, 110, 145, 180))
+_WAVES = ''.join(f'<path d="M0 {y} Q40 {y - 40} 80 {y} T160 {y} T240 {y} T320 {y}"/>' for y in (150, 125, 100, 75, 50))
+_LOW = ''.join(f'<circle cx="160" cy="230" r="{r}"/>' for r in (60, 100, 140, 180, 220))
+_LINKS = ''.join(f'<circle cx="{x}" cy="100" r="70"/>' for x in (160, 210, 260, 310))
+_DOTS = ''.join(f'<circle cx="{x}" cy="{y}" r="5" fill="currentColor" stroke="none"/>'
+                for y, xs in ((30, (190, 230, 270, 310)), (70, (210, 250, 290)), (110, (190, 230, 270, 310)),
+                              (150, (210, 250, 290)), (190, (230, 270, 310))) for x in xs)
+_RAYS = ''.join(f'<path d="M{a} 200 L{a + 180} 20"/>' for a in (80, 110, 140, 170, 200, 230))
+_ARCS = ''.join(f'<path d="M320 {y} A{r} {r} 0 0 0 {320 - r} 200"/>' for y, r in ((0, 200), (40, 160), (80, 120), (120, 80)))
+_GRID = ''.join(f'<rect x="{x}" y="{y}" width="36" height="36" rx="8"/>' for y in (20, 66, 112, 158) for x in (170, 216, 262))
+_LINES = ''.join(f'<path d="M160 {y} L320 {y}"/>' for y in (30, 60, 90, 120, 150, 180))
+_CROSS = '<path d="M240 30 L240 200M190 80 L290 80"/><circle cx="240" cy="80" r="60"/><circle cx="240" cy="80" r="100"/>'
+_HEARTS = ('<path d="M250 160c14-14 28-30 28-52a28 28 0 0 0-50-17 28 28 0 0 0-50 17c0 22 14 38 28 52l22 22z"/>'
+           '<path d="M250 190c22-22 44-46 44-80a44 44 0 0 0-72-34 44 44 0 0 0-72 34c0 34 22 58 44 80l28 28z"/>')
+_SIGNAL = ('<path d="M262 58a60 60 0 0 1 0 84M290 30a100 100 0 0 1 0 140M218 142a60 60 0 0 1 0-84'
+           'M190 170a100 100 0 0 1 0-140"/><circle cx="240" cy="100" r="10"/>')
+DEFAULT_KINDS: Dict[str, Tuple[str, str, str]] = {
+    "welcome": ("brand", '<path d="M10 9h4M12 7v5M14 22v-4a2 2 0 0 0-4 0v4M18 22V5.6a1 1 0 0 0-.4-.8l-5-3.6a1 1 0 0 0-1.2 0'
+                         'l-5 3.6a1 1 0 0 0-.4.8V22M6 22H4a2 2 0 0 1-2-2v-6a2 2 0 0 1 2-2h2M18 22h2a2 2 0 0 0 2-2v-6'
+                         'a2 2 0 0 0-2-2h-2"/>', _RINGS),
+    "worship": ("violet", '<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>', _WAVES),
+    "prayer": ("brand", ICONS["pray"], _LOW),
+    "groups": ("teal", ICONS["users"], _LINKS),
+    "kids": ("coral", '<circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2M9 9h.01M15 9h.01"/>', _DOTS),
+    "youth": ("violet", '<path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.07-2.14-.22-4.05 2-6 .5 2.5 2 4.9 4 '
+                        '6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.15.43-2.29 1-3a2.5 2.5 0 0 0 2.5 2.5z"/>', _RAYS),
+    "serve": ("teal", ICONS["heart"], _ARCS),
+    "events": ("coral", ICONS["calendar"], _GRID),
+    "classes": ("gold", '<path d="M22 10v6M2 10l10-5 10 5-10 5z"/><path d="M6 12v5c3 3 9 3 12 0v-5"/>', _LINES),
+    "word": ("gold", ICONS["book"], _CROSS),
+    "giving": ("brand", ICONS["heart"], _HEARTS),
+    "messages": ("violet", '<rect x="2.5" y="4" width="19" height="13" rx="3"/><path d="m10.5 8.3 4 2.2-4 2.2z"/>'
+                           '<path d="M8 21h8"/>', _SIGNAL),
+}
+
+
+def default_art(kind: str, cls: str = "", *, night: bool = False) -> str:
+    """A spot's default picture: its family colour, a quiet pattern and its
+    icon. `night` keeps it dark on a light base too, for white words on
+    top (a hero)."""
+    hue, ic, pat = DEFAULT_KINDS.get(kind) or DEFAULT_KINDS["welcome"]
+    return (f'<span class="mb-def h-{hue}{" is-night" if night else ""} {cls}" aria-hidden="true">'
+            f'<svg class="mb-def-pat" viewBox="0 0 320 200" preserveAspectRatio="xMidYMid slice" fill="none" '
+            f'stroke="currentColor" stroke-width="1.2" focusable="false">{pat}</svg>'
+            f'<svg class="mb-def-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" '
+            f'stroke-linecap="round" stroke-linejoin="round" focusable="false">{ic}</svg></span>')
+
+
+def picture(url: str, look: str, kind: str, cls: str = "", *, eager: bool = False, night: bool = False) -> str:
+    """The church's photo for a spot in its look, or the spot's default
+    picture when it has none (member_app_photos.choose)."""
+    return photo(url, cls, eager=eager, look=look) if url else default_art(kind, cls, night=night)
 
 
 def art(url: str, cls: str = "") -> str:
@@ -286,7 +385,7 @@ def art(url: str, cls: str = "") -> str:
 def titled_photo(url: str, title: str, cls: str = "") -> str:
     """A series with no art of its own: one of the church's photos with
     the series name set on it."""
-    return (f'<span class="mb-ph mb-titled {cls}" aria-hidden="true"><img src="{escape(url, quote=True)}" alt="" '
+    return (f'<span class="mb-ph is-bw mb-titled {cls}" aria-hidden="true"><img src="{escape(url, quote=True)}" alt="" '
             f'loading="lazy" decoding="async"><b>{escape(str(title or ""))}</b></span>')
 
 
@@ -321,16 +420,17 @@ def initials(name: Any) -> str:
     return ("".join(p[0] for p in parts[:2]) or "?").upper()
 
 
-def ring(n: int, of: int, size: int = 64) -> str:
-    """A progress ring, n of `of`, with n in the middle."""
+def ring(n: int, of: int, size: int = 64, *, label: Optional[str] = None) -> str:
+    """A progress ring, n of `of`, with n in the middle (or `label`, trusted
+    markup from the caller). Its colour is --ring where a card sets one."""
     r = size / 2 - 5
     c = 2 * 3.14159 * r
     done = max(0.0, min(1.0, n / of if of else 0))
     return (f'<span class="mb-ring" style="width:{size}px;height:{size}px" aria-hidden="true">'
             f'<svg width="{size}" height="{size}" viewBox="0 0 {size} {size}">'
             f'<circle cx="{size / 2}" cy="{size / 2}" r="{r}" fill="none" stroke="var(--s3)" stroke-width="6"/>'
-            f'<circle cx="{size / 2}" cy="{size / 2}" r="{r}" fill="none" stroke="var(--mb-fill)" stroke-width="6" '
-            f'stroke-linecap="round" stroke-dasharray="{c * done:.1f} {c:.1f}"/></svg><b>{int(n)}</b></span>')
+            f'<circle cx="{size / 2}" cy="{size / 2}" r="{r}" fill="none" stroke="var(--ring,var(--mb-fill))" stroke-width="6" '
+            f'stroke-linecap="round" stroke-dasharray="{c * done:.1f} {c:.1f}"/></svg><b>{label if label is not None else int(n)}</b></span>')
 
 
 def section(title: str, link: str = "", link_label: str = "", hid: str = "") -> str:
@@ -372,9 +472,11 @@ def nav(active: Optional[str], *, give: bool = True, space: str = "church", kids
         if key == "give" and not give:
             continue
         cur = ' aria-current="page"' if key == cur_tab else ""
-        items.append(f'<a class="mb-tab" href="{href}"{cur}><svg width="25" height="25" viewBox="0 0 24 24" fill="none" '
+        # each tab wears its family colour when it's the page you're on
+        items.append(f'<a class="mb-tab" href="{href}"{cur} data-hue="{TAB_HUE.get(key, "brand")}">'
+                     f'<i class="mb-tab-p"><svg width="25" height="25" viewBox="0 0 24 24" fill="none" '
                      f'stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" '
-                     f'aria-hidden="true" focusable="false">{paths}</svg><span>{label}</span></a>')
+                     f'aria-hidden="true" focusable="false">{paths}</svg></i><span>{label}</span></a>')
     return (f'<nav class="mb-nav mp-noprint" aria-label="Main" style="grid-template-columns:repeat({len(items)},1fr)">'
             f'{"".join(items)}</nav>')
 
@@ -975,12 +1077,120 @@ def css(biz: Dict[str, Any], theme: Dict[str, Any], space: str = "church") -> st
     tokens["youth_dot"] = member_spaces.youth_colour(biz)
     tokens["hot"] = palette({**biz, "settings": {**(biz.get("settings") or {}), "member_portal": {"base": "black"}}},
                             theme)["accent"]
-    out = _CSS.substitute(tokens) + _SPACES_CSS.substitute(tokens)
+    out = _CSS.substitute(tokens) + _FAMILY_CSS.substitute(tokens) + _SPACES_CSS.substitute(tokens)
     if space == "youth":
         out += _YOUTH_CSS.substitute(tokens)
     elif space == "kids":
         out += _KIDS_CSS.substitute(tokens)
     return out
+
+
+# Round three (Kevin approved 2026-10-19): the colour family, the three photo
+# looks, default pictures, the shorter Home top and the Today card. Laid over
+# the sheet above, so Youth and Kids still add their own last.
+_FAMILY_CSS = Template("""
+:root{--gold:$gold;--on-gold:$gold_on;--gold-ink:$gold_ink;--gold-deep:$gold_deep;--gold-night:$gold_night;--gold-lit:$gold_lit;
+--teal:$teal;--on-teal:$teal_on;--teal-ink:$teal_ink;--teal-deep:$teal_deep;--teal-night:$teal_night;--teal-lit:$teal_lit;
+--violet:$violet;--on-violet:$violet_on;--violet-ink:$violet_ink;--violet-deep:$violet_deep;--violet-night:$violet_night;--violet-lit:$violet_lit;
+--coral:$coral;--on-coral:$coral_on;--coral-ink:$coral_ink;--coral-deep:$coral_deep;--coral-night:$coral_night;--coral-lit:$coral_lit;
+--acc-deep:$deep;--acc-night:$night;--acc-lit:$lit;}
+.h-brand{--h:var(--acc-fill);--on-h:var(--on-acc);--h-ink:var(--acc);--h-deep:var(--acc-deep);--h-night:var(--acc-night);--h-lit:var(--acc-lit);}
+.h-gold{--h:var(--gold);--on-h:var(--on-gold);--h-ink:var(--gold-ink);--h-deep:var(--gold-deep);--h-night:var(--gold-night);--h-lit:var(--gold-lit);}
+.h-teal{--h:var(--teal);--on-h:var(--on-teal);--h-ink:var(--teal-ink);--h-deep:var(--teal-deep);--h-night:var(--teal-night);--h-lit:var(--teal-lit);}
+.h-violet{--h:var(--violet);--on-h:var(--on-violet);--h-ink:var(--violet-ink);--h-deep:var(--violet-deep);--h-night:var(--violet-night);--h-lit:var(--violet-lit);}
+.h-coral{--h:var(--coral);--on-h:var(--on-coral);--h-ink:var(--coral-ink);--h-deep:var(--coral-deep);--h-night:var(--coral-night);--h-lit:var(--coral-lit);}
+/* a page wears its tab's colour on its large title, its section links and its back link */
+.pg-watch{--pg:var(--violet-ink);}
+.pg-bible{--pg:var(--gold-ink);}
+.pg-connect{--pg:var(--teal-ink);}
+.mb-hello em,.mb-lt em{color:var(--pg,var(--acc));}
+.mb-sh a,.mp-sect a{color:var(--h-ink,var(--pg,var(--acc)));}
+.mb-back{color:var(--pg,var(--acc));}
+
+/* the tab bar: the page you're on in its colour, in a pill */
+.mb-tab-p{display:grid;place-items:center;width:54px;height:30px;border-radius:999px;font-style:normal;transition:background .2s ease;}
+.mb-tab[aria-current] .mb-tab-p{background:var(--acc-deep);}
+.mb-tab[aria-current][data-hue=violet]{color:var(--violet-ink);}
+.mb-tab[aria-current][data-hue=violet] .mb-tab-p{background:var(--violet-deep);}
+.mb-tab[aria-current][data-hue=gold]{color:var(--gold-ink);}
+.mb-tab[aria-current][data-hue=gold] .mb-tab-p{background:var(--gold-deep);}
+.mb-tab[aria-current][data-hue=teal]{color:var(--teal-ink);}
+.mb-tab[aria-current][data-hue=teal] .mb-tab-p{background:var(--teal-deep);}
+.mb-tab{gap:4px;}
+
+/* photos: in the look the church picked for each one */
+.mb-ph img{filter:none;}
+.mb-ph.is-bw img{filter:grayscale(1) contrast(1.06);}
+.mb-ph.is-church img{filter:grayscale(1) contrast(1.12) brightness(1.04);}
+.mb-ph.is-church::after{content:"";position:absolute;inset:0;background:var(--acc-fill);mix-blend-mode:color;opacity:.72;pointer-events:none;}
+
+/* default pictures: the spot's family colour, a quiet pattern, its icon */
+.mb-def{position:relative;display:block;overflow:hidden;background:var(--h-deep);color:var(--h-ink);}
+.mb-def.is-night{background:var(--h-night);color:var(--h-lit);}
+.mb-def-pat{position:absolute;inset:0;width:100%;height:100%;opacity:.42;}
+.mb-def-ic{position:absolute;right:16px;top:16px;width:40px;height:40px;}
+.mb-hero>.mb-def,.mb-bt>.mb-def,.mb-soon>.mb-def,.mb-offair>.mb-def{position:absolute;inset:0;z-index:-2;}
+.mb-ev-p>.mb-def,.mb-mtile-art>.mb-def,.mb-grp-pic>.mb-def,.mb-find-p>.mb-def,.mb-thumb>.mb-def{position:absolute;inset:0;}
+.mb-grp-pic .mb-def-ic,.mb-thumb .mb-def-ic{right:auto;top:50%;left:50%;width:28px;height:28px;transform:translate(-50%,-50%);}
+.mb-bt.is-def{color:var(--fg);}
+.mb-bt.is-def::after{display:none;}
+.mb-bt.is-def .mb-bt-t span{color:var(--fg2);}
+
+/* Home: the next gathering, shorter (Kevin: "the hero is a little to long") */
+.mb-hero{display:flex;flex-direction:column;justify-content:flex-end;aspect-ratio:auto;min-height:236px;}
+.mb-hero-in{position:relative;left:auto;right:auto;bottom:auto;padding:16px 18px 18px;}
+.mb-hero h2,.mb-hero h3{font-size:26px;margin:10px 0 4px;}
+.mb-hero p{font-size:14px;}
+.mb-hero-row{margin-top:12px;}
+.mb-hero .mp-go{min-height:42px;padding:0 18px;font-size:15px;}
+@media (min-width:600px){.mb-hero{aspect-ratio:auto;min-height:280px;}}
+
+/* quick ways in: each in its colour */
+.mb-quick a{height:88px;gap:8px;}
+.mb-quick .mb-qd{width:38px;height:38px;border-radius:50%;display:grid;place-items:center;background:var(--h-deep);color:var(--h-ink);font-style:normal;}
+.mb-quick a .mb-qd .mb-ic{color:inherit;width:20px;height:20px;}
+
+/* Today: the verse, the devotional and the reading, in one card */
+.mb-today{margin:0;border-radius:var(--r-lg);background:var(--s1);overflow:hidden;}
+.mb-verse{background:var(--gold-deep);}
+.mb-verse .mb-kick,.mb-verse-foot a{color:var(--gold-ink);}
+.mb-today .mb-verse{margin:0;border-radius:0;}
+.mb-trow{display:flex;align-items:center;gap:14px;padding:14px 16px;position:relative;color:var(--fg);text-decoration:none;}
+.mb-trow+.mb-trow::before,.mb-today form+.mb-trow::before{content:"";position:absolute;top:0;left:84px;right:0;height:.5px;background:var(--hair);}
+.mb-trow-t{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;}
+.mb-trow-t small{font-size:12px;font-weight:650;letter-spacing:.05em;text-transform:uppercase;color:var(--h-ink);}
+.mb-trow-t strong{font-size:16px;font-weight:650;letter-spacing:-.015em;line-height:1.25;}
+.mb-trow-t span{font-size:13px;color:var(--fg2);}
+.mb-trow>.mb-ic:last-child{color:var(--fg3);}
+.mb-trow .mb-ring{--ring:var(--h-ink);}
+.mb-trow .mb-ring b{font-size:14px;white-space:nowrap;letter-spacing:-.04em;}
+.mb-trow .mb-ring b small{font-size:10px;color:var(--fg3);font-weight:600;letter-spacing:0;}
+.mb-trow-wrap{display:flex;align-items:center;position:relative;}
+.mb-trow-wrap+.mb-trow-wrap::before,.mb-trow+.mb-trow-wrap::before,.mb-trow-wrap+.mb-trow::before{content:"";position:absolute;top:0;left:84px;right:0;height:.5px;background:var(--hair);}
+.mb-trow-wrap>.mb-trow{flex:1;min-width:0;padding-right:8px;}
+.mb-trow-wrap form{margin:0 14px 0 0;flex:none;}
+.mb-tick{width:40px;height:40px;border-radius:50%;display:grid;place-items:center;border:0;background:var(--s2);color:var(--fg2);cursor:pointer;}
+.mb-tick.is-done{background:var(--h);color:var(--on-h);cursor:default;}
+.mb-tick:focus-visible{outline:2px solid var(--focus);outline-offset:3px;}
+.mb-book{background:var(--gold);color:var(--on-gold);}
+.mb-trow .mb-book{width:44px;height:56px;font-size:19px;margin:0 5px;}
+.mb-reading .mb-ring,.mb-plan .mb-ring{--ring:var(--gold-ink);}
+
+/* the rest of Home */
+.mb-pray{background:var(--acc-deep);}
+.mb-pray .mb-pray-ic{background:var(--acc-fill);color:var(--on-acc);}
+.mb-datebox{background:var(--coral);color:var(--on-coral);}
+.mb-datebox small{color:inherit;opacity:.85;}
+.mb-ev-b .mb-mine{color:var(--teal-ink);}
+
+/* Watch, the Bible, Connect */
+.mb-livecard:not(.is-live) .mb-row-ic{background:var(--violet-deep);color:var(--violet-ink);}
+.mb-q h2{color:var(--violet-ink);}
+.mb-scrip{background:var(--gold-deep);color:var(--gold-ink);}
+.bb-n,.bb-ref{color:var(--gold-ink);}
+.bb-hl{background:color-mix(in srgb,var(--gold) 30%,transparent);box-shadow:0 0 0 3px color-mix(in srgb,var(--gold) 30%,transparent);}
+.mb-grp .mb-chip{background:var(--teal-deep);color:var(--teal-ink);}
+""")
 
 
 # The switcher (Church · Youth · Kids), for anyone with more than one space.

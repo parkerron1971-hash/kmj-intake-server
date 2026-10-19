@@ -468,21 +468,21 @@ def member_leave(business_id: str, me: Dict[str, Any], group_id: str) -> Tuple[b
 
 
 def _group_card(g: Dict[str, Any], action: str, pal: Dict[str, str], pool: Optional[List[str]] = None,
-                used: Optional[set] = None) -> str:
+                used: Optional[set] = None, biz: Optional[Dict[str, Any]] = None) -> str:
     """A group on Connect. Mine: a row (its photo, name, when it meets,
     what's on) with its actions under it. One to join: a card in the
-    "Find a group" row, with Join."""
+    "Find a group" row, with Join. Its picture is the one the church put
+    on it, or a photo named for it, else the groups default picture
+    (member_app_photos.choose)."""
     import member_app_ui as ui
     import member_app_photos as photos
     from member_portal import _e
     gid = _e(g["id"])
     title_id = f"mp-grp-{gid}"
-    pic = photos.pick(pool or [], g["id"], used or ())
-    if used is not None and pic:
-        used.add(pic)
+    pic, look = photos.choose(biz or {}, f"group:{g['id']}", pool or [], title=g.get("name") or "", used=used)
     import member_app_samples as samples
     sample = ui.sample_tag() if samples.is_sample(g) else ""
-    picture = ui.photo(pic) if pic else ui.poster(g["id"], pal, g.get("name") or "", tag="span")
+    picture = ui.picture(pic, look, "youth" if g.get("youth") else "groups")
     facts = " · ".join(_e(x) for x in (g.get("meets"), g.get("location")) if x)
     leaders = g.get("leaders") or []
     if action == "join":
@@ -553,8 +553,8 @@ def render_groups(biz, site, request: Request, data: Optional[Dict[str, List[Dic
     elif not data["mine"] and not data["open"]:
         # Nothing to belong to yet: a designed page, never an empty list.
         church = _e(biz.get("name") or "the church")
-        pic = photos.pick(pool, "groups-coming")
-        art = ui.photo(pic) if pic else ui.gen_art("G")
+        pic, look = photos.choose(biz, "groups", pool)
+        art = ui.picture(pic, look, "groups", night=True)
         body = (f'<section class="mb-soon">{art}<div class="mb-soon-in"><span class="mb-kick">Starting soon</span>'
                 f'<h2>Groups are coming</h2><p>Small groups at {church} will show up here: when they meet, who leads them, '
                 f'and a way to join.</p></div></section>'
@@ -564,9 +564,9 @@ def render_groups(biz, site, request: Request, data: Optional[Dict[str, List[Dic
                 f'and can reach out when a group starts.</p>')
     else:
         used: set = set()
-        mine = "".join(_group_card(g, "leave", pal, pool, used) for g in data["mine"]) or \
+        mine = "".join(_group_card(g, "leave", pal, pool, used, biz) for g in data["mine"]) or \
             '<p class="mp-muted">You\'re not in a group yet. Find one below.</p>'
-        open_ = "".join(_group_card(g, "join", pal, pool, used) for g in data["open"])
+        open_ = "".join(_group_card(g, "join", pal, pool, used, biz) for g in data["open"])
         open_ = (f'<div class="mb-rail">{open_}</div>' if open_ else
                  '<p class="mp-muted">No groups are taking new people right now. Ask the church office what\'s starting soon.</p>')
         import member_app_samples as samples
@@ -749,7 +749,7 @@ def _my_answer(o: Dict[str, Any]) -> str:
 
 
 def next_card(occasions: Optional[List[Dict[str, Any]]], today: Optional[date] = None, *,
-              pic: str = "", church: str = "") -> str:
+              pic: str = "", church: str = "", look: str = "church") -> str:
     """Home's lead: the first thing on the calendar, on the church's own
     photo — when, what, where, how many are coming (a number, never names),
     and their answer — or "I'm coming" right there. '' when nothing is
@@ -793,7 +793,7 @@ def next_card(occasions: Optional[List[Dict[str, Any]]], today: Optional[date] =
                 f'<button class="mp-go" type="submit" aria-describedby="{title_id}">I\'m coming</button></form>'
                 f'{said_no or going or details}')
     where = " · ".join(_e(x) for x in (o.get("date_label") or "", o.get("location") or "") if x)
-    art = ui.photo(pic, eager=True) if pic else ui.gen_art(church)
+    art = ui.picture(pic, look, "welcome", eager=True, night=True)
     return (f'<section class="mb-hero" aria-labelledby="{title_id}">{art}<div class="mb-hero-in">'
             f'<span class="mb-when">{_e(when)}</span>{sample}'
             f'<h2 id="{title_id}">{_e(o.get("title"))}</h2>{f"<p>{where}</p>" if where else ""}'
@@ -803,12 +803,13 @@ def next_card(occasions: Optional[List[Dict[str, Any]]], today: Optional[date] =
 def week_cards(occasions: Optional[List[Dict[str, Any]]],
                groups: Optional[Dict[str, List[Dict[str, Any]]]], *,
                pal: Optional[Dict[str, str]] = None, pool: Optional[List[str]] = None, avoid: str = "",
-               used: Optional[set] = None, skip: str = "") -> str:
+               used: Optional[set] = None, skip: str = "", biz: Optional[Dict[str, Any]] = None) -> str:
     """'This week', a row to swipe: what's on the calendar (the date on a
-    white tab; what this person said yes to, or serves at, in the accent),
-    then their groups and when they meet. Each card wears one of the
-    church's photos (or a poster). No faces or member names — a member
-    never sees who else is in a group, only its leaders' first names.
+    coral tab; what this person said yes to, or serves at, in teal), then
+    their groups and when they meet. Each card wears the picture the church
+    put on it (an event by its name, so a weekly one keeps it), a photo
+    named for it, or the default picture. No faces or member names — a
+    member never sees who else is in a group, only its leaders' first names.
     `skip` is the one Home already leads with. '' when there's nothing."""
     import member_app_ui as ui
     import member_app_photos as photos
@@ -820,12 +821,10 @@ def week_cards(occasions: Optional[List[Dict[str, Any]]],
         used.add(avoid)
     any_sample = False
 
-    def cov(key: str, title: str, item: Dict[str, Any], tab: str) -> str:
+    def cov(key: str, title: str, item: Dict[str, Any], tab: str, kind: str) -> str:
         nonlocal any_sample
-        pic = photos.pick(pool or [], key, used)
-        if pic:
-            used.add(pic)
-        art = ui.photo(pic) if pic else (ui.poster(key, pal, title) if pal else "")
+        pic, look = photos.choose(biz or {}, key, pool or [], title=title, used=used)
+        art = ui.picture(pic, look, kind)
         tag = ui.sample_tag() if samples.is_sample(item) else ""
         any_sample = any_sample or bool(tag)
         return f'<span class="mb-ev-p">{art}{tab}{tag}</span>'
@@ -838,7 +837,7 @@ def week_cards(occasions: Optional[List[Dict[str, Any]]],
         line = (f'<span class="mb-mine">{_e("You\'re coming" if answer == "Going" else answer)}</span>' if answer else
                 f'<span>{_e(o.get("location") or o.get("date_label") or "")}</span>')
         tab = f'<span class="mb-datebox" aria-hidden="true"><small>{d.strftime("%a").upper()}</small><b>{d.day}</b></span>'
-        cards.append(f'<a class="mb-ev" href="/my/events">{cov(str(o.get("entry_id")), o.get("title") or "", o, tab)}'
+        cards.append(f'<a class="mb-ev" href="/my/events">{cov(event_key(o.get("title")), o.get("title") or "", o, tab, "events")}'
                      f'<span class="mb-ev-b"><strong>{_e(o.get("title"))}</strong>'
                      f'<span class="mp-sr">{_e(o.get("date_label") or "")}</span>{line}</span></a>')
         if len(cards) == 6:
@@ -851,13 +850,21 @@ def week_cards(occasions: Optional[List[Dict[str, Any]]],
                 '<span class="mb-mine">You lead</span>' if g.get("role") == "leader" else
                 f'<span>{_e(g.get("meets") or g.get("location") or "")}</span>')
         led_html = f'<span>Led by {_e(led)}</span>' if led and g.get("role") != "leader" and not g.get("live") else ""
-        cards.append(f'<a class="mb-ev" href="{href}">{cov(str(g.get("id")), g.get("name") or "", g, tab)}'
+        gkey = "group:" + str(g.get("id"))
+        cards.append(f'<a class="mb-ev" href="{href}">{cov(gkey, g.get("name") or "", g, tab, "groups")}'
                      f'<span class="mb-ev-b"><strong>{_e(g.get("name"))}</strong>{line}{led_html}</span></a>')
     if not cards:
         return ""
     hint = ui.sample_hint(samples.WHERE["week"]) if any_sample else ""
-    return (f'<section aria-labelledby="mb-week">{ui.section("This week", "/my/events", "Calendar", hid="mb-week")}{hint}'
-            f'<div class="mb-rail">{"".join(cards)}</div></section>')
+    return (f'<section class="h-coral" aria-labelledby="mb-week">{ui.section("This week", "/my/events", "Calendar", hid="mb-week")}'
+            f'{hint}<div class="mb-rail">{"".join(cards)}</div></section>')
+
+
+def event_key(title: Any) -> str:
+    """A calendar event's picture spot, by its name: 'event:sunday-worship',
+    so a weekly gathering keeps the picture the church gave it."""
+    slug = re.sub(r"[^a-z0-9]+", "-", str(title or "").lower()).strip("-")[:60]
+    return f"event:{slug or 'untitled'}"
 
 
 def coming_up(occasions: Optional[List[Dict[str, Any]]], skip: str = "") -> str:
@@ -1064,22 +1071,22 @@ def connect_tabs(biz, current: str) -> str:
     return ui.segmented(tuple(tabs), current, "Connect")
 
 
-def live_hero(live: Dict[str, Any], pic: str, church: str) -> str:
+def live_hero(live: Dict[str, Any], pic: str, church: str, look: str = "church") -> str:
     """While the church is live: the one thing Home leads with."""
     import member_app_ui as ui
     from member_portal import _e
-    art = ui.photo(pic, eager=True) if pic else ui.gen_art(church)
+    art = ui.picture(pic, look, "worship", eager=True, night=True)
     return (f'<a class="mb-hero" href="/my/live" aria-label="Live now: {_e(live.get("title"))}">{art}<span class="mb-hero-in">'
             f'<span class="mb-when is-live"><span class="mb-live-dot" aria-hidden="true"></span>Live now</span>'
             f'<h2>{_e(live.get("title"))}</h2><p>Watch and chat with your church</p>'
             f'<span class="mb-hero-row"><span class="mp-go">Watch now</span></span></span></a>')
 
 
-def church_hero(pic: str, church: str) -> str:
+def church_hero(pic: str, church: str, look: str = "church") -> str:
     """Home's lead when nothing is on the calendar: the church itself."""
     import member_app_ui as ui
     from member_portal import _e
-    art = ui.photo(pic, eager=True) if pic else ui.gen_art(church)
+    art = ui.picture(pic, look, "welcome", eager=True, night=True)
     return (f'<section class="mb-hero" aria-label="{_e(church)}">{art}<div class="mb-hero-in">'
             f'<span class="mb-when">Welcome home</span><h2>{_e(church)}</h2>'
             f'<p>Messages, prayer and your church family, all week.</p>'
@@ -1116,8 +1123,29 @@ def clean_tiles(raw: Any) -> Optional[List[Dict[str, str]]]:
         if photo and not (re.fullmatch(r"https://[^\s<>\"']{1,500}", photo)
                           or re.fullmatch(r"/public/site-assets/[\w.-]+/[\w.-]+", photo)):
             photo = ""
-        out.append({"title": title, "sub": sub, "href": href, "photo": photo})
+        import member_app_photos as photos
+        import member_app_ui as ui
+        look = t.get("look") if t.get("look") in photos.LOOKS else "colour"
+        kind = t.get("kind") if t.get("kind") in ui.DEFAULT_KINDS else ""
+        out.append({"title": title, "sub": sub, "href": href, "photo": photo, "look": look, "kind": kind})
     return out
+
+
+def tile_kind(href: str) -> str:
+    """Which default picture a tile wears, by where it goes."""
+    for start, kind in (("/my/groups", "groups"), ("/my/events", "events"), ("/my/prayer", "prayer"),
+                        ("/my/sermons", "messages"), ("/my/live", "worship"), ("/watch", "worship"),
+                        ("/my/give", "giving"), ("/give", "giving"), ("/my/bible", "word"), ("/my/reading", "word"),
+                        ("/my/classes", "classes"), ("/my/kids", "kids"), ("/my/youth", "youth")):
+        if href == start or href.startswith(start + "/") or href.startswith(start + "?"):
+            return kind
+    return "welcome"
+
+
+def tile_key(title: str) -> str:
+    """A Home tile's picture spot, by its title."""
+    slug = re.sub(r"[^a-z0-9]+", "-", str(title or "").lower()).strip("-")[:60]
+    return f"tile:{slug or 'untitled'}"
 
 
 # Photo names that suit the default tiles.
@@ -1158,13 +1186,21 @@ def home_tiles(biz: Dict[str, Any], site, pool: Optional[List[str]] = None, used
     used = used if used is not None else set()
     out = []
     for t, shape in zip(tiles, shapes):
-        pic = t["photo"] or photos.pick_for(pool or [], _TILE_WORDS.get(t["href"], ()), "tile:" + t["title"], used)
+        key = tile_key(t["title"])
+        got = photos.assigned(biz, key)
+        if got is not None:
+            pic, look = got["url"], got["look"]
+        elif t.get("photo"):
+            pic, look = t["photo"], t.get("look") or "colour"
+        else:
+            pic, look = photos.choose(biz, key, pool or [], title=t["title"],
+                                      words=_TILE_WORDS.get(t["href"], ()), used=used)
         if pic:
             used.add(pic)
-        art = ui.photo(pic) if pic else ui.gen_art(t["title"])
+        art = ui.picture(pic, look, t.get("kind") or tile_kind(t["href"]))
         outside = t["href"].startswith("https://")
         attrs = ' target="_blank" rel="noopener"' if outside else ""
-        out.append(f'<a class="mb-bt {shape}" href="{_e(t["href"])}"{attrs}>{art}<span class="mb-bt-t">'
+        out.append(f'<a class="mb-bt {shape}{"" if pic else " is-def"}" href="{_e(t["href"])}"{attrs}>{art}<span class="mb-bt-t">'
                    f'<strong>{_e(t["title"])}{ui.icon("out", 15) if outside else ""}</strong>'
                    f'{f"<span>{_e(t["sub"])}</span>" if t["sub"] else ""}</span></a>')
     return (f'<section aria-labelledby="mb-at">{ui.section("At " + _short_name(biz.get("name") or ""), hid="mb-at")}'
