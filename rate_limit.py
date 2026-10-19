@@ -163,6 +163,9 @@ _LIMITS: Dict[str, Tuple[int, int]] = {
     "academy_work_upload": (int(os.environ.get("RL_ACADEMY_WORK_UPLOAD_PER_HOUR", "30")), 3600),
     "academy_work_upload_ip": (int(os.environ.get("RL_ACADEMY_WORK_UPLOAD_IP_PER_HOUR", "300")), 3600),
     "academy_work_file": (int(os.environ.get("RL_ACADEMY_WORK_FILE_PER_10MIN", "60")), 600),
+    # Chief sums up a live class's answers (academy_class_sum), per class
+    # night: 8 every ten minutes, counting only asks that reach the model.
+    "class_sum": (int(os.environ.get("RL_CLASS_SUM_PER_10MIN", "8")), 600),
 }
 _DEFAULT = (60, 60)
 
