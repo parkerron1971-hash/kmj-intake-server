@@ -146,6 +146,9 @@ EXPORT_EXCLUDED: Dict[str, str] = {
     # app tells them the church's staff can't read them, and an export
     # the church downloads would. Cascade on member and business deletion.
     "bible_marks":             "a member's own Bible highlights, private notes and saved verses; private to the member (staff can't read them), so never in the church's export; cascade on member/business deletion",
+    # The same for a member's devotional days: their journal is private.
+    "devotional_progress":     "a member's own devotional days: done, practices ticked and a private journal (staff can't read it), so never in the church's export; cascade on member/business/devotional deletion",
+    "member_plan_starts":      "the reading plans and devotionals a member started on their own day; keyed to devotional ids an import re-mints; cascade on member/business deletion",
     "mcp_oauth_refresh":       "user-keyed OAuth refresh tokens",
     "site_events":             "anonymous marketing-site traffic; no business_id by design",
     # The tamper-evident ledger has its own door. audit_log is exported
@@ -176,6 +179,9 @@ BUSINESS_CHILD_TABLES: List[str] = [
     "attendance", "attendance_headcounts",
     # Which days of the reading plan each member has read; before contacts.
     "reading_progress",
+    # The church's own devotionals, their days inside each row (members'
+    # days cascade with them; see EXPORT_EXCLUDED).
+    "devotionals",
     # Families and children: notes, pickups and children before their
     # household, and the household's adult links before contacts.
     "child_checkins",
@@ -484,6 +490,11 @@ async def _owned_businesses(client: httpx.AsyncClient, user_id: str) -> List[Dic
 _TABLE_SELECT = {"audit_log": LEDGER_EXPORT_SELECT}
 from media_library import PUBLIC_COLUMNS as MEDIA_EXPORT_COLUMNS
 _TABLE_SELECT['media_assets'] = MEDIA_EXPORT_COLUMNS
+# A devotional without its day count (the database works it out, and won't
+# take one) or its Listen files (made again from the words after a restore).
+_TABLE_SELECT['devotionals'] = (
+    'id,business_id,title,kind,author,about,practices,days,starts_on,voice,status,published_at,created_at,updated_at'
+)
 _TABLE_SELECT['connected_ai_devices'] = (
     'id,business_id,owner_id,provider,label,state,last_seen_at,expires_at,revoked_at,created_at'
 )

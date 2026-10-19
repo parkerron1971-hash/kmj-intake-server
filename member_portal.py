@@ -798,7 +798,7 @@ def prayer_card() -> str:
 def render_home(biz: Dict[str, Any], site, *, me: Dict[str, Any], occasions, groups, library,
                 give_url: str, flash: str = "", live: Optional[Dict[str, Any]] = None,
                 reading: str = "", bible: str = "kjv", where: Optional[Tuple[str, int]] = None,
-                checkin: str = "", edit: bool = False) -> str:
+                checkin: str = "", edit: bool = False, devotional: str = "") -> str:
     """Home ("Member App, Top Tier", Kevin approved 2026-10-15; round three
     2026-10-19): the greeting, the next gathering on the church's own photo
     (a Live now card while the church is live; the church itself when
@@ -813,7 +813,8 @@ def render_home(biz: Dict[str, Any], site, *, me: Dict[str, Any], occasions, gro
     The greeting and date are set by the phone's own clock (the server
     can't know the member's time of day); without script it reads
     "Hi, Ana.". `reading` is today's reading row (member_portal_reading
-    .today_row), '' when no plan is running. `edit` (the owner in a
+    .today_row), '' when no plan is running; `devotional` today's
+    devotional row (member_portal_devotionals.today_row). `edit` (the owner in a
     preview, or someone the owner named, at /my?edit=pictures) puts a
     Change button on each picture (member_app_pictures)."""
     import member_app_ui as ui
@@ -852,8 +853,8 @@ e.textContent='';e.append(g+', ',em);}
         if hero.startswith("<section"):
             hero = hero.replace('<div class="mb-hero-in">', ui.pin("/my/pictures/spot?key=home&amp;back=home")
                                 + '<div class="mb-hero-in">', 1)
-    today = (f'<section class="h-gold" aria-labelledby="mb-today-h">{ui.section("Today", "/my/bible", "Bible", hid="mb-today-h")}'
-             f'<div class="mb-today">{mpb.verse_card(bible)}{reading or mpb.continue_row(where, bible)}</div></section>')
+    today = (f'<section class="h-gold" aria-labelledby="mb-today-h">{ui.section("Today", "/my/bible/plans", "Plans", hid="mb-today-h")}'
+             f'<div class="mb-today">{mpb.verse_card(bible)}{devotional}{reading or mpb.continue_row(where, bible)}</div></section>')
     return _shell(biz, site, "Home", f"""
 {editbar}
 <div class="mb-hello-wrap"><p class="mb-date" aria-hidden="true"></p>
@@ -1195,11 +1196,13 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
     if sub in ("/my/pictures", "/my/pictures/spot"):
         if not can_picture:
             return RedirectResponse("/my", status_code=303, headers=_SECURE_HEADERS)
-        occ_all, groups_all = await asyncio.gather(asyncio.to_thread(mpc.upcoming_for, biz["id"], me),
-                                                   asyncio.to_thread(mapic.church_groups, biz["id"]))
+        import devotionals as devs_mod
+        occ_all, groups_all, devs_all = await asyncio.gather(asyncio.to_thread(mpc.upcoming_for, biz["id"], me),
+                                                             asyncio.to_thread(mapic.church_groups, biz["id"]),
+                                                             asyncio.to_thread(devs_mod.catalog, biz["id"]))
         if sub == "/my/pictures":
-            return _page(mapic.render_list(biz, site, request, me, occ_all, groups_all))
-        spot = mapic.find_spot(biz, str(request.query_params.get("key") or ""), occ_all, groups_all)
+            return _page(mapic.render_list(biz, site, request, me, occ_all, groups_all, devs_all))
+        spot = mapic.find_spot(biz, str(request.query_params.get("key") or ""), occ_all, groups_all, devs_all)
         if not spot:
             return RedirectResponse("/my/pictures", status_code=303, headers=_SECURE_HEADERS)
         return _page(mapic.render_spot(biz, site, request, me, spot))
@@ -1319,6 +1322,12 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
     done = (await asyncio.to_thread(rp.read_days, biz["id"], me["id"], rp.current(biz))
             if today else None)
     occ, groups, lib = fill(occ, "occasions"), fill(groups, "groups"), fill(lib, "library")
+    # Today's devotional, and a reading plan of the member's own when the
+    # church has none running (member_portal_devotionals).
+    import member_portal_devotionals as mpd
+    devotional, own, own_done = await mpd.home_extras(biz, me, preview=preview, church_reading=bool(today))
+    if own and not today:
+        today, done = own, own_done
     if preview and not today:
         today, done = samples.plan_today(), set()
     import member_portal_bible as mpb
@@ -1347,7 +1356,7 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
     return _page(render_home(biz, site, me=me, occasions=occ, groups=groups, library=lib,
                              give_url=give_url, flash=mpc._flash(request) or mpr._flash(request),
                              live=live, reading=mpr.today_row(today, done), bible=bible, where=where,
-                             checkin=checkin,
+                             checkin=checkin, devotional=devotional,
                              edit=can_picture and request.query_params.get("edit") == "pictures"))
 
 

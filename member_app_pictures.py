@@ -49,7 +49,7 @@ MAX_BYTES = 12 * 1024 * 1024
 LONGEST = 1600
 EDITORS_MAX = 25
 PICTURES_MAX = 300
-KEY_RE = re.compile(r"(home|signin|give|live|watch|groups|youth)|(tile|event):[a-z0-9-]{1,60}|group:[0-9a-f-]{36}")
+KEY_RE = re.compile(r"(home|signin|give|live|watch|groups|youth)|(tile|event):[a-z0-9-]{1,60}|(group|devotional):[0-9a-f-]{36}")
 
 # The spots every church has: key, what it's called, where it shows, its default picture.
 FIXED: Tuple[Tuple[str, str, str, str], ...] = (
@@ -142,9 +142,11 @@ def _label_events(occasions: Optional[List[Dict[str, Any]]]) -> List[Tuple[str, 
 
 
 def spots(biz: Dict[str, Any], occasions: Optional[List[Dict[str, Any]]],
-          groups: Optional[List[Dict[str, Any]]]) -> List[Dict[str, str]]:
+          groups: Optional[List[Dict[str, Any]]],
+          devotionals: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, str]]:
     """Every spot a picture can go: the fixed ones, Home's tiles, what's
-    coming on the calendar (by name) and the church's groups."""
+    coming on the calendar (by name), the church's groups and its
+    published devotionals (member_portal_devotionals)."""
     import member_portal_church as mpc
     from member_portal import portal_settings
     out = [{"key": k, "label": label, "where": where, "kind": kind, "group": "Across the app"}
@@ -161,6 +163,9 @@ def spots(biz: Dict[str, Any], occasions: Optional[List[Dict[str, Any]]],
     out += [{"key": f"group:{g['id']}", "label": str(g.get("name") or "A group"), "where": "Its card on Connect",
              "kind": "youth" if g.get("youth") else "groups", "group": "Groups"}
             for g in (groups or []) if g.get("id")][:40]
+    out += [{"key": f"devotional:{d['id']}", "label": str(d.get("title") or "A devotional"),
+             "where": "Its cover in the Bible tab and on each of its days", "kind": "word", "group": "Devotionals"}
+            for d in (devotionals or []) if d.get("id")][:40]
     return out
 
 
@@ -172,8 +177,8 @@ def church_groups(business_id: str) -> Optional[List[Dict[str, Any]]]:
     return rows if isinstance(rows, list) else None
 
 
-def find_spot(biz: Dict[str, Any], key: str, occasions, groups) -> Optional[Dict[str, str]]:
-    return next((s for s in spots(biz, occasions, groups) if s["key"] == key), None)
+def find_spot(biz: Dict[str, Any], key: str, occasions, groups, devotionals=None) -> Optional[Dict[str, str]]:
+    return next((s for s in spots(biz, occasions, groups, devotionals) if s["key"] == key), None)
 
 
 def current(biz: Dict[str, Any], site, pool: List[str], spot: Dict[str, str]) -> Tuple[str, str, str]:
@@ -203,6 +208,8 @@ def current(biz: Dict[str, Any], site, pool: List[str], spot: Dict[str, str]) ->
                                   words=mpc._TILE_WORDS.get(spot.get("href") or "", ()))
     elif key.startswith(("event:", "group:")):
         url, look = photos.choose(biz, key, pool, title=spot["label"])
+    elif key.startswith("devotional:"):
+        url, look = photos.choose(biz, key, pool, title=spot["label"], look="church")
     else:
         url, look = "", ""
     return url, look, "named" if url else "default"
@@ -403,14 +410,15 @@ def _thumb(url: str, look: str, kind: str) -> str:
     return ui.picture(url, look, kind, "pc-thumb-in")
 
 
-def render_list(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], occasions, groups) -> str:
+def render_list(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], occasions, groups,
+                devotionals=None) -> str:
     """Every spot, grouped, with what's on it now and Change."""
     import member_app_photos as photos
     import member_app_ui as ui
     from member_portal import _e, _shell
     pool = photos.photos(biz, site, limit=None)
     rows: Dict[str, List[str]] = {}
-    for s in spots(biz, occasions, groups):
+    for s in spots(biz, occasions, groups, devotionals):
         url, look, how = current(biz, site, pool, s)
         state = {"chosen": "Chosen" + {"bw": " · black and white", "church": " · church colour"}.get(look, " · colour"),
                  "named": "Matched by its name", "default": "Default picture"}[how]

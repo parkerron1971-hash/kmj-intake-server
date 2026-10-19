@@ -137,6 +137,9 @@ _LIMITS: Dict[str, Tuple[int, int]] = {
     # translation).
     "bible_mark": (int(os.environ.get("RL_BIBLE_MARK_PER_10MIN", "120")), 600),
     "bible_search": (int(os.environ.get("RL_BIBLE_SEARCH_PER_MIN", "20")), 60),
+    # Listen on a devotional's day (devotional_voice.py), per member: a day
+    # is read aloud once and kept, so this only bounds taps.
+    "devotional_listen": (int(os.environ.get("RL_DEVOTIONAL_LISTEN_PER_10MIN", "30")), 600),
     # Joining a free class from its public page (academy_join.py) mails a
     # class link, so the same shape as member sign-in: per network
     # (generous: a church lobby is one address), then per business +
