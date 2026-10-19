@@ -30,9 +30,9 @@ import sb_clients
 router = APIRouter(prefix="/academy-live", tags=["academy-live"])
 UUID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.I)
 ACTIONS = {"status", "start", "join", "end", "allow", "listen", "remove", "lower",
-           "post", "history", "moderate", "roster", "here", "mark", "missed"}
+           "post", "history", "moderate", "roster", "here", "mark", "missed", "sum"}
 CONTROLS = {"allow", "listen", "remove", "lower"}
-TEACHER_ACTIONS = {"start", "end", "allow", "listen", "remove", "lower", "moderate", "roster", "mark", "missed"}
+TEACHER_ACTIONS = {"start", "end", "allow", "listen", "remove", "lower", "moderate", "roster", "mark", "missed", "sum"}
 # Things a student may do while the class is live or its lobby is open.
 ROOM_ACTIONS = {"join", "post", "history", "here"}
 KINDS = {"chat", "question", "answer"}
@@ -111,6 +111,13 @@ def parse_input(raw):
         if not isinstance(on, bool):
             raise LiveError(400, "Say yes or no.")
         out.update(on=on)
+    if action == "sum":
+        slide, question = value.get("slide_id"), value.get("question")
+        if not isinstance(slide, str) or not SLIDE_RE.fullmatch(slide):
+            raise LiveError(400, "Choose the question on the screen.")
+        if question is not None and (not isinstance(question, str) or len(question) > 1000):
+            raise LiveError(400, "Choose the question on the screen.")
+        out.update(slide_id=slide, question=(question or "").strip())
     # Never trust client-supplied role, permission, room, or business fields.
     return out
 
@@ -397,6 +404,24 @@ async def ask_missed(client, input, access):
     return {"ok": True, "send_missed": bool(rows[0].get("send_missed")), "missed_sent_at": rows[0].get("missed_sent_at")}
 
 
+async def sum_answers(client, input, access):
+    """Chief sums up the answers to the question on the screen, for the
+    teacher alone (academy_class_sum): only answers still showing, never a
+    name."""
+    import academy_class_sum
+    import rate_limit
+    if not rate_limit.allow_strict("class_sum", access["session_id"]):
+        raise LiveError(429, "Give it a minute, then ask Chief again.")
+    rows = await db(client, "GET", "/academy_live_messages?select=body&session_id=eq." + access["session_id"]
+                    + "&kind=eq.answer&status=neq.hidden&slide_id=eq." + input["slide_id"]
+                    + "&order=created_at.desc&limit=" + str(academy_class_sum.MAX_ANSWERS)) or []
+    try:
+        return await academy_class_sum.summarize(client, access["business_id"], input["question"],
+                                                 [r.get("body") or "" for r in rows])
+    except academy_class_sum.SumError as e:
+        raise LiveError(e.status, e.message) from None
+
+
 async def run_action(client, input, authorization):
     action = input["action"]
     if action == "status":
@@ -423,6 +448,8 @@ async def run_action(client, input, authorization):
         return await mark_here(client, input, access)
     if action == "missed":
         return await ask_missed(client, input, access)
+    if action == "sum":
+        return await sum_answers(client, input, access)
     if action == "join":
         await db(client, "POST", "/rpc/academy_live_token_claim",
                  {"p_session": access["session_id"], "p_identity": access["identity"]})
