@@ -441,31 +441,40 @@ async def sum_answers(client, input, access):
 async def start_recording(client, live, access, *, asked=False):
     """Record the night from its start (academy_recordings): once, when the
     business's storage is connected and the class's owner left recording on
-    (or the teacher asked for it tonight). Never raises: a recording that
-    won't start never stops the class."""
+    (or the teacher asked for it tonight). The night is claimed before
+    LiveKit is asked, so two starts never make two files. Never raises: a
+    recording that won't start never stops the class."""
     import academy_recordings
     cfg = academy_recordings.settings()
     if not cfg:
         return None
-    path = "/academy_live_sessions?id=eq." + access["session_id"]
-    egress_id = None
+    sid = access["session_id"]
+    key = academy_recordings.object_key(access["business_id"], access["course_id"], sid)
+    claimed, egress_id = False, None
     try:
-        rows = await db(client, "GET", "/academy_live_sessions?select=recording_status,academy_courses(record_live)&id=eq."
-                        + access["session_id"]) or [{}]
-        status = rows[0].get("recording_status")
-        if status in ("recording", "ready"):
-            return status  # one recording a night
-        if not asked and (rows[0].get("academy_courses") or {}).get("record_live") is False:
-            return None
-        key = academy_recordings.object_key(access["business_id"], access["course_id"], access["session_id"])
+        if not asked:
+            course = await db(client, "GET", "/academy_courses?select=record_live&id=eq." + access["course_id"]) or [{}]
+            if course[0].get("record_live") is False:
+                return None
+        # Claim the night: only a night with no recording yet (or one that
+        # didn't start) becomes "recording", and only one caller gets it.
+        rows = await db(client, "PATCH", "/academy_live_sessions?id=eq." + sid
+                        + "&or=(recording_status.is.null,recording_status.eq.failed)&select=id", {
+                            "recording_status": "recording", "recording_egress_id": None, "recording_path": key,
+                            "recording_started_at": datetime.now(timezone.utc).isoformat(), "recording_ended_at": None,
+                            "recording_seconds": None, "recording_bytes": None})
+        if not rows:
+            now = await db(client, "GET", "/academy_live_sessions?select=recording_status&id=eq." + sid) or [{}]
+            return now[0].get("recording_status")  # already recording, or ready: one a night
+        claimed = True
         info = await live.egress.start_room_composite_egress(academy_recordings.egress_request(access["room_name"], key, cfg))
         egress_id = info.egress_id
-        await db(client, "PATCH", path, {
-            "recording_egress_id": egress_id, "recording_path": key, "recording_status": "recording",
-            "recording_started_at": datetime.now(timezone.utc).isoformat(), "recording_ended_at": None,
-            "recording_seconds": None, "recording_bytes": None}, prefer="return=minimal")
+        await db(client, "PATCH", "/academy_live_sessions?id=eq." + sid + "&recording_egress_id=is.null",
+                 {"recording_egress_id": egress_id}, prefer="return=minimal")
         return "recording"
     except Exception:
+        if not claimed:
+            return None  # nothing started: the teacher can press Record
         if egress_id:
             # Started but not written down: stop it rather than leave a file
             # nobody can find.
@@ -474,7 +483,8 @@ async def start_recording(client, live, access, *, asked=False):
             except Exception:
                 pass
         try:
-            await db(client, "PATCH", path, {"recording_status": "failed"}, prefer="return=minimal")
+            await db(client, "PATCH", "/academy_live_sessions?id=eq." + sid + "&recording_status=eq.recording",
+                     {"recording_status": "failed"}, prefer="return=minimal")
         except Exception:
             pass
         return "failed"
@@ -482,17 +492,31 @@ async def start_recording(client, live, access, *, asked=False):
 
 async def stop_recording(client, live, access):
     """The teacher's Stop recording: the file so far is kept and is ready
-    once LiveKit finishes it (egress_ended). It doesn't start again tonight."""
+    once LiveKit finishes it (egress_ended). It doesn't start again tonight.
+    When LiveKit says the recording is already over, the night is set from
+    what LiveKit knows of it, so it never stays "recording"."""
+    import academy_recordings
     rows = await db(client, "GET", "/academy_live_sessions?select=recording_egress_id,recording_status&id=eq."
                     + access["session_id"]) or [{}]
-    egress = rows[0].get("recording_egress_id")
-    if rows[0].get("recording_status") == "recording" and egress:
-        try:
-            await live.egress.stop_egress(api.StopEgressRequest(egress_id=egress))
-        except api.TwirpError as exc:
-            if exc.code not in ("not_found", "failed_precondition"):
-                raise
-    return {"ok": True, "recording": "stopping" if egress else rows[0].get("recording_status")}
+    egress, status = rows[0].get("recording_egress_id"), rows[0].get("recording_status")
+    if status != "recording" or not egress:
+        return {"ok": True, "recording": status}
+    try:
+        await live.egress.stop_egress(api.StopEgressRequest(egress_id=egress))
+        return {"ok": True, "recording": "stopping"}
+    except api.TwirpError as exc:
+        if exc.code not in ("not_found", "failed_precondition"):
+            raise
+    found = await live.egress.list_egress(api.ListEgressRequest(egress_id=egress))
+    items = list(getattr(found, "items", []) or [])
+    ended = items and items[0].status not in (api.EgressStatus.EGRESS_STARTING, api.EgressStatus.EGRESS_ACTIVE,
+                                              api.EgressStatus.EGRESS_ENDING)
+    fields = academy_recordings.ended_fields(items[0]) if ended else {"recording_status": "failed"}
+    if not items or ended:
+        await db(client, "PATCH", "/academy_live_sessions?recording_egress_id=eq." + egress + "&recording_status=eq.recording",
+                 fields, prefer="return=minimal")
+        return {"ok": True, "recording": fields["recording_status"]}
+    return {"ok": True, "recording": "stopping"}  # still finishing: egress_ended will say
 
 
 async def watch(client, access):
@@ -571,9 +595,12 @@ async def run_action(client, input, authorization):
         if action == "record":
             if not input["on"]:
                 return await stop_recording(client, live, access)
+            import academy_recordings
+            if not academy_recordings.configured():
+                raise LiveError(503, "Recording isn't set up for this business yet.")
             recording = await start_recording(client, live, access, asked=True)
             if recording is None:
-                raise LiveError(503, "Recording isn't set up for this business yet.")
+                raise LiveError(503, "The recording didn't start. Try again.")
             return {"ok": True, "recording": recording}
         if action == "end":
             await db(client, "PATCH", session_path + "&status=in.(live,scheduled)",

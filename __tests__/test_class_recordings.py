@@ -106,44 +106,64 @@ def egress(monkeypatch):
     return eg
 
 
-def _start_db(night):
-    """access, the PATCH live, access again, the token claim, then the night's recording read and its PATCH."""
-    return AsyncMock(side_effect=[access(teacher=True, status="scheduled"), [], access(teacher=True), None, [night], None])
+def _start_db(*after):
+    """access, the PATCH live, access again, the token claim, then the recording's own calls."""
+    return AsyncMock(side_effect=[access(teacher=True, status="scheduled"), [], access(teacher=True), None, *after])
 
 
 def test_a_class_is_recorded_from_its_start_into_the_bucket(client, monkeypatch, egress, storage):
-    db = _start_db({"recording_status": None, "academy_courses": {"record_live": True}})
+    db = _start_db([{"record_live": True}], [{"id": SID}], None)
     monkeypatch.setattr(live, "db", db)
     r = client.post("/academy-live", json=input("start"))
     assert r.status_code == 200 and r.json()["recording"] == "recording" and r.json()["participant_token"]
     req = egress.start_room_composite_egress.call_args.args[0]
     assert req.room_name == "class_" + SID and req.file_outputs[0].filepath == f"classes/{BIZ}/{COURSE}/{SID}.mp4"
-    saved = db.call_args_list[5].args[3]
-    assert saved["recording_egress_id"] == "EG_abc123" and saved["recording_status"] == "recording"
+    claim_path, claim = db.call_args_list[5].args[2], db.call_args_list[5].args[3]
+    assert "or=(recording_status.is.null,recording_status.eq.failed)" in claim_path, "the night is claimed before LiveKit is asked"
+    assert claim["recording_status"] == "recording" and claim["recording_path"] == f"classes/{BIZ}/{COURSE}/{SID}.mp4"
+    assert db.call_args_list[6].args[3] == {"recording_egress_id": "EG_abc123"}
+    assert "recording_egress_id=is.null" in db.call_args_list[6].args[2]
 
 
 def test_without_storage_nothing_is_recorded(client, monkeypatch, egress, no_storage):
-    db = AsyncMock(side_effect=[access(teacher=True, status="scheduled"), [], access(teacher=True), None])
+    db = _start_db()
     monkeypatch.setattr(live, "db", db)
     assert client.post("/academy-live", json=input("start")).json()["recording"] is None
     egress.start_room_composite_egress.assert_not_called()
 
 
 def test_the_owners_off_switch_holds(client, monkeypatch, egress, storage):
-    db = AsyncMock(side_effect=[access(teacher=True, status="scheduled"), [], access(teacher=True), None,
-                                [{"recording_status": None, "academy_courses": {"record_live": False}}]])
+    db = _start_db([{"record_live": False}])
     monkeypatch.setattr(live, "db", db)
     assert client.post("/academy-live", json=input("start")).json()["recording"] is None
     egress.start_room_composite_egress.assert_not_called()
 
 
+def test_two_starts_never_make_two_files(client, monkeypatch, egress, storage):
+    # Someone else claimed the night first: no second egress, their status.
+    db = _start_db([{"record_live": True}], [], [{"recording_status": "recording"}])
+    monkeypatch.setattr(live, "db", db)
+    assert client.post("/academy-live", json=input("start")).json()["recording"] == "recording"
+    egress.start_room_composite_egress.assert_not_called()
+
+
 def test_a_recording_that_wont_start_never_stops_the_class(client, monkeypatch, egress, storage):
     egress.start_room_composite_egress.side_effect = RuntimeError("egress unavailable")
-    db = _start_db({"recording_status": None, "academy_courses": {"record_live": True}})
+    db = _start_db([{"record_live": True}], [{"id": SID}], None)
     monkeypatch.setattr(live, "db", db)
     r = client.post("/academy-live", json=input("start"))
     assert r.status_code == 200 and r.json()["participant_token"] and r.json()["recording"] == "failed"
-    assert db.call_args_list[5].args[3] == {"recording_status": "failed"}
+    assert db.call_args_list[6].args[3] == {"recording_status": "failed"}
+    assert "recording_status=eq.recording" in db.call_args_list[6].args[2]
+
+
+def test_a_database_blip_before_the_claim_marks_nothing_failed(client, monkeypatch, egress, storage):
+    db = _start_db(live.LiveError(503, "Class data is unavailable."))
+    monkeypatch.setattr(live, "db", db)
+    r = client.post("/academy-live", json=input("start"))
+    assert r.status_code == 200 and r.json()["recording"] is None, "nothing started: the teacher can press Record"
+    assert db.await_count == 5, "no failed written over a night that may be recording"
+    egress.start_room_composite_egress.assert_not_called()
 
 
 def test_the_teacher_stops_it_and_it_never_starts_a_second_file(client, monkeypatch, egress, storage):
@@ -151,9 +171,28 @@ def test_the_teacher_stops_it_and_it_never_starts_a_second_file(client, monkeypa
     r = client.post("/academy-live", json=input("record", on=False))
     assert r.json() == {"ok": True, "recording": "stopping"}
     assert egress.stop_egress.call_args.args[0].egress_id == "EG_abc123"
-    monkeypatch.setattr(live, "db", AsyncMock(side_effect=[access(teacher=True), [{"recording_status": "ready", "academy_courses": {"record_live": True}}]]))
+    egress.stop_egress.reset_mock()
+    monkeypatch.setattr(live, "db", AsyncMock(side_effect=[access(teacher=True), [{"recording_egress_id": "EG_abc123", "recording_status": "ready"}]]))
+    assert client.post("/academy-live", json=input("record", on=False)).json() == {"ok": True, "recording": "ready"}
+    egress.stop_egress.assert_not_called()
+    monkeypatch.setattr(live, "db", AsyncMock(side_effect=[access(teacher=True), [], [{"recording_status": "ready"}]]))
     assert client.post("/academy-live", json=input("record", on=True)).json()["recording"] == "ready"
     egress.start_room_composite_egress.assert_not_called()
+
+
+def test_a_stop_livekit_says_is_over_never_leaves_the_night_recording(client, monkeypatch, egress, storage):
+    egress.stop_egress.side_effect = api.TwirpError("not_found", "egress not found", status=404)
+    done = SimpleNamespace(status=api.EgressStatus.EGRESS_COMPLETE, file_results=[SimpleNamespace(size=9_000_000, duration=600 * 1_000_000_000)])
+    egress.list_egress = AsyncMock(return_value=SimpleNamespace(items=[done]))
+    db = AsyncMock(side_effect=[access(teacher=True), [{"recording_egress_id": "EG_abc123", "recording_status": "recording"}], None])
+    monkeypatch.setattr(live, "db", db)
+    assert client.post("/academy-live", json=input("record", on=False)).json()["recording"] == "ready"
+    assert db.call_args_list[2].args[3]["recording_seconds"] == 600
+    egress.list_egress = AsyncMock(return_value=SimpleNamespace(items=[]))
+    db = AsyncMock(side_effect=[access(teacher=True), [{"recording_egress_id": "EG_abc123", "recording_status": "recording"}], None])
+    monkeypatch.setattr(live, "db", db)
+    assert client.post("/academy-live", json=input("record", on=False)).json()["recording"] == "failed"
+    assert db.call_args_list[2].args[3] == {"recording_status": "failed"}
 
 
 def test_a_student_cannot_stop_a_recording(client, monkeypatch, egress, storage):

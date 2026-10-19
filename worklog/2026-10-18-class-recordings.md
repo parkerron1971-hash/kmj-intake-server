@@ -15,6 +15,7 @@ decisions:
   - "A recording that won't start never stops the class (it says failed); one that started but couldn't be written down is stopped, not left as a file nobody can find"
   - "Watched by a link signed for an hour, only for an ended night with a ready file, only for a student of that class (their link) or its teaching team, the live room's own access check"
   - "LiveKit's egress_ended marks the night ready with its length and size, or failed; an empty file is no recording"
+  - "Review on #1501: the night is claimed (recording_status null or failed -> recording) before LiveKit is asked, so two starts never make two files; a database blip before the claim marks nothing failed (the teacher can press Record); a stop LiveKit says is already over sets the night from LiveKit's own record of it (ready or failed), never left recording"
   - "The signing is S3 SigV4 by hand (no boto3 on the server), checked against AWS's published example"
 related: [2026-10-18-class-nights-counted.md, 2026-10-18-class-sum.md]
 ---
@@ -26,5 +27,5 @@ related: [2026-10-18-class-nights-counted.md, 2026-10-18-class-sum.md]
   `egress_ended` marks the night.
 - `supabase/APPLY-2026-10-18-academy-recordings.sql` (+ MIGRATIONS):
   rehearsed with a rollback probe, applied, verified.
-- `__tests__/test_class_recordings.py` (17; the owner's off switch rehearsed
-  red); the status test in `test_academy_live.py` reads `recording`.
+- `__tests__/test_class_recordings.py` (20; the owner's off switch and the
+  claim rehearsed red); the status test in `test_academy_live.py` reads `recording`.
