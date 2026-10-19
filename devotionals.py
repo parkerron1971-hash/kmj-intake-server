@@ -279,6 +279,14 @@ def ready(dev: Dict[str, Any]) -> Optional[str]:
 # in quotes ending with its reference, the words, and "Pray:", "Do today:",
 # "Together:", "Journal:" lines. Nothing is saved; the team checks every
 # field before saving.
+# A real document, copied, is looser than that: a "date · name" byline,
+# section headings, tables (tab-separated), the practices as numbered
+# anchors that run on ("1. First Look (morning, before your phone). Your
+# first look…"), and after the last day a "Your Daily Checklist" and a closing
+# word. So the welcome is the first section's own words; the practices are a
+# checklist section's lines when there is one, else the anchors; and a day
+# ends at a heading once its Pray/Do today/Together/Journal lines have begun,
+# or where one of those labels comes round again.
 
 _DAY_HEAD = re.compile(r"^\s*(?:#+\s*)?day\s+(\d{1,2})\b\s*(?:[,(][^:–—\-]*?)?\s*(?:[:.–—\-]\s*(.*?))?\s*$", re.I)
 _LABELLED = (("pray", re.compile(r"^\s*(?:\*\*)?(?:pray|prayer)(?:\*\*)?\s*[:\-–—]\s*(?:\*\*)?\s*(.*)$", re.I)),
@@ -287,7 +295,16 @@ _LABELLED = (("pray", re.compile(r"^\s*(?:\*\*)?(?:pray|prayer)(?:\*\*)?\s*[:\-�
              ("journal", re.compile(r"^\s*(?:\*\*)?(?:journal|reflect|reflection|write)(?:\*\*)?\s*[:\-–—]\s*(?:\*\*)?\s*(.*)$", re.I)),
              ("scripture", re.compile(r"^\s*(?:\*\*)?(?:scripture|read|verse)(?:\*\*)?\s*[:\-–—]\s*(?:\*\*)?\s*(.*)$", re.I)))
 _QUOTED = re.compile(r'^\s*>?\s*["“](.+)["”]\s*[(\-–—]?\s*([1-3]?\s?[A-Za-z][A-Za-z .]+?\s\d{1,3}(?::\d{1,3}(?:\s?[-–]\s?\d{1,3})?)?)\)?\s*\.?\s*$')
-_PRACTICE = re.compile(r"^\s*(?:[-*•]\s*)?([A-Z][\w’']*(?:\s[A-Za-z][\w’']*){0,3})\s*\(([^)]{2,80})\)\s*\.?\s*$")
+_MARK = r"(?:[-*•◦▪]\s*|\[[ xX]?\]\s*|[☐☑✓✔]\s*|\d{1,2}[.)]\s+)"
+_NAME = r"(?:\*\*)?([A-Z][\w’']*(?:\s[A-Za-z][\w’']*){0,3})"
+_PRACTICE = re.compile(rf"^\s*{_MARK}?{_NAME}\s*\(([^)]{{2,80}})\)\s*\.?\s*(?:\*\*)?\s*$")
+# "1. First Look (morning, before your phone). Your first look goes to God…"
+_ANCHOR = re.compile(rf"^\s*{_MARK}?{_NAME}\s*\(([^)]{{2,80}})\)\.(?:\*\*)?\s+\S")
+# a checklist line: "First Look: verse, prayer, and one ask", "- [ ] One Thing – 25 minutes"
+_ITEM = re.compile(rf"^\s*{_MARK}?(?:\*\*)?([A-Z][^:–—]{{0,58}}?)(?:\*\*)?\s*(?::|\s[–—-]\s)\s*(.+)$")
+_LISTS = re.compile(r"\b(?:check\s?list|practices|daily rhythm|every day|each day)\b", re.I)
+_LABEL_ONLY = re.compile(r"^(?:pray|prayer|do today|together|journal|reflect|reflection|scripture|read|verse)$", re.I)
+_DAY_LABELS = ("pray", "act", "together", "journal")
 
 
 def _ref(text: str) -> str:
@@ -298,6 +315,88 @@ def _ref(text: str) -> str:
     return found[0][2].label() if found else ""
 
 
+def _heading(line: str) -> bool:
+    """A line that reads as a section's heading: "## Notes", or a short line
+    with no closing punctuation and no colon ("Your Daily Checklist", "A
+    closing charge", a "date · name" byline)."""
+    s = line.strip()
+    if s.startswith("#"):
+        return bool(s.lstrip("#").strip())
+    s = s.strip("*").strip()
+    if (not s or "\t" in s or ":" in s or len(s) > 70 or len(s.split()) > 10
+            or s[-1] in ".!?,;\"”’')" or not (s[0].isupper() or s[0].isdigit())):
+        return False
+    return not (_LABEL_ONLY.match(s) or re.match(_MARK, s) or _QUOTED.match(s))
+
+
+def _sections(lines: List[str]) -> List[Tuple[str, List[str]]]:
+    """[(heading, its lines)]; the lines before the first heading come under ''."""
+    out: List[Tuple[str, List[str]]] = [("", [])]
+    for ln in lines:
+        if _heading(ln):
+            out.append((ln.strip().lstrip("#").strip().strip("*").strip(), []))
+        else:
+            out[-1][1].append(ln)
+    return out
+
+
+def _practice(title: str, sub: str) -> Dict[str, str]:
+    sub = sub.strip().strip("*").strip()
+    return {"title": title.strip().strip("*").strip()[:60], "sub": (sub[:1].upper() + sub[1:])[:120]}
+
+
+def _anchor(line: str) -> Optional[Dict[str, str]]:
+    """'First Look (morning, before your phone).', on its own or running on."""
+    s = line.strip()
+    m = (_PRACTICE.match(s) if len(s) <= 90 else None) or _ANCHOR.match(s)
+    return _practice(m.group(1), m.group(2)) if m else None
+
+
+def _checklist(lines: List[str]) -> List[Dict[str, str]]:
+    """A checklist section's practices: "Title: what it is", "Title (when)",
+    or a listed "- Title"; its other words (an intro line) are left."""
+    out: List[Dict[str, str]] = []
+    for ln in lines:
+        s = ln.strip()
+        if not s:
+            continue
+        got = _anchor(s)
+        if not got:
+            m = _ITEM.match(s)
+            if m and len(m.group(1).split()) <= 5:
+                got = _practice(m.group(1), m.group(2))
+            elif re.match(_MARK, s) and len(s) <= 64 and s[-1] not in ".!?":
+                got = _practice(re.sub(rf"^{_MARK}", "", s), "")
+        if got and got["title"]:
+            out.append(got)
+        if len(out) >= PRACTICES_MAX:
+            break
+    return out
+
+
+def _day_over(day: Dict[str, str], rest: List[str]) -> bool:
+    """At a heading inside a day: the day is over once its Pray/Do today/
+    Together/Journal lines have begun and none still to come is new (so an
+    "Amen" on its own line doesn't end it before its "Do today")."""
+    if not any(day[k] for k in _DAY_LABELS):
+        return False
+    for ln in rest:
+        k = next((k for k, rx in _LABELLED if rx.match(ln.strip())), None)
+        if k in _DAY_LABELS and not day[k]:
+            return False
+    return True
+
+
+def _kind(raw: str) -> str:
+    """The title's "Focus Week" after a colon. A "7-Day Devotional" says
+    nothing the page doesn't (it reads "7-day devotional · <kind>")."""
+    k = raw.strip()
+    if not k or len(k) > 60:
+        return ""
+    k = re.sub(r"^(?:an?\s+)?\d{1,3}[\s-]?days?\b\s*", "", k, flags=re.I).strip()
+    return "" if k.lower() in ("devotional", "devotion", "devotional plan") else k
+
+
 def parse(text: str) -> Dict[str, Any]:
     """{title, kind, about, practices, days} read from pasted text; days is
     [] when no "Day 1" heading was found."""
@@ -305,24 +404,25 @@ def parse(text: str) -> Dict[str, Any]:
     heads = [i for i, ln in enumerate(lines) if _DAY_HEAD.match(ln)]
     pre = lines[:heads[0]] if heads else lines
     out: Dict[str, Any] = {"title": "", "kind": "", "about": "", "practices": [], "days": []}
-    paras: List[str] = []
-    for ln in pre:
-        s = ln.strip().lstrip("#").strip()
-        if not s:
-            paras.append("")
-            continue
-        if not out["title"]:
+    for i, ln in enumerate(pre):
+        s = ln.strip().lstrip("#").strip().strip("*").strip()
+        if s:
             title, _, kind = s.partition(":")
             out["title"] = title.strip()[:120]
-            if kind.strip() and len(kind.strip()) <= 60:
-                out["kind"] = kind.strip()
+            out["kind"] = _kind(kind)
+            pre = pre[i + 1:]
+            break
+    intro = _sections(pre)
+    # the welcome: the first section with words of its own (a byline or a heading alone has none)
+    for head, ls in intro:
+        if head and _LISTS.search(head):
             continue
-        m = _PRACTICE.match(s)
-        if m and len(out["practices"]) < PRACTICES_MAX and len(s) <= 90:
-            out["practices"].append({"title": m.group(1)[:60], "sub": m.group(2).strip()[:120].capitalize()})
-            continue
-        paras.append(s)
-    out["about"] = "\n\n".join(paragraphs("\n".join(paras)))[:LIMITS["about"]]
+        paras = paragraphs("\n".join(ln for ln in ls if "\t" not in ln and not _anchor(ln)))
+        if paras:
+            out["about"] = "\n\n".join(paras)[:LIMITS["about"]]
+            break
+    anchors = [p for p in (_anchor(ln) for ln in pre) if p][:PRACTICES_MAX]
+    after: List[str] = []    # what follows a day's own lines: a checklist, a closing word
     for at, start in enumerate(heads):
         end = heads[at + 1] if at + 1 < len(heads) else len(lines)
         m = _DAY_HEAD.match(lines[start])
@@ -330,13 +430,17 @@ def parse(text: str) -> Dict[str, Any]:
         day["title"] = (m.group(2) or "").strip().strip("*").strip()[:120]
         words: List[str] = []
         last = None
-        for ln in lines[start + 1:end]:
-            s = ln.strip()
+        for i in range(start + 1, end):
+            s = lines[i].strip()
             if not s:
                 words.append("")
                 last = None
                 continue
             hit = next(((k, rx.match(s)) for k, rx in _LABELLED if rx.match(s)), None)
+            if ((last is None and _heading(s) and _day_over(day, lines[i + 1:end]))
+                    or (hit and hit[0] in _DAY_LABELS and day[hit[0]])):
+                after.extend(lines[i:end])
+                break
             if hit:
                 k, mm = hit
                 value = mm.group(1).strip()
@@ -362,6 +466,9 @@ def parse(text: str) -> Dict[str, Any]:
         out["days"].append(day)
         if len(out["days"]) >= DAYS_MAX:
             break
+    listed = next((got for head, ls in intro + _sections(after)
+                   if head and _LISTS.search(head) for got in [_checklist(ls)] if got), [])
+    out["practices"] = listed or anchors
     return out
 
 
