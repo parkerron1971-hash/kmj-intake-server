@@ -168,10 +168,16 @@ def test_a_pasted_devotional_is_read_into_its_days():
 
 
 def _authed(role):
+    """A signed-in user with `role` on the church, through the one access
+    check (business_access.assert_access: no seat is a 404)."""
     from auth_supabase import AuthedUser
-    import business_users_router
+
+    def access(biz, user, min_role="viewer"):
+        if not role:
+            raise HTTPException(404, "business not found")
+        return role
     return AuthedUser(id="44444444-4444-4444-8444-444444444444", email="x@example.com", role="authenticated"), \
-        mock.patch.object(business_users_router, "role_of", lambda biz, uid: role)
+        mock.patch.object(dv, "assert_access", access)
 
 
 def test_only_the_owner_an_admin_or_a_manager_writes_devotionals():

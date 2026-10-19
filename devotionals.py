@@ -50,6 +50,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 import sb_clients
 from auth_supabase import AuthedUser, require_user
+from business_access import assert_access
 
 logger = logging.getLogger("devotionals")
 router = APIRouter(prefix="/church", tags=["church"])
@@ -374,13 +375,15 @@ def _uuid(value: Any, what: str = "business") -> str:
         raise HTTPException(400, f"That {what} id isn't valid")
 
 
-def _role(biz: str, user: AuthedUser) -> Optional[str]:
-    from business_users_router import role_of
-    return role_of(biz, str(user.id))
+def _seat(biz: str, user: AuthedUser) -> str:
+    """The caller's role on the church, through the one access check
+    (business_access.assert_access: 404 for no seat, 503 when it can't
+    run)."""
+    return assert_access(biz, user)
 
 
 def _staff(biz: str, user: AuthedUser) -> None:
-    if _role(biz, user) not in STAFF_ROLES:
+    if _seat(biz, user) not in STAFF_ROLES:
         raise HTTPException(403, "Only the owner, an admin or a manager writes devotionals")
 
 
@@ -410,21 +413,19 @@ def _get_or_404(biz: str, dev_id: str) -> Dict[str, Any]:
 @router.get("/devotionals")
 def list_devotionals(business_id: str, user: AuthedUser = Depends(require_user)):
     biz = _uuid(business_id)
-    if not _role(biz, user):
-        raise HTTPException(404, "business not found")
+    role = assert_access(biz, user)
     rows = catalog(biz, published=False)
     if rows is None:
         raise HTTPException(503, "The devotionals couldn't be read. Try again.")
     import devotional_voice as dv
     return {"devotionals": [_out(r) for r in rows], "voices": _voices(), "listen": dv.can_speak(),
-            "can_write": _role(biz, user) in STAFF_ROLES}
+            "can_write": role in STAFF_ROLES}
 
 
 @router.get("/devotionals/{devotional_id}")
 def get_devotional(devotional_id: str, business_id: str, user: AuthedUser = Depends(require_user)):
     biz = _uuid(business_id)
-    if not _role(biz, user):
-        raise HTTPException(404, "business not found")
+    assert_access(biz, user)
     return {"devotional": _out(_get_or_404(biz, _uuid(devotional_id, "devotional")), days=True)}
 
 
