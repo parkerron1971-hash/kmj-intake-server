@@ -30,9 +30,10 @@ import sb_clients
 router = APIRouter(prefix="/academy-live", tags=["academy-live"])
 UUID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.I)
 ACTIONS = {"status", "start", "join", "end", "allow", "listen", "remove", "lower",
-           "post", "history", "moderate", "roster", "here", "mark", "missed", "sum"}
+           "post", "history", "moderate", "roster", "here", "mark", "missed", "sum", "record", "watch"}
 CONTROLS = {"allow", "listen", "remove", "lower"}
-TEACHER_ACTIONS = {"start", "end", "allow", "listen", "remove", "lower", "moderate", "roster", "mark", "missed", "sum"}
+TEACHER_ACTIONS = {"start", "end", "allow", "listen", "remove", "lower", "moderate", "roster", "mark", "missed", "sum",
+                   "record"}
 # Things a student may do while the class is live or its lobby is open.
 ROOM_ACTIONS = {"join", "post", "history", "here"}
 KINDS = {"chat", "question", "answer"}
@@ -106,7 +107,7 @@ def parse_input(raw):
         if not isinstance(message, str) or not UUID_RE.fullmatch(message) or op not in MODERATION:
             raise LiveError(400, "Choose a message and what to do with it.")
         out.update(message_id=message, op=op)
-    if action in ("mark", "missed"):
+    if action in ("mark", "missed", "record"):
         on = value.get("on")
         if not isinstance(on, bool):
             raise LiveError(400, "Say yes or no.")
@@ -141,6 +142,12 @@ def lobby_open(access, now=None):
 def authorize(action, access):
     if action in TEACHER_ACTIONS and access.get("teacher") is not True:
         raise LiveError(403, "Only your teaching team can manage this class.")
+    # A recording is watched once the class is over, by its students and
+    # its teaching team alike.
+    if action == "watch":
+        if access["status"] != "ended":
+            raise LiveError(409, "The recording is ready after the class ends.")
+        return
     # Ending again closes leftover connections; the slides can be sent to
     # who missed a class after it is over.
     if action in ("end", "missed") and access["status"] == "ended":
@@ -151,6 +158,8 @@ def authorize(action, access):
         raise LiveError(409, "Your teacher has not started this class yet.")
     if action == "mark" and access["status"] != "live" and not lobby_open(access):
         raise LiveError(409, "Open the room first.")
+    if action == "record" and access["status"] != "live":
+        raise LiveError(409, "Start the class first.")
     if action in CONTROLS and access["status"] != "live":
         raise LiveError(409, "Start the class first.")
 
@@ -364,10 +373,13 @@ async def roster(client, access):
     # marked them), and whether the slides go to who isn't here.
     here = await db(client, "GET", "/academy_live_here?select=enrollment_id,marked_by&session_id=eq." + access["session_id"]) or []
     room = {h["enrollment_id"]: h["marked_by"] for h in here}
-    night = await db(client, "GET", "/academy_live_sessions?select=send_missed,missed_sent_at&id=eq." + access["session_id"]) or [{}]
+    night = await db(client, "GET", "/academy_live_sessions?select=send_missed,missed_sent_at,recording_status&id=eq."
+                     + access["session_id"]) or [{}]
+    import academy_recordings
     return {"students": [{"identity": "student_" + e["id"], "name": names.get(e.get("contact_id")) or "Student",
                           "room": room.get(e["id"])} for e in enrolled],
-            "send_missed": bool(night[0].get("send_missed")), "missed_sent_at": night[0].get("missed_sent_at")}
+            "send_missed": bool(night[0].get("send_missed")), "missed_sent_at": night[0].get("missed_sent_at"),
+            "recording": night[0].get("recording_status"), "can_record": academy_recordings.configured()}
 
 
 async def mark_here(client, input, access):
@@ -426,6 +438,76 @@ async def sum_answers(client, input, access):
         raise LiveError(e.status, e.message) from None
 
 
+async def start_recording(client, live, access, *, asked=False):
+    """Record the night from its start (academy_recordings): once, when the
+    business's storage is connected and the class's owner left recording on
+    (or the teacher asked for it tonight). Never raises: a recording that
+    won't start never stops the class."""
+    import academy_recordings
+    cfg = academy_recordings.settings()
+    if not cfg:
+        return None
+    path = "/academy_live_sessions?id=eq." + access["session_id"]
+    egress_id = None
+    try:
+        rows = await db(client, "GET", "/academy_live_sessions?select=recording_status,academy_courses(record_live)&id=eq."
+                        + access["session_id"]) or [{}]
+        status = rows[0].get("recording_status")
+        if status in ("recording", "ready"):
+            return status  # one recording a night
+        if not asked and (rows[0].get("academy_courses") or {}).get("record_live") is False:
+            return None
+        key = academy_recordings.object_key(access["business_id"], access["course_id"], access["session_id"])
+        info = await live.egress.start_room_composite_egress(academy_recordings.egress_request(access["room_name"], key, cfg))
+        egress_id = info.egress_id
+        await db(client, "PATCH", path, {
+            "recording_egress_id": egress_id, "recording_path": key, "recording_status": "recording",
+            "recording_started_at": datetime.now(timezone.utc).isoformat(), "recording_ended_at": None,
+            "recording_seconds": None, "recording_bytes": None}, prefer="return=minimal")
+        return "recording"
+    except Exception:
+        if egress_id:
+            # Started but not written down: stop it rather than leave a file
+            # nobody can find.
+            try:
+                await live.egress.stop_egress(api.StopEgressRequest(egress_id=egress_id))
+            except Exception:
+                pass
+        try:
+            await db(client, "PATCH", path, {"recording_status": "failed"}, prefer="return=minimal")
+        except Exception:
+            pass
+        return "failed"
+
+
+async def stop_recording(client, live, access):
+    """The teacher's Stop recording: the file so far is kept and is ready
+    once LiveKit finishes it (egress_ended). It doesn't start again tonight."""
+    rows = await db(client, "GET", "/academy_live_sessions?select=recording_egress_id,recording_status&id=eq."
+                    + access["session_id"]) or [{}]
+    egress = rows[0].get("recording_egress_id")
+    if rows[0].get("recording_status") == "recording" and egress:
+        try:
+            await live.egress.stop_egress(api.StopEgressRequest(egress_id=egress))
+        except api.TwirpError as exc:
+            if exc.code not in ("not_found", "failed_precondition"):
+                raise
+    return {"ok": True, "recording": "stopping" if egress else rows[0].get("recording_status")}
+
+
+async def watch(client, access):
+    """A link to an ended night's recording, signed for an hour: for a
+    student of the class (their link) or its teaching team, nobody else."""
+    import academy_recordings
+    cfg = academy_recordings.settings()
+    rows = await db(client, "GET", "/academy_live_sessions?select=recording_status,recording_path&id=eq."
+                    + access["session_id"]) or [{}]
+    if not cfg or rows[0].get("recording_status") != "ready" or not rows[0].get("recording_path"):
+        raise LiveError(404, "This class wasn't recorded.")
+    return {"url": academy_recordings.presign_get(rows[0]["recording_path"], cfg),
+            "expires_in": academy_recordings.LINK_TTL}
+
+
 async def run_action(client, input, authorization):
     action = input["action"]
     if action == "status":
@@ -435,7 +517,8 @@ async def run_action(client, input, authorization):
                 await db(client, "GET", "/academy_live_sessions?select=id&limit=0")
             except Exception:
                 ready = False
-        return {"configured": ready}
+        import academy_recordings
+        return {"configured": ready, "recording": ready and academy_recordings.configured()}
     if not configured():
         raise LiveError(503, "Live classes are being connected. Please try again later.")
     access = await access_for(client, input, authorization)
@@ -454,6 +537,8 @@ async def run_action(client, input, authorization):
         return await ask_missed(client, input, access)
     if action == "sum":
         return await sum_answers(client, input, access)
+    if action == "watch":
+        return await watch(client, access)
     if action == "join":
         await db(client, "POST", "/rpc/academy_live_token_claim",
                  {"p_session": access["session_id"], "p_identity": access["identity"]})
@@ -480,7 +565,16 @@ async def run_action(client, input, authorization):
                 raise
             await db(client, "POST", "/rpc/academy_live_token_claim",
                      {"p_session": access["session_id"], "p_identity": access["identity"]})
-            return mint_token(access)
+            # Recorded from the start (Kevin 2026-10-17), once storage is in.
+            recording = await start_recording(client, live, access)
+            return {**mint_token(access), "recording": recording}
+        if action == "record":
+            if not input["on"]:
+                return await stop_recording(client, live, access)
+            recording = await start_recording(client, live, access, asked=True)
+            if recording is None:
+                raise LiveError(503, "Recording isn't set up for this business yet.")
+            return {"ok": True, "recording": recording}
         if action == "end":
             await db(client, "PATCH", session_path + "&status=in.(live,scheduled)",
                      {"status": "ended", "ended_at": datetime.now(timezone.utc).isoformat()})
@@ -539,6 +633,16 @@ async def live_action(request: Request):
 
 
 async def record_event(client, event):
+    if event.event == "egress_ended":
+        # A class recording finished (academy_recordings): ready with its
+        # length and size, or failed.
+        info = event.egress_info
+        egress = getattr(info, "egress_id", "") or ""
+        if re.fullmatch(r"EG_[A-Za-z0-9]{1,64}", egress):
+            import academy_recordings
+            await db(client, "PATCH", "/academy_live_sessions?recording_egress_id=eq." + egress + "&recording_status=eq.recording",
+                     academy_recordings.ended_fields(info), prefer="return=minimal")
+        return
     room = event.room.name
     if not room.startswith("class_") or not UUID_RE.fullmatch(room[6:]):
         return
