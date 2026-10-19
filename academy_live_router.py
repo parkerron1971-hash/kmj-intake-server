@@ -406,18 +406,22 @@ async def ask_missed(client, input, access):
 
 async def sum_answers(client, input, access):
     """Chief sums up the answers to the question on the screen, for the
-    teacher alone (academy_class_sum): only answers still showing, never a
-    name."""
+    teacher alone (academy_class_sum): only answers showing in the room
+    (never one hidden, or held for the teacher), and only their words, never
+    who wrote them. Only an ask that reaches the model counts against the
+    night's limit."""
     import academy_class_sum
     import rate_limit
-    if not rate_limit.allow_strict("class_sum", access["session_id"]):
-        raise LiveError(429, "Give it a minute, then ask Chief again.")
     rows = await db(client, "GET", "/academy_live_messages?select=body&session_id=eq." + access["session_id"]
-                    + "&kind=eq.answer&status=neq.hidden&slide_id=eq." + input["slide_id"]
+                    + "&kind=eq.answer&status=eq.shown&slide_id=eq." + input["slide_id"]
                     + "&order=created_at.desc&limit=" + str(academy_class_sum.MAX_ANSWERS)) or []
+    answers = [r.get("body") or "" for r in rows]
+    if len([a for a in answers if a.strip()]) < academy_class_sum.MIN_ANSWERS:
+        raise LiveError(409, "Wait for a few more answers first.")
+    if not await asyncio.to_thread(rate_limit.allow_strict, "class_sum", access["session_id"]):
+        raise LiveError(429, "Give it a few minutes, then ask Chief again.")
     try:
-        return await academy_class_sum.summarize(client, access["business_id"], input["question"],
-                                                 [r.get("body") or "" for r in rows])
+        return await academy_class_sum.summarize(client, access["business_id"], input["question"], answers)
     except academy_class_sum.SumError as e:
         raise LiveError(e.status, e.message) from None
 

@@ -86,7 +86,7 @@ def test_over_budget_or_a_failed_call_says_so(model, monkeypatch):
     assert e.value.status == 502, "a cut-off summary is never shown"
 
 
-def test_the_teacher_asks_and_only_the_answers_on_this_slide_still_showing_go(client, monkeypatch, model):
+def test_the_teacher_asks_and_only_the_words_of_answers_showing_on_this_slide_go(client, monkeypatch, model):
     import rate_limit
     monkeypatch.setattr(rate_limit, "allow_strict", lambda b, k, **kw: True)
     db = AsyncMock(side_effect=[access(teacher=True), [{"body": a} for a in ANSWERS]])
@@ -94,7 +94,11 @@ def test_the_teacher_asks_and_only_the_answers_on_this_slide_still_showing_go(cl
     r = client.post("/academy-live", json=input("sum", slide_id="s-q3", question="Which is hardest?"))
     assert r.status_code == 200 and r.json()["count"] == 4
     path = db.call_args_list[1].args[2]
-    assert "session_id=eq." + SID in path and "kind=eq.answer" in path and "status=neq.hidden" in path and "slide_id=eq.s-q3" in path
+    assert "session_id=eq." + SID in path and "kind=eq.answer" in path and "slide_id=eq.s-q3" in path
+    assert "status=eq.shown" in path, "never a hidden answer, nor one held for the teacher"
+    assert "select=body&" in path, "only the words: who wrote them never reaches the model"
+    sent = model["calls"][0][0]["messages"][0]["content"]
+    assert "display_name" not in sent and "student_" not in sent
 
 
 def test_a_student_cannot_ask_and_a_bad_slide_is_refused(client, monkeypatch, model):
@@ -109,9 +113,14 @@ def test_a_student_cannot_ask_and_a_bad_slide_is_refused(client, monkeypatch, mo
     assert model["calls"] == []
 
 
-def test_too_many_asks_wait(client, monkeypatch, model):
+def test_too_many_asks_wait_and_an_early_ask_costs_nothing(client, monkeypatch, model):
     import rate_limit
-    monkeypatch.setattr(rate_limit, "allow_strict", lambda b, k, **kw: b != "class_sum")
-    monkeypatch.setattr(live, "db", AsyncMock(return_value=access(teacher=True)))
+    charged = []
+    monkeypatch.setattr(rate_limit, "allow_strict", lambda b, k, **kw: charged.append(b) or b != "class_sum")
+    monkeypatch.setattr(live, "db", AsyncMock(side_effect=[access(teacher=True), [{"body": a} for a in ANSWERS]]))
     assert client.post("/academy-live", json=input("sum", slide_id="s-q3")).status_code == 429
     assert model["calls"] == []
+    charged.clear()
+    monkeypatch.setattr(live, "db", AsyncMock(side_effect=[access(teacher=True), [{"body": a} for a in ANSWERS[:2]]]))
+    r = client.post("/academy-live", json=input("sum", slide_id="s-q3"))
+    assert r.status_code == 409 and "class_sum" not in charged, "two answers in: refused before the limit is charged"
