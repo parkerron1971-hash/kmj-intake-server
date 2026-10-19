@@ -194,8 +194,11 @@ def _verdict(raw: str) -> str:
     return v
 
 
-async def screen(business_id: str, webp: bytes) -> str:
-    """'ok' | 'no'. Raises ScreenUnavailable."""
+async def screen(business_id: str, webp: bytes, *, policy: str = POLICY,
+                 question: str = "Is this picture ok as a profile photo?",
+                 task: str = "member_photo_screen") -> str:
+    """'ok' | 'no'. Raises ScreenUnavailable. The church's own app pictures
+    (member_app_pictures) pass their own policy and question."""
     import httpx
     import chief_models
     import llm_call
@@ -206,15 +209,15 @@ async def screen(business_id: str, webp: bytes) -> str:
         "model": MODEL, "max_tokens": 20,
         **model_ladder.sampling_kwargs(MODEL, 0),
         **chief_models.quick_call_kwargs(MODEL),
-        "system": [{"type": "text", "text": POLICY, "cache_control": {"type": "ephemeral"}}],
+        "system": [{"type": "text", "text": policy, "cache_control": {"type": "ephemeral"}}],
         "messages": [{"role": "user", "content": [
             {"type": "image", "source": {"type": "base64", "media_type": "image/webp",
                                          "data": base64.b64encode(webp).decode("ascii")}},
-            {"type": "text", "text": "Is this picture ok as a profile photo?"}]}],
+            {"type": "text", "text": question}]}],
     }
     try:
         async with httpx.AsyncClient() as client:
-            resp = await llm_call.apost(client, payload, timeout=15, task="member_photo_screen",
+            resp = await llm_call.apost(client, payload, timeout=15, task=task,
                                         business_id=str(business_id))
         if resp.status_code != 200:
             raise ScreenUnavailable(f"http {resp.status_code}")

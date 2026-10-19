@@ -49,7 +49,9 @@ PHOTO_EXT = (".webp", ".jpg", ".jpeg", ".png")
 NOT_PHOTOS = ("logo", "mark", "icon", "favicon", "og-", "apple-touch", "badge", "qr",
               "series", "flyer", "poster", "banner", "graphic")
 MIN_PHOTO_BYTES = 25_000
-MAX_PHOTOS = 24
+# Photos are matched to spots by name now, never at random, so the pool is
+# wide enough to hold a church's whole photo set (Love City's has 36).
+MAX_PHOTOS = 80
 # Words in a file name that make a good Home photo (the whole church in
 # the room), and a good sign-in photo (people together).
 HERO_WORDS = ("service", "worship", "sanctuary", "congregation", "stage", "hero", "church")

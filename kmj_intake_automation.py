@@ -384,6 +384,11 @@ app.include_router(member_portal_checkin_router)
 # staff view. BEFORE public_site_router.
 from member_photos import router as member_photos_router
 app.include_router(member_photos_router)
+# The app's own pictures (member_app_pictures.py): POST /my/pictures, for
+# the owner (from a preview) and the people the owner named. BEFORE
+# public_site_router.
+from member_app_pictures import router as member_app_pictures_router
+app.include_router(member_app_pictures_router)
 # Church, Youth and Kids spaces (member_spaces.py): leaders' posts and the
 # office's leader approvals. BEFORE public_site_router.
 from member_spaces import router as member_spaces_router
