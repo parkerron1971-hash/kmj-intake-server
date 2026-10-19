@@ -72,12 +72,13 @@ def test_oversized_body(client):
 def test_status_requires_schema_and_configuration(client, monkeypatch):
     monkeypatch.setattr(live, "db", AsyncMock(return_value=[]))
     response = client.post("/academy-live", json={"action": "status"})
-    assert response.json() == {"configured": True}
+    # "recording": the business's storage is connected (academy_recordings); none here.
+    assert response.json() == {"configured": True, "recording": False}
     assert response.headers["cache-control"] == "no-store"
     monkeypatch.setattr(live, "db", AsyncMock(side_effect=live.LiveError(503, "Missing migration")))
-    assert client.post("/academy-live", json={"action": "status"}).json() == {"configured": False}
+    assert client.post("/academy-live", json={"action": "status"}).json() == {"configured": False, "recording": False}
     monkeypatch.delenv("LIVEKIT_API_SECRET")
-    assert client.post("/academy-live", json={"action": "status"}).json() == {"configured": False}
+    assert client.post("/academy-live", json={"action": "status"}).json() == {"configured": False, "recording": False}
     assert client.post("/academy-live/webhook", content="{}").status_code == 503
 
 
