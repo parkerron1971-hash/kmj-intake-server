@@ -72,6 +72,30 @@ def home_card(today: Optional[Dict[str, Any]], done: Optional[set]) -> str:
 </section>"""
 
 
+def today_row(today: Optional[Dict[str, Any]], done: Optional[set]) -> str:
+    """Today's reading as a row in Home's Today card: the plan's ring, the
+    chapters (they open the reading), the plan, and a round button that
+    marks it read. '' when no plan is running."""
+    import member_app_ui as ui
+    import member_app_samples as samples
+    from member_portal import _e
+    if not today:
+        return ""
+    read = bool(done) and today["day"] in done
+    tag = ui.sample_tag() if samples.is_sample(today) else ""
+    ring = ui.ring(today["day"], today["of"], 54, label=f'{today["day"]}<small>/{today["of"]}</small>')
+    if read:
+        tick = f'<span class="mb-tick is-done" role="img" aria-label="Read today">{ui.icon("check", 18)}</span>'
+    else:
+        tick = (f'<form method="post" action="/my/reading"><input type="hidden" name="day" value="{today["day"]}">'
+                f'<input type="hidden" name="read" value="yes"><input type="hidden" name="back" value="/my">'
+                f'<button class="mb-tick" type="submit" aria-label="Mark today&#x27;s reading as read">'
+                f'{ui.icon("check", 18)}</button></form>')
+    return (f'<div class="mb-trow-wrap h-gold"><a class="mb-trow" href="{_e(today["href"])}">{ring}'
+            f'<span class="mb-trow-t"><small>Reading plan · Day {today["day"]}{tag}</small>'
+            f'<strong>{_e(today["label"])}</strong><span>{_e(today["title"])}</span></span></a>{tick}</div>')
+
+
 def render_page(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any],
                 done: Optional[set], today: Optional[date] = None) -> str:
     import member_app_ui as ui

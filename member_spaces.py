@@ -251,10 +251,9 @@ def render_youth_home(biz: Dict[str, Any], site, *, me: Dict[str, Any], occasion
     used: set = set()
     events = youth_events(occasions) or list(occasions or [])
     lead = events[0] if events else None
-    pic = (photos.named(biz, site, ("youth", "teen", "student"))
-           or photos.pick_for(pool, ("fellowship", "community", "together"), "youth-hero"))
-    used.add(pic)
-    art = ui.photo(pic, eager=True) if pic else ui.gen_art("Youth")
+    pic, look = photos.choose(biz, "youth", pool, fallback=photos.named(biz, site, ("youth", "teen", "student")),
+                              used=used)
+    art = ui.picture(pic, look, "youth", eager=True, night=True)
     hero = ""
     if lead:
         d = mpc._day(lead.get("date") or "")

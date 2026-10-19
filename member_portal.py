@@ -541,6 +541,20 @@ def palette_for(biz: Dict[str, Any], site: Optional[Dict[str, Any]]) -> Dict[str
     return ui.palette(biz, resolve_theme(biz, site))
 
 
+def _body_class(door: bool, space: str, tab: Optional[str]) -> str:
+    """The sign-in pages' class, a Youth or Kids space's, and the colour the
+    page's tab wears (member_app_ui.TAB_HUE: Watch violet, Bible gold,
+    Connect teal)."""
+    import member_app_ui as ui
+    if door:
+        return ' class="si"'
+    names = [f"sp-{space}"] if space != "church" else []
+    place = ui.TAB_OF.get(tab or "", "")
+    if place in ui.TAB_HUE:
+        names.append(f"pg-{place}")
+    return f' class="{" ".join(names)}"' if names else ""
+
+
 def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
            body: str, *, script: str = "", tab: Optional[str] = None,
            who: Optional[Dict[str, Any]] = None, bare: bool = False, bar: bool = True,
@@ -616,7 +630,7 @@ def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
 <style>{ui.css(biz, theme, space)}</style>
 {f'<style>{sg.css(biz, theme)}</style>' if door else ''}
 </head>
-<body{' class="si"' if door else (' class="sp-' + space + '"' if space != "church" else '')}>
+<body{_body_class(door, space, tab)}>
 {top}
 <main class="mp-shell{' mb-has-nav' if signed_in and bar else ''}{' mb-bare' if bare or door else ''}">
   {body}
@@ -753,8 +767,8 @@ def render_give_off(biz: Dict[str, Any], site, me: Dict[str, Any], *, preview: b
     import member_app_photos as photos
     church = (biz.get("name") or "").strip() or "the church"
     pool = photos.photos(biz, site)
-    pic = photos.pick_for(pool, ("giv", "basket", "offering", "worship", "service"), "give")
-    art = ui.photo(pic, eager=True) if pic else ui.gen_art(church)
+    pic, look = photos.choose(biz, "give", pool, words=("giv", "basket", "offering"))
+    art = ui.picture(pic, look, "giving", eager=True, night=True)
     online = photos.has_site_page(site, "give")
     action = (f'<div class="mb-hero-row"><a class="mp-go" href="/give">{ui.icon("give", 18)}Give online</a></div>'
               if online else "")
@@ -765,7 +779,7 @@ def render_give_off(biz: Dict[str, Any], site, me: Dict[str, Any], *, preview: b
     body = f"""<div class="mb-lt"><h1>Give</h1></div>
 <p class="mb-sub" style="margin:0 0 16px">To {_e(church)}. Thank you for your generosity.</p>
 {hint}
-<section class="mb-hero" aria-labelledby="mb-give-h" style="aspect-ratio:350/300">{art}<div class="mb-hero-in">
+<section class="mb-hero" aria-labelledby="mb-give-h">{art}<div class="mb-hero-in">
 <span class="mb-when">Ways to give</span><h2 id="mb-give-h">Every gift matters</h2><p>{_e(lead)}</p>{action}</div></section>
 <a class="mb-row" href="/my/me#mp-giving"><span class="mb-row-ic">{ui.icon("doc", 20)}</span>
 <span class="mb-row-t"><strong>Your giving</strong><span>This year, each gift and your statement</span></span>{ui.icon("chevron", 18)}</a>
@@ -785,18 +799,21 @@ def render_home(biz: Dict[str, Any], site, *, me: Dict[str, Any], occasions, gro
                 give_url: str, flash: str = "", live: Optional[Dict[str, Any]] = None,
                 reading: str = "", bible: str = "kjv", where: Optional[Tuple[str, int]] = None,
                 checkin: str = "") -> str:
-    """Home ("Member App, Top Tier", Kevin approved 2026-10-15): the
-    greeting, the next gathering on the church's own photo (a Live now card
-    while the church is live; the church itself when nothing is on the
-    calendar), four quick ways in, the latest message (its art, the title
-    under it, as members know from Subsplash), the verse of the day,
-    today's reading, the church's own tiles, this week, and prayer.
+    """Home ("Member App, Top Tier", Kevin approved 2026-10-15; round three
+    2026-10-19): the greeting, the next gathering on the church's own photo
+    (a Live now card while the church is live; the church itself when
+    nothing is on the calendar), shorter now, four quick ways in, each in its
+    colour, Today (the verse of the day with today's reading, or where they
+    left off, in one card), the latest message (its art, the title under it,
+    as members know from Subsplash), the church's own tiles, this week, and
+    prayer.
 
     Nothing here ever says "nothing yet": a block with nothing in it is
     left out, and the verse, the Bible and prayer always have something.
     The greeting and date are set by the phone's own clock (the server
     can't know the member's time of day); without script it reads
-    "Hi, Ana."."""
+    "Hi, Ana.". `reading` is today's reading row (member_portal_reading
+    .today_row), '' when no plan is running."""
     import member_app_ui as ui
     import member_app_photos as photos
     import member_portal_bible as mpb
@@ -806,16 +823,18 @@ def render_home(biz: Dict[str, Any], site, *, me: Dict[str, Any], occasions, gro
     import member_push
     pal = palette_for(biz, site)
     pool = photos.photos(biz, site)
-    hero_pic = photos.hero(pool)
-    used = {hero_pic}
+    used: set = set()
+    hero_pic, hero_look = photos.choose(biz, "home", pool, fallback=photos.hero(pool), look="church", used=used)
     hello = first_name(me.get("name") or "") or "there"
     church = (biz.get("name") or "").strip() or "Your church"
-    hero = (mpc.live_hero(live, hero_pic, church) if live else
-            mpc.next_card(occasions, pic=hero_pic, church=church) or mpc.church_hero(hero_pic, church))
-    quick = (f'<a href="/my/prayer">{ui.icon("pray", 24)}Prayer</a>'
-             f'<a href="/my/events">{ui.icon("calendar", 24)}Events</a>'
-             f'<a href="/my/groups">{ui.icon("users", 24)}Groups</a>'
-             f'<a href="/my/live">{ui.icon("live", 24)}Live</a>')
+    hero = (mpc.live_hero(live, hero_pic, church, look=hero_look) if live else
+            mpc.next_card(occasions, pic=hero_pic, church=church, look=hero_look)
+            or mpc.church_hero(hero_pic, church, look=hero_look))
+    quick = "".join(f'<a class="h-{hue}" href="{href}"><i class="mb-qd">{ui.icon(ic, 20)}</i>{label}</a>'
+                    for hue, href, ic, label in (("brand", "/my/prayer", "pray", "Prayer"),
+                                                 ("coral", "/my/events", "calendar", "Events"),
+                                                 ("teal", "/my/groups", "users", "Groups"),
+                                                 ("violet", "/my/live", "live", "Live")))
     script = """<script>(function(){var d=new Date(),h=d.getHours();
 var g=h<12?'Good morning':(h<17?'Good afternoon':'Good evening');
 var t=document.querySelector('.mb-date');if(t){t.textContent=d.toLocaleDateString(undefined,{weekday:'long',month:'long',day:'numeric'});}
@@ -823,7 +842,8 @@ var e=document.querySelector('[data-first]');if(e){var em=document.createElement
 e.textContent='';e.append(g+', ',em);}
 })();</script>"""
     first = str(((occasions or [{}])[0] or {}).get("entry_id") or "") if hero and not live and occasions else ""
-    read = reading or (ui.section("Read today", "/my/bible", "Bible") + mpb.continue_card(where, bible))
+    today = (f'<section class="h-gold" aria-labelledby="mb-today-h">{ui.section("Today", "/my/bible", "Bible", hid="mb-today-h")}'
+             f'<div class="mb-today">{mpb.verse_card(bible)}{reading or mpb.continue_row(where, bible)}</div></section>')
     return _shell(biz, site, "Home", f"""
 <div class="mb-hello-wrap"><p class="mb-date" aria-hidden="true"></p>
 <h1 class="mb-hello" data-first="{_e(hello)}">Hi, <em>{_e(hello)}.</em></h1></div>
@@ -831,11 +851,10 @@ e.textContent='';e.append(g+', ',em);}
 {hero}
 <nav class="mb-quick" aria-label="Quick ways in">{quick}</nav>
 {flash}
+{today}
 {mps.latest_card(library, pal, pool=pool, used=used, site=site)}
-{mpb.verse_card(bible)}
-{read}
 {mpc.home_tiles(biz, site, pool, used)}
-{mpc.week_cards(occasions, groups, pal=pal, pool=pool, used=used, skip=first)}
+{mpc.week_cards(occasions, groups, pal=pal, pool=pool, used=used, skip=first, biz=biz)}
 {mai.install_card(church)}
 {member_push.home_card(biz)}
 {prayer_card()}""", tab="home", who=me, script=script)
@@ -1295,7 +1314,7 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
             logger.warning("member home: check-in card skipped", exc_info=True)
     return _page(render_home(biz, site, me=me, occasions=occ, groups=groups, library=lib,
                              give_url=give_url, flash=mpc._flash(request) or mpr._flash(request),
-                             live=live, reading=mpr.home_card(today, done), bible=bible, where=where,
+                             live=live, reading=mpr.today_row(today, done), bible=bible, where=where,
                              checkin=checkin))
 
 
