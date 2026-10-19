@@ -92,6 +92,9 @@ class FakeSongs:
         return [dict(r) for r in self.rows if self._match(r, self._filters(path))]
 
     def post(self, path, body, prefer=None, **_):
+        """Like sb_clients._sync_request: a refused insert is None, and so is a
+        successful one sent with return=minimal (PostgREST answers 201 with an
+        empty body, which the helper reads as None)."""
         if self.fail:
             return None
         items = body if isinstance(body, list) else [body]
@@ -101,11 +104,11 @@ class FakeSongs:
                    "public_domain": False, "song_key": None, "tempo": None, "ccli_number": None, "lines_per_slide": 2,
                    "source": "typed", "source_ref": "", "times_sung": {}, "last_sung": None, **item}
             if row["source_ref"] and any(r["source_ref"] == row["source_ref"] and r["business_id"] == row["business_id"]
-                                         and r["source"] == row["source"] for r in self.rows):
-                return None  # the unique index
-            self.rows.append(row)
-            made.append(dict(row))
-        return made if prefer == "return=representation" else []
+                                         and r["source"] == row["source"] for r in self.rows + made):
+                return None  # the unique index refuses the whole batch
+            made.append(row)
+        self.rows.extend(made)
+        return [dict(r) for r in made] if prefer == "return=representation" else None
 
     def patch(self, path, body):
         if self.fail:

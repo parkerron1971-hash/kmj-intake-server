@@ -395,8 +395,11 @@ def _import_rows(biz: str, songs: List[Dict[str, Any]]) -> Dict[str, Any]:
         else:
             already += 1
     for k in range(0, len(new_rows), 50):
-        got = sb_clients.sb_post_as_service("/worship_songs", new_rows[k:k + 50], prefer="return=minimal")
-        if got is None:
+        chunk = new_rows[k:k + 50]
+        # Ask for the new ids: a return=minimal success has an empty body,
+        # which sb_clients hands back as None, the same as a refusal.
+        got = sb_clients.sb_post_as_service("/worship_songs?select=id", chunk, prefer="return=representation")
+        if not isinstance(got, list) or len(got) != len(chunk):
             raise HTTPException(503, "Some songs didn't save. Nothing is lost; run it again and it picks up where it stopped.")
     return {"added": added, "updated": updated, "already_here": already}
 
