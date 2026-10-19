@@ -115,6 +115,12 @@ def may_edit(sess: Optional[Dict[str, Any]], biz: Dict[str, Any]) -> Optional[st
     if sess.get("preview"):
         return "owner:" + str((sess.get("claims") or {}).get("own") or "")
     me = sess.get("me")
+    # The right is one person's. A sign-in shared by a household could switch
+    # to the named person ("Not you?"), so it never carries it. One person
+    # per email is the rule today (MAX_HOUSEHOLD); this keeps it so if that
+    # ever changes.
+    if len(sess.get("people") or [me]) != 1:
+        return None
     if me and str(me.get("id")) in editors(biz):
         return "member:" + str(me["id"])
     return None

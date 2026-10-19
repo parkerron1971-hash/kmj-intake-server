@@ -37,6 +37,9 @@ def test_only_the_owner_in_a_preview_and_the_people_named_may_change_pictures():
     assert mapic.may_edit({"me": {"id": OTHER}}, biz) is None            # any other member: their own photo only
     assert mapic.may_edit({"unavailable": True}, biz) is None
     assert mapic.may_edit(None, biz) is None
+    # a sign-in shared by a household never carries the named person's right
+    assert mapic.may_edit({"me": {"id": ED}, "people": [{"id": ED}, {"id": OTHER}]}, biz) is None
+    assert mapic.may_edit({"me": {"id": ED}, "people": [{"id": ED}]}, biz) == f"member:{ED}"
 
 
 def test_the_owners_list_is_checked():
@@ -114,6 +117,31 @@ def test_saving_puts_the_picture_on_its_spot_and_an_upload_in_the_library(monkey
     assert written[-1]["settings"]["member_portal"]["pictures"]["tile:prayer"] == {
         **written[-1]["settings"]["member_portal"]["pictures"]["tile:prayer"], "url": "", "look": "colour"}
     assert len(written[-1]["settings"]["media_library"]["gallery"]) == 1               # choosing isn't uploading
+
+
+def test_a_failed_read_or_write_saves_nothing_and_says_so(monkeypatch):
+    import sb_clients
+    writes = []
+    monkeypatch.setattr(sb_clients, "sb_patch_as_service", lambda path, body: writes.append(body) or [{"id": "b"}])
+    for failed_read in (None, []):
+        monkeypatch.setattr(sb_clients, "sb_get_as_service", lambda path, r=failed_read: r)
+        assert mapic.save_spot("b1", "home", "", "colour", by="owner:u") is False
+    assert writes == []                                                    # never a write from a failed read
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", lambda path: [{"settings": {}}])
+    monkeypatch.setattr(sb_clients, "sb_patch_as_service", lambda path, body: None)
+    assert mapic.save_spot("b1", "home", "", "colour", by="owner:u") is False
+
+
+def test_the_owners_new_settings_are_checked(monkeypatch):
+    from fastapi import HTTPException
+    import member_portal as mp
+
+    class U:
+        id = "u-owner"
+    for bad in ({"colours": "rainbow"}, {"photo_editors": "everyone"}):
+        with pytest.raises(HTTPException) as e:
+            mp.patch_member_portal_config("b1", bad, user=U())
+        assert e.value.status_code == 400
 
 
 # ─── the route ───────────────────────────────────────────────────────
