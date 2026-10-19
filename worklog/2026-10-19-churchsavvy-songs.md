@@ -19,4 +19,4 @@ Step 2 of ChurchSavvy, the church presentation add-on (Kevin's replacement for F
 
 Against Love City's real Proclaim data, the import finds 100 songs: 87 with words, 13 without, from 50 services. Before building more here, read the canvas's notes (Round 2/3 boards) and the Proclaim teardown.
 
-Checks: 89 pytest (lyrics 27, scripture 20, Proclaim, router), `__tests__/worship_songs_db.mjs` 22 checks on PGlite, the dashboard wiring + setup brief tests (68).
+Songs are in the account export (`account_lifecycle`, beside devotionals). Checks: 89 pytest (lyrics 27, scripture 20, Proclaim, router), `__tests__/worship_songs_db.mjs` 22 checks on PGlite, the dashboard wiring + setup brief tests (68).

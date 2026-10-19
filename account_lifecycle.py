@@ -182,6 +182,9 @@ BUSINESS_CHILD_TABLES: List[str] = [
     # The church's own devotionals, their days inside each row (members'
     # days cascade with them; see EXPORT_EXCLUDED).
     "devotionals",
+    # The church's song library for Sunday screens: each song's words,
+    # orders and how often it was sung. Nothing points at it.
+    "worship_songs",
     # Families and children: notes, pickups and children before their
     # household, and the household's adult links before contacts.
     "child_checkins",

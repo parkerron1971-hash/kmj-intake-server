@@ -401,12 +401,14 @@ def _import_rows(biz: str, songs: List[Dict[str, Any]]) -> Dict[str, Any]:
     return {"added": added, "updated": updated, "already_here": already}
 
 
+# A plain def: FastAPI runs it in its thread pool, so the reads, the
+# SQLite work and the saves below never hold up the event loop.
 @router.post("/import/proclaim")
-async def import_proclaim(business_id: str = Form(...), files: List[UploadFile] = File(...),
-                          user: AuthedUser = Depends(require_user)):
+def import_proclaim(business_id: str = Form(...), files: List[UploadFile] = File(...),
+                    user: AuthedUser = Depends(require_user)):
     _gate(user)
     biz = _uuid(business_id)
-    await asyncio.to_thread(_staff, biz, user)
+    _staff(biz, user)
     if not files or len(files) > MAX_IMPORT_FILES:
         raise HTTPException(400, f"Choose the Proclaim folder (at most {MAX_IMPORT_FILES} files are read)")
     tmp = Path(tempfile.mkdtemp(prefix="proclaim-"))
@@ -417,7 +419,7 @@ async def import_proclaim(business_id: str = Form(...), files: List[UploadFile] 
             size = 0
             with open(dest, "wb") as out:
                 while True:
-                    chunk = await f.read(1024 * 1024)
+                    chunk = f.file.read(1024 * 1024)
                     if not chunk:
                         break
                     size += len(chunk)
@@ -428,8 +430,8 @@ async def import_proclaim(business_id: str = Form(...), files: List[UploadFile] 
         kinds = [wp.kind_of(p) for p in paths]
         if not any(kinds):
             raise HTTPException(400, "Those files aren't Proclaim's. Choose the Proclaim folder itself.")
-        result = await asyncio.to_thread(wp.read_proclaim, [p for p, k in zip(paths, kinds) if k])
-        saved = await asyncio.to_thread(_import_rows, biz, result["songs"])
+        result = wp.read_proclaim([p for p, k in zip(paths, kinds) if k])
+        saved = _import_rows(biz, result["songs"])
         without = sorted((s["title"] for s in result["songs"] if not s["has_words"]), key=str.lower)
         return {"ok": True, **result["summary"], **saved, "without_words": len(without), "need_words": without[:40]}
     finally:
