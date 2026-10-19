@@ -167,6 +167,108 @@ def test_a_pasted_devotional_is_read_into_its_days():
     assert dv.parse("Just some words")["days"] == []
 
 
+# Kevin's document as it really copies out: a byline, headings, a table, the
+# anchors running on, and a checklist and closing word after the last day.
+DOC = """Consecrate Your Focus: 7-Day Devotional
+
+October 18, 2026 · Kevin McCloud
+
+Welcome to Focus Week
+
+For seven days we consecrate our focus, because tomorrow the Lord will do wonders among us (Joshua 3:5).
+
+Consecration isn't subtraction, it's dedication.
+
+How to Consecrate Your Day
+
+A consecrated day has five anchors.
+
+1. First Look (morning, before your phone). Your first look goes to God, not a screen.
+2. Guarded Evening (replaces the binge). Set a hard stop for screens at 9 PM.
+
+What you set aside, and what you pick up
+
+Set aside\tPick up
+Phone beside the bed\tA Bible beside the bed
+
+Day 1, Monday: Not Here Before
+
+"...that ye may know the way by which ye must go: for ye have not passed this way heretofore." Joshua 3:4
+
+This is not a rerun.
+
+Pray: Lord, I have not been this way before.
+
+Together: 6 PM prayer line.
+
+Day 7, Sunday: Tomorrow the Lord Will Do Wonders
+
+"Sanctify yourselves: for to morrow the LORD will do wonders among you." Joshua 3:5
+
+You have consecrated your focus for seven days.
+
+Gather with the church today and look back at the week.
+
+Pray: Lord, I have set my focus apart for You.
+
+Do today: Come to the gathering expectant.
+
+Together: Sunday service. Close the Focus week together.
+"""
+CHECKLIST = """
+Your Daily Checklist
+
+Tick these off each day. Mark the First Look first, since it holds the day together.
+
+First Look: verse, prayer, and one ask before my phone
+Guarded Evening: screens off by 9 PM, something that builds me instead
+Together: joined the 6 PM prayer line or the service
+
+A closing charge
+
+You are not giving up your focus. You are giving it to God.
+"""
+
+
+def test_a_real_document_keeps_its_welcome_practices_and_last_day():
+    got = dv.parse(DOC + CHECKLIST)
+    assert (got["title"], got["kind"]) == ("Consecrate Your Focus", "")    # the page already says "7-day devotional"
+    # the welcome is the first section's words: no byline, headings, anchors or table
+    assert got["about"] == ("For seven days we consecrate our focus, because tomorrow the Lord will do wonders "
+                            "among us (Joshua 3:5).\n\nConsecration isn't subtraction, it's dedication.")
+    # the checklist is what a member ticks, so it wins over the anchors; "9 PM" keeps its capitals
+    assert [(p["title"], p["sub"]) for p in got["practices"]] == [
+        ("First Look", "Verse, prayer, and one ask before my phone"),
+        ("Guarded Evening", "Screens off by 9 PM, something that builds me instead"),
+        ("Together", "Joined the 6 PM prayer line or the service")]
+    d1, d7 = got["days"]
+    assert d1["pray"] == "Lord, I have not been this way before." and d1["together"] == "6 PM prayer line."
+    # the last day ends at the checklist: its Together isn't the checklist's, its words aren't the closing charge
+    assert d7["together"] == "Sunday service. Close the Focus week together."
+    assert d7["body"] == "You have consecrated your focus for seven days."
+    assert d7["pull"] == "Gather with the church today and look back at the week."
+    assert d7["act"] == "Come to the gathering expectant."
+
+
+def test_without_a_checklist_the_numbered_anchors_are_the_practices():
+    for doc in (DOC, DOC.replace("1. First", "First").replace("2. Guarded", "Guarded")):
+        got = dv.parse(doc)
+        assert [(p["title"], p["sub"]) for p in got["practices"]] == [
+            ("First Look", "Morning, before your phone"), ("Guarded Evening", "Replaces the binge")]
+        assert "First Look" not in got["about"]
+
+
+def test_a_day_ends_only_when_nothing_of_its_own_is_left():
+    # an "Amen" on its own line reads like a heading, but the day's Do today is still to come
+    amen = dv.parse("Day 1: Here\n\nWords.\n\nPray: Lord, lead me.\n\nIn Jesus' name, Amen\n\n"
+                    "Do today: Walk with someone.\n\nTogether: The 6 PM line.")["days"][0]
+    assert (amen["act"], amen["together"]) == ("Walk with someone.", "The 6 PM line.")
+    # a label coming round again is past the day, and doesn't overwrite it
+    again = dv.parse("Day 1: Here\n\nWords.\n\nTogether: The 6 PM line.\n\nTogether: joined the line")["days"][0]
+    assert again["together"] == "The 6 PM line."
+    assert [dv._kind(k) for k in (" Focus Week", "21-Day Fast", "7 day devotional", "")] == ["Focus Week", "Fast", "", ""]
+
+
 def _authed(role):
     """A signed-in user with `role` on the church, through the one access
     check (business_access.assert_access: no seat is a 404)."""
