@@ -295,10 +295,15 @@ def test_the_composer_asks_before_charging_for_a_build():
 def test_a_thousand_credits_with_a_free_build_is_a_real_week(monkeypatch):
     monkeypatch.delenv("PRICE_CHAT_PRICE", raising=False)
     monkeypatch.delenv("CHAT_PRICE", raising=False)
+    # 50 messages since 2026-10-16 (20 credits each, all of a message's
+    # calls together). The old "> 80" counted model calls at 12; a message
+    # averaged 19.6 credits under that meter, so a trial already bought
+    # about 51 messages. The cost bound moves from $10 to $11 for the same
+    # reason: 50 messages at 21.5c is $10.75, which is what it always was.
     turns = pc.trial_credits() / pc.chat_price()
-    assert turns > 80, f"only {turns:.0f} Chief turns in a trial"
+    assert turns >= 50, f"only {turns:.0f} Chief messages in a trial"
     cogs = turns * pc.MEASURED_CHAT_COST_CENTS / 100
-    assert cogs < 10, f"${cogs:.2f} of chat in a single trial"
+    assert cogs < 11, f"${cogs:.2f} of chat in a single trial"
 
 
 def test_charging_for_the_build_would_gut_the_tank():

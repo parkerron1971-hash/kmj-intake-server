@@ -329,6 +329,43 @@ def _linkage(model: Optional[str], *, lane: Optional[str], provider: Optional[st
     return out
 
 
+# ─── One price per Chief message (2026-10-16) ─────────────────────────
+# The meter used to price every ROW, so a message that took two model
+# calls was charged twice, a retry after an error was charged as if it
+# had answered, and the answer check rode along at 1 credit a call. The
+# price is now decided here, at write time, from the turn the row
+# belongs to. usage_metering still reads `units` exactly as before.
+
+def _priced_units(endpoint: Optional[str], ok: bool, units: Optional[int]) -> Optional[int]:
+    """The credits to write onto one row; None = price it from the endpoint.
+
+      explicit units                      unchanged (builds, revamps, ...)
+      a Chief call that failed            0, in or out of a turn
+      a Chief call inside a turn          the message price once, then 0
+      any other unpriced call in a turn   0: it rides the message's price
+      everything else                     None (the endpoint table)
+
+    Never raises: on any error the row keeps the units it came with."""
+    if units is not None:
+        return units
+    try:
+        import pricing_config
+        ep = (endpoint or "").strip()
+        in_turn = bool(turn_context.turn_id())
+        if ep in pricing_config.CHAT_TURN_ENDPOINTS:
+            if ok is False:
+                return 0
+            if in_turn:
+                return pricing_config.chat_price() if turn_context.claim_charge() else 0
+            return None
+        if in_turn and ep not in pricing_config.unit_weights():
+            return 0
+        return None
+    except Exception as e:  # pragma: no cover - pricing never costs the row
+        logger.warning(f"api_usage pricing skipped: {e}")
+        return units
+
+
 def log_api_usage_sync(
     *,
     endpoint: str,
@@ -394,6 +431,7 @@ def log_api_usage_sync(
     business_id = business_id or billing_context.current()
     if business_id: body["business_id"] = business_id
     if task_type:   body["task_type"] = task_type
+    units = _priced_units(endpoint, ok, units)
     if units is not None: body["units"] = int(units)
     if duration_ms is not None: body["duration_ms"] = int(duration_ms)
     try:
@@ -477,6 +515,7 @@ async def log_api_usage(
     if task_type:   body["task_type"] = task_type
     if duration_ms is not None: body["duration_ms"] = int(duration_ms)
     if error:       body["error"] = str(error)[:500]
+    units = _priced_units(endpoint, ok, units)
     if units is not None: body["units"] = int(units)
     try:
         import schema_probe
