@@ -2,7 +2,7 @@
 title: CSP violation reports are logged (report-only policy)
 date: 2026-10-18
 agent: Claude Code (Claude Opus 5.5)
-asked: "you can start working on that list" (the needs sweep after the REA trial)
+asked: '"you can start working on that list" (the needs sweep after the REA trial)'
 status: shipped
 prs: [kmj-intake-server#1498, solutionist-studio#1272]
 migrations: []
