@@ -41,6 +41,9 @@ assert.equal(row.colour, 'gold'); checks++;
 row = (await db.query(upsert, [b1, jas, 'PRO', 4, 23, 'gold', 'Guard what I let in first', false])).rows[0];
 assert.equal(row.note, 'Guard what I let in first'); checks++;
 await db.query(upsert, [b1, jas, '1CO', 13, 4, null, null, true]);               // a bookmark alone, a numbered book
+// PGlite's now() ticks in whole milliseconds: two quick saves can tie, and a tie
+// sorts either way, so the newest-first check below needs a later millisecond.
+await new Promise((r) => setTimeout(r, 5));
 await db.query(upsert, [b1, jas, 'PSA', 119, 176, 'teal', null, false]);         // the Bible's last-numbered verse
 await db.query(upsert, [b1, sam, 'PRO', 4, 23, 'pink', null, false]);            // Sam's own mark on the same verse
 const mine = (await db.query(`SELECT count(*)::int n FROM bible_marks WHERE contact_id = $1`, [jas])).rows[0].n;
