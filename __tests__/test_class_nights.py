@@ -95,6 +95,7 @@ def world(monkeypatch):
     monkeypatch.setattr(sb_clients, "sb_post_as_service", post)
     monkeypatch.setattr(church_checkin, "_roster", lambda b: w["roster"])
     monkeypatch.setattr(academy_reminders, "_zone", lambda b: "America/Chicago")
+    monkeypatch.setattr(cn, "RETRY_WAITS", (0, 0))
 
     async def email(business, course_title, night, student, session_id):
         if "@" not in str(student.get("email")):
@@ -172,6 +173,34 @@ def test_a_send_outage_unmarks_the_emails_so_the_next_tick_tries_again(world, mo
     monkeypatch.setattr(cn, "_email", down)
     asyncio.run(cn.sweep_tick(NOW))
     assert world["released"] == ["s1"]
+
+
+def test_a_failed_email_is_tried_again_and_a_night_some_heard_stays_marked(world, monkeypatch, caplog):
+    two = [{"enrollment_id": "e3", "token": "t3", "name": "Tasha", "email": "t@example.com"},
+           {"enrollment_id": "e4", "token": "t4", "name": "Lee", "email": "l@example.com"}]
+    world["count"], world["send"] = [], [dict(NIGHT, counted_at="x", send_missed=True)]
+    tries = []
+
+    async def hiccup(business, course_title, night, student, session_id):
+        tries.append(student["enrollment_id"])
+        if student["enrollment_id"] == "e3" and tries.count("e3") == 1:
+            raise RuntimeError("resend hiccup")
+        return True
+    monkeypatch.setattr(cn, "_email", hiccup)
+    world["claim"] = {"session_id": "s1", "students": two}
+    assert asyncio.run(cn.sweep_tick(NOW))["emails"] == 2 and tries == ["e3", "e4", "e3"]
+    assert world["released"] == []
+
+    async def lee_only(business, course_title, night, student, session_id):
+        if student["enrollment_id"] == "e3":
+            raise RuntimeError("refused")
+        return True
+    monkeypatch.setattr(cn, "_email", lee_only)
+    world["claim"] = {"session_id": "s1", "students": two}
+    with caplog.at_level("WARNING"):
+        assert asyncio.run(cn.sweep_tick(NOW))["emails"] == 1
+    assert world["released"] == [], "un-marking would send Lee a second copy past the idempotency window"
+    assert "1 of 2 missed-class emails not sent" in caplog.text
 
 
 def test_the_real_email_goes_to_the_student_with_their_class_link(monkeypatch):

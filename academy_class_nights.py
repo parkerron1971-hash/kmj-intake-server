@@ -18,8 +18,10 @@ Within ten minutes of a live class ending:
 Each night is counted once: academy_live_count_night marks it in the same
 statement that checks people in (APPLY-2026-10-18-academy-class-nights.sql).
 Its emails go out once: academy_live_missed_claim marks them before a word
-goes out, and academy_live_missed_release un-marks them when every email
-failed, the idempotency keys keeping a retry from reaching anyone twice.
+goes out; a failed email is tried again twice within the tick, and
+academy_live_missed_release un-marks the night only when nobody heard (a
+send outage), the idempotency keys keeping a retry from reaching anyone
+twice.
 """
 from __future__ import annotations
 
@@ -37,6 +39,7 @@ logger = logging.getLogger(__name__)
 LOOK_BACK = timedelta(days=3)       # a night that ended longer ago is left as it is
 SEND_WITHIN = timedelta(days=14)    # the teacher can still ask from Course Studio
 BATCH = 50
+RETRY_WAITS = (2, 6)                # seconds before trying a failed email again
 SESSION_FIELDS = ("id,course_id,title,starts_at,started_at,ended_at,send_missed,missed_sent_at,counted_at,"
                   "academy_lessons(title),academy_courses!inner(title,business_id)")
 
@@ -191,16 +194,32 @@ async def _send_missed(business: Dict[str, Any], n: Dict[str, Any]) -> int:
         return 0  # already sent, no longer asked for, or the call failed
     course = str((n.get("academy_courses") or {}).get("title") or "your class")
     night = night_name(n)
-    sent = failed = 0
-    for s in claimed["students"]:
-        try:
-            if await _email(business, course, night, s, str(n["id"])):
-                sent += 1
-        except Exception as e:  # noqa: BLE001
-            failed += 1
-            logger.warning(f"[class-nights] email failed: {type(e).__name__}")
-    if failed and not sent:
+    sent = 0
+    todo: List[Dict[str, Any]] = list(claimed["students"])
+    # A send that fails is tried again here, twice, a few seconds apart.
+    # Once some went out the night stays marked: un-marking it would send
+    # everyone again on a later tick, past what the idempotency keys
+    # cover (the teacher can ask days after the class).
+    for wait in (0, *RETRY_WAITS):
+        if not todo:
+            break
+        if wait:
+            await asyncio.sleep(wait)
+        failed: List[Dict[str, Any]] = []
+        for s in todo:
+            try:
+                if await _email(business, course, night, s, str(n["id"])):
+                    sent += 1
+            except Exception as e:  # noqa: BLE001
+                failed.append(s)
+                logger.warning(f"[class-nights] email failed: {type(e).__name__}")
+        todo = failed
+    if todo and not sent:
+        # A send outage: nobody heard, so the next tick tries them all again.
         await asyncio.to_thread(sb_clients.sb_post_as_service, "/rpc/academy_live_missed_release", {"p_session": n["id"]})
+    elif todo:
+        logger.warning(f"[class-nights] {len(todo)} of {len(claimed['students'])} missed-class emails not sent "
+                       f"for night {str(n['id'])[:8]}")
     return sent
 
 
