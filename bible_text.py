@@ -248,3 +248,57 @@ def verses(ref: Ref, tr: str = DEFAULT) -> List[Tuple[int, int, str]]:
                     continue
             out.append((ch, v, t))
     return out
+
+
+# ─── the book picker's groups (member app, round three, 2026-10-19) ─
+# Kevin: "the choice of what book of bible needs a better flow a mixed of
+# how the bible app looks when selecting book of the bible . also old
+# testament comes before new testment". (key, name, family colour, first
+# book, last book), in the Bible's own order.
+GROUPS: List[Tuple[str, str, str, str, str]] = [
+    ("law", "The Law", "gold", "GEN", "DEU"),
+    ("history", "History", "coral", "JOS", "EST"),
+    ("wisdom", "Poetry & Wisdom", "violet", "JOB", "SOL"),
+    ("major", "Major Prophets", "teal", "ISA", "DAN"),
+    ("minor", "Minor Prophets", "brand", "HOS", "MAL"),
+    ("gospels", "The Gospels", "gold", "MAT", "JOH"),
+    ("church", "The early church", "coral", "ACT", "ACT"),
+    ("paul", "Paul's letters", "teal", "ROM", "PHM"),
+    ("letters", "Letters to everyone", "violet", "HEB", "JUD"),
+    ("prophecy", "Prophecy", "brand", "REV", "REV"),
+]
+
+
+def groups(testament: str) -> List[Tuple[str, str, str, List[str]]]:
+    """[(key, name, colour, [book codes])] for 'ot' or 'nt', in order."""
+    out = []
+    for key, name, colour, first, last in GROUPS:
+        codes = [c for c, _, _ in BOOKS[ORDER[first]:ORDER[last] + 1]]
+        if (codes[0] in OLD_TESTAMENT) == (testament == "ot"):
+            out.append((key, name, colour, codes))
+    return out
+
+
+def _plain(text: str) -> str:
+    return re.sub(r"[^a-z0-9' ]+", " ", text.replace("¶", "").replace("[", "").replace("]", "").lower())
+
+
+def search(query: str, tr: str = DEFAULT, limit: int = 50) -> Tuple[List[Tuple[str, int, int, str]], int]:
+    """Verses holding every word of `query` (whole words, any order), in
+    the Bible's order: ([(book, chapter, verse, text)], how many in all).
+    The words must all be 2 letters or more; ([], 0) otherwise."""
+    words = [w for w in _plain(query).split() if w]
+    if not words or any(len(w) < 2 for w in words) or len(words) > 8:
+        return [], 0
+    pats = [re.compile(r"\b" + re.escape(w) + r"\b") for w in words]
+    data = _load(translation(tr))
+    hits: List[Tuple[str, int, int, str]] = []
+    total = 0
+    for (code, ch), vs in sorted(data.items(), key=lambda kv: (ORDER.get(kv[0][0], 99), kv[0][1])):
+        for v, text in vs:
+            plain = _plain(text)
+            if all(p.search(plain) for p in pats):
+                total += 1
+                if len(hits) < limit:
+                    hits.append((code, ch, v, text))
+    return hits, total

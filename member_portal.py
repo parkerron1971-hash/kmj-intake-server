@@ -1259,7 +1259,7 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
     # The Bible (member_portal_bible.py).
     if sub == "/my/bible" or sub.startswith("/my/bible/"):
         import member_portal_bible as mpb
-        return await mpb.serve(request, biz, site, me, sub)
+        return await mpb.serve(request, biz, site, me, sub, preview=preview)
     # Sermons, inside the app (member_portal_sermons.py).
     if sub == "/my/sermons" or sub.startswith("/my/sermons/"):
         lib = fill(await asyncio.to_thread(mps.load_library, biz["id"]), "library")

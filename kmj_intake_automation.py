@@ -389,6 +389,10 @@ app.include_router(member_photos_router)
 # public_site_router.
 from member_app_pictures import router as member_app_pictures_router
 app.include_router(member_app_pictures_router)
+# A member's own highlights, notes and bookmarks in the Bible
+# (member_bible_marks.py): POST /my/bible/mark. BEFORE public_site_router.
+from member_bible_marks import router as member_bible_marks_router
+app.include_router(member_bible_marks_router)
 # Church, Youth and Kids spaces (member_spaces.py): leaders' posts and the
 # office's leader approvals. BEFORE public_site_router.
 from member_spaces import router as member_spaces_router
