@@ -76,6 +76,11 @@ _LIMITS: Dict[str, Tuple[int, int]] = {
     # courtesy bucket beside it — fail-open, because a tracking endpoint
     # must never surface an error to a visitor's browser.
     "track": (int(os.environ.get("RL_TRACK_PER_MIN", "240")), 60),
+    # Report-Only CSP violations (platform_watchdog.csp_report): anonymous,
+    # sent by browsers, one log line per new kind. Per IP, fail-open — a
+    # preview iframe can raise dozens on one render, and past the budget the
+    # rest are simply not counted.
+    "csp_report": (int(os.environ.get("RL_CSP_REPORT_PER_HOUR", "300")), 3600),
     # The booking widget's three anonymous routes (2026-09-04): they had
     # their own 10/hour dict in booking_widget_router; they ride the
     # strict, shared path now with the same numbers.
