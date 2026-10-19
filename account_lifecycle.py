@@ -142,6 +142,10 @@ EXPORT_EXCLUDED: Dict[str, str] = {
     "entity_groups":           "owner-keyed consolidation groups; die with the auth user",
     "mcp_oauth_codes":         "user-keyed OAuth codes; short-lived",
     "member_login_codes":      "member portal sign-in codes (hashed, 10-minute, pruned daily); credentials, not records, cascade on business deletion",
+    # A member's Bible highlights and notes are private to the member: the
+    # app tells them the church's staff can't read them, and an export
+    # the church downloads would. Cascade on member and business deletion.
+    "bible_marks":             "a member's own Bible highlights, private notes and saved verses; private to the member (staff can't read them), so never in the church's export; cascade on member/business deletion",
     "mcp_oauth_refresh":       "user-keyed OAuth refresh tokens",
     "site_events":             "anonymous marketing-site traffic; no business_id by design",
     # The tamper-evident ledger has its own door. audit_log is exported

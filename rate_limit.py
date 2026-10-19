@@ -132,6 +132,11 @@ _LIMITS: Dict[str, Tuple[int, int]] = {
     "member_verify": (int(os.environ.get("RL_MEMBER_VERIFY_PER_10MIN", "60")), 600),
     # A signed-in member's writes (RSVP, prayer, details), per person.
     "member_action": (int(os.environ.get("RL_MEMBER_ACTION_PER_HOUR", "30")), 3600),
+    # The member app's Bible, per member: highlights, notes and saved verses
+    # (a chapter can be many taps), and word searches (each reads a whole
+    # translation).
+    "bible_mark": (int(os.environ.get("RL_BIBLE_MARK_PER_10MIN", "120")), 600),
+    "bible_search": (int(os.environ.get("RL_BIBLE_SEARCH_PER_MIN", "20")), 60),
     # Joining a free class from its public page (academy_join.py) mails a
     # class link, so the same shape as member sign-in: per network
     # (generous: a church lobby is one address), then per business +
