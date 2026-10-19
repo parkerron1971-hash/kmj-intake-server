@@ -30,11 +30,11 @@ import sb_clients
 router = APIRouter(prefix="/academy-live", tags=["academy-live"])
 UUID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.I)
 ACTIONS = {"status", "start", "join", "end", "allow", "listen", "remove", "lower",
-           "post", "history", "moderate", "roster"}
+           "post", "history", "moderate", "roster", "here", "mark", "missed"}
 CONTROLS = {"allow", "listen", "remove", "lower"}
-TEACHER_ACTIONS = {"start", "end", "allow", "listen", "remove", "lower", "moderate", "roster"}
+TEACHER_ACTIONS = {"start", "end", "allow", "listen", "remove", "lower", "moderate", "roster", "mark", "missed"}
 # Things a student may do while the class is live or its lobby is open.
-ROOM_ACTIONS = {"join", "post", "history"}
+ROOM_ACTIONS = {"join", "post", "history", "here"}
 KINDS = {"chat", "question", "answer"}
 MODERATION = {"hide", "show", "pin", "unpin", "answered", "onscreen", "offscreen"}
 SLIDE_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")
@@ -85,7 +85,7 @@ def parse_input(raw):
         required = field == "session_id" and action != "status"
         if (required or item is not None) and (not isinstance(item, str) or not UUID_RE.fullmatch(item)):
             raise LiveError(400, "Choose a valid class and classroom link.")
-    if action in CONTROLS:
+    if action in CONTROLS or action == "mark":
         target = value.get("identity")
         if not isinstance(target, str) or not target.startswith("student_") or not UUID_RE.fullmatch(target[8:]):
             raise LiveError(400, "Choose a student in this class.")
@@ -106,6 +106,11 @@ def parse_input(raw):
         if not isinstance(message, str) or not UUID_RE.fullmatch(message) or op not in MODERATION:
             raise LiveError(400, "Choose a message and what to do with it.")
         out.update(message_id=message, op=op)
+    if action in ("mark", "missed"):
+        on = value.get("on")
+        if not isinstance(on, bool):
+            raise LiveError(400, "Say yes or no.")
+        out.update(on=on)
     # Never trust client-supplied role, permission, room, or business fields.
     return out
 
@@ -129,12 +134,16 @@ def lobby_open(access, now=None):
 def authorize(action, access):
     if action in TEACHER_ACTIONS and access.get("teacher") is not True:
         raise LiveError(403, "Only your teaching team can manage this class.")
-    if action == "end" and access["status"] == "ended":
+    # Ending again closes leftover connections; the slides can be sent to
+    # who missed a class after it is over.
+    if action in ("end", "missed") and access["status"] == "ended":
         return
     if access["status"] in ("ended", "cancelled"):
         raise LiveError(409, "This class has ended or was cancelled.")
     if action in ROOM_ACTIONS and access["status"] != "live" and not lobby_open(access):
         raise LiveError(409, "Your teacher has not started this class yet.")
+    if action == "mark" and access["status"] != "live" and not lobby_open(access):
+        raise LiveError(409, "Open the room first.")
     if action in CONTROLS and access["status"] != "live":
         raise LiveError(409, "Start the class first.")
 
@@ -344,8 +353,48 @@ async def roster(client, access):
         for c in await db(client, "GET", "/contacts?select=id,name&business_id=eq." + access["business_id"]
                           + "&id=in.(" + ",".join(chunk) + ")") or []:
             names[c["id"]] = (c.get("name") or "").strip()
-    return {"students": [{"identity": "student_" + e["id"], "name": names.get(e.get("contact_id")) or "Student"}
-                         for e in enrolled]}
+    # Who is in the room (they tapped "I'm in the room", or a teacher
+    # marked them), and whether the slides go to who isn't here.
+    here = await db(client, "GET", "/academy_live_here?select=enrollment_id,marked_by&session_id=eq." + access["session_id"]) or []
+    room = {h["enrollment_id"]: h["marked_by"] for h in here}
+    night = await db(client, "GET", "/academy_live_sessions?select=send_missed,missed_sent_at&id=eq." + access["session_id"]) or [{}]
+    return {"students": [{"identity": "student_" + e["id"], "name": names.get(e.get("contact_id")) or "Student",
+                          "room": room.get(e["id"])} for e in enrolled],
+            "send_missed": bool(night[0].get("send_missed")), "missed_sent_at": night[0].get("missed_sent_at")}
+
+
+async def mark_here(client, input, access):
+    """A student says they're in the room ("here"), or a teacher marks or
+    unmarks one ("mark"). Counted when the class ends (academy_class_nights)."""
+    sid = access["session_id"]
+    if input["action"] == "here":
+        if access["teacher"]:
+            raise LiveError(400, "Mark people in the room from People.")
+        enrollment, by, on = access["identity"][8:], "self", True
+    else:
+        enrollment, by, on = input["identity"][8:], "teacher", input["on"]
+        enrolled = await db(client, "GET", "/academy_enrollments?select=id&id=eq." + enrollment
+                            + "&course_id=eq." + access["course_id"] + "&business_id=eq." + access["business_id"] + "&limit=1")
+        if not enrolled:
+            raise LiveError(403, "That student does not belong to this class.")
+    if on:
+        await db(client, "POST", "/academy_live_here?on_conflict=session_id,enrollment_id",
+                 {"session_id": sid, "enrollment_id": enrollment, "marked_by": by},
+                 prefer="resolution=ignore-duplicates,return=minimal")
+    else:
+        await db(client, "DELETE", "/academy_live_here?session_id=eq." + sid + "&enrollment_id=eq." + enrollment,
+                 prefer="return=minimal")
+    return {"ok": True, "room": on}
+
+
+async def ask_missed(client, input, access):
+    """The teacher's "Send tonight's slides to who wasn't here": sent once,
+    after the class ends (academy_class_nights). Once sent, it stays sent."""
+    rows = await db(client, "PATCH", "/academy_live_sessions?id=eq." + access["session_id"]
+                    + "&missed_sent_at=is.null&select=send_missed,missed_sent_at", {"send_missed": input["on"]})
+    if not rows:
+        rows = await db(client, "GET", "/academy_live_sessions?select=send_missed,missed_sent_at&id=eq." + access["session_id"]) or [{}]
+    return {"ok": True, "send_missed": bool(rows[0].get("send_missed")), "missed_sent_at": rows[0].get("missed_sent_at")}
 
 
 async def run_action(client, input, authorization):
@@ -370,6 +419,10 @@ async def run_action(client, input, authorization):
         return await moderate(client, input, access)
     if action == "roster":
         return await roster(client, access)
+    if action in ("here", "mark"):
+        return await mark_here(client, input, access)
+    if action == "missed":
+        return await ask_missed(client, input, access)
     if action == "join":
         await db(client, "POST", "/rpc/academy_live_token_claim",
                  {"p_session": access["session_id"], "p_identity": access["identity"]})

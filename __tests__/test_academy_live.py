@@ -488,14 +488,16 @@ def test_roster_names_every_enrolled_student(client, monkeypatch):
     enrolled = [{"id": f"9{i:07d}-0000-4000-8000-000000000000", "contact_id": f"c{i}"} for i in range(85)]
     contacts_a = [{"id": f"c{i}", "name": f" Person {i} "} for i in range(80)]
     contacts_b = [{"id": f"c{i}", "name": ""} for i in range(80, 85)]
-    db = AsyncMock(side_effect=[access(teacher=True, identity=TEACHER), enrolled, contacts_a, contacts_b])
+    db = AsyncMock(side_effect=[access(teacher=True, identity=TEACHER), enrolled, contacts_a, contacts_b, [], []])
     monkeypatch.setattr(live, "db", db)
     students = client.post("/academy-live", json=input("roster")).json()["students"]
     assert len(students) == 85
-    assert students[0] == {"identity": "student_" + enrolled[0]["id"], "name": "Person 0"}
+    assert students[0] == {"identity": "student_" + enrolled[0]["id"], "name": "Person 0", "room": None}
     assert students[-1]["name"] == "Student"
     assert "business_id=eq." + BIZ in db.call_args_list[1].args[2] and "course_id=eq." + COURSE in db.call_args_list[1].args[2]
-    assert all("business_id=eq." + BIZ in c.args[2] for c in db.call_args_list[2:])
+    assert all("business_id=eq." + BIZ in c.args[2] for c in db.call_args_list[2:4])
+    # Who's in the room and the night's own ask: this session only.
+    assert all("id=eq." + SID in c.args[2] for c in db.call_args_list[4:])
 
 
 def test_the_token_carries_what_the_room_shows(env):

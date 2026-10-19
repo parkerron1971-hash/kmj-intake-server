@@ -1651,6 +1651,15 @@ async def startup():
                           minutes=15, id="academy_class_reminders")
     except Exception as e:
         print(f"   [warn] class reminders not scheduled: {e}")
+    # Class nights after they end: a church's night counted in its
+    # attendance as its own occasion, and the slides to who missed it when
+    # the teacher asked (academy_class_nights.sweep_tick; each night once).
+    try:
+        import academy_class_nights as _academy_class_nights
+        scheduler.add_job(g("academy_class_nights", _academy_class_nights.sweep_tick), "interval",
+                          minutes=10, id="academy_class_nights")
+    except Exception as e:
+        print(f"   [warn] class nights not scheduled: {e}")
     # THE LEAD ARC PR 4 (2026-08-14) — the first-response clock.
     #
     # Nothing measured how long a lead waited before anyone answered.

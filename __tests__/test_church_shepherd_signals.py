@@ -172,6 +172,23 @@ def test_an_occasions_own_day_wins_over_when_it_was_recorded(db):
     assert rec["days"] == [date(2026, 10, 18)] and eid
 
 
+def test_a_class_night_counts_in_attendance_but_is_never_a_sunday(db):
+    """Kevin 2026-10-18, "Count class nights": a class night is its own
+    occasion (academy_class_nights), even one held on a Sunday afternoon."""
+    hid = _drifting_carters(db)
+    for day in (date(2026, 10, 18), date(2026, 10, 11), date(2026, 10, 4)):
+        eid = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"class-{day}"))
+        db.t["module_entries"].append({"id": eid, "business_id": BIZ, "data": {"_class_session": f"s-{day}", "type": "class"}})
+        db.t["attendance"].append({"id": str(uuid.uuid4()), "business_id": BIZ, "entry_id": eid, "contact_id": CALVIN,
+                                   "method": "online", "checked_in_at": f"{day.isoformat()}T21:00:00+00:00"})
+    rec = sig.recorded(dict(BUSINESS), now=NOW)
+    assert sig.drift(rec["days"], rec["seen"][CALVIN]) == {"since": date(2026, 10, 4), "last_seen": date(2026, 9, 27)}
+    # A Sunday with only a class on it is no recorded Sunday either.
+    svc = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"svc-{date(2026, 10, 18)}"))
+    db.t["attendance"] = [a for a in db.t["attendance"] if a["entry_id"] != svc]
+    assert date(2026, 10, 18) not in sig.recorded(dict(BUSINESS), now=NOW)["days"] and hid
+
+
 # ─── Monday ──────────────────────────────────────────────────────────
 
 def test_monday_tells_the_shepherd_once_and_opens_a_signal(db, mail):
