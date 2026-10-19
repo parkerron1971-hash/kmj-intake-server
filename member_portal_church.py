@@ -803,14 +803,16 @@ def next_card(occasions: Optional[List[Dict[str, Any]]], today: Optional[date] =
 def week_cards(occasions: Optional[List[Dict[str, Any]]],
                groups: Optional[Dict[str, List[Dict[str, Any]]]], *,
                pal: Optional[Dict[str, str]] = None, pool: Optional[List[str]] = None, avoid: str = "",
-               used: Optional[set] = None, skip: str = "", biz: Optional[Dict[str, Any]] = None) -> str:
+               used: Optional[set] = None, skip: str = "", biz: Optional[Dict[str, Any]] = None,
+               edit: bool = False) -> str:
     """'This week', a row to swipe: what's on the calendar (the date on a
     coral tab; what this person said yes to, or serves at, in teal), then
     their groups and when they meet. Each card wears the picture the church
     put on it (an event by its name, so a weekly one keeps it), a photo
     named for it, or the default picture. No faces or member names — a
     member never sees who else is in a group, only its leaders' first names.
-    `skip` is the one Home already leads with. '' when there's nothing."""
+    `skip` is the one Home already leads with. '' when there's nothing.
+    `edit`: each card opens its picture instead (member_app_pictures)."""
     import member_app_ui as ui
     import member_app_photos as photos
     from member_portal import _e
@@ -827,7 +829,10 @@ def week_cards(occasions: Optional[List[Dict[str, Any]]],
         art = ui.picture(pic, look, kind)
         tag = ui.sample_tag() if samples.is_sample(item) else ""
         any_sample = any_sample or bool(tag)
-        return f'<span class="mb-ev-p">{art}{tab}{tag}</span>'
+        return f'<span class="mb-ev-p">{art}{tab}{tag}{ui.pin("", link=False) if edit else ""}</span>'
+
+    def to(key: str, href: str) -> str:
+        return f"/my/pictures/spot?key={quote(key, safe=':')}&amp;back=home" if edit else href
     cards = []
     for o in (occasions or []):
         d = _day(o.get("date") or "")
@@ -837,7 +842,8 @@ def week_cards(occasions: Optional[List[Dict[str, Any]]],
         line = (f'<span class="mb-mine">{_e("You\'re coming" if answer == "Going" else answer)}</span>' if answer else
                 f'<span>{_e(o.get("location") or o.get("date_label") or "")}</span>')
         tab = f'<span class="mb-datebox" aria-hidden="true"><small>{d.strftime("%a").upper()}</small><b>{d.day}</b></span>'
-        cards.append(f'<a class="mb-ev" href="/my/events">{cov(event_key(o.get("title")), o.get("title") or "", o, tab, "events")}'
+        ekey = event_key(o.get("title"))
+        cards.append(f'<a class="mb-ev" href="{to(ekey, "/my/events")}">{cov(ekey, o.get("title") or "", o, tab, "events")}'
                      f'<span class="mb-ev-b"><strong>{_e(o.get("title"))}</strong>'
                      f'<span class="mp-sr">{_e(o.get("date_label") or "")}</span>{line}</span></a>')
         if len(cards) == 6:
@@ -851,7 +857,7 @@ def week_cards(occasions: Optional[List[Dict[str, Any]]],
                 f'<span>{_e(g.get("meets") or g.get("location") or "")}</span>')
         led_html = f'<span>Led by {_e(led)}</span>' if led and g.get("role") != "leader" and not g.get("live") else ""
         gkey = "group:" + str(g.get("id"))
-        cards.append(f'<a class="mb-ev" href="{href}">{cov(gkey, g.get("name") or "", g, tab, "groups")}'
+        cards.append(f'<a class="mb-ev" href="{to(gkey, href)}">{cov(gkey, g.get("name") or "", g, tab, "groups")}'
                      f'<span class="mb-ev-b"><strong>{_e(g.get("name"))}</strong>{line}{led_html}</span></a>')
     if not cards:
         return ""
@@ -1162,11 +1168,13 @@ def _short_name(name: str) -> str:
     return short or n or "your church"
 
 
-def home_tiles(biz: Dict[str, Any], site, pool: Optional[List[str]] = None, used: Optional[set] = None) -> str:
+def home_tiles(biz: Dict[str, Any], site, pool: Optional[List[str]] = None, used: Optional[set] = None,
+               edit: bool = False) -> str:
     """"At Love City": the church's own tiles on one grid (a wide one, two
     squares, a band, then squares) — what its Subsplash Home held. Without
     any saved, the ways in every church has: groups, the calendar, prayer
-    and its website."""
+    and its website. `edit`: each tile opens its picture instead
+    (member_app_pictures)."""
     import member_app_ui as ui
     import member_app_photos as photos
     from member_portal import _e, portal_settings
@@ -1198,9 +1206,11 @@ def home_tiles(biz: Dict[str, Any], site, pool: Optional[List[str]] = None, used
         if pic:
             used.add(pic)
         art = ui.picture(pic, look, t.get("kind") or tile_kind(t["href"]))
-        outside = t["href"].startswith("https://")
+        outside = t["href"].startswith("https://") and not edit
         attrs = ' target="_blank" rel="noopener"' if outside else ""
-        out.append(f'<a class="mb-bt {shape}{"" if pic else " is-def"}" href="{_e(t["href"])}"{attrs}>{art}<span class="mb-bt-t">'
+        href = f"/my/pictures/spot?key={quote(key, safe=':')}&amp;back=home" if edit else _e(t["href"])
+        art += ui.pin("", link=False) if edit else ""
+        out.append(f'<a class="mb-bt {shape}{"" if pic else " is-def"}" href="{href}"{attrs}>{art}<span class="mb-bt-t">'
                    f'<strong>{_e(t["title"])}{ui.icon("out", 15) if outside else ""}</strong>'
                    f'{f"<span>{_e(t["sub"])}</span>" if t["sub"] else ""}</span></a>')
     return (f'<section aria-labelledby="mb-at">{ui.section("At " + _short_name(biz.get("name") or ""), hid="mb-at")}'

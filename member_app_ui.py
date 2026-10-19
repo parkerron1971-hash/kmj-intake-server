@@ -370,6 +370,16 @@ def default_art(kind: str, cls: str = "", *, night: bool = False) -> str:
             f'stroke-linecap="round" stroke-linejoin="round" focusable="false">{ic}</svg></span>')
 
 
+def pin(href: str, label: str = "Change", *, link: bool = True) -> str:
+    """The Change button on a picture while someone who may change pictures
+    is changing them (member_app_pictures). `href` is trusted markup. On a
+    card that is itself the link, it's a label, not a second link."""
+    inner = f'{icon("camera", 15)}<span>{escape(label)}</span>'
+    if link:
+        return f'<a class="mb-pin" href="{href}">{inner}</a>'
+    return f'<span class="mb-pin" aria-hidden="true">{inner}</span>'
+
+
 def picture(url: str, look: str, kind: str, cls: str = "", *, eager: bool = False, night: bool = False) -> str:
     """The church's photo for a spot in its look, or the spot's default
     picture when it has none (member_app_photos.choose)."""
@@ -1182,6 +1192,20 @@ _FAMILY_CSS = Template("""
 .mb-datebox{background:var(--coral);color:var(--on-coral);}
 .mb-datebox small{color:inherit;opacity:.85;}
 .mb-ev-b .mb-mine{color:var(--teal-ink);}
+
+/* changing pictures (member_app_pictures): the bar, and Change on each picture */
+.mb-editbar{display:flex;align-items:center;gap:12px;margin:0 0 14px;padding:12px 12px 12px 14px;border-radius:var(--r-md);background:var(--acc-deep);}
+.mb-editbar-ic{width:38px;height:38px;flex:none;border-radius:50%;display:grid;place-items:center;background:var(--acc-fill);color:var(--on-acc);}
+.mb-editbar-t{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px;}
+.mb-editbar-t strong{font-size:15px;}
+.mb-editbar-t span{font-size:12.5px;color:var(--fg2);}
+.mb-editbar-a{font-size:14px;font-weight:600;text-decoration:none;color:var(--acc);padding:0 4px;}
+.mp-go.mb-editbar-done{width:auto;min-height:36px;padding:0 16px;border-radius:999px;font-size:14px;}
+.mb-pin{position:absolute;z-index:3;top:12px;right:12px;display:inline-flex;align-items:center;gap:6px;height:34px;padding:0 12px 0 10px;
+  border-radius:999px;background:rgba(0,0,0,.62);color:#fff;font-size:13px;font-weight:650;text-decoration:none;
+  box-shadow:0 0 0 1.5px rgba(255,255,255,.55);-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);}
+.mb-ev-p .mb-pin{top:auto;bottom:10px;right:10px;}
+a.mb-pin:focus-visible{outline:2px solid #fff;outline-offset:2px;}
 
 /* Watch, the Bible, Connect */
 .mb-livecard:not(.is-live) .mb-row-ic{background:var(--violet-deep);color:var(--violet-ink);}
