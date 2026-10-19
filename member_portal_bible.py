@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import re
 from datetime import date, datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 from urllib.parse import quote
 
 from fastapi import Request
@@ -223,23 +223,31 @@ def _chips(places: List[Tuple[str, int]]) -> str:
         f'<a href="/my/bible/{bt.slug(c)}/{n}">{_e(where_label(c, n))}</a>' for c, n in places) + "</nav>")
 
 
-def render_home(biz, site, me, tr: str, where, *, query: str = "", missed: bool = False,
+def render_home(biz, site, me, tr: str, where, *, query: str = "", missed: bool = False, slow: bool = False,
                 places: Optional[List[Tuple[str, int]]] = None, reading: str = "",
-                marks: Optional[List[Dict[str, Any]]] = None, preview: bool = False) -> str:
+                marks: Optional[Sequence[Dict[str, Any]]] = (), preview: bool = False) -> str:
     """The Bible tab (approved board 6): find a passage or a word, the last
     chapters read, keep reading, the church's reading plan, the member's
-    highlights and notes, and the books, Old Testament first."""
+    highlights and notes, and the books, Old Testament first. `marks` None
+    = they couldn't load (said so, never shown as none at all)."""
     import member_app_ui as ui
     import member_bible_marks as mbm
     from member_portal import _e, _shell
     err = ('<p class="mp-err" role="alert">We couldn\'t find that passage or word. Try something like John 3:16, '
-           'Psalm 23 or shepherd.</p>' if missed else "")
+           'Psalm 23 or shepherd.</p>' if missed else
+           '<p class="mp-err" role="alert">That\'s a lot of searching at once. Wait a minute, then try again.</p>'
+           if slow else "")
     plan = ""
     if reading:
         plan = (f'{ui.section("Reading plan", "/my/reading", "See the plan")}'
                 f'<div class="mb-today">{reading}</div>')
     notes = ""
-    if marks:
+    if preview:
+        pass
+    elif marks is None:
+        notes = (f'{ui.section("Highlights & notes", "/my/bible/notes", "See all")}<p class="mp-err" role="alert">'
+                 f'Your highlights and notes couldn\'t load just now. They\'re still saved.</p>')
+    elif marks:
         n = mbm.counts(marks)
         last = next((m for m in marks if m.get("colour") or (m.get("note") or "").strip()), None)
         quote_html = ""
@@ -252,7 +260,7 @@ def render_home(biz, site, me, tr: str, where, *, query: str = "", missed: bool 
                  f'<a class="bb-hn" href="/my/bible/notes"><span class="bb-hn-top"><span><b>{n["highlights"]}</b> '
                  f'highlight{"" if n["highlights"] == 1 else "s"}</span><span><b>{n["notes"]}</b> note{"" if n["notes"] == 1 else "s"}</span>'
                  f'<span><b>{n["bookmarks"]}</b> saved</span></span>{quote_html}</a>')
-    elif not preview:
+    else:
         notes = (f'{ui.section("Highlights & notes")}<p class="mp-muted bb-hn-empty">Tap any verse while you read to '
                  f'highlight it, add a private note, or save it. They show up here.</p>')
     books = ('<div class="bb-tst">'
@@ -616,6 +624,11 @@ async def serve(request: Request, biz, site, me, sub: str, *, preview: bool = Fa
                 resp = RedirectResponse(to, status_code=303, headers=_SECURE_HEADERS)
                 _remember(resp, tr, where, places)
                 return resp
+            import rate_limit
+            if not rate_limit.allow("bible_search", f"{biz['id']}|{me['id']}"):
+                return page(render_home(biz, site, me, tr, where, query=q, places=places, slow=True,
+                                        marks=() if preview else await asyncio.to_thread(mbm.all_marks, biz["id"], str(me["id"])),
+                                        preview=preview))
             hits, total = await asyncio.to_thread(bt.search, q, tr)
             if hits:
                 return page(render_search(biz, site, me, tr, q, hits, total))

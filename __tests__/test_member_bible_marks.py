@@ -82,9 +82,10 @@ def test_saving_upserts_merges_and_drops_an_empty_mark(monkeypatch):
     assert mbm.save("b", "c", {**v, "colour": "teal"}) is None                         # a failed read saves nothing
 
 
-def _post(body, *, session=(BIZ, ME, False)):
+def _post(body, *, session=(BIZ, ME, False), allow=lambda bucket, key: True):
     import member_portal as mp
     import member_portal_church as mpc
+    import rate_limit
     from unittest import mock
 
     async def signed_in(request):
@@ -95,7 +96,8 @@ def _post(body, *, session=(BIZ, ME, False)):
         return {"type": "http.request", "body": raw, "more_body": False}
     request = Request({"type": "http", "method": "POST", "path": "/my/bible/mark", "query_string": b"",
                        "headers": [(b"content-type", b"application/json")]}, receive)
-    with mock.patch.object(mpc, "_signed_in", signed_in), mock.patch.object(mpc, "_allowed", lambda c, m: True), \
+    with mock.patch.object(mpc, "_signed_in", signed_in), mock.patch.object(rate_limit, "allow", allow), \
+            mock.patch.object(mpc, "_allowed", lambda c, m: False), \
             mock.patch.object(mp, "_same_origin", lambda r: True), \
             mock.patch.object(mbm, "save", lambda b, c, ch: {"mark": {**ch, "note": None, "bookmarked": False}}):
         resp = asyncio.run(mbm.mark(request))
@@ -108,6 +110,20 @@ def test_the_route_saves_only_for_the_member_themselves():
     assert _post({"book": "PRO", "chapter": 4, "verse": 25, "colour": "pink"}, session=(BIZ, None, "preview"))[0] == 403
     assert _post({"book": "PRO", "chapter": 4, "verse": 25, "colour": "pink"}, session=(BIZ, None, False))[0] == 401
     assert _post({"book": "PRO", "chapter": 4, "verse": 99, "colour": "pink"})[0] == 400
+
+
+def test_marks_have_their_own_budget_not_the_members_rsvp_one():
+    # _post refuses member_action (RSVPs, prayers: 30 an hour) throughout; a
+    # highlight still saves, and only its own bucket can slow it down.
+    asked = []
+    assert _post({"book": "PRO", "chapter": 4, "verse": 25, "colour": "pink"},
+                 allow=lambda bucket, key: asked.append((bucket, key)) or True)[0] == 200
+    assert asked == [("bible_mark", f"{BIZ['id']}|{ME['id']}")]
+    assert _post({"book": "PRO", "chapter": 4, "verse": 25, "colour": "pink"},
+                 allow=lambda bucket, key: bucket != "bible_mark") == (429, {"ok": False, "error": "slow"})
+    import rate_limit
+    per, window = rate_limit._LIMITS["bible_mark"]
+    assert per * 3600 / window >= 300                                                 # a whole chapter's worth an hour
 
 
 def test_the_route_is_mounted_before_the_catch_all():
@@ -163,6 +179,18 @@ def test_a_word_finds_its_verses_and_a_reference_still_opens_it(monkeypatch):
     assert "couldn" in go("/my/bible", "q=zzzzqq").body.decode()
 
 
+def test_too_many_searches_wait_and_never_read_the_bible(monkeypatch):
+    import bible_text as bt
+    import rate_limit
+    monkeypatch.setattr(mbm, "all_marks", lambda b, c: [])
+    monkeypatch.setattr(rate_limit, "allow", lambda bucket, key: bucket != "bible_search")
+    monkeypatch.setattr(bt, "search", lambda *a, **k: pytest.fail("searched past the budget"))
+    page = go("/my/bible", "q=shepherd").body.decode()
+    assert "a lot of searching at once" in page and 'value="shepherd"' in page
+    # a reference still opens: it never reads the whole translation
+    assert go("/my/bible", "q=John 3:16").headers["location"] == "/my/bible/john/3?v=16#v16"
+
+
 def test_the_last_chapters_read_come_back_as_chips(monkeypatch):
     monkeypatch.setattr(mbm, "chapter_marks", lambda *a: {})
     monkeypatch.setattr(mbm, "all_marks", lambda b, c: [])
@@ -196,3 +224,12 @@ def test_the_home_shows_the_members_highlights_and_notes(monkeypatch):
          "updated_at": "2026-10-19T12:00:00+00:00"}])
     page = go("/my/bible").body.decode()
     assert 'href="/my/bible/notes"' in page and "<b>1</b> highlight" in page and "Keep thy heart" in page
+
+
+def test_highlights_that_cant_load_never_look_like_none(monkeypatch):
+    monkeypatch.setattr(mbm, "all_marks", lambda b, c: None)                          # a failed read
+    page = go("/my/bible").body.decode()
+    assert "couldn&#x27;t load" in page or "couldn't load" in page
+    assert "Tap any verse while you read" not in page                                  # not "you have none"
+    monkeypatch.setattr(mbm, "all_marks", lambda b, c: [])                            # truly none yet
+    assert "Tap any verse while you read" in go("/my/bible").body.decode()

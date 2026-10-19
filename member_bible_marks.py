@@ -141,7 +141,10 @@ async def mark(request: Request):
         return JSONResponse({"ok": False, "error": "unavailable"}, status_code=503, headers=mp._SECURE_HEADERS)
     if not me:
         return JSONResponse({"ok": False, "error": "signin"}, status_code=401, headers=mp._SECURE_HEADERS)
-    if not mpc._allowed(church, me):
+    # Its own budget: highlighting through a chapter is many taps, and
+    # member_action (30 an hour) is for RSVPs, prayers and details.
+    import rate_limit
+    if not rate_limit.allow("bible_mark", f"{church['business']['id']}|{me['id']}"):
         return JSONResponse({"ok": False, "error": "slow"}, status_code=429, headers=mp._SECURE_HEADERS)
     try:
         body = await request.json()

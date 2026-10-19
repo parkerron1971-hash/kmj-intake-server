@@ -291,14 +291,21 @@ def search(query: str, tr: str = DEFAULT, limit: int = 50) -> Tuple[List[Tuple[s
     if not words or any(len(w) < 2 for w in words) or len(words) > 8:
         return [], 0
     pats = [re.compile(r"\b" + re.escape(w) + r"\b") for w in words]
-    data = _load(translation(tr))
     hits: List[Tuple[str, int, int, str]] = []
     total = 0
-    for (code, ch), vs in sorted(data.items(), key=lambda kv: (ORDER.get(kv[0][0], 99), kv[0][1])):
-        for v, text in vs:
-            plain = _plain(text)
-            if all(p.search(plain) for p in pats):
-                total += 1
-                if len(hits) < limit:
-                    hits.append((code, ch, v, text))
+    for code, ch, v, text, plain in _searchable(translation(tr)):
+        if all(p.search(plain) for p in pats):
+            total += 1
+            if len(hits) < limit:
+                hits.append((code, ch, v, text))
     return hits, total
+
+
+@lru_cache(maxsize=None)
+def _searchable(tr: str) -> Tuple[Tuple[str, int, int, str, str], ...]:
+    """Every verse in the Bible's order with its plain words, made once per
+    translation (not on every search)."""
+    data = _load(tr)
+    return tuple((code, ch, v, text, _plain(text))
+                 for (code, ch), vs in sorted(data.items(), key=lambda kv: (ORDER.get(kv[0][0], 99), kv[0][1]))
+                 for v, text in vs)
