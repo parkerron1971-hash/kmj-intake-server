@@ -32,7 +32,9 @@
       "projects",
       "queue",
       "sessions",
+      "shepherding",
       "sms",
+      "songs",
       "tasks",
       "trust"
     ],

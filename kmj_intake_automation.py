@@ -324,6 +324,11 @@ from academy_live_router import router as academy_live_router
 app.include_router(academy_live_router)
 from academy_slides_router import router as academy_slides_router
 app.include_router(academy_slides_router)
+# Sunday screens (ChurchSavvy step 2): the church song library, words in
+# any form, a church's own Proclaim files, and Scripture on the spot.
+# WORSHIP_SONGS=off|owner|on (default owner) until a Thursday release.
+from worship_router import router as worship_router
+app.include_router(worship_router)
 # Joining a free class from its public page (POST <class page>/join).
 from academy_join import router as academy_join_router
 app.include_router(academy_join_router)
