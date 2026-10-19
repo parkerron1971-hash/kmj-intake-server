@@ -39,11 +39,18 @@ def _flash(request: Request) -> str:
     return ""
 
 
-def _tick_form(day: int, read: bool, label: str, back: str) -> str:
+def _tick_form(day: int, read: bool, label: str, back: str, plan: str = "") -> str:
+    """`plan`: a reading plan the member started on their own (its key);
+    '' for the church's."""
+    mine = f'<input type="hidden" name="plan" value="{plan}">' if plan in rp.PLANS else ""
     return (f'<form method="post" action="/my/reading" style="display:inline">'
             f'<input type="hidden" name="day" value="{day}"><input type="hidden" name="read" value="{"no" if read else "yes"}">'
-            f'<input type="hidden" name="back" value="{back}">'
+            f'<input type="hidden" name="back" value="{back}">{mine}'
             f'<button class="mp-go mp-go-2" type="submit">{label}</button></form>')
+
+
+def _own_key(today: Optional[Dict[str, Any]]) -> str:
+    return str(today.get("key") or "") if today and today.get("own") else ""
 
 
 def home_card(today: Optional[Dict[str, Any]], done: Optional[set]) -> str:
@@ -57,7 +64,7 @@ def home_card(today: Optional[Dict[str, Any]], done: Optional[set]) -> str:
     if read:
         buttons += f'<span class="mb-chip">{ui.icon("check", 12)}Read today</span>'
     else:
-        buttons += _tick_form(today["day"], False, "Mark as read", "/my")
+        buttons += _tick_form(today["day"], False, "Mark as read", "/my", _own_key(today))
     import member_app_samples as samples
     sample = samples.is_sample(today)
     head = (f'<h2 class="mp-sect">Reading plan{ui.sample_tag()}</h2>{ui.sample_hint(samples.WHERE["plan"])}' if sample else
@@ -84,12 +91,14 @@ def today_row(today: Optional[Dict[str, Any]], done: Optional[set]) -> str:
     read = bool(done) and today["day"] in done
     tag = ui.sample_tag() if samples.is_sample(today) else ""
     ring = ui.ring(today["day"], today["of"], 54, label=f'{today["day"]}<small>/{today["of"]}</small>')
+    own = _own_key(today)
     if read:
         tick = f'<span class="mb-tick is-done" role="img" aria-label="Read today">{ui.icon("check", 18)}</span>'
     else:
         tick = (f'<form method="post" action="/my/reading"><input type="hidden" name="day" value="{today["day"]}">'
                 f'<input type="hidden" name="read" value="yes"><input type="hidden" name="back" value="/my">'
-                f'<button class="mb-tick" type="submit" aria-label="Mark today&#x27;s reading as read">'
+                + (f'<input type="hidden" name="plan" value="{own}">' if own in rp.PLANS else "")
+                + f'<button class="mb-tick" type="submit" aria-label="Mark today&#x27;s reading as read">'
                 f'{ui.icon("check", 18)}</button></form>')
     return (f'<div class="mb-trow-wrap h-gold"><a class="mb-trow" href="{_e(today["href"])}">{ring}'
             f'<span class="mb-trow-t"><small>Reading plan · Day {today["day"]}{tag}</small>'
@@ -97,11 +106,17 @@ def today_row(today: Optional[Dict[str, Any]], done: Optional[set]) -> str:
 
 
 def render_page(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any],
-                done: Optional[set], today: Optional[date] = None) -> str:
+                done: Optional[set], today: Optional[date] = None, *, plan: Optional[Dict[str, Any]] = None) -> str:
+    """The church's plan, or `plan`: one the member started on their own
+    (member_portal_devotionals.own_plan), which has a Stop."""
     import member_app_ui as ui
     from member_portal import _e, _shell
-    plan = rp.current(biz)
-    back = f'<a class="mb-back" href="/my">{ui.icon("back", 16)}Home</a>'
+    own = bool(plan and plan.get("own"))
+    plan = plan if own else rp.current(biz)
+    here = f"/my/bible/plans/{plan['key']}" if own else "/my/reading"
+    key = plan["key"] if own else ""
+    back = (f'<a class="mb-back" href="/my/bible/plans">{ui.icon("back", 16)}Plans</a>' if own else
+            f'<a class="mb-back" href="/my">{ui.icon("back", 16)}Home</a>')
     if not plan:
         return _shell(biz, site, "Reading plan", back + """
 <h1>Reading plan</h1>
@@ -126,22 +141,27 @@ def render_page(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any],
             rows.append(
                 f'<li><span><strong>Day {d}</strong> · {_e(when.strftime("%a"))} {when.day} · '
                 f'<a href="{_e(rp.href(days[d - 1]))}">{_e(rp.label(days[d - 1]))}</a></span>'
-                f'{_tick_form(d, read, "Read ✓" if read else "Mark as read", "/my/reading")}</li>')
+                f'{_tick_form(d, read, "Read ✓" if read else "Mark as read", here, key)}</li>')
         catch = ""
         if missed and n_today:
             catch = (f'<details class="mb-each"><summary>{len(missed)} '
                      f'{"day" if len(missed) == 1 else "days"} to catch up</summary><ul class="mp-gifts">'
                      + "".join(f'<li><span>Day {d} · <a href="{_e(rp.href(days[d - 1]))}">{_e(rp.label(days[d - 1]))}</a></span>'
-                               f'{_tick_form(d, False, "Mark as read", "/my/reading")}</li>' for d in missed)
+                               f'{_tick_form(d, False, "Mark as read", here, key)}</li>' for d in missed)
                      + '</ul></details>')
         body = (f'<div class="mp-card"><p class="mp-total">{len(done)} <span class="mp-muted">of {plan["days"]} days read</span></p>'
                 + (f'<p class="mp-muted">{streak} {"day" if streak == 1 else "days"} in a row.</p>' if streak > 1 else '')
                 + f'<ul class="mp-gifts">{"".join(rows)}</ul>{catch}</div>')
+    stop = ""
+    if own:
+        stop = (f'<form method="post" action="/my/bible/plans/stop" class="mb-stop"><input type="hidden" name="plan" '
+                f'value="reading:{key}"><button class="mp-link" type="submit">Stop this plan</button></form>')
     return _shell(biz, site, "Reading plan", f"""{back}
 <h1>{_e(plan['title'])}</h1>
-<p class="mp-muted">{_e(rp.PLANS[plan['key']]['about'])} Started {_e(plan['start'].strftime('%B'))} {plan['start'].day}.</p>
+<p class="mp-muted">{_e(rp.PLANS[plan['key']]['about'])} {"You started it" if own else "Started"} {_e(plan['start'].strftime('%B'))} {plan['start'].day}.</p>
 {_flash(request)}
-{body}""", tab="home", who=me)
+{body}
+{stop}""", tab="bible" if own else "home", who=me)
 
 
 @router.post("/my/reading", include_in_schema=False)
@@ -151,7 +171,10 @@ async def tick(request: Request):
     from member_portal import _SECURE_HEADERS
     church, me, unavailable = await mpc._signed_in(request)
     form = await request.form()
-    back = "/my" if str(form.get("back") or "") == "/my" else "/my/reading"
+    # A plan the member started on their own carries its key.
+    key = str(form.get("plan") or "")
+    key = key if key in rp.PLANS else ""
+    back = "/my" if str(form.get("back") or "") == "/my" else (f"/my/bible/plans/{key}" if key else "/my/reading")
 
     def go(**q: str) -> RedirectResponse:
         qs = "&".join(f"{k}={v}" for k, v in q.items())
@@ -160,7 +183,14 @@ async def tick(request: Request):
         return go(err="preview" if unavailable == "preview" else "error")
     if not me:
         return RedirectResponse("/my", status_code=303, headers=_SECURE_HEADERS)
-    plan = rp.current(church["business"])
+    if key:
+        import member_portal_devotionals as mpd
+        mine = await asyncio.to_thread(mpd.starts, church["business"]["id"], str(me["id"]))
+        if mine is None:
+            return go(err="error")
+        plan = mpd.own_plan(key, mine.get(f"reading:{key}"))
+    else:
+        plan = rp.current(church["business"])
     try:
         day = int(str(form.get("day") or ""))
     except ValueError:

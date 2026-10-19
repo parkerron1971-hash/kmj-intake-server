@@ -393,6 +393,16 @@ app.include_router(member_app_pictures_router)
 # (member_bible_marks.py): POST /my/bible/mark. BEFORE public_site_router.
 from member_bible_marks import router as member_bible_marks_router
 app.include_router(member_bible_marks_router)
+# Plans & devotionals (member_portal_devotionals.py): a member starts a plan,
+# keeps their devotional day, and Listens to it (devotional_voice.py).
+# BEFORE public_site_router. The church writes them in Solutionist
+# (devotionals.py, /church/devotionals).
+from member_portal_devotionals import router as member_portal_devotionals_router
+app.include_router(member_portal_devotionals_router)
+from devotional_voice import router as devotional_voice_router
+app.include_router(devotional_voice_router)
+from devotionals import router as devotionals_router
+app.include_router(devotionals_router)
 # Church, Youth and Kids spaces (member_spaces.py): leaders' posts and the
 # office's leader approvals. BEFORE public_site_router.
 from member_spaces import router as member_spaces_router

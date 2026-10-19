@@ -13,6 +13,7 @@ with Me on the profile picture).
   /my/bible/<book>/<n>?v=16-18   read a chapter, those verses marked; tap a verse
                                  to highlight it, add a note, copy, share, bookmark
   /my/bible/notes                the member's highlights, notes and bookmarks
+  /my/bible/plans*               plans & devotionals (member_portal_devotionals.py)
 
 Round three (Kevin approved "Member App, Round Three", 2026-10-19): "the
 bible section needs major upgrade ... the choice of what book of bible
@@ -224,12 +225,14 @@ def _chips(places: List[Tuple[str, int]]) -> str:
 
 
 def render_home(biz, site, me, tr: str, where, *, query: str = "", missed: bool = False, slow: bool = False,
-                places: Optional[List[Tuple[str, int]]] = None, reading: str = "",
+                places: Optional[List[Tuple[str, int]]] = None, reading: str = "", plans: str = "",
                 marks: Optional[Sequence[Dict[str, Any]]] = (), preview: bool = False) -> str:
     """The Bible tab (approved board 6): find a passage or a word, the last
-    chapters read, keep reading, the church's reading plan, the member's
-    highlights and notes, and the books, Old Testament first. `marks` None
-    = they couldn't load (said so, never shown as none at all)."""
+    chapters read, keep reading, the church's devotionals and reading plans
+    (`plans`, member_portal_devotionals.bible_sections; else the church's
+    reading plan alone, `reading`), the member's highlights and notes, and
+    the books, Old Testament first. `marks` None = they couldn't load (said
+    so, never shown as none at all)."""
     import member_app_ui as ui
     import member_bible_marks as mbm
     from member_portal import _e, _shell
@@ -237,8 +240,8 @@ def render_home(biz, site, me, tr: str, where, *, query: str = "", missed: bool 
            'Psalm 23 or shepherd.</p>' if missed else
            '<p class="mp-err" role="alert">That\'s a lot of searching at once. Wait a minute, then try again.</p>'
            if slow else "")
-    plan = ""
-    if reading:
+    plan = plans
+    if reading and not plans:
         plan = (f'{ui.section("Reading plan", "/my/reading", "See the plan")}'
                 f'<div class="mb-today">{reading}</div>')
     notes = ""
@@ -632,14 +635,26 @@ async def serve(request: Request, biz, site, me, sub: str, *, preview: bool = Fa
             hits, total = await asyncio.to_thread(bt.search, q, tr)
             if hits:
                 return page(render_search(biz, site, me, tr, q, hits, total))
-        import reading_plans as rp
-        import member_portal_reading as mpr
-        plan = rp.current(biz)
-        done = await asyncio.to_thread(rp.read_days, biz["id"], me["id"], plan) if plan and not preview else set()
-        reading = mpr.today_row(rp.today_for(biz), done) if plan else ""
-        marks = None if preview else await asyncio.to_thread(mbm.all_marks, biz["id"], str(me["id"]))
+        import member_portal_devotionals as mpd
+        plans, marks = await asyncio.gather(
+            mpd.bible_home(biz, site, me, preview=preview),
+            asyncio.to_thread(lambda: None if preview else mbm.all_marks(biz["id"], str(me["id"]))))
+        reading = ""
+        if not plans:
+            import reading_plans as rp
+            import member_portal_reading as mpr
+            plan = rp.current(biz)
+            done = await asyncio.to_thread(rp.read_days, biz["id"], me["id"], plan) if plan and not preview else set()
+            reading = mpr.today_row(rp.today_for(biz), done) if plan else ""
         return page(render_home(biz, site, me, tr, where, query=q, missed=bool(q), places=places,
-                                reading=reading, marks=marks, preview=preview))
+                                reading=reading, plans=plans, marks=marks, preview=preview))
+    if parts[0] == "plans":
+        # Plans & devotionals (member_portal_devotionals.py).
+        import member_portal_devotionals as mpd
+        got = await mpd.serve(request, biz, site, me, parts[1:], tr=tr, preview=preview)
+        if not isinstance(got, tuple):
+            return got
+        return page(got[0], got[1])
     if parts == ["books"]:
         t = str(request.query_params.get("t") or "")
         if t not in ("ot", "nt"):
