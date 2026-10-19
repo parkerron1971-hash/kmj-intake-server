@@ -147,22 +147,28 @@ def sunday_rule(biz: Dict[str, Any]) -> Optional[Tuple[ZoneInfo, int]]:
     return tz, int(st.get("weekday", 6))
 
 
-def _entry_days(b: str, rows: List[Dict[str, Any]], tz: ZoneInfo) -> Optional[Dict[str, date]]:
+def _entry_days(b: str, rows: List[Dict[str, Any]], tz: ZoneInfo) -> Optional[Dict[str, Optional[date]]]:
     """Each attendance row's occasion, as the day it was for: a check-in
-    occasion's own `_checkin_day`, else the day its first check-in landed."""
+    occasion's own `_checkin_day`, else the day its first check-in landed.
+    A class night (academy_class_nights) is None: counted in attendance,
+    never a Sunday to this rule (Kevin 2026-10-18, "Count class nights")."""
     first: Dict[str, datetime] = {}
     for r in rows:
         eid = str(r.get("entry_id") or "")
         at = _parse(r.get("checked_in_at"))
         if eid and at and (eid not in first or at < first[eid]):
             first[eid] = at
-    out: Dict[str, date] = {}
+    out: Dict[str, Optional[date]] = {}
     for chunk in _chunks(sorted(first)):
         got = _rows(f"/module_entries?business_id=eq.{_q(b)}&id=in.({','.join(_q(i) for i in chunk)})&select=id,data")
         if got is None:
             return None
         for e in got:
-            d = _day((e.get("data") or {}).get("_checkin_day")) if isinstance(e.get("data"), dict) else None
+            data = e.get("data") if isinstance(e.get("data"), dict) else {}
+            if data.get("_class_session"):
+                out[str(e["id"])] = None
+                continue
+            d = _day(data.get("_checkin_day"))
             if d:
                 out[str(e["id"])] = d
     for eid, at in first.items():
