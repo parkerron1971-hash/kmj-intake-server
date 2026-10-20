@@ -486,7 +486,8 @@ async def my_notifications_save(request: Request):
 
 
 def render_page(biz: Dict[str, Any], site: Optional[Dict[str, Any]], request: Request,
-                me: Dict[str, Any], off: Optional[Set[str]], quiet: Optional[Dict[str, bool]] = None) -> str:
+                me: Dict[str, Any], off: Optional[Set[str]], quiet: Optional[Dict[str, bool]] = None,
+                chats: Optional[List[Dict[str, Any]]] = None) -> str:
     from html import escape
     from member_portal import _shell
     import member_spaces as msp
@@ -525,6 +526,9 @@ def render_page(biz: Dict[str, Any], site: Optional[Dict[str, Any]], request: Re
                                    t="Email me if my phone misses a leader’s post",
                                    h="If you haven’t opened it an hour after it went up."))
     key = escape(vapid_public(), quote=True)
+    # Each group chat: Every message / Evening summary / Off (group_chat_notify).
+    import group_chat_notify as gcn
+    chat_section = gcn.notifications_section(chats, escape) if any(k == "messages" for k, _, _ in offered) else ""
     return _shell(biz, site, "Notifications", f"""
 {flash}
 <section class="mp-card" aria-labelledby="np-dev">
@@ -540,6 +544,7 @@ def render_page(biz: Dict[str, Any], site: Optional[Dict[str, Any]], request: Re
   {boxes}
   <button class="mp-go" type="submit">Save</button>
 </form>
+{chat_section}
 <p><a href="/my/me">Back to Me</a></p>
 <script>(function(){{
   var KEY='{key}', st=document.getElementById('np-state'), on=document.getElementById('np-on'),
@@ -657,10 +662,13 @@ def _later(fn, *args, **kwargs) -> None:
 
 
 def chat_recipients(t: Dict[str, Any], acc: Dict[str, Any], sender_id: str,
-                    parts: Optional[List[Dict[str, Any]]]) -> List[str]:
+                    parts: Optional[List[Dict[str, Any]]], *, ring: bool = False,
+                    everyone: bool = False) -> List[str]:
     """Who hears about a new message: the other side of a direct chat, or
     the group's members with messaging on. Never the sender, never someone
-    who declined the chat or muted it."""
+    who declined the chat or muted it, and in a group's chat only those who
+    chose a note for every message (group_chat_notify), unless it's an
+    after-hours alert (`ring`) or the caller wants `everyone` who could."""
     sender_id = str(sender_id)
     state = {str(p.get("contact_id")): p for p in (parts or [])}
     folks = acc.get("people") or {}
@@ -674,25 +682,29 @@ def chat_recipients(t: Dict[str, Any], acc: Dict[str, Any], sender_id: str,
         p = state.get(i) or {}
         if i == sender_id or p.get("muted") or p.get("state") == "declined":
             continue
+        if not everyone:
+            import group_chat_notify as gcn
+            if not gcn.hears_each(t, p, ring):
+                continue
         out.append(i)
     return out
 
 
 def tell_chat(business: Dict[str, Any], t: Dict[str, Any], acc: Dict[str, Any],
-              sender_id: str, ring: bool = False) -> None:
+              sender_id: str, ring: bool = False, replied_to: Optional[str] = None) -> None:
     """After a delivered message (member_portal_messaging.send). `ring`:
-    sent as an after-hours alert."""
+    sent as an after-hours alert. `replied_to`: the message it answers, so
+    its writer hears even when they chose replies only."""
     if "messages" not in church_kinds(business.get("settings")):
         return
-    _later(_tell_chat, business, t, acc, sender_id, ring)
+    _later(_tell_chat, business, t, acc, sender_id, ring, replied_to)
 
 
-def _tell_chat(business, t, acc, sender_id, ring=False) -> None:
+def _tell_chat(business, t, acc, sender_id, ring=False, replied_to=None) -> None:
+    import group_chat_notify as gcn
     import member_portal_messaging as mpm
     parts = mpm.participants(business["id"], t["id"])
-    who = chat_recipients(t, acc, sender_id, parts)
-    if not who:
-        return
+    who = chat_recipients(t, acc, sender_id, parts, ring=ring)
     title = "New message"
     if t.get("kind") == "leaders":
         import member_portal_messaging as mpm2
@@ -705,8 +717,11 @@ def _tell_chat(business, t, acc, sender_id, ring=False) -> None:
     # A group's chat lives inside the group (member_portal_groups).
     url = (f"/my/groups/{t['group_id']}/chat" if t.get("kind") == "group" and t.get("group_id")
            else "/my/groups/leaders" if t.get("kind") == "leaders" else f"/my/messages/{t['id']}")
-    send(business, "messages", title=title, body="Open the app to read it.",
-         url=url, contact_ids=who, tag=f"chat-{t['id']}", ring=ring)
+    if who:
+        send(business, "messages", title=title, body="Open the app to read it.",
+             url=url, contact_ids=who, tag=f"chat-{t['id']}", ring=ring)
+    if replied_to and not ring:
+        gcn.reply_note(business, t, acc, sender_id, replied_to, parts, title, url)
 
 
 def tell_prayed(business_id: str, contact_id: Optional[str], request_id: str) -> None:
@@ -984,6 +999,10 @@ def sweep_tick() -> Dict[str, int]:
                 # A group's gathering, at 5 PM (group_gatherings).
                 import group_gatherings
                 out["gatherings"] = out.get("gatherings", 0) + group_gatherings.reminders(biz)
+            if "messages" in kinds:
+                # The evening note about a group's chat, at 7 PM (group_chat_notify).
+                import group_chat_notify
+                out["chat_evening"] = out.get("chat_evening", 0) + group_chat_notify.evening(biz)
         except Exception:
             logger.warning("member push sweep failed for one church", exc_info=True)
     # What waited through quiet hours, after 7 AM at each church.
