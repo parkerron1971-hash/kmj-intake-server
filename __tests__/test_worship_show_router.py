@@ -363,6 +363,9 @@ def test_a_real_screen_follows_the_booth_over_events(api, monkeypatch):
         with httpx.stream("GET", f"{base}/worship/screen/{token}/events", timeout=10) as stream:
             assert stream.headers["content-type"].startswith("text/event-stream")
             lines = stream.iter_lines()
+            # A 16 KB comment first, so Railway's edge flushes everything after it.
+            first = next(lines)
+            assert first.startswith(":") and len(first) >= wsr.PREAMBLE_BYTES
             for line in lines:
                 if line.startswith("data: "):
                     got.append(jsonlib.loads(line[6:])["state"]["slide"])
