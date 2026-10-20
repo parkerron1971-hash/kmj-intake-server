@@ -64,3 +64,27 @@ def test_the_search_box_offers_the_passage_one_more_verse_and_the_chapter():
 def test_the_world_english_bible_works_too():
     c = ws.choices("jn 3 16", "web")
     assert c["translation"] == "web" and "loved the world" in c["choices"][0]["slides"][0]["verses"][0]["text"]
+
+
+def test_a_passage_splits_the_way_it_is_asked():
+    ref = ws.lookup("ps 23")
+    assert [s["label"] for s in ws.slides(ref, split="verse")] == [f"Psalm 23:{n}" for n in range(1, 7)]
+    assert len(ws.slides(ref, split="block")) < len(ws.slides(ref))
+    assert [s["label"] for s in ws.slides(ref, breaks=["23:3", "23:5"])] == ["Psalm 23:1-2", "Psalm 23:3-4", "Psalm 23:5-6"]
+    # Breaks picked by hand win over the split.
+    assert [s["label"] for s in ws.slides(ref, split="verse", breaks=[])] == ["Psalm 23:1-6"]
+
+
+def test_a_fix_changes_this_sunday_only():
+    ref = ws.lookup("jn 3 16")
+    fixed = ws.slides(ref, fixes={"3:16": "Our own words"})
+    assert fixed[0]["verses"][0]["text"] == "Our own words"
+    assert ws.slides(ref)[0]["verses"][0]["text"] != "Our own words"
+
+
+def test_words_find_verses_when_it_isnt_a_passage():
+    got = ws.choices("still waters")
+    assert got["choices"] == [] and got["words_total"] >= 1
+    assert any(h["label"] == "Psalm 23:2" for h in got["words"])
+    passage = ws.choices("ps 23")
+    assert passage["words"] == [] and [v["verse"] for v in passage["verses"]] == list(range(1, 7))
