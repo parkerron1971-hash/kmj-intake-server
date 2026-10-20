@@ -5,6 +5,12 @@
 # "ps 23", "1 cor 13 4-7") and gets slides back, split at verse breaks so
 # no verse is ever cut mid-sentence.
 #
+# A planned passage can split its own way (2026-10-20, the Bible passage
+# editor: canvas board 32): about a slide's worth at a time, one verse a
+# slide, or bigger blocks; or at the verses the booth picked by hand. It can
+# carry this Sunday's own words for a verse (a "fix"); the Bible itself never
+# changes. The search box also finds verses by their words ("be still").
+#
 # Builds on bible_text (the member app's Bible): its reference parser
 # wants "Romans 8:28" and refuses a two-letter book with no verse, which is
 # right for scanning sermon notes and wrong for a booth that typed it on
@@ -18,6 +24,9 @@ from typing import Optional
 import bible_text as bt
 
 MAX_SLIDE_CHARS = 220
+BLOCK_SLIDE_CHARS = 600
+SPLITS = ("fit", "verse", "block")
+VERSE_KEY = re.compile(r"^\d{1,3}:\d{1,3}$")
 _SPACE_VERSE = re.compile(r"(\d{1,3})\s+(\d{1,3})(?=\s*(?:[-–—]\s*\d{1,3})?\s*$)")
 _BARE = re.compile(
     r"^\s*(?P<book>(?:[123]\s*)?[a-z]+)\.?\s+(?P<ch>\d{1,3})"
@@ -60,15 +69,25 @@ def plain(text: str) -> str:
     return re.sub(r"\[([^\]]*)\]", r"\1", text or "").strip()
 
 
-def slides(ref: bt.Ref, tr: str = bt.DEFAULT, max_chars: int = MAX_SLIDE_CHARS) -> list[dict]:
-    """Verses grouped into slides of about max_chars, always breaking between verses."""
+def slides(ref: bt.Ref, tr: str = bt.DEFAULT, max_chars: int = MAX_SLIDE_CHARS, *, split: str = "fit",
+           breaks: Optional[list[str]] = None, fixes: Optional[dict[str, str]] = None) -> list[dict]:
+    """Verses grouped into slides, always breaking between verses.
+
+    split: "fit" (about max_chars a slide), "verse" (one verse a slide) or
+    "block" (up to BLOCK_SLIDE_CHARS). breaks: the verses ("chapter:verse")
+    that start a slide, when the booth picked them by hand; they win over
+    split. fixes: this Sunday's own words for a verse, by the same key."""
     tr = bt.translation(tr)
+    limit = BLOCK_SLIDE_CHARS if split == "block" else max_chars
+    starts = set(breaks) if breaks is not None else None
     out: list[dict] = []
     cur: list[dict] = []
     size = 0
     for ch, v, text in bt.verses(ref, tr):
-        t = plain(text)
-        if cur and size + len(t) > max_chars:
+        key = f"{ch}:{v}"
+        t = (fixes or {}).get(key) or plain(text)
+        new = (key in starts) if starts is not None else (split == "verse" or size + len(t) > limit)
+        if cur and new:
             out.append(cur)
             cur, size = [], 0
         cur.append({"chapter": ch, "verse": v, "text": t})
@@ -93,7 +112,9 @@ def choices(query: str, tr: str = bt.DEFAULT) -> dict:
     tr = bt.translation(tr)
     ref = lookup(query, tr)
     if not ref:
-        return {"query": query, "translation": tr, "choices": []}
+        found = find_words(query, tr)
+        return {"query": query, "translation": tr, "translation_name": bt.TRANSLATIONS[tr]["short"], "choices": [],
+                "words": found["hits"], "words_total": found["total"]}
 
     def pack(r: bt.Ref, kind: str) -> dict:
         ss = slides(r, tr)
@@ -107,4 +128,17 @@ def choices(query: str, tr: str = bt.DEFAULT) -> dict:
         if last < count:
             out.append(pack(bt.Ref(ref.book, ref.chapter, ref.start, last + 1), "one_more"))
         out.append(pack(bt.Ref(ref.book, ref.chapter), "chapter"))
-    return {"query": query, "translation": tr, "translation_name": bt.TRANSLATIONS[tr]["short"], "choices": out}
+    return {"query": query, "translation": tr, "translation_name": bt.TRANSLATIONS[tr]["short"], "choices": out,
+            "verses": verses_of(ref, tr) if len(out) and out[0]["verse_count"] <= 200 else [], "words": [], "words_total": 0}
+
+
+def verses_of(ref: bt.Ref, tr: str = bt.DEFAULT) -> list[dict]:
+    """Every verse of a passage, plainly: the passage editor's word list."""
+    return [{"chapter": ch, "verse": v, "text": plain(text)} for ch, v, text in bt.verses(ref, bt.translation(tr))]
+
+
+def find_words(query: str, tr: str = bt.DEFAULT, limit: int = 8) -> dict:
+    """Verses holding every word typed ("be still"), in the Bible's order."""
+    tr = bt.translation(tr)
+    hits, total = bt.search(query, tr, limit)
+    return {"total": total, "hits": [{"label": bt.Ref(code, ch, v).label(), "text": plain(text)} for code, ch, v, text in hits]}

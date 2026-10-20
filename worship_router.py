@@ -11,7 +11,7 @@
 #   PUT    /worship/songs/{id}                 change a song
 #   DELETE /worship/songs/{id}?business_id=    take a song out of the library
 #   POST   /worship/import/proclaim            the church's own Proclaim files -> songs
-#   GET    /worship/scripture?q=&tr=           "rom 8 28" -> the passage as slides
+#   GET    /worship/scripture?q=&tr=           "rom 8 28" -> the passage as slides; "still waters" -> verses by their words
 #
 # The switch: WORSHIP_SONGS = off | owner | on (default owner). Features
 # switch on on Thursdays (docs/OPERATIONS.md); until then only the platform

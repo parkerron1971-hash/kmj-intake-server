@@ -189,3 +189,39 @@ def test_a_song_or_typed_words_go_up_on_the_spot():
     words = wsh.clean_live({"adhoc": {"kind": "text", "title": "Welcome", "slides": [{"kind": "text", "kicker": "", "text": "Welcome home"}]}})
     assert words["adhoc"]["slides"][0]["text"] == "Welcome home"
 
+
+
+# ─── the passage editor (canvas board 32) ─────────────────────────────
+
+def test_a_passage_keeps_how_it_goes_up():
+    v = wsh.clean_item(item("scripture", ref="ps 23", split="verse", breaks=["23:4", "23:1", "23:4"],
+                            fixes={"23:1": "  Our   own words  ", "23:2": ""}, show_nums=False, size="big", align="left"))
+    assert (v["split"], v["breaks"], v["fixes"]) == ("verse", ["23:1", "23:4"], {"23:1": "Our own words"})
+    assert (v["show_ref"], v["show_nums"], v["show_version"], v["size"], v["align"]) == (True, False, True, "big", "left")
+    plain = wsh.clean_item(item("scripture", ref="ps 23"))
+    assert (plain["split"], plain["breaks"], plain["fixes"], plain["size"], plain["align"]) == ("fit", None, {}, None, None)
+
+
+@pytest.mark.parametrize("extra, words", [
+    ({"split": "chunks"}, "splits to fit"),
+    ({"breaks": ["four"]}, "name a verse"),
+    ({"breaks": "23:4"}, "name a verse"),
+    ({"fixes": {"verse four": "x"}}, "names its verse"),
+    ({"fixes": {"23:1": "x" * 601}}, "600 letters"),
+    ({"size": "huge"}, "small, standard or big"),
+    ({"align": "right"}, "centered or on the left"),
+])
+def test_what_a_passage_cannot_be(extra, words):
+    with pytest.raises(ValueError, match=words):
+        wsh.clean_item(item("scripture", ref="ps 23", **extra))
+
+
+def test_a_passage_goes_up_its_own_way():
+    one_a_slide = wsh.compile_item(wsh.clean_item(item("scripture", ref="ps 23", split="verse")), {})
+    assert [s["label"] for s in one_a_slide["slides"]] == [f"Psalm 23:{n}" for n in range(1, 7)]
+    by_hand = wsh.compile_item(wsh.clean_item(item("scripture", ref="ps 23", breaks=["23:4"])), {})
+    assert [s["label"] for s in by_hand["slides"]] == ["Psalm 23:1-3", "Psalm 23:4-6"]
+    fixed = wsh.compile_item(wsh.clean_item(item("scripture", ref="jn 3 16", fixes={"3:16": "Our own words"}, show_ref=False)), {})
+    slide = fixed["slides"][0]
+    assert slide["verses"][0]["text"] == "Our own words"
+    assert slide["opts"] == {"ref": False, "nums": True, "version": True, "size": None, "align": None}

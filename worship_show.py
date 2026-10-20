@@ -105,6 +105,7 @@ def clean_item(raw: Any) -> Dict[str, Any]:
             raise ValueError(f"“{ref}” isn't a passage we can find. Try John 3:16 or Psalm 23")
         out["ref"] = found.label() if found else ""
         out["translation"] = tr
+        out.update(_clean_passage_choices(raw))
     elif kind == "text":
         out["title"] = _text(raw, "title", 80, "The title")
         slides = raw.get("slides") or []
@@ -147,6 +148,46 @@ def clean_item(raw: Any) -> Dict[str, Any]:
                 raise ValueError("The countdown needs a time to count to")
         out["to"] = to or None
     return out
+
+
+MAX_FIXES = 60
+SLIDE_SIZES = ("small", "std", "big")
+SLIDE_ALIGNS = ("center", "left")
+
+
+def _clean_passage_choices(raw: Dict[str, Any]) -> Dict[str, Any]:
+    """How a planned passage goes up (the passage editor, canvas board 32):
+    how it splits, where the booth broke it by hand, this Sunday's own words
+    for a verse, what shows beside the words, and its size and alignment."""
+    split = raw.get("split") or "fit"
+    if split not in ws.SPLITS:
+        raise ValueError("A passage splits to fit, one verse a slide, or in bigger blocks")
+    breaks = raw.get("breaks")
+    if breaks is not None:
+        if not isinstance(breaks, list) or len(breaks) > 200 or not all(isinstance(b, str) and ws.VERSE_KEY.match(b) for b in breaks):
+            raise ValueError("Slide breaks name a verse, like 23:4")
+        breaks = sorted(set(breaks), key=lambda k: tuple(int(x) for x in k.split(":")))
+    fixes_in = raw.get("fixes") or {}
+    if not isinstance(fixes_in, dict) or len(fixes_in) > MAX_FIXES:
+        raise ValueError(f"A passage keeps up to {MAX_FIXES} fixed verses")
+    fixes: Dict[str, str] = {}
+    for key, text in fixes_in.items():
+        if not ws.VERSE_KEY.match(str(key)) or not isinstance(text, str):
+            raise ValueError("A fixed verse names its verse, like 23:4")
+        t = re.sub(r"\s+", " ", text).strip()
+        if len(t) > 600:
+            raise ValueError("A fixed verse is at most 600 letters")
+        if t:
+            fixes[str(key)] = t
+    size = raw.get("size") or None
+    if size is not None and size not in SLIDE_SIZES:
+        raise ValueError("The words are small, standard or big")
+    align = raw.get("align") or None
+    if align is not None and align not in SLIDE_ALIGNS:
+        raise ValueError("The words sit centered or on the left")
+    return {"split": split, "breaks": breaks, "fixes": fixes,
+            "show_ref": raw.get("show_ref") is not False, "show_nums": raw.get("show_nums") is not False,
+            "show_version": raw.get("show_version") is not False, "size": size, "align": align}
 
 
 def clean_items(raw: Any) -> List[Dict[str, Any]]:
@@ -264,7 +305,11 @@ def _scripture_slides(item: Dict[str, Any]) -> Dict[str, Any]:
     if not ref:
         return {"title": item.get("ref") or "A passage", "missing": "passage", "slides": []}
     short = bt.TRANSLATIONS[tr]["short"]
-    slides = [{"kind": "verse", "label": s["label"], "translation": short, "verses": s["verses"]} for s in ws.slides(ref, tr)]
+    # What shows beside the words, and the passage's own size and alignment (None: the church's look).
+    opts = {"ref": item.get("show_ref") is not False, "nums": item.get("show_nums") is not False,
+            "version": item.get("show_version") is not False, "size": item.get("size"), "align": item.get("align")}
+    split = ws.slides(ref, tr, split=item.get("split") or "fit", breaks=item.get("breaks"), fixes=item.get("fixes") or None)
+    slides = [{"kind": "verse", "label": s["label"], "translation": short, "verses": s["verses"], "opts": opts} for s in split]
     return {"title": f"{ref.label()} · {short}", "slides": slides}
 
 
