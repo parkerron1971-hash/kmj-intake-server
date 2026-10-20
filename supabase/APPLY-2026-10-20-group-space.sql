@@ -119,6 +119,18 @@ do $$ declare t text; begin
   end loop;
 end $$;
 
+-- The office may answer a request too (a group with no leader yet would
+-- otherwise leave someone waiting): writing seats update a request's
+-- status. Posts and "seen" stay server-only.
+drop policy if exists tenant_writer_answer on public.group_join_requests;
+create policy tenant_writer_answer on public.group_join_requests for update to authenticated
+  using (public.is_business_writer(business_id)) with check (public.is_business_writer(business_id));
+drop policy if exists business_owner_answer on public.group_join_requests;
+create policy business_owner_answer on public.group_join_requests for update to authenticated
+  using (business_id in (select id from public.businesses where owner_id = auth.uid()))
+  with check (business_id in (select id from public.businesses where owner_id = auth.uid()));
+grant update (status, decided_at) on public.group_join_requests to authenticated;
+
 -- Every row's group, person and post must be this church's own. Nested
 -- per table: PL/pgSQL does not short-circuit `and` (a field one table
 -- lacks would error 42703).
