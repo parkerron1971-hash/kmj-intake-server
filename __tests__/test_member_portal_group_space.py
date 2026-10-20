@@ -189,8 +189,10 @@ def fake(monkeypatch):
     import member_push
     monkeypatch.setattr(member_push, "tell_join_request", lambda biz, g, me: told.append(("ask", g["id"], me["id"])))
     monkeypatch.setattr(member_push, "tell_join_yes", lambda biz, gid, cid: told.append(("yes", gid, cid)))
+    f.rang = []
     monkeypatch.setattr(member_push, "tell_group_post",
-                        lambda biz, g, pid, me, title: told.append(("post", g["id"], pid, title)))
+                        lambda biz, g, pid, me, title, ring=False: told.append(("post", g["id"], pid, title))
+                        or f.rang.append(ring))
     import member_portal_group_live as mgl
     monkeypatch.setattr(mgl, "open_sessions", lambda *a: {})
     f.told = told

@@ -174,9 +174,9 @@ BUSINESS_CHILD_TABLES: List[str] = [
     "ministry_care_notes", "ministry_care_requests", "ministry_gift_history",
     # Which givers were emailed a year-end statement; before contacts.
     "giving_statement_sends",
-    # Members' notification devices and choices (before contacts), and
-    # the log of what the church sent them.
-    "member_push_subscriptions", "member_push_prefs", "member_push_sends",
+    # Members' notification devices and choices (before contacts), the log
+    # of what the church sent them, and what waits through quiet hours.
+    "member_push_subscriptions", "member_push_prefs", "member_push_sends", "member_push_held",
     # Who was at each occasion; before module_entries and contacts.
     "attendance", "attendance_headcounts",
     # Which days of the reading plan each member has read; before contacts.
@@ -723,8 +723,9 @@ _IMPORT_SKIP = {
     # restored class is scheduled again (or Chief drafts it again).
     "academy_schedule_items",
     # Members' phones are devices, not records (like push_subscriptions);
-    # the send log must not claim a restored church already notified anyone.
-    "member_push_subscriptions", "member_push_prefs", "member_push_sends",
+    # the send log must not claim a restored church already notified anyone,
+    # and a note that waited through last night's quiet hours isn't news.
+    "member_push_subscriptions", "member_push_prefs", "member_push_sends", "member_push_held",
     "chief_errand_events", "chief_errands",  # never restore execution authority or private frames
     "connected_agents", "agent_assignments",  # execution authority must never be restored from a file
     # Preserve the archive, but never restore paid job state, publication

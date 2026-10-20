@@ -143,6 +143,7 @@ ERRORS = {
     "answered": "Someone already answered that request.",
     "group_board_only": "This group uses its Board only, so its chat is closed.",
     "leaders_write": "Only the group's leaders write in this chat. You can still react.",
+    "alert_used": "You've already sent an after-hours alert tonight. Turn it off to send this; it reaches phones in the morning.",
 }
 
 

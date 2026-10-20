@@ -20,6 +20,16 @@ Kept apart from the staff table push_subscriptions, so a staff send
 (morning brief, send_to_business) can never reach a member. The VAPID
 keys and the sending code are shared (push_notifications._send_one).
 
+Quiet hours (Kevin, 2026-10-20: phone alerts for group news, "and allow
+for group to send message with an (after hours alert) ... just incase they
+might have a prayer time outside of the hours"): from 9 PM to 7 AM in the
+church's own time, group news and messages (QUIET_KINDS) wait until
+morning for a member who keeps quiet hours on, the default. They wait in
+member_push_held, one note per chat or group, and the 15-minute sweep
+delivers them after 7 AM. An after-hours alert (a message or a leader's
+post sent as one) still rings for members who let it.
+MEMBER_QUIET_HOURS=off turns the waiting off.
+
 What goes on a lock screen is chosen here, never by the caller's raw
 text. A message or a prayer note says that something happened, not
 what was written: a teen's phone, a shared tablet.
@@ -38,6 +48,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional, Set
@@ -74,6 +85,9 @@ KINDS = (
 SPACE_KINDS = ("youth", "kids")
 KIND_KEYS = tuple(k for k, _, _ in KINDS)
 DAILY_ANNOUNCEMENTS = 3
+QUIET_KINDS = ("groups", "messages")
+QUIET_FROM, QUIET_TO = 21, 7          # 9 PM to 7 AM, the church's own clock
+HELD_MAX_HOURS = 36                   # a note older than this isn't news any more
 TITLE_MAX, BODY_MAX = 60, 180
 _TABLE = "member_push_subscriptions"
 
@@ -112,6 +126,30 @@ def clean_switches(raw: Any) -> Dict[str, bool]:
             raise HTTPException(400, f"{k} must be true or false")
         out[k] = v
     return out
+
+
+def is_quiet_hour(hour: int) -> bool:
+    return hour >= QUIET_FROM or hour < QUIET_TO
+
+
+def quiet_hour(business: Dict[str, Any], now: Optional[datetime] = None) -> bool:
+    """Is it quiet hours at this church right now? False whenever it can't
+    be told: a note is never held back by a clock nobody could read."""
+    if os.environ.get("MEMBER_QUIET_HOURS", "on").strip().lower() == "off":
+        return False
+    import business_marketing
+    row = business
+    if "owner_id" not in row:
+        # The member app's church row has no owner; the zone may be theirs.
+        got = sb_clients.sb_get_as_service(
+            f"/businesses?id=eq.{quote(str(business.get('id') or ''), safe='')}&select=id,settings,owner_id&limit=1")
+        if isinstance(got, list) and got:
+            row = {**business, **got[0]}
+    try:
+        zone = business_marketing.business_tz(row)
+    except Exception:
+        return False
+    return is_quiet_hour((now or datetime.now(timezone.utc)).astimezone(zone).hour)
 
 
 def ready() -> bool:
@@ -176,6 +214,25 @@ def save_turned_off(business_id: str, contact_id: str, off: Iterable[str]) -> bo
     return bool(rows)
 
 
+def quiet_prefs(business_id: str, contact_id: str) -> Optional[Dict[str, bool]]:
+    """{'quiet', 'after_hours'}: both on unless the member turned them off."""
+    rows = sb_clients.sb_get_as_service(
+        f"/member_push_prefs?business_id=eq.{business_id}&contact_id=eq.{contact_id}&select=quiet,after_hours&limit=1")
+    if rows is None:
+        return None
+    r = rows[0] if rows else {}
+    return {"quiet": r.get("quiet") is not False, "after_hours": r.get("after_hours") is not False}
+
+
+def save_quiet(business_id: str, contact_id: str, quiet: bool, after_hours: bool) -> bool:
+    rows = sb_clients.sb_post_as_service(
+        "/member_push_prefs?on_conflict=business_id,contact_id",
+        {"business_id": business_id, "contact_id": contact_id, "quiet": bool(quiet), "after_hours": bool(after_hours),
+         "updated_at": datetime.now(timezone.utc).isoformat()},
+        prefer="resolution=merge-duplicates,return=representation")
+    return bool(rows)
+
+
 def device_count(business_id: str, contact_id: Optional[str] = None) -> int:
     q = f"/{_TABLE}?business_id=eq.{business_id}&select=id&limit=5000"
     if contact_id:
@@ -190,7 +247,7 @@ def _safe_url(url: Optional[str]) -> str:
     return u if re.match(r"^/my(?:[/?#][^\s]*)?$", u) else "/my"
 
 
-def send(business: Dict[str, Any], kind: str, *, title: str, body: str = "",
+def send(business: Dict[str, Any], kind: str, *, title: str, body: str = "", ring: bool = False,
          url: str = "/my", contact_ids: Optional[Iterable[str]] = None,
          ref_id: Optional[str] = None, sent_by: Optional[str] = None,
          tag: Optional[str] = None) -> int:
@@ -198,16 +255,18 @@ def send(business: Dict[str, Any], kind: str, *, title: str, body: str = "",
     `contact_ids`). Returns how many phones it reached. Quietly 0 when
     push isn't set up, the church hasn't switched this kind on, or `ref_id`
     was already sent. Never raises: a notification is never worth failing
-    the thing it's about."""
+    the thing it's about. In quiet hours a QUIET_KINDS note waits for the
+    morning unless it's an after-hours alert (`ring`) and the member lets
+    those ring."""
     try:
         return _send(business, kind, title=title, body=body, url=url,
-                     contact_ids=contact_ids, ref_id=ref_id, sent_by=sent_by, tag=tag)
+                     contact_ids=contact_ids, ref_id=ref_id, sent_by=sent_by, tag=tag, ring=ring)
     except Exception:
         logger.warning("member push send failed", exc_info=True)
         return 0
 
 
-def _send(business, kind, *, title, body, url, contact_ids, ref_id, sent_by, tag=None) -> int:
+def _send(business, kind, *, title, body, url, contact_ids, ref_id, sent_by, tag=None, ring=False) -> int:
     import push_notifications as pn
     biz_id = str(business.get("id") or "")
     if kind not in KIND_KEYS or not biz_id or not ready():
@@ -240,19 +299,95 @@ def _send(business, kind, *, title, body, url, contact_ids, ref_id, sent_by, tag
     for i in range(0, len(people), 150):
         off_rows += sb_clients.sb_get_as_service(
             f"/member_push_prefs?business_id=eq.{biz_id}&contact_id=in.({','.join(people[i:i + 150])})"
-            f"&select=contact_id,off") or []
+            f"&select=contact_id,off,quiet,after_hours") or []
     muted = {str(r["contact_id"]) for r in off_rows if kind in (r.get("off") or [])}
     # One tag per chat (or per thing): a busy chat replaces its own note
     # on the lock screen instead of stacking twenty.
     payload = {"title": title, "body": body, "url": url,
                "tag": (tag or f"{kind}-{ref_id or ''}")[:60]}
+    held: Set[str] = set()
+    if kind in QUIET_KINDS and quiet_hour(business):
+        prefs = {str(r["contact_id"]): r for r in off_rows}
+        for c in people:
+            p = prefs.get(c) or {}
+            if c not in muted and p.get("quiet") is not False and not (ring and p.get("after_hours") is not False):
+                held.add(c)
+        if ring:
+            payload["title"] = f"After-hours alert · {title}"[:TITLE_MAX]
+        _hold(biz_id, kind, held, payload)
     reached = 0
     for s in subs:
-        if str(s["contact_id"]) in muted:
+        if str(s["contact_id"]) in muted or str(s["contact_id"]) in held:
             continue
         if pn._send_one(s, payload, table=_TABLE):
             reached += 1
     return _logged(log_id, reached)
+
+
+def _hold(biz_id: str, kind: str, contact_ids: Iterable[str], payload: Dict[str, Any]) -> None:
+    """Quiet hours: the note waits for the morning, one per person per tag
+    (a busy chat waits as its newest note)."""
+    now = datetime.now(timezone.utc).isoformat()
+    rows = [{"business_id": biz_id, "contact_id": c, "kind": kind, "title": payload["title"], "body": payload["body"],
+             "url": payload["url"], "tag": payload["tag"], "created_at": now} for c in sorted(contact_ids)]
+    for i in range(0, len(rows), 200):
+        sb_clients.sb_post_as_service("/member_push_held?on_conflict=business_id,contact_id,tag", rows[i:i + 200],
+                                      prefer="resolution=merge-duplicates,return=minimal")
+
+
+def sweep_held(now: Optional[datetime] = None) -> int:
+    """After 7 AM at each church: what waited through quiet hours, one
+    note per person (a summary when several waited). Stale notes and the
+    ones whose kind was switched off overnight are dropped. Phones reached."""
+    import push_notifications as pn
+    now = now or datetime.now(timezone.utc)
+    rows = sb_clients.sb_get_as_service(
+        "/member_push_held?select=id,business_id,contact_id,kind,title,body,url,tag,created_at&order=created_at.asc&limit=5000")
+    if not isinstance(rows, list) or not rows:
+        return 0
+    by_biz: Dict[str, List[Dict[str, Any]]] = {}
+    for r in rows:
+        by_biz.setdefault(str(r["business_id"]), []).append(r)
+    bizs = sb_clients.sb_get_as_service(
+        f"/businesses?id=in.({','.join(sorted(by_biz))})&select=id,name,settings,owner_id&limit=500")
+    if not isinstance(bizs, list):
+        return 0
+    stale = (now - timedelta(hours=HELD_MAX_HOURS)).isoformat()
+    reached = 0
+    for biz in bizs:
+        bid = str(biz["id"])
+        if quiet_hour(biz, now):
+            continue
+        kinds = church_kinds(biz.get("settings"))
+        by_person: Dict[str, List[Dict[str, Any]]] = {}
+        for r in by_biz.get(bid, []):
+            by_person.setdefault(str(r["contact_id"]), []).append(r)
+        for cid, notes in by_person.items():
+            prefs = sb_clients.sb_get_as_service(
+                f"/member_push_prefs?business_id=eq.{bid}&contact_id=eq.{cid}&select=off&limit=1")
+            off = set(((prefs or [{}])[0] if prefs else {}).get("off") or [])
+            fresh = [n for n in notes if str(n.get("created_at") or "") >= stale and n["kind"] in kinds and n["kind"] not in off]
+            if fresh and ready():
+                if len(fresh) == 1:
+                    n = fresh[0]
+                    payload = {"title": n["title"], "body": n["body"], "url": _safe_url(n["url"]), "tag": n["tag"]}
+                else:
+                    urls = {_safe_url(n["url"]) for n in fresh}
+                    names = []
+                    for n in reversed(fresh):
+                        if n["title"] not in names:
+                            names.append(n["title"])
+                    payload = {"title": "While you were resting",
+                               "body": " · ".join(names)[:BODY_MAX],
+                               "url": urls.pop() if len(urls) == 1 else "/my/groups", "tag": "quiet-morning"}
+                subs = sb_clients.sb_get_as_service(
+                    f"/{_TABLE}?business_id=eq.{bid}&contact_id=eq.{cid}&select=id,contact_id,endpoint,subscription&limit=20") or []
+                for s in subs:
+                    if pn._send_one(s, payload, table=_TABLE):
+                        reached += 1
+            ids = ",".join(str(n["id"]) for n in notes)
+            sb_clients.sb_delete_as_service(f"/member_push_held?business_id=eq.{bid}&id=in.({ids})")
+    return reached
 
 
 def _logged(log_id: Optional[str], reached: int) -> int:
@@ -337,11 +472,14 @@ async def my_notifications_save(request: Request):
     # becomes a parent later still hears about their child).
     off = (before - shown) | {k for k in shown if str(form.get(f"k_{k}") or "") != "on"}
     ok = await asyncio.to_thread(save_turned_off, biz_id, me["id"], off)
+    if ok and str(form.get("quiet_shown") or "") == "1":
+        ok = await asyncio.to_thread(save_quiet, biz_id, me["id"], str(form.get("q_quiet") or "") == "on",
+                                     str(form.get("q_after") or "") == "on")
     return _back("/my/notifications", **({"done": "notifications"} if ok else {"err": "error"}))
 
 
 def render_page(biz: Dict[str, Any], site: Optional[Dict[str, Any]], request: Request,
-                me: Dict[str, Any], off: Optional[Set[str]]) -> str:
+                me: Dict[str, Any], off: Optional[Set[str]], quiet: Optional[Dict[str, bool]] = None) -> str:
     from html import escape
     from member_portal import _shell
     import member_spaces as msp
@@ -363,6 +501,17 @@ def render_page(biz: Dict[str, Any], site: Optional[Dict[str, Any]], request: Re
         f'<input type="checkbox" name="k_{k}" {"" if k in off else "checked"} style="width:22px;height:22px;margin-top:2px">'
         f'<span><strong>{escape(label)}</strong><br><span class="mp-muted">{escape(hint)}</span></span></label>'
         for k, label, hint in offered)
+    # Quiet hours, where group news or messages can reach this phone.
+    if any(k in QUIET_KINDS for k, _, _ in offered):
+        q = quiet or {"quiet": True, "after_hours": True}
+        row = ('<label class="mp-check" style="display:flex;gap:10px;align-items:flex-start;min-height:44px;margin:8px 0">'
+               '<input type="checkbox" name="{n}" {c} style="width:22px;height:22px;margin-top:2px">'
+               '<span><strong>{t}</strong><br><span class="mp-muted">{h}</span></span></label>')
+        boxes += ('<h3 class="mp-sect" style="margin:18px 0 0;font-size:15px">At night</h3><input type="hidden" name="quiet_shown" value="1">'
+                  + row.format(n="q_quiet", c="checked" if q["quiet"] else "", t="Quiet hours",
+                               h="9 PM to 7 AM. Group news and messages wait until morning.")
+                  + row.format(n="q_after", c="checked" if q["after_hours"] else "", t="Let after-hours alerts ring",
+                               h="When someone in your group sends one during quiet hours, like a late prayer call."))
     key = escape(vapid_public(), quote=True)
     return _shell(biz, site, "Notifications", f"""
 {flash}
@@ -518,14 +667,15 @@ def chat_recipients(t: Dict[str, Any], acc: Dict[str, Any], sender_id: str,
 
 
 def tell_chat(business: Dict[str, Any], t: Dict[str, Any], acc: Dict[str, Any],
-              sender_id: str) -> None:
-    """After a delivered message (member_portal_messaging.send)."""
+              sender_id: str, ring: bool = False) -> None:
+    """After a delivered message (member_portal_messaging.send). `ring`:
+    sent as an after-hours alert."""
     if "messages" not in church_kinds(business.get("settings")):
         return
-    _later(_tell_chat, business, t, acc, sender_id)
+    _later(_tell_chat, business, t, acc, sender_id, ring)
 
 
-def _tell_chat(business, t, acc, sender_id) -> None:
+def _tell_chat(business, t, acc, sender_id, ring=False) -> None:
     import member_portal_messaging as mpm
     parts = mpm.participants(business["id"], t["id"])
     who = chat_recipients(t, acc, sender_id, parts)
@@ -544,7 +694,7 @@ def _tell_chat(business, t, acc, sender_id) -> None:
     url = (f"/my/groups/{t['group_id']}/chat" if t.get("kind") == "group" and t.get("group_id")
            else "/my/groups/leaders" if t.get("kind") == "leaders" else f"/my/messages/{t['id']}")
     send(business, "messages", title=title, body="Open the app to read it.",
-         url=url, contact_ids=who, tag=f"chat-{t['id']}")
+         url=url, contact_ids=who, tag=f"chat-{t['id']}", ring=ring)
 
 
 def tell_prayed(business_id: str, contact_id: Optional[str], request_id: str) -> None:
@@ -628,15 +778,15 @@ def _tell_youth_post(business, post_id, author) -> None:
 
 
 def tell_group_post(business: Dict[str, Any], group: Dict[str, Any], post_id: str,
-                    author: Dict[str, Any], title: str = "") -> None:
+                    author: Dict[str, Any], title: str = "", ring: bool = False) -> None:
     """After a leader posts to their group's Board (member_portal_groups):
     everyone else in the group. The post's title, never its words."""
     if "groups" not in church_kinds(business.get("settings")):
         return
-    _later(_tell_group_post, business, group, post_id, author, title)
+    _later(_tell_group_post, business, group, post_id, author, title, ring)
 
 
-def _tell_group_post(business, group, post_id, author, title) -> None:
+def _tell_group_post(business, group, post_id, author, title, ring=False) -> None:
     gid = str(group.get("id") or "")
     me = str((author or {}).get("id") or "")
     rows = sb_clients.sb_get_as_service(
@@ -647,7 +797,7 @@ def _tell_group_post(business, group, post_id, author, title) -> None:
     first = str((author or {}).get("name") or "").split(" ")[0] or "A leader"
     body = f"{first} posted: {title}" if title else f"New post from {first}. Open the group to see it."
     send(business, "groups", title=str(group.get("name") or "Your group"), body=body,
-         url=f"/my/groups/{gid}/board", contact_ids=who, ref_id=f"group-post:{post_id}", tag=f"group-{gid}")
+         url=f"/my/groups/{gid}/board", contact_ids=who, ref_id=f"group-post:{post_id}", tag=f"group-{gid}", ring=ring)
 
 
 def tell_join_request(business: Dict[str, Any], group: Dict[str, Any], asker: Dict[str, Any]) -> None:
@@ -771,7 +921,7 @@ REMIND_HOURS = range(16, 20)    # the afternoon before, on the church's clock
 
 def sweep_tick() -> Dict[str, int]:
     """Every 15 minutes (kmj_intake_automation, leader-locked)."""
-    out = {"sermons": 0, "events": 0}
+    out = {"sermons": 0, "events": 0, "held": 0}
     if not ready():
         return out
     rows = sb_clients.sb_get_as_service(
@@ -787,6 +937,11 @@ def sweep_tick() -> Dict[str, int]:
                 out["events"] += _sweep_events(biz)
         except Exception:
             logger.warning("member push sweep failed for one church", exc_info=True)
+    # What waited through quiet hours, after 7 AM at each church.
+    try:
+        out["held"] = sweep_held()
+    except Exception:
+        logger.warning("member push morning delivery failed", exc_info=True)
     return out
 
 

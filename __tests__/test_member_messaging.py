@@ -57,6 +57,10 @@ def _ok(row, col, expr):
         return str(v) not in expr[8:-1].split(",")
     if expr == "is.null":
         return v is None
+    if expr in ("is.true", "is.false"):
+        return v is (expr == "is.true")
+    if expr.startswith("gte."):
+        return str(v) >= expr[4:]
     if expr.startswith("lt."):
         return str(v) < expr[3:]
     if expr.startswith("gt."):

@@ -215,7 +215,7 @@ def posts_for(business_id: str, group_id: str, me_id: str, leader: bool,
     pressed "Got it", and (for a leader) how many have seen it."""
     rows = sb_clients.sb_get_as_service(
         f"/group_posts?business_id=eq.{_q(business_id)}&or=(group_id.eq.{_q(group_id)},group_id.is.null)"
-        f"&removed_at=is.null&select=id,group_id,title,body,pinned,ask_ack,posted_by,created_at"
+        f"&removed_at=is.null&select=id,group_id,title,body,pinned,ask_ack,posted_by,after_hours,created_at"
         f"&order=created_at.desc&limit={POSTS_SHOWN}")
     if rows is None:
         return None
@@ -414,7 +414,7 @@ def answer(business: Dict[str, Any], me: Dict[str, Any], request_id: str, yes: b
 
 
 async def create_post(business: Dict[str, Any], me: Dict[str, Any], group_id: str, title: str, body: str,
-                      pinned: bool, ask_ack: bool) -> Tuple[bool, str]:
+                      pinned: bool, ask_ack: bool, after_hours: bool = False) -> Tuple[bool, str]:
     import asyncio
     import msg_screen
     business_id = str(business["id"])
@@ -438,6 +438,20 @@ async def create_post(business: Dict[str, Any], me: Dict[str, Any], group_id: st
         return False, "post_busy"
     if verdict != "ok":
         return False, "post_no"
+    # An after-hours alert (member_push quiet hours): only in quiet hours,
+    # one a night for each leader.
+    import member_portal_messaging as mpm
+    import member_push
+    alert = bool(after_hours) and await asyncio.to_thread(member_push.quiet_hour, business)
+    if alert:
+        used = await asyncio.to_thread(
+            sb_clients.sb_get_as_service,
+            f"/group_posts?business_id=eq.{_q(business_id)}&posted_by=eq.{_q(me['id'])}&after_hours=is.true"
+            f"&created_at=gte.{quote(mpm.alert_since(), safe='')}&select=id&limit=1")
+        if not isinstance(used, list):
+            return False, "error"
+        if used:
+            return False, "alert_used"
     if pinned:
         # One pin per group: the new one takes the top.
         await asyncio.to_thread(
@@ -446,11 +460,11 @@ async def create_post(business: Dict[str, Any], me: Dict[str, Any], group_id: st
             {"pinned": False})
     rows = await asyncio.to_thread(sb_clients.sb_post_as_service, "/group_posts", {
         "business_id": business_id, "group_id": g["id"], "title": title, "body": body,
-        "pinned": bool(pinned), "ask_ack": bool(ask_ack), "posted_by": str(me["id"])})
+        "pinned": bool(pinned), "ask_ack": bool(ask_ack), "posted_by": str(me["id"]),
+        **({"after_hours": True} if alert else {})})
     if not (isinstance(rows, list) and rows):
         return False, "error"
-    import member_push
-    member_push.tell_group_post(business, g, str(rows[0].get("id") or ""), me, title)
+    member_push.tell_group_post(business, g, str(rows[0].get("id") or ""), me, title, ring=bool(alert))
     return True, "post_up"
 
 
@@ -777,6 +791,8 @@ def _post_card(p: Dict[str, Any], g: Dict[str, Any], *, leader: bool, me_id: str
         meta += " · to every group"
     pinned = bool(p.get("pinned")) and not p.get("church")
     pin_mark = f'<span class="gs-pinned">{_ic("pin", 14)}Pinned</span>' if pinned else ""
+    if p.get("after_hours"):
+        pin_mark += f'<span class="gs-pinned gc-ahs">{_ic("bell", 14)}After-hours alert</span>'
     title = f'<h3>{_e(p["title"])}</h3>' if p.get("title") else ""
     pid = _e(p["id"])
     ack = ""
@@ -832,8 +848,10 @@ def _requests_block(reqs: List[Dict[str, Any]], g: Dict[str, Any]) -> str:
             f'<span class="gs-n">{len(reqs)}</span></div>{"".join(rows)}</section>')
 
 
-def _compose(g: Dict[str, Any]) -> str:
+def _compose(g: Dict[str, Any], quiet: bool = False) -> str:
     from member_portal import _e
+    alert = (f'<label class="gs-check"><input type="checkbox" name="after_hours" value="1">After-hours alert: '
+             f'rings through quiet hours for people who allow it. One a night.</label>' if quiet else "")
     return (f'<form class="gs-compose" id="post" method="post" action="/my/groups/post">'
             f'<input type="hidden" name="group_id" value="{_e(g["id"])}">'
             f'<label class="gs-l" for="gs-pt">Post to the Board</label>'
@@ -842,7 +860,7 @@ def _compose(g: Dict[str, Any]) -> str:
             f'<textarea id="gs-pb" name="body" maxlength="{POST_MAX}" required '
             f'placeholder="Write it like you\'d say it to the group."></textarea>'
             f'<label class="gs-check"><input type="checkbox" name="pin" value="1">Pin it to the top</label>'
-            f'<label class="gs-check"><input type="checkbox" name="ack" value="1" checked>Ask everyone for a “Got it”</label>'
+            f'<label class="gs-check"><input type="checkbox" name="ack" value="1" checked>Ask everyone for a “Got it”</label>{alert}'
             f'<button class="gs-btn" type="submit">{_ic("send", 16)}Post to {_e(g.get("name") or "the group")}</button>'
             f'<p class="gs-fine">Everyone in the group sees it on the group\'s Home and Board. It\'s checked before it goes up, like every message.</p>'
             f'</form>')
@@ -900,7 +918,8 @@ def render(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], data
     elif tab == "board":
         cards = "".join(_post_card(p, g, leader=leader, me_id=me_id, size=size, back=back) for p in posts)
         empty = ('<p class="gs-empty">Nothing on the Board yet. When a leader posts, it shows here.</p>' if not cards else "")
-        content = f'{_compose(g) if leader else ""}{cards}{empty}'
+        import member_push
+        content = f'{_compose(g, member_push.quiet_hour(biz)) if leader else ""}{cards}{empty}'
         content += (f'<p class="gs-note">{_ic("lock", 15)}<span>Only the group\'s leaders post here, plus your pastors to every group.'
                     f'</span></p>')
     elif tab == "people":
@@ -1039,8 +1058,11 @@ def chat_view(biz: Dict[str, Any], g: Optional[Dict[str, Any]], me: Dict[str, An
     if rx is None:
         return {"state": "error"}
     mpm.mark_read(biz_id, tid, str(me["id"]))
+    import member_push
+    quiet = member_push.quiet_hour(biz)
     writers = "all" if room else (g.get("chat_writers") if g.get("chat_writers") in ("all", "leaders") else "all")
-    return {"state": "ok", "tid": tid, "acc": acc, "msgs": msgs, "looks": looks, "rx": rx, "writers": writers}
+    return {"state": "ok", "tid": tid, "acc": acc, "msgs": msgs, "looks": looks, "rx": rx, "writers": writers,
+            "quiet": quiet}
 
 
 def room_view(biz: Dict[str, Any], me: Dict[str, Any]) -> Dict[str, Any]:
@@ -1140,6 +1162,11 @@ CHAT_CSS = """
   padding:0 16px;font:inherit;font-size:16px;box-shadow:inset 0 0 0 1px var(--line);}
 .gc-send{width:46px;height:46px;border-radius:50%;border:0;display:grid;place-items:center;background:var(--acc-fill);color:var(--on-acc);
   cursor:pointer;flex:none;}
+.gc-ah{display:flex;align-items:flex-start;gap:8px;font-size:12.5px;color:var(--fg2);line-height:1.35;cursor:pointer;}
+.gc-ah input{width:20px;height:20px;margin:0;flex:none;accent-color:var(--coral,var(--acc));}
+.gc-ah .mb-ic{flex:none;margin-top:2px;color:var(--coral,var(--acc));}
+.gc-ah b{color:var(--fg);font-weight:650;}
+.gc-ahs{display:inline-flex;align-items:center;gap:4px;font-size:12px;font-weight:650;color:var(--coral,var(--acc));padding:0 4px;}
 .gc-safe{display:flex;align-items:center;justify-content:center;gap:6px;font-size:12px;color:var(--fg3);margin:0;}
 .gc-guide{background:var(--s1);border-radius:var(--r-lg);padding:16px 18px;}
 .gc-guide ul{margin:8px 0 14px;padding-left:18px;display:flex;flex-direction:column;gap:6px;font-size:14.5px;color:var(--fg2);}
@@ -1242,8 +1269,9 @@ def _chat_body(biz: Dict[str, Any], request: Request, me: Dict[str, Any], g: Dic
         # leader's Take down): the chat stays calm, like the canvas.
         bubble = (f'<details class="gc-d"><summary class="gc-b">{body}</summary><div class="gc-acts">{"".join(acts)}</div></details>'
                   if acts else f'<p class="gc-b">{body}</p>')
+        rang = f'<span class="gc-ahs">{_ic("bell", 13)}After-hours alert</span>' if m.get("after_hours") else ""
         items.append(f'<li class="gc-m{" mine" if mine else ""}" id="m-{_e(m["id"])}">{face}<div class="gc-col">{who}{quote}'
-                     f'{bubble}{held}{chips_html}</div></li>')
+                     f'{bubble}{rang}{held}{chips_html}</div></li>')
     listing = "".join(items) or '<li class="gs-empty">No messages yet. Say hello to your group.</li>'
     notes_html = "".join(f'<p class="gc-note">{_ic(i, 14)}<span>{_e(n)}</span></p>' for i, n in notes)
     can_write = bool(acc.get("can_send")) and (cv.get("writers") != "leaders" or leader)
@@ -1256,7 +1284,7 @@ def _chat_body(biz: Dict[str, Any], request: Request, me: Dict[str, Any], g: Dic
                          f'<a href="{_e(here)}#gc-compose" aria-label="Cancel reply">Cancel</a></div>')
             reply_input = f'<input type="hidden" name="reply_to" value="{_e(replying["id"])}">'
         compose = (f'<form class="gc-compose" id="gc-compose" method="post" action="/my/messages/{_e(tid)}/send">'
-                   f'{reply_bar}<input type="hidden" name="back" value="{_e(here)}">{reply_input}'
+                   f'{reply_bar}<input type="hidden" name="back" value="{_e(here)}">{reply_input}{_alert_toggle(cv)}'
                    f'<div class="gc-row"><label class="mp-sr" for="gc-say">Message the group</label>'
                    f'<input id="gc-say" name="body" maxlength="{mpm.BODY_MAX}" autocomplete="off" required '
                    f'placeholder="Message {_e(g.get("name") or "the group")}">'
@@ -1274,6 +1302,16 @@ def _chat_body(biz: Dict[str, Any], request: Request, me: Dict[str, Any], g: Dic
     script = _chat_script(tid, len(msgs))
     return (f'<section class="gc" aria-label="Group chat"><div class="gc-notes">{notes_html}</div>'
             f'<ul class="gc-list" id="gc-list" aria-live="polite" aria-label="Messages">{listing}</ul>{compose}</section>'), script
+
+
+def _alert_toggle(cv: Dict[str, Any]) -> str:
+    """Quiet hours (member_push): this message can ring through for the
+    people who let after-hours alerts ring, like a late prayer call."""
+    if not cv.get("quiet"):
+        return ""
+    return (f'<label class="gc-ah"><input type="checkbox" name="after_hours" value="1">{_ic("bell", 15)}'
+            f'<span><b>After-hours alert</b> Rings through quiet hours for people who allow it, like a late prayer call. '
+            f'One a night.</span></label>')
 
 
 def _chat_script(tid: str, count: int) -> str:
@@ -1294,7 +1332,7 @@ if(f){{f.addEventListener('submit',function(e){{e.preventDefault();var i=documen
 var b=f.querySelector('.gc-send');b.disabled=true;err.hidden=true;var body=new URLSearchParams(new FormData(f));
 fetch(f.getAttribute('action'),{{method:'POST',credentials:'same-origin',headers:{{'Accept':'application/json','Content-Type':'application/x-www-form-urlencoded'}},body:body.toString()}})
 .then(function(r){{return r.json().then(function(d){{return {{ok:r.ok,d:d}};}});}}).then(function(x){{b.disabled=false;
-if(x.ok){{i.value='';if(x.d.care){{location.href=location.pathname+'?done=care';return;}}location.replace(location.pathname);}}else{{err.textContent=x.d.error||'That didn\'t send. Please try again.';err.hidden=false;}}}})
+if(x.ok){{i.value='';var ah=f.querySelector('input[name=after_hours]');if(ah)ah.checked=false;if(x.d.care){{location.href=location.pathname+'?done=care';return;}}location.replace(location.pathname);}}else{{err.textContent=x.d.error||'That didn\'t send. Please try again.';err.hidden=false;}}}})
 .catch(function(){{b.disabled=false;err.textContent='That didn\'t send. Please try again.';err.hidden=false;}});}});}}
 }})();</script>"""
 
@@ -1377,7 +1415,8 @@ async def post_route(request: Request):
     if not gid:
         return _go("/my/groups", err="group_gone")
     ok, code = await create_post(church["business"], me, gid, str(form.get("title") or ""), str(form.get("body") or ""),
-                                 str(form.get("pin") or "") == "1", str(form.get("ack") or "") == "1")
+                                 str(form.get("pin") or "") == "1", str(form.get("ack") or "") == "1",
+                                 str(form.get("after_hours") or "") == "1")
     return _go(_base(gid, "board"), **({"done": code} if ok else {"err": code}))
 
 
