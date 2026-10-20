@@ -104,7 +104,7 @@ def group_row(business_id: str, group_id: str) -> Optional[Dict[str, Any]]:
     rows = sb_clients.sb_get_as_service(
         f"/groups?id=eq.{_q(group_id)}&business_id=eq.{_q(business_id)}"
         f"&select=id,name,kind,description,meets,location,capacity,open_to_join,join_mode,name_display,youth,active,"
-        f"chat_on,chat_writers,meet_day,meet_time,meet_address,meet_note,meet_skips,updated_at&limit=1")
+        f"chat_on,chat_writers,meet_day,meet_time,meet_address,meet_note,meet_skips,study_on,updated_at&limit=1")
     if rows is None:
         return None
     if not rows or not rows[0].get("active"):
@@ -691,6 +691,10 @@ def _ic(name: str, size: int = 18) -> str:
                 'a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/>'),
         "home": '<path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"/>',
         "x": '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+        # Chief, on this week's study (group_study).
+        "sparkles": ('<path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5'
+                     'l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063'
+                     'a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/><path d="M20 3v4M22 5h-4M4 17v2M5 18H3"/>'),
         # Bring something (group_bring).
         "utensils": ('<path d="M3 2v7c0 1.1.9 2 2 2h4a2 2 0 0 0 2-2V2"/><path d="M7 2v20"/>'
                      '<path d="M21 15V2a5 5 0 0 0-5 5v6c0 1.1.9 2 2 2h3Zm0 0v7"/>'),
@@ -936,10 +940,19 @@ def render(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], data
         content, script = _chat_body(biz, request, me, g, data.get("chat") or {"state": "error"}, leader)
     elif tab == "meet":
         import group_gatherings
+        import group_study
+        st = data.get("study")
+        study = group_study.render(g, st, leader=leader, people=people, next_day=(data.get("meet") or {}).get("next"),
+                                   ic=_ic, esc=_e, name=lambda p: display_name(p, g.get("name_display") or "full"))
+        draft = bool(st and st.get("study") and not st["study"].get("posted_at"))
         content = group_gatherings.render_tab(
             biz, g, data.get("meet"), me_id=me_id, leader=leader, people=people, live=data.get("live"), ic=_ic,
             face=lambda p: _face(p, "gs-av m", g.get("name_display") or "full"), esc=_e,
-            name=lambda p: display_name(p, g.get("name_display") or "full"))
+            name=lambda p: display_name(p, g.get("name_display") or "full"), study="" if draft else study)
+        if draft:
+            content = study + content
+        if (data.get("meet") is not None) and st is None:
+            content += '<p class="mp-err" role="alert">This week’s study couldn’t load just now. Please try again in a moment.</p>'
     elif tab == "prayer":
         import group_prayer
         content = group_prayer.render_tab(
@@ -982,9 +995,15 @@ def render(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], data
             content += (f'<form method="post" action="/my/groups" style="margin-top:8px"><input type="hidden" name="group_id" value="{gid}">'
                         f'<input type="hidden" name="action" value="leave"><button class="gs-mini warn" type="submit">Leave this group</button></form>')
     else:
+        import group_study
         parts = []
+        st = data.get("study")
         if leader:
             parts.append(_requests_block(data.get("requests") or [], g))
+            if st and st.get("study") and not st["study"].get("posted_at"):
+                parts.append(group_study.render(g, st, leader=True, people=people,
+                                                next_day=(data.get("meet") or {}).get("next"), ic=_ic, esc=_e,
+                                                name=lambda p: display_name(p, g.get("name_display") or "full")))
         pinned = [p for p in posts if p.get("pinned") and not p.get("church")]
         church_new = [p for p in posts if p.get("church") and not p.get("i_acked")][:1]
         for p in (pinned[:1] + church_new):
@@ -1031,6 +1050,9 @@ def render(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], data
         if chat:
             doors.append(f'<a class="gs-row" href="{_base(g["id"], "chat")}"><span class="gs-disc violet">{_ic("chat", 20)}</span>'
                          f'<span class="gs-t"><b>Group chat</b><span>Talk with everyone in the group</span></span>{_ic("chevron", 18)}</a>')
+        study_line = group_study.home_line(g, st, _ic, _e, _base(g["id"], "meet"))
+        if study_line:
+            doors.append(study_line)
         doors.append(f'<a class="gs-row" href="{_base(g["id"], "prayer")}"><span class="gs-disc coral">{_ic("hand-heart", 20)}</span>'
                      f'<span class="gs-t"><b>Prayer wall</b><span>Carry each other in prayer</span></span>{_ic("chevron", 18)}</a>')
         doors.append(f'<a class="gs-row" href="{_base(g["id"], "people")}"><span class="gs-disc gold">{_ic("users", 20)}</span>'
@@ -1044,8 +1066,9 @@ def render(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], data
     import group_bring
     import group_gatherings
     import group_prayer
+    import group_study
     return _shell(biz, site, g.get("name") or "Group",
-                  f"<style>{GROUP_CSS}{CHAT_CSS}{group_prayer.PRAYER_CSS}{group_gatherings.MEET_CSS}{group_bring.BRING_CSS}</style>{page}",
+                  f"<style>{GROUP_CSS}{CHAT_CSS}{group_prayer.PRAYER_CSS}{group_gatherings.MEET_CSS}{group_bring.BRING_CSS}{group_study.STUDY_CSS}</style>{page}",
                   tab="connect", who=me, script=script), 200
 
 
@@ -1064,6 +1087,8 @@ async def serve(request: Request, biz: Dict[str, Any], site, me: Dict[str, Any],
     if data and data.get("role") and tab in ("", "meet"):
         import group_gatherings
         data["meet"] = await asyncio.to_thread(group_gatherings.view, biz, data["group"], str(me["id"]), data["people"])
+        import group_study
+        data["study"] = await asyncio.to_thread(group_study.view, biz, data["group"], leader=data.get("role") == "leader")
     if data and data.get("role") and tab == "prayer":
         import group_prayer
         data["prayer"] = await asyncio.to_thread(group_prayer.wall, str(biz["id"]), gid, str(me["id"]),
@@ -1581,6 +1606,23 @@ async def meet_bring_add_route(request: Request):
     if not gid:
         return _go("/my/groups", err="group_gone")
     ok, code = await group_bring.add(church["business"], me, gid, str(form.get("day") or ""), str(form.get("what") or ""))
+    return _go(_base(gid, "meet"), **({"done": code} if ok else {"err": code}))
+
+
+@router.post("/my/groups/meet/study", include_in_schema=False)
+async def meet_study_route(request: Request):
+    import group_study
+    church, me, form, stop = await _who(request, "/my/groups")
+    if stop:
+        return stop
+    gid = _gid(form)
+    if not gid:
+        return _go("/my/groups", err="group_gone")
+    sid = str(form.get("study") or "")
+    if not UUID.match(sid):
+        return _go(_base(gid, "meet"), err="study_gone")
+    edited = [str(q) for q in form.getlist("q")] if str(form.get("edited") or "") == "1" else None
+    ok, code = await group_study.post(church["business"], me, gid, sid, edited)
     return _go(_base(gid, "meet"), **({"done": code} if ok else {"err": code}))
 
 

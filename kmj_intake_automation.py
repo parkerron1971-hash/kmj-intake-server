@@ -1689,6 +1689,15 @@ async def startup():
                           minutes=15, id="group_email_followup")
     except Exception as e:
         print(f"   [warn] group email follow-up not scheduled: {e}")
+    # This week's study: each group's draft questions from Sunday's message,
+    # for its leaders to post (group_study.sweep_tick; once per group per
+    # message).
+    try:
+        import group_study as _group_study
+        scheduler.add_job(g("group_study_drafts", _group_study.sweep_tick), "interval",
+                          minutes=30, id="group_study_drafts")
+    except Exception as e:
+        print(f"   [warn] group study drafts not scheduled: {e}")
     # Class-night reminders: a few hours before each live class, its students
     # by email and a church's member app by its "Class nights" notification
     # (academy_reminders.sweep_tick; each night once).
