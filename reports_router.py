@@ -519,7 +519,7 @@ async def accountant_send(biz: str, year: Optional[int] = None,
         from email_sender import send_via_resend
         await send_via_resend(
             to_email=to_email, to_name=None,
-            from_email="reports@solutionist.studio", from_name=biz_name,
+            from_email="reports@mysolutionist.app", from_name=biz_name,
             reply_to=None, subject=subject, body=body,
             attachments=[{"filename": f"{y}_financial_package.zip",
                           "content": base64.b64encode(blob).decode("ascii"),
@@ -905,7 +905,7 @@ async def customer_statement_send(biz: str, contact_id: str,
         from email_sender import send_via_resend
         await send_via_resend(
             to_email=to_email, to_name=contact.get("name"),
-            from_email="reports@solutionist.studio", from_name=biz_name,
+            from_email="reports@mysolutionist.app", from_name=biz_name,
             reply_to=None, subject=subject, body=body,
             attachments=[{"filename": "statement.pdf",
                           "content": base64.b64encode(pdf).decode("ascii"),

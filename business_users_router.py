@@ -166,7 +166,7 @@ async def invite(biz: str, body: InviteBody, request: Request,
         biz_name = biz_row.get("name") or "a business"
         await send_via_resend(
             to_email=email, to_name=None,
-            from_email="invites@solutionist.studio", from_name="Solutionist System",
+            from_email="invites@mysolutionist.app", from_name="Solutionist System",
             reply_to=None,
             subject=f"{biz_name} invited you to their team",
             body=(f"You've been invited to join {biz_name} on Solutionist as a "
