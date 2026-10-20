@@ -155,3 +155,12 @@ def test_what_the_booth_puts_on_screen():
                        ({"message": "x" * 121}, "at most 120")]:
         with pytest.raises(ValueError, match=words):
             wsh.clean_live(bad)
+
+
+def test_a_church_without_a_brand_kit_sets_its_colors_in_the_look():
+    look = wsh.clean_look({"brand": {"primary": "#1C0B1F", "accent": "#C2125F", "logo_url": "https://x.example/logo.png"}})
+    assert look["brand"] == {"primary": "#1C0B1F", "accent": "#C2125F", "background": None, "logo_url": "https://x.example/logo.png"}
+    assert wsh.clean_look({})["brand"] == {"primary": None, "accent": None, "background": None, "logo_url": None}
+    for bad, words in [({"brand": {"primary": "plum"}}, "#2E1A47"), ({"brand": {"logo_url": "http://x.example/l.png"}}, "https://")]:
+        with pytest.raises(ValueError, match=words):
+            wsh.clean_look(bad)
