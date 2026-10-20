@@ -100,6 +100,7 @@ HTTP_TIMEOUT = httpx.Timeout(connect=10.0, read=60.0, write=30.0, pool=10.0)
 EXPORT_EXCLUDED: Dict[str, str] = {
     "worship_screens": "each screen's private link (a token); a copied link would show another church's Sunday, so screens are added again after a restore; cascade on business deletion",
     "worship_live": "what was on screen at one moment of a service; nothing to restore; cascade on business deletion",
+    "worship_team": "who is on the church's Sunday team: sign-in user ids and invite links (tokens) that can't mean anything in another business; the church invites its team again after a restore; cascade on business deletion",
     "academy_present_sessions": "a class presenting right now: a short-lived TV code and a copy of the slides without teacher notes (the deck itself is exported in academy_decks); expires within hours; cascade on business deletion",
     "chief_rail_practice": "the rail's practice record (chief_rail.py): a records-only answer next to Chief's, for deciding which question shapes may skip the full turn; platform tuning data, derived from records the export already carries; cascade on business deletion",
     "chief_reflection_runs": "nightly brain-pass run log (status, tokens, cost); operations metadata, not the business's content; the digest it wrote is exported in business_brain_versions; cascade on business deletion",

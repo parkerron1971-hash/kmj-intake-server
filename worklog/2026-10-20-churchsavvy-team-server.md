@@ -38,3 +38,10 @@ Step 7 of the approved round-4 ChurchSavvy build (canvas board 30), server side.
 - Sabotage rehearsals went red, then green after restoring:
   - letting the worship leader run the screens;
   - letting any seat be an admin.
+
+**After an independent review (8 findings; the server's four fixed here):**
+- `worship_team` now has an entry in account_lifecycle's EXPORT_EXCLUDED; without it the export list's own test failed.
+- An invite a month old shows as expired, doesn't block inviting the same email again, and gets a fresh link (`POST /worship/team/{id}/new-link`, which retires the old link).
+- A second accept that lost a race to the same person's first now reads as joined, not 503.
+- The fix names its slide (`start`, from each lyric slide's place in its part, `worship_lyrics.slide_starts`), so a chorus that repeats lines gets the copy the booth means. It refuses a blank line, which would re-split the slides mid-service.
+- Sabotage rehearsals for the race and the slide's place went red, then green.

@@ -229,6 +229,45 @@ def test_a_dead_link_says_so(api):
     assert as_("sam").post("/worship/team/accept", json={"token": "nope"}).status_code == 400
 
 
+def test_an_expired_invite_says_so_and_gets_a_new_link(api):
+    db, as_, mail = api
+    r = invite(as_, name="Sam", email="sam@example.org")
+    member, old = r.json()["member"]["id"], r.json()["link"].split("t=")[1]
+    for row in db.t["worship_team"]:
+        row["invited_at"] = (datetime.now(timezone.utc) - timedelta(days=40)).isoformat()
+    shown = as_("owner").get(f"/worship/team?business_id={BIZ}").json()["team"][0]
+    assert shown["expired"] is True and "link" not in shown
+    # Inviting the same email again isn't refused by a dead invite.
+    assert invite(as_, name="Sam", email="sam@example.org").status_code == 200
+    fresh = as_("owner").post(f"/worship/team/{member}/new-link", json={"business_id": BIZ})
+    assert fresh.status_code == 200 and fresh.json()["member"]["expired"] is False
+    token = fresh.json()["link"].split("t=")[1]
+    assert token != old and mail[-1]["body"].count(token) == 1
+    assert as_("sam").post("/worship/team/accept", json={"token": old}).status_code == 410
+    assert as_("sam").post("/worship/team/accept", json={"token": token}).status_code == 200
+    assert as_("owner").post(f"/worship/team/{member}/new-link", json={"business_id": BIZ}).status_code == 409
+    assert as_("sam").post(f"/worship/team/{member}/new-link", json={"business_id": BIZ}).status_code == 403
+
+
+def test_a_second_accept_that_lost_the_race_still_joins(api, monkeypatch):
+    db, as_, _ = api
+    token = invite(as_, name="Sam").json()["link"].split("t=")[1]
+    real = db.patch
+
+    def other_tab_won(path, body):
+        # The other tab's accept lands first; this one's conditional write then matches nothing.
+        if body.get("status") == "active":
+            for r in db.t["worship_team"]:
+                if r["token"] == token:
+                    r.update(body)
+            return []
+        return real(path, body)
+
+    monkeypatch.setattr(sb_clients, "sb_patch_as_service", other_tab_won)
+    r = as_("sam").post("/worship/team/accept", json={"token": token})
+    assert r.status_code == 200 and r.json()["roles"] == ["booth"]
+
+
 def _service(as_, who="owner"):
     return as_(who).post("/worship/services", json={
         "business_id": BIZ, "title": "Sunday", "starts_at": "2026-10-25T15:05:00Z",
@@ -317,6 +356,8 @@ def test_the_booth_fixes_a_typo_in_the_song(api):
     assert as_("sam").post(f"/worship/songs/{SONG_ID}/fix", json={**fix, "old": ["Third line"], "new": [" "]}).status_code == 400
     assert as_("member").post(f"/worship/songs/{SONG_ID}/fix",
                               json={**fix, "old": ["Third line"], "new": ["Third line!"]}).status_code == 403
+    # A blank line would start a new slide mid-service.
+    assert as_("sam").post(f"/worship/songs/{SONG_ID}/fix", json={**fix, "old": ["Third line", "Fourth line"], "new": ["Third", ""]}).status_code == 400
     # Fixing is all the booth may do to the library.
     assert as_("sam").put(f"/worship/songs/{SONG_ID}", json={"business_id": BIZ, "title": "Renamed"}).status_code == 403
 
@@ -337,3 +378,21 @@ def test_the_switch_off_closes_joining(api, monkeypatch):
     assert as_("sam").get("/worship/team/mine").json() == {"churches": []}
     assert invite(as_, name="Jo").status_code == 404
 
+
+
+def test_a_fix_lands_on_the_slide_it_names(api):
+    db, as_, _ = api
+    join(as_, db, "sam", ["booth"])
+    db.t["worship_songs"][0]["sections"][0]["lines"] = ["Same line here", "And again", "Same line here", "And again"]
+    two = {"business_id": BIZ, "section_id": "v1", "old": ["Same line here", "And again"], "new": ["Same line here", "And AGAIN"], "start": 2}
+    assert as_("sam").post(f"/worship/songs/{SONG_ID}/fix", json=two).status_code == 200
+    assert db.t["worship_songs"][0]["sections"][0]["lines"] == ["Same line here", "And again", "Same line here", "And AGAIN"]
+    # The slide moved on since it went up: refused, nothing changed.
+    assert as_("sam").post(f"/worship/songs/{SONG_ID}/fix", json={**two, "start": 1}).status_code == 409
+
+
+def test_each_song_slide_knows_where_it_starts():
+    import worship_lyrics as wl
+    song = {"sections": [{"id": "v1", "label": "Verse 1", "lines": ["a", "b", "c", "", "d", "e"]}]}
+    assert [(s["lines"], s["start"]) for s in wl.slides_for_song(song, ["v1", "v1"], 2)] == [
+        (["a", "b"], 0), (["c"], 2), (["d", "e"], 4), (["a", "b"], 0), (["c"], 2), (["d", "e"], 4)]

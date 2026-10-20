@@ -353,18 +353,22 @@ def fix_words(song_id: str, body: Dict[str, Any], user: AuthedUser = Depends(req
     biz = _uuid(body.get("business_id"))
     _staff(biz, user, "fix")
     sid = _uuid(song_id, "song")
-    old, new, part = body.get("old"), body.get("new"), body.get("section_id")
+    old, new, part, start = body.get("old"), body.get("new"), body.get("section_id"), body.get("start")
     if (not isinstance(old, list) or not isinstance(new, list) or not old or len(old) != len(new) or len(old) > 12
             or not all(isinstance(x, str) and len(x) <= 200 for x in old + new)):
         raise HTTPException(400, "Fix the words on the slide's own lines")
-    if not any(ln.strip() for ln in new):
-        raise HTTPException(400, "The slide needs its words")
+    # A blank line would start a new slide and move every slide after it, mid-service.
+    if not all(ln.strip() for ln in new):
+        raise HTTPException(400, "Each line on the slide needs its words")
+    if start is not None and (not isinstance(start, int) or isinstance(start, bool) or not 0 <= start < 2000):
+        raise HTTPException(400, "Fix the words on the slide's own lines")
     current = _get_or_404(biz, sid)
     sections = [dict(s) for s in current.get("sections") or []]
     sec = next((s for s in sections if s.get("id") == part), None)
     lines = list((sec or {}).get("lines") or [])
-    at = next((k for k in range(len(lines) - len(old) + 1)
-               if [x.strip() for x in lines[k:k + len(old)]] == [x.strip() for x in old]), None)
+    same = lambda k: [x.strip() for x in lines[k:k + len(old)]] == [x.strip() for x in old]  # noqa: E731
+    # The slide's own place when the booth knows it (a chorus can repeat the same lines); else the first match.
+    at = (start if same(start) else None) if start is not None else next((k for k in range(len(lines) - len(old) + 1) if same(k)), None)
     if sec is None or at is None:
         raise HTTPException(409, "The song changed since this slide went up. Fix it in Songs.")
     sec["lines"] = lines[:at] + [x.rstrip() for x in new] + lines[at + len(old):]

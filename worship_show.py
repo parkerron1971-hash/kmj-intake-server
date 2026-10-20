@@ -402,7 +402,7 @@ def _song_slides(item: Dict[str, Any], song: Optional[Dict[str, Any]]) -> Dict[s
     arrs = song.get("arrangements") or []
     arr = next((a for a in arrs if a.get("id") == item.get("arrangement_id")), None) or (arrs[0] if arrs else None)
     order = arr["order"] if arr else [s["id"] for s in song.get("sections") or []]
-    slides = [{"kind": "lyric", "label": s["label"], "section_id": s["section_id"], "lines": s["lines"]}
+    slides = [{"kind": "lyric", "label": s["label"], "section_id": s["section_id"], "lines": s["lines"], "start": s["start"]}
               for s in wl.slides_for_song(song, order, int(song.get("lines_per_slide") or 2))]
     out: Dict[str, Any] = {"title": song.get("title") or "Untitled song", "slides": slides,
                            "song": {"key": song.get("song_key"), "authors": song.get("authors") or "",

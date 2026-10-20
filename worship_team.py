@@ -5,6 +5,8 @@
 #   GET     /worship/team?business_id=      the team (an admin)
 #   POST    /worship/team/invite            invite someone to a part (an admin)
 #   PUT     /worship/team/{id}              change their parts (an admin)
+#   POST    /worship/team/{id}/new-link     a fresh link for an invite (an admin; the
+#                                           old link stops working, a month from now)
 #   DELETE  /worship/team/{id}              take them off the team (an admin)
 #   GET     /worship/team/invite?t=         what an invite link is for (no sign-in:
 #                                           the sign-up screen says whose team it is)
@@ -163,12 +165,26 @@ def _link(token: str) -> str:
     return f"{app_base_url()}/churchsavvy/join?t={token}"
 
 
+def _expired(row: Dict[str, Any]) -> bool:
+    """An invite not taken within the month: its link no longer joins."""
+    if row.get("status") != "invited":
+        return False
+    try:
+        at = datetime.fromisoformat(str(row.get("invited_at")).replace("Z", "+00:00"))
+    except ValueError:
+        return True
+    return _now() - at > timedelta(days=INVITE_DAYS)
+
+
 def _out(row: Dict[str, Any], me: str) -> Dict[str, Any]:
     out = {k: row.get(k) for k in ("id", "name", "email", "roles", "status", "invited_at", "joined_at")}
     out["you"] = bool(row.get("user_id")) and str(row.get("user_id")) == me
-    # An invite not yet taken keeps its link, so it can be sent again (by text, say).
+    # An invite not yet taken keeps its link, so it can be sent again (by text,
+    # say); one a month old says so, and the admin makes a new link.
     if row.get("status") == "invited":
-        out["link"] = _link(row.get("token"))
+        out["expired"] = _expired(row)
+        if not out["expired"]:
+            out["link"] = _link(row.get("token"))
     return out
 
 
@@ -222,13 +238,13 @@ async def invite(body: Dict[str, Any], user: AuthedUser = Depends(require_user))
     email = email.strip().lower() or None
     roles = _clean_roles(body.get("roles"))
     rows = sb_clients.sb_get_as_service(
-        f"/worship_team?business_id=eq.{_q(biz)}&status=in.(invited,active)&select=id,email")
+        f"/worship_team?business_id=eq.{_q(biz)}&status=in.(invited,active)&select=id,email,status,invited_at")
     if rows is None:
         raise HTTPException(503, "The team couldn't be read. Try again.")
     if len(rows) >= MAX_TEAM:
         raise HTTPException(400, f"A team is at most {MAX_TEAM} people")
-    if email and any((r.get("email") or "") == email for r in rows):
-        raise HTTPException(409, "They're already invited. Their link is in the team list.")
+    if email and any((r.get("email") or "") == email and not _expired(r) for r in rows):
+        raise HTTPException(409, "They're already on the team or invited. Their link is in the team list.")
     saved = sb_clients.sb_post_as_service("/worship_team?select=" + _FIELDS, {
         "business_id": biz, "name": name.strip(), "email": email, "roles": roles,
         "status": "invited", "invited_by": str(user.id), "invited_at": _now().isoformat(),
@@ -236,24 +252,53 @@ async def invite(body: Dict[str, Any], user: AuthedUser = Depends(require_user))
     row = saved[0] if isinstance(saved, list) and saved else None
     if not row:
         raise HTTPException(503, "The invite didn't save. Try again.")
-    emailed = False
-    if email:
-        church = _church(biz).get("name") or "Your church"
-        parts = " and ".join(ROLE_LABEL[r].lower() for r in roles)
-        try:
-            from email_sender import send_via_resend
-            await send_via_resend(
-                to_email=email, to_name=name.strip(),
-                from_email="invites@mysolutionist.app", from_name="ChurchSavvy", reply_to=None,
-                subject=f"{church} invited you to their Sunday team",
-                body=(f"Hi {name.strip()},\n\n{church} invited you to their Sunday team on ChurchSavvy, "
-                      f"as {parts}.\n\nJoin here (sign in, or make your account, with this email):\n"
-                      f"{_link(row['token'])}\n\n— ChurchSavvy"),
-                business_id=biz)
-            emailed = True
-        except Exception as e:
-            logger.warning("[worship-team] invite email not sent: %s", e)
+    emailed = await _email_invite(biz, row) if email else False
     return {"member": _out(row, str(user.id)), "link": _link(row["token"]), "emailed": emailed}
+
+
+async def _email_invite(biz: str, row: Dict[str, Any]) -> bool:
+    """The invite's link by email, best effort: the admin has the link to send either way."""
+    church = _church(biz).get("name") or "Your church"
+    roles = [r for r in ROLES if r in (row.get("roles") or [])]
+    if len(roles) > 1:
+        parts = ", ".join(ROLE_LABEL[r].lower() for r in roles[:-1]) + " and " + ROLE_LABEL[roles[-1]].lower()
+    else:
+        parts = "".join(ROLE_LABEL[r].lower() for r in roles)
+    name = row.get("name") or ""
+    try:
+        from email_sender import send_via_resend
+        await send_via_resend(
+            to_email=row["email"], to_name=name,
+            from_email="invites@mysolutionist.app", from_name="ChurchSavvy", reply_to=None,
+            subject=f"{church} invited you to their Sunday team",
+            body=(f"Hi {name},\n\n{church} invited you to their Sunday team on ChurchSavvy, "
+                  f"as {parts}.\n\nJoin here (sign in, or make your account, with this email):\n"
+                  f"{_link(row['token'])}\n\n— ChurchSavvy"),
+            business_id=biz)
+        return True
+    except Exception as e:
+        logger.warning("[worship-team] invite email not sent: %s", e)
+        return False
+
+
+@router.post("/team/{member_id}/new-link")
+async def new_link(member_id: str, body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
+    """A fresh link for an invite not yet taken (one that expired, or one sent
+    to the wrong place). The old link stops working."""
+    _gate(user)
+    biz = _uuid((body or {}).get("business_id"))
+    require(biz, user, "setup")
+    row = _row(biz, _uuid(member_id, "team member"))
+    if row.get("status") != "invited":
+        raise HTTPException(409, "They've already joined")
+    fresh = {"token": str(uuid.uuid4()), "invited_at": _now().isoformat()}
+    saved = sb_clients.sb_patch_as_service(
+        f"/worship_team?id=eq.{_q(row['id'])}&business_id=eq.{_q(biz)}&status=eq.invited&select={_FIELDS}", fresh)
+    if not isinstance(saved, list) or not saved:
+        raise HTTPException(503, "The new link didn't save. Try again.")
+    out = saved[0]
+    emailed = await _email_invite(biz, out) if out.get("email") else False
+    return {"member": _out(out, str(user.id)), "link": _link(out["token"]), "emailed": emailed}
 
 
 @router.put("/team/{member_id}")
@@ -347,6 +392,12 @@ def accept(body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
             f"/worship_team?id=eq.{_q(inv['id'])}&status=eq.invited",
             {"status": "active", "user_id": str(user.id), "joined_at": _now().isoformat()})
     if not isinstance(joined, list) or not joined or not isinstance(done, list) or not done:
+        # Two of the same person's tabs (or a retry) can race to the same link:
+        # the one that lost finds the invite already theirs, and that's a join.
+        again = sb_clients.sb_get_as_service(
+            f"/worship_team?id=eq.{_q(inv['id'])}&select=status,user_id,roles&limit=1", redact=True) or []
+        if again and again[0].get("status") == "active" and str(again[0].get("user_id")) == str(user.id):
+            return {"business_id": biz, "church": church, "roles": again[0].get("roles") or []}
         raise HTTPException(503, "You didn't join yet. Try the link again.")
     return {"business_id": biz, "church": church, "roles": roles}
 
