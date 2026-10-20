@@ -200,7 +200,7 @@ BUSINESS_CHILD_TABLES: List[str] = [
     # Groups: who saw each Board post, the posts and who's asking to join
     # (member_portal_groups), who came to each meeting, the meetings, the
     # roster, then the groups — all before contacts.
-    "group_post_seen", "group_posts", "group_join_requests", "group_prayer_marks", "group_prayers",
+    "group_post_seen", "group_posts", "group_join_requests", "group_prayer_marks", "group_prayers", "group_rsvps",
     "group_live_sessions", "group_meeting_attendance", "group_meetings", "group_members", "groups",
     "sermons", "sermon_series",   # sermons before the series they point at
     # Live: chat, pauses and presence before their session; all before
@@ -757,7 +757,7 @@ _IMPORT_SKIP = {
     # Groups link contacts and each other by id; same reason. So do a
     # group's Board posts, who saw them, and who asked to join.
     "groups", "group_members", "group_meetings", "group_meeting_attendance", "group_live_sessions",
-    "group_join_requests", "group_posts", "group_post_seen", "group_prayers", "group_prayer_marks",
+    "group_join_requests", "group_posts", "group_post_seen", "group_prayers", "group_prayer_marks", "group_rsvps",
     # Sermons cite their series by id; same reason.
     "sermon_series", "sermons",
     # Live sessions, chat and presence cite contacts and occasions by id;

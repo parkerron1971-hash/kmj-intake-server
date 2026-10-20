@@ -91,6 +91,15 @@ DONE = {
     "unmarked": "Taken back.",
     "answered": "Marked answered. Praise God!",
     "prayer_down": "Taken off the wall.",
+    # Gatherings (group_gatherings).
+    "rsvp_going": "You're going. See you there!",
+    "rsvp_maybe": "Marked maybe.",
+    "rsvp_no": "Thanks for letting your group know.",
+    "here": "You're counted. Welcome!",
+    "roll_saved": "Attendance saved. Thank you.",
+    "schedule_saved": "Saved. Everyone sees the new time.",
+    "skipped": "That gathering is skipped. Your group sees it.",
+    "unskipped": "That gathering is back on.",
     "post_down": "That post is taken down.",
     "pinned": "Pinned to the top.",
     "unpinned": "Unpinned.",
@@ -125,6 +134,10 @@ ERRORS = {
     "prayer_no": "That can't go on the wall as written. Change it, or send it to the pastors instead.",
     "prayer_gone": "That prayer isn't on the wall any more.",
     "not_yours": "Only the person who asked can do that.",
+    "no_gathering": "There's no gathering coming up to answer for.",
+    "here_closed": "“I'm here” opens 30 minutes before the gathering starts.",
+    "roll_closed": "Attendance opens on the day of the gathering.",
+    "schedule_bad": "Choose a day and a time.",
     "not_kids_leader": "Only Kids leaders the church office approved can do that.",
     "lesson_incomplete": "Add a title and what they learned.",
     "lesson_link": "A video link has to start with https://",
@@ -997,7 +1010,7 @@ def _back(target: str, **q: str) -> RedirectResponse:
     allowed = ("/my", "/my/me", "/my/events", "/my/prayer", "/my/details", "/my/groups", "/my/classes", "/my/live", "/my/messages",
                "/my/kids/stories", "/my/kids/sundays", "/my/kids/family")
     if (target not in allowed and not re.fullmatch(r"/my/(groups/live|messages)/[0-9a-f-]{36}", target)
-            and not re.fullmatch(r"/my/groups/([0-9a-fA-F-]{36}(/(board|people|chat|prayer))?|leaders)", target)):
+            and not re.fullmatch(r"/my/groups/([0-9a-fA-F-]{36}(/(board|people|chat|prayer|meet))?|leaders)", target)):
         target = "/my"
     qs = "&".join(f"{k}={v}" for k, v in q.items())
     return RedirectResponse(f"{target}?{qs}" if qs else target, status_code=303, headers=_SECURE_HEADERS)

@@ -68,6 +68,11 @@ def _cond(row, key, expr):
         return cur is None if val == "null" else str(cur).lower() == val
     if op == "in":
         return str(cur) in val.strip("()").split(",")
+    if op in ("lt", "lte", "gt", "gte"):
+        if cur is None:
+            return False
+        c, v = str(cur), val
+        return {"lt": c < v, "lte": c <= v, "gt": c > v, "gte": c >= v}[op]
     return True
 
 

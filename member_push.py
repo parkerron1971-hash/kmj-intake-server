@@ -970,7 +970,8 @@ def sweep_tick() -> Dict[str, int]:
         return out
     rows = sb_clients.sb_get_as_service(
         "/businesses?or=(settings->member_portal->notifications->>sermons.eq.true,"
-        "settings->member_portal->notifications->>events.eq.true)"
+        "settings->member_portal->notifications->>events.eq.true,"
+        "settings->member_portal->notifications->>groups.eq.true)"
         "&select=id,name,settings,owner_id&limit=500") or []
     for biz in rows:
         kinds = church_kinds(biz.get("settings"))
@@ -979,6 +980,10 @@ def sweep_tick() -> Dict[str, int]:
                 out["sermons"] += _sweep_sermons(biz)
             if "events" in kinds:
                 out["events"] += _sweep_events(biz)
+            if "groups" in kinds:
+                # A group's gathering, at 5 PM (group_gatherings).
+                import group_gatherings
+                out["gatherings"] = out.get("gatherings", 0) + group_gatherings.reminders(biz)
         except Exception:
             logger.warning("member push sweep failed for one church", exc_info=True)
     # What waited through quiet hours, after 7 AM at each church.
