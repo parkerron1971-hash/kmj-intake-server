@@ -91,6 +91,17 @@ def test_a_finished_file_is_ready_and_anything_else_failed():
     assert rec.ended_fields(empty)["recording_status"] == "failed", "an empty file is no recording"
 
 
+def test_the_file_as_livekit_really_reports_it():
+    # The first real test recording (2026-10-20): the file in the older
+    # `file` field, `file_results` empty. It must read as ready.
+    real = api.EgressInfo(status=api.EgressStatus.EGRESS_COMPLETE,
+                          file=api.FileInfo(size=94_816, duration=23 * 1_000_000_000))
+    got = rec.ended_fields(real)
+    assert got["recording_status"] == "ready" and got["recording_seconds"] == 23 and got["recording_bytes"] == 94_816
+    assert rec.ended_fields(api.EgressInfo(status=api.EgressStatus.EGRESS_COMPLETE))["recording_status"] == "failed", \
+        "no file at all is no recording"
+
+
 # ─── The live room: start, stop, watch, LiveKit's word ───────────────
 
 @pytest.fixture
