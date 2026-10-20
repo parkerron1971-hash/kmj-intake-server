@@ -29,7 +29,15 @@ import bible_text as bt
 import worship_lyrics as wl
 import worship_scripture as ws
 
-ITEM_KINDS = ("section", "song", "scripture", "text", "announcement", "media", "countdown")
+ITEM_KINDS = ("section", "song", "scripture", "text", "announcement", "media", "countdown", "loop")
+# A loop (canvas board 29): slides that play by themselves, each for its own seconds.
+MAX_LOOP_SLIDES = 40
+LOOP_UNTIL = ("press", "time")
+# A church's own quick screens (board 29): one press over anything, with its own key.
+MAX_QUICK = 8
+_KEY = re.compile(r"^[A-Z0-9]$")
+# Keys the booth already uses: Clear, Logo, Black.
+TAKEN_KEYS = ("C", "L", "B")
 SHOW = ("all", "room", "online")
 ROLES = ("room", "online", "led", "stage", "lobby")
 # The confidence screen (canvas board 33): what a stage screen shows, and how.
@@ -146,6 +154,9 @@ def clean_item(raw: Any) -> Dict[str, Any]:
         out["media_kind"] = mk
         out["title"] = _text(raw, "title", 80, "The title")
         out["loop"] = bool(raw.get("loop"))
+    elif kind == "loop":
+        out["title"] = _text(raw, "title", 60, "The loop's name") or "Welcome loop"
+        out.update(_clean_loop(raw))
     elif kind == "countdown":
         out["title"] = _text(raw, "title", 60, "The countdown's words") or "We start soon"
         to = _text(raw, "to", 40, "The time it counts to")
@@ -214,6 +225,81 @@ def clean_stage(raw: Any) -> Dict[str, Any]:
     return {"layout": layout, "show": show, "size": size}
 
 
+def _seconds(v: Any, label: str) -> int:
+    if not isinstance(v, (int, float)) or not 3 <= v <= 120:
+        raise ValueError(f"{label} is 3 to 120 seconds")
+    return int(v)
+
+
+def _clean_loop(raw: Dict[str, Any]) -> Dict[str, Any]:
+    """A loop's slides (pictures, videos or a few words), how long each stays,
+    and what ends it: a press in the booth, or a time on the clock."""
+    seconds = _seconds(raw.get("seconds", 7), "Each slide")
+    slides = raw.get("slides") or []
+    if not isinstance(slides, list) or not 1 <= len(slides) <= MAX_LOOP_SLIDES:
+        raise ValueError(f"A loop has 1 to {MAX_LOOP_SLIDES} slides")
+    clean = []
+    for s in slides:
+        if not isinstance(s, dict) or s.get("kind") not in ("image", "video", "text"):
+            raise ValueError("A loop's slides are pictures, videos or words")
+        one: Dict[str, Any] = {"kind": s["kind"], "title": _text(s, "title", 80, "A slide's name")}
+        if s["kind"] == "text":
+            one["text"] = _text(s, "text", 200, "A slide's words")
+            if not one["text"]:
+                raise ValueError("A words slide in the loop has no words")
+        else:
+            one["url"] = _url(s, "url", "The picture or video")
+            if not one["url"]:
+                raise ValueError("Pick the picture or video")
+        if s.get("seconds") not in (None, ""):
+            one["seconds"] = _seconds(s.get("seconds"), "A slide")
+        clean.append(one)
+    until = raw.get("until") or "press"
+    if until not in LOOP_UNTIL:
+        raise ValueError("A loop plays until a press or until a time")
+    at = _text(raw, "until_at", 40, "The time it stops")
+    if until == "time":
+        try:
+            datetime.fromisoformat(at.replace("Z", "+00:00"))
+        except ValueError:
+            raise ValueError("Pick the time the loop stops")
+    return {"seconds": seconds, "slides": clean, "until": until, "until_at": at if until == "time" else "",
+            "shuffle": bool(raw.get("shuffle"))}
+
+
+def clean_quick(raw: Any) -> List[Dict[str, Any]]:
+    """A church's own quick screens: a few words or a picture, each with a key."""
+    if raw in (None, ""):
+        return []
+    if not isinstance(raw, list) or len(raw) > MAX_QUICK:
+        raise ValueError(f"Up to {MAX_QUICK} quick screens of your own")
+    out, keys, ids = [], set(), set()
+    for q in raw:
+        if not isinstance(q, dict) or q.get("kind") not in ("text", "image"):
+            raise ValueError("A quick screen is a few words or a picture")
+        qid = str(q.get("id") or "")
+        if not _ID.match(qid) or qid in ids:
+            raise ValueError("Each quick screen needs its own id")
+        label = _text(q, "label", 24, "A quick screen's name")
+        if not label:
+            raise ValueError("Give the quick screen a name")
+        key = str(q.get("key") or "").upper()
+        if key and (not _KEY.match(key) or key in TAKEN_KEYS or key in keys):
+            raise ValueError("Each quick screen's key is its own letter or number (C, L and B are taken)")
+        one: Dict[str, Any] = {"id": qid, "kind": q["kind"], "label": label, "key": key}
+        if q["kind"] == "text":
+            one["text"] = _text(q, "text", 120, "A quick screen's words") or label
+        else:
+            one["url"] = _url(q, "url", "The picture")
+            if not one["url"]:
+                raise ValueError("Pick the quick screen's picture")
+        ids.add(qid)
+        if key:
+            keys.add(key)
+        out.append(one)
+    return out
+
+
 def clean_items(raw: Any) -> List[Dict[str, Any]]:
     if not isinstance(raw, list) or len(raw) > MAX_ITEMS:
         raise ValueError(f"A service has at most {MAX_ITEMS} items")
@@ -237,6 +323,8 @@ DEFAULT_LOOK: Dict[str, Any] = {
     # A church with no Solutionist brand kit (ChurchSavvy on its own) sets
     # its colors and logo here; a brand kit, when there is one, wins.
     "brand": {"primary": None, "accent": None, "background": None, "logo_url": None},
+    # The church's own quick screens (Amen, Giving, Please stand): see clean_quick.
+    "quick": [],
 }
 
 
@@ -292,7 +380,7 @@ def clean_look(raw: Any) -> Dict[str, Any]:
         "background": {"kind": kind, "color": color, "url": url, "dim": round(float(dim), 2)},
         "size": size, "caps": bool(raw.get("caps")), "align": align, "font": font or None,
         "translation": tr, "lower_third": {"style": style, "position": position},
-        "brand": brand,
+        "brand": brand, "quick": clean_quick(raw.get("quick")),
     }
 
 
@@ -361,6 +449,18 @@ def compile_item(item: Dict[str, Any], songs: Dict[str, Dict[str, Any]], starts_
         if mk == "video":
             slide["loop"] = bool(item.get("loop"))
         body = {"title": item.get("title") or ("Video" if mk == "video" else "Picture"), "slides": [slide]}
+    elif kind == "loop":
+        # Each screen plays it on its own clock, from when it went up (the live state's `since`).
+        slides = []
+        for s in item.get("slides") or []:
+            secs = s.get("seconds") or item.get("seconds") or 7
+            if s["kind"] == "text":
+                slides.append({"kind": "text", "kicker": "", "text": s["text"], "seconds": secs})
+            else:
+                slides.append({"kind": s["kind"], "url": s["url"], "title": s.get("title") or "", "loop": True, "seconds": secs})
+        body = {"title": item.get("title") or "Welcome loop", "slides": slides,
+                "loop": {"seconds": item.get("seconds") or 7, "until": item.get("until") or "press",
+                         "until_at": item.get("until_at") or "", "shuffle": bool(item.get("shuffle"))}}
     else:  # countdown
         body = {"title": item.get("title") or "Countdown",
                 "slides": [{"kind": "countdown", "to": item.get("to") or starts_at, "title": item.get("title") or "We start soon"}]}
@@ -387,7 +487,8 @@ def song_ids(items: List[Dict[str, Any]]) -> List[str]:
 
 MODES = ("show", "black", "logo", "clear")
 # What may go up on the spot, and the kinds of slide each brings.
-ADHOC_KINDS = {"verse": ("verse",), "song": ("lyric",), "text": ("text",)}
+# A quick screen of a church's own goes up on the spot too: its words, or its picture.
+ADHOC_KINDS = {"verse": ("verse",), "song": ("lyric",), "text": ("text",), "image": ("image",)}
 
 
 def clean_live(raw: Any) -> Dict[str, Any]:
@@ -419,6 +520,8 @@ def clean_live(raw: Any) -> Dict[str, Any]:
             raise ValueError("Something on the spot has 1 to 60 slides")
         if any(not isinstance(sl, dict) or sl.get("kind") not in ADHOC_KINDS[adhoc["kind"]] for sl in slides):
             raise ValueError("Those slides don't match what's going up")
+        if adhoc["kind"] == "image" and any(not isinstance(sl.get("url"), str) or not _HTTPS.match(sl["url"]) for sl in slides):
+            raise ValueError("A quick screen's picture must be an https:// link")
         out["adhoc"] = {"kind": adhoc["kind"], "title": str(adhoc.get("title") or "")[:80], "slides": slides}
     message = raw.get("message")
     if message is not None:

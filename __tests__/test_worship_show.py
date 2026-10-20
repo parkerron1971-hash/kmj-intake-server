@@ -261,3 +261,56 @@ def test_the_live_state_says_when_the_item_went_up():
     for bad in ("soon", 5, "x" * 41):
         with pytest.raises(ValueError, match="isn't a time"):
             wsh.clean_live({"item_id": "well", "since": bad})
+
+
+# ─── loops and a church's own quick screens (canvas board 29) ──────────
+
+def test_a_loop_plays_its_slides_by_themselves():
+    loop = wsh.clean_item(item("loop", title="Welcome loop", seconds=7, shuffle=True, until="press", slides=[
+        {"kind": "image", "url": "https://x.example/series.jpg", "title": "Series"},
+        {"kind": "text", "text": "Welcome home", "seconds": 10}]))
+    assert (loop["seconds"], loop["until"], loop["shuffle"], len(loop["slides"])) == (7, "press", True, 2)
+    shown = wsh.compile_item(loop, {})
+    assert [s["seconds"] for s in shown["slides"]] == [7, 10]
+    assert shown["slides"][0]["kind"] == "image" and shown["slides"][1] == {"kind": "text", "kicker": "", "text": "Welcome home", "seconds": 10}
+    assert shown["loop"] == {"seconds": 7, "until": "press", "until_at": "", "shuffle": True}
+    timed = wsh.clean_item(item("loop", until="time", until_at="2026-10-25T14:58:00Z", slides=[{"kind": "text", "text": "Hi"}]))
+    assert timed["until_at"] == "2026-10-25T14:58:00Z"
+
+
+@pytest.mark.parametrize("extra, words", [
+    ({"slides": []}, "1 to 40 slides"),
+    ({"slides": [{"kind": "song"}]}, "pictures, videos or words"),
+    ({"slides": [{"kind": "image", "url": "http://x.example/a.jpg"}]}, "https://"),
+    ({"slides": [{"kind": "text", "text": ""}]}, "no words"),
+    ({"slides": [{"kind": "text", "text": "a"}], "seconds": 1}, "3 to 120 seconds"),
+    ({"slides": [{"kind": "text", "text": "a", "seconds": 500}]}, "3 to 120 seconds"),
+    ({"slides": [{"kind": "text", "text": "a"}], "until": "forever"}, "a press or until a time"),
+    ({"slides": [{"kind": "text", "text": "a"}], "until": "time", "until_at": "soon"}, "time the loop stops"),
+])
+def test_what_a_loop_cannot_be(extra, words):
+    with pytest.raises(ValueError, match=words):
+        wsh.clean_item(item("loop", **extra))
+
+
+def test_a_church_keeps_its_own_quick_screens():
+    look = wsh.clean_look({"quick": [{"id": "amen", "kind": "text", "label": "Amen", "key": "a"},
+                                     {"id": "give", "kind": "image", "label": "Giving", "url": "https://x.example/g.png", "key": "G"}]})
+    assert look["quick"] == [{"id": "amen", "kind": "text", "label": "Amen", "key": "A", "text": "Amen"},
+                             {"id": "give", "kind": "image", "label": "Giving", "key": "G", "url": "https://x.example/g.png"}]
+    assert wsh.clean_look({})["quick"] == []
+    for bad, words in [([{"id": "x", "kind": "text", "label": "X", "key": "B"}], "C, L and B are taken"),
+                       ([{"id": "x", "kind": "text", "label": "X", "key": "A"}, {"id": "y", "kind": "text", "label": "Y", "key": "A"}], "its own letter"),
+                       ([{"id": "x", "kind": "video", "label": "X"}], "words or a picture"),
+                       ([{"id": "x", "kind": "image", "label": "X"}], "Pick the quick screen's picture"),
+                       ([{"id": "x", "kind": "text", "label": ""}], "Give the quick screen a name"),
+                       ([{"id": f"q{k}", "kind": "text", "label": "Q"} for k in range(9)], "Up to 8")]:
+        with pytest.raises(ValueError, match=words):
+            wsh.clean_look({"quick": bad})
+
+
+def test_a_quick_screen_picture_goes_up_on_the_spot():
+    live = wsh.clean_live({"adhoc": {"kind": "image", "title": "Giving", "slides": [{"kind": "image", "url": "https://x.example/g.png", "title": "Giving"}]}})
+    assert live["adhoc"]["kind"] == "image"
+    with pytest.raises(ValueError, match="https://"):
+        wsh.clean_live({"adhoc": {"kind": "image", "title": "x", "slides": [{"kind": "image", "url": "javascript:alert(1)"}]}})
