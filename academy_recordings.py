@@ -104,11 +104,16 @@ def ended_fields(info: Any) -> Dict[str, Any]:
     egress_ended: ready with its length and size, or failed."""
     from livekit import api
     status = getattr(info, "status", None)
+    # LiveKit reports our one file in the older `file` field and leaves
+    # `file_results` empty (the first real test recording, 2026-10-20), so
+    # either counts. An unset `file` reads as size 0: no recording.
     files = list(getattr(info, "file_results", []) or [])
-    done = status == api.EgressStatus.EGRESS_COMPLETE and files and (files[0].size or 0) > 0
+    file = files[0] if files else getattr(info, "file", None)
+    size = int(getattr(file, "size", 0) or 0)
+    done = status == api.EgressStatus.EGRESS_COMPLETE and size > 0
     out: Dict[str, Any] = {"recording_status": "ready" if done else "failed",
                            "recording_ended_at": datetime.now(timezone.utc).isoformat()}
     if done:
-        out["recording_seconds"] = int((files[0].duration or 0) // 1_000_000_000)
-        out["recording_bytes"] = int(files[0].size or 0)
+        out["recording_seconds"] = int((getattr(file, "duration", 0) or 0) // 1_000_000_000)
+        out["recording_bytes"] = size
     return out
