@@ -201,3 +201,4 @@ jobs:
           node __tests__/worship_show_db.mjs
           node __tests__/worship_media_db.mjs
           node __tests__/worship_team_db.mjs
+          node __tests__/group_word_db.mjs

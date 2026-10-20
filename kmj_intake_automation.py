@@ -477,6 +477,10 @@ from member_portal_messaging import router as member_portal_messaging_router
 app.include_router(member_portal_messaging_router)
 from messaging_router import router as messaging_router
 app.include_router(messaging_router)
+# The office's Groups page: how each group is doing, a word to every group,
+# a nudge to a leader (church_groups_office).
+from church_groups_office import router as church_groups_office_router
+app.include_router(church_groups_office_router)
 # Phase D.4 PR 1 — Stripe Connect OAuth + webhook receiver. Same
 # discipline: BEFORE public_site_router so /payments/* doesn't fall
 # into the subdomain catch-all.
