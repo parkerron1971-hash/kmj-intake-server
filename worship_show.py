@@ -99,10 +99,11 @@ def clean_item(raw: Any) -> Dict[str, Any]:
         tr = str(raw.get("translation") or bt.DEFAULT)
         if tr not in bt.TRANSLATIONS:
             raise ValueError("That Bible version isn't here yet")
+        # Empty is a slot ("pick a passage"), like a song's; a typed one must be found.
         found = ws.lookup(ref, tr) if ref else None
-        if not found:
+        if ref and not found:
             raise ValueError(f"“{ref}” isn't a passage we can find. Try John 3:16 or Psalm 23")
-        out["ref"] = found.label()
+        out["ref"] = found.label() if found else ""
         out["translation"] = tr
     elif kind == "text":
         out["title"] = _text(raw, "title", 80, "The title")
@@ -257,6 +258,8 @@ def _song_slides(item: Dict[str, Any], song: Optional[Dict[str, Any]]) -> Dict[s
 
 def _scripture_slides(item: Dict[str, Any]) -> Dict[str, Any]:
     tr = item.get("translation") or bt.DEFAULT
+    if not item.get("ref"):
+        return {"title": "Pick a passage", "missing": "pick", "slides": []}
     ref = ws.lookup(item.get("ref") or "", tr)
     if not ref:
         return {"title": item.get("ref") or "A passage", "missing": "passage", "slides": []}

@@ -175,6 +175,14 @@ def test_a_song_slot_waits_for_its_song():
     assert show["missing"] == [{"id": "slot", "title": "Pick a song", "missing": "pick"}]
 
 
+def test_a_passage_slot_waits_for_its_passage():
+    slot = wsh.clean_item(item("scripture", id="word", ref=""))
+    assert slot["ref"] == ""
+    show = wsh.compile_show({"items": [slot]}, {})
+    assert show["items"][0]["title"] == "Pick a passage" and show["items"][0]["slides"] == []
+    assert show["missing"] == [{"id": "word", "title": "Pick a passage", "missing": "pick"}]
+
+
 def test_a_song_or_typed_words_go_up_on_the_spot():
     song = wsh.clean_live({"adhoc": {"kind": "song", "title": "A song", "slides": [{"kind": "lyric", "label": "Verse 1", "lines": ["line one"]}]}})
     assert song["adhoc"]["kind"] == "song"
