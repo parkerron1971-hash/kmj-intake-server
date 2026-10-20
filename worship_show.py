@@ -167,6 +167,9 @@ DEFAULT_LOOK: Dict[str, Any] = {
     "size": "std", "caps": False, "align": "center", "font": None,
     "translation": bt.DEFAULT,
     "lower_third": {"style": "bar", "position": "bottom"},
+    # A church with no Solutionist brand kit (ChurchSavvy on its own) sets
+    # its colors and logo here; a brand kit, when there is one, wins.
+    "brand": {"primary": None, "accent": None, "background": None, "logo_url": None},
 }
 
 
@@ -207,10 +210,22 @@ def clean_look(raw: Any) -> Dict[str, Any]:
     position = lt_raw.get("position") or "bottom"
     if style not in ("bar", "shadow") or position not in ("bottom", "top"):
         raise ValueError("The lower third is a bar or words with a shadow, at the bottom or the top")
+    br_raw = raw.get("brand") if isinstance(raw.get("brand"), dict) else {}
+    brand: Dict[str, Any] = {}
+    for key in ("primary", "accent", "background"):
+        v = br_raw.get(key)
+        if v not in (None, "") and (not isinstance(v, str) or not _COLOR.match(v)):
+            raise ValueError("A color looks like #2E1A47")
+        brand[key] = v or None
+    logo = br_raw.get("logo_url")
+    if logo not in (None, "") and (not isinstance(logo, str) or not _HTTPS.match(logo)):
+        raise ValueError("The logo must be an https:// link")
+    brand["logo_url"] = logo or None
     return {
         "background": {"kind": kind, "color": color, "url": url, "dim": round(float(dim), 2)},
         "size": size, "caps": bool(raw.get("caps")), "align": align, "font": font or None,
         "translation": tr, "lower_third": {"style": style, "position": position},
+        "brand": brand,
     }
 
 

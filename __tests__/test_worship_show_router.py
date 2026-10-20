@@ -379,3 +379,16 @@ def test_a_real_screen_follows_the_booth_over_events(api, monkeypatch):
     finally:
         server.should_exit = True
         thread.join(5)
+
+
+def test_a_brand_kit_wins_and_a_church_without_one_uses_its_look(api, monkeypatch):
+    db, as_, _ = api
+    monkeypatch.setenv("WORSHIP_SONGS", "on")
+    own = {"business_id": BIZ, "look": {"brand": {"primary": "#112233", "accent": "#C2125F", "logo_url": "https://x.example/own.png"}}}
+    as_("owner").put("/worship/look", json=own)
+    # Love City has a brand kit: it wins.
+    assert as_("owner").get(f"/worship/look?business_id={BIZ}").json()["church"]["brand_kit"]["logo_url"] == "https://x.example/l.png"
+    # A church on ChurchSavvy alone has none: its look's colors and logo draw the screens.
+    db.t["businesses"][0]["settings"] = {}
+    church = as_("owner").get(f"/worship/look?business_id={BIZ}").json()["church"]
+    assert church["brand_kit"] == {"colors": {"primary": "#112233", "accent": "#C2125F"}, "logo_url": "https://x.example/own.png"}
