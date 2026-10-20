@@ -145,13 +145,14 @@ def test_the_look_defaults_and_refusals():
 def test_what_the_booth_puts_on_screen():
     live = wsh.clean_live({"service_id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc", "item_id": "well", "slide": 3, "mode": "black"})
     assert (live["mode"], live["slide"], live["item_id"]) == ("black", 3, "well")
-    adhoc = wsh.clean_live({"adhoc": {"kind": "verse", "title": "Romans 8:28", "slides": [{"label": "Romans 8:28", "verses": []}]},
+    adhoc = wsh.clean_live({"adhoc": {"kind": "verse", "title": "Romans 8:28", "slides": [{"kind": "verse", "label": "Romans 8:28", "verses": []}]},
                             "message": "  Wrap up in 5 "})
     assert adhoc["adhoc"]["title"] == "Romans 8:28" and adhoc["message"] == "Wrap up in 5"
     for bad, words in [({"mode": "party"}, "black, the logo or no words"),
                        ({"slide": -1}, "isn't a slide"),
                        ({"item_id": "Not Ok"}, "isn't an item"),
-                       ({"adhoc": {"kind": "song", "slides": [{}]}}, "Only a passage"),
+                       ({"adhoc": {"kind": "hymnbook", "slides": [{}]}}, "a passage, a song or words"),
+                       ({"adhoc": {"kind": "song", "slides": [{"kind": "verse"}]}}, "don't match"),
                        ({"message": "x" * 121}, "at most 120")]:
         with pytest.raises(ValueError, match=words):
             wsh.clean_live(bad)
@@ -164,3 +165,19 @@ def test_a_church_without_a_brand_kit_sets_its_colors_in_the_look():
     for bad, words in [({"brand": {"primary": "plum"}}, "#2E1A47"), ({"brand": {"logo_url": "http://x.example/l.png"}}, "https://")]:
         with pytest.raises(ValueError, match=words):
             wsh.clean_look(bad)
+
+
+def test_a_song_slot_waits_for_its_song():
+    slot = wsh.clean_item(item("song", id="slot"))
+    assert slot["song_id"] is None
+    show = wsh.compile_show({"items": [slot]}, {})
+    assert show["items"][0]["title"] == "Pick a song" and show["items"][0]["slides"] == []
+    assert show["missing"] == [{"id": "slot", "title": "Pick a song", "missing": "pick"}]
+
+
+def test_a_song_or_typed_words_go_up_on_the_spot():
+    song = wsh.clean_live({"adhoc": {"kind": "song", "title": "A song", "slides": [{"kind": "lyric", "label": "Verse 1", "lines": ["line one"]}]}})
+    assert song["adhoc"]["kind"] == "song"
+    words = wsh.clean_live({"adhoc": {"kind": "text", "title": "Welcome", "slides": [{"kind": "text", "kicker": "", "text": "Welcome home"}]}})
+    assert words["adhoc"]["slides"][0]["text"] == "Welcome home"
+

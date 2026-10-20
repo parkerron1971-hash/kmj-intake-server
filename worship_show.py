@@ -87,10 +87,11 @@ def clean_item(raw: Any) -> Dict[str, Any]:
     if kind == "section":
         out["title"] = _text(raw, "title", 60, "A section's name") or "Section"
     elif kind == "song":
+        # Empty is a slot ("pick a song"): templates and drafts hold one.
         sid = str(raw.get("song_id") or "")
-        if not _UUID.match(sid):
+        if sid and not _UUID.match(sid):
             raise ValueError("Pick a song from the library")
-        out["song_id"] = sid
+        out["song_id"] = sid or None
         arr = str(raw.get("arrangement_id") or "")
         out["arrangement_id"] = arr if re.match(r"^[a-z0-9-]{1,20}$", arr) else None
     elif kind == "scripture":
@@ -233,6 +234,8 @@ def clean_look(raw: Any) -> Dict[str, Any]:
 
 
 def _song_slides(item: Dict[str, Any], song: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    if not item.get("song_id"):
+        return {"title": "Pick a song", "missing": "pick", "slides": []}
     if not song:
         return {"title": "A song that was taken out", "missing": "song", "slides": []}
     arrs = song.get("arrangements") or []
@@ -310,6 +313,8 @@ def song_ids(items: List[Dict[str, Any]]) -> List[str]:
 # ─── what's on screen now ────────────────────────────────────────────
 
 MODES = ("show", "black", "logo", "clear")
+# What may go up on the spot, and the kinds of slide each brings.
+ADHOC_KINDS = {"verse": ("verse",), "song": ("lyric",), "text": ("text",)}
 
 
 def clean_live(raw: Any) -> Dict[str, Any]:
@@ -332,12 +337,16 @@ def clean_live(raw: Any) -> Dict[str, Any]:
                            "show_key": str(raw.get("show_key") or "")[:64]}
     adhoc = raw.get("adhoc")
     if adhoc is not None:
-        if not isinstance(adhoc, dict) or adhoc.get("kind") != "verse":
-            raise ValueError("Only a passage goes up on the spot")
+        # Up on the spot, no plan needed: a passage, a song from the library,
+        # or words typed in the booth. Each slide is one the screens can draw.
+        if not isinstance(adhoc, dict) or adhoc.get("kind") not in ADHOC_KINDS:
+            raise ValueError("On the spot is a passage, a song or words you type")
         slides = adhoc.get("slides")
         if not isinstance(slides, list) or not 1 <= len(slides) <= 60:
-            raise ValueError("A passage on the spot has 1 to 60 slides")
-        out["adhoc"] = {"kind": "verse", "title": str(adhoc.get("title") or "")[:80], "slides": slides}
+            raise ValueError("Something on the spot has 1 to 60 slides")
+        if any(not isinstance(sl, dict) or sl.get("kind") not in ADHOC_KINDS[adhoc["kind"]] for sl in slides):
+            raise ValueError("Those slides don't match what's going up")
+        out["adhoc"] = {"kind": adhoc["kind"], "title": str(adhoc.get("title") or "")[:80], "slides": slides}
     message = raw.get("message")
     if message is not None:
         if not isinstance(message, str) or len(message) > 120:
