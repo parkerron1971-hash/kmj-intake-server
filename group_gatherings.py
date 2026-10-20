@@ -453,6 +453,10 @@ def reminders(business: Dict[str, Any], now: Optional[datetime] = None) -> int:
             clock = t.strftime("%I:%M %p").lstrip("0") if t else ""
             when = ("Tonight" if ahead == 0 else "Tomorrow") + (f" at {clock}" if clock else "")
             body = when + (f" · {g['location']}" if g.get("location") else "")
+            import group_study
+            studied = group_study.posted_title(str(business["id"]), str(g["id"]), day)
+            if studied:
+                body += f" · Study: {studied}"
             import group_bring
             bring = group_bring.bringing(str(business["id"]), str(g["id"]), day)
             say = dict(title=str(g.get("name") or "Your group"), url=f"/my/groups/{g['id']}/meet", tag=f"gathering-{g['id']}")
@@ -514,9 +518,10 @@ MEET_CSS = """
 
 
 def render_tab(biz: Dict[str, Any], g: Dict[str, Any], v: Optional[Dict[str, Any]], *, me_id: str, leader: bool,
-               people: List[Dict[str, Any]], live: Optional[Dict[str, Any]], ic, face, esc, name) -> str:
+               people: List[Dict[str, Any]], live: Optional[Dict[str, Any]], ic, face, esc, name, study: str = "") -> str:
     """The Meet tab's html. `ic`, `face`, `esc`, `name` are the group page's
-    helpers (icons, avatars, escaping, names the way the group shows them)."""
+    helpers (icons, avatars, escaping, names the way the group shows them);
+    `study` is this week's study card (group_study), after Bring something."""
     gid = esc(g["id"])
     if v is None:
         return '<p class="mp-err" role="alert">Gatherings couldn’t load just now. Please try again in a moment.</p>'
@@ -602,6 +607,7 @@ def render_tab(biz: Dict[str, Any], g: Dict[str, Any], v: Optional[Dict[str, Any
             f'<button class="gs-btn" type="submit">Save attendance</button>'
             f'<p class="gm-fine">It counts toward each person’s attendance, the same as Sunday check-in.</p></form></section>')
     parts.append(bring)
+    parts.append(study)
     if leader:
         days = "".join(f'<option value="{i}"{" selected" if g.get("meet_day") is not None and int(g["meet_day"]) == i else ""}>{d}</option>'
                        for i, d in enumerate(DAYS))
