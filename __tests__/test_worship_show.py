@@ -1,0 +1,157 @@
+# __tests__/test_worship_show.py
+#
+# The show engine, without a network (worship_show.py). Pins:
+#   * what an item may hold: each kind's fields, refusals in plain words,
+#     a passage that can't be found refused when it's planned, not on Sunday
+#   * a service becomes slides in order: a song in the arrangement asked
+#     for (or its first), a passage split between verses, text slides, an
+#     announcement, a picture or video, a countdown to the start time
+#   * a song that lost its words, or was taken out, says so instead of
+#     going up blank
+#   * the look: defaults, and refusals for a color, a link or a size that
+#     isn't one
+#   * what the booth puts on screen: modes, a passage on the spot, a
+#     message to the stage
+
+import pathlib
+import sys
+
+import pytest
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+
+import worship_show as wsh
+
+SONG_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+SONG = {
+    "id": SONG_ID, "title": "It Is Well With My Soul", "song_key": "D", "authors": "Horatio Spafford",
+    "ccli_number": None, "copyright": "", "public_domain": True, "lines_per_slide": 2,
+    "sections": [
+        {"id": "v1", "kind": "verse", "number": 1, "label": "Verse 1",
+         "lines": ["When peace like a river attendeth my way,", "When sorrows like sea billows roll;",
+                   "Whatever my lot, Thou hast taught me to say,", "It is well, it is well with my soul."]},
+        {"id": "r", "kind": "refrain", "number": None, "label": "Refrain",
+         "lines": ["It is well with my soul,", "It is well, it is well with my soul."]},
+    ],
+    "arrangements": [{"id": "main", "name": "Sunday", "order": ["v1", "r", "r"]},
+                     {"id": "short", "name": "Short", "order": ["r"]}],
+}
+
+
+def item(kind, **kw):
+    return {"id": kw.pop("id", kind[:4] + "1"), "kind": kind, **kw}
+
+
+def test_each_kind_is_cleaned():
+    assert wsh.clean_item(item("section", title="Worship"))["title"] == "Worship"
+    s = wsh.clean_item(item("song", song_id=SONG_ID, arrangement_id="short", minutes=5, who="Worship team"))
+    assert (s["song_id"], s["arrangement_id"], s["minutes"], s["show"]) == (SONG_ID, "short", 5.0, "all")
+    v = wsh.clean_item(item("scripture", ref="josh 4 6-7"))
+    assert (v["ref"], v["translation"]) == ("Joshua 4:6-7", "kjv")
+    t = wsh.clean_item(item("text", title="What Mean These Stones?", slides=[{"kicker": "Point 1", "text": "Pick up stones."}]))
+    assert t["slides"] == [{"kicker": "Point 1", "text": "Pick up stones."}]
+    a = wsh.clean_item(item("announcement", title="The Making", when="Thursdays", image_url="https://x.example/a.jpg"))
+    assert a["image_url"] == "https://x.example/a.jpg"
+    m = wsh.clean_item(item("media", url="https://x.example/v.mp4", media_kind="video", loop=True, show="room"))
+    assert (m["media_kind"], m["loop"], m["show"]) == ("video", True, "room")
+    c = wsh.clean_item(item("countdown"))
+    assert (c["title"], c["to"]) == ("We start soon", None)
+
+
+@pytest.mark.parametrize("raw, words", [
+    (item("hymn"), "isn't a kind of item"),
+    ({"id": "BAD ID", "kind": "section"}, "its own id"),
+    (item("section", show="lobby"), "room only, or online only"),
+    (item("song", song_id="not-a-uuid"), "Pick a song"),
+    (item("scripture", ref="hezekiah 4 1"), "isn't a passage we can find"),
+    (item("scripture", ref="john 3 16", translation="niv"), "isn't here yet"),
+    (item("text", slides=[]), "1 to 30 slides"),
+    (item("text", slides=[{"text": " "}]), "has no words"),
+    (item("announcement", title=""), "Give the announcement a title"),
+    (item("announcement", title="x", image_url="http://plain.example/a.jpg"), "https://"),
+    (item("media", url=""), "Pick a picture or video"),
+    (item("media", url="https://x.example/a.gif", media_kind="gif"), "a picture or a video"),
+    (item("countdown", to="soonish"), "a time to count to"),
+    (item("section", minutes=500), "0 to 240"),
+])
+def test_what_an_item_cannot_be(raw, words):
+    with pytest.raises(ValueError, match=words):
+        wsh.clean_item(raw)
+
+
+def test_items_need_their_own_ids():
+    with pytest.raises(ValueError, match="share an id"):
+        wsh.clean_items([item("section", id="a"), item("section", id="a")])
+    with pytest.raises(ValueError, match="at most 80"):
+        wsh.clean_items([item("section", id=f"s{k}") for k in range(81)])
+
+
+def test_a_service_becomes_slides_in_order():
+    service = {"id": "svc", "title": "Sunday", "starts_at": "2026-10-25T15:05:00+00:00", "items": wsh.clean_items([
+        item("countdown", id="count"),
+        item("section", id="worship", title="Worship"),
+        item("song", id="well", song_id=SONG_ID),
+        item("song", id="well-short", song_id=SONG_ID, arrangement_id="short"),
+        item("scripture", id="word", ref="Joshua 4:6-7"),
+        item("text", id="pts", slides=[{"kicker": "Point 1", "text": "One"}, {"kicker": "Point 2", "text": "Two"}]),
+        item("announcement", id="ann", title="The Making", when="Thursdays"),
+        item("media", id="vid", url="https://x.example/v.mp4", media_kind="video"),
+    ])}
+    show = wsh.compile_show(service, {SONG_ID: SONG})
+    by = {i["id"]: i for i in show["items"]}
+    assert [i["id"] for i in show["items"]] == ["count", "worship", "well", "well-short", "word", "pts", "ann", "vid"]
+    assert by["count"]["slides"] == [{"kind": "countdown", "to": "2026-10-25T15:05:00+00:00", "title": "We start soon"}]
+    assert by["worship"]["slides"] == []
+    # The first arrangement: verse 1 in two slides, then the refrain twice.
+    assert [s["label"] for s in by["well"]["slides"]] == ["Verse 1", "Verse 1", "Refrain", "Refrain"]
+    assert by["well"]["slides"][0]["lines"] == SONG["sections"][0]["lines"][:2]
+    assert by["well"]["song"]["order"] == ["Verse 1", "Refrain", "Refrain"]
+    assert [s["label"] for s in by["well-short"]["slides"]] == ["Refrain"]
+    verses = [v["verse"] for s in by["word"]["slides"] for v in s["verses"]]
+    assert verses == [6, 7] and by["word"]["slides"][0]["translation"] == "KJV"
+    assert by["word"]["title"] == "Joshua 4:6-7 · KJV"
+    assert [s["kicker"] for s in by["pts"]["slides"]] == ["Point 1", "Point 2"]
+    assert by["ann"]["slides"][0]["kind"] == "announcement"
+    assert by["vid"]["slides"][0] == {"kind": "video", "url": "https://x.example/v.mp4", "title": "", "loop": False}
+    assert show["slide_count"] == 1 + 4 + 1 + len(by["word"]["slides"]) + 2 + 1 + 1
+    assert show["missing"] == []
+
+
+def test_a_song_without_words_or_taken_out_says_so():
+    empty = {**SONG, "sections": [], "arrangements": []}
+    service = {"items": [item("song", id="a", song_id=SONG_ID), item("song", id="b", song_id="bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")]}
+    show = wsh.compile_show(service, {SONG_ID: empty})
+    assert [(m["id"], m["missing"]) for m in show["missing"]] == [("a", "words"), ("b", "song")]
+    assert show["slide_count"] == 0
+
+
+def test_the_look_defaults_and_refusals():
+    assert wsh.clean_look({}) == wsh.clean_look(None) == {**wsh.DEFAULT_LOOK, "background": {**wsh.DEFAULT_LOOK["background"]}}
+    look = wsh.clean_look({"background": {"kind": "image", "url": "https://x.example/stage.jpg", "dim": 0.6},
+                           "size": "big", "caps": True, "translation": "web", "lower_third": {"style": "shadow"}})
+    assert look["background"] == {"kind": "image", "color": None, "url": "https://x.example/stage.jpg", "dim": 0.6}
+    assert (look["size"], look["caps"], look["translation"], look["lower_third"]) == ("big", True, "web", {"style": "shadow", "position": "bottom"})
+    for bad, words in [({"background": {"kind": "color"}}, "Pick the background color"),
+                       ({"background": {"kind": "color", "color": "plum"}}, "#2E1A47"),
+                       ({"background": {"kind": "image", "url": "javascript:alert(1)"}}, "https://"),
+                       ({"background": {"dim": 0.95}}, "0 to 0.85"),
+                       ({"size": "huge"}, "smaller, standard or larger"),
+                       ({"font": "Comic</style>"}, "isn't a font"),
+                       ({"lower_third": {"style": "neon"}}, "bar or words with a shadow")]:
+        with pytest.raises(ValueError, match=words):
+            wsh.clean_look(bad)
+
+
+def test_what_the_booth_puts_on_screen():
+    live = wsh.clean_live({"service_id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc", "item_id": "well", "slide": 3, "mode": "black"})
+    assert (live["mode"], live["slide"], live["item_id"]) == ("black", 3, "well")
+    adhoc = wsh.clean_live({"adhoc": {"kind": "verse", "title": "Romans 8:28", "slides": [{"label": "Romans 8:28", "verses": []}]},
+                            "message": "  Wrap up in 5 "})
+    assert adhoc["adhoc"]["title"] == "Romans 8:28" and adhoc["message"] == "Wrap up in 5"
+    for bad, words in [({"mode": "party"}, "black, the logo or no words"),
+                       ({"slide": -1}, "isn't a slide"),
+                       ({"item_id": "Not Ok"}, "isn't an item"),
+                       ({"adhoc": {"kind": "song", "slides": [{}]}}, "Only a passage"),
+                       ({"message": "x" * 121}, "at most 120")]:
+        with pytest.raises(ValueError, match=words):
+            wsh.clean_live(bad)
