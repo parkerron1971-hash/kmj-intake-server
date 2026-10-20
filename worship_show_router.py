@@ -59,7 +59,7 @@ WAIT_SECONDS = 15.0
 PREAMBLE_BYTES = 16384
 _SONG_FIELDS = "id,title,song_key,authors,ccli_number,copyright,public_domain,sections,arrangements,lines_per_slide"
 _SERVICE_LIST = "id,title,starts_at,is_template,notes,updated_at,items"
-_SCREEN_FIELDS = "id,name,role,width,height,fit,led,token,sort,updated_at"
+_SCREEN_FIELDS = "id,name,role,width,height,fit,led,stage,token,sort,updated_at"
 
 
 # ─── helpers ─────────────────────────────────────────────────────────
@@ -391,11 +391,14 @@ def _clean_screen(body: Dict[str, Any], partial: bool) -> Dict[str, Any]:
         if not isinstance(v, int) or not 0 <= v <= 1000:
             raise ValueError("That isn't a place in the list")
         out["sort"] = v
+    if "stage" in body:
+        out["stage"] = wsh.clean_stage(body.get("stage"))
     return out
 
 
 def _screen_out(row: Dict[str, Any], with_link: bool) -> Dict[str, Any]:
     out = {k: row.get(k) for k in ("id", "name", "role", "width", "height", "fit", "led", "sort", "updated_at")}
+    out["stage"] = wsh.clean_stage(row.get("stage"))
     if with_link:
         out["token"] = row.get("token")
     return out
@@ -587,9 +590,15 @@ def screen_show(token: str):
         if e.status_code == 404:
             return {"service": None, "items": [], "slide_count": 0, "missing": [], "look": _look(biz), "church": _brand(biz, _look(biz))}
         raise
-    # A screen never gets the booth's notes.
+    # A screen never gets the booth's notes; only a stage screen gets the notes for the stage.
+    stage = screen.get("role") == "stage"
     for item in show["items"]:
         item.pop("notes", None)
+        if not stage:
+            item.pop("stage", None)
+            for s in item.get("slides") or []:
+                if s.get("kind") == "text":
+                    s.pop("notes", None)
     return show
 
 

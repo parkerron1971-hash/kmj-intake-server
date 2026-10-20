@@ -49,7 +49,7 @@ def test_each_kind_is_cleaned():
     v = wsh.clean_item(item("scripture", ref="josh 4 6-7"))
     assert (v["ref"], v["translation"]) == ("Joshua 4:6-7", "kjv")
     t = wsh.clean_item(item("text", title="What Mean These Stones?", slides=[{"kicker": "Point 1", "text": "Pick up stones."}]))
-    assert t["slides"] == [{"kicker": "Point 1", "text": "Pick up stones."}]
+    assert t["slides"] == [{"kicker": "Point 1", "text": "Pick up stones.", "notes": ""}]
     a = wsh.clean_item(item("announcement", title="The Making", when="Thursdays", image_url="https://x.example/a.jpg"))
     assert a["image_url"] == "https://x.example/a.jpg"
     m = wsh.clean_item(item("media", url="https://x.example/v.mp4", media_kind="video", loop=True, show="room"))
@@ -225,3 +225,30 @@ def test_a_passage_goes_up_its_own_way():
     slide = fixed["slides"][0]
     assert slide["verses"][0]["text"] == "Our own words"
     assert slide["opts"] == {"ref": False, "nums": True, "version": True, "size": None, "align": None}
+
+
+# ─── the confidence screen (canvas board 33) ───────────────────────────
+
+def test_notes_for_the_stage_ride_with_the_item():
+    s = wsh.clean_item(item("song", song_id=SONG_ID, stage="  Key change into verse 4  "))
+    assert s["stage"] == "Key change into verse 4"
+    t = wsh.clean_item(item("text", title="Points", slides=[{"kicker": "Point 1", "text": "Pick up stones.", "notes": "Hold up the river stone."}]))
+    assert t["slides"][0]["notes"] == "Hold up the river stone."
+    shown = wsh.compile_item(t, {})
+    assert shown["stage"] == "" and shown["slides"][0]["notes"] == "Hold up the river stone."
+    with pytest.raises(ValueError, match="note for the stage"):
+        wsh.clean_item(item("song", stage="x" * 501))
+    with pytest.raises(ValueError, match="point's notes"):
+        wsh.clean_item(item("text", slides=[{"text": "a", "notes": "x" * 1001}]))
+
+
+def test_a_stage_screen_keeps_its_own_settings():
+    assert wsh.clean_stage(None) == {"layout": "auto", "size": "std",
+                                     "show": {k: k != "picture" for k in wsh.STAGE_SHOWS}}
+    got = wsh.clean_stage({"layout": "pastor", "size": "big", "show": {"next": False, "picture": True, "bogus": True}})
+    assert (got["layout"], got["size"], got["show"]["next"], got["show"]["picture"], got["show"]["clock"]) == ("pastor", "big", False, True, True)
+    assert "bogus" not in got["show"]
+    with pytest.raises(ValueError, match="band's, the pastor's"):
+        wsh.clean_stage({"layout": "karaoke"})
+    with pytest.raises(ValueError, match="small, standard or big"):
+        wsh.clean_stage({"size": "huge"})

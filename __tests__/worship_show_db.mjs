@@ -1,5 +1,5 @@
 // Sundays on screens on a real Postgres (PGlite):
-// supabase/APPLY-2026-10-19-worship-show.sql. Rows go through every check:
+// supabase/APPLY-2026-10-19-worship-show.sql (and -10-20-worship-stage.sql). Rows go through every check:
 //   worship_services  a service and its items; a blank title, 81 items or
 //                     items that aren't a list are refused
 //   worship_screens   a screen and its link; a role that isn't one, a link
@@ -54,6 +54,17 @@ await refuses(`INSERT INTO worship_screens(business_id, name, role, token) VALUE
 await refuses(`INSERT INTO worship_screens(business_id, name, token) VALUES ($1, 'x', 'short')`, [b1], /check constraint/);
 await refuses(`INSERT INTO worship_screens(business_id, name, width, token) VALUES ($1, 'x', 99, $2)`, [b1, 'C'.repeat(43)], /check constraint/);
 await refuses(`INSERT INTO worship_screens(business_id, name, token) VALUES ($1, ' ', $2)`, [b1, 'D'.repeat(43)], /check constraint/);
+
+// A stage screen's settings (APPLY-2026-10-20-worship-stage.sql): an object, kept small.
+await db.exec(await sql('APPLY-2026-10-20-worship-stage.sql'));
+await db.exec(await sql('APPLY-2026-10-20-worship-stage.sql'));   // idempotent
+const led = (await db.query(`SELECT stage FROM worship_screens WHERE token = $1`, [token])).rows[0];
+assert.deepEqual(led.stage, {}); checks++;                            // an existing screen gets the default
+await db.query(`INSERT INTO worship_screens(business_id, name, role, stage, token) VALUES ($1, 'Stage TV', 'stage', $2::jsonb, $3)`,
+  [b1, JSON.stringify({ layout: 'band', size: 'std', show: { now: true, next: false } }), 'F'.repeat(43)]);
+checks++;
+await refuses(`INSERT INTO worship_screens(business_id, name, stage, token) VALUES ($1, 'x', '[1]'::jsonb, $2)`, [b1, 'G'.repeat(43)], /check constraint/);
+await refuses(`INSERT INTO worship_screens(business_id, name, stage, token) VALUES ($1, 'x', $2::jsonb, $3)`, [b1, JSON.stringify({ pad: 'x'.repeat(1001) }), 'H'.repeat(43)], /check constraint/);
 
 // One look, one live row a church: the upserts the router does.
 const upsertLook = `INSERT INTO worship_settings(business_id, look) VALUES ($1, $2::jsonb)

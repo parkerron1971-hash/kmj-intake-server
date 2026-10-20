@@ -289,6 +289,7 @@ def test_the_booth_runs_the_screens(api, monkeypatch):
     show = as_("stranger").get(f"/worship/screen/{token}/show").json()
     assert [i["id"] for i in show["items"]] == ["worship", "well", "word"]
     assert all("notes" not in i for i in show["items"])          # a screen never gets the booth's notes
+    assert all("stage" not in i for i in show["items"])          # nor the stage's, unless it's a stage screen
 
     # The row brings a restarted server back to where Sunday was.
     wsr.HUB = wsr.LiveHub()
@@ -392,3 +393,26 @@ def test_a_brand_kit_wins_and_a_church_without_one_uses_its_look(api, monkeypatc
     db.t["businesses"][0]["settings"] = {}
     church = as_("owner").get(f"/worship/look?business_id={BIZ}").json()["church"]
     assert church["brand_kit"] == {"colors": {"primary": "#112233", "accent": "#C2125F"}, "logo_url": "https://x.example/own.png"}
+
+
+def test_a_confidence_screen_gets_the_stage_notes_and_keeps_its_settings(api, monkeypatch):
+    db, as_, _ = api
+    monkeypatch.setenv("WORSHIP_SONGS", "on")
+    sid = plan(as_).json()["service"]["id"]
+    items = as_("owner").get(f"/worship/services/{sid}?business_id={BIZ}").json()["service"]["items"]
+    for i in items:
+        if i["id"] == "well":
+            i["stage"] = "Hold the last refrain"
+    assert as_("owner").put(f"/worship/services/{sid}", json={"business_id": BIZ, "items": items}).status_code == 200
+    r = as_("owner").post("/worship/screens", json={"business_id": BIZ, "name": "Stage TV", "role": "stage",
+                                                     "stage": {"layout": "band", "show": {"next": False}}})
+    assert r.status_code == 200
+    screen = r.json()["screen"]
+    assert (screen["stage"]["layout"], screen["stage"]["show"]["next"], screen["stage"]["show"]["clock"]) == ("band", False, True)
+    assert as_("owner").post("/worship/screens", json={"business_id": BIZ, "name": "x", "stage": {"layout": "karaoke"}}).status_code == 400
+    as_("owner").post("/worship/live", json={"business_id": BIZ, "state": {"service_id": sid, "item_id": "well", "slide": 0}})
+    show = as_("stranger").get(f"/worship/screen/{screen['token']}/show").json()
+    well = next(i for i in show["items"] if i["id"] == "well")
+    assert well["stage"] == "Hold the last refrain" and "notes" not in well
+    info = as_("stranger").get(f"/worship/screen/{screen['token']}").json()
+    assert info["screen"]["stage"]["layout"] == "band"
