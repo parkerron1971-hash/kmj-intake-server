@@ -56,6 +56,7 @@ router = APIRouter(prefix="/worship", tags=["worship"])
 STAFF_ROLES = ("owner", "admin", "manager")
 MAX_SCREENS = 20
 WAIT_SECONDS = 15.0
+PREAMBLE_BYTES = 16384
 _SONG_FIELDS = "id,title,song_key,authors,ccli_number,copyright,public_domain,sections,arrangements,lines_per_slide"
 _SERVICE_LIST = "id,title,starts_at,is_template,notes,updated_at,items"
 _SCREEN_FIELDS = "id,name,role,width,height,fit,led,token,sort,updated_at"
@@ -594,6 +595,13 @@ async def screen_events(token: str, request: Request):
     biz = screen["business_id"]
 
     async def events():
+        # Railway's edge flushes a response only once ~16 KB has piled up,
+        # so a slide (a few hundred bytes) would sit there until the screen
+        # gave up. A 16 KB comment first crosses that line, and every event
+        # after it goes straight through (what Chief's stream does; clients
+        # ignore ":" lines). Found 2026-10-19: the first live screen heard
+        # nothing for 20 seconds.
+        yield ":" + (" " * PREAMBLE_BYTES) + "\n\n"
         yield "retry: 2000\n\n"
         last = -1
         cur = await asyncio.to_thread(_current, biz)
