@@ -413,4 +413,5 @@ def test_the_owner_names_safety_officers_and_never_drops_below_two_while_on(env)
     r = owner.post("/messaging/officers", json={"business_id": BIZ, "user_id": OFF2, "officer": False})
     assert r.status_code == 409 and len(env.t["msg_safety_officers"]) == 2        # messaging is on
     env.biz["settings"]["messaging"]["enabled"] = False
-    assert owner.post("/messaging/officers", json={"business_id": BIZ, "user_id": OFF2, "officer": False}).json() == {"officers": [OFF1]}
+    assert owner.post("/messaging/officers", json={"business_id": BIZ, "user_id": OFF2, "officer": False}).json() == {
+        "officers": [OFF1], "member_officers": []}

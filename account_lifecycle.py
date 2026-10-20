@@ -209,7 +209,7 @@ BUSINESS_CHILD_TABLES: List[str] = [
     # Messaging: reports, staff looks, messages, people and blocks before
     # their chats; links and switches before contacts.
     "msg_reports", "msg_staff_views", "msg_messages", "msg_participants", "msg_blocks", "msg_threads",
-    "msg_guardians", "msg_members", "msg_safety_officers",
+    "msg_guardians", "msg_members", "msg_safety_officers", "msg_member_officers",
     # Youth and Kids spaces: leaders' posts and the office's leader
     # approvals (with background-check dates); before contacts.
     "space_posts", "space_leaders",
@@ -766,6 +766,9 @@ _IMPORT_SKIP = {
     # officers are team logins, not records.
     "msg_threads", "msg_participants", "msg_messages", "msg_blocks", "msg_reports", "msg_staff_views",
     "msg_guardians", "msg_members", "msg_safety_officers",
+    # A member officer cites a contact by id; a restored church names its
+    # officers again.
+    "msg_member_officers",
     # Youth and Kids leaders and their posts cite contacts by id; same
     # reason. A restored church approves its leaders again.
     "space_leaders", "space_posts",
