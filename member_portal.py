@@ -1223,9 +1223,11 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
         return _page(mpc.render_details(biz, site, request, full))
     if sub == "/my/notifications":
         import member_push
-        off, quiet = await asyncio.gather(asyncio.to_thread(member_push.turned_off, biz["id"], me["id"]),
-                                          asyncio.to_thread(member_push.quiet_prefs, biz["id"], me["id"]))
-        return _page(member_push.render_page(biz, site, request, me, off, quiet))
+        import group_chat_notify as gcn
+        off, quiet, chats = await asyncio.gather(asyncio.to_thread(member_push.turned_off, biz["id"], me["id"]),
+                                                 asyncio.to_thread(member_push.quiet_prefs, biz["id"], me["id"]),
+                                                 asyncio.to_thread(gcn.my_chats, biz, str(me["id"])))
+        return _page(member_push.render_page(biz, site, request, me, off, quiet, chats))
     from giving_router import giving_is_active
     # Giving opens inside the app (2026-10-14): /my/give is the give
     # page's own form in the app's look, the member's name and email filled.

@@ -190,7 +190,7 @@ from test_member_messaging import ANA, BEN, GRP, _group_tid, _send, env  # noqa:
 @pytest.fixture
 def rung(monkeypatch):
     calls = []
-    monkeypatch.setattr(mp, "tell_chat", lambda biz, t, acc, sender, ring=False: calls.append(ring))
+    monkeypatch.setattr(mp, "tell_chat", lambda biz, t, acc, sender, ring=False, **kw: calls.append(ring))
     return calls
 
 

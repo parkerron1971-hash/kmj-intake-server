@@ -197,7 +197,7 @@ def thread(business_id: str, tid: str):
 
 def participants(business_id: str, tid: str) -> Optional[List[Dict[str, Any]]]:
     rows = sb_clients.sb_get_as_service(
-        f"/msg_participants?thread_id=eq.{_q(tid)}&business_id=eq.{_q(business_id)}&select=contact_id,state,last_read_at,muted")
+        f"/msg_participants?thread_id=eq.{_q(tid)}&business_id=eq.{_q(business_id)}&select=contact_id,state,last_read_at,muted,notify")
     return rows if isinstance(rows, list) else None
 
 
@@ -1014,7 +1014,7 @@ async def send(tid: str, request: Request):
     if status_ == "delivered":
         # Members with "New messages" on hear that something arrived, never
         # what it says (member_push.tell_chat; off the request).
-        member_push.tell_chat(biz, t, acc, str(me["id"]), ring=bool(alert))
+        member_push.tell_chat(biz, t, acc, str(me["id"]), ring=bool(alert), replied_to=reply_to or None)
     if acc.get("me_state") == "requested":
         # Replying accepts the request.
         await asyncio.to_thread(sb_clients.sb_patch_as_service,

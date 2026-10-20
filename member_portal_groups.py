@@ -1067,8 +1067,9 @@ def render(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], data
     import group_gatherings
     import group_prayer
     import group_study
+    import group_chat_notify
     return _shell(biz, site, g.get("name") or "Group",
-                  f"<style>{GROUP_CSS}{CHAT_CSS}{group_prayer.PRAYER_CSS}{group_gatherings.MEET_CSS}{group_bring.BRING_CSS}{group_study.STUDY_CSS}</style>{page}",
+                  f"<style>{GROUP_CSS}{CHAT_CSS}{group_prayer.PRAYER_CSS}{group_gatherings.MEET_CSS}{group_bring.BRING_CSS}{group_study.STUDY_CSS}{group_chat_notify.CONTROL_CSS}</style>{page}",
                   tab="connect", who=me, script=script), 200
 
 
@@ -1140,11 +1141,13 @@ def chat_view(biz: Dict[str, Any], g: Optional[Dict[str, Any]], me: Dict[str, An
     if rx is None:
         return {"state": "error"}
     mpm.mark_read(biz_id, tid, str(me["id"]))
+    import group_chat_notify as gcn
     import member_push
     quiet = member_push.quiet_hour(biz)
+    notify = gcn.mine(biz_id, tid, str(me["id"])) if "messages" in member_push.church_kinds(biz.get("settings")) else None
     writers = "all" if room else (g.get("chat_writers") if g.get("chat_writers") in ("all", "leaders") else "all")
     return {"state": "ok", "tid": tid, "acc": acc, "msgs": msgs, "looks": looks, "rx": rx, "writers": writers,
-            "quiet": quiet}
+            "quiet": quiet, "notify": notify}
 
 
 def room_view(biz: Dict[str, Any], me: Dict[str, Any]) -> Dict[str, Any]:
@@ -1382,8 +1385,11 @@ def _chat_body(biz: Dict[str, Any], request: Request, me: Dict[str, Any], g: Dic
         compose = f'<p class="gs-note">{_e(reason)}</p>'
     # New messages show up for everyone, readers of a leaders-only chat too.
     script = _chat_script(tid, len(msgs))
+    # How you hear about it (group_chat_notify), when the church sends notes about messages.
+    import group_chat_notify as gcn
+    hear = gcn.control(tid, cv["notify"], here, _ic, _e) if cv.get("notify") else ""
     return (f'<section class="gc" aria-label="Group chat"><div class="gc-notes">{notes_html}</div>'
-            f'<ul class="gc-list" id="gc-list" aria-live="polite" aria-label="Messages">{listing}</ul>{compose}</section>'), script
+            f'<ul class="gc-list" id="gc-list" aria-live="polite" aria-label="Messages">{listing}</ul>{compose}{hear}</section>'), script
 
 
 def _alert_toggle(cv: Dict[str, Any]) -> str:
@@ -1607,6 +1613,24 @@ async def meet_bring_add_route(request: Request):
         return _go("/my/groups", err="group_gone")
     ok, code = await group_bring.add(church["business"], me, gid, str(form.get("day") or ""), str(form.get("what") or ""))
     return _go(_base(gid, "meet"), **({"done": code} if ok else {"err": code}))
+
+
+@router.post("/my/groups/chat/notify", include_in_schema=False)
+async def chat_notify_route(request: Request):
+    """Every message / Evening summary / Off, for one group chat or the
+    leaders room (group_chat_notify)."""
+    import asyncio
+    import group_chat_notify as gcn
+    import member_portal_church as mpc
+    church, me, form, stop = await _who(request, "/my/groups")
+    if stop:
+        return stop
+    back = str(form.get("back") or "/my/groups")
+    tid = str(form.get("thread") or "")
+    if not UUID.match(tid):
+        return mpc._back(back, err="gone_chat")
+    ok, code = await asyncio.to_thread(gcn.choose, church["business"], me, tid, str(form.get("level") or ""))
+    return mpc._back(back, **({"done": code} if ok else {"err": code}))
 
 
 @router.post("/my/groups/meet/study", include_in_schema=False)

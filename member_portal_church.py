@@ -106,6 +106,10 @@ DONE = {
     "bring_undone": "Done. It's open again for someone else.",
     "study_posted": "Posted. Your group sees this week's study now.",
     "study_saved": "Saved. Your group sees the changes.",
+    # How you hear about a group's chat (group_chat_notify).
+    "chat_every": "You'll get a note for each message.",
+    "chat_evening": "You'll get one note at 7 PM when there's something new.",
+    "chat_replies": "You'll hear only when someone replies to you.",
     "post_down": "That post is taken down.",
     "pinned": "Pinned to the top.",
     "unpinned": "Unpinned.",
@@ -1021,6 +1025,7 @@ async def _signed_in(request: Request):
 def _back(target: str, **q: str) -> RedirectResponse:
     from member_portal import _SECURE_HEADERS
     allowed = ("/my", "/my/me", "/my/events", "/my/prayer", "/my/details", "/my/groups", "/my/classes", "/my/live", "/my/messages",
+               "/my/notifications",
                "/my/kids/stories", "/my/kids/sundays", "/my/kids/family")
     if (target not in allowed and not re.fullmatch(r"/my/(groups/live|messages)/[0-9a-f-]{36}", target)
             and not re.fullmatch(r"/my/groups/([0-9a-fA-F-]{36}(/(board|people|chat|prayer|meet))?|leaders)", target)):
