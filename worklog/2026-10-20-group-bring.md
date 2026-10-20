@@ -1,5 +1,5 @@
 ---
-title: Bring something: who's bringing what to a group's gathering
+title: Bring something — who's bringing what to a group's gathering
 date: 2026-10-20
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-10-20: "you can continue to work on things." Next from the approved canvas "Church Groups, Together" (boards Meet and Main: "Bring something", "Bring a dish · 2 open")'
