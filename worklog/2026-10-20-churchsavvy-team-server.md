@@ -4,8 +4,8 @@ date: 2026-10-20
 agent: Claude Code (Claude Opus 5.5)
 asked: '"these are a go" (Kevin 2026-10-20, canvas board 30: Setup, Team and roles, Workspace colors)'
 status: in progress
-prs: []
-migrations: [supabase/APPLY-2026-10-20-worship-team.sql]
+prs: [kmj-intake-server#1533]
+migrations: [supabase/APPLY-2026-10-20-worship-team.sql (APPLIED LIVE 10/20 after a rollback probe)]
 left_undone: ["the Setup page, Team and roles, Workspace colors and the booth's fix in the app (solutionist-studio, next PR)", "invites by text from our own number (texting isn't open yet): the invite gives a link to copy and send any way", "the step-up passcode Solutionist asks before granting a seat isn't asked here (a team part opens only the worship routes, never the business)"]
 decisions: ["a volunteer is NOT a Solutionist seat: any active business_users row reads the whole business through is_business_member (people, giving, books), so the team lives in its own server-only table (worship_team) and opens only the worship routes", "four parts, more than one each: planner (plans, runs), worship leader (plans, songs; never the screens), booth (runs, fixes a typo; never the plan), admin (everything, the setup, the team); the owner, an admin or a manager of the church is an admin without an invite; a viewer or member seat reads only", "an invite is a link (/churchsavvy/join?t=…) that works once, for a month, emailed when there's an email; joining a church you're already on adds the new parts", "the booth's fix changes the slide's own lines in the song, the same number of lines, and refuses (409) when the song changed since the slide went up", "the church's starting workspace colors (dark, light, or light to plan and dark to run) live in the look"]
 related: [kmj-intake-server worklog/2026-10-20-churchsavvy-loops-quick-server.md]
