@@ -1,0 +1,15 @@
+---
+title: Bring something: who's bringing what to a group's gathering
+date: 2026-10-20
+agent: Claude Code (Claude Opus 5.5)
+asked: 'Kevin, 2026-10-20: "you can continue to work on things." Next from the approved canvas "Church Groups, Together" (boards Meet and Main: "Bring something", "Bring a dish · 2 open")'
+status: shipped
+prs: [kmj-intake-server#1532, solutionist-studio#1308]
+migrations: [supabase/APPLY-2026-10-20-group-bring.sql (applied)]
+left_undone: ["a member adding their own thing to the list (today: leaders list, members pick)", "telling someone when a leader takes their thing off the list"]
+decisions: ["leaders list what a gathering needs, for the next gathering or one of the 8 after it (skipped dates left out); each thing is checked by msg_screen like a Board post", "one thing each per gathering, as the canvas has it ('I'll bring it' hides once you've picked one); a partial unique index holds it if two taps race, and a claim only lands if nobody took it in the meantime", "someone who has left the group no longer holds a thing: it reads as open and the next person can take it", "members see nothing until a list is out; a leader sees a closed 'Bring something' card to start one", "the 5 PM reminder says 'You're bringing Dessert' to each bringer (its own ref_id), the plain one to the rest; if the gathering's reminder already went, a later tick sends nobody anything", "the office reads the lists (RLS select); only the server writes; exported, never re-imported"]
+related: [2026-10-20-group-gatherings.md, 2026-10-20-church-group-space.md]
+---
+`group_bring.py` (new): `load`, `add` (leaders, screened), `remove` (leaders), `claim` (one open thing each, conditional on who held it), `unclaim` (only your own), `bringing` (for the reminder), and the Meet tab's list + CSS. `group_gatherings`: `upcoming()` (the next n gatherings), `view` carries the coming dates and their lists (a failed read fails the tab, never an empty list), the list on the Meet tab, the per-person reminder. `member_portal_groups`: routes /my/groups/meet/bring/add, /claim, /undo, /remove; the Home card's "Bring something · 2 still open"; `x` and `utensils` icons. `member_portal_church`: the done/error words. `account_lifecycle`: group_bring exported, never re-imported.
+
+Checks: 22 tests in `test_group_bring.py` (20 sabotages caught: members adding, any date, empty things, no cap, unchecked text, taking a held thing, two each, a race stealing, leavers holding, past gatherings claimable, undoing someone else's, members removing, the button after you've picked, the start card shown to members, a later list unlabeled, a failed read shown as empty, a second reminder, the reminder silent about the dish, bringers reminded twice, Home silent); `group_bring_db.mjs` 16 checks on PGlite, in CI (5 sabotages of the migration caught); 698 tests across every file touching these modules. The Meet tab (member, after picking, leader, a leader with no list) and Home rendered and looked at at 390 and 1280. Rollback probe on the live database before applying.

@@ -17,7 +17,9 @@ up"). The group page's Meet tab:
   * the last few gatherings: how many came, and whether you were there
   * a reminder (member_push "groups"): 5 PM on the day of an evening
     gathering, 5 PM the day before an earlier one; never to someone who
-    said they can't make it
+    said they can't make it; it tells each person what they said they'd
+    bring
+  * "Bring something" (group_bring): who's bringing what
 
 The routes live in member_portal_groups (/my/groups/meet...).
 """
@@ -106,6 +108,25 @@ def next_on(g: Dict[str, Any], now_local: datetime) -> Tuple[Optional[date], Opt
     return None, skipped
 
 
+def upcoming(g: Dict[str, Any], now_local: datetime, n: int) -> List[date]:
+    """The next `n` gatherings (skipped dates left out), the first being
+    next_on's."""
+    if not scheduled(g):
+        return []
+    skips = {str(d)[:10] for d in (g.get("meet_skips") or [])}
+    out: List[date] = []
+    for i in range(0, 7 * n + 70):
+        day = now_local.date() + timedelta(days=i)
+        if day.weekday() != int(g["meet_day"]) or day.isoformat() in skips:
+            continue
+        if starts_at(g, day, now_local.tzinfo) + HERE_AFTER < now_local:
+            continue
+        out.append(day)
+        if len(out) == n:
+            break
+    return out
+
+
 def can_say_here(g: Dict[str, Any], day: Optional[date], now_local: datetime) -> bool:
     if not day:
         return False
@@ -159,6 +180,12 @@ def view(business: Dict[str, Any], g: Dict[str, Any], me_id: str, people: List[D
     nxt, skipped = next_on(g, now_local)
     out: Dict[str, Any] = {"next": nxt, "skipped": skipped, "tz": tz, "now": now_local, "rsvps": {},
                            "mine": None, "here": False, "can_here": False, "came": set(), "self_n": 0, "past": []}
+    import group_bring
+    out["coming"] = upcoming(g, now_local, group_bring.AHEAD)
+    items = group_bring.load(biz_id, str(g["id"]), out["coming"])
+    if items is None:
+        return None
+    out["bring"] = group_bring.by_day(items)
     if nxt:
         rows = sb_clients.sb_get_as_service(
             f"/group_rsvps?business_id=eq.{_q(biz_id)}&group_id=eq.{_q(g['id'])}&met_on=eq.{nxt.isoformat()}"
@@ -415,13 +442,27 @@ def reminders(business: Dict[str, Any], now: Optional[datetime] = None) -> int:
             who = sorted({str(r["contact_id"]) for r in members} - {str(r["contact_id"]) for r in noes})
             if not who:
                 continue
+            ref = f"gathering:{g['id']}:{day.isoformat()}"
+            # Sent already (a later tick this hour): nobody gets a second
+            # one, even someone who picked something to bring since.
+            done = sb_clients.sb_get_as_service(
+                f"/member_push_sends?business_id=eq.{_q(business['id'])}&kind=eq.groups&ref_id=eq.{_q(ref)}&select=id&limit=1")
+            if not isinstance(done, list) or done:
+                continue
             t = _time(g)
             clock = t.strftime("%I:%M %p").lstrip("0") if t else ""
             when = ("Tonight" if ahead == 0 else "Tomorrow") + (f" at {clock}" if clock else "")
             body = when + (f" · {g['location']}" if g.get("location") else "")
-            sent += member_push.send(business, "groups", title=str(g.get("name") or "Your group"), body=body,
-                                     url=f"/my/groups/{g['id']}/meet", contact_ids=who,
-                                     ref_id=f"gathering:{g['id']}:{day.isoformat()}", tag=f"gathering-{g['id']}")
+            import group_bring
+            bring = group_bring.bringing(str(business["id"]), str(g["id"]), day)
+            say = dict(title=str(g.get("name") or "Your group"), url=f"/my/groups/{g['id']}/meet", tag=f"gathering-{g['id']}")
+            for c in who:
+                if c in bring:
+                    sent += member_push.send(business, "groups", body=f"{body} · You’re bringing {bring[c]}",
+                                             contact_ids=[c], ref_id=f"{ref}:{c}", **say)
+            rest = [c for c in who if c not in bring]
+            if rest:
+                sent += member_push.send(business, "groups", body=body, contact_ids=rest, ref_id=ref, **say)
     return sent
 
 
@@ -539,6 +580,8 @@ def render_tab(biz: Dict[str, Any], g: Dict[str, Any], v: Optional[Dict[str, Any
         parts.append(f'<p class="gs-empty">No regular time yet. {lead}</p>')
     if live:
         parts.append(f'<a class="gs-btn tint sm" href="/my/groups/live/{esc(live["id"])}">{ic("video", 15)}Join on video</a>')
+    import group_bring
+    bring = group_bring.render(g, v, me_id=me_id, leader=leader, people=people, ic=ic, face=face, esc=esc, name=name)
     if leader and nxt and v.get("today"):
         came = v.get("came") or set()
         rs = v.get("rsvps") or {}
@@ -558,6 +601,7 @@ def render_tab(biz: Dict[str, Any], g: Dict[str, Any], v: Optional[Dict[str, Any
             f'<textarea id="gm-note" name="note" maxlength="{ROLL_NOTE_MAX}" placeholder="A note for next time (only leaders and the office see it)">{esc(m.get("notes") or "")}</textarea>'
             f'<button class="gs-btn" type="submit">Save attendance</button>'
             f'<p class="gm-fine">It counts toward each person’s attendance, the same as Sunday check-in.</p></form></section>')
+    parts.append(bring)
     if leader:
         days = "".join(f'<option value="{i}"{" selected" if g.get("meet_day") is not None and int(g["meet_day"]) == i else ""}>{d}</option>'
                        for i, d in enumerate(DAYS))

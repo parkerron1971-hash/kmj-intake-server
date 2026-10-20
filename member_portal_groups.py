@@ -690,6 +690,10 @@ def _ic(name: str, size: int = 18) -> str:
         "pin": ('<path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76'
                 'a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/>'),
         "home": '<path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"/>',
+        "x": '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+        # Bring something (group_bring).
+        "utensils": ('<path d="M3 2v7c0 1.1.9 2 2 2h4a2 2 0 0 0 2-2V2"/><path d="M7 2v20"/>'
+                     '<path d="M21 15V2a5 5 0 0 0-5 5v6c0 1.1.9 2 2 2h3Zm0 0v7"/>'),
     }
     if name in extra:
         return (f'<svg class="mb-ic" width="{size}" height="{size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
@@ -987,10 +991,17 @@ def render(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], data
             parts.append(_post_card(p, g, leader=leader, me_id=me_id, size=size, back=back))
         when = " · ".join(_e(x) for x in (g.get("meets"), g.get("location")) if x)
         nxt = (data.get("meet") or {}).get("next")
+        bring = ""
         if nxt:
+            import group_bring
             import group_gatherings
             going = sum(1 for a in ((data.get("meet") or {}).get("rsvps") or {}).values() if a == "going")
             when = _e(group_gatherings.when_text(g, nxt)) + (f" · {going} going" if going else "")
+            items = ((data.get("meet") or {}).get("bring") or {}).get(nxt.isoformat()) or []
+            if items:
+                left = group_bring.still_open(items, {p["id"] for p in people})
+                bring = (f'<a class="gs-mini" href="{_base(g["id"], "meet")}">{_ic("utensils", 15)}'
+                         f'Bring something · {group_bring.open_label(left)}</a>')
         live = data.get("live") or {}
         meet = ""
         if live:
@@ -1005,7 +1016,7 @@ def render(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], data
                          f'<span class="gs-disc coral">{_ic("calendar", 20)}</span><span class="gs-t"><b>When we meet</b>'
                          f'<span>{when or "Your leaders will share the next time"}</span></span>'
                          f'<a class="gs-mini" href="{_base(g["id"], "meet")}">{"Are you coming?" if nxt else "Open"}</a></div>'
-                         f'{f"<div class=gs-acts>{meet}</div>" if meet else ""}</section>')
+                         f'{bring}{f"<div class=gs-acts>{meet}</div>" if meet else ""}</section>')
         latest = [p for p in posts if p not in pinned and p not in church_new][:2]
         if latest:
             parts.append(f'<div class="mb-sh"><h2>From the Board</h2><a href="{_base(g["id"], "board")}">See all</a></div>')
@@ -1030,10 +1041,11 @@ def render(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], data
                          f'{_e(biz.get("name") or "the church")} turns on messaging.</span></p>')
         content = "".join(parts)
     page = f'<a class="mb-back" href="/my/groups">Connect</a>{hero}{tabs}{flash}<div style="margin-top:16px">{content}</div>'
+    import group_bring
     import group_gatherings
     import group_prayer
     return _shell(biz, site, g.get("name") or "Group",
-                  f"<style>{GROUP_CSS}{CHAT_CSS}{group_prayer.PRAYER_CSS}{group_gatherings.MEET_CSS}</style>{page}",
+                  f"<style>{GROUP_CSS}{CHAT_CSS}{group_prayer.PRAYER_CSS}{group_gatherings.MEET_CSS}{group_bring.BRING_CSS}</style>{page}",
                   tab="connect", who=me, script=script), 200
 
 
@@ -1555,6 +1567,47 @@ async def meet_skip_route(request: Request):
     import group_gatherings as gg
     return await _meet_action(request, lambda biz, me, gid, form: gg.skip(
         biz, me, gid, str(form.get("day") or ""), str(form.get("on") or "") == "1"))
+
+
+# Bring something (group_bring).
+
+@router.post("/my/groups/meet/bring/add", include_in_schema=False)
+async def meet_bring_add_route(request: Request):
+    import group_bring
+    church, me, form, stop = await _who(request, "/my/groups")
+    if stop:
+        return stop
+    gid = _gid(form)
+    if not gid:
+        return _go("/my/groups", err="group_gone")
+    ok, code = await group_bring.add(church["business"], me, gid, str(form.get("day") or ""), str(form.get("what") or ""))
+    return _go(_base(gid, "meet"), **({"done": code} if ok else {"err": code}))
+
+
+def _bring_item(form) -> str:
+    item = str(form.get("item") or "")
+    return item if UUID.match(item) else ""
+
+
+@router.post("/my/groups/meet/bring/claim", include_in_schema=False)
+async def meet_bring_claim_route(request: Request):
+    import group_bring
+    return await _meet_action(request, lambda biz, me, gid, form: group_bring.claim(biz, me, gid, _bring_item(form))
+                              if _bring_item(form) else (False, "bring_gone"))
+
+
+@router.post("/my/groups/meet/bring/undo", include_in_schema=False)
+async def meet_bring_undo_route(request: Request):
+    import group_bring
+    return await _meet_action(request, lambda biz, me, gid, form: group_bring.unclaim(biz, me, gid, _bring_item(form))
+                              if _bring_item(form) else (False, "bring_gone"))
+
+
+@router.post("/my/groups/meet/bring/remove", include_in_schema=False)
+async def meet_bring_remove_route(request: Request):
+    import group_bring
+    return await _meet_action(request, lambda biz, me, gid, form: group_bring.remove(biz, me, gid, _bring_item(form))
+                              if _bring_item(form) else (False, "bring_gone"))
 
 
 # ─── the prayer wall (group_prayer) ──────────────────────────────────
