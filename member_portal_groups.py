@@ -20,6 +20,9 @@ page of its own; this is part 1 of building it:
                            officers are told). The office can make a group
                            Board-only or leaders-only.
 
+  /my/groups/<id>/prayer   the group's prayer wall (part 3, group_prayer):
+                           ask the group, or only the pastors; danger words
+                           go to a pastor first; "I'm praying", answered
   /my/groups/leaders       All group leaders (part 2c): one chat for
                            everyone who leads a group and the church's
                            pastors (member_portal_messaging.leaders_room_people)
@@ -76,7 +79,7 @@ TITLE_MAX = 120
 POST_MAX = 2000
 POSTS_SHOWN = 40
 UUID = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
-TABS = ("", "board", "people", "chat")
+TABS = ("", "board", "people", "chat", "prayer")
 
 
 def _q(v: Any) -> str:
@@ -774,7 +777,7 @@ def _tabs(gid: str, current: str, *, board_new: int, chat: bool, live: Optional[
     items = [("", "Home", "home", 0)]
     if chat:
         items.append(("chat", "Chat", "chat", 0))
-    items += [("board", "Board", "megaphone", board_new), ("people", "People", "users", 0)]
+    items += [("board", "Board", "megaphone", board_new), ("prayer", "Prayer", "hand-heart", 0), ("people", "People", "users", 0)]
     out = []
     for key, label, icon, n in items:
         cur = ' aria-current="page"' if key == current else ""
@@ -923,6 +926,12 @@ def render(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], data
     script = ""
     if tab == "chat":
         content, script = _chat_body(biz, request, me, g, data.get("chat") or {"state": "error"}, leader)
+    elif tab == "prayer":
+        import group_prayer
+        content = group_prayer.render_tab(
+            biz, g, data.get("prayer"), me_id=me_id, leader=leader, size=size,
+            answered=request.query_params.get("view") == "answered", ic=_ic,
+            face=lambda p: _face(p, "gs-av m", "first"), when=_when, esc=_e)
     elif tab == "board":
         cards = "".join(_post_card(p, g, leader=leader, me_id=me_id, size=size, back=back) for p in posts)
         empty = ('<p class="gs-empty">Nothing on the Board yet. When a leader posts, it shows here.</p>' if not cards else "")
@@ -995,6 +1004,8 @@ def render(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], data
         if chat:
             doors.append(f'<a class="gs-row" href="{_base(g["id"], "chat")}"><span class="gs-disc violet">{_ic("chat", 20)}</span>'
                          f'<span class="gs-t"><b>Group chat</b><span>Talk with everyone in the group</span></span>{_ic("chevron", 18)}</a>')
+        doors.append(f'<a class="gs-row" href="{_base(g["id"], "prayer")}"><span class="gs-disc coral">{_ic("hand-heart", 20)}</span>'
+                     f'<span class="gs-t"><b>Prayer wall</b><span>Carry each other in prayer</span></span>{_ic("chevron", 18)}</a>')
         doors.append(f'<a class="gs-row" href="{_base(g["id"], "people")}"><span class="gs-disc gold">{_ic("users", 20)}</span>'
                      f'<span class="gs-t"><b>People</b><span>{size} in the group</span></span>{_ic("chevron", 18)}</a>')
         parts.append(f'<div class="mb-sh"><h2>In the group</h2></div><div class="gs-list">{"".join(doors)}</div>')
@@ -1003,8 +1014,9 @@ def render(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], data
                          f'{_e(biz.get("name") or "the church")} turns on messaging.</span></p>')
         content = "".join(parts)
     page = f'<a class="mb-back" href="/my/groups">Connect</a>{hero}{tabs}{flash}<div style="margin-top:16px">{content}</div>'
-    return _shell(biz, site, g.get("name") or "Group", f"<style>{GROUP_CSS}{CHAT_CSS}</style>{page}", tab="connect", who=me,
-                  script=script), 200
+    import group_prayer
+    return _shell(biz, site, g.get("name") or "Group", f"<style>{GROUP_CSS}{CHAT_CSS}{group_prayer.PRAYER_CSS}</style>{page}",
+                  tab="connect", who=me, script=script), 200
 
 
 async def serve(request: Request, biz: Dict[str, Any], site, me: Dict[str, Any], sub: str) -> Tuple[str, int]:
@@ -1019,6 +1031,10 @@ async def serve(request: Request, biz: Dict[str, Any], site, me: Dict[str, Any],
     data = await asyncio.to_thread(space, str(biz["id"]), gid, me, tab=tab)
     if data and data.get("role") and tab == "chat":
         data["chat"] = await asyncio.to_thread(chat_view, biz, data["group"], me)
+    if data and data.get("role") and tab == "prayer":
+        import group_prayer
+        data["prayer"] = await asyncio.to_thread(group_prayer.wall, str(biz["id"]), gid, str(me["id"]),
+                                                 answered=request.query_params.get("view") == "answered")
     if data and data.get("role") and tab in ("", "board"):
         shown = data.get("posts") or []
         if tab == "":
@@ -1347,7 +1363,7 @@ if(x.ok){{i.value='';var ah=f.querySelector('input[name=after_hours]');if(ah)ah.
 
 # ─── routes ──────────────────────────────────────────────────────────
 
-_BACK_RE = re.compile(r"^/my/groups(/[0-9a-fA-F-]{36}(/(board|people))?)?$")
+_BACK_RE = re.compile(r"^/my/groups(/[0-9a-fA-F-]{36}(/(board|people|prayer))?)?$")
 
 
 def _go(target: str, **q: str) -> RedirectResponse:
@@ -1462,6 +1478,66 @@ async def pin_route(request: Request):
     ok, code, gid = await asyncio.to_thread(pin, church["business"]["id"], me, str(form.get("id") or ""),
                                             str(form.get("on") or "") == "1")
     return _go(_base(gid, "board") if gid else "/my/groups", **({"done": code} if ok else {"err": code}))
+
+
+# ─── the prayer wall (group_prayer) ──────────────────────────────────
+
+
+@router.post("/my/groups/prayer", include_in_schema=False)
+async def prayer_route(request: Request):
+    import asyncio
+    import group_prayer
+    church, me, form, stop = await _who(request, "/my/groups")
+    if stop:
+        return stop
+    gid = _gid(form)
+    if not gid:
+        return _go("/my/groups", err="group_gone")
+    biz = church["business"]
+    g = await asyncio.to_thread(group_row, str(biz["id"]), gid)
+    inside = await asyncio.to_thread(_is_member, str(biz["id"]), gid, me["id"]) if g else False
+    if g is None or inside is None:
+        return _go(_base(gid, "prayer"), err="error")
+    if not g or not inside:
+        return _go(_base(gid), err="not_in_group")
+    ok, code = await group_prayer.ask(biz, me, g, str(form.get("body") or ""), str(form.get("to") or "") == "pastors")
+    return _go(_base(gid, "prayer"), **({"done": code} if ok else {"err": code}))
+
+
+async def _prayer_action(request: Request, act):
+    """The shared shape of mark / answer / remove: back to the wall."""
+    import asyncio
+    church, me, form, stop = await _who(request, "/my/groups")
+    if stop:
+        return stop
+    biz_id = str(church["business"]["id"])
+    ok, code, gid = await asyncio.to_thread(act, church["business"], biz_id, me, form)
+    back = _base(gid, "prayer") if UUID.match(gid or "") else "/my/groups"
+    if ok and str(form.get("view") or "") == "answered" and UUID.match(gid or ""):
+        back = _base(gid, "prayer")
+    return _go(back, **({"done": code} if ok else {"err": code}))
+
+
+@router.post("/my/groups/prayer/mark", include_in_schema=False)
+async def prayer_mark_route(request: Request):
+    import group_prayer
+    return await _prayer_action(request, lambda biz, biz_id, me, form: group_prayer.mark(
+        biz, me, str(form.get("id") or ""), str(form.get("kind") or ""),
+        lambda gid: _is_member(biz_id, gid, me["id"])))
+
+
+@router.post("/my/groups/prayer/answer", include_in_schema=False)
+async def prayer_answer_route(request: Request):
+    import group_prayer
+    return await _prayer_action(request, lambda biz, biz_id, me, form: group_prayer.answer(
+        biz_id, me, str(form.get("id") or ""), str(form.get("praise") or "")))
+
+
+@router.post("/my/groups/prayer/remove", include_in_schema=False)
+async def prayer_remove_route(request: Request):
+    import group_prayer
+    return await _prayer_action(request, lambda biz, biz_id, me, form: group_prayer.remove(
+        biz_id, me, str(form.get("id") or ""), lambda gid: _is_leader(biz_id, gid, me["id"])))
 
 
 @router.post("/my/groups/names", include_in_schema=False)
