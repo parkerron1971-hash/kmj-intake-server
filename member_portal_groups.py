@@ -221,10 +221,12 @@ def posts_for(business_id: str, group_id: str, me_id: str, leader: bool,
     pressed "Got it", and (for a leader) how many have seen it."""
     rows = sb_clients.sb_get_as_service(
         f"/group_posts?business_id=eq.{_q(business_id)}&or=(group_id.eq.{_q(group_id)},group_id.is.null)"
-        f"&removed_at=is.null&select=id,group_id,title,body,pinned,ask_ack,posted_by,after_hours,emailed,created_at"
+        f"&removed_at=is.null&select=id,group_id,title,body,pinned,ask_ack,posted_by,after_hours,emailed,audience,created_at"
         f"&order=created_at.desc&limit={POSTS_SHOWN}")
     if rows is None:
         return None
+    # A word the office sent to the group leaders only shows to leaders.
+    rows = [r for r in rows if leader or r.get("audience") != "leaders"]
     if not rows:
         return []
     ids = [str(r["id"]) for r in rows]
@@ -803,12 +805,14 @@ def _tabs(gid: str, current: str, *, board_new: int, chat: bool, live: Optional[
 def _post_card(p: Dict[str, Any], g: Dict[str, Any], *, leader: bool, me_id: str, size: int, back: str) -> str:
     from member_portal import _e
     author = p.get("author") or {}
-    name = display_name(author, g.get("name_display") or "full") if author else "A leader"
+    # The office's word has no author contact: it's from the pastors.
+    name = (display_name(author, g.get("name_display") or "full") if author
+            else "Your pastors" if p.get("church") else "A leader")
     tag = '<span class="gs-tag pastor">Pastor</span>' if p.get("church") else '<span class="gs-tag">Leader</span>'
     who = f'{_e(name)} {tag}'
     meta = _when(p.get("created_at"))
     if p.get("church"):
-        meta += " · to every group"
+        meta += " · to every group leader" if p.get("audience") == "leaders" else " · to every group"
     pinned = bool(p.get("pinned")) and not p.get("church")
     pin_mark = f'<span class="gs-pinned">{_ic("pin", 14)}Pinned</span>' if pinned else ""
     if p.get("after_hours"):
