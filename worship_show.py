@@ -32,6 +32,10 @@ import worship_scripture as ws
 ITEM_KINDS = ("section", "song", "scripture", "text", "announcement", "media", "countdown")
 SHOW = ("all", "room", "online")
 ROLES = ("room", "online", "led", "stage", "lobby")
+# The confidence screen (canvas board 33): what a stage screen shows, and how.
+STAGE_LAYOUTS = ("auto", "band", "pastor", "notes", "count")
+STAGE_SHOWS = ("now", "next", "notes", "clock", "timer", "message", "parts", "key", "picture")
+STAGE_SIZES = ("small", "std", "big")
 MAX_ITEMS = 80
 MAX_TEXT_SLIDES = 30
 _ID = re.compile(r"^[a-z0-9-]{1,24}$")
@@ -75,7 +79,9 @@ def clean_item(raw: Any) -> Dict[str, Any]:
         raise ValueError("An item shows to everyone, the room only, or online only")
     out: Dict[str, Any] = {"id": iid, "kind": kind, "show": show,
                            "notes": _text(raw, "notes", 500, "Notes for the booth"),
-                           "who": _text(raw, "who", 60, "Who leads it")}
+                           "who": _text(raw, "who", 60, "Who leads it"),
+                           # For the stage: beside the words on the confidence screen, never on the big screen.
+                           "stage": _text(raw, "stage", 500, "The note for the stage")}
     minutes = raw.get("minutes")
     if minutes in (None, ""):
         out["minutes"] = None
@@ -118,7 +124,9 @@ def clean_item(raw: Any) -> Dict[str, Any]:
             text = _text(s, "text", 400, "A slide's words")
             if not text:
                 raise ValueError("A slide has no words")
-            clean.append({"kicker": _text(s, "kicker", 60, "A slide's small heading"), "text": text})
+            clean.append({"kicker": _text(s, "kicker", 60, "A slide's small heading"), "text": text,
+                          # The pastor's notes for this point: the confidence screen only.
+                          "notes": _text(s, "notes", 1000, "A point's notes")})
         out["slides"] = clean
     elif kind == "announcement":
         out["title"] = _text(raw, "title", 80, "The announcement's title")
@@ -188,6 +196,22 @@ def _clean_passage_choices(raw: Dict[str, Any]) -> Dict[str, Any]:
     return {"split": split, "breaks": breaks, "fixes": fixes,
             "show_ref": raw.get("show_ref") is not False, "show_nums": raw.get("show_nums") is not False,
             "show_version": raw.get("show_version") is not False, "size": size, "align": align}
+
+
+def clean_stage(raw: Any) -> Dict[str, Any]:
+    """A stage screen's settings (the confidence screen, canvas board 33): its
+    layout (auto picks the band's view for words and the pastor's for points),
+    what it shows, and how big. Anything left out takes the default."""
+    raw = raw if isinstance(raw, dict) else {}
+    layout = raw.get("layout") or "auto"
+    if layout not in STAGE_LAYOUTS:
+        raise ValueError("A confidence screen is the band's, the pastor's, notes, or a countdown")
+    size = raw.get("size") or "std"
+    if size not in STAGE_SIZES:
+        raise ValueError("The words are small, standard or big")
+    shows = raw.get("show") if isinstance(raw.get("show"), dict) else {}
+    show = {k: (shows[k] is not False) if k in shows else (k != "picture") for k in STAGE_SHOWS}
+    return {"layout": layout, "show": show, "size": size}
 
 
 def clean_items(raw: Any) -> List[Dict[str, Any]]:
@@ -315,7 +339,7 @@ def _scripture_slides(item: Dict[str, Any]) -> Dict[str, Any]:
 
 def compile_item(item: Dict[str, Any], songs: Dict[str, Dict[str, Any]], starts_at: Optional[str] = None) -> Dict[str, Any]:
     """One item with its slides. `songs` maps song id → the song row (sections, arrangements…)."""
-    base = {k: item.get(k) for k in ("id", "kind", "show", "notes", "who", "minutes")}
+    base = {k: item.get(k) for k in ("id", "kind", "show", "notes", "who", "minutes", "stage")}
     kind = item["kind"]
     if kind == "section":
         body: Dict[str, Any] = {"title": item.get("title") or "Section", "slides": []}
@@ -325,7 +349,8 @@ def compile_item(item: Dict[str, Any], songs: Dict[str, Dict[str, Any]], starts_
         body = _scripture_slides(item)
     elif kind == "text":
         body = {"title": item.get("title") or (item["slides"][0]["kicker"] if item.get("slides") else "") or "Slides",
-                "slides": [{"kind": "text", "kicker": s.get("kicker") or "", "text": s["text"]} for s in item.get("slides") or []]}
+                "slides": [{"kind": "text", "kicker": s.get("kicker") or "", "text": s["text"], "notes": s.get("notes") or ""}
+                           for s in item.get("slides") or []]}
     elif kind == "announcement":
         body = {"title": item["title"], "slides": [{"kind": "announcement", "title": item["title"], "when": item.get("when") or "",
                                                      "body": item.get("body") or "", "image_url": item.get("image_url") or "",
@@ -400,6 +425,16 @@ def clean_live(raw: Any) -> Dict[str, Any]:
         if not isinstance(message, str) or len(message) > 120:
             raise ValueError("A message to the stage is at most 120 characters")
         out["message"] = message.strip() or None
+    since = raw.get("since")
+    if since is not None:
+        # When the item up now first went up: the confidence screen's "this song" and "left of 35".
+        if not isinstance(since, str) or len(since) > 40:
+            raise ValueError("That isn't a time")
+        try:
+            datetime.fromisoformat(since.replace("Z", "+00:00"))
+        except ValueError:
+            raise ValueError("That isn't a time")
+        out["since"] = since
     timer = raw.get("timer")
     if timer is not None:
         if not isinstance(timer, dict) or not isinstance(timer.get("ends_at"), str):
