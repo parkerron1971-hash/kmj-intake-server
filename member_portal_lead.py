@@ -455,8 +455,9 @@ def _file(i: Dict[str, Any], biz: Dict[str, Any], me: Dict[str, Any]) -> str:
 def render(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], my_roles: List[Dict[str, Any]],
            view: Optional[Dict[str, Any]], selected: str = "", *, now: Optional[datetime] = None,
            prayer: Optional[Dict[str, Any]] = None, tab: str = "people",
-           targets: Optional[List[Dict[str, Any]]] = None, fams: int = 0) -> str:
+           targets: Optional[List[Dict[str, Any]]] = None, fams: int = 0, safety: Optional[int] = None) -> str:
     from member_portal import _shell
+    import member_portal_safety as mps
     now = now or datetime.now(timezone.utc)
     church = (biz.get("name") or "Your church").strip()
     done = DONE.get(request.query_params.get("done") or "")
@@ -474,8 +475,9 @@ def render(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], my_r
     if active and prays and (tab == "prayer" or not people):
         waiting = sum(1 for p in (prayer or {}).get("requests") or [] if not p.get("prayed_at"))
         seg = _seg("prayer", people, True, waiting, fams)
-        body = f'{flash}{head}{invites}{seg}{_prayer_body(prayer, biz, targets or [], now)}'
-        return _shell(biz, site, "Prayer", f'<style>{LEAD_CSS}</style><div class="ld-wide">{body}</div>', tab="lead", who=me)
+        body = f'{flash}{head}{invites}{mps.card(safety)}{seg}{_prayer_body(prayer, biz, targets or [], now)}'
+        return _shell(biz, site, "Prayer", f'<style>{LEAD_CSS}{mps.SAFETY_CSS}</style><div class="ld-wide">{body}</div>',
+                      tab="lead", who=me)
     seg = ""
     if active:
         waiting = sum(1 for p in (prayer or {}).get("requests") or [] if not p.get("prayed_at"))
@@ -508,7 +510,9 @@ def render(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], my_r
               if shown else '<section class="ld-file"></section>')
     grid = f'<div class="ld-grid{" has-sel" if sel else ""}">{listing}{detail}</div>'
     title = sel["person"]["name"] if sel else "Lead"
-    return _shell(biz, site, title, f'<style>{LEAD_CSS}</style><div class="ld-wide">{flash}{head}{invites}{grid}</div>',
+    door = "" if sel else mps.card(safety)
+    return _shell(biz, site, title,
+                  f'<style>{LEAD_CSS}{mps.SAFETY_CSS}</style><div class="ld-wide">{flash}{head}{invites}{door}{grid}</div>',
                   tab="lead", who=me, back=("/my/lead", "Lead") if sel else None)
 
 
@@ -519,6 +523,10 @@ async def serve(request: Request, biz: Dict[str, Any], site, me: Dict[str, Any],
     selected = sub[len("/my/lead/"):] if sub.startswith("/my/lead/") else ""
     if selected == "families" or selected.startswith("family/"):
         return await serve_families(request, biz, site, me, selected)
+    # The Safety room, for the church's safety officers (member_portal_safety).
+    import member_portal_safety as mps
+    if selected == "safety" or selected.startswith("safety/"):
+        return await mps.serve(request, biz, site, me, sub)
     tab = "prayer" if selected == "prayer" else "people"
     if tab == "prayer":
         selected = ""
@@ -537,8 +545,10 @@ async def serve(request: Request, biz: Dict[str, Any], site, me: Dict[str, Any],
         prayer = await asyncio.to_thread(church_prayer.leader_prayers, biz["id"], str(me["id"]))
         if any(_is_prayer(r) for r in my_roles if r["status"] == "active"):
             targets = await asyncio.to_thread(church_prayer.pass_targets, biz["id"], me) or []
+    safety = await asyncio.to_thread(mps.waiting, biz["id"], str(me["id"])) if any(
+        r["status"] == "active" for r in my_roles) else None
     html_out = render(biz, site, request, me, my_roles, view, selected, prayer=prayer, tab=tab, targets=targets,
-                      fams=fams)
+                      fams=fams, safety=safety)
     ok = (prayer is not None) if tab == "prayer" else (view is not None)
     return html_out, 200 if ok or not my_roles else 503
 

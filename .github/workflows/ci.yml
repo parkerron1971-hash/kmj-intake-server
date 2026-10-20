@@ -186,6 +186,7 @@ jobs:
           node __tests__/sunday_checkin_db.mjs
           node __tests__/bible_marks_db.mjs
           node __tests__/devotionals_db.mjs
+          node __tests__/member_safety_officers_db.mjs
           node __tests__/group_space_db.mjs
           node __tests__/worship_songs_db.mjs
           node __tests__/worship_show_db.mjs

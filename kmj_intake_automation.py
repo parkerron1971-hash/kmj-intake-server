@@ -389,6 +389,10 @@ app.include_router(member_classes_router)
 # invitation, logs a conversation, marks a step, hands someone back.
 from member_portal_lead import router as member_portal_lead_router
 app.include_router(member_portal_lead_router)
+# The Safety room on a pastoral leader's Lead tab (member_portal_safety.py):
+# safety officers picked from the church's Pastors and Elders.
+from member_portal_safety import router as member_portal_safety_router
+app.include_router(member_portal_safety_router)
 # Sunday check-in (member_portal_checkin.py): POST /my/here, a member
 # counts their family "at church" or "watching online". BEFORE public_site.
 from member_portal_checkin import router as member_portal_checkin_router
