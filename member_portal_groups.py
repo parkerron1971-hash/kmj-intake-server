@@ -104,7 +104,7 @@ def group_row(business_id: str, group_id: str) -> Optional[Dict[str, Any]]:
     rows = sb_clients.sb_get_as_service(
         f"/groups?id=eq.{_q(group_id)}&business_id=eq.{_q(business_id)}"
         f"&select=id,name,kind,description,meets,location,capacity,open_to_join,join_mode,name_display,youth,active,"
-        f"chat_on,chat_writers,meet_day,meet_time,meet_address,meet_note,meet_skips,study_on,updated_at&limit=1")
+        f"chat_on,chat_writers,meet_day,meet_time,meet_address,meet_note,meet_skips,meet_every,meet_from,study_on,updated_at&limit=1")
     if rows is None:
         return None
     if not rows or not rows[0].get("active"):
@@ -1597,7 +1597,7 @@ async def meet_schedule_route(request: Request):
     import group_gatherings as gg
     return await _meet_action(request, lambda biz, me, gid, form: gg.set_schedule(
         biz, me, gid, str(form.get("day") or ""), str(form.get("time") or ""), str(form.get("address") or ""),
-        str(form.get("note") or "")))
+        str(form.get("note") or ""), str(form.get("every") or "1"), str(form.get("first") or "")))
 
 
 @router.post("/my/groups/meet/skip", include_in_schema=False)
