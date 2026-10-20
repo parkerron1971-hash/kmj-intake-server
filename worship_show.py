@@ -325,7 +325,11 @@ DEFAULT_LOOK: Dict[str, Any] = {
     "brand": {"primary": None, "accent": None, "background": None, "logo_url": None},
     # The church's own quick screens (Amen, Giving, Please stand): see clean_quick.
     "quick": [],
+    # ChurchSavvy's own colors around the slides, the church's starting choice
+    # (each person can switch theirs): dark, light, or light to plan and dark to run.
+    "workspace": "dark",
 }
+WORKSPACES = ("dark", "light", "split")
 
 
 def clean_look(raw: Any) -> Dict[str, Any]:
@@ -376,11 +380,14 @@ def clean_look(raw: Any) -> Dict[str, Any]:
     if logo not in (None, "") and (not isinstance(logo, str) or not _HTTPS.match(logo)):
         raise ValueError("The logo must be an https:// link")
     brand["logo_url"] = logo or None
+    workspace = raw.get("workspace") or "dark"
+    if workspace not in WORKSPACES:
+        raise ValueError("Workspace colors are dark, light, or light to plan and dark to run")
     return {
         "background": {"kind": kind, "color": color, "url": url, "dim": round(float(dim), 2)},
         "size": size, "caps": bool(raw.get("caps")), "align": align, "font": font or None,
         "translation": tr, "lower_third": {"style": style, "position": position},
-        "brand": brand, "quick": clean_quick(raw.get("quick")),
+        "brand": brand, "quick": clean_quick(raw.get("quick")), "workspace": workspace,
     }
 
 
@@ -395,7 +402,7 @@ def _song_slides(item: Dict[str, Any], song: Optional[Dict[str, Any]]) -> Dict[s
     arrs = song.get("arrangements") or []
     arr = next((a for a in arrs if a.get("id") == item.get("arrangement_id")), None) or (arrs[0] if arrs else None)
     order = arr["order"] if arr else [s["id"] for s in song.get("sections") or []]
-    slides = [{"kind": "lyric", "label": s["label"], "section_id": s["section_id"], "lines": s["lines"]}
+    slides = [{"kind": "lyric", "label": s["label"], "section_id": s["section_id"], "lines": s["lines"], "start": s["start"]}
               for s in wl.slides_for_song(song, order, int(song.get("lines_per_slide") or 2))]
     out: Dict[str, Any] = {"title": song.get("title") or "Untitled song", "slides": slides,
                            "song": {"key": song.get("song_key"), "authors": song.get("authors") or "",

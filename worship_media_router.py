@@ -2,7 +2,7 @@
 # screens (ChurchSavvy, step 2; Kevin 2026-10-19: "a place for library
 # stuff ... Videos can get uploaded for video announcements").
 #
-#   GET     /worship/media                  the library (any seat)
+#   GET     /worship/media                  the library (anyone on the team)
 #   POST    /worship/media/start            a slot to upload one file into
 #   POST    /worship/media/{id}/finish      check the stored file; it's ready
 #   DELETE  /worship/media/{id}             take it out (the file goes too)
@@ -33,13 +33,12 @@ from fastapi import APIRouter, Depends, HTTPException
 import sb_clients
 import storage_links
 from auth_supabase import AuthedUser, require_user
-from business_access import assert_access
+from worship_team import can, require, roles_of
 from worship_router import open_to
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/worship", tags=["worship"])
 
-STAFF_ROLES = ("owner", "admin", "manager")
 BUCKET = "business-assets"
 CHUNK_BYTES = 6 * 1024 * 1024     # what Supabase's resumable uploads require
 MAX_IMAGE_BYTES = 20 * 1024 * 1024
@@ -72,19 +71,18 @@ def _supabase() -> str:
     return os.environ["SUPABASE_URL"].rstrip("/")
 
 
-def _seat(biz: str, user: AuthedUser) -> str:
+def _seat(biz: str, user: AuthedUser) -> set:
+    """Anyone on the church's team (worship_team): their parts."""
     if not open_to(user):
         raise HTTPException(404, "Not Found")
-    return assert_access(biz, user)
+    return roles_of(biz, user)
 
 
-def _staff(biz: str, user: AuthedUser) -> str:
+def _staff(biz: str, user: AuthedUser) -> set:
+    """Refused unless one of the caller's team parts changes the library."""
     if not open_to(user):
         raise HTTPException(404, "Not Found")
-    role = assert_access(biz, user)
-    if role not in STAFF_ROLES:
-        raise HTTPException(403, "Only the owner, an admin or a manager changes the library")
-    return role
+    return require(biz, user, "media")
 
 
 def public_url(object_name: str) -> str:
@@ -186,13 +184,13 @@ def _own(biz: str, mid: str) -> Dict[str, Any]:
 @router.get("/media")
 def list_media(business_id: str, user: AuthedUser = Depends(require_user)):
     biz = _uuid(business_id)
-    role = _seat(biz, user)
+    roles = _seat(biz, user)
     rows = sb_clients.sb_get_as_service(
         f"/worship_media?business_id=eq.{_q(biz)}&archived_at=is.null&status=eq.ready&select={_FIELDS}"
         f"&order=created_at.desc&limit=500")
     if rows is None:
         raise HTTPException(503, "The library couldn't be read. Try again.")
-    return {"media": [_out(r) for r in rows], "can_write": role in STAFF_ROLES,
+    return {"media": [_out(r) for r in rows], "can_write": can(roles, "media"),
             "used_bytes": sum(int(r.get("bytes") or 0) for r in rows), "limit_bytes": LIBRARY_BYTES}
 
 

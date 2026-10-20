@@ -369,8 +369,29 @@ def slides_for_section(section: dict, lines_per_slide: int = 2) -> list[list[str
     return slides
 
 
+def slide_starts(section: dict, lines_per_slide: int = 2) -> list[int]:
+    """Where each of slides_for_section's slides starts in the section's own
+    lines (blank lines counted), so a fix can name the very slide it's for."""
+    starts: list[int] = []
+    run: list[int] = []
+
+    def flush() -> None:
+        for k in range(0, len(run), max(1, lines_per_slide)):
+            starts.append(run[k])
+
+    for i, ln in enumerate(section.get("lines") or []):
+        if ln.strip():
+            run.append(i)
+        else:
+            flush()
+            run = []
+    flush()
+    return starts
+
+
 def slides_for_song(song: dict, order: list[str] | None = None, lines_per_slide: int = 2) -> list[dict]:
-    """Every slide of a song in sung order: [{section_id, label, lines}]."""
+    """Every slide of a song in sung order: [{section_id, label, lines, start}];
+    `start` is where the slide's first line sits in its section's lines."""
     by_id = {s["id"]: s for s in song.get("sections") or []}
     seq = order if order is not None else (song.get("order") or [s["id"] for s in song.get("sections") or []])
     out: list[dict] = []
@@ -378,8 +399,9 @@ def slides_for_song(song: dict, order: list[str] | None = None, lines_per_slide:
         sec = by_id.get(sid)
         if not sec:
             continue
-        for lines in slides_for_section(sec, lines_per_slide):
-            out.append({"section_id": sid, "label": sec["label"], "lines": lines})
+        starts = slide_starts(sec, lines_per_slide)
+        for k, lines in enumerate(slides_for_section(sec, lines_per_slide)):
+            out.append({"section_id": sid, "label": sec["label"], "lines": lines, "start": starts[k]})
     return out
 
 

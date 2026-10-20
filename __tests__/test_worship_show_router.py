@@ -27,6 +27,7 @@ from fastapi.testclient import TestClient
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 import sb_clients
+import worship_team
 import worship_show_router as wsr
 from auth_supabase import AuthedUser, require_user
 
@@ -59,7 +60,7 @@ class FakeDb:
                                   "settings": {"brand_kit": {"colors": {"primary": "#1c0b1f"}, "logo_url": "https://x.example/l.png"},
                                                "stripe_secret": "never-sent"}}],
                   "worship_songs": [dict(SONG)], "worship_services": [], "worship_screens": [],
-                  "worship_settings": [], "worship_live": []}
+                  "worship_settings": [], "worship_live": [], "worship_team": []}
         self.fail = set()
 
     @staticmethod
@@ -126,13 +127,8 @@ def api(monkeypatch):
     monkeypatch.delenv("WORSHIP_SONGS", raising=False)
     monkeypatch.setattr(wsr, "HUB", wsr.LiveHub())
 
-    def fake_access(biz, user, min_role="viewer"):
-        role = SEATS.get((user.id, biz))
-        if not role:
-            raise HTTPException(404, "Not Found")
-        return role
-
-    monkeypatch.setattr(wsr, "assert_access", fake_access)
+    # Seats; nobody here is on a church's ChurchSavvy team (test_worship_team.py is).
+    monkeypatch.setattr(worship_team, "role_of", lambda biz, uid: SEATS.get((uid, biz)))
     who = {"user": PEOPLE["owner"]}
     app = FastAPI()
     app.include_router(wsr.router)

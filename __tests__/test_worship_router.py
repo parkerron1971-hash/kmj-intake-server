@@ -28,6 +28,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
 import sb_clients
+import worship_team
 import worship_router as wr
 from auth_supabase import AuthedUser, require_user
 from test_worship_proclaim import build as build_proclaim
@@ -128,13 +129,8 @@ def api(monkeypatch):
     monkeypatch.setenv("PLATFORM_OWNER_EMAIL", OWNER_EMAIL)
     monkeypatch.delenv("WORSHIP_SONGS", raising=False)
 
-    def fake_access(biz, user, min_role="viewer"):
-        role = SEATS.get((user.id, biz))
-        if not role:
-            raise HTTPException(404, "Not Found")
-        return role
-
-    monkeypatch.setattr(wr, "assert_access", fake_access)
+    # Seats; nobody here is on a church's ChurchSavvy team (test_worship_team.py is).
+    monkeypatch.setattr(worship_team, "role_of", lambda biz, uid: SEATS.get((uid, biz)))
     who = {"user": PEOPLE["owner"]}
     app = FastAPI()
     app.include_router(wr.router)
@@ -158,8 +154,12 @@ def test_the_switch_opens_it_to_the_owner_first(api, monkeypatch):
     assert as_("manager").get(f"/worship/songs?business_id={BIZ}").status_code == 404
     assert as_("manager").get(f"/worship/status?business_id={BIZ}").json() == {"enabled": False, "can_write": False}
     monkeypatch.setenv("WORSHIP_SONGS", "on")
-    assert as_("manager").get(f"/worship/status?business_id={BIZ}").json() == {"enabled": True, "can_write": True}
-    assert as_("member").get(f"/worship/status?business_id={BIZ}").json() == {"enabled": True, "can_write": False}
+    every = {k: True for k in ("plan", "songs", "media", "fix", "run", "setup")}
+    assert as_("manager").get(f"/worship/status?business_id={BIZ}").json() == {
+        "enabled": True, "can_write": True, "can": every, "roles": ["planner", "worship", "booth", "admin"]}
+    # A member seat reads and changes nothing (a part on the team is how they would).
+    assert as_("member").get(f"/worship/status?business_id={BIZ}").json() == {
+        "enabled": True, "can_write": False, "can": {k: False for k in every}, "roles": []}
     monkeypatch.setenv("WORSHIP_SONGS", "off")
     assert as_("owner").get(f"/worship/songs?business_id={BIZ}").status_code == 404
     assert as_("owner").get("/worship/scripture?q=rom 8 28").status_code == 404
