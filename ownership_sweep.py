@@ -74,6 +74,11 @@ HINTS = (
     # the caller never supplies it. Refuses (401) on an unknown, removed
     # or re-paired token.
     "station_from_token",
+    # A church's screen link (worship_show_router.py): its token names
+    # exactly one screen row, and the business comes from that row — the
+    # caller never supplies it. Refuses (404) on an unknown, removed or
+    # replaced link, and opens only what that screen shows.
+    "screen_from_token",
 )
 
 BIZ_PARAMS = ("business_id", "biz", "biz_id", "businessId")
