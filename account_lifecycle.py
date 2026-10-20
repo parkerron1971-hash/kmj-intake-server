@@ -185,6 +185,10 @@ BUSINESS_CHILD_TABLES: List[str] = [
     # The church's song library for Sunday screens: each song's words,
     # orders and how often it was sung. Nothing points at it.
     "worship_songs",
+    # The church's pictures and videos for Sunday's screens: the rows (name,
+    # type, size, link); the files themselves are in business-assets. Not
+    # re-imported (see _IMPORT_SKIP).
+    "worship_media",
     # Families and children: notes, pickups and children before their
     # household, and the household's adult links before contacts.
     "child_checkins",
@@ -805,6 +809,9 @@ _IMPORT_SKIP = {
     # business's accounts and photos. The owner sets the desk up again; the
     # export keeps the old settings for reference.
     "marketing_desks",
+    # Rows that point at files under the OLD business's storage prefix; a
+    # copy would show another account's files and lose them when it goes.
+    "worship_media",
 }
 
 # Columns the platform owns. Carrying them across would let an import
