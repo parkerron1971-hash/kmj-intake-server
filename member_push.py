@@ -215,19 +215,25 @@ def save_turned_off(business_id: str, contact_id: str, off: Iterable[str]) -> bo
 
 
 def quiet_prefs(business_id: str, contact_id: str) -> Optional[Dict[str, bool]]:
-    """{'quiet', 'after_hours'}: both on unless the member turned them off."""
+    """{'quiet', 'after_hours', 'email_missed'}: quiet hours and after-hours
+    alerts on unless the member turned them off; the email follow-up
+    (group_email) off unless they turned it on."""
     rows = sb_clients.sb_get_as_service(
-        f"/member_push_prefs?business_id=eq.{business_id}&contact_id=eq.{contact_id}&select=quiet,after_hours&limit=1")
+        f"/member_push_prefs?business_id=eq.{business_id}&contact_id=eq.{contact_id}"
+        f"&select=quiet,after_hours,email_missed&limit=1")
     if rows is None:
         return None
     r = rows[0] if rows else {}
-    return {"quiet": r.get("quiet") is not False, "after_hours": r.get("after_hours") is not False}
+    return {"quiet": r.get("quiet") is not False, "after_hours": r.get("after_hours") is not False,
+            "email_missed": r.get("email_missed") is True}
 
 
-def save_quiet(business_id: str, contact_id: str, quiet: bool, after_hours: bool) -> bool:
+def save_quiet(business_id: str, contact_id: str, quiet: bool, after_hours: bool,
+               email_missed: Optional[bool] = None) -> bool:
     rows = sb_clients.sb_post_as_service(
         "/member_push_prefs?on_conflict=business_id,contact_id",
         {"business_id": business_id, "contact_id": contact_id, "quiet": bool(quiet), "after_hours": bool(after_hours),
+         **({} if email_missed is None else {"email_missed": bool(email_missed)}),
          "updated_at": datetime.now(timezone.utc).isoformat()},
         prefer="resolution=merge-duplicates,return=representation")
     return bool(rows)
@@ -474,7 +480,8 @@ async def my_notifications_save(request: Request):
     ok = await asyncio.to_thread(save_turned_off, biz_id, me["id"], off)
     if ok and str(form.get("quiet_shown") or "") == "1":
         ok = await asyncio.to_thread(save_quiet, biz_id, me["id"], str(form.get("q_quiet") or "") == "on",
-                                     str(form.get("q_after") or "") == "on")
+                                     str(form.get("q_after") or "") == "on",
+                                     (str(form.get("q_email") or "") == "on") if form.get("email_shown") else None)
     return _back("/my/notifications", **({"done": "notifications"} if ok else {"err": "error"}))
 
 
@@ -498,20 +505,25 @@ def render_page(biz: Dict[str, Any], site: Optional[Dict[str, Any]], request: Re
     off = off or set()
     boxes = "".join(
         f'<label class="mp-check" style="display:flex;gap:10px;align-items:flex-start;min-height:44px;margin:8px 0">'
-        f'<input type="checkbox" name="k_{k}" {"" if k in off else "checked"} style="width:22px;height:22px;margin-top:2px">'
+        f'<input type="checkbox" name="k_{k}" {"" if k in off else "checked"} style="width:22px;height:22px;margin-top:2px;flex:none">'
         f'<span><strong>{escape(label)}</strong><br><span class="mp-muted">{escape(hint)}</span></span></label>'
         for k, label, hint in offered)
     # Quiet hours, where group news or messages can reach this phone.
     if any(k in QUIET_KINDS for k, _, _ in offered):
-        q = quiet or {"quiet": True, "after_hours": True}
+        q = quiet or {"quiet": True, "after_hours": True, "email_missed": False}
         row = ('<label class="mp-check" style="display:flex;gap:10px;align-items:flex-start;min-height:44px;margin:8px 0">'
-               '<input type="checkbox" name="{n}" {c} style="width:22px;height:22px;margin-top:2px">'
+               '<input type="checkbox" name="{n}" {c} style="width:22px;height:22px;margin-top:2px;flex:none">'
                '<span><strong>{t}</strong><br><span class="mp-muted">{h}</span></span></label>')
         boxes += ('<h3 class="mp-sect" style="margin:18px 0 0;font-size:15px">At night</h3><input type="hidden" name="quiet_shown" value="1">'
                   + row.format(n="q_quiet", c="checked" if q["quiet"] else "", t="Quiet hours",
                                h="9 PM to 7 AM. Group news and messages wait until morning.")
                   + row.format(n="q_after", c="checked" if q["after_hours"] else "", t="Let after-hours alerts ring",
                                h="When someone in your group sends one during quiet hours, like a late prayer call."))
+        if any(k == "groups" for k, _, _ in offered):
+            boxes += ('<h3 class="mp-sect" style="margin:18px 0 0;font-size:15px">By email</h3><input type="hidden" name="email_shown" value="1">'
+                      + row.format(n="q_email", c="checked" if q.get("email_missed") else "",
+                                   t="Email me if my phone misses a leader’s post",
+                                   h="If you haven’t opened it an hour after it went up."))
     key = escape(vapid_public(), quote=True)
     return _shell(biz, site, "Notifications", f"""
 {flash}

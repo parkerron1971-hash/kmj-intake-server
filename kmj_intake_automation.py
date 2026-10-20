@@ -1678,6 +1678,14 @@ async def startup():
                           hour=9, minute=15, id="academy_work_sweep")
     except Exception as e:
         print(f"   [warn] homework file sweep not scheduled: {e}")
+    # A church group's news by email: a leader's post an hour old, to the
+    # members who asked and haven't opened it (group_email.sweep_tick).
+    try:
+        import group_email as _group_email
+        scheduler.add_job(g("group_email_followup", _group_email.sweep_tick), "interval",
+                          minutes=15, id="group_email_followup")
+    except Exception as e:
+        print(f"   [warn] group email follow-up not scheduled: {e}")
     # Class-night reminders: a few hours before each live class, its students
     # by email and a church's member app by its "Class nights" notification
     # (academy_reminders.sweep_tick; each night once).
