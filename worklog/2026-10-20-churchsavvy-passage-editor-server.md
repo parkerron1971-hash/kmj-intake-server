@@ -4,7 +4,7 @@ date: 2026-10-20
 agent: Claude Code (Claude Opus 5.5)
 asked: '"the bible area. i like the search ability… we need to have the layout look like proclaim but better… the plan mode edit in real time needs to be a little better" then "these are a go" (Kevin, 2026-10-20; canvas board 32)'
 status: in progress
-prs: []
+prs: [kmj-intake-server#1528]
 migrations: []
 left_undone: ["the editor itself (solutionist-studio, next PR)", "stage notes and the confidence screen's layouts (step 4)"]
 decisions: ["a fix changes this Sunday's slides only (stage, next-slide, phones read the same compiled slides); the Bible text never changes", "breaks picked by hand win over the split; a break naming a verse that isn't in the passage does nothing", "show_ref, show_nums and show_version default on, so every plan saved before this reads exactly as it did", "size and align on a passage are None unless set: the church's look decides"]
