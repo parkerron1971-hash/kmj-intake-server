@@ -33,6 +33,19 @@ from __future__ import annotations
 STREAM_PATH_SUFFIXES = ("/agents/chief/chat/stream",)
 
 
+# A church screen's live slides (worship_show_router: /worship/screen/
+# <link>/events). The link sits in the middle of the path, so it's matched
+# by both ends. Found 2026-10-19: through gzip, a live screen on
+# production heard nothing at all, 16 KB preamble or not. (Starlette 0.4x+
+# exempts text/event-stream by itself; production pins fastapi 0.115,
+# whose Starlette doesn't, so a local run can't show this bug.)
+SCREEN_STREAM = ("/worship/screen/", "/events")
+
+
+def is_screen_stream(path: str) -> bool:
+    return path.startswith(SCREEN_STREAM[0]) and path.endswith(SCREEN_STREAM[1])
+
+
 class NoGzipForStreams:
     """Strip Accept-Encoding for streaming paths so GZipMiddleware
     stands down there. Add OUTERMOST (i.e., add_middleware LAST) — an
@@ -44,7 +57,8 @@ class NoGzipForStreams:
     async def __call__(self, scope, receive, send):
         if scope.get("type") == "http":
             path = str(scope.get("path", ""))
-            if path.endswith(STREAM_PATH_SUFFIXES):
+            chat = path.endswith(STREAM_PATH_SUFFIXES)
+            if chat:
                 # The first-token clock starts here, the outermost layer,
                 # before auth and body parsing (route_ledger). A contextvar
                 # set in this task is visible to the endpoint below it.
@@ -54,6 +68,7 @@ class NoGzipForStreams:
                     chief_fast_track.ARRIVED.set(_time.perf_counter())
                 except Exception:  # pragma: no cover — never cost a request
                     pass
+            if chat or is_screen_stream(path):
                 scope = dict(scope)
                 scope["headers"] = [
                     (k, v) for (k, v) in scope.get("headers", [])
