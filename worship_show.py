@@ -425,6 +425,16 @@ def clean_live(raw: Any) -> Dict[str, Any]:
         if not isinstance(message, str) or len(message) > 120:
             raise ValueError("A message to the stage is at most 120 characters")
         out["message"] = message.strip() or None
+    since = raw.get("since")
+    if since is not None:
+        # When the item up now first went up: the confidence screen's "this song" and "left of 35".
+        if not isinstance(since, str) or len(since) > 40:
+            raise ValueError("That isn't a time")
+        try:
+            datetime.fromisoformat(since.replace("Z", "+00:00"))
+        except ValueError:
+            raise ValueError("That isn't a time")
+        out["since"] = since
     timer = raw.get("timer")
     if timer is not None:
         if not isinstance(timer, dict) or not isinstance(timer.get("ends_at"), str):

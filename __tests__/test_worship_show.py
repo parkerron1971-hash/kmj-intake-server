@@ -252,3 +252,12 @@ def test_a_stage_screen_keeps_its_own_settings():
         wsh.clean_stage({"layout": "karaoke"})
     with pytest.raises(ValueError, match="small, standard or big"):
         wsh.clean_stage({"size": "huge"})
+
+
+def test_the_live_state_says_when_the_item_went_up():
+    live = wsh.clean_live({"item_id": "well", "slide": 2, "since": "2026-10-25T15:12:00.000Z"})
+    assert live["since"] == "2026-10-25T15:12:00.000Z"
+    assert "since" not in wsh.clean_live({"item_id": "well"})
+    for bad in ("soon", 5, "x" * 41):
+        with pytest.raises(ValueError, match="isn't a time"):
+            wsh.clean_live({"item_id": "well", "since": bad})
