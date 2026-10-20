@@ -84,6 +84,18 @@ def scheduled(g: Dict[str, Any]) -> bool:
     return g.get("meet_day") is not None and _time(g) is not None
 
 
+def on_cycle(g: Dict[str, Any], day: date) -> bool:
+    """Is `day` one of the group's weeks? Every week, or every other week
+    counted from groups.meet_from (a date it gathers)."""
+    if int(g.get("meet_every") or 1) != 2 or not g.get("meet_from"):
+        return True
+    try:
+        start = date.fromisoformat(str(g["meet_from"])[:10])
+    except ValueError:
+        return True
+    return (day - start).days % 14 == 0
+
+
 def starts_at(g: Dict[str, Any], day: date, tz) -> datetime:
     return datetime.combine(day, _time(g), tzinfo=tz)
 
@@ -97,7 +109,7 @@ def next_on(g: Dict[str, Any], now_local: datetime) -> Tuple[Optional[date], Opt
     skipped = None
     for i in range(0, 63):
         day = now_local.date() + timedelta(days=i)
-        if day.weekday() != int(g["meet_day"]):
+        if day.weekday() != int(g["meet_day"]) or not on_cycle(g, day):
             continue
         if starts_at(g, day, now_local.tzinfo) + HERE_AFTER < now_local:
             continue
@@ -115,9 +127,9 @@ def upcoming(g: Dict[str, Any], now_local: datetime, n: int) -> List[date]:
         return []
     skips = {str(d)[:10] for d in (g.get("meet_skips") or [])}
     out: List[date] = []
-    for i in range(0, 7 * n + 70):
+    for i in range(0, 14 * n + 70):
         day = now_local.date() + timedelta(days=i)
-        if day.weekday() != int(g["meet_day"]) or day.isoformat() in skips:
+        if day.weekday() != int(g["meet_day"]) or day.isoformat() in skips or not on_cycle(g, day):
             continue
         if starts_at(g, day, now_local.tzinfo) + HERE_AFTER < now_local:
             continue
@@ -144,7 +156,10 @@ def regular_text(g: Dict[str, Any]) -> str:
     t = _time(g)
     if not scheduled(g):
         return ""
-    return f"{DAYS[int(g['meet_day'])]}s · {t.strftime('%I:%M %p').lstrip('0')}"
+    clock = t.strftime('%I:%M %p').lstrip('0')
+    if int(g.get("meet_every") or 1) == 2:
+        return f"Every other {DAYS[int(g['meet_day'])]} · {clock}"
+    return f"{DAYS[int(g['meet_day'])]}s · {clock}"
 
 
 # ─── reading ─────────────────────────────────────────────────────────
@@ -239,7 +254,7 @@ def _member(business_id: str, group_id: str, contact_id: str) -> Optional[Option
 def _group(business_id: str, group_id: str) -> Optional[Dict[str, Any]]:
     rows = sb_clients.sb_get_as_service(
         f"/groups?id=eq.{_q(group_id)}&business_id=eq.{_q(business_id)}&active=eq.true"
-        f"&select=id,name,meet_day,meet_time,meet_skips,location&limit=1")
+        f"&select=id,name,meet_day,meet_time,meet_skips,meet_every,meet_from,location&limit=1")
     if not isinstance(rows, list):
         return None
     return rows[0] if rows else {}
@@ -359,9 +374,11 @@ def roll(business: Dict[str, Any], me: Dict[str, Any], group_id: str, present: L
 
 
 def set_schedule(business: Dict[str, Any], me: Dict[str, Any], group_id: str, day: str, at: str,
-                 address: str, note: str) -> Tuple[bool, str]:
-    """A leader sets the regular gathering (or clears it with no day)."""
-    g, _, role = _ready(business, me, group_id, leader=True)
+                 address: str, note: str, every: str = "1", first: str = "") -> Tuple[bool, str]:
+    """A leader sets the regular gathering (or clears it with no day).
+    Every other week counts from `first`: "0" the coming one, "1" the one
+    after."""
+    g, now_local, role = _ready(business, me, group_id, leader=True)
     if not g:
         return False, role
     body: Dict[str, Any] = {"meet_address": " ".join(address.split())[:ADDRESS_MAX],
@@ -376,7 +393,13 @@ def set_schedule(business: Dict[str, Any], me: Dict[str, Any], group_id: str, da
             return False, "schedule_bad"
         if not 0 <= d <= 6 or t is None:
             return False, "schedule_bad"
-        body.update(meet_day=d, meet_time=t.strftime("%H:%M"))
+        body.update(meet_day=d, meet_time=t.strftime("%H:%M"), meet_every=1, meet_from=None)
+        if every == "2":
+            ahead = (d - now_local.weekday()) % 7
+            coming = now_local.date() + timedelta(days=ahead)
+            if ahead == 0 and datetime.combine(coming, t, tzinfo=now_local.tzinfo) + HERE_AFTER < now_local:
+                coming += timedelta(days=7)          # today's is over: the coming one is next week's
+            body.update(meet_every=2, meet_from=(coming + timedelta(days=7 if first == "1" else 0)).isoformat())
     saved = sb_clients.sb_patch_as_service(
         f"/groups?id=eq.{_q(g['id'])}&business_id=eq.{_q(business['id'])}", body)
     return (True, "schedule_saved") if isinstance(saved, list) and saved else (False, "error")
@@ -421,7 +444,7 @@ def reminders(business: Dict[str, Any], now: Optional[datetime] = None) -> int:
         return 0
     groups = sb_clients.sb_get_as_service(
         f"/groups?business_id=eq.{_q(business['id'])}&active=eq.true&meet_day=not.is.null"
-        f"&select=id,name,meet_day,meet_time,meet_skips,location&limit=500")
+        f"&select=id,name,meet_day,meet_time,meet_skips,meet_every,meet_from,location&limit=500")
     if not isinstance(groups, list):
         return 0
     sent = 0
@@ -429,6 +452,8 @@ def reminders(business: Dict[str, Any], now: Optional[datetime] = None) -> int:
         for ahead in (0, 1):
             day = now_local.date() + timedelta(days=ahead)
             if not scheduled(g) or day.weekday() != int(g["meet_day"]) or remind_day(g, day) != now_local.date():
+                continue
+            if not on_cycle(g, day):
                 continue
             if day.isoformat() in {str(x)[:10] for x in (g.get("meet_skips") or [])}:
                 continue
@@ -622,6 +647,11 @@ def render_tab(biz: Dict[str, Any], g: Dict[str, Any], v: Optional[Dict[str, Any
             f'<form method="post" action="/my/groups/meet/schedule">{hidden}<div class="gm-row">'
             f'<label>Day<select name="day"><option value="">No regular time</option>{days}</select></label>'
             f'<label>Time<input type="time" name="time" value="{t.strftime("%H:%M") if t else ""}"></label></div>'
+            f'<div class="gm-row"><label>How often<select name="every">'
+            f'<option value="1"{"" if int(g.get("meet_every") or 1) == 2 else " selected"}>Every week</option>'
+            f'<option value="2"{" selected" if int(g.get("meet_every") or 1) == 2 else ""}>Every other week</option></select></label>'
+            f'<label>Every other week starts<select name="first"><option value="0">With the coming one</option>'
+            f'<option value="1">The week after</option></select></label></div>'
             f'<div class="gm-row"><label>Street address (only the group sees it)'
             f'<input type="text" name="address" maxlength="{ADDRESS_MAX}" value="{esc(g.get("meet_address") or "")}" autocomplete="street-address"></label></div>'
             f'<div class="gm-row"><label>Directions or a note<input type="text" name="note" maxlength="{NOTE_MAX}" value="{esc(g.get("meet_note") or "")}" '
