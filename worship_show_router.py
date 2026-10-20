@@ -105,13 +105,19 @@ def _read(path: str, what: str) -> List[Dict[str, Any]]:
     return rows
 
 
-def _brand(biz: str) -> Dict[str, Any]:
-    """The church's name and the parts of its brand kit a screen draws with (never the rest of its settings)."""
+def _brand(biz: str, look: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """The church's name and the parts of its brand kit a screen draws with (never the rest of its settings).
+    A church with no brand kit (ChurchSavvy on its own) draws with the colors and logo set in its look."""
     rows = sb_clients.sb_get_as_service(f"/businesses?id=eq.{_q(biz)}&select=name,settings&limit=1") or []
     row = rows[0] if rows else {}
     kit = ((row.get("settings") or {}).get("brand_kit") or {}) if isinstance(row.get("settings"), dict) else {}
     keep = {k: kit[k] for k in ("colors", "font_pair", "font_heading", "font_body", "logo_url", "primary_color",
                                  "secondary_color", "accent_color") if k in kit}
+    own = (look or {}).get("brand") or {}
+    if not keep and any(own.values()):
+        keep = {"colors": {k: own[k] for k in ("primary", "accent", "background") if own.get(k)}}
+        if own.get("logo_url"):
+            keep["logo_url"] = own["logo_url"]
     return {"name": row.get("name") or "", "brand_kit": keep}
 
 
@@ -142,7 +148,7 @@ def _songs_for(biz: str, items: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any
 def _show(biz: str, service: Dict[str, Any]) -> Dict[str, Any]:
     show = wsh.compile_show(service, _songs_for(biz, service.get("items") or []))
     show["look"] = _look(biz)
-    show["church"] = _brand(biz)
+    show["church"] = _brand(biz, show["look"])
     return show
 
 
@@ -487,7 +493,8 @@ def remove_screen(screen_id: str, business_id: str, user: AuthedUser = Depends(r
 def get_look(business_id: str, user: AuthedUser = Depends(require_user)):
     biz = _uuid(business_id)
     role = _seat(biz, user)
-    return {"look": _look(biz), "church": _brand(biz), "can_write": role in STAFF_ROLES}
+    look = _look(biz)
+    return {"look": look, "church": _brand(biz, look), "can_write": role in STAFF_ROLES}
 
 
 @router.put("/look")
@@ -562,7 +569,8 @@ def screen_from_token(token: str) -> Dict[str, Any]:
 def screen_info(token: str):
     screen = screen_from_token(token)
     biz = screen["business_id"]
-    return {"screen": _screen_out(screen, False), "church": _brand(biz), "look": _look(biz)}
+    look = _look(biz)
+    return {"screen": _screen_out(screen, False), "church": _brand(biz, look), "look": look}
 
 
 @router.get("/screen/{token}/show")
@@ -572,12 +580,12 @@ def screen_show(token: str):
     cur = _current(biz)
     sid = (cur[1] if cur else {}).get("service_id")
     if not sid:
-        return {"service": None, "items": [], "slide_count": 0, "missing": [], "look": _look(biz), "church": _brand(biz)}
+        return {"service": None, "items": [], "slide_count": 0, "missing": [], "look": _look(biz), "church": _brand(biz, _look(biz))}
     try:
         show = _show(biz, _service(biz, sid))
     except HTTPException as e:
         if e.status_code == 404:
-            return {"service": None, "items": [], "slide_count": 0, "missing": [], "look": _look(biz), "church": _brand(biz)}
+            return {"service": None, "items": [], "slide_count": 0, "missing": [], "look": _look(biz), "church": _brand(biz, _look(biz))}
         raise
     # A screen never gets the booth's notes.
     for item in show["items"]:
