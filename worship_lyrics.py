@@ -164,10 +164,98 @@ def _songselect_meta(lines: list[str]) -> tuple[list[str], dict]:
     return keep, meta
 
 
+_USR_SECTION_RE = re.compile(r"^\[S\s+A?(\d{3,9})\]\s*$", re.IGNORECASE)
+_CHORDPRO_DIRECTIVE_RE = re.compile(r"^\{\s*([a-z_]+)\s*(?::\s*(.*?))?\s*\}\s*$", re.IGNORECASE)
+_CHORDPRO_SECTIONS = {
+    "start_of_chorus": "Chorus", "soc": "Chorus", "start_of_verse": "Verse", "sov": "Verse",
+    "start_of_bridge": "Bridge", "sob": "Bridge",
+}
+# Directives only ChordPro uses: one of these marks a file as a chart (a
+# pasted "{Chorus}" marker alone doesn't).
+_CHORDPRO_KNOWN = {
+    "title", "t", "subtitle", "st", "artist", "composer", "lyricist", "copyright", "ccli", "key", "tempo", "time",
+    "capo", "comment", "c", "ci", "cb", "highlight", "start_of_chorus", "soc", "end_of_chorus", "eoc",
+    "start_of_verse", "sov", "end_of_verse", "eov", "start_of_bridge", "sob", "end_of_bridge", "eob",
+}
+
+
+def _from_usr(lines: list[str]) -> tuple[list[str], dict] | None:
+    """A SongSelect .usr file: key=value lines; Fields and Words split their parts on "/t" and lines on "/n"."""
+    if not any(ln.startswith("Words=") for ln in lines):
+        return None
+    values: dict = {}
+    meta: dict = {}
+    for ln in lines:
+        m = _USR_SECTION_RE.match(ln.strip())
+        if m:
+            meta["ccli_number"] = m.group(1)
+            continue
+        key, sep, value = ln.partition("=")
+        if sep:
+            values[key.strip().lower()] = value
+    if values.get("title"):
+        meta["title"] = values["title"].strip()
+    if values.get("author"):
+        meta["authors"] = " | ".join(a.strip() for a in values["author"].split("|") if a.strip())
+    if values.get("copyright"):
+        meta["copyright"] = values["copyright"].strip()
+    fields = [f.strip() for f in values.get("fields", "").split("/t")]
+    out: list[str] = []
+    for k, part in enumerate(values.get("words", "").split("/t")):
+        label = fields[k] if k < len(fields) and fields[k] else ""
+        if label:
+            out.append(label)
+        out.extend(part.split("/n"))
+        out.append("")
+    return out, meta
+
+
+def _from_chordpro(lines: list[str]) -> tuple[list[str], dict] | None:
+    """A ChordPro chart: {title: …} directives, [G] chords inside the lines."""
+    if not any((m := _CHORDPRO_DIRECTIVE_RE.match(ln.strip())) and m.group(1).lower() in _CHORDPRO_KNOWN for ln in lines):
+        return None
+    meta: dict = {}
+    out: list[str] = []
+    for ln in lines:
+        s = ln.strip()
+        if s.startswith("#"):
+            continue
+        d = _CHORDPRO_DIRECTIVE_RE.match(s)
+        if d:
+            name, value = d.group(1).lower(), (d.group(2) or "").strip()
+            if name in ("title", "t") and value:
+                meta["title"] = value
+            elif name in ("artist", "composer", "lyricist") and value:
+                meta["authors"] = f"{meta['authors']} | {value}" if meta.get("authors") else value
+            elif name == "copyright" and value:
+                meta["copyright"] = value
+            elif name == "ccli" and re.fullmatch(r"\d{3,9}", value):
+                meta["ccli_number"] = value
+            elif name in _CHORDPRO_SECTIONS:
+                out += ["", value or _CHORDPRO_SECTIONS[name]]
+            elif name.startswith("end_of") or name in ("eoc", "eov", "eob"):
+                out.append("")
+            elif name in ("comment", "c", "ci", "cb", "highlight") and value:
+                out += ["", value]
+            elif name not in _CHORDPRO_KNOWN and _header(s):
+                out += ["", s]  # a "{Chorus}" marker among the directives
+            continue
+        out.append(re.sub(r"\[[^\]]*\]", "", ln).rstrip())
+    return out, meta
+
+
 def parse_lyrics(text: str | list[str]) -> dict:
-    """Sections + order + meta from pasted words, a SongSelect file, or Proclaim lines."""
+    """Sections + order + meta from pasted words, a SongSelect .txt or .usr file,
+    a ChordPro chart, or Proclaim lines."""
     raw = text if isinstance(text, list) else (text or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    file_meta: dict = {}
+    if not isinstance(text, list):
+        converted = _from_usr(raw) or _from_chordpro(raw)
+        if converted:
+            raw, file_meta = converted
     lines, meta = _songselect_meta([ln.replace("\t", " ") for ln in raw])
+    for key, value in file_meta.items():
+        meta.setdefault(key, value)
     had_chords = any(_is_chord_line(ln) for ln in lines if ln.strip())
     lines = [ln for ln in lines if not (ln.strip() and _is_chord_line(ln))]
 
