@@ -422,7 +422,8 @@ def test_the_sweep_only_reads_churches_with_a_clock_kind_on(wired, monkeypatch):
     monkeypatch.setattr(mp, "sb_clients", SB())
     monkeypatch.setattr(mp, "_sweep_sermons", lambda biz: 1)
     monkeypatch.setattr(mp, "_sweep_events", broken)
-    assert mp.sweep_tick() == {"sermons": 1, "events": 0}
+    monkeypatch.setattr(mp, "sweep_held", lambda: 0)
+    assert mp.sweep_tick() == {"sermons": 1, "events": 0, "held": 0}
     assert "notifications->>sermons.eq.true" in seen[0] and "notifications->>events.eq.true" in seen[0]
 
 

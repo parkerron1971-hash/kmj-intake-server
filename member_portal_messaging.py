@@ -17,6 +17,10 @@ reads the records those rules need and applies them on every action:
                                    down; the safety officers are told (a report)
   POST /my/messages/report · /my/messages/guidelines
 
+An after-hours alert (send with after_hours=1, 2026-10-20): during the
+church's quiet hours a message can ring through for members who let it, for
+a late prayer call (member_push quiet hours). One per person a night.
+
 A group's chat lives inside the group (member_portal_groups, 2026-10-20):
 /my/messages/group/<group> and a group thread opened from the inbox go to
 /my/groups/<group>/chat for its members (a linked parent still reads here).
@@ -271,7 +275,7 @@ def messages(business_id: str, tid: str, me_id: str, *, parent: bool = False) ->
     removed message."""
     rows = sb_clients.sb_get_as_service(
         f"/msg_messages?thread_id=eq.{_q(tid)}&business_id=eq.{_q(business_id)}"
-        f"&select=id,sender_contact_id,body,status,flag,reply_to,created_at&order=created_at.desc&limit={PAGE}")
+        f"&select=id,sender_contact_id,body,status,flag,reply_to,after_hours,created_at&order=created_at.desc&limit={PAGE}")
     if not isinstance(rows, list):
         return None
     keep = [m for m in rows if m["status"] == "delivered"
@@ -879,6 +883,11 @@ def _feed(business_id: str, me_id: str, tid: str) -> Dict[str, Any]:
 # ─── POST ─────────────────────────────────────────────────────────────
 
 
+def alert_since() -> str:
+    """The window for "one after-hours alert a night": the last 12 hours."""
+    return (datetime.now(timezone.utc) - timedelta(hours=12)).isoformat()
+
+
 _GROUP_BACK = re.compile(r"^/my/groups/(?:[0-9a-fA-F-]{36}/chat|leaders)$")
 
 
@@ -976,6 +985,19 @@ async def send(tid: str, request: Request):
             if not isinstance(hit, list):
                 return _answer(request, False, "error", back, 503)
             reply_to = reply_to if hit else ""
+    # An after-hours alert means something only in quiet hours, and each
+    # person sends one a night.
+    import member_push
+    alert = str(form.get("after_hours") or "") == "1" and await asyncio.to_thread(member_push.quiet_hour, biz)
+    if alert:
+        used = await asyncio.to_thread(
+            sb_clients.sb_get_as_service,
+            f"/msg_messages?business_id=eq.{_q(biz['id'])}&sender_contact_id=eq.{_q(me['id'])}&after_hours=is.true"
+            f"&created_at=gte.{quote(alert_since(), safe='')}&select=id&limit=1")
+        if not isinstance(used, list):
+            return _answer(request, False, "error", back, 503)
+        if used:
+            return _answer(request, False, "alert_used", back, 429)
     if not rate_limit.allow_strict("live_chat", f"msg|{biz['id']}|{me['id']}"):
         return _answer(request, False, "slow_chat", back, 429)
     try:
@@ -985,14 +1007,14 @@ async def send(tid: str, request: Request):
     status_ = "held" if verdict == "harm" else "delivered"
     row = await asyncio.to_thread(sb_clients.sb_post_as_service, "/msg_messages", {
         "business_id": biz["id"], "thread_id": tid, "sender_contact_id": str(me["id"]), "body": text,
-        "status": status_, "flag": None if verdict == "ok" else verdict, **({"reply_to": reply_to} if reply_to else {})})
+        "status": status_, "flag": None if verdict == "ok" else verdict, **({"reply_to": reply_to} if reply_to else {}),
+        **({"after_hours": True} if alert and status_ == "delivered" else {})})
     if not isinstance(row, list) or not row:
         return _answer(request, False, "error", back, 503)
     if status_ == "delivered":
         # Members with "New messages" on hear that something arrived, never
         # what it says (member_push.tell_chat; off the request).
-        import member_push
-        member_push.tell_chat(biz, t, acc, str(me["id"]))
+        member_push.tell_chat(biz, t, acc, str(me["id"]), ring=bool(alert))
     if acc.get("me_state") == "requested":
         # Replying accepts the request.
         await asyncio.to_thread(sb_clients.sb_patch_as_service,
