@@ -82,6 +82,15 @@ DONE = {
     "said_yes": "They're in. They'll see the group now.",
     "not_now": "Okay. They aren't added, and the church office can help them find another group.",
     "post_up": "Posted to the Board. Everyone in the group sees it.",
+    # A group's prayer wall (group_prayer).
+    "prayer_up": "It's on the wall. Your group can pray with you now.",
+    "prayer_pastors": "Sent privately to the pastors. The group won't see it.",
+    "prayer_pastor_first": "This went straight to a pastor, not the wall. They'll reach out to you.",
+    "praying": "Thank you for praying.",
+    "praised": "Praise God!",
+    "unmarked": "Taken back.",
+    "answered": "Marked answered. Praise God!",
+    "prayer_down": "Taken off the wall.",
     "post_down": "That post is taken down.",
     "pinned": "Pinned to the top.",
     "unpinned": "Unpinned.",
@@ -113,6 +122,9 @@ ERRORS = {
     "empty_post": "Write your post first.",
     "post_no": "That post can't go out as written. Change it, or talk to the church office.",
     "post_busy": "Posts can't be checked just now, so nothing went out. Please try again in a minute.",
+    "prayer_no": "That can't go on the wall as written. Change it, or send it to the pastors instead.",
+    "prayer_gone": "That prayer isn't on the wall any more.",
+    "not_yours": "Only the person who asked can do that.",
     "not_kids_leader": "Only Kids leaders the church office approved can do that.",
     "lesson_incomplete": "Add a title and what they learned.",
     "lesson_link": "A video link has to start with https://",
@@ -308,7 +320,7 @@ def member_rsvp(business_id: str, me: Dict[str, Any], entry_id: str, action: str
 
 
 def save_prayer(business_id: str, me: Dict[str, Any], text: str, confidential: bool, youth: bool = False,
-                wants_call: bool = False) -> bool:
+                wants_call: bool = False, source: str = "") -> bool:
     """A prayer request from the member page. `confidential` keeps it with
     the pastors; otherwise the person agreed to share it with the prayer
     team (church_prayer hands it to a member who leads prayer). A youth
@@ -319,7 +331,7 @@ def save_prayer(business_id: str, me: Dict[str, Any], text: str, confidential: b
         "name": (me.get("name") or "").strip(), "email": me.get("email") or "",
         "phone": me.get("phone") or "", "prayer_request": text,
         "confidential": "yes" if confidential or youth else "no",
-        "source": "Member page, Youth" if youth else "Member page",
+        "source": source or ("Member page, Youth" if youth else "Member page"),
     }
     rows = sb_clients.sb_post_as_service("/ministry_care_requests", {
         "business_id": str(business_id), "form_id": None, "contact_id": str(me["id"]),
@@ -985,7 +997,7 @@ def _back(target: str, **q: str) -> RedirectResponse:
     allowed = ("/my", "/my/me", "/my/events", "/my/prayer", "/my/details", "/my/groups", "/my/classes", "/my/live", "/my/messages",
                "/my/kids/stories", "/my/kids/sundays", "/my/kids/family")
     if (target not in allowed and not re.fullmatch(r"/my/(groups/live|messages)/[0-9a-f-]{36}", target)
-            and not re.fullmatch(r"/my/groups/([0-9a-fA-F-]{36}(/(board|people|chat))?|leaders)", target)):
+            and not re.fullmatch(r"/my/groups/([0-9a-fA-F-]{36}(/(board|people|chat|prayer))?|leaders)", target)):
         target = "/my"
     qs = "&".join(f"{k}={v}" for k, v in q.items())
     return RedirectResponse(f"{target}?{qs}" if qs else target, status_code=303, headers=_SECURE_HEADERS)

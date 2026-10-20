@@ -812,6 +812,38 @@ def _tell_group_post(business, group, post_id, author, title, ring=False) -> Non
          url=f"/my/groups/{gid}/board", contact_ids=who, ref_id=f"group-post:{post_id}", tag=f"group-{gid}", ring=ring)
 
 
+def tell_group_prayer(business: Dict[str, Any], group: Dict[str, Any], prayer_id: str, asker: Dict[str, Any]) -> None:
+    """A request on a group's prayer wall (group_prayer): everyone else in
+    the group. That someone asked, by first name; never the words."""
+    if "groups" not in church_kinds(business.get("settings")):
+        return
+    _later(_tell_group_prayer, business, group, prayer_id, asker)
+
+
+def _tell_group_prayer(business, group, prayer_id, asker) -> None:
+    gid = str(group.get("id") or "")
+    me = str((asker or {}).get("id") or "")
+    rows = sb_clients.sb_get_as_service(
+        f"/group_members?group_id=eq.{_q(gid)}&business_id=eq.{_q(business['id'])}&select=contact_id&limit=5000") or []
+    who = sorted({str(r["contact_id"]) for r in rows} - {me})
+    if not who:
+        return
+    first = str((asker or {}).get("name") or "").split(" ")[0] or "Someone"
+    send(business, "groups", title=str(group.get("name") or "Your group"), body=f"{first} asked the group to pray",
+         url=f"/my/groups/{gid}/prayer", contact_ids=who, ref_id=f"group-prayer:{prayer_id}", tag=f"group-prayer-{gid}")
+
+
+def tell_group_praying(business: Dict[str, Any], group_id: str, prayer_id: str, asker_id: str) -> None:
+    """Someone pressed "I'm praying" on a request: its asker, at most once a
+    day for each request."""
+    if not asker_id or "prayer" not in church_kinds(business.get("settings")):
+        return
+    _later(send, business, "prayer", title="Your group is praying with you",
+           body="Someone in your group is praying for your request.", url=f"/my/groups/{group_id}/prayer",
+           contact_ids=[asker_id], ref_id=f"group-praying:{prayer_id}:{datetime.now(timezone.utc):%Y%m%d}",
+           tag=f"group-praying-{prayer_id}")
+
+
 def tell_join_request(business: Dict[str, Any], group: Dict[str, Any], asker: Dict[str, Any]) -> None:
     """Someone asked to join (member_portal_groups.ask): the group's leaders."""
     if "groups" not in church_kinds(business.get("settings")):
