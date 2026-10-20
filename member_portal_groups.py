@@ -23,6 +23,9 @@ page of its own; this is part 1 of building it:
   /my/groups/<id>/prayer   the group's prayer wall (part 3, group_prayer):
                            ask the group, or only the pastors; danger words
                            go to a pastor first; "I'm praying", answered
+  /my/groups/<id>/meet     gatherings (part 3, group_gatherings): the next
+                           one, Going / Maybe / Can't, "I'm here", a
+                           leader's roll and schedule, the last few
   /my/groups/leaders       All group leaders (part 2c): one chat for
                            everyone who leads a group and the church's
                            pastors (member_portal_messaging.leaders_room_people)
@@ -79,7 +82,7 @@ TITLE_MAX = 120
 POST_MAX = 2000
 POSTS_SHOWN = 40
 UUID = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
-TABS = ("", "board", "people", "chat", "prayer")
+TABS = ("", "board", "people", "chat", "prayer", "meet")
 
 
 def _q(v: Any) -> str:
@@ -101,7 +104,7 @@ def group_row(business_id: str, group_id: str) -> Optional[Dict[str, Any]]:
     rows = sb_clients.sb_get_as_service(
         f"/groups?id=eq.{_q(group_id)}&business_id=eq.{_q(business_id)}"
         f"&select=id,name,kind,description,meets,location,capacity,open_to_join,join_mode,name_display,youth,active,"
-        f"chat_on,chat_writers,updated_at&limit=1")
+        f"chat_on,chat_writers,meet_day,meet_time,meet_address,meet_note,meet_skips,updated_at&limit=1")
     if rows is None:
         return None
     if not rows or not rows[0].get("active"):
@@ -777,7 +780,8 @@ def _tabs(gid: str, current: str, *, board_new: int, chat: bool, live: Optional[
     items = [("", "Home", "home", 0)]
     if chat:
         items.append(("chat", "Chat", "chat", 0))
-    items += [("board", "Board", "megaphone", board_new), ("prayer", "Prayer", "hand-heart", 0), ("people", "People", "users", 0)]
+    items += [("board", "Board", "megaphone", board_new), ("prayer", "Prayer", "hand-heart", 0), ("meet", "Meet", "calendar", 0),
+              ("people", "People", "users", 0)]
     out = []
     for key, label, icon, n in items:
         cur = ' aria-current="page"' if key == current else ""
@@ -926,6 +930,12 @@ def render(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], data
     script = ""
     if tab == "chat":
         content, script = _chat_body(biz, request, me, g, data.get("chat") or {"state": "error"}, leader)
+    elif tab == "meet":
+        import group_gatherings
+        content = group_gatherings.render_tab(
+            biz, g, data.get("meet"), me_id=me_id, leader=leader, people=people, live=data.get("live"), ic=_ic,
+            face=lambda p: _face(p, "gs-av m", g.get("name_display") or "full"), esc=_e,
+            name=lambda p: display_name(p, g.get("name_display") or "full"))
     elif tab == "prayer":
         import group_prayer
         content = group_prayer.render_tab(
@@ -976,6 +986,11 @@ def render(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], data
         for p in (pinned[:1] + church_new):
             parts.append(_post_card(p, g, leader=leader, me_id=me_id, size=size, back=back))
         when = " · ".join(_e(x) for x in (g.get("meets"), g.get("location")) if x)
+        nxt = (data.get("meet") or {}).get("next")
+        if nxt:
+            import group_gatherings
+            going = sum(1 for a in ((data.get("meet") or {}).get("rsvps") or {}).values() if a == "going")
+            when = _e(group_gatherings.when_text(g, nxt)) + (f" · {going} going" if going else "")
         live = data.get("live") or {}
         meet = ""
         if live:
@@ -988,7 +1003,8 @@ def render(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], data
         if when or meet:
             parts.append(f'<section class="gs-card" aria-label="When we meet"><div class="gs-meet">'
                          f'<span class="gs-disc coral">{_ic("calendar", 20)}</span><span class="gs-t"><b>When we meet</b>'
-                         f'<span>{when or "Your leaders will share the next time"}</span></span></div>'
+                         f'<span>{when or "Your leaders will share the next time"}</span></span>'
+                         f'<a class="gs-mini" href="{_base(g["id"], "meet")}">{"Are you coming?" if nxt else "Open"}</a></div>'
                          f'{f"<div class=gs-acts>{meet}</div>" if meet else ""}</section>')
         latest = [p for p in posts if p not in pinned and p not in church_new][:2]
         if latest:
@@ -1014,8 +1030,10 @@ def render(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], data
                          f'{_e(biz.get("name") or "the church")} turns on messaging.</span></p>')
         content = "".join(parts)
     page = f'<a class="mb-back" href="/my/groups">Connect</a>{hero}{tabs}{flash}<div style="margin-top:16px">{content}</div>'
+    import group_gatherings
     import group_prayer
-    return _shell(biz, site, g.get("name") or "Group", f"<style>{GROUP_CSS}{CHAT_CSS}{group_prayer.PRAYER_CSS}</style>{page}",
+    return _shell(biz, site, g.get("name") or "Group",
+                  f"<style>{GROUP_CSS}{CHAT_CSS}{group_prayer.PRAYER_CSS}{group_gatherings.MEET_CSS}</style>{page}",
                   tab="connect", who=me, script=script), 200
 
 
@@ -1031,6 +1049,9 @@ async def serve(request: Request, biz: Dict[str, Any], site, me: Dict[str, Any],
     data = await asyncio.to_thread(space, str(biz["id"]), gid, me, tab=tab)
     if data and data.get("role") and tab == "chat":
         data["chat"] = await asyncio.to_thread(chat_view, biz, data["group"], me)
+    if data and data.get("role") and tab in ("", "meet"):
+        import group_gatherings
+        data["meet"] = await asyncio.to_thread(group_gatherings.view, biz, data["group"], str(me["id"]), data["people"])
     if data and data.get("role") and tab == "prayer":
         import group_prayer
         data["prayer"] = await asyncio.to_thread(group_prayer.wall, str(biz["id"]), gid, str(me["id"]),
@@ -1363,7 +1384,7 @@ if(x.ok){{i.value='';var ah=f.querySelector('input[name=after_hours]');if(ah)ah.
 
 # ─── routes ──────────────────────────────────────────────────────────
 
-_BACK_RE = re.compile(r"^/my/groups(/[0-9a-fA-F-]{36}(/(board|people|prayer))?)?$")
+_BACK_RE = re.compile(r"^/my/groups(/[0-9a-fA-F-]{36}(/(board|people|prayer|meet))?)?$")
 
 
 def _go(target: str, **q: str) -> RedirectResponse:
@@ -1478,6 +1499,62 @@ async def pin_route(request: Request):
     ok, code, gid = await asyncio.to_thread(pin, church["business"]["id"], me, str(form.get("id") or ""),
                                             str(form.get("on") or "") == "1")
     return _go(_base(gid, "board") if gid else "/my/groups", **({"done": code} if ok else {"err": code}))
+
+
+# ─── gatherings (group_gatherings) ───────────────────────────────────
+
+
+async def _meet_action(request: Request, act):
+    import asyncio
+    church, me, form, stop = await _who(request, "/my/groups")
+    if stop:
+        return stop
+    gid = _gid(form)
+    if not gid:
+        return _go("/my/groups", err="group_gone")
+    ok, code = await asyncio.to_thread(act, church["business"], me, gid, form)
+    return _go(_base(gid, "meet"), **({"done": code} if ok else {"err": code}))
+
+
+@router.post("/my/groups/meet/rsvp", include_in_schema=False)
+async def meet_rsvp_route(request: Request):
+    import group_gatherings as gg
+    return await _meet_action(request, lambda biz, me, gid, form: gg.rsvp(biz, me, gid, str(form.get("answer") or "")))
+
+
+@router.post("/my/groups/meet/here", include_in_schema=False)
+async def meet_here_route(request: Request):
+    import group_gatherings as gg
+    return await _meet_action(request, lambda biz, me, gid, form: gg.here(biz, me, gid))
+
+
+@router.post("/my/groups/meet/roll", include_in_schema=False)
+async def meet_roll_route(request: Request):
+    import group_gatherings as gg
+
+    def act(biz, me, gid, form):
+        try:
+            visitors = int(str(form.get("visitors") or "0") or 0)
+        except ValueError:
+            visitors = 0
+        present = [str(x) for x in form.getlist("here") if UUID.match(str(x))]
+        return gg.roll(biz, me, gid, present, visitors, str(form.get("note") or ""))
+    return await _meet_action(request, act)
+
+
+@router.post("/my/groups/meet/schedule", include_in_schema=False)
+async def meet_schedule_route(request: Request):
+    import group_gatherings as gg
+    return await _meet_action(request, lambda biz, me, gid, form: gg.set_schedule(
+        biz, me, gid, str(form.get("day") or ""), str(form.get("time") or ""), str(form.get("address") or ""),
+        str(form.get("note") or "")))
+
+
+@router.post("/my/groups/meet/skip", include_in_schema=False)
+async def meet_skip_route(request: Request):
+    import group_gatherings as gg
+    return await _meet_action(request, lambda biz, me, gid, form: gg.skip(
+        biz, me, gid, str(form.get("day") or ""), str(form.get("on") or "") == "1"))
 
 
 # ─── the prayer wall (group_prayer) ──────────────────────────────────
