@@ -6,6 +6,8 @@
 #   POST    /worship/team/invite            invite someone to a part (an admin)
 #   PUT     /worship/team/{id}              change their parts (an admin)
 #   DELETE  /worship/team/{id}              take them off the team (an admin)
+#   GET     /worship/team/invite?t=         what an invite link is for (no sign-in:
+#                                           the sign-up screen says whose team it is)
 #   POST    /worship/team/accept            join with an invite's link (signed in)
 #   GET     /worship/team/mine              the churches I'm on the team of
 #
@@ -282,11 +284,12 @@ def remove(member_id: str, business_id: str, user: AuthedUser = Depends(require_
     return {"ok": True}
 
 
-def invite_from_token(token: Any, user: AuthedUser) -> Dict[str, Any]:
-    """The invite an invite link names, for the signed-in person taking it.
-    The token names exactly one invite and the church comes from that row:
-    the caller never names a church. Refuses a link that was taken back,
-    one someone else already took, and one a month old."""
+def invite_from_token(token: Any, user: Optional[AuthedUser]) -> Dict[str, Any]:
+    """The invite an invite link names, for the signed-in person taking it
+    (or, with no one signed in yet, for the sign-up screen). The token names
+    exactly one invite and the church comes from that row: the caller never
+    names a church. Refuses a link that was taken back, one someone else
+    already took, and one a month old."""
     token = _uuid(token, "invite")
     rows = sb_clients.sb_get_as_service(
         f"/worship_team?token=eq.{_q(token)}&select=business_id,{_FIELDS}&limit=1", redact=True)
@@ -296,13 +299,25 @@ def invite_from_token(token: Any, user: AuthedUser) -> Dict[str, Any]:
         raise HTTPException(410, "This invite was taken back. Ask for a new one.")
     inv = rows[0]
     if inv.get("status") == "active":
-        if str(inv.get("user_id")) != str(user.id):
+        if user is None or str(inv.get("user_id")) != str(user.id):
             raise HTTPException(409, "Someone already joined with this invite. Ask for a new one.")
         return inv
     invited = datetime.fromisoformat(str(inv.get("invited_at")).replace("Z", "+00:00"))
     if _now() - invited > timedelta(days=INVITE_DAYS):
         raise HTTPException(410, "This invite is too old. Ask for a new one.")
     return inv
+
+
+@router.get("/team/invite")
+def invite_info(t: str):
+    """Whose team an invite link joins, before anyone signs in: the church,
+    the invitee's name and email (to fill in the form) and their parts."""
+    if _switch_off():
+        raise HTTPException(404, "Not Found")
+    inv = invite_from_token(t, None)
+    church = _church(str(inv.get("business_id"))).get("name") or ""
+    return {"church": church, "name": inv.get("name") or "", "email": inv.get("email") or "",
+            "roles": inv.get("roles") or []}
 
 
 @router.post("/team/accept")

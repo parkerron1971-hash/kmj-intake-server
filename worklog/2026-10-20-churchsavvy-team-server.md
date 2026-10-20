@@ -14,7 +14,7 @@ Step 7 of the approved round-4 ChurchSavvy build (canvas board 30), server side.
 
 **The team (`worship_team.py`, new):**
 - Admin routes: `GET /worship/team`, `POST /worship/team/invite`, `PUT` and `DELETE /worship/team/{id}`.
-- For the person joining: `POST /worship/team/accept` takes the link, and `GET /worship/team/mine` lists the churches they're on.
+- For the person joining: `GET /worship/team/invite?t=` tells the sign-up screen whose team it is (no sign-in), `POST /worship/team/accept` takes the link, and `GET /worship/team/mine` lists the churches they're on.
 - `roles_of` / `require(biz, user, what)` decide every worship route now (songs, Sundays, screens, look, live, library):
   - plan: planner, worship leader, admin
   - songs and library: planner, worship leader, admin

@@ -204,6 +204,17 @@ def test_the_link_joins_once(api):
     assert len(active) == 1 and active[0]["roles"] == ["worship", "booth"]
 
 
+def test_the_link_says_whose_team_before_sign_in(api):
+    db, as_, _ = api
+    r = invite(as_, name="Sam", email="sam@example.org", roles=["booth"])
+    token = r.json()["link"].split("t=")[1]
+    info = as_("stranger").get(f"/worship/team/invite?t={token}")
+    assert info.json() == {"church": "Love City Church", "name": "Sam", "email": "sam@example.org", "roles": ["booth"]}
+    as_("sam").post("/worship/team/accept", json={"token": token})
+    assert as_("stranger").get(f"/worship/team/invite?t={token}").status_code == 409
+    assert as_("stranger").get(f"/worship/team/invite?t={uuidlib.uuid4()}").status_code == 410
+
+
 def test_a_dead_link_says_so(api):
     db, as_, _ = api
     r = invite(as_, name="Sam")
