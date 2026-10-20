@@ -63,6 +63,9 @@ KINDS = (
     # the member is in; the evening before for a morning one.
     ("classes", "Class nights", "A few hours before a class you're in meets"),
     ("prayer", "Prayer", "When the church has prayed for your request"),
+    # A group's own page (member_portal_groups, Kevin 2026-10-20: "recieve
+    # announcements from group leader"): its Board, and asking to join.
+    ("groups", "Your groups", "When a leader of your group posts, and news about joining a group"),
     # Youth and Kids (member_spaces, Kevin 2026-10-15): only the people each
     # is for see its box (visible_kinds) — teens and youth leaders; parents.
     ("youth", "Youth", "When a youth leader posts"),
@@ -616,6 +619,67 @@ def _tell_youth_post(business, post_id, author) -> None:
     first = str((author or {}).get("name") or "").split(" ")[0] or "A youth leader"
     send(business, "youth", title="Youth", body=f"New post from {first}. Open the app to see it.",
          url="/my/space?to=youth", contact_ids=sorted(who), ref_id=f"youth-post:{post_id}", tag="youth")
+
+
+def tell_group_post(business: Dict[str, Any], group: Dict[str, Any], post_id: str,
+                    author: Dict[str, Any], title: str = "") -> None:
+    """After a leader posts to their group's Board (member_portal_groups):
+    everyone else in the group. The post's title, never its words."""
+    if "groups" not in church_kinds(business.get("settings")):
+        return
+    _later(_tell_group_post, business, group, post_id, author, title)
+
+
+def _tell_group_post(business, group, post_id, author, title) -> None:
+    gid = str(group.get("id") or "")
+    me = str((author or {}).get("id") or "")
+    rows = sb_clients.sb_get_as_service(
+        f"/group_members?group_id=eq.{_q(gid)}&business_id=eq.{_q(business['id'])}&select=contact_id&limit=5000") or []
+    who = sorted({str(r["contact_id"]) for r in rows} - {me})
+    if not who:
+        return
+    first = str((author or {}).get("name") or "").split(" ")[0] or "A leader"
+    body = f"{first} posted: {title}" if title else f"New post from {first}. Open the group to see it."
+    send(business, "groups", title=str(group.get("name") or "Your group"), body=body,
+         url=f"/my/groups/{gid}/board", contact_ids=who, ref_id=f"group-post:{post_id}", tag=f"group-{gid}")
+
+
+def tell_join_request(business: Dict[str, Any], group: Dict[str, Any], asker: Dict[str, Any]) -> None:
+    """Someone asked to join (member_portal_groups.ask): the group's leaders."""
+    if "groups" not in church_kinds(business.get("settings")):
+        return
+    _later(_tell_join_request, business, group, asker)
+
+
+def _tell_join_request(business, group, asker) -> None:
+    gid = str(group.get("id") or "")
+    rows = sb_clients.sb_get_as_service(
+        f"/group_members?group_id=eq.{_q(gid)}&business_id=eq.{_q(business['id'])}&role=eq.leader"
+        f"&select=contact_id&limit=50") or []
+    leaders = sorted({str(r["contact_id"]) for r in rows} - {str((asker or {}).get("id") or "")})
+    if not leaders:
+        return
+    first = str((asker or {}).get("name") or "").split(" ")[0] or "Someone"
+    send(business, "groups", title=str(group.get("name") or "Your group"),
+         body=f"{first} asked to join. Open the group to say yes.", url=f"/my/groups/{gid}",
+         contact_ids=leaders, ref_id=f"group-ask:{gid}:{(asker or {}).get('id')}:{datetime.now(timezone.utc):%Y%m%d}",
+         tag=f"group-ask-{gid}")
+
+
+def tell_join_yes(business: Dict[str, Any], group_id: str, contact_id: str) -> None:
+    """A leader said yes: the person who asked."""
+    if "groups" not in church_kinds(business.get("settings")):
+        return
+    _later(_tell_join_yes, business, group_id, contact_id)
+
+
+def _tell_join_yes(business, group_id, contact_id) -> None:
+    rows = sb_clients.sb_get_as_service(
+        f"/groups?id=eq.{_q(group_id)}&business_id=eq.{_q(business['id'])}&select=name&limit=1") or []
+    name = str((rows[0] if rows else {}).get("name") or "the group")
+    send(business, "groups", title=name, body=f"You're in {name}. Open the group to say hello.",
+         url=f"/my/groups/{group_id}", contact_ids=[str(contact_id)], ref_id=f"group-yes:{group_id}:{contact_id}",
+         tag=f"group-{group_id}")
 
 
 def tell_kids_in(business_id: str, household_id: str, entry_id: str,

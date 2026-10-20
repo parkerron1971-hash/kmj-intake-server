@@ -1189,6 +1189,12 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
     if sub == "/my/groups":
         data = fill(await asyncio.to_thread(mpc.groups_for, biz["id"], me), "groups")
         return _page(mpc.render_groups(biz, site, request, data, who=me))
+    # A group's own page (member_portal_groups): Home, Board, People. The
+    # owner's preview reads it as the member they chose; nothing saves.
+    if sub.startswith("/my/groups/"):
+        import member_portal_groups as mpg
+        html, status = await mpg.serve(request, biz, site, me, sub)
+        return _page(html, status)
     # The app's pictures (member_app_pictures): the owner, from a preview,
     # and the people the owner named; nobody else sees these pages.
     import member_app_pictures as mapic

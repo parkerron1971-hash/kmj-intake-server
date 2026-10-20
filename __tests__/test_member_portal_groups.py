@@ -181,9 +181,13 @@ def _client(monkeypatch, me):
     return TestClient(app, follow_redirects=False)
 
 
-def test_route_joins_and_redirects_with_a_code(fake, monkeypatch):
+def test_route_joins_and_lands_on_the_groups_page(fake, monkeypatch):
+    # An open group (no join_mode read: the older open_to_join rule) lets
+    # them in right away; they land on the group's own page (2026-10-20).
+    import member_portal_groups as mpg
+    monkeypatch.setattr(mpg, "my_request", lambda *a: {})
     r = _client(monkeypatch, ME).post("/my/groups", data={"group_id": G_OPEN, "action": "join"})
-    assert r.status_code == 303 and r.headers["location"] == "/my/groups?done=joined"
+    assert r.status_code == 303 and r.headers["location"] == f"/my/groups/{G_OPEN}?done=joined"
 
 
 def test_route_without_a_session_goes_to_sign_in(fake, monkeypatch):

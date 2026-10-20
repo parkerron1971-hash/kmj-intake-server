@@ -1,0 +1,1109 @@
+"""
+member_portal_groups.py — a group's own place in the member app.
+
+Kevin, 2026-10-20: "We need to upgrade the groups for churches. there is no
+area where people can communicate like a chat. recieve announcements from
+group leader. etc... there is a entire area missing." The approved canvas
+("Church Groups, Together", HZfUhGgL6phQUVfFLz3Uwb) gives every group a
+page of its own; this is part 1 of building it:
+
+  /my/groups/<id>          Home: what the leader pinned, the newest posts,
+                           when it meets, the chat and video doors, who's in
+  /my/groups/<id>/board    the Board: announcements from the group's leaders
+                           (and from the pastors to every group), each with
+                           "Got it"; a leader sees who has seen it
+  /my/groups/<id>/people   who's in the group
+
+Someone who isn't in the group sees what it is, who leads it, and how to
+get in — never who else belongs.
+
+Kevin's calls (2026-10-20):
+  * People in a group see each other's FULL names; each group's leader may
+    switch the group to first names (groups.name_display). A teen always
+    shows by first name, and photos follow member_photos (adults only).
+  * How people join depends on the group's type and on whoever creates it
+    (groups.join_mode): open = join right away; ask = a leader says yes
+    (JOIN_DEFAULT per type); invite = not listed, leaders bring people in.
+
+POST, each acting as the signed-in member (same-origin form, a live
+session, the per-person limit, a redirect back with a short code):
+  /my/groups/ask            join an open group, or ask to join
+  /my/groups/withdraw       take back a request
+  /my/groups/answer         a leader: say yes, or not now
+  /my/groups/post           a leader posts to the Board (checked first, like
+                            every message: msg_screen)
+  /my/groups/post/ack       "Got it"
+  /my/groups/post/remove    the author or a leader of the group
+  /my/groups/post/pin       a leader pins or unpins (one pin per group)
+  /my/groups/names          a leader: full names or first names
+
+Records: group_join_requests, group_posts, group_post_seen
+(supabase/APPLY-2026-10-20-group-space.sql). Only this file writes them.
+"""
+from __future__ import annotations
+
+import logging
+import re
+from datetime import date, datetime, timezone
+from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import quote
+
+from fastapi import APIRouter, Request
+from fastapi.responses import RedirectResponse
+
+import sb_clients
+
+logger = logging.getLogger("member_portal_groups")
+
+router = APIRouter(tags=["member-portal"])
+
+JOIN_MODES = ("open", "ask", "invite")
+# A new group's way in, by its type (Kevin: "optional based on who created
+# the group and what type of group this is"); whoever creates it can change it.
+JOIN_DEFAULT = {"small_group": "ask", "team": "ask", "ministry": "ask", "class": "open"}
+NAME_MODES = ("full", "first")
+TITLE_MAX = 120
+POST_MAX = 2000
+POSTS_SHOWN = 40
+UUID = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+TABS = ("", "board", "people")
+
+
+def _q(v: Any) -> str:
+    return quote(str(v), safe="")
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+# ─── reading ─────────────────────────────────────────────────────────
+
+
+def group_row(business_id: str, group_id: str) -> Optional[Dict[str, Any]]:
+    """The group, {} when it isn't this church's or isn't running, None
+    when the read failed."""
+    if not UUID.match(str(group_id or "")):
+        return {}
+    rows = sb_clients.sb_get_as_service(
+        f"/groups?id=eq.{_q(group_id)}&business_id=eq.{_q(business_id)}"
+        f"&select=id,name,kind,description,meets,location,capacity,open_to_join,join_mode,name_display,youth,active,updated_at"
+        f"&limit=1")
+    if rows is None:
+        return None
+    if not rows or not rows[0].get("active"):
+        return {}
+    g = rows[0]
+    import member_portal_church as mpc
+    g["join_mode"] = mpc.join_mode(g)
+    if g.get("name_display") not in NAME_MODES:
+        g["name_display"] = "full"
+    return g
+
+
+def _contacts(business_id: str, ids: List[str]) -> Optional[Dict[str, Dict[str, Any]]]:
+    out: Dict[str, Dict[str, Any]] = {}
+    ids = sorted({str(i) for i in ids if i})
+    for i in range(0, len(ids), 150):
+        rows = sb_clients.sb_get_as_service(
+            f"/contacts?business_id=eq.{_q(business_id)}&id=in.({','.join(_q(x) for x in ids[i:i + 150])})"
+            f"&select=id,name,birthdate,metadata")
+        if rows is None:
+            return None
+        out.update({str(r["id"]): r for r in rows})
+    return out
+
+
+def roster(business_id: str, group_id: str) -> Optional[List[Dict[str, Any]]]:
+    """Everyone in the group, leaders first, then by name."""
+    members = sb_clients.sb_get_as_service(
+        f"/group_members?group_id=eq.{_q(group_id)}&business_id=eq.{_q(business_id)}"
+        f"&select=contact_id,role,joined_on,can_host_live&limit=5000")
+    if members is None:
+        return None
+    people = _contacts(business_id, [m["contact_id"] for m in members])
+    if people is None:
+        return None
+    out = []
+    for m in members:
+        c = people.get(str(m["contact_id"]))
+        if not c:
+            continue
+        out.append({**c, "id": str(c["id"]), "role": m.get("role") or "member", "joined_on": m.get("joined_on"),
+                    "host": bool(m.get("can_host_live")) and m.get("role") == "leader"})
+    out.sort(key=lambda p: (p["role"] != "leader", str(p.get("name") or "").lower()))
+    return out
+
+
+def _age(person: Dict[str, Any]) -> Optional[int]:
+    import member_messaging_rules as rules
+    return rules.age(person.get("birthdate"))
+
+
+def display_name(person: Dict[str, Any], mode: str) -> str:
+    """Full or first name, by the group's setting. A teen always shows by
+    first name (their profile is for parents and staff)."""
+    name = " ".join(str(person.get("name") or "").split())
+    first = name.split(" ")[0] if name else ""
+    a = _age(person)
+    if mode == "first" or (a is not None and a < 18):
+        return first or "Someone"
+    return name or "Someone"
+
+
+def my_request(business_id: str, group_id: str, contact_id: str) -> Optional[Dict[str, Any]]:
+    """This person's waiting request to join, {} when none, None on a failed read."""
+    rows = sb_clients.sb_get_as_service(
+        f"/group_join_requests?business_id=eq.{_q(business_id)}&group_id=eq.{_q(group_id)}"
+        f"&contact_id=eq.{_q(contact_id)}&status=eq.waiting&select=id,asked_at&limit=1")
+    if rows is None:
+        return None
+    return rows[0] if rows else {}
+
+
+def my_requests(business_id: str, contact_id: str) -> Optional[set]:
+    """The groups this person is waiting to hear from."""
+    rows = sb_clients.sb_get_as_service(
+        f"/group_join_requests?business_id=eq.{_q(business_id)}&contact_id=eq.{_q(contact_id)}"
+        f"&status=eq.waiting&select=group_id&limit=200")
+    if rows is None:
+        return None
+    return {str(r["group_id"]) for r in rows}
+
+
+def requests_for(business_id: str, group_id: str) -> Optional[List[Dict[str, Any]]]:
+    """Who is waiting to join, oldest first, with what a leader needs to say
+    yes: their name and how long they've been around."""
+    rows = sb_clients.sb_get_as_service(
+        f"/group_join_requests?business_id=eq.{_q(business_id)}&group_id=eq.{_q(group_id)}"
+        f"&status=eq.waiting&select=id,contact_id,asked_at&order=asked_at.asc&limit=100")
+    if rows is None:
+        return None
+    if not rows:
+        return []
+    ids = [str(r["contact_id"]) for r in rows]
+    people: Dict[str, Dict[str, Any]] = {}
+    for i in range(0, len(ids), 150):
+        got = sb_clients.sb_get_as_service(
+            f"/contacts?business_id=eq.{_q(business_id)}&id=in.({','.join(_q(x) for x in ids[i:i + 150])})"
+            f"&select=id,name,birthdate,metadata,status,created_at")
+        if got is None:
+            return None
+        people.update({str(p["id"]): p for p in got})
+    out = []
+    for r in rows:
+        p = people.get(str(r["contact_id"]))
+        if p:
+            out.append({**r, "person": p})
+    return out
+
+
+def posts_for(business_id: str, group_id: str, me_id: str, leader: bool,
+              group_size: int) -> Optional[List[Dict[str, Any]]]:
+    """The Board, pinned first, then newest: the group's own posts and the
+    pastors' posts to every group. Each carries its author, whether I
+    pressed "Got it", and (for a leader) how many have seen it."""
+    rows = sb_clients.sb_get_as_service(
+        f"/group_posts?business_id=eq.{_q(business_id)}&or=(group_id.eq.{_q(group_id)},group_id.is.null)"
+        f"&removed_at=is.null&select=id,group_id,title,body,pinned,ask_ack,posted_by,created_at"
+        f"&order=created_at.desc&limit={POSTS_SHOWN}")
+    if rows is None:
+        return None
+    if not rows:
+        return []
+    ids = [str(r["id"]) for r in rows]
+    seen = sb_clients.sb_get_as_service(
+        f"/group_post_seen?business_id=eq.{_q(business_id)}&post_id=in.({','.join(ids)})"
+        f"&select=post_id,contact_id,acked_at&limit=20000")
+    if seen is None:
+        return None
+    authors = _contacts(business_id, [str(r["posted_by"]) for r in rows if r.get("posted_by")])
+    if authors is None:
+        return None
+    for r in rows:
+        mine = [s for s in seen if str(s["post_id"]) == str(r["id"])]
+        r["seen_n"] = min(len({str(s["contact_id"]) for s in mine}), group_size) if leader else 0
+        r["acked_n"] = min(len({str(s["contact_id"]) for s in mine if s.get("acked_at")}), group_size) if leader else 0
+        # Whoever posted it has nothing to say "Got it" to.
+        r["i_acked"] = str(r.get("posted_by") or "") == str(me_id) or any(
+            str(s["contact_id"]) == str(me_id) and s.get("acked_at") for s in mine)
+        r["author"] = authors.get(str(r.get("posted_by") or "")) or {}
+        r["church"] = not r.get("group_id")
+    pinned =[r for r in rows if r.get("pinned") and not r["church"]]
+    rest = sorted([r for r in rows if not (r.get("pinned") and not r["church"])],
+                  key=lambda r: str(r.get("created_at") or ""), reverse=True)
+    return pinned + rest
+
+
+def mark_seen(business_id: str, contact_id: str, post_ids: List[str]) -> None:
+    """Opening the group counts as seeing what's on it. Best effort."""
+    if not post_ids:
+        return
+    try:
+        sb_clients.sb_post_as_service(
+            "/group_post_seen?on_conflict=post_id,contact_id",
+            [{"post_id": p, "contact_id": str(contact_id), "business_id": str(business_id)} for p in post_ids],
+            prefer="resolution=ignore-duplicates,return=minimal")
+    except Exception:
+        logger.warning("group post seen write failed", exc_info=True)
+
+
+def space(business_id: str, group_id: str, me: Dict[str, Any], *, tab: str = "") -> Optional[Dict[str, Any]]:
+    """Everything a group's page shows this person. None when a read failed
+    (the page says "try again", never "no group"), {} when there's no such
+    group here, or it's invite-only and they aren't in it."""
+    g = group_row(business_id, group_id)
+    if g is None:
+        return None
+    if not g:
+        return {}
+    people = roster(business_id, group_id)
+    if people is None:
+        return None
+    me_id = str(me["id"])
+    mine = next((p for p in people if p["id"] == me_id), None)
+    role = (mine or {}).get("role")
+    data: Dict[str, Any] = {"group": g, "role": role, "people": people,
+                            "leaders": [p for p in people if p["role"] == "leader"]}
+    if not role:
+        if g["join_mode"] == "invite":
+            return {}
+        req = my_request(business_id, group_id, me_id)
+        if req is None:
+            return None
+        data["asked"] = bool(req)
+        data["full"] = bool(g.get("capacity")) and len(people) >= int(g["capacity"])
+        return data
+    posts = posts_for(business_id, group_id, me_id, role == "leader", len(people))
+    if posts is None:
+        return None
+    data["posts"] = posts
+    if role == "leader":
+        reqs = requests_for(business_id, group_id)
+        if reqs is None:
+            return None
+        data["requests"] = reqs
+    import member_portal_group_live as mgl
+    live = mgl.open_sessions(business_id, [group_id]) or {}
+    data["live"] = live.get(str(group_id))
+    data["host"] = bool((mine or {}).get("host"))
+    return data
+
+
+# ─── writing ─────────────────────────────────────────────────────────
+
+
+def _is_leader(business_id: str, group_id: str, contact_id: str) -> Optional[bool]:
+    rows = sb_clients.sb_get_as_service(
+        f"/group_members?group_id=eq.{_q(group_id)}&contact_id=eq.{_q(contact_id)}"
+        f"&business_id=eq.{_q(business_id)}&select=role&limit=1")
+    if rows is None:
+        return None
+    return bool(rows) and rows[0].get("role") == "leader"
+
+
+def _is_member(business_id: str, group_id: str, contact_id: str) -> Optional[bool]:
+    rows = sb_clients.sb_get_as_service(
+        f"/group_members?group_id=eq.{_q(group_id)}&contact_id=eq.{_q(contact_id)}"
+        f"&business_id=eq.{_q(business_id)}&select=role&limit=1")
+    if rows is None:
+        return None
+    return bool(rows)
+
+
+def ask(business: Dict[str, Any], me: Dict[str, Any], group_id: str) -> Tuple[bool, str]:
+    """Join an open group, or ask to join one a leader says yes to."""
+    business_id = str(business["id"])
+    g = group_row(business_id, group_id)
+    if g is None:
+        return False, "error"
+    if not g:
+        return False, "group_gone"
+    if g["join_mode"] == "invite":
+        return False, "group_invite"
+    if g["join_mode"] == "open":
+        import member_portal_church as mpc
+        return mpc.add_member(business_id, me, g)
+    member = _is_member(business_id, g["id"], me["id"])
+    if member is None:
+        return False, "error"
+    if member:
+        return True, "joined"
+    if g.get("capacity"):
+        count = sb_clients.sb_get_as_service(f"/group_members?group_id=eq.{_q(g['id'])}&select=contact_id&limit=10001")
+        if count is None:
+            return False, "error"
+        if len(count) >= int(g["capacity"]):
+            return False, "group_full"
+    waiting = my_request(business_id, g["id"], me["id"])
+    if waiting is None:
+        return False, "error"
+    if waiting:
+        return True, "asked"
+    saved = sb_clients.sb_post_as_service("/group_join_requests", {
+        "business_id": business_id, "group_id": g["id"], "contact_id": str(me["id"]), "status": "waiting"})
+    if not saved:
+        # A double press: the one-waiting index refused the second.
+        again = my_request(business_id, g["id"], me["id"])
+        return (True, "asked") if again else (False, "error")
+    import member_push
+    member_push.tell_join_request(business, g, me)
+    return True, "asked"
+
+
+def withdraw(business_id: str, me: Dict[str, Any], group_id: str) -> Tuple[bool, str]:
+    if not UUID.match(str(group_id or "")):
+        return False, "group_gone"
+    ok = sb_clients.sb_patch_as_service(
+        f"/group_join_requests?business_id=eq.{_q(business_id)}&group_id=eq.{_q(group_id)}"
+        f"&contact_id=eq.{_q(me['id'])}&status=eq.waiting",
+        {"status": "withdrawn", "decided_at": _now()})
+    return (True, "withdrawn") if ok is not None else (False, "error")
+
+
+def answer(business: Dict[str, Any], me: Dict[str, Any], request_id: str, yes: bool) -> Tuple[bool, str, str]:
+    """A leader of the group says yes, or not now. (ok, code, group_id)."""
+    business_id = str(business["id"])
+    if not UUID.match(str(request_id or "")):
+        return False, "gone", ""
+    rows = sb_clients.sb_get_as_service(
+        f"/group_join_requests?id=eq.{_q(request_id)}&business_id=eq.{_q(business_id)}"
+        f"&select=id,group_id,contact_id,status&limit=1")
+    if rows is None:
+        return False, "error", ""
+    if not rows:
+        return False, "gone", ""
+    r = rows[0]
+    gid = str(r["group_id"])
+    leader = _is_leader(business_id, gid, me["id"])
+    if leader is None:
+        return False, "error", gid
+    if not leader:
+        return False, "not_group_leader", gid
+    if r.get("status") != "waiting":
+        return False, "answered", gid
+    if yes:
+        g = group_row(business_id, gid)
+        if g is None:
+            return False, "error", gid
+        if not g:
+            return False, "group_gone", gid
+        import member_portal_church as mpc
+        ok, code = mpc.add_member(business_id, {"id": str(r["contact_id"])}, g)
+        if not ok:
+            return False, code, gid
+    done = sb_clients.sb_patch_as_service(
+        f"/group_join_requests?id=eq.{_q(request_id)}&business_id=eq.{_q(business_id)}&status=eq.waiting",
+        {"status": "yes" if yes else "no", "decided_at": _now(), "decided_by": str(me["id"])})
+    if done is None:
+        return False, "error", gid
+    if yes:
+        import member_push
+        member_push.tell_join_yes(business, gid, str(r["contact_id"]))
+    return True, "said_yes" if yes else "not_now", gid
+
+
+async def create_post(business: Dict[str, Any], me: Dict[str, Any], group_id: str, title: str, body: str,
+                      pinned: bool, ask_ack: bool) -> Tuple[bool, str]:
+    import asyncio
+    import msg_screen
+    business_id = str(business["id"])
+    g = await asyncio.to_thread(group_row, business_id, group_id)
+    if g is None:
+        return False, "error"
+    if not g:
+        return False, "group_gone"
+    leader = await asyncio.to_thread(_is_leader, business_id, g["id"], me["id"])
+    if leader is None:
+        return False, "error"
+    if not leader:
+        return False, "not_group_leader"
+    title = " ".join(str(title or "").split())[:TITLE_MAX]
+    body = re.sub(r"[ \t]+\n", "\n", str(body or "")).strip()[:POST_MAX]
+    if not body:
+        return False, "empty_post"
+    try:
+        verdict = await msg_screen.screen(business_id, f"{title}\n{body}".strip())
+    except msg_screen.ScreenUnavailable:
+        return False, "post_busy"
+    if verdict != "ok":
+        return False, "post_no"
+    if pinned:
+        # One pin per group: the new one takes the top.
+        await asyncio.to_thread(
+            sb_clients.sb_patch_as_service,
+            f"/group_posts?business_id=eq.{_q(business_id)}&group_id=eq.{_q(g['id'])}&pinned=eq.true",
+            {"pinned": False})
+    rows = await asyncio.to_thread(sb_clients.sb_post_as_service, "/group_posts", {
+        "business_id": business_id, "group_id": g["id"], "title": title, "body": body,
+        "pinned": bool(pinned), "ask_ack": bool(ask_ack), "posted_by": str(me["id"])})
+    if not (isinstance(rows, list) and rows):
+        return False, "error"
+    import member_push
+    member_push.tell_group_post(business, g, str(rows[0].get("id") or ""), me, title)
+    return True, "post_up"
+
+
+def _post(business_id: str, post_id: str) -> Optional[Dict[str, Any]]:
+    if not UUID.match(str(post_id or "")):
+        return {}
+    rows = sb_clients.sb_get_as_service(
+        f"/group_posts?id=eq.{_q(post_id)}&business_id=eq.{_q(business_id)}&removed_at=is.null"
+        f"&select=id,group_id,posted_by,pinned&limit=1")
+    if rows is None:
+        return None
+    return rows[0] if rows else {}
+
+
+def ack(business_id: str, me: Dict[str, Any], post_id: str) -> Tuple[bool, str, str]:
+    """"Got it" on a post this person can see. (ok, code, group_id)."""
+    p = _post(business_id, post_id)
+    if p is None:
+        return False, "error", ""
+    if not p:
+        return False, "gone", ""
+    gid = str(p.get("group_id") or "")
+    if gid:
+        member = _is_member(business_id, gid, me["id"])
+        if member is None:
+            return False, "error", gid
+        if not member:
+            return False, "not_in_group", gid
+    else:
+        rows = sb_clients.sb_get_as_service(
+            f"/group_members?business_id=eq.{_q(business_id)}&contact_id=eq.{_q(me['id'])}&select=group_id&limit=1")
+        if rows is None:
+            return False, "error", ""
+        if not rows:
+            return False, "not_in_group", ""
+    # return=representation: a minimal write hands back None even when it
+    # worked, which would read as a failure.
+    ok = sb_clients.sb_post_as_service(
+        "/group_post_seen?on_conflict=post_id,contact_id",
+        {"post_id": str(p["id"]), "contact_id": str(me["id"]), "business_id": str(business_id), "acked_at": _now()},
+        prefer="resolution=merge-duplicates,return=representation")
+    return (True, "got_it", gid) if ok else (False, "error", gid)
+
+
+def remove_post(business_id: str, me: Dict[str, Any], post_id: str) -> Tuple[bool, str, str]:
+    p = _post(business_id, post_id)
+    if p is None:
+        return False, "error", ""
+    if not p or not p.get("group_id"):
+        return False, "gone", str(p.get("group_id") or "") if p else ""
+    gid = str(p["group_id"])
+    if str(p.get("posted_by") or "") != str(me["id"]):
+        leader = _is_leader(business_id, gid, me["id"])
+        if leader is None:
+            return False, "error", gid
+        if not leader:
+            return False, "not_group_leader", gid
+    ok = sb_clients.sb_patch_as_service(
+        f"/group_posts?id=eq.{_q(p['id'])}&business_id=eq.{_q(business_id)}", {"removed_at": _now(), "pinned": False})
+    return (True, "post_down", gid) if ok is not None else (False, "error", gid)
+
+
+def pin(business_id: str, me: Dict[str, Any], post_id: str, on: bool) -> Tuple[bool, str, str]:
+    p = _post(business_id, post_id)
+    if p is None:
+        return False, "error", ""
+    if not p or not p.get("group_id"):
+        return False, "gone", ""
+    gid = str(p["group_id"])
+    leader = _is_leader(business_id, gid, me["id"])
+    if leader is None:
+        return False, "error", gid
+    if not leader:
+        return False, "not_group_leader", gid
+    if on:
+        sb_clients.sb_patch_as_service(
+            f"/group_posts?business_id=eq.{_q(business_id)}&group_id=eq.{_q(gid)}&pinned=eq.true", {"pinned": False})
+    ok = sb_clients.sb_patch_as_service(
+        f"/group_posts?id=eq.{_q(p['id'])}&business_id=eq.{_q(business_id)}", {"pinned": bool(on)})
+    return (True, "pinned" if on else "unpinned", gid) if ok is not None else (False, "error", gid)
+
+
+def set_names(business_id: str, me: Dict[str, Any], group_id: str, mode: str) -> Tuple[bool, str]:
+    if mode not in NAME_MODES:
+        return False, "error"
+    leader = _is_leader(business_id, group_id, me["id"])
+    if leader is None:
+        return False, "error"
+    if not leader:
+        return False, "not_group_leader"
+    ok = sb_clients.sb_patch_as_service(
+        f"/groups?id=eq.{_q(group_id)}&business_id=eq.{_q(business_id)}",
+        {"name_display": mode, "updated_at": _now()})
+    return (True, f"names_{mode}") if ok is not None else (False, "error")
+
+
+# ─── the page ────────────────────────────────────────────────────────
+
+# Group pages: the member app's tokens, groups in teal (the Connect colour),
+# the church colour only on what you press. One sheet, gs-* names.
+GROUP_CSS = """
+.gs-hero{position:relative;display:grid;margin:0 calc(var(--g) * -1);min-height:268px;color:#fff;overflow:hidden;border-radius:0 0 var(--r-lg) var(--r-lg);}
+.gs-hero>*{grid-area:1/1;}
+.gs-hero .gs-art,.gs-hero .gs-art>*{width:100%;height:100%;min-height:268px;object-fit:cover;display:block;}
+.gs-hero .gs-art{position:relative;}
+.gs-scrim{position:relative;background:linear-gradient(180deg,rgba(0,0,0,.18) 0%,rgba(0,0,0,0) 30%,rgba(0,0,0,.55) 62%,rgba(0,0,0,.9) 100%);}
+.gs-hero-in{position:relative;align-self:end;display:flex;flex-direction:column;gap:6px;padding:0 var(--g) 18px;}
+.gs-kind{align-self:flex-start;display:inline-flex;align-items:center;height:26px;padding:0 10px;border-radius:999px;font-size:12.5px;font-weight:650;
+  background:rgba(255,255,255,.2);-webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);}
+.gs-hero h1{color:#fff;margin:0;font-size:33px;letter-spacing:-.04em;line-height:1.04;}
+.gs-hero p{margin:0;font-size:14px;color:rgba(255,255,255,.86);}
+.gs-who{display:flex;align-items:center;gap:10px;margin-top:4px!important;}
+.gs-faces{display:flex;align-items:center;}
+.gs-faces .gs-av{margin-left:-4px;box-shadow:0 0 0 2px rgba(0,0,0,.55);}
+@media (min-width:640px){.gs-hero{margin:0;border-radius:var(--r-lg);}}
+.gs-faces .gs-av:first-child{margin-left:0;}
+.gs-av{width:28px;height:28px;border-radius:50%;flex:none;display:grid;place-items:center;overflow:hidden;font-size:11px;font-weight:700;
+  background:var(--teal-deep);color:var(--teal-ink);}
+.gs-av img{width:100%;height:100%;object-fit:cover;display:block;}
+.gs-av.m{width:42px;height:42px;font-size:14px;}
+.gs-av.l{width:56px;height:56px;font-size:18px;}
+.gs-tabs{display:flex;gap:6px;overflow-x:auto;margin:16px calc(var(--g) * -1) 0;padding:0 var(--g) 2px;scrollbar-width:none;}
+.gs-tabs::-webkit-scrollbar{display:none;}
+.gs-tab{flex:none;display:inline-flex;align-items:center;gap:7px;min-height:42px;padding:0 15px;border-radius:999px;background:var(--s1);
+  color:var(--fg2);font-size:14.5px;font-weight:600;text-decoration:none;letter-spacing:-.01em;}
+.gs-tab[aria-current]{background:var(--teal-deep);color:var(--teal-ink);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--teal-ink) 30%,transparent);}
+.gs-n{min-width:19px;height:19px;padding:0 5px;border-radius:10px;background:var(--acc-fill);color:var(--on-acc);font-size:11px;font-weight:700;display:grid;place-items:center;}
+.gs-card{border-radius:var(--r-lg);background:var(--s1);padding:16px;display:flex;flex-direction:column;gap:12px;margin-bottom:12px;}
+.gs-card.pin{background:var(--teal-deep);}
+.gs-card.church{background:var(--acc-deep,var(--s1));}
+.gs-ph{display:flex;align-items:center;gap:10px;}
+.gs-ph .gs-t{flex:1;min-width:0;display:flex;flex-direction:column;}
+.gs-ph b{font-size:14.5px;font-weight:650;display:flex;align-items:center;gap:6px;flex-wrap:wrap;}
+.gs-ph small{font-size:12.5px;color:var(--fg2);}
+.gs-tag{display:inline-flex;align-items:center;height:19px;padding:0 7px;border-radius:6px;background:var(--teal-deep);color:var(--teal-ink);font-size:11px;font-weight:700;}
+.gs-card.pin .gs-tag{background:var(--s1);}
+.gs-tag.pastor{background:var(--acc-soft);color:var(--acc);}
+.gs-pinned{display:inline-flex;align-items:center;gap:4px;color:var(--teal-ink);font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;}
+.gs-card h3{margin:0;font-size:19px;font-weight:700;letter-spacing:-.022em;line-height:1.2;}
+.gs-card p.gs-body{margin:0;font-size:15px;line-height:1.5;white-space:pre-line;overflow-wrap:anywhere;}
+.gs-foot{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;}
+.gs-foot form{margin:0;}
+.gs-ack{display:inline-flex;align-items:center;gap:6px;min-height:42px;padding:0 16px;border-radius:999px;border:0;background:var(--acc-fill);
+  color:var(--on-acc);font:inherit;font-size:14.5px;font-weight:620;cursor:pointer;}
+.gs-ack.done{background:var(--s2);color:var(--fg2);cursor:default;}
+.gs-seen{font-size:13px;color:var(--fg2);}
+.gs-mini{display:inline-flex;align-items:center;gap:6px;min-height:40px;padding:0 4px;border:0;background:none;font:inherit;font-size:14px;
+  font-weight:600;color:var(--teal-ink);cursor:pointer;text-decoration:none;}
+.gs-mini.warn{color:var(--error);}
+.gs-row{display:flex;align-items:center;gap:14px;padding:14px 16px;text-decoration:none;color:inherit;position:relative;}
+.gs-list{border-radius:var(--r-md);background:var(--s1);overflow:hidden;margin-bottom:12px;}
+.gs-list>.gs-row+.gs-row::before{content:"";position:absolute;top:0;left:72px;right:0;height:.5px;background:var(--line);}
+.gs-row .gs-t{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;}
+.gs-row .gs-t b{font-size:16px;font-weight:620;letter-spacing:-.015em;}
+.gs-row .gs-t span{font-size:13.5px;color:var(--fg2);}
+.gs-disc{width:42px;height:42px;border-radius:50%;flex:none;display:grid;place-items:center;background:var(--teal-deep);color:var(--teal-ink);}
+.gs-disc.gold{background:var(--gold-deep);color:var(--gold-ink);}
+.gs-disc.violet{background:var(--violet-deep);color:var(--violet-ink);}
+.gs-disc.coral{background:var(--coral-deep);color:var(--coral-ink);}
+.gs-acts{display:flex;gap:8px;flex-wrap:wrap;}
+.gs-btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:44px;padding:0 18px;border-radius:999px;border:0;
+  background:var(--acc-fill);color:var(--on-acc);font:inherit;font-size:15px;font-weight:600;text-decoration:none;cursor:pointer;}
+.gs-btn.soft{background:var(--s2);color:var(--fg);}
+.gs-btn.tint{background:var(--teal-deep);color:var(--teal-ink);}
+.gs-btn.sm{min-height:38px;padding:0 14px;font-size:14px;}
+.gs-req{display:flex;flex-wrap:wrap;align-items:center;gap:10px 14px;padding:14px 16px;position:relative;}
+.gs-req+.gs-req::before{content:"";position:absolute;top:0;left:16px;right:0;height:.5px;background:var(--line);}
+.gs-req .gs-t{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;}
+.gs-req .gs-t b{font-size:16px;font-weight:620;}
+.gs-req .gs-t span{font-size:13.5px;color:var(--fg2);}
+.gs-req .gs-acts{width:100%;padding-left:56px;}
+.gs-req form{margin:0;}
+.gs-head{display:flex;align-items:center;gap:10px;padding:14px 16px 4px;}
+.gs-head b{font-size:15.5px;font-weight:660;}
+.gs-compose{border-radius:var(--r-lg);background:var(--s1);padding:6px 16px 16px;display:flex;flex-direction:column;gap:6px;margin-bottom:16px;}
+.gs-compose label.gs-l{font-size:12.5px;font-weight:650;letter-spacing:.05em;text-transform:uppercase;color:var(--fg3);padding-top:10px;}
+.gs-compose input[type=text],.gs-compose textarea{width:100%;border:0;outline:none;background:var(--bg);color:var(--fg);border-radius:12px;
+  padding:12px 14px;font:inherit;font-size:16px;line-height:1.45;}
+.gs-compose input[type=text]{font-weight:650;}
+.gs-compose textarea{min-height:120px;resize:vertical;}
+.gs-check{display:flex;align-items:center;gap:10px;min-height:40px;font-size:14.5px;}
+.gs-check input{width:20px;height:20px;accent-color:var(--teal);}
+.gs-fine{font-size:12.5px;color:var(--fg3);margin:0;}
+.gs-meet{display:flex;align-items:center;gap:14px;}
+.gs-meet .gs-t{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;}
+.gs-meet .gs-t b{font-size:17px;font-weight:660;letter-spacing:-.02em;}
+.gs-meet .gs-t span{font-size:13.5px;color:var(--fg2);}
+.gs-lead{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;margin-bottom:12px;}
+.gs-lc{border-radius:var(--r-md);background:var(--teal-deep);padding:16px 12px 14px;display:flex;flex-direction:column;align-items:center;gap:6px;text-align:center;}
+.gs-lc b{font-size:15.5px;font-weight:660;}
+.gs-lc small{font-size:12.5px;color:var(--fg2);}
+.gs-note{display:flex;gap:10px;align-items:flex-start;font-size:13px;color:var(--fg3);line-height:1.45;margin:4px 0 12px;}
+.gs-note .mb-ic{margin-top:2px;}
+.gs-seg{display:inline-grid;grid-auto-flow:column;padding:3px;border-radius:12px;background:var(--s2);}
+.gs-seg button{min-height:36px;padding:0 14px;border:0;border-radius:9px;background:none;color:var(--fg2);font:inherit;font-size:14px;font-weight:600;cursor:pointer;}
+.gs-seg button[aria-pressed=true]{background:var(--s3);color:var(--fg);}
+.gs-about{font-size:15px;color:var(--fg2);line-height:1.5;margin:14px 0 0;white-space:pre-line;}
+.gs-empty{border-radius:var(--r-md);background:var(--s1);padding:18px 16px;color:var(--fg2);font-size:14.5px;margin-bottom:12px;}
+.gs-wait{display:inline-flex;align-items:center;gap:6px;min-height:38px;padding:0 14px;border-radius:999px;background:var(--teal-deep);
+  color:var(--teal-ink);font-size:14px;font-weight:620;}
+"""
+
+
+def _ic(name: str, size: int = 18) -> str:
+    import member_app_ui as ui
+    extra = {
+        "megaphone": '<path d="m3 11 18-5v12L3 14v-3z"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/>',
+        "pin": ('<path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76'
+                'a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/>'),
+        "home": '<path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"/>',
+    }
+    if name in extra:
+        return (f'<svg class="mb-ic" width="{size}" height="{size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+                f'stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">{extra[name]}</svg>')
+    return ui.icon(name, size)
+
+
+def _when(iso: Any) -> str:
+    try:
+        then = datetime.fromisoformat(str(iso).replace("Z", "+00:00"))
+    except ValueError:
+        return ""
+    mins = int((datetime.now(timezone.utc) - then).total_seconds() // 60)
+    if mins < 2:
+        return "Just now"
+    if mins < 60:
+        return f"{mins} min ago"
+    if mins < 60 * 24:
+        return f"{mins // 60} h ago"
+    days = mins // (60 * 24)
+    if days == 1:
+        return "Yesterday"
+    if days < 7:
+        return then.strftime("%A")
+    return f"{then.strftime('%b')} {then.day}"
+
+
+def _since(d: Any) -> str:
+    try:
+        day = date.fromisoformat(str(d)[:10])
+    except ValueError:
+        return ""
+    return f"Since {day.strftime('%b')} {day.year}" if day.year == date.today().year else f"Since {day.year}"
+
+
+def _face(person: Dict[str, Any], cls: str = "gs-av", mode: str = "full") -> str:
+    """Their photo when members may see it, else initials of the name the
+    group shows (so first-name mode, and a teen, show one letter)."""
+    import member_photos as ph
+    shown = display_name(person, mode) if person.get("name") else ""
+    return ph.avatar({**person, "name": shown}, show=ph.shown_to_members(person), cls=cls)
+
+
+def _base(gid: str, tab: str = "") -> str:
+    return f"/my/groups/{gid}" + (f"/{tab}" if tab else "")
+
+
+def _flash(request: Request) -> str:
+    import member_portal_church as mpc
+    return mpc._flash(request)
+
+
+def _hero(biz: Dict[str, Any], site, g: Dict[str, Any], people: List[Dict[str, Any]],
+          leaders: List[Dict[str, Any]], in_group: bool) -> str:
+    import member_app_ui as ui
+    import member_app_photos as photos
+    import member_portal_church as mpc
+    from member_portal import _e
+    pool = photos.photos(biz, site)
+    pic, look = photos.choose(biz, f"group:{g['id']}", pool, title=g.get("name") or "")
+    art = ui.picture(pic, look, "youth" if g.get("youth") else "groups", eager=True, night=True)
+    facts = " · ".join(_e(x) for x in (g.get("meets"), g.get("location")) if x)
+    kind = mpc.GROUP_KINDS.get(g.get("kind") or "", "Group")
+    led = [display_name(p, "first") for p in leaders]
+    led_line = f'led by {_e(_and(led))}' if led else ""
+    n = len(people)
+    count = f"{n} {'person' if n == 1 else 'people'}" if in_group else ""
+    who = " · ".join(x for x in (count, led_line) if x)
+    shown = (leaders + [p for p in people if p["role"] != "leader"])[:4] if in_group else leaders[:3]
+    faces = "".join(_face(p, mode=g.get("name_display") or "full") for p in shown)
+    facts_p = f'<p>{facts}</p>' if facts else ""
+    who_p = (f'<p class="gs-who"><span class="gs-faces" aria-hidden="true">{faces}</span><span>{who}</span></p>'
+             if who else "")
+    return (f'<section class="gs-hero" aria-labelledby="gs-name"><span class="gs-art">{art}</span><span class="gs-scrim"></span>'
+            f'<div class="gs-hero-in"><span class="gs-kind">{_e(kind)}</span><h1 id="gs-name">{_e(g.get("name") or "")}</h1>'
+            f'{facts_p}{who_p}</div></section>')
+
+
+def _and(names: List[str]) -> str:
+    names = [n for n in names if n]
+    if len(names) <= 1:
+        return "".join(names)
+    return ", ".join(names[:-1]) + " and " + names[-1]
+
+
+def _tabs(gid: str, current: str, *, board_new: int, chat: bool, live: Optional[Dict[str, Any]]) -> str:
+    from member_portal import _e
+    items = [("", "Home", "home", 0), ("board", "Board", "megaphone", board_new), ("people", "People", "users", 0)]
+    out = []
+    for key, label, icon, n in items:
+        cur = ' aria-current="page"' if key == current else ""
+        badge = f'<span class="gs-n" aria-label="{n} new">{n}</span>' if n else ""
+        out.append(f'<a class="gs-tab" href="{_base(gid, key)}"{cur}>{_ic(icon, 17)}<span>{label}</span>{badge}</a>')
+    if chat:
+        out.append(f'<a class="gs-tab" href="/my/messages/group/{_e(gid)}">{_ic("chat", 17)}<span>Chat</span></a>')
+    if live:
+        out.append(f'<a class="gs-tab" href="/my/groups/live/{_e(live["id"])}">{_ic("video", 17)}<span>Video</span></a>')
+    return f'<nav class="gs-tabs" aria-label="In this group">{"".join(out)}</nav>'
+
+
+def _post_card(p: Dict[str, Any], g: Dict[str, Any], *, leader: bool, me_id: str, size: int, back: str) -> str:
+    from member_portal import _e
+    author = p.get("author") or {}
+    name = display_name(author, g.get("name_display") or "full") if author else "A leader"
+    tag = '<span class="gs-tag pastor">Pastor</span>' if p.get("church") else '<span class="gs-tag">Leader</span>'
+    who = f'{_e(name)} {tag}'
+    meta = _when(p.get("created_at"))
+    if p.get("church"):
+        meta += " · to every group"
+    pinned = bool(p.get("pinned")) and not p.get("church")
+    pin_mark = f'<span class="gs-pinned">{_ic("pin", 14)}Pinned</span>' if pinned else ""
+    title = f'<h3>{_e(p["title"])}</h3>' if p.get("title") else ""
+    pid = _e(p["id"])
+    ack = ""
+    if p.get("ask_ack"):
+        if p.get("i_acked"):
+            ack = f'<span class="gs-ack done">{_ic("check", 15)}You saw this</span>'
+        else:
+            ack = (f'<form method="post" action="/my/groups/post/ack"><input type="hidden" name="id" value="{pid}">'
+                   f'<input type="hidden" name="back" value="{_e(back)}">'
+                   f'<button class="gs-ack" type="submit">{_ic("check", 15)}Got it</button></form>')
+    seen = ""
+    if leader and not p.get("church"):
+        bits = [f"Seen by {int(p.get('seen_n') or 0)} of {size}"]
+        if p.get("ask_ack"):
+            bits.append(f"{int(p.get('acked_n') or 0)} said got it")
+        seen = f'<span class="gs-seen">{" · ".join(bits)}</span>'
+    tools = ""
+    if not p.get("church") and (leader or str(p.get("posted_by") or "") == str(me_id)):
+        pin_form = ""
+        if leader:
+            pin_form = (f'<form method="post" action="/my/groups/post/pin"><input type="hidden" name="id" value="{pid}">'
+                        f'<input type="hidden" name="on" value="{"0" if pinned else "1"}">'
+                        f'<button class="gs-mini" type="submit">{_ic("pin", 15)}{"Unpin" if pinned else "Pin to the top"}</button></form>')
+        tools = (f'<div class="gs-acts">{pin_form}<form method="post" action="/my/groups/post/remove">'
+                 f'<input type="hidden" name="id" value="{pid}"><button class="gs-mini warn" type="submit">Take it down</button>'
+                 f'</form></div>')
+    cls = "gs-card pin" if pinned else ("gs-card church" if p.get("church") else "gs-card")
+    face = _face(author, "gs-av m", g.get("name_display") or "full") if author else '<span class="gs-av m" aria-hidden="true">?</span>'
+    foot = f'<div class="gs-foot">{ack}{seen}</div>' if (ack or seen) else ""
+    return (f'<article class="{cls}"><div class="gs-ph">{face}<span class="gs-t"><b>{who}</b><small>{_e(meta)}</small></span>'
+            f'{pin_mark}</div>{title}<p class="gs-body">{_e(p.get("body") or "")}</p>{foot}{tools}</article>')
+
+
+def _requests_block(reqs: List[Dict[str, Any]], g: Dict[str, Any]) -> str:
+    from member_portal import _e
+    if not reqs:
+        return ""
+    rows = []
+    for r in reqs:
+        p = r["person"]
+        status = "Member" if (p.get("status") or "") in ("active", "member") else "Visitor"
+        bits = [f"{status} since {str(p.get('created_at') or '')[:4]}" if p.get("created_at") else status,
+                f"asked {_when(r.get('asked_at')).lower()}"]
+        name = display_name(p, "full")
+        rid = _e(r["id"])
+        rows.append(
+            f'<div class="gs-req">{_face(p, "gs-av m")}<span class="gs-t"><b>{_e(name)}</b><span>{_e(" · ".join(b for b in bits if b))}</span></span>'
+            f'<div class="gs-acts"><form method="post" action="/my/groups/answer"><input type="hidden" name="id" value="{rid}">'
+            f'<input type="hidden" name="yes" value="0"><button class="gs-btn soft sm" type="submit" aria-label="Not now for {_e(name)}">Not now</button></form>'
+            f'<form method="post" action="/my/groups/answer"><input type="hidden" name="id" value="{rid}">'
+            f'<input type="hidden" name="yes" value="1"><button class="gs-btn sm" type="submit" aria-label="Say yes to {_e(name)}">Say yes</button></form></div></div>')
+    return (f'<section class="gs-list" aria-labelledby="gs-req-h"><div class="gs-head"><b id="gs-req-h">Asking to join</b>'
+            f'<span class="gs-n">{len(reqs)}</span></div>{"".join(rows)}</section>')
+
+
+def _compose(g: Dict[str, Any]) -> str:
+    from member_portal import _e
+    return (f'<form class="gs-compose" id="post" method="post" action="/my/groups/post">'
+            f'<input type="hidden" name="group_id" value="{_e(g["id"])}">'
+            f'<label class="gs-l" for="gs-pt">Post to the Board</label>'
+            f'<input type="text" id="gs-pt" name="title" maxlength="{TITLE_MAX}" placeholder="What\'s it about?">'
+            f'<label class="mp-sr" for="gs-pb">Your post</label>'
+            f'<textarea id="gs-pb" name="body" maxlength="{POST_MAX}" required '
+            f'placeholder="Write it like you\'d say it to the group."></textarea>'
+            f'<label class="gs-check"><input type="checkbox" name="pin" value="1">Pin it to the top</label>'
+            f'<label class="gs-check"><input type="checkbox" name="ack" value="1" checked>Ask everyone for a “Got it”</label>'
+            f'<button class="gs-btn" type="submit">{_ic("send", 16)}Post to {_e(g.get("name") or "the group")}</button>'
+            f'<p class="gs-fine">Everyone in the group sees it on the group\'s Home and Board. It\'s checked before it goes up, like every message.</p>'
+            f'</form>')
+
+
+def render(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], data: Optional[Dict[str, Any]],
+           tab: str = "") -> Tuple[str, int]:
+    """The group's page. (html, status)."""
+    import member_portal_messaging as mpm
+    from member_portal import _e, _shell
+    if data is None:
+        body = ('<a class="mb-back" href="/my/groups">Connect</a>'
+                '<p class="mp-err" role="alert">This group couldn\'t load just now. Please try again in a moment.</p>')
+        return _shell(biz, site, "Group", f"<style>{GROUP_CSS}</style>{body}", tab="connect", who=me), 503
+    if not data:
+        body = ('<a class="mb-back" href="/my/groups">Connect</a><div class="mb-lt"><h1>Not here</h1></div>'
+                '<p class="mp-muted">This group isn\'t running any more, or it\'s by invitation. '
+                'Find another on Connect, or ask the church office.</p>')
+        return _shell(biz, site, "Group", f"<style>{GROUP_CSS}</style>{body}", tab="connect", who=me), 404
+    g, people, leaders, role = data["group"], data["people"], data["leaders"], data.get("role")
+    gid = _e(g["id"])
+    hero = _hero(biz, site, g, people, leaders, bool(role))
+    flash = _flash(request)
+    about = f'<p class="gs-about">{_e(g["description"])}</p>' if g.get("description") else ""
+    if not role:
+        if data.get("asked"):
+            act = (f'<span class="gs-wait">{_ic("clock", 15)}Asked · a leader will say yes</span>'
+                   f'<form method="post" action="/my/groups/withdraw"><input type="hidden" name="group_id" value="{gid}">'
+                   f'<button class="gs-mini" type="submit">Take back my request</button></form>')
+        elif data.get("full"):
+            act = '<p class="mp-muted">This group is full right now. Ask the church office about the next one.</p>'
+        else:
+            label = "Join" if g["join_mode"] == "open" else "Ask to join"
+            note = ("You'll be in right away." if g["join_mode"] == "open"
+                    else "A leader of the group says yes, usually within a day or two.")
+            act = (f'<form method="post" action="/my/groups/ask"><input type="hidden" name="group_id" value="{gid}">'
+                   f'<button class="gs-btn" type="submit">{label}</button></form><p class="gs-fine" style="width:100%">{note}</p>')
+        led = "".join(f'<div class="gs-lc">{_face(p, "gs-av l", "first")}<b>{_e(display_name(p, "first"))}</b><small>Leader</small></div>'
+                      for p in leaders)
+        leads = f'<div class="mb-sh"><h2>Who leads</h2></div><div class="gs-lead">{led}</div>' if led else ""
+        body = (f'<a class="mb-back" href="/my/groups">Connect</a>{hero}{flash}{about}'
+                f'<div class="gs-acts" style="margin-top:18px">{act}</div>{leads}')
+        return _shell(biz, site, g.get("name") or "Group", f"<style>{GROUP_CSS}</style>{body}", tab="connect", who=me), 200
+    leader = role == "leader"
+    posts = data.get("posts") or []
+    me_id = str(me["id"])
+    unread = sum(1 for p in posts if p.get("ask_ack") and not p.get("i_acked"))
+    chat = mpm.turned_on(biz)
+    tabs = _tabs(g["id"], tab, board_new=unread if tab != "board" else 0, chat=chat, live=data.get("live"))
+    back = _base(g["id"], tab)
+    size = len(people)
+    if tab == "board":
+        cards = "".join(_post_card(p, g, leader=leader, me_id=me_id, size=size, back=back) for p in posts)
+        empty = ('<p class="gs-empty">Nothing on the Board yet. When a leader posts, it shows here.</p>' if not cards else "")
+        content = f'{_compose(g) if leader else ""}{cards}{empty}'
+        content += (f'<p class="gs-note">{_ic("lock", 15)}<span>Only the group\'s leaders post here, plus your pastors to every group.'
+                    f'</span></p>')
+    elif tab == "people":
+        mode = g.get("name_display") or "full"
+        lead_cards = "".join(
+            f'<div class="gs-lc">{_face(p, "gs-av l", mode)}<b>{_e(display_name(p, mode))}</b><small>Leader</small></div>'
+            for p in leaders)
+        rows = "".join(
+            f'<div class="gs-row">{_face(p, "gs-av m", mode)}<span class="gs-t"><b>{_e(display_name(p, mode))}'
+            f'{" (you)" if p["id"] == me_id else ""}</b><span>{_e(_since(p.get("joined_on")))}</span></span></div>'
+            for p in people if p["role"] != "leader")
+        members = f'<div class="gs-list">{rows}</div>' if rows else '<p class="gs-empty">No one else has joined yet.</p>'
+        names = ""
+        if leader:
+            names = (f'<div class="gs-card"><div class="gs-ph"><span class="gs-t"><b>Names in this group</b>'
+                     f'<small>You choose. Phone numbers and emails always stay hidden.</small></span></div>'
+                     f'<form method="post" action="/my/groups/names"><input type="hidden" name="group_id" value="{gid}">'
+                     f'<span class="gs-seg" role="group" aria-label="Names in this group">'
+                     f'<button type="submit" name="mode" value="full" aria-pressed="{"true" if mode == "full" else "false"}">Full names</button>'
+                     f'<button type="submit" name="mode" value="first" aria-pressed="{"true" if mode == "first" else "false"}">First names</button>'
+                     f'</span></form></div>')
+        others = sum(1 for p in people if p["role"] != "leader")
+        content = (f'<div class="gs-lead" style="margin-top:4px">{lead_cards}</div>'
+                   f'<h2 style="margin:22px 0 12px">{others} {"person" if others == 1 else "people"} in the group</h2>{members}'
+                   f'<p class="gs-note">{_ic("lock", 15)}<span>Only people in this group see this list. '
+                   f'{"Full names" if mode == "full" else "First names"}, by the leader\'s choice; a teen always shows by first name. '
+                   f'Phone numbers and emails stay hidden.</span></p>{names}')
+        if not leader:
+            content += (f'<form method="post" action="/my/groups" style="margin-top:8px"><input type="hidden" name="group_id" value="{gid}">'
+                        f'<input type="hidden" name="action" value="leave"><button class="gs-mini warn" type="submit">Leave this group</button></form>')
+    else:
+        parts = []
+        if leader:
+            parts.append(_requests_block(data.get("requests") or [], g))
+        pinned = [p for p in posts if p.get("pinned") and not p.get("church")]
+        church_new = [p for p in posts if p.get("church") and not p.get("i_acked")][:1]
+        for p in (pinned[:1] + church_new):
+            parts.append(_post_card(p, g, leader=leader, me_id=me_id, size=size, back=back))
+        when = " · ".join(_e(x) for x in (g.get("meets"), g.get("location")) if x)
+        live = data.get("live") or {}
+        meet = ""
+        if live:
+            label = "Join the video meeting" if live.get("status") == "live" or data.get("host") else "Video starting: waiting for leaders"
+            meet = f'<a class="gs-btn tint sm" href="/my/groups/live/{_e(live["id"])}">{_ic("video", 15)}{label}</a>'
+        elif data.get("host"):
+            meet = (f'<form method="post" action="/my/groups/live/start"><input type="hidden" name="group_id" value="{gid}">'
+                    f'<input type="hidden" name="mode" value="meeting">'
+                    f'<button class="gs-btn soft sm" type="submit">{_ic("video", 15)}Open a video room</button></form>')
+        if when or meet:
+            parts.append(f'<section class="gs-card" aria-label="When we meet"><div class="gs-meet">'
+                         f'<span class="gs-disc coral">{_ic("calendar", 20)}</span><span class="gs-t"><b>When we meet</b>'
+                         f'<span>{when or "Your leaders will share the next time"}</span></span></div>'
+                         f'{f"<div class=gs-acts>{meet}</div>" if meet else ""}</section>')
+        latest = [p for p in posts if p not in pinned and p not in church_new][:2]
+        if latest:
+            parts.append(f'<div class="mb-sh"><h2>From the Board</h2><a href="{_base(g["id"], "board")}">See all</a></div>')
+            parts.extend(_post_card(p, g, leader=leader, me_id=me_id, size=size, back=back) for p in latest)
+        elif not pinned and not church_new:
+            parts.append(f'<p class="gs-empty">Nothing on the Board yet.'
+                         f'{" Post the first word to your group." if leader else " When a leader posts, it shows here."}</p>')
+        doors = []
+        if leader:
+            doors.append(f'<a class="gs-row" href="{_base(g["id"], "board")}#post"><span class="gs-disc">{_ic("megaphone", 20)}</span>'
+                         f'<span class="gs-t"><b>Post to the Board</b><span>Everyone in the group sees it</span></span>{_ic("chevron", 18)}</a>')
+        if chat:
+            doors.append(f'<a class="gs-row" href="/my/messages/group/{gid}"><span class="gs-disc violet">{_ic("chat", 20)}</span>'
+                         f'<span class="gs-t"><b>Group chat</b><span>Talk with everyone in the group</span></span>{_ic("chevron", 18)}</a>')
+        doors.append(f'<a class="gs-row" href="{_base(g["id"], "people")}"><span class="gs-disc gold">{_ic("users", 20)}</span>'
+                     f'<span class="gs-t"><b>People</b><span>{size} in the group</span></span>{_ic("chevron", 18)}</a>')
+        parts.append(f'<div class="mb-sh"><h2>In the group</h2></div><div class="gs-list">{"".join(doors)}</div>')
+        if not chat:
+            parts.append(f'<p class="gs-note">{_ic("chat", 15)}<span>The group chat opens when '
+                         f'{_e(biz.get("name") or "the church")} turns on messaging.</span></p>')
+        content = "".join(parts)
+    page = f'<a class="mb-back" href="/my/groups">Connect</a>{hero}{tabs}{flash}<div style="margin-top:16px">{content}</div>'
+    return _shell(biz, site, g.get("name") or "Group", f"<style>{GROUP_CSS}</style>{page}", tab="connect", who=me), 200
+
+
+async def serve(request: Request, biz: Dict[str, Any], site, me: Dict[str, Any], sub: str) -> Tuple[str, int]:
+    """GET /my/groups/<id>[/board|/people]."""
+    import asyncio
+    rest = sub[len("/my/groups/"):].strip("/")
+    gid, _, tab = rest.partition("/")
+    if not UUID.match(gid) or tab not in TABS:
+        return render(biz, site, request, me, {}, "")
+    data = await asyncio.to_thread(space, str(biz["id"]), gid, me, tab=tab)
+    if data and data.get("role") and tab in ("", "board"):
+        shown = data.get("posts") or []
+        if tab == "":
+            shown = [p for p in shown if (p.get("pinned") and not p.get("church"))][:1] + \
+                    [p for p in shown if p.get("church") and not p.get("i_acked")][:1] + shown[:3]
+        await asyncio.to_thread(mark_seen, str(biz["id"]), str(me["id"]), sorted({str(p["id"]) for p in shown}))
+    return render(biz, site, request, me, data, tab)
+
+
+# ─── routes ──────────────────────────────────────────────────────────
+
+_BACK_RE = re.compile(r"^/my/groups(/[0-9a-fA-F-]{36}(/(board|people))?)?$")
+
+
+def _go(target: str, **q: str) -> RedirectResponse:
+    from member_portal import _SECURE_HEADERS
+    if not _BACK_RE.match(target or ""):
+        target = "/my/groups"
+    qs = "&".join(f"{k}={v}" for k, v in q.items() if v)
+    return RedirectResponse(f"{target}?{qs}" if qs else target, status_code=303, headers=_SECURE_HEADERS)
+
+
+async def _who(request: Request, back: str):
+    """(church, me, form) for a POST, or a redirect when it can't go ahead."""
+    import member_portal_church as mpc
+    church, me, unavailable = await mpc._signed_in(request)
+    if unavailable:
+        return None, None, None, _go(back, err="preview" if unavailable == "preview" else "error")
+    if not me:
+        return None, None, None, mpc._back("/my")
+    if not mpc._allowed(church, me):
+        return None, None, None, _go(back, err="slow")
+    form = await request.form()
+    return church, me, form, None
+
+
+def _gid(form) -> str:
+    v = str(form.get("group_id") or "")
+    return v if UUID.match(v) else ""
+
+
+@router.post("/my/groups/ask", include_in_schema=False)
+async def ask_route(request: Request):
+    import asyncio
+    church, me, form, stop = await _who(request, "/my/groups")
+    if stop:
+        return stop
+    gid = _gid(form)
+    if not gid:
+        return _go("/my/groups", err="group_gone")
+    ok, code = await asyncio.to_thread(ask, church["business"], me, gid)
+    if code == "joined":
+        return _go(_base(gid), done="joined")
+    return _go(_base(gid) if ok or code in ("group_full",) else "/my/groups", **({"done": code} if ok else {"err": code}))
+
+
+@router.post("/my/groups/withdraw", include_in_schema=False)
+async def withdraw_route(request: Request):
+    import asyncio
+    church, me, form, stop = await _who(request, "/my/groups")
+    if stop:
+        return stop
+    gid = _gid(form)
+    ok, code = await asyncio.to_thread(withdraw, church["business"]["id"], me, gid)
+    return _go(_base(gid) if gid else "/my/groups", **({"done": code} if ok else {"err": code}))
+
+
+@router.post("/my/groups/answer", include_in_schema=False)
+async def answer_route(request: Request):
+    import asyncio
+    church, me, form, stop = await _who(request, "/my/groups")
+    if stop:
+        return stop
+    yes = str(form.get("yes") or "") == "1"
+    ok, code, gid = await asyncio.to_thread(answer, church["business"], me, str(form.get("id") or ""), yes)
+    return _go(_base(gid) if gid else "/my/groups", **({"done": code} if ok else {"err": code}))
+
+
+@router.post("/my/groups/post", include_in_schema=False)
+async def post_route(request: Request):
+    church, me, form, stop = await _who(request, "/my/groups")
+    if stop:
+        return stop
+    gid = _gid(form)
+    if not gid:
+        return _go("/my/groups", err="group_gone")
+    ok, code = await create_post(church["business"], me, gid, str(form.get("title") or ""), str(form.get("body") or ""),
+                                 str(form.get("pin") or "") == "1", str(form.get("ack") or "") == "1")
+    return _go(_base(gid, "board"), **({"done": code} if ok else {"err": code}))
+
+
+def _back_of(form, gid: str) -> str:
+    b = str(form.get("back") or "")
+    return b if _BACK_RE.match(b) else (_base(gid, "board") if gid else "/my/groups")
+
+
+@router.post("/my/groups/post/ack", include_in_schema=False)
+async def ack_route(request: Request):
+    import asyncio
+    church, me, form, stop = await _who(request, "/my/groups")
+    if stop:
+        return stop
+    ok, code, gid = await asyncio.to_thread(ack, church["business"]["id"], me, str(form.get("id") or ""))
+    return _go(_back_of(form, gid), **({} if ok else {"err": code}))
+
+
+@router.post("/my/groups/post/remove", include_in_schema=False)
+async def remove_route(request: Request):
+    import asyncio
+    church, me, form, stop = await _who(request, "/my/groups")
+    if stop:
+        return stop
+    ok, code, gid = await asyncio.to_thread(remove_post, church["business"]["id"], me, str(form.get("id") or ""))
+    return _go(_base(gid, "board") if gid else "/my/groups", **({"done": code} if ok else {"err": code}))
+
+
+@router.post("/my/groups/post/pin", include_in_schema=False)
+async def pin_route(request: Request):
+    import asyncio
+    church, me, form, stop = await _who(request, "/my/groups")
+    if stop:
+        return stop
+    ok, code, gid = await asyncio.to_thread(pin, church["business"]["id"], me, str(form.get("id") or ""),
+                                            str(form.get("on") or "") == "1")
+    return _go(_base(gid, "board") if gid else "/my/groups", **({"done": code} if ok else {"err": code}))
+
+
+@router.post("/my/groups/names", include_in_schema=False)
+async def names_route(request: Request):
+    import asyncio
+    church, me, form, stop = await _who(request, "/my/groups")
+    if stop:
+        return stop
+    gid = _gid(form)
+    if not gid:
+        return _go("/my/groups", err="group_gone")
+    ok, code = await asyncio.to_thread(set_names, church["business"]["id"], me, gid, str(form.get("mode") or ""))
+    return _go(_base(gid, "people"), **({"done": code} if ok else {"err": code}))

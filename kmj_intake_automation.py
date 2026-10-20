@@ -378,6 +378,10 @@ from member_portal import router as member_portal_router
 app.include_router(member_portal_router)
 from member_portal_church import router as member_portal_church_router
 app.include_router(member_portal_church_router)
+# A group's own page in the member app: its Board, who's in it, asking to
+# join (GET /my/groups/<id> is member_portal.serve's).
+from member_portal_groups import router as member_portal_groups_router
+app.include_router(member_portal_groups_router)
 # Classes in the church member app: one-tap join (GET /my/classes is member_portal.serve's).
 from member_portal_classes import router as member_classes_router
 app.include_router(member_classes_router)

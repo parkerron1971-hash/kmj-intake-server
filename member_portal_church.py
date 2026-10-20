@@ -76,6 +76,17 @@ DONE = {
     "group_interest": "Thanks. The church office knows you'd like to join a group and can reach out when one starts.",
     "class_joined": "You're in. Your class is below, and your teacher sees you on the list.",
     "class_already": "You're already in that class. It's below.",
+    # A group's own page (member_portal_groups.py).
+    "asked": "Asked. A leader of the group will say yes soon.",
+    "withdrawn": "Your request is taken back.",
+    "said_yes": "They're in. They'll see the group now.",
+    "not_now": "Okay. They aren't added, and the church office can help them find another group.",
+    "post_up": "Posted to the Board. Everyone in the group sees it.",
+    "post_down": "That post is taken down.",
+    "pinned": "Pinned to the top.",
+    "unpinned": "Unpinned.",
+    "names_full": "The group shows full names now.",
+    "names_first": "The group shows first names now.",
 }
 ERRORS = {
     "full": "That one is full now.",
@@ -124,6 +135,11 @@ ERRORS = {
     "not_enabled": "Ask the church office to turn on messaging for you.",
     "no_birthdate": "Messaging needs your birthdate on your record.",
     "declined": "You ignored this request.",
+    "group_invite": "This group is by invitation. Ask one of its leaders or the church office.",
+    "group_ask": "This group's leaders say yes to new people. Ask to join from the group's page.",
+    "not_group_leader": "Only the group's leaders can do that.",
+    "not_in_group": "That's for people in the group.",
+    "answered": "Someone already answered that request.",
 }
 
 
@@ -379,11 +395,15 @@ def groups_for(business_id: str, me: Dict[str, Any]) -> Optional[Dict[str, List[
     read (the page says "try again" rather than showing no groups)."""
     groups = sb_clients.sb_get_as_service(
         f"/groups?business_id=eq.{business_id}&active=eq.true"
-        f"&select=id,name,kind,description,meets,location,capacity,open_to_join,youth&order=name.asc&limit=500")
+        f"&select=id,name,kind,description,meets,location,capacity,open_to_join,join_mode,youth&order=name.asc&limit=500")
     members = sb_clients.sb_get_as_service(
         f"/group_members?business_id=eq.{business_id}&select=group_id,contact_id,role,can_host_live&limit=20000")
     if groups is None or members is None:
         return None
+    # The groups this person already asked to join (member_portal_groups);
+    # a failed read only loses the "Asked" mark.
+    import member_portal_groups as mpg
+    asked = mpg.my_requests(business_id, str(me["id"])) or set()
     leader_ids = sorted({str(m["contact_id"]) for m in members if m.get("role") == "leader"})
     names: Dict[str, str] = {}
     for i in range(0, len(leader_ids), 150):
@@ -408,10 +428,11 @@ def groups_for(business_id: str, me: Dict[str, Any]) -> Optional[Dict[str, List[
             "leaders": [names[str(m["contact_id"])] for m in members
                         if str(m["group_id"]) == gid and m.get("role") == "leader" and str(m["contact_id"]) in names],
             "full": bool(g.get("capacity")) and count.get(gid, 0) >= int(g["capacity"]),
+            "mode": join_mode(g), "asked": gid in asked,
         }
         if gid in my_role:
             mine.append({**item, "role": my_role[gid], "host": gid in my_host, "youth": bool(g.get("youth"))})
-        elif g.get("open_to_join") and not item["full"]:
+        elif item["mode"] != "invite" and not item["full"]:
             open_.append(item)
     # Live group meetings (member_portal_group_live.py) for the groups
     # this person is in. A failed read only hides the Join buttons.
@@ -423,17 +444,37 @@ def groups_for(business_id: str, me: Dict[str, Any]) -> Optional[Dict[str, List[
     return {"mine": mine, "open": open_}
 
 
+def join_mode(g: Dict[str, Any]) -> str:
+    """open | ask | invite (groups.join_mode, 2026-10-20). A row read without
+    the column keeps the older rule: open_to_join means join right away."""
+    mode = g.get("join_mode")
+    if mode in ("open", "ask", "invite"):
+        return mode
+    return "open" if g.get("open_to_join") else "invite"
+
+
 def member_join(business_id: str, me: Dict[str, Any], group_id: str) -> Tuple[bool, str]:
+    """Join a group that lets people straight in. A group whose leaders say
+    yes is asked from its page instead (member_portal_groups.ask)."""
     rows = sb_clients.sb_get_as_service(
         f"/groups?id=eq.{quote(group_id, safe='')}&business_id=eq.{business_id}"
-        f"&select=id,active,open_to_join,capacity&limit=1")
+        f"&select=id,active,open_to_join,join_mode,capacity&limit=1")
     if rows is None:
         return False, "error"
     if not rows or not rows[0].get("active"):
         return False, "group_gone"
     g = rows[0]
-    if not g.get("open_to_join"):
+    mode = join_mode(g)
+    if mode == "invite":
         return False, "group_closed"
+    if mode == "ask":
+        return False, "group_ask"
+    return add_member(business_id, me, g)
+
+
+def add_member(business_id: str, me: Dict[str, Any], g: Dict[str, Any]) -> Tuple[bool, str]:
+    """Put this person in the group as a member: room permitting, and
+    harmless when they're already in."""
     if g.get("capacity"):
         members = sb_clients.sb_get_as_service(f"/group_members?group_id=eq.{g['id']}&select=contact_id&limit=10001")
         if members is None:
@@ -482,18 +523,27 @@ def _group_card(g: Dict[str, Any], action: str, pal: Dict[str, str], pool: Optio
     pic, look = photos.choose(biz or {}, f"group:{g['id']}", pool or [], title=g.get("name") or "", used=used)
     import member_app_samples as samples
     sample = ui.sample_tag() if samples.is_sample(g) else ""
+    # The group's own page (member_portal_groups); a preview's sample has none.
+    page = "" if sample else f"/my/groups/{gid}"
+    name_html = (f'<a href="{page}" style="color:inherit;text-decoration:none">{_e(g.get("name") or "")}</a>'
+                 if page else _e(g.get("name") or ""))
     picture = ui.picture(pic, look, "youth" if g.get("youth") else "groups")
     facts = " · ".join(_e(x) for x in (g.get("meets"), g.get("location")) if x)
     leaders = g.get("leaders") or []
     if action == "join":
         about = f'<p>{_e(g["about"])}</p>' if g.get("about") else ""
         led = f'<span>Led by {_e(", ".join(leaders))}</span>' if leaders else ""
+        if g.get("asked") and page:
+            # Asked already: the group's page shows where it stands.
+            go = (f'<a class="mp-go mp-go-2" href="{page}" aria-describedby="{title_id}">'
+                  f'{ui.icon("clock", 16)}Asked · waiting</a>')
+        else:
+            label = "Ask to join" if g.get("mode") == "ask" else "Join"
+            go = (f'<form method="post" action="/my/groups/ask"><input type="hidden" name="group_id" value="{gid}">'
+                  f'<button class="mp-go" type="submit" aria-describedby="{title_id}">{label}</button></form>')
         return (f'<article class="mb-find" aria-labelledby="{title_id}"><span class="mb-find-p">{picture}{sample}</span>'
-                f'<div class="mb-find-b"><h3 id="{title_id}">{_e(g.get("name") or "")}</h3>'
-                f'{f"<span>{facts}</span>" if facts else ""}{led}{about}'
-                f'<form method="post" action="/my/groups"><input type="hidden" name="group_id" value="{gid}">'
-                f'<input type="hidden" name="action" value="join">'
-                f'<button class="mp-go" type="submit" aria-describedby="{title_id}">Join</button></form></div></article>')
+                f'<div class="mb-find-b"><h3 id="{title_id}">{name_html}</h3>'
+                f'{f"<span>{facts}</span>" if facts else ""}{led}{about}{go}</div></article>')
     live = g.get("live") or {}
     if live.get("status") == "live":
         chip = '<span class="mb-live-badge"><span class="mb-live-dot" aria-hidden="true"></span>Meeting now</span>'
@@ -521,6 +571,9 @@ def _group_card(g: Dict[str, Any], action: str, pal: Dict[str, str], pool: Optio
                    'approved adult leader joins.</p>' if g.get("youth") else ''))
     if g.get("chat_on"):
         meet += f'<a class="mp-go mp-go-2" href="/my/messages/group/{gid}" aria-describedby="{title_id}">Open chat</a>'
+    # The group's own page (member_portal_groups): its Board, who's in it.
+    if page:
+        meet = f'<a class="mp-go" href="{page}" aria-describedby="{title_id}">Open the group</a>' + meet
     leave = ""
     if g.get("role") != "leader":
         leave = (f'<form method="post" action="/my/groups"><input type="hidden" name="group_id" value="{gid}">'
@@ -529,7 +582,7 @@ def _group_card(g: Dict[str, Any], action: str, pal: Dict[str, str], pool: Optio
     about = f'<div class="mb-grp-more"><p>{_e(g["about"])}</p></div>' if g.get("about") else ""
     return f"""<article class="mb-grp mp-occ" aria-labelledby="{title_id}">
   <div class="mb-grp-top"><span class="mb-grp-pic">{picture}</span>
-  <div class="mb-grp-t"><h3 id="{title_id}">{_e(g.get("name") or "")}{sample}</h3>{f'<span>{facts}</span>' if facts else ''}{chip}</div></div>
+  <div class="mb-grp-t"><h3 id="{title_id}">{name_html}{sample}</h3>{f'<span>{facts}</span>' if facts else ''}{chip}</div></div>
   {about}
   <div class="mp-actions">{meet}{leave}</div>
 </article>"""
@@ -850,7 +903,7 @@ def week_cards(occasions: Optional[List[Dict[str, Any]]],
             break
     for g in (groups or {}).get("mine", [])[:3]:
         led = ", ".join(g.get("leaders") or [])
-        href = f"/my/groups/live/{_e(g['live']['id'])}" if g.get("live") else "/my/groups"
+        href = f"/my/groups/live/{_e(g['live']['id'])}" if g.get("live") else f"/my/groups/{_e(g['id'])}"
         tab = ('<span class="mb-datebox" aria-hidden="true" style="width:auto;padding:6px 9px"><small>Group</small></span>')
         line = ('<span class="mb-mine">Meeting now</span>' if g.get("live") else
                 '<span class="mb-mine">You lead</span>' if g.get("role") == "leader" else
@@ -1055,8 +1108,15 @@ async def groups(request: Request):
         return _back("/my/groups", err="group_gone")
     if not _allowed(church, me):
         return _back("/my/groups", err="slow")
-    fn = member_join if action == "join" else member_leave
-    ok, code = await asyncio.to_thread(fn, church["business"]["id"], me, group_id)
+    if action == "join":
+        # Joining goes the group's way: in right away, or asked
+        # (member_portal_groups.ask), and lands on the group's page.
+        import member_portal_groups as mpg
+        ok, code = await asyncio.to_thread(mpg.ask, church["business"], me, group_id)
+        if ok:
+            return mpg._go(f"/my/groups/{group_id}", done=code)
+        return _back("/my/groups", err=code)
+    ok, code = await asyncio.to_thread(member_leave, church["business"]["id"], me, group_id)
     return _back("/my/groups", **({"done": code} if ok else {"err": code}))
 
 
