@@ -189,6 +189,7 @@ jobs:
           node __tests__/member_safety_officers_db.mjs
           node __tests__/group_space_db.mjs
           node __tests__/group_chat_db.mjs
+          node __tests__/leaders_room_db.mjs
           node __tests__/worship_songs_db.mjs
           node __tests__/worship_show_db.mjs
           node __tests__/worship_media_db.mjs

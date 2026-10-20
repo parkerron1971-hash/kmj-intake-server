@@ -1187,8 +1187,12 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
         html, status = mgl.render_meeting(biz, site, me, s, g, m)
         return _page(html, status)
     if sub == "/my/groups":
+        import member_portal_messaging as mpm
         data = fill(await asyncio.to_thread(mpc.groups_for, biz["id"], me), "groups")
-        return _page(mpc.render_groups(biz, site, request, data, who=me))
+        # The All group leaders room's door, for the people in it.
+        room = (await asyncio.to_thread(mpm.in_leaders_room, biz["id"], str(me["id"]))
+                if data is not None and mpm.turned_on(biz) else False)
+        return _page(mpc.render_groups(biz, site, request, data, who=me, room=bool(room)))
     # A group's own page (member_portal_groups): Home, Board, People. The
     # owner's preview reads it as the member they chose; nothing saves.
     if sub.startswith("/my/groups/"):

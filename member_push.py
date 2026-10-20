@@ -532,13 +532,17 @@ def _tell_chat(business, t, acc, sender_id) -> None:
     if not who:
         return
     title = "New message"
-    if t.get("kind") != "direct" and t.get("group_id"):
+    if t.get("kind") == "leaders":
+        import member_portal_messaging as mpm2
+        title = f"New message in {mpm2.LEADERS_ROOM}"
+    elif t.get("kind") != "direct" and t.get("group_id"):
         g = sb_clients.sb_get_as_service(
             f"/groups?id=eq.{t['group_id']}&business_id=eq.{business['id']}&select=name&limit=1") or []
         if g and g[0].get("name"):
             title = f"New message in {g[0]['name']}"
     # A group's chat lives inside the group (member_portal_groups).
-    url = f"/my/groups/{t['group_id']}/chat" if t.get("kind") == "group" and t.get("group_id") else f"/my/messages/{t['id']}"
+    url = (f"/my/groups/{t['group_id']}/chat" if t.get("kind") == "group" and t.get("group_id")
+           else "/my/groups/leaders" if t.get("kind") == "leaders" else f"/my/messages/{t['id']}")
     send(business, "messages", title=title, body="Open the app to read it.",
          url=url, contact_ids=who, tag=f"chat-{t['id']}")
 

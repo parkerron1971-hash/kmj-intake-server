@@ -455,7 +455,8 @@ def _file(i: Dict[str, Any], biz: Dict[str, Any], me: Dict[str, Any]) -> str:
 def render(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], my_roles: List[Dict[str, Any]],
            view: Optional[Dict[str, Any]], selected: str = "", *, now: Optional[datetime] = None,
            prayer: Optional[Dict[str, Any]] = None, tab: str = "people",
-           targets: Optional[List[Dict[str, Any]]] = None, fams: int = 0, safety: Optional[int] = None) -> str:
+           targets: Optional[List[Dict[str, Any]]] = None, fams: int = 0, safety: Optional[int] = None,
+           room: bool = False) -> str:
     from member_portal import _shell
     import member_portal_safety as mps
     now = now or datetime.now(timezone.utc)
@@ -475,7 +476,7 @@ def render(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], my_r
     if active and prays and (tab == "prayer" or not people):
         waiting = sum(1 for p in (prayer or {}).get("requests") or [] if not p.get("prayed_at"))
         seg = _seg("prayer", people, True, waiting, fams)
-        body = f'{flash}{head}{invites}{mps.card(safety)}{seg}{_prayer_body(prayer, biz, targets or [], now)}'
+        body = f'{flash}{head}{invites}{mps.card(safety)}{_room_door(room)}{seg}{_prayer_body(prayer, biz, targets or [], now)}'
         return _shell(biz, site, "Prayer", f'<style>{LEAD_CSS}{mps.SAFETY_CSS}</style><div class="ld-wide">{body}</div>',
                       tab="lead", who=me)
     seg = ""
@@ -510,10 +511,21 @@ def render(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], my_r
               if shown else '<section class="ld-file"></section>')
     grid = f'<div class="ld-grid{" has-sel" if sel else ""}">{listing}{detail}</div>'
     title = sel["person"]["name"] if sel else "Lead"
-    door = "" if sel else mps.card(safety)
+    door = "" if sel else mps.card(safety) + _room_door(room)
     return _shell(biz, site, title,
                   f'<style>{LEAD_CSS}{mps.SAFETY_CSS}</style><div class="ld-wide">{flash}{head}{invites}{door}{grid}</div>',
                   tab="lead", who=me, back=("/my/lead", "Lead") if sel else None)
+
+
+def _room_door(room: bool) -> str:
+    """The All group leaders room's door (member_portal_groups), for the
+    pastors and group leaders in it."""
+    if not room:
+        return ""
+    from member_app_ui import icon
+    return (f'<a class="sf-door" href="/my/groups/leaders">{icon("users", 20)}'
+            f'<span><b>All group leaders</b><small>Every group leader and your pastors, in one chat</small></span>'
+            f'{icon("chevron", 18)}</a>')
 
 
 async def serve(request: Request, biz: Dict[str, Any], site, me: Dict[str, Any], sub: str):
@@ -547,8 +559,11 @@ async def serve(request: Request, biz: Dict[str, Any], site, me: Dict[str, Any],
             targets = await asyncio.to_thread(church_prayer.pass_targets, biz["id"], me) or []
     safety = await asyncio.to_thread(mps.waiting, biz["id"], str(me["id"])) if any(
         r["status"] == "active" for r in my_roles) else None
+    import member_portal_messaging as mpm
+    room = (await asyncio.to_thread(mpm.in_leaders_room, biz["id"], str(me["id"]))
+            if mpm.turned_on(biz) and any(r["status"] == "active" for r in my_roles) else False)
     html_out = render(biz, site, request, me, my_roles, view, selected, prayer=prayer, tab=tab, targets=targets,
-                      fams=fams, safety=safety)
+                      fams=fams, safety=safety, room=bool(room))
     ok = (prayer is not None) if tab == "prayer" else (view is not None)
     return html_out, 200 if ok or not my_roles else 503
 
