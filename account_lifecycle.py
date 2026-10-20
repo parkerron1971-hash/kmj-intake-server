@@ -98,6 +98,8 @@ HTTP_TIMEOUT = httpx.Timeout(connect=10.0, read=60.0, write=30.0, pool=10.0)
 # belong here with a reason.
 
 EXPORT_EXCLUDED: Dict[str, str] = {
+    "worship_screens": "each screen's private link (a token); a copied link would show another church's Sunday, so screens are added again after a restore; cascade on business deletion",
+    "worship_live": "what was on screen at one moment of a service; nothing to restore; cascade on business deletion",
     "academy_present_sessions": "a class presenting right now: a short-lived TV code and a copy of the slides without teacher notes (the deck itself is exported in academy_decks); expires within hours; cascade on business deletion",
     "chief_rail_practice": "the rail's practice record (chief_rail.py): a records-only answer next to Chief's, for deciding which question shapes may skip the full turn; platform tuning data, derived from records the export already carries; cascade on business deletion",
     "chief_reflection_runs": "nightly brain-pass run log (status, tokens, cost); operations metadata, not the business's content; the digest it wrote is exported in business_brain_versions; cascade on business deletion",
@@ -185,6 +187,9 @@ BUSINESS_CHILD_TABLES: List[str] = [
     # The church's song library for Sunday screens: each song's words,
     # orders and how often it was sung. Nothing points at it.
     "worship_songs",
+    # Sundays on screens: the services (their order, notes and the songs
+    # they point at; see _IMPORT_SKIP) and the look every slide wears.
+    "worship_services", "worship_settings",
     # The church's pictures and videos for Sunday's screens: the rows (name,
     # type, size, link); the files themselves are in business-assets. Not
     # re-imported (see _IMPORT_SKIP).
@@ -809,6 +814,9 @@ _IMPORT_SKIP = {
     # business's accounts and photos. The owner sets the desk up again; the
     # export keeps the old settings for reference.
     "marketing_desks",
+    # A service's items point at song ids the import mints anew; the
+    # services stay in the archive, readable, and are planned again.
+    "worship_services",
     # Rows that point at files under the OLD business's storage prefix; a
     # copy would show another account's files and lose them when it goes.
     "worship_media",

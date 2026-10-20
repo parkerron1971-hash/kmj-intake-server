@@ -31,12 +31,16 @@
       "payments",
       "projects",
       "queue",
+      "run-sunday",
+      "screens",
       "sessions",
       "shepherding",
       "sms",
       "songs",
+      "sundays",
       "tasks",
-      "trust"
+      "trust",
+      "worship-media"
     ],
     "grow": [
       "briefing",

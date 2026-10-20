@@ -355,6 +355,10 @@ def test_chief_answers_who_shepherds_the_carters_never_a_notes_words(db, monkeyp
     monkeypatch.setattr(A, "_caller_role", lambda b: "manager")
     hid = _drifting_carters(db)
     _open_signal(db, hid)
+    # Jaylen's age is read on this file's pinned NOW (Oct 19); the shared
+    # fixture's born(9) counts from the machine's real date, so from Oct 20
+    # on he'd be 8 here. A fixed birthday keeps him 9 on NOW.
+    next(p for p in db.t["contacts"] if p["id"] == JAYLEN)["birthdate"] = "2017-03-01"
     db.t["church_shepherd_touches"].append({"id": "t1", "business_id": BIZ, "household_id": hid,
                                             "shepherd_contact_id": MARCUS, "kind": "call", "note": "JOB MOVED TO SUNDAYS",
                                             "needs_pastor": False, "created_at": "2026-09-10T20:00:00+00:00"})
