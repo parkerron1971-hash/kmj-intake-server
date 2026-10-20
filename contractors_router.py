@@ -215,7 +215,7 @@ async def onboarding_link(contractor_id: str,
             from email_sender import send_via_resend
             await send_via_resend(
                 to_email=c["email"], to_name=c.get("name"),
-                from_email="payments@solutionist.studio", from_name="Solutionist System",
+                from_email="payments@mysolutionist.app", from_name="Solutionist System",
                 reply_to=None,
                 subject=f"{biz_name} wants to pay you — set up your payout account",
                 body=(f"{biz_name} uses Solutionist System to send contractor payments.\n\n"

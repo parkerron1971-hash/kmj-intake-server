@@ -178,7 +178,7 @@ def _platform_from_addresses() -> set:
         DEFAULT_FROM_EMAIL,
         "hello@mysolutionist.app",
         "receipts@mysolutionist.app",
-        "reports@solutionist.studio",
+        "reports@mysolutionist.app",
         (os.environ.get("RESEND_FROM_EMAIL") or "").strip().lower(),
     }
     return {a for a in addrs if a}
