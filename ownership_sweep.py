@@ -79,6 +79,12 @@ HINTS = (
     # caller never supplies it. Refuses (404) on an unknown, removed or
     # replaced link, and opens only what that screen shows.
     "screen_from_token",
+    # A church's ChurchSavvy invite link (worship_team.py): its token names
+    # exactly one invite row, and the church comes from that row — the
+    # caller never supplies it. Refuses (410/409) a link that was taken
+    # back, one someone else already took, or one a month old, and opens
+    # nothing but joining that one church's team.
+    "invite_from_token",
 )
 
 BIZ_PARAMS = ("business_id", "biz", "biz_id", "businessId")

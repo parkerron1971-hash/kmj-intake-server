@@ -333,6 +333,9 @@ from worship_show_router import router as worship_show_router
 app.include_router(worship_show_router)
 from worship_media_router import router as worship_media_router
 app.include_router(worship_media_router)
+# Who does what in a church's ChurchSavvy: planner, worship leader, booth, admin.
+from worship_team import router as worship_team_router
+app.include_router(worship_team_router)
 # Joining a free class from its public page (POST <class page>/join).
 from academy_join import router as academy_join_router
 app.include_router(academy_join_router)

@@ -325,7 +325,11 @@ DEFAULT_LOOK: Dict[str, Any] = {
     "brand": {"primary": None, "accent": None, "background": None, "logo_url": None},
     # The church's own quick screens (Amen, Giving, Please stand): see clean_quick.
     "quick": [],
+    # ChurchSavvy's own colors around the slides, the church's starting choice
+    # (each person can switch theirs): dark, light, or light to plan and dark to run.
+    "workspace": "dark",
 }
+WORKSPACES = ("dark", "light", "split")
 
 
 def clean_look(raw: Any) -> Dict[str, Any]:
@@ -376,11 +380,14 @@ def clean_look(raw: Any) -> Dict[str, Any]:
     if logo not in (None, "") and (not isinstance(logo, str) or not _HTTPS.match(logo)):
         raise ValueError("The logo must be an https:// link")
     brand["logo_url"] = logo or None
+    workspace = raw.get("workspace") or "dark"
+    if workspace not in WORKSPACES:
+        raise ValueError("Workspace colors are dark, light, or light to plan and dark to run")
     return {
         "background": {"kind": kind, "color": color, "url": url, "dim": round(float(dim), 2)},
         "size": size, "caps": bool(raw.get("caps")), "align": align, "font": font or None,
         "translation": tr, "lower_third": {"style": style, "position": position},
-        "brand": brand, "quick": clean_quick(raw.get("quick")),
+        "brand": brand, "quick": clean_quick(raw.get("quick")), "workspace": workspace,
     }
 
 

@@ -26,6 +26,7 @@ from fastapi.testclient import TestClient
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 import sb_clients
+import worship_team
 import worship_media_router as wm
 from auth_supabase import AuthedUser, require_user
 
@@ -92,13 +93,8 @@ def api(monkeypatch):
     monkeypatch.setattr(wm, "read_start", lambda name, limit: (store["files"].get(name) or b"")[:limit] if limit else store["files"].get(name))
     monkeypatch.setattr(wm, "remove_object", lambda name: store["removed"].append(name))
 
-    def fake_access(biz, user, min_role="viewer"):
-        role = SEATS.get((user.id, biz))
-        if not role:
-            raise HTTPException(404, "Not Found")
-        return role
-
-    monkeypatch.setattr(wm, "assert_access", fake_access)
+    # Seats; nobody here is on a church's ChurchSavvy team (test_worship_team.py is).
+    monkeypatch.setattr(worship_team, "role_of", lambda biz, uid: SEATS.get((uid, biz)))
     who = {"user": PEOPLE["owner"]}
     app = FastAPI()
     app.include_router(wm.router)

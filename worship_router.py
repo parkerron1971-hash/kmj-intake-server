@@ -18,9 +18,11 @@
 # owner reaches any of this, and everyone else gets the same 404 as a route
 # that doesn't exist.
 #
-# Seats: anyone with a seat at the church reads; the owner, an admin or a
-# manager writes (the same STAFF_ROLES as devotionals). Table is
-# server-only (supabase/APPLY-2026-10-19-worship-songs.sql).
+# The team (worship_team.py): anyone on it, or with a seat at the church,
+# reads; a planner, the worship leader or an admin changes the library
+# (the owner, an admin or a manager of the church is an admin); the booth
+# fixes a typo in the words of the slide that's up, and nothing else.
+# Table is server-only (supabase/APPLY-2026-10-19-worship-songs.sql).
 
 from __future__ import annotations
 
@@ -43,12 +45,11 @@ import worship_lyrics as wl
 import worship_proclaim as wp
 import worship_scripture as ws
 from auth_supabase import AuthedUser, require_user
-from business_access import assert_access
+from worship_team import can, can_all, require, roles_of, ROLES
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/worship", tags=["worship"])
 
-STAFF_ROLES = ("owner", "admin", "manager")
 MAX_WORDS_CHARS = 20000
 MAX_IMPORT_FILES = 8
 MAX_IMPORT_BYTES = 64 * 1024 * 1024  # PresentationManager.db at a busy church is ~26 MB
@@ -98,11 +99,9 @@ def _q(v: Any) -> str:
     return quote(str(v), safe="")
 
 
-def _staff(biz: str, user: AuthedUser) -> str:
-    role = assert_access(biz, user)
-    if role not in STAFF_ROLES:
-        raise HTTPException(403, "Only the owner, an admin or a manager changes the song library")
-    return role
+def _staff(biz: str, user: AuthedUser, what: str = "songs") -> set:
+    """The caller's parts on the church's team (worship_team), refused unless one may do `what`."""
+    return require(biz, user, what)
 
 
 def _now() -> str:
@@ -264,8 +263,10 @@ def _get_or_404(biz: str, song_id: str) -> Dict[str, Any]:
 def status(business_id: str, user: AuthedUser = Depends(require_user)):
     if not open_to(user):
         return {"enabled": False, "can_write": False}
-    role = assert_access(_uuid(business_id), user)
-    return {"enabled": True, "can_write": role in STAFF_ROLES}
+    roles = roles_of(_uuid(business_id), user)
+    allowed = can_all(roles)
+    # can_write: the song library; `can` is each part of ChurchSavvy, `roles` the caller's parts.
+    return {"enabled": True, "can_write": allowed["songs"], "can": allowed, "roles": [r for r in ROLES if r in roles]}
 
 
 @router.post("/parse")
@@ -283,19 +284,19 @@ def parse(body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
 def list_songs(business_id: str, user: AuthedUser = Depends(require_user)):
     _gate(user)
     biz = _uuid(business_id)
-    role = assert_access(biz, user)
+    roles = roles_of(biz, user)
     rows = sb_clients.sb_get_as_service(
         f"/worship_songs?business_id=eq.{_q(biz)}&archived_at=is.null&select={_LIST}&order=title.asc&limit=2000")
     if rows is None:
         raise HTTPException(503, "The song library couldn't be read. Try again.")
-    return {"songs": [_list_out(r) for r in rows], "can_write": role in STAFF_ROLES}
+    return {"songs": [_list_out(r) for r in rows], "can_write": can(roles, "songs")}
 
 
 @router.get("/songs/{song_id}")
 def get_song(song_id: str, business_id: str, user: AuthedUser = Depends(require_user)):
     _gate(user)
     biz = _uuid(business_id)
-    assert_access(biz, user)
+    roles_of(biz, user)
     return {"song": _full_out(_get_or_404(biz, _uuid(song_id, "song")))}
 
 
@@ -337,6 +338,41 @@ def save_song(song_id: str, body: Dict[str, Any], user: AuthedUser = Depends(req
         f"/worship_songs?id=eq.{_q(sid)}&business_id=eq.{_q(biz)}&select={_FULL}", fields)
     if not isinstance(rows, list) or not rows:
         raise HTTPException(503, "That didn't save. Nothing changed; try again.")
+    return {"ok": True, "song": _full_out(rows[0])}
+
+
+@router.post("/songs/{song_id}/fix")
+def fix_words(song_id: str, body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
+    """The booth fixes a typo on the slide that's up (board "Live": "Fix the
+    words on slide 5"): the slide's lines, as they were, become the fixed
+    ones, in the song itself, so every Sunday after has them right. The
+    booth's part allows this and nothing else in the library. The same
+    number of lines, so the slides stay as they were planned."""
+    _gate(user)
+    body = body or {}
+    biz = _uuid(body.get("business_id"))
+    _staff(biz, user, "fix")
+    sid = _uuid(song_id, "song")
+    old, new, part = body.get("old"), body.get("new"), body.get("section_id")
+    if (not isinstance(old, list) or not isinstance(new, list) or not old or len(old) != len(new) or len(old) > 12
+            or not all(isinstance(x, str) and len(x) <= 200 for x in old + new)):
+        raise HTTPException(400, "Fix the words on the slide's own lines")
+    if not any(ln.strip() for ln in new):
+        raise HTTPException(400, "The slide needs its words")
+    current = _get_or_404(biz, sid)
+    sections = [dict(s) for s in current.get("sections") or []]
+    sec = next((s for s in sections if s.get("id") == part), None)
+    lines = list((sec or {}).get("lines") or [])
+    at = next((k for k in range(len(lines) - len(old) + 1)
+               if [x.strip() for x in lines[k:k + len(old)]] == [x.strip() for x in old]), None)
+    if sec is None or at is None:
+        raise HTTPException(409, "The song changed since this slide went up. Fix it in Songs.")
+    sec["lines"] = lines[:at] + [x.rstrip() for x in new] + lines[at + len(old):]
+    rows = sb_clients.sb_patch_as_service(
+        f"/worship_songs?id=eq.{_q(sid)}&business_id=eq.{_q(biz)}&select={_FULL}",
+        {"sections": sections, "updated_at": _now()})
+    if not isinstance(rows, list) or not rows:
+        raise HTTPException(503, "The fix didn't save. Nothing changed; try again.")
     return {"ok": True, "song": _full_out(rows[0])}
 
 

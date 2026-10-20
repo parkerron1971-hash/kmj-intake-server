@@ -1,7 +1,10 @@
 # worship_show_router.py — Sundays on screens (ChurchSavvy, step 2; Kevin
 # 2026-10-19: "keep going with step 2 I want the entire thing built").
 #
-# Signed in (the church's seats; the owner, an admin or a manager changes):
+# Signed in. Anyone on the church's team reads; each part changes its own
+# (worship_team.py): the plan (planner, worship leader), the screens and
+# the look (admin), what's on screen now (planner, booth). The owner, an
+# admin or a manager of the church is an admin.
 #   GET/POST          /worship/services                  a church's services
 #   GET/PUT/DELETE    /worship/services/{id}             one (DELETE archives)
 #   GET               /worship/services/{id}/show        as slides (worship_show)
@@ -47,13 +50,12 @@ from fastapi.responses import StreamingResponse
 import sb_clients
 import worship_show as wsh
 from auth_supabase import AuthedUser, require_user
-from business_access import assert_access
+from worship_team import can, can_all, require, roles_of
 from worship_router import mode, open_to
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/worship", tags=["worship"])
 
-STAFF_ROLES = ("owner", "admin", "manager")
 MAX_SCREENS = 20
 WAIT_SECONDS = 15.0
 PREAMBLE_BYTES = 16384
@@ -85,17 +87,16 @@ def _gate(user: AuthedUser) -> None:
         raise HTTPException(404, "Not Found")
 
 
-def _seat(biz: str, user: AuthedUser) -> str:
+def _seat(biz: str, user: AuthedUser) -> set:
+    """Anyone on the church's team (worship_team): their parts."""
     _gate(user)
-    return assert_access(biz, user)
+    return roles_of(biz, user)
 
 
-def _staff(biz: str, user: AuthedUser) -> str:
+def _staff(biz: str, user: AuthedUser, what: str) -> set:
+    """Refused unless one of the caller's parts may do `what` (plan, run, setup)."""
     _gate(user)
-    role = assert_access(biz, user)
-    if role not in STAFF_ROLES:
-        raise HTTPException(403, "Only the owner, an admin or a manager runs Sunday's screens")
-    return role
+    return require(biz, user, what)
 
 
 def _read(path: str, what: str) -> List[Dict[str, Any]]:
@@ -272,10 +273,11 @@ def _clean_service(body: Dict[str, Any], partial: bool) -> Dict[str, Any]:
 @router.get("/services")
 def list_services(business_id: str, user: AuthedUser = Depends(require_user)):
     biz = _uuid(business_id)
-    role = _seat(biz, user)
+    roles = _seat(biz, user)
     rows = _read(f"/worship_services?business_id=eq.{_q(biz)}&archived_at=is.null&select={_SERVICE_LIST}"
                  f"&order=starts_at.desc.nullslast&limit=200", "Your services")
-    return {"services": [_service_out(r) for r in rows], "can_write": role in STAFF_ROLES}
+    # can_write: the plan; `can`: each part of ChurchSavvy the caller's team parts allow.
+    return {"services": [_service_out(r) for r in rows], "can_write": can(roles, "plan"), "can": can_all(roles)}
 
 
 @router.get("/services/{service_id}")
@@ -296,7 +298,7 @@ def get_show(service_id: str, business_id: str, user: AuthedUser = Depends(requi
 def create_service(body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
     body = body or {}
     biz = _uuid(body.get("business_id"))
-    _staff(biz, user)
+    _staff(biz, user, "plan")
     try:
         fields = _clean_service(body, partial=False)
     except ValueError as e:
@@ -319,7 +321,7 @@ def create_service(body: Dict[str, Any], user: AuthedUser = Depends(require_user
 def save_service(service_id: str, body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
     body = body or {}
     biz = _uuid(body.get("business_id"))
-    _staff(biz, user)
+    _staff(biz, user, "plan")
     sid = _uuid(service_id, "service")
     current = _service(biz, sid)
     try:
@@ -339,7 +341,7 @@ def save_service(service_id: str, body: Dict[str, Any], user: AuthedUser = Depen
 @router.delete("/services/{service_id}")
 def remove_service(service_id: str, business_id: str, user: AuthedUser = Depends(require_user)):
     biz = _uuid(business_id)
-    _staff(biz, user)
+    _staff(biz, user, "plan")
     sid = _uuid(service_id, "service")
     _service(biz, sid)
     rows = sb_clients.sb_patch_as_service(f"/worship_services?id=eq.{_q(sid)}&business_id=eq.{_q(biz)}&select=id",
@@ -407,18 +409,19 @@ def _screen_out(row: Dict[str, Any], with_link: bool) -> Dict[str, Any]:
 @router.get("/screens")
 def list_screens(business_id: str, user: AuthedUser = Depends(require_user)):
     biz = _uuid(business_id)
-    role = _seat(biz, user)
+    roles = _seat(biz, user)
     rows = _read(f"/worship_screens?business_id=eq.{_q(biz)}&archived_at=is.null&select={_SCREEN_FIELDS}"
                  f"&order=sort.asc,created_at.asc", "Your screens")
-    staff = role in STAFF_ROLES
-    return {"screens": [_screen_out(r, staff) for r in rows], "can_write": staff}
+    # Only the setup ever sees a screen's link.
+    setup = can(roles, "setup")
+    return {"screens": [_screen_out(r, setup) for r in rows], "can_write": setup}
 
 
 @router.post("/screens")
 def create_screen(body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
     body = body or {}
     biz = _uuid(body.get("business_id"))
-    _staff(biz, user)
+    _staff(biz, user, "setup")
     try:
         fields = _clean_screen(body, partial=False)
     except ValueError as e:
@@ -446,7 +449,7 @@ def _own_screen(biz: str, sid: str) -> Dict[str, Any]:
 def save_screen(screen_id: str, body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
     body = body or {}
     biz = _uuid(body.get("business_id"))
-    _staff(biz, user)
+    _staff(biz, user, "setup")
     sid = _uuid(screen_id, "screen")
     _own_screen(biz, sid)
     try:
@@ -464,7 +467,7 @@ def save_screen(screen_id: str, body: Dict[str, Any], user: AuthedUser = Depends
 @router.post("/screens/{screen_id}/new-link")
 def new_screen_link(screen_id: str, body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
     biz = _uuid((body or {}).get("business_id"))
-    _staff(biz, user)
+    _staff(biz, user, "setup")
     sid = _uuid(screen_id, "screen")
     _own_screen(biz, sid)
     rows = sb_clients.sb_patch_as_service(
@@ -478,7 +481,7 @@ def new_screen_link(screen_id: str, body: Dict[str, Any], user: AuthedUser = Dep
 @router.delete("/screens/{screen_id}")
 def remove_screen(screen_id: str, business_id: str, user: AuthedUser = Depends(require_user)):
     biz = _uuid(business_id)
-    _staff(biz, user)
+    _staff(biz, user, "setup")
     sid = _uuid(screen_id, "screen")
     _own_screen(biz, sid)
     # A removed screen's link stops working: archived rows never answer.
@@ -495,16 +498,16 @@ def remove_screen(screen_id: str, business_id: str, user: AuthedUser = Depends(r
 @router.get("/look")
 def get_look(business_id: str, user: AuthedUser = Depends(require_user)):
     biz = _uuid(business_id)
-    role = _seat(biz, user)
+    roles = _seat(biz, user)
     look = _look(biz)
-    return {"look": look, "church": _brand(biz, look), "can_write": role in STAFF_ROLES}
+    return {"look": look, "church": _brand(biz, look), "can_write": can(roles, "setup")}
 
 
 @router.put("/look")
 def save_look(body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
     body = body or {}
     biz = _uuid(body.get("business_id"))
-    _staff(biz, user)
+    _staff(biz, user, "setup")
     try:
         look = wsh.clean_look(body.get("look"))
     except ValueError as e:
@@ -532,7 +535,7 @@ def get_live(business_id: str, user: AuthedUser = Depends(require_user)):
 def set_live(body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
     body = body or {}
     biz = _uuid(body.get("business_id"))
-    _staff(biz, user)
+    _staff(biz, user, "run")
     try:
         state = wsh.clean_live(body.get("state"))
     except ValueError as e:
