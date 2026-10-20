@@ -20,6 +20,10 @@ page of its own; this is part 1 of building it:
                            officers are told). The office can make a group
                            Board-only or leaders-only.
 
+  /my/groups/leaders       All group leaders (part 2c): one chat for
+                           everyone who leads a group and the church's
+                           pastors (member_portal_messaging.leaders_room_people)
+
 Someone who isn't in the group sees what it is, who leads it, and how to
 get in — never who else belongs.
 
@@ -980,6 +984,8 @@ async def serve(request: Request, biz: Dict[str, Any], site, me: Dict[str, Any],
     """GET /my/groups/<id>[/board|/people]."""
     import asyncio
     rest = sub[len("/my/groups/"):].strip("/")
+    if rest == "leaders":
+        return render_room(biz, site, request, me, await asyncio.to_thread(room_view, biz, me))
     gid, _, tab = rest.partition("/")
     if not UUID.match(gid) or tab not in TABS:
         return render(biz, site, request, me, {}, "")
@@ -998,16 +1004,17 @@ async def serve(request: Request, biz: Dict[str, Any], site, me: Dict[str, Any],
 # ─── the Chat tab ────────────────────────────────────────────────────
 
 
-def chat_view(biz: Dict[str, Any], g: Dict[str, Any], me: Dict[str, Any]) -> Dict[str, Any]:
+def chat_view(biz: Dict[str, Any], g: Optional[Dict[str, Any]], me: Dict[str, Any], *, room: bool = False) -> Dict[str, Any]:
     """What the Chat tab shows this member: {'state': off | board_only |
     gate (why) | guidelines | error | ok, ...}. Messaging's own rules decide
-    who may write (birthdates, the per-person switch, teens' two adults)."""
+    who may write (birthdates, the per-person switch, teens' two adults).
+    `room`: the church's All group leaders room instead of a group."""
     import member_portal_messaging as mpm
     import member_messaging_rules as rules
     biz_id = str(biz["id"])
     if not mpm.turned_on(biz):
         return {"state": "off"}
-    if g.get("chat_on") is False:
+    if not room and g.get("chat_on") is False:
         return {"state": "board_only"}
     full = mpm._me_profile(biz_id, me)
     if full is None:
@@ -1017,7 +1024,7 @@ def chat_view(biz: Dict[str, Any], g: Dict[str, Any], me: Dict[str, Any]) -> Dic
         return {"state": "gate", "why": why}
     if not full.get("guidelines_at"):
         return {"state": "guidelines", "teen": rules.is_teen(full)}
-    tid = mpm.ensure_group_thread(biz_id, str(g["id"]))
+    tid = mpm.ensure_leaders_thread(biz_id) if room else mpm.ensure_group_thread(biz_id, str(g["id"]))
     t = mpm.thread(biz_id, tid) if tid else None
     if not t:
         return {"state": "error"}
@@ -1032,8 +1039,55 @@ def chat_view(biz: Dict[str, Any], g: Dict[str, Any], me: Dict[str, Any]) -> Dic
     if rx is None:
         return {"state": "error"}
     mpm.mark_read(biz_id, tid, str(me["id"]))
-    return {"state": "ok", "tid": tid, "acc": acc, "msgs": msgs, "looks": looks, "rx": rx,
-            "writers": g.get("chat_writers") if g.get("chat_writers") in ("all", "leaders") else "all"}
+    writers = "all" if room else (g.get("chat_writers") if g.get("chat_writers") in ("all", "leaders") else "all")
+    return {"state": "ok", "tid": tid, "acc": acc, "msgs": msgs, "looks": looks, "rx": rx, "writers": writers}
+
+
+def room_view(biz: Dict[str, Any], me: Dict[str, Any]) -> Dict[str, Any]:
+    """The All group leaders room for this member: {'state': not_in |
+    error | ...chat_view's states, 'size'}."""
+    import member_portal_messaging as mpm
+    folks = mpm.leaders_room_people(str(biz["id"]))
+    if folks is None:
+        return {"state": "error"}
+    if not any(p["contact_id"] == str(me["id"]) for p in folks):
+        return {"state": "not_in"}
+    return {**chat_view(biz, None, me, room=True), "size": len(folks)}
+
+
+ROOM = {"id": "leaders", "name": "All group leaders", "name_display": "full"}
+
+
+def render_room(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], cv: Dict[str, Any]) -> Tuple[str, int]:
+    """/my/groups/leaders: (html, status)."""
+    from member_portal import _e, _shell
+    church = _e(biz.get("name") or "the church")
+    back = '<a class="mb-back" href="/my/groups">Connect</a>'
+    if cv.get("state") == "not_in":
+        body = (f'{back}<div class="mb-lt"><h1>For leaders</h1></div><p class="mp-muted">This room is for the people who '
+                f'lead a group at {church}, and its pastors. Find a group to join on Connect.</p>')
+        return _shell(biz, site, "All group leaders", f"<style>{GROUP_CSS}</style>{body}", tab="connect", who=me), 404
+    n = cv.get("size") or 0
+    faces = ""
+    if cv.get("state") == "ok":
+        folks = cv["acc"]["people"]
+        shown = sorted((p for p in folks.values() if p.get("name")), key=lambda p: str(p["name"]).lower())[:4]
+        faces = f'<span class="gs-faces" aria-hidden="true">{"".join(_face(p) for p in shown)}</span>'
+    hero = (f'<section class="gs-hero gs-room" aria-labelledby="gs-name"><span class="gs-scrim"></span><div class="gs-hero-in">'
+            f'<span class="gs-kind">For leaders</span><h1 id="gs-name">All group leaders</h1>'
+            f'<p>Everyone who leads a group at {church}, and its pastors</p>'
+            f'<p class="gs-who">{faces}<span>{n} {"person" if n == 1 else "people"}</span></p></div></section>')
+    content, script = _chat_body(biz, request, me, ROOM, cv, False, here="/my/groups/leaders")
+    page = f'{back}{hero}{_flash(request)}<div style="margin-top:16px">{content}</div>'
+    status = 503 if cv.get("state") == "error" else 200
+    return _shell(biz, site, "All group leaders", f"<style>{GROUP_CSS}{CHAT_CSS}{ROOM_CSS}</style>{page}", tab="connect",
+                  who=me, script=script), status
+
+
+ROOM_CSS = """
+.gs-room{min-height:200px;background:radial-gradient(120% 140% at 90% 0%,color-mix(in srgb,var(--teal) 45%,transparent),transparent 60%),
+  linear-gradient(160deg,var(--teal-deep),var(--s1));}
+"""
 
 
 CHAT_CSS = """
@@ -1093,17 +1147,17 @@ CHAT_CSS = """
 
 
 def _chat_body(biz: Dict[str, Any], request: Request, me: Dict[str, Any], g: Dict[str, Any], cv: Dict[str, Any],
-               leader: bool):
-    """(html, script) for the Chat tab."""
+               leader: bool, *, here: str = ""):
+    """(html, script) for the Chat tab (and the leaders' room, `here`)."""
     import member_portal_messaging as mpm
     import member_messaging_rules as rules
     from member_portal import _e
     church = _e(biz.get("name") or "the church")
     gid = str(g["id"])
-    here = _base(gid, "chat")
+    here = here or _base(gid, "chat")
     state = cv.get("state")
     if state == "off":
-        return f'<p class="gs-empty">The group chat opens when {church} turns on messaging.</p>', ""
+        return f'<p class="gs-empty">This chat opens when {church} turns on messaging.</p>', ""
     if state == "board_only":
         return (f'<p class="gs-empty">{_e(g.get("name") or "This group")} uses its Board only. '
                 f'<a href="{_base(gid, "board")}">Open the Board</a></p>'), ""

@@ -592,8 +592,9 @@ def _group_card(g: Dict[str, Any], action: str, pal: Dict[str, str], pool: Optio
 
 
 def render_groups(biz, site, request: Request, data: Optional[Dict[str, List[Dict[str, Any]]]],
-                  who: Optional[Dict[str, Any]] = None) -> str:
-    """Connect: your groups, then groups to join."""
+                  who: Optional[Dict[str, Any]] = None, room: bool = False) -> str:
+    """Connect: your groups, then groups to join. `room`: this member is in
+    the church's All group leaders room (messaging on), so it has a door."""
     import member_app_ui as ui
     import member_app_photos as photos
     import member_portal_messaging as mpm
@@ -628,7 +629,13 @@ def render_groups(biz, site, request: Request, data: Optional[Dict[str, List[Dic
         import member_app_samples as samples
         hint = (ui.sample_hint(samples.WHERE["groups"])
                 if any(samples.is_sample(g) for g in data["mine"] + data["open"]) else "")
-        body = (f'{hint}<section aria-labelledby="mp-mine-h">{ui.section("Your groups", hid="mp-mine-h")}{mine}</section>'
+        lead = ""
+        if room:
+            lead = (f'<section aria-labelledby="mp-lead-h">{ui.section("For leaders", hid="mp-lead-h")}'
+                    f'<ul class="mb-list mb-cards"><li><a href="/my/groups/leaders"><span class="mb-thumb mb-chat-av">{ui.icon("users", 18)}</span>'
+                    f'<span class="mb-list-text"><strong>All group leaders</strong><span>Every group leader and your pastors, '
+                    f'in one chat</span></span>{ui.icon("chevron", 16)}</a></li></ul></section>')
+        body = (f'{hint}<section aria-labelledby="mp-mine-h">{ui.section("Your groups", hid="mp-mine-h")}{mine}</section>{lead}'
                 f'<section aria-labelledby="mp-open-h">{ui.section("Find a group", hid="mp-open-h")}{open_}</section>')
     return _shell(biz, site, "Connect", f"""
 <div class="mb-lt"><h1>Connect</h1></div>
@@ -977,7 +984,7 @@ def _back(target: str, **q: str) -> RedirectResponse:
     allowed = ("/my", "/my/me", "/my/events", "/my/prayer", "/my/details", "/my/groups", "/my/classes", "/my/live", "/my/messages",
                "/my/kids/stories", "/my/kids/sundays", "/my/kids/family")
     if (target not in allowed and not re.fullmatch(r"/my/(groups/live|messages)/[0-9a-f-]{36}", target)
-            and not re.fullmatch(r"/my/groups/[0-9a-fA-F-]{36}(/(board|people|chat))?", target)):
+            and not re.fullmatch(r"/my/groups/([0-9a-fA-F-]{36}(/(board|people|chat))?|leaders)", target)):
         target = "/my"
     qs = "&".join(f"{k}={v}" for k, v in q.items())
     return RedirectResponse(f"{target}?{qs}" if qs else target, status_code=303, headers=_SECURE_HEADERS)

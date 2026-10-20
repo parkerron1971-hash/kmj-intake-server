@@ -9,6 +9,7 @@ reads the records those rules need and applies them on every action:
   /my/messages/feed/<thread>?v=    JSON for the chat poll
   /my/messages/to/<contact>        start (or reopen) a private chat
   /my/messages/group/<group>       open a group's chat
+  (the church's All group leaders room is at /my/groups/leaders)
   /my/messages/family/<teen>       a linked parent's read-only view of their teen's chats
   POST /my/messages/<thread>/send · /accept · /decline · /mute · /block
   POST /my/messages/<thread>/react {message_id, kind}  Love / Praying / Amen
@@ -142,6 +143,39 @@ def group_people(business_id: str, group_id: str) -> Optional[List[Dict[str, Any
     return rows if isinstance(rows, list) else None
 
 
+LEADERS_ROOM = "All group leaders"
+
+
+def leaders_room_people(business_id: str) -> Optional[List[Dict[str, Any]]]:
+    """Who is in the church's All group leaders room, read live (Kevin,
+    2026-10-20: "yes all group leaders room would be great"): everyone who
+    leads one of its active groups, and its active Pastors and Elders (a
+    church role whose job is senior or pastoral). [{'contact_id', 'role':
+    'leader'}], or None on a failed read."""
+    import church_roles as cr
+    import messaging_router as mr
+    leads = sb_clients.sb_get_as_service(
+        f"/group_members?business_id=eq.{_q(business_id)}&role=eq.leader&select=contact_id,group_id&limit=5000")
+    active = sb_clients.sb_get_as_service(
+        f"/groups?business_id=eq.{_q(business_id)}&active=eq.true&select=id&limit=2000")
+    roles = sb_clients.sb_get_as_service(
+        f"/church_leader_roles?business_id=eq.{_q(business_id)}&status=eq.active&select=contact_id,role&limit=1000")
+    defs = cr.defs(str(business_id))
+    if not isinstance(leads, list) or not isinstance(active, list) or not isinstance(roles, list) or defs is None:
+        return None
+    by = cr.by_key(defs)
+    on = {str(g["id"]) for g in active}
+    ids = {str(r["contact_id"]) for r in leads if str(r["group_id"]) in on}
+    ids |= {str(r["contact_id"]) for r in roles
+            if (by.get(r["role"]) or cr.LEGACY.get(r["role"]) or {}).get("job") in mr.PASTORAL_JOBS}
+    return [{"contact_id": i, "role": "leader"} for i in sorted(ids)]
+
+
+def in_leaders_room(business_id: str, me_id: str) -> Optional[bool]:
+    room = leaders_room_people(business_id)
+    return None if room is None else any(p["contact_id"] == str(me_id) for p in room)
+
+
 def share_group(business_id: str, a: str, b: str) -> Optional[bool]:
     ga, gb = my_groups(business_id, a), my_groups(business_id, b)
     if ga is None or gb is None:
@@ -176,7 +210,8 @@ def chat_access(business_id: str, t: Dict[str, Any], me_id: str, today: Optional
             return None
         ids = [str(p["contact_id"]) for p in parts]
     else:
-        gp = group_people(business_id, t["group_id"])
+        gp = (leaders_room_people(business_id) if t["kind"] == "leaders"
+              else group_people(business_id, t["group_id"]))
         if gp is None:
             return None
         ids = [str(r["contact_id"]) for r in gp]
@@ -299,6 +334,21 @@ def ensure_group_thread(business_id: str, group_id: str) -> Optional[str]:
         return str(made[0]["id"])
     again = sb_clients.sb_get_as_service(
         f"/msg_threads?business_id=eq.{_q(business_id)}&group_id=eq.{_q(group_id)}&kind=eq.group&select=id&limit=1")
+    return str(again[0]["id"]) if isinstance(again, list) and again else None
+
+
+def ensure_leaders_thread(business_id: str) -> Optional[str]:
+    """The church's one All group leaders room (msg_threads kind leaders)."""
+    where = f"/msg_threads?business_id=eq.{_q(business_id)}&kind=eq.leaders&select=id&limit=1"
+    rows = sb_clients.sb_get_as_service(where)
+    if not isinstance(rows, list):
+        return None
+    if rows:
+        return str(rows[0]["id"])
+    made = sb_clients.sb_post_as_service("/msg_threads", {"business_id": business_id, "kind": "leaders"})
+    if isinstance(made, list) and made:
+        return str(made[0]["id"])
+    again = sb_clients.sb_get_as_service(where)   # another request made it first
     return str(again[0]["id"]) if isinstance(again, list) and again else None
 
 
@@ -549,6 +599,15 @@ def inbox_rows(business_id: str, me_id: str) -> Optional[Tuple[List[Dict[str, An
             f"/msg_threads?business_id=eq.{_q(business_id)}&kind=eq.group&group_id=in.({_in(gids)})&select=id,group_id,last_message_at")
         if not isinstance(gthreads, list):
             return None
+    room = in_leaders_room(business_id, me_id)
+    if room is None:
+        return None
+    if room:
+        lthread = sb_clients.sb_get_as_service(
+            f"/msg_threads?business_id=eq.{_q(business_id)}&kind=eq.leaders&select=id,group_id,last_message_at&limit=1")
+        if not isinstance(lthread, list):
+            return None
+        gthreads = list(gthreads) + lthread
     tids = {str(p["thread_id"]) for p in mine if p.get("state") != "declined"} | {str(t["id"]) for t in gthreads}
     if not tids:
         return [], []
@@ -580,11 +639,13 @@ def inbox_rows(business_id: str, me_id: str) -> Optional[Tuple[List[Dict[str, An
         preview = (recent[0]["body"][:80] if recent else "No messages yet")
         if t["kind"] == "group":
             title = gname.get(str(t["group_id"]), "Group")
+        elif t["kind"] == "leaders":
+            title = LEADERS_ROOM
         else:
             title = first_and_initial((folks.get(other_of.get(tid, "")) or {}).get("name"))
         import member_photos as ph
         other = folks.get(other_of.get(tid, "")) or {}
-        photo = ph.src(other) if t["kind"] != "group" and ph.shown_to_members(other) else ""
+        photo = ph.src(other) if t["kind"] == "direct" and ph.shown_to_members(other) else ""
         row = {"id": tid, "kind": t["kind"], "title": title, "preview": preview, "unread": unread, "photo": photo}
         (requests if (read.get(tid) or {}).get("state") == "requested" else chats).append(row)
     return chats, requests
@@ -734,6 +795,8 @@ def _title(business_id: str, t: Dict[str, Any], acc: Dict[str, Any], me_id: str)
     if t["kind"] == "group":
         g = sb_clients.sb_get_as_service(f"/groups?id=eq.{_q(t['group_id'])}&business_id=eq.{_q(business_id)}&select=name&limit=1")
         return (g[0].get("name") if isinstance(g, list) and g else "") or "Group chat"
+    if t["kind"] == "leaders":
+        return LEADERS_ROOM
     ids = [i for i in acc["people"] if i != str(me_id)]
     return first_and_initial(acc["people"][ids[0]]["name"]) if ids else "Chat"
 
@@ -750,11 +813,13 @@ def _chat_page(request, biz, site, me, tid: str, *, as_parent_of: str = ""):
     if not acc["role"]:
         return _gate(biz, site, me, "gone"), 404
     parent = acc["role"] == "parent"
-    if t["kind"] == "group" and not parent:
-        # Its members read a group's chat inside the group.
+    if t["kind"] in ("group", "leaders") and not parent:
+        # Its members read a group's chat inside the group, and the leaders'
+        # room on its own page.
         from fastapi.responses import RedirectResponse
         from member_portal import _SECURE_HEADERS
-        return RedirectResponse(f"/my/groups/{t['group_id']}/chat", status_code=303, headers=_SECURE_HEADERS)
+        to = f"/my/groups/{t['group_id']}/chat" if t["kind"] == "group" else "/my/groups/leaders"
+        return RedirectResponse(to, status_code=303, headers=_SECURE_HEADERS)
     msgs = messages(biz["id"], tid, str(me["id"]), parent=parent)
     looks = staff_looks(biz["id"], tid)
     if msgs is None or looks is None:
@@ -790,7 +855,7 @@ def _family_page(request, biz, site, me, teen_id: str):
         return _gate(biz, site, me, "error"), 503
     chats = rows[0] + rows[1]
     items = "".join(
-        f'<li><a href="/my/messages/{_e(r["id"])}"><span class="mb-thumb mb-chat-av">{ui.icon("users", 18) if r["kind"] == "group" else _e(ui.initials(r["title"]))}</span>'
+        f'<li><a href="/my/messages/{_e(r["id"])}"><span class="mb-thumb mb-chat-av">{ui.icon("users", 18) if r["kind"] != "direct" else _e(ui.initials(r["title"]))}</span>'
         f'<span class="mb-list-text"><strong>{_e(r["title"])}</strong><span>{_e(r["preview"])}</span></span>{ui.icon("chevron", 16)}</a></li>'
         for r in chats) or '<li class="mp-muted" style="padding:12px 0">No chats yet.</li>'
     return _shell(biz, site, "Messages", f"""<div class="mb-lt"><h1>{_e(teen['name'])}'s chats</h1></div>
@@ -814,12 +879,12 @@ def _feed(business_id: str, me_id: str, tid: str) -> Dict[str, Any]:
 # ─── POST ─────────────────────────────────────────────────────────────
 
 
-_GROUP_BACK = re.compile(r"^/my/groups/[0-9a-fA-F-]{36}/chat$")
+_GROUP_BACK = re.compile(r"^/my/groups/(?:[0-9a-fA-F-]{36}/chat|leaders)$")
 
 
 def _back_to(form, default: str) -> str:
-    """A group's chat page asks to come back to itself; anything else goes
-    where it always went."""
+    """A group's chat page (or the leaders' room) asks to come back to
+    itself; anything else goes where it always went."""
     b = str(form.get("back") or "") if form is not None else ""
     return b if _GROUP_BACK.match(b) else default
 
