@@ -4,7 +4,7 @@ date: 2026-10-19
 agent: Claude Code (Claude Opus 5.5)
 asked: '"keep going with step 2 I want the entire thing built. also can you ahve access inside the system and access outside the system as well. i want this part built so we can ship out soon." (Kevin, 2026-10-19)'
 status: in progress
-prs: [kmj-intake-server#1510, kmj-intake-server#TBD]
+prs: [kmj-intake-server#1510, kmj-intake-server#1513]
 migrations: [supabase/APPLY-2026-10-19-worship-show.sql (applied)]
 left_undone: ["the app's Sundays planner, Run Sunday booth, Screens setup and screen pages (solutionist-studio, same arc)", "the Look editor page", "the song finder (public-domain hymns, photo read)", "ChurchSavvy standalone (its own front door for churches without Solutionist)", "media volunteers who aren't staff can't run slides yet (STAFF_ROLES only)", "the lobby loop (lobby screens show the room's slides for now)"]
 decisions: ["screens follow the booth over Server-Sent Events from this process (LiveHub), not polling: the class TV's once-a-second poll is too slow for lyrics", "a screen's link is a 32-byte token naming one screen row; the business comes from that row (ownership_sweep HINT screen_from_token, beside the check-in station's station_from_token)", "the booth posts what's on screen; the screens fetch the live service's slides and redraw for their role (room, online lower third, LED wide, stage)", "live state is kept in worship_live so a restart or a late screen picks up; rev = milliseconds since 1970 and only goes up", "a screen never receives the booth's notes"]
