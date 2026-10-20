@@ -11,7 +11,17 @@ reads the records those rules need and applies them on every action:
   /my/messages/group/<group>       open a group's chat
   /my/messages/family/<teen>       a linked parent's read-only view of their teen's chats
   POST /my/messages/<thread>/send · /accept · /decline · /mute · /block
+  POST /my/messages/<thread>/react {message_id, kind}  Love / Praying / Amen
+  POST /my/messages/<thread>/hide  {message_id}        a group's leader takes one
+                                   down; the safety officers are told (a report)
   POST /my/messages/report · /my/messages/guidelines
+
+A group's chat lives inside the group (member_portal_groups, 2026-10-20):
+/my/messages/group/<group> and a group thread opened from the inbox go to
+/my/groups/<group>/chat for its members (a linked parent still reads here).
+Replies quote the message they answer (msg_messages.reply_to); the office
+can make a group Board-only (groups.chat_on) or leaders-only
+(groups.chat_writers).
 
 Every message is screened (msg_screen.py) before anyone sees it: harmful
 ones are HELD for the church's safety officers, crisis words deliver with
@@ -226,12 +236,46 @@ def messages(business_id: str, tid: str, me_id: str, *, parent: bool = False) ->
     removed message."""
     rows = sb_clients.sb_get_as_service(
         f"/msg_messages?thread_id=eq.{_q(tid)}&business_id=eq.{_q(business_id)}"
-        f"&select=id,sender_contact_id,body,status,flag,created_at&order=created_at.desc&limit={PAGE}")
+        f"&select=id,sender_contact_id,body,status,flag,reply_to,created_at&order=created_at.desc&limit={PAGE}")
     if not isinstance(rows, list):
         return None
     keep = [m for m in rows if m["status"] == "delivered"
             or (m["status"] == "held" and not parent and str(m.get("sender_contact_id")) == str(me_id))]
     return list(reversed(keep))
+
+
+REACTIONS = ("love", "pray", "amen")
+
+
+def reactions_for(business_id: str, message_ids: Iterable[str], me_id: str) -> Optional[Dict[str, Dict[str, Any]]]:
+    """{message_id: {'love': n, 'pray': n, 'amen': n, 'mine': {kinds}}}."""
+    ids = sorted({str(i) for i in message_ids if i})
+    out: Dict[str, Dict[str, Any]] = {i: {**{k: 0 for k in REACTIONS}, "mine": set()} for i in ids}
+    for i in range(0, len(ids), 150):
+        rows = sb_clients.sb_get_as_service(
+            f"/msg_reactions?business_id=eq.{_q(business_id)}&message_id=in.({','.join(ids[i:i + 150])})"
+            f"&select=message_id,contact_id,kind&limit=20000")
+        if not isinstance(rows, list):
+            return None
+        for r in rows:
+            o = out.get(str(r["message_id"]))
+            if o is None or r.get("kind") not in REACTIONS:
+                continue
+            o[r["kind"]] += 1
+            if str(r["contact_id"]) == str(me_id):
+                o["mine"].add(r["kind"])
+    return out
+
+
+def group_chat_settings(business_id: str, group_id: str) -> Optional[Dict[str, Any]]:
+    """{'chat_on', 'chat_writers'} for a group (an older row reads as on, everyone writes)."""
+    rows = sb_clients.sb_get_as_service(
+        f"/groups?id=eq.{_q(group_id)}&business_id=eq.{_q(business_id)}&select=chat_on,chat_writers&limit=1")
+    if not isinstance(rows, list):
+        return None
+    g = rows[0] if rows else {}
+    return {"chat_on": g.get("chat_on") is not False,
+            "chat_writers": g.get("chat_writers") if g.get("chat_writers") in ("all", "leaders") else "all"}
 
 
 def staff_looks(business_id: str, tid: str) -> Optional[List[Dict[str, Any]]]:
@@ -627,6 +671,9 @@ async def serve(request: Request, biz, site, me, sub: str):
             return RedirectResponse("/my/messages?err=error", status_code=303, headers=_SECURE_HEADERS)
         if isinstance(tid, str) and tid.startswith("err:"):
             return RedirectResponse(f"/my/messages?err={tid[4:]}", status_code=303, headers=_SECURE_HEADERS)
+        if kind == "group":
+            # A group's chat lives inside the group (member_portal_groups).
+            return RedirectResponse(f"/my/groups/{target}/chat", status_code=303, headers=_SECURE_HEADERS)
         return RedirectResponse(f"/my/messages/{tid}", status_code=303, headers=_SECURE_HEADERS)
     if rest.startswith("feed/"):
         tid = rest[len("feed/"):]
@@ -703,6 +750,11 @@ def _chat_page(request, biz, site, me, tid: str, *, as_parent_of: str = ""):
     if not acc["role"]:
         return _gate(biz, site, me, "gone"), 404
     parent = acc["role"] == "parent"
+    if t["kind"] == "group" and not parent:
+        # Its members read a group's chat inside the group.
+        from fastapi.responses import RedirectResponse
+        from member_portal import _SECURE_HEADERS
+        return RedirectResponse(f"/my/groups/{t['group_id']}/chat", status_code=303, headers=_SECURE_HEADERS)
     msgs = messages(biz["id"], tid, str(me["id"]), parent=parent)
     looks = staff_looks(biz["id"], tid)
     if msgs is None or looks is None:
@@ -762,6 +814,16 @@ def _feed(business_id: str, me_id: str, tid: str) -> Dict[str, Any]:
 # ─── POST ─────────────────────────────────────────────────────────────
 
 
+_GROUP_BACK = re.compile(r"^/my/groups/[0-9a-fA-F-]{36}/chat$")
+
+
+def _back_to(form, default: str) -> str:
+    """A group's chat page asks to come back to itself; anything else goes
+    where it always went."""
+    b = str(form.get("back") or "") if form is not None else ""
+    return b if _GROUP_BACK.match(b) else default
+
+
 def _wants_json(request: Request) -> bool:
     return "application/json" in (request.headers.get("accept") or "")
 
@@ -808,6 +870,7 @@ async def send(tid: str, request: Request):
     if rules.why_not(me) or not me.get("guidelines_at"):
         return _answer(request, False, "not_enabled", back, 403)
     form = await request.form()
+    back = _back_to(form, back)
     text = str(form.get("body") or "").strip()[:BODY_MAX]
     if not text:
         return _answer(request, False, "empty_chat", back)
@@ -823,6 +886,31 @@ async def send(tid: str, request: Request):
         return _answer(request, False, "error", back, 503)
     if acc["role"] != "member" or not acc["can_send"] or acc.get("me_state") == "declined":
         return _answer(request, False, acc.get("why") or "cant_send", back, 403)
+    if t["kind"] == "group":
+        # The office's switches for this group (2026-10-20).
+        gs = await asyncio.to_thread(group_chat_settings, biz["id"], str(t["group_id"]))
+        if gs is None:
+            return _answer(request, False, "error", back, 503)
+        if not gs["chat_on"]:
+            return _answer(request, False, "group_board_only", back, 403)
+        if gs["chat_writers"] == "leaders":
+            mine = await asyncio.to_thread(my_groups, biz["id"], str(me["id"]))
+            if mine is None:
+                return _answer(request, False, "error", back, 503)
+            if not any(str(g["group_id"]) == str(t["group_id"]) and g.get("role") == "leader" for g in mine):
+                return _answer(request, False, "leaders_write", back, 403)
+    reply_to = str(form.get("reply_to") or "")
+    if reply_to:
+        if not UUID.match(reply_to):
+            reply_to = ""
+        else:
+            hit = await asyncio.to_thread(
+                sb_clients.sb_get_as_service,
+                f"/msg_messages?id=eq.{_q(reply_to)}&thread_id=eq.{_q(tid)}&business_id=eq.{_q(biz['id'])}"
+                f"&status=eq.delivered&select=id&limit=1")
+            if not isinstance(hit, list):
+                return _answer(request, False, "error", back, 503)
+            reply_to = reply_to if hit else ""
     if not rate_limit.allow_strict("live_chat", f"msg|{biz['id']}|{me['id']}"):
         return _answer(request, False, "slow_chat", back, 429)
     try:
@@ -832,7 +920,7 @@ async def send(tid: str, request: Request):
     status_ = "held" if verdict == "harm" else "delivered"
     row = await asyncio.to_thread(sb_clients.sb_post_as_service, "/msg_messages", {
         "business_id": biz["id"], "thread_id": tid, "sender_contact_id": str(me["id"]), "body": text,
-        "status": status_, "flag": None if verdict == "ok" else verdict})
+        "status": status_, "flag": None if verdict == "ok" else verdict, **({"reply_to": reply_to} if reply_to else {})})
     if not isinstance(row, list) or not row:
         return _answer(request, False, "error", back, 503)
     if status_ == "delivered":
@@ -909,6 +997,99 @@ async def block(tid: str, request: Request):
     return _answer(request, True, "blocked", "/my/messages")
 
 
+async def _member_message(request: Request, tid: str):
+    """(church, me, form, message, t, acc, back, error_response) for an action
+    on one delivered message in a chat this person belongs to."""
+    import asyncio
+    church, me, err, status = await _who(request)
+    form = await request.form()
+    back = _back_to(form, f"/my/messages/{tid}" if UUID.match(tid) else "/my/messages")
+    if err:
+        return None, None, None, None, None, None, back, _answer(request, False, err, back, status)
+    biz = church["business"]
+    mid = str(form.get("message_id") or "")
+    if not UUID.match(tid) or not UUID.match(mid):
+        return None, None, None, None, None, None, back, _answer(request, False, "gone_chat", back, 404)
+    t = await asyncio.to_thread(thread, biz["id"], tid)
+    rows = await asyncio.to_thread(
+        sb_clients.sb_get_as_service,
+        f"/msg_messages?id=eq.{_q(mid)}&thread_id=eq.{_q(tid)}&business_id=eq.{_q(biz['id'])}"
+        f"&select=id,thread_id,sender_contact_id,status&limit=1")
+    if t is None or not isinstance(rows, list):
+        return None, None, None, None, None, None, back, _answer(request, False, "error", back, 503)
+    if not t or not rows or rows[0]["status"] != "delivered":
+        return None, None, None, None, None, None, back, _answer(request, False, "gone_chat", back, 404)
+    acc = await asyncio.to_thread(chat_access, biz["id"], t, str(me["id"]))
+    if acc is None:
+        return None, None, None, None, None, None, back, _answer(request, False, "error", back, 503)
+    if acc["role"] != "member":
+        return None, None, None, None, None, None, back, _answer(request, False, "gone_chat", back, 404)
+    return church, me, form, rows[0], t, acc, back, None
+
+
+@router.post("/my/messages/{tid}/react", include_in_schema=False)
+async def react(tid: str, request: Request):
+    """Love, Praying or Amen on a message; pressing it again takes it back."""
+    import asyncio
+    church, me, form, m, t, acc, back, stop = await _member_message(request, tid)
+    if stop:
+        return stop
+    kind = str(form.get("kind") or "")
+    if kind not in REACTIONS:
+        return _answer(request, False, "error", back)
+    biz_id = church["business"]["id"]
+    where = (f"/msg_reactions?message_id=eq.{_q(m['id'])}&contact_id=eq.{_q(me['id'])}"
+             f"&kind=eq.{_q(kind)}&business_id=eq.{_q(biz_id)}")
+    had = await asyncio.to_thread(sb_clients.sb_get_as_service, where + "&select=kind&limit=1")
+    if not isinstance(had, list):
+        return _answer(request, False, "error", back, 503)
+    if had:
+        ok = await asyncio.to_thread(sb_clients.sb_delete_as_service, where)
+    else:
+        ok = isinstance(await asyncio.to_thread(sb_clients.sb_post_as_service, "/msg_reactions?on_conflict=message_id,contact_id,kind", {
+            "message_id": str(m["id"]), "contact_id": str(me["id"]), "business_id": str(biz_id), "kind": kind},
+            prefer="return=representation,resolution=ignore-duplicates"), list)
+    if not ok:
+        return _answer(request, False, "error", back, 503)
+    return _answer(request, True, "reacted", back, on=not had)
+
+
+@router.post("/my/messages/{tid}/hide", include_in_schema=False)
+async def hide(tid: str, request: Request):
+    """A group's leader takes a message down. It isn't deleted: the church's
+    safety officers get it as a report, and can put it back."""
+    import asyncio
+    church, me, form, m, t, acc, back, stop = await _member_message(request, tid)
+    if stop:
+        return stop
+    biz_id = church["business"]["id"]
+    if t["kind"] != "group":
+        return _answer(request, False, "not_group_leader", back, 403)
+    mine = await asyncio.to_thread(my_groups, biz_id, str(me["id"]))
+    if mine is None:
+        return _answer(request, False, "error", back, 503)
+    if not any(str(g["group_id"]) == str(t["group_id"]) and g.get("role") == "leader" for g in mine):
+        return _answer(request, False, "not_group_leader", back, 403)
+    saved = await asyncio.to_thread(
+        sb_clients.sb_patch_as_service,
+        f"/msg_messages?id=eq.{_q(m['id'])}&business_id=eq.{_q(biz_id)}&status=eq.delivered",
+        {"status": "removed", "removed_by": str(me["id"]), "removed_at": now_iso()})
+    if not isinstance(saved, list):
+        return _answer(request, False, "error", back, 503)
+    if saved:
+        told = await asyncio.to_thread(sb_clients.sb_post_as_service, "/msg_reports", {
+            "business_id": str(biz_id), "message_id": str(m["id"]), "reporter_contact_id": str(me["id"]),
+            "reason": "Hidden by a leader of the group"})
+        if not isinstance(told, list) or not told:
+            # The officers must be told, or nothing is taken down.
+            await asyncio.to_thread(
+                sb_clients.sb_patch_as_service,
+                f"/msg_messages?id=eq.{_q(m['id'])}&business_id=eq.{_q(biz_id)}&status=eq.removed",
+                {"status": "delivered", "removed_by": None, "removed_at": None})
+            return _answer(request, False, "error", back, 503)
+    return _answer(request, True, "hidden", back)
+
+
 @router.post("/my/messages/report", include_in_schema=False)
 async def report(request: Request):
     import asyncio
@@ -927,7 +1108,7 @@ async def report(request: Request):
     if not rows:
         return _answer(request, False, "gone_chat", "/my/messages", 404)
     m = rows[0]
-    back = f"/my/messages/{m['thread_id']}"
+    back = _back_to(form, f"/my/messages/{m['thread_id']}")
     t = await asyncio.to_thread(thread, biz["id"], str(m["thread_id"]))
     acc = await asyncio.to_thread(chat_access, biz["id"], t, str(me["id"])) if t else None
     if not acc or acc["role"] != "member":
@@ -944,17 +1125,18 @@ async def report(request: Request):
 async def guidelines(request: Request):
     import asyncio
     church, me, err, status = await _who(request)
+    back = _back_to(await request.form(), "/my/messages")
     if err:
-        return _answer(request, False, err, "/my/messages", status)
+        return _answer(request, False, err, back, status)
     if rules.why_not(me):
-        return _answer(request, False, "not_enabled", "/my/messages", 403)
+        return _answer(request, False, "not_enabled", back, 403)
     biz = church["business"]
     saved = await asyncio.to_thread(sb_clients.sb_patch_as_service,
                                     f"/msg_members?contact_id=eq.{_q(me['id'])}&business_id=eq.{_q(biz['id'])}",
                                     {"guidelines_at": now_iso(), "updated_at": now_iso()})
     if not isinstance(saved, list) or not saved:
-        return _answer(request, False, "error", "/my/messages", 503)
-    return _answer(request, True, "welcome_msgs", "/my/messages")
+        return _answer(request, False, "error", back, 503)
+    return _answer(request, True, "welcome_msgs", back)
 
 
 # ─── keeping messages a year ─────────────────────────────────────────

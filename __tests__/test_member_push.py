@@ -298,7 +298,7 @@ def test_a_new_message_says_only_that_one_arrived(wired, monkeypatch):
     mp.tell_chat(church(messages=True), t, acc, "a")
     assert sorted(c for c, _, _ in sent) == ["b", "c"]
     assert sent[0][1] == {"title": "New message in Youth", "body": "Open the app to read it.",
-                          "url": "/my/messages/t9", "tag": "chat-t9"}
+                          "url": "/my/groups/g1/chat", "tag": "chat-t9"}   # a group's chat is inside the group
     sent.clear()
     mp.tell_chat(church(), t, acc, "a")          # messages not switched on by the church
     assert sent == []

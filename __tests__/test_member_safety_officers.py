@@ -78,6 +78,9 @@ def church(env, monkeypatch):
     t["business_users"] = [{"business_id": BIZ, "user_id": OFF1, "status": "active", "invited_email": "SAM@example.com",
                             "role": "admin"}]
     t["msg_member_officers"] = []
+    for g in t["groups"]:   # the group page reads these (member_portal_groups)
+        g.update(active=True, kind="small_group", description="", meets="", location="", capacity=None,
+                 open_to_join=True, join_mode="ask", name_display="full", youth=False, chat_on=True, chat_writers="all")
     monkeypatch.setattr(mr, "_owner_email", lambda owner_id: "owner@example.com")
     return env
 
@@ -98,6 +101,17 @@ def _officers_app(env, who):
     return TestClient(app, base_url=f"https://{HOST}")
 
 
+def _group_page(env, who, path):
+    """GET a group page (member_portal.serve → member_portal_groups)."""
+    env.who["id"] = who
+    app = FastAPI()
+
+    @app.get("/my/groups{rest:path}")
+    async def _groups(rest: str, request: mp.Request):
+        return await mp.serve(request, "/my/groups" + rest)
+    return TestClient(app, base_url=f"https://{HOST}").get(path)
+
+
 def _name_elder(church):
     r = _team(church, OWNER).post("/messaging/officers", json={"business_id": BIZ, "contact_id": ELDER, "officer": True})
     assert r.status_code == 200, r.text
@@ -107,17 +121,13 @@ def _name_elder(church):
 def _held(church):
     """Ana writes something the check holds in her group's chat."""
     church.verdict = "harm"
-    tid = _tid(_member_group(church))
+    import test_member_messaging as tmm
+    tid = tmm._group_tid(church, ANA, GRP)
     _send(church, ANA, tid, "something unkind")
     church.verdict = "ok"
     held = [m for m in church.t["msg_messages"] if m["status"] == "held"]
     assert held
     return tid, held[0]
-
-
-def _member_group(church):
-    import test_member_messaging as tmm
-    return tmm._member(church, ANA).get(f"/my/messages/group/{GRP}", follow_redirects=False).headers["location"]
 
 
 # ── 1. who can be picked ─────────────────────────────────────────────
@@ -207,6 +217,22 @@ def test_release_and_remove_act_as_the_officer(church):
     assert held["status"] == "removed" and held["removed_by"] == ELDER
 
 
+def test_what_a_group_leader_took_down_can_be_put_back(church):
+    _name_elder(church)
+    import test_member_messaging as tmm
+    tid = tmm._group_tid(church, ANA, GRP)
+    _send(church, ANA, tid, "a joke that landed wrong")
+    m = next(x for x in church.t["msg_messages"] if x["body"] == "a joke that landed wrong")
+    r = _officers_app(church, BEN).post(f"/my/messages/{tid}/hide", data={"message_id": m["id"]}, headers=JSON)
+    assert r.json()["ok"] and m["status"] == "removed"          # Ben leads the group
+    church.t["msg_reports"][-1].setdefault("status", "open")    # the column's default
+    page = _officers_app(church, ELDER).get("/my/lead/safety").text
+    assert "Hidden by a leader of the group" in page and "Put it back" in page and "Remove the message" not in page
+    _officers_app(church, ELDER).post("/my/lead/safety/act", data={"message_id": m["id"], "action": "release"},
+                                      headers=JSON, follow_redirects=False)
+    assert m["status"] == "delivered"
+
+
 def test_a_non_officer_cannot_act(church):
     tid, held = _held(church)
     r = _officers_app(church, BEN).post("/my/lead/safety/act", data={"message_id": held["id"], "action": "release"},
@@ -240,9 +266,11 @@ def test_opening_a_whole_chat_needs_a_reason_and_is_logged(church):
     look["created_at"] = datetime.now(timezone.utc).isoformat()
     page = c.get(f"/my/lead/safety/chat/{tid}")
     assert page.status_code == 200 and "something unkind" in page.text
-    # The people in that chat are told a safety officer reviewed it.
+    # The people in that chat are told a safety officer reviewed it, on the
+    # group's own chat page, where its members read it.
     import test_member_messaging as tmm
-    assert "reviewed" in tmm._member(church, ANA).get(f"/my/messages/{tid}").text
+    assert tmm._member(church, ANA).get(f"/my/messages/{tid}", follow_redirects=False).headers["location"] ==         f"/my/groups/{GRP}/chat"
+    assert "safety officer reviewed this chat" in _group_page(church, ANA, f"/my/groups/{GRP}/chat").text
 
 
 # ── 6. preview, failed reads ─────────────────────────────────────────

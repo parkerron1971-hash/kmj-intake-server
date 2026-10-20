@@ -13,6 +13,12 @@ page of its own; this is part 1 of building it:
                            (and from the pastors to every group), each with
                            "Got it"; a leader sees who has seen it
   /my/groups/<id>/people   who's in the group
+  /my/groups/<id>/chat     the group's chat, inside the group (part 2): the
+                           messaging thread, every message checked first;
+                           Love / Praying / Amen, replies, report, and a
+                           leader can take a message down (the safety
+                           officers are told). The office can make a group
+                           Board-only or leaders-only.
 
 Someone who isn't in the group sees what it is, who leads it, and how to
 get in — never who else belongs.
@@ -66,7 +72,7 @@ TITLE_MAX = 120
 POST_MAX = 2000
 POSTS_SHOWN = 40
 UUID = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
-TABS = ("", "board", "people")
+TABS = ("", "board", "people", "chat")
 
 
 def _q(v: Any) -> str:
@@ -87,8 +93,8 @@ def group_row(business_id: str, group_id: str) -> Optional[Dict[str, Any]]:
         return {}
     rows = sb_clients.sb_get_as_service(
         f"/groups?id=eq.{_q(group_id)}&business_id=eq.{_q(business_id)}"
-        f"&select=id,name,kind,description,meets,location,capacity,open_to_join,join_mode,name_display,youth,active,updated_at"
-        f"&limit=1")
+        f"&select=id,name,kind,description,meets,location,capacity,open_to_join,join_mode,name_display,youth,active,"
+        f"chat_on,chat_writers,updated_at&limit=1")
     if rows is None:
         return None
     if not rows or not rows[0].get("active"):
@@ -648,6 +654,10 @@ def _ic(name: str, size: int = 18) -> str:
     import member_app_ui as ui
     extra = {
         "megaphone": '<path d="m3 11 18-5v12L3 14v-3z"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/>',
+        # Praying, on a message in the chat.
+        "hand-heart": ('<path d="M11 14h2a2 2 0 1 0 0-4h-3c-.6 0-1.1.2-1.4.6L3 16"/><path d="m7 20 1.6-1.4c.3-.4.8-.6 1.4-.6h4'
+                       'c1.1 0 2.1-.4 2.8-1.2l4.6-4.4a2 2 0 0 0-2.75-2.91l-4.2 3.9"/><path d="m2 15 6 6"/><path d="M19.5 8.5'
+                       'c.7-.7 1.5-1.6 1.5-2.7A2.73 2.73 0 0 0 16 4a2.78 2.78 0 0 0-5 1.8c0 1.2.8 2 1.5 2.8L16 12Z"/>'),
         "pin": ('<path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76'
                 'a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/>'),
         "home": '<path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"/>',
@@ -738,14 +748,15 @@ def _and(names: List[str]) -> str:
 
 def _tabs(gid: str, current: str, *, board_new: int, chat: bool, live: Optional[Dict[str, Any]]) -> str:
     from member_portal import _e
-    items = [("", "Home", "home", 0), ("board", "Board", "megaphone", board_new), ("people", "People", "users", 0)]
+    items = [("", "Home", "home", 0)]
+    if chat:
+        items.append(("chat", "Chat", "chat", 0))
+    items += [("board", "Board", "megaphone", board_new), ("people", "People", "users", 0)]
     out = []
     for key, label, icon, n in items:
         cur = ' aria-current="page"' if key == current else ""
         badge = f'<span class="gs-n" aria-label="{n} new">{n}</span>' if n else ""
         out.append(f'<a class="gs-tab" href="{_base(gid, key)}"{cur}>{_ic(icon, 17)}<span>{label}</span>{badge}</a>')
-    if chat:
-        out.append(f'<a class="gs-tab" href="/my/messages/group/{_e(gid)}">{_ic("chat", 17)}<span>Chat</span></a>')
     if live:
         out.append(f'<a class="gs-tab" href="/my/groups/live/{_e(live["id"])}">{_ic("video", 17)}<span>Video</span></a>')
     return f'<nav class="gs-tabs" aria-label="In this group">{"".join(out)}</nav>'
@@ -875,11 +886,14 @@ def render(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], data
     posts = data.get("posts") or []
     me_id = str(me["id"])
     unread = sum(1 for p in posts if p.get("ask_ack") and not p.get("i_acked"))
-    chat = mpm.turned_on(biz)
+    chat = mpm.turned_on(biz) and g.get("chat_on") is not False
     tabs = _tabs(g["id"], tab, board_new=unread if tab != "board" else 0, chat=chat, live=data.get("live"))
     back = _base(g["id"], tab)
     size = len(people)
-    if tab == "board":
+    script = ""
+    if tab == "chat":
+        content, script = _chat_body(biz, request, me, g, data.get("chat") or {"state": "error"}, leader)
+    elif tab == "board":
         cards = "".join(_post_card(p, g, leader=leader, me_id=me_id, size=size, back=back) for p in posts)
         empty = ('<p class="gs-empty">Nothing on the Board yet. When a leader posts, it shows here.</p>' if not cards else "")
         content = f'{_compose(g) if leader else ""}{cards}{empty}'
@@ -948,17 +962,18 @@ def render(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], data
             doors.append(f'<a class="gs-row" href="{_base(g["id"], "board")}#post"><span class="gs-disc">{_ic("megaphone", 20)}</span>'
                          f'<span class="gs-t"><b>Post to the Board</b><span>Everyone in the group sees it</span></span>{_ic("chevron", 18)}</a>')
         if chat:
-            doors.append(f'<a class="gs-row" href="/my/messages/group/{gid}"><span class="gs-disc violet">{_ic("chat", 20)}</span>'
+            doors.append(f'<a class="gs-row" href="{_base(g["id"], "chat")}"><span class="gs-disc violet">{_ic("chat", 20)}</span>'
                          f'<span class="gs-t"><b>Group chat</b><span>Talk with everyone in the group</span></span>{_ic("chevron", 18)}</a>')
         doors.append(f'<a class="gs-row" href="{_base(g["id"], "people")}"><span class="gs-disc gold">{_ic("users", 20)}</span>'
                      f'<span class="gs-t"><b>People</b><span>{size} in the group</span></span>{_ic("chevron", 18)}</a>')
         parts.append(f'<div class="mb-sh"><h2>In the group</h2></div><div class="gs-list">{"".join(doors)}</div>')
-        if not chat:
+        if not chat and g.get("chat_on") is not False:
             parts.append(f'<p class="gs-note">{_ic("chat", 15)}<span>The group chat opens when '
                          f'{_e(biz.get("name") or "the church")} turns on messaging.</span></p>')
         content = "".join(parts)
     page = f'<a class="mb-back" href="/my/groups">Connect</a>{hero}{tabs}{flash}<div style="margin-top:16px">{content}</div>'
-    return _shell(biz, site, g.get("name") or "Group", f"<style>{GROUP_CSS}</style>{page}", tab="connect", who=me), 200
+    return _shell(biz, site, g.get("name") or "Group", f"<style>{GROUP_CSS}{CHAT_CSS}</style>{page}", tab="connect", who=me,
+                  script=script), 200
 
 
 async def serve(request: Request, biz: Dict[str, Any], site, me: Dict[str, Any], sub: str) -> Tuple[str, int]:
@@ -969,6 +984,8 @@ async def serve(request: Request, biz: Dict[str, Any], site, me: Dict[str, Any],
     if not UUID.match(gid) or tab not in TABS:
         return render(biz, site, request, me, {}, "")
     data = await asyncio.to_thread(space, str(biz["id"]), gid, me, tab=tab)
+    if data and data.get("role") and tab == "chat":
+        data["chat"] = await asyncio.to_thread(chat_view, biz, data["group"], me)
     if data and data.get("role") and tab in ("", "board"):
         shown = data.get("posts") or []
         if tab == "":
@@ -976,6 +993,256 @@ async def serve(request: Request, biz: Dict[str, Any], site, me: Dict[str, Any],
                     [p for p in shown if p.get("church") and not p.get("i_acked")][:1] + shown[:3]
         await asyncio.to_thread(mark_seen, str(biz["id"]), str(me["id"]), sorted({str(p["id"]) for p in shown}))
     return render(biz, site, request, me, data, tab)
+
+
+# ─── the Chat tab ────────────────────────────────────────────────────
+
+
+def chat_view(biz: Dict[str, Any], g: Dict[str, Any], me: Dict[str, Any]) -> Dict[str, Any]:
+    """What the Chat tab shows this member: {'state': off | board_only |
+    gate (why) | guidelines | error | ok, ...}. Messaging's own rules decide
+    who may write (birthdates, the per-person switch, teens' two adults)."""
+    import member_portal_messaging as mpm
+    import member_messaging_rules as rules
+    biz_id = str(biz["id"])
+    if not mpm.turned_on(biz):
+        return {"state": "off"}
+    if g.get("chat_on") is False:
+        return {"state": "board_only"}
+    full = mpm._me_profile(biz_id, me)
+    if full is None:
+        return {"state": "error"}
+    why = rules.why_not(full)
+    if why:
+        return {"state": "gate", "why": why}
+    if not full.get("guidelines_at"):
+        return {"state": "guidelines", "teen": rules.is_teen(full)}
+    tid = mpm.ensure_group_thread(biz_id, str(g["id"]))
+    t = mpm.thread(biz_id, tid) if tid else None
+    if not t:
+        return {"state": "error"}
+    acc = mpm.chat_access(biz_id, t, str(me["id"]))
+    if acc is None or acc.get("role") != "member":
+        return {"state": "error"}
+    msgs = mpm.messages(biz_id, tid, str(me["id"]))
+    looks = mpm.staff_looks(biz_id, tid)
+    if msgs is None or looks is None:
+        return {"state": "error"}
+    rx = mpm.reactions_for(biz_id, [m["id"] for m in msgs], str(me["id"]))
+    if rx is None:
+        return {"state": "error"}
+    mpm.mark_read(biz_id, tid, str(me["id"]))
+    return {"state": "ok", "tid": tid, "acc": acc, "msgs": msgs, "looks": looks, "rx": rx,
+            "writers": g.get("chat_writers") if g.get("chat_writers") in ("all", "leaders") else "all"}
+
+
+CHAT_CSS = """
+.gc-notes{display:flex;flex-direction:column;gap:6px;margin:0 0 10px;}
+.gc-note{display:flex;gap:8px;align-items:flex-start;font-size:13px;color:var(--fg3);margin:0;}
+.gc-list{list-style:none;margin:0;padding:0 0 12px;display:flex;flex-direction:column;gap:12px;}
+.gc-m{display:flex;align-items:flex-start;gap:8px;max-width:100%;}
+.gc-m.mine{flex-direction:row-reverse;}
+.gc-col{display:flex;flex-direction:column;gap:4px;min-width:0;max-width:82%;}
+.gc-m.mine .gc-col{align-items:flex-end;}
+.gc-who{display:flex;align-items:center;gap:6px;font-size:12.5px;font-weight:650;color:var(--fg2);padding:0 4px;}
+.gc-b{margin:0;padding:9px 13px 10px;border-radius:20px;background:var(--s1);font-size:15.5px;line-height:1.38;
+  white-space:pre-line;overflow-wrap:anywhere;color:var(--fg);}
+.gc-m.mine .gc-b{background:var(--teal);color:var(--on-teal);}
+.gc-q{display:flex;flex-direction:column;gap:1px;padding:6px 10px;border-radius:12px;background:var(--s2);font-size:13px;
+  line-height:1.3;color:var(--fg2);max-width:100%;}
+.gc-q b{font-size:12px;color:var(--fg);}
+.gc-held{font-size:12.5px;color:var(--coral-ink,var(--fg3));padding:0 4px;}
+.gc-rx{display:flex;gap:4px;flex-wrap:wrap;padding:0 2px;}
+.gc-rx form,.gc-acts form{margin:0;}
+.gc-chip{display:inline-flex;align-items:center;gap:4px;min-height:32px;padding:0 10px;border-radius:999px;border:0;background:var(--s2);
+  color:var(--fg2);font:inherit;font-size:12.5px;font-weight:650;cursor:pointer;}
+.gc-chip.on{background:var(--teal-deep);color:var(--teal-ink);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--teal-ink) 40%,transparent);}
+.gc-chip .mb-ic{width:14px;height:14px;}
+.gc-d{display:flex;flex-direction:column;align-items:flex-start;gap:6px;min-width:0;max-width:100%;}
+.gc-m.mine .gc-d{align-items:flex-end;}
+.gc-d>summary{list-style:none;cursor:pointer;}
+.gc-d>summary::-webkit-details-marker{display:none;}
+.gc-d>summary:focus-visible{outline:2px solid var(--acc);outline-offset:2px;}
+.gc-d[open]>summary{box-shadow:0 0 0 2px color-mix(in srgb,var(--acc) 55%,transparent);}
+.gc-acts{display:flex;align-items:center;gap:4px;flex-wrap:wrap;padding:6px;border-radius:999px;background:var(--s2);}
+.gc-pk{min-width:38px;height:38px;padding:0 10px;border-radius:999px;border:0;display:inline-grid;place-items:center;background:none;
+  color:var(--fg);font:inherit;font-size:13px;font-weight:700;cursor:pointer;box-sizing:border-box;}
+.gc-pk:has(.mb-ic){padding:0;}
+.gc-pk.on{background:var(--teal-deep);color:var(--teal-ink);}
+.gc-pk .mb-ic{width:18px;height:18px;}
+.gc-act{display:inline-flex;align-items:center;gap:4px;min-height:32px;padding:0 8px;border:0;background:none;color:var(--fg3);
+  font:inherit;font-size:12.5px;font-weight:600;cursor:pointer;text-decoration:none;border-radius:999px;}
+.gc-act:hover{background:var(--s1);color:var(--fg2);}
+.gc-act.warn{color:var(--error);}
+.gc-act .mb-ic{width:15px;height:15px;}
+.gc-compose{position:sticky;bottom:calc(84px + env(safe-area-inset-bottom,0px));z-index:6;margin:6px calc(var(--g) * -1) 0;
+  padding:10px var(--g) 12px;background:var(--bar,var(--bg));-webkit-backdrop-filter:blur(20px);backdrop-filter:blur(20px);
+  display:flex;flex-direction:column;gap:8px;}
+.gc-reply{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--fg2);}
+.gc-reply span{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.gc-reply a{color:var(--fg3);font-weight:600;text-decoration:none;}
+.gc-row{display:flex;gap:8px;align-items:center;}
+.gc-row input{flex:1;min-width:0;min-height:46px;border:0;outline:none;border-radius:23px;background:var(--s1);color:var(--fg);
+  padding:0 16px;font:inherit;font-size:16px;box-shadow:inset 0 0 0 1px var(--line);}
+.gc-send{width:46px;height:46px;border-radius:50%;border:0;display:grid;place-items:center;background:var(--acc-fill);color:var(--on-acc);
+  cursor:pointer;flex:none;}
+.gc-safe{display:flex;align-items:center;justify-content:center;gap:6px;font-size:12px;color:var(--fg3);margin:0;}
+.gc-guide{background:var(--s1);border-radius:var(--r-lg);padding:16px 18px;}
+.gc-guide ul{margin:8px 0 14px;padding-left:18px;display:flex;flex-direction:column;gap:6px;font-size:14.5px;color:var(--fg2);}
+"""
+
+
+def _chat_body(biz: Dict[str, Any], request: Request, me: Dict[str, Any], g: Dict[str, Any], cv: Dict[str, Any],
+               leader: bool):
+    """(html, script) for the Chat tab."""
+    import member_portal_messaging as mpm
+    import member_messaging_rules as rules
+    from member_portal import _e
+    church = _e(biz.get("name") or "the church")
+    gid = str(g["id"])
+    here = _base(gid, "chat")
+    state = cv.get("state")
+    if state == "off":
+        return f'<p class="gs-empty">The group chat opens when {church} turns on messaging.</p>', ""
+    if state == "board_only":
+        return (f'<p class="gs-empty">{_e(g.get("name") or "This group")} uses its Board only. '
+                f'<a href="{_base(gid, "board")}">Open the Board</a></p>'), ""
+    if state == "gate":
+        why = {"no_birthdate": f"The group chat needs your birthdate on your record. Ask {church}'s office to add it.",
+               "not_enabled": f"Ask {church}'s office to turn on messaging for you, then you can join the group chat."}
+        return f'<p class="gs-empty">{_e(why.get(cv.get("why"), "Messaging isn’t available to you right now."))}</p>', ""
+    if state == "guidelines":
+        teen = ('<li><strong>Your linked parents can read all of your chats.</strong></li>' if cv.get("teen") else "")
+        return (f'<section class="gc-guide"><p style="margin:0"><strong>Before you join the chat</strong></p><ul>'
+                f'<li>Be kind. No harassment, threats, or sexual content.</li>'
+                f'<li>Never ask anyone for money, photos, or to move to another app.</li>'
+                f'<li>Every message is checked before it’s delivered. Harmful ones are held for the church’s safety officers.</li>'
+                f'<li>You can report any message. They aren’t told who reported them.</li>'
+                f'<li>Staff don’t read your messages, except a safety officer reviewing a reported or held one; if that happens, '
+                f'everyone in the chat is told.</li>{teen}'
+                f'<li>If you or someone else is in danger, call 911. For a mental health crisis, call or text 988.</li></ul>'
+                f'<form method="post" action="/my/messages/guidelines"><input type="hidden" name="back" value="{_e(here)}">'
+                f'<button class="gs-btn" type="submit">I agree</button></form></section>'), ""
+    if state != "ok":
+        return '<p class="mp-err" role="alert">The group chat couldn’t load just now. Please try again in a moment.</p>', ""
+    acc, msgs, rx, tid = cv["acc"], cv["msgs"], cv["rx"], cv["tid"]
+    folks = acc["people"]
+    mode = g.get("name_display") or "full"
+    me_id = str(me["id"])
+    notes = []
+    if rules.is_teen(folks.get(me_id, {})):
+        notes.append(("lock", "Your linked parents can read this chat."))
+    elif acc.get("teen_in_chat"):
+        notes.append(("lock", "A teen is in this chat; their linked parents can read it."))
+    if cv.get("looks"):
+        notes.append(("shield", "A church safety officer reviewed this chat on " + mpm._days(x["created_at"] for x in cv["looks"]) + "."))
+    if msgs:
+        notes.append(("chat", "Tap a message to react, reply or report it."))
+    by_id = {str(m["id"]): m for m in msgs}
+    reply_id = str(request.query_params.get("reply") or "")
+    replying = by_id.get(reply_id) if UUID.match(reply_id) and by_id.get(reply_id, {}).get("status") == "delivered" else None
+    rx_names = (("love", "heart", "Love"), ("pray", "hand-heart", "Praying"), ("amen", "", "Amen"))
+    items = []
+    for m in msgs:
+        sid = str(m.get("sender_contact_id") or "")
+        mine = sid == me_id
+        person = folks.get(sid) or {}
+        name = display_name(person, mode) if person else "Someone"
+        face = "" if mine else _face(person, "gs-av m", mode)
+        who = "" if mine else f'<span class="gc-who">{_e(name)}</span>'
+        quote = ""
+        if m.get("reply_to"):
+            q = by_id.get(str(m["reply_to"]))
+            if q and q.get("status") == "delivered":
+                qn = display_name(folks.get(str(q.get("sender_contact_id") or "")) or {}, mode) or "Someone"
+                quote = f'<span class="gc-q"><b>{_e(qn)}</b><span>{_e(str(q.get("body") or "")[:120])}</span></span>'
+        held = ('<span class="gc-held">Held for review. Only you can see it.</span>' if m.get("status") == "held" else "")
+        r = rx.get(str(m["id"])) or {}
+        chips, acts = [], []
+        if m.get("status") == "delivered":
+            for kind, icon, label in rx_names:
+                n = int(r.get(kind) or 0)
+                on = kind in (r.get("mine") or set())
+
+                def toggle(cls: str, inner: str, said: str) -> str:
+                    return (f'<form method="post" action="/my/messages/{_e(tid)}/react"><input type="hidden" name="message_id" value="{_e(m["id"])}">'
+                            f'<input type="hidden" name="kind" value="{kind}"><input type="hidden" name="back" value="{_e(here)}">'
+                            f'<button class="{cls}{" on" if on else ""}" type="submit" aria-pressed="{"true" if on else "false"}" '
+                            f'aria-label="{said}">{inner}</button></form>')
+                # Under the message: the reactions it has, with counts.
+                if n or on:
+                    chips.append(toggle("gc-chip", (_ic(icon, 14) if icon else f"<span>{label}</span>") + f"<span>{n}</span>",
+                                        f"{label}, {n}"))
+                # In the picker: all three.
+                acts.append(toggle("gc-pk", _ic(icon, 18) if icon else f"<span>{label}</span>", label))
+            acts.append(f'<a class="gc-act" href="{_e(here)}?reply={_e(m["id"])}#gc-compose">Reply</a>')
+            if not mine:
+                acts.append(f'<form method="post" action="/my/messages/report"><input type="hidden" name="message_id" value="{_e(m["id"])}">'
+                            f'<input type="hidden" name="back" value="{_e(here)}"><button class="gc-act" type="submit">Report</button></form>')
+            if leader and not mine:
+                acts.append(f'<form method="post" action="/my/messages/{_e(tid)}/hide"><input type="hidden" name="message_id" value="{_e(m["id"])}">'
+                            f'<input type="hidden" name="back" value="{_e(here)}"><button class="gc-act warn" type="submit">Take down</button></form>')
+        chips_html = f'<div class="gc-rx">{"".join(chips)}</div>' if chips else ""
+        body = _e(m.get("body") or "")
+        # Tap a message for Love / Praying / Amen, Reply, Report (and a
+        # leader's Take down): the chat stays calm, like the canvas.
+        bubble = (f'<details class="gc-d"><summary class="gc-b">{body}</summary><div class="gc-acts">{"".join(acts)}</div></details>'
+                  if acts else f'<p class="gc-b">{body}</p>')
+        items.append(f'<li class="gc-m{" mine" if mine else ""}" id="m-{_e(m["id"])}">{face}<div class="gc-col">{who}{quote}'
+                     f'{bubble}{held}{chips_html}</div></li>')
+    listing = "".join(items) or '<li class="gs-empty">No messages yet. Say hello to your group.</li>'
+    notes_html = "".join(f'<p class="gc-note">{_ic(i, 14)}<span>{_e(n)}</span></p>' for i, n in notes)
+    can_write = bool(acc.get("can_send")) and (cv.get("writers") != "leaders" or leader)
+    if can_write:
+        reply_bar = ""
+        reply_input = ""
+        if replying:
+            rn = display_name(folks.get(str(replying.get("sender_contact_id") or "")) or {}, mode) or "Someone"
+            reply_bar = (f'<div class="gc-reply">{_ic("chat", 14)}<span>Replying to <b>{_e(rn)}</b>: {_e(str(replying.get("body") or "")[:80])}</span>'
+                         f'<a href="{_e(here)}#gc-compose" aria-label="Cancel reply">Cancel</a></div>')
+            reply_input = f'<input type="hidden" name="reply_to" value="{_e(replying["id"])}">'
+        compose = (f'<form class="gc-compose" id="gc-compose" method="post" action="/my/messages/{_e(tid)}/send">'
+                   f'{reply_bar}<input type="hidden" name="back" value="{_e(here)}">{reply_input}'
+                   f'<div class="gc-row"><label class="mp-sr" for="gc-say">Message the group</label>'
+                   f'<input id="gc-say" name="body" maxlength="{mpm.BODY_MAX}" autocomplete="off" required '
+                   f'placeholder="Message {_e(g.get("name") or "the group")}">'
+                   f'<button class="gc-send" type="submit" aria-label="Send">{_ic("send", 18)}</button></div>'
+                   f'<p class="gc-safe">{_ic("shield", 13)}<span>Kind words only. Every message is checked before it’s delivered.</span></p>'
+                   f'<p class="mp-err" id="gc-err" role="alert" hidden></p></form>')
+    elif cv.get("writers") == "leaders":
+        compose = '<p class="gs-note">Only the group’s leaders write in this chat. You can react to what they say.</p>'
+    else:
+        reason = {"two_adults": "This chat opens once two adult leaders of the group can message.",
+                  "no_birthdate": "Messaging needs your birthdate on your record.",
+                  "not_enabled": "Ask the church office to turn on messaging for you."}.get(acc.get("why"), "You can’t post here right now.")
+        compose = f'<p class="gs-note">{_e(reason)}</p>'
+    # New messages show up for everyone, readers of a leaders-only chat too.
+    script = _chat_script(tid, len(msgs))
+    return (f'<section class="gc" aria-label="Group chat"><div class="gc-notes">{notes_html}</div>'
+            f'<ul class="gc-list" id="gc-list" aria-live="polite" aria-label="Messages">{listing}</ul>{compose}</section>'), script
+
+
+def _chat_script(tid: str, count: int) -> str:
+    """Send without leaving the page; reload when something new arrives
+    (messaging's own feed counts the messages this person can see), never
+    while they're typing or choosing; one message's picker open at a time."""
+    import json
+    return f"""<script>(function(){{var f=document.getElementById('gc-compose'),err=document.getElementById('gc-err'),n={json.dumps(count)};
+var l=document.getElementById('gc-list');if(l&&!location.hash){{window.scrollTo(0,document.documentElement.scrollHeight);}}
+document.addEventListener('toggle',function(e){{var d=e.target;if(!d.classList||!d.classList.contains('gc-d')||!d.open)return;
+document.querySelectorAll('details.gc-d[open]').forEach(function(o){{if(o!==d)o.open=false;}});}},true);
+function poll(){{if(document.activeElement&&document.activeElement.id==='gc-say'&&document.activeElement.value)return;
+if(document.querySelector('details.gc-d[open]'))return;
+fetch('/my/messages/feed/{tid}',{{credentials:'same-origin',headers:{{'Accept':'application/json'}}}})
+.then(function(r){{return r.json();}}).then(function(d){{if(d&&typeof d.count==='number'&&d.count!==n)location.replace(location.pathname);}}).catch(function(){{}});}}
+setInterval(poll,6000);
+if(f){{f.addEventListener('submit',function(e){{e.preventDefault();var i=document.getElementById('gc-say'),t=i.value.trim();if(!t)return;
+var b=f.querySelector('.gc-send');b.disabled=true;err.hidden=true;var body=new URLSearchParams(new FormData(f));
+fetch(f.getAttribute('action'),{{method:'POST',credentials:'same-origin',headers:{{'Accept':'application/json','Content-Type':'application/x-www-form-urlencoded'}},body:body.toString()}})
+.then(function(r){{return r.json().then(function(d){{return {{ok:r.ok,d:d}};}});}}).then(function(x){{b.disabled=false;
+if(x.ok){{i.value='';if(x.d.care){{location.href=location.pathname+'?done=care';return;}}location.replace(location.pathname);}}else{{err.textContent=x.d.error||'That didn\'t send. Please try again.';err.hidden=false;}}}})
+.catch(function(){{b.disabled=false;err.textContent='That didn\'t send. Please try again.';err.hidden=false;}});}});}}
+}})();</script>"""
 
 
 # ─── routes ──────────────────────────────────────────────────────────

@@ -87,6 +87,7 @@ DONE = {
     "unpinned": "Unpinned.",
     "names_full": "The group shows full names now.",
     "names_first": "The group shows first names now.",
+    "hidden": "Taken down. The church's safety officers will look at it.",
 }
 ERRORS = {
     "full": "That one is full now.",
@@ -140,6 +141,8 @@ ERRORS = {
     "not_group_leader": "Only the group's leaders can do that.",
     "not_in_group": "That's for people in the group.",
     "answered": "Someone already answered that request.",
+    "group_board_only": "This group uses its Board only, so its chat is closed.",
+    "leaders_write": "Only the group's leaders write in this chat. You can still react.",
 }
 
 
@@ -973,7 +976,8 @@ def _back(target: str, **q: str) -> RedirectResponse:
     from member_portal import _SECURE_HEADERS
     allowed = ("/my", "/my/me", "/my/events", "/my/prayer", "/my/details", "/my/groups", "/my/classes", "/my/live", "/my/messages",
                "/my/kids/stories", "/my/kids/sundays", "/my/kids/family")
-    if target not in allowed and not re.fullmatch(r"/my/(groups/live|messages)/[0-9a-f-]{36}", target):
+    if (target not in allowed and not re.fullmatch(r"/my/(groups/live|messages)/[0-9a-f-]{36}", target)
+            and not re.fullmatch(r"/my/groups/[0-9a-fA-F-]{36}(/(board|people|chat))?", target)):
         target = "/my"
     qs = "&".join(f"{k}={v}" for k, v in q.items())
     return RedirectResponse(f"{target}?{qs}" if qs else target, status_code=303, headers=_SECURE_HEADERS)

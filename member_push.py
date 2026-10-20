@@ -537,8 +537,10 @@ def _tell_chat(business, t, acc, sender_id) -> None:
             f"/groups?id=eq.{t['group_id']}&business_id=eq.{business['id']}&select=name&limit=1") or []
         if g and g[0].get("name"):
             title = f"New message in {g[0]['name']}"
+    # A group's chat lives inside the group (member_portal_groups).
+    url = f"/my/groups/{t['group_id']}/chat" if t.get("kind") == "group" and t.get("group_id") else f"/my/messages/{t['id']}"
     send(business, "messages", title=title, body="Open the app to read it.",
-         url=f"/my/messages/{t['id']}", contact_ids=who, tag=f"chat-{t['id']}")
+         url=url, contact_ids=who, tag=f"chat-{t['id']}")
 
 
 def tell_prayed(business_id: str, contact_id: Optional[str], request_id: str) -> None:
