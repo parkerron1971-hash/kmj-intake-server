@@ -188,3 +188,4 @@ jobs:
           node __tests__/devotionals_db.mjs
           node __tests__/worship_songs_db.mjs
           node __tests__/worship_show_db.mjs
+          node __tests__/worship_media_db.mjs

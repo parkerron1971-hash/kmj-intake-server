@@ -190,6 +190,10 @@ BUSINESS_CHILD_TABLES: List[str] = [
     # Sundays on screens: the services (their order, notes and the songs
     # they point at; see _IMPORT_SKIP) and the look every slide wears.
     "worship_services", "worship_settings",
+    # The church's pictures and videos for Sunday's screens: the rows (name,
+    # type, size, link); the files themselves are in business-assets. Not
+    # re-imported (see _IMPORT_SKIP).
+    "worship_media",
     # Families and children: notes, pickups and children before their
     # household, and the household's adult links before contacts.
     "child_checkins",
@@ -813,6 +817,9 @@ _IMPORT_SKIP = {
     # A service's items point at song ids the import mints anew; the
     # services stay in the archive, readable, and are planned again.
     "worship_services",
+    # Rows that point at files under the OLD business's storage prefix; a
+    # copy would show another account's files and lose them when it goes.
+    "worship_media",
 }
 
 # Columns the platform owns. Carrying them across would let an import

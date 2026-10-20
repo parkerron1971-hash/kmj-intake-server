@@ -331,6 +331,8 @@ from worship_router import router as worship_router
 app.include_router(worship_router)
 from worship_show_router import router as worship_show_router
 app.include_router(worship_show_router)
+from worship_media_router import router as worship_media_router
+app.include_router(worship_media_router)
 # Joining a free class from its public page (POST <class page>/join).
 from academy_join import router as academy_join_router
 app.include_router(academy_join_router)
