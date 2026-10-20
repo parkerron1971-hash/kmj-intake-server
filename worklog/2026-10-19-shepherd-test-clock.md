@@ -4,7 +4,7 @@ date: 2026-10-19
 agent: Claude Code (Claude Opus 5.5)
 asked: '"keep going with step 2 I want the entire thing built" (Kevin, 2026-10-19); this test failed the ChurchSavvy show engine PR (#1510) and would fail every PR from 2026-10-20 UTC on'
 status: shipped
-prs: [kmj-intake-server#TBD]
+prs: [kmj-intake-server#1512]
 migrations: []
 left_undone: []
 decisions: ["pin Jaylen's birthday in that one test, not change born(): the shared fixture is right for the tests that read the real date; only this file pins NOW"]
