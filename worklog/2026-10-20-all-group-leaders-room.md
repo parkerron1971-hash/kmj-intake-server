@@ -4,7 +4,7 @@ date: 2026-10-20
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-10-20: "yes all group leaders room would be great"; part 2 of the approved canvas "Church Groups, Together"'
 status: shipped
-prs: [kmj-intake-server#1523, solutionist-studio#1296]
+prs: [kmj-intake-server#1523, solutionist-studio#1297]
 migrations: [supabase/APPLY-2026-10-20-leaders-room.sql (applied)]
 left_undone: ["part 3: the group prayer wall, gatherings (RSVP, I'm here, the roll from the phone, bring-a-dish), study questions", "part 4: quiet hours and the after-hours alert, email for group news, the evening summary, the office's health page and a word to every group, the leader's desk, groups on the Lead tab"]
 decisions: ["the room is a messaging thread of a new kind ('leaders'), not a group: it never shows in Groups, Find a group, counts or the export as a group", "who's in it is read live, never copied: leaders of ACTIVE groups plus ACTIVE senior/pastoral church roles (the same pastoral rule as safety officers); an invited pastor or a non-pastoral role isn't in it", "every message is still checked (msg_screen), reportable, and visible to the safety officers' logged reviews like any chat; no take-down in the room (pastors use Report)", "doors only for the people in it and only once messaging is on: Connect gets a 'For leaders' row, the Lead page a card; Messages lists it and opens its page", "being in the room doesn't make two people 'share a group' for direct messages"]
