@@ -852,10 +852,11 @@ def _post_card(p: Dict[str, Any], g: Dict[str, Any], *, leader: bool, me_id: str
             f'{pin_mark}</div>{title}<p class="gs-body">{_e(p.get("body") or "")}</p>{foot}{tools}</article>')
 
 
-def _requests_block(reqs: List[Dict[str, Any]], g: Dict[str, Any]) -> str:
+def _requests_block(reqs: List[Dict[str, Any]], g: Dict[str, Any], back: str = "") -> str:
     from member_portal import _e
     if not reqs:
         return ""
+    back_in = f'<input type="hidden" name="back" value="{_e(back)}">' if back else ""
     rows = []
     for r in reqs:
         p = r["person"]
@@ -866,9 +867,9 @@ def _requests_block(reqs: List[Dict[str, Any]], g: Dict[str, Any]) -> str:
         rid = _e(r["id"])
         rows.append(
             f'<div class="gs-req">{_face(p, "gs-av m")}<span class="gs-t"><b>{_e(name)}</b><span>{_e(" · ".join(b for b in bits if b))}</span></span>'
-            f'<div class="gs-acts"><form method="post" action="/my/groups/answer"><input type="hidden" name="id" value="{rid}">'
+            f'<div class="gs-acts"><form method="post" action="/my/groups/answer"><input type="hidden" name="id" value="{rid}">{back_in}'
             f'<input type="hidden" name="yes" value="0"><button class="gs-btn soft sm" type="submit" aria-label="Not now for {_e(name)}">Not now</button></form>'
-            f'<form method="post" action="/my/groups/answer"><input type="hidden" name="id" value="{rid}">'
+            f'<form method="post" action="/my/groups/answer"><input type="hidden" name="id" value="{rid}">{back_in}'
             f'<input type="hidden" name="yes" value="1"><button class="gs-btn sm" type="submit" aria-label="Say yes to {_e(name)}">Say yes</button></form></div></div>')
     return (f'<section class="gs-list" aria-labelledby="gs-req-h"><div class="gs-head"><b id="gs-req-h">Asking to join</b>'
             f'<span class="gs-n">{len(reqs)}</span></div>{"".join(rows)}</section>')
@@ -1431,7 +1432,7 @@ if(x.ok){{i.value='';var ah=f.querySelector('input[name=after_hours]');if(ah)ah.
 
 # ─── routes ──────────────────────────────────────────────────────────
 
-_BACK_RE = re.compile(r"^/my/groups(/[0-9a-fA-F-]{36}(/(board|people|prayer|meet))?)?$")
+_BACK_RE = re.compile(r"^(/my/groups(/[0-9a-fA-F-]{36}(/(board|people|prayer|meet))?)?|/my/lead/groups(/[0-9a-fA-F-]{36})?)$")
 
 
 def _go(target: str, **q: str) -> RedirectResponse:
@@ -1495,7 +1496,9 @@ async def answer_route(request: Request):
         return stop
     yes = str(form.get("yes") or "") == "1"
     ok, code, gid = await asyncio.to_thread(answer, church["business"], me, str(form.get("id") or ""), yes)
-    return _go(_base(gid) if gid else "/my/groups", **({"done": code} if ok else {"err": code}))
+    back = str(form.get("back") or "")
+    target = back if back.startswith("/my/lead/") and _BACK_RE.match(back) else (_base(gid) if gid else "/my/groups")
+    return _go(target, **({"done": code} if ok else {"err": code}))
 
 
 @router.post("/my/groups/post", include_in_schema=False)

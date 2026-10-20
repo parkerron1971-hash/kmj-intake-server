@@ -1060,6 +1060,10 @@ async def serve(request: Request, path: str) -> HTMLResponse:
         import church_follow_up as cfu
         if ctx.get("space", "church") == "church" and not sess.get("preview") and cfu.is_church(biz):
             mine = await asyncio.to_thread(cfu.roles_for, biz["id"], str(sess["me"]["id"]))
+            # A group's leaders too: their group lives on the Lead tab (group_lead).
+            if not mine:
+                import group_lead
+                mine = await asyncio.to_thread(group_lead.led_groups, biz["id"], str(sess["me"]["id"]))
             ctx = dict(ctx, lead=bool(mine))
         msp.CURRENT.set(ctx)
     resp = await _serve_page(request, church, sess, sub)

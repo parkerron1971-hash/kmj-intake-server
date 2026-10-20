@@ -75,6 +75,9 @@ ERRORS = {
 
 LEAD_CSS = """
 body:has(.ld-wide) .mb-top,body:has(.ld-wide) .mp-shell{max-width:1180px;}
+/* From 1100px the tab bar is a 92px rail on the left: a wide page starts
+   after it instead of under it (centred once there's room). */
+@media (min-width:1100px){body:has(.ld-wide) .mp-shell.mb-has-nav{margin-left:max(92px,calc((100vw - 1180px) / 2));margin-right:auto;}}
 .ld-head{display:flex;align-items:flex-end;flex-wrap:wrap;gap:10px 14px;margin:6px 0 16px;}
 .ld-hello{margin:0;font-size:34px;font-weight:750;letter-spacing:-.035em;line-height:1.05;}
 .ld-hello em{font-family:var(--mb-serif);font-style:italic;font-weight:500;color:var(--acc);}
@@ -456,7 +459,7 @@ def render(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], my_r
            view: Optional[Dict[str, Any]], selected: str = "", *, now: Optional[datetime] = None,
            prayer: Optional[Dict[str, Any]] = None, tab: str = "people",
            targets: Optional[List[Dict[str, Any]]] = None, fams: int = 0, safety: Optional[int] = None,
-           room: bool = False) -> str:
+           room: bool = False, groups: int = 0) -> str:
     from member_portal import _shell
     import member_portal_safety as mps
     now = now or datetime.now(timezone.utc)
@@ -475,14 +478,14 @@ def render(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], my_r
     people = any(not _is_prayer(r) for r in active) or bool((view or {}).get("follow_ups"))
     if active and prays and (tab == "prayer" or not people):
         waiting = sum(1 for p in (prayer or {}).get("requests") or [] if not p.get("prayed_at"))
-        seg = _seg("prayer", people, True, waiting, fams)
+        seg = _seg("prayer", people, True, waiting, fams, groups)
         body = f'{flash}{head}{invites}{mps.card(safety)}{_room_door(room)}{seg}{_prayer_body(prayer, biz, targets or [], now)}'
         return _shell(biz, site, "Prayer", f'<style>{LEAD_CSS}{mps.SAFETY_CSS}</style><div class="ld-wide">{body}</div>',
                       tab="lead", who=me)
     seg = ""
     if active:
         waiting = sum(1 for p in (prayer or {}).get("requests") or [] if not p.get("prayed_at"))
-        seg = _seg("people", True, prays, waiting, fams)
+        seg = _seg("people", True, prays, waiting, fams, groups)
     head = head + seg
     if not active:
         body = (f'{flash}{head}{invites}' if invites else
@@ -535,6 +538,9 @@ async def serve(request: Request, biz: Dict[str, Any], site, me: Dict[str, Any],
     selected = sub[len("/my/lead/"):] if sub.startswith("/my/lead/") else ""
     if selected == "families" or selected.startswith("family/"):
         return await serve_families(request, biz, site, me, selected)
+    # A group's leaders: their group (group_lead).
+    if selected == "groups" or selected.startswith("groups/"):
+        return await serve_groups(request, biz, site, me, selected[len("groups/"):] if "/" in selected else "")
     # The Safety room, for the church's safety officers (member_portal_safety).
     import member_portal_safety as mps
     if selected == "safety" or selected.startswith("safety/"):
@@ -547,6 +553,11 @@ async def serve(request: Request, biz: Dict[str, Any], site, me: Dict[str, Any],
     my_roles = await asyncio.to_thread(cfu.roles_for, biz["id"], str(me["id"]))
     if my_roles is None:
         return render(biz, site, request, me, [{"status": "active", "role": "", "label": ""}], None), 503
+    import group_lead
+    led = await asyncio.to_thread(group_lead.led_groups, biz["id"], str(me["id"])) or []
+    if led and not selected and tab == "people" and not any(r["status"] == "active" for r in my_roles):
+        # Only a group to lead: the Lead tab opens on it.
+        return await serve_groups(request, biz, site, me, "")
     view = prayer = None
     targets: List[Dict[str, Any]] = []
     fams = 0
@@ -563,9 +574,49 @@ async def serve(request: Request, biz: Dict[str, Any], site, me: Dict[str, Any],
     room = (await asyncio.to_thread(mpm.in_leaders_room, biz["id"], str(me["id"]))
             if mpm.turned_on(biz) and any(r["status"] == "active" for r in my_roles) else False)
     html_out = render(biz, site, request, me, my_roles, view, selected, prayer=prayer, tab=tab, targets=targets,
-                      fams=fams, safety=safety, room=bool(room))
+                      fams=fams, safety=safety, room=bool(room), groups=len(led))
     ok = (prayer is not None) if tab == "prayer" else (view is not None)
     return html_out, 200 if ok or not my_roles else 503
+
+
+async def serve_groups(request: Request, biz: Dict[str, Any], site, me: Dict[str, Any], group_id: str):
+    """GET /my/lead/groups[/<group id>]: a group's leaders, their group
+    (group_lead). (html, status)."""
+    import group_lead
+    import group_study
+    import member_portal_church as mpc
+    import member_portal_groups as mpg
+    from member_portal import _shell
+    if group_id and not _FID.match(group_id):
+        group_id = ""
+    v = await asyncio.to_thread(group_lead.view, biz, me, group_id)
+    my_roles = await asyncio.to_thread(cfu.roles_for, biz["id"], str(me["id"])) or []
+    active = [r for r in my_roles if r.get("status") == "active"]
+    people = any(not _is_prayer(r) for r in active)
+    prays = any(_is_prayer(r) for r in active)
+    n = len((v or {}).get("groups") or [])
+    seg = _seg("groups", people, prays, 0, 0, n)
+    first = (me.get("name") or "").strip().split(" ")[0] or "friend"
+    if v is None:
+        body = (f'<header class="ld-head"><h1 class="ld-hello">Lead, <em>{_e(first)}</em></h1></header>{seg}'
+                f'<p class="mp-err" role="alert">Your group couldn’t load just now. Please try again in a moment.</p>')
+        return _shell(biz, site, "My group", f'<style>{LEAD_CSS}</style><div class="ld-wide">{body}</div>', tab="lead", who=me), 503
+    if not v:
+        body = (f'<header class="ld-head"><h1 class="ld-hello">Lead, <em>{_e(first)}</em></h1></header>{seg}'
+                f'<section class="ld-card"><p>You don’t lead a group right now. When the church office makes you a group’s '
+                f'leader, it shows up here.</p><p><a href="/my/lead">Back to Lead</a></p></section>')
+        return _shell(biz, site, "My group", f'<style>{LEAD_CSS}</style><div class="ld-wide">{body}</div>', tab="lead", who=me), 200
+    g = v["g"]
+    mode = g.get("name_display") or "full"
+    inner = group_lead.render_body(biz, me, v, ic=mpg._ic, esc=_e,
+                                   face=lambda p: mpg._face(p, "gs-av", mode), name=lambda p: mpg.display_name(p, mode))
+    head = (f'<header class="ld-head" style="flex-direction:column;align-items:flex-start;gap:6px">'
+            f'<p class="gl-eb">You lead {_e(g.get("name") or "a group")}</p>'
+            f'<h1 class="ld-hello">{group_lead.hello(biz, me)}</h1></header>')
+    css = f"{LEAD_CSS}{mpg.GROUP_CSS}{group_study.STUDY_CSS}{group_lead.GL_CSS}"
+    body = f'{mpc._flash(request)}{head}{seg}{inner}'
+    return _shell(biz, site, g.get("name") or "My group", f'<style>{css}</style><div class="ld-wide gl">{body}</div>',
+                  tab="lead", who=me), 200
 
 
 # ─── Shepherding: the families a pastor or elder shepherds ────────────
@@ -612,10 +663,12 @@ def _ago(days: Optional[int]) -> str:
     return f"Last reached {days} days ago"
 
 
-def _seg(tab: str, people: bool, prays: bool, waiting: int, fams: int) -> str:
-    """People | Prayer | Families: only the ones this leader has, and only
-    when there is more than one."""
+def _seg(tab: str, people: bool, prays: bool, waiting: int, fams: int, groups: int = 0) -> str:
+    """My group | People | Prayer | Families: only the ones this leader has,
+    and only when there is more than one."""
     tabs = []
+    if groups:
+        tabs.append(("groups", "/my/lead/groups", "My groups" if groups > 1 else "My group"))
     if people:
         tabs.append(("people", "/my/lead", "People"))
     if prays:
