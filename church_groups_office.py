@@ -193,7 +193,8 @@ async def word(body: WordIn, user: AuthedUser = Depends(require_user)):
     import kids_router
     import member_push
     biz_id = kids_router._uuid(body.business_id, "business_id")
-    await asyncio.to_thread(_need, biz_id, user, "member")
+    # A direct call, so the ownership sweep (ownership_sweep.py) sees the gate.
+    _need(biz_id, user, "member")
     text = "\n".join(line.rstrip() for line in body.body.strip().splitlines()).strip()
     title = " ".join(body.title.split())
     if not text:
