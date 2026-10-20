@@ -215,7 +215,7 @@ def posts_for(business_id: str, group_id: str, me_id: str, leader: bool,
     pressed "Got it", and (for a leader) how many have seen it."""
     rows = sb_clients.sb_get_as_service(
         f"/group_posts?business_id=eq.{_q(business_id)}&or=(group_id.eq.{_q(group_id)},group_id.is.null)"
-        f"&removed_at=is.null&select=id,group_id,title,body,pinned,ask_ack,posted_by,after_hours,created_at"
+        f"&removed_at=is.null&select=id,group_id,title,body,pinned,ask_ack,posted_by,after_hours,emailed,created_at"
         f"&order=created_at.desc&limit={POSTS_SHOWN}")
     if rows is None:
         return None
@@ -414,7 +414,7 @@ def answer(business: Dict[str, Any], me: Dict[str, Any], request_id: str, yes: b
 
 
 async def create_post(business: Dict[str, Any], me: Dict[str, Any], group_id: str, title: str, body: str,
-                      pinned: bool, ask_ack: bool, after_hours: bool = False) -> Tuple[bool, str]:
+                      pinned: bool, ask_ack: bool, after_hours: bool = False, email_rest: bool = False) -> Tuple[bool, str]:
     import asyncio
     import msg_screen
     business_id = str(business["id"])
@@ -461,10 +461,15 @@ async def create_post(business: Dict[str, Any], me: Dict[str, Any], group_id: st
     rows = await asyncio.to_thread(sb_clients.sb_post_as_service, "/group_posts", {
         "business_id": business_id, "group_id": g["id"], "title": title, "body": body,
         "pinned": bool(pinned), "ask_ack": bool(ask_ack), "posted_by": str(me["id"]),
-        **({"after_hours": True} if alert else {})})
+        **({"after_hours": True} if alert else {}), **({"email_rest": True} if email_rest else {})})
     if not (isinstance(rows, list) and rows):
         return False, "error"
     member_push.tell_group_post(business, g, str(rows[0].get("id") or ""), me, title, ring=bool(alert))
+    if email_rest:
+        # "Email the rest" (group_email): the group's people with no phone
+        # set up for the app, off the request.
+        import group_email
+        group_email.spawn(group_email.email_rest(business, g, {**rows[0], "title": title, "body": body}, me))
     return True, "post_up"
 
 
@@ -646,7 +651,7 @@ GROUP_CSS = """
 .gs-compose input[type=text]{font-weight:650;}
 .gs-compose textarea{min-height:120px;resize:vertical;}
 .gs-check{display:flex;align-items:center;gap:10px;min-height:40px;font-size:14.5px;}
-.gs-check input{width:20px;height:20px;accent-color:var(--teal);}
+.gs-check input{width:20px;height:20px;flex:none;margin:0;accent-color:var(--teal);}
 .gs-fine{font-size:12.5px;color:var(--fg3);margin:0;}
 .gs-meet{display:flex;align-items:center;gap:14px;}
 .gs-meet .gs-t{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;}
@@ -808,6 +813,8 @@ def _post_card(p: Dict[str, Any], g: Dict[str, Any], *, leader: bool, me_id: str
         bits = [f"Seen by {int(p.get('seen_n') or 0)} of {size}"]
         if p.get("ask_ack"):
             bits.append(f"{int(p.get('acked_n') or 0)} said got it")
+        if p.get("emailed"):
+            bits.append(f"{int(p['emailed'])} by email")
         seen = f'<span class="gs-seen">{" · ".join(bits)}</span>'
     tools = ""
     if not p.get("church") and (leader or str(p.get("posted_by") or "") == str(me_id)):
@@ -861,6 +868,7 @@ def _compose(g: Dict[str, Any], quiet: bool = False) -> str:
             f'placeholder="Write it like you\'d say it to the group."></textarea>'
             f'<label class="gs-check"><input type="checkbox" name="pin" value="1">Pin it to the top</label>'
             f'<label class="gs-check"><input type="checkbox" name="ack" value="1" checked>Ask everyone for a “Got it”</label>{alert}'
+            f'<label class="gs-check"><input type="checkbox" name="email" value="1">Email the people who haven’t set the app up on a phone</label>'
             f'<button class="gs-btn" type="submit">{_ic("send", 16)}Post to {_e(g.get("name") or "the group")}</button>'
             f'<p class="gs-fine">Everyone in the group sees it on the group\'s Home and Board. It\'s checked before it goes up, like every message.</p>'
             f'</form>')
@@ -1416,7 +1424,7 @@ async def post_route(request: Request):
         return _go("/my/groups", err="group_gone")
     ok, code = await create_post(church["business"], me, gid, str(form.get("title") or ""), str(form.get("body") or ""),
                                  str(form.get("pin") or "") == "1", str(form.get("ack") or "") == "1",
-                                 str(form.get("after_hours") or "") == "1")
+                                 str(form.get("after_hours") or "") == "1", str(form.get("email") or "") == "1")
     return _go(_base(gid, "board"), **({"done": code} if ok else {"err": code}))
 
 

@@ -300,9 +300,11 @@ def test_the_page_saves_quiet_hours_only_when_it_showed_them(monkeypatch):
     monkeypatch.setattr(mpc, "_allowed", lambda c, m: True)
     monkeypatch.setattr(mp, "save_turned_off", lambda b, c, off: True)
     monkeypatch.setattr(mp, "turned_off", lambda b, c: set())
-    monkeypatch.setattr(mp, "save_quiet", lambda b, c, quiet, after: saved.append((quiet, after)) or True)
+    monkeypatch.setattr(mp, "save_quiet", lambda b, c, quiet, after, email=None: saved.append((quiet, after, email)) or True)
     monkeypatch.setattr(msp, "resolve", lambda b, me, wanted="": {"space": "church", "options": ["church"]})
     asyncio.run(mp.my_notifications_save(_form(b"k_groups=on&quiet_shown=1&q_after=on")))
-    assert saved == [(False, True)]                     # quiet hours off, after-hours alerts still ring
+    assert saved == [(False, True, None)]               # quiet hours off, after-hours alerts still ring
     asyncio.run(mp.my_notifications_save(_form(b"k_groups=on")))
-    assert saved == [(False, True)]                     # not shown: left as it was
+    assert saved == [(False, True, None)]               # not shown: left as it was
+    asyncio.run(mp.my_notifications_save(_form(b"k_groups=on&quiet_shown=1&q_quiet=on&q_after=on&email_shown=1&q_email=on")))
+    assert saved[-1] == (True, True, True)              # and the email follow-up, when its box was shown
