@@ -194,6 +194,7 @@ jobs:
           node __tests__/group_email_db.mjs
           node __tests__/group_prayer_db.mjs
           node __tests__/group_gatherings_db.mjs
+          node __tests__/group_bring_db.mjs
           node __tests__/worship_songs_db.mjs
           node __tests__/worship_show_db.mjs
           node __tests__/worship_media_db.mjs
