@@ -267,8 +267,16 @@ def test_a_parent_reads_their_teens_chats_but_cant_post(env):
     assert _member(env, ANA).get(f"/my/messages/family/{TEEN}").status_code == 404
 
 
+def _group_tid(env, who, gid):
+    """Open a group's chat from Messages: it lives inside the group now
+    (member_portal_groups, 2026-10-20); the thread is still messaging's."""
+    loc = _member(env, who).get(f"/my/messages/group/{gid}", follow_redirects=False).headers["location"]
+    assert loc == f"/my/groups/{gid}/chat"
+    return next(t["id"] for t in env.t["msg_threads"] if t.get("group_id") == gid)
+
+
 def test_a_group_chat_with_a_teen_waits_for_two_adult_leaders(env):
-    tid = _tid(_member(env, TEEN).get(f"/my/messages/group/{YOUTH}", follow_redirects=False).headers["location"])
+    tid = _group_tid(env, TEEN, YOUTH)
     r = _send(env, TEEN, tid, "hi all")
     assert r.status_code == 403 and "two adult leaders" in r.json()["error"]
     env.t["group_members"].append({"group_id": YOUTH, "contact_id": BEN, "business_id": BIZ, "role": "leader"})

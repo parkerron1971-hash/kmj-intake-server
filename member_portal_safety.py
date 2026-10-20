@@ -206,9 +206,13 @@ def render_room(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any],
         rid = _e(r["id"])
         sender = _e(msg.get("sender") or "Someone")
         reason = f'<span>· “{_e(r["reason"])}”</span>' if r.get("reason") else ""
+        # A message a group's leader took down comes here as a report: the
+        # officer can put it back (release) if the leader was too quick.
         remove = (f'<form method="post" action="/my/lead/safety/act"><input type="hidden" name="message_id" value="{_e(msg.get("id") or "")}">'
-                  f'<input type="hidden" name="action" value="remove"><button class="sf-btn" type="submit">Remove the message</button></form>'
-                  if msg.get("id") and msg.get("status") != "removed" else "")
+                  + (f'<input type="hidden" name="action" value="release"><button class="sf-btn go" type="submit">Put it back</button></form>'
+                     if msg.get("status") == "removed" else
+                     f'<input type="hidden" name="action" value="remove"><button class="sf-btn" type="submit">Remove the message</button></form>')
+                  if msg.get("id") else "")
         cards.append(
             f'<article class="sf-item"><div class="sf-meta"><b>{sender}</b><span>{_e(_when(msg.get("created_at")))}</span>'
             f'<span class="sf-flag">Reported by {_e(r.get("reporter") or "a member")}</span>{reason}</div>'
