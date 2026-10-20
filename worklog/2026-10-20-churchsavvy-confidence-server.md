@@ -4,7 +4,7 @@ date: 2026-10-20
 agent: Claude Code (Claude Opus 5.5)
 asked: '"also confidence screen. make sure that that is function as well" and "have where people put the notes down the timer is still showing on confidence screen" then "these are a go" (Kevin, 2026-10-20; canvas board 33)'
 status: in progress
-prs: []
+prs: [kmj-intake-server#1529]
 migrations: [supabase/APPLY-2026-10-20-worship-stage.sql]
 left_undone: ["the confidence screen itself and its setup (solutionist-studio, next PR)"]
 decisions: ["notes for the stage live on each item (`stage`) and on each point of a sermon's slides (`notes`); the booth's own notes stay separate and never reach a screen", "only a stage screen's link gets the stage notes; the room, stream, LED wall and lobby never do", "a stage screen's settings sit in their own column (jsonb, at most 1000 bytes), filled with defaults on the way out so an older screen reads like a new one", "the column goes in before the code that selects it deploys"]
