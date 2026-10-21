@@ -129,11 +129,32 @@ def resolve(business_id: str, me: Dict[str, Any], wanted: str = "") -> Dict[str,
     {space, youth, leader: {space: row}, kids_parent, options: [...]}.
     A read that fails leaves them in Church (never somewhere they may not be)."""
     if is_youth(me):
-        return {"space": "youth", "youth": True, "leader": {}, "kids_parent": False, "options": []}
+        return _placed(me, wanted, {}, False)
     # A leader must be an adult, whatever the table says (the office's
     # approval checked the birthdate; this holds if it later changes).
     leaders = (leader_rows(business_id, str(me["id"])) or {}) if is_adult(me) else {}
     parent = bool(has_children(business_id, str(me["id"]))) if KIDS_READY else False
+    return _placed(me, wanted, leaders, parent)
+
+
+async def resolve_async(business_id: str, me: Dict[str, Any], wanted: str = "") -> Dict[str, Any]:
+    """resolve, with its two reads (leader of a space? a parent?) made at
+    once rather than one after the other: every member page waits on this."""
+    import asyncio
+    if is_youth(me):
+        return _placed(me, wanted, {}, False)
+
+    async def nothing():
+        return None
+    leaders, parent = await asyncio.gather(
+        asyncio.to_thread(leader_rows, business_id, str(me["id"])) if is_adult(me) else nothing(),
+        asyncio.to_thread(has_children, business_id, str(me["id"])) if KIDS_READY else nothing())
+    return _placed(me, wanted, leaders or {}, bool(parent))
+
+
+def _placed(me: Dict[str, Any], wanted: str, leaders: Dict[str, Dict[str, Any]], parent: bool) -> Dict[str, Any]:
+    if is_youth(me):
+        return {"space": "youth", "youth": True, "leader": {}, "kids_parent": False, "options": []}
     options = ["church"]
     if "youth" in leaders:
         options.append("youth")
