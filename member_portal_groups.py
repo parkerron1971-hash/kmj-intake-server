@@ -1634,6 +1634,20 @@ async def meet_roll_route(request: Request):
     return await _meet_action(request, act)
 
 
+@router.post("/my/groups/meet/guest", include_in_schema=False)
+async def meet_guest_route(request: Request):
+    import group_gatherings as gg
+    return await _meet_action(request, lambda biz, me, gid, form: gg.add_guest(
+        biz, me, gid, str(form.get("first") or ""), str(form.get("phone") or "")))
+
+
+@router.post("/my/groups/meet/guest/remove", include_in_schema=False)
+async def meet_guest_remove_route(request: Request):
+    import group_gatherings as gg
+    return await _meet_action(request, lambda biz, me, gid, form: gg.remove_guest(biz, me, gid, str(form.get("guest") or ""))
+                              if UUID.match(str(form.get("guest") or "")) else (False, "error"))
+
+
 @router.post("/my/groups/meet/schedule", include_in_schema=False)
 async def meet_schedule_route(request: Request):
     import group_gatherings as gg
