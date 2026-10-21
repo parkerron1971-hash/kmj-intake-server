@@ -42,6 +42,7 @@ REMIND_AT = 17                 # 5 PM
 EVENING = time(18, 0)          # a gathering from 6 PM is reminded the same day
 PAST_SHOWN = 4
 ADDRESS_MAX, NOTE_MAX, ROLL_NOTE_MAX = 200, 300, 2000
+GUEST_NAME_MAX, GUEST_PHONE_MAX, GUESTS_MAX = 40, 40, 50
 
 
 def _q(v: Any) -> str:
@@ -240,6 +241,10 @@ def view(business: Dict[str, Any], g: Dict[str, Any], me_id: str, people: List[D
             out["came"] = {str(c["contact_id"]) for c in came}
             out["self_n"] = sum(1 for c in came if c.get("how") == "self")
             out["meeting"] = m
+            named = guests(biz_id, str(m["id"]))
+            if named is None:
+                return None
+            out["guests"] = named
         out["here"] = str(me_id) in out["came"]
         out["can_here"] = can_say_here(g, nxt, now_local)
         out["today"] = nxt == now_local.date()
@@ -255,6 +260,14 @@ def view(business: Dict[str, Any], g: Dict[str, Any], me_id: str, people: List[D
         who = {str(c["contact_id"]) for c in came if str(c["meeting_id"]) == str(m["id"])}
         out["past"].append({**m, "n": len(who), "me": str(me_id) in who})
     return out
+
+
+def guests(business_id: str, meeting_id: str) -> Optional[List[Dict[str, Any]]]:
+    """First-time guests named at one gathering, in the order they came."""
+    rows = sb_clients.sb_get_as_service(
+        f"/group_meeting_guests?business_id=eq.{_q(business_id)}&meeting_id=eq.{_q(meeting_id)}"
+        f"&select=id,first_name,phone,contact_id,created_at&order=created_at.asc&limit={GUESTS_MAX}")
+    return rows if isinstance(rows, list) else None
 
 
 # ─── writing ─────────────────────────────────────────────────────────
@@ -386,11 +399,67 @@ def roll(business: Dict[str, Any], me: Dict[str, Any], group_id: str, present: L
             prefer="resolution=ignore-duplicates,return=representation")
         if not isinstance(rows, list):
             return False, "error"
-    patch: Dict[str, Any] = {"visitors": max(0, min(int(visitors or 0), 500)), "updated_at": datetime.now(timezone.utc).isoformat()}
+    named = guests(biz_id, mid)
+    if named is None:
+        return False, "error"
+    patch: Dict[str, Any] = {"visitors": max(len(named), min(max(int(visitors or 0), 0), 500)),
+                             "updated_at": datetime.now(timezone.utc).isoformat()}
     if note.strip():
         patch["notes"] = note.strip()[:ROLL_NOTE_MAX]
     saved = sb_clients.sb_patch_as_service(f"/group_meetings?id=eq.{_q(mid)}&business_id=eq.{_q(biz_id)}", patch)
     return (True, "roll_saved") if isinstance(saved, list) and saved else (False, "error")
+
+
+def _today_meeting(business: Dict[str, Any], me: Dict[str, Any], group_id: str):
+    """(group, today's meeting id, code): a leader, on the day."""
+    g, now_local, role = _ready(business, me, group_id, leader=True)
+    if not g:
+        return None, None, role
+    nxt, _ = next_on(g, now_local)
+    if not nxt or nxt != now_local.date():
+        return None, None, "roll_closed"
+    mid = _meeting_id(str(business["id"]), str(g["id"]), nxt)
+    return (g, mid, "") if mid else (None, None, "error")
+
+
+def add_guest(business: Dict[str, Any], me: Dict[str, Any], group_id: str, first: str, phone: str) -> Tuple[bool, str]:
+    """A first-time guest by first name (a phone only with their yes), on
+    the day; the guest count keeps up."""
+    import re
+    first = " ".join(str(first or "").split())[:GUEST_NAME_MAX]
+    if not first:
+        return False, "guest_empty"
+    phone = re.sub(r"[^0-9+()\- .]", "", str(phone or ""))[:GUEST_PHONE_MAX].strip()
+    g, mid, code = _today_meeting(business, me, group_id)
+    if not g:
+        return False, code
+    biz_id = str(business["id"])
+    have = guests(biz_id, mid)
+    if have is None:
+        return False, "error"
+    if len(have) >= GUESTS_MAX:
+        return False, "error"
+    rows = sb_clients.sb_post_as_service("/group_meeting_guests", {
+        "business_id": biz_id, "group_id": str(g["id"]), "meeting_id": mid, "first_name": first, "phone": phone,
+        "added_by": str(me["id"])}, prefer="return=representation")
+    if not isinstance(rows, list) or not rows:
+        return False, "error"
+    got = sb_clients.sb_get_as_service(f"/group_meetings?id=eq.{_q(mid)}&business_id=eq.{_q(biz_id)}&select=visitors&limit=1")
+    m = got[0] if isinstance(got, list) and got else {}
+    if int(m.get("visitors") or 0) < len(have) + 1:
+        sb_clients.sb_patch_as_service(f"/group_meetings?id=eq.{_q(mid)}&business_id=eq.{_q(biz_id)}",
+                                       {"visitors": len(have) + 1})
+    return True, "guest_added"
+
+
+def remove_guest(business: Dict[str, Any], me: Dict[str, Any], group_id: str, guest_id: str) -> Tuple[bool, str]:
+    """Take a guest off today's list (the count stays as the leader set it)."""
+    g, mid, code = _today_meeting(business, me, group_id)
+    if not g:
+        return False, code
+    ok = sb_clients.sb_delete_as_service(
+        f"/group_meeting_guests?id=eq.{_q(guest_id)}&business_id=eq.{_q(business['id'])}&meeting_id=eq.{_q(mid)}")
+    return (True, "guest_removed") if ok else (False, "error")
 
 
 def set_schedule(business: Dict[str, Any], me: Dict[str, Any], group_id: str, day: str, at: str,
@@ -564,6 +633,15 @@ MEET_CSS = """
 .gm-past-row .gs-t{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;}
 .gm-past-row .gs-t span{font-size:13px;color:var(--fg2);}
 .gm-you{font-size:12px;font-weight:700;color:var(--teal-ink,var(--acc));}
+.gm-guests{display:flex;flex-direction:column;gap:8px;padding-top:12px;border-top:.5px solid var(--line);}
+.gm-guests h3{margin:0;font-size:15px;font-weight:660;}
+.gm-guest-list{display:flex;flex-direction:column;margin:0;padding:0;list-style:none;}
+.gm-guest{display:flex;align-items:center;gap:10px;min-height:44px;}
+.gm-guest .gs-t{flex:1;min-width:0;display:flex;flex-direction:column;}
+.gm-guest small{font-size:12px;color:var(--fg3);}
+.gm-guest form{margin:0;}
+.gm-guest-add{align-items:flex-end;}
+.gm-guest-add .gs-btn{flex:none;}
 .gm-set summary{list-style:none;cursor:pointer;}
 .gm-set summary::-webkit-details-marker{display:none;}
 .gm-set form{display:flex;flex-direction:column;gap:10px;margin-top:12px;}
@@ -658,7 +736,8 @@ def render_tab(biz: Dict[str, Any], g: Dict[str, Any], v: Optional[Dict[str, Any
             f'<label class="mp-sr" for="gm-note">A note for next time</label>'
             f'<textarea id="gm-note" name="note" maxlength="{ROLL_NOTE_MAX}" placeholder="A note for next time (only leaders and the office see it)">{esc(m.get("notes") or "")}</textarea>'
             f'<button class="gs-btn" type="submit">Save attendance</button>'
-            f'<p class="gm-fine">It counts toward each person’s attendance, the same as Sunday check-in.</p></form></section>')
+            f'<p class="gm-fine">It counts toward each person’s attendance, the same as Sunday check-in.</p></form>'
+            f'{_guests_block(v.get("guests") or [], hidden, ic, esc)}</section>')
     parts.append(bring)
     parts.append(study)
     if leader:
@@ -695,6 +774,23 @@ def render_tab(biz: Dict[str, Any], g: Dict[str, Any], v: Optional[Dict[str, Any
         rows = "".join(_past_row(m, leader, esc) for m in past)
         parts.append(f'<div class="mb-sh"><h2>Before</h2></div><div class="gm-past">{rows}</div>')
     return "".join(parts)
+
+
+def _guests_block(named: List[Dict[str, Any]], hidden: str, ic, esc) -> str:
+    """First-time guests by name, on a leader's roll."""
+    rows = "".join(
+        f'<li class="gm-guest"><span class="gs-t"><b>{esc(x["first_name"])}</b>'
+        f'<small>{"Phone saved" if x.get("phone") else "No phone"}{" · the office has them" if x.get("contact_id") else ""}</small></span>'
+        f'<form method="post" action="/my/groups/meet/guest/remove">{hidden}<input type="hidden" name="guest" value="{esc(x["id"])}">'
+        f'<button class="gb-x" type="submit" aria-label="Take {esc(x["first_name"])} off the list">{ic("x", 16)}</button></form></li>'
+        for x in named)
+    return (f'<div class="gm-guests"><h3>First-time guests</h3>'
+            f'{f"<ul class=gm-guest-list>{rows}</ul>" if rows else ""}'
+            f'<form method="post" action="/my/groups/meet/guest" class="gm-row gm-guest-add">{hidden}'
+            f'<label>First name<input type="text" name="first" maxlength="{GUEST_NAME_MAX}" required autocomplete="off"></label>'
+            f'<label>Phone (optional)<input type="tel" name="phone" maxlength="{GUEST_PHONE_MAX}" autocomplete="off"></label>'
+            f'<button class="gs-btn soft sm" type="submit">{ic("plus", 15)}Add guest</button></form>'
+            f'<p class="gm-fine">The office welcomes them as a first-time guest. Add a phone only if they said yes to hearing from us.</p></div>')
 
 
 def _past_row(m: Dict[str, Any], leader: bool, esc) -> str:
