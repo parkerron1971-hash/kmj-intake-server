@@ -17,7 +17,9 @@ related: [2026-10-20-member-app-speed.md]
 Second half of the member-app speed work (the first, kmj-intake-server#1542, keeps database
 connections open). Every tab read the church, the church again, the member, their space and
 their roles one after another before its own reads; Home, Connect and Watch then read their parts
-mostly one after another too. Now each tab makes those waits at once: on live Love City data (from
-Kevin's PC, a member's view, writes blocked) with #1542, Home 7.5 s → 0.95 s, Connect 8.6 → 0.81,
-Watch 5.3 → 0.48, Bible 4.7 → 0.41. `__tests__/test_member_portal_speed.py` proves "at once" with
-barriers (a sequential read breaks them; each case rehearsed red) and pins who gets the Lead tab.
+mostly one after another too. Now each tab makes those waits at once. Reads one after another, a
+member's view of live Love City data (page code run locally, writes blocked): Home 12 → 7,
+Connect 16 → 8, Watch 10 → 5, Bible 8 → 4, Me 9 → 5. Each of those costs ~85 ms from the server
+(see the correction in 2026-10-20-member-app-speed.md), so a tab should lose roughly 0.3-0.7 s.
+`__tests__/test_member_portal_speed.py` proves "at once" with barriers (a sequential read breaks
+them; each case rehearsed red) and pins who gets the Lead tab.
