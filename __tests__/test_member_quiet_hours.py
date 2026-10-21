@@ -253,6 +253,9 @@ def test_a_leaders_post_as_an_alert(fake, monkeypatch):
     _quiet(monkeypatch, True)
     assert _board_post("Prayer call at 10", True) == (True, "post_up")
     assert fake.t["group_posts"][-1]["after_hours"] is True and fake.rang[-1] is True
+    # The fake stamps posts on a fixed day; the night's window is the real clock's.
+    from datetime import datetime as _dt, timezone as _tz
+    fake.t["group_posts"][-1]["created_at"] = _dt.now(_tz.utc).isoformat()
     assert _board_post("Another", True) == (False, "alert_used")
     assert _board_post("Another, quietly", False) == (True, "post_up")
 

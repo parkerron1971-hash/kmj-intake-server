@@ -82,6 +82,7 @@ DONE = {
     "said_yes": "They're in. They'll see the group now.",
     "not_now": "Okay. They aren't added, and the church office can help them find another group.",
     "post_up": "Posted to the Board. Everyone in the group sees it.",
+    "post_later": "Scheduled. It goes out then; until then only the group's leaders see it.",
     # A group's prayer wall (group_prayer).
     "prayer_up": "It's on the wall. Your group can pray with you now.",
     "prayer_pastors": "Sent privately to the pastors. The group won't see it.",
@@ -154,6 +155,8 @@ ERRORS = {
     "bring_taken": "Someone just picked that one. Choose another.",
     "bring_one_each": "You're already bringing something. Undo it first to pick another.",
     "study_gone": "That study isn't here any more.",
+    "later_bad": "Pick a time from 5 minutes to 30 days from now.",
+    "post_gone": "That post isn't on the Board any more.",
     "study_empty": "Keep at least one question.",
     "not_kids_leader": "Only Kids leaders the church office approved can do that.",
     "lesson_incomplete": "Add a title and what they learned.",

@@ -1693,6 +1693,13 @@ async def startup():
                           minutes=15, id="group_email_followup")
     except Exception as e:
         print(f"   [warn] group email follow-up not scheduled: {e}")
+    # A Board post scheduled for later goes out at its time (group_post_later).
+    try:
+        import group_post_later as _group_post_later
+        scheduler.add_job(g("group_post_later", _group_post_later.sweep_tick), "interval",
+                          minutes=5, id="group_post_later")
+    except Exception as e:
+        print(f"   [warn] scheduled group posts not scheduled: {e}")
     # This week's study: each group's draft questions from Sunday's message,
     # for its leaders to post (group_study.sweep_tick; once per group per
     # message).

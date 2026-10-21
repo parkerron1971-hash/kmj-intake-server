@@ -986,7 +986,8 @@ def sweep_tick() -> Dict[str, int]:
     rows = sb_clients.sb_get_as_service(
         "/businesses?or=(settings->member_portal->notifications->>sermons.eq.true,"
         "settings->member_portal->notifications->>events.eq.true,"
-        "settings->member_portal->notifications->>groups.eq.true)"
+        "settings->member_portal->notifications->>groups.eq.true,"
+        "settings->member_portal->notifications->>messages.eq.true)"
         "&select=id,name,settings,owner_id&limit=500") or []
     for biz in rows:
         kinds = church_kinds(biz.get("settings"))
