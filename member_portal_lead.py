@@ -610,13 +610,21 @@ async def serve_groups(request: Request, biz: Dict[str, Any], site, me: Dict[str
     mode = g.get("name_display") or "full"
     inner = group_lead.render_body(biz, me, v, ic=mpg._ic, esc=_e,
                                    face=lambda p: mpg._face(p, "gs-av", mode), name=lambda p: mpg.display_name(p, mode))
+    import group_desk
     head = (f'<header class="ld-head" style="flex-direction:column;align-items:flex-start;gap:6px">'
             f'<p class="gl-eb">You lead {_e(g.get("name") or "a group")}</p>'
             f'<h1 class="ld-hello">{group_lead.hello(biz, me)}</h1></header>')
-    css = f"{LEAD_CSS}{mpg.GROUP_CSS}{group_study.STUDY_CSS}{group_lead.GL_CSS}"
-    body = f'{mpc._flash(request)}{head}{seg}{inner}'
+    # On a computer, the leader's desk (group_desk): the chats and the group's
+    # chat beside My group; the phone keeps My group as it is.
+    import chat_photos
+    import chat_polls
+    import group_chat_notify
+    css = (f"{LEAD_CSS}{mpg.GROUP_CSS}{group_study.STUDY_CSS}{group_lead.GL_CSS}{mpg.CHAT_CSS}{chat_polls.POLL_CSS}"
+           f"{chat_photos.PHOTO_CSS}{group_chat_notify.CONTROL_CSS}{group_desk.DESK_CSS}")
+    rail = f'{mpc._flash(request)}{head}{seg}{group_desk.gathering(g, v, esc=_e, ic=mpg._ic)}{inner}'
+    body = group_desk.shell(str(g["id"]), rail, esc=_e, ic=mpg._ic)
     return _shell(biz, site, g.get("name") or "My group", f'<style>{css}</style><div class="ld-wide gl">{body}</div>',
-                  tab="lead", who=me), 200
+                  tab="lead", who=me, script=group_desk.script(str(g["id"]))), 200
 
 
 # ─── Shepherding: the families a pastor or elder shepherds ────────────
@@ -948,6 +956,34 @@ async def care_notes(request: Request):
     from fastapi.responses import HTMLResponse
     from member_portal import _SECURE_HEADERS
     return HTMLResponse(html, headers=_SECURE_HEADERS)
+
+
+@router.get("/my/lead/groups/{group_id}/desk", include_in_schema=False)
+async def desk(group_id: str, request: Request):
+    """The leader's desk's left and middle columns (group_desk), as JSON,
+    fetched only on a wide screen."""
+    import group_desk
+    import group_lead
+    import member_portal_groups as mpg
+    import member_portal_messaging as mpm
+    from fastapi.responses import JSONResponse
+    from member_portal_church import _signed_in
+    no_store = {"Cache-Control": "no-store"}
+    church, me, unavailable = await _signed_in(request)
+    if unavailable or not me or not _FID.match(group_id):
+        return JSONResponse({"error": "gone"}, status_code=404, headers=no_store)
+    biz = church["business"]
+    v = await asyncio.to_thread(group_lead.view, biz, me, group_id)
+    if v is None:
+        return JSONResponse({"error": "unavailable"}, status_code=503, headers=no_store)
+    if not v or str(v["g"]["id"]) != group_id:
+        return JSONResponse({"error": "gone"}, status_code=404, headers=no_store)
+    rows = (await asyncio.to_thread(mpm.inbox_rows, str(biz["id"]), str(me["id"]))) if mpm.turned_on(biz) else ([], [])
+    cv = await asyncio.to_thread(mpg.chat_view, biz, v["g"], me)
+    side = group_desk.side(rows, group_id, [str(x["id"]) for x in v["groups"]], esc=_e, ic=mpg._ic)
+    middle, script = await asyncio.to_thread(group_desk.middle, biz, request, me, v, cv)
+    script = re.sub(r"^\s*<script>|</script>\s*$", "", script or "")
+    return JSONResponse({"side": side, "middle": middle, "script": script}, headers=no_store)
 
 
 @router.post("/my/lead/answer", include_in_schema=False)

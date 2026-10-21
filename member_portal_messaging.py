@@ -653,7 +653,8 @@ def inbox_rows(business_id: str, me_id: str) -> Optional[Tuple[List[Dict[str, An
         import member_photos as ph
         other = folks.get(other_of.get(tid, "")) or {}
         photo = ph.src(other) if t["kind"] == "direct" and ph.shown_to_members(other) else ""
-        row = {"id": tid, "kind": t["kind"], "title": title, "preview": preview, "unread": unread, "photo": photo}
+        row = {"id": tid, "kind": t["kind"], "title": title, "preview": preview, "unread": unread, "photo": photo,
+               "group_id": str(t.get("group_id") or "")}
         (requests if (read.get(tid) or {}).get("state") == "requested" else chats).append(row)
     return chats, requests
 
@@ -894,7 +895,8 @@ def alert_since() -> str:
     return (datetime.now(timezone.utc) - timedelta(hours=12)).isoformat()
 
 
-_GROUP_BACK = re.compile(r"^/my/groups/(?:[0-9a-fA-F-]{36}/chat|leaders)$")
+# The leader's desk (group_desk) is a group's chat too.
+_GROUP_BACK = re.compile(r"^(?:/my/groups/(?:[0-9a-fA-F-]{36}/chat|leaders)|/my/lead/groups/[0-9a-fA-F-]{36})$")
 
 
 def _back_to(form, default: str) -> str:
