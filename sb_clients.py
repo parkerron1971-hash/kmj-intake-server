@@ -532,14 +532,15 @@ def _pool() -> httpx.HTTPTransport:
 def _send(client: httpx.Client, method: str, url: str, headers: Dict[str, str],
           body: Any = None) -> httpx.Response:
     """One call. A read that meets a kept-open connection the database had
-    just closed is sent once more on a fresh one; a write never is (it may
-    have landed)."""
+    just closed (disconnected, reset, broken pipe) is sent once more on a
+    fresh one; a write never is (it may have landed), and a timeout isn't a
+    dead connection."""
     for attempt in (1, 2):
         try:
             if body is None:
                 return client.request(method, url, headers=headers)
             return client.request(method, url, headers=headers, content=json.dumps(body))
-        except httpx.RemoteProtocolError:
+        except (httpx.RemoteProtocolError, httpx.ReadError, httpx.WriteError):
             if attempt == 2 or method != "GET":
                 raise
     raise AssertionError("unreachable")

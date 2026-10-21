@@ -12,7 +12,8 @@ decisions:
   - "Fix the connections in sb_clients (every sync caller), not only the member app: the same handshake cost is in every server-side read and write"
   - "Only the transport (the pool) is shared; each call still opens a Client around it, so the tests that patch httpx.Client keep working"
   - "No cap on connections, as before (a busy moment opens more); 32 stay open for 30 s idle"
-  - "A GET that meets a connection the database just closed goes once more; a write never does (it may have landed)"
+  - "A GET that meets a connection the database just closed (RemoteProtocolError, ReadError, WriteError) goes once more; a write never does (it may have landed); a timeout is not retried"
+  - "Passing transport= stops httpx reading HTTP(S)_PROXY from the environment: Railway sets none (checked 2026-10-20)"
 related: []
 ---
 Measured 2026-10-20 (owner's preview of Love City, live): every tab took 0.9-1.8 s on

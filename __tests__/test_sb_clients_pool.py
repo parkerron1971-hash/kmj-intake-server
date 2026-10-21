@@ -66,11 +66,14 @@ class SharedPoolTests(unittest.TestCase):
         self.assertIs(sb_clients._pool(), pool)
 
     def test_a_read_goes_once_more_when_the_connection_was_just_closed(self):
-        with patch("sb_clients.httpx.Client") as client_cls, patch.dict(os.environ, ENV, clear=False):
-            req = client_cls.return_value.__enter__.return_value.request
-            req.side_effect = [httpx.RemoteProtocolError("Server disconnected"), _resp('[{"id":"b1"}]')]
-            self.assertEqual(sb_clients.sb_get_as_service("/businesses"), [{"id": "b1"}])
-        self.assertEqual(req.call_count, 2)
+        # Disconnected, reset by peer, broken pipe: how a dead kept-open socket shows.
+        for dead in (httpx.RemoteProtocolError("Server disconnected"), httpx.ReadError("Connection reset by peer"),
+                     httpx.WriteError("Broken pipe")):
+            with patch("sb_clients.httpx.Client") as client_cls, patch.dict(os.environ, ENV, clear=False):
+                req = client_cls.return_value.__enter__.return_value.request
+                req.side_effect = [dead, _resp('[{"id":"b1"}]')]
+                self.assertEqual(sb_clients.sb_get_as_service("/businesses"), [{"id": "b1"}])
+            self.assertEqual(req.call_count, 2, type(dead).__name__)
 
     def test_a_read_that_fails_twice_is_none(self):
         with patch("sb_clients.httpx.Client") as client_cls, patch.dict(os.environ, ENV, clear=False):
@@ -81,12 +84,14 @@ class SharedPoolTests(unittest.TestCase):
 
     def test_a_write_is_never_sent_twice(self):
         for call in (lambda: sb_clients.sb_patch_as_service("/businesses?id=eq.b1", {"name": "x"}),
-                     lambda: sb_clients.sb_post_as_service("/businesses", {"name": "x"})):
-            with patch("sb_clients.httpx.Client") as client_cls, patch.dict(os.environ, ENV, clear=False):
-                req = client_cls.return_value.__enter__.return_value.request
-                req.side_effect = [httpx.RemoteProtocolError("Server disconnected"), _resp()]
-                self.assertIsNone(call())
-            self.assertEqual(req.call_count, 1)
+                     lambda: sb_clients.sb_post_as_service("/businesses", {"name": "x"}),
+                     lambda: sb_clients.sb_delete_as_service("/businesses?id=eq.b1")):
+            for dead in (httpx.RemoteProtocolError("Server disconnected"), httpx.ReadError("reset")):
+                with patch("sb_clients.httpx.Client") as client_cls, patch.dict(os.environ, ENV, clear=False):
+                    req = client_cls.return_value.__enter__.return_value.request
+                    req.side_effect = [dead, _resp()]
+                    self.assertIn(call(), (None, False))
+                self.assertEqual(req.call_count, 1)
 
     def test_other_transport_errors_are_not_retried(self):
         with patch("sb_clients.httpx.Client") as client_cls, patch.dict(os.environ, ENV, clear=False):
