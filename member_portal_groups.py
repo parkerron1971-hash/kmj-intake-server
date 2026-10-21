@@ -221,12 +221,18 @@ def posts_for(business_id: str, group_id: str, me_id: str, leader: bool,
     pressed "Got it", and (for a leader) how many have seen it."""
     rows = sb_clients.sb_get_as_service(
         f"/group_posts?business_id=eq.{_q(business_id)}&or=(group_id.eq.{_q(group_id)},group_id.is.null)"
-        f"&removed_at=is.null&select=id,group_id,title,body,pinned,ask_ack,posted_by,after_hours,emailed,audience,created_at"
+        f"&removed_at=is.null&select=id,group_id,title,body,pinned,ask_ack,posted_by,after_hours,emailed,audience,publish_at,created_at"
         f"&order=created_at.desc&limit={POSTS_SHOWN}")
     if rows is None:
         return None
-    # A word the office sent to the group leaders only shows to leaders.
-    rows = [r for r in rows if leader or r.get("audience") != "leaders"]
+    # A word the office sent to the group leaders only shows to leaders; a
+    # post scheduled for later only to the group's leaders until its time.
+    import group_post_later as gpl
+    rows = [r for r in rows if (leader or r.get("audience") != "leaders") and (leader or not gpl.is_waiting(r))]
+    for r in rows:
+        r["later"] = gpl.is_waiting(r)
+        if r["later"]:
+            r["later_label"] = gpl.label({"id": business_id}, r["publish_at"])
     if not rows:
         return []
     ids = [str(r["id"]) for r in rows]
@@ -249,7 +255,7 @@ def posts_for(business_id: str, group_id: str, me_id: str, leader: bool,
         r["church"] = not r.get("group_id")
     pinned =[r for r in rows if r.get("pinned") and not r["church"]]
     rest = sorted([r for r in rows if not (r.get("pinned") and not r["church"])],
-                  key=lambda r: str(r.get("created_at") or ""), reverse=True)
+                  key=lambda r: str(r.get("publish_at") or r.get("created_at") or ""), reverse=True)
     return pinned + rest
 
 
@@ -422,7 +428,8 @@ def answer(business: Dict[str, Any], me: Dict[str, Any], request_id: str, yes: b
 
 
 async def create_post(business: Dict[str, Any], me: Dict[str, Any], group_id: str, title: str, body: str,
-                      pinned: bool, ask_ack: bool, after_hours: bool = False, email_rest: bool = False) -> Tuple[bool, str]:
+                      pinned: bool, ask_ack: bool, after_hours: bool = False, email_rest: bool = False,
+                      send_at: str = "") -> Tuple[bool, str]:
     import asyncio
     import msg_screen
     business_id = str(business["id"])
@@ -440,6 +447,11 @@ async def create_post(business: Dict[str, Any], me: Dict[str, Any], group_id: st
     body = re.sub(r"[ \t]+\n", "\n", str(body or "")).strip()[:POST_MAX]
     if not body:
         return False, "empty_post"
+    # Send later (group_post_later): a time on the church's clock.
+    import group_post_later as gpl
+    when, why = await asyncio.to_thread(gpl.when_from, business, send_at)
+    if why:
+        return False, why
     try:
         verdict = await msg_screen.screen(business_id, f"{title}\n{body}".strip())
     except msg_screen.ScreenUnavailable:
@@ -450,7 +462,7 @@ async def create_post(business: Dict[str, Any], me: Dict[str, Any], group_id: st
     # one a night for each leader.
     import member_portal_messaging as mpm
     import member_push
-    alert = bool(after_hours) and await asyncio.to_thread(member_push.quiet_hour, business)
+    alert = bool(after_hours) and not when and await asyncio.to_thread(member_push.quiet_hour, business)
     if alert:
         used = await asyncio.to_thread(
             sb_clients.sb_get_as_service,
@@ -460,8 +472,8 @@ async def create_post(business: Dict[str, Any], me: Dict[str, Any], group_id: st
             return False, "error"
         if used:
             return False, "alert_used"
-    if pinned:
-        # One pin per group: the new one takes the top.
+    if pinned and not when:
+        # One pin per group: the new one takes the top (a scheduled one, when it goes out).
         await asyncio.to_thread(
             sb_clients.sb_patch_as_service,
             f"/group_posts?business_id=eq.{_q(business_id)}&group_id=eq.{_q(g['id'])}&pinned=eq.true",
@@ -469,9 +481,12 @@ async def create_post(business: Dict[str, Any], me: Dict[str, Any], group_id: st
     rows = await asyncio.to_thread(sb_clients.sb_post_as_service, "/group_posts", {
         "business_id": business_id, "group_id": g["id"], "title": title, "body": body,
         "pinned": bool(pinned), "ask_ack": bool(ask_ack), "posted_by": str(me["id"]),
-        **({"after_hours": True} if alert else {}), **({"email_rest": True} if email_rest else {})})
+        **({"after_hours": True} if alert else {}), **({"email_rest": True} if email_rest else {}),
+        **({"publish_at": when.astimezone(timezone.utc).isoformat()} if when else {})})
     if not (isinstance(rows, list) and rows):
         return False, "error"
+    if when:
+        return True, "post_later"
     member_push.tell_group_post(business, g, str(rows[0].get("id") or ""), me, title, ring=bool(alert))
     if email_rest:
         # "Email the rest" (group_email): the group's people with no phone
@@ -811,6 +826,11 @@ def _post_card(p: Dict[str, Any], g: Dict[str, Any], *, leader: bool, me_id: str
     tag = '<span class="gs-tag pastor">Pastor</span>' if p.get("church") else '<span class="gs-tag">Leader</span>'
     who = f'{_e(name)} {tag}'
     meta = _when(p.get("created_at"))
+    later = bool(p.get("later"))
+    if later:
+        meta = f"Goes out {p.get('later_label') or 'later'}"
+        tag += '<span class="gs-tag later">Scheduled</span>'
+        who = f'{_e(name)} {tag}'
     if p.get("church"):
         meta += " · to every group leader" if p.get("audience") == "leaders" else " · to every group"
     pinned = bool(p.get("pinned")) and not p.get("church")
@@ -820,7 +840,7 @@ def _post_card(p: Dict[str, Any], g: Dict[str, Any], *, leader: bool, me_id: str
     title = f'<h3>{_e(p["title"])}</h3>' if p.get("title") else ""
     pid = _e(p["id"])
     ack = ""
-    if p.get("ask_ack"):
+    if p.get("ask_ack") and not later:
         if p.get("i_acked"):
             ack = f'<span class="gs-ack done">{_ic("check", 15)}You saw this</span>'
         else:
@@ -828,7 +848,7 @@ def _post_card(p: Dict[str, Any], g: Dict[str, Any], *, leader: bool, me_id: str
                    f'<input type="hidden" name="back" value="{_e(back)}">'
                    f'<button class="gs-ack" type="submit">{_ic("check", 15)}Got it</button></form>')
     seen = ""
-    if leader and not p.get("church"):
+    if leader and not p.get("church") and not later:
         bits = [f"Seen by {int(p.get('seen_n') or 0)} of {size}"]
         if p.get("ask_ack"):
             bits.append(f"{int(p.get('acked_n') or 0)} said got it")
@@ -842,10 +862,13 @@ def _post_card(p: Dict[str, Any], g: Dict[str, Any], *, leader: bool, me_id: str
             pin_form = (f'<form method="post" action="/my/groups/post/pin"><input type="hidden" name="id" value="{pid}">'
                         f'<input type="hidden" name="on" value="{"0" if pinned else "1"}">'
                         f'<button class="gs-mini" type="submit">{_ic("pin", 15)}{"Unpin" if pinned else "Pin to the top"}</button></form>')
+        if later:
+            pin_form = (f'<form method="post" action="/my/groups/post/now"><input type="hidden" name="id" value="{pid}">'
+                        f'<button class="gs-mini" type="submit">{_ic("send", 15)}Send now</button></form>')
         tools = (f'<div class="gs-acts">{pin_form}<form method="post" action="/my/groups/post/remove">'
                  f'<input type="hidden" name="id" value="{pid}"><button class="gs-mini warn" type="submit">Take it down</button>'
                  f'</form></div>')
-    cls = "gs-card pin" if pinned else ("gs-card church" if p.get("church") else "gs-card")
+    cls = "gs-card later" if later else "gs-card pin" if pinned else ("gs-card church" if p.get("church") else "gs-card")
     face = _face(author, "gs-av m", g.get("name_display") or "full") if author else '<span class="gs-av m" aria-hidden="true">?</span>'
     foot = f'<div class="gs-foot">{ack}{seen}</div>' if (ack or seen) else ""
     return (f'<article class="{cls}"><div class="gs-ph">{face}<span class="gs-t"><b>{who}</b><small>{_e(meta)}</small></span>'
@@ -875,7 +898,7 @@ def _requests_block(reqs: List[Dict[str, Any]], g: Dict[str, Any], back: str = "
             f'<span class="gs-n">{len(reqs)}</span></div>{"".join(rows)}</section>')
 
 
-def _compose(g: Dict[str, Any], quiet: bool = False) -> str:
+def _compose(g: Dict[str, Any], quiet: bool = False, later: str = "") -> str:
     from member_portal import _e
     alert = (f'<label class="gs-check"><input type="checkbox" name="after_hours" value="1">After-hours alert: '
              f'rings through quiet hours for people who allow it. One a night.</label>' if quiet else "")
@@ -889,6 +912,7 @@ def _compose(g: Dict[str, Any], quiet: bool = False) -> str:
             f'<label class="gs-check"><input type="checkbox" name="pin" value="1">Pin it to the top</label>'
             f'<label class="gs-check"><input type="checkbox" name="ack" value="1" checked>Ask everyone for a “Got it”</label>{alert}'
             f'<label class="gs-check"><input type="checkbox" name="email" value="1">Email the people who haven’t set the app up on a phone</label>'
+            f'{later}'
             f'<button class="gs-btn" type="submit">{_ic("send", 16)}Post to {_e(g.get("name") or "the group")}</button>'
             f'<p class="gs-fine">Everyone in the group sees it on the group\'s Home and Board. It\'s checked before it goes up, like every message.</p>'
             f'</form>')
@@ -968,7 +992,8 @@ def render(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], data
         cards = "".join(_post_card(p, g, leader=leader, me_id=me_id, size=size, back=back) for p in posts)
         empty = ('<p class="gs-empty">Nothing on the Board yet. When a leader posts, it shows here.</p>' if not cards else "")
         import member_push
-        content = f'{_compose(g, member_push.quiet_hour(biz)) if leader else ""}{cards}{empty}'
+        import group_post_later as gpl
+        content = f'{_compose(g, member_push.quiet_hour(biz), gpl.compose_later(biz, _ic)) if leader else ""}{cards}{empty}'
         content += (f'<p class="gs-note">{_ic("lock", 15)}<span>Only the group\'s leaders post here, plus your pastors to every group.'
                     f'</span></p>')
     elif tab == "people":
@@ -1073,8 +1098,9 @@ def render(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], data
     import group_prayer
     import group_study
     import group_chat_notify
+    import group_post_later
     return _shell(biz, site, g.get("name") or "Group",
-                  f"<style>{GROUP_CSS}{CHAT_CSS}{group_prayer.PRAYER_CSS}{group_gatherings.MEET_CSS}{group_bring.BRING_CSS}{group_study.STUDY_CSS}{group_chat_notify.CONTROL_CSS}</style>{page}",
+                  f"<style>{GROUP_CSS}{CHAT_CSS}{group_prayer.PRAYER_CSS}{group_gatherings.MEET_CSS}{group_bring.BRING_CSS}{group_study.STUDY_CSS}{group_chat_notify.CONTROL_CSS}{group_post_later.LATER_CSS}</style>{page}",
                   tab="connect", who=me, script=script), 200
 
 
@@ -1511,8 +1537,24 @@ async def post_route(request: Request):
         return _go("/my/groups", err="group_gone")
     ok, code = await create_post(church["business"], me, gid, str(form.get("title") or ""), str(form.get("body") or ""),
                                  str(form.get("pin") or "") == "1", str(form.get("ack") or "") == "1",
-                                 str(form.get("after_hours") or "") == "1", str(form.get("email") or "") == "1")
+                                 str(form.get("after_hours") or "") == "1", str(form.get("email") or "") == "1",
+                                 str(form.get("send_at") or ""))
     return _go(_base(gid, "board"), **({"done": code} if ok else {"err": code}))
+
+
+@router.post("/my/groups/post/now", include_in_schema=False)
+async def post_now_route(request: Request):
+    """A scheduled post, out now (group_post_later)."""
+    import asyncio
+    import group_post_later as gpl
+    church, me, form, stop = await _who(request, "/my/groups")
+    if stop:
+        return stop
+    pid = str(form.get("id") or "")
+    if not UUID.match(pid):
+        return _go("/my/groups", err="post_gone")
+    ok, code, gid = await asyncio.to_thread(gpl.send_now, church["business"], me, pid)
+    return _go(_base(gid, "board") if gid else "/my/groups", **({"done": code} if ok else {"err": code}))
 
 
 def _back_of(form, gid: str) -> str:

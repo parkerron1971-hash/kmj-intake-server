@@ -64,6 +64,8 @@ def _cond(row, key, expr):
     cur = row.get(key)
     if op == "eq":
         return str(cur).lower() == val.lower() if cur is not None else val == "None"
+    if op == "neq":
+        return str(cur).lower() != val.lower()
     if op == "is":
         return cur is None if val == "null" else str(cur).lower() == val
     if op == "in":
