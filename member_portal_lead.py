@@ -77,7 +77,7 @@ LEAD_CSS = """
 body:has(.ld-wide) .mb-top,body:has(.ld-wide) .mp-shell{max-width:1180px;}
 /* From 1100px the tab bar is a 92px rail on the left: a wide page starts
    after it instead of under it (centred once there's room). */
-@media (min-width:1100px){body:has(.ld-wide) .mp-shell.mb-has-nav{margin-left:max(92px,calc((100vw - 1180px) / 2));margin-right:auto;}}
+@media (min-width:1100px){body:has(.ld-wide) .mp-shell.mb-has-nav,body:has(.mb-has-nav .ld-wide) .mb-top{margin-left:max(92px,calc((100vw - 1180px) / 2));margin-right:auto;}}
 .ld-head{display:flex;align-items:flex-end;flex-wrap:wrap;gap:10px 14px;margin:6px 0 16px;}
 .ld-hello{margin:0;font-size:34px;font-weight:750;letter-spacing:-.035em;line-height:1.05;}
 .ld-hello em{font-family:var(--mb-serif);font-style:italic;font-weight:500;color:var(--acc);}
@@ -863,8 +863,8 @@ async def serve_families(request: Request, biz: Dict[str, Any], site, me: Dict[s
 
 def _go(target: str, **q: str) -> RedirectResponse:
     from member_portal import _SECURE_HEADERS
-    if (target not in ("/my/lead", "/my/lead/prayer", "/my/lead/families")
-            and not re.fullmatch(r"/my/lead/(family/)?[0-9a-fA-F-]{36}", target)):
+    if (target not in ("/my/lead", "/my/lead/prayer", "/my/lead/families", "/my/lead/groups")
+            and not re.fullmatch(r"/my/lead/(family/|groups/)?[0-9a-fA-F-]{36}", target)):
         target = "/my/lead"
     qs = "&".join(f"{k}={v}" for k, v in q.items())
     return RedirectResponse(f"{target}?{qs}" if qs else target, status_code=303, headers=_SECURE_HEADERS)
@@ -891,6 +891,63 @@ async def _leader(request: Request):
 def _allowed(church, me) -> bool:
     import rate_limit
     return rate_limit.allow_strict("member_action", f"{church['business']['id']}|{me['id']}")
+
+
+@router.post("/my/lead/groups/notes", include_in_schema=False)
+async def care_notes(request: Request):
+    """Chief's note to each person who's missed the last three gatherings
+    (group_care): a page of drafts, each sent by the leader from their own
+    chat."""
+    import group_care
+    import group_gatherings as gg
+    import group_lead
+    import member_messaging_rules as rules
+    import member_portal_groups as mpg
+    import member_portal_messaging as mpm
+    import rate_limit
+    from member_portal import _shell
+    from member_portal_church import _signed_in
+    church, me, unavailable = await _signed_in(request)
+    if unavailable:
+        return _go("/my/lead", err="preview" if unavailable == "preview" else "error")
+    if not me:
+        return _go("/my")
+    form = await request.form()
+    gid = str(form.get("group_id") or "")
+    if not _FID.match(gid):
+        return _go("/my/lead")
+    biz = church["business"]
+    v = await asyncio.to_thread(group_lead.view, biz, me, gid)
+    if v is None:
+        return _go(f"/my/lead/groups/{gid}", err="error")
+    if not v or str(v["g"]["id"]) != gid:
+        return _go("/my/lead")
+    if not mpm.turned_on(biz):
+        return _go(f"/my/lead/groups/{gid}", err="notes_off")
+    missing = v.get("missing") or []
+    if not any(not rules.is_teen(p) for p in missing):          # nobody, or only teens: no note to send
+        return _go(f"/my/lead/groups/{gid}", err="notes_none")
+    if not rate_limit.allow_strict("care_notes", f"{biz['id']}|{me['id']}"):
+        return _go(f"/my/lead/groups/{gid}", err="slow")
+    g = v["g"]
+    mode = g.get("name_display") or "full"
+    rows = [{**p, "teen": rules.is_teen(p)} for p in missing[:group_care.PEOPLE_MAX]]
+    nxt = (v.get("meet") or {}).get("next")
+    when = gg.when_text(g, nxt) if nxt else ""
+    first = (me.get("name") or "").strip().split(" ")[0]
+    notes, by_chief = await asyncio.to_thread(
+        group_care.draft, str(biz["id"]), g.get("name") or "the group", first, f"on {when}" if when else "",
+        [{"id": p["id"], "first": mpg.display_name(p, "first")} for p in rows if not p["teen"]])
+    body = group_care.render(g, rows, notes, by_chief, ic=mpg._ic, esc=_e,
+                             face=lambda p: mpg._face(p, "gs-av m", mode), name=lambda p: mpg.display_name(p, mode))
+    head = (f'<header class="ld-head" style="flex-direction:column;align-items:flex-start;gap:6px">'
+            f'<p class="gl-eb">{_e(g.get("name") or "Your group")}</p><h1 class="ld-hello">A note to <em>each</em></h1></header>')
+    css = f"{LEAD_CSS}{mpg.GROUP_CSS}{group_lead.GL_CSS}{group_care.CARE_CSS}"
+    html = _shell(biz, church.get("site"), "A note to each", f'<style>{css}</style><div class="ld-wide gl">{head}{body}</div>',
+                  tab="lead", who=me, back=(f"/my/lead/groups/{gid}", g.get("name") or "My group"))
+    from fastapi.responses import HTMLResponse
+    from member_portal import _SECURE_HEADERS
+    return HTMLResponse(html, headers=_SECURE_HEADERS)
 
 
 @router.post("/my/lead/answer", include_in_schema=False)

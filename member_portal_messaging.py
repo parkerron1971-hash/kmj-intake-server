@@ -540,7 +540,8 @@ def render_chat(biz, site, request, me, t, acc, msgs, looks, *, title: str, view
         elif acc["can_send"]:
             compose = (f'<form class="mb-compose" method="post" action="/my/messages/{_e(t["id"])}/send" id="mb-compose">'
                        '<label class="mp-sr" for="mb-say">Message</label>'
-                       f'<input class="mp-input" id="mb-say" name="body" maxlength="{BODY_MAX}" autocomplete="off" placeholder="Write a message…" required>'
+                       f'<input class="mp-input" id="mb-say" name="body" maxlength="{BODY_MAX}" autocomplete="off" placeholder="Write a message…" required'
+                       f' value="{_e(str(request.query_params.get("say") or "")[:BODY_MAX])}">'
                        f'<button class="mp-go" type="submit" aria-label="Send">{ui.icon("send", 18)}</button></form>'
                        '<p class="mb-chat-err mp-err" id="mb-chat-err" role="alert" hidden></p>')
         else:
@@ -739,7 +740,10 @@ async def serve(request: Request, biz, site, me, sub: str):
         if kind == "group":
             # A group's chat lives inside the group (member_portal_groups).
             return RedirectResponse(f"/my/groups/{target}/chat", status_code=303, headers=_SECURE_HEADERS)
-        return RedirectResponse(f"/my/messages/{tid}", status_code=303, headers=_SECURE_HEADERS)
+        # A note to send (group_care) rides along, written into the box.
+        say = str(request.query_params.get("say") or "")[:BODY_MAX]
+        return RedirectResponse(f"/my/messages/{tid}" + (f"?say={quote(say, safe='')}" if say else ""),
+                                status_code=303, headers=_SECURE_HEADERS)
     if rest.startswith("feed/"):
         tid = rest[len("feed/"):]
         data = await asyncio.to_thread(_feed, biz["id"], str(me["id"]), tid)
