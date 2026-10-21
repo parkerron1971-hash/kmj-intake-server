@@ -104,7 +104,7 @@ def group_row(business_id: str, group_id: str) -> Optional[Dict[str, Any]]:
     rows = sb_clients.sb_get_as_service(
         f"/groups?id=eq.{_q(group_id)}&business_id=eq.{_q(business_id)}"
         f"&select=id,name,kind,description,meets,location,capacity,open_to_join,join_mode,name_display,youth,active,"
-        f"chat_on,chat_writers,meet_day,meet_time,meet_address,meet_note,meet_skips,meet_every,meet_from,meet_nth,study_on,updated_at&limit=1")
+        f"chat_on,chat_writers,chat_extras,meet_day,meet_time,meet_address,meet_note,meet_skips,meet_every,meet_from,meet_nth,study_on,updated_at&limit=1")
     if rows is None:
         return None
     if not rows or not rows[0].get("active"):
@@ -575,6 +575,19 @@ def pin(business_id: str, me: Dict[str, Any], post_id: str, on: bool) -> Tuple[b
     return (True, "pinned" if on else "unpinned", gid) if ok is not None else (False, "error", gid)
 
 
+def set_extras(business_id: str, me: Dict[str, Any], group_id: str, on: bool) -> Tuple[bool, str]:
+    """A group's leaders turn polls in the chat on or off (groups.chat_extras)."""
+    leader = _is_leader(business_id, group_id, me["id"])
+    if leader is None:
+        return False, "error"
+    if not leader:
+        return False, "not_group_leader"
+    ok = sb_clients.sb_patch_as_service(
+        f"/groups?id=eq.{_q(group_id)}&business_id=eq.{_q(business_id)}",
+        {"chat_extras": bool(on), "updated_at": _now()})
+    return (True, "extras_on" if on else "extras_off") if ok is not None else (False, "error")
+
+
 def set_names(business_id: str, me: Dict[str, Any], group_id: str, mode: str) -> Tuple[bool, str]:
     if mode not in NAME_MODES:
         return False, "error"
@@ -712,6 +725,8 @@ def _ic(name: str, size: int = 18) -> str:
         "sparkles": ('<path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5'
                      'l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063'
                      'a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/><path d="M20 3v4M22 5h-4M4 17v2M5 18H3"/>'),
+        # A poll in the chat (chat_polls).
+        "poll": '<path d="m3 17 2 2 4-4"/><path d="m3 7 2 2 4-4"/><path d="M13 6h8"/><path d="M13 12h8"/><path d="M13 18h8"/>',
         # Bring something (group_bring).
         "utensils": ('<path d="M3 2v7c0 1.1.9 2 2 2h4a2 2 0 0 0 2-2V2"/><path d="M7 2v20"/>'
                      '<path d="M21 15V2a5 5 0 0 0-5 5v6c0 1.1.9 2 2 2h3Zm0 0v7"/>'),
@@ -1015,6 +1030,15 @@ def render(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], data
                      f'<button type="submit" name="mode" value="full" aria-pressed="{"true" if mode == "full" else "false"}">Full names</button>'
                      f'<button type="submit" name="mode" value="first" aria-pressed="{"true" if mode == "first" else "false"}">First names</button>'
                      f'</span></form></div>')
+            if g.get("chat_on") is not False:
+                xon = g.get("chat_extras") is not False
+                names += (f'<div class="gs-card"><div class="gs-ph"><span class="gs-t"><b>Polls in the chat</b>'
+                          f'<small>Anyone who writes in the chat can ask the group a quick question.</small></span></div>'
+                          f'<form method="post" action="/my/groups/extras"><input type="hidden" name="group_id" value="{gid}">'
+                          f'<span class="gs-seg" role="group" aria-label="Polls in the chat">'
+                          f'<button type="submit" name="on" value="1" aria-pressed="{"true" if xon else "false"}">On</button>'
+                          f'<button type="submit" name="on" value="0" aria-pressed="{"false" if xon else "true"}">Off</button>'
+                          f'</span></form></div>')
         others = sum(1 for p in people if p["role"] != "leader")
         content = (f'<div class="gs-lead" style="margin-top:4px">{lead_cards}</div>'
                    f'<h2 style="margin:22px 0 12px">{others} {"person" if others == 1 else "people"} in the group</h2>{members}'
@@ -1099,8 +1123,9 @@ def render(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], data
     import group_study
     import group_chat_notify
     import group_post_later
+    import chat_polls
     return _shell(biz, site, g.get("name") or "Group",
-                  f"<style>{GROUP_CSS}{CHAT_CSS}{group_prayer.PRAYER_CSS}{group_gatherings.MEET_CSS}{group_bring.BRING_CSS}{group_study.STUDY_CSS}{group_chat_notify.CONTROL_CSS}{group_post_later.LATER_CSS}</style>{page}",
+                  f"<style>{GROUP_CSS}{CHAT_CSS}{chat_polls.POLL_CSS}{group_prayer.PRAYER_CSS}{group_gatherings.MEET_CSS}{group_bring.BRING_CSS}{group_study.STUDY_CSS}{group_chat_notify.CONTROL_CSS}{group_post_later.LATER_CSS}</style>{page}",
                   tab="connect", who=me, script=script), 200
 
 
@@ -1171,14 +1196,25 @@ def chat_view(biz: Dict[str, Any], g: Optional[Dict[str, Any]], me: Dict[str, An
     rx = mpm.reactions_for(biz_id, [m["id"] for m in msgs], str(me["id"]))
     if rx is None:
         return {"state": "error"}
+    import chat_polls
+    polls = chat_polls.for_messages(biz_id, [m["id"] for m in msgs], str(me["id"]))
+    if polls is None:
+        return {"state": "error"}
     mpm.mark_read(biz_id, tid, str(me["id"]))
     import group_chat_notify as gcn
     import member_push
     quiet = member_push.quiet_hour(biz)
     notify = gcn.mine(biz_id, tid, str(me["id"])) if "messages" in member_push.church_kinds(biz.get("settings")) else None
     writers = "all" if room else (g.get("chat_writers") if g.get("chat_writers") in ("all", "leaders") else "all")
+    # Polls (chat_polls) unless the group's leaders turned them off; the
+    # leaders' room always has them.
+    extras = room or g.get("chat_extras") is not False
+    tz = None
+    if polls:
+        import group_gatherings
+        tz = group_gatherings.zone(biz)
     return {"state": "ok", "tid": tid, "acc": acc, "msgs": msgs, "looks": looks, "rx": rx, "writers": writers,
-            "quiet": quiet, "notify": notify}
+            "quiet": quiet, "notify": notify, "polls": polls, "extras": extras, "tz": tz}
 
 
 def room_view(biz: Dict[str, Any], me: Dict[str, Any]) -> Dict[str, Any]:
@@ -1218,7 +1254,8 @@ def render_room(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any],
     content, script = _chat_body(biz, request, me, ROOM, cv, False, here="/my/groups/leaders")
     page = f'{back}{hero}{_flash(request)}<div style="margin-top:16px">{content}</div>'
     status = 503 if cv.get("state") == "error" else 200
-    return _shell(biz, site, "All group leaders", f"<style>{GROUP_CSS}{CHAT_CSS}{ROOM_CSS}</style>{page}", tab="connect",
+    import chat_polls
+    return _shell(biz, site, "All group leaders", f"<style>{GROUP_CSS}{CHAT_CSS}{chat_polls.POLL_CSS}{ROOM_CSS}</style>{page}", tab="connect",
                   who=me, script=script), status
 
 
@@ -1339,6 +1376,9 @@ def _chat_body(biz: Dict[str, Any], request: Request, me: Dict[str, Any], g: Dic
     reply_id = str(request.query_params.get("reply") or "")
     replying = by_id.get(reply_id) if UUID.match(reply_id) and by_id.get(reply_id, {}).get("status") == "delivered" else None
     rx_names = (("love", "heart", "Love"), ("pray", "hand-heart", "Praying"), ("amen", "", "Amen"))
+    import chat_polls
+    polls = cv.get("polls") or {}
+    now = datetime.now(timezone.utc)
     items = []
     for m in msgs:
         sid = str(m.get("sender_contact_id") or "")
@@ -1385,6 +1425,13 @@ def _chat_body(biz: Dict[str, Any], request: Request, me: Dict[str, Any], g: Dic
         # leader's Take down): the chat stays calm, like the canvas.
         bubble = (f'<details class="gc-d"><summary class="gc-b">{body}</summary><div class="gc-acts">{"".join(acts)}</div></details>'
                   if acts else f'<p class="gc-b">{body}</p>')
+        poll = polls.get(str(m["id"]))
+        if poll:
+            # A poll: its question opens the same picker, its choices vote.
+            q = (f'<details class="gc-d"><summary class="gc-pq">{body}</summary><div class="gc-acts">{"".join(acts)}</div></details>'
+                 if acts else f'<p class="gc-pq">{body}</p>')
+            bubble = chat_polls.card(poll, question_html=q, tid=tid, mid=str(m["id"]), here=here, esc=_e, now=now,
+                                     tz=cv.get("tz"), can_vote=m.get("status") == "delivered")
         rang = f'<span class="gc-ahs">{_ic("bell", 13)}After-hours alert</span>' if m.get("after_hours") else ""
         items.append(f'<li class="gc-m{" mine" if mine else ""}" id="m-{_e(m["id"])}">{face}<div class="gc-col">{who}{quote}'
                      f'{bubble}{rang}{held}{chips_html}</div></li>')
@@ -1399,14 +1446,25 @@ def _chat_body(biz: Dict[str, Any], request: Request, me: Dict[str, Any], g: Dic
             reply_bar = (f'<div class="gc-reply">{_ic("chat", 14)}<span>Replying to <b>{_e(rn)}</b>: {_e(str(replying.get("body") or "")[:80])}</span>'
                          f'<a href="{_e(here)}#gc-compose" aria-label="Cancel reply">Cancel</a></div>')
             reply_input = f'<input type="hidden" name="reply_to" value="{_e(replying["id"])}">'
+        # The + (canvas: "Add a photo, poll, prayer or verse"): a poll when
+        # the group has them, and the group's prayer wall.
+        tray = []
+        if cv.get("extras"):
+            tray.append(f'<a href="{_e(here)}?make=poll#gc-pollform"><span class="gc-disc">{_ic("poll", 18)}</span>Poll</a>')
+        if gid != ROOM["id"]:
+            tray.append(f'<a href="{_base(gid, "prayer")}"><span class="gc-disc">{_ic("hand-heart", 18)}</span>Prayer</a>')
+        plus = (f'<details class="gc-tray"><summary aria-label="Add a {"poll or a " if cv.get("extras") else ""}prayer">{_ic("plus", 20)}</summary>'
+                f'<div class="gc-tray-in">{"".join(tray)}</div></details>' if tray else "")
         compose = (f'<form class="gc-compose" id="gc-compose" method="post" action="/my/messages/{_e(tid)}/send">'
                    f'{reply_bar}<input type="hidden" name="back" value="{_e(here)}">{reply_input}{_alert_toggle(cv)}'
-                   f'<div class="gc-row"><label class="mp-sr" for="gc-say">Message the group</label>'
+                   f'<div class="gc-row">{plus}<label class="mp-sr" for="gc-say">Message the group</label>'
                    f'<input id="gc-say" name="body" maxlength="{mpm.BODY_MAX}" autocomplete="off" required '
                    f'placeholder="Message {_e(g.get("name") or "the group")}">'
                    f'<button class="gc-send" type="submit" aria-label="Send">{_ic("send", 18)}</button></div>'
                    f'<p class="gc-safe">{_ic("shield", 13)}<span>Kind words only. Every message is checked before it’s delivered.</span></p>'
                    f'<p class="mp-err" id="gc-err" role="alert" hidden></p></form>')
+        if cv.get("extras") and request.query_params.get("make") == "poll":
+            compose = chat_polls.form(tid, here, g.get("name") or "the group", _alert_toggle(cv), esc=_e, ic=_ic)
     elif cv.get("writers") == "leaders":
         compose = '<p class="gs-note">Only the group’s leaders write in this chat. You can react to what they say.</p>'
     else:
@@ -1443,6 +1501,7 @@ var l=document.getElementById('gc-list');if(l&&!location.hash){{window.scrollTo(
 document.addEventListener('toggle',function(e){{var d=e.target;if(!d.classList||!d.classList.contains('gc-d')||!d.open)return;
 document.querySelectorAll('details.gc-d[open]').forEach(function(o){{if(o!==d)o.open=false;}});}},true);
 function poll(){{if(document.activeElement&&document.activeElement.id==='gc-say'&&document.activeElement.value)return;
+if(document.getElementById('gc-pollform'))return;
 if(document.querySelector('details.gc-d[open]'))return;
 fetch('/my/messages/feed/{tid}',{{credentials:'same-origin',headers:{{'Accept':'application/json'}}}})
 .then(function(r){{return r.json();}}).then(function(d){{if(d&&typeof d.count==='number'&&d.count!==n)location.replace(location.pathname);}}).catch(function(){{}});}}
@@ -1798,6 +1857,19 @@ async def prayer_remove_route(request: Request):
     import group_prayer
     return await _prayer_action(request, lambda biz, biz_id, me, form: group_prayer.remove(
         biz_id, me, str(form.get("id") or ""), lambda gid: _is_leader(biz_id, gid, me["id"])))
+
+
+@router.post("/my/groups/extras", include_in_schema=False)
+async def extras_route(request: Request):
+    import asyncio
+    church, me, form, stop = await _who(request, "/my/groups")
+    if stop:
+        return stop
+    gid = _gid(form)
+    if not gid:
+        return _go("/my/groups", err="group_gone")
+    ok, code = await asyncio.to_thread(set_extras, church["business"]["id"], me, gid, str(form.get("on") or "") == "1")
+    return _go(_base(gid, "people"), **({"done": code} if ok else {"err": code}))
 
 
 @router.post("/my/groups/names", include_in_schema=False)

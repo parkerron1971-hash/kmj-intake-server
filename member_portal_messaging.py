@@ -307,14 +307,16 @@ def reactions_for(business_id: str, message_ids: Iterable[str], me_id: str) -> O
 
 
 def group_chat_settings(business_id: str, group_id: str) -> Optional[Dict[str, Any]]:
-    """{'chat_on', 'chat_writers'} for a group (an older row reads as on, everyone writes)."""
+    """{'chat_on', 'chat_writers', 'chat_extras'} for a group (an older row
+    reads as on, everyone writes, polls on)."""
     rows = sb_clients.sb_get_as_service(
-        f"/groups?id=eq.{_q(group_id)}&business_id=eq.{_q(business_id)}&select=chat_on,chat_writers&limit=1")
+        f"/groups?id=eq.{_q(group_id)}&business_id=eq.{_q(business_id)}&select=chat_on,chat_writers,chat_extras&limit=1")
     if not isinstance(rows, list):
         return None
     g = rows[0] if rows else {}
     return {"chat_on": g.get("chat_on") is not False,
-            "chat_writers": g.get("chat_writers") if g.get("chat_writers") in ("all", "leaders") else "all"}
+            "chat_writers": g.get("chat_writers") if g.get("chat_writers") in ("all", "leaders") else "all",
+            "chat_extras": g.get("chat_extras") is not False}
 
 
 def staff_looks(business_id: str, tid: str) -> Optional[List[Dict[str, Any]]]:
@@ -952,6 +954,13 @@ async def send(tid: str, request: Request):
     text = str(form.get("body") or "").strip()[:BODY_MAX]
     if not text:
         return _answer(request, False, "empty_chat", back)
+    # A poll (chat_polls): the question is the message, its choices ride along.
+    import chat_polls
+    choices = chat_polls.choices_from(form.getlist("choice")) if str(form.get("poll") or "") == "1" else None
+    if choices is not None:
+        text = text[:chat_polls.QUESTION_MAX]
+        if len(choices) < 2:
+            return _answer(request, False, "poll_choices", back)
     if not UUID.match(tid):
         return _answer(request, False, "gone_chat", "/my/messages", 404)
     t = await asyncio.to_thread(thread, biz["id"], tid)
@@ -959,6 +968,8 @@ async def send(tid: str, request: Request):
         return _answer(request, False, "error", back, 503)
     if not t:
         return _answer(request, False, "gone_chat", "/my/messages", 404)
+    if choices is not None and t["kind"] not in ("group", "leaders"):
+        return _answer(request, False, "poll_where", back, 403)
     acc = await asyncio.to_thread(chat_access, biz["id"], t, str(me["id"]))
     if acc is None:
         return _answer(request, False, "error", back, 503)
@@ -971,6 +982,8 @@ async def send(tid: str, request: Request):
             return _answer(request, False, "error", back, 503)
         if not gs["chat_on"]:
             return _answer(request, False, "group_board_only", back, 403)
+        if choices is not None and not gs["chat_extras"]:
+            return _answer(request, False, "polls_off", back, 403)
         if gs["chat_writers"] == "leaders":
             mine = await asyncio.to_thread(my_groups, biz["id"], str(me["id"]))
             if mine is None:
@@ -1005,7 +1018,8 @@ async def send(tid: str, request: Request):
     if not rate_limit.allow_strict("live_chat", f"msg|{biz['id']}|{me['id']}"):
         return _answer(request, False, "slow_chat", back, 429)
     try:
-        verdict = await msg_screen.screen(biz["id"], text)
+        # A poll's choices are checked with its question.
+        verdict = await msg_screen.screen(biz["id"], "\n".join([text, *(choices or [])]))
     except msg_screen.ScreenUnavailable:
         return _answer(request, False, "screen_off", back, 503)
     status_ = "held" if verdict == "harm" else "delivered"
@@ -1014,6 +1028,11 @@ async def send(tid: str, request: Request):
         "status": status_, "flag": None if verdict == "ok" else verdict, **({"reply_to": reply_to} if reply_to else {}),
         **({"after_hours": True} if alert and status_ == "delivered" else {})})
     if not isinstance(row, list) or not row:
+        return _answer(request, False, "error", back, 503)
+    if choices is not None and not await asyncio.to_thread(chat_polls.attach, biz["id"], row[0]["id"], choices):
+        # A question with no choices isn't a poll: take it back down.
+        await asyncio.to_thread(sb_clients.sb_patch_as_service,
+                                f"/msg_messages?id=eq.{_q(row[0]['id'])}&business_id=eq.{_q(biz['id'])}", {"status": "removed"})
         return _answer(request, False, "error", back, 503)
     if status_ == "delivered":
         # Members with "New messages" on hear that something arrived, never
@@ -1143,6 +1162,24 @@ async def react(tid: str, request: Request):
     if not ok:
         return _answer(request, False, "error", back, 503)
     return _answer(request, True, "reacted", back, on=not had)
+
+
+@router.post("/my/messages/{tid}/vote", include_in_schema=False)
+async def vote(tid: str, request: Request):
+    """A vote on a poll (chat_polls); the same choice again takes it back."""
+    import asyncio
+    import chat_polls
+    church, me, form, m, t, acc, back, stop = await _member_message(request, tid)
+    if stop:
+        return stop
+    try:
+        choice = int(str(form.get("choice") or ""))
+    except ValueError:
+        return _answer(request, False, "poll_gone", back)
+    code = await asyncio.to_thread(chat_polls.vote, church["business"]["id"], str(m["id"]), str(me["id"]), choice)
+    if code in ("voted", "unvoted"):
+        return _answer(request, True, code, back)
+    return _answer(request, False, code, back, 503 if code == "error" else 409)
 
 
 @router.post("/my/messages/{tid}/hide", include_in_schema=False)
