@@ -40,7 +40,7 @@ work you do." The compare table's "Chief, your AI Chief of Staff" became
 
 The front pages: `marketing_home_v3.EDITIONS` and `render_edition()` serve
 the same page as the home at /churches ("Your church office, handled."; month
-to month, your own Stripe with no cut of giving, texts from your own number)
+to month, your own Stripe with no cut of giving, year-end statements by email)
 and /coaches ("One front door for your clients."). The server sets `ED` in
 the page script, which filters and orders the kinds of business. The home
 links to both from Who it's for and the footer. Checked at 1440 and 390 wide
