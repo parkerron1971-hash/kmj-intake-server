@@ -10,7 +10,7 @@ left_undone:
   - "The app (solutionist-studio) still says 'trade' in a few places (DocTemplatesDialog, ReferralsPanel, whatsNew, flyerTemplates); the voice test covers the public marketing pages only"
   - "Chief's own written voice (the Monday note in the brand page) arrives with the daily brief build; Chief's prompt is unchanged here"
   - "Signup does not carry the edition yet: /start links stay bare and onboarding starts empty (see the 2026-10-15 trade editions plan)"
-  - "The size guide on the /churches pricing (about 150 people Starter, about 600 Professional, larger Solutionist) is Kevin's call to keep or drop"
+  - "Kevin dropped the church size guide (a small church may want the bigger plan); the /churches plan line now says what each plan adds. Texting from a number of its own is Solutionist only, so the hero no longer promises it; a Professional add-on is Kevin's call (his 2026-09-02 note)"
   - "An edition's Who it's for list has two kinds of business, which leaves space beside the photo on a wide screen"
   - "Lanes: two new pages are a new feature, so this needs a Build slot on Mission Control → Build → Plan, which only Kevin can set; features switch on on Thursdays (2026-10-22 is one)"
 decisions:

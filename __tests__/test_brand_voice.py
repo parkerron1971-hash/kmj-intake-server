@@ -138,13 +138,30 @@ def test_an_edition_is_the_home_with_its_own_first_screen(key, first, trades):
     assert f'<span class="tell-typed" id="typed">{word}</span>' in html
 
 
-def test_the_church_page_sizes_the_plans_and_drops_the_dollar_calculator():
+def test_the_church_page_says_what_each_plan_adds_and_drops_the_dollar_calculator():
     html = v3.render_edition("churches")
-    assert v3.EDITIONS["churches"]["pricing"] in html
-    assert "we never take a cut of your giving" in html
+    line = v3.EDITIONS["churches"]["pricing"]
+    assert line in html and "we never take a cut of your giving" in line
+    assert "size of your church" in line and "Up to about" not in line   # Kevin: a small church may want more
+    # the plan line names only what the gate map really puts on each plan
+    import feature_gates as fg
+    for key, plan in (("multi_seat", "practice"), ("dedicated_sms_number", "practice"), ("ai_clips", "practice"),
+                      ("site_concierge", "professional"), ("vertical_ledgers", "professional"),
+                      ("period_close", "professional")):
+        assert fg.FEATURE_MIN_PLAN[key] == plan, key
     assert '<div class="wrap worth" hidden>' in html and 'href="#worth"' not in html
     coach = v3.render_edition("coaches")
     assert '<div class="wrap worth">' in coach and 'href="#worth"' in coach
+
+
+def test_a_first_screen_promises_only_what_every_plan_has():
+    """A Starter visitor must get every promise in the hero. A texting number of
+    your own is Solutionist only, so no edition's first screen may promise it."""
+    import feature_gates as fg
+    assert fg.FEATURE_MIN_PLAN["dedicated_sms_number"] != "starter"
+    for ed in v3.EDITIONS.values():
+        first_screen = " ".join((ed["lede"], ed["description"], *ed["proof"])).lower()
+        assert "own number" not in first_screen and "texting number" not in first_screen, ed["path"]
 
 
 def test_the_calculator_list_is_the_pages_own():

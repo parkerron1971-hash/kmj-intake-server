@@ -42,23 +42,28 @@ DESCRIPTION = ("One system for the whole business, with Chief keeping it moving:
 # One brand, three front pages (Kevin, 2026-10-22: "the changes to website one brand three front pages",
 # with barbers and lawyers kept on the site). The home lists every kind of business, churches and coaches
 # first; each edition is the same page showing only its own kinds of business, with its own first screen.
-# Every promise here is a feature that exists: giving runs on the church's own Stripe account with no
-# platform fee, each business can text from its own number, and every plan is month to month.
+# Every promise on an edition's first screen is true on EVERY plan (a visitor on Starter must get it):
+# giving runs on the church's own Stripe account with no platform fee, statements go out by email, and
+# every plan is month to month. A texting number of its own is Solutionist only (dedicated_sms_number),
+# so it is named in the plan line, never promised in the hero.
 EDITIONS = {
     "churches": {
         "path": "/churches",
         "trades": ("ministry", "nonprofit"),
         "title": "Solutionist for Churches",
         "description": ("Giving, people, care and Sunday in one system, with Chief keeping the church office "
-                        "moving. Month to month, on your own Stripe, with texts from your own number."),
+                        "moving. Month to month, on your own Stripe, and we never take a cut of your giving."),
         "h1": '<span class="l1">Your church</span><span class="l2">office, <span class="glint">handled.</span></span>',
         "lede": ("Giving, people, care and Sunday in one system. Chief keeps the church office moving, "
                  "so you can keep your eyes on your people."),
-        "proof": ("Month to month", "Your own Stripe, no cut of giving", "Texts from your own number"),
+        "proof": ("Month to month", "Your own Stripe, no cut of giving", "Year-end statements by email"),
         "who": "Pick yours. A church sees its people, giving, care and Sunday. A nonprofit sees donors, programs and grants.",
-        # Kevin's call to keep: the same three plans, read by the size of the church
-        "pricing": ("Pick by size. Up to about 150 people: Starter. Up to about 600: Professional. Larger, or more "
-                    "than one campus: Solutionist. Every plan is month to month, and we never take a cut of your giving."),
+        # Kevin 2026-10-22 dropped the size guide ("what if small church want the bigger size"): a plan is
+        # picked by what Chief carries and who logs in, so the line says what each one adds (the gate map)
+        "pricing": ("Pick by what you want Chief to carry, not by the size of your church. Starter is the whole "
+                    "system for one person. Professional adds the full books, fund accounting and Chief on your "
+                    "website. Solutionist adds five staff logins, a texting number of your own and sermon clips. "
+                    "Every plan is month to month, and we never take a cut of your giving."),
     },
     "coaches": {
         "path": "/coaches",
