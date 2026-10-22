@@ -47,7 +47,8 @@ def test_enforced_rank_logic(monkeypatch):
     assert fg.has_feature(starter, "reports_full") is False
     assert fg.has_feature(pro, "reports_full") is True
     assert fg.has_feature(pro, "accountant_package") is True    # pricing review: pro
-    assert fg.has_feature(pro, "multi_seat") is False
+    assert fg.has_feature(starter, "multi_seat") is False      # one login on Starter
+    assert fg.has_feature(pro, "multi_seat") is True           # 3 on Professional (Kevin, 2026-10-22)
     assert fg.has_feature(practice, "multi_seat") is True
     # Trialing counts as good standing; past_due does not.
     assert fg.plan_of(practice) == "practice"
@@ -103,7 +104,7 @@ def test_entitlements_shape(monkeypatch):
     assert gl["included_in_plan"] is True       # and would be included anyway
     ms = ent["features"]["multi_seat"]
     assert ms["allowed"] is True                # unenforced
-    assert ms["included_in_plan"] is False      # but practice-tier once enforced
+    assert ms["included_in_plan"] is True       # Professional has team seats (Kevin, 2026-10-22)
 
 
 def test_plan_limits_unenforced_then_enforced(monkeypatch):
@@ -141,7 +142,9 @@ def test_plans_payload_carries_the_offer_numbers(monkeypatch):
     assert set(details) == set(fg.PLANS)
     # Numbers come from the dials, not literals a tuning pass would break.
     assert details["practice"]["credits_monthly"] == pc.tier_credits()["practice"]
-    assert details["practice"]["max_seats"] == 5
+    assert details["starter"]["max_seats"] == 1                   # seats 1/3/7 (Kevin, 2026-10-22)
+    assert details["professional"]["max_seats"] == 3
+    assert details["practice"]["max_seats"] == 7
     assert details["practice"]["max_businesses"] == 3
     assert details["practice"]["bank_connections"] is None        # unlimited
     assert details["professional"]["bank_connections"] == 5

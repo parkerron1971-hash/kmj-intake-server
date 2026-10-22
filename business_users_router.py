@@ -11,7 +11,7 @@ admins can update business settings (businesses UPDATE RLS). Role-scoped
 write access across every operational table is the held "multi-role
 permission system beyond v1" (Category D) — surfaced, not snuck in.
 
-Seat caps (1/1/5 via PLAN_LIMITS.max_seats) are gate-ready: enforced only
+Seat caps (1/3/7 via PLAN_LIMITS.max_seats) are gate-ready: enforced only
 when BILLING_ENFORCE=on.
 """
 from __future__ import annotations

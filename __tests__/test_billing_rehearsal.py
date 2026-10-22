@@ -92,7 +92,7 @@ def test_an_active_professional_business_is_full_and_sees_what_it_lacks(quiet):
     assert b["units"]["allotment"] == fg.plan_limits()["professional"]["chief_messages_monthly"]
     assert b["units"]["out_of_units"] is False
     assert "vertical_reports" in b["features_lost"] and "reports_full" not in b["features_lost"]
-    assert b["seats"] == {"count": 1, "limit": 1, "over": False, "next_add_refused": True}
+    assert b["seats"] == {"count": 1, "limit": 3, "over": False, "next_add_refused": False}   # 1/3/7 (2026-10-22)
     assert b["businesses"]["limit"] == 1 and b["businesses"]["over"] is False
 
 
@@ -142,13 +142,13 @@ def test_out_of_units_and_the_hard_cap(quiet):
 def test_caps_count_seats_banks_and_businesses(quiet):
     def get(path):
         if path.startswith("/business_users"):
-            return [{"id": "s1"}, {"id": "s2"}]
+            return [{"id": "s1"}, {"id": "s2"}, {"id": "s3"}]
         if path.startswith("/plaid_accounts"):
             return [{"account_id": a} for a in range(6)]
         return []
     quiet.setattr(sb_clients, "sb_get_as_service", get)
     b = _judge(_row(), owner_business_count=2)
-    assert b["seats"] == {"count": 3, "limit": 1, "over": True, "next_add_refused": True}
+    assert b["seats"] == {"count": 4, "limit": 3, "over": True, "next_add_refused": True}
     assert b["banks"] == {"count": 6, "limit": 5, "over": True}
     assert b["businesses"] == {"count": 2, "limit": 1, "over": True}
 
