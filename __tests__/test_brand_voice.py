@@ -143,12 +143,8 @@ def test_the_church_page_says_what_each_plan_adds_and_drops_the_dollar_calculato
     line = v3.EDITIONS["churches"]["pricing"]
     assert line in html and "we never take a cut of your giving" in line
     assert "size of your church" in line and "Up to about" not in line   # Kevin: a small church may want more
-    # the plan line names only what the gate map really puts on each plan
-    import feature_gates as fg
-    for key, plan in (("multi_seat", "practice"), ("dedicated_sms_number", "practice"), ("ai_clips", "practice"),
-                      ("site_concierge", "professional"), ("vertical_ledgers", "professional"),
-                      ("period_close", "professional")):
-        assert fg.FEATURE_MIN_PLAN[key] == plan, key
+    for word in ("Starter", "Professional", "Solutionist", "logins", "seats"):
+        assert word not in line, f"the cards say what each plan has; the line must not ({word})"
     assert '<div class="wrap worth" hidden>' in html and 'href="#worth"' not in html
     coach = v3.render_edition("coaches")
     assert '<div class="wrap worth">' in coach and 'href="#worth"' in coach

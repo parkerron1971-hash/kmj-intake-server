@@ -44,8 +44,8 @@ DESCRIPTION = ("One system for the whole business, with Chief keeping it moving:
 # first; each edition is the same page showing only its own kinds of business, with its own first screen.
 # Every promise on an edition's first screen is true on EVERY plan (a visitor on Starter must get it):
 # giving runs on the church's own Stripe account with no platform fee, statements go out by email, and
-# every plan is month to month. A texting number of its own is Solutionist only (dedicated_sms_number),
-# so it is named in the plan line, never promised in the hero.
+# every plan is month to month. A texting number of its own is not on every plan (dedicated_sms_number),
+# so the plan cards name it and the hero never promises it.
 EDITIONS = {
     "churches": {
         "path": "/churches",
@@ -59,11 +59,11 @@ EDITIONS = {
         "proof": ("Month to month", "Your own Stripe, no cut of giving", "Year-end statements by email"),
         "who": "Pick yours. A church sees its people, giving, care and Sunday. A nonprofit sees donors, programs and grants.",
         # Kevin 2026-10-22 dropped the size guide ("what if small church want the bigger size"): a plan is
-        # picked by what Chief carries and who logs in, so the line says what each one adds (the gate map)
-        "pricing": ("Pick by what you want Chief to carry, not by the size of your church. Starter is the whole "
-                    "system for one person. Professional adds the full books, fund accounting and Chief on your "
-                    "website. Solutionist adds five staff logins, a texting number of your own and sermon clips. "
-                    "Every plan is month to month, and we never take a cut of your giving."),
+        # picked by what Chief carries and who logs in. The cards under this line read the gate map and the
+        # dials, so the line names no plan's contents and can never disagree with them.
+        "pricing": ("Pick by what you want Chief to carry and who needs to log in, not by the size of your "
+                    "church. The cards below show what each plan adds. Every plan is month to month, and we "
+                    "never take a cut of your giving."),
     },
     "coaches": {
         "path": "/coaches",
