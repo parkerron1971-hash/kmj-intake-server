@@ -4,7 +4,7 @@ date: 2026-10-22
 agent: Claude Code (Claude Opus 5.5)
 asked: "yes add the texting number to Professional as well. also include people being able to login 3 for professional sizes and solutionist size 7. pick the best number of logins. I go with your judgement. with the different levels I [think] 79 a month should have something else less [than] the 149 besides credits for chief."
 status: waiting on Kevin
-prs: [kmj-intake-server#TBD]
+prs: [kmj-intake-server#1547]
 migrations: []
 left_undone:
   - "No What's New entry yet: practitioners on Professional now get a texting number and three logins, worth a line in solutionist-studio's whatsNew.ts when this goes live"
