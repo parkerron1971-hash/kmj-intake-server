@@ -4,7 +4,7 @@ date: 2026-10-22
 agent: Claude Code (Claude Opus 5.5)
 asked: "I want to make sure we build the voice system to function properly as suggested. the changes to website one brand three front pages. can we leave barbers and lawyers on the site?"
 status: waiting on Kevin
-prs: [kmj-intake-server#TBD]
+prs: [kmj-intake-server#1546]
 migrations: []
 left_undone:
   - "The app (solutionist-studio) still says 'trade' in a few places (DocTemplatesDialog, ReferralsPanel, whatsNew, flyerTemplates); the voice test covers the public marketing pages only"
