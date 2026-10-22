@@ -2478,7 +2478,7 @@ _COMPARE_GROUPS = (
          "Up to two of your own video clips join the week. Give a standing OK to the kinds of posts you "
          "trust Chief with: each one waits on your desk until its time, and you can take it back."),
     )),
-    ("Chief, your AI Chief of Staff", (
+    ("Chief, your chief of staff", (
         ("Chief on every screen, chat and voice", _ALL,
          "Ask for it in plain words and the system moves."),
         ("AI actions a month", lambda t: t["credits"],
@@ -5135,7 +5135,7 @@ def render_features() -> str:
     <span class="eyebrow reveal">Ready to try it?</span>
     <h2 style="margin-top:14px;" class="reveal reveal-delay-1">Open it and see.</h2>
     <p class="reveal reveal-delay-2">__TRIAL_FREE__ on any plan. Your workspace arrives already
-       speaking your trade, so there is nothing to configure before it is useful.</p>
+       speaking your language, so there is nothing to configure before it is useful.</p>
     <a class="btn-primary reveal reveal-delay-3" href="/start">Start your free trial →</a>
   </div>
 </section>
@@ -5403,7 +5403,7 @@ def render_compare() -> str:
         </ul>
         <div class="cost-total"><span class="label">From</span><span class="price">$79 /mo</span></div>
         <p style="margin-top:14px;font-size:12px;color:var(--text-dim);">Starter __PRICE_STARTER__ &middot; Professional __PRICE_PRO__ &middot; Solutionist __PRICE_SOL__. Every plan starts with __TRIAL_FREE__, and you can cancel yourself at any time.</p>
-<p style="margin-top:10px;font-size:12px;color:var(--text-dim);">Already use an AI assistant? Keep it. Connect it from Settings and it works through Solutionist &mdash; reading your business, or, with your permission, keeping its records &mdash; with every action logged, reversible, and yours to revoke.</p>
+<p style="margin-top:10px;font-size:12px;color:var(--text-dim);">Already work with an AI tool of your own? Keep it. Connect it from Settings and it works through Solutionist &mdash; reading your business, or, with your permission, keeping its records &mdash; with every action logged, reversible, and yours to revoke.</p>
       </div>
     </div>
   </div>
@@ -5575,7 +5575,7 @@ def render_faq() -> str:
       </details>
       <details class="faq-item" data-g="money">
         <summary>When can I sign up?</summary>
-        <div class="faq-body"><p>Right now, and you do it yourself. <a href="/start" style="color:var(--accent);">Start your free trial</a>, name your business, and the workspace is built around that trade before you have typed anything else. No application, no waiting list, no call to book. If you would rather talk to a person first, <a href="/get-started" style="color:var(--accent);">we're here</a>.</p></div>
+        <div class="faq-body"><p>Right now, and you do it yourself. <a href="/start" style="color:var(--accent);">Start your free trial</a>, name your business, and the workspace is built around that kind of business before you have typed anything else. No application, no waiting list, no call to book. If you would rather talk to a person first, <a href="/get-started" style="color:var(--accent);">we're here</a>.</p></div>
       </details>
     </div>
     <div style="text-align:center;margin-top:48px;" class="reveal reveal-delay-2">
@@ -5841,8 +5841,8 @@ def render_about() -> str:
       <figcaption id="stkCap" class="stk-cap">The hours are not in the work. They are in the gaps.</figcaption>
     </figure>
 
-    <p class="why-pull reveal">The industry&rsquo;s answer has been enterprise software with the seats
-       removed. That is not the same thing as software built for one person.</p>
+    <p class="why-pull reveal">The industry&rsquo;s answer has been enterprise tools with the seats
+       removed. That is not the same thing as a system built for one person.</p>
 
     <div class="why-body reveal">
       <p>A system for one operator has to hold the whole business at once, because that is how the
@@ -5905,7 +5905,7 @@ def render_about() -> str:
       <div class="principle reveal reveal-delay-2">
         <div class="num">03</div>
         <h3>One operator, one workspace.</h3>
-        <p>We&rsquo;re not building enterprise software with the seats removed. Every decision
+        <p>We&rsquo;re not building enterprise tools with the seats removed. Every decision
            optimises for one person running their whole business. If a feature only makes sense for a
            twenty-person team, we don&rsquo;t build it.</p>
       </div>
@@ -6420,7 +6420,7 @@ def render_get_started() -> str:
   <div class="container">
     <span class="eyebrow reveal">__TRIAL_FREE____TRIAL_CARD_NOTE__ &middot; no application, no waiting list</span>
     <h1 class="reveal reveal-delay-1">Start it yourself in about <span class="gradient-text">two minutes.</span></h1>
-    <p class="lead reveal reveal-delay-2" style="max-width:640px;margin:14px auto 0;">Create your account, name your business, and the whole workspace arrives already speaking your trade. Pick yours below and see exactly what you would be handed.</p>
+    <p class="lead reveal reveal-delay-2" style="max-width:640px;margin:14px auto 0;">Create your account, name your business, and the whole workspace arrives already speaking your language. Pick yours below and see exactly what you would be handed.</p>
     <p class="reveal reveal-delay-3" style="margin-top:22px;">
       <a class="btn-primary" href="/start">Start your free trial &rarr;</a>
     </p>
@@ -6430,7 +6430,7 @@ def render_get_started() -> str:
 <section>
   <div class="container">
     <div class="gs-preview reveal">
-      <p class="gs-pv-eyebrow">Pick your trade &mdash; this is the workspace you would be handed</p>
+      <p class="gs-pv-eyebrow">Pick your kind of business: this is the workspace you would be handed</p>
       <div class="gs-chips" id="gsChips" role="group" aria-label="Business type"></div>
       <div class="gs-pv-card" id="gsCard">
         <div class="gs-pv-top">
