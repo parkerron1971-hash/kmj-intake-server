@@ -52,6 +52,7 @@ DONE = {
     "ann_asked": "Asked. Your anniversary shows once they say yes too.",
     "ann_yes": "Thank you. The church will celebrate your anniversary with you.",
     "ann_no": "Got it. Your anniversary won't be shown.",
+    "alerts_saved": "Saved. That's what rings for News now.",
 }
 ERRORS = {
     "error": "That didn't save. Please try again.",
@@ -140,6 +141,27 @@ CEL_CSS = """
 .cl-opt .cl-t{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;}
 .cl-opt .cl-t b{font-size:15.5px;font-weight:620;}
 .cl-opt .cl-t small{font-size:13px;color:var(--fg2);line-height:1.35;}
+.cl-seg{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(0,1fr);padding:3px;border-radius:12px;background:var(--s1);}
+.cl-seg label{position:relative;display:flex;cursor:pointer;font-size:14px;font-weight:600;color:var(--fg2);}
+.cl-seg input{position:absolute;opacity:0;width:1px;height:1px;}
+.cl-seg span{flex:1;min-height:38px;border-radius:9px;display:flex;align-items:center;justify-content:center;}
+.cl-seg input:checked+span{background:var(--acc-fill);color:var(--on-acc);}
+.cl-seg input:focus-visible+span{outline:2px solid var(--acc);outline-offset:2px;}
+.cl-segnote{margin:8px 0 0;padding:0 4px;font-size:13px;color:var(--fg2);}
+#cl-hear .cl-opts{margin-top:14px;}
+.cl-sw{cursor:pointer;font-weight:400;color:var(--fg);}
+.cl-sw+.cl-sw::before,.cl-opts>input+.cl-sw::before{left:16px;}
+.cl-sw input[type=checkbox]{position:absolute;opacity:0;width:1px;height:1px;}
+.cl-swt{width:51px;height:31px;border-radius:999px;background:var(--s3);padding:2px;display:flex;flex:none;box-sizing:border-box;transition:background .15s;}
+.cl-swt i{width:27px;height:27px;border-radius:50%;background:#fff;box-shadow:0 2px 4px rgba(0,0,0,.25);display:block;transition:transform .15s;}
+.cl-sw input:checked~.cl-swt{background:var(--acc-fill);}
+.cl-sw input:checked~.cl-swt i{transform:translateX(20px);}
+.cl-sw input:focus-visible~.cl-swt{outline:2px solid var(--acc);outline-offset:2px;}
+.cl-save{margin-top:12px;background:var(--acc-fill);color:var(--on-acc);}
+#cl-hear.js .cl-save{display:none;}
+.cl-phone{display:flex;align-items:center;gap:10px;margin:12px 0 0;padding:12px 14px;border-radius:var(--r-md);background:var(--acc-deep);
+  color:var(--acc);font-size:14px;font-weight:650;text-decoration:none;}
+.cl-phone span{flex:1;}
 .cl-opt form{margin:0;}
 .cl-tg{width:51px;height:31px;border-radius:999px;background:var(--s3);padding:2px;display:flex;flex:none;border:0;cursor:pointer;}
 .cl-tg i{width:27px;height:27px;border-radius:50%;background:#fff;box-shadow:0 2px 4px rgba(0,0,0,.25);display:block;transition:transform .15s;}
@@ -399,7 +421,9 @@ def render_celebration(biz: Dict[str, Any], site, request: Request, me: Dict[str
 
 def render_me(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], mine: Optional[Dict[str, Any]],
               anns: Optional[List[Dict[str, Any]]], spouses: Optional[List[Dict[str, Any]]],
-              names: Dict[str, Dict[str, Any]]) -> Tuple[str, int]:
+              names: Dict[str, Dict[str, Any]], alerts: Optional[Dict[str, Any]] = None) -> Tuple[str, int]:
+    """`alerts`: what rings for News (news_alerts.prefs plus 'phone' and
+    'celebrations'); None when the church hasn't turned News alerts on."""
     import member_portal_news as mpn
     from member_portal import _shell
     head = '<a class="mb-back" href="/my/me">Me</a>'
@@ -484,9 +508,55 @@ def render_me(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], m
 </div>
 <span class="cl-lbl">How it looks</span>
 <div class="cl-pv{'' if any_on else ' none'}"><span class="cl-ring s">{me_face}</span><span class="cl-t"><b>{_e(pv_title)}</b><small>{_e(pv_sub)}</small></span></div>
-{stop_note}
+{stop_note}{_hear(alerts)}
 <p class="nw-foot">{mpn._ic("lock", 16)}<span>Only signed-in members of {_e(biz.get("name") or "the church")} see celebrations.</span></p>"""
-    return _shell(biz, site, "Celebrations", f"<style>{mpn.NEWS_CSS}{CEL_CSS}</style>{body}", tab="me", who=me), 200
+    return _shell(biz, site, "Celebrations", f"<style>{mpn.NEWS_CSS}{CEL_CSS}</style>{body}", tab="me", who=me,
+                  script=HEAR_JS if alerts else ""), 200
+
+
+# Board 6's "What you hear about" (news_alerts): what rings for News.
+LEVEL_NOTES = {"important": "Only posts your pastors mark important.",
+               "everything": "Every new post, never more than three a day.",
+               "off": "No phone alerts. News is still there when you open the app."}
+HEAR_JS = """<script>(function(){var f=document.getElementById('cl-hear');if(!f)return;f.classList.add('js');
+var n=f.querySelector('.cl-segnote');f.addEventListener('change',function(ev){var r=ev.target;
+ if(r.name==='level'&&n){n.textContent=r.getAttribute('data-note');}f.submit();});})();</script>"""
+
+
+def _hear(alerts: Optional[Dict[str, Any]]) -> str:
+    """Important, Everything or Off; birthdays in my groups (when the church
+    rings for celebrations); replies; the week's email. Nothing when the
+    church hasn't turned News alerts on."""
+    import member_portal_news as mpn
+    if not alerts:
+        return ""
+    level = alerts.get("level") or "important"
+    seg = "".join(
+        f'<label><input type="radio" name="level" value="{v}" data-note="{_e(LEVEL_NOTES[v])}"{" checked" if v == level else ""}>'
+        f'<span>{label}</span></label>' for v, label in (("important", "Important"), ("everything", "Everything"), ("off", "Off")))
+
+    def sw(name: str, on: bool, title: str, sub: str) -> str:
+        return (f'<label class="cl-opt cl-sw"><span class="cl-t"><b>{_e(title)}</b><small>{_e(sub)}</small></span>'
+                f'<input type="hidden" name="{name}" value="0"><input type="checkbox" name="{name}" value="1" role="switch"'
+                f'{" checked" if on else ""}><span class="cl-swt" aria-hidden="true"><i></i></span></label>')
+    rows = ""
+    if alerts.get("celebrations"):
+        rows += sw("birthdays", bool(alerts.get("birthdays")), "Birthdays in my groups",
+                   'One note at 9 AM: "It\'s Keisha\'s birthday today."')
+    else:
+        rows += f'<input type="hidden" name="birthdays" value="{"1" if alerts.get("birthdays") else "0"}">'
+    rows += sw("replies", bool(alerts.get("replies")), "Replies to my comments", "When someone answers you on News")
+    rows += sw("email", bool(alerts.get("email")), "The week's news by email", "Saturdays at 9 AM, with the posts you haven't seen")
+    phone = ("" if alerts.get("phone") else
+             f'<a class="cl-phone" href="/my/notifications">{mpn._ic("bell", 16)}<span>Turn on alerts on this phone first</span>'
+             f'{mpn._ic("chevron", 16)}</a>')
+    return (f'<span class="cl-lbl">What you hear about</span>'
+            f'<form id="cl-hear" method="post" action="/my/celebrate/alerts">'
+            f'<div class="cl-seg" role="radiogroup" aria-label="Phone alerts for church news">{seg}</div>'
+            f'<p class="cl-segnote">{_e(LEVEL_NOTES[level])}</p>{phone}<div class="cl-opts">{rows}</div>'
+            f'<button class="cl-btn cl-save" type="submit">Save</button></form>'
+            f'<p class="nw-foot">{mpn._ic("moon", 16)}<span>Nothing rings between 9 PM and 7 AM. It waits for the morning, '
+            f'like your group news.</span></p>')
 
 
 def mpn_flash(request: Request) -> str:
@@ -500,6 +570,8 @@ def mpn_flash(request: Request) -> str:
 
 
 async def serve_me(request: Request, biz: Dict[str, Any], site, me: Dict[str, Any]) -> Tuple[str, int]:
+    import member_push
+    import news_alerts as na
     business_id, me_id = str(biz["id"]), str(me["id"])
     mine, anns, spouses = await asyncio.gather(asyncio.to_thread(cel.prefs, business_id, me_id),
                                                asyncio.to_thread(cel.anniversaries_of, business_id, me_id),
@@ -509,7 +581,14 @@ async def serve_me(request: Request, biz: Dict[str, Any], site, me: Dict[str, An
         ids += [a["a_id"], a["b_id"]]
     import church_news as cn
     names = await asyncio.to_thread(cn._people, business_id, ids) if ids else {}
-    return render_me(biz, site, request, me, mine, anns, spouses, names or {})
+    # What rings for News (news_alerts), when the church has News alerts on.
+    alerts = None
+    if na.church_on(biz):
+        chose, devices = await asyncio.gather(asyncio.to_thread(na.prefs, business_id, me_id),
+                                              asyncio.to_thread(member_push.device_count, business_id, me_id))
+        if chose is not None:
+            alerts = {**chose, "phone": bool(devices), "celebrations": na.celebration_alerts(biz)}
+    return render_me(biz, site, request, me, mine, anns, spouses, names or {}, alerts)
 
 
 def home_asks(business: Dict[str, Any], me: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], List[Dict[str, Any]]]:
@@ -531,12 +610,13 @@ def home_asks(business: Dict[str, Any], me: Dict[str, Any]) -> Tuple[Optional[Di
 # ─── routes ──────────────────────────────────────────────────────────
 
 
-def _go(target: str, **q: str) -> RedirectResponse:
+def _go(target: str, anchor: str = "", **q: str) -> RedirectResponse:
     from member_portal import _SECURE_HEADERS
     if target not in ("/my", "/my/me/celebrations"):
         target = "/my"
     qs = "&".join(f"{k}={v}" for k, v in q.items() if v)
-    return RedirectResponse(f"{target}?{qs}" if qs else target, status_code=303, headers=_SECURE_HEADERS)
+    return RedirectResponse((f"{target}?{qs}" if qs else target) + (f"#{anchor}" if anchor else ""), status_code=303,
+                            headers=_SECURE_HEADERS)
 
 
 async def _who(request: Request, back: str):
@@ -601,6 +681,23 @@ async def prefs_route(request: Request):
         changes["answered_at"] = cel._now().isoformat()
     ok = bool(changes) and await asyncio.to_thread(cel.save_prefs, str(church["business"]["id"]), str(me["id"]), **changes)
     return _go("/my/me/celebrations", **({"done": "cel_saved"} if ok else {"err": "error"}))
+
+
+@router.post("/my/celebrate/alerts", include_in_schema=False)
+async def alerts_route(request: Request):
+    """What rings for News: Important, Everything or Off, and the three
+    switches (news_alerts)."""
+    import news_alerts as na
+    church, me, form, stop = await _who(request, "/my/me/celebrations")
+    if stop:
+        return stop
+    level = str(form.get("level") or "important")
+    if level not in na.LEVELS:
+        return _go("/my/me/celebrations", err="error")
+    on = lambda k: "1" in form.getlist(k)  # noqa: E731 — a switch sends 0, then 1 when it's on
+    ok = await asyncio.to_thread(na.save_prefs, str(church["business"]["id"]), str(me["id"]), level,
+                                 on("birthdays"), on("replies"), on("email"))
+    return _go("/my/me/celebrations", "cl-hear", **({"done": "alerts_saved"} if ok else {"err": "error"}))
 
 
 @router.post("/my/celebrate/anniversary", include_in_schema=False)

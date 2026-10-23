@@ -275,7 +275,7 @@ async def serve_share(request: Request, biz: Dict[str, Any], site, me: Dict[str,
             sb_clients.sb_get_as_service,
             f"/groups?business_id=eq.{ns._q(business_id)}&id=in.({cn._ids(mine_g)})&active=eq.true"
             f"&select=id,name&order=name.asc")) if mine_g else []
-    phone = bool(devices) and "announcements" in member_push.church_kinds(biz.get("settings"))
+    phone = bool(devices) and "news" in member_push.church_kinds(biz.get("settings"))
     return render_share(biz, site, request, me, groups, waiting, phone)
 
 

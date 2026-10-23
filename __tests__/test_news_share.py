@@ -78,6 +78,8 @@ def fake(monkeypatch):
     import member_push
     f.pushed = []
     monkeypatch.setattr(member_push, "send", lambda business, kind, **kw: f.pushed.append((kind, kw)) or 1)
+    # Alerts run inline here, so nothing outlives the test (news_alerts).
+    monkeypatch.setattr(member_push, "_later", lambda fn, *a, **k: fn(*a, **k))
     _screen(monkeypatch, f, "ok")
     # The fake's rows carry fixed October dates; the 14- and 30-day windows
     # are read on this clock, never the real one.
@@ -238,7 +240,7 @@ def test_only_the_owner_or_an_admin_posts_what_a_member_shared(fake, monkeypatch
     row = fake.t["church_posts"][0]
     assert row["status"] == "posted" and row["publish_at"] and row["body"] == "Imani is a nurse now!"
     kind, kw = fake.pushed[0]
-    assert kind == "announcements" and kw["contact_ids"] == [MONIQUE] and kw["url"] == f"/my/news/{pid}"
+    assert kind == "news" and kw["contact_ids"] == [MONIQUE] and kw["url"] == f"/my/news/{pid}"
     assert row["told_at"]
     assert [p["id"] for p in cn.feed(BIZ, ROCHELLE)] == [pid]
     # Decided once.

@@ -76,6 +76,8 @@ def fake(monkeypatch):
     f.care = []
     monkeypatch.setattr(mpm, "care_alert", lambda biz, me: f.care.append(me["id"]))
     monkeypatch.setattr(mpc, "upcoming_for", lambda biz, me: [])
+    import member_push
+    monkeypatch.setattr(member_push, "_later", lambda fn, *a, **k: fn(*a, **k))
     return f
 
 

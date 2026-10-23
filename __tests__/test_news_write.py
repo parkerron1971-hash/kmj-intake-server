@@ -80,6 +80,8 @@ def fake(monkeypatch):
         return v
     monkeypatch.setattr(member_photos, "screen", screen)
     monkeypatch.setattr(storage_links, "signed_url_sync", lambda bucket, path, ttl=0: f"https://signed.example/{path}")
+    import member_push
+    monkeypatch.setattr(member_push, "_later", lambda fn, *a, **k: fn(*a, **k))
     return f
 
 

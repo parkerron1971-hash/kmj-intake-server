@@ -297,14 +297,16 @@ def office_list(business_id: str) -> List[Dict[str, Any]]:
 
 
 def _tell(business: Dict[str, Any], post: Dict[str, Any]) -> bool:
-    """Their phone, when the church has News notes on (member_push)."""
+    """Their phone, when the church has News alerts on (member_push kind
+    "news", news_alerts)."""
     import member_push
+    import news_alerts
     who = str(post.get("posted_by") or "")
     if not who:
         return False
     att = post.get("attach") if isinstance(post.get("attach"), dict) else {}
     where = "your group's News" if att.get("groups") else "News"
-    reached = member_push.send(business, "announcements", title=business.get("name") or "Your church",
+    reached = member_push.send(business, news_alerts.KIND, title=business.get("name") or "Your church",
                                body=f"Your good news is on {where}. The church can celebrate with you now.",
                                url=f"/my/news/{post['id']}", contact_ids=[who], ref_id=f"good-news:{post['id']}",
                                tag=f"good-news-{post['id']}")
@@ -360,5 +362,10 @@ def decide(post_id: str, body: DecideIn, user: AuthedUser = Depends(require_user
         raise HTTPException(404, "That one was already decided.")
     told = False
     if body.action == "post":
-        told = _tell(cn._business(biz_id), {**rows[0], **done[0]})
+        import news_alerts
+        business = cn._business(biz_id)
+        post = {**rows[0], **done[0]}
+        told = _tell(business, post)
+        # Members who chose Everything hear about it too (news_alerts).
+        news_alerts.alert_later(business, post)
     return {"ok": True, "told": told}

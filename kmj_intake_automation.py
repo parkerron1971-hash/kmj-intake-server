@@ -1742,6 +1742,15 @@ async def startup():
                           minutes=30, id="celebrations_today")
     except Exception as e:
         print(f"   [warn] celebrations not scheduled: {e}")
+    # News alerts: a post rings when it goes up (a scheduled one when its time
+    # comes), the 9 AM note about birthdays in your groups, Saturday's email
+    # (news_alerts.sweep_tick; each once).
+    try:
+        import news_alerts as _news_alerts
+        scheduler.add_job(g("news_alerts", _news_alerts.sweep_tick), "interval",
+                          minutes=15, id="news_alerts")
+    except Exception as e:
+        print(f"   [warn] news alerts not scheduled: {e}")
     # Class-night reminders: a few hours before each live class, its students
     # by email and a church's member app by its "Class nights" notification
     # (academy_reminders.sweep_tick; each night once).
