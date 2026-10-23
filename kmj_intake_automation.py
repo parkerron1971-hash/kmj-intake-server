@@ -385,6 +385,10 @@ app.include_router(member_portal_church_router)
 # join (GET /my/groups/<id> is member_portal.serve's).
 from member_portal_groups import router as member_portal_groups_router
 app.include_router(member_portal_groups_router)
+# The church's news in the member app: reactions and comments (GET /my/news
+# is member_portal.serve's).
+from member_portal_news import router as member_portal_news_router
+app.include_router(member_portal_news_router)
 # Classes in the church member app: one-tap join (GET /my/classes is member_portal.serve's).
 from member_portal_classes import router as member_classes_router
 app.include_router(member_classes_router)
@@ -481,6 +485,10 @@ app.include_router(messaging_router)
 # a nudge to a leader (church_groups_office).
 from church_groups_office import router as church_groups_office_router
 app.include_router(church_groups_office_router)
+# The office's News & celebrations page: posting, how each post did, held
+# comments, who posts to the whole church (church_news).
+from church_news import router as church_news_router
+app.include_router(church_news_router)
 # Phase D.4 PR 1 — Stripe Connect OAuth + webhook receiver. Same
 # discipline: BEFORE public_site_router so /payments/* doesn't fall
 # into the subdomain catch-all.
