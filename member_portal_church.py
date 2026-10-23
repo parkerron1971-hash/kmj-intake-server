@@ -117,8 +117,8 @@ DONE = {
     "pinned": "Pinned to the top.",
     "unpinned": "Unpinned.",
     "names_full": "The group shows full names now.",
-    "extras_on": "Polls are on in the group's chat.",
-    "extras_off": "Polls are off in the group's chat.",
+    "extras_on": "Photos and polls are on in the group's chat.",
+    "extras_off": "Photos and polls are off in the group's chat.",
     "voted": "Your vote is in.",
     "unvoted": "Your vote is taken back.",
     "names_first": "The group shows first names now.",
@@ -199,7 +199,10 @@ ERRORS = {
     "leaders_write": "Only the group's leaders write in this chat. You can still react.",
     "poll_choices": "A poll needs at least two different choices.",
     "poll_where": "Polls are for group chats.",
-    "polls_off": "This group's leaders have turned polls off.",
+    "polls_off": "This group's leaders have turned photos and polls off.",
+    "photo_where": "Photos are for group chats.",
+    "photo_teen": "Photos aren't shared in a chat with teens in it.",
+    "chat_photo_no": "That photo can't be shared in the group. Choose another.",
     "poll_closed": "Voting on that poll has closed.",
     "poll_gone": "That poll isn't there any more.",
     "alert_used": "You've already sent an after-hours alert tonight. Turn it off to send this; it reaches phones in the morning.",
@@ -1045,7 +1048,8 @@ def _back(target: str, **q: str) -> RedirectResponse:
                "/my/notifications",
                "/my/kids/stories", "/my/kids/sundays", "/my/kids/family")
     if (target not in allowed and not re.fullmatch(r"/my/(groups/live|messages)/[0-9a-f-]{36}", target)
-            and not re.fullmatch(r"/my/groups/([0-9a-fA-F-]{36}(/(board|people|chat|prayer|meet))?|leaders)", target)):
+            and not re.fullmatch(r"/my/groups/([0-9a-fA-F-]{36}(/(board|people|chat|prayer|meet))?|leaders)", target)
+            and not re.fullmatch(r"/my/lead/groups/[0-9a-fA-F-]{36}", target)):
         target = "/my"
     qs = "&".join(f"{k}={v}" for k, v in q.items())
     return RedirectResponse(f"{target}?{qs}" if qs else target, status_code=303, headers=_SECURE_HEADERS)

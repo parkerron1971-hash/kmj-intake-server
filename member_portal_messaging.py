@@ -653,7 +653,8 @@ def inbox_rows(business_id: str, me_id: str) -> Optional[Tuple[List[Dict[str, An
         import member_photos as ph
         other = folks.get(other_of.get(tid, "")) or {}
         photo = ph.src(other) if t["kind"] == "direct" and ph.shown_to_members(other) else ""
-        row = {"id": tid, "kind": t["kind"], "title": title, "preview": preview, "unread": unread, "photo": photo}
+        row = {"id": tid, "kind": t["kind"], "title": title, "preview": preview, "unread": unread, "photo": photo,
+               "group_id": str(t.get("group_id") or "")}
         (requests if (read.get(tid) or {}).get("state") == "requested" else chats).append(row)
     return chats, requests
 
@@ -894,7 +895,8 @@ def alert_since() -> str:
     return (datetime.now(timezone.utc) - timedelta(hours=12)).isoformat()
 
 
-_GROUP_BACK = re.compile(r"^/my/groups/(?:[0-9a-fA-F-]{36}/chat|leaders)$")
+# The leader's desk (group_desk) is a group's chat too.
+_GROUP_BACK = re.compile(r"^(?:/my/groups/(?:[0-9a-fA-F-]{36}/chat|leaders)|/my/lead/groups/[0-9a-fA-F-]{36})$")
 
 
 def _back_to(form, default: str) -> str:
@@ -952,11 +954,19 @@ async def send(tid: str, request: Request):
     form = await request.form()
     back = _back_to(form, back)
     text = str(form.get("body") or "").strip()[:BODY_MAX]
+    # A photo (chat_photos): the caption is the message, "Photo" when there's none.
+    import chat_photos
+    upload = form.get("photo")
+    photo = upload if hasattr(upload, "read") and getattr(upload, "filename", "") else None
+    captioned = bool(text)
+    if photo is not None:
+        text = text[:chat_photos.CAPTION_MAX] or chat_photos.PLACEHOLDER
     if not text:
         return _answer(request, False, "empty_chat", back)
     # A poll (chat_polls): the question is the message, its choices ride along.
     import chat_polls
-    choices = chat_polls.choices_from(form.getlist("choice")) if str(form.get("poll") or "") == "1" else None
+    choices = (chat_polls.choices_from(form.getlist("choice"))
+               if str(form.get("poll") or "") == "1" and photo is None else None)
     if choices is not None:
         text = text[:chat_polls.QUESTION_MAX]
         if len(choices) < 2:
@@ -970,11 +980,16 @@ async def send(tid: str, request: Request):
         return _answer(request, False, "gone_chat", "/my/messages", 404)
     if choices is not None and t["kind"] not in ("group", "leaders"):
         return _answer(request, False, "poll_where", back, 403)
+    if photo is not None and t["kind"] not in ("group", "leaders"):
+        return _answer(request, False, "photo_where", back, 403)
     acc = await asyncio.to_thread(chat_access, biz["id"], t, str(me["id"]))
     if acc is None:
         return _answer(request, False, "error", back, 503)
     if acc["role"] != "member" or not acc["can_send"] or acc.get("me_state") == "declined":
         return _answer(request, False, acc.get("why") or "cant_send", back, 403)
+    if photo is not None and (acc.get("teen_in_chat") or rules.is_teen(me)):
+        # Not in a chat with a teen in it (Kevin's call; off until he says).
+        return _answer(request, False, "photo_teen", back, 403)
     if t["kind"] == "group":
         # The office's switches for this group (2026-10-20).
         gs = await asyncio.to_thread(group_chat_settings, biz["id"], str(t["group_id"]))
@@ -982,7 +997,7 @@ async def send(tid: str, request: Request):
             return _answer(request, False, "error", back, 503)
         if not gs["chat_on"]:
             return _answer(request, False, "group_board_only", back, 403)
-        if choices is not None and not gs["chat_extras"]:
+        if (choices is not None or photo is not None) and not gs["chat_extras"]:
             return _answer(request, False, "polls_off", back, 403)
         if gs["chat_writers"] == "leaders":
             mine = await asyncio.to_thread(my_groups, biz["id"], str(me["id"]))
@@ -1017,17 +1032,47 @@ async def send(tid: str, request: Request):
             return _answer(request, False, "alert_used", back, 429)
     if not rate_limit.allow_strict("live_chat", f"msg|{biz['id']}|{me['id']}"):
         return _answer(request, False, "slow_chat", back, 429)
+    pic = None
+    if photo is not None:
+        import member_photos
+        if not rate_limit.allow_strict("chat_photos", f"{biz['id']}|{me['id']}"):
+            return _answer(request, False, "slow_chat", back, 429)
+        try:
+            pic = await asyncio.to_thread(chat_photos.prepare, await photo.read(member_photos.MAX_BYTES + 1))
+        except member_photos.PhotoError:
+            return _answer(request, False, "photo_bad", back)
     try:
         # A poll's choices are checked with its question.
         verdict = await msg_screen.screen(biz["id"], "\n".join([text, *(choices or [])]))
     except msg_screen.ScreenUnavailable:
         return _answer(request, False, "screen_off", back, 503)
+    path = ""
+    if pic is not None:
+        # The picture is checked before it's kept; one the check turns down never is.
+        import member_photos
+        try:
+            seen = await chat_photos.screen(biz["id"], pic[0])
+        except member_photos.ScreenUnavailable:
+            return _answer(request, False, "photo_busy", back, 503)
+        if seen != "ok":
+            return _answer(request, False, "chat_photo_no", back, 422)
+        path = await asyncio.to_thread(chat_photos.store, str(biz["id"]), tid, pic[0])
+        if not path:
+            return _answer(request, False, "error", back, 503)
     status_ = "held" if verdict == "harm" else "delivered"
     row = await asyncio.to_thread(sb_clients.sb_post_as_service, "/msg_messages", {
         "business_id": biz["id"], "thread_id": tid, "sender_contact_id": str(me["id"]), "body": text,
         "status": status_, "flag": None if verdict == "ok" else verdict, **({"reply_to": reply_to} if reply_to else {}),
         **({"after_hours": True} if alert and status_ == "delivered" else {})})
     if not isinstance(row, list) or not row:
+        if path:
+            await asyncio.to_thread(chat_photos.drop, path)
+        return _answer(request, False, "error", back, 503)
+    if path and not await asyncio.to_thread(chat_photos.attach, str(biz["id"]), row[0]["id"], path, pic[1], pic[2], captioned):
+        # A caption with no picture isn't the photo they sent: take it back down.
+        await asyncio.to_thread(sb_clients.sb_patch_as_service,
+                                f"/msg_messages?id=eq.{_q(row[0]['id'])}&business_id=eq.{_q(biz['id'])}", {"status": "removed"})
+        await asyncio.to_thread(chat_photos.drop, path)
         return _answer(request, False, "error", back, 503)
     if choices is not None and not await asyncio.to_thread(chat_polls.attach, biz["id"], row[0]["id"], choices):
         # A question with no choices isn't a poll: take it back down.
@@ -1164,6 +1209,22 @@ async def react(tid: str, request: Request):
     return _answer(request, True, "reacted", back, on=not had)
 
 
+@router.get("/my/messages/{tid}/photo/{mid}", include_in_schema=False)
+async def chat_photo(tid: str, mid: str, request: Request):
+    """A photo in a chat: a short signed link for whoever may see it
+    (chat_photos.link_for), nothing for anyone else."""
+    import asyncio
+    import chat_photos
+    from fastapi.responses import RedirectResponse, Response
+    church, me, err, status = await _who(request)
+    if err or not UUID.match(tid) or not UUID.match(mid):
+        return Response(status_code=404, headers={"Cache-Control": "no-store"})
+    url = await asyncio.to_thread(chat_photos.link_for, church["business"], tid, mid, str(me["id"]))
+    if not url:
+        return Response(status_code=404 if url == "" else 503, headers={"Cache-Control": "no-store"})
+    return RedirectResponse(url, status_code=302, headers={"Cache-Control": "private, max-age=300", "Referrer-Policy": "no-referrer"})
+
+
 @router.post("/my/messages/{tid}/vote", include_in_schema=False)
 async def vote(tid: str, request: Request):
     """A vote on a poll (chat_polls); the same choice again takes it back."""
@@ -1286,6 +1347,15 @@ def retention_tick() -> int:
             continue
         keep = _in(r["message_id"] for r in open_)
         keep_q = f"&id=not.in.({keep})" if keep else ""
+        pics = sb_clients.sb_get_as_service(
+            f"/msg_photos?business_id=eq.{_q(b['id'])}&created_at=lt.{_q(cutoff)}&select=message_id,path&limit=5000")
         sb_clients.sb_delete_as_service(
             f"/msg_messages?business_id=eq.{_q(b['id'])}&created_at=lt.{_q(cutoff)}&status=neq.held{keep_q}")
+        if isinstance(pics, list) and pics:
+            # A photo's file goes when its message does (chat_photos).
+            import chat_photos
+            left = chat_photos.for_messages(str(b["id"]), [p["message_id"] for p in pics])
+            for p in pics if left is not None else []:
+                if str(p["message_id"]) not in left:
+                    chat_photos.drop(str(p["path"]))
     return len(rows)

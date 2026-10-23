@@ -127,7 +127,7 @@ def test_a_groups_leaders_turn_polls_off(polls):
     tid = _group_tid(polls, ANA, GRP)
     polls.t["groups"][0]["chat_extras"] = False
     r = _ask(polls, ANA, tid)
-    assert r.status_code == 403 and "turned polls off" in r.json()["error"] and not polls.t["msg_polls"]
+    assert r.status_code == 403 and "turned photos and polls off" in r.json()["error"] and not polls.t["msg_polls"]
     page = _page(polls, ANA, f"/my/groups/{GRP}/chat?make=poll").text
     assert "?make=poll" not in page and 'id="gc-pollform"' not in page and 'id="gc-compose"' in page
 
@@ -142,7 +142,7 @@ def _groups_app(env, who):
 def test_the_switch_is_the_leaders(polls):
     _group_tid(polls, ANA, GRP)
     people = _page(polls, BEN, f"/my/groups/{GRP}/people").text
-    assert "Polls in the chat" in people and 'action="/my/groups/extras"' in people
+    assert "Photos and polls in the chat" in people and 'action="/my/groups/extras"' in people
     assert 'action="/my/groups/extras"' not in _page(polls, ANA, f"/my/groups/{GRP}/people").text
     r = _groups_app(polls, ANA).post("/my/groups/extras", data={"group_id": GRP, "on": "0"}, headers=ORIGIN)
     assert "err=not_group_leader" in r.headers["location"] and polls.t["groups"][0].get("chat_extras") is not False
@@ -151,7 +151,7 @@ def test_the_switch_is_the_leaders(polls):
     _groups_app(polls, BEN).post("/my/groups/extras", data={"group_id": GRP, "on": "1"}, headers=ORIGIN)
     assert polls.t["groups"][0]["chat_extras"] is True
     polls.t["groups"][0]["chat_on"] = False                                        # a Board-only group has no chat to poll in
-    assert "Polls in the chat" not in _page(polls, BEN, f"/my/groups/{GRP}/people").text
+    assert "Photos and polls in the chat" not in _page(polls, BEN, f"/my/groups/{GRP}/people").text
 
 
 # ── 3. voting ────────────────────────────────────────────────────────
@@ -226,7 +226,7 @@ def test_the_plus_offers_a_poll_and_the_prayer_wall(polls):
     form = _page(polls, ANA, f"/my/groups/{GRP}/chat?make=poll").text
     assert 'id="gc-pollform"' in form and 'name="poll" value="1"' in form and form.count('name="choice"') == 4
     assert "Everyone sees the counts, never who voted." in form
-    assert "if(document.getElementById('gc-pollform'))return;" in form              # a new message never wipes a half-typed poll
+    assert "if(document.getElementById('gc-pollform')||document.getElementById('gc-photoform'))return;" in form              # a new message never wipes a half-typed poll
 
 
 def test_the_leaders_room_has_polls_and_no_prayer_wall(polls, monkeypatch):
