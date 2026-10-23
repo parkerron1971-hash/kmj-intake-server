@@ -1446,7 +1446,7 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
                              live=live, reading=mpr.today_row(today, done), bible=bible, where=where,
                              checkin=checkin, devotional=devotional,
                              edit=can_picture and request.query_params.get("edit") == "pictures",
-                             news=news_html, news_n=news_n if news_posts else None, celebrate=celebrate))
+                             news=news_html, news_n=mpn.home_bell(news), celebrate=celebrate))
 
 
 # ─── POST ────────────────────────────────────────────────────────────

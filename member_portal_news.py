@@ -620,6 +620,17 @@ def home_block(biz: Dict[str, Any], posts: Optional[List[Dict[str, Any]]], occ: 
             f'{f"<div class=nw-rows>{rows}</div>" if rows else ""}</section>')
 
 
+def home_bell(news: Optional[Tuple[Optional[List[Dict[str, Any]]], int]]) -> Optional[int]:
+    """Home's bell (how many posts are new), the way to News: there whenever
+    the church's news could be read, even before the first post, because
+    News is where a pastor finds Post and a member finds Have good news.
+    None (no bell) when the read failed or this isn't a church's Home."""
+    if not news:
+        return None
+    posts, n = news
+    return int(n or 0) if posts is not None else None
+
+
 # ─── the pages ───────────────────────────────────────────────────────
 
 

@@ -289,6 +289,20 @@ def test_home_shows_nothing_when_there_is_no_news(fake):
     assert cn.home_view(BIZ, MONIQUE)[1] == 1
 
 
+def test_the_bell_leads_to_news_even_before_the_first_post(fake):
+    # Kevin, 2026-10-23, signed in as a pastor: "I don't see where I can post".
+    # With no posts yet, Home had no bell, so News (and Post) was out of reach.
+    assert mpn.home_bell(cn.home_view(BIZ, MONIQUE)) == 0             # no news yet: the bell, no number
+    fake.t["church_posts"].append(_post(P_CHURCH))
+    assert mpn.home_bell(cn.home_view(BIZ, MONIQUE)) == 1
+    fake.fail.add("church_posts")
+    assert mpn.home_bell(cn.home_view(BIZ, MONIQUE)) is None          # a failed read: no bell
+    assert mpn.home_bell(None) is None                                  # not a church's Home
+    import member_portal as mp
+    html = mp._shell(BUSINESS, None, "Home", "<p>hi</p>", tab="home", who=_me(MONIQUE), news_n=0)
+    assert 'href="/my/news"' in html and 'aria-label="News"' in html
+
+
 # ── 6. routes ────────────────────────────────────────────────────────
 
 def _client(monkeypatch, me, unavailable=False):
