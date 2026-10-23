@@ -1,0 +1,51 @@
+# The stream relay on one droplet. Host networking so MediaMTX and the
+# agent talk over 127.0.0.1 and the firewall (ufw) governs the one public
+# port, 443. Both restart on their own after a crash or a reboot.
+#
+# Locked down (Codex R8): no capabilities beyond binding :443, no
+# privilege escalation, read-only filesystems with only the spool and
+# /tmp writable, and memory/process caps so one runaway can't take the
+# droplet. Sized for the $6 droplet (1 GB); raise with the droplet.
+services:
+  mediamtx:
+    image: bluenviron/mediamtx:1.9.3
+    network_mode: host
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 256m
+    pids_limit: 128
+    volumes:
+      - ./mediamtx.yml:/mediamtx.yml:ro
+      - ./tls:/tls:ro
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "5"}
+
+  agent:
+    build:
+      context: .
+      dockerfile: agent/Dockerfile
+    network_mode: host
+    restart: unless-stopped
+    env_file: .env
+    # A dedicated user (made in the image and by cloud-init) that owns
+    # only /var/relay. ffmpeg handles the church's media as this user.
+    user: "10001:10001"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 640m
+    pids_limit: 256
+    tmpfs: [/tmp]
+    volumes:
+      # Recordings in progress, their journals and the remembered keys
+      # survive a restart of the agent, so a mid-service restart resumes
+      # the same recording and an unfinished end is finished.
+      - /var/relay:/var/relay
+    depends_on: [mediamtx]
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "5"}
