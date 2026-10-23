@@ -31,6 +31,7 @@ Office API (any seat reads; a seat that can edit writes):
   POST /church/news                 a new post (now or later)
   POST /church/news/{id}/pin        pin to the top for a week, or unpin
   POST /church/news/{id}/remove     take a post down
+  GET  /church/news/held            a safety officer's seat: the held comments' words
   POST /church/news/held/{id}       a safety officer's seat: show or keep hidden
   POST /church/news/posters         pick who posts to the whole church
 """
@@ -705,6 +706,7 @@ def office_view(business: Dict[str, Any]) -> Dict[str, Any]:
     posters = _get(f"/church_news_posters?business_id=eq.{b}&select=contact_id,added_at&limit=200")
     poster_people = _people(biz_id, [p["contact_id"] for p in posters]) or {}
     week = (now - timedelta(days=7)).isoformat()
+    saw = _get(f"/church_post_seen?business_id=eq.{b}&seen_at=gte.{_q(week)}&select=contact_id&limit=100000")
     # What a new post can be for and carry: the running ministries and
     # groups, what's coming up, the latest sermons.
     ministries = _get(f"/groups?business_id=eq.{b}&active=eq.true&select=id,name,kind&order=name.asc&limit=500")
@@ -724,6 +726,8 @@ def office_view(business: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "posts": posts,
         "app_people": app_people,
+        "seen_week": len({str(s["contact_id"]) for s in saw}),
+        "posts_month": sum(1 for p in posts if p["status"] == "posted" and str(p.get("created_at") or "") >= (now - timedelta(days=30)).isoformat()),
         "held": [{"id": h["id"], "post_id": h["post_id"], "post_title": titles.get(str(h["post_id"]), ""),
                   "created_at": h["created_at"]} for h in held],
         "safety": {"comments_open": comments_open(business), "officers": mr.officer_count(biz_id),
@@ -848,6 +852,23 @@ def remove(post_id: str, body: BizIn, user: AuthedUser = Depends(require_user)):
     return {"ok": True}
 
 
+@router.get("/church/news/held")
+def held_words(business_id: str = Query(...), user: AuthedUser = Depends(require_user)):
+    """The words of each held comment, for the church's safety officers only
+    (everyone else sees that one is waiting, never what it says)."""
+    import kids_router
+    import messaging_router as mr
+    biz = kids_router._uuid(business_id, "business_id")
+    # A direct call, so the ownership sweep sees the gate; then the officer check.
+    _need(biz, user, "viewer")
+    mr.require_officer(biz, user)
+    rows = _get(f"/church_post_comments?business_id=eq.{_q(biz)}&status=eq.held"
+                f"&select=id,post_id,contact_id,body,created_at&order=created_at.desc&limit=50")
+    people = _people(biz, [r["contact_id"] for r in rows]) or {}
+    return {"held": [{"id": r["id"], "post_id": r["post_id"], "body": r.get("body") or "", "created_at": r["created_at"],
+                      "name": (people.get(str(r["contact_id"])) or {}).get("name") or "Someone"} for r in rows]}
+
+
 class HeldIn(BaseModel):
     business_id: str
     show: bool
@@ -860,6 +881,7 @@ def decide_held(comment_id: str, body: HeldIn, user: AuthedUser = Depends(requir
     import messaging_router as mr
     biz_id = kids_router._uuid(body.business_id, "business_id")
     cid = kids_router._uuid(comment_id, "comment")
+    _need(biz_id, user, "viewer")
     mr.require_officer(biz_id, user)
     rows = _get(f"/church_post_comments?id=eq.{_q(cid)}&business_id=eq.{_q(biz_id)}&status=eq.held&select=id&limit=1")
     if not rows:

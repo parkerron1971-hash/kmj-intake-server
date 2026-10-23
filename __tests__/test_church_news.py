@@ -369,6 +369,29 @@ def test_the_office_page_counts_and_never_shows_a_comments_words(fake, monkeypat
     assert [c["contact_id"] for c in v["candidates"]] == [TASHA]
 
 
+def test_only_a_safety_officer_reads_or_decides_a_held_comment(fake, monkeypatch):
+    import messaging_router as mr
+    from fastapi import HTTPException
+    _screen(monkeypatch, "harm")
+    fake.t["church_posts"].append(_post(P_CHURCH))
+    _say(_me(MONIQUE), "something unkind")
+    cid = fake.t["church_post_comments"][0]["id"]
+    officer = {"yes": False}
+
+    def require(biz, user):
+        if not officer["yes"]:
+            raise HTTPException(403, "Only the church's safety officers can open the Safety room.")
+    monkeypatch.setattr(mr, "require_officer", require)
+    client = _office(monkeypatch, "admin")
+    assert client.get(f"/church/news/held?business_id={BIZ}").status_code == 403
+    assert client.post(f"/church/news/held/{cid}", json={"business_id": BIZ, "show": True}).status_code == 403
+    officer["yes"] = True
+    words = client.get(f"/church/news/held?business_id={BIZ}").json()["held"]
+    assert words[0]["body"] == "something unkind" and words[0]["name"] == "Monique Brown"
+    assert client.post(f"/church/news/held/{cid}", json={"business_id": BIZ, "show": False}).status_code == 200
+    assert fake.t["church_post_comments"][0]["status"] == "removed"
+
+
 def test_picking_who_posts_to_the_whole_church_is_an_admins(fake, monkeypatch):
     body = {"business_id": BIZ, "add": [MONIQUE]}
     assert _office(monkeypatch, "member").post("/church/news/posters", json=body).status_code == 403
