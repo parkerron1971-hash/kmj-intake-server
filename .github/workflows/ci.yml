@@ -206,3 +206,4 @@ jobs:
           node __tests__/group_post_later_db.mjs
           node __tests__/group_monthly_db.mjs
           node __tests__/group_guests_db.mjs
+          node __tests__/chat_polls_db.mjs

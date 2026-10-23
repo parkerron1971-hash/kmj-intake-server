@@ -129,6 +129,7 @@ GL_CSS = """
 .gl-face{display:flex;align-items:center;gap:8px;font-size:14.5px;}
 .gl-face a{font-size:13.5px;font-weight:600;color:var(--teal-ink,var(--acc));text-decoration:none;}
 .gl-note{padding:4px 16px 16px;margin:0;font-size:13.5px;color:var(--fg2);line-height:1.45;}
+.gl-draft{padding:0 16px 16px;margin:0;}
 .gl-row{display:flex;align-items:center;gap:12px;padding:14px 16px;}
 .gl-row .gs-t{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;}
 .gl-row .gs-t b{font-size:15px;font-weight:650;}
@@ -213,14 +214,22 @@ def render_body(biz: Dict[str, Any], me: Dict[str, Any], v: Dict[str, Any], *, i
         needs.append(mpg._requests_block(reqs, g, back=f"/my/lead/groups/{gid}"))
     missing = v.get("missing") or []
     if missing:
+        import member_messaging_rules as rules
         talk = mpm.turned_on(biz)
+        # A teen can't get a private message from an adult who isn't their parent.
         faces = "".join(
             f'<span class="gl-face">{face(p)}<span>{esc(name(p))}</span>'
-            + (f' <a href="/my/messages/to/{esc(p["id"])}">Message</a>' if talk else "") + "</span>" for p in missing[:8])
+            + (f' <a href="/my/messages/to/{esc(p["id"])}">Message</a>' if talk and not rules.is_teen(p) else "") + "</span>"
+            for p in missing[:8])
         n = len(missing)
+        # Chief drafts a note to each; the leader sends them (group_care).
+        adults = sum(1 for p in missing if not rules.is_teen(p))
+        draft = (f'<form method="post" action="/my/lead/groups/notes" class="gl-draft"><input type="hidden" name="group_id" value="{esc(gid)}">'
+                 f'<button class="gs-btn sm" type="submit">{ic("sparkles", 15)}Draft a note to {"each" if adults > 1 else "them"}</button></form>'
+                 if talk and adults else "")
         needs.append(f'<section class="gl-need" aria-labelledby="gl-miss"><div class="gl-need-h"><b id="gl-miss">Haven’t been in a while</b>'
                      f'<span class="gs-n">{n}</span></div><div class="gl-faces">{faces}</div>'
-                     f'<p class="gl-note">Missed each of the last three gatherings. A call or a note this week goes a long way.</p></section>')
+                     f'<p class="gl-note">Missed each of the last three gatherings. A call or a note this week goes a long way.</p>{draft}</section>')
     if v.get("to_pastor"):
         k = v["to_pastor"]
         needs.append(f'<section class="gl-need"><div class="gl-row"><span class="gs-disc">{ic("shield", 20)}</span><span class="gs-t">'
