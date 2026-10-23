@@ -4,7 +4,7 @@ date: 2026-10-23
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-10-23: "divide up the system as far as workload so each section of the system is viewed by specific people … if we create media team they would be able to get the part when it comes to media like churchsavvy … seats … treasurer oversees a section, Pastor oversees a section"; then, after the artifact "Church Areas and Keys" (7YRKpKa9g2DdFU9mm3WD8L): "lets start building this" (the Ops desk left Build to make room, Kevin''s pick)'
 status: in progress
-prs: [kmj-intake-server (this PR)]
+prs: [kmj-intake-server#1562]
 migrations: [supabase/APPLY-2026-10-23-church-areas.sql (NOT APPLIED yet)]
 left_undone:
   - "The office's Areas page (solutionist-studio, the next PR): the eight areas, who works each, who reaches it through an office login, what's missing, and Place for a role or team"
