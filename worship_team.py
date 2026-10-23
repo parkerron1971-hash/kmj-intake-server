@@ -18,6 +18,9 @@
 #   planner   plans Sundays, sermon slides, templates; runs the screens
 #   worship   songs and the order, keys, stage notes; never the screens
 #   booth     runs the screens and fixes a typo live; never the plan
+#   media     the rest of Worship & media (Kevin 2026-10-23, "Church Areas
+#             and Keys"): the livestream, sermons, video clips and the
+#             screens' library; never the plan or the screens
 #   admin     everything, the setup and who's on the team
 # The owner, an admin or a manager of the church in Solutionist is an
 # admin here without being invited.
@@ -49,16 +52,22 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/worship", tags=["worship"])
 
 STAFF_ROLES = ("owner", "admin", "manager")
-ROLES = ("planner", "worship", "booth", "admin")
-ROLE_LABEL = {"planner": "Planner", "worship": "Worship leader", "booth": "Booth", "admin": "Admin"}
+ROLES = ("planner", "worship", "booth", "media", "admin")
+ROLE_LABEL = {"planner": "Planner", "worship": "Worship leader", "booth": "Booth", "media": "Media",
+              "admin": "Admin"}
 # What each part may change. Reading is open to every part.
 CAN: Dict[str, Set[str]] = {
     "plan": {"admin", "planner", "worship"},
     "songs": {"admin", "planner", "worship"},
-    "media": {"admin", "planner", "worship"},
+    "media": {"admin", "planner", "worship", "media"},
     "fix": {"admin", "planner", "worship", "booth"},
     "run": {"admin", "planner", "booth"},
     "setup": {"admin"},
+    # Beyond ChurchSavvy's own pages: the rest of Worship & media, each
+    # opened on its own routes through team_can (live_router, media_library).
+    "live": {"admin", "media", "booth"},
+    "clips": {"admin", "media"},
+    "sermons": {"admin", "media"},
 }
 REFUSED = {
     "plan": "Your part on the team doesn't change the plan. A planner or the worship leader does.",
@@ -67,6 +76,9 @@ REFUSED = {
     "fix": "Your part on the team doesn't change the words.",
     "run": "Your part on the team doesn't run the screens. The booth does.",
     "setup": "Only an admin changes the setup.",
+    "live": "Your part on the team doesn't run the livestream. Media or the booth does.",
+    "clips": "Your part on the team doesn't work on video clips. Media does.",
+    "sermons": "Your part on the team doesn't change sermons. Media does.",
 }
 MAX_TEAM = 60
 INVITE_DAYS = 30
@@ -111,12 +123,34 @@ def _seat(biz: str, user: AuthedUser) -> Optional[str]:
         raise HTTPException(503, "access check unavailable") from e
 
 
-def _team_roles(biz: str, user: AuthedUser) -> Set[str]:
+def parts_of(biz: str, user_id: Any) -> Set[str]:
+    """A person's parts on a church's team, by their sign-in alone: no seat
+    and no switch. A failed read is a 503, never "not on the team"."""
     rows = sb_clients.sb_get_as_service(
-        f"/worship_team?business_id=eq.{_q(biz)}&user_id=eq.{_q(user.id)}&status=eq.active&select=roles&limit=1")
+        f"/worship_team?business_id=eq.{_q(biz)}&user_id=eq.{_q(user_id)}&status=eq.active&select=roles&limit=1")
     if rows is None:
         raise HTTPException(503, "access check unavailable")
     return {r for r in (rows[0].get("roles") or []) if r in ROLES} if rows else set()
+
+
+def _team_roles(biz: str, user: AuthedUser) -> Set[str]:
+    return parts_of(biz, user.id)
+
+
+def team_can(biz: str, user: AuthedUser, what: str) -> bool:
+    """Whether this person's team parts open `what` on a route outside
+    ChurchSavvy (the livestream, video clips). Only while ChurchSavvy is open
+    to them: a team made while it was on opens nothing once it is off. Their
+    seat, if any, is the caller's to check first."""
+    from worship_router import open_to
+    try:
+        opened = open_to(user)
+    except AttributeError:
+        # A sign-in with no email at all: the owner-only switch can't say yes.
+        opened = False
+    if not opened:
+        return False
+    return can(parts_of(biz, user.id), what)
 
 
 def roles_of(biz: str, user: AuthedUser) -> Set[str]:
@@ -155,9 +189,9 @@ def require(biz: str, user: AuthedUser, what: str) -> Set[str]:
 
 def _clean_roles(raw: Any) -> List[str]:
     if not isinstance(raw, list) or not raw:
-        raise HTTPException(400, "Pick at least one part: planner, worship leader, booth or admin")
+        raise HTTPException(400, "Pick at least one part: planner, worship leader, booth, media or admin")
     if any(not isinstance(r, str) or r not in ROLES for r in raw):
-        raise HTTPException(400, "A part is planner, worship leader, booth or admin")
+        raise HTTPException(400, "A part is planner, worship leader, booth, media or admin")
     return [r for r in ROLES if r in raw]
 
 

@@ -60,6 +60,20 @@ assert.equal((await db.query('SELECT count(*)::int AS n FROM worship_team WHERE 
 await db.query('DELETE FROM businesses WHERE id = $1', [b1]);
 assert.equal((await db.query('SELECT count(*)::int AS n FROM worship_team')).rows[0].n, 0); checks++;
 
+// The Media part (APPLY-2026-10-23-churchsavvy-media-part.sql): the old
+// check is replaced, not stacked; media and all five parts go in; a part
+// that isn't one still doesn't.
+await db.query('INSERT INTO businesses(id) VALUES ($1)', [b1]);
+await refuses(add, [b1, 'Mo', null, ['media']], /check constraint/);
+await db.exec(await sql('APPLY-2026-10-23-churchsavvy-media-part.sql'));
+await db.exec(await sql('APPLY-2026-10-23-churchsavvy-media-part.sql'));   // idempotent
+assert.equal((await db.query(add, [b1, 'Mo', null, ['media']])).rows[0].roles[0], 'media'); checks++;
+await db.query(add, [b1, 'All', null, ['planner', 'worship', 'booth', 'media', 'admin']]); checks++;
+await refuses(add, [b1, 'Mo', null, ['pastor']], /check constraint/);
+await refuses(add, [b1, 'Mo', null, []], /check constraint/);
+const named = await db.query(`SELECT count(*)::int AS n FROM pg_constraint WHERE conrelid = 'worship_team'::regclass AND contype = 'c' AND pg_get_constraintdef(oid) LIKE '%roles%'`);
+assert.equal(named.rows[0].n, 1); checks++;
+
 for (const role of ['anon', 'authenticated']) {
   await db.exec(`SET ROLE ${role}`);
   await refuses('SELECT * FROM worship_team', [], /permission denied/);

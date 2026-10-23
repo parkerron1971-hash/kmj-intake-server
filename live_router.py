@@ -20,7 +20,10 @@ in the chat; the member app sends it privately to Prayer & care.
   POST  /live/{sid}/mute                   {business_id, contact_id, muted}
 
 Seats: any member of the team can watch the chat; running the service
-and moderating is a manager's (kids_router.require). The tables are
+and moderating is a manager's (kids_router.require). ChurchSavvy's team
+(worship_team) runs it too: the Media, Booth and Admin parts may do all of
+it, while ChurchSavvy is open to them (Kevin 2026-10-23, "Church Areas and
+Keys": a Media team gets the media part already set up). The tables are
 server-only (APPLY-2026-09-30-live.sql). Every read that fails is a 503,
 never an empty chat.
 """
@@ -36,9 +39,27 @@ from pydantic import BaseModel, Field
 
 import sb_clients
 from auth_supabase import AuthedUser, require_user
-from kids_router import _uuid, require
+import kids_router
+from kids_router import _uuid
 
 router = APIRouter(tags=["live"])
+
+
+def require(business_id: str, user: AuthedUser, minimum: str) -> str:
+    """The seat the live page needs, or a part on ChurchSavvy's team that
+    runs the livestream. A seat is checked first and its refusal stands for
+    anyone the team doesn't open it to."""
+    try:
+        # Called through its module, not an alias, so ownership_sweep
+        # follows this gate to kids_router's.
+        return kids_router.require(business_id, user, minimum)
+    except HTTPException as refused:
+        if refused.status_code != 403:
+            raise
+        import worship_team
+        if worship_team.team_can(business_id, user, "live"):
+            return "team"
+        raise
 
 BODY_MAX = 500
 TITLE_MAX = 120

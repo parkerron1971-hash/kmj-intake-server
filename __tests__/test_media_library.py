@@ -76,7 +76,7 @@ def test_denied_user_never_reads_media_store(monkeypatch):
 
 
 def test_asset_lookup_is_business_scoped(monkeypatch):
-    monkeypatch.setattr(media, 'access', lambda *a: None)
+    monkeypatch.setattr(media, 'access', lambda *a, **k: None)
     def read(path):
         assert f'business_id=eq.{BIZ}' in path and f'id=eq.{CLIP}' in path
         return []
@@ -122,7 +122,7 @@ def test_drive_import_checks_grant_and_file_before_queuing(monkeypatch, case, ex
     monkeypatch.setenv('GOOGLE_CLIENT_ID', 'configured-client')
     monkeypatch.setenv('TIN_ENCRYPTION_KEY', 'synthetic-key')
     monkeypatch.delenv('MEDIA_TOKEN_ENCRYPTION_KEY', raising=False)
-    monkeypatch.setattr(media, 'access', lambda *a: None)
+    monkeypatch.setattr(media, 'access', lambda *a, **k: None)
     monkeypatch.setattr(media, 'configuration', lambda: {'drive_configured': True})
     grant = {'aud': 'wrong' if case == 'wrong_app' else 'configured-client', 'scope': media.DRIVE_SCOPE + (' extra-scope' if case == 'broad_scope' else '')}
     file = {'name': 'Synthetic recording', 'mimeType': 'video/mp4', 'size': media.MAX_BYTES + 1 if case == 'oversized' else 100,
@@ -165,6 +165,7 @@ def test_a_clip_changed_after_approval_can_be_approved_again(monkeypatch):
            'configuration': {'origin': 'ai', 'cover_image_id': 'new-cover'}}
     row['approval'] = {'fingerprint': media.fingerprint(row | {'configuration': {'origin': 'ai'}}), 'by': OWNER}
     patched = []
+    monkeypatch.setattr(media, 'access', lambda *a, **k: None)
     monkeypatch.setattr(media, 'asset', lambda b, a, u: dict(row))
     monkeypatch.setattr(media, 'audit', lambda *a, **k: None)
     monkeypatch.setattr(media.sb_clients, 'sb_patch_as_service', lambda path, body: patched.append(body) or [row | body])
