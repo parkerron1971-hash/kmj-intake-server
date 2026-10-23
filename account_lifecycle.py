@@ -231,6 +231,10 @@ BUSINESS_CHILD_TABLES: List[str] = [
     # title, job and chain) and its settings name no contact.
     "church_follow_up_notes", "church_follow_ups", "church_leader_roles",
     "church_role_defs", "church_role_settings",
+    # The map (church_areas): which area the church put a role or a team in.
+    # It names no contact and cites role keys and team names, not ids, so
+    # it restores as it is.
+    "church_area_places",
     # Sunday check-in's service (day, time, how long it stays open): no
     # contact, nothing it cites; a restored church keeps its Sunday.
     "church_checkin_settings",
