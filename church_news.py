@@ -538,15 +538,16 @@ async def comment(business: Dict[str, Any], me: Dict[str, Any], post_id: str, te
     pid = str(p["id"])
     if p.get("comments") != "on":
         return False, "comments_off", pid
-    reply = ""
+    reply = answered = ""
     if reply_to and UUID.match(str(reply_to)):
         parent = await asyncio.to_thread(
             sb_clients.sb_get_as_service,
-            f"/church_post_comments?id=eq.{_q(reply_to)}&post_id=eq.{_q(pid)}&status=eq.shown&select=id,reply_to&limit=1")
+            f"/church_post_comments?id=eq.{_q(reply_to)}&post_id=eq.{_q(pid)}&status=eq.shown&select=id,reply_to,contact_id&limit=1")
         if parent is None:
             return False, "error", pid
         # One level of replies: answering a reply answers its comment.
         reply = str(parent[0].get("reply_to") or parent[0]["id"]) if parent else ""
+        answered = str(parent[0].get("contact_id") or "") if parent else ""
     try:
         verdict = await msg_screen.screen(business_id, text)
     except msg_screen.ScreenUnavailable:
@@ -561,6 +562,11 @@ async def comment(business: Dict[str, Any], me: Dict[str, Any], post_id: str, te
         import member_portal_messaging as mpm
         await asyncio.to_thread(mpm.care_alert, business_id, me)
         return True, "care", pid
+    if status == "shown" and reply and answered:
+        # "Dana replied to your comment" (news_alerts), off the request's path.
+        import member_push
+        import news_alerts
+        member_push._later(news_alerts.tell_reply, business, pid, str(row[0]["id"]), answered, me)
     return True, "commented" if status == "shown" else "comment_held", pid
 
 
@@ -718,6 +724,12 @@ def _business(biz_id: str) -> Dict[str, Any]:
     return rows[0]
 
 
+def _alerts_view(business: Dict[str, Any]) -> Dict[str, Any]:
+    import news_alerts as na
+    return {"on": na.church_on(business), "sent_today": na.sent_today(business) or 0, "max": na.daily_max(),
+            "celebrations": "morning" if na.celebration_alerts(business) else "none"}
+
+
 def office_view(business: Dict[str, Any]) -> Dict[str, Any]:
     """Everything the office page shows. Counts only for comments; the words
     of a comment only for one the check held (the officers decide it)."""
@@ -802,6 +814,9 @@ def office_view(business: Dict[str, Any]) -> Dict[str, Any]:
         "posters": [{"contact_id": str(p["contact_id"]), "name": (poster_people.get(str(p["contact_id"])) or {}).get("name") or ""}
                     for p in posters],
         "settings": {"comments": (((business.get("settings") or {}).get("news") or {}).get("comments")) is not False},
+        # Phone alerts (news_alerts): the church's switch, today's count of
+        # the day's most, how celebrations ring.
+        "alerts": _alerts_view(business),
         "ministries": [{"id": str(g["id"]), "name": g.get("name") or "", "kind": g.get("kind") or ""} for g in ministries],
         "events": events,
         "sermons": [{"id": str(s["id"]), "title": s.get("title") or "", "date": s.get("preached_on")} for s in sermons],
@@ -828,6 +843,9 @@ class PostIn(BaseModel):
     pin: bool = False
     comments: Literal["on", "prayers", "off"] = "on"
     publish_at: Optional[str] = None
+    # "Important: ring their phones": members who keep Important hear it
+    # too, not only those who chose Everything (news_alerts).
+    important: bool = False
     attach: Dict[str, Any] = Field(default_factory=dict)
 
 
@@ -861,9 +879,13 @@ def create(body: PostIn, user: AuthedUser = Depends(require_user)):
         "author_label": " ".join(body.author_label.split())[:LABEL_MAX], "source": "office", "status": "posted",
         "pinned_until": (_now() + timedelta(days=PIN_DAYS)).isoformat() if body.pin else None,
         "comments": body.comments, "publish_at": when.astimezone(timezone.utc).isoformat() if when else None,
-        "attach": att})
+        "important": bool(body.important), "attach": att})
     if not row:
         raise HTTPException(503, "That didn't post. Nothing went out — try again.")
+    if not when:
+        # It rings now (news_alerts); a scheduled one rings when its time comes.
+        import news_alerts
+        news_alerts.alert_later(business, row)
     return {"ok": True, "post_id": row["id"], "scheduled": bool(when), "comments_open": comments_open(business)}
 
 
@@ -1025,20 +1047,35 @@ def posters(body: PostersIn, user: AuthedUser = Depends(require_user)):
 
 class NewsSettingsIn(BaseModel):
     business_id: str
-    comments: bool
+    comments: Optional[bool] = None
+    # Phone alerts for News (member_push kind "news", the church's switch
+    # that Settings → Member page also shows), and how celebrations ring.
+    alerts: Optional[bool] = None
+    celebration_alerts: Optional[Literal["morning", "none"]] = None
 
 
 @router.post("/church/news/settings")
 def news_settings(body: NewsSettingsIn, user: AuthedUser = Depends(require_user)):
-    """Comments on News, on or off (settings.news.comments)."""
+    """Comments on News (settings.news.comments), phone alerts for News
+    (settings.member_portal.notifications.news) and celebration alerts
+    (settings.news.celebration_alerts)."""
     import kids_router
     biz_id = kids_router._uuid(body.business_id, "business_id")
     _need(biz_id, user, "admin")
     business = _business(biz_id)
     settings = business.get("settings") if isinstance(business.get("settings"), dict) else {}
-    news = settings.get("news") if isinstance(settings.get("news"), dict) else {}
-    ok = sb_clients.sb_patch_as_service(f"/businesses?id=eq.{_q(biz_id)}",
-                                        {"settings": {**settings, "news": {**news, "comments": bool(body.comments)}}})
+    news = dict(settings.get("news") if isinstance(settings.get("news"), dict) else {})
+    if body.comments is not None:
+        news["comments"] = bool(body.comments)
+    if body.celebration_alerts is not None:
+        news["celebration_alerts"] = body.celebration_alerts
+    new = {**settings, "news": news}
+    if body.alerts is not None:
+        portal = dict(settings.get("member_portal") if isinstance(settings.get("member_portal"), dict) else {})
+        kinds = dict(portal.get("notifications") if isinstance(portal.get("notifications"), dict) else {})
+        kinds["news"] = bool(body.alerts)
+        new["member_portal"] = {**portal, "notifications": kinds}
+    ok = sb_clients.sb_patch_as_service(f"/businesses?id=eq.{_q(biz_id)}", {"settings": new})
     if ok is None:
         raise _unavailable()
     return {"ok": True}

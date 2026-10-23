@@ -207,6 +207,9 @@ BUSINESS_CHILD_TABLES: List[str] = [
     # Celebrations (celebrations.py): what each member said yes to, and a
     # couple's anniversary — both before contacts.
     "member_celebrations", "member_anniversaries",
+    # The week's news by email (news_alerts): which week each person got
+    # it — before contacts.
+    "church_news_digests",
     # Groups: who saw each Board post, the posts and who's asking to join
     # (member_portal_groups), who came to each meeting, the meetings, the
     # roster, then the groups — all before contacts.
@@ -775,6 +778,8 @@ _IMPORT_SKIP = {
     "church_post_comment_loves", "church_post_reports", "church_news_posters",
     # Celebrations cite people by id; same reason.
     "member_celebrations", "member_anniversaries",
+    # The week's email log cites people by id; same reason.
+    "church_news_digests",
     # Sermons cite their series by id; same reason.
     "sermon_series", "sermons",
     # Live sessions, chat and presence cite contacts and occasions by id;

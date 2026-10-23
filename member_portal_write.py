@@ -22,7 +22,9 @@ church. like an admin."
     as on Events (member_portal_church.member_rsvp)
   * whoever posted can edit the words, what it carries and the comments later
     (?edit=<id>)
-  * "Important: ring their phones" comes with the phone alerts (part 5)
+  * "Important: ring their phones" (news_alerts): shown when the church has
+    News alerts on, with the day's count; past the day's most it says so
+    and the post goes up without ringing
 
   GET  /my/news/write[?edit=<id>|?done=<id>]   (member_portal_news.serve)
   POST /my/news/write                           a post, or an edit
@@ -136,6 +138,8 @@ WRITE_CSS = """
 .wr-seg input:checked+span{background:var(--acc-fill);color:var(--on-acc);}
 .wr-seg input:focus-visible+span{outline:2px solid var(--acc);outline-offset:2px;}
 .wr-fixed{margin:0;font-size:14.5px;color:var(--fg2);}
+.wr-opt.wr-off{cursor:default;}
+.wr-opt+.wr-opt::before{content:"";position:absolute;top:0;left:16px;right:0;height:.5px;background:var(--line);}
 """
 
 # Chief offers the sign-up when the words ask people to sign up and the
@@ -328,16 +332,22 @@ async def write(biz: Dict[str, Any], me: Dict[str, Any], form: Dict[str, Any], p
         att["pics"] = pics
     when = sunday_at_7(biz) if str(form.get("when") or "") == "sunday" else None
     pin = str(form.get("pin") or "") in ("1", "on", "true")
+    important = str(form.get("important") or "") in ("1", "on", "true")
+    later = bool(when and when > cn._now())
     row = await asyncio.to_thread(cn.insert, biz_id, {
         "kind": kind, "title": title, "body": body, "group_id": None if to == "all" else to, "posted_by": me_id,
-        "source": "leader", "status": "posted", "comments": comments,
+        "source": "leader", "status": "posted", "comments": comments, "important": important,
         "pinned_until": (cn._now() + timedelta(days=cn.PIN_DAYS)).isoformat() if pin else None,
-        "publish_at": when.isoformat() if when and when > cn._now() else None, "attach": att})
+        "publish_at": when.isoformat() if later else None, "attach": att})
     if not row:
         import chat_photos
         for p in att.get("pics") or []:
             await asyncio.to_thread(chat_photos.drop, p["path"])
         return False, "error", ""
+    if not later:
+        # It rings now (news_alerts); a Sunday post rings at 7 AM Sunday.
+        import news_alerts
+        news_alerts.alert_later(biz, row)
     return True, "posted", str(row["id"])
 
 
@@ -358,7 +368,9 @@ def _flash(request: Request) -> str:
 def render_write(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], rights: Optional[Dict[str, Any]],
                  auds: Optional[List[Tuple[str, str, int]]], occ: Optional[List[Dict[str, Any]]],
                  sermons: Optional[List[Dict[str, Any]]], editing: Optional[Dict[str, Any]] = None,
-                 posted: Optional[Dict[str, Any]] = None) -> Tuple[str, int]:
+                 posted: Optional[Dict[str, Any]] = None, alerts: Optional[Dict[str, Any]] = None) -> Tuple[str, int]:
+    """`alerts`: {'on', 'sent_today', 'max'} for "Important: ring their
+    phones" (news_alerts); none, no switch."""
     import member_portal_news as mpn
     import member_portal_share as mps
     from member_portal import _shell
@@ -376,7 +388,8 @@ def render_write(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any]
     if posted:
         later = bool(cn._ts(posted.get("publish_at")) and cn._ts(posted.get("publish_at")) > cn._now())
         where = (posted.get("group_name") or "your group") if posted.get("group_id") else "the whole church"
-        bits = ["Pinned for a week." if posted.get("pinned_until") else "",
+        bits = [("Phones set to Important will ring " + ("at 7:00 AM." if later else "now.")) if posted.get("important") else "",
+                "Pinned for a week." if posted.get("pinned_until") else "",
                 "Comments are off." if posted.get("comments") == "off" else
                 "People can say they're praying." if posted.get("comments") == "prayers" else "Comments are on and checked."]
         body = (f'{head}<div class="nw-head"><p class="nw-eb">{"Scheduled" if later else "Posted"}</p>'
@@ -447,6 +460,18 @@ def render_write(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any]
     options = ("" if editing else
                f'<label class="wr-opt"><span class="sh-pt"><b>Pin it to the top</b><small>Stays first on News and Home for a week</small></span>'
                f'<input type="checkbox" name="pin" value="1" role="switch"><span class="wr-tg" aria-hidden="true"><i></i></span></label>')
+    # "Important: ring their phones" (news_alerts) — only when the church
+    # has News alerts on, and never past the day's most.
+    if alerts and alerts.get("on") and not editing:
+        n, most = int(alerts.get("sent_today") or 0), int(alerts.get("max") or 3)
+        if n >= most:
+            options += (f'<div class="wr-opt wr-off"><span class="sh-pt"><b>Important: ring their phones</b><small>The church has sent '
+                        f'its {most} alerts today. This one shows on News without ringing.</small></span></div>')
+        else:
+            nth = {0: "1st", 1: "2nd", 2: "3rd"}.get(n, f"{n + 1}th")
+            options += (f'<label class="wr-opt"><span class="sh-pt"><b>Important: ring their phones</b><small>The church\'s {nth} alert '
+                        f'today, of {most}. After 9 PM it waits for 7 AM.</small></span>'
+                        f'<input type="checkbox" name="important" value="1" role="switch"><span class="wr-tg" aria-hidden="true"><i></i></span></label>')
     options += (f'<div class="wr-seg-row"><b id="wr-l-cm">Comments</b><div class="wr-seg" role="radiogroup" aria-labelledby="wr-l-cm">{seg}</div>'
                 f'<small>Members can comment. Each comment is checked before anyone sees it.</small></div>')
     if not editing:
@@ -492,7 +517,11 @@ async def serve_write(request: Request, biz: Dict[str, Any], site, me: Dict[str,
         if editing is None:
             rights = None
     auds = await asyncio.to_thread(audiences, biz, rights) if rights is not None else None
-    return render_write(biz, site, request, me, rights, auds, occ, sermons, editing=editing or None)
+    import news_alerts as na
+    alerts = None
+    if na.church_on(biz):
+        alerts = {"on": True, "sent_today": await asyncio.to_thread(na.sent_today, biz) or 0, "max": na.daily_max()}
+    return render_write(biz, site, request, me, rights, auds, occ, sermons, editing=editing or None, alerts=alerts)
 
 
 def _go(path: str = "/my/news/write", **q: str):
@@ -516,7 +545,7 @@ async def write_route(request: Request):
             if raw:
                 files.append(raw)
     data = {k: form.get(k) for k in ("title", "body", "link", "event", "signup", "sermon", "comments", "edit", "to", "kind",
-                                      "when", "pin")}
+                                      "when", "pin", "important")}
     ok, code, pid = await write(church["business"], me, data, files)
     edit = str(form.get("edit") or "")
     if not ok:

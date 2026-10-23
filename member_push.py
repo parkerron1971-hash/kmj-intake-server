@@ -81,11 +81,16 @@ KINDS = (
     # is for see its box (visible_kinds) — teens and youth leaders; parents.
     ("youth", "Youth", "When a youth leader posts"),
     ("kids", "Kids check-in", "When your child is checked in or picked up, and their weekly lesson"),
+    # The church's News (news_alerts, the approved canvas "Church News &
+    # Celebrations"): what each member chose (Important, Everything or Off),
+    # birthdays in their groups, replies to their comments. Its own
+    # choices live on Me → Celebrations.
+    ("news", "Church news", "Posts your pastors mark important, birthdays in your groups, and replies to your comments"),
 )
 SPACE_KINDS = ("youth", "kids")
 KIND_KEYS = tuple(k for k, _, _ in KINDS)
-DAILY_ANNOUNCEMENTS = 3
-QUIET_KINDS = ("groups", "messages")
+DAILY_ANNOUNCEMENTS = 3                # shared with News posts that ring (news_alerts)
+QUIET_KINDS = ("groups", "messages", "news")
 QUIET_FROM, QUIET_TO = 21, 7          # 9 PM to 7 AM, the church's own clock
 HELD_MAX_HOURS = 36                   # a note older than this isn't news any more
 TITLE_MAX, BODY_MAX = 60, 180
