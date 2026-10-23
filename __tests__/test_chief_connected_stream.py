@@ -91,7 +91,7 @@ def test_early_review_omits_large_unrelated_context_but_validates_original_quote
     assert asyncio.run(truth.review_stream_prefix(None, 'Your busiest day is Tuesday.',
         sources=sources, message='Which day is busiest?', business_id=None))
     assert len(json.dumps(seen[0])) < 1000
-    assert len(sources['context:brand_block']['text']) > 14000
+    assert len(sources['context:brand_block']['text']) > truth.STREAM_REVIEW_EVIDENCE_CHARS
 
 
 def test_early_review_keeps_contradictions_and_cannot_cite_an_omitted_source(monkeypatch):
@@ -101,7 +101,7 @@ def test_early_review_keeps_contradictions_and_cannot_cite_an_omitted_source(mon
         'context:corrected_summary': {'kind': 'context', 'complete': True,
                                       'text': 'Your busiest day is Friday.'},
         'context:brand_block': {'kind': 'context', 'complete': False,
-                               'text': 'Color palette. ' * 1500},
+                               'text': 'Color palette. ' * (truth.STREAM_REVIEW_EVIDENCE_CHARS // 10)},
     }
     async def review(client, system, messages, **kwargs):
         payload = json.loads(messages[0]['content'])
@@ -118,7 +118,7 @@ def test_large_relevant_record_is_never_truncated_or_falsely_marked_complete(mon
         raise AssertionError('oversized evidence must defer to the final review')
     monkeypatch.setattr(truth, 'review_reply', forbidden)
     sources = {'context:summary': {'kind': 'context', 'complete': True,
-                                   'text': 'Tuesday bookings. ' * 1200}}
+                                   'text': 'Tuesday bookings. ' * (truth.STREAM_REVIEW_EVIDENCE_CHARS // 12)}}
     assert not asyncio.run(truth.review_stream_prefix(None, 'Your busiest day is Tuesday.',
         sources=sources, message='Which day is busiest?', business_id=None))
 
@@ -130,7 +130,8 @@ def _noisy_sources():
         'context:context_quality': {'kind': 'context', 'complete': True,
                                     'text': 'Some secondary context is unavailable.'},
         **{f'context:design_note_{i}': {'kind': 'context', 'complete': False,
-            'text': 'Unrelated historical draft color palette. ' + ('x' * 1600)}
+            'text': 'Unrelated historical draft color palette. '
+                    + ('x' * (truth.STREAM_REVIEW_EVIDENCE_CHARS // 8))}
            for i in range(10)},
     }
 
@@ -179,7 +180,7 @@ def test_relevant_hedged_conflicts_stay_in_early_review(monkeypatch, qualifier):
 
 def test_global_context_quality_cannot_be_dropped_to_make_the_check_fit(monkeypatch):
     sources = _noisy_sources()
-    sources['context:context_quality']['text'] = 'Unavailable context. ' * 1000
+    sources['context:context_quality']['text'] = 'Unavailable context. ' * (truth.STREAM_REVIEW_EVIDENCE_CHARS // 15)
     async def forbidden(*args, **kwargs):
         raise AssertionError('oversized global availability must defer the check')
     monkeypatch.setattr(truth, 'review_reply', forbidden)
@@ -232,7 +233,7 @@ def test_prefix_budget_diagnostic_is_content_free_and_scoped(caplog):
     import time
     token = chief_request_timing.CURRENT.set(chief_request_timing.Trace(time.perf_counter(), 'prefix-test'))
     sources = {'context:summary': {'kind': 'context', 'complete': True,
-                                   'text': 'Tuesday PRIVATE CONTENT ' * 1000}}
+                                   'text': 'Tuesday PRIVATE CONTENT ' * (truth.STREAM_REVIEW_EVIDENCE_CHARS // 10)}}
     try:
         with caplog.at_level('INFO', logger=truth.logger.name):
             assert not asyncio.run(truth.review_stream_prefix(None, 'Your busiest day is Tuesday.',

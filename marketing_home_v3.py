@@ -102,9 +102,9 @@ _PLUS = {
         ("site_concierge", "Chief answers your website’s visitors"),
         ("marketing_week", "Chief plans your marketing week"),
         ("agent_connector_write", "Your own AI can keep records here"),
+        ("dedicated_sms_number", "A texting number of your own"),
     ),
     "practice": (
-        ("dedicated_sms_number", "A texting number of your own"),
         ("ai_clips", "Find my best clips: ten hours of recordings a month"),
         ("accountant_collaborator", "An accountant seat, compliance reports and an audit trail"),
         ("marketing_autopilot", "Chief runs your marketing week"),

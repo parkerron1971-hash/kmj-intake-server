@@ -16,7 +16,9 @@ speak to every group at once. You never see their private chat.").
   POST /church/groups/word     a word from the pastors to every group (or
                                to the group leaders only): it lands on each
                                group's Board, a note goes to every phone that
-                               allows group news, and an email to the rest
+                               allows group news, and an email to the rest.
+                               A word to every group can go on News too
+                               (news), for the people who aren't in a group
   POST /church/groups/remind   someone has been waiting to join: a note to
                                the group's leaders (once a day per group)
 
@@ -139,6 +141,10 @@ class WordIn(BaseModel):
     audience: Literal["groups", "leaders"] = "groups"
     title: str = Field("", max_length=TITLE_MAX)
     body: str = Field(..., min_length=1, max_length=BODY_MAX)
+    # Also on News, for the whole church (Kevin, 2026-10-23: "if I want to
+    # post to news feed i can choose so or not because not everyone possibly
+    # is in a group"). A word to every group only; never a leaders-only one.
+    news: bool = False
 
 
 def _audience(business_id: str, audience: str) -> Tuple[List[str], int]:
@@ -199,13 +205,29 @@ async def word(body: WordIn, user: AuthedUser = Depends(require_user)):
     title = " ".join(body.title.split())
     if not text:
         raise HTTPException(422, "Write your message first.")
+    news_too = bool(body.news) and body.audience == "groups"
     who, n_groups = await asyncio.to_thread(_audience, biz_id, body.audience)
-    if not who:
+    if not who and not news_too:
         raise HTTPException(409, "Nobody is in a group yet." if body.audience == "groups" else "No group has a leader yet.")
     biz = (await asyncio.to_thread(_get, f"/businesses?id=eq.{_q(biz_id)}&select=id,name,settings&limit=1"))
     if not biz:
         raise HTTPException(404, "business not found")
     business = biz[0]
+    news_post = None
+    if news_too:
+        # The same words on News, for everyone in the app, groups or not
+        # (church_news); it rings like any office post (news_alerts).
+        import church_news as cn
+        import news_alerts
+        news_post = await asyncio.to_thread(cn.insert, biz_id, {
+            "kind": "announcement", "title": title, "body": text, "office_user": user.id, "author_label": "",
+            "source": "office", "status": "posted", "comments": "on", "attach": {}})
+        if not news_post:
+            raise HTTPException(503, "That didn't post. Nothing went out — try again.")
+        news_alerts.alert_later(business, news_post)
+    if not who:
+        return {"ok": True, "post_id": None, "people": 0, "phones": 0, "emailed": 0, "groups": n_groups,
+                "news_post_id": news_post["id"]}
     rows = await asyncio.to_thread(sb_clients.sb_post_as_service, "/group_posts", {
         "business_id": biz_id, "group_id": None, "title": title, "body": text, "pinned": False, "ask_ack": True,
         "posted_by": None, "audience": "leaders" if body.audience == "leaders" else "all"})
@@ -227,7 +249,8 @@ async def word(body: WordIn, user: AuthedUser = Depends(require_user)):
         if emailed:
             await asyncio.to_thread(sb_clients.sb_patch_as_service,
                                     f"/group_posts?id=eq.{_q(post['id'])}&business_id=eq.{_q(biz_id)}", {"emailed": emailed})
-    return {"ok": True, "post_id": post["id"], "people": len(who), "phones": phones, "emailed": emailed, "groups": n_groups}
+    return {"ok": True, "post_id": post["id"], "people": len(who), "phones": phones, "emailed": emailed, "groups": n_groups,
+            "news_post_id": news_post["id"] if news_post else None}
 
 
 # ─── a nudge to a group's leaders ────────────────────────────────────

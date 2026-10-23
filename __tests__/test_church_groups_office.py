@@ -173,6 +173,42 @@ def test_nobody_to_send_to(office):
     assert r.status_code == 409 and office.t["group_posts"] == []
 
 
+def _news(office, monkeypatch):
+    import news_alerts
+    office.t["church_posts"] = []
+    office.rang = []
+    monkeypatch.setattr(news_alerts, "alert_later", lambda business, post: office.rang.append(post["id"]))
+
+
+def test_a_word_can_go_on_news_too(office, monkeypatch):
+    # Kevin, 2026-10-23: "if I want to post to news feed i can choose so or
+    # not because not everyone possibly is in a group".
+    _news(office, monkeypatch)
+    r = _office(EDITOR).post("/church/groups/word", json={"business_id": BIZ, "title": "Consecrate Your Focus",
+                                                          "body": "Starting Monday, we read it together.", "news": True})
+    assert r.status_code == 200, r.text
+    news = office.t["church_posts"]
+    assert len(news) == 1 and r.json()["news_post_id"] == news[0]["id"] and office.rang == [news[0]["id"]]
+    assert (news[0].get("group_id"), news[0]["source"], news[0]["status"], news[0]["title"], news[0]["body"]) == (
+        None, "office", "posted", "Consecrate Your Focus", "Starting Monday, we read it together.")
+    assert len(office.t["group_posts"]) == 1 and r.json()["people"] == 5          # the groups still get it
+
+
+def test_not_on_news_unless_chosen_and_never_a_leaders_only_word(office, monkeypatch):
+    _news(office, monkeypatch)
+    assert _office(OWNER).post("/church/groups/word", json={"business_id": BIZ, "body": "Hello"}).json()["news_post_id"] is None
+    r = _office(OWNER).post("/church/groups/word", json={"business_id": BIZ, "audience": "leaders", "body": "Leaders", "news": True})
+    assert r.json()["news_post_id"] is None and office.t["church_posts"] == [] and office.rang == []
+
+
+def test_with_nobody_in_a_group_news_still_takes_it(office, monkeypatch):
+    _news(office, monkeypatch)
+    office.t["group_members"] = []
+    r = _office(OWNER).post("/church/groups/word", json={"business_id": BIZ, "body": "Hello, church", "news": True})
+    assert r.status_code == 200 and r.json()["people"] == 0 and r.json()["news_post_id"]
+    assert office.t["group_posts"] == [] and office.pushed == [] and len(office.t["church_posts"]) == 1
+
+
 # ── 3. a nudge to a leader ───────────────────────────────────────────
 
 def test_remind_the_leaders_once_a_day(office):

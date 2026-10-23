@@ -5513,7 +5513,7 @@ def render_faq() -> str:
       </details>
       <details class="faq-item" data-g="fit">
         <summary>Do I need a team to use this?</summary>
-        <div class="faq-body"><p>No. Solo-first is the default: one operator, everything in one workspace. When you do bring people in, the Solutionist plan includes team seats with roles and an accountant collaborator seat: invite by email, they see the business, no enterprise admin sprawl.</p></div>
+        <div class="faq-body"><p>No. Solo-first is the default: one operator, everything in one workspace. When you do bring people in, Professional includes three team seats and Solutionist seven, each with a role, and Solutionist adds a seat for your accountant: invite by email, they see the business, no enterprise admin sprawl.</p></div>
       </details>
       <details class="faq-item" data-g="money">
         <summary>What about pricing?</summary>
