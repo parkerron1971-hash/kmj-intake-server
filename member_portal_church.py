@@ -1048,7 +1048,8 @@ def _back(target: str, **q: str) -> RedirectResponse:
                "/my/notifications",
                "/my/kids/stories", "/my/kids/sundays", "/my/kids/family")
     if (target not in allowed and not re.fullmatch(r"/my/(groups/live|messages)/[0-9a-f-]{36}", target)
-            and not re.fullmatch(r"/my/groups/([0-9a-fA-F-]{36}(/(board|people|chat|prayer|meet))?|leaders)", target)):
+            and not re.fullmatch(r"/my/groups/([0-9a-fA-F-]{36}(/(board|people|chat|prayer|meet))?|leaders)", target)
+            and not re.fullmatch(r"/my/lead/groups/[0-9a-fA-F-]{36}", target)):
         target = "/my"
     qs = "&".join(f"{k}={v}" for k, v in q.items())
     return RedirectResponse(f"{target}?{qs}" if qs else target, status_code=303, headers=_SECURE_HEADERS)

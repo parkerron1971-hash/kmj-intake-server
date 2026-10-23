@@ -1524,7 +1524,7 @@ def _chat_script(tid: str, count: int) -> str:
     while they're typing or choosing; one message's picker open at a time."""
     import json
     return f"""<script>(function(){{var f=document.getElementById('gc-compose'),err=document.getElementById('gc-err'),n={json.dumps(count)};
-var l=document.getElementById('gc-list');if(l&&!location.hash){{window.scrollTo(0,document.documentElement.scrollHeight);}}
+var l=document.getElementById('gc-list');if(l&&!location.hash){{if(getComputedStyle(l).overflowY==='auto'){{l.scrollTop=l.scrollHeight;}}else{{window.scrollTo(0,document.documentElement.scrollHeight);}}}}
 document.addEventListener('toggle',function(e){{var d=e.target;if(!d.classList||!d.classList.contains('gc-d')||!d.open)return;
 document.querySelectorAll('details.gc-d[open]').forEach(function(o){{if(o!==d)o.open=false;}});}},true);
 function poll(){{if(document.activeElement&&document.activeElement.id==='gc-say'&&document.activeElement.value)return;
