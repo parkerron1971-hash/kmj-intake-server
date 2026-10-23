@@ -9,7 +9,8 @@ section." The proposal is the artifact "Church Areas and Keys"
 (7YRKpKa9g2DdFU9mm3WD8L); this is its step 1, the map.
 
     an AREA ......... AREAS: what it holds, the team that works it, who
-                      usually keeps it, and what in it will need a keeper's
+                      usually keeps it (said to follow "Usually kept by"),
+                      and what in it will need a keeper's
                       yes (step 2 enforces that; this step only names it)
     a PLACE ......... the area a role or a Serve team belongs to: the
                       church's own pick (church_area_places), else a guess
@@ -62,56 +63,56 @@ AREAS: Dict[str, Dict[str, Any]] = {
         "holds": ["ChurchSavvy: songs, Sundays and the screens", "Sermons", "The livestream and replays",
                   "The media library"],
         "team": "Media team",
-        "keeper": "Worship pastor or media director",
+        "keeper": "the worship pastor or media director",
         "guarded": [],
     },
     "people_care": {
         "label": "People & care",
         "holds": ["Member records", "Cards and follow-up", "Care", "Prayer", "Shepherding"],
         "team": "Welcome, care and prayer teams",
-        "keeper": "Pastor",
+        "keeper": "a pastor",
         "guarded": ["Pastors-only notes and prayer"],
     },
     "giving_money": {
         "label": "Giving & money",
         "holds": ["Gifts and funds", "Giving statements", "The books", "The bank and payouts"],
         "team": "Counting team",
-        "keeper": "Treasurer, with a second keeper",
+        "keeper": "the treasurer, with a second keeper",
         "guarded": ["Who gave what", "The bank", "Payouts"],
     },
     "kids_youth": {
         "label": "Kids & youth",
         "holds": ["Kids check-in", "Rooms", "Approved adults"],
         "team": "Kids workers",
-        "keeper": "Kids director",
+        "keeper": "the kids director",
         "guarded": ["Medical and custody notes"],
     },
     "groups_classes": {
         "label": "Groups & classes",
         "holds": ["Groups", "Classes", "Gatherings and study", "The leaders room"],
         "team": "Group leaders and teachers",
-        "keeper": "Groups pastor",
+        "keeper": "the groups pastor",
         "guarded": ["A group's private chat"],
     },
     "messages_safety": {
         "label": "Messages & safety",
         "holds": ["Chat rules", "Held messages", "Reports"],
         "team": "Safety officers",
-        "keeper": "The two safety officers",
+        "keeper": "the two safety officers",
         "guarded": ["Opening a whole chat"],
     },
     "website_outreach": {
         "label": "Website & outreach",
         "holds": ["The website", "Events", "Flyers", "The marketing desk"],
         "team": "Communications team",
-        "keeper": "Admin",
+        "keeper": "an admin",
         "guarded": [],
     },
     "office": {
         "label": "Office",
         "holds": ["Office logins", "Billing", "Connections", "Settings"],
         "team": "Office staff",
-        "keeper": "Admin",
+        "keeper": "an admin",
         "guarded": ["Changing who keeps what"],
     },
 }
