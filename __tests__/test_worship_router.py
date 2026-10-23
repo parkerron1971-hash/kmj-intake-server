@@ -154,7 +154,7 @@ def test_the_switch_opens_it_to_the_owner_first(api, monkeypatch):
     assert as_("manager").get(f"/worship/songs?business_id={BIZ}").status_code == 404
     assert as_("manager").get(f"/worship/status?business_id={BIZ}").json() == {"enabled": False, "can_write": False}
     monkeypatch.setenv("WORSHIP_SONGS", "on")
-    every = {k: True for k in ("plan", "songs", "media", "fix", "run", "setup", "live", "clips", "sermons")}
+    every = {k: True for k in ("plan", "songs", "media", "fix", "run", "setup", "live", "clips", "sermons", "serve")}
     assert as_("manager").get(f"/worship/status?business_id={BIZ}").json() == {
         "enabled": True, "can_write": True, "can": every, "roles": ["planner", "worship", "booth", "media", "admin"]}
     # A member seat reads and changes nothing (a part on the team is how they would).
