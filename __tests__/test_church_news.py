@@ -303,6 +303,19 @@ def test_the_bell_leads_to_news_even_before_the_first_post(fake):
     assert 'href="/my/news"' in html and 'aria-label="News"' in html
 
 
+def test_home_shows_a_poster_where_the_first_news_goes(fake):
+    # Kevin, 2026-10-23, as a pastor at a church with no news yet: "the home
+    # area still look the same". Someone who posts sees From the church with Post.
+    church = mpn.home_block(BUSINESS, [], [], True, {"church": True, "groups": []})
+    assert "From the church" in church and 'href="/my/news/write"' in church and "All news" not in church
+    assert "Post the church&#x27;s first news" in church and "Everyone at Love City Church sees it" in church
+    group = mpn.home_block(BUSINESS, [], [], True, {"church": False, "groups": [{"id": "g"}]})
+    assert "Post news for your group" in group and "They see it here" in group
+    assert mpn.home_block(BUSINESS, [], [], True, {"church": False, "groups": []}) == ""  # a member: nothing
+    assert mpn.home_block(BUSINESS, [], [], True, None) == ""                             # rights unread: nothing
+    assert mpn.home_block(BUSINESS, None, [], True, {"church": True, "groups": []}) == ""  # news unread: nothing
+
+
 # ── 6. routes ────────────────────────────────────────────────────────
 
 def _client(monkeypatch, me, unavailable=False):

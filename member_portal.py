@@ -1438,7 +1438,9 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
     checkin = checkin or ""
     import member_portal_news as mpn
     news_posts, news_n = news if news else (None, 0)
-    news_html = mpn.home_block(biz, news_posts, occ, bool(open_)) if news_posts else ""
+    # No news reaches me yet: if I post, Home shows where it will go.
+    rights = await asyncio.to_thread(cn.can_post, str(biz["id"]), str(me["id"])) if news_posts == [] else None
+    news_html = mpn.home_block(biz, news_posts, occ, bool(open_), rights)
     mine, waiting = asks if asks else (None, [])
     celebrate = mcl.ask_card(biz, me, mine, waiting) + mcl.home_strip(today_cel)
     return _page(render_home(biz, site, me=me, occasions=occ, groups=groups, library=lib,
