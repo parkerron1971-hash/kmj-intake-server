@@ -4,7 +4,7 @@ date: 2026-10-22
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin: "pull the slow turns" then "yes start with #1" (after a TikTok tip about chunking words; the slow-turn breakdown said the early check never ran)'
 status: shipped
-prs: [kmj-intake-server#TBD]
+prs: [kmj-intake-server#1550]
 migrations: []
 left_undone:
   - "Measure live after deploy: `[chief prefix review]` lines should show dispatch/accepted instead of evidence_budget, and `[voice flow]` first_answer_text_ms should drop on turns that open with a one-record fact. Logs are per deployment: railway deployment list, then railway logs <id> --lines 5000"
