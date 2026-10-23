@@ -323,6 +323,54 @@ def test_a_cut_opening_is_marked_dangling():
     assert not g.dangling
 
 
+# Measured live (2026-10-23): a call said "…I'll set aside the invoice work
+# you're —" and then nothing for sixteen seconds. A call says whole sentences.
+_SPOKEN = ("Let me look at your goals and what's been on your plate. "
+           "I'll set aside the invoice work you're already doing.")
+
+
+@pytest.mark.parametrize("chunk_size", [1, 3, 1000])
+def test_a_call_drops_a_sentence_that_trips_the_gate_whole(chunk_size):
+    g = mr.OpenerGate("What should I focus on?", max_words=48, max_sentences=2,
+                      whole_sentences=True)
+    out = "".join(g.feed(_SPOKEN[i:i + chunk_size])
+                  for i in range(0, len(_SPOKEN), chunk_size)) + g.finish()
+    assert out == "Let me look at your goals and what's been on your plate."
+    assert g.cut_reason == "already" and not g.dangling
+
+
+def test_a_call_says_nothing_of_a_sentence_until_all_of_it_passed():
+    g = mr.OpenerGate("Did Maria pay?", whole_sentences=True)
+    assert g.feed("Let me check ") == ""
+    assert g.feed("Maria's invoices") == ""
+    assert g.feed(".") + g.finish() == "Let me check Maria's invoices."
+
+
+@pytest.mark.parametrize("opener", [
+    "Let me check — she paid $400 on Friday.",
+    "Let me pull up the 3 invoices.",
+    "Let me check Maria's payment from Tuesday.",
+    "Let me confirm, but she already paid.",
+    "Let me look: you have two bookings.",
+])
+def test_a_call_never_says_half_a_sentence(opener):
+    out, g = _gate(opener, "Did Maria pay?", whole_sentences=True)
+    assert out == "" and not g.dangling, (out, g.cut_reason)
+
+
+def test_a_call_drops_a_sentence_the_model_never_finished():
+    g = mr.OpenerGate("check invoices", max_words=48, max_sentences=2, whole_sentences=True)
+    out = g.feed("Let me check the invoices. I'll look for anything that") + g.finish()
+    assert out == "Let me check the invoices." and g.cut_reason == "unfinished"
+
+
+def test_a_held_sentence_follows_the_lead_that_went_out_meanwhile():
+    g = mr.OpenerGate("Did Maria pay?", whole_sentences=True)
+    assert g.feed("Sure, let me check ") == ""
+    g.after_lead, g.lower_after_lead = True, False      # "One second." went out
+    assert g.feed("Maria's invoices. ") == "Let me check Maria's invoices."
+
+
 # ── the fast answer gate + thinness ──────────────────────────────────
 
 def _answer(text):
