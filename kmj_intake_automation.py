@@ -385,6 +385,23 @@ app.include_router(member_portal_church_router)
 # join (GET /my/groups/<id> is member_portal.serve's).
 from member_portal_groups import router as member_portal_groups_router
 app.include_router(member_portal_groups_router)
+# The church's news in the member app: reactions and comments (GET /my/news
+# is member_portal.serve's).
+from member_portal_news import router as member_portal_news_router
+app.include_router(member_portal_news_router)
+# Celebrations in the member app: Home's question, Me's choices, a couple's yes.
+from member_portal_celebrations import router as member_portal_celebrations_router
+app.include_router(member_portal_celebrations_router)
+# The office's celebrations: this week's, milestones, Sunday's post, stopping.
+from celebrations import router as celebrations_router
+app.include_router(celebrations_router)
+# Share good news: a member sends it (GET /my/news/share is member_portal.serve's).
+from member_portal_share import router as member_portal_share_router
+app.include_router(member_portal_share_router)
+# Posting to News from a phone, and Sign me up from a post (GET /my/news/write
+# is member_portal.serve's).
+from member_portal_write import router as member_portal_write_router
+app.include_router(member_portal_write_router)
 # Classes in the church member app: one-tap join (GET /my/classes is member_portal.serve's).
 from member_portal_classes import router as member_classes_router
 app.include_router(member_classes_router)
@@ -481,6 +498,13 @@ app.include_router(messaging_router)
 # a nudge to a leader (church_groups_office).
 from church_groups_office import router as church_groups_office_router
 app.include_router(church_groups_office_router)
+# The office's News & celebrations page: posting, how each post did, held
+# comments, who posts to the whole church (church_news).
+from church_news import router as church_news_router
+app.include_router(church_news_router)
+# What members share: the owner or an admin posts it, or saves it for later (news_share).
+from news_share import router as news_share_router
+app.include_router(news_share_router)
 # Phase D.4 PR 1 — Stripe Connect OAuth + webhook receiver. Same
 # discipline: BEFORE public_site_router so /payments/* doesn't fall
 # into the subdomain catch-all.
@@ -1709,6 +1733,24 @@ async def startup():
                           minutes=30, id="group_study_drafts")
     except Exception as e:
         print(f"   [warn] group study drafts not scheduled: {e}")
+    # Celebrations: once a church's clock passes 7 AM, today's birthdays and
+    # anniversaries (only people who said yes) go up on its News
+    # (celebrations.sweep_tick; one post per person per day).
+    try:
+        import celebrations as _celebrations
+        scheduler.add_job(g("celebrations_today", _celebrations.sweep_tick), "interval",
+                          minutes=30, id="celebrations_today")
+    except Exception as e:
+        print(f"   [warn] celebrations not scheduled: {e}")
+    # News alerts: a post rings when it goes up (a scheduled one when its time
+    # comes), the 9 AM note about birthdays in your groups, Saturday's email
+    # (news_alerts.sweep_tick; each once).
+    try:
+        import news_alerts as _news_alerts
+        scheduler.add_job(g("news_alerts", _news_alerts.sweep_tick), "interval",
+                          minutes=15, id="news_alerts")
+    except Exception as e:
+        print(f"   [warn] news alerts not scheduled: {e}")
     # Class-night reminders: a few hours before each live class, its students
     # by email and a church's member app by its "Class nights" notification
     # (academy_reminders.sweep_tick; each night once).

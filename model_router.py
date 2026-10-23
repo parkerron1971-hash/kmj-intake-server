@@ -651,13 +651,20 @@ class OpenerGate:
     (about 2 tokens after the model's first); after that, whole words go out
     as they complete. Once `closed`, nothing more is released — the full
     turn's checked answer carries on from what was said. `dangling` is True
-    when the cut fell mid-sentence, so the caller can close it with a dash."""
+    when the cut fell mid-sentence, so the caller can close it with a dash.
+
+    With `whole_sentences` (a call), a sentence goes out only once all of it
+    has passed, and a sentence that trips the gate is dropped whole. Spoken,
+    "I'll set aside the invoice work you're —" and then sixteen seconds of
+    the answer check sounded stuck (Kevin, 2026-10-23). The model's words
+    already arrive a sentence at a time, so holding them costs nothing."""
 
     MAX_WORDS = 28
     LEAD_PROBE_WORDS = 3
 
     def __init__(self, user_message: str, *, after_lead: bool = False,
-                 max_words: int = MAX_WORDS, max_sentences: int = 1) -> None:
+                 max_words: int = MAX_WORDS, max_sentences: int = 1,
+                 whole_sentences: bool = False) -> None:
         said = set()
         for w in re.findall(r"\S+", user_message or ""):
             w = w.lower().strip(".,!?;:\"()'").replace("’", "'")
@@ -677,6 +684,8 @@ class OpenerGate:
         self.closed = False
         self.cut_reason: Optional[str] = None
         self.text = ""
+        self.whole_sentences = whole_sentences
+        self._held = ""              # the sentence still being checked (whole_sentences)
 
     @property
     def dangling(self) -> bool:
@@ -709,7 +718,7 @@ class OpenerGate:
 
     def _release(self, *, final: bool) -> str:
         out: List[str] = []
-        if self.after_lead and not self.text and self._buf:
+        if self.after_lead and not self.text and self._buf and not self.whole_sentences:
             # Framed before the lead went out but not yet shown ("Pulling"
             # still growing when the deadline came): it now follows the lead.
             self._buf = strip_interjection(self._buf.lstrip(), lower=self.lower_after_lead)
@@ -737,14 +746,24 @@ class OpenerGate:
                 word = word[:-1]
             is_dash = word in ("—", "–", "-", "--")
             lead_dash = is_dash and bool(re.fullmatch(
-                r"\s*(?:" + _INTERJECTION_WORDS + r")\s*", self.text, re.I))
-            chunk = (ws if self.text else "") + word
-            self.text += chunk
+                r"\s*(?:" + _INTERJECTION_WORDS + r")\s*", self.text + self._held, re.I))
+            chunk = (ws if self.text or self._held else "") + word
+            if self.whole_sentences:
+                self._held += chunk
+            else:
+                self.text += chunk
+                out.append(chunk)
             self._sentence_start = False
             self._words += 0 if is_dash else 1
-            out.append(chunk)
             self._buf = nxt
             if _END.search(word):
+                if self._held:
+                    if self.after_lead and not self.text:
+                        # Held until now, so it follows the lead now.
+                        self._held = strip_interjection(self._held, lower=self.lower_after_lead)
+                    self.text += self._held
+                    out.append(self._held)
+                    self._held = ""
                 self.sentences += 1
                 if self.sentences >= self.max_sentences or self.stop_after_sentence:
                     self.close("sentence_end")
@@ -792,6 +811,8 @@ class OpenerGate:
             self.close("no_intent_lead")
             return ""
         out = self._release(final=True)
+        if self._held:
+            self.close("unfinished")    # cut off by max_tokens: never said
         self.close(self.cut_reason or "model_end")
         return out
 
@@ -799,6 +820,7 @@ class OpenerGate:
         if not self.closed:
             self.closed = True
             self.cut_reason = self.cut_reason or reason
+            self._held = ""             # a sentence that did not pass is never said
 
 
 # ─── What a fast-lane answer may say ─────────────────────────────────
