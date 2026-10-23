@@ -85,7 +85,7 @@ KINDS = (
     # Celebrations"): what each member chose (Important, Everything or Off),
     # birthdays in their groups, replies to their comments. Its own
     # choices live on Me → Celebrations.
-    ("news", "Church news", "Posts your pastors mark important, birthdays in your groups, and replies to your comments"),
+    ("news", "News & celebrations", "Posts your pastors mark important, birthdays in your groups, and replies to your comments"),
 )
 SPACE_KINDS = ("youth", "kids")
 KIND_KEYS = tuple(k for k, _, _ in KINDS)
