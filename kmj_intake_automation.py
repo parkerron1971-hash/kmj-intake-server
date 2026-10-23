@@ -389,6 +389,12 @@ app.include_router(member_portal_groups_router)
 # is member_portal.serve's).
 from member_portal_news import router as member_portal_news_router
 app.include_router(member_portal_news_router)
+# Celebrations in the member app: Home's question, Me's choices, a couple's yes.
+from member_portal_celebrations import router as member_portal_celebrations_router
+app.include_router(member_portal_celebrations_router)
+# The office's celebrations: this week's, milestones, Sunday's post, stopping.
+from celebrations import router as celebrations_router
+app.include_router(celebrations_router)
 # Classes in the church member app: one-tap join (GET /my/classes is member_portal.serve's).
 from member_portal_classes import router as member_classes_router
 app.include_router(member_classes_router)
@@ -1717,6 +1723,15 @@ async def startup():
                           minutes=30, id="group_study_drafts")
     except Exception as e:
         print(f"   [warn] group study drafts not scheduled: {e}")
+    # Celebrations: once a church's clock passes 7 AM, today's birthdays and
+    # anniversaries (only people who said yes) go up on its News
+    # (celebrations.sweep_tick; one post per person per day).
+    try:
+        import celebrations as _celebrations
+        scheduler.add_job(g("celebrations_today", _celebrations.sweep_tick), "interval",
+                          minutes=30, id="celebrations_today")
+    except Exception as e:
+        print(f"   [warn] celebrations not scheduled: {e}")
     # Class-night reminders: a few hours before each live class, its students
     # by email and a church's member app by its "Class nights" notification
     # (academy_reminders.sweep_tick; each night once).

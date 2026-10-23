@@ -195,6 +195,17 @@ NEWS_CSS = """
   font-size:13.5px;color:var(--fg2);line-height:1.45;}
 .nw-closed .mb-ic{flex:none;margin-top:1px;color:var(--acc);}
 .mb-bell{position:relative;}
+.nw-celrow{display:flex;align-items:center;gap:12px;padding:10px 12px;border-radius:14px;background:rgba(127,127,127,.12);color:inherit;text-decoration:none;}
+.nw-celrow .nw-t{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px;}
+.nw-celrow .nw-t b{font-size:15px;font-weight:650;}
+.nw-celrow .nw-t small{font-size:12.5px;color:var(--fg2);}
+.nw-ring{position:relative;width:46px;height:46px;border-radius:50%;padding:2px;box-shadow:inset 0 0 0 2px var(--gold);flex:none;}
+.nw-ring .nw-av{width:42px;height:42px;font-size:14px;}
+.nw-ring .nw-pair{display:flex;width:42px;height:42px;border-radius:50%;overflow:hidden;}
+.nw-ring .nw-pair .nw-av{width:21px;height:42px;border-radius:0;font-size:10.5px;}
+.nw-gold{display:inline-flex;align-items:center;min-height:36px;padding:0 14px;border-radius:999px;background:var(--gold);color:var(--on-gold);
+  font-size:14px;font-weight:600;flex:none;}
+.nw-ph .nw-kind{margin-left:auto;}
 """
 
 _EXTRA = {
@@ -385,15 +396,65 @@ def _comment_link(p: Dict[str, Any], open_: bool) -> str:
     return f'<a class="nw-cl" href="/my/news/{_e(p["id"])}#comments">{_ic("comment", 16)}<span>{label}</span></a>'
 
 
+def _ring(p: Dict[str, Any]) -> str:
+    if p.get("sub") == "anniversary":
+        return (f'<span class="nw-ring"><span class="nw-pair">{_face(p.get("person") or {})}{_face(p.get("partner") or {})}'
+                f'</span></span>')
+    return f'<span class="nw-ring">{_face(p.get("person") or {})}</span>'
+
+
+def today_card(people: List[Dict[str, Any]]) -> str:
+    """'Today we celebrate' (board 2): today's birthdays and anniversaries in
+    one gold card, each opening its own page of wishes."""
+    import member_portal_celebrations as mcl
+    if not people:
+        return ""
+    rows = []
+    for p in people:
+        n = int(p.get("comment_n") or 0)
+        if p.get("sub") == "anniversary":
+            years = (p.get("attach") or {}).get("years")
+            small = f"{years} years married today" if years else "Their anniversary is today"
+            act = "Congratulate"
+        else:
+            small = "Happy birthday" + (f" · {n} wish{'' if n == 1 else 'es'} so far" if n else "")
+            act = "Wish them well"
+        rows.append(f'<a class="nw-celrow" href="/my/news/{_e(p["id"])}">{_ring(p)}<span class="nw-t"><b>{_e(mcl.full_name(p))}</b>'
+                    f'<small>{_e(small)}</small></span><span class="nw-gold">{act}</span></a>')
+    return (f'<article class="nw-post gold" aria-label="Today we celebrate"><span class="nw-kind">{_ic("cheer", 14)}'
+            f'<span>Today we celebrate</span></span>{"".join(rows)}'
+            f'<div class="nw-rxbar"><span class="nw-off">Shown because they said yes</span></div></article>')
+
+
+def _milestone_card(biz: Dict[str, Any], p: Dict[str, Any], occ, back: str, open_: bool, full: bool) -> str:
+    """A milestone (board 2): from the church, the person in a gold ring."""
+    face, who = _author(biz, p)
+    rxs = "".join(_rx_button(p, k, back) for k in (cn.REACTIONS if full else ("cheer", "love")))
+    link = "" if full else _comment_link(p, open_)
+    meta = " · ".join(x for x in (when_label(biz, cn.when_of(p)), "a milestone" if p.get("kind") == "milestone" else "good news") if x)
+    label = "Milestone" if p.get("kind") == "milestone" else "Good news"
+    return (f'<article class="nw-post" id="p-{_e(p["id"])}" aria-label="{_e(p.get("title") or label)}">'
+            f'<div class="nw-ph">{face}<span class="nw-t"><b>{who}</b><small>{_e(meta)}</small></span>'
+            f'<span class="nw-kind">{_ic("award", 14)}<span>{label}</span></span></div>'
+            f'<a class="nw-celrow" href="/my/news/{_e(p["id"])}">{_ring(p)}<span class="nw-t"><b>{_e(p.get("title") or "")}</b>'
+            f'<small>{_e(p.get("body") or "")}</small></span></a>{_attachments(p, occ)}'
+            f'<div class="nw-rxbar"><div class="nw-rxs" role="group" aria-label="React">{rxs}</div>{link}</div></article>')
+
+
 def card(biz: Dict[str, Any], p: Dict[str, Any], occ: Dict[str, Dict[str, Any]], *, back: str, open_: bool,
          full: bool = False) -> str:
     """One post. In the feed it offers two reactions that fit it; on its own
     page, all four."""
+    if p.get("kind") in ("milestone", "good_news") and p.get("person_id"):
+        return _milestone_card(biz, p, occ, back, open_, full)
     face, who = _author(biz, p)
     pin = f'<span class="nw-pin">{_ic("pin", 18)}</span>' if p.get("pinned") else ""
     cls = "nw-post church" if p.get("pinned") else "nw-post"
-    if p.get("kind") in ("celebration", "milestone", "good_news") and not p.get("pinned"):
-        cls = "nw-post gold" if p.get("kind") == "celebration" else "nw-post"
+    kind_label = ""
+    if p.get("kind") == "celebration" and not p.get("pinned"):
+        # The week's "This week we celebrate".
+        cls = "nw-post gold"
+        kind_label = f'<span class="nw-kind">{_ic("cheer", 14)}<span>Celebrating</span></span>'
     title = f'<h3>{_e(p["title"])}</h3>' if p.get("title") else ""
     body = f'<p class="nw-body">{_e(p["body"])}</p>' if p.get("body") else ""
     kinds = cn.REACTIONS if full else CARD_RX.get(p.get("kind") or "", CARD_RX_DEFAULT)
@@ -403,7 +464,7 @@ def card(biz: Dict[str, Any], p: Dict[str, Any], occ: Dict[str, Dict[str, Any]],
     link = "" if full else _comment_link(p, open_)
     return (f'<article class="{cls}" id="p-{_e(p["id"])}" aria-label="{_e(p.get("title") or "A post")}">'
             f'<div class="nw-ph">{face}<span class="nw-t"><b>{who}</b><small>{_e(_meta(biz, p))}</small></span>{pin}</div>'
-            f'{title}{body}{_attachments(p, occ)}'
+            f'{kind_label}{title}{body}{_attachments(p, occ)}'
             f'<div class="nw-rxbar"><div class="nw-rxs" role="group" aria-label="React">{rxs}</div>{link}</div></article>')
 
 
@@ -493,7 +554,11 @@ def render_news(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any],
         for key, label in cn.FILTERS)
     by = _occasions(occ)
     back = "/my/news" + (f"?f={filt}" if filt else "")
-    cards = "".join(card(biz, p, by, back=back, open_=open_) for p in posts)
+    # Today's birthdays and anniversaries sit together, under what's pinned.
+    people = [p for p in posts if cn.is_person_celebration(p)]
+    rest = [p for p in posts if not cn.is_person_celebration(p)]
+    cards = ("".join(card(biz, p, by, back=back, open_=open_) for p in rest if p.get("pinned")) + today_card(people)
+             + "".join(card(biz, p, by, back=back, open_=open_) for p in rest if not p.get("pinned")))
     if not cards:
         empty = ("Nothing from your church yet. When your pastors post, it shows here." if not filt
                  else "Nothing here yet. Try All.")
@@ -556,8 +621,13 @@ def _reactors(p: Dict[str, Any]) -> str:
     return f'<p class="nw-who"><span class="nw-faces" aria-hidden="true">{faces}</span><span>{_e(words)}</span></p>'
 
 
+def celebrated(p: Dict[str, Any]) -> bool:
+    """A post about one person (or a couple): their own celebration page."""
+    return cn.is_person_celebration(p) or (p.get("kind") in ("milestone", "good_news") and bool(p.get("person_id")))
+
+
 def render_post(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], p: Optional[Dict[str, Any]], occ,
-                open_: bool) -> Tuple[str, int]:
+                open_: bool, today: Optional[List[Dict[str, Any]]] = None) -> Tuple[str, int]:
     from member_portal import _shell
     import member_photos as ph
     import member_app_ui as ui
@@ -611,6 +681,13 @@ def render_post(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any],
         comp = f'<p class="nw-closed">{_ic("pray", 16)}<span>Comments are off for this one. Tap Praying to let them know.</span></p>'
     elif mode == "off":
         comp = f'<p class="nw-closed">{_ic("lock", 16)}<span>Comments are off for this post.</span></p>'
+    if celebrated(p):
+        # A birthday, an anniversary or a milestone has its own page (board 4).
+        import member_portal_celebrations as mcl
+        page = mcl.render_celebration(biz, site, request, me, p, today or [], open_)
+        body = f'{head}{_flash(request)}{mcl.mpn_flash(request)}{page}'
+        return _shell(biz, site, mcl.full_name(p) or "Celebrating", f"<style>{NEWS_CSS}{mcl.CEL_CSS}</style>{body}",
+                      tab="home", who=me, script=RX_JS), 200
     body = (f'{head}{_flash(request)}<div style="margin-top:6px">'
             f'{card(biz, p, _occasions(occ), back="/my/news/" + pid, open_=open_, full=True)}</div>'
             f'{who_rx}{section}{comp}')
@@ -622,12 +699,14 @@ def render_post(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any],
 async def serve(request: Request, biz: Dict[str, Any], site, me: Dict[str, Any], sub: str) -> Tuple[str, int]:
     """GET /my/news and /my/news/<id>."""
     import member_portal_church as mpc
+    import celebrations as cel
     rest = sub[len("/my/news"):].strip("/")
     business_id, me_id = str(biz["id"]), str(me["id"])
+    today = cel.local_now(biz).date().isoformat()
     if not rest:
         filt = str(request.query_params.get("f") or "")
         filt = filt if filt in dict(cn.FILTERS) else ""
-        posts, occ, open_ = await asyncio.gather(asyncio.to_thread(cn.feed, business_id, me_id, filt),
+        posts, occ, open_ = await asyncio.gather(asyncio.to_thread(cn.feed, business_id, me_id, filt, today),
                                                  asyncio.to_thread(mpc.upcoming_for, business_id, me),
                                                  asyncio.to_thread(cn.comments_open, biz))
         if posts:
@@ -636,9 +715,12 @@ async def serve(request: Request, biz: Dict[str, Any], site, me: Dict[str, Any],
     p, occ, open_ = await asyncio.gather(asyncio.to_thread(cn.one, business_id, me_id, rest),
                                          asyncio.to_thread(mpc.upcoming_for, business_id, me),
                                          asyncio.to_thread(cn.comments_open, biz))
+    others = None
     if p:
         await asyncio.to_thread(cn.mark_seen, business_id, me_id, [str(p["id"])])
-    return render_post(biz, site, request, me, p, occ, open_)
+        if celebrated(p):
+            others = await asyncio.to_thread(cel.today_posts, biz, me_id)
+    return render_post(biz, site, request, me, p, occ, open_, others)
 
 
 # ─── routes ──────────────────────────────────────────────────────────
