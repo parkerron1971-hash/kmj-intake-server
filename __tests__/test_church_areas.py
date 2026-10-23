@@ -277,6 +277,22 @@ def test_a_business_that_isnt_a_church_gets_no_map_and_no_church_roles(office, d
     assert len(db.t["church_role_defs"]) == before
 
 
+def test_the_status_says_where_the_map_opens_and_reads_nothing_else(office, db, monkeypatch):
+    assert office.get(f"/church/areas/status?business_id={BIZ}").json() == {"enabled": True}
+    real = db.get
+    monkeypatch.setattr(sb_clients, "sb_get_as_service",
+                        lambda path, **kw: real(path, **kw) if path.lstrip("/").startswith("businesses?")
+                        else pytest.fail(f"the status read {path}"))
+    assert office.get(f"/church/areas/status?business_id={BIZ}").json() == {"enabled": True}
+    db.t["businesses"][0]["type"] = "salon"
+    assert office.get(f"/church/areas/status?business_id={BIZ}").json() == {"enabled": False}
+    office.who["role"] = "member"
+    assert office.get(f"/church/areas/status?business_id={BIZ}").status_code == 404
+    office.who["role"] = "owner"
+    monkeypatch.setenv("CHURCH_AREAS", "off")
+    assert office.get(f"/church/areas/status?business_id={BIZ}").status_code == 404
+
+
 def test_the_switch_keeps_it_to_the_platform_owner_then_everyone_or_no_one(office, monkeypatch):
     office.who["email"] = "pastor@lovecity.org"
     assert office.get(f"/church/areas?business_id={BIZ}").status_code == 404

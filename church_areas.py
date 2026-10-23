@@ -444,6 +444,16 @@ def areas(business_id: str, session: UserSession = Depends(sb_clients.authed_req
     return build(biz)
 
 
+@router.get("/areas/status")
+def areas_status(business_id: str, session: UserSession = Depends(sb_clients.authed_request),
+                 biz: Dict[str, Any] = Depends(business_access("manager"))):
+    """Whether this person's office shows the map: the app asks once, so its
+    menu offers Areas only where it opens. Reads nothing but the business."""
+    _gate(session.user)
+    import church_follow_up as cfu
+    return {"enabled": cfu.is_church(biz)}
+
+
 def _place_key(kind: str, key: Any) -> str:
     if kind == "team":
         k = team_key(str(key or ""))
