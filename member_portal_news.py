@@ -48,6 +48,7 @@ DONE = {
             "Lifeline) any time. Your pastor has been told so they can reach out.",
     "reported": "Reported. The safety officers will look. They won't say who told them.",
     "comment_down": "Your comment is down.",
+    "signed_up": "You're signed up. See you there!",
 }
 ERRORS = {
     "error": "That didn't go through. Please try again.",
@@ -60,6 +61,9 @@ ERRORS = {
     "comments_closed": "Comments aren't open at your church yet.",
     "comments_off": "Comments are off for this post.",
     "not_yours": "Only the person who wrote it, or whoever posted, can take it down.",
+    "signup_full": "That one is full.",
+    "signup_past": "That already happened.",
+    "signup_gone": "That event isn't open for sign-up any more.",
 }
 REACT_LABEL = {"love": "Love", "pray": "Praying", "amen": "Amen", "cheer": "Celebrate"}
 # Which reactions a card in the feed offers, by what the post is (the post
@@ -67,7 +71,7 @@ REACT_LABEL = {"love": "Love", "pray": "Praying", "amen": "Amen", "cheer": "Cele
 CARD_RX = {"message": ("amen", "pray"), "celebration": ("cheer", "love"), "milestone": ("cheer", "love"),
            "good_news": ("cheer", "love"), "praise": ("amen", "love")}
 CARD_RX_DEFAULT = ("love", "amen")
-_BACK_RE = re.compile(r"^/my(/news(/[0-9a-fA-F-]{36}|/share)?)?$")
+_BACK_RE = re.compile(r"^/my(/news(/[0-9a-fA-F-]{36}|/share|/write)?)?$")
 
 # The canvas's sheet (news.css) on the member app's tokens: the church colour
 # is --acc-fill / --acc / --acc-deep; gold, teal, violet and coral are the
@@ -214,6 +218,17 @@ NEWS_CSS = """
 .nw-share>.mb-ic:last-child{color:var(--fg3);flex:none;}
 .nw-sd{width:42px;height:42px;border-radius:13px;flex:none;display:grid;place-items:center;background:var(--gold-deep);color:var(--gold-ink);}
 .nw-pics.one a.tall{aspect-ratio:4/5;}
+.nw-pics.odd a:first-child{grid-column:1 / -1;aspect-ratio:16/10;}
+.nw-disc.link{background:var(--teal);color:var(--on-teal);}
+.nw-signf{margin:0;}
+.nw-signup{display:flex;align-items:center;justify-content:center;width:100%;min-height:46px;border:0;border-radius:14px;
+  background:var(--acc-fill);color:var(--on-acc);font:inherit;font-size:15.5px;font-weight:650;cursor:pointer;}
+.nw-in{display:flex;align-items:center;gap:8px;margin:0;font-size:14px;font-weight:600;color:var(--fg2);}
+.nw-in .mb-ic{color:var(--acc);}
+.nw-in a{margin-left:auto;color:var(--acc);text-decoration:none;font-weight:650;}
+.nw-headrow{display:flex;align-items:center;justify-content:space-between;gap:12px;}
+.nw-write{display:inline-flex;align-items:center;gap:6px;min-height:36px;padding:0 14px;border-radius:999px;background:var(--acc-fill);
+  color:var(--on-acc);font-size:14px;font-weight:650;text-decoration:none;flex:none;}
 """
 
 _EXTRA = {
@@ -238,6 +253,13 @@ _EXTRA = {
     "playtri": '<path d="m7 4 13 8-13 8z"/>',
     "heart": ('<path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5'
               'c0 2.3 1.5 4.05 3 5.5l7 7Z"/>'),
+    "sparkle": ('<path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135'
+                'a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437'
+                'l-1.582 6.135a.5.5 0 0 1-.963 0z"/>'),
+    "link": ('<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>'
+             '<path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>'),
+    "pencil": ('<path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622'
+               'l4.353-1.32a2 2 0 0 0 .83-.497z"/><path d="m15 5 4 4"/>'),
 }
 
 
@@ -349,7 +371,17 @@ def _occasions(occ: Optional[List[Dict[str, Any]]]) -> Dict[str, Dict[str, Any]]
     return {str(o.get("entry_id")): o for o in (occ or []) if o.get("entry_id")}
 
 
-def _attachments(p: Dict[str, Any], occ: Dict[str, Dict[str, Any]]) -> str:
+def _signup(p: Dict[str, Any], o: Dict[str, Any], back: str) -> str:
+    """The post's Sign me up (member_portal_write, attach.signup): one tap
+    puts them on the event's list, as on Events."""
+    if (o.get("mine") or {}).get("status") == "yes":
+        return (f'<p class="nw-in">{_ic("check", 16)}<span>You\'re signed up.</span>'
+                f'<a href="/my/events#mp-occ-{_e(o["entry_id"])}">Change</a></p>')
+    return (f'<form class="nw-signf" method="post" action="/my/news/signup"><input type="hidden" name="id" value="{_e(p["id"])}">'
+            f'<input type="hidden" name="back" value="{_e(back)}"><button class="nw-signup" type="submit">Sign me up</button></form>')
+
+
+def _attachments(p: Dict[str, Any], occ: Dict[str, Dict[str, Any]], back: str = "/my/news", full: bool = False) -> str:
     out = []
     att = p.get("attach") or {}
     o = occ.get(str(att.get("event") or ""))
@@ -364,28 +396,43 @@ def _attachments(p: Dict[str, Any], occ: Dict[str, Dict[str, Any]]) -> str:
         sub = " · ".join(_e(b) for b in bits if b)
         out.append(f'<a class="nw-att" href="/my/events#mp-occ-{_e(o["entry_id"])}">{box}<span class="nw-t"><b>{_e(o.get("title"))}</b>'
                    f'<small>{_e(o.get("date_label") or "")}{(" · " + sub) if sub else ""}</small></span>{_ic("chevron", 18)}</a>')
+        if att.get("signup"):
+            out.append(_signup(p, o, back))
     s = p.get("sermon")
     if s:
         bits = [s.get("speaker") or "", s.get("scripture") or ""]
         out.append(f'<a class="nw-att" href="/my/sermons/{_e(s["id"])}"><span class="nw-disc" aria-hidden="true">{_ic("playtri", 18)}</span>'
                    f'<span class="nw-t"><b>{_e(s.get("title"))}</b><small>{" · ".join(_e(b) for b in bits if b)}</small></span>'
                    f'{_ic("chevron", 18)}</a>')
+    link = att.get("link")
+    if isinstance(link, str) and link.startswith("https://"):
+        from urllib.parse import urlparse
+        u = urlparse(link)
+        rest = (u.path.rstrip("/") + ("?" + u.query if u.query else ""))[:60]
+        out.append(f'<a class="nw-att" href="{_e(link)}" target="_blank" rel="noopener nofollow ugc">'
+                   f'<span class="nw-disc link" aria-hidden="true">{_ic("link", 18)}</span><span class="nw-t">'
+                   f'<b>{_e(u.netloc.removeprefix("www."))}</b><small>{_e(rest or "Open the link")}</small></span>{_ic("chevron", 18)}</a>')
     # Photos the church linked (an address on its own storage), and photos
-    # uploaded with a post (news_share: private, behind /my/news/<id>/photo/<n>).
+    # uploaded with a post (private, behind /my/news/<id>/photo/<n>). The
+    # feed shows two and how many more; the post's own page, all of them.
     photos = [(u, 0, 0) for u in att.get("photos") or [] if isinstance(u, str)]
     photos += [(f"/my/news/{p['id']}/photo/{i}", int(x.get("w") or 0), int(x.get("h") or 0))
                for i, x in enumerate(att.get("pics") or []) if isinstance(x, dict) and x.get("path")]
     if photos:
-        shown = photos[:2]
+        shown = photos if full else photos[:2]
         more = len(photos) - len(shown)
         cells = []
         for i, (u, w, h) in enumerate(shown):
-            over = f'<span class="nw-more">+{more}</span>' if more and i == len(shown) - 1 else ""
+            last_more = bool(more) and i == len(shown) - 1
+            over = f'<span class="nw-more">+{more}</span>' if last_more else ""
             # One tall photo stays tall (a graduate, a baby), never cut to a strip.
             tall = ' class="tall"' if len(shown) == 1 and w and h and h > w else ""
             size = f' width="{w}" height="{h}"' if w and h else ""
-            cells.append(f'<a href="{_e(u)}" target="_blank" rel="noopener"{tall}><img src="{_e(u)}" alt="" loading="lazy"{size}>{over}</a>')
-        out.append(f'<div class="nw-pics{" one" if len(shown) == 1 else ""}">{"".join(cells)}</div>')
+            href = f"/my/news/{p['id']}" if last_more else u
+            cells.append(f'<a href="{_e(href)}"{"" if last_more else " target=_blank rel=noopener"}{tall}>'
+                         f'<img src="{_e(u)}" alt="" loading="lazy"{size}>{over}</a>')
+        odd = " odd" if len(shown) > 2 and len(shown) % 2 else ""
+        out.append(f'<div class="nw-pics{" one" if len(shown) == 1 else ""}{odd}">{"".join(cells)}</div>')
     return "".join(out)
 
 
@@ -455,7 +502,7 @@ def _milestone_card(biz: Dict[str, Any], p: Dict[str, Any], occ, back: str, open
             f'<div class="nw-ph">{face}<span class="nw-t"><b>{who}</b><small>{_e(meta)}</small></span>'
             f'<span class="nw-kind">{_ic("award", 14)}<span>{label}</span></span></div>'
             f'<a class="nw-celrow" href="/my/news/{_e(p["id"])}">{_ring(p)}<span class="nw-t"><b>{_e(p.get("title") or "")}</b>'
-            f'<small>{_e(p.get("body") or "")}</small></span></a>{_attachments(p, occ)}'
+            f'<small>{_e(p.get("body") or "")}</small></span></a>{_attachments(p, occ, back, full)}'
             f'<div class="nw-rxbar"><div class="nw-rxs" role="group" aria-label="React">{rxs}</div>{link}</div></article>')
 
 
@@ -469,7 +516,7 @@ def _good_news_card(biz: Dict[str, Any], p: Dict[str, Any], occ, back: str, open
     return (f'<article class="nw-post" id="p-{_e(p["id"])}" aria-label="Good news from {_e(_person_name(p.get("author") or {}))}">'
             f'<div class="nw-ph">{face}<span class="nw-t"><b>{who}</b><small>{_e(_meta(biz, p))}</small></span>'
             f'<span class="nw-kind">{_ic("cheer", 14)}<span>Good news</span></span></div>'
-            f'{body}{_attachments(p, occ)}'
+            f'{body}{_attachments(p, occ, back, full)}'
             f'<div class="nw-rxbar"><div class="nw-rxs" role="group" aria-label="React">{rxs}</div>{link}</div></article>')
 
 
@@ -498,7 +545,7 @@ def card(biz: Dict[str, Any], p: Dict[str, Any], occ: Dict[str, Dict[str, Any]],
     link = "" if full else _comment_link(p, open_)
     return (f'<article class="{cls}" id="p-{_e(p["id"])}" aria-label="{_e(p.get("title") or "A post")}">'
             f'<div class="nw-ph">{face}<span class="nw-t"><b>{who}</b><small>{_e(_meta(biz, p))}</small></span>{pin}</div>'
-            f'{kind_label}{title}{body}{_attachments(p, occ)}'
+            f'{kind_label}{title}{body}{_attachments(p, occ, back, full)}'
             f'<div class="nw-rxbar"><div class="nw-rxs" role="group" aria-label="React">{rxs}</div>{link}</div></article>')
 
 
@@ -576,10 +623,14 @@ def home_block(biz: Dict[str, Any], posts: Optional[List[Dict[str, Any]]], occ: 
 
 
 def render_news(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any],
-                posts: Optional[List[Dict[str, Any]]], filt: str, occ, open_: bool) -> Tuple[str, int]:
+                posts: Optional[List[Dict[str, Any]]], filt: str, occ, open_: bool, poster: bool = False) -> Tuple[str, int]:
+    """`poster`: they post to News (a pastor, someone the church picked, a
+    group's leader), so the page offers Post (member_portal_write)."""
     from member_portal import _shell
+    write = f'<a class="nw-write" href="/my/news/write">{_ic("pencil", 15)}Post</a>' if poster else ""
     head = ('<a class="mb-back" href="/my">Home</a>'
-            '<div class="nw-head"><p class="nw-eb">From your church</p><h1 class="nw-lt">What\'s <em>happening.</em></h1></div>')
+            f'<div class="nw-head"><div class="nw-headrow"><p class="nw-eb">From your church</p>{write}</div>'
+            f'<h1 class="nw-lt">What\'s <em>happening.</em></h1></div>')
     if posts is None:
         body = f'{head}<p class="mp-err" role="alert">The news couldn\'t load just now. Please try again in a moment.</p>'
         return _shell(biz, site, "News", f"<style>{NEWS_CSS}</style>{body}", tab="home", who=me), 503
@@ -749,8 +800,9 @@ async def _photo(biz: Dict[str, Any], me: Dict[str, Any], post_id: str, n: int):
 
 
 async def serve(request: Request, biz: Dict[str, Any], site, me: Dict[str, Any], sub: str):
-    """GET /my/news, /my/news/<id>, /my/news/share (member_portal_share) and
-    /my/news/<id>/photo/<n>. A page is (html, status); a photo, a Response."""
+    """GET /my/news, /my/news/<id>, /my/news/share (member_portal_share),
+    /my/news/write (member_portal_write) and /my/news/<id>/photo/<n>. A page
+    is (html, status); a photo, a Response."""
     import member_portal_church as mpc
     import celebrations as cel
     rest = sub[len("/my/news"):].strip("/")
@@ -758,6 +810,9 @@ async def serve(request: Request, biz: Dict[str, Any], site, me: Dict[str, Any],
     if rest == "share":
         import member_portal_share as mps
         return await mps.serve_share(request, biz, site, me)
+    if rest == "write":
+        import member_portal_write as mpw
+        return await mpw.serve_write(request, biz, site, me)
     m = _PHOTO_RE.match(rest)
     if m:
         return await _photo(biz, me, m.group(1), int(m.group(2)))
@@ -765,12 +820,14 @@ async def serve(request: Request, biz: Dict[str, Any], site, me: Dict[str, Any],
     if not rest:
         filt = str(request.query_params.get("f") or "")
         filt = filt if filt in dict(cn.FILTERS) else ""
-        posts, occ, open_ = await asyncio.gather(asyncio.to_thread(cn.feed, business_id, me_id, filt, today),
-                                                 asyncio.to_thread(mpc.upcoming_for, business_id, me),
-                                                 asyncio.to_thread(cn.comments_open, biz))
+        posts, occ, open_, rights = await asyncio.gather(asyncio.to_thread(cn.feed, business_id, me_id, filt, today),
+                                                         asyncio.to_thread(mpc.upcoming_for, business_id, me),
+                                                         asyncio.to_thread(cn.comments_open, biz),
+                                                         asyncio.to_thread(cn.can_post, business_id, me_id))
         if posts:
             await asyncio.to_thread(cn.mark_seen, business_id, me_id, [str(p["id"]) for p in posts])
-        return render_news(biz, site, request, me, posts, filt, occ, open_)
+        poster = bool(rights and (rights.get("church") or rights.get("groups")))
+        return render_news(biz, site, request, me, posts, filt, occ, open_, poster)
     p, occ, open_ = await asyncio.gather(asyncio.to_thread(cn.one, business_id, me_id, rest),
                                          asyncio.to_thread(mpc.upcoming_for, business_id, me),
                                          asyncio.to_thread(cn.comments_open, biz))

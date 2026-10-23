@@ -398,6 +398,10 @@ app.include_router(celebrations_router)
 # Share good news: a member sends it (GET /my/news/share is member_portal.serve's).
 from member_portal_share import router as member_portal_share_router
 app.include_router(member_portal_share_router)
+# Posting to News from a phone, and Sign me up from a post (GET /my/news/write
+# is member_portal.serve's).
+from member_portal_write import router as member_portal_write_router
+app.include_router(member_portal_write_router)
 # Classes in the church member app: one-tap join (GET /my/classes is member_portal.serve's).
 from member_portal_classes import router as member_classes_router
 app.include_router(member_classes_router)

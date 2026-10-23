@@ -18,17 +18,24 @@ leaders can make a post." The approved canvas "Church News & Celebrations"
     (msg_screen): 'ok' shows, 'harm' is held for the safety officers,
     'self_harm' is held and the pastor is told (the writer sees 988).
     Comments open once the church has its two safety officers, like group
-    chat (messaging_router.MIN_OFFICERS).
+    chat (messaging_router.MIN_OFFICERS). They can share good news, which
+    the owner or an admin posts (news_share).
+  * Pastors, picked posters and group leaders post from their phone too
+    (member_portal_write), with photos, a link, and a Sign me up button on
+    a post that carries an event.
 
 Records (supabase/APPLY-2026-10-23-church-news.sql): church_posts,
 church_post_reactions, church_post_seen, church_post_comments,
-church_post_comment_loves, church_post_reports, church_news_posters. Only
-this file writes them.
+church_post_comment_loves, church_post_reports, church_news_posters. This
+file writes them; news_share (shared good news), member_portal_write (a
+post from a phone, and its edit) and celebrations (each day's celebrations)
+write church_posts too.
 
 Office API (any seat reads; a seat that can edit writes):
   GET  /church/news                 posts with how each did, the safety
                                     picture, who may post, held comments
   POST /church/news                 a new post (now or later)
+  POST /church/news/photo           a photo for a new post: checked, kept, its place
   POST /church/news/{id}/pin        pin to the top for a week, or unpin
   POST /church/news/{id}/remove     take a post down
   GET  /church/news/held            a safety officer's seat: the held comments' words
@@ -44,7 +51,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Literal, Optional, Tuple
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
 
 import sb_clients
@@ -643,17 +650,29 @@ def clean(title: str, body: str) -> Tuple[str, str]:
 
 
 def _attach(business_id: str, raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    """Only what can be shown: an event and a sermon by id, photos by an
-    https address on this church's own storage."""
+    """Only what can be shown: an event (with its Sign me up) and a sermon by
+    id, a link, photos by an https address on this church's own storage, and
+    photos uploaded for News (POST /church/news/photo) by their place in
+    this church's own folder."""
+    import member_portal_write as mpw
     raw = raw if isinstance(raw, dict) else {}
     out: Dict[str, Any] = {}
     if UUID.match(str(raw.get("event") or "")):
         out["event"] = str(raw["event"])
+        if raw.get("signup") is True:
+            out["signup"] = True
     if UUID.match(str(raw.get("sermon") or "")):
         out["sermon"] = str(raw["sermon"])
+    link = mpw.clean_link(str(raw.get("link") or "")) if isinstance(raw.get("link"), str) else ""
+    if link:
+        out["link"] = link
     photos = [str(u) for u in (raw.get("photos") or []) if isinstance(u, str) and u.startswith("https://")][:12]
     if photos:
         out["photos"] = photos
+    pics = [x for x in (raw.get("pics") or []) if isinstance(x, dict)
+            and re.fullmatch(rf"{re.escape(str(business_id))}/news-photos/[0-9a-f]{{20}}\.webp", str(x.get("path") or ""))]
+    if pics:
+        out["pics"] = [{"path": str(x["path"]), "w": int(x.get("w") or 0), "h": int(x.get("h") or 0)} for x in pics[:mpw.PHOTOS_MAX]]
     return out
 
 
@@ -846,6 +865,39 @@ def create(body: PostIn, user: AuthedUser = Depends(require_user)):
     if not row:
         raise HTTPException(503, "That didn't post. Nothing went out — try again.")
     return {"ok": True, "post_id": row["id"], "scheduled": bool(when), "comments_open": comments_open(business)}
+
+
+@router.post("/church/news/photo")
+async def photo(business_id: str = Form(...), photo: UploadFile = File(...), user: AuthedUser = Depends(require_user)):
+    """A photo for a new post: made upright and small, checked like a
+    leader's photo (member_portal_write.POLICY), kept in the church's own
+    folder. Its place goes back with the post (attach.pics); `url` is a short
+    link to show it while the post is written."""
+    import chat_photos
+    import kids_router
+    import member_photos
+    import member_portal_write as mpw
+    import news_share
+    import storage_links
+    biz_id = kids_router._uuid(business_id, "business_id")
+    # A direct call, so the ownership sweep (ownership_sweep.py) sees the gate.
+    _need(biz_id, user, "member")
+    raw = await photo.read(member_photos.MAX_BYTES + 1)
+    try:
+        webp, w, h = await asyncio.to_thread(chat_photos.prepare, raw)
+    except member_photos.PhotoError as e:
+        raise HTTPException(422, str(e))
+    try:
+        verdict = await member_photos.screen(biz_id, webp, policy=mpw.POLICY, question=mpw.QUESTION, task="news_photo_screen")
+    except member_photos.ScreenUnavailable:
+        raise HTTPException(503, "We couldn't check the photo just now. Nothing was kept — try again in a moment.")
+    if verdict != "ok":
+        raise HTTPException(422, "That photo can't go on News. Choose another.")
+    path = await asyncio.to_thread(news_share._store, biz_id, webp)
+    if not path:
+        raise _unavailable()
+    url = await asyncio.to_thread(storage_links.signed_url_sync, member_photos.BUCKET, path, ttl=news_share.LINK_TTL)
+    return {"path": path, "w": int(w), "h": int(h), "url": url or ""}
 
 
 class PinIn(BaseModel):
