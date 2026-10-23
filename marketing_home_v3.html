@@ -151,6 +151,12 @@ ol,ul{list-style:none}
 .glint{background:linear-gradient(100deg,#fff 0%,#fff 22%,var(--cyan) 38%,var(--violet) 52%,var(--magenta) 64%,#fff 80%,#fff 100%);background-size:280% 100%;background-position:100% 0;-webkit-background-clip:text;background-clip:text;color:transparent;animation:glint 7s var(--ease) 1.2s infinite;padding-right:.04em}
 @keyframes glint{0%{background-position:100% 0}45%,100%{background-position:0 0}}
 .hero .lede{margin-top:20px;max-width:48ch}
+/* the front pages for churches and for coaches and consultants (2026-10-22): a longer first line, and three plain promises */
+.h-hero.ed{font-size:clamp(52px,7.4vw,108px)}
+.hero-proof{display:flex;flex-wrap:wrap;gap:8px 20px;margin:16px 0 0;padding:0;list-style:none;color:var(--mut-n);text-transform:uppercase;letter-spacing:.12em;font-size:11px}
+.hero-proof li{display:inline-flex;align-items:center;gap:8px}
+.hero-proof li::before{content:"";width:6px;height:6px;border-radius:50%;background:linear-gradient(135deg,var(--violet),var(--cyan))}
+.ed-go{display:flex;flex-wrap:wrap;gap:6px 22px;margin-top:14px}
 .tell{margin-top:24px;max-width:600px}
 .tell-l{display:flex;justify-content:space-between;color:var(--mut-n);margin-bottom:12px;text-transform:uppercase;letter-spacing:.14em;font-size:11px}
 .tell-line{position:relative;display:flex;align-items:baseline;gap:.32em;flex-wrap:wrap;font:500 clamp(24px,2.4vw,34px)/1.15 var(--display);letter-spacing:-.025em;padding-bottom:14px}
@@ -1163,11 +1169,11 @@ body{margin:0}
     <div class="hero-copy">
       <button type="button" class="hero-pill" id="heroFilm"><span class="tg">New</span><b>See it move</b><span>· 64 seconds</span><span class="pl"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg></span></button>
       <h1 class="h-hero" id="heroH"><span class="l1">Every problem</span><span class="l2">has a <span class="glint">solution.</span></span></h1>
-      <p class="lede">One system for the whole business, and Chief, an AI chief of staff who runs it beside you. You keep doing the work you’re known for.</p>
+      <p class="lede">One system for the whole business. Chief keeps it moving, so you keep doing the work you’re known for.</p>{{HERO_PROOF}}
       <div class="tell">
         <p class="tell-l mono"><span>Tell it what you do</span><span>Pick yours</span></p>
-        <p class="tell-line"><span class="tell-pre">I run a</span><span class="nowrap"><span class="tell-typed" id="typed">barbershop</span><span class="caret" aria-hidden="true"></span></span></p>
-        <div class="chips" id="heroChips" role="group" aria-label="Pick your trade"></div>
+        <p class="tell-line"><span class="tell-pre">I run a</span><span class="nowrap"><span class="tell-typed" id="typed">ministry</span><span class="caret" aria-hidden="true"></span></span></p>
+        <div class="chips" id="heroChips" role="group" aria-label="Pick your kind of business"></div>
       </div>
       <div class="hero-ctas">
         <a class="btn btn-white" href="/start">Start free <svg class="i" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a>
@@ -1185,8 +1191,8 @@ body{margin:0}
     </div>
   </div>
 
-  <div class="wrap ticker" role="group" aria-label="Trades it already speaks">
-    <p class="lbl">Seven trades it already speaks</p>
+  <div class="wrap ticker" role="group" aria-label="Kinds of business it already speaks">
+    <p class="lbl">Seven kinds of business it already speaks</p>
     <div class="tk-view"><div class="tk-track" id="tkTrack"></div></div>
   </div>
 </section>
@@ -1203,8 +1209,8 @@ body{margin:0}
 
   <div class="wrap trades">
     <div class="sec-hd">
-      <div><p class="eyebrow">Who it’s for</p><h2 class="h2">Built for the trade <b>you’re in.</b></h2></div>
-      <p class="lede">Pick yours. The words on the screen, the reports, and Chief’s habits all change with it. A barber sees regulars and chairs. An attorney sees matters and a trust ledger.</p>
+      <div><p class="eyebrow">Who it’s for</p><h2 class="h2">Built for the work <b>you do.</b></h2></div>
+      <p class="lede">Pick yours. The words on the screen, the reports, and Chief’s habits all change with it. A barber sees regulars and chairs. An attorney sees matters and a trust ledger.<span class="ed-go"><a class="arrow-link" href="/churches">For churches <svg class="i" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a><a class="arrow-link" href="/coaches">For coaches and consultants <svg class="i" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a></span></p>
     </div>
     <div class="tr-body">
       <ol class="tr-list" id="trList"></ol>
@@ -1243,14 +1249,14 @@ body{margin:0}
   <div class="wrap">
     <div class="sec-hd">
       <div><p class="eyebrow">How it works</p><h2 class="h2" id="howH">One sentence in. <span class="grad">A running business out.</span></h2></div>
-      <p class="lede">Tell Chief what you do. It sets up the system in your trade’s words, then keeps it running with you. Scroll to watch it happen.</p>
+      <p class="lede">Tell Chief what you do. It sets up the system in your own words, then keeps it running with you. Scroll to watch it happen.</p>
     </div>
   </div>
   <div class="how-scroll" id="howScroll">
     <div class="wrap how-stage">
       <ol class="steps" id="steps">
-        <li><span class="n">01</span><div><h3>Tell it what you do.</h3><p>One sentence about your trade, your town and how you work. Type it or say it.</p></div><span class="bar"><i></i></span></li>
-        <li><span class="n">02</span><div><h3>It builds the business around it.</h3><p>Clients, booking, invoices, your website and your brand, named the way your trade talks.</p></div><span class="bar"><i></i></span></li>
+        <li><span class="n">01</span><div><h3>Tell it what you do.</h3><p>One sentence about your business, your town and how you work. Type it or say it.</p></div><span class="bar"><i></i></span></li>
+        <li><span class="n">02</span><div><h3>It builds the business around it.</h3><p>Clients, booking, invoices, your website and your brand, named the way you talk about your work.</p></div><span class="bar"><i></i></span></li>
         <li><span class="n">03</span><div><h3>Then it keeps it running.</h3><p>Chief answers, follows up, rebooks and reconciles. Anything that spends money waits for your yes.</p></div><span class="bar"><i></i></span></li>
       </ol>
       <div class="con-wrap">
@@ -1354,11 +1360,11 @@ body{margin:0}
   <div class="wrap worth">
     <div class="sec-hd">
       <div><p class="eyebrow">What it’s worth</p><h2 class="h2" id="worthH">What the quiet chairs cost you.</h2></div>
-      <p class="lede">Move the numbers to match your week. It follows the trade you picked at the top.</p>
+      <p class="lede">Move the numbers to match your week. It follows the kind of business you picked at the top.</p>
     </div>
     <div class="calc">
       <div>
-        <div class="cchips" id="cchips" role="group" aria-label="Pick a trade for the calculator"></div>
+        <div class="cchips" id="cchips" role="group" aria-label="Pick a kind of business for the calculator"></div>
         <div id="sliders"></div>
       </div>
       <div class="calc-out" aria-live="polite">
@@ -1431,7 +1437,7 @@ body{margin:0}
       <div class="faq-list">
         <details><summary>Will it do something I did not want?</summary><p>Chief asks before anything that touches money, messages a client, or cannot be taken back. Everything else it does is logged in plain English with an Undo, and Undo means undo: the action is reversed, not just hidden.</p></details>
         <details><summary>Does it actually read my business, or guess?</summary><p>It reads your real contacts, calendar, invoices and inbox every turn. The morning brief and every answer come from your data, not from a template. Sample data on this page stands in for yours.</p></details>
-        <details><summary>My trade is not one of the seven. Does it still fit?</summary><p>Seven trades arrive already speaking your language. Anything else, you tell Chief what you do and it composes the room: the words, the workflows, the modules, your site. Say what is missing and it builds it in the window, not in a ticket.</p></details>
+        <details><summary>My business is not one of the seven. Does it still fit?</summary><p>Seven kinds of business arrive already speaking your language. Anything else, you tell Chief what you do and it composes the room: the words, the workflows, the modules, your site. Say what is missing and it builds it in the window, not in a ticket.</p></details>
         <details><summary>What happens when I run out of AI actions?</summary><p>Only Chief’s AI work pauses, and it tells you. Bookings, invoices, contacts and your site keep working. Top up with a prepaid pack, or wait for the month to roll.</p></details>
         <details><summary>Can I bring the assistant I already use?</summary><p>Yes. Solutionist is the system of record; whatever assistant you already talk to can work through it, and the log stays in one place.</p></details>
         <details><summary>What does the free trial include?</summary><p>The whole room, on the plan you pick. __TRIAL_FREE__, __TRIAL_CARD__, and you can leave before then with nothing owed.</p></details>
@@ -1469,7 +1475,7 @@ body{margin:0}
     <footer class="foot">
       <div class="foot-cols">
         <div><a class="brand" href="#top"><svg class="mk"><use href="#mark"/></svg><span>Solutionist</span></a><p class="about">Everything a small business runs on, in one place, with Chief running it beside you.</p></div>
-        <div><h4>The system</h4><a href="/features">Features</a><a href="#how">How it works</a><a href="#film">The film</a><a href="/compare">Compare plans</a><a href="/download">Get the app</a></div>
+        <div><h4>The system</h4><a href="/features">Features</a><a href="/churches">For churches</a><a href="/coaches">For coaches and consultants</a><a href="#how">How it works</a><a href="#film">The film</a><a href="/compare">Compare plans</a><a href="/download">Get the app</a></div>
         <div><h4>Company</h4><a href="/about">About</a><a href="/news">News</a><a href="#pricing">Pricing</a><a href="/start?plan=founder">Founding seat</a><a href="/faq">Questions</a></div>
         <div><h4>Account</h4><a href="{{APP_URL}}">Log in</a><a href="/start">Start free</a><a href="mailto:__CONTACT_EMAIL__">__CONTACT_EMAIL__</a><a href="/privacy">Privacy</a><a href="/terms">Terms</a></div>
       </div>
@@ -1545,7 +1551,7 @@ const T = [
     desc: 'Chairs filled, regulars rebooked before they drift, and the pomade reordered before it runs out.',
     vocab: ['Regulars', 'Chair calendar', 'Walk-ins', 'Inventory'],
     prompt: 'I run a barbershop on Euclid Ave. Three chairs, walk-ins welcome, closed Mondays.',
-    ents: [['barbershop', 'Trade'], ['Euclid Ave', 'Place'], ['Three chairs', 'Chairs'], ['walk-ins welcome', 'Walk-ins'], ['closed Mondays', 'Hours']],
+    ents: [['barbershop', 'Shop'], ['Euclid Ave', 'Place'], ['Three chairs', 'Chairs'], ['walk-ins welcome', 'Walk-ins'], ['closed Mondays', 'Hours']],
     site: { slug: 'fadeandco', tag: 'Sharp cuts on Euclid Ave.', cta: 'Book a chair' },
     pal: ['#121A2A', '#C8102E', '#F2E8D5', '#2E7DFF'],
     mods: [['Regulars', 'people', '124'], ['Chair calendar', 'cal'], ['Walk-ins', 'door', '2'], ['Inventory', 'box'], ['Invoices', 'receipt', '$6,910'], ['Website', 'globe'], ['Reviews', 'star', '4.9'], ['Books', 'book']],
@@ -1591,7 +1597,7 @@ const T = [
     desc: 'Estimates followed up while they’re warm, change orders signed on site, and every crew’s week on one calendar.',
     vocab: ['Customers', 'Job schedule', 'Estimates', 'Change orders'],
     prompt: 'I run a remodeling company. Kitchens and baths, a crew of five, estimates are free.',
-    ents: [['remodeling company', 'Trade'], ['Kitchens and baths', 'Services'], ['a crew of five', 'Crew'], ['estimates are free', 'Estimates']],
+    ents: [['remodeling company', 'Company'], ['Kitchens and baths', 'Services'], ['a crew of five', 'Crew'], ['estimates are free', 'Estimates']],
     site: { slug: 'reyesbuilders', tag: 'Kitchens and baths, built right.', cta: 'Get a free estimate' },
     pal: ['#1C1C1C', '#F5A524', '#EDE6DA', '#6B7F8E'],
     mods: [['Customers', 'people', '86'], ['Job schedule', 'cal'], ['Estimates', 'doc', '$48,200'], ['Change orders', 'pen'], ['Invoices', 'receipt', '$31,500'], ['Suppliers', 'box'], ['Website', 'globe'], ['Books', 'book']],
@@ -1704,9 +1710,19 @@ const CALC = {
   coach: { chip: 'Coach', h: 'What the missed calls cost you.', l: ['Monthly package', 'Missed calls a week', 'Clients who lapsed'], v: [300, 1, 5], max: 1500, step: 25, mode: 'std' }
 };
 
+/* ---------- which front page this is (one brand, three front pages, 2026-10-22) ----------
+   The home lists every kind of business, churches and coaches first. /churches and /coaches serve this same page
+   with only their own, named by the server in ED; a front page none of whose kinds has a calculator hides it. */
+const ED = {{EDITION_JSON}};
+const ORDER = ED ? ED.trades : ['ministry', 'coach', 'consult', 'barber', 'law', 'build', 'nonprofit'];
+const rankOf = (id) => ORDER.indexOf(id);
+for (let i = T.length - 1; i >= 0; i--) if (rankOf(T[i].id) < 0) T.splice(i, 1);
+T.sort((a, b) => rankOf(a.id) - rankOf(b.id));
+Object.keys(CALC).forEach((k) => { if (rankOf(k) < 0) delete CALC[k]; });
+
 let cur = T[0];
-let calcId = 'barber';
-let vals = CALC.barber.v.slice();
+let calcId = CALC[cur.id] ? cur.id : (Object.keys(CALC)[0] || null);
+let vals = calcId ? CALC[calcId].v.slice() : [];
 let annual = false;
 let userPicked = false;
 
@@ -1834,7 +1850,9 @@ function renderChiefCard(animate) {
 
 /* the trade ticker, the same size and colors as the live site's */
 const TK = [['barber', 'Barbers & salons', '#2E7DFF'], ['law', 'Attorneys', '#C9A84C'], ['build', 'Contractors', '#F5A524'], ['coach', 'Coaches', '#A78BFA'], ['consult', 'Consultants', '#22D3EE'], ['ministry', 'Ministries & churches', '#F472B6'], ['nonprofit', 'Nonprofits', '#2DD4BF']];
-const tkHalf = (copy) => TK.map((k) => `<button type="button" class="tkp" data-id="${k[0]}" style="--c:${k[2]}"${copy ? ' tabindex="-1" aria-hidden="true"' : ''}><i></i>${k[1]}</button>`).join('');
+for (let i = TK.length - 1; i >= 0; i--) if (rankOf(TK[i][0]) < 0) TK.splice(i, 1);
+TK.sort((a, b) => rankOf(a[0]) - rankOf(b[0]));
+const tkHalf =(copy) => TK.map((k) => `<button type="button" class="tkp" data-id="${k[0]}" style="--c:${k[2]}"${copy ? ' tabindex="-1" aria-hidden="true"' : ''}><i></i>${k[1]}</button>`).join('');
 $('#tkTrack').innerHTML = tkHalf(false) + tkHalf(true);
 $('#tkTrack').addEventListener('click', (e) => { const b = e.target.closest('.tkp'); if (b) setTrade(b.dataset.id, true); });
 
@@ -1932,7 +1950,7 @@ function renderHow() {
   const a = /^[aeiou]/i.test(t.word) ? 'an' : 'a';
   $('#conLog').innerHTML = [
     `${ico('check')}<span>Read your sentence. You run ${a} ${t.word}.</span>`,
-    `${ico('check')}<span>Set up 8 parts, named the way your trade talks.</span>`,
+    `${ico('check')}<span>Set up 8 parts, named the way you talk about your work.</span>`,
     `${ico('check')}<span>Drafted your website and brand from what you told it.</span>`,
     `<span class="dotl"></span><span>Chief is on. Ask it anything, any hour.</span>`
   ].map((h, i) => `<li${i === 3 ? ' class="live"' : ''}>${h}</li>`).join('');
@@ -2388,7 +2406,7 @@ const io = new IntersectionObserver((ents) => {
     if (en.target.id === 'trList') listSeen = en.isIntersecting;
     if (en.target.id === 'stackvs' && en.isIntersecting && !vsSeen) { vsSeen = true; vsShown = 0; en.target.classList.add('in'); vsUpdate(); }
   });
-  const run = !userPicked && !RM.matches && (heroSeen || listSeen);
+  const run = !ED && !userPicked && !RM.matches && (heroSeen || listSeen);   /* a front page stays on its own */
   if (run && !document.body.classList.contains('cycling')) cycleAt = performance.now();
   document.body.classList.toggle('cycling', run);
 }, { threshold: [0, 0.35, 0.5] });
@@ -2489,9 +2507,10 @@ addEventListener('keydown', (e) => { if (e.key === 'Escape' && !cp.hidden) close
 /* ---------- boot ---------- */
 city();
 renderHero(false); renderTrades(false); renderHow(); renderNight(); renderMorning(); vsUpdate();
-renderCalcChips(); renderSliders(); calc(); setPeriod(false); renderPrFor(); fitWordmark();
+if (calcId) { renderCalcChips(); renderSliders(); calc(); }
+setPeriod(false); renderPrFor(); fitWordmark();
 readTradeParam();
-document.body.classList.toggle('cycling', !RM.matches);
+document.body.classList.toggle('cycling', !ED && !RM.matches);
 tick();
 })();
 </script>

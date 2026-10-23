@@ -113,3 +113,8 @@ three build sessions run at a time. Features switch on on Thursdays.
   Always `git fetch` + check PR state before branching from / pushing to
   anything.
 - `git push` from a workflow context needs the gh credential helper.
+- **The Solutionist voice** on anything a visitor reads: plain, specific,
+  warm, and it says what got done. `brand_voice.AVOID` is the word list (no
+  "trade", no "software", Chief is never an "AI agent" or "AI assistant");
+  `__tests__/test_brand_voice.py` holds every public marketing page to it.
+  A new public page joins that test's `_pages()`.
