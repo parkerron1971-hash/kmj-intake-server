@@ -725,6 +725,9 @@ def _ic(name: str, size: int = 18) -> str:
         "sparkles": ('<path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5'
                      'l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063'
                      'a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/><path d="M20 3v4M22 5h-4M4 17v2M5 18H3"/>'),
+        # A photo in the chat (chat_photos).
+        "image": ('<rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/>'
+                  '<path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/>'),
         # A poll in the chat (chat_polls).
         "poll": '<path d="m3 17 2 2 4-4"/><path d="m3 7 2 2 4-4"/><path d="M13 6h8"/><path d="M13 12h8"/><path d="M13 18h8"/>',
         # Bring something (group_bring).
@@ -1032,10 +1035,11 @@ def render(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], data
                      f'</span></form></div>')
             if g.get("chat_on") is not False:
                 xon = g.get("chat_extras") is not False
-                names += (f'<div class="gs-card"><div class="gs-ph"><span class="gs-t"><b>Polls in the chat</b>'
-                          f'<small>Anyone who writes in the chat can ask the group a quick question.</small></span></div>'
+                names += (f'<div class="gs-card"><div class="gs-ph"><span class="gs-t"><b>Photos and polls in the chat</b>'
+                          f'<small>Anyone who writes in the chat can share a photo or ask a quick question. Photos are checked '
+                          f'before anyone sees them, and never shared in a chat with teens.</small></span></div>'
                           f'<form method="post" action="/my/groups/extras"><input type="hidden" name="group_id" value="{gid}">'
-                          f'<span class="gs-seg" role="group" aria-label="Polls in the chat">'
+                          f'<span class="gs-seg" role="group" aria-label="Photos and polls in the chat">'
                           f'<button type="submit" name="on" value="1" aria-pressed="{"true" if xon else "false"}">On</button>'
                           f'<button type="submit" name="on" value="0" aria-pressed="{"false" if xon else "true"}">Off</button>'
                           f'</span></form></div>')
@@ -1123,9 +1127,10 @@ def render(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], data
     import group_study
     import group_chat_notify
     import group_post_later
+    import chat_photos
     import chat_polls
     return _shell(biz, site, g.get("name") or "Group",
-                  f"<style>{GROUP_CSS}{CHAT_CSS}{chat_polls.POLL_CSS}{group_prayer.PRAYER_CSS}{group_gatherings.MEET_CSS}{group_bring.BRING_CSS}{group_study.STUDY_CSS}{group_chat_notify.CONTROL_CSS}{group_post_later.LATER_CSS}</style>{page}",
+                  f"<style>{GROUP_CSS}{CHAT_CSS}{chat_polls.POLL_CSS}{chat_photos.PHOTO_CSS}{group_prayer.PRAYER_CSS}{group_gatherings.MEET_CSS}{group_bring.BRING_CSS}{group_study.STUDY_CSS}{group_chat_notify.CONTROL_CSS}{group_post_later.LATER_CSS}</style>{page}",
                   tab="connect", who=me, script=script), 200
 
 
@@ -1198,7 +1203,9 @@ def chat_view(biz: Dict[str, Any], g: Optional[Dict[str, Any]], me: Dict[str, An
         return {"state": "error"}
     import chat_polls
     polls = chat_polls.for_messages(biz_id, [m["id"] for m in msgs], str(me["id"]))
-    if polls is None:
+    import chat_photos
+    photos = chat_photos.for_messages(biz_id, [m["id"] for m in msgs])
+    if polls is None or photos is None:
         return {"state": "error"}
     mpm.mark_read(biz_id, tid, str(me["id"]))
     import group_chat_notify as gcn
@@ -1214,7 +1221,7 @@ def chat_view(biz: Dict[str, Any], g: Optional[Dict[str, Any]], me: Dict[str, An
         import group_gatherings
         tz = group_gatherings.zone(biz)
     return {"state": "ok", "tid": tid, "acc": acc, "msgs": msgs, "looks": looks, "rx": rx, "writers": writers,
-            "quiet": quiet, "notify": notify, "polls": polls, "extras": extras, "tz": tz}
+            "quiet": quiet, "notify": notify, "polls": polls, "photos": photos, "extras": extras, "tz": tz}
 
 
 def room_view(biz: Dict[str, Any], me: Dict[str, Any]) -> Dict[str, Any]:
@@ -1254,8 +1261,9 @@ def render_room(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any],
     content, script = _chat_body(biz, request, me, ROOM, cv, False, here="/my/groups/leaders")
     page = f'{back}{hero}{_flash(request)}<div style="margin-top:16px">{content}</div>'
     status = 503 if cv.get("state") == "error" else 200
+    import chat_photos
     import chat_polls
-    return _shell(biz, site, "All group leaders", f"<style>{GROUP_CSS}{CHAT_CSS}{chat_polls.POLL_CSS}{ROOM_CSS}</style>{page}", tab="connect",
+    return _shell(biz, site, "All group leaders", f"<style>{GROUP_CSS}{CHAT_CSS}{chat_polls.POLL_CSS}{chat_photos.PHOTO_CSS}{ROOM_CSS}</style>{page}", tab="connect",
                   who=me, script=script), status
 
 
@@ -1376,8 +1384,12 @@ def _chat_body(biz: Dict[str, Any], request: Request, me: Dict[str, Any], g: Dic
     reply_id = str(request.query_params.get("reply") or "")
     replying = by_id.get(reply_id) if UUID.match(reply_id) and by_id.get(reply_id, {}).get("status") == "delivered" else None
     rx_names = (("love", "heart", "Love"), ("pray", "hand-heart", "Praying"), ("amen", "", "Amen"))
+    import chat_photos
     import chat_polls
     polls = cv.get("polls") or {}
+    photos = cv.get("photos") or {}
+    # Photos: when the group has them, never in a chat with a teen in it.
+    pics_ok = bool(cv.get("extras")) and not acc.get("teen_in_chat") and not rules.is_teen(folks.get(me_id, {}))
     now = datetime.now(timezone.utc)
     items = []
     for m in msgs:
@@ -1425,6 +1437,16 @@ def _chat_body(biz: Dict[str, Any], request: Request, me: Dict[str, Any], g: Dic
         # leader's Take down): the chat stays calm, like the canvas.
         bubble = (f'<details class="gc-d"><summary class="gc-b">{body}</summary><div class="gc-acts">{"".join(acts)}</div></details>'
                   if acts else f'<p class="gc-b">{body}</p>')
+        pic = photos.get(str(m["id"]))
+        if pic:
+            # A photo: tap it for the same picker, with Open for the full size.
+            cap = body if pic["captioned"] else ""
+            alt = ("Your photo" if mine else f"Photo from {name}") + (": " + str(m.get("body") or "") if cap else "")
+            shown = (f'<span class="gc-ph{" cap" if cap else ""}">{chat_photos.img(tid, str(m["id"]), pic, alt, _e)}</span>'
+                     + (f'<span class="gc-b">{cap}</span>' if cap else ""))
+            opener = f'<a class="gc-act" href="{_e(chat_photos.src(tid, str(m["id"])))}" target="_blank" rel="noopener">Open</a>'
+            bubble = (f'<details class="gc-d"><summary class="gc-phs">{shown}</summary><div class="gc-acts">{opener}{"".join(acts)}</div></details>'
+                      if acts else f'<div class="gc-phs">{shown}</div>')
         poll = polls.get(str(m["id"]))
         if poll:
             # A poll: its question opens the same picker, its choices vote.
@@ -1449,11 +1471,14 @@ def _chat_body(biz: Dict[str, Any], request: Request, me: Dict[str, Any], g: Dic
         # The + (canvas: "Add a photo, poll, prayer or verse"): a poll when
         # the group has them, and the group's prayer wall.
         tray = []
+        if pics_ok:
+            tray.append(f'<a href="{_e(here)}?make=photo#gc-photoform"><span class="gc-disc">{_ic("image", 18)}</span>Photo</a>')
         if cv.get("extras"):
             tray.append(f'<a href="{_e(here)}?make=poll#gc-pollform"><span class="gc-disc">{_ic("poll", 18)}</span>Poll</a>')
         if gid != ROOM["id"]:
             tray.append(f'<a href="{_base(gid, "prayer")}"><span class="gc-disc">{_ic("hand-heart", 18)}</span>Prayer</a>')
-        plus = (f'<details class="gc-tray"><summary aria-label="Add a {"poll or a " if cv.get("extras") else ""}prayer">{_ic("plus", 20)}</summary>'
+        said = "Add a photo, poll or prayer" if pics_ok else "Add a poll or a prayer" if cv.get("extras") else "Add a prayer"
+        plus = (f'<details class="gc-tray"><summary aria-label="{said}">{_ic("plus", 20)}</summary>'
                 f'<div class="gc-tray-in">{"".join(tray)}</div></details>' if tray else "")
         compose = (f'<form class="gc-compose" id="gc-compose" method="post" action="/my/messages/{_e(tid)}/send">'
                    f'{reply_bar}<input type="hidden" name="back" value="{_e(here)}">{reply_input}{_alert_toggle(cv)}'
@@ -1465,6 +1490,8 @@ def _chat_body(biz: Dict[str, Any], request: Request, me: Dict[str, Any], g: Dic
                    f'<p class="mp-err" id="gc-err" role="alert" hidden></p></form>')
         if cv.get("extras") and request.query_params.get("make") == "poll":
             compose = chat_polls.form(tid, here, g.get("name") or "the group", _alert_toggle(cv), esc=_e, ic=_ic)
+        if pics_ok and request.query_params.get("make") == "photo":
+            compose = chat_photos.form(tid, here, _alert_toggle(cv), esc=_e, ic=_ic)
     elif cv.get("writers") == "leaders":
         compose = '<p class="gs-note">Only the group’s leaders write in this chat. You can react to what they say.</p>'
     else:
@@ -1501,7 +1528,7 @@ var l=document.getElementById('gc-list');if(l&&!location.hash){{window.scrollTo(
 document.addEventListener('toggle',function(e){{var d=e.target;if(!d.classList||!d.classList.contains('gc-d')||!d.open)return;
 document.querySelectorAll('details.gc-d[open]').forEach(function(o){{if(o!==d)o.open=false;}});}},true);
 function poll(){{if(document.activeElement&&document.activeElement.id==='gc-say'&&document.activeElement.value)return;
-if(document.getElementById('gc-pollform'))return;
+if(document.getElementById('gc-pollform')||document.getElementById('gc-photoform'))return;
 if(document.querySelector('details.gc-d[open]'))return;
 fetch('/my/messages/feed/{tid}',{{credentials:'same-origin',headers:{{'Accept':'application/json'}}}})
 .then(function(r){{return r.json();}}).then(function(d){{if(d&&typeof d.count==='number'&&d.count!==n)location.replace(location.pathname);}}).catch(function(){{}});}}

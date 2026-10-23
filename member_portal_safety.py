@@ -108,6 +108,7 @@ def card(n: Optional[int]) -> str:
 
 
 SAFETY_CSS = """
+.sf-photo{display:block;max-width:min(320px,100%);height:auto;border-radius:14px;margin:0 0 8px;}
 .sf-door{display:flex;align-items:center;gap:14px;padding:14px 16px;border-radius:var(--r-md);background:var(--s1);color:var(--fg);
   text-decoration:none;margin:0 0 14px;}
 .sf-door.has-n{background:var(--coral-deep,var(--s1));}
@@ -175,8 +176,18 @@ def _open_form(tid: str) -> str:
             f'<button class="sf-btn" type="submit">Open the whole chat</button></form>')
 
 
+def _photo(m: Dict[str, Any], photos: Optional[Dict[str, Any]]) -> str:
+    """A held or reported photo (chat_photos), for the officer to see."""
+    import chat_photos
+    from member_portal import _e
+    mid, tid = str(m.get("id") or ""), str(m.get("thread_id") or "")
+    if not photos or mid not in photos or not tid:
+        return ""
+    return f'<img class="sf-photo" src="{_e(chat_photos.src(tid, mid))}" alt="The photo" loading="lazy">'
+
+
 def render_room(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any],
-                items: Optional[Dict[str, Any]]) -> str:
+                items: Optional[Dict[str, Any]], photos: Optional[Dict[str, Any]] = None) -> str:
     import member_app_ui as ui
     from member_portal import _e, _shell
     import member_portal_lead as mpl
@@ -193,7 +204,7 @@ def render_room(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any],
         cards.append(
             f'<article class="sf-item"><div class="sf-meta"><b>{sender}</b><span>{_e(_when(m.get("created_at")))}</span>'
             f'<span class="sf-flag">{_e(FLAGS.get(m.get("flag") or "", "Held by the check"))}</span></div>'
-            f'<p class="sf-body">{_e(m.get("body") or "")}</p>'
+            f'{_photo(m, photos)}<p class="sf-body">{_e(m.get("body") or "")}</p>'
             f'<div class="sf-acts"><form method="post" action="/my/lead/safety/act"><input type="hidden" name="message_id" value="{mid}">'
             f'<input type="hidden" name="action" value="release"><button class="sf-btn go" type="submit">Release it</button></form>'
             f'<form method="post" action="/my/lead/safety/act"><input type="hidden" name="message_id" value="{mid}">'
@@ -216,7 +227,7 @@ def render_room(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any],
         cards.append(
             f'<article class="sf-item"><div class="sf-meta"><b>{sender}</b><span>{_e(_when(msg.get("created_at")))}</span>'
             f'<span class="sf-flag">Reported by {_e(r.get("reporter") or "a member")}</span>{reason}</div>'
-            f'<p class="sf-body">{_e(msg.get("body") or "")}</p>'
+            f'{_photo(msg, photos)}<p class="sf-body">{_e(msg.get("body") or "")}</p>'
             f'<div class="sf-acts">{remove}'
             f'<form method="post" action="/my/lead/safety/pause"><input type="hidden" name="contact_id" value="{_e(msg.get("sender_contact_id") or "")}">'
             f'<button class="sf-btn warn" type="submit">Pause {sender}\'s messaging</button></form></div>'
@@ -252,7 +263,7 @@ def render_chat(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any],
     import member_portal_lead as mpl
     rows = "".join(
         f'<div class="sf-msg {"held" if m.get("status") == "held" else "removed" if m.get("status") == "removed" else ""}">'
-        f'<b>{_e(m.get("sender") or "Someone")}</b><span>{_e(m.get("body") or "")}</span>'
+        f'<b>{_e(m.get("sender") or "Someone")}</b>{_photo({**m, "thread_id": data.get("tid")}, data.get("photos"))}<span>{_e(m.get("body") or "")}</span>'
         f'<small>{_e(_when(m.get("created_at")))}{" · held" if m.get("status") == "held" else " · removed" if m.get("status") == "removed" else ""}</small></div>'
         for m in data.get("messages") or [])
     body = (f'<a class="mb-back" href="/my/lead/safety">Safety room</a>'
@@ -287,9 +298,18 @@ async def serve(request: Request, biz: Dict[str, Any], site, me: Dict[str, Any],
             data = await asyncio.to_thread(_whole_chat, biz_id, tid)
         except HTTPException as e:
             return render_room(biz, site, request, me, None), e.status_code
+        data = {**data, "tid": tid, "photos": await asyncio.to_thread(_photos, biz_id, data["messages"])}
         return render_chat(biz, site, request, me, data), 200
     items = await _items(biz_id)
-    return render_room(biz, site, request, me, items), 200 if items is not None else 503
+    photos = None
+    if items is not None:
+        photos = await asyncio.to_thread(_photos, biz_id, items["held"] + [r.get("message") or {} for r in items["reports"]])
+    return render_room(biz, site, request, me, items, photos), 200 if items is not None else 503
+
+
+def _photos(biz_id: str, msgs: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    import chat_photos
+    return chat_photos.for_messages(biz_id, [m.get("id") for m in msgs if m.get("id")])
 
 
 async def _items(biz_id: str) -> Optional[Dict[str, Any]]:
