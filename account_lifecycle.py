@@ -198,6 +198,12 @@ BUSINESS_CHILD_TABLES: List[str] = [
     # Families and children: notes, pickups and children before their
     # household, and the household's adult links before contacts.
     "child_checkins",
+    # News (church_news): reports, Loves and comments before their posts,
+    # reactions and who saw a post before it, the posts (which may be for
+    # one group) and the people who post to the whole church — all before
+    # groups and contacts.
+    "church_post_reports", "church_post_comment_loves", "church_post_comments", "church_post_reactions",
+    "church_post_seen", "church_posts", "church_news_posters",
     # Groups: who saw each Board post, the posts and who's asking to join
     # (member_portal_groups), who came to each meeting, the meetings, the
     # roster, then the groups — all before contacts.
@@ -760,6 +766,10 @@ _IMPORT_SKIP = {
     "groups", "group_members", "group_meetings", "group_meeting_attendance", "group_live_sessions",
     "group_join_requests", "group_posts", "group_post_seen", "group_prayers", "group_prayer_marks", "group_rsvps",
     "group_bring", "group_studies", "group_meeting_guests",
+    # The church's news cites people, groups, posts and comments by id;
+    # same reason.
+    "church_posts", "church_post_reactions", "church_post_seen", "church_post_comments",
+    "church_post_comment_loves", "church_post_reports", "church_news_posters",
     # Sermons cite their series by id; same reason.
     "sermon_series", "sermons",
     # Live sessions, chat and presence cite contacts and occasions by id;
