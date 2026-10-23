@@ -105,6 +105,8 @@ CEL_CSS = """
 .cl-hero h1{margin:6px 0 0;font-family:var(--mb-serif);font-style:italic;font-weight:500;font-size:36px;letter-spacing:-.02em;line-height:1.05;}
 .cl-hero h1 em{color:var(--gold-ink);}
 .cl-hero p{margin:0;font-size:14.5px;color:var(--fg2);line-height:1.45;max-width:30ch;}
+.cl-hero p.cl-said{max-width:34ch;font-size:15px;color:var(--fg);white-space:pre-line;overflow-wrap:anywhere;}
+.cl-pics{margin-top:12px;}
 .cl-seen{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--fg2);}
 .cl-seen .nw-faces .nw-av{box-shadow:0 0 0 2px var(--gold-deep);}
 .cl-lbl{display:block;margin:24px 0 10px;font-size:12.5px;font-weight:650;letter-spacing:.06em;text-transform:uppercase;color:var(--fg3);}
@@ -193,6 +195,12 @@ def _ring(p: Dict[str, Any], cls: str = "cl-ring") -> str:
     face = (f'<span class="cl-pair">{mpn._face(p.get("person") or {})}{mpn._face(p.get("partner") or {})}</span>'
             if sub == "anniversary" else mpn._face(p.get("person") or {}))
     why = {"birthday": "cake", "anniversary": "rings"}.get(sub or "", "award")
+    share = str((p.get("attach") or {}).get("share") or "") if sub == "good_news" else ""
+    if share:
+        # What the good news was (member_portal_share's icons).
+        import member_portal_share as mps
+        if share in mps.ICONS:
+            return f'<span class="{cls}">{face}<span class="cl-why" aria-hidden="true">{mps._ic(share, 14)}</span></span>'
     return f'<span class="{cls}">{face}<span class="cl-why" aria-hidden="true">{_ic(why, 14)}</span></span>'
 
 
@@ -225,7 +233,10 @@ def why_of(p: Dict[str, Any]) -> str:
     t = p.get("title") or ""
     if " finished " in t:
         return "Finished " + t.split(" finished ", 1)[1]
-    return "Good news" if sub == "good_news" else "A milestone"
+    if sub == "good_news":
+        import news_share as ns
+        return ns.LABEL.get(str((p.get("attach") or {}).get("share") or ""), "Good news")
+    return "A milestone"
 
 
 def cta_of(p: Dict[str, Any]) -> str:
@@ -333,8 +344,12 @@ def render_celebration(biz: Dict[str, Any], site, request: Request, me: Dict[str
     faces = "".join(mpn._face(c.get("person") or {}) for c in [c for c in thread if c.get("status") == "shown"][-3:])
     seen = (f'<span class="cl-seen"><span class="nw-faces" aria-hidden="true">{faces}</span>'
             f'<span>{n} {"person has" if n == 1 else "people have"} {verb}</span></span>') if n else ""
+    shared = sub == "good_news" and p.get("source") == "member"
+    # Good news a member shared carries their photo (news_share).
+    pics = mpn._attachments(p, {}) if shared else ""
     hero = (f'<section class="cl-hero" aria-label="{_e(full_name(p))}">{_ring(p)}<h1>{head}</h1>'
-            f'<p>{_e(line)}</p>{seen}</section>')
+            f'<p{" class=cl-said" if shared else ""}>{_e(line)}</p>{seen}</section>'
+            f'{f"<div class=cl-pics>{pics}</div>" if pics else ""}')
     can_say = open_ and p.get("comments") == "on"
     if can_say:
         chips = "".join(
@@ -364,9 +379,18 @@ def render_celebration(biz: Dict[str, Any], site, request: Request, me: Dict[str
             for o in others)
         also = f'<div class="mb-sh"><h2>Also today</h2></div><div class="cl-also">{rows}</div>'
     who = "They" if sub != "anniversary" else "They both"
-    guard = (f'<p class="cl-guard">{mpn._ic("shield", 18)}<span><b>{who} said yes to this in the app.</b> '
-             f'{"We show the day, never the year or an age, " if sub == "birthday" else ""}'
-             f'only to signed-in members of {_e(biz.get("name") or "the church")}. They can turn it off any time.</span></p>')
+    church = _e(biz.get("name") or "the church")
+    if shared:
+        groups = p.get("for_groups") or []
+        reach = (f"the people in {_e(' and '.join(groups))}" if groups and len(groups) <= 2
+                 else "the people in their groups" if (p.get("attach") or {}).get("groups")
+                 else f"signed-in members of {church}")
+        guard = (f'<p class="cl-guard">{mpn._ic("shield", 18)}<span><b>{_e(name)} shared this, and a pastor read it first.</b> '
+                 f'Only {reach} see it.</span></p>')
+    else:
+        guard = (f'<p class="cl-guard">{mpn._ic("shield", 18)}<span><b>{who} said yes to this in the app.</b> '
+                 f'{"We show the day, never the year or an age, " if sub == "birthday" else ""}'
+                 f'only to signed-in members of {church}. They can turn it off any time.</span></p>')
     return f'{hero}{rxbar}{say}{listing}{also}{guard}'
 
 
