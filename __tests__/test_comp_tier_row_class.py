@@ -84,12 +84,13 @@ def test_comped_solutionist_gets_three_businesses(fake):
     assert out["allowed"] is True
 
 
-def test_comped_solutionist_seat_cap_is_five(fake):
+def test_comped_solutionist_seat_cap_is_seven(fake):
     """can_add_seat's fallback fetch — the row business_users_router
-    trusts at invite time comes through the same starved shape."""
+    trusts at invite time comes through the same starved shape.
+    Seven since 2026-10-22 (Kevin: seats 1/3/7)."""
     _comp_biz(fake, "b1", "practice")
     out = bl.can_add_seat("b1")
-    assert out["limit"] == 5
+    assert out["limit"] == 7
     assert out["allowed"] is True
 
 

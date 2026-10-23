@@ -482,7 +482,10 @@ async def handle_provision_sms_number(client, biz, action) -> Dict[str, Any]:
                 "nav": _nav_sms(),
             }
         if err == "feature_locked":
-            plan = str(d.get("required_plan") or "Practice").title()
+            import billing_limits
+            import feature_gates
+            key = str(d.get("required_plan") or feature_gates.FEATURE_MIN_PLAN["dedicated_sms_number"])
+            plan = billing_limits.PLAN_DISPLAY.get(key, key.title())
             return _fail("provision_sms_number",
                          f"A private texting number comes with the {plan} plan. "
                          f"Upgrade and I'll set it up in a moment.")

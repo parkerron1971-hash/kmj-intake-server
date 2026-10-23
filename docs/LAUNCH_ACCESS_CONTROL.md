@@ -130,7 +130,7 @@ Then: Railway → service → Variables → `BILLING_ENFORCE=on` → redeploy.
 | Features (GL, exports, collaborator…) | all free | tier-gated (grandfather bypass) |
 | Chief interactions | counted, never blocked | allotment → overage billed → blocked at 2× cap or hard cap |
 | Business creation | invite-gate only | + tier cap (1/1/3) |
-| Team seats | counted | capped 1/1/5 |
+| Team seats | counted | capped 1/3/7 |
 | Plaid connections | counted | capped 2/5/unlimited |
 | Stripe usage reporting | dormant | daily job reports overage |
 

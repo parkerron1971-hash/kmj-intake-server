@@ -212,13 +212,13 @@ def test_seat_cap_and_invite_flow(fake, monkeypatch):
                     type("U", (), {"id": "member9"})())
     assert acc["ok"] and acc["business_id"] == "b1"
     assert fb.rows("business_users")[0]["status"] == "active"
-    # Enforced practice cap = 5 seats: fill to 5, 6th invite → 402.
+    # Enforced practice cap = 7 seats (Kevin, 2026-10-22): fill to 7, 8th invite → 402.
     monkeypatch.setenv("BILLING_ENFORCE", "on")
-    for i in range(3):
+    for i in range(5):
         asyncio.run(bu.invite("b1", bu.InviteBody(email=f"m{i}@x.com"), _stepup(_User().id), _User()))
-    assert bl.seat_count("b1") == 5
+    assert bl.seat_count("b1") == 7
     with pytest.raises(HTTPException) as e:
-        asyncio.run(bu.invite("b1", bu.InviteBody(email="six@x.com"), _stepup(_User().id), _User()))
+        asyncio.run(bu.invite("b1", bu.InviteBody(email="eight@x.com"), _stepup(_User().id), _User()))
     assert e.value.status_code == 402
     # Revoke frees the seat.
     rid = fb.rows("business_users")[1]["id"]
