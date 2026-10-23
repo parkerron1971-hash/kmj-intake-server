@@ -160,6 +160,8 @@ ERRORS = {
     "study_gone": "That study isn't here any more.",
     "later_bad": "Pick a time from 5 minutes to 30 days from now.",
     "post_gone": "That post isn't on the Board any more.",
+    "notes_off": "Notes go through member messaging, and it's off at your church right now.",
+    "notes_none": "Everyone has been coming lately. Nobody needs a note right now.",
     "study_empty": "Keep at least one question.",
     "not_kids_leader": "Only Kids leaders the church office approved can do that.",
     "lesson_incomplete": "Add a title and what they learned.",
