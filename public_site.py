@@ -7858,7 +7858,7 @@ async def public_marketing_link(request: Request, code: str):
 # does, because a sitemap advertising a 404 is worse than no sitemap.
 
 _MARKETING_SITEMAP_PATHS = [
-    ("/", "1.0"), ("/features", "0.8"), ("/compare", "0.8"),
+    ("/", "1.0"), ("/churches", "0.9"), ("/coaches", "0.9"), ("/features", "0.8"), ("/compare", "0.8"),
     ("/faq", "0.6"), ("/about", "0.6"), ("/get-started", "0.7"),
     ("/download", "0.5"), ("/privacy", "0.3"), ("/terms", "0.3"),
 ]
@@ -7933,6 +7933,25 @@ async def public_faq(request: Request):
 @router.get("/about", include_in_schema=False)
 async def public_about(request: Request):
     return await _platform_page_or_site(request, render_about)
+
+# One brand, three front pages (2026-10-22): the home, and the same page for
+# churches and for coaches and consultants (marketing_home_v3.EDITIONS).
+# /consultants is the coaches page with consultants first.
+@router.get("/churches", include_in_schema=False)
+async def public_edition_churches(request: Request):
+    import marketing_home_v3
+    return await _platform_page_or_site(request, lambda: marketing_home_v3.render_edition("churches"))
+
+@router.get("/coaches", include_in_schema=False)
+async def public_edition_coaches(request: Request):
+    import marketing_home_v3
+    return await _platform_page_or_site(request, lambda: marketing_home_v3.render_edition("coaches"))
+
+@router.get("/consultants", include_in_schema=False)
+async def public_edition_consultants(request: Request):
+    import marketing_home_v3
+    return await _platform_page_or_site(
+        request, lambda: marketing_home_v3.render_edition("coaches", first="consult"))
 
 @router.get("/get-started", include_in_schema=False)
 async def public_get_started(request: Request):

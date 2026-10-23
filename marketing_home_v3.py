@@ -36,9 +36,48 @@ import html as _html
 import pathlib
 
 TEMPLATE_PATH = pathlib.Path(__file__).resolve().parent / "marketing_home_v3.html"
-DESCRIPTION = ("One system for the whole business, and Chief, an AI chief of staff who runs it beside you: "
-               "bookings, clients, invoices, your website and the books, in the words your trade uses. "
-               "Every problem has a solution.")
+DESCRIPTION = ("One system for the whole business, with Chief keeping it moving: bookings, clients, invoices, "
+               "your website and the books, in the words your business uses. Every problem has a solution.")
+
+# One brand, three front pages (Kevin, 2026-10-22: "the changes to website one brand three front pages",
+# with barbers and lawyers kept on the site). The home lists every kind of business, churches and coaches
+# first; each edition is the same page showing only its own kinds of business, with its own first screen.
+# Every promise on an edition's first screen is true on EVERY plan (a visitor on Starter must get it):
+# giving runs on the church's own Stripe account with no platform fee, statements go out by email, and
+# every plan is month to month. A texting number of its own is not on every plan (dedicated_sms_number),
+# so the plan cards name it and the hero never promises it.
+EDITIONS = {
+    "churches": {
+        "path": "/churches",
+        "trades": ("ministry", "nonprofit"),
+        "title": "Solutionist for Churches",
+        "description": ("Giving, people, care and Sunday in one system, with Chief keeping the church office "
+                        "moving. Month to month, on your own Stripe, and we never take a cut of your giving."),
+        "h1": '<span class="l1">Your church</span><span class="l2">office, <span class="glint">handled.</span></span>',
+        "lede": ("Giving, people, care and Sunday in one system. Chief keeps the church office moving, "
+                 "so you can keep your eyes on your people."),
+        "proof": ("Month to month", "Your own Stripe, no cut of giving", "Year-end statements by email"),
+        "who": "Pick yours. A church sees its people, giving, care and Sunday. A nonprofit sees donors, programs and grants.",
+        # Kevin 2026-10-22 dropped the size guide ("what if small church want the bigger size"): a plan is
+        # picked by what Chief carries and who logs in. The cards under this line read the gate map and the
+        # dials, so the line names no plan's contents and can never disagree with them.
+        "pricing": ("Pick by what you want Chief to carry and who needs to log in, not by the size of your "
+                    "church. The cards below show what each plan adds. Every plan is month to month, and we "
+                    "never take a cut of your giving."),
+    },
+    "coaches": {
+        "path": "/coaches",
+        "trades": ("coach", "consult"),
+        "title": "Solutionist for Coaches and Consultants",
+        "description": ("One front door for your clients: they book, sign and pay in one place, Chief follows up, "
+                        "and every step stays on the record."),
+        "h1": '<span class="l1">One front door</span><span class="l2">for your <span class="glint">clients.</span></span>',
+        "lede": "Clients book, sign and pay in one place. Chief follows up, and every step stays on the record.",
+        "proof": ("Book, sign and pay in one place", "Chief follows up for you", "Every step on the record"),
+        "who": "Pick yours. A coach sees clients, packages and sessions. A consultant sees projects, hours and invoices.",
+        "pricing": None,
+    },
+}
 
 _TEMPLATE_CACHE: dict = {"mtime": None, "text": ""}
 
@@ -291,14 +330,92 @@ def _seat_section_html(f) -> str:
 """
 
 
+def _swap(page: str, old: str, new: str) -> str:
+    """One exact replacement in the template. A miss is loud: an edition that
+    silently kept the home's first screen would look like it worked."""
+    if old not in page:
+        raise ValueError(f"the home template no longer has: {old[:60]}")
+    return page.replace(old, new)
+
+
+# The home's own words that an edition replaces, exactly as the template has them.
+_HOME_TITLE = "Every problem has a solution &middot; The Solutionist System"
+_HOME_H1 = '<span class="l1">Every problem</span><span class="l2">has a <span class="glint">solution.</span></span>'
+_HOME_LEDE = "One system for the whole business. Chief keeps it moving, so you keep doing the work you’re known for."
+_HOME_WHO = ("Pick yours. The words on the screen, the reports, and Chief’s habits all change with it. "
+             "A barber sees regulars and chairs. An attorney sees matters and a trust ledger.")
+_HOME_PRICING = ("The tiers change how much Chief does for you each month, how deep it thinks, "
+                 "and the room for a team and the books.")
+_CALC_TRADES = ("barber", "law", "build", "coach")   # the kinds of business the worth calculator has numbers for
+
+
+def _edition_markup(page: str, ed: dict, trades: tuple) -> str:
+    title = _html.escape(ed["title"]) + " &middot; The Solutionist System"
+    url = "https://mysolutionist.app" + ed["path"]
+    page = page.replace(_HOME_TITLE, title)    # the <title> and og:title
+    page = _swap(page, '<meta property="og:url" content="https://mysolutionist.app/">',
+                 f'<meta property="og:url" content="{url}">')
+    page = _swap(page, '<link rel="canonical" href="https://mysolutionist.app/">', f'<link rel="canonical" href="{url}">')
+    page = _swap(page, '<h1 class="h-hero" id="heroH">' + _HOME_H1, '<h1 class="h-hero ed" id="heroH">' + ed["h1"])
+    page = _swap(page, _HOME_LEDE, _html.escape(ed["lede"], quote=False))
+    page = _swap(page, '<span class="tell-typed" id="typed">ministry</span>',
+                 f'<span class="tell-typed" id="typed">{_typed_word(page, trades[0])}</span>')
+    # the moving list of every kind of business is the home's; two kinds would only repeat
+    page = _swap(page, '<div class="wrap ticker" role="group"', '<div class="wrap ticker" hidden role="group"')
+    i = page.index(_HOME_WHO)
+    j = page.index("</span></p>", i) + len("</span>")
+    page = (page[:i] + _html.escape(ed["who"], quote=False)
+            + f'<span class="ed-go"><a class="arrow-link" href="/">See every kind of business {_ARROW}</a></span>'
+            + page[j:])
+    if ed.get("pricing"):
+        page = _swap(page, _HOME_PRICING, _html.escape(ed["pricing"], quote=False))
+    if not any(t in _CALC_TRADES for t in trades):
+        page = _swap(page, '<div class="wrap worth">', '<div class="wrap worth" hidden>')
+        page = page.replace('<a href="#worth">What it’s worth</a>', "")
+    return page
+
+
+def _typed_word(page: str, trade: str) -> str:
+    """The word the hero types for a kind of business, read from the page's own list."""
+    import re
+    m = re.search(r"\{ id: '" + re.escape(trade) + r"', chip: '[^']*', word: '([^']*)'", page)
+    return m.group(1) if m else trade
+
+
 def render_home_v3() -> str:
+    return _render(None)
+
+
+def render_edition(key: str, first: str = "") -> str:
+    """The home page for one edition (EDITIONS). `first` puts one of its kinds
+    of business first, as /consultants does."""
+    ed = EDITIONS[key]
+    trades = tuple(ed["trades"])
+    if first in trades:
+        trades = (first,) + tuple(t for t in trades if t != first)
+    return _render((ed, trades))
+
+
+def _render(edition) -> str:
+    import json
     import marketing_founder_ad
     import marketing_home_v2 as v2
     import marketing_pages as mp
+    page = _template()
+    proof, ed_json, description = "", "null", DESCRIPTION
+    if edition:
+        ed, trades = edition
+        page = _edition_markup(page, ed, trades)
+        proof = ('<ul class="hero-proof mono">'
+                 + "".join(f"<li>{_html.escape(p)}</li>" for p in ed["proof"]) + "</ul>")
+        ed_json = json.dumps({"key": ed["path"].strip("/"), "trades": list(trades)})
+        description = ed["description"]
     ad_css, ad_markup = marketing_founder_ad.founder_ad_bundle("/")
     dials = mp._tier_dials()
     founder = _founder_state()
-    html = (_template()
+    html = (page
+            .replace("{{HERO_PROOF}}", proof)
+            .replace("{{EDITION_JSON}}", ed_json)
             .replace("{{PRICE_CARDS}}", _price_cards_html())
             .replace("{{COMPARE_TABLE}}", _compare_table_html())
             .replace("{{FOUNDER_STRIP}}", _founder_strip_html(founder))
@@ -312,7 +429,7 @@ def render_home_v3() -> str:
             .replace("{{PIXEL}}", mp._pixel_script())
             .replace("{{ANALYTICS}}", v2._analytics_scripts())
             .replace("{{APP_URL}}", mp.APP_URL)
-            .replace("{{DESCRIPTION}}", _html.escape(DESCRIPTION))
+            .replace("{{DESCRIPTION}}", _html.escape(description))
             .replace("{{YEAR}}", str(datetime.date.today().year)))
     html = mp._fill_trial(mp._fill_contact(html))
     # after the sentinels are filled, so the FAQ answers carry the real trial length
