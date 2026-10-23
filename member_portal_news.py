@@ -67,7 +67,7 @@ REACT_LABEL = {"love": "Love", "pray": "Praying", "amen": "Amen", "cheer": "Cele
 CARD_RX = {"message": ("amen", "pray"), "celebration": ("cheer", "love"), "milestone": ("cheer", "love"),
            "good_news": ("cheer", "love"), "praise": ("amen", "love")}
 CARD_RX_DEFAULT = ("love", "amen")
-_BACK_RE = re.compile(r"^/my(/news(/[0-9a-fA-F-]{36})?)?$")
+_BACK_RE = re.compile(r"^/my(/news(/[0-9a-fA-F-]{36}|/share)?)?$")
 
 # The canvas's sheet (news.css) on the member app's tokens: the church colour
 # is --acc-fill / --acc / --acc-deep; gold, teal, violet and coral are the
@@ -206,6 +206,14 @@ NEWS_CSS = """
 .nw-gold{display:inline-flex;align-items:center;min-height:36px;padding:0 14px;border-radius:999px;background:var(--gold);color:var(--on-gold);
   font-size:14px;font-weight:600;flex:none;}
 .nw-ph .nw-kind{margin-left:auto;}
+.nw-share{display:flex;align-items:center;gap:14px;margin:20px 0 0;padding:16px;border-radius:var(--r-md);background:var(--s1);
+  color:inherit;text-decoration:none;}
+.nw-share .nw-t{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;}
+.nw-share .nw-t b{font-size:16px;font-weight:650;}
+.nw-share .nw-t small{font-size:13.5px;color:var(--fg2);line-height:1.35;}
+.nw-share>.mb-ic:last-child{color:var(--fg3);flex:none;}
+.nw-sd{width:42px;height:42px;border-radius:13px;flex:none;display:grid;place-items:center;background:var(--gold-deep);color:var(--gold-ink);}
+.nw-pics.one a.tall{aspect-ratio:4/5;}
 """
 
 _EXTRA = {
@@ -329,6 +337,9 @@ def _meta(biz: Dict[str, Any], p: Dict[str, Any]) -> str:
         bits.append("pinned")
     elif p.get("group_id"):
         bits.append(f"for {p.get('group_name') or 'your group'}")
+    elif (p.get("attach") or {}).get("groups"):
+        names = p.get("for_groups") or []
+        bits.append(f"for {names[0]}" if len(names) == 1 else "for their groups")
     else:
         bits.append("whole church")
     return " · ".join(b for b in bits if b)
@@ -359,14 +370,21 @@ def _attachments(p: Dict[str, Any], occ: Dict[str, Dict[str, Any]]) -> str:
         out.append(f'<a class="nw-att" href="/my/sermons/{_e(s["id"])}"><span class="nw-disc" aria-hidden="true">{_ic("playtri", 18)}</span>'
                    f'<span class="nw-t"><b>{_e(s.get("title"))}</b><small>{" · ".join(_e(b) for b in bits if b)}</small></span>'
                    f'{_ic("chevron", 18)}</a>')
-    photos = [u for u in att.get("photos") or [] if isinstance(u, str)]
+    # Photos the church linked (an address on its own storage), and photos
+    # uploaded with a post (news_share: private, behind /my/news/<id>/photo/<n>).
+    photos = [(u, 0, 0) for u in att.get("photos") or [] if isinstance(u, str)]
+    photos += [(f"/my/news/{p['id']}/photo/{i}", int(x.get("w") or 0), int(x.get("h") or 0))
+               for i, x in enumerate(att.get("pics") or []) if isinstance(x, dict) and x.get("path")]
     if photos:
         shown = photos[:2]
         more = len(photos) - len(shown)
         cells = []
-        for i, u in enumerate(shown):
+        for i, (u, w, h) in enumerate(shown):
             over = f'<span class="nw-more">+{more}</span>' if more and i == len(shown) - 1 else ""
-            cells.append(f'<a href="{_e(u)}" target="_blank" rel="noopener"><img src="{_e(u)}" alt="" loading="lazy">{over}</a>')
+            # One tall photo stays tall (a graduate, a baby), never cut to a strip.
+            tall = ' class="tall"' if len(shown) == 1 and w and h and h > w else ""
+            size = f' width="{w}" height="{h}"' if w and h else ""
+            cells.append(f'<a href="{_e(u)}" target="_blank" rel="noopener"{tall}><img src="{_e(u)}" alt="" loading="lazy"{size}>{over}</a>')
         out.append(f'<div class="nw-pics{" one" if len(shown) == 1 else ""}">{"".join(cells)}</div>')
     return "".join(out)
 
@@ -441,10 +459,26 @@ def _milestone_card(biz: Dict[str, Any], p: Dict[str, Any], occ, back: str, open
             f'<div class="nw-rxbar"><div class="nw-rxs" role="group" aria-label="React">{rxs}</div>{link}</div></article>')
 
 
+def _good_news_card(biz: Dict[str, Any], p: Dict[str, Any], occ, back: str, open_: bool, full: bool) -> str:
+    """Good news a member shared (news_share): under their own name, in
+    their words, with their photo."""
+    face, who = _author(biz, p)
+    rxs = "".join(_rx_button(p, k, back) for k in (cn.REACTIONS if full else ("cheer", "love")))
+    link = "" if full else _comment_link(p, open_)
+    body = f'<p class="nw-body">{_e(p["body"])}</p>' if p.get("body") else ""
+    return (f'<article class="nw-post" id="p-{_e(p["id"])}" aria-label="Good news from {_e(_person_name(p.get("author") or {}))}">'
+            f'<div class="nw-ph">{face}<span class="nw-t"><b>{who}</b><small>{_e(_meta(biz, p))}</small></span>'
+            f'<span class="nw-kind">{_ic("cheer", 14)}<span>Good news</span></span></div>'
+            f'{body}{_attachments(p, occ)}'
+            f'<div class="nw-rxbar"><div class="nw-rxs" role="group" aria-label="React">{rxs}</div>{link}</div></article>')
+
+
 def card(biz: Dict[str, Any], p: Dict[str, Any], occ: Dict[str, Dict[str, Any]], *, back: str, open_: bool,
          full: bool = False) -> str:
     """One post. In the feed it offers two reactions that fit it; on its own
     page, all four."""
+    if p.get("kind") == "good_news" and p.get("source") == "member" and p.get("person_id"):
+        return _good_news_card(biz, p, occ, back, open_, full)
     if p.get("kind") in ("milestone", "good_news") and p.get("person_id"):
         return _milestone_card(biz, p, occ, back, open_, full)
     face, who = _author(biz, p)
@@ -566,8 +600,9 @@ def render_news(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any],
     foot = (f'<p class="nw-foot">{_ic("lock", 16)}<span>Only your pastors and the leaders they name can post here. '
             f'{"Everyone can react and comment, and every comment is checked before anyone sees it." if open_ else "Everyone can react."}'
             f'</span></p>')
+    import member_portal_share as mps
     body = (f'{head}<nav class="nw-filter" aria-label="Show">{chips}</nav>{_flash(request)}'
-            f'<div class="nw-list">{cards}</div>{foot}')
+            f'<div class="nw-list">{cards}</div>{mps.share_card()}{foot}')
     return _shell(biz, site, "News", f"<style>{NEWS_CSS}</style>{body}", tab="home", who=me, script=RX_JS), 200
 
 
@@ -696,12 +731,36 @@ def render_post(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any],
                   bar=not can_say, script=RX_JS + (COMMENT_JS if can_say else "")), 200
 
 
-async def serve(request: Request, biz: Dict[str, Any], site, me: Dict[str, Any], sub: str) -> Tuple[str, int]:
-    """GET /my/news and /my/news/<id>."""
+_PHOTO_RE = re.compile(r"^([0-9a-fA-F-]{36})/photo/(\d{1,2})$")
+
+
+async def _photo(biz: Dict[str, Any], me: Dict[str, Any], post_id: str, n: int):
+    """GET /my/news/<id>/photo/<n>: a short signed link, for whoever may see
+    the post (news_share.photo_link)."""
+    import news_share as ns
+    from fastapi.responses import Response
+    from member_portal import _SECURE_HEADERS
+    link = await asyncio.to_thread(ns.photo_link, str(biz["id"]), post_id, n, str(me["id"]))
+    if link is None:
+        return Response(status_code=503, headers=_SECURE_HEADERS)
+    if not link:
+        return Response(status_code=404, headers=_SECURE_HEADERS)
+    return RedirectResponse(link, status_code=302, headers={**_SECURE_HEADERS, "Cache-Control": "private, max-age=300"})
+
+
+async def serve(request: Request, biz: Dict[str, Any], site, me: Dict[str, Any], sub: str):
+    """GET /my/news, /my/news/<id>, /my/news/share (member_portal_share) and
+    /my/news/<id>/photo/<n>. A page is (html, status); a photo, a Response."""
     import member_portal_church as mpc
     import celebrations as cel
     rest = sub[len("/my/news"):].strip("/")
     business_id, me_id = str(biz["id"]), str(me["id"])
+    if rest == "share":
+        import member_portal_share as mps
+        return await mps.serve_share(request, biz, site, me)
+    m = _PHOTO_RE.match(rest)
+    if m:
+        return await _photo(biz, me, m.group(1), int(m.group(2)))
     today = cel.local_now(biz).date().isoformat()
     if not rest:
         filt = str(request.query_params.get("f") or "")

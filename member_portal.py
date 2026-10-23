@@ -1189,8 +1189,10 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
     # comments. The owner's preview reads it; nothing saves.
     if sub == "/my/news" or sub.startswith("/my/news/"):
         import member_portal_news as mpn
-        html, status = await mpn.serve(request, biz, site, me, sub)
-        return _page(html, status)
+        out = await mpn.serve(request, biz, site, me, sub)
+        if isinstance(out, tuple):
+            return _page(out[0], out[1])
+        return out
     if sub == "/my/events":
         occ = fill(await asyncio.to_thread(mpc.upcoming_for, biz["id"], me), "occasions")
         return _page(mpc.render_events(biz, site, request, occ, who=me))

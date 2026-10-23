@@ -78,6 +78,26 @@ def is_person_celebration(p: Dict[str, Any]) -> bool:
     return p.get("kind") == "celebration" and bool(p.get("person_id"))
 
 
+def scoped(p: Dict[str, Any]) -> bool:
+    """For some people only: one ministry (group_id), or the groups a member
+    chose when they shared good news (attach.groups, news_share)."""
+    att = p.get("attach") if isinstance(p.get("attach"), dict) else {}
+    return bool(p.get("group_id") or att.get("groups"))
+
+
+def reaches(p: Dict[str, Any], mine: set, me_id: str = "") -> bool:
+    """Whether this post is for someone in the groups `mine`. Whoever posted
+    it always sees their own."""
+    if me_id and str(p.get("posted_by") or "") == str(me_id):
+        return True
+    if p.get("group_id"):
+        return str(p["group_id"]) in mine
+    att = p.get("attach") if isinstance(p.get("attach"), dict) else {}
+    if att.get("groups"):
+        return any(str(g) in mine for g in att["groups"])
+    return True
+
+
 def _q(v: Any) -> str:
     return quote(str(v), safe="")
 
@@ -207,7 +227,7 @@ def matches(p: Dict[str, Any], filt: str) -> bool:
     att = p.get("attach") if isinstance(p.get("attach"), dict) else {}
     if filt == "events" and att.get("event"):
         return True
-    if filt == "photos" and att.get("photos"):
+    if filt == "photos" and (att.get("photos") or att.get("pics")):
         return True
     return p.get("kind") in FILTER_KINDS.get(filt, set())
 
@@ -225,7 +245,8 @@ def _decorate(business_id: str, rows: List[Dict[str, Any]], me_id: str) -> Optio
                                       f"&select=post_id&limit=50000")
     authors = _people(business_id, [r.get("posted_by") for r in rows] + [r.get("person_id") for r in rows]
                       + [r.get("partner_id") for r in rows])
-    gids = {str(r["group_id"]) for r in rows if r.get("group_id")}
+    gids = {str(r["group_id"]) for r in rows if r.get("group_id")} | {
+        str(g) for r in rows if isinstance(r.get("attach"), dict) for g in (r["attach"].get("groups") or [])}
     groups = (sb_clients.sb_get_as_service(f"/groups?business_id=eq.{b}&id=in.({_ids(gids)})&select=id,name")
               if gids else [])
     if rx is None or cm is None or authors is None or groups is None:
@@ -244,6 +265,8 @@ def _decorate(business_id: str, rows: List[Dict[str, Any]], me_id: str) -> Optio
         att = r.get("attach") if isinstance(r.get("attach"), dict) else {}
         r["sub"] = att.get("sub") or {"milestone": "milestone", "good_news": "good_news"}.get(r.get("kind") or "", "")
         r["group_name"] = gname.get(str(r.get("group_id") or ""), "")
+        # Good news for "just my groups": who it's for, by name.
+        r["for_groups"] = [gname[str(g)] for g in (att.get("groups") or []) if gname.get(str(g))]
         r["pinned"] = pinned_now(r)
         a = str(r.get("posted_by") or "")
         if a and a not in pastoral:
@@ -285,7 +308,7 @@ def feed(business_id: str, me_id: str, filt: str = "", today: str = "") -> Optio
         return None
     now = _now()
     mine = set(groups)
-    rows = [r for r in rows if is_live(r, now) and (not r.get("group_id") or str(r["group_id"]) in mine)
+    rows = [r for r in rows if is_live(r, now) and reaches(r, mine, me_id)
             and (not is_person_celebration(r) or (today and str(r.get("celebrate_on")) == today))]
     rows.sort(key=when_of, reverse=True)
     rows.sort(key=lambda r: not pinned_now(r, now))
@@ -308,7 +331,7 @@ def home_view(business_id: str, me_id: str) -> Tuple[Optional[List[Dict[str, Any
     mine = set(groups)
     # A birthday, anniversary or milestone is Home's "Celebrating today", not
     # "From the church" (News keeps them all).
-    rows = [r for r in rows if is_live(r, now) and (not r.get("group_id") or str(r["group_id"]) in mine)
+    rows = [r for r in rows if is_live(r, now) and reaches(r, mine, me_id)
             and not is_person_celebration(r) and not (r.get("person_id") and r.get("kind") in ("milestone", "good_news"))]
     if not rows:
         return [], 0
@@ -338,11 +361,11 @@ def one(business_id: str, me_id: str, post_id: str) -> Optional[Dict[str, Any]]:
     if not rows or not is_live(rows[0]):
         return {}
     p = rows[0]
-    if p.get("group_id"):
+    if scoped(p):
         groups = my_groups(business_id, me_id)
         if groups is None:
             return None
-        if str(p["group_id"]) not in groups:
+        if not reaches(p, set(groups), me_id):
             return {}
     done = _decorate(business_id, [p], me_id)
     if done is None:
@@ -428,15 +451,15 @@ def unseen(business_id: str, me_id: str) -> int:
     since = _q((_now() - timedelta(days=14)).isoformat())
     rows = sb_clients.sb_get_as_service(
         f"/church_posts?business_id=eq.{_q(business_id)}&status=eq.posted&removed_at=is.null&created_at=gte.{since}"
-        f"&select=id,group_id,status,publish_at,removed_at&limit=200")
+        f"&select=id,group_id,posted_by,attach,status,publish_at,removed_at&limit=200")
     seen = sb_clients.sb_get_as_service(
         f"/church_post_seen?business_id=eq.{_q(business_id)}&contact_id=eq.{_q(me_id)}&seen_at=gte.{since}&select=post_id&limit=500")
     groups = my_groups(business_id, me_id)
     if rows is None or seen is None or groups is None:
         return 0
     have = {str(s["post_id"]) for s in seen}
-    return sum(1 for r in rows if is_live(r) and str(r["id"]) not in have
-               and (not r.get("group_id") or str(r["group_id"]) in groups))
+    mine = set(groups)
+    return sum(1 for r in rows if is_live(r) and str(r["id"]) not in have and reaches(r, mine, me_id))
 
 
 # ─── a member's reactions and comments ──────────────────────────────
@@ -447,17 +470,17 @@ def _live_post(business_id: str, me_id: str, post_id: str) -> Optional[Dict[str,
         return {}
     rows = sb_clients.sb_get_as_service(
         f"/church_posts?id=eq.{_q(post_id)}&business_id=eq.{_q(business_id)}"
-        f"&select=id,group_id,posted_by,status,publish_at,removed_at,comments&limit=1")
+        f"&select=id,group_id,posted_by,attach,status,publish_at,removed_at,comments&limit=1")
     if rows is None:
         return None
     if not rows or not is_live(rows[0]):
         return {}
     p = rows[0]
-    if p.get("group_id"):
+    if scoped(p):
         groups = my_groups(business_id, me_id)
         if groups is None:
             return None
-        if str(p["group_id"]) not in groups:
+        if not reaches(p, set(groups), me_id):
             return {}
     return p
 
@@ -684,13 +707,16 @@ def office_view(business: Dict[str, Any]) -> Dict[str, Any]:
     b = _q(biz_id)
     rows = _get(f"/church_posts?business_id=eq.{b}&status=in.(posted,waiting)&removed_at=is.null"
                 f"&select={POST_SELECT}&order=created_at.desc&limit=80")
-    # Each day's birthdays and anniversaries are the Celebrations panel's, not rows here.
-    rows = [r for r in rows if not is_person_celebration(r)][:60]
+    # Each day's birthdays and anniversaries are the Celebrations panel's, and
+    # what members shared is Waiting for you's (news_share), not rows here.
+    rows = [r for r in rows if not is_person_celebration(r)
+            and not (r.get("source") == "member" and r.get("status") == "waiting")][:60]
     ids = _ids(r["id"] for r in rows)
     seen = _get(f"/church_post_seen?business_id=eq.{b}&post_id=in.({ids})&select=post_id&limit=100000") if rows else []
     rx = _get(f"/church_post_reactions?business_id=eq.{b}&post_id=in.({ids})&select=post_id&limit=100000") if rows else []
     cm = _get(f"/church_post_comments?business_id=eq.{b}&post_id=in.({ids})&status=eq.shown&select=post_id&limit=100000") if rows else []
-    gids = {str(r["group_id"]) for r in rows if r.get("group_id")}
+    gids = {str(r["group_id"]) for r in rows if r.get("group_id")} | {
+        str(g) for r in rows if isinstance(r.get("attach"), dict) for g in (r["attach"].get("groups") or [])}
     groups = _get(f"/groups?business_id=eq.{b}&id=in.({_ids(gids)})&select=id,name") if gids else []
     authors = _people(biz_id, [r.get("posted_by") for r in rows]) or {}
     # The app's people: every address that has signed in to the member app.
@@ -710,7 +736,8 @@ def office_view(business: Dict[str, Any]) -> Dict[str, Any]:
             "from": a.get("name") or r.get("author_label") or business.get("name") or "",
             "from_sub": {"office": "Office", "leader": "Leader", "member": "Shared by a member", "chief": "Chief",
                          "sermon": "With the sermon"}.get(r.get("source") or "", ""),
-            "for": gname.get(str(r.get("group_id") or ""), "") or "Whole church",
+            "for": gname.get(str(r.get("group_id") or ""), "") or ", ".join(
+                gname[str(g)] for g in ((r.get("attach") or {}).get("groups") or []) if gname.get(str(g))) or "Whole church",
             "group_id": r.get("group_id"), "status": r.get("status"),
             "scheduled": bool(_ts(r.get("publish_at")) and _ts(r.get("publish_at")) > now),
             "publish_at": r.get("publish_at"), "created_at": r.get("created_at"),
@@ -741,8 +768,10 @@ def office_view(business: Dict[str, Any]) -> Dict[str, Any]:
     chosen = {str(p["contact_id"]) for p in posters}
     pool = sorted({str(r["contact_id"]) for r in led + roles} - chosen)
     pool_people = _people(biz_id, pool) or {}
+    import news_share
     return {
         "posts": posts,
+        "shared": news_share.office_list(biz_id),
         "app_people": app_people,
         "seen_week": len({str(s["contact_id"]) for s in saw}),
         "posts_month": sum(1 for p in posts if p["status"] == "posted" and str(p.get("created_at") or "") >= (now - timedelta(days=30)).isoformat()),

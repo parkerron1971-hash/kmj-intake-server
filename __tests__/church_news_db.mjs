@@ -97,6 +97,24 @@ await db.query(`INSERT INTO church_post_reports(business_id, comment_id, reporte
 await refuses(`INSERT INTO church_post_reports(business_id, comment_id, reported_by) VALUES ($1,$2,$3)`,
   [b1, c1, tasha], /duplicate key/);
 
+// Good news a member shares (news_share.py): it waits under their own name,
+// for just their groups if they say so, with its photo; the office posts it
+// (who decided, when, and when they were told), or they take it back.
+const shared = await post({ business_id: b1, kind: 'good_news', title: 'A graduation', body: 'Imani graduated!',
+  posted_by: monique, person_id: monique, source: 'member', status: 'waiting', comments: 'on',
+  attach: JSON.stringify({ share: 'grad', groups: [women], pics: [{ path: `${b1}/news-photos/a.webp`, w: 1200, h: 900 }] }) });
+const waiting = (await db.query(`SELECT id FROM church_posts WHERE business_id=$1 AND posted_by=$2 AND source='member'
+  AND status IN ('waiting','declined') AND removed_at IS NULL`, [b1, monique])).rows;
+assert.deepEqual(waiting.map(r => r.id), [shared]); checks++;
+await db.query(`UPDATE church_posts SET status='posted', publish_at=now(), decided_at=now(), decided_by='u1', told_at=now(),
+  body='Imani is a nurse now!' WHERE id=$1 AND status IN ('waiting','declined')`, [shared]);
+const kept = (await db.query(`SELECT status, attach->'groups'->>0 AS g, attach->'pics'->0->>'path' AS p FROM church_posts WHERE id=$1`, [shared])).rows[0];
+assert.deepEqual(kept, { status: 'posted', g: women, p: `${b1}/news-photos/a.webp` }); checks++;
+const later = await post({ business_id: b1, kind: 'good_news', body: 'x', posted_by: monique, person_id: monique, source: 'member', status: 'waiting' });
+await db.query(`UPDATE church_posts SET status='removed', removed_at=now() WHERE id=$1 AND posted_by=$2 AND status IN ('waiting','declined')`, [later, monique]);
+assert.equal((await db.query('SELECT status FROM church_posts WHERE id=$1', [later])).rows[0].status, 'removed'); checks++;
+await refuses(`INSERT INTO church_posts(business_id, kind, body, source) VALUES ($1,'good_news','x','neighbor')`, [b1], /church_posts_source_check/);
+
 // Who posts to the whole church: this church's people only.
 await db.query(`INSERT INTO church_news_posters(business_id, contact_id) VALUES ($1,$2)`, [b1, monique]);
 await refuses(`INSERT INTO church_news_posters(business_id, contact_id) VALUES ($1,$2)`, [b1, elsewhere], /person is not in this business/);

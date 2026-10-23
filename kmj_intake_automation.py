@@ -395,6 +395,9 @@ app.include_router(member_portal_celebrations_router)
 # The office's celebrations: this week's, milestones, Sunday's post, stopping.
 from celebrations import router as celebrations_router
 app.include_router(celebrations_router)
+# Share good news: a member sends it (GET /my/news/share is member_portal.serve's).
+from member_portal_share import router as member_portal_share_router
+app.include_router(member_portal_share_router)
 # Classes in the church member app: one-tap join (GET /my/classes is member_portal.serve's).
 from member_portal_classes import router as member_classes_router
 app.include_router(member_classes_router)
@@ -495,6 +498,9 @@ app.include_router(church_groups_office_router)
 # comments, who posts to the whole church (church_news).
 from church_news import router as church_news_router
 app.include_router(church_news_router)
+# What members share: the owner or an admin posts it, or saves it for later (news_share).
+from news_share import router as news_share_router
+app.include_router(news_share_router)
 # Phase D.4 PR 1 — Stripe Connect OAuth + webhook receiver. Same
 # discipline: BEFORE public_site_router so /payments/* doesn't fall
 # into the subdomain catch-all.
