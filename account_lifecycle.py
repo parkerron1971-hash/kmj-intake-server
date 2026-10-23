@@ -209,7 +209,7 @@ BUSINESS_CHILD_TABLES: List[str] = [
     "live_chat", "live_mutes", "live_presence", "live_sessions",
     # Messaging: reports, staff looks, reactions, messages, people and blocks
     # before their chats; links and switches before contacts.
-    "msg_reports", "msg_staff_views", "msg_reactions", "msg_messages", "msg_participants", "msg_blocks", "msg_threads",
+    "msg_reports", "msg_staff_views", "msg_reactions", "msg_poll_votes", "msg_polls", "msg_photos", "msg_messages", "msg_participants", "msg_blocks", "msg_threads",
     "msg_guardians", "msg_members", "msg_safety_officers", "msg_member_officers",
     # Youth and Kids spaces: leaders' posts and the office's leader
     # approvals (with background-check dates); before contacts.
@@ -768,7 +768,7 @@ _IMPORT_SKIP = {
     # Messaging cites people, groups and messages by id; same reason. Safety
     # officers are team logins, not records.
     "msg_threads", "msg_participants", "msg_messages", "msg_blocks", "msg_reports", "msg_staff_views",
-    "msg_guardians", "msg_members", "msg_safety_officers", "msg_reactions",
+    "msg_guardians", "msg_members", "msg_safety_officers", "msg_reactions", "msg_polls", "msg_poll_votes", "msg_photos",
     # A member officer cites a contact by id; a restored church names its
     # officers again.
     "msg_member_officers",
