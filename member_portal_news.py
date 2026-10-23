@@ -606,18 +606,38 @@ def _row(biz: Dict[str, Any], p: Dict[str, Any]) -> str:
 
 
 def home_block(biz: Dict[str, Any], posts: Optional[List[Dict[str, Any]]], occ: Optional[List[Dict[str, Any]]],
-               open_: bool) -> str:
+               open_: bool, rights: Optional[Dict[str, Any]] = None) -> str:
     """'From the church' on Home: the pinned or newest post as a card, then
     up to three more as rows. Nothing at all when there's no news (Home
-    never says "nothing yet")."""
+    never says "nothing yet"), except to someone who posts (`rights`,
+    church_news.can_post): one row that opens Post, so a pastor at a church
+    with no news yet sees where the news will go."""
     import member_app_ui as ui
     if not posts:
-        return ""
+        return home_first(biz, rights) if posts == [] else ""
     lead, rest = posts[0], posts[1:4]
     rows = "".join(_row(biz, p) for p in rest)
     return (f'<section aria-labelledby="nw-home-h">{ui.section("From the church", "/my/news", "All news", hid="nw-home-h")}'
             f'{card(biz, lead, _occasions(occ), back="/my", open_=open_)}'
             f'{f"<div class=nw-rows>{rows}</div>" if rows else ""}</section>')
+
+
+def home_first(biz: Dict[str, Any], rights: Optional[Dict[str, Any]]) -> str:
+    """Home's 'From the church' before anything reaches me: for a poster,
+    the way to Post, drawn as one of the section's rows."""
+    import member_app_ui as ui
+    rights = rights or {}
+    groups = rights.get("groups") or []
+    if rights.get("church"):
+        title, sub = "Post the church's first news", f"Everyone at {(biz.get('name') or '').strip() or 'your church'} sees it here, on Home"
+    elif groups:
+        title, sub = "Post news for your group" if len(groups) == 1 else "Post news for your groups", "They see it here, on Home"
+    else:
+        return ""
+    row = (f'<a class="nw-row" href="/my/news/write"><span class="nw-thumb gold">{_ic("megaphone", 22)}</span>'
+           f'<span class="nw-t"><b>{_e(title)}</b><span>{_e(sub)}</span></span>{_ic("chevron", 18)}</a>')
+    return (f'<section aria-labelledby="nw-home-h">{ui.section("From the church", hid="nw-home-h")}'
+            f'<div class="nw-rows">{row}</div></section>')
 
 
 def home_bell(news: Optional[Tuple[Optional[List[Dict[str, Any]]], int]]) -> Optional[int]:
