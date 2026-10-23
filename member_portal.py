@@ -458,17 +458,19 @@ def _church_for_request(request: Request) -> Optional[Dict[str, Any]]:
         if "." not in domain:
             return None
         q = f"site_config->>custom_domain=eq.{quote(domain, safe='')}"
+    # The site and its church in one read (every member page, its icons and
+    # its service worker start here; two reads in a row were two waits).
     sites = sb_clients.sb_get_as_service(
         f"/business_sites?{q}&order=updated_at.desc&limit=1"
-        f"&select=slug,business_id,site_config") or []
+        f"&select=slug,business_id,site_config,"
+        f"business:businesses(id,name,type,settings,stripe_account_id)") or []
     if not sites or (sites[0].get("site_config") or {}).get("offline"):
         return None
-    biz = sb_clients.sb_get_as_service(
-        f"/businesses?id=eq.{quote(str(sites[0].get('business_id')), safe='')}"
-        f"&select=id,name,type,settings,stripe_account_id&limit=1") or []
-    if not biz:
+    site = dict(sites[0])
+    biz = site.pop("business", None)
+    if not isinstance(biz, dict) or not biz.get("id"):
         return None
-    return {"business": biz[0], "site": sites[0]}
+    return {"business": biz, "site": site}
 
 
 def _same_origin(request: Request) -> bool:
@@ -1054,23 +1056,37 @@ async def serve(request: Request, path: str) -> HTMLResponse:
         # Church, Youth or Kids (member_spaces): a teen is always in Youth;
         # anyone else in the space they switched to, if it's theirs.
         import member_spaces as msp
-        ctx = await asyncio.to_thread(msp.resolve, biz["id"], sess["me"], request.cookies.get(msp.COOKIE) or "")
         # A member who holds a church role (or is asked to) gets the Lead
-        # tab (member_portal_lead). The owner's preview never does.
+        # tab (member_portal_lead), in Church. The owner's preview never does.
+        # Read alongside the space, not after it: every tab waits on both.
         import church_follow_up as cfu
-        if ctx.get("space", "church") == "church" and not sess.get("preview") and cfu.is_church(biz):
-            mine = await asyncio.to_thread(cfu.roles_for, biz["id"], str(sess["me"]["id"]))
-            # A group's leaders too: their group lives on the Lead tab (group_lead).
-            if not mine:
-                import group_lead
-                mine = await asyncio.to_thread(group_lead.led_groups, biz["id"], str(sess["me"]["id"]))
-            ctx = dict(ctx, lead=bool(mine))
+        may_lead = not sess.get("preview") and cfu.is_church(biz) and not msp.is_youth(sess["me"])
+        ctx, lead = await asyncio.gather(
+            msp.resolve_async(biz["id"], sess["me"], request.cookies.get(msp.COOKIE) or ""),
+            _leads(biz["id"], str(sess["me"]["id"])) if may_lead else _nothing())
+        if may_lead and ctx.get("space", "church") == "church":
+            ctx = dict(ctx, lead=lead)
         msp.CURRENT.set(ctx)
     resp = await _serve_page(request, church, sess, sub)
     if sess and sess.get("preview") and isinstance(resp, HTMLResponse):
         import member_portal_preview as pv
         resp = _page(pv.mark(resp.body.decode("utf-8"), (sess["me"] or {}).get("name") or ""), resp.status_code)
     return resp
+
+
+async def _nothing():
+    return None
+
+
+async def _leads(business_id: str, me_id: str) -> bool:
+    """Whether this member gets the Lead tab: a church role, held or asked
+    (church_follow_up), or a group they lead (group_lead: their group lives
+    on the Lead tab). Both read at once."""
+    import church_follow_up as cfu
+    import group_lead
+    roles, led = await asyncio.gather(asyncio.to_thread(cfu.roles_for, business_id, me_id),
+                                      asyncio.to_thread(group_lead.led_groups, business_id, me_id))
+    return bool(roles) or bool(led)
 
 
 def _open_preview(request: Request, biz: Dict[str, Any], site) -> HTMLResponse:
@@ -1192,10 +1208,12 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
         return _page(html, status)
     if sub == "/my/groups":
         import member_portal_messaging as mpm
-        data = fill(await asyncio.to_thread(mpc.groups_for, biz["id"], me), "groups")
-        # The All group leaders room's door, for the people in it.
-        room = (await asyncio.to_thread(mpm.in_leaders_room, biz["id"], str(me["id"]))
-                if data is not None and mpm.turned_on(biz) else False)
+        # The All group leaders room's door, for the people in it, read
+        # alongside the groups (render_groups shows it only when they loaded).
+        data, room = await asyncio.gather(
+            asyncio.to_thread(mpc.groups_for, biz["id"], me),
+            asyncio.to_thread(mpm.in_leaders_room, biz["id"], str(me["id"])) if mpm.turned_on(biz) else _nothing())
+        data = fill(data, "groups")
         return _page(mpc.render_groups(biz, site, request, data, who=me, room=bool(room)))
     # A group's own page (member_portal_groups): Home, Board, People. The
     # owner's preview reads it as the member they chose; nothing saves.
@@ -1282,20 +1300,21 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
         return await mpb.serve(request, biz, site, me, sub, preview=preview)
     # Sermons, inside the app (member_portal_sermons.py).
     if sub == "/my/sermons" or sub.startswith("/my/sermons/"):
-        lib = fill(await asyncio.to_thread(mps.load_library, biz["id"]), "library")
         rest = sub[len("/my/sermons"):].strip("/")
         import member_portal_bible as mpb
         if not rest:
             series = str(request.query_params.get("series") or "")
-            # Watch leads with live, or the next gathering.
+            # Watch leads with live, or the next gathering: all three at once.
             import live_router as lr
-            live, occ = await asyncio.gather(asyncio.to_thread(lr.current, biz["id"]),
-                                             asyncio.to_thread(mpc.upcoming_for, biz["id"], me))
-            occ = fill(occ, "occasions")
+            lib, live, occ = await asyncio.gather(asyncio.to_thread(mps.load_library, biz["id"]),
+                                                  asyncio.to_thread(lr.current, biz["id"]),
+                                                  asyncio.to_thread(mpc.upcoming_for, biz["id"], me))
+            lib, occ = fill(lib, "library"), fill(occ, "occasions")
             return _page(mps.render_library(biz, site, me, lib, series if UUID_RE.match(series) else "",
                                             bible=mpb.prefs(request)[0], live=live or None,
                                             next_occ=(occ or [None])[0]),
                          200 if lib is not None else 503)
+        lib = fill(await asyncio.to_thread(mps.load_library, biz["id"]), "library")
         page = (mps.render_sermon(biz, site, me, lib, rest, give_url, bible=mpb.prefs(request)[0])
                 if UUID_RE.match(rest) else None)
         if page is None:
@@ -1330,46 +1349,52 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
     if sub != "/my":
         return RedirectResponse("/my", status_code=303, headers=_SECURE_HEADERS)
     import live_router as lr
-    occ, groups, lib, live = await asyncio.gather(
+    import member_portal_devotionals as mpd
+    import member_spaces as msp
+    import church_follow_up as cfu
+    ctx = msp.CURRENT.get() or {}
+    space = ctx.get("space")
+    today = rp.today_for(biz)
+
+    async def checkin_card() -> str:
+        # While Sunday check-in is open its card leads Home (church_checkin).
+        import church_checkin as cc
+        import member_portal_checkin as mpk
+        try:
+            return mpk.home_card(await asyncio.to_thread(cc.card, biz, me), request)
+        except Exception:
+            logger.warning("member home: check-in card skipped", exc_info=True)
+            return ""
+    # Everything Home shows, read at once (one after another, these were
+    # most of the wait on every visit to Home).
+    occ, groups, lib, live, done, extras, checkin, posts = await asyncio.gather(
         asyncio.to_thread(mpc.upcoming_for, biz["id"], me),
         asyncio.to_thread(mpc.groups_for, biz["id"], me),
         asyncio.to_thread(mps.load_library, biz["id"]),
-        asyncio.to_thread(lr.current, biz["id"]))
-    today = rp.today_for(biz)
-    done = (await asyncio.to_thread(rp.read_days, biz["id"], me["id"], rp.current(biz))
-            if today else None)
+        asyncio.to_thread(lr.current, biz["id"]),
+        asyncio.to_thread(rp.read_days, biz["id"], me["id"], rp.current(biz)) if today else _nothing(),
+        # Today's devotional, and a reading plan of the member's own when
+        # the church has none running (member_portal_devotionals).
+        mpd.home_extras(biz, me, preview=preview, church_reading=bool(today)),
+        checkin_card() if space not in ("kids", "youth") and cfu.is_church(biz) else _nothing(),
+        asyncio.to_thread(msp.posts, biz["id"], "youth") if space == "youth" else _nothing())
     occ, groups, lib = fill(occ, "occasions"), fill(groups, "groups"), fill(lib, "library")
-    # Today's devotional, and a reading plan of the member's own when the
-    # church has none running (member_portal_devotionals).
-    import member_portal_devotionals as mpd
-    devotional, own, own_done = await mpd.home_extras(biz, me, preview=preview, church_reading=bool(today))
+    devotional, own, own_done = extras
     if own and not today:
         today, done = own, own_done
     if preview and not today:
         today, done = samples.plan_today(), set()
     import member_portal_bible as mpb
     bible, where = mpb.prefs(request)
-    import member_spaces as msp
-    ctx = msp.CURRENT.get() or {}
-    if ctx.get("space") == "kids":
+    if space == "kids":
         import member_spaces_kids as mk
         return await mk.home(request, church, me, occ, mpc._flash(request) or mpr._flash(request))
-    if ctx.get("space") == "youth":
-        posts = await asyncio.to_thread(msp.posts, biz["id"], "youth")
+    if space == "youth":
         return _page(msp.render_youth_home(
             biz, site, me=me, occasions=occ, groups=groups, youth_posts=posts,
             reading=mpr.home_card(today, done), bible=bible, leader=(ctx.get("leader") or {}).get("youth"),
             flash=mpc._flash(request) or mpr._flash(request)))
-    # While Sunday check-in is open its card leads Home (church_checkin).
-    checkin = ""
-    import church_follow_up as cfu
-    if cfu.is_church(biz):
-        import church_checkin as cc
-        import member_portal_checkin as mpk
-        try:
-            checkin = mpk.home_card(await asyncio.to_thread(cc.card, biz, me), request)
-        except Exception:
-            logger.warning("member home: check-in card skipped", exc_info=True)
+    checkin = checkin or ""
     return _page(render_home(biz, site, me=me, occasions=occ, groups=groups, library=lib,
                              give_url=give_url, flash=mpc._flash(request) or mpr._flash(request),
                              live=live, reading=mpr.today_row(today, done), bible=bible, where=where,
