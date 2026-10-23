@@ -117,6 +117,10 @@ DONE = {
     "pinned": "Pinned to the top.",
     "unpinned": "Unpinned.",
     "names_full": "The group shows full names now.",
+    "extras_on": "Polls are on in the group's chat.",
+    "extras_off": "Polls are off in the group's chat.",
+    "voted": "Your vote is in.",
+    "unvoted": "Your vote is taken back.",
     "names_first": "The group shows first names now.",
     "hidden": "Taken down. The church's safety officers will look at it.",
 }
@@ -160,6 +164,8 @@ ERRORS = {
     "study_gone": "That study isn't here any more.",
     "later_bad": "Pick a time from 5 minutes to 30 days from now.",
     "post_gone": "That post isn't on the Board any more.",
+    "notes_off": "Notes go through member messaging, and it's off at your church right now.",
+    "notes_none": "Everyone has been coming lately. Nobody needs a note right now.",
     "study_empty": "Keep at least one question.",
     "not_kids_leader": "Only Kids leaders the church office approved can do that.",
     "lesson_incomplete": "Add a title and what they learned.",
@@ -191,6 +197,11 @@ ERRORS = {
     "answered": "Someone already answered that request.",
     "group_board_only": "This group uses its Board only, so its chat is closed.",
     "leaders_write": "Only the group's leaders write in this chat. You can still react.",
+    "poll_choices": "A poll needs at least two different choices.",
+    "poll_where": "Polls are for group chats.",
+    "polls_off": "This group's leaders have turned polls off.",
+    "poll_closed": "Voting on that poll has closed.",
+    "poll_gone": "That poll isn't there any more.",
     "alert_used": "You've already sent an after-hours alert tonight. Turn it off to send this; it reaches phones in the morning.",
 }
 
