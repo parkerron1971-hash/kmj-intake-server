@@ -146,11 +146,18 @@ KINDS = ("role", "team")
 def guess_area(text: str) -> Optional[Tuple[str, str]]:
     """The area the words in a title or a team's name point to, and the word
     that decided it. None when they say nothing."""
-    t = (text or "").casefold()
+    t = (text or "").lower()
     for area, rx in _AREA_WORDS:
         m = re.search(rx, t)
         if m:
-            return area, m.group(0).strip()
+            # The whole word the pattern landed in ("treasurer", not "treasur"):
+            # the page quotes it back to the church.
+            start, end = m.start(), m.end()
+            while start > 0 and t[start - 1].isalnum():
+                start -= 1
+            while end < len(t) and t[end].isalnum():
+                end += 1
+            return area, t[start:end].strip()
     return None
 
 

@@ -113,6 +113,13 @@ def test_words_place_a_title_or_a_team(text, area):
     assert ca.guess_area(text)[0] == area
 
 
+def test_the_guess_quotes_the_whole_word_it_read():
+    assert ca.guess_area("Treasurer") == ("giving_money", "treasurer")
+    assert ca.guess_area("Sound and A/V") == ("worship_media", "sound")
+    assert ca.place_role({"key": "treasurer", "title": "Church Treasurer", "job": "office"}, {})["why"] == \
+        "Chief's guess, from “treasurer”"
+
+
 @pytest.mark.parametrize("text", ["Armor Bearers", "Discount table", "Heart of the house", "Dance ministry"])
 def test_words_that_say_nothing_place_nothing(text):
     assert ca.guess_area(text) is None
