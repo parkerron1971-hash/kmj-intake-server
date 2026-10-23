@@ -165,6 +165,9 @@ _LIMITS: Dict[str, Tuple[int, int]] = {
     # Chief's notes from a group leader to people who've been missing
     # (group_care), per leader. Strict.
     "care_notes": (int(os.environ.get("RL_CARE_NOTES_PER_HOUR", "6")), 3600),
+    # Photos in a group's chat (chat_photos), per member: each one is
+    # looked at by a model before it's kept. Strict.
+    "chat_photos": (int(os.environ.get("RL_CHAT_PHOTOS_PER_HOUR", "20")), 3600),
     # Live chat, per member; "I'm here" rides member_action.
     "live_chat": (int(os.environ.get("RL_LIVE_CHAT_PER_MIN", "8")), 60),
     # Homework handed in as a file, by the class link (academy_work.py):
