@@ -120,6 +120,7 @@ a{color:#F5F6F8}a:hover{color:#FDBA74}
 .lv-stage{flex:1.65;min-width:0;display:flex;flex-direction:column;gap:10px}
 .lv-slide{position:relative;aspect-ratio:16/9;border-radius:12px;overflow:hidden;background:radial-gradient(80% 90% at 92% 0%,rgba(249,115,22,.42) 0%,transparent 60%),linear-gradient(160deg,#16213D,#0B1022);padding:20px 22px;display:flex;flex-direction:column;justify-content:center;gap:10px;font-family:'Inter Tight',sans-serif}
 .lv-cam{position:absolute;right:10px;bottom:10px;width:17%;aspect-ratio:4/3;border-radius:9px;background:linear-gradient(140deg,#2F6BEA,#13275C);display:grid;place-items:center;font:700 15px/1 'Inter',sans-serif;color:#FFFFFF;box-shadow:0 0 0 2px rgba(255,255,255,.18)}
+.lv-cam-on{width:27%;overflow:hidden;background:#13275C}.lv-cam-on img{position:absolute;left:0;top:0;width:100%;height:100%;object-fit:cover;object-position:50% 26%}.lv-cam-on em{position:absolute;left:6px;bottom:5px;font:600 9.5px/1 'Inter',sans-serif;font-style:normal;padding:3px 6px;border-radius:6px;background:rgba(0,0,0,.55);color:#FFFFFF}
 .lv-side{flex:1;min-width:0;display:flex;flex-direction:column;gap:8px}
 .lv-tabs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:3px;padding:3px;border-radius:10px;background:#13151C;font-size:11px;font-weight:600;text-align:center}
 .lv-tabs span{padding:6px 0;border-radius:8px;color:#8D93A1}
@@ -160,6 +161,7 @@ a{color:#F5F6F8}a:hover{color:#FDBA74}
 </style>
 <style>
 {{COACH_CSS}}
+.mc-strip a{color:#F5F6F8;font-weight:600;text-decoration:underline;text-underline-offset:4px;white-space:nowrap}
 </style>
 {{PIXEL}}
 </head>
@@ -269,7 +271,7 @@ a{color:#F5F6F8}a:hover{color:#FDBA74}
 <div class="ow-card" style="flex: 1.5; gap: 2px">
 <span class="ow-k" style="color: #8D93A1; padding-bottom: 3px">Your classes</span>
 <div class="ow-row" style="border-top: 0; font-size: 6.5px; color: #8D93A1; padding: 3px 0 2px"><span style="flex: 1">Class</span><span style="width: 40px; text-align: right">Students</span><span style="width: 58px; text-align: right">Status</span></div>
-<div class="ow-row"><span style="flex: 1; min-width: 0; display: flex; flex-direction: column"><b style="font-weight: 600; color: #F5F6F8">Leading Through Change</b><span style="font-size: 7px; color: #8D93A1">Tuesdays 7 PM, since Oct 21 · 6 weeks</span></span><span class="mono" style="width: 40px; text-align: right">14</span><span style="width: 58px; text-align: right"><span class="ow-pill" style="background: rgba(249,115,22,0.2); color: #FDBA74">Live tonight</span></span></div>
+<div class="ow-row"><span style="flex: 1; min-width: 0; display: flex; flex-direction: column"><b style="font-weight: 600; color: #F5F6F8">Leading Through Change</b><span style="font-size: 7px; color: #8D93A1">Tuesdays 7 PM, since Oct 20 · 6 weeks</span></span><span class="mono" style="width: 40px; text-align: right">14</span><span style="width: 58px; text-align: right"><span class="ow-pill" style="background: rgba(249,115,22,0.2); color: #FDBA74">Live tonight</span></span></div>
 <div class="ow-row"><span style="flex: 1; min-width: 0; display: flex; flex-direction: column"><b style="font-weight: 600; color: #F5F6F8">Henderson Co. Manager Training</b><span style="font-size: 7px; color: #8D93A1">In their office and online · 4 sessions</span></span><span class="mono" style="width: 40px; text-align: right">22</span><span style="width: 58px; text-align: right"><span class="ow-pill" style="background: rgba(34,197,94,0.16); color: #86EFAC">Published</span></span></div>
 <div class="ow-row"><span style="flex: 1; min-width: 0; display: flex; flex-direction: column"><b style="font-weight: 600; color: #F5F6F8">The First 90 Days</b><span style="font-size: 7px; color: #8D93A1">Free · Wednesdays 12 PM, from Nov 4</span></span><span class="mono" style="width: 40px; text-align: right">37</span><span style="width: 58px; text-align: right"><span class="ow-pill" style="background: rgba(34,197,94,0.16); color: #86EFAC">Published</span></span></div>
 <div class="ow-row"><span style="flex: 1; min-width: 0; display: flex; flex-direction: column"><b style="font-weight: 600; color: #F5F6F8">Money Habits for Family Firms</b><span style="font-size: 7px; color: #8D93A1">5 lessons drafted by Chief</span></span><span class="mono" style="width: 40px; text-align: right">·</span><span style="width: 58px; text-align: right"><span class="ow-pill" style="background: #222533; color: #C9CDD6">Draft</span></span></div>
@@ -495,9 +497,9 @@ a{color:#F5F6F8}a:hover{color:#FDBA74}
 </div>
 <div class="cal flat" style="position: absolute; right: 2%; bottom: 20px; width: 50%; max-width: 310px" aria-label="Sample of the class on a student's own calendar">
 <div style="display: flex; justify-content: space-between; align-items: baseline; padding: 13px 14px 9px"><b style="font-size: 14px">November</b><span style="font-size: 11.5px; color: #5C6070">From your class link</span></div>
-<div class="cal-r"><span class="cal-d"><small>TUE</small><b>4</b></span><span style="display: flex; flex-direction: column"><b style="font-size: 13px">Leading Through Change</b><span style="font-size: 11.5px; color: #5C6070">7:00 PM · week 3, live</span></span></div>
-<div class="cal-r"><span class="cal-d"><small>MON</small><b>10</b></span><span style="display: flex; flex-direction: column"><b style="font-size: 13px">Homework due</b><span style="font-size: 11.5px; color: #5C6070">The first two minutes</span></span></div>
-<div class="cal-r"><span class="cal-d"><small>TUE</small><b>11</b></span><span style="display: flex; flex-direction: column"><b style="font-size: 13px">Leading Through Change</b><span style="font-size: 11.5px; color: #5C6070">7:00 PM · week 4, live</span></span></div>
+<div class="cal-r"><span class="cal-d"><small>TUE</small><b>3</b></span><span style="display: flex; flex-direction: column"><b style="font-size: 13px">Leading Through Change</b><span style="font-size: 11.5px; color: #5C6070">7:00 PM · week 3, live</span></span></div>
+<div class="cal-r"><span class="cal-d"><small>MON</small><b>9</b></span><span style="display: flex; flex-direction: column"><b style="font-size: 13px">Homework due</b><span style="font-size: 11.5px; color: #5C6070">The first two minutes</span></span></div>
+<div class="cal-r"><span class="cal-d"><small>TUE</small><b>10</b></span><span style="display: flex; flex-direction: column"><b style="font-size: 13px">Leading Through Change</b><span style="font-size: 11.5px; color: #5C6070">7:00 PM · week 4, live</span></span></div>
 </div>
 </div>
 </div>
@@ -534,8 +536,8 @@ a{color:#F5F6F8}a:hover{color:#FDBA74}
 <div class="lv-slide">
 <span class="mono" style="font-size: 10px; letter-spacing: 0.16em; text-transform: uppercase; color: #FDBA74">Question</span>
 <b style="font-weight: 600; font-size: clamp(17px, 1.9vw, 25px); line-height: 1.12; letter-spacing: -0.02em; color: #FFFFFF; max-width: 78%">What's one conversation you've been putting off?</b>
-<span style="align-self: flex-start; max-width: 66%; padding: 9px 12px; border-radius: 10px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); font-size: 12px; line-height: 1.4; color: #F5F6F8">"Waiting for the right moment means it never comes."</span>
-<span class="lv-cam" aria-hidden="true">DR</span>
+<span style="align-self: flex-start; max-width: 58%; padding: 9px 12px; border-radius: 10px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); font-size: 12px; line-height: 1.4; color: #F5F6F8">"Waiting for the right moment means it never comes."</span>
+<span class="lv-cam lv-cam-on"><img src="/assets/home/p-maya.jpg" alt="The teacher, on camera"><em>You</em></span>
 </div>
 <div style="display: flex; justify-content: space-between; align-items: baseline"><b style="font-size: 12px; color: #F5F6F8">12 answers</b><span style="font-size: 10.5px; color: #8D93A1">Only you see names</span></div>
 <div class="lv-ans on"><p><small>Priya Shah · on screen, no name</small>Waiting for the right moment means it never comes.</p></div>
@@ -565,6 +567,17 @@ a{color:#F5F6F8}a:hover{color:#FDBA74}
 </div>
 </section>
 
+<!-- CHIEF, EVERY ROOM -->
+<section style="background: #07080B; border-top: 1px solid #12141B">
+<div class="wrap" style="padding-top: 40px; padding-bottom: 8px">
+<div class="mc-strip" style="display: flex; flex-wrap: wrap; align-items: center; gap: 14px 22px; padding: 22px 26px; border-radius: 22px; background: #0D0F14; border: 1px solid #1F2330">
+<span style="width: 36px; height: 36px; border-radius: 50%; background: linear-gradient(135deg, #E040FB, #7C5CFF 55%, #22D3EE); flex: none"></span>
+<p style="margin: 0; flex: 1 1 420px; font-size: 16px; line-height: 1.55; color: #C9CDD6"><b style="color: #F5F6F8; font-weight: 600">Chief works the same way in every room.</b> It works from your practice's own records, waits for your yes before it sends anything or touches money, and lists what it does on your History page.</p>
+<a href="/coaches#chief">How Chief works</a>
+</div>
+</div>
+</section>
+<!-- /CHIEF, EVERY ROOM -->
 <!-- THE ROOMS NEXT DOOR -->
 <section class="sec" style="background: #07080B; padding-top: 40px; border-top: 1px solid #12141B">
 <div class="wrap" style="display: flex; flex-direction: column; gap: 32px">

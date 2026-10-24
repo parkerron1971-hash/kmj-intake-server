@@ -340,6 +340,27 @@ footer nav a:hover{text-decoration-color:#C9CDD6 !important}
 }
 .bt[aria-pressed="true"]{background:#FFFFFF;color:#0B0C11;box-shadow:0 2px 8px rgba(11,12,17,.12)}
 .bt[aria-pressed="false"]{background:transparent;color:#5A5E6B}
+/* meet chief */
+.mc-aur{position:absolute;inset:0;pointer-events:none}
+.mc-aur i{position:absolute;border-radius:50%;mix-blend-mode:screen}
+.mc-aur i:nth-child(1){width:60vw;height:60vw;left:-20vw;top:-26vw;background:radial-gradient(closest-side,rgba(224,64,251,.16),transparent 72%)}
+.mc-aur i:nth-child(2){width:52vw;height:52vw;right:-16vw;bottom:-24vw;background:radial-gradient(closest-side,rgba(34,211,238,.13),transparent 70%)}
+.mc-glint{background:linear-gradient(100deg,#F0ABFC 0%,#FFFFFF 22%,#A78BFA 48%,#67E8F9 74%,#FFFFFF 100%);background-size:220% 100%;-webkit-background-clip:text;background-clip:text;color:transparent;animation:glint 8s linear infinite}
+.mc-top{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:flex-end;gap:20px 48px}
+.mc-body{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px;align-items:stretch}
+.mc-four{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+.mc-pt{display:flex;flex-direction:column;gap:12px;padding:24px;border-radius:22px;background:#0D0F14;border:1px solid #1F2330}
+.mc-pt b{font-family:'Inter Tight',sans-serif;font-size:19px;font-weight:600;letter-spacing:-.01em;line-height:1.25;color:#F5F6F8}
+.mc-pt>span{font-size:15px;line-height:1.55;color:#A9AEB9}
+.mc-bub{align-self:flex-end;max-width:88%;padding:10px 14px;border-radius:16px 16px 4px 16px;background:#1A1D26;border:1px solid #2A2E3A;font-size:15px;line-height:1.45;color:#F5F6F8;display:flex;align-items:center;gap:10px}
+.mc-wave{display:inline-flex;align-items:center;gap:2px;height:16px;flex:none}
+.mc-wave i{width:3px;border-radius:2px;background:#C9BCFF}
+.mc-foot{margin:0;font-size:15px;line-height:1.6;color:#959BA8;max-width:860px}
+.mc-foot a,.mc-strip a{color:#F5F6F8;font-weight:600;text-decoration:underline;text-underline-offset:4px}
+@media (max-width:980px){.mc-body{grid-template-columns:minmax(0,1fr)}}
+@media (max-width:620px){.mc-four{grid-template-columns:minmax(0,1fr)}.mc-pad{padding-top:88px !important;padding-bottom:88px !important}}
+@media (prefers-reduced-motion: reduce){.mc-glint{animation:none}}
+/* /meet chief */
 </style>
 {{PIXEL}}
 </head>
@@ -381,6 +402,7 @@ footer nav a:hover{text-decoration-color:#C9CDD6 !important}
 </a>
 <nav aria-label="Churches" style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px 28px; font-size: 15px; font-weight: 500">
 <details class="pmenu"><summary>Products<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#E4E6EB" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg></summary><div class="pmenu-panel"><a href="/churches" aria-current="page"><i style="background: linear-gradient(135deg, #E040FB, #7C5CFF 55%, #22D3EE)"></i><b>Overview</b><span>Every part of church life</span></a><a href="/churches/people-and-care"><i style="background: #14B8A6"></i><b>People and Care</b><span>Shepherds, guests and prayer</span></a><a href="/churches/giving"><i style="background: #22C55E"></i><b>Giving</b><span>Your own Stripe, statements in January</span></a><a href="/churches/kids-and-youth"><i style="background: #F97316"></i><b>Kids and Youth</b><span>Check-in, tags and safe pickup</span></a><a href="/churches/groups-and-classes"><i style="background: #3B82F6"></i><b>Groups and Classes</b><span>Chats, prayer walls and this week's study</span></a><a href="/churches/member-app"><i style="background: #EC4899"></i><b>Member App</b><span>The church in every pocket</span></a><a href="/churches/website-and-sermons"><i style="background: #EAB308"></i><b>Website and Sermons</b><span>Your front door, always open</span></a><a href="/churches/office-and-books"><i style="background: #94A3B8"></i><b>Office and Books</b><span>The books, and who sees giving</span></a></div></details>
+<a href="#chief" style="text-decoration: none; color: #E4E6EB">Chief</a>
 <a href="#app" style="text-decoration: none; color: #E4E6EB">Member app</a>
 <a href="#pricing" style="text-decoration: none; color: #E4E6EB">Pricing</a>
 <a href="/start" style="background: #F5F6F8; color: #07080B; text-decoration: none; padding: 11px 20px; border-radius: 999px; font-weight: 600">Start free</a>
@@ -445,7 +467,7 @@ footer nav a:hover{text-decoration-color:#C9CDD6 !important}
 </div>
 <div class="ow-main">
 <div style="display: flex; justify-content: space-between; align-items: flex-end; gap: 8px">
-<div style="display: flex; flex-direction: column; gap: 3px"><span class="ow-k" style="color: #5F6672">Sunday, October 26</span><span style="font: 600 13px/1 'Inter Tight', sans-serif; color: #F5F6F8; letter-spacing: -0.02em">Good morning, Pastor James</span></div>
+<div style="display: flex; flex-direction: column; gap: 3px"><span class="ow-k" style="color: #5F6672">Sunday, October 25</span><span style="font: 600 13px/1 'Inter Tight', sans-serif; color: #F5F6F8; letter-spacing: -0.02em">Good morning, Pastor James</span></div>
 <span style="display: flex; align-items: center; gap: 4px; font-size: 7.5px; color: #FFB4B6; padding: 3px 7px; border-radius: 999px; background: rgba(255,59,48,0.14)"><span style="width: 5px; height: 5px; border-radius: 50%; background: #FF3B30"></span>11:00 service is live</span>
 </div>
 <div style="position: relative; border-radius: 9px; padding: 1px; background: linear-gradient(110deg, rgba(224,64,251,0.7), rgba(124,92,255,0.35) 40%, rgba(34,211,238,0.6))">
@@ -495,7 +517,7 @@ footer nav a:hover{text-decoration-color:#C9CDD6 !important}
 <div style="background: #fff; border-radius: 9px; box-shadow: 0 6px 14px rgba(43,29,14,0.14); border-left: 5px solid #f28c28; padding: 7px 8px; display: flex; flex-direction: column; gap: 2px; transform: rotate(-2deg)">
 <b style="font-size: 11px; font-weight: 800; letter-spacing: -0.02em">MAYA BROOKS</b>
 <span style="font-size: 7px; color: #65533f">Big Kids · Room 3</span>
-<span style="font-size: 7px; color: #65533f">Sun, Oct 26 · 11:00</span>
+<span style="font-size: 7px; color: #65533f">Sun, Oct 25 · 11:00</span>
 <span style="margin-top: 3px; padding-top: 3px; border-top: 1px dashed #f1e3c7; font-size: 6.5px; color: #7a6650">Pickup: Tom or Lisa Brooks</span>
 </div>
 <span style="font-size: 7px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #7a6650; margin-top: 2px">Rooms now</span>
@@ -579,6 +601,43 @@ footer nav a:hover{text-decoration-color:#C9CDD6 !important}
 </div>
 </section>
 
+<!-- MEET CHIEF -->
+<section id="chief" style="position: relative; background: #050507; border-top: 1px solid #12141B; overflow: hidden">
+<div class="mc-aur" aria-hidden="true"><i></i><i></i></div>
+<div class="mc-pad" style="position: relative; max-width: 1240px; margin: 0 auto; padding: 120px 32px; display: flex; flex-direction: column; gap: 56px">
+<div class="mc-top">
+<div style="display: flex; flex-direction: column; gap: 18px; max-width: 700px">
+<p class="eyebrow" style="margin: 0; color: #C9BCFF">Meet Chief</p>
+<h2 style="margin: 0; font-family: 'Inter Tight', sans-serif; font-weight: 600; font-size: clamp(38px, 4.6vw, 64px); line-height: 1; letter-spacing: -0.04em">A chief of staff for your church. <span class="serif mc-glint" style="font-size: 1.1em">It's called Chief.</span></h2>
+</div>
+<p style="margin: 0; font-size: 18px; line-height: 1.6; color: #A9AEB9; max-width: 420px">Chief is the AI built into Solutionist. It works from your church's own records, your people, Sundays, giving and groups, and tells you when it can't confirm something. People make the calls that matter.</p>
+</div>
+<div class="mc-body">
+<div role="group" aria-label="A sample conversation with Chief" style="background: rgba(13,15,20,0.96); color: #F5F6F8; border: 1px solid #2A2E3A; border-radius: 24px; padding: 22px; display: flex; flex-direction: column; gap: 14px; box-shadow: 0 50px 100px -30px rgba(40,20,120,0.7)">
+<div style="display: flex; align-items: center; gap: 10px"><span style="width: 30px; height: 30px; border-radius: 50%; background: linear-gradient(135deg, #E040FB, #7C5CFF 55%, #22D3EE); flex: none"></span><span style="display: flex; flex-direction: column"><b style="font-size: 14px; font-weight: 600">Chief</b><span style="font-size: 12px; color: #959BA8">Grace Fellowship · sample</span></span><span style="margin-left: auto; font-size: 12px; color: #6B7080; white-space: nowrap">Monday, 8:40 AM</span></div>
+<span class="mc-bub"><span class="mc-wave" aria-hidden="true"><i style="height: 5px"></i><i style="height: 11px"></i><i style="height: 16px"></i><i style="height: 9px"></i><i style="height: 13px"></i><i style="height: 6px"></i><i style="height: 10px"></i><i style="height: 4px"></i></span><span>What needs me this week?</span></span>
+<span style="align-self: flex-end; margin-top: -8px; font-size: 11px; color: #6B7080">Said out loud, on a call from the phone</span>
+<div style="display: flex; flex-direction: column; gap: 6px; font-size: 15px; line-height: 1.5">
+<span class="line" style="animation-delay: 0.3s">Three things.</span>
+<span class="line" style="animation-delay: 1.4s">The Brooks family has missed three Sundays, and Elder Mark has them.</span>
+<span class="line" style="animation-delay: 2.5s">Two first-time guests from Sunday haven't heard from anyone yet.</span>
+<span class="line" style="animation-delay: 3.6s">And 3 bank rows are waiting for a category.</span>
+</div>
+<span class="mc-bub line" style="animation-delay: 4.7s">Draft a welcome note to both guests.</span>
+<span class="line" style="animation-delay: 5.8s; font-size: 15px; line-height: 1.5">Drafted. They wait for you, and nothing goes out until you send them.<span class="caret"></span></span>
+<div style="display: flex; flex-wrap: wrap; gap: 8px"><button type="button" style="font-family: inherit; font-size: 13px; font-weight: 600; padding: 9px 16px; border-radius: 999px; border: 0; background: #F5F6F8; color: #07080B">Read the notes</button><button type="button" style="font-family: inherit; font-size: 13px; font-weight: 600; padding: 9px 16px; border-radius: 999px; border: 1px solid #2A2E3A; background: transparent; color: #F5F6F8">Not now</button></div>
+</div>
+<div class="mc-four">
+<div class="mc-pt"><svg width="40" height="40" viewBox="0 0 48 48" aria-hidden="true"><defs><clipPath id="mct1"><rect width="48" height="48" rx="12"></rect></clipPath></defs><g clip-path="url(#mct1)" stroke="rgba(255,255,255,0.55)" stroke-width="1.1" stroke-linejoin="round"><polygon points="0,0 28,0 17,21 0,15" fill="#E040FB"></polygon><polygon points="28,0 48,0 48,19 17,21" fill="#22D3EE"></polygon><polygon points="0,15 17,21 9,48 0,48" fill="#7C5CFF"></polygon><polygon points="17,21 48,19 48,48 9,48" fill="#A78BFA"></polygon><polygon points="17,21 33,31 24,48 9,48" fill="#5B3FE0" fill-opacity="0.6"></polygon></g><g transform="translate(12 12)" fill="none" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="8.5" y="2" width="7" height="12" rx="3.5"></rect><path d="M5 11a7 7 0 0 0 14 0"></path><path d="M12 18v4"></path></g></svg><b>Type it or say it</b><span>Type a question, or tap call and talk it through out loud. It's the same Chief on your phone and your computer.</span></div>
+<div class="mc-pt"><svg width="40" height="40" viewBox="0 0 48 48" aria-hidden="true"><defs><clipPath id="mct2"><rect width="48" height="48" rx="12"></rect></clipPath></defs><g clip-path="url(#mct2)" stroke="rgba(255,255,255,0.55)" stroke-width="1.1" stroke-linejoin="round"><polygon points="0,0 28,0 17,21 0,15" fill="#E040FB"></polygon><polygon points="28,0 48,0 48,19 17,21" fill="#22D3EE"></polygon><polygon points="0,15 17,21 9,48 0,48" fill="#7C5CFF"></polygon><polygon points="17,21 48,19 48,48 9,48" fill="#A78BFA"></polygon><polygon points="17,21 33,31 24,48 9,48" fill="#5B3FE0" fill-opacity="0.6"></polygon></g><g transform="translate(12 12)" fill="none" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path></g></svg><b>Ready each morning</b><span>Each morning Chief notes what's waiting for you: drafts to read, people to get back to, what's on today. Churches with shepherds also get a Monday note about families who have missed three Sundays.</span></div>
+<div class="mc-pt"><svg width="40" height="40" viewBox="0 0 48 48" aria-hidden="true"><defs><clipPath id="mct3"><rect width="48" height="48" rx="12"></rect></clipPath></defs><g clip-path="url(#mct3)" stroke="rgba(255,255,255,0.55)" stroke-width="1.1" stroke-linejoin="round"><polygon points="0,0 28,0 17,21 0,15" fill="#E040FB"></polygon><polygon points="28,0 48,0 48,19 17,21" fill="#22D3EE"></polygon><polygon points="0,15 17,21 9,48 0,48" fill="#7C5CFF"></polygon><polygon points="17,21 48,19 48,48 9,48" fill="#A78BFA"></polygon><polygon points="17,21 33,31 24,48 9,48" fill="#5B3FE0" fill-opacity="0.6"></polygon></g><g transform="translate(12 12)" fill="none" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 11V6a2 2 0 0 0-4 0v5"></path><path d="M14 10V4a2 2 0 0 0-4 0v2"></path><path d="M10 10.5V6a2 2 0 0 0-4 0v8"></path><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"></path></g></svg><b>Your yes comes first</b><span>What Chief sends to your people, and anything it does with money, waits for your yes. It takes a kind of task on itself only after you tell it it may.</span></div>
+<div class="mc-pt"><svg width="40" height="40" viewBox="0 0 48 48" aria-hidden="true"><defs><clipPath id="mct4"><rect width="48" height="48" rx="12"></rect></clipPath></defs><g clip-path="url(#mct4)" stroke="rgba(255,255,255,0.55)" stroke-width="1.1" stroke-linejoin="round"><polygon points="0,0 28,0 17,21 0,15" fill="#E040FB"></polygon><polygon points="28,0 48,0 48,19 17,21" fill="#22D3EE"></polygon><polygon points="0,15 17,21 9,48 0,48" fill="#7C5CFF"></polygon><polygon points="17,21 48,19 48,48 9,48" fill="#A78BFA"></polygon><polygon points="17,21 33,31 24,48 9,48" fill="#5B3FE0" fill-opacity="0.6"></polygon></g><g transform="translate(12 12)" fill="none" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"></path><path d="M14 2v5h6"></path><path d="M8 13h8M8 17h5"></path></g></svg><b>Shows its work</b><span>What Chief does, including anything that failed, is listed in plain words on your History page. Many changes, like tasks and website text, can be undone for a day. Anything sent or paid can't.</span></div>
+</div>
+</div>
+<p class="mc-foot">Chief comes with every plan. A plan's AI actions pay for Chief's work: about {{CONV_STARTER}} conversations a month on Starter, {{CONV_PRO}} on Professional and {{CONV_SOL}} on Solutionist, and the morning notes don't use any. The bigger plans also think deeper in long planning sessions and the weekly look-back. Everyday answers are the same on every plan. <a href="#pricing">Compare the plans</a></p>
+</div>
+</section>
+<!-- /MEET CHIEF -->
 <!-- THE PRODUCTS, as a bento -->
 <section id="products" style="position: relative; background: #07080B; border-top: 1px solid #12141B">
 <div style="max-width: 1240px; margin: 0 auto; padding: 120px 32px; display: flex; flex-direction: column; gap: 56px">
@@ -640,7 +699,7 @@ footer nav a:hover{text-decoration-color:#C9CDD6 !important}
 <div class="dv-ph cq" style="box-shadow: 0 50px 90px -24px rgba(0,0,0,0.9), -24px 0 70px -24px rgba(236,72,153,0.28)"><span class="dv-island"></span><div class="mx" style="aspect-ratio: 9 / 19.2">
 <div class="mx-in">
 <div class="mx-bar"><span class="mx-brand"><span class="mx-mark">GF</span><span class="mx-church">Grace Fellowship</span></span><span class="mx-right"><span class="mx-circ"><svg class="i" viewBox="0 0 24 24" aria-hidden="true" style="width: calc(var(--u)*19); height: calc(var(--u)*19)"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"></path><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"></path></svg><span class="mx-unread">2</span></span><span class="mx-me">S</span></span></div>
-<div style="flex: none"><span class="mx-kick">Wednesday, October 29</span><b class="mx-hello" style="display: block; margin-top: calc(var(--u)*2)">Good evening, <em>Sarah.</em></b></div>
+<div style="flex: none"><span class="mx-kick">Wednesday, October 28</span><b class="mx-hello" style="display: block; margin-top: calc(var(--u)*2)">Good evening, <em>Sarah.</em></b></div>
 <div class="mh-hero"><img src="/assets/home/p-james.jpg" alt=""><div class="mh-hero-in"><span class="mh-when">Tonight · 7:00 PM</span><b class="t">Prayer Night</b><p>Main sanctuary · 24 going</p><div class="mh-row"><span class="mx-go">I'm coming</span><span class="mx-go glass">Details</span></div></div></div>
 <div class="mh-quick">
 <span><i style="background: #0a1429; color: #6B9BFF"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"></path><path d="M15.8 9.2a2.5 2.5 0 0 0-3.5 0l-.3.4-.35-.3a2.42 2.42 0 1 0-3.2 3.6l3.6 3.5 3.6-3.5c1.2-1.2 1.1-2.7.2-3.7"></path></svg></i>Prayer</span>
@@ -772,7 +831,7 @@ footer nav a:hover{text-decoration-color:#C9CDD6 !important}
 <li style="display: flex; flex-direction: column; gap: 10px; padding: 22px; background: #FFFFFF; border: 1px solid #E9E4DA; border-radius: 18px"><span class="mono" style="font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: #C2410C">Same morning</span><span style="font-family: 'Inter Tight', sans-serif; font-weight: 600; font-size: 19px; line-height: 1.25">Their kids check in at the kiosk.</span><span style="font-size: 14px; color: #615B53">The same family the office sees. Tags print, and pickup is checked.</span></li>
 <li style="display: flex; flex-direction: column; gap: 10px; padding: 22px; background: #FFFFFF; border: 1px solid #E9E4DA; border-radius: 18px"><span class="mono" style="font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: #BE185D">That week</span><span style="font-family: 'Inter Tight', sans-serif; font-weight: 600; font-size: 19px; line-height: 1.25">They join the member app.</span><span style="font-size: 14px; color: #615B53">News, the Bible, sermons and giving, on their phone, in your church's look.</span></li>
 <li style="display: flex; flex-direction: column; gap: 10px; padding: 22px; background: #FFFFFF; border: 1px solid #E9E4DA; border-radius: 18px"><span class="mono" style="font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: #1D4ED8">Next month</span><span style="font-family: 'Inter Tight', sans-serif; font-weight: 600; font-size: 19px; line-height: 1.25">They find a small group.</span><span style="font-size: 14px; color: #615B53">The group chat, the prayer wall and this week's study are waiting.</span></li>
-<li style="display: flex; flex-direction: column; gap: 10px; padding: 22px; background: #FFFFFF; border: 1px solid #E9E4DA; border-radius: 18px"><span class="mono" style="font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: #0F766E">Always</span><span style="font-family: 'Inter Tight', sans-serif; font-weight: 600; font-size: 19px; line-height: 1.25">Their shepherd hears if they drift.</span><span style="font-size: 14px; color: #615B53">Chief watches Sunday attendance for every family and tells the right person, early.</span></li>
+<li style="display: flex; flex-direction: column; gap: 10px; padding: 22px; background: #FFFFFF; border: 1px solid #E9E4DA; border-radius: 18px"><span class="mono" style="font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: #0F766E">Always</span><span style="font-family: 'Inter Tight', sans-serif; font-weight: 600; font-size: 19px; line-height: 1.25">Their shepherd hears if they drift.</span><span style="font-size: 14px; color: #615B53">Chief watches the Sundays of every family with a shepherd and tells the right person, early.</span></li>
 </ol>
 </div>
 </div>
@@ -799,7 +858,7 @@ footer nav a:hover{text-decoration-color:#C9CDD6 !important}
 </div>
 <div class="ma-in">
 <div class="ma-top"><span class="ma-mark" style="background: #2F6BEA">GF</span><span class="ma-me">S</span></div>
-<div><div class="ma-date">Wednesday, October 29</div><div class="ma-hello">Good evening, <em>Sarah</em></div></div>
+<div><div class="ma-date">Wednesday, October 28</div><div class="ma-hello">Good evening, <em>Sarah</em></div></div>
 <div class="ma-hero">
 <div class="ma-gen" style="background: radial-gradient(90% 90% at 85% 0%, #5B8CF5 0%, transparent 70%), linear-gradient(160deg, #3F72E8 0%, #0F1D45 100%)"><span class="ma-ghost">P</span></div>
 <div class="ma-hero-in">
@@ -994,7 +1053,7 @@ footer nav a:hover{text-decoration-color:#C9CDD6 !important}
 <div class="pz"><b>$<span class="pnum" data-m="{{P_STARTER}}" data-y="{{Y_STARTER}}">{{P_STARTER}}</span></b><span class="pper">a month</span></div>
 <div class="pbl">Billed monthly · cancel anytime</div>
 <div class="pds">One person running the church office.</div>
-<div class="mtr"><div class="mrow"><b>{{C_STARTER}}</b><span>AI actions a month</span></div><div class="mbar"><i style="width: {{W_STARTER}}%"></i></div><small>Messages, drafts and answers from Chief.</small></div>
+<div class="mtr"><div class="mrow"><b>{{C_STARTER}}</b><span>AI actions a month</span></div><div class="mbar"><i style="width: {{W_STARTER}}%"></i></div><small>About {{CONV_STARTER}} conversations with Chief.</small></div>
 <div class="dep"><span>Chief thinks <b>Standard</b></span><span class="dd"><i class="on"></i><i></i><i></i></span></div>
 <div class="pinc">Includes</div>
 <ul>
@@ -1012,7 +1071,7 @@ footer nav a:hover{text-decoration-color:#C9CDD6 !important}
 <div class="pz"><b>$<span class="pnum" data-m="{{P_PRO}}" data-y="{{Y_PRO}}">{{P_PRO}}</span></b><span class="pper">a month</span></div>
 <div class="pbl">Billed monthly · cancel anytime</div>
 <div class="pds">A pastor, an admin and a treasurer.</div>
-<div class="mtr"><div class="mrow"><b>{{C_PRO}}</b><span>AI actions a month</span></div><div class="mbar"><i style="width: {{W_PRO}}%"></i></div><small>Room for Chief to draft for every shepherd and leader.</small></div>
+<div class="mtr"><div class="mrow"><b>{{C_PRO}}</b><span>AI actions a month</span></div><div class="mbar"><i style="width: {{W_PRO}}%"></i></div><small>About {{CONV_PRO}} conversations, room to draft for every shepherd and leader.</small></div>
 <div class="dep"><span>Chief thinks <b>Advanced</b></span><span class="dd"><i class="on"></i><i class="on"></i><i></i></span></div>
 <div class="pinc">Everything in Starter, plus</div>
 <ul>
@@ -1031,13 +1090,13 @@ footer nav a:hover{text-decoration-color:#C9CDD6 !important}
 <div class="pz"><b>$<span class="pnum" data-m="{{P_SOL}}" data-y="{{Y_SOL}}">{{P_SOL}}</span></b><span class="pper">a month</span></div>
 <div class="pbl">Billed monthly · cancel anytime</div>
 <div class="pds">A staffed church, with its accountant.</div>
-<div class="mtr"><div class="mrow"><b>{{C_SOL}}</b><span>AI actions a month</span></div><div class="mbar"><i style="width: {{W_SOL}}%"></i></div><small>Chief across every ministry, all month.</small></div>
+<div class="mtr"><div class="mrow"><b>{{C_SOL}}</b><span>AI actions a month</span></div><div class="mbar"><i style="width: {{W_SOL}}%"></i></div><small>About {{CONV_SOL}} conversations, Chief across every ministry.</small></div>
 <div class="dep"><span>Chief thinks <b>Maximum</b></span><span class="dd"><i class="on"></i><i class="on"></i><i class="on"></i></span></div>
 <div class="pinc">Everything in Professional, plus</div>
 <ul>
 <li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>7 logins, and a seat for your accountant</span></li>
 <li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Short clips from your sermon recordings</span></li>
-<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>990 prep and a full audit trail</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>990 prep, and an audit trail of every change to a closed month</span></li>
 <li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Unlimited bank connections</span></li>
 <li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Up to 3 organizations, like a church and its nonprofit</span></li>
 </ul>

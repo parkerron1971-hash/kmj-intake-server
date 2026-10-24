@@ -65,8 +65,10 @@ def test_every_page_speaks_in_the_voice():
 
 
 def test_no_customer_photos():
+    # the main site's own: its coach (p-maya, only ever "You") and the workshop
+    allowed = {"/assets/home/p-maya.jpg", "/assets/home/w-workshop.jpg"}
     for path, html in _all().items():
-        assert set(re.findall(r'<img[^>]*\ssrc="([^"]+)"', html)) <= {"/assets/home/p-james.jpg"}, path
+        assert set(re.findall(r'<img[^>]*\ssrc="([^"]+)"', html)) <= allowed, path
 
 
 def test_product_pages_carry_the_shared_style_and_their_own_light():
@@ -156,7 +158,8 @@ def test_the_plan_cards_match_the_gates():
                   "5 bank connections", "Chief thinks <b>Advanced</b>"):
         assert words in pro, words
     for words in ("7 logins, and a seat for your accountant", "Short clips from your recordings",
-                  "A full audit trail", "Unlimited bank connections", "Up to 3 businesses on one account",
+                  "An audit trail of every change to a closed month", "Unlimited bank connections",
+                  "Up to 3 businesses on one account",
                   "Chief thinks <b>Maximum</b>"):
         assert words in sol, words
 

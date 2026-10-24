@@ -111,17 +111,22 @@ def _read(name: str) -> str:
 
 
 def _plan_tokens() -> Dict[str, str]:
-    """Prices, yearly prices, AI actions and meter widths, from the dials."""
+    """Prices, yearly prices, AI actions, conversations and meter widths, from
+    the dials. A conversation is one Chief turn at the chat price, rounded
+    down the way the main site's plan cards round it (_credits_in_words)."""
     import marketing_pages as mp
+    import pricing_config
     dials = mp._tier_dials()
     credits = {p: int(str(d["credits"]).replace(",", "")) for p, d in dials.items()}
     top = max(credits.values()) or 1
+    per_turn = max(1, pricing_config.chat_price())
     out: Dict[str, str] = {}
     for key, plan in (("STARTER", "starter"), ("PRO", "professional"), ("SOL", "practice")):
         price = int(dials[plan]["price_num"])
         out[f"P_{key}"] = str(price)
         out[f"Y_{key}"] = f"{price * mp.ANNUAL_MONTHS:,}"
         out[f"C_{key}"] = dials[plan]["credits"]
+        out[f"CONV_{key}"] = f"{mp._about(credits[plan] // per_turn):,}"
         out[f"W_{key}"] = str(max(4, round(credits[plan] / top * 100)))
     return out
 
