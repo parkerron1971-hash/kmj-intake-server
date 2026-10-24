@@ -263,7 +263,9 @@ def _get_or_404(biz: str, song_id: str) -> Dict[str, Any]:
 def status(business_id: str, user: AuthedUser = Depends(require_user)):
     if not open_to(user):
         return {"enabled": False, "can_write": False}
-    roles = roles_of(_uuid(business_id), user)
+    # Every plan reads this (part=None): the app learns who they are here
+    # first, and churchsavvy-billing/status says what the plan opens.
+    roles = roles_of(_uuid(business_id), user, part=None)
     allowed = can_all(roles)
     # can_write: the song library; `can` is each part of ChurchSavvy, `roles` the caller's parts.
     return {"enabled": True, "can_write": allowed["songs"], "can": allowed, "roles": [r for r in ROLES if r in roles]}

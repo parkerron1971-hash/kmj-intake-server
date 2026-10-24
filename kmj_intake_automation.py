@@ -353,6 +353,10 @@ app.include_router(sunday_order_router)
 # "Stop these emails" (the link names one church and one person).
 from serve_links import router as serve_links_router
 app.include_router(serve_links_router)
+# What a church on ChurchSavvy alone has paid for: its plan, and changing it.
+# CHURCHSAVVY_BILLING=off|owner|on (default off) until Kevin opens it.
+from churchsavvy_billing import router as churchsavvy_billing_router
+app.include_router(churchsavvy_billing_router)
 # Joining a free class from its public page (POST <class page>/join).
 from academy_join import router as academy_join_router
 app.include_router(academy_join_router)

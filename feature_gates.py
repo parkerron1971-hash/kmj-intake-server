@@ -28,12 +28,18 @@ PLANS = ("starter", "professional", "practice")   # the public ladder
 # PLANS stays the public ladder, so the site and the compare table are
 # untouched; ALL_PLANS is every key a subscription or comp can resolve to.
 AUDIENCE_PLANS = ("solo", "booked", "boss")
-ALL_PLANS = PLANS + AUDIENCE_PLANS
+# ChurchSavvy on its own (2026-10-24, Kevin: "the pricing is good"): a
+# church that uses ChurchSavvy without Solutionist buys the screens ($20),
+# Planning ($15) or both ($29). They carry ChurchSavvy's parts and nothing
+# of Solutionist's; churchsavvy_billing.py decides what they open.
+CHURCHSAVVY_PLANS = ("cs_screens", "cs_planning", "cs_both")
+ALL_PLANS = PLANS + AUDIENCE_PLANS + CHURCHSAVVY_PLANS
 
 # ORDERING only (the best-plan pick behind the business cap, the billing
 # rehearsal). Access comes from plan_features(), never from this number.
 _PLAN_RANK = {"starter": 1, "professional": 2, "practice": 3,
-              "solo": 1, "booked": 1, "boss": 2}
+              "solo": 1, "booked": 1, "boss": 2,
+              "cs_screens": 1, "cs_planning": 1, "cs_both": 1}
 
 # Gate-ready map: feature → minimum tier. Working pricing hypothesis
 # (2026-06-09 review): Starter $79 / Professional $199 / Practice $399;
@@ -247,7 +253,18 @@ def plan_limits() -> Dict[str, Dict[str, Optional[int]]]:
                          "max_seats": 7, "plaid_connections": None,
                          "open_assignments": 10},
         **_audience_limits(),
+        **_churchsavvy_limits(),
     }
+
+
+def _churchsavvy_limits() -> Dict[str, Dict[str, Optional[int]]]:
+    """ChurchSavvy on its own: one church, its owner the one seat (the
+    Sunday team is worship_team, never seats), and Starter's AI tank: what
+    these plans fell back to before they were listed (_limits_of)."""
+    credits = pricing_config.tier_credits()
+    return {p: {"max_businesses": 1, "chief_messages_monthly": credits["starter"],
+                "max_seats": 1, "plaid_connections": 0, "open_assignments": 0}
+            for p in CHURCHSAVVY_PLANS}
 
 
 def _audience_limits() -> Dict[str, Dict[str, Optional[int]]]:
@@ -335,6 +352,10 @@ PRICE_ENV_TO_PLAN: Dict[str, str] = {
     "BOOKED_ANNUAL":       "booked",
     "BOSS":                "boss",
     "BOSS_ANNUAL":         "boss",
+    # ChurchSavvy on its own. Checkout (churchsavvy_billing) enforces churches only.
+    "CS_SCREENS":          "cs_screens",
+    "CS_PLANNING":         "cs_planning",
+    "CS_BOTH":             "cs_both",
 }
 
 

@@ -241,7 +241,8 @@ def today(business_id: str, service_id: Optional[str] = None, user: AuthedUser =
     item (the sermon), when it ends. For the booth (ChurchSavvy's Today)."""
     _gate(user)
     biz = _uuid(business_id)
-    _staff(biz, user, write=False)
+    # The booth reads it on any plan: with the screens alone it is simply empty.
+    _staff(biz, user, write=False, part=None)
     zone = sp._zone(biz)
     svc = _service(biz, _uuid(service_id, "service") if service_id else None, zone)
     order = order_of(biz, svc, zone)

@@ -288,12 +288,16 @@ async def _office(biz_id: str, title: str, body: str, key: str, person_id: Optio
 
 def _churches() -> List[Dict[str, Any]]:
     """Churches that switched Serving on in the member app, and churches
-    that switched on ChurchSavvy's "Email asks and reminders"."""
+    that switched on ChurchSavvy's "Email asks and reminders"; never a
+    church on ChurchSavvy alone whose plan hasn't got Planning."""
+    import churchsavvy_billing as csb
     out: Dict[str, Dict[str, Any]] = {}
     for where in (f"settings->member_portal->notifications->>{KIND}=eq.true",
                   "settings->churchsavvy->>planning_email=eq.true"):
-        for b in sb_clients.sb_get_as_service(f"/businesses?{where}&select=id,name,settings,owner_id&limit=5000") or []:
-            out[str(b["id"])] = b
+        for b in sb_clients.sb_get_as_service(
+                f"/businesses?{where}&select=id,name,settings,owner_id,{csb.BILLING_FIELDS}&limit=5000") or []:
+            if not csb.lapsed(b, "planning"):
+                out[str(b["id"])] = b
     return list(out.values())
 
 

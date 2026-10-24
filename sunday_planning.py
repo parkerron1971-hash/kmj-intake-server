@@ -122,12 +122,13 @@ def _ids(values) -> str:
     return ",".join(_q(v) for v in sorted({str(v) for v in values if v}))
 
 
-def _staff(biz: str, user: AuthedUser, write: bool) -> Set[str]:
+def _staff(biz: str, user: AuthedUser, write: bool, part: Optional[str] = "planning") -> Set[str]:
     """Every part of the team and every seat reads; scheduling is the
-    owner's, an admin's, a manager's, or a ChurchSavvy admin's or planner's."""
+    owner's, an admin's, a manager's, or a ChurchSavvy admin's or planner's.
+    Both are Planning's part of a ChurchSavvy plan (worship_team.roles_of)."""
     if write:
         return require(biz, user, "serve")
-    return roles_of(biz, user)
+    return roles_of(biz, user, part=part)
 
 
 def _church(biz: str) -> Dict[str, Any]:
@@ -260,7 +261,7 @@ def status(business_id: Optional[str] = None, user: AuthedUser = Depends(require
     if not business_id:
         return {"enabled": True}
     biz = _uuid(business_id)
-    roles = roles_of(biz, user)
+    roles = roles_of(biz, user, part=None)
     settings = _church(biz).get("settings") or {}
     cs = settings.get("churchsavvy") if isinstance(settings.get("churchsavvy"), dict) else {}
     portal = settings.get("member_portal") if isinstance(settings.get("member_portal"), dict) else {}
