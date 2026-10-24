@@ -363,6 +363,7 @@ a{color:#F5F6F8}a:hover{color:#F9A8D4}
 </style>
 <style>
 {{CHURCH_CSS}}
+.mc-strip a{color:#F5F6F8;font-weight:600;text-decoration:underline;text-underline-offset:4px;white-space:nowrap}
 </style>
 {{PIXEL}}
 </head>
@@ -371,13 +372,14 @@ a{color:#F5F6F8}a:hover{color:#F9A8D4}
 
 <!-- The Solutionist frame, lit in this room's colour -->
 <div class="strip"><div class="wrap strip-in">
-<a href="/churches" style="display: flex; align-items: center; gap: 8px; color: #F5F6F8">
+<a href="{{HOME}}/" data-home style="display: flex; align-items: center; gap: 8px; color: #F5F6F8; text-decoration: none">
+<svg width="8" height="13" viewBox="0 0 8 13" fill="none" stroke="#959BA8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6.5 1.5 1.5 6.5l5 5"></path></svg>
 <svg width="20" height="17" viewBox="8 36 496 424" aria-hidden="true"><defs><linearGradient id="mkg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#E040FB"></stop><stop offset=".55" stop-color="#7C5CFF"></stop><stop offset="1" stop-color="#22D3EE"></stop></linearGradient></defs><g fill="url(#mkg)" stroke="#fff" stroke-width="8" stroke-opacity=".92"><polygon points="18,46 175,232 237,231 133,98 376,99 356,131 412,167 494,49"></polygon><polygon points="205,138 338,241 232,391 274,449 435,221 319,137"></polygon><polygon points="264,274 149,279 201,359"></polygon></g></svg>
-<span style="font-weight: 600">Solutionist</span>
+<span style="font-weight: 600" data-home-label>Solutionist home</span>
 </a>
 <nav aria-label="Solutionist" style="display: flex; flex-wrap: wrap; gap: 6px 22px">
-<a href="/coaches">For coaches and consultants</a>
-<a href="/">All of Solutionist</a>
+<a href="{{HOME}}/coaches">For coaches and consultants</a>
+<a href="{{HOME}}/">All of Solutionist</a>
 <a href="{{APP_URL}}" style="color: #F5F6F8">Sign in</a>
 </nav>
 </div></div>
@@ -397,7 +399,7 @@ a{color:#F5F6F8}a:hover{color:#F9A8D4}
 <details class="pmenu"><summary>Products<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#E4E6EB" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg></summary><div class="pmenu-panel"><a href="/churches"><i style="background: linear-gradient(135deg, #E040FB, #7C5CFF 55%, #22D3EE)"></i><b>Overview</b><span>Every part of church life</span></a><a href="/churches/people-and-care"><i style="background: #14B8A6"></i><b>People and Care</b><span>Shepherds, guests and prayer</span></a><a href="/churches/giving"><i style="background: #22C55E"></i><b>Giving</b><span>Your own Stripe, statements in January</span></a><a href="/churches/kids-and-youth"><i style="background: #F97316"></i><b>Kids and Youth</b><span>Check-in, tags and safe pickup</span></a><a href="/churches/groups-and-classes"><i style="background: #3B82F6"></i><b>Groups and Classes</b><span>Chats, prayer walls and this week's study</span></a><a href="/churches/member-app" aria-current="page"><i style="background: #EC4899"></i><b>Member App</b><span>The church in every pocket</span></a><a href="/churches/website-and-sermons"><i style="background: #EAB308"></i><b>Website and Sermons</b><span>Your front door, always open</span></a><a href="/churches/office-and-books"><i style="background: #94A3B8"></i><b>Office and Books</b><span>The books, and who sees giving</span></a></div></details>
 <a href="/churches#app" style="text-decoration: none; color: #E4E6EB">Member app</a>
 <a href="/churches#pricing" style="text-decoration: none; color: #E4E6EB">Pricing</a>
-<a href="/start" class="btn btn-w btn-s">Start free</a>
+<a href="{{HOME}}/start" class="btn btn-w btn-s">Start free</a>
 </nav>
 </header>
 
@@ -424,7 +426,7 @@ a{color:#F5F6F8}a:hover{color:#F9A8D4}
 <div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; gap: 24px 48px">
 <p class="lede" style="max-width: 640px">One app on your church's own address, in your church's colour. Members sign in with a code, no password, and find the news, the Bible, Sunday's message, giving and their groups. It goes on the home screen straight from your site.</p>
 <div style="display: flex; flex-wrap: wrap; gap: 12px">
-<a href="/start" class="btn btn-w">{{CTA_START}}</a>
+<a href="{{HOME}}/start" class="btn btn-w">{{CTA_START}}</a>
 <a href="#news" class="btn btn-l">See the app</a>
 </div>
 </div>
@@ -485,7 +487,7 @@ a{color:#F5F6F8}a:hover{color:#F9A8D4}
 <div class="dv-ph"><span class="dv-island"></span><div class="mx" style="aspect-ratio: 9 / 19.2">
 <div class="mx-in">
 <div class="mx-bar"><span class="mx-brand"><span class="mx-mark">GF</span><span class="mx-church">Grace Fellowship</span></span><span class="mx-right"><span class="mx-circ"><svg class="i" viewBox="0 0 24 24" aria-hidden="true" style="width: calc(var(--u)*19); height: calc(var(--u)*19)"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"></path><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"></path></svg><span class="mx-unread">2</span></span><span class="mx-me">S</span></span></div>
-<div style="flex: none"><span class="mx-kick">Wednesday, October 29</span><b class="mx-hello" style="display: block; margin-top: calc(var(--u)*2)">Good evening, <em>Sarah.</em></b></div>
+<div style="flex: none"><span class="mx-kick">Wednesday, October 28</span><b class="mx-hello" style="display: block; margin-top: calc(var(--u)*2)">Good evening, <em>Sarah.</em></b></div>
 <div class="mh-hero"><img src="/assets/home/p-james.jpg" alt=""><div class="mh-hero-in"><span class="mh-when">Tonight · 7:00 PM</span><b class="t">Prayer Night</b><p>Main sanctuary · 24 going</p><div class="mh-row"><span class="mx-go">I'm coming</span><span class="mx-go glass">Details</span></div></div></div>
 <div class="mh-quick">
 <span><i style="background: #0a1429; color: #6B9BFF"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"></path><path d="M15.8 9.2a2.5 2.5 0 0 0-3.5 0l-.3.4-.35-.3a2.42 2.42 0 1 0-3.2 3.6l3.6 3.5 3.6-3.5c1.2-1.2 1.1-2.7.2-3.7"></path></svg></i>Prayer</span>
@@ -532,7 +534,7 @@ a{color:#F5F6F8}a:hover{color:#F9A8D4}
 <div class="alt" style="width: min(260px, 90%); margin-top: 56px">
 <div class="dv-ph"><span class="dv-island"></span><div class="mx" style="aspect-ratio: 9 / 19.2">
 <div class="lk">
-<span class="lk-date">Sunday, October 26</span>
+<span class="lk-date">Sunday, October 25</span>
 <span class="lk-time">9:41</span>
 <div class="lk-n"><span class="mk">GF</span><span class="tx"><span class="hd"><b>Grace Fellowship</b><span>now</span></span><p>Important: Fall retreat sign-ups close tonight. There are still beds left.</p></span></div>
 <div class="lk-n"><span class="mk">GF</span><span class="tx"><span class="hd"><b>Grace Fellowship</b><span>9:04 AM</span></span><p>It's Denise's birthday today.</p></span></div>
@@ -551,8 +553,8 @@ a{color:#F5F6F8}a:hover{color:#F9A8D4}
 <div class="nw-post church">
 <div class="nw-ph"><span class="nw-av church">PJ</span><span class="nw-t"><b>Pastor James<span class="nw-tag">Pastor</span></b><small>2 h ago · to the whole church</small></span><svg class="i" viewBox="0 0 24 24" aria-hidden="true" style="color: #6B9BFF"><path d="M12 17v5"></path><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"></path></svg></div>
 <b class="nw-h">Fall retreat: sign up by Sunday</b>
-<p class="nw-body">Two nights away together, November 7 to 9. Rides leave from the church at 5.</p>
-<div class="nw-att"><span class="nw-date"><span class="m">NOV</span><span class="d">7</span></span><span class="nw-t"><b>Fall Retreat</b><small>Camp Shiloh · 42 going</small></span><span class="mx-go" style="height: calc(var(--u)*38); padding: 0 calc(var(--u)*14); font-size: calc(var(--u)*13.5)">Sign me up</span></div>
+<p class="nw-body">Two nights away together, November 6 to 8. Rides leave from the church at 5.</p>
+<div class="nw-att"><span class="nw-date"><span class="m">NOV</span><span class="d">6</span></span><span class="nw-t"><b>Fall Retreat</b><small>Camp Shiloh · 42 going</small></span><span class="mx-go" style="height: calc(var(--u)*38); padding: 0 calc(var(--u)*14); font-size: calc(var(--u)*13.5)">Sign me up</span></div>
 <div class="nw-rx"><span class="on"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7z"></path></svg>18</span><span>Amen 6</span><span>Celebrate 9</span><span>4 comments</span></div>
 </div>
 <div class="nw-post gold">
@@ -683,7 +685,7 @@ a{color:#F5F6F8}a:hover{color:#F9A8D4}
 <div class="dv-ph"><span class="dv-island"></span><div class="mx" style="aspect-ratio: 9 / 19.2">
 <div class="mx-in">
 <div class="mx-bar"><span class="mx-brand"><span class="mx-mark">GF</span><span class="mx-church">Grace Fellowship</span></span><span class="mx-me">S</span></div>
-<div style="flex: none"><span class="mx-kick">Sunday, October 26</span><b class="mx-hello" style="display: block; margin-top: calc(var(--u)*2)">Good morning, <em>Sarah.</em></b></div>
+<div style="flex: none"><span class="mx-kick">Sunday, October 25</span><b class="mx-hello" style="display: block; margin-top: calc(var(--u)*2)">Good morning, <em>Sarah.</em></b></div>
 <div class="ck">
 <span class="ck-k">Check-in · Sunday 11:00</span>
 <b class="ck-h">Good morning, <em>Sarah</em>. Are you with us today?</b>
@@ -728,7 +730,7 @@ a{color:#F5F6F8}a:hover{color:#F9A8D4}
 <div class="dv-ph"><span class="dv-island"></span><div class="mx" style="aspect-ratio: 9 / 19.2">
 <div class="mx-in">
 <div class="mx-bar"><span class="sp-switch"><i style="background: #2F6BEA; color: #fff">GF</i>Church<svg class="i" viewBox="0 0 24 24" aria-hidden="true" style="color: #7a7a80; width: calc(var(--u)*16); height: calc(var(--u)*16)"><path d="m6 9 6 6 6-6"></path></svg></span><span class="mx-me">DR</span></div>
-<div style="flex: none; margin-top: calc(var(--u)*6)"><span class="mx-kick">Sunday, October 26</span><b class="mx-hello" style="display: block; margin-top: calc(var(--u)*2)">Good morning, <em>Denise.</em></b></div>
+<div style="flex: none; margin-top: calc(var(--u)*6)"><span class="mx-kick">Sunday, October 25</span><b class="mx-hello" style="display: block; margin-top: calc(var(--u)*2)">Good morning, <em>Denise.</em></b></div>
 <div class="mh-hero"><img src="/assets/home/p-james.jpg" alt=""><div class="mh-hero-in"><span class="mh-when">Today · 11:00 AM</span><b class="t">Sunday Gathering</b><p>Main sanctuary</p></div></div>
 <div class="mh-quick">
 <span><i style="background: #0a1429; color: #6B9BFF"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"></path><path d="M15.8 9.2a2.5 2.5 0 0 0-3.5 0l-.3.4-.35-.3a2.42 2.42 0 1 0-3.2 3.6l3.6 3.5 3.6-3.5c1.2-1.2 1.1-2.7.2-3.7"></path></svg></i>Prayer</span>
@@ -833,7 +835,7 @@ a{color:#F5F6F8}a:hover{color:#F9A8D4}
 <div class="wr-me"><span class="nw-av">PJ</span><span><b>Pastor James<span class="nw-tag">Pastor</span></b><small>Posting as yourself, to News</small></span></div>
 <span class="wr-l">Who it's for</span>
 <div class="wr-chips"><span class="on">Whole church · 412</span><span>Youth · 38</span></div>
-<div class="wr-field"><b>Fall retreat sign-ups</b><span>Two nights away, November 7 to 9. Sign up by Sunday so we can hold your bed.</span></div>
+<div class="wr-field"><b>Fall retreat sign-ups</b><span>Two nights away, November 6 to 8. Sign up by Sunday so we can hold your bed.</span></div>
 <div class="wr-chief">
 <span class="wr-chief-h"><svg class="i" viewBox="0 0 24 24" aria-hidden="true" style="width: calc(var(--u)*14); height: calc(var(--u)*14)"><path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"></path></svg>Chief</span>
 <p>This mentions a sign-up. I can add a Sign me up button from the Fall Retreat event, so nobody has to call the office. Your words stay as you wrote them.</p>
@@ -864,6 +866,17 @@ a{color:#F5F6F8}a:hover{color:#F9A8D4}
 </div>
 </section>
 
+<!-- CHIEF, EVERY ROOM -->
+<section style="background: #07080B; border-top: 1px solid #12141B">
+<div class="wrap" style="padding-top: 40px; padding-bottom: 8px">
+<div class="mc-strip" style="display: flex; flex-wrap: wrap; align-items: center; gap: 14px 22px; padding: 22px 26px; border-radius: 22px; background: #0D0F14; border: 1px solid #1F2330">
+<span style="width: 36px; height: 36px; border-radius: 50%; background: linear-gradient(135deg, #E040FB, #7C5CFF 55%, #22D3EE); flex: none"></span>
+<p style="margin: 0; flex: 1 1 420px; font-size: 16px; line-height: 1.55; color: #C9CDD6"><b style="color: #F5F6F8; font-weight: 600">Chief works the same way in every room.</b> It works from your church's own records, waits for your yes before it sends anything or touches money, and lists what it does on your History page.</p>
+<a href="/churches#chief">How Chief works</a>
+</div>
+</div>
+</section>
+<!-- /CHIEF, EVERY ROOM -->
 <!-- THE ROOMS NEXT DOOR -->
 <section class="sec" style="background: #07080B; padding-top: 40px; border-top: 1px solid #12141B">
 <div class="wrap" style="display: flex; flex-direction: column; gap: 32px">
@@ -923,7 +936,7 @@ a{color:#F5F6F8}a:hover{color:#F9A8D4}
 <div class="wrap" style="position: relative; padding-top: 150px; padding-bottom: 150px; display: flex; flex-direction: column; align-items: center; gap: 24px; text-align: center">
 <h2 class="h1" style="font-size: clamp(42px, 5.6vw, 84px); max-width: 960px; text-wrap: balance">Welcome every member <span class="serif glint" style="font-size: 1.06em">home.</span></h2>
 <p class="lede">{{TRIAL_LINE}}</p>
-<a href="/start" class="btn btn-w">Start free</a>
+<a href="{{HOME}}/start" class="btn btn-w">Start free</a>
 </div>
 </section>
 
@@ -935,10 +948,24 @@ a{color:#F5F6F8}a:hover{color:#F9A8D4}
 </div>
 <nav aria-label="Church products"><b>For churches</b><a href="/churches">Overview</a><a href="/churches/people-and-care">People and Care</a><a href="/churches/giving">Giving</a><a href="/churches/kids-and-youth">Kids and Youth</a></nav>
 <nav aria-label="More church products"><span aria-hidden="true" style="display: block; height: 21px"></span><a href="/churches/groups-and-classes">Groups and Classes</a><a href="/churches/member-app">Member App</a><a href="/churches/website-and-sermons">Website and Sermons</a><a href="/churches/office-and-books">Office and Books</a></nav>
-<nav aria-label="Company"><b>Solutionist</b><a href="/coaches">For coaches and consultants</a><a href="/churches#pricing">Pricing</a><a href="/privacy">Privacy</a><a href="/terms">Terms</a></nav>
+<nav aria-label="Company"><b>Solutionist</b><a href="{{HOME}}/">Solutionist home</a><a href="{{HOME}}/coaches">For coaches and consultants</a><a href="/churches#pricing">Pricing</a><a href="{{HOME}}/privacy">Privacy</a><a href="{{HOME}}/terms">Terms</a></nav>
 </div></footer>
 
 </div>
 {{ANALYTICS}}
+<script>
+/* Solutionist home: someone who came here from the main site goes back to the page they left */
+(function () {
+  try {
+    var a = document.querySelector("[data-home]");
+    if (!a || !document.referrer) return;
+    var r = new URL(document.referrer), h = new URL(a.href).hostname;
+    if (r.hostname !== h && r.hostname !== "www." + h) return;
+    if (/^\/(churches|coaches|consultants)(\/|$)/.test(r.pathname)) return;
+    a.href = r.href;
+    a.querySelector("[data-home-label]").textContent = "Back to Solutionist";
+  } catch (e) { /* the plain link still goes home */ }
+})();
+</script>
 </body>
 </html>

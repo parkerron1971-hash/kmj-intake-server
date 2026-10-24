@@ -110,6 +110,7 @@ a{color:#F5F6F8}a:hover{color:#C4B5FD}
 </style>
 <style>
 {{COACH_CSS}}
+.mc-strip a{color:#F5F6F8;font-weight:600;text-decoration:underline;text-underline-offset:4px;white-space:nowrap}
 </style>
 {{PIXEL}}
 </head>
@@ -118,13 +119,14 @@ a{color:#F5F6F8}a:hover{color:#C4B5FD}
 
 <!-- The Solutionist frame, lit in this room's colour -->
 <div class="strip"><div class="wrap strip-in">
-<a href="/coaches" style="display: flex; align-items: center; gap: 8px; color: #F5F6F8">
+<a href="{{HOME}}/" data-home style="display: flex; align-items: center; gap: 8px; color: #F5F6F8; text-decoration: none">
+<svg width="8" height="13" viewBox="0 0 8 13" fill="none" stroke="#959BA8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6.5 1.5 1.5 6.5l5 5"></path></svg>
 <svg width="20" height="17" viewBox="8 36 496 424" aria-hidden="true"><defs><linearGradient id="mkg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#E040FB"></stop><stop offset=".55" stop-color="#7C5CFF"></stop><stop offset="1" stop-color="#22D3EE"></stop></linearGradient></defs><g fill="url(#mkg)" stroke="#fff" stroke-width="8" stroke-opacity=".92"><polygon points="18,46 175,232 237,231 133,98 376,99 356,131 412,167 494,49"></polygon><polygon points="205,138 338,241 232,391 274,449 435,221 319,137"></polygon><polygon points="264,274 149,279 201,359"></polygon></g></svg>
-<span style="font-weight: 600">Solutionist</span>
+<span style="font-weight: 600" data-home-label>Solutionist home</span>
 </a>
 <nav aria-label="Solutionist" style="display: flex; flex-wrap: wrap; gap: 6px 22px">
-<a href="/churches">For churches</a>
-<a href="/">All of Solutionist</a>
+<a href="{{HOME}}/churches">For churches</a>
+<a href="{{HOME}}/">All of Solutionist</a>
 <a href="{{APP_URL}}" style="color: #F5F6F8">Sign in</a>
 </nav>
 </div></div>
@@ -143,7 +145,7 @@ a{color:#F5F6F8}a:hover{color:#C4B5FD}
 <nav aria-label="Coaches and consultants" style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px 28px; font-size: 15px; font-weight: 500">
 <details class="pmenu"><summary>Products<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#E4E6EB" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg></summary><div class="pmenu-panel"><a href="/coaches"><i style="background: linear-gradient(135deg, #E040FB, #7C5CFF 55%, #22D3EE)"></i><b>Overview</b><span>Every part of your practice</span></a><a href="/coaches/bookings"><i style="background: #3B82F6"></i><b>Bookings</b><span>Your booking page and standing sessions</span></a><a href="/coaches/clients"><i style="background: #14B8A6"></i><b>Clients</b><span>One record, a brief before every session</span></a><a href="/coaches/proposals-and-contracts" aria-current="page"><i style="background: #8B5CF6"></i><b>Proposals and Contracts</b><span>Drafted in your voice</span></a><a href="/coaches/billing-and-time"><i style="background: #22C55E"></i><b>Billing and Time</b><span>Invoices, pay links and your hours</span></a><a href="/coaches/courses-and-classes"><i style="background: #F97316"></i><b>Courses and Classes</b><span>Live classes, recordings, homework</span></a><a href="/coaches/marketing-and-website"><i style="background: #EC4899"></i><b>Marketing and Website</b><span>Your site and a week of posts</span></a><a href="/coaches/office-and-books"><i style="background: #94A3B8"></i><b>Office and Books</b><span>The books, the close, the 1099s</span></a></div></details>
 <a href="/coaches#pricing" style="text-decoration: none; color: #E4E6EB">Pricing</a>
-<a href="/start" class="btn btn-w btn-s">Start free</a>
+<a href="{{HOME}}/start" class="btn btn-w btn-s">Start free</a>
 </nav>
 </header>
 
@@ -169,7 +171,7 @@ a{color:#F5F6F8}a:hover{color:#C4B5FD}
 <div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; gap: 24px 48px">
 <p class="lede" style="max-width: 640px">A coaching client gets a program outline. A consulting client gets a scope of work. Both are written in your voice from what the client already told you, sent as a branded PDF, and signed from a link in their email.</p>
 <div style="display: flex; flex-wrap: wrap; gap: 12px">
-<a href="/start" class="btn btn-w">{{CTA_START}}</a>
+<a href="{{HOME}}/start" class="btn btn-w">{{CTA_START}}</a>
 <a href="#proposals" class="btn btn-l">See a proposal</a>
 </div>
 </div>
@@ -473,6 +475,17 @@ a{color:#F5F6F8}a:hover{color:#C4B5FD}
 </div>
 </section>
 
+<!-- CHIEF, EVERY ROOM -->
+<section style="background: #07080B; border-top: 1px solid #12141B">
+<div class="wrap" style="padding-top: 40px; padding-bottom: 8px">
+<div class="mc-strip" style="display: flex; flex-wrap: wrap; align-items: center; gap: 14px 22px; padding: 22px 26px; border-radius: 22px; background: #0D0F14; border: 1px solid #1F2330">
+<span style="width: 36px; height: 36px; border-radius: 50%; background: linear-gradient(135deg, #E040FB, #7C5CFF 55%, #22D3EE); flex: none"></span>
+<p style="margin: 0; flex: 1 1 420px; font-size: 16px; line-height: 1.55; color: #C9CDD6"><b style="color: #F5F6F8; font-weight: 600">Chief works the same way in every room.</b> It works from your practice's own records, waits for your yes before it sends anything or touches money, and lists what it does on your History page.</p>
+<a href="/coaches#chief">How Chief works</a>
+</div>
+</div>
+</section>
+<!-- /CHIEF, EVERY ROOM -->
 <!-- THE ROOMS NEXT DOOR -->
 <section class="sec" style="background: #07080B; padding-top: 40px; border-top: 1px solid #12141B">
 <div class="wrap" style="display: flex; flex-direction: column; gap: 32px">
@@ -532,7 +545,7 @@ a{color:#F5F6F8}a:hover{color:#C4B5FD}
 <div class="wrap" style="position: relative; padding-top: 150px; padding-bottom: 150px; display: flex; flex-direction: column; align-items: center; gap: 24px; text-align: center">
 <h2 class="h1" style="font-size: clamp(42px, 5.6vw, 84px); max-width: 960px">Send the proposal. <span class="serif glint nw" style="font-size: 1.06em">Start the work.</span></h2>
 <p class="lede">{{TRIAL_LINE}}</p>
-<a href="/start" class="btn btn-w">Start free</a>
+<a href="{{HOME}}/start" class="btn btn-w">Start free</a>
 </div>
 </section>
 
@@ -544,10 +557,24 @@ a{color:#F5F6F8}a:hover{color:#C4B5FD}
 </div>
 <nav aria-label="Coach and consultant products"><b>For coaches and consultants</b><a href="/coaches/bookings">Bookings</a><a href="/coaches/clients">Clients</a><a href="/coaches/proposals-and-contracts">Proposals and Contracts</a><a href="/coaches/billing-and-time">Billing and Time</a></nav>
 <nav aria-label="More coach and consultant products"><span aria-hidden="true" style="display: block; height: 21px"></span><a href="/coaches/courses-and-classes">Courses and Classes</a><a href="/coaches/marketing-and-website">Marketing and Website</a><a href="/coaches/office-and-books">Office and Books</a></nav>
-<nav aria-label="Company"><b>Solutionist</b><a href="/churches">For churches</a><a href="/coaches#pricing">Pricing</a><a href="/privacy">Privacy</a><a href="/terms">Terms</a></nav>
+<nav aria-label="Company"><b>Solutionist</b><a href="{{HOME}}/">Solutionist home</a><a href="{{HOME}}/churches">For churches</a><a href="/coaches#pricing">Pricing</a><a href="{{HOME}}/privacy">Privacy</a><a href="{{HOME}}/terms">Terms</a></nav>
 </div></footer>
 
 </div>
 {{ANALYTICS}}
+<script>
+/* Solutionist home: someone who came here from the main site goes back to the page they left */
+(function () {
+  try {
+    var a = document.querySelector("[data-home]");
+    if (!a || !document.referrer) return;
+    var r = new URL(document.referrer), h = new URL(a.href).hostname;
+    if (r.hostname !== h && r.hostname !== "www." + h) return;
+    if (/^\/(churches|coaches|consultants)(\/|$)/.test(r.pathname)) return;
+    a.href = r.href;
+    a.querySelector("[data-home-label]").textContent = "Back to Solutionist";
+  } catch (e) { /* the plain link still goes home */ }
+})();
+</script>
 </body>
 </html>

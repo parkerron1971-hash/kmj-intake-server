@@ -274,6 +274,36 @@ footer nav a:hover{text-decoration-color:#C9CDD6 !important}
 .pmenu-panel i{width:10px;height:10px;border-radius:3px;grid-row:span 2}
 .pmenu-panel b{font-weight:600;font-size:14.5px}
 .pmenu-panel span{grid-column:2;font-size:12.5px;color:#959BA8}
+/* meet chief */
+.mc-aur{position:absolute;inset:0;pointer-events:none}
+.mc-aur i{position:absolute;border-radius:50%;mix-blend-mode:screen}
+.mc-aur i:nth-child(1){width:60vw;height:60vw;left:-20vw;top:-26vw;background:radial-gradient(closest-side,rgba(224,64,251,.16),transparent 72%)}
+.mc-aur i:nth-child(2){width:52vw;height:52vw;right:-16vw;bottom:-24vw;background:radial-gradient(closest-side,rgba(34,211,238,.13),transparent 70%)}
+.mc-glint{background:linear-gradient(100deg,#F0ABFC 0%,#FFFFFF 22%,#A78BFA 48%,#67E8F9 74%,#FFFFFF 100%);background-size:220% 100%;-webkit-background-clip:text;background-clip:text;color:transparent;animation:glint 8s linear infinite}
+.mc-top{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:flex-end;gap:20px 48px}
+.mc-body{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px;align-items:stretch}
+.mc-four{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+.mc-pt{display:flex;flex-direction:column;gap:12px;padding:24px;border-radius:22px;background:#0D0F14;border:1px solid #1F2330}
+.mc-pt b{font-family:'Inter Tight',sans-serif;font-size:19px;font-weight:600;letter-spacing:-.01em;line-height:1.25;color:#F5F6F8}
+.mc-pt>span{font-size:15px;line-height:1.55;color:#A9AEB9}
+.mc-bub{align-self:flex-end;max-width:88%;padding:10px 14px;border-radius:16px 16px 4px 16px;background:#1A1D26;border:1px solid #2A2E3A;font-size:15px;line-height:1.45;color:#F5F6F8;display:flex;align-items:center;gap:10px}
+.mc-wave{display:inline-flex;align-items:center;gap:2px;height:16px;flex:none}
+.mc-wave i{width:3px;border-radius:2px;background:#C9BCFF}
+.mc-foot{margin:0;font-size:15px;line-height:1.6;color:#959BA8;max-width:860px}
+.mc-foot a,.mc-strip a{color:#F5F6F8;font-weight:600;text-decoration:underline;text-underline-offset:4px}
+@media (max-width:980px){.mc-body{grid-template-columns:minmax(0,1fr)}}
+@media (max-width:620px){.mc-four{grid-template-columns:minmax(0,1fr)}.mc-pad{padding-top:88px !important;padding-bottom:88px !important}}
+@media (prefers-reduced-motion: reduce){.mc-glint{animation:none}}
+/* /meet chief */
+/* coach hero on a phone: the live class, a coach on camera, in place of the booking phone */
+@media (max-width:760px){.st-tab{display:block !important;position:relative !important;left:auto !important;bottom:auto !important;width:min(380px,100%) !important}.st-ph{display:none !important}}
+/* in the room */
+.wk-glint{background:linear-gradient(100deg,#FDBA74 0%,#FFFFFF 22%,#F97316 48%,#FDBA74 74%,#FFFFFF 100%);background-size:220% 100%;-webkit-background-clip:text;background-clip:text;color:transparent;animation:glint 8s linear infinite}
+.wk-shade{background:linear-gradient(270deg,rgba(7,8,11,.94) 0%,rgba(7,8,11,.76) 34%,rgba(7,8,11,0) 62%),linear-gradient(0deg,rgba(7,8,11,.7) 0%,rgba(7,8,11,0) 34%)}
+.wk-in>div{margin-left:auto}
+@media (max-width:760px){.wk-band{min-height:720px !important}.wk-band img{object-position:42% 22% !important}.wk-shade{background:linear-gradient(0deg,rgba(7,8,11,.97) 0%,rgba(7,8,11,.82) 46%,rgba(7,8,11,0) 76%)}.wk-in{padding-bottom:64px !important}.wk-in>div{margin-left:0}}
+@media (prefers-reduced-motion: reduce){.wk-glint{animation:none}}
+/* /in the room */
 </style>
 {{PIXEL}}
 </head>
@@ -283,13 +313,14 @@ footer nav a:hover{text-decoration-color:#C9CDD6 !important}
 <!-- The Solutionist frame -->
 <div style="background: #000000; color: #C9CDD6; font-size: 13px; border-bottom: 1px solid #15171E">
 <div style="max-width: 1240px; margin: 0 auto; padding: 9px 32px; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 6px 24px">
-<a href="#top" style="display: flex; align-items: center; gap: 8px; color: #F5F6F8; text-decoration: none">
+<a href="{{HOME}}/" data-home style="display: flex; align-items: center; gap: 8px; color: #F5F6F8; text-decoration: none">
+<svg width="8" height="13" viewBox="0 0 8 13" fill="none" stroke="#959BA8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6.5 1.5 1.5 6.5l5 5"></path></svg>
 <svg width="20" height="17" viewBox="8 36 496 424" aria-hidden="true"><defs><linearGradient id="mkg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#E040FB"></stop><stop offset=".55" stop-color="#7C5CFF"></stop><stop offset="1" stop-color="#22D3EE"></stop></linearGradient></defs><g fill="url(#mkg)" stroke="#fff" stroke-width="8" stroke-opacity=".92"><polygon points="18,46 175,232 237,231 133,98 376,99 356,131 412,167 494,49"></polygon><polygon points="205,138 338,241 232,391 274,449 435,221 319,137"></polygon><polygon points="264,274 149,279 201,359"></polygon></g></svg>
-<span style="font-weight: 600">Solutionist</span>
+<span style="font-weight: 600" data-home-label>Solutionist home</span>
 </a>
 <nav aria-label="Solutionist" style="display: flex; flex-wrap: wrap; gap: 6px 22px">
-<a href="/churches" style="color: #C9CDD6; text-decoration: none">For churches</a>
-<a href="/" style="color: #C9CDD6; text-decoration: none">All of Solutionist</a>
+<a href="{{HOME}}/churches" style="color: #C9CDD6; text-decoration: none">For churches</a>
+<a href="{{HOME}}/" style="color: #C9CDD6; text-decoration: none">All of Solutionist</a>
 <a href="{{APP_URL}}" style="color: #F5F6F8; text-decoration: none">Sign in</a>
 </nav>
 </div>
@@ -315,8 +346,9 @@ footer nav a:hover{text-decoration-color:#C9CDD6 !important}
 </a>
 <nav aria-label="Coaches and consultants" style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px 28px; font-size: 15px; font-weight: 500">
 <details class="pmenu"><summary>Products<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#E4E6EB" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg></summary><div class="pmenu-panel"><a href="/coaches" aria-current="page"><i style="background: linear-gradient(135deg, #E040FB, #7C5CFF 55%, #22D3EE)"></i><b>Overview</b><span>Every part of your practice</span></a><a href="/coaches/bookings"><i style="background: #3B82F6"></i><b>Bookings</b><span>Your booking page and standing sessions</span></a><a href="/coaches/clients"><i style="background: #14B8A6"></i><b>Clients</b><span>One record, a brief before every session</span></a><a href="/coaches/proposals-and-contracts"><i style="background: #8B5CF6"></i><b>Proposals and Contracts</b><span>Drafted in your voice</span></a><a href="/coaches/billing-and-time"><i style="background: #22C55E"></i><b>Billing and Time</b><span>Invoices, pay links and your hours</span></a><a href="/coaches/courses-and-classes"><i style="background: #F97316"></i><b>Courses and Classes</b><span>Live classes, recordings, homework</span></a><a href="/coaches/marketing-and-website"><i style="background: #EC4899"></i><b>Marketing and Website</b><span>Your site and a week of posts</span></a><a href="/coaches/office-and-books"><i style="background: #94A3B8"></i><b>Office and Books</b><span>The books, the close, the 1099s</span></a></div></details>
+<a href="#chief" style="text-decoration: none; color: #E4E6EB">Chief</a>
 <a href="#pricing" style="text-decoration: none; color: #E4E6EB">Pricing</a>
-<a href="/start" style="background: #F5F6F8; color: #07080B; text-decoration: none; padding: 11px 20px; border-radius: 999px; font-weight: 600">Start free</a>
+<a href="{{HOME}}/start" style="background: #F5F6F8; color: #07080B; text-decoration: none; padding: 11px 20px; border-radius: 999px; font-weight: 600">Start free</a>
 </nav>
 </div>
 </header>
@@ -338,7 +370,7 @@ footer nav a:hover{text-decoration-color:#C9CDD6 !important}
 <p style="margin: 0; font-size: clamp(18px, 1.5vw, 21px); color: #C9CDD6; max-width: 600px">Bookings, clients, proposals, invoices, classes and your marketing, in one system. Chief keeps it all moving between sessions.</p>
 <div style="display: flex; flex-direction: column; gap: 12px; align-items: flex-start">
 <div style="display: flex; flex-wrap: wrap; gap: 12px; align-items: center">
-<a href="/start" style="background: #F5F6F8; color: #07080B; text-decoration: none; font-weight: 600; font-size: 17px; padding: 15px 26px; border-radius: 999px">{{CTA_START}}</a>
+<a href="{{HOME}}/start" style="background: #F5F6F8; color: #07080B; text-decoration: none; font-weight: 600; font-size: 17px; padding: 15px 26px; border-radius: 999px">{{CTA_START}}</a>
 <a href="#products" style="color: #F5F6F8; text-decoration: none; font-weight: 600; font-size: 17px; padding: 15px 22px; border-radius: 999px; border: 1px solid rgba(255,255,255,0.16); background: rgba(255,255,255,0.03)">See every part</a>
 </div>
 <div class="mono" style="font-size: 12px; color: #8D93A1">Month to month · paid straight to your own Stripe</div>
@@ -432,9 +464,12 @@ footer nav a:hover{text-decoration-color:#C9CDD6 !important}
 </div>
 <div style="flex: 1; display: flex; gap: 8px; padding: 9px 11px; min-height: 0">
 <div style="flex: 1.3; min-width: 0; display: flex; flex-direction: column; gap: 6px">
-<div style="flex: 1; border-radius: 9px; background: radial-gradient(110% 90% at 80% 0%, #C2410C 0%, transparent 60%), linear-gradient(160deg, #3a1a07, #110a05); padding: 10px; display: flex; flex-direction: column; justify-content: flex-end; gap: 3px">
-<span style="font-size: 6.5px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: #FDBA74">Question for the room</span>
-<b style="font: 600 12px/1.15 'Inter Tight', sans-serif">What's the hardest thing to say no to?</b>
+<div style="position: relative; flex: 1; border-radius: 9px; overflow: hidden; background: #110a05; padding: 10px; display: flex; flex-direction: column; justify-content: flex-end; gap: 3px">
+<img src="/assets/home/p-maya.jpg" alt="A coach teaching a live class, on camera" style="position: absolute; left: 0; top: 0; width: 100%; height: 100%; object-fit: cover; object-position: 50% 24%">
+<span aria-hidden="true" style="position: absolute; inset: 0; background: linear-gradient(180deg, rgba(17,10,5,0) 38%, rgba(17,10,5,0.94) 100%)"></span>
+<span style="position: absolute; left: 7px; top: 7px; display: inline-flex; align-items: center; height: 14px; padding: 0 6px; border-radius: 999px; background: rgba(0,0,0,0.55); font-size: 6.5px; font-weight: 600">You</span>
+<span style="position: relative; font-size: 6.5px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: #FDBA74">Question for the room</span>
+<b style="position: relative; font: 600 12px/1.15 'Inter Tight', sans-serif">What's the hardest thing to say no to?</b>
 </div>
 <div style="display: flex; gap: 4px"><span style="flex: 1; height: 18px; border-radius: 4px; background: #1B1E28"></span><span style="flex: 1; height: 18px; border-radius: 4px; background: #1B1E28; outline: 1.5px solid #F97316"></span><span style="flex: 1; height: 18px; border-radius: 4px; background: #1B1E28"></span><span style="flex: 1; height: 18px; border-radius: 4px; background: #1B1E28"></span></div>
 </div>
@@ -506,6 +541,43 @@ footer nav a:hover{text-decoration-color:#C9CDD6 !important}
 </div>
 </section>
 
+<!-- MEET CHIEF -->
+<section id="chief" style="position: relative; background: #050507; border-top: 1px solid #12141B; overflow: hidden">
+<div class="mc-aur" aria-hidden="true"><i></i><i></i></div>
+<div class="mc-pad" style="position: relative; max-width: 1240px; margin: 0 auto; padding: 120px 32px; display: flex; flex-direction: column; gap: 56px">
+<div class="mc-top">
+<div style="display: flex; flex-direction: column; gap: 18px; max-width: 700px">
+<p class="eyebrow" style="margin: 0; color: #C9BCFF">Meet Chief</p>
+<h2 style="margin: 0; font-family: 'Inter Tight', sans-serif; font-weight: 600; font-size: clamp(38px, 4.6vw, 64px); line-height: 1; letter-spacing: -0.04em">A chief of staff for your practice. <span class="serif mc-glint" style="font-size: 1.1em">It's called Chief.</span></h2>
+</div>
+<p style="margin: 0; font-size: 18px; line-height: 1.6; color: #A9AEB9; max-width: 420px">Chief is the AI built into Solutionist. It works from your practice's own records, your clients, sessions, invoices and hours, and tells you when it can't confirm something. You make the calls that matter.</p>
+</div>
+<div class="mc-body">
+<div role="group" aria-label="A sample conversation with Chief" style="background: rgba(13,15,20,0.96); color: #F5F6F8; border: 1px solid #2A2E3A; border-radius: 24px; padding: 22px; display: flex; flex-direction: column; gap: 14px; box-shadow: 0 50px 100px -30px rgba(40,20,120,0.7)">
+<div style="display: flex; align-items: center; gap: 10px"><span style="width: 30px; height: 30px; border-radius: 50%; background: linear-gradient(135deg, #E040FB, #7C5CFF 55%, #22D3EE); flex: none"></span><span style="display: flex; flex-direction: column"><b style="font-size: 14px; font-weight: 600">Chief</b><span style="font-size: 12px; color: #959BA8">Reyes Coaching · sample</span></span><span style="margin-left: auto; font-size: 12px; color: #6B7080; white-space: nowrap">Tuesday, 8:40 AM</span></div>
+<span class="mc-bub"><span class="mc-wave" aria-hidden="true"><i style="height: 5px"></i><i style="height: 11px"></i><i style="height: 16px"></i><i style="height: 9px"></i><i style="height: 13px"></i><i style="height: 6px"></i><i style="height: 10px"></i><i style="height: 4px"></i></span><span>What needs me this week?</span></span>
+<span style="align-self: flex-end; margin-top: -8px; font-size: 11px; color: #6B7080">Said out loud, on a call from the phone</span>
+<div style="display: flex; flex-direction: column; gap: 6px; font-size: 15px; line-height: 1.5">
+<span class="line" style="animation-delay: 0.3s">Three things.</span>
+<span class="line" style="animation-delay: 1.4s">Marcus Hale's invoice for $1,200 is 34 days past due.</span>
+<span class="line" style="animation-delay: 2.5s">Priya Shah hasn't booked since her session on September 28.</span>
+<span class="line" style="animation-delay: 3.6s">And Henderson Co. has 6.5 hours you haven't billed.</span>
+</div>
+<span class="mc-bub line" style="animation-delay: 4.7s">Draft a note to Marcus.</span>
+<span class="line" style="animation-delay: 5.8s; font-size: 15px; line-height: 1.5">Drafted. It waits for you, and nothing goes out until you send it.<span class="caret"></span></span>
+<div style="display: flex; flex-wrap: wrap; gap: 8px"><button type="button" style="font-family: inherit; font-size: 13px; font-weight: 600; padding: 9px 16px; border-radius: 999px; border: 0; background: #F5F6F8; color: #07080B">Read the note</button><button type="button" style="font-family: inherit; font-size: 13px; font-weight: 600; padding: 9px 16px; border-radius: 999px; border: 1px solid #2A2E3A; background: transparent; color: #F5F6F8">Not now</button></div>
+</div>
+<div class="mc-four">
+<div class="mc-pt"><svg width="40" height="40" viewBox="0 0 48 48" aria-hidden="true"><defs><clipPath id="mct1"><rect width="48" height="48" rx="12"></rect></clipPath></defs><g clip-path="url(#mct1)" stroke="rgba(255,255,255,0.55)" stroke-width="1.1" stroke-linejoin="round"><polygon points="0,0 28,0 17,21 0,15" fill="#E040FB"></polygon><polygon points="28,0 48,0 48,19 17,21" fill="#22D3EE"></polygon><polygon points="0,15 17,21 9,48 0,48" fill="#7C5CFF"></polygon><polygon points="17,21 48,19 48,48 9,48" fill="#A78BFA"></polygon><polygon points="17,21 33,31 24,48 9,48" fill="#5B3FE0" fill-opacity="0.6"></polygon></g><g transform="translate(12 12)" fill="none" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="8.5" y="2" width="7" height="12" rx="3.5"></rect><path d="M5 11a7 7 0 0 0 14 0"></path><path d="M12 18v4"></path></g></svg><b>Type it or say it</b><span>Type a question, or tap call and talk it through out loud. It's the same Chief on your phone and your computer.</span></div>
+<div class="mc-pt"><svg width="40" height="40" viewBox="0 0 48 48" aria-hidden="true"><defs><clipPath id="mct2"><rect width="48" height="48" rx="12"></rect></clipPath></defs><g clip-path="url(#mct2)" stroke="rgba(255,255,255,0.55)" stroke-width="1.1" stroke-linejoin="round"><polygon points="0,0 28,0 17,21 0,15" fill="#E040FB"></polygon><polygon points="28,0 48,0 48,19 17,21" fill="#22D3EE"></polygon><polygon points="0,15 17,21 9,48 0,48" fill="#7C5CFF"></polygon><polygon points="17,21 48,19 48,48 9,48" fill="#A78BFA"></polygon><polygon points="17,21 33,31 24,48 9,48" fill="#5B3FE0" fill-opacity="0.6"></polygon></g><g transform="translate(12 12)" fill="none" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path></g></svg><b>Ready each morning</b><span>Each morning Chief notes what's waiting for you: drafts to read, people to get back to, and today's sessions. Ask about the week, and it answers from your invoices, bookings and hours.</span></div>
+<div class="mc-pt"><svg width="40" height="40" viewBox="0 0 48 48" aria-hidden="true"><defs><clipPath id="mct3"><rect width="48" height="48" rx="12"></rect></clipPath></defs><g clip-path="url(#mct3)" stroke="rgba(255,255,255,0.55)" stroke-width="1.1" stroke-linejoin="round"><polygon points="0,0 28,0 17,21 0,15" fill="#E040FB"></polygon><polygon points="28,0 48,0 48,19 17,21" fill="#22D3EE"></polygon><polygon points="0,15 17,21 9,48 0,48" fill="#7C5CFF"></polygon><polygon points="17,21 48,19 48,48 9,48" fill="#A78BFA"></polygon><polygon points="17,21 33,31 24,48 9,48" fill="#5B3FE0" fill-opacity="0.6"></polygon></g><g transform="translate(12 12)" fill="none" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 11V6a2 2 0 0 0-4 0v5"></path><path d="M14 10V4a2 2 0 0 0-4 0v2"></path><path d="M10 10.5V6a2 2 0 0 0-4 0v8"></path><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"></path></g></svg><b>Your yes comes first</b><span>What Chief sends to your clients, and anything it does with money, waits for your yes. It takes a kind of task on itself only after you tell it it may.</span></div>
+<div class="mc-pt"><svg width="40" height="40" viewBox="0 0 48 48" aria-hidden="true"><defs><clipPath id="mct4"><rect width="48" height="48" rx="12"></rect></clipPath></defs><g clip-path="url(#mct4)" stroke="rgba(255,255,255,0.55)" stroke-width="1.1" stroke-linejoin="round"><polygon points="0,0 28,0 17,21 0,15" fill="#E040FB"></polygon><polygon points="28,0 48,0 48,19 17,21" fill="#22D3EE"></polygon><polygon points="0,15 17,21 9,48 0,48" fill="#7C5CFF"></polygon><polygon points="17,21 48,19 48,48 9,48" fill="#A78BFA"></polygon><polygon points="17,21 33,31 24,48 9,48" fill="#5B3FE0" fill-opacity="0.6"></polygon></g><g transform="translate(12 12)" fill="none" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"></path><path d="M14 2v5h6"></path><path d="M8 13h8M8 17h5"></path></g></svg><b>Shows its work</b><span>What Chief does, including anything that failed, is listed in plain words on your History page. Many changes, like tasks and website text, can be undone for a day. Anything sent or paid can't.</span></div>
+</div>
+</div>
+<p class="mc-foot">Chief comes with every plan. A plan's AI actions pay for Chief's work: about {{CONV_STARTER}} conversations a month on Starter, {{CONV_PRO}} on Professional and {{CONV_SOL}} on Solutionist, and the morning notes don't use any. The bigger plans also think deeper in long planning sessions and the weekly look-back. Everyday answers are the same on every plan. <a href="#pricing">Compare the plans</a></p>
+</div>
+</section>
+<!-- /MEET CHIEF -->
 <!-- THE PRODUCTS, as a bento -->
 <section id="products" style="position: relative; background: #07080B; border-top: 1px solid #12141B">
 <div style="max-width: 1240px; margin: 0 auto; padding: 120px 32px; display: flex; flex-direction: column; gap: 56px">
@@ -639,6 +711,20 @@ footer nav a:hover{text-decoration-color:#C9CDD6 !important}
 </div>
 </section>
 
+<!-- IN THE ROOM -->
+<section id="room" class="wk-band" style="position: relative; min-height: 640px; display: flex; align-items: flex-end; background: #07080B; overflow: hidden; border-top: 1px solid #12141B">
+<img src="/assets/home/w-class.jpg" alt="A coach leading a small group at a whiteboard" style="position: absolute; left: 0; top: 0; width: 100%; height: 100%; object-fit: cover; object-position: 42% 30%">
+<span class="wk-shade" aria-hidden="true" style="position: absolute; inset: 0"></span>
+<div class="wk-in" style="position: relative; width: 100%; max-width: 1240px; margin: 0 auto; padding: 140px 32px 104px">
+<div style="max-width: 560px; display: flex; flex-direction: column; gap: 18px">
+<p class="eyebrow" style="margin: 0; color: #FDBA74">Courses and Classes</p>
+<h2 style="margin: 0; font-family: 'Inter Tight', sans-serif; font-weight: 600; font-size: clamp(34px, 3.8vw, 54px); line-height: 1; letter-spacing: -0.04em; color: #F5F6F8">Teach the room, <span class="serif wk-glint" style="font-size: 1.1em">and everyone at home.</span></h2>
+<p style="margin: 0; font-size: 18px; line-height: 1.6; color: #C9CDD6">The people with you watch your slides on the TV. Everyone else joins from their class link, at home or at their desk, in the same class. It's recorded from the moment you start.</p>
+<a href="/coaches/courses-and-classes#live" style="align-self: flex-start; font-weight: 600; color: #F5F6F8; text-decoration: underline; text-underline-offset: 4px">See live classes</a>
+</div>
+</div>
+</section>
+<!-- /IN THE ROOM -->
 <!-- ONE CLIENT, ONE RECORD -->
 <section style="background: #FBF9F5; color: #16130F">
 <div style="max-width: 1240px; margin: 0 auto; padding: 120px 32px; display: flex; flex-direction: column; gap: 64px">
@@ -753,7 +839,7 @@ footer nav a:hover{text-decoration-color:#C9CDD6 !important}
 <div style="flex: 1 1 380px; min-width: 0; display: flex; flex-direction: column; gap: 22px">
 <p class="eyebrow" style="margin: 0; color: #5A5E6B">The office</p>
 <h2 style="margin: 0; font-family: 'Inter Tight', sans-serif; font-weight: 600; font-size: clamp(38px, 4.6vw, 64px); line-height: 1; letter-spacing: -0.04em">Get paid for the work <span class="serif" style="font-size: 1.1em; color: #5B3FE0">you already did.</span></h2>
-<p style="margin: 0; font-size: 18px; color: #5A5E6B">Log the hour when you finish it. Chief keeps track of what's billed and what isn't, offers a reminder when an invoice runs late, and tells you the moment it's paid.</p>
+<p style="margin: 0; font-size: 18px; color: #5A5E6B">Log the hour when you finish it. Chief keeps track of what's billed and what isn't, drafts a reminder when you ask about a late invoice, and tells you the moment it's paid.</p>
 <ul style="list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; font-size: 16px">
 <li style="display: flex; gap: 12px"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#5B3FE0" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex: 0 0 20px; margin-top: 2px"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>"Log 90 minutes on Henderson Co." and it's on the record</span></li>
 <li style="display: flex; gap: 12px"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#5B3FE0" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex: 0 0 20px; margin-top: 2px"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Invoices with a pay link, paid to your own Stripe</span></li>
@@ -834,7 +920,7 @@ footer nav a:hover{text-decoration-color:#C9CDD6 !important}
 <div class="pz"><b>$<span class="pnum" data-m="{{P_STARTER}}" data-y="{{Y_STARTER}}">{{P_STARTER}}</span></b><span class="pper">a month</span></div>
 <div class="pbl">Billed monthly · cancel anytime</div>
 <div class="pds">One person, one practice.</div>
-<div class="mtr"><div class="mrow"><b>{{C_STARTER}}</b><span>AI actions a month</span></div><div class="mbar"><i style="width: {{W_STARTER}}%"></i></div><small>Messages, drafts and answers from Chief.</small></div>
+<div class="mtr"><div class="mrow"><b>{{C_STARTER}}</b><span>AI actions a month</span></div><div class="mbar"><i style="width: {{W_STARTER}}%"></i></div><small>About {{CONV_STARTER}} conversations with Chief.</small></div>
 <div class="dep"><span>Chief thinks <b>Standard</b></span><span class="dd"><i class="on"></i><i></i><i></i></span></div>
 <div class="pinc">Includes</div>
 <ul>
@@ -844,7 +930,7 @@ footer nav a:hover{text-decoration-color:#C9CDD6 !important}
 <li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Basic books</span></li>
 <li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>2 bank connections</span></li>
 </ul>
-<a href="/start" class="pbtn" style="border: 1px solid rgba(11,12,17,0.2); color: #0B0C11">Start free</a>
+<a href="{{HOME}}/start" class="pbtn" style="border: 1px solid rgba(11,12,17,0.2); color: #0B0C11">Start free</a>
 </div>
 
 <div class="pc mid">
@@ -852,7 +938,7 @@ footer nav a:hover{text-decoration-color:#C9CDD6 !important}
 <div class="pz"><b>$<span class="pnum" data-m="{{P_PRO}}" data-y="{{Y_PRO}}">{{P_PRO}}</span></b><span class="pper">a month</span></div>
 <div class="pbl">Billed monthly · cancel anytime</div>
 <div class="pds">You and the two people who help you.</div>
-<div class="mtr"><div class="mrow"><b>{{C_PRO}}</b><span>AI actions a month</span></div><div class="mbar"><i style="width: {{W_PRO}}%"></i></div><small>Room for Chief to draft for every client.</small></div>
+<div class="mtr"><div class="mrow"><b>{{C_PRO}}</b><span>AI actions a month</span></div><div class="mbar"><i style="width: {{W_PRO}}%"></i></div><small>About {{CONV_PRO}} conversations, room to draft for every client.</small></div>
 <div class="dep"><span>Chief thinks <b>Advanced</b></span><span class="dd"><i class="on"></i><i class="on"></i><i></i></span></div>
 <div class="pinc">Everything in Starter, plus</div>
 <ul>
@@ -863,7 +949,7 @@ footer nav a:hover{text-decoration-color:#C9CDD6 !important}
 <li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Chief plans your week of posts</span></li>
 <li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>5 bank connections</span></li>
 </ul>
-<a href="/start" class="pbtn" style="background: #F5F6F8; color: #0B0C11">Start free</a>
+<a href="{{HOME}}/start" class="pbtn" style="background: #F5F6F8; color: #0B0C11">Start free</a>
 </div>
 
 <div class="pc">
@@ -871,17 +957,17 @@ footer nav a:hover{text-decoration-color:#C9CDD6 !important}
 <div class="pz"><b>$<span class="pnum" data-m="{{P_SOL}}" data-y="{{Y_SOL}}">{{P_SOL}}</span></b><span class="pper">a month</span></div>
 <div class="pbl">Billed monthly · cancel anytime</div>
 <div class="pds">A growing practice, with its accountant.</div>
-<div class="mtr"><div class="mrow"><b>{{C_SOL}}</b><span>AI actions a month</span></div><div class="mbar"><i style="width: {{W_SOL}}%"></i></div><small>Chief across every client, all month.</small></div>
+<div class="mtr"><div class="mrow"><b>{{C_SOL}}</b><span>AI actions a month</span></div><div class="mbar"><i style="width: {{W_SOL}}%"></i></div><small>About {{CONV_SOL}} conversations, Chief across every client.</small></div>
 <div class="dep"><span>Chief thinks <b>Maximum</b></span><span class="dd"><i class="on"></i><i class="on"></i><i class="on"></i></span></div>
 <div class="pinc">Everything in Professional, plus</div>
 <ul>
 <li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>7 logins, and a seat for your accountant</span></li>
 <li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Short clips from your recordings</span></li>
-<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>A full audit trail</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>An audit trail of every change to a closed month</span></li>
 <li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Unlimited bank connections</span></li>
 <li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Up to 3 businesses on one account</span></li>
 </ul>
-<a href="/start" class="pbtn" style="border: 1px solid rgba(11,12,17,0.2); color: #0B0C11">Start free</a>
+<a href="{{HOME}}/start" class="pbtn" style="border: 1px solid rgba(11,12,17,0.2); color: #0B0C11">Start free</a>
 </div>
 </div>
 
@@ -911,7 +997,7 @@ footer nav a:hover{text-decoration-color:#C9CDD6 !important}
 <div style="position: relative; max-width: 1240px; margin: 0 auto; padding: 160px 32px; display: flex; flex-direction: column; align-items: center; gap: 26px; text-align: center">
 <h2 style="margin: 0; font-family: 'Inter Tight', sans-serif; font-weight: 600; font-size: clamp(42px, 6vw, 92px); line-height: 0.98; letter-spacing: -0.045em; max-width: 1000px">Chief keeps the office. <span class="serif glint" style="font-size: 1.08em">You keep your clients.</span></h2>
 <p style="margin: 0; font-size: 19px; color: #C9CDD6">{{TRIAL_LINE}}</p>
-<a href="/start" style="background: #F5F6F8; color: #07080B; text-decoration: none; font-weight: 600; font-size: 17px; padding: 16px 32px; border-radius: 999px">Start free</a>
+<a href="{{HOME}}/start" style="background: #F5F6F8; color: #07080B; text-decoration: none; font-weight: 600; font-size: 17px; padding: 16px 32px; border-radius: 999px">Start free</a>
 </div>
 </section>
 
@@ -937,10 +1023,11 @@ footer nav a:hover{text-decoration-color:#C9CDD6 !important}
 </nav>
 <nav aria-label="Company" style="display: flex; flex-direction: column; gap: 8px; font-size: 14px">
 <span style="color: #F5F6F8; font-weight: 600">Solutionist</span>
-<a href="/churches" style="color: #C9CDD6; text-decoration: none">For churches</a>
+<a href="{{HOME}}/" style="color: #C9CDD6; text-decoration: none">Solutionist home</a>
+<a href="{{HOME}}/churches" style="color: #C9CDD6; text-decoration: none">For churches</a>
 <a href="#pricing" style="color: #C9CDD6; text-decoration: none">Pricing</a>
-<a href="/privacy" style="color: #C9CDD6; text-decoration: none">Privacy</a>
-<a href="/terms" style="color: #C9CDD6; text-decoration: none">Terms</a>
+<a href="{{HOME}}/privacy" style="color: #C9CDD6; text-decoration: none">Privacy</a>
+<a href="{{HOME}}/terms" style="color: #C9CDD6; text-decoration: none">Terms</a>
 </nav>
 </div>
 </footer>
@@ -962,5 +1049,19 @@ footer nav a:hover{text-decoration-color:#C9CDD6 !important}
 })();
 </script>
 {{ANALYTICS}}
+<script>
+/* Solutionist home: someone who came here from the main site goes back to the page they left */
+(function () {
+  try {
+    var a = document.querySelector("[data-home]");
+    if (!a || !document.referrer) return;
+    var r = new URL(document.referrer), h = new URL(a.href).hostname;
+    if (r.hostname !== h && r.hostname !== "www." + h) return;
+    if (/^\/(churches|coaches|consultants)(\/|$)/.test(r.pathname)) return;
+    a.href = r.href;
+    a.querySelector("[data-home-label]").textContent = "Back to Solutionist";
+  } catch (e) { /* the plain link still goes home */ }
+})();
+</script>
 </body>
 </html>
