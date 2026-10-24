@@ -3,12 +3,11 @@ title: Church areas, step 1 — the map (server)
 date: 2026-10-23
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-10-23: "divide up the system as far as workload so each section of the system is viewed by specific people … if we create media team they would be able to get the part when it comes to media like churchsavvy … seats … treasurer oversees a section, Pastor oversees a section"; then, after the artifact "Church Areas and Keys" (7YRKpKa9g2DdFU9mm3WD8L): "lets start building this" (the Ops desk left Build to make room, Kevin''s pick)'
-status: in progress
-prs: [kmj-intake-server#1562]
+status: shipped
+prs: [kmj-intake-server#1562, solutionist-studio#1335 (the Areas page), kmj-intake-server#1563 + solutionist-studio#1336 (the Media part)]
 migrations: [supabase/APPLY-2026-10-23-church-areas.sql (APPLIED LIVE 10/23 after a rollback probe)]
 left_undone:
-  - "The office's Areas page (solutionist-studio, the next PR): the eight areas, who works each, who reaches it through an office login, what's missing, and Place for a role or team"
-  - "A Media part on ChurchSavvy's team that also opens sermons, the livestream and the media library (server PR next; sermons are written straight to the database today, so they need server routes for a volunteer)"
+  - "CHURCH_AREAS is unset in Railway, so the map is owner-only until it is set to on (a Thursday switch-on)"
   - "Work given to a team lands in its area (the artifact's Wednesday): there is no team job list yet"
   - "Step 2 (keepers, the second key for giving names, approval levels for moving money in the app and outside it) and step 3 (seats by area) are not started"
 decisions:
