@@ -346,6 +346,9 @@ app.include_router(worship_sermons_router)
 # SUNDAY_PLANNING=off|owner|on (default owner) until Kevin turns it on.
 from sunday_planning import router as sunday_planning_router
 app.include_router(sunday_planning_router)
+# Its order of service: when each item starts, and a note for each team.
+from sunday_order import router as sunday_order_router
+app.include_router(sunday_order_router)
 # Joining a free class from its public page (POST <class page>/join).
 from academy_join import router as academy_join_router
 app.include_router(academy_join_router)
