@@ -655,9 +655,10 @@ def _group_card(g: Dict[str, Any], action: str, pal: Dict[str, str], pool: Optio
 
 
 def render_groups(biz, site, request: Request, data: Optional[Dict[str, List[Dict[str, Any]]]],
-                  who: Optional[Dict[str, Any]] = None, room: bool = False) -> str:
+                  who: Optional[Dict[str, Any]] = None, room: bool = False, serving: bool = False) -> str:
     """Connect: your groups, then groups to join. `room`: this member is in
-    the church's All group leaders room (messaging on), so it has a door."""
+    the church's All group leaders room (messaging on), so it has a door.
+    `serving`: they're on a Sunday team (sunday_serving), so My serving does."""
     import member_app_ui as ui
     import member_app_photos as photos
     import member_portal_messaging as mpm
@@ -698,6 +699,11 @@ def render_groups(biz, site, request: Request, data: Optional[Dict[str, List[Dic
                     f'<ul class="mb-list mb-cards"><li><a href="/my/groups/leaders"><span class="mb-thumb mb-chat-av">{ui.icon("users", 18)}</span>'
                     f'<span class="mb-list-text"><strong>All group leaders</strong><span>Every group leader and your pastors, '
                     f'in one chat</span></span>{ui.icon("chevron", 16)}</a></li></ul></section>')
+        if serving:
+            lead = (f'<section aria-labelledby="mp-serve-h">{ui.section("Serving", hid="mp-serve-h")}'
+                    f'<ul class="mb-list mb-cards"><li><a href="/my/serving"><span class="mb-thumb mb-chat-av">{ui.icon("clock", 18)}</span>'
+                    f'<span class="mb-list-text"><strong>My serving</strong><span>Your Sundays, away dates and swaps</span></span>'
+                    f'{ui.icon("chevron", 16)}</a></li></ul></section>') + lead
         body = (f'{hint}<section aria-labelledby="mp-mine-h">{ui.section("Your groups", hid="mp-mine-h")}{mine}</section>{lead}'
                 f'<section aria-labelledby="mp-open-h">{ui.section("Find a group", hid="mp-open-h")}{open_}</section>')
     return _shell(biz, site, "Connect", f"""

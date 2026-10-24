@@ -1,0 +1,450 @@
+# sunday_serving.py — ChurchSavvy Planning, the member's side: what a member
+# is asked to serve, their coming Sundays, a sub when they can't, away dates
+# and how often they'd like to serve (design canvas Ct88v7pxpq5a4PGYX3MuQQ,
+# boards 7 "The ask" and 8 "My serving"). The pages are
+# member_portal_serving.py; the office is sunday_planning.py.
+#
+# A member only ever reads and changes their own: an ask made to them, a
+# Sunday they said yes to, a place offered to their team that they're trained
+# for, their own away days and their own wish for how often. Nothing here
+# reaches a business_users seat.
+from __future__ import annotations
+
+import logging
+from datetime import date, datetime, timedelta, timezone
+from typing import Any, Dict, List, Optional, Set, Tuple
+
+from fastapi import HTTPException
+
+import sb_clients
+import sunday_planning as sp
+from sunday_planning import _ids, _q, _read
+
+logger = logging.getLogger(__name__)
+
+AHEAD_DAYS = 90
+MAX_AWAY = 20
+OFTEN = ("one", "two", "every")
+WHY = ("Away", "Working", "Not feeling well", "Rather not say")
+
+
+def _iso(dt: datetime) -> str:
+    return dt.astimezone(timezone.utc).isoformat()
+
+
+def _when(row: Dict[str, Any], zone) -> Optional[datetime]:
+    try:
+        return datetime.fromisoformat(str(row["starts_at"]).replace("Z", "+00:00")).astimezone(zone)
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def on() -> bool:
+    """The member's side follows the office's switch: nobody can be asked
+    to serve where the office can't schedule."""
+    return sp.mode() != "off"
+
+
+# ─── reading what's mine ─────────────────────────────────────────────
+
+
+def _services(biz: str, zone, lo: datetime, hi: datetime, ids: Optional[List[str]] = None) -> Dict[str, Dict[str, Any]]:
+    path = (f"/worship_services?business_id=eq.{_q(biz)}&archived_at=is.null&is_template=eq.false"
+            + (f"&id=in.({_ids(ids)})" if ids is not None else
+               f"&starts_at=gte.{_q(_iso(lo))}&starts_at=lt.{_q(_iso(hi))}")
+            + "&select=id,title,starts_at&order=starts_at.asc")
+    out = {}
+    for r in (_read(path) if ids is None or ids else []):
+        at = _when(r, zone)
+        if at:
+            out[str(r["id"])] = {"id": str(r["id"]), "title": r.get("title") or "Sunday service", "at": at,
+                                 "day": at.date().isoformat()}
+    return out
+
+
+def mine(biz: Dict[str, Any], cid: str) -> Optional[Dict[str, Any]]:
+    """Everything My serving shows, or None when this member isn't on a
+    Sunday team and nobody has asked them anything."""
+    biz_id = str(biz["id"])
+    zone = sp._zone(biz_id)
+    now = sp._now().astimezone(zone)
+    teams = _read(f"/serve_teams?business_id=eq.{_q(biz_id)}&select=group_id,call_time,max_month")
+    gids = [str(t["group_id"]) for t in teams]
+    member_of = [str(m["group_id"]) for m in (_read(
+        f"/group_members?business_id=eq.{_q(biz_id)}&contact_id=eq.{_q(cid)}&group_id=in.({_ids(gids)})&select=group_id")
+        if gids else [])]
+    soon = _services(biz_id, zone, now - timedelta(hours=3), now + timedelta(days=AHEAD_DAYS))
+    sids = list(soon)
+    rows = (_read(f"/serve_assignments?business_id=eq.{_q(biz_id)}&service_id=in.({_ids(sids)})"
+                  f"&or=(contact_id.eq.{_q(cid)},swap_to.eq.{_q(cid)},status.eq.offered)"
+                  f"&select=id,service_id,position_id,slot,contact_id,status,note,asked_by,asked_at,swap_to,swap_asked_at")
+            if sids else [])
+    if not member_of and not any(str(r.get("contact_id")) == cid or str(r.get("swap_to")) == cid for r in rows):
+        return None
+    trained = {str(t["position_id"]): t.get("level") or "trained" for t in _read(
+        f"/serve_trained?business_id=eq.{_q(biz_id)}&contact_id=eq.{_q(cid)}&select=position_id,level")}
+    pids = {str(r["position_id"]) for r in rows} | set(trained)
+    places = {str(p["id"]): p for p in (_read(
+        f"/serve_positions?business_id=eq.{_q(biz_id)}&id=in.({_ids(pids)})&select=id,group_id,name,active,sort")
+        if pids else [])}
+    names = {str(g["id"]): g["name"] for g in (_read(
+        f"/groups?business_id=eq.{_q(biz_id)}&id=in.({_ids(gids)})&select=id,name") if gids else [])}
+    turns = {str(t["group_id"]): t for t in teams}
+    away = _read(f"/serve_away?business_id=eq.{_q(biz_id)}&contact_id=eq.{_q(cid)}"
+                 f"&ends_on=gte.{now.date().isoformat()}&select=id,starts_on,ends_on,note&order=starts_on.asc")
+    pref = _read(f"/serve_prefs?business_id=eq.{_q(biz_id)}&contact_id=eq.{_q(cid)}&select=often&limit=1")
+
+    def is_away(day: str) -> bool:
+        return any(str(a["starts_on"]) <= day <= str(a["ends_on"]) for a in away)
+
+    def busy(sid: str) -> bool:
+        return any(str(r.get("contact_id")) == cid and str(r["service_id"]) == sid and r["status"] in ("asked", "yes")
+                   for r in rows)
+
+    def item(r: Dict[str, Any]) -> Dict[str, Any]:
+        s = soon[str(r["service_id"])]
+        p = places.get(str(r["position_id"])) or {}
+        gid = str(p.get("group_id") or "")
+        return {"id": str(r["id"]), "service": s, "place": p.get("name") or "A place", "team": names.get(gid, "Your team"),
+                "group_id": gid, "call_time": sp._hhmm((turns.get(gid) or {}).get("call_time")), "status": r["status"],
+                "asked_by": r.get("asked_by") or "", "asked_at": r.get("asked_at"), "note": r.get("note") or "",
+                "swap_to": str(r["swap_to"]) if r.get("swap_to") else None}
+
+    mine_rows = [r for r in rows if str(r.get("contact_id")) == cid]
+    asks = [item(r) for r in mine_rows if r["status"] == "asked"]
+    covers = [item(r) | {"from_id": str(r["contact_id"])} for r in rows
+              if str(r.get("swap_to")) == cid and r["status"] == "yes"]
+    coming = [item(r) for r in mine_rows if r["status"] == "yes"]
+    open_ = [item(r) for r in rows if r["status"] == "offered" and trained.get(str(r["position_id"])) == "trained"
+             and not busy(str(r["service_id"])) and not is_away(soon[str(r["service_id"])]["day"])]
+    who = sp._people(biz_id, [c["from_id"] for c in covers] + [c["swap_to"] for c in coming if c["swap_to"]])
+    for c in covers:
+        c["from"] = (who.get(c["from_id"]) or {}).get("name") or "Someone"
+    for c in coming:
+        c["swap_name"] = (who.get(c["swap_to"]) or {}).get("name") if c["swap_to"] else None
+    # Who else on the team serves those Sundays: "Be there 10:15 · with Luis and Marcus".
+    if coming:
+        team_places = {pid for pid, p in (places.items())}
+        at_mine = _read(f"/serve_assignments?business_id=eq.{_q(biz_id)}&service_id=in.({_ids(c['service']['id'] for c in coming)})"
+                        f"&status=in.(asked,yes)&select=service_id,position_id,contact_id")
+        other_pids = {str(r["position_id"]) for r in at_mine} - team_places
+        if other_pids:
+            places.update({str(p["id"]): p for p in _read(
+                f"/serve_positions?business_id=eq.{_q(biz_id)}&id=in.({_ids(other_pids)})&select=id,group_id,name,active")})
+        names_ = sp._people(biz_id, [r["contact_id"] for r in at_mine if str(r["contact_id"]) != cid])
+        for c in coming:
+            c["with"] = [names_[str(r["contact_id"])]["name"] for r in at_mine
+                         if str(r["service_id"]) == c["service"]["id"] and str(r["contact_id"]) != cid
+                         and str((places.get(str(r["position_id"])) or {}).get("group_id")) == c["group_id"]
+                         and str(r["contact_id"]) in names_]
+    by_time = lambda x: x["service"]["at"]
+    teams_out = []
+    for gid in member_of:
+        # In the team's own order of places, as the office set it.
+        mine_places = sorted((p for pid, p in places.items() if str(p.get("group_id")) == gid and p.get("active") is not False
+                              and trained.get(pid) == "trained"), key=lambda p: (p.get("sort") or 0, p["name"].lower()))
+        teams_out.append({"group_id": gid, "name": names.get(gid, "A team"), "places": [p["name"] for p in mine_places]})
+    return {
+        "teams": sorted(teams_out, key=lambda t: t["name"].lower()),
+        "asks": sorted(asks + covers, key=by_time), "coming": sorted(coming, key=by_time), "open": sorted(open_, key=by_time),
+        "this_year": _served_this_year(biz_id, cid, zone, now),
+        "away": [{"id": str(a["id"]), "starts_on": str(a["starts_on"]), "ends_on": str(a["ends_on"]),
+                  "note": a.get("note") or ""} for a in away],
+        "often": (pref[0]["often"] if pref else None),
+        # The church's next service: "this Sunday" means that one, not
+        # whichever Sunday this member serves next.
+        "next_day": min((s["day"] for s in soon.values()), default=None),
+    }
+
+
+def _served_this_year(biz_id: str, cid: str, zone, now: datetime) -> int:
+    said = _read(f"/serve_assignments?business_id=eq.{_q(biz_id)}&contact_id=eq.{_q(cid)}&status=eq.yes&select=service_id")
+    ids = sorted({str(r["service_id"]) for r in said})
+    if not ids:
+        return 0
+    n = 0
+    for i in range(0, len(ids), 150):
+        for s in _services(biz_id, zone, now, now, ids[i:i + 150]).values():
+            if s["at"].year == now.year and s["at"] <= now:
+                n += 1
+    return n
+
+
+def serves(biz: Dict[str, Any], cid: str) -> bool:
+    """Me shows My serving to someone on a Sunday team, or anyone asked."""
+    if not on():
+        return False
+    biz_id = str(biz["id"])
+    try:
+        gids = [str(t["group_id"]) for t in _read(f"/serve_teams?business_id=eq.{_q(biz_id)}&select=group_id")]
+        if gids and _read(f"/group_members?business_id=eq.{_q(biz_id)}&contact_id=eq.{_q(cid)}"
+                          f"&group_id=in.({_ids(gids)})&select=group_id&limit=1"):
+            return True
+        return bool(_read(f"/serve_assignments?business_id=eq.{_q(biz_id)}&or=(contact_id.eq.{_q(cid)},swap_to.eq.{_q(cid)})"
+                          f"&select=id&limit=1"))
+    except HTTPException:
+        return False
+
+
+def waiting(biz: Dict[str, Any], cid: str) -> List[Dict[str, Any]]:
+    """Home's card: asks and cover requests waiting on this member."""
+    if not on():
+        return []
+    try:
+        m = mine(biz, cid)
+    except HTTPException:
+        return []
+    return (m or {}).get("asks") or []
+
+
+# ─── one ask ─────────────────────────────────────────────────────────
+
+
+def _row(biz_id: str, aid: str) -> Dict[str, Any]:
+    rows = _read(f"/serve_assignments?id=eq.{_q(aid)}&business_id=eq.{_q(biz_id)}&select=*&limit=1")
+    if not rows:
+        raise HTTPException(404, "That isn't on the schedule anymore.")
+    return rows[0]
+
+
+def _future(biz_id: str, row: Dict[str, Any]) -> Tuple[Any, datetime]:
+    zone = sp._zone(biz_id)
+    s = _services(biz_id, zone, sp._now(), sp._now(), [str(row["service_id"])]).get(str(row["service_id"]))
+    if not s or s["at"] <= sp._now().astimezone(zone):
+        raise HTTPException(409, "That Sunday has already passed.")
+    return zone, s["at"]
+
+
+def ask_view(biz: Dict[str, Any], cid: str, aid: str) -> Dict[str, Any]:
+    """The ask (board 7): the place, the Sunday, who's on with them, and the
+    next Sunday they're free, for "I can't, but I can do …"."""
+    biz_id = str(biz["id"])
+    row = _row(biz_id, aid)
+    mine_ = str(row.get("contact_id")) == cid
+    cover = str(row.get("swap_to")) == cid and row["status"] == "yes"
+    if not mine_ and not cover and row["status"] != "offered":
+        raise HTTPException(404, "That isn't on the schedule anymore.")
+    board = sp._service_board(biz_id, str(row["service_id"]))
+    sid, pid = str(row["service_id"]), str(row["position_id"])
+    team = board.place_team.get(pid)
+    if not team:
+        raise HTTPException(404, "That place isn't on a Sunday team anymore.")
+    if row["status"] == "offered":
+        me = next((c for c in board.candidates(sid, pid) if c["contact_id"] == cid), None)
+        if not me or me["trained"] != "trained":
+            raise HTTPException(404, "That isn't on the schedule anymore.")
+    svc = board.service[sid]
+    at = datetime.fromisoformat(str(svc["starts_at"]).replace("Z", "+00:00")).astimezone(board.zone)
+    others = sp._people(biz_id, [r.get("contact_id") for r in board.rows])
+    with_ = []
+    for p in team["places"]:
+        for slot in range(1, (p["needed"] or 1) + 1):
+            if p["id"] == pid and slot == int(row.get("slot") or 1):
+                continue
+            h = board.holder(sid, p["id"], slot)
+            if h and h["status"] in ("asked", "yes") and h.get("contact_id"):
+                with_.append({"name": (others.get(str(h["contact_id"])) or {}).get("name") or "Someone", "place": p["name"],
+                              "status": h["status"]})
+            else:
+                learning = [x["name"] for x in p["people"] if x["level"] == "learning"]
+                with_.append({"name": None, "place": p["name"], "status": "open", "learning": learning[:1]})
+    leaders = [x["name"] for x in team["people"] if x["leader"]]
+    asker = row.get("asked_by") or ""
+    if not asker or asker == sp.FILLED_BY:
+        asker = leaders[0].split(" ")[0] if leaders else ""
+    return {
+        "id": str(row["id"]), "status": row["status"], "cover": cover,
+        "cover_from": (others.get(str(row["contact_id"])) or {}).get("name") if cover else None,
+        "place": next(p["name"] for p in team["places"] if p["id"] == pid), "team": team["name"], "group_id": team["group_id"],
+        "call_time": team.get("call_time"), "at": at, "title": svc["title"], "asked_by": asker,
+        "leader": leaders[0] if leaders else None, "note": row.get("note") or "", "past": at <= sp._now().astimezone(board.zone),
+        "with": with_, "can_do": _next_free(biz_id, cid, board.zone, at) if mine_ and row["status"] in ("asked", "no") else None,
+    }
+
+
+def _next_free(biz_id: str, cid: str, zone, after: datetime) -> Optional[Dict[str, Any]]:
+    """The next service within two weeks that this member isn't away for
+    and isn't already serving at."""
+    later = _services(biz_id, zone, after + timedelta(hours=12), after + timedelta(days=15))
+    if not later:
+        return None
+    rows = _read(f"/serve_assignments?business_id=eq.{_q(biz_id)}&contact_id=eq.{_q(cid)}&service_id=in.({_ids(later)})"
+                 f"&status=in.(asked,yes)&select=service_id")
+    taken = {str(r["service_id"]) for r in rows}
+    away = _read(f"/serve_away?business_id=eq.{_q(biz_id)}&contact_id=eq.{_q(cid)}&select=starts_on,ends_on")
+    for s in later.values():
+        if s["id"] in taken or any(str(a["starts_on"]) <= s["day"] <= str(a["ends_on"]) for a in away):
+            continue
+        return {"id": s["id"], "at": s["at"], "title": s["title"]}
+    return None
+
+
+# ─── answering ───────────────────────────────────────────────────────
+
+
+def _patch(biz_id: str, aid: str, guard: str, fields: Dict[str, Any]) -> Dict[str, Any]:
+    saved = sb_clients.sb_patch_as_service(
+        f"/serve_assignments?id=eq.{_q(aid)}&business_id=eq.{_q(biz_id)}&{guard}&select=*", fields)
+    if saved is None:
+        raise HTTPException(503, "That didn't save. Try again.")
+    if not saved:
+        raise HTTPException(409, "That changed while you were looking. Open it again.")
+    return saved[0]
+
+
+def answer(biz: Dict[str, Any], cid: str, aid: str, ans: str, why: str = "") -> Dict[str, Any]:
+    """yes, no, or other (can't, but free the next Sunday). An answer to a
+    cover request moves the place to this member, or leaves it with the
+    one who asked."""
+    biz_id = str(biz["id"])
+    if ans not in ("yes", "no", "other"):
+        raise HTTPException(400, "The answer is yes or no.")
+    why = why if why in WHY else ""
+    row = _row(biz_id, aid)
+    zone, at = _future(biz_id, row)
+    now = sp._now().isoformat()
+    if str(row.get("swap_to")) == cid and row["status"] == "yes":
+        if ans != "yes":
+            return _patch(biz_id, aid, f"swap_to=eq.{_q(cid)}", {"swap_to": None, "swap_asked_at": None})
+        board = sp._service_board(biz_id, str(row["service_id"]))
+        me = next((c for c in board.candidates(str(row["service_id"]), str(row["position_id"])) if c["contact_id"] == cid), None)
+        if not me or me["away"] or me["clash"]:
+            raise HTTPException(409, "You're away or already serving that hour, so you can't cover it.")
+        was = (sp._people(biz_id, [row["contact_id"]]).get(str(row["contact_id"])) or {}).get("name") or "someone"
+        return _patch(biz_id, aid, f"swap_to=eq.{_q(cid)}",
+                      {"contact_id": cid, "status": "yes", "answered_at": now, "swap_to": None, "swap_asked_at": None,
+                       "note": f"Covering for {was.split(' ')[0]}"[:300]})
+    if str(row.get("contact_id")) != cid or row["status"] not in ("asked", "yes", "no"):
+        raise HTTPException(404, "That isn't on the schedule anymore.")
+    if ans == "yes":
+        return _patch(biz_id, aid, f"contact_id=eq.{_q(cid)}", {"status": "yes", "answered_at": now, "note": ""})
+    note = why
+    if ans == "other":
+        nxt = _next_free(biz_id, cid, zone, at)
+        if nxt:
+            note = f"Can do {_day(nxt['at'])}" + (f" · {why}" if why else "")
+    return _patch(biz_id, aid, f"contact_id=eq.{_q(cid)}",
+                  {"status": "no", "answered_at": now, "note": note[:300], "swap_to": None, "swap_asked_at": None})
+
+
+def _day(at: datetime) -> str:
+    return f"{at.strftime('%b')} {at.day}"
+
+
+def set_why(biz: Dict[str, Any], cid: str, aid: str, why: str) -> Dict[str, Any]:
+    """Why they can't, if they want to say; only the office and the team's
+    leaders see it. A "can do" date they offered stays in front."""
+    biz_id = str(biz["id"])
+    row = _row(biz_id, aid)
+    if str(row.get("contact_id")) != cid or row["status"] != "no":
+        raise HTTPException(404, "That isn't on the schedule anymore.")
+    why = why if why in WHY else ""
+    keep = (row.get("note") or "").split(" · ")[0]
+    note = (f"{keep} · {why}" if keep.startswith("Can do ") and why else keep if keep.startswith("Can do ") else why)
+    return _patch(biz_id, aid, f"contact_id=eq.{_q(cid)}", {"note": note[:300]})
+
+
+def take(biz: Dict[str, Any], cid: str, aid: str) -> Dict[str, Any]:
+    """Take a place offered to the whole team: the first yes takes it."""
+    biz_id = str(biz["id"])
+    row = _row(biz_id, aid)
+    if row["status"] != "offered":
+        raise HTTPException(409, "Someone already took it. Thank you for offering.")
+    _future(biz_id, row)
+    board = sp._service_board(biz_id, str(row["service_id"]))
+    me = next((c for c in board.candidates(str(row["service_id"]), str(row["position_id"])) if c["contact_id"] == cid), None)
+    if not me or me["trained"] != "trained":
+        raise HTTPException(404, "That isn't on the schedule anymore.")
+    if me["away"] or me["clash"]:
+        raise HTTPException(409, "You're away or already serving that hour.")
+    try:
+        return _patch(biz_id, aid, "status=eq.offered", {"contact_id": cid, "status": "yes", "answered_at": sp._now().isoformat()})
+    except HTTPException as e:
+        if e.status_code == 409:
+            raise HTTPException(409, "Someone already took it. Thank you for offering.")
+        raise
+
+
+# ─── a Sunday they can't make ────────────────────────────────────────
+
+
+def subs(biz: Dict[str, Any], cid: str, aid: str) -> List[Dict[str, Any]]:
+    """Who could cover a Sunday this member said yes to: the team's people
+    who are trained on the place or learning it, the free first."""
+    biz_id = str(biz["id"])
+    row = _row(biz_id, aid)
+    if str(row.get("contact_id")) != cid or row["status"] != "yes":
+        raise HTTPException(404, "That isn't on the schedule anymore.")
+    board = sp._service_board(biz_id, str(row["service_id"]))
+    return [c for c in board.candidates(str(row["service_id"]), str(row["position_id"]))
+            if c["contact_id"] != cid and c["trained"] in ("trained", "learning")]
+
+
+def ask_sub(biz: Dict[str, Any], cid: str, aid: str, sub: str) -> Dict[str, Any]:
+    biz_id = str(biz["id"])
+    row = _row(biz_id, aid)
+    _future(biz_id, row)
+    pick = next((c for c in subs(biz, cid, aid) if c["contact_id"] == sub), None)
+    if not pick:
+        raise HTTPException(404, "They aren't on the team for that place.")
+    if not pick["ok"]:
+        raise HTTPException(409, f"{pick['name'].split(' ')[0]} isn't free that day.")
+    return _patch(biz_id, aid, f"contact_id=eq.{_q(cid)}&status=eq.yes",
+                  {"swap_to": sub, "swap_asked_at": sp._now().isoformat()})
+
+
+def stop_sub(biz: Dict[str, Any], cid: str, aid: str) -> Dict[str, Any]:
+    return _patch(str(biz["id"]), aid, f"contact_id=eq.{_q(cid)}&status=eq.yes", {"swap_to": None, "swap_asked_at": None})
+
+
+def cant_make_it(biz: Dict[str, Any], cid: str, aid: str, why: str = "") -> Dict[str, Any]:
+    """Just tell the leader: the place opens and the office sees why."""
+    biz_id = str(biz["id"])
+    row = _row(biz_id, aid)
+    _future(biz_id, row)
+    why = why if why in WHY else ""
+    if str(row.get("contact_id")) != cid or row["status"] not in ("asked", "yes"):
+        raise HTTPException(404, "That isn't on the schedule anymore.")
+    return _patch(biz_id, aid, f"contact_id=eq.{_q(cid)}",
+                  {"status": "no", "answered_at": sp._now().isoformat(), "note": ("Can't make it" + (f" · {why}" if why else ""))[:300],
+                   "swap_to": None, "swap_asked_at": None})
+
+
+# ─── away days and how often ─────────────────────────────────────────
+
+
+def add_away(biz: Dict[str, Any], cid: str, start: str, end: str, note: str = "") -> Dict[str, Any]:
+    biz_id = str(biz["id"])
+    try:
+        a, b = date.fromisoformat(str(start)[:10]), date.fromisoformat(str(end or start)[:10])
+    except ValueError:
+        raise HTTPException(400, "Pick the days you're away.")
+    today = sp._now().astimezone(sp._zone(biz_id)).date()
+    if b < a or b < today or (b - a).days > 366:
+        raise HTTPException(400, "Pick the days you're away, a year at most, not in the past.")
+    have = _read(f"/serve_away?business_id=eq.{_q(biz_id)}&contact_id=eq.{_q(cid)}&ends_on=gte.{today.isoformat()}&select=id")
+    if len(have) >= MAX_AWAY:
+        raise HTTPException(400, "That's a lot of away dates. Take some off first.")
+    saved = sb_clients.sb_post_as_service("/serve_away?select=id", {
+        "business_id": biz_id, "contact_id": cid, "starts_on": a.isoformat(), "ends_on": b.isoformat(),
+        "note": " ".join(str(note or "").split())[:100]})
+    if not isinstance(saved, list) or not saved:
+        raise HTTPException(503, "That didn't save. Try again.")
+    return saved[0]
+
+
+def drop_away(biz: Dict[str, Any], cid: str, away_id: str) -> None:
+    if not sb_clients.sb_delete_as_service(
+            f"/serve_away?id=eq.{_q(away_id)}&business_id=eq.{_q(str(biz['id']))}&contact_id=eq.{_q(cid)}"):
+        raise HTTPException(503, "That didn't save. Try again.")
+
+
+def set_often(biz: Dict[str, Any], cid: str, often: str) -> None:
+    if often not in OFTEN:
+        raise HTTPException(400, "Pick how often.")
+    saved = sb_clients.sb_post_as_service(
+        "/serve_prefs?on_conflict=business_id,contact_id&select=often",
+        {"business_id": str(biz["id"]), "contact_id": cid, "often": often, "updated_at": sp._now().isoformat()},
+        prefer="resolution=merge-duplicates,return=representation")
+    if not isinstance(saved, list) or not saved:
+        raise HTTPException(503, "That didn't save. Try again.")

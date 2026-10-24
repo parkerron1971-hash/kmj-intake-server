@@ -197,11 +197,15 @@ def _teams(biz: str) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
         trained = _read(f"/serve_trained?business_id=eq.{_q(biz)}&position_id=in.({_ids(p['id'] for p in places)})"
                         f"&select=position_id,contact_id,level")
     who = _people(biz, [m["contact_id"] for m in members] + [t["contact_id"] for t in trained])
+    # How often each would like to serve (member_portal_serving): a wish, not a rule.
+    often = {str(p["contact_id"]): p["often"] for p in (_read(
+        f"/serve_prefs?business_id=eq.{_q(biz)}&contact_id=in.({_ids(who)})&select=contact_id,often") if who else [])}
     out = []
     for gid in team_ids:
         s = by_group[gid]
         mine = [m for m in members if str(m["group_id"]) == gid and str(m["contact_id"]) in who]
-        people = sorted(({"contact_id": str(m["contact_id"]), **who[str(m["contact_id"])], "leader": m.get("role") == "leader"}
+        people = sorted(({"contact_id": str(m["contact_id"]), **who[str(m["contact_id"])], "leader": m.get("role") == "leader",
+                          "often": often.get(str(m["contact_id"]))}
                          for m in mine), key=lambda p: (not p["leader"], p["name"].lower()))
         out.append({
             "group_id": gid, "name": names[gid], "call_time": _hhmm(s.get("call_time")),
@@ -580,7 +584,7 @@ class _Board:
             self.month_services = list(self.services)
         sids = [s["id"] for s in self.month_services]
         self.rows = (_read(f"/serve_assignments?business_id=eq.{_q(biz)}&service_id=in.({_ids(sids)})"
-                           f"&select=id,service_id,position_id,slot,contact_id,status,note,asked_by,asked_at,answered_at,notified_at")
+                           f"&select=id,service_id,position_id,slot,contact_id,status,note,asked_by,asked_at,answered_at,notified_at,swap_to")
                      if sids else [])
         last = (hi - timedelta(days=1)).date()
         self.away = _read(f"/serve_away?business_id=eq.{_q(biz)}&starts_on=lte.{last.isoformat()}"
@@ -634,11 +638,14 @@ class _Board:
 
 def _assignment_out(r: Dict[str, Any], who: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
     cid = str(r["contact_id"]) if r.get("contact_id") else None
+    swap = str(r["swap_to"]) if r.get("swap_to") else None
     return {"id": str(r["id"]), "service_id": str(r["service_id"]), "position_id": str(r["position_id"]),
             "slot": int(r.get("slot") or 1), "contact_id": cid, "name": (who.get(cid) or {}).get("name") if cid else None,
             "status": r["status"], "note": r.get("note") or "", "asked_by": r.get("asked_by") or "",
             "asked_at": r.get("asked_at"), "answered_at": r.get("answered_at"),
-            "sent": bool(r.get("notified_at"))}
+            "sent": bool(r.get("notified_at")),
+            # They asked someone to cover; they stay on until that person says yes.
+            "swap_to": swap, "swap_name": (who.get(swap) or {}).get("name") if swap else None}
 
 
 @router.get("/schedule")
@@ -652,7 +659,8 @@ def schedule(business_id: str, user: AuthedUser = Depends(require_user), weeks: 
     board = _Board(biz, start, weeks)
     shown = {s["id"] for s in board.services}
     rows = [r for r in board.rows if str(r["service_id"]) in shown]
-    who = _people(biz, [r.get("contact_id") for r in rows] + [a["contact_id"] for a in board.away])
+    who = _people(biz, [r.get("contact_id") for r in rows] + [r.get("swap_to") for r in rows]
+                  + [a["contact_id"] for a in board.away])
     return {
         "from": board.first.isoformat(), "weeks": weeks,
         "services": board.services,
@@ -737,7 +745,7 @@ def _put(biz: str, board: _Board, sid: str, pid: str, slot: int, fields: Dict[st
         who = _people(biz, [held["contact_id"]]).get(str(held["contact_id"]), {}).get("name", "Someone")
         raise HTTPException(409, f"{who} already said yes for this place. Take them off first.")
     row = {"contact_id": None, "status": "asked", "note": "", "asked_by": "", "asked_at": _now().isoformat(),
-           "answered_at": None, "notified_at": None, "nudged_at": None, **fields}
+           "answered_at": None, "notified_at": None, "nudged_at": None, "swap_to": None, "swap_asked_at": None, **fields}
     if held:
         saved = sb_clients.sb_patch_as_service(
             f"/serve_assignments?id=eq.{_q(held['id'])}&business_id=eq.{_q(biz)}&select=*", row)
