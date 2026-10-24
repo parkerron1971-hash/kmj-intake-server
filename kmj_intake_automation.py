@@ -378,6 +378,12 @@ import booking_series; app.include_router(booking_series.router)  # weekly serie
 # Registered BEFORE public_site_router so its /booking-page/... routes
 # match before the public_site `/{path:path}` catch-all.
 app.include_router(booking_page_router)
+# ChurchSavvy's own website: its logo files (/churchsavvy-assets/...) and the
+# pages before churchsavvy.app is ours (/churchsavvy/site/...). BEFORE
+# public_site_router; churchsavvy.app itself is answered by public_site's
+# host rule (churchsavvy_site.respond).
+from churchsavvy_site import router as churchsavvy_site_router
+app.include_router(churchsavvy_site_router)
 # Online giving (ministry/nonprofit) — owner config (/giving/...) + the
 # anonymous checkout (/public/giving/...). Same discipline: BEFORE
 # public_site_router so nothing falls into the subdomain catch-all.
