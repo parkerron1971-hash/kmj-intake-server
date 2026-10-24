@@ -349,6 +349,10 @@ app.include_router(sunday_planning_router)
 # Its order of service: when each item starts, and a note for each team.
 from sunday_order import router as sunday_order_router
 app.include_router(sunday_order_router)
+# Answering an ask from its email, with no sign-in: Yes, Can't, their Sunday,
+# "Stop these emails" (the link names one church and one person).
+from serve_links import router as serve_links_router
+app.include_router(serve_links_router)
 # Joining a free class from its public page (POST <class page>/join).
 from academy_join import router as academy_join_router
 app.include_router(academy_join_router)

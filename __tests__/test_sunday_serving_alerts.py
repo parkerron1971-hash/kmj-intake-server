@@ -314,3 +314,140 @@ def test_two_sweeps_at_once_say_it_once(heard):
     # Nor for someone the place has since moved to.
     other = dict(stale, contact_id=JO)
     assert ssa._claim(BIZ, other, "nudged_at", NOW) is False
+
+
+# ─── ChurchSavvy by email (serve_links; canvas UZu4VsoY9KemkUGorz234j) ─
+
+
+EMAILED = {"churchsavvy": {"planning_email": True}}
+EMAIL_CHURCH = {"id": BIZ, "name": "Love City Church", "owner_id": "u-owner", "settings": EMAILED}
+
+
+def test_an_email_church_hears_every_step_by_email(heard):
+    """No member app: the ask, a week before, the day before and that
+    morning all go by email."""
+    db, as_, s, sound, slides, got = heard
+    db.t["businesses"][0]["settings"] = EMAILED
+    a = ask(as_, s[1], sound, KENDRA).json()["assignment"]["id"]      # Nov 1, 10:30
+    ssa.church_tick(EMAIL_CHURCH, NOW)
+    assert got["push"] == [], "no member app, no phone note"
+    assert got["email"] == [(KENDRA, "ask", "Can you serve on Sound, Nov 1?")]
+    as_("owner").post(f"/planning/assignments/{a}/answer", json={"business_id": BIZ, "status": "yes"})
+    for at in (local(2026, 10, 25, 11), local(2026, 10, 31, 18), local(2026, 11, 1, 7)):
+        ssa.church_tick(EMAIL_CHURCH, at)
+    assert [e[1] for e in got["email"]] == ["ask", "week", "day", "morning"]
+
+
+def test_stopped_means_no_email_even_when_the_phone_missed(heard):
+    db, as_, s, sound, slides, got = heard
+    # Kendra's phone is off and she used "Stop these emails": nothing goes.
+    ss.set_hearing(CHURCH, KENDRA, "phone", False)
+    ss.stop_emails(CHURCH, KENDRA)
+    ask(as_, s[0], sound, KENDRA)
+    tick(NOW)
+    assert titles(got, KENDRA) == [] and KENDRA not in [e[0] for e in got["email"]]
+    # On an email church too.
+    ss.stop_emails(CHURCH, JO)
+    ask(as_, s[1], sound, JO)
+    ssa.church_tick(EMAIL_CHURCH, NOW + timedelta(minutes=15))
+    assert JO not in [e[0] for e in got["email"]]
+    # The email copy back on: the next ask emails again.
+    ss.set_hearing(CHURCH, JO, "email", True)
+    ask(as_, s[2], sound, JO)
+    ssa.church_tick(EMAIL_CHURCH, NOW + timedelta(minutes=30))
+    assert JO in [e[0] for e in got["email"]]
+
+
+def test_the_emails_links_answer_with_one_tap(heard, monkeypatch):
+    import email_layout
+    import serve_links
+    db, as_, s, sound, slides, got = heard
+    monkeypatch.setenv("CUSTOMER_TOKEN_SECRET", "test-root-secret")
+    monkeypatch.setenv("APP_BASE_URL", "https://system.mysolutionist.app")
+    monkeypatch.delenv("CHURCHSAVVY_APP_URL", raising=False)
+    a = ask(as_, s[0], sound, KENDRA).json()["assignment"]["id"]
+    at = services(db)[0]["starts_at"]
+    ctx = {"id": a, "at": datetime.fromisoformat(str(at)), "team": "Production", "place": "Sound"}
+    w = ssa.words("ask", {**ctx, "day": "Oct 25", "call": "10:30", "asker": "Dana"})
+    p = ssa.email_parts(EMAIL_CHURCH, {"id": KENDRA, "name": "Kendra Lane"}, "ask", w, None, ctx)
+    label, yes = p["cta"]
+    assert label == "Yes, I'm in" and yes.endswith("?ans=yes")
+    t = yes.split("/churchsavvy/a/")[1].split("?")[0]
+    claims = serve_links.verify(t)
+    assert claims["biz"] == BIZ and claims["cid"] == KENDRA and claims["a"] == a
+    assert "ans=no" in p["after"] and "ans=other" in p["after"]
+    assert "Tap Yes or Can't" not in p["message"]
+    stop = serve_links.verify(p["stop_page"].split("/churchsavvy/a/")[1].split("?")[0])
+    assert stop["cid"] == KENDRA and "a" not in stop and p["stop_page"].endswith("?stop=1")
+    assert p["one_click"].startswith("https://mysolutionist.app/serve-link/stop?t=")
+    html = email_layout.render_html(p["message"], business_name=p["church"], brand={}, unsubscribe_url=p["stop_page"],
+                                    unsubscribe_label="Stop these emails", cta=p["cta"], after_cta=p["after"],
+                                    footer_note="Sent with ChurchSavvy")
+    assert "Stop these emails" in html and "Sent with ChurchSavvy" in html and "/email/unsubscribe" not in html
+    assert "Can&#x27;t this time" in html or "Can't this time" in html
+    # A reminder opens their Sunday.
+    r = ssa.email_parts(EMAIL_CHURCH, {"id": KENDRA, "name": "Kendra Lane"}, "day",
+                        {"title": "Tomorrow: Sound, 10:30", "body": "Ana is on with you."}, None, ctx)
+    assert r["cta"][0] == "See your Sunday" and "?ans=" not in r["cta"][1] and r["after"] == ""
+
+
+def test_a_serving_email_unsubscribes_only_itself(monkeypatch):
+    import email_sender
+    sent = {}
+
+    async def not_suppressed(addr):
+        return None
+
+    async def same(from_email, from_name, business_id, reply_to):
+        return from_email, from_name
+
+    class Client:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, url, headers=None, json=None):
+            sent.update(json)
+
+            class R:
+                status_code = 200
+                text = "{}"
+
+                def json(self):
+                    return {"id": "e-1"}
+            return R()
+
+    monkeypatch.setenv("RESEND_API_KEY", "re_test")
+    monkeypatch.setattr(email_sender, "is_suppressed", not_suppressed)
+    monkeypatch.setattr(email_sender, "_apply_business_identity", same)
+    monkeypatch.setattr(email_sender.httpx, "AsyncClient", Client)
+    asyncio.run(email_sender.send_via_resend(to_email="kendra@example.com", to_name=None, from_email="noreply@x.app",
+                                             from_name="Love City Church", subject="Hi", body="<p>Hi</p>", reply_to=None,
+                                             unsubscribe_url="https://mysolutionist.app/serve-link/stop?t=abc"))
+    assert sent["headers"]["List-Unsubscribe"] == "<https://mysolutionist.app/serve-link/stop?t=abc>"
+    # Without one, the platform's own (which blocks every email to them).
+    asyncio.run(email_sender.send_via_resend(to_email="kendra@example.com", to_name=None, from_email="noreply@x.app",
+                                             from_name=None, subject="Hi", body="<p>Hi</p>", reply_to=None))
+    assert "/email/unsubscribe?e=" in sent["headers"]["List-Unsubscribe"]
+
+
+def test_the_sweep_visits_email_churches_too(monkeypatch):
+    import sb_clients
+    seen = []
+
+    def get(path, **_):
+        seen.append(path)
+        if "member_portal" in path:
+            return [{"id": "a", "name": "App church", "settings": {}}, {"id": "b", "name": "Both", "settings": {}}]
+        if "churchsavvy" in path:
+            return [{"id": "b", "name": "Both", "settings": {}}, {"id": "c", "name": "Email church", "settings": {}}]
+        return []
+
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", get)
+    assert sorted(b["id"] for b in ssa._churches()) == ["a", "b", "c"]
+    assert any("settings->churchsavvy->>planning_email=eq.true" in p for p in seen)
