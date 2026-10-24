@@ -29,6 +29,7 @@ import test_sunday_planning as tsp
 from test_sunday_planning import BIZ, PEOPLE, PRODUCTION, WELCOME, api, make_team, services, sundays  # noqa: F401
 
 import sunday_order as so
+import sunday_planning as sp
 from auth_supabase import require_user
 
 SONG = "5c000000-0000-4000-8000-000000000001"
@@ -64,6 +65,7 @@ def order(api, monkeypatch):
     ]
     app = FastAPI()
     app.include_router(so.router)
+    app.include_router(sp.router)
     who = {"user": PEOPLE["owner"]}
     app.dependency_overrides[require_user] = lambda: who["user"]
     client = TestClient(app)
@@ -166,3 +168,41 @@ def test_a_churchsavvy_save_never_touches_a_note(order, monkeypatch):
     db.t["serve_teams"] = [t for t in db.t["serve_teams"] if t["group_id"] != PRODUCTION]
     rows = {i["id"]: i for i in get(as_).json()["items"]}
     assert rows["ff"]["notes"] == {}
+
+
+def test_the_booths_today(order):
+    """Board 11: who's on, place by place (here and when, not here yet,
+    waiting, open), and the plan's clock."""
+    from test_sunday_planning import ANA, KENDRA, ask, place, train
+    db, as_, svc = order
+    team = next(t for t in as_("owner").get("/planning/teams", params={"business_id": BIZ}).json()["teams"]
+                if t["group_id"] == PRODUCTION)
+    sound, slides = place(team, "Sound"), place(team, "Slides")
+    train(as_, sound, [(KENDRA, "trained")])
+    train(as_, slides, [(ANA, "trained")])
+    a = ask(as_, svc["id"], sound, KENDRA).json()["assignment"]["id"]
+    as_("owner").post(f"/planning/assignments/{a}/answer", json={"business_id": BIZ, "status": "yes"})
+    ask(as_, svc["id"], slides, ANA)
+    r = as_("viewer").get("/planning/today", params={"business_id": BIZ})
+    assert r.status_code == 200, r.text
+    t = r.json()
+    prod = next(x for x in t["teams"] if x["name"] == "Production")
+    assert [(s["place"], s["state"], s["name"]) for s in prod["spots"]] == [
+        ("Sound", "yes", "Kendra Lane"), ("Slides", "asked", "Ana Cruz")]
+    welcome = next(x for x in t["teams"] if x["name"] == "Welcome")
+    assert welcome["spots"] == [{"place": "Doors", "slot": 1, "state": "open", "name": None, "here": None}]
+    assert t["clock"] == {"starts": "10:30", "ends": "11:19",
+                          "longest": {"title": "What Mean These Stones?", "time": "10:39", "minutes": 40}}
+    # Kendra tapped I'm here at 8:50 on the day.
+    next(x for x in db.t["serve_assignments"] if x["id"] == a)["here_at"] = "2026-10-25T13:50:00+00:00"
+    prod = next(x for x in get_today(as_)["teams"] if x["name"] == "Production")
+    assert (prod["spots"][0]["state"], prod["spots"][0]["here"]) == ("here", "08:50")
+    # A long rehearsal before the service isn't the sermon.
+    next(i for i in svc["items"] if i["id"] == "loop")["minutes"] = 50
+    assert get_today(as_)["clock"]["longest"]["title"] == "What Mean These Stones?"
+    # Someone who isn't on the team doesn't read it.
+    assert as_("stranger").get("/planning/today", params={"business_id": BIZ}).status_code in (403, 404)
+
+
+def get_today(as_):
+    return as_("owner").get("/planning/today", params={"business_id": BIZ}).json()

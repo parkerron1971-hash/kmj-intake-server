@@ -226,3 +226,50 @@ def put_note(body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
     if not isinstance(saved, list) or not saved:
         raise HTTPException(503, "That didn't save. Try again.")
     return {"ok": True, "note": note}
+
+
+# ??? the booth's Today (board 11) ????????????????????????????????????
+
+SERMON_MIN = 15          # the plan's clock names the longest item this long or longer
+
+
+@router.get("/today")
+def today(business_id: str, service_id: Optional[str] = None, user: AuthedUser = Depends(require_user)):
+    """Who's on that Sunday, team by team and place by place: here (they
+    tapped I'm here, and when), said yes and not here yet, asked and
+    waiting, or open; and the plan's clock: when it starts, its longest
+    item (the sermon), when it ends. For the booth (ChurchSavvy's Today)."""
+    _gate(user)
+    biz = _uuid(business_id)
+    _staff(biz, user, write=False)
+    zone = sp._zone(biz)
+    svc = _service(biz, _uuid(service_id, "service") if service_id else None, zone)
+    order = order_of(biz, svc, zone)
+    teams, _ = sp._teams(biz)
+    rows = _read(f"/serve_assignments?business_id=eq.{_q(biz)}&service_id=eq.{_q(svc['id'])}"
+                 f"&select=position_id,slot,contact_id,status,here_at")
+    who = sp._people(biz, [r.get("contact_id") for r in rows])
+    held = {(str(r["position_id"]), int(r.get("slot") or 1)): r for r in rows}
+    out = []
+    for t in teams:
+        spots = []
+        for p in t["places"]:
+            for slot in range(1, int(p.get("needed") or 1) + 1):
+                r = held.get((p["id"], slot))
+                person = (who.get(str(r["contact_id"])) or {}) if r and r.get("contact_id") else {}
+                here = _at(r.get("here_at"), zone) if r else None
+                state = ("open" if not r or r["status"] in ("offered", "no") or not person
+                         else "here" if r["status"] == "yes" and here
+                         else "yes" if r["status"] == "yes" else "asked")
+                spots.append({"place": p["name"], "slot": slot, "state": state,
+                              "name": person.get("name") if state != "open" else None,
+                              "here": _hm(here) if state == "here" else None})
+        out.append({"group_id": t["group_id"], "name": t["name"], "call_time": sp._hhmm(t.get("call_time")), "spots": spots})
+    service = [i for i in order["items"] if not i["section"] and i.get("part") == "service"]
+    long = max(service, key=lambda i: float(i.get("minutes") or 0), default=None)
+    return {
+        "service": order["service"], "teams": out,
+        "clock": {"starts": order["starts"], "ends": order["ends"],
+                  "longest": ({"title": long["title"], "time": long["time"], "minutes": long["minutes"]}
+                              if long and float(long.get("minutes") or 0) >= SERMON_MIN else None)},
+    }
