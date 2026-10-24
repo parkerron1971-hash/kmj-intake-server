@@ -175,7 +175,9 @@ def switcher(ctx: Dict[str, Any], church_name: str) -> str:
     cur = ctx.get("space") or "church"
     leader = ctx.get("leader") or {}
     meta = {
-        "church": ("Church", escape(church_name or "Your church"), "LC"),
+        # The church's own initials (Love City Church → LC, Grace Fellowship → GF).
+        # It said "LC" for every church until 2026-10-23.
+        "church": ("Church", escape(church_name or "Your church"), escape(ui.initials(church_name or "Church"))),
         "youth": ("Youth", "Leading Youth", "Y"),
         "kids": ("Kids", "Your kids" if ctx.get("kids_parent") else "Your rooms", "★"),
     }
