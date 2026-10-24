@@ -86,8 +86,13 @@ KINDS = (
     # birthdays in their groups, replies to their comments. Its own
     # choices live on Me → Celebrations.
     ("news", "News & celebrations", "Posts your pastors mark important, birthdays in your groups, and replies to your comments"),
+    # ChurchSavvy Planning (sunday_serving_alerts): an ask to serve, a nudge,
+    # a cover, and the reminders before a Sunday someone said yes to. Its box
+    # lives on My serving → How I hear, for the people who serve.
+    ("serving", "Serving", "When you're asked to serve, and reminders before your Sunday"),
 )
 SPACE_KINDS = ("youth", "kids")
+OWN_PAGE_KINDS = ("serving",)         # chosen on their own page, not on Notifications
 KIND_KEYS = tuple(k for k, _, _ in KINDS)
 DAILY_ANNOUNCEMENTS = 3                # shared with News posts that ring (news_alerts)
 QUIET_KINDS = ("groups", "messages", "news")
@@ -109,9 +114,10 @@ def church_kinds(settings: Optional[Dict[str, Any]]) -> Set[str]:
 def visible_kinds(ctx: Optional[Dict[str, Any]]) -> Set[str]:
     """The kinds a member has a box for: everything, except Youth for
     anyone who isn't a teen or a youth leader, and Kids for anyone who
-    isn't a parent of a child on record (member_spaces.resolve's ctx)."""
+    isn't a parent of a child on record (member_spaces.resolve's ctx).
+    Serving is chosen on My serving (OWN_PAGE_KINDS)."""
     ctx = ctx or {}
-    out = set(KIND_KEYS) - set(SPACE_KINDS)
+    out = set(KIND_KEYS) - set(SPACE_KINDS) - set(OWN_PAGE_KINDS)
     if ctx.get("youth") or "youth" in (ctx.get("leader") or {}):
         out.add("youth")
     if ctx.get("kids_parent"):

@@ -77,6 +77,17 @@ SERVING_CSS = """
 .sv-ask .t small{font-size:13px;color:var(--fg2);}
 .sv-ask .mb-ic{color:var(--teal-ink);}
 .sv-card{border-radius:var(--r-md);background:var(--s1);}
+.sv-card > form{margin:0;}
+.sv-opt{display:flex;align-items:center;gap:14px;padding:12px 16px;position:relative;width:100%;text-align:left;border:0;
+  background:transparent;color:var(--fg);font:inherit;cursor:pointer;}
+.sv-card > form + form .sv-opt::before{content:"";position:absolute;top:0;left:16px;right:0;height:.5px;background:var(--line);}
+.sv-opt .t{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;}
+.sv-opt .t b{font-size:15.5px;font-weight:620;}
+.sv-opt .t small{font-size:13px;color:var(--fg2);line-height:1.35;}
+.sv-tg{width:51px;height:31px;border-radius:999px;background:var(--s3);padding:2px;display:flex;flex:none;}
+.sv-tg i{width:27px;height:27px;border-radius:50%;background:#fff;box-shadow:0 2px 4px rgba(0,0,0,.25);display:block;}
+.sv-tg.on{background:var(--teal);}
+.sv-tg.on i{transform:translateX(20px);}
 .sv-row{display:flex;align-items:center;gap:14px;padding:14px 16px;position:relative;}
 .sv-row + .sv-row::before,.sv-sub + .sv-row::before{content:"";position:absolute;top:0;left:16px;right:0;height:.5px;background:var(--line);}
 .sv-row.ind + .sv-row.ind::before{left:62px;}
@@ -149,7 +160,7 @@ DONE = {
     "yes": "", "no": "", "other": "", "why": "Thanks. Only the people who schedule see it.",
     "took": "It's yours. Thank you for serving.", "sub": "Asked. You stay on until they say yes.",
     "stopped": "You're still on for that Sunday.", "told": "Thanks for saying so. The spot is open for someone else.",
-    "away": "Saved. Nobody asks you on those days.", "unaway": "Taken off.", "often": "Saved.",
+    "away": "Saved. Nobody asks you on those days.", "unaway": "Taken off.", "often": "Saved.", "hear": "Saved.",
 }
 ERRS = {"preview": "This is a preview, so nothing was saved.", "slow": "One moment, then try that again.",
         "error": "That didn't save. Please try again in a moment."}
@@ -310,8 +321,32 @@ def render_page(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any],
 <p class="sv-lede" style="padding:0 0 12px">Nobody asks you on these days.</p><div class="sv-away">{away_chips}{add}</div></section>
 <section class="sv-sec" aria-labelledby="sv-of-h"><div class="sv-sh"><h2 id="sv-of-h">How often</h2></div>
 <form method="post" action="/my/serving/often"><div class="sv-seg" role="radiogroup" aria-label="How often">{seg}</div></form>
-<p class="sv-lede">Whoever schedules your team sees this when they fill a month. It's a wish, not a promise.</p></section>"""
+<p class="sv-lede">Whoever schedules your team sees this when they fill a month. It's a wish, not a promise.</p></section>
+{_hear(m.get("hear"))}"""
     return _shell(biz, site, "My serving", body, tab="connect", who=me)
+
+
+def _hear(h: Optional[Dict[str, Any]]) -> str:
+    """How I hear (board 8): phone alerts and an email copy. Nothing shows
+    until the church has switched Serving on. Texts wait for the church's
+    texting number to be approved."""
+    if not h:
+        return ""
+
+    def switch(what: str, title: str, sub: str, on: bool) -> str:
+        return (f'<form method="post" action="/my/serving/hear"><input type="hidden" name="what" value="{what}">'
+                f'<button class="sv-opt" type="submit" name="to" value="{"off" if on else "on"}" role="switch" '
+                f'aria-checked="{"true" if on else "false"}"><span class="t"><b>{_e(title)}</b><small>{_e(sub)}</small></span>'
+                f'<span class="sv-tg{" on" if on else ""}"><i></i></span></button></form>')
+    rows = ""
+    if h.get("phone_shown"):
+        sub = ("Answer an ask right from the lock screen" if h.get("devices")
+               else "Turn them on for this phone in Me, Notifications")
+        rows += switch("phone", "Phone alerts", sub, bool(h.get("phone")))
+    rows += switch("email", "An email copy", "Of every ask and the Saturday reminder", bool(h.get("email")))
+    return ('<section class="sv-sec" aria-labelledby="sv-hr-h"><div class="sv-sh"><h2 id="sv-hr-h">How I hear</h2></div>'
+            f'<div class="sv-card">{rows}</div>'
+            '<p class="sv-lede">An ask always reaches you one way or another. Nothing comes between 9 PM and 7 AM.</p></section>')
 
 
 def _range(a: Dict[str, Any]) -> str:
@@ -462,6 +497,7 @@ async def serve(request: Request, church: Dict[str, Any], me: Dict[str, Any], su
                 cands = await asyncio.to_thread(ss.subs, biz, str(me["id"]), want)
                 v = await asyncio.to_thread(ss.ask_view, biz, str(me["id"]), want)
                 sub_for = {"id": want, "html": _subs_panel(hit, cands, v["leader"])}
+            m["hear"] = await asyncio.to_thread(ss.hearing, biz, str(me["id"]))
             return _page(render_page(biz, site, request, me, m, sub_for))
         aid, cal = (rest[:-4], True) if rest.endswith(".ics") else (rest, False)
         if not _ID.match(aid):
@@ -577,3 +613,9 @@ async def unaway(request: Request):
 async def often(request: Request):
     back, out = await _act(request, False, ss.set_often, "often")
     return out or _go("/my/serving", done="often")
+
+
+@router.post("/my/serving/hear", include_in_schema=False)
+async def hear(request: Request):
+    back, out = await _act(request, False, lambda b, c, what, to: ss.set_hearing(b, c, what, to == "on"), "what", "to")
+    return out or _go("/my/serving", done="hear")

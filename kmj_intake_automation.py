@@ -1764,6 +1764,15 @@ async def startup():
                           minutes=15, id="news_alerts")
     except Exception as e:
         print(f"   [warn] news alerts not scheduled: {e}")
+    # ChurchSavvy Planning: asks, a nudge, covers and the reminders before a
+    # Sunday reach people (sunday_serving_alerts.sweep_tick; each once, never
+    # in quiet hours; churches that switched Serving on).
+    try:
+        import sunday_serving_alerts as _serving_alerts
+        scheduler.add_job(g("serving_alerts", _serving_alerts.sweep_tick), "interval",
+                          minutes=15, id="serving_alerts")
+    except Exception as e:
+        print(f"   [warn] serving alerts not scheduled: {e}")
     # Class-night reminders: a few hours before each live class, its students
     # by email and a church's member app by its "Class nights" notification
     # (academy_reminders.sweep_tick; each night once).
