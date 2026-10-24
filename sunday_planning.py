@@ -748,7 +748,7 @@ def _put(biz: str, board: _Board, sid: str, pid: str, slot: int, fields: Dict[st
            "answered_at": None, "notified_at": None, "nudged_at": None, "swap_to": None, "swap_asked_at": None,
            # What sunday_serving_alerts already said was said to whoever held it.
            "leader_told_at": None, "week_sent_at": None, "day_sent_at": None, "morning_sent_at": None,
-           "swap_told_at": None, **fields}
+           "swap_told_at": None, "here_at": None, **fields}
     if held:
         saved = sb_clients.sb_patch_as_service(
             f"/serve_assignments?id=eq.{_q(held['id'])}&business_id=eq.{_q(biz)}&select=*", row)
