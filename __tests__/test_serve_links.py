@@ -112,6 +112,7 @@ def test_opening_changes_nothing_and_yes_puts_them_on(linked):
     assert body["first"] == "Kendra" and body["email_on"] is True
     assert body["ask"]["place"] == "Sound" and body["ask"]["status"] == "asked" and body["ask"]["short"] == "Oct 25"
     assert [f["short"] for f in body["ask"]["free"]] == ["Nov 1", "Nov 8"]
+    assert body["ask"]["starts_at"].startswith("2026-10-25T") and body["ask"]["arrive_at"] <= body["ask"]["starts_at"]
     assert row(db, aid)["status"] == "asked", "opening a link never answers it"
     r = link.post("/serve-link/answer", json={"t": t, "ans": "yes"})
     assert r.status_code == 200, r.text

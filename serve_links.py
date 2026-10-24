@@ -191,6 +191,19 @@ def _arrive(at: datetime, call: Optional[str]) -> str:
     return _clock(call) if call else _clock(at.strftime("%H:%M"))
 
 
+def _arrive_at(at: datetime, call: Optional[str]) -> datetime:
+    """When they're due, on the church's clock (a call time after the
+    service's start means the service time)."""
+    if not call:
+        return at
+    try:
+        h, m = int(str(call)[:2]), int(str(call)[3:5])
+    except ValueError:
+        return at
+    due = at.replace(hour=h, minute=m, second=0, microsecond=0)
+    return due if due <= at else at
+
+
 # ─── the page ────────────────────────────────────────────────────────
 
 
@@ -217,6 +230,8 @@ def view(token: str) -> Dict[str, Any]:
         "leader": a["leader"], "arrive": _arrive(at, a.get("call_time")), "past": a["past"], **_when(at),
         "with": [{"name": w["name"], "place": w["place"], "status": w["status"]} for w in a["with"]],
         "free": free,
+        # For "Add to my calendar": from when they're due until the service is under way.
+        "starts_at": at.isoformat(), "arrive_at": _arrive_at(at, a.get("call_time")).isoformat(),
     }
     if a["status"] == "yes" and not a["cover"] and not a["past"]:
         try:
