@@ -167,6 +167,11 @@ def test_an_answer_link_lapses_after_its_sunday(linked, monkeypatch):
 def test_stop_these_emails_is_this_church_and_this_person(linked):
     db, as_, link, s, sound = linked
     stop = sl.stop_token(BIZ, KENDRA)
+    # The page names the church first; reading it changes nothing.
+    w = link.get(f"/serve-link/who?t={stop}").json()
+    assert w == {"church": w["church"], "first": "Kendra", "email_on": True}
+    assert w["church"]["name"] == "Love City Church" and ss.emails_on(BIZ, KENDRA) is True
+    assert link.get("/serve-link/who?t=garbage").status_code == 410
     r = link.post("/serve-link/email", json={"t": stop, "on": False})
     assert r.status_code == 200 and r.json()["email_on"] is False
     assert ss.emails_on(BIZ, KENDRA) is False and ss.emails_on(BIZ, JO) is True
