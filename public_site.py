@@ -7297,6 +7297,11 @@ async def subdomain_root(request: Request):
     """
     host = public_host(request)
 
+    # ChurchSavvy's own domain: its home page (churchsavvy_site.py).
+    import churchsavvy_site
+    if churchsavvy_site.is_host(host):
+        return churchsavvy_site.respond("/")
+
     slug = extract_slug_from_host(request)
     if slug:
         if not _check_rate(slug):
@@ -7668,6 +7673,11 @@ async def _site_response_or_none(request: Request, *, charge_page_views: bool = 
     alone.
     """
     path = "/" + (request.url.path or "").lstrip("/")
+    # ChurchSavvy's own domain is neither the platform nor a practitioner's
+    # site: it answers with ChurchSavvy's website (churchsavvy_site.py).
+    import churchsavvy_site
+    if churchsavvy_site.is_host(public_host(request)):
+        return churchsavvy_site.respond(path)
     site_host = _site_host(request)
     if site_host is None:
         return None
@@ -8138,6 +8148,11 @@ async def subdomain_catch_all(request: Request, path: str):
     # Normalize: FastAPI strips the leading slash from path:path, but the
     # downstream renderer expects /about, /services, etc.
     request_path = "/" + (path or "")
+
+    # ChurchSavvy's own domain: its website, and nothing of a church's.
+    import churchsavvy_site
+    if churchsavvy_site.is_host(host):
+        return churchsavvy_site.respond(request_path)
 
     # Academy Phase 4B — learner portal. Portal tokens are globally
     # unique, so /learn/* is host-independent: the same link works on
