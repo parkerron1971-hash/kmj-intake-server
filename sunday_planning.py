@@ -82,7 +82,7 @@ def open_to(user: AuthedUser) -> bool:
         return True
     if m == "owner":
         owner = (os.environ.get("PLATFORM_OWNER_EMAIL") or "kmjcreativesolution@gmail.com").strip().lower()
-        return (user.email or "").strip().lower() == owner
+        return (getattr(user, "email", None) or "").strip().lower() == owner
     return False
 
 
@@ -198,7 +198,7 @@ def _teams(biz: str) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
                         f"&select=position_id,contact_id,level")
     who = _people(biz, [m["contact_id"] for m in members] + [t["contact_id"] for t in trained])
     # How often each would like to serve (member_portal_serving): a wish, not a rule.
-    often = {str(p["contact_id"]): p["often"] for p in (_read(
+    often = {str(p["contact_id"]): p.get("often") for p in (_read(
         f"/serve_prefs?business_id=eq.{_q(biz)}&contact_id=in.({_ids(who)})&select=contact_id,often") if who else [])}
     out = []
     for gid in team_ids:
@@ -745,7 +745,10 @@ def _put(biz: str, board: _Board, sid: str, pid: str, slot: int, fields: Dict[st
         who = _people(biz, [held["contact_id"]]).get(str(held["contact_id"]), {}).get("name", "Someone")
         raise HTTPException(409, f"{who} already said yes for this place. Take them off first.")
     row = {"contact_id": None, "status": "asked", "note": "", "asked_by": "", "asked_at": _now().isoformat(),
-           "answered_at": None, "notified_at": None, "nudged_at": None, "swap_to": None, "swap_asked_at": None, **fields}
+           "answered_at": None, "notified_at": None, "nudged_at": None, "swap_to": None, "swap_asked_at": None,
+           # What sunday_serving_alerts already said was said to whoever held it.
+           "leader_told_at": None, "week_sent_at": None, "day_sent_at": None, "morning_sent_at": None,
+           "swap_told_at": None, **fields}
     if held:
         saved = sb_clients.sb_patch_as_service(
             f"/serve_assignments?id=eq.{_q(held['id'])}&business_id=eq.{_q(biz)}&select=*", row)

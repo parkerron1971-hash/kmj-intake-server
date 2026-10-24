@@ -214,3 +214,4 @@ jobs:
           node __tests__/chat_photos_db.mjs
           node __tests__/sunday_planning_db.mjs
           node __tests__/serving_member_db.mjs
+          node __tests__/serving_alerts_db.mjs
