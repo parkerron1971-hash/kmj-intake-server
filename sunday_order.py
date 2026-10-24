@@ -161,6 +161,7 @@ def order_of(biz: str, svc: Dict[str, Any], zone) -> Dict[str, Any]:
         when = at_before if is_before else at_after
         named = _name(i, songs)
         rows.append({"id": i["id"], "section": False, "kind": i.get("kind"), **named,
+                     "part": "before" if is_before else ("after" if ends is not None else "service"),
                      "minutes": i.get("minutes"), "who": i.get("who") or "",
                      "time": _hm(when) if when else None, "notes": notes.get(i["id"], {})})
         if when:

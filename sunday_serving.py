@@ -25,9 +25,9 @@ logger = logging.getLogger(__name__)
 AHEAD_DAYS = 90
 MAX_AWAY = 20
 OFTEN = ("one", "two", "every")
-# The reminders before a Sunday (sunday_serving_alerts): a place that moves
-# to someone new hasn't reminded them yet.
-REMINDERS_UNSENT = {"week_sent_at": None, "day_sent_at": None, "morning_sent_at": None}
+# The reminders before a Sunday (sunday_serving_alerts) and "I'm here" on
+# the day (the pack): a place that moves to someone new starts fresh.
+REMINDERS_UNSENT = {"week_sent_at": None, "day_sent_at": None, "morning_sent_at": None, "here_at": None}
 WHY = ("Away", "Working", "Not feeling well", "Rather not say")
 
 
@@ -487,3 +487,87 @@ def set_hearing(biz: Dict[str, Any], cid: str, what: str, on_: bool) -> None:
         prefer="resolution=merge-duplicates,return=representation")
     if not isinstance(saved, list) or not saved:
         raise HTTPException(503, "That didn't save. Try again.")
+
+
+# ─── the Sunday pack (board 9) ───────────────────────────────────────
+
+HERE_FROM_HOURS = 3        # "I'm here" opens this long before the call time
+
+
+def pack(biz: Dict[str, Any], cid: str, aid: str) -> Dict[str, Any]:
+    """Everything a member needs for one Sunday they said yes to: when to be
+    there and "I'm here", each team they're on that day, the songs (when
+    their team has notes on them), their team's moments, and today's order.
+    Only their own yes; a song is its title, key and parts, never words."""
+    import sunday_order as so
+    biz_id = str(biz["id"])
+    row = _row(biz_id, aid)
+    if str(row.get("contact_id")) != cid or row["status"] != "yes":
+        raise HTTPException(404, "That isn't on the schedule anymore.")
+    zone = sp._zone(biz_id)
+    svc = so._service(biz_id, str(row["service_id"]), zone)
+    at = _when(svc, zone)
+    if not at:
+        raise HTTPException(404, "That isn't on the schedule anymore.")
+    now = sp._now().astimezone(zone)
+    order = so.order_of(biz_id, svc, zone)
+    teams = {t["group_id"]: t for t in sp._teams(biz_id)[0]}
+    place_team = {p["id"]: t for t in teams.values() for p in t["places"]}
+    mine = _read(f"/serve_assignments?business_id=eq.{_q(biz_id)}&service_id=eq.{_q(row['service_id'])}"
+                 f"&contact_id=eq.{_q(cid)}&status=eq.yes&select=id,position_id,here_at")
+    roles = []
+    for r in mine:
+        t = place_team.get(str(r["position_id"]))
+        if not t:
+            continue
+        place = next(p["name"] for p in t["places"] if p["id"] == str(r["position_id"]))
+        call = sp._hhmm(t.get("call_time"))
+        leaders = [p["name"] for p in t["people"] if p.get("leader")]
+        roles.append({"id": str(r["id"]), "team": t["name"], "group_id": t["group_id"], "place": place,
+                      "call": call, "here": bool(r.get("here_at")), "leader": leaders[0] if leaders else None})
+    roles.sort(key=lambda x: x["team"].lower())
+    role = next((x for x in roles if x["id"] == aid), roles[0] if roles else None)
+    if not role:
+        raise HTTPException(404, "That isn't on the schedule anymore.")
+    gid = role["group_id"]
+    items = [i for i in order["items"] if not i["section"]]
+    note = lambda i: (i.get("notes") or {}).get(gid) or ""
+    songs = [i for i in items if i.get("kind") == "song"]
+    # The songs are their own card for a team with notes on most of them (the
+    # band, board 9); another team's note on a song is one of its moments
+    # ("New slides for Firm Foundation").
+    noted = sum(1 for i in songs if note(i))
+    with_songs = noted * 2 > len(songs)
+    n = 0
+    song_rows = []
+    for i in songs if with_songs else []:
+        n += 1
+        song_rows.append({"n": n, "title": i["title"], "key": i.get("key") or "", "parts": i.get("parts") or [],
+                          "who": i.get("who") or "", "note": note(i)})
+    moments = [{"time": i["time"], "title": i["title"], "note": note(i) or (i.get("notes") or {}).get("all", "")}
+               for i in items if (note(i) or (i.get("notes") or {}).get("all")) and not (with_songs and i.get("kind") == "song")]
+    call_at = (datetime.combine(at.date(), datetime.strptime(role["call"], "%H:%M").time(), tzinfo=zone)
+               if role["call"] else at)
+    ends = (datetime.combine(at.date(), datetime.strptime(order["ends"], "%H:%M").time(), tzinfo=zone)
+            if order.get("ends") else at + timedelta(hours=2))
+    return {
+        "id": aid, "title": svc.get("title") or "Sunday service", "at": at, "role": role, "roles": roles,
+        "songs": song_rows, "moments": moments,
+        "order": [{"time": i["time"], "title": i["title"], "who": i.get("who") or ""} for i in items if i.get("part") == "service"],
+        "here_open": now.date() == at.date() and call_at - timedelta(hours=HERE_FROM_HOURS) <= now <= ends,
+        "past": now > ends,
+    }
+
+
+def here(biz: Dict[str, Any], cid: str, aid: str) -> Dict[str, Any]:
+    """"I'm here": only on the day, from a few hours before the call time
+    until the service ends; once."""
+    p = pack(biz, cid, aid)
+    if not p["here_open"]:
+        raise HTTPException(409, "\"I'm here\" opens on the day, a few hours before you're due.")
+    rows = sb_clients.sb_patch_as_service(
+        f"/serve_assignments?id=eq.{_q(p['role']['id'])}&business_id=eq.{_q(str(biz['id']))}&contact_id=eq.{_q(cid)}"
+        f"&status=eq.yes&here_at=is.null&select=id", {"here_at": sp._now().isoformat()})
+    if rows is None:
+        raise HTTPException(503, "That didn't save. Try again.")
+    return p

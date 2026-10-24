@@ -168,7 +168,7 @@ def tell(biz: Dict[str, Any], step: str, to: str, ctx: Dict[str, Any], person: O
          email_ok: bool, app: Optional[str]) -> Dict[str, int]:
     import member_push
     w = words(step, ctx)
-    url = f"/my/serving/{ctx['id']}" if step in ("ask", "nudge", "cover") else "/my/serving"
+    url = f"/my/serving/{ctx['id']}" if step in ("ask", "nudge", "cover") else f"/my/serving/{ctx['id']}/pack"
     rang = member_push.send(biz, KIND, title=w["title"], body=w["body"], url=url, contact_ids=[to],
                             tag=f"serving-{ctx['id']}")
     mailed = 0
@@ -198,7 +198,7 @@ async def _email(biz: Dict[str, Any], person: Dict[str, Any], step: str, w: Dict
     html = email_layout.render_html(
         message, business_name=church, brand=email_layout.brand_of(settings), sig=None,
         unsubscribe_url=email_sender._unsubscribe_url(email), preheader=w["body"][:90],
-        cta=(("Answer" if step in ("ask", "nudge", "cover") else "My serving", link) if link else None),
+        cta=(("Answer" if step in ("ask", "nudge", "cover") else "Your Sunday", link) if link else None),
         disclaimer=f"You serve with {church}. Turn email copies off in the app: Connect, My serving, How I hear.")
     await email_sender.send_via_resend(
         to_email=email, to_name=person.get("name") or None,

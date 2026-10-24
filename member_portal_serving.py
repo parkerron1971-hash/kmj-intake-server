@@ -154,13 +154,47 @@ SERVING_CSS = """
 .sv-said > b{font-size:16px;}
 .sv-said > span{font-size:13.5px;color:var(--fg2);}
 .sv-home{margin:4px 0 16px;}
+/* The Sunday pack (board 9). */
+.sv-pk-when{display:flex;flex-direction:column;gap:4px;margin:4px 0 0;}
+.sv-pk-when .sv-eb{color:var(--coral-ink);}
+.sv-pk-when h1{margin:0;font-size:30px;font-weight:730;letter-spacing:-.035em;line-height:1.08;text-wrap:wrap;}
+.sv-pk-as{padding:14px 0 0;}
+.sv-pk-as .sv-seg a{min-height:38px;border-radius:9px;font-size:14px;font-weight:600;color:var(--fg2);display:flex;align-items:center;
+  justify-content:center;text-decoration:none;white-space:nowrap;}
+.sv-pk-as .sv-seg a[aria-current="page"]{background:var(--s3);color:var(--fg);box-shadow:0 1px 3px rgba(0,0,0,.2);}
+.sv-pk-here{border-radius:var(--r-lg);background:var(--s1);padding:16px;display:flex;align-items:center;gap:14px;}
+.sv-pk-here.done{background:var(--teal-deep);}
+.sv-pk-here.done .t b{color:var(--teal-ink);}
+.sv-pk-here .t{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;}
+.sv-pk-here .t b{font-size:16px;font-weight:660;}
+.sv-pk-here .t small{font-size:13px;color:var(--fg2);}
+.sv-pk-here form{margin:0;}
+.sv-pk-disc{width:42px;height:42px;border-radius:50%;display:grid;place-items:center;flex:none;background:var(--h);color:var(--on-h);}
+.sv-pk-song{display:flex;align-items:flex-start;gap:12px;padding:14px 16px;position:relative;}
+.sv-pk-song + .sv-pk-song::before{content:"";position:absolute;top:0;left:56px;right:0;height:.5px;background:var(--line);}
+.sv-pk-n{width:28px;height:28px;border-radius:50%;background:var(--gold-deep);color:var(--gold-ink);display:grid;place-items:center;
+  font-size:13px;font-weight:750;flex:none;margin-top:2px;}
+.sv-pk-song .t{flex:1;min-width:0;display:flex;flex-direction:column;gap:6px;}
+.sv-pk-song .ti{font-size:16px;font-weight:640;letter-spacing:-.015em;display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+.sv-pk-song .su{font-size:13px;color:var(--fg2);}
+.sv-pk-arr{display:flex;gap:4px;flex-wrap:wrap;}
+.sv-pk-arr i{font-style:normal;display:inline-grid;place-items:center;min-width:26px;height:22px;padding:0 6px;border-radius:6px;
+  background:var(--s2);font-size:11px;font-weight:700;color:var(--fg2);}
+.sv-pk-key{display:inline-grid;place-items:center;min-width:26px;height:22px;padding:0 7px;border-radius:6px;background:var(--gold);
+  color:var(--on-gold);font-size:12px;font-weight:750;}
+.sv-pk-cue{display:grid;grid-template-columns:52px minmax(0,1fr);gap:10px;padding:11px 16px;position:relative;font-size:14.5px;}
+.sv-pk-cue + .sv-pk-cue::before{content:"";position:absolute;top:0;left:16px;right:0;height:.5px;background:var(--line);}
+.sv-pk-cue b{font-variant-numeric:tabular-nums;font-size:13.5px;font-weight:650;color:var(--fg2);}
+.sv-pk-order{display:grid;grid-template-columns:52px minmax(0,1fr);gap:4px 10px;padding:12px 16px;font-size:14px;}
+.sv-pk-order b{font-variant-numeric:tabular-nums;font-size:13px;font-weight:600;color:var(--fg3);}
+.sv-sh .sv-pk-only{font-size:13px;font-weight:500;color:var(--fg3);}
 """
 
 DONE = {
     "yes": "", "no": "", "other": "", "why": "Thanks. Only the people who schedule see it.",
     "took": "It's yours. Thank you for serving.", "sub": "Asked. You stay on until they say yes.",
     "stopped": "You're still on for that Sunday.", "told": "Thanks for saying so. The spot is open for someone else.",
-    "away": "Saved. Nobody asks you on those days.", "unaway": "Taken off.", "often": "Saved.", "hear": "Saved.",
+    "away": "Saved. Nobody asks you on those days.", "unaway": "Taken off.", "often": "Saved.", "hear": "Saved.", "here": "",
 }
 ERRS = {"preview": "This is a preview, so nothing was saved.", "slow": "One moment, then try that again.",
         "error": "That didn't save. Please try again in a moment."}
@@ -248,7 +282,8 @@ def _coming_row(c: Dict[str, Any], first_day: Optional[str], subs_html: str) -> 
         act = _form("/my/serving/sub/stop", {"id": c["id"]}, "Stop asking")
     else:
         sub = _e(be)
-        act = ('<span class="sv-st">You\'re on</span>' if subs_html or c["service"]["day"] == first_day
+        act = (f'<a class="sv-btn hue" href="/my/serving/{_e(c["id"])}/pack">Your Sunday</a>' if c["service"]["day"] == first_day
+               else '<span class="sv-st">You\'re on</span>' if subs_html
                else f'<a class="sv-btn" href="/my/serving?sub={_e(c["id"])}#sv-{_e(c["id"])}">Can\'t make it</a>')
     return (f'<div class="sv-row" id="sv-{_e(c["id"])}">{_date(at, soft=True)}<span class="t"><span class="ti">{_e(c["place"])} · {_e(label)}</span>'
             f'<span class="su">{sub}</span></span>{act}</div>{subs_html}')
@@ -392,7 +427,8 @@ def render_ask(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], 
     elif v["status"] == "yes" and not v["cover"] and not changing:
         state = (f'<div class="sv-done"><span class="disc" aria-hidden="true">{ui.icon("check", 26)}</span>'
                  f'<b>You\'re on for {_day(at)}.</b><small>Your yes is on {_e(v["team"])}\'s schedule.</small></div>'
-                 f'<div class="sv-acts" style="justify-content:center"><a class="sv-btn" href="/my/serving/{_e(vid)}.ics">Add to my calendar</a>'
+                 f'<div class="sv-acts" style="justify-content:center"><a class="sv-btn hue" href="/my/serving/{_e(vid)}/pack">Your Sunday</a>'
+                 f'<a class="sv-btn" href="/my/serving/{_e(vid)}.ics">Add to my calendar</a>'
                  f'<a class="sv-btn" href="/my/serving/{_e(vid)}?change=1">Change my answer</a></div>')
     elif v["status"] == "no" and not changing:
         note = v["note"]
@@ -476,6 +512,78 @@ def home_card(items: List[Dict[str, Any]]) -> str:
     return f'<style>{SERVING_CSS}</style><div class="sv-home h-teal" style="display:flex;flex-direction:column;gap:8px">{row}{extra}</div>'
 
 
+# ─── The Sunday pack (board 9) ───────────────────────────────────────
+
+
+def _hm(hhmm: Optional[str]) -> str:
+    """"13:05" → "1:05": a run of times reads without AM and PM."""
+    if not hhmm:
+        return ""
+    h, m = hhmm.split(":")[:2]
+    return f"{int(h) % 12 or 12}:{m}"
+
+
+def _pk_song(s: Dict[str, Any]) -> str:
+    """One song: its title and key, the team's note, who leads, the band's
+    order. Never its words."""
+    key = f'<span class="sv-pk-key">{_e(s["key"])}</span>' if s["key"] else ""
+    note = f'<span class="su">{_e(s["note"])}</span>' if s["note"] else ""
+    who = f'<span class="su">{_e(s["who"])}</span>' if s["who"] else ""
+    parts = ('<span class="sv-pk-arr">' + "".join(f"<i>{_e(x)}</i>" for x in s["parts"]) + "</span>") if s["parts"] else ""
+    return (f'<div class="sv-pk-song"><span class="sv-pk-n">{s["n"]}</span><span class="t">'
+            f'<span class="ti"><span>{_e(s["title"])}</span>{key}</span>{note}{who}{parts}</span></div>')
+
+
+def render_pack(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], p: Dict[str, Any]) -> str:
+    import member_app_ui as ui
+    from member_portal import _shell
+    at, role = p["at"], p["role"]
+    day = at.strftime("%A, %B ") + str(at.day)
+    roles = ""
+    if len(p["roles"]) > 1:
+        tabs = "".join(f'<a href="/my/serving/{_e(r["id"])}/pack"{" aria-current=\"page\"" if r["id"] == role["id"] else ""}>{_e(r["team"])}</a>'
+                       for r in p["roles"])
+        roles = f'<div class="sv-pk-as"><nav class="sv-seg" aria-label="See the pack as">{tabs}</nav></div>'
+    due = f'Be there by {_hm(role["call"])}' if role["call"] else f'The service is at {_hm(at.strftime("%H:%M"))}'
+    where = f'{role["place"]} · {role["team"]}'
+    if role["here"]:
+        here = (f'<div class="sv-pk-here done h-teal"><span class="sv-pk-disc" aria-hidden="true">{ui.icon("check", 20)}</span>'
+                f'<span class="t"><b>You\'re here. Thank you!</b><small>{_e(_first(role["leader"]) if role["leader"] else "Your team")} sees you on the list.</small></span></div>')
+    else:
+        btn = (_form("/my/serving/here", {"id": role["id"]}, "<span>I&#x27;m here</span>", "sv-btn hue")
+               if p["here_open"] else "")
+        here = (f'<div class="sv-pk-here h-teal"><span class="sv-pk-disc" aria-hidden="true">{ui.icon("clock", 20)}</span>'
+                f'<span class="t"><b>{_e(due)}</b><small>{_e(where)}</small></span>{btn}</div>')
+    songs = ""
+    if p["songs"]:
+        rows = "".join(_pk_song(s) for s in p["songs"])
+        count = f'{len(p["songs"])} song' + ("" if len(p["songs"]) == 1 else "s")
+        songs = (f'<section class="sv-sec h-gold" aria-labelledby="pk-sg-h"><div class="sv-sh"><h2 id="pk-sg-h">The songs</h2>'
+                 f'<span class="sv-pk-only">{count}</span></div><div class="sv-card">{rows}</div></section>')
+    moments = ""
+    if p["moments"]:
+        rows = "".join(f'<div class="sv-pk-cue"><b>{_e(_hm(m["time"]))}</b><span>{_e(m["note"])}</span></div>' for m in p["moments"])
+        moments = (f'<section class="sv-sec h-coral" aria-labelledby="pk-mo-h"><div class="sv-sh"><h2 id="pk-mo-h">Your moments</h2>'
+                   f'<span class="sv-pk-only">{_e(role["team"])} only</span></div><div class="sv-card">{rows}</div></section>')
+    order = ""
+    if p["order"]:
+        rows = "".join(f'<b>{_e(_hm(o["time"]))}</b><span>{_e(o["title"])}{" · " + _e(o["who"]) if o["who"] else ""}</span>'
+                       for o in p["order"])
+        order = (f'<section class="sv-sec" aria-labelledby="pk-or-h"><div class="sv-sh"><h2 id="pk-or-h">Today&#x27;s order</h2></div>'
+                 f'<div class="sv-card"><div class="sv-pk-order">{rows}</div></div></section>')
+    thread = (f'<section class="sv-sec"><a class="sv-ask h-teal" href="/my/groups/{_e(role["group_id"])}">'
+              f'<span class="t"><b>{_e(role["team"])}&#x27;s group</b><small>Its board, its people and its chat</small></span>'
+              f'{ui.icon("chevron", 18)}</a></section>')
+    body = f"""<style>{SERVING_CSS}</style><a class="mb-back" href="/my/serving">Serving</a>
+{_flash(request)}
+<div class="sv-pk-when h-teal"><p class="sv-eb">{_e(day)} · {_e(_at_clock(at))}</p>
+<h1>{_e(_first(me.get("name")))}, here&#x27;s your Sunday</h1></div>
+{roles}
+<section class="sv-sec" style="margin-top:16px" aria-label="When and where">{here}</section>
+{songs}{moments}{order}{thread}"""
+    return _shell(biz, site, "Your Sunday", body, tab="connect", who=me)
+
+
 # ─── GET (through member_portal.serve) ───────────────────────────────
 
 
@@ -499,6 +607,12 @@ async def serve(request: Request, church: Dict[str, Any], me: Dict[str, Any], su
                 sub_for = {"id": want, "html": _subs_panel(hit, cands, v["leader"])}
             m["hear"] = await asyncio.to_thread(ss.hearing, biz, str(me["id"]))
             return _page(render_page(biz, site, request, me, m, sub_for))
+        if rest.endswith("/pack"):
+            aid = rest[:-5]
+            if not _ID.match(aid):
+                return RedirectResponse("/my/serving", status_code=303, headers=_SECURE_HEADERS)
+            p = await asyncio.to_thread(ss.pack, biz, str(me["id"]), aid)
+            return _page(render_pack(biz, site, request, me, p))
         aid, cal = (rest[:-4], True) if rest.endswith(".ics") else (rest, False)
         if not _ID.match(aid):
             return RedirectResponse("/my/serving", status_code=303, headers=_SECURE_HEADERS)
@@ -523,19 +637,22 @@ async def serve(request: Request, church: Dict[str, Any], me: Dict[str, Any], su
 def _go(path: str, **q: str) -> RedirectResponse:
     from member_portal import _SECURE_HEADERS
     from urllib.parse import urlencode
-    target = path if path == "/my/serving" or (path.startswith("/my/serving/") and _ID.match(path[len("/my/serving/"):])) else "/my/serving"
+    rest = path[len("/my/serving/"):].removesuffix("/pack") if path.startswith("/my/serving/") else ""
+    target = path if path == "/my/serving" or _ID.match(rest) else "/my/serving"
     qs = urlencode({k: v for k, v in q.items() if v})
     return RedirectResponse(f"{target}?{qs}" if qs else target, status_code=303, headers=_SECURE_HEADERS)
 
 
-async def _act(request: Request, back_to_ask: bool, fn, *fields: str):
-    """Signed in, not a preview, not too fast; then fn(biz, cid, *values)."""
+async def _act(request: Request, back_to_ask, fn, *fields: str):
+    """Signed in, not a preview, not too fast; then fn(biz, cid, *values).
+    back_to_ask: True goes back to the ask, "pack" to the Sunday pack."""
     from member_portal_church import _signed_in
     church, me, unavailable = await _signed_in(request)
     form = await request.form()
     vals = [str(form.get(f) or "") for f in fields]
     aid = vals[0] if fields and fields[0] == "id" else ""
-    back = f"/my/serving/{aid}" if back_to_ask and _ID.match(aid) else "/my/serving"
+    back = (f"/my/serving/{aid}" + ("/pack" if back_to_ask == "pack" else "")
+            if back_to_ask and _ID.match(aid) else "/my/serving")
     if unavailable:
         return None, _go(back, err="preview" if unavailable == "preview" else "error")
     if not me:
@@ -613,6 +730,12 @@ async def unaway(request: Request):
 async def often(request: Request):
     back, out = await _act(request, False, ss.set_often, "often")
     return out or _go("/my/serving", done="often")
+
+
+@router.post("/my/serving/here", include_in_schema=False)
+async def here(request: Request):
+    back, out = await _act(request, "pack", ss.here, "id")
+    return out or _go(back, done="here")
 
 
 @router.post("/my/serving/hear", include_in_schema=False)
