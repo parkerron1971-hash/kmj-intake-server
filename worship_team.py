@@ -156,20 +156,29 @@ def team_can(biz: str, user: AuthedUser, what: str) -> bool:
     return can(parts_of(biz, user.id), what)
 
 
-def roles_of(biz: str, user: AuthedUser) -> Set[str]:
+def roles_of(biz: str, user: AuthedUser, part: Optional[str] = "screens") -> Set[str]:
     """This person's parts in a church's ChurchSavvy: every part for the
     owner, an admin or a manager; their team parts for anyone else (none
     for a viewer or member seat, who reads only). A stranger gets the same
-    404 as a church that isn't there."""
+    404 as a church that isn't there.
+
+    `part` is the piece of a ChurchSavvy plan the route belongs to: the
+    screens (the default, every worship route), "planning", or None for
+    what every plan shares (the team, Setup, the status the app reads
+    first). A church on ChurchSavvy alone without it in its plan is
+    answered 402 (churchsavvy_billing), after who they are is settled."""
     seat = _seat(biz, user)
     if seat in STAFF_ROLES:
-        billing_context.set_current(biz)
-        return set(ROLES)
-    team = _team_roles(biz, user)
-    if not seat and not team:
-        raise HTTPException(404, "business not found")
+        roles = set(ROLES)
+    else:
+        roles = set(_team_roles(biz, user))
+        if not seat and not roles:
+            raise HTTPException(404, "business not found")
+    if part:
+        import churchsavvy_billing
+        churchsavvy_billing.require_part(biz, part, user)
     billing_context.set_current(biz)
-    return set(team)
+    return roles
 
 
 def can(roles: Set[str], what: str) -> bool:
@@ -180,8 +189,12 @@ def can_all(roles: Set[str]) -> Dict[str, bool]:
     return {k: can(roles, k) for k in CAN}
 
 
+# The piece of a ChurchSavvy plan each change belongs to; the rest is the screens.
+PART_OF: Dict[str, Optional[str]] = {"serve": "planning", "setup": None}
+
+
 def require(biz: str, user: AuthedUser, what: str) -> Set[str]:
-    roles = roles_of(biz, user)
+    roles = roles_of(biz, user, part=PART_OF.get(what, "screens"))
     if not can(roles, what):
         raise HTTPException(403, REFUSED[what])
     return roles
