@@ -249,3 +249,32 @@ def test_switched_off_nothing_changes(monkeypatch):
     monkeypatch.setenv("CHURCH_SITE", "off")
     monkeypatch.setattr(ps, "_platform_news_posts", no_news)
     assert "/churches/giving" not in asyncio.run(ps.public_sitemap(_req())).body.decode()
+
+
+# ─── 5. getting there from mysolutionist.app ────────────────────────
+
+def test_the_section_is_on_unless_switched_off(monkeypatch):
+    monkeypatch.delenv("CHURCH_SITE", raising=False)
+    assert cs.enabled()
+    for off in ("off", "OFF", "0", "false", "no"):
+        monkeypatch.setenv("CHURCH_SITE", off)
+        assert not cs.enabled(), off
+
+
+def test_every_church_page_has_the_products_menu_with_every_page():
+    pages = _all()
+    for path, html in pages.items():
+        menu = re.search(r'<details class="pmenu">.*?</details>', html, flags=re.S)
+        assert menu, path
+        links = re.findall(r'<a href="(/churches[^"]*)"( aria-current="page")?>', menu.group(0))
+        assert [p for p, _ in links] == list(pages), path                   # all eight, in order
+        assert [p for p, here in links if here] == [path], path            # this page marked
+
+
+def test_the_main_site_menus_lead_to_the_churches():
+    home = v3.render_home_v3()
+    for nav in (r'<nav class="links" aria-label="Main">.*?</nav>', r'<nav class="sheet" id="mobileMenu".*?</nav>'):
+        block = re.search(nav, home, flags=re.S).group(0)
+        assert 'href="/churches">Churches</a>' in block and 'href="/coaches">Coaches</a>' in block
+    for page in (mp.render_features(), mp.render_compare(), mp.render_faq(), mp.render_about()):
+        assert page.count('<a href="/churches">Churches</a>') == 2          # the top menu and the phone menu
