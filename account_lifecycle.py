@@ -192,7 +192,7 @@ BUSINESS_CHILD_TABLES: List[str] = [
     # its answer, who's trained on each place, who's away, the places and
     # the teams' turns, all before the services they're for, the teams'
     # groups and contacts (see _IMPORT_SKIP).
-    "serve_assignments", "serve_trained", "serve_away", "serve_positions", "serve_teams",
+    "serve_assignments", "serve_trained", "serve_away", "serve_prefs", "serve_positions", "serve_teams",
     # Sundays on screens: the services (their order, notes and the songs
     # they point at; see _IMPORT_SKIP) and the look every slide wears.
     "worship_services", "worship_settings",
@@ -858,7 +858,7 @@ _IMPORT_SKIP = {
     "worship_services",
     # Who serves when cites people, services, places and teams by id; the
     # export keeps it, and the church schedules again after a restore.
-    "serve_assignments", "serve_trained", "serve_away", "serve_positions", "serve_teams",
+    "serve_assignments", "serve_trained", "serve_away", "serve_prefs", "serve_positions", "serve_teams",
     # Rows that point at files under the OLD business's storage prefix; a
     # copy would show another account's files and lose them when it goes.
     "worship_media",

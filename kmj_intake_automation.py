@@ -407,6 +407,9 @@ from celebrations import router as celebrations_router
 app.include_router(celebrations_router)
 # Share good news: a member sends it (GET /my/news/share is member_portal.serve's).
 from member_portal_share import router as member_portal_share_router
+# My serving in the member app (ChurchSavvy Planning): answer an ask, a sub, away days.
+from member_portal_serving import router as member_portal_serving_router
+app.include_router(member_portal_serving_router)
 app.include_router(member_portal_share_router)
 # Posting to News from a phone, and Sign me up from a post (GET /my/news/write
 # is member_portal.serve's).
