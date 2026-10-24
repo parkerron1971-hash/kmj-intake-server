@@ -1,0 +1,558 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>{{TITLE}}</title>
+<meta name="description" content="{{DESCRIPTION}}">
+<meta property="og:title" content="{{TITLE}}">
+<meta property="og:description" content="{{DESCRIPTION}}">
+<meta property="og:url" content="{{URL}}">
+<link rel="canonical" href="{{URL}}">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="The Solutionist System">
+<meta property="og:image" content="https://mysolutionist.app/assets/og.png?v=4">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="https://mysolutionist.app/assets/og.png?v=4">
+<link rel="icon" type="image/png" href="/favicon.png">
+<link rel="apple-touch-icon" href="/favicon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@300;400;500;600;700&amp;family=Inter:wght@400;500;600&amp;family=Instrument+Serif:ital@0;1&amp;family=JetBrains+Mono:wght@400;500&amp;family=Geist:wght@400..800&amp;family=Newsreader:ital,opsz,wght@0,6..72,400..600;1,6..72,400..600&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#07080B}
+a{color:#F5F6F8}a:hover{color:#5EEAD4}
+.ow-grp{color:#858B98}
+.why{display:inline-flex;align-items:center;gap:5px;font-size:12px;line-height:1.3;padding:4px 9px;border-radius:999px;background:rgba(94,234,212,0.1);border:1px solid rgba(94,234,212,0.28);color:#B5F5EA}
+.shp{border-radius:16px;background:#12141B;border:1px solid #232735;padding:14px;display:flex;flex-direction:column;gap:10px;min-width:0}
+.shp-f{display:flex;flex-direction:column;gap:6px;padding:10px;border-radius:12px;background:#0B0C11;border:1px solid #1C1F2A}
+.step{display:flex;flex-direction:column;gap:6px;min-width:0}
+.step i{display:block;height:4px;border-radius:999px;background:#E3E5EA}
+.av{display:grid;place-items:center;border-radius:50%;flex:none;font-weight:700;color:#FFFFFF}
+.bub{align-self:flex-end;max-width:86%;padding:9px 13px;border-radius:16px 16px 4px 16px;background:#1C1F2A;color:#E4E6EB;font-size:14px;line-height:1.45}
+.ld-row{display:flex;align-items:center;gap:8px;padding:7px 9px;border-radius:11px;background:#161618}
+.ld-av{width:24px;height:24px;border-radius:50%;flex:none;display:grid;place-items:center;font-size:9.5px;font-weight:700;background:#08241F;color:#4FD8C4}
+.sd{width:22px;height:22px;border-radius:50%;flex:none}
+.pair{display:flex;flex-direction:column;gap:22px}
+.pair .paper{width:80%;transform:rotate(-2deg)}
+.pair .chief{width:76%;align-self:flex-end;margin-top:-26px}
+@media (max-width:760px){.pair .paper{width:100%;transform:none}.pair .chief{width:100%;margin-top:0}}
+</style>
+<style>
+{{CHURCH_CSS}}
+</style>
+{{PIXEL}}
+</head>
+<body>
+<div class="pg" style="--p: #14B8A6; --pl: #5EEAD4; --pd: #0F766E; --pg: rgba(20,184,166,0.30); --pt: #EAF7F5; --pf: rgba(20,184,166,0.16)">
+
+<!-- The Solutionist frame, lit in this room's colour -->
+<div class="strip"><div class="wrap strip-in">
+<a href="/churches" style="display: flex; align-items: center; gap: 8px; color: #F5F6F8">
+<svg width="20" height="17" viewBox="8 36 496 424" aria-hidden="true"><defs><linearGradient id="mkg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#E040FB"></stop><stop offset=".55" stop-color="#7C5CFF"></stop><stop offset="1" stop-color="#22D3EE"></stop></linearGradient></defs><g fill="url(#mkg)" stroke="#fff" stroke-width="8" stroke-opacity=".92"><polygon points="18,46 175,232 237,231 133,98 376,99 356,131 412,167 494,49"></polygon><polygon points="205,138 338,241 232,391 274,449 435,221 319,137"></polygon><polygon points="264,274 149,279 201,359"></polygon></g></svg>
+<span style="font-weight: 600">Solutionist</span>
+</a>
+<nav aria-label="Solutionist" style="display: flex; flex-wrap: wrap; gap: 6px 22px">
+<a href="/coaches">For coaches and consultants</a>
+<a href="/">All of Solutionist</a>
+<a href="{{APP_URL}}" style="color: #F5F6F8">Sign in</a>
+</nav>
+</div></div>
+
+<!-- HERO -->
+<section style="position: relative; overflow: hidden">
+<div class="aur" aria-hidden="true"><i></i><i></i><i></i></div>
+<div class="floor" aria-hidden="true"></div>
+<div class="blade" aria-hidden="true"></div>
+
+<header class="wrap" style="position: relative; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 14px 32px; padding-top: 20px; padding-bottom: 18px">
+<a href="/churches" style="display: flex; align-items: baseline; gap: 10px; text-decoration: none; color: #F5F6F8">
+<span style="font-family: 'Inter Tight', sans-serif; font-weight: 700; font-size: 24px; letter-spacing: -0.02em">Solutionist</span>
+<span class="serif" style="font-size: 28px; color: #D9D2FF">Churches</span>
+</a>
+<nav aria-label="Churches" style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px 28px; font-size: 15px; font-weight: 500">
+<a href="/churches#products" style="display: flex; align-items: center; gap: 6px; text-decoration: none; color: #E4E6EB">Products<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#E4E6EB" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg></a>
+<a href="/churches#app" style="text-decoration: none; color: #E4E6EB">Member app</a>
+<a href="/churches#pricing" style="text-decoration: none; color: #E4E6EB">Pricing</a>
+<a href="/start" class="btn btn-w btn-s">Start free</a>
+</nav>
+</header>
+
+<div class="wrap" style="position: relative">
+<div class="pbar">
+<div class="lock">
+<svg width="40" height="40" viewBox="0 0 48 48" aria-hidden="true"><defs><clipPath id="gt"><rect width="48" height="48" rx="12"></rect></clipPath></defs><g clip-path="url(#gt)" stroke="rgba(255,255,255,0.55)" stroke-width="1.1" stroke-linejoin="round"><polygon points="0,0 28,0 17,21 0,15" fill="#14B8A6"></polygon><polygon points="28,0 48,0 48,19 17,21" fill="#5EEAD4"></polygon><polygon points="0,15 17,21 9,48 0,48" fill="#0F766E"></polygon><polygon points="17,21 48,19 48,48 9,48" fill="#14B8A6"></polygon><polygon points="17,21 33,31 24,48 9,48" fill="#0F766E" fill-opacity="0.6"></polygon></g><g transform="translate(12 12)" fill="none" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.2"></circle><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"></path><path d="M16 4.5a3 3 0 0 1 0 6M18 14.5c1.9.8 3 2.8 3 5.5"></path></g></svg>
+<span style="display: flex; flex-direction: column; gap: 1px"><b>People and Care</b><span>Solutionist for Churches</span></span>
+</div>
+<nav aria-label="In this room">
+<span class="mono" style="font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: rgba(255,255,255,0.6)">In this room</span>
+<a href="#cards">Follow-up</a>
+<a href="#shepherds">Shepherds</a>
+<a href="#sundays">Sundays</a>
+<a href="#prayer">Prayer</a>
+</nav>
+</div>
+</div>
+
+<div class="wrap" style="position: relative; padding-top: 72px; padding-bottom: 40px; display: flex; flex-direction: column; gap: 28px">
+<p class="eyebrow" style="color: #5EEAD4; display: flex; align-items: center; gap: 10px"><span class="ping" style="background: #14B8A6"></span>People and Care</p>
+<h1 class="h1" style="max-width: 1040px">No one gets <span class="serif glint" style="font-size: 1.06em">left behind.</span></h1>
+<div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; gap: 24px 48px">
+<p class="lede" style="max-width: 640px">Every card a guest fills in becomes someone's job. Every member family has a shepherd, who hears early when they stop coming. And prayer goes to the person who will pray, kept as private as the person asked.</p>
+<div style="display: flex; flex-wrap: wrap; gap: 12px">
+<a href="/start" class="btn btn-w">{{CTA_START}}</a>
+<a href="#cards" class="btn btn-l">Follow one card</a>
+</div>
+</div>
+<div class="facts">
+<div class="fact"><svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#5EEAD4" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="3" width="16" height="18" rx="2.5"></rect><path d="M8 8h8M8 12h8M8 16h5"></path></svg><span><b>Every card, a person</b><span>Chief hands it to the right leader</span></span></div>
+<div class="fact"><svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#5EEAD4" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"></path></svg><span><b>A shepherd for each family</b><span>Elders and pastors, a handful each</span></span></div>
+<div class="fact"><svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#5EEAD4" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"></rect><path d="M8 11V8a4 4 0 0 1 8 0v3"></path></svg><span><b>Private stays private</b><span>Prayer kept for the pastors stays there</span></span></div>
+</div>
+</div>
+
+<!-- The devices: the office's People and Care, and a shepherd's Lead tab -->
+<div class="wrap" style="position: relative; padding-bottom: 80px">
+<div class="stage" style="aspect-ratio: 2.25" aria-label="People and Care on a computer, and a shepherd's families on a phone. Sample data.">
+<div class="st-lap" style="position: absolute; left: 4%; top: 0; width: 72%">
+<div class="dv-lid"><div class="dv-glass"></div><div style="aspect-ratio: 16 / 10">
+<div class="ow">
+<div class="ow-top">
+<svg width="11" height="10" viewBox="8 36 496 424" aria-hidden="true"><g fill="url(#mkg)"><polygon points="18,46 175,232 237,231 133,98 376,99 356,131 412,167 494,49"></polygon><polygon points="205,138 338,241 232,391 274,449 435,221 319,137"></polygon><polygon points="264,274 149,279 201,359"></polygon></g></svg>
+<span style="font-weight: 600; font-size: 9px; color: #F5F6F8">Grace Fellowship</span>
+<span style="margin-left: 10px; flex: 1; max-width: 46%; display: flex; align-items: center; gap: 5px; height: 15px; padding: 0 7px; border-radius: 999px; background: #13151C; border: 1px solid #1E2130; color: #8D93A1; font-size: 7.5px">Search people, groups, gifts</span>
+<span style="margin-left: auto; display: flex; align-items: center; gap: 4px; height: 16px; padding: 0 8px; border-radius: 999px; background: linear-gradient(90deg, rgba(224,64,251,0.22), rgba(124,92,255,0.22), rgba(34,211,238,0.18)); border: 1px solid rgba(124,92,255,0.45); font-size: 7.5px; font-weight: 600; color: #F5F6F8"><span style="width: 7px; height: 7px; border-radius: 50%; background: linear-gradient(135deg, #E040FB, #7C5CFF 55%, #22D3EE)"></span>Ask Chief</span>
+</div>
+<div class="ow-body">
+<div class="ow-side">
+<span class="ow-grp">Operate</span>
+<span class="ow-nav"><i style="background: #7C5CFF"></i>This week</span>
+<span class="ow-nav on"><i style="background: #14B8A6"></i>People and Care</span>
+<span class="ow-nav"><i style="background: #3B82F6"></i>Groups</span>
+<span class="ow-nav"><i style="background: #22C55E"></i>Giving</span>
+<span class="ow-nav"><i style="background: #F97316"></i>Kids</span>
+<span class="ow-grp">Grow</span>
+<span class="ow-nav"><i style="background: #EC4899"></i>Member app</span>
+<span class="ow-nav"><i style="background: #EAB308"></i>Sermons</span>
+<span class="ow-grp">Build</span>
+<span class="ow-nav"><i style="background: #EAB308"></i>Website</span>
+<span class="ow-nav"><i style="background: #94A3B8"></i>Books</span>
+</div>
+<div class="ow-main">
+<div style="display: flex; justify-content: space-between; align-items: center"><span class="ow-h">People and Care</span><span style="display: flex; gap: 3px; font-size: 7.5px"><span style="padding: 3px 8px; border-radius: 999px; background: rgba(20,184,166,0.18); color: #5EEAD4">Follow-up</span><span style="padding: 3px 8px; color: #8D93A1">Shepherding</span><span style="padding: 3px 8px; color: #8D93A1">Families</span><span style="padding: 3px 8px; color: #8D93A1">Prayer and care</span></span></div>
+<div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px">
+<div class="ow-card"><span class="ow-k" style="color: #5EEAD4">In follow-up</span><span class="ow-n">14</span><span class="ow-s">3 due today</span></div>
+<div class="ow-card"><span class="ow-k" style="color: #5EEAD4">First-time guests</span><span class="ow-n">6</span><span class="ow-s">each with the welcome team</span></div>
+<div class="ow-card"><span class="ow-k" style="color: #5EEAD4">Shepherded</span><span class="ow-n">36 of 40</span><span class="ow-s">families with a shepherd</span></div>
+<div class="ow-card"><span class="ow-k" style="color: #FF9D6B">Drifting</span><span class="ow-n">3</span><span class="ow-s">shepherds told on Monday</span></div>
+</div>
+<div style="display: flex; gap: 6px; flex: 1; min-height: 0">
+<div class="ow-card" style="flex: 1.5; gap: 4px">
+<div style="display: flex; justify-content: space-between; align-items: center"><span class="ow-k" style="color: #8D93A1">Follow-up board</span><span style="font-size: 7px; color: #8D93A1">Who has them, and where they are</span></div>
+<div class="ow-row"><span class="av" style="width: 14px; height: 14px; font-size: 6px; background: #0F766E">DW</span><span style="flex: 1; min-width: 0"><b style="font-weight: 600; color: #F5F6F8">Dana Whitfield</b><span style="color: #8D93A1"> · Plan your visit</span></span><span style="color: #C9CDD6">Keisha G.</span><span class="ow-pill" style="background: rgba(20,184,166,0.16); color: #5EEAD4">Greet on Sunday</span><span style="flex: 0 0 52px; text-align: right; color: #8D93A1">Due Sun</span></div>
+<div class="ow-row"><span class="av" style="width: 14px; height: 14px; font-size: 6px; background: #6D57E8">TC</span><span style="flex: 1; min-width: 0"><b style="font-weight: 600; color: #F5F6F8">Terrence Cole</b><span style="color: #8D93A1"> · Asked for a pastor</span></span><span style="color: #C9CDD6">Pastor James</span><span class="ow-pill" style="background: rgba(20,184,166,0.16); color: #5EEAD4">Reach out</span><span style="flex: 0 0 52px; text-align: right; color: #5EEAD4">Due today</span></div>
+<div class="ow-row"><span class="av" style="width: 14px; height: 14px; font-size: 6px; background: #B45309">MO</span><span style="flex: 1; min-width: 0"><b style="font-weight: 600; color: #F5F6F8">Marisol Ortiz</b><span style="color: #8D93A1"> · Baptism</span></span><span style="color: #C9CDD6">Elder Linda</span><span class="ow-pill" style="background: rgba(20,184,166,0.16); color: #5EEAD4">Talk it through</span><span style="flex: 0 0 52px; text-align: right; color: #8D93A1">Due Thu</span></div>
+<div class="ow-row"><span class="av" style="width: 14px; height: 14px; font-size: 6px; background: #2F6BEA">DR</span><span style="flex: 1; min-width: 0"><b style="font-weight: 600; color: #F5F6F8">Devon Reed</b><span style="color: #8D93A1"> · Serve with us</span></span><span style="color: #C9CDD6">Worship Leader</span><span class="ow-pill" style="background: rgba(20,184,166,0.16); color: #5EEAD4">Meet the team lead</span><span style="flex: 0 0 52px; text-align: right; color: #FF9D6B">1 day late</span></div>
+<div class="ow-row"><span class="av" style="width: 14px; height: 14px; font-size: 6px; background: #0F766E">RA</span><span style="flex: 1; min-width: 0"><b style="font-weight: 600; color: #F5F6F8">Ruth Adams</b><span style="color: #8D93A1"> · Connect card</span></span><span style="color: #C9CDD6">Keisha G.</span><span class="ow-pill" style="background: rgba(20,184,166,0.16); color: #5EEAD4">Reach out</span><span style="flex: 0 0 52px; text-align: right; color: #5EEAD4">Due today</span></div>
+<div class="ow-row"><span class="av" style="width: 14px; height: 14px; font-size: 6px; background: #BE185D">LN</span><span style="flex: 1; min-width: 0"><b style="font-weight: 600; color: #F5F6F8">Linh Nguyen</b><span style="color: #8D93A1"> · Connect card</span></span><span style="color: #C9CDD6">Pastor Andre</span><span class="ow-pill" style="background: rgba(20,184,166,0.16); color: #5EEAD4">Invite to a next step</span><span style="flex: 0 0 52px; text-align: right; color: #8D93A1">Due Oct 31</span></div>
+<div class="ow-row"><span class="av" style="width: 14px; height: 14px; font-size: 6px; background: #0F766E">BF</span><span style="flex: 1; min-width: 0"><b style="font-weight: 600; color: #F5F6F8">Bianca Flores</b><span style="color: #8D93A1"> · Plan your visit</span></span><span style="color: #C9CDD6">Keisha G.</span><span class="ow-pill" style="background: rgba(20,184,166,0.16); color: #5EEAD4">Call that week</span><span style="flex: 0 0 52px; text-align: right; color: #8D93A1">Due Wed</span></div>
+<div class="ow-row"><span class="av" style="width: 14px; height: 14px; font-size: 6px; background: #B45309">JP</span><span style="flex: 1; min-width: 0"><b style="font-weight: 600; color: #F5F6F8">Jamal Price</b><span style="color: #8D93A1"> · Baptism</span></span><span style="color: #C9CDD6">Elder Linda</span><span class="ow-pill" style="background: rgba(20,184,166,0.16); color: #5EEAD4">Set the date</span><span style="flex: 0 0 52px; text-align: right; color: #8D93A1">Due Nov 9</span></div>
+<div class="ow-row"><span class="av" style="width: 14px; height: 14px; font-size: 6px; background: #2F6BEA">SK</span><span style="flex: 1; min-width: 0"><b style="font-weight: 600; color: #F5F6F8">Sarah Kim</b><span style="color: #8D93A1"> · Serve with us</span></span><span style="color: #C9CDD6">Hospitality lead</span><span class="ow-pill" style="background: rgba(20,184,166,0.16); color: #5EEAD4">First Sunday serving</span><span style="flex: 0 0 52px; text-align: right; color: #8D93A1">Due Nov 2</span></div>
+<div class="ow-row"><span class="av" style="width: 14px; height: 14px; font-size: 6px; background: #6D57E8">GW</span><span style="flex: 1; min-width: 0"><b style="font-weight: 600; color: #F5F6F8">Gloria West</b><span style="color: #8D93A1"> · Care need</span></span><span style="color: #C9CDD6">Care team</span><span class="ow-pill" style="background: rgba(20,184,166,0.16); color: #5EEAD4">Reach out</span><span style="flex: 0 0 52px; text-align: right; color: #8D93A1">Due Fri</span></div>
+</div>
+<div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px">
+<div class="ow-card" style="gap: 5px">
+<span class="ow-k" style="color: #8D93A1">Shepherds</span>
+<div style="display: flex; align-items: center; gap: 6px; font-size: 8px"><span style="flex: 0 0 58px">Pastor James</span><span style="flex: 1; height: 5px; border-radius: 3px; background: #1B1E28"><span class="grow" style="display: block; width: 100%; height: 100%; border-radius: 3px; background: #0F766E"></span></span><span class="mono" style="font-size: 7px; color: #8D93A1">10/10</span></div>
+<div style="display: flex; align-items: center; gap: 6px; font-size: 8px"><span style="flex: 0 0 58px">Elder Mark</span><span style="flex: 1; height: 5px; border-radius: 3px; background: #1B1E28"><span class="grow" style="display: block; width: 83%; height: 100%; border-radius: 3px; background: #14B8A6"></span></span><span class="mono" style="font-size: 7px; color: #8D93A1">10/12</span></div>
+<div style="display: flex; align-items: center; gap: 6px; font-size: 8px"><span style="flex: 0 0 58px">Elder Linda</span><span style="flex: 1; height: 5px; border-radius: 3px; background: #1B1E28"><span class="grow" style="display: block; width: 75%; height: 100%; border-radius: 3px; background: #14B8A6"></span></span><span class="mono" style="font-size: 7px; color: #8D93A1">9/12</span></div>
+<div style="display: flex; align-items: center; gap: 6px; font-size: 8px"><span style="flex: 0 0 58px">Pastor Andre</span><span style="flex: 1; height: 5px; border-radius: 3px; background: #1B1E28"><span class="grow" style="display: block; width: 58%; height: 100%; border-radius: 3px; background: #5EEAD4"></span></span><span class="mono" style="font-size: 7px; color: #8D93A1">7/12</span></div>
+</div>
+<div class="ow-card" style="gap: 4px; border-color: rgba(94,234,212,0.35)">
+<span class="ow-k" style="color: #5EEAD4">Chief's proposal</span>
+<span style="font: 600 11px/1.2 'Inter Tight', sans-serif; color: #F5F6F8">4 families waiting for a shepherd</span>
+<span class="ow-s">Each one placed with someone who knows them. Nothing is sent until you approve.</span>
+<span style="align-self: flex-start; margin-top: 3px; font-size: 7.5px; font-weight: 600; padding: 3px 8px; border-radius: 999px; background: #14B8A6; color: #042F2B">Review the proposal</span>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div></div>
+<div class="dv-base"></div>
+</div>
+
+<div class="st-ph" style="position: absolute; right: 3%; bottom: 0; width: 21%">
+<div class="dv-ph"><span class="dv-island"></span><div class="ma" style="aspect-ratio: 9 / 19.2">
+<div class="ma-in" style="gap: 8px; overflow: hidden">
+<div class="ma-lt" style="font-size: 19px">Your families, <em>this month</em></div>
+<div class="ma-card" style="display: flex; flex-direction: column; gap: 4px; border: 1px solid #1f3b36">
+<span class="ma-kick" style="display: flex; align-items: center; gap: 4px; color: #4FD8C4"><svg width="9" height="9" viewBox="0 0 24 24" fill="#4FD8C4" aria-hidden="true"><path d="m12 2.5 2.9 5.9 6.6 1-4.8 4.6 1.1 6.5L12 17.4l-5.9 3.1 1.1-6.5-4.8-4.6 6.6-1z"></path></svg>From Chief</span>
+<span style="font-size: 9.5px; line-height: 1.38">The Brooks family has missed three Sundays; they were last here Sept 28. A call this week? 2 more to reach.</span>
+</div>
+<div class="ma-card" style="display: flex; flex-direction: column; gap: 6px; padding: 9px 11px">
+<span style="display: flex; justify-content: space-between; align-items: baseline"><span style="font-size: 9px; color: #a8a8ae">Reached in the last 30 days</span><b style="font-size: 12px; font-weight: 720">7 of 10</b></span>
+<span style="display: block; height: 5px; border-radius: 3px; background: #2f2f33"><span class="grow" style="display: block; width: 70%; height: 100%; border-radius: 3px; background: #17A894"></span></span>
+</div>
+<div style="display: flex; justify-content: space-between; align-items: baseline"><b style="font-size: 11.5px; font-weight: 700">They need you first</b><span style="font-size: 9px; color: #a8a8ae">3</span></div>
+<div style="display: flex; flex-direction: column; gap: 5px">
+<div class="ld-row"><span class="ld-av">B</span><span style="flex: 1; min-width: 0; display: flex; flex-direction: column"><b style="font-size: 10px; font-weight: 650">The Brooks family</b><span style="font-size: 8.5px; color: #FF9D6B">Drifting · last here Sept 28</span></span><span style="font-size: 8px; color: #a8a8ae">4 people</span></div>
+<div class="ld-row"><span class="ld-av">C</span><span style="flex: 1; min-width: 0; display: flex; flex-direction: column"><b style="font-size: 10px; font-weight: 650">The Carter family</b><span style="font-size: 8.5px; color: #FF9D6B">Drifting · last here Sept 21</span></span><span style="font-size: 8px; color: #a8a8ae">5 people</span></div>
+<div class="ld-row"><span class="ld-av">D</span><span style="flex: 1; min-width: 0; display: flex; flex-direction: column"><b style="font-size: 10px; font-weight: 650">Denise Ross</b><span style="font-size: 8.5px; color: #a8a8ae">Reached 41 days ago</span></span><span style="font-size: 8px; color: #a8a8ae">1 person</span></div>
+</div>
+</div>
+<div class="ma-tabs" style="padding-left: 2px; padding-right: 2px">
+<span><svg viewBox="0 0 24 24"><path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"></path></svg>Home</span>
+<span><svg viewBox="0 0 24 24"><rect x="2.5" y="4" width="19" height="13" rx="3"></rect><path d="m10.5 8.3 4 2.2-4 2.2z"></path><path d="M8 21h8"></path></svg>Watch</span>
+<span><svg viewBox="0 0 24 24"><path d="M2 4h6a4 4 0 0 1 4 4v13a3 3 0 0 0-3-3H2z"></path><path d="M22 4h-6a4 4 0 0 0-4 4v13a3 3 0 0 1 3-3h7z"></path></svg>Bible</span>
+<span><svg viewBox="0 0 24 24"><path d="M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.6-7 10-7 10z"></path></svg>Give</span>
+<span><svg viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"></path></svg>Connect</span>
+<span class="on"><svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path><path d="m9 12 2 2 4-4"></path></svg>Lead</span>
+</div>
+</div></div>
+</div>
+</div>
+</div>
+</section>
+
+<!-- EVERY CARD BECOMES SOMEONE'S JOB -->
+<section id="cards" class="sec light">
+<div class="wrap split">
+<div class="txt">
+<p class="eyebrow ink">Follow-up</p>
+<h2 class="h2">Every card becomes <span class="serif ink" style="font-size: 1.08em">someone's job.</span></h2>
+<p class="body">A guest fills in a card on your website or in the app. Chief reads what they wrote, hands it to the leader whose role takes it, and starts a path with a clock on every step. Nobody sorts a pile on Monday.</p>
+<ul class="ticks">
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Plan your visit, baptism, serve and connect cards each walk their own path</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Asking to talk with a pastor goes to a pastor, first</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>The leader works it on their phone, from the Lead tab in your member app</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Your roles, your titles: Chief starts from your church's tradition, and you can make your own</span></li>
+</ul>
+</div>
+<div class="vis">
+<div class="card" style="padding: 26px; display: flex; flex-direction: column; gap: 20px" aria-label="Sample of one card handed to a leader, and its path">
+<div style="display: flex; justify-content: space-between; align-items: center; gap: 12px"><b style="font-family: 'Inter Tight', sans-serif; font-size: 20px; letter-spacing: -0.01em">One card, start to finish</b><span class="mono" style="font-size: 11px; color: #5A5E6B">SAMPLE</span></div>
+<div style="display: flex; flex-wrap: wrap; gap: 14px; align-items: stretch">
+<div style="flex: 1 1 240px; min-width: 0; border-radius: 16px; border: 1px solid #E3E5EA; background: #FBFBFC; padding: 16px; display: flex; flex-direction: column; gap: 10px">
+<span class="mono" style="font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase; color: #0F766E">Plan your visit · website</span>
+<span style="display: flex; flex-direction: column; gap: 2px"><span style="font-size: 12.5px; color: #5A5E6B">Your name</span><b style="font-size: 15px; font-weight: 600">Dana Whitfield</b></span>
+<span style="display: flex; flex-direction: column; gap: 2px"><span style="font-size: 12.5px; color: #5A5E6B">When are you coming?</span><b style="font-size: 15px; font-weight: 600">This Sunday, the 11:00</b></span>
+<span style="display: flex; flex-direction: column; gap: 2px"><span style="font-size: 12.5px; color: #5A5E6B">Anyone coming with you?</span><b style="font-size: 15px; font-weight: 600">My two boys, 6 and 9</b></span>
+</div>
+<div style="flex: 1 1 240px; min-width: 0; border-radius: 16px; background: #0B0C11; color: #F5F6F8; padding: 16px; display: flex; flex-direction: column; gap: 12px">
+<span style="display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: #A9AEB9"><span class="chief-av" style="width: 18px; height: 18px"></span>Chief handed it to</span>
+<span style="display: flex; align-items: center; gap: 10px"><span class="av" style="width: 38px; height: 38px; font-size: 13px; background: #0F766E">KG</span><span style="display: flex; flex-direction: column"><b style="font-size: 16px; font-weight: 600">Keisha Grant</b><span style="font-size: 13px; color: #A9AEB9">Welcome Team lead</span></span></span>
+<span style="font-size: 13.5px; line-height: 1.5; color: #C9CDD6">Plan your visit cards go to the Welcome Team, and Keisha has the fewest open.</span>
+<span style="align-self: flex-start; margin-top: auto; font-size: 12px; font-weight: 600; padding: 5px 11px; border-radius: 999px; background: rgba(20,184,166,0.18); color: #5EEAD4">On her Lead tab now</span>
+</div>
+</div>
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 14px">
+<div class="step"><i style="background: #14B8A6"></i><span style="display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: #0F766E"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#0F766E" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>Done Thursday</span><b style="font-size: 15px; font-weight: 600">Reach out</b><span style="font-size: 13px; color: #5A5E6B">before their Sunday</span></div>
+<div class="step"><i style="background: linear-gradient(90deg, #14B8A6 50%, #E3E5EA 50%)"></i><span style="font-size: 12px; font-weight: 600; color: #0F766E">Due Sunday</span><b style="font-size: 15px; font-weight: 600">Greet on Sunday</b><span style="font-size: 13px; color: #5A5E6B">meet them at the door</span></div>
+<div class="step"><i></i><span style="font-size: 12px; font-weight: 600; color: #5A5E6B">Next</span><b style="font-size: 15px; font-weight: 600">Call that week</b><span style="font-size: 13px; color: #5A5E6B">within 5 days</span></div>
+</div>
+<div style="border-radius: 16px; background: #EAF7F5; border: 1px solid #CDEDE7; padding: 14px 16px; display: flex; flex-direction: column; gap: 10px">
+<span class="mono" style="font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase; color: #0F766E">If a step waits</span>
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; font-size: 13.5px">
+<span style="display: flex; flex-direction: column; gap: 2px"><b style="font-weight: 600">On the day</b><span style="color: #3F4450">Keisha gets a reminder</span></span>
+<span style="display: flex; flex-direction: column; gap: 2px"><b style="font-weight: 600">A day late</b><span style="color: #3F4450">Pastor Andre, who she answers to, hears</span></span>
+<span style="display: flex; flex-direction: column; gap: 2px"><b style="font-weight: 600">Three days late</b><span style="color: #3F4450">One more step up: Pastor James</span></span>
+</div>
+</div>
+</div>
+</div>
+</div>
+</section>
+
+<!-- A SHEPHERD FOR EVERY FAMILY -->
+<section id="shepherds" class="sec" style="background: #07080B">
+<div class="wrap split" style="flex-wrap: wrap-reverse">
+<div class="vis">
+<div class="card-d" style="padding: 22px; display: flex; flex-direction: column; gap: 16px" aria-label="Sample of Chief's shepherding proposal">
+<div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px">
+<span style="display: flex; flex-direction: column; gap: 3px"><span class="mono" style="font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase; color: #5EEAD4">Shepherding · Chief's proposal</span><b style="font-family: 'Inter Tight', sans-serif; font-size: 19px; font-weight: 600">4 families waiting, 1 move</b></span>
+<span class="btn btn-p btn-s">Approve and email shepherds</span>
+</div>
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px">
+<div class="shp">
+<div style="display: flex; align-items: center; gap: 9px"><span class="av" style="width: 30px; height: 30px; font-size: 11px; background: #6D57E8">PA</span><span style="flex: 1; display: flex; flex-direction: column"><b style="font-size: 14.5px; font-weight: 600">Pastor Andre</b><span style="font-size: 12px; color: #A9AEB9">Associate Pastor</span></span><span class="mono" style="font-size: 12px; color: #C9CDD6">9 of 12</span></div>
+<div class="shp-f"><span style="display: flex; justify-content: space-between; gap: 8px; font-size: 13.5px"><b style="font-weight: 600">The Nguyen family</b><span style="color: #A9AEB9">3 people</span></span><span class="why">Took Linh's card on the Follow-up board</span></div>
+<div class="shp-f"><span style="display: flex; justify-content: space-between; gap: 8px; font-size: 13.5px"><b style="font-weight: 600">Ruth Adams</b><span style="color: #A9AEB9">1 person</span></span><span class="why">Room on their list</span></div>
+</div>
+<div class="shp">
+<div style="display: flex; align-items: center; gap: 9px"><span class="av" style="width: 30px; height: 30px; font-size: 11px; background: #B45309">EL</span><span style="flex: 1; display: flex; flex-direction: column"><b style="font-size: 14.5px; font-weight: 600">Elder Linda</b><span style="font-size: 12px; color: #A9AEB9">Elder</span></span><span class="mono" style="font-size: 12px; color: #C9CDD6">11 of 12</span></div>
+<div class="shp-f"><span style="display: flex; justify-content: space-between; gap: 8px; font-size: 13.5px"><b style="font-weight: 600">The Ortiz family</b><span style="color: #A9AEB9">5 people</span></span><span class="why">Same part of town (44105)</span></div>
+<div class="shp-f" style="border-color: rgba(255,157,107,0.35)"><span style="display: flex; justify-content: space-between; gap: 8px; font-size: 13.5px"><b style="font-weight: 600">The Carter family</b><span style="color: #A9AEB9">5 people</span></span><span class="why" style="background: rgba(255,157,107,0.1); border-color: rgba(255,157,107,0.35); color: #FFC9AE">Moved from Elder Mark · You chose</span></div>
+</div>
+<div class="shp">
+<div style="display: flex; align-items: center; gap: 9px"><span class="av" style="width: 30px; height: 30px; font-size: 11px; background: #0F766E">EM</span><span style="flex: 1; display: flex; flex-direction: column"><b style="font-size: 14.5px; font-weight: 600">Elder Mark</b><span style="font-size: 12px; color: #A9AEB9">Elder</span></span><span class="mono" style="font-size: 12px; color: #C9CDD6">10 of 12</span></div>
+<div class="shp-f"><span style="display: flex; justify-content: space-between; gap: 8px; font-size: 13.5px"><b style="font-weight: 600">The Haywood family</b><span style="color: #A9AEB9">4 people</span></span><span class="why">Leads Tuesday Men's Group, which Curtis is in</span></div>
+</div>
+<div class="shp">
+<div style="display: flex; align-items: center; gap: 9px"><span class="av" style="width: 30px; height: 30px; font-size: 11px; background: #2F6BEA">PJ</span><span style="flex: 1; display: flex; flex-direction: column"><b style="font-size: 14.5px; font-weight: 600">Pastor James</b><span style="font-size: 12px; color: #A9AEB9">Lead Pastor</span></span><span class="mono" style="font-size: 12px; color: #C9CDD6">10 of 10</span></div>
+<span style="font-size: 13px; line-height: 1.5; color: #A9AEB9">Full. The Lead Pastor's number is lower, so the pastor has room to lead.</span>
+</div>
+</div>
+<div style="display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-radius: 14px; background: rgba(20,184,166,0.08); border: 1px solid rgba(94,234,212,0.22); font-size: 13.5px; color: #C9CDD6"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#5EEAD4" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"></rect><path d="M8 11V8a4 4 0 0 1 8 0v3"></path></svg>Nothing is saved or sent until you approve. Move any family first.</div>
+</div>
+</div>
+<div class="txt">
+<p class="eyebrow" style="color: #5EEAD4">Shepherds</p>
+<h2 class="h2">A shepherd for <span class="serif glint" style="font-size: 1.08em">every family.</span></h2>
+<p class="body">Your elders and pastors each take a handful of families. Chief proposes who goes with whom, and you move anyone you like. When you approve, each shepherd gets one email with their families, and finds them on their Lead tab.</p>
+<ul class="ticks" style="color: #D5D8DF">
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Someone who knows them first: a group they lead, or a card they took</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Families stay whole, and nobody shepherds their own</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Even loads: 12 families each and 10 for the Lead Pastor, or your own numbers</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>No families on record yet? Chief suggests who lives together, and you accept each one</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Shepherds log a call, a visit, a text or a talk at church, and never see giving</span></li>
+</ul>
+</div>
+</div>
+</section>
+
+<!-- SUNDAYS, COUNTED BY YOUR PEOPLE -->
+<section id="sundays" class="sec tint">
+<div class="wrap split">
+<div class="txt">
+<p class="eyebrow ink">Sundays</p>
+<h2 class="h2">Sundays, counted <span class="serif ink" style="font-size: 1.08em">by your people.</span></h2>
+<p class="body">No clipboard at the door. A code on the welcome slide opens your church's check-in page, and one tap counts the family, in the building or watching online. Chief reads those Sundays for every family with a shepherd.</p>
+<ul class="ticks">
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>At church or watching online, the whole family in one tap</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>A parent who checks the kids in at the kiosk counts as there</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Drifting means three Sundays missed by a family who was coming</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Judged on Sundays only, never on giving, and nobody in their first month</span></li>
+</ul>
+</div>
+<div class="vis" style="display: flex; flex-wrap: wrap; gap: 24px; align-items: center; justify-content: center">
+<div style="flex: 0 1 270px; min-width: 230px">
+<div class="dv-ph"><span class="dv-island"></span><div class="ma" style="aspect-ratio: 9 / 19" aria-label="Sample of Sunday check-in on a member's phone">
+<div class="ma-in" style="gap: 11px">
+<div class="ma-top"><span class="ma-mark">GF</span><span class="ma-me">T</span></div>
+<span style="font-size: 10px; color: #a8a8ae">Home</span>
+<span class="ma-kick" style="color: #8FB0FF">Sunday Gathering · 11:00 AM</span>
+<div style="font-size: 20px; font-weight: 720; letter-spacing: -0.035em; line-height: 1.1">Good morning, <em style="font-family: 'Newsreader', serif; font-style: italic; font-weight: 500">Tom</em>. Are you with us today?</div>
+<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px">
+<span style="display: flex; flex-direction: column; gap: 2px; padding: 10px; border-radius: 13px; background: rgba(47,107,234,0.2); border: 1.5px solid #2F6BEA"><b style="font-size: 11px; font-weight: 650">At church</b><span style="font-size: 9px; color: #c8d6ff">In the building</span></span>
+<span style="display: flex; flex-direction: column; gap: 2px; padding: 10px; border-radius: 13px; background: #161618; border: 1.5px solid #2c2c30"><b style="font-size: 11px; font-weight: 650">Watching online</b><span style="font-size: 9px; color: #a8a8ae">From home or away</span></span>
+</div>
+<span style="font-size: 10px; font-weight: 650; color: #a8a8ae">Who's with you</span>
+<div class="ma-card" style="display: flex; flex-direction: column; gap: 9px; padding: 10px">
+<span style="display: flex; align-items: center; gap: 8px"><span class="ld-av" style="background: #2f2f33; color: #f5f5f7">TB</span><span style="flex: 1; display: flex; flex-direction: column"><b style="font-size: 10.5px; font-weight: 650">Tom Brooks</b><span style="font-size: 8.5px; color: #a8a8ae">You</span></span><span style="width: 16px; height: 16px; border-radius: 5px; background: #2F6BEA; display: grid; place-items: center"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg></span></span>
+<span style="display: flex; align-items: center; gap: 8px"><span class="ld-av" style="background: #2f2f33; color: #f5f5f7">LB</span><span style="flex: 1; display: flex; flex-direction: column"><b style="font-size: 10.5px; font-weight: 650">Lisa Brooks</b><span style="font-size: 8.5px; color: #a8a8ae">Your family</span></span><span style="width: 16px; height: 16px; border-radius: 5px; background: #2F6BEA; display: grid; place-items: center"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg></span></span>
+</div>
+<span class="ma-btn" style="height: 38px; border-radius: 14px; background: #2F6BEA; color: #fff; font-size: 12px">Check in</span>
+<span style="font-size: 9px; line-height: 1.4; color: #a8a8ae">Only Grace Fellowship sees who came. You can change it any time.</span>
+</div>
+<div class="ma-tabs">
+<span class="on"><svg viewBox="0 0 24 24"><path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"></path></svg>Home</span>
+<span><svg viewBox="0 0 24 24"><rect x="2.5" y="4" width="19" height="13" rx="3"></rect><path d="m10.5 8.3 4 2.2-4 2.2z"></path><path d="M8 21h8"></path></svg>Watch</span>
+<span><svg viewBox="0 0 24 24"><path d="M2 4h6a4 4 0 0 1 4 4v13a3 3 0 0 0-3-3H2z"></path><path d="M22 4h-6a4 4 0 0 0-4 4v13a3 3 0 0 1 3-3h7z"></path></svg>Bible</span>
+<span><svg viewBox="0 0 24 24"><path d="M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.6-7 10-7 10z"></path></svg>Give</span>
+<span><svg viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"></path></svg>Connect</span>
+</div>
+</div></div>
+</div>
+<div class="card" style="flex: 1 1 280px; min-width: 0; padding: 24px; display: flex; flex-direction: column; gap: 16px" aria-label="Sample of how Chief reads a family's Sundays">
+<div style="display: flex; justify-content: space-between; align-items: center; gap: 10px"><b style="font-family: 'Inter Tight', sans-serif; font-size: 18px">The Brooks family</b><span style="font-size: 12px; font-weight: 600; padding: 3px 10px; border-radius: 999px; background: #FDE8DD; color: #A9471A">Drifting</span></div>
+<div style="display: flex; flex-direction: column; gap: 8px">
+<span style="font-size: 12.5px; color: #5A5E6B">Their last nine Sundays</span>
+<div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap">
+<span class="sd" style="background: #14B8A6"></span><span class="sd" style="background: #14B8A6"></span><span class="sd" style="background: #E3E5EA"></span><span class="sd" style="background: #14B8A6"></span><span class="sd" style="background: #14B8A6"></span><span class="sd" style="background: #14B8A6"></span><span style="width: 1px; height: 22px; background: #CDD1D8; margin: 0 2px"></span><span class="sd" style="border: 2px solid #E07A43; background: #FFFFFF"></span><span class="sd" style="border: 2px solid #E07A43; background: #FFFFFF"></span><span class="sd" style="border: 2px solid #E07A43; background: #FFFFFF"></span>
+</div>
+<span style="font-size: 13px; color: #3F4450">Here 5 of the 6 Sundays before, then missed the last three. Last here Sept 28.</span>
+</div>
+<div style="display: flex; flex-direction: column; gap: 0; border-top: 1px solid #ECEEF1">
+<div style="display: flex; gap: 12px; padding: 11px 0; border-bottom: 1px solid #ECEEF1; font-size: 13.5px"><b style="flex: 0 0 124px; font-weight: 600">Monday</b><span style="color: #3F4450">Elder Mark hears, in his Monday email</span></div>
+<div style="display: flex; gap: 12px; padding: 11px 0; border-bottom: 1px solid #ECEEF1; font-size: 13.5px"><b style="flex: 0 0 124px; font-weight: 600">No call in a week</b><span style="color: #3F4450">Pastor Andre, who Mark answers to</span></div>
+<div style="display: flex; gap: 12px; padding: 11px 0; border-bottom: 1px solid #ECEEF1; font-size: 13.5px"><b style="flex: 0 0 124px; font-weight: 600">A week more</b><span style="color: #3F4450">One step up, and it stops at the top</span></div>
+<div style="display: flex; gap: 12px; padding: 11px 0; font-size: 13.5px"><b style="flex: 0 0 124px; font-weight: 600; color: #0F766E">Back at church</b><span style="color: #3F4450">Resolved, on its own</span></div>
+</div>
+</div>
+</div>
+</div>
+</section>
+
+<!-- PRAYER -->
+<section id="prayer" class="sec light">
+<div class="wrap split" style="flex-wrap: wrap-reverse">
+<div class="vis" style="display: flex; flex-wrap: wrap; gap: 24px; align-items: center; justify-content: center">
+<div class="card" style="flex: 1 1 280px; min-width: 0; padding: 24px; display: flex; flex-direction: column; gap: 14px" aria-label="Sample of a prayer request card on a church's website">
+<span class="mono" style="font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase; color: #0F766E">Prayer request · website</span>
+<b style="font-family: 'Inter Tight', sans-serif; font-size: 20px; letter-spacing: -0.01em">How can we pray for you?</b>
+<div style="padding: 12px 14px; border-radius: 12px; border: 1px solid #DCDCE4; font-size: 14.5px; line-height: 1.5; color: #0B0C11">Please pray for my mother. Her surgery is on Thursday.</div>
+<div style="display: flex; flex-direction: column; gap: 8px">
+<span style="display: flex; align-items: flex-start; gap: 10px; padding: 12px; border-radius: 12px; border: 1.5px solid #0F766E; background: #F1FAF8; font-size: 14px"><span style="width: 16px; height: 16px; margin-top: 2px; border-radius: 50%; border: 5px solid #0F766E; background: #FFFFFF; flex: none"></span>Our prayer team may pray over this with you</span>
+<span style="display: flex; align-items: flex-start; gap: 10px; padding: 12px; border-radius: 12px; border: 1px solid #DCDCE4; font-size: 14px; color: #3F4450"><span style="width: 16px; height: 16px; margin-top: 2px; border-radius: 50%; border: 1.5px solid #9AA0AC; flex: none"></span>Keep this with the pastors only</span>
+</div>
+<span style="display: flex; align-items: center; gap: 10px; font-size: 14px; color: #3F4450"><span style="width: 18px; height: 18px; border-radius: 5px; background: #0F766E; display: grid; place-items: center; flex: none"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg></span>I'd like a call</span>
+</div>
+<div style="flex: 0 1 270px; min-width: 230px">
+<div class="dv-ph"><span class="dv-island"></span><div class="ma" style="aspect-ratio: 9 / 19" aria-label="Sample of an Intercessor leader's prayer list in the member app">
+<div class="ma-in" style="gap: 10px">
+<div class="ma-lt" style="font-size: 20px">Lead, <em>Monica</em></div>
+<div style="display: flex; gap: 4px; font-size: 9px; font-weight: 600"><span style="padding: 5px 10px; border-radius: 999px; background: #222225; color: #a8a8ae">People</span><span style="padding: 5px 10px; border-radius: 999px; background: #08241F; color: #4FD8C4">Prayer · 3</span></div>
+<div class="ma-card" style="display: flex; flex-direction: column; gap: 7px">
+<div style="display: flex; justify-content: space-between; align-items: baseline"><b style="font-size: 12px; font-weight: 700">Denise</b><span style="font-size: 9px; font-weight: 650; color: #6B9BFF">Due today</span></div>
+<span style="font-size: 10.5px; line-height: 1.45">Please pray for my mother. Her surgery is on Thursday.</span>
+<span style="font-size: 8.5px; color: #a8a8ae">From the website · Oct 24</span>
+<div style="display: flex; flex-wrap: wrap; gap: 4px"><span style="font-size: 8px; padding: 3px 7px; border-radius: 999px; background: #222225; color: #a8a8ae">Shared with the prayer team</span><span style="font-size: 8px; padding: 3px 7px; border-radius: 999px; background: #222225; color: #a8a8ae">Wants a call</span></div>
+<div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px">
+<span class="ma-btn" style="height: 28px; padding: 0; background: #2F6BEA; color: #fff; font-size: 9.5px">I prayed</span>
+<span class="ma-btn" style="height: 28px; padding: 0; background: #222225; color: #f5f5f7; font-size: 9.5px">Send a note</span>
+<span class="ma-btn" style="height: 28px; padding: 0; background: #222225; color: #f5f5f7; font-size: 9.5px">Pass on</span>
+</div>
+</div>
+<div class="ma-card" style="display: flex; flex-direction: column; gap: 4px">
+<div style="display: flex; justify-content: space-between; align-items: baseline"><b style="font-size: 11.5px; font-weight: 700">Marcus</b><span style="font-size: 9px; color: #a8a8ae">Due tomorrow</span></div>
+<span style="font-size: 10.5px; line-height: 1.45; color: #d6d6da">For my new job, and for my family as we settle in.</span>
+</div>
+<div class="ma-card" style="display: flex; flex-direction: column; gap: 4px">
+<div style="display: flex; justify-content: space-between; align-items: baseline"><b style="font-size: 11.5px; font-weight: 700">Angela</b><span style="font-size: 9px; color: #a8a8ae">Due Wed</span></div>
+<span style="font-size: 10.5px; line-height: 1.45; color: #d6d6da">Strength for our family this week. Thank you all.</span>
+</div>
+<span style="display: flex; align-items: center; gap: 6px; font-size: 9.5px; color: #a8a8ae"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#4FD8C4" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>11 prayed over in the last 30 days</span>
+</div>
+<div class="ma-tabs" style="padding-left: 2px; padding-right: 2px">
+<span><svg viewBox="0 0 24 24"><path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"></path></svg>Home</span>
+<span><svg viewBox="0 0 24 24"><rect x="2.5" y="4" width="19" height="13" rx="3"></rect><path d="m10.5 8.3 4 2.2-4 2.2z"></path><path d="M8 21h8"></path></svg>Watch</span>
+<span><svg viewBox="0 0 24 24"><path d="M2 4h6a4 4 0 0 1 4 4v13a3 3 0 0 0-3-3H2z"></path><path d="M22 4h-6a4 4 0 0 0-4 4v13a3 3 0 0 1 3-3h7z"></path></svg>Bible</span>
+<span><svg viewBox="0 0 24 24"><path d="M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.6-7 10-7 10z"></path></svg>Give</span>
+<span><svg viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"></path></svg>Connect</span>
+<span class="on"><svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path><path d="m9 12 2 2 4-4"></path></svg>Lead</span>
+</div>
+</div></div>
+</div>
+</div>
+<div class="txt">
+<p class="eyebrow ink">Prayer</p>
+<h2 class="h2">Prayer reaches <span class="serif ink" style="font-size: 1.08em">someone who'll pray.</span></h2>
+<p class="body">Each person chooses who holds their request. A request shared with the prayer team goes to your Intercessor leader, with a first name and the words, due in a day. One kept for the pastors stays with the pastors.</p>
+<ul class="ticks">
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Words about someone in danger, abuse or a death always go to the pastor</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>"I prayed", a note from the church, or pass it to an intercessor</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Emails never carry the request's words</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>The office still sees every request in Prayer and care</span></li>
+</ul>
+</div>
+</div>
+</section>
+
+<!-- CHIEF IN THIS ROOM -->
+<section id="chief" class="sec" style="background: #07080B; overflow: hidden">
+<div class="aur" aria-hidden="true" style="opacity: 0.6"><i></i><i></i><i></i></div>
+<div class="wrap split" style="position: relative">
+<div class="txt">
+<p class="eyebrow" style="color: #5EEAD4">Chief</p>
+<h2 class="h2">Chief knows <span class="serif glint" style="font-size: 1.08em">who needs a call.</span></h2>
+<p class="body">Chief watches every shepherded family's Sundays and writes to the right person on Monday. Ask it who's drifting, who came for the first time, or who has the Carters, and it answers from the same records Shepherding shows.</p>
+<ul class="ticks" style="color: #D5D8DF">
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>First-time guests nobody has reached since their visit</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Moves you ask for wait on Shepherding until you approve</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Never giving, never a note's words, and a child is a first name and an age</span></li>
+</ul>
+</div>
+<div class="vis pair">
+<div class="paper" style="background: #FFFFFF; color: #0B0C11; border-radius: 8px; box-shadow: 0 40px 80px -30px rgba(0,0,0,0.7); padding: 24px 26px; display: flex; flex-direction: column; gap: 12px; font-size: 13.5px" aria-label="Sample of a shepherd's Monday email">
+<div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 10px"><span style="display: flex; flex-direction: column; gap: 2px"><b style="font-family: 'Inter Tight', sans-serif; font-size: 15px">Your families this week</b><span style="color: #5A5E6B; font-size: 12px">Grace Fellowship · to Elder Mark · Monday</span></span><span style="width: 28px; height: 28px; border-radius: 8px; background: #2F6BEA; color: #fff; display: grid; place-items: center; font-weight: 800; font-size: 10px">GF</span></div>
+<div style="padding-top: 10px; border-top: 1px solid #E5E5EB; display: flex; flex-direction: column; gap: 4px"><b style="font-weight: 600">The Brooks family has missed three Sundays.</b><span style="color: #3F4450">They were last here Sept 28. A call this week?</span></div>
+<div style="padding-top: 10px; border-top: 1px solid #E5E5EB; display: flex; flex-direction: column; gap: 4px"><b style="font-weight: 600">Birthdays this week</b><span style="color: #3F4450">Maya turns 8 on Thursday.</span></div>
+</div>
+<div class="chief">
+<div class="chief-in">
+<div style="display: flex; align-items: center; gap: 10px"><span class="chief-av"></span><span style="display: flex; flex-direction: column"><b style="font-size: 14px">Chief</b><span style="font-size: 12px; color: #959BA8">People and Care · sample</span></span></div>
+<span class="bub">Who's drifting?</span>
+<div style="display: flex; flex-direction: column; gap: 6px; font-size: 15px; line-height: 1.5">
+<span class="line" style="animation-delay: 0.2s">Two families. The Brooks family was last here Sept 28, and Elder Mark called them Tuesday.</span>
+<span class="line" style="animation-delay: 1.4s">Nobody has reached the Carters since they missed, so Pastor Andre heard on Monday.</span>
+</div>
+<span class="bub line" style="animation-delay: 2.6s">Give the Carters to Elder Linda.</span>
+<span class="line" style="animation-delay: 3.8s; font-size: 15px; line-height: 1.5">Drafted. It's waiting on Shepherding, and nobody is told until you approve.<span class="caret"></span></span>
+<div style="display: flex; flex-wrap: wrap; gap: 8px"><a href="#shepherds" class="btn btn-w btn-s">Open Shepherding</a><button type="button" class="btn btn-l btn-s" style="font-family: inherit; cursor: pointer">Not now</button></div>
+</div>
+</div>
+</div>
+</div>
+</section>
+
+<!-- THE ROOMS NEXT DOOR -->
+<section class="sec" style="background: #07080B; padding-top: 40px; border-top: 1px solid #12141B">
+<div class="wrap" style="display: flex; flex-direction: column; gap: 32px">
+<div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; gap: 16px">
+<h2 class="h2" style="font-size: clamp(30px, 3.2vw, 44px)">The rooms <span class="serif" style="font-size: 1.08em; color: #D9D2FF">next door.</span></h2>
+<p class="body" style="max-width: 420px">People and Care is the one list of people every other room reads.</p>
+</div>
+<div class="doors">
+<a href="/churches/groups-and-classes" class="door"><span class="dglow" style="background: radial-gradient(circle, #3B82F6 0%, rgba(59,130,246,0) 70%)"></span>
+<svg width="44" height="44" viewBox="0 0 48 48" aria-hidden="true" style="position: relative"><defs><clipPath id="gd1"><rect width="48" height="48" rx="12"></rect></clipPath></defs><g clip-path="url(#gd1)" stroke="rgba(255,255,255,0.55)" stroke-width="1.1" stroke-linejoin="round"><polygon points="0,0 28,0 17,21 0,15" fill="#3B82F6"></polygon><polygon points="28,0 48,0 48,19 17,21" fill="#93C5FD"></polygon><polygon points="0,15 17,21 9,48 0,48" fill="#1D4ED8"></polygon><polygon points="17,21 48,19 48,48 9,48" fill="#3B82F6"></polygon><polygon points="17,21 33,31 24,48 9,48" fill="#1D4ED8" fill-opacity="0.6"></polygon></g><g transform="translate(12 12)" fill="none" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h11a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H9l-4 3v-3H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z"></path><path d="M19 9h1a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-1v3l-3-3h-4"></path></g></svg>
+<b>Groups and Classes</b><span>The group a shepherd leads is often how they know a family, and each group shows who has stopped coming.</span><em style="color: #93C5FD">Go to Groups and Classes</em></a>
+<a href="/churches/kids-and-youth" class="door"><span class="dglow" style="background: radial-gradient(circle, #F97316 0%, rgba(249,115,22,0) 70%)"></span>
+<svg width="44" height="44" viewBox="0 0 48 48" aria-hidden="true" style="position: relative"><defs><clipPath id="gd2"><rect width="48" height="48" rx="12"></rect></clipPath></defs><g clip-path="url(#gd2)" stroke="rgba(255,255,255,0.55)" stroke-width="1.1" stroke-linejoin="round"><polygon points="0,0 28,0 17,21 0,15" fill="#F97316"></polygon><polygon points="28,0 48,0 48,19 17,21" fill="#FDBA74"></polygon><polygon points="0,15 17,21 9,48 0,48" fill="#C2410C"></polygon><polygon points="17,21 48,19 48,48 9,48" fill="#F97316"></polygon><polygon points="17,21 33,31 24,48 9,48" fill="#C2410C" fill-opacity="0.6"></polygon></g><g transform="translate(12 12)" fill="none" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6z"></path><path d="M9 12l2 2 4-4"></path></g></svg>
+<b>Kids and Youth</b><span>A family you accept here is the same family the kids kiosk checks in and releases to.</span><em style="color: #FDBA74">Go to Kids and Youth</em></a>
+<a href="/churches/member-app" class="door"><span class="dglow" style="background: radial-gradient(circle, #EC4899 0%, rgba(236,72,153,0) 70%)"></span>
+<svg width="44" height="44" viewBox="0 0 48 48" aria-hidden="true" style="position: relative"><defs><clipPath id="gd3"><rect width="48" height="48" rx="12"></rect></clipPath></defs><g clip-path="url(#gd3)" stroke="rgba(255,255,255,0.55)" stroke-width="1.1" stroke-linejoin="round"><polygon points="0,0 28,0 17,21 0,15" fill="#EC4899"></polygon><polygon points="28,0 48,0 48,19 17,21" fill="#F9A8D4"></polygon><polygon points="0,15 17,21 9,48 0,48" fill="#BE185D"></polygon><polygon points="17,21 48,19 48,48 9,48" fill="#EC4899"></polygon><polygon points="17,21 33,31 24,48 9,48" fill="#BE185D" fill-opacity="0.6"></polygon></g><g transform="translate(12 12)" fill="none" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="2.5" width="10" height="19" rx="2.5"></rect><path d="M11 18.5h2"></path></g></svg>
+<b>Member App</b><span>Where leaders work their Lead tab, and members check in on Sunday with one tap.</span><em style="color: #F9A8D4">Go to the Member App</em></a>
+</div>
+</div>
+</section>
+
+<!-- ON EVERY PLAN -->
+<section id="plans" class="sec light">
+<div class="wrap" style="display: flex; flex-direction: column; gap: 36px">
+<div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; gap: 20px 48px">
+<div style="display: flex; flex-direction: column; gap: 16px; max-width: 700px">
+<p class="eyebrow" style="color: #5A5E6B">Plans</p>
+<h2 class="h2">People and Care comes with <span class="serif ink" style="font-size: 1.08em">every plan.</span></h2>
+</div>
+<p class="body" style="max-width: 440px">Shepherds, leaders and intercessors work from the member app, so they never need an office login of their own.</p>
+</div>
+<div class="planrow">
+<div class="plan"><span class="pn">Starter</span><span class="pp">${{P_STARTER}} <small>a month</small></span><ul>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>Follow-up, with a path for every card</li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>Shepherds, families and Sunday check-in</li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>Prayer for your prayer team, kept private</li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>One office login</li>
+</ul></div>
+<div class="plan mid"><span class="pn">Professional</span><span class="pp">${{P_PRO}} <small>a month</small></span><ul>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>Everything in Starter</li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>Texts to guests and members from your church's own number</li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>Three office logins</li>
+</ul></div>
+<div class="plan"><span class="pn">Solutionist</span><span class="pp">${{P_SOL}} <small>a month</small></span><ul>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>Everything in Professional</li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>Seven office logins, for a larger staff</li>
+</ul></div>
+</div>
+<a href="/churches#pricing" style="align-self: flex-start; font-weight: 600; color: #0B0C11">Compare every plan</a>
+</div>
+</section>
+
+<!-- CLOSING -->
+<section id="start" style="position: relative; overflow: hidden; background: #07080B">
+<div class="aur" aria-hidden="true"><i></i><i></i><i></i></div>
+<div class="floor" aria-hidden="true" style="height: 60%"></div>
+<div class="wrap" style="position: relative; padding-top: 150px; padding-bottom: 150px; display: flex; flex-direction: column; align-items: center; gap: 24px; text-align: center">
+<h2 class="h1" style="font-size: clamp(42px, 5.6vw, 84px); max-width: 960px">Care for every family <span class="serif glint" style="font-size: 1.06em; white-space: nowrap">by name.</span></h2>
+<p class="lede">{{TRIAL_LINE}}</p>
+<a href="/start" class="btn btn-w">Start free</a>
+</div>
+</section>
+
+<!-- Footer -->
+<footer class="foot"><div class="wrap foot-in">
+<div style="display: flex; flex-direction: column; gap: 10px; max-width: 360px">
+<div style="display: flex; align-items: center; gap: 8px; color: #F5F6F8"><svg width="22" height="19" viewBox="8 36 496 424" aria-hidden="true"><g fill="url(#mkg)" stroke="#fff" stroke-width="8" stroke-opacity=".92"><polygon points="18,46 175,232 237,231 133,98 376,99 356,131 412,167 494,49"></polygon><polygon points="205,138 338,241 232,391 274,449 435,221 319,137"></polygon><polygon points="264,274 149,279 201,359"></polygon></g></svg><span style="font-family: 'Inter Tight', sans-serif; font-weight: 600; font-size: 17px">Solutionist</span></div>
+<p style="margin: 0; font-size: 14px">Everything a small business runs on, in one place, with Chief running it beside you.</p>
+</div>
+<nav aria-label="Church products"><b>For churches</b><a href="/churches">Overview</a><a href="/churches/people-and-care">People and Care</a><a href="/churches/giving">Giving</a><a href="/churches/kids-and-youth">Kids and Youth</a></nav>
+<nav aria-label="More church products"><span aria-hidden="true" style="display: block; height: 21px"></span><a href="/churches/groups-and-classes">Groups and Classes</a><a href="/churches/member-app">Member App</a><a href="/churches/website-and-sermons">Website and Sermons</a><a href="/churches/office-and-books">Office and Books</a></nav>
+<nav aria-label="Company"><b>Solutionist</b><a href="/coaches">For coaches and consultants</a><a href="/churches#pricing">Pricing</a><a href="/privacy">Privacy</a><a href="/terms">Terms</a></nav>
+</div></footer>
+
+</div>
+{{ANALYTICS}}
+</body>
+</html>

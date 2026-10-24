@@ -7903,6 +7903,9 @@ async def public_sitemap(request: Request):
         return site
     origin = "https://mysolutionist.app"
     entries = [(origin + p, pri) for p, pri in _MARKETING_SITEMAP_PATHS]
+    import church_site
+    if church_site.enabled():
+        entries.extend((origin + church_site.path_of(s), "0.8") for s in church_site.PRODUCTS)
     posts = await _platform_news_posts()
     if posts:
         entries.append((origin + "/news", "0.7"))
@@ -7937,10 +7940,26 @@ async def public_about(request: Request):
 # One brand, three front pages (2026-10-22): the home, and the same page for
 # churches and for coaches and consultants (marketing_home_v3.EDITIONS).
 # /consultants is the coaches page with consultants first.
+#
+# CHURCH_SITE=on (church_site.py, 2026-10-23) puts the church section there
+# instead: an overview and seven product pages, each lit in its own colour.
 @router.get("/churches", include_in_schema=False)
 async def public_edition_churches(request: Request):
+    import church_site
+    if church_site.enabled():
+        return await _platform_page_or_site(request, lambda: church_site.render(""))
     import marketing_home_v3
     return await _platform_page_or_site(request, lambda: marketing_home_v3.render_edition("churches"))
+
+@router.get("/churches/{slug}", include_in_schema=False)
+async def public_church_page(request: Request, slug: str):
+    """One church product page. Switched off, or a name that isn't one of
+    the seven, the path goes to the catch-all exactly as it did before
+    this route existed (a site host's own page, or the platform's 404)."""
+    import church_site
+    if church_site.enabled() and slug in church_site.PRODUCTS:
+        return await _platform_page_or_site(request, lambda: church_site.render(slug))
+    return await subdomain_catch_all(request, f"churches/{slug}")
 
 @router.get("/coaches", include_in_schema=False)
 async def public_edition_coaches(request: Request):
