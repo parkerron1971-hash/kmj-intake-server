@@ -770,8 +770,13 @@ def ask(body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
     _staff(biz, user, write=True)
     sid, pid = _uuid(body.get("service_id"), "service"), _uuid(body.get("position_id"), "place")
     cid = _uuid(body.get("contact_id"), "person")
+    return do_ask(biz, sid, pid, body.get("slot", 1), cid, _asker(biz, user))
+
+
+def do_ask(biz: str, sid: str, pid: str, slot: Any, cid: str, asker: str) -> Dict[str, Any]:
+    """The ask itself, for the office or a team's own leader (sunday_leading)."""
     place = _place_row(biz, pid)
-    slot = _slot(body, place)
+    slot = _slot({"slot": slot}, place)
     board = _service_board(biz, sid)
     pick = next((c for c in board.candidates(sid, pid) if c["contact_id"] == cid), None)
     if not pick:
@@ -780,7 +785,7 @@ def ask(body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
         raise HTTPException(409, f"{pick['name']} is away that Sunday")
     if pick["clash"]:
         raise HTTPException(409, f"{pick['name']} is already on {pick['clash']} at that service")
-    row = _put(biz, board, sid, pid, slot, {"contact_id": cid, "status": "asked", "asked_by": _asker(biz, user)})
+    row = _put(biz, board, sid, pid, slot, {"contact_id": cid, "status": "asked", "asked_by": asker})
     out = _assignment_out(row, {cid: {"name": pick["name"]}})
     if pick["at_most"] and pick["load"] >= pick["at_most"]:
         out["warning"] = f"That's more than {pick['at_most']} Sundays this month for {pick['name']}"
@@ -796,10 +801,14 @@ def offer(body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
     biz = _uuid(body.get("business_id"))
     _staff(biz, user, write=True)
     sid, pid = _uuid(body.get("service_id"), "service"), _uuid(body.get("position_id"), "place")
+    return do_offer(biz, sid, pid, body.get("slot", 1), _asker(biz, user))
+
+
+def do_offer(biz: str, sid: str, pid: str, slot: Any, asker: str) -> Dict[str, Any]:
     place = _place_row(biz, pid)
-    slot = _slot(body, place)
+    slot = _slot({"slot": slot}, place)
     board = _service_board(biz, sid)
-    row = _put(biz, board, sid, pid, slot, {"contact_id": None, "status": "offered", "asked_by": _asker(biz, user)})
+    row = _put(biz, board, sid, pid, slot, {"contact_id": None, "status": "offered", "asked_by": asker})
     return {"assignment": _assignment_out(row, {})}
 
 
@@ -838,7 +847,10 @@ def take_back(assignment_id: str, business_id: str, user: AuthedUser = Depends(r
     _gate(user)
     biz = _uuid(business_id)
     _staff(biz, user, write=True)
-    aid = _uuid(assignment_id, "schedule")
+    return do_take_back(biz, _uuid(assignment_id, "schedule"))
+
+
+def do_take_back(biz: str, aid: str) -> Dict[str, Any]:
     _assignment(biz, aid)
     if not sb_clients.sb_delete_as_service(f"/serve_assignments?id=eq.{_q(aid)}&business_id=eq.{_q(biz)}"):
         raise HTTPException(503, "That didn't save. Try again.")
@@ -860,8 +872,11 @@ def fill(body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
     if not isinstance(weeks, int) or isinstance(weeks, bool) or not 1 <= weeks <= MAX_WEEKS:
         raise HTTPException(400, f"Fill 1 to {MAX_WEEKS} weeks")
     only = _uuid(body["group_id"], "team") if body.get("group_id") else None
-    board = _Board(biz, body.get("start"), weeks)
-    asker = FILLED_BY
+    return do_fill(biz, weeks, body.get("start"), only)
+
+
+def do_fill(biz: str, weeks: int, start: Optional[str], only: Optional[str], asker: str = FILLED_BY) -> Dict[str, Any]:
+    board = _Board(biz, start, weeks)
     fresh: List[Dict[str, Any]] = []
     left = 0
     for svc in board.services:
@@ -903,7 +918,10 @@ def unfill(body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
     raw = body.get("ids")
     if not isinstance(raw, list) or not raw or len(raw) > 400:
         raise HTTPException(400, "Which asks to take back?")
-    ids = [_uuid(i, "schedule") for i in raw]
+    return do_unfill(biz, [_uuid(i, "schedule") for i in raw])
+
+
+def do_unfill(biz: str, ids: List[str]) -> Dict[str, Any]:
     back = 0
     for i in range(0, len(ids), 100):
         part = _ids(ids[i:i + 100])
