@@ -21,9 +21,10 @@ marketing_home_v3._founder_state), so the church pages cannot drift from
 checkout. Logins, banks and the depth ladder are in prose; tests hold the
 prose to the dials.
 
-CHURCH_SITE=on serves the section. Off (the default until Kevin switches
-it on), /churches stays marketing_home_v3's church edition and the
-product paths fall through to the catch-all as before.
+On by default since 2026-10-23 (Kevin: "I should be able to get to
+churches page and any other page from mysolutionist.app"). CHURCH_SITE=off
+is the rollback: /churches goes back to marketing_home_v3's church edition
+and the product paths fall through to the catch-all as before.
 """
 from __future__ import annotations
 
@@ -97,7 +98,7 @@ _CHURCHSAVVY_LINK = re.compile(r'<a href="\{\{CHURCHSAVVY_URL\}\}"[^>]*>.*?</a>\
 
 
 def enabled() -> bool:
-    return (os.environ.get("CHURCH_SITE") or "").strip().lower() in ("on", "1", "true", "yes")
+    return (os.environ.get("CHURCH_SITE") or "on").strip().lower() not in ("off", "0", "false", "no")
 
 
 def path_of(slug: str) -> str:
