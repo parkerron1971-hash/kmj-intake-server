@@ -425,6 +425,9 @@ app.include_router(member_classes_router)
 # invitation, logs a conversation, marks a step, hands someone back.
 from member_portal_lead import router as member_portal_lead_router
 app.include_router(member_portal_lead_router)
+# A Sunday team's leader schedules their team (Lead → Sundays; ChurchSavvy Planning).
+from member_portal_leading import router as member_portal_leading_router
+app.include_router(member_portal_leading_router)
 # The Safety room on a pastoral leader's Lead tab (member_portal_safety.py):
 # safety officers picked from the church's Pastors and Elders.
 from member_portal_safety import router as member_portal_safety_router

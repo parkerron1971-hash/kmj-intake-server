@@ -19,6 +19,8 @@ side (design canvas LG4Q97HqtEM4ByyXmmSrCP, boards 3-6).
                                   (church_shepherding; canvas
                                   31su6kdYmYecH5b2NxjBJN boards 6-7)
     GET  /my/lead/family/<id>     one family: who's in it, log a touch
+    GET  /my/lead/sundays         a Sunday team's leader schedules their team
+                                  (member_portal_leading; ChurchSavvy Planning)
     POST /my/lead/family/<id>/touch   a call, a visit, a text or a talk at
                                   church, and "needs a pastor"
 
@@ -36,6 +38,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -48,6 +51,9 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 _FID = re.compile(r"^[0-9a-fA-F-]{36}$")
+# Whether this leader leads a Sunday team (sunday_leading): read once per
+# request in serve(), so every page's section switcher can offer Sundays.
+SUNDAYS: ContextVar[bool] = ContextVar("lead_sundays", default=False)
 
 DONE = {
     "saved": "Saved. The pastors can see it on their page.",
@@ -536,6 +542,12 @@ async def serve(request: Request, biz: Dict[str, Any], site, me: Dict[str, Any],
     import church_prayer
     import church_shepherding as shep
     selected = sub[len("/my/lead/"):] if sub.startswith("/my/lead/") else ""
+    import sunday_leading
+    SUNDAYS.set(await asyncio.to_thread(sunday_leading.leads_a_team, biz["id"], str(me["id"])))
+    # A Sunday team's leader: their team's Sundays (member_portal_leading).
+    if selected == "sundays":
+        import member_portal_leading
+        return await member_portal_leading.serve(request, biz, site, me)
     if selected == "families" or selected.startswith("family/"):
         return await serve_families(request, biz, site, me, selected)
     # A group's leaders: their group (group_lead).
@@ -672,11 +684,13 @@ def _ago(days: Optional[int]) -> str:
 
 
 def _seg(tab: str, people: bool, prays: bool, waiting: int, fams: int, groups: int = 0) -> str:
-    """My group | People | Prayer | Families: only the ones this leader has,
-    and only when there is more than one."""
+    """My group | Sundays | People | Prayer | Families: only the ones this
+    leader has, and only when there is more than one."""
     tabs = []
     if groups:
         tabs.append(("groups", "/my/lead/groups", "My groups" if groups > 1 else "My group"))
+    if SUNDAYS.get():
+        tabs.append(("sundays", "/my/lead/sundays", "Sundays"))
     if people:
         tabs.append(("people", "/my/lead", "People"))
     if prays:
