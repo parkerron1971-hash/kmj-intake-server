@@ -7904,8 +7904,11 @@ async def public_sitemap(request: Request):
     origin = "https://mysolutionist.app"
     entries = [(origin + p, pri) for p, pri in _MARKETING_SITEMAP_PATHS]
     import church_site
+    import coach_site
     if church_site.enabled():
         entries.extend((origin + church_site.path_of(s), "0.8") for s in church_site.PRODUCTS)
+    if coach_site.enabled():
+        entries.extend((origin + coach_site.path_of(s), "0.8") for s in coach_site.PRODUCTS)
     posts = await _platform_news_posts()
     if posts:
         entries.append((origin + "/news", "0.7"))
@@ -7943,6 +7946,8 @@ async def public_about(request: Request):
 #
 # CHURCH_SITE=on (church_site.py, 2026-10-23) puts the church section there
 # instead: an overview and seven product pages, each lit in its own colour.
+# COACH_SITE (coach_site.py) does the same for coaches and consultants;
+# /consultants serves the same overview, whose canonical link is /coaches.
 @router.get("/churches", include_in_schema=False)
 async def public_edition_churches(request: Request):
     import church_site
@@ -7963,11 +7968,26 @@ async def public_church_page(request: Request, slug: str):
 
 @router.get("/coaches", include_in_schema=False)
 async def public_edition_coaches(request: Request):
+    import coach_site
+    if coach_site.enabled():
+        return await _platform_page_or_site(request, lambda: coach_site.render(""))
     import marketing_home_v3
     return await _platform_page_or_site(request, lambda: marketing_home_v3.render_edition("coaches"))
 
+@router.get("/coaches/{slug}", include_in_schema=False)
+async def public_coach_page(request: Request, slug: str):
+    """One coaches product page; anything else goes to the catch-all, as
+    public_church_page does."""
+    import coach_site
+    if coach_site.enabled() and slug in coach_site.PRODUCTS:
+        return await _platform_page_or_site(request, lambda: coach_site.render(slug))
+    return await subdomain_catch_all(request, f"coaches/{slug}")
+
 @router.get("/consultants", include_in_schema=False)
 async def public_edition_consultants(request: Request):
+    import coach_site
+    if coach_site.enabled():
+        return await _platform_page_or_site(request, lambda: coach_site.render(""))
     import marketing_home_v3
     return await _platform_page_or_site(
         request, lambda: marketing_home_v3.render_edition("coaches", first="consult"))
