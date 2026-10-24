@@ -618,6 +618,8 @@ SHELL_TEMPLATE = """<!DOCTYPE html>
     <div class="nav-links">
       <div class="nav-pages">
         <a href="/#what">What it is</a>
+        <a href="/churches">Churches</a>
+        <a href="/coaches">Coaches</a>
         <a href="/features" class="{ax_features}">Product</a>
         <a href="/#trust">Chief</a>
         <a href="/compare" class="{ax_compare}">Compare</a>
@@ -648,6 +650,8 @@ SHELL_TEMPLATE = """<!DOCTYPE html>
     </div>
     <nav class="mm-links" aria-label="Pages">
       <a href="/#what">What it is</a>
+      <a href="/churches">Churches</a>
+      <a href="/coaches">Coaches</a>
       <a href="/features" class="{ax_features}">Product</a>
       <a href="/#trust">Chief</a>
       <a href="/compare" class="{ax_compare}">Compare</a>

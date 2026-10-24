@@ -1,0 +1,553 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>{{TITLE}}</title>
+<meta name="description" content="{{DESCRIPTION}}">
+<meta property="og:title" content="{{TITLE}}">
+<meta property="og:description" content="{{DESCRIPTION}}">
+<meta property="og:url" content="{{URL}}">
+<link rel="canonical" href="{{URL}}">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="The Solutionist System">
+<meta property="og:image" content="https://mysolutionist.app/assets/og.png?v=4">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="https://mysolutionist.app/assets/og.png?v=4">
+<link rel="icon" type="image/png" href="/favicon.png">
+<link rel="apple-touch-icon" href="/favicon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@300;400;500;600;700&amp;family=Inter:wght@400;500;600&amp;family=Instrument+Serif:ital@0;1&amp;family=JetBrains+Mono:wght@400;500&amp;family=Geist:wght@400..800&amp;family=Newsreader:ital,opsz,wght@0,6..72,400..600;1,6..72,400..600&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#07080B}
+a{color:#F5F6F8}a:hover{color:#C4B5FD}
+
+/* the documents room, drawn small in the office app */
+.dl-r{display:flex;align-items:center;gap:6px;padding:5px 4px;border-top:1px solid #1B1E28;border-radius:5px}
+.dl-r.on{background:rgba(139,92,246,.14);border-top-color:transparent}
+.dl-t{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
+.dl-t b{font-weight:600;font-size:8.5px;color:#F5F6F8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dl-t span{font-size:7px;color:#8D93A1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dl-ic{width:14px;height:17px;border-radius:3px;flex:none;background:#1B1E28;display:grid;place-items:center}
+
+/* a page of the branded PDF, drawn small */
+.pm{flex:1;min-height:0;overflow:hidden;background:#FFFFFF;color:#17181D;border-radius:5px;padding:12px 14px;display:flex;flex-direction:column;gap:3px;font-size:8px;line-height:1.45}
+.pm p{margin:0;color:#3A3D46}
+.pm ul{margin:0;padding-left:10px;color:#3A3D46}
+.pm li::marker{color:#2F6BEA}
+.pm-head{display:flex;align-items:center;gap:6px}
+.pm-mark{width:16px;height:16px;border-radius:4px;background:#2F6BEA;color:#FFFFFF;display:grid;place-items:center;font-weight:800;font-size:6px;flex:none}
+.pm-ct{margin-left:auto;text-align:right;font-size:5.6px;line-height:1.4;color:#5A5E6B}
+.pm-rule{height:1.5px;background:#2F6BEA;margin:3px 0 4px}
+.pm-t{font:600 12.5px/1.2 'Inter Tight',sans-serif;letter-spacing:-.01em;color:#17181D}
+.pm-for{font-size:7.6px;color:#5A5E6B}
+.pm-h{font-weight:700;font-size:6.6px;letter-spacing:.12em;text-transform:uppercase;color:#2F6BEA;margin-top:5px}
+
+/* a client's inbox, on a phone */
+.ml{background:#F4F4F6;color:#141417;font-family:'Geist',sans-serif;border-radius:33px;overflow:hidden;display:flex;flex-direction:column}
+.ml-in{padding:34px 13px 12px;display:flex;flex-direction:column;gap:9px;flex:1;min-height:0}
+
+/* paper, full size: the branded PDF */
+.ppr{background:#FFFFFF;color:#17181D;border-radius:6px;box-shadow:0 40px 80px -36px rgba(30,20,70,.45);padding:24px 24px 16px;display:flex;flex-direction:column;gap:6px;font-size:12.5px;line-height:1.5}
+.ppr p{margin:0;color:#3A3D46}
+.ppr ul{margin:0;padding-left:16px;color:#3A3D46;display:flex;flex-direction:column;gap:2px}
+.ppr li::marker{color:#2F6BEA}
+.ppr-head{display:flex;align-items:center;gap:10px}
+.ppr-mark{width:30px;height:30px;border-radius:8px;background:#2F6BEA;color:#FFFFFF;display:grid;place-items:center;font-weight:800;font-size:11px;flex:none}
+.ppr-name{display:flex;flex-direction:column;line-height:1.25}
+.ppr-name b{font-family:'Inter Tight',sans-serif;font-size:14.5px}
+.ppr-name span{font-size:11px;color:#5A5E6B}
+.ppr-ct{margin-left:auto;text-align:right;font-size:10px;line-height:1.45;color:#5A5E6B}
+.ppr-rule{height:2px;background:#2F6BEA;margin:6px 0 8px}
+.ppr-t{font:600 19px/1.2 'Inter Tight',sans-serif;letter-spacing:-.015em}
+.ppr-for{font-size:12px;color:#5A5E6B;margin-bottom:2px}
+.ppr-h{font-weight:700;font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:#2F6BEA;margin-top:8px}
+.ppr-foot{display:flex;justify-content:space-between;gap:10px;margin-top:10px;padding-top:8px;border-top:1px solid #E5E5EB;font-size:10px;color:#5A5E6B}
+.chip{align-self:flex-start;display:inline-flex;align-items:center;gap:8px;font-size:13px;font-weight:600;padding:6px 12px;border-radius:999px;background:#FFFFFF;border:1px solid rgba(11,12,17,.1);color:#4C1D95}
+.duo{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px;align-items:start}
+.duo>div{display:flex;flex-direction:column;gap:12px;min-width:0}
+.duo>div:last-child{margin-top:56px}
+
+/* the template picker */
+.tp{display:flex;flex-wrap:wrap;gap:20px 0}
+.tp-list{flex:0 0 40%;min-width:0;padding-right:18px;border-right:1px solid #1F2330;display:flex;flex-direction:column;gap:2px}
+.tp-g{font:500 10.5px/1 'JetBrains Mono',monospace;letter-spacing:.14em;text-transform:uppercase;color:#959BA8;padding:10px 10px 6px}
+.tp-i{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:10px;font-size:14px;color:#C9CDD6}
+.tp-i.on{background:rgba(139,92,246,.18);color:#F5F6F8}
+.tp-i small{margin-left:auto;font-size:10.5px;font-weight:600;color:#C4B5FD;white-space:nowrap}
+.tp-form{flex:1 1 300px;min-width:0;padding-left:22px;display:flex;flex-direction:column;gap:12px}
+.tf{display:flex;flex-direction:column;gap:6px}
+.tf>span{display:flex;align-items:center;gap:8px;font-size:12.5px;font-weight:600;color:#A9AEB9}
+.tf>p{margin:0;font-size:14px;line-height:1.45;color:#F5F6F8;padding:10px 12px;border-radius:12px;background:#07080B;border:1px solid #262A36}
+.std{font-size:10.5px;font-weight:600;padding:2px 8px;border-radius:999px;background:rgba(139,92,246,.22);color:#DDD6FE}
+
+/* keep a headline phrase whole on wide screens */
+@media (min-width:761px){.nw{white-space:nowrap}}
+
+/* out for signature */
+.sg{display:flex;align-items:center;gap:12px;padding:12px 0;border-top:1px solid #ECEEF1}
+.sg-ic{width:36px;height:36px;border-radius:10px;flex:none;display:grid;place-items:center;background:#F3EFFE}
+.sg-t{flex:1;min-width:0;display:flex;flex-direction:column}
+.sg-t b{font-size:14.5px;font-weight:600}
+.sg-t span{font-size:12.5px;color:#5A5E6B}
+.sg-k{font-size:12px;font-weight:600;padding:4px 10px;border-radius:999px;white-space:nowrap}
+
+@media (max-width:760px){
+.duo{grid-template-columns:minmax(0,1fr)}
+.duo>div:last-child{margin-top:0}
+.tp-list{flex:1 1 100%;padding-right:0;border-right:0}
+.tp-form{padding-left:0}
+.sg{flex-wrap:wrap;row-gap:8px}
+.sg-t{flex:1 1 160px}
+.sg-k{margin-left:48px}
+.ppr-ct{display:none}
+.vs{min-height:0 !important;display:flex;flex-direction:column;gap:16px}
+.vs>.vs-a,.vs>.vs-b{position:relative !important;left:auto !important;right:auto !important;top:auto !important;bottom:auto !important;width:100% !important;transform:none !important}
+.float{position:relative !important;left:auto !important;right:auto !important;top:auto !important;bottom:auto !important;margin-top:14px;width:auto !important}
+}
+</style>
+<style>
+{{COACH_CSS}}
+</style>
+{{PIXEL}}
+</head>
+<body>
+<div class="pg" style="--p: #8B5CF6; --pl: #C4B5FD; --pd: #6D28D9; --pg: rgba(139,92,246,0.30); --pt: #F3EFFE; --pf: rgba(139,92,246,0.16)">
+
+<!-- The Solutionist frame, lit in this room's colour -->
+<div class="strip"><div class="wrap strip-in">
+<a href="/coaches" style="display: flex; align-items: center; gap: 8px; color: #F5F6F8">
+<svg width="20" height="17" viewBox="8 36 496 424" aria-hidden="true"><defs><linearGradient id="mkg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#E040FB"></stop><stop offset=".55" stop-color="#7C5CFF"></stop><stop offset="1" stop-color="#22D3EE"></stop></linearGradient></defs><g fill="url(#mkg)" stroke="#fff" stroke-width="8" stroke-opacity=".92"><polygon points="18,46 175,232 237,231 133,98 376,99 356,131 412,167 494,49"></polygon><polygon points="205,138 338,241 232,391 274,449 435,221 319,137"></polygon><polygon points="264,274 149,279 201,359"></polygon></g></svg>
+<span style="font-weight: 600">Solutionist</span>
+</a>
+<nav aria-label="Solutionist" style="display: flex; flex-wrap: wrap; gap: 6px 22px">
+<a href="/churches">For churches</a>
+<a href="/">All of Solutionist</a>
+<a href="{{APP_URL}}" style="color: #F5F6F8">Sign in</a>
+</nav>
+</div></div>
+
+<!-- HERO -->
+<section style="position: relative; overflow: hidden">
+<div class="aur" aria-hidden="true"><i></i><i></i><i></i></div>
+<div class="floor" aria-hidden="true"></div>
+<div class="blade" aria-hidden="true"></div>
+
+<header class="wrap" style="position: relative; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 14px 32px; padding-top: 20px; padding-bottom: 18px">
+<a href="/coaches" style="display: flex; align-items: baseline; gap: 10px; text-decoration: none; color: #F5F6F8">
+<span style="font-family: 'Inter Tight', sans-serif; font-weight: 700; font-size: 24px; letter-spacing: -0.02em">Solutionist</span>
+<span class="serif" style="font-size: 28px; color: #D9D2FF">Coaches &amp; Consultants</span>
+</a>
+<nav aria-label="Coaches and consultants" style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px 28px; font-size: 15px; font-weight: 500">
+<details class="pmenu"><summary>Products<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#E4E6EB" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg></summary><div class="pmenu-panel"><a href="/coaches"><i style="background: linear-gradient(135deg, #E040FB, #7C5CFF 55%, #22D3EE)"></i><b>Overview</b><span>Every part of your practice</span></a><a href="/coaches/bookings"><i style="background: #3B82F6"></i><b>Bookings</b><span>Your booking page and standing sessions</span></a><a href="/coaches/clients"><i style="background: #14B8A6"></i><b>Clients</b><span>One record, a brief before every session</span></a><a href="/coaches/proposals-and-contracts" aria-current="page"><i style="background: #8B5CF6"></i><b>Proposals and Contracts</b><span>Drafted in your voice</span></a><a href="/coaches/billing-and-time"><i style="background: #22C55E"></i><b>Billing and Time</b><span>Invoices, pay links and your hours</span></a><a href="/coaches/courses-and-classes"><i style="background: #F97316"></i><b>Courses and Classes</b><span>Live classes, recordings, homework</span></a><a href="/coaches/marketing-and-website"><i style="background: #EC4899"></i><b>Marketing and Website</b><span>Your site and a week of posts</span></a><a href="/coaches/office-and-books"><i style="background: #94A3B8"></i><b>Office and Books</b><span>The books, the close, the 1099s</span></a></div></details>
+<a href="/coaches#pricing" style="text-decoration: none; color: #E4E6EB">Pricing</a>
+<a href="/start" class="btn btn-w btn-s">Start free</a>
+</nav>
+</header>
+
+<div class="wrap" style="position: relative">
+<div class="pbar">
+<div class="lock">
+<svg width="40" height="40" viewBox="0 0 48 48" aria-hidden="true"><defs><clipPath id="gt"><rect width="48" height="48" rx="12"></rect></clipPath></defs><g clip-path="url(#gt)" stroke="rgba(255,255,255,0.55)" stroke-width="1.1" stroke-linejoin="round"><polygon points="0,0 28,0 17,21 0,15" fill="#8B5CF6"></polygon><polygon points="28,0 48,0 48,19 17,21" fill="#C4B5FD"></polygon><polygon points="0,15 17,21 9,48 0,48" fill="#6D28D9"></polygon><polygon points="17,21 48,19 48,48 9,48" fill="#8B5CF6"></polygon><polygon points="17,21 33,31 24,48 9,48" fill="#6D28D9" fill-opacity="0.6"></polygon></g><g transform="translate(12 12)" fill="none" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3h7l5 5v13H7z"></path><path d="M14 3v5h5"></path><path d="M10 14l2 2 4-4"></path></g></svg>
+<span style="display: flex; flex-direction: column; gap: 1px"><b>Proposals and Contracts</b><span>Solutionist for Coaches and Consultants</span></span>
+</div>
+<nav aria-label="In this room">
+<span class="mono" style="font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: rgba(255,255,255,0.6)">In this room</span>
+<a href="#proposals">Proposals</a>
+<a href="#agreements">Agreements</a>
+<a href="#signing">Signatures</a>
+<a href="#review">Before it sends</a>
+</nav>
+</div>
+</div>
+
+<div class="wrap" style="position: relative; padding-top: 72px; padding-bottom: 40px; display: flex; flex-direction: column; gap: 28px">
+<p class="eyebrow" style="color: #C4B5FD; display: flex; align-items: center; gap: 10px"><span class="ping" style="background: #8B5CF6"></span>Proposals and Contracts</p>
+<h1 class="h1" style="max-width: 1120px">Chief drafts it. You read it. <span class="serif glint nw" style="font-size: 1.06em">They sign it.</span></h1>
+<div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; gap: 24px 48px">
+<p class="lede" style="max-width: 640px">A coaching client gets a program outline. A consulting client gets a scope of work. Both are written in your voice from what the client already told you, sent as a branded PDF, and signed from a link in their email.</p>
+<div style="display: flex; flex-wrap: wrap; gap: 12px">
+<a href="/start" class="btn btn-w">{{CTA_START}}</a>
+<a href="#proposals" class="btn btn-l">See a proposal</a>
+</div>
+</div>
+<div class="facts">
+<div class="fact"><svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#C4B5FD" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16z"></path><path d="M13.5 6.5l4 4"></path></svg><span><b>In your voice</b><span>Program outlines and scopes of work</span></span></div>
+<div class="fact"><svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#C4B5FD" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 3h7l5 5v13H7z"></path><path d="M14 3v5h5M10 13h6M10 17h6"></path></svg><span><b>Agreements ready to fill</b><span>Coaching, consulting, retainer, NDA</span></span></div>
+<div class="fact"><svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#C4B5FD" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 17c3-4 5 2 8-2s4-6 6-3 2 3 4 2"></path><path d="M3 21h18"></path></svg><span><b>Signed online</b><span>A signing link by email</span></span></div>
+</div>
+</div>
+
+<!-- The devices: the documents room on a computer, and the proposal in a client's inbox -->
+<div class="wrap" style="position: relative; padding-bottom: 80px">
+<div class="stage" style="aspect-ratio: 2.25" role="figure" aria-label="Reyes Coaching's proposals and contracts on a computer, and a proposal arriving in a client's email on a phone. Sample">
+<div class="st-lap" style="position: absolute; left: 4%; top: 0; width: 72%">
+<div class="dv-lid"><div class="dv-glass"></div><div style="aspect-ratio: 16 / 10">
+<div class="ow">
+<div class="ow-top">
+<svg width="11" height="10" viewBox="8 36 496 424" aria-hidden="true"><g fill="url(#mkg)"><polygon points="18,46 175,232 237,231 133,98 376,99 356,131 412,167 494,49"></polygon><polygon points="205,138 338,241 232,391 274,449 435,221 319,137"></polygon><polygon points="264,274 149,279 201,359"></polygon></g></svg>
+<span style="font-weight: 600; font-size: 9px; color: #F5F6F8">Reyes Coaching</span>
+<span style="margin-left: 10px; flex: 1; max-width: 46%; display: flex; align-items: center; gap: 5px; height: 15px; padding: 0 7px; border-radius: 999px; background: #13151C; border: 1px solid #1E2130; color: #8D93A1; font-size: 7.5px">Search clients, invoices, documents</span>
+<span style="margin-left: auto; display: flex; align-items: center; gap: 4px; height: 16px; padding: 0 8px; border-radius: 999px; background: linear-gradient(90deg, rgba(224,64,251,0.22), rgba(124,92,255,0.22), rgba(34,211,238,0.18)); border: 1px solid rgba(124,92,255,0.45); font-size: 7.5px; font-weight: 600; color: #F5F6F8"><span style="width: 7px; height: 7px; border-radius: 50%; background: linear-gradient(135deg, #E040FB, #7C5CFF 55%, #22D3EE)"></span>Ask Chief</span>
+</div>
+<div class="ow-body">
+<div class="ow-side">
+<span class="ow-grp">Operate</span>
+<span class="ow-nav"><i style="background: #7C5CFF"></i>This week</span>
+<span class="ow-nav"><i style="background: #3B82F6"></i>Bookings</span>
+<span class="ow-nav"><i style="background: #14B8A6"></i>Clients</span>
+<span class="ow-nav on"><i style="background: #8B5CF6"></i>Proposals</span>
+<span class="ow-nav"><i style="background: #22C55E"></i>Billing</span>
+<span class="ow-grp">Grow</span>
+<span class="ow-nav"><i style="background: #F97316"></i>Courses</span>
+<span class="ow-nav"><i style="background: #EC4899"></i>Marketing</span>
+<span class="ow-grp">Build</span>
+<span class="ow-nav"><i style="background: #EC4899"></i>Website</span>
+<span class="ow-nav"><i style="background: #94A3B8"></i>Books</span>
+</div>
+<div class="ow-main">
+<div style="display: flex; justify-content: space-between; align-items: center; gap: 8px"><span class="ow-h">Proposals and contracts</span><span style="display: flex; gap: 3px; font-size: 7.5px"><span style="padding: 3px 8px; border-radius: 999px; background: rgba(139,92,246,0.22); color: #DDD6FE">Issued</span><span style="padding: 3px 8px; color: #8D93A1">Out for signature</span><span style="padding: 3px 8px; color: #8D93A1">On file</span><span style="padding: 3px 8px; color: #8D93A1">Templates</span></span></div>
+<div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px">
+<div class="ow-card"><span class="ow-k" style="color: #C4B5FD">Waiting for you</span><span class="ow-n">2</span><span class="ow-s">drafts to read</span></div>
+<div class="ow-card"><span class="ow-k" style="color: #C4B5FD">Out for signature</span><span class="ow-n">2</span><span class="ow-s">sent this week</span></div>
+<div class="ow-card"><span class="ow-k" style="color: #C4B5FD">Signed</span><span class="ow-n">3</span><span class="ow-s">this month</span></div>
+<div class="ow-card"><span class="ow-k" style="color: #C4B5FD">Proposals sent</span><span class="ow-n">5</span><span class="ow-s">this month</span></div>
+</div>
+<div style="display: flex; gap: 6px; flex: 1; min-height: 0">
+<div class="ow-card" style="flex: 1; gap: 2px">
+<span class="ow-k" style="color: #8D93A1; padding-bottom: 3px">Documents</span>
+<div class="dl-r on"><span class="dl-ic"><svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="#C4B5FD" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 3h7l5 5v13H7z"></path></svg></span><span class="dl-t"><b>Proposal for Henderson Co.</b><span>Scope of work · drafted by Chief</span></span><span class="ow-pill" style="background: rgba(234,179,8,0.16); color: #FCD34D">Read me</span></div>
+<div class="dl-r"><span class="dl-ic"><svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="#C4B5FD" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 3h7l5 5v13H7z"></path></svg></span><span class="dl-t"><b>Coaching Agreement</b><span>Marcus Hale · sent Oct 23</span></span><span class="ow-pill" style="background: rgba(139,92,246,0.2); color: #DDD6FE">Awaiting signature</span></div>
+<div class="dl-r"><span class="dl-ic"><svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="#C4B5FD" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 3h7l5 5v13H7z"></path></svg></span><span class="dl-t"><b>Retainer Agreement</b><span>Okafor family business</span></span><span class="ow-pill" style="background: rgba(234,179,8,0.16); color: #FCD34D">Needs a fee</span></div>
+<div class="dl-r"><span class="dl-ic"><svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="#C4B5FD" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 3h7l5 5v13H7z"></path></svg></span><span class="dl-t"><b>Coaching Agreement</b><span>Priya Shah · signed today</span></span><span class="ow-pill" style="background: rgba(34,197,94,0.16); color: #86EFAC">Signed</span></div>
+<div class="dl-r"><span class="dl-ic"><svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="#C4B5FD" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 3h7l5 5v13H7z"></path></svg></span><span class="dl-t"><b>Proposal for Priya Shah</b><span>Program outline · sent Oct 20</span></span><span class="ow-pill" style="background: #1B1E28; color: #C9CDD6">Sent</span></div>
+<div class="dl-r"><span class="dl-ic"><svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="#C4B5FD" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 3h7l5 5v13H7z"></path></svg></span><span class="dl-t"><b>Consulting Agreement</b><span>Henderson Co. · signed Oct 22</span></span><span class="ow-pill" style="background: rgba(34,197,94,0.16); color: #86EFAC">Signed</span></div>
+<div class="dl-r"><span class="dl-ic"><svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="#C4B5FD" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 3h7l5 5v13H7z"></path></svg></span><span class="dl-t"><b>Mutual Nondisclosure Agreement</b><span>Henderson Co. · signed Oct 9</span></span><span class="ow-pill" style="background: rgba(34,197,94,0.16); color: #86EFAC">Signed</span></div>
+<div class="dl-r"><span class="dl-ic"><svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="#C4B5FD" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 3h7l5 5v13H7z"></path></svg></span><span class="dl-t"><b>Engagement Letter</b><span>Okafor family business · sent Oct 21</span></span><span class="ow-pill" style="background: rgba(139,92,246,0.2); color: #DDD6FE">Awaiting signature</span></div>
+<div class="dl-r"><span class="dl-ic"><svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="#C4B5FD" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 3h7l5 5v13H7z"></path></svg></span><span class="dl-t"><b>Closing Letter</b><span>A past client · sent Sep 12</span></span><span class="ow-pill" style="background: #1B1E28; color: #C9CDD6">Sent</span></div>
+</div>
+<div style="flex: 1.15; min-width: 0; display: flex; flex-direction: column; gap: 6px">
+<div class="pm">
+<div class="pm-head"><span class="pm-mark">RC</span><span style="display: flex; flex-direction: column; line-height: 1.25"><b style="font-size: 7.6px">Reyes Coaching</b><span style="font-size: 5.8px; color: #5A5E6B">Dana Reyes</span></span><span class="pm-ct">dana@reyescoaching.com<br>(216) 555-0142<br>reyescoaching.com</span></div>
+<div class="pm-rule"></div>
+<b class="pm-t">Proposal for Henderson Co.</b>
+<span class="pm-for">Prepared for <b style="color: #17181D">Henderson Co.</b></span>
+<p>Thank you for walking me through the pricing questions your team has been carrying since spring. Here is how I would help you answer them.</p>
+<span class="pm-h">Scope of work</span>
+<p>A review of pricing across your three service lines, ending in a written recommendation and a plan your team can roll out in January.</p>
+<span class="pm-h">Deliverables</span>
+<ul><li>Findings from the pricing review, week 2</li><li>Written recommendation, week 4</li><li>Rollout plan and a working session with your team, week 6</li></ul>
+<span class="pm-h">Timeline</span>
+<p>Six weeks, starting the week of November 3, with a short check-in call every Friday.</p>
+<span class="pm-h">Terms</span>
+<p>$5,000 flat, half on signing and half on delivery of the recommendation.</p>
+<span class="pm-h">Next steps</span>
+<p>Reply to this proposal and I'll send the consulting agreement to sign.</p>
+</div>
+<div style="display: flex; gap: 4px; align-items: center">
+<span style="font-size: 7px; font-weight: 600; padding: 4px 9px; border-radius: 999px; background: #F5F6F8; color: #07080B">Approve and send</span>
+<span style="font-size: 7px; font-weight: 600; padding: 4px 9px; border-radius: 999px; background: #1B1E28; color: #C9CDD6">Download PDF</span>
+<span style="font-size: 7px; font-weight: 600; padding: 4px 9px; border-radius: 999px; background: rgba(139,92,246,0.22); color: #DDD6FE">Send to sign</span>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div></div>
+<div class="dv-base"></div>
+</div>
+
+<div class="st-ph" style="position: absolute; right: 3%; bottom: 0; width: 21%">
+<div class="dv-ph"><span class="dv-island"></span><div class="ml" style="aspect-ratio: 9 / 19.2">
+<div class="ml-in">
+<div style="display: flex; align-items: center; justify-content: space-between; font-size: 10px; color: #3B5BB5; font-weight: 600"><span style="display: flex; align-items: center; gap: 2px"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#3B5BB5" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7"></path></svg>Inbox</span><span style="font-size: 9px; color: #6E6E76; font-weight: 500">Oct 20</span></div>
+<b style="font-size: 14px; font-weight: 720; letter-spacing: -0.025em; line-height: 1.15">Proposal for Priya Shah — Reyes Coaching</b>
+<div style="display: flex; align-items: center; gap: 8px"><span style="width: 26px; height: 26px; flex: none; border-radius: 8px; background: #2F6BEA; color: #fff; display: grid; place-items: center; font-weight: 800; font-size: 9.5px">RC</span><span style="display: flex; flex-direction: column; min-width: 0"><b style="font-size: 10px; font-weight: 650">Dana Reyes</b><span style="font-size: 8.5px; color: #6E6E76">Reyes Coaching · to Priya Shah</span></span></div>
+<div style="font-size: 9.5px; line-height: 1.5; color: #2A2A30">Hi Priya,<br>When we talked last week, you said you want to lead your team without working every Sunday night. Here's how I'd suggest we get there.</div>
+<div style="background: #FFFFFF; border: 1px solid #E2E2E8; border-radius: 12px; padding: 10px; display: flex; flex-direction: column; gap: 6px">
+<span style="font-size: 8px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: #2F6BEA">Your program</span>
+<b style="font-size: 11.5px; font-weight: 700; letter-spacing: -0.01em">12 weeks of leadership coaching</b>
+<span style="display: flex; gap: 6px; font-size: 9px; color: #2A2A30"><span style="width: 5px; height: 5px; margin-top: 4px; border-radius: 50%; background: #2F6BEA; flex: none"></span>A 60-minute session every week</span>
+<span style="display: flex; gap: 6px; font-size: 9px; color: #2A2A30"><span style="width: 5px; height: 5px; margin-top: 4px; border-radius: 50%; background: #2F6BEA; flex: none"></span>Email support between sessions</span>
+<span style="display: flex; gap: 6px; font-size: 9px; color: #2A2A30"><span style="width: 5px; height: 5px; margin-top: 4px; border-radius: 50%; background: #2F6BEA; flex: none"></span>$2,400, or three payments of $850</span>
+</div>
+<div style="font-size: 9.5px; line-height: 1.5; color: #2A2A30">If this feels right, reply and I'll send the agreement for you to sign.<br>Dana</div>
+<span style="margin-top: auto; display: flex; align-items: center; justify-content: center; height: 32px; border-radius: 12px; background: #2F6BEA; color: #fff; font-size: 10.5px; font-weight: 600">Reply</span>
+</div>
+</div></div>
+</div>
+</div>
+</div>
+</section>
+
+<!-- PROPOSALS -->
+<section id="proposals" class="sec light">
+<div class="wrap split">
+<div class="txt">
+<p class="eyebrow ink">Proposals</p>
+<h2 class="h2">Written the way <span class="serif ink" style="font-size: 1.08em">you'd write it.</span></h2>
+<p class="body">Chief reads what the client wrote on your intake form and everything that has happened since, then drafts the proposal in your voice. Coaching clients get a program: sessions, package terms and what they're working toward. Consulting clients get a scope: deliverables, milestones, timeline and terms.</p>
+<ul class="ticks">
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>For one client by name, or for every lead who looks ready</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>About outcomes, without promising results</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Your logo, colours and contact details on the PDF</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Nothing goes out until you read it and say send</span></li>
+</ul>
+</div>
+<div class="vis">
+<div class="duo">
+<div>
+<span class="chip"><span style="width: 8px; height: 8px; border-radius: 50%; background: #8B5CF6"></span>A coaching client</span>
+<div class="ppr" role="figure" aria-label="A proposal for a coaching client, as a branded PDF. Sample">
+<div class="ppr-head"><span class="ppr-mark">RC</span><span class="ppr-name"><b>Reyes Coaching</b><span>Dana Reyes</span></span></div>
+<div class="ppr-rule"></div>
+<span class="ppr-t">Proposal for Priya Shah</span>
+<span class="ppr-for">Prepared for <b style="color: #17181D">Priya Shah</b></span>
+<span class="ppr-h">Your program</span>
+<p>Twelve weeks of leadership coaching, built around the team you lead now.</p>
+<span class="ppr-h">How we'll work</span>
+<ul><li>A 60-minute session every week, by video</li><li>Email support between sessions</li><li>A midpoint review in week 6</li></ul>
+<span class="ppr-h">What you're working toward</span>
+<p>Running your weekly meeting with confidence, and getting your Sunday evenings back.</p>
+<span class="ppr-h">Investment</span>
+<p>$2,400, or three monthly payments of $850.</p>
+<div class="ppr-foot"><span>Reyes Coaching · Dana Reyes</span><span>Page 1 of 2</span></div>
+</div>
+</div>
+<div>
+<span class="chip"><span style="width: 8px; height: 8px; border-radius: 50%; background: #6D28D9"></span>A consulting client</span>
+<div class="ppr" role="figure" aria-label="A proposal for a consulting client, as a branded PDF. Sample">
+<div class="ppr-head"><span class="ppr-mark">RC</span><span class="ppr-name"><b>Reyes Coaching</b><span>Dana Reyes</span></span></div>
+<div class="ppr-rule"></div>
+<span class="ppr-t">Proposal for Henderson Co.</span>
+<span class="ppr-for">Prepared for <b style="color: #17181D">Henderson Co.</b></span>
+<span class="ppr-h">Scope of work</span>
+<p>A review of pricing across your three service lines, ending in a written recommendation.</p>
+<span class="ppr-h">Deliverables and milestones</span>
+<ul><li>Findings from the review, week 2</li><li>Written recommendation, week 4</li><li>Rollout plan with your team, week 6</li></ul>
+<span class="ppr-h">Terms</span>
+<p>$5,000 flat, half on signing and half on delivery.</p>
+<span class="ppr-h">Next steps</span>
+<p>Reply, and I'll send the consulting agreement to sign.</p>
+<div class="ppr-foot"><span>Reyes Coaching · Dana Reyes</span><span>Page 1 of 2</span></div>
+</div>
+</div>
+</div>
+</div>
+</div>
+</section>
+
+<!-- AGREEMENTS -->
+<section id="agreements" class="sec" style="background: #07080B">
+<div class="wrap split" style="flex-wrap: wrap-reverse">
+<div class="vis">
+<div class="card-d" style="padding: 22px" role="figure" aria-label="Choosing an agreement and filling it in for a client. Sample">
+<div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; gap: 10px; padding-bottom: 16px; margin-bottom: 4px; border-bottom: 1px solid #1F2330">
+<span style="display: flex; flex-direction: column; gap: 2px"><span class="mono" style="font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: #959BA8">New document</span><b style="font-family: 'Inter Tight', sans-serif; font-size: 22px; letter-spacing: -0.02em">Pick an agreement</b></span>
+<span class="mono" style="font-size: 11px; color: #959BA8">SAMPLE</span>
+</div>
+<div class="tp">
+<div class="tp-list">
+<span class="tp-g">Suggested for you</span>
+<span class="tp-i on">Coaching Agreement<small>Coaches</small></span>
+<span class="tp-i">Consulting Agreement<small>Consultants</small></span>
+<span class="tp-g">The library</span>
+<span class="tp-i">Retainer Agreement</span>
+<span class="tp-i">Engagement Letter</span>
+<span class="tp-i">Service Agreement</span>
+<span class="tp-i">Mutual Nondisclosure Agreement</span>
+<span class="tp-i">Independent Contractor Agreement</span>
+<span class="tp-i">Closing Letter</span>
+<span class="tp-g">Yours</span>
+<span class="tp-i">Group Program Agreement</span>
+</div>
+<div class="tp-form">
+<span style="display: flex; flex-direction: column; gap: 2px; padding-top: 8px"><b style="font-family: 'Inter Tight', sans-serif; font-size: 20px; letter-spacing: -0.015em">Coaching Agreement</b><span style="font-size: 13px; color: #A9AEB9">Sessions, Cancellations &amp; Boundaries</span></span>
+<div class="tf"><span>For</span><p style="display: flex; align-items: center; gap: 8px"><span style="width: 22px; height: 22px; border-radius: 50%; background: #0F766E; color: #FFFFFF; display: grid; place-items: center; font-size: 9px; font-weight: 700; flex: none">MH</span>Marcus Hale</p></div>
+<div class="tf"><span>The program</span><p>12-week leadership coaching: weekly 60-minute sessions plus email support between sessions</p></div>
+<div class="tf"><span>Investment and payment</span><p>$2,400, payable in full, or 3 monthly payments of $850</p></div>
+<div class="tf"><span>Cancellation notice for a session<span class="std">Your standard</span></span><p>24 hours</p></div>
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; padding-top: 4px"><span class="btn btn-w btn-s">Generate</span><span style="font-size: 13px; color: #A9AEB9">It waits in Approvals until you send it.</span></div>
+</div>
+</div>
+</div>
+</div>
+<div class="txt">
+<p class="eyebrow" style="color: #C4B5FD">Agreements</p>
+<h2 class="h2">The paperwork, <span class="serif glint" style="font-size: 1.08em">already filled in.</span></h2>
+<p class="body">Pick an agreement and a client, and the names, your business and your terms are filled in for you. The clauses that carry the weight are fixed text that never changes; only the opening paragraph is written in your voice. After the first one, your fee, your state and your cancellation window are remembered.</p>
+<ul class="ticks" style="color: #D5D8DF">
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Coaching, consulting, retainer, engagement letter, NDA and more</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Missing a fee or a scope? Chief asks. It never makes one up.</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Describe a new agreement and get your own reusable template</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Add, cut or reword a clause in your own templates</span></li>
+</ul>
+<p style="margin: 0; font-size: 14px; color: #A9AEB9">Each agreement carries a short note that it isn't legal advice, and suggests an attorney's eye for the big ones.</p>
+</div>
+</div>
+</section>
+
+<!-- SIGNATURES -->
+<section id="signing" class="sec tint">
+<div class="wrap split">
+<div class="txt">
+<p class="eyebrow ink">Signatures</p>
+<h2 class="h2">Signed from <span class="serif ink" style="font-size: 1.08em">a link in their email.</span></h2>
+<p class="body">Send any proposal or agreement for signature from Solutionist. Your client gets an email with a signing link and signs on whatever screen they have. The moment they do, you both get the signed copy, and it shows as signed in your documents.</p>
+<ul class="ticks">
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Awaiting, signed, declined or expired, in one list</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>The signed copy sent to both of you by email</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Signed on a Sunday? You know on Sunday.</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Signing handled by DocuSeal, with its own record of who signed and when</span></li>
+</ul>
+</div>
+<div class="vis">
+<div class="card" style="padding: 28px; display: flex; flex-direction: column" role="figure" aria-label="Agreements out for signature, and the email that says one was signed. Sample">
+<div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px; padding-bottom: 12px"><span style="display: flex; flex-direction: column; gap: 2px"><b style="font-family: 'Inter Tight', sans-serif; font-size: 20px">Out for signature</b><span style="font-size: 13px; color: #5A5E6B">2 awaiting · 3 signed this month</span></span></div>
+<div class="sg"><span class="sg-ic"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#6D28D9" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 3h7l5 5v13H7z"></path><path d="M14 3v5h5"></path></svg></span><span class="sg-t"><b>Coaching Agreement</b><span>Marcus Hale · sent today</span></span><span class="sg-k" style="background: #EDE7FE; color: #5B21B6">Awaiting signature</span></div>
+<div class="sg"><span class="sg-ic"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#6D28D9" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 3h7l5 5v13H7z"></path><path d="M14 3v5h5"></path></svg></span><span class="sg-t"><b>Engagement Letter</b><span>Okafor family business · sent Oct 21</span></span><span class="sg-k" style="background: #EDE7FE; color: #5B21B6">Awaiting signature</span></div>
+<div class="sg"><span class="sg-ic"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#6D28D9" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 3h7l5 5v13H7z"></path><path d="M14 3v5h5"></path><path d="M10 14l2 2 4-4"></path></svg></span><span class="sg-t"><b>Coaching Agreement</b><span>Priya Shah · signed today, 7:42 am</span></span><span class="sg-k" style="background: #DCF5E3; color: #166534">Signed</span></div>
+<div class="sg"><span class="sg-ic"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#6D28D9" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 3h7l5 5v13H7z"></path><path d="M14 3v5h5"></path><path d="M10 14l2 2 4-4"></path></svg></span><span class="sg-t"><b>Consulting Agreement</b><span>Henderson Co. · signed Oct 22</span></span><span class="sg-k" style="background: #DCF5E3; color: #166534">Signed</span></div>
+<div class="sg"><span class="sg-ic"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#6D28D9" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 3h7l5 5v13H7z"></path><path d="M14 3v5h5"></path><path d="M10 14l2 2 4-4"></path></svg></span><span class="sg-t"><b>Mutual Nondisclosure Agreement</b><span>Henderson Co. · signed Oct 9</span></span><span class="sg-k" style="background: #DCF5E3; color: #166534">Signed</span></div>
+<div class="sg"><span class="sg-ic" style="background: #F1F1F4"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#5A5E6B" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 3h7l5 5v13H7z"></path><path d="M14 3v5h5"></path></svg></span><span class="sg-t"><b>Service Agreement</b><span>A past client · sent Aug 4</span></span><span class="sg-k" style="background: #F1F1F4; color: #474B57">Expired</span></div>
+</div>
+<div class="float" style="position: absolute; right: -18px; top: -44px; width: 300px; display: flex; flex-direction: column; gap: 6px; padding: 14px 16px; border-radius: 20px; background: rgba(28,28,31,0.97); color: #f5f5f7; font-family: 'Geist', sans-serif; box-shadow: 0 24px 50px -16px rgba(40,20,90,0.45)" role="figure" aria-label="The email Dana gets when a client signs. Sample">
+<span style="display: flex; align-items: center; gap: 8px; font-size: 11px; color: #a8a8ae"><span style="width: 18px; height: 18px; border-radius: 5px; background: #2F6BEA; color: #fff; display: grid; place-items: center; font-weight: 800; font-size: 7px">RC</span>Mail · now</span>
+<b style="font-size: 14px; font-weight: 650; line-height: 1.3">Priya Shah signed Coaching Agreement</b>
+<span style="font-size: 12px; line-height: 1.45; color: #c7c7cc">The executed copy is attached, and the document now shows as signed in your Documents.</span>
+<span style="align-self: flex-start; display: inline-flex; align-items: center; gap: 6px; margin-top: 2px; font-size: 11px; font-weight: 600; padding: 5px 10px; border-radius: 8px; background: #2c2c30; color: #f5f5f7"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#F87171" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 3h7l5 5v13H7z"></path><path d="M14 3v5h5"></path></svg>Coaching Agreement.pdf</span>
+</div>
+</div>
+</div>
+</section>
+
+<!-- BEFORE IT SENDS, WITH CHIEF -->
+<section id="review" class="sec" style="background: #07080B; overflow: hidden">
+<div class="aur" aria-hidden="true" style="opacity: 0.6"><i></i><i></i><i></i></div>
+<div class="wrap split" style="position: relative">
+<div class="txt">
+<p class="eyebrow" style="color: #C4B5FD">Before it sends</p>
+<h2 class="h2">Checked again <span class="serif glint" style="font-size: 1.08em">on the way out.</span></h2>
+<p class="body">Drafts wait in Approvals until you say send, and Chief tells you which terms it used, so nothing is vague. Every document is checked again as it leaves: when you send it, make the PDF, or send it to sign. If an edit dropped the signature block or skipped a clause, you hear about it before your client does.</p>
+<ul class="ticks" style="color: #D5D8DF">
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Two clients named Marcus? Chief asks which one.</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>A missing fee is a question, never a guess</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>You can still send a flagged document, and that choice is kept on record</span></li>
+</ul>
+</div>
+<div class="vis vs" style="min-height: 600px">
+<div class="vs-a" style="position: absolute; left: 0; top: 0; width: 70%; transform: rotate(-2deg)">
+<div class="ppr" style="box-shadow: 0 40px 80px -30px rgba(0,0,0,0.7)" role="figure" aria-label="A coaching agreement ready to sign, as a branded PDF. Sample">
+<div class="ppr-head"><span class="ppr-mark">RC</span><span class="ppr-name"><b>Reyes Coaching</b><span>Dana Reyes</span></span><span class="ppr-ct">dana@reyescoaching.com<br>reyescoaching.com</span></div>
+<div class="ppr-rule"></div>
+<span class="ppr-t">Coaching Agreement</span>
+<span class="ppr-for">Sessions, Cancellations &amp; Boundaries · prepared for <b style="color: #17181D">Marcus Hale</b></span>
+<span class="ppr-h">1. The program</span>
+<p>12-week leadership coaching: weekly 60-minute sessions plus email support between sessions.</p>
+<span class="ppr-h">2. Investment</span>
+<p>$2,400, payable in full, or 3 monthly payments of $850.</p>
+<span class="ppr-h">3. Scheduling and cancellations</span>
+<p>A session may be rescheduled without charge with at least 24 hours notice.</p>
+<span class="ppr-h">Accepted and agreed</span>
+<div style="display: flex; flex-wrap: wrap; gap: 10px 20px; padding-top: 6px; font-size: 11px; color: #5A5E6B">
+<span style="flex: 1 1 140px; display: flex; flex-direction: column; gap: 3px"><span style="height: 22px; border-bottom: 1px solid #9A9EAA"></span>Dana Reyes, Reyes Coaching</span>
+<span style="flex: 1 1 140px; display: flex; flex-direction: column; gap: 3px"><span style="height: 22px; border-bottom: 1px solid #9A9EAA"></span>Marcus Hale</span>
+</div>
+</div>
+</div>
+<div class="chief vs-b" style="position: absolute; right: 0; bottom: 0; width: 62%">
+<div class="chief-in">
+<div style="display: flex; align-items: center; gap: 10px"><span class="chief-av"></span><span style="display: flex; flex-direction: column"><b style="font-size: 14px">Chief</b><span style="font-size: 12px; color: #959BA8">Proposals · sample</span></span></div>
+<div style="display: flex; flex-direction: column; gap: 6px; font-size: 15px; line-height: 1.5">
+<span class="line" style="animation-delay: 0.2s">Marcus Hale's coaching agreement is ready in Approvals.</span>
+<span class="line" style="animation-delay: 1.4s">I used your standard 24-hour cancellation notice. Say the word if his is different.</span>
+<span class="line" style="animation-delay: 2.8s">For the Okafor retainer I still need the monthly fee. I won't guess at a number that goes in a contract.<span class="caret"></span></span>
+</div>
+<div style="display: flex; flex-wrap: wrap; gap: 8px"><span class="btn btn-w btn-s">Read Marcus's</span><span class="btn btn-l btn-s">Add the Okafor fee</span></div>
+</div>
+</div>
+</div>
+</div>
+</section>
+
+<!-- THE ROOMS NEXT DOOR -->
+<section class="sec" style="background: #07080B; padding-top: 40px; border-top: 1px solid #12141B">
+<div class="wrap" style="display: flex; flex-direction: column; gap: 32px">
+<div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; gap: 16px">
+<h2 class="h2" style="font-size: clamp(30px, 3.2vw, 44px)">The rooms <span class="serif" style="font-size: 1.08em; color: #D9D2FF">next door.</span></h2>
+<p class="body" style="max-width: 420px">Proposals share one list of clients with every other part of your practice.</p>
+</div>
+<div class="doors">
+<a href="/coaches/clients" class="door"><span class="dglow" style="background: radial-gradient(circle, #14B8A6 0%, rgba(20,184,166,0) 70%)"></span>
+<svg width="44" height="44" viewBox="0 0 48 48" aria-hidden="true" style="position: relative"><defs><clipPath id="gd1"><rect width="48" height="48" rx="12"></rect></clipPath></defs><g clip-path="url(#gd1)" stroke="rgba(255,255,255,0.55)" stroke-width="1.1" stroke-linejoin="round"><polygon points="0,0 28,0 17,21 0,15" fill="#14B8A6"></polygon><polygon points="28,0 48,0 48,19 17,21" fill="#5EEAD4"></polygon><polygon points="0,15 17,21 9,48 0,48" fill="#0F766E"></polygon><polygon points="17,21 48,19 48,48 9,48" fill="#14B8A6"></polygon><polygon points="17,21 33,31 24,48 9,48" fill="#0F766E" fill-opacity="0.6"></polygon></g><g transform="translate(12 12)" fill="none" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.2"></circle><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"></path><path d="M16 4.5a3 3 0 0 1 0 6M18 14.5c1.9.8 3 2.8 3 5.5"></path></g></svg>
+<b>Clients</b><span>Every proposal starts from the client's record: their intake answers and your history together.</span><em style="color: #5EEAD4">Go to Clients</em></a>
+<a href="/coaches/billing-and-time" class="door"><span class="dglow" style="background: radial-gradient(circle, #22C55E 0%, rgba(34,197,94,0) 70%)"></span>
+<svg width="44" height="44" viewBox="0 0 48 48" aria-hidden="true" style="position: relative"><defs><clipPath id="gd2"><rect width="48" height="48" rx="12"></rect></clipPath></defs><g clip-path="url(#gd2)" stroke="rgba(255,255,255,0.55)" stroke-width="1.1" stroke-linejoin="round"><polygon points="0,0 28,0 17,21 0,15" fill="#22C55E"></polygon><polygon points="28,0 48,0 48,19 17,21" fill="#86EFAC"></polygon><polygon points="0,15 17,21 9,48 0,48" fill="#15803D"></polygon><polygon points="17,21 48,19 48,48 9,48" fill="#22C55E"></polygon><polygon points="17,21 33,31 24,48 9,48" fill="#15803D" fill-opacity="0.6"></polygon></g><g transform="translate(12 12)" fill="none" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="13" rx="2.5"></rect><path d="M3 10h18M7 15h3"></path></g></svg>
+<b>Billing and Time</b><span>Once they sign, the invoice and its pay link are one sentence away.</span><em style="color: #86EFAC">Go to Billing and Time</em></a>
+<a href="/coaches/bookings" class="door"><span class="dglow" style="background: radial-gradient(circle, #3B82F6 0%, rgba(59,130,246,0) 70%)"></span>
+<svg width="44" height="44" viewBox="0 0 48 48" aria-hidden="true" style="position: relative"><defs><clipPath id="gd3"><rect width="48" height="48" rx="12"></rect></clipPath></defs><g clip-path="url(#gd3)" stroke="rgba(255,255,255,0.55)" stroke-width="1.1" stroke-linejoin="round"><polygon points="0,0 28,0 17,21 0,15" fill="#3B82F6"></polygon><polygon points="28,0 48,0 48,19 17,21" fill="#93C5FD"></polygon><polygon points="0,15 17,21 9,48 0,48" fill="#1D4ED8"></polygon><polygon points="17,21 48,19 48,48 9,48" fill="#3B82F6"></polygon><polygon points="17,21 33,31 24,48 9,48" fill="#1D4ED8" fill-opacity="0.6"></polygon></g><g transform="translate(12 12)" fill="none" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5" width="17" height="15.5" rx="2.5"></rect><path d="M3.5 10h17M8 3v4M16 3v4"></path></g></svg>
+<b>Bookings</b><span>The sessions the program promises, booked on your own booking page.</span><em style="color: #93C5FD">Go to Bookings</em></a>
+</div>
+</div>
+</section>
+
+<!-- ON EVERY PLAN -->
+<section id="plans" class="sec light">
+<div class="wrap" style="display: flex; flex-direction: column; gap: 36px">
+<div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; gap: 20px 48px">
+<div style="display: flex; flex-direction: column; gap: 16px; max-width: 700px">
+<p class="eyebrow" style="color: #5A5E6B">Plans</p>
+<h2 class="h2">Proposals come with <span class="serif ink" style="font-size: 1.08em">every plan.</span></h2>
+</div>
+<p class="body" style="max-width: 440px">Drafting, the agreement library, branded PDFs and e-signatures are on every plan. The bigger plans add people to work beside you, and the books behind the money that follows.</p>
+</div>
+<div class="planrow">
+<div class="plan"><span class="pn">Starter</span><span class="pp">${{P_STARTER}} <small>a month</small></span><ul>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>Proposals and agreements in your voice</li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>Branded PDFs and e-signatures</li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>1 login</li>
+</ul></div>
+<div class="plan mid"><span class="pn">Professional</span><span class="pp">${{P_PRO}} <small>a month</small></span><ul>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>Everything in Starter</li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>3 logins, for you and your team</li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>Full books, with month-end close</li>
+</ul></div>
+<div class="plan"><span class="pn">Solutionist</span><span class="pp">${{P_SOL}} <small>a month</small></span><ul>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>Everything in Professional</li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>7 logins</li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>A seat for your accountant</li>
+</ul></div>
+</div>
+<a href="/coaches#pricing" style="align-self: flex-start; font-weight: 600; color: #0B0C11">Compare every plan</a>
+</div>
+</section>
+
+<!-- CLOSING -->
+<section id="start" style="position: relative; overflow: hidden; background: #07080B">
+<div class="aur" aria-hidden="true"><i></i><i></i><i></i></div>
+<div class="floor" aria-hidden="true" style="height: 60%"></div>
+<div class="wrap" style="position: relative; padding-top: 150px; padding-bottom: 150px; display: flex; flex-direction: column; align-items: center; gap: 24px; text-align: center">
+<h2 class="h1" style="font-size: clamp(42px, 5.6vw, 84px); max-width: 960px">Send the proposal. <span class="serif glint nw" style="font-size: 1.06em">Start the work.</span></h2>
+<p class="lede">{{TRIAL_LINE}}</p>
+<a href="/start" class="btn btn-w">Start free</a>
+</div>
+</section>
+
+<!-- Footer -->
+<footer class="foot"><div class="wrap foot-in">
+<div style="display: flex; flex-direction: column; gap: 10px; max-width: 360px">
+<div style="display: flex; align-items: center; gap: 8px; color: #F5F6F8"><svg width="22" height="19" viewBox="8 36 496 424" aria-hidden="true"><g fill="url(#mkg)" stroke="#fff" stroke-width="8" stroke-opacity=".92"><polygon points="18,46 175,232 237,231 133,98 376,99 356,131 412,167 494,49"></polygon><polygon points="205,138 338,241 232,391 274,449 435,221 319,137"></polygon><polygon points="264,274 149,279 201,359"></polygon></g></svg><span style="font-family: 'Inter Tight', sans-serif; font-weight: 600; font-size: 17px">Solutionist</span></div>
+<p style="margin: 0; font-size: 14px">Everything a small business runs on, in one place, with Chief running it beside you.</p>
+</div>
+<nav aria-label="Coach and consultant products"><b>For coaches and consultants</b><a href="/coaches/bookings">Bookings</a><a href="/coaches/clients">Clients</a><a href="/coaches/proposals-and-contracts">Proposals and Contracts</a><a href="/coaches/billing-and-time">Billing and Time</a></nav>
+<nav aria-label="More coach and consultant products"><span aria-hidden="true" style="display: block; height: 21px"></span><a href="/coaches/courses-and-classes">Courses and Classes</a><a href="/coaches/marketing-and-website">Marketing and Website</a><a href="/coaches/office-and-books">Office and Books</a></nav>
+<nav aria-label="Company"><b>Solutionist</b><a href="/churches">For churches</a><a href="/coaches#pricing">Pricing</a><a href="/privacy">Privacy</a><a href="/terms">Terms</a></nav>
+</div></footer>
+
+</div>
+{{ANALYTICS}}
+</body>
+</html>

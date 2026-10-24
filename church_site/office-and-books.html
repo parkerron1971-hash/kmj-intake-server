@@ -1,0 +1,500 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>{{TITLE}}</title>
+<meta name="description" content="{{DESCRIPTION}}">
+<meta property="og:title" content="{{TITLE}}">
+<meta property="og:description" content="{{DESCRIPTION}}">
+<meta property="og:url" content="{{URL}}">
+<link rel="canonical" href="{{URL}}">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="The Solutionist System">
+<meta property="og:image" content="https://mysolutionist.app/assets/og.png?v=4">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="https://mysolutionist.app/assets/og.png?v=4">
+<link rel="icon" type="image/png" href="/favicon.png">
+<link rel="apple-touch-icon" href="/favicon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@300;400;500;600;700&amp;family=Inter:wght@400;500;600&amp;family=Instrument+Serif:ital@0;1&amp;family=JetBrains+Mono:wght@400;500&amp;family=Geist:wght@400..800&amp;family=Newsreader:ital,opsz,wght@0,6..72,400..600;1,6..72,400..600&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#07080B}
+a{color:#F5F6F8}a:hover{color:#CBD5E1}
+
+/* the books, drawn small in the office app */
+.bk-h,.bk-r{display:grid;grid-template-columns:minmax(0,1.7fr) repeat(3,minmax(0,1fr));gap:6px;align-items:center}
+.bk-h{font:500 6px/1 'JetBrains Mono',monospace;letter-spacing:.12em;text-transform:uppercase;color:#5F6672;padding:3px 0}
+.bk-h span:not(:first-child),.bk-r span:not(:first-child){text-align:right}
+.bk-r{font-size:8.5px;padding:5px 0;border-top:1px solid #1B1E28}
+.bk-r span:not(:first-child){font-family:'JetBrains Mono',monospace;font-size:7.5px;color:#C9CDD6}
+.bk-r i{font-style:normal;font-size:6.5px;font-weight:600;padding:1px 5px;border-radius:999px;background:rgba(148,163,184,.16);color:#CBD5E1;margin-left:4px}
+.ck-m{display:flex;align-items:center;gap:6px;font-size:8px;color:#C9CDD6}
+.ck-m b{width:10px;height:10px;border-radius:50%;flex:none;display:grid;place-items:center}
+
+/* a giver's inbox, on a phone */
+.ml{background:#F4F4F6;color:#141417;font-family:'Geist',sans-serif;border-radius:33px;overflow:hidden;display:flex;flex-direction:column}
+.ml-in{padding:34px 13px 12px;display:flex;flex-direction:column;gap:9px;flex:1;min-height:0}
+.ml-mono{font-family:'JetBrains Mono',monospace;font-size:7.4px;line-height:1.55;color:#2A2A30;white-space:pre;overflow:hidden}
+
+/* the profit and loss, on paper */
+.pl-r{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:9px 0;border-top:1px solid #ECEEF1;font-size:14.5px}
+.pl-r .mono{font-size:13.5px}
+.pl-t{display:flex;justify-content:space-between;gap:12px;padding:10px 0 4px;border-top:1.5px solid #0B0C11;font-weight:600;font-size:14.5px}
+.tag{font-size:11px;font-weight:600;padding:2px 8px;border-radius:999px;background:#E2E8F0;color:#334155;margin-left:8px;white-space:nowrap}
+
+/* the month-end checklist */
+.ck{display:flex;gap:14px;align-items:flex-start;padding:14px 0;border-top:1px solid #1F2330}
+.ck-n{width:28px;height:28px;border-radius:50%;flex:none;display:grid;place-items:center;font:600 12px/1 'JetBrains Mono',monospace}
+.ck-t{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.ck-t b{font-weight:600;font-size:15.5px;color:#F5F6F8}
+.ck-t span{font-size:13.5px;color:#A9AEB9}
+
+/* who sees the giving */
+.wh{display:flex;align-items:center;gap:12px;padding:11px 0;border-top:1px solid #ECEEF1}
+.wh-av{width:34px;height:34px;border-radius:50%;flex:none;display:grid;place-items:center;font-size:12px;font-weight:700;color:#FFFFFF}
+.wh-t{flex:1;min-width:0;display:flex;flex-direction:column}
+.wh-t b{font-size:14.5px;font-weight:600}
+.wh-t span{font-size:12.5px;color:#475569}
+.wh-k{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;padding:4px 10px;border-radius:999px;white-space:nowrap}
+
+/* bank rows, on paper */
+.br-r{display:flex;align-items:center;gap:10px;padding:9px 0;border-top:1px solid #E5E5EB;font-size:12px}
+.br-r .mono{font-size:11px}
+.br-c{font-size:10.5px;font-weight:600;padding:2px 8px;border-radius:999px;white-space:nowrap}
+
+@media (max-width:760px){
+.wh{flex-wrap:wrap;row-gap:8px}
+.wh-t{flex:1 1 160px}
+.wh-k{margin-left:46px}
+.ck{flex-wrap:wrap;row-gap:10px}
+.ck-t{flex:1 1 200px}
+.ck>.btn,.ck>span:last-child:not(.ck-t){margin-left:42px}
+.br-r{flex-wrap:wrap;row-gap:4px}
+.vs{min-height:0 !important;display:flex;flex-direction:column;gap:16px}
+.vs>.vs-a,.vs>.vs-b{position:relative !important;left:auto !important;right:auto !important;top:auto !important;bottom:auto !important;width:100% !important;transform:none !important}
+}
+</style>
+<style>
+{{CHURCH_CSS}}
+</style>
+{{PIXEL}}
+</head>
+<body>
+<div class="pg" style="--p: #94A3B8; --pl: #CBD5E1; --pd: #475569; --pg: rgba(148,163,184,0.26); --pt: #F1F3F6; --pf: rgba(148,163,184,0.14)">
+
+<!-- The Solutionist frame, lit in this room's colour -->
+<div class="strip"><div class="wrap strip-in">
+<a href="/churches" style="display: flex; align-items: center; gap: 8px; color: #F5F6F8">
+<svg width="20" height="17" viewBox="8 36 496 424" aria-hidden="true"><defs><linearGradient id="mkg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#E040FB"></stop><stop offset=".55" stop-color="#7C5CFF"></stop><stop offset="1" stop-color="#22D3EE"></stop></linearGradient></defs><g fill="url(#mkg)" stroke="#fff" stroke-width="8" stroke-opacity=".92"><polygon points="18,46 175,232 237,231 133,98 376,99 356,131 412,167 494,49"></polygon><polygon points="205,138 338,241 232,391 274,449 435,221 319,137"></polygon><polygon points="264,274 149,279 201,359"></polygon></g></svg>
+<span style="font-weight: 600">Solutionist</span>
+</a>
+<nav aria-label="Solutionist" style="display: flex; flex-wrap: wrap; gap: 6px 22px">
+<a href="/coaches">For coaches and consultants</a>
+<a href="/">All of Solutionist</a>
+<a href="{{APP_URL}}" style="color: #F5F6F8">Sign in</a>
+</nav>
+</div></div>
+
+<!-- HERO -->
+<section style="position: relative; overflow: hidden">
+<div class="aur" aria-hidden="true"><i></i><i></i><i></i></div>
+<div class="floor" aria-hidden="true"></div>
+<div class="blade" aria-hidden="true"></div>
+
+<header class="wrap" style="position: relative; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 14px 32px; padding-top: 20px; padding-bottom: 18px">
+<a href="/churches" style="display: flex; align-items: baseline; gap: 10px; text-decoration: none; color: #F5F6F8">
+<span style="font-family: 'Inter Tight', sans-serif; font-weight: 700; font-size: 24px; letter-spacing: -0.02em">Solutionist</span>
+<span class="serif" style="font-size: 28px; color: #D9D2FF">Churches</span>
+</a>
+<nav aria-label="Churches" style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px 28px; font-size: 15px; font-weight: 500">
+<details class="pmenu"><summary>Products<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#E4E6EB" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg></summary><div class="pmenu-panel"><a href="/churches"><i style="background: linear-gradient(135deg, #E040FB, #7C5CFF 55%, #22D3EE)"></i><b>Overview</b><span>Every part of church life</span></a><a href="/churches/people-and-care"><i style="background: #14B8A6"></i><b>People and Care</b><span>Shepherds, guests and prayer</span></a><a href="/churches/giving"><i style="background: #22C55E"></i><b>Giving</b><span>Your own Stripe, statements in January</span></a><a href="/churches/kids-and-youth"><i style="background: #F97316"></i><b>Kids and Youth</b><span>Check-in, tags and safe pickup</span></a><a href="/churches/groups-and-classes"><i style="background: #3B82F6"></i><b>Groups and Classes</b><span>Chats, prayer walls and this week's study</span></a><a href="/churches/member-app"><i style="background: #EC4899"></i><b>Member App</b><span>The church in every pocket</span></a><a href="/churches/website-and-sermons"><i style="background: #EAB308"></i><b>Website and Sermons</b><span>Your front door, always open</span></a><a href="/churches/office-and-books" aria-current="page"><i style="background: #94A3B8"></i><b>Office and Books</b><span>The books, and who sees giving</span></a></div></details>
+<a href="/churches#app" style="text-decoration: none; color: #E4E6EB">Member app</a>
+<a href="/churches#pricing" style="text-decoration: none; color: #E4E6EB">Pricing</a>
+<a href="/start" class="btn btn-w btn-s">Start free</a>
+</nav>
+</header>
+
+<div class="wrap" style="position: relative">
+<div class="pbar">
+<div class="lock">
+<svg width="40" height="40" viewBox="0 0 48 48" aria-hidden="true"><defs><clipPath id="gt"><rect width="48" height="48" rx="12"></rect></clipPath></defs><g clip-path="url(#gt)" stroke="rgba(255,255,255,0.55)" stroke-width="1.1" stroke-linejoin="round"><polygon points="0,0 28,0 17,21 0,15" fill="#94A3B8"></polygon><polygon points="28,0 48,0 48,19 17,21" fill="#CBD5E1"></polygon><polygon points="0,15 17,21 9,48 0,48" fill="#475569"></polygon><polygon points="17,21 48,19 48,48 9,48" fill="#94A3B8"></polygon><polygon points="17,21 33,31 24,48 9,48" fill="#475569" fill-opacity="0.6"></polygon></g><g transform="translate(12 12)" fill="none" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h10a3 3 0 0 1 3 3v13H8a3 3 0 0 1-3-3z"></path><path d="M5 17a3 3 0 0 1 3-3h10"></path></g></svg>
+<span style="display: flex; flex-direction: column; gap: 1px"><b>Office and Books</b><span>Solutionist for Churches</span></span>
+</div>
+<nav aria-label="In this room">
+<span class="mono" style="font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: rgba(255,255,255,0.6)">In this room</span>
+<a href="#books">The books</a>
+<a href="#close">Month-end</a>
+<a href="#access">Who sees what</a>
+<a href="#sorting">Sorting</a>
+</nav>
+</div>
+</div>
+
+<div class="wrap" style="position: relative; padding-top: 72px; padding-bottom: 40px; display: flex; flex-direction: column; gap: 28px">
+<p class="eyebrow" style="color: #CBD5E1; display: flex; align-items: center; gap: 10px"><span class="ping" style="background: #94A3B8"></span>Office and Books</p>
+<h1 class="h1" style="max-width: 1040px">Every dollar, <span class="serif glint" style="font-size: 1.06em">where it belongs.</span></h1>
+<div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; gap: 24px 48px">
+<p class="lede" style="max-width: 620px">The church's books on the same system as its giving: bank rows that come in on their own, funds kept apart, a month-end close in six checks, and statements in January. Who gave what stays with the owner, an admin and your accountant.</p>
+<div style="display: flex; flex-wrap: wrap; gap: 12px">
+<a href="/start" class="btn btn-w">{{CTA_START}}</a>
+<a href="#books" class="btn btn-l">See the books</a>
+</div>
+</div>
+<div class="facts">
+<div class="fact"><svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#CBD5E1" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 9.5h18L12 4z"></path><path d="M5.5 9.5v8M10 9.5v8M14 9.5v8M18.5 9.5v8M3 20h18"></path></svg><span><b>Your bank, connected</b><span>2, 5 or unlimited accounts by plan</span></span></div>
+<div class="fact"><svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#CBD5E1" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l9 5-9 5-9-5z"></path><path d="M3 12.5l9 5 9-5"></path><path d="M3 16.5l9 5 9-5"></path></svg><span><b>Funds kept apart</b><span>Restricted gifts on their own line</span></span></div>
+<div class="fact"><svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#CBD5E1" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="10.5" width="14" height="10" rx="2.5"></rect><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"></path></svg><span><b>Giving behind a wall</b><span>Owner, admin and accountant only</span></span></div>
+</div>
+</div>
+
+<!-- The devices: the books on a computer, and a giver's statement in their inbox -->
+<div class="wrap" style="position: relative; padding-bottom: 80px">
+<div class="stage" style="aspect-ratio: 2.25" aria-label="The books on a computer, and a giver's year-end statement in their email on a phone. Sample data.">
+<div class="st-lap" style="position: absolute; left: 4%; top: 0; width: 72%">
+<div class="dv-lid"><div class="dv-glass"></div><div style="aspect-ratio: 16 / 10">
+<div class="ow">
+<div class="ow-top">
+<svg width="11" height="10" viewBox="8 36 496 424" aria-hidden="true"><g fill="url(#mkg)"><polygon points="18,46 175,232 237,231 133,98 376,99 356,131 412,167 494,49"></polygon><polygon points="205,138 338,241 232,391 274,449 435,221 319,137"></polygon><polygon points="264,274 149,279 201,359"></polygon></g></svg>
+<span style="font-weight: 600; font-size: 9px; color: #F5F6F8">Grace Fellowship</span>
+<span style="margin-left: 10px; flex: 1; max-width: 46%; display: flex; align-items: center; gap: 5px; height: 15px; padding: 0 7px; border-radius: 999px; background: #13151C; border: 1px solid #1E2130; color: #5F6672; font-size: 7.5px">Search people, groups, gifts</span>
+<span style="margin-left: auto; display: flex; align-items: center; gap: 4px; height: 16px; padding: 0 8px; border-radius: 999px; background: linear-gradient(90deg, rgba(224,64,251,0.22), rgba(124,92,255,0.22), rgba(34,211,238,0.18)); border: 1px solid rgba(124,92,255,0.45); font-size: 7.5px; font-weight: 600; color: #F5F6F8"><span style="width: 7px; height: 7px; border-radius: 50%; background: linear-gradient(135deg, #E040FB, #7C5CFF 55%, #22D3EE)"></span>Ask Chief</span>
+</div>
+<div class="ow-body">
+<div class="ow-side">
+<span class="ow-grp">Operate</span>
+<span class="ow-nav"><i style="background: #7C5CFF"></i>This week</span>
+<span class="ow-nav"><i style="background: #14B8A6"></i>People and Care</span>
+<span class="ow-nav"><i style="background: #3B82F6"></i>Groups</span>
+<span class="ow-nav"><i style="background: #22C55E"></i>Giving</span>
+<span class="ow-nav"><i style="background: #F97316"></i>Kids</span>
+<span class="ow-grp">Grow</span>
+<span class="ow-nav"><i style="background: #EC4899"></i>Member app</span>
+<span class="ow-nav"><i style="background: #EAB308"></i>Sermons</span>
+<span class="ow-grp">Build</span>
+<span class="ow-nav"><i style="background: #EAB308"></i>Website</span>
+<span class="ow-nav on"><i style="background: #94A3B8"></i>Books</span>
+</div>
+<div class="ow-main">
+<div style="display: flex; justify-content: space-between; align-items: center"><span class="ow-h">Books</span><span style="display: flex; gap: 3px; font-size: 7.5px"><span style="padding: 3px 8px; border-radius: 999px; background: rgba(148,163,184,0.2); color: #E2E8F0">October</span><span style="padding: 3px 8px; color: #8D93A1">Year to date</span></span></div>
+<div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px">
+<div class="ow-card"><span class="ow-k" style="color: #CBD5E1">Money in</span><span class="ow-n">$19,380</span><span class="ow-s">gifts and building use</span></div>
+<div class="ow-card"><span class="ow-k" style="color: #CBD5E1">Money out</span><span class="ow-n">$16,920</span><span class="ow-s">payroll, bills and cards</span></div>
+<div class="ow-card"><span class="ow-k" style="color: #CBD5E1">Cash on hand</span><span class="ow-n">$100,510</span><span class="ow-s">in 2 bank accounts</span></div>
+<div class="ow-card"><span class="ow-k" style="color: #FCD34D">To sort</span><span class="ow-n">3</span><span class="ow-s">bank rows need a category</span></div>
+</div>
+<div style="display: flex; gap: 6px; flex: 1; min-height: 0">
+<div class="ow-card" style="flex: 1.45; gap: 3px">
+<span class="ow-k" style="color: #8D93A1">By fund</span>
+<div class="bk-h"><span>Fund</span><span>In</span><span>Out</span><span>Balance</span></div>
+<div class="bk-r"><span>General</span><span>$14,280</span><span>$15,640</span><span>$41,900</span></div>
+<div class="bk-r"><span>Building fund<i>Restricted</i></span><span>$3,300</span><span>$1,200</span><span>$52,400</span></div>
+<div class="bk-r"><span>Missions<i>Restricted</i></span><span>$1,800</span><span>$80</span><span>$6,210</span></div>
+<span class="ow-k" style="color: #8D93A1; margin-top: 7px">Bank rows</span>
+<div class="ow-row"><span class="mono" style="flex: 0 0 34px; font-size: 7px; color: #8D93A1">Oct 27</span><span style="flex: 1; min-width: 0">Stripe payout</span><span class="ow-pill" style="background: rgba(34,197,94,0.16); color: #86EFAC">Sunday's gifts</span><b class="mono" style="flex: 0 0 52px; text-align: right; font-weight: 500; font-size: 7.5px; color: #86EFAC">+$4,820</b></div>
+<div class="ow-row"><span class="mono" style="flex: 0 0 34px; font-size: 7px; color: #8D93A1">Oct 24</span><span style="flex: 1; min-width: 0">Check 1043 · Lakeside Roofing</span><span class="ow-pill" style="background: rgba(234,179,8,0.16); color: #FCD34D">Needs a category</span><b class="mono" style="flex: 0 0 52px; text-align: right; font-weight: 500; font-size: 7.5px">-$1,200</b></div>
+<div class="ow-row"><span class="mono" style="flex: 0 0 34px; font-size: 7px; color: #8D93A1">Oct 23</span><span style="flex: 1; min-width: 0">City Water</span><span class="ow-pill" style="background: rgba(148,163,184,0.16); color: #CBD5E1">Utilities</span><b class="mono" style="flex: 0 0 52px; text-align: right; font-weight: 500; font-size: 7.5px">-$212</b></div>
+<div class="ow-row"><span class="mono" style="flex: 0 0 34px; font-size: 7px; color: #8D93A1">Oct 22</span><span style="flex: 1; min-width: 0">Costco</span><span class="ow-pill" style="background: rgba(148,163,184,0.16); color: #CBD5E1">Hospitality</span><b class="mono" style="flex: 0 0 52px; text-align: right; font-weight: 500; font-size: 7.5px">-$184</b></div>
+<div class="ow-row"><span class="mono" style="flex: 0 0 34px; font-size: 7px; color: #8D93A1">Oct 20</span><span style="flex: 1; min-width: 0">Stripe payout</span><span class="ow-pill" style="background: rgba(34,197,94,0.16); color: #86EFAC">Sunday's gifts</span><b class="mono" style="flex: 0 0 52px; text-align: right; font-weight: 500; font-size: 7.5px; color: #86EFAC">+$4,310</b></div>
+<div class="ow-row"><span class="mono" style="flex: 0 0 34px; font-size: 7px; color: #8D93A1">Oct 15</span><span style="flex: 1; min-width: 0">Payroll</span><span class="ow-pill" style="background: rgba(148,163,184,0.16); color: #CBD5E1">Staff</span><b class="mono" style="flex: 0 0 52px; text-align: right; font-weight: 500; font-size: 7.5px">-$5,200</b></div>
+<div class="ow-row"><span class="mono" style="flex: 0 0 34px; font-size: 7px; color: #8D93A1">Oct 14</span><span style="flex: 1; min-width: 0">Transfer from savings</span><span class="ow-pill" style="background: rgba(148,163,184,0.16); color: #CBD5E1">Your own accounts</span><b class="mono" style="flex: 0 0 52px; text-align: right; font-weight: 500; font-size: 7.5px">+$2,000</b></div>
+<div class="ow-row"><span class="mono" style="flex: 0 0 34px; font-size: 7px; color: #8D93A1">Oct 13</span><span style="flex: 1; min-width: 0">Stripe payout</span><span class="ow-pill" style="background: rgba(34,197,94,0.16); color: #86EFAC">Sunday's gifts</span><b class="mono" style="flex: 0 0 52px; text-align: right; font-weight: 500; font-size: 7.5px; color: #86EFAC">+$4,560</b></div>
+<div class="ow-row"><span class="mono" style="flex: 0 0 34px; font-size: 7px; color: #8D93A1">Oct 9</span><span style="flex: 1; min-width: 0">Cash App, J. Moore</span><span class="ow-pill" style="background: rgba(234,179,8,0.16); color: #FCD34D">Needs a category</span><b class="mono" style="flex: 0 0 52px; text-align: right; font-weight: 500; font-size: 7.5px">-$90</b></div>
+</div>
+<div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px">
+<div class="ow-card" style="gap: 5px">
+<div style="display: flex; justify-content: space-between; align-items: center"><span class="ow-k" style="color: #8D93A1">Close October</span><span class="mono" style="font-size: 7px; color: #CBD5E1">3 of 6</span></div>
+<span style="display: block; height: 4px; border-radius: 2px; background: #1B1E28"><span class="grow" style="display: block; width: 50%; height: 100%; border-radius: 2px; background: #94A3B8"></span></span>
+<span class="ck-m"><b style="background: #94A3B8"><svg width="6" height="6" viewBox="0 0 24 24" fill="none" stroke="#0E1016" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg></b>The bank is synced</span>
+<span class="ck-m"><b style="background: #94A3B8"><svg width="6" height="6" viewBox="0 0 24 24" fill="none" stroke="#0E1016" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg></b>Money in is explained</span>
+<span class="ck-m"><b style="border: 1.5px solid #EAB308"></b>Every row has a category<span style="margin-left: auto; color: #FCD34D">3 left</span></span>
+<span class="ck-m"><b style="background: #94A3B8"><svg width="6" height="6" viewBox="0 0 24 24" fill="none" stroke="#0E1016" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg></b>Statements agree</span>
+<span class="ck-m"><b style="border: 1.5px solid #3A3F4E"></b>Look over the month</span>
+<span class="ck-m"><b style="border: 1.5px solid #3A3F4E"></b>Close and lock October</span>
+</div>
+<div class="ow-card" style="flex: 1; gap: 4px">
+<span class="ow-k" style="color: #8D93A1">Reports</span>
+<div class="ow-row" style="padding: 4px 0"><span style="flex: 1">Profit and loss</span><span class="ow-pill" style="background: #1B1E28; color: #C9CDD6">PDF</span><span class="ow-pill" style="background: #1B1E28; color: #C9CDD6">CSV</span></div>
+<div class="ow-row" style="padding: 4px 0"><span style="flex: 1">Balance sheet</span><span class="ow-pill" style="background: #1B1E28; color: #C9CDD6">PDF</span><span class="ow-pill" style="background: #1B1E28; color: #C9CDD6">CSV</span></div>
+<div class="ow-row" style="padding: 4px 0"><span style="flex: 1">Cash flow</span><span class="ow-pill" style="background: #1B1E28; color: #C9CDD6">PDF</span><span class="ow-pill" style="background: #1B1E28; color: #C9CDD6">CSV</span></div>
+<div class="ow-row" style="padding: 4px 0"><span style="flex: 1">Budget against actual</span><span class="ow-pill" style="background: #1B1E28; color: #C9CDD6">PDF</span><span class="ow-pill" style="background: #1B1E28; color: #C9CDD6">CSV</span></div>
+<div class="ow-row" style="padding: 4px 0"><span style="flex: 1">General ledger</span><span class="ow-pill" style="background: #1B1E28; color: #C9CDD6">PDF</span><span class="ow-pill" style="background: #1B1E28; color: #C9CDD6">CSV</span></div>
+</div>
+<div style="border-radius: 9px; padding: 1px; background: linear-gradient(110deg, rgba(224,64,251,0.7), rgba(124,92,255,0.35) 40%, rgba(34,211,238,0.6))">
+<div style="border-radius: 8px; background: #11131A; padding: 7px 9px; display: flex; flex-direction: column; gap: 4px">
+<div style="display: flex; align-items: center; gap: 6px"><span style="width: 11px; height: 11px; border-radius: 50%; background: linear-gradient(135deg, #E040FB, #7C5CFF 55%, #22D3EE)"></span><b style="font-size: 8.5px; color: #F5F6F8">Chief looked at the 3 rows left</b></div>
+<span style="font-size: 7.5px; color: #C9CDD6">2 categories to approve. The $90 Cash App row is left for you.</span>
+<span style="align-self: flex-start; font-size: 7px; font-weight: 600; padding: 3px 8px; border-radius: 999px; background: #F5F6F8; color: #07080B">Review</span>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div></div>
+<div class="dv-base"></div>
+</div>
+
+<div class="st-ph" style="position: absolute; right: 3%; bottom: 0; width: 21%">
+<div class="dv-ph"><span class="dv-island"></span><div class="ml" style="aspect-ratio: 9 / 19.2">
+<div class="ml-in">
+<div style="display: flex; align-items: center; justify-content: space-between; font-size: 10px; color: #3B5BB5; font-weight: 600"><span style="display: flex; align-items: center; gap: 2px"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#3B5BB5" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7"></path></svg>Inbox</span><span style="font-size: 9px; color: #6E6E76; font-weight: 500">Jan 12</span></div>
+<b style="font-size: 14.5px; font-weight: 720; letter-spacing: -0.025em; line-height: 1.15">Your 2026 giving statement from Grace Fellowship</b>
+<div style="display: flex; align-items: center; gap: 8px"><span style="width: 26px; height: 26px; flex: none; border-radius: 8px; background: #2F6BEA; color: #fff; display: grid; place-items: center; font-weight: 800; font-size: 9.5px">GF</span><span style="display: flex; flex-direction: column; min-width: 0"><b style="font-size: 10px; font-weight: 650">Grace Fellowship</b><span style="font-size: 8.5px; color: #6E6E76">to Sarah Kim</span></span></div>
+<div style="font-size: 9.5px; line-height: 1.5; color: #2A2A30">Dear Sarah,<br>Thank you for your faithful giving to Grace Fellowship in 2026. Your contribution statement is below. Please keep it with your tax records.</div>
+<div style="background: #FFFFFF; border: 1px solid #E2E2E8; border-radius: 10px; padding: 9px 9px 0; flex: 1; min-height: 0; overflow: hidden">
+<div class="ml-mono">Grace Fellowship
+Annual Contribution Statement
+2026
+
+Donor: Sarah Kim
+
+Gifts received:
+  2026-01-01   $50.00  (Building fund)
+  2026-01-04   $40.00
+  2026-02-01   $50.00  (Building fund)
+  2026-02-01   $40.00
+  2026-03-01   $50.00  (Building fund)
+  2026-03-01   $40.00
+  2026-04-05   $60.00
+  ...
+
+  TOTAL 2026: $1,240.00
+  (26 gifts)
+
+No goods or services were provided
+in exchange for these contributions.</div>
+</div>
+</div>
+</div></div>
+</div>
+</div>
+</div>
+</section>
+
+<!-- THE BOOKS -->
+<section id="books" class="sec light">
+<div class="wrap split">
+<div class="txt">
+<p class="eyebrow ink">The books</p>
+<h2 class="h2">Bank rows in. <span class="serif ink" style="font-size: 1.08em">Books that add up.</span></h2>
+<p class="body">Connect the church's bank and the rows come in on their own. Gifts from the give page are already in the books, so the treasurer starts from a ledger, not a shoebox.</p>
+<ul class="ticks">
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Stripe payouts matched to the deposits in the bank</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Profit and loss, balance sheet, cash flow and the full ledger on every plan</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Reports to PDF or CSV, whenever the board asks</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Budget against actual on Professional and up</span></li>
+</ul>
+</div>
+<div class="vis">
+<div class="card" style="padding: 30px; display: flex; flex-direction: column; gap: 4px" aria-label="Sample profit and loss for one month">
+<div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 10px; padding-bottom: 14px">
+<span style="display: flex; flex-direction: column; gap: 2px"><b style="font-family: 'Inter Tight', sans-serif; font-size: 21px; letter-spacing: -0.015em">Profit and loss</b><span style="font-size: 13px; color: #475569">Grace Fellowship · October 2026</span></span>
+<span style="display: flex; gap: 6px"><span style="font-size: 12px; font-weight: 600; padding: 6px 12px; border-radius: 999px; border: 1px solid #CBD5E1; color: #334155">PDF</span><span style="font-size: 12px; font-weight: 600; padding: 6px 12px; border-radius: 999px; border: 1px solid #CBD5E1; color: #334155">CSV</span></span>
+</div>
+<span class="mono" style="font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: #475569; padding-bottom: 4px">Money in</span>
+<div class="pl-r"><span>Tithes and offerings</span><span class="mono">$13,140</span></div>
+<div class="pl-r"><span style="display: flex; align-items: center">Building fund gifts<span class="tag">Restricted</span></span><span class="mono">$3,300</span></div>
+<div class="pl-r"><span style="display: flex; align-items: center">Missions gifts<span class="tag">Restricted</span></span><span class="mono">$1,800</span></div>
+<div class="pl-r"><span>Building use</span><span class="mono">$1,140</span></div>
+<div class="pl-t"><span>Total money in</span><span class="mono" style="font-size: 13.5px">$19,380</span></div>
+<span class="mono" style="font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: #475569; padding: 18px 0 4px">Money out</span>
+<div class="pl-r"><span>Staff and benefits</span><span class="mono">$10,400</span></div>
+<div class="pl-r"><span>Building and utilities</span><span class="mono">$3,640</span></div>
+<div class="pl-r"><span>Ministries and events</span><span class="mono">$2,280</span></div>
+<div class="pl-r"><span>Office and supplies</span><span class="mono">$520</span></div>
+<div class="pl-r"><span>Missions support</span><span class="mono">$80</span></div>
+<div class="pl-t"><span>Total money out</span><span class="mono" style="font-size: 13.5px">$16,920</span></div>
+<div style="margin-top: 14px; display: flex; justify-content: space-between; align-items: center; padding: 14px 16px; border-radius: 14px; background: #F1F3F6; border: 1px solid #E2E8F0; font-weight: 600; font-size: 15px"><span>Net for October</span><span class="mono" style="font-size: 15px; color: #15803D">+$2,460</span></div>
+</div>
+</div>
+</div>
+</section>
+
+<!-- MONTH-END -->
+<section id="close" class="sec" style="background: #07080B">
+<div class="wrap split" style="flex-wrap: wrap-reverse">
+<div class="vis">
+<div class="card-d" style="padding: 28px 30px 18px; display: flex; flex-direction: column" aria-label="Sample month-end checklist">
+<div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; gap: 12px; padding-bottom: 16px">
+<span style="display: flex; flex-direction: column; gap: 2px"><span class="mono" style="font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: #959BA8">Close the month</span><b style="font-family: 'Inter Tight', sans-serif; font-size: 24px; letter-spacing: -0.02em">October 2026</b></span>
+<span style="display: flex; flex-direction: column; align-items: flex-end; gap: 6px; min-width: 160px"><span class="mono" style="font-size: 12px; color: #CBD5E1">3 of 6 done</span><span style="display: block; width: 160px; height: 6px; border-radius: 3px; background: #1B1E28"><span class="grow" style="display: block; width: 50%; height: 100%; border-radius: 3px; background: linear-gradient(90deg, #94A3B8, #CBD5E1)"></span></span></span>
+</div>
+<div class="ck"><span class="ck-n" style="background: #94A3B8; color: #0B0C11"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#0B0C11" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg></span><span class="ck-t"><b>The bank is synced</b><span>Synced November 1, and every October row is in the ledger.</span></span></div>
+<div class="ck"><span class="ck-n" style="background: #94A3B8; color: #0B0C11"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#0B0C11" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg></span><span class="ck-t"><b>Money in is explained</b><span>Four Stripe deposits matched to payouts, one transfer from savings confirmed.</span></span></div>
+<div class="ck"><span class="ck-n" style="border: 2px solid #EAB308; color: #FCD34D">3</span><span class="ck-t"><b>Every row has a category</b><span>3 rows left, starting with check 1043 for $1,200.</span></span><span class="btn btn-l btn-s" style="flex: none; font-size: 13px; padding: 7px 14px">Sort them</span></div>
+<div class="ck"><span class="ck-n" style="background: #94A3B8; color: #0B0C11"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#0B0C11" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg></span><span class="ck-t"><b>Statements agree</b><span>Checking $61,240 and savings $39,270, the same as the books on October 31.</span></span></div>
+<div class="ck"><span class="ck-n" style="border: 2px solid #3A3F4E; color: #959BA8">5</span><span class="ck-t"><b>Look over the month</b><span>Money in, money out, and the biggest changes from September.</span></span></div>
+<div class="ck"><span class="ck-n" style="border: 2px solid #3A3F4E; color: #959BA8">6</span><span class="ck-t"><b>Close and lock October</b><span>Locks the month, so nothing in October changes by accident.</span></span><span style="flex: none; display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; padding: 7px 14px; border-radius: 999px; background: #1B1E28; color: #959BA8"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#959BA8" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="10.5" width="14" height="10" rx="2.5"></rect><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"></path></svg>Lock</span></div>
+</div>
+</div>
+<div class="txt">
+<p class="eyebrow" style="color: #CBD5E1">Month-end</p>
+<h2 class="h2">Close the month <span class="serif glint" style="font-size: 1.08em">in six checks.</span></h2>
+<p class="body">One checklist for the month, in order, and each check says what's left. When all six are done, the month locks, so nobody changes October by accident.</p>
+<ul class="ticks" style="color: #D5D8DF">
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Each account's statement balance checked against the books</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>The year-end close posts the closing entry for you</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>A year-end package, ready to email to your accountant</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>On the Professional plan and up</span></li>
+</ul>
+</div>
+</div>
+</section>
+
+<!-- WHO SEES WHAT -->
+<section id="access" class="sec tint">
+<div class="wrap split">
+<div class="txt">
+<p class="eyebrow ink">Who sees what</p>
+<h2 class="h2">Giving stays with <span class="serif ink" style="font-size: 1.08em">the people who keep it.</span></h2>
+<p class="body">Who gave what is walled off in the database itself: only the owner, an admin and the church's accountant can see it. Leaders do their work from the member app's Lead tab, which never shows giving.</p>
+<ul class="ticks">
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Your church's own titles, from Elders to Trustees, each on a job Chief understands</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>1 login on Starter, 3 on Professional, 7 on Solutionist</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>A seat for your accountant on Solutionist</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Every change to a recorded gift is kept, with who made it</span></li>
+</ul>
+</div>
+<div class="vis">
+<div class="card" style="padding: 28px; display: flex; flex-direction: column" aria-label="Sample of who can see a church's giving">
+<div style="display: flex; justify-content: space-between; align-items: center; padding-bottom: 10px"><b style="font-family: 'Inter Tight', sans-serif; font-size: 20px">Who sees who gave what</b><span class="mono" style="font-size: 11px; color: #475569">SAMPLE</span></div>
+<span class="mono" style="font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: #475569; padding: 6px 0 4px">Office logins</span>
+<div class="wh"><span class="wh-av" style="background: #334155">PJ</span><span class="wh-t"><b>Pastor James</b><span>Lead Pastor · owner</span></span><span class="wh-k" style="background: #E2E8F0; color: #1E293B">Sees giving</span></div>
+<div class="wh"><span class="wh-av" style="background: #475569">DR</span><span class="wh-t"><b>Denise Ray</b><span>Administrator · admin login</span></span><span class="wh-k" style="background: #E2E8F0; color: #1E293B">Sees giving</span></div>
+<div class="wh"><span class="wh-av" style="background: #64748B">SL</span><span class="wh-t"><b>Sara Lin, CPA</b><span>The church's accountant</span></span><span class="wh-k" style="background: #E2E8F0; color: #1E293B">Books and giving</span></div>
+<div class="wh"><span class="wh-av" style="background: #0F766E">MT</span><span class="wh-t"><b>Marcus Tate</b><span>Executive Pastor · manager login</span></span><span class="wh-k" style="background: #FFFFFF; border: 1px solid #CBD5E1; color: #475569"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#475569" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="10.5" width="14" height="10" rx="2.5"></rect><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"></path></svg>Records, no giving</span></div>
+<span class="mono" style="font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: #475569; padding: 18px 0 4px">In the member app's Lead tab</span>
+<div class="wh"><span style="display: flex; flex: none; padding-left: 6px"><span class="wh-av" style="width: 28px; height: 28px; margin-left: -6px; border: 2px solid #FFFFFF; background: #BE185D; font-size: 10px">E</span><span class="wh-av" style="width: 28px; height: 28px; margin-left: -6px; border: 2px solid #FFFFFF; background: #1D4ED8; font-size: 10px">D</span><span class="wh-av" style="width: 28px; height: 28px; margin-left: -6px; border: 2px solid #FFFFFF; background: #C2410C; font-size: 10px">Y</span></span><span class="wh-t"><b>Elders, Deacons, Youth Pastor</b><span>The people and requests handed to them</span></span><span class="wh-k" style="background: #FFFFFF; border: 1px solid #CBD5E1; color: #475569"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#475569" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="10.5" width="14" height="10" rx="2.5"></rect><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"></path></svg>Never giving</span></div>
+<div style="margin-top: 16px; display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-radius: 14px; background: #F1F3F6; border: 1px solid #E2E8F0; font-size: 14px; color: #1E293B"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#475569" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6z"></path></svg>The wall holds in the database, not only on the screen.</div>
+</div>
+</div>
+</div>
+</section>
+
+<!-- SORTING, WITH CHIEF -->
+<section id="sorting" class="sec" style="background: #07080B; overflow: hidden">
+<div class="aur" aria-hidden="true" style="opacity: 0.6"><i></i><i></i><i></i></div>
+<div class="wrap split" style="position: relative">
+<div class="txt">
+<p class="eyebrow" style="color: #CBD5E1">Sorting</p>
+<h2 class="h2">Chief does <span class="serif glint" style="font-size: 1.08em">the sorting.</span></h2>
+<p class="body">Chief goes through the bank rows, matches Stripe payouts to Sunday's giving and suggests a category for the rest. Nothing changes in the books until a person says yes.</p>
+<ul class="ticks" style="color: #D5D8DF">
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Matches, categories, and moves between your own accounts</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>When nothing fits, it leaves the row for you instead of guessing</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>It tells you when a month is ready to close</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>On the Professional plan and up</span></li>
+</ul>
+</div>
+<div class="vis vs" style="min-height: 600px">
+<div class="vs-a" style="position: absolute; left: 0; top: 0; width: 72%; transform: rotate(-2deg); background: #FFFFFF; color: #0B0C11; border-radius: 6px; box-shadow: 0 40px 80px -30px rgba(0,0,0,0.7); padding: 24px 24px 14px; display: flex; flex-direction: column" aria-label="Sample bank rows with Chief's suggestions">
+<div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; padding-bottom: 10px"><span style="display: flex; flex-direction: column; gap: 2px"><b style="font-family: 'Inter Tight', sans-serif; font-size: 16px">Checking, ending 4417</b><span style="font-size: 11.5px; color: #475569">October · 5 rows to look at</span></span><span class="mono" style="font-size: 10.5px; color: #475569">SAMPLE</span></div>
+<div class="br-r"><span class="mono" style="flex: 0 0 44px; color: #475569">Oct 27</span><span style="flex: 1; min-width: 0">Stripe payout</span><span class="br-c" style="background: #DCF5E3; color: #15803D">Match: Sunday's gifts</span><b class="mono" style="flex: 0 0 74px; text-align: right; font-weight: 500">+$4,820.00</b></div>
+<div class="br-r"><span class="mono" style="flex: 0 0 44px; color: #475569">Oct 20</span><span style="flex: 1; min-width: 0">Stripe payout</span><span class="br-c" style="background: #DCF5E3; color: #15803D">Match: Sunday's gifts</span><b class="mono" style="flex: 0 0 74px; text-align: right; font-weight: 500">+$4,310.00</b></div>
+<div class="br-r"><span class="mono" style="flex: 0 0 44px; color: #475569">Oct 14</span><span style="flex: 1; min-width: 0">Transfer from savings</span><span class="br-c" style="background: #E2E8F0; color: #334155">Your own accounts</span><b class="mono" style="flex: 0 0 74px; text-align: right; font-weight: 500">+$2,000.00</b></div>
+<div class="br-r"><span class="mono" style="flex: 0 0 44px; color: #475569">Oct 24</span><span style="flex: 1; min-width: 0">Check 1043</span><span class="br-c" style="background: #FDF3D7; color: #854D0E">Building repairs?</span><b class="mono" style="flex: 0 0 74px; text-align: right; font-weight: 500">-$1,200.00</b></div>
+<div class="br-r"><span class="mono" style="flex: 0 0 44px; color: #475569">Oct 9</span><span style="flex: 1; min-width: 0">Cash App, J. Moore</span><span class="br-c" style="background: #F1F3F6; color: #475569">Left for you</span><b class="mono" style="flex: 0 0 74px; text-align: right; font-weight: 500">-$90.00</b></div>
+<div class="br-r"><span class="mono" style="flex: 0 0 44px; color: #475569">Oct 23</span><span style="flex: 1; min-width: 0">City Water</span><span class="br-c" style="background: #F1F3F6; color: #475569">Utilities</span><b class="mono" style="flex: 0 0 74px; text-align: right; font-weight: 500">-$212.00</b></div>
+<div class="br-r"><span class="mono" style="flex: 0 0 44px; color: #475569">Oct 22</span><span style="flex: 1; min-width: 0">Costco</span><span class="br-c" style="background: #F1F3F6; color: #475569">Hospitality</span><b class="mono" style="flex: 0 0 74px; text-align: right; font-weight: 500">-$184.00</b></div>
+<div class="br-r"><span class="mono" style="flex: 0 0 44px; color: #475569">Oct 15</span><span style="flex: 1; min-width: 0">Payroll</span><span class="br-c" style="background: #F1F3F6; color: #475569">Staff</span><b class="mono" style="flex: 0 0 74px; text-align: right; font-weight: 500">-$5,200.00</b></div>
+</div>
+<div class="chief vs-b" style="position: absolute; right: 0; bottom: 0; width: 62%">
+<div class="chief-in">
+<div style="display: flex; align-items: center; gap: 10px"><span class="chief-av"></span><span style="display: flex; flex-direction: column"><b style="font-size: 14px">Chief</b><span style="font-size: 12px; color: #959BA8">Books · sample</span></span></div>
+<div style="display: flex; flex-direction: column; gap: 6px; font-size: 15px; line-height: 1.5">
+<span class="line" style="animation-delay: 0.2s">Two deposits match Stripe payouts from Sunday's giving.</span>
+<span class="line" style="animation-delay: 1.4s">The $2,000 is a move from your own savings, so it isn't income. Check 1043 looks like building repairs.</span>
+<span class="line" style="animation-delay: 2.8s">I left the $90 for you. Say yes to these four, and it's the last October row to sort.<span class="caret"></span></span>
+</div>
+<div style="display: flex; flex-wrap: wrap; gap: 8px"><span class="btn btn-w btn-s">Approve all 4</span><span class="btn btn-l btn-s">Show me each one</span></div>
+</div>
+</div>
+</div>
+</div>
+</section>
+
+<!-- THE ROOMS NEXT DOOR -->
+<section class="sec" style="background: #07080B; padding-top: 40px; border-top: 1px solid #12141B">
+<div class="wrap" style="display: flex; flex-direction: column; gap: 32px">
+<div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; gap: 16px">
+<h2 class="h2" style="font-size: clamp(30px, 3.2vw, 44px)">The rooms <span class="serif" style="font-size: 1.08em; color: #D9D2FF">next door.</span></h2>
+<p class="body" style="max-width: 420px">The books share one list of people with every other part of your church.</p>
+</div>
+<div class="doors">
+<a href="/churches/giving" class="door"><span class="dglow" style="background: radial-gradient(circle, #22C55E 0%, rgba(34,197,94,0) 70%)"></span>
+<svg width="44" height="44" viewBox="0 0 48 48" aria-hidden="true" style="position: relative"><defs><clipPath id="gd1"><rect width="48" height="48" rx="12"></rect></clipPath></defs><g clip-path="url(#gd1)" stroke="rgba(255,255,255,0.55)" stroke-width="1.1" stroke-linejoin="round"><polygon points="0,0 28,0 17,21 0,15" fill="#22C55E"></polygon><polygon points="28,0 48,0 48,19 17,21" fill="#86EFAC"></polygon><polygon points="0,15 17,21 9,48 0,48" fill="#15803D"></polygon><polygon points="17,21 48,19 48,48 9,48" fill="#22C55E"></polygon><polygon points="17,21 33,31 24,48 9,48" fill="#15803D" fill-opacity="0.6"></polygon></g><g transform="translate(12 12)" fill="none" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.6-7 10-7 10z"></path></g></svg>
+<b>Giving</b><span>Every gift from the give page and the app arrives in the books on its own.</span><em style="color: #86EFAC">Go to Giving</em></a>
+<a href="/churches/people-and-care" class="door"><span class="dglow" style="background: radial-gradient(circle, #14B8A6 0%, rgba(20,184,166,0) 70%)"></span>
+<svg width="44" height="44" viewBox="0 0 48 48" aria-hidden="true" style="position: relative"><defs><clipPath id="gd2"><rect width="48" height="48" rx="12"></rect></clipPath></defs><g clip-path="url(#gd2)" stroke="rgba(255,255,255,0.55)" stroke-width="1.1" stroke-linejoin="round"><polygon points="0,0 28,0 17,21 0,15" fill="#14B8A6"></polygon><polygon points="28,0 48,0 48,19 17,21" fill="#5EEAD4"></polygon><polygon points="0,15 17,21 9,48 0,48" fill="#0F766E"></polygon><polygon points="17,21 48,19 48,48 9,48" fill="#14B8A6"></polygon><polygon points="17,21 33,31 24,48 9,48" fill="#0F766E" fill-opacity="0.6"></polygon></g><g transform="translate(12 12)" fill="none" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.2"></circle><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"></path><path d="M16 4.5a3 3 0 0 1 0 6M18 14.5c1.9.8 3 2.8 3 5.5"></path></g></svg>
+<b>People and Care</b><span>The same people, so each statement reaches the right giver.</span><em style="color: #5EEAD4">Go to People and Care</em></a>
+<a href="/churches/member-app" class="door"><span class="dglow" style="background: radial-gradient(circle, #EC4899 0%, rgba(236,72,153,0) 70%)"></span>
+<svg width="44" height="44" viewBox="0 0 48 48" aria-hidden="true" style="position: relative"><defs><clipPath id="gd3"><rect width="48" height="48" rx="12"></rect></clipPath></defs><g clip-path="url(#gd3)" stroke="rgba(255,255,255,0.55)" stroke-width="1.1" stroke-linejoin="round"><polygon points="0,0 28,0 17,21 0,15" fill="#EC4899"></polygon><polygon points="28,0 48,0 48,19 17,21" fill="#F9A8D4"></polygon><polygon points="0,15 17,21 9,48 0,48" fill="#BE185D"></polygon><polygon points="17,21 48,19 48,48 9,48" fill="#EC4899"></polygon><polygon points="17,21 33,31 24,48 9,48" fill="#BE185D" fill-opacity="0.6"></polygon></g><g transform="translate(12 12)" fill="none" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="2.5" width="10" height="19" rx="2.5"></rect><path d="M11 18.5h2"></path></g></svg>
+<b>Member App</b><span>Leaders work from its Lead tab, which never shows giving.</span><em style="color: #F9A8D4">Go to the Member App</em></a>
+</div>
+</div>
+</section>
+
+<!-- ON EVERY PLAN -->
+<section id="plans" class="sec light">
+<div class="wrap" style="display: flex; flex-direction: column; gap: 36px">
+<div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; gap: 20px 48px">
+<div style="display: flex; flex-direction: column; gap: 16px; max-width: 700px">
+<p class="eyebrow" style="color: #5A5E6B">Plans</p>
+<h2 class="h2">The books come with <span class="serif ink" style="font-size: 1.08em">every plan.</span></h2>
+</div>
+<p class="body" style="max-width: 440px">Every church sees its own full ledger, on every plan. The bigger plans add the month-end close, Chief's sorting, and the work your accountant does at year-end.</p>
+</div>
+<div class="planrow">
+<div class="plan"><span class="pn">Starter</span><span class="pp">${{P_STARTER}} <small>a month</small></span><ul>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>Bank rows, categories and reconciliation</li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>Profit and loss, balance sheet and the full ledger</li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>1 login and 2 bank connections</li>
+</ul></div>
+<div class="plan mid"><span class="pn">Professional</span><span class="pp">${{P_PRO}} <small>a month</small></span><ul>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>Everything in Starter</li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>Month-end and year-end close</li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>Restricted funds kept apart, and budget against actual</li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>Chief sorts the bank rows</li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>3 logins and 5 bank connections</li>
+</ul></div>
+<div class="plan"><span class="pn">Solutionist</span><span class="pp">${{P_SOL}} <small>a month</small></span><ul>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>Everything in Professional</li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>990 prep and a full audit trail</li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>A seat for your accountant</li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>7 logins and unlimited bank connections</li>
+</ul></div>
+</div>
+<a href="/churches#pricing" style="align-self: flex-start; font-weight: 600; color: #0B0C11">Compare every plan</a>
+</div>
+</section>
+
+<!-- CLOSING -->
+<section id="start" style="position: relative; overflow: hidden; background: #07080B">
+<div class="aur" aria-hidden="true"><i></i><i></i><i></i></div>
+<div class="floor" aria-hidden="true" style="height: 60%"></div>
+<div class="wrap" style="position: relative; padding-top: 150px; padding-bottom: 150px; display: flex; flex-direction: column; align-items: center; gap: 24px; text-align: center">
+<h2 class="h1" style="font-size: clamp(42px, 5.6vw, 84px); max-width: 960px">Books your treasurer <span class="serif glint" style="font-size: 1.06em">will thank you for.</span></h2>
+<p class="lede">{{TRIAL_LINE}}</p>
+<a href="/start" class="btn btn-w">Start free</a>
+</div>
+</section>
+
+<!-- Footer -->
+<footer class="foot"><div class="wrap foot-in">
+<div style="display: flex; flex-direction: column; gap: 10px; max-width: 360px">
+<div style="display: flex; align-items: center; gap: 8px; color: #F5F6F8"><svg width="22" height="19" viewBox="8 36 496 424" aria-hidden="true"><g fill="url(#mkg)" stroke="#fff" stroke-width="8" stroke-opacity=".92"><polygon points="18,46 175,232 237,231 133,98 376,99 356,131 412,167 494,49"></polygon><polygon points="205,138 338,241 232,391 274,449 435,221 319,137"></polygon><polygon points="264,274 149,279 201,359"></polygon></g></svg><span style="font-family: 'Inter Tight', sans-serif; font-weight: 600; font-size: 17px">Solutionist</span></div>
+<p style="margin: 0; font-size: 14px">Everything a small business runs on, in one place, with Chief running it beside you.</p>
+</div>
+<nav aria-label="Church products"><b>For churches</b><a href="/churches">Overview</a><a href="/churches/people-and-care">People and Care</a><a href="/churches/giving">Giving</a><a href="/churches/kids-and-youth">Kids and Youth</a></nav>
+<nav aria-label="More church products"><span aria-hidden="true" style="display: block; height: 21px"></span><a href="/churches/groups-and-classes">Groups and Classes</a><a href="/churches/member-app">Member App</a><a href="/churches/website-and-sermons">Website and Sermons</a><a href="/churches/office-and-books">Office and Books</a></nav>
+<nav aria-label="Company"><b>Solutionist</b><a href="/coaches">For coaches and consultants</a><a href="/churches#pricing">Pricing</a><a href="/privacy">Privacy</a><a href="/terms">Terms</a></nav>
+</div></footer>
+
+</div>
+{{ANALYTICS}}
+</body>
+</html>
