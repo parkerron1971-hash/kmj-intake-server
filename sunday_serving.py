@@ -25,6 +25,9 @@ logger = logging.getLogger(__name__)
 AHEAD_DAYS = 90
 MAX_AWAY = 20
 OFTEN = ("one", "two", "every")
+# The reminders before a Sunday (sunday_serving_alerts): a place that moves
+# to someone new hasn't reminded them yet.
+REMINDERS_UNSENT = {"week_sent_at": None, "day_sent_at": None, "morning_sent_at": None}
 WHY = ("Away", "Working", "Not feeling well", "Rather not say")
 
 
@@ -150,7 +153,7 @@ def mine(biz: Dict[str, Any], cid: str) -> Optional[Dict[str, Any]]:
         "this_year": _served_this_year(biz_id, cid, zone, now),
         "away": [{"id": str(a["id"]), "starts_on": str(a["starts_on"]), "ends_on": str(a["ends_on"]),
                   "note": a.get("note") or ""} for a in away],
-        "often": (pref[0]["often"] if pref else None),
+        "often": (pref[0].get("often") if pref else None),
         # The church's next service: "this Sunday" means that one, not
         # whichever Sunday this member serves next.
         "next_day": min((s["day"] for s in soon.values()), default=None),
@@ -305,15 +308,15 @@ def answer(biz: Dict[str, Any], cid: str, aid: str, ans: str, why: str = "") -> 
     now = sp._now().isoformat()
     if str(row.get("swap_to")) == cid and row["status"] == "yes":
         if ans != "yes":
-            return _patch(biz_id, aid, f"swap_to=eq.{_q(cid)}", {"swap_to": None, "swap_asked_at": None})
+            return _patch(biz_id, aid, f"swap_to=eq.{_q(cid)}", {"swap_to": None, "swap_asked_at": None, "swap_told_at": None})
         board = sp._service_board(biz_id, str(row["service_id"]))
         me = next((c for c in board.candidates(str(row["service_id"]), str(row["position_id"])) if c["contact_id"] == cid), None)
         if not me or me["away"] or me["clash"]:
             raise HTTPException(409, "You're away or already serving that hour, so you can't cover it.")
         was = (sp._people(biz_id, [row["contact_id"]]).get(str(row["contact_id"])) or {}).get("name") or "someone"
         return _patch(biz_id, aid, f"swap_to=eq.{_q(cid)}",
-                      {"contact_id": cid, "status": "yes", "answered_at": now, "swap_to": None, "swap_asked_at": None,
-                       "note": f"Covering for {was.split(' ')[0]}"[:300]})
+                      {"contact_id": cid, "status": "yes", "answered_at": now, "swap_to": None, "swap_asked_at": None, "swap_told_at": None,
+                       "note": f"Covering for {was.split(' ')[0]}"[:300], **REMINDERS_UNSENT})
     if str(row.get("contact_id")) != cid or row["status"] not in ("asked", "yes", "no"):
         raise HTTPException(404, "That isn't on the schedule anymore.")
     if ans == "yes":
@@ -324,7 +327,7 @@ def answer(biz: Dict[str, Any], cid: str, aid: str, ans: str, why: str = "") -> 
         if nxt:
             note = f"Can do {_day(nxt['at'])}" + (f" · {why}" if why else "")
     return _patch(biz_id, aid, f"contact_id=eq.{_q(cid)}",
-                  {"status": "no", "answered_at": now, "note": note[:300], "swap_to": None, "swap_asked_at": None})
+                  {"status": "no", "answered_at": now, "note": note[:300], "swap_to": None, "swap_asked_at": None, "swap_told_at": None})
 
 
 def _day(at: datetime) -> str:
@@ -390,11 +393,11 @@ def ask_sub(biz: Dict[str, Any], cid: str, aid: str, sub: str) -> Dict[str, Any]
     if not pick["ok"]:
         raise HTTPException(409, f"{pick['name'].split(' ')[0]} isn't free that day.")
     return _patch(biz_id, aid, f"contact_id=eq.{_q(cid)}&status=eq.yes",
-                  {"swap_to": sub, "swap_asked_at": sp._now().isoformat()})
+                  {"swap_to": sub, "swap_asked_at": sp._now().isoformat(), "swap_told_at": None})
 
 
 def stop_sub(biz: Dict[str, Any], cid: str, aid: str) -> Dict[str, Any]:
-    return _patch(str(biz["id"]), aid, f"contact_id=eq.{_q(cid)}&status=eq.yes", {"swap_to": None, "swap_asked_at": None})
+    return _patch(str(biz["id"]), aid, f"contact_id=eq.{_q(cid)}&status=eq.yes", {"swap_to": None, "swap_asked_at": None, "swap_told_at": None})
 
 
 def cant_make_it(biz: Dict[str, Any], cid: str, aid: str, why: str = "") -> Dict[str, Any]:
@@ -407,7 +410,7 @@ def cant_make_it(biz: Dict[str, Any], cid: str, aid: str, why: str = "") -> Dict
         raise HTTPException(404, "That isn't on the schedule anymore.")
     return _patch(biz_id, aid, f"contact_id=eq.{_q(cid)}",
                   {"status": "no", "answered_at": sp._now().isoformat(), "note": ("Can't make it" + (f" · {why}" if why else ""))[:300],
-                   "swap_to": None, "swap_asked_at": None})
+                   "swap_to": None, "swap_asked_at": None, "swap_told_at": None})
 
 
 # ─── away days and how often ─────────────────────────────────────────
@@ -445,6 +448,42 @@ def set_often(biz: Dict[str, Any], cid: str, often: str) -> None:
     saved = sb_clients.sb_post_as_service(
         "/serve_prefs?on_conflict=business_id,contact_id&select=often",
         {"business_id": str(biz["id"]), "contact_id": cid, "often": often, "updated_at": sp._now().isoformat()},
+        prefer="resolution=merge-duplicates,return=representation")
+    if not isinstance(saved, list) or not saved:
+        raise HTTPException(503, "That didn't save. Try again.")
+
+
+# ─── how I hear (board 8) ────────────────────────────────────────────
+
+
+def hearing(biz: Dict[str, Any], cid: str) -> Optional[Dict[str, Any]]:
+    """How I hear, or None where nothing would reach anyone yet: the
+    church hasn't switched Serving on. Phone alerts are member_push's own
+    box for kind "serving"; the email copy is serve_prefs.email."""
+    import member_push
+    if "serving" not in member_push.church_kinds(biz.get("settings")):
+        return None
+    biz_id = str(biz["id"])
+    off = member_push.turned_off(biz_id, cid)
+    pref = _read(f"/serve_prefs?business_id=eq.{_q(biz_id)}&contact_id=eq.{_q(cid)}&select=email&limit=1")
+    return {"phone_shown": member_push.ready(), "phone": "serving" not in (off or set()),
+            "devices": member_push.device_count(biz_id, cid) if member_push.ready() else 0,
+            "email": not pref or pref[0].get("email") is not False}
+
+
+def set_hearing(biz: Dict[str, Any], cid: str, what: str, on_: bool) -> None:
+    import member_push
+    biz_id = str(biz["id"])
+    if what == "phone":
+        off = member_push.turned_off(biz_id, cid)
+        if off is None or not member_push.save_turned_off(biz_id, cid, (off - {"serving"}) if on_ else (off | {"serving"})):
+            raise HTTPException(503, "That didn't save. Try again.")
+        return
+    if what != "email":
+        raise HTTPException(400, "Pick phone alerts or email.")
+    saved = sb_clients.sb_post_as_service(
+        "/serve_prefs?on_conflict=business_id,contact_id&select=email",
+        {"business_id": biz_id, "contact_id": cid, "email": on_, "updated_at": sp._now().isoformat()},
         prefer="resolution=merge-duplicates,return=representation")
     if not isinstance(saved, list) or not saved:
         raise HTTPException(503, "That didn't save. Try again.")

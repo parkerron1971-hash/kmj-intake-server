@@ -919,7 +919,7 @@ def render_me(biz: Dict[str, Any], site, *, me: Dict[str, Any], people: List[Dic
     import member_portal_messaging as mpm
     import member_push
     msgs_on = mpm.turned_on(biz)
-    notes_on = bool(member_push.church_kinds(biz.get("settings"))) and member_push.ready()
+    notes_on = bool(member_push.church_kinds(biz.get("settings")) - set(member_push.OWN_PAGE_KINDS)) and member_push.ready()
     import church_follow_up as cfu
     celebrations = cfu.is_church(biz)
     import member_app_ui as ui
@@ -1672,7 +1672,7 @@ def _require_owner(business_id: str, user: AuthedUser) -> Dict[str, Any]:
     return rows[0]
 
 
-def _config_payload(biz: Dict[str, Any], site: Dict[str, Any]) -> Dict[str, Any]:
+def _config_payload(biz: Dict[str, Any], site: Dict[str, Any], user: Optional[AuthedUser] = None) -> Dict[str, Any]:
     import vertical_family
     import vertical_scope
     from business_sites_helpers import PUBLIC_DOMAIN
@@ -1691,7 +1691,7 @@ def _config_payload(biz: Dict[str, Any], site: Dict[str, Any]) -> Dict[str, Any]
         # Notifications to members' phones (member_push.py): each kind
         # the church can switch on, whether it is, and whether this
         # server can send at all.
-        "notifications": _notifications_payload(biz),
+        "notifications": _notifications_payload(biz, user),
         # The app's base (black, dark gray, light gray, white; the
         # church's colour is the accent) and its own Home tiles.
         "base": _ui_base(biz),
@@ -1743,13 +1743,17 @@ def _tiles_of(biz: Dict[str, Any]) -> List[Dict[str, str]]:
     return mpc.clean_tiles(portal_settings(biz.get("settings")).get("tiles")) or []
 
 
-def _notifications_payload(biz: Dict[str, Any]) -> Dict[str, Any]:
+def _notifications_payload(biz: Dict[str, Any], user: Optional[AuthedUser] = None) -> Dict[str, Any]:
     import member_push
+    import sunday_planning
     on = member_push.church_kinds(biz.get("settings"))
+    # Serving waits for ChurchSavvy Planning: no switch where nobody can
+    # schedule (one already on still shows, so it can be turned off).
+    planning = user is not None and sunday_planning.open_to(user)
     return {
         "ready": member_push.ready(),
         "kinds": [{"key": k, "label": label, "hint": hint, "on": k in on}
-                  for k, label, hint in member_push.KINDS],
+                  for k, label, hint in member_push.KINDS if k != "serving" or planning or k in on],
     }
 
 
@@ -1758,7 +1762,7 @@ def get_member_portal_config(business_id: str, user: AuthedUser = Depends(requir
     from business_sites_helpers import ensure_business_site
     biz = _require_owner(business_id, user)
     site, _ = ensure_business_site(biz)
-    return _config_payload(biz, site)
+    return _config_payload(biz, site, user)
 
 
 @router.post("/member-portal/{business_id}/preview")
@@ -1882,4 +1886,4 @@ def patch_member_portal_config(business_id: str, body: Dict[str, Any],
         if not saved:
             raise HTTPException(503, "That change didn't save. Please try again.")
         biz = {**biz, "settings": settings}
-    return _config_payload(biz, site)
+    return _config_payload(biz, site, user)
