@@ -1,0 +1,518 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>{{TITLE}}</title>
+<meta name="description" content="{{DESCRIPTION}}">
+<meta property="og:title" content="{{TITLE}}">
+<meta property="og:description" content="{{DESCRIPTION}}">
+<meta property="og:url" content="{{URL}}">
+<link rel="canonical" href="{{URL}}">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="The Solutionist System">
+<meta property="og:image" content="https://mysolutionist.app/assets/og.png?v=4">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="https://mysolutionist.app/assets/og.png?v=4">
+<link rel="icon" type="image/png" href="/favicon.png">
+<link rel="apple-touch-icon" href="/favicon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@300;400;500;600;700&amp;family=Inter:wght@400;500;600&amp;family=Instrument+Serif:ital@0;1&amp;family=JetBrains+Mono:wght@400;500&amp;family=Geist:wght@400..800&amp;family=Newsreader:ital,opsz,wght@0,6..72,400..600;1,6..72,400..600&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#07080B}
+a{color:#F5F6F8}a:hover{color:#86EFAC}
+
+/* invoices, drawn small in the office app */
+.iv-h,.iv-r{display:grid;grid-template-columns:38px minmax(0,1fr) 68px 50px;gap:6px;align-items:center}
+.iv-h{font:500 6px/1 'JetBrains Mono',monospace;letter-spacing:.12em;text-transform:uppercase;color:#5F6672;padding:3px 0}
+.iv-r{font-size:8.5px;padding:5px 0;border-top:1px solid #1B1E28}
+.iv-h>span:last-child,.iv-r>span:last-child{text-align:right}
+.iv-n{font-family:'JetBrains Mono',monospace;font-size:7px;color:#8D93A1}
+.iv-t{display:flex;flex-direction:column;gap:1px;min-width:0}
+.iv-t b{font-weight:600;color:#F5F6F8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.iv-t span{font-size:7px;color:#8D93A1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.iv-a{font-family:'JetBrains Mono',monospace;font-size:7.5px;color:#E4E6EB}
+.bal{display:flex;flex-direction:column;gap:3px;padding:5px 0;border-top:1px solid #1B1E28}
+.bal-t{display:flex;justify-content:space-between;align-items:baseline;gap:6px;font-size:8.5px}
+.bal-t span:last-child{font-family:'JetBrains Mono',monospace;font-size:7px;color:#C9CDD6;white-space:nowrap}
+.bal-m{display:block;height:4px;border-radius:2px;background:#1B1E28;overflow:hidden}
+.bal-m i{display:block;height:100%;border-radius:2px}
+
+/* a text thread on the client's phone */
+.tx{background:#000;color:#f5f5f7;font-family:'Geist',sans-serif;border-radius:33px;overflow:hidden;display:flex;flex-direction:column}
+.tx-top{padding:32px 12px 9px;display:flex;flex-direction:column;align-items:center;gap:3px;border-bottom:1px solid #1c1c1f;background:#0d0d0f}
+.tx-in{flex:1;min-height:0;padding:12px 10px;display:flex;flex-direction:column;justify-content:flex-end;gap:7px}
+.tx-b{max-width:86%;padding:8px 11px;border-radius:16px;font-size:9.6px;line-height:1.42}
+.tx-them{align-self:flex-start;background:#26262A;color:#f5f5f7;border-bottom-left-radius:5px}
+.tx-me{align-self:flex-end;background:#2F6BEA;color:#FFFFFF;border-bottom-right-radius:5px}
+.tx-when{align-self:center;font-size:8px;color:#9a9aa0}
+
+/* the invoice email */
+.em-h,.em-r{display:grid;grid-template-columns:minmax(0,1fr) 34px 84px 88px;gap:8px;align-items:center}
+.em-h{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#6B6B6B;padding:10px 0;border-bottom:2px solid #2F6BEA}
+.em-r{padding:12px 0;border-bottom:1px solid #EEEEEE;font-size:14px;color:#333333}
+.em-h>span:not(:first-child),.em-r>span:not(:first-child){text-align:right}
+.em-r>span:nth-child(2),.em-r>span:nth-child(3){color:#666666}
+.em-r>span:last-child{font-weight:600;color:#17181D}
+.em-btn{display:flex;align-items:center;justify-content:center;gap:8px;height:46px;border-radius:8px;color:#FFFFFF;font-weight:700;font-size:15px}
+
+/* prepaid balances */
+.pb{display:flex;flex-direction:column;gap:9px;padding:14px 0;border-top:1px solid #1F2330}
+.pb-top{display:flex;align-items:center;gap:12px}
+.pb-av{width:34px;height:34px;border-radius:50%;flex:none;display:grid;place-items:center;font-size:12px;font-weight:700;color:#FFFFFF}
+.pb-t{flex:1;min-width:0;display:flex;flex-direction:column}
+.pb-t b{font-size:15px;font-weight:600}
+.pb-t span{font-size:13px;color:#A9AEB9}
+.pb-n{font-family:'JetBrains Mono',monospace;font-size:13px;color:#F5F6F8;text-align:right;white-space:nowrap}
+.pb-m{display:block;height:8px;border-radius:999px;background:#1B1E28;overflow:hidden}
+.pb-m i{display:block;height:100%;border-radius:999px}
+.lg{display:flex;justify-content:space-between;align-items:baseline;gap:12px;padding:8px 0;border-top:1px solid #1F2330;font-size:13.5px;color:#C9CDD6}
+.lg .mono{font-size:12.5px}
+
+/* the time sheet */
+.ts-h,.ts-r{display:grid;grid-template-columns:54px minmax(0,1fr) 44px 74px;gap:10px;align-items:center}
+.ts-h{font:500 10.5px/1 'JetBrains Mono',monospace;letter-spacing:.12em;text-transform:uppercase;color:#5A5E6B;padding:12px 0 8px}
+.ts-r{padding:11px 0;border-top:1px solid #ECEEF1;font-size:14px}
+.ts-h>span:nth-child(n+3),.ts-r>span:nth-child(n+3){text-align:right}
+.ts-r .mono{font-size:13px}
+.ts-w{display:flex;flex-direction:column;gap:3px;min-width:0}
+.ts-k{align-self:flex-start;font-size:11px;font-weight:600;padding:2px 8px;border-radius:999px;white-space:nowrap}
+
+/* keep a headline phrase whole on wide screens */
+@media (min-width:761px){.nw{white-space:nowrap}}
+
+/* who owes what, on paper */
+.ow-l{display:flex;align-items:center;gap:10px;padding:9px 0;border-top:1px solid #E5E5EB;font-size:12.5px}
+.ow-l .mono{font-size:11.5px}
+
+@media (max-width:760px){
+.em-h,.em-r{grid-template-columns:minmax(0,1fr) 28px 80px}
+.em-h>span:nth-child(3),.em-r>span:nth-child(3){display:none}
+.ts-h,.ts-r{grid-template-columns:minmax(0,1fr) 40px 70px}
+.ts-h>span:first-child,.ts-r>span:first-child{display:none}
+.pb-top{flex-wrap:wrap;row-gap:6px}
+.pb-t{flex:1 1 180px}
+.pb-n{margin-left:46px}
+.ow-l{flex-wrap:wrap;row-gap:4px}
+.vs{min-height:0 !important;display:flex;flex-direction:column;gap:16px}
+.vs>.vs-a,.vs>.vs-b{position:relative !important;left:auto !important;right:auto !important;top:auto !important;bottom:auto !important;width:100% !important;transform:none !important}
+}
+</style>
+<style>
+{{COACH_CSS}}
+</style>
+{{PIXEL}}
+</head>
+<body>
+<div class="pg" style="--p: #22C55E; --pl: #86EFAC; --pd: #15803D; --pg: rgba(34,197,94,0.30); --pt: #EEF8F1; --pf: rgba(34,197,94,0.16)">
+
+<!-- The Solutionist frame, lit in this room's colour -->
+<div class="strip"><div class="wrap strip-in">
+<a href="/coaches" style="display: flex; align-items: center; gap: 8px; color: #F5F6F8">
+<svg width="20" height="17" viewBox="8 36 496 424" aria-hidden="true"><defs><linearGradient id="mkg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#E040FB"></stop><stop offset=".55" stop-color="#7C5CFF"></stop><stop offset="1" stop-color="#22D3EE"></stop></linearGradient></defs><g fill="url(#mkg)" stroke="#fff" stroke-width="8" stroke-opacity=".92"><polygon points="18,46 175,232 237,231 133,98 376,99 356,131 412,167 494,49"></polygon><polygon points="205,138 338,241 232,391 274,449 435,221 319,137"></polygon><polygon points="264,274 149,279 201,359"></polygon></g></svg>
+<span style="font-weight: 600">Solutionist</span>
+</a>
+<nav aria-label="Solutionist" style="display: flex; flex-wrap: wrap; gap: 6px 22px">
+<a href="/churches">For churches</a>
+<a href="/">All of Solutionist</a>
+<a href="{{APP_URL}}" style="color: #F5F6F8">Sign in</a>
+</nav>
+</div></div>
+
+<!-- HERO -->
+<section style="position: relative; overflow: hidden">
+<div class="aur" aria-hidden="true"><i></i><i></i><i></i></div>
+<div class="floor" aria-hidden="true"></div>
+<div class="blade" aria-hidden="true"></div>
+
+<header class="wrap" style="position: relative; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 14px 32px; padding-top: 20px; padding-bottom: 18px">
+<a href="/coaches" style="display: flex; align-items: baseline; gap: 10px; text-decoration: none; color: #F5F6F8">
+<span style="font-family: 'Inter Tight', sans-serif; font-weight: 700; font-size: 24px; letter-spacing: -0.02em">Solutionist</span>
+<span class="serif" style="font-size: 28px; color: #D9D2FF">Coaches &amp; Consultants</span>
+</a>
+<nav aria-label="Coaches and consultants" style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px 28px; font-size: 15px; font-weight: 500">
+<details class="pmenu"><summary>Products<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#E4E6EB" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg></summary><div class="pmenu-panel"><a href="/coaches"><i style="background: linear-gradient(135deg, #E040FB, #7C5CFF 55%, #22D3EE)"></i><b>Overview</b><span>Every part of your practice</span></a><a href="/coaches/bookings"><i style="background: #3B82F6"></i><b>Bookings</b><span>Your booking page and standing sessions</span></a><a href="/coaches/clients"><i style="background: #14B8A6"></i><b>Clients</b><span>One record, a brief before every session</span></a><a href="/coaches/proposals-and-contracts"><i style="background: #8B5CF6"></i><b>Proposals and Contracts</b><span>Drafted in your voice</span></a><a href="/coaches/billing-and-time" aria-current="page"><i style="background: #22C55E"></i><b>Billing and Time</b><span>Invoices, pay links and your hours</span></a><a href="/coaches/courses-and-classes"><i style="background: #F97316"></i><b>Courses and Classes</b><span>Live classes, recordings, homework</span></a><a href="/coaches/marketing-and-website"><i style="background: #EC4899"></i><b>Marketing and Website</b><span>Your site and a week of posts</span></a><a href="/coaches/office-and-books"><i style="background: #94A3B8"></i><b>Office and Books</b><span>The books, the close, the 1099s</span></a></div></details>
+<a href="/coaches#pricing" style="text-decoration: none; color: #E4E6EB">Pricing</a>
+<a href="/start" class="btn btn-w btn-s">Start free</a>
+</nav>
+</header>
+
+<div class="wrap" style="position: relative">
+<div class="pbar">
+<div class="lock">
+<svg width="40" height="40" viewBox="0 0 48 48" aria-hidden="true"><defs><clipPath id="gt"><rect width="48" height="48" rx="12"></rect></clipPath></defs><g clip-path="url(#gt)" stroke="rgba(255,255,255,0.55)" stroke-width="1.1" stroke-linejoin="round"><polygon points="0,0 28,0 17,21 0,15" fill="#22C55E"></polygon><polygon points="28,0 48,0 48,19 17,21" fill="#86EFAC"></polygon><polygon points="0,15 17,21 9,48 0,48" fill="#15803D"></polygon><polygon points="17,21 48,19 48,48 9,48" fill="#22C55E"></polygon><polygon points="17,21 33,31 24,48 9,48" fill="#15803D" fill-opacity="0.6"></polygon></g><g transform="translate(12 12)" fill="none" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="13" rx="2.5"></rect><path d="M3 10h18M7 15h3"></path></g></svg>
+<span style="display: flex; flex-direction: column; gap: 1px"><b>Billing and Time</b><span>Solutionist for Coaches and Consultants</span></span>
+</div>
+<nav aria-label="In this room">
+<span class="mono" style="font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: rgba(255,255,255,0.6)">In this room</span>
+<a href="#invoices">Invoices</a>
+<a href="#packages">Packages and retainers</a>
+<a href="#time">Time</a>
+<a href="#paid">Getting paid</a>
+</nav>
+</div>
+</div>
+
+<div class="wrap" style="position: relative; padding-top: 72px; padding-bottom: 40px; display: flex; flex-direction: column; gap: 28px">
+<p class="eyebrow" style="color: #86EFAC; display: flex; align-items: center; gap: 10px"><span class="ping" style="background: #22C55E"></span>Billing and Time</p>
+<h1 class="h1" style="max-width: 1100px">Every hour counted. <span class="serif glint nw" style="font-size: 1.06em">Paid straight to you.</span></h1>
+<div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; gap: 24px 48px">
+<p class="lede" style="max-width: 640px">Invoices by email or text with a pay link on your own Stripe account. Packages and retainers that keep their own count. Time you log by saying it. And we never take a cut of a payment.</p>
+<div style="display: flex; flex-wrap: wrap; gap: 12px">
+<a href="/start" class="btn btn-w">{{CTA_START}}</a>
+<a href="#invoices" class="btn btn-l">See an invoice</a>
+</div>
+</div>
+<div class="facts">
+<div class="fact"><svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#86EFAC" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="6" width="18" height="13" rx="2.5"></rect><path d="M3 10h18M7 15h3"></path></svg><span><b>Your own Stripe</b><span>Payments land in your account</span></span></div>
+<div class="fact"><svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#86EFAC" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M8 12h8"></path></svg><span><b>No platform fee</b><span>Not on a single invoice</span></span></div>
+<div class="fact"><svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#86EFAC" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="13" r="8"></circle><path d="M12 9v4l2.5 2.5M9.5 2.5h5"></path></svg><span><b>Time in a sentence</b><span>&ldquo;Log 90 minutes for Henderson&rdquo;</span></span></div>
+</div>
+</div>
+
+<!-- The devices: billing on a computer, and an invoice arriving by text -->
+<div class="wrap" style="position: relative; padding-bottom: 80px">
+<div class="stage" style="aspect-ratio: 2.25" role="figure" aria-label="Reyes Coaching's invoices and prepaid balances on a computer, and an invoice arriving by text on a client's phone. Sample">
+<div class="st-lap" style="position: absolute; left: 4%; top: 0; width: 72%">
+<div class="dv-lid"><div class="dv-glass"></div><div style="aspect-ratio: 16 / 10">
+<div class="ow">
+<div class="ow-top">
+<svg width="11" height="10" viewBox="8 36 496 424" aria-hidden="true"><g fill="url(#mkg)"><polygon points="18,46 175,232 237,231 133,98 376,99 356,131 412,167 494,49"></polygon><polygon points="205,138 338,241 232,391 274,449 435,221 319,137"></polygon><polygon points="264,274 149,279 201,359"></polygon></g></svg>
+<span style="font-weight: 600; font-size: 9px; color: #F5F6F8">Reyes Coaching</span>
+<span style="margin-left: 10px; flex: 1; max-width: 46%; display: flex; align-items: center; gap: 5px; height: 15px; padding: 0 7px; border-radius: 999px; background: #13151C; border: 1px solid #1E2130; color: #8D93A1; font-size: 7.5px">Search clients, invoices, documents</span>
+<span style="margin-left: auto; display: flex; align-items: center; gap: 4px; height: 16px; padding: 0 8px; border-radius: 999px; background: linear-gradient(90deg, rgba(224,64,251,0.22), rgba(124,92,255,0.22), rgba(34,211,238,0.18)); border: 1px solid rgba(124,92,255,0.45); font-size: 7.5px; font-weight: 600; color: #F5F6F8"><span style="width: 7px; height: 7px; border-radius: 50%; background: linear-gradient(135deg, #E040FB, #7C5CFF 55%, #22D3EE)"></span>Ask Chief</span>
+</div>
+<div class="ow-body">
+<div class="ow-side">
+<span class="ow-grp">Operate</span>
+<span class="ow-nav"><i style="background: #7C5CFF"></i>This week</span>
+<span class="ow-nav"><i style="background: #3B82F6"></i>Bookings</span>
+<span class="ow-nav"><i style="background: #14B8A6"></i>Clients</span>
+<span class="ow-nav"><i style="background: #8B5CF6"></i>Proposals</span>
+<span class="ow-nav on"><i style="background: #22C55E"></i>Billing</span>
+<span class="ow-grp">Grow</span>
+<span class="ow-nav"><i style="background: #F97316"></i>Courses</span>
+<span class="ow-nav"><i style="background: #EC4899"></i>Marketing</span>
+<span class="ow-grp">Build</span>
+<span class="ow-nav"><i style="background: #EC4899"></i>Website</span>
+<span class="ow-nav"><i style="background: #94A3B8"></i>Books</span>
+</div>
+<div class="ow-main">
+<div style="display: flex; justify-content: space-between; align-items: center; gap: 8px"><span class="ow-h">Billing</span><span style="display: flex; gap: 3px; font-size: 7.5px"><span style="padding: 3px 8px; border-radius: 999px; background: rgba(34,197,94,0.18); color: #86EFAC">Invoices</span><span style="padding: 3px 8px; color: #8D93A1">Packages</span><span style="padding: 3px 8px; color: #8D93A1">Time</span><span style="padding: 3px 8px; color: #8D93A1">Payments</span></span></div>
+<div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px">
+<div class="ow-card"><span class="ow-k" style="color: #86EFAC">Paid</span><span class="ow-n">$11,860</span><span class="ow-s">this month</span></div>
+<div class="ow-card"><span class="ow-k" style="color: #86EFAC">Open</span><span class="ow-n">$3,650</span><span class="ow-s">3 invoices</span></div>
+<div class="ow-card"><span class="ow-k" style="color: #FCD34D">Overdue</span><span class="ow-n">$1,650</span><span class="ow-s">2 invoices</span></div>
+<div class="ow-card"><span class="ow-k" style="color: #86EFAC">Unbilled time</span><span class="ow-n">6.5h</span><span class="ow-s">$1,300 at your rates</span></div>
+</div>
+<div style="display: flex; gap: 6px; flex: 1; min-height: 0">
+<div class="ow-card" style="flex: 1.45; gap: 0">
+<div class="iv-h"><span>No.</span><span>Client</span><span>Status</span><span>Amount</span></div>
+<div class="iv-r"><span class="iv-n">INV-2026-046</span><span class="iv-t"><b>Okafor family business</b><span>Planning workshop</span></span><span><span class="ow-pill" style="background: #1B1E28; color: #C9CDD6">Draft</span></span><span class="iv-a">$2,400</span></div>
+<div class="iv-r"><span class="iv-n">INV-2026-045</span><span class="iv-t"><b>Priya Shah</b><span>6-session coaching package</span></span><span><span class="ow-pill" style="background: rgba(34,197,94,0.16); color: #86EFAC">Paid today</span></span><span class="iv-a">$1,500</span></div>
+<div class="iv-r"><span class="iv-n">INV-2026-044</span><span class="iv-t"><b>Henderson Co.</b><span>Advisory retainer, 10 hours · monthly</span></span><span><span class="ow-pill" style="background: rgba(59,130,246,0.18); color: #93C5FD">Viewed</span></span><span class="iv-a">$2,000</span></div>
+<div class="iv-r"><span class="iv-n">INV-2026-043</span><span class="iv-t"><b>Marcus Hale</b><span>Workshop for his managers</span></span><span><span class="ow-pill" style="background: rgba(248,113,113,0.16); color: #FCA5A5">34 days late</span></span><span class="iv-a">$1,200</span></div>
+<div class="iv-r"><span class="iv-n">INV-2026-042</span><span class="iv-t"><b>Henderson Co.</b><span>Pricing review, first half</span></span><span><span class="ow-pill" style="background: rgba(34,197,94,0.16); color: #86EFAC">Paid</span></span><span class="iv-a">$2,500</span></div>
+<div class="iv-r"><span class="iv-n">INV-2026-041</span><span class="iv-t"><b>Okafor family business</b><span>Follow-up session</span></span><span><span class="ow-pill" style="background: rgba(234,179,8,0.16); color: #FCD34D">9 days late</span></span><span class="iv-a">$450</span></div>
+<div class="iv-r"><span class="iv-n">INV-2026-040</span><span class="iv-t"><b>Okafor family business</b><span>Planning retainer</span></span><span><span class="ow-pill" style="background: rgba(34,197,94,0.16); color: #86EFAC">Paid</span></span><span class="iv-a">$5,000</span></div>
+<div class="iv-r"><span class="iv-n">INV-2026-039</span><span class="iv-t"><b>Marcus Hale</b><span>10-session coaching package</span></span><span><span class="ow-pill" style="background: rgba(34,197,94,0.16); color: #86EFAC">Paid</span></span><span class="iv-a">$2,800</span></div>
+<div class="iv-r"><span class="iv-n">INV-2026-038</span><span class="iv-t"><b>Henderson Co.</b><span>Advisory retainer, 10 hours · monthly</span></span><span><span class="ow-pill" style="background: rgba(34,197,94,0.16); color: #86EFAC">Paid</span></span><span class="iv-a">$2,000</span></div>
+<div class="iv-r"><span class="iv-n">INV-2026-037</span><span class="iv-t"><b>Priya Shah</b><span>Coaching, September</span></span><span><span class="ow-pill" style="background: rgba(34,197,94,0.16); color: #86EFAC">Paid by check</span></span><span class="iv-a">$450</span></div>
+</div>
+<div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px">
+<div class="ow-card" style="gap: 0">
+<span class="ow-k" style="color: #8D93A1; padding-bottom: 4px">Prepaid</span>
+<div class="bal"><span class="bal-t"><span>Priya Shah</span><span>4 of 6 sessions</span></span><span class="bal-m"><i class="grow" style="width: 67%; background: #22C55E"></i></span></div>
+<div class="bal"><span class="bal-t"><span>Marcus Hale</span><span style="color: #FCD34D">1 session left</span></span><span class="bal-m"><i class="grow" style="width: 10%; background: #EAB308"></i></span></div>
+<div class="bal"><span class="bal-t"><span>Henderson Co.</span><span>7 of 10 hours</span></span><span class="bal-m"><i class="grow" style="width: 70%; background: #86EFAC"></i></span></div>
+<div class="bal"><span class="bal-t"><span>Okafor family business</span><span>$3,250 left</span></span><span class="bal-m"><i class="grow" style="width: 65%; background: #22C55E"></i></span></div>
+</div>
+<div class="ow-card" style="gap: 4px; border-color: rgba(34,197,94,0.35); background: #0F1A14">
+<span style="display: flex; align-items: center; gap: 5px"><span style="width: 12px; height: 12px; border-radius: 4px; background: #22C55E; display: grid; place-items: center; flex: none"><svg width="7" height="7" viewBox="0 0 24 24" fill="none" stroke="#052E16" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg></span><b style="font-size: 8.5px; color: #F5F6F8">Payment received, $1,500.00</b></span>
+<span style="font-size: 7.5px; color: #C9CDD6">Priya Shah paid invoice INV-2026-045. It's marked paid and in your books.</span>
+<span style="align-self: flex-start; font-size: 7px; font-weight: 600; padding: 3px 8px; border-radius: 999px; background: #F5F6F8; color: #07080B">Thank Priya</span>
+</div>
+<div style="border-radius: 9px; padding: 1px; background: linear-gradient(110deg, rgba(224,64,251,0.7), rgba(124,92,255,0.35) 40%, rgba(34,211,238,0.6))">
+<div style="border-radius: 8px; background: #11131A; padding: 7px 9px; display: flex; flex-direction: column; gap: 4px">
+<div style="display: flex; align-items: center; gap: 6px"><span style="width: 11px; height: 11px; border-radius: 50%; background: linear-gradient(135deg, #E040FB, #7C5CFF 55%, #22D3EE)"></span><b style="font-size: 8.5px; color: #F5F6F8">Marcus is 34 days late</b></div>
+<span style="font-size: 7.5px; color: #C9CDD6">A friendly final notice is drafted for you to read.</span>
+<span style="align-self: flex-start; font-size: 7px; font-weight: 600; padding: 3px 8px; border-radius: 999px; background: #F5F6F8; color: #07080B">Review</span>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div></div>
+<div class="dv-base"></div>
+</div>
+
+<div class="st-ph" style="position: absolute; right: 3%; bottom: 0; width: 21%">
+<div class="dv-ph"><span class="dv-island"></span><div class="tx" style="aspect-ratio: 9 / 19.2">
+<div class="tx-top">
+<span style="width: 30px; height: 30px; border-radius: 50%; background: #2F6BEA; color: #fff; display: grid; place-items: center; font-weight: 800; font-size: 10px">RC</span>
+<span style="font-size: 9px; font-weight: 600">Reyes Coaching</span>
+</div>
+<div class="tx-in">
+<span class="tx-when">Today 9:14 AM</span>
+<span class="tx-b tx-them">Reyes Coaching &#8212; Invoice INV-2026-045<br>6-session coaching package (qty 1)<br>Total: USD 1,500.00<br>Due: 2026-11-06<br>Pay: <span style="color: #8FB0FF; text-decoration: underline">https://buy.stripe.com/aEU6oR3kq9</span></span>
+<span class="tx-b tx-me">Paid! See you Tuesday.</span>
+<span class="tx-when">9:31 AM</span>
+<span class="tx-b tx-them">Got it, thank you Priya! Your next session is Tuesday at 10.<br>Dana</span>
+<span class="tx-when">Delivered</span>
+</div>
+<div style="display: flex; align-items: center; gap: 6px; padding: 8px 10px 14px">
+<span style="flex: 1; height: 24px; border-radius: 999px; border: 1px solid #2c2c30; display: flex; align-items: center; padding: 0 10px; font-size: 9px; color: #8e8e93">Text Message</span>
+</div>
+</div></div>
+</div>
+</div>
+</div>
+</section>
+
+<!-- INVOICES -->
+<section id="invoices" class="sec light">
+<div class="wrap split">
+<div class="txt">
+<p class="eyebrow ink">Invoices</p>
+<h2 class="h2">An invoice <span class="serif ink" style="font-size: 1.08em">in one sentence.</span></h2>
+<p class="body">Say &ldquo;invoice Henderson for this month's ten advisory hours.&rdquo; Chief fills in the price from your price list, numbers the invoice, and adds a pay link from your own Stripe account. Send it by email or by text. The moment your client pays, it's marked paid by itself.</p>
+<ul class="ticks">
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>A Pay button for card, and PayPal or Square if you take them</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Repeats weekly, monthly or quarterly, drafted fresh each time</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Paid by check? Say so, and it's marked paid</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Void an invoice, and its pay link is switched off too</span></li>
+</ul>
+</div>
+<div class="vis">
+<div class="card" style="padding: 0; overflow: hidden" role="figure" aria-label="The invoice email a client receives. Sample">
+<div style="display: flex; flex-direction: column; gap: 4px; padding: 16px 28px; background: #F4F4F6; border-bottom: 1px solid #E5E5EB; font-size: 13px; color: #474B57">
+<span><b style="color: #17181D">Dana Reyes</b> to Henderson Co.</span>
+<span style="font-size: 15px; font-weight: 600; color: #17181D">Invoice INV-2026-044 from Reyes Coaching</span>
+</div>
+<div style="padding: 28px 30px 30px; display: flex; flex-direction: column; gap: 14px; font-family: Arial, sans-serif; color: #333333">
+<div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 12px">
+<b style="font-size: 21px; color: #2F6BEA">Reyes Coaching</b>
+<span style="display: flex; flex-direction: column; align-items: flex-end; gap: 2px"><span style="font-size: 11px; letter-spacing: 0.18em; color: #6B6B6B">INVOICE</span><b style="font-size: 16px; color: #2F6BEA">INV-2026-044</b></span>
+</div>
+<p style="margin: 0; font-size: 14px; line-height: 1.6">Hi Henderson Co.,<br>Please find your invoice below. Payment is due by <b>2026-11-15</b>.</p>
+<div>
+<div class="em-h"><span>Item</span><span>Qty</span><span>Price</span><span>Total</span></div>
+<div class="em-r"><span>Advisory retainer, November</span><span>10</span><span>$200.00</span><span>$2,000.00</span></div>
+<div style="display: flex; justify-content: flex-end; align-items: baseline; gap: 20px; padding-top: 12px"><b style="font-size: 15px">TOTAL</b><b style="font-size: 19px; color: #2F6BEA">$2,000.00</b></div>
+</div>
+<span style="text-align: center; font-size: 14px; font-weight: 600; color: #666666">Pay This Invoice &#8212; $2,000.00</span>
+<span class="em-btn" style="background: #635BFF"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="6" width="18" height="13" rx="2.5"></rect><path d="M3 10h18"></path></svg>Pay with Card</span>
+<span class="em-btn" style="background: #0070BA">Pay with PayPal</span>
+<p style="margin: 4px 0 0; padding: 12px 14px; background: #F9F7F2; border-left: 3px solid #2F6BEA; font-size: 13px; line-height: 1.6; color: #555555; font-style: italic">Thank you for a strong first month. November covers the rollout plan with your team.</p>
+<p style="margin: 0; font-size: 13px; color: #555555">Thank you,<br><b style="color: #333333">Dana Reyes</b></p>
+</div>
+</div>
+</div>
+</div>
+</section>
+
+<!-- PACKAGES AND RETAINERS -->
+<section id="packages" class="sec" style="background: #07080B">
+<div class="wrap split" style="flex-wrap: wrap-reverse">
+<div class="vis">
+<div class="card-d" style="padding: 26px 28px 18px; display: flex; flex-direction: column" role="figure" aria-label="Clients' prepaid packages and retainers, and the record behind one balance. Sample">
+<div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; gap: 10px; padding-bottom: 14px">
+<span style="display: flex; flex-direction: column; gap: 2px"><span class="mono" style="font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: #959BA8">Prepaid</span><b style="font-family: 'Inter Tight', sans-serif; font-size: 23px; letter-spacing: -0.02em">Packages and retainers</b></span>
+<span class="mono" style="font-size: 11px; color: #959BA8">SAMPLE</span>
+</div>
+<div class="pb">
+<div class="pb-top"><span class="pb-av" style="background: #7C3AED">PS</span><span class="pb-t"><b>Priya Shah</b><span>6-session package · bought Sep 2</span></span><span class="pb-n">4 of 6 sessions</span></div>
+<span class="pb-m"><i class="grow" style="width: 67%; background: #22C55E"></i></span>
+</div>
+<div class="pb">
+<div class="pb-top"><span class="pb-av" style="background: #0F766E">MH</span><span class="pb-t"><b>Marcus Hale</b><span>10-session package</span></span><span class="pb-n" style="color: #FCD34D">1 session left</span></div>
+<span class="pb-m"><i class="grow" style="width: 10%; background: #EAB308"></i></span>
+</div>
+<div class="pb">
+<div class="pb-top"><span class="pb-av" style="background: #1D4ED8">HC</span><span class="pb-t"><b>Henderson Co.</b><span>Advisory retainer, in hours</span></span><span class="pb-n">7 of 10 hours</span></div>
+<span class="pb-m"><i class="grow" style="width: 70%; background: #86EFAC"></i></span>
+</div>
+<div class="pb">
+<div class="pb-top"><span class="pb-av" style="background: #B45309">OF</span><span class="pb-t"><b>Okafor family business</b><span>Planning retainer, in dollars</span></span><span class="pb-n">$3,250 of $5,000</span></div>
+<span class="pb-m"><i class="grow" style="width: 65%; background: #22C55E"></i></span>
+</div>
+<div style="margin-top: 8px; padding: 14px 16px 6px; border-radius: 16px; background: #07080B; border: 1px solid #1F2330">
+<span class="mono" style="font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: #959BA8">Why Priya has 4</span>
+<div class="lg" style="margin-top: 8px"><span>Session completed Oct 21 (auto)</span><span class="mono">&#8722;1</span></div>
+<div class="lg"><span>Session completed Oct 14 (auto)</span><span class="mono">&#8722;1</span></div>
+<div class="lg"><span>Bought the 6-session package, Sep 2</span><span class="mono" style="color: #86EFAC">+6</span></div>
+</div>
+</div>
+</div>
+<div class="txt">
+<p class="eyebrow" style="color: #86EFAC">Packages and retainers</p>
+<h2 class="h2">Packages that <span class="serif glint" style="font-size: 1.08em">count themselves down.</span></h2>
+<p class="body">Sell a 6-session package and Solutionist keeps the count. Each session marked done draws one down overnight, so nobody counts in their head. Retainers work the same way, in dollars or in hours, and every balance keeps the record of each draw, so you can always see why it says four.</p>
+<ul class="ticks" style="color: #D5D8DF">
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>A heads-up when a client is down to one session, and when they run out</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>A warning a week before prepaid sessions expire</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Retainer balances in your weekly brief, lowest first</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Sell packages on your own store page, with promo codes</span></li>
+</ul>
+</div>
+</div>
+</section>
+
+<!-- TIME -->
+<section id="time" class="sec tint">
+<div class="wrap split">
+<div class="txt">
+<p class="eyebrow ink">Time</p>
+<h2 class="h2">Log time <span class="serif ink" style="font-size: 1.08em">the way you'd say it.</span></h2>
+<p class="body">&ldquo;Log 90 minutes on the Henderson matter, drafting the board summary.&rdquo; Chief records it against the client, rounds up to the tenth of an hour the way time is billed, and works out the amount at your rate. When you're ready, draw it from their retainer or put it on an invoice.</p>
+<ul class="ticks">
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Say 90m, 1.5h or 1:30. It's all the same to Chief.</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Every entry says what the work was, so the bill explains itself</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Billable or not, and written off when you choose</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Drawn from a retainer once, never twice</span></li>
+</ul>
+</div>
+<div class="vis">
+<div class="card" style="padding: 28px; display: flex; flex-direction: column" role="figure" aria-label="Time logged for a consulting client, starting with one said in a sentence. Sample">
+<div style="display: flex; justify-content: space-between; align-items: center; gap: 10px; padding-bottom: 16px"><span style="display: flex; flex-direction: column; gap: 2px"><b style="font-family: 'Inter Tight', sans-serif; font-size: 20px">Time · Henderson Co.</b><span style="font-size: 13px; color: #5A5E6B">$200 an hour · advisory retainer, 7 hours left</span></span><span class="mono" style="font-size: 11px; color: #5A5E6B">SAMPLE</span></div>
+<div style="align-self: flex-end; max-width: 88%; padding: 11px 15px; border-radius: 18px 18px 6px 18px; background: #0B0C11; color: #F5F6F8; font-size: 14.5px; line-height: 1.45">Log 90 minutes on the Henderson matter, drafting the board summary</div>
+<div style="display: flex; align-items: center; gap: 10px; margin-top: 10px; padding: 10px 14px; border-radius: 14px; background: #EEF8F1; border: 1px solid #CDEBD6; font-size: 13.5px; color: #14532D"><span class="chief-av" style="width: 20px; height: 20px"></span><span>Logged 1.5h for Henderson Co. · $300.00, drafting the board summary</span></div>
+<div class="ts-h" style="margin-top: 8px"><span>Date</span><span>Work</span><span>Hours</span><span>Amount</span></div>
+<div class="ts-r"><span class="mono" style="color: #5A5E6B">Oct 23</span><span class="ts-w">Drafting the board summary<span class="ts-k" style="background: #FDF3D7; color: #854D0E">Unbilled</span></span><span class="mono">1.5</span><span class="mono">$300.00</span></div>
+<div class="ts-r"><span class="mono" style="color: #5A5E6B">Oct 21</span><span class="ts-w">Call with the leadership team<span class="ts-k" style="background: #FDF3D7; color: #854D0E">Unbilled</span></span><span class="mono">1.0</span><span class="mono">$200.00</span></div>
+<div class="ts-r"><span class="mono" style="color: #5A5E6B">Oct 17</span><span class="ts-w">Reviewing the sales targets<span class="ts-k" style="background: #DCF5E3; color: #166534">Billed to retainer</span></span><span class="mono">1.0</span><span class="mono">$200.00</span></div>
+<div class="ts-r"><span class="mono" style="color: #5A5E6B">Oct 14</span><span class="ts-w">Working session on the hiring plan<span class="ts-k" style="background: #DCF5E3; color: #166534">Billed to retainer</span></span><span class="mono">2.0</span><span class="mono">$400.00</span></div>
+<div class="ts-r"><span class="mono" style="color: #5A5E6B">Oct 10</span><span class="ts-w">Travel to the Henderson office<span class="ts-k" style="background: #F1F1F4; color: #474B57">Not billable</span></span><span class="mono">0.6</span><span class="mono" style="color: #5A5E6B">&#8212;</span></div>
+<div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; margin-top: 14px; padding: 14px 16px; border-radius: 14px; background: #F4FBF6; border: 1px solid #DCF5E3">
+<span style="display: flex; flex-direction: column"><span style="font-size: 13px; color: #14532D">Unbilled for Henderson Co.</span><b class="mono" style="font-size: 16px; font-weight: 500; color: #0B0C11">2.5h · $500.00</b></span>
+<span style="display: flex; flex-wrap: wrap; gap: 8px"><span class="btn btn-p btn-s">Draw from retainer</span><span class="btn btn-s" style="border: 1px solid #B7DFC3; color: #14532D">Put on an invoice</span></span>
+</div>
+</div>
+</div>
+</div>
+</section>
+
+<!-- GETTING PAID, WITH CHIEF -->
+<section id="paid" class="sec" style="background: #07080B; overflow: hidden">
+<div class="aur" aria-hidden="true" style="opacity: 0.6"><i></i><i></i><i></i></div>
+<div class="wrap split" style="position: relative">
+<div class="txt">
+<p class="eyebrow" style="color: #86EFAC">Getting paid</p>
+<h2 class="h2">Chief knows <span class="serif glint" style="font-size: 1.08em">who owes what.</span></h2>
+<p class="body">Ask which invoices are overdue and who owes the most, and Chief answers from your real numbers. When one goes 30 days past due, it asks how you'd like to handle it and drafts the note for you to read. When a client pays, you hear about it, and the payment is already in your books.</p>
+<ul class="ticks" style="color: #D5D8DF">
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>A final notice, a payment plan, or a write-off: your call</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Nothing is texted or emailed until you say so</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>A heads-up the moment a client pays, with a thank-you a tap away</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Refunds, in full or in part, by the owner</span></li>
+</ul>
+</div>
+<div class="vis vs" style="min-height: 580px">
+<div class="vs-a" style="position: absolute; left: 0; top: 0; width: 70%; box-sizing: border-box; transform: rotate(-2deg); background: #FFFFFF; color: #0B0C11; border-radius: 6px; box-shadow: 0 40px 80px -30px rgba(0,0,0,0.7); padding: 24px 24px 14px; display: flex; flex-direction: column" role="figure" aria-label="Open invoices, with the overdue ones first. Sample">
+<div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; padding-bottom: 10px"><span style="display: flex; flex-direction: column; gap: 2px"><b style="font-family: 'Inter Tight', sans-serif; font-size: 16px">Who owes what</b><span style="font-size: 11.5px; color: #474B57">Reyes Coaching · as of October 23</span></span><span class="mono" style="font-size: 10.5px; color: #474B57">SAMPLE</span></div>
+<div class="ow-l"><span style="flex: 1; min-width: 0"><b style="font-weight: 600">Marcus Hale</b> · INV-2026-043</span><span style="font-size: 10.5px; font-weight: 600; padding: 2px 8px; border-radius: 999px; background: #FDE8E8; color: #B42318">34 days late</span><b class="mono" style="flex: 0 0 76px; text-align: right; font-weight: 500">$1,200.00</b></div>
+<div class="ow-l"><span style="flex: 1; min-width: 0"><b style="font-weight: 600">Okafor family business</b> · INV-2026-041</span><span style="font-size: 10.5px; font-weight: 600; padding: 2px 8px; border-radius: 999px; background: #FDF3D7; color: #854D0E">9 days late</span><b class="mono" style="flex: 0 0 76px; text-align: right; font-weight: 500">$450.00</b></div>
+<div class="ow-l"><span style="flex: 1; min-width: 0"><b style="font-weight: 600">Henderson Co.</b> · INV-2026-044</span><span style="font-size: 10.5px; font-weight: 600; padding: 2px 8px; border-radius: 999px; background: #F1F1F4; color: #474B57">Due Nov 15</span><b class="mono" style="flex: 0 0 76px; text-align: right; font-weight: 500">$2,000.00</b></div>
+<div class="ow-l" style="font-weight: 600"><span style="flex: 1">Open</span><b class="mono" style="font-weight: 600">$3,650.00</b></div>
+<span class="mono" style="font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: #474B57; padding: 12px 0 2px">Paid this week</span>
+<div class="ow-l"><span style="flex: 1; min-width: 0"><b style="font-weight: 600">Priya Shah</b> · INV-2026-045</span><span style="font-size: 10.5px; font-weight: 600; padding: 2px 8px; border-radius: 999px; background: #DCF5E3; color: #166534">Paid by card</span><b class="mono" style="flex: 0 0 76px; text-align: right; font-weight: 500">$1,500.00</b></div>
+<div class="ow-l"><span style="flex: 1; min-width: 0"><b style="font-weight: 600">Henderson Co.</b> · INV-2026-042</span><span style="font-size: 10.5px; font-weight: 600; padding: 2px 8px; border-radius: 999px; background: #DCF5E3; color: #166534">Paid by card</span><b class="mono" style="flex: 0 0 76px; text-align: right; font-weight: 500">$2,500.00</b></div>
+</div>
+<div class="chief vs-b" style="position: absolute; right: 0; bottom: 0; width: 62%">
+<div class="chief-in">
+<div style="display: flex; align-items: center; gap: 10px"><span class="chief-av"></span><span style="display: flex; flex-direction: column"><b style="font-size: 14px">Chief</b><span style="font-size: 12px; color: #959BA8">Billing · sample</span></span></div>
+<div style="display: flex; flex-direction: column; gap: 6px; font-size: 15px; line-height: 1.5">
+<span class="line" style="animation-delay: 0.2s">Two invoices are overdue, $1,650 in all. The bigger one is Marcus Hale's $1,200, now 34 days late.</span>
+<span class="line" style="animation-delay: 1.4s">I drafted a friendly final notice for Marcus. The Okafors are 9 days late, so a gentle reminder is enough.</span>
+<span class="line" style="animation-delay: 2.8s">Text invoice INV-2026-043 for $1,200 to Marcus, phone ending 4417? Nothing has been sent.<span class="caret"></span></span>
+</div>
+<div style="display: flex; flex-wrap: wrap; gap: 8px"><span class="btn btn-w btn-s">Send it</span><span class="btn btn-l btn-s">Read the notice first</span></div>
+</div>
+</div>
+</div>
+</div>
+</section>
+
+<!-- THE ROOMS NEXT DOOR -->
+<section class="sec" style="background: #07080B; padding-top: 40px; border-top: 1px solid #12141B">
+<div class="wrap" style="display: flex; flex-direction: column; gap: 32px">
+<div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; gap: 16px">
+<h2 class="h2" style="font-size: clamp(30px, 3.2vw, 44px)">The rooms <span class="serif" style="font-size: 1.08em; color: #D9D2FF">next door.</span></h2>
+<p class="body" style="max-width: 420px">Billing shares one list of clients with every other part of your practice.</p>
+</div>
+<div class="doors">
+<a href="/coaches/proposals-and-contracts" class="door"><span class="dglow" style="background: radial-gradient(circle, #8B5CF6 0%, rgba(139,92,246,0) 70%)"></span>
+<svg width="44" height="44" viewBox="0 0 48 48" aria-hidden="true" style="position: relative"><defs><clipPath id="gd1"><rect width="48" height="48" rx="12"></rect></clipPath></defs><g clip-path="url(#gd1)" stroke="rgba(255,255,255,0.55)" stroke-width="1.1" stroke-linejoin="round"><polygon points="0,0 28,0 17,21 0,15" fill="#8B5CF6"></polygon><polygon points="28,0 48,0 48,19 17,21" fill="#C4B5FD"></polygon><polygon points="0,15 17,21 9,48 0,48" fill="#6D28D9"></polygon><polygon points="17,21 48,19 48,48 9,48" fill="#8B5CF6"></polygon><polygon points="17,21 33,31 24,48 9,48" fill="#6D28D9" fill-opacity="0.6"></polygon></g><g transform="translate(12 12)" fill="none" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3h7l5 5v13H7z"></path><path d="M14 3v5h5"></path><path d="M10 14l2 2 4-4"></path></g></svg>
+<b>Proposals and Contracts</b><span>Agree the fee on paper first, with a proposal your client signs from their email.</span><em style="color: #C4B5FD">Go to Proposals and Contracts</em></a>
+<a href="/coaches/bookings" class="door"><span class="dglow" style="background: radial-gradient(circle, #3B82F6 0%, rgba(59,130,246,0) 70%)"></span>
+<svg width="44" height="44" viewBox="0 0 48 48" aria-hidden="true" style="position: relative"><defs><clipPath id="gd2"><rect width="48" height="48" rx="12"></rect></clipPath></defs><g clip-path="url(#gd2)" stroke="rgba(255,255,255,0.55)" stroke-width="1.1" stroke-linejoin="round"><polygon points="0,0 28,0 17,21 0,15" fill="#3B82F6"></polygon><polygon points="28,0 48,0 48,19 17,21" fill="#93C5FD"></polygon><polygon points="0,15 17,21 9,48 0,48" fill="#1D4ED8"></polygon><polygon points="17,21 48,19 48,48 9,48" fill="#3B82F6"></polygon><polygon points="17,21 33,31 24,48 9,48" fill="#1D4ED8" fill-opacity="0.6"></polygon></g><g transform="translate(12 12)" fill="none" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5" width="17" height="15.5" rx="2.5"></rect><path d="M3.5 10h17M8 3v4M16 3v4"></path></g></svg>
+<b>Bookings</b><span>Clients can pay when they book, on your own Stripe account.</span><em style="color: #93C5FD">Go to Bookings</em></a>
+<a href="/coaches/office-and-books" class="door"><span class="dglow" style="background: radial-gradient(circle, #94A3B8 0%, rgba(148,163,184,0) 70%)"></span>
+<svg width="44" height="44" viewBox="0 0 48 48" aria-hidden="true" style="position: relative"><defs><clipPath id="gd3"><rect width="48" height="48" rx="12"></rect></clipPath></defs><g clip-path="url(#gd3)" stroke="rgba(255,255,255,0.55)" stroke-width="1.1" stroke-linejoin="round"><polygon points="0,0 28,0 17,21 0,15" fill="#94A3B8"></polygon><polygon points="28,0 48,0 48,19 17,21" fill="#CBD5E1"></polygon><polygon points="0,15 17,21 9,48 0,48" fill="#475569"></polygon><polygon points="17,21 48,19 48,48 9,48" fill="#94A3B8"></polygon><polygon points="17,21 33,31 24,48 9,48" fill="#475569" fill-opacity="0.6"></polygon></g><g transform="translate(12 12)" fill="none" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h10a3 3 0 0 1 3 3v13H8a3 3 0 0 1-3-3z"></path><path d="M5 17a3 3 0 0 1 3-3h10"></path></g></svg>
+<b>Office and Books</b><span>Every invoice and payment posts to your books on its own.</span><em style="color: #CBD5E1">Go to Office and Books</em></a>
+</div>
+</div>
+</section>
+
+<!-- ON EVERY PLAN -->
+<section id="plans" class="sec light">
+<div class="wrap" style="display: flex; flex-direction: column; gap: 36px">
+<div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; gap: 20px 48px">
+<div style="display: flex; flex-direction: column; gap: 16px; max-width: 700px">
+<p class="eyebrow" style="color: #5A5E6B">Plans</p>
+<h2 class="h2">Billing comes with <span class="serif ink" style="font-size: 1.08em">every plan.</span></h2>
+</div>
+<p class="body" style="max-width: 440px">Invoices, pay links, packages, retainers and time are on every plan, with no platform fee. Stripe's own card fees apply. The bigger plans add the full books behind them.</p>
+</div>
+<div class="planrow">
+<div class="plan"><span class="pn">Starter</span><span class="pp">${{P_STARTER}} <small>a month</small></span><ul>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>Invoices by email or text, with pay links</li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>Packages, retainers and billable time</li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>1 login</li>
+</ul></div>
+<div class="plan mid"><span class="pn">Professional</span><span class="pp">${{P_PRO}} <small>a month</small></span><ul>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>Everything in Starter</li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>Invoice texts from your own number</li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>Full books, with month-end close</li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>3 logins</li>
+</ul></div>
+<div class="plan"><span class="pn">Solutionist</span><span class="pp">${{P_SOL}} <small>a month</small></span><ul>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>Everything in Professional</li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>A seat for your accountant</li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>7 logins</li>
+</ul></div>
+</div>
+<a href="/coaches#pricing" style="align-self: flex-start; font-weight: 600; color: #0B0C11">Compare every plan</a>
+</div>
+</section>
+
+<!-- CLOSING -->
+<section id="start" style="position: relative; overflow: hidden; background: #07080B">
+<div class="aur" aria-hidden="true"><i></i><i></i><i></i></div>
+<div class="floor" aria-hidden="true" style="height: 60%"></div>
+<div class="wrap" style="position: relative; padding-top: 150px; padding-bottom: 150px; display: flex; flex-direction: column; align-items: center; gap: 24px; text-align: center">
+<h2 class="h1" style="font-size: clamp(42px, 5.6vw, 84px); max-width: 960px">Do the work. <span class="serif glint" style="font-size: 1.06em">Get paid for all of it.</span></h2>
+<p class="lede">{{TRIAL_LINE}}</p>
+<a href="/start" class="btn btn-w">Start free</a>
+</div>
+</section>
+
+<!-- Footer -->
+<footer class="foot"><div class="wrap foot-in">
+<div style="display: flex; flex-direction: column; gap: 10px; max-width: 360px">
+<div style="display: flex; align-items: center; gap: 8px; color: #F5F6F8"><svg width="22" height="19" viewBox="8 36 496 424" aria-hidden="true"><g fill="url(#mkg)" stroke="#fff" stroke-width="8" stroke-opacity=".92"><polygon points="18,46 175,232 237,231 133,98 376,99 356,131 412,167 494,49"></polygon><polygon points="205,138 338,241 232,391 274,449 435,221 319,137"></polygon><polygon points="264,274 149,279 201,359"></polygon></g></svg><span style="font-family: 'Inter Tight', sans-serif; font-weight: 600; font-size: 17px">Solutionist</span></div>
+<p style="margin: 0; font-size: 14px">Everything a small business runs on, in one place, with Chief running it beside you.</p>
+</div>
+<nav aria-label="Coach and consultant products"><b>For coaches and consultants</b><a href="/coaches/bookings">Bookings</a><a href="/coaches/clients">Clients</a><a href="/coaches/proposals-and-contracts">Proposals and Contracts</a><a href="/coaches/billing-and-time">Billing and Time</a></nav>
+<nav aria-label="More coach and consultant products"><span aria-hidden="true" style="display: block; height: 21px"></span><a href="/coaches/courses-and-classes">Courses and Classes</a><a href="/coaches/marketing-and-website">Marketing and Website</a><a href="/coaches/office-and-books">Office and Books</a></nav>
+<nav aria-label="Company"><b>Solutionist</b><a href="/churches">For churches</a><a href="/coaches#pricing">Pricing</a><a href="/privacy">Privacy</a><a href="/terms">Terms</a></nav>
+</div></footer>
+
+</div>
+{{ANALYTICS}}
+</body>
+</html>

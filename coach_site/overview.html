@@ -1,0 +1,966 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>{{TITLE}}</title>
+<meta name="description" content="{{DESCRIPTION}}">
+<meta property="og:title" content="{{TITLE}}">
+<meta property="og:description" content="{{DESCRIPTION}}">
+<meta property="og:url" content="{{URL}}">
+<link rel="canonical" href="{{URL}}">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="The Solutionist System">
+<meta property="og:image" content="https://mysolutionist.app/assets/og.png?v=4">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="https://mysolutionist.app/assets/og.png?v=4">
+<link rel="icon" type="image/png" href="/favicon.png">
+<link rel="apple-touch-icon" href="/favicon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@300;400;500;600;700&amp;family=Inter:wght@400;500;600&amp;family=Instrument+Serif:ital@0;1&amp;family=JetBrains+Mono:wght@400;500&amp;family=Geist:wght@400..800&amp;family=Newsreader:ital,opsz,wght@0,6..72,400..600;1,6..72,400..600&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#07080B}
+a{color:#F5F6F8}a:hover{color:#C9BCFF}
+.serif{font-family:'Instrument Serif',Georgia,serif;font-style:italic;font-weight:400;letter-spacing:-0.01em}
+.glint{background:linear-gradient(100deg,#E040FB 0%,#9B7CFF 30%,#22D3EE 55%,#E040FB 80%,#9B7CFF 100%);background-size:220% 100%;-webkit-background-clip:text;background-clip:text;color:transparent;animation:glint 7s linear infinite}
+@keyframes glint{from{background-position:0% 50%}to{background-position:-220% 50%}}
+.mono{font-family:'JetBrains Mono',ui-monospace,monospace}
+.eyebrow{font-family:'JetBrains Mono',monospace;font-size:12px;letter-spacing:.18em;text-transform:uppercase}
+
+/* the main site's hero light: aurora, floor, blade, ribbon */
+.aur{position:absolute;inset:0;pointer-events:none}
+.aur i{position:absolute;border-radius:50%;mix-blend-mode:screen}
+.aur i:nth-child(1){width:62vw;height:62vw;right:-16vw;top:-30vw;background:radial-gradient(closest-side,rgba(224,64,251,.30),transparent 72%);animation:drift1 22s ease-in-out infinite alternate}
+.aur i:nth-child(2){width:54vw;height:54vw;right:6vw;top:6vw;background:radial-gradient(closest-side,rgba(124,92,255,.34),transparent 70%);animation:drift2 26s ease-in-out infinite alternate}
+.aur i:nth-child(3){width:58vw;height:58vw;left:-22vw;top:22vw;background:radial-gradient(closest-side,rgba(34,211,238,.20),transparent 70%);animation:drift3 30s ease-in-out infinite alternate}
+@keyframes drift1{to{transform:translate(-8vw,6vw) scale(1.1)}}
+@keyframes drift2{to{transform:translate(6vw,-4vw) scale(.92)}}
+@keyframes drift3{to{transform:translate(10vw,-6vw) scale(1.08)}}
+.floor{position:absolute;left:-30%;right:-30%;bottom:0;height:52%;pointer-events:none;background-image:linear-gradient(rgba(124,92,255,.16) 1px,transparent 1px),linear-gradient(90deg,rgba(124,92,255,.16) 1px,transparent 1px);background-size:72px 72px;transform:perspective(520px) rotateX(64deg);transform-origin:50% 100%;-webkit-mask-image:linear-gradient(to top,#000 0%,rgba(0,0,0,.6) 30%,transparent 80%);mask-image:linear-gradient(to top,#000 0%,rgba(0,0,0,.6) 30%,transparent 80%);animation:floor 6s linear infinite}
+@keyframes floor{to{background-position:0 72px,0 0}}
+.blade{position:absolute;top:-40%;left:0;width:2px;height:180%;pointer-events:none;background:linear-gradient(180deg,transparent,rgba(255,255,255,.95) 38%,rgba(255,255,255,.95) 62%,transparent);box-shadow:0 0 26px 6px rgba(46,125,255,.6),0 0 90px 24px rgba(34,211,238,.28);opacity:0;animation:blade 2.2s cubic-bezier(.2,.7,.2,1) .35s 1 both}
+@keyframes blade{0%{opacity:0;transform:translateX(-20vw) rotate(-30deg)}12%{opacity:1}80%{opacity:.9}100%{opacity:0;transform:translateX(120vw) rotate(-30deg)}}
+.ribbon{position:absolute;pointer-events:none;left:30%;right:-8%;top:-12%;bottom:-4%;-webkit-mask-image:linear-gradient(to top,transparent 0,transparent 9%,#000 26%);mask-image:linear-gradient(to top,transparent 0,transparent 9%,#000 26%);opacity:0;animation:ribin 2.6s ease .45s forwards}
+@keyframes ribin{to{opacity:1}}
+.ribbon .rb{position:absolute;inset:0}
+.ribbon svg{display:block;width:100%;height:100%;overflow:visible}
+.rb-sway{animation:sway 16s ease-in-out infinite alternate}
+@keyframes sway{to{transform:translate(-22px,14px) rotate(-1.4deg)}}
+.rb-glow{filter:blur(16px);opacity:.95}
+.run{fill:none;stroke:#fff;stroke-opacity:.55;stroke-linecap:round;stroke-dasharray:60 2100;animation:run 26s linear infinite}
+@keyframes run{from{stroke-dashoffset:2170}to{stroke-dashoffset:0}}
+
+/* the rotating line */
+.cyc{position:absolute;left:0;top:0;white-space:nowrap;opacity:0;animation:cyc 13s infinite both}
+@keyframes cyc{0%{opacity:0;transform:translateY(.3em);filter:blur(8px)}4%{opacity:1;transform:none;filter:blur(0)}18%{opacity:1;transform:none;filter:blur(0)}22%{opacity:0;transform:translateY(-.3em);filter:blur(8px)}100%{opacity:0}}
+
+/* the reel, exactly as the main site draws it */
+.tk-lbl{display:flex;align-items:center;justify-content:center;gap:14px;font:500 10.5px/1 'JetBrains Mono',monospace;letter-spacing:.2em;text-transform:uppercase;color:#5F6672;margin:0 0 14px}
+.tk-lbl::before,.tk-lbl::after{content:"";width:48px;height:1px;background:linear-gradient(90deg,transparent,rgba(255,255,255,.24))}
+.tk-lbl::after{transform:scaleX(-1)}
+.tk-view{overflow:hidden;padding:2px 0;-webkit-mask-image:linear-gradient(90deg,transparent,#000 12%,#000 88%,transparent);mask-image:linear-gradient(90deg,transparent,#000 12%,#000 88%,transparent)}
+.tk-track{display:flex;width:max-content;animation:mq 46s linear infinite}
+.tk-wrap:hover .tk-track{animation-play-state:paused}
+@keyframes mq{to{transform:translateX(-50%)}}
+.tkp{display:inline-flex;align-items:center;gap:10px;height:42px;margin-right:12px;padding:0 18px;border:1px solid rgba(255,255,255,.085);border-radius:999px;background:rgba(13,15,20,.6);color:#959BA8;font:500 14px/1 'Inter',sans-serif;white-space:nowrap}
+.tkp:hover{color:#F5F6F8;border-color:rgba(255,255,255,.22)}
+.tkp i{width:8px;height:8px;border-radius:50%;flex:none}
+
+/* devices */
+.bob{animation:bob 7s ease-in-out infinite}
+@keyframes bob{0%,100%{transform:translateY(0)}50%{transform:translateY(-12px)}}
+.lap-scr{background:#0B0C11;border:1px solid #2A2E3A;border-radius:16px 16px 6px 6px;padding:9px;box-shadow:0 60px 120px -30px rgba(40,20,120,.65),0 0 0 1px rgba(255,255,255,.03) inset}
+.lap-base{position:relative;height:16px;margin:0 -7%;border-radius:2px 2px 16px 16px;background:linear-gradient(180deg,#30333D,#16181E)}
+.lap-base::after{content:"";position:absolute;left:50%;top:0;width:18%;height:6px;margin-left:-9%;border-radius:0 0 8px 8px;background:#0E1015}
+.tab{background:#0B0C11;border:1px solid #2A2E3A;border-radius:26px;padding:11px;box-shadow:0 50px 100px -30px rgba(0,0,0,.7)}
+.ph{background:#0B0C11;border:1px solid #2A2E3A;border-radius:42px;padding:9px;box-shadow:0 50px 100px -30px rgba(0,0,0,.75)}
+.scr{border-radius:9px;overflow:hidden}
+
+/* the office app, drawn small */
+.oa{display:flex;height:100%;background:#0D0F14;color:#E4E6EB;font:12px/1.4 'Inter',sans-serif}
+.oa-side{flex:0 0 22%;background:#0A0B0F;border-right:1px solid #1B1E28;padding:10px 8px;display:flex;flex-direction:column;gap:2px}
+.oa-side span{display:flex;align-items:center;gap:7px;padding:6px 8px;border-radius:7px;color:#8D93A1;font-size:11px}
+.oa-side span.on{background:rgba(124,92,255,.16);color:#F5F6F8}
+.oa-side b{display:inline-block;width:8px;height:8px;border-radius:3px}
+.oa-main{flex:1;min-width:0;padding:12px 14px;display:flex;flex-direction:column;gap:9px}
+.oa-row{display:flex;align-items:center;gap:8px;padding:7px 9px;border-radius:8px;background:#12141B;border:1px solid #1B1E28;font-size:11px}
+.oa-pill{font-size:9.5px;font-weight:600;padding:2px 7px;border-radius:999px;white-space:nowrap}
+.oa-stat{flex:1;min-width:0;padding:8px 10px;border-radius:9px;background:#12141B;border:1px solid #1B1E28;display:flex;flex-direction:column;gap:2px}
+.oa-stat b{font:600 17px/1 'Inter Tight',sans-serif;color:#F5F6F8}
+.oa-stat span{font-size:9.5px;color:#8D93A1}
+
+/* the member app, drawn the way it is built */
+.ma{background:#000;color:#f5f5f7;font-family:'Geist',sans-serif;border-radius:33px;overflow:hidden;display:flex;flex-direction:column}
+.ma-in{padding:16px 14px 10px;display:flex;flex-direction:column;gap:10px;flex:1}
+.ma-top{display:flex;justify-content:space-between;align-items:center}
+.ma-mark{width:26px;height:26px;border-radius:8px;display:grid;place-items:center;font-weight:800;font-size:10px;color:#fff}
+.ma-me{width:26px;height:26px;border-radius:50%;background:#2f2f33;display:grid;place-items:center;font-size:10px;font-weight:700;color:#a8a8ae}
+.ma-date{font-size:9px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;color:#7a7a80}
+.ma-hello{font-size:21px;font-weight:720;letter-spacing:-.035em;line-height:1.06}
+.ma-hello em,.ma-lt em{font-family:'Newsreader',serif;font-style:italic;font-weight:500;letter-spacing:-.02em}
+.ma-lt{font-size:24px;font-weight:720;letter-spacing:-.035em;line-height:1.05}
+.ma-hero{position:relative;border-radius:18px;overflow:hidden;aspect-ratio:350/285;color:#fff;isolation:isolate}
+.ma-hero::after{content:"";position:absolute;inset:0;z-index:-1;background:linear-gradient(180deg,rgba(0,0,0,0) 30%,rgba(0,0,0,.25) 50%,rgba(0,0,0,.85) 100%)}
+.ma-gen{position:absolute;inset:0;z-index:-2;overflow:hidden}
+.ma-ghost{position:absolute;right:-6px;bottom:-26px;font-size:130px;font-weight:800;letter-spacing:-.06em;line-height:1;color:#fff;opacity:.12}
+.ma-hero-in{position:absolute;left:0;right:0;bottom:0;padding:13px;display:flex;flex-direction:column;gap:6px}
+.ma-when{display:inline-flex;align-self:flex-start;align-items:center;gap:5px;height:20px;padding:0 8px;border-radius:999px;background:#ff3b30;font-size:9px;font-weight:600}
+.ma-hero h4{margin:0;font-size:19px;font-weight:720;letter-spacing:-.035em;line-height:1.04}
+.ma-hero p{margin:0;font-size:10px;color:rgba(255,255,255,.8)}
+.ma-btn{display:inline-flex;align-items:center;justify-content:center;height:30px;padding:0 13px;border-radius:999px;font-size:10.5px;font-weight:600}
+.ma-quick{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px}
+.ma-quick span{height:44px;border-radius:12px;background:#161618;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;font-size:8.5px;font-weight:550;color:#a8a8ae}
+.ma-card{background:#161618;border-radius:14px;padding:11px}
+.ma-kick{font-size:8.5px;font-weight:600;letter-spacing:.07em;text-transform:uppercase}
+.ma-tabs{display:flex;justify-content:space-around;padding:8px 6px 12px;border-top:1px solid #2c2c30;background:rgba(0,0,0,.92)}
+.ma-tabs span{display:flex;flex-direction:column;align-items:center;gap:2px;font-size:8px;color:#7a7a80}
+.ma-tabs svg{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.hl{background-image:linear-gradient(rgba(227,169,43,.38),rgba(227,169,43,.38));background-repeat:no-repeat;background-size:0% 100%;animation:hl 7s ease infinite}
+@keyframes hl{0%,12%{background-size:0% 100%}40%,85%{background-size:100% 100%}100%{background-size:0% 100%}}
+.toast{animation:toast 9s cubic-bezier(.2,.8,.2,1) infinite both}
+@keyframes toast{0%,10%{transform:translateY(-140%);opacity:0}16%,52%{transform:none;opacity:1}60%,100%{transform:translateY(-140%);opacity:0}}
+.pollbar{transform-origin:0 50%;animation:poll 6s cubic-bezier(.2,.8,.2,1) infinite}
+@keyframes poll{0%,8%{transform:scaleX(0)}30%,88%{transform:scaleX(1)}100%{transform:scaleX(0)}}
+
+/* the kids tablet, in the kids palette */
+.kd{background:#fff8ec;color:#2b1d0e;font-family:'Geist',sans-serif;height:100%;padding:12px 14px;display:flex;flex-direction:column;gap:8px;border-radius:15px}
+.kd-row{display:flex;align-items:center;gap:8px;padding:7px 9px;border-radius:10px;background:#fff;border:1px solid #f1e3c7;font-size:10px}
+.kd-box{width:14px;height:14px;border-radius:4px;background:#f28c28;display:grid;place-items:center;flex:none}
+
+/* bento */
+.bento{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px}
+.t2x2{grid-column:span 2;grid-row:span 2}.t2x1{grid-column:span 2}
+@media (max-width:980px){.bento{grid-template-columns:repeat(2,minmax(0,1fr))}.t2x2{grid-column:span 2;grid-row:span 1}}
+@media (max-width:600px){.bento{grid-template-columns:minmax(0,1fr)}.t2x2,.t2x1{grid-column:span 1}}
+.tile{position:relative;overflow:hidden;text-decoration:none;color:#F5F6F8;background:#0D0F14;border:1px solid #1F2330;border-radius:22px;padding:26px;display:flex;flex-direction:column;gap:12px;min-height:240px}
+.tile:hover{border-color:#343A4C}
+.glow{position:absolute;width:300px;height:300px;border-radius:50%;top:-140px;right:-110px;opacity:.4;animation:breathe 8s ease-in-out infinite;pointer-events:none}
+@keyframes breathe{0%,100%{transform:scale(.9);opacity:.28}50%{transform:scale(1.12);opacity:.5}}
+.ico{position:relative;width:44px;height:44px;border-radius:12px;display:flex;align-items:center;justify-content:center;flex:none}
+.tname{position:relative;font:600 22px/1.15 'Inter Tight',sans-serif;letter-spacing:-.015em}
+.tline{position:relative;font-size:14.5px;color:#A9AEB9}
+.tgo{position:relative;margin-top:auto;font-size:14px;font-weight:600;text-decoration:underline;text-decoration-thickness:1.5px;text-underline-offset:5px}
+.tile:hover .tgo{text-decoration-thickness:2.5px}
+footer nav a{text-decoration:underline !important;text-decoration-color:rgba(201,205,214,.45) !important;text-underline-offset:4px}
+footer nav a:hover{text-decoration-color:#C9CDD6 !important}
+.mini{position:relative;border-radius:14px;background:rgba(255,255,255,.03);border:1px solid #1F2330;padding:12px;display:flex;flex-direction:column;gap:7px;font-size:12px}
+.ping{position:relative;display:inline-block;width:7px;height:7px;border-radius:50%;flex:none}
+.ping::after{content:"";position:absolute;inset:0;border-radius:50%;background:inherit;animation:ping 1.8s cubic-bezier(0,0,.2,1) infinite}
+@keyframes ping{0%{transform:scale(1);opacity:.75}100%{transform:scale(3);opacity:0}}
+.dots span{display:inline-block;width:5px;height:5px;border-radius:50%;background:#93C5FD;margin-right:3px;animation:dot 1.2s ease-in-out infinite}
+.dots span:nth-child(2){animation-delay:.15s}.dots span:nth-child(3){animation-delay:.3s}
+@keyframes dot{0%,60%,100%{transform:translateY(0);opacity:.5}30%{transform:translateY(-4px);opacity:1}}
+.grow{transform-origin:0 50%;animation:growx 1.4s cubic-bezier(.2,.8,.2,1) .3s both}
+@keyframes growx{from{transform:scaleX(0)}to{transform:scaleX(1)}}
+.feed{opacity:1}
+
+/* journey */
+.dot-travel{position:absolute;top:50%;width:18px;height:18px;margin:-9px 0 0 -9px;border-radius:50%;background:linear-gradient(135deg,#E040FB,#7C5CFF 55%,#22D3EE);box-shadow:0 0 18px rgba(124,92,255,.6);animation:travel 10s cubic-bezier(.6,0,.4,1) infinite}
+@keyframes travel{0%{left:0%;opacity:1}80%{left:100%;opacity:1}90%,100%{left:100%;opacity:0}}
+.stop{position:absolute;top:50%;width:22px;height:22px;margin:-11px 0 0 -11px;border-radius:50%;border:3px solid #FBF9F5;animation:lit 10s ease infinite both}
+@keyframes lit{0%{transform:scale(1);box-shadow:0 0 0 0 rgba(0,0,0,0)}4%,16%{transform:scale(1.35);box-shadow:0 0 0 10px var(--halo)}24%,100%{transform:scale(1);box-shadow:0 0 0 0 rgba(0,0,0,0)}}
+
+/* chief's note */
+.line{opacity:0;animation:line 12s ease infinite both}
+@keyframes line{0%{opacity:0;transform:translateY(6px)}5%,84%{opacity:1;transform:none}92%,100%{opacity:0}}
+.caret{display:inline-block;width:2px;height:1.05em;background:#B3A6FF;vertical-align:-2px;margin-left:2px;animation:caret 1s steps(1) infinite}
+@keyframes caret{50%{opacity:0}}
+
+/* hero devices, still: a laptop, a tablet and a phone */
+.dv-lid{position:relative;background:linear-gradient(180deg,#1B1D24,#0C0D11);border:1px solid #30333D;border-radius:15px 15px 5px 5px;padding:8px;box-shadow:0 60px 110px -30px rgba(40,20,120,.7),0 0 0 1px rgba(255,255,255,.04) inset}
+.dv-lid::before{content:"";position:absolute;left:50%;top:3px;width:4px;height:4px;margin-left:-2px;border-radius:50%;background:#2C2F38}
+.dv-glass{position:absolute;left:8px;top:8px;right:8px;bottom:8px;border-radius:7px;pointer-events:none;background:linear-gradient(125deg,rgba(255,255,255,.07) 0%,rgba(255,255,255,0) 34%);z-index:4}
+.dv-base{position:relative;height:13px;margin:0 -8%;border-radius:1px 1px 13px 13px;background:linear-gradient(180deg,#434651 0%,#262830 40%,#121419 100%);box-shadow:0 22px 34px -12px rgba(0,0,0,.85)}
+.dv-base::after{content:"";position:absolute;left:50%;top:0;width:16%;height:5px;margin-left:-8%;border-radius:0 0 7px 7px;background:#16181E}
+.dv-tab{position:relative;background:linear-gradient(180deg,#1B1D24,#0C0D11);border:1px solid #30333D;border-radius:24px;padding:10px;box-shadow:0 50px 90px -24px rgba(0,0,0,.8)}
+.dv-tab::before{content:"";position:absolute;left:4px;top:50%;width:4px;height:4px;margin-top:-2px;border-radius:50%;background:#2C2F38}
+.dv-ph{position:relative;background:linear-gradient(180deg,#22242B,#0C0D11);border:1px solid #3A3D47;border-radius:40px;padding:7px;box-shadow:0 50px 90px -24px rgba(0,0,0,.85),0 0 0 1px rgba(255,255,255,.05) inset}
+.dv-island{position:absolute;left:50%;top:14px;width:30%;height:15px;margin-left:-15%;border-radius:999px;background:#000;z-index:6}
+.ow{display:flex;flex-direction:column;height:100%;background:#0E1016;color:#E4E6EB;font:9px/1.35 'Inter',sans-serif;border-radius:7px;overflow:hidden}
+.ow-top{display:flex;align-items:center;gap:8px;height:24px;flex:none;padding:0 10px;border-bottom:1px solid #1B1E28;background:#0A0B10}
+.ow-body{flex:1;display:flex;min-height:0}
+.ow-side{flex:0 0 19%;padding:6px 6px;border-right:1px solid #1B1E28;background:#0A0B10;display:flex;flex-direction:column;gap:1px}
+.ow-grp{font:500 6.5px/1 'JetBrains Mono',monospace;letter-spacing:.14em;text-transform:uppercase;color:#5F6672;padding:7px 6px 4px}
+.ow-nav{display:flex;align-items:center;gap:6px;padding:4px 6px;border-radius:5px;color:#8D93A1;font-size:8.5px}
+.ow-nav.on{background:rgba(124,92,255,.16);color:#F5F6F8}
+.ow-nav i{width:6px;height:6px;border-radius:2px;flex:none}
+.ow-main{flex:1;min-width:0;padding:10px 12px;display:flex;flex-direction:column;gap:7px}
+.ow-card{background:#13151C;border:1px solid #1E2130;border-radius:8px;padding:7px 9px;display:flex;flex-direction:column;gap:3px;min-width:0}
+.ow-k{font:500 6.5px/1 'JetBrains Mono',monospace;letter-spacing:.12em;text-transform:uppercase}
+.ow-n{font:600 15px/1 'Inter Tight',sans-serif;color:#F5F6F8;letter-spacing:-.02em}
+.ow-s{font-size:7.5px;color:#8D93A1}
+.ow-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}
+.ow-av{width:13px;height:13px;border-radius:50%;border:1.5px solid #13151C;margin-left:-4px;display:inline-block}
+.k2{background:#fff8ec;color:#2b1d0e;font-family:'Geist',sans-serif;height:100%;border-radius:15px;overflow:hidden;display:flex;flex-direction:column}
+.k2-top{display:flex;align-items:center;gap:8px;padding:9px 12px;background:#fff;border-bottom:1px solid #f1e3c7}
+.k2-kid{display:flex;align-items:center;gap:8px;padding:7px 9px;border-radius:11px;background:#fff;border:1.5px solid #f28c28}
+.k2-face{width:24px;height:24px;border-radius:50%;display:grid;place-items:center;font-size:10px;font-weight:750;flex:none}
+.k2-tog{margin-left:auto;width:24px;height:14px;border-radius:999px;background:#f28c28;position:relative;flex:none}
+.k2-tog::after{content:"";position:absolute;right:2px;top:2px;width:10px;height:10px;border-radius:50%;background:#fff}
+.dv-ph .ma-in{padding-top:32px}
+.ma-quick svg{width:15px;height:15px;fill:none;stroke:#f5f5f7;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.lv-chat{display:flex;gap:7px;align-items:flex-start}
+.lv-av{width:20px;height:20px;border-radius:50%;display:grid;place-items:center;font-size:7.5px;font-weight:700;color:#fff;flex:none}
+@media (max-width:760px){
+.stage{aspect-ratio:auto !important;display:flex;justify-content:center}
+.st-lap,.st-tab{display:none}
+.st-ph{position:relative !important;right:auto !important;bottom:auto !important;width:min(290px,80%) !important}
+}
+@media (max-width:760px){.mapp-vis{height:auto !important;aspect-ratio:1/1.12}}
+.chatin{animation:chatin 8s ease infinite both}
+@keyframes chatin{0%,30%{opacity:0;transform:translateY(8px)}38%,92%{opacity:1;transform:none}100%{opacity:0}}
+
+/* pricing, in the main site's cards */
+.plans{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;align-items:stretch}
+@media (max-width:980px){.plans{grid-template-columns:minmax(0,1fr)}.pc.mid{transform:none !important}}
+.pc{position:relative;display:flex;flex-direction:column;padding:28px 28px 26px;border-radius:28px;background:#FFFFFF;color:#0B0C11;border:1px solid rgba(11,12,17,.12);box-shadow:0 30px 60px -40px rgba(20,16,60,.35)}
+.pc>*{position:relative;z-index:1}
+.pc.mid{background:#0B0D12;color:#F5F6F8;border-color:transparent;box-shadow:0 70px 130px -40px rgba(60,40,160,.7);transform:translateY(-16px)}
+.pc.mid::before{content:"";position:absolute;inset:0;z-index:2;border-radius:inherit;padding:1px;background:linear-gradient(140deg,#E040FB,rgba(255,255,255,.1) 35%,rgba(255,255,255,.05) 65%,#22D3EE);-webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask-composite:exclude;pointer-events:none}
+.pc.mid::after{content:"";position:absolute;inset:0;z-index:0;border-radius:inherit;pointer-events:none;background:radial-gradient(90% 46% at 100% 0%,rgba(124,92,255,.34),transparent 62%),radial-gradient(70% 40% at 0% 100%,rgba(34,211,238,.13),transparent 60%)}
+.pname{font:600 12px/1 'JetBrains Mono',monospace;letter-spacing:.18em;text-transform:uppercase}
+.prib{display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 10px;border-radius:999px;font:500 10.5px/1 'JetBrains Mono',monospace;letter-spacing:.05em;color:#E6E0FF;background:rgba(124,92,255,.2);border:1px solid rgba(124,92,255,.55)}
+.prib::before{content:"";width:6px;height:6px;border-radius:50%;background:#C9BCFF;box-shadow:0 0 8px #C9BCFF}
+.pz{display:flex;align-items:flex-end;gap:8px;margin-top:24px}
+.pz b{font:300 clamp(58px,5.2vw,80px)/.78 'Inter Tight',sans-serif;letter-spacing:-.065em;font-variant-numeric:tabular-nums}
+.pz>span{padding-bottom:2px;font-size:15px;color:#5A5E6B}
+.mid .pz>span,.mid .pbl,.mid .pds,.mid .pinc,.mid .mtr small,.mid .mtr .mrow span,.mid .dep{color:#959BA8}
+.pbl{margin-top:12px;font:400 12px/1 'JetBrains Mono',monospace;color:#5A5E6B}
+.pds{margin-top:16px;font-size:15px;line-height:1.55;color:#5A5E6B}
+.mtr{margin-top:20px;padding:15px 16px;border-radius:16px;background:#F1F1F4;border:1px solid rgba(11,12,17,.12)}
+.mid .mtr{background:rgba(255,255,255,.045);border-color:rgba(255,255,255,.085)}
+.mrow{display:flex;justify-content:space-between;align-items:baseline;gap:10px}
+.mrow b{font:600 22px/1 'Inter Tight',sans-serif;letter-spacing:-.02em}
+.mrow span{font:500 10px/1 'JetBrains Mono',monospace;letter-spacing:.12em;text-transform:uppercase;color:#5A5E6B}
+.mbar{margin-top:11px;height:8px;border-radius:999px;background:rgba(11,12,17,.08);overflow:hidden}
+.mid .mbar{background:rgba(255,255,255,.08)}
+.mbar i{display:block;height:100%;border-radius:inherit;background:linear-gradient(90deg,#E040FB,#7C5CFF,#22D3EE);transform-origin:left;animation:growx 1.4s cubic-bezier(.2,.8,.2,1) .4s both}
+.mtr small{display:block;margin-top:10px;font-size:12.5px;line-height:1.45;color:#5A5E6B}
+.dep{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-top:12px;padding:0 2px;font-size:12.5px;color:#5A5E6B}
+.dep b{color:#0B0C11;font-weight:600}.mid .dep b{color:#fff}
+.dep .dd{display:flex;gap:4px}.dep .dd i{width:20px;height:6px;border-radius:3px;background:rgba(11,12,17,.12)}.dep .dd i.on{background:#7C5CFF}
+.mid .dep .dd i{background:rgba(255,255,255,.14)}.mid .dep .dd i.on{background:#B9A8FF}
+.pinc{margin-top:22px;font:500 10.5px/1 'JetBrains Mono',monospace;letter-spacing:.14em;text-transform:uppercase;color:#5A5E6B}
+.pc ul{list-style:none;display:grid;gap:11px;margin:14px 0 26px;padding:0}
+.pc li{display:grid;grid-template-columns:18px minmax(0,1fr);gap:10px;font-size:14.5px;line-height:1.4}
+.pc li svg{width:18px;height:18px;margin-top:1px;fill:none;stroke:#7C5CFF;stroke-width:2.4;stroke-linecap:round;stroke-linejoin:round}
+.mid li svg{stroke:#B9A8FF}
+.pbtn{margin-top:auto;display:flex;align-items:center;justify-content:center;height:50px;border-radius:999px;font-weight:600;font-size:15px;text-decoration:none}
+.seat{display:flex;align-items:center;flex-wrap:wrap;gap:10px 16px;padding:16px 20px;border-radius:18px;background:#FFFFFF;border:1px solid rgba(11,12,17,.12);text-decoration:none;color:#0B0C11}
+.seat:hover{border-color:rgba(124,92,255,.4);box-shadow:0 20px 40px -24px rgba(124,92,255,.6)}
+.seat .sq{width:38px;height:24px;border-radius:6px;background:conic-gradient(from 200deg at 30% 30%,#E040FB,#7C5CFF,#22D3EE,#2E7DFF,#E040FB);box-shadow:0 6px 16px -6px rgba(124,92,255,.9);flex:none}
+
+@media (prefers-reduced-motion: reduce){
+.aur i,.floor,.rb-sway,.run,.glint,.tk-track,.bob,.glow,.ping::after,.dots span,.hl,.toast,.pollbar,.dot-travel,.stop,.caret{animation:none !important}
+.blade{display:none}
+.ribbon,.grow,.mbar i,.feed,.line,.chatin{animation:none !important;opacity:1}
+.cyc{animation:none !important;opacity:0}.cyc.first{opacity:1}
+}
+/* coaches: on a phone the drafted reminder sits under the laptop, not over it */
+@media (max-width:760px){.cc-pad{padding-bottom:0 !important}.cc-float{position:relative !important;right:auto !important;bottom:auto !important;width:auto !important;margin-top:18px}}
+.bt[aria-pressed="true"]{background:#FFFFFF;color:#0B0C11;box-shadow:0 2px 8px rgba(11,12,17,.12)}
+.bt[aria-pressed="false"]{background:transparent;color:#5A5E6B}
+/* the Products menu in the coaches header: every page of the section, one click away */
+.pmenu{position:relative}
+.pmenu summary{list-style:none;cursor:pointer;display:flex;align-items:center;gap:6px;color:#E4E6EB}
+.pmenu summary::-webkit-details-marker{display:none}
+.pmenu[open] summary svg{transform:rotate(180deg)}
+.pmenu-panel{position:absolute;right:0;top:calc(100% + 12px);z-index:50;width:min(560px,92vw);display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px;padding:10px;border-radius:18px;background:rgba(13,15,20,.97);border:1px solid #262A36;box-shadow:0 30px 80px rgba(0,0,0,.6)}
+@media (max-width:640px){.pmenu-panel{grid-template-columns:minmax(0,1fr);right:auto;left:0}}
+.pmenu-panel a{display:grid;grid-template-columns:12px minmax(0,1fr);gap:2px 10px;align-items:center;padding:10px 12px;border-radius:12px;text-decoration:none;color:#F5F6F8}
+.pmenu-panel a:hover,.pmenu-panel a[aria-current="page"]{background:rgba(255,255,255,.06)}
+.pmenu-panel i{width:10px;height:10px;border-radius:3px;grid-row:span 2}
+.pmenu-panel b{font-weight:600;font-size:14.5px}
+.pmenu-panel span{grid-column:2;font-size:12.5px;color:#959BA8}
+</style>
+{{PIXEL}}
+</head>
+<body>
+<div style="font-family: 'Inter', ui-sans-serif, system-ui, sans-serif; color: #F5F6F8; background: #07080B; line-height: 1.55; -webkit-font-smoothing: antialiased; overflow: hidden">
+
+<!-- The Solutionist frame -->
+<div style="background: #000000; color: #C9CDD6; font-size: 13px; border-bottom: 1px solid #15171E">
+<div style="max-width: 1240px; margin: 0 auto; padding: 9px 32px; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 6px 24px">
+<a href="#top" style="display: flex; align-items: center; gap: 8px; color: #F5F6F8; text-decoration: none">
+<svg width="20" height="17" viewBox="8 36 496 424" aria-hidden="true"><defs><linearGradient id="mkg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#E040FB"></stop><stop offset=".55" stop-color="#7C5CFF"></stop><stop offset="1" stop-color="#22D3EE"></stop></linearGradient></defs><g fill="url(#mkg)" stroke="#fff" stroke-width="8" stroke-opacity=".92"><polygon points="18,46 175,232 237,231 133,98 376,99 356,131 412,167 494,49"></polygon><polygon points="205,138 338,241 232,391 274,449 435,221 319,137"></polygon><polygon points="264,274 149,279 201,359"></polygon></g></svg>
+<span style="font-weight: 600">Solutionist</span>
+</a>
+<nav aria-label="Solutionist" style="display: flex; flex-wrap: wrap; gap: 6px 22px">
+<a href="/churches" style="color: #C9CDD6; text-decoration: none">For churches</a>
+<a href="/" style="color: #C9CDD6; text-decoration: none">All of Solutionist</a>
+<a href="{{APP_URL}}" style="color: #F5F6F8; text-decoration: none">Sign in</a>
+</nav>
+</div>
+</div>
+
+<!-- HERO -->
+<section id="top" style="position: relative; background: #07080B; overflow: hidden">
+<div class="aur" aria-hidden="true"><i></i><i></i><i></i></div>
+<div class="floor" aria-hidden="true"></div>
+<div class="blade" aria-hidden="true"></div>
+<div class="ribbon" aria-hidden="true">
+<div class="rb rb-sway">
+<div class="rb rb-glow"><svg viewBox="0 0 1200 1000" preserveAspectRatio="xMidYMid slice" fill="none"><defs><linearGradient id="rg0" gradientUnits="userSpaceOnUse" x1="120" y1="1000" x2="1200" y2="0"><stop offset="0" stop-color="#22D3EE" stop-opacity="0"></stop><stop offset=".22" stop-color="#22D3EE" stop-opacity=".7"></stop><stop offset=".48" stop-color="#7C5CFF"></stop><stop offset=".74" stop-color="#E040FB"></stop><stop offset=".92" stop-color="#FFC2F5"></stop><stop offset="1" stop-color="#fff" stop-opacity="0"></stop></linearGradient><linearGradient id="rg1" gradientUnits="userSpaceOnUse" x1="120" y1="1000" x2="1200" y2="0"><stop offset="0" stop-color="#2E7DFF" stop-opacity="0"></stop><stop offset=".26" stop-color="#2E7DFF" stop-opacity=".7"></stop><stop offset=".55" stop-color="#22D3EE"></stop><stop offset=".8" stop-color="#7C5CFF"></stop><stop offset="1" stop-color="#E040FB" stop-opacity="0"></stop></linearGradient><linearGradient id="rg2" gradientUnits="userSpaceOnUse" x1="120" y1="1000" x2="1200" y2="0"><stop offset="0" stop-color="#7C5CFF" stop-opacity="0"></stop><stop offset=".3" stop-color="#E040FB" stop-opacity=".6"></stop><stop offset=".6" stop-color="#FF8AD8"></stop><stop offset=".86" stop-color="#FFFFFF" stop-opacity=".9"></stop><stop offset="1" stop-color="#22D3EE" stop-opacity="0"></stop></linearGradient></defs><path d="M-66 1076 C318 930 529 538 1279 33" stroke="url(#rg0)" stroke-width="26" stroke-opacity=".32"></path><path d="M-59 1081 C297 941 564 563 1303 -50" stroke="url(#rg1)" stroke-width="40" stroke-opacity=".32"></path><path d="M-54 1084 C282 950 591 582 1321 -113" stroke="url(#rg2)" stroke-width="22" stroke-opacity=".32"></path></svg></div>
+<div class="rb"><svg viewBox="0 0 1200 1000" preserveAspectRatio="xMidYMid slice" fill="none"><path d="M-85 1065 C370 900 440 475 1220 240" stroke="url(#rg0)" stroke-width="0.35" stroke-opacity="0.08"></path><path d="M-83 1066 C365 903 449 481 1226 219" stroke="url(#rg1)" stroke-width="0.35" stroke-opacity="0.09"></path><path d="M-81 1067 C360 906 458 488 1232 199" stroke="url(#rg2)" stroke-width="0.36" stroke-opacity="0.12"></path><path d="M-79 1068 C354 909 467 494 1238 178" stroke="url(#rg0)" stroke-width="0.37" stroke-opacity="0.15"></path><path d="M-78 1069 C349 912 476 500 1244 157" stroke="url(#rg1)" stroke-width="0.40" stroke-opacity="0.19"></path><path d="M-76 1071 C344 915 484 506 1250 136" stroke="url(#rg2)" stroke-width="0.45" stroke-opacity="0.24"></path><path d="M-74 1072 C339 918 493 513 1256 116" stroke="url(#rg0)" stroke-width="0.52" stroke-opacity="0.30"></path><path d="M-72 1073 C334 921 502 519 1261 95" stroke="url(#rg1)" stroke-width="0.61" stroke-opacity="0.36"></path><path d="M-70 1074 C329 924 511 525 1267 74" stroke="url(#rg2)" stroke-width="0.75" stroke-opacity="0.43"></path><path d="M-68 1075 C323 927 520 532 1273 53" stroke="url(#rg0)" stroke-width="0.91" stroke-opacity="0.50"></path><path d="M-66 1076 C318 930 529 538 1279 33" stroke="url(#rg1)" stroke-width="1.12" stroke-opacity="0.57"></path><path d="M-65 1077 C313 933 538 544 1285 12" stroke="url(#rg2)" stroke-width="1.38" stroke-opacity="0.66"></path><path d="M-63 1078 C308 936 547 551 1291 -9" stroke="url(#rg0)" stroke-width="1.68" stroke-opacity="0.74"></path><path d="M-61 1079 C303 939 556 557 1297 -30" stroke="url(#rg1)" stroke-width="2.05" stroke-opacity="0.83"></path><path d="M-59 1081 C297 941 564 563 1303 -50" stroke="url(#rg2)" stroke-width="2.05" stroke-opacity="0.83"></path><path d="M-57 1082 C292 944 573 569 1309 -71" stroke="url(#rg0)" stroke-width="1.68" stroke-opacity="0.74"></path><path d="M-55 1083 C287 947 582 576 1315 -92" stroke="url(#rg1)" stroke-width="1.38" stroke-opacity="0.66"></path><path d="M-54 1084 C282 950 591 582 1321 -113" stroke="url(#rg2)" stroke-width="1.12" stroke-opacity="0.57"></path><path d="M-52 1085 C277 953 600 588 1327 -133" stroke="url(#rg0)" stroke-width="0.91" stroke-opacity="0.50"></path><path d="M-50 1086 C271 956 609 595 1333 -154" stroke="url(#rg1)" stroke-width="0.75" stroke-opacity="0.43"></path><path d="M-48 1087 C266 959 618 601 1339 -175" stroke="url(#rg2)" stroke-width="0.61" stroke-opacity="0.36"></path><path d="M-46 1088 C261 962 627 607 1344 -196" stroke="url(#rg0)" stroke-width="0.52" stroke-opacity="0.30"></path><path d="M-44 1089 C256 965 636 614 1350 -216" stroke="url(#rg1)" stroke-width="0.45" stroke-opacity="0.24"></path><path d="M-42 1091 C251 968 644 620 1356 -237" stroke="url(#rg2)" stroke-width="0.40" stroke-opacity="0.19"></path><path d="M-41 1092 C246 971 653 626 1362 -258" stroke="url(#rg0)" stroke-width="0.37" stroke-opacity="0.15"></path><path d="M-39 1093 C240 974 662 632 1368 -279" stroke="url(#rg1)" stroke-width="0.36" stroke-opacity="0.12"></path><path d="M-37 1094 C235 977 671 639 1374 -299" stroke="url(#rg2)" stroke-width="0.35" stroke-opacity="0.09"></path><path d="M-35 1095 C230 980 680 645 1380 -320" stroke="url(#rg0)" stroke-width="0.35" stroke-opacity="0.08"></path><path class="run" d="M-72 1073 C334 921 502 519 1261 95" stroke-width="1.0" style="animation-delay: 0s"></path><path class="run" d="M-59 1081 C297 941 564 563 1303 -50" stroke-width="2.4" style="animation-delay: -6.5s"></path><path class="run" d="M-46 1088 C261 962 627 607 1344 -196" stroke-width="0.9" style="animation-delay: -13s"></path></svg></div>
+</div>
+</div>
+
+<header style="position: relative">
+<div style="max-width: 1240px; margin: 0 auto; padding: 20px 32px; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 14px 32px">
+<a href="#top" style="display: flex; align-items: baseline; gap: 10px; text-decoration: none; color: #F5F6F8">
+<span style="font-family: 'Inter Tight', sans-serif; font-weight: 700; font-size: 24px; letter-spacing: -0.02em">Solutionist</span>
+<span class="serif" style="font-size: 28px; color: #D9D2FF">Coaches &amp; Consultants</span>
+</a>
+<nav aria-label="Coaches and consultants" style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px 28px; font-size: 15px; font-weight: 500">
+<details class="pmenu"><summary>Products<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#E4E6EB" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg></summary><div class="pmenu-panel"><a href="/coaches" aria-current="page"><i style="background: linear-gradient(135deg, #E040FB, #7C5CFF 55%, #22D3EE)"></i><b>Overview</b><span>Every part of your practice</span></a><a href="/coaches/bookings"><i style="background: #3B82F6"></i><b>Bookings</b><span>Your booking page and standing sessions</span></a><a href="/coaches/clients"><i style="background: #14B8A6"></i><b>Clients</b><span>One record, a brief before every session</span></a><a href="/coaches/proposals-and-contracts"><i style="background: #8B5CF6"></i><b>Proposals and Contracts</b><span>Drafted in your voice</span></a><a href="/coaches/billing-and-time"><i style="background: #22C55E"></i><b>Billing and Time</b><span>Invoices, pay links and your hours</span></a><a href="/coaches/courses-and-classes"><i style="background: #F97316"></i><b>Courses and Classes</b><span>Live classes, recordings, homework</span></a><a href="/coaches/marketing-and-website"><i style="background: #EC4899"></i><b>Marketing and Website</b><span>Your site and a week of posts</span></a><a href="/coaches/office-and-books"><i style="background: #94A3B8"></i><b>Office and Books</b><span>The books, the close, the 1099s</span></a></div></details>
+<a href="#pricing" style="text-decoration: none; color: #E4E6EB">Pricing</a>
+<a href="/start" style="background: #F5F6F8; color: #07080B; text-decoration: none; padding: 11px 20px; border-radius: 999px; font-weight: 600">Start free</a>
+</nav>
+</div>
+</header>
+
+<div style="position: relative; max-width: 1240px; margin: 0 auto; padding: 64px 32px 32px; display: flex; flex-direction: column; gap: 56px">
+<div style="min-width: 0; display: flex; flex-direction: column; gap: 26px">
+<div class="eyebrow" style="display: flex; align-items: center; gap: 10px; color: #D9D2FF"><span class="ping" style="background: #34D399"></span>Solutionist for Coaches and Consultants</div>
+<h1 aria-label="Your practice's clients booked, proposals out, invoices paid, classes running and follow-ups done." style="margin: 0; font-family: 'Inter Tight', sans-serif; font-weight: 600; font-size: clamp(40px, 6.4vw, 96px); line-height: 0.98; letter-spacing: -0.045em">
+<span aria-hidden="true" style="display: block">Your practice's</span>
+<span aria-hidden="true" style="display: block; position: relative; height: 1.1em">
+<span class="cyc first" style="animation-delay: 0s">clients, <span class="serif glint" style="font-size: 1.08em">booked.</span></span>
+<span class="cyc" style="animation-delay: 2.6s">proposals, <span class="serif glint" style="font-size: 1.08em">out.</span></span>
+<span class="cyc" style="animation-delay: 5.2s">invoices, <span class="serif glint" style="font-size: 1.08em">paid.</span></span>
+<span class="cyc" style="animation-delay: 7.8s">classes, <span class="serif glint" style="font-size: 1.08em">running.</span></span>
+<span class="cyc" style="animation-delay: 10.4s">follow-ups, <span class="serif glint" style="font-size: 1.08em">done.</span></span>
+</span>
+</h1>
+<div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; gap: 24px 48px">
+<p style="margin: 0; font-size: clamp(18px, 1.5vw, 21px); color: #C9CDD6; max-width: 600px">Bookings, clients, proposals, invoices, classes and your marketing, in one system. Chief keeps it all moving between sessions.</p>
+<div style="display: flex; flex-direction: column; gap: 12px; align-items: flex-start">
+<div style="display: flex; flex-wrap: wrap; gap: 12px; align-items: center">
+<a href="/start" style="background: #F5F6F8; color: #07080B; text-decoration: none; font-weight: 600; font-size: 17px; padding: 15px 26px; border-radius: 999px">{{CTA_START}}</a>
+<a href="#products" style="color: #F5F6F8; text-decoration: none; font-weight: 600; font-size: 17px; padding: 15px 22px; border-radius: 999px; border: 1px solid rgba(255,255,255,0.16); background: rgba(255,255,255,0.03)">See every part</a>
+</div>
+<div class="mono" style="font-size: 12px; color: #8D93A1">Month to month · paid straight to your own Stripe</div>
+</div>
+</div>
+</div>
+
+<!-- The devices, standing still: the coach's week, a live class, a client booking -->
+<div class="stage" style="width: 100%; max-width: 1160px; margin: 0 auto; position: relative; aspect-ratio: 2.02" aria-label="Solutionist on a computer, a tablet and a phone. Sample data.">
+
+<!-- Laptop: Dana's week -->
+<div class="st-lap" style="position: absolute; left: 17%; top: 0; width: 66%">
+<div class="dv-lid"><div class="dv-glass"></div><div style="aspect-ratio: 16 / 10">
+<div class="ow">
+<div class="ow-top">
+<svg width="11" height="10" viewBox="8 36 496 424" aria-hidden="true"><g fill="url(#mkg)"><polygon points="18,46 175,232 237,231 133,98 376,99 356,131 412,167 494,49"></polygon><polygon points="205,138 338,241 232,391 274,449 435,221 319,137"></polygon><polygon points="264,274 149,279 201,359"></polygon></g></svg>
+<span style="font-weight: 600; font-size: 9px; color: #F5F6F8">Reyes Coaching</span>
+<svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="#5F6672" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg>
+<span style="margin-left: 10px; flex: 1; max-width: 46%; display: flex; align-items: center; gap: 5px; height: 15px; padding: 0 7px; border-radius: 999px; background: #13151C; border: 1px solid #1E2130; color: #5F6672; font-size: 7.5px"><svg width="7" height="7" viewBox="0 0 24 24" fill="none" stroke="#5F6672" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="M20 20l-3.5-3.5"></path></svg>Search clients, invoices, classes</span>
+<span style="margin-left: auto; display: flex; align-items: center; gap: 4px; height: 16px; padding: 0 8px; border-radius: 999px; background: linear-gradient(90deg, rgba(224,64,251,0.22), rgba(124,92,255,0.22), rgba(34,211,238,0.18)); border: 1px solid rgba(124,92,255,0.45); font-size: 7.5px; font-weight: 600; color: #F5F6F8"><span style="width: 7px; height: 7px; border-radius: 50%; background: linear-gradient(135deg, #E040FB, #7C5CFF 55%, #22D3EE)"></span>Ask Chief</span>
+<span style="width: 15px; height: 15px; border-radius: 50%; background: #2A2E3A; display: grid; place-items: center; font-size: 6.5px; font-weight: 700; color: #C9CDD6">DR</span>
+</div>
+<div class="ow-body">
+<div class="ow-side">
+<span class="ow-grp">Operate</span>
+<span class="ow-nav on"><i style="background: linear-gradient(135deg, #E040FB, #22D3EE)"></i>This week</span>
+<span class="ow-nav"><i style="background: #3B82F6"></i>Bookings</span>
+<span class="ow-nav"><i style="background: #14B8A6"></i>Clients</span>
+<span class="ow-nav"><i style="background: #8B5CF6"></i>Proposals</span>
+<span class="ow-nav"><i style="background: #22C55E"></i>Billing</span>
+<span class="ow-grp">Grow</span>
+<span class="ow-nav"><i style="background: #F97316"></i>Courses</span>
+<span class="ow-nav"><i style="background: #EC4899"></i>Marketing</span>
+<span class="ow-grp">Build</span>
+<span class="ow-nav"><i style="background: #EC4899"></i>Website</span>
+<span class="ow-nav"><i style="background: #94A3B8"></i>Books</span>
+</div>
+<div class="ow-main">
+<div style="display: flex; justify-content: space-between; align-items: flex-end; gap: 8px">
+<div style="display: flex; flex-direction: column; gap: 3px"><span class="ow-k" style="color: #5F6672">Tuesday, October 27</span><span style="font: 600 13px/1 'Inter Tight', sans-serif; color: #F5F6F8; letter-spacing: -0.02em">Good morning, Dana</span></div>
+<span style="display: flex; align-items: center; gap: 4px; font-size: 7.5px; color: #93C5FD; padding: 3px 7px; border-radius: 999px; background: rgba(59,130,246,0.14)"><span style="width: 5px; height: 5px; border-radius: 50%; background: #3B82F6"></span>Next: Marcus Hale at 2:00</span>
+</div>
+<div style="position: relative; border-radius: 9px; padding: 1px; background: linear-gradient(110deg, rgba(224,64,251,0.7), rgba(124,92,255,0.35) 40%, rgba(34,211,238,0.6))">
+<div style="border-radius: 8px; background: #11131A; padding: 8px 10px; display: flex; flex-direction: column; gap: 5px">
+<div style="display: flex; align-items: center; gap: 6px"><span style="width: 12px; height: 12px; border-radius: 50%; background: linear-gradient(135deg, #E040FB, #7C5CFF 55%, #22D3EE)"></span><b style="font-size: 9px; color: #F5F6F8">Chief's notes for today</b></div>
+<div style="display: flex; flex-direction: column; gap: 3px; font-size: 8px; color: #C9CDD6">
+<span><b style="color: #5EEAD4">Marcus Hale</b> at 2:00: the brief you asked for is ready, with what he said he'd try.</span>
+<span><b style="color: #86EFAC">The Okafor family business</b> is 9 days late on $450. A gentle reminder is drafted.</span>
+<span><b style="color: #93C5FD">Priya Shah</b> hasn't booked in five weeks. A note is drafted for you to send.</span>
+</div>
+</div>
+</div>
+<div class="ow-grid">
+<div class="ow-card"><span class="ow-k" style="color: #93C5FD">Today</span><span class="ow-n">4</span><span class="ow-s">sessions booked</span><span style="display: flex; gap: 3px; margin-top: 2px"><span style="flex: 1; height: 4px; border-radius: 2px; background: #3B82F6"></span><span style="flex: 1; height: 4px; border-radius: 2px; background: #3B82F6"></span><span style="flex: 1; height: 4px; border-radius: 2px; background: #93C5FD"></span><span style="flex: 1; height: 4px; border-radius: 2px; background: #1E2130"></span></span></div>
+<div class="ow-card"><span class="ow-k" style="color: #86EFAC">Paid</span><span class="ow-n">$8,240</span><span class="ow-s">this month, in your Stripe</span><svg viewBox="0 0 100 18" preserveAspectRatio="none" style="width: 100%; height: 12px; margin-top: 1px" aria-hidden="true"><polyline points="0,15 14,13 28,11 42,12 56,8 70,9 84,5 100,3" fill="none" stroke="#22C55E" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></polyline></svg></div>
+<div class="ow-card"><span class="ow-k" style="color: #86EFAC">Not yet billed</span><span class="ow-n">6.5 h</span><span class="ow-s">across 2 clients</span></div>
+<div class="ow-card"><span class="ow-k" style="color: #C4B5FD">Proposals</span><span class="ow-n">2</span><span class="ow-s">sent, waiting on a yes</span></div>
+<div class="ow-card"><span class="ow-k" style="color: #FDBA74">Class</span><span class="ow-n">14</span><span class="ow-s">enrolled · live Thursday</span></div>
+<div class="ow-card"><span class="ow-k" style="color: #5EEAD4">New</span><span class="ow-n">3</span><span class="ow-s">people asked about coaching</span></div>
+</div>
+<div style="display: flex; gap: 6px; flex: 1; min-height: 0">
+<div class="ow-card" style="flex: 1.4; gap: 4px">
+<span class="ow-k" style="color: #93C5FD">Today's sessions</span>
+<span style="display: flex; align-items: center; gap: 6px; font-size: 8px; color: #8D93A1"><span class="mono" style="flex: 0 0 26px; font-size: 7px">10:00</span><span style="flex: 1; text-decoration: line-through">Okafor family business · strategy</span><span style="color: #86EFAC">done</span></span>
+<span style="display: flex; align-items: center; gap: 6px; font-size: 8px; color: #F5F6F8; padding: 3px 4px; margin: 0 -4px; border-radius: 4px; background: rgba(59,130,246,0.14)"><span class="mono" style="flex: 0 0 26px; font-size: 7px; color: #93C5FD">2:00</span><span style="flex: 1">Marcus Hale · coaching</span><span style="color: #93C5FD">brief ready</span></span>
+<span style="display: flex; align-items: center; gap: 6px; font-size: 8px; color: #C9CDD6"><span class="mono" style="flex: 0 0 26px; font-size: 7px; color: #8D93A1">3:30</span><span style="flex: 1">Henderson Co. · check-in</span><span style="color: #8D93A1">60 min</span></span>
+<span style="display: flex; align-items: center; gap: 6px; font-size: 8px; color: #C9CDD6"><span class="mono" style="flex: 0 0 26px; font-size: 7px; color: #8D93A1">5:00</span><span style="flex: 1">Discovery call · new</span><span style="color: #8D93A1">30 min</span></span>
+</div>
+<div class="ow-card" style="flex: 1; gap: 4px">
+<span class="ow-k" style="color: #D9D2FF">Waiting on you</span>
+<span style="display: flex; align-items: center; gap: 5px; font-size: 8px; color: #C9CDD6"><span style="width: 5px; height: 5px; border-radius: 50%; background: #22C55E"></span>Send the Okafor reminder</span>
+<span style="display: flex; align-items: center; gap: 5px; font-size: 8px; color: #C9CDD6"><span style="width: 5px; height: 5px; border-radius: 50%; background: #14B8A6"></span>Send Priya's note</span>
+<span style="display: flex; align-items: center; gap: 5px; font-size: 8px; color: #C9CDD6"><span style="width: 5px; height: 5px; border-radius: 50%; background: #8B5CF6"></span>Read the Henderson scope</span>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div></div>
+<div class="dv-base"></div>
+</div>
+
+<!-- Tablet: a live class, the teacher's view -->
+<div class="st-tab" style="position: absolute; left: 0; bottom: 0; width: 31%">
+<div class="dv-tab"><div style="aspect-ratio: 4 / 3">
+<div style="height: 100%; border-radius: 15px; overflow: hidden; background: #0E1016; color: #F5F6F8; display: flex; flex-direction: column; font-family: 'Inter', sans-serif">
+<div style="display: flex; align-items: center; gap: 7px; padding: 8px 11px; border-bottom: 1px solid #1B1E28; font-size: 8.5px">
+<span style="display: inline-flex; align-items: center; gap: 4px; height: 15px; padding: 0 6px; border-radius: 999px; background: #ff3b30; font-size: 7px; font-weight: 700">LIVE</span>
+<b style="font-weight: 600">Leading with Clarity · Week 3</b>
+<span style="margin-left: auto; color: #8D93A1">14 joined</span>
+</div>
+<div style="flex: 1; display: flex; gap: 8px; padding: 9px 11px; min-height: 0">
+<div style="flex: 1.3; min-width: 0; display: flex; flex-direction: column; gap: 6px">
+<div style="flex: 1; border-radius: 9px; background: radial-gradient(110% 90% at 80% 0%, #C2410C 0%, transparent 60%), linear-gradient(160deg, #3a1a07, #110a05); padding: 10px; display: flex; flex-direction: column; justify-content: flex-end; gap: 3px">
+<span style="font-size: 6.5px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: #FDBA74">Question for the room</span>
+<b style="font: 600 12px/1.15 'Inter Tight', sans-serif">What's the hardest thing to say no to?</b>
+</div>
+<div style="display: flex; gap: 4px"><span style="flex: 1; height: 18px; border-radius: 4px; background: #1B1E28"></span><span style="flex: 1; height: 18px; border-radius: 4px; background: #1B1E28; outline: 1.5px solid #F97316"></span><span style="flex: 1; height: 18px; border-radius: 4px; background: #1B1E28"></span><span style="flex: 1; height: 18px; border-radius: 4px; background: #1B1E28"></span></div>
+</div>
+<div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px">
+<span style="font-size: 7px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #8D93A1">Answers · 11 of 14</span>
+<div style="border-radius: 9px; padding: 1px; background: linear-gradient(120deg, rgba(224,64,251,0.7), rgba(34,211,238,0.6))"><div style="border-radius: 8px; background: #11131A; padding: 7px 8px; display: flex; flex-direction: column; gap: 3px"><b style="font-size: 7.5px; display: flex; align-items: center; gap: 4px"><span style="width: 8px; height: 8px; border-radius: 50%; background: linear-gradient(135deg, #E040FB, #7C5CFF 55%, #22D3EE)"></span>Chief, for you only</b><span style="font-size: 7.5px; color: #C9CDD6; line-height: 1.35">Most said work they'd enjoy but can't fit. Three mentioned family.</span></div></div>
+<span style="margin-top: auto; font-size: 7px; color: #8D93A1">The recording saves for anyone who missed it.</span>
+</div>
+</div>
+</div>
+</div></div>
+</div>
+
+<!-- Phone: a client booking a session from Dana's page -->
+<div class="st-ph" style="position: absolute; right: 2%; bottom: 0; width: 19.5%">
+<div class="dv-ph"><span class="dv-island"></span><div style="aspect-ratio: 9 / 19.2; border-radius: 33px; overflow: hidden; background: #FFFFFF; color: #0B0C11; display: flex; flex-direction: column; font-family: 'Inter', sans-serif">
+<div style="padding: 34px 12px 10px; display: flex; flex-direction: column; gap: 9px; flex: 1; min-height: 0">
+<div style="display: flex; align-items: center; gap: 7px"><span style="width: 24px; height: 24px; border-radius: 7px; background: #2F6BEA; color: #fff; display: grid; place-items: center; font-weight: 800; font-size: 9px">RC</span><b style="font: 600 11px/1.1 'Inter Tight', sans-serif">Reyes Coaching</b></div>
+<b style="font: 600 15px/1.1 'Inter Tight', sans-serif; letter-spacing: -0.02em">Book a time</b>
+<div style="display: flex; flex-direction: column; gap: 5px">
+<div style="display: flex; justify-content: space-between; align-items: center; padding: 7px 8px; border-radius: 9px; border: 1px solid #E5E5EB; font-size: 8.5px"><span><b style="display: block; font-weight: 600">Discovery call</b><span style="color: #5A5E6B">30 min</span></span><span style="font-weight: 600">Free</span></div>
+<div style="display: flex; justify-content: space-between; align-items: center; padding: 7px 8px; border-radius: 9px; border: 1.5px solid #2F6BEA; background: #F2F6FF; font-size: 8.5px"><span><b style="display: block; font-weight: 600">Coaching session</b><span style="color: #5A5E6B">60 min</span></span><span style="font-weight: 600">$150</span></div>
+</div>
+<div style="display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 3px; text-align: center; font-size: 7.5px">
+<span style="padding: 5px 0; border-radius: 7px; background: #F1F1F4"><b style="display: block">Mon</b>26</span><span style="padding: 5px 0; border-radius: 7px; background: #F1F1F4"><b style="display: block">Tue</b>27</span><span style="padding: 5px 0; border-radius: 7px; background: #2F6BEA; color: #fff"><b style="display: block">Thu</b>29</span><span style="padding: 5px 0; border-radius: 7px; background: #F1F1F4"><b style="display: block">Fri</b>30</span><span style="padding: 5px 0; border-radius: 7px; background: #F1F1F4"><b style="display: block">Mon</b>2</span>
+</div>
+<div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; font-size: 8px; text-align: center">
+<span style="padding: 6px 0; border-radius: 7px; border: 1px solid #E5E5EB">9:00</span><span style="padding: 6px 0; border-radius: 7px; border: 1.5px solid #2F6BEA; color: #2F6BEA; font-weight: 600">10:00</span><span style="padding: 6px 0; border-radius: 7px; border: 1px solid #E5E5EB">1:30</span>
+</div>
+<span style="margin-top: auto; display: flex; align-items: center; justify-content: center; height: 30px; border-radius: 10px; background: #2F6BEA; color: #fff; font-size: 9.5px; font-weight: 600">Book Thursday at 10:00</span>
+<span style="text-align: center; font-size: 7px; color: #5A5E6B">A confirmation comes by email</span>
+</div>
+</div></div>
+</div>
+</div>
+</div>
+
+<!-- The reel, the main site's way -->
+<div class="tk-wrap" role="group" aria-label="Every part of your practice" style="position: relative; max-width: 1240px; margin: 0 auto; padding: 8px 32px 56px">
+<p class="tk-lbl">Every part of your practice, in one place</p>
+<div class="tk-view"><div class="tk-track">
+<span class="tkp"><i style="background: #3B82F6; box-shadow: 0 0 12px #3B82F6"></i>Booking page</span>
+<span class="tkp"><i style="background: #3B82F6; box-shadow: 0 0 12px #3B82F6"></i>Standing sessions</span>
+<span class="tkp"><i style="background: #14B8A6; box-shadow: 0 0 12px #14B8A6"></i>Session briefs</span>
+<span class="tkp"><i style="background: #14B8A6; box-shadow: 0 0 12px #14B8A6"></i>Follow-ups</span>
+<span class="tkp"><i style="background: #8B5CF6; box-shadow: 0 0 12px #8B5CF6"></i>Proposals</span>
+<span class="tkp"><i style="background: #8B5CF6; box-shadow: 0 0 12px #8B5CF6"></i>Scopes of work</span>
+<span class="tkp"><i style="background: #22C55E; box-shadow: 0 0 12px #22C55E"></i>Invoices and pay links</span>
+<span class="tkp"><i style="background: #22C55E; box-shadow: 0 0 12px #22C55E"></i>Billable hours</span>
+<span class="tkp"><i style="background: #F97316; box-shadow: 0 0 12px #F97316"></i>Courses</span>
+<span class="tkp"><i style="background: #F97316; box-shadow: 0 0 12px #F97316"></i>Live classes</span>
+<span class="tkp"><i style="background: #EC4899; box-shadow: 0 0 12px #EC4899"></i>Weekly posts</span>
+<span class="tkp"><i style="background: #EC4899; box-shadow: 0 0 12px #EC4899"></i>Your website</span>
+<span class="tkp"><i style="background: #94A3B8; box-shadow: 0 0 12px #94A3B8"></i>Your books</span>
+<span class="tkp" aria-hidden="true"><i style="background: #3B82F6; box-shadow: 0 0 12px #3B82F6"></i>Booking page</span>
+<span class="tkp" aria-hidden="true"><i style="background: #3B82F6; box-shadow: 0 0 12px #3B82F6"></i>Standing sessions</span>
+<span class="tkp" aria-hidden="true"><i style="background: #14B8A6; box-shadow: 0 0 12px #14B8A6"></i>Session briefs</span>
+<span class="tkp" aria-hidden="true"><i style="background: #14B8A6; box-shadow: 0 0 12px #14B8A6"></i>Follow-ups</span>
+<span class="tkp" aria-hidden="true"><i style="background: #8B5CF6; box-shadow: 0 0 12px #8B5CF6"></i>Proposals</span>
+<span class="tkp" aria-hidden="true"><i style="background: #8B5CF6; box-shadow: 0 0 12px #8B5CF6"></i>Scopes of work</span>
+<span class="tkp" aria-hidden="true"><i style="background: #22C55E; box-shadow: 0 0 12px #22C55E"></i>Invoices and pay links</span>
+<span class="tkp" aria-hidden="true"><i style="background: #22C55E; box-shadow: 0 0 12px #22C55E"></i>Billable hours</span>
+<span class="tkp" aria-hidden="true"><i style="background: #F97316; box-shadow: 0 0 12px #F97316"></i>Courses</span>
+<span class="tkp" aria-hidden="true"><i style="background: #F97316; box-shadow: 0 0 12px #F97316"></i>Live classes</span>
+<span class="tkp" aria-hidden="true"><i style="background: #EC4899; box-shadow: 0 0 12px #EC4899"></i>Weekly posts</span>
+<span class="tkp" aria-hidden="true"><i style="background: #EC4899; box-shadow: 0 0 12px #EC4899"></i>Your website</span>
+<span class="tkp" aria-hidden="true"><i style="background: #94A3B8; box-shadow: 0 0 12px #94A3B8"></i>Your books</span>
+</div></div>
+</div>
+</section>
+
+<!-- THE PRODUCTS, as a bento -->
+<section id="products" style="position: relative; background: #07080B; border-top: 1px solid #12141B">
+<div style="max-width: 1240px; margin: 0 auto; padding: 120px 32px; display: flex; flex-direction: column; gap: 56px">
+<div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; gap: 20px 48px">
+<div style="display: flex; flex-direction: column; gap: 18px; max-width: 720px">
+<p class="eyebrow" style="margin: 0; color: #959BA8">The products</p>
+<h2 style="margin: 0; font-family: 'Inter Tight', sans-serif; font-weight: 600; font-size: clamp(38px, 4.6vw, 64px); line-height: 1; letter-spacing: -0.04em">Every part of your practice has <span class="serif glint" style="font-size: 1.1em">its own place.</span></h2>
+</div>
+<p style="margin: 0; font-size: 18px; color: #A9AEB9; max-width: 420px">Start anywhere. Each part works by itself, and better together, because they all share the same clients.</p>
+</div>
+<div class="bento">
+
+<a href="/coaches/clients" class="tile t2x2" style="padding: 30px">
+<span class="glow" style="width: 460px; height: 460px; top: -200px; right: -160px; background: radial-gradient(circle, #14B8A6 0%, rgba(20,184,166,0) 70%)"></span>
+<div style="position: relative; display: flex; flex-wrap: wrap; gap: 24px; height: 100%">
+<div style="flex: 1 1 100%; min-width: 0; display: flex; flex-direction: column; gap: 12px">
+<svg class="ico" width="44" height="44" viewBox="0 0 48 48" aria-hidden="true"><defs><clipPath id="bt1"><rect width="48" height="48" rx="12"></rect></clipPath></defs><g clip-path="url(#bt1)" stroke="rgba(255,255,255,0.55)" stroke-width="1.1" stroke-linejoin="round"><polygon points="0,0 28,0 17,21 0,15" fill="#14B8A6"></polygon><polygon points="28,0 48,0 48,19 17,21" fill="#5EEAD4"></polygon><polygon points="0,15 17,21 9,48 0,48" fill="#0F766E"></polygon><polygon points="17,21 48,19 48,48 9,48" fill="#14B8A6"></polygon><polygon points="17,21 33,31 24,48 9,48" fill="#0F766E" fill-opacity="0.6"></polygon></g><g transform="translate(12 12)" fill="none" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.2"></circle><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"></path><path d="M16 4.5a3 3 0 0 1 0 6M18 14.5c1.9.8 3 2.8 3 5.5"></path></g></svg>
+<span class="tname" style="font-size: 28px">Clients</span>
+<span class="tline" style="font-size: 16px">One record per client with every session, form, proposal and payment in date order. Ask, and Chief writes a brief before a session and drafts the follow-up after.</span>
+<span class="tgo" style="color: #5EEAD4">Explore Clients</span>
+</div>
+<div style="flex: 1 1 100%; min-width: 0" aria-label="A client's record. Sample.">
+<div style="display: flex; flex-wrap: wrap; gap: 14px">
+<div class="mini" style="flex: 1.2 1 260px; min-width: 0; gap: 9px; padding: 16px">
+<div style="display: flex; align-items: center; gap: 10px"><span style="width: 34px; height: 34px; border-radius: 50%; background: #0F766E; display: grid; place-items: center; font-size: 12px; font-weight: 700">MH</span><span style="display: flex; flex-direction: column"><b style="font-weight: 600; font-size: 14px">Marcus Hale</b><span style="font-size: 11.5px; color: #8D93A1">Leadership coaching · since March</span></span></div>
+<span class="mono" style="font-size: 10px; letter-spacing: 0.1em; color: #5EEAD4">TIMELINE</span>
+<div style="display: flex; align-items: center; gap: 8px; font-size: 12px"><span style="width: 7px; height: 7px; border-radius: 50%; background: #3B82F6"></span><span style="flex: 1">Session · today at 2:00</span><span style="color: #8D93A1">Oct 27</span></div>
+<div style="display: flex; align-items: center; gap: 8px; font-size: 12px"><span style="width: 7px; height: 7px; border-radius: 50%; background: #22C55E"></span><span style="flex: 1">10-session package · 1 left</span><span style="color: #8D93A1">Oct 21</span></div>
+<div style="display: flex; align-items: center; gap: 8px; font-size: 12px"><span style="width: 7px; height: 7px; border-radius: 50%; background: #14B8A6"></span><span style="flex: 1">Session 6 · notes saved</span><span style="color: #8D93A1">Oct 16</span></div>
+<div style="display: flex; align-items: center; gap: 8px; font-size: 12px"><span style="width: 7px; height: 7px; border-radius: 50%; background: #8B5CF6"></span><span style="flex: 1">Program outline sent</span><span style="color: #8D93A1">Mar 2</span></div>
+</div>
+<div style="flex: 1 1 220px; min-width: 0; display: flex; flex-direction: column; gap: 12px">
+<div style="border-radius: 16px; padding: 1px; background: linear-gradient(120deg, #E040FB, rgba(124,92,255,0.4) 40%, #22D3EE)">
+<div style="border-radius: 15px; background: #0B0C11; padding: 14px; display: flex; flex-direction: column; gap: 8px">
+<b style="display: flex; align-items: center; gap: 8px; font-size: 13px"><span style="width: 18px; height: 18px; border-radius: 50%; background: linear-gradient(135deg, #E040FB, #7C5CFF 55%, #22D3EE)"></span>Brief for 2:00</b>
+<span style="font-size: 12px; color: #C9CDD6; line-height: 1.45">Last time he chose to stop saying yes to Friday asks. Open question: how his team took it.</span>
+</div>
+</div>
+<div class="mini" style="gap: 7px; padding: 14px">
+<span class="mono" style="font-size: 10px; letter-spacing: 0.1em; color: #5EEAD4">AFTER THE SESSION</span>
+<span style="font-size: 12px; color: #C9CDD6; line-height: 1.45">Ask for the follow-up and Chief drafts it from your notes. You read it, change a word, and send.</span>
+</div>
+</div>
+</div>
+</div>
+</div>
+</a>
+
+<a href="/coaches/bookings" class="tile t2x1">
+<span class="glow" style="background: radial-gradient(circle, #3B82F6 0%, rgba(59,130,246,0) 70%)"></span>
+<div style="position: relative; display: flex; flex-wrap: wrap; gap: 20px; height: 100%">
+<div style="flex: 1 1 220px; min-width: 0; display: flex; flex-direction: column; gap: 12px">
+<svg class="ico" width="44" height="44" viewBox="0 0 48 48" aria-hidden="true"><defs><clipPath id="bt2"><rect width="48" height="48" rx="12"></rect></clipPath></defs><g clip-path="url(#bt2)" stroke="rgba(255,255,255,0.55)" stroke-width="1.1" stroke-linejoin="round"><polygon points="0,0 28,0 17,21 0,15" fill="#3B82F6"></polygon><polygon points="28,0 48,0 48,19 17,21" fill="#93C5FD"></polygon><polygon points="0,15 17,21 9,48 0,48" fill="#1D4ED8"></polygon><polygon points="17,21 48,19 48,48 9,48" fill="#3B82F6"></polygon><polygon points="17,21 33,31 24,48 9,48" fill="#1D4ED8" fill-opacity="0.6"></polygon></g><g transform="translate(12 12)" fill="none" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="3"></rect><path d="M16 2v4M8 2v4M3 10h18"></path><path d="M8 15h3"></path></g></svg>
+<span class="tname">Bookings</span>
+<span class="tline">Your own booking page, standing weekly sessions, and confirmations that go out on their own.</span>
+<span class="tgo" style="color: #93C5FD">Explore Bookings</span>
+</div>
+<div class="mini" style="flex: 1 1 220px; min-width: 0; align-self: center">
+<span class="mono" style="font-size: 10px; letter-spacing: 0.1em; color: #93C5FD">TUESDAY</span>
+<div style="display: flex; align-items: center; gap: 8px; padding: 7px 9px; border-radius: 9px; background: rgba(59,130,246,0.12)"><span class="mono" style="font-size: 11px; color: #93C5FD">10:00</span><span>Okafor family business</span></div>
+<div style="display: flex; align-items: center; gap: 8px; padding: 7px 9px; border-radius: 9px; background: rgba(59,130,246,0.12)"><span class="mono" style="font-size: 11px; color: #93C5FD">2:00</span><span>Marcus Hale · every Tuesday</span></div>
+<div style="display: flex; align-items: center; gap: 8px; padding: 7px 9px; border-radius: 9px; background: rgba(255,255,255,0.03)"><span class="mono" style="font-size: 11px; color: #8D93A1">4:00</span><span style="color: #8D93A1">Open</span></div>
+</div>
+</div>
+</a>
+
+<a href="/coaches/proposals-and-contracts" class="tile">
+<span class="glow" style="background: radial-gradient(circle, #8B5CF6 0%, rgba(139,92,246,0) 70%)"></span>
+<svg class="ico" width="44" height="44" viewBox="0 0 48 48" aria-hidden="true"><defs><clipPath id="bt3"><rect width="48" height="48" rx="12"></rect></clipPath></defs><g clip-path="url(#bt3)" stroke="rgba(255,255,255,0.55)" stroke-width="1.1" stroke-linejoin="round"><polygon points="0,0 28,0 17,21 0,15" fill="#8B5CF6"></polygon><polygon points="28,0 48,0 48,19 17,21" fill="#C4B5FD"></polygon><polygon points="0,15 17,21 9,48 0,48" fill="#6D28D9"></polygon><polygon points="17,21 48,19 48,48 9,48" fill="#8B5CF6"></polygon><polygon points="17,21 33,31 24,48 9,48" fill="#6D28D9" fill-opacity="0.6"></polygon></g><g transform="translate(12 12)" fill="none" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3h7l5 5v13H7z"></path><path d="M14 3v5h5"></path><path d="M10 14l2 2 4-4"></path></g></svg>
+<span class="tname">Proposals and Contracts</span>
+<span class="tline">A program outline or a scope of work, drafted in your own voice.</span>
+<div style="position: relative; margin-top: auto; align-self: flex-start; transform: rotate(-2deg); background: #FFFFFF; color: #0B0C11; border-radius: 8px; padding: 10px 12px; box-shadow: 0 10px 24px rgba(0,0,0,0.35); display: flex; flex-direction: column; gap: 2px; border-top: 4px solid #8B5CF6; min-width: 160px">
+<b style="font-size: 12.5px; font-weight: 700">Scope of work</b><span style="font-size: 10px; color: #5A5E6B">Henderson Co. · 8 weeks</span>
+</div>
+</a>
+
+<a href="/coaches/billing-and-time" class="tile">
+<span class="glow" style="background: radial-gradient(circle, #22C55E 0%, rgba(34,197,94,0) 70%)"></span>
+<svg class="ico" width="44" height="44" viewBox="0 0 48 48" aria-hidden="true"><defs><clipPath id="bt4"><rect width="48" height="48" rx="12"></rect></clipPath></defs><g clip-path="url(#bt4)" stroke="rgba(255,255,255,0.55)" stroke-width="1.1" stroke-linejoin="round"><polygon points="0,0 28,0 17,21 0,15" fill="#22C55E"></polygon><polygon points="28,0 48,0 48,19 17,21" fill="#86EFAC"></polygon><polygon points="0,15 17,21 9,48 0,48" fill="#15803D"></polygon><polygon points="17,21 48,19 48,48 9,48" fill="#22C55E"></polygon><polygon points="17,21 33,31 24,48 9,48" fill="#15803D" fill-opacity="0.6"></polygon></g><g transform="translate(12 12)" fill="none" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="13" rx="2.5"></rect><path d="M3 10h18M7 15h3"></path></g></svg>
+<span class="tname">Billing and Time</span>
+<span class="tline">Invoices, pay links on your own Stripe, and the hours you haven't billed yet.</span>
+<div class="mini" style="margin-top: auto">
+<div class="feed" style="display: flex; justify-content: space-between"><span>Coaching session</span><b class="mono" style="color: #86EFAC; font-weight: 500">+$150</b></div>
+<div class="feed" style="display: flex; justify-content: space-between"><span>Okafor family business</span><b class="mono" style="color: #FDBA74; font-weight: 500">9 days late</b></div>
+</div>
+</a>
+
+<a href="/coaches/courses-and-classes" class="tile t2x1">
+<span class="glow" style="background: radial-gradient(circle, #F97316 0%, rgba(249,115,22,0) 70%)"></span>
+<div style="position: relative; display: flex; flex-wrap: wrap; gap: 20px; height: 100%">
+<div style="flex: 1 1 220px; min-width: 0; display: flex; flex-direction: column; gap: 12px">
+<svg class="ico" width="44" height="44" viewBox="0 0 48 48" aria-hidden="true"><defs><clipPath id="bt5"><rect width="48" height="48" rx="12"></rect></clipPath></defs><g clip-path="url(#bt5)" stroke="rgba(255,255,255,0.55)" stroke-width="1.1" stroke-linejoin="round"><polygon points="0,0 28,0 17,21 0,15" fill="#F97316"></polygon><polygon points="28,0 48,0 48,19 17,21" fill="#FDBA74"></polygon><polygon points="0,15 17,21 9,48 0,48" fill="#C2410C"></polygon><polygon points="17,21 48,19 48,48 9,48" fill="#F97316"></polygon><polygon points="17,21 33,31 24,48 9,48" fill="#C2410C" fill-opacity="0.6"></polygon></g><g transform="translate(12 12)" fill="none" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 9l10-5 10 5-10 5z"></path><path d="M6 11v5c3 2 9 2 12 0v-5"></path></g></svg>
+<span class="tname">Courses and Classes</span>
+<span class="tline">Live classes with your slides, recordings for anyone who missed one, and homework that comes back to you.</span>
+<span class="tgo" style="color: #FDBA74">Explore Courses and Classes</span>
+</div>
+<div class="mini" style="flex: 1 1 220px; min-width: 0; align-self: center">
+<span class="mono" style="font-size: 10px; letter-spacing: 0.1em; color: #FDBA74">LEADING WITH CLARITY</span>
+<b style="font-weight: 600; font-size: 13px">Week 3 · live Thursday at 7</b>
+<div style="display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: #A9AEB9"><span style="flex: 1; height: 6px; border-radius: 3px; background: rgba(255,255,255,0.06)"><span class="grow" style="display: block; width: 78%; height: 100%; border-radius: 3px; background: #F97316"></span></span>14 enrolled</div>
+<span style="font-size: 11.5px; color: #A9AEB9">Homework due Friday · 9 turned in</span>
+</div>
+</div>
+</a>
+
+<a href="/coaches/marketing-and-website" class="tile">
+<span class="glow" style="background: radial-gradient(circle, #EC4899 0%, rgba(236,72,153,0) 70%)"></span>
+<svg class="ico" width="44" height="44" viewBox="0 0 48 48" aria-hidden="true"><defs><clipPath id="bt6"><rect width="48" height="48" rx="12"></rect></clipPath></defs><g clip-path="url(#bt6)" stroke="rgba(255,255,255,0.55)" stroke-width="1.1" stroke-linejoin="round"><polygon points="0,0 28,0 17,21 0,15" fill="#EC4899"></polygon><polygon points="28,0 48,0 48,19 17,21" fill="#F9A8D4"></polygon><polygon points="0,15 17,21 9,48 0,48" fill="#BE185D"></polygon><polygon points="17,21 48,19 48,48 9,48" fill="#EC4899"></polygon><polygon points="17,21 33,31 24,48 9,48" fill="#BE185D" fill-opacity="0.6"></polygon></g><g transform="translate(12 12)" fill="none" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l15-6v14L3 13z"></path><path d="M7 13v5a2 2 0 0 0 4 0v-4"></path></g></svg>
+<span class="tname">Marketing and Website</span>
+<span class="tline">Your website, and posts Chief drafts in your voice for you to approve.</span>
+<div class="mini" style="margin-top: auto; flex-direction: row; flex-wrap: wrap; gap: 6px">
+<span style="font-size: 11px; padding: 4px 9px; border-radius: 999px; background: rgba(236,72,153,0.16); color: #F9A8D4">Mon · post</span>
+<span style="font-size: 11px; padding: 4px 9px; border-radius: 999px; background: rgba(236,72,153,0.16); color: #F9A8D4">Wed · flyer</span>
+<span style="font-size: 11px; padding: 4px 9px; border-radius: 999px; background: rgba(255,255,255,0.05); color: #A9AEB9">Fri · post</span>
+</div>
+</a>
+
+<a href="/coaches/office-and-books" class="tile">
+<span class="glow" style="background: radial-gradient(circle, #94A3B8 0%, rgba(148,163,184,0) 70%)"></span>
+<svg class="ico" width="44" height="44" viewBox="0 0 48 48" aria-hidden="true"><defs><clipPath id="bt7"><rect width="48" height="48" rx="12"></rect></clipPath></defs><g clip-path="url(#bt7)" stroke="rgba(255,255,255,0.55)" stroke-width="1.1" stroke-linejoin="round"><polygon points="0,0 28,0 17,21 0,15" fill="#94A3B8"></polygon><polygon points="28,0 48,0 48,19 17,21" fill="#CBD5E1"></polygon><polygon points="0,15 17,21 9,48 0,48" fill="#475569"></polygon><polygon points="17,21 48,19 48,48 9,48" fill="#94A3B8"></polygon><polygon points="17,21 33,31 24,48 9,48" fill="#475569" fill-opacity="0.6"></polygon></g><g transform="translate(12 12)" fill="none" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h10a3 3 0 0 1 3 3v13H8a3 3 0 0 1-3-3z"></path><path d="M5 17a3 3 0 0 1 3-3h10"></path></g></svg>
+<span class="tname">Office and Books</span>
+<span class="tline">Your books, with every invoice and payment already in them.</span>
+<div class="mini" style="margin-top: auto; gap: 6px">
+<div style="display: flex; align-items: center; gap: 8px; font-size: 11px"><span style="flex: 0 0 64px; color: #A9AEB9">Coaching</span><span style="flex: 1; height: 6px; border-radius: 3px; background: rgba(255,255,255,0.06)"><span class="grow" style="display: block; width: 68%; height: 100%; border-radius: 3px; background: #CBD5E1"></span></span></div>
+<div style="display: flex; align-items: center; gap: 8px; font-size: 11px"><span style="flex: 0 0 64px; color: #A9AEB9">Consulting</span><span style="flex: 1; height: 6px; border-radius: 3px; background: rgba(255,255,255,0.06)"><span class="grow" style="display: block; width: 44%; height: 100%; border-radius: 3px; background: #86EFAC; animation-delay: 0.5s"></span></span></div>
+<div style="display: flex; align-items: center; gap: 8px; font-size: 11px"><span style="flex: 0 0 64px; color: #A9AEB9">Courses</span><span style="flex: 1; height: 6px; border-radius: 3px; background: rgba(255,255,255,0.06)"><span class="grow" style="display: block; width: 20%; height: 100%; border-radius: 3px; background: #FDBA74; animation-delay: 0.7s"></span></span></div>
+</div>
+</a>
+
+</div>
+</div>
+</section>
+
+<!-- ONE CLIENT, ONE RECORD -->
+<section style="background: #FBF9F5; color: #16130F">
+<div style="max-width: 1240px; margin: 0 auto; padding: 120px 32px; display: flex; flex-direction: column; gap: 64px">
+<div style="display: flex; flex-direction: column; gap: 18px; max-width: 780px">
+<p class="eyebrow" style="margin: 0; color: #615B53">Why one system</p>
+<h2 style="margin: 0; font-family: 'Inter Tight', sans-serif; font-weight: 600; font-size: clamp(38px, 4.6vw, 64px); line-height: 1; letter-spacing: -0.04em">Every client, <span class="serif" style="font-size: 1.1em; color: #5B3FE0">one record.</span></h2>
+<p style="margin: 0; font-size: 18px; color: #615B53">No copying names between a scheduler, a payments app and a spreadsheet. Follow one new client through the system:</p>
+</div>
+<div style="display: flex; flex-direction: column; gap: 28px">
+<div aria-hidden="true" style="position: relative; height: 22px; margin: 0 10%">
+<div style="position: absolute; left: 0; right: 0; top: 50%; height: 2px; margin-top: -1px; background: repeating-linear-gradient(90deg, #CFC7B8 0 8px, transparent 8px 14px)"></div>
+<span class="stop" style="left: 0%; background: #BE185D; --halo: rgba(190,24,93,0.22); animation-delay: 0s"></span>
+<span class="stop" style="left: 25%; background: #1D4ED8; --halo: rgba(29,78,216,0.22); animation-delay: 2s"></span>
+<span class="stop" style="left: 50%; background: #6D28D9; --halo: rgba(109,40,217,0.22); animation-delay: 4s"></span>
+<span class="stop" style="left: 75%; background: #15803D; --halo: rgba(21,128,61,0.22); animation-delay: 6s"></span>
+<span class="stop" style="left: 100%; background: #0F766E; --halo: rgba(15,118,110,0.22); animation-delay: 8s"></span>
+<span class="dot-travel"></span>
+</div>
+<ol style="list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 16px">
+<li style="display: flex; flex-direction: column; gap: 10px; padding: 22px; background: #FFFFFF; border: 1px solid #E9E4DA; border-radius: 18px"><span class="mono" style="font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: #BE185D">Monday</span><span style="font-family: 'Inter Tight', sans-serif; font-weight: 600; font-size: 19px; line-height: 1.25">They find you.</span><span style="font-size: 14px; color: #615B53">Your website or a post brings them in, and they land on your list as a new enquiry.</span></li>
+<li style="display: flex; flex-direction: column; gap: 10px; padding: 22px; background: #FFFFFF; border: 1px solid #E9E4DA; border-radius: 18px"><span class="mono" style="font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: #1D4ED8">Tuesday</span><span style="font-family: 'Inter Tight', sans-serif; font-weight: 600; font-size: 19px; line-height: 1.25">They book a call.</span><span style="font-size: 14px; color: #615B53">From your booking page, at a time you've opened. The confirmation goes out on its own.</span></li>
+<li style="display: flex; flex-direction: column; gap: 10px; padding: 22px; background: #FFFFFF; border: 1px solid #E9E4DA; border-radius: 18px"><span class="mono" style="font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: #6D28D9">After the call</span><span style="font-family: 'Inter Tight', sans-serif; font-weight: 600; font-size: 19px; line-height: 1.25">They get a proposal.</span><span style="font-size: 14px; color: #615B53">A program outline or a scope of work, drafted by Chief in your voice for you to send.</span></li>
+<li style="display: flex; flex-direction: column; gap: 10px; padding: 22px; background: #FFFFFF; border: 1px solid #E9E4DA; border-radius: 18px"><span class="mono" style="font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: #15803D">That week</span><span style="font-family: 'Inter Tight', sans-serif; font-weight: 600; font-size: 19px; line-height: 1.25">They pay from a link.</span><span style="font-size: 14px; color: #615B53">Straight to your own Stripe account. You hear the moment it's paid.</span></li>
+<li style="display: flex; flex-direction: column; gap: 10px; padding: 22px; background: #FFFFFF; border: 1px solid #E9E4DA; border-radius: 18px"><span class="mono" style="font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: #0F766E">Every session</span><span style="font-family: 'Inter Tight', sans-serif; font-weight: 600; font-size: 19px; line-height: 1.25">They keep coming back.</span><span style="font-size: 14px; color: #615B53">A brief from Chief when you ask, a follow-up drafted after, and every step on their record.</span></li>
+</ol>
+</div>
+</div>
+</section>
+
+<!-- YOUR CLIENTS' SIDE -->
+<section id="clients-side" style="position: relative; background: #050507; overflow: hidden">
+<div class="aur" aria-hidden="true" style="opacity: 0.7"><i></i><i></i><i></i></div>
+<div style="position: relative; max-width: 1240px; margin: 0 auto; padding: 120px 32px; display: flex; flex-direction: column; gap: 64px">
+<div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; gap: 20px 48px">
+<div style="display: flex; flex-direction: column; gap: 18px; max-width: 700px">
+<p class="eyebrow" style="margin: 0; color: #93C5FD">Your clients' side</p>
+<h2 style="margin: 0; font-family: 'Inter Tight', sans-serif; font-weight: 600; font-size: clamp(38px, 4.6vw, 64px); line-height: 1; letter-spacing: -0.04em">Your clients never <span class="serif glint" style="font-size: 1.1em">need a login.</span></h2>
+</div>
+<p style="margin: 0; font-size: 18px; color: #A9AEB9; max-width: 440px">They book from your page, pay from a link and join class from their own class link. Every step lands on their record, in your office.</p>
+</div>
+<div style="display: flex; flex-wrap: wrap; gap: 32px; justify-content: center; align-items: flex-start" aria-label="What a client sees on their phone. Sample.">
+
+<div style="flex: 0 1 270px; min-width: 230px; margin-top: 40px">
+<div class="dv-ph"><span class="dv-island"></span><div style="aspect-ratio: 9 / 19; border-radius: 33px; overflow: hidden; background: #FFFFFF; color: #0B0C11; display: flex; flex-direction: column; font-family: 'Inter', sans-serif">
+<div style="padding: 38px 16px 14px; display: flex; flex-direction: column; gap: 12px; flex: 1">
+<div style="display: flex; align-items: center; gap: 8px"><span style="width: 28px; height: 28px; border-radius: 8px; background: #2F6BEA; color: #fff; display: grid; place-items: center; font-weight: 800; font-size: 10px">RC</span><b style="font: 600 13px/1.1 'Inter Tight', sans-serif">Reyes Coaching</b></div>
+<span style="display: inline-flex; align-self: flex-start; align-items: center; gap: 6px; padding: 5px 10px; border-radius: 999px; background: #EAF7EF; color: #15803D; font-size: 11px; font-weight: 600"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#15803D" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>You're booked</span>
+<b style="font: 600 22px/1.1 'Inter Tight', sans-serif; letter-spacing: -0.02em">Coaching session</b>
+<div style="display: flex; flex-direction: column; gap: 8px; padding: 12px; border-radius: 14px; background: #F4F6FB; font-size: 12px">
+<span style="display: flex; justify-content: space-between"><span style="color: #5A5E6B">When</span><b style="font-weight: 600">Thu, Oct 29 · 10:00</b></span>
+<span style="display: flex; justify-content: space-between"><span style="color: #5A5E6B">How long</span><b style="font-weight: 600">60 minutes</b></span>
+<span style="display: flex; justify-content: space-between"><span style="color: #5A5E6B">With</span><b style="font-weight: 600">Dana Reyes</b></span>
+</div>
+<span style="display: flex; align-items: center; justify-content: center; gap: 8px; height: 40px; border-radius: 12px; background: #F4F6FB; font-size: 12px; color: #2A2D36">The calendar invite is in your email</span>
+<div style="display: flex; flex-direction: column; gap: 6px; padding: 12px; border-radius: 14px; border: 1px solid #E5E5EB">
+<span style="font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #2F6BEA">A note from Dana</span>
+<span style="font-size: 12px; line-height: 1.45; color: #2A2D36">Come with one thing you want to be different by December. We'll start there.</span>
+</div>
+<span style="margin-top: auto; font-size: 11px; color: #5A5E6B; text-align: center">Booked with a name and email. No account.</span>
+</div>
+</div></div>
+<p style="margin: 14px 0 0; text-align: center; font-size: 14px; color: #A9AEB9">Booked from your page, no account</p>
+</div>
+
+<div style="flex: 0 1 270px; min-width: 230px">
+<div class="dv-ph"><span class="dv-island"></span><div style="aspect-ratio: 9 / 19; border-radius: 33px; overflow: hidden; background: #FFFFFF; color: #0B0C11; display: flex; flex-direction: column; font-family: 'Inter', sans-serif">
+<div style="padding: 38px 16px 14px; display: flex; flex-direction: column; gap: 12px; flex: 1">
+<div style="display: flex; align-items: center; gap: 8px"><span style="width: 28px; height: 28px; border-radius: 8px; background: #2F6BEA; color: #fff; display: grid; place-items: center; font-weight: 800; font-size: 10px">RC</span><b style="font: 600 13px/1.1 'Inter Tight', sans-serif">Reyes Coaching</b></div>
+<span style="font-size: 11px; color: #5A5E6B">Invoice INV-2026-044 · Henderson Co.</span>
+<b style="font: 600 34px/1 'Inter Tight', sans-serif; letter-spacing: -0.04em">$2,000.00</b>
+<div style="display: flex; flex-direction: column; gap: 8px; padding: 12px; border-radius: 14px; background: #F4F6FB; font-size: 12px">
+<span style="display: flex; justify-content: space-between; gap: 8px"><span>Advisory retainer, November<span style="display: block; font-size: 10.5px; color: #5A5E6B">10 h at $200</span></span><b style="font-weight: 600">$2,000</b></span>
+<span style="font-size: 11.5px; line-height: 1.45; color: #2A2D36; padding-top: 8px; border-top: 1px solid #DDE1EA">Thank you for a strong first month. November covers the rollout plan with your team.</span>
+<span style="display: flex; justify-content: space-between; padding-top: 8px; border-top: 1px solid #DDE1EA; color: #5A5E6B"><span>Due</span><span>Nov 15</span></span>
+</div>
+<span style="display: flex; align-items: center; justify-content: center; height: 44px; border-radius: 12px; background: #2F6BEA; color: #fff; font-size: 13px; font-weight: 600">Pay $2,000.00</span>
+<span style="margin-top: auto; font-size: 11px; color: #5A5E6B; text-align: center">Secure checkout by Stripe. Paid to Reyes Coaching.</span>
+</div>
+</div></div>
+<p style="margin: 14px 0 0; text-align: center; font-size: 14px; color: #A9AEB9">Paid from a link, to your own Stripe</p>
+</div>
+
+<div style="flex: 0 1 270px; min-width: 230px; margin-top: 40px">
+<div class="dv-ph"><span class="dv-island"></span><div style="aspect-ratio: 9 / 19; border-radius: 33px; overflow: hidden; background: #0E1016; color: #F5F6F8; display: flex; flex-direction: column; font-family: 'Inter', sans-serif">
+<div style="padding: 38px 16px 14px; display: flex; flex-direction: column; gap: 12px; flex: 1">
+<span style="font-size: 11px; color: #FDBA74; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase">Your class</span>
+<b style="font: 600 21px/1.1 'Inter Tight', sans-serif; letter-spacing: -0.02em">Leading with Clarity</b>
+<div style="border-radius: 14px; padding: 12px; background: radial-gradient(110% 90% at 80% 0%, #C2410C 0%, transparent 60%), linear-gradient(160deg, #3a1a07, #110a05); display: flex; flex-direction: column; gap: 4px">
+<span style="display: inline-flex; align-self: flex-start; align-items: center; gap: 5px; height: 20px; padding: 0 8px; border-radius: 999px; background: #ff3b30; font-size: 10px; font-weight: 700">LIVE NOW</span>
+<b style="font-size: 14px; font-weight: 600">Week 3 · Saying no well</b>
+<span style="display: flex; align-items: center; justify-content: center; height: 36px; margin-top: 6px; border-radius: 10px; background: #F97316; color: #2a1206; font-size: 12.5px; font-weight: 700">Join the class</span>
+</div>
+<div style="display: flex; flex-direction: column; gap: 0; border-radius: 14px; background: #15171E; font-size: 12px">
+<span style="display: flex; justify-content: space-between; padding: 10px 12px; border-bottom: 1px solid #22252E"><span>Homework</span><span style="color: #FDBA74">due Friday</span></span>
+<span style="display: flex; justify-content: space-between; padding: 10px 12px; border-bottom: 1px solid #22252E"><span>Week 2 recording</span><span style="color: #8D93A1">Watch</span></span>
+<span style="display: flex; justify-content: space-between; padding: 10px 12px"><span>Week 4 · Nov 5 at 7</span><span style="color: #8D93A1">Next</span></span>
+</div>
+<div style="display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-radius: 14px; background: #15171E; font-size: 11.5px; color: #C9CDD6"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#86EFAC" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>Week 2 homework turned in</div>
+<span style="margin-top: auto; font-size: 11px; color: #8D93A1; text-align: center">Their own class link. On their calendar too.</span>
+</div>
+</div></div>
+<p style="margin: 14px 0 0; text-align: center; font-size: 14px; color: #A9AEB9">Class from their own link</p>
+</div>
+
+</div>
+</div>
+</section>
+
+<!-- THE OFFICE, on a computer -->
+<section id="office" style="background: #F1F1F4; color: #0B0C11">
+<div style="max-width: 1240px; margin: 0 auto; padding: 120px 32px; display: flex; flex-wrap: wrap; gap: 56px; align-items: center">
+<div style="flex: 1 1 380px; min-width: 0; display: flex; flex-direction: column; gap: 22px">
+<p class="eyebrow" style="margin: 0; color: #5A5E6B">The office</p>
+<h2 style="margin: 0; font-family: 'Inter Tight', sans-serif; font-weight: 600; font-size: clamp(38px, 4.6vw, 64px); line-height: 1; letter-spacing: -0.04em">Get paid for the work <span class="serif" style="font-size: 1.1em; color: #5B3FE0">you already did.</span></h2>
+<p style="margin: 0; font-size: 18px; color: #5A5E6B">Log the hour when you finish it. Chief keeps track of what's billed and what isn't, offers a reminder when an invoice runs late, and tells you the moment it's paid.</p>
+<ul style="list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; font-size: 16px">
+<li style="display: flex; gap: 12px"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#5B3FE0" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex: 0 0 20px; margin-top: 2px"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>"Log 90 minutes on Henderson Co." and it's on the record</span></li>
+<li style="display: flex; gap: 12px"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#5B3FE0" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex: 0 0 20px; margin-top: 2px"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Invoices with a pay link, paid to your own Stripe</span></li>
+<li style="display: flex; gap: 12px"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#5B3FE0" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex: 0 0 20px; margin-top: 2px"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Reminders and thank-yous Chief drafts, and a person sends</span></li>
+</ul>
+</div>
+<div class="cc-pad" style="flex: 1.5 1 560px; min-width: 0; position: relative; padding-bottom: 150px" aria-label="The billing page on a computer, with a reminder Chief drafted. Sample data.">
+<div class="dv-lid" style="box-shadow: 0 60px 120px -40px rgba(20,16,60,0.45)"><div class="dv-glass"></div><div class="scr" style="aspect-ratio: 16 / 10; border-radius: 7px">
+<div class="oa">
+<div class="oa-side">
+<div style="display: flex; align-items: center; gap: 6px; padding: 2px 6px 10px; font-weight: 600; font-size: 11px; color: #F5F6F8"><svg width="12" height="11" viewBox="8 36 496 424" aria-hidden="true"><g fill="url(#mkg)"><polygon points="18,46 175,232 237,231 133,98 376,99 356,131 412,167 494,49"></polygon><polygon points="205,138 338,241 232,391 274,449 435,221 319,137"></polygon><polygon points="264,274 149,279 201,359"></polygon></g></svg>Reyes Coaching</div>
+<span>This week</span><span><b style="background: #3B82F6"></b>Bookings</span><span><b style="background: #14B8A6"></b>Clients</span><span><b style="background: #8B5CF6"></b>Proposals</span><span class="on"><b style="background: #22C55E"></b>Billing</span><span><b style="background: #F97316"></b>Courses</span><span><b style="background: #EC4899"></b>Marketing</span><span><b style="background: #94A3B8"></b>Books</span>
+</div>
+<div class="oa-main">
+<div style="display: flex; justify-content: space-between; align-items: center"><span style="font: 600 17px/1 'Inter Tight', sans-serif; color: #F5F6F8">Billing</span><span style="display: flex; gap: 4px; font-size: 10px"><span style="padding: 3px 8px; border-radius: 999px; background: rgba(34,197,94,0.18); color: #86EFAC">October</span><span style="padding: 3px 8px; color: #8D93A1">Year</span></span></div>
+<div style="display: flex; gap: 7px"><div class="oa-stat"><b>$8,240</b><span>paid this month</span></div><div class="oa-stat"><b>$1,650</b><span>past due</span></div><div class="oa-stat"><b>6.5 h</b><span>not yet billed</span></div></div>
+<div style="display: flex; gap: 8px; flex: 1; min-height: 0">
+<div style="flex: 1.3; min-width: 0; padding: 10px; border-radius: 9px; background: #12141B; border: 1px solid #1B1E28; display: flex; flex-direction: column; gap: 5px">
+<span style="font-size: 10px; color: #8D93A1">Invoices</span>
+<div style="display: flex; align-items: center; gap: 6px; font-size: 9.5px; padding: 4px 0; border-top: 1px solid #1B1E28"><span style="flex: 1">Okafor family business · INV-2026-041</span><span style="color: #FDBA74">9 days late</span><b class="mono" style="font-weight: 500">$450</b></div>
+<div style="display: flex; align-items: center; gap: 6px; font-size: 9.5px; padding: 4px 0; border-top: 1px solid #1B1E28"><span style="flex: 1">Marcus Hale · INV-2026-043</span><span style="color: #FCA5A5">34 days late</span><b class="mono" style="font-weight: 500">$1,200</b></div>
+<div style="display: flex; align-items: center; gap: 6px; font-size: 9.5px; padding: 4px 0; border-top: 1px solid #1B1E28"><span style="flex: 1">Henderson Co. · INV-2026-044</span><span style="color: #93C5FD">Sent</span><b class="mono" style="font-weight: 500">$2,000</b></div>
+<div style="display: flex; align-items: center; gap: 6px; font-size: 9.5px; padding: 4px 0; border-top: 1px solid #1B1E28"><span style="flex: 1">Priya Shah · INV-2026-045</span><span style="color: #86EFAC">Paid</span><b class="mono" style="font-weight: 500">$1,500</b></div>
+<div style="display: flex; align-items: center; gap: 6px; font-size: 9.5px; padding: 4px 0; border-top: 1px solid #1B1E28"><span style="flex: 1">Henderson Co. · INV-2026-042</span><span style="color: #86EFAC">Paid</span><b class="mono" style="font-weight: 500">$2,500</b></div>
+<div style="display: flex; align-items: center; gap: 6px; font-size: 9.5px; padding: 4px 0; border-top: 1px solid #1B1E28"><span style="flex: 1">Okafor family business · INV-2026-046</span><span style="color: #8D93A1">Draft</span><b class="mono" style="font-weight: 500">$2,400</b></div>
+<span style="margin-top: auto; font-size: 9.5px; color: #8D93A1">Payments land in your own Stripe account.</span>
+</div>
+<div style="flex: 1; min-width: 0; padding: 10px; border-radius: 9px; background: #12141B; border: 1px solid #1B1E28; display: flex; flex-direction: column; gap: 6px">
+<span style="font-size: 10px; color: #8D93A1">Not yet billed</span>
+<div style="display: flex; justify-content: space-between; font-size: 9.5px"><span>Henderson Co.</span><b class="mono" style="font-weight: 500">4.5 h</b></div>
+<div style="display: flex; justify-content: space-between; font-size: 9.5px"><span>Okafor family business</span><b class="mono" style="font-weight: 500">2 h</b></div>
+<span style="margin-top: 4px; font-size: 9px; color: #8D93A1">Logged this week</span>
+<div style="display: flex; justify-content: space-between; font-size: 9px; color: #C9CDD6"><span>Mon · workshop prep</span><span class="mono">1.5 h</span></div>
+<div style="display: flex; justify-content: space-between; font-size: 9px; color: #C9CDD6"><span>Tue · team session</span><span class="mono">3 h</span></div>
+<div style="display: flex; justify-content: space-between; font-size: 9px; color: #C9CDD6"><span>Tue · Okafor call</span><span class="mono">2 h</span></div>
+<span style="margin-top: auto; align-self: flex-start; font-size: 10px; font-weight: 600; padding: 5px 10px; border-radius: 999px; background: #22C55E; color: #052e16">Bill these hours</span>
+</div>
+</div>
+</div>
+</div>
+</div></div>
+<div class="dv-base"></div>
+<div class="cc-float" style="position: absolute; right: -3%; bottom: -6px; width: min(330px, 56%); background: rgba(13,15,20,0.96); color: #F5F6F8; border: 1px solid #2A2E3A; border-radius: 20px; padding: 18px; display: flex; flex-direction: column; gap: 12px; box-shadow: 0 40px 80px -20px rgba(20,16,60,0.6)" aria-label="Sample of a reminder Chief drafted">
+<div style="display: flex; align-items: center; gap: 10px"><span style="width: 30px; height: 30px; border-radius: 50%; background: linear-gradient(135deg, #E040FB, #7C5CFF 55%, #22D3EE); flex: none"></span><span style="display: flex; flex-direction: column"><b style="font-size: 13px; font-weight: 600">Chief drafted a reminder</b><span style="font-size: 11px; color: #959BA8">For the Okafor family business · INV-2026-041</span></span></div>
+<div style="background: #07080B; border: 1px solid #1F2330; border-radius: 12px; padding: 12px; display: flex; flex-direction: column; gap: 5px; font-size: 13px; line-height: 1.45; min-height: 112px">
+<span class="line" style="animation-delay: 0.2s">Hi Ada,</span>
+<span class="line" style="animation-delay: 1.2s">A friendly note that invoice INV-2026-041 is now a few days past due.</span>
+<span class="line" style="animation-delay: 2.6s">The pay link is right here whenever it suits.<span class="caret"></span></span>
+</div>
+<div style="display: flex; gap: 8px"><button type="button" style="font-family: inherit; font-size: 13px; font-weight: 600; padding: 9px 16px; border-radius: 999px; border: 0; background: #F5F6F8; color: #07080B">Send it</button><button type="button" style="font-family: inherit; font-size: 13px; font-weight: 600; padding: 9px 16px; border-radius: 999px; border: 1px solid #2A2E3A; background: transparent; color: #F5F6F8">Change a word</button></div>
+</div>
+</div>
+</div>
+</section>
+
+<!-- PRICING, the main site's way -->
+<section id="pricing" style="position: relative; background: #F1F1F4; color: #0B0C11; overflow: hidden">
+<div aria-hidden="true" style="position: absolute; left: 50%; top: 360px; width: min(1180px, 94vw); height: 680px; transform: translateX(-50%); pointer-events: none; background: radial-gradient(46% 48% at 50% 50%, rgba(124,92,255,0.17), transparent 70%), radial-gradient(30% 30% at 22% 60%, rgba(224,64,251,0.10), transparent 70%), radial-gradient(30% 30% at 78% 60%, rgba(34,211,238,0.10), transparent 70%)"></div>
+<div style="position: relative; max-width: 1240px; margin: 0 auto; padding: 140px 32px 120px; display: flex; flex-direction: column; gap: 60px">
+<div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; gap: 24px 56px">
+<div style="flex: 1.2 1 480px; min-width: 0; display: flex; flex-direction: column; gap: 18px">
+<p class="eyebrow" style="margin: 0; color: #5A5E6B">Pricing</p>
+<h2 style="margin: 0; font-family: 'Inter Tight', sans-serif; font-weight: 400; font-size: clamp(40px, 4.8vw, 68px); line-height: 1; letter-spacing: -0.045em">Every plan is <b style="font-weight: 600">the whole practice.</b></h2>
+<p style="margin: 0; font-size: 18px; color: #5A5E6B; max-width: 560px">Every part of your practice comes with every plan. The plans change who can log in, how much Chief does each month, and how deep the books go.</p>
+</div>
+<div style="flex: 0.8 1 300px; min-width: 0; display: flex; flex-direction: column; gap: 14px; align-items: flex-end">
+<div role="group" aria-label="Billing period" data-billing style="display: inline-flex; padding: 4px; border-radius: 999px; background: #E5E5EB; gap: 2px">
+<button type="button" data-period="monthly" aria-pressed="true" class="bt" style="font-family: inherit; border: 0; cursor: pointer; height: 40px; padding: 0 18px; border-radius: 999px; font-size: 14px; font-weight: 500; display: inline-flex; align-items: center; gap: 8px; ">Monthly</button>
+<button type="button" data-period="yearly" aria-pressed="false" class="bt" style="font-family: inherit; border: 0; cursor: pointer; height: 40px; padding: 0 18px; border-radius: 999px; font-size: 14px; font-weight: 500; display: inline-flex; align-items: center; gap: 8px; ">Yearly <span class="mono" style="font-size: 10.5px; padding: 4px 7px; border-radius: 999px; background: linear-gradient(135deg, rgba(224,64,251,0.16), rgba(34,211,238,0.16)); color: #5B3FE0">2 months free</span></button>
+</div>
+<p style="margin: 0; display: flex; align-items: center; gap: 9px; font-size: 12px; color: #5A5E6B"><span style="width: 7px; height: 7px; border-radius: 2px; background: linear-gradient(135deg, #E040FB, #7C5CFF, #22D3EE)"></span><span>Prices for <b style="color: #0B0C11; font-weight: 500">coaches and consultants</b>, in US dollars</span></p>
+</div>
+</div>
+
+<div class="plans">
+<div class="pc">
+<div style="display: flex; justify-content: space-between; align-items: center; min-height: 24px"><span class="pname">Starter</span></div>
+<div class="pz"><b>$<span class="pnum" data-m="{{P_STARTER}}" data-y="{{Y_STARTER}}">{{P_STARTER}}</span></b><span class="pper">a month</span></div>
+<div class="pbl">Billed monthly · cancel anytime</div>
+<div class="pds">One person, one practice.</div>
+<div class="mtr"><div class="mrow"><b>{{C_STARTER}}</b><span>AI actions a month</span></div><div class="mbar"><i style="width: {{W_STARTER}}%"></i></div><small>Messages, drafts and answers from Chief.</small></div>
+<div class="dep"><span>Chief thinks <b>Standard</b></span><span class="dd"><i class="on"></i><i></i><i></i></span></div>
+<div class="pinc">Includes</div>
+<ul>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Every part of your practice</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>1 login</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Texts from our shared number</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Basic books</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>2 bank connections</span></li>
+</ul>
+<a href="/start" class="pbtn" style="border: 1px solid rgba(11,12,17,0.2); color: #0B0C11">Start free</a>
+</div>
+
+<div class="pc mid">
+<div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 10px; min-height: 24px"><span class="pname">Professional</span><span class="prib">3 logins · your own number</span></div>
+<div class="pz"><b>$<span class="pnum" data-m="{{P_PRO}}" data-y="{{Y_PRO}}">{{P_PRO}}</span></b><span class="pper">a month</span></div>
+<div class="pbl">Billed monthly · cancel anytime</div>
+<div class="pds">You and the two people who help you.</div>
+<div class="mtr"><div class="mrow"><b>{{C_PRO}}</b><span>AI actions a month</span></div><div class="mbar"><i style="width: {{W_PRO}}%"></i></div><small>Room for Chief to draft for every client.</small></div>
+<div class="dep"><span>Chief thinks <b>Advanced</b></span><span class="dd"><i class="on"></i><i class="on"></i><i></i></span></div>
+<div class="pinc">Everything in Starter, plus</div>
+<ul>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>3 logins</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>A texting number of your own</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Full books: month-end, year-end, and 1099s</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Chief answers your website's visitors</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Chief plans your week of posts</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>5 bank connections</span></li>
+</ul>
+<a href="/start" class="pbtn" style="background: #F5F6F8; color: #0B0C11">Start free</a>
+</div>
+
+<div class="pc">
+<div style="display: flex; justify-content: space-between; align-items: center; min-height: 24px"><span class="pname">Solutionist</span></div>
+<div class="pz"><b>$<span class="pnum" data-m="{{P_SOL}}" data-y="{{Y_SOL}}">{{P_SOL}}</span></b><span class="pper">a month</span></div>
+<div class="pbl">Billed monthly · cancel anytime</div>
+<div class="pds">A growing practice, with its accountant.</div>
+<div class="mtr"><div class="mrow"><b>{{C_SOL}}</b><span>AI actions a month</span></div><div class="mbar"><i style="width: {{W_SOL}}%"></i></div><small>Chief across every client, all month.</small></div>
+<div class="dep"><span>Chief thinks <b>Maximum</b></span><span class="dd"><i class="on"></i><i class="on"></i><i class="on"></i></span></div>
+<div class="pinc">Everything in Professional, plus</div>
+<ul>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>7 logins, and a seat for your accountant</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Short clips from your recordings</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>A full audit trail</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Unlimited bank connections</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Up to 3 businesses on one account</span></li>
+</ul>
+<a href="/start" class="pbtn" style="border: 1px solid rgba(11,12,17,0.2); color: #0B0C11">Start free</a>
+</div>
+</div>
+
+<div style="display: flex; flex-direction: column; gap: 14px">
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 10px 20px; padding: 18px 22px; border-radius: 18px; background: #FFFFFF; border: 1px solid rgba(11,12,17,0.12)">
+<b style="font-family: 'Inter Tight', sans-serif; font-weight: 600; font-size: 15px">On every plan</b>
+<span style="display: flex; flex-wrap: wrap; gap: 8px 18px; font-size: 14px; color: #5A5E6B">
+<span style="display: flex; align-items: center; gap: 7px"><i style="width: 8px; height: 8px; border-radius: 50%; background: #3B82F6"></i>Bookings</span>
+<span style="display: flex; align-items: center; gap: 7px"><i style="width: 8px; height: 8px; border-radius: 50%; background: #14B8A6"></i>Clients</span>
+<span style="display: flex; align-items: center; gap: 7px"><i style="width: 8px; height: 8px; border-radius: 50%; background: #8B5CF6"></i>Proposals and Contracts</span>
+<span style="display: flex; align-items: center; gap: 7px"><i style="width: 8px; height: 8px; border-radius: 50%; background: #22C55E"></i>Billing and Time</span>
+<span style="display: flex; align-items: center; gap: 7px"><i style="width: 8px; height: 8px; border-radius: 50%; background: #F97316"></i>Courses and Classes</span>
+<span style="display: flex; align-items: center; gap: 7px"><i style="width: 8px; height: 8px; border-radius: 50%; background: #EC4899"></i>Marketing and Website</span>
+<span style="display: flex; align-items: center; gap: 7px"><i style="width: 8px; height: 8px; border-radius: 50%; background: #94A3B8"></i>Office and Books</span>
+</span>
+</div>
+{{FOUNDER_STRIP}}
+<p class="mono" style="margin: 4px 0 0; text-align: center; font-size: 12.5px; color: #5A5E6B">{{TRIAL_FINE}} · month to month · paid straight to your own Stripe · switch or cancel inside the app</p>
+</div>
+</div>
+</section>
+
+<!-- CLOSING, back under the ribbon -->
+<section id="start" style="position: relative; background: #07080B; overflow: hidden">
+<div class="aur" aria-hidden="true"><i></i><i></i><i></i></div>
+<div class="floor" aria-hidden="true" style="height: 60%"></div>
+<div style="position: relative; max-width: 1240px; margin: 0 auto; padding: 160px 32px; display: flex; flex-direction: column; align-items: center; gap: 26px; text-align: center">
+<h2 style="margin: 0; font-family: 'Inter Tight', sans-serif; font-weight: 600; font-size: clamp(42px, 6vw, 92px); line-height: 0.98; letter-spacing: -0.045em; max-width: 1000px">Chief keeps the office. <span class="serif glint" style="font-size: 1.08em">You keep your clients.</span></h2>
+<p style="margin: 0; font-size: 19px; color: #C9CDD6">{{TRIAL_LINE}}</p>
+<a href="/start" style="background: #F5F6F8; color: #07080B; text-decoration: none; font-weight: 600; font-size: 17px; padding: 16px 32px; border-radius: 999px">Start free</a>
+</div>
+</section>
+
+<!-- Footer: the Solutionist frame -->
+<footer style="background: #000000; color: #959BA8; border-top: 1px solid #15171E">
+<div style="max-width: 1240px; margin: 0 auto; padding: 56px 32px; display: flex; flex-wrap: wrap; gap: 32px 64px; justify-content: space-between">
+<div style="display: flex; flex-direction: column; gap: 10px; max-width: 360px">
+<div style="display: flex; align-items: center; gap: 8px; color: #F5F6F8"><svg width="22" height="19" viewBox="8 36 496 424" aria-hidden="true"><g fill="url(#mkg)" stroke="#fff" stroke-width="8" stroke-opacity=".92"><polygon points="18,46 175,232 237,231 133,98 376,99 356,131 412,167 494,49"></polygon><polygon points="205,138 338,241 232,391 274,449 435,221 319,137"></polygon><polygon points="264,274 149,279 201,359"></polygon></g></svg><span style="font-family: 'Inter Tight', sans-serif; font-weight: 600; font-size: 17px">Solutionist</span></div>
+<p style="margin: 0; font-size: 14px">Everything a small business runs on, in one place, with Chief running it beside you.</p>
+</div>
+<nav aria-label="Products for coaches and consultants" style="display: flex; flex-direction: column; gap: 8px; font-size: 14px">
+<span style="color: #F5F6F8; font-weight: 600">For coaches and consultants</span>
+<a href="/coaches/bookings" style="color: #C9CDD6; text-decoration: none">Bookings</a>
+<a href="/coaches/clients" style="color: #C9CDD6; text-decoration: none">Clients</a>
+<a href="/coaches/proposals-and-contracts" style="color: #C9CDD6; text-decoration: none">Proposals and Contracts</a>
+<a href="/coaches/billing-and-time" style="color: #C9CDD6; text-decoration: none">Billing and Time</a>
+</nav>
+<nav aria-label="More products for coaches and consultants" style="display: flex; flex-direction: column; gap: 8px; font-size: 14px">
+<span aria-hidden="true" style="display: block; height: 21px"></span>
+<a href="/coaches/courses-and-classes" style="color: #C9CDD6; text-decoration: none">Courses and Classes</a>
+<a href="/coaches/marketing-and-website" style="color: #C9CDD6; text-decoration: none">Marketing and Website</a>
+<a href="/coaches/office-and-books" style="color: #C9CDD6; text-decoration: none">Office and Books</a>
+</nav>
+<nav aria-label="Company" style="display: flex; flex-direction: column; gap: 8px; font-size: 14px">
+<span style="color: #F5F6F8; font-weight: 600">Solutionist</span>
+<a href="/churches" style="color: #C9CDD6; text-decoration: none">For churches</a>
+<a href="#pricing" style="color: #C9CDD6; text-decoration: none">Pricing</a>
+<a href="/privacy" style="color: #C9CDD6; text-decoration: none">Privacy</a>
+<a href="/terms" style="color: #C9CDD6; text-decoration: none">Terms</a>
+</nav>
+</div>
+</footer>
+
+</div>
+<script>
+/* the billing switch: monthly or yearly prices, from the numbers on each card */
+(function () {
+  var group = document.querySelector('[data-billing]');
+  if (!group) return;
+  var buttons = group.querySelectorAll('button[data-period]');
+  function show(yearly) {
+    buttons.forEach(function (b) { b.setAttribute('aria-pressed', String((b.getAttribute('data-period') === 'yearly') === yearly)); });
+    document.querySelectorAll('.pnum').forEach(function (n) { n.textContent = yearly ? n.getAttribute('data-y') : n.getAttribute('data-m'); });
+    document.querySelectorAll('.pper').forEach(function (n) { n.textContent = yearly ? 'a year' : 'a month'; });
+    document.querySelectorAll('.pbl').forEach(function (n) { n.textContent = yearly ? 'Billed yearly · 2 months free' : 'Billed monthly · cancel anytime'; });
+  }
+  buttons.forEach(function (b) { b.addEventListener('click', function () { show(b.getAttribute('data-period') === 'yearly'); }); });
+})();
+</script>
+{{ANALYTICS}}
+</body>
+</html>
