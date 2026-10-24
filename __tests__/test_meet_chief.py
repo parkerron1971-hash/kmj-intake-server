@@ -11,10 +11,17 @@ Holds:
   3. THE SAMPLES ADD UP: every weekday next to a date matches the 2026
      calendar, on every page of both sections.
   4. THE PHOTOS ARE THE SITE'S OWN: only pictures served from static/home.
+  5. THE WAY HOME: every page leads back to the main site by its full
+     address (these pages may be served from a church's own domain one
+     day), from the top strip and the footer; someone who came from the
+     main site goes back to the page they left.
 """
 from __future__ import annotations
 
 import datetime
+import json
+import shutil
+import subprocess
 import html as _html
 import pathlib
 import re
@@ -160,10 +167,56 @@ def test_the_photos_are_the_sites_own(section):
 def test_a_coach_is_on_camera_and_in_the_room():
     overview = coach_site.render("")
     assert 'src="/assets/home/p-maya.jpg" alt="A coach teaching a live class, on camera"' in overview
-    assert 'id="room"' in overview and 'src="/assets/home/w-workshop.jpg"' in overview
+    assert 'id="room"' in overview and 'src="/assets/home/w-class.jpg"' in overview
     assert re.search(r'<a href="/coaches/courses-and-classes#live"[^>]*>See live classes</a>', overview)
     marketing = coach_site.render("marketing-and-website")                # the recording and its clips
-    assert 'src="/assets/home/w-workshop.jpg" alt="The workshop recording"' in marketing
+    assert 'src="/assets/home/w-class.jpg" alt="The workshop recording"' in marketing
     assert "p-james.jpg" not in marketing                                 # no pastor standing in for a coach
     assert '<span class="lv-cam lv-cam-on"><img src="/assets/home/p-maya.jpg"' in coach_site.render("courses-and-classes")
     assert ">DR</span>" not in coach_site.render("courses-and-classes")
+
+
+# ─── 5. the way home ────────────────────────────────────────────────
+
+HOME = "https://mysolutionist.app/"
+
+
+@pytest.mark.parametrize("section", list(SECTIONS))
+def test_every_page_leads_home_by_the_main_sites_own_address(section):
+    for path, html in _pages(SECTIONS[section]).items():
+        strip = html[html.index("<!-- The Solutionist frame"):]
+        assert re.search(rf'<a href="{HOME}" data-home[^>]*>.*?<span[^>]*data-home-label>Solutionist home</span>',
+                         strip[:4000], flags=re.S), path
+        footer = html[html.index("<footer"):]
+        assert f'<a href="{HOME}"' in footer and ">Solutionist home</a>" in footer, path
+        for rel in ('href="/"', 'href="/start"', 'href="/privacy"', 'href="/terms"', 'href="/start?'):
+            assert rel not in html, (path, rel)                       # "/" would be the serving domain's
+
+
+def _home_script():
+    html = coach_site.render("")
+    js = [b for b in re.findall(r"<script>(.*?)</script>", html, flags=re.S) if "data-home" in b]
+    assert len(js) == 1
+    return js[0]
+
+
+@pytest.mark.parametrize("referrer,href,label", [
+    ("https://mysolutionist.app/features", "https://mysolutionist.app/features", "Back to Solutionist"),
+    ("https://www.mysolutionist.app/#pricing", "https://www.mysolutionist.app/#pricing", "Back to Solutionist"),
+    ("https://mysolutionist.app/coaches/bookings", HOME, "Solutionist home"),      # still inside the section
+    ("https://acme.mysolutionist.app/", HOME, "Solutionist home"),                 # a practitioner's own site
+    ("https://www.google.com/", HOME, "Solutionist home"),
+    ("", HOME, "Solutionist home"),
+])
+def test_someone_from_the_main_site_goes_back_to_the_page_they_left(referrer, href, label):
+    if not shutil.which("node"):
+        pytest.skip("node is not installed")
+    harness = (
+        "var label = {textContent: 'Solutionist home'};"
+        f"var a = {{href: {json.dumps(HOME)}, querySelector: function () {{ return label; }}}};"
+        f"var document = {{referrer: {json.dumps(referrer)}, querySelector: function () {{ return a; }}}};"
+        + _home_script() +
+        "console.log(JSON.stringify([a.href, label.textContent]));")
+    res = subprocess.run(["node", "-e", harness], capture_output=True, encoding="utf-8", timeout=30)
+    assert res.returncode == 0, res.stderr
+    assert json.loads(res.stdout) == [href, label]
