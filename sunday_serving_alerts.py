@@ -20,6 +20,15 @@
 # before goes to grown-ups who keep it (serve_prefs.email, on unless turned
 # off), and to anyone the phone alert didn't reach: an ask always reaches
 # them one way or another. The church's switch covers the email too.
+#
+# ChurchSavvy's "Email asks and reminders" (settings.churchsavvy.planning_email,
+# Setup → Planning; canvas UZu4VsoY9KemkUGorz234j board 15) makes email a
+# whole channel, for a church whose volunteers have no app: every step goes
+# by email. Every serving email answers with one tap and no sign-in
+# (serve_links: Yes, Can't, another Sunday; "See your Sunday"), and ends
+# with "Stop these emails", which stops this church's serving emails and
+# nothing else. Once someone stops them, nothing is emailed to them, not
+# even an ask their phone missed.
 from __future__ import annotations
 
 import asyncio
@@ -42,6 +51,8 @@ WEEK_DAYS = 7
 DAY_BEFORE_HOUR = 18
 MORNING_HOUR = 7
 EMAIL_STEPS = ("ask", "nudge", "cover", "day")
+ALL_STEPS = ("ask", "nudge", "cover", "week", "day", "morning")   # an email church: email is the whole channel
+ASK_STEPS = ("ask", "nudge", "cover")
 _SELECT = ("id,service_id,position_id,slot,contact_id,status,asked_by,asked_at,answered_at,notified_at,nudged_at,"
            "leader_told_at,week_sent_at,day_sent_at,morning_sent_at,swap_to,swap_asked_at,swap_told_at")
 
@@ -164,15 +175,24 @@ COLUMN = {"ask": "notified_at", "nudge": "nudged_at", "office": "leader_told_at"
           "week": "week_sent_at", "day": "day_sent_at", "morning": "morning_sent_at"}
 
 
+def email_church(biz: Dict[str, Any]) -> bool:
+    """ChurchSavvy's "Email asks and reminders" is on: email is the whole
+    channel here."""
+    settings = biz.get("settings") if isinstance(biz.get("settings"), dict) else {}
+    cs = settings.get("churchsavvy") if isinstance(settings.get("churchsavvy"), dict) else {}
+    return cs.get("planning_email") is True
+
+
 def tell(biz: Dict[str, Any], step: str, to: str, ctx: Dict[str, Any], person: Optional[Dict[str, Any]],
-         email_ok: bool, app: Optional[str]) -> Dict[str, int]:
+         email_ok: bool, app: Optional[str], stopped: bool = False) -> Dict[str, int]:
     import member_push
     w = words(step, ctx)
-    url = f"/my/serving/{ctx['id']}" if step in ("ask", "nudge", "cover") else f"/my/serving/{ctx['id']}/pack"
+    url = f"/my/serving/{ctx['id']}" if step in ASK_STEPS else f"/my/serving/{ctx['id']}/pack"
     rang = member_push.send(biz, KIND, title=w["title"], body=w["body"], url=url, contact_ids=[to],
                             tag=f"serving-{ctx['id']}")
     mailed = 0
-    if step in EMAIL_STEPS and person and (email_ok or not rang):
+    steps = ALL_STEPS if email_church(biz) else EMAIL_STEPS
+    if step in steps and person and not stopped and (email_ok or not rang):
         import group_email
         if group_email._adult(person):
             try:
@@ -181,6 +201,49 @@ def tell(biz: Dict[str, Any], step: str, to: str, ctx: Dict[str, Any], person: O
             except Exception:  # noqa: BLE001 — one address never stops the rest
                 logger.warning("serving alerts: one email failed", exc_info=True)
     return {"rang": rang, "mailed": mailed}
+
+
+def _ghost(label: str, url: str) -> str:
+    """The second button (Can't this time): outlined, so Yes leads."""
+    import html as _html
+    e = _html.escape
+    return ('<table role="presentation" cellpadding="0" cellspacing="0" style="margin:-12px 0 16px;">'
+            '<tr><td style="border-radius:10px;border:1.5px solid #cbd0e0;">'
+            f'<a href="{e(url)}" style="display:inline-block;padding:13px 26px;font-family:Arial,Helvetica,sans-serif;'
+            f'font-size:16px;font-weight:700;line-height:1;color:#0a1033;text-decoration:none;border-radius:10px;">'
+            f'{e(label)}</a></td></tr></table>')
+
+
+def _text_link(label: str, url: str) -> str:
+    import html as _html
+    e = _html.escape
+    return (f'<p style="margin:0 0 20px;font-family:Arial,Helvetica,sans-serif;font-size:14px;">'
+            f'<a href="{e(url)}" style="color:#1d45f2;font-weight:600;text-decoration:none;">{e(label)}</a></p>')
+
+
+def email_parts(biz: Dict[str, Any], person: Dict[str, Any], step: str, w: Dict[str, str], app_link: Optional[str],
+                ctx: Dict[str, Any]) -> Dict[str, Any]:
+    """The words and the links of one serving email (board 12): Yes leads,
+    Can't under it, then "another Sunday"; a reminder opens their Sunday.
+    Every link is signed for this person and works without signing in."""
+    import serve_links
+    church = (biz.get("name") or "").strip() or "Your church"
+    biz_id, cid = str(biz["id"]), str(person["id"])
+    t = serve_links.answer_token(biz_id, cid, ctx["id"], ctx["at"])
+    stop = serve_links.stop_token(biz_id, cid)
+    body = w["body"].replace(" Tap Yes or Can't.", "").replace("Tap Yes or Can't.", "")
+    if step in ASK_STEPS:
+        cta = ("Yes, I'm in", serve_links.page_url(t, ans="yes"))
+        after = (_ghost("Can't this time", serve_links.page_url(t, ans="no"))
+                 + _text_link("Can't that day, but I could do another", serve_links.page_url(t, ans="other")))
+    else:
+        cta = ("See your Sunday", serve_links.page_url(t))
+        after = ""
+    if app_link:
+        after += _text_link(f"Or open it in {church}'s app", app_link)
+    return {"message": "\n\n".join([w["title"], body]), "cta": cta, "after": after,
+            "stop_page": serve_links.page_url(stop, stop="1"), "one_click": serve_links.one_click_url(stop),
+            "disclaimer": f"You serve on the {ctx['team']} team at {church}.", "church": church, "preheader": body[:90]}
 
 
 async def _email(biz: Dict[str, Any], person: Dict[str, Any], step: str, w: Dict[str, str], link: Optional[str],
@@ -192,19 +255,18 @@ async def _email(biz: Dict[str, Any], person: Dict[str, Any], step: str, w: Dict
     email = str(person.get("email") or "").strip()
     if not academy_join.valid_email(email):
         return
-    church = (biz.get("name") or "").strip() or "Your church"
     settings = biz.get("settings") if isinstance(biz.get("settings"), dict) else {}
-    message = "\n\n".join([w["title"], w["body"].replace("Tap Yes or Can't.", "Answer in the app: Yes or Can't.")])
+    p = email_parts(biz, person, step, w, link, ctx)
     html = email_layout.render_html(
-        message, business_name=church, brand=email_layout.brand_of(settings), sig=None,
-        unsubscribe_url=email_sender._unsubscribe_url(email), preheader=w["body"][:90],
-        cta=(("Answer" if step in ("ask", "nudge", "cover") else "Your Sunday", link) if link else None),
-        disclaimer=f"You serve with {church}. Turn email copies off in the app: Connect, My serving, How I hear.")
+        p["message"], business_name=p["church"], brand=email_layout.brand_of(settings), sig=None,
+        unsubscribe_url=p["stop_page"], unsubscribe_label="Stop these emails", preheader=p["preheader"],
+        cta=p["cta"], after_cta=p["after"], disclaimer=p["disclaimer"], footer_note="Sent with ChurchSavvy")
     await email_sender.send_via_resend(
         to_email=email, to_name=person.get("name") or None,
         from_email=os.environ.get("RESEND_FROM_EMAIL") or "noreply@mysolutionist.app",
-        from_name=church, subject=w["title"][:150], body=html, reply_to=None,
-        business_id=str(biz["id"]), idempotency_key=f"serving-{step}-{ctx['id']}-{person['id']}")
+        from_name=p["church"], subject=w["title"][:150], body=html, reply_to=None,
+        business_id=str(biz["id"]), idempotency_key=f"serving-{step}-{ctx['id']}-{person['id']}",
+        unsubscribe_url=p["one_click"])
 
 
 async def _office(biz_id: str, title: str, body: str, key: str, person_id: Optional[str]) -> bool:
@@ -225,9 +287,14 @@ async def _office(biz_id: str, title: str, body: str, key: str, person_id: Optio
 
 
 def _churches() -> List[Dict[str, Any]]:
-    rows = sb_clients.sb_get_as_service(
-        f"/businesses?settings->member_portal->notifications->>{KIND}=eq.true&select=id,name,settings,owner_id&limit=5000")
-    return rows or []
+    """Churches that switched Serving on in the member app, and churches
+    that switched on ChurchSavvy's "Email asks and reminders"."""
+    out: Dict[str, Dict[str, Any]] = {}
+    for where in (f"settings->member_portal->notifications->>{KIND}=eq.true",
+                  "settings->churchsavvy->>planning_email=eq.true"):
+        for b in sb_clients.sb_get_as_service(f"/businesses?{where}&select=id,name,settings,owner_id&limit=5000") or []:
+            out[str(b["id"])] = b
+    return list(out.values())
 
 
 def church_tick(biz: Dict[str, Any], now: Optional[datetime] = None) -> Dict[str, int]:
@@ -265,14 +332,14 @@ def church_tick(biz: Dict[str, Any], now: Optional[datetime] = None) -> Dict[str
     ids = {str(r["contact_id"]) for r, *_ in work} | {str(r["swap_to"]) for r, *_ in work if r.get("swap_to")}
     people = {str(c["id"]): c for c in (group_email._people(biz_id, sorted(ids)) or [])}
     prefs = {str(x["contact_id"]): x for x in _read(
-        f"/serve_prefs?business_id=eq.{_q(biz_id)}&contact_id=in.({_ids(ids)})&select=contact_id,email")}
+        f"/serve_prefs?business_id=eq.{_q(biz_id)}&contact_id=in.({_ids(ids)})&select=contact_id,email,email_stopped_at")}
     app = group_email.app_url(biz_id)
     for r, s, p, t, hhmm, steps in work:
         leaders = [x["name"] for x in t["people"] if x.get("leader")]
         asker = r.get("asked_by") or ""
         if not asker or asker == sp.FILLED_BY:
             asker = _first(leaders[0]) if leaders else ((biz.get("name") or "").strip() or "The church")
-        ctx = {"id": str(r["id"]), "place": p["name"], "team": t["name"], "title": s["title"],
+        ctx = {"id": str(r["id"]), "at": s["at"], "place": p["name"], "team": t["name"], "title": s["title"],
                "day": _day(s["at"]), "call": _clock(hhmm), "time": _clock(hhmm or s["at"].strftime("%H:%M")),
                "asker": asker,
                "from": _first((people.get(str(r["contact_id"])) or {}).get("name"))}
@@ -288,7 +355,9 @@ def church_tick(biz: Dict[str, Any], now: Optional[datetime] = None) -> Dict[str
                     out["office"] += 1
                 continue
             to = str(r["swap_to"]) if name == "cover" else str(r["contact_id"])
-            sent = tell(biz, name, to, ctx, people.get(to), (prefs.get(to) or {}).get("email") is not False, app)
+            pref = prefs.get(to) or {}
+            sent = tell(biz, name, to, ctx, people.get(to), pref.get("email") is not False, app,
+                        stopped=bool(pref.get("email_stopped_at")))
             out["emails"] += sent["mailed"]
             key = {"ask": "asks", "nudge": "nudges", "cover": "covers"}.get(name, "reminders")
             out[key] += 1

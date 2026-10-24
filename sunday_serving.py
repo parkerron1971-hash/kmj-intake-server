@@ -265,21 +265,31 @@ def ask_view(biz: Dict[str, Any], cid: str, aid: str) -> Dict[str, Any]:
     }
 
 
-def _next_free(biz_id: str, cid: str, zone, after: datetime) -> Optional[Dict[str, Any]]:
-    """The next service within two weeks that this member isn't away for
-    and isn't already serving at."""
-    later = _services(biz_id, zone, after + timedelta(hours=12), after + timedelta(days=15))
+def free_sundays(biz_id: str, cid: str, zone, after: datetime, n: int = 2, days: int = 29) -> List[Dict[str, Any]]:
+    """The next services (up to n, within `days`) that this member isn't
+    away for and isn't already serving at: "I can't, but I can do …"."""
+    later = _services(biz_id, zone, after + timedelta(hours=12), after + timedelta(days=days))
     if not later:
-        return None
+        return []
     rows = _read(f"/serve_assignments?business_id=eq.{_q(biz_id)}&contact_id=eq.{_q(cid)}&service_id=in.({_ids(later)})"
                  f"&status=in.(asked,yes)&select=service_id")
     taken = {str(r["service_id"]) for r in rows}
     away = _read(f"/serve_away?business_id=eq.{_q(biz_id)}&contact_id=eq.{_q(cid)}&select=starts_on,ends_on")
+    out: List[Dict[str, Any]] = []
     for s in later.values():
         if s["id"] in taken or any(str(a["starts_on"]) <= s["day"] <= str(a["ends_on"]) for a in away):
             continue
-        return {"id": s["id"], "at": s["at"], "title": s["title"]}
-    return None
+        out.append({"id": s["id"], "at": s["at"], "title": s["title"]})
+        if len(out) >= n:
+            break
+    return out
+
+
+def _next_free(biz_id: str, cid: str, zone, after: datetime) -> Optional[Dict[str, Any]]:
+    """The next service within two weeks that this member isn't away for
+    and isn't already serving at."""
+    free = free_sundays(biz_id, cid, zone, after, n=1, days=15)
+    return free[0] if free else None
 
 
 # ─── answering ───────────────────────────────────────────────────────
@@ -295,10 +305,12 @@ def _patch(biz_id: str, aid: str, guard: str, fields: Dict[str, Any]) -> Dict[st
     return saved[0]
 
 
-def answer(biz: Dict[str, Any], cid: str, aid: str, ans: str, why: str = "") -> Dict[str, Any]:
-    """yes, no, or other (can't, but free the next Sunday). An answer to a
-    cover request moves the place to this member, or leaves it with the
-    one who asked."""
+def answer(biz: Dict[str, Any], cid: str, aid: str, ans: str, why: str = "",
+           offer: Optional[str] = None) -> Dict[str, Any]:
+    """yes, no, or other (can't, but free the next Sunday, or the one they
+    picked: `offer`, a service from free_sundays). An answer to a cover
+    request moves the place to this member, or leaves it with the one who
+    asked."""
     biz_id = str(biz["id"])
     if ans not in ("yes", "no", "other"):
         raise HTTPException(400, "The answer is yes or no.")
@@ -323,7 +335,12 @@ def answer(biz: Dict[str, Any], cid: str, aid: str, ans: str, why: str = "") -> 
         return _patch(biz_id, aid, f"contact_id=eq.{_q(cid)}", {"status": "yes", "answered_at": now, "note": ""})
     note = why
     if ans == "other":
-        nxt = _next_free(biz_id, cid, zone, at)
+        if offer:
+            nxt = next((f for f in free_sundays(biz_id, cid, zone, at) if f["id"] == offer), None)
+            if not nxt:
+                raise HTTPException(409, "That Sunday isn't free for you anymore. Pick another.")
+        else:
+            nxt = _next_free(biz_id, cid, zone, at)
         if nxt:
             note = f"Can do {_day(nxt['at'])}" + (f" · {why}" if why else "")
     return _patch(biz_id, aid, f"contact_id=eq.{_q(cid)}",
@@ -481,12 +498,31 @@ def set_hearing(biz: Dict[str, Any], cid: str, what: str, on_: bool) -> None:
         return
     if what != "email":
         raise HTTPException(400, "Pick phone alerts or email.")
+    # Turning the email copy back on also undoes "Stop these emails".
+    _save_prefs(biz_id, cid, {"email": on_, **({"email_stopped_at": None} if on_ else {})})
+
+
+def _save_prefs(biz_id: str, cid: str, fields: Dict[str, Any]) -> None:
     saved = sb_clients.sb_post_as_service(
         "/serve_prefs?on_conflict=business_id,contact_id&select=email",
-        {"business_id": biz_id, "contact_id": cid, "email": on_, "updated_at": sp._now().isoformat()},
+        {"business_id": biz_id, "contact_id": cid, **fields, "updated_at": sp._now().isoformat()},
         prefer="resolution=merge-duplicates,return=representation")
     if not isinstance(saved, list) or not saved:
         raise HTTPException(503, "That didn't save. Try again.")
+
+
+def stop_emails(biz: Dict[str, Any], cid: str) -> None:
+    """"Stop these emails" (the link in every serving email): no serving
+    email from this church reaches them again, not even an ask their phone
+    missed, until they turn the email copy back on. Only this church, and
+    only serving: their sign-in codes and other mail still go."""
+    _save_prefs(str(biz["id"]), cid, {"email": False, "email_stopped_at": sp._now().isoformat()})
+
+
+def emails_on(biz_id: str, cid: str) -> bool:
+    """False once they've said "Stop these emails"."""
+    rows = _read(f"/serve_prefs?business_id=eq.{_q(biz_id)}&contact_id=eq.{_q(cid)}&select=email_stopped_at&limit=1")
+    return not (rows and rows[0].get("email_stopped_at"))
 
 
 # ─── the Sunday pack (board 9) ───────────────────────────────────────

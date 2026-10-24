@@ -12,6 +12,8 @@
 #   DELETE /planning/positions/{id}                 retire it; who served there stays
 #   PUT    /planning/positions/{id}/people          who's trained on it, or learning
 #   GET    /planning/people?business_id=&q=         find a member to add (names only)
+#   POST   /planning/people                         someone new, by name and email (ChurchSavvy alone)
+#   PUT    /planning/email                          ChurchSavvy's "Email asks and reminders", an admin's switch
 #   GET    /planning/schedule?business_id=&start=&weeks=  the coming services, each place, who
 #   POST   /planning/sundays                        add the coming Sundays to plan
 #   GET    /planning/candidates?business_id=&service_id=&position_id=
@@ -150,15 +152,18 @@ def _asker(biz: str, user: AuthedUser) -> str:
 
 
 def _people(biz: str, ids) -> Dict[str, Dict[str, Any]]:
-    """id → {name, teen} for these members of this church."""
+    """id → {name, teen, has_email} for these members of this church: whether
+    an email can reach them, never the address itself."""
+    import academy_join
     out: Dict[str, Dict[str, Any]] = {}
     ids = sorted({str(i) for i in ids if i})
     today = _now().date()
     for i in range(0, len(ids), 150):
-        rows = _read(f"/contacts?business_id=eq.{_q(biz)}&id=in.({_ids(ids[i:i + 150])})&select=id,name,birthdate")
+        rows = _read(f"/contacts?business_id=eq.{_q(biz)}&id=in.({_ids(ids[i:i + 150])})&select=id,name,birthdate,email")
         for r in rows:
             out[str(r["id"])] = {"name": (r.get("name") or "Someone").strip() or "Someone",
-                                 "teen": _is_teen(r.get("birthdate"), today)}
+                                 "teen": _is_teen(r.get("birthdate"), today),
+                                 "has_email": academy_join.valid_email(str(r.get("email") or "").strip())}
     return out
 
 
@@ -256,7 +261,34 @@ def status(business_id: Optional[str] = None, user: AuthedUser = Depends(require
         return {"enabled": True}
     biz = _uuid(business_id)
     roles = roles_of(biz, user)
-    return {"enabled": True, "can_write": can(roles, "serve"), "roles": sorted(roles)}
+    settings = _church(biz).get("settings") or {}
+    cs = settings.get("churchsavvy") if isinstance(settings.get("churchsavvy"), dict) else {}
+    portal = settings.get("member_portal") if isinstance(settings.get("member_portal"), dict) else {}
+    return {"enabled": True, "can_write": can(roles, "serve"), "roles": sorted(roles),
+            "can_setup": can(roles, "setup"), "email_asks": cs.get("planning_email") is True,
+            "member_app": portal.get("enabled") is True}
+
+
+@router.put("/email")
+def set_email_asks(body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
+    """ChurchSavvy's "Email asks and reminders" (Setup → Planning): on, every
+    ask and reminder goes by email with one-tap answers; off, Planning
+    emails only what the member app's own switch sends. An admin's choice."""
+    _gate(user)
+    biz = _uuid(body.get("business_id"))
+    require(biz, user, "setup")
+    on = body.get("on") is True
+    rows = _read(f"/businesses?id=eq.{_q(biz)}&select=settings&limit=1")
+    if not rows:
+        raise HTTPException(404, "That church isn't here")
+    settings = rows[0].get("settings") if isinstance(rows[0].get("settings"), dict) else {}
+    cs = dict(settings["churchsavvy"]) if isinstance(settings.get("churchsavvy"), dict) else {}
+    cs["planning_email"] = on
+    saved = sb_clients.sb_patch_as_service(f"/businesses?id=eq.{_q(biz)}&select=id",
+                                           {"settings": {**settings, "churchsavvy": cs}})
+    if not saved:
+        raise HTTPException(503, "That didn't save. Try again.")
+    return {"email_asks": on}
 
 
 @router.get("/teams")
@@ -523,6 +555,34 @@ def find_people(business_id: str, q: str = "", user: AuthedUser = Depends(requir
     today = _now().date()
     return {"people": [{"contact_id": str(r["id"]), "name": (r.get("name") or "").strip() or "Someone",
                         "teen": _is_teen(r.get("birthdate"), today)} for r in rows]}
+
+
+@router.post("/people")
+def add_person(body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
+    """Someone new to schedule, by name and email (canvas UZu4VsoY9KemkUGorz234j
+    board 10 "Add a person"): a church on ChurchSavvy alone has no member
+    list to pick from. The same email at this church is the same person, so
+    nobody is made twice, and their name stays as the church has it."""
+    import academy_join
+    _gate(user)
+    biz = _uuid(body.get("business_id"))
+    _staff(biz, user, write=True)
+    name = _clean_name(body.get("name"), "person", 80)
+    email = str(body.get("email") or "").strip().lower()
+    if not academy_join.valid_email(email):
+        raise HTTPException(400, "That email doesn't look right.")
+    like = email.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    found = _read(f"/contacts?business_id=eq.{_q(biz)}&email=ilike.{_q(like)}&select=id,name,birthdate&limit=1")
+    if found:
+        r = found[0]
+        return {"person": {"contact_id": str(r["id"]), "name": (r.get("name") or "").strip() or name,
+                           "teen": _is_teen(r.get("birthdate"), _now().date()), "has_email": True}, "existing": True}
+    made = sb_clients.sb_post_as_service("/contacts", {"business_id": biz, "name": name, "email": email,
+                                                      "source": "churchsavvy_planning"})
+    if not isinstance(made, list) or not made:
+        raise HTTPException(503, "That didn't save. Try again.")
+    return {"person": {"contact_id": str(made[0]["id"]), "name": name, "teen": False, "has_email": True},
+            "existing": False}
 
 
 # ─── the schedule ────────────────────────────────────────────────────

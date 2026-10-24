@@ -217,3 +217,4 @@ jobs:
           node __tests__/serving_alerts_db.mjs
           node __tests__/serve_notes_db.mjs
           node __tests__/serve_here_db.mjs
+          node __tests__/serve_email_stop_db.mjs
