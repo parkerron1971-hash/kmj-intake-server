@@ -339,6 +339,9 @@ app.include_router(worship_team_router)
 # The map: every part of a church's system in one area, and who reaches it.
 from church_areas import router as church_areas_router
 app.include_router(church_areas_router)
+# Sermons from ChurchSavvy, for the team's Media part (no seat needed).
+from worship_sermons import router as worship_sermons_router
+app.include_router(worship_sermons_router)
 # Joining a free class from its public page (POST <class page>/join).
 from academy_join import router as academy_join_router
 app.include_router(academy_join_router)
