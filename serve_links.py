@@ -6,6 +6,7 @@
 # for at least emails to go out").
 #
 #   GET  /serve-link/view?t=           the ask or their Sunday, as the page shows it
+#   GET  /serve-link/who?t=            the church and their first name (the stop page)
 #   POST /serve-link/answer            {t, ans: yes|no|other, why?, offer?}
 #   POST /serve-link/why               {t, why}: why they can't, if they want to say
 #   POST /serve-link/here              {t}: "I'm here", on the day
@@ -230,6 +231,18 @@ def view(token: str) -> Dict[str, Any]:
 @router.get("/view")
 def open_link(t: str):
     return view(t)
+
+
+@router.get("/who")
+def who(t: str):
+    """The church and the first name a link is for, and whether this
+    church's serving emails still reach them: the Stop these emails page
+    names the church before anything changes. Any genuine link reads it."""
+    claims = _claims(t, ask=False)
+    biz = _church(claims["biz"])
+    person = _person(claims["biz"], claims["cid"])
+    return {"church": church_card(biz), "first": ((person.get("name") or "").strip().split(" ") or [""])[0],
+            "email_on": ss.emails_on(claims["biz"], claims["cid"])}
 
 
 def _body_token(body: Dict[str, Any]) -> str:
