@@ -113,6 +113,7 @@ def render(slug: str) -> str:
         "TITLE": escape(meta["title"]),
         "DESCRIPTION": escape(meta["description"]),
         "URL": ORIGIN + path_of(slug),
+        "HOME": ORIGIN,     # the main site by its own address, whatever domain serves this page
         "APP_URL": mp.APP_URL,
         "COACH_CSS": _read("coach.css"),
         **church_site._plan_tokens(),

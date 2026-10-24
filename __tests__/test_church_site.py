@@ -126,7 +126,7 @@ def test_the_founding_seat_is_the_live_offer(monkeypatch):
                         lambda: {"limit": 50, "taken": 3, "left": 47, "next": 4, "price": 99,
                                  "list_price": 149, "credits": 5000})
     html = cs.render("")
-    assert 'href="/start?plan=founder"' in html and "<b style=\"color: #0B0C11\">47</b> of 50 seats left" in html
+    assert 'href="https://mysolutionist.app/start?plan=founder"' in html and "<b style=\"color: #0B0C11\">47</b> of 50 seats left" in html
     assert "Claim seat 04" in html and "Professional for $99 a month" in html
     monkeypatch.setattr(v3, "_founder_state",
                         lambda: {"limit": 50, "taken": 50, "left": 0, "next": 50, "price": 99,

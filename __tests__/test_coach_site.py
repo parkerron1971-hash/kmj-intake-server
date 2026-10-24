@@ -65,8 +65,10 @@ def test_every_page_speaks_in_the_voice():
 
 
 def test_no_customer_photos():
+    # the main site's own: its coach (p-maya, only ever "You") and the workshop
+    allowed = {"/assets/home/p-maya.jpg", "/assets/home/w-class.jpg"}
     for path, html in _all().items():
-        assert set(re.findall(r'<img[^>]*\ssrc="([^"]+)"', html)) <= {"/assets/home/p-james.jpg"}, path
+        assert set(re.findall(r'<img[^>]*\ssrc="([^"]+)"', html)) <= allowed, path
 
 
 def test_product_pages_carry_the_shared_style_and_their_own_light():
@@ -124,7 +126,7 @@ def test_the_founding_seat_is_the_live_offer(monkeypatch):
                         lambda: {"limit": 50, "taken": 3, "left": 47, "next": 4, "price": 99,
                                  "list_price": 149, "credits": 5000})
     html = cs.render("")
-    assert 'href="/start?plan=founder"' in html and "Claim seat 04" in html
+    assert 'href="https://mysolutionist.app/start?plan=founder"' in html and "Claim seat 04" in html
 
 
 def test_the_plan_cards_match_the_gates():
@@ -156,7 +158,8 @@ def test_the_plan_cards_match_the_gates():
                   "5 bank connections", "Chief thinks <b>Advanced</b>"):
         assert words in pro, words
     for words in ("7 logins, and a seat for your accountant", "Short clips from your recordings",
-                  "A full audit trail", "Unlimited bank connections", "Up to 3 businesses on one account",
+                  "An audit trail of every change to a closed month", "Unlimited bank connections",
+                  "Up to 3 businesses on one account",
                   "Chief thinks <b>Maximum</b>"):
         assert words in sol, words
 
@@ -197,7 +200,7 @@ def test_every_page_has_the_products_menu_with_every_page():
 
 def test_the_pages_lead_to_the_churches_and_back_to_the_main_site():
     for path, html in _all().items():
-        assert 'href="/churches"' in html and 'href="/"' in html, path
+        assert 'href="https://mysolutionist.app/churches"' in html and 'href="https://mysolutionist.app/"' in html, path
 
 
 # ─── 4. the routes ──────────────────────────────────────────────────

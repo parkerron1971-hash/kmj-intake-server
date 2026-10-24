@@ -115,6 +115,7 @@ a{color:#F5F6F8}a:hover{color:#F9A8D4}
 </style>
 <style>
 {{COACH_CSS}}
+.mc-strip a{color:#F5F6F8;font-weight:600;text-decoration:underline;text-underline-offset:4px;white-space:nowrap}
 </style>
 {{PIXEL}}
 </head>
@@ -123,13 +124,14 @@ a{color:#F5F6F8}a:hover{color:#F9A8D4}
 
 <!-- The Solutionist frame, lit in this room's colour -->
 <div class="strip"><div class="wrap strip-in">
-<a href="/coaches" style="display: flex; align-items: center; gap: 8px; color: #F5F6F8">
+<a href="{{HOME}}/" data-home style="display: flex; align-items: center; gap: 8px; color: #F5F6F8; text-decoration: none">
+<svg width="8" height="13" viewBox="0 0 8 13" fill="none" stroke="#959BA8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6.5 1.5 1.5 6.5l5 5"></path></svg>
 <svg width="20" height="17" viewBox="8 36 496 424" aria-hidden="true"><defs><linearGradient id="mkg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#E040FB"></stop><stop offset=".55" stop-color="#7C5CFF"></stop><stop offset="1" stop-color="#22D3EE"></stop></linearGradient></defs><g fill="url(#mkg)" stroke="#fff" stroke-width="8" stroke-opacity=".92"><polygon points="18,46 175,232 237,231 133,98 376,99 356,131 412,167 494,49"></polygon><polygon points="205,138 338,241 232,391 274,449 435,221 319,137"></polygon><polygon points="264,274 149,279 201,359"></polygon></g></svg>
-<span style="font-weight: 600">Solutionist</span>
+<span style="font-weight: 600" data-home-label>Solutionist home</span>
 </a>
 <nav aria-label="Solutionist" style="display: flex; flex-wrap: wrap; gap: 6px 22px">
-<a href="/churches">For churches</a>
-<a href="/">All of Solutionist</a>
+<a href="{{HOME}}/churches">For churches</a>
+<a href="{{HOME}}/">All of Solutionist</a>
 <a href="{{APP_URL}}" style="color: #F5F6F8">Sign in</a>
 </nav>
 </div></div>
@@ -148,7 +150,7 @@ a{color:#F5F6F8}a:hover{color:#F9A8D4}
 <nav aria-label="Coaches and consultants" style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px 28px; font-size: 15px; font-weight: 500">
 <details class="pmenu"><summary>Products<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#E4E6EB" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg></summary><div class="pmenu-panel"><a href="/coaches"><i style="background: linear-gradient(135deg, #E040FB, #7C5CFF 55%, #22D3EE)"></i><b>Overview</b><span>Every part of your practice</span></a><a href="/coaches/bookings"><i style="background: #3B82F6"></i><b>Bookings</b><span>Your booking page and standing sessions</span></a><a href="/coaches/clients"><i style="background: #14B8A6"></i><b>Clients</b><span>One record, a brief before every session</span></a><a href="/coaches/proposals-and-contracts"><i style="background: #8B5CF6"></i><b>Proposals and Contracts</b><span>Drafted in your voice</span></a><a href="/coaches/billing-and-time"><i style="background: #22C55E"></i><b>Billing and Time</b><span>Invoices, pay links and your hours</span></a><a href="/coaches/courses-and-classes"><i style="background: #F97316"></i><b>Courses and Classes</b><span>Live classes, recordings, homework</span></a><a href="/coaches/marketing-and-website" aria-current="page"><i style="background: #EC4899"></i><b>Marketing and Website</b><span>Your site and a week of posts</span></a><a href="/coaches/office-and-books"><i style="background: #94A3B8"></i><b>Office and Books</b><span>The books, the close, the 1099s</span></a></div></details>
 <a href="/coaches#pricing" style="text-decoration: none; color: #E4E6EB">Pricing</a>
-<a href="/start" class="btn btn-w btn-s">Start free</a>
+<a href="{{HOME}}/start" class="btn btn-w btn-s">Start free</a>
 </nav>
 </header>
 
@@ -174,7 +176,7 @@ a{color:#F5F6F8}a:hover{color:#F9A8D4}
 <div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; gap: 24px 48px">
 <p class="lede" style="max-width: 640px">A website on your own address, and a marketing desk where Chief writes the posts, designs the flyers and shows what each one brought in. For the coach filling a calendar and the consultant filling a workshop. Nothing goes out until you say so.</p>
 <div style="display: flex; flex-wrap: wrap; gap: 12px">
-<a href="/start" class="btn btn-w">{{CTA_START}}</a>
+<a href="{{HOME}}/start" class="btn btn-w">{{CTA_START}}</a>
 <a href="#week" class="btn btn-l">See a planned week</a>
 </div>
 </div>
@@ -331,7 +333,7 @@ a{color:#F5F6F8}a:hover{color:#F9A8D4}
 <div class="wrap split" style="flex-wrap: wrap-reverse">
 <div class="vis stack" style="min-height: 560px">
 <div class="dk" style="position: absolute; left: 0; top: 0; width: 100%" aria-label="Sample of next week's posts on the marketing desk">
-<div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px"><b style="font: 600 17px/1.2 'Inter Tight', sans-serif; color: #F5F6F8">Next week · Nov 3 to 7</b><span style="display: flex; flex-wrap: wrap; gap: 5px"><span class="dk-acct"><i style="background: #E1306C"></i>Instagram</span><span class="dk-acct"><i style="background: #1877F2"></i>Facebook</span><span class="dk-acct"><i style="background: #FF0033"></i>YouTube</span></span></div>
+<div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px"><b style="font: 600 17px/1.2 'Inter Tight', sans-serif; color: #F5F6F8">Next week · Nov 2 to 6</b><span style="display: flex; flex-wrap: wrap; gap: 5px"><span class="dk-acct"><i style="background: #E1306C"></i>Instagram</span><span class="dk-acct"><i style="background: #1877F2"></i>Facebook</span><span class="dk-acct"><i style="background: #FF0033"></i>YouTube</span></span></div>
 <div class="dk-read">
 <span class="chief-av" style="width: 22px; height: 22px"></span>
 <span style="display: flex; flex-direction: column; gap: 3px"><b style="font-size: 13px; color: #F5F6F8">Chief's read</b><span style="font-size: 12.5px; color: #C9CDD6">2 bookings in the next 7 days so far, against about 5 at this point in each of the last 4 weeks. Next week leans on inviting a booking, with a tip so it isn't all asks.</span></span>
@@ -384,23 +386,23 @@ a{color:#F5F6F8}a:hover{color:#F9A8D4}
 <div class="vc" aria-label="Sample of Video Clips with clips from a workshop recording">
 <div style="display: flex; justify-content: space-between; align-items: baseline; gap: 10px"><b style="font: 600 17px/1.2 'Inter Tight', sans-serif; color: #F5F6F8">Video Clips</b><span style="font-size: 11.5px; color: #8D93A1">From one recording</span></div>
 <div class="vc-src">
-<span class="vc-thumb"><img src="/assets/home/p-james.jpg" alt="The workshop recording" style="object-position: 56% 26%"></span>
+<span class="vc-thumb"><img src="/assets/home/w-class.jpg" alt="The workshop recording" style="object-position: 50% 34%"></span>
 <span style="display: flex; flex-direction: column; gap: 2px; min-width: 0"><b style="font-size: 13px; color: #F5F6F8">Leading Through Change, live workshop</b><span style="font-size: 11.5px; color: #8D93A1">1 h 12 min · 6 clips ready to review</span></span>
 <span style="margin-left: auto; flex: none; font-size: 10.5px; font-weight: 600; padding: 3px 9px; border-radius: 999px; background: rgba(34,197,94,0.16); color: #86EFAC">Done</span>
 </div>
 <div class="vc-clips">
 <div class="clip">
-<div class="clip-v"><img src="/assets/home/p-james.jpg" alt="A clip from the workshop" style="object-position: 58% 20%"><span class="clip-dur">0:42</span><span class="clip-cap">Your team isn't resisting <em>change.</em></span></div>
+<div class="clip-v"><img src="/assets/home/w-class.jpg" alt="A clip from the workshop" style="object-position: 42% 28%"><span class="clip-dur">0:42</span><span class="clip-cap">Your team isn't resisting <em>change.</em></span></div>
 <b style="font-size: 12px; color: #F5F6F8">They're resisting the loss</b>
 <div class="clip-acts"><span class="on">Kept</span><span>Cover</span></div>
 </div>
 <div class="clip">
-<div class="clip-v"><img src="/assets/home/p-james.jpg" alt="Another clip from the workshop" style="object-position: 48% 30%"><span class="clip-dur">0:37</span><span class="clip-cap">Say the hard thing in the <em>first two minutes.</em></span></div>
+<div class="clip-v"><img src="/assets/home/w-class.jpg" alt="Another clip from the workshop" style="object-position: 72% 44%"><span class="clip-dur">0:37</span><span class="clip-cap">Say the hard thing in the <em>first two minutes.</em></span></div>
 <b style="font-size: 12px; color: #F5F6F8">The first two minutes</b>
 <div class="clip-acts"><span>Keep</span><span>Skip</span></div>
 </div>
 <div class="clip">
-<div class="clip-v" style="background: #0F1830"><img src="/assets/home/p-james.jpg" alt="" style="object-position: 62% 18%; opacity: 0.55"><span style="position: absolute; left: 0; right: 0; top: 0; bottom: 0; background: linear-gradient(180deg, rgba(15,24,48,0.1) 30%, rgba(15,24,48,0.92) 78%)"></span><span style="position: absolute; left: 10%; right: 10%; bottom: 10%; display: flex; flex-direction: column; gap: 4px"><span style="font: 600 7px/1 'Inter', sans-serif; letter-spacing: 0.12em; text-transform: uppercase; color: #B9C8EE">Reyes Coaching</span><b style="font: 600 15px/1.05 'Newsreader', serif; color: #F5F2EC">Small wins, <em style="color: #F9A8D4">in public</em></b></span></div>
+<div class="clip-v" style="background: #0F1830"><img src="/assets/home/w-class.jpg" alt="" style="object-position: 42% 26%; opacity: 0.55"><span style="position: absolute; left: 0; right: 0; top: 0; bottom: 0; background: linear-gradient(180deg, rgba(15,24,48,0.1) 30%, rgba(15,24,48,0.92) 78%)"></span><span style="position: absolute; left: 10%; right: 10%; bottom: 10%; display: flex; flex-direction: column; gap: 4px"><span style="font: 600 7px/1 'Inter', sans-serif; letter-spacing: 0.12em; text-transform: uppercase; color: #B9C8EE">Reyes Coaching</span><b style="font: 600 15px/1.05 'Newsreader', serif; color: #F5F2EC">Small wins, <em style="color: #F9A8D4">in public</em></b></span></div>
 <b style="font-size: 12px; color: #F5F6F8">Story cover, ready</b>
 <div class="clip-acts"><span class="on">Post</span><span>Later</span></div>
 </div>
@@ -451,6 +453,17 @@ a{color:#F5F6F8}a:hover{color:#F9A8D4}
 </div>
 </section>
 
+<!-- CHIEF, EVERY ROOM -->
+<section style="background: #07080B; border-top: 1px solid #12141B">
+<div class="wrap" style="padding-top: 40px; padding-bottom: 8px">
+<div class="mc-strip" style="display: flex; flex-wrap: wrap; align-items: center; gap: 14px 22px; padding: 22px 26px; border-radius: 22px; background: #0D0F14; border: 1px solid #1F2330">
+<span style="width: 36px; height: 36px; border-radius: 50%; background: linear-gradient(135deg, #E040FB, #7C5CFF 55%, #22D3EE); flex: none"></span>
+<p style="margin: 0; flex: 1 1 420px; font-size: 16px; line-height: 1.55; color: #C9CDD6"><b style="color: #F5F6F8; font-weight: 600">Chief works the same way in every room.</b> It works from your practice's own records, waits for your yes before it sends anything or touches money, and lists what it does on your History page.</p>
+<a href="/coaches#chief">How Chief works</a>
+</div>
+</div>
+</section>
+<!-- /CHIEF, EVERY ROOM -->
 <!-- THE ROOMS NEXT DOOR -->
 <section class="sec" style="background: #07080B; padding-top: 40px; border-top: 1px solid #12141B">
 <div class="wrap" style="display: flex; flex-direction: column; gap: 32px">
@@ -510,7 +523,7 @@ a{color:#F5F6F8}a:hover{color:#F9A8D4}
 <div class="wrap" style="position: relative; padding-top: 150px; padding-bottom: 150px; display: flex; flex-direction: column; align-items: center; gap: 24px; text-align: center">
 <h2 class="h1" style="font-size: clamp(42px, 5.6vw, 84px); max-width: 960px">Be found <span class="serif glint" style="font-size: 1.06em; white-space: nowrap">every week.</span></h2>
 <p class="lede">{{TRIAL_LINE}}</p>
-<a href="/start" class="btn btn-w">Start free</a>
+<a href="{{HOME}}/start" class="btn btn-w">Start free</a>
 </div>
 </section>
 
@@ -521,10 +534,24 @@ a{color:#F5F6F8}a:hover{color:#F9A8D4}
 <p style="margin: 0; font-size: 14px">Everything a small business runs on, in one place, with Chief running it beside you.</p>
 </div>
 <nav aria-label="Products for coaches and consultants"><b>For coaches and consultants</b><a href="/coaches/bookings">Bookings</a><a href="/coaches/clients">Clients</a><a href="/coaches/proposals-and-contracts">Proposals and Contracts</a><a href="/coaches/billing-and-time">Billing and Time</a><a href="/coaches/courses-and-classes">Courses and Classes</a><a href="/coaches/marketing-and-website">Marketing and Website</a><a href="/coaches/office-and-books">Office and Books</a></nav>
-<nav aria-label="Company"><b>Solutionist</b><a href="/churches">For churches</a><a href="/coaches#pricing">Pricing</a><a href="/privacy">Privacy</a><a href="/terms">Terms</a></nav>
+<nav aria-label="Company"><b>Solutionist</b><a href="{{HOME}}/">Solutionist home</a><a href="{{HOME}}/churches">For churches</a><a href="/coaches#pricing">Pricing</a><a href="{{HOME}}/privacy">Privacy</a><a href="{{HOME}}/terms">Terms</a></nav>
 </div></footer>
 
 </div>
 {{ANALYTICS}}
+<script>
+/* Solutionist home: someone who came here from the main site goes back to the page they left */
+(function () {
+  try {
+    var a = document.querySelector("[data-home]");
+    if (!a || !document.referrer) return;
+    var r = new URL(document.referrer), h = new URL(a.href).hostname;
+    if (r.hostname !== h && r.hostname !== "www." + h) return;
+    if (/^\/(churches|coaches|consultants)(\/|$)/.test(r.pathname)) return;
+    a.href = r.href;
+    a.querySelector("[data-home-label]").textContent = "Back to Solutionist";
+  } catch (e) { /* the plain link still goes home */ }
+})();
+</script>
 </body>
 </html>

@@ -76,6 +76,7 @@ a{color:#F5F6F8}a:hover{color:#FCD34D}
 </style>
 <style>
 {{CHURCH_CSS}}
+.mc-strip a{color:#F5F6F8;font-weight:600;text-decoration:underline;text-underline-offset:4px;white-space:nowrap}
 </style>
 {{PIXEL}}
 </head>
@@ -84,13 +85,14 @@ a{color:#F5F6F8}a:hover{color:#FCD34D}
 
 <!-- The Solutionist frame, lit in this room's colour -->
 <div class="strip"><div class="wrap strip-in">
-<a href="/churches" style="display: flex; align-items: center; gap: 8px; color: #F5F6F8">
+<a href="{{HOME}}/" data-home style="display: flex; align-items: center; gap: 8px; color: #F5F6F8; text-decoration: none">
+<svg width="8" height="13" viewBox="0 0 8 13" fill="none" stroke="#959BA8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6.5 1.5 1.5 6.5l5 5"></path></svg>
 <svg width="20" height="17" viewBox="8 36 496 424" aria-hidden="true"><defs><linearGradient id="mkg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#E040FB"></stop><stop offset=".55" stop-color="#7C5CFF"></stop><stop offset="1" stop-color="#22D3EE"></stop></linearGradient></defs><g fill="url(#mkg)" stroke="#fff" stroke-width="8" stroke-opacity=".92"><polygon points="18,46 175,232 237,231 133,98 376,99 356,131 412,167 494,49"></polygon><polygon points="205,138 338,241 232,391 274,449 435,221 319,137"></polygon><polygon points="264,274 149,279 201,359"></polygon></g></svg>
-<span style="font-weight: 600">Solutionist</span>
+<span style="font-weight: 600" data-home-label>Solutionist home</span>
 </a>
 <nav aria-label="Solutionist" style="display: flex; flex-wrap: wrap; gap: 6px 22px">
-<a href="/coaches">For coaches and consultants</a>
-<a href="/">All of Solutionist</a>
+<a href="{{HOME}}/coaches">For coaches and consultants</a>
+<a href="{{HOME}}/">All of Solutionist</a>
 <a href="{{APP_URL}}" style="color: #F5F6F8">Sign in</a>
 </nav>
 </div></div>
@@ -110,7 +112,7 @@ a{color:#F5F6F8}a:hover{color:#FCD34D}
 <details class="pmenu"><summary>Products<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#E4E6EB" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg></summary><div class="pmenu-panel"><a href="/churches"><i style="background: linear-gradient(135deg, #E040FB, #7C5CFF 55%, #22D3EE)"></i><b>Overview</b><span>Every part of church life</span></a><a href="/churches/people-and-care"><i style="background: #14B8A6"></i><b>People and Care</b><span>Shepherds, guests and prayer</span></a><a href="/churches/giving"><i style="background: #22C55E"></i><b>Giving</b><span>Your own Stripe, statements in January</span></a><a href="/churches/kids-and-youth"><i style="background: #F97316"></i><b>Kids and Youth</b><span>Check-in, tags and safe pickup</span></a><a href="/churches/groups-and-classes"><i style="background: #3B82F6"></i><b>Groups and Classes</b><span>Chats, prayer walls and this week's study</span></a><a href="/churches/member-app"><i style="background: #EC4899"></i><b>Member App</b><span>The church in every pocket</span></a><a href="/churches/website-and-sermons" aria-current="page"><i style="background: #EAB308"></i><b>Website and Sermons</b><span>Your front door, always open</span></a><a href="/churches/office-and-books"><i style="background: #94A3B8"></i><b>Office and Books</b><span>The books, and who sees giving</span></a></div></details>
 <a href="/churches#app" style="text-decoration: none; color: #E4E6EB">Member app</a>
 <a href="/churches#pricing" style="text-decoration: none; color: #E4E6EB">Pricing</a>
-<a href="/start" class="btn btn-w btn-s">Start free</a>
+<a href="{{HOME}}/start" class="btn btn-w btn-s">Start free</a>
 </nav>
 </header>
 
@@ -136,7 +138,7 @@ a{color:#F5F6F8}a:hover{color:#FCD34D}
 <div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; gap: 24px 48px">
 <p class="lede" style="max-width: 620px">A website on your own address, every sermon by series, and events people sign up for themselves. Publish Sunday's message once, and it's on the site and in the member app.</p>
 <div style="display: flex; flex-wrap: wrap; gap: 12px">
-<a href="/start" class="btn btn-w">{{CTA_START}}</a>
+<a href="{{HOME}}/start" class="btn btn-w">{{CTA_START}}</a>
 <a href="#site" class="btn btn-l">See a church site</a>
 </div>
 </div>
@@ -180,14 +182,14 @@ a{color:#F5F6F8}a:hover{color:#FCD34D}
 <div style="flex: 0.95; min-width: 0; display: flex; flex-direction: column; gap: 6px">
 <div class="ow-card" style="gap: 0">
 <span class="ow-k" style="color: #8D93A1; padding-bottom: 5px">Messages</span>
-<div class="se-row on"><span class="se-th" style="background: linear-gradient(140deg, #E3A92B, #5A3D06)"></span><span class="se-t"><b>Planted by the water</b><span>Rooted · Oct 26</span></span><span class="ow-pill" style="background: rgba(234,179,8,0.18); color: #FCD34D">Draft</span></div>
-<div class="se-row"><span class="se-th" style="background: linear-gradient(140deg, #E3A92B, #5A3D06)"></span><span class="se-t"><b>Deep roots</b><span>Rooted · Oct 19</span></span><span class="ow-pill" style="background: rgba(34,197,94,0.16); color: #86EFAC">Published</span></div>
-<div class="se-row"><span class="se-th" style="background: linear-gradient(140deg, #E3A92B, #5A3D06)"></span><span class="se-t"><b>Good soil</b><span>Rooted · Oct 12</span></span><span class="ow-pill" style="background: rgba(34,197,94,0.16); color: #86EFAC">Published</span></div>
-<div class="se-row"><span class="se-th" style="background: linear-gradient(140deg, #5B8CF5, #0F1D45)"></span><span class="se-t"><b>Hope has a name</b><span>Come and see · Oct 5</span></span><span class="ow-pill" style="background: rgba(34,197,94,0.16); color: #86EFAC">Published</span></div>
-<div class="se-row"><span class="se-th" style="background: linear-gradient(140deg, #5B8CF5, #0F1D45)"></span><span class="se-t"><b>The long obedience</b><span>Come and see · Sep 28</span></span><span class="ow-pill" style="background: rgba(34,197,94,0.16); color: #86EFAC">Published</span></div>
-<div class="se-row"><span class="se-th" style="background: linear-gradient(140deg, #5B8CF5, #0F1D45)"></span><span class="se-t"><b>Taste and see</b><span>Come and see · Sep 21</span></span><span class="ow-pill" style="background: rgba(34,197,94,0.16); color: #86EFAC">Published</span></div>
-<div class="se-row"><span class="se-th" style="background: linear-gradient(140deg, #5B8CF5, #0F1D45)"></span><span class="se-t"><b>Follow me</b><span>Come and see · Sep 14</span></span><span class="ow-pill" style="background: rgba(34,197,94,0.16); color: #86EFAC">Published</span></div>
-<div class="se-row"><span class="se-th" style="background: linear-gradient(140deg, #2DD4BF, #0B3B36)"></span><span class="se-t"><b>A table for everyone</b><span>Guest speaker · Sep 7</span></span><span class="ow-pill" style="background: rgba(34,197,94,0.16); color: #86EFAC">Published</span></div>
+<div class="se-row on"><span class="se-th" style="background: linear-gradient(140deg, #E3A92B, #5A3D06)"></span><span class="se-t"><b>Planted by the water</b><span>Rooted · Oct 25</span></span><span class="ow-pill" style="background: rgba(234,179,8,0.18); color: #FCD34D">Draft</span></div>
+<div class="se-row"><span class="se-th" style="background: linear-gradient(140deg, #E3A92B, #5A3D06)"></span><span class="se-t"><b>Deep roots</b><span>Rooted · Oct 18</span></span><span class="ow-pill" style="background: rgba(34,197,94,0.16); color: #86EFAC">Published</span></div>
+<div class="se-row"><span class="se-th" style="background: linear-gradient(140deg, #E3A92B, #5A3D06)"></span><span class="se-t"><b>Good soil</b><span>Rooted · Oct 11</span></span><span class="ow-pill" style="background: rgba(34,197,94,0.16); color: #86EFAC">Published</span></div>
+<div class="se-row"><span class="se-th" style="background: linear-gradient(140deg, #5B8CF5, #0F1D45)"></span><span class="se-t"><b>Hope has a name</b><span>Come and see · Oct 4</span></span><span class="ow-pill" style="background: rgba(34,197,94,0.16); color: #86EFAC">Published</span></div>
+<div class="se-row"><span class="se-th" style="background: linear-gradient(140deg, #5B8CF5, #0F1D45)"></span><span class="se-t"><b>The long obedience</b><span>Come and see · Sep 27</span></span><span class="ow-pill" style="background: rgba(34,197,94,0.16); color: #86EFAC">Published</span></div>
+<div class="se-row"><span class="se-th" style="background: linear-gradient(140deg, #5B8CF5, #0F1D45)"></span><span class="se-t"><b>Taste and see</b><span>Come and see · Sep 20</span></span><span class="ow-pill" style="background: rgba(34,197,94,0.16); color: #86EFAC">Published</span></div>
+<div class="se-row"><span class="se-th" style="background: linear-gradient(140deg, #5B8CF5, #0F1D45)"></span><span class="se-t"><b>Follow me</b><span>Come and see · Sep 13</span></span><span class="ow-pill" style="background: rgba(34,197,94,0.16); color: #86EFAC">Published</span></div>
+<div class="se-row"><span class="se-th" style="background: linear-gradient(140deg, #2DD4BF, #0B3B36)"></span><span class="se-t"><b>A table for everyone</b><span>Guest speaker · Sep 6</span></span><span class="ow-pill" style="background: rgba(34,197,94,0.16); color: #86EFAC">Published</span></div>
 </div>
 <div class="ow-card" style="flex: 1; gap: 0">
 <span class="ow-k" style="color: #8D93A1; padding-bottom: 5px">Series</span>
@@ -203,7 +205,7 @@ a{color:#F5F6F8}a:hover{color:#FCD34D}
 <div class="se-f"><span>Series</span><b>Rooted</b></div>
 <div class="se-f"><span>Speaker</span><b>Pastor James</b></div>
 <div class="se-f"><span>Scripture</span><b>Jeremiah 17:7-8</b></div>
-<div class="se-f"><span>Preached on</span><b>Sunday, October 26</b></div>
+<div class="se-f"><span>Preached on</span><b>Sunday, October 25</b></div>
 <div class="se-f"><span>Video link</span><b>youtube.com/watch?v=q7Rr2</b></div>
 </div>
 <div class="se-f"><span>Audio link</span><b style="color: #5F6672">Optional. Members can listen instead.</b></div>
@@ -235,7 +237,7 @@ a{color:#F5F6F8}a:hover{color:#FCD34D}
 <span style="position: absolute; left: 9px; bottom: 9px; width: 28px; height: 28px; border-radius: 50%; background: rgba(255,255,255,0.94); display: grid; place-items: center"><svg width="11" height="11" viewBox="0 0 24 24" fill="#000" aria-hidden="true"><path d="M8 5.5v13l10.5-6.5z"></path></svg></span>
 </div>
 <div style="display: flex; flex-direction: column; gap: 2px">
-<span class="ma-kick" style="color: #F4C04E">Latest · October 26</span>
+<span class="ma-kick" style="color: #F4C04E">Latest · October 25</span>
 <b style="font-size: 16px; font-weight: 720; letter-spacing: -0.03em; line-height: 1.1">Planted by the water</b>
 <span style="font-size: 9.5px; color: #a8a8ae">Pastor James · Jeremiah 17:7-8</span>
 </div>
@@ -309,9 +311,9 @@ a{color:#F5F6F8}a:hover{color:#FCD34D}
 </div>
 <div class="gf-card" style="flex: 1 1 210px; min-width: 0; padding: 14px; display: flex; flex-direction: column; gap: 9px">
 <div style="display: flex; justify-content: space-between; align-items: baseline"><b class="gf-serif" style="font-size: 18px; font-weight: 600">Coming up</b><span style="font-size: 11.5px; font-weight: 600; color: #2F6BEA">All events</span></div>
-<div class="gf-ev"><span class="gf-date"><small>WED</small><b>29</b></span><span class="gf-ev-t"><b>Prayer Night</b><span>7:00 PM · Main room</span></span></div>
-<div class="gf-ev"><span class="gf-date"><small>SAT</small><b>8</b></span><span class="gf-ev-t"><b>Fall Festival</b><span>2:00 PM · Volunteers needed</span></span></div>
-<div class="gf-ev"><span class="gf-date"><small>SUN</small><b>16</b></span><span class="gf-ev-t"><b>Newcomers lunch</b><span>12:30 PM · After the 11:00</span></span></div>
+<div class="gf-ev"><span class="gf-date"><small>WED</small><b>28</b></span><span class="gf-ev-t"><b>Prayer Night</b><span>7:00 PM · Main room</span></span></div>
+<div class="gf-ev"><span class="gf-date"><small>SAT</small><b>7</b></span><span class="gf-ev-t"><b>Fall Festival</b><span>2:00 PM · Volunteers needed</span></span></div>
+<div class="gf-ev"><span class="gf-date"><small>SUN</small><b>15</b></span><span class="gf-ev-t"><b>Newcomers lunch</b><span>12:30 PM · After the 11:00</span></span></div>
 </div>
 </div>
 <div class="gf-row">
@@ -347,7 +349,7 @@ a{color:#F5F6F8}a:hover{color:#FCD34D}
 <span class="mono" style="position: absolute; right: 12px; bottom: 11px; font-size: 11px; padding: 3px 8px; border-radius: 6px; background: rgba(0,0,0,0.6); color: #FFFFFF">38:12</span>
 </div>
 <div style="display: flex; flex-direction: column; gap: 4px">
-<span style="font-size: 12px; color: #6B6255">Rooted · Pastor James · Jeremiah 17:7-8 · October 26, 2026</span>
+<span style="font-size: 12px; color: #6B6255">Rooted · Pastor James · Jeremiah 17:7-8 · October 25, 2026</span>
 <b class="gf-serif" style="font-size: clamp(24px, 2.4vw, 32px); font-weight: 600; letter-spacing: -0.02em; line-height: 1.05">Planted by the water</b>
 </div>
 <div style="display: flex; flex-wrap: wrap; gap: 10px">
@@ -356,8 +358,8 @@ a{color:#F5F6F8}a:hover{color:#FCD34D}
 </div>
 <div style="display: flex; flex-direction: column; gap: 0">
 <span class="gf-kick" style="color: #6B6255; padding-bottom: 8px">More in Rooted</span>
-<div class="gf-ev"><span style="width: 52px; height: 32px; flex: none; border-radius: 7px; background: radial-gradient(90% 90% at 85% 0%, #E3A92B 0%, transparent 70%), linear-gradient(160deg, #B97F0C 0%, #251C09 100%)"></span><span class="gf-ev-t"><b>Deep roots</b><span>Pastor James · October 19</span></span></div>
-<div class="gf-ev" style="margin-top: 9px"><span style="width: 52px; height: 32px; flex: none; border-radius: 7px; background: radial-gradient(90% 90% at 85% 0%, #E3A92B 0%, transparent 70%), linear-gradient(160deg, #B97F0C 0%, #251C09 100%)"></span><span class="gf-ev-t"><b>Good soil</b><span>Pastor Ana · October 12</span></span></div>
+<div class="gf-ev"><span style="width: 52px; height: 32px; flex: none; border-radius: 7px; background: radial-gradient(90% 90% at 85% 0%, #E3A92B 0%, transparent 70%), linear-gradient(160deg, #B97F0C 0%, #251C09 100%)"></span><span class="gf-ev-t"><b>Deep roots</b><span>Pastor James · October 18</span></span></div>
+<div class="gf-ev" style="margin-top: 9px"><span style="width: 52px; height: 32px; flex: none; border-radius: 7px; background: radial-gradient(90% 90% at 85% 0%, #E3A92B 0%, transparent 70%), linear-gradient(160deg, #B97F0C 0%, #251C09 100%)"></span><span class="gf-ev-t"><b>Good soil</b><span>Pastor Ana · October 11</span></span></div>
 </div>
 </div>
 </div>
@@ -402,7 +404,7 @@ a{color:#F5F6F8}a:hover{color:#FCD34D}
 <div style="padding: 22px 22px 24px; display: flex; flex-direction: column; gap: 14px">
 <div style="display: flex; flex-direction: column; gap: 2px"><b class="gf-serif" style="font-size: 30px; font-weight: 600; letter-spacing: -0.02em; line-height: 1.05">Events</b><span style="font-size: 13px; color: #6B6255">What's coming up at Grace Fellowship, and where you can help.</span></div>
 <div class="gf-card" style="padding: 18px; display: flex; flex-direction: column; gap: 10px">
-<span class="gf-kick" style="color: #1E46A8">Saturday, November 8 · 2:00 PM</span>
+<span class="gf-kick" style="color: #1E46A8">Saturday, November 7 · 2:00 PM</span>
 <div style="display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px"><b class="gf-serif" style="font-size: 23px; font-weight: 600; letter-spacing: -0.01em">Fall Festival</b><span style="font-size: 11.5px; font-weight: 700; color: #1E46A8">64 spots left</span></div>
 <span style="font-size: 12.5px; color: #6B6255">The back lawn, 1400 Lakeview Ave</span>
 <div style="display: flex; flex-wrap: wrap; gap: 6px">
@@ -419,7 +421,7 @@ a{color:#F5F6F8}a:hover{color:#FCD34D}
 </div>
 </div>
 <div class="gf-card" style="padding: 16px 18px; display: flex; flex-direction: column; gap: 6px">
-<span class="gf-kick" style="color: #6B6255">Sunday, November 16 · 12:30 PM</span>
+<span class="gf-kick" style="color: #6B6255">Sunday, November 15 · 12:30 PM</span>
 <div style="display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px"><b class="gf-serif" style="font-size: 20px; font-weight: 600">Newcomers lunch</b><span style="font-size: 11.5px; font-weight: 700; color: #6B6255">Full</span></div>
 <span style="font-size: 12.5px; color: #6B6255">This one is full. Check back in case a spot opens.</span>
 </div>
@@ -484,6 +486,17 @@ a{color:#F5F6F8}a:hover{color:#FCD34D}
 </div>
 </section>
 
+<!-- CHIEF, EVERY ROOM -->
+<section style="background: #07080B; border-top: 1px solid #12141B">
+<div class="wrap" style="padding-top: 40px; padding-bottom: 8px">
+<div class="mc-strip" style="display: flex; flex-wrap: wrap; align-items: center; gap: 14px 22px; padding: 22px 26px; border-radius: 22px; background: #0D0F14; border: 1px solid #1F2330">
+<span style="width: 36px; height: 36px; border-radius: 50%; background: linear-gradient(135deg, #E040FB, #7C5CFF 55%, #22D3EE); flex: none"></span>
+<p style="margin: 0; flex: 1 1 420px; font-size: 16px; line-height: 1.55; color: #C9CDD6"><b style="color: #F5F6F8; font-weight: 600">Chief works the same way in every room.</b> It works from your church's own records, waits for your yes before it sends anything or touches money, and lists what it does on your History page.</p>
+<a href="/churches#chief">How Chief works</a>
+</div>
+</div>
+</section>
+<!-- /CHIEF, EVERY ROOM -->
 <!-- THE ROOMS NEXT DOOR -->
 <section class="sec" style="background: #07080B; padding-top: 40px; border-top: 1px solid #12141B">
 <div class="wrap" style="display: flex; flex-direction: column; gap: 32px">
@@ -543,7 +556,7 @@ a{color:#F5F6F8}a:hover{color:#FCD34D}
 <div class="wrap" style="position: relative; padding-top: 150px; padding-bottom: 150px; display: flex; flex-direction: column; align-items: center; gap: 24px; text-align: center">
 <h2 class="h1" style="font-size: clamp(42px, 5.6vw, 84px); max-width: 960px">Let them find you <span class="serif glint" style="font-size: 1.06em">before Sunday.</span></h2>
 <p class="lede">{{TRIAL_LINE}}</p>
-<a href="/start" class="btn btn-w">Start free</a>
+<a href="{{HOME}}/start" class="btn btn-w">Start free</a>
 </div>
 </section>
 
@@ -555,10 +568,24 @@ a{color:#F5F6F8}a:hover{color:#FCD34D}
 </div>
 <nav aria-label="Church products"><b>For churches</b><a href="/churches">Overview</a><a href="/churches/people-and-care">People and Care</a><a href="/churches/giving">Giving</a><a href="/churches/kids-and-youth">Kids and Youth</a></nav>
 <nav aria-label="More church products"><span aria-hidden="true" style="display: block; height: 21px"></span><a href="/churches/groups-and-classes">Groups and Classes</a><a href="/churches/member-app">Member App</a><a href="/churches/website-and-sermons">Website and Sermons</a><a href="/churches/office-and-books">Office and Books</a></nav>
-<nav aria-label="Company"><b>Solutionist</b><a href="/coaches">For coaches and consultants</a><a href="/churches#pricing">Pricing</a><a href="/privacy">Privacy</a><a href="/terms">Terms</a></nav>
+<nav aria-label="Company"><b>Solutionist</b><a href="{{HOME}}/">Solutionist home</a><a href="{{HOME}}/coaches">For coaches and consultants</a><a href="/churches#pricing">Pricing</a><a href="{{HOME}}/privacy">Privacy</a><a href="{{HOME}}/terms">Terms</a></nav>
 </div></footer>
 
 </div>
 {{ANALYTICS}}
+<script>
+/* Solutionist home: someone who came here from the main site goes back to the page they left */
+(function () {
+  try {
+    var a = document.querySelector("[data-home]");
+    if (!a || !document.referrer) return;
+    var r = new URL(document.referrer), h = new URL(a.href).hostname;
+    if (r.hostname !== h && r.hostname !== "www." + h) return;
+    if (/^\/(churches|coaches|consultants)(\/|$)/.test(r.pathname)) return;
+    a.href = r.href;
+    a.querySelector("[data-home-label]").textContent = "Back to Solutionist";
+  } catch (e) { /* the plain link still goes home */ }
+})();
+</script>
 </body>
 </html>

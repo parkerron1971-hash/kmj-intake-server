@@ -111,17 +111,22 @@ def _read(name: str) -> str:
 
 
 def _plan_tokens() -> Dict[str, str]:
-    """Prices, yearly prices, AI actions and meter widths, from the dials."""
+    """Prices, yearly prices, AI actions, conversations and meter widths, from
+    the dials. A conversation is one Chief turn at the chat price, rounded
+    down the way the main site's plan cards round it (_credits_in_words)."""
     import marketing_pages as mp
+    import pricing_config
     dials = mp._tier_dials()
     credits = {p: int(str(d["credits"]).replace(",", "")) for p, d in dials.items()}
     top = max(credits.values()) or 1
+    per_turn = max(1, pricing_config.chat_price())
     out: Dict[str, str] = {}
     for key, plan in (("STARTER", "starter"), ("PRO", "professional"), ("SOL", "practice")):
         price = int(dials[plan]["price_num"])
         out[f"P_{key}"] = str(price)
         out[f"Y_{key}"] = f"{price * mp.ANNUAL_MONTHS:,}"
         out[f"C_{key}"] = dials[plan]["credits"]
+        out[f"CONV_{key}"] = f"{mp._about(credits[plan] // per_turn):,}"
         out[f"W_{key}"] = str(max(4, round(credits[plan] / top * 100)))
     return out
 
@@ -157,7 +162,7 @@ def _founder_strip() -> str:
         return (f'<div class="seat">{sq}<b style="font-family: \'Inter Tight\', sans-serif; font-weight: 600; '
                 f'font-size: 15px">The {f["limit"]} founding seats are gone.</b>'
                 f'<span style="font-size: 14px; color: #5A5E6B">The price on this page is the price.</span></div>')
-    return (f'<a href="/start?plan=founder" class="seat">{sq}'
+    return (f'<a href="{ORIGIN}/start?plan=founder" class="seat">{sq}'
             f'<b style="font-family: \'Inter Tight\', sans-serif; font-weight: 600; font-size: 15px">Founding seat</b>'
             f'<span style="font-size: 14px; color: #5A5E6B">Professional for ${f["price"]} a month, locked while you '
             f'hold it. <b style="color: #0B0C11">{f["left"]}</b> of {f["limit"]} seats left.</span>'
@@ -178,6 +183,9 @@ def render(slug: str) -> str:
         "TITLE": escape(meta["title"]),
         "DESCRIPTION": escape(meta["description"]),
         "URL": ORIGIN + path_of(slug),
+        # the main site, always by its own address: these pages may one day
+        # be served from a church's own domain, where "/" is not Solutionist
+        "HOME": ORIGIN,
         "APP_URL": mp.APP_URL,
         "CHURCHSAVVY_URL": escape(partner),
         "CHURCH_CSS": _read("church.css"),
