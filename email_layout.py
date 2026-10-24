@@ -288,12 +288,15 @@ def cta_html(label: str, url: str, primary: str) -> str:
 def render_html(message: str, *, business_name: str, brand: Dict[str, Any],
                 sig: Optional[Dict[str, Any]] = None, disclaimer: str = "",
                 unsubscribe_url: Optional[str] = None, preheader: str = "",
-                cta: Optional[Tuple[str, str]] = None) -> str:
+                cta: Optional[Tuple[str, str]] = None, after_cta: str = "",
+                unsubscribe_label: str = "Unsubscribe", footer_note: str = "") -> str:
     """The email. One 600px column, the brand colour as a rule at the
     top and on links, the logo or a wordmark, the message in real
     paragraphs, the signature as the block the practitioner designed,
     and a footer that says who sent it and how to stop. `cta` is an
-    optional (label, url) button under the message."""
+    optional (label, url) button under the message; `after_cta` is the
+    caller's own markup right under it (a second button). `footer_note`
+    ends the footer (an escaped line, e.g. "Sent with ChurchSavvy")."""
     e = _html.escape
     primary = brand.get("primary") or DEFAULT_ACCENT
     name = e(business_name or "")
@@ -309,8 +312,9 @@ def render_html(message: str, *, business_name: str, brand: Dict[str, Any],
         f'<p style="margin:24px 0 0;font-size:12px;line-height:1.5;color:#6b7280;">{e(disclaimer)}</p>'
         if disclaimer else "")
     unsub = (
-        f' · <a href="{e(unsubscribe_url)}" style="color:#6b7280;">Unsubscribe</a>'
+        f' · <a href="{e(unsubscribe_url)}" style="color:#6b7280;">{e(unsubscribe_label)}</a>'
         if unsubscribe_url else "")
+    note = f"<br />{e(footer_note)}" if footer_note else ""
     pre = e(preheader or "")
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -330,12 +334,13 @@ def render_html(message: str, *, business_name: str, brand: Dict[str, Any],
 <tr><td style="padding:16px 36px 8px;font-family:Arial,Helvetica,sans-serif;">
 {paragraphs_html(message)}
 {cta_html(cta[0], cta[1], primary) if cta else ""}
+{after_cta}
 {sig_block}
 {disc_block}
 </td></tr>
 <tr><td style="padding:20px 36px 28px;font-family:Arial,Helvetica,sans-serif;font-size:12px;line-height:1.5;color:#6b7280;border-top:1px solid #e5e7eb;">
 {name}{(" · " + tagline) if tagline else ""}<br />
-You're receiving this because you're in touch with {name}{unsub}.
+You're receiving this because you're in touch with {name}{unsub}.{note}
 </td></tr>
 </table>
 </td></tr>

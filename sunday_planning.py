@@ -12,6 +12,8 @@
 #   DELETE /planning/positions/{id}                 retire it; who served there stays
 #   PUT    /planning/positions/{id}/people          who's trained on it, or learning
 #   GET    /planning/people?business_id=&q=         find a member to add (names only)
+#   POST   /planning/people                         someone new, by name and email (ChurchSavvy alone)
+#   PUT    /planning/email                          ChurchSavvy's "Email asks and reminders", an admin's switch
 #   GET    /planning/schedule?business_id=&start=&weeks=  the coming services, each place, who
 #   POST   /planning/sundays                        add the coming Sundays to plan
 #   GET    /planning/candidates?business_id=&service_id=&position_id=
@@ -150,15 +152,18 @@ def _asker(biz: str, user: AuthedUser) -> str:
 
 
 def _people(biz: str, ids) -> Dict[str, Dict[str, Any]]:
-    """id → {name, teen} for these members of this church."""
+    """id → {name, teen, has_email} for these members of this church: whether
+    an email can reach them, never the address itself."""
+    import academy_join
     out: Dict[str, Dict[str, Any]] = {}
     ids = sorted({str(i) for i in ids if i})
     today = _now().date()
     for i in range(0, len(ids), 150):
-        rows = _read(f"/contacts?business_id=eq.{_q(biz)}&id=in.({_ids(ids[i:i + 150])})&select=id,name,birthdate")
+        rows = _read(f"/contacts?business_id=eq.{_q(biz)}&id=in.({_ids(ids[i:i + 150])})&select=id,name,birthdate,email")
         for r in rows:
             out[str(r["id"])] = {"name": (r.get("name") or "Someone").strip() or "Someone",
-                                 "teen": _is_teen(r.get("birthdate"), today)}
+                                 "teen": _is_teen(r.get("birthdate"), today),
+                                 "has_email": academy_join.valid_email(str(r.get("email") or "").strip())}
     return out
 
 
@@ -256,7 +261,34 @@ def status(business_id: Optional[str] = None, user: AuthedUser = Depends(require
         return {"enabled": True}
     biz = _uuid(business_id)
     roles = roles_of(biz, user)
-    return {"enabled": True, "can_write": can(roles, "serve"), "roles": sorted(roles)}
+    settings = _church(biz).get("settings") or {}
+    cs = settings.get("churchsavvy") if isinstance(settings.get("churchsavvy"), dict) else {}
+    portal = settings.get("member_portal") if isinstance(settings.get("member_portal"), dict) else {}
+    return {"enabled": True, "can_write": can(roles, "serve"), "roles": sorted(roles),
+            "can_setup": can(roles, "setup"), "email_asks": cs.get("planning_email") is True,
+            "member_app": portal.get("enabled") is True}
+
+
+@router.put("/email")
+def set_email_asks(body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
+    """ChurchSavvy's "Email asks and reminders" (Setup → Planning): on, every
+    ask and reminder goes by email with one-tap answers; off, Planning
+    emails only what the member app's own switch sends. An admin's choice."""
+    _gate(user)
+    biz = _uuid(body.get("business_id"))
+    require(biz, user, "setup")
+    on = body.get("on") is True
+    rows = _read(f"/businesses?id=eq.{_q(biz)}&select=settings&limit=1")
+    if not rows:
+        raise HTTPException(404, "That church isn't here")
+    settings = rows[0].get("settings") if isinstance(rows[0].get("settings"), dict) else {}
+    cs = dict(settings["churchsavvy"]) if isinstance(settings.get("churchsavvy"), dict) else {}
+    cs["planning_email"] = on
+    saved = sb_clients.sb_patch_as_service(f"/businesses?id=eq.{_q(biz)}&select=id",
+                                           {"settings": {**settings, "churchsavvy": cs}})
+    if not saved:
+        raise HTTPException(503, "That didn't save. Try again.")
+    return {"email_asks": on}
 
 
 @router.get("/teams")
@@ -525,6 +557,34 @@ def find_people(business_id: str, q: str = "", user: AuthedUser = Depends(requir
                         "teen": _is_teen(r.get("birthdate"), today)} for r in rows]}
 
 
+@router.post("/people")
+def add_person(body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
+    """Someone new to schedule, by name and email (canvas UZu4VsoY9KemkUGorz234j
+    board 10 "Add a person"): a church on ChurchSavvy alone has no member
+    list to pick from. The same email at this church is the same person, so
+    nobody is made twice, and their name stays as the church has it."""
+    import academy_join
+    _gate(user)
+    biz = _uuid(body.get("business_id"))
+    _staff(biz, user, write=True)
+    name = _clean_name(body.get("name"), "person", 80)
+    email = str(body.get("email") or "").strip().lower()
+    if not academy_join.valid_email(email):
+        raise HTTPException(400, "That email doesn't look right.")
+    like = email.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    found = _read(f"/contacts?business_id=eq.{_q(biz)}&email=ilike.{_q(like)}&select=id,name,birthdate&limit=1")
+    if found:
+        r = found[0]
+        return {"person": {"contact_id": str(r["id"]), "name": (r.get("name") or "").strip() or name,
+                           "teen": _is_teen(r.get("birthdate"), _now().date()), "has_email": True}, "existing": True}
+    made = sb_clients.sb_post_as_service("/contacts", {"business_id": biz, "name": name, "email": email,
+                                                      "source": "churchsavvy_planning"})
+    if not isinstance(made, list) or not made:
+        raise HTTPException(503, "That didn't save. Try again.")
+    return {"person": {"contact_id": str(made[0]["id"]), "name": name, "teen": False, "has_email": True},
+            "existing": False}
+
+
 # ─── the schedule ────────────────────────────────────────────────────
 
 
@@ -748,7 +808,7 @@ def _put(biz: str, board: _Board, sid: str, pid: str, slot: int, fields: Dict[st
            "answered_at": None, "notified_at": None, "nudged_at": None, "swap_to": None, "swap_asked_at": None,
            # What sunday_serving_alerts already said was said to whoever held it.
            "leader_told_at": None, "week_sent_at": None, "day_sent_at": None, "morning_sent_at": None,
-           "swap_told_at": None, **fields}
+           "swap_told_at": None, "here_at": None, **fields}
     if held:
         saved = sb_clients.sb_patch_as_service(
             f"/serve_assignments?id=eq.{_q(held['id'])}&business_id=eq.{_q(biz)}&select=*", row)
@@ -770,8 +830,13 @@ def ask(body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
     _staff(biz, user, write=True)
     sid, pid = _uuid(body.get("service_id"), "service"), _uuid(body.get("position_id"), "place")
     cid = _uuid(body.get("contact_id"), "person")
+    return do_ask(biz, sid, pid, body.get("slot", 1), cid, _asker(biz, user))
+
+
+def do_ask(biz: str, sid: str, pid: str, slot: Any, cid: str, asker: str) -> Dict[str, Any]:
+    """The ask itself, for the office or a team's own leader (sunday_leading)."""
     place = _place_row(biz, pid)
-    slot = _slot(body, place)
+    slot = _slot({"slot": slot}, place)
     board = _service_board(biz, sid)
     pick = next((c for c in board.candidates(sid, pid) if c["contact_id"] == cid), None)
     if not pick:
@@ -780,7 +845,7 @@ def ask(body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
         raise HTTPException(409, f"{pick['name']} is away that Sunday")
     if pick["clash"]:
         raise HTTPException(409, f"{pick['name']} is already on {pick['clash']} at that service")
-    row = _put(biz, board, sid, pid, slot, {"contact_id": cid, "status": "asked", "asked_by": _asker(biz, user)})
+    row = _put(biz, board, sid, pid, slot, {"contact_id": cid, "status": "asked", "asked_by": asker})
     out = _assignment_out(row, {cid: {"name": pick["name"]}})
     if pick["at_most"] and pick["load"] >= pick["at_most"]:
         out["warning"] = f"That's more than {pick['at_most']} Sundays this month for {pick['name']}"
@@ -796,10 +861,14 @@ def offer(body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
     biz = _uuid(body.get("business_id"))
     _staff(biz, user, write=True)
     sid, pid = _uuid(body.get("service_id"), "service"), _uuid(body.get("position_id"), "place")
+    return do_offer(biz, sid, pid, body.get("slot", 1), _asker(biz, user))
+
+
+def do_offer(biz: str, sid: str, pid: str, slot: Any, asker: str) -> Dict[str, Any]:
     place = _place_row(biz, pid)
-    slot = _slot(body, place)
+    slot = _slot({"slot": slot}, place)
     board = _service_board(biz, sid)
-    row = _put(biz, board, sid, pid, slot, {"contact_id": None, "status": "offered", "asked_by": _asker(biz, user)})
+    row = _put(biz, board, sid, pid, slot, {"contact_id": None, "status": "offered", "asked_by": asker})
     return {"assignment": _assignment_out(row, {})}
 
 
@@ -838,7 +907,10 @@ def take_back(assignment_id: str, business_id: str, user: AuthedUser = Depends(r
     _gate(user)
     biz = _uuid(business_id)
     _staff(biz, user, write=True)
-    aid = _uuid(assignment_id, "schedule")
+    return do_take_back(biz, _uuid(assignment_id, "schedule"))
+
+
+def do_take_back(biz: str, aid: str) -> Dict[str, Any]:
     _assignment(biz, aid)
     if not sb_clients.sb_delete_as_service(f"/serve_assignments?id=eq.{_q(aid)}&business_id=eq.{_q(biz)}"):
         raise HTTPException(503, "That didn't save. Try again.")
@@ -860,8 +932,11 @@ def fill(body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
     if not isinstance(weeks, int) or isinstance(weeks, bool) or not 1 <= weeks <= MAX_WEEKS:
         raise HTTPException(400, f"Fill 1 to {MAX_WEEKS} weeks")
     only = _uuid(body["group_id"], "team") if body.get("group_id") else None
-    board = _Board(biz, body.get("start"), weeks)
-    asker = FILLED_BY
+    return do_fill(biz, weeks, body.get("start"), only)
+
+
+def do_fill(biz: str, weeks: int, start: Optional[str], only: Optional[str], asker: str = FILLED_BY) -> Dict[str, Any]:
+    board = _Board(biz, start, weeks)
     fresh: List[Dict[str, Any]] = []
     left = 0
     for svc in board.services:
@@ -903,7 +978,10 @@ def unfill(body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
     raw = body.get("ids")
     if not isinstance(raw, list) or not raw or len(raw) > 400:
         raise HTTPException(400, "Which asks to take back?")
-    ids = [_uuid(i, "schedule") for i in raw]
+    return do_unfill(biz, [_uuid(i, "schedule") for i in raw])
+
+
+def do_unfill(biz: str, ids: List[str]) -> Dict[str, Any]:
     back = 0
     for i in range(0, len(ids), 100):
         part = _ids(ids[i:i + 100])

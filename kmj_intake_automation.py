@@ -346,6 +346,13 @@ app.include_router(worship_sermons_router)
 # SUNDAY_PLANNING=off|owner|on (default owner) until Kevin turns it on.
 from sunday_planning import router as sunday_planning_router
 app.include_router(sunday_planning_router)
+# Its order of service: when each item starts, and a note for each team.
+from sunday_order import router as sunday_order_router
+app.include_router(sunday_order_router)
+# Answering an ask from its email, with no sign-in: Yes, Can't, their Sunday,
+# "Stop these emails" (the link names one church and one person).
+from serve_links import router as serve_links_router
+app.include_router(serve_links_router)
 # Joining a free class from its public page (POST <class page>/join).
 from academy_join import router as academy_join_router
 app.include_router(academy_join_router)
@@ -422,6 +429,9 @@ app.include_router(member_classes_router)
 # invitation, logs a conversation, marks a step, hands someone back.
 from member_portal_lead import router as member_portal_lead_router
 app.include_router(member_portal_lead_router)
+# A Sunday team's leader schedules their team (Lead → Sundays; ChurchSavvy Planning).
+from member_portal_leading import router as member_portal_leading_router
+app.include_router(member_portal_leading_router)
 # The Safety room on a pastoral leader's Lead tab (member_portal_safety.py):
 # safety officers picked from the church's Pastors and Elders.
 from member_portal_safety import router as member_portal_safety_router

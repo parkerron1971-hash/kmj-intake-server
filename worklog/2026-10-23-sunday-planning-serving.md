@@ -3,10 +3,10 @@ title: ChurchSavvy Planning, step 2 — My serving and the ask, in the member ap
 date: 2026-10-23
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-10-23: "team communication and assignments, notification of weeks they are on to serve"; "This is a good build. i agree with your plan."'
-status: in progress
-prs: [kmj-intake-server (this PR), solutionist-studio#1334 (the office draws the wish, the cover and the can't; merged 2026-10-23)]
+status: shipped
+prs: [kmj-intake-server#1568, solutionist-studio#1334 (the office draws the wish, the cover and the can't; merged 2026-10-23)]
 migrations: [supabase/APPLY-2026-10-23-serving-member.sql (applied 2026-10-23 after a live rollback probe built from the file: a wish, a cover and three refusals, rolled back)]
-left_undone: ["the sweep that rings phones and emails asks (push kind 'serving', notified_at), and the canvas's How I hear section that goes with it", "reminders (a week, a day, that morning), change alerts and the Monday thank-you (board 6)", "the leader's own note on an ask (board 7's pinned card) and What you'll get (reminders, the Sunday pack): each waits for the piece that makes it true", "a swap needing the leader's OK (Turns, board 5)"]
+left_undone: ["change alerts and the Monday thank-you (board 6); the asks, reminders and How I hear went out in kmj-intake-server#1571", "the leader's own note on an ask (board 7's pinned card) and What you'll get (reminders, the Sunday pack): each waits for the piece that makes it true", "a swap needing the leader's OK (Turns, board 5)"]
 decisions: ["My serving lives under Connect (the canvas's tab), with a row on Connect and on Me for anyone on a Sunday team or asked", "Can't make it (board 8) asks someone on the team who is trained on the place or learning it, and free; the member stays on until that person says yes, then the place is theirs (\"Covering for Dana\"); a no leaves it with the member", "\"I can't, but I can do Nov 8\" offers the next service within two weeks that they're free for, and the office sees \"Can do Nov 8\" in the note", "why they can't is one of the canvas's four, optional, and only the office sees it", "an offered place: the first yes takes it, only someone trained and free", "this Sunday shows You're on; Can't make it is for later Sundays (the ask page still changes an answer)", "Add to my calendar is a real .ics: from the arrive-by time, two hours"]
 related: [2026-10-23-sunday-planning-teams.md]
 ---

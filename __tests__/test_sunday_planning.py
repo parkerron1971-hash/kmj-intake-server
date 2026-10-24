@@ -260,7 +260,8 @@ def test_the_switch(api, monkeypatch):
     assert as_("planner").get(f"/planning/teams?business_id={BIZ}").status_code == 404
     monkeypatch.setenv("SUNDAY_PLANNING", "on")
     assert as_("planner").get(f"/planning/status?business_id={BIZ}").json() == {
-        "enabled": True, "can_write": True, "roles": ["planner"]}
+        "enabled": True, "can_write": True, "roles": ["planner"], "can_setup": False, "email_asks": False,
+        "member_app": False}
     # A word the switch doesn't know is off, never on.
     monkeypatch.setenv("SUNDAY_PLANNING", "yes please")
     assert as_("owner").get("/planning/status").status_code == 404
