@@ -94,6 +94,15 @@ def test_the_switcher_shows_only_for_someone_with_two_spaces():
     assert '<span class="mb-sp-lead">Leader</span>' in html and "Background check on file, August 2026." in html
 
 
+def test_the_switcher_badge_is_the_churchs_own_initials():
+    """The Church row's badge said LC (Love City) for every church."""
+    ctx = {"space": "church", "options": ["church", "youth"], "leader": {"youth": YOUTH_ROW}}
+    html = msp.switcher(ctx, "Grace Fellowship")
+    assert "<i>GF</i>Church" in html and "<i>LC</i>" not in html
+    assert "<i>LC</i>Church" in msp.switcher(ctx, "Love City Church")
+    assert "<i>C</i>Church" in msp.switcher(ctx, "")
+
+
 def _space_req(to):
     from starlette.requests import Request
     return Request({"type": "http", "method": "GET", "path": "/my/space", "query_string": f"to={to}".encode(),
