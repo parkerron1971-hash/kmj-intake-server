@@ -287,7 +287,7 @@ def test_each_part_changes_only_its_own(api):
     booth = as_("sam")
     assert booth.get(f"/worship/services?business_id={BIZ}").json()["can"] == {
         "plan": False, "songs": False, "media": False, "fix": True, "run": True, "setup": False,
-        "live": True, "clips": False, "sermons": False}
+        "live": True, "clips": False, "sermons": False, "serve": False}
     assert booth.get(f"/worship/services/{sid}/show?business_id={BIZ}").status_code == 200
     assert booth.post("/worship/live", json=live).status_code == 200
     refused = booth.put(f"/worship/services/{sid}", json={"business_id": BIZ, "title": "Mine now"})

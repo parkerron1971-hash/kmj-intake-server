@@ -68,6 +68,8 @@ CAN: Dict[str, Set[str]] = {
     "live": {"admin", "media", "booth"},
     "clips": {"admin", "media"},
     "sermons": {"admin", "media"},
+    # ChurchSavvy Planning (sunday_planning.py): who's asked to serve when.
+    "serve": {"admin", "planner"},
 }
 REFUSED = {
     "plan": "Your part on the team doesn't change the plan. A planner or the worship leader does.",
@@ -79,6 +81,7 @@ REFUSED = {
     "live": "Your part on the team doesn't run the livestream. Media or the booth does.",
     "clips": "Your part on the team doesn't work on video clips. Media does.",
     "sermons": "Your part on the team doesn't change sermons. Media does.",
+    "serve": "Your part on the team doesn't schedule people. A planner or an admin does.",
 }
 MAX_TEAM = 60
 INVITE_DAYS = 30

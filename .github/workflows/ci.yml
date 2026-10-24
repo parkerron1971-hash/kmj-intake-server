@@ -212,3 +212,4 @@ jobs:
           node __tests__/group_guests_db.mjs
           node __tests__/chat_polls_db.mjs
           node __tests__/chat_photos_db.mjs
+          node __tests__/sunday_planning_db.mjs
