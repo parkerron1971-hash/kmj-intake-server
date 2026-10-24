@@ -70,7 +70,7 @@ class FakeDb:
 
     # on_conflict targets, and the unique keys a second insert breaks.
     KEYS = {"serve_teams": ("group_id",), "serve_trained": ("position_id", "contact_id"),
-            "group_members": ("group_id", "contact_id"),
+            "group_members": ("group_id", "contact_id"), "serve_prefs": ("business_id", "contact_id"),
             "serve_assignments": ("service_id", "position_id", "slot")}
 
     def __init__(self):
@@ -93,7 +93,7 @@ class FakeDb:
             "group_members": [],
             "worship_services": [],
             "serve_teams": [], "serve_positions": [], "serve_trained": [], "serve_assignments": [],
-            "serve_away": [],
+            "serve_away": [], "serve_prefs": [],
         }
 
     @staticmethod
@@ -105,6 +105,11 @@ class FakeDb:
     @staticmethod
     def _match(row, filters):
         for k, v in filters:
+            if k == "or":
+                # or=(contact_id.eq.X,swap_to.eq.X,status.eq.offered): any one.
+                if not any(FakeDb._match(row, [tuple(part.split(".", 1))]) for part in v[1:-1].split(",")):
+                    return False
+                continue
             val = row.get(k)
             have = str(val).lower() if isinstance(val, bool) else str(val)
             op, _, want = v.partition(".")
@@ -158,6 +163,7 @@ class FakeDb:
                 row.setdefault("slot", 1)
                 row.setdefault("notified_at", None)
                 row.setdefault("note", "")
+                row.setdefault("swap_to", None)
             self.t[table].append(row)
             out.append(dict(row))
         return None if prefer == "return=minimal" else out
