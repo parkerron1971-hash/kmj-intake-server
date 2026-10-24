@@ -3,11 +3,10 @@ title: Church areas, step 1 — a Media part on ChurchSavvy's team opens the liv
 date: 2026-10-23
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-10-23: "if we create media team they would be able to get the part when it comes to media like churchsavvy part and any that is related to that field already setup for them"; "lets start building this" (artifact "Church Areas and Keys", 7YRKpKa9g2DdFU9mm3WD8L, step 1)'
-status: in progress
-prs: [kmj-intake-server#1563]
+status: shipped
+prs: [kmj-intake-server#1563, solutionist-studio#1336 (the app: Team page invite and the Media tab)]
 migrations: [supabase/APPLY-2026-10-23-churchsavvy-media-part.sql (APPLIED LIVE 10/23 after a rollback probe)]
 left_undone:
-  - "The app: the Media part in ChurchSavvy's Team page and invite, and the Live, Clips and Sermons pages inside ChurchSavvy for someone with the part (solutionist-studio)"
   - "A clip finder push for a volunteer opens the office's Video Clips page (grow:video-clips), which a volunteer can't open; it should open ChurchSavvy"
 decisions:
   - "A fifth part, Media: the livestream, video clips, sermons and the screens' library; never the plan, the screens or the setup"
