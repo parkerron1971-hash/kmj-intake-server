@@ -532,8 +532,8 @@ def join_by_text(business_id: str, phone: str) -> Optional[Dict[str, str]]:
 def _welcome(name: str, link: str) -> str:
     import sms_service
     return sms_service.compose_outbound_body(
-        name, f"You're signed up for the daily devotional. Each evening at {SEND_AT} you'll get the next day. "
-              f"Today's is here: {link}", include_optout=True)
+        name, f"You're signed up for the daily devotional: 1 text each evening at {SEND_AT} with the next day. "
+              f"Today's is here: {link} Msg & data rates may apply. Reply HELP for help.", include_optout=True)
 
 
 @router.post("/daily/join", include_in_schema=False)

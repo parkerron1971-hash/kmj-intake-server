@@ -200,7 +200,8 @@ def test_signing_up_saves_the_words_and_sends_a_welcome(client, world):
     assert row["consent"].startswith("Text me the daily devotional from Love City Church")
     assert world["contacts"] == ["+12315550123"]
     (phone, body), = world["texts"]
-    assert body.startswith("Love City Church: You're signed up") and body.endswith("Reply STOP to opt out.")
+    assert body.startswith("Love City Church: You're signed up") and body.endswith("Reply HELP for help. Reply STOP to opt out.")
+    assert "1 text each evening at 7:30" in body and "Msg & data rates may apply" in body and len(body) <= 320
     assert "https://lovecityc.com/daily" in body
     assert "this evening at 7:30" in client.get("/daily?joined=1").text
 

@@ -336,11 +336,14 @@ def test_daily_on_own_number_signs_up_and_sends_the_page(routed, giving, daily, 
     res = _run(sms_routing.route_inbound(from_number=CUSTOMER, text=text, to_number=OWN_A))
     assert res["action"] == "daily_join" and res["business_id"] == BIZ_A
     assert res["reply"].startswith(sms_routing.sender_brand() + ": You're signed up for Love City Church's daily devotional")
-    assert "https://lovecityc.com/daily" in res["reply"] and "7:30" in res["reply"] and "STOP" in res["reply"]
+    # what the person agreed to: how often, rates, HELP and STOP
+    for words in ("https://lovecityc.com/daily", "1 text each evening at 7:30", "Msg & data rates may apply",
+                  "HELP", "STOP"):
+        assert words in res["reply"]
     assert daily["asked"] == [(BIZ_A, CUSTOMER)] and routed["inbound"][0]["text"] == text.strip()
     giving["own_name"] = {"number": OWN_A}
     res = _run(sms_routing.route_inbound(from_number=CUSTOMER, text="DAILY", to_number=OWN_A))
-    assert res["reply"].startswith("Love City Church: You're signed up for the daily devotional.")
+    assert res["reply"].startswith("Love City Church: You're signed up for the daily devotional: 1 text")
 
 
 def test_daily_with_nothing_to_send_is_just_a_message(routed, giving, daily):

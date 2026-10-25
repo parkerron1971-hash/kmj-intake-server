@@ -413,8 +413,9 @@ async def route_inbound(
                     own_name = await own_registration(client, business_id)
                     reply = ((f"{joined['name']}: You're signed up for the daily devotional" if own_name else
                               f"{sender_brand()}: You're signed up for {joined['name']}'s daily devotional")
-                             + f". Each evening at {devotional_daily.SEND_AT} you'll get the next day."
-                             + f" Today's is here:\n{joined['url']}\nReply STOP to opt out.")
+                             + f": 1 text each evening at {devotional_daily.SEND_AT} with the next day."
+                             + f" Today's is here:\n{joined['url']}\n"
+                             + "Msg & data rates may apply. Reply HELP for help, STOP to opt out.")
                     logger.info(f"[ROUTE] DAILY from {phone} on biz {business_id[:8]}'s own number")
                     await _bind(client, phone, business_id)
                     await _ensure_contact(client, business_id, phone)
