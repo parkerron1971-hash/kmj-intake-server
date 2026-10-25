@@ -15,6 +15,7 @@ What these pin:
 from __future__ import annotations
 
 import pathlib
+import re
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
@@ -44,12 +45,16 @@ def _cs(client, path):
 def test_its_own_domain_answers_with_its_own_pages(client):
     home = _cs(client, "/")
     assert home.status_code == 200
-    assert "Every Sunday, <span class=\"grad\">ready.</span>" in home.text
+    assert '<h1 id="hero-h" class="disp">Every service, <span class="grad">ready.</span></h1>' in home.text
+    assert "<title>ChurchSavvy · Every service, ready.</title>" in home.text
     assert '<link rel="canonical" href="https://churchsavvy.app/">' in home.text
     assert "The Solutionist System" not in home.text, "never the platform's marketing site"
     for path, words in (("/pricing", "One price per church."), ("/solutionist", "Solutionist runs the rest of the week")):
         r = _cs(client, path)
         assert r.status_code == 200 and words in r.text, path
+    # The tagline is "Every service, ready." (Kevin, 10/25): the Sunday one is gone everywhere.
+    for path in ("/", "/pricing", "/solutionist"):
+        assert "Every Sunday" not in _cs(client, path).text, path
     assert _cs(client, "/www-only").status_code == 404
     assert client.get("/", headers={"Host": "www.churchsavvy.app"}).status_code == 200
 
@@ -85,7 +90,10 @@ def test_the_pages_before_the_domain_open_on_the_platform_only(client):
 def test_logo_files_by_name_only(client):
     r = client.get("/churchsavvy-assets/logo-mark.webp")
     assert r.status_code == 200 and r.headers["content-type"] == "image/webp"
-    assert client.get("/churchsavvy-assets/og.png").headers["content-type"] == "image/png"
+    # The share picture the pages name is one the folder serves (its name
+    # changes with its words: the files are cached as never changing).
+    share = re.search(r'<meta property="og:image" content="[^"]*(/churchsavvy-assets/[^"]+)">', _cs(client, "/").text)
+    assert share and client.get(share.group(1)).headers["content-type"] == "image/png"
     for bad in ("..%2Fchurchsavvy_site.py", "logo-mark.svg", "nope.png", ".hidden.png"):
         assert client.get(f"/churchsavvy-assets/{bad}").status_code == 404, bad
     assert _cs(client, "/favicon.ico").status_code == 200
