@@ -187,6 +187,12 @@ app.add_middleware(GZipMiddleware, minimum_size=1024)
 # and strips Accept-Encoding before gzip decides. See sse_middleware.py.
 from sse_middleware import NoGzipForStreams
 app.add_middleware(NoGzipForStreams)
+# A custom domain's pages are never stored by Cloudflare: the SaaS Worker
+# fetches the Railway URL, so every custom domain shared one cache entry per
+# path (churchsavvy.app's home showed on lovecityc.com, 2026-10-25). See
+# custom_domain_cache.py. Outermost, so it sees the final headers.
+from custom_domain_cache import NoSharedCacheForCustomDomains
+app.add_middleware(NoSharedCacheForCustomDomains)
 # Guarantee CORS headers on ALL error responses (500/404/422/unhandled) — an
 # unhandled exception escapes CORSMiddleware otherwise, masking every error as
 # a browser CORS block. See cors_error_handlers.py.
