@@ -1074,12 +1074,12 @@ html{scroll-behavior:smooth}
 .cs .nav.scrolled{border-bottom-color:var(--line)}
 .cs .links a[aria-current="page"]{color:var(--ink)}
 .cs .cmp-link{margin-top:22px;text-align:center}
-.sheet{display:none}
+.menu-sheet{display:none}
 @media (max-width:760px){
-.sheet{position:fixed;inset:64px 0 auto 0;z-index:49;background:#FFFFFF;border-bottom:1px solid #E1E4F0;padding:12px 20px 22px;flex-direction:column;gap:2px;font-family:'Inter',system-ui,sans-serif}
-.sheet.open{display:flex}
-.sheet a{min-height:48px;display:flex;align-items:center;font-size:17px;font-weight:600;color:#0A1033;text-decoration:none;border-bottom:1px solid #E1E4F0}
-.sheet a.btn{margin-top:14px;border-bottom:0;justify-content:center;border-radius:999px;background:#1D45F2;color:#FFFFFF}
+.menu-sheet{position:fixed;inset:64px 0 auto 0;z-index:49;background:#FFFFFF;border-bottom:1px solid #E1E4F0;padding:12px 20px 22px;flex-direction:column;gap:2px;font-family:'Inter',system-ui,sans-serif}
+.menu-sheet.open{display:flex}
+.menu-sheet a{min-height:48px;display:flex;align-items:center;font-size:17px;font-weight:600;color:#0A1033;text-decoration:none;border-bottom:1px solid #E1E4F0}
+.menu-sheet a.btn{margin-top:14px;border-bottom:0;justify-content:center;border-radius:999px;background:#1D45F2;color:#FFFFFF}
 }
 @media (prefers-reduced-motion: reduce){html{scroll-behavior:auto}}
 /* a part the booth hides is hidden, whatever its own display */
