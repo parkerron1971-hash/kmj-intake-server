@@ -102,6 +102,9 @@ def test_the_home_page_is_the_church_the_booth_and_whats_in_it(client):
     # The booth's Scripture is the KJV, and it says so when it doesn't carry a verse.
     assert "For God so loved the world, that he gave his only begotten Son" in script
     assert "every verse of the KJV and the WEB is there" in script
+    # The phone menu and the chord chart in "Bring what you already have" are
+    # different things: the menu's class once hid the chart on every screen.
+    assert 'class="menu-sheet" id="sheet"' in html and ".sheet{display:none}" not in html
     # Made-up names only: the sample church is "Your Church".
     assert "Riverbend" not in html and "Love City" not in html
 
