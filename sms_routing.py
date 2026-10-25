@@ -403,6 +403,27 @@ async def route_inbound(
                         provider_id=provider_id, media=media, business_id=business_id,
                     )
                     return {"action": "give_link", "business_id": business_id, "reply": reply}
+            # DAILY: the devotional the church reads together, tomorrow's
+            # day each evening (devotional_daily.py). Like GIVE, only on the
+            # church's own number; with nothing to send it's an ordinary text.
+            import devotional_daily
+            if devotional_daily.is_daily_word(body):
+                joined = await asyncio.to_thread(devotional_daily.join_by_text, business_id, phone)
+                if joined:
+                    own_name = await own_registration(client, business_id)
+                    reply = ((f"{joined['name']}: You're signed up for the daily devotional" if own_name else
+                              f"{sender_brand()}: You're signed up for {joined['name']}'s daily devotional")
+                             + f": 1 text each evening at {devotional_daily.SEND_AT} with the next day."
+                             + f" Today's is here:\n{joined['url']}\n"
+                             + "Msg & data rates may apply. Reply HELP for help, STOP to opt out.")
+                    logger.info(f"[ROUTE] DAILY from {phone} on biz {business_id[:8]}'s own number")
+                    await _bind(client, phone, business_id)
+                    await _ensure_contact(client, business_id, phone)
+                    await record_inbound_sms(
+                        client, from_number=phone, text=body,
+                        provider_id=provider_id, media=media, business_id=business_id,
+                    )
+                    return {"action": "daily_join", "business_id": business_id, "reply": reply}
             logger.info(f"[ROUTE] own-number {phone} → biz {business_id[:8]} (direct)")
             await _bind(client, phone, business_id)
             await _ensure_contact(client, business_id, phone)
