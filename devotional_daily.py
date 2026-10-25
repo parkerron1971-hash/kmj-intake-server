@@ -9,8 +9,9 @@ i reveal the app?" ... "build the page and nightly text".
     GET  /daily            today's day of the devotional the church reads
                            together (a published devotional with a start
                            date), on the church's own address;
-                           ?date=YYYY-MM-DD opens another day that's open
-    POST /daily/join       form {phone, name?, consent}: text me the next
+                           ?date=YYYY-MM-DD opens another day that's open;
+                           ?t=1 (every link we text) means "on the list"
+    POST /daily/join      form {phone, name?, consent}: text me the next
                            day each evening
     the word DAILY         texted to the church's own number does the same
                            (sms_routing, beside GIVE)
@@ -31,6 +32,11 @@ Sign-ups are devotional_texts rows (APPLY-2026-10-25-devotional-texts.sql),
 one per church and phone. A row is the consent for these texts and nothing
 else: it isn't an sms_consents row, so the church's campaigns and
 reminders never count it. STOP (sms_opt_outs) still wins at send time.
+Kevin, the first evening: after reading the day, the page asked people to
+sign up again. Someone who came from a text, or signed up here, is
+remembered on that phone and sees "You're on the text list" instead, with
+a way to sign up another number (a link forwarded to a friend carries
+t=1 too, so that way stays one tap away).
 The evening claim is last_key: one PATCH moves it from anything else to
 "<devotional id>_<day>", so one replica wins and nobody gets a day twice.
 """
@@ -254,16 +260,24 @@ def _join_box(church: Dict[str, Any], number: str, flash: str, now: datetime) ->
         "none": ("bad", "There’s no devotional to send right now."),
         "error": ("bad", "That didn’t save. Try again in a minute."),
     }
-    note = ""
+    note, state = "", ""
     if flash in msgs:
         kind, words = msgs[flash]
         note = f'<p class="flash {kind}" role="status">{_e(words)}</p>'
+        state = " done" if flash == "joined" else " open"     # a problem always shows the form
     text_line = (f'<p class="or">Or text <b>DAILY</b> to <a href="sms:{_e(number)}?&body=DAILY">{_e(pretty_phone(number))}</a>.</p>'
                  if number else "")
-    return f"""<section class="card join" id="join">
+    return f"""<section class="card join{state}" id="join">
+<div class="onlist">
+<h2>You’re on the text list</h2>
+{note if flash == "joined" else ""}
+<p>Each evening at {SEND_AT}, the next day comes to your phone. No need to sign up again.</p>
+<button type="button" class="another">Not on the list yet? Sign up here</button>
+</div>
+<div class="ask">
 <h2>Get the next day by text</h2>
 <p>Each evening at {SEND_AT}, tomorrow’s day comes to your phone, ready for the morning.</p>
-{note}
+{note if flash != "joined" else ""}
 <form method="post" action="/daily/join">
 <label class="f"><span>Your name <i>(optional)</i></span><input name="name" autocomplete="name" maxlength="120"></label>
 <label class="f"><span>Mobile number</span><input name="phone" type="tel" inputmode="tel" autocomplete="tel" required maxlength="20" placeholder="(231) 555-0123"></label>
@@ -272,6 +286,7 @@ def _join_box(church: Dict[str, Any], number: str, flash: str, now: datetime) ->
 <button type="submit">Text me each evening</button>
 </form>
 {text_line}
+</div>
 </section>"""
 
 
@@ -318,6 +333,7 @@ def _shell(church: Dict[str, Any], title: str, body: str) -> str:
 <meta name="description" content="The devotional {_e(name)} is reading together, a day at a time.">
 <meta name="theme-color" content="#f7f5f2" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#151217" media="(prefers-color-scheme: dark)">
+<script>try{{if(/[?&](t|joined)=1(&|$)/.test(location.search))localStorage.setItem('daily-listed','1');if(localStorage.getItem('daily-listed'))document.documentElement.className+=' listed';}}catch(e){{}}</script>
 {ui.FONTS}
 <style>
 :root{{--paper:#f7f5f2;--card:#fff;--ink:#1d1720;--soft:#5d5562;--line:#e6e1e7;--accent:{col['light']};color-scheme:light dark}}
@@ -378,6 +394,10 @@ h1{{font:500 clamp(34px,8vw,46px)/1.08 Newsreader,Georgia,serif;letter-spacing:-
 .consent{{display:flex;gap:10px;align-items:flex-start;font-size:13px;line-height:1.5;color:var(--soft);margin:4px 0 16px}}
 .consent input{{width:18px;height:18px;margin-top:2px;accent-color:var(--accent);flex:0 0 auto}}
 .join button{{width:100%;font:600 16px Geist,system-ui,sans-serif;color:#fff;background:var(--accent);border:0;border-radius:12px;padding:14px;cursor:pointer}}
+.join .onlist{{display:none}}
+.join.done .ask,.listed .join:not(.open) .ask{{display:none}}
+.join.done .onlist,.listed .join:not(.open) .onlist{{display:block}}
+.join .onlist button{{width:auto;background:none;color:var(--accent);padding:0;font-size:15px;text-decoration:underline;text-underline-offset:3px}}
 .or{{text-align:center;font-size:14px;color:var(--soft);margin:14px 0 0!important}}
 .hp{{position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden}}
 .flash{{padding:10px 14px;border-radius:12px;font-size:14px;font-weight:600}}
@@ -393,6 +413,14 @@ h1{{font:500 clamp(34px,8vw,46px)/1.08 Newsreader,Georgia,serif;letter-spacing:-
 </div>
 <script>
 (function(){{
+ if(/[?&]t=1/.test(location.search)&&history.replaceState){{
+  var u=new URL(location.href);u.searchParams.delete('t');history.replaceState(null,'',u.pathname+u.search+u.hash);
+ }}
+ var a=document.querySelector('.join .another');
+ if(a)a.addEventListener('click',function(){{
+  var j=document.getElementById('join');j.classList.remove('done');j.classList.add('open');
+  var p=j.querySelector('input[name=phone]');if(p)p.focus();
+ }});
  var c=document.querySelector('.check');
  if(c){{var k=c.getAttribute('data-key'),s={{}};
   try{{s=JSON.parse(localStorage.getItem(k)||'{{}}')||{{}};}}catch(e){{s={{}};}}
@@ -501,9 +529,11 @@ def _save(business_id: str, phone: str, *, name: str, source: str, consent: str)
 
 
 def page_link(business_id: str, on: Optional[date] = None) -> str:
+    """The page as we text it, only ever to someone on the list: t=1 tells
+    the page so, and it stops asking them to sign up."""
     import church_follow_up
     origin = church_follow_up.site_origin(business_id) or ""
-    return f"{origin}/daily" + (f"?date={on.isoformat()}" if on else "")
+    return f"{origin}/daily?" + (f"date={on.isoformat()}&" if on else "") + "t=1"
 
 
 def is_daily_word(body: str) -> bool:

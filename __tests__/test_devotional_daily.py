@@ -5,6 +5,8 @@ before i reveal the app?"). Pins:
   · the day by date across three back-to-back weeks; tomorrow opens the
     evening before, later days don't;
   · /daily answers only on the address of a church it's on for;
+  · someone on the list (t=1 in every texted link, or just signed up)
+    isn't asked to sign up again;
   · signing up needs a real mobile number and the box ticked, keeps the
     words agreed to, never moves last_key, and a bot that fills the
     hidden box saves nothing;
@@ -69,8 +71,8 @@ def world(monkeypatch):
     monkeypatch.setattr(dd, "dated", lambda biz: state["devs"])
     monkeypatch.setattr(dv, "one", lambda biz, dev_id, published=True: (FULL.get(dev_id), True))
     monkeypatch.setattr(dd, "own_number", lambda biz: "+12316254974")
-    monkeypatch.setattr(dd, "page_link", lambda biz, on=None: "https://lovecityc.com/daily"
-                        + (f"?date={on.isoformat()}" if on else ""))
+    monkeypatch.setattr(dd, "page_link", lambda biz, on=None: "https://lovecityc.com/daily?"
+                        + (f"date={on.isoformat()}&" if on else "") + "t=1")
 
     def save(biz, phone, *, name, source, consent):
         state["saved"].append({"biz": biz, "phone": phone, "name": name, "source": source, "consent": consent})
@@ -173,6 +175,30 @@ def test_before_the_first_day_it_welcomes_and_after_the_last_it_keeps_every_day(
     assert late.count('class="day"') == 7                                         # every day a link
 
 
+def test_every_link_we_text_says_on_the_list(monkeypatch):
+    import church_follow_up
+    monkeypatch.setattr(church_follow_up, "site_origin", lambda biz: "https://lovecityc.com")
+    assert dd.page_link(BIZ["id"]) == "https://lovecityc.com/daily?t=1"
+    assert dd.page_link(BIZ["id"], date(2026, 10, 26)) == "https://lovecityc.com/daily?date=2026-10-26&t=1"
+
+
+def test_someone_on_the_list_isnt_asked_to_sign_up_again(client):
+    """Kevin, the first evening: after reading the day, the page asked people
+    to sign up again. The phone remembers (t=1 from a text, or joined=1),
+    the form steps aside, and another number is one tap away."""
+    page = client.get("/daily?t=1").text
+    assert "localStorage.setItem('daily-listed','1')" in page.split("</head>")[0]    # before anything paints
+    assert "You’re on the text list" in page and "No need to sign up again." in page
+    assert "Not on the list yet? Sign up here" in page and 'action="/daily/join"' in page
+    assert 'class="card join" id="join"' in page                                    # the phone decides
+    done = client.get("/daily?joined=1").text
+    assert 'class="card join done" id="join"' in done
+    assert done.index("this evening at 7:30") < done.index('class="ask"')            # the thanks sits in the list box
+    oops = client.get("/daily?why=phone").text
+    assert 'class="card join open" id="join"' in oops                               # a problem always shows the form
+    assert oops.index('class="ask"') < oops.index('class="flash bad"')
+
+
 def test_it_answers_only_where_it_is_on(client, world):
     world["church"] = None                       # the API host, an unknown host, or a church it's off for
     assert client.get("/daily").status_code == 404
@@ -252,7 +278,7 @@ def test_daily_by_text_only_while_there_is_something_to_send(world, monkeypatch)
     import sb_clients
     monkeypatch.setattr(sb_clients, "sb_get_as_service", lambda path: [{"name": "Love City Church"}])
     assert dd.join_by_text(BIZ["id"], "+12315550123") == {"name": "Love City Church",
-                                                          "url": "https://lovecityc.com/daily"}
+                                                          "url": "https://lovecityc.com/daily?t=1"}
     assert world["saved"][-1]["source"] == "text"
     world["now"] = _at(2026, 11, 12)
     assert dd.join_by_text(BIZ["id"], "+12315550124") is None
@@ -313,7 +339,7 @@ def test_the_evening_text_is_tomorrows_day_once_a_person(world, signups):
     assert [p for p, _ in world["texts"]] == ["+12315550001", "+12315550002"]      # never the church it's off for
     body = world["texts"][0][1]
     assert body == ("Love City Church: Tomorrow's devotional (Finance Week, day 3): First Fruits, Proverbs 3:9-10. "
-                    "Read it tonight: https://lovecityc.com/daily?date=2026-10-28 Reply STOP to opt out.")
+                    "Read it tonight: https://lovecityc.com/daily?date=2026-10-28&t=1 Reply STOP to opt out.")
     assert len(body) <= 320 and body.isascii()
     assert signups[0]["last_key"] == f"{W2}_3" and signups[2]["last_key"] is None
     # the next tick that evening, and a second replica, send nothing again
