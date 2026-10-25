@@ -13,11 +13,19 @@
 #   mysolutionist.app            /churchsavvy/site[/pricing|/solutionist]   the same pages, before the domain
 #   any host                     /churchsavvy-assets/<file>                  logo, icon, share picture
 #
+# The home page is its own design (canvas FDAysirAGzcrWosHuzijSA, version 3;
+# Kevin 2026-10-25): a cutaway of a church from above, a booth people can try
+# in the page, and what's in the booth. Its markup, stylesheet, script and
+# drawings live in churchsavvy_site/ and are filled here per request; the
+# pricing and Solutionist pages keep the stylesheet below.
+#
 # Rules it keeps: the logo's blue-to-violet only on the logo and the
-# wordmark's word "ready."; flat color everywhere else; no invented numbers,
-# reviews or customers; Scripture is KJV; never a song's words.
+# wordmark's word "ready."; no invented numbers, reviews or customers;
+# Scripture is KJV; never a song's words, in the booth you can try too (it
+# puts up Scripture or the visitor's own words, as text, never markup).
 from __future__ import annotations
 
+import functools
 import html as _html
 import os
 import pathlib
@@ -33,6 +41,7 @@ HOSTS = ("churchsavvy.app", "www.churchsavvy.app")
 CANONICAL = "https://churchsavvy.app"
 PREVIEW_BASE = "/churchsavvy/site"
 _ASSETS = pathlib.Path(__file__).resolve().parent / "static" / "churchsavvy"
+_HOME_DIR = pathlib.Path(__file__).resolve().parent / "churchsavvy_site"
 _ASSET_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,40}\.(webp|png)$")
 _CACHE = {"Cache-Control": "public, max-age=604800, immutable"}
 _PAGE_CACHE = {"Cache-Control": "public, max-age=300, s-maxage=600"}
@@ -130,44 +139,8 @@ section{scroll-margin-top:84px}
 .nav-right .btn{min-height:42px;padding:0 18px;font-size:14.5px}
 .menu-btn{display:none;width:44px;height:44px;border-radius:12px;place-items:center;box-shadow:inset 0 0 0 1px var(--line2)}
 .sheet{display:none}
-/* hero */
-.hero{position:relative;padding:72px 0 88px;overflow:hidden;background:linear-gradient(180deg,var(--tint) 0%,var(--paper) 78%)}
-.hero-in{display:grid;grid-template-columns:minmax(0,.8fr) minmax(0,1.2fr);gap:48px;align-items:center}
-.hero h1{font-size:clamp(52px,7.4vw,92px);margin-top:18px}
-.hero .lede{margin-top:22px;max-width:520px}
+/* buttons in a row */
 .ctas{display:flex;gap:12px;flex-wrap:wrap;margin-top:32px}
-.facts{display:flex;gap:10px 22px;flex-wrap:wrap;margin-top:28px;font-size:14px;color:var(--ink3)}
-.facts span{display:inline-flex;align-items:center;gap:7px}.facts .ic-s{color:var(--blue)}
-/* the product window */
-.win{border-radius:18px;background:var(--d-bg);color:var(--d-text);box-shadow:0 40px 90px -36px rgba(10,16,51,.5),0 0 0 1px rgba(10,16,51,.1);overflow:hidden;font-size:12px}
-.win-bar{height:34px;display:flex;align-items:center;gap:7px;padding:0 14px;background:#11121A;border-bottom:1px solid var(--d-line)}
-.win-bar i{width:10px;height:10px;border-radius:50%;background:#2B2E40;display:block}
-.bo-top{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--d-line)}
-.tally{display:inline-flex;align-items:center;gap:6px;height:22px;padding:0 9px;border-radius:6px;background:var(--d-live);color:#fff;font-weight:700;font-size:10.5px;letter-spacing:.06em}
-.tally i{width:6px;height:6px;border-radius:50%;background:#fff;display:block;animation:pulse 2s ease-in-out infinite}
-@keyframes pulse{50%{opacity:.35}}
-.bo-top b{font-family:var(--display);font-size:13px}.bo-top .ahead{color:var(--d-ok);font-weight:650;font-size:11px}
-.bo-top .clock{margin-left:auto;font-family:var(--display);font-weight:800;font-size:16px;font-variant-numeric:tabular-nums}
-.bo-body{display:grid;grid-template-columns:132px minmax(0,1fr) 124px}
-.bo-ord{border-right:1px solid var(--d-line);padding:10px 8px;display:flex;flex-direction:column;gap:2px}
-.bo-ord .k{font-size:9px;font-weight:800;letter-spacing:.14em;color:var(--d-faint);padding:8px 8px 3px}
-.bo-ord .it{display:flex;gap:8px;padding:6px 8px;border-radius:7px;color:var(--d-dim);white-space:nowrap;overflow:hidden}
-.bo-ord .it .t{width:30px;flex:none;color:var(--d-faint);font-size:10.5px}
-.bo-ord .it.done{opacity:.5}.bo-ord .it.now{background:rgba(229,72,77,.14);color:var(--d-text);box-shadow:inset 2px 0 0 var(--d-live)}
-.bo-mid{padding:12px;display:flex;flex-direction:column;gap:10px;min-width:0}
-.lab{display:flex;justify-content:space-between;font-size:9.5px;font-weight:800;letter-spacing:.12em;color:var(--d-faint);margin-bottom:5px}.lab.live{color:#FF8A8E}
-.slide{aspect-ratio:16/9;border-radius:8px;background:#0F1C55;display:flex;flex-direction:column;justify-content:center;padding:7%;color:#fff;overflow:hidden}
-.slide .ref{font-size:9px;letter-spacing:.14em;font-weight:700;opacity:.65}
-.slide p{font-family:Georgia,'Times New Roman',serif;font-size:clamp(11px,1.05vw,15px);line-height:1.35;margin-top:6px;display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden}
-.slide.on{box-shadow:0 0 0 2px var(--d-live)}
-.bo-pair{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(0,1fr);gap:10px;align-items:end}
-.bo-pair .slide.next p{font-size:clamp(8.5px,.75vw,10.5px);-webkit-line-clamp:2}
-.film{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:6px}
-.film span{aspect-ratio:16/9;border-radius:4px;background:#1A2350}.film span.on{box-shadow:0 0 0 1.5px var(--d-live)}.film span.nx{box-shadow:0 0 0 1.5px var(--d-blue)}
-.bo-side{border-left:1px solid var(--d-line);padding:12px 10px;display:flex;flex-direction:column;gap:8px}
-.bo-side .k{font-size:9px;font-weight:800;letter-spacing:.14em;color:var(--d-faint)}
-.bo-side .p{display:flex;align-items:center;justify-content:space-between;gap:6px;color:var(--d-dim);font-size:11px}
-.bo-side .p b{color:var(--d-text);font-weight:600}.bo-side .here{color:var(--d-ok);font-weight:650;font-size:10.5px}.bo-side .way{color:#F0B64C;font-weight:650;font-size:10.5px}
 /* bands */
 .band{padding:104px 0}.band-alt{background:var(--ground)}
 .head{max-width:720px}.head .h2{margin-top:12px}.head .lede{margin-top:16px}
@@ -176,78 +149,8 @@ section{scroll-margin-top:84px}
 .pillar{padding:28px;display:flex;flex-direction:column;gap:12px}
 .pillar .n{font-family:var(--display);font-weight:800;font-size:13px;letter-spacing:.08em;color:var(--blue)}
 .pillar > p{color:var(--ink2);font-size:15.5px}
-.vign{margin-top:auto;border-radius:14px;background:var(--ground);padding:14px;display:flex;flex-direction:column;gap:8px;font-size:13.5px}
-.vrow{display:flex;align-items:center;gap:10px}.vrow .t{width:44px;color:var(--ink3);font-size:12.5px;font-variant-numeric:tabular-nums}.vrow b{font-weight:600;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.st{display:inline-flex;align-items:center;height:22px;padding:0 8px;border-radius:6px;font-size:11.5px;font-weight:650;white-space:nowrap}
-.st-yes{background:var(--ok-soft);color:var(--ok)}.st-wait{background:var(--wait-soft);color:var(--wait)}.st-open{box-shadow:inset 0 0 0 1.5px var(--line2);color:var(--ink3)}
-.vign.dark{background:var(--d-bg);color:var(--d-text)}
-/* four screens */
-.screens{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:18px;margin-top:52px}
-.scr{display:flex;flex-direction:column;gap:12px}
-.tv{aspect-ratio:16/9;border-radius:12px;overflow:hidden;position:relative;background:#0F1C55;color:#fff;display:flex;flex-direction:column;justify-content:center;padding:8%;box-shadow:0 18px 40px -24px rgba(10,16,51,.55)}
-.tv p{font-family:Georgia,serif;font-size:clamp(11px,1.15vw,15px);line-height:1.35}
-.tv .ref{font-size:8px;letter-spacing:.14em;font-weight:700;opacity:.65;margin-bottom:5px}
-.tv.stage{background:#000;justify-content:flex-start;gap:6px;padding:7%}
-.tv.stage .now{font-weight:800;font-size:clamp(11px,1.1vw,14px);line-height:1.25}
-.tv.stage .nx{color:#8C90A8;font-size:clamp(8px,.8vw,10.5px)}
-.tv.stage .row{margin-top:auto;display:flex;justify-content:space-between;font-weight:800;font-size:clamp(9px,.9vw,12px);font-variant-numeric:tabular-nums}
-.tv.stage .row span:last-child{color:var(--d-blue)}
-.tv.stream{background:linear-gradient(135deg,#3B4A6B,#1E2638);justify-content:flex-end;padding:0}
-.tv.stream .cam{position:absolute;inset:0;background:radial-gradient(60% 70% at 50% 40%,rgba(255,255,255,.14),transparent 70%)}
-.tv.stream .lt{position:relative;margin:0 6% 7%;padding:6px 10px;border-radius:6px;background:rgba(10,16,51,.86);font-size:clamp(8.5px,.85vw,11px)}
-.tv.stream .lt b{display:block;font-size:clamp(9px,.95vw,12px)}
-.tv.lobby{background:#F5F6FB;color:var(--ink);justify-content:flex-end;gap:2px}
-.tv.lobby .k{font-size:clamp(7px,.7vw,9px);font-weight:800;letter-spacing:.14em;color:var(--blue)}
-.tv.lobby b{font-family:var(--display);font-weight:800;font-size:clamp(12px,1.3vw,17px);letter-spacing:-.02em}
-.tv.lobby small{font-size:clamp(8px,.75vw,10px);color:var(--ink2)}
-.scr h3{font-family:var(--display);font-size:17px;font-weight:800;letter-spacing:-.02em}
-.scr p.d{font-size:14.5px;color:var(--ink2);margin-top:-6px}
-/* planning */
+/* two columns */
 .split{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:64px;align-items:center}
-.ticks{list-style:none;margin:28px 0 0;padding:0;display:flex;flex-direction:column;gap:14px}
-.ticks li{display:flex;gap:12px;font-size:16px;color:var(--ink2)}.ticks li .ic{color:var(--blue);margin-top:2px}
-.ticks li b{color:var(--ink);font-weight:650}
-.stage-art{position:relative;min-height:520px}
-.grid-card{position:absolute;left:0;top:10px;width:70%;padding:16px;background:var(--d-bg);color:var(--d-text);border-radius:16px;box-shadow:0 30px 70px -34px rgba(10,16,51,.6)}
-.grid-card .gh{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}.grid-card .gh b{font-family:var(--display);font-size:14px}
-.grid-card .gh span{font-size:11px;color:var(--d-faint)}
-.mx{display:grid;grid-template-columns:62px repeat(3,minmax(0,1fr));gap:6px;font-size:11px}
-.mx .h{color:var(--d-faint);font-weight:700;font-size:10px}.mx .r{color:var(--d-dim);font-weight:600;align-self:center}
-.mx .c{border-radius:8px;background:var(--d-panel);padding:6px 7px;display:flex;flex-direction:column;gap:3px;min-height:44px;box-shadow:inset 0 0 0 1px var(--d-line)}
-.mx .c b{font-weight:600;font-size:10.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.mx .c i{font-style:normal;font-size:9.5px;font-weight:700}.mx .c i.y{color:var(--d-ok)}.mx .c i.w{color:#F0B64C}.mx .c i.o{color:var(--d-faint)}
-.mx .x4{display:none}
-.mx .c.open{background:transparent;box-shadow:inset 0 0 0 1px var(--d-line2);justify-content:center;align-items:center;color:var(--d-blue);font-weight:700}
-.phone{position:absolute;right:0;bottom:0;width:270px;border-radius:34px;background:#fff;box-shadow:0 0 0 9px #0B0C12,0 40px 80px -30px rgba(10,16,51,.65);overflow:hidden}
-.phone .bar{height:30px;display:flex;justify-content:center;align-items:center}.phone .bar i{width:84px;height:20px;border-radius:999px;background:#0B0C12}
-.mail{padding:12px 16px 18px;display:flex;flex-direction:column;gap:10px;font-size:13px}
-.mail .from{display:flex;align-items:center;gap:8px}.mail .crest{width:30px;height:30px;border-radius:8px;background:#0F1C55;color:#fff;display:grid;place-items:center;font-weight:800;font-size:11px}
-.mail .from b{display:block;font-size:12.5px}.mail .from small{color:var(--ink3);font-size:11px}
-.mail h4{font-family:var(--display);font-weight:800;font-size:19px;letter-spacing:-.02em;line-height:1.15}
-.mail .facts2{border-radius:12px;background:var(--ground);padding:4px 12px;font-size:12px}
-.mail .facts2 div{display:flex;justify-content:space-between;padding:7px 0;border-top:1px solid var(--line)}.mail .facts2 div:first-child{border-top:0}
-.mail .facts2 span{color:var(--ink3)}
-.mail .y{height:42px;border-radius:999px;background:var(--blue);color:#fff;display:grid;place-items:center;font-weight:700;font-size:14px}
-.mail .n{height:42px;border-radius:999px;box-shadow:inset 0 0 0 1.5px var(--line2);display:grid;place-items:center;font-weight:650;font-size:14px}
-.mail .alt{text-align:center;font-size:12px;color:var(--blue);font-weight:600}
-/* the week */
-.week{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:0;margin-top:56px;position:relative}
-.week::before{content:"";position:absolute;left:0;right:0;top:19px;height:2px;background:var(--line)}
-.day{position:relative;padding-right:18px;display:flex;flex-direction:column;gap:8px}
-.day .dot{width:40px;height:40px;border-radius:50%;background:var(--paper);box-shadow:inset 0 0 0 2px var(--blue);display:grid;place-items:center;color:var(--blue);position:relative}
-.day.sun .dot{background:var(--blue);color:#fff;box-shadow:none}
-.day small,.day b{display:block}
-.day small{font-size:12.5px;font-weight:700;letter-spacing:.1em;color:var(--ink3);text-transform:uppercase;margin-top:6px}
-.day b{font-family:var(--display);font-size:18px;font-weight:800;letter-spacing:-.02em}
-.day p{font-size:14.5px;color:var(--ink2)}
-/* bring what you have */
-.four{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:18px;margin-top:52px}
-.tile{padding:24px;display:flex;flex-direction:column;gap:10px}
-.tile .ib{width:44px;height:44px;border-radius:12px;background:var(--blue-soft);color:var(--blue);display:grid;place-items:center}
-.tile p{font-size:14.5px;color:var(--ink2)}
-.wide{margin-top:18px;padding:22px 26px;display:flex;align-items:center;gap:18px;flex-wrap:wrap}
-.wide .ib{width:44px;height:44px;border-radius:12px;background:var(--ink);color:#fff;display:grid;place-items:center;flex:none}
-.wide p{flex:1;min-width:240px;color:var(--ink2);font-size:15.5px}.wide p b{color:var(--ink)}
 /* pricing */
 .plans{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:20px;margin-top:52px;align-items:stretch}
 .plan{padding:30px;display:flex;flex-direction:column;gap:14px;position:relative}
@@ -259,13 +162,6 @@ section{scroll-margin-top:84px}
 .plan li{display:flex;gap:10px}.plan li .ic-s{color:var(--blue);margin-top:3px}
 .plan .btn{margin-top:auto}
 .note{margin-top:22px;text-align:center;font-size:14.5px;color:var(--ink3)}
-/* partner */
-.partner{background:var(--ink);color:#fff;border-radius:var(--r-xl);padding:56px;display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,.9fr);gap:48px;align-items:center}
-.partner .eyebrow{color:#8EA6FF}.partner p{color:#C9CEE6;font-size:17px;margin-top:14px}
-.pair{display:flex;flex-direction:column;gap:12px}
-.pair div{display:flex;gap:14px;align-items:flex-start;padding:16px 18px;border-radius:14px;background:rgba(255,255,255,.06);box-shadow:inset 0 0 0 1px rgba(255,255,255,.08)}
-.pair .ic{color:#8EA6FF;margin-top:2px}.pair b{display:block;font-size:15.5px}.pair span{color:#C9CEE6;font-size:14.5px}
-.btn-w{background:#fff;color:var(--ink)}.btn-w:hover{background:var(--tint)}
 /* faq */
 .faq{max-width:820px;margin:44px auto 0;display:flex;flex-direction:column;gap:10px}
 .faq details{border-radius:16px;background:var(--paper);box-shadow:0 0 0 1px var(--line);padding:0 22px}
@@ -408,8 +304,17 @@ _JS = """
 </script>"""
 
 
-def _page(*, title: str, description: str, path: str, base: str, active: str, body: str) -> str:
+_FONTS = "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Manrope:wght@600;700;800&display=swap"
+_HOME_FONTS = ("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600"
+               "&family=Manrope:wght@600;700;800&family=Source+Serif+4:opsz,wght@8..60,500;8..60,600&display=swap")
+
+
+def _page(*, title: str, description: str, path: str, base: str, active: str, body: str,
+          css: str = CSS, fonts: str = _FONTS, chrome: bool = True, script: str = _JS) -> str:
+    """One page. `chrome=False` when the body brings its own bar and footer
+    (the home page)."""
     canonical = CANONICAL + (path if path != "/" else "/")
+    inner = f"{_nav(base, active)}\n<main id=\"main\">\n{body}\n</main>\n{_footer(base)}" if chrome else body
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -430,227 +335,43 @@ def _page(*, title: str, description: str, path: str, base: str, active: str, bo
 <link rel="icon" type="image/png" sizes="192x192" href="/churchsavvy-assets/icon-192.png">
 <link rel="apple-touch-icon" href="/churchsavvy-assets/icon-192.png">
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Manrope:wght@600;700;800&display=swap">
-<style>{CSS}</style>
+<link rel="stylesheet" href="{_e(fonts)}">
+<style>{css}</style>
 </head>
 <body>
-{_nav(base, active)}
-<main id="main">
-{body}
-</main>
-{_footer(base)}
-{_JS}
+{inner}
+{script}
 </body>
 </html>"""
 
 
 # ─── the home page ───────────────────────────────────────────────────
+# churchsavvy_site/home.html is the body; {{APP}} {{HOME}} {{PRICING}}
+# {{SOLUTIONIST}} are filled per request (escaped), the {{ART_*}} drawings
+# once, from their files (made by scripts/churchsavvy_art.py).
+
+_HOME_TOKEN = re.compile(r"\{\{(APP|HOME|PRICING|SOLUTIONIST)\}\}")
 
 
-def _booth_window() -> str:
-    return f"""
-<div class="win" role="img" aria-label="The ChurchSavvy booth on a Sunday: the order of service, Psalm 100 on the screens, the next verse, and who's serving today">
-  <div class="win-bar"><i></i><i></i><i></i></div>
-  <div class="bo-top"><span class="tally"><i></i>LIVE</span><b>Sunday service · Nov 1</b><span class="ahead">2 min ahead</span><span class="clock">11:16</span></div>
-  <div class="bo-body">
-    <div class="bo-ord" aria-hidden="true">
-      <span class="k">BEFORE</span><span class="it done"><span class="t">10:50</span>Welcome loop</span>
-      <span class="k">THE SERVICE</span>
-      <span class="it done"><span class="t">11:05</span>Holy, Holy, Holy</span>
-      <span class="it done"><span class="t">11:10</span>Come, Thou Fount</span>
-      <span class="it now"><span class="t">11:15</span>Psalm 100</span>
-      <span class="it"><span class="t">11:18</span>Prayer</span>
-      <span class="it"><span class="t">11:20</span>Enter His gates</span>
-      <span class="it"><span class="t">12:00</span>It Is Well</span>
-    </div>
-    <div class="bo-mid">
-      <div class="bo-pair">
-        <div><div class="lab live"><span>LIVE</span><span>1 of 5</span></div>
-          <div class="slide on"><span class="ref">PSALM 100:1 · KJV</span><p>Make a joyful noise unto the LORD, all ye lands.</p></div></div>
-        <div><div class="lab"><span>NEXT</span></div>
-          <div class="slide next"><span class="ref">PSALM 100:2</span><p>Serve the LORD with gladness: come before his presence with singing.</p></div></div>
-      </div>
-      <div class="film" aria-hidden="true"><span class="on"></span><span class="nx"></span><span></span><span></span><span></span></div>
-    </div>
-    <div class="bo-side" aria-hidden="true">
-      <span class="k">SERVING TODAY</span>
-      <span class="p"><b>Slides</b><span class="here">Here</span></span>
-      <span class="p"><b>Sound</b><span class="here">Here</span></span>
-      <span class="p"><b>Stream</b><span class="here">Here</span></span>
-      <span class="p"><b>Lights</b><span class="way">On the way</span></span>
-      <span class="p"><b>Greeters</b><span class="here">Here</span></span>
-    </div>
-  </div>
-</div>"""
+@functools.lru_cache(maxsize=1)
+def _home_files() -> tuple[str, str, str]:
+    read = lambda name: (_HOME_DIR / name).read_text(encoding="utf-8")  # noqa: E731
+    body = read("home.html")
+    for token, name in (("ART_CHURCH", "art-church.svg"), ("ART_STAGE_BACK", "art-stage-back.svg"),
+                        ("ART_STAGE_FRONT", "art-stage-front.svg")):
+        body = body.replace("{{" + token + "}}", read(name).strip())
+    return body, read("home.css"), "<script>\n" + read("home.js") + "</script>"
 
 
 def render_home(base: str = "") -> str:
-    app = app_url()
-    body = f"""
-<section class="hero" aria-labelledby="hero-h">
-  <div class="wrap hero-in">
-    <div>
-      <p class="eyebrow">Church presentation and planning</p>
-      <h1 id="hero-h" class="disp">Every service, <span class="grad">ready.</span></h1>
-      <p class="lede">Plan the service, put it on every screen, and get the right people serving — in one place made for churches.</p>
-      <div class="ctas">
-        <a class="btn btn-p btn-lg" href="{_e(app)}?signup=1">Start your church {icon('arrow', 'ic-s')}</a>
-        <a class="btn btn-q btn-lg" href="#product">See how it works</a>
-      </div>
-      <div class="facts"><span>{icon('check', 'ic-s')}One price per church</span><span>{icon('check', 'ic-s')}Your whole team included</span><span>{icon('check', 'ic-s')}Plug in by HDMI and go</span></div>
-    </div>
-    <div class="rv">{_booth_window()}</div>
-  </div>
-</section>
-
-<section class="band" id="product" aria-labelledby="pillars-h">
-  <div class="wrap">
-    <div class="head rv"><p class="eyebrow">One place, Tuesday to Sunday</p><h2 id="pillars-h" class="h2">Plan&nbsp;it. Show&nbsp;it. Serve&nbsp;it.</h2>
-      <p class="lede">Most churches juggle a planning tool, a presentation app and a group text. ChurchSavvy is all three, so the plan you make on Tuesday is the show you run on Sunday.</p></div>
-    <div class="three">
-      <article class="card pillar rv"><span class="n">PLAN IT</span><h3 class="h3">The whole service, in order.</h3>
-        <p>Songs, Scripture, announcements and the sermon, timed to the minute. Start from last week or your own template.</p>
-        <div class="vign"><div class="vrow"><span class="t">11:05</span><b>Holy, Holy, Holy</b><span class="st st-yes">Key of E♭</span></div>
-          <div class="vrow"><span class="t">11:15</span><b>Psalm 100 · KJV</b><span class="st st-yes">5 slides</span></div>
-          <div class="vrow"><span class="t">11:20</span><b>Enter His gates</b><span class="st st-wait">2 points to add</span></div></div></article>
-      <article class="card pillar rv"><span class="n">SHOW IT</span><h3 class="h3">Every screen, from one booth.</h3>
-        <p>Rehearse it, then run it live. The room, the stage, the stream and the lobby each get the look that fits them.</p>
-        <div class="vign dark"><div class="slide" style="box-shadow:none"><span class="ref">PSALM 100:1 · KJV</span><p>Make a joyful noise unto the LORD, all ye lands.</p></div></div></article>
-      <article class="card pillar rv"><span class="n">SERVE IT</span><h3 class="h3">The right people, every week.</h3>
-        <p>Ask your teams by email. They answer in one tap, with no app and no password, and reminders take care of the rest.</p>
-        <div class="vign"><div class="vrow"><span class="t">Slides</span><b>Dana</b><span class="st st-yes">Said yes</span></div>
-          <div class="vrow"><span class="t">Sound</span><b>Luis</b><span class="st st-wait">Asked Tue</span></div>
-          <div class="vrow"><span class="t">Lights</span><b>Open</b><span class="st st-open">Fill</span></div></div></article>
-    </div>
-  </div>
-</section>
-
-<section class="band band-alt" aria-labelledby="screens-h">
-  <div class="wrap">
-    <div class="head rv"><p class="eyebrow">ChurchSavvy screens</p><h2 id="screens-h" class="h2">One press. Every screen gets the look that fits.</h2>
-      <p class="lede">The booth runs them all. Plug the projector in by HDMI, and open any other screen from its own link: a stage TV, a stream, the lobby.</p></div>
-    <div class="screens">
-      <div class="scr rv"><div class="tv"><span class="ref">PSALM 100:4</span><p>Enter into his gates with thanksgiving…</p></div><h3>{icon('monitor', 'ic-s')} The room</h3><p class="d">Big, clear words in your church’s look.</p></div>
-      <div class="scr rv"><div class="tv stage"><span class="now">Enter into his gates with thanksgiving…</span><span class="nx">Next · For the LORD is good…</span><span class="row"><span>11:16</span><span>Prayer in 2:10</span></span></div><h3>{icon('mic', 'ic-s')} The stage</h3><p class="d">What’s now, what’s next, the clock and the pastor’s notes.</p></div>
-      <div class="scr rv"><div class="tv stream"><span class="cam"></span><span class="lt"><b>Psalm 100:4</b>Enter into his gates with thanksgiving</span></div><h3>{icon('radio', 'ic-s')} The stream</h3><p class="d">A lower third over the camera, never covering faces.</p></div>
-      <div class="scr rv"><div class="tv lobby"><span class="k">THIS WEEK</span><b>Community dinner</b><small>Wednesday · 6:30 PM · Fellowship hall</small></div><h3>{icon('door', 'ic-s')} The lobby</h3><p class="d">Announcements and loops before and after.</p></div>
-    </div>
-  </div>
-</section>
-
-<section class="band" id="planning" aria-labelledby="plan-h">
-  <div class="wrap split">
-    <div class="rv">
-      <p class="eyebrow">ChurchSavvy Planning</p>
-      <h2 id="plan-h" class="h2">Your teams, without the group texts.</h2>
-      <p class="lede" style="margin-top:16px">Teams, places and who serves when, with a fair way to fill the month. Every person gets a clear ask, a reminder, and their Sunday.</p>
-      <ul class="ticks">
-        <li>{icon('mail')}<span><b>Asks by email.</b> Yes or Can’t with one tap, and they can offer another Sunday.</span></li>
-        <li>{icon('swap')}<span><b>Fill the month fairly.</b> Nobody twice in one Sunday, nobody on the Sundays they’re away, and whoever has served least goes first.</span></li>
-        <li>{icon('bell')}<span><b>Reminders that know the hour.</b> A week before, the night before, that morning — never between 9 PM and 7 AM.</span></li>
-        <li>{icon('heart')}<span><b>Their Sunday on one page.</b> When to arrive, their team’s notes, the order, and “I’m here” for the booth.</span></li>
-      </ul>
-    </div>
-    <div class="stage-art rv" aria-hidden="true">
-      <div class="grid-card">
-        <div class="gh"><b>Who serves when · Tech</b><span>November</span></div>
-        <div class="mx">
-          <span></span><span class="h">Nov 1</span><span class="h">Nov 8</span><span class="h">Nov 15</span><span class="h x4">Nov 22</span>
-          <span class="r">Slides</span><span class="c"><b>Dana R.</b><i class="y">Said yes</i></span><span class="c"><b>Sam K.</b><i class="y">Said yes</i></span><span class="c"><b>Ruth O.</b><i class="y">Said yes</i></span><span class="c open x4">Fill</span>
-          <span class="r">Sound</span><span class="c"><b>Luis M.</b><i class="w">Asked</i></span><span class="c"><b>Marcus W.</b><i class="y">Said yes</i></span><span class="c"><b>Luis M.</b><i class="y">Said yes</i></span><span class="c x4"><b>Luis M.</b><i class="w">Asked</i></span>
-          <span class="r">Stream</span><span class="c"><b>Marcus W.</b><i class="y">Said yes</i></span><span class="c"><b>Dana R.</b><i class="y">Said yes</i></span><span class="c"><b>Grace L.</b><i class="w">Asked</i></span><span class="c x4"><b>Marcus W.</b><i class="y">Said yes</i></span>
-          <span class="r">Lights</span><span class="c"><b>Jordan P.</b><i class="y">Said yes</i></span><span class="c open">Fill</span><span class="c"><b>Jordan P.</b><i class="w">Asked</i></span><span class="c x4"><b>Sam K.</b><i class="y">Said yes</i></span>
-        </div>
-      </div>
-      <div class="phone">
-        <div class="bar"><i></i></div>
-        <div class="mail">
-          <div class="from"><span class="crest">LC</span><span><b>Love City Church</b><small>via ChurchSavvy · 9:12 AM</small></span></div>
-          <h4>Can you run Livestream on Sunday, Nov 15?</h4>
-          <div class="facts2"><div><span>Arrive by</span><b>10:30 AM</b></div><div><span>Service</span><b>11:05 AM</b></div><div><span>Asked by</span><b>Dana</b></div></div>
-          <span class="y">Yes, I’m in</span><span class="n">Can’t this time</span><span class="alt">Can’t that day, but I could do another</span>
-        </div>
-      </div>
-    </div>
-  </div>
-</section>
-
-<section class="band band-alt" aria-labelledby="week-h">
-  <div class="wrap">
-    <div class="head center rv"><p class="eyebrow">How a week goes</p><h2 id="week-h" class="h2">From Tuesday’s plan to Sunday’s last slide.</h2></div>
-    <div class="week">
-      <div class="day rv"><span class="dot">{icon('layers', 'ic-s')}</span><div><small>Tuesday</small><b>Plan the service</b><p>Pick the songs and the reading. The order and times lay themselves out.</p></div></div>
-      <div class="day rv"><span class="dot">{icon('users', 'ic-s')}</span><div><small>Wednesday</small><b>Fill the teams</b><p>Fill the month in one press. The asks go out by email.</p></div></div>
-      <div class="day rv"><span class="dot">{icon('play', 'ic-s')}</span><div><small>Thursday</small><b>Rehearse</b><p>Step through every slide before Sunday, without going live.</p></div></div>
-      <div class="day rv"><span class="dot">{icon('bell', 'ic-s')}</span><div><small>Saturday</small><b>Everyone’s ready</b><p>Each person gets their Sunday: when to arrive, notes, the order.</p></div></div>
-      <div class="day sun rv"><span class="dot">{icon('check', 'ic-s')}</span><div><small>Sunday</small><b>Run it live</b><p>One booth, every screen. The booth sees who’s here.</p></div></div>
-    </div>
-  </div>
-</section>
-
-<section class="band" aria-labelledby="bring-h">
-  <div class="wrap">
-    <div class="head rv"><p class="eyebrow">Switching is easy</p><h2 id="bring-h" class="h2">Bring what you already have.</h2>
-      <p class="lede">Your songs come with you, and the words stay exactly as your church typed them.</p></div>
-    <div class="four">
-      <div class="card tile rv"><span class="ib">{icon('music')}</span><h3 class="h3">From Proclaim</h3><p>Bring your song library over from Proclaim, with each song’s verses and choruses.</p></div>
-      <div class="card tile rv"><span class="ib">{icon('file')}</span><h3 class="h3">Song files</h3><p>Open SongSelect and ChordPro files you already have.</p></div>
-      <div class="card tile rv"><span class="ib">{icon('camera')}</span><h3 class="h3">A photo of the words</h3><p>Take a picture of a lyric sheet or a chord chart. ChurchSavvy reads it for you.</p></div>
-      <div class="card tile rv"><span class="ib">{icon('clipboard')}</span><h3 class="h3">Paste them in</h3><p>Paste the words and ChurchSavvy splits them into slides by verse and chorus.</p></div>
-    </div>
-    <div class="card wide rv"><span class="ib">{icon('plug')}</span><p><b>Works with the screens you have.</b> Plug the projector into your computer by HDMI, open other screens from a link, and the projector keeps going if the internet drops. Scripture comes in the King James Version and the World English Bible.</p></div>
-  </div>
-</section>
-
-<section class="band band-alt" aria-labelledby="price-h">
-  <div class="wrap">
-    <div class="head center rv"><p class="eyebrow">Pricing</p><h2 id="price-h" class="h2">Simple, monthly, one price per church.</h2>
-      <p class="lede">Every person on your team is included. Change your plan or cancel any time.</p></div>
-    {_plans_html(app)}
-    <p class="note rv"><a href="{_e(_href(base, 'pricing'))}" style="color:var(--blue);font-weight:650">Compare the plans in full →</a></p>
-  </div>
-</section>
-
-<section class="band" aria-labelledby="partner-h">
-  <div class="wrap">
-    <div class="partner rv">
-      <div><p class="eyebrow">A Solutionist partner</p><h2 id="partner-h" class="h2" style="color:#fff">Ready for more than Sunday?</h2>
-        <p>When your church wants a member app, giving, groups and care, Solutionist joins the same church. Nothing you built in ChurchSavvy moves.</p>
-        <div class="ctas"><a class="btn btn-w btn-lg" href="{_e(_href(base, 'solutionist'))}">How they work together {icon('arrow', 'ic-s')}</a></div></div>
-      <div class="pair">
-        <div>{icon('bell')}<span><b>Asks reach phones</b>Volunteers with the member app get a notification. Everyone else still gets email.</span></div>
-        <div>{icon('users')}<span><b>One list of people</b>The members you care for and the people who serve, added once.</span></div>
-        <div>{icon('card')}<span><b>One bill</b>Planning comes included with Solutionist.</span></div>
-      </div>
-    </div>
-  </div>
-</section>
-
-<section class="band band-alt" aria-labelledby="faq-h">
-  <div class="wrap">
-    <div class="head center rv"><p class="eyebrow">Questions</p><h2 id="faq-h" class="h2">Good to know.</h2></div>
-    <div class="faq">
-      <details class="rv"><summary>Do our volunteers need an account?</summary><p>No. Volunteers answer asks from the email itself and see their Sunday on a web page. Only the people who plan and run Sunday sign in, and each opens to just their part: planner, worship leader, booth, media or admin.</p></details>
-      <details class="rv"><summary>Can we bring our songs from Proclaim?</summary><p>Yes. Bring your song library over from Proclaim, along with SongSelect and ChordPro files. You can also add songs from a photo of the words or by pasting them.</p></details>
-      <details class="rv"><summary>What do we need for the projector?</summary><p>A computer with ChurchSavvy open in the browser, plugged into your projector by HDMI. ChurchSavvy finds the screen and puts Sunday on it. Other screens — a stage TV, the stream, the lobby — open from their own links.</p></details>
-      <details class="rv"><summary>What happens if the internet drops on Sunday?</summary><p>The projector plugged into your computer keeps going, because the booth feeds it directly. Screens opened from a link catch up as soon as they’re back online.</p></details>
-      <details class="rv"><summary>Which Bibles are included?</summary><p>The King James Version and the World English Bible, with search by reference or by words, and verses split into slides for you.</p></details>
-      <details class="rv"><summary>Is there a contract?</summary><p>No. Plans are monthly, one price for the whole church, and you can change or cancel any time.</p></details>
-    </div>
-  </div>
-</section>
-
-<section class="final" aria-labelledby="final-h">
-  <div class="wrap rv">
-    <img src="/churchsavvy-assets/logo-mark.webp" alt="" width="142" height="84">
-    <h2 id="final-h" class="disp">Every service, <span class="grad">ready.</span></h2>
-    <p class="lede" style="margin:18px auto 0;max-width:520px">Set up your church tonight and have your first service on the screens this week.</p>
-    <div class="ctas"><a class="btn btn-p btn-lg" href="{_e(app)}?signup=1">Start your church {icon('arrow', 'ic-s')}</a><a class="btn btn-q btn-lg" href="{_e(_href(base, 'pricing'))}">See pricing</a></div>
-  </div>
-</section>"""
+    body, css, script = _home_files()
+    fills = {"APP": app_url(), "HOME": _href(base, ""), "PRICING": _href(base, "pricing"),
+             "SOLUTIONIST": _href(base, "solutionist")}
+    body = _HOME_TOKEN.sub(lambda m: _e(fills[m.group(1)]), body)
     return _page(title="ChurchSavvy · Every service, ready.",
-                 description="Plan the service, put it on every screen, and get the right people serving — church presentation and planning in one place.",
-                 path="/", base=base, active="home", body=body)
+                 description="Plan the service, put it on every screen in the building, and get the right people serving: "
+                             "church presentation and planning in one place. Try the booth in your browser.",
+                 path="/", base=base, active="home", body=body, css=css, fonts=_HOME_FONTS, chrome=False, script=script)
 
 
 def _plans_html(app: str) -> str:
