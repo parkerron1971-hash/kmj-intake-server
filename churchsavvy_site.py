@@ -423,7 +423,7 @@ def _page(*, title: str, description: str, path: str, base: str, active: str, bo
 <meta property="og:title" content="{_e(title)}">
 <meta property="og:description" content="{_e(description)}">
 <meta property="og:url" content="{_e(canonical)}">
-<meta property="og:image" content="{CANONICAL}/churchsavvy-assets/og.png">
+<meta property="og:image" content="{CANONICAL}/churchsavvy-assets/og-2.png">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="theme-color" content="#0A1033">
 <link rel="icon" type="image/png" sizes="64x64" href="/churchsavvy-assets/icon-64.png">
@@ -491,7 +491,7 @@ def render_home(base: str = "") -> str:
   <div class="wrap hero-in">
     <div>
       <p class="eyebrow">Church presentation and planning</p>
-      <h1 id="hero-h" class="disp">Every Sunday, <span class="grad">ready.</span></h1>
+      <h1 id="hero-h" class="disp">Every service, <span class="grad">ready.</span></h1>
       <p class="lede">Plan the service, put it on every screen, and get the right people serving — in one place made for churches.</p>
       <div class="ctas">
         <a class="btn btn-p btn-lg" href="{_e(app)}?signup=1">Start your church {icon('arrow', 'ic-s')}</a>
@@ -643,12 +643,12 @@ def render_home(base: str = "") -> str:
 <section class="final" aria-labelledby="final-h">
   <div class="wrap rv">
     <img src="/churchsavvy-assets/logo-mark.webp" alt="" width="142" height="84">
-    <h2 id="final-h" class="disp">Every Sunday, <span class="grad">ready.</span></h2>
-    <p class="lede" style="margin:18px auto 0;max-width:520px">Set up your church tonight and have your first Sunday on the screens this week.</p>
+    <h2 id="final-h" class="disp">Every service, <span class="grad">ready.</span></h2>
+    <p class="lede" style="margin:18px auto 0;max-width:520px">Set up your church tonight and have your first service on the screens this week.</p>
     <div class="ctas"><a class="btn btn-p btn-lg" href="{_e(app)}?signup=1">Start your church {icon('arrow', 'ic-s')}</a><a class="btn btn-q btn-lg" href="{_e(_href(base, 'pricing'))}">See pricing</a></div>
   </div>
 </section>"""
-    return _page(title="ChurchSavvy · Every Sunday, ready.",
+    return _page(title="ChurchSavvy · Every service, ready.",
                  description="Plan the service, put it on every screen, and get the right people serving — church presentation and planning in one place.",
                  path="/", base=base, active="home", body=body)
 
@@ -723,7 +723,7 @@ def render_pricing(base: str = "") -> str:
   </div>
 </section>
 <section class="final" aria-labelledby="pf">
-  <div class="wrap rv"><h2 id="pf" class="disp">Every Sunday, <span class="grad">ready.</span></h2>
+  <div class="wrap rv"><h2 id="pf" class="disp">Every service, <span class="grad">ready.</span></h2>
     <div class="ctas"><a class="btn btn-p btn-lg" href="{_e(app)}?signup=1">Start your church {icon('arrow', 'ic-s')}</a></div></div>
 </section>"""
     return _page(title="Pricing · ChurchSavvy", description="ChurchSavvy is $20 a month, ChurchSavvy Planning $15, or both for $29 — one price for your whole church.",
@@ -789,7 +789,7 @@ def render_solutionist(base: str = "") -> str:
   </div>
 </section>
 <section class="final" aria-labelledby="sf">
-  <div class="wrap rv"><h2 id="sf" class="disp">Every Sunday, <span class="grad">ready.</span></h2>
+  <div class="wrap rv"><h2 id="sf" class="disp">Every service, <span class="grad">ready.</span></h2>
     <div class="ctas"><a class="btn btn-p btn-lg" href="{_e(app)}?signup=1">Start your church {icon('arrow', 'ic-s')}</a><a class="btn btn-q btn-lg" href="https://mysolutionist.app">Visit Solutionist</a></div></div>
 </section>"""
     return _page(title="ChurchSavvy and Solutionist", description="ChurchSavvy runs Sunday; Solutionist runs the rest of the week. Two products made to work as one.",
