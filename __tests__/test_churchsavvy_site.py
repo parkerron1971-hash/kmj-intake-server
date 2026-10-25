@@ -45,7 +45,7 @@ def _cs(client, path):
 def test_its_own_domain_answers_with_its_own_pages(client):
     home = _cs(client, "/")
     assert home.status_code == 200
-    assert '<h1 id="hero-h" class="disp">Every service, <span class="grad">ready.</span></h1>' in home.text
+    assert '<h1 id="hero-h" class="h1">Every service, <span class="grad">ready.</span></h1>' in home.text
     assert "<title>ChurchSavvy · Every service, ready.</title>" in home.text
     assert '<link rel="canonical" href="https://churchsavvy.app/">' in home.text
     assert "The Solutionist System" not in home.text, "never the platform's marketing site"
@@ -76,6 +76,34 @@ def test_start_and_sign_in_go_to_its_app(client):
         assert all(h.startswith("https://system.mysolutionist.app/churchsavvy?signup=1") for h in starts), (path, starts)
         assert 'href="https://system.mysolutionist.app/churchsavvy">Sign in' in html, path
     assert "plan=both" in _cs(client, "/pricing").text
+
+
+def test_the_plans_start_the_right_sign_up(client):
+    """The app reads ?plan= and keeps it through sign-up, so the values are exact."""
+    for path in ("/", "/pricing"):
+        html = _cs(client, path).text
+        plans = set(re.findall(r'href="https://system\.mysolutionist\.app/churchsavvy\?signup=1&amp;plan=([a-z]+)"', html))
+        assert plans == {"churchsavvy", "planning", "both"}, (path, plans)
+
+
+def test_the_home_page_is_the_church_the_booth_and_whats_in_it(client):
+    html = _cs(client, "/").text
+    assert "{{" not in html, "every token is filled"
+    assert '<svg class="iso"' in html and 'class="stg-back"' in html and 'class="stg-front"' in html
+    # The order: what it is, then the booth to try, then what's in it, then the teams.
+    at = [html.index(f'id="{s}"') for s in ("hero-h", "product", "try", "inside", "planning", "screens", "pricing")]
+    assert at == sorted(at)
+    assert 'id="cs-try"' in html and 'data-act="show"' in html
+    script = html[html.rindex("<script>"):]
+    # What a visitor types goes on the screens as text, never as markup.
+    for risky in ("innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "eval("):
+        assert risky not in script, risky
+    assert "textContent" in script
+    # The booth's Scripture is the KJV, and it says so when it doesn't carry a verse.
+    assert "For God so loved the world, that he gave his only begotten Son" in script
+    assert "every verse of the KJV and the WEB is there" in script
+    # Made-up names only: the sample church is "Your Church".
+    assert "Riverbend" not in html and "Love City" not in html
 
 
 def test_the_pages_before_the_domain_open_on_the_platform_only(client):
