@@ -250,6 +250,13 @@ def test_a_real_document_keeps_its_welcome_practices_and_last_day():
     assert d7["act"] == "Come to the gathering expectant."
 
 
+def test_a_markdown_checklist_reads_like_a_copied_one():
+    # a doc exported as markdown writes its checklist as tasks: "- [ ] First Look: ..."
+    tasks = CHECKLIST.replace("\nFirst Look", "\n- [ ] First Look").replace(
+        "\nGuarded Evening", "\n* [x] Guarded Evening").replace("\nTogether:", "\n- [] Together:")
+    assert dv.parse(DOC + tasks)["practices"] == dv.parse(DOC + CHECKLIST)["practices"]
+
+
 def test_without_a_checklist_the_numbered_anchors_are_the_practices():
     for doc in (DOC, DOC.replace("1. First", "First").replace("2. Guarded", "Guarded")):
         got = dv.parse(doc)

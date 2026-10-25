@@ -315,3 +315,39 @@ def test_give_link_needs_giving_on_and_no_opt_out(monkeypatch):
     assert sms_routing.give_link(BIZ_A, CUSTOMER) is None
     _link_db(monkeypatch, biz=_church(), site=False)
     assert sms_routing.give_link(BIZ_A, CUSTOMER) is None
+
+
+# ─── DAILY: the devotional by text (devotional_daily.py) ─────────────
+
+@pytest.fixture
+def daily(routed, giving, monkeypatch):
+    import devotional_daily
+    state = {"joined": {"name": "Love City Church", "url": "https://lovecityc.com/daily"}, "asked": []}
+
+    def join_by_text(business_id, phone):
+        state["asked"].append((business_id, phone))
+        return state["joined"]
+    monkeypatch.setattr(devotional_daily, "join_by_text", join_by_text)
+    return state
+
+
+@pytest.mark.parametrize("text", ["DAILY", "daily", "Daily!", " devotional. "])
+def test_daily_on_own_number_signs_up_and_sends_the_page(routed, giving, daily, text):
+    res = _run(sms_routing.route_inbound(from_number=CUSTOMER, text=text, to_number=OWN_A))
+    assert res["action"] == "daily_join" and res["business_id"] == BIZ_A
+    assert res["reply"].startswith(sms_routing.sender_brand() + ": You're signed up for Love City Church's daily devotional")
+    assert "https://lovecityc.com/daily" in res["reply"] and "7:30" in res["reply"] and "STOP" in res["reply"]
+    assert daily["asked"] == [(BIZ_A, CUSTOMER)] and routed["inbound"][0]["text"] == text.strip()
+    giving["own_name"] = {"number": OWN_A}
+    res = _run(sms_routing.route_inbound(from_number=CUSTOMER, text="DAILY", to_number=OWN_A))
+    assert res["reply"].startswith("Love City Church: You're signed up for the daily devotional.")
+
+
+def test_daily_with_nothing_to_send_is_just_a_message(routed, giving, daily):
+    daily["joined"] = None
+    res = _run(sms_routing.route_inbound(from_number=CUSTOMER, text="DAILY", to_number=OWN_A))
+    assert res == {"action": "routed_direct", "business_id": BIZ_A, "reply": None}
+    res = _run(sms_routing.route_inbound(from_number=CUSTOMER, text="our daily bread", to_number=OWN_A))
+    assert res["action"] == "routed_direct"
+    _run(sms_routing.route_inbound(from_number=CUSTOMER, text="DAILY", to_number=PLATFORM))
+    assert daily["asked"] == [(BIZ_A, CUSTOMER)]          # never on the shared number
