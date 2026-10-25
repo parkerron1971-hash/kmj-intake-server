@@ -295,7 +295,8 @@ _LABELLED = (("pray", re.compile(r"^\s*(?:\*\*)?(?:pray|prayer)(?:\*\*)?\s*[:\-�
              ("journal", re.compile(r"^\s*(?:\*\*)?(?:journal|reflect|reflection|write)(?:\*\*)?\s*[:\-–—]\s*(?:\*\*)?\s*(.*)$", re.I)),
              ("scripture", re.compile(r"^\s*(?:\*\*)?(?:scripture|read|verse)(?:\*\*)?\s*[:\-–—]\s*(?:\*\*)?\s*(.*)$", re.I)))
 _QUOTED = re.compile(r'^\s*>?\s*["“](.+)["”]\s*[(\-–—]?\s*([1-3]?\s?[A-Za-z][A-Za-z .]+?\s\d{1,3}(?::\d{1,3}(?:\s?[-–]\s?\d{1,3})?)?)\)?\s*\.?\s*$')
-_MARK = r"(?:[-*•◦▪]\s*|\[[ xX]?\]\s*|[☐☑✓✔]\s*|\d{1,2}[.)]\s+)"
+# a list mark: "- ", "1. ", "☐ ", "[ ] ", or a markdown task's "- [ ] "
+_MARK = r"(?:(?:[-*•◦▪]\s*)?\[[ xX]?\]\s*|[-*•◦▪]\s*|[☐☑✓✔]\s*|\d{1,2}[.)]\s+)"
 _NAME = r"(?:\*\*)?([A-Z][\w’']*(?:\s[A-Za-z][\w’']*){0,3})"
 _PRACTICE = re.compile(rf"^\s*{_MARK}?{_NAME}\s*\(([^)]{{2,80}})\)\s*\.?\s*(?:\*\*)?\s*$")
 # "1. First Look (morning, before your phone). Your first look goes to God…"

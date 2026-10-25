@@ -473,6 +473,11 @@ from devotional_voice import router as devotional_voice_router
 app.include_router(devotional_voice_router)
 from devotionals import router as devotionals_router
 app.include_router(devotionals_router)
+# The devotional a day at a time, before sign-in (devotional_daily.py):
+# /daily on the church's own address and its text sign-up. BEFORE
+# public_site_router; it answers only on a church's address.
+from devotional_daily import router as devotional_daily_router
+app.include_router(devotional_daily_router)
 # Church, Youth and Kids spaces (member_spaces.py): leaders' posts and the
 # office's leader approvals. BEFORE public_site_router.
 from member_spaces import router as member_spaces_router
@@ -2246,6 +2251,15 @@ async def startup():
                           "cron", minute=45, id="week_beats")
     except Exception as e:
         print(f"   [warn] lifecycle email sweep not scheduled: {e}")
+
+    # The devotional by text (devotional_daily.py): every 10 minutes; it
+    # sends only from 7:30 to 8 PM Eastern, tomorrow's day, once a person.
+    try:
+        import devotional_daily as _devotional_daily
+        scheduler.add_job(g("devotional_daily_texts", _devotional_daily.sweep_tick),
+                          "interval", minutes=10, id="devotional_daily_texts")
+    except Exception as e:
+        print(f"   [warn] devotional evening texts not scheduled: {e}")
 
     _staggered = stagger_long_interval_first_runs(scheduler)
     if _staggered:
