@@ -4,7 +4,7 @@ date: 2026-10-26
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-10-26, his "who sees what" plan for churches: "yes, a first-time check-in starts a welcome follow-up"'
 status: shipped
-prs: [kmj-intake-server#PENDING]
+prs: [kmj-intake-server#1594]
 migrations: []
 left_undone:
   - "Ships dark: nothing happens until CHURCH_AREAS=on in Railway (a Thursday switch-on); unset it reads as owner, which does not start these"
