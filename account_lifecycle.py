@@ -120,6 +120,7 @@ EXPORT_EXCLUDED: Dict[str, str] = {
     # (it reads their whole calendar), and the busy blocks are re-derived
     # from it on every sync; both cascade with the business.
     "calendar_feeds": "private calendar links (each one reads a whole calendar); never exported, cascade on business deletion",
+    "worship_calendar": "the church's calendar link for bringing events onto the announcements board (worship_announce_import.py); like calendar_feeds a secret that reads a whole calendar, so never exported; the church pastes it again after a restore; cascade on business deletion",
     "calendar_busy_blocks": "busy times re-derived from a private calendar link on every sync; cascade on feed/business deletion",
     # Platform books and metering — the platform must keep these for its
     # own accounts, whatever a business does with theirs.

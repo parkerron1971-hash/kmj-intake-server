@@ -345,6 +345,9 @@ app.include_router(worship_announce_router)
 # Ministries send their own announcements by a link (round 5, board 20).
 from worship_ministries import router as worship_ministries_router
 app.include_router(worship_ministries_router)
+# "Bring in from the calendar" onto the announcements board (round 5, board 18).
+from worship_announce_import import router as worship_announce_import_router
+app.include_router(worship_announce_import_router)
 # Who does what in a church's ChurchSavvy: planner, worship leader, booth, admin.
 from worship_team import router as worship_team_router
 app.include_router(worship_team_router)
