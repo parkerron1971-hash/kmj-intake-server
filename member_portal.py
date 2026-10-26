@@ -1114,8 +1114,8 @@ async def _leads(business_id: str, me_id: str, biz: Optional[Dict[str, Any]] = N
     if biz is None or not member_app_ui.serve_mode():
         return False
     import member_portal_lead
-    parts = await asyncio.to_thread(member_portal_lead.parts, biz, me_id)
-    return bool(parts["serving"] or parts["kids"])
+    parts = await asyncio.to_thread(member_portal_lead.parts, biz, me_id, (me or {}).get("email"))
+    return bool(parts["serving"] or parts["kids"] or parts["team"])
 
 
 def _open_preview(request: Request, biz: Dict[str, Any], site) -> HTMLResponse:

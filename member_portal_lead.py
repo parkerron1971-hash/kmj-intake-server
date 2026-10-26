@@ -57,7 +57,7 @@ SUNDAYS: ContextVar[bool] = ContextVar("lead_sundays", default=False)
 # Who sees what (2026-10-26): the other parts this member holds, read once per
 # request in serve() when the tab is the Serve tab, so every page's section
 # switcher can offer them: their Sundays (sunday_serving) and a kids room.
-PARTS: ContextVar[Dict[str, bool]] = ContextVar("lead_parts", default={})
+PARTS: ContextVar[Dict[str, Any]] = ContextVar("lead_parts", default={})
 
 
 def _word() -> str:
@@ -66,10 +66,12 @@ def _word() -> str:
     return "Serve" if member_app_ui.serve_mode() else "Lead"
 
 
-def parts(biz: Dict[str, Any], me_id: str) -> Dict[str, bool]:
+def parts(biz: Dict[str, Any], me_id: str, email: Optional[str] = None) -> Dict[str, Any]:
     """The parts besides a role or a group: a place on a Sunday team (or an
-    ask), and a kids room (space_leaders). A read that fails is no part."""
-    out = {"serving": False, "kids": False}
+    ask), a kids room (space_leaders), and a part on ChurchSavvy's Sunday
+    team (`team`: booth, media, worship, planner, by the email the church
+    has for them). A read that fails is no part."""
+    out: Dict[str, Any] = {"serving": False, "kids": False, "team": team_parts(biz, email)}
     try:
         import sunday_serving
         out["serving"] = bool(sunday_serving.serves(biz, me_id))
@@ -83,6 +85,51 @@ def parts(biz: Dict[str, Any], me_id: str) -> Dict[str, bool]:
     except Exception:
         logger.warning("serve tab: kids read failed (business %s)", str(biz.get("id"))[:8])
     return out
+
+# ChurchSavvy's Sunday team (worship_team.ROLES), said as the work.
+SAVVY_WORK = {"booth": "the screens", "media": "sermons, live and clips", "worship": "the songs",
+              "planner": "the order of service", "admin": "the team and the screens"}
+
+
+def team_parts(biz: Dict[str, Any], email: Optional[str]) -> List[str]:
+    """Their parts on ChurchSavvy's Sunday team, while ChurchSavvy is on for
+    every church (WORSHIP_SONGS=on). A read that fails is no part.
+
+    By email, the only key: a member is a church contact, not a sign-in, so
+    worship_team.user_id (their ChurchSavvy sign-in) has nothing to meet.
+    The member app proves the email with a code. What it can reveal is the
+    part in words, on a door that only links out."""
+    import worship_router
+    em = (email or "").strip().lower()
+    if worship_router.mode() != "on" or "@" not in em:
+        return []
+    try:
+        import sb_clients
+        import church_areas
+        rows = sb_clients.sb_get_as_service(
+            f"/worship_team?business_id=eq.{cfu._q(biz['id'])}&email=ilike.{cfu._q(church_areas._escape_ilike(em))}"
+            "&status=eq.active&select=roles&limit=1")
+    except Exception:
+        rows = None
+    if not isinstance(rows, list):
+        logger.warning("serve tab: team read failed (business %s)", str(biz.get("id"))[:8])
+        return []
+    have = set((rows[0].get("roles") or []) if rows else [])
+    return [p for p in SAVVY_WORK if p in have]
+
+
+def savvy_door(team: List[str]) -> str:
+    """ChurchSavvy's door, for someone on its Sunday team. It opens in its
+    own app with the same email; nothing here changes what they can do."""
+    if not team:
+        return ""
+    import churchsavvy_billing
+    from member_app_ui import icon
+    title = "Open the booth" if "booth" in team else "Open ChurchSavvy"
+    work = _and([SAVVY_WORK[p] for p in team])
+    return (f'<a class="sf-door" href="{_e(churchsavvy_billing.app_url())}">{icon("video", 20)}'
+            f'<span><b>{title}</b><small>Your part on Sunday: {_e(work)}</small></span>{icon("chevron", 18)}</a>')
+
 
 DONE = {
     "saved": "Saved. The pastors can see it on their page.",
@@ -514,7 +561,8 @@ def render(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], my_r
     if active and prays and (tab == "prayer" or not people):
         waiting = sum(1 for p in (prayer or {}).get("requests") or [] if not p.get("prayed_at"))
         seg = _seg("prayer", people, True, waiting, fams, groups)
-        body = f'{flash}{head}{invites}{mps.card(safety)}{_room_door(room)}{seg}{_prayer_body(prayer, biz, targets or [], now)}'
+        body = (f'{flash}{head}{invites}{mps.card(safety)}{_room_door(room)}{savvy_door(PARTS.get().get("team") or [])}'
+                f'{seg}{_prayer_body(prayer, biz, targets or [], now)}')
         return _shell(biz, site, "Prayer", f'<style>{LEAD_CSS}{mps.SAFETY_CSS}</style><div class="ld-wide">{body}</div>',
                       tab="lead", who=me)
     seg = ""
@@ -527,10 +575,12 @@ def render(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], my_r
         kids = (f'<section class="ld-card"><h3>Kids room</h3><p>You serve in Kids. Your room and its Sundays live in '
                 f'the Kids space.</p><p><a class="ld-btn" href="/my/space?to=kids">Open the Kids room</a></p></section>'
                 if p.get("kids") else "")
-        body = (f'{flash}{head}{invites}{kids}' if invites or kids else
+        savvy = savvy_door(p.get("team") or [])
+        body = (f'{flash}{head}{invites}{savvy}{kids}' if invites or kids or savvy else
                 f'{flash}{head}<section class="ld-card"><p>You don’t lead anything at {_e(church)} yet. When the church '
                 f'asks you to, it shows up here.</p><p><a href="/my">Back to Home</a></p></section>')
-        return _shell(biz, site, _word(), f'<style>{LEAD_CSS}</style><div class="ld-wide">{body}</div>', tab="lead", who=me)
+        return _shell(biz, site, _word(), f'<style>{LEAD_CSS}{mps.SAFETY_CSS if savvy else ""}</style><div class="ld-wide">{body}</div>',
+                      tab="lead", who=me)
     if view is None:
         body = (f'{flash}{head}<p class="mp-err" role="alert">Your people couldn’t load just now. '
                 f'Please try again in a moment.</p>')
@@ -553,7 +603,7 @@ def render(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], my_r
               if shown else '<section class="ld-file"></section>')
     grid = f'<div class="ld-grid{" has-sel" if sel else ""}">{listing}{detail}</div>'
     title = sel["person"]["name"] if sel else "Lead"
-    door = "" if sel else mps.card(safety) + _room_door(room)
+    door = "" if sel else mps.card(safety) + _room_door(room) + savvy_door(PARTS.get().get("team") or [])
     return _shell(biz, site, title,
                   f'<style>{LEAD_CSS}{mps.SAFETY_CSS}</style><div class="ld-wide">{flash}{head}{invites}{door}{grid}</div>',
                   tab="lead", who=me, back=("/my/lead", _word()) if sel else None)
@@ -578,7 +628,7 @@ async def serve(request: Request, biz: Dict[str, Any], site, me: Dict[str, Any],
     import sunday_leading
     import member_app_ui
     SUNDAYS.set(await asyncio.to_thread(sunday_leading.leads_a_team, biz["id"], str(me["id"])))
-    PARTS.set(await asyncio.to_thread(parts, biz, str(me["id"])) if member_app_ui.serve_mode() else {})
+    PARTS.set(await asyncio.to_thread(parts, biz, str(me["id"]), me.get("email")) if member_app_ui.serve_mode() else {})
     # A Sunday team's leader: their team's Sundays (member_portal_leading).
     if selected == "sundays":
         import member_portal_leading
@@ -613,7 +663,8 @@ async def serve(request: Request, biz: Dict[str, Any], site, me: Dict[str, Any],
         m = await asyncio.to_thread(ss.mine, biz, str(me["id"]))
         if m is not None:
             m["hear"] = await asyncio.to_thread(ss.hearing, biz, str(me["id"]))
-            return mps_serving.render_page(biz, site, request, me, m, None), 200
+            return mps_serving.render_page(biz, site, request, me, m, None,
+                                           door=savvy_door(PARTS.get().get("team") or [])), 200
     view = prayer = None
     targets: List[Dict[str, Any]] = []
     fams = 0
