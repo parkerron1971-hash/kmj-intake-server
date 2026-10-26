@@ -39,6 +39,13 @@ NEW_SEAT = "44444444-4444-4444-4444-444444444444"
 KEISHA_SEAT = "55555555-5555-5555-5555-555555555555"
 
 
+@pytest.fixture(autouse=True)
+def _fresh_cache():
+    ca._MY_CACHE.clear()
+    yield
+    ca._MY_CACHE.clear()
+
+
 def _seat(uid, email, role="manager", areas=None):
     return {"business_id": BIZ, "user_id": uid, "invited_email": email, "role": role, "status": "active",
             "areas": areas}
@@ -189,3 +196,16 @@ def test_before_the_column_exists_the_map_and_my_areas_still_answer(seats, monke
     assert _login(m, NEW_SEAT)["by"] == "none", "its pick can't be read, and nothing else places it"
     assert _login(m, MARCUS_SEAT)["by"] == "guess"
     assert ca.my_areas(BIZ, MARCUS_SEAT, "manager")["areas"] == ["kids_youth"]
+
+
+def test_a_logins_view_is_kept_a_minute_and_a_saved_pick_clears_it(office, seats, monkeypatch):
+    monkeypatch.setenv("CHURCH_AREAS", "on")
+    assert ca.my_areas(BIZ, MARCUS_SEAT, "manager")["areas"] == ["kids_youth"]
+    reads = []
+    real = seats.get
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", lambda path, **kw: (reads.append(path), real(path, **kw))[1])
+    assert ca.my_areas(BIZ, MARCUS_SEAT, "manager")["areas"] == ["kids_youth"]
+    assert [p for p in reads if not p.startswith("/businesses")] == [], "the second ask reads only the church"
+    r = office.put("/church/areas/login", json={"business_id": BIZ, "user_id": MARCUS_SEAT, "areas": ["office"]})
+    assert r.status_code == 200
+    assert ca.my_areas(BIZ, MARCUS_SEAT, "manager")["areas"] == ["office"]

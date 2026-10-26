@@ -37,6 +37,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import time
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional, Tuple
@@ -296,7 +297,26 @@ def my_areas(business_id: str, user_id: str, role: Optional[str]) -> Optional[Di
     got = sb_clients.sb_get_as_service(f"/businesses?id=eq.{_q(business_id)}&select=id,type,owner_id,settings&limit=1")
     if not isinstance(got, list) or not got or not cfu.is_church(got[0]):
         return None
-    return view_for(business_id, user_id, role)
+    key = (str(business_id), str(user_id), role)
+    hit = _MY_CACHE.get(key)
+    if hit and time.monotonic() - hit[0] < MY_CACHE_SECONDS:
+        return hit[1]
+    view = view_for(business_id, user_id, role)
+    if view is not None:
+        _MY_CACHE[key] = (time.monotonic(), view)
+    return view
+
+
+# my-role runs on every app load: a login's view is kept a minute per
+# replica (a guess reads about a dozen tables), and a pick saved here
+# clears it at once.
+MY_CACHE_SECONDS = 60
+_MY_CACHE: Dict[Tuple[str, str, str], Tuple[float, Dict[str, Any]]] = {}
+
+
+def _forget(business_id: str, user_id: str) -> None:
+    for k in [k for k in _MY_CACHE if k[0] == str(business_id) and k[1] == str(user_id)]:
+        _MY_CACHE.pop(k, None)
 
 
 def _picks(biz: str, user_id: Optional[str] = None) -> Dict[str, Any]:
@@ -718,4 +738,5 @@ def place_login(body: Dict[str, Any], session: UserSession = Depends(sb_clients.
         f"/business_users?business_id=eq.{_q(biz)}&user_id=eq.{_q(uid)}&status=eq.active", {"areas": areas})
     if not isinstance(saved, list) or not saved:
         raise HTTPException(503, "That didn't save. Try again.")
+    _forget(biz, uid)
     return {"ok": True, "user_id": uid, "areas": areas}
