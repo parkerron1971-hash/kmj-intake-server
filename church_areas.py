@@ -293,18 +293,36 @@ def my_areas(business_id: str, user_id: str, role: Optional[str]) -> Optional[Di
     if mode() != "on" or not role:
         return None
     import church_follow_up as cfu
-    biz = _q(business_id)
-    got = sb_clients.sb_get_as_service(f"/businesses?id=eq.{biz}&select=id,type,owner_id,settings&limit=1")
+    got = sb_clients.sb_get_as_service(f"/businesses?id=eq.{_q(business_id)}&select=id,type,owner_id,settings&limit=1")
     if not isinstance(got, list) or not got or not cfu.is_church(got[0]):
         return None
+    return view_for(business_id, user_id, role)
+
+
+def _picks(biz: str, user_id: Optional[str] = None) -> Dict[str, Any]:
+    """user id → the church's pick for that login. Read on its own and
+    allowed to fail: a pick only narrows, so a read that failed (or the
+    column before its migration) shows Chief's guess instead."""
+    one = f"&user_id=eq.{_q(user_id)}" if user_id else ""
+    rows = sb_clients.sb_get_as_service(f"/business_users?business_id=eq.{_q(biz)}{one}&status=eq.active"
+                                        "&select=user_id,areas&limit=200")
+    if not isinstance(rows, list):
+        return {}
+    return {str(r.get("user_id")): r.get("areas") for r in rows}
+
+
+def view_for(business_id: str, user_id: str, role: Optional[str]) -> Optional[Dict[str, Any]]:
+    """What one login on a church is shown, whatever the switch says (the
+    caller decides that). None when a read failed."""
+    biz = _q(business_id)
     if role in KEEPS_ALL:
         return login_view(role, None, {})
     try:
         seat = _need(f"/business_users?business_id=eq.{biz}&user_id=eq.{_q(user_id)}&status=eq.active"
-                     "&select=invited_email,areas&limit=1")
+                     "&select=invited_email&limit=1")
         if not seat:
             return None
-        picked = seat[0].get("areas")
+        picked = _picks(business_id, user_id).get(str(user_id))
         if isinstance(picked, list) and any(a in AREAS for a in picked):
             return login_view(role, picked, {})
         email = (seat[0].get("invited_email") or "").strip().lower()
@@ -436,8 +454,8 @@ def build(business: Dict[str, Any]) -> Dict[str, Any]:
                     "&select=contact_id,role,scope,status&limit=1000")
     team = _need(f"/worship_team?business_id=eq.{_q(biz)}&status=in.(invited,active)"
                  "&select=name,email,roles,status&order=invited_at.asc&limit=100")
-    seats = _need(f"/business_users?business_id=eq.{_q(biz)}&status=eq.active"
-                  "&select=invited_email,role,user_id,areas&limit=200")
+    seats = _need(f"/business_users?business_id=eq.{_q(biz)}&status=eq.active&select=invited_email,role,user_id&limit=200")
+    picks = _picks(biz)
     accountants = _need(f"/business_collaborators?business_id=eq.{_q(biz)}&status=eq.active&role=eq.accountant"
                         "&select=invited_email&limit=50")
     kids = _need(f"/space_leaders?business_id=eq.{_q(biz)}&select=contact_id,space,background_check_on&limit=500")
@@ -582,7 +600,7 @@ def build(business: Dict[str, Any]) -> Dict[str, Any]:
         logins.append({"user_id": str(s.get("user_id") or ""), "email": s.get("invited_email") or "",
                        "name": next((p["name"] for p in people.values() if email and p["email"] == email), ""),
                        "role": s.get("role") or "", "guess": [a for a in AREA_ORDER if a in g],
-                       **login_view(s.get("role"), s.get("areas"), g)})
+                       **login_view(s.get("role"), picks.get(str(s.get("user_id"))), g)})
     rank = {"admin": 0, "manager": 1, "member": 2, "viewer": 3}
     logins.sort(key=lambda x: (rank.get(x["role"], 9), (x["name"] or x["email"]).lower()))
 

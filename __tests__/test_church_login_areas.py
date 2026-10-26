@@ -176,3 +176,16 @@ def test_picking_never_places_an_admin_never_offers_giving_and_never_none(office
     office.who["role"] = "manager"
     assert office.put("/church/areas/login", json=body).status_code == 404
     assert next(s for s in seats.t["business_users"] if s["user_id"] == MARCUS_SEAT)["areas"] is None
+
+
+def test_before_the_column_exists_the_map_and_my_areas_still_answer(seats, monkeypatch):
+    """The picks are read on their own: before the migration (or on a blip)
+    a login shows Chief's guess, never a broken map."""
+    monkeypatch.setenv("CHURCH_AREAS", "on")
+    real = seats.get
+    monkeypatch.setattr(sb_clients, "sb_get_as_service",
+                        lambda path, **kw: None if "select=user_id,areas" in path else real(path, **kw))
+    m = ca.build(seats.t["businesses"][0])
+    assert _login(m, NEW_SEAT)["by"] == "none", "its pick can't be read, and nothing else places it"
+    assert _login(m, MARCUS_SEAT)["by"] == "guess"
+    assert ca.my_areas(BIZ, MARCUS_SEAT, "manager")["areas"] == ["kids_youth"]
