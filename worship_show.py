@@ -750,7 +750,8 @@ def carry_ask(prev: Optional[Dict[str, Any]], state: Dict[str, Any]) -> Dict[str
     """The ask belongs to its item: a new item (or another service) drops it. A press
     from a booth that hasn't heard of it yet keeps it, and of two asks the newer wins,
     so a stale booth can't put back one already answered. The booth's answer to the
-    same ask is the same ask, and it stands."""
+    same ask is the same ask, and it stands; a booth that hasn't heard the answer
+    yet can't take it back (the same ask, answered, beats it unanswered)."""
     item, sid = state.get("item_id"), state.get("service_id")
 
     def mine(a: Any) -> Optional[Dict[str, Any]]:
@@ -759,7 +760,8 @@ def carry_ask(prev: Optional[Dict[str, Any]], state: Dict[str, Any]) -> Dict[str
     old = mine((prev or {}).get("ask")) if (prev or {}).get("service_id") == sid else None
     new = mine(state.get("ask"))
     try:
-        if old and (not new or _when(new["at"]) < _when(old["at"])):
+        if old and (not new or _when(new["at"]) < _when(old["at"])
+                    or (_when(new["at"]) == _when(old["at"]) and old.get("answer") and not new.get("answer"))):
             new = old
     except (KeyError, TypeError, ValueError):
         new = old or new

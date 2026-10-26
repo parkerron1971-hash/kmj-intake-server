@@ -57,6 +57,9 @@ def test_the_ask_belongs_to_its_item():
     # A stale booth can't put back an older, answered ask over a newer one.
     newer = {"service_id": SID, "item_id": "sermon", "ask": ask(at="2026-11-01T17:40:00+00:00")}
     assert wsh.carry_ask(newer, {"service_id": SID, "item_id": "sermon", "ask": answered})["ask"]["answer"] is None
+    # A booth that hasn't heard the answer yet presses with the same ask unanswered: the answer stands (PR review).
+    said = {"service_id": SID, "item_id": "sermon", "ask": answered}
+    assert wsh.carry_ask(said, {"service_id": SID, "item_id": "sermon", "ask": ask()})["ask"]["answer"] == "no"
     # A new item, or another service, drops it.
     assert "ask" not in wsh.carry_ask(prev, {"service_id": SID, "item_id": "well", "ask": ask()})
     assert "ask" not in wsh.carry_ask(prev, {"service_id": OTHER, "item_id": "sermon"})
@@ -113,6 +116,36 @@ def test_the_pastors_phone_asks_the_booth(api, monkeypatch):
     as_("owner").post("/worship/live", json={"business_id": BIZ, "state": {"service_id": sid, "item_id": "word", "slide": 0}})
     live = as_("member").get(f"/worship/live?business_id={BIZ}").json()["state"]
     assert "ask" not in live and [e["id"] for e in live["log"]] == ["well", "word"]
+    # A failed save still reaches the booth (the hub has it), and says so, like a press (PR review).
+    db.fail.add("worship_live")
+    r = as_("stranger").post(f"/worship/screen/{stage}/ask")
+    assert r.status_code == 200 and r.json()["saved"] is False
+    assert as_("member").get(f"/worship/live?business_id={BIZ}").json()["state"]["ask"]["item_id"] == "word"
+    db.fail.discard("worship_live")
     # The switch off closes the ask with every screen link.
     monkeypatch.setenv("WORSHIP_SONGS", "off")
     assert as_("stranger").post(f"/worship/screen/{stage}/ask").status_code == 404
+
+
+def test_a_press_and_an_ask_never_cross(api, monkeypatch):
+    """Each reads the live state, adds to it and writes it back, under the church's lock,
+    so an ask can't land between a press's read and its write and undo it (PR review)."""
+    import threading
+    import time
+
+    import worship_show_router as wsr
+
+    db, as_, client = api
+    monkeypatch.setenv("WORSHIP_SONGS", "on")
+    sid = plan(as_).json()["service"]["id"]
+    stage = as_("owner").post("/worship/screens", json={"business_id": BIZ, "name": "Pastor's phone", "role": "stage"}).json()["screen"]["token"]
+    as_("owner").post("/worship/live", json={"business_id": BIZ, "state": {"service_id": sid, "item_id": "well", "slide": 0}})
+    got = {}
+    lock = wsr._church_lock(BIZ)
+    with lock:
+        t = threading.Thread(target=lambda: got.update(r=client.post(f"/worship/screen/{stage}/ask")))
+        t.start()
+        time.sleep(0.3)
+        assert t.is_alive()                      # the ask waits while a press holds the church
+    t.join(5)
+    assert got["r"].status_code == 200 and got["r"].json()["ask"]["item_id"] == "well"

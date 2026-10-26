@@ -554,13 +554,26 @@ def set_live(body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
         raise HTTPException(400, str(e))
     if len(json.dumps(state)) > 50000:
         raise HTTPException(400, "That passage is too long to put up at once. Show part of it.")
-    state["at"] = _now()
-    prev = _current(biz)
-    # The preacher's ask and the service's log ride along from the state before (round 5, board 24).
-    wsh.carry_ask(prev[1] if prev else None, state)
-    wsh.carry_log(prev[1] if prev else None, state, state["at"])
-    rev, saved = _put_live(biz, state, prev)
+    with _church_lock(biz):
+        state["at"] = _now()
+        prev = _current(biz)
+        # The preacher's ask and the service's log ride along from the state before (round 5, board 24).
+        wsh.carry_ask(prev[1] if prev else None, state)
+        wsh.carry_log(prev[1] if prev else None, state, state["at"])
+        rev, saved = _put_live(biz, state, prev)
     return {"ok": True, "rev": rev, "saved": saved}
+
+
+_LOCKS: Dict[str, threading.Lock] = {}
+_LOCKS_GUARD = threading.Lock()
+
+
+def _church_lock(biz: str) -> threading.Lock:
+    """One church's writes to its live state, one at a time: a press and the preacher's
+    ask each read the state, add to it and write it back, so neither may land in between
+    the other's read and write (the server runs as one copy; the hub is this process's)."""
+    with _LOCKS_GUARD:
+        return _LOCKS.setdefault(biz, threading.Lock())
 
 
 def _put_live(biz: str, state: Dict[str, Any], prev: Optional[Tuple[int, Dict[str, Any]]]) -> Tuple[int, bool]:
@@ -634,21 +647,23 @@ def screen_ask(token: str):
     if screen.get("role") != "stage":
         raise HTTPException(403, "Only a stage screen can ask the booth for more time")
     biz = screen["business_id"]
-    prev = _current(biz)
-    state = dict(prev[1]) if prev else {}
-    item = state.get("item_id")
-    if not item or state.get("adhoc"):
-        raise HTTPException(409, "Nothing from the plan is up to ask more time for")
-    old = state.get("ask")
-    if isinstance(old, dict) and old.get("item_id") == item:
-        answered = old.get("answered_at")
-        # Asked already and waiting, or answered a moment ago: a second tap asks nothing new.
-        if not old.get("answer") or (isinstance(answered, str) and _age(answered) < ASK_AGAIN_SECONDS):
-            return {"ok": True, "ask": old}
-    state["ask"] = {"minutes": wsh.ASK_MINUTES, "item_id": item, "from": screen.get("name") or "The stage",
-                    "at": _now(), "answer": None, "answered_at": None}
-    _put_live(biz, state, prev)
-    return {"ok": True, "ask": state["ask"]}
+    with _church_lock(biz):
+        prev = _current(biz)
+        state = dict(prev[1]) if prev else {}
+        item = state.get("item_id")
+        if not item or state.get("adhoc"):
+            raise HTTPException(409, "Nothing from the plan is up to ask more time for")
+        old = state.get("ask")
+        if isinstance(old, dict) and old.get("item_id") == item:
+            answered = old.get("answered_at")
+            # Asked already and waiting, or answered a moment ago: a second tap asks nothing new.
+            if not old.get("answer") or (isinstance(answered, str) and _age(answered) < ASK_AGAIN_SECONDS):
+                return {"ok": True, "ask": old, "saved": True}
+        state["ask"] = {"minutes": wsh.ASK_MINUTES, "item_id": item, "from": screen.get("name") or "The stage",
+                        "at": _now(), "answer": None, "answered_at": None}
+        _, saved = _put_live(biz, state, prev)
+    # Like a press: the booth and the screens have it either way; only a restart would lose an unsaved one.
+    return {"ok": True, "ask": state["ask"], "saved": saved}
 
 
 ASK_AGAIN_SECONDS = 30
