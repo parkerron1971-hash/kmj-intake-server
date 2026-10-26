@@ -699,4 +699,89 @@ def clean_live(raw: Any) -> Dict[str, Any]:
         if not (room or online):
             raise ValueError("The crawl goes on the room, online, or both")
         out["crawl"] = {"text": text, "room": room, "online": online, "times": times, "at": at}
+    ask = raw.get("ask")
+    if ask is not None:
+        out["ask"] = clean_ask(ask)
     return out
+
+
+# ─── the preacher's ask, and the service's log (round 5, board 24) ────
+
+ASK_MINUTES = 5
+MAX_LOG = 80
+
+
+def _iso(v: Any) -> str:
+    """A time with its zone, as sent; anything else is refused."""
+    if not isinstance(v, str) or len(v) > 40:
+        raise ValueError("That isn't a time")
+    try:
+        t = datetime.fromisoformat(v.replace("Z", "+00:00"))
+    except ValueError:
+        raise ValueError("That isn't a time")
+    if t.tzinfo is None:
+        raise ValueError("That isn't a time")
+    return v
+
+
+def _when(v: str) -> datetime:
+    return datetime.fromisoformat(v.replace("Z", "+00:00"))
+
+
+def clean_ask(raw: Any) -> Dict[str, Any]:
+    """"I need 5 more" from a stage screen's phone, and the booth's yes or no."""
+    if not isinstance(raw, dict):
+        raise ValueError("That isn't a request for more time")
+    minutes = raw.get("minutes")
+    if type(minutes) is not int or not 1 <= minutes <= 15:
+        raise ValueError("A request for more time is 1 to 15 minutes")
+    item = raw.get("item_id")
+    if not isinstance(item, str) or not _ID.match(item):
+        raise ValueError("That isn't an item")
+    answer = raw.get("answer")
+    if answer not in (None, "yes", "no"):
+        raise ValueError("The booth answers yes or no")
+    return {"minutes": minutes, "item_id": item, "from": " ".join(str(raw.get("from") or "").split())[:60],
+            "at": _iso(raw.get("at")), "answer": answer,
+            "answered_at": None if answer is None else _iso(raw.get("answered_at"))}
+
+
+def carry_ask(prev: Optional[Dict[str, Any]], state: Dict[str, Any]) -> Dict[str, Any]:
+    """The ask belongs to its item: a new item (or another service) drops it. A press
+    from a booth that hasn't heard of it yet keeps it, and of two asks the newer wins,
+    so a stale booth can't put back one already answered. The booth's answer to the
+    same ask is the same ask, and it stands."""
+    item, sid = state.get("item_id"), state.get("service_id")
+
+    def mine(a: Any) -> Optional[Dict[str, Any]]:
+        return a if isinstance(a, dict) and item and a.get("item_id") == item else None
+
+    old = mine((prev or {}).get("ask")) if (prev or {}).get("service_id") == sid else None
+    new = mine(state.get("ask"))
+    try:
+        if old and (not new or _when(new["at"]) < _when(old["at"])):
+            new = old
+    except (KeyError, TypeError, ValueError):
+        new = old or new
+    if new:
+        state["ask"] = new
+    else:
+        state.pop("ask", None)
+    return state
+
+
+def carry_log(prev: Optional[Dict[str, Any]], state: Dict[str, Any], at: str) -> Dict[str, Any]:
+    """When each item went up this service, kept by the server (the booth never sends it),
+    for the order's "planned / took" and the service clock. Something put up on the spot
+    counts in the item it interrupted."""
+    prev = prev or {}
+    sid = state.get("service_id")
+    log = [e for e in (prev.get("log") or []) if isinstance(e, dict)] if sid and prev.get("service_id") == sid else []
+    item = state.get("item_id")
+    if sid and item and not state.get("adhoc") and (not log or log[-1].get("id") != item):
+        log.append({"id": item, "at": state.get("since") or at})
+    if sid:
+        state["log"] = log[-MAX_LOG:]
+    else:
+        state.pop("log", None)
+    return state

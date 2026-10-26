@@ -556,15 +556,24 @@ def set_live(body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
         raise HTTPException(400, "That passage is too long to put up at once. Show part of it.")
     state["at"] = _now()
     prev = _current(biz)
+    # The preacher's ask and the service's log ride along from the state before (round 5, board 24).
+    wsh.carry_ask(prev[1] if prev else None, state)
+    wsh.carry_log(prev[1] if prev else None, state, state["at"])
+    rev, saved = _put_live(biz, state, prev)
+    return {"ok": True, "rev": rev, "saved": saved}
+
+
+def _put_live(biz: str, state: Dict[str, Any], prev: Optional[Tuple[int, Dict[str, Any]]]) -> Tuple[int, bool]:
+    """Every screen hears it at once, then it's saved for a screen that joins later."""
     rev = max(int(time.time() * 1000), (prev[0] + 1) if prev else 0)
     HUB.publish(biz, rev, state)
-    row = {"business_id": biz, "service_id": state.get("service_id"), "state": state, "rev": rev, "updated_at": state["at"]}
+    row = {"business_id": biz, "service_id": state.get("service_id"), "state": state, "rev": rev, "updated_at": _now()}
     saved = sb_clients.sb_post_as_service("/worship_live?on_conflict=business_id&select=rev", row,
                                           prefer="resolution=merge-duplicates,return=representation")
     if not isinstance(saved, list) or not saved:
         # The screens already have it; only a restart would lose it.
         logger.warning("[worship] live state for %s didn't save (rev %s)", biz, rev)
-    return {"ok": True, "rev": rev, "saved": bool(saved)}
+    return rev, bool(saved)
 
 
 # ─── a screen's own link ─────────────────────────────────────────────
@@ -615,6 +624,41 @@ def screen_show(token: str):
                 if s.get("kind") == "text":
                     s.pop("notes", None)
     return show
+
+
+@router.post("/screen/{token}/ask")
+def screen_ask(token: str):
+    """The preacher's phone asks the booth for 5 more minutes (round 5, board 24).
+    Only a stage screen's link can; the booth says yes or no."""
+    screen = screen_from_token(token)
+    if screen.get("role") != "stage":
+        raise HTTPException(403, "Only a stage screen can ask the booth for more time")
+    biz = screen["business_id"]
+    prev = _current(biz)
+    state = dict(prev[1]) if prev else {}
+    item = state.get("item_id")
+    if not item or state.get("adhoc"):
+        raise HTTPException(409, "Nothing from the plan is up to ask more time for")
+    old = state.get("ask")
+    if isinstance(old, dict) and old.get("item_id") == item:
+        answered = old.get("answered_at")
+        # Asked already and waiting, or answered a moment ago: a second tap asks nothing new.
+        if not old.get("answer") or (isinstance(answered, str) and _age(answered) < ASK_AGAIN_SECONDS):
+            return {"ok": True, "ask": old}
+    state["ask"] = {"minutes": wsh.ASK_MINUTES, "item_id": item, "from": screen.get("name") or "The stage",
+                    "at": _now(), "answer": None, "answered_at": None}
+    _put_live(biz, state, prev)
+    return {"ok": True, "ask": state["ask"]}
+
+
+ASK_AGAIN_SECONDS = 30
+
+
+def _age(iso: str) -> float:
+    try:
+        return (datetime.now(timezone.utc) - datetime.fromisoformat(iso.replace("Z", "+00:00"))).total_seconds()
+    except (TypeError, ValueError):
+        return float("inf")
 
 
 def _sse(rev: int, state: Dict[str, Any]) -> str:
