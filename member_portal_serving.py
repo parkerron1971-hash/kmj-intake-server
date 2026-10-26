@@ -358,7 +358,7 @@ def render_page(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any],
 <form method="post" action="/my/serving/often"><div class="sv-seg" role="radiogroup" aria-label="How often">{seg}</div></form>
 <p class="sv-lede">Whoever schedules your team sees this when they fill a month. It's a wish, not a promise.</p></section>
 {_hear(m.get("hear"))}"""
-    return _shell(biz, site, "My serving", body, tab="connect", who=me)
+    return _shell(biz, site, "My serving", body, tab=_tab(), who=me)
 
 
 def _hear(h: Optional[Dict[str, Any]]) -> str:
@@ -473,7 +473,7 @@ def render_ask(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], 
 {_flash(request)}
 <section class="sv-hero h-teal" aria-label="Your answer">{top}{state}</section>
 {with_html}{thread}"""
-    return _shell(biz, site, "Serving", body, tab="connect", who=me)
+    return _shell(biz, site, "Serving", body, tab=_tab(), who=me)
 
 
 def ics(biz: Dict[str, Any], v: Dict[str, Any]) -> str:
@@ -581,10 +581,16 @@ def render_pack(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any],
 {roles}
 <section class="sv-sec" style="margin-top:16px" aria-label="When and where">{here}</section>
 {songs}{moments}{order}{thread}"""
-    return _shell(biz, site, "Your Sunday", body, tab="connect", who=me)
+    return _shell(biz, site, "Your Sunday", body, tab=_tab(), who=me)
 
 
 # ─── GET (through member_portal.serve) ───────────────────────────────
+
+
+def _tab() -> str:
+    """Serving lives under the Serve tab once Who sees what is on (member_app_ui.SERVE_TAB)."""
+    import member_app_ui
+    return "lead" if member_app_ui.serve_mode() else "connect"
 
 
 async def serve(request: Request, church: Dict[str, Any], me: Dict[str, Any], sub: str):

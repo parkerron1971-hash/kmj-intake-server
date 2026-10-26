@@ -54,6 +54,35 @@ _FID = re.compile(r"^[0-9a-fA-F-]{36}$")
 # Whether this leader leads a Sunday team (sunday_leading): read once per
 # request in serve(), so every page's section switcher can offer Sundays.
 SUNDAYS: ContextVar[bool] = ContextVar("lead_sundays", default=False)
+# Who sees what (2026-10-26): the other parts this member holds, read once per
+# request in serve() when the tab is the Serve tab, so every page's section
+# switcher can offer them: their Sundays (sunday_serving) and a kids room.
+PARTS: ContextVar[Dict[str, bool]] = ContextVar("lead_parts", default={})
+
+
+def _word() -> str:
+    """The tab's name, said in its header: Serve once Who sees what is on."""
+    import member_app_ui
+    return "Serve" if member_app_ui.serve_mode() else "Lead"
+
+
+def parts(biz: Dict[str, Any], me_id: str) -> Dict[str, bool]:
+    """The parts besides a role or a group: a place on a Sunday team (or an
+    ask), and a kids room (space_leaders). A read that fails is no part."""
+    out = {"serving": False, "kids": False}
+    try:
+        import sunday_serving
+        out["serving"] = bool(sunday_serving.serves(biz, me_id))
+    except Exception:
+        logger.warning("serve tab: serving read failed (business %s)", str(biz.get("id"))[:8])
+    try:
+        import sb_clients
+        rows = sb_clients.sb_get_as_service(
+            f"/space_leaders?business_id=eq.{cfu._q(biz['id'])}&contact_id=eq.{cfu._q(me_id)}&select=contact_id&limit=1")
+        out["kids"] = bool(isinstance(rows, list) and rows)
+    except Exception:
+        logger.warning("serve tab: kids read failed (business %s)", str(biz.get("id"))[:8])
+    return out
 
 DONE = {
     "saved": "Saved. The pastors can see it on their page.",
@@ -477,7 +506,7 @@ def render(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], my_r
     active = [r for r in my_roles if r.get("status") == "active"]
     invited = [r for r in my_roles if r.get("status") == "invited"]
     first = (me.get("name") or "").strip().split(" ")[0] or "friend"
-    head = (f'<header class="ld-head"><h1 class="ld-hello">Lead, <em>{_e(first)}</em></h1>'
+    head = (f'<header class="ld-head"><h1 class="ld-hello">{_word()}, <em>{_e(first)}</em></h1>'
             f'<div class="ld-roles">{"".join(f"<span class=ld-role>{_e(_role_text(r))}</span>" for r in active)}</div></header>')
     invites = "".join(_invite_card(r, church) for r in invited)
     prays = any(_is_prayer(r) for r in active) or bool((prayer or {}).get("requests"))
@@ -494,10 +523,14 @@ def render(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], my_r
         seg = _seg("people", True, prays, waiting, fams, groups)
     head = head + seg
     if not active:
-        body = (f'{flash}{head}{invites}' if invites else
+        p = PARTS.get()
+        kids = (f'<section class="ld-card"><h3>Kids room</h3><p>You serve in Kids. Your room and its Sundays live in '
+                f'the Kids space.</p><p><a class="ld-btn" href="/my/space?to=kids">Open the Kids room</a></p></section>'
+                if p.get("kids") else "")
+        body = (f'{flash}{head}{invites}{kids}' if invites or kids else
                 f'{flash}{head}<section class="ld-card"><p>You don’t lead anything at {_e(church)} yet. When the church '
                 f'asks you to, it shows up here.</p><p><a href="/my">Back to Home</a></p></section>')
-        return _shell(biz, site, "Lead", f'<style>{LEAD_CSS}</style><div class="ld-wide">{body}</div>', tab="lead", who=me)
+        return _shell(biz, site, _word(), f'<style>{LEAD_CSS}</style><div class="ld-wide">{body}</div>', tab="lead", who=me)
     if view is None:
         body = (f'{flash}{head}<p class="mp-err" role="alert">Your people couldn’t load just now. '
                 f'Please try again in a moment.</p>')
@@ -523,7 +556,7 @@ def render(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], my_r
     door = "" if sel else mps.card(safety) + _room_door(room)
     return _shell(biz, site, title,
                   f'<style>{LEAD_CSS}{mps.SAFETY_CSS}</style><div class="ld-wide">{flash}{head}{invites}{door}{grid}</div>',
-                  tab="lead", who=me, back=("/my/lead", "Lead") if sel else None)
+                  tab="lead", who=me, back=("/my/lead", _word()) if sel else None)
 
 
 def _room_door(room: bool) -> str:
@@ -543,7 +576,9 @@ async def serve(request: Request, biz: Dict[str, Any], site, me: Dict[str, Any],
     import church_shepherding as shep
     selected = sub[len("/my/lead/"):] if sub.startswith("/my/lead/") else ""
     import sunday_leading
+    import member_app_ui
     SUNDAYS.set(await asyncio.to_thread(sunday_leading.leads_a_team, biz["id"], str(me["id"])))
+    PARTS.set(await asyncio.to_thread(parts, biz, str(me["id"])) if member_app_ui.serve_mode() else {})
     # A Sunday team's leader: their team's Sundays (member_portal_leading).
     if selected == "sundays":
         import member_portal_leading
@@ -570,6 +605,15 @@ async def serve(request: Request, biz: Dict[str, Any], site, me: Dict[str, Any],
     if led and not selected and tab == "people" and not any(r["status"] == "active" for r in my_roles):
         # Only a group to lead: the Lead tab opens on it.
         return await serve_groups(request, biz, site, me, "")
+    if (PARTS.get().get("serving") and not selected and tab == "people"
+            and not any(r["status"] in ("active", "invited") for r in my_roles)):
+        # Only a place on a Sunday team: the Serve tab opens on their Sundays.
+        import member_portal_serving as mps_serving
+        import sunday_serving as ss
+        m = await asyncio.to_thread(ss.mine, biz, str(me["id"]))
+        if m is not None:
+            m["hear"] = await asyncio.to_thread(ss.hearing, biz, str(me["id"]))
+            return mps_serving.render_page(biz, site, request, me, m, None), 200
     view = prayer = None
     targets: List[Dict[str, Any]] = []
     fams = 0
@@ -697,11 +741,16 @@ def _seg(tab: str, people: bool, prays: bool, waiting: int, fams: int, groups: i
         tabs.append(("prayer", "/my/lead/prayer", f"Prayer · {waiting}" if waiting else "Prayer"))
     if fams:
         tabs.append(("families", "/my/lead/families", f"Families · {fams}"))
+    p = PARTS.get()
+    if p.get("serving"):
+        tabs.append(("serving", "/my/serving", "Serving"))
+    if p.get("kids"):
+        tabs.append(("kids", "/my/space?to=kids", "Kids room"))
     if len(tabs) < 2:
         return ""
     here = ' aria-current="page"'
     links = "".join(f'<a href="{href}"{here if key == tab else ""}>{_e(label)}</a>' for key, href, label in tabs)
-    return f'<nav class="ld-seg" aria-label="Lead">{links}</nav>'
+    return f'<nav class="ld-seg" aria-label="{_word()}">{links}</nav>'
 
 
 def _fam_link(f: Dict[str, Any], biz: Dict[str, Any]) -> str:
