@@ -57,7 +57,7 @@ SUNDAYS: ContextVar[bool] = ContextVar("lead_sundays", default=False)
 # Who sees what (2026-10-26): the other parts this member holds, read once per
 # request in serve() when the tab is the Serve tab, so every page's section
 # switcher can offer them: their Sundays (sunday_serving) and a kids room.
-PARTS: ContextVar[Dict[str, bool]] = ContextVar("lead_parts", default={})
+PARTS: ContextVar[Dict[str, Any]] = ContextVar("lead_parts", default={})
 
 
 def _word() -> str:
@@ -93,7 +93,12 @@ SAVVY_WORK = {"booth": "the screens", "media": "sermons, live and clips", "worsh
 
 def team_parts(biz: Dict[str, Any], email: Optional[str]) -> List[str]:
     """Their parts on ChurchSavvy's Sunday team, while ChurchSavvy is on for
-    every church (WORSHIP_SONGS=on). A read that fails is no part."""
+    every church (WORSHIP_SONGS=on). A read that fails is no part.
+
+    By email, the only key: a member is a church contact, not a sign-in, so
+    worship_team.user_id (their ChurchSavvy sign-in) has nothing to meet.
+    The member app proves the email with a code. What it can reveal is the
+    part in words, on a door that only links out."""
     import worship_router
     em = (email or "").strip().lower()
     if worship_router.mode() != "on" or "@" not in em:
