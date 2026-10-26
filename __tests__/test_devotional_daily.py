@@ -154,6 +154,8 @@ def test_today_reads_the_whole_day_with_its_scripture(client):
     assert 'action="/daily/join"' in page and "Love City Church: one text each evening" in page
     assert "Or text <b>DAILY</b>" in page and "(231) 625-4974" in page
     assert "app" not in page.lower().replace("apply", "").replace("application", "").replace("apple", "")
+    # read, not heard: the phone's reading voice didn't sound natural (Kevin, 10-25)
+    assert ">Listen<" not in page and "speechSynthesis" not in page
 
 
 def test_tomorrow_opens_the_evening_before_and_later_days_stay_shut(client):

@@ -37,6 +37,8 @@ sign up again. Someone who came from a text, or signed up here, is
 remembered on that phone and sees "You're on the text list" instead, with
 a way to sign up another number (a link forwarded to a friend carries
 t=1 too, so that way stays one tap away).
+No Listen button: the phone's own reading voice sounded like a machine
+(Kevin, 10-25: "it doesn't sound natural"), so the page is read, not heard.
 The evening claim is last_key: one PATCH moves it from anything else to
 "<devotional id>_<day>", so one replica wins and nobody gets a day twice.
 """
@@ -306,7 +308,6 @@ def _day_html(dev: Dict[str, Any], n: int, today: date) -> str:
 <p class="kicker">{kicker}</p>
 <p class="when">{(when_line + " · ") if when_line else ""}{_e(_long(when))}</p>
 <h1>{_e(day.get("title") or f"Day {n}")}</h1>
-<button class="listen" type="button" hidden>Listen</button>
 </header>
 {scripture}
 <article class="words">{_paras(day.get("body") or "")}{pull}</article>
@@ -359,7 +360,6 @@ a{{color:var(--accent)}}
 .kicker{{margin:0;color:var(--accent);font-weight:600;font-size:14px;letter-spacing:.04em;text-transform:uppercase}}
 .when{{margin:4px 0 0;color:var(--soft);font-size:15px}}
 h1{{font:500 clamp(34px,8vw,46px)/1.08 Newsreader,Georgia,serif;letter-spacing:-.01em;margin:14px 0 0}}
-.listen{{margin-top:16px;font:600 14px Geist,system-ui,sans-serif;color:var(--accent);background:none;border:1px solid var(--accent);border-radius:999px;padding:8px 16px;cursor:pointer}}
 .scripture{{margin:26px 0 8px;padding:22px 22px 18px;background:var(--card);border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:16px}}
 .scripture blockquote{{margin:0;font:italic 400 21px/1.5 Newsreader,Georgia,serif}}
 .scripture sup{{font:600 11px Geist,system-ui,sans-serif;color:var(--soft);margin-right:2px}}
@@ -428,17 +428,6 @@ h1{{font:500 clamp(34px,8vw,46px)/1.08 Newsreader,Georgia,serif;letter-spacing:-
    b.checked=!!s[b.getAttribute('data-i')];
    b.addEventListener('change',function(){{s[b.getAttribute('data-i')]=b.checked;try{{localStorage.setItem(k,JSON.stringify(s));}}catch(e){{}}}});
   }});}}
- var l=document.querySelector('.listen');
- if(l&&'speechSynthesis' in window){{
-  l.hidden=false;
-  l.addEventListener('click',function(){{
-   var ss=window.speechSynthesis;
-   if(ss.speaking){{ss.cancel();l.textContent='Listen';return;}}
-   var t=[].map.call(document.querySelectorAll('h1,.scripture blockquote,.scripture figcaption,.words p,.do'),function(n){{return n.innerText;}}).join('. ');
-   var u=new SpeechSynthesisUtterance(t);u.rate=.95;u.onend=function(){{l.textContent='Listen';}};
-   ss.speak(u);l.textContent='Stop';
-  }});
- }}
 }})();
 </script></body></html>"""
 
