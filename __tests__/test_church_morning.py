@@ -129,6 +129,8 @@ def test_not_a_church_or_the_switch_off_sends_no_notes(phones, monkeypatch):
      "A kids room has no background check. 1 more needs you this week."),
     ({"next": {"title": "Robert Hayes is waiting to hear from you."}, "counts": {"needs": 4}},
      "Robert Hayes is waiting to hear from you. 3 more need you this week."),
+    ({"next": {"kind": "task", "title": "Order the VBS shirts"}, "counts": {"needs": 1}},
+     "Your task: Order the VBS shirts."),
 ])
 def test_the_line_is_the_weeks_first_thing_and_how_many_more(week_, said):
     assert cm.line(week_) == said
