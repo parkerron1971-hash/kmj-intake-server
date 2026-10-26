@@ -354,6 +354,9 @@ app.include_router(worship_team_router)
 # The map: every part of a church's system in one area, and who reaches it.
 from church_areas import router as church_areas_router
 app.include_router(church_areas_router)
+# My week: a church login's first page (Who sees what, 2026-10-26).
+from church_my_week import router as church_my_week_router
+app.include_router(church_my_week_router)
 # Sermons from ChurchSavvy, for the team's Media part (no seat needed).
 from worship_sermons import router as worship_sermons_router
 app.include_router(worship_sermons_router)
