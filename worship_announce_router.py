@@ -25,6 +25,7 @@ import sb_clients
 import worship_announce as wa
 from auth_supabase import AuthedUser, require_user
 from worship_show_router import _q, _read, _seat, _staff, _uuid
+from worship_team import can
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/worship", tags=["worship"])
@@ -98,13 +99,14 @@ def _day(raw: Optional[str], biz: str) -> date:
 @router.get("/announcements")
 def list_announcements(business_id: str, day: Optional[str] = None, user: AuthedUser = Depends(require_user)):
     biz = _uuid(business_id)
-    _seat(biz, user)
+    roles = _seat(biz, user)
     today = _day(day, biz)
     out = [wa.as_out(r, today) for r in _rows(biz)]
     cutoff = wa.past_cutoff(today)
     out = [a for a in out if a["tab"] != "declined" and not (a["tab"] == "past" and (a["show_until"] or "") < cutoff)]
     counts = {t: sum(1 for a in out if a["tab"] == t) for t in wa.TABS}
-    return {"announcements": out, "counts": counts, "day": today.isoformat()}
+    # can_write: the plan's part (planner, worship leader, admin) makes and changes them.
+    return {"announcements": out, "counts": counts, "day": today.isoformat(), "can_write": can(roles, "plan")}
 
 
 @router.post("/announcements")

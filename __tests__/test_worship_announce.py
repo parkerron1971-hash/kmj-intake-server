@@ -238,7 +238,9 @@ def test_make_change_decide_and_take_off(api):
     assert a["show_until"] == "2026-11-07" and a["status"] == "on" and a["source"] == "typed"
     assert as_("owner").post("/worship/announcements", json={"business_id": BIZ, "title": ""}).status_code == 400
     # A member reads the board but doesn't change it; a stranger gets nothing.
-    assert as_("member").get(f"/worship/announcements?business_id={BIZ}&day=2026-11-01").status_code == 200
+    seen = as_("member").get(f"/worship/announcements?business_id={BIZ}&day=2026-11-01")
+    assert seen.status_code == 200 and seen.json()["can_write"] is False
+    assert as_("owner").get(f"/worship/announcements?business_id={BIZ}").json()["can_write"] is True
     assert as_("member").post("/worship/announcements", json={"business_id": BIZ, "title": "Mine"}).status_code in (403, 404)
     assert as_("stranger").get(f"/worship/announcements?business_id={BIZ}").status_code in (403, 404)
 
