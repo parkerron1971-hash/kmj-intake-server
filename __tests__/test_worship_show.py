@@ -100,7 +100,9 @@ def test_a_service_becomes_slides_in_order():
     show = wsh.compile_show(service, {SONG_ID: SONG})
     by = {i["id"]: i for i in show["items"]}
     assert [i["id"] for i in show["items"]] == ["count", "worship", "well", "well-short", "word", "pts", "ann", "vid"]
-    assert by["count"]["slides"] == [{"kind": "countdown", "to": "2026-10-25T15:05:00+00:00", "title": "We start soon"}]
+    # Round 5: a countdown also carries its look, what happens at zero and the call to the stage.
+    assert by["count"]["slides"] == [{"kind": "countdown", "to": "2026-10-25T15:05:00+00:00", "title": "We start soon",
+                                      "look": "big", "zero": "next", "band_at": 120, "band_text": "Band to the stage"}]
     assert by["worship"]["slides"] == []
     # The first arrangement: verse 1 in two slides, then the refrain twice.
     assert [s["label"] for s in by["well"]["slides"]] == ["Verse 1", "Verse 1", "Refrain", "Refrain"]
