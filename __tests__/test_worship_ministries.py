@@ -53,6 +53,9 @@ def _match(row, filters):
         elif v.startswith("lt."):
             if cell is None or str(cell) >= v[3:]:
                 return False
+        elif v.startswith("gte."):
+            if cell is None or str(cell) < v[4:]:
+                return False
         elif v.startswith("in.("):
             if str(cell) not in v[4:-1].split(","):
                 return False
@@ -183,6 +186,15 @@ def test_a_picture_from_the_link_goes_to_the_library(church, monkeypatch):
     url = done.json()["url"]
     assert url.startswith(wm.picture_prefix(BIZ)) and db.t["worship_media"][-1]["status"] == "ready"
     assert as_("stranger").post(f"/worship/send/{t}", json=form(image_url=url)).status_code == 200
+    # Exactly a picture in this church's library: a path that walks to another church's is refused (PR review).
+    walk = f"{wm.picture_prefix(BIZ)}../{OTHER_BIZ}/worship-{mid}.png"
+    assert as_("stranger").post(f"/worship/send/{t}", json=form(image_url=walk)).status_code == 400
+    assert as_("stranger").post(f"/worship/send/{t}", json=form(image_url=url + "?x=1")).status_code == 400
+    # A link passed around can't fill the library with half-sent pictures (PR review).
+    now = datetime.now(timezone.utc).isoformat()
+    db.t["worship_media"] += [{"id": f"u{k}", "business_id": BIZ, "status": "uploading", "archived_at": None, "created_at": now}
+                              for k in range(wm.MAX_UPLOADING)]
+    assert as_("stranger").post(f"/worship/send/{t}/picture", json={"mime": "image/png", "bytes": 2048}).status_code == 429
 
 
 def test_the_leader_hears_the_answer(church):
@@ -235,6 +247,33 @@ def test_wednesdays_reminder(church, monkeypatch):
     monkeypatch.setenv("WORSHIP_SONGS", "off")
     assert wm.sweep_tick(datetime(2026, 11, 18, 15, 0, tzinfo=timezone.utc)) == {"reminded": 0, "failed": 0}
     assert client.get(f"/worship/send/{t}").status_code == 404
+
+
+def test_a_reminder_that_fails_is_tried_again(church, monkeypatch):
+    """The weekly claim goes back when the email fails, so the next sweep tries (PR review)."""
+    db, as_, client, sent = church
+    import email_sender
+    import worship_announce_router as war
+    from zoneinfo import ZoneInfo
+    monkeypatch.setattr(war, "church_zone", lambda biz: ZoneInfo("America/New_York"))
+    add(as_)
+    real = email_sender.send_via_resend
+
+    async def down(**kw):
+        raise RuntimeError("Resend is down")
+
+    monkeypatch.setattr(email_sender, "send_via_resend", down)
+    wed = datetime(2026, 11, 4, 15, 0, tzinfo=timezone.utc)
+    assert wm.sweep_tick(wed) == {"reminded": 0, "failed": 1}
+    assert db.t["worship_ministries"][0]["reminded_on"] is None
+    monkeypatch.setattr(email_sender, "send_via_resend", real)
+    assert wm.sweep_tick(datetime(2026, 11, 4, 15, 30, tzinfo=timezone.utc))["reminded"] == 1
+
+
+def test_the_link_is_a_gate_the_ownership_sweep_sees():
+    import ownership_sweep
+    gaps = [h for h in ownership_sweep.sweep()["unguarded"] if h["file"] == "worship_ministries.py"]
+    assert gaps == []
 
 
 def test_mounted_before_the_public_site_catch_all():

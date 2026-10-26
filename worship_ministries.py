@@ -35,8 +35,9 @@ import hmac
 import json
 import logging
 import os
+import re
 import uuid
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote
 
@@ -62,6 +63,7 @@ NOTE_LIMIT = 300
 MAX_PICTURE_BYTES = 10 * 1024 * 1024
 PICTURE_TYPES = ("image/png", "image/jpeg", "image/webp")
 MINISTRY_SHOWS = ("room", "lobby")  # phones and the stream are the office's to add
+MAX_UPLOADING = 30                # pictures on their way into one church's library from links, a day
 _FIELDS = "id,business_id,name,leader_name,leader_email,remind,link_n,reminded_on,archived_at,created_at,updated_at"
 
 
@@ -129,7 +131,7 @@ def link_of(row: Dict[str, Any]) -> str:
     return sign(row["business_id"], row["id"], int(row.get("link_n") or 1))
 
 
-def _from_link(token: str) -> Dict[str, Any]:
+def ministry_from_link(token: str) -> Dict[str, Any]:
     """The ministry a link opens: genuine, its church's, not taken out, and the newest link."""
     if mode() == "off":
         raise HTTPException(404, "Not Found")
@@ -273,7 +275,7 @@ def remove_ministry(ministry_id: str, business_id: str, user: AuthedUser = Depen
 @router.get("/send/{link}")
 def open_send(link: str):
     import serve_links
-    m = _from_link(link)
+    m = ministry_from_link(link)
     return {"church": serve_links.church_card(_church(m["business_id"])), "ministry": m["name"],
             "leader": (m.get("leader_name") or "").split(" ")[0], "due": DUE, "remind": m.get("remind") is not False,
             "can_remind": bool(m.get("leader_email")), "shows": list(MINISTRY_SHOWS)}
@@ -288,7 +290,7 @@ def picture_prefix(biz: str) -> str:
 @router.post("/send/{link}")
 def send_announcement(link: str, body: Dict[str, Any]):
     from worship_announce_router import church_today
-    m = _from_link(link)
+    m = ministry_from_link(link)
     biz = m["business_id"]
     body = body or {}
     try:
@@ -298,7 +300,8 @@ def send_announcement(link: str, body: Dict[str, Any]):
     row["shows"] = {k: bool(row["shows"].get(k)) and k in MINISTRY_SHOWS for k in wa.WHERE}
     if not any(row["shows"].values()):
         raise HTTPException(400, "Pick where it should show")
-    if row.get("image_url") and not row["image_url"].startswith(picture_prefix(biz)):
+    if row.get("image_url") and not re.fullmatch(re.escape(picture_prefix(biz)) + r"[0-9a-f-]{36}\.(png|jpg|webp)", row["image_url"]):
+        # Exactly a picture in this church's library: nothing after the prefix can walk elsewhere.
         raise HTTPException(400, "Add the picture here, from your phone or computer")
     if not row.get("show_until"):
         row["show_until"] = wa.until_default(row.get("event_on"))
@@ -329,7 +332,7 @@ def send_announcement(link: str, body: Dict[str, Any]):
 @router.post("/send/{link}/picture")
 def send_picture_start(link: str, body: Dict[str, Any]):
     import worship_media_router as wm
-    m = _from_link(link)
+    m = ministry_from_link(link)
     biz = m["business_id"]
     body = body or {}
     mime = str(body.get("mime") or "")
@@ -343,6 +346,14 @@ def send_picture_start(link: str, body: Dict[str, Any]):
         raise HTTPException(503, "That couldn't be prepared. Try again.")
     if sum(int(r.get("bytes") or 0) for r in have) + size > wm.LIBRARY_BYTES:
         raise HTTPException(409, "The church's library is full. Send it without a picture, and the office can add one.")
+    # A link someone passed around can't fill the library with half-sent pictures.
+    since = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+    going = sb_clients.sb_get_as_service(f"/worship_media?business_id=eq.{_q(biz)}&status=eq.uploading&archived_at=is.null"
+                                         f"&created_at=gte.{_q(since)}&select=id&limit={MAX_UPLOADING}")
+    if going is None:
+        raise HTTPException(503, "That couldn't be prepared. Try again.")
+    if len(going) >= MAX_UPLOADING:
+        raise HTTPException(429, "Too many pictures are on their way just now. Send it without one, or try again tomorrow.")
     mid = str(uuid.uuid4())
     object_name = f"{biz}/worship-{mid}.{wm.TYPES[mime][1]}"
     name = f"{m['name']}: {str(body.get('name') or 'Picture').strip()}"[:120]
@@ -359,7 +370,7 @@ def send_picture_start(link: str, body: Dict[str, Any]):
 @router.post("/send/{link}/picture/{media_id}")
 def send_picture_finish(link: str, media_id: str):
     import worship_media_router as wm
-    m = _from_link(link)
+    m = ministry_from_link(link)
     row = wm._own(m["business_id"], _uuid(media_id, "picture"))
     if row.get("kind") != "image":
         raise HTTPException(400, "That isn't a picture")
@@ -376,7 +387,7 @@ def _set_remind(m: Dict[str, Any], on: bool) -> None:
 
 @router.post("/send/{link}/reminders")
 def send_reminders(link: str, body: Dict[str, Any]):
-    m = _from_link(link)
+    m = ministry_from_link(link)
     on = (body or {}).get("on")
     if not isinstance(on, bool):
         raise HTTPException(400, "On or off")
@@ -387,7 +398,7 @@ def send_reminders(link: str, body: Dict[str, Any]):
 @router.post("/send/{link}/stop")
 def stop_reminders(link: str):
     """RFC 8058 one-click: the email client stops Wednesday's reminder, nothing else."""
-    _set_remind(_from_link(link), False)
+    _set_remind(ministry_from_link(link), False)
     return {"ok": True}
 
 
@@ -472,6 +483,14 @@ def due_now(local: datetime) -> bool:
     return local.weekday() == REMIND_WEEKDAY and REMIND_HOURS[0] <= local.hour < REMIND_HOURS[1]
 
 
+def _release(m: Dict[str, Any], today: date) -> None:
+    """A reminder that didn't go: the claim goes back, so the next sweep tries again
+    (Resend's idempotency key keeps a retry from sending twice)."""
+    sb_clients.sb_patch_as_service(
+        f"/worship_ministries?id=eq.{_q(m['id'])}&business_id=eq.{_q(m['business_id'])}&reminded_on=eq.{today.isoformat()}&select=id",
+        {"reminded_on": m.get("reminded_on")})
+
+
 def _claim(m: Dict[str, Any], today: date) -> bool:
     """This week's reminder, once: only the sweep that moves reminded_on to today sends it."""
     rows = sb_clients.sb_patch_as_service(
@@ -515,6 +534,7 @@ def sweep_tick(now: Optional[datetime] = None) -> Dict[str, int]:
                 except Exception:  # noqa: BLE001 — one address never stops the rest
                     out["failed"] += 1
                     logger.warning("ministries: one reminder failed", exc_info=True)
+                    _release(m, local.date())
         except Exception:  # noqa: BLE001
             logger.warning("ministries: one church's reminders failed", exc_info=True)
     return out

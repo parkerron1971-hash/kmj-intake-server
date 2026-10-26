@@ -85,6 +85,12 @@ HINTS = (
     # back, one someone else already took, or one a month old, and opens
     # nothing but joining that one church's team.
     "invite_from_token",
+    # A ministry's link to send the office an announcement
+    # (worship_ministries.py): signed for one church and one ministry, and
+    # the church comes from that row, never from the caller. Refuses (410)
+    # a link that's been replaced or whose ministry was taken out, and opens
+    # only sending that ministry's announcements and pictures.
+    "ministry_from_link",
 )
 
 BIZ_PARAMS = ("business_id", "biz", "biz_id", "businessId")
