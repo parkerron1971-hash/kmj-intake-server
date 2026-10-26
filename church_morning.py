@@ -97,6 +97,8 @@ def notes(biz: Dict[str, Any], *, today: str) -> int:
             continue
         said = line(week)
         if said:
-            sent += push_notifications.send_to_user(uid, business_id=bid, title=TITLE, body=said, nav=NAV,
+            first = str((week.get("me") or {}).get("name") or "").split(" ")[0]
+            title = f"Good morning, {first} ✦ Chief here" if first else TITLE
+            sent += push_notifications.send_to_user(uid, business_id=bid, title=title, body=said, nav=NAV,
                                                     tag=f"morning-{today}")
     return sent

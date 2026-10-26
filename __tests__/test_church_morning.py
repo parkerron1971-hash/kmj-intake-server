@@ -32,7 +32,7 @@ import church_morning as cm  # noqa: E402
 import church_my_week as mw  # noqa: E402
 import push_notifications as push  # noqa: E402
 import sb_clients  # noqa: E402
-from test_church_follow_up import BIZ, OWNER  # noqa: E402
+from test_church_follow_up import BIZ, MARCUS, NAMES, OWNER  # noqa: E402
 from test_church_areas import db  # noqa: E402,F401
 from test_church_my_week import MARCUS_SEAT, week  # noqa: E402,F401
 
@@ -95,7 +95,14 @@ def test_each_limited_login_hears_its_own_week_on_this_church_only(phones):
     assert uid == MARCUS_SEAT and endpoint.endswith("/1"), "only the device signed up from this church"
     assert payload["nav"] == "operate:my-week" and payload["tag"] == "morning-2026-11-05"
     assert "background check" in payload["body"]
-    assert payload["title"] == cm.TITLE
+    assert payload["title"] == f"Good morning, {NAMES[MARCUS].split()[0]} ✦ Chief here", "their own name"
+
+
+def test_a_login_whose_email_names_no_one_is_greeted_without_a_name(phones):
+    seat = phones.t["business_users"][-1]
+    seat.update(invited_email="kids-desk@lovecity.org", areas=["kids_youth"])
+    cm.notes(phones.t["businesses"][0], today="2026-11-05")
+    assert [p["title"] for _, _, p in phones.sent] == [cm.TITLE]
 
 
 def test_a_week_that_cant_be_read_sends_no_note(phones, monkeypatch):
