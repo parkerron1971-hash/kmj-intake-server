@@ -27,7 +27,7 @@ import json
 import logging
 import os
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -178,13 +178,68 @@ def _payload(title: str, body: str, nav: str, tag: Optional[str] = None,
 def send_to_user(user_id: str, *, title: str, body: str, nav: str = "home",
                  tag: Optional[str] = None,
                  actions: Optional[List[Dict[str, str]]] = None,
-                 data: Optional[Dict[str, Any]] = None) -> int:
+                 data: Optional[Dict[str, Any]] = None,
+                 business_id: Optional[str] = None) -> int:
+    """`business_id`: only the devices this person signed up from that
+    business (someone on two businesses hears each one's notes on its own)."""
     if not push_enabled():
         return 0
+    from urllib.parse import quote
+    one = f"&business_id=eq.{quote(str(business_id), safe='')}" if business_id else ""
     rows = sb_clients.sb_get_as_service(
-        f"/push_subscriptions?user_id=eq.{user_id}&select=endpoint,subscription&limit=10"
+        f"/push_subscriptions?user_id=eq.{user_id}{one}&select=endpoint,subscription&limit=10"
     ) or []
     return sum(1 for r in rows if _send_one(r, _payload(title, body, nav, tag, actions, data)))
+
+
+def active_seats(business_id: str, users: Iterable[str]) -> Optional[Dict[str, Dict[str, Any]]]:
+    """user id → that person's active seat on the business, for the ids
+    given. None when the read failed."""
+    from urllib.parse import quote
+    ids = ",".join(quote(u, safe="") for u in sorted(set(users)) if u)
+    if not ids:
+        return {}
+    rows = sb_clients.sb_get_as_service(
+        f"/business_users?business_id=eq.{quote(str(business_id), safe='')}&user_id=in.({ids})"
+        "&status=eq.active&select=user_id,role,invited_email&limit=50"
+    )
+    if not isinstance(rows, list):
+        return None
+    return {str(r["user_id"]): r for r in rows if r.get("user_id")}
+
+
+def _who_hears(business_id: str, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """The devices a business push may reach: the owner's and its active
+    seats'. Nothing clears push_subscriptions when a seat is removed, so a
+    removed login's phone went on hearing every new email and booking.
+    On a church with Church Areas on, a login that works only some areas
+    hears its own week instead (church_morning). A read that fails sends
+    as before; a device with no person on it (none are written that way)
+    is left as it was."""
+    users = {str(r["user_id"]) for r in rows if r.get("user_id")}
+    if not users:
+        return rows
+    from urllib.parse import quote
+    biz = sb_clients.sb_get_as_service(
+        f"/businesses?id=eq.{quote(str(business_id), safe='')}&select=id,type,owner_id,settings&limit=1")
+    seats = active_seats(business_id, users)
+    if not isinstance(biz, list) or not biz or seats is None:
+        return rows
+    owner = str(biz[0].get("owner_id") or "")
+    try:
+        import church_morning
+        own_week = church_morning.limited(biz[0], seats)
+    except Exception as e:
+        log.warning("church push narrowing for %s failed: %s", business_id, e)
+        own_week = {}
+
+    def hears(r: Dict[str, Any]) -> bool:
+        uid = str(r.get("user_id") or "")
+        if not uid:
+            return True
+        return (uid == owner or uid in seats) and uid not in own_week
+
+    return [r for r in rows if hears(r)]
 
 
 def send_to_business(business_id: str, *, title: str, body: str, nav: str = "home",
@@ -192,8 +247,9 @@ def send_to_business(business_id: str, *, title: str, body: str, nav: str = "hom
     if not push_enabled():
         return 0
     rows = sb_clients.sb_get_as_service(
-        f"/push_subscriptions?business_id=eq.{business_id}&select=endpoint,subscription&limit=20"
+        f"/push_subscriptions?business_id=eq.{business_id}&select=user_id,endpoint,subscription&limit=20"
     ) or []
+    rows = _who_hears(business_id, rows)
     return sum(1 for r in rows if _send_one(r, _payload(title, body, nav, tag)))
 
 
@@ -227,6 +283,14 @@ async def morning_brief_tick() -> None:
                 notif = settings.get("notifications") or {}
                 if notif.get("morning_brief_enabled") is False:
                     continue
+                # A church's office logins that work only some areas hear
+                # their own week (church_morning); send_to_business below
+                # leaves their phones out of the church-wide brief.
+                try:
+                    import church_morning
+                    church_morning.notes(biz_rows[0], today=today)
+                except Exception as e:
+                    log.warning("church morning notes for %s failed: %s", biz_id, e)
 
                 sessions = sb_clients.sb_get_as_service(
                     f"/sessions?business_id=eq.{biz_id}"
