@@ -159,3 +159,15 @@ def test_the_switch_a_church_and_a_seat(client, week, monkeypatch):
     week.t["businesses"][0]["type"] = "salon"
     assert client.get(f"/church/my-week?business_id={BIZ}").status_code == 404
     assert client.get(f"/church/my-week/status?business_id={BIZ}").json() == {"enabled": False}
+
+
+def test_the_owner_seeing_as_a_login_gets_that_logins_week_and_no_one_else_can(client, week):
+    w = client.get(f"/church/my-week?business_id={BIZ}&as_user={MARCUS_SEAT}").json()
+    assert [a["key"] for a in w["areas"]] == ["kids_youth"] and w["me"]["role"] == "manager"
+    client.who.update(role="manager", id=MARCUS_SEAT, email="marcus@example.com")
+    other = "44444444-4444-4444-4444-444444444444"
+    assert client.get(f"/church/my-week?business_id={BIZ}&as_user={other}").status_code == 403
+    assert client.get(f"/church/my-week?business_id={BIZ}&as_user={MARCUS_SEAT}").status_code == 200, "yourself is fine"
+    client.who.update(role="owner", id=OWNER)
+    assert client.get(f"/church/my-week?business_id={BIZ}&as_user=nope").status_code == 400
+    assert client.get(f"/church/my-week?business_id={BIZ}&as_user={other}").status_code == 404

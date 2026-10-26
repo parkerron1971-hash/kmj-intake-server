@@ -20,6 +20,7 @@ empty week. Switched with the map: CHURCH_AREAS (off | owner | on).
 from __future__ import annotations
 
 import logging
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
@@ -258,14 +259,30 @@ def my_week_status(business_id: str, session: UserSession = Depends(sb_clients.a
 
 
 @router.get("/my-week")
-def my_week(business_id: str, session: UserSession = Depends(sb_clients.authed_request),
+def my_week(business_id: str, as_user: Optional[str] = None, session: UserSession = Depends(sb_clients.authed_request),
             biz: Dict[str, Any] = Depends(business_access("viewer"))):
+    """The caller's week, or, for the owner or an admin seeing as another
+    office login (See as), that login's week: what it's shown, what's
+    handed to it. Admins already see the whole church."""
     church_areas._gate(session.user)
     import church_follow_up as cfu
     if not cfu.is_church(biz):
         raise HTTPException(404, "My week is for churches")
     import business_users_router
-    role = business_users_router.role_of(str(biz["id"]), str(session.user.id))
+    bid = str(biz["id"])
+    role = business_users_router.role_of(bid, str(session.user.id))
     if not role:
         raise HTTPException(404, "Not Found")
+    if as_user and as_user != str(session.user.id):
+        if role not in FINANCE_ROLES:
+            raise HTTPException(403, "Only the owner or an admin can see as someone else")
+        try:
+            uid = str(uuid.UUID(as_user))
+        except (ValueError, TypeError):
+            raise HTTPException(400, "That login isn't valid")
+        seat = _need(f"/business_users?business_id=eq.{_q(bid)}&user_id=eq.{_q(uid)}&status=eq.active"
+                     "&select=role,invited_email&limit=1")
+        if not seat:
+            raise HTTPException(404, "That login isn't on this church")
+        return build(biz, uid, seat[0].get("invited_email") or "", seat[0].get("role") or "viewer")
     return build(biz, str(session.user.id), session.user.email or "", role)
