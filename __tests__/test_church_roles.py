@@ -42,6 +42,10 @@ def _cmp(row, col, op, val):
         return v is None if val == "null" else str(v).lower() == val
     if op == "in":
         return str(v) in set(_split(val.strip("()")))
+    if op == "ilike":
+        # Exact, case-insensitive: the escaped email lookups (no wildcards).
+        want = val.replace("\\_", "_").replace("\\%", "%").replace("\\\\", "\\")
+        return v is not None and str(v).lower() == want.lower()
     if op == "eq":
         return str(v).lower() == val.lower() if isinstance(v, bool) else str(v) == val
     if op == "neq":
