@@ -37,6 +37,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import time
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional, Tuple
@@ -211,6 +212,186 @@ def suggested_parts(title: str) -> List[str]:
     return ["planner"]
 
 
+# ─── Each office login's areas ────────────────────────────────────────
+#
+# Kevin, 2026-10-26 ("Who sees what", canvas 99aFvCSRXU1x9pmqUcncoP):
+# "when an admin or Pastor key seated people access the system this could
+# become overwhelming." An office login sees the areas it works in: the
+# church's own pick (business_users.areas), else Chief's guess from the
+# roles and teams its person already holds, else everything, as today.
+# The owner and admins keep everything. This shapes what the app SHOWS;
+# the walls are steps 2 and 3 of Church Areas and Keys.
+
+KEEPS_ALL = ("owner", "admin")
+# Money stays walled to the owner, admins and the accountant
+# (ministry_finance_access) whatever a login's areas say.
+FINANCE_ONLY = "giving_money"
+
+
+def _guesses(email: str, user_id: str, *, people: Dict[str, Dict[str, Any]], holders: List[Dict[str, Any]],
+             by_key: Dict[str, Dict[str, Any]], role_place: Dict[str, Dict[str, Any]],
+             places: Dict[Tuple[str, str], str], team: List[Dict[str, Any]], kids: List[Dict[str, Any]],
+             leads: List[Dict[str, Any]], group_names: Dict[str, str], officer_users: List[Dict[str, Any]],
+             officer_members: List[Dict[str, Any]]) -> Dict[str, str]:
+    """Area → what placed it, for one login: the roles and teams its person
+    holds, matched by the login's email. Only what they've said yes to."""
+    email = (email or "").strip().lower()
+    mine = {cid for cid, p in people.items() if email and p.get("email") == email}
+    out: Dict[str, str] = {}
+
+    def add(area: Optional[str], why: str) -> None:
+        if area in AREAS and area not in out:
+            out[area] = why
+
+    for h in holders:
+        d = by_key.get(h.get("role") or "")
+        if not d or str(h.get("contact_id")) not in mine or h.get("status") != "active":
+            continue
+        scope = _plain(h.get("scope"))
+        where = role_place.get(d["key"]) or place_role(d, places)
+        if scope and d.get("job") == "team":
+            tp = place_team(scope, places)
+            where = tp if tp["area"] else where
+        add(where["area"], d["title"] + (f" · {scope}" if scope else ""))
+    if email and any((t.get("email") or "").strip().lower() == email and t.get("status") == "active" for t in team):
+        add("worship_media", "ChurchSavvy's team")
+    if any(str(k.get("contact_id")) in mine for k in kids):
+        add("kids_youth", "Kids check-in")
+    for x in leads:
+        if str(x.get("contact_id")) in mine:
+            add("groups_classes", f"Leads {group_names.get(str(x.get('group_id'))) or 'a group'}")
+    if any(str(o.get("user_id")) == str(user_id) for o in officer_users) or \
+            any(str(o.get("contact_id")) in mine for o in officer_members):
+        add("messages_safety", "Safety officer")
+    return out
+
+
+def login_view(role: Optional[str], picked: Any, guesses: Dict[str, str]) -> Dict[str, Any]:
+    """What one office login is shown: {areas, by, why}. `areas` None means
+    the whole church: the owner and admins always, and a login nothing
+    places yet (as every login was before)."""
+    if role in KEEPS_ALL:
+        return {"areas": None, "by": "all", "why": "Sees the whole church"}
+    if isinstance(picked, list):
+        areas = [a for a in AREA_ORDER if a in picked]
+        if areas:
+            return {"areas": areas, "by": "picked", "why": "Picked by your church"}
+    if guesses:
+        whys = list(dict.fromkeys(guesses[a] for a in AREA_ORDER if a in guesses))
+        return {"areas": [a for a in AREA_ORDER if a in guesses], "by": "guess",
+                "why": "Chief's guess, from " + ", ".join(whys)}
+    return {"areas": None, "by": "none", "why": "No role or team places them yet"}
+
+
+def _escape_ilike(s: str) -> str:
+    return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def my_areas(business_id: str, user_id: str, role: Optional[str]) -> Optional[Dict[str, Any]]:
+    """One login's view for /team/my-role, or None when it doesn't apply:
+    not a church, or the switch isn't on. A read that fails gives None too,
+    so the app shows what it showed before rather than an empty menu."""
+    if mode() != "on" or not role:
+        return None
+    import church_follow_up as cfu
+    got = sb_clients.sb_get_as_service(f"/businesses?id=eq.{_q(business_id)}&select=id,type,owner_id,settings&limit=1")
+    if not isinstance(got, list) or not got or not cfu.is_church(got[0]):
+        return None
+    key = (str(business_id), str(user_id), role)
+    hit = _MY_CACHE.get(key)
+    if hit and time.monotonic() - hit[0] < MY_CACHE_SECONDS:
+        return hit[1]
+    view = view_for(business_id, user_id, role)
+    if view is not None:
+        _MY_CACHE[key] = (time.monotonic(), view)
+    return view
+
+
+# my-role runs on every app load: a login's view is kept a minute per
+# replica (a guess reads about a dozen tables), and a pick saved here
+# clears it at once.
+MY_CACHE_SECONDS = 60
+_MY_CACHE: Dict[Tuple[str, str, str], Tuple[float, Dict[str, Any]]] = {}
+
+
+def _forget(business_id: str, user_id: str) -> None:
+    for k in [k for k in _MY_CACHE if k[0] == str(business_id) and k[1] == str(user_id)]:
+        _MY_CACHE.pop(k, None)
+
+
+def _picks(biz: str, user_id: Optional[str] = None) -> Dict[str, Any]:
+    """user id → the church's pick for that login. Read on its own and
+    allowed to fail: a pick only narrows, so a read that failed (or the
+    column before its migration) shows Chief's guess instead."""
+    one = f"&user_id=eq.{_q(user_id)}" if user_id else ""
+    rows = sb_clients.sb_get_as_service(f"/business_users?business_id=eq.{_q(biz)}{one}&status=eq.active"
+                                        "&select=user_id,areas&limit=200")
+    if not isinstance(rows, list):
+        return {}
+    return {str(r.get("user_id")): r.get("areas") for r in rows}
+
+
+def view_for(business_id: str, user_id: str, role: Optional[str]) -> Optional[Dict[str, Any]]:
+    """What one login on a church is shown, whatever the switch says (the
+    caller decides that). None when a read failed."""
+    biz = _q(business_id)
+    if role in KEEPS_ALL:
+        return login_view(role, None, {})
+    try:
+        seat = _need(f"/business_users?business_id=eq.{biz}&user_id=eq.{_q(user_id)}&status=eq.active"
+                     "&select=invited_email&limit=1")
+        if not seat:
+            return None
+        picked = _picks(business_id, user_id).get(str(user_id))
+        if isinstance(picked, list) and any(a in AREAS for a in picked):
+            return login_view(role, picked, {})
+        email = (seat[0].get("invited_email") or "").strip().lower()
+        contacts: List[Dict[str, Any]] = []
+        if email and "@" in email:
+            contacts = _need(f"/contacts?business_id=eq.{biz}&email=ilike.{_q(_escape_ilike(email))}"
+                             "&select=id,name,email&limit=10")
+        people = {str(c["id"]): {"name": _plain(c.get("name")), "email": (c.get("email") or "").strip().lower()}
+                  for c in contacts}
+        ids = ",".join(_q(i) for i in people)
+        holders: List[Dict[str, Any]] = []
+        kids: List[Dict[str, Any]] = []
+        leads: List[Dict[str, Any]] = []
+        officer_members: List[Dict[str, Any]] = []
+        defs: List[Dict[str, Any]] = []
+        groups: List[Dict[str, Any]] = []
+        places: Dict[Tuple[str, str], str] = {}
+        if ids:
+            holders = _need(f"/church_leader_roles?business_id=eq.{biz}&contact_id=in.({ids})&status=eq.active"
+                            "&select=contact_id,role,scope,status&limit=100")
+            if holders:
+                keys = ",".join(_q(k) for k in sorted({h.get("role") or "" for h in holders}) if k)
+                defs = _need(f"/church_role_defs?business_id=eq.{biz}&key=in.({keys})"
+                             "&select=key,title,job,oversees_teams&limit=100") if keys else []
+                places = _places(business_id)
+            kids = _need(f"/space_leaders?business_id=eq.{biz}&contact_id=in.({ids})&select=contact_id&limit=50")
+            leads = _need(f"/group_members?business_id=eq.{biz}&contact_id=in.({ids})&role=eq.leader"
+                          "&select=group_id,contact_id&limit=50")
+            if leads:
+                gids = ",".join(_q(x.get("group_id")) for x in leads)
+                groups = _need(f"/groups?business_id=eq.{biz}&id=in.({gids})&select=id,name&limit=50")
+            officer_members = _need(f"/msg_member_officers?business_id=eq.{biz}&contact_id=in.({ids})"
+                                    "&select=contact_id&limit=10")
+        team = _need(f"/worship_team?business_id=eq.{biz}&email=ilike.{_q(_escape_ilike(email))}"
+                     "&select=email,status&limit=5") if email else []
+        officer_users = _need(f"/msg_safety_officers?business_id=eq.{biz}&user_id=eq.{_q(user_id)}"
+                              "&select=user_id&limit=1")
+    except HTTPException:
+        print(f"[church_areas] my_areas read failed for {business_id}; showing everything")
+        return None
+    by_key = {d["key"]: d for d in defs}
+    guesses = _guesses(email, user_id, people=people, holders=holders, by_key=by_key,
+                       role_place={k: place_role(d, places) for k, d in by_key.items()}, places=places,
+                       team=team, kids=kids, leads=leads,
+                       group_names={str(g["id"]): _plain(g.get("name")) for g in groups},
+                       officer_users=officer_users, officer_members=officer_members)
+    return login_view(role, picked, guesses)
+
+
 # ─── The switch ───────────────────────────────────────────────────────
 
 def mode() -> str:
@@ -294,6 +475,7 @@ def build(business: Dict[str, Any]) -> Dict[str, Any]:
     team = _need(f"/worship_team?business_id=eq.{_q(biz)}&status=in.(invited,active)"
                  "&select=name,email,roles,status&order=invited_at.asc&limit=100")
     seats = _need(f"/business_users?business_id=eq.{_q(biz)}&status=eq.active&select=invited_email,role,user_id&limit=200")
+    picks = _picks(biz)
     accountants = _need(f"/business_collaborators?business_id=eq.{_q(biz)}&status=eq.active&role=eq.accountant"
                         "&select=invited_email&limit=50")
     kids = _need(f"/space_leaders?business_id=eq.{_q(biz)}&select=contact_id,space,background_check_on&limit=500")
@@ -427,7 +609,23 @@ def build(business: Dict[str, Any]) -> Dict[str, Any]:
     unplaced = ([{"kind": "role", "key": d["key"], "name": d["title"]} for d in defs if not role_place[d["key"]]["area"]]
                 + [{"kind": "team", "key": team_key(n), "name": n} for n in team_names if not team_place[team_key(n)]["area"]])
 
+    # Each office login: what it's shown, and why (Who sees what, 2026-10-26).
+    group_names = {str(g["id"]): _plain(g.get("name")) for g in groups}
+    logins = []
+    for s in seats:
+        email = (s.get("invited_email") or "").strip().lower()
+        g = _guesses(email, str(s.get("user_id")), people=people, holders=holders, by_key=by_key,
+                     role_place=role_place, places=places, team=team, kids=kids, leads=leads,
+                     group_names=group_names, officer_users=officer_users, officer_members=officer_members)
+        logins.append({"user_id": str(s.get("user_id") or ""), "email": s.get("invited_email") or "",
+                       "name": next((p["name"] for p in people.values() if email and p["email"] == email), ""),
+                       "role": s.get("role") or "", "guess": [a for a in AREA_ORDER if a in g],
+                       **login_view(s.get("role"), picks.get(str(s.get("user_id"))), g)})
+    rank = {"admin": 0, "manager": 1, "member": 2, "viewer": 3}
+    logins.sort(key=lambda x: (rank.get(x["role"], 9), (x["name"] or x["email"]).lower()))
+
     return {
+        "logins": logins,
         "areas": [{"key": a, **AREAS[a], "people": area_people[a], "reach": reach[a], "gaps": gaps[a],
                    **({"suggest": suggest} if a == "worship_media" else {})} for a in AREA_ORDER],
         "roles": [{"key": d["key"], "title": d["title"], "job": d["job"], **role_place[d["key"]]} for d in defs],
@@ -505,3 +703,40 @@ def place(body: Dict[str, Any], session: UserSession = Depends(sb_clients.authed
     if not isinstance(saved, list) or not saved:
         raise HTTPException(503, "That didn't save. Try again.")
     return {"ok": True, "kind": kind, "key": key, "area": area}
+
+
+@router.put("/areas/login")
+def place_login(body: Dict[str, Any], session: UserSession = Depends(sb_clients.authed_request)):
+    """Give an office login its areas, or send it back to Chief's guess
+    (areas null). The owner and admins see everything and aren't placed;
+    Giving opens only to admins and the accountant, so it isn't offered."""
+    user = session.user
+    _gate(user)
+    body = body or {}
+    try:
+        biz = str(uuid.UUID(str(body.get("business_id") or "")))
+        uid = str(uuid.UUID(str(body.get("user_id") or "")))
+    except (ValueError, TypeError):
+        raise HTTPException(400, "That login isn't valid")
+    assert_access(biz, user, "admin")
+    seat = sb_clients.sb_get_as_service(f"/business_users?business_id=eq.{_q(biz)}&user_id=eq.{_q(uid)}"
+                                        "&status=eq.active&select=role&limit=1")
+    if not isinstance(seat, list):
+        raise HTTPException(503, "That didn't save. Try again.")
+    if not seat:
+        raise HTTPException(404, "That login isn't on this church")
+    if seat[0].get("role") in KEEPS_ALL:
+        raise HTTPException(400, "Admins see the whole church")
+    areas = body.get("areas")
+    if areas is not None:
+        if not isinstance(areas, list) or not areas or any(a not in AREAS for a in areas):
+            raise HTTPException(400, "Pick at least one of the areas")
+        if FINANCE_ONLY in areas:
+            raise HTTPException(400, "Giving opens only for admins and the accountant")
+        areas = [a for a in AREA_ORDER if a in areas]
+    saved = sb_clients.sb_patch_as_service(
+        f"/business_users?business_id=eq.{_q(biz)}&user_id=eq.{_q(uid)}&status=eq.active", {"areas": areas})
+    if not isinstance(saved, list) or not saved:
+        raise HTTPException(503, "That didn't save. Try again.")
+    _forget(biz, uid)
+    return {"ok": True, "user_id": uid, "areas": areas}

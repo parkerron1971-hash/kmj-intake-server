@@ -105,7 +105,16 @@ def my_role(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[str, Any
     if not r:
         from business_collaborators_router import is_active_accountant
         accountant = is_active_accountant(biz, str(user.id))
-    return {"ok": True, "role": r, "accountant": accountant}
+    out: Dict[str, Any] = {"ok": True, "role": r, "accountant": accountant}
+    # A church's office login sees the areas it works in (church_areas,
+    # "Who sees what"); null is the whole church. Absent when it doesn't apply.
+    if r:
+        import church_areas
+        view = church_areas.my_areas(biz, str(user.id), r)
+        if view is not None:
+            out["areas"] = view["areas"]
+            out["areas_by"] = view["by"]
+    return out
 
 
 class InviteBody(BaseModel):
