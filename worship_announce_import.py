@@ -50,9 +50,19 @@ def _now() -> str:
 
 
 def _short(text: str, limit: int) -> str:
-    """A field's words, on one line, kept whole up to `limit`."""
+    """A field's words, on one line, kept whole up to `limit`; longer, left out
+    (a description too long for a slide is the office's to write)."""
     words = " ".join(str(text or "").split())
     return words if len(words) <= limit else ""
+
+
+def _cut(text: str, limit: int) -> str:
+    """A field's words, on one line, cut at a word to fit `limit` (a long title still comes in)."""
+    words = " ".join(str(text or "").split())
+    if len(words) <= limit:
+        return words
+    head = words[:limit - 1].rsplit(" ", 1)[0] if " " in words[:limit - 1] else words[:limit - 1]
+    return head.rstrip(" ,;:-") + "…"
 
 
 def _clock(t: datetime) -> str:
@@ -82,7 +92,7 @@ def events_from_ics(ics: bytes, zone: Any, today: date, window_days: int = WINDO
         try:
             if str(ev.get("STATUS") or "").upper() == "CANCELLED":
                 continue
-            title = _short(str(ev.get("SUMMARY") or ""), 80)
+            title = _cut(str(ev.get("SUMMARY") or ""), 80)
             raw = ev.decoded("DTSTART")
         except Exception:
             continue
@@ -101,7 +111,7 @@ def events_from_ics(ics: bytes, zone: Any, today: date, window_days: int = WINDO
             continue
         # The key names the date too: next week's Bible study is its own announcement.
         seen[series] = {"key": f"{series}:{day.isoformat()}", "source": "calendar", "title": title, "event_on": day.isoformat(), "when": when,
-                        "where": _short(str(ev.get("LOCATION") or ""), 80), "body": _short(str(ev.get("DESCRIPTION") or ""), 140)}
+                        "where": _cut(str(ev.get("LOCATION") or ""), 80), "body": _short(str(ev.get("DESCRIPTION") or ""), 140)}
     return sorted(seen.values(), key=lambda e: (e["event_on"], e["title"]))[:MAX_ITEMS]
 
 
@@ -127,8 +137,8 @@ def solutionist_events(biz: str, today: date) -> Optional[List[Dict[str, Any]]]:
     for o in er.build_occasions(mods, by_mod, today=today):
         if (date.fromisoformat(o["date"]) - today).days > WINDOW_DAYS:
             continue
-        out.append({"key": f"ev:{o['entry_id']}", "source": "events", "title": _short(o["title"], 80) or o["title"][:80],
-                    "event_on": o["date"], "when": "", "where": _short(o.get("location") or "", 80), "body": ""})
+        out.append({"key": f"ev:{o['entry_id']}", "source": "events", "title": _cut(o["title"], 80),
+                    "event_on": o["date"], "when": "", "where": _cut(o.get("location") or "", 80), "body": ""})
     return out[:MAX_ITEMS]
 
 
@@ -136,7 +146,8 @@ def solutionist_events(biz: str, today: date) -> Optional[List[Dict[str, Any]]]:
 
 
 def _link(biz: str) -> Optional[Dict[str, Any]]:
-    rows = sb_clients.sb_get_as_service(f"/worship_calendar?business_id=eq.{_q(biz)}&select={CALENDAR_FIELDS}&limit=1")
+    # redact: a failure's log line never carries the row (the link is a secret).
+    rows = sb_clients.sb_get_as_service(f"/worship_calendar?business_id=eq.{_q(biz)}&select={CALENDAR_FIELDS}&limit=1", redact=True)
     if rows is None:
         raise HTTPException(503, "Your calendar link couldn't be read just now. Try again.")
     return rows[0] if rows else None
@@ -201,7 +212,9 @@ def set_calendar(body: Dict[str, Any], user: AuthedUser = Depends(require_user))
         raise HTTPException(400, str(e))
     rows = sb_clients.sb_post_as_service("/worship_calendar?on_conflict=business_id&select=business_id",
                                          {"business_id": biz, "url": url, "provider": oc.detect_provider(url)[:20], "updated_at": _now()},
-                                         prefer="resolution=merge-duplicates,return=representation")
+                                         prefer="resolution=merge-duplicates,return=representation",
+                                         # PostgREST's error body quotes the failing row: never into the log.
+                                         redact=True)
     if not isinstance(rows, list) or not rows:
         raise HTTPException(503, "The link wasn't kept. Try again.")
     return {"ok": True, "shown_as": oc.mask_url(url), "found": len(found)}
@@ -228,6 +241,9 @@ def bring_in(body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
         raise HTTPException(400, "Pick the events to bring in")
     got = _items(biz)
     today = date.fromisoformat(got["today"])
+    found = {i["key"] for i in got["items"]}
+    if got["calendar"]["error"] and any(k.startswith("ics:") and k not in found for k in keys):
+        raise HTTPException(502, f"Your calendar didn't open just now: {got['calendar']['error']}")
     picked = [i for i in got["items"] if i["key"] in set(keys) and not i["already"]]
     have = _read(f"/worship_announcements?business_id=eq.{_q(biz)}&archived_at=is.null&select=id&limit={wa.MAX_PER_CHURCH}",
                  "The announcements")
@@ -243,8 +259,21 @@ def bring_in(body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
                      "shows": {"room": True, "lobby": True, "online": False, "phones": False},
                      "status": "on", "source": "calendar", "source_ref": i["key"], "sent_by": {}, "sort": 0,
                      "created_at": now, "updated_at": now})
-    if rows:
-        saved = sb_clients.sb_post_as_service("/worship_announcements?select=id", rows, prefer="return=representation")
-        if not isinstance(saved, list) or len(saved) != len(rows):
-            raise HTTPException(503, "They weren't brought in. Try again.")
-    return {"ok": True, "brought": len(rows), "skipped": len(keys) - len(rows)}
+    # One at a time: the database keeps an event to once a board
+    # (worship_announcements_calendar_once), so a press that loses a race to
+    # another fails that one row, and it counts as already there.
+    brought, failed = 0, []
+    for row in rows:
+        saved = sb_clients.sb_post_as_service("/worship_announcements?select=id", row, prefer="return=representation")
+        if isinstance(saved, list) and saved:
+            brought += 1
+        else:
+            failed.append(row["source_ref"])
+    if failed:
+        there = {r.get("source_ref") for r in _read(
+            f"/worship_announcements?business_id=eq.{_q(biz)}&source=eq.calendar&archived_at=is.null&select=source_ref"
+            f"&limit={wa.MAX_PER_CHURCH}", "The announcements")}
+        if any(k not in there for k in failed):
+            raise HTTPException(503, f"{brought} came in, and the rest didn't. Try those again." if brought
+                                else "They weren't brought in. Try again.")
+    return {"ok": True, "brought": brought, "skipped": len(keys) - brought}

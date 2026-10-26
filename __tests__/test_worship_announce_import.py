@@ -179,6 +179,60 @@ def test_the_churchs_own_events(church, monkeypatch):
     assert r.json()["brought"] == 1 and db.t["worship_announcements"][-1]["source_ref"] == "ev:e-1"
 
 
+def test_review_fixes(church, monkeypatch):
+    """PR review: the link's write and read never log the row; a long title is cut, not
+    dropped; once is the database's too (a lost race counts as already there); a link that
+    won't open says why on Bring in."""
+    db, as_, fetched = church
+    import sb_clients
+    calls = []
+    real_post, real_get = sb_clients.sb_post_as_service, sb_clients.sb_get_as_service
+
+    def post(path, body, prefer=None, **kw):
+        calls.append(("POST", path.split("?")[0], kw.get("redact")))
+        return real_post(path, body, prefer=prefer, **kw)
+
+    def get(path, **kw):
+        calls.append(("GET", path.split("?")[0], kw.get("redact")))
+        return real_get(path, **kw)
+
+    monkeypatch.setattr(sb_clients, "sb_post_as_service", post)
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", get)
+    long_title = ("The Annual Love City Community Thanksgiving Dinner and Family Celebration Night "
+                  "for Everyone in the Neighborhood")
+    fetched["ics"] = ICS.replace(b"SUMMARY:Thanksgiving service", b"SUMMARY:" + long_title.encode())
+    as_("owner").put("/worship/announcements/import/calendar", json={"business_id": BIZ, "url": LINK})
+    assert ("POST", "/worship_calendar", True) in calls and all(r for m, p, r in calls if p == "/worship_calendar")
+    page = as_("owner").get(f"/worship/announcements/import?business_id={BIZ}").json()
+    long = [i for i in page["items"] if i["title"].startswith("The Annual")][0]
+    assert len(long["title"]) <= 80 and long["title"].endswith("…") and " " not in long["title"][-2:]
+    # Someone else brought Community Day in a moment ago: the database refuses the second, and it counts as there.
+    cd = [i for i in page["items"] if i["title"] == "Community Day"][0]
+    db.t["worship_announcements"].append({"id": "x1", "business_id": BIZ, "source": "calendar", "source_ref": cd["key"],
+                                          "archived_at": None, "title": "Community Day"})
+
+    def race_post(path, body, prefer=None, **kw):
+        if path.startswith("/worship_announcements") and isinstance(body, dict) and body.get("source_ref") == cd["key"]:
+            return None
+        return real_post(path, body, prefer=prefer, **kw)
+
+    monkeypatch.setattr(sb_clients, "sb_post_as_service", race_post)
+    import worship_announce_import as wimp
+    monkeypatch.setattr(wimp, "_items", lambda biz: {**page, "items": [{**i, "already": False} for i in page["items"]]})
+    r = as_("owner").post("/worship/announcements/import", json={"business_id": BIZ, "keys": [cd["key"], long["key"]]})
+    assert r.status_code == 200 and r.json() == {"ok": True, "brought": 1, "skipped": 1}
+    monkeypatch.undo()
+
+
+def test_bring_in_says_why_when_the_link_wont_open(church):
+    db, as_, fetched = church
+    as_("owner").put("/worship/announcements/import/calendar", json={"business_id": BIZ, "url": LINK})
+    key = as_("owner").get(f"/worship/announcements/import?business_id={BIZ}").json()["items"][0]["key"]
+    fetched["ics"] = oc.FeedError(oc.MSG_UNREADABLE)
+    r = as_("owner").post("/worship/announcements/import", json={"business_id": BIZ, "keys": [key]})
+    assert r.status_code == 502 and "didn't open just now" in r.json()["detail"]
+
+
 def test_mounted_before_the_public_site_catch_all():
     src = (pathlib.Path(__file__).resolve().parent.parent / "kmj_intake_automation.py").read_text(encoding="utf-8")
     assert src.index("include_router(worship_announce_import_router)") < src.index("include_router(public_site_router)")
