@@ -71,10 +71,8 @@ def client(week, monkeypatch):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
     import business_access
-    import business_users_router
     who = {"role": "owner", "id": OWNER, "email": "kmjcreativesolution@gmail.com"}
     monkeypatch.setattr(business_access, "_resolve_role", lambda b, u: who["role"])
-    monkeypatch.setattr(business_users_router, "role_of", lambda b, u: who["role"])
     monkeypatch.setenv("CHURCH_AREAS", "on")
     app = FastAPI()
     app.include_router(mw.router)
@@ -142,11 +140,17 @@ def test_giving_shows_only_to_the_owner_and_admins(client, week):
     assert [a["key"] for a in _get(client)["areas"]] == ["office"]
 
 
-def test_a_failed_read_is_a_503_never_an_empty_week(client, week, monkeypatch):
+@pytest.mark.parametrize("table", ["church_follow_ups", "contacts", "ministry_care_requests", "church_role_defs",
+                                   "business_users", "church_leader_roles", "worship_team", "space_leaders"])
+def test_a_failed_read_is_a_503_never_an_empty_week(client, week, monkeypatch, table):
+    client.who.update(role="manager", id=MARCUS_SEAT, email="marcus@example.com")
     real = week.get
     monkeypatch.setattr(sb_clients, "sb_get_as_service",
-                        lambda path, **kw: None if path.lstrip("/").startswith("church_follow_ups") else real(path, **kw))
-    assert client.get(f"/church/my-week?business_id={BIZ}").status_code == 503
+                        lambda path, **kw: None if path.lstrip("/").startswith(table) else real(path, **kw))
+    # A seat: every read on its path runs (its own seat, its guess, its follow-ups).
+    if table in ("church_follow_ups", "contacts", "church_role_defs"):
+        client.who.update(email="robert@example.com")      # someone with follow-ups and roles to name
+    assert client.get(f"/church/my-week?business_id={BIZ}").status_code == 503, table
 
 
 def test_the_switch_a_church_and_a_seat(client, week, monkeypatch):

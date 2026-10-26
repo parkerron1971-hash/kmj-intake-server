@@ -196,6 +196,18 @@ def build(business: Dict[str, Any], user_id: str, email: str, role: str) -> Dict
     }
 
 
+def _role(business: Dict[str, Any], user_id: str) -> str:
+    """The caller's standing: the owner, or their seat's role. A read that
+    fails is a 503, never "no seat" (business_access has already let them in)."""
+    if str(business.get("owner_id")) == str(user_id):
+        return "owner"
+    rows = _need(f"/business_users?business_id=eq.{_q(business['id'])}&user_id=eq.{_q(user_id)}"
+                 "&status=eq.active&select=role&limit=1")
+    if not rows or not rows[0].get("role"):
+        raise HTTPException(404, "Not Found")
+    return str(rows[0]["role"])
+
+
 def _names(biz: str, ids: List[Any]) -> Dict[str, str]:
     ids = sorted({str(i) for i in ids if i})
     if not ids:
@@ -219,7 +231,9 @@ def _handed(biz: str, now: datetime, whole: bool, mine: set) -> List[Dict[str, A
         rows = [r for r in rows if r.get("card_key") == "checkin:first"]
     names = _names(biz, [r.get("contact_id") for r in rows] + [r.get("leader_contact_id") for r in rows])
     import church_roles as cr
-    defs = cr.defs(biz) or []
+    defs = cr.defs(biz)
+    if defs is None:
+        raise HTTPException(503, "Your week couldn't be read just now. Try again.")
     out = []
     for r in rows[:SHOWN]:
         who = names.get(str(r.get("contact_id"))) or "Someone"
@@ -268,11 +282,8 @@ def my_week(business_id: str, as_user: Optional[str] = None, session: UserSessio
     import church_follow_up as cfu
     if not cfu.is_church(biz):
         raise HTTPException(404, "My week is for churches")
-    import business_users_router
     bid = str(biz["id"])
-    role = business_users_router.role_of(bid, str(session.user.id))
-    if not role:
-        raise HTTPException(404, "Not Found")
+    role = _role(biz, str(session.user.id))
     if as_user and as_user != str(session.user.id):
         if role not in FINANCE_ROLES:
             raise HTTPException(403, "Only the owner or an admin can see as someone else")
