@@ -310,7 +310,9 @@ def _subs_panel(c: Dict[str, Any], cands: List[Dict[str, Any]], leader: Optional
 
 
 def render_page(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], m: Dict[str, Any],
-                sub_for: Optional[Dict[str, Any]] = None) -> str:
+                sub_for: Optional[Dict[str, Any]] = None, door: str = "") -> str:
+    """`door`: ChurchSavvy's, for someone on its Sunday team (the Serve tab
+    opens here for someone whose only part is serving)."""
     import member_app_ui as ui
     from member_portal import _shell
     teams = "".join(
@@ -346,6 +348,7 @@ def render_page(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any],
     body = f"""<style>{SERVING_CSS}</style><a class="mb-back" href="/my/groups">Connect</a>
 <div class="sv-lt h-teal"><p class="sv-eb">{_e(me.get("name") or "")}</p><h1 class="sv-h">My <em>serving</em></h1></div>
 {f'<div class="sv-teams h-teal">{teams}</div>' if teams else ''}
+{f'<style>{_door_css()}</style><div class="sv-door">{door}</div>' if door else ''}
 {_flash(request)}
 <section class="sv-sec" style="margin-top:20px" aria-label="This year"><div class="sv-stats">
 <div class="sv-stat"><b>{m["this_year"]}</b><small>Sundays this year</small></div>
@@ -359,6 +362,12 @@ def render_page(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any],
 <p class="sv-lede">Whoever schedules your team sees this when they fill a month. It's a wish, not a promise.</p></section>
 {_hear(m.get("hear"))}"""
     return _shell(biz, site, "My serving", body, tab=_tab(), who=me)
+
+
+def _door_css() -> str:
+    """A door is drawn as the Safety room's is (member_portal_safety)."""
+    import member_portal_safety
+    return member_portal_safety.SAFETY_CSS + ".sv-door{margin-top:16px;}.sv-door .sf-door{margin:0;}"
 
 
 def _hear(h: Optional[Dict[str, Any]]) -> str:
