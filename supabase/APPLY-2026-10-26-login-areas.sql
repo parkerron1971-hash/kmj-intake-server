@@ -11,8 +11,9 @@
 -- router still checks its own role. The walls are steps 2 and 3 of
 -- Church Areas and Keys.
 --
--- Additive and safe to run twice. Best applied before the code that reads it
--- deploys (church_areas.build reads it for the map).
+-- Additive and safe to run twice. The code reads it on its own and treats
+-- a failed read as no pick, so this can go in before or after it deploys;
+-- picking a login's areas answers "didn't save" until it's applied.
 
 alter table public.business_users
   add column if not exists areas text[];
