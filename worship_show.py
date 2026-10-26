@@ -787,3 +787,82 @@ def carry_log(prev: Optional[Dict[str, Any]], state: Dict[str, Any], at: str) ->
     else:
         state.pop("log", None)
     return state
+
+
+# ─── the lobby TV on its own (round 5, board 26) ─────────────────────
+
+LOBBY_MODES = ("follow", "own")
+# The welcome loop (the service itself while it's on), this week, a countdown to a night, or dark.
+LOBBY_WHAT = ("welcome", "week", "count", "off")
+LOBBY_SHOWS = ("announcements", "countdown", "service", "clock", "verse", "logo")
+MAX_LOBBY_TIMES = 12
+_HHMM = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+
+
+def default_lobby_times() -> List[Dict[str, Any]]:
+    """A first week for a lobby TV: Sunday morning's welcome loop, and this week every day."""
+    return [{"days": [0], "from": "08:00", "to": "13:00", "what": "welcome", "title": "", "count_to": ""},
+            {"days": [0, 1, 2, 3, 4, 5, 6], "from": "09:00", "to": "18:00", "what": "week", "title": "", "count_to": ""}]
+
+
+def _clean_lobby_time(t: Any) -> Dict[str, Any]:
+    if not isinstance(t, dict):
+        raise ValueError("That isn't a time for the lobby")
+    days = t.get("days")
+    # Days of the week as the screens count them: 0 is Sunday.
+    if not isinstance(days, list) or not days or any(type(d) is not int or not 0 <= d <= 6 for d in days):
+        raise ValueError("Pick the days it's on")
+    start, end = t.get("from"), t.get("to")
+    if not (isinstance(start, str) and _HHMM.match(start) and isinstance(end, str) and _HHMM.match(end)):
+        raise ValueError("A time on the lobby TV starts and ends at a time of day")
+    if end <= start:
+        raise ValueError("It ends after it starts, the same day")
+    what = t.get("what") or "week"
+    if what not in LOBBY_WHAT:
+        raise ValueError("The lobby shows the welcome loop, this week, a countdown, or nothing")
+    title = " ".join(str(t.get("title") or "").split())[:60]
+    count_to = t.get("count_to") or ""
+    if what == "count":
+        if not (isinstance(count_to, str) and _HHMM.match(count_to)):
+            raise ValueError("A countdown counts to a time of day")
+        if not title:
+            raise ValueError("Give the night a name, like Bible study")
+    else:
+        count_to = ""
+    return {"days": sorted(set(days)), "from": start, "to": end, "what": what, "title": title, "count_to": count_to}
+
+
+def clean_lobby(raw: Any) -> Dict[str, Any]:
+    """A lobby TV's own week: follow the booth (what every screen does), or run on
+    its own, with when it shows what and what it shows. Anything left out takes the
+    default; a lobby TV that was never set follows the booth."""
+    raw = raw if isinstance(raw, dict) else {}
+    mode = raw.get("mode") or "follow"
+    if mode not in LOBBY_MODES:
+        raise ValueError("A lobby TV follows the booth or runs on its own")
+    times_raw = raw.get("times")
+    if times_raw is None:
+        times = default_lobby_times()
+    else:
+        if not isinstance(times_raw, list) or len(times_raw) > MAX_LOBBY_TIMES:
+            raise ValueError(f"A lobby TV has up to {MAX_LOBBY_TIMES} times")
+        times = [_clean_lobby_time(t) for t in times_raw]
+    shows_raw = raw.get("shows") if isinstance(raw.get("shows"), dict) else {}
+    shows = {k: shows_raw.get(k) is not False for k in LOBBY_SHOWS}
+    return {"mode": mode, "times": times, "shows": shows}
+
+
+def lobby_verse(today: Any) -> Optional[Dict[str, Any]]:
+    """A verse for the day as a slide, KJV, from the member app's list of well-loved
+    verses (the same one a member sees on Home that day)."""
+    from member_portal_bible import VERSES  # the list lives with the member app's verse of the day
+    for i in range(len(VERSES)):
+        refs = bt.find_refs(VERSES[(today.toordinal() + i) % len(VERSES)], "kjv")
+        if not refs:
+            continue
+        ref = refs[0][2]
+        found = bt.verses(ref, "kjv")
+        if found:
+            return {"kind": "verse", "label": ref.label(), "translation": "kjv",
+                    "verses": [{"chapter": ch, "verse": v, "text": ws.plain(t)} for ch, v, t in found]}
+    return None

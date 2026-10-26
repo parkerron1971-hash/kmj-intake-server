@@ -40,7 +40,7 @@ import secrets
 import threading
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import quote
 
@@ -61,7 +61,7 @@ WAIT_SECONDS = 15.0
 PREAMBLE_BYTES = 16384
 _SONG_FIELDS = "id,title,song_key,authors,ccli_number,copyright,public_domain,sections,arrangements,lines_per_slide"
 _SERVICE_LIST = "id,title,starts_at,is_template,notes,updated_at,items"
-_SCREEN_FIELDS = "id,name,role,width,height,fit,led,stage,token,sort,updated_at"
+_SCREEN_FIELDS = "id,name,role,width,height,fit,led,stage,lobby,token,sort,updated_at"
 
 
 # ─── helpers ─────────────────────────────────────────────────────────
@@ -407,12 +407,20 @@ def _clean_screen(body: Dict[str, Any], partial: bool) -> Dict[str, Any]:
         out["sort"] = v
     if "stage" in body:
         out["stage"] = wsh.clean_stage(body.get("stage"))
+    if "lobby" in body:
+        # A lobby TV's own week (round 5, board 26).
+        out["lobby"] = wsh.clean_lobby(body.get("lobby"))
     return out
 
 
 def _screen_out(row: Dict[str, Any], with_link: bool) -> Dict[str, Any]:
     out = {k: row.get(k) for k in ("id", "name", "role", "width", "height", "fit", "led", "sort", "updated_at")}
     out["stage"] = wsh.clean_stage(row.get("stage"))
+    try:
+        out["lobby"] = wsh.clean_lobby(row.get("lobby"))
+    except ValueError:
+        # A saved week that no longer passes (an older shape) follows the booth.
+        out["lobby"] = wsh.clean_lobby({})
     if with_link:
         out["token"] = row.get("token")
     return out
@@ -674,6 +682,33 @@ def _age(iso: str) -> float:
         return (datetime.now(timezone.utc) - datetime.fromisoformat(iso.replace("Z", "+00:00"))).total_seconds()
     except (TypeError, ValueError):
         return float("inf")
+
+
+@router.get("/screen/{token}/lobby")
+def screen_lobby(token: str):
+    """A lobby TV running on its own (round 5, board 26): its week, the announcements
+    marked Lobby for today, a verse for the day (KJV), and the next service, with the
+    church's clock so the TV keeps the church's time whatever its own says."""
+    screen = screen_from_token(token)
+    if screen.get("role") != "lobby":
+        raise HTTPException(403, "Only a lobby screen runs on its own")
+    biz = screen["business_id"]
+    look = _look(biz)
+    from worship_announce_router import board_for, church_today, church_zone  # it imports this module's helpers
+    zone = church_zone(biz)
+    try:
+        board = board_for(biz, None, "lobby")
+    except HTTPException:
+        # A board that can't be read leaves the logo, the verse and the clock.
+        logger.warning("worship lobby: the announcements board couldn't be read for %s", biz)
+        board = []
+    now = datetime.now(timezone.utc)
+    since = (now - timedelta(hours=3)).isoformat()
+    rows = _read(f"/worship_services?business_id=eq.{_q(biz)}&archived_at=is.null&is_template=eq.false"
+                 f"&starts_at=gte.{_q(since)}&select=id,title,starts_at&order=starts_at.asc&limit=1", "The next service")
+    nxt = {"id": rows[0]["id"], "title": rows[0].get("title") or "", "starts_at": rows[0].get("starts_at")} if rows else None
+    return {"lobby": _screen_out(screen, False)["lobby"], "slides": board, "verse": wsh.lobby_verse(church_today(biz)),
+            "next": nxt, "zone": str(zone.key) if hasattr(zone, "key") else "UTC", "look": look, "church": _brand(biz, look)}
 
 
 def _sse(rev: int, state: Dict[str, Any]) -> str:
