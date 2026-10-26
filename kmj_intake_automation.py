@@ -339,6 +339,9 @@ from worship_show_router import router as worship_show_router
 app.include_router(worship_show_router)
 from worship_media_router import router as worship_media_router
 app.include_router(worship_media_router)
+# The announcements board: made once, shown where they belong, gone when over.
+from worship_announce_router import router as worship_announce_router
+app.include_router(worship_announce_router)
 # Who does what in a church's ChurchSavvy: planner, worship leader, booth, admin.
 from worship_team import router as worship_team_router
 app.include_router(worship_team_router)

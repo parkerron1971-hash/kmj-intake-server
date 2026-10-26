@@ -136,6 +136,15 @@ def clean_item(raw: Any) -> Dict[str, Any]:
                           # The pastor's notes for this point: the confidence screen only.
                           "notes": _text(s, "notes", 1000, "A point's notes")})
         out["slides"] = clean
+    elif kind == "announcement" and raw.get("from_board"):
+        # From the announcements board (worship_announce): the spot fills itself
+        # with the nearest few showing on the service's day.
+        out["from_board"] = True
+        out["title"] = _text(raw, "title", 80, "The title") or "This week"
+        count = raw.get("count", 3)
+        if not isinstance(count, int) or isinstance(count, bool) or not 1 <= count <= 8:
+            raise ValueError("Show 1 to 8 announcements")
+        out["count"] = count
     elif kind == "announcement":
         out["title"] = _text(raw, "title", 80, "The announcement's title")
         if not out["title"]:
@@ -235,8 +244,10 @@ def _clean_loop(raw: Dict[str, Any]) -> Dict[str, Any]:
     """A loop's slides (pictures, videos or a few words), how long each stays,
     and what ends it: a press in the booth, or a time on the clock."""
     seconds = _seconds(raw.get("seconds", 7), "Each slide")
+    # Built from the announcements board, a loop needs no slides of its own.
+    from_board = bool(raw.get("from_board"))
     slides = raw.get("slides") or []
-    if not isinstance(slides, list) or not 1 <= len(slides) <= MAX_LOOP_SLIDES:
+    if not isinstance(slides, list) or not (0 if from_board else 1) <= len(slides) <= MAX_LOOP_SLIDES:
         raise ValueError(f"A loop has 1 to {MAX_LOOP_SLIDES} slides")
     clean = []
     for s in slides:
@@ -263,8 +274,13 @@ def _clean_loop(raw: Dict[str, Any]) -> Dict[str, Any]:
             datetime.fromisoformat(at.replace("Z", "+00:00"))
         except ValueError:
             raise ValueError("Pick the time the loop stops")
+    logo_every = raw.get("logo_every", 2 if from_board else 0)
+    if not isinstance(logo_every, int) or isinstance(logo_every, bool) or not 0 <= logo_every <= 4:
+        raise ValueError("The logo comes between every 1 to 4 slides, or not at all")
     return {"seconds": seconds, "slides": clean, "until": until, "until_at": at if until == "time" else "",
-            "shuffle": bool(raw.get("shuffle"))}
+            "shuffle": bool(raw.get("shuffle")), "from_board": from_board, "logo_every": logo_every,
+            # The countdown to the service, small in the corner of every slide.
+            "corner": bool(raw.get("corner"))}
 
 
 def clean_quick(raw: Any) -> List[Dict[str, Any]]:
@@ -432,8 +448,23 @@ def _scripture_slides(item: Dict[str, Any]) -> Dict[str, Any]:
     return {"title": f"{ref.label()} · {short}", "slides": slides}
 
 
-def compile_item(item: Dict[str, Any], songs: Dict[str, Dict[str, Any]], starts_at: Optional[str] = None) -> Dict[str, Any]:
-    """One item with its slides. `songs` maps song id → the song row (sections, arrangements…)."""
+def _board_loop(item: Dict[str, Any], board: List[Dict[str, Any]], secs: int) -> List[Dict[str, Any]]:
+    """The announcements board as loop slides, the church's logo between every few."""
+    every = item.get("logo_every") or 0
+    if not board:
+        return []
+    out: List[Dict[str, Any]] = [{"kind": "logo", "seconds": 5}] if every else []
+    for k, a in enumerate(board, 1):
+        out.append({**a, "seconds": secs})
+        if every and k % every == 0 and k < len(board):
+            out.append({"kind": "logo", "seconds": 5})
+    return out
+
+
+def compile_item(item: Dict[str, Any], songs: Dict[str, Dict[str, Any]], starts_at: Optional[str] = None,
+                 board: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+    """One item with its slides. `songs` maps song id → the song row (sections, arrangements…);
+    `board` is the announcements showing on the service's day, as slides (worship_announce.slide)."""
     base = {k: item.get(k) for k in ("id", "kind", "show", "notes", "who", "minutes", "stage")}
     kind = item["kind"]
     if kind == "section":
@@ -446,6 +477,9 @@ def compile_item(item: Dict[str, Any], songs: Dict[str, Dict[str, Any]], starts_
         body = {"title": item.get("title") or (item["slides"][0]["kicker"] if item.get("slides") else "") or "Slides",
                 "slides": [{"kind": "text", "kicker": s.get("kicker") or "", "text": s["text"], "notes": s.get("notes") or ""}
                            for s in item.get("slides") or []]}
+    elif kind == "announcement" and item.get("from_board"):
+        body = {"title": item.get("title") or "This week", "slides": [dict(a) for a in (board or [])[:item.get("count") or 3]],
+                "from_board": True}
     elif kind == "announcement":
         body = {"title": item["title"], "slides": [{"kind": "announcement", "title": item["title"], "when": item.get("when") or "",
                                                      "body": item.get("body") or "", "image_url": item.get("image_url") or "",
@@ -458,25 +492,37 @@ def compile_item(item: Dict[str, Any], songs: Dict[str, Dict[str, Any]], starts_
         body = {"title": item.get("title") or ("Video" if mk == "video" else "Picture"), "slides": [slide]}
     elif kind == "loop":
         # Each screen plays it on its own clock, from when it went up (the live state's `since`).
-        slides = []
+        slides = _board_loop(item, board or [], item.get("seconds") or 7) if item.get("from_board") else []
         for s in item.get("slides") or []:
             secs = s.get("seconds") or item.get("seconds") or 7
             if s["kind"] == "text":
                 slides.append({"kind": "text", "kicker": "", "text": s["text"], "seconds": secs})
             else:
                 slides.append({"kind": s["kind"], "url": s["url"], "title": s.get("title") or "", "loop": True, "seconds": secs})
+        if not slides:
+            # Nothing on the board that day: the logo, so the room is never blank.
+            slides = [{"kind": "logo", "seconds": 7}]
         body = {"title": item.get("title") or "Welcome loop", "slides": slides,
                 "loop": {"seconds": item.get("seconds") or 7, "until": item.get("until") or "press",
-                         "until_at": item.get("until_at") or "", "shuffle": bool(item.get("shuffle"))}}
+                         "until_at": item.get("until_at") or "", "shuffle": bool(item.get("shuffle")),
+                         "from_board": bool(item.get("from_board")), "corner": bool(item.get("corner")),
+                         # What the corner counts to: the service's start (the booth's countdown moves it live).
+                         "count_to": starts_at}}
     else:  # countdown
         body = {"title": item.get("title") or "Countdown",
                 "slides": [{"kind": "countdown", "to": item.get("to") or starts_at, "title": item.get("title") or "We start soon"}]}
     return {**base, **body}
 
 
-def compile_show(service: Dict[str, Any], songs: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+def uses_board(items: List[Dict[str, Any]]) -> bool:
+    """Whether any item fills itself from the announcements board."""
+    return any(i.get("kind") in ("announcement", "loop") and i.get("from_board") for i in items or [])
+
+
+def compile_show(service: Dict[str, Any], songs: Dict[str, Dict[str, Any]],
+                 board: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     """The whole service as slides, in order, with a count the booth can show."""
-    items = [compile_item(i, songs, service.get("starts_at")) for i in service.get("items") or []]
+    items = [compile_item(i, songs, service.get("starts_at"), board) for i in service.get("items") or []]
     return {
         "service": {"id": service.get("id"), "title": service.get("title"), "starts_at": service.get("starts_at"),
                     "updated_at": service.get("updated_at")},

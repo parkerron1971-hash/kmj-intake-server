@@ -273,7 +273,8 @@ def test_a_loop_plays_its_slides_by_themselves():
     shown = wsh.compile_item(loop, {})
     assert [s["seconds"] for s in shown["slides"]] == [7, 10]
     assert shown["slides"][0]["kind"] == "image" and shown["slides"][1] == {"kind": "text", "kicker": "", "text": "Welcome home", "seconds": 10}
-    assert shown["loop"] == {"seconds": 7, "until": "press", "until_at": "", "shuffle": True}
+    assert shown["loop"] == {"seconds": 7, "until": "press", "until_at": "", "shuffle": True,
+                             "from_board": False, "corner": False, "count_to": None}
     timed = wsh.clean_item(item("loop", until="time", until_at="2026-10-25T14:58:00Z", slides=[{"kind": "text", "text": "Hi"}]))
     assert timed["until_at"] == "2026-10-25T14:58:00Z"
 

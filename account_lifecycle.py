@@ -201,6 +201,9 @@ BUSINESS_CHILD_TABLES: List[str] = [
     # type, size, link); the files themselves are in business-assets. Not
     # re-imported (see _IMPORT_SKIP).
     "worship_media",
+    # The announcements board: each announcement's words, dates, design and
+    # QR code. Not re-imported (see _IMPORT_SKIP).
+    "worship_announcements",
     # Families and children: notes, pickups and children before their
     # household, and the household's adult links before contacts.
     "child_checkins",
@@ -862,7 +865,8 @@ _IMPORT_SKIP = {
     "serve_notes", "serve_assignments", "serve_trained", "serve_away", "serve_prefs", "serve_positions", "serve_teams",
     # Rows that point at files under the OLD business's storage prefix; a
     # copy would show another account's files and lose them when it goes.
-    "worship_media",
+    # An announcement's picture is one of those files.
+    "worship_media", "worship_announcements",
 }
 
 # Columns the platform owns. Carrying them across would let an import
