@@ -147,7 +147,19 @@ def _songs_for(biz: str, items: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any
 
 
 def _show(biz: str, service: Dict[str, Any]) -> Dict[str, Any]:
-    show = wsh.compile_show(service, _songs_for(biz, service.get("items") or []))
+    items = service.get("items") or []
+    board = None
+    if wsh.uses_board(items):
+        # The announcement spot and the welcome loop fill themselves from the board
+        # for the service's day. A board that can't be read leaves the rest of Sunday
+        # on screen (the loop shows the logo) rather than taking the service down.
+        from worship_announce_router import board_for  # it imports this module's helpers
+        try:
+            board = board_for(biz, service.get("starts_at"))
+        except HTTPException:
+            logger.warning("worship show: the announcements board couldn't be read for %s", biz)
+            board = []
+    show = wsh.compile_show(service, _songs_for(biz, items), board)
     show["look"] = _look(biz)
     show["church"] = _brand(biz, show["look"])
     return show
