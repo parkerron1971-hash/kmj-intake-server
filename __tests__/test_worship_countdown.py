@@ -34,6 +34,8 @@ def test_a_countdown_has_a_look_and_a_plan_for_zero():
     pic = count(look="picture", picture_url="https://x.example/stage.jpg", welcome="Welcome to Love City Church",
                 zero="up", band_at=180, band_text="Worship team, come on up")
     assert (pic["look"], pic["zero"], pic["band_at"], pic["welcome"]) == ("picture", "up", 180, "Welcome to Love City Church")
+    # A cleared field takes the default; a whole number sent as 180.0 is 180 (PR review).
+    assert count(band_at=None)["band_at"] == 120 and count(band_at=180.0)["band_at"] == 180
     vid = count(video_url="https://x.example/gather.mp4", video_seconds=300)
     assert vid["video_seconds"] == 300.0
     for bad, words in [({"look": "flip"}, "big numbers"), ({"zero": "fireworks"}, "At zero"),
@@ -64,7 +66,9 @@ def test_the_booth_grabs_the_countdown():
     held = wsh.clean_live({"item_id": "count", "count": {"to": None, "held": 251}})
     assert held["count"] == {"to": None, "held": 251.0}
     assert "count" not in wsh.clean_live({"item_id": "count"})
-    for bad in ({"to": "soon"}, {"held": -5}, {"held": "251"}, "4:59"):
+    # Exactly one of the two (PR review): neither, or both, can't be drawn.
+    for bad in ({"to": "soon"}, {"held": -5}, {"held": "251"}, "4:59", {"to": None, "held": None},
+                {"to": "2026-11-01T16:07:00Z", "held": 30}):
         with pytest.raises(ValueError):
             wsh.clean_live({"item_id": "count", "count": bad})
 
@@ -76,6 +80,8 @@ def test_the_crawl():
                              "at": "2026-11-01T16:12:00Z"}
     for bad, words in [({"text": ""}, "1 to 160"), ({"text": "x" * 161}, "1 to 160"),
                        ({"text": "Hi", "times": 2, "at": "2026-11-01T16:12:00Z"}, "three times"),
+                       ({"text": "Hi", "times": True, "at": "2026-11-01T16:12:00Z"}, "three times"),
+                       ({"text": "Hi", "times": 3.0, "at": "2026-11-01T16:12:00Z"}, "three times"),
                        ({"text": "Hi", "room": False, "online": False, "at": "2026-11-01T16:12:00Z"}, "room, online"),
                        ({"text": "Hi", "at": "noon"}, "isn't a time")]:
         with pytest.raises(ValueError, match=words):

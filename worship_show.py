@@ -202,7 +202,11 @@ def _clean_countdown(raw: Dict[str, Any]) -> Dict[str, Any]:
     if video:
         if not isinstance(secs, (int, float)) or isinstance(secs, bool) or not 1 <= secs <= 3600:
             raise ValueError("The countdown video needs its length, up to an hour")
-    band_at = raw.get("band_at", 120)
+    band_at = raw.get("band_at")
+    if band_at is None:
+        band_at = 120  # a cleared field: the default, not a refusal
+    if isinstance(band_at, float) and band_at.is_integer():
+        band_at = int(band_at)
     if not isinstance(band_at, int) or isinstance(band_at, bool) or not 0 <= band_at <= 900:
         raise ValueError("The call to the stage comes 0 to 15 minutes before")
     return {"look": look, "zero": zero, "picture_url": picture, "welcome": _text(raw, "welcome", 80, "The welcome line"),
@@ -660,6 +664,9 @@ def clean_live(raw: Any) -> Dict[str, Any]:
         if not isinstance(count, dict):
             raise ValueError("That isn't a countdown")
         to, held = count.get("to"), count.get("held")
+        # Exactly one: counting to a time, or held at some seconds.
+        if (to is None) == (held is None):
+            raise ValueError("A countdown counts to a time or is held, one of the two")
         if to is not None:
             if not isinstance(to, str) or len(to) > 40:
                 raise ValueError("That isn't a time")
@@ -679,7 +686,7 @@ def clean_live(raw: Any) -> Dict[str, Any]:
         if not 1 <= len(text) <= CRAWL_TEXT:
             raise ValueError(f"The crawl is 1 to {CRAWL_TEXT} letters")
         times = crawl.get("times", 3)
-        if times not in (0, 1, 3):
+        if type(times) is not int or times not in (0, 1, 3):
             raise ValueError("The crawl goes once, three times, or until it's stopped")
         at = crawl.get("at")
         if not isinstance(at, str) or len(at) > 40:
