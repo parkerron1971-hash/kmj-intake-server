@@ -459,6 +459,42 @@ def test_the_kids_desk_then_the_office_mark_make_one(db):
     assert len(follow_ups(db)) == 1
 
 
+@pytest.mark.parametrize("finish", ["done", "closed"])
+def test_a_card_follow_up_finished_inside_the_sweep_window_opens_no_second(db, finish):
+    """The review's case: the guest filled in a connect card, so the first
+    sweep keeps that follow-up. The leader finishes it before the First
+    time row leaves the sweep's day; the next sweep must not welcome the
+    same person for the same visit."""
+    first_time(db, GUEST)
+    card = cfu.on_connect_card(BIZ, GUEST, {"fields": {"visits": "This is my first time"}}, "receipt-7")
+    assert asyncio.run(cfv.sweep()) == 0, "in follow-up: that one is kept"
+    if finish == "done":
+        for _ in card["steps"]:
+            cfu.advance(BIZ, card["id"], author_kind="leader", author_name="Robert Hayes")
+    else:
+        cfu.close(BIZ, card["id"], by_user=OWNER, by_name="The office")
+    assert cfu._one(BIZ, card["id"])["status"] == finish
+    assert asyncio.run(cfv.sweep()) == 0, "the next sweep, same visit"
+    assert [f["card_key"] for f in follow_ups(db)] == ["web:connect_card"]
+    # The kids desk reads the same rule.
+    db.t["household_adults"].append({"household_id": HOME, "contact_id": GUEST, "business_id": BIZ,
+                                     "relationship": "parent", "created_at": ago(minutes=30)})
+    kids_in([MIA], adult=GUEST)
+    assert len(follow_ups(db)) == 1
+
+
+def test_a_follow_up_finished_before_the_window_doesnt_stop_a_first_visit(db):
+    first_time(db, GUEST)
+    cfu.on_connect_card(BIZ, GUEST, {"fields": {"visits": "Planning to visit"}}, "receipt-8")
+    follow_ups(db)[0].update(status="done", done_at=ago(days=3))
+    assert asyncio.run(cfv.sweep()) == 1
+    assert [f["card_key"] for f in follow_ups(db)] == ["web:connect_card", "checkin:first"]
+
+
+def test_the_quiet_window_outlasts_the_sweeps_day_with_a_margin():
+    assert timedelta(days=cfu.FIRST_CHECK_IN_QUIET_DAYS) >= timedelta(hours=cfv.SWEEP_HOURS + 12)
+
+
 def test_the_sweep_skips_returners_name_only_guests_old_rows_and_other_businesses(db):
     first_time(db, OLD_MEMBER, name="Pat Long")
     db.t["attendance"].append({"id": "prior", "business_id": BIZ, "entry_id": LAST_WEEK, "contact_id": OLD_MEMBER,

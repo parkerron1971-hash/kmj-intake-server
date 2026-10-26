@@ -571,6 +571,10 @@ def on_connect_card(business_id: str, contact_id: str, data: Dict[str, Any], rec
 
 
 FIRST_CHECK_IN_KEY = "checkin:first"
+# A family whose follow-up finished this recently isn't handed on again for
+# a first check-in. Longer than church_first_visit.SWEEP_HOURS (a day) with
+# a margin, so the sweep's re-reads of the same visit always see it.
+FIRST_CHECK_IN_QUIET_DAYS = 2
 
 
 def on_first_check_in(business_id: str, contact_id: str, *, family_key: str, said: str,
@@ -581,14 +585,20 @@ def on_first_check_in(business_id: str, contact_id: str, *, family_key: str, sai
     welcome role, else the senior one, else the office). The family's one
     receipt is `first-visit:<family_key>`, which the unique source index
     keeps once however often the check-in is sent. Anyone in the family
-    already in follow-up keeps that one instead. Never raises."""
+    already in follow-up, or whose follow-up finished in the last two days,
+    keeps that one instead. Never raises."""
     biz, cid = str(business_id), str(contact_id or "")
     if not cid or not family_key:
         return None
     try:
         ids = sorted({cid} | {str(i) for i in family_ids if i})
+        # In follow-up now, or finished (done or closed) in the last
+        # FIRST_CHECK_IN_QUIET_DAYS: the sweep re-reads a First time row
+        # for a day, and a card's follow-up finished meanwhile must not
+        # open a second one for the same visit.
+        since = _iso(_now() - timedelta(days=FIRST_CHECK_IN_QUIET_DAYS))
         open_any = _rows(f"/church_follow_ups?business_id=eq.{_q(biz)}&contact_id=in.({','.join(_q(i) for i in ids)})"
-                         "&status=in.(open,handed_back)&select=id&limit=1")
+                         f"&or=(status.in.(open,handed_back),done_at.gte.{_q(since)})&select=id&limit=1")
         if open_any is None:
             print(f"[church_follow_up] first check-in skipped: open check failed (business {biz[:8]})", flush=True)
             return None
