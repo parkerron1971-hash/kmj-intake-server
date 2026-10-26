@@ -249,6 +249,14 @@ async def do_checkin(biz: str, entry: Dict[str, Any], household_id: str, childre
         member_push.tell_kids_in(biz, str(fam["id"]), str(entry["id"]), [
             {"child_id": r["child_id"], "first_name": kids[r["child_id"]].get("first_name") or "",
              "room": r.get("room") or ""} for r in new_rows])
+        # A family here for the first time is handed to the welcome lead
+        # (church_first_visit: switched, in the background, never fails this).
+        try:
+            import church_first_visit
+            church_first_visit.after_kids_checkin(biz, str(entry["id"]), _title(entry), str(fam["id"]),
+                                                  adult["id"] if adult else None)
+        except Exception as e:
+            print(f"[kids_checkin] first-visit hook skipped ({type(e).__name__})", flush=True)
 
     rows = _get(f"/child_checkins?business_id=eq.{biz}&entry_id=eq.{entry['id']}"
                 f"&child_id=in.({_in(list(wanted))})&select=*&order=checked_in_at.asc")
