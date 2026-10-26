@@ -1083,7 +1083,7 @@ async def serve(request: Request, path: str) -> HTMLResponse:
         may_lead = not sess.get("preview") and cfu.is_church(biz) and not msp.is_youth(sess["me"])
         ctx, lead = await asyncio.gather(
             msp.resolve_async(biz["id"], sess["me"], request.cookies.get(msp.COOKIE) or ""),
-            _leads(biz["id"], str(sess["me"]["id"])) if may_lead else _nothing())
+            _leads(biz["id"], str(sess["me"]["id"]), biz, sess["me"]) if may_lead else _nothing())
         if may_lead and ctx.get("space", "church") == "church":
             ctx = dict(ctx, lead=lead)
         msp.CURRENT.set(ctx)
@@ -1098,15 +1098,24 @@ async def _nothing():
     return None
 
 
-async def _leads(business_id: str, me_id: str) -> bool:
+async def _leads(business_id: str, me_id: str, biz: Optional[Dict[str, Any]] = None,
+                 me: Optional[Dict[str, Any]] = None) -> bool:
     """Whether this member gets the Lead tab: a church role, held or asked
     (church_follow_up), or a group they lead (group_lead: their group lives
-    on the Lead tab). Both read at once."""
+    on the Lead tab). Both read at once. With Who sees what on, it's the
+    Serve tab, for every part: a place on a Sunday team too, or a kids room."""
     import church_follow_up as cfu
     import group_lead
     roles, led = await asyncio.gather(asyncio.to_thread(cfu.roles_for, business_id, me_id),
                                       asyncio.to_thread(group_lead.led_groups, business_id, me_id))
-    return bool(roles) or bool(led)
+    if roles or led:
+        return True
+    import member_app_ui
+    if biz is None or not member_app_ui.serve_mode():
+        return False
+    import member_portal_lead
+    parts = await asyncio.to_thread(member_portal_lead.parts, biz, me_id)
+    return bool(parts["serving"] or parts["kids"])
 
 
 def _open_preview(request: Request, biz: Dict[str, Any], site) -> HTMLResponse:

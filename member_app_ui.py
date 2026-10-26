@@ -126,6 +126,19 @@ TAB_OF = {"home": "home", "watch": "watch", "sermons": "watch", "live": "watch",
 # A member who holds a church role (church_follow_up) gets a sixth tab:
 # the people Chief hands them (member_portal_lead).
 LEAD_TAB = ("lead", "/my/lead", "Lead", '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/>')
+# Who sees what (Kevin, 2026-10-26: "go with your picks"): one tab for anyone
+# the church has given a part, called Serve: a role, a group to lead, a place
+# on a Sunday team, a kids room. Same page and route; switched by
+# CHURCH_AREAS with the rest of Who sees what (serve_mode).
+SERVE_TAB = ("lead", "/my/lead", "Serve",
+             '<path d="M11 14h2a2 2 0 1 0 0-4h-3c-.6 0-1.1.2-1.4.6L3 16"/><path d="m7 20 1.6-1.4c.3-.4.8-.6 1.4-.6h4c1.1 0 '
+             '2.1-.4 2.8-1.2l4.6-4.4a2 2 0 0 0-2.75-2.91l-4.2 3.9"/><path d="m2 15 6 6"/>')
+
+
+def serve_mode() -> bool:
+    """The Lead tab is the Serve tab, for every part (Who sees what)."""
+    import church_areas
+    return church_areas.mode() == "on"
 
 ICONS = {
     "heart": '<path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7z"/>',
@@ -475,7 +488,7 @@ def nav(active: Optional[str], *, give: bool = True, space: str = "church", kids
         if not kids_parent:
             tabs = ((tabs[0][0], tabs[0][1], "Room", tabs[0][3]),) + tabs[1:3]
     else:
-        tabs, of = (TABS + (LEAD_TAB,) if lead else TABS), TAB_OF
+        tabs, of = (TABS + (SERVE_TAB if serve_mode() else LEAD_TAB,) if lead else TABS), TAB_OF
     cur_tab = of.get(active or "", "")
     items = []
     for key, href, label, paths in tabs:
