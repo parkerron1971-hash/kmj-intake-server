@@ -102,7 +102,7 @@ def _area_line(area: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "key": area["key"], "label": area["label"],
         "line": gaps[0] if gaps else ("Nothing missing." if names else f"No one works it yet. Usually: {area.get('team')}."),
-        "more": max(0, len(gaps) - 1),
+        "more": max(0, len(gaps) - 1), "gaps": len(gaps),
         "state": "watch" if gaps or not names else "ok",
         "people": len(names), "names": names[:3],
         "door": DOOR.get(area["key"]),
