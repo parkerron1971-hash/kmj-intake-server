@@ -13,6 +13,10 @@
 #   image / video  {url, title} / {url, loop}
 #   countdown      {to, title}                 counts down to a time
 #
+# Any slide may carry `bg`, a background of its own (a color, a picture or a
+# video, with how dark): the item's, or a sermon point's own. Without it the
+# screen draws the church's look.
+#
 # Who sees an item: `show` is "all" (each screen follows its own rules),
 # "room" (the people in the seats only; the stream keeps the camera) or
 # "online" (the stream only). Screens decide how a slide looks for them
@@ -70,6 +74,40 @@ def _url(raw: Dict[str, Any], key: str, label: str) -> str:
     if v and not _HTTPS.match(v):
         raise ValueError(f"{label} must be an https:// link")
     return v
+
+
+# A background of its own, for one item or one sermon point (Kevin, 2026-10-26:
+# "if there only want certain design background for certain slides it should
+# be able to happen"). The items whose words sit on the background have one.
+BG_KINDS = ("color", "image", "video")
+BG_ITEM_KINDS = ("song", "scripture", "text", "announcement")
+
+
+def clean_bg(raw: Any, label: str = "The background") -> Optional[Dict[str, Any]]:
+    """A slide's own background, checked; None (or kind "look") follows the church's look."""
+    if raw in (None, "", {}):
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError(f"{label} is a color, a picture or a video")
+    kind = raw.get("kind")
+    if kind in (None, "", "look"):
+        return None
+    if kind not in BG_KINDS:
+        raise ValueError(f"{label} is a color, a picture or a video")
+    color = raw.get("color")
+    url = raw.get("url")
+    if kind == "color":
+        if not isinstance(color, str) or not _COLOR.match(color):
+            raise ValueError(f"{label}: pick the color")
+        url = None
+    else:
+        if not isinstance(url, str) or not _HTTPS.match(url):
+            raise ValueError(f"{label}: pick the {'picture' if kind == 'image' else 'video'}")
+        color = None
+    dim = raw.get("dim", DEFAULT_LOOK["background"]["dim"])
+    if isinstance(dim, bool) or not isinstance(dim, (int, float)) or not 0 <= dim <= 0.85:
+        raise ValueError(f"{label}: darkening is 0 to 0.85")
+    return {"kind": kind, "color": color, "url": url, "dim": round(float(dim), 2)}
 
 
 def clean_item(raw: Any) -> Dict[str, Any]:
@@ -132,9 +170,13 @@ def clean_item(raw: Any) -> Dict[str, Any]:
             text = _text(s, "text", 400, "A slide's words")
             if not text:
                 raise ValueError("A slide has no words")
-            clean.append({"kicker": _text(s, "kicker", 60, "A slide's small heading"), "text": text,
-                          # The pastor's notes for this point: the confidence screen only.
-                          "notes": _text(s, "notes", 1000, "A point's notes")})
+            point = {"kicker": _text(s, "kicker", 60, "A slide's small heading"), "text": text,
+                     # The pastor's notes for this point: the confidence screen only.
+                     "notes": _text(s, "notes", 1000, "A point's notes")}
+            own = clean_bg(s.get("bg"), f"Slide {len(clean) + 1}'s background")
+            if own:
+                point["bg"] = own
+            clean.append(point)
         out["slides"] = clean
     elif kind == "announcement" and raw.get("from_board"):
         # From the announcements board (worship_announce): the spot fills itself
@@ -176,6 +218,10 @@ def clean_item(raw: Any) -> Dict[str, Any]:
                 raise ValueError("The countdown needs a time to count to")
         out["to"] = to or None
         out.update(_clean_countdown(raw))
+    if kind in BG_ITEM_KINDS and not out.get("from_board"):
+        bg = clean_bg(raw.get("bg"))
+        if bg:
+            out["bg"] = bg
     return out
 
 
@@ -572,6 +618,12 @@ def compile_item(item: Dict[str, Any], songs: Dict[str, Dict[str, Any]], starts_
             if item.get(k) not in (None, ""):
                 slide[k] = item[k]
         body = {"title": item.get("title") or "Countdown", "slides": [slide]}
+    # A background of its own: a sermon point's, else the item's (the screen draws the look without one).
+    points = (item.get("slides") or []) if kind == "text" else []
+    for k, s in enumerate(body["slides"]):
+        bg = (points[k].get("bg") if k < len(points) else None) or item.get("bg")
+        if bg and kind in BG_ITEM_KINDS and not body.get("from_board"):
+            s["bg"] = dict(bg)
     return {**base, **body}
 
 

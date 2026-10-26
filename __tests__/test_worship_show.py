@@ -12,6 +12,8 @@
 #     isn't one
 #   * what the booth puts on screen: modes, a passage on the spot, a
 #     message to the stage
+#   * a background of its own: an item's, or one sermon point's, rides on
+#     its slides; nothing set (or "look") follows the church's look
 
 import pathlib
 import sys
@@ -317,3 +319,58 @@ def test_a_quick_screen_picture_goes_up_on_the_spot():
     assert live["adhoc"]["kind"] == "image"
     with pytest.raises(ValueError, match="https://"):
         wsh.clean_live({"adhoc": {"kind": "image", "title": "x", "slides": [{"kind": "image", "url": "javascript:alert(1)"}]}})
+
+
+PIC = "https://x.example/stones.jpg"
+
+
+def test_a_point_or_an_item_can_have_its_own_background():
+    # Kevin, 2026-10-26: "if there only want certain design background for certain slides".
+    points = wsh.clean_item(item("text", title="Stones", bg={"kind": "color", "color": "#1C0B1F", "url": "https://ignored.example/x.png"}, slides=[
+        {"kicker": "Point 1", "text": "Stop and pick up stones."},
+        {"kicker": "Point 2", "text": "Stones are for questions.", "bg": {"kind": "image", "url": PIC, "dim": 0.3}},
+        {"kicker": "Point 3", "text": "Your story is a stone.", "bg": {"kind": "look"}}]))
+    assert points["bg"] == {"kind": "color", "color": "#1C0B1F", "url": None, "dim": 0.55}
+    assert "bg" not in points["slides"][0] and "bg" not in points["slides"][2]
+    assert points["slides"][1]["bg"] == {"kind": "image", "color": None, "url": PIC, "dim": 0.3}
+    slides = wsh.compile_item(points, {})["slides"]
+    # The point's own wins; the others take the item's.
+    assert [s["bg"]["kind"] for s in slides] == ["color", "image", "color"]
+
+    song = wsh.compile_item(wsh.clean_item(item("song", song_id=SONG_ID, bg={"kind": "video", "url": "https://x.example/waves.mp4"})), {SONG_ID: SONG})
+    assert song["slides"] and all(s["bg"]["kind"] == "video" for s in song["slides"])
+    verse = wsh.compile_item(wsh.clean_item(item("scripture", ref="jn 3 16", bg={"kind": "color", "color": "#203040"})), {})
+    assert verse["slides"][0]["bg"]["color"] == "#203040"
+    ann = wsh.compile_item(wsh.clean_item(item("announcement", title="Community Day", bg={"kind": "image", "url": PIC})), {})
+    assert ann["slides"][0]["bg"]["url"] == PIC
+
+
+def test_without_its_own_background_a_slide_follows_the_look():
+    for raw in (None, {}, {"kind": "look"}, {"kind": ""}):
+        assert wsh.clean_bg(raw) is None
+    plain = wsh.compile_item(wsh.clean_item(item("text", slides=[{"text": "Welcome home"}])), {})
+    assert "bg" not in plain and "bg" not in plain["slides"][0]
+    # Pictures, videos, countdowns and the board's own designs draw their own way: no background of their own.
+    media = wsh.clean_item(item("media", url=PIC, bg={"kind": "color", "color": "#000000"}))
+    assert "bg" not in media and "bg" not in wsh.compile_item(media, {})["slides"][0]
+    spot = wsh.clean_item(item("announcement", from_board=True, bg={"kind": "color", "color": "#000000"}))
+    assert "bg" not in spot
+    board = [{"kind": "announcement", "title": "Community Day", "when": "", "body": "", "image_url": "", "link": ""}]
+    assert all("bg" not in s for s in wsh.compile_item(spot, {}, board=board)["slides"])
+
+
+@pytest.mark.parametrize("bg, words", [
+    ({"kind": "pattern"}, "a color, a picture or a video"),
+    ("navy", "a color, a picture or a video"),
+    ({"kind": "color", "color": "navy"}, "pick the color"),
+    ({"kind": "image"}, "pick the picture"),
+    ({"kind": "video", "url": "http://x.example/w.mp4"}, "pick the video"),
+    ({"kind": "image", "url": "javascript:alert(1)"}, "pick the picture"),
+    ({"kind": "image", "url": PIC, "dim": 0.95}, "darkening is 0 to 0.85"),
+    ({"kind": "image", "url": PIC, "dim": True}, "darkening is 0 to 0.85"),
+])
+def test_what_a_background_cannot_be(bg, words):
+    with pytest.raises(ValueError, match=words):
+        wsh.clean_item(item("song", song_id=SONG_ID, bg=bg))
+    with pytest.raises(ValueError, match="Slide 1's background"):
+        wsh.clean_item(item("text", slides=[{"text": "Welcome", "bg": bg}]))
