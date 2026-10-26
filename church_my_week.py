@@ -9,12 +9,14 @@ an area to a line; a login that works some areas sees only those.
 
     GET /church/my-week?business_id=          the page (any office login)
     GET /church/my-week/status?business_id=   whether this app shows it
+    GET /church/my-week/people?business_id=   who a task can be handed to
 
 Everything is read from where it already lives: the areas map
 (church_areas.build: who works each area and what's missing), follow-ups
 (church_follow_ups: handed to the person, matched by their sign-in email),
-and Prayer & care requests handed to their login (assigned_to, said as one
-line with nothing of what was asked). A read that fails is a 503, never an
+Prayer & care requests handed to their login (assigned_to, said as one
+line with nothing of what was asked), and tasks handed to their login
+(tasks.assigned_to, supabase/APPLY-2026-10-26-task-hand-off.sql). A read that fails is a 503, never an
 empty week. Switched with the map: CHURCH_AREAS (off | owner | on).
 """
 from __future__ import annotations
@@ -51,6 +53,7 @@ DOOR = {
     "website_outreach": {"area": "build", "id": "my-site", "label": "Open the website"},
     "office": {"area": "operate", "id": "tasks", "label": "Open Tasks"},
     "giving_money": {"area": "operate", "id": "bookkeeping", "label": "Open Giving"},
+    "tasks": {"area": "operate", "id": "tasks", "label": "Open Tasks"},
 }
 
 
@@ -159,6 +162,16 @@ def build(business: Dict[str, Any], user_id: str, email: str, role: str) -> Dict
                       "title": "A prayer or care request was handed to you." if n == 1
                       else f"{n} prayer or care requests were handed to you.",
                       "detail": "Private to you and the pastors.", "door": DOOR["care"]})
+    # Tasks handed to their login, late first.
+    today = now.date().isoformat()
+    for t in _need(f"/tasks?business_id=eq.{_q(biz)}&assigned_to=eq.{_q(user_id)}&status=neq.done"
+                   "&select=id,title,due_date&order=due_date.asc.nullslast&limit=20"):
+        due = str(t.get("due_date") or "")[:10]
+        late = bool(due and due < today)
+        needs.append({"kind": "task", "late": late, "area": "office",
+                      "title": (t.get("title") or "A task").strip(),
+                      "detail": "A task handed to you · " + (_due(due, now) if due else "no date"),
+                      "door": DOOR["tasks"]})
     # The whole church: follow-ups with no one, and late ones.
     if whole:
         open_rows = _need(f"/church_follow_ups?business_id=eq.{_q(biz)}&status=in.(open,handed_back)"
@@ -188,7 +201,7 @@ def build(business: Dict[str, Any], user_id: str, email: str, role: str) -> Dict
                               "door": a["door"]})
 
     handed = _handed(biz, now, whole, set(mine_areas))
-    order = {"follow_up": 0, "no_one": 1, "care": 2, "gap": 3, "late": 4, "logins": 5}
+    order = {"follow_up": 0, "no_one": 1, "care": 2, "task": 3, "gap": 4, "late": 5, "logins": 6}
     needs.sort(key=lambda n: (not n["late"], order.get(n["kind"], 9)))
     return {
         "me": {"role": role, "areas": view["areas"], "by": view["by"], "why": view["why"], "name": me_name},
@@ -198,6 +211,53 @@ def build(business: Dict[str, Any], user_id: str, email: str, role: str) -> Dict
         "handed": handed,
         "counts": {"needs": len(needs), "areas": len(areas), "handed": len(handed)},
     }
+
+
+def _due(day: str, now: datetime) -> str:
+    """A task's due date, said: late by how much, today, tomorrow, or the day."""
+    try:
+        d = datetime.fromisoformat(day).date()
+    except ValueError:
+        return "no date"
+    gap = (d - now.date()).days
+    if gap < 0:
+        return f"{-gap} day{'s' if gap != -1 else ''} late"
+    if gap == 0:
+        return "due today"
+    if gap == 1:
+        return "due tomorrow"
+    return f"due {d.strftime('%A')}" if gap < 7 else f"due {d.strftime('%b')} {d.day}"
+
+
+def people(business: Dict[str, Any], me: str) -> List[Dict[str, Any]]:
+    """Who a task can be handed to: the owner and every active office login,
+    each by their own name (the church's list, by their sign-in email; else
+    the part of the email before the @, never the whole address: the logins
+    list is the admins'). The person asking is `you`."""
+    biz = str(business["id"])
+    seats = _need(f"/business_users?business_id=eq.{_q(biz)}&status=eq.active"
+                  "&select=user_id,role,invited_email&limit=200")
+    emails = sorted({(s.get("invited_email") or "").strip().lower() for s in seats if "@" in (s.get("invited_email") or "")})
+    named: Dict[str, str] = {}
+    if emails:
+        rows = _need(f"/contacts?business_id=eq.{_q(biz)}&email=in.({','.join(_q(e) for e in emails)})"
+                     "&select=name,email&limit=400")
+        for r in rows:
+            em, nm = (r.get("email") or "").strip().lower(), (r.get("name") or "").strip()
+            if em and nm and em not in named:
+                named[em] = nm
+    owner = str(business.get("owner_id") or "")
+    settings = business.get("settings") if isinstance(business.get("settings"), dict) else {}
+    out = [{"user_id": owner, "name": (settings.get("practitioner_name") or "").strip() or "The owner",
+            "role": "owner", "you": owner == me}] if owner else []
+    for s in seats:
+        uid = str(s.get("user_id") or "")
+        if not uid or uid == owner:
+            continue
+        em = (s.get("invited_email") or "").strip().lower()
+        out.append({"user_id": uid, "name": named.get(em) or em.split("@")[0] or "An office login", "role": s.get("role"),
+                    "you": uid == me})
+    return out
 
 
 def _role(business: Dict[str, Any], user_id: str) -> str:
@@ -274,6 +334,18 @@ def my_week_status(business_id: str, session: UserSession = Depends(sb_clients.a
     church_areas._gate(session.user)
     import church_follow_up as cfu
     return {"enabled": cfu.is_church(biz)}
+
+
+@router.get("/my-week/people")
+def my_week_people(business_id: str, session: UserSession = Depends(sb_clients.authed_request),
+                   biz: Dict[str, Any] = Depends(business_access("member"))):
+    """Who a task can be handed to (Tasks, "Hand to"), for anyone who can
+    change tasks."""
+    church_areas._gate(session.user)
+    import church_follow_up as cfu
+    if not cfu.is_church(biz):
+        raise HTTPException(404, "Handing tasks over is for churches")
+    return {"people": people(biz, str(session.user.id))}
 
 
 @router.get("/my-week")

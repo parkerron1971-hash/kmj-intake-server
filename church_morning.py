@@ -67,6 +67,9 @@ def line(week: Dict[str, Any]) -> Optional[str]:
         return None
     more = int((week.get("counts") or {}).get("needs") or 0) - 1
     said = str(first["title"]).strip()
+    if first.get("kind") == "task":
+        # A task's title is the church's own words, not a sentence.
+        said = f"Your task: {said}"
     if not said.endswith((".", "?", "!")):
         said += "."
     if more > 0:
