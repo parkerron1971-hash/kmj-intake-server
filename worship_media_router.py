@@ -231,8 +231,14 @@ def finish_upload(media_id: str, body: Dict[str, Any], user: AuthedUser = Depend
     biz = _uuid((body or {}).get("business_id"))
     _staff(biz, user)
     row = _own(biz, _uuid(media_id, "picture or video"))
+    return {"ok": True, "media": _out(finish(biz, row))}
+
+
+def finish(biz: str, row: Dict[str, Any]) -> Dict[str, Any]:
+    """Read the stored file back: ready when it is what it says, deleted when it
+    isn't. Shared with a ministry's link (worship_ministries), which sends a picture."""
     if row["status"] == "ready":
-        return {"ok": True, "media": _out(row)}
+        return row
     name = row["object_name"]
     if not _OBJECT.match(name) or not name.startswith(biz + "/"):
         raise HTTPException(409, "That upload isn't this church's")
@@ -251,7 +257,7 @@ def finish_upload(media_id: str, body: Dict[str, Any], user: AuthedUser = Depend
         {"status": "ready", "url": public_url(name), "updated_at": _now()})
     if not isinstance(rows, list) or not rows:
         raise HTTPException(503, "The upload is stored but couldn't be marked ready. Press Finish again.")
-    return {"ok": True, "media": _out(rows[0])}
+    return rows[0]
 
 
 @router.delete("/media/{media_id}")
