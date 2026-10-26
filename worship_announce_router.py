@@ -7,7 +7,7 @@
 #   GET     /worship/announcements                 the board, each with its tab on `day`
 #   POST    /worship/announcements                 a new one
 #   PUT     /worship/announcements/{id}            change one
-#   POST    /worship/announcements/{id}/decide     a ministry's request: put it on, or not
+#   POST    /worship/announcements/{id}/decide     a ministry's request: put it on, or not (its leader hears)
 #   DELETE  /worship/announcements/{id}            take it off the board (archived)
 #
 # board_for() hands worship_show_router the board for a service's day, so the
@@ -157,18 +157,26 @@ def save_announcement(announcement_id: str, body: Dict[str, Any], user: AuthedUs
 
 @router.post("/announcements/{announcement_id}/decide")
 def decide_announcement(announcement_id: str, body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
-    """A ministry's request: on the board (`on`), or not this time (`declined`)."""
+    """A ministry's request: on the board (`on`), or not this time (`declined`).
+    Its leader hears by email, with the office's note when there is one."""
     biz = _uuid(body.get("business_id"))
     _staff(biz, user, "plan")
     decision = body.get("decision")
     if decision not in ("on", "declined"):
         raise HTTPException(400, "Put it on, or not this time")
+    note = body.get("note") or ""
+    if not isinstance(note, str) or len(note.strip()) > 300:
+        raise HTTPException(400, "A note is at most 300 letters")
     cur = _one(biz, announcement_id)
     saved = sb_clients.sb_patch_as_service(
         f"/worship_announcements?id=eq.{_q(cur['id'])}&business_id=eq.{_q(biz)}&select={_FIELDS}", {"status": decision, "updated_at": _now()})
     if not isinstance(saved, list) or not saved:
         raise HTTPException(503, "That wasn't saved. Try again.")
-    return {"announcement": wa.as_out(saved[0], church_today(biz))}
+    told = False
+    if cur.get("status") == "waiting" and cur.get("source") == "ministry":
+        import worship_ministries
+        told = worship_ministries.tell_leader(biz, saved[0], decision, " ".join(note.split()))
+    return {"announcement": wa.as_out(saved[0], church_today(biz)), "told": told}
 
 
 @router.delete("/announcements/{announcement_id}")

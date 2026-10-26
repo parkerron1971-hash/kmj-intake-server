@@ -204,6 +204,9 @@ BUSINESS_CHILD_TABLES: List[str] = [
     # The announcements board: each announcement's words, dates, design and
     # QR code. Not re-imported (see _IMPORT_SKIP).
     "worship_announcements",
+    # The ministries that send announcements by a link: each one's name, its
+    # leader and the leader's email. Not re-imported (see _IMPORT_SKIP).
+    "worship_ministries",
     # Families and children: notes, pickups and children before their
     # household, and the household's adult links before contacts.
     "child_checkins",
@@ -867,6 +870,9 @@ _IMPORT_SKIP = {
     # copy would show another account's files and lose them when it goes.
     # An announcement's picture is one of those files.
     "worship_media", "worship_announcements",
+    # A ministry's link is signed for its row; a restore would mint new rows
+    # and new links, so the church adds its ministries again and sends them.
+    "worship_ministries",
 }
 
 # Columns the platform owns. Carrying them across would let an import

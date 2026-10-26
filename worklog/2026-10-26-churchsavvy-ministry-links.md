@@ -1,0 +1,13 @@
+---
+title: ChurchSavvy's ministries send their own announcements (round 5, server)
+date: 2026-10-26
+agent: Claude Code (Claude Opus 5.5)
+asked: 'Kevin, 2026-10-25: "we never create space for announcements to be able to be placed" (idea A5: each ministry leader gets a link to send one by Thursday, the office approves it, a Wednesday reminder email goes out); 2026-10-26 on the round 5 canvas: "these are a go. build it"'
+status: shipped
+prs: [kmj-intake-server (this PR), solutionist-studio (the ministries on the board, the send page, the office's note)]
+migrations: [supabase/APPLY-2026-10-26-worship-ministries.sql (APPLIED LIVE 2026-10-26 after a rollback probe)]
+left_undone: ["the calendar import (A4: a Google or Outlook calendar link, and Solutionist's own events)"]
+decisions: ["one link per ministry, signed like the volunteers' links (customer_token.derive_key, its own purpose), naming one church and one ministry; it doesn't expire: a new link (link_n) or taking the ministry out retires it", "what a ministry sends waits for the office (status waiting, source ministry, source_ref the ministry), shows only on Sunday's slides and in the lobby (phones and the stream are the office's to add), at most 10 waiting from one ministry", "a picture from the link goes into the church's own library through the same checked upload (worship_media_router.finish, now shared), at most 10 MB, and only a picture from that library is taken", "the office's answer reaches the leader by email, with its note (decide's optional note, up to 300 letters); only the first answer to a waiting one, never a typed announcement", "Wednesday 9 AM to 8 PM on the church's clock, each leader with an email who hasn't said stop hears once (reminded_on claim); every email's stop and one-click unsubscribe stop only Wednesday's reminder", "a church on ChurchSavvy alone whose plan hasn't got the screens gets no reminders (churchsavvy_billing.lapsed)"]
+related: [2026-10-26-churchsavvy-announcements-board.md, 2026-10-26-churchsavvy-lobby.md]
+---
+`worship_ministries.py` (the link: sign / verify / page_url / one_click_url; the office's routes: list, add, change, new link, take out; the link's routes: the page, send, a picture's start and finish, reminders on or off, one-click stop; `tell_leader`, `answer_words`, `remind_words`, `sweep_tick`). `worship_announce_router.decide` takes a `note` and tells the leader (`told`). `worship_media_router.finish` shared. `kmj_intake_automation.py`: the router, and `ministry_reminders` every 30 minutes. `account_lifecycle.py`: exported, not re-imported. Migration rehearsed in a rollback probe, applied, ledger row in `docs/MIGRATIONS.md`. Tests: `__tests__/test_worship_ministries.py`. Canvas UZu4VsoY9KemkUGorz234j boards 18 and 20.

@@ -342,6 +342,9 @@ app.include_router(worship_media_router)
 # The announcements board: made once, shown where they belong, gone when over.
 from worship_announce_router import router as worship_announce_router
 app.include_router(worship_announce_router)
+# Ministries send their own announcements by a link (round 5, board 20).
+from worship_ministries import router as worship_ministries_router
+app.include_router(worship_ministries_router)
 # Who does what in a church's ChurchSavvy: planner, worship leader, booth, admin.
 from worship_team import router as worship_team_router
 app.include_router(worship_team_router)
@@ -1801,6 +1804,14 @@ async def startup():
     # ChurchSavvy Planning: asks, a nudge, covers and the reminders before a
     # Sunday reach people (sunday_serving_alerts.sweep_tick; each once, never
     # in quiet hours; churches that switched Serving on).
+    # ChurchSavvy's ministries: Wednesday's "anything for Sunday?" to each
+    # leader who wants it (worship_ministries.sweep_tick; once a week).
+    try:
+        import worship_ministries as _ministries
+        scheduler.add_job(g("ministry_reminders", _ministries.sweep_tick), "interval",
+                          minutes=30, id="ministry_reminders")
+    except Exception as e:
+        print(f"   [warn] ministry reminders not scheduled: {e}")
     try:
         import sunday_serving_alerts as _serving_alerts
         scheduler.add_job(g("serving_alerts", _serving_alerts.sweep_tick), "interval",
