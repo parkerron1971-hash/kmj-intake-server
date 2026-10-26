@@ -9,6 +9,9 @@ gets left behind." Design canvas LG4Q97HqtEM4ByyXmmSrCP; "build it".
                                        church's own: church_roles, its title
                                        on a job)
     a card comes in .................. on_intake_form / on_connect_card
+    a first check-in ................. on_first_check_in (church_first_visit:
+                                       the kids desk, the office's First
+                                       time), routed like a connect card
       → Chief picks the leader ....... choose() — the church's roles, what
                                        each job takes, and the answers
       → a follow-up with a path ...... church_follow_ups (steps + a clock)
@@ -301,19 +304,22 @@ _STREAM_WORDS = {"baptism": "Baptism cards", "visit": "Plan your visit cards", "
 
 
 def choose(kind: str, answers: List[Dict[str, str]], roles: List[Dict[str, Any]],
-           load: Optional[Dict[str, int]] = None, all_defs: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+           load: Optional[Dict[str, int]] = None, all_defs: Optional[List[Dict[str, Any]]] = None,
+           *, what: str = "") -> Dict[str, Any]:
     """{leader: holder row or None, role: its key, reason}. The church's own
     roles decide: the ones whose job takes what the card asks for (its
     stream), the holder with the fewest open follow-ups first. A team's
     sign-up goes to its leader, else the role with the team under it, else
     up the chain. Nobody for it: the senior role, else the office. The
     reason is said to the leader and shown to the office, so it names what
-    decided it."""
+    decided it. `what` names the cards in that reason when they aren't the
+    stream's own ("First check-ins go to …" rides the connect stream)."""
     import church_roles as cr
     load = load or {}
     defs = _effective_defs(all_defs, roles)
     held = [r for r in roles if r.get("status") == "active"]
     stream, why = stream_for(kind, answers)
+    own_words = what if (what and stream == kind) else ""
 
     def best(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         return sorted(rows, key=lambda r: (load.get(str(r["contact_id"]), 0), _norm(r.get("name") or "")))
@@ -383,9 +389,9 @@ def choose(kind: str, answers: List[Dict[str, str]], roles: List[Dict[str, Any]]
         d, rows = found[0]
         if stream == "pastor_ask":
             return to(rows, why)
-        what = _STREAM_WORDS.get(stream, "Those")
-        return to(rows, f"{why} {what} go to the {d['title']}." if why else f"{what} go to the {d['title']}.")
-    return fallback(why or f"No one holds a role that takes {_STREAM_WORDS.get(stream, 'these').lower()} yet.")
+        words = own_words or _STREAM_WORDS.get(stream, "Those")
+        return to(rows, f"{why} {words} go to the {d['title']}." if why else f"{words} go to the {d['title']}.")
+    return fallback(why or f"No one holds a role that takes {(own_words or _STREAM_WORDS.get(stream, 'these')).lower()} yet.")
 
 
 # ─── Reads ────────────────────────────────────────────────────────────
@@ -469,10 +475,14 @@ def _note(biz: str, fid: str, author_kind: str, kind: str, body: str = "", *, pa
 
 
 def start(business_id: str, contact_id: str, *, card_key: str, card_name: str, kind: str,
-          answers: List[Dict[str, str]], source_event: str = "") -> Optional[Dict[str, Any]]:
+          answers: List[Dict[str, str]], source_event: str = "", what: str = "",
+          route_answers: Optional[List[Dict[str, str]]] = None) -> Optional[Dict[str, Any]]:
     """Open a follow-up for this person and hand it to a leader. Returns the
     row, or None when it already exists (a retried card) or could not be
-    saved. Never raises: a card is saved whether or not this works."""
+    saved. Never raises: a card is saved whether or not this works.
+    `route_answers` is what choose() reads when it isn't what the leader
+    reads (a first check-in's line names the occasion, and a "Community
+    Meal" must not read as a care need)."""
     biz, cid = str(business_id), str(contact_id)
     try:
         # Every read here decides something, so a read that failed stops the
@@ -506,7 +516,8 @@ def start(business_id: str, contact_id: str, *, card_key: str, card_name: str, k
         if all_roles is None or load is None or all_defs is None:
             logger.warning("church follow-up skipped: roles could not be read (business %s)", biz[:8])
             return None
-        pick = choose(kind, answers, all_roles, load, all_defs)
+        pick = choose(kind, answers if route_answers is None else route_answers, all_roles, load, all_defs,
+                      what=what)
         steps = PATHS.get(kind) or PATHS["general"]
         now = _now()
         leader = pick["leader"]
@@ -557,6 +568,40 @@ def on_connect_card(business_id: str, contact_id: str, data: Dict[str, Any], rec
     return start(str(business_id), str(contact_id), card_key="web:connect_card", card_name="Connect card",
                  kind="connect", answers=answers_from_connect((data or {}).get("fields") or {}),
                  source_event=str(receipt or ""))
+
+
+FIRST_CHECK_IN_KEY = "checkin:first"
+
+
+def on_first_check_in(business_id: str, contact_id: str, *, family_key: str, said: str,
+                      family_ids: Iterable[str] = ()) -> Optional[Dict[str, Any]]:
+    """church_first_visit's hook: a person or family checked in for the
+    first time. One follow-up per family per first visit, for the adult who
+    checked in (a guardian, never a child), routed like a connect card (the
+    welcome role, else the senior one, else the office). The family's one
+    receipt is `first-visit:<family_key>`, which the unique source index
+    keeps once however often the check-in is sent. Anyone in the family
+    already in follow-up keeps that one instead. Never raises."""
+    biz, cid = str(business_id), str(contact_id or "")
+    if not cid or not family_key:
+        return None
+    try:
+        ids = sorted({cid} | {str(i) for i in family_ids if i})
+        open_any = _rows(f"/church_follow_ups?business_id=eq.{_q(biz)}&contact_id=in.({','.join(_q(i) for i in ids)})"
+                         "&status=in.(open,handed_back)&select=id&limit=1")
+        if open_any is None:
+            print(f"[church_follow_up] first check-in skipped: open check failed (business {biz[:8]})", flush=True)
+            return None
+        if open_any:
+            return None
+    except Exception as e:
+        print(f"[church_follow_up] first check-in not started ({type(e).__name__}, business {biz[:8]})", flush=True)
+        return None
+    # The line is for the leader; the routing reads nothing from it, so a
+    # first visit always goes where a connect card goes.
+    return start(biz, cid, card_key=FIRST_CHECK_IN_KEY, card_name="First check-in", kind="connect",
+                 answers=[{"q": "First visit", "a": _plain(said)[:MAX_ANSWER] or "Checked in for the first time"}],
+                 source_event=f"first-visit:{family_key}"[:80], what="First check-ins", route_answers=[])
 
 
 # ─── One follow-up ────────────────────────────────────────────────────
@@ -1097,6 +1142,8 @@ async def _office_alert(biz_id: str, title: str, body: str, key: str, person_id:
 
 async def sweep(now: Optional[datetime] = None) -> Dict[str, int]:
     """Every few minutes, across churches:
+      · the office's First time check-ins become welcome follow-ups
+        (church_first_visit, when CHURCH_AREAS is on);
       · a new follow-up's leader is told it's theirs (once), or the office
         when there is no one to hand it to;
       · someone at "Reach out" who has had an email or text from the
@@ -1109,6 +1156,13 @@ async def sweep(now: Optional[datetime] = None) -> Dict[str, int]:
     import asyncio
     now = now or _now()
     stats = {"told": 0, "office": 0, "reached": 0, "nudged": 0, "overseer_told": 0, "next_up": 0, "terms": 0}
+    # The office's First time check-ins first, so their leaders are told in
+    # this same pass (church_first_visit; switched by CHURCH_AREAS).
+    try:
+        import church_first_visit
+        stats["first_visits"] = await church_first_visit.sweep(now)
+    except Exception as e:
+        print(f"[church_follow_up] first-visit sweep skipped ({type(e).__name__})", flush=True)
     rows = await asyncio.to_thread(
         _rows, "/church_follow_ups?status=eq.open"
                f"&or=(leader_told_at.is.null,due_at.lt.{_q(_iso(now))},step.eq.0)&select=*&limit=500")
