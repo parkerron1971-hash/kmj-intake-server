@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import os
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone  # noqa: F401
 from types import SimpleNamespace
 
 import pytest
@@ -167,6 +167,19 @@ def test_a_task_handed_to_your_login_is_yours_late_first(client, week):
     assert tasks[0]["door"] == {"area": "operate", "id": "tasks", "label": "Open Tasks"}
 
 
+def test_a_tasks_day_is_the_churchs_own(client, week, monkeypatch):
+    from zoneinfo import ZoneInfo
+    import chief_assignments
+    evening = datetime(2026, 10, 27, 2, 0, tzinfo=timezone.utc)          # 9 PM on the 26th in Chicago
+    monkeypatch.setattr(mw, "_now", lambda: evening)
+    monkeypatch.setattr(chief_assignments, "_tz_for", lambda biz: ZoneInfo("America/Chicago"))
+    week.t["tasks"] = [{"id": "t1", "business_id": BIZ, "title": "Lock the building", "status": "todo",
+                        "due_date": "2026-10-26", "assigned_to": MARCUS_SEAT}]
+    client.who.update(role="manager", id=MARCUS_SEAT, email="marcus@example.com")
+    task = next(n for n in [_get(client)["next"]] + _get(client)["needs"] if n["kind"] == "task")
+    assert task["detail"] == "A task handed to you · due today" and not task["late"], "not late at 9 PM on the day"
+
+
 def test_who_a_task_can_be_handed_to_by_their_own_names(client, week):
     r = client.get(f"/church/my-week/people?business_id={BIZ}")
     assert r.status_code == 200, r.text
@@ -193,6 +206,18 @@ def test_a_failed_read_is_a_503_never_an_empty_week(client, week, monkeypatch, t
     if table in ("church_follow_ups", "contacts", "church_role_defs"):
         client.who.update(email="robert@example.com")      # someone with follow-ups and roles to name
     assert client.get(f"/church/my-week?business_id={BIZ}").status_code == 503, table
+
+
+@pytest.mark.parametrize("table", ["business_users", "contacts"])
+def test_a_failed_read_of_who_tasks_can_go_to_is_a_503(client, week, monkeypatch, table):
+    real = week.get
+    monkeypatch.setattr(sb_clients, "sb_get_as_service",
+                        lambda path, **kw: None if path.lstrip("/").startswith(table) and "my-week" not in path
+                        else real(path, **kw))
+    if table == "contacts":
+        week.t["business_users"][-1]["invited_email"] = "marcus@example.com"
+    r = client.get(f"/church/my-week/people?business_id={BIZ}")
+    assert r.status_code == 503, (table, r.status_code)
 
 
 def test_the_switch_a_church_and_a_seat(client, week, monkeypatch):

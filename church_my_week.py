@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -162,15 +162,16 @@ def build(business: Dict[str, Any], user_id: str, email: str, role: str) -> Dict
                       "title": "A prayer or care request was handed to you." if n == 1
                       else f"{n} prayer or care requests were handed to you.",
                       "detail": "Private to you and the pastors.", "door": DOOR["care"]})
-    # Tasks handed to their login, late first.
-    today = now.date().isoformat()
+    # Tasks handed to their login, late first. A due date is the church's
+    # own day: in a US evening, UTC is already tomorrow.
+    today = _today(biz, now)
     for t in _need(f"/tasks?business_id=eq.{_q(biz)}&assigned_to=eq.{_q(user_id)}&status=neq.done"
                    "&select=id,title,due_date&order=due_date.asc.nullslast&limit=20"):
         due = str(t.get("due_date") or "")[:10]
-        late = bool(due and due < today)
+        late = bool(due and due < today.isoformat())
         needs.append({"kind": "task", "late": late, "area": "office",
                       "title": (t.get("title") or "A task").strip(),
-                      "detail": "A task handed to you · " + (_due(due, now) if due else "no date"),
+                      "detail": "A task handed to you · " + (_due(due, today) if due else "no date"),
                       "door": DOOR["tasks"]})
     # The whole church: follow-ups with no one, and late ones.
     if whole:
@@ -213,13 +214,19 @@ def build(business: Dict[str, Any], user_id: str, email: str, role: str) -> Dict
     }
 
 
-def _due(day: str, now: datetime) -> str:
+def _today(biz: str, now: datetime) -> date:
+    """The church's own date (its time zone, as Chief's task list reads it)."""
+    import chief_assignments
+    return now.astimezone(chief_assignments._tz_for(biz)).date()
+
+
+def _due(day: str, today: date) -> str:
     """A task's due date, said: late by how much, today, tomorrow, or the day."""
     try:
         d = datetime.fromisoformat(day).date()
     except ValueError:
         return "no date"
-    gap = (d - now.date()).days
+    gap = (d - today).days
     if gap < 0:
         return f"{-gap} day{'s' if gap != -1 else ''} late"
     if gap == 0:
