@@ -175,7 +175,43 @@ def clean_item(raw: Any) -> Dict[str, Any]:
             except ValueError:
                 raise ValueError("The countdown needs a time to count to")
         out["to"] = to or None
+        out.update(_clean_countdown(raw))
     return out
+
+
+COUNT_LOOKS = ("big", "picture", "ring", "plain")
+COUNT_ZERO = ("next", "logo", "up")
+
+
+def _clean_countdown(raw: Dict[str, Any]) -> Dict[str, Any]:
+    """A countdown's look (round 5, canvas board 22): big numbers, over a picture,
+    a ring, or just the numbers; a welcome line; what happens at zero (the next
+    item goes up, the logo, or it counts up on the stage only); a countdown video
+    that ends on the dot; and the call to the band on the stage."""
+    look = raw.get("look") or "big"
+    if look not in COUNT_LOOKS:
+        raise ValueError("A countdown is big numbers, over a picture, a ring or just the numbers")
+    zero = raw.get("zero") or "next"
+    if zero not in COUNT_ZERO:
+        raise ValueError("At zero: the next item, the logo, or counting up on the stage")
+    picture = _url(raw, "picture_url", "The picture behind the countdown")
+    if look == "picture" and not picture:
+        raise ValueError("Pick the picture behind the countdown")
+    video = _url(raw, "video_url", "The countdown video")
+    secs = raw.get("video_seconds")
+    if video:
+        if not isinstance(secs, (int, float)) or isinstance(secs, bool) or not 1 <= secs <= 3600:
+            raise ValueError("The countdown video needs its length, up to an hour")
+    band_at = raw.get("band_at")
+    if band_at is None:
+        band_at = 120  # a cleared field: the default, not a refusal
+    if isinstance(band_at, float) and band_at.is_integer():
+        band_at = int(band_at)
+    if not isinstance(band_at, int) or isinstance(band_at, bool) or not 0 <= band_at <= 900:
+        raise ValueError("The call to the stage comes 0 to 15 minutes before")
+    return {"look": look, "zero": zero, "picture_url": picture, "welcome": _text(raw, "welcome", 80, "The welcome line"),
+            "video_url": video, "video_seconds": round(float(secs), 1) if video else None,
+            "band_at": band_at, "band_text": _text(raw, "band_text", 40, "The call to the stage") or "Band to the stage"}
 
 
 MAX_FIXES = 60
@@ -344,6 +380,8 @@ DEFAULT_LOOK: Dict[str, Any] = {
     # ChurchSavvy's own colors around the slides, the church's starting choice
     # (each person can switch theirs): dark, light, or light to plan and dark to run.
     "workspace": "dark",
+    # The crawl's saved lines (round 5): see _clean_crawls.
+    "crawls": [],
 }
 WORKSPACES = ("dark", "light", "split")
 
@@ -404,7 +442,26 @@ def clean_look(raw: Any) -> Dict[str, Any]:
         "size": size, "caps": bool(raw.get("caps")), "align": align, "font": font or None,
         "translation": tr, "lower_third": {"style": style, "position": position},
         "brand": brand, "quick": clean_quick(raw.get("quick")), "workspace": workspace,
+        "crawls": _clean_crawls(raw.get("crawls")),
     }
+
+
+MAX_CRAWLS = 10
+CRAWL_TEXT = 160
+
+
+def _clean_crawls(raw: Any) -> List[str]:
+    """The crawl's saved lines (round 5, canvas board 25), for one press in the booth."""
+    if raw in (None, ""):
+        return []
+    if not isinstance(raw, list) or len(raw) > MAX_CRAWLS:
+        raise ValueError(f"Keep up to {MAX_CRAWLS} saved lines for the crawl")
+    out = []
+    for line in raw:
+        if not isinstance(line, str) or not line.strip() or len(line) > CRAWL_TEXT:
+            raise ValueError(f"A crawl line is 1 to {CRAWL_TEXT} letters")
+        out.append(" ".join(line.split()))
+    return out
 
 
 # ─── a service, as slides ────────────────────────────────────────────
@@ -509,8 +566,12 @@ def compile_item(item: Dict[str, Any], songs: Dict[str, Dict[str, Any]], starts_
                          # What the corner counts to: the service's start (the booth's countdown moves it live).
                          "count_to": starts_at}}
     else:  # countdown
-        body = {"title": item.get("title") or "Countdown",
-                "slides": [{"kind": "countdown", "to": item.get("to") or starts_at, "title": item.get("title") or "We start soon"}]}
+        slide = {"kind": "countdown", "to": item.get("to") or starts_at, "title": item.get("title") or "We start soon"}
+        # Its look, what happens at zero, the video that lands on time, the call to the stage (round 5).
+        for k in ("look", "zero", "picture_url", "welcome", "video_url", "video_seconds", "band_at", "band_text"):
+            if item.get(k) not in (None, ""):
+                slide[k] = item[k]
+        body = {"title": item.get("title") or "Countdown", "slides": [slide]}
     return {**base, **body}
 
 
@@ -596,4 +657,46 @@ def clean_live(raw: Any) -> Dict[str, Any]:
         if not isinstance(timer, dict) or not isinstance(timer.get("ends_at"), str):
             raise ValueError("A timer needs the time it ends")
         out["timer"] = {"label": str(timer.get("label") or "")[:40], "ends_at": timer["ends_at"][:40]}
+    count = raw.get("count")
+    if count is not None:
+        # The countdown the booth grabbed (round 5, board 22): the time it counts to now,
+        # or, held, the seconds it stopped at.
+        if not isinstance(count, dict):
+            raise ValueError("That isn't a countdown")
+        to, held = count.get("to"), count.get("held")
+        # Exactly one: counting to a time, or held at some seconds.
+        if (to is None) == (held is None):
+            raise ValueError("A countdown counts to a time or is held, one of the two")
+        if to is not None:
+            if not isinstance(to, str) or len(to) > 40:
+                raise ValueError("That isn't a time")
+            try:
+                datetime.fromisoformat(to.replace("Z", "+00:00"))
+            except ValueError:
+                raise ValueError("That isn't a time")
+        if held is not None and (not isinstance(held, (int, float)) or isinstance(held, bool) or not 0 <= held <= 86400):
+            raise ValueError("A held countdown stops at 0 to 24 hours")
+        out["count"] = {"to": to, "held": None if held is None else round(float(held), 1)}
+    crawl = raw.get("crawl")
+    if crawl is not None:
+        # A line along the bottom during the service (round 5, board 25).
+        if not isinstance(crawl, dict) or not isinstance(crawl.get("text"), str):
+            raise ValueError("The crawl needs its words")
+        text = " ".join(crawl["text"].split())
+        if not 1 <= len(text) <= CRAWL_TEXT:
+            raise ValueError(f"The crawl is 1 to {CRAWL_TEXT} letters")
+        times = crawl.get("times", 3)
+        if type(times) is not int or times not in (0, 1, 3):
+            raise ValueError("The crawl goes once, three times, or until it's stopped")
+        at = crawl.get("at")
+        if not isinstance(at, str) or len(at) > 40:
+            raise ValueError("That isn't a time")
+        try:
+            datetime.fromisoformat(at.replace("Z", "+00:00"))
+        except ValueError:
+            raise ValueError("That isn't a time")
+        room, online = bool(crawl.get("room", True)), bool(crawl.get("online"))
+        if not (room or online):
+            raise ValueError("The crawl goes on the room, online, or both")
+        out["crawl"] = {"text": text, "room": room, "online": online, "times": times, "at": at}
     return out
