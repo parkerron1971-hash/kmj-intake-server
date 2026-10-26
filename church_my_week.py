@@ -126,10 +126,14 @@ def build(business: Dict[str, Any], user_id: str, email: str, role: str) -> Dict
     # The person behind this login, by their sign-in email.
     email = (email or "").strip().lower()
     me_ids: List[str] = []
+    me_name: Optional[str] = None
     if email and "@" in email:
         me = _need(f"/contacts?business_id=eq.{_q(biz)}&email=ilike.{_q(church_areas._escape_ilike(email))}"
-                   "&select=id&limit=10")
+                   "&select=id,name&limit=10")
         me_ids = [str(c["id"]) for c in me]
+        # Their own name for the greeting: the church's settings carry the
+        # pastor's, and every login was greeted with it.
+        me_name = next((str(c["name"]).strip() for c in me if str(c.get("name") or "").strip()), None)
 
     needs: List[Dict[str, Any]] = []
     # Follow-ups handed to them.
@@ -187,7 +191,7 @@ def build(business: Dict[str, Any], user_id: str, email: str, role: str) -> Dict
     order = {"follow_up": 0, "no_one": 1, "care": 2, "gap": 3, "late": 4, "logins": 5}
     needs.sort(key=lambda n: (not n["late"], order.get(n["kind"], 9)))
     return {
-        "me": {"role": role, "areas": view["areas"], "by": view["by"], "why": view["why"]},
+        "me": {"role": role, "areas": view["areas"], "by": view["by"], "why": view["why"], "name": me_name},
         "next": needs[0] if needs else None,
         "needs": needs[1:SHOWN + 1],
         "areas": areas,

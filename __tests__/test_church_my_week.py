@@ -32,7 +32,7 @@ for p in (ROOT, HERE):
 import church_areas as ca  # noqa: E402
 import church_my_week as mw  # noqa: E402
 import sb_clients  # noqa: E402
-from test_church_follow_up import BIZ, OWNER, PASTOR, TASHA, ROBERT, ANDRE  # noqa: E402
+from test_church_follow_up import BIZ, OWNER, NAMES, PASTOR, TASHA, ROBERT, ANDRE  # noqa: E402
 from test_church_areas import db  # noqa: E402,F401
 
 MARCUS_SEAT = "11111111-1111-1111-1111-111111111111"
@@ -94,7 +94,7 @@ def test_the_owner_sees_the_whole_church_an_area_to_a_line(client):
     assert [a["key"] for a in w["areas"]] == list(ca.AREA_ORDER)
     kids = next(a for a in w["areas"] if a["key"] == "kids_youth")
     assert kids["state"] == "watch" and "background check" in kids["line"] and kids["door"]["id"] == "kids"
-    assert w["me"] == {"role": "owner", "areas": None, "by": "all", "why": "Sees the whole church"}
+    assert w["me"] == {"role": "owner", "areas": None, "by": "all", "why": "Sees the whole church", "name": None}
     titles = [w["next"]["title"]] + [n["title"] for n in w["needs"]]
     assert "1 person in follow-up has no one." in titles
     assert any(t.endswith("office logins still see everything.") for t in titles)
@@ -104,6 +104,7 @@ def test_a_follow_up_handed_to_you_comes_first_late_before_new(client):
     client.who["email"] = "Kevin@Example.com"          # the pastor's contact, by sign-in email
     w = _get(client)
     assert w["next"]["title"] == "Robert Hayes is waiting to hear from you."
+    assert w["me"]["name"] == NAMES[PASTOR], "greeted by their own name, not the church's settings"
     assert w["next"]["late"] and w["next"]["door"]["id"] == "follow-up"
     assert "Tasha Williams was handed to you." in [n["title"] for n in w["needs"]]
 
