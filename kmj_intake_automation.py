@@ -356,6 +356,9 @@ from church_areas import router as church_areas_router
 app.include_router(church_areas_router)
 from church_keys import router as church_keys_router
 app.include_router(church_keys_router)
+# Rooms & spaces, with Rentals: booking the building (2026-10-27).
+from church_spaces import router as church_spaces_router
+app.include_router(church_spaces_router)
 # My week: a church login's first page (Who sees what, 2026-10-26).
 from church_my_week import router as church_my_week_router
 app.include_router(church_my_week_router)
