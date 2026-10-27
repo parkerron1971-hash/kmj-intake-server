@@ -11,12 +11,16 @@ THE RULES
     directory; owner only). While off, /my/directory isn't served.
   · Nobody is listed until they say yes themselves, from My details or the
     directory page's "Show me in the directory".
-  · A listed member shows their name and photo (the photo by member_photos'
-    rule: an adult by their birthdate). Their phone, their email and their
-    household each show only if they turned that one on; all start off.
+  · A listed member shows their name and photo. Their phone, their email
+    and their household each show only if they turned that one on; all
+    start off.
   · Minors are never listed and never see it: anyone under 18 by birthdate,
     a child on a family (children.contact_id), a teen linked to a parent
     for messaging (msg_guardians), or anyone the office tagged youth/kids.
+  · Being listed also needs a birthdate on record, 18 or older: Kevin's
+    rule for photos (9/29) says someone with no birthdate "could be a
+    child", and member messaging needs one too. Without it, a member can
+    still look, and is told to ask the office to add their birthdate.
   · Members only: signed in at this church, and on the records as a member
     (contacts.status active or vip). Never public, never a visitor or lead,
     never another church's people.
@@ -140,9 +144,16 @@ def is_minor(person: Optional[Dict[str, Any]], flagged: Iterable[str] = (), toda
     return False
 
 
+def known_adult(person: Optional[Dict[str, Any]], today: Optional[date] = None) -> bool:
+    """18 or older by a birthdate on record (no birthdate: could be a child)."""
+    a = _age(person or {}, today)
+    return a is not None and a >= ADULT_AGE
+
+
 def shown(person: Dict[str, Any], flagged: Iterable[str] = (), today: Optional[date] = None) -> bool:
     """Whether this person appears in the directory."""
-    return prefs(person)["listed"] and is_member(person) and not is_minor(person, flagged, today)
+    return (prefs(person)["listed"] and is_member(person) and not is_minor(person, flagged, today)
+            and known_adult(person, today))
 
 
 def viewer_state(me: Optional[Dict[str, Any]], flagged: Iterable[str] = (), today: Optional[date] = None) -> str:
@@ -343,7 +354,8 @@ def view(biz: Dict[str, Any], me_id: str, q: str = "", today: Optional[date] = N
     found = cards(people, house_of=houses[0], house_names=houses[1], me_id=str(me_id), can_message=reach, q=q)
     return {"state": "ok", "me": prefs(me), "cards": found, "count": len(people),
             "found": sum(len(c["people"]) for c in found), "messaging": mpm.turned_on(biz),
-            "listed_me": any(str(r["id"]) == str(me_id) for r in people)}
+            "listed_me": any(str(r["id"]) == str(me_id) for r in people),
+            "can_join": known_adult(me, today)}
 
 
 # ─── writes ──────────────────────────────────────────────────────────
@@ -391,6 +403,8 @@ def save_choice(business_id: str, contact_id: str, want: Dict[str, bool]) -> Opt
                 return "dir_removed"
             if not is_member(row):
                 return "dir_members"
+            if not known_adult(row):
+                return "dir_birthdate"
             rec = {"listed": True, **{f: bool(want.get(f)) for f in FIELDS}, "at": _now()}
             return rec, ("dir_saved" if was["listed"] else "dir_on")
         rec = {"listed": False, **{f: False for f in FIELDS}, "at": _now()}
@@ -438,12 +452,10 @@ def office_view(biz: Dict[str, Any], *, can_switch: bool) -> Optional[Dict[str, 
         if p["removed"]:
             out.append({"id": str(r["id"]), "name": name, "reason": p["removed"]["reason"], "at": p["removed"]["at"]})
         elif p["listed"]:
-            hidden = "under_18" if is_minor(r, flags) else "" if is_member(r) else "not_member"
-            # Listed with no birthdate on record: shown (a minor is caught by
-            # a known birthdate, a family, a parent link or a tag), and the
-            # office is told, so it can add one or take them out.
+            hidden = ("under_18" if is_minor(r, flags) else "not_member" if not is_member(r)
+                      else "no_birthdate" if not known_adult(r) else "")
             on_list.append({"id": str(r["id"]), "name": name, "shows": [f for f in FIELDS if p[f]],
-                            "hidden": hidden, "no_birthdate": not hidden and _age(r, None) is None})
+                            "hidden": hidden})
     return {"ok": True, "on": church_on(biz), "can_switch": can_switch, "messaging": mpm.turned_on(biz),
             "listed": on_list, "removed": out, "shown": sum(1 for x in on_list if not x["hidden"])}
 
@@ -579,7 +591,8 @@ async def save_mine(request: Request):
     code = await asyncio.to_thread(save_choice, str(church["business"]["id"]), str(me["id"]), want)
     if code in ("dir_on", "dir_saved", "dir_off"):
         return mpc._back(back, done=code)
-    return mpc._back(back, err=code if code in ("dir_adults", "dir_removed", "dir_members") else "error")
+    return mpc._back(back, err=code if code in ("dir_adults", "dir_removed", "dir_members", "dir_birthdate")
+                     else "error")
 
 
 # ─── pages ───────────────────────────────────────────────────────────
@@ -661,8 +674,12 @@ def render_card(c: Dict[str, Any]) -> str:
             f'{"".join(render_person(p) for p in c["people"])}</li>')
 
 
-def _join_card(church: str) -> str:
+def _join_card(church: str, can_join: bool = True) -> str:
     from member_portal import _e
+    if not can_join:
+        return (f'<div class="mp-card dir-join"><h2>Want to be in the directory?</h2>'
+                f'<p class="mp-muted">To list you, the church office needs your birthdate on your record, so the '
+                f'directory never lists a child. Ask the office to add it.</p></div>')
     return (f'<div class="mp-card dir-join"><h2>Show me in the directory</h2>'
             f'<p class="mp-muted">Members of {_e(church)} will see your name and photo. Your phone, your email and '
             f'your household stay hidden unless you turn each one on.</p>'
@@ -703,7 +720,7 @@ def render_page(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any],
         me_row = (f'<p class="dir-me"><span>You\'re in the directory.</span>'
                   f'<a href="/my/details#directory">Change what shows</a></p>')
     else:
-        me_row = _join_card(church)
+        me_row = _join_card(church, v.get("can_join", True) is not False)
     count = v.get("count") or 0
     everyone = f'{count} {"person" if count == 1 else "people"}'
     cards_html = "".join(render_card(c) for c in v.get("cards") or [])
@@ -762,6 +779,14 @@ def details_block(biz: Dict[str, Any], me_id: str) -> str:
                 f'Ask the office if you\'d like to be back in.</p>')
     if not is_member(me):
         return ""
+    if not known_adult(me):
+        out = (f'{head}<p class="mp-flash" style="margin:0">To list you, the church office needs your birthdate on '
+               f'your record, so the directory never lists a child. Ask the office to add it.</p>')
+        if p["listed"]:
+            out += ('<form method="post" action="/my/directory/me" style="margin-top:10px">'
+                    '<input type="hidden" name="back" value="/my/details"><input type="hidden" name="listed" value="no">'
+                    '<button class="mp-link" type="submit">Take me out of the directory</button></form>')
+        return out
     chk = lambda on: " checked" if on else ""
     return (f'{head}<form class="mp-form" method="post" action="/my/directory/me">'
             f'<input type="hidden" name="back" value="/my/details">'

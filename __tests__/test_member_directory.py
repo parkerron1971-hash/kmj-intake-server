@@ -338,24 +338,22 @@ def test_minors_are_never_listed(fake):
     fake.turn_on()
     fake.add(ANA, "Ana Rivers")
     fake.add(BEN, "Ben Teen", birthdate=TEEN, directory=_yes(phone=True))            # under 18
-    fake.add(CARA, "Cara Child", birthdate=None, directory=_yes())                   # a child on a family
+    # Each flag keeps a person out even when the record's birthdate says adult.
+    fake.add(CARA, "Cara Child", directory=_yes())                                   # a child on a family
     fake.children.append({"business_id": BIZ, "contact_id": CARA})
-    fake.add(DEV, "Dev Linked", birthdate=None, directory=_yes())                    # a teen linked to a parent
+    fake.add(DEV, "Dev Linked", directory=_yes())                                    # a teen linked to a parent
     fake.guardians.append({"business_id": BIZ, "teen_contact_id": DEV})
-    fake.add(ELI, "Eli Tagged", birthdate=None, tags=[" Youth "], directory=_yes())  # tagged by the office
+    fake.add(ELI, "Eli Tagged", tags=[" Youth "], directory=_yes())                  # tagged by the office
     fake.add(FAY, "Fay Leader", tags=["Youth leader"], directory=_yes())             # an adult who leads youth
-    fake.add(GUS, "Gus Nodate", birthdate=None, directory=_yes())                    # no birthdate known
+    fake.add(GUS, "Gus Nodate", birthdate=None, directory=_yes())                    # no birthdate: could be a child
     v = md.view(fake.business(), ANA)
-    assert _names(v) == ["Fay Leader", "Gus Nodate"]
+    assert _names(v) == ["Fay Leader"]
     # The office sees why they're not shown.
     out = md.office_view(fake.business(), can_switch=True)
     hidden = {p["name"]: p["hidden"] for p in out["listed"]}
     assert hidden == {"Ben Teen": "under_18", "Cara Child": "under_18", "Dev Linked": "under_18",
-                      "Eli Tagged": "under_18", "Fay Leader": "", "Gus Nodate": ""}
-    assert out["shown"] == 2
-    # Listed with no birthdate on record: shown, and the office is told.
-    nodate = {p["name"]: p["no_birthdate"] for p in out["listed"]}
-    assert nodate["Gus Nodate"] is True and nodate["Fay Leader"] is False and nodate["Ben Teen"] is False
+                      "Eli Tagged": "under_18", "Fay Leader": "", "Gus Nodate": "no_birthdate"}
+    assert out["shown"] == 1
 
 
 def test_a_minor_cant_join_or_see_it(fake, monkeypatch):
@@ -375,11 +373,21 @@ def test_a_minor_cant_join_or_see_it(fake, monkeypatch):
     page = _app(fake, monkeypatch, DEV).get("/my/directory").text
     assert "Ana Rivers" not in page and "for adults" in page
     assert md.details_block(fake.business(), DEV) == ""
-    # A photo of a listed adult with no birthdate isn't shown (member_photos' rule).
-    fake.add(CARA, "Cara Nodate", birthdate=None, directory=_yes())
-    fake.contacts[CARA]["metadata"]["member_photo"] = {"path": f"{BIZ}/member-photos/x/1.webp", "v": "1"}
-    p = {x["name"]: x for x in _people(md.view(fake.business(), ANA))}["Cara Nodate"]
-    assert p["photo"] == ""
+    # With no birthdate on record nobody is listed (they could be a child),
+    # but they may look, and are told what the office needs.
+    fake.add(CARA, "Cara Nodate", birthdate=None)
+    assert md.save_choice(BIZ, CARA, _yes()) == "dir_birthdate"
+    assert "directory" not in fake.contacts[CARA]["metadata"]
+    v = md.view(fake.business(), CARA)
+    assert v["state"] == "ok" and _names(v) == ["Ana Rivers"] and v["can_join"] is False
+    page = _app(fake, monkeypatch, CARA).get("/my/directory").text
+    assert "needs your birthdate" in page and 'name="listed" value="yes"' not in page
+    block = md.details_block(fake.business(), CARA)
+    assert "needs your birthdate" in block and 'name="listed" value="yes"' not in block
+    # A listed adult's photo shows.
+    fake.contacts[ANA]["metadata"]["member_photo"] = {"path": f"{BIZ}/member-photos/x/1.webp", "v": "1"}
+    p = {x["name"]: x for x in _people(md.view(fake.business(), CARA))}["Ana Rivers"]
+    assert p["photo"].startswith(f"/my/photo/{ANA}?v=")
 
 
 # ─── 5. other churches ───────────────────────────────────────────────

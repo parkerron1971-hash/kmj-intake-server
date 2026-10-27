@@ -212,6 +212,7 @@ ERRORS = {
     "dir_closed": "The directory isn't open at your church right now.",
     "dir_adults": "The directory is for adult members.",
     "dir_members": "The directory is for members. If you're a member, ask the church office to mark you as one.",
+    "dir_birthdate": "To list you, the church office needs your birthdate on your record. Ask the office to add it.",
     "dir_removed": "The church office took you out of the directory, so you can't add yourself back. Ask the office.",
     "alert_used": "You've already sent an after-hours alert tonight. Turn it off to send this; it reaches phones in the morning.",
 }
