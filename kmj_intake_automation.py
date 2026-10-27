@@ -383,6 +383,11 @@ app.include_router(church_register_router)
 # decisions log (2026-10-27; CHURCH_BOARD off | owner | on).
 from church_board import router as church_board_router
 app.include_router(church_board_router)
+# The Monday leaders note: this week, what's needed and one win, emailed to
+# the All group leaders room once a week (2026-10-27; CHURCH_LEADERS_NOTE
+# off | owner | on).
+from church_leaders_note import router as church_leaders_note_router
+app.include_router(church_leaders_note_router)
 # My week: a church login's first page (Who sees what, 2026-10-26).
 from church_my_week import router as church_my_week_router
 app.include_router(church_my_week_router)

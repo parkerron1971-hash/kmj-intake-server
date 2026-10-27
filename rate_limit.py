@@ -196,6 +196,9 @@ _LIMITS: Dict[str, Tuple[int, int]] = {
     # A board's draft minutes emailed to its members (church_board.py), per
     # meeting: a resend or two is normal, a loop of them isn't.
     "church_board_send": (int(os.environ.get("RL_CHURCH_BOARD_SEND_PER_HOUR", "6")), 3600),
+    # The Monday leaders note (church_leaders_note.py), per church: it goes
+    # once a week anyway; this only stops a tap loop of tries that fail.
+    "church_leaders_note_send": (int(os.environ.get("RL_CHURCH_LEADERS_NOTE_SEND_PER_HOUR", "4")), 3600),
 }
 _DEFAULT = (60, 60)
 
