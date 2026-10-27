@@ -1231,11 +1231,12 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
         import member_portal_classes as mcl
         mcl.TAB.set(preview or await asyncio.to_thread(mcl.classes_on, biz["id"]))
     # The member directory (member_directory.py): served only while the
-    # church has it on, and never in the Kids space.
+    # church has it on, and only in Church (never in Youth or Kids, even
+    # for an adult leader who switched there).
     if sub == "/my/directory":
         import member_directory as mdir
         import member_spaces as msp
-        if not mdir.church_on(biz) or (msp.CURRENT.get() or {}).get("space") == "kids":
+        if not mdir.church_on(biz) or (msp.CURRENT.get() or {}).get("space", "church") != "church":
             return RedirectResponse("/my", status_code=303, headers=_SECURE_HEADERS)
         html, status = await mdir.serve(request, biz, site, me)
         return _page(html, status)

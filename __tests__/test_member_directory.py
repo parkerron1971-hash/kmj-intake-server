@@ -353,6 +353,9 @@ def test_minors_are_never_listed(fake):
     assert hidden == {"Ben Teen": "under_18", "Cara Child": "under_18", "Dev Linked": "under_18",
                       "Eli Tagged": "under_18", "Fay Leader": "", "Gus Nodate": ""}
     assert out["shown"] == 2
+    # Listed with no birthdate on record: shown, and the office is told.
+    nodate = {p["name"]: p["no_birthdate"] for p in out["listed"]}
+    assert nodate["Gus Nodate"] is True and nodate["Fay Leader"] is False and nodate["Ben Teen"] is False
 
 
 def test_a_minor_cant_join_or_see_it(fake, monkeypatch):
@@ -362,9 +365,16 @@ def test_a_minor_cant_join_or_see_it(fake, monkeypatch):
     assert md.save_choice(BIZ, BEN, _yes()) == "dir_adults"
     assert "directory" not in fake.contacts[BEN]["metadata"]
     assert md.view(fake.business(), BEN)["state"] == "minor"
-    page = _app(fake, monkeypatch, BEN).get("/my/directory").text
-    assert "Ana Rivers" not in page and "for adults" in page
+    # A teen is always in Youth, where the directory isn't.
+    r = _app(fake, monkeypatch, BEN).get("/my/directory", follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/my"
     assert md.details_block(fake.business(), BEN) == ""
+    # A child on a family with no birthdate is in Church, and still sees nobody.
+    fake.add(DEV, "Dev Child", birthdate=None)
+    fake.children.append({"business_id": BIZ, "contact_id": DEV})
+    page = _app(fake, monkeypatch, DEV).get("/my/directory").text
+    assert "Ana Rivers" not in page and "for adults" in page
+    assert md.details_block(fake.business(), DEV) == ""
     # A photo of a listed adult with no birthdate isn't shown (member_photos' rule).
     fake.add(CARA, "Cara Nodate", birthdate=None, directory=_yes())
     fake.contacts[CARA]["metadata"]["member_photo"] = {"path": f"{BIZ}/member-photos/x/1.webp", "v": "1"}
@@ -579,8 +589,9 @@ def _request(query: str = ""):
                     "headers": [], "server": (HOST, 443), "scheme": "https"})
 
 
-def _app(fake, monkeypatch, me_id):
-    """The church's address with `me_id` signed in (None: signed out)."""
+def _app(fake, monkeypatch, me_id, space=""):
+    """The church's address with `me_id` signed in (None: signed out),
+    in the space they switched to (an approved Youth leader, a parent)."""
     monkeypatch.setenv("CUSTOMER_TOKEN_SECRET", "test-root-secret")
     monkeypatch.setattr(mp, "_church_for_request", lambda req: {"business": fake.business(), "site": {}})
     import rate_limit
@@ -595,7 +606,7 @@ def _app(fake, monkeypatch, me_id):
     import member_spaces as msp
 
     async def resolve(b, me, wanted=""):
-        return msp._placed(me, wanted, {}, False)
+        return msp._placed(me, space, {"youth": {}} if space == "youth" else {}, space == "kids")
     monkeypatch.setattr(msp, "resolve_async", resolve)
 
     async def leads(*a, **kw):
@@ -625,6 +636,15 @@ def test_the_page_on_a_phone(fake, monkeypatch):
     block = md.details_block(fake.business(), ANA)
     assert 'name="listed" value="yes" checked' in block and 'name="phone" value="yes" checked' in block
     assert 'name="email" value="yes">' in block and 'name="household" value="yes">' in block
+
+
+def test_never_in_the_youth_or_kids_space(fake, monkeypatch):
+    fake.turn_on()
+    fake.add(ANA, "Ana Leader", directory=_yes())
+    for space in ("youth", "kids"):
+        r = _app(fake, monkeypatch, ANA, space).get("/my/directory", follow_redirects=False)
+        assert r.status_code == 303 and r.headers["location"] == "/my", space
+    assert _app(fake, monkeypatch, ANA, "church").get("/my/directory").status_code == 200
 
 
 def test_signed_out_never_sees_it(fake, monkeypatch):

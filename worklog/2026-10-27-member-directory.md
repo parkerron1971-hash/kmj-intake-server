@@ -11,6 +11,8 @@ left_undone:
   - "Members count as members by contacts.status active or vip. A church that imported its people as leads (the import's default without a status column) shows an empty directory and 'ask the office to mark you as a member' until the office marks them. Check Love City's statuses before Thursday"
   - "No People door row yet: the church-menu worker adds 'Member directory' there with the office component"
   - "Photos follow member_photos' rule: a listed member with no birthdate on their record shows initials, not their photo"
+  - "No birthdate on record counts as an adult for listing (the brief: under 18 'if one is known'), unlike messaging and photos. The office view flags each such person (no_birthdate). Tighten to 'a known birthdate of 18+' if Kevin wants it"
+  - "One read returns at most 2000 people (LIST_MAX); past that some are left out and a [directory] line is printed to the logs"
 decisions:
   - "Lane: Build, under 'Love City leaves Subsplash (M-1)' (Subsplash has a directory)"
   - "No migration. The church's switch is settings.member_portal.directory = {on}; each member's yes and what shows is contacts.metadata.directory = {listed, phone, email, household, at, removed}"
@@ -18,7 +20,7 @@ decisions:
   - "The office list and take-out/let-back (GET and POST /member-portal/{biz}/directory/...) are the owner or an admin seat (business_access.assert_access 'admin'), the rule member_spaces' leaders follow"
   - "Nobody is listed until they say yes (My details, or the directory page's 'Show me in the directory'). Name and photo always; phone, email and household each behind its own switch, all off. Saying no always works and turns every field off"
   - "Minors never listed and never see it: under 18 by birthdate, a child on a family (children.contact_id), a teen linked for messaging (msg_guardians), or a whole tag youth/kids/teen/child/minor. No birthdate known = an adult for listing"
-  - "Visitors (status lead) and anyone not active/vip aren't listed and see 'the directory is for members'. Youth and Kids spaces never show it"
+  - "Visitors (status lead) and anyone not active/vip aren't listed and see 'the directory is for members'. Youth and Kids spaces never show it, even to an adult leader who switched there (/my/directory redirects to /my)"
   - "Households show together only between listed adults who each turned household on; one alone shows nothing about the household"
   - "Message goes to /my/messages/to/<id> (member messaging, screened and watched by the safety officers) only while the church has messaging on and that person can message; otherwise only what each person chose shows"
   - "The office takes someone out with a reason the member sees on the directory and My details; they can't put themselves back until the office lets them back, and then they say yes again themselves"
@@ -43,7 +45,7 @@ page.
 - `member_app_ui.py`: the `directory` tab, its icon, hint and colour.
 - `kmj_intake_automation.py`: mounts the router before the site catch-all.
 
-Tests: `__tests__/test_member_directory.py` (23). Each rule was broken on
+Tests: `__tests__/test_member_directory.py` (24). Each rule was broken on
 purpose (the minor check, the member check, a phone always shown, a removed
 member rejoining, the owner switch, a minor viewer, household grouping,
 a removal on a listed record, the church filter) and a test caught every one.

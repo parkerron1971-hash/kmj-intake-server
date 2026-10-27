@@ -249,7 +249,16 @@ def listed(business_id: str) -> Optional[List[Dict[str, Any]]]:
     rows = sb_clients.sb_get_as_service(
         f"/contacts?business_id=eq.{_q(business_id)}&metadata=cs.{_contains({KEY: {'listed': True}})}"
         f"&select={_LISTED}&order=name.asc&limit={LIST_MAX}")
+    _full(business_id, rows)
     return rows if isinstance(rows, list) else None
+
+
+def _full(business_id: str, rows: Any) -> None:
+    """Past LIST_MAX people the list is cut short: say so in the logs
+    (only print reaches them), since the page can't."""
+    if isinstance(rows, list) and len(rows) >= LIST_MAX:
+        print(f"[directory] {business_id}: {len(rows)} rows, the most one read returns; some are left out",
+              flush=True)
 
 
 def flagged(business_id: str, ids: Iterable[str]) -> Optional[Set[str]]:
@@ -418,6 +427,7 @@ def office_view(biz: Dict[str, Any], *, can_switch: bool) -> Optional[Dict[str, 
         f"&select=id,name,status,birthdate,tags,directory:metadata->directory&order=name.asc&limit={LIST_MAX}")
     if not isinstance(rows, list):
         return None
+    _full(b, rows)
     flags = flagged(b, [r["id"] for r in rows])
     if flags is None:
         return None
@@ -429,8 +439,11 @@ def office_view(biz: Dict[str, Any], *, can_switch: bool) -> Optional[Dict[str, 
             out.append({"id": str(r["id"]), "name": name, "reason": p["removed"]["reason"], "at": p["removed"]["at"]})
         elif p["listed"]:
             hidden = "under_18" if is_minor(r, flags) else "" if is_member(r) else "not_member"
+            # Listed with no birthdate on record: shown (a minor is caught by
+            # a known birthdate, a family, a parent link or a tag), and the
+            # office is told, so it can add one or take them out.
             on_list.append({"id": str(r["id"]), "name": name, "shows": [f for f in FIELDS if p[f]],
-                            "hidden": hidden})
+                            "hidden": hidden, "no_birthdate": not hidden and _age(r, None) is None})
     return {"ok": True, "on": church_on(biz), "can_switch": can_switch, "messaging": mpm.turned_on(biz),
             "listed": on_list, "removed": out, "shown": sum(1 for x in on_list if not x["hidden"])}
 
