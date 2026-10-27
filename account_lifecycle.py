@@ -173,6 +173,10 @@ EXPORT_EXCLUDED: Dict[str, str] = {
     "ledger_erasure_tickets":  "tamper-evident ledger: erasure requests; evidence",
 }
 BUSINESS_CHILD_TABLES: List[str] = [
+    # Help requests (church_help.py): what was given before its request, and
+    # both before the Prayer & care asks, contacts and expenses they cite.
+    # The fund's settings name nothing by id.
+    "church_help_given", "church_help_requests", "church_help_settings",
     # Owner-only account export includes private care and finance history.
     # Erase children before their business, contact and invoice records.
     # A request's private notes go before the request.
@@ -847,6 +851,10 @@ _IMPORT_SKIP = {
     # id; same reason. A restored church keeps its list of spaces (they cite
     # nothing) and books them again.
     "church_space_bookings",
+    # A help request cites its person and its Prayer & care ask by id, and
+    # help given cites its request and its expense; same reason. The export
+    # keeps them; a restored church keeps its fund's settings.
+    "church_help_given", "church_help_requests",
     # Event sign-ups cite their event (a module entry) and the person by id,
     # and a setup and its ticket types cite the event; the importer re-mints
     # those ids, so the export keeps them and a restored church sets its
