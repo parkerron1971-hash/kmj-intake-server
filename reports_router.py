@@ -61,6 +61,24 @@ def _gl_or_fallback(biz: str, gl_fn, h3a_fn) -> Dict[str, Any]:
     return data
 
 
+def _giving_wall(biz: str, user: AuthedUser) -> None:
+    """Church Areas step 2: where a church named a keeper for Giving & money,
+    who gave what and the bank need that keeper's key (church_keys.wall).
+    The totals stay open."""
+    import church_keys
+    church_keys.wall(biz, user, "giving_money")
+
+
+def _givers_hidden(biz: str, user: AuthedUser, data: Dict[str, Any]) -> Dict[str, Any]:
+    """Revenue and profitability keep their totals behind the Giving lock;
+    only the per-giver rows (by_customer) are left out."""
+    import church_keys
+    if isinstance(data, dict) and data.get("by_customer") \
+            and not church_keys.is_open(biz, user, "giving_money"):
+        return {**data, "by_customer": [], "givers_locked": True}
+    return data
+
+
 def _owner_or_accountant(biz: str, user: AuthedUser) -> Dict[str, Any]:
     """Category D — the year-end deliverables (IIF + package) are exactly
     what the accountant collaborator exists for; allow active accountants
@@ -587,7 +605,7 @@ def revenue(biz: str, period: str = "this_month",
         return _needs_gl("revenue", total_revenue=0, by_account=[], by_source=[],
                          by_customer=[], by_offering=[], monthly=[])
     try:
-        return gl_reports_t2.revenue_report(biz, period, from_, to)
+        return _givers_hidden(biz, user, gl_reports_t2.revenue_report(biz, period, from_, to))
     except ValueError as e:
         raise HTTPException(400, str(e))
 
@@ -680,7 +698,7 @@ def profitability(biz: str, period: str = "this_year",
     if not gl_reports.gl_active(biz):
         return _needs_gl("profitability", by_customer=[], by_offering=[])
     try:
-        return gl_reports_t3.profitability(biz, period, from_, to)
+        return _givers_hidden(biz, user, gl_reports_t3.profitability(biz, period, from_, to))
     except ValueError as e:
         raise HTTPException(400, str(e))
 
@@ -713,6 +731,7 @@ def donors(biz: str, period: str = "this_year",
     from giving_records import require_finance
     require_finance(biz, user)
     biz_row = _owner_or_reader(biz, user)
+    _giving_wall(biz, user)
     billing_limits.require_feature(biz, "vertical_reports")
     period, from_, to = _fiscal_period(biz_row, period, from_, to)
     try:
@@ -737,6 +756,7 @@ def bank_reconciliation(biz: str, period: str = "this_month",
                         from_: Optional[str] = Query(None, alias="from"), to: Optional[str] = None,
                         user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     biz_row = _owner_or_reader(biz, user)
+    _giving_wall(biz, user)
     period, from_, to = _fiscal_period(biz_row, period, from_, to)
     try:
         return gl_reports_t4.bank_reconciliation(biz, period, from_, to)
@@ -862,6 +882,7 @@ def superbill_pdf(biz: str, contact_id: str, month: Optional[str] = None,
 @router.get("/statement-customers")
 def statement_customers(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     _owner_or_reader(biz, user)
+    _giving_wall(biz, user)
     return {"ok": True, "customers": gl_reports_t2.list_statement_customers(biz)}
 
 
@@ -869,6 +890,7 @@ def statement_customers(biz: str, user: AuthedUser = Depends(require_user)) -> D
 def customer_statement(biz: str, contact_id: str, as_of: Optional[str] = None,
                        user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     _owner_or_reader(biz, user)
+    _giving_wall(biz, user)
     return gl_reports_t2.customer_statement(biz, contact_id, as_of)
 
 
@@ -881,6 +903,7 @@ async def customer_statement_send(biz: str, contact_id: str,
     biz_row = _owner_or_reader(biz, user)
     from business_users_router import require_role
     require_role(biz, str(user.id), "member")
+    _giving_wall(biz, user)
     data = gl_reports_t2.customer_statement(biz, contact_id, None)
     contact = data.get("contact") or {}
     to_email = contact.get("email")
@@ -935,6 +958,8 @@ def export(biz: str, report: str, format: str = "csv",
     if report == "donors":
         from giving_records import require_finance
         require_finance(biz, user)
+    if report in ("donors", "customer_statement", "bank_reconciliation"):
+        _giving_wall(biz, user)
     if report not in _REPORT_TITLES:
         raise HTTPException(400, "unknown report")
     # Exports gate exactly like their screens; Starter reports (P&L,
@@ -1019,6 +1044,8 @@ def export(biz: str, report: str, format: str = "csv",
                 custom_from=from_, custom_to=to)
     except ValueError as e:
         raise HTTPException(400, str(e))
+    if report in ("revenue", "profitability"):
+        data = _givers_hidden(biz, user, data)
 
     biz_name = biz_row.get("name") or "Business"
 

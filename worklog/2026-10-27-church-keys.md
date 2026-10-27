@@ -3,12 +3,11 @@ title: Church areas, step 2 — keepers and keys (server; nothing locked yet)
 date: 2026-10-27
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-10-23: "if Pastor look at money another leader is notified and have to recieve a code from that person to get into money"; 2026-10-26: "go with your picks" (the lock binds the owner too; a tap with a code as the backup; a yes opens an hour) and "go ahead, you build step 2 after the media fixes"'
-status: in progress
-prs: [kmj-intake-server (this PR)]
+status: shipped
+prs: [kmj-intake-server#1602]
 migrations: ["supabase/APPLY-2026-10-27-church-keys.sql (APPLIED LIVE 10/27 after a rollback rehearsal)"]
 left_undone:
-  - "The doors (next server PR): who gave what, the bank and payouts (giving records, statements, Chief's giving actions, the donor report and export, Stripe charges, customers and payouts, the bank feed); kids' medical and custody notes; pastors-only notes and prayer"
-  - "Asking from an accountant's collaborator login: the routes take an owner or an office login, and an accountant collaborator has neither"
+  - "The doors: Giving's are in 2026-10-27-church-key-doors-giving.md (with asking from an accountant's login); kids' medical and custody notes and pastors-only notes and prayer are the next server PR"
   - "The app: naming keepers on the Areas page, Ask for a key, a keeper's yes or no, entering the code"
   - "The database lock on the giving rows the app reads directly (invoices gift rows through ministry_finance_access)"
   - "Approval levels for money the system sends (contractor payments) and for money paid outside it"
