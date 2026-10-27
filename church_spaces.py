@@ -666,23 +666,28 @@ def decide(me: Dict[str, Any], booking_id: str, status: Any, series: bool, tz_na
         raise HTTPException(503, "That didn't save. Try again.")
     if not got:
         raise HTTPException(409, "That booking was settled already.")
-    return {"bookings": shown(me, sorted(got, key=lambda r: str(r.get("start_at"))))}
+    rows = shown(me, sorted(got, key=lambda r: str(r.get("start_at"))))
+    # A cancelled rental's bill stays a bill until someone voids it in Bills:
+    # the app names it, so it isn't sent or chased by mistake.
+    left = [r["bill"] for r in rows if status == "cancelled" and isinstance(r.get("bill"), dict)
+            and r["bill"].get("status") in ("draft", "sent", "overdue")]
+    return {"bookings": rows, "bills_left": left}
 
 
 # ─── Rentals: the bill ────────────────────────────────────────────────
 
 def _next_number(biz_id: str) -> str:
-    """The invoices' own numbering (InvoiceComposer, Chief): INV-YYYY-NNN."""
+    """The invoices' own numbering (InvoiceComposer, Chief): INV-YYYY-NNN,
+    one past the year's highest, read as numbers (as text, INV-2026-1000
+    sorts below INV-2026-999). Two bills made in the same moment can still
+    share a number, as they can from the composer: the table doesn't
+    forbid it, and the bill's id is what links it."""
     prefix = f"INV-{_now().year}-"
     rows = _need(f"/invoices?business_id=eq.{_q(biz_id)}&invoice_number=like.{_q(prefix)}%25"
-                 "&select=invoice_number&order=invoice_number.desc&limit=1")
-    n = 1
-    if rows and rows[0].get("invoice_number"):
-        try:
-            n = int(str(rows[0]["invoice_number"]).split("-")[-1]) + 1
-        except ValueError:
-            n = 1
-    return f"{prefix}{n:03d}"
+                 "&select=invoice_number&limit=5000")
+    seen = [int(m.group(1)) for r in rows
+            if (m := re.fullmatch(re.escape(prefix) + r"(\d+)", str(r.get("invoice_number") or "")))]
+    return f"{prefix}{(max(seen) + 1 if seen else 1):03d}"
 
 
 def _renter(biz_id: str, booking: Dict[str, Any]) -> Optional[str]:

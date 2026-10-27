@@ -13,6 +13,8 @@ left_undone:
   - "An accountant collaborator has no business_users role, so Rentals (owner and admins) doesn't open for them, though ministry_finance_access lets them read invoices"
   - "Rooms per Sunday service, setup/teardown buffers, and resources attached to a room (the projector that lives in the hall): Planning Center has them; not here yet"
   - "Chief can't book a room yet (no action handler)"
+  - "Two bills made in the same moment (from here or the composer) can share an INV number: the invoices table has no unique number for ordinary bills"
+  - "Cancelling a billed rental leaves its bill as it is: the answer names it (bills_left) and the app says to void it in Bills; nothing voids it for them"
 decisions:
   - "Lane: Build, under the Build item 'Love City leaves Subsplash (M-1)'"
   - "One row per booking; a weekly repeat is one row a week sharing series_id, expanded in the church's clock (the app sends the person's own zone), a year at most, all or none"
@@ -39,11 +41,12 @@ related: [2026-10-27-church-keys.md, 2026-10-23-church-areas-map.md]
 - `.github/workflows/ci.yml`: adds `church_spaces_db.mjs`.
 
 Checks:
-- `__tests__/test_church_spaces.py`: 14 tests (the clash refused and named,
+- `__tests__/test_church_spaces.py`: 15 tests (the clash refused and named,
   two presses at once, requests and approvals, weekly repeats across the
   clock change, a login outside the office refused, another church's spaces
   invisible, the switch and missing tables, the bill made once and linked,
-  rental money kept to the owner and admins, the spaces list).
+  rental money kept to the owner and admins, the bill number read as numbers
+  and the bill a cancel leaves named, the spaces list).
 - `__tests__/church_spaces_db.mjs`: 32 checks on PGlite with btree_gist.
 - Export/import, the access ratchet, route type hints, seat access, areas
   and keys pass.

@@ -382,6 +382,23 @@ def test_a_rental_bill_is_made_once_and_linked(db):
     assert edit.status_code == 409
 
 
+def test_the_bill_number_follows_the_years_highest_and_a_cancel_names_the_bill_left(db):
+    db.t["invoices"] += [{"id": f"i{n}", "business_id": BIZ, "invoice_number": f"INV-2026-{n:03d}", "status": "paid"}
+                         for n in (7, 999, 1000)] + [{"id": "x", "business_id": BIZ, "invoice_number": "INV-2026-draft"},
+                                                     {"id": "o", "business_id": OTHER, "invoice_number": "INV-2026-5000"}]
+    r = _rental().json()["bookings"][0]
+    client("admin").post(f"/church/spaces/bookings/{r['id']}/bill", json={"business_id": BIZ, "tz": NY})
+    made = [i for i in db.t["invoices"] if i.get("contact_id")][0]
+    assert made["invoice_number"] == "INV-2026-1001", "read as numbers, this church's only"
+    gone = client("admin").post(f"/church/spaces/bookings/{r['id']}/decide",
+                                json={"business_id": BIZ, "status": "cancelled"}).json()
+    assert gone["bookings"][0]["status"] == "cancelled"
+    assert [b["id"] for b in gone["bills_left"]] == [made["id"]] and gone["bills_left"][0]["status"] == "draft"
+    use = _book("admin", start_at=_ny(2026, 11, 2, 9), end_at=_ny(2026, 11, 2, 10)).json()["bookings"][0]
+    assert client("admin").post(f"/church/spaces/bookings/{use['id']}/decide",
+                                json={"business_id": BIZ, "status": "cancelled"}).json()["bills_left"] == []
+
+
 def test_a_bill_needs_a_booked_rental_with_an_amount_and_somewhere_to_go(db):
     use = _book("admin").json()["bookings"][0]
     assert client("admin").post(f"/church/spaces/bookings/{use['id']}/bill", json={"business_id": BIZ}).status_code == 400
