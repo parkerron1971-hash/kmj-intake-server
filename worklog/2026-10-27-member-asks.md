@@ -22,7 +22,8 @@ decisions:
   - "Members see free and busy only (booked times on the day they pick), never a title or a name; a clash is 'taken then', never what's there"
   - "Room asks need Rooms & spaces open for the church (CHURCH_SPACES, its owner switch read as 'the church's owner is the platform owner') and an active room; pledges need Pledges & campaigns open and a campaign that hasn't ended (a pledge Sunday often comes before the start)"
   - "Pledges keep church_pledges' rules (its amount check, one per giver per campaign, request_id): pledging again changes the amount of the one pledge. recorded_by is the member's own contact id (a member signs in as a person, not a login). Progress is the member's own paid gifts to the fund in the campaign's dates (church_pledges.progress)"
-  - "Minors: a teen (13 to 17) or anyone member_directory.is_minor marks (a child on a family, a teen linked to a parent, a youth/kids tag) gets only prayer and help; help goes the youth way (pastors only, marked Youth). Kids, and an adult leader who switched into Youth, are sent back to /my. A read that fails is a 503, never 'an adult'"
+  - "Minors: a teen (13 to 17) or anyone member_directory.is_minor marks (a child on a family, a teen linked to a parent, a youth/kids tag) gets only prayer and help; help goes the youth way (pastors only, marked Youth). Kids, and an adult leader who switched into Youth, are sent back to /my. A read that fails is a 503, never 'an adult'. Home and Me use the same rule (kept five minutes), so their line never promises a minor more than the page gives"
+  - "Review fixes: the switch's owner lookup runs off the event loop; a failed read before a room or care write is an error, never a second request"
   - "Rate limit: member_ask (6 an hour) and member_ask_day (15 a day), strict, on top of member_action"
   - "Who hears: room → the office; help, visit, life event → People & care; pledge → the owner, admins and the accountant. Owner and admins always; with CHURCH_AREAS on, also the logins whose areas are the whole church or include it. Phone alerts via push_notifications.send_to_user, the bell via notification_engine.create_urgent_alert (deduplicated per ask)"
   - "Switch CHURCH_MEMBER_ASKS = off | owner | on, default owner (church_keys' pattern): with owner, only the platform owner reaches the office routes, and members are served only at a church whose owner is the platform owner (read from Auth, kept ten minutes, a failed read is a no)"
@@ -46,7 +47,7 @@ section's pattern).
 - `rate_limit.py`: `member_ask`, `member_ask_day`.
 - `kmj_intake_automation.py`: mounts the router before the site catch-all.
 
-Checks: `__tests__/test_member_asks.py` (27). I broke eleven rules on purpose
+Checks: `__tests__/test_member_asks.py` (29). I broke eleven rules on purpose
 (minors ignored, every ask for a teen, the form's contact, the prayer team,
 an ended campaign, the rate limit, asks on by default, the switch, who hears)
 and the tests caught each one; the two that passed (no clash pre-check, a

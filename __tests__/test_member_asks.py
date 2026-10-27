@@ -208,6 +208,7 @@ def fake(monkeypatch):
     monkeypatch.setattr(church_spaces, "_tz", lambda me, given=None: NY)
     ma._READY.clear()
     ma._OWNER_CACHE.clear()
+    ma._MINOR.clear()
     f.told = []
     monkeypatch.setattr(ma, "notify", lambda *a, **kw: f.told.append(a))
     f.person(ANA, "Ana Rivers")
@@ -644,6 +645,35 @@ def test_anyone_the_office_marks_a_child_is_a_minor_here_too(fake, monkeypatch):
     fake.down.add("children")
     assert ma.minor(BIZ, {"id": ANA}) is None
     assert _app(fake, monkeypatch, ANA).get("/my/ask").status_code == 503
+
+
+def test_home_and_me_promise_a_minor_only_what_the_page_gives(fake, monkeypatch):
+    fake.turn_on()
+    fake.person(TEO, "Teo Rivers", tags=["Youth"])          # an adult birthdate, tagged youth
+    assert ma.entry(fake.business(), {"id": TEO, "birthdate": ADULT}) == ["help"]
+    assert ma.entry(fake.business(), {"id": ANA, "birthdate": ADULT}) == list(ma.ASKS)
+    # A read that fails promises the fewest, and isn't kept.
+    ma._MINOR.clear()
+    fake.down.add("children")
+    assert ma.entry(fake.business(), {"id": ANA, "birthdate": ADULT}) == ["help"]
+    assert not ma._MINOR
+
+
+def test_a_failed_read_before_writing_never_writes_twice(fake, monkeypatch):
+    fake.turn_on("help", "room")
+    c = _app(fake, monkeypatch, ANA)
+    real = fake.get
+
+    def get(path, **kw):
+        if path.startswith("/ministry_care_requests") or (path.startswith("/church_space_bookings")
+                                                          and "contact_id=eq." in path):
+            return None
+        return real(path, **kw)
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", get)
+    assert _post(c, "/my/ask/care", {"kind": "help", "pick": "food", "text": "Groceries"}).headers["location"]         == "/my/ask/help?err=error"
+    r = _post(c, "/my/ask/room", {**_slot(), "reason": "Baby shower"})
+    assert "err=error" in r.headers["location"]
+    assert not fake.t["ministry_care_requests"] and not fake.t["church_space_bookings"] and not fake.told
 
 
 def test_kids_and_an_adult_in_youth_go_back_to_church(fake, monkeypatch):

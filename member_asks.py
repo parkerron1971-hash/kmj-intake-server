@@ -343,13 +343,27 @@ def minor(business_id: str, me: Dict[str, Any]) -> Optional[bool]:
     return mdir.is_minor(row, flags)
 
 
+_MINOR: Dict[Tuple[str, str], Tuple[float, bool]] = {}
+MINOR_SECONDS = 300
+
+
 def entry(biz: Dict[str, Any], me: Dict[str, Any]) -> List[str]:
-    """For Home and Me: the asks to point at, from what the session knows (a
-    teen by birthdate). The page itself checks the rest."""
+    """For Home and Me: the asks to point at, by the same minor rule as the
+    page, so the line never promises a teen (or anyone marked a child) more
+    than the page gives. Kept five minutes per member per replica; a read
+    that fails counts as a minor (the fewest asks)."""
     if not turned_on(biz) or not church_open(biz):
         return []
-    import member_spaces as msp
-    return offered(biz, minor=msp.is_youth(me))
+    key = (str(biz.get("id")), str(me.get("id")))
+    hit = _MINOR.get(key)
+    if hit and time.monotonic() - hit[0] < MINOR_SECONDS:
+        young = hit[1]
+    else:
+        found = minor(key[0], me)
+        young = found is not False
+        if found is not None:
+            _MINOR[key] = (time.monotonic(), young)
+    return offered(biz, minor=young)
 
 
 # ─── Telling the people who handle it ─────────────────────────────────
@@ -526,7 +540,9 @@ def ask_room(biz: Dict[str, Any], me: Dict[str, Any], form: Dict[str, Any]) -> T
             f"/church_space_bookings?business_id=eq.{_q(biz['id'])}&space_id=eq.{_q(sid)}"
             f"&contact_id=eq.{_q(me['id'])}&status=eq.requested&start_at=eq.{_q(s_utc)}&end_at=eq.{_q(e_utc)}"
             "&select=id&limit=1")
-        if isinstance(again, list) and again:
+        if not isinstance(again, list):
+            return False, "error", keep
+        if again:
             return True, "ask_room", keep
         title = reason if len(reason) <= church_spaces.TITLE_MAX else reason[:church_spaces.TITLE_MAX - 1] + "…"
         church_spaces.book({"biz": {"id": str(biz["id"]), "owner_id": None}, "role": "member", "uid": None}, {
@@ -590,10 +606,10 @@ def ask_care(biz: Dict[str, Any], me: Dict[str, Any], kind: str, form: Dict[str,
     have = sb_clients.sb_get_as_service(
         f"/ministry_care_requests?business_id=eq.{_q(biz['id'])}&contact_id=eq.{_q(me['id'])}&status=eq.new"
         f"&submission->>kind=eq.{_q(kind)}&select=submission&order=created_at.desc&limit=20")
-    if isinstance(have, list) and any(isinstance(r.get("submission"), dict)
-                                       and r["submission"].get("request") == sub["request"]
-                                       and r["submission"].get(PICK_FIELD[kind]) == sub[PICK_FIELD[kind]]
-                                       for r in have):
+    if not isinstance(have, list):
+        return False, "error"
+    if any(isinstance(r.get("submission"), dict) and r["submission"].get("request") == sub["request"]
+           and r["submission"].get(PICK_FIELD[kind]) == sub[PICK_FIELD[kind]] for r in have):
         return True, _done_code(kind, sub)
     rows = sb_clients.sb_post_as_service("/ministry_care_requests", {
         "business_id": str(biz["id"]), "form_id": None, "contact_id": str(me["id"]), "status": "new",
@@ -776,7 +792,7 @@ async def _start(request: Request, ask: str, back: str):
     if not me:
         return church, None, form, False, mpc._back("/my")
     biz = church["business"]
-    if not church_open(biz) or ask not in turned_on(biz):
+    if ask not in turned_on(biz) or not await asyncio.to_thread(church_open, biz):
         return church, me, form, False, _go("/my/ask", err="ask_off")
     young = await asyncio.to_thread(minor, str(biz["id"]), me)
     if young is None:
@@ -1278,7 +1294,7 @@ async def serve(request: Request, biz: Dict[str, Any], site, me: Dict[str, Any],
     space = ctx.get("space", "church")
     if space == "kids" or (space == "youth" and not ctx.get("youth")):
         return home
-    if not turned_on(biz) or not church_open(biz):
+    if not turned_on(biz) or not await asyncio.to_thread(church_open, biz):
         return home
     young = await asyncio.to_thread(minor, str(biz["id"]), me)
     if young is None:
