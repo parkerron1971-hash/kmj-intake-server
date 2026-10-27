@@ -4,8 +4,11 @@
 # and the church's pastors talk together (Kevin, 2026-10-20: "yes all group
 # leaders room would be great"; member_portal_groups /my/groups/leaders on
 # member_portal_messaging's thread kind "leaders"). Pins:
-#   1. who's in it, read live: leaders of ACTIVE groups and ACTIVE pastoral
-#      roles; never a plain member, an invited pastor, or a non-pastoral role
+#   1. who's in it, read live: leaders of ACTIVE groups and ACTIVE roles that
+#      lead (pastors, ministry and team leads, the welcome lead, teachers, or
+#      a role another role answers to; Kevin 2026-10-27); never a plain
+#      member, an invited pastor, or a role that leads nothing (an
+#      intercessor, a kids worker)
 #   2. the room's page for the people in it; "not here" for anyone else
 #   3. it's a real chat: sending, replies and reactions work; a message is
 #      checked like any other
@@ -31,6 +34,9 @@ from test_member_messaging import ANA, BEN, BIZ, CARL, GRP, HOST, JSON, TEEN, YO
 from test_member_safety_officers import ELDER, EXEC, GREETER, OWNERC, STAFFER, church  # noqa: F401
 
 ROOM = "/my/groups/leaders"
+LEADI = "00000000-0000-4000-8000-0000000000f6"     # Intercessor leader: the Intercessors answer to her
+PRAYS = "00000000-0000-4000-8000-0000000000f7"     # one of the Intercessors
+KIDSW = "00000000-0000-4000-8000-0000000000f8"     # a kids worker
 
 
 @pytest.fixture
@@ -40,6 +46,24 @@ def room(church):
                                  "guidelines_at": "2026-10-01T00:00:00+00:00"} for c in (ELDER, GREETER)]
     church.t.setdefault("msg_reactions", [])
     return church
+
+
+def _prayer_and_kids(t):
+    """An Intercessor leader the Intercessors answer to, one Intercessor, and
+    a kids worker, each holding an active role."""
+    t["contacts"] += [{"id": c, "business_id": BIZ, "name": n, "birthdate": "1980-01-01", "email": f"{c[-2:]}@example.com"}
+                      for c, n in ((LEADI, "Lena Ives"), (PRAYS, "Pat Rice"), (KIDSW, "Kim Wade"))]
+    t["church_role_defs"] += [
+        {"id": "def-intercessor_leader", "business_id": BIZ, "key": "intercessor_leader", "title": "Intercessor leader",
+         "job": "prayer", "status": "active", "sort": 10, "created_at": "2026-10-17T00:00:00+00:00"},
+        {"id": "def-intercessors", "business_id": BIZ, "key": "intercessors", "title": "Intercessors", "job": "prayer",
+         "status": "active", "sort": 11, "created_at": "2026-10-17T00:00:00+00:00", "reports_to": "def-intercessor_leader"},
+        {"id": "def-kids", "business_id": BIZ, "key": "kids_workers", "title": "Kids workers", "job": "kids",
+         "status": "active", "sort": 12, "created_at": "2026-10-17T00:00:00+00:00"}]
+    t["church_leader_roles"] += [
+        {"id": f"00000000-0000-4000-9999-00000000001{n}", "scope": "", "invited_at": "2026-10-17T00:00:00+00:00",
+         "business_id": BIZ, "contact_id": c, "role": k, "status": "active"}
+        for n, (c, k) in enumerate(((LEADI, "intercessor_leader"), (PRAYS, "intercessors"), (KIDSW, "kids_workers")))]
 
 
 def _app(env, who):
@@ -60,10 +84,19 @@ def _tid(env):
 
 # ── 1. who's in it ───────────────────────────────────────────────────
 
-def test_leaders_of_active_groups_and_active_pastors_are_in(room):
+def test_group_leaders_pastors_and_department_leaders_are_in(room):
     ids = {p["contact_id"] for p in mpm.leaders_room_people(BIZ)}
-    assert ids == {BEN, CARL, ELDER, STAFFER, OWNERC}
-    assert not ids & {ANA, TEEN, EXEC, GREETER}      # a member, a teen, an invited pastor, a welcome lead
+    assert ids == {BEN, CARL, ELDER, STAFFER, OWNERC, GREETER}     # the welcome lead leads a department
+    assert not ids & {ANA, TEEN, EXEC}               # a member, a teen, an invited pastor
+
+
+def test_a_role_is_in_when_it_leads_and_out_when_it_leads_nothing(room):
+    _prayer_and_kids(room.t)
+    ids = {p["contact_id"] for p in mpm.leaders_room_people(BIZ)}
+    assert LEADI in ids                              # the Intercessors answer to her
+    assert not ids & {PRAYS, KIDSW}                  # an intercessor and a kids worker lead nothing
+    next(d for d in room.t["church_role_defs"] if d["key"] == "intercessors")["reports_to"] = None
+    assert LEADI not in {p["contact_id"] for p in mpm.leaders_room_people(BIZ)}   # nobody answers to her now
 
 
 def test_leading_an_archived_group_doesnt_count(room):
@@ -84,14 +117,15 @@ def test_a_failed_read_is_none_not_empty(room, monkeypatch):
 def test_the_room_opens_for_a_group_leader(room):
     r = _app(room, BEN).get(ROOM)
     assert r.status_code == 200 and "All group leaders" in r.text and 'id="gc-compose"' in r.text
-    assert "5 people" in r.text
+    assert "6 people" in r.text and "leads a group or a ministry" in r.text
     assert room.t["msg_threads"][0]["kind"] == "leaders"     # made on first visit, one per church
     _app(room, ELDER).get(ROOM)
     assert len([t for t in room.t["msg_threads"] if t["kind"] == "leaders"]) == 1
 
 
 def test_anyone_else_is_told_its_for_leaders(room):
-    for who in (ANA, GREETER):
+    _prayer_and_kids(room.t)
+    for who in (ANA, PRAYS):
         r = _app(room, who).get(ROOM)
         assert r.status_code == 404 and "This room is for" in r.text and 'id="gc-compose"' not in r.text
 
@@ -155,9 +189,13 @@ def test_connect_shows_the_door_only_to_the_people_in_it(room):
     assert 'href="/my/groups/leaders"' not in _app(room, BEN).get("/my/groups").text
 
 
-def test_the_lead_page_has_the_door_for_a_pastor(room):
+def test_the_lead_page_has_the_door_for_a_pastor_and_a_department_leader(room):
+    _prayer_and_kids(room.t)
+    room.t["msg_members"].append({"contact_id": PRAYS, "business_id": BIZ, "enabled": True,
+                                  "guidelines_at": "2026-10-01T00:00:00+00:00"})
     assert 'href="/my/groups/leaders"' in _app(room, ELDER).get("/my/lead").text
-    assert 'href="/my/groups/leaders"' not in _app(room, GREETER).get("/my/lead").text   # a role, but not pastoral
+    assert 'href="/my/groups/leaders"' in _app(room, GREETER).get("/my/lead").text       # the welcome lead
+    assert 'href="/my/groups/leaders"' not in _app(room, PRAYS).get("/my/lead").text     # a role that leads nothing
 
 
 # ── 6. its push ──────────────────────────────────────────────────────
