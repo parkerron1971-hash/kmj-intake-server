@@ -173,6 +173,11 @@ EXPORT_EXCLUDED: Dict[str, str] = {
     "ledger_erasure_tickets":  "tamper-evident ledger: erasure requests; evidence",
 }
 BUSINESS_CHILD_TABLES: List[str] = [
+    # Board & minutes (church_board.py): decisions and attendance before the
+    # items and members they cite, items before their meetings, meetings and
+    # members before their boards; all before the contacts and tasks they cite.
+    "church_board_decisions", "church_board_attendance", "church_board_items", "church_board_meetings",
+    "church_board_members", "church_boards",
     # Help requests (church_help.py): what was given before its request, and
     # both before the Prayer & care asks, contacts and expenses they cite.
     # The fund's settings name nothing by id.
@@ -851,6 +856,13 @@ _IMPORT_SKIP = {
     # id; same reason. A restored church keeps its list of spaces (they cite
     # nothing) and books them again.
     "church_space_bookings",
+    # A board's members cite its people and logins by id; its meetings,
+    # agenda items (carried from one another, linked to tasks), attendance
+    # and decisions cite each other by id; same reason. The export keeps the
+    # minutes; a restored church keeps its boards and names their members
+    # again.
+    "church_board_decisions", "church_board_attendance", "church_board_items", "church_board_meetings",
+    "church_board_members",
     # A help request cites its person and its Prayer & care ask by id, and
     # help given cites its request and its expense; same reason. The export
     # keeps them; a restored church keeps its fund's settings.
