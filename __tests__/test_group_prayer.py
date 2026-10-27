@@ -16,6 +16,7 @@
 import asyncio
 import pathlib
 import sys
+from datetime import datetime, timezone
 
 import pytest
 
@@ -46,6 +47,10 @@ def wall(fake, monkeypatch):
         return True
     monkeypatch.setattr(sb_clients, "sb_delete_as_service", delete)
     _screen(monkeypatch, "ok")
+    # The fake stamps every row in the week of 2026-10-20, and a pastor card
+    # leaves the wall after PASTOR_CARD_DAYS: the wall reads the clock of
+    # that week, or this suite fails from 2026-10-27 on.
+    monkeypatch.setattr(gp, "_now", lambda: datetime(2026, 10, 21, 12, 0, tzinfo=timezone.utc))
     fake.prayed = told
     return fake
 
