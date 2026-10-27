@@ -433,11 +433,12 @@ def test_the_switch(db, monkeypatch):
 def test_status_says_what_each_login_sees(db, monkeypatch):
     def status(name, biz=BIZ):
         return client(name).get(f"/church/reports/status?business_id={biz}")
-    assert status("owner").json() == {"enabled": True, "giving": True, "deaths": True}
-    assert status("admin").json() == {"enabled": True, "giving": True, "deaths": True}
-    assert status("clerk").json() == {"enabled": True, "giving": False, "deaths": False}
-    assert status("books").json() == {"enabled": True, "giving": True, "deaths": False}, "the accountant sees giving"
-    off = {"enabled": False, "giving": False, "deaths": False}
+    assert status("owner").json() == {"enabled": True, "giving": True, "deaths": True, "care": True}
+    assert status("admin").json() == {"enabled": True, "giving": True, "deaths": True, "care": True}
+    assert status("clerk").json() == {"enabled": True, "giving": False, "deaths": False, "care": False}
+    assert status("books").json() == {"enabled": True, "giving": True, "deaths": False, "care": False}, \
+        "the accountant sees giving"
+    off = {"enabled": False, "giving": False, "deaths": False, "care": False}
     assert status("carer").json() == off, "People & care alone doesn't open the office's reports"
     assert status("singer").json() == off
     assert status("owner", SALON).json() == off, "not a church"
@@ -446,7 +447,7 @@ def test_status_says_what_each_login_sees(db, monkeypatch):
         assert client(who).get(f"/church/reports?business_id={BIZ}").status_code == 403
     # While Who sees what is off, every login sees the whole church, as before.
     monkeypatch.setenv("CHURCH_AREAS", "off")
-    assert status("carer").json() == {"enabled": True, "giving": False, "deaths": True}
+    assert status("carer").json() == {"enabled": True, "giving": False, "deaths": True, "care": True}
     assert status("singer").json()["enabled"] is True
 
 
@@ -599,7 +600,7 @@ def test_giving_budget_missing_says_so(db):
 def test_giving_is_kept_with_the_treasurer(db):
     db.reads.clear()
     r = _report("clerk")
-    assert r["me"] == {"giving": False, "deaths": False}
+    assert r["me"] == {"giving": False, "deaths": False, "care": False}
     assert r["sections"]["giving"] == {"kept": True, "reason": "Kept with the treasurer."}
     money = ("/invoices", "/business_budgets", "/church_check_settings", "/business_expenses")
     assert not [p for p in db.reads if p.startswith(money)], "no giving table is read for them"
@@ -617,6 +618,58 @@ def test_funerals_are_the_care_teams(db):
     d = _stats(r, "people")["deaths"]
     assert d["value"] is None and d["reason"] == "Kept with the pastors and the care team."
     assert _v(r, "people", "baptisms") == 2
+
+
+def test_care_is_the_care_teams_even_as_totals(db):
+    """Help given and Prayer & care are People & care's on their own pages
+    (church_help, private_care): an Office login gets "kept", and nothing
+    is read for it."""
+    db.reads.clear()
+    r = _report("clerk")
+    assert r["sections"]["care"] == {"kept": True, "reason": "Kept with the pastors and the care team."}
+    assert not [p for p in db.reads if p.startswith(("/church_help_", "/ministry_care_requests"))]
+    text = client("clerk").get(f"/church/reports/export?business_id={BIZ}").text
+    assert "Kept with the pastors and the care team." in text and "Help given" not in text
+    # The pastors and the care team, the owner and admins see it, and so does
+    # every login while Who sees what is off.
+    assert _v(_report("owner"), "care", "help_given") == 210.0
+
+
+def test_a_report_with_a_failed_read_is_never_kept(db):
+    db.missing |= {"invoices"}
+    assert _stats(_report(), "giving")["giving_total"]["value"] is None
+    db.missing.clear()
+    assert _v(_report(), "giving", "giving_total") == 460.0, "the blip isn't handed to the next reader"
+    # A report every read answered is kept: the next read reads nothing.
+    db.reads.clear()
+    assert _v(_report(), "giving", "giving_total") == 460.0
+    assert not [p for p in db.reads if not p.startswith(("/businesses", "/business_users", "/business_collaborators"))]
+
+
+def test_a_section_that_breaks_is_not_kept_either(db, monkeypatch):
+    calls = []
+
+    def flaky(ctx):
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("blip")
+        return {"stats": [], "months": []}
+    monkeypatch.setitem(rp.BUILDERS, "events", flaky)
+    assert _report()["sections"]["events"]["failed"] is True
+    assert "failed" not in _report()["sections"]["events"]
+
+
+def test_a_guest_checked_in_by_name_and_from_their_record_is_one(db):
+    # Guest One came in January from their record, and the greeter typed
+    # their name alone in March: one guest, in January.
+    db.t["attendance"] += _att(S_FEB1, 1, first=[(None, "  GUEST one ")], day="2026-03-01")
+    r = _report()
+    assert _v(r, "people", "guests") == 3
+    assert r["sections"]["people"]["guests_by_month"][:3] == [1, 0, 1]
+    # A name nobody on the list has stays a guest of its own.
+    rp._CACHE.clear()
+    db.t["attendance"] += _att(S_OCT3, 1, first=[(None, "Visiting Cousin")], day="2026-03-02")
+    assert _v(_report(), "people", "guests") == 4
 
 
 def test_care_help_and_requests(db):

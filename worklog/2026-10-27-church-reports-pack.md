@@ -19,8 +19,9 @@ decisions:
   - "Attendance is services only (the app's rosterKind: its type, else its room's noun, else a Sunday), each service the headcount or the names if more (Attendance's own rule); services nobody counted are left out of the average"
   - "Giving reads paid gifts less refunds in the UTC year, the same read the year-end statements use, so the two agree. Giving against budget is the books' revenue budget through this month (this year) or the whole year (a past one)"
   - "Serving hours reuse church_serving's own readers and arithmetic (its suite pins them); a record that's gone takes its hours with it, as on the Serving page"
-  - "Care is counts and sums: help amounts, needs and days, and Prayer & care requests by their day (not the backfill). No name, no story, no person's id leaves the server"
-  - "Plain def handlers (FastAPI's worker threads, never the event loop); the seven sections read side by side on a small pool; the report is kept two minutes per church, year and view so the page, its print and its CSV read once"
+  - "Care is counts and sums: help amounts, needs and days, and Prayer & care requests by their day (not the backfill). No name, no story, no person's id leaves the server. And it is People & care's, like the Help and Prayer & care pages (the review of #1618): an Office-only login gets 'kept with the pastors and the care team', and nothing is read for it. If Kevin wants the office to see these totals, open care to office in care()"
+  - "First-time guests: a name-only check-in joins a record with the same name (one person, the earlier visit)"
+  - "Plain def handlers (FastAPI's worker threads, never the event loop); the seven sections read side by side on a small pool; the report is kept two minutes per church, year and view so the page, its print and its CSV read once, but never when a read failed (a '—' from a blip is not handed to the next reader)"
 related: [2026-10-27-church-register.md, 2026-10-27-church-serving-hours.md, 2026-10-27-church-help.md, 2026-10-27-church-checks.md, 2026-10-27-church-event-signups.md]
 ---
 `church_reports.py` (new): the switch (`CHURCH_REPORTS` off | owner | on,
@@ -31,7 +32,7 @@ the place it came from; the module docstring lists each source. Mounted in
 `kmj_intake_automation.py` after the register; `.env.example` has the switch.
 
 Checks:
-- `__tests__/test_church_reports.py`: 25 tests (each number's arithmetic on a
+- `__tests__/test_church_reports.py`: 29 tests (each number's arithmetic on a
   made-up church, members rewound to January 1, an import or a late start
   making it '—', the register's counts, guests once each, groups and a past
   year's '—', serving hours, giving less refunds with funds and the budget,
@@ -39,7 +40,8 @@ Checks:
   and families helped, no name or story anywhere, events and sign-ups,
   another church unreachable and never counted, reads past 1000 rows paged,
   missing sources and failed reads saying why, a section that breaks, a
-  church's first year, the years, the CSV and its formula guard). Twenty-one
-  rules broken on purpose: all twenty-one caught.
+  church's first year, the years, the CSV and its formula guard, care kept
+  from an Office login, a failed read never cached, a guest by name and by
+  record counted once). Twenty-five rules broken on purpose: all twenty-five caught.
 - The access ratchet, seat access, step-up routes, route type hints, and the
   register and serving suites pass.

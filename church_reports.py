@@ -50,6 +50,7 @@ count is never cut short.
                   by need) and requests received in Prayer & care
                   (ministry_care_requests, not the backfill). Counts and
                   sums only: no name, no story is read past a count.
+                  People & care's, like the pages they come from.
     EVENTS ...... Events held (Services & Events occasions that aren't
                   services, dated in the year up to today), their RSVPs
                   (a yes) and paid sign-ups (church_event_registrations,
@@ -58,10 +59,13 @@ count is never cut short.
 Who: the owner, admins and office logins (church_areas, Who sees what; while
 that is off, every login sees the whole church, as before). Giving is the
 owner's, the admins' and the accountant's: anyone else gets "kept with the
-treasurer" and no giving number at all. Funerals follow the register's rule:
-the pastors' and the care team's (People & care), never an Office login's.
+treasurer" and no giving number at all. Funerals follow the register's rule,
+and Care the Help and Prayer & care pages' (church_help, private_care): the
+pastors' and the care team's (People & care), never an Office login's, not
+even as a total. A login without them gets "kept with the pastors and the
+care team" and nothing is read for it.
 
-  GET /church/reports/status?business_id=            {enabled, giving, deaths}
+  GET /church/reports/status?business_id=            {enabled, giving, deaths, care}
   GET /church/reports?business_id=&year=             the year's numbers, by section
   GET /church/reports/export?business_id=&year=      the same numbers as a CSV
 
@@ -250,9 +254,21 @@ class Unread(Exception):
     and the rest of the report stands."""
 
 
+# The report being put together on this thread: a read that fails marks it,
+# so a report with a "—" from a blip is never kept for the next reader.
+_TL = threading.local()
+
+
+def _shaky(why: str) -> None:
+    marks = getattr(_TL, "shaky", None)
+    if marks is not None:
+        marks.append(why)
+
+
 def _rows(path: str, what: str) -> List[Dict[str, Any]]:
     rows = sb_clients.sb_get_as_service(path)
     if not isinstance(rows, list):
+        _shaky(what)
         raise Unread(what)
     return rows
 
@@ -359,10 +375,13 @@ def _access(business_id: Any, user: AuthedUser) -> Dict[str, Any]:
     areas = _areas(biz_id, uid, role)
     if areas is not None and OFFICE_AREA not in areas:
         raise HTTPException(403, "Reports are kept by the office. An admin can add Office to your areas.")
+    carer = areas is None or CARE_AREA in areas
     return {"biz": biz, "role": role, "uid": uid,
             "giving": _finance(biz_id, uid, role),
-            # Funerals are the pastors' and the care team's (the register's rule).
-            "deaths": areas is None or CARE_AREA in areas}
+            # Funerals are the pastors' and the care team's (the register's
+            # rule), and so are help given and Prayer & care, even as totals
+            # (church_help and private_care keep them to People & care).
+            "deaths": carer, "care": carer}
 
 
 # ─── One number ───────────────────────────────────────────────────────
@@ -597,6 +616,16 @@ def _guests(ctx: Dict[str, Any]) -> Dict[int, int]:
                   f"&created_at=lt.{end}&select=contact_id,created_at", "id", "Follow-up"):
         if r.get("contact_id"):
             seen(f"c:{r['contact_id']}", _at(r.get("created_at")))
+    # Someone checked in by name alone and, another time, from their record
+    # is one guest: a name-only visit joins the record with that name (the
+    # earlier visit counts). Names are read to match, never shown.
+    named = {k[2:]: k for k in first if k.startswith("n:")}
+    if named:
+        ids = [k[2:] for k in first if k.startswith("c:")]
+        for c in _all_in(f"/contacts?business_id=eq.{ctx['b']}&select=id,name", "id", ids, "id", "Attendance"):
+            nk = named.get(" ".join(str(c.get("name") or "").lower().split()))
+            if nk and nk in first:
+                seen(f"c:{c['id']}", first.pop(nk))
     out: Dict[int, int] = {}
     for at in first.values():
         if ctx["start"] <= at < ctx["end"]:
@@ -718,6 +747,7 @@ def serving(ctx: Dict[str, Any]) -> Dict[str, Any]:
         # takes its hours with it, as on the Serving page).
         names = cs._people(biz_id, per) if per else {}
     except HTTPException:
+        _shaky("Serving")
         return {"stats": _unknown(keys, "Serving couldn't be read just now."), "months": _series(ctx, {}, None)}
     kept = {cid for cid, mins in per.items() if mins > 0 and cid in names}
     minutes = sum(per[c] for c in kept)
@@ -857,7 +887,11 @@ NEED_WORDS = {"food": "Food", "bill": "Bills", "ride": "Rides", "other": "Other 
 
 def care(ctx: Dict[str, Any]) -> Dict[str, Any]:
     """Counts and sums only: amounts, needs and days are read, never a name
-    or a story, and who was helped is only ever counted."""
+    or a story, and who was helped is only ever counted. People & care's
+    alone (the pastors and the care team, the owner and admins): an Office
+    login gets "kept", and nothing is read for it."""
+    if not ctx["me"].get("care"):
+        return {"kept": True, "reason": "Kept with the pastors and the care team."}
     y = ctx["year"]
     stats: List[Dict[str, Any]] = []
     by_need: List[Dict[str, Any]] = []
@@ -946,24 +980,32 @@ BUILDERS: Dict[str, Callable[[Dict[str, Any]], Dict[str, Any]]] = {
 TITLES = {"people": "People", "sunday": "Sunday", "groups": "Groups", "serving": "Serving",
           "giving": "Giving", "care": "Care", "events": "Events"}
 
-_CACHE: Dict[Tuple[str, int, bool, bool], Tuple[float, Dict[str, Any]]] = {}
+_CACHE: Dict[Tuple[str, int, bool, bool, bool], Tuple[float, Dict[str, Any]]] = {}
 _CACHE_LOCK = threading.Lock()
 
 
 def _section(name: str, ctx: Dict[str, Any]) -> Dict[str, Any]:
     """One section; anything unexpected is that section's "—", never the
-    whole report's 500."""
+    whole report's 500. A read that fails on its thread marks the report."""
+    _TL.shaky = ctx["shaky"]
     try:
         return BUILDERS[name](ctx)
     except Exception as e:   # noqa: BLE001: a report stands without one section
         print(f"[church_reports] {name} failed for {ctx['biz_id']}: {type(e).__name__}: {e}")
         logger.warning("church_reports %s failed: %s", name, e)
+        _shaky(name)
         return {"stats": [], "failed": True, "reason": f"{TITLES[name]} couldn't be put together just now."}
+    finally:
+        _TL.shaky = None
 
 
 def build(me: Dict[str, Any], year: Optional[Any] = None) -> Dict[str, Any]:
+    """The year's report. Kept CACHE_SECONDS for the same church, year and
+    view, but only when every read answered: a "—" from a blip is never
+    handed to the next reader (a source not set up yet is read each time)."""
     ctx = _context(me, year)
-    key = (ctx["biz_id"], ctx["year"], bool(me["giving"]), bool(me["deaths"]))
+    ctx["shaky"] = []
+    key = (ctx["biz_id"], ctx["year"], bool(me["giving"]), bool(me["deaths"]), bool(me.get("care")))
     with _CACHE_LOCK:
         hit = _CACHE.get(key)
         if hit and time.monotonic() - hit[0] < CACHE_SECONDS:
@@ -977,13 +1019,14 @@ def build(me: Dict[str, Any], year: Optional[Any] = None) -> Dict[str, Any]:
         "year": y, "years": list(range(ctx["today"].year, ctx["today"].year - YEARS_BACK - 1, -1)),
         "today": ctx["today"].isoformat(), "through": ctx["through"].isoformat(), "current": ctx["current"],
         "church": church_register.church_look(ctx["biz"]),
-        "me": {"giving": bool(me["giving"]), "deaths": bool(me["deaths"])},
+        "me": {"giving": bool(me["giving"]), "deaths": bool(me["deaths"]), "care": bool(me.get("care"))},
         "sections": sections,
     }
-    with _CACHE_LOCK:
-        if len(_CACHE) > 64:
-            _CACHE.clear()
-        _CACHE[key] = (time.monotonic(), out)
+    if not ctx["shaky"]:
+        with _CACHE_LOCK:
+            if len(_CACHE) > 64:
+                _CACHE.clear()
+            _CACHE[key] = (time.monotonic(), out)
     return out
 
 
@@ -1025,8 +1068,8 @@ def csv_of(report: Dict[str, Any]) -> str:
     for name in SECTIONS:
         sec = report["sections"].get(name) or {}
         title = TITLES[name]
-        if name == "giving" and sec.get("kept"):
-            w.writerow([_cell(church), y, through, title, "Giving", "—", "", "Kept with the treasurer.", ""])
+        if sec.get("kept"):
+            w.writerow([_cell(church), y, through, title, title, "—", "", _cell(sec.get("reason") or ""), ""])
             continue
         if sec.get("failed"):
             w.writerow([_cell(church), y, through, title, title, "—", "", _cell(sec.get("reason") or ""), ""])
@@ -1049,7 +1092,7 @@ def reports_status(business_id: str, user: AuthedUser = Depends(require_user)):
     """Whether this login's office shows Reports: the app asks once, so its
     menu offers the page only where it opens. Quietly false for a closed
     switch, a business that isn't a church, or a login outside the Office."""
-    off = {"enabled": False, "giving": False, "deaths": False}
+    off = {"enabled": False, "giving": False, "deaths": False, "care": False}
     if not open_to(user):
         return off
     try:
@@ -1058,7 +1101,7 @@ def reports_status(business_id: str, user: AuthedUser = Depends(require_user)):
         if e.status_code in (403, 503) or e.detail == "Reports are for churches":
             return off
         raise
-    return {"enabled": True, "giving": me["giving"], "deaths": me["deaths"]}
+    return {"enabled": True, "giving": me["giving"], "deaths": me["deaths"], "care": me["care"]}
 
 
 @router.get("")
