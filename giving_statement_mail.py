@@ -34,6 +34,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 
+import church_keys
 import giving_statements as gs
 import sb_clients
 from auth_supabase import AuthedUser, require_user
@@ -157,6 +158,7 @@ async def send_batch(business_id: str, year: int, goods_and_services: str) -> Di
 def statements_mail_plan(business_id: str, year: int, user: AuthedUser = Depends(require_user)):
     from giving_records import require_finance
     require_finance(_uuid(business_id), user)
+    church_keys.wall(_uuid(business_id), user, "giving_money")
     out = plan(business_id, year)
     out.pop("_to_send", None)
     return out
@@ -168,6 +170,7 @@ async def statements_mail_send(business_id: str, year: int, body: Dict[str, Any]
     from giving_records import require_finance
     # Called directly (not via to_thread) so the access sweep can see it.
     require_finance(_uuid(business_id), user)
+    church_keys.wall(_uuid(business_id), user, "giving_money")
     if (body or {}).get("confirm") is not True:
         raise HTTPException(400, "Confirm to send the statements")
     return await send_batch(business_id, year, str((body or {}).get("goods_and_services") or ""))
