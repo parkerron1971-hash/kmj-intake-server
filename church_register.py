@@ -104,7 +104,7 @@ MAIN_WORD = {"baptism": "who was baptized", "dedication": "the child", "wedding"
 KIND_WORD = {"baptism": "baptism", "dedication": "dedication", "wedding": "wedding", "funeral": "funeral",
              "membership": "membership"}
 CERT_TITLE = {"baptism": "Certificate of Baptism", "dedication": "Certificate of Dedication",
-              "wedding": "Certificate of Marriage"}
+              "wedding": "Certificate of Holy Matrimony"}
 
 WRITERS = ("owner", "admin", "manager", "member")   # add and change
 KEEPS_ALL = ("owner", "admin")                      # remove; youth asks
@@ -188,6 +188,24 @@ def _need(path: str) -> List[Dict[str, Any]]:
     if not isinstance(rows, list):
         raise HTTPException(503, "The register couldn't be read just now. Try again.")
     return rows
+
+
+PAGE = 1000          # the most rows one read returns (PostgREST's cap)
+MAX_ROWS = 100_000   # past this a read is refused, never cut short
+
+
+def _need_all(path: str, order: str) -> List[Dict[str, Any]]:
+    """Every row, a page at a time in a stable order: a read the server
+    caps is never taken for the whole (a count cut short, or a baptism
+    offered twice)."""
+    out: List[Dict[str, Any]] = []
+    while True:
+        rows = _need(f"{path}&order={order}&limit={PAGE}&offset={len(out)}")
+        out += rows
+        if len(rows) < PAGE:
+            return out
+        if len(out) >= MAX_ROWS:
+            raise HTTPException(503, "The register has more rows than one page can read. Try again later.")
 
 
 def _tz(biz_id: str) -> ZoneInfo:
@@ -403,21 +421,24 @@ def page(me: Dict[str, Any], year: Any = None) -> Dict[str, Any]:
             raise HTTPException(400, "Pick a year, like 2026.")
         if not FIRST_YEAR <= y <= today.year + PLAN_YEARS:
             raise HTTPException(400, "Pick a year, like 2026.")
-    # Every entry that happened, light: the years the register has, and this one's numbers.
-    light = [r for r in _need(f"/church_register_entries?business_id=eq.{_q(biz)}&removed_at=is.null&status=eq.done"
-                              "&select=kind,membership,event_on&limit=50000") if visible(me, r)]
-    in_year = [r for r in light if str(r.get("event_on") or "")[:4] == str(y)]
-    years = sorted({int(str(r["event_on"])[:4]) for r in light if r.get("event_on")} | {today.year}, reverse=True)
-    entries = [r for r in _need(
-        f"/church_register_entries?business_id=eq.{_q(biz)}&removed_at=is.null&status=eq.done"
-        f"&event_on=gte.{y}-01-01&event_on=lte.{y}-12-31&select={ENTRY_FIELDS}"
-        "&order=event_on.desc,created_at.desc&limit=5000") if visible(me, r)]
+    done = f"/church_register_entries?business_id=eq.{_q(biz)}&removed_at=is.null&status=eq.done"
+    # The year: every entry that happened in it (its numbers come from these).
+    entries = [r for r in _need_all(f"{done}&event_on=gte.{y}-01-01&event_on=lte.{y}-12-31&select={ENTRY_FIELDS}",
+                                    "event_on.desc,created_at.desc,id.desc") if visible(me, r)]
+    # The years the register holds: from its first entry to this year (or its last).
+    ends = {}
+    for way in ("asc", "desc"):
+        rows = _need(f"{done}&select=event_on&order=event_on.{way}&limit=1")
+        ends[way] = int(str(rows[0]["event_on"])[:4]) if rows and rows[0].get("event_on") else None
+    first_year = ends["asc"]
+    top = max(today.year, ends["desc"] or today.year)
+    years = list(range(top, min(first_year or today.year, today.year) - 1, -1))
     planned = [r for r in _need(
         f"/church_register_entries?business_id=eq.{_q(biz)}&removed_at=is.null&status=eq.planned"
         f"&select={ENTRY_FIELDS}&order=event_on.asc&limit=500") if visible(me, r)]
     return {
-        "year": y, "years": years, "today": today.isoformat(), "counts": counts(me, in_year),
-        "total": len(light), "entries": [shown(r) for r in entries], "planned": [shown(r) for r in planned],
+        "year": y, "years": years, "first_year": first_year, "today": today.isoformat(),
+        "counts": counts(me, entries), "entries": [shown(r) for r in entries], "planned": [shown(r) for r in planned],
         "asks": asks(me) if me["view"] == "care" else [], "me": _can(me),
     }
 
@@ -531,11 +552,15 @@ def _move_care(biz: str, care_id: Any, status: str) -> None:
     frm = "(new,reviewed)" if status == "closed" else "(new)"
     now = _iso(_now())
     try:
-        sb_clients.sb_patch_as_service(
+        got = sb_clients.sb_patch_as_service(
             f"/ministry_care_requests?id=eq.{_q(care_id)}&business_id=eq.{_q(biz)}&status=in.{frm}",
             {"status": status, "status_changed_at": now, "updated_at": now})
     except Exception:
-        logger.warning("church register: the Prayer & care row didn't move", exc_info=True)
+        got = None
+    if not isinstance(got, list):
+        # Printed so it reaches the logs; the next press on the ask tries again.
+        print(f"[church_register] the Prayer & care row {care_id} didn't move to {status}")
+        logger.warning("church register: the Prayer & care row %s didn't move to %s", care_id, status)
 
 
 def add(me: Dict[str, Any], body: Dict[str, Any]) -> Dict[str, Any]:
@@ -599,18 +624,20 @@ def from_ask(me: Dict[str, Any], care_id: Any, body: Dict[str, Any]) -> Dict[str
     _care(me)
     biz = str(me["biz"]["id"])
     cid = _uuid(care_id, "ask")
-    have = _need(f"/church_register_entries?business_id=eq.{_q(biz)}&care_request_id=eq.{_q(cid)}"
-                 f"&select={ENTRY_FIELDS}&limit=1")
-    if have:
-        return {"entry": shown(have[0]), "already": True}
     care = _need(f"/ministry_care_requests?id=eq.{_q(cid)}&business_id=eq.{_q(biz)}&select={CARE_FIELDS}&limit=1")
     if not care or not _is_life(care[0]):
         raise HTTPException(404, "That ask isn't here.")
     ask = _from_ask(care[0])
-    # Nothing is written for an ask this login can't see, or one Prayer &
-    # care already closed.
+    # An ask this login can't see reads as missing, entry or not.
     if ask["youth"] and not me["boss"]:
         raise HTTPException(404, "That ask isn't here.")
+    have = _need(f"/church_register_entries?business_id=eq.{_q(biz)}&care_request_id=eq.{_q(cid)}"
+                 f"&select={ENTRY_FIELDS}&limit=1")
+    if have:
+        # Already an entry: its Prayer & care row catches up if it didn't move before.
+        _move_care(biz, cid, "reviewed" if have[0].get("status") == "planned" else "closed")
+        return {"entry": shown(have[0]), "already": True}
+    # Nothing is written for an ask Prayer & care already closed.
     if care[0].get("status") == "closed":
         raise HTTPException(409, "This one was closed in Prayer & care.")
     status = body.get("status")
@@ -670,10 +697,10 @@ def import_candidates(me: Dict[str, Any], only: Optional[str] = None) -> List[Di
     import brought in before (even if it was removed since)."""
     biz = str(me["biz"]["id"])
     path = (f"/contacts?business_id=eq.{_q(biz)}&metadata->>imported_from=eq.{IMPORT_FROM}"
-            "&select=id,name,imported:metadata->imported&limit=10000")
+            "&select=id,name,imported:metadata->imported")
     if only:
         path += f"&id=eq.{_q(only)}"
-    people = _need(path)
+    people = _need_all(path, "id.asc")
     found = []
     for c in people:
         imp = c.get("imported")
@@ -688,9 +715,9 @@ def import_candidates(me: Dict[str, Any], only: Optional[str] = None) -> List[Di
         return []
     keys: Set[str] = set()
     covered: Set[str] = set()
-    have = _need(f"/church_register_entries?business_id=eq.{_q(biz)}&kind=eq.baptism"
-                 + (f"&contact_ids=cs.{{{_q(only)}}}" if only else "")
-                 + "&select=contact_ids,import_key,removed_at&limit=50000")
+    have = _need_all(f"/church_register_entries?business_id=eq.{_q(biz)}&kind=eq.baptism"
+                     + (f"&contact_ids=cs.{{{_q(only)}}}" if only else "")
+                     + "&select=id,contact_ids,import_key,removed_at", "id.asc")
     for r in have:
         if r.get("import_key"):
             keys.add(str(r["import_key"]))

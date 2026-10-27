@@ -19,6 +19,7 @@ decisions:
   - "People are kept as the day recorded them ([{role, contact_id, name}]); contact_ids beside them for a person's page. A later rename on Members doesn't rewrite the register or a certificate; a person who leaves the list keeps their name on old entries"
   - "Asks: a life-event ask (ministry_care_requests, submission.kind 'life_event', member_asks.py's contract) waits on the page until the office marks it planned (a date) or records it; then it is one entry (care_request_id unique, on_conflict ignore-duplicates) and its Prayer & care row moves: reviewed once planned, closed once it happened (a planned entry recorded later closes it). Reading writes nothing; a closed ask or a youth's ask (for anyone but the owner and admins) writes nothing"
   - "Existing baptism dates: a one-time import the office presses, not a read-through. GET /church/register/import offers the people with metadata.imported['Baptism date'] (Subsplash) and no baptism in the register; POST adds them as baptism entries once each (import_key unique per church), all at once or one person from their page. A removed import entry is never offered again; a baptism recorded by hand covers the person. Chosen over a read-through so the register is a real record (editable, with certificates) and a removed one stays removed"
+  - "Long reads (the year's entries, the import's people, the baptisms it checks against) go a page of 1000 at a time in a stable order (PostgREST caps a read), so a count is never cut short and a baptism is never offered twice; the years run from the register's first entry to this year (two one-row reads)"
   - "Certificates: baptisms, dedications and weddings that happened. GET …/certificate returns the entry's own words (people as recorded, the day, officiant, place) and the church's name, brand-kit colours and logo; never notes, never anyone's record (it reads no contact)"
 related: [2026-10-27-church-help.md, 2026-10-23-church-areas-map.md, 2026-10-27-member-asks.md]
 ---
@@ -39,15 +40,16 @@ related: [2026-10-27-church-help.md, 2026-10-23-church-areas-map.md, 2026-10-27-
 - `.github/workflows/ci.yml`: adds `church_register_db.mjs`. `.env.example`: `CHURCH_REGISTER`.
 
 Checks:
-- `__tests__/test_church_register.py`: 23 tests (the switch and the missing
+- `__tests__/test_church_register.py`: 26 tests (the switch and the missing
   table, what each login may do, funerals and removals by area, another church
-  unreachable, an ask becoming one entry and its Prayer & care row moving, an
-  ask nobody can act on writing nothing, the import offered and pressed once,
-  a removed import not offered again, a hand-recorded baptism covering the
-  person, Subsplash's date shapes, an entry's checks, removing, the year's
-  numbers, a person who left the list, the certificate's words).
-  Ten rules broken on purpose: nine caught by the tests; the tenth (an ask
-  answered twice) is held by the unique constraint too.
+  unreachable, an ask becoming one entry and its Prayer & care row moving, a
+  move that failed retried on the next press, a youth ask's entry missing to
+  the care team, an ask nobody can act on writing nothing, the import offered
+  and pressed once, a removed import not offered again, a hand-recorded
+  baptism covering the person, Subsplash's date shapes, an entry's checks,
+  removing, the year's numbers, long lists read a page at a time, a person
+  who left the list, the certificate's words). Twelve rules broken on
+  purpose: all twelve caught.
 - `__tests__/church_register_db.mjs`: 37 checks on PGlite.
 - Export/import, the access ratchet, route type hints, seat access and step-up
   routes pass.

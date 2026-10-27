@@ -24,6 +24,7 @@ from __future__ import annotations
 import os
 import sys
 from datetime import datetime, timezone
+from urllib.parse import unquote
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -91,10 +92,22 @@ class RegisterDB(FakeDB):
         return self.missing and path.lstrip("/").split("?")[0].startswith("church_register_")
 
     def get(self, path, **kw):
+        """PostgREST's order, limit and offset too: the page reads its first
+        and last years and reads long lists a page at a time."""
         if self._gone(path):
             return None
         self.reads.append(path)
-        rows = super().get(path, **kw)
+        table, _, qs = path.lstrip("/").partition("?")
+        parts = qs.split("&") if qs else []
+        order = next((unquote(x[6:]) for x in parts if x.startswith("order=")), None)
+        offset = next((int(x[7:]) for x in parts if x.startswith("offset=")), 0)
+        limit = next((int(x[6:]) for x in parts if x.startswith("limit=")), None)
+        rest = [x for x in parts if not x.startswith(("order=", "offset=", "limit="))]
+        rows = super().get("/" + table + ("?" + "&".join(rest) if rest else ""), **kw)
+        for spec in reversed((order or "").split(",") if order else []):
+            col, _, way = spec.partition(".")
+            rows.sort(key=lambda r: str(r.get(col) or ""), reverse=way.startswith("desc"))
+        rows = rows[offset:offset + limit] if limit else rows[offset:]
         if "imported:metadata->imported" in path:
             rows = [{**r, "imported": (r.get("metadata") or {}).get("imported")} for r in rows]
         return rows
@@ -373,6 +386,50 @@ def test_an_ask_becomes_an_entry_once_and_its_prayer_and_care_row_moves(db):
         "people": [{"contact_id": ANDRE}, {"name": "Tasha Green"}]}).json()["entry"]
     assert wed["kind"] == "wedding" and [p["role"] for p in wed["people"]] == ["spouse", "spouse"]
     assert _care_row(db, WEDDING_ASK)["status"] == "closed"
+
+
+def test_an_ask_whose_row_didnt_move_moves_on_the_next_press(db, monkeypatch):
+    real = db.patch
+    monkeypatch.setattr(sb_clients, "sb_patch_as_service",
+                        lambda path, body, **kw: None if path.startswith("/ministry_care_requests") else real(path, body, **kw))
+    c = client("carer")
+    first = c.post(f"/church/register/asks/{ASK}", json={"business_id": BIZ, "status": "planned",
+                                                         "people": [{"contact_id": DANA}]})
+    assert first.status_code == 200 and _care_row(db, ASK)["status"] == "new", "the entry stands; the move failed"
+    monkeypatch.setattr(sb_clients, "sb_patch_as_service", real)
+    again = c.post(f"/church/register/asks/{ASK}", json={"business_id": BIZ, "status": "planned"})
+    assert again.json()["already"] is True and _care_row(db, ASK)["status"] == "reviewed"
+
+
+def test_an_ask_this_login_cant_see_is_missing_even_once_it_is_an_entry(db):
+    youth = "dddddddd-0000-4000-8000-000000000007"
+    db.t["ministry_care_requests"].append(_care(youth, BIZ, {"kind": "life_event", "life_event": "A baptism",
+                                                             "request": "Mine", "youth": "yes"}, contact=MIA))
+    assert youth not in {a["id"] for a in _page("carer")["asks"]}
+    assert youth in {a["id"] for a in _page("owner")["asks"]}
+    made = client("owner").post(f"/church/register/asks/{youth}", json={
+        "business_id": BIZ, "status": "planned", "event_on": "2026-11-15", "people": [{"contact_id": MIA}]})
+    assert made.status_code == 200
+    got = client("carer").post(f"/church/register/asks/{youth}", json={"business_id": BIZ, "status": "planned"})
+    assert got.status_code == 404 and "entry" not in got.text
+
+
+def test_long_lists_are_read_a_page_at_a_time(db, monkeypatch):
+    monkeypatch.setattr(cr, "PAGE", 2)
+    for day in ("2026-01-04", "2026-02-01", "2026-03-01", "2026-04-05", "2026-05-03"):
+        assert _add("carer", event_on=day, people=[{"name": f"Person {day}"}]).status_code == 200
+    page = _page("carer")
+    assert page["counts"]["baptism"] == 5 and len(page["entries"]) == 5
+    assert [e["event_on"] for e in page["entries"]] == ["2026-05-03", "2026-04-05", "2026-03-01", "2026-02-01", "2026-01-04"]
+    # The import's people and the baptisms it checks against, past one page.
+    for i in range(3):
+        db.t["contacts"].append({"id": f"cccccccc-0000-4000-8000-0000000001{i:02d}", "business_id": BIZ, "name": f"Extra {i}",
+                                 "metadata": {"imported_from": "Subsplash", "imported": {"Baptism date": "2018-05-0" + str(i + 1)}}})
+    _add("carer", event_on="2018-05-01", people=[{"contact_id": "cccccccc-0000-4000-8000-000000000100"}])
+    offer = client("carer").get(f"/church/register/import?business_id={BIZ}").json()
+    assert offer["count"] == 4, "Jordan, Dana and two extras; the one recorded by hand is covered"
+    assert page["years"] == [2026] and page["first_year"] == 2026
+    assert _page("carer")["years"] == list(range(2026, 2017, -1))
 
 
 def test_an_ask_nobody_here_can_act_on_writes_nothing(db):
