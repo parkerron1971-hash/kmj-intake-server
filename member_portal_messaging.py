@@ -149,15 +149,24 @@ def group_people(business_id: str, group_id: str) -> Optional[List[Dict[str, Any
 
 LEADERS_ROOM = "All group leaders"
 
+# The jobs whose holders lead something (church_roles.JOBS): the pastors, a
+# ministry's lead, a team's leader, the welcome lead and the teachers.
+# Kevin, 2026-10-27, on the approved leadership plan: department leaders
+# belong in the leaders chat, not only group leaders and pastors. A role
+# on any other job (prayer, care, kids, office) is in only when another
+# role answers to it: the Intercessor leader and the Deacons are, the
+# Intercessors, the Care team and the kids workers aren't.
+LEADER_JOBS = ("senior", "pastoral", "ministry", "team", "welcome", "teach")
+
 
 def leaders_room_people(business_id: str) -> Optional[List[Dict[str, Any]]]:
     """Who is in the church's All group leaders room, read live (Kevin,
-    2026-10-20: "yes all group leaders room would be great"): everyone who
-    leads one of its active groups, and its active Pastors and Elders (a
-    church role whose job is senior or pastoral). [{'contact_id', 'role':
-    'leader'}], or None on a failed read."""
+    2026-10-20: "yes all group leaders room would be great"; 2026-10-27:
+    department leaders too): everyone who leads one of its active groups,
+    and everyone holding an active role that leads (LEADER_JOBS, or one
+    another role answers to). [{'contact_id', 'role': 'leader'}], or None
+    on a failed read."""
     import church_roles as cr
-    import messaging_router as mr
     leads = sb_clients.sb_get_as_service(
         f"/group_members?business_id=eq.{_q(business_id)}&role=eq.leader&select=contact_id,group_id&limit=5000")
     active = sb_clients.sb_get_as_service(
@@ -168,10 +177,15 @@ def leaders_room_people(business_id: str) -> Optional[List[Dict[str, Any]]]:
     if not isinstance(leads, list) or not isinstance(active, list) or not isinstance(roles, list) or defs is None:
         return None
     by = cr.by_key(defs)
+    led = {str(d["reports_to"]) for d in defs if d.get("reports_to")}
+
+    def leads_something(key: str) -> bool:
+        d = by.get(key) or cr.LEGACY.get(key) or {}
+        return d.get("job") in LEADER_JOBS or (bool(d.get("id")) and str(d["id"]) in led)
+
     on = {str(g["id"]) for g in active}
     ids = {str(r["contact_id"]) for r in leads if str(r["group_id"]) in on}
-    ids |= {str(r["contact_id"]) for r in roles
-            if (by.get(r["role"]) or cr.LEGACY.get(r["role"]) or {}).get("job") in mr.PASTORAL_JOBS}
+    ids |= {str(r["contact_id"]) for r in roles if leads_something(r["role"])}
     return [{"contact_id": i, "role": "leader"} for i in sorted(ids)]
 
 

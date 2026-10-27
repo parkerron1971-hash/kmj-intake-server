@@ -27,8 +27,9 @@ page of its own; this is part 1 of building it:
                            one, Going / Maybe / Can't, "I'm here", a
                            leader's roll and schedule, the last few
   /my/groups/leaders       All group leaders (part 2c): one chat for
-                           everyone who leads a group and the church's
-                           pastors (member_portal_messaging.leaders_room_people)
+                           everyone who leads a group or a ministry, and
+                           the church's pastors
+                           (member_portal_messaging.leaders_room_people)
 
 Someone who isn't in the group sees what it is, who leads it, and how to
 get in — never who else belongs.
@@ -1246,7 +1247,7 @@ def render_room(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any],
     back = '<a class="mb-back" href="/my/groups">Connect</a>'
     if cv.get("state") == "not_in":
         body = (f'{back}<div class="mb-lt"><h1>For leaders</h1></div><p class="mp-muted">This room is for the people who '
-                f'lead a group at {church}, and its pastors. Find a group to join on Connect.</p>')
+                f'lead a group or a ministry at {church}, and its pastors. Find a group to join on Connect.</p>')
         return _shell(biz, site, "All group leaders", f"<style>{GROUP_CSS}</style>{body}", tab="connect", who=me), 404
     n = cv.get("size") or 0
     faces = ""
@@ -1256,7 +1257,7 @@ def render_room(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any],
         faces = f'<span class="gs-faces" aria-hidden="true">{"".join(_face(p) for p in shown)}</span>'
     hero = (f'<section class="gs-hero gs-room" aria-labelledby="gs-name"><span class="gs-scrim"></span><div class="gs-hero-in">'
             f'<span class="gs-kind">For leaders</span><h1 id="gs-name">All group leaders</h1>'
-            f'<p>Everyone who leads a group at {church}, and its pastors</p>'
+            f'<p>Everyone who leads a group or a ministry at {church}, and its pastors</p>'
             f'<p class="gs-who">{faces}<span>{n} {"person" if n == 1 else "people"}</span></p></div></section>')
     content, script = _chat_body(biz, request, me, ROOM, cv, False, here="/my/groups/leaders")
     page = f'{back}{hero}{_flash(request)}<div style="margin-top:16px">{content}</div>'
