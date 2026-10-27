@@ -5,7 +5,7 @@ agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-10-23: "if Pastor look at money another leader is notified and have to recieve a code from that person to get into money"; 2026-10-26: "go with your picks" (the lock binds the owner too; a tap with a code as the backup; a yes opens an hour) and "go ahead, you build step 2 after the media fixes"'
 status: in progress
 prs: [kmj-intake-server (this PR)]
-migrations: [supabase/APPLY-2026-10-27-church-keys.sql]
+migrations: ["supabase/APPLY-2026-10-27-church-keys.sql (APPLIED LIVE 10/27 after a rollback rehearsal)"]
 left_undone:
   - "The doors (next server PR): who gave what, the bank and payouts (giving records, statements, Chief's giving actions, the donor report and export, Stripe charges, customers and payouts, the bank feed); kids' medical and custody notes; pastors-only notes and prayer"
   - "Asking from an accountant's collaborator login: the routes take an owner or an office login, and an accountant collaborator has neither"
