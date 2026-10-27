@@ -363,6 +363,10 @@ app.include_router(church_pledges_router)
 # Rooms & spaces, with Rentals: booking the building (2026-10-27).
 from church_spaces import router as church_spaces_router
 app.include_router(church_spaces_router)
+# Serving hours and background checks, the Sunday door (2026-10-27;
+# CHURCH_SERVING off | owner | on).
+from church_serving import router as church_serving_router
+app.include_router(church_serving_router)
 # Help requests (benevolence): a fund, a limit, a keeper's yes, a record
 # (2026-10-27; CHURCH_HELP off | owner | on).
 from church_help import router as church_help_router
