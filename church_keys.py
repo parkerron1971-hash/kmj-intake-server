@@ -167,17 +167,25 @@ def _open_key(biz: str, user_id: str, area: str) -> Optional[Dict[str, Any]]:
 
 # ─── The wall ─────────────────────────────────────────────────────────
 
+def opened(business_id: str, user: AuthedUser, area: str) -> Optional[bool]:
+    """None where the area has no lock (no keeper, or the switch is off);
+    else whether this person keeps it or holds an open key. For a door
+    whose rule changes once an area is kept (Care's inbox: the owner sees
+    every request until the church names a keeper, then the keepers do)."""
+    if mode() == "off" or area not in GUARDED:
+        return None
+    biz = str(business_id)
+    keepers = active_keepers(biz, area)
+    if not keepers:
+        return None
+    return str(user.id) in keepers or _open_key(biz, str(user.id), area) is not None
+
+
 def is_open(business_id: str, user: AuthedUser, area: str) -> bool:
     """Whether this person may see the guarded part of an area now: always
     where the area has no keeper (or the switch is off), else for its
     keepers and for anyone holding an open key. The owner too."""
-    if mode() == "off" or area not in GUARDED:
-        return True
-    biz = str(business_id)
-    keepers = active_keepers(biz, area)
-    if not keepers or str(user.id) in keepers:
-        return True
-    return _open_key(biz, str(user.id), area) is not None
+    return opened(business_id, user, area) is not False
 
 
 def wall(business_id: str, user: AuthedUser, area: str) -> None:

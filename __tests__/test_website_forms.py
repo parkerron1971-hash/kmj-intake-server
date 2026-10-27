@@ -347,7 +347,8 @@ def test_website_prayer_reaches_care_inbox_and_church_counts(env, monkeypatch):
                 rows = [r for r in rows if query["user_id"] == ["eq." + r["user_id"]]]
             return rows
         if table != "ministry_care_requests":
-            assert table in ("ministry_care_notes", "child_checkins")
+            # church_keepers: no People & care keeper, so the owner sees everything.
+            assert table in ("ministry_care_notes", "child_checkins", "church_keepers")
             return []
         for key in ("id", "assigned_to"):
             if key in query and query[key] != ["eq." + str(row.get(key))]:
