@@ -429,6 +429,11 @@ app.include_router(giving_statement_mail_router)
 # subdomain catch-all.
 from events_rsvp_router import router as events_rsvp_router
 app.include_router(events_rsvp_router)
+# Paid sign-ups for church events, with a waitlist (2026-10-27;
+# CHURCH_PAID_SIGNUPS off | owner | on): the office routes, the public
+# page's sign-up, offer and receipt, and the member app's form.
+from church_event_signups import router as church_event_signups_router
+app.include_router(church_event_signups_router)
 # A member's own page at <church site>/my — the POSTs (/my/code, /my/verify,
 # …) and the owner switch (/member-portal/...). BEFORE public_site_router.
 from member_portal import router as member_portal_router
@@ -1807,6 +1812,14 @@ async def startup():
                           minutes=30, id="group_study_drafts")
     except Exception as e:
         print(f"   [warn] group study drafts not scheduled: {e}")
+    # Event sign-ups: holds and waitlist offers that ran out give their
+    # places back, and the waitlist moves (church_event_signups.sweep_tick).
+    try:
+        import church_event_signups as _event_signups
+        scheduler.add_job(g("event_signups_sweep", _event_signups.sweep_tick), "interval",
+                          minutes=5, id="event_signups_sweep")
+    except Exception as e:
+        print(f"   [warn] event sign-ups sweep not scheduled: {e}")
     # Celebrations: once a church's clock passes 7 AM, today's birthdays and
     # anniversaries (only people who said yes) go up on its News
     # (celebrations.sweep_tick; one post per person per day).
