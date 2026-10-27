@@ -621,7 +621,8 @@ async def serve(request: Request, church: Dict[str, Any], me: Dict[str, Any], su
                 v = await asyncio.to_thread(ss.ask_view, biz, str(me["id"]), want)
                 sub_for = {"id": want, "html": _subs_panel(hit, cands, v["leader"])}
             m["hear"] = await asyncio.to_thread(ss.hearing, biz, str(me["id"]))
-            return _page(render_page(biz, site, request, me, m, sub_for))
+            import member_portal_checks as mpck
+            return _page(render_page(biz, site, request, me, m, sub_for, door=await mpck.door_async(request, biz)))
         if rest.endswith("/pack"):
             aid = rest[:-5]
             if not _ID.match(aid):
