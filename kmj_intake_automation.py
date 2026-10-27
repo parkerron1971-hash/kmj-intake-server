@@ -371,6 +371,10 @@ app.include_router(church_serving_router)
 # (2026-10-27; CHURCH_HELP off | owner | on).
 from church_help import router as church_help_router
 app.include_router(church_help_router)
+# Check requests: money going out, a receipt, a limit and a keeper's yes
+# (2026-10-27; CHURCH_CHECKS off | owner | on).
+from church_checks import router as church_checks_router
+app.include_router(church_checks_router)
 # My week: a church login's first page (Who sees what, 2026-10-26).
 from church_my_week import router as church_my_week_router
 app.include_router(church_my_week_router)
@@ -476,6 +480,9 @@ from member_portal_share import router as member_portal_share_router
 # My serving in the member app (ChurchSavvy Planning): answer an ask, a sub, away days.
 from member_portal_serving import router as member_portal_serving_router
 app.include_router(member_portal_serving_router)
+# Get paid back, under Serve: a volunteer's receipt (GET /my/paid-back is member_portal.serve's).
+from member_portal_checks import router as member_portal_checks_router
+app.include_router(member_portal_checks_router)
 app.include_router(member_portal_share_router)
 # Posting to News from a phone, and Sign me up from a post (GET /my/news/write
 # is member_portal.serve's).
