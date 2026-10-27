@@ -135,6 +135,11 @@ _LIMITS: Dict[str, Tuple[int, int]] = {
     "member_verify": (int(os.environ.get("RL_MEMBER_VERIFY_PER_10MIN", "60")), 600),
     # A signed-in member's writes (RSVP, prayer, details), per person.
     "member_action": (int(os.environ.get("RL_MEMBER_ACTION_PER_HOUR", "30")), 3600),
+    # Ask the church (member_asks.py), per member, on top of member_action:
+    # a room, help, a visit, a life event or a pledge reaches the office, so
+    # one member can't flood it. An hour's budget and a day's.
+    "member_ask": (int(os.environ.get("RL_MEMBER_ASK_PER_HOUR", "6")), 3600),
+    "member_ask_day": (int(os.environ.get("RL_MEMBER_ASK_PER_DAY", "15")), 86400),
     # The member app's Bible, per member: highlights, notes and saved verses
     # (a chapter can be many taps), and word searches (each reads a whole
     # translation).
