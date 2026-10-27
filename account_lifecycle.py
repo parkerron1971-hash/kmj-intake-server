@@ -179,6 +179,9 @@ BUSINESS_CHILD_TABLES: List[str] = [
     "ministry_care_notes", "ministry_care_requests", "ministry_gift_history",
     # Which givers were emailed a year-end statement; before contacts.
     "giving_statement_sends",
+    # Pledges and campaigns (church_pledges.py): each pledge cites a giver
+    # and a campaign by id, so pledges go before contacts and campaigns.
+    "church_pledges", "church_campaigns",
     # Members' notification devices and choices (before contacts), the log
     # of what the church sent them, and what waits through quiet hours.
     "member_push_subscriptions", "member_push_prefs", "member_push_sends", "member_push_held",
@@ -746,6 +749,10 @@ _IMPORT_SKIP = {
     # They remain in the owner archive and are explicitly reported as skipped.
     "ministry_care_notes", "ministry_care_requests", "ministry_gift_history",
     "giving_statement_sends",  # a send log: a restore must not claim statements went out
+    # A pledge cites its giver and its campaign by id, which the importer
+    # re-mints; the export keeps them, and the restored church records its
+    # pledge cards again. Campaigns name nothing by id, so they restore.
+    "church_pledges",
     # A deck is keyed by its lesson's original id, which the importer re-mints;
     # restored lessons rebuild their slides from the lesson text instead.
     "academy_decks",

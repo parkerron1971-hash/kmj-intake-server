@@ -356,6 +356,10 @@ from church_areas import router as church_areas_router
 app.include_router(church_areas_router)
 from church_keys import router as church_keys_router
 app.include_router(church_keys_router)
+# The Giving door's office pages: recurring gifts, pledges and campaigns
+# (2026-10-27; CHURCH_PLEDGES off | owner | on).
+from church_pledges import router as church_pledges_router
+app.include_router(church_pledges_router)
 # Rooms & spaces, with Rentals: booking the building (2026-10-27).
 from church_spaces import router as church_spaces_router
 app.include_router(church_spaces_router)
