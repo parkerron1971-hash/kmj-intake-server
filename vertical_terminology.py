@@ -220,6 +220,17 @@ VERTICAL_TERMS: Dict[str, Dict[str, str]] = {
         "donation":         "Gift",
         "donations":        "Giving",
         "restricted_fund":  "Designated fund",
+        # The words the app's church list maps too (FE #1375, 2026-10-27),
+        # so Chief says what the menu says: a church has members and
+        # guests, not clients and leads, and its catalog is its Store.
+        "client":       "Member",
+        "clients":      "Members",
+        "lead":         "Guest",
+        "leads":        "Guests",
+        "prospect":     "Guest",
+        "prospects":    "Guests",
+        "offering":     "Item",
+        "offerings":    "Store",
     },
     "personal_services": {
         # Barbers, salons, lash/brow, esthetics, massage, tattoo.
