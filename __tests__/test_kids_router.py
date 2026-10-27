@@ -52,7 +52,9 @@ class Store:
                   "contacts": [{"id": PARENT, "business_id": BIZ, "name": "Ana Rivers", "email": "ana@x.test", "phone": ""},
                                {"id": OTHER_PARENT, "business_id": OTHER, "name": "Zed", "email": "", "phone": ""}],
                   "households": [], "household_adults": [], "children": [], "household_pickups": [],
-                  "child_care_notes": []}
+                  "child_care_notes": [],
+                  # No church named a Kids keeper (church_keys): nothing locked.
+                  "church_keepers": []}
         self.fail = set()
         self.clock = 0
 
