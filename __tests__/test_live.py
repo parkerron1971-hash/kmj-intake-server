@@ -55,6 +55,7 @@ class DB:
         self.t["contacts"] = [{"id": ANA, "business_id": BIZ, "name": "Ana Rivers"},
                               {"id": BEN, "business_id": BIZ, "name": "Ben Okafor"}]
         self.t["business_users"] = []
+        self.t["module_entries"] = [{"id": ENTRY, "business_id": BIZ, "status": "active", "data": {}}]
         self.n = 0
         self.fail = False
 
