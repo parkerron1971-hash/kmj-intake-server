@@ -371,6 +371,10 @@ app.include_router(church_serving_router)
 # (2026-10-27; CHURCH_HELP off | owner | on).
 from church_help import router as church_help_router
 app.include_router(church_help_router)
+# The church register: baptisms, dedications, weddings, funerals and
+# membership, with certificates (2026-10-27; CHURCH_REGISTER off | owner | on).
+from church_register import router as church_register_router
+app.include_router(church_register_router)
 # My week: a church login's first page (Who sees what, 2026-10-26).
 from church_my_week import router as church_my_week_router
 app.include_router(church_my_week_router)
