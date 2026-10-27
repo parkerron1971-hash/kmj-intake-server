@@ -375,6 +375,10 @@ app.include_router(church_help_router)
 # (2026-10-27; CHURCH_CHECKS off | owner | on).
 from church_checks import router as church_checks_router
 app.include_router(church_checks_router)
+# The church register: baptisms, dedications, weddings, funerals and
+# membership, with certificates (2026-10-27; CHURCH_REGISTER off | owner | on).
+from church_register import router as church_register_router
+app.include_router(church_register_router)
 # Board & minutes: boards, meetings, attendance and quorum, minutes, the
 # decisions log (2026-10-27; CHURCH_BOARD off | owner | on).
 from church_board import router as church_board_router

@@ -210,6 +210,7 @@ jobs:
           node __tests__/church_spaces_db.mjs
           node __tests__/church_help_db.mjs
           node __tests__/church_checks_db.mjs
+          node __tests__/church_register_db.mjs
           node __tests__/church_board_db.mjs
           node __tests__/church_event_signups_db.mjs
           node __tests__/login_areas_db.mjs
