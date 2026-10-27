@@ -481,3 +481,47 @@ def test_asks_from_the_member_app_show_up_and_become_one_request(db):
     assert next(r for r in db.t["church_help_requests"] if r["care_request_id"] == YOUTH_ASK)["pastors_only"] is True
     assert _decide("owner", f"care-{VISIT}").status_code == 404, "a visit isn't a help request"
     assert _decide("owner", f"care-{PRAYER}").status_code == 404
+
+
+def test_part_of_what_was_approved_leaves_the_rest_promised(db):
+    _keeper(db, "admin")
+    c = client("admin")
+    c.put("/church/help/settings", json={"business_id": BIZ, "monthly_budget": "1000"})
+    rent = _decide("admin", f"care-{ASK}", amount="300")
+    assert rent.status_code == 200
+    ref = rent.json()["request"]["id"]
+    care = next(r for r in db.t["ministry_care_requests"] if r["id"] == ASK)
+    part = _give("carer", ref, amount="100", how="cash")
+    assert part.status_code == 200 and part.json()["request"]["status"] == "approved"
+    assert _req(db, ref)["status"] == "approved", "$200 is still owed"
+    assert care["status"] == "reviewed", "Prayer & care stays open until it's all given"
+    fund = _page("carer")["fund"]
+    assert fund["given_month_cents"] == 10000 and fund["promised_cents"] == 20000
+    assert fund["left_cents"] == 100000 - 10000 - 20000
+    rest = _give("carer", ref, amount="200")
+    assert rest.json()["request"]["status"] == "helped" and care["status"] == "closed"
+    # Taking part back leaves it approved, with that part promised again.
+    rec = next(g for g in db.t["church_help_given"] if g["amount_cents"] == 20000)
+    back = c.delete(f"/church/help/given/{rec['id']}?business_id={BIZ}").json()
+    assert back["request"]["status"] == "approved" and back["books"] is True
+    assert _page("carer")["fund"]["promised_cents"] == 20000
+
+
+def test_nothing_is_written_for_an_ask_someone_cant_act_on(db):
+    assert _decide("carer", f"care-{YOUTH_ASK}").status_code == 404
+    assert _give("carer", f"care-{YOUTH_ASK}", how="ride", amount="").status_code == 404
+    closed = _decide("owner", f"care-{CLOSED_ASK}")
+    assert closed.status_code == 409, "it was closed in Prayer & care"
+    assert db.t["church_help_requests"] == [], "no row for an ask nobody could act on here"
+
+
+def test_a_take_back_whose_expense_wont_delete_says_so(db, monkeypatch):
+    ref = _add("carer", amount="40").json()["request"]["id"]
+    _give("carer", ref, amount="40", how="cash")
+    rec = db.t["church_help_given"][0]
+    real = db.delete
+    monkeypatch.setattr(sb_clients, "sb_delete_as_service",
+                        lambda path, **kw: False if path.startswith("/business_expenses") else real(path, **kw))
+    got = client("admin").delete(f"/church/help/given/{rec['id']}?business_id={BIZ}").json()
+    assert got["books"] is False and "still in the books" in got["message"]
+    assert db.t["church_help_given"] == [], "the record is gone, and the answer says the expense isn't"

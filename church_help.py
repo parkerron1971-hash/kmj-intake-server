@@ -600,8 +600,15 @@ def _adopt(me: Dict[str, Any], care_id: str) -> Dict[str, Any]:
     care = _need(f"/ministry_care_requests?id=eq.{_q(care_id)}&business_id=eq.{_q(biz)}&select={CARE_FIELDS}&limit=1")
     if not care or not _is_help(care[0]):
         raise HTTPException(404, "That request isn't here.")
+    asked = from_ask(care[0])
+    # Nothing is written for someone who can't see it (a youth's ask), or
+    # for an ask Prayer & care already closed.
+    if asked["pastors_only"] and not me["boss"]:
+        raise HTTPException(404, "That request isn't here.")
+    if care[0].get("status") == "closed":
+        raise HTTPException(409, "This one was closed in Prayer & care.")
     now = _iso(_now())
-    row = {**from_ask(care[0]), "business_id": biz, "updated_at": now}
+    row = {**asked, "business_id": biz, "updated_at": now}
     row["created_at"] = row.get("created_at") or now
     saved = sb_clients.sb_post_as_service("/church_help_requests?on_conflict=care_request_id", row,
                                           prefer="resolution=ignore-duplicates,return=representation")
@@ -807,7 +814,10 @@ def record(me: Dict[str, Any], ref: str, body: Dict[str, Any]) -> Dict[str, Any]
         if expense_id:
             sb_clients.sb_delete_as_service(f"/business_expenses?id=eq.{_q(expense_id)}&business_id=eq.{_q(biz)}")
         raise HTTPException(503, "That didn't save. Try again.")
-    fields: Dict[str, Any] = {"status": "helped"}
+    # Helped once what was given reaches what was approved; until then the
+    # rest is still promised (and counted against the month's fund).
+    approved_now = max(approved, total)
+    fields: Dict[str, Any] = {"status": "helped" if total >= approved_now else "approved"}
     if total > approved:
         fields["approved_cents"] = total
     if row["status"] == "new" or total > approved:
@@ -819,7 +829,7 @@ def record(me: Dict[str, Any], ref: str, body: Dict[str, Any]) -> Dict[str, Any]
     # The record stands either way (it's in the books); a request that
     # didn't catch up reads as helped from its records (shown()).
     moved = got[0] if isinstance(got, list) and got else {**row, **fields}
-    _move_care({**row, "business_id": biz}, "helped")
+    _move_care({**row, "business_id": biz}, fields["status"])
     return {"request": _one(me, moved), "in_books": bool(expense_id)}
 
 
@@ -834,19 +844,25 @@ def take_back(me: Dict[str, Any], given_id: str) -> Dict[str, Any]:
     g = rows[0]
     if g.get("expense_id"):
         _closed_books(biz, date.fromisoformat(str(g["given_on"])[:10]))
-        if not sb_clients.sb_delete_as_service(
-                f"/business_expenses?id=eq.{_q(g['expense_id'])}&business_id=eq.{_q(biz)}"):
-            raise HTTPException(503, "The books didn't change, so nothing was taken back. Try again.")
+    # The record first: a record left saying money was given while its
+    # expense is gone would be the books and the page disagreeing.
     if not sb_clients.sb_delete_as_service(f"/church_help_given?id=eq.{_q(g['id'])}&business_id=eq.{_q(biz)}"):
-        raise HTTPException(503, "That didn't save. Try again.")
+        raise HTTPException(503, "Nothing was taken back. Try again.")
+    books = True
+    if g.get("expense_id") and not sb_clients.sb_delete_as_service(
+            f"/business_expenses?id=eq.{_q(g['expense_id'])}&business_id=eq.{_q(biz)}"):
+        books = False
     req = _need(f"/church_help_requests?id=eq.{_q(g['request_id'])}&business_id=eq.{_q(biz)}"
                 f"&select={REQ_FIELDS}&limit=1")
+    said = None if books else ("The record is taken back, but its expense is still in the books. "
+                               "Remove it in Bookkeeping, under Expenses.")
     if not req:
-        return {"request": None}
+        return {"request": None, "books": books, "message": said}
     row = req[0]
-    if row["status"] == "helped" and not _given_total(biz, row["id"]):
-        row = _patch(me, row, {"status": "approved" if row.get("approved_cents") else "new"}, was="helped")
-    return {"request": _one(me, row)}
+    left, approved = _given_total(biz, row["id"]), int(row.get("approved_cents") or 0)
+    if row["status"] == "helped" and (not left or left < approved):
+        row = _patch(me, row, {"status": "approved" if approved else "new"}, was="helped")
+    return {"request": _one(me, row), "books": books, "message": said}
 
 
 def put_settings(me: Dict[str, Any], body: Dict[str, Any]) -> Dict[str, Any]:

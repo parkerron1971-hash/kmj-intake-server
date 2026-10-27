@@ -22,6 +22,8 @@ decisions:
   - "The books: each record with money is one business_expenses row (category operating, subcategory the fund's name, vendor the payee, payment_method cash/check, description 'Help given from the <fund>: <need> (<how>)', no name, no story), the same plain row Chief's log_expense and the Expenses screen write, so the GL triggers post it. A closed period refuses the record; taking a record back (owner and admins) deletes its expense"
   - "An app ask (ministry_care_requests, submission.kind 'help', member_asks.py's contract) is listed as a new request ('care-<id>') and becomes its own row the first time anyone acts on it (care_request_id unique, so two presses make one). Reading writes nothing. Its Prayer & care row follows: reviewed once approved, closed once helped or declined"
   - "What's left this month = the monthly budget − given this month − promised (approved, not given), in the church's clock. Families helped this year = distinct people (or requests with no person) with help given this year"
+  - "Helped means what was given reached what was approved: part given leaves it approved, the rest still promised, and its Prayer & care row stays open until then (review, PR #1610)"
+  - "Nothing is written for an ask a login can't act on: a youth's ask (non-admin) or one Prayer & care already closed is refused before any row is made. Taking a record back deletes the record before its expense, and says so if the expense stays"
 related: [2026-10-27-church-keys.md, 2026-10-23-church-areas-map.md, 2026-10-27-church-spaces.md]
 ---
 - `church_help.py` (new): the switch (`CHURCH_HELP` off | owner | on, owner by
@@ -42,11 +44,13 @@ related: [2026-10-27-church-keys.md, 2026-10-23-church-areas-map.md, 2026-10-27-
 - `.github/workflows/ci.yml`: adds `church_help_db.mjs`. `.env.example`: `CHURCH_HELP`.
 
 Checks:
-- `__tests__/test_church_help.py`: 10 tests (the switch and missing tables,
+- `__tests__/test_church_help.py`: 13 tests (the switch and missing tables,
   what each login may do, confidentiality by area, the limit with no keeper,
   a keeper's yes by ask and by code, a keeper approving here, raising the
   limit, another church unreachable, the books and the fund's totals, closed
-  books, taking a record back, declining, the app's asks becoming one row).
+  books, taking a record back, declining, the app's asks becoming one row,
+  part of an approval given, no row for an ask nobody here can act on, a
+  take-back whose expense won't delete).
   Eight rules broken on purpose (no limit, Giving reading the story, any care
   row as help, another church's id, a youth's ask shown to all, no keeper
   meaning open, a free limit raise, no books): all caught.
