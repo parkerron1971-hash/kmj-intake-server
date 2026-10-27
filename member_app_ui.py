@@ -85,7 +85,7 @@ FAMILY: Dict[str, Dict[str, Any]] = {
 FAMILY_NEAR = 35       # degrees of hue
 # Which family colour a page's tab wears (home, give and news wear the church's).
 TAB_HUE = {"watch": "violet", "bible": "gold", "connect": "teal", "events": "coral", "prayer": "teal",
-           "messages": "teal"}
+           "messages": "teal", "directory": "teal"}
 
 TABS = (
     ("home", "/my", "Home", '<path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"/>'),
@@ -126,7 +126,7 @@ KIDS_TAB_OF = {"home": "home", "watch": "watch", "sermons": "watch", "live": "wa
 # unless the church made them tabs of their own (church_tabs).
 TAB_OF = {"home": "home", "watch": "watch", "sermons": "watch", "live": "watch", "bible": "bible",
           "give": "give", "connect": "connect", "groups": "connect", "messages": "connect", "lead": "lead",
-          "events": "home", "prayer": "home", "news": "home"}
+          "events": "home", "prayer": "home", "news": "home", "directory": "connect"}
 # A member who holds a church role (church_follow_up) gets a sixth tab:
 # the people Chief hands them (member_portal_lead).
 LEAD_TAB = ("lead", "/my/lead", "Lead", '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/>')
@@ -180,6 +180,9 @@ ICONS = {
     "home": '<path d="M3 21h18M5 21V8l7-5 7 5v13"/><path d="M10 21v-6h4v6"/>',
     "down": '<path d="m6 9 6 6 6-6"/>',
     "star": '<path d="m12 2.5 2.9 5.9 6.6 1-4.8 4.6 1.1 6.5L12 17.4l-5.9 3.1 1.1-6.5-4.8-4.6 6.6-1z"/>',
+    # The member directory (member_directory): a book with a person on it.
+    "directory": '<path d="M15 13a3 3 0 1 0-6 0"/><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H19a1 1 0 0 1 1 1v18a1 1 0 0 1-1 1H6.5a1 1 0 0 1 0-5H20"/>'
+                 '<circle cx="12" cy="8" r="2"/>',
     "camera": '<path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3z"/><circle cx="12" cy="13" r="3.5"/>',
 }
 
@@ -215,6 +218,9 @@ CHURCH_TABS: Dict[str, Tuple[str, str, str, str]] = {
     "news": ("news", "/my/news", "News", ICONS["bell"]),
     "prayer": ("prayer", "/my/prayer", "Prayer", ICONS["pray"]),
     "messages": ("messages", "/my/messages", "Messages", ICONS["chat"]),
+    # Offered only while the church has its member directory on
+    # (member_directory.church_on); turning it off takes it off the bar.
+    "directory": ("directory", "/my/directory", "Directory", ICONS["directory"]),
 }
 # What each tab opens, in the office's words (Settings shows these).
 TAB_HINTS = {
@@ -227,6 +233,7 @@ TAB_HINTS = {
     "news": "Your news, celebrations and good news from members",
     "prayer": "A prayer request straight to your pastors",
     "messages": "Chats with groups and the church",
+    "directory": "The members who chose to be listed, households together",
 }
 
 
@@ -263,6 +270,9 @@ def _tab_ready(biz: Optional[Dict[str, Any]], key: str) -> bool:
     if key == "messages":
         import member_portal_messaging as mpm
         return mpm.turned_on(biz or {})
+    if key == "directory":
+        import member_directory
+        return member_directory.church_on(biz)
     return True
 
 
@@ -283,10 +293,13 @@ def in_church_bar(biz: Optional[Dict[str, Any]], key: Optional[str]) -> bool:
 def tab_choices(biz: Optional[Dict[str, Any]]) -> list:
     """Every tab the office can pick, for Settings → Member page: its name,
     what it opens, whether it's locked (Home first, Give always there) and,
-    for Messages, whether members would see it yet."""
+    for Messages, whether members would see it yet. The directory is offered
+    only while the church has it on, so no tab leads nowhere."""
     out = []
     for key, (_, _href, label, _paths) in CHURCH_TABS.items():
         ready = _tab_ready(biz, key)
+        if key == "directory" and not ready:
+            continue
         out.append({"key": key, "label": label, "hint": TAB_HINTS.get(key, ""),
                     "locked": "first" if key == "home" else "always" if key == "give" else "",
                     "ready": ready,
