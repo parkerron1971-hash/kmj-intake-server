@@ -511,3 +511,62 @@ def test_a_business_that_isnt_a_church_has_no_board(db):
     db.t["businesses"][0]["type"] = "salon"
     assert ok(client("owner").get(f"/church/board/status?business_id={BIZ}"))["enabled"] is False
     assert client("owner").get(f"/church/board?business_id={BIZ}").status_code == 404
+
+
+# ─── The review's three (PR #1617) ────────────────────────────────────
+
+def test_an_item_follows_its_latest_decision_and_a_failed_move_says_so(db, monkeypatch):
+    b, ids = _deacons()
+    m = _meeting(b["id"])["meeting"]
+    roof = _item(m["id"], "Roof bids")
+    page = ok(_decide(roof["id"]))
+    did = page["items"][0]["decisions"][0]["id"]
+    assert page["items"][0]["status"] == "done"
+    # Changed to tabled: the item is tabled, so it carries.
+    page = ok(client("owner").patch(f"/church/board/decisions/{did}", json={"business_id": BIZ, "result": "tabled"}))
+    assert page["items"][0]["status"] == "tabled"
+    # The motion taken out: the item is open again, and doesn't carry.
+    page = ok(client("owner").delete(f"/church/board/decisions/{did}?business_id={BIZ}"))
+    assert page["items"][0]["status"] == "open"
+    assert _meeting(b["id"], "2026-11-26T00:00:00+00:00")["carried"] == 0
+    # A follow-up stays a follow-up whatever is decided.
+    ok(_patch_item(roof["id"], status="follow_up", follow_up_member=ids["hayes"]))
+    assert ok(_decide(roof["id"], result="carried"))["items"][0]["status"] == "follow_up"
+    # The item's move fails: the decision is kept, and the answer says so.
+    fund = _item(m["id"], "Benevolence limit")
+    real = db.patch
+    monkeypatch.setattr(sb_clients, "sb_patch_as_service",
+                        lambda path, body, **kw: None if path.startswith("/church_board_items") else real(path, body, **kw))
+    r = _decide(fund["id"], result="tabled")
+    assert r.status_code == 503 and "decision is saved" in r.json()["detail"]
+
+
+def test_a_carried_follow_up_keeps_its_task(db):
+    b, ids = _deacons()
+    sep = _meeting(b["id"], "2026-09-24T23:00:00+00:00")["meeting"]
+    van = _item(sep["id"], "Van insurance")
+    ok(_patch_item(van["id"], status="follow_up", follow_up_member=ids["hayes"]))
+    assert ok(client("owner").post(f"/church/board/meetings/{sep['id']}/tasks", json={"business_id": BIZ}))["made"] == 1
+    oct_ = _meeting(b["id"], "2026-10-29T23:00:00+00:00")
+    assert oct_["items"][0]["task_id"] == db.t["tasks"][0]["id"]
+    # Still a follow-up in October: "Make tasks" there makes nothing new.
+    ok(_patch_item(oct_["items"][0]["id"], status="follow_up"))
+    got = ok(client("owner").post(f"/church/board/meetings/{oct_['meeting']['id']}/tasks", json={"business_id": BIZ}))
+    assert got["made"] == 0 and len(db.t["tasks"]) == 1
+
+
+def test_sending_is_held_to_a_few_an_hour_and_each_send_is_its_own(db, monkeypatch):
+    b, ids = _deacons()
+    m = _meeting(b["id"])["meeting"]
+    ok(_status(m["id"], "in_progress"))
+    send = lambda: client("owner").post(f"/church/board/meetings/{m['id']}/send", json={"business_id": BIZ})  # noqa: E731
+    # The count didn't save: the next send still goes, under a new key.
+    real = db.patch
+    monkeypatch.setattr(sb_clients, "sb_patch_as_service",
+                        lambda path, body, **kw: [] if "sent_count" in body else real(path, body, **kw))
+    assert ok(send())["recorded"] is False
+    monkeypatch.setattr(sb_clients, "sb_patch_as_service", real)
+    for _ in range(5):
+        assert send().status_code == 200
+    assert send().status_code == 429
+    assert len({x["key"] for x in db.sent}) == len(db.sent) == 6 * 2

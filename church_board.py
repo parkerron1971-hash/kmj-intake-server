@@ -785,7 +785,9 @@ def carry_forward(me: Dict[str, Any], m: Dict[str, Any]) -> int:
                      "title": i.get("title") or "An open item", "notes": i.get("notes") or "", "minutes": "",
                      "status": "open", "documents": i.get("documents") or [], "carried_from": str(i["id"]),
                      "follow_up_member": i.get("follow_up_member"), "follow_up_due": i.get("follow_up_due"),
-                     "created_at": now, "updated_at": now})
+                     # A follow-up that already became a task keeps it: "Make
+                     # tasks" at the next meeting doesn't make it twice.
+                     "task_id": i.get("task_id"), "created_at": now, "updated_at": now})
     got = sb_clients.sb_post_as_service("/church_board_items?on_conflict=carried_from", rows,
                                         prefer="resolution=ignore-duplicates,return=representation")
     if not isinstance(got, list):
@@ -1054,15 +1056,31 @@ def add_decision(me: Dict[str, Any], item_id: str, body: Dict[str, Any]) -> Dict
         "item_title": (i.get("title") or "")[:ITEM_MAX], "moved_by": None, "seconded_by": None, **fields,
         "decided_on": day.isoformat(), "created_by": me["uid"], "created_at": now, "updated_at": now}),
         "That decision didn't save. Try again.")
-    _settle_item(biz, i, fields["result"])
+    resettle(biz, str(i["id"]))
     return meeting_page(me, m)
 
 
-def _settle_item(biz: str, i: Dict[str, Any], result: str) -> None:
-    want = "tabled" if result == "tabled" else "done"
-    if i.get("status") == "open" or (result == "tabled" and i.get("status") == "done"):
-        sb_clients.sb_patch_as_service(f"/church_board_items?id=eq.{_q(i['id'])}&business_id=eq.{_q(biz)}",
-                                       {"status": want, "updated_at": _iso(_now())})
+def resettle(biz: str, item_id: str) -> None:
+    """An item follows its latest decision: tabled carries it to the next
+    meeting, carried or failed settles it, and with no decision left it's
+    open again. A follow-up stays a follow-up whatever was decided. A move
+    that doesn't save says so: the item would otherwise drop off (or stay
+    on) the next agenda without anyone knowing."""
+    rows = _need(f"/church_board_items?id=eq.{_q(item_id)}&business_id=eq.{_q(biz)}&select=id,status&limit=1")
+    if not rows or rows[0].get("status") == "follow_up":
+        return
+    decided = _need(f"/church_board_decisions?business_id=eq.{_q(biz)}&item_id=eq.{_q(item_id)}"
+                    "&select=result,created_at&order=created_at.asc&limit=200")
+    decided.sort(key=lambda d: str(d.get("created_at") or ""))
+    want = ("tabled" if decided[-1].get("result") == "tabled" else "done") if decided else "open"
+    have = rows[0].get("status")
+    if want == have or (not decided and have == "open"):
+        return
+    got = sb_clients.sb_patch_as_service(f"/church_board_items?id=eq.{_q(item_id)}&business_id=eq.{_q(biz)}",
+                                         {"status": want, "updated_at": _iso(_now())})
+    if not isinstance(got, list):
+        raise HTTPException(503, f"The decision is saved, but the item is still marked {have.replace('_', '-')}. "
+                                 f"Mark it {want} on the item.")
 
 
 def _decision(me: Dict[str, Any], decision_id: Any) -> Dict[str, Any]:
@@ -1088,6 +1106,8 @@ def edit_decision(me: Dict[str, Any], decision_id: str, body: Dict[str, Any]) ->
         fields["updated_at"] = _iso(_now())
         _saved(sb_clients.sb_patch_as_service(f"/church_board_decisions?id=eq.{_q(d['id'])}&business_id=eq.{_q(biz)}",
                                               fields))
+        if "result" in fields:
+            resettle(biz, str(d["item_id"]))
     return meeting_page(me, m)
 
 
@@ -1099,6 +1119,7 @@ def delete_decision(me: Dict[str, Any], decision_id: str) -> Dict[str, Any]:
     biz = str(me["biz"]["id"])
     if not sb_clients.sb_delete_as_service(f"/church_board_decisions?id=eq.{_q(d['id'])}&business_id=eq.{_q(biz)}"):
         raise HTTPException(503, "Nothing was removed. Try again.")
+    resettle(biz, str(d["item_id"]))
     return meeting_page(me, m)
 
 
@@ -1225,6 +1246,9 @@ def send_minutes(me: Dict[str, Any], meeting_id: str) -> Dict[str, Any]:
         raise HTTPException(409, "These minutes are approved already.")
     if m.get("status") == "planned":
         raise HTTPException(409, "The meeting hasn't started. Minutes go out once there are minutes.")
+    import rate_limit
+    if not rate_limit.allow("church_board_send", str(m["id"])):
+        raise HTTPException(429, "These minutes went out several times this hour. Try again later.")
     biz = me["biz"]
     biz_id = str(biz["id"])
     if m.get("status") == "in_progress":
@@ -1243,6 +1267,9 @@ def send_minutes(me: Dict[str, Any], meeting_id: str) -> Dict[str, Any]:
     text = minutes_text(church, mp, zone)
     subject = f"Draft minutes: {mp['board']['name']}, {when_words(m['starts_at'], zone).split(' at ')[0]}"
     n = int(m.get("sent_count") or 0) + 1
+    # One key per send, for each member: a retry of this send never goes
+    # twice, and the next send is its own whatever the count says.
+    token = uuid.uuid4().hex[:12]
     sent, missing, failed = [], [], []
     for x in members:
         email = emails.get(str(x.get("contact_id") or "")) or logins.get(str(x.get("user_id") or "")) or ""
@@ -1250,16 +1277,18 @@ def send_minutes(me: Dict[str, Any], meeting_id: str) -> Dict[str, Any]:
             missing.append(x["name"])
             continue
         try:
-            deliver(biz, email, x["name"], subject, text, f"board-minutes-{m['id']}-{x['id']}-{n}")
+            deliver(biz, email, x["name"], subject, text, f"board-minutes-{m['id']}-{x['id']}-{token}")
             sent.append(x["name"])
         except Exception:
             logger.warning("church board: a minutes email failed", exc_info=True)
             failed.append(x["name"])
+    recorded = True
     if sent:
-        sb_clients.sb_patch_as_service(
+        got = sb_clients.sb_patch_as_service(
             f"/church_board_meetings?id=eq.{_q(m['id'])}&business_id=eq.{_q(biz_id)}",
             {"sent_at": _iso(_now()), "sent_by": me["uid"], "sent_count": min(1000, n), "updated_at": _iso(_now())})
-    return {"sent": len(sent), "to": sent, "no_email": missing, "failed": failed,
+        recorded = isinstance(got, list) and bool(got)
+    return {"sent": len(sent), "to": sent, "no_email": missing, "failed": failed, "recorded": recorded,
             **meeting_page(me, _meeting(me, m["id"]))}
 
 

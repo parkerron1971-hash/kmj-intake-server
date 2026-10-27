@@ -27,6 +27,7 @@ decisions:
   - "Make tasks from follow-ups: one task per follow-up item with none yet (title, a line saying which meeting, the item's minutes, due the follow-up's day), handed to the member's login where they have one (tasks.assigned_to); twice makes each once"
   - "Attachments are Documents: paths in the church's own folder of business-documents ({business_id}/...), never another church's, no new file type"
   - "Minutes never reach the member app; nothing here is read by member_portal"
+  - "Review (PR #1617): an item follows its latest decision (tabled carries it, carried or failed settles it, none left reopens it; a follow-up stays one), on adding, changing and taking out a decision, and a move that doesn't save is a 503 that says the decision was kept. A carried follow-up keeps its task, so the next meeting's Make tasks doesn't make it twice. Sending is held to 6 an hour per meeting (rate_limit 'church_board_send'), each send has its own key, and a count that didn't save is reported, never a silent re-send"
 related: [2026-10-27-church-help.md, 2026-10-26-task-hand-off.md, 2026-10-23-church-areas-map.md]
 ---
 - `church_board.py` (new): the switch (`CHURCH_BOARD` off | owner | on, owner by
@@ -43,17 +44,20 @@ related: [2026-10-27-church-help.md, 2026-10-26-task-hand-off.md, 2026-10-23-chu
 - `account_lifecycle.py`: the six tables exported (first, before the contacts and
   tasks they cite); all but `church_boards` skipped on import (they cite each
   other, people and logins by id).
-- `kmj_intake_automation.py`: mounts the router after Help requests.
+- `kmj_intake_automation.py`: mounts the router after Check requests.
+- `rate_limit.py`: the `church_board_send` bucket (6 an hour per meeting).
 - `.github/workflows/ci.yml`: adds `church_board_db.mjs`. `.env.example`: `CHURCH_BOARD`.
 
 Checks:
-- `__tests__/test_church_board.py`: 13 tests (a login on no board refused, an
+- `__tests__/test_church_board.py`: 16 tests (a login on no board refused, an
   office manager too; a member sees only their board and a viewer only reads;
   another church unreachable, its people and files too; quorum math; the live
   quorum, excused, ending the meeting, someone leaving; an open item carried
   once; a decision's vote and the log's search across years; approving minutes
   and the lock; send only to the board's members; follow-ups become tasks once;
-  the switch; before the migration; a business that isn't a church).
+  the switch; before the migration; a business that isn't a church; an item
+  following its latest decision; a carried follow-up keeping its task; sending
+  held to a few an hour, each send its own).
 - Rules broken on purpose, each caught: anyone seeing every board, half as a
   majority, minutes to people who left, a login on no board getting in,
   decisions on approved minutes. Carrying twice is held by the database's
