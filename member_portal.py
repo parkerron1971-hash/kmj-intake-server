@@ -5,7 +5,9 @@ WHAT IT IS (Kevin, 2026-09-29: "passwordless, permanent address, long
 device session"). A member signs in with a 6-digit code sent to the email
 the church already has for them — no password, no account in the
 practitioner's user pool — and sees their own giving and their year-end
-statement. Nothing else about anyone else: there is no member directory.
+statement. Nothing else about anyone else, except the member directory
+(member_directory.py, 2026-10-27): off until the church turns it on, and
+only the adult members who said yes, showing only what each one chose.
 
 WHO CAN SIGN IN. Only an email the church has on a contact. Asking for a
 code NEVER says whether an address is on the list — the same page comes
@@ -1223,11 +1225,21 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
             return RedirectResponse("/my", status_code=303, headers=_SECURE_HEADERS)
         html, status = await mpl.serve(request, biz, site, me, sub)
         return _page(html, status)
-    if sub in ("/my/groups", "/my/classes", "/my/messages") or sub.startswith("/my/messages/"):
+    if sub in ("/my/groups", "/my/classes", "/my/messages", "/my/directory") or sub.startswith("/my/messages/"):
         # Connect's Classes tab: when the church has a published class, or
         # in the owner's preview (member_portal_classes).
         import member_portal_classes as mcl
         mcl.TAB.set(preview or await asyncio.to_thread(mcl.classes_on, biz["id"]))
+    # The member directory (member_directory.py): served only while the
+    # church has it on, and only in Church (never in Youth or Kids, even
+    # for an adult leader who switched there).
+    if sub == "/my/directory":
+        import member_directory as mdir
+        import member_spaces as msp
+        if not mdir.church_on(biz) or (msp.CURRENT.get() or {}).get("space", "church") != "church":
+            return RedirectResponse("/my", status_code=303, headers=_SECURE_HEADERS)
+        html, status = await mdir.serve(request, biz, site, me)
+        return _page(html, status)
     if sub == "/my/classes":
         import member_portal_classes as mcl
         data = fill(await asyncio.to_thread(mcl.classes_for, biz["id"], me), "classes")
@@ -1285,10 +1297,12 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
             return RedirectResponse("/my/pictures", status_code=303, headers=_SECURE_HEADERS)
         return _page(mapic.render_spot(biz, site, request, me, spot))
     if sub == "/my/details":
-        full = await asyncio.to_thread(mpc.load_me, biz["id"], me["id"])
+        import member_directory as mdir
+        full, directory = await asyncio.gather(asyncio.to_thread(mpc.load_me, biz["id"], me["id"]),
+                                               asyncio.to_thread(mdir.details_block, biz, str(me["id"])))
         if not full:
             return _page(render_try_again(biz, site), 503)
-        return _page(mpc.render_details(biz, site, request, full))
+        return _page(mpc.render_details(biz, site, request, full, directory))
     if sub == "/my/notifications":
         import member_push
         import group_chat_notify as gcn
@@ -1729,7 +1743,11 @@ def _config_payload(biz: Dict[str, Any], site: Dict[str, Any], user: Optional[Au
 
 def _tabs_payload(biz: Dict[str, Any]) -> Dict[str, Any]:
     import member_app_ui as ui
-    return {"tabs": list(ui.church_tab_keys(biz)), "tab_choices": ui.tab_choices(biz),
+    choices = ui.tab_choices(biz)
+    offered = {c["key"] for c in choices}
+    # A tab that isn't offered now (the directory while it's off) isn't
+    # shown as on the bar either.
+    return {"tabs": [k for k in ui.church_tab_keys(biz) if k in offered], "tab_choices": choices,
             "tab_limit": ui.CHURCH_TAB_LIMIT, "tabs_default": list(ui.DEFAULT_TAB_KEYS)}
 
 
@@ -1915,6 +1933,11 @@ def patch_member_portal_config(business_id: str, body: Dict[str, Any],
         if editors_list is not None:
             cfg["photo_editors"] = editors_list
         if "tabs" in body:
+            # The directory is a tab only while the church has it on.
+            if tab_keys is not None and "directory" in tab_keys:
+                import member_directory
+                if not member_directory.church_on({"settings": {"member_portal": cfg}}):
+                    tab_keys = [k for k in tab_keys if k != "directory"]
             # Today's bar is kept as no bar at all, so it follows ours.
             if tab_keys is None or tuple(tab_keys) == ui.DEFAULT_TAB_KEYS:
                 cfg.pop("tabs", None)
