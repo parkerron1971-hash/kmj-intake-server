@@ -58,6 +58,9 @@ SUNDAYS: ContextVar[bool] = ContextVar("lead_sundays", default=False)
 # request in serve() when the tab is the Serve tab, so every page's section
 # switcher can offer them: their Sundays (sunday_serving) and a kids room.
 PARTS: ContextVar[Dict[str, Any]] = ContextVar("lead_parts", default={})
+# Get paid back (church_checks, 2026-10-27): its door, set once per request
+# in serve() where the switch shows it. Whoever reaches the tab serves.
+PAID_BACK: ContextVar[str] = ContextVar("lead_paid_back", default="")
 
 
 def _word() -> str:
@@ -562,7 +565,7 @@ def render(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], my_r
         waiting = sum(1 for p in (prayer or {}).get("requests") or [] if not p.get("prayed_at"))
         seg = _seg("prayer", people, True, waiting, fams, groups)
         body = (f'{flash}{head}{invites}{mps.card(safety)}{_room_door(room)}{savvy_door(PARTS.get().get("team") or [])}'
-                f'{seg}{_prayer_body(prayer, biz, targets or [], now)}')
+                f'{PAID_BACK.get()}{seg}{_prayer_body(prayer, biz, targets or [], now)}')
         return _shell(biz, site, "Prayer", f'<style>{LEAD_CSS}{mps.SAFETY_CSS}</style><div class="ld-wide">{body}</div>',
                       tab="lead", who=me)
     seg = ""
@@ -575,7 +578,7 @@ def render(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], my_r
         kids = (f'<section class="ld-card"><h3>Kids room</h3><p>You serve in Kids. Your room and its Sundays live in '
                 f'the Kids space.</p><p><a class="ld-btn" href="/my/space?to=kids">Open the Kids room</a></p></section>'
                 if p.get("kids") else "")
-        savvy = savvy_door(p.get("team") or [])
+        savvy = savvy_door(p.get("team") or []) + PAID_BACK.get()
         body = (f'{flash}{head}{invites}{savvy}{kids}' if invites or kids or savvy else
                 f'{flash}{head}<section class="ld-card"><p>You don’t lead anything at {_e(church)} yet. When the church '
                 f'asks you to, it shows up here.</p><p><a href="/my">Back to Home</a></p></section>')
@@ -603,7 +606,7 @@ def render(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], my_r
               if shown else '<section class="ld-file"></section>')
     grid = f'<div class="ld-grid{" has-sel" if sel else ""}">{listing}{detail}</div>'
     title = sel["person"]["name"] if sel else "Lead"
-    door = "" if sel else mps.card(safety) + _room_door(room) + savvy_door(PARTS.get().get("team") or [])
+    door = "" if sel else mps.card(safety) + _room_door(room) + savvy_door(PARTS.get().get("team") or []) + PAID_BACK.get()
     return _shell(biz, site, title,
                   f'<style>{LEAD_CSS}{mps.SAFETY_CSS}</style><div class="ld-wide">{flash}{head}{invites}{door}{grid}</div>',
                   tab="lead", who=me, back=("/my/lead", _word()) if sel else None)
@@ -629,6 +632,8 @@ async def serve(request: Request, biz: Dict[str, Any], site, me: Dict[str, Any],
     import member_app_ui
     SUNDAYS.set(await asyncio.to_thread(sunday_leading.leads_a_team, biz["id"], str(me["id"])))
     PARTS.set(await asyncio.to_thread(parts, biz, str(me["id"]), me.get("email")) if member_app_ui.serve_mode() else {})
+    import member_portal_checks as mpck
+    PAID_BACK.set(await mpck.door_async(request, biz))
     # A Sunday team's leader: their team's Sundays (member_portal_leading).
     if selected == "sundays":
         import member_portal_leading
@@ -663,8 +668,9 @@ async def serve(request: Request, biz: Dict[str, Any], site, me: Dict[str, Any],
         m = await asyncio.to_thread(ss.mine, biz, str(me["id"]))
         if m is not None:
             m["hear"] = await asyncio.to_thread(ss.hearing, biz, str(me["id"]))
+            m["hours"] = await mps_serving.hours_for(request, biz, me)
             return mps_serving.render_page(biz, site, request, me, m, None,
-                                           door=savvy_door(PARTS.get().get("team") or [])), 200
+                                           door=savvy_door(PARTS.get().get("team") or []) + PAID_BACK.get()), 200
     view = prayer = None
     targets: List[Dict[str, Any]] = []
     fams = 0
@@ -728,7 +734,7 @@ async def serve_groups(request: Request, biz: Dict[str, Any], site, me: Dict[str
     import group_chat_notify
     css = (f"{LEAD_CSS}{mpg.GROUP_CSS}{group_study.STUDY_CSS}{group_lead.GL_CSS}{mpg.CHAT_CSS}{chat_polls.POLL_CSS}"
            f"{chat_photos.PHOTO_CSS}{group_chat_notify.CONTROL_CSS}{group_desk.DESK_CSS}")
-    rail = f'{mpc._flash(request)}{head}{seg}{group_desk.gathering(g, v, esc=_e, ic=mpg._ic)}{inner}'
+    rail = f'{mpc._flash(request)}{head}{seg}{PAID_BACK.get()}{group_desk.gathering(g, v, esc=_e, ic=mpg._ic)}{inner}'
     body = group_desk.shell(str(g["id"]), rail, esc=_e, ic=mpg._ic)
     return _shell(biz, site, g.get("name") or "My group", f'<style>{css}</style><div class="ld-wide gl">{body}</div>',
                   tab="lead", who=me, script=group_desk.script(str(g["id"]))), 200

@@ -363,10 +363,18 @@ app.include_router(church_pledges_router)
 # Rooms & spaces, with Rentals: booking the building (2026-10-27).
 from church_spaces import router as church_spaces_router
 app.include_router(church_spaces_router)
+# Serving hours and background checks, the Sunday door (2026-10-27;
+# CHURCH_SERVING off | owner | on).
+from church_serving import router as church_serving_router
+app.include_router(church_serving_router)
 # Help requests (benevolence): a fund, a limit, a keeper's yes, a record
 # (2026-10-27; CHURCH_HELP off | owner | on).
 from church_help import router as church_help_router
 app.include_router(church_help_router)
+# Check requests: money going out, a receipt, a limit and a keeper's yes
+# (2026-10-27; CHURCH_CHECKS off | owner | on).
+from church_checks import router as church_checks_router
+app.include_router(church_checks_router)
 # My week: a church login's first page (Who sees what, 2026-10-26).
 from church_my_week import router as church_my_week_router
 app.include_router(church_my_week_router)
@@ -449,6 +457,10 @@ app.include_router(member_portal_church_router)
 # and the office's switch, list and take-out (/member-portal/{biz}/directory).
 from member_directory import router as member_directory_router
 app.include_router(member_directory_router)
+# Ask the church (member_asks.py): a member's room, help, visit, life event
+# and pledge asks, and the office's choices. Before the site catch-all.
+from member_asks import router as member_asks_router
+app.include_router(member_asks_router)
 # A group's own page in the member app: its Board, who's in it, asking to
 # join (GET /my/groups/<id> is member_portal.serve's).
 from member_portal_groups import router as member_portal_groups_router
@@ -468,6 +480,9 @@ from member_portal_share import router as member_portal_share_router
 # My serving in the member app (ChurchSavvy Planning): answer an ask, a sub, away days.
 from member_portal_serving import router as member_portal_serving_router
 app.include_router(member_portal_serving_router)
+# Get paid back, under Serve: a volunteer's receipt (GET /my/paid-back is member_portal.serve's).
+from member_portal_checks import router as member_portal_checks_router
+app.include_router(member_portal_checks_router)
 app.include_router(member_portal_share_router)
 # Posting to News from a phone, and Sign me up from a post (GET /my/news/write
 # is member_portal.serve's).
