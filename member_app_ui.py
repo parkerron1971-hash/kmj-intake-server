@@ -83,8 +83,9 @@ FAMILY: Dict[str, Dict[str, Any]] = {
               "deep_d": "#2A1409", "deep_l": "#FDE8DD"},
 }
 FAMILY_NEAR = 35       # degrees of hue
-# Which family colour a page's tab wears (home and give wear the church's).
-TAB_HUE = {"watch": "violet", "bible": "gold", "connect": "teal"}
+# Which family colour a page's tab wears (home, give and news wear the church's).
+TAB_HUE = {"watch": "violet", "bible": "gold", "connect": "teal", "events": "coral", "prayer": "teal",
+           "messages": "teal"}
 
 TABS = (
     ("home", "/my", "Home", '<path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"/>'),
@@ -108,7 +109,8 @@ YOUTH_TABS = (
     ("crew", "/my/groups", "Crew", TABS[4][3]),
 )
 YOUTH_TAB_OF = {"home": "home", "watch": "watch", "sermons": "watch", "live": "watch", "bible": "bible",
-                "messages": "chats", "chats": "chats", "groups": "crew", "connect": "crew", "crew": "crew"}
+                "messages": "chats", "chats": "chats", "groups": "crew", "connect": "crew", "crew": "crew",
+                "events": "home", "prayer": "home", "news": "home"}
 # Kids' bar (member_spaces_kids): its stories, its Sundays and the family.
 # A leader who isn't a parent gets the first three, Home called Room.
 KIDS_TABS = (
@@ -119,10 +121,12 @@ KIDS_TABS = (
     ("family", "/my/kids/family", "Family", TABS[4][3]),
 )
 KIDS_TAB_OF = {"home": "home", "watch": "watch", "sermons": "watch", "live": "watch", "stories": "stories",
-               "sundays": "sundays", "family": "family"}
-# Which tab a page belongs under.
+               "sundays": "sundays", "family": "family", "events": "home", "prayer": "home", "news": "home"}
+# Which tab a page belongs under. Events, Prayer and News sit under Home
+# unless the church made them tabs of their own (church_tabs).
 TAB_OF = {"home": "home", "watch": "watch", "sermons": "watch", "live": "watch", "bible": "bible",
-          "give": "give", "connect": "connect", "groups": "connect", "messages": "connect", "lead": "lead"}
+          "give": "give", "connect": "connect", "groups": "connect", "messages": "connect", "lead": "lead",
+          "events": "home", "prayer": "home", "news": "home"}
 # A member who holds a church role (church_follow_up) gets a sixth tab:
 # the people Chief hands them (member_portal_lead).
 LEAD_TAB = ("lead", "/my/lead", "Lead", '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/>')
@@ -184,6 +188,110 @@ def icon(name: str, size: int = 20) -> str:
     return (f'<svg class="mb-ic" width="{size}" height="{size}" viewBox="0 0 24 24" fill="none" '
             f'stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" '
             f'aria-hidden="true" focusable="false">{ICONS[name]}</svg>')
+
+
+# ─── the church's own bar ────────────────────────────────────────────
+# Tabs your members see (2026-10-27, Kevin: "build it merge it"; step 4 of
+# the Church Menu Upgrade, filed under "Love City leaves Subsplash"): the
+# church office picks which tabs the church's bar shows and in what order,
+# the way a Subsplash app's Manage tabs does (Settings → Member page,
+# settings.member_portal.tabs, a list of keys). Nothing saved is today's
+# bar exactly (TABS).
+#
+# - Home is always first and always there.
+# - Give is always there (Kevin, 2026-10-15) and can move: before the
+#   church takes gifts in the app, it says how to give.
+# - Only pages every signed-in member already has are offered, so a tab
+#   never leads nowhere. Messages needs the church's member messaging on;
+#   while it's off the tab stays out of the bar.
+# - Five at most: the phone bar fits five, and a leader's Serve tab (Lead)
+#   still comes last, as the sixth.
+# Youth and Kids keep their own bars (YOUTH_TABS, KIDS_TABS).
+CHURCH_TAB_LIMIT = 5
+DEFAULT_TAB_KEYS = tuple(t[0] for t in TABS)
+CHURCH_TABS: Dict[str, Tuple[str, str, str, str]] = {
+    **{t[0]: t for t in TABS},
+    "events": ("events", "/my/events", "Events", ICONS["calendar"]),
+    "news": ("news", "/my/news", "News", ICONS["bell"]),
+    "prayer": ("prayer", "/my/prayer", "Prayer", ICONS["pray"]),
+    "messages": ("messages", "/my/messages", "Messages", ICONS["chat"]),
+}
+# What each tab opens, in the office's words (Settings shows these).
+TAB_HINTS = {
+    "home": "Always first: the week, what's on and the verse",
+    "watch": "Sermons, series and the live service",
+    "bible": "The Bible, reading plans and devotionals",
+    "give": "Always there: giving, or how to give before you take gifts in the app",
+    "connect": "Groups, classes and chats",
+    "events": "What's coming up, with RSVPs and sign-ups",
+    "news": "Your news, celebrations and good news from members",
+    "prayer": "A prayer request straight to your pastors",
+    "messages": "Chats with groups and the church",
+}
+
+
+def clean_tab_keys(value: Any) -> Optional[list]:
+    """A bar the office saved, made safe: known keys only, each once, Home
+    first, Give kept (where they put it, else last), at most
+    CHURCH_TAB_LIMIT. None for anything that isn't a list."""
+    if not isinstance(value, (list, tuple)):
+        return None
+    picked: list = []
+    for k in value:
+        k = k.strip().lower() if isinstance(k, str) else ""
+        if k in CHURCH_TABS and k != "home" and k not in picked:
+            picked.append(k)
+    room, kept = CHURCH_TAB_LIMIT - 2, []   # Home and Give always take two
+    for k in picked:
+        if k == "give" or len([x for x in kept if x != "give"]) < room:
+            kept.append(k)
+    if "give" not in kept:
+        kept.append("give")
+    return ["home"] + kept
+
+
+def church_tab_keys(biz: Optional[Dict[str, Any]]) -> Tuple[str, ...]:
+    """The church's bar as it saved it, in order; today's bar when it saved
+    none (or something that isn't a bar)."""
+    cfg = ((biz or {}).get("settings") or {}).get("member_portal") or {}
+    keys = clean_tab_keys(cfg.get("tabs")) if isinstance(cfg, dict) else None
+    return tuple(keys) if keys else DEFAULT_TAB_KEYS
+
+
+def _tab_ready(biz: Optional[Dict[str, Any]], key: str) -> bool:
+    """Whether a tab's page is there for the church's members now."""
+    if key == "messages":
+        import member_portal_messaging as mpm
+        return mpm.turned_on(biz or {})
+    return True
+
+
+def church_tabs(biz: Optional[Dict[str, Any]]) -> Tuple[Tuple[str, str, str, str], ...]:
+    """The tabs of the church's bar, in its order, each one a page that's
+    there (a saved Messages tab waits for member messaging)."""
+    keys = church_tab_keys(biz)
+    if keys == DEFAULT_TAB_KEYS:
+        return TABS
+    return tuple(CHURCH_TABS[k] for k in keys if _tab_ready(biz, k))
+
+
+def in_church_bar(biz: Optional[Dict[str, Any]], key: Optional[str]) -> bool:
+    """Whether a page is a tab of its own in the church's bar."""
+    return bool(key) and any(t[0] == key for t in church_tabs(biz))
+
+
+def tab_choices(biz: Optional[Dict[str, Any]]) -> list:
+    """Every tab the office can pick, for Settings → Member page: its name,
+    what it opens, whether it's locked (Home first, Give always there) and,
+    for Messages, whether members would see it yet."""
+    out = []
+    for key, (_, _href, label, _paths) in CHURCH_TABS.items():
+        ready = _tab_ready(biz, key)
+        out.append({"key": key, "label": label, "hint": TAB_HINTS.get(key, ""),
+                    "locked": "first" if key == "home" else "always" if key == "give" else "",
+                    "ready": ready,
+                    "waiting": "" if ready else "Members see it once member messaging is on."})
+    return out
 
 
 # ─── colour ──────────────────────────────────────────────────────────
@@ -474,13 +582,15 @@ def segmented(items: Tuple[Tuple[str, str, str], ...], current: str, label: str)
 
 
 def nav(active: Optional[str], *, give: bool = True, space: str = "church", kids_parent: bool = True,
-        lead: bool = False) -> str:
+        lead: bool = False, biz: Optional[Dict[str, Any]] = None) -> str:
     """The tab bar. Give is always there (Kevin, 2026-10-15): before the
     church takes gifts in the app, it says how to give
     (member_portal.render_give_off). Youth and Kids have their own bars;
-    a Kids leader who isn't a parent gets Room, Watch and Stories. A
-    church leader (lead=True) gets Lead last. On a wide screen the bar is
-    a rail down the left (Kevin, 2026-10-17: a desktop view too)."""
+    a Kids leader who isn't a parent gets Room, Watch and Stories. The
+    church's bar is the one it picked (church_tabs; today's when it picked
+    none), and a church leader (lead=True) gets Lead last. On a wide
+    screen the bar is a rail down the left (Kevin, 2026-10-17: a desktop
+    view too)."""
     if space == "youth":
         tabs, of = YOUTH_TABS, YOUTH_TAB_OF
     elif space == "kids":
@@ -488,8 +598,11 @@ def nav(active: Optional[str], *, give: bool = True, space: str = "church", kids
         if not kids_parent:
             tabs = ((tabs[0][0], tabs[0][1], "Room", tabs[0][3]),) + tabs[1:3]
     else:
-        tabs, of = (TABS + (SERVE_TAB if serve_mode() else LEAD_TAB,) if lead else TABS), TAB_OF
+        bar = church_tabs(biz) if biz else TABS
+        tabs, of = (bar + (SERVE_TAB if serve_mode() else LEAD_TAB,) if lead else bar), TAB_OF
     cur_tab = of.get(active or "", "")
+    if space == "church" and any(t[0] == active for t in tabs):
+        cur_tab = active   # Events, Prayer, News or Messages made a tab of its own
     items = []
     for key, href, label, paths in tabs:
         if key == "give" and not give:
@@ -1140,6 +1253,8 @@ _FAMILY_CSS = Template("""
 .mb-tab[aria-current][data-hue=gold] .mb-tab-p{background:var(--gold-deep);}
 .mb-tab[aria-current][data-hue=teal]{color:var(--teal-ink);}
 .mb-tab[aria-current][data-hue=teal] .mb-tab-p{background:var(--teal-deep);}
+.mb-tab[aria-current][data-hue=coral]{color:var(--coral-ink);}
+.mb-tab[aria-current][data-hue=coral] .mb-tab-p{background:var(--coral-deep);}
 .mb-tab{gap:4px;}
 
 /* photos: in the look the church picked for each one */
