@@ -512,6 +512,7 @@ def tally(regs: List[Dict[str, Any]], now: Optional[datetime] = None) -> Dict[st
             t["refunded_cents"] += int(r.get("refunded_cents") or 0)
             if st == "refunded":
                 t["refunded"] += 1
+    t["over"] = 0
     t["collected_cents"] = t["paid_cents"] - t["refunded_cents"] + sum(
         int(r.get("amount_cents") or 0) for r in regs or [] if r.get("status") == "refunded")
     return t
@@ -914,7 +915,7 @@ async def public_signup(slug: str, body: Dict[str, Any], request: Request):
     body = body if isinstance(body, dict) else {}
     entry_id = _uuid(body.get("entry_id"))
     site, biz, _mods = await asyncio.to_thread(_public_church, slug)
-    if not business_open(biz):
+    if not await asyncio.to_thread(business_open, biz):
         return _fail(409, "closed", CLOSED_WORDS["paused"])
     ev = await asyncio.to_thread(_event, str(biz["id"]), entry_id)
     if not ev or not er.is_public(ev["data"]):
@@ -1003,7 +1004,7 @@ async def public_claim(slug: str, body: Dict[str, Any], request: Request):
         raise HTTPException(429, "Too many tries. Please wait a few minutes, then try again.")
     body = body if isinstance(body, dict) else {}
     site, biz, _m = await asyncio.to_thread(_public_church, slug)
-    if not business_open(biz):
+    if not await asyncio.to_thread(business_open, biz):
         return _fail(409, "closed", CLOSED_WORDS["paused"])
     reg = await asyncio.to_thread(_offer_for, str(biz["id"]), str(body.get("token") or ""))
     base = await asyncio.to_thread(_return_base, site, request)
@@ -1084,7 +1085,7 @@ async def member_signup(request: Request):
     try:
         entry_id = _uuid(form.get("entry_id"))
         biz = await asyncio.to_thread(_business, biz_id)
-        if not biz or not business_open(biz):
+        if not biz or not await asyncio.to_thread(business_open, biz):
             return mpc._back("/my/events", err="signup_closed")
         ev = await asyncio.to_thread(_event, biz_id, entry_id)
         if not ev or not mpc.can_see(ev["data"], ev["fields"], me):
@@ -1183,6 +1184,8 @@ def record_checkout(session: Dict[str, Any], account_id: Optional[str]) -> Optio
         raise ValueError("Sign-up couldn't be marked paid")
     if not done:
         return None     # paid by another delivery a moment ago, or refunded
+    if reg.get("status") in ("expired", "cancelled"):
+        _tell_office_late(biz_id, reg)
     try:
         ev = _event(biz_id, str(reg["entry_id"]))
         setup = (setups_for(biz_id, [str(reg["entry_id"])]) or {}).get(str(reg["entry_id"]))
@@ -1190,6 +1193,26 @@ def record_checkout(session: Dict[str, Any], account_id: Optional[str]) -> Optio
     except Exception:
         logger.warning("[signups] paid confirmation failed (fail-soft)", exc_info=True)
     return biz_id
+
+
+def _tell_office_late(biz_id: str, reg: Dict[str, Any]) -> None:
+    """A payment that landed after its place went back (the hold ran out,
+    or the office took it off while Stripe's page was still open). It is
+    kept as paid, because the money moved; the office hears that the event
+    may be over its places, and can refund in Stripe if it can't fit them."""
+    try:
+        name = _plain(reg.get("name"), NAME_MAX) or "Someone"
+        title = reg.get("event_title") or "an event"
+        sb_clients.sb_post_as_service("/chief_notifications", {
+            "business_id": biz_id, "type": "warning",
+            "title": f"A late payment for {title}",
+            "body": (f"{name} paid after their place had gone back, so {title} may be over its places. "
+                     "Open its Sign-ups to see; if you can't fit them, refund them in Stripe."),
+            "status": "unread",
+            "data": {"kind": "event_signup_late", "registration_id": reg.get("id"), "entry_id": reg.get("entry_id")},
+        })
+    except Exception:
+        logger.warning("[signups] late-payment note failed (fail-soft)", exc_info=True)
 
 
 ANY_ACCOUNT = object()
@@ -1220,7 +1243,10 @@ def record_refund(charge: Dict[str, Any], account_id: Any = ANY_ACCOUNT) -> Opti
     patch: Dict[str, Any] = {"refunded_cents": cents, "refunded_at": _iso(_now()), "updated_at": _iso(_now())}
     if full and reg.get("status") == "paid":
         patch["status"] = "refunded"
-    sb_clients.sb_patch_as_service(f"/church_event_registrations?id=eq.{_q(reg_id)}&business_id=eq.{_q(biz_id)}", patch)
+    done = sb_clients.sb_patch_as_service(
+        f"/church_event_registrations?id=eq.{_q(reg_id)}&business_id=eq.{_q(biz_id)}", patch)
+    if done is None:
+        raise ValueError("Sign-up refund couldn't be recorded")
     if patch.get("status") == "refunded":
         settle(biz_id, str(reg["entry_id"]))
     return biz_id
@@ -1506,6 +1532,8 @@ def detail(me: Dict[str, Any], entry_id: str) -> Dict[str, Any]:
                  f"&select={REG_FIELDS}&order=created_at.asc&limit=3000") if setup else []
     now = _now()
     t = tally(regs, now)
+    if setup and capacity_of(setup) is not None:
+        t["over"] = max(0, t["taken"] - capacity_of(setup))
     queue = [r["id"] for r in regs if r.get("status") == "waiting"]
     view = public_view(setup, t, now=now, event_day=ev.get("date")) if setup else None
     cap_field = ev.get("capacity_field")

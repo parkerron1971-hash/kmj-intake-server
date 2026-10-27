@@ -452,7 +452,14 @@ def test_a_payment_that_lands_after_the_hold_ran_out_is_still_paid(db, monkeypat
     db.now = T0 + timedelta(hours=1)
     ces.sweep_tick()
     assert r["status"] == "expired"
+    # Its places went to someone else meanwhile: the payment is still kept
+    # (the money moved), the office is told, and the event shows over.
+    signup(name="Bea", email="bea@example.org", tickets={ADULT: 3})
     assert webhook(db, monkeypatch, paid_session(db, r)).status_code == 200 and r["status"] == "paid"
+    [note] = [n for n in db.t.get("chief_notifications", []) if n["data"]["kind"] == "event_signup_late"]
+    assert "Ann Carter paid after their place had gone back" in note["body"]
+    d = office().get(f"/church/events/signups?business_id={BIZ}&entry_id={VBS}").json()
+    assert d["totals"]["over"] == 2
 
 
 def test_a_full_refund_frees_the_place_and_moves_the_waitlist(db, monkeypatch):
@@ -467,6 +474,12 @@ def test_a_full_refund_frees_the_place_and_moves_the_waitlist(db, monkeypatch):
     # Another account's refund touches nothing.
     webhook(db, monkeypatch, charge, account="acct_grace", kind="charge.refunded")
     assert r["status"] == "paid" and r["refunded_cents"] == 0
+    # A refund that can't be written is a failed event, so Stripe sends it again.
+    real = db.patch
+    monkeypatch.setattr(sb_clients, "sb_patch_as_service",
+                        lambda path, body, **kw: None if "church_event_registrations" in path else real(path, body, **kw))
+    assert webhook(db, monkeypatch, charge, kind="charge.refunded").status_code == 500 and r["status"] == "paid"
+    monkeypatch.setattr(sb_clients, "sb_patch_as_service", real)
     assert webhook(db, monkeypatch, charge, kind="charge.refunded").status_code == 200
     assert r["status"] == "refunded" and r["refunded_cents"] == 3500
     [dee] = regs(db, name="Dee")
