@@ -512,6 +512,13 @@ async def stripe_webhook(request: Request) -> JSONResponse:
                 verify_checkout_account(obj, account_id)
             if (obj.get("metadata") or {}).get("source_type") == "gift":
                 _verify_gift_account(obj.get("metadata") or {}, account_id)
+            if (obj.get("metadata") or {}).get("source_type") == "event_signup":
+                # Church event sign-ups: paid only when the payment came in
+                # on the connected account of the sign-up's own church, for
+                # the amount the server priced (raises otherwise, so the
+                # event is recorded as failed and the sign-up stays unpaid).
+                import church_event_signups
+                church_event_signups.record_checkout(obj, account_id)
             _handle_checkout_session_completed(obj)
         elif evt_type == "payment_intent.succeeded":
             if (obj.get("metadata") or {}).get("discount_checkout_v1") == "true":
@@ -979,6 +986,12 @@ def _handle_charge_refunded(charge: Dict[str, Any], account_id: Any = _ANY_ACCOU
         refund_biz = rows[0].get("business_id") if rows else None
         record_order_refund(source_id, refunded_cents,
                             fully=bool(charge.get("refunded")))
+    elif source_type == "event_signup":
+        # Church event sign-ups: only the church whose account refunded it;
+        # a full refund gives the places back and moves the waitlist.
+        import church_event_signups
+        refund_biz = church_event_signups.record_refund(
+            charge, church_event_signups.ANY_ACCOUNT if account_id is _ANY_ACCOUNT else account_id)
     elif source_type == "gift":
         # Online giving — a refunded gift adjusts the SAME columns the
         # giving surfaces already read (giving_statements._net_amount
