@@ -383,6 +383,10 @@ app.include_router(church_register_router)
 # decisions log (2026-10-27; CHURCH_BOARD off | owner | on).
 from church_board import router as church_board_router
 app.include_router(church_board_router)
+# The Reports pack: the year's numbers a church is asked for, from tables the
+# app already keeps (2026-10-27; CHURCH_REPORTS off | owner | on).
+from church_reports import router as church_reports_router
+app.include_router(church_reports_router)
 # The Monday leaders note: this week, what's needed and one win, emailed to
 # the All group leaders room once a week (2026-10-27; CHURCH_LEADERS_NOTE
 # off | owner | on).
