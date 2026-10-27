@@ -239,3 +239,22 @@ def test_the_accountant_never_answers_and_a_stranger_still_sees_nothing(church):
 def test_an_accountant_is_never_named_a_keeper(church):
     e = _refused(ck.put_keeper, BIZ, PEOPLE["treasurer"], "giving_money", ACCOUNTANT.id, True)
     assert e.status_code == 400
+
+
+def test_a_church_that_changes_its_type_stays_locked(church, reader):
+    # A church can change its own type, so the lock never asks what type a
+    # business is: it asks whether anyone keeps the area.
+    church.t["businesses"][0]["type"] = "consultant"
+    _locked(plaid_router._require_owner, BIZ, PEOPLE["owner"])
+    _locked(stripe_data_proxy._require_owner_with_acct, BIZ, PEOPLE["owner"])
+    _locked(reports_router.statement_customers, BIZ, user=PEOPLE["pastor"])
+
+
+def test_an_accountant_whose_name_cant_be_read_still_asks_only_for_giving(church, monkeypatch):
+    ck.put_keeper(BIZ, PEOPLE["admin"], "kids_youth", ID["second"], True)
+    real = sb_clients.sb_get_as_service
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", lambda path, **k: None
+                        if path.startswith("/business_collaborators") and "invited_email" in path else real(path, **k))
+    assert _refused(ck.keys_ask, {"business_id": BIZ, "area": "kids_youth"}, user=ACCOUNTANT).status_code == 400
+    assert [a["area"] for a in ck.keys_overview(BIZ, user=ACCOUNTANT)["areas"]] == ["giving_money"]
+    assert ck.keys_ask({"business_id": BIZ, "area": "giving_money"}, user=ACCOUNTANT)["told"] == 1

@@ -218,6 +218,12 @@ def _people(biz: str) -> Dict[str, Dict[str, Any]]:
     return {**outside, **seats}
 
 
+def _outside(uid: str, owner_id: Any, people: Dict[str, Dict[str, Any]]) -> bool:
+    """Neither the owner nor a seat: the routes only let an outside
+    accountant this far, even when their row couldn't be read for a name."""
+    return str(uid) != str(owner_id) and (people.get(str(uid)) or {}).get("role") in (None, "accountant")
+
+
 def _who(uid: str, owner_id: Any, seats: Dict[str, Dict[str, Any]]) -> str:
     if str(uid) == str(owner_id):
         return "The owner"
@@ -316,7 +322,7 @@ def ask(business_id: str, user: AuthedUser, area: str, reason: str) -> Dict[str,
     if already:
         return {"key": {**already, "area": area, "status": "open"}, "told": 0}
     seats = _people(biz["id"])
-    if (seats.get(me) or {}).get("role") == "accountant" and area != "giving_money":
+    if _outside(me, biz.get("owner_id"), seats) and area != "giving_money":
         raise HTTPException(400, "An accountant's key is for Giving & money.")
     waiting = [r for r in _need(
         f"/church_area_keys?business_id=eq.{_q(biz['id'])}&user_id=eq.{_q(me)}&area=eq.{_q(area)}"
@@ -483,7 +489,7 @@ def overview(business_id: str, user: AuthedUser) -> Dict[str, Any]:
     me, now = str(user.id), _now()
     rows, seats = _keeper_rows(biz["id"]), _people(biz["id"])
     # An outside accountant only ever needs Giving's key.
-    outside = (seats.get(me) or {}).get("role") == "accountant"
+    outside = _outside(me, biz.get("owner_id"), seats)
     # An ask answered at the end of its day is a key for an hour after.
     since = now - timedelta(hours=ASK_HOURS, minutes=KEY_MINUTES)
     asks = [a for a in _need(f"/church_area_keys?business_id=eq.{_q(biz['id'])}&status=in.(asked,open)"

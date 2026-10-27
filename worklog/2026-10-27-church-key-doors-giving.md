@@ -17,7 +17,7 @@ decisions:
   - "The books overview, review and month close read the bank feed through plaid_router's gates, so a church with a Giving keeper finds them behind the lock too"
   - "Totals stay open: the P&L, balance sheet, budgets, general ledger, 990 prep, the Reports pack and campaign totals. Revenue and profitability keep their totals and leave out the per-giver rows (givers_locked: true)"
   - "The church's outside accountant (a collaborator, no seat) sees who gave what, so the lock holds them too. They see Giving's keys, ask for Giving's key, are named to the keepers by their invited email and hear the answer by email; they never answer an ask and are never a keeper"
-  - "Keepers can only be named at a church (404 anywhere else), so no other business ever has a lock. Each door still reads the keepers, one indexed read, and a failed read is a 503, never an open door"
+  - "Keepers can only be named at a church (404 anywhere else), so no other business ever has a lock. The lock never asks a business's type, because a church can change its own type to slip its keeper: each door reads the keepers (one indexed read, for every business), and a failed read is a 503, never an open door"
 related: [2026-10-27-church-keys.md, 2026-10-23-church-areas-map.md]
 ---
 - `church_keys.py`:
@@ -34,12 +34,12 @@ related: [2026-10-27-church-keys.md, 2026-10-23-church-areas-map.md]
 - No shared reader is touched, so `church_my_week` and the Reports pack read as before.
 
 Checks:
-- `__tests__/test_church_key_doors.py`: 51 tests.
+- `__tests__/test_church_key_doors.py`: 53 tests.
   - Every door refuses the pastor, an admin and the owner, with nothing written or sent first.
   - The keeper gets in, and so does a key for its hour.
   - Givers are left out of revenue and profitability.
   - With no keeper there's no lock, and another business is never locked.
   - A failed keepers read is a 503.
-  - The accountant path is covered.
-- I removed each lock and accountant rule on purpose, and the tests caught all 30.
+  - The accountant path is covered, and a church that changes its type stays locked.
+- I removed each lock and accountant rule on purpose, and the tests caught all 31.
 - The 55 suites that touch these modules pass (1,017 tests), including the access ratchet, giving, statements, the bank, Stripe and the books.
