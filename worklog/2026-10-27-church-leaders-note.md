@@ -4,7 +4,7 @@ date: 2026-10-27
 agent: Claude Code (Claude Opus 5.5)
 asked: 'The leadership plan (artifact D68g78Hu7ULPXpwgkg1v5Y) and its meeting playbook (Evd8431XHqafeFpSXSgCFr) → Kevin, 2026-10-27: "let''s build"'
 status: shipped, switched off (platform owner only until a Thursday)
-prs: [kmj-intake-server (this PR), solutionist-studio (the Office › Leaders note page, its own PR)]
+prs: [kmj-intake-server#1619, solutionist-studio#1390]
 migrations: []
 left_undone:
   - "Switch-on: CHURCH_LEADERS_NOTE=on on Railway on a Thursday (it defaults to owner), with the app's What's New entry"
@@ -14,6 +14,7 @@ left_undone:
   - "The last send only is kept (businesses.settings.church_leaders_note); there is no history of earlier weeks"
 decisions:
   - "Lane: Build, Kevin's direct ask on the leadership plan"
+  - "A leader's reply goes to whoever sent the note (their sign-in email as reply_to), not a no-reply box: What's needed asks for answers"
   - "No model call: the draft is assembled from rows. This week = the church's next seven days (today and six more) on its clock (business_marketing.business_tz via group_gatherings.zone, the clock Sunday Planning and the groups read; chief_assignments._tz_for falls back to UTC). A clock that can't be read is a 503"
   - "This week reads where the church calendar reads: worship_services (archived and templates out), Services & Events occasions (an invite-only one stays out of a note to every leader), rooms booked (booked only; a rental is said as 'booked for a rental', never its renter), and the groups that meet (meet_day, every other week, monthly, skips) on one line. A plan and its own occasion are said once (same day, within two hours); a room booked under a gathering's name is folded in as its place"
   - "What's needed: places still open on the Sunday teams for each plan in the days (no one, offered to the team, or a no: the schedule page's rule) by team, and how many were asked and haven't answered; an event's roles short (events_rsvp_router.role_fill); people in follow-up with no one, as a count. Nothing else, never invented. The win is blank"

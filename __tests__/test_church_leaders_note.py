@@ -198,10 +198,10 @@ def db(monkeypatch):
     fake.sent = []
     fake.fail_to = set()
 
-    def deliver(biz, to, name, subject, html, key):
+    def deliver(biz, to, name, subject, html, key, reply_to=None):
         if to in fake.fail_to or "*" in fake.fail_to:
             raise RuntimeError("Resend said no")
-        fake.sent.append({"to": to, "name": name, "subject": subject, "html": html, "key": key})
+        fake.sent.append({"to": to, "name": name, "subject": subject, "html": html, "key": key, "reply_to": reply_to})
     monkeypatch.setattr(cln, "deliver", deliver)
     return fake
 
@@ -367,6 +367,8 @@ def test_it_goes_to_the_leaders_room_one_email_an_address_and_says_who_has_none(
     # Each email has its own key; a retry of one send never goes twice.
     assert len({x["key"] for x in db.sent}) == 3
     assert all(x["subject"] == "Leaders, the week of October 26" for x in db.sent)
+    # A leader's reply reaches whoever sent the note, never a no-reply box.
+    assert all(x["reply_to"] == "clerk@lovecity.org" for x in db.sent)
 
 
 def test_the_email_sets_each_heading_apart_and_escapes_what_was_typed(db):

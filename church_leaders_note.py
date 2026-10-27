@@ -645,15 +645,18 @@ def note_html(text: str, primary: str) -> str:
     return "".join(out)
 
 
-def deliver(biz: Dict[str, Any], to_email: str, to_name: str, subject: str, html: str, key: str) -> None:
+def deliver(biz: Dict[str, Any], to_email: str, to_name: str, subject: str, html: str, key: str,
+            reply_to: Optional[str] = None) -> None:
     """One email through the app's own path (Resend, the church's identity
-    where it has one). Raises when it doesn't go."""
+    where it has one). Raises when it doesn't go. A leader's reply goes to
+    whoever sent the note (the Church Administrator), not a no-reply box:
+    "What's needed" asks for answers."""
     import email_sender
     church = _plain(biz.get("name")) or "Your church"
     asyncio.run(email_sender.send_via_resend(
         to_email=to_email, to_name=to_name or None,
         from_email=os.environ.get("RESEND_FROM_EMAIL") or "noreply@mysolutionist.app",
-        from_name=church, subject=subject[:SUBJECT_MAX], body=html, reply_to=None,
+        from_name=church, subject=subject[:SUBJECT_MAX], body=html, reply_to=reply_to,
         business_id=str(biz["id"]), idempotency_key=key))
 
 
@@ -704,11 +707,14 @@ def send(me: Dict[str, Any], body: Dict[str, Any]) -> Dict[str, Any]:
     if not swap(biz_id, (last or {}).get("id"), claim):
         raise HTTPException(409, "Someone else is sending this week's note right now. Open the page again in a moment.")
     html = render(fresh, subject, text)
+    reply = str(me["user"].email or "").strip()
+    reply_to = reply if "@" in reply and " " not in reply else None
     sent: List[str] = []
     failed: List[str] = []
     for p in people["to"]:
         try:
-            deliver(fresh, p["email"], p["name"], subject, html, f"leaders-note-{biz_id}-{claim['id'][:12]}-{p['contact_id']}")
+            deliver(fresh, p["email"], p["name"], subject, html, f"leaders-note-{biz_id}-{claim['id'][:12]}-{p['contact_id']}",
+                    reply_to=reply_to)
             sent.append(p["name"])
         except Exception:
             logger.warning("leaders note: an email failed", exc_info=True)
