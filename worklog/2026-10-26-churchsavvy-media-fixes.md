@@ -3,12 +3,11 @@ title: ChurchSavvy's Media part, two fixes — a volunteer hears their clips are
 date: 2026-10-26
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-10-26: "go with your picks, do the media fixes first"; "go ahead, you build step 2 after the media fixes" (the two left over from the Media part, kmj-intake-server#1563)'
-status: in progress
+status: shipped
 prs: [kmj-intake-server#1601, "solutionist-studio#1367 (the app half; merge kmj-intake-server#1601 before it)"]
 migrations: []
 left_undone:
   - "Signing in from ChurchSavvy returns to /churchsavvy, not the address that sent you there, so a signed-out volunteer opening the email's link lands on Media's first part rather than Clips"
-  - "Church Areas step 2 (the walls) is next"
 decisions:
   - "A clip run started by someone with no office login (only a ChurchSavvy part) tells them by email, from the church's name, with a link to ChurchSavvy's Media → Clips. A volunteer can't turn on phone alerts (that's in the office's settings), so the push to grow:video-clips never reached them"
   - "The owner and anyone with an active seat still get the phone alert as before; if the seat read fails, the phone alert goes as before"
