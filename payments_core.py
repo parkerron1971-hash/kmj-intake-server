@@ -106,6 +106,11 @@ class PaymentAdapter:
         # contract: giving_router's public checkout is the call site.
         raise HTTPException(409, f"online giving isn't supported by {self.display_name} yet")
 
+    async def create_event_signup_checkout(self, biz_row: Dict[str, Any], **kwargs) -> Dict[str, Any]:
+        # Church event sign-ups (church_event_signups) — the public and
+        # member sign-up are the call sites.
+        raise HTTPException(409, f"paid event sign-ups aren't supported by {self.display_name} yet")
+
 
 class StripeAdapter(PaymentAdapter):
     """Adapter #1 — wraps the existing, battle-tested helpers. No
@@ -141,6 +146,11 @@ class StripeAdapter(PaymentAdapter):
     async def create_giving_checkout(self, biz_row: Dict[str, Any], **kwargs) -> Dict[str, Any]:
         from stripe_checkout_helpers import create_giving_checkout
         return await create_giving_checkout(
+            stripe_account_id=biz_row["stripe_account_id"], **kwargs)
+
+    async def create_event_signup_checkout(self, biz_row: Dict[str, Any], **kwargs) -> Dict[str, Any]:
+        from stripe_checkout_helpers import create_event_signup_checkout
+        return await create_event_signup_checkout(
             stripe_account_id=biz_row["stripe_account_id"], **kwargs)
 
 

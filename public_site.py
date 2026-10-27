@@ -6091,6 +6091,11 @@ async def _serve_events_page(client, biz_id: Optional[str], slug: str) -> HTMLRe
         entries_by_module[str(mod["id"])] = rows
 
     occasions = build_occasions(modules, entries_by_module)
+    # Events that take sign-ups (church_event_signups): price, places,
+    # deadline, questions. Fail-soft: a read that fails leaves the page as
+    # it was.
+    import church_event_signups
+    occasions = await asyncio.to_thread(church_event_signups.annotate, str(biz_id), occasions)
     from public_form_theme import SITE_SELECT
     site_rows = await _sb_service(client, f"/business_sites?business_id=eq.{biz_id}&status=eq.published&select={SITE_SELECT}&limit=1") or []
     html = render_events_page(business, occasions, canonical, slug,

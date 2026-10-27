@@ -127,6 +127,11 @@ DONE = {
     "dir_on": "You're in the directory. Only your name and photo show until you turn more on.",
     "dir_saved": "Saved. The directory shows only what you chose.",
     "dir_off": "You're out of the directory.",
+    # Event sign-ups (church_event_signups).
+    "signup_paid": "Thank you. You're signed up, and your receipt is on its way to your email.",
+    "signup_done": "You're signed up. The details are on their way to your email.",
+    "signup_waiting": "You're on the waitlist. If a place opens, we'll email you a link to take it.",
+    "signup_already": "You're already signed up for that one.",
 }
 ERRORS = {
     "full": "That one is full now.",
@@ -215,6 +220,12 @@ ERRORS = {
     "dir_birthdate": "To list you, the church office needs your birthdate on your record. Ask the office to add it.",
     "dir_removed": "The church office took you out of the directory, so you can't add yourself back. Ask the office.",
     "alert_used": "You've already sent an after-hours alert tonight. Turn it off to send this; it reaches phones in the morning.",
+    # Event sign-ups (church_event_signups).
+    "signup": "That event takes sign-ups. Use Sign up on it below.",
+    "signup_check": "Check your tickets and answers, then try again.",
+    "signup_full": "That event just filled up. You can join its waitlist below.",
+    "signup_closed": "Sign-ups for that event aren't open online right now.",
+    "signup_gone": "That place has gone to the next person on the waitlist. Please call the church office.",
 }
 
 
@@ -291,7 +302,8 @@ def upcoming_for(business_id: str, me: Dict[str, Any]) -> Optional[List[Dict[str
         signups = er.read_signups(entry.get("data") or {}, f["signups_field"]) if f else []
         mine = next((s for s in signups if is_mine(s, me)), None)
         o["mine"] = ({"status": mine.get("status") or "yes", "role": mine.get("role")} if mine else None)
-    return out
+    import church_event_signups
+    return church_event_signups.annotate(str(business_id), out, contact_id=str(me["id"]))
 
 
 def _registration_key(business_id: str, entry_id: str, email: str) -> str:
@@ -341,6 +353,10 @@ def member_rsvp(business_id: str, me: Dict[str, Any], entry_id: str, action: str
         old = next((s for s in signups if is_mine(s, me)), None) or {}
         others = [s for s in signups if not is_mine(s, me)]
         base = {k: v for k, v in old.items() if k != "role"}
+        if action == "coming":
+            import church_event_signups
+            if church_event_signups.blocks_free_rsvp(str(business_id), str(entry["id"])):
+                return False, "signup"
         if action in ("coming", "serve"):
             cap = er._capacity_of(data, f["capacity_field"])
             if cap is not None and er.attending_count(others) >= cap:
@@ -757,7 +773,7 @@ def occasion_card(o: Dict[str, Any], back: str, level: int = 2) -> str:
     eid = _e(o.get("entry_id"))
     title_id = f"mp-occ-{eid}"
     facts = [o.get("location") or ""]
-    if o.get("capacity") is not None:
+    if o.get("capacity") is not None and not o.get("signup"):   # a sign-up's places are its own
         facts.append("Full" if o.get("full") else f"{o.get('spots_left')} places left")
     facts_html = " · ".join(_e(x) for x in facts if x)
     mine = o.get("mine") or {}
@@ -767,7 +783,14 @@ def occasion_card(o: Dict[str, Any], back: str, level: int = 2) -> str:
     hidden = f'<input type="hidden" name="entry_id" value="{eid}"><input type="hidden" name="back" value="{_e(back)}">'
     about = f'aria-describedby="{title_id}"'
     actions = []
-    if (not coming or serving_role) and can_join:
+    signup = ""
+    if o.get("signup"):
+        # An event that takes sign-ups (tickets, maybe a price, a waitlist):
+        # its sign-up stands where "I'm coming" would. Serving still works.
+        import church_event_signups
+        signup = church_event_signups.member_block(o, _e)
+        coming = True
+    if (not coming or serving_role) and can_join and not signup:
         label = "Just attend instead" if serving_role else "I'm coming"
         actions.append(f'<form method="post" action="/my/rsvp">{hidden}<input type="hidden" name="action" value="coming">'
                        f'<button class="{"mp-link" if serving_role else "mp-go mb-soft"}" type="submit" {about}>{label}</button></form>')
@@ -779,7 +802,7 @@ def occasion_card(o: Dict[str, Any], back: str, level: int = 2) -> str:
                        f'<label class="mp-sr" for="mp-role-{eid}">Role to serve in</label>'
                        f'<select class="mp-input" id="mp-role-{eid}" name="role">{opts}</select>'
                        f'<button class="mp-go mp-go-2" type="submit" {about}>Serve</button></form>')
-    if mine.get("status") != "no":
+    if mine.get("status") != "no" and (not signup or serving_role):
         actions.append(f'<form method="post" action="/my/rsvp">{hidden}<input type="hidden" name="action" value="cant">'
                        f'<button class="mp-link" type="submit" {about}>Can\'t make it</button></form>')
     h = "h3" if level == 3 else "h2"
@@ -790,7 +813,8 @@ def occasion_card(o: Dict[str, Any], back: str, level: int = 2) -> str:
   <p class="mp-when">{_e(o.get('date_label') or '')}{sample}</p>
   <{h} id="{title_id}">{_e(o.get('title') or '')}</{h}>
   {f'<p class="mp-muted">{facts_html}</p>' if facts_html else ''}
-  {_status_line(o)}
+  {_status_line(o) if not signup or serving_role else ''}
+  {signup}
   <div class="mp-actions">{''.join(actions)}</div>
 </article>"""
 
@@ -807,6 +831,9 @@ def render_events(biz, site, request: Request, occasions: Optional[List[Dict[str
         import member_app_samples as samples
         hint = ui.sample_hint(samples.WHERE["events"]) if any(samples.is_sample(o) for o in occasions) else ""
         body = hint + "".join(occasion_card(o, "/my/events") for o in occasions)
+        if any(o.get("signup") for o in occasions):
+            import church_event_signups
+            body = church_event_signups.MEMBER_CSS + body
     return _shell(biz, site, "Coming up", f"""
 <div class="mb-lt"><h1>Coming up</h1></div>
 <p class="mb-sub" style="margin-bottom:18px">Let the church know you're coming, or sign up to serve.</p>
@@ -926,6 +953,13 @@ def next_card(occasions: Optional[List[Dict[str, Any]]], today: Optional[date] =
     if answer:
         label = "You're coming" if answer == "Going" else answer
         acts = f'<span class="mb-chip">{ui.icon("check", 13)}{_e(label)}</span>{going}'
+    elif o.get("signup"):
+        su = o["signup"]
+        mine_su = su.get("mine") or {}
+        if mine_su.get("status") in ("paid", "confirmed"):
+            acts = f'<span class="mb-chip">{ui.icon("check", 13)}You\'re signed up</span>{going}'
+        else:
+            acts = f'<a class="mp-go" href="/my/events" aria-describedby="{title_id}">Sign up</a>'
     elif o.get("full"):
         acts = f'<span class="mb-chip">Full</span>{details}'
     else:
