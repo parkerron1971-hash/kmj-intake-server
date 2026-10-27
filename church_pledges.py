@@ -316,15 +316,32 @@ def progress(campaign: Dict[str, Any], pledges: List[Dict[str, Any]], gifts: Lis
     }
 
 
-def _gifts_for(biz: Dict[str, Any], campaigns: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Paid gifts across the campaigns' dates (a day's slack each side for
-    the time zone; counted() trims to the church's own days)."""
-    if not campaigns:
-        return []
+def windows(campaigns: List[Dict[str, Any]], today: date) -> List[tuple]:
+    """The stretches of days whose gifts the campaigns need: each one's
+    dates up to today (a campaign that hasn't started has no gifts yet),
+    with a day's slack each side for the time zone, overlapping stretches
+    merged, so the gaps between old campaigns are never read."""
+    spans = sorted(
+        (date.fromisoformat(str(c["starts_on"])[:10]) - timedelta(days=1),
+         min(date.fromisoformat(str(c["ends_on"])[:10]), today) + timedelta(days=2))
+        for c in campaigns if date.fromisoformat(str(c["starts_on"])[:10]) <= today)
+    out: List[list] = []
+    for a, b in spans:
+        if out and a <= out[-1][1]:
+            out[-1][1] = max(out[-1][1], b)
+        else:
+            out.append([a, b])
+    return [(a, b) for a, b in out]
+
+
+def _gifts_for(biz: Dict[str, Any], campaigns: List[Dict[str, Any]], today: date) -> List[Dict[str, Any]]:
+    """Paid gifts in the campaigns' stretches (counted() trims each
+    campaign to its own fund and the church's own days)."""
     from giving_records import read_gifts
-    start = min(date.fromisoformat(str(c["starts_on"])[:10]) for c in campaigns) - timedelta(days=1)
-    end = max(date.fromisoformat(str(c["ends_on"])[:10]) for c in campaigns) + timedelta(days=2)
-    return read_gifts(str(biz["id"]), f"{start.isoformat()}T00:00:00Z", f"{end.isoformat()}T00:00:00Z")
+    gifts: List[Dict[str, Any]] = []
+    for a, b in windows(campaigns, today):
+        gifts.extend(read_gifts(str(biz["id"]), f"{a.isoformat()}T00:00:00Z", f"{b.isoformat()}T00:00:00Z"))
+    return gifts
 
 
 # ─── Campaigns ────────────────────────────────────────────────────────
@@ -399,9 +416,9 @@ def list_campaigns(business_id: str, user: AuthedUser = Depends(require_user)) -
     bid = str(biz["id"])
     campaigns = _campaigns(bid)
     pledges = _pledges(bid)
-    gifts = _gifts_for(biz, campaigns)
     tz = _tz(biz)
     today = _now().astimezone(tz).date()
+    gifts = _gifts_for(biz, campaigns, today)
     by_campaign: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
     for p in pledges:
         by_campaign[str(p.get("campaign_id"))].append(p)
@@ -484,8 +501,8 @@ def list_pledges(business_id: str, campaign_id: Optional[str] = None,
     else:
         campaigns = _campaigns(bid)
     pledges = _pledges(bid, campaigns[0]["id"] if campaign_id else None)
-    gifts = _gifts_for(biz, campaigns)
     tz = _tz(biz)
+    gifts = _gifts_for(biz, campaigns, _now().astimezone(tz).date())
     by_campaign: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
     for p in pledges:
         by_campaign[str(p.get("campaign_id"))].append(p)

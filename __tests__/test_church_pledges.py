@@ -19,7 +19,7 @@ import json
 import os
 import sys
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 import pytest
 from fastapi import HTTPException
@@ -114,6 +114,8 @@ def db(monkeypatch):
     monkeypatch.setenv("PLATFORM_OWNER_EMAIL", OWNER_EMAIL)
     monkeypatch.setenv("CHURCH_PLEDGES", "on")
     monkeypatch.setenv("CHURCH_KEYS", "on")
+    # The campaigns here run Nov-Dec 2026; read them from mid-January.
+    monkeypatch.setattr(cp, "_now", lambda: datetime(2027, 1, 15, 17, 0, tzinfo=timezone.utc))
     crg._cache.clear()
     return fake
 
@@ -294,6 +296,24 @@ def test_progress_by_hand_matches_the_route():
     assert out["given_cents"] == 60 and out["goal_percent"] == 60
     assert out["rows"][0]["percent"] == 100 and out["rows"][0]["left_cents"] == 0
     assert cp.fund_key(None) == cp.fund_key("General Fund") == "general"
+
+
+def test_gifts_are_read_only_for_the_days_the_campaigns_have_run():
+    today = date(2027, 1, 15)
+    camps = [{"starts_on": "2020-01-01", "ends_on": "2020-03-31"},   # long over
+             {"starts_on": "2026-11-01", "ends_on": "2027-06-30"},   # running: up to today
+             {"starts_on": "2026-12-01", "ends_on": "2027-01-10"},   # overlaps the running one
+             {"starts_on": "2027-03-01", "ends_on": "2027-04-30"}]   # not started: no gifts yet
+    assert cp.windows(camps, today) == [(date(2019, 12, 31), date(2020, 4, 2)), (date(2026, 10, 31), date(2027, 1, 17))]
+    assert cp.windows([camps[3]], today) == []
+
+
+def test_a_campaign_that_has_not_started_reads_no_gifts(db, monkeypatch):
+    _campaign(starts_on="2027-03-01", ends_on="2027-04-30")
+    import giving_records
+    monkeypatch.setattr(giving_records, "read_gifts", lambda *a, **k: pytest.fail("read gifts for a campaign that hasn't started"))
+    camp = cp.list_campaigns(BIZ, OWNER)["campaigns"][0]
+    assert (camp["phase"], camp["given_cents"]) == ("upcoming", 0)
 
 
 # ─── The keys ─────────────────────────────────────────────────────────

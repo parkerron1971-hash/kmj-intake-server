@@ -168,12 +168,18 @@ def test_a_failed_stripe_read_is_an_error_never_an_empty_list_and_no_stripe_mean
     assert out["connected"] is False and out["gifts"] == []
 
 
-def test_the_list_is_kept_two_minutes_unless_fresh_is_asked(db, stripe):
+def test_the_list_is_kept_two_minutes_and_fresh_never_hammers_stripe(db, stripe):
     pages, calls = stripe
     pages["subs"] = [_sub("a", 10_000)]
     cp.recurring(BIZ, user=OWNER)
     cp.recurring(BIZ, user=OWNER)
     assert len(calls) == 1
+    # Refresh pressed again and again: one read per FRESH_FLOOR seconds.
+    for _ in range(5):
+        cp.recurring(BIZ, fresh=True, user=OWNER)
+    assert len(calls) == 1
+    at, account, payload = crg._cache[BIZ]
+    crg._cache[BIZ] = (at - crg.FRESH_FLOOR - 1, account, payload)
     cp.recurring(BIZ, fresh=True, user=OWNER)
     assert len(calls) == 2
 

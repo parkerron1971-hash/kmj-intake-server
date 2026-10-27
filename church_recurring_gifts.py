@@ -26,7 +26,9 @@ Read-only. Changing a gift is the giver's, on /my/gifts.
 
 Cached per business for CACHE_SECONDS in this process (several replicas
 each keep their own copy; a read-only list can be two minutes old).
-`fresh` skips it.
+`fresh` skips it, but never within FRESH_FLOOR seconds of the last read:
+a Refresh pressed over and over (or a page that refetches in a loop) can't
+spend the platform Stripe key's rate limit, which checkout shares.
 """
 from __future__ import annotations
 
@@ -41,6 +43,7 @@ import httpx
 import sb_clients
 
 CACHE_SECONDS = 120
+FRESH_FLOOR = 15
 PAGE = 100
 MAX_PAGES = 20            # 2,000 subscriptions; a church past that is told the list is cut
 CONTACT_CHUNK = 40
@@ -255,11 +258,10 @@ def recurring_for(biz: Dict[str, Any], *, fresh: bool = False) -> Optional[Dict[
         return {"connected": False, "gifts": [], "totals": totals([]), "cut_short": False,
                 "as_of": datetime.now(timezone.utc).isoformat()}
     now = time.time()
-    if not fresh:
-        with _lock:
-            hit = _cache.get(business_id)
-        if hit and hit[1] == account and now - hit[0] < CACHE_SECONDS:
-            return hit[2]
+    with _lock:
+        hit = _cache.get(business_id)
+    if hit and hit[1] == account and now - hit[0] < (FRESH_FLOOR if fresh else CACHE_SECONDS):
+        return hit[2]
     subs, truncated = read_subscriptions(account)
     if subs is None:
         return None

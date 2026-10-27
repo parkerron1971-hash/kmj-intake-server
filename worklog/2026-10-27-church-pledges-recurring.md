@@ -13,6 +13,7 @@ left_undone:
   - "No Chief verbs (record a pledge, read a campaign's progress) and no pledge reminders"
   - "Two campaigns on one fund with overlapping dates both count the same gift: a gift says only its fund"
   - "Switch CHURCH_PLEDGES to on (a Thursday) once Kevin has lived in it"
+  - "The campaigns list reads every paid gift in each campaign's days so far (merged stretches, nothing after today). A church with years of old campaigns still reads each one's period; store ended campaigns' totals if that gets slow"
 decisions:
   - "Lane: Build, the Build item \"Love City leaves Subsplash (M-1)\""
   - "Recurring gifts live only in Stripe (subscriptions on the church's connected account, metadata source_type=gift + business_id); read server-side with the customer expanded for name/email, each row built field by field so no card data passes; cached 2 minutes per replica; a failed read is a 503, never an empty list"
@@ -22,6 +23,7 @@ decisions:
   - "Progress is never stored: paid gifts to the campaign's fund (normalized, so Building = Building Fund) on the church's own calendar days inside the dates, net of refunds"
   - "One pledge per giver per campaign; a pledge is a total or per week / two weeks / month x periods (the server works out the total); request_id makes a retried save land once"
   - "Switch CHURCH_PLEDGES = off | owner | on, default owner"
+  - "Review fixes: Refresh (fresh=true) reads Stripe at most once per 15 seconds per church, since checkout shares the platform Stripe key's rate limit; gifts are read only for the stretches campaigns have run (merged, up to today), never the gaps between them"
 related: [2026-10-27-church-keys.md]
 ---
 Before building I read both repos' `worklog/`: nothing on pledges,
@@ -45,7 +47,7 @@ campaigns or an office list of recurring gifts. The nearest work is
 - `docs/MIGRATIONS.md` row; `ci.yml` runs `church_pledges_db.mjs`.
 
 Checks:
-- `__tests__/test_church_pledges.py` (12) and
+- `__tests__/test_church_pledges.py` (14) and
   `__tests__/test_church_recurring_gifts.py` (10).
 - I broke nine rules on purpose and the tests caught every one: the fund
   filter, the date filter, refund netting, the keys wall, the finance
