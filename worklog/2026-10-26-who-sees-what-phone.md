@@ -3,10 +3,10 @@ title: Who sees what on the phone — business pushes reach who still opens the 
 date: 2026-10-26
 agent: Claude Code (Claude Opus 5.5)
 asked: "continue (after: yes go with your picks and build it… keep building after you show me)"
-status: in progress
+status: shipped
 prs: [kmj-intake-server (this PR)]
 migrations: []
-left_undone: ["the in-app bell and morning brief (notifications table) are still church-wide; the Home page change in solutionist-studio hides them for a limited login", "Chief's answers narrowed per person", "switch on with CHURCH_AREAS=on (Thursday)"]
+left_undone: ["the in-app bell and morning brief (notifications table) are still church-wide; the Home page change in solutionist-studio hides them for a limited login", "Chief's answers narrowed per person"]
 decisions: ["no model call: the note is My week's first item and a count", "a morning with nothing for them sends nothing", "the owner, admins and a login that sees the whole church hear business pushes as before", "a removed seat's phone hears nothing (a fix for every business, not only churches)", "a read that fails sends as before"]
 related: [2026-10-26-who-sees-what.md, 2026-10-26-serve-tab.md]
 ---
@@ -24,3 +24,5 @@ Areas on). Each of those gets one morning line of its own (`church_morning.notes
 morning tick): the first thing in its week from `church_my_week.build` and how many more, on
 its devices on that church, opening on My week (`operate:my-week`). `send_to_user` gained
 `business_id` so the note doesn't reach the person's devices on another business.
+
+Shipped: merged and switched on 2026-10-26 evening (Kevin set CHURCH_AREAS=on on kmj-intake-server and kmj-intake-worker; checked both read exactly on; the worker redeployed 20:09 EDT).
