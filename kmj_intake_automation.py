@@ -379,6 +379,10 @@ app.include_router(church_checks_router)
 # membership, with certificates (2026-10-27; CHURCH_REGISTER off | owner | on).
 from church_register import router as church_register_router
 app.include_router(church_register_router)
+# The Reports pack: the year's numbers a church is asked for, from tables the
+# app already keeps (2026-10-27; CHURCH_REPORTS off | owner | on).
+from church_reports import router as church_reports_router
+app.include_router(church_reports_router)
 # My week: a church login's first page (Who sees what, 2026-10-26).
 from church_my_week import router as church_my_week_router
 app.include_router(church_my_week_router)
