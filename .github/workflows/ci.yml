@@ -206,6 +206,7 @@ jobs:
           node __tests__/worship_team_db.mjs
           node __tests__/church_areas_db.mjs
           node __tests__/church_keys_db.mjs
+          node __tests__/church_spaces_db.mjs
           node __tests__/login_areas_db.mjs
           node __tests__/task_hand_off_db.mjs
           node __tests__/group_word_db.mjs

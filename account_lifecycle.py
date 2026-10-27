@@ -250,6 +250,9 @@ BUSINESS_CHILD_TABLES: List[str] = [
     # It names no contact and cites role keys and team names, not ids, so
     # it restores as it is.
     "church_area_places",
+    # Rooms & spaces (church_spaces): the bookings before the spaces they're
+    # in, and before the contacts and invoices (a rental's bill) they cite.
+    "church_space_bookings", "church_spaces",
     # Sunday check-in's service (day, time, how long it stays open): no
     # contact, nothing it cites; a restored church keeps its Sunday.
     "church_checkin_settings",
@@ -829,6 +832,10 @@ _IMPORT_SKIP = {
     # sent-once ledger names shepherds and follow-ups by id. A restored
     # church's sweep starts its watch again.
     "church_shepherd_signals", "church_shepherd_notices",
+    # A booking cites its space, the person it's for and a rental's bill by
+    # id; same reason. A restored church keeps its list of spaces (they cite
+    # nothing) and books them again.
+    "church_space_bookings",
     # A texting number belongs to the provider account that bought it;
     # a restored business provisions its own. Auditor links and push
     # subscriptions are credentials and devices, not records. The
