@@ -154,6 +154,11 @@ _LIMITS: Dict[str, Tuple[int, int]] = {
     # network, PIN tries per station, and mobile-number lookups per
     # self check-in kiosk — so neither a code nor a family can be guessed.
     "station_pair": (int(os.environ.get("RL_STATION_PAIR_PER_10MIN", "10")), 600),
+    # Church event sign-ups (church_event_signups.py), strict: starting a
+    # sign-up opens a Stripe page and can hold places, so per network a
+    # family's few tries and no more; reading an offer or a receipt is looser.
+    "event_signup": (int(os.environ.get("RL_EVENT_SIGNUP_PER_10MIN", "12")), 600),
+    "event_signup_read": (int(os.environ.get("RL_EVENT_SIGNUP_READ_PER_10MIN", "60")), 600),
     "station_pin": (int(os.environ.get("RL_STATION_PIN_PER_15MIN", "6")), 900),
     "station_self_find": (int(os.environ.get("RL_STATION_SELF_PER_10MIN", "40")), 600),
     # Dev Desk relay: strict shared windows; screen cadence also uses a DB lock.
