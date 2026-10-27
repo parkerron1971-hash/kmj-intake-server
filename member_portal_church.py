@@ -802,7 +802,7 @@ def render_events(biz, site, request: Request, occasions: Optional[List[Dict[str
 <div class="mb-lt"><h1>Coming up</h1></div>
 <p class="mb-sub" style="margin-bottom:18px">Let the church know you're coming, or sign up to serve.</p>
 {_flash(request)}
-{body}""", tab="home", who=who, back=("/my", "Home"))
+{body}""", tab="events", who=who, back=("/my", "Home"))
 
 
 def render_prayer(biz, site, request: Request, who: Optional[Dict[str, Any]] = None) -> str:
@@ -825,7 +825,7 @@ def render_prayer(biz, site, request: Request, who: Optional[Dict[str, Any]] = N
   </fieldset>
   <label class="mp-check" style="margin:6px 0 8px"><input type="checkbox" name="wants_call" value="yes"> I’d like someone to call me</label>'''}
   <button class="mp-go" type="submit">Send</button>
-</form>""", tab="home", who=who, back=("/my", "Home"))
+</form>""", tab="prayer", who=who, back=("/my", "Home"))
 
 
 def render_details(biz, site, request: Request, me: Dict[str, Any]) -> str:

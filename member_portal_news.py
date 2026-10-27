@@ -665,7 +665,7 @@ def render_news(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any],
             f'<h1 class="nw-lt">What\'s <em>happening.</em></h1></div>')
     if posts is None:
         body = f'{head}<p class="mp-err" role="alert">The news couldn\'t load just now. Please try again in a moment.</p>'
-        return _shell(biz, site, "News", f"<style>{NEWS_CSS}</style>{body}", tab="home", who=me), 503
+        return _shell(biz, site, "News", f"<style>{NEWS_CSS}</style>{body}", tab="news", who=me), 503
     chips = "".join(
         f'<a class="nw-fp" href="/my/news{"?f=" + key if key else ""}"{" aria-current=page" if key == filt else ""}>{label}</a>'
         for key, label in cn.FILTERS)
@@ -686,7 +686,7 @@ def render_news(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any],
     import member_portal_share as mps
     body = (f'{head}<nav class="nw-filter" aria-label="Show">{chips}</nav>{_flash(request)}'
             f'<div class="nw-list">{cards}</div>{mps.share_card()}{foot}')
-    return _shell(biz, site, "News", f"<style>{NEWS_CSS}</style>{body}", tab="home", who=me, script=RX_JS), 200
+    return _shell(biz, site, "News", f"<style>{NEWS_CSS}</style>{body}", tab="news", who=me, script=RX_JS), 200
 
 
 def _comment(biz: Dict[str, Any], c: Dict[str, Any], pid: str, *, can_take_down: bool) -> str:
@@ -752,11 +752,11 @@ def render_post(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any],
     head = '<a class="mb-back" href="/my/news">News</a>'
     if p is None:
         body = f'{head}<p class="mp-err" role="alert">This post couldn\'t load just now. Please try again in a moment.</p>'
-        return _shell(biz, site, "News", f"<style>{NEWS_CSS}</style>{body}", tab="home", who=me), 503
+        return _shell(biz, site, "News", f"<style>{NEWS_CSS}</style>{body}", tab="news", who=me), 503
     if not p:
         body = (f'{head}<div class="mb-lt"><h1>Not here</h1></div>'
                 f'<p class="mp-muted">That post isn\'t there any more. See what\'s new on News.</p>')
-        return _shell(biz, site, "News", f"<style>{NEWS_CSS}</style>{body}", tab="home", who=me), 404
+        return _shell(biz, site, "News", f"<style>{NEWS_CSS}</style>{body}", tab="news", who=me), 404
     pid = str(p["id"])
     thread = p.get("thread") or []
     i_posted = str(p.get("posted_by") or "") == str(me["id"])
@@ -805,12 +805,12 @@ def render_post(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any],
         page = mcl.render_celebration(biz, site, request, me, p, today or [], open_)
         body = f'{head}{_flash(request)}{mcl.mpn_flash(request)}{page}'
         return _shell(biz, site, mcl.full_name(p) or "Celebrating", f"<style>{NEWS_CSS}{mcl.CEL_CSS}</style>{body}",
-                      tab="home", who=me, script=RX_JS), 200
+                      tab="news", who=me, script=RX_JS), 200
     body = (f'{head}{_flash(request)}<div style="margin-top:6px">'
             f'{card(biz, p, _occasions(occ), back="/my/news/" + pid, open_=open_, full=True)}</div>'
             f'{who_rx}{section}{comp}')
     title = p.get("title") or "Post"
-    return _shell(biz, site, title, f"<style>{NEWS_CSS}</style>{body}", tab="home", who=me,
+    return _shell(biz, site, title, f"<style>{NEWS_CSS}</style>{body}", tab="news", who=me,
                   bar=not can_say, script=RX_JS + (COMMENT_JS if can_say else "")), 200
 
 

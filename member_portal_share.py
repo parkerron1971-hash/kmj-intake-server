@@ -215,7 +215,7 @@ def render_share(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any]
     css = f"<style>{mpn.NEWS_CSS}{SHARE_CSS}</style>"
     if groups is None or waiting is None:
         body = f'{head}<p class="mp-err" role="alert">This couldn\'t load just now. Please try again in a moment.</p>'
-        return _shell(biz, site, "Share good news", css + body, tab="home", who=me), 503
+        return _shell(biz, site, "Share good news", css + body, tab="news", who=me), 503
     q = request.query_params
     if q.get("sent") in ("all", "groups"):
         where = "your groups' News" if q.get("sent") == "groups" else "News"
@@ -228,7 +228,7 @@ def render_share(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any]
                 f'<b>Your pastors have it</b><small>{_e(note)}</small></span></div>'
                 f'<div class="sh-acts"><a class="sh-btn" href="/my/news">Back to News</a>'
                 f'<a class="sh-btn s2" href="/my/news/share">Share something else</a></div>')
-        return _shell(biz, site, "Share good news", css + body, tab="home", who=me), 200
+        return _shell(biz, site, "Share good news", css + body, tab="news", who=me), 200
     first = ns.KINDS[1][0]
     kinds = "".join(
         f'<label class="sh-opt"><input type="radio" name="kind" value="{k}" data-ph="{_e(ph)}"{" checked" if k == first else ""}>'
@@ -258,7 +258,7 @@ def render_share(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any]
             f'their health or their family, goes up only with their OK.</span></p>'
             f'<button class="sh-go" type="submit">Send to the pastors</button></form>'
             f'{_mine(biz, waiting)}')
-    return _shell(biz, site, "Share good news", css + body, tab="home", who=me, script=SHARE_JS), 200
+    return _shell(biz, site, "Share good news", css + body, tab="news", who=me, script=SHARE_JS), 200
 
 
 async def serve_share(request: Request, biz: Dict[str, Any], site, me: Dict[str, Any]) -> Tuple[str, int]:

@@ -378,13 +378,13 @@ def render_write(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any]
     css = f"<style>{mpn.NEWS_CSS}{mps.SHARE_CSS}{WRITE_CSS}</style>"
     if rights is None or auds is None or occ is None or sermons is None:
         body = f'{head}<p class="mp-err" role="alert">This couldn\'t load just now. Please try again in a moment.</p>'
-        return _shell(biz, site, "New post", css + body, tab="home", who=me), 503
+        return _shell(biz, site, "New post", css + body, tab="news", who=me), 503
     if not editing and not posted and not auds:
         body = (f'{head}<div class="nw-head"><p class="nw-eb">News</p><h1 class="nw-lt">Post to the <em>church.</em></h1></div>'
                 f'<p class="sh-lede">Your pastors, the leaders they pick, and each group\'s leaders post here. '
                 f'Have good news of your own? Share it and a pastor will post it.</p>'
                 f'<div class="sh-acts"><a class="sh-btn" href="/my/news/share">Share good news</a></div>')
-        return _shell(biz, site, "New post", css + body, tab="home", who=me), 200
+        return _shell(biz, site, "New post", css + body, tab="news", who=me), 200
     if posted:
         later = bool(cn._ts(posted.get("publish_at")) and cn._ts(posted.get("publish_at")) > cn._now())
         where = (posted.get("group_name") or "your group") if posted.get("group_id") else "the whole church"
@@ -399,7 +399,7 @@ def render_write(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any]
                 f'<small>{_e(" ".join(b for b in bits if b))}</small></span></div>'
                 f'<div class="sh-acts"><a class="sh-btn" href="/my/news{"" if later else "#p-" + _e(posted["id"])}">See it on News</a>'
                 f'<a class="sh-btn s2" href="/my/news/write?edit={_e(posted["id"])}">Edit</a></div>')
-        return _shell(biz, site, "Posted", css + body, tab="home", who=me), 200
+        return _shell(biz, site, "Posted", css + body, tab="news", who=me), 200
     import member_photos as ph
     import member_app_ui as ui
     p = editing or {}
@@ -491,7 +491,7 @@ def render_write(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any]
             f'<span class="sh-lbl">Add</span><div class="wr-adds">{add_row}</div>{fields}{chief}'
             f'<span class="sh-lbl">Options</span><div class="wr-card">{options}</div>'
             f'<button class="sh-go" type="submit"{" data-edit=1" if editing else ""}>{_e(go)}</button></form>')
-    return _shell(biz, site, "Edit post" if editing else "New post", css + body, tab="home", who=me, script=WRITE_JS), 200
+    return _shell(biz, site, "Edit post" if editing else "New post", css + body, tab="news", who=me, script=WRITE_JS), 200
 
 
 async def serve_write(request: Request, biz: Dict[str, Any], site, me: Dict[str, Any]) -> Tuple[str, int]:

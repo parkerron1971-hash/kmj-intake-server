@@ -601,17 +601,24 @@ def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
             import html as _html
             back = (_html.unescape(m.group(1)), _html.unescape(re.sub(r"<[^>]+>", "", m.group(2)).strip()))
             body = body[:m.start()] + body[m.end():]
+    import member_spaces as msp
+    ctx = (msp.CURRENT.get() or {}) if signed_in else {}
+    space = ctx.get("space") or "church"
+    # A page the church made a tab of its own (Events, Prayer, News,
+    # Messages: member_app_ui.church_tabs) is a tab like Watch: no way back
+    # to Home at the top, and Messages has no second way in up there.
+    own_bar = signed_in and space == "church"
+    if own_bar and back and back[0] == "/my" and ui.in_church_bar(biz, tab):
+        back = None
     import member_portal_messaging as mpm
     chat = (f'<a class="mb-chat-link mp-noprint" href="/my/messages" aria-label="Messages">{ui.icon("chat", 19)}</a>'
-            if signed_in and mpm.turned_on(biz) and tab not in ("messages", "connect", "groups") else "")
+            if signed_in and mpm.turned_on(biz) and tab not in ("messages", "connect", "groups")
+            and not (own_bar and ui.in_church_bar(biz, "messages")) else "")
     if signed_in and news_n is not None:
         badge = f'<span class="mb-unread">{news_n}</span>' if news_n else ""
         label = f"News, {news_n} new" if news_n else "News"
         chat = (f'<a class="mb-chat-link mp-noprint" href="/my/news" aria-label="{label}">{ui.icon("bell", 19)}{badge}</a>'
                 + chat)
-    import member_spaces as msp
-    ctx = (msp.CURRENT.get() or {}) if signed_in else {}
-    space = ctx.get("space") or "church"
     if back:
         left = f'<a class="mb-back" href="{_e(back[0])}">{ui.icon("back", 24)}{_e(back[1])}</a>'
     elif tab == "home":
@@ -645,7 +652,7 @@ def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
   {body}
   {'' if door else f'<footer class="mp-foot mp-noprint">Your page at {_e(name)} · Powered by Solutionist</footer>'}
 </main>
-{ui.nav(tab, space=space, kids_parent=bool(ctx.get("kids_parent")), lead=bool(ctx.get("lead"))) if signed_in and bar else ''}
+{ui.nav(tab, space=space, kids_parent=bool(ctx.get("kids_parent")), lead=bool(ctx.get("lead")), biz=biz) if signed_in and bar else ''}
 {'' if bare or door else ui.SCROLL_JS}
 {script}
 {mai.REGISTER_JS}
@@ -704,7 +711,7 @@ def render_give(biz: Dict[str, Any], site, me: Dict[str, Any], *, preview: bool 
     return render_give_page(biz, f"https://{slug}.{PUBLIC_DOMAIN}/give", slug, api_origin=public_site._EMBED_ORIGIN,
                             app={"head": head, "top": top, "name": me.get("name") or "",
                                  "email": me.get("email") or "", "preview": preview,
-                                 "foot": ui.nav("give")})
+                                 "foot": ui.nav("give", biz=biz)})
 
 
 def _door_page(biz: Dict[str, Any], site, title: str, *, icon: str, heading: str, body: str,
@@ -1714,7 +1721,16 @@ def _config_payload(biz: Dict[str, Any], site: Dict[str, Any], user: Optional[Au
         "colours": "church" if portal_settings(biz.get("settings")).get("colours") == "church" else "family",
         "photo_editors": _editors_of(biz),
         "pictures": len(portal_settings(biz.get("settings")).get("pictures") or {}),
+        # Tabs your members see (member_app_ui.church_tabs, 2026-10-27): the
+        # church's bar in order, every tab it can pick, and how many fit.
+        **_tabs_payload(biz),
     }
+
+
+def _tabs_payload(biz: Dict[str, Any]) -> Dict[str, Any]:
+    import member_app_ui as ui
+    return {"tabs": list(ui.church_tab_keys(biz)), "tab_choices": ui.tab_choices(biz),
+            "tab_limit": ui.CHURCH_TAB_LIMIT, "tabs_default": list(ui.DEFAULT_TAB_KEYS)}
 
 
 def _editors_of(biz: Dict[str, Any]) -> List[Dict[str, str]]:
@@ -1809,9 +1825,12 @@ def patch_member_portal_config(business_id: str, body: Dict[str, Any],
     """Owner-gated. Body: { enabled?: bool, sign_in?: bool, sign_out_all?: true,
     notifications?: {kind: bool}, base?: "black"|"charcoal"|"gray"|"white",
     tiles?: [{title, sub, href, photo}], youth_color?: "#rrggbb" | "",
-    colours?: "family"|"church", photo_editors?: [contact id] }
+    colours?: "family"|"church", photo_editors?: [contact id],
+    tabs?: [tab key] | null }
     (the kinds are member_push.KINDS;
-    tiles are checked by member_portal_church.clean_tiles).
+    tiles are checked by member_portal_church.clean_tiles; tabs by
+    member_app_ui.clean_tab_keys: unknown keys are dropped, Home stays
+    first, Give stays in, five at most; null is today's bar again).
 
     Turning the page ON, or "sign everyone out", moves the epoch to now:
     every session issued before it ends (a page switched off and on again
@@ -1849,10 +1868,16 @@ def patch_member_portal_config(business_id: str, body: Dict[str, Any],
     if "notifications" in body:
         import member_push
         switches = member_push.clean_switches(body.get("notifications"))
+    tab_keys = None
+    if "tabs" in body and body.get("tabs") is not None:
+        tab_keys = ui.clean_tab_keys(body.get("tabs"))
+        if tab_keys is None:
+            raise HTTPException(400, "tabs must be a list of tabs")
     biz = _require_owner(business_id, user)
     site, _ = ensure_business_site(biz)
     if ("enabled" in body or "sign_in" in body or sign_out_all or switches is not None or "base" in body
-            or tiles is not None or "youth_color" in body or "colours" in body or editors_list is not None):
+            or tiles is not None or "youth_color" in body or "colours" in body or editors_list is not None
+            or "tabs" in body):
         import vertical_family
         import vertical_scope
         if want and not (vertical_family.is_nonprofit_like(biz.get("type"))
@@ -1889,6 +1914,12 @@ def patch_member_portal_config(business_id: str, body: Dict[str, Any],
             cfg["colours"] = body["colours"]
         if editors_list is not None:
             cfg["photo_editors"] = editors_list
+        if "tabs" in body:
+            # Today's bar is kept as no bar at all, so it follows ours.
+            if tab_keys is None or tuple(tab_keys) == ui.DEFAULT_TAB_KEYS:
+                cfg.pop("tabs", None)
+            else:
+                cfg["tabs"] = tab_keys
         settings["member_portal"] = cfg
         saved = sb_clients.sb_patch_as_service(
             f"/businesses?id=eq.{quote(str(business_id), safe='')}", {"settings": settings})
