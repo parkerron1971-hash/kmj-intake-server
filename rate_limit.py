@@ -193,6 +193,9 @@ _LIMITS: Dict[str, Tuple[int, int]] = {
     # Chief sums up a live class's answers (academy_class_sum), per class
     # night: 8 every ten minutes, counting only asks that reach the model.
     "class_sum": (int(os.environ.get("RL_CLASS_SUM_PER_10MIN", "8")), 600),
+    # A board's draft minutes emailed to its members (church_board.py), per
+    # meeting: a resend or two is normal, a loop of them isn't.
+    "church_board_send": (int(os.environ.get("RL_CHURCH_BOARD_SEND_PER_HOUR", "6")), 3600),
 }
 _DEFAULT = (60, 60)
 
