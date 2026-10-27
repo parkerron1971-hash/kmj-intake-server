@@ -188,6 +188,22 @@ SERVING_CSS = """
 .sv-pk-order{display:grid;grid-template-columns:52px minmax(0,1fr);gap:4px 10px;padding:12px 16px;font-size:14px;}
 .sv-pk-order b{font-variant-numeric:tabular-nums;font-size:13px;font-weight:600;color:var(--fg3);}
 .sv-sh .sv-pk-only{font-size:13px;font-weight:500;color:var(--fg3);}
+/* Hours this year and the background check (church_serving). */
+.sv-hrs{border-radius:var(--r-lg);background:var(--h-deep);padding:18px 18px 20px;display:flex;flex-direction:column;gap:2px;}
+.sv-hrs .sv-eb{color:var(--h-ink);}
+.sv-hrs-n{margin:6px 0 0;display:flex;align-items:baseline;gap:8px;line-height:1;}
+.sv-hrs-n b{font-size:52px;font-weight:740;letter-spacing:-.045em;font-variant-numeric:tabular-nums;color:var(--fg);}
+.sv-hrs-n span{font-family:var(--mb-serif);font-style:italic;font-weight:500;font-size:24px;letter-spacing:-.01em;color:var(--h-ink);}
+.sv-hrs-thx{margin:12px 0 0;font-family:var(--mb-serif);font-style:italic;font-weight:500;font-size:20px;line-height:1.25;color:var(--fg);}
+.sv-hrs-how{margin:4px 0 0;font-size:14px;line-height:1.45;color:var(--fg2);}
+.sv-hrs.quiet .sv-hrs-thx{font-size:18px;}
+.sv-bc .sv-row{align-items:flex-start;}
+.sv-bc-ic{width:36px;height:36px;border-radius:50%;display:grid;place-items:center;flex:none;background:var(--teal-deep);color:var(--teal-ink);}
+.sv-bc-ic.wait{background:var(--gold-deep);color:var(--gold-ink);}
+.sv-bc-ic.open{background:var(--coral-deep);color:var(--coral-ink);}
+.sv-bc .sv-st{margin-top:2px;}
+.sv-bc .sv-acts{padding:0 16px 16px 66px;}
+.sv-bc a.sv-btn{min-height:44px;background:var(--mb-fill);color:var(--mb-on-fill);}
 """
 
 DONE = {
@@ -309,6 +325,86 @@ def _subs_panel(c: Dict[str, Any], cands: List[Dict[str, Any]], leader: Optional
             + '<a class="sv-btn soft" href="/my/serving">Never mind</a></div></div>')
 
 
+def hours_number(minutes: int) -> str:
+    """42, 7.5, 1: whole hours from ten up, halves and tenths below."""
+    h = max(int(minutes or 0), 0) / 60
+    if h >= 10:
+        return f"{round(h):,}"
+    return f"{round(h, 1):g}"
+
+
+def _and(parts: List[str]) -> str:
+    return parts[0] if len(parts) == 1 else ", ".join(parts[:-1]) + " and " + parts[-1] if parts else ""
+
+
+def _hours_html(h: Optional[Dict[str, Any]], me: Dict[str, Any]) -> str:
+    """This year's hours and a thank-you (the Serving hours prototype's
+    phone): they add up on their own from the Sundays they served."""
+    if not h:
+        return ""
+    first = _first(me.get("name"))
+    if h["minutes"] <= 0:
+        return ('<section class="sv-sec" style="margin-top:18px" aria-label="Hours this year"><div class="sv-hrs quiet h-gold">'
+                f'<p class="sv-eb">{h["year"]} so far</p>'
+                f'<p class="sv-hrs-thx">Your hours start with your first Sunday, {_e(first)}.</p>'
+                '<p class="sv-hrs-how">They add up here on their own, from the Sundays you serve.</p></div></section>')
+    n = hours_number(h["minutes"])
+    unit = "hour" if n == "1" else "hours"
+    parts = []
+    if h.get("sundays"):
+        teams = [t for t in h.get("teams") or [] if t][:2]
+        parts.append("Sundays" + (f" on {_and([_e(t) for t in teams])}" if teams else ""))
+    if h.get("gatherings"):
+        parts.append("a group night" if h["gatherings"] == 1 else f'{h["gatherings"]} group nights')
+    if h.get("extra"):
+        parts.append("a day the office added" if h["extra"] == 1 else f'{h["extra"]} days the office added')
+    how = f"{_and(parts)}." if parts else ""
+    return ('<section class="sv-sec" style="margin-top:18px" aria-label="Hours this year"><div class="sv-hrs h-gold">'
+            f'<p class="sv-eb">{h["year"]} so far</p>'
+            f'<p class="sv-hrs-n"><b>{n}</b><span>{unit}</span></p>'
+            f'<p class="sv-hrs-thx">Thank you, {_e(first)}.</p>'
+            + (f'<p class="sv-hrs-how">{how}</p>' if how else "") + '</div></section>')
+
+
+def _month(iso: Any, year: bool = False) -> str:
+    try:
+        d = datetime.fromisoformat(str(iso)[:10])
+    except (TypeError, ValueError):
+        return ""
+    return f"{d.strftime('%b')} {d.year}" if year else _day(d)
+
+
+def _check_html(h: Optional[Dict[str, Any]]) -> str:
+    """Their background check, for someone who serves with kids or youth.
+    Only the office sees the date it was done; they see where it stands."""
+    import member_app_ui as ui
+    c = (h or {}).get("check")
+    if not c or c["status"] == "teen":
+        return ""
+    link = (h or {}).get("check_link")
+    nxt = c.get("next") or {}
+    words = {
+        "ok": (f'Good until {_month(c["due"], year=True)}', "Thank you for keeping it current.", "Current", ""),
+        "due": (f'Runs out {_month(c["due"])}', "Start the renewal below." if link else "The office will send you the link to renew it.",
+                "Due soon", "wait"),
+        "overdue": (f'Ran out {_month(c["due"])}', "Renew it before you serve with kids again.", "Renew", "open"),
+        "none": ("None on record yet", "Everyone who serves with kids and youth keeps a current check.", "Needed", "open"),
+        "blocked": (f'Needed before {_month(nxt.get("day"))}',
+                    f'You\'re on {_e(nxt.get("place") or "the schedule")} {_month(nxt.get("day"))}. A check comes first.',
+                    "Needed", "open"),
+    }
+    title, sub, chip, tone = words.get(c["status"], words["none"])
+    if c["status"] in ("none", "overdue", "blocked") and not link:
+        sub += " The office will send you the link."
+    act = (f'<div class="sv-acts"><a class="sv-btn" href="{_e(link)}" target="_blank" rel="noopener noreferrer">'
+           f'Start my check{ui.icon("arrow", 16)}</a></div>' if link and c["status"] != "ok" else "")
+    return ('<section class="sv-sec sv-bc" aria-labelledby="sv-bc-h"><div class="sv-sh"><h2 id="sv-bc-h">Background check</h2></div>'
+            f'<div class="sv-card"><div class="sv-row"><span class="sv-bc-ic {tone}">{ui.icon("shield", 18)}</span>'
+            f'<span class="t"><span class="ti">{_e(title)}</span><span class="su">{sub}</span></span>'
+            f'<span class="sv-st {tone}">{_e(chip)}</span></div>{act}</div>'
+            '<p class="sv-lede">For everyone who serves with kids and youth. The office keeps the date.</p></section>')
+
+
 def render_page(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], m: Dict[str, Any],
                 sub_for: Optional[Dict[str, Any]] = None, door: str = "") -> str:
     """`door`: ChurchSavvy's, for someone on its Sunday team (the Serve tab
@@ -343,6 +439,8 @@ def render_page(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any],
            '<label>From<input type="date" name="start" required></label><label>To<input type="date" name="end"></label></div>'
            '<button class="sv-btn hue" type="submit">Save</button></form></details>')
     often = m["often"]
+    # A check that needs them leads the page; a current one sits lower.
+    check_first = ((m.get("hours") or {}).get("check") or {}).get("status") in ("blocked", "overdue", "none", "due")
     seg = "".join(f'<button type="submit" name="often" value="{k}" role="radio" aria-checked="{"true" if often == k else "false"}">{t}</button>'
                   for k, t in (("one", "Once a month"), ("two", "Twice"), ("every", "Every week I can")))
     body = f"""<style>{SERVING_CSS}</style><a class="mb-back" href="/my/groups">Connect</a>
@@ -350,11 +448,14 @@ def render_page(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any],
 {f'<div class="sv-teams h-teal">{teams}</div>' if teams else ''}
 {f'<style>{_door_css()}</style><div class="sv-door">{door}</div>' if door else ''}
 {_flash(request)}
-<section class="sv-sec" style="margin-top:20px" aria-label="This year"><div class="sv-stats">
+{_check_html(m.get("hours")) if check_first else ""}
+{_hours_html(m.get("hours"), me)}
+<section class="sv-sec" style="margin-top:{"10px" if m.get("hours") else "20px"}" aria-label="This year"><div class="sv-stats">
 <div class="sv-stat"><b>{m["this_year"]}</b><small>Sundays this year</small></div>
 <div class="sv-stat"><b>{len(m["coming"])}</b><small>coming up</small></div>
 <div class="sv-stat"><b>{len(m["asks"])}</b><small>to answer</small></div></div></section>
 {asks}{open_}{coming}
+{"" if check_first else _check_html(m.get("hours"))}
 <section class="sv-sec" id="away" aria-labelledby="sv-aw-h"><div class="sv-sh"><h2 id="sv-aw-h">Away</h2></div>
 <p class="sv-lede" style="padding:0 0 12px">Nobody asks you on these days.</p><div class="sv-away">{away_chips}{add}</div></section>
 <section class="sv-sec" aria-labelledby="sv-of-h"><div class="sv-sh"><h2 id="sv-of-h">How often</h2></div>
@@ -602,6 +703,28 @@ def _tab() -> str:
     return "lead" if member_app_ui.serve_mode() else "connect"
 
 
+async def hours_for(request: Request, biz: Dict[str, Any], me: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """This member's own hours and check (church_serving), while its switch
+    shows them here: on, or owner mode in the platform owner's own preview.
+    A read that fails shows the page without them."""
+    import church_serving as cs
+    if cs.mode() == "off":
+        return None
+    if cs.mode() == "owner":
+        from member_portal import _previewing
+        try:
+            claims = _previewing(request, biz)
+        except Exception:  # noqa: BLE001 — no readable preview is no preview
+            claims = None
+        if not claims or not await asyncio.to_thread(cs.is_platform_owner, claims.get("own")):
+            return None
+    try:
+        return await asyncio.to_thread(cs.member_view, biz, str(me["id"]))
+    except Exception:  # noqa: BLE001 — the page stands without its hours
+        logger.warning("my serving: hours didn't load", exc_info=True)
+        return None
+
+
 async def serve(request: Request, church: Dict[str, Any], me: Dict[str, Any], sub: str):
     from member_portal import _page, _SECURE_HEADERS
     biz, site = church["business"], church.get("site")
@@ -621,6 +744,7 @@ async def serve(request: Request, church: Dict[str, Any], me: Dict[str, Any], su
                 v = await asyncio.to_thread(ss.ask_view, biz, str(me["id"]), want)
                 sub_for = {"id": want, "html": _subs_panel(hit, cands, v["leader"])}
             m["hear"] = await asyncio.to_thread(ss.hearing, biz, str(me["id"]))
+            m["hours"] = await hours_for(request, biz, me)
             return _page(render_page(biz, site, request, me, m, sub_for))
         if rest.endswith("/pack"):
             aid = rest[:-5]

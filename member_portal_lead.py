@@ -663,6 +663,7 @@ async def serve(request: Request, biz: Dict[str, Any], site, me: Dict[str, Any],
         m = await asyncio.to_thread(ss.mine, biz, str(me["id"]))
         if m is not None:
             m["hear"] = await asyncio.to_thread(ss.hearing, biz, str(me["id"]))
+            m["hours"] = await mps_serving.hours_for(request, biz, me)
             return mps_serving.render_page(biz, site, request, me, m, None,
                                            door=savvy_door(PARTS.get().get("team") or [])), 200
     view = prayer = None
