@@ -10,7 +10,7 @@ left_undone:
   - "Switch-on: CHURCH_REPORTS=on on Railway on a Thursday (it defaults to owner)"
   - "Groups are kept as they are today, so a past year's groups numbers are '—' (no history table). A yearly snapshot would fix that"
   - "Members on a past day are today's list rewound through logged status changes (events, contact_status_changed). A status changed outside the app's logged paths isn't in the log; a church whose people were imported after that day gets '—'"
-  - "The register, help requests, check requests and paid sign-ups need their migrations applied; until then those numbers say '—' with the reason"
+  - "The register, help requests, check requests and paid sign-ups read tables whose migrations were applied 2026-10-27 (#1613); a church that hasn't used them yet shows zeros, and a read that fails shows '—' with the reason"
   - "Chief can't read the reports (no action handler)"
 decisions:
   - "Lane: Build, under the Build item 'Love City leaves Subsplash (M-1)'"
