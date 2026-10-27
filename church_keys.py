@@ -15,7 +15,9 @@ as the backup, and a yes opens the area for one hour.
                     keeper taps yes, or reads out the 6-digit code that came
                     with the alert. The asker never counts as their own yes.
                     Open for KEY_MINUTES; an ask with no answer lapses after
-                    ASK_HOURS, and silence never opens anything
+                    ASK_HOURS, and silence never opens anything. The
+                    church's outside accountant, who has no seat, asks for
+                    Giving's key the same way
     the WALL ...... wall() / is_open(): what each guarded door calls. Only
                     the guarded part of an area is behind it (who gave what,
                     the bank, payouts; medical and custody notes;
@@ -201,6 +203,27 @@ def _seats(biz: str) -> Dict[str, Dict[str, Any]]:
         if r.get("user_id")}
 
 
+def _people(biz: str) -> Dict[str, Dict[str, Any]]:
+    """The seats, and the church's outside accountants (business_collaborators):
+    an accountant sees who gave what (giving_records.require_finance), so the
+    Giving keeper's lock holds them too, and they ask for a key like anyone.
+    Only for naming and telling: an accountant is never a keeper. A failed
+    read of the accountants only costs a name."""
+    seats = _seats(biz)
+    rows = sb_clients.sb_get_as_service(
+        f"/business_collaborators?business_id=eq.{_q(biz)}&status=eq.active&role=eq.accountant"
+        "&select=user_id,invited_email&limit=50")
+    outside = {str(r["user_id"]): {**r, "role": "accountant"}
+               for r in (rows if isinstance(rows, list) else []) if r.get("user_id")}
+    return {**outside, **seats}
+
+
+def _outside(uid: str, owner_id: Any, people: Dict[str, Dict[str, Any]]) -> bool:
+    """Neither the owner nor a seat: the routes only let an outside
+    accountant this far, even when their row couldn't be read for a name."""
+    return str(uid) != str(owner_id) and (people.get(str(uid)) or {}).get("role") in (None, "accountant")
+
+
 def _who(uid: str, owner_id: Any, seats: Dict[str, Dict[str, Any]]) -> str:
     if str(uid) == str(owner_id):
         return "The owner"
@@ -298,6 +321,9 @@ def ask(business_id: str, user: AuthedUser, area: str, reason: str) -> Dict[str,
     already = _open_key(biz["id"], me, area)
     if already:
         return {"key": {**already, "area": area, "status": "open"}, "told": 0}
+    seats = _people(biz["id"])
+    if _outside(me, biz.get("owner_id"), seats) and area != "giving_money":
+        raise HTTPException(400, "An accountant's key is for Giving & money.")
     waiting = [r for r in _need(
         f"/church_area_keys?business_id=eq.{_q(biz['id'])}&user_id=eq.{_q(me)}&area=eq.{_q(area)}"
         "&status=eq.asked&select=id,area,status,reason,asked_at,opens_until&order=asked_at.desc&limit=5")
@@ -311,7 +337,6 @@ def ask(business_id: str, user: AuthedUser, area: str, reason: str) -> Dict[str,
         "reason": " ".join(str(reason or "").split())[:REASON_MAX], "code_hash": _hash(key_id, code)})
     if not isinstance(saved, list) or not saved:
         raise HTTPException(503, "Your ask didn't save. Try again.")
-    seats = _seats(biz["id"])
     who, why = _who(me, biz.get("owner_id"), seats), saved[0].get("reason")
     _tell(biz, keepers, f"{who} asks for a key to {_label(area)}",
           (f"“{why}” " if why else "") + f"Open the app to say yes or no, or read them this code: {code}. "
@@ -338,7 +363,7 @@ def answer(business_id: str, user: AuthedUser, key_id: str, yes: bool) -> Dict[s
     if yes:
         fields["opens_until"] = _iso(now + timedelta(minutes=KEY_MINUTES))
     saved = _set(row, fields)
-    seats = _seats(biz["id"])
+    seats = _people(biz["id"])
     _tell(biz, {str(row["user_id"])},
           f"Your key to {_label(row['area'])} is {'open for an hour' if yes else 'not given this time'}",
           f"{_who(me, biz.get('owner_id'), seats)} {'said yes' if yes else 'said no'}.", seats,
@@ -368,7 +393,7 @@ def enter_code(business_id: str, user: AuthedUser, key_id: str, code: str) -> Di
     saved = _set(row, {"status": "open", "answered_at": _iso(now), "how": "code",
                        "opens_until": _iso(now + timedelta(minutes=KEY_MINUTES))})
     keepers = active_keepers(biz["id"], row["area"])
-    seats = _seats(biz["id"])
+    seats = _people(biz["id"])
     _tell(biz, keepers, f"{_who(str(user.id), biz.get('owner_id'), seats)} opened {_label(row['area'])} with a code",
           "A keeper's code opened it for an hour. If nobody gave them that code, close it from the app.",
           seats, tag=f"key-{row['id']}-code")
@@ -379,6 +404,9 @@ def enter_code(business_id: str, user: AuthedUser, key_id: str, code: str) -> Di
 
 def put_keeper(business_id: str, user: AuthedUser, area: str, target: str, keep: bool) -> Dict[str, Any]:
     biz = _business(business_id)
+    import church_follow_up as cfu
+    if not cfu.is_church(biz):
+        raise HTTPException(404, "Keys are for churches")
     rows = _keeper_rows(biz["id"], area)
     keepers = active_keepers(biz["id"], area, rows)
     me = str(user.id)
@@ -459,7 +487,9 @@ def overview(business_id: str, user: AuthedUser) -> Dict[str, Any]:
         raise HTTPException(404, "Keys are for churches")
     import church_areas
     me, now = str(user.id), _now()
-    rows, seats = _keeper_rows(biz["id"]), _seats(biz["id"])
+    rows, seats = _keeper_rows(biz["id"]), _people(biz["id"])
+    # An outside accountant only ever needs Giving's key.
+    outside = _outside(me, biz.get("owner_id"), seats)
     # An ask answered at the end of its day is a key for an hour after.
     since = now - timedelta(hours=ASK_HOURS, minutes=KEY_MINUTES)
     asks = [a for a in _need(f"/church_area_keys?business_id=eq.{_q(biz['id'])}&status=in.(asked,open)"
@@ -467,7 +497,7 @@ def overview(business_id: str, user: AuthedUser) -> Dict[str, Any]:
                              "&select=id,area,user_id,reason,status,asked_at,opens_until&order=asked_at.desc&limit=200")
             if a["status"] == "open" or not _lapsed(a)]
     areas, waiting = [], []
-    for area in GUARDED:
+    for area in (("giving_money",) if outside else GUARDED):
         keep = active_keepers(biz["id"], area, rows)
         people = []
         for r in rows:
@@ -494,21 +524,29 @@ def overview(business_id: str, user: AuthedUser) -> Dict[str, Any]:
 
 # ─── Routes ───────────────────────────────────────────────────────────
 
-def _member(business_id: Any, user: AuthedUser, minimum: str = "member") -> str:
+def _member(business_id: Any, user: AuthedUser, minimum: str = "member", accountant: bool = False) -> str:
     _gate(user)
     biz = _uuid(business_id, "business")
-    business_access.assert_access(biz, user, minimum)
+    try:
+        business_access.assert_access(biz, user, minimum)
+    except HTTPException as e:
+        # A seatless outside accountant still sees who gave what, so they
+        # see their key and ask for it; they never answer one.
+        import business_collaborators_router
+        if not (accountant and e.status_code == 404
+                and business_collaborators_router.is_active_accountant(biz, str(user.id))):
+            raise
     return biz
 
 
 @router.get("/keys")
 def keys_overview(business_id: str, user: AuthedUser = Depends(require_user)):
-    return overview(_member(business_id, user), user)
+    return overview(_member(business_id, user, accountant=True), user)
 
 
 @router.post("/keys/ask")
 def keys_ask(body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
-    biz = _member(body.get("business_id"), user)
+    biz = _member(body.get("business_id"), user, accountant=True)
     return ask(biz, user, _area(body.get("area")), str(body.get("reason") or ""))
 
 
@@ -520,7 +558,7 @@ def keys_answer(key_id: str, body: Dict[str, Any], user: AuthedUser = Depends(re
 
 @router.post("/keys/{key_id}/code")
 def keys_code(key_id: str, body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
-    biz = _member(body.get("business_id"), user)
+    biz = _member(body.get("business_id"), user, accountant=True)
     return enter_code(biz, user, key_id, str(body.get("code") or ""))
 
 
