@@ -472,6 +472,24 @@ def test_help_is_confidential_and_lands_in_care(fake, monkeypatch):
     assert "err=ask_empty" in _post(c, "/my/ask/care", {"kind": "help", "pick": "food"}).headers["location"]
 
 
+def test_help_may_say_how_much_and_help_requests_reads_it(fake, monkeypatch):
+    import church_help
+    fake.turn_on("help", "visit")
+    c = _app(fake, monkeypatch, ANA)
+    assert 'name="amount"' in c.get("/my/ask/help").text
+    assert 'name="amount"' not in c.get("/my/ask/visit").text
+    assert "err=ask_amount" in _post(c, "/my/ask/care", {"kind": "help", "pick": "bill", "text": "Light bill",
+                                                         "amount": "about 200"}).headers["location"]
+    assert fake.t.get("ministry_care_requests", []) == []
+    _post(c, "/my/ask/care", {"kind": "help", "pick": "bill", "text": "Light bill", "amount": "$1,180.50"})
+    [row] = fake.t["ministry_care_requests"]
+    assert row["submission"]["amount"] == "1180.50"
+    assert church_help.from_ask(row)["amount_cents"] == 118050
+    # A visit never carries one, whatever is sent.
+    _post(c, "/my/ask/care", {"kind": "visit", "pick": "home", "text": "", "amount": "50"})
+    assert all("amount" not in r["submission"] for r in fake.t["ministry_care_requests"] if r["submission"]["kind"] == "visit")
+
+
 def test_a_visit_and_a_life_event_land_in_care_by_kind(fake, monkeypatch):
     fake.turn_on("visit", "life_event")
     c = _app(fake, monkeypatch, ANA)
