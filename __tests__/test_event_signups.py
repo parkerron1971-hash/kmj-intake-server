@@ -539,6 +539,12 @@ def test_a_closed_or_past_deadline_event_takes_no_one(db):
     db.t["church_event_signup_setups"][0].update(deadline=None, open=False)
     got = signup()
     assert got.status_code == 409 and not regs(db)
+    # Closed is still a sign-up event: the free RSVP stays shut, and the page says closed.
+    got = public().post("/public/events/love-city-church/rsvp",
+                        json={"entry_id": VBS, "name": "Bo Diaz", "email": "bo@example.org"})
+    assert got.status_code == 409
+    occ = ces.annotate(BIZ, [{"entry_id": VBS, "date": "2026-11-14"}])
+    assert occ[0]["signup"]["closed"] == "closed"
 
 
 def test_back_from_stripe_gives_the_hold_back(db):

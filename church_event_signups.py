@@ -328,15 +328,16 @@ def active_types(setup: Dict[str, Any]) -> List[Dict[str, Any]]:
 
 
 def blocks_free_rsvp(business_id: str, entry_id: str) -> bool:
-    """An event with an open setup takes its sign-ups (and payment) through
-    the sign-up, not the free RSVP. A read that fails, or tables that don't
-    exist yet, block nothing: free RSVP stays exactly as it was."""
+    """An event with a setup takes its sign-ups (and payment) through the
+    sign-up, never the free RSVP, open or closed (closed means no form at
+    all). A read that fails, or tables that don't exist yet, block nothing:
+    free RSVP stays exactly as it was."""
     try:
         got = setups_for(str(business_id), [str(entry_id)])
     except Exception:
         return False
     s = (got or {}).get(str(entry_id))
-    return bool(s and s.get("open") and active_types(s))
+    return bool(s and active_types(s))
 
 
 # ─── Pure rules (unit-tested) ─────────────────────────────────────────
@@ -661,7 +662,7 @@ def annotate(business_id: str, occasions: List[Dict[str, Any]], contact_id: Opti
         now = _now()
         for o in occasions:
             s = setups.get(str(o.get("entry_id")))
-            if not s or not s.get("open"):
+            if not s or not active_types(s):
                 continue
             mine_rows = [r for r in regs if str(r["entry_id"]) == str(s["entry_id"])]
             view = public_view(s, tally(mine_rows, now), now=now, event_day=o.get("date"), open_here=here, tz=tz)
@@ -839,11 +840,11 @@ async def run_signup(biz: Dict[str, Any], ev: Dict[str, Any], setup: Dict[str, A
             return {"kind": "already", "status": st, "id": got["id"]}
         return {"kind": "closed", "why": "stale"}
     if state == "confirmed":
-        tell_confirmed(str(biz["id"]), ev, {**row, "id": got["id"], "status": "confirmed"}, setup)
+        await asyncio.to_thread(tell_confirmed, str(biz["id"]), ev, {**row, "id": got["id"], "status": "confirmed"}, setup)
         return {"kind": "confirmed", "id": got["id"], "lines": row["tickets"], "amount_cents": 0}
     if state == "waiting":
-        tell_waiting(str(biz["id"]), ev, {**row, "id": got["id"]}, int(got.get("position") or 1),
-                     int(setup.get("offer_hours") or OFFER_HOURS))
+        await asyncio.to_thread(tell_waiting, str(biz["id"]), ev, {**row, "id": got["id"]}, int(got.get("position") or 1),
+                                int(setup.get("offer_hours") or OFFER_HOURS))
         return {"kind": "waiting", "id": got["id"], "position": int(got.get("position") or 1),
                 "offer_hours": int(setup.get("offer_hours") or OFFER_HOURS)}
     if state == "full":
