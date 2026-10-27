@@ -56,3 +56,6 @@ Checks:
 - `__tests__/church_pledges_db.mjs`: 21 checks on PGlite.
 - Export/import, the access ratchet, keys, route type hints, seat access
   and member gifts all pass.
+- Fix carried here: `test_church_news.py`'s office-page test read the real
+  clock against a fake that stamps every row 2026-10-20, so it started
+  failing on main at 13:00 UTC on 2026-10-27. Its clock is now frozen to that week.

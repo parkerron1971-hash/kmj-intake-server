@@ -380,6 +380,10 @@ def test_posting_needs_a_seat_that_edits(fake, monkeypatch):
 
 
 def test_the_office_page_counts_and_never_shows_a_comments_words(fake, monkeypatch):
+    # The shared fake stamps every row 2026-10-20; read the office page that
+    # week, so "held this week" doesn't run out a week later (it did, 10-27).
+    from datetime import datetime, timezone
+    monkeypatch.setattr(cn, "_now", lambda: datetime(2026, 10, 22, 12, 0, tzinfo=timezone.utc))
     _screen(monkeypatch, "ok")
     fake.t["businesses"] = [{"id": BIZ, "name": "Love City Church", "settings": {}, "owner_id": "o1"}]
     fake.t["member_login_codes"] = [{"business_id": BIZ, "email": e, "succeeded": True} for e in ("a@x", "b@x", "a@x")]
