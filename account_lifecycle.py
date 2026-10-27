@@ -260,6 +260,10 @@ BUSINESS_CHILD_TABLES: List[str] = [
     # Rooms & spaces (church_spaces): the bookings before the spaces they're
     # in, and before the contacts and invoices (a rental's bill) they cite.
     "church_space_bookings", "church_spaces",
+    # Event sign-ups (church_event_signups): who signed up, what they paid
+    # and their answers, then the ticket types and each event's setup, all
+    # before the contacts and module entries (events) they cite.
+    "church_event_registrations", "church_event_ticket_types", "church_event_signup_setups",
     # Sunday check-in's service (day, time, how long it stays open): no
     # contact, nothing it cites; a restored church keeps its Sunday.
     "church_checkin_settings",
@@ -851,6 +855,11 @@ _IMPORT_SKIP = {
     # help given cites its request and its expense; same reason. The export
     # keeps them; a restored church keeps its fund's settings.
     "church_help_given", "church_help_requests",
+    # Event sign-ups cite their event (a module entry) and the person by id,
+    # and a setup and its ticket types cite the event; the importer re-mints
+    # those ids, so the export keeps them and a restored church sets its
+    # sign-ups up again. A paid sign-up's money stays in Stripe either way.
+    "church_event_registrations", "church_event_ticket_types", "church_event_signup_setups",
     # A texting number belongs to the provider account that bought it;
     # a restored business provisions its own. Auditor links and push
     # subscriptions are credentials and devices, not records. The
