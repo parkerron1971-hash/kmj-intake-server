@@ -584,6 +584,14 @@ def ask_care(biz: Dict[str, Any], me: Dict[str, Any], kind: str, form: Dict[str,
     text = _words(form.get("text"), TEXT_MAX)
     if kind == KIND_HELP and len(text) < 2:
         return False, "ask_empty"
+    # Help may say how much, as typed ("180", "$1,200.50"): Help requests
+    # reads it as the amount asked (church_help.from_ask).
+    amount = str(form.get("amount") or "").strip()
+    if kind == KIND_HELP and amount:
+        if not re.fullmatch(r"\$?\d{1,3}(,?\d{3})*(\.\d{1,2})?", amount) or len(amount) > 14:
+            return False, "ask_amount"
+    else:
+        amount = ""
     when = None
     if kind == KIND_LIFE and str(form.get("date") or "").strip():
         when = _day(form.get("date"))
@@ -597,6 +605,8 @@ def ask_care(biz: Dict[str, Any], me: Dict[str, Any], kind: str, form: Dict[str,
     }
     if when:
         sub["date"] = when.isoformat()
+    if amount:
+        sub["amount"] = amount.replace("$", "").replace(",", "")
     if youth:
         sub["youth"] = "yes"
     wants_call = str(form.get("wants_call") or "") == "yes"
@@ -1011,6 +1021,7 @@ ERRORS = {
     "ask_pick": "Choose one first.",
     "ask_empty": "Tell us a little about what you need.",
     "ask_date": "That date doesn't look right.",
+    "ask_amount": "Enter the amount in dollars, like 180 or 42.50, or leave it blank.",
     "ask_amount": "Enter an amount of at least $1, like 25 or 1200.",
     "ask_times": "Enter how many times, from 1 to 520.",
     "ask_campaign": "That campaign isn't taking pledges any more.",
@@ -1103,6 +1114,10 @@ def render_care(biz, site, request: Request, me, kind: str, youth: bool) -> str:
     radios = "".join(f'<label><input type="radio" name="pick" value="{_e(k)}" required> {_e(v)}</label>'
                      for k, v in picks.items())
     date_row = ""
+    if kind == KIND_HELP:
+        date_row = ('<label for="ask-amount">How much, if you know (optional)</label>'
+                    '<input class="mp-input" id="ask-amount" name="amount" inputmode="decimal" '
+                    'autocomplete="off" maxlength="14" placeholder="$180">')
     if kind == KIND_LIFE:
         today = church_today(biz)
         date_row = (f'<label for="ask-date">When, if you know (optional)</label>'
