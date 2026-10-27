@@ -126,7 +126,8 @@ KIDS_TAB_OF = {"home": "home", "watch": "watch", "sermons": "watch", "live": "wa
 # unless the church made them tabs of their own (church_tabs).
 TAB_OF = {"home": "home", "watch": "watch", "sermons": "watch", "live": "watch", "bible": "bible",
           "give": "give", "connect": "connect", "groups": "connect", "messages": "connect", "lead": "lead",
-          "events": "home", "prayer": "home", "news": "home", "directory": "connect"}
+          "events": "home", "prayer": "home", "news": "home", "directory": "connect",
+          "ask": "home"}
 # A member who holds a church role (church_follow_up) gets a sixth tab:
 # the people Chief hands them (member_portal_lead).
 LEAD_TAB = ("lead", "/my/lead", "Lead", '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/>')
