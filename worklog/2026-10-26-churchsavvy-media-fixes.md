@@ -4,7 +4,7 @@ date: 2026-10-26
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-10-26: "go with your picks, do the media fixes first"; "go ahead, you build step 2 after the media fixes" (the two left over from the Media part, kmj-intake-server#1563)'
 status: in progress
-prs: [kmj-intake-server (this PR), solutionist-studio (the app half; either can merge first)]
+prs: [kmj-intake-server#1601, solutionist-studio#1367 (the app half; merge #1601 before it)]
 migrations: []
 left_undone:
   - "Signing in from ChurchSavvy returns to /churchsavvy, not the address that sent you there, so a signed-out volunteer opening the email's link lands on Media's first part rather than Clips"
