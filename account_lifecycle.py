@@ -177,6 +177,10 @@ BUSINESS_CHILD_TABLES: List[str] = [
     # both before the Prayer & care asks, contacts and expenses they cite.
     # The fund's settings name nothing by id.
     "church_help_given", "church_help_requests", "church_help_settings",
+    # Check requests (church_checks.py): a request cites its person and its
+    # expense, so it goes before contacts and expenses. The limit and the
+    # budget lines name nothing by id.
+    "church_check_requests", "church_check_settings",
     # The church register (church_register.py): each entry cites its people
     # and its Prayer & care ask by id, so it goes before both.
     "church_register_entries",
@@ -858,6 +862,11 @@ _IMPORT_SKIP = {
     # help given cites its request and its expense; same reason. The export
     # keeps them; a restored church keeps its fund's settings.
     "church_help_given", "church_help_requests",
+    # A check request cites its person and its expense by id; same reason.
+    # The export keeps them; a restored church keeps its limit and budget
+    # lines. (Receipts live in business-documents under the church's own
+    # folder, which deleting the account empties one level down.)
+    "church_check_requests",
     # A register entry cites its people and its Prayer & care ask by id;
     # same reason. The export keeps the whole register.
     "church_register_entries",
