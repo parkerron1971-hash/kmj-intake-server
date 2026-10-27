@@ -387,6 +387,11 @@ app.include_router(church_board_router)
 # app already keeps (2026-10-27; CHURCH_REPORTS off | owner | on).
 from church_reports import router as church_reports_router
 app.include_router(church_reports_router)
+# The Monday leaders note: this week, what's needed and one win, emailed to
+# the All group leaders room once a week (2026-10-27; CHURCH_LEADERS_NOTE
+# off | owner | on).
+from church_leaders_note import router as church_leaders_note_router
+app.include_router(church_leaders_note_router)
 # My week: a church login's first page (Who sees what, 2026-10-26).
 from church_my_week import router as church_my_week_router
 app.include_router(church_my_week_router)
