@@ -98,6 +98,8 @@ HTTP_TIMEOUT = httpx.Timeout(connect=10.0, read=60.0, write=30.0, pool=10.0)
 # belong here with a reason.
 
 EXPORT_EXCLUDED: Dict[str, str] = {
+    "church_keepers": "who keeps a church's guarded areas (church_keys.py): sign-in user ids that can't mean anything in another business; a restored church names its keepers again, and until it does nothing is locked; cascade on business deletion",
+    "church_area_keys": "asks for an hour's key to a guarded area and their answers: sign-in user ids and a hashed one-time code, over within a day; nothing to restore; cascade on business deletion",
     "devotional_texts": "who asked for the church's devotional by text each evening (devotional_daily.py): phone numbers and the words they agreed to, given to this account's texting; a restored account must not start texting them, so people sign up again; cascade on business deletion",
     "worship_screens": "each screen's private link (a token); a copied link would show another church's Sunday, so screens are added again after a restore; cascade on business deletion",
     "worship_live": "what was on screen at one moment of a service; nothing to restore; cascade on business deletion",
