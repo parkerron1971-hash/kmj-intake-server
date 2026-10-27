@@ -23,6 +23,9 @@ side (design canvas LG4Q97HqtEM4ByyXmmSrCP, boards 3-6).
                                   (member_portal_leading; ChurchSavvy Planning)
     POST /my/lead/family/<id>/touch   a call, a visit, a text or a talk at
                                   church, and "needs a pastor"
+    GET  /my/lead/tasks           the tasks the office handed to me (My tasks
+                                  for leaders, church_leader_tasks)
+    POST /my/lead/tasks/<id>/done mark one done
 
 A leader only ever sees the follow-ups handed to them (church_follow_up
 checks every read and write against leader_contact_id), and never another
@@ -30,8 +33,10 @@ person's pastors-only note. Prayer: only requests the person shared with the
 prayer team and that were handed to them (church_prayer), a first name, and
 how to reach them only when they asked for a call. A shepherd sees only
 the families given to them: the adults by name, a child by first name and
-age, never giving, prayer kept for the pastors or a child's care notes. The
-owner's preview reads and never writes.
+age, never giving, prayer kept for the pastors or a child's care notes. A
+leader sees only the tasks handed to them (church_leader_tasks checks every
+read and write against the church and their contact id). The owner's
+preview reads and never writes.
 """
 from __future__ import annotations
 
@@ -61,6 +66,10 @@ PARTS: ContextVar[Dict[str, Any]] = ContextVar("lead_parts", default={})
 # Get paid back (church_checks, 2026-10-27): its door, set once per request
 # in serve() where the switch shows it. Whoever reaches the tab serves.
 PAID_BACK: ContextVar[str] = ContextVar("lead_paid_back", default="")
+# My tasks for leaders (church_leader_tasks, 2026-10-27): {"open": n} when
+# this member has tasks the office handed them, read once per request in
+# serve(), so every page's section switcher can offer Tasks; None when not.
+TASKS: ContextVar[Optional[Dict[str, int]]] = ContextVar("lead_tasks", default=None)
 
 
 def _word() -> str:
@@ -147,6 +156,7 @@ DONE = {
     "touched": "Saved. The pastors can read it.",
     "pastor": "Saved. The Lead Pastor has been told.",
     "pastor_unsent": "Saved, but no pastor could be emailed. Please tell the office.",
+    "task_done": "Done. The church office can see it.",
 }
 ERRORS = {
     "error": "That didn’t save. Please try again.",
@@ -156,6 +166,7 @@ ERRORS = {
     "prayer_gone": "That request isn’t handed to you anymore.",
     "noemail": "They left no email, so a note can’t be sent.",
     "family_gone": "That family isn’t yours to shepherd anymore.",
+    "task_gone": "That task isn’t handed to you anymore.",
 }
 
 LEAD_CSS = """
@@ -623,17 +634,28 @@ def _room_door(room: bool) -> str:
             f'{icon("chevron", 18)}</a>')
 
 
+async def _context(request: Request, biz: Dict[str, Any], me: Dict[str, Any]) -> None:
+    """What every Lead tab page's switcher and doors read, once per request:
+    their Sunday team, their other parts, Get paid back, and their tasks."""
+    import sunday_leading
+    import member_app_ui
+    import church_leader_tasks as clt
+    SUNDAYS.set(await asyncio.to_thread(sunday_leading.leads_a_team, biz["id"], str(me["id"])))
+    PARTS.set(await asyncio.to_thread(parts, biz, str(me["id"]), me.get("email")) if member_app_ui.serve_mode() else {})
+    import member_portal_checks as mpck
+    PAID_BACK.set(await mpck.door_async(request, biz))
+    TASKS.set(await asyncio.to_thread(clt.section, biz, str(me["id"])))
+
+
 async def serve(request: Request, biz: Dict[str, Any], site, me: Dict[str, Any], sub: str):
     """GET /my/lead, /my/lead/prayer and /my/lead/<id>: (html, status)."""
     import church_prayer
     import church_shepherding as shep
     selected = sub[len("/my/lead/"):] if sub.startswith("/my/lead/") else ""
-    import sunday_leading
-    import member_app_ui
-    SUNDAYS.set(await asyncio.to_thread(sunday_leading.leads_a_team, biz["id"], str(me["id"])))
-    PARTS.set(await asyncio.to_thread(parts, biz, str(me["id"]), me.get("email")) if member_app_ui.serve_mode() else {})
-    import member_portal_checks as mpck
-    PAID_BACK.set(await mpck.door_async(request, biz))
+    await _context(request, biz, me)
+    # The tasks the office handed them (church_leader_tasks).
+    if selected == "tasks":
+        return await serve_tasks(request, biz, site, me)
     # A Sunday team's leader: their team's Sundays (member_portal_leading).
     if selected == "sundays":
         import member_portal_leading
@@ -671,6 +693,10 @@ async def serve(request: Request, biz: Dict[str, Any], site, me: Dict[str, Any],
             m["hours"] = await mps_serving.hours_for(request, biz, me)
             return mps_serving.render_page(biz, site, request, me, m, None,
                                            door=savvy_door(PARTS.get().get("team") or []) + PAID_BACK.get()), 200
+    if (TASKS.get() is not None and not selected and tab == "people"
+            and not any(r["status"] in ("active", "invited") for r in my_roles)):
+        # Only tasks the office handed them: the tab opens on them.
+        return await serve_tasks(request, biz, site, me)
     view = prayer = None
     targets: List[Dict[str, Any]] = []
     fams = 0
@@ -785,8 +811,8 @@ def _ago(days: Optional[int]) -> str:
 
 
 def _seg(tab: str, people: bool, prays: bool, waiting: int, fams: int, groups: int = 0) -> str:
-    """My group | Sundays | People | Prayer | Families: only the ones this
-    leader has, and only when there is more than one."""
+    """My group | Sundays | People | Prayer | Tasks | Families: only the ones
+    this leader has, and only when there is more than one."""
     tabs = []
     if groups:
         tabs.append(("groups", "/my/lead/groups", "My groups" if groups > 1 else "My group"))
@@ -796,6 +822,9 @@ def _seg(tab: str, people: bool, prays: bool, waiting: int, fams: int, groups: i
         tabs.append(("people", "/my/lead", "People"))
     if prays:
         tabs.append(("prayer", "/my/lead/prayer", f"Prayer · {waiting}" if waiting else "Prayer"))
+    tasks = TASKS.get()
+    if tasks is not None:
+        tabs.append(("tasks", "/my/lead/tasks", f"Tasks · {tasks['open']}" if tasks.get("open") else "Tasks"))
     if fams:
         tabs.append(("families", "/my/lead/families", f"Families · {fams}"))
     p = PARTS.get()
@@ -987,11 +1016,114 @@ async def serve_families(request: Request, biz: Dict[str, Any], site, me: Dict[s
     return render_families(biz, site, request, me, my_roles, fv, fam), 200
 
 
+# ─── My tasks: what the office handed a leader ────────────────────────
+#
+# Kevin, 2026-10-27 ("yes build my tasks for leaders"; church_leader_tasks).
+# Only the tasks handed to this member, at this church: every read and
+# write is checked against both.
+
+TASK_CSS = """
+.ld-tks{display:flex;flex-direction:column;gap:12px;max-width:760px;}
+.ld-tk-top{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;}
+.ld-tk-top b{font-size:17px;font-weight:650;line-height:1.3;min-width:0;overflow-wrap:anywhere;}
+.ld-tk-top .ld-due{flex:none;padding-top:2px;}
+.ld-tk-top .ld-due.late{color:var(--error);}
+.ld-tk-notes{margin:0;font-size:15px;line-height:1.5;color:var(--fg2);white-space:pre-line;overflow-wrap:anywhere;}
+.ld-tk-from{margin:0;font-size:12.5px;color:var(--fg3);}
+.ld-tk form{margin:0;}
+.ld-tk-done .ld-notes li b{overflow-wrap:anywhere;}
+"""
+
+
+def tasks_line(items: List[Dict[str, Any]]) -> str:
+    """Chief's one line at the top of a leader's tasks."""
+    if not items:
+        return "Nothing is waiting on you. When the church office hands you a task, it shows up here."
+    late = [t for t in items if t.get("late")]
+    if late:
+        more = f" {len(late) - 1} more past due." if len(late) > 1 else ""
+        return f"“{late[0]['title']}” is {late[0]['due_text']}. If it’s done, tap Done so the office knows.{more}"
+    first = items[0]
+    when = first["due_text"][:1].lower() + first["due_text"][1:]
+    n = len(items)
+    return f"{n} task{'s' if n != 1 else ''} handed to you. Next: “{first['title']}”, {when}."
+
+
+def _task_card(t: Dict[str, Any]) -> str:
+    from member_app_ui import icon
+    cls = {"late": "ld-due late", "soon": "ld-due soon"}.get(t.get("state") or "", "ld-due")
+    notes = f'<p class="ld-tk-notes">{_e(t["notes"])}</p>' if t.get("notes") else ""
+    return (f'<section class="ld-pr ld-tk" aria-label="{_e(t["title"])}">'
+            f'<div class="ld-tk-top"><b>{_e(t["title"])}</b><span class="{cls}">{_e(t["due_text"])}</span></div>'
+            f'{notes}<p class="ld-tk-from">From {_e(t.get("from") or "the church office")}</p>'
+            f'<form method="post" action="/my/lead/tasks/{_e(t["id"])}/done">'
+            f'<button class="ld-btn" type="submit">{icon("check", 17)}Done</button></form></section>')
+
+
+def _tasks_body(view: Optional[Dict[str, Any]]) -> str:
+    from member_app_ui import icon
+    if view is None:
+        return '<p class="mp-err" role="alert">Your tasks couldn’t load just now. Please try again in a moment.</p>'
+    items, done = view.get("open") or [], view.get("done") or []
+    out = (f'<div class="ld-tks"><div class="ld-chief"><small>{icon("star", 12)}From Chief</small>'
+           f'<p>{_e(tasks_line(items))}</p></div>')
+    if items:
+        out += (f'<div class="mb-sh"><h2>My tasks</h2><span>{len(items)} open</span></div>'
+                + "".join(_task_card(t) for t in items))
+    if done:
+        lis = "".join(
+            f'<li><div class="ld-by"><b>{_e(d["title"])}</b><span>{_e(d.get("done_on") or "")}</span>'
+            f'<span class="ld-tag">{"Done by you" if d.get("by_me") else "Marked done"}</span></div></li>' for d in done)
+        out += (f'<details class="ld-card ld-back ld-tk-done"><summary class="ld-ghost">Done lately · {len(done)}</summary>'
+                f'<ul class="ld-notes">{lis}</ul></details>')
+    return out + (f'<p class="ld-quiet">{icon("lock", 14)}<span>You see only the tasks handed to you. When you tap '
+                  f'Done, the church office sees it.</span></p></div>')
+
+
+def render_tasks(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], active: List[Dict[str, Any]],
+                 view: Optional[Dict[str, Any]], seg: str, *, err: str = "") -> str:
+    """/my/lead/tasks."""
+    from member_portal import _shell
+    done = DONE.get(request.query_params.get("done") or "")
+    bad = ERRORS.get(err or request.query_params.get("err") or "")
+    flash = (f'<p class="mp-err mp-flash" role="alert">{_e(bad)}</p>' if bad else
+             f'<p class="mp-ok mp-flash" role="status">{_e(done)}</p>' if done else "")
+    first = (me.get("name") or "").strip().split(" ")[0] or "friend"
+    head = (f'<header class="ld-head"><h1 class="ld-hello">{_word()}, <em>{_e(first)}</em></h1>'
+            f'<div class="ld-roles">{"".join(f"<span class=ld-role>{_e(_role_text(r))}</span>" for r in active)}</div></header>')
+    return _shell(biz, site, "My tasks",
+                  f'<style>{LEAD_CSS}{TASK_CSS}</style><div class="ld-wide">{flash}{head}{seg}{_tasks_body(view)}</div>',
+                  tab="lead", who=me)
+
+
+async def serve_tasks(request: Request, biz: Dict[str, Any], site, me: Dict[str, Any], *, err: str = ""):
+    """GET /my/lead/tasks: (html, status). Not a page while the switch is
+    closed for this church."""
+    import church_leader_tasks as clt
+    import church_shepherding as shep
+    import group_lead
+    if not await asyncio.to_thread(clt.church_open, biz.get("id")):
+        return render(biz, site, request, me, [], None), 404
+    my_roles = await asyncio.to_thread(cfu.roles_for, biz["id"], str(me["id"])) or []
+    active = [r for r in my_roles if r.get("status") == "active"]
+    led = await asyncio.to_thread(group_lead.led_groups, biz["id"], str(me["id"])) or []
+    fams = 0
+    if active:
+        fv = await asyncio.to_thread(shep.my_families, biz["id"], str(me["id"]))
+        fams = len((fv or {}).get("families") or [])
+    view = await asyncio.to_thread(clt.mine, biz, str(me["id"]))
+    if TASKS.get() is None and view is not None:
+        # On the page itself the switcher always names it, even with nothing handed yet.
+        TASKS.set({"open": len(view["open"])})
+    seg = _seg("tasks", any(not _is_prayer(r) for r in active), any(_is_prayer(r) for r in active), 0, fams, len(led))
+    return render_tasks(biz, site, request, me, active, view, seg, err=err), 200 if view is not None else 503
+
+
 # ─── POST ─────────────────────────────────────────────────────────────
 
 def _go(target: str, **q: str) -> RedirectResponse:
     from member_portal import _SECURE_HEADERS
-    if (target not in ("/my/lead", "/my/lead/prayer", "/my/lead/families", "/my/lead/groups")
+    if (target not in ("/my/lead", "/my/lead/prayer", "/my/lead/families", "/my/lead/groups", "/my/lead/tasks")
             and not re.fullmatch(r"/my/lead/(family/|groups/)?[0-9a-fA-F-]{36}", target)):
         target = "/my/lead"
     qs = "&".join(f"{k}={v}" for k, v in q.items())
@@ -1242,3 +1374,34 @@ async def family_touch(household_id: str, request: Request):
         told = await shep.tell_pastor(biz, me, logged)
         return _go(here, done="pastor" if told else "pastor_unsent")
     return _go(here, done="touched")
+
+
+@router.post("/my/lead/tasks/{task_id}/done", include_in_schema=False)
+async def task_done(task_id: str, request: Request):
+    """A leader marks a task the office handed them done (church_leader_tasks
+    checks it is theirs, at this church, and records who). Anyone else's
+    task is a 404: their own list, saying it isn't theirs."""
+    import church_leader_tasks as clt
+    from fastapi.responses import HTMLResponse
+    from member_portal import _SECURE_HEADERS
+    from member_portal_church import _signed_in
+    church, me, unavailable = await _signed_in(request)
+    here = "/my/lead/tasks"
+    if unavailable:
+        return _go(here, err="preview" if unavailable == "preview" else "error")
+    if not me:
+        return _go("/my")
+    biz = church["business"]
+    if not cfu.is_church(biz) or not await asyncio.to_thread(clt.church_open, biz.get("id")):
+        raise HTTPException(404, "Not found")
+    if not _allowed(church, me):
+        return _go(here, err="slow")
+    try:
+        await asyncio.to_thread(clt.mark_done, biz["id"], str(me["id"]), task_id)
+    except HTTPException as e:
+        if e.status_code != 404:
+            return _go(here, err="error")
+        await _context(request, biz, me)
+        html, _ = await serve_tasks(request, biz, church.get("site"), me, err="task_gone")
+        return HTMLResponse(html, status_code=404, headers=_SECURE_HEADERS)
+    return _go(here, done="task_done")

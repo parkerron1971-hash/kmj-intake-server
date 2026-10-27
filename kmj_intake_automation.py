@@ -1811,6 +1811,17 @@ async def startup():
                           id="church_shepherd_sweep")
     except Exception as e:
         print(f"   [warn] church shepherding sweep not scheduled: {e}")
+    # My tasks for leaders (2026-10-27): a task the office handed to a leader
+    # is emailed to them within the hour, and one past due goes up once, in
+    # the church's morning, to whoever the leader answers to. Each claimed
+    # before it's sent, so it's sent once (church_leader_tasks.sweep_tick).
+    # CHURCH_LEADER_TASKS is read here, on the worker, too.
+    try:
+        import church_leader_tasks as _clt
+        scheduler.add_job(g("church_leader_tasks_sweep", _clt.sweep_tick), "interval", hours=1,
+                          id="church_leader_tasks_sweep")
+    except Exception as e:
+        print(f"   [warn] leader tasks sweep not scheduled: {e}")
     # Homework files nothing points at any more (a deleted homework, student
     # or class; an attach that never landed) leave the private bucket once a
     # day (academy_work.sweep_tick).
