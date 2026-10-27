@@ -1325,7 +1325,10 @@ def approve(me: Dict[str, Any], meeting_id: str, in_meeting_id: Any = None) -> D
 def make_tasks(me: Dict[str, Any], meeting_id: str) -> Dict[str, Any]:
     """Each follow-up without a task becomes one, through the app's own tasks
     (Office › Tasks): handed to the member's login where they have one, due
-    when the follow-up is. Twice makes each once."""
+    when the follow-up is. A member with no login who is one of the church's
+    people is handed it as a leader (My tasks for leaders, church_leader_tasks:
+    while its switch is open to this login and its migration is in), so it
+    reaches their Lead tab. Twice makes each once."""
     m = _meeting(me, meeting_id)
     _writes(me, m["board_id"])
     biz = str(me["biz"]["id"])
@@ -1336,18 +1339,24 @@ def make_tasks(me: Dict[str, Any], meeting_id: str) -> Dict[str, Any]:
     members = {str(x["id"]): x for x in _members(biz, [str(board["id"])], everyone=True)}
     zone = _zone(me)
     day = when_words(m["starts_at"], zone).split(" at ")[0]
+    import church_leader_tasks
+    by_contact = (any(x.get("contact_id") and not x.get("user_id") for x in members.values())
+                  and church_leader_tasks.open_to(me["user"]) and church_leader_tasks.ready(biz))
     made = 0
     for i in items:
         who = members.get(str(i.get("follow_up_member") or "")) or {}
         title = i.get("title") or "A follow-up"
-        if who and not who.get("user_id"):
+        leader = str(who.get("contact_id") or "") if by_contact and who and not who.get("user_id") else ""
+        if who and not who.get("user_id") and not leader:
             title = f"{title} ({who.get('name')})"
         desc = f"A follow-up from the {board['name']} meeting of {day}."
         if i.get("minutes"):
             desc += f"\n\n{i['minutes'][:1500]}"
-        task = sb_clients.sb_post_as_service("/tasks", {
-            "business_id": biz, "title": title[:200], "description": desc, "status": "todo", "priority": "medium",
-            "due_date": i.get("follow_up_due"), "assigned_to": who.get("user_id") or None})
+        row = {"business_id": biz, "title": title[:200], "description": desc, "status": "todo", "priority": "medium",
+               "due_date": i.get("follow_up_due"), "assigned_to": who.get("user_id") or None}
+        if leader:
+            row["assigned_contact_id"] = leader
+        task = sb_clients.sb_post_as_service("/tasks", row)
         if not isinstance(task, list) or not task or not task[0].get("id"):
             raise HTTPException(503, f"{made} task{'s' if made != 1 else ''} made; the rest didn't save. Try again.")
         tid = str(task[0]["id"])

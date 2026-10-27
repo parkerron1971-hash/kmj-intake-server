@@ -9,7 +9,8 @@ an area to a line; a login that works some areas sees only those.
 
     GET /church/my-week?business_id=          the page (any office login)
     GET /church/my-week/status?business_id=   whether this app shows it
-    GET /church/my-week/people?business_id=   who a task can be handed to
+    GET /church/my-week/people?business_id=   who a task can be handed to (and
+                                              the church's leaders: church_leader_tasks)
 
 Everything is read from where it already lives: the areas map
 (church_areas.build: who works each area and what's missing), follow-ups
@@ -347,12 +348,20 @@ def my_week_status(business_id: str, session: UserSession = Depends(sb_clients.a
 def my_week_people(business_id: str, session: UserSession = Depends(sb_clients.authed_request),
                    biz: Dict[str, Any] = Depends(business_access("member"))):
     """Who a task can be handed to (Tasks, "Hand to"), for anyone who can
-    change tasks."""
+    change tasks: the office logins, and (My tasks for leaders, while its
+    switch is open to this login and its migration is in) `leaders`, the
+    church's leaders by name and role title. No `leaders` key: no Leaders
+    group in the picker."""
     church_areas._gate(session.user)
     import church_follow_up as cfu
     if not cfu.is_church(biz):
         raise HTTPException(404, "Handing tasks over is for churches")
-    return {"people": people(biz, str(session.user.id))}
+    out: Dict[str, Any] = {"people": people(biz, str(session.user.id))}
+    import church_leader_tasks
+    leaders = church_leader_tasks.hand_list(biz, session.user)
+    if leaders is not None:
+        out["leaders"] = leaders
+    return out
 
 
 @router.get("/my-week")

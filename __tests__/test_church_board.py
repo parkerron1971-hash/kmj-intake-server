@@ -465,7 +465,10 @@ def test_send_for_approval_goes_only_to_the_boards_members(db):
 
 # ─── Follow-ups become tasks ──────────────────────────────────────────
 
-def test_follow_ups_become_tasks_once_handed_to_a_login(db):
+def test_follow_ups_become_tasks_once_handed_to_a_login(db, monkeypatch):
+    # My tasks for leaders off: a no-login member's name goes in the title
+    # (with it on, test_church_leader_tasks hands it to them as a leader).
+    monkeypatch.setenv("CHURCH_LEADER_TASKS", "off")
     b, ids = _deacons()
     m = _meeting(b["id"])["meeting"]
     van = _item(m["id"], "Van insurance")
