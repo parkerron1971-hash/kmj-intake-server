@@ -41,10 +41,12 @@ login whose areas leave Serving out.
 - `kmj_intake_automation.py`: mounts the router after Rooms & spaces.
 
 Checks:
-- `__tests__/test_church_serving.py`: 18 tests (the arithmetic, subs,
+- `__tests__/test_church_serving.py`: 21 tests (the arithmetic, subs,
   declines, away days, the shared time, group leaders, added hours, every
   check status, recording a check, reminders once a week, another church,
-  areas, the switch, a failed read, the member's own reads, the member page).
+  areas, the switch, a failed read, the member's own reads, the member page,
+  reads the server caps read page by page, a leaders page that didn't take
+  the date, a reminder that couldn't be marked).
 - Each rule broken on purpose, and a test caught all ten: an unanswered ask
   counting, away days counting, shared time counted twice, a group member
   earning gatherings, "can't serve yet" never shown, areas ignored, checks

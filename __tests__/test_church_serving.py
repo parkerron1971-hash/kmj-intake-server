@@ -87,7 +87,24 @@ def _contains(have, want) -> bool:
 
 
 class ServingDB(FakeDB):
-    """JSON containment (metadata=cs.{...}) and ilike *wildcards*, on the shared fake."""
+    """JSON containment (metadata=cs.{...}), ilike *wildcards*, order and
+    offset paging, on the shared fake. `cap` is the server's most rows
+    per read (PostgREST's max rows), whatever limit was asked for."""
+    cap = 1000
+
+    def get(self, path, **kw):
+        table, _, qs = path.lstrip("/").partition("?")
+        parts = qs.split("&") if qs else []
+        offset = next((int(p.split("=", 1)[1]) for p in parts if p.startswith("offset=")), 0)
+        order = next((p.split("=", 1)[1] for p in parts if p.startswith("order=")), "")
+        rest = "&".join(p for p in parts if not p.startswith(("offset=", "limit=")))
+        rows = super().get(f"/{table}?{rest}" if rest else f"/{table}", **kw)
+        if order:
+            cols = [c.split(".")[0] for c in order.split(",")]
+            rows.sort(key=lambda r: tuple(str(r.get(c) or "") for c in cols))
+        limit = next((int(p.split("=", 1)[1]) for p in parts if p.startswith("limit=")), None)
+        rows = rows[offset:]
+        return rows[:min(limit or self.cap, self.cap)]
 
     def _match(self, row, filters):
         rest = []
@@ -341,6 +358,38 @@ def test_reminders_go_to_who_needs_one_and_once_a_week(db, monkeypatch):
     again = client("admin").post("/church/serving/checks/remind", json={"business_id": BIZ}).json()
     assert again["sent"] == 0 and again["recent"] == 4, "never twice in a week"
     assert len(rang) == 4
+
+
+def test_a_reminder_that_isnt_marked_is_said(db, monkeypatch):
+    import member_push
+    monkeypatch.setattr(member_push, "send", lambda biz, kind, **kw: 1)
+
+    async def mail(*a):
+        return False
+    monkeypatch.setattr(cs, "_email_one", mail)
+    real = db.patch
+    monkeypatch.setattr(sb_clients, "sb_patch_as_service",
+                        lambda path, body, **kw: None if path.startswith("/contacts") else real(path, body, **kw))
+    got = client("admin").post("/church/serving/checks/remind", json={"business_id": BIZ, "contact_ids": [DANA]}).json()
+    assert got["sent"] == 1 and got["unstamped"] == 1, "a second press this week would remind her again"
+
+
+def test_a_check_the_leaders_page_didnt_take_is_said(db, monkeypatch):
+    real = db.patch
+    monkeypatch.setattr(sb_clients, "sb_patch_as_service",
+                        lambda path, body, **kw: None if path.startswith("/space_leaders") else real(path, body, **kw))
+    got = client("admin").post("/church/serving/checks", json={"business_id": BIZ, "contact_id": DANA, "on": "2026-10-20"})
+    assert got.status_code == 200 and got.json() == {"on": "2026-10-20", "leaders_page": False}
+    ok = client("admin").post("/church/serving/checks", json={"business_id": BIZ, "contact_id": MIA, "on": "2026-10-20"})
+    assert ok.json()["leaders_page"] is True, "no leader row to follow is nothing missed"
+
+
+def test_a_read_the_server_caps_is_read_page_by_page(db, monkeypatch):
+    whole = _read().json()
+    db.cap = 2
+    monkeypatch.setattr(cs, "PAGE", 2)
+    paged = _read().json()
+    assert paged["totals"] == whole["totals"] and paged["checks"] == whole["checks"], "two rows a read, the same year"
 
 
 def test_reminder_words_name_where_the_check_stands():

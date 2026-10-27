@@ -172,11 +172,30 @@ def _need(path: str) -> List[Dict[str, Any]]:
     return rows
 
 
-def _need_in(path: str, column: str, values: Iterable[Any], n: int = 120) -> List[Dict[str, Any]]:
-    """`path` with `column=in.(…)` added, read in chunks so a URL stays short."""
+PAGE = 1000          # the most rows one read returns (PostgREST's cap)
+MAX_ROWS = 100_000   # past this a read is refused, never cut short
+
+
+def _need_all(path: str, order: str) -> List[Dict[str, Any]]:
+    """Every row, a page at a time in a stable order: a read the server
+    caps is never taken for the whole, and a short total never reads as
+    fewer hours."""
+    out: List[Dict[str, Any]] = []
+    while True:
+        rows = _need(f"{path}&order={order}&limit={PAGE}&offset={len(out)}")
+        out += rows
+        if len(rows) < PAGE:
+            return out
+        if len(out) >= MAX_ROWS:
+            raise HTTPException(503, "Serving has more rows than one page can add up. Try again later.")
+
+
+def _need_in(path: str, column: str, values: Iterable[Any], order: str, n: int = 120) -> List[Dict[str, Any]]:
+    """`path` with `column=in.(…)` added, read in chunks so a URL stays
+    short, each chunk read whole."""
     out: List[Dict[str, Any]] = []
     for part in _chunks(values, n):
-        out += _need(f"{path}&{column}=in.({','.join(_q(v) for v in part)})")
+        out += _need_all(f"{path}&{column}=in.({','.join(_q(v) for v in part)})", order)
     return out
 
 
@@ -394,28 +413,28 @@ def _sunday_spans(biz_id: str, zone, lo: datetime, hi: datetime, settings: Dict[
     window = (f"&starts_at=gte.{_q(lo.astimezone(timezone.utc).isoformat())}"
               f"&starts_at=lt.{_q(hi.astimezone(timezone.utc).isoformat())}")
     if only:
-        said = _need(f"/serve_assignments?business_id=eq.{b}&contact_id=eq.{_q(only)}&status=eq.yes"
-                     f"&select=service_id,position_id,contact_id&limit=5000")
+        said = _need_all(f"/serve_assignments?business_id=eq.{b}&contact_id=eq.{_q(only)}&status=eq.yes"
+                         f"&select=id,service_id,position_id,contact_id", "id")
         services = _need_in(f"/worship_services?business_id=eq.{b}&archived_at=is.null&is_template=eq.false{window}"
-                            f"&select=id,starts_at,items", "id", [r["service_id"] for r in said]) if said else []
+                            f"&select=id,starts_at,items", "id", [r["service_id"] for r in said], "id") if said else []
     else:
-        services = _need(f"/worship_services?business_id=eq.{b}&archived_at=is.null&is_template=eq.false{window}"
-                         f"&select=id,starts_at,items&order=starts_at.asc&limit=3000")
-        said = _need_in(f"/serve_assignments?business_id=eq.{b}&status=eq.yes&select=service_id,position_id,contact_id",
-                        "service_id", [s["id"] for s in services]) if services else []
+        services = _need_all(f"/worship_services?business_id=eq.{b}&archived_at=is.null&is_template=eq.false{window}"
+                             f"&select=id,starts_at,items", "id")
+        said = _need_in(f"/serve_assignments?business_id=eq.{b}&status=eq.yes&select=id,service_id,position_id,contact_id",
+                        "service_id", [s["id"] for s in services], "id") if services else []
     svc = {str(s["id"]): s for s in services}
     said = [r for r in said if str(r.get("service_id")) in svc and r.get("contact_id")]
     if not said:
         return [], {}
     places = {str(p["id"]): p for p in _need_in(f"/serve_positions?business_id=eq.{b}&select=id,group_id,name",
-                                                 "id", [r["position_id"] for r in said])}
+                                                 "id", [r["position_id"] for r in said], "id")}
     turns = {str(t["group_id"]): t for t in _need(f"/serve_teams?business_id=eq.{b}&select=group_id,call_time&limit=200")}
     gids = {str(p.get("group_id")) for p in places.values() if p.get("group_id")}
     names = {str(g["id"]): _plain(g.get("name")) or "A team"
-             for g in _need_in(f"/groups?business_id=eq.{b}&select=id,name", "id", gids)} if gids else {}
+             for g in _need_in(f"/groups?business_id=eq.{b}&select=id,name", "id", gids, "id")} if gids else {}
     who = f"&contact_id=eq.{_q(only)}" if only else ""
-    away = _need(f"/serve_away?business_id=eq.{b}{who}&starts_on=lte.{hi.date().isoformat()}"
-                 f"&ends_on=gte.{lo.date().isoformat()}&select=contact_id,starts_on,ends_on&limit=5000")
+    away = _need_all(f"/serve_away?business_id=eq.{b}{who}&starts_on=lte.{hi.date().isoformat()}"
+                     f"&ends_on=gte.{lo.date().isoformat()}&select=id,contact_id,starts_on,ends_on", "id")
     gone: Dict[str, List[Tuple[str, str]]] = {}
     for a in away:
         gone.setdefault(str(a["contact_id"]), []).append((str(a["starts_on"])[:10], str(a["ends_on"])[:10]))
@@ -448,22 +467,23 @@ def _group_credits(biz_id: str, lo: date, hi: date, settings: Dict[str, Any],
     Sundays."""
     b = _q(biz_id)
     who = f"&contact_id=eq.{_q(only)}" if only else ""
-    leads = _need(f"/group_members?business_id=eq.{b}&role=eq.leader{who}&select=group_id,contact_id&limit=5000")
+    leads = _need_all(f"/group_members?business_id=eq.{b}&role=eq.leader{who}&select=group_id,contact_id",
+                      "group_id,contact_id")
     if not leads:
         return [], {}
     groups = {str(g["id"]): g for g in _need_in(f"/groups?business_id=eq.{b}&select=id,name,kind", "id",
-                                               [x["group_id"] for x in leads])}
+                                               [x["group_id"] for x in leads], "id")}
     led = {(str(x["group_id"]), str(x["contact_id"])) for x in leads
            if str(x["group_id"]) in groups and groups[str(x["group_id"])].get("kind") != "team"}
     if not led:
         return [], {}
     meetings = {str(m["id"]): m for m in _need_in(
         f"/group_meetings?business_id=eq.{b}&met_on=gte.{lo.isoformat()}&met_on=lte.{hi.isoformat()}"
-        f"&select=id,group_id,met_on", "group_id", {g for g, _ in led})}
+        f"&select=id,group_id,met_on", "group_id", {g for g, _ in led}, "id")}
     if not meetings:
         return [], {}
     came = _need_in(f"/group_meeting_attendance?business_id=eq.{b}{who}&select=meeting_id,contact_id",
-                    "meeting_id", meetings, n=100)
+                    "meeting_id", meetings, "meeting_id,contact_id", n=100)
     out = []
     for c in came:
         m = meetings.get(str(c.get("meeting_id")))
@@ -479,7 +499,7 @@ def _extra_rows(biz_id: str, only: Optional[str] = None) -> List[Dict[str, Any]]
     b = _q(biz_id)
     one = f"&id=eq.{_q(only)}" if only else ""
     has = _q(json.dumps({KEY: {}}, separators=(",", ":")))
-    return _need(f"/contacts?business_id=eq.{b}{one}&metadata=cs.{has}&select=id,name,birthdate,metadata&limit=2000")
+    return _need_all(f"/contacts?business_id=eq.{b}{one}&metadata=cs.{has}&select=id,name,birthdate,metadata", "id")
 
 
 def _extra_credits(rows: List[Dict[str, Any]], year: int) -> List[Dict[str, Any]]:
@@ -497,7 +517,7 @@ def _extra_credits(rows: List[Dict[str, Any]], year: int) -> List[Dict[str, Any]
 
 
 def _people(biz_id: str, ids: Iterable[str]) -> Dict[str, Dict[str, Any]]:
-    rows = _need_in(f"/contacts?business_id=eq.{_q(biz_id)}&select=id,name,birthdate", "id", ids)
+    rows = _need_in(f"/contacts?business_id=eq.{_q(biz_id)}&select=id,name,birthdate", "id", ids, "id")
     return {str(r["id"]): {"name": _plain(r.get("name")) or "Someone", "birthdate": r.get("birthdate")} for r in rows}
 
 
@@ -511,7 +531,7 @@ def _kids_teams(biz_id: str) -> Dict[str, str]:
     turns = _need(f"/serve_teams?business_id=eq.{b}&select=group_id&limit=200")
     if not turns:
         return {}
-    groups = _need_in(f"/groups?business_id=eq.{b}&active=eq.true&select=id,name", "id", [t["group_id"] for t in turns])
+    groups = _need_in(f"/groups?business_id=eq.{b}&active=eq.true&select=id,name", "id", [t["group_id"] for t in turns], "id")
     try:
         places = church_areas._places(biz_id)
     except HTTPException:
@@ -526,7 +546,8 @@ def checks(biz: Dict[str, Any], settings: Dict[str, Any], today: date, zone,
     biz_id = str(biz["id"])
     b = _q(biz_id)
     who = f"&contact_id=eq.{_q(only)}" if only else ""
-    leaders = _need(f"/space_leaders?business_id=eq.{b}{who}&select=contact_id,space,background_check_on&limit=2000")
+    leaders = _need_all(f"/space_leaders?business_id=eq.{b}{who}&select=contact_id,space,background_check_on",
+                        "contact_id,space")
     teams = _kids_teams(biz_id)
     where: Dict[str, List[str]] = {}
     dates: Dict[str, List[date]] = {}
@@ -540,14 +561,15 @@ def checks(biz: Dict[str, Any], settings: Dict[str, Any], today: date, zone,
             dates.setdefault(cid, []).append(d)
     nexts: Dict[str, Dict[str, Any]] = {}
     if teams:
-        members = _need_in(f"/group_members?business_id=eq.{b}{who}&select=group_id,contact_id", "group_id", teams)
+        members = _need_in(f"/group_members?business_id=eq.{b}{who}&select=group_id,contact_id", "group_id", teams,
+                           "group_id,contact_id")
         for m in members:
             cid = str(m["contact_id"])
             name = teams.get(str(m["group_id"]))
             if name and name not in where.setdefault(cid, []):
                 where[cid].append(name)
         places = {str(p["id"]): p for p in _need_in(f"/serve_positions?business_id=eq.{b}&active=eq.true&select=id,group_id,name",
-                                                     "group_id", teams)}
+                                                     "group_id", teams, "id")}
         now = _now().astimezone(zone)
         soon = _need(f"/worship_services?business_id=eq.{b}&archived_at=is.null&is_template=eq.false"
                      f"&starts_at=gte.{_q((now - timedelta(hours=3)).astimezone(timezone.utc).isoformat())}"
@@ -556,8 +578,8 @@ def checks(biz: Dict[str, Any], settings: Dict[str, Any], today: date, zone,
         if soon and places:
             when = {str(s["id"]): _at(s.get("starts_at")) for s in soon}
             rows = _need_in(f"/serve_assignments?business_id=eq.{b}{who}&status=in.(asked,yes)"
-                            f"&service_id=in.({_ids(when)})&select=service_id,position_id,contact_id",
-                            "position_id", places)
+                            f"&service_id=in.({_ids(when)})&select=id,service_id,position_id,contact_id",
+                            "position_id", places, "id")
             for r in rows:
                 at, p = when.get(str(r["service_id"])), places.get(str(r["position_id"]))
                 if not at or not p or not r.get("contact_id"):
@@ -671,7 +693,7 @@ def overview(me: Dict[str, Any], year: Optional[int] = None) -> Dict[str, Any]:
     # Teams the office can set a length for: every Sunday team, served yet or not.
     sunday_teams = _need(f"/serve_teams?business_id=eq.{_q(biz_id)}&select=group_id,call_time,sort&order=sort.asc&limit=200")
     st_names = {str(g["id"]): _plain(g.get("name")) for g in _need_in(
-        f"/groups?business_id=eq.{_q(biz_id)}&active=eq.true&select=id,name", "id", [t["group_id"] for t in sunday_teams])}
+        f"/groups?business_id=eq.{_q(biz_id)}&active=eq.true&select=id,name", "id", [t["group_id"] for t in sunday_teams], "id")}
     lengths = [{"group_id": str(t["group_id"]), "name": st_names[str(t["group_id"])],
                 "call_time": str(t.get("call_time") or "")[:5] or None,
                 "set_minutes": settings["team_minutes"].get(str(t["group_id"]))}
@@ -873,16 +895,18 @@ def record_check(me: Dict[str, Any], body: Dict[str, Any]) -> Dict[str, Any]:
         return rec
     _write_mine(biz_id, cid, change)
     # The Youth and Kids leaders page shows the same date: keep it in step
-    # where this one is newer.
+    # where this one is newer, and say so when it couldn't be.
     leaders = sb_clients.sb_get_as_service(
         f"/space_leaders?business_id=eq.{_q(biz_id)}&contact_id=eq.{_q(cid)}&select=space,background_check_on")
+    followed = isinstance(leaders, list)
     for x in leaders if isinstance(leaders, list) else []:
         had = _day(x.get("background_check_on"))
         if had is None or had < on:
-            sb_clients.sb_patch_as_service(
-                f"/space_leaders?business_id=eq.{_q(biz_id)}&contact_id=eq.{_q(cid)}&space=eq.{_q(x['space'])}",
+            saved = sb_clients.sb_patch_as_service(
+                f"/space_leaders?business_id=eq.{_q(biz_id)}&contact_id=eq.{_q(cid)}&space=eq.{_q(x['space'])}&select=space",
                 {"background_check_on": on.isoformat()})
-    return {"on": on.isoformat()}
+            followed = followed and isinstance(saved, list) and bool(saved)
+    return {"on": on.isoformat(), "leaders_page": followed}
 
 
 def save_settings(me: Dict[str, Any], body: Dict[str, Any]) -> Dict[str, Any]:
@@ -1009,7 +1033,7 @@ async def remind(me: Dict[str, Any], body: Dict[str, Any]) -> Dict[str, Any]:
         if not isinstance(picked, list) or len(picked) > 500:
             raise HTTPException(400, "contact_ids is a list of people.")
         picked = {_uuid(p, "person") for p in picked}
-    out = {"sent": 0, "phones": 0, "emails": 0, "recent": 0, "unreachable": 0}
+    out = {"sent": 0, "phones": 0, "emails": 0, "recent": 0, "unreachable": 0, "unstamped": 0}
     targets = []
     for c in rows:
         if c["status"] not in NEEDS or (picked is not None and c["contact_id"] not in picked):
@@ -1063,6 +1087,8 @@ async def remind(me: Dict[str, Any], body: Dict[str, Any]) -> Dict[str, Any]:
         try:
             await asyncio.to_thread(_write_mine, biz_id, c["contact_id"], change)
         except HTTPException:
+            # Not marked: a second press this week would remind them again.
+            out["unstamped"] += 1
             logger.warning("serving checks: reminded_at didn't save for one person")
     return out
 
