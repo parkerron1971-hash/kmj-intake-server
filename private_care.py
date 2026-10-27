@@ -87,7 +87,12 @@ class CareCaller:
 
 
 def care_access(business_id: str, user) -> CareCaller:
-    """The owner, or an active seat on this business. Anyone else: 403."""
+    """The owner, or an active seat on this business. Anyone else: 403.
+
+    Who sees every request (Church Areas step 2, church_keys): the owner,
+    until the church names a keeper for People & care; from then on that
+    keeper, and anyone holding their key, the owner included. Everyone else
+    sees what was handed to them."""
     biz = _uuid(business_id, "business")
     rows = sb_clients.sb_get_as_service(
         f"/businesses?id=eq.{biz}&select=id,owner_id&limit=1")
@@ -95,16 +100,18 @@ def care_access(business_id: str, user) -> CareCaller:
         raise HTTPException(503, "Private care is temporarily unavailable")
     if not rows:
         raise HTTPException(404, "business not found")
-    if str(rows[0].get("owner_id")) == str(user.id):
-        return CareCaller(user.id, True)
-    seats = sb_clients.sb_get_as_service(
-        f"/business_users?business_id=eq.{biz}&user_id=eq.{_uuid(user.id, 'user')}"
-        "&status=eq.active&select=role&limit=1")
-    if not isinstance(seats, list):
-        raise HTTPException(503, "Private care is temporarily unavailable")
-    if not seats:
-        raise HTTPException(403, "Prayer & care requests are for this church's team")
-    return CareCaller(user.id, False)
+    owner = str(rows[0].get("owner_id")) == str(user.id)
+    if not owner:
+        seats = sb_clients.sb_get_as_service(
+            f"/business_users?business_id=eq.{biz}&user_id=eq.{_uuid(user.id, 'user')}"
+            "&status=eq.active&select=role&limit=1")
+        if not isinstance(seats, list):
+            raise HTTPException(503, "Private care is temporarily unavailable")
+        if not seats:
+            raise HTTPException(403, "Prayer & care requests are for this church's team")
+    import church_keys
+    kept = church_keys.opened(biz, user, "people_care")
+    return CareCaller(user.id, owner if kept is None else kept)
 
 
 def _team(biz: str) -> List[Dict[str, Any]]:

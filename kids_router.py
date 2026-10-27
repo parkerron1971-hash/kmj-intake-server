@@ -35,6 +35,7 @@ from urllib.parse import quote
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
+import church_keys
 import sb_clients
 from auth_supabase import AuthedUser, require_user
 
@@ -132,7 +133,10 @@ def _in(ids: List[str]) -> str:
 def list_families(business_id: str = Query(...), user: AuthedUser = Depends(require_user)):
     biz = _uuid(business_id, "business")
     role = require(biz, user, "member")
-    private = _RANK[role] >= _RANK["manager"]
+    # Medical and custody notes are Kids & youth's guarded part (church_keys):
+    # where the church named a keeper, a manager needs the keeper's key too.
+    locked = _RANK[role] >= _RANK["manager"] and not church_keys.is_open(biz, user, "kids_youth")
+    private = _RANK[role] >= _RANK["manager"] and not locked
 
     families = sb_clients.sb_get_as_service(
         f"/households?business_id=eq.{biz}&select=id,name,created_at,updated_at&order=name.asc&limit=2000")
@@ -192,7 +196,8 @@ def list_families(business_id: str = Query(...), user: AuthedUser = Depends(requ
         r = _clean(k.get("room"))
         if r and r.lower() not in {x.lower() for x in rooms}:
             rooms.append(r)
-    return {"role": role, "can_see_private": private, "rooms": rooms, "families": list(out.values())}
+    return {"role": role, "can_see_private": private, "private_locked": locked, "rooms": rooms,
+            "families": list(out.values())}
 
 
 # ─── Families ────────────────────────────────────────────────────────
@@ -416,6 +421,10 @@ def edit_child(child_id: str, body: ChildPatch, user: AuthedUser = Depends(requi
     current = _child(biz, child_id)
     row = _child_row(body)
     notes = _notes_row(body, role)
+    if "medical" in notes or "custody" in notes:
+        # Never over a note they can't read. A new child's first notes are
+        # written by whoever registers them, so the desk can record them.
+        church_keys.wall(biz, user, "kids_youth")
     if not row and not notes:
         return {"child": current}
     # Claim the child first, conditional on the stamp the app read — one

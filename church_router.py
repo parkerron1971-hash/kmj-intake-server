@@ -154,12 +154,24 @@ def _who(session: UserSession) -> Tuple[str, str]:
 
 @router.get("/follow-ups")
 def follow_ups(business_id: str = Query(...),
-               biz: Dict[str, Any] = Depends(business_access(CARE_MIN_ROLE))):
+               biz: Dict[str, Any] = Depends(business_access(CARE_MIN_ROLE)),
+               session: UserSession = Depends(sb_clients.authed_request)):
     """The Follow-up board: everyone a card handed to someone, where they
-    are on their path, and every note (church_follow_up.board)."""
+    are on their path, and every note (church_follow_up.board).
+
+    Pastors-only notes are People & care's guarded part (church_keys): where
+    the church named a keeper, everyone else's board says how many there
+    are on a card, never what they say. Writing one stays open."""
     out = church_follow_up.board(_uuid(business_id))
     if out is None:
         raise HTTPException(503, "Follow-up couldn't be loaded. Try again in a moment.")
+    import church_keys
+    if not church_keys.is_open(_uuid(business_id), session.user, "people_care"):
+        for card in out["follow_ups"]:
+            notes = card.get("notes") or []
+            card["notes"] = [n for n in notes if not n.get("pastors_only")]
+            card["pastors_notes_locked"] = len(notes) - len(card["notes"])
+        out["pastors_only_locked"] = True
     return out
 
 
