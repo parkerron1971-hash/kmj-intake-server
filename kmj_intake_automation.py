@@ -428,6 +428,11 @@ from member_portal import router as member_portal_router
 app.include_router(member_portal_router)
 from member_portal_church import router as member_portal_church_router
 app.include_router(member_portal_church_router)
+# The member directory (member_directory.py): a member's own yes and what
+# shows (POST /my/directory/me; GET /my/directory is member_portal.serve's),
+# and the office's switch, list and take-out (/member-portal/{biz}/directory).
+from member_directory import router as member_directory_router
+app.include_router(member_directory_router)
 # A group's own page in the member app: its Board, who's in it, asking to
 # join (GET /my/groups/<id> is member_portal.serve's).
 from member_portal_groups import router as member_portal_groups_router

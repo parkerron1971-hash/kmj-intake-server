@@ -661,7 +661,8 @@ def inbox_rows(business_id: str, me_id: str) -> Optional[Tuple[List[Dict[str, An
 
 def startable(business_id: str, me: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
     """People this member can message directly: group-mates (by the rules)
-    and their own family links. There is no member directory."""
+    and their own family links. (The member directory, member_directory.py,
+    links to /my/messages/to/<id> for the adults listed in it.)"""
     groups = my_groups(business_id, me["id"])
     if groups is None:
         return None

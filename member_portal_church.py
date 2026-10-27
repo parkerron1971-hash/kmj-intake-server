@@ -123,6 +123,10 @@ DONE = {
     "unvoted": "Your vote is taken back.",
     "names_first": "The group shows first names now.",
     "hidden": "Taken down. The church's safety officers will look at it.",
+    # The member directory (member_directory).
+    "dir_on": "You're in the directory. Only your name and photo show until you turn more on.",
+    "dir_saved": "Saved. The directory shows only what you chose.",
+    "dir_off": "You're out of the directory.",
 }
 ERRORS = {
     "full": "That one is full now.",
@@ -205,6 +209,10 @@ ERRORS = {
     "chat_photo_no": "That photo can't be shared in the group. Choose another.",
     "poll_closed": "Voting on that poll has closed.",
     "poll_gone": "That poll isn't there any more.",
+    "dir_closed": "The directory isn't open at your church right now.",
+    "dir_adults": "The directory is for adult members.",
+    "dir_members": "The directory is for members. If you're a member, ask the church office to mark you as one.",
+    "dir_removed": "The church office took you out of the directory, so you can't add yourself back. Ask the office.",
     "alert_used": "You've already sent an after-hours alert tonight. Turn it off to send this; it reaches phones in the morning.",
 }
 
@@ -443,8 +451,8 @@ def update_details(business_id: str, contact_id: str, details: Dict[str, Any]) -
 # ─── Groups ───────────────────────────────────────────────────────────
 # "My groups": the groups this member belongs to, and the current ones
 # open to new people that they could join. A member sees when and where a
-# group meets and its leaders' FIRST names — never who else belongs (no
-# member directory in v1). Joining an open group adds them as a member at
+# group meets and its leaders' FIRST names — never who else belongs (the
+# member directory, member_directory.py, is its own opt-in page). Joining an open group adds them as a member at
 # once; the leader sees them on the Groups page. A leader can't leave
 # here (they talk to the office), so a group is never left leaderless by
 # a tap.
@@ -828,7 +836,9 @@ def render_prayer(biz, site, request: Request, who: Optional[Dict[str, Any]] = N
 </form>""", tab="prayer", who=who, back=("/my", "Home"))
 
 
-def render_details(biz, site, request: Request, me: Dict[str, Any]) -> str:
+def render_details(biz, site, request: Request, me: Dict[str, Any], directory: str = "") -> str:
+    """`directory` is the member directory's part (member_directory.details_block),
+    its own form below the details: '' while the church has it off."""
     from member_portal import _e, _shell
     addr = (me.get("metadata") or {}).get("mailing_address") or {}
     if not isinstance(addr, dict):
@@ -850,7 +860,7 @@ def render_details(biz, site, request: Request, me: Dict[str, Any]) -> str:
   {field('state', 'State', 'address-level1')}
   {field('postal', 'ZIP code', 'postal-code')}
   <button class="mp-go" type="submit" style="margin-top:8px">Save my details</button>
-</form>""", tab="me", who=me, back=("/my/me", "Me"))
+</form>{directory}""", tab="me", who=me, back=("/my/me", "Me"))
 
 
 # ─── Home (member app, 2026-09-30) ────────────────────────────────────
@@ -1051,7 +1061,7 @@ async def _signed_in(request: Request):
 def _back(target: str, **q: str) -> RedirectResponse:
     from member_portal import _SECURE_HEADERS
     allowed = ("/my", "/my/me", "/my/events", "/my/prayer", "/my/details", "/my/groups", "/my/classes", "/my/live", "/my/messages",
-               "/my/notifications",
+               "/my/notifications", "/my/directory",
                "/my/kids/stories", "/my/kids/sundays", "/my/kids/family")
     if (target not in allowed and not re.fullmatch(r"/my/(groups/live|messages)/[0-9a-f-]{36}", target)
             and not re.fullmatch(r"/my/groups/([0-9a-fA-F-]{36}(/(board|people|chat|prayer|meet))?|leaders)", target)
@@ -1205,15 +1215,22 @@ async def groups(request: Request):
 def connect_tabs(biz, current: str) -> str:
     """Connect's pages under one title: Groups; Classes when the church has
     a published class (member_portal_classes.TAB, set for this request);
-    Messages when the church has messaging on. '' when Groups is alone."""
+    Messages when the church has messaging on; Directory when the church has
+    its member directory on, in Church (never in Youth or Kids). '' when
+    Groups is alone."""
     import member_app_ui as ui
+    import member_directory
     import member_portal_classes as mcl
     import member_portal_messaging as mpm
+    import member_spaces as msp
     tabs = [("groups", "/my/groups", "Groups")]
     if mcl.TAB.get():
         tabs.append(("classes", "/my/classes", "Classes"))
     if mpm.turned_on(biz):
         tabs.append(("messages", "/my/messages", "Messages"))
+    ctx = msp.CURRENT.get() or {}
+    if member_directory.church_on(biz) and ctx.get("space", "church") == "church" and not ctx.get("youth"):
+        tabs.append(("directory", "/my/directory", "Directory"))
     if len(tabs) == 1:
         return ""
     return ui.segmented(tuple(tabs), current, "Connect")
