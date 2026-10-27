@@ -440,6 +440,10 @@ app.include_router(member_portal_church_router)
 # and the office's switch, list and take-out (/member-portal/{biz}/directory).
 from member_directory import router as member_directory_router
 app.include_router(member_directory_router)
+# Ask the church (member_asks.py): a member's room, help, visit, life event
+# and pledge asks, and the office's choices. Before the site catch-all.
+from member_asks import router as member_asks_router
+app.include_router(member_asks_router)
 # A group's own page in the member app: its Board, who's in it, asking to
 # join (GET /my/groups/<id> is member_portal.serve's).
 from member_portal_groups import router as member_portal_groups_router
