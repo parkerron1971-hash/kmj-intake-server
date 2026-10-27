@@ -3,11 +3,10 @@ title: A first-time check-in starts a welcome follow-up (kids desk + the office'
 date: 2026-10-26
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-10-26, his "who sees what" plan for churches: "yes, a first-time check-in starts a welcome follow-up"'
-status: in progress
+status: shipped
 prs: [kmj-intake-server#1594]
 migrations: []
 left_undone:
-  - "Switch on Thursday: it ships dark, and nothing happens until CHURCH_AREAS=on in Railway; unset it reads as owner, which does not start these"
   - "A name-only first-time guest (checked in without a Members record) can't be followed up: church_follow_ups needs a contact. They stay on the First-time guests list"
   - "Someone already in follow-up (a Plan your visit card, say) gets no note that they came; their open follow-up is left as it is"
   - "Leaders & roles still describes the welcome job as Plan your visit cards and Connect cards; first check-ins ride the connect stream, so a church whose roles take connect cards gets them"
@@ -46,3 +45,5 @@ a blocking hook, an unguarded hook, earlier visits ignored, a failed read
 read as new, one per child, grandparent first, not a church let through,
 the occasion routing, the sweep without the family key, finished
 follow-ups ignored, a quiet window too short or endless, ...).
+
+Shipped: merged and switched on 2026-10-26 evening (Kevin set CHURCH_AREAS=on on kmj-intake-server and kmj-intake-worker; checked both read exactly on; the worker redeployed 20:09 EDT).

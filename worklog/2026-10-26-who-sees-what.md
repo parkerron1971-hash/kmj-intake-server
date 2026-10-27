@@ -3,10 +3,10 @@ title: Who sees what — each church login sees its areas, My week, one Serve ta
 date: 2026-10-26
 agent: Claude Code (Claude Opus 5.5)
 asked: "yes go with your picks and build it. make sure the design for frontend is top tier"
-status: in progress
+status: shipped
 prs: [kmj-intake-server#1593, kmj-intake-server (this PR, My week), kmj-intake-server#1594, solutionist-studio#1362]
 migrations: [supabase/APPLY-2026-10-26-login-areas.sql]
-left_undone: ["the Serve tab in the member app", "apply supabase/APPLY-2026-10-26-login-areas.sql (picks answer didn't save until then)", "the morning brief and Chief narrowed per person", "tasks handed to a person", "Areas & Keys steps 2-3 (the walls)"]
+left_undone: ["Chief narrowed per person (Chief still answers a limited login about the whole church, giving included)", "Areas & Keys steps 2-3 (the walls)"]
 decisions: ["Kevin's picks: the tab is called Serve; a first-time check-in starts a welcome follow-up; volunteers get a part, not an office login; every login shares the church calendar", "the owner and admins see everything; a login nothing places sees everything, as before", "Giving is never offered as a login's area: money stays walled to owner, admin and accountant", "everything rides CHURCH_AREAS: off | owner | on; switches on on a Thursday (this is the quiet week)"]
 related: [2026-10-23-church-areas-and-keys.md]
 ---
@@ -27,3 +27,5 @@ Before building more here: this only shapes what the app shows. Every router sti
 its own role; the walls are Areas & Keys steps 2 and 3.
 
 My week (`church_my_week.py`, `GET /church/my-week`, `/church/my-week/status`): a church login's first page. The most pressing thing handed to them (a follow-up by their sign-in email, late before new; Prayer & care handed to their login as one line with nothing of what was asked), one line per area they work in from the map (the whole church for the owner and admins, never Giving for anyone else), what's missing in their areas, and what was handed across this week (follow-ups started, from the card or the kids desk to the role, and where each is now). A failed read is a 503.
+
+Shipped: merged and switched on 2026-10-26 evening (Kevin set CHURCH_AREAS=on on kmj-intake-server and kmj-intake-worker; checked both read exactly on; the worker redeployed 20:09 EDT).
