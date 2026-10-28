@@ -3,8 +3,8 @@ title: Church areas, step 2 — the Giving doors (who gave what, the bank and pa
 date: 2026-10-27
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-10-23: "if Pastor look at money another leader is notified and have to recieve a code from that person to get into money"; 2026-10-26: "go with your picks" (the lock binds the owner too; guarded at the start: giving names and bank, kids medical notes, pastors-only notes) and "go ahead, you build step 2 after the media fixes"'
-status: in progress
-prs: [kmj-intake-server (this PR)]
+status: shipped
+prs: ["kmj-intake-server#1621"]
 migrations: []
 left_undone:
   - "The Kids and Care doors (the next server PR): medical and custody notes in kids_router and kids_checkin; pastors-only notes on the follow-up board and private_care's see-everything branch"

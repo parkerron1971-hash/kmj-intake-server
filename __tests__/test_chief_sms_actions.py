@@ -381,9 +381,10 @@ def test_verb_is_registered_classified_and_in_the_prompt(verb):
 
 
 def test_no_broadcast_verb_exists():
-    """Deliberate. /sms/broadcast gates on opt-out only and never calls
-    has_sms_consent, while campaigns_router runs the same bulk traffic
-    through the consent check and quiet hours. A verb is what the model
-    reaches for, so wrapping the weaker path would make it the default."""
+    """Deliberate. /sms/broadcast is a person pressing a button: it texts
+    only people who said yes (2026-10-28) but keeps no quiet hours, while
+    campaigns_router runs the same bulk traffic through the consent check
+    and quiet hours. A verb is what the model reaches for, so wrapping the
+    weaker path would make it the default."""
     assert "broadcast_sms" not in cos.ACTION_HANDLERS
     assert "send_broadcast" not in cos.ACTION_HANDLERS

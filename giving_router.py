@@ -1428,6 +1428,27 @@ def giving_records(business_id: str, year: Optional[int] = None, user: AuthedUse
     return {"rows": rows, "year": year}
 
 
+# What a gift was worth, when, and to which fund: never who gave it, its
+# note, or its number. The Giving keeper guards the names, not the picture,
+# so this read has no wall: the church's Home, its giving goal and the
+# board's year stay right for an owner the keeper hasn't let in. The same
+# people as the records (owner, admin, the outside accountant).
+GIFT_AMOUNT_FIELDS = ("paid_at", "total", "refund_amount_cents", "gift_fund", "category")
+
+
+@router.get("/giving/{business_id}/amounts")
+def giving_amounts(business_id: str, year: Optional[int] = None, user: AuthedUser = Depends(require_user)):
+    from giving_records import require_finance, read_gifts
+    require_finance(business_id, user)
+    year = year or datetime.now(timezone.utc).year
+    if not 2000 <= year <= 2200:
+        raise HTTPException(400, "Choose a valid year")
+    rows = read_gifts(business_id, f"{year}-01-01T00:00:00Z", f"{year+1}-01-01T00:00:00Z")
+    return {"rows": [{**{k: r.get(k) for k in GIFT_AMOUNT_FIELDS},
+                      "manual": str(r.get("invoice_number") or "").startswith("GIVE-manual-")} for r in rows],
+            "year": year}
+
+
 def _manual_gift_fields(business_id, body):
     from decimal import Decimal, InvalidOperation
     from datetime import date

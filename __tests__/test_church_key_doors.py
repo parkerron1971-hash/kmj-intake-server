@@ -183,6 +183,47 @@ def test_revenue_and_profitability_keep_their_totals_and_leave_out_the_givers(ch
     assert "Marcus" in reports_router.export(BIZ, "revenue", user=PEOPLE["treasurer"]).body.decode()
 
 
+def _gift(gid, **kw):
+    return {"id": gid, "business_id": BIZ, "is_gift": True, "status": "paid", "paid_at": "2026-10-05T15:00:00Z",
+            "invoice_number": f"GIVE-{gid}", "total": 50.0, "refund_amount_cents": 0, "gift_fund": "General",
+            "category": None, "notes": "", "payment_method": "card", "contact_id": "c1",
+            "contacts": {"name": "Marcus Hill", "email": "marcus@example.com"}, **kw}
+
+
+def test_the_amounts_stay_open_to_the_finance_roles_and_never_name_a_giver(church):
+    church.t["invoices"] = [
+        _gift("a1", invoice_number="GIVE-manual-8f2", gift_fund="Building", category="restricted",
+              notes="In memory of Ruth", payment_method="cash"),
+        _gift("a2", total=120.0, refund_amount_cents=2000, paid_at="2026-10-26T14:30:00Z"),
+        _gift("a3", is_gift=False, invoice_number="INV-0007"),
+        _gift("a4", paid_at="2025-12-28T15:00:00Z"),
+        _gift("a5", status="refunded"),
+    ]
+    want = {"year": 2026, "rows": [
+        {"paid_at": "2026-10-05T15:00:00Z", "total": 50.0, "refund_amount_cents": 0, "gift_fund": "Building",
+         "category": "restricted", "manual": True},
+        {"paid_at": "2026-10-26T14:30:00Z", "total": 120.0, "refund_amount_cents": 2000, "gift_fund": "General",
+         "category": None, "manual": False},
+    ]}
+    # Locked out of the names (the records), never out of the picture: the
+    # owner, the admins and the outside accountant, as the records' rule.
+    for who in (PEOPLE["owner"], PEOPLE["pastor"], PEOPLE["admin"], PEOPLE["treasurer"], ACCOUNTANT):
+        assert giving_router.giving_amounts(BIZ, 2026, user=who) == want
+    _locked(giving_router.giving_records, BIZ, 2026, user=PEOPLE["pastor"])
+    assert "Marcus" not in str(giving_router.giving_amounts(BIZ, 2026, user=PEOPLE["pastor"]))
+    assert giving_router.giving_amounts(BIZ, 2025, user=PEOPLE["pastor"])["rows"][0]["paid_at"].startswith("2025-12")
+    e = _refused(giving_router.giving_amounts, BIZ, 2026, user=PEOPLE["member"])
+    assert e.status_code == 403 and "Giving records" in e.detail
+    assert _refused(giving_router.giving_amounts, BIZ, 1999, user=PEOPLE["pastor"]).status_code == 400
+
+
+def test_a_failed_read_of_the_amounts_is_a_503_never_zero(church, monkeypatch):
+    real = sb_clients.sb_get_as_service
+    monkeypatch.setattr(sb_clients, "sb_get_as_service",
+                        lambda path, **k: None if path.startswith("/invoices") else real(path, **k))
+    assert _refused(giving_router.giving_amounts, BIZ, 2026, user=PEOPLE["owner"]).status_code == 503
+
+
 def test_no_keeper_no_lock_and_other_businesses_are_never_locked(db, reader):
     db.t["businesses"][0]["stripe_account_id"] = "acct_love"
     db.t["invoices"] = []
