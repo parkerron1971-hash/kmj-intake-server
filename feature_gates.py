@@ -290,6 +290,24 @@ def _limits_of(plan: Optional[str]) -> Dict[str, Optional[int]]:
     return limits.get((plan or "").strip().lower()) or limits["starter"]
 
 
+def seat_overrides() -> Dict[str, int]:
+    """SEAT_LIMIT_OVERRIDES="<business id>:<seats>,...": more logins for one
+    business than its plan carries (Kevin 2026-10-28: Love City's staff and
+    its board member need more than the top plan's 7). An env var the
+    platform sets, never a column the business could write itself.
+    Malformed entries are skipped."""
+    out: Dict[str, int] = {}
+    for part in (os.environ.get("SEAT_LIMIT_OVERRIDES") or "").split(","):
+        bid, _, n = part.strip().partition(":")
+        try:
+            seats = int(n.strip())
+        except ValueError:
+            continue
+        if bid.strip() and seats > 0:
+            out[bid.strip()] = seats
+    return out
+
+
 def limit_for(business_row: Optional[Dict[str, Any]], limit: str) -> Optional[int]:
     """The numeric limit for a business's tier; None = unlimited. Unenforced
     (and unlimited) until BILLING_ENFORCE=on AND a plan exists."""
@@ -300,7 +318,14 @@ def limit_for(business_row: Optional[Dict[str, Any]], limit: str) -> Optional[in
         return plan_limits()["starter"].get(limit)
     if limit == "chief_messages_monthly":
         return monthly_credits(business_row, plan)
-    return _limits_of(plan).get(limit)
+    value = _limits_of(plan).get(limit)
+    if limit == "max_seats" and value is not None:
+        # Only ever raises, and only while the business has a plan: a
+        # lapsed business falls back to Starter's one seat as before.
+        more = seat_overrides().get(str((business_row or {}).get("id") or ""))
+        if more:
+            value = max(value, more)
+    return value
 
 
 def is_founder_price(business_row: Optional[Dict[str, Any]]) -> bool:

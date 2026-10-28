@@ -226,6 +226,27 @@ def test_seat_cap_and_invite_flow(fake, monkeypatch):
     assert bl.can_add_seat("b1")["allowed"] is True
 
 
+def test_seat_override_raises_one_business(fake, monkeypatch):
+    """SEAT_LIMIT_OVERRIDES gives one business more logins than its plan
+    (Love City, 2026-10-28); it never lowers a cap, never reaches another
+    business, and a lapsed business keeps Starter's one seat."""
+    monkeypatch.setenv("BILLING_ENFORCE", "on")
+    fb = fake
+    fb.rows("businesses").append({"id": "church", "owner_id": "owner1", "comp_tier": "practice"})
+    fb.rows("businesses").append({"id": "other", "owner_id": "owner1", "comp_tier": "practice"})
+    fb.rows("businesses").append({"id": "lapsed", "owner_id": "owner1"})
+    monkeypatch.setenv("SEAT_LIMIT_OVERRIDES", "church:10, other:3, lapsed:10, junk, bad:x")
+    assert bl.can_add_seat("church")["limit"] == 10
+    assert bl.can_add_seat("other")["limit"] == 7        # never lowers
+    assert bl.can_add_seat("lapsed")["limit"] == 1       # no plan, no override
+    for i in range(7):
+        fb.rows("business_users").append({"id": f"u{i}", "business_id": "church", "status": "active"})
+    assert bl.seat_count("church") == 8
+    assert bl.can_add_seat("church")["allowed"] is True  # the 8th login and beyond
+    monkeypatch.delenv("SEAT_LIMIT_OVERRIDES")
+    assert bl.can_add_seat("church")["allowed"] is False
+
+
 def test_validate_is_the_prelogin_front_door(fake, monkeypatch):
     """A brand-new invitee has no session, so the auth screen needs a
     no-auth validate (like /access/invites/validate) to unlock sign-up
