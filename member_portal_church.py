@@ -832,8 +832,11 @@ def render_events(biz, site, request: Request, occasions: Optional[List[Dict[str
     else:
         import member_app_samples as samples
         hint = ui.sample_hint(samples.WHERE["events"]) if any(samples.is_sample(o) for o in occasions) else ""
-        # On a computer the cards sit on a grid (hm-grid); a phone lists them.
-        body = hint + '<div class="hm-grid">' + "".join(occasion_card(o, "/my/events") for o in occasions) + "</div>"
+        # On a computer: an agenda (each card beside its day) and the month
+        # beside it (month_card); a phone lists the cards as it always has.
+        from member_portal import band
+        rows = "".join(_agenda_row(o) for o in occasions)
+        body = hint + band(f'<div class="hm-grid">{rows}</div>', month_card(occasions), cls="hm-lead")
         if any(o.get("signup") for o in occasions):
             import church_event_signups
             body = church_event_signups.MEMBER_CSS + body
@@ -842,6 +845,58 @@ def render_events(biz, site, request: Request, occasions: Optional[List[Dict[str
 <p class="mb-sub" style="margin-bottom:18px">Let the church know you're coming, or sign up to serve.</p>
 {_flash(request)}
 {body}""", tab="events", who=who, back=("/my", "Home"), wide=True)
+
+
+def _agenda_row(o: Dict[str, Any]) -> str:
+    """Coming up on a computer: an occasion's card beside its day (oc-day,
+    filled when this person said yes). A phone sees only the card."""
+    d = _day(o.get("date") or "")
+    mine = (o.get("mine") or {}).get("status") == "yes"
+    day = (f'<time class="oc-day" datetime="{d.isoformat()}" aria-hidden="true">{d.strftime("%a")}'
+           f'<b>{d.day}</b>{d.strftime("%b")}</time>') if d else ""
+    return f'<div class="oc-row{" is-mine" if mine else ""}">{day}{occasion_card(o, "/my/events")}</div>'
+
+
+def month_card(occasions: List[Dict[str, Any]], today: Optional[date] = None) -> str:
+    """Coming up on a computer: the month beside the list (two when the
+    list runs into the next), each day with something on marked and
+    linked to its card, filled when this person said yes, today ringed.
+    '' when no occasion has a date. A phone never shows it (oc-cal)."""
+    import calendar
+    from member_portal import _e
+    today = today or date.today()
+    days: Dict[date, Dict[str, Any]] = {}
+    for o in occasions:
+        d = _day(o.get("date") or "")
+        if not d:
+            continue
+        cur = days.setdefault(d, {"href": f"#mp-occ-{o.get('entry_id')}", "titles": [], "mine": False})
+        cur["titles"].append(o.get("title") or "")
+        cur["mine"] = cur["mine"] or (o.get("mine") or {}).get("status") == "yes"
+    if not days:
+        return ""
+    first, last = min(days), max(days)
+    months = [(first.year, first.month)]
+    if (last.year, last.month) != months[0]:
+        months.append((first.year + first.month // 12, first.month % 12 + 1))
+    out = []
+    for y, m in months:
+        cells = "".join(f'<span class="oc-wd" aria-hidden="true">{w}</span>' for w in "SMTWTFS")
+        cells += "<span></span>" * ((date(y, m, 1).weekday() + 1) % 7)   # the week starts on Sunday
+        for n in range(1, calendar.monthrange(y, m)[1] + 1):
+            d = date(y, m, n)
+            ring = " is-today" if d == today else ""
+            info = days.get(d)
+            if info:
+                label = _e(f'{d.strftime("%A, %B")} {n}: {", ".join(info["titles"])}')
+                cells += (f'<a class="{"is-mine" if info["mine"] else ""}{ring}" href="{_e(info["href"])}" title="{label}" '
+                          f'aria-label="{label}">{n}</a>')
+            else:
+                cells += f'<span class="{ring.strip()}" aria-hidden="true">{n}</span>' if ring else f'<span aria-hidden="true">{n}</span>'
+        name = date(y, m, 1).strftime("%B %Y")
+        out.append(f'<section class="oc-month" aria-label="{name}"><h2>{name}</h2><div class="oc-grid">{cells}</div></section>')
+    key = '<p class="oc-key"><span><i></i>Something on</span><span><i class="mine"></i>You&#x27;re going</span></p>'
+    return f'<aside class="oc-cal" aria-label="The month">{"".join(out)}{key}</aside>'
 
 
 def render_prayer(biz, site, request: Request, who: Optional[Dict[str, Any]] = None) -> str:

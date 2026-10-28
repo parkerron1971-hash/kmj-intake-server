@@ -131,7 +131,11 @@ def test_home_on_a_computer_reads_in_rows_in_the_phones_order():
     assert 'class="hm-band hm-lead"' in body and 'class="hm-band hm-cards"' in body
     assert (body.index('class="mb-hero"') < body.index('class="mb-quick"') < body.index('id="mb-today-h"')
             < body.index('id="mb-latest"'))
-    assert ".hm-band,.hm-col,.hm-grid{display:contents;}" in page              # a phone: no rows
+    assert ".hm-band,.hm-col,.hm-grid,.hm-txt,.oc-row{display:contents;}" in page   # a phone: no rows
+    assert ".hm-only,.mb-side,.oc-day,.oc-cal{display:none;}" in page              # nor what's a computer's
+    # The next messages under the latest, on a computer only.
+    more = body[body.index('id="mb-latest"'):]
+    assert 'class="mb-list mb-cards hm-only hm-more"' in more and "Deliverance" in more
     assert "body.mb-wide .mb-top,body.mb-wide .mp-shell{max-width:1180px;}" in page
     # A row leaves out what's empty; nothing at all is no row.
     assert mp.band("", "  ") == ""
@@ -142,6 +146,68 @@ def test_home_on_a_computer_reads_in_rows_in_the_phones_order():
     req = type("R", (), {"query_params": {}})()
     prayer = mpc.render_prayer(_biz(), None, req, who=ME)
     assert "mb-wide" not in prayer[prayer.index("<body"):prayer.index("<body") + 40]
+
+
+def test_on_a_computer_the_tab_bar_is_a_sidebar():
+    """From 1200px the tab bar is a sidebar: the church's name at the top,
+    the pages with no tab of their own under "Your church", who's signed in
+    at the foot (opening Me). A phone never shows those parts (mb-side)."""
+    page = mp.render_home(_biz(), None, me=ME, occasions=[], groups={"mine": [], "open": []},
+                          library=None, give_url="/my/give")
+    bar = page[page.index('<nav class="mb-nav'):]
+    bar = bar[:bar.index("</nav>")]
+    assert bar.index('class="mb-side mb-side-top"') < bar.index('class="mb-tab"') < bar.index('class="mb-side mb-side-more"')
+    assert 'href="/my/events"' in bar and 'href="/my/prayer"' in bar and "Your church" in bar
+    assert "<strong>Ana</strong>" in bar and "Ana Rivers" not in bar and 'href="/my/me"' in bar
+    # The page you're on is marked in the sidebar too.
+    req = type("R", (), {"query_params": {}})()
+    prayer = mpc.render_prayer(_biz(), None, req, who=ME)
+    side = prayer[prayer.index('class="mb-side mb-side-more"'):]
+    assert '<a href="/my/prayer" aria-current="page">' in side
+    me_page = mp.render_me(_biz(), None, me=ME, people=[ME], year=2026, gifts=[], give_url="", this_year=2026)
+    assert '<a href="/my/me" aria-current="page"><span class="mb-side-av">' in me_page
+    # A church that made Prayer a tab of its own has no second way in.
+    biz = _biz()
+    biz["settings"] = {"member_portal": {"tabs": ["home", "watch", "bible", "give", "prayer"]}}
+    own = mpc.render_prayer(biz, None, req, who=ME)
+    more = own[own.index('class="mb-side mb-side-more"'):]
+    assert 'href="/my/prayer"' not in more[:more.index("</div>")]
+
+
+def test_watch_on_a_computer_is_a_cinema_then_every_message_on_a_grid():
+    """Watch on a computer: the latest message's art beside its title, the
+    next live under that, then the series, then every message on a grid.
+    A phone reads them in the same order as before."""
+    page = mps.render_library(_biz(), None, ME, _lib())
+    body = page[page.index("<body"):]
+    assert 'class="hm-band wt-cine"' in body and 'class="mb-list mb-cards wt-grid"' in body
+    assert (body.index('class="mb-livecard"') < body.index('id="mb-feat-h"') < body.index(">Series<")
+            < body.index(">All messages<"))
+    feat = body[body.index('class="mb-feat"'):body.index("</section>", body.index('class="mb-feat"'))]
+    assert feat.index('class="mb-mtile-art"') < feat.index('class="hm-txt"') < feat.index('id="mb-feat-h"')
+
+
+def test_coming_up_on_a_computer_is_an_agenda_beside_the_month():
+    """Coming up on a computer: each card beside its day, the month beside
+    the list with the days that have something on linked to their cards
+    (filled when this person said yes), today ringed."""
+    occ = [_occ("e1", "Sunday Worship", day="2026-10-18"),
+           _occ("e2", "Prayer Night", {"status": "yes"}, day="2026-10-21")]
+    req = type("R", (), {"query_params": {}})()
+    page = mpc.render_events(_biz(), None, req, occ, who=ME)
+    assert '<div class="oc-row"><time class="oc-day" datetime="2026-10-18"' in page
+    assert '<div class="oc-row is-mine"><time class="oc-day" datetime="2026-10-21"' in page
+    cal = mpc.month_card(occ, today=date(2026, 10, 28))
+    assert "October 2026" in cal and 'href="#mp-occ-e1"' in cal
+    assert '<a class="is-mine" href="#mp-occ-e2"' in cal
+    assert '<span class="is-today" aria-hidden="true">28</span>' in cal
+    assert cal.count('<span aria-hidden="true">') + cal.count("is-today") + cal.count("<a ") == 31
+    # October 2026 starts on a Thursday: four blank days before the 1st.
+    assert cal.count("<span></span>") == 4
+    # Into the next month: two months. No dates: no month.
+    two = mpc.month_card(occ + [_occ("e3", "Harvest", day="2026-11-02")], today=date(2026, 10, 28))
+    assert "October 2026" in two and "November 2026" in two
+    assert mpc.month_card([_occ("e4", "Someday", day="")]) == ""
 
 
 # ─── Me ──────────────────────────────────────────────────────────────
@@ -353,8 +419,9 @@ def test_the_bar_is_home_watch_bible_give_connect_and_me_is_the_picture(monkeypa
     page = mp._shell(_biz(), None, "Live", "<p>x</p>", tab="live", who=ME)
     nav = page[page.index('aria-label="Main"'):]
     order = [nav.index(f'href="{h}"') for h in ("/my", "/my/sermons", "/my/bible", "/my/give", "/my/groups")]
-    assert order == sorted(order) and 'href="/my/sermons" aria-current="page"' in nav and "/my/me" not in nav
-    assert "/my/live" not in nav
+    assert order == sorted(order) and 'href="/my/sermons" aria-current="page"' in nav
+    # No Me tab (Me is the picture; on a computer, the sidebar's foot too).
+    assert 'class="mb-tab" href="/my/me"' not in nav and "/my/live" not in nav
     me = mp._shell(_biz(), None, "Me", "<p>x</p>", tab="me", who=ME)
     assert 'href="/my/me" aria-label="Me" aria-current="page">AR<' in me
 

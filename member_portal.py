@@ -561,6 +561,36 @@ def _body_class(door: bool, space: str, tab: Optional[str], wide: bool = False) 
     return f' class="{" ".join(names)}"' if names else ""
 
 
+def _side(biz: Dict[str, Any], tab: Optional[str], space: str, brand: str,
+          who: Optional[Dict[str, Any]], pic: str) -> Tuple[str, str]:
+    """The sidebar's own parts on a computer (member_app_ui: from 1200px
+    the tab bar is a sidebar): the church's logo or name at the top; under
+    "Your church", the pages with no tab of their own; who's signed in at
+    the foot by their first name (a group in first-names mode shows no full
+    name anywhere on the page), which opens Me. A phone never shows them
+    (mb-side)."""
+    import member_app_ui as ui
+    head = f'<div class="mb-side mb-side-top"><a class="mb-side-brand" href="/my">{brand}</a></div>'
+    links = []
+    if space == "church":
+        for key, href, ic, label in (("events", "/my/events", "calendar", "Coming up"),
+                                     ("prayer", "/my/prayer", "pray", "Prayer")):
+            if ui.in_church_bar(biz, key):
+                continue
+            cur = ' aria-current="page"' if tab == key else ""
+            links.append(f'<a href="{href}"{cur}>{ui.icon(ic, 20)}<span>{label}</span></a>')
+    more = (f'<div class="mb-side mb-side-more"><p class="mb-side-h">Your church</p>{"".join(links)}</div>'
+            if links else "")
+    me = ""
+    if who:
+        face = f'<img src="{_e(pic)}" alt="">' if pic else _e(ui.initials(who.get("name")))
+        cur = ' aria-current="page"' if tab == "me" else ""
+        me = (f'<div class="mb-side mb-side-me"><a href="/my/me"{cur}><span class="mb-side-av">{face}</span>'
+              f'<span><strong>{_e((who.get("name") or "").split()[0] if (who.get("name") or "").strip() else "Me")}</strong>'
+              f'<small>Your account</small></span></a></div>')
+    return head, more + me
+
+
 def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
            body: str, *, script: str = "", tab: Optional[str] = None,
            who: Optional[Dict[str, Any]] = None, bare: bool = False, bar: bool = True,
@@ -577,7 +607,7 @@ def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
     page before sign-in (member_app_signin), which draws its own top and
     foot. `news_n` (Home, when the church has news) puts the bell at the top
     right, with how many posts are new (member_portal_news). `wide` lays
-    the page out for a computer (member_app_ui: 1180px beside the tab rail,
+    the page out for a computer (member_app_ui: 1180px beside the sidebar,
     its rows side by side, see band()); a phone never sees a difference.
     The look is member_app_ui's."""
     import member_app_ui as ui
@@ -659,7 +689,8 @@ def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
   {body}
   {'' if door else f'<footer class="mp-foot mp-noprint">Your page at {_e(name)} · Powered by Solutionist</footer>'}
 </main>
-{ui.nav(tab, space=space, kids_parent=bool(ctx.get("kids_parent")), lead=bool(ctx.get("lead")), biz=biz) if signed_in and bar else ''}
+{ui.nav(tab, space=space, kids_parent=bool(ctx.get("kids_parent")), lead=bool(ctx.get("lead")), biz=biz,
+        side=_side(biz, tab, space, brand, who, mine)) if signed_in and bar else ''}
 {'' if bare or door else ui.SCROLL_JS}
 {script}
 {mai.REGISTER_JS}
@@ -899,7 +930,7 @@ e.textContent='';e.append(g+', ',em);}
     # in beside Today; the latest message beside the church's tiles; this
     # week; then the small cards. The order is the phone's, so a phone
     # reads it exactly as before. Pictures are chosen in this same order.
-    latest = mps.latest_card(library, pal, pool=pool, used=used, site=site)
+    latest = mps.latest_card(library, pal, pool=pool, used=used, site=site, more=2)
     tiles = mpc.home_tiles(biz, site, pool, used, edit=edit)
     week = mpc.week_cards(occasions, groups, pal=pal, pool=pool, used=used, skip=first, biz=biz, edit=edit)
     lower = [b for b in (latest, tiles, week) if (b or "").strip()]

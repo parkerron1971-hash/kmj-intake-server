@@ -596,7 +596,7 @@ def segmented(items: Tuple[Tuple[str, str, str], ...], current: str, label: str)
 
 
 def nav(active: Optional[str], *, give: bool = True, space: str = "church", kids_parent: bool = True,
-        lead: bool = False, biz: Optional[Dict[str, Any]] = None) -> str:
+        lead: bool = False, biz: Optional[Dict[str, Any]] = None, side: Tuple[str, str] = ("", "")) -> str:
     """The tab bar. Give is always there (Kevin, 2026-10-15): before the
     church takes gifts in the app, it says how to give
     (member_portal.render_give_off). Youth and Kids have their own bars;
@@ -604,7 +604,8 @@ def nav(active: Optional[str], *, give: bool = True, space: str = "church", kids
     church's bar is the one it picked (church_tabs; today's when it picked
     none), and a church leader (lead=True) gets Lead last. On a wide
     screen the bar is a rail down the left (Kevin, 2026-10-17: a desktop
-    view too)."""
+    view too), and wider still a sidebar, with `side` = (what goes above
+    the tabs, what goes below them) shown only there (member_portal._side)."""
     if space == "youth":
         tabs, of = YOUTH_TABS, YOUTH_TAB_OF
     elif space == "kids":
@@ -628,7 +629,7 @@ def nav(active: Optional[str], *, give: bool = True, space: str = "church", kids
                      f'stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" '
                      f'aria-hidden="true" focusable="false">{paths}</svg></i><span>{label}</span></a>')
     return (f'<nav class="mb-nav mp-noprint" aria-label="Main" style="grid-template-columns:repeat({len(items)},1fr)">'
-            f'{"".join(items)}</nav>')
+            f'{side[0]}{"".join(items)}{side[1]}</nav>')
 
 
 # Geist for everything; Newsreader for scripture and the greeting's name.
@@ -1214,11 +1215,15 @@ td.n,th.n{text-align:right;font-variant-numeric:tabular-nums;}
    their account on desktop or mobile phone"). A page that asks for it
    (_shell wide=True) is 1180px wide beside the tab rail, and its rows
    (member_portal.band) sit side by side. On a phone a row's wrappers
-   vanish (display:contents) and the page reads exactly as it always has. */
-.hm-band,.hm-col,.hm-grid{display:contents;}
+   vanish (display:contents) and the page reads exactly as it always has;
+   what only a computer shows (hm-only, the sidebar's mb-side, Coming up's
+   days and month) is display:none on a phone. */
+.hm-band,.hm-col,.hm-grid,.hm-txt,.oc-row{display:contents;}
+.hm-only,.mb-side,.oc-day,.oc-cal{display:none;}
 @media (min-width:1000px){
   body.mb-wide .mb-top,body.mb-wide .mp-shell{max-width:1180px;}
   body.mb-wide .mb-seg{max-width:420px;}
+  body.mb-wide .hm-only{display:block;}
   .hm-band{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(0,1fr);gap:28px;align-items:start;margin:40px 0 0;}
   .mb-hello-wrap+.hm-band{margin-top:10px;}
   .hm-col{display:block;min-width:0;}
@@ -1238,9 +1243,120 @@ td.n,th.n{text-align:right;font-variant-numeric:tabular-nums;}
   .hm-cards>.hm-col:not(:has(>:not([hidden],style,script))){display:none;}
   .hm-band>.hm-col:only-child .mb-bento{grid-template-columns:repeat(4,minmax(0,1fr));}
   .hm-band>.hm-col:only-child .mb-bt.is-wide{grid-column:span 2;}
+  /* a row to swipe is a grid on a computer: nothing scrolls sideways */
+  .hm-col .mb-rail{display:grid;grid-template-columns:repeat(auto-fill,minmax(var(--cell,200px),1fr));gap:22px 16px;overflow:visible;
+    scroll-snap-type:none;}
+  .hm-col .mb-rail>*{width:auto;min-width:0;}
+  .hm-col .mb-rail .mb-ev-p{aspect-ratio:4/3;}
+  .hm-col .mb-rail:has(>.mb-ser){--cell:250px;}
+  .hm-col .mb-rail:has(>.mb-find){--cell:220px;}
+  .hm-more{margin-top:14px;}
+  /* Watch: the latest message as a cinema, then the series, then every
+     message on a grid */
+  .wt-cine{position:relative;margin-top:22px;}
+  .wt-cine::before{content:"";position:absolute;inset:-70px 0 -50px;z-index:-1;pointer-events:none;
+    background:radial-gradient(52% 68% at 30% 48%,color-mix(in srgb,var(--pg,var(--acc)) 22%,transparent),transparent 72%);}
+  .wt-cine>.hm-col{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(0,1fr);column-gap:48px;align-items:center;}
+  .wt-cine .mb-feat{display:contents;}
+  .wt-cine .mb-feat>.mb-mtile-art{grid-column:1;grid-row:1 / span 2;border-radius:var(--r-lg);box-shadow:0 30px 70px rgba(0,0,0,.42);}
+  .wt-cine .hm-txt{display:block;grid-column:2;grid-row:1;align-self:end;}
+  .wt-cine .mb-livecard{grid-column:2;grid-row:2;align-self:start;margin:26px 0 0;}
+  .wt-cine .mb-feat>.mb-hint{grid-column:1 / -1;grid-row:3;margin:16px 0 0;}
+  .wt-cine .hm-txt .mb-kick{margin-top:0;}
+  .wt-cine .hm-txt h2{font-size:44px;line-height:1.02;letter-spacing:-.045em;margin:10px 0 10px;text-wrap:balance;}
+  .wt-cine .hm-txt .mb-meta{font-size:16px;}
+  .wt-cine .mb-acts{margin-top:24px;}
+  .mb-cards.wt-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:28px 18px;background:none;border-radius:0;overflow:visible;}
+  .mb-cards.wt-grid li::before{display:none;}
+  .mb-cards.wt-grid a{flex-direction:column;align-items:stretch;gap:0;padding:0;min-height:0;}
+  .mb-cards.wt-grid .mb-thumb{width:100%;height:auto;aspect-ratio:16/9;border-radius:var(--r-md);}
+  .mb-cards.wt-grid .mb-thumb .mb-art{padding:16px 18px;}
+  .mb-cards.wt-grid .mb-thumb .mb-titled b,.mb-cards.wt-grid .mb-thumb .mb-art-title{font-size:22px;padding:0;}
+  .mb-cards.wt-grid .mb-list-text{padding:12px 2px 0;}
+  .mb-cards.wt-grid .mb-list-text strong{font-size:16px;white-space:normal;}
+  .mb-cards.wt-grid .mb-list-text span{white-space:normal;}
+  /* Coming up: an agenda, the day beside each card, the month beside the list */
+  .hm-grid:has(>.oc-row){grid-template-columns:minmax(0,1fr);gap:14px;}
+  .oc-row{display:grid;grid-template-columns:76px minmax(0,1fr);gap:16px;align-items:start;}
+  .oc-row>.mp-card{grid-column:2;margin:0;}
+  .oc-day{display:flex;flex-direction:column;align-items:center;padding:12px 0 13px;border-radius:var(--r-md);background:var(--s1);
+    font-size:11.5px;font-weight:650;letter-spacing:.08em;text-transform:uppercase;color:var(--fg3);}
+  .oc-day b{font-size:30px;font-weight:720;letter-spacing:-.03em;line-height:1.1;color:var(--fg);}
+  .oc-row.is-mine .oc-day{background:var(--acc);color:var(--on-acc);}
+  .oc-row.is-mine .oc-day b{color:var(--on-acc);}
+  .hm-lead>.hm-col:has(>.oc-cal){align-self:stretch;}
+  .oc-cal{display:block;position:sticky;top:84px;}
+  .oc-month{border-radius:var(--r-lg);background:var(--s1);padding:20px 20px 16px;}
+  .oc-month+.oc-month{margin-top:14px;}
+  .oc-month h2{font-size:18px;font-weight:680;letter-spacing:-.02em;margin:0 0 14px;}
+  .oc-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:4px;}
+  .oc-grid>*{position:relative;display:grid;place-items:center;aspect-ratio:1;border-radius:50%;font-size:14px;color:var(--fg3);text-decoration:none;}
+  .oc-grid>.oc-wd{aspect-ratio:auto;padding-bottom:6px;font-size:11px;font-weight:650;letter-spacing:.06em;}
+  .oc-grid>a{color:var(--fg);font-weight:650;background:var(--s2);}
+  .oc-grid>a::after{content:"";position:absolute;bottom:12%;left:50%;width:5px;height:5px;margin-left:-2.5px;border-radius:50%;background:var(--acc);}
+  .oc-grid>a.is-mine{background:var(--acc);color:var(--on-acc);}
+  .oc-grid>a.is-mine::after{background:var(--on-acc);}
+  .oc-grid>.is-today{box-shadow:inset 0 0 0 1.5px var(--fg2);color:var(--fg);}
+  .oc-key{display:flex;flex-wrap:wrap;gap:6px 18px;margin:14px 4px 0;font-size:12.5px;color:var(--fg3);}
+  .oc-key i{display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--s2);box-shadow:inset 0 0 0 2px var(--acc);margin-right:7px;}
+  .oc-key i.mine{background:var(--acc);box-shadow:none;}
+  /* Me: your photo beside your name */
+  .hm-col .mb-profile{display:grid;grid-template-columns:auto minmax(0,1fr);column-gap:22px;align-items:center;justify-items:start;
+    text-align:left;margin:0 0 22px;}
+  .hm-col .mb-profile>:first-child{grid-row:1 / span 4;}
+  .hm-col .mb-profile>:not(:first-child){grid-column:2;}
+  .hm-col .mb-profile h1{font-size:30px;margin:0 0 2px;}
+  .hm-col .mb-profile .mb-photo-note{text-align:left;margin:8px 0 0;}
 }
+/* A mouse: what you point at lifts, its picture leans in, a row lights. */
+@media (min-width:1000px) and (hover:hover) and (pointer:fine){
+  .mb-cards:not(.wt-grid) a:hover{background:var(--s2);}
+  .mb-nav .mb-tab:not([aria-current]):hover,.mb-side-more a:not([aria-current]):hover,.mb-side-me a:not([aria-current]):hover{background:var(--s1);color:var(--fg);}
+}
+@media (min-width:1000px) and (hover:hover) and (pointer:fine) and (prefers-reduced-motion:no-preference){
+  .mb-bt,.mb-ev,.mb-ser,.mb-mtile,.mb-find,.mb-quick a,.mb-livecard,.mb-cards.wt-grid a,.oc-grid>a{transition:transform .2s ease;}
+  .mb-bt:hover,.mb-ev:hover,.mb-ser:hover,.mb-mtile:hover,.mb-find:hover,.mb-quick a:hover,.mb-livecard:hover,.mb-cards.wt-grid a:hover{transform:translateY(-3px);}
+  .oc-grid>a:hover{transform:scale(1.08);}
+  .mb-mtile-art img,.mb-bt img,.mb-ev-p img,.mb-thumb img,.mb-find-p img{transition:transform .5s ease;}
+  .mb-mtile:hover .mb-mtile-art img,a.mb-mtile-art:hover img,.mb-bt:hover img,.mb-ev:hover .mb-ev-p img,.mb-ser:hover img,
+  .mb-cards.wt-grid a:hover .mb-thumb img,.mb-find:hover .mb-find-p img{transform:scale(1.045);}
+}
+/* From 1100px the tab bar is a rail down the left, and from 1200px a
+   sidebar: the church's logo, every tab by name, the pages with no tab of
+   their own, and who's signed in at the foot (member_portal._side). The
+   page sits beside it, centred in what's left. */
 @media (min-width:1100px){
-  body.mb-wide .mp-shell.mb-has-nav,body.mb-wide:has(.mb-has-nav) .mb-top{margin-left:max(92px,calc((100vw - 1180px) / 2));margin-right:auto;}
+  body:has(>.mb-nav){padding-left:92px;}
+}
+@media (min-width:1200px){
+  body:has(>.mb-nav){padding-left:252px;}
+  .mb-nav{width:252px;align-items:stretch;justify-content:flex-start;gap:2px;padding:22px 14px 16px;overflow-y:auto;}
+  .mb-side{display:block;}
+  .mb-nav .mb-tab{flex-direction:row;width:auto;min-height:46px;justify-content:flex-start;gap:12px;padding:0 10px 0 6px;font-size:15px;
+    font-weight:580;color:var(--fg2);}
+  .mb-nav .mb-tab[aria-current]{color:var(--fg);}
+  .mb-nav .mb-tab-p{width:40px;height:32px;}
+  .mb-nav .mb-tab-p svg{width:22px;height:22px;}
+  .mb-nav:has(.mb-side [aria-current]) .mb-tab[aria-current]{background:none;color:var(--fg2);}
+  .mb-nav:has(.mb-side [aria-current]) .mb-tab[aria-current] .mb-tab-p{background:none;}
+  .mb-side-top{padding:4px 10px 26px;}
+  .mb-side-brand{display:flex;align-items:center;gap:10px;min-width:0;text-decoration:none;color:var(--fg);}
+  .mb-side-brand .mb-wordmark{height:38px;max-width:190px;}
+  .mb-side-brand .mp-church{margin:0;font-size:16px;font-weight:680;letter-spacing:-.02em;line-height:1.2;}
+  .mb-side-h{margin:28px 12px 8px;font-size:11.5px;font-weight:650;letter-spacing:.09em;text-transform:uppercase;color:var(--fg3);}
+  .mb-side-more a{display:flex;align-items:center;gap:14px;min-height:42px;padding:0 12px 0 16px;border-radius:12px;color:var(--fg2);
+    text-decoration:none;font-size:14.5px;font-weight:560;}
+  .mb-side-more a[aria-current]{background:var(--s1);color:var(--fg);}
+  .mb-side-me{margin-top:auto;padding-top:14px;}
+  .mb-side-me a{display:flex;align-items:center;gap:12px;padding:8px;border-radius:14px;color:var(--fg);text-decoration:none;
+    box-shadow:0 -.5px 0 var(--hair);}
+  .mb-side-me a[aria-current]{background:var(--s1);}
+  .mb-side-av{width:40px;height:40px;flex:none;border-radius:50%;overflow:hidden;display:grid;place-items:center;font-size:14px;font-weight:650;
+    background:var(--acc-fill);color:var(--on-acc);}
+  .mb-side-av img{width:100%;height:100%;object-fit:cover;}
+  .mb-side-me strong{display:block;font-size:14.5px;font-weight:620;line-height:1.25;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .mb-side-me small{display:block;font-size:12.5px;color:var(--fg3);}
+  body:has(>.mb-nav) .mb-top .mb-brand,body:has(>.mb-nav) .mb-top-right>.mb-avatar{display:none;}
 }
 @media print{.mp-noprint,.mb-nav,.mb-top{display:none!important;} html,body{background:#fff;color:#000;}
   .mp-shell{max-width:none;padding:0;} .mp-card{background:#fff;} th,td{border-color:#999;} .mp-muted{color:#333;}}""")
