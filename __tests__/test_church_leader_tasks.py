@@ -15,7 +15,8 @@ Pins:
   * late: told once, in the church's morning, to whoever the leader answers
     to (a vacant role passed over); never for a done task; never before the
     due date on the church's own clock; a group leader with no role above
-    them has no one to tell
+    them: back to whoever handed it out (handed_by), else no one to tell
+  * the leader's page and email name who handed it, else "the church office"
   * the Board's "Make tasks" hands a no-login member's follow-up to them as
     a leader
   * before the migration everything is quiet: no Leaders, no Tasks, no
@@ -538,6 +539,7 @@ def test_the_boards_follow_up_goes_to_a_no_login_member_as_a_leader(board, monke
     by = _make_tasks(board)
     roof = by["Get a third roof bid"]
     assert roof["assigned_contact_id"] == tb.MOORE and roof["assigned_to"] is None and roof["due_date"] == "2026-11-15"
+    assert roof["handed_by"] == tb.ID["owner"], "late, with no one above them, it comes back to who made it"
     van = by["Van insurance"]
     assert van["assigned_to"] == tb.ID["deacon"] and "assigned_contact_id" not in van, "a login stays a login"
 
@@ -565,3 +567,78 @@ def test_before_the_migration_everything_is_quiet(db, office, shell):
     assert status == 503 and "couldn’t load" in html, "the page itself says so, never a 500"
     assert clt.sweep_tick(NOW)["told"] == 0 and not db.sent
     assert clt.section(CHURCH, RAY) is None and not clt.ready(BIZ)
+
+
+# ─── Who handed it (APPLY-2026-10-27-task-handed-by.sql) ─────────────
+
+SARAH = "44444444-4444-4444-8444-444444444444"
+LEFT = "55555555-5555-4555-8555-555555555555"
+
+
+def _office_login(db):
+    """Sarah, the church administrator: an office login, on the church's list
+    by her sign-in email."""
+    db.t["business_users"].append({"business_id": BIZ, "user_id": SARAH, "role": "manager", "status": "active",
+                                   "invited_email": "sarah@lovecity.org"})
+    db.t["contacts"].append({"id": "c0000000-0000-4000-8000-000000000009", "business_id": BIZ,
+                             "name": "Sarah Office", "email": "sarah@lovecity.org"})
+
+
+def test_a_late_task_with_no_one_above_goes_back_to_whoever_handed_it(db):
+    _office_login(db)
+    _t(db, T_TASHA).update(due_date="2026-10-26", handed_by=SARAH)
+    stats = clt.sweep_tick(NOW)
+    back = [m for m in _late_mail(db) if "Tasha" in m["subject"]]
+    assert stats["late_no_one"] == 0 and len(back) == 1
+    m = back[0]
+    assert m["to"] == "sarah@lovecity.org" and m["subject"] == "Tasha Williams has a task past due"
+    assert "Hi Sarah" in m["html"] and "you handed it to Tasha" in m["html"] and "Call the caterer" in m["html"]
+    assert _t(db, T_TASHA)["late_told_at"] == "2026-10-28T14:00:00+00:00"
+    clt.sweep_tick(NOW)
+    assert len([m for m in _late_mail(db) if "Tasha" in m["subject"]]) == 1, "once"
+
+
+def test_the_owner_who_handed_it_hears_at_their_sign_in_email(db, monkeypatch):
+    import messaging_router
+    monkeypatch.setattr(messaging_router, "_owner_email", lambda uid: "pastor@lovecity.org" if uid == OWNER else "")
+    _t(db, T_TASHA).update(due_date="2026-10-26", handed_by=OWNER)
+    clt.sweep_tick(NOW)
+    back = [m for m in _late_mail(db) if "Tasha" in m["subject"]]
+    assert [m["to"] for m in back] == ["pastor@lovecity.org"]
+    assert "Hi friend" in back[0]["html"], "the owner with no name on the list"
+
+
+def test_a_leader_with_someone_above_still_goes_up_not_back(db):
+    _office_login(db)
+    _t(db, T_LATE)["handed_by"] = SARAH
+    clt.sweep_tick(NOW)
+    assert [m["to"] for m in _late_mail(db)] == ["kevin@lovecity.org"]
+
+
+def test_whoever_handed_it_has_left_so_no_one_is_told(db):
+    _t(db, T_TASHA).update(due_date="2026-10-26", handed_by=LEFT)
+    stats = clt.sweep_tick(NOW)
+    assert stats["late_no_one"] == 1 and not [m for m in _late_mail(db) if "Tasha" in m["subject"]]
+    assert _t(db, T_TASHA)["late_told_at"], "set, so it's never asked again"
+
+
+def test_the_leader_sees_and_hears_who_handed_it(db):
+    _office_login(db)
+    _t(db, T_SOON)["handed_by"] = SARAH
+    by = {i["title"]: i["from"] for i in clt.mine(CHURCH, RAY, NOW)["open"]}
+    assert by["Order the youth shirts"] == "Sarah Office"
+    assert by["Plan the fall retreat"] == "the church office", "no hander recorded"
+    _fresh(db, "71000000-0000-4000-8000-000000000009", RAY, "Lead the youth retreat", handed_by=SARAH)
+    clt.sweep_tick(NOW)
+    assert "Sarah Office handed you a task: Lead the youth retreat." in _handed_mail(db)[0]["html"]
+
+
+def test_names_that_cant_be_read_fall_back_to_the_church_office(db, monkeypatch):
+    import church_my_week
+    from fastapi import HTTPException
+
+    def down(*a, **kw):
+        raise HTTPException(503, "Your week couldn't be read just now. Try again.")
+    monkeypatch.setattr(church_my_week, "people", down)
+    _t(db, T_SOON)["handed_by"] = SARAH
+    assert {i["from"] for i in clt.mine(CHURCH, RAY, NOW)["open"]} == {"the church office"}

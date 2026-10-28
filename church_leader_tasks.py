@@ -37,10 +37,14 @@ fall retreat by Nov 15" couldn't be handed to the youth pastor. Now it can
                  roles they hold, an empty role passed over; one email per
                  leader for all their newly late tasks). late_told_at is
                  claimed the same way. A leader who holds no role with anyone
-                 above them (a group leader only) has no one to go up to:
-                 tasks don't record which login made them, so nobody is
-                 told, and late_told_at is set so it's never asked again. A
-                 done task is never told about.
+                 above them (a group leader only) has no one to go up to: it
+                 goes back to whoever handed it out (tasks.handed_by, stamped
+                 by the database, APPLY-2026-10-27-task-handed-by.sql). With
+                 no one to tell, late_told_at is set so it's never asked
+                 again. A done task is never told about.
+  Who handed it  handed_by names the login on the leader's page and in their
+                 email ("From Sarah"), by the Hand to list's own names
+                 (church_my_week.people); else "the church office".
   The Board .... church_board.make_tasks hands a follow-up whose member has
                  no login but is one of the church's people by their contact.
 
@@ -78,8 +82,10 @@ LATE_FROM, LATE_UNTIL = 8, 12   # the church's morning: when "past due" goes up
 SWEEP_MAX = 500                 # tasks one sweep takes on
 NOT_YOURS = "That task isn’t handed to you."
 TASK_FIELDS = ("id,business_id,title,description,status,due_date,assigned_contact_id,leader_told_at,"
-               "late_told_at,done_by_contact_id,completed_at,created_at")
-NEW_COLUMNS = "assigned_contact_id,leader_told_at,late_told_at,done_by_contact_id"
+               "late_told_at,done_by_contact_id,completed_at,created_at,handed_by")
+# Both migrations' columns: APPLY-2026-10-27-leader-tasks.sql, then
+# APPLY-2026-10-27-task-handed-by.sql (who handed it).
+NEW_COLUMNS = "assigned_contact_id,leader_told_at,late_told_at,done_by_contact_id,handed_by"
 _UUID = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 
 
@@ -212,6 +218,50 @@ def _contacts(biz_id: str, ids: Iterable[Any]) -> Optional[Dict[str, Dict[str, s
     return out
 
 
+# ─── Who handed it ────────────────────────────────────────────────────
+
+# The Hand to list's stand-ins when a login has no name: "the church office"
+# reads better to a leader.
+_NO_NAME = {"The owner", "An office login"}
+
+
+def handers(business: Dict[str, Any], ids: Iterable[Any]) -> Dict[str, str]:
+    """Who handed these tasks out, by the Hand to list's own names
+    (church_my_week.people: their name on the church's list, never an
+    email). {} when no login handed them, or the names can't be read: the
+    leader then sees "the church office"."""
+    want = {str(i) for i in ids if i}
+    if not want:
+        return {}
+    biz = business
+    if not business.get("owner_id") or not isinstance(business.get("settings"), dict):
+        rows = _rows(f"/businesses?id=eq.{_q(business['id'])}&select=id,name,type,settings,owner_id&limit=1")
+        if not rows:
+            return {}
+        biz = rows[0]
+    import church_my_week
+    try:
+        people = church_my_week.people(biz, "")
+    except HTTPException:
+        return {}
+    return {str(p["user_id"]): _plain(p.get("name")) for p in people
+            if str(p.get("user_id")) in want and _plain(p.get("name")) and p.get("name") not in _NO_NAME}
+
+
+def hander_email(biz: Dict[str, Any], user_id: str) -> str:
+    """The sign-in email of whoever handed a task out: the owner's from
+    Auth, a login's from its seat. "" when they've left or it can't be read."""
+    if str(user_id) == str(biz.get("owner_id") or ""):
+        try:
+            import messaging_router
+            return _email_ok(messaging_router._owner_email(str(user_id)))
+        except Exception:
+            return ""
+    rows = _rows(f"/business_users?business_id=eq.{_q(biz['id'])}&user_id=eq.{_q(user_id)}"
+                 "&status=eq.active&select=invited_email&limit=1")
+    return _email_ok(rows[0].get("invited_email")) if rows else ""
+
+
 # ─── The office: who a task can be handed to ──────────────────────────
 
 def _titles(biz_id: str, wanted: set) -> Optional[Dict[str, str]]:
@@ -301,12 +351,13 @@ def section(business: Dict[str, Any], contact_id: Any, now: Optional[datetime] =
     return {"open": sum(1 for r in rows if r.get("status") != "done")}
 
 
-def _item(r: Dict[str, Any], today: date) -> Dict[str, Any]:
+def _item(r: Dict[str, Any], today: date, by: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
     due = due_words(r.get("due_date"), today)
     return {"id": str(r["id"]), "title": _plain(r.get("title"))[:200] or "A task",
             "notes": str(r.get("description") or "").replace("\r\n", "\n").strip()[:NOTES_MAX],
             "due": str(r.get("due_date") or "")[:10], "due_text": due["text"], "state": due["state"],
-            "late": due["state"] == "late", "from": "the church office",
+            "late": due["state"] == "late",
+            "from": (by or {}).get(str(r.get("handed_by") or "")) or "the church office",
             "created_at": str(r.get("created_at") or "")}
 
 
@@ -330,7 +381,8 @@ def mine(business: Dict[str, Any], contact_id: Any, now: Optional[datetime] = No
         tz = mpl._tz(business)
     today = now.astimezone(tz).date()
     ours = lambda r: str(r.get("business_id")) == b and str(r.get("assigned_contact_id")) == cid  # noqa: E731
-    items = [_item(r, today) for r in open_rows if ours(r) and r.get("status") != "done"]
+    by = handers(business, (r.get("handed_by") for r in open_rows if ours(r)))
+    items = [_item(r, today, by) for r in open_rows if ours(r) and r.get("status") != "done"]
     items.sort(key=lambda i: (not i["late"], i["due"] or "9999-12-31", i["created_at"]))
     done = []
     for r in done_rows:
@@ -420,10 +472,10 @@ def deliver(biz: Dict[str, Any], to_email: str, to_name: str, subject: str, html
         business_id=str(biz["id"]), idempotency_key=key[:120]))
 
 
-def handed_text(name: str, task: Dict[str, Any], today: Optional[date]) -> str:
-    """The leader's email, in plain words."""
+def handed_text(name: str, task: Dict[str, Any], today: Optional[date], by: str = "") -> str:
+    """The leader's email, in plain words. `by`: who handed it, by name."""
     title = _plain(task.get("title")) or "A task"
-    lines = [f"Hi {first_name(name)},", f"The church office handed you a task: {title}."]
+    lines = [f"Hi {first_name(name)},", f"{by or 'The church office'} handed you a task: {title}."]
     d = _day(task.get("due_date"))
     if d:
         lines.append(f"It was due {day_words(d)}, so it’s already late." if today and d < today
@@ -436,8 +488,9 @@ def handed_text(name: str, task: Dict[str, Any], today: Optional[date]) -> str:
     return "\n\n".join(lines)
 
 
-def late_text(name: str, leader: str, tasks: List[Dict[str, Any]]) -> str:
-    """The email to the person the leader answers to."""
+def late_text(name: str, leader: str, tasks: List[Dict[str, Any]], handed: bool = False) -> str:
+    """The email to the person the leader answers to, or (`handed`) to
+    whoever handed the tasks out when the leader answers to no one."""
     def said(t: Dict[str, Any]) -> str:
         d = _day(t.get("due_date"))
         return f"“{_plain(t.get('title')) or 'A task'}”" + (f", due {day_words(d)}" if d else "")
@@ -446,8 +499,10 @@ def late_text(name: str, leader: str, tasks: List[Dict[str, Any]]) -> str:
         lines.append(f"{leader} has a task past due: {said(tasks[0])}.")
     else:
         lines.append(f"{leader} has {len(tasks)} tasks past due:\n" + "\n".join(said(t) for t in tasks))
-    lines.append(f"You’re hearing about it because {first_name(leader)} answers to you. "
-                 "A quick, kind word is usually all it takes.")
+    why = (f"You’re hearing about it because you handed {'it' if len(tasks) == 1 else 'them'} to "
+           f"{first_name(leader)}, and no one is named above them in Leaders & roles. " if handed
+           else f"You’re hearing about it because {first_name(leader)} answers to you. ")
+    lines.append(why + "A quick, kind word is usually all it takes.")
     return "\n\n".join(lines)
 
 
@@ -481,6 +536,7 @@ def tell_new(biz: Dict[str, Any], rows: List[Dict[str, Any]], now: datetime, sta
     reply_to = _office_email(biz)
     tz = zone(biz)
     today = now.astimezone(tz).date() if tz else None
+    by = handers(biz, (r.get("handed_by") for r in rows))
     for t in rows:
         tid, cid = str(t["id"]), str(t.get("assigned_contact_id") or "")
         stamp = _iso(now)
@@ -491,8 +547,8 @@ def tell_new(biz: Dict[str, Any], rows: List[Dict[str, Any]], now: datetime, sta
             stats["no_email"] += 1
             continue
         try:
-            html = render_email(biz, handed_text(who["name"], t, today), f"{_plain(t.get('title'))[:80]}",
-                                link, "Open your tasks")
+            html = render_email(biz, handed_text(who["name"], t, today, by.get(str(t.get("handed_by") or ""), "")),
+                                f"{_plain(t.get('title'))[:80]}", link, "Open your tasks")
             deliver(biz, who["email"], who["name"], f"{church}: a task for you", html,
                     f"leader-task-{tid}-{cid}", reply_to=reply_to)
             stats["told"] += 1
@@ -527,8 +583,9 @@ def overseer(leader_id: str, all_roles: List[Dict[str, Any]], defs: List[Dict[st
 def tell_late(biz: Dict[str, Any], rows: List[Dict[str, Any]], now: datetime, stats: Dict[str, int]) -> None:
     """In the church's morning: each leader's open tasks past their due
     date (the church's day), told before today, go up once to whoever the
-    leader answers to, in one email per leader. No one above them: set as
-    told, with nobody told."""
+    leader answers to, in one email per leader. No one above them: back to
+    whoever handed each out (handed_by); with no one at all, set as told,
+    with nobody told."""
     import church_follow_up as cfu
     tz = zone(biz)
     if tz is None:
@@ -566,36 +623,56 @@ def tell_late(biz: Dict[str, Any], rows: List[Dict[str, Any]], now: datetime, st
         if not claimed:
             continue
         leader = (names.get(lid) or {}).get("name") or "A leader"
-        if not above:
-            logger.info("leader tasks: %d late task(s) with no one above the leader (business %s)", len(claimed), b[:8])
-            stats["late_no_one"] += len(claimed)
+        if above:
+            to: Dict[str, Dict[str, Any]] = {}
+            for h in above:
+                e = _email_ok(h.get("email"))
+                if e and e.lower() not in to:
+                    to[e.lower()] = {**h, "email": e}
+            if not to:
+                stats["late_no_email"] += len(claimed)
+                continue
+            _send_late(biz, leader, claimed, to, stamp, reply_to, stats)
             continue
-        to: Dict[str, Dict[str, Any]] = {}
-        for h in above:
-            e = _email_ok(h.get("email"))
-            if e and e.lower() not in to:
-                to[e.lower()] = {**h, "email": e}
-        if not to:
-            stats["late_no_email"] += len(claimed)
-            continue
-        subject = (f"{leader} has a task past due" if len(claimed) == 1
-                   else f"{leader} has {len(claimed)} tasks past due")
-        digest = hashlib.sha1(",".join(sorted(str(t["id"]) for t in claimed)).encode()).hexdigest()[:16]
-        sent = 0
-        for h in to.values():
-            try:
-                html = render_email(biz, late_text(h.get("name") or "", leader, claimed), subject)
-                deliver(biz, h["email"], h.get("name") or "", subject, html,
-                        f"leader-task-late-{digest}-{h.get('contact_id')}", reply_to=reply_to)
-                sent += 1
-            except Exception:
-                logger.warning("leader tasks: a past-due email failed (business %s)", b[:8], exc_info=True)
-        if sent:
-            stats["late"] += len(claimed)
-        else:
-            for t in claimed:
-                _release(b, str(t["id"]), "late_told_at", stamp)
-            stats["late_unsent"] += len(claimed)
+        # No one above them: each task goes back to whoever handed it out.
+        back: Dict[str, List[Dict[str, Any]]] = {}
+        for t in claimed:
+            back.setdefault(str(t.get("handed_by") or ""), []).append(t)
+        by = handers(biz, back)
+        for uid, theirs in back.items():
+            e = hander_email(biz, uid) if uid else ""
+            if not e:
+                logger.info("leader tasks: %d late task(s) with no one above the leader and no one who handed "
+                            "them out (business %s)", len(theirs), b[:8])
+                stats["late_no_one"] += len(theirs)
+                continue
+            _send_late(biz, leader, theirs, {e.lower(): {"email": e, "name": by.get(uid, ""), "contact_id": uid}},
+                       stamp, reply_to, stats, handed=True)
+
+
+def _send_late(biz: Dict[str, Any], leader: str, tasks: List[Dict[str, Any]], to: Dict[str, Dict[str, Any]],
+               stamp: str, reply_to: Optional[str], stats: Dict[str, int], handed: bool = False) -> None:
+    """One past-due email to each of `to` for these claimed tasks; when none
+    goes, the claims are let go so the next sweep tries again."""
+    b = str(biz["id"])
+    subject = (f"{leader} has a task past due" if len(tasks) == 1
+               else f"{leader} has {len(tasks)} tasks past due")
+    digest = hashlib.sha1(",".join(sorted(str(t["id"]) for t in tasks)).encode()).hexdigest()[:16]
+    sent = 0
+    for h in to.values():
+        try:
+            html = render_email(biz, late_text(h.get("name") or "", leader, tasks, handed), subject)
+            deliver(biz, h["email"], h.get("name") or "", subject, html,
+                    f"leader-task-late-{digest}-{h.get('contact_id')}", reply_to=reply_to)
+            sent += 1
+        except Exception:
+            logger.warning("leader tasks: a past-due email failed (business %s)", b[:8], exc_info=True)
+    if sent:
+        stats["late"] += len(tasks)
+    else:
+        for t in tasks:
+            _release(b, str(t["id"]), "late_told_at", stamp)
+        stats["late_unsent"] += len(tasks)
 
 
 def sweep_tick(now: Optional[datetime] = None) -> Dict[str, int]:

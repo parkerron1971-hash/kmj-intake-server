@@ -120,6 +120,9 @@ def my_role(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[str, Any
 class InviteBody(BaseModel):
     email: str
     role: str = "member"
+    # A church's office lane (church_areas.LANES): it sets the role and the
+    # areas, so the login is set up the moment they accept.
+    lane: Optional[str] = None
 
 
 @router.post("/invite")
@@ -129,7 +132,12 @@ async def invite(biz: str, body: InviteBody, request: Request,
     # must never have friction in front of it.
     ledger_unlock.require_unlock(request, str(user.id), ledger_unlock.SCOPE_ACCESS)
     inviter_role = require_role(biz, str(user.id), "manager")
-    if body.role == "admin" and _ROLE_RANK[inviter_role] < _ROLE_RANK["admin"]:
+    lane = None
+    if body.lane:
+        import church_areas
+        lane = church_areas.lane_for_invite(biz, body.lane)
+    role = lane["role"] if lane else body.role
+    if role == "admin" and _ROLE_RANK[inviter_role] < _ROLE_RANK["admin"]:
         raise HTTPException(403, "only an admin or the owner can invite admins")
     # comp_tier in the select (flip-test class, 2026-08-22): without it a
     # comped business resolves to NO plan and the seat cap reads 1 —
@@ -138,7 +146,7 @@ async def invite(biz: str, body: InviteBody, request: Request,
         f"/businesses?id=eq.{biz}&select=id,name,owner_id,subscription_status,"
         f"subscription_plan,comp_tier&limit=1") or []
     biz_row = rows[0] if rows else {}
-    if body.role not in _ROLES:
+    if role not in _ROLES:
         raise HTTPException(400, f"role must be one of {_ROLES}")
     email = (body.email or "").strip().lower()
     if not email or "@" not in email:
@@ -160,9 +168,10 @@ async def invite(biz: str, body: InviteBody, request: Request,
         raise HTTPException(409, "this person is already invited or active")
 
     res = sb_clients.sb_post_as_service("/business_users", {
-        "business_id": biz, "invited_email": email, "role": body.role,
+        "business_id": biz, "invited_email": email, "role": role,
         "status": "invited", "invited_by": str(user.id),
         "invited_at": _now_iso(),
+        **({"areas": lane["areas"]} if lane and lane["areas"] else {}),
     })
     row = (res or [None])[0] if isinstance(res, list) else res
     if not row:
@@ -178,15 +187,15 @@ async def invite(biz: str, body: InviteBody, request: Request,
             from_email="invites@mysolutionist.app", from_name="Solutionist System",
             reply_to=None,
             subject=f"{biz_name} invited you to their team",
-            body=(f"You've been invited to join {biz_name} on Solutionist as a "
-                  f"{body.role}.\n\nAccept your invitation (sign in or create your "
+            body=(f"You've been invited to join {biz_name} on Solutionist as "
+                  f"{lane['label'] if lane else 'a ' + role}.\n\nAccept your invitation (sign in or create your "
                   f"account first):\n{accept_url}\n\n— The Solutionist System"))
         email_sent = True
     except Exception as e:
         logger.warning(f"[team] invite email not sent: {e}")
 
     return {"ok": True, "member": row, "email_sent": email_sent,
-            "accept_url": accept_url, "seats": cap}
+            "accept_url": accept_url, "seats": cap, "lane": lane["key"] if lane else None}
 
 
 @router.get("")
