@@ -116,3 +116,31 @@ def test_accountant_overview_access_and_shape(fake):
     with pytest.raises(HTTPException) as e:
         bc.accountant_overview("b1", _u("stranger"))
     assert e.value.status_code == 403
+
+
+def test_an_invite_can_carry_a_churchs_office_lane(fake):
+    """Kevin 2026-10-28: "make these roles for admin so all i have to do is
+    assign them to the person": a lane sets the login's role and areas, so
+    it's set up the moment they accept (church_areas.LANES)."""
+    fb = fake
+    fb.rows("businesses")[0]["type"] = "ministry"
+    out = asyncio.run(bu.invite("b1", bu.InviteBody(email="ruth@x.com", lane="people_care"), _stepup("owner1"), _u("owner1")))
+    assert out["lane"] == "people_care" and out["member"]["role"] == "manager"
+    assert out["member"]["areas"] == ["people_care", "kids_youth", "groups_classes"]
+    t = asyncio.run(bu.invite("b1", bu.InviteBody(email="minnie@x.com", role="viewer", lane="treasurer"),
+                              _stepup("owner1"), _u("owner1")))
+    assert t["member"]["role"] == "admin" and "areas" not in t["member"], "the lane sets the role; an admin keeps all"
+    plain = asyncio.run(bu.invite("b1", bu.InviteBody(email="plain@x.com", role="member"), _stepup("owner1"), _u("owner1")))
+    assert plain["lane"] is None and "areas" not in plain["member"], "no lane: as before"
+    _member(fb, "mg1", "manager")
+    with pytest.raises(HTTPException) as e:
+        asyncio.run(bu.invite("b1", bu.InviteBody(email="x@x.com", lane="treasurer"), _stepup("mg1"), _u("mg1")))
+    assert e.value.status_code == 403, "the treasurer is an admin: a manager can't invite one"
+    with pytest.raises(HTTPException) as e:
+        asyncio.run(bu.invite("b1", bu.InviteBody(email="y@x.com", lane="the_moon"), _stepup("owner1"), _u("owner1")))
+    assert e.value.status_code == 400
+    fb.rows("businesses")[0]["type"] = "salon"
+    with pytest.raises(HTTPException) as e:
+        asyncio.run(bu.invite("b1", bu.InviteBody(email="z@x.com", lane="people_care"), _stepup("owner1"), _u("owner1")))
+    assert e.value.status_code == 400, "lanes are a church's"
+    assert not any(r.get("invited_email") in ("x@x.com", "y@x.com", "z@x.com") for r in fb.rows("business_users"))
