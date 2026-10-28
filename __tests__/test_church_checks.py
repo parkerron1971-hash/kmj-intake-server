@@ -16,9 +16,15 @@ Pins:
   * receipts: kept in the private bucket under the church's own folder,
     re-saved without the phone's tags, read only through the server by the
     office or the asker; never a public link
-  * the limit: up to it the treasurer approves; above it a keeper says yes
-    (here, or by an ask and a tap or code), the owner bound too; with no
-    keeper the limit alone governs; raising it needs the same yes
+  * the money levels (on unless switched off): the treasurer for every
+    amount, the pastor too from $500, a board member too over $2,500 or past
+    the ministry's budget; each yes a different person, never the asker;
+    one payee's week counts together; a change takes the yeses back; the
+    pastor and a board member say yes or no and nothing more
+  * with the levels off, the limit: up to it the treasurer approves; above
+    it a keeper says yes (here, or by an ask and a tap or code), the owner
+    bound too; with no keeper the limit alone governs; raising it needs the
+    same yes
   * paid writes ONE expense in the ministry's line (with the receipt), a
     closed period refuses it, taking it back removes the expense; spent vs
     budget per ministry adds up from the books
@@ -31,7 +37,7 @@ import io
 import os
 import re
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -47,6 +53,7 @@ for p in (ROOT, HERE):
 import church_areas  # noqa: E402
 import church_checks as cc  # noqa: E402
 import church_keys as ck  # noqa: E402
+import church_money_levels as cml  # noqa: E402
 import member_portal_checks as mpck  # noqa: E402
 import sb_clients  # noqa: E402
 from auth_supabase import AuthedUser, require_user  # noqa: E402
@@ -55,7 +62,7 @@ from test_church_roles import FakeDB  # noqa: E402
 BIZ = "11111111-1111-4111-8111-111111111111"
 OTHER = "22222222-2222-4222-8222-222222222222"
 SALON = "33333333-3333-4333-8333-333333333333"
-NAMES = ("owner", "admin", "treasurer", "viewer", "singer", "accountant", "stranger", "other_owner")
+NAMES = ("owner", "admin", "treasurer", "viewer", "singer", "accountant", "stranger", "other_owner", "pastor", "elder")
 PEOPLE = {n: AuthedUser(id=f"00000000-0000-4000-8000-{i:012d}", email=f"{n}@lovecity.org", role="authenticated")
           for i, n in enumerate(NAMES, start=1)}
 ID = {n: u.id for n, u in PEOPLE.items()}
@@ -117,7 +124,8 @@ class ChecksDB(FakeDB):
 
 @pytest.fixture
 def db(monkeypatch):
-    seats = (("admin", "admin"), ("treasurer", "member"), ("viewer", "viewer"), ("singer", "member"))
+    seats = (("admin", "admin"), ("treasurer", "member"), ("viewer", "viewer"), ("singer", "member"),
+             ("pastor", "member"), ("elder", "viewer"))
     fake = ChecksDB(
         businesses=[{"id": BIZ, "name": "Love City Church", "type": "ministry", "owner_id": ID["owner"], "settings": {}},
                     {"id": OTHER, "name": "Grace Chapel", "type": "ministry", "owner_id": ID["other_owner"], "settings": {}},
@@ -138,6 +146,7 @@ def db(monkeypatch):
         church_leader_roles=[], space_leaders=[],
         church_check_settings=[], church_check_requests=[], business_expenses=[],
         church_keepers=[], church_area_keys=[], accounting_periods=[],
+        church_role_defs=[], church_boards=[], church_board_members=[], church_check_approvals=[],
     )
     fake.missing = False
     for name in ("get", "post", "patch", "delete"):
@@ -153,6 +162,10 @@ def db(monkeypatch):
     monkeypatch.setattr(cc, "_tz", lambda biz: ZoneInfo("America/New_York"))
     fake.told = []
     monkeypatch.setattr(ck, "_tell", lambda biz, to, title, body, seats, tag: fake.told.append((sorted(to), title, body)))
+    fake.levels_told = []
+    monkeypatch.setattr(cml, "_tell", lambda biz, to, title, body, emails, tag:
+                        fake.levels_told.append((sorted(to), title, body)))
+    monkeypatch.delenv("CHURCH_MONEY_LEVELS", raising=False)
     # Who sees what: the treasurer works Giving & money, the viewer too
     # (read only), the singer worship only.
     areas = {ID["treasurer"]: ["giving_money"], ID["viewer"]: ["giving_money"], ID["singer"]: ["worship_media"]}
@@ -231,7 +244,7 @@ def test_the_switch_and_tables_not_made_yet(db, monkeypatch):
     assert status("admin") is True
     db.missing = True
     assert client("owner").get(f"/church/checks/status?business_id={BIZ}").json() == {
-        "enabled": False, "approve": False, "settings": False}
+        "enabled": False, "approve": False, "pay": False, "settings": False}
     c = client("owner")
     for got in (c.get(f"/church/checks?business_id={BIZ}"), _add("owner"),
                 c.put("/church/checks/settings", json={"business_id": BIZ, "limit": "100"})):
@@ -264,11 +277,11 @@ def test_the_member_side_follows_the_switch(db, monkeypatch):
 def test_status_says_what_each_login_may_do(db):
     def status(name, biz=BIZ):
         return client(name).get(f"/church/checks/status?business_id={biz}").json()
-    assert status("owner") == {"enabled": True, "approve": True, "settings": True}
-    assert status("admin") == {"enabled": True, "approve": True, "settings": True}
-    assert status("accountant") == {"enabled": True, "approve": True, "settings": False}
-    assert status("treasurer") == {"enabled": True, "approve": True, "settings": False}
-    assert status("viewer") == {"enabled": True, "approve": False, "settings": False}
+    assert status("owner") == {"enabled": True, "approve": True, "pay": True, "settings": True}
+    assert status("admin") == {"enabled": True, "approve": True, "pay": True, "settings": True}
+    assert status("accountant") == {"enabled": True, "approve": True, "pay": True, "settings": False}
+    assert status("treasurer") == {"enabled": True, "approve": True, "pay": True, "settings": False}
+    assert status("viewer") == {"enabled": True, "approve": False, "pay": False, "settings": False}
     assert status("singer")["enabled"] is False, "their areas leave out Giving & money"
     assert status("owner", SALON)["enabled"] is False, "churches only"
     assert client("stranger").get(f"/church/checks/status?business_id={BIZ}").status_code == 404
@@ -412,9 +425,10 @@ def test_the_member_post_saves_and_a_preview_saves_nothing(db, monkeypatch):
     assert len(db.t["church_check_requests"]) == 1
 
 
-# ─── The limit and the keepers ───────────────────────────────────────
+# ─── The limit and the keepers (the money levels off) ────────────────
 
-def test_with_no_keeper_the_limit_alone_governs(db):
+def test_with_no_keeper_the_limit_alone_governs(db, monkeypatch):
+    monkeypatch.setenv("CHURCH_MONEY_LEVELS", "off")
     small = _ask(amount="62.18", ministry="Hospitality")["id"]
     big = _ask()["id"]                                             # $340, over $250
     page = _page("treasurer")
@@ -433,7 +447,8 @@ def test_with_no_keeper_the_limit_alone_governs(db):
     assert _decide("treasurer", big).status_code == 200
 
 
-def test_above_the_limit_a_keeper_says_yes_the_owner_bound_too(db):
+def test_above_the_limit_a_keeper_says_yes_the_owner_bound_too(db, monkeypatch):
+    monkeypatch.setenv("CHURCH_MONEY_LEVELS", "off")
     _keeper(db, "admin")
     big = _ask()["id"]
     assert _page("treasurer")["keeper"] == {"on": True, "mine": False, "open_until": None, "asked": None, "keepers": 1}
@@ -456,7 +471,8 @@ def test_above_the_limit_a_keeper_says_yes_the_owner_bound_too(db):
     assert got.json()["request"]["decided_by"] == "treasurer@lovecity.org"
 
 
-def test_a_keeper_approves_here_and_a_code_opens_it_too(db):
+def test_a_keeper_approves_here_and_a_code_opens_it_too(db, monkeypatch):
+    monkeypatch.setenv("CHURCH_MONEY_LEVELS", "off")
     _keeper(db, "admin")
     _keeper(db, "owner")
     big = _ask()["id"]
@@ -487,7 +503,7 @@ def test_a_keeper_approves_here_and_a_code_opens_it_too(db):
 
 def test_paid_writes_one_expense_and_taking_it_back_removes_it(db):
     admin = client("admin")
-    saved = admin.put("/church/checks/settings", json={"business_id": BIZ, "limit": "1000", "lines": [
+    saved = admin.put("/church/checks/settings", json={"business_id": BIZ, "lines": [
         {"name": "Kids ministry", "budget": "2000"}, {"name": "Hospitality", "budget": "600"}, {"name": "Youth", "budget": ""}]})
     assert saved.status_code == 200
     assert saved.json()["settings"]["lines"] == [{"name": "Kids ministry", "budget_cents": 200000},
@@ -513,9 +529,10 @@ def test_paid_writes_one_expense_and_taking_it_back_removes_it(db):
     assert _pay("treasurer", row["id"]).status_code == 409 and len(db.t["business_expenses"]) == 1
 
     # The office pays the camp directly, by transfer.
-    camp = _add("treasurer").json()["request"]
+    camp = _add("treasurer", amount="450").json()["request"]
     assert camp["payee"] == "Camp Swift Creek" and camp["added_by"] == "treasurer@lovecity.org"
-    _decide("treasurer", camp["id"])
+    assert _decide("treasurer", camp["id"]).status_code == 403, "whoever asked never says yes"
+    assert _decide("admin", camp["id"]).json()["approved"] is True
     assert _pay("treasurer", camp["id"], how="transfer", check_number="").status_code == 200
     exp2 = db.t["business_expenses"][1]
     assert exp2["vendor"] == "Camp Swift Creek" and exp2["payment_method"] is None
@@ -533,9 +550,9 @@ def test_paid_writes_one_expense_and_taking_it_back_removes_it(db):
     kids = next(x for x in b["lines"] if x["name"] == "Kids ministry")
     hosp = next(x for x in b["lines"] if x["name"] == "Hospitality")
     assert b["year"] == 2026
-    assert kids == {"name": "Kids ministry", "budget_cents": 200000, "spent_cents": 34000 + 50000 + 37000, "committed_cents": 0}
+    assert kids == {"name": "Kids ministry", "budget_cents": 200000, "spent_cents": 34000 + 45000 + 37000, "committed_cents": 0}
     assert hosp == {"name": "Hospitality", "budget_cents": 60000, "spent_cents": 0, "committed_cents": 6218}
-    assert b["paid_year_cents"] == 84000
+    assert b["paid_year_cents"] == 79000
 
     # Taking it back: the owner and admins; the request goes back to approved.
     assert client("treasurer").delete(f"/church/checks/requests/{row['id']}/paid?business_id={BIZ}").status_code == 403
@@ -635,3 +652,268 @@ def test_another_church_is_unreachable(db):
     with pytest.raises(HTTPException):
         _ask(ministry="Their kids")
     assert "Their kids" not in cc.member_lines({"id": BIZ})
+
+
+# ─── The money levels (Kevin 2026-10-23/26; 2026-10-28 "change check requests yourself") ───
+
+PASTOR_C = "cccccccc-0000-4000-8000-000000000010"
+EXEC_C = "cccccccc-0000-4000-8000-000000000011"
+
+
+def _leaders(db, *, pastor="pastor@lovecity.org", elder=True):
+    """Pastor Reed holds the senior role (the pastor login, by email); the
+    executive pastor's role is pastoral, not senior, and the admin holds it;
+    Ruth sits on the Elders with the elder login (a viewer); the singer is
+    on a board that was archived."""
+    db.t["contacts"] += [{"id": PASTOR_C, "business_id": BIZ, "name": "Pastor Reed", "email": pastor},
+                         {"id": EXEC_C, "business_id": BIZ, "name": "Exec Pastor Lee", "email": "admin@lovecity.org"}]
+    db.t["church_role_defs"] += [
+        {"business_id": BIZ, "key": "pastor", "title": "Lead Pastor", "job": "senior", "status": "active"},
+        {"business_id": BIZ, "key": "exec", "title": "Executive Pastor", "job": "pastoral", "status": "active"}]
+    db.t["church_leader_roles"] += [{"business_id": BIZ, "role": "pastor", "contact_id": PASTOR_C, "status": "active"},
+                                    {"business_id": BIZ, "role": "exec", "contact_id": EXEC_C, "status": "active"}]
+    db.t["church_boards"] += [{"id": "bd1", "business_id": BIZ, "name": "Elders", "archived": False},
+                              {"id": "bd2", "business_id": BIZ, "name": "Old council", "archived": True}]
+    if elder:
+        db.t["church_board_members"].append({"id": "m1", "business_id": BIZ, "board_id": "bd1", "user_id": ID["elder"],
+                                             "contact_id": None, "name": "Ruth Elder", "title": "Chair", "active": True})
+    db.t["church_board_members"].append({"id": "m2", "business_id": BIZ, "board_id": "bd2", "user_id": ID["singer"],
+                                         "contact_id": None, "name": "Sam Singer", "title": "", "active": True})
+
+
+def _lv(name, rid):
+    return _by(_page(name), rid)["levels"]
+
+
+def _status(name):
+    return client(name).get(f"/church/checks/status?business_id={BIZ}").json()
+
+
+def test_the_levels_by_amount_and_the_switch(monkeypatch):
+    assert cml.required(49_999) == ["treasurer"]
+    assert cml.required(50_000) == ["treasurer", "pastor"]
+    assert cml.required(250_000) == ["treasurer", "pastor"]
+    assert cml.required(250_001) == ["treasurer", "pastor", "board"]
+    assert cml.required(10_000, over_budget=True) == ["treasurer", "board"]
+    monkeypatch.delenv("CHURCH_MONEY_LEVELS", raising=False)
+    assert cml.on(), "on unless switched off"
+    monkeypatch.setenv("CHURCH_MONEY_LEVELS", "of")
+    assert cml.on(), "a typo keeps the levels"
+    monkeypatch.setenv("CHURCH_MONEY_LEVELS", " OFF ")
+    assert not cml.on()
+
+
+def test_under_500_the_treasurer_says_yes_alone(db):
+    _leaders(db)
+    rid = _ask()["id"]                                              # $340
+    lv = _lv("treasurer", rid)
+    assert lv["needs"] == ["treasurer"] and lv["mine"] == "treasurer" and lv["counted_cents"] == 34000
+    got = _decide("treasurer", rid).json()
+    assert got["approved"] is True and got["step"] == "treasurer" and got["request"]["status"] == "approved"
+    assert [(h["step"], h["by"]) for h in got["request"]["levels"]["have"]] == [("treasurer", "treasurer@lovecity.org")]
+    assert db.levels_told == []
+
+
+def test_500_and_up_the_pastor_says_yes_too(db):
+    _leaders(db)
+    rid = _ask(amount="1200", about="Youth retreat bus")["id"]
+    first = _decide("treasurer", rid).json()
+    assert first["approved"] is False and first["missing"] == ["pastor"] and first["request"]["status"] == "new"
+    assert first["told"] == 1
+    to, title, body = db.levels_told[-1]
+    assert to == [ID["pastor"]] and title == "A check request needs the pastor: $1,200"
+    assert "Kids ministry" in body and "Dana Moore" in body and "Yes so far: the treasurer" in body
+    # One step a person, and the executive pastor isn't the pastor.
+    again = _decide("admin", rid)
+    assert again.status_code == 403 and again.json()["detail"]["code"] == "not_your_step"
+    assert again.json()["detail"]["message"] == "This one waits on the pastor."
+    # The pastor's login opens the page to say yes or no, and nothing more.
+    assert _status("pastor") == {"enabled": True, "approve": True, "pay": False, "settings": False}
+    assert _lv("pastor", rid)["mine"] == "pastor"
+    assert _add("pastor").status_code == 403
+    assert _pay("pastor", rid).status_code == 403
+    assert client("pastor").patch(f"/church/checks/requests/{rid}", json={"business_id": BIZ, "amount": "1"}).status_code == 403
+    assert client("pastor").put("/church/checks/settings", json={"business_id": BIZ, "lines": []}).status_code == 403
+    done = _decide("pastor", rid).json()
+    assert done["approved"] is True and done["request"]["status"] == "approved"
+    assert [(h["step"], h["by"]) for h in done["request"]["levels"]["have"]] == [
+        ("treasurer", "treasurer@lovecity.org"), ("pastor", "Pastor Reed")]
+    assert _req(db, rid)["decided_by"] == ID["pastor"]
+    assert _status("singer")["enabled"] is False, "an archived board opens nothing"
+    assert _pay("treasurer", rid).status_code == 200
+
+
+def test_the_owner_who_is_the_pastor_gives_one_yes_not_two(db):
+    _leaders(db, pastor="owner@lovecity.org")
+    rid = _ask(amount="900", ministry="Hospitality")["id"]
+    assert _lv("owner", rid)["mine"] == "pastor", "the scarcer yes first"
+    assert _decide("owner", rid).json()["missing"] == ["treasurer"]
+    again = _decide("owner", rid)
+    assert again.status_code == 403 and again.json()["detail"]["message"] == "Your yes is in. It waits on the treasurer."
+    assert _decide("accountant", rid).json()["approved"] is True
+    assert {a["step"]: a["user_id"] for a in db.t["church_check_approvals"]} == {"pastor": ID["owner"],
+                                                                                  "treasurer": ID["accountant"]}
+
+
+def test_over_2500_a_board_member_too_and_whoever_asked_never_counts(db):
+    _leaders(db)
+    rid = _add("admin", amount="3000", about="Roof deposit", ministry="Hospitality", payee="Ace Roofing").json()["request"]["id"]
+    assert _lv("treasurer", rid)["needs"] == ["treasurer", "pastor", "board"]
+    assert _lv("admin", rid)["why_not"].startswith("You asked for this one")
+    assert _decide("admin", rid).status_code == 403
+    assert _status("elder") == {"enabled": True, "approve": True, "pay": False, "settings": False}, "a viewer on the board"
+    got = _decide("elder", rid).json()
+    assert got["step"] == "board" and got["missing"] == ["treasurer", "pastor"] and db.levels_told[-1][0] == [ID["pastor"]]
+    assert _decide("pastor", rid).json()["missing"] == ["treasurer"]
+    assert db.levels_told[-1][0] == [ID["pastor"]], "nobody left to tell for the treasurer's step"
+    done = _decide("treasurer", rid).json()
+    assert done["approved"] is True
+    assert [h["by"] for h in done["request"]["levels"]["have"]] == ["Ruth Elder", "Pastor Reed", "treasurer@lovecity.org"]
+
+
+def test_a_member_who_asked_can_t_say_yes_to_their_own(db):
+    _leaders(db)
+    reed = {"id": PASTOR_C, "name": "Pastor Reed", "email": "pastor@lovecity.org"}
+    rid = _ask(person=reed, amount="800", about="Conference hotel")["id"]
+    assert _lv("pastor", rid)["why_not"].startswith("You asked for this one")
+    assert _decide("pastor", rid).status_code == 403
+    got = _decide("treasurer", rid).json()
+    assert got["missing"] == ["pastor"] and got["told"] == 0, "never told to approve their own"
+
+
+def test_one_payee_split_across_a_week_counts_together(db, monkeypatch):
+    _leaders(db)
+    a = _add("admin", amount="300").json()["request"]["id"]                       # to Camp Swift Creek
+    monkeypatch.setattr(cc, "_now", lambda: T0 + timedelta(days=2))
+    b = _add("admin", amount="300", payee="camp  swift creek").json()["request"]["id"]
+    no = _add("admin", amount="300").json()["request"]["id"]
+    _decide("treasurer", no, "declined", reason="Sent twice")
+    other = _add("admin", amount="300", payee="Ace Roofing").json()["request"]["id"]
+    monkeypatch.setattr(cc, "_now", lambda: T0 + timedelta(days=9, hours=12))
+    later = _add("admin", amount="300").json()["request"]["id"]
+    page = _page("treasurer")
+    for rid in (a, b):
+        lv = _by(page, rid)["levels"]
+        assert (lv["counted_cents"], lv["others_cents"], lv["needs"]) == (60000, 30000, ["treasurer", "pastor"]), rid
+    assert _by(page, other)["levels"]["needs"] == ["treasurer"], "another payee"
+    assert _by(page, later)["levels"]["counted_cents"] == 30000, "more than a week after both"
+    assert _decide("treasurer", a).json()["missing"] == ["pastor"]
+    # Paid back to Dana in the app and paid to her by the office: one payee.
+    dana = _ask(amount="300")["id"]
+    office = _add("admin", amount="250", payee=None, contact_id=DANA).json()["request"]["id"]
+    assert _lv("treasurer", dana)["needs"] == ["treasurer", "pastor"]
+    assert _lv("treasurer", office)["counted_cents"] == 55000
+
+
+def test_past_its_budget_a_board_member_too(db):
+    _leaders(db)
+    assert client("admin").put("/church/checks/settings", json={"business_id": BIZ, "lines": [
+        {"name": "Kids ministry", "budget": "500"}, {"name": "Hospitality", "budget": ""}]}).status_code == 200
+    db.t["business_expenses"].append({"id": "e1", "business_id": BIZ, "amount": 300.0, "subcategory": "Kids ministry",
+                                      "date": "2026-05-01", "category": "operating"})
+    over = _ask(amount="250", about="Snacks")["id"]
+    fits = _ask(amount="150", about="Crayons", person=MARCUS_ME)["id"]
+    free = _ask(amount="250", ministry="Hospitality", person=MARCUS_ME, about="Cups")["id"]
+    page = _page("treasurer")
+    assert _by(page, over)["levels"]["over_budget"] is True and _by(page, over)["levels"]["needs"] == ["treasurer", "board"]
+    assert _by(page, fits)["levels"]["needs"] == ["treasurer"], "$450 of $500"
+    assert _by(page, free)["levels"]["over_budget"] is False, "no budget set is never over"
+    assert _decide("treasurer", fits).json()["approved"] is True
+    assert _decide("treasurer", over).json()["missing"] == ["board"] and db.levels_told[-1][0] == [ID["elder"]]
+
+
+def test_a_change_takes_the_yeses_back(db):
+    _leaders(db)
+    rid = _ask(amount="1200")["id"]
+    _decide("treasurer", rid)
+    c = client("treasurer")
+    c.patch(f"/church/checks/requests/{rid}", json={"business_id": BIZ, "about": "Youth retreat bus (two days)"})
+    assert len(db.t["church_check_approvals"]) == 1, "words alone keep the yes"
+    got = c.patch(f"/church/checks/requests/{rid}", json={"business_id": BIZ, "amount": "1100"}).json()["request"]
+    assert db.t["church_check_approvals"] == [] and got["levels"]["have"] == [] and got["levels"]["mine"] == "treasurer"
+
+
+def test_the_pastor_or_a_board_member_declines_only_what_waits_on_them(db):
+    _leaders(db)
+    small = _ask(amount="100", about="Glue")["id"]
+    big = _ask(amount="900", about="Speakers", person=MARCUS_ME)["id"]
+    assert _decide("pastor", small, "declined", reason="No").status_code == 403
+    assert _decide("elder", big, "declined", reason="No").status_code == 403, "it doesn't wait on the board"
+    got = _decide("pastor", big, "declined", reason="Let's talk Sunday.")
+    assert got.status_code == 200 and got.json()["request"]["status"] == "declined"
+    _decide("treasurer", small)
+    assert _decide("pastor", small, "declined", reason="No").status_code == 403, "approved: the treasurer's to undo"
+
+
+def test_with_the_levels_on_the_limit_and_the_keeper_don_t_decide(db):
+    _leaders(db)
+    _keeper(db, "admin")
+    rid = _ask()["id"]                                      # $340: over the $250 limit
+    page = _page("treasurer")
+    assert page["keeper"]["on"] is False and page["levels"]["on"] is True
+    assert _decide("treasurer", rid).json()["approved"] is True, "the levels say the treasurer alone"
+    other = _ask(amount="20", about="Tape")["id"]
+    asked = client("treasurer").post(f"/church/checks/requests/{other}/keeper", json={"business_id": BIZ})
+    assert asked.status_code == 409 and asked.json()["detail"]["code"] == "levels_on"
+    code = client("treasurer").post("/church/checks/key-code", json={"business_id": BIZ, "key_id": DANA, "code": "123456"})
+    assert code.status_code == 409
+    moved = client("owner").put("/church/checks/settings", json={"business_id": BIZ, "limit": "5000"})
+    assert moved.status_code == 400 and moved.json()["detail"]["code"] == "levels_on"
+    assert client("owner").put("/church/checks/settings", json={"business_id": BIZ, "limit": "250"}).status_code == 200
+
+
+def test_the_page_says_what_no_one_can_approve(db):
+    levels = _page("owner")["levels"]
+    assert levels["on"] is True and levels["pastor_from_cents"] == 50000 and levels["board_over_cents"] == 250000
+    assert levels["mine"] == ["treasurer"]
+    assert [g.split(",")[0] for g in levels["gaps"]] == [
+        "No one holds the senior pastor's role yet", "No board member has a login"]
+    _leaders(db, pastor="reed@gmail.com", elder=False)
+    levels = _page("owner")["levels"]
+    assert levels["pastors"] == [] and levels["board"] == []
+    assert levels["gaps"][0].startswith("Pastor Reed, the pastor, has no login here")
+    rid = _ask(amount="600")["id"]
+    assert _decide("treasurer", rid).json()["told"] == 0
+    db.t["church_board_members"].append({"id": "m3", "business_id": BIZ, "board_id": "bd1", "user_id": ID["elder"],
+                                         "contact_id": DANA, "name": "", "title": "", "active": True})
+    assert _page("owner")["levels"]["board"] == ["Dana Moore"], "a board member's name is their person's"
+
+
+def test_two_yeses_at_once_for_one_step_land_once(db, monkeypatch):
+    _leaders(db)
+    rid = _ask(amount="900")["id"]
+    real = db.post
+
+    def post(path, body, prefer=None, **kw):
+        if path.startswith("/church_check_approvals"):
+            real(path, {**body, "user_id": ID["admin"]})     # the admin's yes landed first
+            return None                                      # ours hit one-a-step
+        return real(path, body, prefer=prefer, **kw)
+    monkeypatch.setattr(sb_clients, "sb_post_as_service", post)
+    got = _decide("treasurer", rid)
+    assert got.status_code == 409 and len(db.t["church_check_approvals"]) == 1
+    monkeypatch.setattr(sb_clients, "sb_post_as_service", lambda path, body, prefer=None, **kw:
+                        None if path.startswith("/church_check_approvals") else real(path, body, prefer=prefer, **kw))
+    assert _decide("pastor", rid).status_code == 503, "a yes that didn't save is never a yes"
+    assert _req(db, rid)["status"] == "new"
+
+
+def test_a_failed_read_of_who_says_yes_is_a_503_never_a_yes(db, monkeypatch):
+    _leaders(db)
+    rid = _ask(amount="900")["id"]
+    real = db.get
+    monkeypatch.setattr(sb_clients, "sb_get_as_service",
+                        lambda path, **kw: None if path.startswith("/church_board_members") else real(path, **kw))
+    assert _decide("treasurer", rid).status_code == 503
+    assert _status("elder")["enabled"] is False, "the board couldn't be read: a quiet no"
+    assert db.t["church_check_approvals"] == []
+
+
+def test_whoever_said_yes_is_never_told_again(db):
+    _leaders(db)
+    db.t["church_board_members"].append({"id": "m4", "business_id": BIZ, "board_id": "bd1", "user_id": ID["pastor"],
+                                         "contact_id": PASTOR_C, "name": "", "title": "", "active": True})
+    rid = _ask(amount="3000", about="Roof")["id"]
+    got = _decide("pastor", rid).json()
+    assert got["step"] == "pastor" and got["missing"] == ["treasurer", "board"]
+    assert db.levels_told[-1][0] == [ID["elder"]], "the pastor sits on the board too, and said yes already"
