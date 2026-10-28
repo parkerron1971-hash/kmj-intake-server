@@ -3,8 +3,8 @@ title: The member app on a computer (Home, Watch, Connect, Coming up, Me)
 date: 2026-10-28
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-10-28: "the system should allow for logins for elders and pastors etc to have a view on desktop. really everyone should be able to view their account on desktop or mobile phone". Two ways in: the 7 office logins stay for the office; everyone else uses the member app, by role. This is step 3 (a computer layout for member Home and the other tabs); steps 1-2 (the Board tab and the board member''s yes from the member app) are the money-levels session''s'
-status: in progress
-prs: [kmj-intake-server (this PR)]
+status: shipped
+prs: [kmj-intake-server#1631, kmj-intake-server#1634]
 migrations: []
 left_undone:
   - "Bible, Give, Prayer, My details, Messages, News and the other reading and form pages stay one column (600px), centred: they read best that way"
@@ -19,3 +19,5 @@ decisions:
 ---
 
 On a computer the member app was a phone-width column (600px) beside the tab rail. Five tabs now use the width; everything else is unchanged, and phones see no difference.
+
+Shipped 2026-10-28 (#1631, deployed 21:01 UTC; lovecityc.com/my serves it). #1634 fixed the serving-link tests, which read the real clock and failed on every PR from 10/28.
