@@ -90,7 +90,7 @@ def test_another_business_s_design_is_refused_and_never_fetched(s):
     assert not any(THEIRS in r and 'business_id=eq.' + OTHER in r for r in s.db.reads)
 
 
-@pytest.mark.parametrize('image_id', ['not-a-uuid', str(uuid4())])
+@pytest.mark.parametrize('image_id', ['not-a-uuid', str(uuid4())], ids=['malformed', 'unknown'])
 def test_an_unknown_or_malformed_id(s, image_id):
     refused(s, 404)(lambda: post(image_id))
     assert not any('not-a-uuid' in r for r in s.db.reads), 'a malformed id never reaches a query'

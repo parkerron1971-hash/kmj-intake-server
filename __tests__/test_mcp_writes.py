@@ -126,9 +126,15 @@ def test_the_write_surface_count_is_a_tripwire():
     saves owner-scoped public website assets only; no paid generation,
     authenticated browsing, or publishing. URLs and all subresources
     are validated and DNS-pinned; gallery storage uses the owner JWT.
+    60 (2026-10-17, class slides): save_lesson_slides replaces one
+    lesson's slide deck through academy_save_deck (owner/teacher JWT,
+    revision-checked). Scripture is filled from the server's Bible text
+    or must be the lesson's own words; pictures must already be the
+    business's; chart numbers must be the lesson's. It does not publish,
+    present, enroll or send anything.
     """
     offered = set(mcp.exposed_tools(allow_writes=True)) - set(mcp.exposed_tools())
-    assert len(offered) == 59, (
+    assert len(offered) == 60, (
         f"write surface changed: {sorted(offered)}. If a verb was added, "
         "decide whether an outside agent should change it, write its "
         "schema from the handler, and update this count on purpose.")

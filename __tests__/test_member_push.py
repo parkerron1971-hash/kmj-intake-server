@@ -298,7 +298,7 @@ def test_a_new_message_says_only_that_one_arrived(wired, monkeypatch):
     mp.tell_chat(church(messages=True), t, acc, "a")
     assert sorted(c for c, _, _ in sent) == ["b", "c"]
     assert sent[0][1] == {"title": "New message in Youth", "body": "Open the app to read it.",
-                          "url": "/my/messages/t9", "tag": "chat-t9"}
+                          "url": "/my/groups/g1/chat", "tag": "chat-t9"}   # a group's chat is inside the group
     sent.clear()
     mp.tell_chat(church(), t, acc, "a")          # messages not switched on by the church
     assert sent == []
@@ -422,7 +422,8 @@ def test_the_sweep_only_reads_churches_with_a_clock_kind_on(wired, monkeypatch):
     monkeypatch.setattr(mp, "sb_clients", SB())
     monkeypatch.setattr(mp, "_sweep_sermons", lambda biz: 1)
     monkeypatch.setattr(mp, "_sweep_events", broken)
-    assert mp.sweep_tick() == {"sermons": 1, "events": 0}
+    monkeypatch.setattr(mp, "sweep_held", lambda: 0)
+    assert mp.sweep_tick() == {"sermons": 1, "events": 0, "held": 0}
     assert "notifications->>sermons.eq.true" in seen[0] and "notifications->>events.eq.true" in seen[0]
 
 

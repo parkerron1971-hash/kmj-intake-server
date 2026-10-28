@@ -74,6 +74,23 @@ HINTS = (
     # the caller never supplies it. Refuses (401) on an unknown, removed
     # or re-paired token.
     "station_from_token",
+    # A church's screen link (worship_show_router.py): its token names
+    # exactly one screen row, and the business comes from that row — the
+    # caller never supplies it. Refuses (404) on an unknown, removed or
+    # replaced link, and opens only what that screen shows.
+    "screen_from_token",
+    # A church's ChurchSavvy invite link (worship_team.py): its token names
+    # exactly one invite row, and the church comes from that row — the
+    # caller never supplies it. Refuses (410/409) a link that was taken
+    # back, one someone else already took, or one a month old, and opens
+    # nothing but joining that one church's team.
+    "invite_from_token",
+    # A ministry's link to send the office an announcement
+    # (worship_ministries.py): signed for one church and one ministry, and
+    # the church comes from that row, never from the caller. Refuses (410)
+    # a link that's been replaced or whose ministry was taken out, and opens
+    # only sending that ministry's announcements and pictures.
+    "ministry_from_link",
 )
 
 BIZ_PARAMS = ("business_id", "biz", "biz_id", "businessId")
@@ -287,6 +304,31 @@ def _imported_names(tree: ast.AST) -> Dict[str, str]:
     return out
 
 
+# ast.get_source_segment re-splits the whole file for every node it is
+# asked about; over 12,000 functions that was a quarter of the sweep. The
+# file is split once instead, the way the parser splits it: only \r\n, \r
+# and \n end a line (a form feed or U+2028 inside a string does not).
+_LINE_RE = re.compile(r"[^\r\n]*(?:\r\n|\r|\n)|[^\r\n]+\Z")
+
+
+def _source_lines(src: str) -> List[str]:
+    return _LINE_RE.findall(src)
+
+
+def _segment(lines: List[str], node: ast.AST) -> str:
+    """ast.get_source_segment(src, node), over lines already split."""
+    end_lineno = getattr(node, "end_lineno", None)
+    end_col = getattr(node, "end_col_offset", None)
+    if end_lineno is None or end_col is None:
+        return ""
+    first, last = node.lineno - 1, end_lineno - 1
+    if first == last:
+        return lines[first].encode()[node.col_offset:end_col].decode()
+    head = lines[first].encode()[node.col_offset:].decode()
+    tail = lines[last].encode()[:end_col].decode()
+    return "".join([head, *lines[first + 1:last], tail])
+
+
 def _calls_of(node: ast.AST) -> Set[Tuple[str, str]]:
     """Calls made inside a function, as ('*', name) or ('module', attr)."""
     out: Set[Tuple[str, str]] = set()
@@ -315,10 +357,11 @@ def sweep() -> Dict[str, Any]:
         stem = path.stem
         fns = mods.setdefault(stem, {})
         imported.setdefault(stem, {}).update(_imported_names(tree))
+        lines = _source_lines(src)
         for node in ast.walk(tree):
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
-            body = ast.get_source_segment(src, node) or ""
+            body = _segment(lines, node)
             calls = _calls_of(node)
             # First definition wins: a later same-named function must not
             # clobber the one a handler was recorded against.

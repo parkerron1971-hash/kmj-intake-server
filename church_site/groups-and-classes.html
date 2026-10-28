@@ -1,0 +1,835 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>{{TITLE}}</title>
+<meta name="description" content="{{DESCRIPTION}}">
+<meta property="og:title" content="{{TITLE}}">
+<meta property="og:description" content="{{DESCRIPTION}}">
+<meta property="og:url" content="{{URL}}">
+<link rel="canonical" href="{{URL}}">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="The Solutionist System">
+<meta property="og:image" content="https://mysolutionist.app/assets/og.png?v=4">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="https://mysolutionist.app/assets/og.png?v=4">
+<link rel="icon" type="image/png" href="/favicon.png">
+<link rel="apple-touch-icon" href="/favicon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@300;400;500;600;700&amp;family=Inter:wght@400;500;600&amp;family=Instrument+Serif:ital@0;1&amp;family=JetBrains+Mono:wght@400;500&amp;family=Geist:wght@400..800&amp;family=Newsreader:ital,opsz,wght@0,6..72,400..600;1,6..72,400..600&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#07080B}
+a{color:#F5F6F8}a:hover{color:#93C5FD}
+.ow-grp{color:#8D93A1}
+
+/* the member app, drawn from member_app_ui.py: calc(var(--u)*15) is 15 of the app's own px on a 390-wide phone */
+.dv-ph{container-type:inline-size}
+.mx{--u:calc(100cqw / 390);--bg:#000;--s1:#161618;--s2:#222225;--s3:#2f2f33;--line:#2c2c30;--hair:rgba(245,245,247,.1);--fg:#f5f5f7;--fg2:#a8a8ae;--fg3:#7a7a80;--acc:#6B9BFF;--fill:#2F6BEA;--deep:#0a1429;--gold:#E3A92B;--on-gold:#1A1205;--gold-ink:#F4C04E;--gold-deep:#251C09;--teal:#17A894;--on-teal:#03211D;--teal-ink:#4FD8C4;--teal-deep:#08241F;--violet:#6D57E8;--violet-ink:#A99BFF;--violet-deep:#16122E;--coral:#F07A43;--on-coral:#2A1206;--coral-ink:#FF9D6B;--coral-deep:#2A1409;position:relative;display:flex;flex-direction:column;background:var(--bg);color:var(--fg);font-family:'Geist',sans-serif;font-size:calc(var(--u)*15);line-height:1.4;letter-spacing:-.006em;border-radius:33px;overflow:hidden}
+.mx p{margin:0}
+.mx-in{flex:1;min-height:0;overflow:hidden;padding:34px calc(var(--u)*18) calc(var(--u)*10);display:flex;flex-direction:column;gap:calc(var(--u)*12)}
+.mx-bar{display:flex;align-items:center;justify-content:space-between;gap:calc(var(--u)*10);min-height:calc(var(--u)*38);flex:none}
+.mx-back{display:inline-flex;align-items:center;gap:calc(var(--u)*2);color:var(--acc);font-size:calc(var(--u)*16);margin-left:calc(var(--u)*-6);white-space:nowrap}
+.mx-right{display:flex;align-items:center;gap:calc(var(--u)*8)}
+.mx-circ{position:relative;width:calc(var(--u)*38);height:calc(var(--u)*38);border-radius:50%;display:grid;place-items:center;background:var(--s1);color:var(--fg);flex:none}
+.mx-me{width:calc(var(--u)*38);height:calc(var(--u)*38);border-radius:50%;display:grid;place-items:center;background:var(--s2);font-size:calc(var(--u)*14);font-weight:650;flex:none}
+.mx svg.i{width:calc(var(--u)*18);height:calc(var(--u)*18);fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;flex:none}
+.mx-lt{margin:0;font-size:calc(var(--u)*32);font-weight:720;letter-spacing:-.035em;line-height:1.06}
+.mx-lt em,.mx-hello em{font-family:'Newsreader',serif;font-style:italic;font-weight:500;letter-spacing:-.02em}
+.mx-nav{flex:none;display:grid;grid-template-columns:repeat(5,minmax(0,1fr));padding:calc(var(--u)*7) calc(var(--u)*4) calc(var(--u)*14);background:rgba(0,0,0,.9);box-shadow:0 -.5px 0 var(--hair)}
+.mx-tab{display:flex;flex-direction:column;align-items:center;gap:calc(var(--u)*4);font-size:calc(var(--u)*10.5);font-weight:600;color:var(--fg3)}
+.mx-tab i{display:grid;place-items:center;width:calc(var(--u)*52);height:calc(var(--u)*30);border-radius:999px}
+.mx-tab svg{width:calc(var(--u)*24);height:calc(var(--u)*24);fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.mx-tab.on{color:var(--acc)}.mx-tab.on i{background:var(--deep)}
+.mx-tab.on.teal{color:var(--teal-ink)}.mx-tab.on.teal i{background:var(--teal-deep)}
+
+/* a group's own page (member_portal_groups GROUP_CSS) */
+.gx-hero{position:relative;flex:none;margin:0 calc(var(--u)*-18);min-height:calc(var(--u)*236);display:flex;flex-direction:column;justify-content:flex-end;border-radius:0 0 calc(var(--u)*24) calc(var(--u)*24);overflow:hidden;color:#fff;background:var(--teal-deep)}
+.gx-art{position:absolute;inset:0;color:var(--teal-ink)}
+.gx-art .pat{position:absolute;inset:0;width:100%;height:100%;opacity:.42}
+.gx-art .ic{position:absolute;right:calc(var(--u)*18);top:calc(var(--u)*18);width:calc(var(--u)*40);height:calc(var(--u)*40)}
+.gx-scrim{position:absolute;inset:0;background:linear-gradient(180deg,rgba(0,0,0,.18) 0%,rgba(0,0,0,0) 30%,rgba(0,0,0,.55) 62%,rgba(0,0,0,.9) 100%)}
+.gx-hero-in{position:relative;display:flex;flex-direction:column;gap:calc(var(--u)*6);padding:0 calc(var(--u)*18) calc(var(--u)*16)}
+.gx-kind{align-self:flex-start;display:inline-flex;align-items:center;height:calc(var(--u)*26);padding:0 calc(var(--u)*10);border-radius:999px;font-size:calc(var(--u)*12.5);font-weight:650;background:rgba(255,255,255,.2)}
+.gx-name{margin:0;font-size:calc(var(--u)*31);font-weight:720;letter-spacing:-.04em;line-height:1.04}
+.gx-hero p{font-size:calc(var(--u)*13.5);color:rgba(255,255,255,.88)}
+.gx-who{display:flex;align-items:center;gap:calc(var(--u)*10);margin-top:calc(var(--u)*2)}
+.gx-faces{display:flex;align-items:center}
+.gx-av{width:calc(var(--u)*28);height:calc(var(--u)*28);border-radius:50%;flex:none;display:grid;place-items:center;font-size:calc(var(--u)*11);font-weight:700;background:var(--teal-deep);color:var(--teal-ink)}
+.gx-av.m{width:calc(var(--u)*40);height:calc(var(--u)*40);font-size:calc(var(--u)*14)}
+.gx-faces .gx-av{margin-left:calc(var(--u)*-5);box-shadow:0 0 0 calc(var(--u)*2) rgba(0,0,0,.6)}
+.gx-faces .gx-av:first-child{margin-left:0}
+.gx-tabs{flex:none;display:flex;gap:calc(var(--u)*6);overflow:hidden;margin:0 calc(var(--u)*-18);padding:0 calc(var(--u)*18)}
+.gx-tab{flex:none;display:inline-flex;align-items:center;gap:calc(var(--u)*6);height:calc(var(--u)*40);padding:0 calc(var(--u)*14);border-radius:999px;background:var(--s1);color:var(--fg2);font-size:calc(var(--u)*14);font-weight:600}
+.gx-tab.on{background:var(--teal-deep);color:var(--teal-ink);box-shadow:inset 0 0 0 1px rgba(79,216,196,.3)}
+.gx-n{min-width:calc(var(--u)*19);height:calc(var(--u)*19);padding:0 calc(var(--u)*5);border-radius:calc(var(--u)*10);background:var(--fill);color:#fff;font-size:calc(var(--u)*11);font-weight:700;display:grid;place-items:center}
+.gx-card{flex:none;border-radius:calc(var(--u)*22);background:var(--s1);padding:calc(var(--u)*16);display:flex;flex-direction:column;gap:calc(var(--u)*10)}
+.gx-card.pin{background:var(--teal-deep)}
+.gx-ph{display:flex;align-items:center;gap:calc(var(--u)*10)}
+.gx-t{flex:1;min-width:0;display:flex;flex-direction:column;gap:calc(var(--u)*2)}
+.gx-who2{display:flex;align-items:center;gap:calc(var(--u)*6);font-size:calc(var(--u)*14.5);font-weight:650}
+.gx-tag{display:inline-flex;align-items:center;height:calc(var(--u)*19);padding:0 calc(var(--u)*7);border-radius:calc(var(--u)*6);background:var(--teal-deep);color:var(--teal-ink);font-size:calc(var(--u)*11);font-weight:700}
+.gx-card.pin .gx-tag{background:var(--s1)}
+.gx-small{font-size:calc(var(--u)*12.5);color:var(--fg2)}
+.gx-pinned{display:inline-flex;align-items:center;gap:calc(var(--u)*4);color:var(--teal-ink);font-size:calc(var(--u)*11.5);font-weight:700;letter-spacing:.06em;text-transform:uppercase}
+.gx-h{margin:0;font-size:calc(var(--u)*19);font-weight:700;letter-spacing:-.022em;line-height:1.2}
+.gx-body{font-size:calc(var(--u)*15);line-height:1.48}
+.gx-foot{display:flex;align-items:center;justify-content:space-between;gap:calc(var(--u)*10);flex-wrap:wrap}
+.gx-btn{display:inline-flex;align-items:center;justify-content:center;gap:calc(var(--u)*7);height:calc(var(--u)*42);padding:0 calc(var(--u)*16);border-radius:999px;background:var(--fill);color:#fff;font-size:calc(var(--u)*14.5);font-weight:620;white-space:nowrap}
+.gx-btn.soft{background:var(--s2);color:var(--fg)}
+.gx-btn.sm{height:calc(var(--u)*36);padding:0 calc(var(--u)*14);font-size:calc(var(--u)*13.5)}
+.gx-row{flex:none;display:flex;align-items:center;gap:calc(var(--u)*14);padding:calc(var(--u)*13) calc(var(--u)*16);border-radius:calc(var(--u)*18);background:var(--s1)}
+.gx-row b{display:block;font-size:calc(var(--u)*15.5);font-weight:620;letter-spacing:-.015em}
+.gx-row .gx-t span{font-size:calc(var(--u)*13);color:var(--fg2)}
+.gx-disc{width:calc(var(--u)*42);height:calc(var(--u)*42);border-radius:50%;flex:none;display:grid;place-items:center;background:var(--teal-deep);color:var(--teal-ink)}
+.gx-disc.gold{background:var(--gold-deep);color:var(--gold-ink)}
+.gx-disc.coral{background:var(--coral-deep);color:var(--coral-ink)}
+.gx-disc.violet{background:var(--violet-deep);color:var(--violet-ink)}
+.gx-fine{font-size:calc(var(--u)*12.5);color:var(--fg2)}
+
+/* the chat (CHAT_CSS, POLL_CSS) */
+.cx-list{display:flex;flex-direction:column;gap:calc(var(--u)*12)}
+.cx-m{display:flex;align-items:flex-start;gap:calc(var(--u)*8)}
+.cx-m.mine{flex-direction:row-reverse}
+.cx-col{display:flex;flex-direction:column;gap:calc(var(--u)*4);min-width:0;max-width:84%}
+.cx-m.mine .cx-col{align-items:flex-end}
+.cx-who{display:flex;align-items:center;gap:calc(var(--u)*6);font-size:calc(var(--u)*12.5);font-weight:650;color:var(--fg2);padding:0 calc(var(--u)*4)}
+.cx-b{padding:calc(var(--u)*9) calc(var(--u)*13) calc(var(--u)*10);border-radius:calc(var(--u)*20);background:var(--s1);font-size:calc(var(--u)*15);line-height:1.38}
+.cx-m.mine .cx-b{background:var(--teal);color:var(--on-teal)}
+.cx-q{display:flex;flex-direction:column;gap:1px;padding:calc(var(--u)*6) calc(var(--u)*10);border-radius:calc(var(--u)*12);background:var(--s2);font-size:calc(var(--u)*12.5);line-height:1.3;color:var(--fg2)}
+.cx-q b{font-size:calc(var(--u)*12);color:var(--fg);font-weight:650}
+.cx-rx{display:flex;gap:calc(var(--u)*4);flex-wrap:wrap;padding:0 calc(var(--u)*2)}
+.cx-chip{display:inline-flex;align-items:center;gap:calc(var(--u)*4);height:calc(var(--u)*30);padding:0 calc(var(--u)*10);border-radius:999px;background:var(--s2);color:var(--fg2);font-size:calc(var(--u)*12.5);font-weight:650}
+.cx-chip.on{background:var(--teal-deep);color:var(--teal-ink);box-shadow:inset 0 0 0 1px rgba(79,216,196,.4)}
+.cx-chip svg.i{width:calc(var(--u)*14);height:calc(var(--u)*14)}
+.cx-poll{width:calc(var(--u)*272);max-width:100%;border-radius:calc(var(--u)*18);background:var(--s1);padding:calc(var(--u)*12);display:flex;flex-direction:column;gap:calc(var(--u)*8)}
+.cx-pq{font-size:calc(var(--u)*15);font-weight:650;line-height:1.3}
+.cx-po{position:relative;display:flex;align-items:center;justify-content:space-between;gap:calc(var(--u)*10);height:calc(var(--u)*40);padding:0 calc(var(--u)*12);border-radius:calc(var(--u)*11);background:var(--s2);font-size:calc(var(--u)*14);overflow:hidden}
+.cx-po i{position:absolute;left:0;top:0;bottom:0;background:var(--teal-deep)}
+.cx-po span,.cx-po b{position:relative}
+.cx-po b{font-weight:700;color:var(--fg2)}
+.cx-po.on{box-shadow:inset 0 0 0 1.5px var(--teal-ink)}
+.cx-po.on b{color:var(--teal-ink)}
+.cx-pn{font-size:calc(var(--u)*12);color:var(--fg2);padding:0 calc(var(--u)*2)}
+.cx-compose{flex:none;margin:auto calc(var(--u)*-18) 0;padding:calc(var(--u)*10) calc(var(--u)*18) calc(var(--u)*4);display:flex;flex-direction:column;gap:calc(var(--u)*8);background:rgba(0,0,0,.9)}
+.cx-row{display:flex;gap:calc(var(--u)*8);align-items:center}
+.cx-plus{width:calc(var(--u)*44);height:calc(var(--u)*44);border-radius:50%;background:var(--s1);display:grid;place-items:center;flex:none}
+.cx-in{flex:1;min-width:0;height:calc(var(--u)*44);border-radius:calc(var(--u)*22);background:var(--s1);box-shadow:inset 0 0 0 1px var(--line);display:flex;align-items:center;padding:0 calc(var(--u)*16);font-size:calc(var(--u)*14.5);color:var(--fg2);white-space:nowrap;overflow:hidden}
+.cx-send{width:calc(var(--u)*44);height:calc(var(--u)*44);border-radius:50%;background:var(--fill);color:#fff;display:grid;place-items:center;flex:none}
+.cx-safe{display:flex;justify-content:center;align-items:center;gap:calc(var(--u)*6);font-size:calc(var(--u)*11.5);color:var(--fg3)}
+.cx-safe svg.i{width:calc(var(--u)*13);height:calc(var(--u)*13)}
+
+/* the prayer wall (group_prayer PRAYER_CSS) */
+.px-stat{display:flex;align-items:baseline;gap:calc(var(--u)*8);font-size:calc(var(--u)*14);color:var(--fg2)}
+.px-stat b{font-family:'Newsreader',serif;font-size:calc(var(--u)*30);font-weight:500;color:var(--fg);line-height:1}
+.px-l{font-size:calc(var(--u)*12);font-weight:650;letter-spacing:.05em;text-transform:uppercase;color:var(--fg2)}
+.px-area{min-height:calc(var(--u)*70);border-radius:calc(var(--u)*16);background:var(--s2);box-shadow:inset 0 0 0 1px var(--line);padding:calc(var(--u)*12) calc(var(--u)*14);font-size:calc(var(--u)*15);color:var(--fg2)}
+.px-to{display:grid;grid-template-columns:1fr 1fr;gap:calc(var(--u)*8)}
+.px-to>span{display:flex;gap:calc(var(--u)*8);align-items:flex-start;padding:calc(var(--u)*11);border-radius:calc(var(--u)*16);background:var(--s2);box-shadow:inset 0 0 0 1px var(--line)}
+.px-to>span.on{background:var(--teal-deep);box-shadow:inset 0 0 0 1.5px var(--teal-ink)}
+.px-to i{width:calc(var(--u)*16);height:calc(var(--u)*16);border-radius:50%;border:calc(var(--u)*2) solid var(--fg2);flex:none;margin-top:calc(var(--u)*2)}
+.px-to>span.on i{border:calc(var(--u)*5) solid var(--teal)}
+.px-to b{display:block;font-size:calc(var(--u)*14);font-weight:650}
+.px-to small{display:block;font-size:calc(var(--u)*12);color:var(--fg2);line-height:1.3}
+.px-filter{display:flex;gap:calc(var(--u)*6)}
+.px-filter span{display:inline-flex;align-items:center;height:calc(var(--u)*36);padding:0 calc(var(--u)*14);border-radius:999px;background:var(--s1);color:var(--fg2);font-size:calc(var(--u)*13.5);font-weight:650}
+.px-filter span.on{background:var(--teal-deep);color:var(--teal-ink)}
+.px-btn{display:inline-flex;align-items:center;gap:calc(var(--u)*6);height:calc(var(--u)*40);padding:0 calc(var(--u)*14);border-radius:999px;background:var(--s2);color:var(--fg);font-size:calc(var(--u)*14);font-weight:650}
+.px-btn.on{background:var(--teal-deep);color:var(--teal-ink);box-shadow:inset 0 0 0 1px rgba(79,216,196,.4)}
+.px-btn svg.i{width:calc(var(--u)*16);height:calc(var(--u)*16)}
+.px-n{display:inline-flex;align-items:center;gap:calc(var(--u)*6);font-size:calc(var(--u)*13);color:var(--fg2)}
+.px-n .gx-av{width:calc(var(--u)*22);height:calc(var(--u)*22);font-size:calc(var(--u)*9)}
+.px-praise{padding:calc(var(--u)*10) calc(var(--u)*12);border-radius:calc(var(--u)*16);background:var(--s2);font-size:calc(var(--u)*14);line-height:1.4}
+.px-tag{display:inline-flex;align-items:center;gap:calc(var(--u)*5);font-size:calc(var(--u)*12);font-weight:700;color:var(--gold-ink)}
+.px-pastor{display:flex;gap:calc(var(--u)*10);align-items:flex-start;font-size:calc(var(--u)*14);color:var(--fg2);line-height:1.4}
+.px-pastor svg.i{color:var(--teal-ink);width:calc(var(--u)*18);height:calc(var(--u)*18)}
+
+/* gatherings (group_gatherings MEET_CSS, group_bring BRING_CSS) */
+.mt-kick{font-size:calc(var(--u)*12);font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--teal-ink)}
+.mt-when{margin:0;font-size:calc(var(--u)*21);font-weight:700;letter-spacing:-.02em;line-height:1.2}
+.mt-where{display:flex;gap:calc(var(--u)*10);align-items:flex-start;font-size:calc(var(--u)*14);color:var(--fg2);line-height:1.4}
+.mt-where a{color:var(--teal-ink);font-weight:650;text-decoration:none}
+.mt-note{padding:calc(var(--u)*10) calc(var(--u)*12);border-radius:calc(var(--u)*16);background:var(--s2);font-size:calc(var(--u)*13.5);line-height:1.4;color:var(--fg2)}
+.mt-note b{color:var(--fg)}
+.mt-rsvp{display:grid;grid-template-columns:repeat(3,1fr);gap:calc(var(--u)*6)}
+.mt-rsvp span{display:grid;place-items:center;height:calc(var(--u)*42);border-radius:999px;background:var(--s2);font-size:calc(var(--u)*13.5);font-weight:650;box-shadow:inset 0 0 0 1px var(--line);white-space:nowrap}
+.mt-rsvp span.on{background:var(--teal-deep);color:var(--teal-ink);box-shadow:inset 0 0 0 1.5px var(--teal-ink)}
+.mt-count{display:flex;align-items:center;gap:calc(var(--u)*8);font-size:calc(var(--u)*13);color:var(--fg2)}
+.mt-count .gx-av{width:calc(var(--u)*24);height:calc(var(--u)*24);font-size:calc(var(--u)*9.5)}
+.bx-list{flex:none;border-radius:calc(var(--u)*22);background:var(--s1);overflow:hidden}
+.bx-h{display:flex;justify-content:space-between;align-items:baseline;padding:calc(var(--u)*14) calc(var(--u)*16) calc(var(--u)*4)}
+.bx-h b{font-size:calc(var(--u)*16);font-weight:660}
+.bx-h span{font-size:calc(var(--u)*13.5);color:var(--fg2)}
+.bx-slot{display:flex;align-items:center;gap:calc(var(--u)*12);padding:calc(var(--u)*10) calc(var(--u)*16);position:relative}
+.bx-slot+.bx-slot::before{content:"";position:absolute;top:0;left:calc(var(--u)*70);right:0;height:.5px;background:var(--line)}
+.bx-slot b{display:block;font-size:calc(var(--u)*14.5);font-weight:620}
+.bx-slot small{display:block;font-size:calc(var(--u)*12.5);color:var(--fg2)}
+.bx-open{width:calc(var(--u)*40);height:calc(var(--u)*40);border-radius:50%;flex:none;display:grid;place-items:center;border:calc(var(--u)*1.5) dashed var(--fg3);color:var(--fg2)}
+
+/* video, for a group (member_portal_group_live) */
+.vx-tiles{display:grid;grid-template-columns:1fr 1fr;gap:calc(var(--u)*8)}
+.vx-tile{position:relative;aspect-ratio:4/3;border-radius:calc(var(--u)*14);overflow:hidden;background:var(--s1);display:grid;place-items:center}
+.vx-tile img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:56% 22%}
+.vx-tile .gx-av{width:calc(var(--u)*54);height:calc(var(--u)*54);font-size:calc(var(--u)*18)}
+.vx-name{position:absolute;left:calc(var(--u)*8);bottom:calc(var(--u)*8);padding:calc(var(--u)*3) calc(var(--u)*8);border-radius:999px;background:rgba(0,0,0,.62);color:#fff;font-size:calc(var(--u)*11.5);font-weight:650;white-space:nowrap}
+.vx-bar{display:grid;grid-template-columns:1fr 1fr 1fr;gap:calc(var(--u)*8)}
+.vx-bar span{display:flex;align-items:center;justify-content:center;gap:calc(var(--u)*6);height:calc(var(--u)*46);border-radius:calc(var(--u)*16);background:var(--s1);font-size:calc(var(--u)*13.5);font-weight:600}
+.vx-bar span.end{background:var(--fill);color:#fff}
+
+/* classes (member_app_ui, Connect > Classes) */
+.cl-seg{flex:none;display:grid;grid-template-columns:1fr 1fr 1fr;padding:calc(var(--u)*3);border-radius:calc(var(--u)*12);background:var(--s1)}
+.cl-seg span{display:grid;place-items:center;height:calc(var(--u)*34);border-radius:calc(var(--u)*9);font-size:calc(var(--u)*13.5);font-weight:600;color:var(--fg2)}
+.cl-seg span.on{background:var(--s3);color:var(--fg)}
+.cl-next{flex:none;padding:calc(var(--u)*16);border-radius:calc(var(--u)*24);background:rgba(47,107,234,.18);border:1px solid rgba(47,107,234,.4);display:flex;flex-direction:column;gap:calc(var(--u)*6)}
+.cl-when{align-self:flex-start;display:inline-flex;align-items:center;gap:calc(var(--u)*6);height:calc(var(--u)*26);padding:0 calc(var(--u)*10);border-radius:999px;background:var(--fill);color:#fff;font-size:calc(var(--u)*12);font-weight:600}
+.cl-next b.t{font-size:calc(var(--u)*20);font-weight:720;letter-spacing:-.02em;line-height:1.15}
+.cl-next span.s{font-size:calc(var(--u)*13.5);color:var(--fg2)}
+.cl-road{display:flex;flex-direction:column}
+.cl-step{position:relative;display:grid;grid-template-columns:calc(var(--u)*30) minmax(0,1fr);gap:calc(var(--u)*12);align-items:center;padding:calc(var(--u)*7) 0}
+.cl-step:not(:last-child)::after{content:"";position:absolute;left:calc(var(--u)*14);top:calc(var(--u)*38);bottom:calc(var(--u)*-8);width:calc(var(--u)*2);background:var(--line)}
+.cl-dot{position:relative;z-index:1;width:calc(var(--u)*30);height:calc(var(--u)*30);border-radius:50%;display:grid;place-items:center;font-size:calc(var(--u)*12);font-weight:700;background:var(--s2);color:var(--fg2)}
+.cl-step.done .cl-dot{background:rgba(47,107,234,.18);color:var(--acc)}
+.cl-step.now .cl-dot{background:var(--fill);color:#fff}
+.cl-step.fin .cl-dot{background:var(--s1);color:var(--acc)}
+.cl-st b{display:block;font-size:calc(var(--u)*15);font-weight:650}
+.cl-st span{display:block;font-size:calc(var(--u)*12.5);color:var(--fg2)}
+.cl-cls{flex:none;display:flex;align-items:center;gap:calc(var(--u)*12);padding:calc(var(--u)*13);border-radius:calc(var(--u)*18);background:var(--s1)}
+.cl-cls b{display:block;font-size:calc(var(--u)*15);font-weight:650}
+.cl-cls span.s{display:block;font-size:calc(var(--u)*12.5);color:var(--fg2)}
+.cl-bar{display:block;height:calc(var(--u)*4);margin-top:calc(var(--u)*6);border-radius:2px;background:var(--s3);overflow:hidden}
+.cl-bar i{display:block;height:100%;background:var(--acc)}
+
+/* My group, on the Lead tab (group_lead GL_CSS) */
+.ld-eb{font-size:calc(var(--u)*12);font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--teal-ink)}
+.mx-hello{margin:0;font-size:calc(var(--u)*30);font-weight:720;letter-spacing:-.035em;line-height:1.06}
+.ld-pick{flex:none;display:flex;gap:calc(var(--u)*6)}
+.ld-pick span{display:inline-flex;align-items:center;height:calc(var(--u)*36);padding:0 calc(var(--u)*14);border-radius:999px;background:var(--s1);color:var(--fg2);font-size:calc(var(--u)*13.5);font-weight:600;white-space:nowrap}
+.ld-pick span.on{background:var(--teal-deep);color:var(--teal-ink)}
+.ld-stats{flex:none;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:calc(var(--u)*8)}
+.ld-stat{border-radius:calc(var(--u)*18);background:var(--s1);padding:calc(var(--u)*12);display:flex;flex-direction:column;gap:calc(var(--u)*4);min-width:0}
+.ld-stat b{font-size:calc(var(--u)*24);font-weight:700;letter-spacing:-.02em;line-height:1}
+.ld-stat b span{font-size:calc(var(--u)*14);color:var(--fg2);font-weight:600}
+.ld-stat small{font-size:calc(var(--u)*11.5);color:var(--fg2);line-height:1.3}
+.ld-stat.first{background:var(--teal-deep)}
+.ld-stat.first b{color:var(--teal-ink)}
+.ld-chief{flex:none;border-radius:calc(var(--u)*22);background:var(--violet-deep);padding:calc(var(--u)*16);display:flex;flex-direction:column;gap:calc(var(--u)*10)}
+.ld-chief-h{display:flex;align-items:center;gap:calc(var(--u)*8);font-size:calc(var(--u)*12);font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--violet-ink)}
+.ld-chief p{font-size:calc(var(--u)*14.5);line-height:1.45}
+.ld-mini{display:inline-flex;align-items:center;height:calc(var(--u)*36);padding:0 calc(var(--u)*4);font-size:calc(var(--u)*13.5);font-weight:600;color:var(--teal-ink)}
+.ld-need{flex:none;border-radius:calc(var(--u)*22);background:var(--s1);overflow:hidden}
+.ld-need-h{display:flex;align-items:center;justify-content:space-between;padding:calc(var(--u)*14) calc(var(--u)*16) calc(var(--u)*6)}
+.ld-need-h b{font-size:calc(var(--u)*15.5);font-weight:660}
+.ld-faces{display:flex;flex-wrap:wrap;gap:calc(var(--u)*8) calc(var(--u)*12);padding:calc(var(--u)*4) calc(var(--u)*16)}
+.ld-face{display:flex;align-items:center;gap:calc(var(--u)*8);font-size:calc(var(--u)*14)}
+.ld-face a{font-size:calc(var(--u)*13);font-weight:600;color:var(--teal-ink);text-decoration:none}
+.ld-draft{padding:calc(var(--u)*10) calc(var(--u)*16) calc(var(--u)*16)}
+
+/* page pieces around the devices */
+.note-card{border-radius:20px;padding:18px 20px;display:flex;flex-direction:column;gap:10px}
+.lock{display:flex;align-items:center;gap:12px}
+.push{display:flex;gap:12px;align-items:flex-start;padding:14px 16px;border-radius:20px;background:rgba(34,34,37,.97);color:#f5f5f7;font-family:'Geist',sans-serif;box-shadow:0 24px 50px -20px rgba(0,0,0,.55)}
+.push-mark{width:34px;height:34px;flex:none;border-radius:9px;background:#f5f5f7;color:#000;display:grid;place-items:center;font-weight:760;font-size:12px}
+.seg3{display:grid;grid-template-columns:auto auto auto;gap:2px;padding:4px;border-radius:999px;background:#ECEEF1;font-size:12px;font-weight:600;text-align:center}
+.seg3 span{padding:8px 7px;border-radius:999px;color:#5A5E6B;white-space:nowrap}
+.seg3 span.on{background:#FFFFFF;color:#0B0C11;box-shadow:0 1px 3px rgba(11,12,17,.18)}
+.twin{display:flex;flex-wrap:wrap;gap:24px;justify-content:center;align-items:flex-start}
+@media (max-width:760px){.twin>.alt{margin-top:0 !important}.stack{min-height:0 !important;display:flex;flex-direction:column;align-items:center;gap:20px}.stack>*{position:relative !important;left:auto !important;right:auto !important;top:auto !important;bottom:auto !important}.stack>.dvw{width:min(290px,90%) !important}.stack>.chief{width:100% !important}}
+</style>
+<style>
+{{CHURCH_CSS}}
+.mc-strip a{color:#F5F6F8;font-weight:600;text-decoration:underline;text-underline-offset:4px;white-space:nowrap}
+</style>
+{{PIXEL}}
+</head>
+<body>
+<div class="pg" style="--p: #3B82F6; --pl: #93C5FD; --pd: #1D4ED8; --pg: rgba(59,130,246,0.30); --pt: #EEF4FF; --pf: rgba(59,130,246,0.16)">
+
+<!-- The Solutionist frame, lit in this room's colour -->
+<div class="strip"><div class="wrap strip-in">
+<a href="{{HOME}}/" data-home style="display: flex; align-items: center; gap: 8px; color: #F5F6F8; text-decoration: none">
+<svg width="8" height="13" viewBox="0 0 8 13" fill="none" stroke="#959BA8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6.5 1.5 1.5 6.5l5 5"></path></svg>
+<svg width="20" height="17" viewBox="8 36 496 424" aria-hidden="true"><defs><linearGradient id="mkg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#E040FB"></stop><stop offset=".55" stop-color="#7C5CFF"></stop><stop offset="1" stop-color="#22D3EE"></stop></linearGradient></defs><g fill="url(#mkg)" stroke="#fff" stroke-width="8" stroke-opacity=".92"><polygon points="18,46 175,232 237,231 133,98 376,99 356,131 412,167 494,49"></polygon><polygon points="205,138 338,241 232,391 274,449 435,221 319,137"></polygon><polygon points="264,274 149,279 201,359"></polygon></g></svg>
+<span style="font-weight: 600" data-home-label>Solutionist home</span>
+</a>
+<nav aria-label="Solutionist" style="display: flex; flex-wrap: wrap; gap: 6px 22px">
+<a href="{{HOME}}/coaches">For coaches and consultants</a>
+<a href="{{HOME}}/">All of Solutionist</a>
+<a href="{{APP_URL}}" style="color: #F5F6F8">Sign in</a>
+</nav>
+</div></div>
+
+<!-- HERO -->
+<section style="position: relative; overflow: hidden">
+<div class="aur" aria-hidden="true"><i></i><i></i><i></i></div>
+<div class="floor" aria-hidden="true"></div>
+<div class="blade" aria-hidden="true"></div>
+
+<header class="wrap" style="position: relative; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 14px 32px; padding-top: 20px; padding-bottom: 18px">
+<a href="/churches" style="display: flex; align-items: baseline; gap: 10px; text-decoration: none; color: #F5F6F8">
+<span style="font-family: 'Inter Tight', sans-serif; font-weight: 700; font-size: 24px; letter-spacing: -0.02em">Solutionist</span>
+<span class="serif" style="font-size: 28px; color: #D9D2FF">Churches</span>
+</a>
+<nav aria-label="Churches" style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px 28px; font-size: 15px; font-weight: 500">
+<details class="pmenu"><summary>Products<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#E4E6EB" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg></summary><div class="pmenu-panel"><a href="/churches"><i style="background: linear-gradient(135deg, #E040FB, #7C5CFF 55%, #22D3EE)"></i><b>Overview</b><span>Every part of church life</span></a><a href="/churches/people-and-care"><i style="background: #14B8A6"></i><b>People and Care</b><span>Shepherds, guests and prayer</span></a><a href="/churches/giving"><i style="background: #22C55E"></i><b>Giving</b><span>Your own Stripe, statements in January</span></a><a href="/churches/kids-and-youth"><i style="background: #F97316"></i><b>Kids and Youth</b><span>Check-in, tags and safe pickup</span></a><a href="/churches/groups-and-classes" aria-current="page"><i style="background: #3B82F6"></i><b>Groups and Classes</b><span>Chats, prayer walls and this week's study</span></a><a href="/churches/member-app"><i style="background: #EC4899"></i><b>Member App</b><span>The church in every pocket</span></a><a href="/churches/website-and-sermons"><i style="background: #EAB308"></i><b>Website and Sermons</b><span>Your front door, always open</span></a><a href="/churches/office-and-books"><i style="background: #94A3B8"></i><b>Office and Books</b><span>The books, and who sees giving</span></a></div></details>
+<a href="/churches#app" style="text-decoration: none; color: #E4E6EB">Member app</a>
+<a href="/churches#pricing" style="text-decoration: none; color: #E4E6EB">Pricing</a>
+<a href="{{HOME}}/start" class="btn btn-w btn-s">Start free</a>
+</nav>
+</header>
+
+<div class="wrap" style="position: relative">
+<div class="pbar">
+<div class="lock">
+<svg width="40" height="40" viewBox="0 0 48 48" aria-hidden="true"><defs><clipPath id="gt"><rect width="48" height="48" rx="12"></rect></clipPath></defs><g clip-path="url(#gt)" stroke="rgba(255,255,255,0.55)" stroke-width="1.1" stroke-linejoin="round"><polygon points="0,0 28,0 17,21 0,15" fill="#3B82F6"></polygon><polygon points="28,0 48,0 48,19 17,21" fill="#93C5FD"></polygon><polygon points="0,15 17,21 9,48 0,48" fill="#1D4ED8"></polygon><polygon points="17,21 48,19 48,48 9,48" fill="#3B82F6"></polygon><polygon points="17,21 33,31 24,48 9,48" fill="#1D4ED8" fill-opacity="0.6"></polygon></g><g transform="translate(12 12)" fill="none" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h11a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H9l-4 3v-3H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z"></path><path d="M19 9h1a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-1v3l-3-3h-4"></path></g></svg>
+<span style="display: flex; flex-direction: column; gap: 1px"><b>Groups and Classes</b><span>Solutionist for Churches</span></span>
+</div>
+<nav aria-label="In this room">
+<span class="mono" style="font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: rgba(255,255,255,0.6)">In this room</span>
+<a href="#chat">The chat</a>
+<a href="#prayer">Prayer wall</a>
+<a href="#meet">Gatherings</a>
+<a href="#classes">Classes</a>
+<a href="#study">This week's study</a>
+</nav>
+</div>
+</div>
+
+<div class="wrap" style="position: relative; padding-top: 72px; padding-bottom: 40px; display: flex; flex-direction: column; gap: 28px">
+<p class="eyebrow" style="color: #93C5FD; display: flex; align-items: center; gap: 10px"><span class="ping" style="background: #3B82F6"></span>Groups and Classes</p>
+<h1 class="h1" style="max-width: 1080px">Every group gets<br> <span class="serif glint" style="font-size: 1.06em">a home of its own.</span></h1>
+<div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; gap: 24px 48px">
+<p class="lede" style="max-width: 640px">Each small group, team and class gets its own page in the member app: a chat, a Board for the leader's news, a prayer wall, and when it meets. Chief drafts each week's questions from Sunday's message, and the leader posts them.</p>
+<div style="display: flex; flex-wrap: wrap; gap: 12px">
+<a href="{{HOME}}/start" class="btn btn-w">{{CTA_START}}</a>
+<a href="#chat" class="btn btn-l">See a group</a>
+</div>
+</div>
+<div class="facts">
+<div class="fact"><svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#93C5FD" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path><path d="m9 12 2 2 4-4"></path></svg><span><b>Every message checked</b><span>Before anyone in the group sees it</span></span></div>
+<div class="fact"><svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#93C5FD" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 4h6a4 4 0 0 1 4 4v13a3 3 0 0 0-3-3H2z"></path><path d="M22 4h-6a4 4 0 0 0-4 4v13a3 3 0 0 1 3-3h7z"></path></svg><span><b>Questions from Sunday</b><span>Drafted by Chief, posted by the leader</span></span></div>
+<div class="fact"><svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#93C5FD" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="18" rx="3"></rect><path d="M16 2v4M8 2v4M3 10h18"></path><path d="m9 15 2 2 4-4"></path></svg><span><b>Who came, counted</b><span>The same as Sunday check-in</span></span></div>
+</div>
+</div>
+
+<!-- The devices: the office's Groups page, and a group's own page in the member app -->
+<div class="wrap" style="position: relative; padding-bottom: 80px">
+<div class="stage" style="aspect-ratio: 2.25" aria-label="The office's Groups page on a computer and a group's page in the member app on a phone. Sample data.">
+<div class="st-lap" style="position: absolute; left: 4%; top: 0; width: 72%">
+<div class="dv-lid"><div class="dv-glass"></div><div style="aspect-ratio: 16 / 10">
+<div class="ow">
+<div class="ow-top">
+<svg width="11" height="10" viewBox="8 36 496 424" aria-hidden="true"><g fill="url(#mkg)"><polygon points="18,46 175,232 237,231 133,98 376,99 356,131 412,167 494,49"></polygon><polygon points="205,138 338,241 232,391 274,449 435,221 319,137"></polygon><polygon points="264,274 149,279 201,359"></polygon></g></svg>
+<span style="font-weight: 600; font-size: 9px; color: #F5F6F8">Grace Fellowship</span>
+<span style="margin-left: 10px; flex: 1; max-width: 46%; display: flex; align-items: center; gap: 5px; height: 15px; padding: 0 7px; border-radius: 999px; background: #13151C; border: 1px solid #1E2130; color: #8D93A1; font-size: 7.5px">Search people, groups, gifts</span>
+<span style="margin-left: auto; display: flex; align-items: center; gap: 4px; height: 16px; padding: 0 8px; border-radius: 999px; background: linear-gradient(90deg, rgba(224,64,251,0.22), rgba(124,92,255,0.22), rgba(34,211,238,0.18)); border: 1px solid rgba(124,92,255,0.45); font-size: 7.5px; font-weight: 600; color: #F5F6F8"><span style="width: 7px; height: 7px; border-radius: 50%; background: linear-gradient(135deg, #E040FB, #7C5CFF 55%, #22D3EE)"></span>Ask Chief</span>
+</div>
+<div class="ow-body">
+<div class="ow-side">
+<span class="ow-grp">Operate</span>
+<span class="ow-nav"><i style="background: #7C5CFF"></i>This week</span>
+<span class="ow-nav"><i style="background: #14B8A6"></i>People and Care</span>
+<span class="ow-nav on"><i style="background: #3B82F6"></i>Groups</span>
+<span class="ow-nav"><i style="background: #22C55E"></i>Giving</span>
+<span class="ow-nav"><i style="background: #F97316"></i>Kids</span>
+<span class="ow-grp">Grow</span>
+<span class="ow-nav"><i style="background: #EC4899"></i>Member app</span>
+<span class="ow-nav"><i style="background: #EAB308"></i>Sermons</span>
+<span class="ow-grp">Build</span>
+<span class="ow-nav"><i style="background: #EAB308"></i>Website</span>
+<span class="ow-nav"><i style="background: #94A3B8"></i>Books</span>
+</div>
+<div class="ow-main">
+<div style="display: flex; justify-content: space-between; align-items: center"><span class="ow-h">Groups</span><span style="display: flex; gap: 3px; font-size: 7.5px"><span style="padding: 3px 8px; border-radius: 999px; background: rgba(59,130,246,0.2); color: #93C5FD">This week</span><span style="padding: 3px 8px; color: #8D93A1">This month</span></span></div>
+<div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px">
+<div class="ow-card"><span class="ow-k" style="color: #93C5FD">Groups</span><span class="ow-n">14</span><span class="ow-s">12 met this week</span></div>
+<div class="ow-card"><span class="ow-k" style="color: #93C5FD">In a group</span><span class="ow-n">186</span><span class="ow-s">people</span></div>
+<div class="ow-card"><span class="ow-k" style="color: #93C5FD">Waiting to join</span><span class="ow-n">3</span><span class="ow-s">the longest, 3 days</span></div>
+<div class="ow-card"><span class="ow-k" style="color: #93C5FD">Held by the check</span><span class="ow-n">0</span><span class="ow-s">messages this week</span></div>
+</div>
+<div style="display: flex; gap: 6px; flex: 1; min-height: 0">
+<div class="ow-card" style="flex: 1.55; gap: 2px">
+<div style="display: flex; justify-content: space-between; align-items: baseline"><span class="ow-k" style="color: #8D93A1">How each group is doing</span><span style="font-size: 6.5px; color: #8D93A1">Counts only</span></div>
+<div class="ow-row" style="border-top: 0; font-size: 6.5px; color: #8D93A1; padding: 4px 0 2px"><span style="flex: 1">Group</span><span style="width: 44px; text-align: right">Chat, week</span><span style="width: 40px; text-align: right">Board</span><span style="width: 40px; text-align: right">Prayers</span><span style="width: 44px; text-align: right">Last met</span></div>
+<div class="ow-row"><span style="flex: 1; display: flex; flex-direction: column"><b style="font-weight: 600; color: #F5F6F8">Women of Grace</b><span style="font-size: 7px; color: #8D93A1">Denise R. and Ruth A.</span></span><span class="mono" style="width: 44px; text-align: right">48</span><span class="mono" style="width: 40px; text-align: right">6</span><span class="mono" style="width: 40px; text-align: right">9</span><span style="width: 44px; text-align: right; color: #93C5FD">12 came</span></div>
+<div class="ow-row"><span style="flex: 1; display: flex; flex-direction: column"><b style="font-weight: 600; color: #F5F6F8">Young Adults</b><span style="font-size: 7px; color: #8D93A1">Marcus T.</span></span><span class="mono" style="width: 44px; text-align: right">112</span><span class="mono" style="width: 40px; text-align: right">4</span><span class="mono" style="width: 40px; text-align: right">3</span><span style="width: 44px; text-align: right; color: #93C5FD">18 came</span></div>
+<div class="ow-row"><span style="flex: 1; display: flex; flex-direction: column"><b style="font-weight: 600; color: #F5F6F8">Men's Breakfast</b><span style="font-size: 7px; color: #8D93A1">Elder Mark</span></span><span class="mono" style="width: 44px; text-align: right">15</span><span class="mono" style="width: 40px; text-align: right">2</span><span class="mono" style="width: 40px; text-align: right">5</span><span style="width: 44px; text-align: right; color: #93C5FD">9 came</span></div>
+<div class="ow-row"><span style="flex: 1; display: flex; flex-direction: column"><b style="font-weight: 600; color: #F5F6F8">Youth</b><span style="font-size: 7px; color: #8D93A1">Pastor Dana · Board only</span></span><span class="mono" style="width: 44px; text-align: right">·</span><span class="mono" style="width: 40px; text-align: right">5</span><span class="mono" style="width: 40px; text-align: right">2</span><span style="width: 44px; text-align: right; color: #93C5FD">23 came</span></div>
+<div class="ow-row"><span style="flex: 1; display: flex; flex-direction: column"><b style="font-weight: 600; color: #F5F6F8">Marriage Class</b><span style="font-size: 7px; color: #8D93A1">The Okafors</span></span><span class="mono" style="width: 44px; text-align: right">22</span><span class="mono" style="width: 40px; text-align: right">3</span><span class="mono" style="width: 40px; text-align: right">4</span><span style="width: 44px; text-align: right; color: #93C5FD">11 came</span></div>
+<div class="ow-row"><span style="flex: 1; display: flex; flex-direction: column"><b style="font-weight: 600; color: #F5F6F8">Worship Team</b><span style="font-size: 7px; color: #8D93A1">Ruth A.</span></span><span class="mono" style="width: 44px; text-align: right">30</span><span class="mono" style="width: 40px; text-align: right">2</span><span class="mono" style="width: 40px; text-align: right">1</span><span style="width: 44px; text-align: right; color: #93C5FD">8 came</span></div>
+<div style="margin-top: 5px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px"><span style="padding: 5px 6px; border-radius: 6px; background: #0E1016; display: flex; flex-direction: column; gap: 1px"><b class="mono" style="font-weight: 500; font-size: 10px; color: #F5F6F8">0</b><span style="font-size: 6.5px; color: #8D93A1">open reports</span></span><span style="padding: 5px 6px; border-radius: 6px; background: #0E1016; display: flex; flex-direction: column; gap: 1px"><b class="mono" style="font-weight: 500; font-size: 10px; color: #F5F6F8">2</b><span style="font-size: 6.5px; color: #8D93A1">safety officers</span></span><span style="padding: 5px 6px; border-radius: 6px; background: #0E1016; display: flex; flex-direction: column; gap: 1px"><b class="mono" style="font-weight: 500; font-size: 10px; color: #F5F6F8">1</b><span style="font-size: 6.5px; color: #8D93A1">prayer went to a pastor</span></span></div>
+<span style="margin-top: 4px; display: flex; align-items: center; gap: 4px; font-size: 7px; color: #8D93A1"><svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="#93C5FD" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="11" width="16" height="10" rx="2.5"></rect><path d="M8 11V7a4 4 0 0 1 8 0v4"></path></svg>You see how each group is doing, never a word of its chat.</span>
+</div>
+<div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px">
+<div class="ow-card" style="gap: 5px"><span class="ow-k" style="color: #8D93A1">A word to every group</span>
+<span style="padding: 6px 7px; border-radius: 6px; background: #0E1016; border: 1px solid #1E2130; font-size: 8px; color: #C9CDD6; line-height: 1.4">Thank you for praying for the fall retreat. Sign-ups close Sunday.</span>
+<span style="display: flex; gap: 3px; font-size: 7px"><span style="padding: 2px 7px; border-radius: 999px; background: rgba(59,130,246,0.2); color: #93C5FD">Every group</span><span style="padding: 2px 7px; color: #8D93A1">Leaders only</span></span>
+<span class="ow-s">On each Board, a note to every phone, an email to the rest.</span>
+<span style="align-self: flex-start; font-size: 7.5px; font-weight: 600; padding: 3px 8px; border-radius: 999px; background: #1D4ED8; color: #FFFFFF">Send to 14 groups</span></div>
+<div class="ow-card" style="gap: 4px"><span class="ow-k" style="color: #8D93A1">Waiting to join</span><span style="font-size: 8.5px; color: #F5F6F8"><b style="font-weight: 600">Kayla M.</b> asked to join Young Adults</span><span class="ow-s">3 days ago · no answer yet</span><span style="align-self: flex-start; font-size: 7.5px; font-weight: 600; padding: 3px 8px; border-radius: 999px; background: #222533; color: #F5F6F8">Remind the leaders</span></div>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div></div>
+<div class="dv-base"></div>
+</div>
+
+<div class="st-ph" style="position: absolute; right: 3%; bottom: 0; width: 21%">
+<div class="dv-ph"><span class="dv-island"></span><div class="mx sm" style="aspect-ratio: 9 / 19.2">
+<div class="mx-in">
+<div class="mx-bar"><span class="mx-back"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"></path></svg>Connect</span><span class="mx-me">S</span></div>
+<div class="gx-hero">
+<span class="gx-art" aria-hidden="true"><svg class="pat" viewBox="0 0 320 200" preserveAspectRatio="xMidYMid slice" fill="none" stroke="currentColor" stroke-width="1.2"><circle cx="160" cy="100" r="70"></circle><circle cx="210" cy="100" r="70"></circle><circle cx="260" cy="100" r="70"></circle><circle cx="310" cy="100" r="70"></circle></svg><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"></path></svg></span>
+<span class="gx-scrim"></span>
+<div class="gx-hero-in"><span class="gx-kind">Small group</span><b class="gx-name">Women of Grace</b><p>Tuesdays, 7:00 PM · The Okafors' home</p><p class="gx-who"><span class="gx-faces" aria-hidden="true"><span class="gx-av">DR</span><span class="gx-av">RA</span><span class="gx-av">GO</span><span class="gx-av">S</span></span><span>14 people · led by Denise and Ruth</span></p></div>
+</div>
+<div class="gx-tabs">
+<span class="gx-tab on"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"></path></svg>Home</span>
+<span class="gx-tab"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20.5l1.4-4.9A8 8 0 1 1 21 12z"></path></svg>Chat</span>
+<span class="gx-tab"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="m3 11 18-5v12L3 14v-3z"></path><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"></path></svg>Board<span class="gx-n">1</span></span>
+<span class="gx-tab"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M11 14h2a2 2 0 1 0 0-4h-3c-.6 0-1.1.2-1.4.6L3 16"></path><path d="m7 20 1.6-1.4c.3-.4.8-.6 1.4-.6h4c1.1 0 2.1-.4 2.8-1.2l4.6-4.4a2 2 0 0 0-2.75-2.91l-4.2 3.9"></path><path d="m2 15 6 6"></path><path d="M19.5 8.5c.7-.7 1.5-1.6 1.5-2.7A2.73 2.73 0 0 0 16 4a2.78 2.78 0 0 0-5 1.8c0 1.2.8 2 1.5 2.8L16 12Z"></path></svg>Prayer</span>
+</div>
+<div class="gx-card pin">
+<div class="gx-ph"><span class="gx-av m">DR</span><span class="gx-t"><span class="gx-who2">Denise R.<span class="gx-tag">Leader</span></span><span class="gx-small">2 h ago</span></span><span class="gx-pinned">Pinned</span></div>
+<b class="gx-h">Potluck on Tuesday</b>
+<p class="gx-body">Bring a dish if you can. We start at 7, and Ruth is making her peach cobbler.</p>
+<div class="gx-foot"><span class="gx-btn"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg>Got it</span></div>
+</div>
+<div class="gx-row"><span class="gx-disc gold"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 4h6a4 4 0 0 1 4 4v13a3 3 0 0 0-3-3H2z"></path><path d="M22 4h-6a4 4 0 0 0-4 4v13a3 3 0 0 1 3-3h7z"></path></svg></span><span class="gx-t"><b>This week's study</b><span>Rooted in Love · 4 questions from Sunday</span></span></div>
+</div>
+<div class="mx-nav">
+<span class="mx-tab"><i><svg viewBox="0 0 24 24"><path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"></path></svg></i>Home</span>
+<span class="mx-tab"><i><svg viewBox="0 0 24 24"><rect x="2.5" y="4" width="19" height="13" rx="3"></rect><path d="m10.5 8.3 4 2.2-4 2.2z"></path><path d="M8 21h8"></path></svg></i>Watch</span>
+<span class="mx-tab"><i><svg viewBox="0 0 24 24"><path d="M2 4h6a4 4 0 0 1 4 4v13a3 3 0 0 0-3-3H2z"></path><path d="M22 4h-6a4 4 0 0 0-4 4v13a3 3 0 0 1 3-3h7z"></path></svg></i>Bible</span>
+<span class="mx-tab"><i><svg viewBox="0 0 24 24"><path d="M11 14h2a2 2 0 1 0 0-4h-3c-.6 0-1.1.2-1.4.6L3 16"></path><path d="m7 20 1.6-1.4c.3-.4.8-.6 1.4-.6h4c1.1 0 2.1-.4 2.8-1.2l4.6-4.4a2 2 0 0 0-2.75-2.91l-4.2 3.9"></path><path d="m2 15 6 6"></path><path d="M19.5 8.5c.7-.7 1.5-1.6 1.5-2.7A2.73 2.73 0 0 0 16 4a2.78 2.78 0 0 0-5 1.8c0 1.2.8 2 1.5 2.8L16 12Z"></path></svg></i>Give</span>
+<span class="mx-tab on teal"><i><svg viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"></path></svg></i>Connect</span>
+</div>
+</div></div>
+</div>
+</div>
+</div>
+</section>
+
+<!-- THE CHAT -->
+<section id="chat" class="sec light">
+<div class="wrap split">
+<div class="txt">
+<p class="eyebrow ink">The chat</p>
+<h2 class="h2">A group chat that <span class="serif ink" style="font-size: 1.08em">stays kind.</span></h2>
+<p class="body">Every group's chat lives inside the group. Every message is checked before anyone sees it, and a harmful one is held for the church's safety officers. A leader can take a message down, and the office can make a group Board-only or leaders-only.</p>
+<ul class="ticks">
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Love, Praying and Amen on any message, and replies that quote it</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Polls and photos from the +, checked like any message</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Each person picks how they hear: every message, one evening note at 7, or only replies</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Quiet from 9 PM to 7 AM. An after-hours alert, one a night, still rings for people who allow it, for a late prayer call</span></li>
+</ul>
+</div>
+<div class="vis">
+<div class="twin" aria-label="Sample of a group's chat in the member app">
+<div style="width: min(300px, 90%)">
+<div class="dv-ph"><span class="dv-island"></span><div class="mx" style="aspect-ratio: 9 / 19.2">
+<div class="mx-in">
+<div class="mx-bar"><span class="mx-back"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"></path></svg>Women of Grace</span><span class="mx-me">S</span></div>
+<div class="gx-tabs">
+<span class="gx-tab"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"></path></svg>Home</span>
+<span class="gx-tab on"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20.5l1.4-4.9A8 8 0 1 1 21 12z"></path></svg>Chat</span>
+<span class="gx-tab"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="m3 11 18-5v12L3 14v-3z"></path><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"></path></svg>Board</span>
+<span class="gx-tab"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M11 14h2a2 2 0 1 0 0-4h-3c-.6 0-1.1.2-1.4.6L3 16"></path><path d="m7 20 1.6-1.4c.3-.4.8-.6 1.4-.6h4c1.1 0 2.1-.4 2.8-1.2l4.6-4.4a2 2 0 0 0-2.75-2.91l-4.2 3.9"></path><path d="m2 15 6 6"></path><path d="M19.5 8.5c.7-.7 1.5-1.6 1.5-2.7A2.73 2.73 0 0 0 16 4a2.78 2.78 0 0 0-5 1.8c0 1.2.8 2 1.5 2.8L16 12Z"></path></svg>Prayer</span>
+</div>
+<div class="cx-list">
+<div class="cx-m"><span class="gx-av">RA</span><div class="cx-col"><span class="cx-who">Ruth A.<span class="gx-tag">Leader</span></span><p class="cx-b">Who can come early Tuesday to help set up chairs?</p><div class="cx-rx"><span class="cx-chip"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7z"></path></svg>2</span></div></div></div>
+<div class="cx-m mine"><div class="cx-col"><p class="cx-b">I can be there at 6:30!</p></div></div>
+<div class="cx-m"><span class="gx-av">DR</span><div class="cx-col"><span class="cx-who">Denise R.<span class="gx-tag">Leader</span></span>
+<div class="cx-poll"><p class="cx-pq">Fall retreat: which weekend?</p>
+<span class="cx-po on"><i style="width: 64%"></i><span>Nov 6 to 8</span><b>9</b></span>
+<span class="cx-po"><i style="width: 36%"></i><span>Nov 13 to 15</span><b>5</b></span>
+<small class="cx-pn">You voted · 14 votes · closes Friday</small></div></div></div>
+<div class="cx-m"><span class="gx-av">GO</span><div class="cx-col"><span class="cx-who">Grace O.</span><span class="cx-q"><b>Ruth A.</b>My mom's surgery is Thursday morning.</span><p class="cx-b">Praying for her, Ruth.</p><div class="cx-rx"><span class="cx-chip on"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M11 14h2a2 2 0 1 0 0-4h-3c-.6 0-1.1.2-1.4.6L3 16"></path><path d="m7 20 1.6-1.4c.3-.4.8-.6 1.4-.6h4c1.1 0 2.1-.4 2.8-1.2l4.6-4.4a2 2 0 0 0-2.75-2.91l-4.2 3.9"></path><path d="m2 15 6 6"></path><path d="M19.5 8.5c.7-.7 1.5-1.6 1.5-2.7A2.73 2.73 0 0 0 16 4a2.78 2.78 0 0 0-5 1.8c0 1.2.8 2 1.5 2.8L16 12Z"></path></svg>6</span><span class="cx-chip">Amen 3</span></div></div></div>
+</div>
+<div class="cx-compose">
+<div class="cx-row"><span class="cx-plus"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg></span><span class="cx-in">Message Women of Grace</span><span class="cx-send"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7"></path></svg></span></div>
+<p class="cx-safe"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path><path d="m9 12 2 2 4-4"></path></svg>Kind words only. Every message is checked first.</p>
+</div>
+</div>
+</div></div>
+</div>
+<div class="alt" style="flex: 1 1 250px; max-width: 320px; display: flex; flex-direction: column; gap: 16px; margin-top: 48px">
+<div class="push" aria-label="Sample evening note on a phone">
+<span class="push-mark">GF</span>
+<span style="display: flex; flex-direction: column; gap: 2px; min-width: 0"><span style="display: flex; justify-content: space-between; gap: 8px; font-size: 12px; color: #a8a8ae"><b style="color: #f5f5f7; font-weight: 650">Women of Grace</b>7:00 PM</span><span style="font-size: 13px; line-height: 1.35">12 new messages from Denise, Ruth and 3 others · 1 reply to you</span></span>
+</div>
+<div class="card note-card" aria-label="How a member hears about the chat">
+<span style="display: flex; align-items: center; gap: 8px; font-size: 14px; color: #5A5E6B"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#1D4ED8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"></path><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"></path></svg>Notes: <b style="color: #0B0C11">Evening summary</b></span>
+<div class="seg3"><span>Every message</span><span class="on">Evening summary</span><span>Off</span></div>
+<span style="font-size: 13.5px; color: #5A5E6B; line-height: 1.45">One quiet note at 7 PM: who talked, and any replies to you. Off still tells you when someone replies.</span>
+</div>
+</div>
+</div>
+</div>
+</div>
+</section>
+
+<!-- THE PRAYER WALL -->
+<section id="prayer" class="sec" style="background: #07080B">
+<div class="wrap split" style="flex-wrap: wrap-reverse">
+<div class="vis" style="display: flex; justify-content: center">
+<div style="width: min(300px, 90%)">
+<div class="dv-ph" aria-label="Sample of a group's prayer wall"><span class="dv-island"></span><div class="mx" style="aspect-ratio: 9 / 19.2">
+<div class="mx-in">
+<div class="mx-bar"><span class="mx-back"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"></path></svg>Women of Grace</span><span class="mx-me">S</span></div>
+<div class="gx-tabs">
+<span class="gx-tab"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="m3 11 18-5v12L3 14v-3z"></path><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"></path></svg>Board</span>
+<span class="gx-tab on"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M11 14h2a2 2 0 1 0 0-4h-3c-.6 0-1.1.2-1.4.6L3 16"></path><path d="m7 20 1.6-1.4c.3-.4.8-.6 1.4-.6h4c1.1 0 2.1-.4 2.8-1.2l4.6-4.4a2 2 0 0 0-2.75-2.91l-4.2 3.9"></path><path d="m2 15 6 6"></path><path d="M19.5 8.5c.7-.7 1.5-1.6 1.5-2.7A2.73 2.73 0 0 0 16 4a2.78 2.78 0 0 0-5 1.8c0 1.2.8 2 1.5 2.8L16 12Z"></path></svg>Prayer</span>
+<span class="gx-tab"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="18" rx="3"></rect><path d="M16 2v4M8 2v4M3 10h18"></path></svg>Meet</span>
+<span class="gx-tab"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"></path></svg>People</span>
+</div>
+<p class="px-stat"><b>38</b>prayers prayed this month</p>
+<div class="gx-card" style="gap: 8px">
+<span class="px-l">Carry each other in prayer</span>
+<span class="px-area">What can we pray about?</span>
+<div class="px-to"><span class="on"><i></i><span style="display: block"><b>This group</b><small>13 people pray with you</small></span></span><span><i></i><span style="display: block"><b>Only the pastors</b><small>Private. The group never sees it</small></span></span></div>
+</div>
+<div class="px-filter"><span class="on">Praying for</span><span>Answered · 7</span></div>
+<div class="gx-card">
+<div class="gx-ph"><span class="gx-av m">RA</span><span class="gx-t"><span class="gx-who2">Ruth</span><span class="gx-small">2 h ago</span></span></div>
+<p class="gx-body">My mom's surgery is Thursday morning. Praying for steady hands and a quick recovery.</p>
+<div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap"><span class="px-btn on"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M11 14h2a2 2 0 1 0 0-4h-3c-.6 0-1.1.2-1.4.6L3 16"></path><path d="m7 20 1.6-1.4c.3-.4.8-.6 1.4-.6h4c1.1 0 2.1-.4 2.8-1.2l4.6-4.4a2 2 0 0 0-2.75-2.91l-4.2 3.9"></path><path d="m2 15 6 6"></path><path d="M19.5 8.5c.7-.7 1.5-1.6 1.5-2.7A2.73 2.73 0 0 0 16 4a2.78 2.78 0 0 0-5 1.8c0 1.2.8 2 1.5 2.8L16 12Z"></path></svg>Praying</span><span class="px-n"><span class="gx-faces" aria-hidden="true"><span class="gx-av">S</span><span class="gx-av">GO</span><span class="gx-av">DR</span></span>6 praying</span></div>
+</div>
+<div class="gx-card"><p class="px-pastor"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path><path d="m9 12 2 2 4-4"></path></svg><span>A pastor has a request from this group. They'll reach out.</span></p></div>
+</div>
+<div class="mx-nav">
+<span class="mx-tab"><i><svg viewBox="0 0 24 24"><path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"></path></svg></i>Home</span>
+<span class="mx-tab"><i><svg viewBox="0 0 24 24"><rect x="2.5" y="4" width="19" height="13" rx="3"></rect><path d="m10.5 8.3 4 2.2-4 2.2z"></path><path d="M8 21h8"></path></svg></i>Watch</span>
+<span class="mx-tab"><i><svg viewBox="0 0 24 24"><path d="M2 4h6a4 4 0 0 1 4 4v13a3 3 0 0 0-3-3H2z"></path><path d="M22 4h-6a4 4 0 0 0-4 4v13a3 3 0 0 1 3-3h7z"></path></svg></i>Bible</span>
+<span class="mx-tab"><i><svg viewBox="0 0 24 24"><path d="M11 14h2a2 2 0 1 0 0-4h-3c-.6 0-1.1.2-1.4.6L3 16"></path><path d="m7 20 1.6-1.4c.3-.4.8-.6 1.4-.6h4c1.1 0 2.1-.4 2.8-1.2l4.6-4.4a2 2 0 0 0-2.75-2.91l-4.2 3.9"></path><path d="m2 15 6 6"></path><path d="M19.5 8.5c.7-.7 1.5-1.6 1.5-2.7A2.73 2.73 0 0 0 16 4a2.78 2.78 0 0 0-5 1.8c0 1.2.8 2 1.5 2.8L16 12Z"></path></svg></i>Give</span>
+<span class="mx-tab on teal"><i><svg viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"></path></svg></i>Connect</span>
+</div>
+</div></div>
+</div>
+</div>
+<div class="txt">
+<p class="eyebrow" style="color: #93C5FD">Prayer wall</p>
+<h2 class="h2">Carry each other <span class="serif glint" style="font-size: 1.08em">in prayer.</span></h2>
+<p class="body">Every group has its own prayer wall. A member asks the group, by first name, or only the pastors, privately. Words about harm, abuse or a death never reach the wall: they go straight to a pastor, and the group sees only that a pastor has it.</p>
+<ul class="ticks" style="color: #D5D8DF">
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>"I'm praying" on any request, and the asker hears, once a day</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Mark it answered with a word of praise, and the group says "Praise God"</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Every request is checked first, like every message</span></li>
+</ul>
+</div>
+</div>
+</section>
+
+<!-- GATHERINGS AND VIDEO -->
+<section id="meet" class="sec tint">
+<div class="wrap split">
+<div class="txt">
+<p class="eyebrow ink">Gatherings</p>
+<h2 class="h2">Who's coming, <span class="serif ink" style="font-size: 1.08em">who came.</span></h2>
+<p class="body">A group's regular time sets its next gathering. Members say Going, Maybe or Can't make it, see who else is coming, and tap "I'm here" when they arrive. It counts the same as Sunday check-in, so the office's attendance and its list of who's been missing line up.</p>
+<ul class="ticks">
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>The host's address shows only to the group, with directions</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Bring something: one dish each, so the list spreads around</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>A 5 PM reminder that says what each person is bringing</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Video for a group, from the app. Joining counts as being there, nothing is recorded, and a youth meeting waits for two approved adults</span></li>
+</ul>
+</div>
+<div class="vis">
+<div class="twin" aria-label="Sample of a group's Meet tab and a group video meeting">
+<div style="width: min(290px, 90%)">
+<div class="dv-ph"><span class="dv-island"></span><div class="mx" style="aspect-ratio: 9 / 19.2">
+<div class="mx-in">
+<div class="mx-bar"><span class="mx-back"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"></path></svg>Women of Grace</span><span class="mx-me">S</span></div>
+<div class="gx-tabs">
+<span class="gx-tab"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M11 14h2a2 2 0 1 0 0-4h-3c-.6 0-1.1.2-1.4.6L3 16"></path><path d="m7 20 1.6-1.4c.3-.4.8-.6 1.4-.6h4c1.1 0 2.1-.4 2.8-1.2l4.6-4.4a2 2 0 0 0-2.75-2.91l-4.2 3.9"></path><path d="m2 15 6 6"></path><path d="M19.5 8.5c.7-.7 1.5-1.6 1.5-2.7A2.73 2.73 0 0 0 16 4a2.78 2.78 0 0 0-5 1.8c0 1.2.8 2 1.5 2.8L16 12Z"></path></svg>Prayer</span>
+<span class="gx-tab on"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="18" rx="3"></rect><path d="M16 2v4M8 2v4M3 10h18"></path></svg>Meet</span>
+<span class="gx-tab"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"></path></svg>People</span>
+</div>
+<div class="gx-card">
+<span class="mt-kick">This week</span>
+<b class="mt-when">Tuesday, Oct 27 · 7:00 PM</b>
+<p class="mt-where"><svg class="i" viewBox="0 0 24 24" aria-hidden="true" style="color: #7a7a80; margin-top: 2px"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0z"></path><circle cx="12" cy="10" r="3"></circle></svg><span>The Okafors' home · 412 Elm Street · <a href="#meet">Directions</a></span></p>
+<p class="mt-note"><b>From your leaders:</b> Park on the street. The driveway is for Ruth's van.</p>
+<div class="mt-rsvp"><span class="on">Going</span><span>Maybe</span><span>Can't make it</span></div>
+<p class="mt-count"><span class="gx-faces" aria-hidden="true"><span class="gx-av">DR</span><span class="gx-av">RA</span><span class="gx-av">GO</span></span>You and 9 others going · 2 maybe</p>
+</div>
+<div class="bx-list">
+<div class="bx-h"><b>Bring something</b><span>2 still open</span></div>
+<div class="bx-slot"><span class="gx-av m">DR</span><span class="gx-t"><b>A main dish</b><small>Denise</small></span></div>
+<div class="bx-slot"><span class="gx-av m" style="background: #2F6BEA; color: #fff">S</span><span class="gx-t"><b>Greens</b><small>You</small></span></div>
+<div class="bx-slot"><span class="bx-open"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 2v7c0 1.1.9 2 2 2h4a2 2 0 0 0 2-2V2"></path><path d="M7 2v20"></path><path d="M21 15V2a5 5 0 0 0-5 5v6c0 1.1.9 2 2 2h3Zm0 0v7"></path></svg></span><span class="gx-t"><b>Drinks</b><small>Open</small></span><span class="gx-btn sm">I'll bring it</span></div>
+</div>
+</div>
+<div class="mx-nav">
+<span class="mx-tab"><i><svg viewBox="0 0 24 24"><path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"></path></svg></i>Home</span>
+<span class="mx-tab"><i><svg viewBox="0 0 24 24"><rect x="2.5" y="4" width="19" height="13" rx="3"></rect><path d="m10.5 8.3 4 2.2-4 2.2z"></path><path d="M8 21h8"></path></svg></i>Watch</span>
+<span class="mx-tab"><i><svg viewBox="0 0 24 24"><path d="M2 4h6a4 4 0 0 1 4 4v13a3 3 0 0 0-3-3H2z"></path><path d="M22 4h-6a4 4 0 0 0-4 4v13a3 3 0 0 1 3-3h7z"></path></svg></i>Bible</span>
+<span class="mx-tab"><i><svg viewBox="0 0 24 24"><path d="M11 14h2a2 2 0 1 0 0-4h-3c-.6 0-1.1.2-1.4.6L3 16"></path><path d="m7 20 1.6-1.4c.3-.4.8-.6 1.4-.6h4c1.1 0 2.1-.4 2.8-1.2l4.6-4.4a2 2 0 0 0-2.75-2.91l-4.2 3.9"></path><path d="m2 15 6 6"></path><path d="M19.5 8.5c.7-.7 1.5-1.6 1.5-2.7A2.73 2.73 0 0 0 16 4a2.78 2.78 0 0 0-5 1.8c0 1.2.8 2 1.5 2.8L16 12Z"></path></svg></i>Give</span>
+<span class="mx-tab on teal"><i><svg viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"></path></svg></i>Connect</span>
+</div>
+</div></div>
+</div>
+<div class="alt" style="width: min(250px, 70%); margin-top: 72px">
+<div class="dv-ph"><span class="dv-island"></span><div class="mx" style="aspect-ratio: 9 / 19.2">
+<div class="mx-in">
+<div class="mx-bar"><span class="mx-back"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"></path></svg>Groups</span><span class="mx-me">S</span></div>
+<div style="display: flex; flex-direction: column; gap: calc(var(--u)*6)"><span style="align-self: flex-start; display: inline-flex; align-items: center; gap: calc(var(--u)*6); height: calc(var(--u)*26); padding: 0 calc(var(--u)*10); border-radius: 999px; background: #ff3b30; color: #fff; font-size: calc(var(--u)*12); font-weight: 700"><span style="width: calc(var(--u)*8); height: calc(var(--u)*8); border-radius: 50%; background: #fff"></span>Live</span><b class="mx-lt">Men's Breakfast</b></div>
+<div class="vx-tiles">
+<div class="vx-tile"><img src="/assets/home/p-james.jpg" alt=""><span class="vx-name">Pastor James</span></div>
+<div class="vx-tile"><span class="gx-av">MT</span><span class="vx-name">Marcus T.</span></div>
+<div class="vx-tile"><span class="gx-av" style="background: #251C09; color: #F4C04E">JO</span><span class="vx-name">James O.</span></div>
+<div class="vx-tile"><span class="gx-av" style="background: #2A1409; color: #FF9D6B">DK</span><span class="vx-name">David K.</span></div>
+<div class="vx-tile"><span class="gx-av" style="background: #16122E; color: #A99BFF">AB</span><span class="vx-name">Andre B.</span></div>
+<div class="vx-tile"><span class="gx-av" style="background: #0a1429; color: #6B9BFF">S</span><span class="vx-name">You</span></div>
+</div>
+<div class="vx-bar"><span>Mic off</span><span>Camera off</span><span class="end">Leave</span></div>
+<span class="gx-btn soft" style="background: #161618">End meeting for everyone</span>
+<p style="font-size: calc(var(--u)*12); color: #a8a8ae; text-align: center">Group meetings aren't recorded.</p>
+</div>
+<div class="mx-nav">
+<span class="mx-tab"><i><svg viewBox="0 0 24 24"><path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"></path></svg></i>Home</span>
+<span class="mx-tab"><i><svg viewBox="0 0 24 24"><rect x="2.5" y="4" width="19" height="13" rx="3"></rect><path d="m10.5 8.3 4 2.2-4 2.2z"></path><path d="M8 21h8"></path></svg></i>Watch</span>
+<span class="mx-tab"><i><svg viewBox="0 0 24 24"><path d="M2 4h6a4 4 0 0 1 4 4v13a3 3 0 0 0-3-3H2z"></path><path d="M22 4h-6a4 4 0 0 0-4 4v13a3 3 0 0 1 3-3h7z"></path></svg></i>Bible</span>
+<span class="mx-tab"><i><svg viewBox="0 0 24 24"><path d="M11 14h2a2 2 0 1 0 0-4h-3c-.6 0-1.1.2-1.4.6L3 16"></path><path d="m7 20 1.6-1.4c.3-.4.8-.6 1.4-.6h4c1.1 0 2.1-.4 2.8-1.2l4.6-4.4a2 2 0 0 0-2.75-2.91l-4.2 3.9"></path><path d="m2 15 6 6"></path><path d="M19.5 8.5c.7-.7 1.5-1.6 1.5-2.7A2.73 2.73 0 0 0 16 4a2.78 2.78 0 0 0-5 1.8c0 1.2.8 2 1.5 2.8L16 12Z"></path></svg></i>Give</span>
+<span class="mx-tab on teal"><i><svg viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"></path></svg></i>Connect</span>
+</div>
+</div></div>
+</div>
+</div>
+</div>
+</div>
+</section>
+
+<!-- CLASSES -->
+<section id="classes" class="sec light">
+<div class="wrap split" style="flex-wrap: wrap-reverse">
+<div class="vis">
+<div class="twin" aria-label="Sample of Classes in the member app, and a class night as the office counts it">
+<div style="width: min(290px, 90%)">
+<div class="dv-ph"><span class="dv-island"></span><div class="mx" style="aspect-ratio: 9 / 19.2">
+<div class="mx-in">
+<div class="mx-bar"><b style="font-size: calc(var(--u)*15); font-weight: 700">Grace Fellowship</b><span class="mx-me">S</span></div>
+<b class="mx-lt">Connect</b>
+<div class="cl-seg"><span>Groups</span><span>Messages</span><span class="on">Classes</span></div>
+<div class="cl-next">
+<span class="cl-when">Thursday · 7:00 PM</span>
+<b class="t">Growing in the Word, week 3</b>
+<span class="s">Fellowship Hall, or join from here</span>
+<span class="gx-btn sm" style="align-self: flex-start; margin-top: calc(var(--u)*4)">Open my classroom</span>
+</div>
+<b style="font-size: calc(var(--u)*19); font-weight: 700; letter-spacing: -0.025em; margin-top: calc(var(--u)*4)">Your road</b>
+<div class="cl-road">
+<div class="cl-step done"><span class="cl-dot"><svg class="i" viewBox="0 0 24 24" aria-hidden="true" style="width: calc(var(--u)*14); height: calc(var(--u)*14)"><path d="M20 6 9 17l-5-5"></path></svg></span><span class="cl-st"><b>Foundations</b><span>Finished in September</span></span></div>
+<div class="cl-step now"><span class="cl-dot">2</span><span class="cl-st"><b>Growing in the Word</b><span>Week 3 of 6</span></span></div>
+<div class="cl-step"><span class="cl-dot">3</span><span class="cl-st"><b>Serving</b><span>Open to join</span></span></div>
+<div class="cl-step fin"><span class="cl-dot"><svg class="i" viewBox="0 0 24 24" aria-hidden="true" style="width: calc(var(--u)*14); height: calc(var(--u)*14)"><path d="m12 2.5 2.9 5.9 6.6 1-4.8 4.6 1.1 6.5L12 17.4l-5.9 3.1 1.1-6.5-4.8-4.6 6.6-1z"></path></svg></span><span class="cl-st"><b>Commissioning night</b><span>December 13</span></span></div>
+</div>
+<div class="cl-cls"><span class="gx-t"><b>Marriage Class</b><span class="s">Sundays at 9:00 AM · open to join</span></span><span class="gx-btn sm">Join</span></div>
+</div>
+<div class="mx-nav">
+<span class="mx-tab"><i><svg viewBox="0 0 24 24"><path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"></path></svg></i>Home</span>
+<span class="mx-tab"><i><svg viewBox="0 0 24 24"><rect x="2.5" y="4" width="19" height="13" rx="3"></rect><path d="m10.5 8.3 4 2.2-4 2.2z"></path><path d="M8 21h8"></path></svg></i>Watch</span>
+<span class="mx-tab"><i><svg viewBox="0 0 24 24"><path d="M2 4h6a4 4 0 0 1 4 4v13a3 3 0 0 0-3-3H2z"></path><path d="M22 4h-6a4 4 0 0 0-4 4v13a3 3 0 0 1 3-3h7z"></path></svg></i>Bible</span>
+<span class="mx-tab"><i><svg viewBox="0 0 24 24"><path d="M11 14h2a2 2 0 1 0 0-4h-3c-.6 0-1.1.2-1.4.6L3 16"></path><path d="m7 20 1.6-1.4c.3-.4.8-.6 1.4-.6h4c1.1 0 2.1-.4 2.8-1.2l4.6-4.4a2 2 0 0 0-2.75-2.91l-4.2 3.9"></path><path d="m2 15 6 6"></path><path d="M19.5 8.5c.7-.7 1.5-1.6 1.5-2.7A2.73 2.73 0 0 0 16 4a2.78 2.78 0 0 0-5 1.8c0 1.2.8 2 1.5 2.8L16 12Z"></path></svg></i>Give</span>
+<span class="mx-tab on teal"><i><svg viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"></path></svg></i>Connect</span>
+</div>
+</div></div>
+</div>
+<div class="alt" style="flex: 1 1 230px; max-width: 290px; display: flex; flex-direction: column; gap: 16px; margin-top: 60px">
+<div class="card note-card" aria-label="Sample of a class night as the office sees it">
+<span class="mono" style="font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: #1D4ED8">Thursday's class night</span>
+<b style="font-family: 'Inter Tight', sans-serif; font-size: 22px; letter-spacing: -0.02em">21 came</b>
+<div style="display: flex; height: 10px; border-radius: 999px; overflow: hidden; background: #ECEEF1"><span class="grow" style="width: 67%; background: #1D4ED8"></span><span class="grow" style="width: 33%; background: #93C5FD"></span></div>
+<span style="display: flex; justify-content: space-between; font-size: 13.5px; color: #5A5E6B"><span>14 in the room</span><span>7 online</span></span>
+<span style="font-size: 13.5px; color: #5A5E6B; line-height: 1.45">Counted in Services and Events, like any night at church. The slides went to the 4 who weren't there.</span>
+</div>
+<div class="card note-card" style="background: #0B0C11; color: #F5F6F8; border-color: transparent" aria-label="Sample of Chief summing up a class's answers">
+<span style="display: flex; align-items: center; gap: 8px"><span class="chief-av" style="width: 22px; height: 22px"></span><b style="font-size: 14px">Chief, for the teacher</b></span>
+<span style="font-size: 14px; line-height: 1.5; color: #C9CDD6">Most said prayer feels easier in the morning, before the day gets loud. A few find it hardest after a long shift.</span>
+<span style="font-size: 12.5px; color: #959BA8">No one is named.</span>
+</div>
+</div>
+</div>
+</div>
+<div class="txt">
+<p class="eyebrow ink">Classes</p>
+<h2 class="h2">Classes in the app, <span class="serif ink" style="font-size: 1.08em">one tap to join.</span></h2>
+<p class="body">Connect holds Classes beside Groups and Messages. A member sees their next class night or the one live now, the road of each program they're on, and the church's other classes, each one tap to join. No email to type, no link to wait for.</p>
+<ul class="ticks">
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>A class night counts toward attendance, in the room or online</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>The teacher can send the night's slides to whoever wasn't there</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Chief sums up the room's answers for the teacher alone, and never names anyone</span></li>
+</ul>
+</div>
+</div>
+</section>
+
+<!-- THIS WEEK'S STUDY, WITH CHIEF -->
+<section id="study" class="sec" style="background: #07080B; overflow: hidden">
+<div class="aur" aria-hidden="true" style="opacity: 0.6"><i></i><i></i><i></i></div>
+<div class="wrap split" style="position: relative">
+<div class="txt">
+<p class="eyebrow" style="color: #93C5FD">This week's study</p>
+<h2 class="h2">Sunday's message, <span class="serif glint" style="font-size: 1.08em">in every group.</span></h2>
+<p class="body">When a new message goes up in Sermons, Chief drafts four questions from its title, passage and summary for every group that has a leader. The leader posts them as they are, or changes them first. Nothing reaches the group until a leader posts it.</p>
+<ul class="ticks" style="color: #D5D8DF">
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>The office's own questions for small groups go first, when the message has them</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>The group sees the passage, the questions and a way to the message itself</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Missed three gatherings? Chief writes a note to each person, and the leader sends it</span></li>
+</ul>
+</div>
+<div class="vis stack" style="min-height: 600px">
+<div class="dvw" style="position: absolute; left: 0; top: 0; width: min(290px, 45%)">
+<div class="dv-ph" aria-label="Sample of a leader's My group page in the member app"><span class="dv-island"></span><div class="mx" style="aspect-ratio: 9 / 19.2">
+<div class="mx-in">
+<div class="mx-bar"><b style="font-size: calc(var(--u)*15); font-weight: 700">Grace Fellowship</b><span class="mx-me">DR</span></div>
+<span class="ld-eb">My group</span>
+<b class="mx-hello">Good evening, <em style="color: #4FD8C4">Denise.</em></b>
+<div class="ld-pick"><span class="on">Women of Grace</span><span>Marriage Class</span></div>
+<div class="ld-stats">
+<div class="ld-stat first"><b>14</b><small>people · 1 asking to join</small></div>
+<div class="ld-stat"><b>12</b><small>came Tuesday · 10 going next</small></div>
+<div class="ld-stat"><b>11<span>/14</span></b><small>saw your pinned post</small></div>
+</div>
+<div class="ld-chief">
+<span class="ld-chief-h"><svg class="i" viewBox="0 0 24 24" aria-hidden="true" style="width: calc(var(--u)*15); height: calc(var(--u)*15)"><path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"></path><path d="M20 3v4M22 5h-4M4 17v2M5 18H3"></path></svg>Chief</span>
+<p>Sunday's message, <b>Rooted in Love</b>, has 4 questions ready for Tuesday. You can change any of them.</p>
+<div style="display: flex; align-items: center; gap: calc(var(--u)*8); flex-wrap: wrap"><span class="gx-btn sm">Post them as they are</span><span class="ld-mini">Review the questions</span></div>
+<span class="gx-fine">Nobody in the group sees them until you post.</span>
+</div>
+<div class="ld-need">
+<div class="ld-need-h"><b>Haven't been in a while</b></div>
+<div class="ld-faces"><span class="ld-face"><span class="gx-av">B</span>Brenda <a href="#study">Message</a></span><span class="ld-face"><span class="gx-av">F</span>Faith <a href="#study">Message</a></span><span class="ld-face"><span class="gx-av">G</span>Gloria <a href="#study">Message</a></span></div>
+<div class="ld-draft"><span class="gx-btn sm"><svg class="i" viewBox="0 0 24 24" aria-hidden="true" style="width: calc(var(--u)*15); height: calc(var(--u)*15)"><path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"></path></svg>Draft a note to each</span></div>
+</div>
+</div>
+<div class="mx-nav" style="grid-template-columns: repeat(6, minmax(0, 1fr))">
+<span class="mx-tab"><i><svg viewBox="0 0 24 24"><path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"></path></svg></i>Home</span>
+<span class="mx-tab"><i><svg viewBox="0 0 24 24"><rect x="2.5" y="4" width="19" height="13" rx="3"></rect><path d="m10.5 8.3 4 2.2-4 2.2z"></path><path d="M8 21h8"></path></svg></i>Watch</span>
+<span class="mx-tab"><i><svg viewBox="0 0 24 24"><path d="M2 4h6a4 4 0 0 1 4 4v13a3 3 0 0 0-3-3H2z"></path><path d="M22 4h-6a4 4 0 0 0-4 4v13a3 3 0 0 1 3-3h7z"></path></svg></i>Bible</span>
+<span class="mx-tab"><i><svg viewBox="0 0 24 24"><path d="M11 14h2a2 2 0 1 0 0-4h-3c-.6 0-1.1.2-1.4.6L3 16"></path><path d="m7 20 1.6-1.4c.3-.4.8-.6 1.4-.6h4c1.1 0 2.1-.4 2.8-1.2l4.6-4.4a2 2 0 0 0-2.75-2.91l-4.2 3.9"></path><path d="m2 15 6 6"></path><path d="M19.5 8.5c.7-.7 1.5-1.6 1.5-2.7A2.73 2.73 0 0 0 16 4a2.78 2.78 0 0 0-5 1.8c0 1.2.8 2 1.5 2.8L16 12Z"></path></svg></i>Give</span>
+<span class="mx-tab"><i><svg viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"></path></svg></i>Connect</span>
+<span class="mx-tab on"><i><svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path><path d="m9 12 2 2 4-4"></path></svg></i>Lead</span>
+</div>
+</div></div>
+</div>
+<div class="chief" style="position: absolute; right: 0; bottom: 56px; width: 52%">
+<div class="chief-in">
+<div style="display: flex; align-items: center; gap: 10px"><span class="chief-av"></span><span style="display: flex; flex-direction: column"><b style="font-size: 14px">Chief</b><span style="font-size: 12px; color: #959BA8">To Denise · sample</span></span></div>
+<div style="display: flex; flex-direction: column; gap: 6px; font-size: 15px; line-height: 1.5">
+<span class="line" style="animation-delay: 0.2s">Sunday's message has four questions ready for Tuesday.</span>
+<span class="line" style="animation-delay: 1.4s">Brenda, Faith and Gloria haven't been in three weeks. I wrote each of them a short note for you to send.<span class="caret"></span></span>
+</div>
+<div style="display: flex; flex-wrap: wrap; gap: 8px"><span class="btn btn-w btn-s">Post the questions</span><span class="btn btn-l btn-s">Read the notes</span></div>
+</div>
+</div>
+</div>
+</div>
+</section>
+
+<!-- CHIEF, EVERY ROOM -->
+<section style="background: #07080B; border-top: 1px solid #12141B">
+<div class="wrap" style="padding-top: 40px; padding-bottom: 8px">
+<div class="mc-strip" style="display: flex; flex-wrap: wrap; align-items: center; gap: 14px 22px; padding: 22px 26px; border-radius: 22px; background: #0D0F14; border: 1px solid #1F2330">
+<span style="width: 36px; height: 36px; border-radius: 50%; background: linear-gradient(135deg, #E040FB, #7C5CFF 55%, #22D3EE); flex: none"></span>
+<p style="margin: 0; flex: 1 1 420px; font-size: 16px; line-height: 1.55; color: #C9CDD6"><b style="color: #F5F6F8; font-weight: 600">Chief works the same way in every room.</b> It works from your church's own records, waits for your yes before it sends anything or touches money, and lists what it does on your History page.</p>
+<a href="/churches#chief">How Chief works</a>
+</div>
+</div>
+</section>
+<!-- /CHIEF, EVERY ROOM -->
+<!-- THE ROOMS NEXT DOOR -->
+<section class="sec" style="background: #07080B; padding-top: 40px; border-top: 1px solid #12141B">
+<div class="wrap" style="display: flex; flex-direction: column; gap: 32px">
+<div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; gap: 16px">
+<h2 class="h2" style="font-size: clamp(30px, 3.2vw, 44px)">The rooms <span class="serif" style="font-size: 1.08em; color: #D9D2FF">next door.</span></h2>
+<p class="body" style="max-width: 420px">Groups share one list of people with every other part of your church.</p>
+</div>
+<div class="doors">
+<a href="/churches/people-and-care" class="door"><span class="dglow" style="background: radial-gradient(circle, #14B8A6 0%, rgba(20,184,166,0) 70%)"></span>
+<svg width="44" height="44" viewBox="0 0 48 48" aria-hidden="true" style="position: relative"><defs><clipPath id="gd1"><rect width="48" height="48" rx="12"></rect></clipPath></defs><g clip-path="url(#gd1)" stroke="rgba(255,255,255,0.55)" stroke-width="1.1" stroke-linejoin="round"><polygon points="0,0 28,0 17,21 0,15" fill="#14B8A6"></polygon><polygon points="28,0 48,0 48,19 17,21" fill="#5EEAD4"></polygon><polygon points="0,15 17,21 9,48 0,48" fill="#0F766E"></polygon><polygon points="17,21 48,19 48,48 9,48" fill="#14B8A6"></polygon><polygon points="17,21 33,31 24,48 9,48" fill="#0F766E" fill-opacity="0.6"></polygon></g><g transform="translate(12 12)" fill="none" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.2"></circle><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"></path><path d="M16 4.5a3 3 0 0 1 0 6M18 14.5c1.9.8 3 2.8 3 5.5"></path></g></svg>
+<b>People and Care</b><span>Who came to group counts with Sunday, so the people who drift get noticed early.</span><em style="color: #5EEAD4">Go to People and Care</em></a>
+<a href="/churches/member-app" class="door"><span class="dglow" style="background: radial-gradient(circle, #EC4899 0%, rgba(236,72,153,0) 70%)"></span>
+<svg width="44" height="44" viewBox="0 0 48 48" aria-hidden="true" style="position: relative"><defs><clipPath id="gd2"><rect width="48" height="48" rx="12"></rect></clipPath></defs><g clip-path="url(#gd2)" stroke="rgba(255,255,255,0.55)" stroke-width="1.1" stroke-linejoin="round"><polygon points="0,0 28,0 17,21 0,15" fill="#EC4899"></polygon><polygon points="28,0 48,0 48,19 17,21" fill="#F9A8D4"></polygon><polygon points="0,15 17,21 9,48 0,48" fill="#BE185D"></polygon><polygon points="17,21 48,19 48,48 9,48" fill="#EC4899"></polygon><polygon points="17,21 33,31 24,48 9,48" fill="#BE185D" fill-opacity="0.6"></polygon></g><g transform="translate(12 12)" fill="none" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="2.5" width="10" height="19" rx="2.5"></rect><path d="M11 18.5h2"></path></g></svg>
+<b>Member App</b><span>Every group lives in the Connect tab, beside messages and classes.</span><em style="color: #F9A8D4">Go to the Member App</em></a>
+<a href="/churches/website-and-sermons" class="door"><span class="dglow" style="background: radial-gradient(circle, #EAB308 0%, rgba(234,179,8,0) 70%)"></span>
+<svg width="44" height="44" viewBox="0 0 48 48" aria-hidden="true" style="position: relative"><defs><clipPath id="gd3"><rect width="48" height="48" rx="12"></rect></clipPath></defs><g clip-path="url(#gd3)" stroke="rgba(255,255,255,0.55)" stroke-width="1.1" stroke-linejoin="round"><polygon points="0,0 28,0 17,21 0,15" fill="#EAB308"></polygon><polygon points="28,0 48,0 48,19 17,21" fill="#FCD34D"></polygon><polygon points="0,15 17,21 9,48 0,48" fill="#A16207"></polygon><polygon points="17,21 48,19 48,48 9,48" fill="#EAB308"></polygon><polygon points="17,21 33,31 24,48 9,48" fill="#A16207" fill-opacity="0.6"></polygon></g><g transform="translate(12 12)" fill="none" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M10 8.5l5 3.5-5 3.5z"></path></g></svg>
+<b>Website and Sermons</b><span>Each week's study starts from the message the office posts in Sermons.</span><em style="color: #FCD34D">Go to Website and Sermons</em></a>
+</div>
+</div>
+</section>
+
+<!-- ON EVERY PLAN -->
+<section id="plans" class="sec light">
+<div class="wrap" style="display: flex; flex-direction: column; gap: 36px">
+<div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; gap: 20px 48px">
+<div style="display: flex; flex-direction: column; gap: 16px; max-width: 700px">
+<p class="eyebrow" style="color: #5A5E6B">Plans</p>
+<h2 class="h2">Groups and Classes come with <span class="serif ink" style="font-size: 1.08em">every plan.</span></h2>
+</div>
+<p class="body" style="max-width: 440px">Every group feature is on every plan, for every group you have. The plans change how many people sign in at the office and how much Chief does each month.</p>
+</div>
+<div class="planrow">
+<div class="plan"><span class="pn">Starter</span><span class="pp">${{P_STARTER}} <small>a month</small></span><ul>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>Every group's page: chat, Board, prayer wall, Meet</li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>Attendance, video for groups, and classes in the app</li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>1 login at the office, {{C_STARTER}} AI actions a month</li>
+</ul></div>
+<div class="plan mid"><span class="pn">Professional</span><span class="pp">${{P_PRO}} <small>a month</small></span><ul>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>Everything in Starter</li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>3 logins at the office</li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>{{C_PRO}} AI actions a month, room for Chief to draft for every leader</li>
+</ul></div>
+<div class="plan"><span class="pn">Solutionist</span><span class="pp">${{P_SOL}} <small>a month</small></span><ul>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>Everything in Professional</li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>7 logins, and a seat for your accountant</li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>{{C_SOL}} AI actions a month, Chief across every ministry</li>
+</ul></div>
+</div>
+<a href="/churches#pricing" style="align-self: flex-start; font-weight: 600; color: #0B0C11">Compare every plan</a>
+</div>
+</section>
+
+<!-- CLOSING -->
+<section id="start" style="position: relative; overflow: hidden; background: #07080B">
+<div class="aur" aria-hidden="true"><i></i><i></i><i></i></div>
+<div class="floor" aria-hidden="true" style="height: 60%"></div>
+<div class="wrap" style="position: relative; padding-top: 150px; padding-bottom: 150px; display: flex; flex-direction: column; align-items: center; gap: 24px; text-align: center">
+<h2 class="h1" style="font-size: clamp(42px, 5.6vw, 84px); max-width: 960px; text-wrap: balance">Give every group <span class="serif glint" style="font-size: 1.06em">a place to gather.</span></h2>
+<p class="lede">{{TRIAL_LINE}}</p>
+<a href="{{HOME}}/start" class="btn btn-w">Start free</a>
+</div>
+</section>
+
+<!-- Footer -->
+<footer class="foot"><div class="wrap foot-in">
+<div style="display: flex; flex-direction: column; gap: 10px; max-width: 360px">
+<div style="display: flex; align-items: center; gap: 8px; color: #F5F6F8"><svg width="22" height="19" viewBox="8 36 496 424" aria-hidden="true"><g fill="url(#mkg)" stroke="#fff" stroke-width="8" stroke-opacity=".92"><polygon points="18,46 175,232 237,231 133,98 376,99 356,131 412,167 494,49"></polygon><polygon points="205,138 338,241 232,391 274,449 435,221 319,137"></polygon><polygon points="264,274 149,279 201,359"></polygon></g></svg><span style="font-family: 'Inter Tight', sans-serif; font-weight: 600; font-size: 17px">Solutionist</span></div>
+<p style="margin: 0; font-size: 14px">Everything a small business runs on, in one place, with Chief running it beside you.</p>
+</div>
+<nav aria-label="Church products"><b>For churches</b><a href="/churches">Overview</a><a href="/churches/people-and-care">People and Care</a><a href="/churches/giving">Giving</a><a href="/churches/kids-and-youth">Kids and Youth</a></nav>
+<nav aria-label="More church products"><span aria-hidden="true" style="display: block; height: 21px"></span><a href="/churches/groups-and-classes">Groups and Classes</a><a href="/churches/member-app">Member App</a><a href="/churches/website-and-sermons">Website and Sermons</a><a href="/churches/office-and-books">Office and Books</a></nav>
+<nav aria-label="Company"><b>Solutionist</b><a href="{{HOME}}/">Solutionist home</a><a href="{{HOME}}/coaches">For coaches and consultants</a><a href="/churches#pricing">Pricing</a><a href="{{HOME}}/privacy">Privacy</a><a href="{{HOME}}/terms">Terms</a></nav>
+</div></footer>
+
+</div>
+{{ANALYTICS}}
+<script>
+/* Solutionist home: someone who came here from the main site goes back to the page they left */
+(function () {
+  try {
+    var a = document.querySelector("[data-home]");
+    if (!a || !document.referrer) return;
+    var r = new URL(document.referrer), h = new URL(a.href).hostname;
+    if (r.hostname !== h && r.hostname !== "www." + h) return;
+    if (/^\/(churches|coaches|consultants)(\/|$)/.test(r.pathname)) return;
+    a.href = r.href;
+    a.querySelector("[data-home-label]").textContent = "Back to Solutionist";
+  } catch (e) { /* the plain link still goes home */ }
+})();
+</script>
+</body>
+</html>

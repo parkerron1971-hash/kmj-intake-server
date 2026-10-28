@@ -9,9 +9,24 @@ reads the records those rules need and applies them on every action:
   /my/messages/feed/<thread>?v=    JSON for the chat poll
   /my/messages/to/<contact>        start (or reopen) a private chat
   /my/messages/group/<group>       open a group's chat
+  (the church's All group leaders room is at /my/groups/leaders)
   /my/messages/family/<teen>       a linked parent's read-only view of their teen's chats
   POST /my/messages/<thread>/send · /accept · /decline · /mute · /block
+  POST /my/messages/<thread>/react {message_id, kind}  Love / Praying / Amen
+  POST /my/messages/<thread>/hide  {message_id}        a group's leader takes one
+                                   down; the safety officers are told (a report)
   POST /my/messages/report · /my/messages/guidelines
+
+An after-hours alert (send with after_hours=1, 2026-10-20): during the
+church's quiet hours a message can ring through for members who let it, for
+a late prayer call (member_push quiet hours). One per person a night.
+
+A group's chat lives inside the group (member_portal_groups, 2026-10-20):
+/my/messages/group/<group> and a group thread opened from the inbox go to
+/my/groups/<group>/chat for its members (a linked parent still reads here).
+Replies quote the message they answer (msg_messages.reply_to); the office
+can make a group Board-only (groups.chat_on) or leaders-only
+(groups.chat_writers).
 
 Every message is screened (msg_screen.py) before anyone sees it: harmful
 ones are HELD for the church's safety officers, crisis words deliver with
@@ -132,6 +147,53 @@ def group_people(business_id: str, group_id: str) -> Optional[List[Dict[str, Any
     return rows if isinstance(rows, list) else None
 
 
+LEADERS_ROOM = "All group leaders"
+
+# The jobs whose holders lead something (church_roles.JOBS): the pastors, a
+# ministry's lead, a team's leader, the welcome lead and the teachers.
+# Kevin, 2026-10-27, on the approved leadership plan: department leaders
+# belong in the leaders chat, not only group leaders and pastors. A role
+# on any other job (prayer, care, kids, office) is in only when another
+# role answers to it: the Intercessor leader and the Deacons are, the
+# Intercessors, the Care team and the kids workers aren't.
+LEADER_JOBS = ("senior", "pastoral", "ministry", "team", "welcome", "teach")
+
+
+def leaders_room_people(business_id: str) -> Optional[List[Dict[str, Any]]]:
+    """Who is in the church's All group leaders room, read live (Kevin,
+    2026-10-20: "yes all group leaders room would be great"; 2026-10-27:
+    department leaders too): everyone who leads one of its active groups,
+    and everyone holding an active role that leads (LEADER_JOBS, or one
+    another role answers to). [{'contact_id', 'role': 'leader'}], or None
+    on a failed read."""
+    import church_roles as cr
+    leads = sb_clients.sb_get_as_service(
+        f"/group_members?business_id=eq.{_q(business_id)}&role=eq.leader&select=contact_id,group_id&limit=5000")
+    active = sb_clients.sb_get_as_service(
+        f"/groups?business_id=eq.{_q(business_id)}&active=eq.true&select=id&limit=2000")
+    roles = sb_clients.sb_get_as_service(
+        f"/church_leader_roles?business_id=eq.{_q(business_id)}&status=eq.active&select=contact_id,role&limit=1000")
+    defs = cr.defs(str(business_id))
+    if not isinstance(leads, list) or not isinstance(active, list) or not isinstance(roles, list) or defs is None:
+        return None
+    by = cr.by_key(defs)
+    led = {str(d["reports_to"]) for d in defs if d.get("reports_to")}
+
+    def leads_something(key: str) -> bool:
+        d = by.get(key) or cr.LEGACY.get(key) or {}
+        return d.get("job") in LEADER_JOBS or (bool(d.get("id")) and str(d["id"]) in led)
+
+    on = {str(g["id"]) for g in active}
+    ids = {str(r["contact_id"]) for r in leads if str(r["group_id"]) in on}
+    ids |= {str(r["contact_id"]) for r in roles if leads_something(r["role"])}
+    return [{"contact_id": i, "role": "leader"} for i in sorted(ids)]
+
+
+def in_leaders_room(business_id: str, me_id: str) -> Optional[bool]:
+    room = leaders_room_people(business_id)
+    return None if room is None else any(p["contact_id"] == str(me_id) for p in room)
+
+
 def share_group(business_id: str, a: str, b: str) -> Optional[bool]:
     ga, gb = my_groups(business_id, a), my_groups(business_id, b)
     if ga is None or gb is None:
@@ -149,7 +211,7 @@ def thread(business_id: str, tid: str):
 
 def participants(business_id: str, tid: str) -> Optional[List[Dict[str, Any]]]:
     rows = sb_clients.sb_get_as_service(
-        f"/msg_participants?thread_id=eq.{_q(tid)}&business_id=eq.{_q(business_id)}&select=contact_id,state,last_read_at,muted")
+        f"/msg_participants?thread_id=eq.{_q(tid)}&business_id=eq.{_q(business_id)}&select=contact_id,state,last_read_at,muted,notify")
     return rows if isinstance(rows, list) else None
 
 
@@ -166,7 +228,8 @@ def chat_access(business_id: str, t: Dict[str, Any], me_id: str, today: Optional
             return None
         ids = [str(p["contact_id"]) for p in parts]
     else:
-        gp = group_people(business_id, t["group_id"])
+        gp = (leaders_room_people(business_id) if t["kind"] == "leaders"
+              else group_people(business_id, t["group_id"]))
         if gp is None:
             return None
         ids = [str(r["contact_id"]) for r in gp]
@@ -226,12 +289,48 @@ def messages(business_id: str, tid: str, me_id: str, *, parent: bool = False) ->
     removed message."""
     rows = sb_clients.sb_get_as_service(
         f"/msg_messages?thread_id=eq.{_q(tid)}&business_id=eq.{_q(business_id)}"
-        f"&select=id,sender_contact_id,body,status,flag,created_at&order=created_at.desc&limit={PAGE}")
+        f"&select=id,sender_contact_id,body,status,flag,reply_to,after_hours,created_at&order=created_at.desc&limit={PAGE}")
     if not isinstance(rows, list):
         return None
     keep = [m for m in rows if m["status"] == "delivered"
             or (m["status"] == "held" and not parent and str(m.get("sender_contact_id")) == str(me_id))]
     return list(reversed(keep))
+
+
+REACTIONS = ("love", "pray", "amen")
+
+
+def reactions_for(business_id: str, message_ids: Iterable[str], me_id: str) -> Optional[Dict[str, Dict[str, Any]]]:
+    """{message_id: {'love': n, 'pray': n, 'amen': n, 'mine': {kinds}}}."""
+    ids = sorted({str(i) for i in message_ids if i})
+    out: Dict[str, Dict[str, Any]] = {i: {**{k: 0 for k in REACTIONS}, "mine": set()} for i in ids}
+    for i in range(0, len(ids), 150):
+        rows = sb_clients.sb_get_as_service(
+            f"/msg_reactions?business_id=eq.{_q(business_id)}&message_id=in.({','.join(ids[i:i + 150])})"
+            f"&select=message_id,contact_id,kind&limit=20000")
+        if not isinstance(rows, list):
+            return None
+        for r in rows:
+            o = out.get(str(r["message_id"]))
+            if o is None or r.get("kind") not in REACTIONS:
+                continue
+            o[r["kind"]] += 1
+            if str(r["contact_id"]) == str(me_id):
+                o["mine"].add(r["kind"])
+    return out
+
+
+def group_chat_settings(business_id: str, group_id: str) -> Optional[Dict[str, Any]]:
+    """{'chat_on', 'chat_writers', 'chat_extras'} for a group (an older row
+    reads as on, everyone writes, polls on)."""
+    rows = sb_clients.sb_get_as_service(
+        f"/groups?id=eq.{_q(group_id)}&business_id=eq.{_q(business_id)}&select=chat_on,chat_writers,chat_extras&limit=1")
+    if not isinstance(rows, list):
+        return None
+    g = rows[0] if rows else {}
+    return {"chat_on": g.get("chat_on") is not False,
+            "chat_writers": g.get("chat_writers") if g.get("chat_writers") in ("all", "leaders") else "all",
+            "chat_extras": g.get("chat_extras") is not False}
 
 
 def staff_looks(business_id: str, tid: str) -> Optional[List[Dict[str, Any]]]:
@@ -255,6 +354,21 @@ def ensure_group_thread(business_id: str, group_id: str) -> Optional[str]:
         return str(made[0]["id"])
     again = sb_clients.sb_get_as_service(
         f"/msg_threads?business_id=eq.{_q(business_id)}&group_id=eq.{_q(group_id)}&kind=eq.group&select=id&limit=1")
+    return str(again[0]["id"]) if isinstance(again, list) and again else None
+
+
+def ensure_leaders_thread(business_id: str) -> Optional[str]:
+    """The church's one All group leaders room (msg_threads kind leaders)."""
+    where = f"/msg_threads?business_id=eq.{_q(business_id)}&kind=eq.leaders&select=id&limit=1"
+    rows = sb_clients.sb_get_as_service(where)
+    if not isinstance(rows, list):
+        return None
+    if rows:
+        return str(rows[0]["id"])
+    made = sb_clients.sb_post_as_service("/msg_threads", {"business_id": business_id, "kind": "leaders"})
+    if isinstance(made, list) and made:
+        return str(made[0]["id"])
+    again = sb_clients.sb_get_as_service(where)   # another request made it first
     return str(again[0]["id"]) if isinstance(again, list) and again else None
 
 
@@ -442,7 +556,8 @@ def render_chat(biz, site, request, me, t, acc, msgs, looks, *, title: str, view
         elif acc["can_send"]:
             compose = (f'<form class="mb-compose" method="post" action="/my/messages/{_e(t["id"])}/send" id="mb-compose">'
                        '<label class="mp-sr" for="mb-say">Message</label>'
-                       f'<input class="mp-input" id="mb-say" name="body" maxlength="{BODY_MAX}" autocomplete="off" placeholder="Write a message…" required>'
+                       f'<input class="mp-input" id="mb-say" name="body" maxlength="{BODY_MAX}" autocomplete="off" placeholder="Write a message…" required'
+                       f' value="{_e(str(request.query_params.get("say") or "")[:BODY_MAX])}">'
                        f'<button class="mp-go" type="submit" aria-label="Send">{ui.icon("send", 18)}</button></form>'
                        '<p class="mb-chat-err mp-err" id="mb-chat-err" role="alert" hidden></p>')
         else:
@@ -505,6 +620,15 @@ def inbox_rows(business_id: str, me_id: str) -> Optional[Tuple[List[Dict[str, An
             f"/msg_threads?business_id=eq.{_q(business_id)}&kind=eq.group&group_id=in.({_in(gids)})&select=id,group_id,last_message_at")
         if not isinstance(gthreads, list):
             return None
+    room = in_leaders_room(business_id, me_id)
+    if room is None:
+        return None
+    if room:
+        lthread = sb_clients.sb_get_as_service(
+            f"/msg_threads?business_id=eq.{_q(business_id)}&kind=eq.leaders&select=id,group_id,last_message_at&limit=1")
+        if not isinstance(lthread, list):
+            return None
+        gthreads = list(gthreads) + lthread
     tids = {str(p["thread_id"]) for p in mine if p.get("state") != "declined"} | {str(t["id"]) for t in gthreads}
     if not tids:
         return [], []
@@ -536,19 +660,23 @@ def inbox_rows(business_id: str, me_id: str) -> Optional[Tuple[List[Dict[str, An
         preview = (recent[0]["body"][:80] if recent else "No messages yet")
         if t["kind"] == "group":
             title = gname.get(str(t["group_id"]), "Group")
+        elif t["kind"] == "leaders":
+            title = LEADERS_ROOM
         else:
             title = first_and_initial((folks.get(other_of.get(tid, "")) or {}).get("name"))
         import member_photos as ph
         other = folks.get(other_of.get(tid, "")) or {}
-        photo = ph.src(other) if t["kind"] != "group" and ph.shown_to_members(other) else ""
-        row = {"id": tid, "kind": t["kind"], "title": title, "preview": preview, "unread": unread, "photo": photo}
+        photo = ph.src(other) if t["kind"] == "direct" and ph.shown_to_members(other) else ""
+        row = {"id": tid, "kind": t["kind"], "title": title, "preview": preview, "unread": unread, "photo": photo,
+               "group_id": str(t.get("group_id") or "")}
         (requests if (read.get(tid) or {}).get("state") == "requested" else chats).append(row)
     return chats, requests
 
 
 def startable(business_id: str, me: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
     """People this member can message directly: group-mates (by the rules)
-    and their own family links. There is no member directory."""
+    and their own family links. (The member directory, member_directory.py,
+    links to /my/messages/to/<id> for the adults listed in it.)"""
     groups = my_groups(business_id, me["id"])
     if groups is None:
         return None
@@ -627,7 +755,13 @@ async def serve(request: Request, biz, site, me, sub: str):
             return RedirectResponse("/my/messages?err=error", status_code=303, headers=_SECURE_HEADERS)
         if isinstance(tid, str) and tid.startswith("err:"):
             return RedirectResponse(f"/my/messages?err={tid[4:]}", status_code=303, headers=_SECURE_HEADERS)
-        return RedirectResponse(f"/my/messages/{tid}", status_code=303, headers=_SECURE_HEADERS)
+        if kind == "group":
+            # A group's chat lives inside the group (member_portal_groups).
+            return RedirectResponse(f"/my/groups/{target}/chat", status_code=303, headers=_SECURE_HEADERS)
+        # A note to send (group_care) rides along, written into the box.
+        say = str(request.query_params.get("say") or "")[:BODY_MAX]
+        return RedirectResponse(f"/my/messages/{tid}" + (f"?say={quote(say, safe='')}" if say else ""),
+                                status_code=303, headers=_SECURE_HEADERS)
     if rest.startswith("feed/"):
         tid = rest[len("feed/"):]
         data = await asyncio.to_thread(_feed, biz["id"], str(me["id"]), tid)
@@ -687,6 +821,8 @@ def _title(business_id: str, t: Dict[str, Any], acc: Dict[str, Any], me_id: str)
     if t["kind"] == "group":
         g = sb_clients.sb_get_as_service(f"/groups?id=eq.{_q(t['group_id'])}&business_id=eq.{_q(business_id)}&select=name&limit=1")
         return (g[0].get("name") if isinstance(g, list) and g else "") or "Group chat"
+    if t["kind"] == "leaders":
+        return LEADERS_ROOM
     ids = [i for i in acc["people"] if i != str(me_id)]
     return first_and_initial(acc["people"][ids[0]]["name"]) if ids else "Chat"
 
@@ -703,6 +839,13 @@ def _chat_page(request, biz, site, me, tid: str, *, as_parent_of: str = ""):
     if not acc["role"]:
         return _gate(biz, site, me, "gone"), 404
     parent = acc["role"] == "parent"
+    if t["kind"] in ("group", "leaders") and not parent:
+        # Its members read a group's chat inside the group, and the leaders'
+        # room on its own page.
+        from fastapi.responses import RedirectResponse
+        from member_portal import _SECURE_HEADERS
+        to = f"/my/groups/{t['group_id']}/chat" if t["kind"] == "group" else "/my/groups/leaders"
+        return RedirectResponse(to, status_code=303, headers=_SECURE_HEADERS)
     msgs = messages(biz["id"], tid, str(me["id"]), parent=parent)
     looks = staff_looks(biz["id"], tid)
     if msgs is None or looks is None:
@@ -738,7 +881,7 @@ def _family_page(request, biz, site, me, teen_id: str):
         return _gate(biz, site, me, "error"), 503
     chats = rows[0] + rows[1]
     items = "".join(
-        f'<li><a href="/my/messages/{_e(r["id"])}"><span class="mb-thumb mb-chat-av">{ui.icon("users", 18) if r["kind"] == "group" else _e(ui.initials(r["title"]))}</span>'
+        f'<li><a href="/my/messages/{_e(r["id"])}"><span class="mb-thumb mb-chat-av">{ui.icon("users", 18) if r["kind"] != "direct" else _e(ui.initials(r["title"]))}</span>'
         f'<span class="mb-list-text"><strong>{_e(r["title"])}</strong><span>{_e(r["preview"])}</span></span>{ui.icon("chevron", 16)}</a></li>'
         for r in chats) or '<li class="mp-muted" style="padding:12px 0">No chats yet.</li>'
     return _shell(biz, site, "Messages", f"""<div class="mb-lt"><h1>{_e(teen['name'])}'s chats</h1></div>
@@ -760,6 +903,22 @@ def _feed(business_id: str, me_id: str, tid: str) -> Dict[str, Any]:
 
 
 # ─── POST ─────────────────────────────────────────────────────────────
+
+
+def alert_since() -> str:
+    """The window for "one after-hours alert a night": the last 12 hours."""
+    return (datetime.now(timezone.utc) - timedelta(hours=12)).isoformat()
+
+
+# The leader's desk (group_desk) is a group's chat too.
+_GROUP_BACK = re.compile(r"^(?:/my/groups/(?:[0-9a-fA-F-]{36}/chat|leaders)|/my/lead/groups/[0-9a-fA-F-]{36})$")
+
+
+def _back_to(form, default: str) -> str:
+    """A group's chat page (or the leaders' room) asks to come back to
+    itself; anything else goes where it always went."""
+    b = str(form.get("back") or "") if form is not None else ""
+    return b if _GROUP_BACK.match(b) else default
 
 
 def _wants_json(request: Request) -> bool:
@@ -808,9 +967,25 @@ async def send(tid: str, request: Request):
     if rules.why_not(me) or not me.get("guidelines_at"):
         return _answer(request, False, "not_enabled", back, 403)
     form = await request.form()
+    back = _back_to(form, back)
     text = str(form.get("body") or "").strip()[:BODY_MAX]
+    # A photo (chat_photos): the caption is the message, "Photo" when there's none.
+    import chat_photos
+    upload = form.get("photo")
+    photo = upload if hasattr(upload, "read") and getattr(upload, "filename", "") else None
+    captioned = bool(text)
+    if photo is not None:
+        text = text[:chat_photos.CAPTION_MAX] or chat_photos.PLACEHOLDER
     if not text:
         return _answer(request, False, "empty_chat", back)
+    # A poll (chat_polls): the question is the message, its choices ride along.
+    import chat_polls
+    choices = (chat_polls.choices_from(form.getlist("choice"))
+               if str(form.get("poll") or "") == "1" and photo is None else None)
+    if choices is not None:
+        text = text[:chat_polls.QUESTION_MAX]
+        if len(choices) < 2:
+            return _answer(request, False, "poll_choices", back)
     if not UUID.match(tid):
         return _answer(request, False, "gone_chat", "/my/messages", 404)
     t = await asyncio.to_thread(thread, biz["id"], tid)
@@ -818,28 +993,111 @@ async def send(tid: str, request: Request):
         return _answer(request, False, "error", back, 503)
     if not t:
         return _answer(request, False, "gone_chat", "/my/messages", 404)
+    if choices is not None and t["kind"] not in ("group", "leaders"):
+        return _answer(request, False, "poll_where", back, 403)
+    if photo is not None and t["kind"] not in ("group", "leaders"):
+        return _answer(request, False, "photo_where", back, 403)
     acc = await asyncio.to_thread(chat_access, biz["id"], t, str(me["id"]))
     if acc is None:
         return _answer(request, False, "error", back, 503)
     if acc["role"] != "member" or not acc["can_send"] or acc.get("me_state") == "declined":
         return _answer(request, False, acc.get("why") or "cant_send", back, 403)
+    if photo is not None and (acc.get("teen_in_chat") or rules.is_teen(me)):
+        # Not in a chat with a teen in it (Kevin's call; off until he says).
+        return _answer(request, False, "photo_teen", back, 403)
+    if t["kind"] == "group":
+        # The office's switches for this group (2026-10-20).
+        gs = await asyncio.to_thread(group_chat_settings, biz["id"], str(t["group_id"]))
+        if gs is None:
+            return _answer(request, False, "error", back, 503)
+        if not gs["chat_on"]:
+            return _answer(request, False, "group_board_only", back, 403)
+        if (choices is not None or photo is not None) and not gs["chat_extras"]:
+            return _answer(request, False, "polls_off", back, 403)
+        if gs["chat_writers"] == "leaders":
+            mine = await asyncio.to_thread(my_groups, biz["id"], str(me["id"]))
+            if mine is None:
+                return _answer(request, False, "error", back, 503)
+            if not any(str(g["group_id"]) == str(t["group_id"]) and g.get("role") == "leader" for g in mine):
+                return _answer(request, False, "leaders_write", back, 403)
+    reply_to = str(form.get("reply_to") or "")
+    if reply_to:
+        if not UUID.match(reply_to):
+            reply_to = ""
+        else:
+            hit = await asyncio.to_thread(
+                sb_clients.sb_get_as_service,
+                f"/msg_messages?id=eq.{_q(reply_to)}&thread_id=eq.{_q(tid)}&business_id=eq.{_q(biz['id'])}"
+                f"&status=eq.delivered&select=id&limit=1")
+            if not isinstance(hit, list):
+                return _answer(request, False, "error", back, 503)
+            reply_to = reply_to if hit else ""
+    # An after-hours alert means something only in quiet hours, and each
+    # person sends one a night.
+    import member_push
+    alert = str(form.get("after_hours") or "") == "1" and await asyncio.to_thread(member_push.quiet_hour, biz)
+    if alert:
+        used = await asyncio.to_thread(
+            sb_clients.sb_get_as_service,
+            f"/msg_messages?business_id=eq.{_q(biz['id'])}&sender_contact_id=eq.{_q(me['id'])}&after_hours=is.true"
+            f"&created_at=gte.{quote(alert_since(), safe='')}&select=id&limit=1")
+        if not isinstance(used, list):
+            return _answer(request, False, "error", back, 503)
+        if used:
+            return _answer(request, False, "alert_used", back, 429)
     if not rate_limit.allow_strict("live_chat", f"msg|{biz['id']}|{me['id']}"):
         return _answer(request, False, "slow_chat", back, 429)
+    pic = None
+    if photo is not None:
+        import member_photos
+        if not rate_limit.allow_strict("chat_photos", f"{biz['id']}|{me['id']}"):
+            return _answer(request, False, "slow_chat", back, 429)
+        try:
+            pic = await asyncio.to_thread(chat_photos.prepare, await photo.read(member_photos.MAX_BYTES + 1))
+        except member_photos.PhotoError:
+            return _answer(request, False, "photo_bad", back)
     try:
-        verdict = await msg_screen.screen(biz["id"], text)
+        # A poll's choices are checked with its question.
+        verdict = await msg_screen.screen(biz["id"], "\n".join([text, *(choices or [])]))
     except msg_screen.ScreenUnavailable:
         return _answer(request, False, "screen_off", back, 503)
+    path = ""
+    if pic is not None:
+        # The picture is checked before it's kept; one the check turns down never is.
+        import member_photos
+        try:
+            seen = await chat_photos.screen(biz["id"], pic[0])
+        except member_photos.ScreenUnavailable:
+            return _answer(request, False, "photo_busy", back, 503)
+        if seen != "ok":
+            return _answer(request, False, "chat_photo_no", back, 422)
+        path = await asyncio.to_thread(chat_photos.store, str(biz["id"]), tid, pic[0])
+        if not path:
+            return _answer(request, False, "error", back, 503)
     status_ = "held" if verdict == "harm" else "delivered"
     row = await asyncio.to_thread(sb_clients.sb_post_as_service, "/msg_messages", {
         "business_id": biz["id"], "thread_id": tid, "sender_contact_id": str(me["id"]), "body": text,
-        "status": status_, "flag": None if verdict == "ok" else verdict})
+        "status": status_, "flag": None if verdict == "ok" else verdict, **({"reply_to": reply_to} if reply_to else {}),
+        **({"after_hours": True} if alert and status_ == "delivered" else {})})
     if not isinstance(row, list) or not row:
+        if path:
+            await asyncio.to_thread(chat_photos.drop, path)
+        return _answer(request, False, "error", back, 503)
+    if path and not await asyncio.to_thread(chat_photos.attach, str(biz["id"]), row[0]["id"], path, pic[1], pic[2], captioned):
+        # A caption with no picture isn't the photo they sent: take it back down.
+        await asyncio.to_thread(sb_clients.sb_patch_as_service,
+                                f"/msg_messages?id=eq.{_q(row[0]['id'])}&business_id=eq.{_q(biz['id'])}", {"status": "removed"})
+        await asyncio.to_thread(chat_photos.drop, path)
+        return _answer(request, False, "error", back, 503)
+    if choices is not None and not await asyncio.to_thread(chat_polls.attach, biz["id"], row[0]["id"], choices):
+        # A question with no choices isn't a poll: take it back down.
+        await asyncio.to_thread(sb_clients.sb_patch_as_service,
+                                f"/msg_messages?id=eq.{_q(row[0]['id'])}&business_id=eq.{_q(biz['id'])}", {"status": "removed"})
         return _answer(request, False, "error", back, 503)
     if status_ == "delivered":
         # Members with "New messages" on hear that something arrived, never
         # what it says (member_push.tell_chat; off the request).
-        import member_push
-        member_push.tell_chat(biz, t, acc, str(me["id"]))
+        member_push.tell_chat(biz, t, acc, str(me["id"]), ring=bool(alert), replied_to=reply_to or None)
     if acc.get("me_state") == "requested":
         # Replying accepts the request.
         await asyncio.to_thread(sb_clients.sb_patch_as_service,
@@ -909,6 +1167,133 @@ async def block(tid: str, request: Request):
     return _answer(request, True, "blocked", "/my/messages")
 
 
+async def _member_message(request: Request, tid: str):
+    """(church, me, form, message, t, acc, back, error_response) for an action
+    on one delivered message in a chat this person belongs to."""
+    import asyncio
+    church, me, err, status = await _who(request)
+    form = await request.form()
+    back = _back_to(form, f"/my/messages/{tid}" if UUID.match(tid) else "/my/messages")
+    if err:
+        return None, None, None, None, None, None, back, _answer(request, False, err, back, status)
+    biz = church["business"]
+    mid = str(form.get("message_id") or "")
+    if not UUID.match(tid) or not UUID.match(mid):
+        return None, None, None, None, None, None, back, _answer(request, False, "gone_chat", back, 404)
+    t = await asyncio.to_thread(thread, biz["id"], tid)
+    rows = await asyncio.to_thread(
+        sb_clients.sb_get_as_service,
+        f"/msg_messages?id=eq.{_q(mid)}&thread_id=eq.{_q(tid)}&business_id=eq.{_q(biz['id'])}"
+        f"&select=id,thread_id,sender_contact_id,status&limit=1")
+    if t is None or not isinstance(rows, list):
+        return None, None, None, None, None, None, back, _answer(request, False, "error", back, 503)
+    if not t or not rows or rows[0]["status"] != "delivered":
+        return None, None, None, None, None, None, back, _answer(request, False, "gone_chat", back, 404)
+    acc = await asyncio.to_thread(chat_access, biz["id"], t, str(me["id"]))
+    if acc is None:
+        return None, None, None, None, None, None, back, _answer(request, False, "error", back, 503)
+    if acc["role"] != "member":
+        return None, None, None, None, None, None, back, _answer(request, False, "gone_chat", back, 404)
+    return church, me, form, rows[0], t, acc, back, None
+
+
+@router.post("/my/messages/{tid}/react", include_in_schema=False)
+async def react(tid: str, request: Request):
+    """Love, Praying or Amen on a message; pressing it again takes it back."""
+    import asyncio
+    church, me, form, m, t, acc, back, stop = await _member_message(request, tid)
+    if stop:
+        return stop
+    kind = str(form.get("kind") or "")
+    if kind not in REACTIONS:
+        return _answer(request, False, "error", back)
+    biz_id = church["business"]["id"]
+    where = (f"/msg_reactions?message_id=eq.{_q(m['id'])}&contact_id=eq.{_q(me['id'])}"
+             f"&kind=eq.{_q(kind)}&business_id=eq.{_q(biz_id)}")
+    had = await asyncio.to_thread(sb_clients.sb_get_as_service, where + "&select=kind&limit=1")
+    if not isinstance(had, list):
+        return _answer(request, False, "error", back, 503)
+    if had:
+        ok = await asyncio.to_thread(sb_clients.sb_delete_as_service, where)
+    else:
+        ok = isinstance(await asyncio.to_thread(sb_clients.sb_post_as_service, "/msg_reactions?on_conflict=message_id,contact_id,kind", {
+            "message_id": str(m["id"]), "contact_id": str(me["id"]), "business_id": str(biz_id), "kind": kind},
+            prefer="return=representation,resolution=ignore-duplicates"), list)
+    if not ok:
+        return _answer(request, False, "error", back, 503)
+    return _answer(request, True, "reacted", back, on=not had)
+
+
+@router.get("/my/messages/{tid}/photo/{mid}", include_in_schema=False)
+async def chat_photo(tid: str, mid: str, request: Request):
+    """A photo in a chat: a short signed link for whoever may see it
+    (chat_photos.link_for), nothing for anyone else."""
+    import asyncio
+    import chat_photos
+    from fastapi.responses import RedirectResponse, Response
+    church, me, err, status = await _who(request)
+    if err or not UUID.match(tid) or not UUID.match(mid):
+        return Response(status_code=404, headers={"Cache-Control": "no-store"})
+    url = await asyncio.to_thread(chat_photos.link_for, church["business"], tid, mid, str(me["id"]))
+    if not url:
+        return Response(status_code=404 if url == "" else 503, headers={"Cache-Control": "no-store"})
+    return RedirectResponse(url, status_code=302, headers={"Cache-Control": "private, max-age=300", "Referrer-Policy": "no-referrer"})
+
+
+@router.post("/my/messages/{tid}/vote", include_in_schema=False)
+async def vote(tid: str, request: Request):
+    """A vote on a poll (chat_polls); the same choice again takes it back."""
+    import asyncio
+    import chat_polls
+    church, me, form, m, t, acc, back, stop = await _member_message(request, tid)
+    if stop:
+        return stop
+    try:
+        choice = int(str(form.get("choice") or ""))
+    except ValueError:
+        return _answer(request, False, "poll_gone", back)
+    code = await asyncio.to_thread(chat_polls.vote, church["business"]["id"], str(m["id"]), str(me["id"]), choice)
+    if code in ("voted", "unvoted"):
+        return _answer(request, True, code, back)
+    return _answer(request, False, code, back, 503 if code == "error" else 409)
+
+
+@router.post("/my/messages/{tid}/hide", include_in_schema=False)
+async def hide(tid: str, request: Request):
+    """A group's leader takes a message down. It isn't deleted: the church's
+    safety officers get it as a report, and can put it back."""
+    import asyncio
+    church, me, form, m, t, acc, back, stop = await _member_message(request, tid)
+    if stop:
+        return stop
+    biz_id = church["business"]["id"]
+    if t["kind"] != "group":
+        return _answer(request, False, "not_group_leader", back, 403)
+    mine = await asyncio.to_thread(my_groups, biz_id, str(me["id"]))
+    if mine is None:
+        return _answer(request, False, "error", back, 503)
+    if not any(str(g["group_id"]) == str(t["group_id"]) and g.get("role") == "leader" for g in mine):
+        return _answer(request, False, "not_group_leader", back, 403)
+    saved = await asyncio.to_thread(
+        sb_clients.sb_patch_as_service,
+        f"/msg_messages?id=eq.{_q(m['id'])}&business_id=eq.{_q(biz_id)}&status=eq.delivered",
+        {"status": "removed", "removed_by": str(me["id"]), "removed_at": now_iso()})
+    if not isinstance(saved, list):
+        return _answer(request, False, "error", back, 503)
+    if saved:
+        told = await asyncio.to_thread(sb_clients.sb_post_as_service, "/msg_reports", {
+            "business_id": str(biz_id), "message_id": str(m["id"]), "reporter_contact_id": str(me["id"]),
+            "reason": "Hidden by a leader of the group"})
+        if not isinstance(told, list) or not told:
+            # The officers must be told, or nothing is taken down.
+            await asyncio.to_thread(
+                sb_clients.sb_patch_as_service,
+                f"/msg_messages?id=eq.{_q(m['id'])}&business_id=eq.{_q(biz_id)}&status=eq.removed",
+                {"status": "delivered", "removed_by": None, "removed_at": None})
+            return _answer(request, False, "error", back, 503)
+    return _answer(request, True, "hidden", back)
+
+
 @router.post("/my/messages/report", include_in_schema=False)
 async def report(request: Request):
     import asyncio
@@ -927,7 +1312,7 @@ async def report(request: Request):
     if not rows:
         return _answer(request, False, "gone_chat", "/my/messages", 404)
     m = rows[0]
-    back = f"/my/messages/{m['thread_id']}"
+    back = _back_to(form, f"/my/messages/{m['thread_id']}")
     t = await asyncio.to_thread(thread, biz["id"], str(m["thread_id"]))
     acc = await asyncio.to_thread(chat_access, biz["id"], t, str(me["id"])) if t else None
     if not acc or acc["role"] != "member":
@@ -944,17 +1329,18 @@ async def report(request: Request):
 async def guidelines(request: Request):
     import asyncio
     church, me, err, status = await _who(request)
+    back = _back_to(await request.form(), "/my/messages")
     if err:
-        return _answer(request, False, err, "/my/messages", status)
+        return _answer(request, False, err, back, status)
     if rules.why_not(me):
-        return _answer(request, False, "not_enabled", "/my/messages", 403)
+        return _answer(request, False, "not_enabled", back, 403)
     biz = church["business"]
     saved = await asyncio.to_thread(sb_clients.sb_patch_as_service,
                                     f"/msg_members?contact_id=eq.{_q(me['id'])}&business_id=eq.{_q(biz['id'])}",
                                     {"guidelines_at": now_iso(), "updated_at": now_iso()})
     if not isinstance(saved, list) or not saved:
-        return _answer(request, False, "error", "/my/messages", 503)
-    return _answer(request, True, "welcome_msgs", "/my/messages")
+        return _answer(request, False, "error", back, 503)
+    return _answer(request, True, "welcome_msgs", back)
 
 
 # ─── keeping messages a year ─────────────────────────────────────────
@@ -976,6 +1362,15 @@ def retention_tick() -> int:
             continue
         keep = _in(r["message_id"] for r in open_)
         keep_q = f"&id=not.in.({keep})" if keep else ""
+        pics = sb_clients.sb_get_as_service(
+            f"/msg_photos?business_id=eq.{_q(b['id'])}&created_at=lt.{_q(cutoff)}&select=message_id,path&limit=5000")
         sb_clients.sb_delete_as_service(
             f"/msg_messages?business_id=eq.{_q(b['id'])}&created_at=lt.{_q(cutoff)}&status=neq.held{keep_q}")
+        if isinstance(pics, list) and pics:
+            # A photo's file goes when its message does (chat_photos).
+            import chat_photos
+            left = chat_photos.for_messages(str(b["id"]), [p["message_id"] for p in pics])
+            for p in pics if left is not None else []:
+                if str(p["message_id"]) not in left:
+                    chat_photos.drop(str(p["path"]))
     return len(rows)

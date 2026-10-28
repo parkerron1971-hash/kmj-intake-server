@@ -14,6 +14,9 @@ TEXT_LIMITS = {"name": 200, "email": 200, "phone": 40, "message": 5000}
 FIELD_LIMITS = {
     "first_name": 90, "last_name": 90, "visits": 120,
     "heard_from": 200, "notes": 2500, "request": 4000,
+    # "Who prays with you?" on a prayer request (church_prayer): the
+    # prayer team, or the pastors only.
+    "share": 120,
 }
 
 
@@ -42,7 +45,7 @@ def validate(body: Dict[str, Any]) -> Dict[str, Any]:
         raise ValueError("Structured fields require connect_card or prayer_request.")
     allowed = {"first_name", "last_name"}
     allowed |= ({"visits", "heard_from", "interests", "notes"} if kind == "connect_card"
-                else {"request", "follow_up"})
+                else {"request", "follow_up", "share"})
     clean = {}
     for key, value in fields.items():
         if key not in allowed:
@@ -129,16 +132,26 @@ def store_once(table: str, row: Dict[str, Any]):
 
 
 def save_prayer(business_id: str, data: Dict[str, Any], receipt: str):
-    return store_once("ministry_care_requests", {
-        "id": receipt, "business_id": business_id, "form_id": None, "status": "new",
-        "submission": {
-            "name": data["name"], "email": data["email"], "phone": data["phone"],
-            "prayer_request": data["fields"].get("request") or data["message"],
-            "message": data["message"], "fields": data["fields"],
-            "follow_up": data["fields"].get("follow_up", False),
-            "confidential": "yes", "source": "website prayer request",
-        },
+    """A website prayer request. It reaches the prayer team only when the
+    visitor chose "Our prayer team may pray over this with you" (fields.share
+    = "team"); asking to be followed up is asking for a call."""
+    import church_prayer
+    said = str(data["fields"].get("share") or "").strip().lower()
+    shared = said == "team" or ("prayer team" in said and "pastors only" not in said)
+    submission = {
+        "name": data["name"], "email": data["email"], "phone": data["phone"],
+        "prayer_request": data["fields"].get("request") or data["message"],
+        "message": data["message"], "fields": data["fields"],
+        "follow_up": data["fields"].get("follow_up", False),
+        "confidential": "no" if shared else "yes", "source": "website prayer request",
+    }
+    row = store_once("ministry_care_requests", {
+        "id": receipt, "business_id": business_id, "form_id": None, "status": "new", "submission": submission,
+        **church_prayer.consent_columns(submission, share=shared,
+                                        wants_call=bool(data["fields"].get("follow_up"))),
     })
+    church_prayer.on_new(str(business_id), row)
+    return row
 
 
 async def alert_church(business_id: str, kind: str, receipt: str):

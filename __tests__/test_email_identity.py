@@ -178,9 +178,9 @@ def test_send_routed_reply_to_infers_business(monkeypatch, wired_send):
 def test_send_explicit_custom_from_never_overridden(wired_send):
     asyncio.run(email_sender.send_via_resend(
         to_email="c@example.com", to_name=None,
-        from_email="invites@solutionist.studio", from_name="Solutionist System",
+        from_email="invites@mysolutionist.app", from_name="Solutionist System",
         subject="s", body="b", reply_to=None, business_id="b1"))
-    assert _last_payload()["from"] == "Solutionist System <invites@solutionist.studio>"
+    assert _last_payload()["from"] == "Solutionist System <invites@mysolutionist.app>"
 
 
 def test_send_platform_default_without_business_stays_platform(wired_send):

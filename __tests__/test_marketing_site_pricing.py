@@ -147,7 +147,7 @@ def test_compare_table_names_the_everyday_product():
     assert "Email: send, receive, templates" in html
     # The bands that make forty rows readable.
     for group in ("The day-to-day work", "Your presence",
-                  "Chief, your AI Chief of Staff", "Books, tax &amp; compliance",
+                  "Chief, your chief of staff", "Books, tax &amp; compliance",
                   "Room to grow"):
         assert group in html, group
 

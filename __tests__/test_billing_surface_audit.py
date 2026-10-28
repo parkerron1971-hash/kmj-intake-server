@@ -140,11 +140,17 @@ def test_exactly_the_three_anonymous_stripe_doors_are_exempt():
     assert got == STRIPE_PUBLIC
 
 
-def test_a_new_unguarded_stripe_handler_would_be_reported():
+@pytest.fixture(scope="module")
+def unguarded():
+    """The sweep reads every source file; the tests below share one pass."""
+    return ownership_sweep.sweep()["unguarded"]
+
+
+def test_a_new_unguarded_stripe_handler_would_be_reported(unguarded):
     """The property the narrowing buys. Under the old blanket every
     handler in these two files was invisible; now only the three named
     ones are."""
-    rows = ownership_sweep.sweep()["unguarded"]
+    rows = unguarded
     flagged = {(r["module"], r["fn"]) for r in rows
                if r["module"].startswith("stripe")}
     assert flagged <= STRIPE_PUBLIC, (
@@ -165,7 +171,7 @@ def test_booking_series_is_not_parked_on_the_exemption_list():
 
 # ─── the sweep's two blind spots ──────────────────────────────────────
 
-def test_an_aliased_http_exception_still_counts_as_refusing():
+def test_an_aliased_http_exception_still_counts_as_refusing(unguarded):
     """business_users_router.require_role is THE shared role ladder and
     raises `_HTTPException`. Matching the literal name missed it, so
     every handler delegating to it read as unguarded."""
@@ -173,7 +179,7 @@ def test_an_aliased_http_exception_still_counts_as_refusing():
     src = inspect.getsource(business_users_router.require_role)
     assert "raise _HTTPException" in src, (
         "fixture drift — this test is about the aliased spelling")
-    rows = ownership_sweep.sweep()["unguarded"]
+    rows = unguarded
     delegating = [r for r in rows
                   if "require_role" in r["body"] and not r["public_by_design"]]
     assert not delegating, (
@@ -181,7 +187,7 @@ def test_an_aliased_http_exception_still_counts_as_refusing():
         f"{[(r['module'], r['fn']) for r in delegating]}")
 
 
-def test_a_function_local_import_still_resolves_across_modules():
+def test_a_function_local_import_still_resolves_across_modules(unguarded):
     """The dominant shape in this codebase:
 
         def _require_member_writer(business_id, user):
@@ -194,8 +200,7 @@ def test_a_function_local_import_still_resolves_across_modules():
     src = inspect.getsource(booking_series._require_member_writer)
     assert "from business_users_router import require_role" in src, (
         "fixture drift — this test is about the function-local import")
-    rows = ownership_sweep.sweep()["unguarded"]
-    assert not [r for r in rows if r["module"] == "booking_series"]
+    assert not [r for r in unguarded if r["module"] == "booking_series"]
 
 
 def test_only_explicit_from_imports_are_followed():

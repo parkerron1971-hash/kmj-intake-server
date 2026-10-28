@@ -33,10 +33,13 @@ Response:
 """
 
 import asyncio
+import base64
+import json
 import logging
 import os
 import time
 from collections import OrderedDict
+from dataclasses import dataclass
 from typing import AsyncIterator, Optional
 
 import httpx
@@ -46,6 +49,7 @@ from pydantic import BaseModel
 
 from api_usage_logger import log_api_usage
 from auth_supabase import AuthedUser, optional_user, require_user
+import chief_tone
 import pricing_config
 import rate_limit
 import sb_clients
@@ -140,6 +144,79 @@ ELEVENLABS_BUSY_RETRY_S = 0.6
 # shared ElevenLabs account pool. Over the cap → graceful fallback to
 # OpenAI voices (never silence). 0 disables the cap.
 ELEVENLABS_MONTHLY_CHARS_PER_BIZ = int(os.environ.get("ELEVENLABS_MONTHLY_CHARS_PER_BIZ", "200000") or 0)
+
+# ── Inworld (featured voices, included with every plan) ──────────────
+# Kevin's pick 2026-10-17, after a blind listening test against
+# ElevenLabs, Cartesia and Rime: four Inworld voices any practitioner
+# can choose. On the Flash model they cost about what the built-in
+# OpenAI voice does (~$15 / 1M characters), so they ride /ai/tts, which
+# carries UNIT weight 0 — included, no allowance, no monthly cap.
+#
+# Picker ids are our own slugs ("iw:grace"), never Inworld's voice ids.
+# A practitioner's saved choice is the slug, so the voice behind it can
+# be re-made or swapped without breaking anyone's setting. Grace and
+# Elijah were made with Inworld's voice design and live in the workspace
+# INWORLD_API_KEY belongs to; they speak at 1.1x because that is how
+# Kevin picked them. A voice that is gone, a missing key or any Inworld
+# failure falls back to Nova — never silence.
+INWORLD_TTS_URL = "https://api.inworld.ai/tts/v1/voice:stream"
+INWORLD_VOICES_URL = "https://api.inworld.ai/tts/v1/voices"
+INWORLD_MODEL = os.getenv("INWORLD_TTS_MODEL", "inworld-tts-2-flash")
+INWORLD_MAX_CHARS = 4000                 # per request; longer speaks in Nova, uncut
+
+
+@dataclass(frozen=True)
+class FeaturedVoice:
+    voice_id: str      # Inworld's id — stays on the server
+    label: str
+    desc: str
+    rate: float        # Inworld speakingRate, 0.5–1.5
+
+
+INWORLD_VOICES = {
+    "grace": FeaturedVoice("misty-lemon-6417__design-voice-b82f90e7", "Grace",
+                           "warm, steady woman — reassuring, unhurried", 1.1),
+    # Kevin, 2026-10-17: "want to see it in real time to see if it was
+    # better" — the same Grace at 1.0x, side by side in the picker, until
+    # he keeps one speed and the other row goes.
+    "grace-normal": FeaturedVoice("misty-lemon-6417__design-voice-b82f90e7", "Grace (normal speed)",
+                                  "the same Grace, a little slower", 1.0),
+    "elijah": FeaturedVoice("misty-lemon-6417__design-voice-b40ecacd", "Elijah",
+                            "warm, steady man — a rich, low voice", 1.1),
+    "jessica": FeaturedVoice("Jessica", "Jessica",
+                             "encouraging, articulate woman — warm and clear", 1.0),
+    "reed": FeaturedVoice("Reed", "Reed",
+                          "clear, professional man — calm and direct", 1.0),
+}
+# Inworld's name for each wire format. "PCM" is headerless s16le at the
+# rate asked for; LINEAR16 would put a WAV header on every chunk, which a
+# client playing the bytes as they land hears as a click.
+_IW_ENCODINGS = {"mp3": "MP3", "pcm": "PCM"}
+
+# ── Tone notes (chief_tone, 2026-10-18) ──────────────────────────────
+# Chief marks a reply that carries news with a note — [pleased] [proud]
+# [gentle] [steady] [breathe] — and the app sends it along with the words.
+# A featured voice speaks a piece with a tone note on Inworld's bigger
+# model, which follows "steering" directions; a piece without one stays on
+# Flash, which ignores them (a breath works on both). The directions are
+# the ones Kevin picked by ear on the tone test (artifact
+# TnbYNV74wuE7HytcFmEUkZ): "upbeat and pleased", "upbeat and proud", and a
+# breath with "steady" where good news turns. Every other voice gets the
+# words alone.
+#
+# The bigger model costs ~$25 / 1M characters against Flash's $15, so it
+# has a platform-wide monthly cap: past INWORLD_TONE_MONTHLY_CHARS
+# characters, notes are dropped and every piece speaks on Flash until the
+# month turns. 0 = no cap.
+INWORLD_TONE_MODEL = os.getenv("INWORLD_TONE_MODEL", "inworld-tts-2")
+INWORLD_TONE_MONTHLY_CHARS = int(os.environ.get("INWORLD_TONE_MONTHLY_CHARS", "200000") or 0)
+_IW_STEERING = {
+    "pleased": "[say upbeat and pleased]",
+    "proud": "[say upbeat and proud]",
+    "gentle": "[sound gentle and sympathetic]",
+    "steady": "[steady]",
+    "breathe": "[breathe]",
+}
 MAX_BYTES = 25 * 1024 * 1024          # Whisper server-side limit
 HTTP_TIMEOUT = httpx.Timeout(connect=10.0, read=60.0, write=60.0, pool=10.0)
 TTS_TIMEOUT = httpx.Timeout(connect=10.0, read=30.0, write=30.0, pool=10.0)
@@ -160,6 +237,13 @@ def _elevenlabs_key() -> str:
     return os.environ.get("ELEVENLABS_API_KEY", "")
 
 
+def _inworld_key() -> str:
+    """Inworld's Basic credential, as the dashboard copies it (with or
+    without the "Basic " prefix)."""
+    k = (os.environ.get("INWORLD_API_KEY") or "").strip()
+    return k[6:].strip() if k.lower().startswith("basic ") else k
+
+
 # ── A warm connection to the speech providers (2026-09-25) ───────────
 # Every spoken sentence group used to open its own AsyncClient: a fresh
 # TCP + TLS handshake to OpenAI or ElevenLabs per group, paid before the
@@ -172,7 +256,7 @@ def _elevenlabs_key() -> str:
 # connection removes exactly the cost the brief names — the handshake.
 _TTS_HTTP: Optional[httpx.AsyncClient] = None
 _TTS_HTTP_LOOP = None
-_TTS_LAST_USE = {"openai": 0.0, "elevenlabs": 0.0}
+_TTS_LAST_USE = {"openai": 0.0, "elevenlabs": 0.0, "inworld": 0.0}
 _TTS_WARM_TASK = None
 TTS_WARM_EVERY_S = 45
 TTS_WARM_FOR_S = 600
@@ -215,6 +299,11 @@ async def _keep_tts_warm() -> None:
             if "elevenlabs" in live and _elevenlabs_key():
                 await c.get("https://api.elevenlabs.io/v1/models",
                             headers={"xi-api-key": _elevenlabs_key()}, timeout=5.0)
+            if "inworld" in live and _inworld_key():
+                # The French list is four voices (~750 bytes): the
+                # cheapest request that keeps the connection open.
+                await c.get(f"{INWORLD_VOICES_URL}?filter=language=fr",
+                            headers={"Authorization": f"Basic {_inworld_key()}"}, timeout=5.0)
         except Exception:
             pass
 
@@ -361,6 +450,63 @@ def _el_allowance_ok(business_id: str) -> bool:
     return _el_chars_this_month(business_id) < ELEVENLABS_MONTHLY_CHARS_PER_BIZ
 
 
+_TONE_CHARS_CACHE: dict = {"at": 0.0, "month": "", "chars": 0}
+
+
+def _tone_chars_this_month() -> int:
+    """Characters every business spoke on the tone model this month, from
+    the api_usage rows its pieces write. Cached like the ElevenLabs count,
+    bumped locally between reads; a failed read keeps the last count.
+
+    The month starts at "...T00:00:00Z", never "+00:00": a raw "+" in a
+    query string reads as a space, PostgREST answers 400, and a failed read
+    taken as no rows would let the cap never trip (measured 2026-10-18).
+    One row per spoken piece: the cap trips around a thousand rows, far
+    inside the row limit."""
+    month_key, _ = _month_bounds()
+    now = time.time()
+    c = _TONE_CHARS_CACHE
+    if c["month"] == month_key and now - c["at"] < _EL_CHARS_TTL_S:
+        return c["chars"]
+    try:
+        rows = sb_clients.sb_get_as_service(
+            f"/api_usage?endpoint=eq./ai/tts&model=eq.{INWORLD_TONE_MODEL}"
+            f"&created_at=gte.{month_key}-01T00:00:00Z&select=input_tokens&limit=10000")
+        if rows is None:
+            raise RuntimeError("api_usage read failed")
+        chars = sum(int(r.get("input_tokens") or 0) for r in rows)
+    except Exception as e:
+        logger.warning(f"tone-note usage read failed (fail-open): {e}")
+        chars = c["chars"] if c["month"] == month_key else 0
+    c.update(at=now, month=month_key, chars=chars)
+    return chars
+
+
+def _note_tone_chars(chars: int) -> None:
+    month_key, _ = _month_bounds()
+    if _TONE_CHARS_CACHE["month"] == month_key:
+        _TONE_CHARS_CACHE["chars"] += chars
+
+
+def _tone_allowed() -> bool:
+    if INWORLD_TONE_MONTHLY_CHARS <= 0:
+        return True
+    return _tone_chars_this_month() < INWORLD_TONE_MONTHLY_CHARS
+
+
+def _inworld_text(text: str, steer: bool) -> str:
+    """What Inworld reads: each run of words made speakable on its own,
+    each note in Inworld's own words — or, off the tone model, only the
+    breaths, which Flash performs too."""
+    out = []
+    for kind, value in chief_tone.pieces(text):
+        if kind == "words":
+            out.append(normalize_for_speech(value))
+        elif steer or value in chief_tone.NONVERBALS:
+            out.append(_IW_STEERING[value])
+    return " ".join(p for p in out if p)
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # ROUTER
 # ═══════════════════════════════════════════════════════════════════════
@@ -481,11 +627,12 @@ class TTSRequest(BaseModel):
 @router.post("/ai/tts/speak")
 async def text_to_speech(req: TTSRequest, request: Request,
                          user: Optional[AuthedUser] = Depends(optional_user)):
-    """Proxy TTS (OpenAI, or ElevenLabs for 'el:' voice ids). Streams raw
-    mp3 audio back to the client for faster time-to-first-byte playback.
+    """Proxy TTS (OpenAI; Inworld for 'iw:' voice ids; ElevenLabs for
+    'el:'). Streams raw mp3 audio back to the client for faster
+    time-to-first-byte playback.
 
-    Auth is OPTIONAL: OpenAI voices work for any caller (rate-guarded,
-    included with every plan). ElevenLabs voices are premium — they
+    Auth is OPTIONAL: OpenAI and Inworld voices work for any caller
+    (rate-guarded, included with every plan). ElevenLabs voices are premium — they
     require a signed-in owner of business_id, bill 1 unit per chunk on
     the plan-allowance rails, and are capped per business per month
     (ELEVENLABS_MONTHLY_CHARS_PER_BIZ). Every deny falls back to OpenAI
@@ -500,6 +647,11 @@ async def text_to_speech(req: TTSRequest, request: Request,
         raise HTTPException(400, "text is required")
     if len(text) > TTS_MAX_CHARS:
         text = text[:TTS_MAX_CHARS]
+    # Tone notes (chief_tone) are for the featured voices alone; every
+    # other voice reads the words without them.
+    plain = chief_tone.strip(text).strip()
+    if not plain:
+        raise HTTPException(400, "text is required")
 
     # Metering identity — attribute characters to the business only when
     # the signed-in caller actually owns it (these rows feed the billing
@@ -523,7 +675,7 @@ async def text_to_speech(req: TTSRequest, request: Request,
         elif not await asyncio.to_thread(_el_allowance_ok, metered_biz):
             logger.info(f"ElevenLabs monthly char cap reached for business {metered_biz} — falling back to OpenAI nova")
         else:
-            spoken = await _elevenlabs_speak(text, el_voice_id, el_key,
+            spoken = await _elevenlabs_speak(plain, el_voice_id, el_key,
                                              business_id=metered_biz,
                                              user_id=user.id if user else None,
                                              fmt=fmt)
@@ -535,7 +687,7 @@ async def text_to_speech(req: TTSRequest, request: Request,
                 # of switching to Nova mid-sentence (2026-09-19 log:
                 # "concurrent_limit_exceeded" → "falling back to OpenAI nova").
                 await asyncio.sleep(ELEVENLABS_BUSY_RETRY_S)
-                spoken = await _elevenlabs_speak(text, el_voice_id, el_key,
+                spoken = await _elevenlabs_speak(plain, el_voice_id, el_key,
                                                  business_id=metered_biz,
                                                  user_id=user.id if user else None,
                                                  fmt=fmt)
@@ -547,6 +699,30 @@ async def text_to_speech(req: TTSRequest, request: Request,
             # the reply was withheld by the provider, not by Chief.
             logger.warning("ElevenLabs unavailable for this reply — falling back to OpenAI nova")
 
+    # Inworld routing — "iw:<slug>" picks one of the featured voices.
+    # Included like Nova, so no owner check and no allowance; any miss
+    # (unknown slug, no key, Inworld down) speaks with Nova instead.
+    if raw_voice.startswith("iw:"):
+        featured = INWORLD_VOICES.get(raw_voice[3:].strip().lower())
+        iw_key = _inworld_key()
+        if not featured or not iw_key:
+            logger.warning(f"Inworld voice {raw_voice!r} unknown or key missing — falling back to OpenAI nova")
+        else:
+            spoken_iw = await _inworld_speak(text, featured, iw_key,
+                                             business_id=metered_biz,
+                                             user_id=user.id if user else None,
+                                             fmt=fmt)
+            if spoken_iw is None and plain != text:
+                # The tone model missed: the same voice on Flash, words
+                # only, before Nova.
+                spoken_iw = await _inworld_speak(plain, featured, iw_key,
+                                                 business_id=metered_biz,
+                                                 user_id=user.id if user else None,
+                                                 fmt=fmt)
+            if spoken_iw is not None:
+                return spoken_iw
+            logger.warning("Inworld unavailable for this reply — falling back to OpenAI nova")
+
     voice = raw_voice.lower()
     if voice not in TTS_VOICES:
         voice = "nova"
@@ -557,7 +733,7 @@ async def text_to_speech(req: TTSRequest, request: Request,
     # way no matter which client called us — the web app normalizes for
     # its own local browser-speech path, but the KAI agent and the mobile
     # app do not, and they reach this endpoint too.
-    spoken = normalize_for_speech(text)[:TTS_MAX_CHARS]
+    spoken = normalize_for_speech(plain)[:TTS_MAX_CHARS]
 
     # A short phrase already rendered in this voice: no provider call.
     phrase_key = _phrase_key("openai", voice, model, fmt, spoken)
@@ -728,6 +904,139 @@ async def _elevenlabs_speak(text: str, voice_id: str, key: str,
         headers=tts_response_headers(fmt))
 
 
+async def _inworld_chunks(upstream: httpx.Response) -> "AsyncIterator[bytes]":
+    """Inworld's stream is one JSON object per line, each carrying a
+    base64 slice of audio. An error line ends the stream with an
+    exception, so a failure before the first audio can still fall back.
+    PCM slices are kept sample-aligned: an odd trailing byte waits for
+    the next slice instead of shifting every sample after it."""
+    carry = b""
+    async for line in upstream.aiter_lines():
+        if not line.strip():
+            continue
+        msg = json.loads(line)
+        if msg.get("error"):
+            raise RuntimeError(f"Inworld stream error: {str(msg['error'])[:200]}")
+        b64 = (msg.get("result") or {}).get("audioContent")
+        if not b64:
+            continue
+        audio = carry + base64.b64decode(b64)
+        cut = len(audio) - (len(audio) % 2)
+        carry = audio[cut:]
+        if audio[:cut]:
+            yield audio[:cut]
+    if carry:
+        yield carry
+
+
+async def _inworld_speak(text: str, voice: FeaturedVoice, key: str,
+                         business_id: Optional[str] = None,
+                         user_id: Optional[str] = None,
+                         fmt: str = "mp3") -> Optional[Response]:
+    """Stream an Inworld voice back to the client — same audio-over-HTTP
+    contract as the OpenAI path. Returns None (the caller speaks with
+    Nova) on anything that stops audio before it starts: a request
+    Inworld refuses, a timeout, an error before the first slice."""
+    fmt = fmt if fmt in _IW_ENCODINGS else "mp3"
+    # A tone note (chief_tone) puts this piece on the tone model, while
+    # the month's cap allows; everything else speaks on Flash.
+    toned = chief_tone.steers(text) and await asyncio.to_thread(_tone_allowed)
+    model = INWORLD_TONE_MODEL if toned else INWORLD_MODEL
+    spoken = _inworld_text(text, steer=toned)
+    if not spoken or len(spoken) > INWORLD_MAX_CHARS:
+        return None
+
+    phrase_key = _phrase_key("inworld", voice.voice_id, f"{model}@{voice.rate}", fmt, spoken)
+    cached = _phrase_get(phrase_key)
+    if cached is not None:
+        logger.info(f"Inworld phrase cache hit: chars={len(spoken)} voice={voice.label}")
+        return _phrase_response(cached, fmt)
+
+    client = _tts_http("inworld")
+    try:
+        upstream = await client.send(
+            client.build_request(
+                "POST", INWORLD_TTS_URL,
+                headers={"Authorization": f"Basic {key}", "Content-Type": "application/json"},
+                json={
+                    "text": spoken,
+                    "voiceId": voice.voice_id,
+                    "modelId": model,
+                    "audioConfig": {
+                        "audioEncoding": _IW_ENCODINGS[fmt],
+                        "sampleRateHertz": TTS_PCM_SAMPLE_RATE,
+                        "speakingRate": voice.rate,
+                    },
+                },
+            ),
+            stream=True,
+        )
+    except httpx.HTTPError as e:
+        logger.warning(f"Inworld TTS failed to connect: {e}")
+        return None
+
+    if upstream.status_code >= 400:
+        body = (await upstream.aread()).decode("utf-8", errors="replace")[:300]
+        await upstream.aclose()
+        logger.warning(f"Inworld TTS {upstream.status_code}: {body}")
+        return None
+
+    # Hold the response until the first slice of audio exists: an error
+    # after we have answered 200 could no longer fall back to Nova.
+    chunks = _inworld_chunks(upstream)
+    try:
+        first = await chunks.__anext__()
+    except Exception as e:  # noqa: BLE001 — StopAsyncIteration included
+        await upstream.aclose()
+        logger.warning(f"Inworld TTS gave no audio: {e!r}")
+        return None
+
+    logger.info(f"Inworld TTS streaming: chars={len(spoken)} voice={voice.label} "
+                f"rate={voice.rate} format={fmt} model={model}")
+    if toned:
+        _note_tone_chars(len(spoken))
+
+    async def audio():
+        kept: Optional[list] = [first] if phrase_key is not None else None
+        complete = False
+        try:
+            yield first
+            async for chunk in chunks:
+                if kept is not None:
+                    kept.append(chunk)
+                yield chunk
+            complete = True
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"Inworld stream ended early: {e!r}")
+        finally:
+            await upstream.aclose()
+            if complete and kept:
+                _phrase_put(phrase_key, b"".join(kept))
+            # Metering after the audio, never in front of it. /ai/tts is
+            # included (UNIT weight 0); the row prices the characters
+            # Inworld was sent, which is what it bills — notes included —
+            # and the tone model's rows are what its monthly cap sums.
+            try:
+                await log_api_usage(endpoint="/ai/tts", model=model,
+                                    input_tokens=len(spoken), output_tokens=0,
+                                    business_id=business_id, user_id=user_id)
+            except Exception:
+                pass
+
+    return StreamingResponse(audio(), media_type=TTS_MEDIA_TYPES[fmt],
+                             headers=tts_response_headers(fmt))
+
+
+def _featured_voices() -> list:
+    """The Inworld voices for the picker — slugs and words only; the
+    Inworld ids stay here. Empty without a key, so the picker never
+    offers a voice that would only ever speak as Nova."""
+    if not _inworld_key():
+        return []
+    return [{"id": f"iw:{slug}", "label": v.label, "desc": v.desc}
+            for slug, v in INWORLD_VOICES.items()]
+
+
 # In-process cache — the voice list changes rarely; don't hit the
 # ElevenLabs API on every picker open.
 _EL_VOICES_CACHE: dict = {"at": 0.0, "voices": []}
@@ -736,25 +1045,28 @@ _EL_VOICES_TTL_S = 300
 
 @router.get("/ai/tts/voices")
 async def list_tts_voices(request: Request):
-    """ElevenLabs voices connected to this deployment's account, shaped
-    for the frontend voice picker: [{id: "el:<voice_id>", label, desc}].
-    Empty list when ELEVENLABS_API_KEY isn't configured — the picker
-    simply doesn't render the section (no dead-end)."""
+    """Voices beyond the built-in OpenAI ones, shaped for the frontend
+    voice picker: the featured Inworld voices first ([{id: "iw:<slug>",
+    label, desc}]), then the ElevenLabs voices connected to this
+    deployment's account ("el:<voice_id>"). Each part is empty when its
+    key isn't configured — the picker simply doesn't render that section
+    (no dead-end)."""
     _voice_rate_guard(request)
+    featured = _featured_voices()
     key = _elevenlabs_key()
     if not key:
-        return {"voices": []}
+        return {"voices": featured}
 
     now = time.time()
     if _EL_VOICES_CACHE["voices"] and now - _EL_VOICES_CACHE["at"] < _EL_VOICES_TTL_S:
-        return {"voices": _EL_VOICES_CACHE["voices"]}
+        return {"voices": featured + _EL_VOICES_CACHE["voices"]}
 
     try:
         async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
             resp = await client.get(ELEVENLABS_VOICES_URL, headers={"xi-api-key": key})
         if resp.status_code >= 400:
             logger.warning(f"ElevenLabs voices list {resp.status_code}")
-            return {"voices": _EL_VOICES_CACHE["voices"]}
+            return {"voices": featured + _EL_VOICES_CACHE["voices"]}
         data = resp.json()
         voices = []
         for v in (data.get("voices") or []):
@@ -769,10 +1081,10 @@ async def list_tts_voices(request: Request):
                 "desc": ", ".join(desc_bits) or "ElevenLabs voice",
             })
         _EL_VOICES_CACHE.update(at=now, voices=voices)
-        return {"voices": voices}
+        return {"voices": featured + voices}
     except Exception as e:
         logger.warning(f"ElevenLabs voices list failed: {e}")
-        return {"voices": _EL_VOICES_CACHE["voices"]}
+        return {"voices": featured + _EL_VOICES_CACHE["voices"]}
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -787,6 +1099,11 @@ async def health():
         "key_present": bool(_openai_key()),
         "elevenlabs_key_present": bool(_elevenlabs_key()),
         "elevenlabs_monthly_chars_per_biz": ELEVENLABS_MONTHLY_CHARS_PER_BIZ,
+        "inworld_key_present": bool(_inworld_key()),
+        "inworld_model": INWORLD_MODEL,
+        "inworld_tone_model": INWORLD_TONE_MODEL,
+        "inworld_tone_monthly_chars": INWORLD_TONE_MONTHLY_CHARS,
+        "inworld_voices": sorted(INWORLD_VOICES),
         "whisper_model": WHISPER_MODEL,
         "tts_model": TTS_MODEL_DEFAULT,
         "tts_voices": sorted(TTS_VOICES),

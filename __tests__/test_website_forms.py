@@ -115,7 +115,8 @@ def test_repeat_card_bounds_history_and_preserves_existing_contact_state(env):
                      "updated_at": "2026-10-13T12:00:00Z",
                      "metadata": {"office_note": "Keep", "website_form_messages": history}}]
     assert submit(env, form="connect-card", fields={"notes": "New"}).json()["ok"] is True
-    assert [p[0] for p in env.posts] == ["/events", "/chief_notifications"]
+    # A connect card also opens a follow-up for a leader (church_follow_up).
+    assert [p[0] for p in env.posts] == ["/events", "/church_follow_ups", "/church_follow_up_notes", "/chief_notifications"]
     path, patch = env.patches[0]
     assert "business_id=eq.church-1" in path and "updated_at=eq." in path
     assert patch["metadata"]["website_form_messages"][:-1] == history[-9:]
@@ -283,7 +284,8 @@ def test_no_recipient_still_returns_success_after_storage(env, monkeypatch, kind
     response = submit(env, **args)
     assert response.status_code == 200
     assert response.json() == {"ok": True, "notification_sent": False}
-    assert len(env.posts) == (3 if kind == "connect_card" else 2) and not env.mail
+    # A connect card's two extra writes are its follow-up and Chief's note on it.
+    assert len(env.posts) == (5 if kind == "connect_card" else 2) and not env.mail
     path, row = env.posts[0]
     assert row["business_id"] == "church-1"
     if kind == "prayer_request":
@@ -318,7 +320,11 @@ def test_website_prayer_reaches_care_inbox_and_church_counts(env, monkeypatch):
     assert response.json() == {"ok": True, "notification_sent": False}
     path, inserted = env.posts[0]
     assert path == "/ministry_care_requests"
-    assert set(inserted) == {"id", "business_id", "form_id", "status", "submission"}
+    assert set(inserted) == {"id", "business_id", "form_id", "status", "submission",
+                             "prayer_team", "wants_call", "needs_pastor"}
+    # No "Who prays with you?" answer: it stays with the pastors. Asking to
+    # be followed up is asking for a call (church_prayer.consent_columns).
+    assert (inserted["prayer_team"], inserted["wants_call"], inserted["needs_pastor"]) == (False, True, False)
     assert inserted["business_id"] == biz and inserted["status"] == "new"
     assert inserted["form_id"] is None
     # Base schema supplies created_at; #1414 and #1417 add nullable fields.
@@ -341,7 +347,8 @@ def test_website_prayer_reaches_care_inbox_and_church_counts(env, monkeypatch):
                 rows = [r for r in rows if query["user_id"] == ["eq." + r["user_id"]]]
             return rows
         if table != "ministry_care_requests":
-            assert table in ("ministry_care_notes", "child_checkins")
+            # church_keepers: no People & care keeper, so the owner sees everything.
+            assert table in ("ministry_care_notes", "child_checkins", "church_keepers")
             return []
         for key in ("id", "assigned_to"):
             if key in query and query[key] != ["eq." + str(row.get(key))]:

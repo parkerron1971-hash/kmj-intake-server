@@ -25,6 +25,11 @@ os.environ.setdefault("LEAD_SCORING_MODE", "off")
 # tests call it directly with the reads faked.
 os.environ.setdefault("CHIEF_RAIL", "off")
 
+# Members' quiet hours (member_push) follow the church's clock: left on, a
+# test's notification would wait or not depending on the hour it runs. The
+# quiet-hours tests turn it on with monkeypatch.setenv and a fixed clock.
+os.environ.setdefault("MEMBER_QUIET_HOURS", "off")
+
 
 # Chief's per-turn state lives in contextvars that a real turn resets at
 # its start and that a test which calls the door or the tool loop

@@ -594,11 +594,58 @@ def notify(run, source, filed, flagged):
             'data': {'kind': 'clips_ready', 'run_id': str(run['id']), 'source_id': str(source['id'])}})
     except Exception:
         log.warning('Clip run %s notification failed', run['id'])
+    if office_login(run['business_id'], run['created_by']) is False:
+        tell_team_member(run, title, body)
+        return
     try:
         import push_notifications
         push_notifications.send_to_user(str(run['created_by']), title=title, body=body[:160], nav='grow:video-clips', tag=f'clips-{run["id"]}')
     except Exception:
         log.warning('Clip run %s push failed', run['id'])
+
+
+def office_login(business_id, user_id):
+    """The owner or an active seat: True. Someone on ChurchSavvy's team
+    alone: False. None when the read failed (the alert goes as before)."""
+    try:
+        biz, uid = media_library.key(business_id), media_library.key(user_id)
+    except (ValueError, TypeError):
+        return None
+    owner = sb_clients.sb_get_as_service(f'/businesses?id=eq.{biz}&select=owner_id&limit=1')
+    seat = sb_clients.sb_get_as_service(
+        f'/business_users?business_id=eq.{biz}&user_id=eq.{uid}&status=eq.active&select=id&limit=1')
+    if not isinstance(owner, list) or not isinstance(seat, list):
+        return None
+    return bool(seat) or bool(owner and str(owner[0].get('owner_id')) == str(user_id))
+
+
+def tell_team_member(run, title, body):
+    """A volunteer with ChurchSavvy's Media part has no office login, so no
+    phone alert can reach them (pushes are turned on in the office's
+    settings). The email opens ChurchSavvy's Clips instead."""
+    biz = media_library.key(run['business_id'])
+    member = sb_clients.sb_get_as_service(
+        f'/worship_team?business_id=eq.{biz}&user_id=eq.{media_library.key(run["created_by"])}&status=eq.active'
+        '&select=name,email&limit=1')
+    church = sb_clients.sb_get_as_service(f'/businesses?id=eq.{biz}&select=name&limit=1')
+    email = str((member[0].get('email') if isinstance(member, list) and member else '') or '').strip()
+    if '@' not in email:
+        return
+    name = (member[0].get('name') or '').strip()
+    church_name = ((church[0].get('name') if isinstance(church, list) and church else '') or '').strip() or 'Your church'
+    try:
+        import asyncio
+        import os
+        import churchsavvy_billing
+        import email_sender
+        asyncio.run(email_sender.send_via_resend(
+            to_email=email, to_name=name or None,
+            from_email=os.environ.get('RESEND_FROM_EMAIL') or 'noreply@mysolutionist.app', from_name=church_name,
+            subject=title, reply_to=None, business_id=str(run['business_id']), idempotency_key=f'clips-ready-{run["id"]}',
+            body=(f'{"Hi " + name + "," if name else "Hi,"}\n\n{title}. {body}\n\n'
+                  f'See them in ChurchSavvy:\n{churchsavvy_billing.app_url()}/media/clips\n\n— ChurchSavvy')))
+    except Exception:
+        log.warning('Clip run %s email failed', run['id'])
 
 
 def drive(run):

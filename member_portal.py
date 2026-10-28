@@ -5,7 +5,9 @@ WHAT IT IS (Kevin, 2026-09-29: "passwordless, permanent address, long
 device session"). A member signs in with a 6-digit code sent to the email
 the church already has for them — no password, no account in the
 practitioner's user pool — and sees their own giving and their year-end
-statement. Nothing else about anyone else: there is no member directory.
+statement. Nothing else about anyone else, except the member directory
+(member_directory.py, 2026-10-27): off until the church turns it on, and
+only the adult members who said yes, showing only what each one chose.
 
 WHO CAN SIGN IN. Only an email the church has on a contact. Asking for a
 code NEVER says whether an address is on the list — the same page comes
@@ -458,17 +460,19 @@ def _church_for_request(request: Request) -> Optional[Dict[str, Any]]:
         if "." not in domain:
             return None
         q = f"site_config->>custom_domain=eq.{quote(domain, safe='')}"
+    # The site and its church in one read (every member page, its icons and
+    # its service worker start here; two reads in a row were two waits).
     sites = sb_clients.sb_get_as_service(
         f"/business_sites?{q}&order=updated_at.desc&limit=1"
-        f"&select=slug,business_id,site_config") or []
+        f"&select=slug,business_id,site_config,"
+        f"business:businesses(id,name,type,settings,stripe_account_id)") or []
     if not sites or (sites[0].get("site_config") or {}).get("offline"):
         return None
-    biz = sb_clients.sb_get_as_service(
-        f"/businesses?id=eq.{quote(str(sites[0].get('business_id')), safe='')}"
-        f"&select=id,name,type,settings,stripe_account_id&limit=1") or []
-    if not biz:
+    site = dict(sites[0])
+    biz = site.pop("business", None)
+    if not isinstance(biz, dict) or not biz.get("id"):
         return None
-    return {"business": biz[0], "site": sites[0]}
+    return {"business": biz, "site": site}
 
 
 def _same_origin(request: Request) -> bool:
@@ -541,10 +545,24 @@ def palette_for(biz: Dict[str, Any], site: Optional[Dict[str, Any]]) -> Dict[str
     return ui.palette(biz, resolve_theme(biz, site))
 
 
+def _body_class(door: bool, space: str, tab: Optional[str]) -> str:
+    """The sign-in pages' class, a Youth or Kids space's, and the colour the
+    page's tab wears (member_app_ui.TAB_HUE: Watch violet, Bible gold,
+    Connect teal)."""
+    import member_app_ui as ui
+    if door:
+        return ' class="si"'
+    names = [f"sp-{space}"] if space != "church" else []
+    place = ui.TAB_OF.get(tab or "", "")
+    if place in ui.TAB_HUE:
+        names.append(f"pg-{place}")
+    return f' class="{" ".join(names)}"' if names else ""
+
+
 def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
            body: str, *, script: str = "", tab: Optional[str] = None,
            who: Optional[Dict[str, Any]] = None, bare: bool = False, bar: bool = True,
-           door: bool = False, back: Optional[Tuple[str, str]] = None) -> str:
+           door: bool = False, back: Optional[Tuple[str, str]] = None, news_n: Optional[int] = None) -> str:
     """Every member page. Signed-in pages pass `tab` (the page's place in
     the tab bar: home, watch, bible, give, connect — the older names map
     over) and `who` (their picture, top right, which opens Me); the
@@ -554,7 +572,9 @@ def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
     `bare` leaves the bar at the top out; `bar=False` keeps it but drops the
     tab bar (a chat, whose box sits at the foot of the screen). `door` is a
     page before sign-in (member_app_signin), which draws its own top and
-    foot. The look is member_app_ui's."""
+    foot. `news_n` (Home, when the church has news) puts the bell at the top
+    right, with how many posts are new (member_portal_news). The look is
+    member_app_ui's."""
     import member_app_ui as ui
     import member_app_install as mai
     import member_app_photos as photos
@@ -583,12 +603,24 @@ def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
             import html as _html
             back = (_html.unescape(m.group(1)), _html.unescape(re.sub(r"<[^>]+>", "", m.group(2)).strip()))
             body = body[:m.start()] + body[m.end():]
-    import member_portal_messaging as mpm
-    chat = (f'<a class="mb-chat-link mp-noprint" href="/my/messages" aria-label="Messages">{ui.icon("chat", 19)}</a>'
-            if signed_in and mpm.turned_on(biz) and tab not in ("messages", "connect", "groups") else "")
     import member_spaces as msp
     ctx = (msp.CURRENT.get() or {}) if signed_in else {}
     space = ctx.get("space") or "church"
+    # A page the church made a tab of its own (Events, Prayer, News,
+    # Messages: member_app_ui.church_tabs) is a tab like Watch: no way back
+    # to Home at the top, and Messages has no second way in up there.
+    own_bar = signed_in and space == "church"
+    if own_bar and back and back[0] == "/my" and ui.in_church_bar(biz, tab):
+        back = None
+    import member_portal_messaging as mpm
+    chat = (f'<a class="mb-chat-link mp-noprint" href="/my/messages" aria-label="Messages">{ui.icon("chat", 19)}</a>'
+            if signed_in and mpm.turned_on(biz) and tab not in ("messages", "connect", "groups")
+            and not (own_bar and ui.in_church_bar(biz, "messages")) else "")
+    if signed_in and news_n is not None:
+        badge = f'<span class="mb-unread">{news_n}</span>' if news_n else ""
+        label = f"News, {news_n} new" if news_n else "News"
+        chat = (f'<a class="mb-chat-link mp-noprint" href="/my/news" aria-label="{label}">{ui.icon("bell", 19)}{badge}</a>'
+                + chat)
     if back:
         left = f'<a class="mb-back" href="{_e(back[0])}">{ui.icon("back", 24)}{_e(back[1])}</a>'
     elif tab == "home":
@@ -616,13 +648,13 @@ def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
 <style>{ui.css(biz, theme, space)}</style>
 {f'<style>{sg.css(biz, theme)}</style>' if door else ''}
 </head>
-<body{' class="si"' if door else (' class="sp-' + space + '"' if space != "church" else '')}>
+<body{_body_class(door, space, tab)}>
 {top}
 <main class="mp-shell{' mb-has-nav' if signed_in and bar else ''}{' mb-bare' if bare or door else ''}">
   {body}
   {'' if door else f'<footer class="mp-foot mp-noprint">Your page at {_e(name)} · Powered by Solutionist</footer>'}
 </main>
-{ui.nav(tab, space=space, kids_parent=bool(ctx.get("kids_parent"))) if signed_in and bar else ''}
+{ui.nav(tab, space=space, kids_parent=bool(ctx.get("kids_parent")), lead=bool(ctx.get("lead")), biz=biz) if signed_in and bar else ''}
 {'' if bare or door else ui.SCROLL_JS}
 {script}
 {mai.REGISTER_JS}
@@ -681,7 +713,7 @@ def render_give(biz: Dict[str, Any], site, me: Dict[str, Any], *, preview: bool 
     return render_give_page(biz, f"https://{slug}.{PUBLIC_DOMAIN}/give", slug, api_origin=public_site._EMBED_ORIGIN,
                             app={"head": head, "top": top, "name": me.get("name") or "",
                                  "email": me.get("email") or "", "preview": preview,
-                                 "foot": ui.nav("give")})
+                                 "foot": ui.nav("give", biz=biz)})
 
 
 def _door_page(biz: Dict[str, Any], site, title: str, *, icon: str, heading: str, body: str,
@@ -753,8 +785,8 @@ def render_give_off(biz: Dict[str, Any], site, me: Dict[str, Any], *, preview: b
     import member_app_photos as photos
     church = (biz.get("name") or "").strip() or "the church"
     pool = photos.photos(biz, site)
-    pic = photos.pick_for(pool, ("giv", "basket", "offering", "worship", "service"), "give")
-    art = ui.photo(pic, eager=True) if pic else ui.gen_art(church)
+    pic, look = photos.choose(biz, "give", pool, words=("giv", "basket", "offering"))
+    art = ui.picture(pic, look, "giving", eager=True, night=True)
     online = photos.has_site_page(site, "give")
     action = (f'<div class="mb-hero-row"><a class="mp-go" href="/give">{ui.icon("give", 18)}Give online</a></div>'
               if online else "")
@@ -765,7 +797,7 @@ def render_give_off(biz: Dict[str, Any], site, me: Dict[str, Any], *, preview: b
     body = f"""<div class="mb-lt"><h1>Give</h1></div>
 <p class="mb-sub" style="margin:0 0 16px">To {_e(church)}. Thank you for your generosity.</p>
 {hint}
-<section class="mb-hero" aria-labelledby="mb-give-h" style="aspect-ratio:350/300">{art}<div class="mb-hero-in">
+<section class="mb-hero" aria-labelledby="mb-give-h">{art}<div class="mb-hero-in">
 <span class="mb-when">Ways to give</span><h2 id="mb-give-h">Every gift matters</h2><p>{_e(lead)}</p>{action}</div></section>
 <a class="mb-row" href="/my/me#mp-giving"><span class="mb-row-ic">{ui.icon("doc", 20)}</span>
 <span class="mb-row-t"><strong>Your giving</strong><span>This year, each gift and your statement</span></span>{ui.icon("chevron", 18)}</a>
@@ -783,19 +815,27 @@ def prayer_card() -> str:
 
 def render_home(biz: Dict[str, Any], site, *, me: Dict[str, Any], occasions, groups, library,
                 give_url: str, flash: str = "", live: Optional[Dict[str, Any]] = None,
-                reading: str = "", bible: str = "kjv", where: Optional[Tuple[str, int]] = None) -> str:
-    """Home ("Member App, Top Tier", Kevin approved 2026-10-15): the
-    greeting, the next gathering on the church's own photo (a Live now card
-    while the church is live; the church itself when nothing is on the
-    calendar), four quick ways in, the latest message (its art, the title
-    under it, as members know from Subsplash), the verse of the day,
-    today's reading, the church's own tiles, this week, and prayer.
+                reading: str = "", bible: str = "kjv", where: Optional[Tuple[str, int]] = None,
+                checkin: str = "", serving: str = "", edit: bool = False, devotional: str = "", news: str = "",
+                news_n: Optional[int] = None, celebrate: str = "", ask: str = "") -> str:
+    """Home ("Member App, Top Tier", Kevin approved 2026-10-15; round three
+    2026-10-19): the greeting, the next gathering on the church's own photo
+    (a Live now card while the church is live; the church itself when
+    nothing is on the calendar), shorter now, four quick ways in, each in its
+    colour, Today (the verse of the day with today's reading, or where they
+    left off, in one card), the latest message (its art, the title under it,
+    as members know from Subsplash), the church's own tiles, this week, and
+    prayer.
 
     Nothing here ever says "nothing yet": a block with nothing in it is
     left out, and the verse, the Bible and prayer always have something.
     The greeting and date are set by the phone's own clock (the server
     can't know the member's time of day); without script it reads
-    "Hi, Ana."."""
+    "Hi, Ana.". `reading` is today's reading row (member_portal_reading
+    .today_row), '' when no plan is running; `devotional` today's
+    devotional row (member_portal_devotionals.today_row). `edit` (the owner in a
+    preview, or someone the owner named, at /my?edit=pictures) puts a
+    Change button on each picture (member_app_pictures)."""
     import member_app_ui as ui
     import member_app_photos as photos
     import member_portal_bible as mpb
@@ -803,18 +843,24 @@ def render_home(biz: Dict[str, Any], site, *, me: Dict[str, Any], occasions, gro
     import member_portal_sermons as mps
     import member_app_install as mai
     import member_push
+    import member_portal_news as mpn
+    import member_portal_celebrations as mcl
+    if news or celebrate:
+        news = f"<style>{mpn.NEWS_CSS}{mcl.CEL_CSS if celebrate else ''}</style>{news}"
     pal = palette_for(biz, site)
     pool = photos.photos(biz, site)
-    hero_pic = photos.hero(pool)
-    used = {hero_pic}
+    used: set = set()
+    hero_pic, hero_look = photos.choose(biz, "home", pool, fallback=photos.hero(pool), look="church", used=used)
     hello = first_name(me.get("name") or "") or "there"
     church = (biz.get("name") or "").strip() or "Your church"
-    hero = (mpc.live_hero(live, hero_pic, church) if live else
-            mpc.next_card(occasions, pic=hero_pic, church=church) or mpc.church_hero(hero_pic, church))
-    quick = (f'<a href="/my/prayer">{ui.icon("pray", 24)}Prayer</a>'
-             f'<a href="/my/events">{ui.icon("calendar", 24)}Events</a>'
-             f'<a href="/my/groups">{ui.icon("users", 24)}Groups</a>'
-             f'<a href="/my/live">{ui.icon("live", 24)}Live</a>')
+    hero = (mpc.live_hero(live, hero_pic, church, look=hero_look) if live else
+            mpc.next_card(occasions, pic=hero_pic, church=church, look=hero_look)
+            or mpc.church_hero(hero_pic, church, look=hero_look))
+    quick = "".join(f'<a class="h-{hue}" href="{href}"><i class="mb-qd">{ui.icon(ic, 20)}</i>{label}</a>'
+                    for hue, href, ic, label in (("brand", "/my/prayer", "pray", "Prayer"),
+                                                 ("coral", "/my/events", "calendar", "Events"),
+                                                 ("teal", "/my/groups", "users", "Groups"),
+                                                 ("violet", "/my/live", "live", "Live")))
     script = """<script>(function(){var d=new Date(),h=d.getHours();
 var g=h<12?'Good morning':(h<17?'Good afternoon':'Good evening');
 var t=document.querySelector('.mb-date');if(t){t.textContent=d.toLocaleDateString(undefined,{weekday:'long',month:'long',day:'numeric'});}
@@ -822,21 +868,36 @@ var e=document.querySelector('[data-first]');if(e){var em=document.createElement
 e.textContent='';e.append(g+', ',em);}
 })();</script>"""
     first = str(((occasions or [{}])[0] or {}).get("entry_id") or "") if hero and not live and occasions else ""
-    read = reading or (ui.section("Read today", "/my/bible", "Bible") + mpb.continue_card(where, bible))
+    editbar = ""
+    if edit:
+        editbar = (f'<div class="mb-editbar" role="status"><span class="mb-editbar-ic">{ui.icon("camera", 18)}</span>'
+                   f'<span class="mb-editbar-t"><strong>Changing pictures</strong><span>Only you see these buttons.</span></span>'
+                   f'<a class="mb-editbar-a" href="/my/pictures">All</a><a class="mp-go mb-editbar-done" href="/my">Done</a></div>')
+        if hero.startswith("<section"):
+            hero = hero.replace('<div class="mb-hero-in">', ui.pin("/my/pictures/spot?key=home&amp;back=home")
+                                + '<div class="mb-hero-in">', 1)
+    today = (f'<section class="h-gold" aria-labelledby="mb-today-h">{ui.section("Today", "/my/bible/plans", "Plans", hid="mb-today-h")}'
+             f'<div class="mb-today">{mpb.verse_card(bible)}{devotional}{reading or mpb.continue_row(where, bible)}</div></section>')
     return _shell(biz, site, "Home", f"""
+{editbar}
 <div class="mb-hello-wrap"><p class="mb-date" aria-hidden="true"></p>
 <h1 class="mb-hello" data-first="{_e(hello)}">Hi, <em>{_e(hello)}.</em></h1></div>
+{checkin}
+{serving}
+{f'<div style="display:flex;flex-direction:column;gap:12px;margin:6px 0 16px">{celebrate}</div>' if celebrate else ''}
 {hero}
 <nav class="mb-quick" aria-label="Quick ways in">{quick}</nav>
 {flash}
+{news}
+{today}
 {mps.latest_card(library, pal, pool=pool, used=used, site=site)}
-{mpb.verse_card(bible)}
-{read}
-{mpc.home_tiles(biz, site, pool, used)}
-{mpc.week_cards(occasions, groups, pal=pal, pool=pool, used=used, skip=first)}
+{mpc.home_tiles(biz, site, pool, used, edit=edit)}
+{mpc.week_cards(occasions, groups, pal=pal, pool=pool, used=used, skip=first, biz=biz, edit=edit)}
 {mai.install_card(church)}
 {member_push.home_card(biz)}
-{prayer_card()}""", tab="home", who=me, script=script)
+{prayer_card()}
+{ask}""", tab="home", who=me, script=script + (mpn.RX_JS if news else "") + (mcl.STRIP_JS if celebrate else ""),
+                  news_n=news_n)
 
 
 def _month_bars(gifts: List[Dict[str, Any]], year: int, this_year: int) -> str:
@@ -860,14 +921,20 @@ def _month_bars(gifts: List[Dict[str, Any]], year: int, this_year: int) -> str:
 
 def render_me(biz: Dict[str, Any], site, *, me: Dict[str, Any], people: List[Dict[str, Any]],
               year: int, gifts: Optional[List[Dict[str, Any]]], give_url: str,
-              this_year: int, flash: str = "") -> str:
+              this_year: int, flash: str = "", pictures: bool = False, serving: bool = False,
+              asks: Optional[List[str]] = None) -> str:
     """Me: who's signed in, their giving (a year's total, month by month,
     each gift and the statement), then the ways to look after their own
-    record, and sign out."""
+    record, and sign out. `pictures` (the owner in a preview, or someone
+    the owner named) adds the app's pictures; `asks` (member_asks.entry)
+    adds Ask the church."""
+    import member_asks
     import member_portal_messaging as mpm
     import member_push
     msgs_on = mpm.turned_on(biz)
-    notes_on = bool(member_push.church_kinds(biz.get("settings"))) and member_push.ready()
+    notes_on = bool(member_push.church_kinds(biz.get("settings")) - set(member_push.OWN_PAGE_KINDS)) and member_push.ready()
+    import church_follow_up as cfu
+    celebrations = cfu.is_church(biz)
     import member_app_ui as ui
     years = "".join(
         f'<a href="/my/me?year={y}#mp-giving"{" aria-current=\"page\"" if y == year else ""}>{y}</a>'
@@ -933,12 +1000,16 @@ if(n){n.textContent='Saving your photo\u2026';}i.form.submit();});})();</script>
 {ui.section('Your church life')}
 <ul class="mb-list mb-cards" style="--inset:60px">
   {link('/my/events', 'calendar', 'Coming up', 'Say you&#x27;re coming, or sign up to serve')}
+  {link('/my/serving', 'clock', 'My serving', 'Your Sundays, away dates and swaps') if serving else ''}
   {link('/my/groups', 'users', 'My groups', 'Your groups, and ones you can join')}
   {link('/my/messages', 'chat', 'Messages', 'Your chats and group chats') if msgs_on else ''}
   {link('/my/prayer', 'pray', 'Prayer', 'A private request to the pastors')}
+  {link('/my/ask', 'send', 'Ask the church', _e(member_asks.me_sub(asks))) if asks else ''}
   {recurring}
   {link('/my/notifications', 'bell', 'Notifications', 'What this app tells you about') if notes_on else ''}
   {link('/my/details', 'user', 'My details', 'Phone and mailing address')}
+  {link('/my/me/celebrations', 'star', 'Celebrations', 'Your birthday, anniversary and milestones') if celebrations else ''}
+  {link('/my/pictures', 'camera', 'Pictures in the app', 'Choose the photo for every spot') if pictures else ''}
 </ul>
 <div class="mp-noprint" style="margin-top:8px">{switch}
 <form method="post" action="/my/signout"><button class="mb-signout" type="submit">Sign out</button></form></div>""",
@@ -1019,13 +1090,51 @@ async def serve(request: Request, path: str) -> HTMLResponse:
         # Church, Youth or Kids (member_spaces): a teen is always in Youth;
         # anyone else in the space they switched to, if it's theirs.
         import member_spaces as msp
-        ctx = await asyncio.to_thread(msp.resolve, biz["id"], sess["me"], request.cookies.get(msp.COOKIE) or "")
+        # A member who holds a church role (or is asked to) gets the Lead
+        # tab (member_portal_lead), in Church. The owner's preview never does.
+        # Read alongside the space, not after it: every tab waits on both.
+        import church_follow_up as cfu
+        may_lead = not sess.get("preview") and cfu.is_church(biz) and not msp.is_youth(sess["me"])
+        ctx, lead = await asyncio.gather(
+            msp.resolve_async(biz["id"], sess["me"], request.cookies.get(msp.COOKIE) or ""),
+            _leads(biz["id"], str(sess["me"]["id"]), biz, sess["me"]) if may_lead else _nothing())
+        if may_lead and ctx.get("space", "church") == "church":
+            ctx = dict(ctx, lead=lead)
         msp.CURRENT.set(ctx)
     resp = await _serve_page(request, church, sess, sub)
     if sess and sess.get("preview") and isinstance(resp, HTMLResponse):
         import member_portal_preview as pv
         resp = _page(pv.mark(resp.body.decode("utf-8"), (sess["me"] or {}).get("name") or ""), resp.status_code)
     return resp
+
+
+async def _nothing():
+    return None
+
+
+async def _leads(business_id: str, me_id: str, biz: Optional[Dict[str, Any]] = None,
+                 me: Optional[Dict[str, Any]] = None) -> bool:
+    """Whether this member gets the Lead tab: a church role, held or asked
+    (church_follow_up), or a group they lead (group_lead: their group lives
+    on the Lead tab). Both read at once. With Who sees what on, it's the
+    Serve tab, for every part: a place on a Sunday team too, or a kids room.
+    A task the office handed them (church_leader_tasks) gives it too."""
+    import church_follow_up as cfu
+    import group_lead
+    roles, led = await asyncio.gather(asyncio.to_thread(cfu.roles_for, business_id, me_id),
+                                      asyncio.to_thread(group_lead.led_groups, business_id, me_id))
+    if roles or led:
+        return True
+    if biz is not None:
+        import church_leader_tasks
+        if await asyncio.to_thread(church_leader_tasks.section, biz, me_id) is not None:
+            return True
+    import member_app_ui
+    if biz is None or not member_app_ui.serve_mode():
+        return False
+    import member_portal_lead
+    parts = await asyncio.to_thread(member_portal_lead.parts, biz, me_id, (me or {}).get("email"))
+    return bool(parts["serving"] or parts["kids"] or parts["team"])
 
 
 def _open_preview(request: Request, biz: Dict[str, Any], site) -> HTMLResponse:
@@ -1038,7 +1147,10 @@ def _open_preview(request: Request, biz: Dict[str, Any], site) -> HTMLResponse:
         return _page(_shell(biz, site, "Preview", """
 <div class="mp-card"><h1>This preview link has expired</h1>
 <p class="mp-muted">Preview links work once, for two minutes. Open a new one from Settings → Member page in the app.</p></div>"""), 410)
-    resp = RedirectResponse("/my", status_code=303, headers=_SECURE_HEADERS)
+    # "Change pictures" in Settings → Member page opens the preview on the
+    # app's pictures (member_app_pictures); any other link lands on Home.
+    to = "/my/pictures" if request.query_params.get("next") == "pictures" else "/my"
+    resp = RedirectResponse(to, status_code=303, headers=_SECURE_HEADERS)
     pv.set_cookie(resp, pv.mint_session(biz["id"], claims["cid"], claims.get("own") or ""))
     return resp
 
@@ -1103,11 +1215,53 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
     # Part 2 (member_portal_church.py): coming up, prayer, my details.
     import member_portal_church as mpc
     import member_portal_sermons as mps
+    # The church's news (member_portal_news): the feed and one post with its
+    # comments. The owner's preview reads it; nothing saves.
+    if sub == "/my/news" or sub.startswith("/my/news/"):
+        import member_portal_news as mpn
+        out = await mpn.serve(request, biz, site, me, sub)
+        if isinstance(out, tuple):
+            return _page(out[0], out[1])
+        return out
     if sub == "/my/events":
         occ = fill(await asyncio.to_thread(mpc.upcoming_for, biz["id"], me), "occasions")
         return _page(mpc.render_events(biz, site, request, occ, who=me))
     if sub == "/my/prayer":
         return _page(mpc.render_prayer(biz, site, request, who=me))
+    # Ask the church (member_asks.py): only the asks the church turned on,
+    # each landing in the office queue that already handles it.
+    if sub == "/my/ask" or sub.startswith("/my/ask/"):
+        import member_asks
+        out = await member_asks.serve(request, biz, site, me, sub)
+        if isinstance(out, tuple):
+            return _page(out[0], out[1])
+        return out
+    if (sub == "/my/lead" or sub.startswith("/my/lead/")) and not preview:
+        import church_follow_up as cfu
+        import member_portal_lead as mpl
+        if not cfu.is_church(biz):
+            return RedirectResponse("/my", status_code=303, headers=_SECURE_HEADERS)
+        html, status = await mpl.serve(request, biz, site, me, sub)
+        return _page(html, status)
+    if sub in ("/my/groups", "/my/classes", "/my/messages", "/my/directory") or sub.startswith("/my/messages/"):
+        # Connect's Classes tab: when the church has a published class, or
+        # in the owner's preview (member_portal_classes).
+        import member_portal_classes as mcl
+        mcl.TAB.set(preview or await asyncio.to_thread(mcl.classes_on, biz["id"]))
+    # The member directory (member_directory.py): served only while the
+    # church has it on, and only in Church (never in Youth or Kids, even
+    # for an adult leader who switched there).
+    if sub == "/my/directory":
+        import member_directory as mdir
+        import member_spaces as msp
+        if not mdir.church_on(biz) or (msp.CURRENT.get() or {}).get("space", "church") != "church":
+            return RedirectResponse("/my", status_code=303, headers=_SECURE_HEADERS)
+        html, status = await mdir.serve(request, biz, site, me)
+        return _page(html, status)
+    if sub == "/my/classes":
+        import member_portal_classes as mcl
+        data = fill(await asyncio.to_thread(mcl.classes_for, biz["id"], me), "classes")
+        return _page(mcl.render_classes(biz, site, request, data, who=me))
     if sub == "/my/messages" or sub.startswith("/my/messages/"):
         import member_portal_messaging as mpm
         out = await mpm.serve(request, biz, site, me, sub)
@@ -1127,17 +1281,53 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
         html, status = mgl.render_meeting(biz, site, me, s, g, m)
         return _page(html, status)
     if sub == "/my/groups":
-        data = fill(await asyncio.to_thread(mpc.groups_for, biz["id"], me), "groups")
-        return _page(mpc.render_groups(biz, site, request, data, who=me))
+        import member_portal_messaging as mpm
+        # The All group leaders room's door, for the people in it, read
+        # alongside the groups (render_groups shows it only when they loaded).
+        import sunday_serving as ssv
+        data, room, serving = await asyncio.gather(
+            asyncio.to_thread(mpc.groups_for, biz["id"], me),
+            asyncio.to_thread(mpm.in_leaders_room, biz["id"], str(me["id"])) if mpm.turned_on(biz) else _nothing(),
+            asyncio.to_thread(ssv.serves, biz, str(me["id"])))
+        data = fill(data, "groups")
+        return _page(mpc.render_groups(biz, site, request, data, who=me, room=bool(room), serving=bool(serving)))
+    # A group's own page (member_portal_groups): Home, Board, People. The
+    # owner's preview reads it as the member they chose; nothing saves.
+    if sub.startswith("/my/groups/"):
+        import member_portal_groups as mpg
+        html, status = await mpg.serve(request, biz, site, me, sub)
+        return _page(html, status)
+    # The app's pictures (member_app_pictures): the owner, from a preview,
+    # and the people the owner named; nobody else sees these pages.
+    import member_app_pictures as mapic
+    can_picture = bool(mapic.may_edit(sess, biz))
+    if sub in ("/my/pictures", "/my/pictures/spot"):
+        if not can_picture:
+            return RedirectResponse("/my", status_code=303, headers=_SECURE_HEADERS)
+        import devotionals as devs_mod
+        occ_all, groups_all, devs_all = await asyncio.gather(asyncio.to_thread(mpc.upcoming_for, biz["id"], me),
+                                                             asyncio.to_thread(mapic.church_groups, biz["id"]),
+                                                             asyncio.to_thread(devs_mod.catalog, biz["id"]))
+        if sub == "/my/pictures":
+            return _page(mapic.render_list(biz, site, request, me, occ_all, groups_all, devs_all))
+        spot = mapic.find_spot(biz, str(request.query_params.get("key") or ""), occ_all, groups_all, devs_all)
+        if not spot:
+            return RedirectResponse("/my/pictures", status_code=303, headers=_SECURE_HEADERS)
+        return _page(mapic.render_spot(biz, site, request, me, spot))
     if sub == "/my/details":
-        full = await asyncio.to_thread(mpc.load_me, biz["id"], me["id"])
+        import member_directory as mdir
+        full, directory = await asyncio.gather(asyncio.to_thread(mpc.load_me, biz["id"], me["id"]),
+                                               asyncio.to_thread(mdir.details_block, biz, str(me["id"])))
         if not full:
             return _page(render_try_again(biz, site), 503)
-        return _page(mpc.render_details(biz, site, request, full))
+        return _page(mpc.render_details(biz, site, request, full, directory))
     if sub == "/my/notifications":
         import member_push
-        off = await asyncio.to_thread(member_push.turned_off, biz["id"], me["id"])
-        return _page(member_push.render_page(biz, site, request, me, off))
+        import group_chat_notify as gcn
+        off, quiet, chats = await asyncio.gather(asyncio.to_thread(member_push.turned_off, biz["id"], me["id"]),
+                                                 asyncio.to_thread(member_push.quiet_prefs, biz["id"], me["id"]),
+                                                 asyncio.to_thread(gcn.my_chats, biz, str(me["id"])))
+        return _page(member_push.render_page(biz, site, request, me, off, quiet, chats))
     from giving_router import giving_is_active
     # Giving opens inside the app (2026-10-14): /my/give is the give
     # page's own form in the app's look, the member's name and email filled.
@@ -1185,36 +1375,45 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
     # The Bible (member_portal_bible.py).
     if sub == "/my/bible" or sub.startswith("/my/bible/"):
         import member_portal_bible as mpb
-        return await mpb.serve(request, biz, site, me, sub)
+        return await mpb.serve(request, biz, site, me, sub, preview=preview)
     # Sermons, inside the app (member_portal_sermons.py).
     if sub == "/my/sermons" or sub.startswith("/my/sermons/"):
-        lib = fill(await asyncio.to_thread(mps.load_library, biz["id"]), "library")
         rest = sub[len("/my/sermons"):].strip("/")
         import member_portal_bible as mpb
         if not rest:
             series = str(request.query_params.get("series") or "")
-            # Watch leads with live, or the next gathering.
+            # Watch leads with live, or the next gathering: all three at once.
             import live_router as lr
-            live, occ = await asyncio.gather(asyncio.to_thread(lr.current, biz["id"]),
-                                             asyncio.to_thread(mpc.upcoming_for, biz["id"], me))
-            occ = fill(occ, "occasions")
+            lib, live, occ = await asyncio.gather(asyncio.to_thread(mps.load_library, biz["id"]),
+                                                  asyncio.to_thread(lr.current, biz["id"]),
+                                                  asyncio.to_thread(mpc.upcoming_for, biz["id"], me))
+            lib, occ = fill(lib, "library"), fill(occ, "occasions")
             return _page(mps.render_library(biz, site, me, lib, series if UUID_RE.match(series) else "",
                                             bible=mpb.prefs(request)[0], live=live or None,
                                             next_occ=(occ or [None])[0]),
                          200 if lib is not None else 503)
+        lib = fill(await asyncio.to_thread(mps.load_library, biz["id"]), "library")
         page = (mps.render_sermon(biz, site, me, lib, rest, give_url, bible=mpb.prefs(request)[0])
                 if UUID_RE.match(rest) else None)
         if page is None:
             return RedirectResponse("/my/sermons", status_code=303, headers=_SECURE_HEADERS)
         return _page(page, 200 if lib is not None else 503)
+    # Me → Celebrations (member_portal_celebrations): what the church celebrates.
+    if sub == "/my/me/celebrations":
+        import member_portal_celebrations as mcl
+        html, status = await mcl.serve_me(request, biz, site, me)
+        return _page(html, status)
     if sub == "/my/me":
         try:
             gifts: Optional[List[Dict[str, Any]]] = await asyncio.to_thread(gifts_for, biz["id"], me["id"], year)
         except Exception:
             logger.warning("member giving read failed", exc_info=True)
             gifts = None
+        import sunday_serving as ssv
+        serving = await asyncio.to_thread(ssv.serves, biz, str(me["id"]))
         return _page(render_me(biz, site, me=me, people=sess["people"], year=year, gifts=gifts,
-                               give_url=give_url, this_year=this_year, flash=mpc._flash(request)))
+                               give_url=give_url, this_year=this_year, flash=mpc._flash(request),
+                               pictures=can_picture, serving=serving, asks=await _ask_entry(biz, me)))
     # The church's reading plan (reading_plans.py, member_portal_reading.py).
     import reading_plans as rp
     import member_portal_reading as mpr
@@ -1225,36 +1424,118 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
     if sub.startswith("/my/kids/"):
         import member_spaces_kids as mk
         return await mk.serve(request, church, me, sub)
+    # Sunday check-in (member_portal_checkin.py): the code on the welcome
+    # slide opens the church's /here, which lands here.
+    if sub == "/my/here":
+        import church_checkin as cc
+        import member_portal_checkin as mpk
+        c = await asyncio.to_thread(cc.card, biz, me)
+        return _page(mpk.render_page(biz, site, request, me, c), 503 if c.get("state") == "error" else 200)
+    # My serving (ChurchSavvy Planning: sunday_serving.py, member_portal_serving.py).
+    if sub == "/my/serving" or sub.startswith("/my/serving/"):
+        import member_portal_serving as mpsv
+        return await mpsv.serve(request, church, me, sub)
+    # Get paid back, under Serve (church_checks.py, member_portal_checks.py).
+    if sub == "/my/paid-back" or sub.startswith("/my/paid-back/"):
+        import member_portal_checks as mpck
+        return await mpck.serve(request, church, me, sub, preview=preview)
     if sub != "/my":
         return RedirectResponse("/my", status_code=303, headers=_SECURE_HEADERS)
     import live_router as lr
-    occ, groups, lib, live = await asyncio.gather(
+    import member_portal_devotionals as mpd
+    import member_spaces as msp
+    import church_follow_up as cfu
+    ctx = msp.CURRENT.get() or {}
+    space = ctx.get("space")
+    today = rp.today_for(biz)
+
+    async def checkin_card() -> str:
+        # While Sunday check-in is open its card leads Home (church_checkin).
+        import church_checkin as cc
+        import member_portal_checkin as mpk
+        try:
+            return mpk.home_card(await asyncio.to_thread(cc.card, biz, me), request)
+        except Exception:
+            logger.warning("member home: check-in card skipped", exc_info=True)
+            return ""
+    # Everything Home shows, read at once (one after another, these were
+    # most of the wait on every visit to Home).
+    import church_news as cn
+    import celebrations as cel
+    import member_portal_celebrations as mcl
+    church_home = space not in ("kids", "youth")
+    import sunday_serving as ssv
+    occ, groups, lib, live, done, extras, checkin, posts, news, open_, today_cel, asks, serve_asks = await asyncio.gather(
         asyncio.to_thread(mpc.upcoming_for, biz["id"], me),
         asyncio.to_thread(mpc.groups_for, biz["id"], me),
         asyncio.to_thread(mps.load_library, biz["id"]),
-        asyncio.to_thread(lr.current, biz["id"]))
-    today = rp.today_for(biz)
-    done = (await asyncio.to_thread(rp.read_days, biz["id"], me["id"], rp.current(biz))
-            if today else None)
+        asyncio.to_thread(lr.current, biz["id"]),
+        asyncio.to_thread(rp.read_days, biz["id"], me["id"], rp.current(biz)) if today else _nothing(),
+        # Today's devotional, and a reading plan of the member's own when
+        # the church has none running (member_portal_devotionals).
+        mpd.home_extras(biz, me, preview=preview, church_reading=bool(today)),
+        checkin_card() if space not in ("kids", "youth") and cfu.is_church(biz) else _nothing(),
+        asyncio.to_thread(msp.posts, biz["id"], "youth") if space == "youth" else _nothing(),
+        # "From the church" and the bell (member_portal_news).
+        asyncio.to_thread(cn.home_view, str(biz["id"]), str(me["id"])) if church_home else _nothing(),
+        asyncio.to_thread(cn.comments_open, biz) if church_home else _nothing(),
+        # "Celebrating today" and the church's once-only question (member_portal_celebrations).
+        asyncio.to_thread(cel.today_posts, biz, str(me["id"])) if church_home else _nothing(),
+        asyncio.to_thread(mcl.home_asks, biz, me) if church_home and not preview else _nothing(),
+        # Asks to serve waiting on this member (member_portal_serving).
+        asyncio.to_thread(ssv.waiting, biz, str(me["id"])) if church_home else _nothing())
     occ, groups, lib = fill(occ, "occasions"), fill(groups, "groups"), fill(lib, "library")
+    devotional, own, own_done = extras
+    if own and not today:
+        today, done = own, own_done
     if preview and not today:
         today, done = samples.plan_today(), set()
     import member_portal_bible as mpb
     bible, where = mpb.prefs(request)
-    import member_spaces as msp
-    ctx = msp.CURRENT.get() or {}
-    if ctx.get("space") == "kids":
+    if space == "kids":
         import member_spaces_kids as mk
         return await mk.home(request, church, me, occ, mpc._flash(request) or mpr._flash(request))
-    if ctx.get("space") == "youth":
-        posts = await asyncio.to_thread(msp.posts, biz["id"], "youth")
+    if space == "youth":
         return _page(msp.render_youth_home(
             biz, site, me=me, occasions=occ, groups=groups, youth_posts=posts,
             reading=mpr.home_card(today, done), bible=bible, leader=(ctx.get("leader") or {}).get("youth"),
             flash=mpc._flash(request) or mpr._flash(request)))
+    checkin = checkin or ""
+    import member_portal_news as mpn
+    news_posts, news_n = news if news else (None, 0)
+    # No news reaches me yet: if I post, Home shows where it will go.
+    rights = await asyncio.to_thread(cn.can_post, str(biz["id"]), str(me["id"])) if news_posts == [] else None
+    news_html = mpn.home_block(biz, news_posts, occ, bool(open_), rights)
+    mine, waiting = asks if asks else (None, [])
+    celebrate = mcl.ask_card(biz, me, mine, waiting) + mcl.home_strip(today_cel)
+    import member_portal_serving as mpsv
+    serving = mpsv.home_card(serve_asks or [])
+    import member_asks
     return _page(render_home(biz, site, me=me, occasions=occ, groups=groups, library=lib,
                              give_url=give_url, flash=mpc._flash(request) or mpr._flash(request),
-                             live=live, reading=mpr.home_card(today, done), bible=bible, where=where))
+                             live=live, reading=mpr.today_row(today, done), bible=bible, where=where,
+                             checkin=checkin, serving=serving, devotional=devotional,
+                             edit=can_picture and request.query_params.get("edit") == "pictures",
+                             news=news_html, news_n=mpn.home_bell(news), celebrate=celebrate,
+                             ask=member_asks.home_row(await _ask_entry(biz, me))))
+
+
+async def _ask_entry(biz: Dict[str, Any], me: Dict[str, Any]) -> List[str]:
+    """Ask the church's way in, for Home and Me (member_asks): nothing in
+    Kids, or for an adult who switched into Youth (Ask lives in Church), and
+    no read at all for a church with nothing turned on."""
+    import member_asks
+    import member_spaces as msp
+    ctx = msp.CURRENT.get() or {}
+    if ctx.get("space", "church") == "kids" or (ctx.get("space") == "youth" and not ctx.get("youth")):
+        return []
+    if not member_asks.turned_on(biz):
+        return []
+    try:
+        return await asyncio.to_thread(member_asks.entry, biz, me)
+    except Exception:
+        logger.warning("member asks: the way in was skipped", exc_info=True)
+        return []
 
 
 # ─── POST ────────────────────────────────────────────────────────────
@@ -1463,7 +1744,7 @@ def _require_owner(business_id: str, user: AuthedUser) -> Dict[str, Any]:
     return rows[0]
 
 
-def _config_payload(biz: Dict[str, Any], site: Dict[str, Any]) -> Dict[str, Any]:
+def _config_payload(biz: Dict[str, Any], site: Dict[str, Any], user: Optional[AuthedUser] = None) -> Dict[str, Any]:
     import vertical_family
     import vertical_scope
     from business_sites_helpers import PUBLIC_DOMAIN
@@ -1482,7 +1763,7 @@ def _config_payload(biz: Dict[str, Any], site: Dict[str, Any]) -> Dict[str, Any]
         # Notifications to members' phones (member_push.py): each kind
         # the church can switch on, whether it is, and whether this
         # server can send at all.
-        "notifications": _notifications_payload(biz),
+        "notifications": _notifications_payload(biz, user),
         # The app's base (black, dark gray, light gray, white; the
         # church's colour is the accent) and its own Home tiles.
         "base": _ui_base(biz),
@@ -1490,7 +1771,41 @@ def _config_payload(biz: Dict[str, Any], site: Dict[str, Any]) -> Dict[str, Any]
         "tiles": _tiles_of(biz),
         # Youth's colour (member_spaces): volt green unless the church picks one.
         "youth_color": _youth_colour(biz),
+        # Round three (2026-10-19): the colour family beside the church's
+        # colour, or the church's colour alone; and who besides the owner
+        # can change the app's pictures (member_app_pictures).
+        "colours": "church" if portal_settings(biz.get("settings")).get("colours") == "church" else "family",
+        "photo_editors": _editors_of(biz),
+        "pictures": len(portal_settings(biz.get("settings")).get("pictures") or {}),
+        # Tabs your members see (member_app_ui.church_tabs, 2026-10-27): the
+        # church's bar in order, every tab it can pick, and how many fit.
+        **_tabs_payload(biz),
     }
+
+
+def _tabs_payload(biz: Dict[str, Any]) -> Dict[str, Any]:
+    import member_app_ui as ui
+    choices = ui.tab_choices(biz)
+    offered = {c["key"] for c in choices}
+    # A tab that isn't offered now (the directory while it's off) isn't
+    # shown as on the bar either.
+    return {"tabs": [k for k in ui.church_tab_keys(biz) if k in offered], "tab_choices": choices,
+            "tab_limit": ui.CHURCH_TAB_LIMIT, "tabs_default": list(ui.DEFAULT_TAB_KEYS)}
+
+
+def _editors_of(biz: Dict[str, Any]) -> List[Dict[str, str]]:
+    """The people the owner named to change pictures, with their names
+    (anyone no longer in the records is left out)."""
+    import member_app_pictures as mapic
+    ids = mapic.editors(biz)
+    if not ids:
+        return []
+    rows = sb_clients.sb_get_as_service(
+        f"/contacts?business_id=eq.{quote(str(biz.get('id')), safe='')}&id=in.({','.join(ids)})&select=id,name,email")
+    if not isinstance(rows, list):
+        return [{"id": i, "name": ""} for i in ids]
+    names = {str(r["id"]): (r.get("name") or r.get("email") or "") for r in rows}
+    return [{"id": i, "name": names[i]} for i in ids if i in names]
 
 
 def _youth_colour(biz: Dict[str, Any]) -> str:
@@ -1513,13 +1828,17 @@ def _tiles_of(biz: Dict[str, Any]) -> List[Dict[str, str]]:
     return mpc.clean_tiles(portal_settings(biz.get("settings")).get("tiles")) or []
 
 
-def _notifications_payload(biz: Dict[str, Any]) -> Dict[str, Any]:
+def _notifications_payload(biz: Dict[str, Any], user: Optional[AuthedUser] = None) -> Dict[str, Any]:
     import member_push
+    import sunday_planning
     on = member_push.church_kinds(biz.get("settings"))
+    # Serving waits for ChurchSavvy Planning: no switch where nobody can
+    # schedule (one already on still shows, so it can be turned off).
+    planning = user is not None and sunday_planning.open_to(user)
     return {
         "ready": member_push.ready(),
         "kinds": [{"key": k, "label": label, "hint": hint, "on": k in on}
-                  for k, label, hint in member_push.KINDS],
+                  for k, label, hint in member_push.KINDS if k != "serving" or planning or k in on],
     }
 
 
@@ -1528,14 +1847,16 @@ def get_member_portal_config(business_id: str, user: AuthedUser = Depends(requir
     from business_sites_helpers import ensure_business_site
     biz = _require_owner(business_id, user)
     site, _ = ensure_business_site(biz)
-    return _config_payload(biz, site)
+    return _config_payload(biz, site, user)
 
 
 @router.post("/member-portal/{business_id}/preview")
 def create_member_preview(business_id: str, body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
-    """Owner only. Body: { contact_id }. A one-time, two-minute link that
-    opens the member app as that member, in a read-only preview
-    (member_portal_preview.py) — no email or text involved."""
+    """Owner only. Body: { contact_id, next?: "pictures" }. A one-time,
+    two-minute link that opens the member app as that member, in a
+    read-only preview (member_portal_preview.py) — no email or text
+    involved. next = "pictures" lands on the app's pictures, the one thing
+    the owner can change from a preview (member_app_pictures)."""
     import member_portal_preview as pv
     from business_sites_helpers import ensure_business_site
     biz = _require_owner(business_id, user)
@@ -1554,7 +1875,8 @@ def create_member_preview(business_id: str, body: Dict[str, Any], user: AuthedUs
         raise HTTPException(503, "Couldn't open a preview just now. Please try again.")
     site, _ = ensure_business_site(biz)
     base = _config_payload(biz, site)["url"]
-    return {"ok": True, "url": f"{base}/preview?t={quote(token, safe='')}", "expires_in": pv.LINK_TTL_SECONDS}
+    nxt = "&next=pictures" if (body or {}).get("next") == "pictures" else ""
+    return {"ok": True, "url": f"{base}/preview?t={quote(token, safe='')}{nxt}", "expires_in": pv.LINK_TTL_SECONDS}
 
 
 @router.patch("/member-portal/{business_id}")
@@ -1562,9 +1884,13 @@ def patch_member_portal_config(business_id: str, body: Dict[str, Any],
                                user: AuthedUser = Depends(require_user)):
     """Owner-gated. Body: { enabled?: bool, sign_in?: bool, sign_out_all?: true,
     notifications?: {kind: bool}, base?: "black"|"charcoal"|"gray"|"white",
-    tiles?: [{title, sub, href, photo}], youth_color?: "#rrggbb" | "" }
+    tiles?: [{title, sub, href, photo}], youth_color?: "#rrggbb" | "",
+    colours?: "family"|"church", photo_editors?: [contact id],
+    tabs?: [tab key] | null }
     (the kinds are member_push.KINDS;
-    tiles are checked by member_portal_church.clean_tiles).
+    tiles are checked by member_portal_church.clean_tiles; tabs by
+    member_app_ui.clean_tab_keys: unknown keys are dropped, Home stays
+    first, Give stays in, five at most; null is today's bar again).
 
     Turning the page ON, or "sign everyone out", moves the epoch to now:
     every session issued before it ends (a page switched off and on again
@@ -1590,14 +1916,28 @@ def patch_member_portal_config(business_id: str, body: Dict[str, Any],
         tiles = mpc.clean_tiles(body.get("tiles"))
         if tiles is None:
             raise HTTPException(400, "tiles must be a list")
+    if "colours" in body and body.get("colours") not in ("family", "church"):
+        raise HTTPException(400, "colours must be family or church")
+    editors_list = None
+    if "photo_editors" in body:
+        import member_app_pictures as mapic
+        editors_list = mapic.clean_editors(body.get("photo_editors"))
+        if editors_list is None:
+            raise HTTPException(400, "photo_editors must be a list of people")
     switches = None
     if "notifications" in body:
         import member_push
         switches = member_push.clean_switches(body.get("notifications"))
+    tab_keys = None
+    if "tabs" in body and body.get("tabs") is not None:
+        tab_keys = ui.clean_tab_keys(body.get("tabs"))
+        if tab_keys is None:
+            raise HTTPException(400, "tabs must be a list of tabs")
     biz = _require_owner(business_id, user)
     site, _ = ensure_business_site(biz)
     if ("enabled" in body or "sign_in" in body or sign_out_all or switches is not None or "base" in body
-            or tiles is not None or "youth_color" in body):
+            or tiles is not None or "youth_color" in body or "colours" in body or editors_list is not None
+            or "tabs" in body):
         import vertical_family
         import vertical_scope
         if want and not (vertical_family.is_nonprofit_like(biz.get("type"))
@@ -1630,10 +1970,25 @@ def patch_member_portal_config(business_id: str, body: Dict[str, Any],
                 cfg.pop("youth_color", None)
         if tiles is not None:
             cfg["tiles"] = tiles
+        if "colours" in body:
+            cfg["colours"] = body["colours"]
+        if editors_list is not None:
+            cfg["photo_editors"] = editors_list
+        if "tabs" in body:
+            # The directory is a tab only while the church has it on.
+            if tab_keys is not None and "directory" in tab_keys:
+                import member_directory
+                if not member_directory.church_on({"settings": {"member_portal": cfg}}):
+                    tab_keys = [k for k in tab_keys if k != "directory"]
+            # Today's bar is kept as no bar at all, so it follows ours.
+            if tab_keys is None or tuple(tab_keys) == ui.DEFAULT_TAB_KEYS:
+                cfg.pop("tabs", None)
+            else:
+                cfg["tabs"] = tab_keys
         settings["member_portal"] = cfg
         saved = sb_clients.sb_patch_as_service(
             f"/businesses?id=eq.{quote(str(business_id), safe='')}", {"settings": settings})
         if not saved:
             raise HTTPException(503, "That change didn't save. Please try again.")
         biz = {**biz, "settings": settings}
-    return _config_payload(biz, site)
+    return _config_payload(biz, site, user)

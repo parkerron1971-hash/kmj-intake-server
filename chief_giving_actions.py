@@ -26,6 +26,11 @@ def _authorize(biz):
         from fastapi import HTTPException
         raise HTTPException(403, "A signed-in finance user must request giving statements.")
     require_finance(biz["id"], SimpleNamespace(id=user_id))
+    import church_keys
+    if not church_keys.is_open(str(biz["id"]), SimpleNamespace(id=user_id), "giving_money"):
+        from fastapi import HTTPException
+        raise HTTPException(403, "Giving & money is locked. Ask its keeper for a key in Areas: "
+                                 "it opens for an hour once they say yes.")
 
 
 def _fail(action_type: str, msg: str) -> Dict[str, Any]:

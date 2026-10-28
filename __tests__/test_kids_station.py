@@ -297,6 +297,30 @@ def test_self_kiosk_by_mobile_number(store, texts):
     assert row["method"] == "self" and str(row["dropped_off_by"]) == PARENT
 
 
+def test_the_parent_who_checks_children_in_at_the_kiosk_counts_once(store, texts):
+    """The kiosk stays for children (Kevin, 2026-10-17), but the parent was
+    at church too: one attendance row, 'kids_parent', however many times."""
+    fid, (mia, leo) = _ck.family(store)
+    store.t.setdefault("attendance", [])
+    _, token = paired("self")
+    k = app_client(token=token)
+    for child in (mia, leo):
+        r = k.post("/kids/station/self/checkin", json={"entry_id": ENTRY, "phone": "(555) 010-2030", "child_ids": [child]})
+        assert r.status_code == 200, r.text
+    assert [(str(a["contact_id"]), a["method"], str(a["entry_id"])) for a in store.t["attendance"]] == \
+        [(PARENT, "kids_parent", ENTRY)]
+
+
+def test_a_failure_counting_the_parent_never_fails_the_kiosk(store, texts, monkeypatch):
+    import church_checkin
+    fid, (mia, _) = _ck.family(store)
+    _, token = paired("self")
+    monkeypatch.setattr(church_checkin, "marks", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("down")))
+    r = app_client(token=token).post("/kids/station/self/checkin",
+                                     json={"entry_id": ENTRY, "phone": "(555) 010-2030", "child_ids": [mia]})
+    assert r.status_code == 200 and store.t["child_checkins"]
+
+
 def test_self_kiosk_unknown_and_shared_numbers_look_the_same(store):
     _ck.family(store)
     _, token = paired("self")

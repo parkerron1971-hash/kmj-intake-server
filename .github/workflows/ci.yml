@@ -144,9 +144,11 @@ jobs:
       - name: Run test suite
         # Controller fixtures use real Chromium with local route responses only.
         # No supplier, model or paid service is contacted.
+        # One worker per core; each test file stays on one worker, so its
+        # module fixtures build once and its tests keep their order.
         run: |
           python -m playwright install --with-deps chromium
-          pytest -q __tests__ agents --maxfail=10
+          pytest -q -n auto --dist loadfile __tests__ agents --maxfail=10 --durations=10
           python scripts/chief_computer_sabotage.py
 
       - uses: actions/setup-node@v4
@@ -179,3 +181,51 @@ jobs:
           node __tests__/booking_columns_db.mjs
           node __tests__/square_connections_db.mjs
           node __tests__/square_booking_sync_db.mjs
+          node __tests__/church_leaders_db.mjs
+          node __tests__/church_role_library_db.mjs
+          node __tests__/sunday_checkin_db.mjs
+          node __tests__/bible_marks_db.mjs
+          node __tests__/devotionals_db.mjs
+          node __tests__/member_safety_officers_db.mjs
+          node __tests__/group_space_db.mjs
+          node __tests__/church_news_db.mjs
+          node __tests__/celebrations_db.mjs
+          node __tests__/news_alerts_db.mjs
+          node __tests__/group_chat_db.mjs
+          node __tests__/leaders_room_db.mjs
+          node __tests__/quiet_hours_db.mjs
+          node __tests__/group_email_db.mjs
+          node __tests__/group_prayer_db.mjs
+          node __tests__/group_gatherings_db.mjs
+          node __tests__/group_bring_db.mjs
+          node __tests__/group_study_db.mjs
+          node __tests__/chat_evening_db.mjs
+          node __tests__/worship_songs_db.mjs
+          node __tests__/worship_show_db.mjs
+          node __tests__/worship_media_db.mjs
+          node __tests__/worship_team_db.mjs
+          node __tests__/church_areas_db.mjs
+          node __tests__/church_keys_db.mjs
+          node __tests__/church_pledges_db.mjs
+          node __tests__/church_spaces_db.mjs
+          node __tests__/church_help_db.mjs
+          node __tests__/church_checks_db.mjs
+          node __tests__/church_register_db.mjs
+          node __tests__/church_board_db.mjs
+          node __tests__/church_event_signups_db.mjs
+          node __tests__/login_areas_db.mjs
+          node __tests__/task_hand_off_db.mjs
+          node __tests__/leader_tasks_db.mjs
+          node __tests__/group_word_db.mjs
+          node __tests__/group_every_db.mjs
+          node __tests__/group_post_later_db.mjs
+          node __tests__/group_monthly_db.mjs
+          node __tests__/group_guests_db.mjs
+          node __tests__/chat_polls_db.mjs
+          node __tests__/chat_photos_db.mjs
+          node __tests__/sunday_planning_db.mjs
+          node __tests__/serving_member_db.mjs
+          node __tests__/serving_alerts_db.mjs
+          node __tests__/serve_notes_db.mjs
+          node __tests__/serve_here_db.mjs
+          node __tests__/serve_email_stop_db.mjs

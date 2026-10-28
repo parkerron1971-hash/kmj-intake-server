@@ -11,7 +11,8 @@ attendance for the service the session is tied to. Prayer never goes
 in the chat; the member app sends it privately to Prayer & care.
 
   GET   /live?business_id=                 now live (with chat + who's here) and recent
-  POST  /live/start                        {business_id, title, stream_url, entry_id?}
+  GET   /live/occasions?business_id=       services and events from today on, for Go live
+  POST  /live/start                        {business_id, title, stream_url, entry_id?}  (entry: one of the church's own)
   PATCH /live/{sid}                        {business_id, chat_open?, stream_url?, title?}
   POST  /live/{sid}/end                    {business_id}
   GET   /live/{sid}/chat?business_id=      every message (hidden ones flagged), who's here, who's paused
@@ -20,14 +21,17 @@ in the chat; the member app sends it privately to Prayer & care.
   POST  /live/{sid}/mute                   {business_id, contact_id, muted}
 
 Seats: any member of the team can watch the chat; running the service
-and moderating is a manager's (kids_router.require). The tables are
+and moderating is a manager's (kids_router.require). ChurchSavvy's team
+(worship_team) runs it too: the Media, Booth and Admin parts may do all of
+it, while ChurchSavvy is open to them (Kevin 2026-10-23, "Church Areas and
+Keys": a Media team gets the media part already set up). The tables are
 server-only (APPLY-2026-09-30-live.sql). Every read that fails is a 503,
 never an empty chat.
 """
 from __future__ import annotations
 
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote, urlparse
 
@@ -36,9 +40,27 @@ from pydantic import BaseModel, Field
 
 import sb_clients
 from auth_supabase import AuthedUser, require_user
-from kids_router import _uuid, require
+import kids_router
+from kids_router import _uuid
 
 router = APIRouter(tags=["live"])
+
+
+def require(business_id: str, user: AuthedUser, minimum: str) -> str:
+    """The seat the live page needs, or a part on ChurchSavvy's team that
+    runs the livestream. A seat is checked first and its refusal stands for
+    anyone the team doesn't open it to."""
+    try:
+        # Called through its module, not an alias, so ownership_sweep
+        # follows this gate to kids_router's.
+        return kids_router.require(business_id, user, minimum)
+    except HTTPException as refused:
+        if refused.status_code != 403:
+            raise
+        import worship_team
+        if worship_team.team_can(business_id, user, "live"):
+            return "team"
+        raise
 
 BODY_MAX = 500
 TITLE_MAX = 120
@@ -163,6 +185,36 @@ def _names(business_id: str, ids: List[str]) -> Dict[str, str]:
     return out
 
 
+def occasions(business_id: str) -> Optional[List[Dict[str, Any]]]:
+    """Go live's "Counts as attendance for": the church's services and
+    events dated from yesterday on (the page keeps today's and later on
+    the person's own clock), soonest first. Read here because a part on
+    ChurchSavvy's team has no seat to read Services & Events with. None
+    when a read failed."""
+    import church_checkin
+    from events_rsvp_router import _parse_day, resolve_fields
+    mods = church_checkin._roster(business_id)
+    if mods is None:
+        return None
+    fields = {str(m["id"]): resolve_fields(m.get("archetype_params")) for m in mods}
+    entries = church_checkin._entries(business_id, list(fields))
+    if entries is None:
+        return None
+    since = datetime.now(timezone.utc).date() - timedelta(days=1)
+    dated = []
+    for e in entries:
+        f = fields.get(str(e.get("module_id")))
+        data = e.get("data") or {}
+        day = _parse_day(data.get(f["date_field"])) if f else None
+        if day is None or day < since:
+            continue
+        dated.append((day, str(data.get(f["date_field"]) or ""), {
+            "id": str(e["id"]), "title": str(data.get(f["title_field"]) or "").strip() or "Untitled",
+            "when": str(data.get(f["date_field"]) or "")}))
+    dated.sort(key=lambda d: (d[0], d[1]))
+    return [o for _, _, o in dated[:24]]
+
+
 # ─── team routes ─────────────────────────────────────────────────────
 
 
@@ -230,6 +282,16 @@ def live_overview(business_id: str = Query(...), user: AuthedUser = Depends(requ
     return {"live": live, "recent": recent}
 
 
+@router.get("/live/occasions")
+def live_occasions(business_id: str = Query(...), user: AuthedUser = Depends(require_user)):
+    biz = _uuid(business_id, "business_id")
+    require(biz, user, "manager")
+    got = occasions(biz)
+    if got is None:
+        raise _unavailable()
+    return {"occasions": got}
+
+
 @router.post("/live/start")
 def live_start(body: StartIn, user: AuthedUser = Depends(require_user)):
     biz = _uuid(body.business_id, "business_id")
@@ -238,6 +300,15 @@ def live_start(body: StartIn, user: AuthedUser = Depends(require_user)):
     if not valid_stream_url(url):
         raise HTTPException(400, "Paste the stream's https:// link (YouTube, Facebook or Vimeo).")
     entry = _uuid(body.entry_id, "entry_id") if body.entry_id else None
+    if entry:
+        # "I'm here" checks members in to this occasion, so it must be
+        # one of this church's own.
+        found = sb_clients.sb_get_as_service(
+            f"/module_entries?id=eq.{_q(entry)}&business_id=eq.{_q(biz)}&status=eq.active&select=id&limit=1")
+        if not isinstance(found, list):
+            raise _unavailable()
+        if not found:
+            raise HTTPException(400, "That service isn't on this church's calendar. Pick another, or don't count attendance.")
     cur = current(biz)
     if cur is None:
         raise _unavailable()

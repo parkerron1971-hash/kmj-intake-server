@@ -13,6 +13,7 @@ import re
 import chief_fast_track as cft
 import chief_headline as headline
 import chief_models
+import chief_tone
 from chief_turn_direction import direction_for
 
 SYSTEM = """You are Chief, answering the owner's current question in a voice conversation.
@@ -37,6 +38,7 @@ class VoiceBridge:
         self._main_started = False
         self._sentences = []
         self._duplicates = ""
+        self._notes = ""
         self._task = None
         self.streamer = streamer_factory(self._preview, prover)
 
@@ -60,13 +62,21 @@ class VoiceBridge:
         """Called only for checked main prose, never raw model tokens."""
         self.stop()
         sentence = piece[len(self._prefix):] if piece.startswith(self._prefix) else ""
+        # A toned sentence (chief_tone) is compared and stitched by its
+        # words; a note on a sentence left out goes with the next one.
+        notes = " ".join(f"[{n}]" for n in chief_tone.notes_in(sentence))
+        sentence = chief_tone.strip(sentence)
         # Exact repeated leading sentences can be omitted without guessing
         # whether two differently worded facts mean the same thing. All other
         # main content, including corrections, is retained in order.
         if not self._main_started and _key(sentence) in {_key(s) for s in self._sentences}:
             self._duplicates += sentence
+            self._notes = (self._notes + " " + notes).strip()
             return
         self._main_started = True
+        if self._notes and piece.startswith(self._prefix):
+            piece = self._prefix + self._notes + " " + piece[len(self._prefix):]
+            self._notes = ""
         self._sink(piece)
 
     def stop(self):

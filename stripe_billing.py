@@ -548,11 +548,11 @@ async def create_checkout(body: CheckoutBody, user: AuthedUser = Depends(require
     import feature_gates
     requested = (body.plan or "").strip().lower()
     requested_base = requested[:-len("_annual")] if requested.endswith("_annual") else requested
-    if requested_base in feature_gates.AUDIENCE_PLANS:
+    if requested_base in feature_gates.AUDIENCE_PLANS or requested in feature_gates.CHURCHSAVVY_PLANS:
         # Strict: an audience plan resolves to ITS price or nothing.
         # _price_for_plan falls back to the default (Professional) price,
         # which would put a barber who asked for Solo on a Professional
-        # checkout while Solo's price isn't set yet.
+        # checkout while Solo's price isn't set yet. ChurchSavvy's the same.
         price_id = (body.price_id or
                     os.environ.get(f"STRIPE_PRICE_ID_{requested.upper()}") or "").strip()
         if not price_id:
@@ -597,6 +597,12 @@ async def create_checkout(body: CheckoutBody, user: AuthedUser = Depends(require
         if resolved not in feature_gates.audience_plans_for(biz.get("type")):
             raise HTTPException(
                 409, f"The {resolved.title()} plan isn't available for this business.")
+    # ChurchSavvy on its own: churches on ChurchSavvy alone, once the
+    # switch opens it, back to ChurchSavvy's own page (churchsavvy_billing).
+    church_savvy = None
+    if resolved in feature_gates.CHURCHSAVVY_PLANS:
+        import churchsavvy_billing
+        church_savvy = churchsavvy_billing.checkout_rules(biz, user, resolved)
 
     customer_id = biz.get("stripe_customer_id")
     if not customer_id:
@@ -618,7 +624,7 @@ async def create_checkout(body: CheckoutBody, user: AuthedUser = Depends(require
     # PAYG overage line item is GONE — usage beyond the allowance draws
     # down prepaid credit packs instead. See /billing/credits/checkout.)
     line_items: list = [{"price": price_id, "quantity": 1}]
-    discount_options = {"allow_promotion_codes": True}
+    discount_options = {"allow_promotion_codes": not church_savvy}
     if body.promotion_code:
         from stripe_discounts import resolve_code
         promo = await resolve_code(body.promotion_code)
@@ -628,8 +634,9 @@ async def create_checkout(body: CheckoutBody, user: AuthedUser = Depends(require
         "mode": "subscription",
         "customer": customer_id,
         "line_items": line_items,
-        "success_url": _success_url() + "?session_id={CHECKOUT_SESSION_ID}",
-        "cancel_url":  _cancel_url(),
+        "success_url": church_savvy["success_url"] if church_savvy
+                       else _success_url() + "?session_id={CHECKOUT_SESSION_ID}",
+        "cancel_url":  church_savvy["cancel_url"] if church_savvy else _cancel_url(),
         # Echo business_id in metadata so the webhook can resolve back
         # even if the customer object's metadata is missing it.
         "subscription_data": _subscription_data(biz, user, skip_trial=bool(body.skip_trial)),
@@ -880,9 +887,11 @@ async def create_portal(body: PortalBody, request: Request,
             status_code=400,
             detail="This business has no Stripe customer yet. Start a subscription first.",
         )
+    import churchsavvy_billing
     session = await _stripe_post("/billing_portal/sessions", {
         "customer": customer_id,
-        "return_url": _portal_return_url(),
+        "return_url": churchsavvy_billing.billing_page() if churchsavvy_billing.standalone(biz)
+                      else _portal_return_url(),
     })
     return {"url": session.get("url")}
 
@@ -1435,6 +1444,12 @@ BOOTSTRAP_CATALOG = [
     ("STRIPE_PRICE_ID_BOOKED_ANNUAL",       "solutionist_booked_annual",        "Solutionist Booked",        79000,  "year"),
     ("STRIPE_PRICE_ID_BOSS",                "solutionist_boss_monthly",         "Solutionist Boss",          9900,   "month"),
     ("STRIPE_PRICE_ID_BOSS_ANNUAL",         "solutionist_boss_annual",          "Solutionist Boss",          99000,  "year"),
+    # ChurchSavvy on its own (2026-10-24, Kevin: "the pricing is good").
+    # Monthly only. Creating them sells nothing: checkout refuses these
+    # plans until CHURCHSAVVY_BILLING opens them (churchsavvy_billing).
+    ("STRIPE_PRICE_ID_CS_SCREENS",          "churchsavvy_screens_monthly",      "ChurchSavvy",               2000,   "month"),
+    ("STRIPE_PRICE_ID_CS_PLANNING",         "churchsavvy_planning_monthly",     "ChurchSavvy Planning",      1500,   "month"),
+    ("STRIPE_PRICE_ID_CS_BOTH",             "churchsavvy_both_monthly",         "ChurchSavvy and Planning",  2900,   "month"),
 ]
 
 
