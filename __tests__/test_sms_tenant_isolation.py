@@ -47,6 +47,7 @@ GUARDED = [
     (sms_routing, "get_keyword", "viewer"),
     (sms_routing, "set_keyword", "admin"),
     (sms_routing, "broadcast", "admin"),
+    (sms_routing, "broadcast_reach", "admin"),
     # Dedicated numbers (phase C): a number id is not a capability —
     # every handler resolves the caller's relationship to the business.
     (sms_numbers_router, "get_number", "viewer"),
