@@ -302,6 +302,13 @@ def test_a_short_title_goes_whole(fake):
 
 # ── 5. the office, the member ────────────────────────────────────────
 
+def test_settings_say_whether_the_church_texts_yet(fake):
+    assert nr.can_text(CHURCH) is True
+    fake.own = False
+    assert nr.can_text(CHURCH) is False
+
+
+
 def test_the_office_sees_what_an_important_post_would_do(fake, monkeypatch):
     import church_news as cn
     monkeypatch.setattr(cn, "_need", lambda biz, user, minimum: biz)

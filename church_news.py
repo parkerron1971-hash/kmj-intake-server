@@ -731,7 +731,7 @@ def _alerts_view(business: Dict[str, Any]) -> Dict[str, Any]:
             "celebrations": "morning" if na.celebration_alerts(business) else "none",
             # Important posts reach the people without the app (news_reach).
             "reach": {"on": news_reach.church_on(business), "texts_month": news_reach.texts_used(business) or 0,
-                      "cap": news_reach.texts_cap()}}
+                      "cap": news_reach.texts_cap(), "texting": news_reach.can_text(business)}}
 
 
 def office_view(business: Dict[str, Any]) -> Dict[str, Any]:

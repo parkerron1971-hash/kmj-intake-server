@@ -75,6 +75,17 @@ def texts_cap() -> int:
         return 500
 
 
+def can_text(business: Dict[str, Any]) -> bool:
+    """Whether this church texts under its own name today (approved, its own
+    number active), for the office's Settings line. False when it can't be
+    told, or when asked from inside a running loop."""
+    try:
+        got = asyncio.run(_texting(str(business["id"]), []))
+    except Exception:  # noqa: BLE001
+        return False
+    return bool(got and got[0])
+
+
 def church_on(business: Dict[str, Any]) -> bool:
     news = ((business or {}).get("settings") or {}).get("news") or {}
     return not (isinstance(news, dict) and news.get("reach_rest") is False)

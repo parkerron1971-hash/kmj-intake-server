@@ -296,4 +296,4 @@ def test_the_office_turns_news_alerts_on_and_chooses_celebrations(fake, monkeypa
     assert s["news"] == {"comments": False, "celebration_alerts": "none"}               # comments untouched
     v = cn._alerts_view(fake.t["businesses"][0])
     assert v == {"on": True, "sent_today": 0, "max": 3, "celebrations": "none",
-                 "reach": {"on": True, "texts_month": 0, "cap": 500}}
+                 "reach": {"on": True, "texts_month": 0, "cap": 500, "texting": False}}
