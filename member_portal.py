@@ -1439,6 +1439,10 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
     if sub == "/my/paid-back" or sub.startswith("/my/paid-back/"):
         import member_portal_checks as mpck
         return await mpck.serve(request, church, me, sub, preview=preview)
+    # The board's money yes (church_money_levels.py, member_portal_board.py).
+    if sub == "/my/board" or sub.startswith("/my/board/"):
+        import member_portal_board as mpb
+        return await mpb.serve(request, church, me, sub, preview=preview)
     if sub != "/my":
         return RedirectResponse("/my", status_code=303, headers=_SECURE_HEADERS)
     import live_router as lr
