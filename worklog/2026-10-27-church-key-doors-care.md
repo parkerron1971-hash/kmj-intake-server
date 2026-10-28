@@ -3,8 +3,8 @@ title: Church areas, step 2 — the Kids and Care doors (medical and custody not
 date: 2026-10-27
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-10-26: "go with your picks" (the lock binds the owner too; guarded at the start: giving names and bank, kids medical notes, pastors-only notes) and "go ahead, you build step 2 after the media fixes"'
-status: in progress
-prs: [kmj-intake-server (this PR)]
+status: shipped
+prs: ["kmj-intake-server#1622"]
 migrations: []
 left_undone:
   - "Check-in and pickup still show a manager a child's custody note (see decisions)"
