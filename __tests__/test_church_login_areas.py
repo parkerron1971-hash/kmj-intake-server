@@ -209,3 +209,36 @@ def test_a_logins_view_is_kept_a_minute_and_a_saved_pick_clears_it(office, seats
     r = office.put("/church/areas/login", json={"business_id": BIZ, "user_id": MARCUS_SEAT, "areas": ["office"]})
     assert r.status_code == 200
     assert ca.my_areas(BIZ, MARCUS_SEAT, "manager")["areas"] == ["office"]
+
+
+# ─── The office's lanes (Kevin 2026-10-28) ────────────────────────────
+
+def test_the_offices_lanes_are_each_a_login_and_its_areas():
+    assert [x["key"] for x in ca.lanes_view()] == [
+        "office_leadership", "people_care", "sunday_serving", "media_comms", "treasurer"]
+    for x in ca.lanes_view():
+        if x["role"] == "manager":
+            assert x["areas"] and ca.FINANCE_ONLY not in x["areas"], x["key"]
+            assert x["areas"] == [a for a in ca.AREA_ORDER if a in x["areas"]], "in the areas' order"
+    assert ca.LANES["treasurer"]["role"] == "admin" and ca.LANES["treasurer"]["areas"] is None
+    assert ca.lane_of("manager", ["office", "messages_safety"]) == "office_leadership"
+    assert ca.lane_of("member", ["worship_media"]) == "sunday_serving"
+    assert ca.lane_of("manager", ["worship_media", "office"]) is None, "a pick that's no lane"
+    assert ca.lane_of("admin", ["office", "messages_safety"]) is None, "an admin keeps everything"
+
+
+def test_an_admin_gives_a_login_its_lane(office, seats):
+    body = {"business_id": BIZ, "user_id": MARCUS_SEAT}
+    r = office.put("/church/areas/login", json={**body, "lane": "media_comms"})
+    assert r.status_code == 200 and r.json()["areas"] == ["worship_media", "website_outreach"]
+    assert r.json()["lane"] == "media_comms"
+    m = office.get(f"/church/areas?business_id={BIZ}").json()
+    assert _login(m, MARCUS_SEAT)["lane"] == "media_comms" and _login(m, MARCUS_SEAT)["by"] == "picked"
+    assert _login(m, SAM_SEAT)["lane"] is None, "a guess is no lane"
+    assert _login(m, NEW_SEAT)["lane"] is None, "a pick that's no lane"
+    assert [x["key"] for x in m["lanes"]][0] == "office_leadership"
+    assert office.put("/church/areas/login", json={**body, "lane": "treasurer"}).status_code == 400, "an admin login"
+    assert office.put("/church/areas/login", json={**body, "lane": "the_moon"}).status_code == 400
+    assert office.get(f"/church/lanes?business_id={BIZ}").json()["lanes"][-1]["role"] == "admin"
+    assert next(s for s in seats.t["business_users"] if s["user_id"] == MARCUS_SEAT)["areas"] == [
+        "worship_media", "website_outreach"]
