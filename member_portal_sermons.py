@@ -185,12 +185,13 @@ def render_library(biz, site, who, lib: Optional[Dict[str, Any]], series_id: str
         f'{_art(lib, by_series[sid][0], pal, site, pool, used)}</span><span class="mb-mtile-b"><strong>{_e(titles[sid])}</strong>'
         f'<span>{len(by_series[sid])} message{"" if len(by_series[sid]) == 1 else "s"}</span></span></a>'
         for sid in order)
-    parts = [head, live_card(live, next_occ), feat]
-    if shelf:
-        parts.append(f'{ui.section("Series")}<div class="mb-rail">{shelf}</div>')
-    parts.append(f'{ui.section("All messages")}<ul class="mb-list mb-cards" style="--inset:124px">'
-                 f'{"".join(_row(x, lib, pal, site, pool) for x in lib["sermons"])}</ul>')
-    return _shell(biz, site, "Watch", "".join(parts), tab="watch", who=who, script=SHARE_SCRIPT)
+    rest = f'{ui.section("Series")}<div class="mb-rail">{shelf}</div>' if shelf else ""
+    rest += (f'{ui.section("All messages")}<ul class="mb-list mb-cards" style="--inset:124px">'
+             f'{"".join(_row(x, lib, pal, site, pool) for x in lib["sermons"])}</ul>')
+    # On a computer: the latest message beside the series and every message.
+    from member_portal import band
+    return _shell(biz, site, "Watch", head + band(live_card(live, next_occ) + feat, rest, cls="hm-lead"),
+                  tab="watch", who=who, script=SHARE_SCRIPT, wide=True)
 
 
 def render_sermon(biz, site, who, lib: Optional[Dict[str, Any]], sermon_id: str,

@@ -545,14 +545,16 @@ def palette_for(biz: Dict[str, Any], site: Optional[Dict[str, Any]]) -> Dict[str
     return ui.palette(biz, resolve_theme(biz, site))
 
 
-def _body_class(door: bool, space: str, tab: Optional[str]) -> str:
-    """The sign-in pages' class, a Youth or Kids space's, and the colour the
+def _body_class(door: bool, space: str, tab: Optional[str], wide: bool = False) -> str:
+    """The sign-in pages' class, a Youth or Kids space's, the colour the
     page's tab wears (member_app_ui.TAB_HUE: Watch violet, Bible gold,
-    Connect teal)."""
+    Connect teal), and `mb-wide` for a page laid out for a computer."""
     import member_app_ui as ui
     if door:
         return ' class="si"'
     names = [f"sp-{space}"] if space != "church" else []
+    if wide:
+        names.append("mb-wide")
     place = ui.TAB_OF.get(tab or "", "")
     if place in ui.TAB_HUE:
         names.append(f"pg-{place}")
@@ -562,7 +564,8 @@ def _body_class(door: bool, space: str, tab: Optional[str]) -> str:
 def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
            body: str, *, script: str = "", tab: Optional[str] = None,
            who: Optional[Dict[str, Any]] = None, bare: bool = False, bar: bool = True,
-           door: bool = False, back: Optional[Tuple[str, str]] = None, news_n: Optional[int] = None) -> str:
+           door: bool = False, back: Optional[Tuple[str, str]] = None, news_n: Optional[int] = None,
+           wide: bool = False) -> str:
     """Every member page. Signed-in pages pass `tab` (the page's place in
     the tab bar: home, watch, bible, give, connect — the older names map
     over) and `who` (their picture, top right, which opens Me); the
@@ -573,8 +576,10 @@ def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
     tab bar (a chat, whose box sits at the foot of the screen). `door` is a
     page before sign-in (member_app_signin), which draws its own top and
     foot. `news_n` (Home, when the church has news) puts the bell at the top
-    right, with how many posts are new (member_portal_news). The look is
-    member_app_ui's."""
+    right, with how many posts are new (member_portal_news). `wide` lays
+    the page out for a computer (member_app_ui: 1180px beside the tab rail,
+    its rows side by side, see band()); a phone never sees a difference.
+    The look is member_app_ui's."""
     import member_app_ui as ui
     import member_app_install as mai
     import member_app_photos as photos
@@ -648,7 +653,7 @@ def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
 <style>{ui.css(biz, theme, space)}</style>
 {f'<style>{sg.css(biz, theme)}</style>' if door else ''}
 </head>
-<body{_body_class(door, space, tab)}>
+<body{_body_class(door, space, tab, wide)}>
 {top}
 <main class="mp-shell{' mb-has-nav' if signed_in and bar else ''}{' mb-bare' if bare or door else ''}">
   {body}
@@ -806,6 +811,18 @@ def render_give_off(biz: Dict[str, Any], site, me: Dict[str, Any], *, preview: b
     return _shell(biz, site, "Give", body, tab="give", who=me)
 
 
+def band(*cols: str, cls: str = "") -> str:
+    """One row of a page on a computer: its blocks side by side, each in a
+    column (member_app_ui: hm-band). On a phone the wrappers vanish and the
+    blocks read one under another, in this same order, as they always have.
+    Empty blocks are left out, and a row of one block is the full width."""
+    kept = [c for c in cols if (c or "").strip()]
+    if not kept:
+        return ""
+    inner = "".join(f'<div class="hm-col">{c}</div>' for c in kept)
+    return f'<div class="hm-band{" " + cls if cls else ""}">{inner}</div>'
+
+
 def prayer_card() -> str:
     import member_app_ui as ui
     return (f'<a class="mb-pray" href="/my/prayer"><span class="mb-pray-ic">{ui.icon("pray", 22)}</span>'
@@ -878,26 +895,25 @@ e.textContent='';e.append(g+', ',em);}
                                 + '<div class="mb-hero-in">', 1)
     today = (f'<section class="h-gold" aria-labelledby="mb-today-h">{ui.section("Today", "/my/bible/plans", "Plans", hid="mb-today-h")}'
              f'<div class="mb-today">{mpb.verse_card(bible)}{devotional}{reading or mpb.continue_row(where, bible)}</div></section>')
+    # On a computer Home reads in rows (band): what's on and the four ways
+    # in beside Today; the latest message beside the church's tiles; this
+    # week; then the small cards. The order is the phone's, so a phone
+    # reads it exactly as before. Pictures are chosen in this same order.
+    latest = mps.latest_card(library, pal, pool=pool, used=used, site=site)
+    tiles = mpc.home_tiles(biz, site, pool, used, edit=edit)
+    week = mpc.week_cards(occasions, groups, pal=pal, pool=pool, used=used, skip=first, biz=biz, edit=edit)
+    lower = [b for b in (latest, tiles, week) if (b or "").strip()]
+    rows = (band(lower[0], lower[1], cls="hm-pair") + band(lower[2]) if len(lower) == 3 else band(*lower, cls="hm-pair"))
     return _shell(biz, site, "Home", f"""
 {editbar}
 <div class="mb-hello-wrap"><p class="mb-date" aria-hidden="true"></p>
 <h1 class="mb-hello" data-first="{_e(hello)}">Hi, <em>{_e(hello)}.</em></h1></div>
-{checkin}
-{serving}
-{f'<div style="display:flex;flex-direction:column;gap:12px;margin:6px 0 16px">{celebrate}</div>' if celebrate else ''}
-{hero}
-<nav class="mb-quick" aria-label="Quick ways in">{quick}</nav>
-{flash}
-{news}
-{today}
-{mps.latest_card(library, pal, pool=pool, used=used, site=site)}
-{mpc.home_tiles(biz, site, pool, used, edit=edit)}
-{mpc.week_cards(occasions, groups, pal=pal, pool=pool, used=used, skip=first, biz=biz, edit=edit)}
-{mai.install_card(church)}
-{member_push.home_card(biz)}
-{prayer_card()}
-{ask}""", tab="home", who=me, script=script + (mpn.RX_JS if news else "") + (mcl.STRIP_JS if celebrate else ""),
-                  news_n=news_n)
+{band(checkin, serving, f'<div style="display:flex;flex-direction:column;gap:12px;margin:6px 0 16px">{celebrate}</div>' if celebrate else '')}
+{band(hero + f'<nav class="mb-quick" aria-label="Quick ways in">{quick}</nav>', flash + news + today, cls="hm-lead")}
+{rows}
+{band(mai.install_card(church), member_push.home_card(biz), prayer_card(), ask, cls="hm-cards")}""",
+                  tab="home", who=me, script=script + (mpn.RX_JS if news else "") + (mcl.STRIP_JS if celebrate else ""),
+                  news_n=news_n, wide=True)
 
 
 def _month_bars(gifts: List[Dict[str, Any]], year: int, this_year: int) -> str:
@@ -984,7 +1000,7 @@ def render_me(biz: Dict[str, Any], site, *, me: Dict[str, Any], people: List[Dic
     script = """<script>(function(){var i=document.getElementById('mb-photo-in');if(!i)return;
 i.addEventListener('change',function(){if(!i.files||!i.files.length)return;var n=document.getElementById('mb-photo-note');
 if(n){n.textContent='Saving your photo\u2026';}i.form.submit();});})();</script>"""
-    return _shell(biz, site, "Me", f"""
+    you = f"""
 <div class="mb-profile">{photo}
   <h1>{_e(me.get('name') or 'Me')}</h1>
   <span class="mp-muted">{_e(me.get('email') or '')}{' · ' if me.get('email') else ''}{_e(biz.get('name') or 'the church')}</span>
@@ -996,8 +1012,8 @@ if(n){n.textContent='Saving your photo\u2026';}i.form.submit();});})();</script>
   <nav class="mp-years" aria-label="Year" style="margin-top:14px">{years}</nav>
   {giving}
   {buttons}
-</section>
-{ui.section('Your church life')}
+</section>"""
+    life = f"""{ui.section('Your church life')}
 <ul class="mb-list mb-cards" style="--inset:60px">
   {link('/my/events', 'calendar', 'Coming up', 'Say you&#x27;re coming, or sign up to serve')}
   {link('/my/serving', 'clock', 'My serving', 'Your Sundays, away dates and swaps') if serving else ''}
@@ -1012,8 +1028,9 @@ if(n){n.textContent='Saving your photo\u2026';}i.form.submit();});})();</script>
   {link('/my/pictures', 'camera', 'Pictures in the app', 'Choose the photo for every spot') if pictures else ''}
 </ul>
 <div class="mp-noprint" style="margin-top:8px">{switch}
-<form method="post" action="/my/signout"><button class="mb-signout" type="submit">Sign out</button></form></div>""",
-                  tab="me", who=me, back=("/my", "Home"), script=script)
+<form method="post" action="/my/signout"><button class="mb-signout" type="submit">Sign out</button></form></div>"""
+    # On a computer: you and your giving beside your church life (band).
+    return _shell(biz, site, "Me", band(you, life), tab="me", who=me, back=("/my", "Home"), script=script, wide=True)
 
 
 def render_statement(biz: Dict[str, Any], site, stmt: Dict[str, Any],

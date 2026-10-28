@@ -109,13 +109,39 @@ def test_coming_up_offers_only_what_i_havent_answered():
 def test_home_leads_with_the_greeting_next_and_latest_message():
     page = mp.render_home(_biz("#0B2146"), None, me=ME, occasions=[_occ("e1", "Sunday Worship")],
                           groups={"mine": [], "open": []}, library=_lib(), give_url="/my/give")
-    body = page[page.index("<body>"):]
+    body = page[page.index("<body"):]
     assert "Hi, <em>Ana.</em>" in body and 'data-first="Ana"' in body
     assert "God&#x27;s order for families" in body and "Kingdom Order · Pastor Ana · September 27, 2026" in body
     assert body.index('class="mb-hero"') < body.index('class="mb-quick"') < body.index('id="mb-latest"')
     empty = mp.render_home(_biz(), None, me=ME, occasions=[], groups=None, library=None, give_url="")
-    empty = empty[empty.index("<body>"):]
+    empty = empty[empty.index("<body"):]
     assert "Latest message" not in empty and "Welcome home" in empty     # the church itself leads
+
+
+def test_home_on_a_computer_reads_in_rows_in_the_phones_order():
+    """Kevin 2026-10-28: everyone views their account on a computer or a
+    phone. Home, Watch, Connect, Coming up and Me ask for the wide layout
+    (body.mb-wide: 1180px beside the tab rail); their blocks sit in rows
+    (band) that keep the phone's order, and on a phone a row's wrappers
+    vanish (display:contents), so a phone reads exactly what it did."""
+    page = mp.render_home(_biz("#0B2146"), None, me=ME, occasions=[_occ("e1", "Sunday Worship")],
+                          groups={"mine": [], "open": []}, library=_lib(), give_url="/my/give")
+    assert '<body class="mb-wide">' in page
+    body = page[page.index("<body"):]
+    assert 'class="hm-band hm-lead"' in body and 'class="hm-band hm-cards"' in body
+    assert (body.index('class="mb-hero"') < body.index('class="mb-quick"') < body.index('id="mb-today-h"')
+            < body.index('id="mb-latest"'))
+    assert ".hm-band,.hm-col,.hm-grid{display:contents;}" in page              # a phone: no rows
+    assert "body.mb-wide .mb-top,body.mb-wide .mp-shell{max-width:1180px;}" in page
+    # A row leaves out what's empty; nothing at all is no row.
+    assert mp.band("", "  ") == ""
+    assert mp.band("<p>a</p>", "", cls="hm-pair") == '<div class="hm-band hm-pair"><div class="hm-col"><p>a</p></div></div>'
+    # Me is wide; a page made for reading or a form (Prayer) stays one column.
+    me_page = mp.render_me(_biz(), None, me=ME, people=[ME], year=2026, gifts=[], give_url="", this_year=2026)
+    assert 'class="mb-wide' in me_page[me_page.index("<body"):me_page.index("<body") + 40]
+    req = type("R", (), {"query_params": {}})()
+    prayer = mpc.render_prayer(_biz(), None, req, who=ME)
+    assert "mb-wide" not in prayer[prayer.index("<body"):prayer.index("<body") + 40]
 
 
 # ─── Me ──────────────────────────────────────────────────────────────
@@ -230,7 +256,7 @@ def test_the_next_card_offers_im_coming_and_counts_without_names():
 def test_a_new_church_home_has_no_empty_blocks_and_always_something_to_read():
     page = mp.render_home(_biz(), None, me=ME, occasions=[], groups={"mine": [], "open": []},
                           library={"sermons": [], "series": []}, give_url="")
-    body = page[page.index("<body>"):]
+    body = page[page.index("<body"):]
     assert "Verse of the day" in body and "Start with John 1" in body and "How can we pray for you?" in body
     assert "Nothing is on the calendar" not in body and "Latest message" not in body and "This week" not in body
     quick = body[body.index('class="mb-quick"'):]

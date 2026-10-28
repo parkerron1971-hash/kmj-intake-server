@@ -1210,6 +1210,38 @@ td.n,th.n{text-align:right;font-variant-numeric:tabular-nums;}
   .mb-quick a:active,.mb-ev:active,.mb-mtile:active,.mb-bt:active,.mb-pray:active,.mb-row:active,.mb-reading-card:active,.mb-hero:active,
   .mb-ser:active{transform:scale(.98);}
 }
+/* On a computer (Kevin 2026-10-28: "really everyone should be able to view
+   their account on desktop or mobile phone"). A page that asks for it
+   (_shell wide=True) is 1180px wide beside the tab rail, and its rows
+   (member_portal.band) sit side by side. On a phone a row's wrappers
+   vanish (display:contents) and the page reads exactly as it always has. */
+.hm-band,.hm-col,.hm-grid{display:contents;}
+@media (min-width:1000px){
+  body.mb-wide .mb-top,body.mb-wide .mp-shell{max-width:1180px;}
+  body.mb-wide .mb-seg{max-width:420px;}
+  .hm-band{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(0,1fr);gap:28px;align-items:start;margin:40px 0 0;}
+  .mb-hello-wrap+.hm-band{margin-top:10px;}
+  .hm-col{display:block;min-width:0;}
+  .hm-col>:first-child,.hm-col>:first-child>.mb-sh:first-child,.hm-col>style:first-child+*,
+  .hm-col>style:first-child+*>.mb-sh:first-child{margin-top:0;}
+  .hm-lead:has(>.hm-col+.hm-col),.hm-pair:has(>.hm-col+.hm-col){grid-template-columns:minmax(0,1.32fr) minmax(0,1fr);grid-auto-flow:row;}
+  .hm-pair .mb-bt.is-wide{aspect-ratio:2/1;}
+  .hm-pair .mb-bt.is-sq{aspect-ratio:5/4;}
+  .hm-pair .mb-bt.is-band{aspect-ratio:3/1;}
+  .hm-lead .mb-hero{min-height:380px;}
+  .hm-lead .mb-hero h2,.hm-lead .mb-hero h3{font-size:34px;}
+  .hm-cards{grid-auto-flow:row;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px 16px;}
+  .hm-cards>.hm-col>*{margin-top:0;}
+  .hm-col .mb-rail{margin-inline:0;padding-inline:0;scroll-padding-inline:0;}
+  .hm-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:14px 16px;align-items:start;}
+  .hm-grid>*{margin-top:0;margin-bottom:0;}
+  .hm-cards>.hm-col:not(:has(>:not([hidden],style,script))){display:none;}
+  .hm-band>.hm-col:only-child .mb-bento{grid-template-columns:repeat(4,minmax(0,1fr));}
+  .hm-band>.hm-col:only-child .mb-bt.is-wide{grid-column:span 2;}
+}
+@media (min-width:1100px){
+  body.mb-wide .mp-shell.mb-has-nav,body.mb-wide:has(.mb-has-nav) .mb-top{margin-left:max(92px,calc((100vw - 1180px) / 2));margin-right:auto;}
+}
 @media print{.mp-noprint,.mb-nav,.mb-top{display:none!important;} html,body{background:#fff;color:#000;}
   .mp-shell{max-width:none;padding:0;} .mp-card{background:#fff;} th,td{border-color:#999;} .mp-muted{color:#333;}}""")
 

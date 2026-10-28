@@ -729,13 +729,15 @@ def render_groups(biz, site, request: Request, data: Optional[Dict[str, List[Dic
                     f'<ul class="mb-list mb-cards"><li><a href="/my/serving"><span class="mb-thumb mb-chat-av">{ui.icon("clock", 18)}</span>'
                     f'<span class="mb-list-text"><strong>My serving</strong><span>Your Sundays, away dates and swaps</span></span>'
                     f'{ui.icon("chevron", 16)}</a></li></ul></section>') + lead
-        body = (f'{hint}<section aria-labelledby="mp-mine-h">{ui.section("Your groups", hid="mp-mine-h")}{mine}</section>{lead}'
-                f'<section aria-labelledby="mp-open-h">{ui.section("Find a group", hid="mp-open-h")}{open_}</section>')
+        # On a computer: your groups beside the ones to find (band).
+        from member_portal import band
+        body = band(f'{hint}<section aria-labelledby="mp-mine-h">{ui.section("Your groups", hid="mp-mine-h")}{mine}</section>{lead}',
+                    f'<section aria-labelledby="mp-open-h">{ui.section("Find a group", hid="mp-open-h")}{open_}</section>')
     return _shell(biz, site, "Connect", f"""
 <div class="mb-lt"><h1>Connect</h1></div>
 {connect_tabs(biz, "groups") or '<p class="mb-sub">Smaller circles to belong to: small groups, serving teams and classes.</p>'}
 {_flash(request)}
-{body}""", tab="connect", who=who)
+{body}""", tab="connect", who=who, wide=True)
 
 
 def _flash(request: Request) -> str:
@@ -830,7 +832,8 @@ def render_events(biz, site, request: Request, occasions: Optional[List[Dict[str
     else:
         import member_app_samples as samples
         hint = ui.sample_hint(samples.WHERE["events"]) if any(samples.is_sample(o) for o in occasions) else ""
-        body = hint + "".join(occasion_card(o, "/my/events") for o in occasions)
+        # On a computer the cards sit on a grid (hm-grid); a phone lists them.
+        body = hint + '<div class="hm-grid">' + "".join(occasion_card(o, "/my/events") for o in occasions) + "</div>"
         if any(o.get("signup") for o in occasions):
             import church_event_signups
             body = church_event_signups.MEMBER_CSS + body
@@ -838,7 +841,7 @@ def render_events(biz, site, request: Request, occasions: Optional[List[Dict[str
 <div class="mb-lt"><h1>Coming up</h1></div>
 <p class="mb-sub" style="margin-bottom:18px">Let the church know you're coming, or sign up to serve.</p>
 {_flash(request)}
-{body}""", tab="events", who=who, back=("/my", "Home"))
+{body}""", tab="events", who=who, back=("/my", "Home"), wide=True)
 
 
 def render_prayer(biz, site, request: Request, who: Optional[Dict[str, Any]] = None) -> str:
