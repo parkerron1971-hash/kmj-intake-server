@@ -5,7 +5,7 @@ agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-10-28: "The 7 office logins are for the office only ... Everyone else uses the member app, by role, on phone or computer ... Please build step 2 (the board member''s yes from the member app, with a fresh code on every approval) and then step 1 (a Board tab, with approvals inside it) ... Board members are matched by their contact in church_board_members, so make sure each one has an email on file"; "yes start step 2"'
 status: in progress
 prs: ["kmj-intake-server (this PR)"]
-migrations: [supabase/APPLY-2026-10-28-church-board-member-yes.sql]
+migrations: ["supabase/APPLY-2026-10-28-church-board-member-yes.sql (applied 2026-10-28 before the code, verified)"]
 left_undone:
   - "Step 1, the Board tab: meetings, minutes and these approvals in one tab of the member app (next PR). Until then the way in is the email's link"
   - "A board member's no: they tell the treasurer, who declines it in the office with the reason the asker reads"
