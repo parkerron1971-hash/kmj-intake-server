@@ -20,10 +20,20 @@ Subsplash (M-1)".
                     "<church id>/check-requests/". Nobody reads it by a
                     public link: the office through /church/checks, the
                     asker through /my/paid-back, both from the server
-    the LIMIT ..... up to it (the church sets it here; $250 unless set) the
-                    treasurer's role approves: the owner, admins, the
-                    accountant, and logins whose areas include Giving &
-                    money. Above it a keeper of Giving & money says yes,
+    the LEVELS .... who says yes, by amount (church_money_levels.py; Kevin
+                    2026-10-23/26, and 2026-10-28 "change check requests
+                    yourself"): the treasurer for every amount; $500 and up
+                    the pastor too; over $2,500, or past the ministry's
+                    budget, a board member too. Each yes from a different
+                    person, never the one who asked; what one payee is
+                    asked for within 7 days counts together. The pastor and
+                    a board member open this page to say yes or no, and
+                    nothing more. CHURCH_MONEY_LEVELS=off goes back to the
+                    LIMIT below
+    the LIMIT ..... (the money levels off) up to it (the church sets it
+                    here; $250 unless set) the treasurer's role approves:
+                    the owner, admins, the accountant, and logins whose
+                    areas include Giving & money. Above it a keeper of Giving & money says yes,
                     through the church keys (church_keys.py), the way Help
                     requests do (church_help.py): a keeper approves it here,
                     or the treasurer asks for a key (an hour's yes, by tap or
@@ -57,10 +67,11 @@ Subsplash (M-1)".
   POST   /church/checks/requests/{id}/receipt      multipart: business_id, file
   GET    /church/checks/requests/{id}/receipt?business_id=     the receipt's bytes
   POST   /church/checks/requests/{id}/decide       {business_id, status: approved | declined, reason?}
+                                                    (a yes with the levels on: {request, approved, step, missing, told})
   POST   /church/checks/requests/{id}/paid         {business_id, how: check | transfer, check_number?, paid_on?}
   DELETE /church/checks/requests/{id}/paid?business_id=        take the payment back (and its expense)
-  POST   /church/checks/requests/{id}/keeper       {business_id}       ask a keeper (church keys)
-  POST   /church/checks/key-code                   {business_id, key_id, code}
+  POST   /church/checks/requests/{id}/keeper       {business_id}       ask a keeper (church keys; levels off)
+  POST   /church/checks/key-code                   {business_id, key_id, code}             (levels off)
 
 The member side is member_portal_checks.py (/my/paid-back), which calls
 member_ask / member_requests / member_receipt here. Switched by
@@ -86,6 +97,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import Response
 
 import business_access
+import church_money_levels
 import sb_clients
 from auth_supabase import AuthedUser, require_user
 
@@ -102,6 +114,8 @@ KEEPS_ALL = ("owner", "admin")                          # the limit, the budgets
 MONEY_AREA = "giving_money"
 
 DEFAULT_LIMIT_CENTS = 25000
+LEVELS_ON = ("The money levels say who says yes: the treasurer, the pastor too from $500, and a board member "
+             "too over $2,500. The limit and the Giving keeper don't decide while they're on.")
 MONEY_MAX_CENTS = 10_000_000
 NAME_MAX, ABOUT_MAX, PAYEE_MAX, REASON_MAX, LINE_MAX, CHECK_NO_MAX = 120, 200, 120, 300, 60, 20
 LINES_MAX = 40
@@ -296,7 +310,9 @@ def treasurer(biz_id: str, uid: str, role: str) -> bool:
 def _access(business_id: Any, user: AuthedUser) -> Dict[str, Any]:
     """The church, and this login's standing in its check requests. 404 when
     the switch is closed to them, they have no login here, or it isn't a
-    church; 403 for a login outside the treasurer's role."""
+    church; 403 for a login outside the treasurer's role, unless the money
+    levels make them the pastor or a board member (who say yes or no, and
+    nothing more)."""
     if not open_to(user):
         raise HTTPException(404, "Not Found")
     biz_id = _uuid(business_id, "church")
@@ -306,16 +322,19 @@ def _access(business_id: Any, user: AuthedUser) -> Dict[str, Any]:
     if not cfu.is_church(biz):
         raise HTTPException(404, "Check requests are for churches")
     uid = str(user.id)
-    if not treasurer(biz_id, uid, role):
+    keeps = treasurer(biz_id, uid, role)
+    me = {"biz": biz, "role": role, "uid": uid, "user": user, "treasurer": keeps,
+          "boss": role in KEEPS_ALL, "writer": keeps and role in WRITERS}
+    if not keeps and not church_money_levels.approver(me):
         raise HTTPException(403, "Check requests are kept with the treasurer: the owner, admins, the accountant, "
                                  "or a login that works Giving & money.")
-    return {"biz": biz, "role": role, "uid": uid, "user": user,
-            "boss": role in KEEPS_ALL, "writer": role in WRITERS}
+    return me
 
 
 def _writer(me: Dict[str, Any]) -> None:
     if not me["writer"]:
-        raise HTTPException(403, "Your login can read check requests but not act on them.")
+        raise HTTPException(403, "Your login can read check requests but not act on them." if me["treasurer"] else
+                            "Adding, changing and paying check requests stays with the treasurer: you say yes or no.")
 
 
 def _boss(me: Dict[str, Any], why: str) -> None:
@@ -384,11 +403,11 @@ def ministry_of(s: Dict[str, Any], v: Any) -> str:
 def keeper_state(me: Dict[str, Any]) -> Dict[str, Any]:
     """Whether a keeper of Giving & money says yes above the limit here, and
     where this login stands: a keeper, holding an open key, or waiting on
-    one. `on` is false while the keys are off or the church named no keeper:
-    then the limit alone governs."""
+    one. `on` is false while the keys are off, the church named no keeper
+    (then the limit alone governs), or the money levels decide instead."""
     import church_keys
     off = {"on": False, "mine": False, "open_until": None, "asked": None, "keepers": 0}
-    if church_keys.mode() == "off":
+    if church_keys.mode() == "off" or church_money_levels.on():
         return off
     biz = str(me["biz"]["id"])
     keepers = church_keys.active_keepers(biz, MONEY_AREA)
@@ -640,11 +659,15 @@ def page(me: Dict[str, Any]) -> Dict[str, Any]:
     rows.sort(key=lambda r: str(r.get("created_at") or ""), reverse=True)
     new = [r for r in rows if r.get("status") == "new"]
     approved = [r for r in rows if r.get("status") == "approved"]
+    views = shown(me, rows, s)
+    spend = budgets(me, s, rows)
+    church_money_levels.annotate(me, views, rows, spend["lines"])
     return {
         "settings": s,
-        "budgets": budgets(me, s, rows),
+        "budgets": spend,
         "keeper": keeper_state(me),
-        "requests": shown(me, rows, s),
+        "levels": church_money_levels.page_view(me),
+        "requests": views,
         "totals": {"waiting": len(new), "waiting_cents": sum(int(r.get("amount_cents") or 0) for r in new),
                    "approved": len(approved), "approved_cents": sum(int(r.get("amount_cents") or 0) for r in approved)},
         "me": _can(me),
@@ -652,7 +675,9 @@ def page(me: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _can(me: Dict[str, Any]) -> Dict[str, Any]:
-    return {"approve": me["writer"], "settings": me["boss"]}
+    """approve: say yes or no; pay: add, change and pay (the treasurer's
+    role); settings: the limit and the budgets."""
+    return {"approve": me["writer"] or church_money_levels.approver(me), "pay": me["writer"], "settings": me["boss"]}
 
 
 # ─── Requests: writing ────────────────────────────────────────────────
@@ -683,7 +708,15 @@ def resolve(me: Dict[str, Any], rid: Any) -> Dict[str, Any]:
 
 
 def _one(me: Dict[str, Any], row: Dict[str, Any]) -> Dict[str, Any]:
-    return shown(me, [row], settings(str(me["biz"]["id"])))[0]
+    biz = str(me["biz"]["id"])
+    s = settings(biz)
+    view = shown(me, [row], s)[0]
+    if church_money_levels.on():
+        rows = _rows(biz)
+        if not any(str(r["id"]) == str(row["id"]) for r in rows):
+            rows.append(row)
+        church_money_levels.annotate(me, [view], [row], budgets(me, s, rows)["lines"], rows)
+    return view
 
 
 def _patch(me: Dict[str, Any], row: Dict[str, Any], fields: Dict[str, Any], *, was: str) -> Dict[str, Any]:
@@ -741,6 +774,16 @@ def edit(me: Dict[str, Any], rid: str, body: Dict[str, Any]) -> Dict[str, Any]:
         fields["payee"] = _plain(body.get("payee"))[:PAYEE_MAX] or None
     if not fields:
         return {"request": _one(me, row)}
+    changed = any(k in fields and fields[k] != row.get(k) for k in ("amount_cents", "ministry", "payee"))
+    if changed and church_money_levels.on():
+        # A yes was for what it asked before: they go, before and after the
+        # change (one given as it changed goes too).
+        biz = str(me["biz"]["id"])
+        if not church_money_levels.take_back_yeses(biz, str(row["id"])):
+            raise HTTPException(503, "That didn't save. Try again.")
+        saved = _patch(me, row, fields, was="new")
+        church_money_levels.take_back_yeses(biz, str(row["id"]))
+        return {"request": _one(me, saved)}
     return {"request": _one(me, _patch(me, row, fields, was="new"))}
 
 
@@ -765,16 +808,24 @@ def attach(me: Dict[str, Any], rid: str, raw: bytes) -> Dict[str, Any]:
 
 
 def decide(me: Dict[str, Any], rid: str, status: Any, reason: Any) -> Dict[str, Any]:
-    """Approve (up to the limit, or above it with a keeper's yes) or decline
-    with a reason the asker reads."""
-    _writer(me)
+    """Approve or decline with a reason the asker reads. With the money
+    levels on, a yes is this login's step and the request is approved once
+    every step it needs has one; the pastor or a board member declines one
+    that waits on them. With them off: up to the limit, or above it with a
+    keeper's yes."""
     if status not in ("approved", "declined"):
         raise HTTPException(400, "A request is approved or declined.")
+    if not church_money_levels.on():
+        _writer(me)
     row = resolve(me, rid)
     if status == "declined":
         if row["status"] not in ("new", "approved"):
             raise HTTPException(409, "This one was paid already. Take the payment back first."
                                 if row["status"] == "paid" else "This one was declined already.")
+        if not me["writer"]:
+            lv = church_money_levels.check(me, row)[1] if row["status"] == "new" else {"needs": []}
+            if not set(lv["needs"]) & church_money_levels.steps_of(me) or (lv.get("why_not") or "").startswith("You asked"):
+                raise HTTPException(403, "This one isn't waiting on you.")
         why = _plain(reason)[:REASON_MAX]
         if not why:
             raise HTTPException(400, "Say why, in a sentence they'll read: it shows in their app.")
@@ -785,6 +836,8 @@ def decide(me: Dict[str, Any], rid: str, status: Any, reason: Any) -> Dict[str, 
         raise HTTPException(409, {"approved": "This one is approved already.", "paid": "This one was paid already.",
                                   "declined": "This one was declined. Add it again if things changed."}.get(
                                       row["status"], "This request was settled already."))
+    if church_money_levels.on():
+        return church_money_levels.approve(me, row)
     s = settings(str(me["biz"]["id"]))
     may_approve(me, int(row.get("amount_cents") or 0), s)
     saved = _patch(me, row, {"status": "approved", "decline_reason": None, "decided_by": me["uid"],
@@ -934,6 +987,8 @@ def put_settings(me: Dict[str, Any], body: Dict[str, Any]) -> Dict[str, Any]:
         out["lines"] = _lines_in(body.get("lines"), have)
     if "limit" in body:
         limit = cents(body.get("limit"), "limit", allow_none=False)
+        if church_money_levels.on() and limit != have["limit_cents"]:
+            raise HTTPException(400, {"code": "levels_on", "message": LEVELS_ON})
         if limit > have["limit_cents"]:
             ks = keeper_state(me)
             import church_keys
@@ -957,10 +1012,13 @@ def put_settings(me: Dict[str, Any], body: Dict[str, Any]) -> Dict[str, Any]:
 def ask_keeper(me: Dict[str, Any], rid: str) -> Dict[str, Any]:
     """Ask the keepers of Giving & money for a yes above the limit: the
     church keys' own ask (every keeper hears it, with a code to read out).
-    The reason names the ministry and the amount."""
+    The reason names the ministry and the amount. Only with the money
+    levels off."""
     _writer(me)
     biz = str(me["biz"]["id"])
     row = resolve(me, rid)
+    if church_money_levels.on():
+        raise HTTPException(409, {"code": "levels_on", "message": LEVELS_ON})
     if row["status"] != "new":
         raise HTTPException(409, "Only a request waiting for a yes needs a keeper.")
     s = settings(biz)
@@ -984,6 +1042,8 @@ def ask_keeper(me: Dict[str, Any], rid: str) -> Dict[str, Any]:
 def key_code(me: Dict[str, Any], key_id: Any, code: Any) -> Dict[str, Any]:
     """The code a keeper read out, for this login's ask for Giving & money."""
     _writer(me)
+    if church_money_levels.on():
+        raise HTTPException(409, {"code": "levels_on", "message": LEVELS_ON})
     biz = str(me["biz"]["id"])
     kid = _uuid(key_id, "ask")
     rows = _need(f"/church_area_keys?id=eq.{_q(kid)}&business_id=eq.{_q(biz)}&select=area,user_id&limit=1")
@@ -1105,7 +1165,7 @@ def checks_status(business_id: str, user: AuthedUser = Depends(require_user)):
     so its menu offers the page only where it opens. Quietly false for a
     closed switch, a business that isn't a church, a login outside the
     treasurer's role, or tables not made yet."""
-    off = {"enabled": False, "approve": False, "settings": False}
+    off = {"enabled": False, "approve": False, "pay": False, "settings": False}
     if not open_to(user):
         return off
     try:
