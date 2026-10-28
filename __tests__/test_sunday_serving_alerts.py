@@ -373,11 +373,11 @@ def test_the_emails_links_answer_with_one_tap(heard, monkeypatch):
     label, yes = p["cta"]
     assert label == "Yes, I'm in" and yes.endswith("?ans=yes")
     t = yes.split("/churchsavvy/a/")[1].split("?")[0]
-    claims = serve_links.verify(t)
+    claims = serve_links.verify(t, now=int(NOW.timestamp()))   # the tests' clock, not today's
     assert claims["biz"] == BIZ and claims["cid"] == KENDRA and claims["a"] == a
     assert "ans=no" in p["after"] and "ans=other" in p["after"]
     assert "Tap Yes or Can't" not in p["message"]
-    stop = serve_links.verify(p["stop_page"].split("/churchsavvy/a/")[1].split("?")[0])
+    stop = serve_links.verify(p["stop_page"].split("/churchsavvy/a/")[1].split("?")[0], now=int(NOW.timestamp()))
     assert stop["cid"] == KENDRA and "a" not in stop and p["stop_page"].endswith("?stop=1")
     assert p["one_click"].startswith("https://mysolutionist.app/serve-link/stop?t=")
     html = email_layout.render_html(p["message"], business_name=p["church"], brand={}, unsubscribe_url=p["stop_page"],

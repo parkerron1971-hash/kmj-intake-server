@@ -171,9 +171,7 @@ ERRORS = {
 
 LEAD_CSS = """
 body:has(.ld-wide) .mb-top,body:has(.ld-wide) .mp-shell{max-width:1180px;}
-/* From 1100px the tab bar is a 92px rail on the left: a wide page starts
-   after it instead of under it (centred once there's room). */
-@media (min-width:1100px){body:has(.ld-wide) .mp-shell.mb-has-nav,body:has(.mb-has-nav .ld-wide) .mb-top{margin-left:max(92px,calc((100vw - 1180px) / 2));margin-right:auto;}}
+/* From 1100px the page sits beside the tab bar's rail (member_app_ui). */
 .ld-head{display:flex;align-items:flex-end;flex-wrap:wrap;gap:10px 14px;margin:6px 0 16px;}
 .ld-hello{margin:0;font-size:34px;font-weight:750;letter-spacing:-.035em;line-height:1.05;}
 .ld-hello em{font-family:var(--mb-serif);font-style:italic;font-weight:500;color:var(--acc);}

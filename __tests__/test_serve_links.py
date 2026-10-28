@@ -18,7 +18,7 @@
 
 import pathlib
 import sys
-import time
+import types
 from datetime import timedelta
 
 import pytest
@@ -38,8 +38,12 @@ import sunday_serving as ss
 @pytest.fixture
 def linked(api, monkeypatch):
     """Production on four Sundays (10/25, 11/1, 11/8, 11/15): Sound (Kendra
-    and Jo trained) and Slides (Ana). Kendra and Jo have email addresses."""
+    and Jo trained) and Slides (Ana). Kendra and Jo have email addresses.
+    The links read the planning tests' clock (NOW, Wed 10/21), not today's:
+    an ask's link lapses three days after its Sunday, so on the real clock
+    these tests started failing on 10/28."""
     db, as_ = api
+    monkeypatch.setattr(sl, "time", types.SimpleNamespace(time=lambda: NOW.timestamp()))
     monkeypatch.setenv("CUSTOMER_TOKEN_SECRET", "test-root-secret")
     monkeypatch.setenv("APP_BASE_URL", "https://system.mysolutionist.app")
     monkeypatch.delenv("CHURCHSAVVY_APP_URL", raising=False)
@@ -72,7 +76,7 @@ def row(db, aid):
 
 def test_a_link_is_signed_for_one_church_and_one_person(linked, monkeypatch):
     db, *_ = linked
-    t = sl.sign(BIZ, KENDRA, "a-1", int(time.time()) + 600)
+    t = sl.sign(BIZ, KENDRA, "a-1", int(sl.time.time()) + 600)
     claims = sl.verify(t)
     assert claims["biz"] == BIZ and claims["cid"] == KENDRA and claims["a"] == "a-1"
     # Name another church inside: its own signature fails.
@@ -84,15 +88,15 @@ def test_a_link_is_signed_for_one_church_and_one_person(linked, monkeypatch):
     forged = base64.urlsafe_b64encode(json.dumps(raw, separators=(",", ":")).encode()).decode().rstrip("=")
     assert sl.verify(f"{forged}.{sig}") is None
     # Expired, garbage, and a link signed for another purpose open nothing.
-    assert sl.verify(sl.sign(BIZ, KENDRA, "a-1", int(time.time()) - 1)) is None
+    assert sl.verify(sl.sign(BIZ, KENDRA, "a-1", int(sl.time.time()) - 1)) is None
     assert sl.verify("not-a-link") is None and sl.verify("") is None
     import member_portal_preview as mpp
-    other_purpose = mpp._sign("member-preview-link", BIZ, {"v": 1, "biz": BIZ, "cid": KENDRA, "exp": int(time.time()) + 600})
+    other_purpose = mpp._sign("member-preview-link", BIZ, {"v": 1, "biz": BIZ, "cid": KENDRA, "exp": int(sl.time.time()) + 600})
     assert sl.verify(other_purpose) is None
 
 
 def test_the_pages_links(linked):
-    t = sl.sign(BIZ, KENDRA, "a-1", int(time.time()) + 600)
+    t = sl.sign(BIZ, KENDRA, "a-1", int(sl.time.time()) + 600)
     assert sl.page_url(t, ans="yes") == f"https://system.mysolutionist.app/churchsavvy/a/{t}?ans=yes"
     assert sl.page_url(t) == f"https://system.mysolutionist.app/churchsavvy/a/{t}"
     assert sl.one_click_url(t).startswith("https://mysolutionist.app/serve-link/stop?t=")
