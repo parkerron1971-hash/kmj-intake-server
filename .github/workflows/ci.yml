@@ -229,3 +229,5 @@ jobs:
           node __tests__/serve_notes_db.mjs
           node __tests__/serve_here_db.mjs
           node __tests__/serve_email_stop_db.mjs
+          node __tests__/leader_tasks_db.mjs
+          node __tests__/task_handed_by_db.mjs
