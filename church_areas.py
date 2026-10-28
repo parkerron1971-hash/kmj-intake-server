@@ -29,6 +29,18 @@ gave what. A failed read is a 503, never an empty area.
   GET /church/areas?business_id=     the map and its people (a manager seat)
   PUT /church/areas/place            {business_id, kind, key, area} (an admin;
                                      area null puts it back to the guess)
+  PUT /church/areas/login            {business_id, user_id, areas | lane} (an
+                                     admin): an office login's areas, or its lane
+  GET /church/lanes?business_id=     the office's lanes (a manager seat), for
+                                     the Team page's invite
+
+The office's LANES (Kevin's leadership plan, 2026-10-27, and 2026-10-28:
+"make these roles for admin so all i have to do is assign them to the
+person"): Office & Leadership, People & Care, Sunday & Serving, Media &
+Communications (each a Manager login and its areas) and the Treasurer (an
+Admin login). Giving a login its lane is giving it the lane's areas; an
+invite can carry one (business_users_router), so the person's login is set
+up the moment they accept.
 
 Switched by CHURCH_AREAS: off | owner | on (owner until a Thursday).
 """
@@ -226,6 +238,58 @@ KEEPS_ALL = ("owner", "admin")
 # Money stays walled to the owner, admins and the accountant
 # (ministry_finance_access) whatever a login's areas say.
 FINANCE_ONLY = "giving_money"
+
+# The office's lanes: who does which kind of work, as a login and its areas
+# (the approved leadership plan, 2026-10-27). A lane's areas are an
+# ordinary pick, so the menu, the first page and what reaches the login
+# follow them; the Treasurer is an Admin login (money opens only to admins
+# and the accountant), so it sees the whole church.
+LANES: Dict[str, Dict[str, Any]] = {
+    "office_leadership": {
+        "label": "Office & Leadership", "role": "manager", "areas": ["messages_safety", "office"],
+        "does": "Runs the office and supports the leaders: the meetings and the tasks from them, the weekly text "
+                "and the Monday leaders note, the calendar, the leaders list and the board's minutes",
+    },
+    "people_care": {
+        "label": "People & Care", "role": "manager", "areas": ["people_care", "kids_youth", "groups_classes"],
+        "does": "Member records, follow-up, care and prayer, kids and youth, groups and classes",
+    },
+    "sunday_serving": {
+        "label": "Sunday & Serving", "role": "manager", "areas": ["worship_media"],
+        "does": "Sundays and the people who serve them: ChurchSavvy planning, who serves when, the Serve teams",
+    },
+    "media_comms": {
+        "label": "Media & Communications", "role": "manager", "areas": ["worship_media", "website_outreach"],
+        "does": "Posts, clips and the production rotation, the website, events and flyers",
+    },
+    "treasurer": {
+        "label": "Treasurer", "role": "admin", "areas": None,
+        "does": "Giving, the books, the Sunday deposit and check requests. An Admin login, so it sees the whole church",
+    },
+}
+
+
+def lanes_view() -> List[Dict[str, Any]]:
+    return [{"key": k, "label": v["label"], "role": v["role"], "areas": v["areas"], "does": v["does"]}
+            for k, v in LANES.items()]
+
+
+def lane(key: Any) -> Dict[str, Any]:
+    """One lane by its key; 400 for any other."""
+    if not isinstance(key, str) or key not in LANES:
+        raise HTTPException(400, "Pick one of the office's lanes")
+    return {"key": key, **LANES[key]}
+
+
+def lane_of(role: Optional[str], areas: Optional[List[str]]) -> Optional[str]:
+    """The lane a Manager-type login's picked areas are exactly, if any.
+    An admin keeps everything, so no lane names one."""
+    if role in KEEPS_ALL or not areas:
+        return None
+    for k, v in LANES.items():
+        if v["areas"] and sorted(v["areas"]) == sorted(areas):
+            return k
+    return None
 
 
 def _guesses(email: str, user_id: str, *, people: Dict[str, Dict[str, Any]], holders: List[Dict[str, Any]],
@@ -617,10 +681,11 @@ def build(business: Dict[str, Any]) -> Dict[str, Any]:
         g = _guesses(email, str(s.get("user_id")), people=people, holders=holders, by_key=by_key,
                      role_place=role_place, places=places, team=team, kids=kids, leads=leads,
                      group_names=group_names, officer_users=officer_users, officer_members=officer_members)
+        view = login_view(s.get("role"), picks.get(str(s.get("user_id"))), g)
         logins.append({"user_id": str(s.get("user_id") or ""), "email": s.get("invited_email") or "",
                        "name": next((p["name"] for p in people.values() if email and p["email"] == email), ""),
-                       "role": s.get("role") or "", "guess": [a for a in AREA_ORDER if a in g],
-                       **login_view(s.get("role"), picks.get(str(s.get("user_id"))), g)})
+                       "role": s.get("role") or "", "guess": [a for a in AREA_ORDER if a in g], **view,
+                       "lane": lane_of(s.get("role"), view["areas"]) if view["by"] == "picked" else None})
     rank = {"admin": 0, "manager": 1, "member": 2, "viewer": 3}
     logins.sort(key=lambda x: (rank.get(x["role"], 9), (x["name"] or x["email"]).lower()))
 
@@ -632,6 +697,7 @@ def build(business: Dict[str, Any]) -> Dict[str, Any]:
         "teams": [{"key": team_key(n), "name": n, **team_place[team_key(n)]} for n in team_names],
         "unplaced": unplaced,
         "area_order": list(AREA_ORDER),
+        "lanes": lanes_view(),
     }
 
 
@@ -707,9 +773,11 @@ def place(body: Dict[str, Any], session: UserSession = Depends(sb_clients.authed
 
 @router.put("/areas/login")
 def place_login(body: Dict[str, Any], session: UserSession = Depends(sb_clients.authed_request)):
-    """Give an office login its areas, or send it back to Chief's guess
-    (areas null). The owner and admins see everything and aren't placed;
-    Giving opens only to admins and the accountant, so it isn't offered."""
+    """Give an office login its areas (or its lane: the lane's areas), or
+    send it back to Chief's guess (areas null). The owner and admins see
+    everything and aren't placed; Giving opens only to admins and the
+    accountant, so it isn't offered, and the Treasurer's lane is an Admin
+    login, given at the invite."""
     user = session.user
     _gate(user)
     body = body or {}
@@ -728,6 +796,12 @@ def place_login(body: Dict[str, Any], session: UserSession = Depends(sb_clients.
     if seat[0].get("role") in KEEPS_ALL:
         raise HTTPException(400, "Admins see the whole church")
     areas = body.get("areas")
+    if body.get("lane") is not None:
+        picked = lane(body.get("lane"))
+        if picked["role"] != "manager":
+            raise HTTPException(400, f"The {picked['label']}'s lane is an Admin login. Invite them as the "
+                                     f"{picked['label']} from Settings → Team.")
+        areas = picked["areas"]
     if areas is not None:
         if not isinstance(areas, list) or not areas or any(a not in AREAS for a in areas):
             raise HTTPException(400, "Pick at least one of the areas")
@@ -739,4 +813,28 @@ def place_login(body: Dict[str, Any], session: UserSession = Depends(sb_clients.
     if not isinstance(saved, list) or not saved:
         raise HTTPException(503, "That didn't save. Try again.")
     _forget(biz, uid)
-    return {"ok": True, "user_id": uid, "areas": areas}
+    return {"ok": True, "user_id": uid, "areas": areas, "lane": lane_of(seat[0].get("role"), areas)}
+
+
+@router.get("/lanes")
+def lanes(business_id: str, session: UserSession = Depends(sb_clients.authed_request),
+          biz: Dict[str, Any] = Depends(business_access("manager"))):
+    """The office's lanes, for the Team page's invite: churches only."""
+    _gate(session.user)
+    import church_follow_up as cfu
+    if not cfu.is_church(biz):
+        raise HTTPException(404, "The lanes are for churches")
+    return {"lanes": lanes_view()}
+
+
+def lane_for_invite(business_id: str, key: Any) -> Dict[str, Any]:
+    """A lane an invite carries (business_users_router): one of the lanes,
+    for a church. 400 otherwise, before anyone is invited."""
+    picked = lane(key)
+    import church_follow_up as cfu
+    rows = sb_clients.sb_get_as_service(f"/businesses?id=eq.{_q(business_id)}&select=id,type,settings&limit=1")
+    if not isinstance(rows, list):
+        raise HTTPException(503, "That didn't save. Try again.")
+    if not rows or not cfu.is_church(rows[0]):
+        raise HTTPException(400, "Lanes are for a church's office")
+    return picked
