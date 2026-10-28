@@ -258,7 +258,8 @@ def test_the_alerts_route_saves_what_they_chose(fake, monkeypatch):
     c = TestClient(app, follow_redirects=False)
     r = c.post("/my/celebrate/alerts", data={"level": "everything", "birthdays": "0", "replies": ["0", "1"], "email": ["0", "1"]})
     assert r.headers["location"] == "/my/me/celebrations?done=alerts_saved#cl-hear"
-    assert na.prefs(BIZ, MONIQUE) == {"level": "everything", "birthdays": False, "replies": True, "email": True, "muted": False}
+    assert na.prefs(BIZ, MONIQUE) == {"level": "everything", "birthdays": False, "replies": True, "email": True, "muted": False,
+                                      "texts": True, "chose_texts": None}      # the texts box wasn't on the page
     assert c.post("/my/celebrate/alerts", data={"level": "loud"}).headers["location"].endswith("err=error")
 
 
@@ -294,4 +295,5 @@ def test_the_office_turns_news_alerts_on_and_chooses_celebrations(fake, monkeypa
     assert s["member_portal"]["notifications"] == {"live": True, "news": True}
     assert s["news"] == {"comments": False, "celebration_alerts": "none"}               # comments untouched
     v = cn._alerts_view(fake.t["businesses"][0])
-    assert v == {"on": True, "sent_today": 0, "max": 3, "celebrations": "none"}
+    assert v == {"on": True, "sent_today": 0, "max": 3, "celebrations": "none",
+                 "reach": {"on": True, "texts_month": 0, "cap": 500, "texting": False}}

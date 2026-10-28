@@ -59,7 +59,7 @@ import asyncio
 import logging
 import os
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional, Set
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -163,6 +163,71 @@ async def has_sms_consent(client: httpx.AsyncClient, business_id: str,
     if await is_opted_out(client, phone, business_id):
         return False
     return await _positive_consent(client, business_id, phone)
+
+
+# ─── Consent for a send to many (the bulletin, a church's news) ──────
+
+_IN_CHUNK = 100                       # phones per read; keeps the URL short
+
+
+async def _phones_found(client: httpx.AsyncClient, path_for: Callable[[str], str],
+                        phones: List[str], field: str) -> Optional[Set[str]]:
+    """One read per chunk of phones: the (normalized) `field` values found,
+    or None as soon as a read fails."""
+    out: Set[str] = set()
+    for i in range(0, len(phones), _IN_CHUNK):
+        rows = await _sb_get(client, path_for(",".join(_pq(p) for p in phones[i:i + _IN_CHUNK])))
+        if rows is None:
+            return None
+        for r in rows:
+            raw = str(r.get(field) or "")
+            out.add(normalize_phone(raw) or raw)
+    return out
+
+
+async def said_yes_to_texts(client: httpx.AsyncClient, business_id: str,
+                            phones: Iterable[str]) -> Optional[Set[str]]:
+    """Which of these phones may get a text this business wrote itself,
+    sent to many people at once (the bulletin, a church's news). Kevin,
+    2026-10-28: the bulletin texted everyone with a number, skipping only
+    STOP; it texts only the people who said yes.
+
+    Under the business's own registered name (sms_routing.own_registration)
+    it's the mixed rule, agreed_under_own_name for many: people who agreed
+    to its texts, or texted it, since it registered. Otherwise THE CONSENT
+    RULE above (has_sms_consent) for many. STOP always wins, the platform's
+    and the business's own. None when any read fails: a send to many that
+    can't tell who said yes sends nothing."""
+    wanted = sorted({p for p in (normalize_phone(x) for x in phones) if p})
+    if not wanted:
+        return set()
+    biz = business_id
+    own = await own_registration(client, biz)
+    if own:
+        since = own.get("since")
+        yes = await _phones_found(
+            client, lambda ps: f"/sms_consents?business_id=eq.{biz}&phone=in.({ps})"
+                               + (f"&consented_at=gte.{_pq(since)}" if since else "")
+                               + "&select=phone&limit=5000", wanted, "phone")
+        texted = await _phones_found(
+            client, lambda ps: f"/sms_messages?business_id=eq.{biz}&direction=eq.inbound"
+                               f"&phone_number=in.({ps})"
+                               + (f"&created_at=gte.{_pq(since)}" if since else "")
+                               + "&select=phone_number&limit=5000", wanted, "phone_number")
+    else:
+        yes = await _phones_found(
+            client, lambda ps: f"/sms_consents?phone=in.({ps})"
+                               f"&or=(and(business_id.eq.{biz},source.neq.booking_marketing),source.eq.web_form)"
+                               "&select=phone&limit=5000", wanted, "phone")
+        texted = await _phones_found(
+            client, lambda ps: f"/sms_bindings?customer_phone=in.({ps})&business_id=eq.{biz}"
+                               "&select=customer_phone&limit=5000", wanted, "customer_phone")
+    stopped = await _phones_found(
+        client, lambda ps: f"/sms_opt_outs?phone=in.({ps})&or=(business_id.is.null,business_id.eq.{biz})"
+                           "&select=phone&limit=5000", wanted, "phone")
+    if yes is None or texted is None or stopped is None:
+        return None
+    return ((yes | texted) & set(wanted)) - stopped
 
 
 # ─── Formatting helpers ───────────────────────────────────────────────

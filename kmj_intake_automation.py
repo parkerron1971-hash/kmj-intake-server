@@ -1881,6 +1881,15 @@ async def startup():
                           minutes=15, id="news_alerts")
     except Exception as e:
         print(f"   [warn] news alerts not scheduled: {e}")
+    # News reaching the rest: an important post texted to the people without
+    # the app who said yes, emailed to the others; one held through quiet
+    # hours or scheduled goes when its time comes (news_reach.sweep_tick; once).
+    try:
+        import news_reach as _news_reach
+        scheduler.add_job(g("news_reach", _news_reach.sweep_tick), "interval",
+                          minutes=15, id="news_reach")
+    except Exception as e:
+        print(f"   [warn] news reach not scheduled: {e}")
     # ChurchSavvy Planning: asks, a nudge, covers and the reminders before a
     # Sunday reach people (sunday_serving_alerts.sweep_tick; each once, never
     # in quiet hours; churches that switched Serving on).

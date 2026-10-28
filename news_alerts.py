@@ -84,15 +84,18 @@ def celebration_alerts(business: Dict[str, Any]) -> bool:
 def _pref(row: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     r = row or {}
     level = r.get("news_level") if r.get("news_level") in LEVELS else "important"
+    # texts: "Text me important news" (news_reach), yes unless turned off;
+    # a text still needs the person's yes to the church's texts.
     return {"level": level, "birthdays": r.get("news_birthdays") is not False,
             "replies": r.get("news_replies") is not False, "email": r.get("news_email") is True,
+            "texts": r.get("news_texts") is not False, "chose_texts": r.get("news_texts"),
             "muted": KIND in (r.get("off") or [])}
 
 
 def prefs(business_id: str, contact_id: str) -> Optional[Dict[str, Any]]:
     rows = sb_clients.sb_get_as_service(
         f"/member_push_prefs?business_id=eq.{_q(business_id)}&contact_id=eq.{_q(contact_id)}"
-        f"&select=off,news_level,news_birthdays,news_replies,news_email&limit=1")
+        f"&select=off,news_level,news_birthdays,news_replies,news_email,news_texts&limit=1")
     if rows is None:
         return None
     return _pref(rows[0] if rows else None)
@@ -104,19 +107,23 @@ def _prefs_of(business_id: str, ids: List[str]) -> Optional[Dict[str, Dict[str, 
     for i in range(0, len(ids), 150):
         rows = sb_clients.sb_get_as_service(
             f"/member_push_prefs?business_id=eq.{_q(business_id)}&contact_id=in.({','.join(_q(x) for x in ids[i:i + 150])})"
-            f"&select=contact_id,off,news_level,news_birthdays,news_replies,news_email&limit=5000")
+            f"&select=contact_id,off,news_level,news_birthdays,news_replies,news_email,news_texts&limit=5000")
         if rows is None:
             return None
         out.update({str(r["contact_id"]): _pref(r) for r in rows})
     return {c: out.get(c) or _pref(None) for c in ids}
 
 
-def save_prefs(business_id: str, contact_id: str, level: str, birthdays: bool, replies: bool, email: bool) -> bool:
+def save_prefs(business_id: str, contact_id: str, level: str, birthdays: bool, replies: bool, email: bool,
+               texts: Optional[bool] = None) -> bool:
+    """`texts` None leaves "Text me important news" as it was (the page
+    didn't show it)."""
     rows = sb_clients.sb_post_as_service(
         "/member_push_prefs?on_conflict=business_id,contact_id",
         {"business_id": str(business_id), "contact_id": str(contact_id),
          "news_level": level if level in LEVELS else "important", "news_birthdays": bool(birthdays),
-         "news_replies": bool(replies), "news_email": bool(email), "updated_at": _now().isoformat()},
+         "news_replies": bool(replies), "news_email": bool(email), "updated_at": _now().isoformat(),
+         **({} if texts is None else {"news_texts": bool(texts)})},
         prefer="resolution=merge-duplicates,return=representation")
     return bool(rows)
 
@@ -216,9 +223,14 @@ def alert_post(business: Dict[str, Any], post: Dict[str, Any], now: Optional[dat
 
 
 def alert_later(business: Dict[str, Any], post: Dict[str, Any]) -> None:
-    """After a post goes up now, off the request's path."""
+    """After a post goes up now, off the request's path. An important one
+    also reaches the people without the app (news_reach): a text to those
+    who said yes, an email to the rest."""
     import member_push
     member_push._later(alert_post, business, post)
+    if post.get("important"):
+        import news_reach
+        news_reach.reach_later(business, post)
 
 
 # ─── a reply ────────────────────────────────────────────────────────

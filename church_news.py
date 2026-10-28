@@ -726,8 +726,12 @@ def _business(biz_id: str) -> Dict[str, Any]:
 
 def _alerts_view(business: Dict[str, Any]) -> Dict[str, Any]:
     import news_alerts as na
+    import news_reach
     return {"on": na.church_on(business), "sent_today": na.sent_today(business) or 0, "max": na.daily_max(),
-            "celebrations": "morning" if na.celebration_alerts(business) else "none"}
+            "celebrations": "morning" if na.celebration_alerts(business) else "none",
+            # Important posts reach the people without the app (news_reach).
+            "reach": {"on": news_reach.church_on(business), "texts_month": news_reach.texts_used(business) or 0,
+                      "cap": news_reach.texts_cap(), "texting": news_reach.can_text(business)}}
 
 
 def office_view(business: Dict[str, Any]) -> Dict[str, Any]:
@@ -737,7 +741,7 @@ def office_view(business: Dict[str, Any]) -> Dict[str, Any]:
     biz_id = str(business["id"])
     b = _q(biz_id)
     rows = _get(f"/church_posts?business_id=eq.{b}&status=in.(posted,waiting)&removed_at=is.null"
-                f"&select={POST_SELECT}&order=created_at.desc&limit=80")
+                f"&select={POST_SELECT},reach&order=created_at.desc&limit=80")
     # Each day's birthdays and anniversaries are the Celebrations panel's, and
     # what members shared is Waiting for you's (news_share), not rows here.
     rows = [r for r in rows if not is_person_celebration(r)
@@ -774,6 +778,10 @@ def office_view(business: Dict[str, Any]) -> Dict[str, Any]:
             "publish_at": r.get("publish_at"), "created_at": r.get("created_at"),
             "pinned": pinned_now(r, now), "comments": r.get("comments"),
             "seen": n(seen, pid), "reactions": n(rx, pid), "comment_n": n(cm, pid),
+            "important": bool(r.get("important")),
+            # What an important post sent past the app (news_reach), once it has.
+            "reach": ({"texts": int(r["reach"].get("texts") or 0), "emails": int(r["reach"].get("emails") or 0)}
+                      if isinstance(r.get("reach"), dict) and not r["reach"].get("why") else None),
         })
     held = _get(f"/church_post_comments?business_id=eq.{b}&status=eq.held&select=id,post_id,contact_id,body,created_at"
                 f"&order=created_at.desc&limit=50")
@@ -831,6 +839,29 @@ def office(business_id: str = Query(...), user: AuthedUser = Depends(require_use
     biz = kids_router._uuid(business_id, "business_id")
     _need(biz, user, "viewer")
     return office_view(_business(biz))
+
+
+@router.get("/church/news/reach")
+def reach_preview(business_id: str = Query(...), group_id: Optional[str] = Query(None),
+                  user: AuthedUser = Depends(require_user)):
+    """What an important post would do, before it goes up: how many phones
+    ring in the app, and how many of the rest get a text or an email
+    (news_reach.plan). Counts only."""
+    import kids_router
+    import news_reach
+    biz_id = kids_router._uuid(business_id, "business_id")
+    # A direct call, so the ownership sweep (ownership_sweep.py) sees the gate.
+    _need(biz_id, user, "member")
+    gid = kids_router._uuid(group_id, "group") if group_id else None
+    business = _business(biz_id)
+    if not news_reach.church_on(business):
+        return {"on": False, "phones": 0, "texts": 0, "emails": 0, "texting": False, "used": 0,
+                "cap": news_reach.texts_cap()}
+    who = news_reach.plan(business, {"id": "preview", "important": True, "group_id": gid, "attach": {}})
+    if who is None:
+        raise _unavailable()
+    return {"on": True, "phones": who["phones"], "texts": len(who["texts"]), "emails": len(who["emails"]),
+            "texting": who["texting"], "used": who["used"], "cap": who["cap"]}
 
 
 class PostIn(BaseModel):
@@ -1052,13 +1083,16 @@ class NewsSettingsIn(BaseModel):
     # that Settings → Member page also shows), and how celebrations ring.
     alerts: Optional[bool] = None
     celebration_alerts: Optional[Literal["morning", "none"]] = None
+    # An important post reaches the people without the app (news_reach).
+    reach_rest: Optional[bool] = None
 
 
 @router.post("/church/news/settings")
 def news_settings(body: NewsSettingsIn, user: AuthedUser = Depends(require_user)):
     """Comments on News (settings.news.comments), phone alerts for News
-    (settings.member_portal.notifications.news) and celebration alerts
-    (settings.news.celebration_alerts)."""
+    (settings.member_portal.notifications.news), celebration alerts
+    (settings.news.celebration_alerts) and reaching the people without the
+    app (settings.news.reach_rest)."""
     import kids_router
     biz_id = kids_router._uuid(body.business_id, "business_id")
     _need(biz_id, user, "admin")
@@ -1069,6 +1103,8 @@ def news_settings(body: NewsSettingsIn, user: AuthedUser = Depends(require_user)
         news["comments"] = bool(body.comments)
     if body.celebration_alerts is not None:
         news["celebration_alerts"] = body.celebration_alerts
+    if body.reach_rest is not None:
+        news["reach_rest"] = bool(body.reach_rest)
     new = {**settings, "news": news}
     if body.alerts is not None:
         portal = dict(settings.get("member_portal") if isinstance(settings.get("member_portal"), dict) else {})

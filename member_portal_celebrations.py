@@ -547,6 +547,16 @@ def _hear(alerts: Optional[Dict[str, Any]]) -> str:
         rows += f'<input type="hidden" name="birthdays" value="{"1" if alerts.get("birthdays") else "0"}">'
     rows += sw("replies", bool(alerts.get("replies")), "Replies to my comments", "When someone answers you on News")
     rows += sw("email", bool(alerts.get("email")), "The week's news by email", "Saturdays at 9 AM, with the posts you haven't seen")
+    # "Text me important news" (news_reach): only when the church texts under
+    # its own name and this member's phone doesn't ring for the app. Ticking
+    # it is their yes to the church's texts, so the words carriers ask for
+    # sit right under it.
+    if alerts.get("texting"):
+        rows += sw("texts", bool(alerts.get("texts")), "Text me important news",
+                   f"To the number ending {alerts.get('tail') or ''}, only posts your pastors mark important, "
+                   f"while the app can't ring this phone. Msg & data rates may apply. Reply STOP to stop, HELP for help.")
+        rows += ('<p class="cl-segnote"><a href="/texting-terms">Texting terms</a> · '
+                 '<a href="/texting-privacy">Privacy</a></p>')
     phone = ("" if alerts.get("phone") else
              f'<a class="cl-phone" href="/my/notifications">{mpn._ic("bell", 16)}<span>Turn on alerts on this phone first</span>'
              f'{mpn._ic("chevron", 16)}</a>')
@@ -588,7 +598,30 @@ async def serve_me(request: Request, biz: Dict[str, Any], site, me: Dict[str, An
                                               asyncio.to_thread(member_push.device_count, business_id, me_id))
         if chose is not None:
             alerts = {**chose, "phone": bool(devices), "celebrations": na.celebration_alerts(biz)}
+            alerts.update(await _texts_box(biz, me, chose, bool(devices)))
     return render_me(biz, site, request, me, mine, anns, spouses, names or {}, alerts)
+
+
+async def _texts_box(biz: Dict[str, Any], me: Dict[str, Any], chose: Dict[str, Any], devices: bool) -> Dict[str, Any]:
+    """"Text me important news" (news_reach): shown when the church texts
+    under its own name, this member has a number, and no phone of theirs
+    rings for the app. On when they'd get the texts today."""
+    import member_portal_church as mpc
+    import news_reach
+    from sms_service import normalize_phone
+    if devices or not news_reach.church_on(biz):
+        return {}
+    full = await asyncio.to_thread(mpc.load_me, str(biz["id"]), str(me["id"]))   # an email sign-in has no phone on it
+    phone = normalize_phone((full or {}).get("phone"))
+    if not phone:
+        return {}
+    try:
+        got = await news_reach._texting(str(biz["id"]), [{"phone": phone}])
+    except Exception:  # noqa: BLE001 — a failed read just doesn't show the box
+        return {}
+    if not got or not got[0]:
+        return {}
+    return {"texting": True, "texts": bool(chose.get("texts")) and phone in got[1], "tail": phone[-4:]}
 
 
 def home_asks(business: Dict[str, Any], me: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], List[Dict[str, Any]]]:
@@ -685,8 +718,10 @@ async def prefs_route(request: Request):
 
 @router.post("/my/celebrate/alerts", include_in_schema=False)
 async def alerts_route(request: Request):
-    """What rings for News: Important, Everything or Off, and the three
-    switches (news_alerts)."""
+    """What rings for News: Important, Everything or Off, the three
+    switches (news_alerts), and "Text me important news" when the page
+    showed it (news_reach): turning it on is the member's yes to the
+    church's texts, kept as one (sms_consents)."""
     import news_alerts as na
     church, me, form, stop = await _who(request, "/my/me/celebrations")
     if stop:
@@ -695,8 +730,23 @@ async def alerts_route(request: Request):
     if level not in na.LEVELS:
         return _go("/my/me/celebrations", err="error")
     on = lambda k: "1" in form.getlist(k)  # noqa: E731 — a switch sends 0, then 1 when it's on
-    ok = await asyncio.to_thread(na.save_prefs, str(church["business"]["id"]), str(me["id"]), level,
-                                 on("birthdays"), on("replies"), on("email"))
+    biz_id, me_id = str(church["business"]["id"]), str(me["id"])
+    texts = on("texts") if "texts" in form else None
+    if texts:
+        import member_portal_church as mpc
+        import news_reach
+        before, full = await asyncio.gather(asyncio.to_thread(na.prefs, biz_id, me_id),
+                                            asyncio.to_thread(mpc.load_me, biz_id, me_id))
+        if before is None or not full:
+            return _go("/my/me/celebrations", "cl-hear", err="error")
+        if before.get("chose_texts") is not True:
+            fwd = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
+            ip = fwd or (request.client.host if request.client else "")
+            if not await asyncio.to_thread(news_reach.record_yes, biz_id, full, ip,
+                                           request.headers.get("user-agent") or ""):
+                return _go("/my/me/celebrations", "cl-hear", err="error")
+    ok = await asyncio.to_thread(na.save_prefs, biz_id, me_id, level,
+                                 on("birthdays"), on("replies"), on("email"), texts)
     return _go("/my/me/celebrations", "cl-hear", **({"done": "alerts_saved"} if ok else {"err": "error"}))
 
 
