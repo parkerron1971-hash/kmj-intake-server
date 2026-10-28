@@ -500,6 +500,8 @@ app.include_router(member_portal_serving_router)
 # Get paid back, under Serve: a volunteer's receipt (GET /my/paid-back is member_portal.serve's).
 from member_portal_checks import router as member_portal_checks_router
 app.include_router(member_portal_checks_router)
+from member_portal_board import router as member_portal_board_router
+app.include_router(member_portal_board_router)
 app.include_router(member_portal_share_router)
 # Posting to News from a phone, and Sign me up from a post (GET /my/news/write
 # is member_portal.serve's).
