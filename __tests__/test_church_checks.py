@@ -165,6 +165,12 @@ def db(monkeypatch):
     fake.levels_told = []
     monkeypatch.setattr(cml, "_tell", lambda biz, to, title, body, emails, tag:
                         fake.levels_told.append((sorted(to), title, body)))
+    fake.people_told = []
+    monkeypatch.setattr(cml, "_tell_people", lambda biz, people, title, body, tag:
+                        fake.people_told.append((sorted(people), title)))
+    fake.codes_sent = []
+    monkeypatch.setattr(cml, "_send_code_email", lambda biz, me, row, code:
+                        fake.codes_sent.append((me["contact_id"], str(row["id"]), code)))
     monkeypatch.delenv("CHURCH_MONEY_LEVELS", raising=False)
     # Who sees what: the treasurer works Giving & money, the viewer too
     # (read only), the singer worship only.
@@ -867,7 +873,7 @@ def test_the_page_says_what_no_one_can_approve(db):
     assert levels["on"] is True and levels["pastor_from_cents"] == 50000 and levels["board_over_cents"] == 250000
     assert levels["mine"] == ["treasurer"]
     assert [g.split(",")[0] for g in levels["gaps"]] == [
-        "No one holds the senior pastor's role yet", "No board member has a login"]
+        "No one holds the senior pastor's role yet", "No board member has an email on file"]
     _leaders(db, pastor="reed@gmail.com", elder=False)
     levels = _page("owner")["levels"]
     assert levels["pastors"] == [] and levels["board"] == []
@@ -917,3 +923,202 @@ def test_whoever_said_yes_is_never_told_again(db):
     got = _decide("pastor", rid).json()
     assert got["step"] == "pastor" and got["missing"] == ["treasurer", "board"]
     assert db.levels_told[-1][0] == [ID["elder"]], "the pastor sits on the board too, and said yes already"
+
+
+# ─── A board member's yes from the member app (Kevin 2026-10-28, step 2) ───
+
+RUTH_C = "cccccccc-0000-4000-8000-000000000020"
+SAM_C = "cccccccc-0000-4000-8000-000000000021"
+RUTH_ME = {"id": RUTH_C, "name": "Ruth Elder", "email": "ruth@example.com"}
+SAM_ME = {"id": SAM_C, "name": "Sam Deacon", "email": "sam@example.com"}
+CHURCH = {"id": BIZ, "owner_id": ID["owner"], "name": "Love City Church", "type": "ministry", "settings": {}}
+
+
+def _board_people(db, *people, board_id="bd1"):
+    """Board members by their person (no login): church_board_members.contact_id."""
+    for i, (cid, name, email) in enumerate(people):
+        if not any(c["id"] == cid for c in db.t["contacts"]):
+            db.t["contacts"].append({"id": cid, "business_id": BIZ, "name": name, "email": email})
+        db.t["church_board_members"].append({"id": f"mb-{cid[-4:]}-{board_id}", "business_id": BIZ, "board_id": board_id,
+                                             "user_id": None, "contact_id": cid, "name": "", "title": "", "active": True})
+
+
+def _roof(db, amount="3000"):
+    """$3,000 from the office (the admin) to Ace Roofing, with the treasurer's
+    and the pastor's yes: it waits on a board member."""
+    rid = _add("admin", amount=amount, about="Roof deposit", ministry="Hospitality", payee="Ace Roofing").json()["request"]["id"]
+    assert _decide("treasurer", rid).json()["missing"] == ["pastor", "board"]
+    assert _decide("pastor", rid).json()["missing"] == ["board"]
+    return rid
+
+
+def _code(db, person, rid):
+    sent = cml.send_code(CHURCH, person, rid)
+    cid, req, code = db.codes_sent[-1]
+    assert (cid, req) == (person["id"], rid)
+    return sent["code_id"], code
+
+
+def test_a_board_member_says_yes_from_the_member_app_with_a_fresh_code(db):
+    _leaders(db, elder=False)
+    _board_people(db, (RUTH_C, "Ruth Elder", "ruth@example.com"))
+    rid = _roof(db)
+    assert db.people_told and db.people_told[-1][0] == [RUTH_C], "Ruth hears it by email, to the member app"
+    view = cml.member_view(CHURCH, RUTH_ME)
+    assert [str(x["row"]["id"]) for x in view["waiting"]] == [rid] and view["email"] == "r***@example.com"
+    lv = view["waiting"][0]["levels"]
+    assert lv["mine"] == "board" and lv["missing"] == ["board"]
+    assert [(h["step"], h["by"]) for h in lv["have"]] == [("treasurer", "treasurer@lovecity.org"), ("pastor", "Pastor Reed")]
+    k, code = _code(db, RUTH_ME, rid)
+    row = next(c for c in db.t["church_check_approval_codes"] if c["id"] == k)
+    assert row["code_hash"] != code and len(row["code_hash"]) == 64, "only a hash is kept"
+    wrong = "000000" if code != "000000" else "111111"
+    with pytest.raises(HTTPException) as e:
+        cml.confirm_code(CHURCH, RUTH_ME, rid, k, wrong)
+    assert e.value.status_code == 400 and "isn't right" in e.value.detail and row["tries"] == 1
+    done = cml.confirm_code(CHURCH, RUTH_ME, rid, k, f"{code[:3]} {code[3:]}")
+    assert done["approved"] is True and done["step"] == "board"
+    yes = next(a for a in db.t["church_check_approvals"] if a["step"] == "board")
+    assert yes.get("contact_id") == RUTH_C and not yes.get("user_id"), "the yes is her person's, not a login's"
+    assert _req(db, rid)["status"] == "approved" and _req(db, rid)["decided_by"] is None
+    assert row["used_at"]
+    have = _by(_page("treasurer"), rid)["levels"]["have"]
+    assert [h["by"] for h in have] == ["treasurer@lovecity.org", "Pastor Reed", "Ruth Elder"], "the office sees her name"
+    with pytest.raises(HTTPException) as e:
+        cml.confirm_code(CHURCH, RUTH_ME, rid, k, code)
+    assert e.value.status_code == 409, "approved already: nothing more to say yes to"
+    assert _pay("treasurer", rid).status_code == 200
+
+
+def test_a_code_is_one_requests_and_one_persons_and_runs_out(db):
+    _leaders(db, elder=False)
+    _board_people(db, (RUTH_C, "Ruth Elder", "ruth@example.com"), (SAM_C, "Sam Deacon", "sam@example.com"))
+    a = _roof(db)
+    b = _roof(db, amount="2600")
+    k, code = _code(db, RUTH_ME, a)
+    for person, rid in ((RUTH_ME, b), (SAM_ME, a)):
+        with pytest.raises(HTTPException) as e:
+            cml.confirm_code(CHURCH, person, rid, k, code)
+        assert e.value.status_code == 400 and "new code" in e.value.detail, (person["name"], rid)
+    row = next(c for c in db.t["church_check_approval_codes"] if c["id"] == k)
+    row["created_at"] = "2026-01-01T00:00:00+00:00"
+    with pytest.raises(HTTPException) as e:
+        cml.confirm_code(CHURCH, RUTH_ME, a, k, code)
+    assert "ran out" in e.value.detail
+    k2, code2 = _code(db, RUTH_ME, a)
+    for _ in range(cml.CODE_TRIES):
+        with pytest.raises(HTTPException):
+            cml.confirm_code(CHURCH, RUTH_ME, a, k2, "999999" if code2 != "999999" else "888888")
+    with pytest.raises(HTTPException) as e:
+        cml.confirm_code(CHURCH, RUTH_ME, a, k2, code2)
+    assert "Too many tries" in e.value.detail
+    for _ in range(cml.CODES_PER_HOUR - 1):         # the run-out one is past the hour
+        _code(db, RUTH_ME, a)
+    with pytest.raises(HTTPException) as e:
+        cml.send_code(CHURCH, RUTH_ME, a)
+    assert e.value.status_code == 429
+    assert all(x.get("step") != "board" for x in db.t["church_check_approvals"])
+    k3, code3 = _code(db, SAM_ME, a)
+    assert cml.confirm_code(CHURCH, SAM_ME, a, k3, code3)["approved"] is True, "Sam's own code is his to use"
+
+
+def test_no_yes_from_the_member_app_for_anyone_the_board_rule_leaves_out(db):
+    _leaders(db, elder=False)
+    _board_people(db, (RUTH_C, "Ruth Elder", "ruth@example.com"))
+    _board_people(db, (SAM_C, "Sam Deacon", "sam@example.com"), board_id="bd2")     # an archived board
+    rid = _roof(db)
+    for person in (DANA_ME, SAM_ME):
+        with pytest.raises(HTTPException) as e:
+            cml.member_view(CHURCH, person)
+        assert e.value.status_code == 403, person["name"]
+        with pytest.raises(HTTPException) as e:
+            cml.send_code(CHURCH, person, rid)
+        assert e.value.status_code == 403, person["name"]
+    # Ruth's own request: her yes never counts.
+    own = cc.member_ask({"id": BIZ, "owner_id": ID["owner"]}, RUTH_ME, "3000", "Conference", "Hospitality", photo())["id"]
+    _decide("treasurer", own)
+    _decide("pastor", own)
+    mine = next(x for x in cml.member_view(CHURCH, RUTH_ME)["waiting"] if str(x["row"]["id"]) == own) \
+        if any(str(x["row"]["id"]) == own for x in cml.member_view(CHURCH, RUTH_ME)["waiting"]) else None
+    assert mine is None, "what she asked for doesn't wait on her"
+    with pytest.raises(HTTPException) as e:
+        cml.send_code(CHURCH, RUTH_ME, own)
+    assert e.value.status_code == 403
+    assert not db.codes_sent or all(c[1] != own for c in db.codes_sent)
+
+
+def test_one_human_gives_one_step_whether_by_login_or_by_person(db):
+    """Ruth's person carries the treasurer login's email: the treasurer's
+    yes is hers, so the board's can't be too."""
+    _leaders(db, elder=False)
+    _board_people(db, (RUTH_C, "Ruth Elder", "treasurer@lovecity.org"))
+    rid = _roof(db)
+    lv = next(x for x in cml.member_view(CHURCH, {**RUTH_ME, "email": "treasurer@lovecity.org"})["waiting"]
+              if str(x["row"]["id"]) == rid)["levels"]
+    assert lv["mine"] is None and lv["why_not"].startswith("Your yes is in")
+    with pytest.raises(HTTPException) as e:
+        cml.send_code(CHURCH, {**RUTH_ME, "email": "treasurer@lovecity.org"}, rid)
+    assert e.value.status_code == 403
+    assert db.people_told == [] or all(RUTH_C not in t[0] for t in db.people_told), "never told to give a second step"
+
+
+def test_a_board_member_with_no_email_is_named_and_cant_get_a_code(db):
+    _leaders(db, elder=False)
+    _board_people(db, (RUTH_C, "Ruth Elder", ""))
+    gaps = _page("owner")["levels"]["gaps"]
+    assert any(g.startswith("No board member has an email on file") for g in gaps)
+    assert any(g.startswith("Ruth Elder is on the board with no email on file") for g in gaps)
+    rid = _roof(db)
+    with pytest.raises(HTTPException) as e:
+        cml.send_code(CHURCH, {**RUTH_ME, "email": ""}, rid)
+    assert e.value.status_code == 400 and "no email" in e.value.detail
+
+
+def test_the_board_page_and_its_posts(db, monkeypatch):
+    import member_portal_board as mpb
+    import member_portal_church
+    import rate_limit
+    _leaders(db, elder=False)
+    _board_people(db, (RUTH_C, "Ruth Elder", "ruth@example.com"))
+    rid = _roof(db)
+    church = {"business": {**CHURCH}, "site": {}}
+    state = {"me": RUTH_ME, "unavailable": False}
+
+    async def signed_in(request):
+        return church, state["me"], state["unavailable"]
+    monkeypatch.setattr(member_portal_church, "_signed_in", signed_in)
+    monkeypatch.setattr(rate_limit, "allow_strict", lambda *a, **k: True)
+    app = FastAPI()
+    app.include_router(mpb.router)
+    c = TestClient(app)
+    got = c.post(f"/my/board/approvals/{rid}/code", follow_redirects=False)
+    assert got.status_code == 303 and "done=sent" in got.headers["location"] and "k=" in got.headers["location"]
+    k = re.search(r"k=([0-9a-f-]{36})", got.headers["location"]).group(1)
+    code = db.codes_sent[-1][2]
+    bad = c.post(f"/my/board/approvals/{rid}/approve", data={"k": k, "code": "12"}, follow_redirects=False)
+    assert "err=1" in bad.headers["location"] and f"k={k}" in bad.headers["location"], "a wrong code keeps the form"
+    ok = c.post(f"/my/board/approvals/{rid}/approve", data={"k": k, "code": code}, follow_redirects=False)
+    assert "done=approved" in ok.headers["location"] and _req(db, rid)["status"] == "approved"
+    other = c.post(f"/my/board/approvals/{rid}/code", headers={"Origin": "https://evil.example"}, follow_redirects=False)
+    assert other.status_code == 403, "another site's form never reaches it"
+    state["me"] = DANA_ME
+    assert c.post(f"/my/board/approvals/{rid}/code", follow_redirects=False).headers["location"].endswith("err=1&msg=This+one+is+approved+already.")
+    state.update(me=RUTH_ME, unavailable="preview")
+    assert "preview" in c.post(f"/my/board/approvals/{rid}/code", follow_redirects=False).headers["location"].lower()
+
+    # The page: what waits on her, the receipt, the steps, the yes.
+    second = _roof(db, amount="2700")
+    from starlette.requests import Request
+    def req(qs=b""):
+        return Request({"type": "http", "method": "GET", "path": "/my/board/approvals", "query_string": qs, "headers": [],
+                        "server": ("x", 443), "scheme": "https"})
+    view = cml.member_view(CHURCH, RUTH_ME)
+    html = mpb.render_page(CHURCH, {}, req(f"r={second}".encode()), RUTH_ME, view)
+    assert "Waiting on <em>your yes</em>" in html and "$2,700" in html and "Say yes as a board member" not in html
+    assert "Approve $2,700" in html and "r***@example.com" in html and "No receipt" in html
+    assert "You said yes" in html, "the roof she approved is listed below"
+    assert 'class="ld-grid has-sel"' in html and "Pastor Reed" in html
+    html = mpb.render_page(CHURCH, {}, req(f"r={second}&k={k}".encode()), RUTH_ME, view)
+    assert 'autocomplete="one-time-code"' in html and "Send a new code" in html
+    empty = mpb.render_page(CHURCH, {}, req(), RUTH_ME, {"waiting": [], "said": [], "email": "", "me": {}})
+    assert "Nothing is waiting on the board." in empty
