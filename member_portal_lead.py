@@ -641,7 +641,8 @@ async def _context(request: Request, biz: Dict[str, Any], me: Dict[str, Any]) ->
     SUNDAYS.set(await asyncio.to_thread(sunday_leading.leads_a_team, biz["id"], str(me["id"])))
     PARTS.set(await asyncio.to_thread(parts, biz, str(me["id"]), me.get("email")) if member_app_ui.serve_mode() else {})
     import member_portal_checks as mpck
-    PAID_BACK.set(await mpck.door_async(request, biz))
+    import member_portal_board as mpb
+    PAID_BACK.set(mpb.serve_door() + await mpck.door_async(request, biz))
     TASKS.set(await asyncio.to_thread(clt.section, biz, str(me["id"])))
 
 
