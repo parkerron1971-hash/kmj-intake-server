@@ -9,17 +9,25 @@
   </div>
 </section>
 
-<section class="live-watch" aria-labelledby="watch-title">
+<section class="live-watch" aria-labelledby="watch-live-title">
   <div class="wrap live-grid">
     <div class="live-copy" data-reveal="up">
-      <h2 id="watch-title" class="h-section">Watch with us</h2>
-      <p class="lead" data-override-target="watch.facebook">Follow Love City Church on Facebook to catch us live.</p>
-      <a class="btn btn-love" href="{{FACEBOOK_URL}}">Watch on Facebook</a>
+      <h2 id="watch-live-title" class="h-section">Watch with us</h2>
+      <p class="lead" data-override-target="watch.live">Every service streams live on YouTube and Facebook. When we’re on, it plays right here.</p>
+      <div class="cta-row">
+        <a class="btn btn-love" href="{{YOUTUBE_LIVE_URL}}">Watch on YouTube</a>
+        <a class="btn btn-line" href="{{FACEBOOK_URL}}">Watch on Facebook</a>
+      </div>
     </div>
-    <div class="live-latest">
-      <p class="h-section">Or watch the latest message now</p>
+    <!-- During a gathering, site.js swaps the latest message for the live player. -->
+    <div class="live-latest" data-live-player data-live-src="{{YOUTUBE_LIVE_EMBED}}">
+      <p class="h-section" data-live-label>Or watch the latest message now</p>
       <div class="embed"><iframe src="{{SUBSPLASH_LATEST}}" title="Latest message from Love City Church" loading="lazy" allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowfullscreen></iframe></div>
-      <a class="link" href="/sermons">Browse every series</a>
+      <p class="live-wait" data-live-wait hidden>Not on yet? The service starts here once we go live. Refresh in a minute.</p>
+      <div class="cta-row live-links">
+        <a class="link" href="/sermons">Browse every series</a>
+        <a class="link" href="{{YOUTUBE_LIVE_URL}}" data-live-open>Open the live player</a>
+      </div>
     </div>
   </div>
 </section>
