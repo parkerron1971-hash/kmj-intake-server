@@ -25,7 +25,8 @@
 -- alerts in the bell, and the bank (plaid_transactions, plaid_accounts).
 -- What a gift was worth, when and to which fund stays open to the finance
 -- roles through GET /giving/{id}/amounts (the service role, no names), so
--- the church's Home and its giving goal keep their numbers.
+-- the church's Home and its giving goal keep their numbers. Apply only once
+-- the app reads them (solutionist-studio#1394) is live.
 --
 -- The CHURCH_KEYS switch is the server's; this lock follows the keepers
 -- alone. To take it away, remove the church's keepers or run
