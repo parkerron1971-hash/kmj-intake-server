@@ -12,10 +12,26 @@ import pytest
 from fastapi import HTTPException
 
 import chief_growth_intelligence_actions as chief
+import church_keys
 import giving_records
 import growth_intelligence_router as api
 from growth_intelligence import report
 from growth_words import re_say, voice_of
+
+KEEPERS = []  # church_keepers rows; empty: nothing is locked
+
+
+@pytest.fixture(autouse=True)
+def keeper_store(monkeypatch):
+    monkeypatch.delenv('CHURCH_KEYS', raising=False)
+    KEEPERS.clear()
+    monkeypatch.setattr(church_keys, '_keeper_rows', lambda biz, area=None: list(KEEPERS))
+    monkeypatch.setattr(church_keys, '_open_key', lambda biz, user_id, area: None)
+
+
+def giving_kept_by(user_id):
+    KEEPERS.append({'area': 'giving_money', 'user_id': user_id, 'starts_at': '2026-01-01T00:00:00+00:00', 'ends_at': None})
+
 
 NOW = datetime(2026, 9, 16, 12, tzinfo=timezone.utc)
 PREFS = {'timezone': 'UTC', 'currency': 'USD', 'weekly_hours': 30}
@@ -196,6 +212,80 @@ def test_chief_refuses_a_church_report_to_a_seat_without_finance(monkeypatch):
         chief_of_staff._TURN_USER_ID.reset(token)
     assert read['failed'] and 'data' not in read and loaded == []
     assert write['failed'] and 'Nothing was saved' in write['result']
+    token = as_turn('accountant')
+    try:
+        assert not asyncio.run(chief.handle_growth_report(None, CHURCH, {'section': 'drivers'})).get('failed')
+    finally:
+        chief_of_staff._TURN_USER_ID.reset(token)
+
+
+def test_a_named_giving_keeper_locks_the_report_for_everyone_else(monkeypatch):
+    # Who gave what, ranked by name, is a Giving door (church_keys): the
+    # owner and an admin seat need the keeper's key too.
+    church_business(monkeypatch)
+    finance_only(monkeypatch)
+    giving_kept_by('accountant')
+    for who in ('owner', 'admin-seat'):
+        for write in (False, True):
+            with pytest.raises(HTTPException) as exc:
+                asyncio.run(api.authorize(None, BID, SimpleNamespace(id=who), write))
+            assert exc.value.status_code == 403 and exc.value.detail['code'] == 'area_locked', who
+    assert asyncio.run(api.authorize(None, BID, SimpleNamespace(id='accountant')))['id'] == BID
+
+
+def test_an_open_key_lets_the_owner_back_in(monkeypatch):
+    church_business(monkeypatch)
+    giving_kept_by('accountant')
+    monkeypatch.setattr(church_keys, '_open_key',
+                        lambda biz, user_id, area: {'id': 'k'} if (user_id, area) == ('owner', 'giving_money') else None)
+    assert asyncio.run(api.authorize(None, BID, SimpleNamespace(id='owner')))['id'] == BID
+
+
+def test_a_church_that_changes_its_type_keeps_its_keeper(monkeypatch):
+    import sys, types
+    church_business(monkeypatch, 'coach')
+    monkeypatch.setitem(sys.modules, 'business_users_router', types.SimpleNamespace(require_role=lambda *a: None))
+    giving_kept_by('accountant')
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(api.authorize(None, BID, SimpleNamespace(id='member-seat')))
+    assert exc.value.detail['code'] == 'area_locked'
+
+
+def test_the_report_stays_shut_when_the_keys_cannot_be_read(monkeypatch):
+    def down(biz, area=None):
+        raise HTTPException(503, "The keys couldn't be read just now. Try again.")
+    monkeypatch.setattr(church_keys, '_keeper_rows', down)
+    church_business(monkeypatch)
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(api.authorize(None, BID, SimpleNamespace(id='owner')))
+    assert exc.value.status_code == 503
+    served(monkeypatch)
+    import chief_of_staff
+    token = as_turn('owner')
+    try:
+        read = asyncio.run(chief.handle_growth_report(None, CHURCH, {'section': 'drivers'}))
+    finally:
+        chief_of_staff._TURN_USER_ID.reset(token)
+    assert read['failed'] and 'data' not in read
+
+
+def test_chief_needs_the_key_where_giving_is_kept(monkeypatch):
+    served(monkeypatch)
+    finance_only(monkeypatch)
+    giving_kept_by('accountant')
+    import chief_of_staff
+    retyped = {'id': BID, 'type': 'coach', 'owner_id': 'owner'}
+    for who, biz in (('owner', CHURCH), ('admin-seat', CHURCH), ('', CHURCH), ('member-seat', retyped), ('', retyped)):
+        token = as_turn(who)
+        try:
+            read = asyncio.run(chief.handle_growth_report(None, biz, {'section': 'drivers'}))
+            write = asyncio.run(chief.handle_save_growth_record(None, biz, {'kind': 'actions', 'data': {}}))
+        finally:
+            chief_of_staff._TURN_USER_ID.reset(token)
+        assert read['failed'] and 'data' not in read, (who, biz['type'])
+        assert write['failed'] and 'Nothing was saved' in write['result'], (who, biz['type'])
+        if who:
+            assert 'keeper' in read['result'], who
     token = as_turn('accountant')
     try:
         assert not asyncio.run(chief.handle_growth_report(None, CHURCH, {'section': 'drivers'})).get('failed')

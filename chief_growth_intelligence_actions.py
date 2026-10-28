@@ -15,26 +15,46 @@ CHURCH_CARE_NOTE = ("For a church, Who's drifting (Grow, Health) is read from at
                     "rank people by what they give when talking about care.")
 
 
-def giving_reader(biz):
-    """A church's or nonprofit's growth report is its giving, read per
-    person: the person in this turn must hold a finance role (owner, admin,
-    accountant), as on the page. A call with no person in it is refused,
-    as church_people refuses care numbers: nothing outside a signed-in
-    turn reads giving."""
-    if not giving_is_private(biz.get('type')):
-        return True
+FINANCE_ONLY = "Giving is kept to the owner, admins and the accountant."
+KEEPER_ONLY = ("Giving & money is locked: it needs its keeper's key, asked for in Areas, which opens for an hour "
+               "once they say yes.")
+
+
+def giving_refused(biz):
+    """Why this turn may not read the growth report, or None. A church's or
+    nonprofit's report is its giving, read per person: the person in this
+    turn must hold a finance role (owner, admin, accountant), as on the
+    page. A call with no person in it is refused, as church_people refuses
+    care numbers: nothing outside a signed-in turn reads giving. Where a
+    church named a keeper for Giving & money, the person needs the keeper's
+    key too, the owner as well (church_keys), whatever the business's type
+    now says: a church that changes its type keeps its keeper."""
+    import church_keys
     from chief_of_staff import _TURN_USER_ID
-    user_id = _TURN_USER_ID.get()
+    bid, user_id = str(biz['id']), _TURN_USER_ID.get()
+    if not giving_is_private(biz.get('type')):
+        if not user_id:
+            # No person to hold a key: open only where nothing is locked.
+            locked = church_keys.mode() != 'off' and church_keys.active_keepers(bid, 'giving_money')
+            return KEEPER_ONLY if locked else None
+        return None if church_keys.is_open(bid, SimpleNamespace(id=user_id), 'giving_money') else KEEPER_ONLY
     if not user_id:
-        return False
-    if str(user_id) == str(biz.get('owner_id')):
-        return True
-    from giving_records import require_finance
+        return FINANCE_ONLY
+    if str(user_id) != str(biz.get('owner_id')):
+        from giving_records import require_finance
+        try:
+            require_finance(bid, SimpleNamespace(id=user_id))
+        except HTTPException:
+            return FINANCE_ONLY
+    return None if church_keys.is_open(bid, SimpleNamespace(id=user_id), 'giving_money') else KEEPER_ONLY
+
+
+def refusal(biz):
+    """giving_refused, closed when the keys can't be read."""
     try:
-        require_finance(biz['id'], SimpleNamespace(id=user_id))
-        return True
+        return giving_refused(biz)
     except HTTPException:
-        return False
+        return "Giving couldn't be checked just now."
 
 
 def recall_view(report, action):
@@ -107,9 +127,10 @@ def recall_view(report, action):
 
 
 async def handle_growth_report(client, biz, action):
-    if not giving_reader(biz):
-        return {'type': 'growth_report', 'label': 'Giving is for the finance roles', 'failed': True,
-                'result': "Giving is kept to the owner, admins and the accountant. Say so plainly; give no figures or names."}
+    refused = refusal(biz)
+    if refused:
+        return {'type': 'growth_report', 'label': 'Giving is kept', 'failed': True,
+                'result': f"{refused} Say so plainly; give no figures or names."}
     try:
         report = await load_report(client, biz['id'], action.get('period', 'mtd'), action.get('comparison', 'previous'), action.get('start'), action.get('end'),
                                    business_type=biz.get('type'))
@@ -128,9 +149,10 @@ async def handle_growth_report(client, biz, action):
 
 
 async def handle_save_growth_record(client, biz, action):
-    if not giving_reader(biz):
-        return {'type': 'save_growth_record', 'label': 'Giving is for the finance roles', 'failed': True,
-                'result': "Giving records are kept to the owner, admins and the accountant. Nothing was saved."}
+    refused = refusal(biz)
+    if refused:
+        return {'type': 'save_growth_record', 'label': 'Giving is kept', 'failed': True,
+                'result': f"{refused} Nothing was saved."}
     try:
         payload = {k: action[k] for k in ('data', 'id', 'revision', 'request_id') if k in action}
         if isinstance(payload.get('data'), dict):

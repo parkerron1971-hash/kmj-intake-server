@@ -110,6 +110,12 @@ async def authorize(client, business_id, user, write=False):
         else:
             from business_users_router import require_role
             await asyncio.to_thread(require_role, bid, user.id, "member" if write else "viewer")
+    # Who gave what, ranked by name, is a Giving door: where a church named
+    # a keeper for Giving & money it needs that keeper's key, the owner's
+    # too (church_keys). Read for every type, as the other doors do: a
+    # church that changes its type keeps its keeper.
+    import church_keys
+    await asyncio.to_thread(church_keys.wall, bid, user, "giving_money")
     return rows[0]
 
 

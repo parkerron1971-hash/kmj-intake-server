@@ -19,6 +19,13 @@ BID = '10000000-0000-4000-8000-000000000001'
 RID = '20000000-0000-4000-8000-000000000001'
 
 
+@pytest.fixture(autouse=True)
+def no_giving_keeper(monkeypatch):
+    # No business here names a Giving keeper (the lock: test_growth_words).
+    import church_keys
+    monkeypatch.setattr(church_keys, '_keeper_rows', lambda biz, area=None: [])
+
+
 def invoice(id, person, paid, amount, **kw):
     return dict(id=id, contact_id=person, paid_at=paid, total=amount, status='paid', category='Consulting', **kw)
 
