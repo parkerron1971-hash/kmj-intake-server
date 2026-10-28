@@ -1355,7 +1355,9 @@ def make_tasks(me: Dict[str, Any], meeting_id: str) -> Dict[str, Any]:
         row = {"business_id": biz, "title": title[:200], "description": desc, "status": "todo", "priority": "medium",
                "due_date": i.get("follow_up_due"), "assigned_to": who.get("user_id") or None}
         if leader:
-            row["assigned_contact_id"] = leader
+            # Who handed it (the database keeps a server write's own value):
+            # late, with no one above the leader, it comes back to them.
+            row.update(assigned_contact_id=leader, handed_by=str(me["user"].id))
         task = sb_clients.sb_post_as_service("/tasks", row)
         if not isinstance(task, list) or not task or not task[0].get("id"):
             raise HTTPException(503, f"{made} task{'s' if made != 1 else ''} made; the rest didn't save. Try again.")
