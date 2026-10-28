@@ -41,6 +41,7 @@ Changes:
   - the three keeper tests now run with the levels off;
   - the paid test uses $450 and someone else's yes.
 - `.env.example` (`CHURCH_MONEY_LEVELS`) and `docs/MIGRATIONS.md` (ledger row).
+- `account_lifecycle.py`: the yeses aren't exported (sign-in user ids; the export keeps the requests), and they cascade with their request.
 
 Checked:
 - `pytest __tests__/test_church_checks.py`: 31 pass, with the levels on.
