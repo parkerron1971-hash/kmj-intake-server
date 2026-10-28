@@ -3,11 +3,10 @@ title: Church areas, step 2, part 3 — the Giving keeper in the database (gift 
 date: 2026-10-27
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-10-23: "if Pastor look at money another leader is notified and have to recieve a code from that person to get into money"; 2026-10-26: "go with your picks" (the lock binds the owner too; guarded at the start: giving names and bank) and "go ahead, you build step 2 after the media fixes"'
-status: in progress
+status: shipped (the SQL applied 2026-10-28 after solutionist-studio#1394 went live, and verified)
 prs: ["kmj-intake-server#1624", "solutionist-studio#1394 (the app reads the amounts)"]
 migrations: [supabase/APPLY-2026-10-27-church-keys-gift-rows.sql]
 left_undone:
-  - "The SQL waits for solutionist-studio#1394 to be live: until then Home's giving and the giving goal read the walled records and the gift rows, so applying it first would show a locked owner $0"
   - "Generic revenue cards (the status ribbon, the week card, Revenue) read invoices with the person's login, so for a locked owner they leave the gifts out, as they already do for a church's managers"
   - "Chief reads invoices with the person's login too, so a locked person's Chief no longer sees gift rows; its giving totals aren't given the amounts read yet"
   - "CHURCH_KEYS=off opens the server's doors but not this lock, which follows the keepers alone (remove the keepers or run the rollback)"
