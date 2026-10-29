@@ -4,7 +4,7 @@ date: 2026-10-29
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-10-29: "yes do small fix" (office logins could read texts, but only the owner could mark them read)'
 status: in review
-prs: []
+prs: [kmj-intake-server#1645]
 migrations: []
 left_undone:
   - "The frontend's Text room switches its mark-read to this endpoint in a separate solutionist-studio PR"
