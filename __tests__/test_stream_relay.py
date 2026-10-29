@@ -720,6 +720,148 @@ def test_the_sweep_does_nothing_before_its_column_exists(db, ready):
     assert sr.sweep_stale() == 0 and s["status"] == "live"
 
 
+# ─── the relay re-confirms the keys it remembers (Kevin 2026-10-29) ──
+#
+# The relay keeps a key the backend confirmed so a Sunday-morning backend
+# outage doesn't stop a service, for 24 hours at most, and asks once an
+# hour which of those keys are still good. A key left out of the answer is
+# cut; so a failed read is a 503 (change nothing), never a short list.
+
+
+def _confirm(c, grants, headers=RELAY):
+    return c.post("/stream-relay/relay/confirm", headers=headers, json={"grants": grants})
+
+
+def _grant(full):
+    stream_id, secret = _parts(full)
+    return {"stream_id": stream_id, "key_hash": sr.key_hash(secret)}
+
+
+def _strangers(n, start=1):
+    return [{"stream_id": f"{i:020x}", "key_hash": f"{i:064x}"} for i in range(start, start + n)]
+
+
+def _second_church(db):
+    secret = "S" * 32
+    db.t["church_streams"].append({"business_id": OTHER, "key_hash": sr.key_hash(secret), "key_last4": "SSSS",
+                                   "youtube_on": False, "youtube_key_enc": "", "facebook_on": False,
+                                   "facebook_key_enc": "", "sermon_drafts": True})
+    return {"stream_id": sr.stream_id_for(OTHER), "key_hash": sr.key_hash(secret)}
+
+
+def _key_reads(db, monkeypatch, fail_at=None):
+    """Every read of keys by hash, in order; `fail_at` (1-based) fails that one."""
+    reads = []
+    real = db.get
+
+    def get(path):
+        if path.startswith("/church_streams?key_hash=in."):
+            reads.append(path)
+            if fail_at == len(reads):
+                return None
+        return real(path)
+    import sb_clients
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", get)
+    return reads
+
+
+def test_confirm_a_current_key_is_confirmed(db, ready):
+    c = _app()
+    full = _key(c)
+    other = _second_church(db)
+    r = _confirm(c, [_grant(full), other])
+    assert r.status_code == 200, r.text
+    assert r.json() == {"confirmed": [_parts(full)[0], other["stream_id"]]}
+
+
+def test_confirm_a_replaced_key_is_left_out(db, ready):
+    c = _app()
+    first = _key(c)
+    second = _key(c)
+    assert _confirm(c, [_grant(first)]).json() == {"confirmed": []}
+    assert _confirm(c, [_grant(second)]).json() == {"confirmed": [_parts(second)[0]]}
+    # Asked about both, the church is confirmed once, on its current key.
+    assert _confirm(c, [_grant(first), _grant(second)]).json() == {"confirmed": [_parts(second)[0]]}
+
+
+@pytest.mark.parametrize("name,value", [
+    ("STREAM_INGEST_URL", ""),                                      # switched off
+    ("STREAM_INGEST_URL", "rtmp://stream.example.app/live"),        # half set up: plaintext ingest
+    ("STREAM_DEST_ENCRYPTION_KEY", "not-a-fernet-key"),
+])
+def test_confirm_switched_off_or_half_set_up_confirms_nothing(db, ready, monkeypatch, name, value):
+    """Verify would refuse every key, so confirm keeps none (and reads nothing)."""
+    c = _app()
+    full = _key(c)
+    monkeypatch.setenv(name, value)
+    reads = _key_reads(db, monkeypatch)
+    r = _confirm(c, [_grant(full)])
+    assert r.status_code == 200 and r.json() == {"confirmed": []} and reads == []
+    assert _verify(c, full).status_code == 403                     # the same answer verify gives
+
+
+def test_confirm_a_key_on_another_churchs_path_is_left_out(db, ready):
+    c = _app()
+    full = _key(c)
+    mine, other = _grant(full), _second_church(db)
+    crossed = [{"stream_id": mine["stream_id"], "key_hash": other["key_hash"]},
+               {"stream_id": other["stream_id"], "key_hash": mine["key_hash"]}]
+    assert _confirm(c, crossed).json() == {"confirmed": []}
+    assert _confirm(c, crossed + [other]).json() == {"confirmed": [other["stream_id"]]}
+
+
+@pytest.mark.parametrize("extra,fail_at", [(0, 1), (119, 1), (119, 2)])
+def test_confirm_a_failed_read_is_a_503_never_a_short_list(db, ready, monkeypatch, extra, fail_at):
+    """One read, or a long list read in parts with any part failing: a 503
+    for all of it, so the relay changes nothing."""
+    c = _app()
+    full = _key(c)
+    reads = _key_reads(db, monkeypatch, fail_at=fail_at)
+    r = _confirm(c, [_grant(full)] + _strangers(extra))
+    assert r.status_code == 503 and "confirmed" not in r.json()
+    assert len(reads) == fail_at
+
+
+def test_confirm_reads_the_keys_together_not_one_by_one(db, ready, monkeypatch):
+    c = _app()
+    full = _key(c)
+    reads = _key_reads(db, monkeypatch)
+    assert _confirm(c, [_grant(full)] + _strangers(29)).json() == {"confirmed": [_parts(full)[0]]}
+    assert len(reads) == 1
+    reads.clear()
+    assert _confirm(c, _strangers(200)).json() == {"confirmed": []}
+    assert len(reads) == 200 // sr.CONFIRM_READ_CHUNK
+    assert all(len(p) < 4096 for p in reads)                       # well under a proxy's URL limit
+    reads.clear()
+    assert _confirm(c, []).json() == {"confirmed": []} and reads == []
+
+
+def test_confirm_more_than_200_or_a_malformed_entry_is_422(db, ready):
+    c = _app()
+    full = _key(c)
+    good = _grant(full)
+    assert _confirm(c, _strangers(201)).status_code == 422
+    for bad in ({**good, "stream_id": good["stream_id"][:19]},
+                {**good, "stream_id": good["stream_id"].upper()},
+                {**good, "stream_id": good["stream_id"][:19] + "g"},
+                {**good, "key_hash": good["key_hash"][:63]},
+                {**good, "key_hash": "Z" * 64},
+                {"stream_id": good["stream_id"]}):
+        assert _confirm(c, [good, bad]).status_code == 422, bad
+    assert c.post("/stream-relay/relay/confirm", headers=RELAY, json={}).status_code == 422
+
+
+def test_confirm_fails_closed_without_the_relay_secret(db, ready, monkeypatch):
+    """The same door as verify, started and ended (require_relay): no or a
+    wrong secret is 401, no secret configured is 503."""
+    c = _app()
+    full = _key(c)
+    assert _confirm(c, [_grant(full)], headers={}).status_code == 401
+    assert _confirm(c, [_grant(full)], headers={"x-relay-secret": "nope"}).status_code == 401
+    monkeypatch.delenv("STREAM_RELAY_SECRET")
+    assert _confirm(c, [_grant(full)]).status_code == 503
+
+
 # ─── an old run never retires a newer one (Codex B2-R) ───────────────
 
 

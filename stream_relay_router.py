@@ -34,6 +34,16 @@ The relay's side (the shared secret in X-Relay-Secret; fails closed, and
 answers 403 while streaming is switched off):
 
   POST  /stream-relay/relay/verify      {stream_id, key}  — may this key stream? where copies go
+  POST  /stream-relay/relay/confirm     {grants: [{stream_id, key_hash}, ...]}  (200 at most)
+        Which of the keys the relay remembers are still good. The relay
+        keeps a key the backend confirmed so a backend outage doesn't stop
+        a service, for 24 hours at most, and asks this once an hour (Kevin,
+        2026-10-29: a revoked key stops within an hour while the backend is
+        up). 200 {confirmed: [stream_id, ...]}: a stream id is in it only
+        when its church's CURRENT key has that hash and verify would admit
+        it now. One left out is cut by the relay, so a failed read is a 503
+        (the relay changes nothing), never a short list. 422 for more than
+        200 or a malformed entry.
   POST  /stream-relay/relay/started     {stream_id, key, run_id, recorded_s?, bytes?, ending?}
         The stream is up, AND the relay's heartbeat (every minute while it
         is): opens or repairs the session and its live service, records
@@ -804,6 +814,29 @@ class EndedIn(BaseModel):
     bytes: int = Field(default=0, ge=0)
 
 
+# The relay asks about this many remembered keys at most, and they are read
+# this many at a time: 200 hashes in one in.() list is a ~13 KB URL, past
+# the 8 KB request line common proxies allow.
+CONFIRM_MAX = 200
+CONFIRM_READ_CHUNK = 50
+
+
+class GrantIn(BaseModel):
+    stream_id: str = Field(pattern=r"^[0-9a-f]{20}$")
+    key_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class ConfirmIn(BaseModel):
+    grants: List[GrantIn] = Field(max_length=CONFIRM_MAX)
+
+
+def _admits(row: Dict[str, Any], stream_id: str) -> bool:
+    """Verify's test of the row a key was found by, shared with confirm:
+    the key is that church's current one (it was found by its hash) AND it
+    is presented on that church's own path."""
+    return bool(row) and hmac.compare_digest(stream_id_for(str(row["business_id"])), stream_id)
+
+
 def church_from_stream_key(stream_id: str, key: str) -> Dict[str, Any]:
     """The church a stream key belongs to. The relay never names a
     business: it comes from the key's own row, and an unknown or replaced
@@ -815,7 +848,7 @@ def church_from_stream_key(stream_id: str, key: str) -> Dict[str, Any]:
         f"/church_streams?key_hash=eq.{key_hash(key)}&select=*&limit=1")
     if not isinstance(rows, list):
         raise HTTPException(503, "read failed")
-    if not rows or not hmac.compare_digest(stream_id_for(str(rows[0]["business_id"])), stream_id):
+    if not rows or not _admits(rows[0], stream_id):
         raise HTTPException(403, "unknown stream key")
     return rows[0]
 
@@ -826,6 +859,42 @@ def relay_verify(body: VerifyIn, x_relay_secret: Optional[str] = Header(default=
     require_switched_on()
     row = church_from_stream_key(body.stream_id, body.key)
     return {"ok": True, "destinations": destinations_for(row)}
+
+
+@router.post("/stream-relay/relay/confirm")
+def relay_confirm(body: ConfirmIn, x_relay_secret: Optional[str] = Header(default=None)):
+    """Which remembered keys are still good (the relay asks once an hour).
+    The relay names no business: each comes from its key's own row."""
+    require_relay(x_relay_secret)
+    return {"confirmed": confirmed_streams(body.grants)}
+
+
+def confirmed_streams(grants: List[GrantIn]) -> List[str]:
+    """The stream ids verify would admit right now with these keys, in the
+    order asked, each once. Switched off, that is none. Raises 503 when any
+    read fails: a key left out is cut, so a failed read must never look
+    like a revoked key."""
+    try:
+        require_switched_on()                 # verify's own door
+    except HTTPException:
+        return []
+    hashes = sorted({g.key_hash for g in grants})
+    found: Dict[str, Dict[str, Any]] = {}
+    for i in range(0, len(hashes), CONFIRM_READ_CHUNK):
+        part = hashes[i:i + CONFIRM_READ_CHUNK]
+        rows = sb_clients.sb_get_as_service(
+            f"/church_streams?key_hash=in.({','.join(_q(h) for h in part)})"
+            f"&select=business_id,key_hash&limit={len(part)}")
+        if not isinstance(rows, list):
+            raise HTTPException(503, "read failed")
+        found.update({str(r.get("key_hash") or ""): r for r in rows})
+    out: List[str] = []
+    for g in grants:
+        row = found.get(g.key_hash)
+        if (row and hmac.compare_digest(str(row.get("key_hash") or ""), g.key_hash)
+                and _admits(row, g.stream_id) and g.stream_id not in out):
+            out.append(g.stream_id)
+    return out
 
 
 @router.post("/stream-relay/relay/started")
