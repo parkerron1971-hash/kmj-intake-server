@@ -3,8 +3,8 @@ title: Church areas, step 2, part 4 — the money levels for check requests (the
 date: 2026-10-28
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-10-23: approval levels by amount for money going out; 2026-10-26: "go with your picks" (under $500 the treasurer alone; $500 to $2,500 plus the pastor; over $2,500 plus a board member); 2026-10-28: "merge 1626 and change check requests yourself"'
-status: in progress
-prs: ["kmj-intake-server (this PR)", "solutionist-studio (the Check requests page shows the steps, its own PR)"]
+status: shipped
+prs: [kmj-intake-server#1628, solutionist-studio#1396]
 migrations: ["supabase/APPLY-2026-10-28-church-money-levels.sql (applied 2026-10-28 before the code, verified)"]
 left_undone:
   - "The levels are Kevin's amounts for every church, in code: a church can't set its own yet (the proposal's rule that raising them takes the top level needs a settings yes of its own)"
