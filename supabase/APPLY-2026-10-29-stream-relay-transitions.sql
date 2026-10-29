@@ -1,6 +1,6 @@
 -- The stream relay's start, end and sweep can't step on each other
--- (2026-10-29, Kevin: "yes start on the fixes"; Codex's re-check of #1460,
--- findings B2-R and B3-R). Additive to APPLY-2026-10-16-stream-relay.sql,
+-- (2026-10-29, Kevin: "yes start on the fixes"; Codex's re-checks of #1460,
+-- findings B2-R, B3-R and B3-F). Additive to APPLY-2026-10-16-stream-relay.sql,
 -- which is applied and stays as it was. This file also carries the
 -- heartbeat column that APPLY-2026-10-16-stream-relay-heartbeat.sql added
 -- (never applied; folded in here, same statements), so it is the one
@@ -37,8 +37,23 @@
 --                           session AND links it, only while the session
 --                           is still live (B3-R: a start retry that lost a
 --                           race with the sweep opens nothing).
---   stream_relay_close      live -> ending, and closes its live service.
+--   stream_relay_close      raises the saved totals to the caller's (never
+--                           lowers them), then live -> ending and closes
+--                           its live service. The end's totals are saved
+--                           before anything can fail (B3-F).
+--   stream_relay_finish     ending -> ended, together with the sermon draft:
+--                           made from the SAVED length and the church's
+--                           own setting, inserted and linked in the same
+--                           step, so nothing can mark a session ended
+--                           before its draft is accounted for (B3-F). An
+--                           ended session is only ever given a draft by a
+--                           "late" end whose totals just took the saved
+--                           length past the line.
 --   stream_relay_retire     the step both claim and close share.
+--
+-- stream_relay_beat (the heartbeat's totals and last_seen_at) is one
+-- UPDATE of a live row, raising never lowering; the row lock it takes
+-- orders it against close, so it needs no church lock.
 --
 -- Server-only, like the tables: execute is revoked from the browser roles
 -- and granted to service_role. Idempotent; safe to run twice.
@@ -185,11 +200,17 @@ begin
   return jsonb_build_object('outcome', 'opened', 'live', to_jsonb(v_made));
 end $$;
 
-create or replace function public.stream_relay_close(p_session uuid, p_watch_prefix text)
+-- An earlier draft of this file had close without the totals; a re-run
+-- replaces it rather than leaving a second close beside the new one.
+drop function if exists public.stream_relay_close(uuid, text);
+
+create or replace function public.stream_relay_close(
+  p_session uuid, p_watch_prefix text, p_duration_s integer, p_bytes bigint)
 returns jsonb language plpgsql set search_path = public as $$
 declare
   v_biz uuid;
   v_s public.stream_sessions;
+  v_prev integer;
 begin
   select business_id into v_biz from public.stream_sessions where id = p_session;
   if not found then
@@ -200,23 +221,95 @@ begin
   if not found then
     return jsonb_build_object('outcome', 'missing');
   end if;
-  if v_s.status = 'ended' then
+  -- The caller's totals are saved first, whatever happens after: raised,
+  -- never lowered, in every state (a late end's real length counts too).
+  v_prev := v_s.duration_s;
+  update public.stream_sessions
+    set duration_s = greatest(duration_s, coalesce(p_duration_s, 0)),
+        bytes = greatest(bytes, coalesce(p_bytes, 0))
+    where id = p_session;
+  if v_s.status <> 'ended' then
+    perform public.stream_relay_retire(p_session, p_watch_prefix, clock_timestamp());
+  end if;
+  select * into v_s from public.stream_sessions where id = p_session;
+  return jsonb_build_object('outcome', case when v_s.status = 'ended' then 'ended' else 'ending' end,
+                            'session', to_jsonb(v_s), 'prev_duration_s', v_prev);
+end $$;
+
+create or replace function public.stream_relay_finish(
+  p_session uuid, p_sermon uuid, p_title text, p_preached_on date, p_video_url text,
+  p_min_s integer, p_late boolean)
+returns jsonb language plpgsql set search_path = public as $$
+declare
+  v_biz uuid;
+  v_s public.stream_sessions;
+  v_drafts boolean;
+begin
+  select business_id into v_biz from public.stream_sessions where id = p_session;
+  if not found then
+    return jsonb_build_object('outcome', 'missing');
+  end if;
+  perform pg_advisory_xact_lock(hashtextextended('stream_relay:' || v_biz::text, 0));
+  select * into v_s from public.stream_sessions where id = p_session;
+  if not found then
+    return jsonb_build_object('outcome', 'missing');
+  end if;
+  if v_s.status = 'live' then
+    return jsonb_build_object('outcome', 'live', 'session', to_jsonb(v_s));   -- close comes first
+  end if;
+  if v_s.status = 'ended' and not p_late then
+    -- Another finalizer got here first: its answer stands. Every total any
+    -- finalizer knew was saved by its close before this, so the winner
+    -- decided on the longest length known.
     return jsonb_build_object('outcome', 'ended', 'session', to_jsonb(v_s));
   end if;
-  perform public.stream_relay_retire(p_session, p_watch_prefix, clock_timestamp());
+  select sermon_drafts into v_drafts from public.church_streams where business_id = v_biz;
+  if v_s.sermon_id is null and coalesce(v_drafts, false) and v_s.duration_s >= p_min_s then
+    if p_title is null or p_preached_on is null or p_video_url is null then
+      -- The saved length passed the line after this caller looked: it
+      -- comes back once with the draft's title and date.
+      return jsonb_build_object('outcome', 'needs_draft', 'session', to_jsonb(v_s));
+    end if;
+    insert into public.sermons(id, business_id, title, preached_on, video_url, published)
+    values (p_sermon, v_biz, p_title, p_preached_on, p_video_url, false)
+    on conflict (id) do nothing;
+    update public.stream_sessions set sermon_id = p_sermon where id = p_session;
+  end if;
+  update public.stream_sessions set status = 'ended' where id = p_session and status = 'ending';
   select * into v_s from public.stream_sessions where id = p_session;
-  return jsonb_build_object('outcome', 'ending', 'session', to_jsonb(v_s));
+  return jsonb_build_object('outcome', 'ended', 'session', to_jsonb(v_s));
+end $$;
+
+create or replace function public.stream_relay_beat(p_session uuid, p_recorded_s integer, p_bytes bigint)
+returns jsonb language plpgsql set search_path = public as $$
+declare v_n integer;
+begin
+  -- One statement on a live row. A close holding this row (it updates it
+  -- first, under the church lock) makes this wait, then re-check status:
+  -- an ended or ending session is left alone.
+  update public.stream_sessions
+    set last_seen_at = clock_timestamp(),
+        duration_s = greatest(duration_s, coalesce(p_recorded_s, 0)),
+        bytes = greatest(bytes, coalesce(p_bytes, 0))
+    where id = p_session and status = 'live';
+  get diagnostics v_n = row_count;
+  return jsonb_build_object('outcome', case when v_n = 1 then 'beat' else 'not_live' end);
 end $$;
 
 revoke all on function public.stream_relay_retire(uuid, text, timestamptz) from public, anon, authenticated;
 revoke all on function public.stream_relay_claim(uuid, uuid, text, boolean, integer, bigint, integer, text)
   from public, anon, authenticated;
 revoke all on function public.stream_relay_open_live(uuid, uuid, text, text, text) from public, anon, authenticated;
-revoke all on function public.stream_relay_close(uuid, text) from public, anon, authenticated;
+revoke all on function public.stream_relay_close(uuid, text, integer, bigint) from public, anon, authenticated;
+revoke all on function public.stream_relay_finish(uuid, uuid, text, date, text, integer, boolean)
+  from public, anon, authenticated;
+revoke all on function public.stream_relay_beat(uuid, integer, bigint) from public, anon, authenticated;
 grant execute on function public.stream_relay_retire(uuid, text, timestamptz),
   public.stream_relay_claim(uuid, uuid, text, boolean, integer, bigint, integer, text),
   public.stream_relay_open_live(uuid, uuid, text, text, text),
-  public.stream_relay_close(uuid, text) to service_role;
+  public.stream_relay_close(uuid, text, integer, bigint),
+  public.stream_relay_finish(uuid, uuid, text, date, text, integer, boolean),
+  public.stream_relay_beat(uuid, integer, bigint) to service_role;
 
 commit;
 

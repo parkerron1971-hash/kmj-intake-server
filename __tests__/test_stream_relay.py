@@ -164,14 +164,49 @@ class DB:
         self.t["live_sessions"].append(made)
         return {"outcome": "opened", "live": dict(made)}
 
-    def stream_relay_close(self, p_session, p_watch_prefix):
+    def stream_relay_close(self, p_session, p_watch_prefix, p_duration_s, p_bytes):
         s = self._one("stream_sessions", p_session)
         if s is None:
             return {"outcome": "missing"}
-        if s["status"] == "ended":
+        prev = s["duration_s"]
+        s["duration_s"] = max(s["duration_s"], int(p_duration_s or 0))
+        s["bytes"] = max(s["bytes"], int(p_bytes or 0))
+        if s["status"] != "ended":
+            self._retire(p_session, p_watch_prefix, datetime.now(timezone.utc).isoformat())
+        return {"outcome": "ended" if s["status"] == "ended" else "ending", "session": dict(s),
+                "prev_duration_s": prev}
+
+    def stream_relay_finish(self, p_session, p_sermon, p_title, p_preached_on, p_video_url, p_min_s, p_late):
+        s = self._one("stream_sessions", p_session)
+        if s is None:
+            return {"outcome": "missing"}
+        if s["status"] == "live":
+            return {"outcome": "live", "session": dict(s)}
+        if s["status"] == "ended" and not p_late:
             return {"outcome": "ended", "session": dict(s)}
-        self._retire(p_session, p_watch_prefix, datetime.now(timezone.utc).isoformat())
-        return {"outcome": "ending", "session": dict(s)}
+        church = next((r for r in self.t["church_streams"] if r["business_id"] == s["business_id"]), None)
+        if s.get("sermon_id") is None and church and church.get("sermon_drafts") and s["duration_s"] >= p_min_s:
+            if p_title is None or p_preached_on is None or p_video_url is None:
+                return {"outcome": "needs_draft", "session": dict(s)}
+            if self._boom("POST", "sermons"):
+                return None              # the insert failed: the whole step rolls back
+            if self._one("sermons", p_sermon) is None:
+                self.t["sermons"].append({"id": p_sermon, "business_id": s["business_id"], "title": p_title,
+                                          "preached_on": p_preached_on, "video_url": p_video_url,
+                                          "published": False})
+            s["sermon_id"] = p_sermon
+        if s["status"] == "ending":
+            s["status"] = "ended"
+        return {"outcome": "ended", "session": dict(s)}
+
+    def stream_relay_beat(self, p_session, p_recorded_s, p_bytes):
+        s = self._one("stream_sessions", p_session)
+        if s is None or s["status"] != "live":
+            return {"outcome": "not_live"}
+        s["last_seen_at"] = datetime.now(timezone.utc).isoformat()
+        s["duration_s"] = max(s["duration_s"], int(p_recorded_s or 0))
+        s["bytes"] = max(s["bytes"], int(p_bytes or 0))
+        return {"outcome": "beat"}
 
     def rpc(self, name, args):
         if self._boom("RPC", name):
@@ -535,31 +570,33 @@ def test_a_close_that_saved_but_lost_its_answer_is_finished_by_the_retry(db, rea
     assert _row(db, sid)["status"] == "ended" and len(db.t["sermons"]) == 1
 
 
-@pytest.mark.parametrize("book", ["fail", "lose"])
-def test_a_failed_draft_is_a_503_and_the_retry_saves_it(db, ready, book):
-    """Failed, or saved with its answer lost (Codex's commit-then-lose-
-    sermon probe): one draft either way. The live service is closed
-    already, so members aren't left on "live" while it is retried."""
+def test_a_failed_draft_is_a_503_and_the_retry_saves_it(db, ready):
+    """The draft's insert fails inside the finish step, so the whole step
+    rolls back: still ending, no draft, nothing linked. The live service is
+    closed already, so members aren't left on "live" while it is retried."""
     c = _app()
     full = _key(c)
     sid = _start(c, full).json()["session_id"]
-    getattr(db, book)[("POST", "sermons")] = 1
+    db.fail[("POST", "sermons")] = 1
     assert _end(c, sid).status_code == 503
     assert db.t["stream_sessions"][0]["status"] == "ending" and _live_services(db) == []
+    assert db.t["sermons"] == [] and db.t["stream_sessions"][0]["sermon_id"] is None
     assert _end(c, sid).status_code == 200
     assert len(db.t["sermons"]) == 1 and db.t["stream_sessions"][0]["sermon_id"] == db.t["sermons"][0]["id"]
 
 
-@pytest.mark.parametrize("book", ["fail", "lose"])
-def test_a_failed_final_mark_is_a_503_and_the_retry_makes_no_second_draft(db, ready, book):
-    """The PR bot's item 2: the last write (ending -> ended, with the
-    draft's id) is checked, and its retry makes no second draft."""
+@pytest.mark.parametrize("book,status,drafts", [("fail", "ending", 0), ("lose", "ended", 1)])
+def test_a_failed_final_mark_is_a_503_and_the_retry_makes_no_second_draft(db, ready, book, status, drafts):
+    """The PR bot's item 2: the last step (the draft, its link and ending ->
+    ended, now one step) is checked. Failed, nothing of it is saved; saved
+    with its answer lost (Codex's commit-then-lose-sermon probe), all of
+    it is. Either way the retry answers with one draft."""
     c = _app()
     full = _key(c)
     sid = _start(c, full).json()["session_id"]
-    getattr(db, book)[("PATCH", "stream_sessions")] = 1
+    getattr(db, book)[("RPC", "stream_relay_finish")] = 1
     assert _end(c, sid).status_code == 503
-    assert len(db.t["sermons"]) == 1
+    assert _row(db, sid)["status"] == status and len(db.t["sermons"]) == drafts
     r = _end(c, sid)
     assert r.status_code == 200 and r.json()["sermon_id"] == db.t["sermons"][0]["id"]
     assert len(db.t["sermons"]) == 1 and _row(db, sid)["status"] == "ended"
@@ -942,6 +979,97 @@ def test_a_run_still_beating_is_never_taken_over(db, ready):
     assert [s["stream_url"] for s in _live_services(db)] == [sr.watch_url(r.json()["session_id"])]
 
 
+# ─── an end's totals and draft are never lost (Codex B3-F) ───────────
+
+
+def test_a_failed_draft_then_the_sweep_keeps_the_final_totals_and_the_draft(db, ready):
+    """Codex's final re-check, probe 1 (as written): the end's totals were
+    only in the failed request, so the sweep finished on the heartbeat's
+    240 s, skipped the draft, and the retry answered sermon_id null."""
+    c = _app()
+    full = _key(c)
+    sid = _start(c, full, recorded_s=240, bytes=100000).json()["session_id"]
+    db.fail[("POST", "sermons")] = 1
+    response = c.post("/stream-relay/relay/ended", headers=RELAY,
+                      json={"session_id": sid, "duration_s": 360, "bytes": 123456})
+    assert response.status_code == 503, response.text
+    row = db.t["stream_sessions"][0]
+    assert row["status"] == "ending"
+    row["ended_at"] = "2000-01-01T00:00:00+00:00"
+    assert sr.sweep_stale() == 1
+    retry = c.post("/stream-relay/relay/ended", headers=RELAY,
+                   json={"session_id": sid, "duration_s": 360, "bytes": 123456})
+    assert retry.status_code == 200
+    assert row["duration_s"] == 360 and row["bytes"] == 123456, (row, retry.json(), db.t["sermons"])
+    assert len(db.t["sermons"]) == 1 and row["sermon_id"] == db.t["sermons"][0]["id"]
+    assert retry.json()["sermon_id"] == row["sermon_id"]
+
+
+def test_a_finalizer_that_loses_the_race_never_orphans_its_draft(db, ready, monkeypatch):
+    """Codex's probe 2: a 360 s end pauses at its draft while a finalizer
+    holding the old 240 s (the sweep, say) finishes first. Before, that left
+    a draft no session pointed at. (Adapted: the competitor runs once; as
+    written it re-entered the patched draft step forever once the 360 s
+    total was saved where the competitor could see it.)"""
+    c = _app()
+    full = _key(c)
+    sid = _start(c, full, recorded_s=240).json()["session_id"]
+    real = sr._sermon_draft
+    raced = []
+
+    def interleave(biz, session):
+        if not raced:
+            raced.append(None)
+            raced[0] = sr.finalize(dict(_row(db, sid)), 240, 0)
+        return real(biz, session)
+    monkeypatch.setattr(sr, "_sermon_draft", interleave)
+    response = _end(c, sid, duration=360)
+    assert response.status_code == 200
+    row = _row(db, sid)
+    assert len(db.t["sermons"]) == 1
+    assert row["sermon_id"] == db.t["sermons"][0]["id"] == response.json()["sermon_id"], (row, response.json())
+    assert raced[0] == row["sermon_id"] and row["status"] == "ended"
+
+
+def test_a_late_end_with_the_real_length_makes_the_draft_a_short_finish_skipped(db, ready):
+    """The other order: a finalizer that knew only 240 s (the sweep, after
+    the relay went quiet) finished first, with no draft. The relay's own end
+    arrives later with the real length: the draft is made then."""
+    c = _app()
+    full = _key(c)
+    sid = _start(c, full, recorded_s=240, bytes=100000).json()["session_id"]
+    assert sr.finalize(dict(_row(db, sid)), 240, 100000) is None
+    assert _row(db, sid)["status"] == "ended" and db.t["sermons"] == []
+    r = _end(c, sid, 3600, bytes=900000)
+    assert r.status_code == 200, r.text
+    row = _row(db, sid)
+    assert len(db.t["sermons"]) == 1 and row["sermon_id"] == db.t["sermons"][0]["id"] == r.json()["sermon_id"]
+    assert row["duration_s"] == 3600 and row["bytes"] == 900000
+
+
+def test_a_late_end_never_brings_back_a_draft_the_team_deleted(db, ready):
+    c = _app()
+    full = _key(c)
+    sid = _start(c, full).json()["session_id"]
+    assert _end(c, sid, 3600).status_code == 200 and len(db.t["sermons"]) == 1
+    db.t["sermons"].clear()
+    _row(db, sid)["sermon_id"] = None                       # deleted from Sermons: on delete set null
+    r = _end(c, sid, 3660)
+    assert r.status_code == 200 and r.json()["sermon_id"] is None
+    assert db.t["sermons"] == [] and _row(db, sid)["sermon_id"] is None
+
+
+def test_the_totals_never_go_down(db, ready):
+    c = _app()
+    full = _key(c)
+    sid = _start(c, full, recorded_s=600, bytes=5000).json()["session_id"]
+    assert _start(c, full, recorded_s=300, bytes=10).status_code == 200     # a beat that counts less
+    assert (_row(db, sid)["duration_s"], _row(db, sid)["bytes"]) == (600, 5000)
+    assert _end(c, sid, 100, bytes=1).status_code == 200                     # an end that counts less
+    assert (_row(db, sid)["duration_s"], _row(db, sid)["bytes"]) == (600, 5000)
+    assert len(db.t["sermons"]) == 1                                         # 600 s is a service
+
+
 # ─── start, end and the sweep can't interleave (Codex B3-R) ──────────
 
 
@@ -1001,12 +1129,13 @@ def test_a_live_service_opened_just_before_the_sweep_is_closed_by_it(db, ready, 
 
 def test_a_failed_settings_read_at_the_end_is_a_503_never_a_draft(db, ready):
     """Bot item 1: a church with drafts off whose settings didn't load is
-    not a church with drafts on."""
+    not a church with drafts on. (Since B3-F the setting is read inside the
+    finish step, under the church's lock: its failure fails that step.)"""
     c = _app()
     full = _key(c)
     c.patch("/stream-relay/settings", json={"business_id": BIZ, "sermon_drafts": False})
     sid = _start(c, full).json()["session_id"]
-    db.fail[("GET", "church_streams")] = 1
+    db.fail[("RPC", "stream_relay_finish")] = 1
     assert _end(c, sid).status_code == 503
     assert db.t["sermons"] == [] and _row(db, sid)["status"] != "ended"
     assert _live_services(db) == []                         # members aren't left watching "live"
@@ -1058,7 +1187,7 @@ def test_the_database_functions_take_what_the_router_sends(db, ready, monkeypatc
         name: {p.split()[0] for p in params.replace("\n", " ").split(",") if p.strip()}
         for name, params in _re.findall(r"create or replace function public\.(\w+)\((.*?)\)\s*returns", sql, _re.S)}
     assert set(signatures) == {"stream_relay_claim", "stream_relay_open_live", "stream_relay_close",
-                               "stream_relay_retire"}
+                               "stream_relay_retire", "stream_relay_finish", "stream_relay_beat"}
     calls = []
     real = db.post
 
@@ -1073,7 +1202,8 @@ def test_the_database_functions_take_what_the_router_sends(db, ready, monkeypatc
     sid = _start(c, full).json()["session_id"]
     _end(c, sid)
     _start(c, full, RUN_B, ending=True)
-    assert {name for name, _ in calls} == {"stream_relay_claim", "stream_relay_open_live", "stream_relay_close"}
+    assert {name for name, _ in calls} == {"stream_relay_claim", "stream_relay_open_live", "stream_relay_close",
+                                           "stream_relay_finish", "stream_relay_beat"}
     for name, args in calls:
         assert args == signatures[name], name
 
