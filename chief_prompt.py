@@ -465,7 +465,8 @@ def _format_priorities_block(priorities: List[str]) -> str:
 def _build_assistant_name_block(biz: Dict[str, Any]) -> str:
     prefs = (biz.get("settings") or {}).get("chief_preferences") or {}
     name = (prefs.get("assistant_name") or "").strip()
-    practitioner = (biz.get("settings") or {}).get("practitioner_name") or ""
+    import chief_areas   # an office login is greeted as itself (chief_areas.speaker)
+    practitioner = chief_areas.speaker(biz, "", short=True) or ""
     first_name = practitioner.split()[0] if practitioner else ""
     if name:
         return (
@@ -1165,7 +1166,15 @@ def _build_system_prompt(ctx: Dict[str, Any], is_greeting: bool,
 
     biz = ctx.get("business") or {}
     biz_name = biz.get("name", "the business")
-    practitioner = (biz.get("settings") or {}).get("practitioner_name", "the practitioner")
+    # The owner by the business's practitioner_name, as always; an office
+    # login by its own first name, and one nothing names by no name, never
+    # the owner's (chief_areas.speaker).
+    import chief_areas
+    practitioner = chief_areas.speaker(biz, "the practitioner", short=True)
+    _hello = f", {practitioner}" if practitioner else ""
+    _hey = f" {practitioner}" if practitioner else " there"
+    if not practitioner and chief_areas.WHO.get() is not None:
+        practitioner = "this team member"
     voice = biz.get("voice_profile") or {}
 
     # The snapshot splits in two (2026-10-07): what holds still between
@@ -1241,13 +1250,13 @@ def _build_system_prompt(ctx: Dict[str, Any], is_greeting: bool,
     # Time-of-day tailoring for greeting
     tod_guidance = ""
     if time_of_day == "morning":
-        tod_guidance = f" Start with 'Good morning, {practitioner}.' Focus on what to prioritize TODAY."
+        tod_guidance = f" Start with 'Good morning{_hello}.' Focus on what to prioritize TODAY."
     elif time_of_day == "afternoon":
         tod_guidance = f" Start with 'Good afternoon.' Focus on what's still pending from the morning."
     elif time_of_day == "evening":
-        tod_guidance = f" Start with 'Evening, {practitioner}.' Focus on what happened today and what carries to tomorrow."
+        tod_guidance = f" Start with 'Evening{_hello}.' Focus on what happened today and what carries to tomorrow."
     elif time_of_day == "night":
-        tod_guidance = f" Start with 'Hey {practitioner}.' Keep it very brief — just the one most important thing."
+        tod_guidance = f" Start with 'Hey{_hey}.' Keep it very brief — just the one most important thing."
 
     # Resumed conversation context
     resume_clause = ""
@@ -1708,6 +1717,7 @@ ACTIONS — PRODUCTS & SERVICES:
 ACTIONS — ACADEMY (BUILD → Course Studio; the practitioner teaches, students are their contacts):
   {ACADEMY_AUTHORING_PROMPT}
   [ACTION:{{"type":"save_course_content","request_key":"<unique-save-key>","course_id":"<uuid-from-inspect_course>","lessons":[{{"title":"Your Next Lesson","content":"Complete teaching content in Markdown","learning_design":{{"version":1,"objective":"What students will learn"}}}}]}}] — action-tag transport for the same course-authoring schema. Prefer the native tool when available. Inspect first, use real course IDs, and omit course_id only when creating a new draft with a title. Never use this example's placeholder IDs or prose as finished lesson content.
+  [ACTION:{{"type":"save_lesson_slides","course_id":"<uuid-from-inspect_course>","lesson_id":"<uuid>","slides":[{{"id":"title","layout":"title","title":"Lesson title"}},{{"id":"q1","layout":"quote","quote":{{"text":"","ref":"Romans 8:28"}}}}]}}] — action-tag transport for the same slide-deck schema (see SLIDES above). Prefer the native tool when available. Pass slides_revision when the lesson's slides were already saved. An empty scripture quote is filled from the Bible text; never type verse text yourself.
   [ACTION:{{"type":"create_course","title":"90-Day Business Foundations","description":"...","lessons":["Week 1: Your Foundation","Week 2: Your Offer"]}}]  — scaffold a course; legacy format; prefer save_course_content for complete lessons, workbooks and quizzes. Tells: "create a course", "set up my course", or after you've outlined a curriculum together and they say yes.
   [ACTION:{{"type":"enroll_student","contact_id":"<uuid>","course_title":"Foundations"}}]  — enroll an existing contact in a course (partial title match; course_id also accepted). Tells: "enroll Sarah in my foundations course", "add her to the course".
   [ACTION:{{"type":"generate_payment_link","name":"Leadership Course"}}]  — fuzzy match by name when you don't have the id.
@@ -2061,7 +2071,9 @@ ACTIONS — GIVING (any nonprofit or ministry — donor statements; this data is
   [ACTION:{{"type":"giving_statements_run"}}]  — every donor's totals for a tax year: the January mailing run.
 
 LOOKUP — CHURCH PEOPLE (a church or nonprofit; read-only; call it mid-turn):
-  church_people section=first_time|groups|attendance|care  — who came for the first time and hasn't been reached; who has missed their group's last 3 meetings; who came to recent services in person and online; care and children's check-in as counts (owner or manager only). Call it before answering "who came for the first time", "who's drifting", "how many were online"; never guess a name or number. Never put a prayer request or a child's details in a draft.
+  church_people section=first_time|groups|attendance|care|leaders|shepherding  — who came for the first time and hasn't been reached; who has missed their group's last 3 meetings; who came to recent services in person and online; care and children's check-in as counts (owner or manager only); leaders = the church's roles (each is its own title on a job: senior pastor, pastoral, prayer, care, ministry lead, team leader, welcome, teacher, kids, office), who holds each, who each answers to, what each is handed and its definition. shepherding (owner or manager) = which pastor or elder shepherds each member family, who's drifting from Sunday church (three Sundays missed; never giving) and who hasn't been reached; add name="the Carters" for one family or person. Call it before answering "who came for the first time", "who's drifting", "how many were online", "who handles prayer / baptisms", "who leads YWD", "who shepherds the Carters", "which families haven't been reached"; never guess a name or number. Never put a prayer request or a child's details in a draft.
+  [ACTION:{{"type":"draft_church_role","title":"Church Mother","job":"care","definition":"..."}}]  — the owner asks for a role ("add a Church Mother role", "we need an Armor Bearer"). Saves a DRAFT on Leaders & roles; it hands nobody anything until they save it. job is optional (senior|pastoral|prayer|care|ministry|team|welcome|teach|kids|office — leave it out and the title decides); definition optional (one or two plain sentences of what the role does). Say it's a draft they can open and save; never say the role is live.
+  [ACTION:{{"type":"draft_shepherd_moves","moves":[{{"family":"the Johnsons","to":"Pastor Andre Mills"}}]}}]  — the owner asks to move families between shepherds ("give both Johnsons to Pastor Andre", "move three of Tanya's to Ray"; to "waiting" takes a family off its shepherd). Read church_people section=shepherding first so the names are real. It only DRAFTS: say nothing changes and no shepherd is told until they approve it on Shepherding, and pass on any over-the-cap warning.
 
 ACTIONS — UNDO (the safety net; use it the moment the practitioner says "undo that" / "wait, put it back"):
   [ACTION:{{"type":"undo_last"}}]  — reverse the most recent reversible action. If they ask "what would undo do?", the what_undo lookup answers without changing anything. Never claim something cannot be undone without checking. When undo reports nothing in its log, say exactly that and offer the direct way back (delete_task, delete_expense, revert_site_text, or the room it lives in). The receipts in this conversation are the record of what ran: NEVER say an earlier action did not happen, was not fired, or was "your mistake" because undo found nothing — that is a guess, and it has been wrong.

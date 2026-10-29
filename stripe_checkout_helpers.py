@@ -38,7 +38,7 @@ HTTP_TIMEOUT = httpx.Timeout(connect=10.0, read=30.0, write=15.0, pool=10.0)
 # webhook routes it to record_gift_* instead of the invoice/booking
 # markers.
 ALLOWED_SOURCE_TYPES = {"booking", "consultation", "invoice", "manual", "order",
-                        "gift"}
+                        "gift", "event_signup"}
 
 
 def _secret_key() -> str:
@@ -558,6 +558,81 @@ async def create_giving_checkout(
             f"stripe giving checkout create failed ({resp.status_code}): "
             f"{resp.text[:200]}"
         )
+    return resp.json()
+
+
+def _event_signup_checkout_form(
+    *,
+    registration_id: str,
+    business_id: str,
+    entry_id: str,
+    event_title: str,
+    lines: List[Dict[str, Any]],
+    customer_email: Optional[str],
+    success_url: str,
+    cancel_url: str,
+    expires_at: int,
+    currency: str = "usd",
+) -> Dict[str, Any]:
+    """The Checkout-Session form for a church event sign-up
+    (church_event_signups). Pure, so tests pin the contract.
+
+    One line per ticket type, at the price the SERVER worked out (the
+    lines come from church_event_signups.price_order, never the browser).
+    Cards only, so the payment is settled when the page closes and a held
+    place is never waiting on a bank transfer. expires_at closes the page
+    before the place's hold runs out. Metadata (session and payment
+    intent): source_type='event_signup', source_id=<registration id>,
+    business_id, entry_id — the webhook checks the business against the
+    account the payment arrived on."""
+    if not registration_id or not business_id:
+        raise ValueError("registration_id and business_id required")
+    if not lines:
+        raise ValueError("lines required")
+    md = {"source_type": "event_signup", "source_id": registration_id,
+          "business_id": business_id, "entry_id": entry_id}
+    form: Dict[str, Any] = {"mode": "payment", "success_url": success_url, "cancel_url": cancel_url,
+                            "expires_at": int(expires_at), "payment_method_types[0]": "card"}
+    for k, v in md.items():
+        form[f"metadata[{k}]"] = v
+        form[f"payment_intent_data[metadata][{k}]"] = v
+    if customer_email:
+        form["customer_email"] = customer_email
+    title = (event_title or "Event").strip()[:120] or "Event"
+    form["payment_intent_data[description]"] = f"{title} sign-up"[:200]
+    i = 0
+    for line in lines:
+        price = int(line.get("price_cents") or 0)
+        qty = int(line.get("qty") or 0)
+        if price <= 0 or qty <= 0:
+            continue            # a free ticket rides along without a line
+        form[f"line_items[{i}][quantity]"] = qty
+        form[f"line_items[{i}][price_data][currency]"] = (currency or "usd").lower()
+        form[f"line_items[{i}][price_data][product_data][name]"] = f"{title} — {line.get('label') or 'Ticket'}"[:200]
+        form[f"line_items[{i}][price_data][unit_amount]"] = price
+        i += 1
+    if not i:
+        raise ValueError("nothing to pay for")
+    return form
+
+
+async def create_event_signup_checkout(*, stripe_account_id: str, **kwargs) -> Dict[str, Any]:
+    """Create the sign-up's Checkout Session on the church's connected
+    account. Raises RuntimeError on a Stripe error."""
+    if not stripe_account_id:
+        raise ValueError("stripe_account_id required")
+    form = _event_signup_checkout_form(**kwargs)
+    require_stripe_write(stripe_account_id)
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+        resp = await client.post(
+            f"{STRIPE_API_BASE}/checkout/sessions",
+            auth=(_secret_key(), ""),
+            headers={"Stripe-Account": stripe_account_id},
+            data=form,
+        )
+    if resp.status_code >= 400:
+        logger.warning(f"create_event_signup_checkout failed: {resp.status_code} {resp.text[:300]}")
+        raise RuntimeError(f"stripe sign-up checkout create failed ({resp.status_code}): {resp.text[:200]}")
     return resp.json()
 
 

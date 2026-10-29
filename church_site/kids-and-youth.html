@@ -1,0 +1,631 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>{{TITLE}}</title>
+<meta name="description" content="{{DESCRIPTION}}">
+<meta property="og:title" content="{{TITLE}}">
+<meta property="og:description" content="{{DESCRIPTION}}">
+<meta property="og:url" content="{{URL}}">
+<link rel="canonical" href="{{URL}}">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="The Solutionist System">
+<meta property="og:image" content="https://mysolutionist.app/assets/og.png?v=4">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="https://mysolutionist.app/assets/og.png?v=4">
+<link rel="icon" type="image/png" href="/favicon.png">
+<link rel="apple-touch-icon" href="/favicon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@300;400;500;600;700&amp;family=Inter:wght@400;500;600&amp;family=Instrument+Serif:ital@0;1&amp;family=JetBrains+Mono:wght@400;500&amp;family=Geist:wght@400..800&amp;family=Newsreader:ital,opsz,wght@0,6..72,400..600;1,6..72,400..600&amp;family=Fredoka:wght@500;600;700&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#07080B}
+a{color:#F5F6F8}a:hover{color:#FDBA74}
+.fk{font-family:'Fredoka','Geist',sans-serif}
+.kx{background:#fff8ec;color:#2b1d0e}
+.kx .ma-in{gap:10px}
+.k-h{font-family:'Fredoka','Geist',sans-serif;font-weight:700;font-size:24px;line-height:1.02;letter-spacing:-0.01em}
+.k-h em{font-style:normal;color:#B4590A}
+.k-kick{font-size:8.5px;font-weight:800;letter-spacing:.1em;text-transform:uppercase}
+.k-dot{width:26px;height:26px;border-radius:50%;display:grid;place-items:center;font-family:'Fredoka','Geist',sans-serif;font-weight:700;font-size:12px;flex:none}
+.k-flag{margin-left:auto;padding:3px 8px;border-radius:999px;font-size:8.5px;font-weight:700;white-space:nowrap;flex:none}
+.k-row{display:flex;align-items:center;gap:8px;padding:8px 10px}
+.k-row+.k-row{border-top:1px solid #f1e3c7}
+.k-card{background:#ffffff;border-radius:16px;box-shadow:0 2px 0 #f0dfbd}
+.k-btn{display:inline-flex;align-items:center;justify-content:center;height:30px;padding:0 14px;border-radius:999px;background:#f28c28;color:#2a1206;font-size:10.5px;font-weight:750}
+.ma-tabs.kt{background:#ffffff;border-top-color:#f1e3c7}
+.ma-tabs.kt span{color:#7a6650}
+.ma-tabs.kt span.on{color:#B4590A}
+.k2-top{display:flex;align-items:center;gap:8px;padding:9px 12px;background:#fff;border-bottom:1px solid #f1e3c7}
+.k2-kid{display:flex;align-items:center;gap:8px;padding:7px 9px;border-radius:11px;background:#fff;border:1.5px solid #f28c28}
+.k2-face{width:24px;height:24px;border-radius:50%;display:grid;place-items:center;font-size:10px;font-weight:750;flex:none;color:#2b1d0e}
+.k2-tog{margin-left:auto;width:38px;height:22px;border-radius:999px;background:#f28c28;position:relative;flex:none}
+.k2-tog::after{content:"";position:absolute;right:3px;top:3px;width:16px;height:16px;border-radius:50%;background:#fff}
+.k2 .key{display:grid;place-items:center;height:40px;border-radius:12px;background:#ffffff;border:1px solid #f1e3c7;font-family:'Fredoka','Geist',sans-serif;font-size:18px;font-weight:600;box-shadow:0 2px 0 #f0dfbd}
+.tag{background:#ffffff;color:#2b1d0e;font-family:'Geist',sans-serif;border-radius:10px;box-shadow:0 10px 22px rgba(43,29,14,0.16);border-left:6px solid #f28c28;padding:10px 12px;display:flex;flex-direction:column;gap:2px}
+.way{display:flex;flex-direction:column;gap:8px;padding:16px;border-radius:16px;background:#FFFFFF;border:1px solid rgba(11,12,17,0.1)}
+.way b{font-size:15px;font-weight:600}
+.way span{font-size:13.5px;line-height:1.45;color:#5A5E6B}
+.yh{font-weight:800;text-transform:uppercase;letter-spacing:-0.05em;line-height:0.92}
+.ysafe{display:flex;gap:7px;align-items:flex-start;padding:9px 10px;border-radius:12px;background:#161618;font-size:9px;line-height:1.4;color:#d6d6da}
+.pair{display:flex;flex-direction:column;gap:22px}
+.pair .paper{width:78%;transform:rotate(-2deg)}
+.pair .chief{width:78%;align-self:flex-end;margin-top:-26px}
+@media (max-width:760px){.pair .paper{width:100%;transform:none}.pair .chief{width:100%;margin-top:0}.kio-scr{aspect-ratio:auto !important}.kio-body{flex-direction:column}.kio-body .k-push{margin-top:6px !important}}
+</style>
+<style>
+{{CHURCH_CSS}}
+.mc-strip a{color:#F5F6F8;font-weight:600;text-decoration:underline;text-underline-offset:4px;white-space:nowrap}
+</style>
+{{PIXEL}}
+</head>
+<body>
+<div class="pg" style="--p: #F97316; --pl: #FDBA74; --pd: #C2410C; --pg: rgba(249,115,22,0.28); --pt: #FFF4EA; --pf: rgba(249,115,22,0.15)">
+
+<!-- The Solutionist frame, lit in this room's colour -->
+<div class="strip"><div class="wrap strip-in">
+<a href="{{HOME}}/" data-home style="display: flex; align-items: center; gap: 8px; color: #F5F6F8; text-decoration: none">
+<svg width="8" height="13" viewBox="0 0 8 13" fill="none" stroke="#959BA8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6.5 1.5 1.5 6.5l5 5"></path></svg>
+<svg width="20" height="17" viewBox="8 36 496 424" aria-hidden="true"><defs><linearGradient id="mkg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#E040FB"></stop><stop offset=".55" stop-color="#7C5CFF"></stop><stop offset="1" stop-color="#22D3EE"></stop></linearGradient></defs><g fill="url(#mkg)" stroke="#fff" stroke-width="8" stroke-opacity=".92"><polygon points="18,46 175,232 237,231 133,98 376,99 356,131 412,167 494,49"></polygon><polygon points="205,138 338,241 232,391 274,449 435,221 319,137"></polygon><polygon points="264,274 149,279 201,359"></polygon></g></svg>
+<span style="font-weight: 600" data-home-label>Solutionist home</span>
+</a>
+<nav aria-label="Solutionist" style="display: flex; flex-wrap: wrap; gap: 6px 22px">
+<a href="{{HOME}}/coaches">For coaches and consultants</a>
+<a href="{{HOME}}/">All of Solutionist</a>
+<a href="{{APP_URL}}" style="color: #F5F6F8">Sign in</a>
+</nav>
+</div></div>
+
+<!-- HERO -->
+<section style="position: relative; overflow: hidden">
+<div class="aur" aria-hidden="true"><i></i><i></i><i></i></div>
+<div class="floor" aria-hidden="true"></div>
+<div class="blade" aria-hidden="true"></div>
+
+<header class="wrap" style="position: relative; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 14px 32px; padding-top: 20px; padding-bottom: 18px">
+<a href="/churches" style="display: flex; align-items: baseline; gap: 10px; text-decoration: none; color: #F5F6F8">
+<span style="font-family: 'Inter Tight', sans-serif; font-weight: 700; font-size: 24px; letter-spacing: -0.02em">Solutionist</span>
+<span class="serif" style="font-size: 28px; color: #D9D2FF">Churches</span>
+</a>
+<nav aria-label="Churches" style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px 28px; font-size: 15px; font-weight: 500">
+<details class="pmenu"><summary>Products<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#E4E6EB" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg></summary><div class="pmenu-panel"><a href="/churches"><i style="background: linear-gradient(135deg, #E040FB, #7C5CFF 55%, #22D3EE)"></i><b>Overview</b><span>Every part of church life</span></a><a href="/churches/people-and-care"><i style="background: #14B8A6"></i><b>People and Care</b><span>Shepherds, guests and prayer</span></a><a href="/churches/giving"><i style="background: #22C55E"></i><b>Giving</b><span>Your own Stripe, statements in January</span></a><a href="/churches/kids-and-youth" aria-current="page"><i style="background: #F97316"></i><b>Kids and Youth</b><span>Check-in, tags and safe pickup</span></a><a href="/churches/groups-and-classes"><i style="background: #3B82F6"></i><b>Groups and Classes</b><span>Chats, prayer walls and this week's study</span></a><a href="/churches/member-app"><i style="background: #EC4899"></i><b>Member App</b><span>The church in every pocket</span></a><a href="/churches/website-and-sermons"><i style="background: #EAB308"></i><b>Website and Sermons</b><span>Your front door, always open</span></a><a href="/churches/office-and-books"><i style="background: #94A3B8"></i><b>Office and Books</b><span>The books, and who sees giving</span></a></div></details>
+<a href="/churches#app" style="text-decoration: none; color: #E4E6EB">Member app</a>
+<a href="/churches#pricing" style="text-decoration: none; color: #E4E6EB">Pricing</a>
+<a href="{{HOME}}/start" class="btn btn-w btn-s">Start free</a>
+</nav>
+</header>
+
+<div class="wrap" style="position: relative">
+<div class="pbar">
+<div class="lock">
+<svg width="40" height="40" viewBox="0 0 48 48" aria-hidden="true"><defs><clipPath id="gt"><rect width="48" height="48" rx="12"></rect></clipPath></defs><g clip-path="url(#gt)" stroke="rgba(255,255,255,0.55)" stroke-width="1.1" stroke-linejoin="round"><polygon points="0,0 28,0 17,21 0,15" fill="#F97316"></polygon><polygon points="28,0 48,0 48,19 17,21" fill="#FDBA74"></polygon><polygon points="0,15 17,21 9,48 0,48" fill="#C2410C"></polygon><polygon points="17,21 48,19 48,48 9,48" fill="#F97316"></polygon><polygon points="17,21 33,31 24,48 9,48" fill="#C2410C" fill-opacity="0.6"></polygon></g><g transform="translate(12 12)" fill="none" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6z"></path><path d="M9 12l2 2 4-4"></path></g></svg>
+<span style="display: flex; flex-direction: column; gap: 1px"><b>Kids and Youth</b><span>Solutionist for Churches</span></span>
+</div>
+<nav aria-label="In this room">
+<span class="mono" style="font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: rgba(255,255,255,0.6)">In this room</span>
+<a href="#checkin">Check-in</a>
+<a href="#pickup">Pickup</a>
+<a href="#parents">For parents</a>
+<a href="#youth">Youth</a>
+</nav>
+</div>
+</div>
+
+<div class="wrap" style="position: relative; padding-top: 72px; padding-bottom: 40px; display: flex; flex-direction: column; gap: 28px">
+<p class="eyebrow" style="color: #FDBA74; display: flex; align-items: center; gap: 10px"><span class="ping" style="background: #F97316"></span>Kids and Youth</p>
+<h1 class="h1" style="max-width: 1080px">Every child in. <span class="serif glint" style="font-size: 1.06em; white-space: nowrap">Every child home.</span></h1>
+<div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; gap: 24px 48px">
+<p class="lede" style="max-width: 640px">Check children in at the desk, on a tablet, or at a kiosk families use themselves. Name tags print, the parent gets a pickup code by text, and a child goes home only with someone on the family's list.</p>
+<div style="display: flex; flex-wrap: wrap; gap: 12px">
+<a href="{{HOME}}/start" class="btn btn-w">{{CTA_START}}</a>
+<a href="#checkin" class="btn btn-l">See check-in</a>
+</div>
+</div>
+<div class="facts">
+<div class="fact"><svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#FDBA74" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12V4h8l10 10-8 8z"></path><circle cx="7.5" cy="8.5" r="1.5"></circle></svg><span><b>Tags and a texted code</b><span>Both, every Sunday</span></span></div>
+<div class="fact"><svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#FDBA74" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6z"></path><path d="M9 12l2 2 4-4"></path></svg><span><b>Only the family's list</b><span>Pickup is checked, every time</span></span></div>
+<div class="fact"><svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#FDBA74" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"></rect><path d="M8 11V8a4 4 0 0 1 8 0v3"></path></svg><span><b>Notes stay with the office</b><span>Medical and custody, never on the floor</span></span></div>
+</div>
+</div>
+
+<!-- The devices: the welcome desk station, and a parent's Sunday pass -->
+<div class="wrap" style="position: relative; padding-bottom: 80px">
+<div class="stage" style="aspect-ratio: 1.96" aria-label="The kids check-in station on a tablet, and a parent's pickup code on a phone. Sample data.">
+<div class="st-tab" style="position: absolute; left: 3%; top: 0; width: 66%">
+<div class="dv-tab"><div style="aspect-ratio: 4 / 3">
+<div class="k2">
+<div class="k2-top" style="gap: 10px; padding: 12px 16px">
+<span style="width: 26px; height: 26px; border-radius: 8px; background: #f28c28; display: grid; place-items: center"><svg width="15" height="15" viewBox="0 0 24 24" fill="#fff" aria-hidden="true"><path d="m12 2.5 2.9 5.9 6.6 1-4.8 4.6 1.1 6.5L12 17.4l-5.9 3.1 1.1-6.5-4.8-4.6 6.6-1z"></path></svg></span>
+<b class="fk" style="font-size: 17px; font-weight: 700">Kids check-in</b>
+<span style="font-size: 11px; font-weight: 600; padding: 4px 10px; border-radius: 999px; background: #fbefd9; color: #65533f">Welcome desk</span>
+<span style="margin-left: auto; font-size: 11px; font-weight: 600; color: #65533f">Sunday Gathering · 11:00</span>
+<span style="display: flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 600; padding: 4px 10px; border-radius: 999px; background: #dcf5e6; color: #17663b"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#17663b" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2"></rect><path d="M8 11V8a4 4 0 0 1 7.5-2"></path></svg>Unlocked with the PIN</span>
+</div>
+<div style="flex: 1; display: flex; gap: 16px; padding: 14px 16px; min-height: 0">
+<div style="flex: 1.3; min-width: 0; display: flex; flex-direction: column; gap: 10px">
+<div style="display: flex; align-items: center; gap: 8px; height: 38px; padding: 0 12px; border-radius: 12px; background: #fff; border: 1.5px solid #f28c28; font-size: 14px"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#7a6650" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="M20 20l-3.5-3.5"></path></svg>Brooks</div>
+<span style="font-size: 10.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #7a6650">Tom and Lisa Brooks</span>
+<div class="k2-kid" style="gap: 12px; padding: 10px 12px; border-radius: 14px; border-width: 2px"><span class="k2-face" style="width: 40px; height: 40px; font-size: 16px; background: #FFD66B">M</span><span style="display: flex; flex-direction: column; min-width: 0"><b style="font-size: 15px; font-weight: 700">Maya, 7</b><span style="font-size: 12px; color: #65533f">Big Kids</span></span><span class="k2-tog"></span></div>
+<div class="k2-kid" style="gap: 12px; padding: 10px 12px; border-radius: 14px; border-width: 2px"><span class="k2-face" style="width: 40px; height: 40px; font-size: 16px; background: #8FD3FF">E</span><span style="display: flex; flex-direction: column; min-width: 0"><b style="font-size: 15px; font-weight: 700">Eli, 4</b><span style="font-size: 12px; color: #65533f">Little Lambs</span></span><span class="k2-tog"></span></div>
+<div style="display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 14px; background: #fbefd9; font-size: 12.5px"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#65533f" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20.5l1.4-4.9A8 8 0 1 1 21 12z"></path></svg><span style="flex: 1; display: flex; flex-direction: column"><b style="font-weight: 650">Text the pickup code to Lisa</b><span style="font-size: 11px; color: #65533f">(216) ••• 0144</span></span><span class="k2-tog"></span></div>
+<div style="margin-top: auto; display: flex; align-items: center; justify-content: center; gap: 8px; height: 46px; border-radius: 999px; background: #f28c28; color: #2a1206; font-size: 15px; font-weight: 750"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#2a1206" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9V3h12v6"></path><rect x="4" y="9" width="16" height="8" rx="2"></rect><path d="M7 14h10v7H7z"></path></svg>Check in 2 and print tags</div>
+</div>
+<div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 10px">
+<span style="font-size: 10.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #7a6650">The tags</span>
+<div class="tag" style="transform: rotate(-2deg)">
+<b style="font-size: 17px; font-weight: 800; letter-spacing: -0.02em">MAYA BROOKS</b>
+<span style="font-size: 11px; color: #65533f">Big Kids · Sunday Gathering</span>
+<span style="display: flex; justify-content: space-between; align-items: flex-end; margin-top: 6px; padding-top: 6px; border-top: 1px dashed #f1e3c7"><span style="font-size: 10px; color: #65533f">Sun, Oct 25 · 11:00</span><b class="fk" style="font-size: 22px; font-weight: 700; letter-spacing: 0.08em">7KQ4</b></span>
+</div>
+<div class="tag" style="transform: rotate(1.5deg); border-left-color: #2b1d0e">
+<span style="font-size: 9.5px; font-weight: 800; letter-spacing: 0.1em; text-transform: uppercase; color: #65533f">Parent tag · keep this</span>
+<span style="display: flex; justify-content: space-between; align-items: center"><b style="font-size: 14px; font-weight: 750">Maya and Eli</b><b class="fk" style="font-size: 22px; font-weight: 700; letter-spacing: 0.08em">7KQ4</b></span>
+<span style="font-size: 10px; color: #65533f">Show this code at pickup</span>
+</div>
+<span style="margin-top: 4px; font-size: 10.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #7a6650">Rooms now</span>
+<div style="display: flex; flex-direction: column; gap: 6px; font-size: 13px">
+<div style="display: flex; justify-content: space-between"><span>Little Lambs</span><b>9</b></div>
+<div style="display: flex; justify-content: space-between"><span>Preschool</span><b>11</b></div>
+<div style="display: flex; justify-content: space-between"><span>Big Kids</span><b>14</b></div>
+</div>
+</div>
+</div>
+</div>
+</div></div>
+</div>
+
+<div class="st-ph" style="position: absolute; right: 5%; bottom: 0; width: 21%">
+<div class="dv-ph"><span class="dv-island"></span><div class="ma kx" style="aspect-ratio: 9 / 19.2">
+<div class="ma-in" style="overflow: hidden">
+<div class="ma-top"><span style="display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 9px; border-radius: 999px; background: #fbefd9; font-size: 9.5px; font-weight: 700; color: #65533f">Kids<svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="#65533f" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg></span><span class="ma-me" style="background: #f0dfbd; color: #65533f">L</span></div>
+<div class="k-h" style="font-size: 21px">Hi, <em>Lisa</em></div>
+<div style="display: flex; gap: 6px">
+<span style="display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 11px 0 3px; border-radius: 999px; background: #fff; border: 1.5px solid #f0dfbd; font-size: 10.5px; font-weight: 650"><span class="k-dot" style="width: 24px; height: 24px; background: #ff6b6b; color: #2b1d0e">M</span>Maya, 7</span>
+<span style="display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 11px 0 3px; border-radius: 999px; background: #fff; border: 1.5px solid #f0dfbd; font-size: 10.5px; font-weight: 650"><span class="k-dot" style="width: 24px; height: 24px; background: #3cc47c; color: #0b2540">E</span>Eli, 4</span>
+</div>
+<div style="position: relative; overflow: hidden; border-radius: 18px; background: #ffc83d; color: #2b1d0e; padding: 11px; display: flex; flex-direction: column; gap: 4px; flex: none">
+<span style="position: absolute; right: -40px; top: -40px; width: 110px; height: 110px; border-radius: 50%; background: rgba(255,255,255,0.3)"></span>
+<span class="k-kick" style="position: relative">Checked in</span>
+<b class="fk" style="position: relative; font-size: 16px; font-weight: 700">Pickup code</b>
+<div style="position: relative; display: flex; gap: 5px; margin: 3px 0">
+<b class="fk" style="width: 32px; height: 38px; border-radius: 10px; background: #fff; display: grid; place-items: center; font-size: 21px; font-weight: 700">7</b><b class="fk" style="width: 32px; height: 38px; border-radius: 10px; background: #fff; display: grid; place-items: center; font-size: 21px; font-weight: 700">K</b><b class="fk" style="width: 32px; height: 38px; border-radius: 10px; background: #fff; display: grid; place-items: center; font-size: 21px; font-weight: 700">Q</b><b class="fk" style="width: 32px; height: 38px; border-radius: 10px; background: #fff; display: grid; place-items: center; font-size: 21px; font-weight: 700">4</b>
+</div>
+<span style="position: relative; font-size: 8.5px; line-height: 1.35">Show this code at pickup. It matches the tag and the text.</span>
+<div style="position: relative; margin-top: 2px; padding: 1px 9px; border-radius: 11px; background: #fff; font-size: 8.5px">
+<div style="display: flex; justify-content: space-between; padding: 4px 0"><b>Maya</b><span style="color: #65533f">Big Kids · in at 10:52 AM</span></div>
+<div style="display: flex; justify-content: space-between; padding: 4px 0; border-top: 1px solid #f3e6cc"><b>Eli</b><span style="color: #65533f">Little Lambs · in at 10:52 AM</span></div>
+</div>
+</div>
+<div style="display: flex; align-items: center; gap: 9px; padding: 11px; border-radius: 18px; background: #4cc3ff; color: #08304a; box-shadow: 0 3px 0 #2aa3dd">
+<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#08304a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M10 8.5l5 3.5-5 3.5z"></path></svg>
+<span style="display: flex; flex-direction: column"><b class="fk" style="font-size: 14px; font-weight: 700">Kids mode</b><span style="font-size: 8.5px; line-height: 1.35">The story, a verse game and drawing. A grown-up holds a button to leave.</span></span>
+</div>
+</div>
+<div class="ma-tabs kt">
+<span class="on"><svg viewBox="0 0 24 24"><path d="m12 2.5 2.9 5.9 6.6 1-4.8 4.6 1.1 6.5L12 17.4l-5.9 3.1 1.1-6.5-4.8-4.6 6.6-1z"></path></svg>Kids</span>
+<span><svg viewBox="0 0 24 24"><rect x="2.5" y="4" width="19" height="13" rx="3"></rect><path d="m10.5 8.3 4 2.2-4 2.2z"></path><path d="M8 21h8"></path></svg>Watch</span>
+<span><svg viewBox="0 0 24 24"><path d="M2 4h6a4 4 0 0 1 4 4v13a3 3 0 0 0-3-3H2z"></path><path d="M22 4h-6a4 4 0 0 0-4 4v13a3 3 0 0 1 3-3h7z"></path></svg>Stories</span>
+<span><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="3"></rect><path d="M16 2v4M8 2v4M3 10h18"></path></svg>Sundays</span>
+<span><svg viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"></path></svg>Family</span>
+</div>
+</div></div>
+</div>
+</div>
+</div>
+</section>
+
+<!-- CHECK-IN: THREE WAYS IN -->
+<section id="checkin" class="sec light">
+<div class="wrap split">
+<div class="txt">
+<p class="eyebrow ink">Check-in</p>
+<h2 class="h2">Three ways in. <span class="serif ink" style="font-size: 1.08em">One set of rules.</span></h2>
+<p class="body">Your team checks children in from the app. A tablet at the welcome desk unlocks with a PIN and locks itself again after 30 minutes. And a kiosk lets a family check in on their own: a parent types their mobile number and taps their children.</p>
+<ul class="ticks">
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Name tags print the moment they're in</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>The pickup code is texted to the parent who brought them</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>A brother or sister checked in later keeps the family's code</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>The kiosk can't search names, list families or release anyone</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Pair a tablet once with a code; retire it with one tap</span></li>
+</ul>
+</div>
+<div class="vis" style="display: flex; flex-direction: column; gap: 18px">
+<div class="dv-tab" aria-label="Sample of the family self check-in kiosk"><div class="kio-scr" style="aspect-ratio: 4 / 3">
+<div class="k2">
+<div class="k2-top" style="gap: 10px; padding: 12px 16px">
+<span style="width: 26px; height: 26px; border-radius: 8px; background: #f28c28; display: grid; place-items: center"><svg width="15" height="15" viewBox="0 0 24 24" fill="#fff" aria-hidden="true"><path d="m12 2.5 2.9 5.9 6.6 1-4.8 4.6 1.1 6.5L12 17.4l-5.9 3.1 1.1-6.5-4.8-4.6 6.6-1z"></path></svg></span>
+<b class="fk" style="font-size: 17px; font-weight: 700">Family check-in</b>
+<span style="margin-left: auto; font-size: 11.5px; font-weight: 600; color: #65533f">Sunday Gathering · 11:00</span>
+</div>
+<div class="kio-body" style="flex: 1; display: flex; gap: 18px; padding: 16px 18px; min-height: 0">
+<div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 10px">
+<b class="fk" style="font-size: 19px; font-weight: 700; line-height: 1.1">Welcome! Type your mobile number</b>
+<div style="display: flex; align-items: center; justify-content: center; height: 44px; border-radius: 12px; background: #fff; border: 1.5px solid #f28c28; font-size: 19px; font-weight: 650; letter-spacing: 0.04em">(216) 555-0144</div>
+<div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px">
+<span class="key">1</span><span class="key">2</span><span class="key">3</span><span class="key">4</span><span class="key">5</span><span class="key">6</span><span class="key">7</span><span class="key">8</span><span class="key">9</span><span class="key" style="font-size: 12px; color: #65533f">Clear</span><span class="key">0</span><span class="key"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#2b1d0e" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 5H9l-6 7 6 7h12z"></path><path d="M16 10l-4 4M12 10l4 4"></path></svg></span>
+</div>
+</div>
+<div style="flex: 1.05; min-width: 0; display: flex; flex-direction: column; gap: 10px">
+<b class="fk" style="font-size: 22px; font-weight: 700; line-height: 1.05">Hi, Brooks family</b>
+<span style="font-size: 13px; color: #65533f">Who's here today?</span>
+<div style="display: flex; align-items: center; gap: 12px; padding: 12px; border-radius: 16px; background: #fff; border: 2px solid #f28c28"><span class="k2-face" style="width: 42px; height: 42px; font-size: 17px; background: #FFD66B">M</span><b style="flex: 1; font-size: 16px; font-weight: 700">Maya</b><span style="width: 26px; height: 26px; border-radius: 8px; background: #f28c28; display: grid; place-items: center"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#2a1206" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg></span></div>
+<div style="display: flex; align-items: center; gap: 12px; padding: 12px; border-radius: 16px; background: #fff; border: 2px solid #f28c28"><span class="k2-face" style="width: 42px; height: 42px; font-size: 17px; background: #8FD3FF">E</span><b style="flex: 1; font-size: 16px; font-weight: 700">Eli</b><span style="width: 26px; height: 26px; border-radius: 8px; background: #f28c28; display: grid; place-items: center"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#2a1206" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg></span></div>
+<div class="k-push" style="margin-top: auto; display: flex; align-items: center; justify-content: center; height: 48px; border-radius: 999px; background: #f28c28; color: #2a1206; font-size: 15px; font-weight: 750">Check in and print tags</div>
+<span style="text-align: center; font-size: 11.5px; color: #65533f">Your pickup code comes by text to this number.</span>
+</div>
+</div>
+</div>
+</div></div>
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px">
+<div class="way"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#C2410C" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="7" y="2.5" width="10" height="19" rx="2.5"></rect><path d="M11 18.5h2"></path></svg><b>Your team, in the app</b><span>Find a family, check them in, print the tags.</span></div>
+<div class="way"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#C2410C" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="14" rx="2.5"></rect><path d="M9 21h6"></path><path d="M10 11V9.5a2 2 0 0 1 4 0V11"></path><rect x="9" y="11" width="6" height="4" rx="1"></rect></svg><b>A station at the desk</b><span>No login. A volunteer unlocks it with the PIN.</span></div>
+<div class="way"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#C2410C" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="2.5" width="14" height="13" rx="2"></rect><path d="M12 15.5V21M8 21h8"></path><path d="M9 7h6M9 10.5h4"></path></svg><b>A kiosk for families</b><span>A mobile number and a tap. Tags print, the code texts.</span></div>
+</div>
+</div>
+</div>
+</section>
+
+<!-- PICKUP -->
+<section id="pickup" class="sec" style="background: #07080B">
+<div class="wrap split" style="flex-wrap: wrap-reverse">
+<div class="vis" style="display: flex; flex-direction: column; gap: 18px">
+<div style="display: flex; flex-wrap: wrap; gap: 22px; justify-content: center; align-items: flex-start">
+<div style="flex: 0 1 268px; min-width: 230px">
+<div class="dv-ph"><span class="dv-island"></span><div class="ma kx" style="aspect-ratio: 9 / 19" aria-label="Sample of a Kids leader's room roster in the member app">
+<div class="ma-in" style="overflow: hidden">
+<div class="k-h" style="font-size: 22px">Big Kids<br><span style="font-size: 15px; color: #65533f">Sunday Gathering</span></div>
+<div style="display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-radius: 14px; background: #dcf5e6; color: #17663b; font-size: 10.5px"><span>Today</span><b class="fk" style="margin-left: auto; font-size: 15px">14 kids in</b><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#17663b" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg></div>
+<div class="k-card" style="overflow: hidden">
+<div class="k-row"><span class="k-dot" style="background: #ff6b6b; color: #2b1d0e">M</span><span style="min-width: 0; display: flex; flex-direction: column"><b style="font-size: 11px">Maya B.</b><span style="font-size: 9px; color: #65533f">In at 10:52 AM</span></span><span class="k-flag" style="background: #dcf5e6; color: #17663b">Ready</span></div>
+<div class="k-row"><span class="k-dot" style="background: #3cc47c; color: #0b2540">J</span><span style="min-width: 0; display: flex; flex-direction: column"><b style="font-size: 11px">Jonah T.</b><span style="font-size: 9px; color: #65533f">In at 10:55 AM</span></span><span class="k-flag" style="background: #ffe1e1; color: #a3191f">Peanuts</span></div>
+<div class="k-row"><span class="k-dot" style="background: #7c5cff; color: #ffffff">A</span><span style="min-width: 0; display: flex; flex-direction: column"><b style="font-size: 11px">Ava K.</b><span style="font-size: 9px; color: #65533f">In at 10:58 AM</span></span><span class="k-flag" style="background: #fff0c7; color: #7a4e00">Office at pickup</span></div>
+<div class="k-row"><span class="k-dot" style="background: #4cc3ff; color: #08304a">L</span><span style="min-width: 0; display: flex; flex-direction: column"><b style="font-size: 11px">Leo M.</b><span style="font-size: 9px; color: #65533f">Out at 12:20 PM</span></span><span class="k-flag" style="background: #fbefd9; color: #65533f">Home with Dana</span></div>
+</div>
+<b class="fk" style="font-size: 15px; font-weight: 700; margin-top: 2px">Pickup</b>
+<div style="display: flex; gap: 6px"><span style="flex: 1; display: flex; align-items: center; height: 30px; padding: 0 10px; border-radius: 10px; background: #fff; border: 1px solid #f0dfbd; font-size: 10px; color: #7a6650">4-letter code</span><span class="k-btn">Check</span></div>
+<div style="display: flex; gap: 7px; align-items: flex-start; padding: 9px 10px; border-radius: 12px; background: #fff3d6; font-size: 8.5px; line-height: 1.4"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#9a6200" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex: none; margin-top: 1px"><path d="M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6z"></path></svg><span>You see first names and allergies. Medical and custody notes stay with the church office. Background check on file, Aug 2026.</span></div>
+</div>
+<div class="ma-tabs kt">
+<span class="on"><svg viewBox="0 0 24 24"><path d="m12 2.5 2.9 5.9 6.6 1-4.8 4.6 1.1 6.5L12 17.4l-5.9 3.1 1.1-6.5-4.8-4.6 6.6-1z"></path></svg>Room</span>
+<span><svg viewBox="0 0 24 24"><rect x="2.5" y="4" width="19" height="13" rx="3"></rect><path d="m10.5 8.3 4 2.2-4 2.2z"></path><path d="M8 21h8"></path></svg>Watch</span>
+<span><svg viewBox="0 0 24 24"><path d="M2 4h6a4 4 0 0 1 4 4v13a3 3 0 0 0-3-3H2z"></path><path d="M22 4h-6a4 4 0 0 0-4 4v13a3 3 0 0 1 3-3h7z"></path></svg>Stories</span>
+</div>
+</div></div>
+</div>
+<div style="flex: 0 1 268px; min-width: 230px; margin-top: 40px">
+<div class="dv-ph"><span class="dv-island"></span><div class="ma kx" style="aspect-ratio: 9 / 19" aria-label="Sample of a pickup check in the member app">
+<div class="ma-in" style="overflow: hidden">
+<span style="font-size: 10px; font-weight: 600; color: #B4590A">Room</span>
+<div class="k-h">Pickup</div>
+<div class="k-card" style="padding: 12px; display: flex; flex-direction: column; gap: 8px">
+<span class="k-kick" style="color: #65533f">Code 7KQ4 · The Brooks family</span>
+<span style="display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 11px; background: #fff8ec; border: 1.5px solid #f28c28"><span style="width: 15px; height: 15px; border-radius: 4px; background: #f28c28; display: grid; place-items: center"><svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="#2a1206" stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg></span><b style="font-size: 11px">Maya B.</b><span style="font-size: 9.5px; color: #65533f">Big Kids</span></span>
+<b style="font-size: 11px; margin-top: 2px">Going home with</b>
+<span style="display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 11px; border: 1.5px solid #f28c28; background: #fff8ec"><span style="width: 14px; height: 14px; border-radius: 50%; border: 4.5px solid #f28c28; background: #fff; flex: none"></span><b style="font-size: 11px">Lisa Brooks</b><span style="margin-left: auto; font-size: 9.5px; color: #65533f">mother</span></span>
+<span style="display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 11px; border: 1px solid #f1e3c7"><span style="width: 14px; height: 14px; border-radius: 50%; border: 1.5px solid #b9a789; flex: none"></span><b style="font-size: 11px">Tom Brooks</b><span style="margin-left: auto; font-size: 9.5px; color: #65533f">father</span></span>
+<span style="display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 11px; border: 1px solid #f1e3c7"><span style="width: 14px; height: 14px; border-radius: 50%; border: 1.5px solid #b9a789; flex: none"></span><b style="font-size: 11px">June Brooks</b><span style="margin-left: auto; font-size: 9.5px; color: #65533f">grandmother</span></span>
+<span class="k-btn" style="height: 34px; margin-top: 2px">Release</span>
+<span style="font-size: 8.5px; line-height: 1.4; color: #65533f">Only someone on the family's list. Anyone else: the church office decides.</span>
+</div>
+<span style="font-size: 9px; line-height: 1.4; color: #65533f">Eli (Little Lambs): pickup is at their room.</span>
+</div>
+<div class="ma-tabs kt">
+<span class="on"><svg viewBox="0 0 24 24"><path d="m12 2.5 2.9 5.9 6.6 1-4.8 4.6 1.1 6.5L12 17.4l-5.9 3.1 1.1-6.5-4.8-4.6 6.6-1z"></path></svg>Room</span>
+<span><svg viewBox="0 0 24 24"><rect x="2.5" y="4" width="19" height="13" rx="3"></rect><path d="m10.5 8.3 4 2.2-4 2.2z"></path><path d="M8 21h8"></path></svg>Watch</span>
+<span><svg viewBox="0 0 24 24"><path d="M2 4h6a4 4 0 0 1 4 4v13a3 3 0 0 0-3-3H2z"></path><path d="M22 4h-6a4 4 0 0 0-4 4v13a3 3 0 0 1 3-3h7z"></path></svg>Stories</span>
+</div>
+</div></div>
+</div>
+</div>
+<div style="display: flex; align-items: flex-start; gap: 12px; padding: 16px 18px; border-radius: 18px; background: #14110D; border: 1px solid rgba(253,186,116,0.3)">
+<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#FDBA74" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex: none; margin-top: 1px"><path d="M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6z"></path><path d="M12 8v5M12 16h.01"></path></svg>
+<span style="display: flex; flex-direction: column; gap: 3px"><b style="font-size: 15px; font-weight: 600">When a family has a custody note</b><span style="font-size: 14px; line-height: 1.5; color: #C9CDD6">The leader sees: "This family has a note with the church office. A manager releases these children. Keep them with you and get the office."</span></span>
+</div>
+</div>
+<div class="txt">
+<p class="eyebrow" style="color: #FDBA74">Pickup</p>
+<h2 class="h2">Pickup, <span class="serif glint" style="font-size: 1.08em">checked every time.</span></h2>
+<p class="body">At pickup, a leader types the code from the parent's tag or text. They see the children waiting with that code, and the only people those children may go home with: the family's adults and its pickup list. Who took them home goes on the record.</p>
+<ul class="ticks" style="color: #D5D8DF">
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>A volunteer releases only to someone on the list</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>A family with a custody note waits for a manager to release them</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Kids leaders see first names and allergies, never medical or custody notes</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Every leader approved by the office, with the date of their background check</span></li>
+</ul>
+</div>
+</div>
+</section>
+
+<!-- FOR PARENTS: THE KIDS SPACE -->
+<section id="parents" class="sec tint">
+<div class="wrap split">
+<div class="txt">
+<p class="eyebrow ink">For parents</p>
+<h2 class="h2">Sunday, <span class="serif ink" style="font-size: 1.08em">followed home.</span></h2>
+<p class="body">Parents switch to the Kids space in your member app. The pickup code waits there while their children are in. After church they find what each child learned, posted by the room's leader: the story, the memory verse and questions for dinner.</p>
+<ul class="ticks">
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Past Sundays: the room, and who they went home with</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Who can pick up, and each child's allergies, in one place</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Kids mode: the Bible story read aloud, a memory verse game and a drawing pad</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>No messages and no links out. A grown-up holds a button for three seconds to leave</span></li>
+</ul>
+</div>
+<div class="vis" style="display: flex; flex-wrap: wrap; gap: 22px; justify-content: center; align-items: flex-start">
+<div style="flex: 0 1 268px; min-width: 230px; margin-top: 40px">
+<div class="dv-ph"><span class="dv-island"></span><div class="ma kx" style="aspect-ratio: 9 / 19" aria-label="Sample of this week's lesson for parents in the Kids space">
+<div class="ma-in" style="overflow: hidden">
+<div class="k-h">Stories</div>
+<div class="k-card" style="padding: 13px; display: flex; flex-direction: column; gap: 6px">
+<span class="k-kick" style="color: #0a6f9e">Oct 25 · Big Kids · Ms. Carla</span>
+<b class="fk" style="font-size: 18px; font-weight: 700; line-height: 1.1">David and Goliath</b>
+<span style="margin-top: -3px; font-size: 9.5px; color: #65533f">1 Samuel 17</span>
+<span style="font-size: 10.5px; line-height: 1.45">Being brave because God is with you.</span>
+<div style="padding: 9px 11px; border-radius: 12px; background: #fdf0d9; font-family: 'Newsreader', serif; font-style: italic; font-size: 13px; line-height: 1.3">What time I am afraid, I will trust in thee.<span style="display: block; margin-top: 3px; font-family: 'Geist', sans-serif; font-style: normal; font-size: 9px; color: #65533f">Psalm 56:3</span></div>
+<b style="font-size: 10.5px; margin-top: 3px">Questions for dinner</b>
+<ol style="margin: 0; padding-left: 16px; font-size: 10px; line-height: 1.5">
+<li>What was David's giant?</li>
+<li>When do you need to be brave?</li>
+</ol>
+</div>
+<div style="display: flex; align-items: center; gap: 9px; padding: 11px; border-radius: 18px; background: #4cc3ff; color: #08304a; box-shadow: 0 3px 0 #2aa3dd">
+<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#08304a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M10 8.5l5 3.5-5 3.5z"></path></svg>
+<span style="display: flex; flex-direction: column"><b class="fk" style="font-size: 14px; font-weight: 700">Kids mode</b><span style="font-size: 8.5px; line-height: 1.35">The story, a verse game and drawing.</span></span>
+</div>
+<div class="k-card" style="padding: 12px 13px; display: flex; flex-direction: column; gap: 4px">
+<span class="k-kick" style="color: #0a6f9e">Oct 25 · Little Lambs · Mr. Ben</span>
+<b class="fk" style="font-size: 16px; font-weight: 700; line-height: 1.1">Noah and the rainbow</b>
+<span style="font-size: 10.5px; line-height: 1.45">God always keeps his promises.</span>
+</div>
+</div>
+<div class="ma-tabs kt">
+<span><svg viewBox="0 0 24 24"><path d="m12 2.5 2.9 5.9 6.6 1-4.8 4.6 1.1 6.5L12 17.4l-5.9 3.1 1.1-6.5-4.8-4.6 6.6-1z"></path></svg>Kids</span>
+<span><svg viewBox="0 0 24 24"><rect x="2.5" y="4" width="19" height="13" rx="3"></rect><path d="m10.5 8.3 4 2.2-4 2.2z"></path><path d="M8 21h8"></path></svg>Watch</span>
+<span class="on"><svg viewBox="0 0 24 24"><path d="M2 4h6a4 4 0 0 1 4 4v13a3 3 0 0 0-3-3H2z"></path><path d="M22 4h-6a4 4 0 0 0-4 4v13a3 3 0 0 1 3-3h7z"></path></svg>Stories</span>
+<span><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="3"></rect><path d="M16 2v4M8 2v4M3 10h18"></path></svg>Sundays</span>
+<span><svg viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"></path></svg>Family</span>
+</div>
+</div></div>
+</div>
+<div style="flex: 0 1 268px; min-width: 230px">
+<div class="dv-ph"><span class="dv-island"></span><div class="ma" style="position: relative; aspect-ratio: 9 / 19; background: #4cc3ff; color: #0b2540" aria-label="Sample of Kids mode, the child's own screen">
+<span style="position: absolute; right: -60px; top: -60px; width: 170px; height: 170px; border-radius: 50%; background: #ffc83d"></span>
+<span style="position: absolute; left: -50px; bottom: 90px; width: 120px; height: 120px; border-radius: 50%; background: #ff6b6b; opacity: 0.9"></span>
+<div class="ma-in" style="position: relative; gap: 9px">
+<span style="align-self: flex-start; display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 12px; border-radius: 999px; background: #fff; font-size: 10.5px; font-weight: 700; color: #0b2540"><svg width="12" height="12" viewBox="0 0 24 24" fill="#f2a100" aria-hidden="true"><path d="m12 2.5 2.9 5.9 6.6 1-4.8 4.6 1.1 6.5L12 17.4l-5.9 3.1 1.1-6.5-4.8-4.6 6.6-1z"></path></svg>3 stars this week</span>
+<b class="fk" style="font-size: 32px; font-weight: 700; line-height: 1; margin-top: 6px">Hi, Maya!</b>
+<span style="font-size: 11.5px; font-weight: 600">What do you want to do?</span>
+<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 4px">
+<span style="grid-column: 1 / -1; min-height: 86px; border-radius: 20px; padding: 12px; display: flex; flex-direction: column; justify-content: flex-end; gap: 2px; background: #ff6b6b; color: #2b1d0e"><b class="fk" style="font-size: 16px; font-weight: 700; line-height: 1.05">Today's Bible story</b><span style="font-size: 9.5px; font-weight: 600">David and Goliath · listen</span></span>
+<span style="min-height: 100px; border-radius: 20px; padding: 12px; display: flex; flex-direction: column; justify-content: flex-end; gap: 2px; background: #3cc47c; color: #0b2540"><b class="fk" style="font-size: 15px; font-weight: 700; line-height: 1.05">Memory verse game</b><span style="font-size: 9px; font-weight: 600">Fill in the words</span></span>
+<span style="min-height: 100px; border-radius: 20px; padding: 12px; display: flex; flex-direction: column; justify-content: flex-end; gap: 2px; background: #7c5cff; color: #ffffff"><b class="fk" style="font-size: 15px; font-weight: 700; line-height: 1.05">Draw the story</b><span style="font-size: 9px; font-weight: 600">Pick a crayon</span></span>
+</div>
+</div>
+<div style="position: relative; margin: 0 14px 16px; display: flex; align-items: center; justify-content: center; height: 36px; border-radius: 999px; background: #fff; font-size: 10px; font-weight: 700; color: #0b2540">Grown-ups: hold to leave Kids mode</div>
+</div></div>
+</div>
+</div>
+</div>
+</section>
+
+<!-- YOUTH -->
+<section id="youth" class="sec light" style="border-top: 1px solid #ECE7DE">
+<div class="wrap split" style="flex-wrap: wrap-reverse">
+<div class="vis" style="display: flex; flex-wrap: wrap; gap: 22px; justify-content: center; align-items: flex-start">
+<div style="flex: 0 1 268px; min-width: 230px">
+<div class="dv-ph"><span class="dv-island"></span><div class="ma" style="aspect-ratio: 9 / 19" aria-label="Sample of a teen's Youth home in the member app">
+<div class="ma-in" style="gap: 10px; overflow: hidden">
+<div class="ma-top"><span class="ma-mark">GF</span><span class="ma-me">T</span></div>
+<div class="yh" style="font-size: 30px">What's up,<br><span style="color: #d4ff3a">Tia</span></div>
+<div style="position: relative; overflow: hidden; border-radius: 20px; aspect-ratio: 350 / 300; transform: rotate(-0.8deg); background: radial-gradient(80% 70% at 85% 10%, rgba(212,255,58,0.55), transparent 60%), radial-gradient(70% 60% at 0% 100%, rgba(107,155,255,0.45), transparent 60%), linear-gradient(160deg, #1d1f24, #050506)">
+<span style="position: absolute; right: -8px; top: 6px; font-weight: 800; font-size: 96px; line-height: 1; letter-spacing: -0.06em; color: #ffffff; opacity: 0.1">FALL</span>
+<div style="position: absolute; left: 0; right: 0; bottom: 0; padding: 12px; display: flex; flex-direction: column; gap: 5px; background: linear-gradient(180deg, transparent, rgba(0,0,0,0.85))">
+<span style="align-self: flex-start; font-size: 8.5px; font-weight: 700; padding: 3px 8px; border-radius: 999px; background: rgba(255,255,255,0.16)">Friday · Oct 30</span>
+<b class="yh" style="font-size: 24px">Fall lock-in</b>
+<span style="font-size: 9.5px; color: rgba(255,255,255,0.82)">Fellowship hall</span>
+<span style="display: flex; align-items: center; gap: 8px; margin-top: 2px"><span style="display: inline-flex; align-items: center; height: 28px; padding: 0 13px; border-radius: 10px; background: #d4ff3a; color: #0b0b0b; font-size: 10px; font-weight: 800; letter-spacing: 0.04em; text-transform: uppercase; box-shadow: 3px 3px 0 #6B9BFF">I'm in</span><span style="font-size: 9.5px; color: rgba(255,255,255,0.82)">24 going</span></span>
+</div>
+</div>
+<span style="font-size: 10px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: #a8a8ae">From your leaders</span>
+<div class="ma-card" style="display: flex; flex-direction: column; gap: 3px"><b style="font-size: 10.5px">Pastor Dee</b><span style="font-size: 10.5px; color: #d6d6da">Rides leave at 6:30. Bring a friend!</span></div>
+<div class="ysafe"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#d4ff3a" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex: none; margin-top: 1px"><path d="M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6z"></path></svg><span>Your parents can read your chats. Group chats always have two adult leaders in them.</span></div>
+</div>
+<div class="ma-tabs">
+<span style="color: #d4ff3a"><svg viewBox="0 0 24 24"><path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"></path></svg>Home</span>
+<span><svg viewBox="0 0 24 24"><rect x="2.5" y="4" width="19" height="13" rx="3"></rect><path d="m10.5 8.3 4 2.2-4 2.2z"></path><path d="M8 21h8"></path></svg>Watch</span>
+<span><svg viewBox="0 0 24 24"><path d="M2 4h6a4 4 0 0 1 4 4v13a3 3 0 0 0-3-3H2z"></path><path d="M22 4h-6a4 4 0 0 0-4 4v13a3 3 0 0 1 3-3h7z"></path></svg>Bible</span>
+<span><svg viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20.5l1.4-4.9A8 8 0 1 1 21 12z"></path></svg>Chats</span>
+<span><svg viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"></path></svg>Crew</span>
+</div>
+</div></div>
+</div>
+<div style="flex: 0 1 268px; min-width: 230px; margin-top: 40px">
+<div class="dv-ph"><span class="dv-island"></span><div class="ma" style="aspect-ratio: 9 / 19" aria-label="Sample of a youth leader's home in the member app">
+<div class="ma-in" style="gap: 10px; overflow: hidden">
+<div class="yh" style="font-size: 26px">Leading<br><span style="color: #d4ff3a">High School</span></div>
+<div class="ma-card" style="display: flex; flex-direction: column; gap: 7px">
+<b style="font-size: 10.5px">Post to Youth</b>
+<span style="min-height: 44px; padding: 8px 10px; border-radius: 10px; background: #222225; font-size: 10px; color: #a8a8ae">Rides leave at 6:30. Bring a friend!</span>
+<span style="align-self: flex-start; display: inline-flex; align-items: center; height: 26px; padding: 0 12px; border-radius: 9px; background: #d4ff3a; color: #0b0b0b; font-size: 9.5px; font-weight: 800; letter-spacing: 0.04em; text-transform: uppercase; box-shadow: 3px 3px 0 #6B9BFF">Post</span>
+<span style="font-size: 8.5px; line-height: 1.4; color: #a8a8ae">Everyone in Youth sees it on their Home. It's checked before it shows, like every message.</span>
+</div>
+<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px">
+<span class="ma-card" style="display: flex; flex-direction: column; gap: 2px; padding: 9px"><b style="font-size: 10px">Start a meeting</b><span style="font-size: 8.5px; color: #a8a8ae">Opens when a 2nd adult joins</span></span>
+<span class="ma-card" style="display: flex; flex-direction: column; gap: 2px; padding: 9px"><b style="font-size: 10px">Group chats</b><span style="font-size: 8.5px; color: #a8a8ae">The ones you lead</span></span>
+<span class="ma-card" style="display: flex; flex-direction: column; gap: 2px; padding: 9px"><b style="font-size: 10px">Who's coming</b><span style="font-size: 8.5px; color: #a8a8ae">Youth events</span></span>
+<span class="ma-card" style="display: flex; flex-direction: column; gap: 2px; padding: 9px"><b style="font-size: 10px">Your groups</b><span style="font-size: 8.5px; color: #a8a8ae">Meetings and members</span></span>
+</div>
+<div class="ysafe"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#d4ff3a" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex: none; margin-top: 1px"><path d="M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6z"></path></svg><span>Leaders talk with teens in group chats only, never one to one. Background check on file, Aug 2026.</span></div>
+</div>
+<div class="ma-tabs">
+<span style="color: #d4ff3a"><svg viewBox="0 0 24 24"><path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"></path></svg>Home</span>
+<span><svg viewBox="0 0 24 24"><rect x="2.5" y="4" width="19" height="13" rx="3"></rect><path d="m10.5 8.3 4 2.2-4 2.2z"></path><path d="M8 21h8"></path></svg>Watch</span>
+<span><svg viewBox="0 0 24 24"><path d="M2 4h6a4 4 0 0 1 4 4v13a3 3 0 0 0-3-3H2z"></path><path d="M22 4h-6a4 4 0 0 0-4 4v13a3 3 0 0 1 3-3h7z"></path></svg>Bible</span>
+<span><svg viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20.5l1.4-4.9A8 8 0 1 1 21 12z"></path></svg>Chats</span>
+<span><svg viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"></path></svg>Crew</span>
+</div>
+</div></div>
+</div>
+</div>
+<div class="txt">
+<p class="eyebrow ink">Youth</p>
+<h2 class="h2">Teens get <span class="serif ink" style="font-size: 1.08em">a space of their own.</span></h2>
+<p class="body">Teens 13 to 17 sign in themselves and land in Youth: their events, their crew, posts from their leaders and a verse for the day. Children under 13 never get a sign-in of their own; they come in through a parent's Kids space.</p>
+<ul class="ticks">
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Leaders talk with teens in group chats only, never one to one</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>A group chat with a teen opens only with two adult leaders in it</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Parents can read their teen's chats, and the teen is told</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>A leader's post is checked before it shows, like every message</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Its own colour: volt green, or one your church picks</span></li>
+</ul>
+</div>
+</div>
+</section>
+
+<!-- CHIEF IN THIS ROOM -->
+<section id="chief" class="sec" style="background: #07080B; overflow: hidden">
+<div class="aur" aria-hidden="true" style="opacity: 0.6"><i></i><i></i><i></i></div>
+<div class="wrap split" style="position: relative">
+<div class="txt">
+<p class="eyebrow" style="color: #FDBA74">Chief</p>
+<h2 class="h2">Chief counts heads, <span class="serif glint" style="font-size: 1.08em">not names.</span></h2>
+<p class="body">Ask Chief how many children came on Sunday and it answers from check-in, as numbers only. A child's name, room and notes stay with your Kids team and the office. Only the owner or a manager can ask, and Chief tells you which teams still need a leader.</p>
+<ul class="ticks" style="color: #D5D8DF">
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Children checked in, Sunday by Sunday</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Who leads Kids and Youth, and who they answer to</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>A role you ask for waits as a draft until you save it</span></li>
+</ul>
+</div>
+<div class="vis pair">
+<div class="paper" style="background: #FFFFFF; color: #0B0C11; border-radius: 8px; box-shadow: 0 40px 80px -30px rgba(0,0,0,0.7); padding: 24px 26px; display: flex; flex-direction: column; gap: 14px" aria-label="Sample count of children checked in each Sunday">
+<div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 10px"><span style="display: flex; flex-direction: column; gap: 2px"><b style="font-family: 'Inter Tight', sans-serif; font-size: 15px">Children checked in</b><span style="color: #5A5E6B; font-size: 12px">Grace Fellowship · the last six Sundays</span></span><span class="mono" style="font-size: 11px; color: #5A5E6B">NUMBERS ONLY</span></div>
+<div style="display: flex; align-items: flex-end; gap: 12px; height: 130px; padding-top: 6px; border-bottom: 1px solid #E5E5EB" aria-hidden="true">
+<span style="flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px"><span class="mono" style="font-size: 11px; color: #5A5E6B">29</span><span style="width: 100%; height: 76px; border-radius: 6px 6px 0 0; background: #FED7AA"></span></span>
+<span style="flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px"><span class="mono" style="font-size: 11px; color: #5A5E6B">33</span><span style="width: 100%; height: 86px; border-radius: 6px 6px 0 0; background: #FED7AA"></span></span>
+<span style="flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px"><span class="mono" style="font-size: 11px; color: #5A5E6B">30</span><span style="width: 100%; height: 78px; border-radius: 6px 6px 0 0; background: #FED7AA"></span></span>
+<span style="flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px"><span class="mono" style="font-size: 11px; color: #5A5E6B">35</span><span style="width: 100%; height: 91px; border-radius: 6px 6px 0 0; background: #FED7AA"></span></span>
+<span style="flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px"><span class="mono" style="font-size: 11px; color: #5A5E6B">31</span><span style="width: 100%; height: 81px; border-radius: 6px 6px 0 0; background: #FDBA74"></span></span>
+<span style="flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px"><b class="mono" style="font-size: 11px; color: #C2410C">38</b><span style="width: 100%; height: 99px; border-radius: 6px 6px 0 0; background: #F97316"></span></span>
+</div>
+<div style="display: flex; gap: 12px; font-size: 11px; color: #5A5E6B"><span style="flex: 1; text-align: center">Sep 20</span><span style="flex: 1; text-align: center">Sep 27</span><span style="flex: 1; text-align: center">Oct 4</span><span style="flex: 1; text-align: center">Oct 11</span><span style="flex: 1; text-align: center">Oct 18</span><span style="flex: 1; text-align: center; color: #0B0C11; font-weight: 600">Oct 25</span></div>
+</div>
+<div class="chief">
+<div class="chief-in">
+<div style="display: flex; align-items: center; gap: 10px"><span class="chief-av"></span><span style="display: flex; flex-direction: column"><b style="font-size: 14px">Chief</b><span style="font-size: 12px; color: #959BA8">Kids and Youth · sample</span></span></div>
+<span style="align-self: flex-end; max-width: 86%; padding: 9px 13px; border-radius: 16px 16px 4px 16px; background: #1C1F2A; color: #E4E6EB; font-size: 14px; line-height: 1.45">How many kids did we have Sunday?</span>
+<div style="display: flex; flex-direction: column; gap: 6px; font-size: 15px; line-height: 1.5">
+<span class="line" style="animation-delay: 0.2s">38 children checked in on Sunday, up from 31 the week before.</span>
+<span class="line" style="animation-delay: 1.4s">I see numbers only. Names, rooms and notes stay with your Kids team.</span>
+<span class="line" style="animation-delay: 2.6s">One more thing: your Nursery team has no leader yet. Want me to draft a Nursery lead role?<span class="caret"></span></span>
+</div>
+<div style="display: flex; flex-wrap: wrap; gap: 8px"><button type="button" class="btn btn-w btn-s" style="font-family: inherit; border: 0; cursor: pointer">Draft the role</button><button type="button" class="btn btn-l btn-s" style="font-family: inherit; cursor: pointer">Not now</button></div>
+</div>
+</div>
+</div>
+</div>
+</section>
+
+<!-- CHIEF, EVERY ROOM -->
+<section style="background: #07080B; border-top: 1px solid #12141B">
+<div class="wrap" style="padding-top: 40px; padding-bottom: 8px">
+<div class="mc-strip" style="display: flex; flex-wrap: wrap; align-items: center; gap: 14px 22px; padding: 22px 26px; border-radius: 22px; background: #0D0F14; border: 1px solid #1F2330">
+<span style="width: 36px; height: 36px; border-radius: 50%; background: linear-gradient(135deg, #E040FB, #7C5CFF 55%, #22D3EE); flex: none"></span>
+<p style="margin: 0; flex: 1 1 420px; font-size: 16px; line-height: 1.55; color: #C9CDD6"><b style="color: #F5F6F8; font-weight: 600">Chief works the same way in every room.</b> It works from your church's own records, waits for your yes before it sends anything or touches money, and lists what it does on your History page.</p>
+<a href="/churches#chief">How Chief works</a>
+</div>
+</div>
+</section>
+<!-- /CHIEF, EVERY ROOM -->
+<!-- THE ROOMS NEXT DOOR -->
+<section class="sec" style="background: #07080B; padding-top: 40px; border-top: 1px solid #12141B">
+<div class="wrap" style="display: flex; flex-direction: column; gap: 32px">
+<div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; gap: 16px">
+<h2 class="h2" style="font-size: clamp(30px, 3.2vw, 44px)">The rooms <span class="serif" style="font-size: 1.08em; color: #D9D2FF">next door.</span></h2>
+<p class="body" style="max-width: 420px">Kids and Youth works from the same families the rest of your church uses.</p>
+</div>
+<div class="doors">
+<a href="/churches/people-and-care" class="door"><span class="dglow" style="background: radial-gradient(circle, #14B8A6 0%, rgba(20,184,166,0) 70%)"></span>
+<svg width="44" height="44" viewBox="0 0 48 48" aria-hidden="true" style="position: relative"><defs><clipPath id="gd1"><rect width="48" height="48" rx="12"></rect></clipPath></defs><g clip-path="url(#gd1)" stroke="rgba(255,255,255,0.55)" stroke-width="1.1" stroke-linejoin="round"><polygon points="0,0 28,0 17,21 0,15" fill="#14B8A6"></polygon><polygon points="28,0 48,0 48,19 17,21" fill="#5EEAD4"></polygon><polygon points="0,15 17,21 9,48 0,48" fill="#0F766E"></polygon><polygon points="17,21 48,19 48,48 9,48" fill="#14B8A6"></polygon><polygon points="17,21 33,31 24,48 9,48" fill="#0F766E" fill-opacity="0.6"></polygon></g><g transform="translate(12 12)" fill="none" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.2"></circle><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"></path><path d="M16 4.5a3 3 0 0 1 0 6M18 14.5c1.9.8 3 2.8 3 5.5"></path></g></svg>
+<b>People and Care</b><span>One record of each family for the office, the kiosk and the family's shepherd.</span><em style="color: #5EEAD4">Go to People and Care</em></a>
+<a href="/churches/member-app" class="door"><span class="dglow" style="background: radial-gradient(circle, #EC4899 0%, rgba(236,72,153,0) 70%)"></span>
+<svg width="44" height="44" viewBox="0 0 48 48" aria-hidden="true" style="position: relative"><defs><clipPath id="gd2"><rect width="48" height="48" rx="12"></rect></clipPath></defs><g clip-path="url(#gd2)" stroke="rgba(255,255,255,0.55)" stroke-width="1.1" stroke-linejoin="round"><polygon points="0,0 28,0 17,21 0,15" fill="#EC4899"></polygon><polygon points="28,0 48,0 48,19 17,21" fill="#F9A8D4"></polygon><polygon points="0,15 17,21 9,48 0,48" fill="#BE185D"></polygon><polygon points="17,21 48,19 48,48 9,48" fill="#EC4899"></polygon><polygon points="17,21 33,31 24,48 9,48" fill="#BE185D" fill-opacity="0.6"></polygon></g><g transform="translate(12 12)" fill="none" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="2.5" width="10" height="19" rx="2.5"></rect><path d="M11 18.5h2"></path></g></svg>
+<b>Member App</b><span>The Kids and Youth spaces live in the app your members already have.</span><em style="color: #F9A8D4">Go to the Member App</em></a>
+<a href="/churches/groups-and-classes" class="door"><span class="dglow" style="background: radial-gradient(circle, #3B82F6 0%, rgba(59,130,246,0) 70%)"></span>
+<svg width="44" height="44" viewBox="0 0 48 48" aria-hidden="true" style="position: relative"><defs><clipPath id="gd3"><rect width="48" height="48" rx="12"></rect></clipPath></defs><g clip-path="url(#gd3)" stroke="rgba(255,255,255,0.55)" stroke-width="1.1" stroke-linejoin="round"><polygon points="0,0 28,0 17,21 0,15" fill="#3B82F6"></polygon><polygon points="28,0 48,0 48,19 17,21" fill="#93C5FD"></polygon><polygon points="0,15 17,21 9,48 0,48" fill="#1D4ED8"></polygon><polygon points="17,21 48,19 48,48 9,48" fill="#3B82F6"></polygon><polygon points="17,21 33,31 24,48 9,48" fill="#1D4ED8" fill-opacity="0.6"></polygon></g><g transform="translate(12 12)" fill="none" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h11a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H9l-4 3v-3H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z"></path><path d="M19 9h1a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-1v3l-3-3h-4"></path></g></svg>
+<b>Groups and Classes</b><span>Youth groups and their chats, with two adult leaders in every one a teen is in.</span><em style="color: #93C5FD">Go to Groups and Classes</em></a>
+</div>
+</div>
+</section>
+
+<!-- ON EVERY PLAN -->
+<section id="plans" class="sec light">
+<div class="wrap" style="display: flex; flex-direction: column; gap: 36px">
+<div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; gap: 20px 48px">
+<div style="display: flex; flex-direction: column; gap: 16px; max-width: 700px">
+<p class="eyebrow" style="color: #5A5E6B">Plans</p>
+<h2 class="h2">Kids and Youth comes with <span class="serif ink" style="font-size: 1.08em">every plan.</span></h2>
+</div>
+<p class="body" style="max-width: 440px">Stations and kiosks unlock with a PIN, and Kids and Youth leaders work in the member app, so volunteers never need an office login.</p>
+</div>
+<div class="planrow">
+<div class="plan"><span class="pn">Starter</span><span class="pp">${{P_STARTER}} <small>a month</small></span><ul>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>Check-in from the app, a station or a kiosk</li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>Name tags and texted pickup codes</li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>The Kids and Youth spaces in your member app</li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>One office login</li>
+</ul></div>
+<div class="plan mid"><span class="pn">Professional</span><span class="pp">${{P_PRO}} <small>a month</small></span><ul>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>Everything in Starter</li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>Pickup codes sent from your church's own number</li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>Three office logins, room for your Children's Director</li>
+</ul></div>
+<div class="plan"><span class="pn">Solutionist</span><span class="pp">${{P_SOL}} <small>a month</small></span><ul>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>Everything in Professional</li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>Seven office logins, for a larger staff</li>
+</ul></div>
+</div>
+<a href="/churches#pricing" style="align-self: flex-start; font-weight: 600; color: #0B0C11">Compare every plan</a>
+</div>
+</section>
+
+<!-- CLOSING -->
+<section id="start" style="position: relative; overflow: hidden; background: #07080B">
+<div class="aur" aria-hidden="true"><i></i><i></i><i></i></div>
+<div class="floor" aria-hidden="true" style="height: 60%"></div>
+<div class="wrap" style="position: relative; padding-top: 150px; padding-bottom: 150px; display: flex; flex-direction: column; align-items: center; gap: 24px; text-align: center">
+<h2 class="h1" style="font-size: clamp(42px, 5.6vw, 84px); max-width: 980px">Bring them in. <span class="serif glint" style="font-size: 1.06em; white-space: nowrap">Send them home safe.</span></h2>
+<p class="lede">{{TRIAL_LINE}}</p>
+<a href="{{HOME}}/start" class="btn btn-w">Start free</a>
+</div>
+</section>
+
+<!-- Footer -->
+<footer class="foot"><div class="wrap foot-in">
+<div style="display: flex; flex-direction: column; gap: 10px; max-width: 360px">
+<div style="display: flex; align-items: center; gap: 8px; color: #F5F6F8"><svg width="22" height="19" viewBox="8 36 496 424" aria-hidden="true"><g fill="url(#mkg)" stroke="#fff" stroke-width="8" stroke-opacity=".92"><polygon points="18,46 175,232 237,231 133,98 376,99 356,131 412,167 494,49"></polygon><polygon points="205,138 338,241 232,391 274,449 435,221 319,137"></polygon><polygon points="264,274 149,279 201,359"></polygon></g></svg><span style="font-family: 'Inter Tight', sans-serif; font-weight: 600; font-size: 17px">Solutionist</span></div>
+<p style="margin: 0; font-size: 14px">Everything a small business runs on, in one place, with Chief running it beside you.</p>
+</div>
+<nav aria-label="Church products"><b>For churches</b><a href="/churches">Overview</a><a href="/churches/people-and-care">People and Care</a><a href="/churches/giving">Giving</a><a href="/churches/kids-and-youth">Kids and Youth</a></nav>
+<nav aria-label="More church products"><span aria-hidden="true" style="display: block; height: 21px"></span><a href="/churches/groups-and-classes">Groups and Classes</a><a href="/churches/member-app">Member App</a><a href="/churches/website-and-sermons">Website and Sermons</a><a href="/churches/office-and-books">Office and Books</a></nav>
+<nav aria-label="Company"><b>Solutionist</b><a href="{{HOME}}/">Solutionist home</a><a href="{{HOME}}/coaches">For coaches and consultants</a><a href="/churches#pricing">Pricing</a><a href="{{HOME}}/privacy">Privacy</a><a href="{{HOME}}/terms">Terms</a></nav>
+</div></footer>
+
+</div>
+{{ANALYTICS}}
+<script>
+/* Solutionist home: someone who came here from the main site goes back to the page they left */
+(function () {
+  try {
+    var a = document.querySelector("[data-home]");
+    if (!a || !document.referrer) return;
+    var r = new URL(document.referrer), h = new URL(a.href).hostname;
+    if (r.hostname !== h && r.hostname !== "www." + h) return;
+    if (/^\/(churches|coaches|consultants)(\/|$)/.test(r.pathname)) return;
+    a.href = r.href;
+    a.querySelector("[data-home-label]").textContent = "Back to Solutionist";
+  } catch (e) { /* the plain link still goes home */ }
+})();
+</script>
+</body>
+</html>

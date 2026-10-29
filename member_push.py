@@ -20,6 +20,16 @@ Kept apart from the staff table push_subscriptions, so a staff send
 (morning brief, send_to_business) can never reach a member. The VAPID
 keys and the sending code are shared (push_notifications._send_one).
 
+Quiet hours (Kevin, 2026-10-20: phone alerts for group news, "and allow
+for group to send message with an (after hours alert) ... just incase they
+might have a prayer time outside of the hours"): from 9 PM to 7 AM in the
+church's own time, group news and messages (QUIET_KINDS) wait until
+morning for a member who keeps quiet hours on, the default. They wait in
+member_push_held, one note per chat or group, and the 15-minute sweep
+delivers them after 7 AM. An after-hours alert (a message or a leader's
+post sent as one) still rings for members who let it.
+MEMBER_QUIET_HOURS=off turns the waiting off.
+
 What goes on a lock screen is chosen here, never by the caller's raw
 text. A message or a prayer note says that something happened, not
 what was written: a teen's phone, a shared tablet.
@@ -38,6 +48,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional, Set
@@ -59,15 +70,34 @@ KINDS = (
     ("messages", "New messages", "When someone writes to you or a group you're in"),
     ("sermons", "New sermons", "When a new message is posted"),
     ("events", "Event reminders", "The day before something you said you'd come to"),
+    # Class nights (academy_reminders.py): a few hours before a live class
+    # the member is in; the evening before for a morning one.
+    ("classes", "Class nights", "A few hours before a class you're in meets"),
     ("prayer", "Prayer", "When the church has prayed for your request"),
+    # A group's own page (member_portal_groups, Kevin 2026-10-20: "recieve
+    # announcements from group leader"): its Board, and asking to join.
+    ("groups", "Your groups", "When a leader of your group posts, and news about joining a group"),
     # Youth and Kids (member_spaces, Kevin 2026-10-15): only the people each
     # is for see its box (visible_kinds) — teens and youth leaders; parents.
     ("youth", "Youth", "When a youth leader posts"),
     ("kids", "Kids check-in", "When your child is checked in or picked up, and their weekly lesson"),
+    # The church's News (news_alerts, the approved canvas "Church News &
+    # Celebrations"): what each member chose (Important, Everything or Off),
+    # birthdays in their groups, replies to their comments. Its own
+    # choices live on Me → Celebrations.
+    ("news", "News & celebrations", "Posts your pastors mark important, birthdays in your groups, and replies to your comments"),
+    # ChurchSavvy Planning (sunday_serving_alerts): an ask to serve, a nudge,
+    # a cover, and the reminders before a Sunday someone said yes to. Its box
+    # lives on My serving → How I hear, for the people who serve.
+    ("serving", "Serving", "When you're asked to serve, and reminders before your Sunday"),
 )
 SPACE_KINDS = ("youth", "kids")
+OWN_PAGE_KINDS = ("serving",)         # chosen on their own page, not on Notifications
 KIND_KEYS = tuple(k for k, _, _ in KINDS)
-DAILY_ANNOUNCEMENTS = 3
+DAILY_ANNOUNCEMENTS = 3                # shared with News posts that ring (news_alerts)
+QUIET_KINDS = ("groups", "messages", "news")
+QUIET_FROM, QUIET_TO = 21, 7          # 9 PM to 7 AM, the church's own clock
+HELD_MAX_HOURS = 36                   # a note older than this isn't news any more
 TITLE_MAX, BODY_MAX = 60, 180
 _TABLE = "member_push_subscriptions"
 
@@ -84,9 +114,10 @@ def church_kinds(settings: Optional[Dict[str, Any]]) -> Set[str]:
 def visible_kinds(ctx: Optional[Dict[str, Any]]) -> Set[str]:
     """The kinds a member has a box for: everything, except Youth for
     anyone who isn't a teen or a youth leader, and Kids for anyone who
-    isn't a parent of a child on record (member_spaces.resolve's ctx)."""
+    isn't a parent of a child on record (member_spaces.resolve's ctx).
+    Serving is chosen on My serving (OWN_PAGE_KINDS)."""
     ctx = ctx or {}
-    out = set(KIND_KEYS) - set(SPACE_KINDS)
+    out = set(KIND_KEYS) - set(SPACE_KINDS) - set(OWN_PAGE_KINDS)
     if ctx.get("youth") or "youth" in (ctx.get("leader") or {}):
         out.add("youth")
     if ctx.get("kids_parent"):
@@ -106,6 +137,30 @@ def clean_switches(raw: Any) -> Dict[str, bool]:
             raise HTTPException(400, f"{k} must be true or false")
         out[k] = v
     return out
+
+
+def is_quiet_hour(hour: int) -> bool:
+    return hour >= QUIET_FROM or hour < QUIET_TO
+
+
+def quiet_hour(business: Dict[str, Any], now: Optional[datetime] = None) -> bool:
+    """Is it quiet hours at this church right now? False whenever it can't
+    be told: a note is never held back by a clock nobody could read."""
+    if os.environ.get("MEMBER_QUIET_HOURS", "on").strip().lower() == "off":
+        return False
+    import business_marketing
+    row = business
+    if "owner_id" not in row:
+        # The member app's church row has no owner; the zone may be theirs.
+        got = sb_clients.sb_get_as_service(
+            f"/businesses?id=eq.{quote(str(business.get('id') or ''), safe='')}&select=id,settings,owner_id&limit=1")
+        if isinstance(got, list) and got:
+            row = {**business, **got[0]}
+    try:
+        zone = business_marketing.business_tz(row)
+    except Exception:
+        return False
+    return is_quiet_hour((now or datetime.now(timezone.utc)).astimezone(zone).hour)
 
 
 def ready() -> bool:
@@ -170,6 +225,31 @@ def save_turned_off(business_id: str, contact_id: str, off: Iterable[str]) -> bo
     return bool(rows)
 
 
+def quiet_prefs(business_id: str, contact_id: str) -> Optional[Dict[str, bool]]:
+    """{'quiet', 'after_hours', 'email_missed'}: quiet hours and after-hours
+    alerts on unless the member turned them off; the email follow-up
+    (group_email) off unless they turned it on."""
+    rows = sb_clients.sb_get_as_service(
+        f"/member_push_prefs?business_id=eq.{business_id}&contact_id=eq.{contact_id}"
+        f"&select=quiet,after_hours,email_missed&limit=1")
+    if rows is None:
+        return None
+    r = rows[0] if rows else {}
+    return {"quiet": r.get("quiet") is not False, "after_hours": r.get("after_hours") is not False,
+            "email_missed": r.get("email_missed") is True}
+
+
+def save_quiet(business_id: str, contact_id: str, quiet: bool, after_hours: bool,
+               email_missed: Optional[bool] = None) -> bool:
+    rows = sb_clients.sb_post_as_service(
+        "/member_push_prefs?on_conflict=business_id,contact_id",
+        {"business_id": business_id, "contact_id": contact_id, "quiet": bool(quiet), "after_hours": bool(after_hours),
+         **({} if email_missed is None else {"email_missed": bool(email_missed)}),
+         "updated_at": datetime.now(timezone.utc).isoformat()},
+        prefer="resolution=merge-duplicates,return=representation")
+    return bool(rows)
+
+
 def device_count(business_id: str, contact_id: Optional[str] = None) -> int:
     q = f"/{_TABLE}?business_id=eq.{business_id}&select=id&limit=5000"
     if contact_id:
@@ -184,7 +264,7 @@ def _safe_url(url: Optional[str]) -> str:
     return u if re.match(r"^/my(?:[/?#][^\s]*)?$", u) else "/my"
 
 
-def send(business: Dict[str, Any], kind: str, *, title: str, body: str = "",
+def send(business: Dict[str, Any], kind: str, *, title: str, body: str = "", ring: bool = False,
          url: str = "/my", contact_ids: Optional[Iterable[str]] = None,
          ref_id: Optional[str] = None, sent_by: Optional[str] = None,
          tag: Optional[str] = None) -> int:
@@ -192,16 +272,18 @@ def send(business: Dict[str, Any], kind: str, *, title: str, body: str = "",
     `contact_ids`). Returns how many phones it reached. Quietly 0 when
     push isn't set up, the church hasn't switched this kind on, or `ref_id`
     was already sent. Never raises: a notification is never worth failing
-    the thing it's about."""
+    the thing it's about. In quiet hours a QUIET_KINDS note waits for the
+    morning unless it's an after-hours alert (`ring`) and the member lets
+    those ring."""
     try:
         return _send(business, kind, title=title, body=body, url=url,
-                     contact_ids=contact_ids, ref_id=ref_id, sent_by=sent_by, tag=tag)
+                     contact_ids=contact_ids, ref_id=ref_id, sent_by=sent_by, tag=tag, ring=ring)
     except Exception:
         logger.warning("member push send failed", exc_info=True)
         return 0
 
 
-def _send(business, kind, *, title, body, url, contact_ids, ref_id, sent_by, tag=None) -> int:
+def _send(business, kind, *, title, body, url, contact_ids, ref_id, sent_by, tag=None, ring=False) -> int:
     import push_notifications as pn
     biz_id = str(business.get("id") or "")
     if kind not in KIND_KEYS or not biz_id or not ready():
@@ -234,19 +316,95 @@ def _send(business, kind, *, title, body, url, contact_ids, ref_id, sent_by, tag
     for i in range(0, len(people), 150):
         off_rows += sb_clients.sb_get_as_service(
             f"/member_push_prefs?business_id=eq.{biz_id}&contact_id=in.({','.join(people[i:i + 150])})"
-            f"&select=contact_id,off") or []
+            f"&select=contact_id,off,quiet,after_hours") or []
     muted = {str(r["contact_id"]) for r in off_rows if kind in (r.get("off") or [])}
     # One tag per chat (or per thing): a busy chat replaces its own note
     # on the lock screen instead of stacking twenty.
     payload = {"title": title, "body": body, "url": url,
                "tag": (tag or f"{kind}-{ref_id or ''}")[:60]}
+    held: Set[str] = set()
+    if kind in QUIET_KINDS and quiet_hour(business):
+        prefs = {str(r["contact_id"]): r for r in off_rows}
+        for c in people:
+            p = prefs.get(c) or {}
+            if c not in muted and p.get("quiet") is not False and not (ring and p.get("after_hours") is not False):
+                held.add(c)
+        if ring:
+            payload["title"] = f"After-hours alert · {title}"[:TITLE_MAX]
+        _hold(biz_id, kind, held, payload)
     reached = 0
     for s in subs:
-        if str(s["contact_id"]) in muted:
+        if str(s["contact_id"]) in muted or str(s["contact_id"]) in held:
             continue
         if pn._send_one(s, payload, table=_TABLE):
             reached += 1
     return _logged(log_id, reached)
+
+
+def _hold(biz_id: str, kind: str, contact_ids: Iterable[str], payload: Dict[str, Any]) -> None:
+    """Quiet hours: the note waits for the morning, one per person per tag
+    (a busy chat waits as its newest note)."""
+    now = datetime.now(timezone.utc).isoformat()
+    rows = [{"business_id": biz_id, "contact_id": c, "kind": kind, "title": payload["title"], "body": payload["body"],
+             "url": payload["url"], "tag": payload["tag"], "created_at": now} for c in sorted(contact_ids)]
+    for i in range(0, len(rows), 200):
+        sb_clients.sb_post_as_service("/member_push_held?on_conflict=business_id,contact_id,tag", rows[i:i + 200],
+                                      prefer="resolution=merge-duplicates,return=minimal")
+
+
+def sweep_held(now: Optional[datetime] = None) -> int:
+    """After 7 AM at each church: what waited through quiet hours, one
+    note per person (a summary when several waited). Stale notes and the
+    ones whose kind was switched off overnight are dropped. Phones reached."""
+    import push_notifications as pn
+    now = now or datetime.now(timezone.utc)
+    rows = sb_clients.sb_get_as_service(
+        "/member_push_held?select=id,business_id,contact_id,kind,title,body,url,tag,created_at&order=created_at.asc&limit=5000")
+    if not isinstance(rows, list) or not rows:
+        return 0
+    by_biz: Dict[str, List[Dict[str, Any]]] = {}
+    for r in rows:
+        by_biz.setdefault(str(r["business_id"]), []).append(r)
+    bizs = sb_clients.sb_get_as_service(
+        f"/businesses?id=in.({','.join(sorted(by_biz))})&select=id,name,settings,owner_id&limit=500")
+    if not isinstance(bizs, list):
+        return 0
+    stale = (now - timedelta(hours=HELD_MAX_HOURS)).isoformat()
+    reached = 0
+    for biz in bizs:
+        bid = str(biz["id"])
+        if quiet_hour(biz, now):
+            continue
+        kinds = church_kinds(biz.get("settings"))
+        by_person: Dict[str, List[Dict[str, Any]]] = {}
+        for r in by_biz.get(bid, []):
+            by_person.setdefault(str(r["contact_id"]), []).append(r)
+        for cid, notes in by_person.items():
+            prefs = sb_clients.sb_get_as_service(
+                f"/member_push_prefs?business_id=eq.{bid}&contact_id=eq.{cid}&select=off&limit=1")
+            off = set(((prefs or [{}])[0] if prefs else {}).get("off") or [])
+            fresh = [n for n in notes if str(n.get("created_at") or "") >= stale and n["kind"] in kinds and n["kind"] not in off]
+            if fresh and ready():
+                if len(fresh) == 1:
+                    n = fresh[0]
+                    payload = {"title": n["title"], "body": n["body"], "url": _safe_url(n["url"]), "tag": n["tag"]}
+                else:
+                    urls = {_safe_url(n["url"]) for n in fresh}
+                    names = []
+                    for n in reversed(fresh):
+                        if n["title"] not in names:
+                            names.append(n["title"])
+                    payload = {"title": "While you were resting",
+                               "body": " · ".join(names)[:BODY_MAX],
+                               "url": urls.pop() if len(urls) == 1 else "/my/groups", "tag": "quiet-morning"}
+                subs = sb_clients.sb_get_as_service(
+                    f"/{_TABLE}?business_id=eq.{bid}&contact_id=eq.{cid}&select=id,contact_id,endpoint,subscription&limit=20") or []
+                for s in subs:
+                    if pn._send_one(s, payload, table=_TABLE):
+                        reached += 1
+            ids = ",".join(str(n["id"]) for n in notes)
+            sb_clients.sb_delete_as_service(f"/member_push_held?business_id=eq.{bid}&id=in.({ids})")
+    return reached
 
 
 def _logged(log_id: Optional[str], reached: int) -> int:
@@ -331,11 +489,16 @@ async def my_notifications_save(request: Request):
     # becomes a parent later still hears about their child).
     off = (before - shown) | {k for k in shown if str(form.get(f"k_{k}") or "") != "on"}
     ok = await asyncio.to_thread(save_turned_off, biz_id, me["id"], off)
+    if ok and str(form.get("quiet_shown") or "") == "1":
+        ok = await asyncio.to_thread(save_quiet, biz_id, me["id"], str(form.get("q_quiet") or "") == "on",
+                                     str(form.get("q_after") or "") == "on",
+                                     (str(form.get("q_email") or "") == "on") if form.get("email_shown") else None)
     return _back("/my/notifications", **({"done": "notifications"} if ok else {"err": "error"}))
 
 
 def render_page(biz: Dict[str, Any], site: Optional[Dict[str, Any]], request: Request,
-                me: Dict[str, Any], off: Optional[Set[str]]) -> str:
+                me: Dict[str, Any], off: Optional[Set[str]], quiet: Optional[Dict[str, bool]] = None,
+                chats: Optional[List[Dict[str, Any]]] = None) -> str:
     from html import escape
     from member_portal import _shell
     import member_spaces as msp
@@ -354,10 +517,29 @@ def render_page(biz: Dict[str, Any], site: Optional[Dict[str, Any]], request: Re
     off = off or set()
     boxes = "".join(
         f'<label class="mp-check" style="display:flex;gap:10px;align-items:flex-start;min-height:44px;margin:8px 0">'
-        f'<input type="checkbox" name="k_{k}" {"" if k in off else "checked"} style="width:22px;height:22px;margin-top:2px">'
+        f'<input type="checkbox" name="k_{k}" {"" if k in off else "checked"} style="width:22px;height:22px;margin-top:2px;flex:none">'
         f'<span><strong>{escape(label)}</strong><br><span class="mp-muted">{escape(hint)}</span></span></label>'
         for k, label, hint in offered)
+    # Quiet hours, where group news or messages can reach this phone.
+    if any(k in QUIET_KINDS for k, _, _ in offered):
+        q = quiet or {"quiet": True, "after_hours": True, "email_missed": False}
+        row = ('<label class="mp-check" style="display:flex;gap:10px;align-items:flex-start;min-height:44px;margin:8px 0">'
+               '<input type="checkbox" name="{n}" {c} style="width:22px;height:22px;margin-top:2px;flex:none">'
+               '<span><strong>{t}</strong><br><span class="mp-muted">{h}</span></span></label>')
+        boxes += ('<h3 class="mp-sect" style="margin:18px 0 0;font-size:15px">At night</h3><input type="hidden" name="quiet_shown" value="1">'
+                  + row.format(n="q_quiet", c="checked" if q["quiet"] else "", t="Quiet hours",
+                               h="9 PM to 7 AM. Group news and messages wait until morning.")
+                  + row.format(n="q_after", c="checked" if q["after_hours"] else "", t="Let after-hours alerts ring",
+                               h="When someone in your group sends one during quiet hours, like a late prayer call."))
+        if any(k == "groups" for k, _, _ in offered):
+            boxes += ('<h3 class="mp-sect" style="margin:18px 0 0;font-size:15px">By email</h3><input type="hidden" name="email_shown" value="1">'
+                      + row.format(n="q_email", c="checked" if q.get("email_missed") else "",
+                                   t="Email me if my phone misses a leader’s post",
+                                   h="If you haven’t opened it an hour after it went up."))
     key = escape(vapid_public(), quote=True)
+    # Each group chat: Every message / Evening summary / Off (group_chat_notify).
+    import group_chat_notify as gcn
+    chat_section = gcn.notifications_section(chats, escape) if any(k == "messages" for k, _, _ in offered) else ""
     return _shell(biz, site, "Notifications", f"""
 {flash}
 <section class="mp-card" aria-labelledby="np-dev">
@@ -373,6 +555,7 @@ def render_page(biz: Dict[str, Any], site: Optional[Dict[str, Any]], request: Re
   {boxes}
   <button class="mp-go" type="submit">Save</button>
 </form>
+{chat_section}
 <p><a href="/my/me">Back to Me</a></p>
 <script>(function(){{
   var KEY='{key}', st=document.getElementById('np-state'), on=document.getElementById('np-on'),
@@ -490,10 +673,13 @@ def _later(fn, *args, **kwargs) -> None:
 
 
 def chat_recipients(t: Dict[str, Any], acc: Dict[str, Any], sender_id: str,
-                    parts: Optional[List[Dict[str, Any]]]) -> List[str]:
+                    parts: Optional[List[Dict[str, Any]]], *, ring: bool = False,
+                    everyone: bool = False) -> List[str]:
     """Who hears about a new message: the other side of a direct chat, or
     the group's members with messaging on. Never the sender, never someone
-    who declined the chat or muted it."""
+    who declined the chat or muted it, and in a group's chat only those who
+    chose a note for every message (group_chat_notify), unless it's an
+    after-hours alert (`ring`) or the caller wants `everyone` who could."""
     sender_id = str(sender_id)
     state = {str(p.get("contact_id")): p for p in (parts or [])}
     folks = acc.get("people") or {}
@@ -507,32 +693,46 @@ def chat_recipients(t: Dict[str, Any], acc: Dict[str, Any], sender_id: str,
         p = state.get(i) or {}
         if i == sender_id or p.get("muted") or p.get("state") == "declined":
             continue
+        if not everyone:
+            import group_chat_notify as gcn
+            if not gcn.hears_each(t, p, ring):
+                continue
         out.append(i)
     return out
 
 
 def tell_chat(business: Dict[str, Any], t: Dict[str, Any], acc: Dict[str, Any],
-              sender_id: str) -> None:
-    """After a delivered message (member_portal_messaging.send)."""
+              sender_id: str, ring: bool = False, replied_to: Optional[str] = None) -> None:
+    """After a delivered message (member_portal_messaging.send). `ring`:
+    sent as an after-hours alert. `replied_to`: the message it answers, so
+    its writer hears even when they chose replies only."""
     if "messages" not in church_kinds(business.get("settings")):
         return
-    _later(_tell_chat, business, t, acc, sender_id)
+    _later(_tell_chat, business, t, acc, sender_id, ring, replied_to)
 
 
-def _tell_chat(business, t, acc, sender_id) -> None:
+def _tell_chat(business, t, acc, sender_id, ring=False, replied_to=None) -> None:
+    import group_chat_notify as gcn
     import member_portal_messaging as mpm
     parts = mpm.participants(business["id"], t["id"])
-    who = chat_recipients(t, acc, sender_id, parts)
-    if not who:
-        return
+    who = chat_recipients(t, acc, sender_id, parts, ring=ring)
     title = "New message"
-    if t.get("kind") != "direct" and t.get("group_id"):
+    if t.get("kind") == "leaders":
+        import member_portal_messaging as mpm2
+        title = f"New message in {mpm2.LEADERS_ROOM}"
+    elif t.get("kind") != "direct" and t.get("group_id"):
         g = sb_clients.sb_get_as_service(
             f"/groups?id=eq.{t['group_id']}&business_id=eq.{business['id']}&select=name&limit=1") or []
         if g and g[0].get("name"):
             title = f"New message in {g[0]['name']}"
-    send(business, "messages", title=title, body="Open the app to read it.",
-         url=f"/my/messages/{t['id']}", contact_ids=who, tag=f"chat-{t['id']}")
+    # A group's chat lives inside the group (member_portal_groups).
+    url = (f"/my/groups/{t['group_id']}/chat" if t.get("kind") == "group" and t.get("group_id")
+           else "/my/groups/leaders" if t.get("kind") == "leaders" else f"/my/messages/{t['id']}")
+    if who:
+        send(business, "messages", title=title, body="Open the app to read it.",
+             url=url, contact_ids=who, tag=f"chat-{t['id']}", ring=ring)
+    if replied_to and not ring:
+        gcn.reply_note(business, t, acc, sender_id, replied_to, parts, title, url)
 
 
 def tell_prayed(business_id: str, contact_id: Optional[str], request_id: str) -> None:
@@ -613,6 +813,99 @@ def _tell_youth_post(business, post_id, author) -> None:
     first = str((author or {}).get("name") or "").split(" ")[0] or "A youth leader"
     send(business, "youth", title="Youth", body=f"New post from {first}. Open the app to see it.",
          url="/my/space?to=youth", contact_ids=sorted(who), ref_id=f"youth-post:{post_id}", tag="youth")
+
+
+def tell_group_post(business: Dict[str, Any], group: Dict[str, Any], post_id: str,
+                    author: Dict[str, Any], title: str = "", ring: bool = False) -> None:
+    """After a leader posts to their group's Board (member_portal_groups):
+    everyone else in the group. The post's title, never its words."""
+    if "groups" not in church_kinds(business.get("settings")):
+        return
+    _later(_tell_group_post, business, group, post_id, author, title, ring)
+
+
+def _tell_group_post(business, group, post_id, author, title, ring=False) -> None:
+    gid = str(group.get("id") or "")
+    me = str((author or {}).get("id") or "")
+    rows = sb_clients.sb_get_as_service(
+        f"/group_members?group_id=eq.{_q(gid)}&business_id=eq.{_q(business['id'])}&select=contact_id&limit=5000") or []
+    who = sorted({str(r["contact_id"]) for r in rows} - {me})
+    if not who:
+        return
+    first = str((author or {}).get("name") or "").split(" ")[0] or "A leader"
+    body = f"{first} posted: {title}" if title else f"New post from {first}. Open the group to see it."
+    send(business, "groups", title=str(group.get("name") or "Your group"), body=body,
+         url=f"/my/groups/{gid}/board", contact_ids=who, ref_id=f"group-post:{post_id}", tag=f"group-{gid}", ring=ring)
+
+
+def tell_group_prayer(business: Dict[str, Any], group: Dict[str, Any], prayer_id: str, asker: Dict[str, Any]) -> None:
+    """A request on a group's prayer wall (group_prayer): everyone else in
+    the group. That someone asked, by first name; never the words."""
+    if "groups" not in church_kinds(business.get("settings")):
+        return
+    _later(_tell_group_prayer, business, group, prayer_id, asker)
+
+
+def _tell_group_prayer(business, group, prayer_id, asker) -> None:
+    gid = str(group.get("id") or "")
+    me = str((asker or {}).get("id") or "")
+    rows = sb_clients.sb_get_as_service(
+        f"/group_members?group_id=eq.{_q(gid)}&business_id=eq.{_q(business['id'])}&select=contact_id&limit=5000") or []
+    who = sorted({str(r["contact_id"]) for r in rows} - {me})
+    if not who:
+        return
+    first = str((asker or {}).get("name") or "").split(" ")[0] or "Someone"
+    send(business, "groups", title=str(group.get("name") or "Your group"), body=f"{first} asked the group to pray",
+         url=f"/my/groups/{gid}/prayer", contact_ids=who, ref_id=f"group-prayer:{prayer_id}", tag=f"group-prayer-{gid}")
+
+
+def tell_group_praying(business: Dict[str, Any], group_id: str, prayer_id: str, asker_id: str) -> None:
+    """Someone pressed "I'm praying" on a request: its asker, at most once a
+    day for each request."""
+    if not asker_id or "prayer" not in church_kinds(business.get("settings")):
+        return
+    _later(send, business, "prayer", title="Your group is praying with you",
+           body="Someone in your group is praying for your request.", url=f"/my/groups/{group_id}/prayer",
+           contact_ids=[asker_id], ref_id=f"group-praying:{prayer_id}:{datetime.now(timezone.utc):%Y%m%d}",
+           tag=f"group-praying-{prayer_id}")
+
+
+def tell_join_request(business: Dict[str, Any], group: Dict[str, Any], asker: Dict[str, Any]) -> None:
+    """Someone asked to join (member_portal_groups.ask): the group's leaders."""
+    if "groups" not in church_kinds(business.get("settings")):
+        return
+    _later(_tell_join_request, business, group, asker)
+
+
+def _tell_join_request(business, group, asker) -> None:
+    gid = str(group.get("id") or "")
+    rows = sb_clients.sb_get_as_service(
+        f"/group_members?group_id=eq.{_q(gid)}&business_id=eq.{_q(business['id'])}&role=eq.leader"
+        f"&select=contact_id&limit=50") or []
+    leaders = sorted({str(r["contact_id"]) for r in rows} - {str((asker or {}).get("id") or "")})
+    if not leaders:
+        return
+    first = str((asker or {}).get("name") or "").split(" ")[0] or "Someone"
+    send(business, "groups", title=str(group.get("name") or "Your group"),
+         body=f"{first} asked to join. Open the group to say yes.", url=f"/my/groups/{gid}",
+         contact_ids=leaders, ref_id=f"group-ask:{gid}:{(asker or {}).get('id')}:{datetime.now(timezone.utc):%Y%m%d}",
+         tag=f"group-ask-{gid}")
+
+
+def tell_join_yes(business: Dict[str, Any], group_id: str, contact_id: str) -> None:
+    """A leader said yes: the person who asked."""
+    if "groups" not in church_kinds(business.get("settings")):
+        return
+    _later(_tell_join_yes, business, group_id, contact_id)
+
+
+def _tell_join_yes(business, group_id, contact_id) -> None:
+    rows = sb_clients.sb_get_as_service(
+        f"/groups?id=eq.{_q(group_id)}&business_id=eq.{_q(business['id'])}&select=name&limit=1") or []
+    name = str((rows[0] if rows else {}).get("name") or "the group")
+    send(business, "groups", title=name, body=f"You're in {name}. Open the group to say hello.",
+         url=f"/my/groups/{group_id}", contact_ids=[str(contact_id)], ref_id=f"group-yes:{group_id}:{contact_id}",
+         tag=f"group-{group_id}")
 
 
 def tell_kids_in(business_id: str, household_id: str, entry_id: str,
@@ -698,12 +991,14 @@ REMIND_HOURS = range(16, 20)    # the afternoon before, on the church's clock
 
 def sweep_tick() -> Dict[str, int]:
     """Every 15 minutes (kmj_intake_automation, leader-locked)."""
-    out = {"sermons": 0, "events": 0}
+    out = {"sermons": 0, "events": 0, "held": 0}
     if not ready():
         return out
     rows = sb_clients.sb_get_as_service(
         "/businesses?or=(settings->member_portal->notifications->>sermons.eq.true,"
-        "settings->member_portal->notifications->>events.eq.true)"
+        "settings->member_portal->notifications->>events.eq.true,"
+        "settings->member_portal->notifications->>groups.eq.true,"
+        "settings->member_portal->notifications->>messages.eq.true)"
         "&select=id,name,settings,owner_id&limit=500") or []
     for biz in rows:
         kinds = church_kinds(biz.get("settings"))
@@ -712,8 +1007,21 @@ def sweep_tick() -> Dict[str, int]:
                 out["sermons"] += _sweep_sermons(biz)
             if "events" in kinds:
                 out["events"] += _sweep_events(biz)
+            if "groups" in kinds:
+                # A group's gathering, at 5 PM (group_gatherings).
+                import group_gatherings
+                out["gatherings"] = out.get("gatherings", 0) + group_gatherings.reminders(biz)
+            if "messages" in kinds:
+                # The evening note about a group's chat, at 7 PM (group_chat_notify).
+                import group_chat_notify
+                out["chat_evening"] = out.get("chat_evening", 0) + group_chat_notify.evening(biz)
         except Exception:
             logger.warning("member push sweep failed for one church", exc_info=True)
+    # What waited through quiet hours, after 7 AM at each church.
+    try:
+        out["held"] = sweep_held()
+    except Exception:
+        logger.warning("member push morning delivery failed", exc_info=True)
     return out
 
 

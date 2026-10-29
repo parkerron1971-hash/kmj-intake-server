@@ -30,7 +30,13 @@ ME = {"id": "c1", "name": "Ana Rivers"}
 @pytest.fixture(autouse=True)
 def _quiet(monkeypatch):
     import giving_router
+    import member_bible_marks as mbm
+    import reading_plans as rp
     monkeypatch.setattr(giving_router, "giving_is_active", lambda b: False)
+    # a member's own highlights live on the server (member_bible_marks); none here
+    monkeypatch.setattr(mbm, "all_marks", lambda b, c: [])
+    monkeypatch.setattr(mbm, "chapter_marks", lambda b, c, book, ch: {})
+    monkeypatch.setattr(rp, "current", lambda biz: None)
 
 
 def req(path="/my/bible", query="", cookie=""):
@@ -46,11 +52,17 @@ def cookie_of(resp):
     return resp.headers.get("set-cookie", "")
 
 
-def test_the_bible_home_lists_the_books_and_remembers_on_the_phone():
+def test_the_bible_home_leads_to_every_book_old_testament_first_and_remembers_on_the_phone():
     r = go("/my/bible")
     page = r.body.decode()
-    assert r.status_code == 200 and page.count('href="/my/bible/') >= 66
-    assert 'href="/my/bible/genesis"' in page and 'href="/my/bible/revelation"' in page
+    assert r.status_code == 200
+    assert page.index('href="/my/bible/books?t=ot"') < page.index('href="/my/bible/books?t=nt"')   # Old first
+    ot = go("/my/bible/books", "t=ot").body.decode()
+    nt = go("/my/bible/books", "t=nt").body.decode()
+    assert 'href="/my/bible/genesis/1"' in ot and 'href="/my/bible/malachi/4"' in ot and "/my/bible/matthew/" not in ot
+    assert 'href="/my/bible/matthew/1"' in nt and 'href="/my/bible/revelation/22"' in nt
+    assert sum(ot.count(f'id="bk-{s}"') for s in mpb.bt.SLUGS) == 39 and nt.count('<details class="bk"') == 27
+    assert ot.index("The Law") < ot.index("History") < ot.index("Poetry &amp; Wisdom") < ot.index("Minor Prophets")
     assert 'href="/my/bible?t=kjv" aria-current="true"' in page and "Keep reading" not in page
     later = go("/my/bible", cookie="sol_bible=web|romans/8").body.decode()
     assert 'href="/my/bible?t=web" aria-current="true"' in later
@@ -118,7 +130,7 @@ def test_nothing_typed_is_echoed_unescaped():
 def test_the_member_app_routes_the_bible(monkeypatch):
     seen = {}
 
-    async def fake(request, biz, site, me, sub):
+    async def fake(request, biz, site, me, sub, **kw):
         seen["sub"] = sub
         return mp._page("ok")
     monkeypatch.setattr(mpb, "serve", fake)

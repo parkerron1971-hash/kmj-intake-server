@@ -15,6 +15,7 @@ from fastapi.responses import JSONResponse
 
 import brand_engine
 import sb_clients
+import storage_links
 from auth_supabase import AuthedUser, UserSession, require_user
 
 from business_access import assert_access, business_access
@@ -252,17 +253,27 @@ async def upload_brand_asset(
     # field here, and a dependency's own parameters resolve out of the
     # QUERY string — the dependency would reject every valid upload
     # looking for a `?business_id=` that never comes.
-    assert_access(business_id, user, "admin")
-    file_bytes = await file.read()
+    biz = storage_links.canonical_business_id(business_id)
+    if not biz:
+        raise HTTPException(status_code=404, detail="business not found")
+    assert_access(biz, user, "admin")
+    # One byte past the cap is enough to know it's too big.
+    file_bytes = await file.read(brand_engine.asset_max_bytes(variant) + 1)
     result = brand_engine.upload_asset(
-        business_id=business_id,
+        business_id=biz,
         variant=variant,
         file_bytes=file_bytes,
         filename=file.filename or "upload.png",
         content_type=file.content_type or "image/png",
     )
     if not result.get("ok"):
-        raise HTTPException(status_code=400, detail=result.get("error", "Upload failed"))
+        # `detail` stays a plain sentence (what every app version shows);
+        # `code` marks it as written for the practitioner, so the app can
+        # tell it apart from a framework error like "access check unavailable".
+        code = result.get("code") or "upload_failed"
+        status = 502 if code.startswith("storage_") or code in ("unsafe_path", "attach_failed") else 400
+        return JSONResponse({"detail": result.get("error") or storage_links.UPLOAD_UNREACHABLE,
+                             "code": code}, status_code=status)
     return JSONResponse(result)
 
 

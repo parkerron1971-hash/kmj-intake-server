@@ -67,7 +67,9 @@ def test_provision_passes_a_chosen_number_through(monkeypatch):
 
 
 @pytest.mark.parametrize("detail, expect", [
-    ({"error": "feature_locked", "required_plan": "practice"}, "Practice plan"),
+    ({"error": "feature_locked", "required_plan": "professional"}, "Professional plan"),
+    ({"error": "feature_locked", "required_plan": "practice"}, "Solutionist plan"),   # the plan's name, not its key
+    ({"error": "feature_locked"}, "Professional plan"),                               # no plan given: the gate map's
     ({"error": "area_code_required"}, "Which area code"),
     ({"error": "no_numbers", "message": "No local numbers in 415 right now — try a nearby area code."}, "another area code"),
     ({"error": "platform_number_unpinned", "message": "Texting isn't ready for private numbers yet."}, "isn't ready"),

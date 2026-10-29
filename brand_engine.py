@@ -39,6 +39,7 @@ import httpx
 
 import brand_dna
 import llm_call
+import storage_links
 import untrusted_text
 
 logger = logging.getLogger("brand_engine")
@@ -1923,23 +1924,51 @@ ASSET_VARIANTS: Dict[str, Dict[str, Any]] = {
     "social_card": {"max_size_mb": 5, "preferred_format": "png"},
 }
 
-_ALLOWED_ASSET_EXTS = {"png", "jpg", "jpeg", "svg", "webp", "gif", "ico"}
+# Judged from the bytes (upload_images), never the name or declared type.
+# No SVG: it can carry script and the bucket is public.
+_ASSET_KINDS = ("png", "jpeg", "webp", "gif", "ico")
 _STORAGE_BUCKET = "business-assets"
 
+ASSET_EMPTY = "That file is empty. Pick the picture again."
+ASSET_SVG = ("SVG files can't be uploaded here. Save the logo as a PNG "
+             "(most design apps can) and upload that.")
+ASSET_NOT_IMAGE = ("That file isn't a picture we can read. "
+                   "Use a PNG, JPG, WebP, GIF or ICO.")
 
-def _storage_upload(storage_path: str, file_bytes: bytes, content_type: str) -> Optional[str]:
-    """POST raw bytes to Supabase Storage REST. Returns the public URL on
-    success, None on failure. Uses the same anon key the rest of the
-    codebase uses; the bucket's RLS policy must allow uploads (existing
-    permissive policy on business-assets does)."""
+
+def asset_max_bytes(variant: str) -> int:
+    """The size cap for a plate (the largest cap for an unknown one)."""
+    mb = (ASSET_VARIANTS.get(variant)
+          or {"max_size_mb": max(v["max_size_mb"] for v in ASSET_VARIANTS.values())})["max_size_mb"]
+    return mb * 1024 * 1024
+
+
+def _storage_upload(
+    storage_path: str, file_bytes: bytes, content_type: str,
+) -> Tuple[Optional[str], Optional[str]]:
+    """POST raw bytes to Supabase Storage REST. Returns (public_url, None)
+    on success, (None, plain-words reason) on failure.
+
+    Service role, not anon. The 2026-08-09 write lockdown left
+    business-assets with one insert policy — `authenticated` plus a
+    business check — and anon fails it: every logo upload since then
+    came back "new row violates row-level security policy". The route
+    runs `assert_access(business_id, user, "admin")` before this, which
+    is the access check; storage just has to accept the bytes.
+
+    The service role also skips storage's per-business check, so a key
+    that is not `brand/<business uuid>/<plain name>` is refused here
+    before anything is sent."""
+    if not storage_links.is_business_object_key(storage_path, prefix="brand/"):
+        logger.warning(f"storage upload refused unsafe key {str(storage_path)[:120]!r}")
+        return None, storage_links.UPLOAD_UNSAFE_PATH
     base = _sb_url()
-    if not base:
-        logger.warning("storage_upload: SUPABASE_URL not configured")
-        return None
+    if not base or not storage_links.has_service_key():
+        logger.error("storage_upload: SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY not configured")
+        return None, storage_links.UPLOAD_NOT_CONFIGURED
     url = f"{base}/storage/v1/object/{_STORAGE_BUCKET}/{storage_path}"
     headers = {
-        "apikey": _sb_anon(),
-        "Authorization": f"Bearer {_sb_anon()}",
+        **storage_links.service_headers(),
         "Content-Type": content_type or "application/octet-stream",
         # `x-upsert: true` lets re-uploading the same path replace the object.
         "x-upsert": "true",
@@ -1949,12 +1978,12 @@ def _storage_upload(storage_path: str, file_bytes: bytes, content_type: str) -> 
             r = client.post(url, content=file_bytes, headers=headers)
         if r.status_code >= 400:
             logger.warning(f"storage upload {storage_path}: {r.status_code} {r.text[:200]}")
-            return None
+            return None, storage_links.upload_refusal(r.status_code, r.text)
     except httpx.HTTPError as e:
         logger.warning(f"storage upload {storage_path} failed: {e}")
-        return None
+        return None, storage_links.UPLOAD_UNREACHABLE
     # Public URL — bucket has public read RLS already in place.
-    return f"{base}/storage/v1/object/public/{_STORAGE_BUCKET}/{storage_path}"
+    return f"{base}/storage/v1/object/public/{_STORAGE_BUCKET}/{storage_path}", None
 
 
 def upload_asset(
@@ -1965,37 +1994,49 @@ def upload_asset(
     content_type: str,
 ) -> Dict[str, Any]:
     """Upload an asset to Supabase Storage and update brand_kit.assets[variant].
-    Returns {ok, url?, variant?, error?}."""
-    if not business_id:
-        return {"ok": False, "error": "business_id required"}
+    Returns {ok, url?, variant?} or {ok: False, code, error}; `error` is
+    plain words for the practitioner, `code` is for the app and the log.
+
+    `filename` and `content_type` are the uploader's say-so and decide
+    nothing: the stored type and extension come from the bytes."""
+    import upload_images
+
+    def refuse(code: str, words: str) -> Dict[str, Any]:
+        return {"ok": False, "code": code, "error": words}
+
+    biz = storage_links.canonical_business_id(business_id)
+    if not biz:
+        return refuse("no_business", "That business couldn't be found.")
     if variant not in ASSET_VARIANTS:
-        return {"ok": False, "error": f"Unknown variant: {variant}"}
+        return refuse("unknown_variant",
+                      "That isn't one of the brand file spots. Refresh the page and try again.")
 
-    max_size = ASSET_VARIANTS[variant]["max_size_mb"] * 1024 * 1024
-    if len(file_bytes) > max_size:
-        return {
-            "ok": False,
-            "error": f"File exceeds {ASSET_VARIANTS[variant]['max_size_mb']}MB limit",
-        }
-
-    if not (content_type or "").startswith("image/"):
-        return {"ok": False, "error": f"Content type must be an image, got {content_type}"}
-
-    ext = (filename.rsplit(".", 1)[-1] if "." in (filename or "") else "png").lower()
-    if ext not in _ALLOWED_ASSET_EXTS:
-        return {"ok": False, "error": f"Unsupported file extension: {ext}"}
+    if len(file_bytes) > asset_max_bytes(variant):
+        return refuse("too_large",
+                      f"That file is over the {ASSET_VARIANTS[variant]['max_size_mb']} MB "
+                      "limit for this spot. Try a smaller copy.")
+    if not file_bytes:
+        return refuse("empty_file", ASSET_EMPTY)
+    if upload_images.looks_like_svg(file_bytes):
+        return refuse("svg_refused", ASSET_SVG)
+    verified = upload_images.verified_image(file_bytes, _ASSET_KINDS)
+    if not verified:
+        return refuse("not_an_image", ASSET_NOT_IMAGE)
+    mime, ext = verified
 
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
-    storage_path = f"brand/{business_id}/{variant}-{timestamp}.{ext}"
+    storage_path = storage_links.business_object_key(
+        biz, f"{variant}-{timestamp}.{ext}", prefix="brand/")
 
-    public_url = _storage_upload(storage_path, file_bytes, content_type)
+    public_url, refusal = _storage_upload(storage_path, file_bytes, mime)
     if not public_url:
-        return {"ok": False, "error": "Storage upload failed"}
+        words = refusal or storage_links.UPLOAD_UNREACHABLE
+        return refuse(storage_links.upload_code(words), words)
 
     # Update brand_kit.assets[variant] in the businesses row.
-    business = _safe_get_one("businesses", "id", business_id)
+    business = _safe_get_one("businesses", "id", biz)
     if not business:
-        return {"ok": False, "error": "Business not found"}
+        return refuse("no_business", "That business couldn't be found.")
 
     settings = dict(business.get("settings") or {})
     brand_kit = dict(settings.get("brand_kit") or {})
@@ -2009,13 +2050,14 @@ def upload_asset(
     settings["brand_kit"] = brand_kit
 
     res = _sb_patch(
-        f"/businesses?id=eq.{business_id}",
+        f"/businesses?id=eq.{biz}",
         {"settings": settings, "updated_at": datetime.now(timezone.utc).isoformat()},
     )
     if res is None:
-        return {"ok": False, "error": "Database update failed"}
+        return refuse("attach_failed",
+                      "The file saved, but it couldn't be attached to your brand. Try again.")
 
-    invalidate_bundle_cache(business_id)   # new logo/favicon must show now
+    invalidate_bundle_cache(biz)   # new logo/favicon must show now
     return {"ok": True, "url": public_url, "variant": variant}
 
 

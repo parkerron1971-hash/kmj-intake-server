@@ -28,12 +28,18 @@ PLANS = ("starter", "professional", "practice")   # the public ladder
 # PLANS stays the public ladder, so the site and the compare table are
 # untouched; ALL_PLANS is every key a subscription or comp can resolve to.
 AUDIENCE_PLANS = ("solo", "booked", "boss")
-ALL_PLANS = PLANS + AUDIENCE_PLANS
+# ChurchSavvy on its own (2026-10-24, Kevin: "the pricing is good"): a
+# church that uses ChurchSavvy without Solutionist buys the screens ($20),
+# Planning ($15) or both ($29). They carry ChurchSavvy's parts and nothing
+# of Solutionist's; churchsavvy_billing.py decides what they open.
+CHURCHSAVVY_PLANS = ("cs_screens", "cs_planning", "cs_both")
+ALL_PLANS = PLANS + AUDIENCE_PLANS + CHURCHSAVVY_PLANS
 
 # ORDERING only (the best-plan pick behind the business cap, the billing
 # rehearsal). Access comes from plan_features(), never from this number.
 _PLAN_RANK = {"starter": 1, "professional": 2, "practice": 3,
-              "solo": 1, "booked": 1, "boss": 2}
+              "solo": 1, "booked": 1, "boss": 2,
+              "cs_screens": 1, "cs_planning": 1, "cs_both": 1}
 
 # Gate-ready map: feature → minimum tier. Working pricing hypothesis
 # (2026-06-09 review): Starter $79 / Professional $199 / Practice $399;
@@ -78,6 +84,19 @@ FEATURE_MIN_PLAN: Dict[str, str] = {
                                            # collaboration and compliance
                                            # deliverables, and this is
                                            # neither.
+    "dedicated_sms_number": "professional",  # a private texting line (sms_numbers_router).
+                                           # Kevin 2026-09-02 put it on Practice first;
+                                           # 2026-10-22 he moved it to Professional ("add
+                                           # the texting number to Professional as
+                                           # well"): a church texts its members and
+                                           # texts GIVE on its own line, and that is
+                                           # the plan most of them land on.
+    "multi_seat": "professional",          # more than one login. The CAPS are
+                                           # plan_limits() max_seats (1/3/7, Kevin
+                                           # 2026-10-22), enforced in billing_limits.
+                                           # can_add_seat; the frontend hides this key
+                                           # from plan cards (HIDDEN_FEATURES) and
+                                           # shows the seat count instead
     "sourcing_desk": "professional",       # find vendors on the live web +
                                            # RFQ them (sourcing_router).
                                            # Kevin's ruling 2026-08-22: the
@@ -89,17 +108,9 @@ FEATURE_MIN_PLAN: Dict[str, str] = {
                                            # plan (data is never plan-
                                            # locked).
     # Practice — collaboration + compliance deliverables + scale
-    "dedicated_sms_number": "practice",    # a private texting line (sms_numbers_router).
-                                           # Kevin's call 2026-09-02: included at
-                                           # Practice first; a Professional add-on
-                                           # is a later, separate change.
     "accountant_collaborator": "practice",
     "audit_trail": "practice",
     "vertical_reports": "practice",        # Trust Reconciliation, 990 prep (I.10)
-    "multi_seat": "practice",              # seat CAPS enforce via business_users_router
-                                           # (max_seats limit); the frontend still hides
-                                           # this key from plan cards (HIDDEN_FEATURES)
-                                           # until the full team experience ships
     "ai_clips": "practice",                # Find my best clips (clip_finder.py): a
                                            # recording becomes short captioned clips.
                                            # Kevin 2026-10-05: the Growth marketing
@@ -231,16 +242,29 @@ def plan_limits() -> Dict[str, Dict[str, Optional[int]]]:
                          "chief_messages_monthly": credits["starter"],
                          "max_seats": 1, "plaid_connections": 2,
                          "open_assignments": 1},
+        # seats 1/3/7 (Kevin 2026-10-22, "3 for professional ... solutionist 7"): a
+        # pastor, an admin and a treasurer on Professional; a staffed church on Solutionist
         "professional": {"max_businesses": 1,
                          "chief_messages_monthly": credits["professional"],
-                         "max_seats": 1, "plaid_connections": 5,
+                         "max_seats": 3, "plaid_connections": 5,
                          "open_assignments": 3},
         "practice":     {"max_businesses": 3,
                          "chief_messages_monthly": credits["practice"],
-                         "max_seats": 5, "plaid_connections": None,
+                         "max_seats": 7, "plaid_connections": None,
                          "open_assignments": 10},
         **_audience_limits(),
+        **_churchsavvy_limits(),
     }
+
+
+def _churchsavvy_limits() -> Dict[str, Dict[str, Optional[int]]]:
+    """ChurchSavvy on its own: one church, its owner the one seat (the
+    Sunday team is worship_team, never seats), and Starter's AI tank: what
+    these plans fell back to before they were listed (_limits_of)."""
+    credits = pricing_config.tier_credits()
+    return {p: {"max_businesses": 1, "chief_messages_monthly": credits["starter"],
+                "max_seats": 1, "plaid_connections": 0, "open_assignments": 0}
+            for p in CHURCHSAVVY_PLANS}
 
 
 def _audience_limits() -> Dict[str, Dict[str, Optional[int]]]:
@@ -328,6 +352,10 @@ PRICE_ENV_TO_PLAN: Dict[str, str] = {
     "BOOKED_ANNUAL":       "booked",
     "BOSS":                "boss",
     "BOSS_ANNUAL":         "boss",
+    # ChurchSavvy on its own. Checkout (churchsavvy_billing) enforces churches only.
+    "CS_SCREENS":          "cs_screens",
+    "CS_PLANNING":         "cs_planning",
+    "CS_BOTH":             "cs_both",
 }
 
 

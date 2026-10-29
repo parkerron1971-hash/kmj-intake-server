@@ -19,6 +19,13 @@ BID = '10000000-0000-4000-8000-000000000001'
 RID = '20000000-0000-4000-8000-000000000001'
 
 
+@pytest.fixture(autouse=True)
+def no_giving_keeper(monkeypatch):
+    # No business here names a Giving keeper (the lock: test_growth_words).
+    import church_keys
+    monkeypatch.setattr(church_keys, '_keeper_rows', lambda biz, area=None: [])
+
+
 def invoice(id, person, paid, amount, **kw):
     return dict(id=id, contact_id=person, paid_at=paid, total=amount, status='paid', category='Consulting', **kw)
 
@@ -297,7 +304,7 @@ def test_native_chief_growth_read_and_write_use_registered_handlers(monkeypatch)
     assert 'save_growth_record' in {t['name'] for t in ctl.write_tool_definitions()}
     r = report(data(), PREFS, now=NOW)
     r.update(records={'actions':[],'costs':[],'attributions':[]}, preferences=PREFS)
-    async def load(*args): return r
+    async def load(*args, **kwargs): return r
     monkeypatch.setattr(chief,'load_report',load)
     saved=[]
     async def save(client,bid,kind,req):

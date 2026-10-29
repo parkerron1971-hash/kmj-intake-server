@@ -208,6 +208,20 @@ def test_refocused_voice_has_one_opening_and_shared_direction(monkeypatch, resto
     assert turns[0]['opening'] == ''  # the main model still starts concurrently
 
 
+def test_a_call_never_speaks_half_an_opening_sentence(monkeypatch, restore_chat):
+    # Measured live (2026-10-23): "…I'll set aside the invoice work you're —",
+    # then sixteen seconds of silence while the answer was checked.
+    first = "Let me check the invoices and look at what needs your attention."
+    fake, _ = _fake_stream(lambda ep: [(0.01, first + " "),
+                                     (0.01, "I'll set aside the work you're already doing.")])
+    monkeypatch.setattr(cft, "stream_text", fake)
+    events, _ = asyncio.run(_run(_req("Check my invoices", client_surface="voice"),
+                                 turn_reply="Here is the answer.", turn_delay=0.3))
+    shown = "".join(d["text"] for d in _deltas(events))
+    assert shown == first + " Here is the answer." == events[-1][1]["payload"]["response"]
+    assert "—" not in shown
+
+
 def test_ready_answer_skips_a_slow_second_opener_sentence(monkeypatch, restore_chat):
     fake, _ = _fake_stream(lambda ep: [(0.01, "Let me check your invoices. "),
                                      (2, "I'll look for the next step.")])

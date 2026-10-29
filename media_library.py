@@ -71,9 +71,22 @@ def key(value):
     return str(UUID(str(value)))
 
 
-def access(business_id, user, minimum='manager'):
+def access(business_id, user, minimum='manager', team=True):
+    """A manager's seat, or (for clip work, `team`) the Media or Admin part
+    on the church's ChurchSavvy team while ChurchSavvy is open to them (Kevin
+    2026-10-23, "Church Areas and Keys": a Media team gets the media part
+    already set up). Approving a clip to post and importing from the church's
+    Drive pass team=False: those stay with a seat."""
     from business_users_router import require_role
-    return require_role(key(business_id), str(user.id), minimum)
+    try:
+        return require_role(key(business_id), str(user.id), minimum)
+    except HTTPException as refused:
+        if not team or minimum != 'manager' or refused.status_code != 403:
+            raise
+        import worship_team
+        if worship_team.team_can(key(business_id), user, 'clips'):
+            return 'team'
+        raise
 
 
 def read(path):
@@ -147,7 +160,8 @@ def enqueue(business_id, user, data):
 
 
 def import_drive(business_id, body, user):
-    access(business_id, user)
+    # The church's own Drive grant: a seat's, never the team's.
+    access(business_id, user, team=False)
     if not configuration()['drive_configured']:
         raise HTTPException(503, 'Google Drive selection is not configured yet.')
     token = body.access_token.get_secret_value()
@@ -189,6 +203,8 @@ def create_clip(business_id, body, user):
 
 
 def approve(business_id, asset_id, body, user):
+    # Approving a clip to post speaks for the church: a seat's, never the team's.
+    access(business_id, user, team=False)
     row = asset(business_id, asset_id, user)
     if row['kind'] != 'clip' or row['status'] != 'ready' or fingerprint(row) != body.fingerprint:
         raise HTTPException(409, 'Review this finished clip and its current caption and destination first.')

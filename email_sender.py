@@ -178,7 +178,7 @@ def _platform_from_addresses() -> set:
         DEFAULT_FROM_EMAIL,
         "hello@mysolutionist.app",
         "receipts@mysolutionist.app",
-        "reports@solutionist.studio",
+        "reports@mysolutionist.app",
         (os.environ.get("RESEND_FROM_EMAIL") or "").strip().lower(),
     }
     return {a for a in addrs if a}
@@ -375,11 +375,17 @@ async def send_via_resend(
     attachments: Optional[List[Dict[str, Any]]] = None,
     business_id: Optional[str] = None,
     idempotency_key: Optional[str] = None,
+    unsubscribe_url: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Low-level Resend client. Raises on API error.
 
     `attachments` is a list of {filename, content (base64) | path (url),
     content_type?} dicts. Passed through to Resend verbatim.
+
+    `unsubscribe_url` (optional) is a narrower one-click unsubscribe for a
+    send that has one — a church's serving emails stop only themselves
+    (serve_links). Without it, List-Unsubscribe is the platform's own,
+    which blocks every email to the address.
 
     `business_id` (optional) marks the send as business-originated: when
     the given from_email is a platform default and that business has a
@@ -420,6 +426,7 @@ async def send_via_resend(
         # list that already gates all sends.
         "headers": {
             "List-Unsubscribe": (
+                f"<{unsubscribe_url}>" if unsubscribe_url else
                 f"<{_unsubscribe_url(to_email)}>, "
                 f"<mailto:{os.environ.get('UNSUBSCRIBE_EMAIL', 'unsubscribe@mysolutionist.app')}"
                 f"?subject=unsubscribe>"),

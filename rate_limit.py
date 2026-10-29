@@ -65,6 +65,9 @@ _LIMITS: Dict[str, Tuple[int, int]] = {
     # Web-form SMS consent: writes the A2P audit trail, and was limited
     # only per PHONE, which the caller chooses. Per IP too, strict.
     "sms_opt_in": (int(os.environ.get("RL_SMS_OPT_IN_PER_HOUR", "10")), 3600),
+    # A church's /daily sign-up (devotional_daily.py): anonymous, and a
+    # sign-up can send a welcome text, so strict and per IP like the above.
+    "daily_join": (int(os.environ.get("RL_DAILY_JOIN_PER_HOUR", "10")), 3600),
     # The no-card trial's phone check (no_card_trial.py). Sending a code
     # costs a text and is the classic SMS-pumping target, so few per
     # business per hour; checking a code is the brute-force target for a
@@ -76,6 +79,11 @@ _LIMITS: Dict[str, Tuple[int, int]] = {
     # courtesy bucket beside it — fail-open, because a tracking endpoint
     # must never surface an error to a visitor's browser.
     "track": (int(os.environ.get("RL_TRACK_PER_MIN", "240")), 60),
+    # Report-Only CSP violations (platform_watchdog.csp_report): anonymous,
+    # sent by browsers, one log line per new kind. Per IP, fail-open — a
+    # preview iframe can raise dozens on one render, and past the budget the
+    # rest are simply not counted.
+    "csp_report": (int(os.environ.get("RL_CSP_REPORT_PER_HOUR", "300")), 3600),
     # The booking widget's three anonymous routes (2026-09-04): they had
     # their own 10/hour dict in booking_widget_router; they ride the
     # strict, shared path now with the same numbers.
@@ -127,10 +135,35 @@ _LIMITS: Dict[str, Tuple[int, int]] = {
     "member_verify": (int(os.environ.get("RL_MEMBER_VERIFY_PER_10MIN", "60")), 600),
     # A signed-in member's writes (RSVP, prayer, details), per person.
     "member_action": (int(os.environ.get("RL_MEMBER_ACTION_PER_HOUR", "30")), 3600),
+    # Ask the church (member_asks.py), per member, on top of member_action:
+    # a room, help, a visit, a life event or a pledge reaches the office, so
+    # one member can't flood it. An hour's budget and a day's.
+    "member_ask": (int(os.environ.get("RL_MEMBER_ASK_PER_HOUR", "6")), 3600),
+    "member_ask_day": (int(os.environ.get("RL_MEMBER_ASK_PER_DAY", "15")), 86400),
+    # The member app's Bible, per member: highlights, notes and saved verses
+    # (a chapter can be many taps), and word searches (each reads a whole
+    # translation).
+    "bible_mark": (int(os.environ.get("RL_BIBLE_MARK_PER_10MIN", "120")), 600),
+    "bible_search": (int(os.environ.get("RL_BIBLE_SEARCH_PER_MIN", "20")), 60),
+    # Listen on a devotional's day (devotional_voice.py), per member: a day
+    # is read aloud once and kept, so this only bounds taps.
+    "devotional_listen": (int(os.environ.get("RL_DEVOTIONAL_LISTEN_PER_10MIN", "30")), 600),
+    # Joining a free class from its public page (academy_join.py) mails a
+    # class link, so the same shape as member sign-in: per network
+    # (generous: a church lobby is one address), then per business +
+    # address a one-minute cooldown and a daily ceiling.
+    "class_join_ip": (int(os.environ.get("RL_CLASS_JOIN_PER_HOUR", "60")), 3600),
+    "class_join_email_minute": (1, 60),
+    "class_join_email_day": (int(os.environ.get("RL_CLASS_JOIN_EMAIL_PER_DAY", "6")), 86400),
     # Check-in stations (kids_station.py), all strict: pairing codes per
     # network, PIN tries per station, and mobile-number lookups per
     # self check-in kiosk — so neither a code nor a family can be guessed.
     "station_pair": (int(os.environ.get("RL_STATION_PAIR_PER_10MIN", "10")), 600),
+    # Church event sign-ups (church_event_signups.py), strict: starting a
+    # sign-up opens a Stripe page and can hold places, so per network a
+    # family's few tries and no more; reading an offer or a receipt is looser.
+    "event_signup": (int(os.environ.get("RL_EVENT_SIGNUP_PER_10MIN", "12")), 600),
+    "event_signup_read": (int(os.environ.get("RL_EVENT_SIGNUP_READ_PER_10MIN", "60")), 600),
     "station_pin": (int(os.environ.get("RL_STATION_PIN_PER_15MIN", "6")), 900),
     "station_self_find": (int(os.environ.get("RL_STATION_SELF_PER_10MIN", "40")), 600),
     # Dev Desk relay: strict shared windows; screen cadence also uses a DB lock.
@@ -142,8 +175,30 @@ _LIMITS: Dict[str, Tuple[int, int]] = {
     "dev_alert_digest": (1, 900),
     "dev_alert_email": (1, 1800),
     "dev_watch_run": (6, 60),
+    # Chief's notes from a group leader to people who've been missing
+    # (group_care), per leader. Strict.
+    "care_notes": (int(os.environ.get("RL_CARE_NOTES_PER_HOUR", "6")), 3600),
+    # Photos in a group's chat (chat_photos), per member: each one is
+    # looked at by a model before it's kept. Strict.
+    "chat_photos": (int(os.environ.get("RL_CHAT_PHOTOS_PER_HOUR", "20")), 3600),
     # Live chat, per member; "I'm here" rides member_action.
     "live_chat": (int(os.environ.get("RL_LIVE_CHAT_PER_MIN", "8")), 60),
+    # Homework handed in as a file, by the class link (academy_work.py):
+    # per link (hashed), so a whole class on one church Wi-Fi isn't one
+    # budget; and a wide per-IP ceiling beside it. Opening a file is a
+    # signed link, per link or per teacher. Strict.
+    "academy_work_upload": (int(os.environ.get("RL_ACADEMY_WORK_UPLOAD_PER_HOUR", "30")), 3600),
+    "academy_work_upload_ip": (int(os.environ.get("RL_ACADEMY_WORK_UPLOAD_IP_PER_HOUR", "300")), 3600),
+    "academy_work_file": (int(os.environ.get("RL_ACADEMY_WORK_FILE_PER_10MIN", "60")), 600),
+    # Chief sums up a live class's answers (academy_class_sum), per class
+    # night: 8 every ten minutes, counting only asks that reach the model.
+    "class_sum": (int(os.environ.get("RL_CLASS_SUM_PER_10MIN", "8")), 600),
+    # A board's draft minutes emailed to its members (church_board.py), per
+    # meeting: a resend or two is normal, a loop of them isn't.
+    "church_board_send": (int(os.environ.get("RL_CHURCH_BOARD_SEND_PER_HOUR", "6")), 3600),
+    # The Monday leaders note (church_leaders_note.py), per church: it goes
+    # once a week anyway; this only stops a tap loop of tries that fail.
+    "church_leaders_note_send": (int(os.environ.get("RL_CHURCH_LEADERS_NOTE_SEND_PER_HOUR", "4")), 3600),
 }
 _DEFAULT = (60, 60)
 

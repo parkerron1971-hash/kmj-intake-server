@@ -39,6 +39,7 @@ from auth_supabase import require_user, UserSession
 from pydantic import BaseModel
 
 import sb_clients
+import storage_links
 from business_access import assert_access, business_access
 
 from agents.slot_system.unsplash_client import (
@@ -189,8 +190,19 @@ def diag_dalle_generate(
 
     business_id is in the body, so the FastAPI dependency cannot see it
     (it would look for a query string). assert_access is the same gate.
+
+    Everything after the gate uses the canonical business id and a slot
+    name the server defines. The write is service-role, so a caller's
+    own string in the storage key ("../<other id>/x.png#") would land in
+    another business's folder (Codex review of #1464, 2026-10-16).
     """
-    assert_access(req.business_id, session.user, "admin")
+    business_id = storage_links.canonical_business_id(req.business_id)
+    if not business_id:
+        raise HTTPException(status_code=404, detail="business not found")
+    assert_access(business_id, session.user, "admin")
+    if req.slot_name not in SLOT_DEFINITIONS:
+        raise HTTPException(400, {"error": "unknown_slot",
+                                  "allowed": sorted(SLOT_DEFINITIONS)})
     enriched_brief = {
         "inferred_vibe": req.inferred_vibe or "",
         "brand_metaphor": req.brand_metaphor or "",
@@ -208,7 +220,7 @@ def diag_dalle_generate(
     )
 
     expected = dalle_cost(req.quality, req.size)
-    allowed, current = can_dalle_generate(req.business_id, expected)
+    allowed, current = can_dalle_generate(business_id, expected)
     if not allowed:
         # 402 Payment Required is the closest semantic; budget-cap
         # rejection is exactly this. PART 5 reroll endpoint will
@@ -226,7 +238,7 @@ def diag_dalle_generate(
 
     debug = generate_dalle_image_debug(
         prompt=composed_prompt,
-        business_id=req.business_id,
+        business_id=business_id,
         slot_name=req.slot_name,
         quality=req.quality,
         size=req.size,
@@ -244,6 +256,7 @@ def diag_dalle_generate(
             "openai_no_data": 502,
             "openai_no_url": 502,
             "rehost_failed": 502,
+            "unsafe_slot_name": 400,
         }
         raise HTTPException(
             status_code=status_to_http.get(debug.get("status"), 502),
@@ -252,7 +265,7 @@ def diag_dalle_generate(
 
     # Persist as the slot's default so /preview surfaces it.
     persisted = slot_storage.set_slot_default(
-        business_id=req.business_id,
+        business_id=business_id,
         slot_name=req.slot_name,
         url=debug["url"],
         source="dalle",
@@ -263,7 +276,7 @@ def diag_dalle_generate(
         "composed_prompt": composed_prompt,
         "result": debug,
         "persisted_to_slot": persisted,
-        "spend_today_usd_after": get_site_dalle_spend_today(req.business_id),
+        "spend_today_usd_after": get_site_dalle_spend_today(business_id),
     }
 
 
@@ -309,7 +322,8 @@ def diag_storage_probe(
         "890000000D49444154789C636060606000000004000133D58E000000004945"
         "4E44AE426082"
     )
-    storage_path = f"{business_id}/_diag_probe_{int(_time.time())}.png"
+    # The folder is the id the access check returned, never the query string.
+    storage_path = f"{_biz.get('id')}/_diag_probe_{int(_time.time())}.png"
     debug = _upload_site_image_debug(storage_path, PNG_1X1, "image/png")
     return {
         "bucket": SITE_IMAGES_BUCKET,
@@ -504,7 +518,8 @@ async def upload_slot(
             },
         )
 
-    image_bytes = await file.read()
+    # Read at most one byte past the cap: enough to know it's too big.
+    image_bytes = await file.read(MAX_UPLOAD_BYTES + 1)
     if len(image_bytes) > MAX_UPLOAD_BYTES:
         raise HTTPException(
             400,
@@ -538,7 +553,13 @@ async def upload_slot(
     import time as _time
     ext = _MIME_TO_EXT.get(content_type, "png")
     ts = int(_time.time())
-    storage_path = f"{business_id}/custom_{slot_name}_{ts}.{ext}"
+    # Folder = the id the access check returned (canonical), not the path
+    # string; the slot name is a SLOT_DEFINITIONS key by now.
+    try:
+        storage_path = storage_links.business_object_key(
+            _biz.get("id"), f"custom_{slot_name}_{ts}.{ext}")
+    except ValueError:
+        raise HTTPException(400, {"error": "unsafe_storage_path"})
     public_url = _upload_site_image(storage_path, image_bytes, content_type)
     if not public_url:
         raise HTTPException(

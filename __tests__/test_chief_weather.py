@@ -80,7 +80,7 @@ def test_fresh_observation_and_forecast_remain_separate_timestamped_evidence():
 @pytest.mark.parametrize('stamp', [
     (NOW - timedelta(days=1)).isoformat(), (NOW + timedelta(minutes=1)).isoformat(),
     NOW.replace(tzinfo=None).isoformat(), 'invalid', None,
-])
+], ids=['a-day-old', 'a-minute-ahead', 'no-timezone', 'invalid', 'missing'])
 def test_old_future_or_unverifiable_observations_never_become_current(stamp):
     out, _ = run_lookup(obs={'properties': {**OBS['properties'], 'timestamp': stamp}})
     assert out['status'] == 'forecast_only' and out['current'] is None

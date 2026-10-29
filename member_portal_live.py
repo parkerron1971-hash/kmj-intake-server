@@ -99,8 +99,8 @@ def render_live(biz, site, request: Request, me: Dict[str, Any], cur: Optional[D
                    f'<span class="mb-row-t"><strong>{_e(first.get("title"))}</strong><span>{_e(when)}</span></span>'
                    f'{ui.icon("chevron", 18)}</a>')
         pool = photos.photos(biz, site)
-        pic = photos.pick(pool, "live", avoid=photos.hero(pool))
-        art = ui.photo(pic) if pic else ui.gen_art("Live")
+        pic, look = photos.choose(biz, "live", pool, words=("live", "stream", "stage", "worship"))
+        art = ui.picture(pic, look, "worship", night=True)
         church = _e(biz.get("name") or "the church")
         body = f"""<section class="mb-offair">{art}<div><span class="mb-kick">Live</span><h1>Between services</h1>
 <p style="margin:0"><strong>No service is live right now.</strong> When {church} goes live, it plays right here, with a chat for the church.</p></div></section>

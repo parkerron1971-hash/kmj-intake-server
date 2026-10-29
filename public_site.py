@@ -2478,7 +2478,14 @@ def _capture_contact_from_form(business_id: str, name: str, email: str,
         print(f"[contact-submit] contact/note storage failed biz={business_id[:8]}: {exc!r}", flush=True)
         return None
     if form == "connect_card":
-        return contact_id  # no lead scoring or automated outreach for church cards
+        # No lead scoring or automated outreach for church cards: a person
+        # follows up instead. Chief hands them to a leader (church_follow_up).
+        try:
+            import church_follow_up
+            church_follow_up.on_connect_card(business_id, contact_id, data, receipt or "")
+        except Exception as exc:
+            print(f"[contact-submit] church follow-up skipped biz={business_id[:8]}: {type(exc).__name__}", flush=True)
+        return contact_id
     try:
         import lead_scoring
         lead_scoring.score_in_background(
@@ -3916,7 +3923,14 @@ async def generate_html_endpoint(business_id: str, user: AuthedUser = Depends(re
     only .bak snapshots of decorationGen mention neighboring endpoints).
     The Builder-Agent pipeline this drove is superseded by the Module
     Composer end to end.
+
+    Owner-gated before the flag check, like smart-enable and
+    promote-alternative: with LEGACY_SITE_ENGINES on, the build below
+    rewrites the site row via service role, and it used to do that for
+    any signed-in caller (found beside Codex's re-check of #1464,
+    2026-10-16).
     """
+    _require_business_owner(business_id, user)
     import site_composer as _sc
     if not _sc.legacy_site_engines_enabled():
         return JSONResponse(status_code=410, content={
@@ -5987,15 +6001,33 @@ async def _serve_form_page(client, biz_id: Optional[str], slug: str, form_id: st
         f"/intake_forms?id=eq.{fid}&business_id=eq.{biz_id}&is_active=eq.true"
         "&select=id,business_id,name,fields,settings,form_type&limit=1",
     )
+    # A switched-off form still answers its link with the business's own
+    # page (render_closed_page): a website button may point here.
+    paused = False
+    if not rows:
+        rows = await _sb_service(
+            client,
+            f"/intake_forms?id=eq.{fid}&business_id=eq.{biz_id}&is_active=eq.false"
+            "&select=id,business_id,name,settings&limit=1",
+        )
+        paused = True
     if not rows:
         raise HTTPException(404, "form not found")
     biz_rows = await _sb_service(
         client, f"/businesses?id=eq.{biz_id}&select=id,name,type,settings&limit=1")
     if not biz_rows:
         raise HTTPException(404, "business not found")
-    from form_page_renderer import render_form_page
+    from form_page_renderer import render_closed_page, render_form_page
     from public_form_theme import SITE_SELECT
     site_rows = await _sb_service(client, f"/business_sites?business_id=eq.{biz_id}&status=eq.published&select={SITE_SELECT}&limit=1") or []
+    if paused:
+        return HTMLResponse(
+            content=render_closed_page(
+                biz_rows[0], rows[0],
+                canonical_url=f"https://{slug}.mysolutionist.app{_FORM_PAGE_PREFIX}{fid}",
+                site=site_rows[0] if site_rows else None),
+            status_code=404, media_type="text/html",
+            headers={**_PUBLIC_SITE_NO_STORE_HEADERS})
     from chief_host import FALLBACK_BASE
     html = render_form_page(
         biz_rows[0], rows[0],
@@ -6059,6 +6091,11 @@ async def _serve_events_page(client, biz_id: Optional[str], slug: str) -> HTMLRe
         entries_by_module[str(mod["id"])] = rows
 
     occasions = build_occasions(modules, entries_by_module)
+    # Events that take sign-ups (church_event_signups): price, places,
+    # deadline, questions. Fail-soft: a read that fails leaves the page as
+    # it was.
+    import church_event_signups
+    occasions = await asyncio.to_thread(church_event_signups.annotate, str(biz_id), occasions)
     from public_form_theme import SITE_SELECT
     site_rows = await _sb_service(client, f"/business_sites?business_id=eq.{biz_id}&status=eq.published&select={SITE_SELECT}&limit=1") or []
     html = render_events_page(business, occasions, canonical, slug,
@@ -6382,6 +6419,24 @@ def _academy_mode_css(theme: Dict[str, Any]) -> str:
     return ""
 
 
+def _academy_zone(business_id: str) -> str:
+    """The business's time zone (sync, worker thread); UTC when it can't tell."""
+    try:
+        from outside_calendar import business_timezone
+        return business_timezone(business_id) or "UTC"
+    except Exception:
+        return "UTC"
+
+
+async def _academy_is_church(client, biz_id) -> bool:
+    try:
+        rows = await _sb_service(client, f"/businesses?id=eq.{biz_id}&select=type&limit=1") or []
+        import vertical_registry
+        return bool(rows) and vertical_registry.resolve(rows[0].get("type")) == "ministry"
+    except Exception:
+        return False
+
+
 async def _serve_academy(client, biz_id, path: str, standalone: bool,
                          main_slug: str = "") -> HTMLResponse:
     """Render the academy catalog or a course landing page."""
@@ -6399,16 +6454,37 @@ async def _serve_academy(client, biz_id, path: str, standalone: bool,
             client,
             f"/academy_courses?id=eq.{course_id}&business_id=eq.{biz_id}"
             f"&status=eq.published&limit=1"
-            f"&select=id,title,description,drip_mode,product_id") or []
+            f"&select=id,title,description,drip_mode,opens_from,opens_tz,product_id,self_join") or []
         if crows:
+            import academy_join
             course = crows[0]
             lessons = await _sb_service(
                 client,
                 f"/academy_lessons?course_id=eq.{course_id}"
                 f"&order=sort_order.asc&limit=60"
-                f"&select=title,duration_minutes,lesson_type") or []
+                f"&select=id,title,duration_minutes,lesson_type,drip_offset_days") or []
+            # The class schedule (steps 2-4): what each week holds, said before
+            # anyone joins. Published items only; titles, never details.
+            import academy_site
+            items = await _sb_service(
+                client,
+                f"/academy_schedule_items?course_id=eq.{course_id}&status=eq.published"
+                f"&select=id,kind,title,lesson_id,project_id,position,starts_at&limit=300") or []
+            sessions = await _sb_service(
+                client,
+                f"/academy_live_sessions?course_id=eq.{course_id}&status=in.(scheduled,live,ended)"
+                f"&select=lesson_id,starts_at,status&limit=200") or []
+            membership = await _sb_service(
+                client,
+                f"/academy_program_courses?course_id=eq.{course_id}&limit=1"
+                f"&select=position,teacher_name,academy_programs(title,academy_program_courses(course_id))") or []
+            zone = course.get("opens_tz") or await asyncio.to_thread(_academy_zone, str(biz_id))
             price_html = ""
             product_id = course.get("product_id")
+            # Free and open (phase 4b): people join themselves, and their
+            # class link comes by email (academy_join.py).
+            if academy_join.join_open({**course, "status": "published"}):
+                price_html = academy_join.join_box(f"{course_href(course['id'])}/join", accent)
             if product_id:
                 prows = await _sb_service(
                     client,
@@ -6435,34 +6511,39 @@ async def _serve_academy(client, biz_id, path: str, standalone: bool,
   </div>"""
             total_min = sum(int(l.get("duration_minutes") or 0) for l in lessons)
             runtime = _academy_fmt_runtime(total_min)
-            drip = course.get("drip_mode") or "none"
-            drip_note = (
-                "New material unlocks each week after you join." if drip == "weekly"
-                else "Material unlocks on a guided schedule after you join." if drip == "custom"
-                else "Everything is available the moment you join.")
-            lesson_rows = "".join(
-                f'<div class="lesson"><span class="n">{i + 1}</span>'
-                f'<span class="t">{_esc(l.get("title") or "Lesson")}</span>'
-                f'<span class="d muted">{_esc(_academy_fmt_runtime(int(l.get("duration_minutes") or 0)))}</span></div>'
-                for i, l in enumerate(lessons))
+            next_live = await asyncio.to_thread(academy_join.next_class_line, str(biz_id), course_id)
+            drip_note = await asyncio.to_thread(academy_join.release_note, str(biz_id), course)
+            unit = "Week" if (course.get("drip_mode") or "none") == "weekly" else "Lesson"
+            weeks = academy_site.weeks_html(academy_site.week_rows(course, lessons, items, sessions, zone), accent, unit)
+            facts = academy_site.facts_html(course, lessons, items, zone)
+            prog = (membership[0].get("academy_programs") or {}) if membership else {}
+            eyebrow = safe_biz + " &middot; Academy"
+            if prog.get("title"):
+                n_tracks = len(prog.get("academy_program_courses") or [])
+                eyebrow = (_esc(prog["title"]) + (f" &middot; track {int(membership[0].get('position') or 0) + 1} of {n_tracks}"
+                                                  if n_tracks > 1 else ""))
+            teacher = (membership[0].get("teacher_name") or "").strip() if membership else ""
+            title_shown = academy_site.track_name(course.get("title") or "Course", prog.get("title") or "")
             html = f"""<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>{_esc(course.get("title") or "Course")} &mdash; {safe_biz}</title>
-<style>{_ACADEMY_CSS}</style>{skin_head}<style>{mode_css}</style></head>
+<style>{_ACADEMY_CSS}{academy_join.JOIN_CSS}{academy_site.SITE_CSS}</style>{skin_head}<style>{mode_css}</style></head>
 <body><div class="wrap">
-  <a class="back" style="color:{accent}" href="{_esc(catalog_href)}">&larr; All courses</a>
+  <a class="back" style="color:{accent}" href="{_esc(catalog_href)}">&larr; All {'classes' if prog.get('title') else 'courses'}</a>
   <div style="height:26px"></div>
-  <div class="eyebrow" style="color:{accent}">{safe_biz} &middot; Academy</div>
-  <h1>{_esc(course.get("title") or "Course")}</h1>
+  <div class="eyebrow" style="color:{accent}">{eyebrow}</div>
+  <h1>{_esc(title_shown)}</h1>
   <p class="muted" style="font-size:15.5px;max-width:600px">{_esc(course.get("description") or "")}</p>
-  <div class="meta muted" style="margin-top:14px">
-    <span>{len(lessons)} lesson{"s" if len(lessons) != 1 else ""}</span>
-    {f'<span>&middot; {_esc(runtime)}</span>' if runtime else ''}
-    <span>&middot; {_esc(drip_note)}</span>
+  {facts}
+  <div class="meta muted" style="margin-top:12px">
+    <span>{_esc(drip_note)}</span>
+    {f'<span>&middot; {_esc(runtime)} in all</span>' if runtime else ''}
+    {f'<span>&middot; with {_esc(teacher)}</span>' if teacher else ''}
   </div>
+  {f'<p class="next-live" style="color:{accent}">Next live class: {_esc(next_live)}</p>' if next_live else ''}
   {price_html}
-  <div class="lessons">{lesson_rows}</div>
+  {weeks}
   <div class="foot muted">Powered by The Solutionist System</div>
 </div></body></html>"""
             html = _inject_brand_meta(html, biz_id)
@@ -6475,7 +6556,13 @@ async def _serve_academy(client, biz_id, path: str, standalone: bool,
             client,
             f"/academy_courses?business_id=eq.{biz_id}&status=eq.published"
             f"&order=created_at.desc&limit=50"
-            f"&select=id,title,description,product_id") or []
+            f"&select=id,title,description,product_id,self_join,drip_mode,opens_from,opens_tz") or []
+        import academy_site
+        church = await _academy_is_church(client, biz_id)
+        zone = await asyncio.to_thread(_academy_zone, str(biz_id))
+        items_by_course: Dict[str, List[Dict[str, Any]]] = {}
+        dates_by_course: Dict[str, List[str]] = {}
+        programs: List[Dict[str, Any]] = []
         lesson_stats: Dict[str, Dict[str, int]] = {}
         price_by_product: Dict[str, str] = {}
         if courses:
@@ -6488,6 +6575,17 @@ async def _serve_academy(client, biz_id, path: str, standalone: bool,
                 s = lesson_stats.setdefault(l["course_id"], {"n": 0, "min": 0})
                 s["n"] += 1
                 s["min"] += int(l.get("duration_minutes") or 0)
+            for it in await _sb_service(
+                    client, f"/academy_schedule_items?course_id=in.({ids})&status=eq.published"
+                    f"&select=course_id,kind,project_id,lesson_id&limit=2000") or []:
+                items_by_course.setdefault(it["course_id"], []).append(it)
+            for se in await _sb_service(
+                    client, f"/academy_live_sessions?course_id=in.({ids})&status=in.(scheduled,live,ended)"
+                    f"&select=course_id,starts_at&limit=2000") or []:
+                dates_by_course.setdefault(se["course_id"], []).append(se["starts_at"])
+            programs = await _sb_service(
+                client, f"/academy_programs?business_id=eq.{biz_id}"
+                f"&select=id,title,finish_title,finish_at,academy_program_courses(course_id,position)&limit=10") or []
             pids = [c.get("product_id") for c in courses if c.get("product_id")]
             if pids:
                 prows = await _sb_service(
@@ -6496,18 +6594,40 @@ async def _serve_academy(client, biz_id, path: str, standalone: bool,
                 for p in prows:
                     if (p.get("stripe_payment_url") or "").strip() and p.get("price"):
                         price_by_product[p["id"]] = f"${int(round(float(p['price']))):,}"
+        by_id = {c["id"]: c for c in courses}
+        program_bands = ""
+        for pg in programs:
+            tracks = []
+            for pc in sorted(pg.get("academy_program_courses") or [], key=lambda r: r.get("position") or 0):
+                c = by_id.get(pc.get("course_id"))
+                if not c:
+                    continue
+                ds = sorted(dates_by_course.get(c["id"]) or [])
+                if ds:
+                    a, b = academy_site._when(ds[0]), academy_site._when(ds[-1])
+                    a, b = academy_site._local(a, c.get("opens_tz") or zone), academy_site._local(b, c.get("opens_tz") or zone)
+                    dates = f"{a.strftime('%b')} {a.day} – {b.strftime('%b')} {b.day}" if ds[0] != ds[-1] else f"{a.strftime('%b')} {a.day}"
+                else:
+                    dates = academy_site.when_line(c, zone)
+                tracks.append({"id": c["id"], "name": academy_site.track_name(c.get("title") or "", pg.get("title") or ""), "dates": dates})
+            program_bands += academy_site.program_html(pg, tracks, accent, course_href, zone)
         cards = ""
         for c in courses:
             s = lesson_stats.get(c["id"], {"n": 0, "min": 0})
+            lines = [academy_site.when_line(c, zone), academy_site.pace_line(c, s["n"]),
+                     academy_site.involves_line(items_by_course.get(c["id"]) or [], s["n"])]
             runtime = _academy_fmt_runtime(s["min"])
             price = price_by_product.get(c.get("product_id") or "")
+            if not price and c.get("self_join") is not False and not c.get("product_id"):
+                price = "Free"
             price_pill = (
                 f'<span class="pill" style="background:{accent}1a;color:{accent}">{_esc(price)}</span>'
                 if price else "")
             cards += f"""
   <a class="card" href="{_esc(course_href(c["id"]))}">
-    <h2>{_esc(c.get("title") or "Course")}</h2>
+    <h2>{_esc(c.get("title") or ("Class" if church else "Course"))}</h2>
     <p class="muted">{_esc((c.get("description") or "")[:160])}</p>
+    <div class="ac-lines"><b>{_esc(lines[0])}</b><span class="muted">{_esc(lines[1])}</span>{f'<span class="muted">{_esc(lines[2])}</span>' if lines[2] else ''}</div>
     <div class="meta muted">
       <span>{s["n"]} lesson{"s" if s["n"] != 1 else ""}</span>
       {f'<span>&middot; {_esc(runtime)}</span>' if runtime else ''}
@@ -6515,25 +6635,28 @@ async def _serve_academy(client, biz_id, path: str, standalone: bool,
     </div>
   </a>"""
         empty = "" if courses else (
-            '<p class="muted" style="margin-top:30px">New courses are on the way &mdash; check back soon.</p>')
+            '<p class="muted" style="margin-top:30px">'
+            + ("New classes are on the way" if church else "New courses are on the way")
+            + ' &mdash; check back soon.</p>')
         main_link = (
             f'<a class="back" style="color:{accent}" href="{_esc(main_href)}">&larr; {safe_biz}</a>'
             if main_href else "")
-        catalog_h1 = _esc((theme.get("headline") or "").strip() or "The Academy")
-        default_intro = ("Courses taught by " + biz_name
-                         + " — learn at your own pace, with real accountability.")
+        catalog_h1 = _esc((theme.get("headline") or "").strip() or ("Classes" if church else "The Academy"))
+        default_intro = (("Classes" if church else "Courses") + " from " + biz_name
+                         + ". Each one says when it meets and what it asks of you, before you join.")
         catalog_intro = _esc((theme.get("intro") or "").strip() or default_intro)
         html = f"""<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Academy &mdash; {safe_biz}</title>
-<style>{_ACADEMY_CSS}</style>{skin_head}<style>{mode_css}</style></head>
+<title>{'Classes' if church else 'Academy'} &mdash; {safe_biz}</title>
+<style>{_ACADEMY_CSS}{academy_site.SITE_CSS}</style>{skin_head}<style>{mode_css}</style></head>
 <body><div class="wrap">
   {main_link}
   <div style="height:26px"></div>
   <div class="eyebrow" style="color:{accent}">{safe_biz}</div>
   <h1>{catalog_h1}</h1>
   <p class="muted" style="font-size:15.5px;max-width:560px">{catalog_intro}</p>
+  {program_bands}
   <div class="cards">{cards}</div>
   {empty}
   <div class="foot muted">Powered by The Solutionist System</div>
@@ -6620,17 +6743,27 @@ def _learn_content_html(text: str) -> str:
     return "".join(f"<p>{p}</p>" for p in paras)
 
 
-def _learn_unlock(drip_mode: str, idx: int, drip_offset_days: int, enrolled_at: str):
-    """Datetime when lesson idx unlocks, or None if already available."""
+def _learn_unlock(drip_mode: str, idx: int, drip_offset_days: int, enrolled_at: str,
+                  opens_from: Optional[str] = None, opens_tz: Optional[str] = None):
+    """Datetime when lesson idx unlocks, or None if already available.
+    A class that runs together counts from its opens_from, on the clock of
+    its opens_tz (6 PM stays 6 PM across daylight saving); everyone else
+    from the day they joined. academy_lesson_unlock says the same."""
     if drip_mode not in ("weekly", "custom"):
         return None
     days = idx * 7 if drip_mode == "weekly" else max(0, int(drip_offset_days or 0))
-    if days <= 0:
+    if days <= 0 and not opens_from:
         return None
     try:
-        base = datetime.fromisoformat((enrolled_at or "").replace("Z", "+00:00"))
+        base = datetime.fromisoformat((opens_from or enrolled_at or "").replace("Z", "+00:00"))
     except Exception:
         return None
+    if opens_from and opens_tz:
+        try:
+            from zoneinfo import ZoneInfo
+            base = base.astimezone(ZoneInfo(opens_tz))  # aware + timedelta keeps the wall clock
+        except Exception:
+            pass
     when = base + timedelta(days=days)
     return when if when > datetime.now(timezone.utc) else None
 
@@ -6650,7 +6783,7 @@ async def _learn_load(client, token: str):
     crows = await _sb_service(
         client,
         f"/academy_courses?id=eq.{enr['course_id']}&limit=1"
-        f"&select=id,title,description,drip_mode") or []
+        f"&select=id,title,description,drip_mode,opens_from,opens_tz") or []
     if not crows:
         return None
     lessons = await _sb_service(
@@ -6702,7 +6835,7 @@ async def _serve_learner(path: str) -> HTMLResponse:
                 return RedirectResponse(url=home_href, status_code=303)
             lesson = lessons[idx]
             locked = _learn_unlock(drip_mode, idx, lesson.get("drip_offset_days") or 0,
-                                   enr.get("enrolled_at") or "")
+                                   enr.get("enrolled_at") or "", course.get("opens_from"), course.get("opens_tz"))
             if locked:
                 return RedirectResponse(url=home_href, status_code=303)
             is_done = bool(progress.get(lesson_id))
@@ -6762,7 +6895,7 @@ async def _serve_learner(path: str) -> HTMLResponse:
         rows = ""
         for i, l in enumerate(lessons):
             locked = _learn_unlock(drip_mode, i, l.get("drip_offset_days") or 0,
-                                   enr.get("enrolled_at") or "")
+                                   enr.get("enrolled_at") or "", course.get("opens_from"), course.get("opens_tz"))
             is_done = bool(progress.get(l["id"]))
             check = (f'<span class="check" style="background:{accent};border-color:{accent}">&#10003;</span>'
                      if is_done else '<span class="check"></span>')
@@ -7169,6 +7302,11 @@ async def subdomain_root(request: Request):
     """
     host = public_host(request)
 
+    # ChurchSavvy's own domain: its home page (churchsavvy_site.py).
+    import churchsavvy_site
+    if churchsavvy_site.is_host(host):
+        return churchsavvy_site.respond("/")
+
     slug = extract_slug_from_host(request)
     if slug:
         if not _check_rate(slug):
@@ -7540,6 +7678,11 @@ async def _site_response_or_none(request: Request, *, charge_page_views: bool = 
     alone.
     """
     path = "/" + (request.url.path or "").lstrip("/")
+    # ChurchSavvy's own domain is neither the platform nor a practitioner's
+    # site: it answers with ChurchSavvy's website (churchsavvy_site.py).
+    import churchsavvy_site
+    if churchsavvy_site.is_host(public_host(request)):
+        return churchsavvy_site.respond(path)
     site_host = _site_host(request)
     if site_host is None:
         return None
@@ -7730,7 +7873,7 @@ async def public_marketing_link(request: Request, code: str):
 # does, because a sitemap advertising a 404 is worse than no sitemap.
 
 _MARKETING_SITEMAP_PATHS = [
-    ("/", "1.0"), ("/features", "0.8"), ("/compare", "0.8"),
+    ("/", "1.0"), ("/churches", "0.9"), ("/coaches", "0.9"), ("/features", "0.8"), ("/compare", "0.8"),
     ("/faq", "0.6"), ("/about", "0.6"), ("/get-started", "0.7"),
     ("/download", "0.5"), ("/privacy", "0.3"), ("/terms", "0.3"),
 ]
@@ -7775,6 +7918,12 @@ async def public_sitemap(request: Request):
         return site
     origin = "https://mysolutionist.app"
     entries = [(origin + p, pri) for p, pri in _MARKETING_SITEMAP_PATHS]
+    import church_site
+    import coach_site
+    if church_site.enabled():
+        entries.extend((origin + church_site.path_of(s), "0.8") for s in church_site.PRODUCTS)
+    if coach_site.enabled():
+        entries.extend((origin + coach_site.path_of(s), "0.8") for s in coach_site.PRODUCTS)
     posts = await _platform_news_posts()
     if posts:
         entries.append((origin + "/news", "0.7"))
@@ -7805,6 +7954,58 @@ async def public_faq(request: Request):
 @router.get("/about", include_in_schema=False)
 async def public_about(request: Request):
     return await _platform_page_or_site(request, render_about)
+
+# One brand, three front pages (2026-10-22): the home, and the same page for
+# churches and for coaches and consultants (marketing_home_v3.EDITIONS).
+# /consultants is the coaches page with consultants first.
+#
+# CHURCH_SITE=on (church_site.py, 2026-10-23) puts the church section there
+# instead: an overview and seven product pages, each lit in its own colour.
+# COACH_SITE (coach_site.py) does the same for coaches and consultants;
+# /consultants serves the same overview, whose canonical link is /coaches.
+@router.get("/churches", include_in_schema=False)
+async def public_edition_churches(request: Request):
+    import church_site
+    if church_site.enabled():
+        return await _platform_page_or_site(request, lambda: church_site.render(""))
+    import marketing_home_v3
+    return await _platform_page_or_site(request, lambda: marketing_home_v3.render_edition("churches"))
+
+@router.get("/churches/{slug}", include_in_schema=False)
+async def public_church_page(request: Request, slug: str):
+    """One church product page. Switched off, or a name that isn't one of
+    the seven, the path goes to the catch-all exactly as it did before
+    this route existed (a site host's own page, or the platform's 404)."""
+    import church_site
+    if church_site.enabled() and slug in church_site.PRODUCTS:
+        return await _platform_page_or_site(request, lambda: church_site.render(slug))
+    return await subdomain_catch_all(request, f"churches/{slug}")
+
+@router.get("/coaches", include_in_schema=False)
+async def public_edition_coaches(request: Request):
+    import coach_site
+    if coach_site.enabled():
+        return await _platform_page_or_site(request, lambda: coach_site.render(""))
+    import marketing_home_v3
+    return await _platform_page_or_site(request, lambda: marketing_home_v3.render_edition("coaches"))
+
+@router.get("/coaches/{slug}", include_in_schema=False)
+async def public_coach_page(request: Request, slug: str):
+    """One coaches product page; anything else goes to the catch-all, as
+    public_church_page does."""
+    import coach_site
+    if coach_site.enabled() and slug in coach_site.PRODUCTS:
+        return await _platform_page_or_site(request, lambda: coach_site.render(slug))
+    return await subdomain_catch_all(request, f"coaches/{slug}")
+
+@router.get("/consultants", include_in_schema=False)
+async def public_edition_consultants(request: Request):
+    import coach_site
+    if coach_site.enabled():
+        return await _platform_page_or_site(request, lambda: coach_site.render(""))
+    import marketing_home_v3
+    return await _platform_page_or_site(
+        request, lambda: marketing_home_v3.render_edition("coaches", first="consult"))
 
 @router.get("/get-started", include_in_schema=False)
 async def public_get_started(request: Request):
@@ -7953,6 +8154,11 @@ async def subdomain_catch_all(request: Request, path: str):
     # downstream renderer expects /about, /services, etc.
     request_path = "/" + (path or "")
 
+    # ChurchSavvy's own domain: its website, and nothing of a church's.
+    import churchsavvy_site
+    if churchsavvy_site.is_host(host):
+        return churchsavvy_site.respond(request_path)
+
     # Academy Phase 4B — learner portal. Portal tokens are globally
     # unique, so /learn/* is host-independent: the same link works on
     # subdomains, custom domains, and standalone academy addresses.
@@ -7965,6 +8171,23 @@ async def subdomain_catch_all(request: Request, path: str):
     if request_path == "/my" or request_path.startswith("/my/"):
         import member_portal
         return await member_portal.serve(request, request_path)
+    # Sunday check-in's short address, for the code on the welcome slide
+    # (member_portal_checkin.py): the member's own page does the rest.
+    if request_path.rstrip("/") == "/here":
+        return RedirectResponse(url="/my/here", status_code=302,
+                                headers={**_PUBLIC_SITE_NO_STORE_HEADERS, "Referrer-Policy": "no-referrer"})
+    # A church's office door (office_door.py): its address + /office opens the
+    # app's sign-in in the church's colours. Any other site keeps its own
+    # /office page, so this asks whose address it is first.
+    if request_path.rstrip("/") == "/office":
+        import member_portal
+        import office_door
+        found = member_portal._church_for_request(request)
+        door = office_door.path_for(found["business"]["id"]) if found else None
+        if door:
+            from app_base import app_base_url
+            return RedirectResponse(url=f"{app_base_url()}{door}", status_code=302,
+                                    headers={**_PUBLIC_SITE_NO_STORE_HEADERS, "Referrer-Policy": "no-referrer"})
 
     slug = extract_slug_from_host(request)
     if slug:
@@ -8013,7 +8236,7 @@ async def learner_mark(token: str, request: Request):
             return RedirectResponse(url=back, status_code=303)
         if _learn_unlock(course.get("drip_mode") or "none", idx,
                          lessons[idx].get("drip_offset_days") or 0,
-                         enr.get("enrolled_at") or ""):
+                         enr.get("enrolled_at") or "", course.get("opens_from"), course.get("opens_tz")):
             return RedirectResponse(url=f"/learn/{token}", status_code=303)
         patch: Dict[str, Any] = {}
         if kind == "homework":

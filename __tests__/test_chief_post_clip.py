@@ -272,7 +272,7 @@ def test_no_clip_named_at_all(s):
     assert out['label'] == 'Which clip?'
 
 
-@pytest.mark.parametrize('clip_id', ['not-a-uuid', str(uuid4())])
+@pytest.mark.parametrize('clip_id', ['not-a-uuid', str(uuid4())], ids=['malformed', 'unknown'])
 def test_an_unknown_or_malformed_id(s, clip_id):
     out = refused(s, run({'clip_id': clip_id}))
     assert out['label'] == 'Clip not found'

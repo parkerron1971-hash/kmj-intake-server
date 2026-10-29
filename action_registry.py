@@ -256,8 +256,22 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
     # refused unless the chat's signed-in user is the owner or a manager,
     # so an outside caller, which has no turn user, never gets it.
     "church_people":       _r("first-time guests, group drift and attendance from "
-                              "church_reads; care counts gated to owner/manager. "
-                              "Writes nothing"),
+                              "church_reads; care counts gated to owner/manager; "
+                              "the role library (titles, jobs, who holds them, "
+                              "the chain; leaders' names only) from church_roles; "
+                              "shepherding (who shepherds whom, drifting, not "
+                              "reached) gated to owner/manager. Writes nothing"),
+    # The owner asks Chief for a role ("add a Church Mother role"). It is
+    # saved as a DRAFT: routing ignores drafts, so it hands nobody anything
+    # until the owner saves it on Leaders & roles; discarding it deletes it.
+    "draft_church_role":   _w("A", "creates one draft role in church_role_defs; "
+                                   "inert until the owner saves it; discard deletes it"),
+    # The owner asks Chief to move families between shepherds ("give both
+    # Johnsons to Pastor Andre"). The moves wait in the shepherding
+    # proposal: nothing is reassigned and no shepherd is emailed until the
+    # office approves it on Shepherding; discarding the proposal drops them.
+    "draft_shepherd_moves": _w("A", "writes moves into church_shepherd_drafts; inert "
+                                    "until the office approves on Shepherding; discard drops them"),
 
     # ── UI directives ────────────────────────────────────────────────
     # Verified: pass-throughs the frontend acts on. No persistence.
@@ -392,6 +406,7 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
     "reschedule_booking":     _w("A", "moves an appointment; sends nothing, same as cancel"),
     "inspect_course": _r("owner-scoped course and lesson content; includes private answer keys"),
     "save_course_content": _w("A", "atomically authors course lessons, workbooks, quizzes and live details; published course edits are student-visible"),
+    "save_lesson_slides": _w("A", "saves one lesson's slide deck (replaces it); published-course slides are student-visible and show on a presenting TV"),
     "create_course":          _w("A", "atomically creates a draft course and complete lessons"),
     "create_growth_objective": _w("A", "materializes an objective plus its modules/workflows/"
                                        "milestones — a lot of rows, all ordinary records"),

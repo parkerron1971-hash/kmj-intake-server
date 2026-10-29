@@ -61,6 +61,32 @@ KIDS_BASE: Dict[str, Any] = {"bg": "#fff8ec", "s1": "#ffffff", "s2": "#fbefd9", 
 KIDS_ACCENT = "#f28c28"
 DEFAULT_BASE = "black"
 
+# The colour family (Kevin, 2026-10-19: "it only have two colors. this
+# experience need to have accent to it"; approved on the "Member App, Round
+# Three" canvas). The church's colour still owns every main button; each
+# part of the app wears one of these beside it: gold for the Word (Bible,
+# the verse, reading plans), teal for people (Connect, groups, serving),
+# violet for listening (Watch, messages, youth), coral for dates (events,
+# this week, kids). Each has a fill, the words on it, an ink that reads
+# on a dark base and one that reads on a light base, and a deep surface
+# for each. A family colour within FAMILY_NEAR of the church's own steps
+# aside and takes the church colour. settings.member_portal.colours =
+# "church" turns the family off (every hue is the church's).
+FAMILY: Dict[str, Dict[str, Any]] = {
+    "gold": {"hue": 42, "fill": "#E3A92B", "on": "#1A1205", "ink_d": "#F4C04E", "ink_l": "#8A5A00",
+             "deep_d": "#251C09", "deep_l": "#FBF1D9"},
+    "teal": {"hue": 172, "fill": "#17A894", "on": "#03211D", "ink_d": "#4FD8C4", "ink_l": "#0A7566",
+             "deep_d": "#08241F", "deep_l": "#DDF3EE"},
+    "violet": {"hue": 250, "fill": "#6D57E8", "on": "#FFFFFF", "ink_d": "#A99BFF", "ink_l": "#5440D0",
+               "deep_d": "#16122E", "deep_l": "#ECE9FF"},
+    "coral": {"hue": 20, "fill": "#F07A43", "on": "#2A1206", "ink_d": "#FF9D6B", "ink_l": "#A9471A",
+              "deep_d": "#2A1409", "deep_l": "#FDE8DD"},
+}
+FAMILY_NEAR = 35       # degrees of hue
+# Which family colour a page's tab wears (home, give and news wear the church's).
+TAB_HUE = {"watch": "violet", "bible": "gold", "connect": "teal", "events": "coral", "prayer": "teal",
+           "messages": "teal", "directory": "teal"}
+
 TABS = (
     ("home", "/my", "Home", '<path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"/>'),
     ("watch", "/my/sermons", "Watch",
@@ -83,7 +109,8 @@ YOUTH_TABS = (
     ("crew", "/my/groups", "Crew", TABS[4][3]),
 )
 YOUTH_TAB_OF = {"home": "home", "watch": "watch", "sermons": "watch", "live": "watch", "bible": "bible",
-                "messages": "chats", "chats": "chats", "groups": "crew", "connect": "crew", "crew": "crew"}
+                "messages": "chats", "chats": "chats", "groups": "crew", "connect": "crew", "crew": "crew",
+                "events": "home", "prayer": "home", "news": "home"}
 # Kids' bar (member_spaces_kids): its stories, its Sundays and the family.
 # A leader who isn't a parent gets the first three, Home called Room.
 KIDS_TABS = (
@@ -94,10 +121,29 @@ KIDS_TABS = (
     ("family", "/my/kids/family", "Family", TABS[4][3]),
 )
 KIDS_TAB_OF = {"home": "home", "watch": "watch", "sermons": "watch", "live": "watch", "stories": "stories",
-               "sundays": "sundays", "family": "family"}
-# Which tab a page belongs under.
+               "sundays": "sundays", "family": "family", "events": "home", "prayer": "home", "news": "home"}
+# Which tab a page belongs under. Events, Prayer and News sit under Home
+# unless the church made them tabs of their own (church_tabs).
 TAB_OF = {"home": "home", "watch": "watch", "sermons": "watch", "live": "watch", "bible": "bible",
-          "give": "give", "connect": "connect", "groups": "connect", "messages": "connect"}
+          "give": "give", "connect": "connect", "groups": "connect", "messages": "connect", "lead": "lead",
+          "events": "home", "prayer": "home", "news": "home", "directory": "connect",
+          "ask": "home", "board": "board"}
+# A member who holds a church role (church_follow_up) gets a sixth tab:
+# the people Chief hands them (member_portal_lead).
+LEAD_TAB = ("lead", "/my/lead", "Lead", '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/>')
+# Who sees what (Kevin, 2026-10-26: "go with your picks"): one tab for anyone
+# the church has given a part, called Serve: a role, a group to lead, a place
+# on a Sunday team, a kids room. Same page and route; switched by
+# CHURCH_AREAS with the rest of Who sees what (serve_mode).
+SERVE_TAB = ("lead", "/my/lead", "Serve",
+             '<path d="M11 14h2a2 2 0 1 0 0-4h-3c-.6 0-1.1.2-1.4.6L3 16"/><path d="m7 20 1.6-1.4c.3-.4.8-.6 1.4-.6h4c1.1 0 '
+             '2.1-.4 2.8-1.2l4.6-4.4a2 2 0 0 0-2.75-2.91l-4.2 3.9"/><path d="m2 15 6 6"/>')
+
+
+def serve_mode() -> bool:
+    """The Lead tab is the Serve tab, for every part (Who sees what)."""
+    import church_areas
+    return church_areas.mode() == "on"
 
 ICONS = {
     "heart": '<path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7z"/>',
@@ -135,14 +181,138 @@ ICONS = {
     "home": '<path d="M3 21h18M5 21V8l7-5 7 5v13"/><path d="M10 21v-6h4v6"/>',
     "down": '<path d="m6 9 6 6 6-6"/>',
     "star": '<path d="m12 2.5 2.9 5.9 6.6 1-4.8 4.6 1.1 6.5L12 17.4l-5.9 3.1 1.1-6.5-4.8-4.6 6.6-1z"/>',
+    # The member directory (member_directory): a book with a person on it.
+    "directory": '<path d="M15 13a3 3 0 1 0-6 0"/><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H19a1 1 0 0 1 1 1v18a1 1 0 0 1-1 1H6.5a1 1 0 0 1 0-5H20"/>'
+                 '<circle cx="12" cy="8" r="2"/>',
     "camera": '<path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3z"/><circle cx="12" cy="13" r="3.5"/>',
 }
+
+
+# A member who sits on one of the church's boards (Board & minutes) gets the
+# Board tab (member_portal_board, Kevin 2026-10-28), last. One who has Serve
+# too keeps Serve there: the phone's bar holds six, and the Board is at the
+# top of Serve and in a computer's sidebar instead.
+BOARD_TAB = ("board", "/my/board", "Board", ICONS["users"])
 
 
 def icon(name: str, size: int = 20) -> str:
     return (f'<svg class="mb-ic" width="{size}" height="{size}" viewBox="0 0 24 24" fill="none" '
             f'stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" '
             f'aria-hidden="true" focusable="false">{ICONS[name]}</svg>')
+
+
+# ─── the church's own bar ────────────────────────────────────────────
+# Tabs your members see (2026-10-27, Kevin: "build it merge it"; step 4 of
+# the Church Menu Upgrade, filed under "Love City leaves Subsplash"): the
+# church office picks which tabs the church's bar shows and in what order,
+# the way a Subsplash app's Manage tabs does (Settings → Member page,
+# settings.member_portal.tabs, a list of keys). Nothing saved is today's
+# bar exactly (TABS).
+#
+# - Home is always first and always there.
+# - Give is always there (Kevin, 2026-10-15) and can move: before the
+#   church takes gifts in the app, it says how to give.
+# - Only pages every signed-in member already has are offered, so a tab
+#   never leads nowhere. Messages needs the church's member messaging on;
+#   while it's off the tab stays out of the bar.
+# - Five at most: the phone bar fits five, and a leader's Serve tab (Lead)
+#   still comes last, as the sixth.
+# Youth and Kids keep their own bars (YOUTH_TABS, KIDS_TABS).
+CHURCH_TAB_LIMIT = 5
+DEFAULT_TAB_KEYS = tuple(t[0] for t in TABS)
+CHURCH_TABS: Dict[str, Tuple[str, str, str, str]] = {
+    **{t[0]: t for t in TABS},
+    "events": ("events", "/my/events", "Events", ICONS["calendar"]),
+    "news": ("news", "/my/news", "News", ICONS["bell"]),
+    "prayer": ("prayer", "/my/prayer", "Prayer", ICONS["pray"]),
+    "messages": ("messages", "/my/messages", "Messages", ICONS["chat"]),
+    # Offered only while the church has its member directory on
+    # (member_directory.church_on); turning it off takes it off the bar.
+    "directory": ("directory", "/my/directory", "Directory", ICONS["directory"]),
+}
+# What each tab opens, in the office's words (Settings shows these).
+TAB_HINTS = {
+    "home": "Always first: the week, what's on and the verse",
+    "watch": "Sermons, series and the live service",
+    "bible": "The Bible, reading plans and devotionals",
+    "give": "Always there: giving, or how to give before you take gifts in the app",
+    "connect": "Groups, classes and chats",
+    "events": "What's coming up, with RSVPs and sign-ups",
+    "news": "Your news, celebrations and good news from members",
+    "prayer": "A prayer request straight to your pastors",
+    "messages": "Chats with groups and the church",
+    "directory": "The members who chose to be listed, households together",
+}
+
+
+def clean_tab_keys(value: Any) -> Optional[list]:
+    """A bar the office saved, made safe: known keys only, each once, Home
+    first, Give kept (where they put it, else last), at most
+    CHURCH_TAB_LIMIT. None for anything that isn't a list."""
+    if not isinstance(value, (list, tuple)):
+        return None
+    picked: list = []
+    for k in value:
+        k = k.strip().lower() if isinstance(k, str) else ""
+        if k in CHURCH_TABS and k != "home" and k not in picked:
+            picked.append(k)
+    room, kept = CHURCH_TAB_LIMIT - 2, []   # Home and Give always take two
+    for k in picked:
+        if k == "give" or len([x for x in kept if x != "give"]) < room:
+            kept.append(k)
+    if "give" not in kept:
+        kept.append("give")
+    return ["home"] + kept
+
+
+def church_tab_keys(biz: Optional[Dict[str, Any]]) -> Tuple[str, ...]:
+    """The church's bar as it saved it, in order; today's bar when it saved
+    none (or something that isn't a bar)."""
+    cfg = ((biz or {}).get("settings") or {}).get("member_portal") or {}
+    keys = clean_tab_keys(cfg.get("tabs")) if isinstance(cfg, dict) else None
+    return tuple(keys) if keys else DEFAULT_TAB_KEYS
+
+
+def _tab_ready(biz: Optional[Dict[str, Any]], key: str) -> bool:
+    """Whether a tab's page is there for the church's members now."""
+    if key == "messages":
+        import member_portal_messaging as mpm
+        return mpm.turned_on(biz or {})
+    if key == "directory":
+        import member_directory
+        return member_directory.church_on(biz)
+    return True
+
+
+def church_tabs(biz: Optional[Dict[str, Any]]) -> Tuple[Tuple[str, str, str, str], ...]:
+    """The tabs of the church's bar, in its order, each one a page that's
+    there (a saved Messages tab waits for member messaging)."""
+    keys = church_tab_keys(biz)
+    if keys == DEFAULT_TAB_KEYS:
+        return TABS
+    return tuple(CHURCH_TABS[k] for k in keys if _tab_ready(biz, k))
+
+
+def in_church_bar(biz: Optional[Dict[str, Any]], key: Optional[str]) -> bool:
+    """Whether a page is a tab of its own in the church's bar."""
+    return bool(key) and any(t[0] == key for t in church_tabs(biz))
+
+
+def tab_choices(biz: Optional[Dict[str, Any]]) -> list:
+    """Every tab the office can pick, for Settings → Member page: its name,
+    what it opens, whether it's locked (Home first, Give always there) and,
+    for Messages, whether members would see it yet. The directory is offered
+    only while the church has it on, so no tab leads nowhere."""
+    out = []
+    for key, (_, _href, label, _paths) in CHURCH_TABS.items():
+        ready = _tab_ready(biz, key)
+        if key == "directory" and not ready:
+            continue
+        out.append({"key": key, "label": label, "hint": TAB_HINTS.get(key, ""),
+                    "locked": "first" if key == "home" else "always" if key == "give" else "",
+                    "ready": ready,
+                    "waiting": "" if ready else "Members see it once member messaging is on."})
+    return out
 
 
 # ─── colour ──────────────────────────────────────────────────────────
@@ -220,8 +390,8 @@ def palette(biz: Dict[str, Any], theme: Dict[str, Any], space: str = "church") -
         fill = _readable_on(fill, bg, False, 1.35)
     on_fill = "#FFFFFF" if contrast("#FFFFFF", fill) >= 4.5 else "#0B0B0C"
     accent = _readable_on(brand, bg, dark)
-    h = _hls(brand)[0]
-    return {
+    h, _l, s = _hls(brand)
+    out = {
         "base": name, "dark": dark, "bg": bg, "s1": b["s1"], "s2": b["s2"], "s3": b["s3"], "line": b["line"],
         "fg": b["fg"], "fg2": b["fg2"], "fg3": b["fg3"],
         # the older names, which other parts still read
@@ -229,7 +399,22 @@ def palette(biz: Dict[str, Any], theme: Dict[str, Any], space: str = "church") -
         "tint": brand, "glow": _hex(h, 0.42, 0.5), "ptint": _hex(h, 0.42, 0.3),
         "accent": accent, "on_accent": readable(accent), "fill": fill, "on_fill": on_fill,
         "error": "#FF6B5E" if dark else "#C5221F", "on_white": _readable_on(brand, "#FFFFFF", False),
+        # the church colour's own deep surface: one on this base, one always dark (under white words on art)
+        "deep": _hex(h, 0.10, min(s, 0.6)) if dark else _hex(h, 0.95, min(s, 0.75)),
+        "night": _hex(h, 0.10, min(s, 0.6)),
+        "lit": _readable_on(brand, "#000000", True),
     }
+    one = (((biz or {}).get("settings") or {}).get("member_portal") or {}).get("colours") == "church"
+    for slot, f in FAMILY.items():
+        near = abs((h * 360 - f["hue"] + 180) % 360 - 180) < FAMILY_NEAR and s >= 0.25
+        if one or near:
+            out.update({slot: fill, f"{slot}_on": on_fill, f"{slot}_ink": accent, f"{slot}_deep": out["deep"],
+                        f"{slot}_night": out["night"], f"{slot}_lit": out["lit"]})
+        else:
+            out.update({slot: f["fill"], f"{slot}_on": f["on"], f"{slot}_ink": f["ink_d" if dark else "ink_l"],
+                        f"{slot}_deep": f["deep_d" if dark else "deep_l"], f"{slot}_night": f["deep_d"],
+                        f"{slot}_lit": f["ink_d"]})
+    return out
 
 
 def accent_for(biz: Dict[str, Any], theme: Dict[str, Any]) -> str:
@@ -266,12 +451,81 @@ def poster(key: Any, pal: Dict[str, str], title: str, kick: str = "", *, tag: st
             f'{play_html}{kick_html}<{title_tag} class="mb-art-title"{tid}>{t}</{title_tag}></{tag}>')
 
 
-def photo(url: str, cls: str = "", *, eager: bool = False) -> str:
-    """One of the church's photos, in black and white (CSS). Decorative:
-    the card around it carries the words."""
+def photo(url: str, cls: str = "", *, eager: bool = False, look: str = "bw") -> str:
+    """One of the church's photos in the look the church picked for it:
+    colour, black and white, or washed in the church colour (CSS).
+    Decorative: the card around it carries the words."""
     load = 'fetchpriority="high"' if eager else 'loading="lazy"'
-    return (f'<span class="mb-ph {cls}" aria-hidden="true"><img src="{escape(url, quote=True)}" alt="" '
+    look = look if look in ("colour", "bw", "church") else "bw"
+    return (f'<span class="mb-ph is-{look} {cls}" aria-hidden="true"><img src="{escape(url, quote=True)}" alt="" '
             f'{load} decoding="async"></span>')
+
+
+# Default pictures (approved board 5, "Nothing random. Your photos, or your
+# colours."): one per kind of space, in its family colour, until the church
+# puts a photo there. kind: (family hue or "brand", icon paths, pattern).
+_RINGS = ''.join(f'<circle cx="250" cy="40" r="{r}"/>' for r in (40, 75, 110, 145, 180))
+_WAVES = ''.join(f'<path d="M0 {y} Q40 {y - 40} 80 {y} T160 {y} T240 {y} T320 {y}"/>' for y in (150, 125, 100, 75, 50))
+_LOW = ''.join(f'<circle cx="160" cy="230" r="{r}"/>' for r in (60, 100, 140, 180, 220))
+_LINKS = ''.join(f'<circle cx="{x}" cy="100" r="70"/>' for x in (160, 210, 260, 310))
+_DOTS = ''.join(f'<circle cx="{x}" cy="{y}" r="5" fill="currentColor" stroke="none"/>'
+                for y, xs in ((30, (190, 230, 270, 310)), (70, (210, 250, 290)), (110, (190, 230, 270, 310)),
+                              (150, (210, 250, 290)), (190, (230, 270, 310))) for x in xs)
+_RAYS = ''.join(f'<path d="M{a} 200 L{a + 180} 20"/>' for a in (80, 110, 140, 170, 200, 230))
+_ARCS = ''.join(f'<path d="M320 {y} A{r} {r} 0 0 0 {320 - r} 200"/>' for y, r in ((0, 200), (40, 160), (80, 120), (120, 80)))
+_GRID = ''.join(f'<rect x="{x}" y="{y}" width="36" height="36" rx="8"/>' for y in (20, 66, 112, 158) for x in (170, 216, 262))
+_LINES = ''.join(f'<path d="M160 {y} L320 {y}"/>' for y in (30, 60, 90, 120, 150, 180))
+_CROSS = '<path d="M240 30 L240 200M190 80 L290 80"/><circle cx="240" cy="80" r="60"/><circle cx="240" cy="80" r="100"/>'
+_HEARTS = ('<path d="M250 160c14-14 28-30 28-52a28 28 0 0 0-50-17 28 28 0 0 0-50 17c0 22 14 38 28 52l22 22z"/>'
+           '<path d="M250 190c22-22 44-46 44-80a44 44 0 0 0-72-34 44 44 0 0 0-72 34c0 34 22 58 44 80l28 28z"/>')
+_SIGNAL = ('<path d="M262 58a60 60 0 0 1 0 84M290 30a100 100 0 0 1 0 140M218 142a60 60 0 0 1 0-84'
+           'M190 170a100 100 0 0 1 0-140"/><circle cx="240" cy="100" r="10"/>')
+DEFAULT_KINDS: Dict[str, Tuple[str, str, str]] = {
+    "welcome": ("brand", '<path d="M10 9h4M12 7v5M14 22v-4a2 2 0 0 0-4 0v4M18 22V5.6a1 1 0 0 0-.4-.8l-5-3.6a1 1 0 0 0-1.2 0'
+                         'l-5 3.6a1 1 0 0 0-.4.8V22M6 22H4a2 2 0 0 1-2-2v-6a2 2 0 0 1 2-2h2M18 22h2a2 2 0 0 0 2-2v-6'
+                         'a2 2 0 0 0-2-2h-2"/>', _RINGS),
+    "worship": ("violet", '<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>', _WAVES),
+    "prayer": ("brand", ICONS["pray"], _LOW),
+    "groups": ("teal", ICONS["users"], _LINKS),
+    "kids": ("coral", '<circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2M9 9h.01M15 9h.01"/>', _DOTS),
+    "youth": ("violet", '<path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.07-2.14-.22-4.05 2-6 .5 2.5 2 4.9 4 '
+                        '6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.15.43-2.29 1-3a2.5 2.5 0 0 0 2.5 2.5z"/>', _RAYS),
+    "serve": ("teal", ICONS["heart"], _ARCS),
+    "events": ("coral", ICONS["calendar"], _GRID),
+    "classes": ("gold", '<path d="M22 10v6M2 10l10-5 10 5-10 5z"/><path d="M6 12v5c3 3 9 3 12 0v-5"/>', _LINES),
+    "word": ("gold", ICONS["book"], _CROSS),
+    "giving": ("brand", ICONS["heart"], _HEARTS),
+    "messages": ("violet", '<rect x="2.5" y="4" width="19" height="13" rx="3"/><path d="m10.5 8.3 4 2.2-4 2.2z"/>'
+                           '<path d="M8 21h8"/>', _SIGNAL),
+}
+
+
+def default_art(kind: str, cls: str = "", *, night: bool = False) -> str:
+    """A spot's default picture: its family colour, a quiet pattern and its
+    icon. `night` keeps it dark on a light base too, for white words on
+    top (a hero)."""
+    hue, ic, pat = DEFAULT_KINDS.get(kind) or DEFAULT_KINDS["welcome"]
+    return (f'<span class="mb-def h-{hue}{" is-night" if night else ""} {cls}" aria-hidden="true">'
+            f'<svg class="mb-def-pat" viewBox="0 0 320 200" preserveAspectRatio="xMidYMid slice" fill="none" '
+            f'stroke="currentColor" stroke-width="1.2" focusable="false">{pat}</svg>'
+            f'<svg class="mb-def-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" '
+            f'stroke-linecap="round" stroke-linejoin="round" focusable="false">{ic}</svg></span>')
+
+
+def pin(href: str, label: str = "Change", *, link: bool = True) -> str:
+    """The Change button on a picture while someone who may change pictures
+    is changing them (member_app_pictures). `href` is trusted markup. On a
+    card that is itself the link, it's a label, not a second link."""
+    inner = f'{icon("camera", 15)}<span>{escape(label)}</span>'
+    if link:
+        return f'<a class="mb-pin" href="{href}">{inner}</a>'
+    return f'<span class="mb-pin" aria-hidden="true">{inner}</span>'
+
+
+def picture(url: str, look: str, kind: str, cls: str = "", *, eager: bool = False, night: bool = False) -> str:
+    """The church's photo for a spot in its look, or the spot's default
+    picture when it has none (member_app_photos.choose)."""
+    return photo(url, cls, eager=eager, look=look) if url else default_art(kind, cls, night=night)
 
 
 def art(url: str, cls: str = "") -> str:
@@ -283,7 +537,7 @@ def art(url: str, cls: str = "") -> str:
 def titled_photo(url: str, title: str, cls: str = "") -> str:
     """A series with no art of its own: one of the church's photos with
     the series name set on it."""
-    return (f'<span class="mb-ph mb-titled {cls}" aria-hidden="true"><img src="{escape(url, quote=True)}" alt="" '
+    return (f'<span class="mb-ph is-bw mb-titled {cls}" aria-hidden="true"><img src="{escape(url, quote=True)}" alt="" '
             f'loading="lazy" decoding="async"><b>{escape(str(title or ""))}</b></span>')
 
 
@@ -318,16 +572,17 @@ def initials(name: Any) -> str:
     return ("".join(p[0] for p in parts[:2]) or "?").upper()
 
 
-def ring(n: int, of: int, size: int = 64) -> str:
-    """A progress ring, n of `of`, with n in the middle."""
+def ring(n: int, of: int, size: int = 64, *, label: Optional[str] = None) -> str:
+    """A progress ring, n of `of`, with n in the middle (or `label`, trusted
+    markup from the caller). Its colour is --ring where a card sets one."""
     r = size / 2 - 5
     c = 2 * 3.14159 * r
     done = max(0.0, min(1.0, n / of if of else 0))
     return (f'<span class="mb-ring" style="width:{size}px;height:{size}px" aria-hidden="true">'
             f'<svg width="{size}" height="{size}" viewBox="0 0 {size} {size}">'
             f'<circle cx="{size / 2}" cy="{size / 2}" r="{r}" fill="none" stroke="var(--s3)" stroke-width="6"/>'
-            f'<circle cx="{size / 2}" cy="{size / 2}" r="{r}" fill="none" stroke="var(--mb-fill)" stroke-width="6" '
-            f'stroke-linecap="round" stroke-dasharray="{c * done:.1f} {c:.1f}"/></svg><b>{int(n)}</b></span>')
+            f'<circle cx="{size / 2}" cy="{size / 2}" r="{r}" fill="none" stroke="var(--ring,var(--mb-fill))" stroke-width="6" '
+            f'stroke-linecap="round" stroke-dasharray="{c * done:.1f} {c:.1f}"/></svg><b>{label if label is not None else int(n)}</b></span>')
 
 
 def section(title: str, link: str = "", link_label: str = "", hid: str = "") -> str:
@@ -347,11 +602,19 @@ def segmented(items: Tuple[Tuple[str, str, str], ...], current: str, label: str)
     return f'<nav class="mb-seg" aria-label="{escape(label)}">{"".join(out)}</nav>'
 
 
-def nav(active: Optional[str], *, give: bool = True, space: str = "church", kids_parent: bool = True) -> str:
+def nav(active: Optional[str], *, give: bool = True, space: str = "church", kids_parent: bool = True,
+        lead: bool = False, biz: Optional[Dict[str, Any]] = None, side: Tuple[str, str] = ("", ""),
+        board: bool = False) -> str:
     """The tab bar. Give is always there (Kevin, 2026-10-15): before the
     church takes gifts in the app, it says how to give
     (member_portal.render_give_off). Youth and Kids have their own bars;
-    a Kids leader who isn't a parent gets Room, Watch and Stories."""
+    a Kids leader who isn't a parent gets Room, Watch and Stories. The
+    church's bar is the one it picked (church_tabs; today's when it picked
+    none), and a church leader (lead=True) gets Lead last, else a board
+    member (board=True) gets Board there. On a wide
+    screen the bar is a rail down the left (Kevin, 2026-10-17: a desktop
+    view too), and wider still a sidebar, with `side` = (what goes above
+    the tabs, what goes below them) shown only there (member_portal._side)."""
     if space == "youth":
         tabs, of = YOUTH_TABS, YOUTH_TAB_OF
     elif space == "kids":
@@ -359,18 +622,26 @@ def nav(active: Optional[str], *, give: bool = True, space: str = "church", kids
         if not kids_parent:
             tabs = ((tabs[0][0], tabs[0][1], "Room", tabs[0][3]),) + tabs[1:3]
     else:
-        tabs, of = TABS, TAB_OF
+        bar = church_tabs(biz) if biz else TABS
+        last = (SERVE_TAB if serve_mode() else LEAD_TAB,) if lead else (BOARD_TAB,) if board else ()
+        tabs, of = bar + last, TAB_OF
     cur_tab = of.get(active or "", "")
+    if cur_tab == "board" and lead:
+        cur_tab = "lead"   # the Board sits at the top of Serve
+    if space == "church" and any(t[0] == active for t in tabs):
+        cur_tab = active   # Events, Prayer, News or Messages made a tab of its own
     items = []
     for key, href, label, paths in tabs:
         if key == "give" and not give:
             continue
         cur = ' aria-current="page"' if key == cur_tab else ""
-        items.append(f'<a class="mb-tab" href="{href}"{cur}><svg width="25" height="25" viewBox="0 0 24 24" fill="none" '
+        # each tab wears its family colour when it's the page you're on
+        items.append(f'<a class="mb-tab" href="{href}"{cur} data-hue="{TAB_HUE.get(key, "brand")}">'
+                     f'<i class="mb-tab-p"><svg width="25" height="25" viewBox="0 0 24 24" fill="none" '
                      f'stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" '
-                     f'aria-hidden="true" focusable="false">{paths}</svg><span>{label}</span></a>')
+                     f'aria-hidden="true" focusable="false">{paths}</svg></i><span>{label}</span></a>')
     return (f'<nav class="mb-nav mp-noprint" aria-label="Main" style="grid-template-columns:repeat({len(items)},1fr)">'
-            f'{"".join(items)}</nav>')
+            f'{side[0]}{"".join(items)}{side[1]}</nav>')
 
 
 # Geist for everything; Newsreader for scripture and the greeting's name.
@@ -822,6 +1093,42 @@ label{font-size:14px;font-weight:600;color:var(--fg2);}
 .mb-grp-t .mb-chip,.mb-grp-t .mb-live-badge{margin-top:5px;}
 .mb-grp-more{margin:10px 2px 0;font-size:14px;color:var(--fg2);}
 .mb-grp-more p{margin:0 0 6px;}
+/* Connect > Classes (member_portal_classes): the next class night, the road, your classes, classes to join. */
+.mb-cnext{margin:16px 0 0;padding:18px;border-radius:var(--r-lg);background:var(--acc-soft);border:1px solid var(--mb-soft-line);}
+.mb-cnext .mb-when{background:var(--acc-fill);color:var(--on-acc);}
+.mb-cnext.is-live .mb-when{background:#ff3b30;color:#fff;}
+.mb-cnext h2{font-size:22px;font-weight:720;letter-spacing:-.02em;line-height:1.15;margin:10px 0 4px;}
+.mb-cnext p{margin:0;color:var(--fg2);font-size:14.5px;}
+.mb-road{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;}
+.mb-road li{position:relative;display:grid;grid-template-columns:32px minmax(0,1fr) auto;gap:12px;align-items:center;padding:10px 0;}
+.mb-road li:not(:last-child)::after{content:"";position:absolute;left:15px;top:44px;bottom:-8px;width:2px;background:var(--line);}
+.mb-road-dot{width:32px;height:32px;border-radius:50%;display:grid;place-items:center;font-size:13px;font-weight:700;
+background:var(--s2);color:var(--fg2);position:relative;z-index:1;}
+.mb-road li[data-state=done] .mb-road-dot{background:var(--acc-soft);color:var(--acc);}
+.mb-road li[data-state=now] .mb-road-dot{background:var(--acc-fill);color:var(--on-acc);}
+.mb-road li[data-state=finish] .mb-road-dot{background:var(--s1);color:var(--acc);}
+.mb-road-t{min-width:0;display:flex;flex-direction:column;gap:2px;}
+.mb-road-t b{font-size:16px;}
+.mb-road-t span{font-size:13px;color:var(--fg2);}
+.mb-road li[data-state=later] .mb-road-t b{color:var(--fg2);}
+.mb-road .mp-actions{margin:0;}
+.mb-clist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:10px;}
+.mb-cls{display:flex;align-items:center;gap:12px;padding:14px;border-radius:var(--r-md);background:var(--s1);}
+.mb-cls-t{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;}
+.mb-cls-t b{font-size:16px;}
+.mb-cls-t>span:not(.mb-kick){font-size:13px;color:var(--fg2);}
+.mb-cls-bar{display:block;height:4px;margin-top:6px;border-radius:2px;background:var(--s3);overflow:hidden;}
+.mb-cls-bar i{display:block;height:100%;background:var(--acc);border-radius:2px;}
+.mb-cls .mp-go{width:auto;min-height:40px;padding:0 16px;font-size:14px;border-radius:999px;flex:none;}
+.mb-copen{padding:16px;border-radius:var(--r-md);background:var(--s1);margin-bottom:10px;}
+.mb-copen h3{font-size:17px;margin:4px 0 2px;}
+.mb-copen-f{display:block;font-size:13px;color:var(--fg2);}
+.mb-copen p{margin:8px 0 0;font-size:14px;color:var(--fg2);}
+.mb-cfoot{font-size:13px;text-align:center;margin-top:6px;}
+.mb-cempty{margin:20px 0 0;padding:28px 20px;border-radius:var(--r-lg);background:var(--s1);text-align:center;color:var(--fg2);}
+.mb-cempty svg{color:var(--acc);}
+.mb-cempty h2{color:var(--fg);font-size:20px;margin:10px 0 6px;}
+.mb-cempty p{margin:0;font-size:14.5px;}
 .mp-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px;align-items:center;}
 .mp-actions:empty{display:none;}
 .mp-actions form{display:contents;}
@@ -899,6 +1206,11 @@ td.n,th.n{text-align:right;font-variant-numeric:tabular-nums;}
 @media (min-width:600px){.mb-hero{aspect-ratio:16/10;}}
 @media (min-width:600px){.mb-nav{left:50%;right:auto;width:560px;margin-left:-280px;bottom:14px;border-radius:24px;padding-bottom:4px;
   box-shadow:0 18px 40px rgba(0,0,0,.35),0 0 0 .5px var(--hair);}}
+@media (min-width:1100px){.mb-nav{top:0;bottom:0;left:0;right:auto;width:92px;margin-left:0;border-radius:0;display:flex;
+  flex-direction:column;justify-content:center;align-items:center;gap:6px;padding:24px 8px;box-shadow:.5px 0 0 var(--hair);}
+  .mb-tab{width:76px;min-height:60px;justify-content:center;border-radius:16px;padding-top:0;}
+  .mb-tab[aria-current]{background:var(--s1);}
+  .mp-shell.mb-has-nav{padding-bottom:48px;}}
 
 .mp-go:focus-visible,.mp-input:focus-visible,.mp-link:focus-visible,.mp-person:focus-visible,.mp-years a:focus-visible,.mb-tab:focus-visible,
 .mb-quick a:focus-visible,.mb-list a:focus-visible,.mb-ev:focus-visible,.mb-art:focus-visible,.mb-hero:focus-visible,.mb-back:focus-visible,
@@ -910,6 +1222,153 @@ td.n,th.n{text-align:right;font-variant-numeric:tabular-nums;}
   .mb-quick a,.mb-ev,.mb-mtile,.mb-bt,.mb-pray,.mb-row,.mb-reading-card,.mb-hero,.mb-ser{transition:transform .15s ease;}
   .mb-quick a:active,.mb-ev:active,.mb-mtile:active,.mb-bt:active,.mb-pray:active,.mb-row:active,.mb-reading-card:active,.mb-hero:active,
   .mb-ser:active{transform:scale(.98);}
+}
+/* On a computer (Kevin 2026-10-28: "really everyone should be able to view
+   their account on desktop or mobile phone"). A page that asks for it
+   (_shell wide=True) is 1180px wide beside the tab rail, and its rows
+   (member_portal.band) sit side by side. On a phone a row's wrappers
+   vanish (display:contents) and the page reads exactly as it always has;
+   what only a computer shows (hm-only, the sidebar's mb-side, Coming up's
+   days and month) is display:none on a phone. */
+.hm-band,.hm-col,.hm-grid,.hm-txt,.oc-row{display:contents;}
+.hm-only,.mb-side,.oc-day,.oc-cal{display:none;}
+@media (min-width:1000px){
+  body.mb-wide .mb-top,body.mb-wide .mp-shell{max-width:1180px;}
+  body.mb-wide .mb-seg{max-width:420px;}
+  body.mb-wide .hm-only{display:block;}
+  .hm-band{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(0,1fr);gap:28px;align-items:start;margin:40px 0 0;}
+  .mb-hello-wrap+.hm-band{margin-top:10px;}
+  .hm-col{display:block;min-width:0;}
+  .hm-col>:first-child,.hm-col>:first-child>.mb-sh:first-child,.hm-col>style:first-child+*,
+  .hm-col>style:first-child+*>.mb-sh:first-child{margin-top:0;}
+  .hm-lead:has(>.hm-col+.hm-col),.hm-pair:has(>.hm-col+.hm-col){grid-template-columns:minmax(0,1.32fr) minmax(0,1fr);grid-auto-flow:row;}
+  .hm-pair .mb-bt.is-wide{aspect-ratio:2/1;}
+  .hm-pair .mb-bt.is-sq{aspect-ratio:5/4;}
+  .hm-pair .mb-bt.is-band{aspect-ratio:3/1;}
+  .hm-lead .mb-hero{min-height:380px;}
+  .hm-lead .mb-hero h2,.hm-lead .mb-hero h3{font-size:34px;}
+  .hm-cards{grid-auto-flow:row;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px 16px;}
+  .hm-cards>.hm-col>*{margin-top:0;}
+  .hm-col .mb-rail{margin-inline:0;padding-inline:0;scroll-padding-inline:0;}
+  .hm-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:14px 16px;align-items:start;}
+  .hm-grid>*{margin-top:0;margin-bottom:0;}
+  .hm-cards>.hm-col:not(:has(>:not([hidden],style,script))){display:none;}
+  .hm-band>.hm-col:only-child .mb-bento{grid-template-columns:repeat(4,minmax(0,1fr));}
+  .hm-band>.hm-col:only-child .mb-bt.is-wide{grid-column:span 2;}
+  /* a row to swipe is a grid on a computer: nothing scrolls sideways */
+  .hm-col .mb-rail{display:grid;grid-template-columns:repeat(auto-fill,minmax(var(--cell,200px),1fr));gap:22px 16px;overflow:visible;
+    scroll-snap-type:none;}
+  .hm-col .mb-rail>*{width:auto;min-width:0;}
+  .hm-col .mb-rail .mb-ev-p{aspect-ratio:4/3;}
+  .hm-col .mb-rail:has(>.mb-ser){--cell:250px;}
+  .hm-col .mb-rail:has(>.mb-find){--cell:220px;}
+  .hm-more{margin-top:14px;}
+  /* Watch: the latest message as a cinema, then the series, then every
+     message on a grid */
+  .wt-cine{position:relative;margin-top:22px;}
+  .wt-cine::before{content:"";position:absolute;inset:-70px 0 -50px;z-index:-1;pointer-events:none;
+    background:radial-gradient(52% 68% at 30% 48%,color-mix(in srgb,var(--pg,var(--acc)) 22%,transparent),transparent 72%);}
+  .wt-cine>.hm-col{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(0,1fr);column-gap:48px;align-items:center;}
+  .wt-cine .mb-feat{display:contents;}
+  .wt-cine .mb-feat>.mb-mtile-art{grid-column:1;grid-row:1 / span 2;border-radius:var(--r-lg);box-shadow:0 30px 70px rgba(0,0,0,.42);}
+  .wt-cine .hm-txt{display:block;grid-column:2;grid-row:1;align-self:end;}
+  .wt-cine .mb-livecard{grid-column:2;grid-row:2;align-self:start;margin:26px 0 0;}
+  .wt-cine .mb-feat>.mb-hint{grid-column:1 / -1;grid-row:3;margin:16px 0 0;}
+  .wt-cine .hm-txt .mb-kick{margin-top:0;}
+  .wt-cine .hm-txt h2{font-size:44px;line-height:1.02;letter-spacing:-.045em;margin:10px 0 10px;text-wrap:balance;}
+  .wt-cine .hm-txt .mb-meta{font-size:16px;}
+  .wt-cine .mb-acts{margin-top:24px;}
+  .mb-cards.wt-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:28px 18px;background:none;border-radius:0;overflow:visible;}
+  .mb-cards.wt-grid li::before{display:none;}
+  .mb-cards.wt-grid a{flex-direction:column;align-items:stretch;gap:0;padding:0;min-height:0;}
+  .mb-cards.wt-grid .mb-thumb{width:100%;height:auto;aspect-ratio:16/9;border-radius:var(--r-md);}
+  .mb-cards.wt-grid .mb-thumb .mb-art{padding:16px 18px;}
+  .mb-cards.wt-grid .mb-thumb .mb-titled b,.mb-cards.wt-grid .mb-thumb .mb-art-title{font-size:22px;padding:0;}
+  .mb-cards.wt-grid .mb-list-text{padding:12px 2px 0;}
+  .mb-cards.wt-grid .mb-list-text strong{font-size:16px;white-space:normal;}
+  .mb-cards.wt-grid .mb-list-text span{white-space:normal;}
+  /* Coming up: an agenda, the day beside each card, the month beside the list */
+  .hm-grid:has(>.oc-row){grid-template-columns:minmax(0,1fr);gap:14px;}
+  .oc-row{display:grid;grid-template-columns:76px minmax(0,1fr);gap:16px;align-items:start;}
+  .oc-row>.mp-card{grid-column:2;margin:0;}
+  .oc-day{display:flex;flex-direction:column;align-items:center;padding:12px 0 13px;border-radius:var(--r-md);background:var(--s1);
+    font-size:11.5px;font-weight:650;letter-spacing:.08em;text-transform:uppercase;color:var(--fg3);}
+  .oc-day b{font-size:30px;font-weight:720;letter-spacing:-.03em;line-height:1.1;color:var(--fg);}
+  .oc-row.is-mine .oc-day{background:var(--acc);color:var(--on-acc);}
+  .oc-row.is-mine .oc-day b{color:var(--on-acc);}
+  .hm-lead>.hm-col:has(>.oc-cal){align-self:stretch;}
+  .oc-cal{display:block;position:sticky;top:84px;}
+  .oc-month{border-radius:var(--r-lg);background:var(--s1);padding:20px 20px 16px;}
+  .oc-month+.oc-month{margin-top:14px;}
+  .oc-month h2{font-size:18px;font-weight:680;letter-spacing:-.02em;margin:0 0 14px;}
+  .oc-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:4px;}
+  .oc-grid>*{position:relative;display:grid;place-items:center;aspect-ratio:1;border-radius:50%;font-size:14px;color:var(--fg3);text-decoration:none;}
+  .oc-grid>.oc-wd{aspect-ratio:auto;padding-bottom:6px;font-size:11px;font-weight:650;letter-spacing:.06em;}
+  .oc-grid>a{color:var(--fg);font-weight:650;background:var(--s2);}
+  .oc-grid>a::after{content:"";position:absolute;bottom:12%;left:50%;width:5px;height:5px;margin-left:-2.5px;border-radius:50%;background:var(--acc);}
+  .oc-grid>a.is-mine{background:var(--acc);color:var(--on-acc);}
+  .oc-grid>a.is-mine::after{background:var(--on-acc);}
+  .oc-grid>.is-today{box-shadow:inset 0 0 0 1.5px var(--fg2);color:var(--fg);}
+  .oc-key{display:flex;flex-wrap:wrap;gap:6px 18px;margin:14px 4px 0;font-size:12.5px;color:var(--fg3);}
+  .oc-key i{display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--s2);box-shadow:inset 0 0 0 2px var(--acc);margin-right:7px;}
+  .oc-key i.mine{background:var(--acc);box-shadow:none;}
+  /* Me: your photo beside your name */
+  .hm-col .mb-profile{display:grid;grid-template-columns:auto minmax(0,1fr);column-gap:22px;align-items:center;justify-items:start;
+    text-align:left;margin:0 0 22px;}
+  .hm-col .mb-profile>:first-child{grid-row:1 / span 4;}
+  .hm-col .mb-profile>:not(:first-child){grid-column:2;}
+  .hm-col .mb-profile h1{font-size:30px;margin:0 0 2px;}
+  .hm-col .mb-profile .mb-photo-note{text-align:left;margin:8px 0 0;}
+}
+/* A mouse: what you point at lifts, its picture leans in, a row lights. */
+@media (min-width:1000px) and (hover:hover) and (pointer:fine){
+  .mb-cards:not(.wt-grid) a:hover{background:var(--s2);}
+  .mb-nav .mb-tab:not([aria-current]):hover,.mb-side-more a:not([aria-current]):hover,.mb-side-me a:not([aria-current]):hover{background:var(--s1);color:var(--fg);}
+}
+@media (min-width:1000px) and (hover:hover) and (pointer:fine) and (prefers-reduced-motion:no-preference){
+  .mb-bt,.mb-ev,.mb-ser,.mb-mtile,.mb-find,.mb-quick a,.mb-livecard,.mb-cards.wt-grid a,.oc-grid>a{transition:transform .2s ease;}
+  .mb-bt:hover,.mb-ev:hover,.mb-ser:hover,.mb-mtile:hover,.mb-find:hover,.mb-quick a:hover,.mb-livecard:hover,.mb-cards.wt-grid a:hover{transform:translateY(-3px);}
+  .oc-grid>a:hover{transform:scale(1.08);}
+  .mb-mtile-art img,.mb-bt img,.mb-ev-p img,.mb-thumb img,.mb-find-p img{transition:transform .5s ease;}
+  .mb-mtile:hover .mb-mtile-art img,a.mb-mtile-art:hover img,.mb-bt:hover img,.mb-ev:hover .mb-ev-p img,.mb-ser:hover img,
+  .mb-cards.wt-grid a:hover .mb-thumb img,.mb-find:hover .mb-find-p img{transform:scale(1.045);}
+}
+/* From 1100px the tab bar is a rail down the left, and from 1200px a
+   sidebar: the church's logo, every tab by name, the pages with no tab of
+   their own, and who's signed in at the foot (member_portal._side). The
+   page sits beside it, centred in what's left. */
+@media (min-width:1100px){
+  body:has(>.mb-nav){padding-left:92px;}
+}
+@media (min-width:1200px){
+  body:has(>.mb-nav){padding-left:252px;}
+  .mb-nav{width:252px;align-items:stretch;justify-content:flex-start;gap:2px;padding:22px 14px 16px;overflow-y:auto;}
+  .mb-side{display:block;}
+  .mb-nav .mb-tab{flex-direction:row;width:auto;min-height:46px;justify-content:flex-start;gap:12px;padding:0 10px 0 6px;font-size:15px;
+    font-weight:580;color:var(--fg2);}
+  .mb-nav .mb-tab[aria-current]{color:var(--fg);}
+  .mb-nav .mb-tab-p{width:40px;height:32px;}
+  .mb-nav .mb-tab-p svg{width:22px;height:22px;}
+  .mb-nav:has(.mb-side [aria-current]) .mb-tab[aria-current]{background:none;color:var(--fg2);}
+  .mb-nav:has(.mb-side [aria-current]) .mb-tab[aria-current] .mb-tab-p{background:none;}
+  .mb-side-top{padding:4px 10px 26px;}
+  .mb-side-brand{display:flex;align-items:center;gap:10px;min-width:0;text-decoration:none;color:var(--fg);}
+  .mb-side-brand .mb-wordmark{height:38px;max-width:190px;}
+  .mb-side-brand .mp-church{margin:0;font-size:16px;font-weight:680;letter-spacing:-.02em;line-height:1.2;}
+  .mb-side-h{margin:28px 12px 8px;font-size:11.5px;font-weight:650;letter-spacing:.09em;text-transform:uppercase;color:var(--fg3);}
+  .mb-side-more a{display:flex;align-items:center;gap:14px;min-height:42px;padding:0 12px 0 16px;border-radius:12px;color:var(--fg2);
+    text-decoration:none;font-size:14.5px;font-weight:560;}
+  .mb-side-more a[aria-current]{background:var(--s1);color:var(--fg);}
+  .mb-side-me{margin-top:auto;padding-top:14px;}
+  .mb-side-me a{display:flex;align-items:center;gap:12px;padding:8px;border-radius:14px;color:var(--fg);text-decoration:none;
+    box-shadow:0 -.5px 0 var(--hair);}
+  .mb-side-me a[aria-current]{background:var(--s1);}
+  .mb-side-av{width:40px;height:40px;flex:none;border-radius:50%;overflow:hidden;display:grid;place-items:center;font-size:14px;font-weight:650;
+    background:var(--acc-fill);color:var(--on-acc);}
+  .mb-side-av img{width:100%;height:100%;object-fit:cover;}
+  .mb-side-me strong{display:block;font-size:14.5px;font-weight:620;line-height:1.25;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .mb-side-me small{display:block;font-size:12.5px;color:var(--fg3);}
+  body:has(>.mb-nav) .mb-top .mb-brand,body:has(>.mb-nav) .mb-top-right>.mb-avatar{display:none;}
 }
 @media print{.mp-noprint,.mb-nav,.mb-top{display:none!important;} html,body{background:#fff;color:#000;}
   .mp-shell{max-width:none;padding:0;} .mp-card{background:#fff;} th,td{border-color:#999;} .mp-muted{color:#333;}}""")
@@ -928,12 +1387,435 @@ def css(biz: Dict[str, Any], theme: Dict[str, Any], space: str = "church") -> st
     tokens["youth_dot"] = member_spaces.youth_colour(biz)
     tokens["hot"] = palette({**biz, "settings": {**(biz.get("settings") or {}), "member_portal": {"base": "black"}}},
                             theme)["accent"]
-    out = _CSS.substitute(tokens) + _SPACES_CSS.substitute(tokens)
+    out = (_CSS.substitute(tokens) + _FAMILY_CSS.substitute(tokens) + _BIBLE_CSS.substitute(tokens)
+           + _DEVOTIONAL_CSS.substitute(tokens) + _SPACES_CSS.substitute(tokens))
     if space == "youth":
         out += _YOUTH_CSS.substitute(tokens)
     elif space == "kids":
         out += _KIDS_CSS.substitute(tokens)
     return out
+
+
+# Round three (Kevin approved 2026-10-19): the colour family, the three photo
+# looks, default pictures, the shorter Home top and the Today card. Laid over
+# the sheet above, so Youth and Kids still add their own last.
+_FAMILY_CSS = Template("""
+:root{--gold:$gold;--on-gold:$gold_on;--gold-ink:$gold_ink;--gold-deep:$gold_deep;--gold-night:$gold_night;--gold-lit:$gold_lit;
+--teal:$teal;--on-teal:$teal_on;--teal-ink:$teal_ink;--teal-deep:$teal_deep;--teal-night:$teal_night;--teal-lit:$teal_lit;
+--violet:$violet;--on-violet:$violet_on;--violet-ink:$violet_ink;--violet-deep:$violet_deep;--violet-night:$violet_night;--violet-lit:$violet_lit;
+--coral:$coral;--on-coral:$coral_on;--coral-ink:$coral_ink;--coral-deep:$coral_deep;--coral-night:$coral_night;--coral-lit:$coral_lit;
+--acc-deep:$deep;--acc-night:$night;--acc-lit:$lit;}
+.h-brand{--h:var(--acc-fill);--on-h:var(--on-acc);--h-ink:var(--acc);--h-deep:var(--acc-deep);--h-night:var(--acc-night);--h-lit:var(--acc-lit);}
+.h-gold{--h:var(--gold);--on-h:var(--on-gold);--h-ink:var(--gold-ink);--h-deep:var(--gold-deep);--h-night:var(--gold-night);--h-lit:var(--gold-lit);}
+.h-teal{--h:var(--teal);--on-h:var(--on-teal);--h-ink:var(--teal-ink);--h-deep:var(--teal-deep);--h-night:var(--teal-night);--h-lit:var(--teal-lit);}
+.h-violet{--h:var(--violet);--on-h:var(--on-violet);--h-ink:var(--violet-ink);--h-deep:var(--violet-deep);--h-night:var(--violet-night);--h-lit:var(--violet-lit);}
+.h-coral{--h:var(--coral);--on-h:var(--on-coral);--h-ink:var(--coral-ink);--h-deep:var(--coral-deep);--h-night:var(--coral-night);--h-lit:var(--coral-lit);}
+/* a page wears its tab's colour on its large title, its section links and its back link */
+.pg-watch{--pg:var(--violet-ink);}
+.pg-bible{--pg:var(--gold-ink);}
+.pg-connect{--pg:var(--teal-ink);}
+.mb-hello em,.mb-lt em{color:var(--pg,var(--acc));}
+.mb-sh a,.mp-sect a{color:var(--h-ink,var(--pg,var(--acc)));}
+.mb-back{color:var(--pg,var(--acc));}
+
+/* the tab bar: the page you're on in its colour, in a pill */
+.mb-tab-p{display:grid;place-items:center;width:54px;height:30px;border-radius:999px;font-style:normal;transition:background .2s ease;}
+.mb-tab[aria-current] .mb-tab-p{background:var(--acc-deep);}
+.mb-tab[aria-current][data-hue=violet]{color:var(--violet-ink);}
+.mb-tab[aria-current][data-hue=violet] .mb-tab-p{background:var(--violet-deep);}
+.mb-tab[aria-current][data-hue=gold]{color:var(--gold-ink);}
+.mb-tab[aria-current][data-hue=gold] .mb-tab-p{background:var(--gold-deep);}
+.mb-tab[aria-current][data-hue=teal]{color:var(--teal-ink);}
+.mb-tab[aria-current][data-hue=teal] .mb-tab-p{background:var(--teal-deep);}
+.mb-tab[aria-current][data-hue=coral]{color:var(--coral-ink);}
+.mb-tab[aria-current][data-hue=coral] .mb-tab-p{background:var(--coral-deep);}
+.mb-tab{gap:4px;}
+
+/* photos: in the look the church picked for each one */
+.mb-ph img{filter:none;}
+.mb-ph.is-bw img{filter:grayscale(1) contrast(1.06);}
+.mb-ph.is-church img{filter:grayscale(1) contrast(1.12) brightness(1.04);}
+.mb-ph.is-church::after{content:"";position:absolute;inset:0;background:var(--acc-fill);mix-blend-mode:color;opacity:.72;pointer-events:none;}
+
+/* default pictures: the spot's family colour, a quiet pattern, its icon */
+.mb-def{position:relative;display:block;overflow:hidden;background:var(--h-deep);color:var(--h-ink);}
+.mb-def.is-night{background:var(--h-night);color:var(--h-lit);}
+.mb-def-pat{position:absolute;inset:0;width:100%;height:100%;opacity:.42;}
+.mb-def-ic{position:absolute;right:16px;top:16px;width:40px;height:40px;}
+.mb-hero>.mb-def,.mb-bt>.mb-def,.mb-soon>.mb-def,.mb-offair>.mb-def{position:absolute;inset:0;z-index:-2;}
+.mb-ev-p>.mb-def,.mb-mtile-art>.mb-def,.mb-grp-pic>.mb-def,.mb-find-p>.mb-def,.mb-thumb>.mb-def{position:absolute;inset:0;}
+.mb-grp-pic .mb-def-ic,.mb-thumb .mb-def-ic{right:auto;top:50%;left:50%;width:28px;height:28px;transform:translate(-50%,-50%);}
+.mb-bt.is-def{color:var(--fg);}
+.mb-bt.is-def::after{display:none;}
+.mb-bt.is-def .mb-bt-t span{color:var(--fg2);}
+
+/* Home: the next gathering, shorter (Kevin: "the hero is a little to long") */
+.mb-hero{display:flex;flex-direction:column;justify-content:flex-end;aspect-ratio:auto;min-height:236px;}
+.mb-hero-in{position:relative;left:auto;right:auto;bottom:auto;padding:16px 18px 18px;}
+.mb-hero h2,.mb-hero h3{font-size:26px;margin:10px 0 4px;}
+.mb-hero p{font-size:14px;}
+.mb-hero-row{margin-top:12px;}
+.mb-hero .mp-go{min-height:42px;padding:0 18px;font-size:15px;}
+@media (min-width:600px){.mb-hero{aspect-ratio:auto;min-height:280px;}}
+
+/* quick ways in: each in its colour */
+.mb-quick a{height:88px;gap:8px;}
+.mb-quick .mb-qd{width:38px;height:38px;border-radius:50%;display:grid;place-items:center;background:var(--h-deep);color:var(--h-ink);font-style:normal;}
+.mb-quick a .mb-qd .mb-ic{color:inherit;width:20px;height:20px;}
+
+/* Today: the verse, the devotional and the reading, in one card */
+.mb-today{margin:0;border-radius:var(--r-lg);background:var(--s1);overflow:hidden;}
+.mb-verse{background:var(--gold-deep);}
+.mb-verse .mb-kick,.mb-verse-foot a{color:var(--gold-ink);}
+.mb-today .mb-verse{margin:0;border-radius:0;}
+.mb-trow{display:flex;align-items:center;gap:14px;padding:14px 16px;position:relative;color:var(--fg);text-decoration:none;}
+.mb-trow+.mb-trow::before,.mb-today form+.mb-trow::before{content:"";position:absolute;top:0;left:84px;right:0;height:.5px;background:var(--hair);}
+.mb-trow-t{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;}
+.mb-trow-t small{font-size:12px;font-weight:650;letter-spacing:.05em;text-transform:uppercase;color:var(--h-ink);}
+.mb-trow-t strong{font-size:16px;font-weight:650;letter-spacing:-.015em;line-height:1.25;}
+.mb-trow-t span{font-size:13px;color:var(--fg2);}
+.mb-trow>.mb-ic:last-child{color:var(--fg3);}
+.mb-trow .mb-ring{--ring:var(--h-ink);}
+.mb-trow .mb-ring b{font-size:14px;white-space:nowrap;letter-spacing:-.04em;}
+.mb-trow .mb-ring b small{font-size:10px;color:var(--fg3);font-weight:600;letter-spacing:0;}
+.mb-trow-wrap{display:flex;align-items:center;position:relative;}
+.mb-trow-wrap+.mb-trow-wrap::before,.mb-trow+.mb-trow-wrap::before,.mb-trow-wrap+.mb-trow::before{content:"";position:absolute;top:0;left:84px;right:0;height:.5px;background:var(--hair);}
+.mb-trow-wrap>.mb-trow{flex:1;min-width:0;padding-right:8px;}
+.mb-trow-wrap form{margin:0 14px 0 0;flex:none;}
+.mb-tick{width:40px;height:40px;border-radius:50%;display:grid;place-items:center;border:0;background:var(--s2);color:var(--fg2);cursor:pointer;}
+.mb-tick.is-done{background:var(--h);color:var(--on-h);cursor:default;}
+.mb-tick:focus-visible{outline:2px solid var(--focus);outline-offset:3px;}
+.mb-book{background:var(--gold);color:var(--on-gold);}
+.mb-trow .mb-book{width:44px;height:56px;font-size:19px;margin:0 5px;}
+.mb-reading .mb-ring,.mb-plan .mb-ring{--ring:var(--gold-ink);}
+
+/* the rest of Home */
+.mb-pray{background:var(--acc-deep);}
+.mb-pray .mb-pray-ic{background:var(--acc-fill);color:var(--on-acc);}
+.mb-datebox{background:var(--coral);color:var(--on-coral);}
+.mb-datebox small{color:inherit;opacity:.85;}
+.mb-ev-b .mb-mine{color:var(--teal-ink);}
+
+/* changing pictures (member_app_pictures): the bar, and Change on each picture */
+.mb-editbar{display:flex;align-items:center;gap:12px;margin:0 0 14px;padding:12px 12px 12px 14px;border-radius:var(--r-md);background:var(--acc-deep);}
+.mb-editbar-ic{width:38px;height:38px;flex:none;border-radius:50%;display:grid;place-items:center;background:var(--acc-fill);color:var(--on-acc);}
+.mb-editbar-t{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px;}
+.mb-editbar-t strong{font-size:15px;}
+.mb-editbar-t span{font-size:12.5px;color:var(--fg2);}
+.mb-editbar-a{font-size:14px;font-weight:600;text-decoration:none;color:var(--acc);padding:0 4px;}
+.mp-go.mb-editbar-done{width:auto;min-height:36px;padding:0 16px;border-radius:999px;font-size:14px;}
+.mb-pin{position:absolute;z-index:3;top:12px;right:12px;display:inline-flex;align-items:center;gap:6px;height:34px;padding:0 12px 0 10px;
+  border-radius:999px;background:rgba(0,0,0,.62);color:#fff;font-size:13px;font-weight:650;text-decoration:none;
+  box-shadow:0 0 0 1.5px rgba(255,255,255,.55);-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);}
+.mb-ev-p .mb-pin{top:auto;bottom:10px;right:10px;}
+a.mb-pin:focus-visible{outline:2px solid #fff;outline-offset:2px;}
+
+/* Watch, the Bible, Connect */
+.mb-livecard:not(.is-live) .mb-row-ic{background:var(--violet-deep);color:var(--violet-ink);}
+.mb-q h2{color:var(--violet-ink);}
+.mb-scrip{background:var(--gold-deep);color:var(--gold-ink);}
+.bb-n,.bb-ref{color:var(--gold-ink);}
+.bb-hl{background:color-mix(in srgb,var(--gold) 30%,transparent);box-shadow:0 0 0 3px color-mix(in srgb,var(--gold) 30%,transparent);}
+.mb-grp .mb-chip{background:var(--teal-deep);color:var(--teal-ink);}
+""")
+
+
+# The Bible, rebuilt (round three, boards 6-9): the tab, the book picker, the
+# reader with highlights and notes, search, and Highlights & notes. The five
+# highlighter colours are fixed (a highlight keeps its meaning if the church
+# changes its colour).
+_BIBLE_CSS = Template("""
+.hl-gold{background:rgba(244,192,78,.32);}
+.hl-pink{background:rgba(255,95,162,.30);}
+.hl-teal{background:rgba(79,216,196,.28);}
+.hl-violet{background:rgba(169,155,255,.32);}
+.hl-coral{background:rgba(255,157,107,.30);}
+.sw-gold{background:#F4C04E;}.sw-pink{background:#FF5FA2;}.sw-teal{background:#4FD8C4;}.sw-violet{background:#A99BFF;}.sw-coral{background:#FF9D6B;}
+.bb-recent{display:flex;gap:8px;overflow-x:auto;scrollbar-width:none;margin:12px calc(var(--g) * -1) 0;padding:0 var(--g) 2px;}
+.bb-recent::-webkit-scrollbar{display:none;}
+.bb-recent a{flex:none;display:inline-flex;align-items:center;min-height:36px;padding:0 14px;border-radius:999px;background:var(--s1);
+  color:var(--fg);font-size:14px;font-weight:600;text-decoration:none;}
+.bb-recent a:first-child{background:var(--gold-deep);color:var(--gold-ink);}
+.bb-hn{display:block;padding:16px;border-radius:var(--r-md);background:var(--s1);color:var(--fg);text-decoration:none;}
+.bb-hn-top{display:flex;gap:14px;font-size:13.5px;color:var(--fg2);}
+.bb-hn-top b{color:var(--fg);}
+.bb-hn-v{margin:12px 0 0;font-family:var(--mb-serif);font-size:19px;line-height:1.45;}
+.bb-hn-ref{margin:8px 0 0;font-size:13px;color:var(--fg3);}
+.bb-hn-empty{margin:0;}
+.bb-mark{border-radius:4px;padding:1px 3px;-webkit-box-decoration-break:clone;box-decoration-break:clone;}
+.bb-tst{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+.bb-tst a{display:flex;flex-direction:column;justify-content:space-between;gap:16px;min-height:132px;padding:16px;border-radius:var(--r-md);
+  background:var(--gold-deep);color:var(--fg);text-decoration:none;}
+.bb-tst-ab{font-family:var(--mb-serif);font-style:italic;font-size:30px;line-height:1;color:var(--gold-ink);}
+.bb-tst b{display:block;font-size:17px;letter-spacing:-.02em;}
+.bb-tst span span{display:block;font-size:12.5px;color:var(--fg2);margin-top:2px;}
+.bk-find{margin:12px 0 0;min-height:46px;}
+.bk-group{margin-top:18px;}
+.bk-gh{display:flex;align-items:center;gap:8px;margin:0 0 6px;font-size:12.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--h-ink);}
+.bk-dot{width:8px;height:8px;border-radius:50%;background:var(--h);flex:none;}
+.bk-gc{margin-left:auto;font-size:12.5px;font-weight:500;letter-spacing:0;text-transform:none;color:var(--fg3);}
+details.bk{border-bottom:.5px solid var(--hair);}
+details.bk>summary{display:flex;align-items:center;gap:12px;min-height:52px;cursor:pointer;list-style:none;}
+details.bk>summary::-webkit-details-marker{display:none;}
+.bk-n{flex:1;font-size:17px;font-weight:550;letter-spacing:-.015em;}
+.bk-c{font-size:13px;color:var(--fg3);font-variant-numeric:tabular-nums;}
+details.bk>summary .mb-ic{color:var(--fg3);transition:transform .2s ease;}
+details.bk[open]>summary .bk-n{color:var(--gold-ink);font-weight:650;}
+details.bk[open]>summary .mb-ic{transform:rotate(180deg);color:var(--gold-ink);}
+details.bk>summary:focus-visible{outline:2px solid var(--focus);outline-offset:2px;}
+.bk-grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px;padding:6px 0 16px;}
+.bk-grid a{display:grid;place-items:center;height:46px;border-radius:12px;background:var(--s1);color:var(--fg);text-decoration:none;
+  font-size:15.5px;font-weight:600;font-variant-numeric:tabular-nums;}
+.bk-grid a.is-now{background:var(--gold);color:var(--on-gold);}
+.bb-where{display:inline-flex;align-items:center;gap:6px;min-height:40px;padding:0 14px;border-radius:999px;background:var(--s1);
+  color:var(--fg);font-weight:650;font-size:15.5px;text-decoration:none;margin-bottom:8px;}
+.bb-where .mb-ic{color:var(--fg3);}
+.bb-head{align-items:center;}
+.bb-aa{width:42px;height:42px;border-radius:50%;border:0;background:var(--s1);color:var(--fg);font-family:var(--mb-serif);font-size:18px;
+  font-weight:600;cursor:pointer;margin-bottom:8px;}
+.bb-aa[aria-expanded=true]{background:var(--gold-deep);color:var(--gold-ink);}
+.bb-aa-panel{display:flex;flex-direction:column;gap:10px;margin:4px 0 8px;padding:14px 16px;border-radius:var(--r-md);background:var(--s1);}
+.bb-aa-row{display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:14px;color:var(--fg2);}
+.bb-aa-btns{display:flex;gap:6px;}
+.bb-aa-btns button{min-width:56px;min-height:40px;padding:0 12px;border-radius:10px;border:0;background:var(--s2);color:var(--fg);font:inherit;
+  font-weight:650;cursor:pointer;}
+.bb-title{font-family:var(--mb-serif);font-weight:500;font-size:36px;letter-spacing:-.02em;margin:10px 0 4px;}
+.bb-title em{color:var(--gold-ink);}
+.bb-pv{margin:6px 0 0;font-size:13.5px;}
+.bb-text.sz-s{font-size:17px;}
+.bb-text.sz-l{font-size:23px;}
+.bb-text.f-sans{font-family:var(--mb-ui);}
+.bb-v{cursor:pointer;border-radius:5px;padding:1px 0;-webkit-box-decoration-break:clone;box-decoration-break:clone;}
+.bb-v.is-sel{text-decoration:underline dashed var(--gold-ink) 1.5px;text-underline-offset:6px;}
+.bb-v:focus-visible{outline:2px solid var(--focus);outline-offset:2px;}
+.bb-nm,.bb-bm{display:inline-block;width:9px;height:9px;border-radius:50%;margin-left:5px;vertical-align:2px;background:var(--acc);}
+.bb-bm{border-radius:2px;background:var(--gold);}
+.bb-dock{position:fixed;z-index:30;left:0;right:0;bottom:0;max-width:600px;margin:0 auto;padding:12px 18px calc(18px + env(safe-area-inset-bottom,0px));
+  border-radius:24px 24px 0 0;background:var(--s1);box-shadow:0 -12px 30px rgba(0,0,0,.4);}
+.bb-docked .mp-shell{padding-bottom:300px;}
+.bb-dock-h{display:flex;align-items:center;justify-content:space-between;gap:10px;}
+.bb-dock-ref{font-size:15px;letter-spacing:-.01em;}
+.bb-x{width:36px;height:36px;border-radius:50%;border:0;background:var(--s2);color:var(--fg);display:grid;place-items:center;cursor:pointer;}
+.bb-x .mb-ic{transform:rotate(45deg);}
+.bb-sws{display:flex;align-items:center;gap:12px;margin-top:12px;}
+.bb-sw{width:38px;height:38px;border-radius:50%;border:0;cursor:pointer;box-shadow:inset 0 0 0 1px rgba(0,0,0,.12);}
+.bb-sw[aria-pressed=true]{box-shadow:0 0 0 2px var(--s1),0 0 0 4.5px var(--fg);}
+.bb-clear{margin-left:auto;font-size:13.5px;color:var(--fg2);}
+.bb-acts{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-top:14px;}
+.bb-acts button{display:flex;flex-direction:column;align-items:center;gap:6px;padding:10px 0;border-radius:14px;border:0;background:var(--s2);
+  color:var(--fg2);font:inherit;font-size:12.5px;font-weight:600;cursor:pointer;}
+.bb-acts button .mb-ic{color:var(--fg);}
+.bb-acts button[aria-pressed=true] .mb-ic{color:var(--gold-ink);fill:var(--gold);}
+.bb-note-v{margin:10px 0 0;font-family:var(--mb-serif);font-style:italic;font-size:16px;line-height:1.45;color:var(--fg2);}
+.bb-note-in{margin-top:12px;min-height:96px;resize:vertical;}
+.bb-priv{display:flex;align-items:center;gap:6px;margin:10px 0 12px;font-size:12.5px;color:var(--fg2);}
+.bb-priv-foot{margin-top:24px;align-items:flex-start;}
+.bb-toast{position:fixed;z-index:31;left:50%;bottom:calc(220px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);margin:0;
+  padding:8px 14px;border-radius:999px;background:var(--fg);color:var(--bg);font-size:13.5px;font-weight:650;white-space:nowrap;}
+.bb-hits{list-style:none;margin:8px 0 0;padding:0;display:flex;flex-direction:column;gap:8px;}
+.bb-hits a{display:flex;flex-direction:column;gap:4px;padding:14px 16px;border-radius:var(--r-md);background:var(--s1);color:var(--fg);text-decoration:none;}
+.bb-hits strong{font-size:14px;color:var(--gold-ink);}
+.bb-hits span{font-family:var(--mb-serif);font-size:17px;line-height:1.45;}
+.bb-q{font-weight:700;background:rgba(244,192,78,.25);border-radius:3px;}
+.bb-filters{display:flex;gap:8px;overflow-x:auto;scrollbar-width:none;margin:14px calc(var(--g) * -1) 0;padding:0 var(--g) 2px;}
+.bb-filters::-webkit-scrollbar{display:none;}
+.bb-filters a{flex:none;display:inline-flex;align-items:center;gap:6px;min-height:36px;padding:0 14px;border-radius:999px;background:var(--s1);
+  color:var(--fg2);font-size:14px;font-weight:600;text-decoration:none;}
+.bb-filters a[aria-current]{background:var(--fg);color:var(--bg);}
+.bb-filters a span{font-size:12px;opacity:.7;}
+.bb-colours{display:flex;align-items:center;gap:10px;margin-top:14px;font-size:13px;color:var(--fg3);}
+.bb-cdot{width:24px;height:24px;border-radius:50%;display:block;}
+.bb-cdot[aria-current]{box-shadow:0 0 0 2px var(--bg),0 0 0 4px var(--fg);}
+.bb-day{margin:26px 0 10px;font-size:12.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--fg3);}
+.bb-it{margin:0 0 10px;padding:16px;border-radius:var(--r-md);background:var(--s1);}
+.bb-it-h{display:flex;align-items:baseline;justify-content:space-between;gap:10px;}
+.bb-it-h strong{font-size:15px;}
+.bb-it-h span{font-size:12.5px;color:var(--fg3);}
+.bb-it-v{margin:10px 0 0;font-family:var(--mb-serif);font-size:18.5px;line-height:1.45;}
+.bb-it-note{display:flex;gap:10px;margin-top:12px;padding:12px;border-radius:14px;background:var(--s2);font-size:14.5px;line-height:1.45;}
+.bb-it-note .mb-ic{color:var(--acc);flex:none;margin-top:2px;}
+.bb-it-f{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:12px;}
+.bb-it-f a{display:inline-flex;align-items:center;gap:2px;font-size:14px;font-weight:600;color:var(--gold-ink);text-decoration:none;}
+""")
+
+
+# Plans & devotionals (round three, boards 10 and 11;
+# member_portal_devotionals): the plans page, a devotional, its day with the
+# checklist, the journal and Listen, and their rows on Home and the Bible tab.
+_DEVOTIONAL_CSS = Template("""
+.dv-eb{margin:4px 0 0;font-size:12.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--fg3);}
+.dv-eb-in{margin:24px 0 10px;}
+.dv-t{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;}
+.dv-t strong{font-size:16px;font-weight:650;letter-spacing:-.015em;line-height:1.25;}
+.dv-t>span{font-size:13px;color:var(--fg2);}
+.dv-t small{font-size:12px;font-weight:650;letter-spacing:.05em;text-transform:uppercase;color:var(--h-ink,var(--acc));}
+.mp-go.dv-sm{width:auto;min-height:38px;padding:0 16px;border-radius:999px;font-size:14px;flex:none;}
+.mp-go.dv-hue{background:var(--gold);color:var(--on-gold);}
+.dv-glass{align-self:flex-start;display:inline-flex;align-items:center;height:26px;padding:0 10px;border-radius:999px;background:rgba(0,0,0,.42);
+  color:#fff;font-size:12px;font-weight:650;-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);}
+
+/* a cover: the devotional's picture, its words on a shade */
+.dv-now,.dv-feat{display:block;border-radius:var(--r-lg);overflow:hidden;background:var(--s1);color:var(--fg);text-decoration:none;}
+.dv-cv{position:relative;isolation:isolate;display:flex;flex-direction:column;justify-content:flex-end;aspect-ratio:16/9;color:#fff;}
+.dv-feat .dv-cv{aspect-ratio:16/10;}
+.dv-cv>.dv-cv-p,.dv-hero>.dv-cv-p{position:absolute;inset:0;z-index:-2;}
+.dv-cv::after,.dv-hero::after{content:"";position:absolute;inset:0;z-index:-1;background:linear-gradient(180deg,rgba(0,0,0,0) 28%,rgba(0,0,0,.8));}
+.dv-cv-in{display:flex;flex-direction:column;gap:6px;padding:16px 18px;}
+.dv-cv-in strong{font-size:25px;font-weight:720;letter-spacing:-.035em;line-height:1.05;}
+.dv-cv-in>span:not(.dv-glass){font-size:14px;color:rgba(255,255,255,.82);}
+.dv-now-b{display:flex;flex-direction:column;gap:14px;padding:16px 18px 18px;}
+.dv-vl{font-family:var(--mb-serif);font-style:italic;font-size:17px;line-height:1.4;}
+.dv-vl b{font-family:var(--mb-ui);font-style:normal;font-size:12.5px;font-weight:650;color:var(--h-ink);margin-left:6px;}
+.dv-row,.dv-foot{display:flex;align-items:center;justify-content:space-between;gap:12px;}
+.dv-foot{padding:14px 16px;}
+.dv-segs{flex:1;display:flex;gap:4px;}
+.dv-seg{flex:1;height:6px;border-radius:3px;background:var(--s3);}
+.dv-seg.is-done{background:var(--h);}
+.dv-seg.is-now{background:var(--h-ink);}
+
+/* lists */
+.dv-lib,.dv-card,.dv-days,.dv-prac{border-radius:var(--r-md);background:var(--s1);overflow:hidden;}
+.dv-li,.dv-pl,.dv-plan,.dv-dl{display:flex;align-items:center;gap:14px;padding:14px 16px;position:relative;color:var(--fg);text-decoration:none;}
+.dv-li{padding:12px 14px;}
+.dv-li+.dv-li::before,.dv-pl+.dv-pl::before,.dv-plan+.dv-plan::before,.dv-dl+.dv-dl::before,.dv-prac li+li::before{content:"";position:absolute;
+  top:0;right:0;height:.5px;background:var(--hair);}
+.dv-li+.dv-li::before{left:100px;}
+.dv-pl+.dv-pl::before{left:16px;}
+.dv-plan+.dv-plan::before{left:84px;}
+.dv-dl+.dv-dl::before{left:66px;}
+.dv-th{position:relative;width:72px;height:72px;border-radius:14px;overflow:hidden;flex:none;}
+.dv-th>.dv-th-p,.dv-mc-p>.dv-th-p{position:absolute;inset:0;}
+.dv-th .mb-def-ic,.dv-mc-p .mb-def-ic{right:auto;top:50%;left:50%;width:28px;height:28px;transform:translate(-50%,-50%);}
+.dv-t>.dv-chip{align-self:flex-start;margin-top:4px;font-size:12.5px;background:var(--h-deep);color:var(--h-ink);}
+.dv-t>.dv-chip.is-done{background:var(--s2);color:var(--fg2);}
+.dv-t>.dv-chip.is-start{background:var(--h);color:var(--on-h);}
+.dv-cp{display:flex;flex-direction:column;gap:12px;padding:16px;border-radius:var(--r-md);background:var(--gold-deep);}
+.dv-cp-top{display:flex;align-items:center;gap:14px;}
+.dv-cp .mb-ring,.dv-plan .mb-ring{--ring:var(--h-ink,var(--gold-ink));}
+.dv-cp .mb-ring b,.dv-plan .mb-ring b{font-size:14px;white-space:nowrap;letter-spacing:-.04em;}
+.dv-cp .mb-ring b small,.dv-plan .mb-ring b small{font-size:10px;color:var(--fg3);font-weight:600;letter-spacing:0;}
+.dv-cp .dv-t small{color:var(--gold-ink);}
+.dv-acts{display:flex;gap:8px;flex-wrap:wrap;}
+.dv-len{width:54px;height:54px;flex:none;border-radius:14px;background:var(--gold-deep);color:var(--gold-ink);display:flex;flex-direction:column;
+  align-items:center;justify-content:center;line-height:1;}
+.dv-len b{font-size:18px;font-weight:750;letter-spacing:-.03em;}
+.dv-len small{font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;margin-top:3px;}
+.dv-pl form{margin:0;flex:none;}
+.dv-start{min-height:36px;padding:0 16px;border:0;border-radius:999px;background:var(--gold-deep);color:var(--gold-ink);font:inherit;font-size:14px;
+  font-weight:650;cursor:pointer;}
+.dv-start:focus-visible{outline:2px solid var(--focus);outline-offset:2px;}
+.dv-yours{flex:none;background:var(--teal-deep);color:var(--teal-ink);}
+.dv-rail{display:flex;gap:12px;overflow-x:auto;margin:12px calc(var(--g) * -1) 0;padding:0 var(--g) 2px;scrollbar-width:none;}
+.dv-rail::-webkit-scrollbar{display:none;}
+.dv-mc{flex:none;width:150px;display:flex;flex-direction:column;gap:3px;color:var(--fg);text-decoration:none;}
+.dv-mc-p{position:relative;display:block;aspect-ratio:1;border-radius:var(--r-md);overflow:hidden;margin-bottom:6px;}
+.dv-mc strong{font-size:14.5px;line-height:1.25;letter-spacing:-.01em;}
+.dv-mc>span:last-child{font-size:12.5px;color:var(--fg2);}
+.dv-starts{display:flex;flex-wrap:wrap;gap:8px;padding:2px 16px 16px;}
+.dv-starts .mb-chip{height:32px;padding:0 12px;font-size:13px;text-decoration:none;background:var(--gold-deep);color:var(--gold-ink);}
+.dv-plain{margin:0;padding:16px;font-size:14px;color:var(--fg2);}
+
+/* a devotional, and its day */
+.dv-hero{position:relative;isolation:isolate;display:flex;flex-direction:column;justify-content:flex-end;min-height:280px;margin-top:4px;
+  border-radius:var(--r-lg);overflow:hidden;color:#fff;}
+.dv-hero.is-day{min-height:300px;}
+.dv-hero .dv-cv-in{gap:8px;padding:18px 20px 22px;}
+.dv-hero h1{margin:0;font-size:34px;font-weight:740;letter-spacing:-.04em;line-height:1.02;color:#fff;}
+.dv-hero p{margin:0;font-size:14px;color:rgba(255,255,255,.82);}
+.dv-share{position:absolute;top:14px;right:14px;width:42px;height:42px;border:0;border-radius:50%;display:grid;place-items:center;
+  background:rgba(0,0,0,.45);color:#fff;cursor:pointer;-webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);}
+.dv-share:focus-visible{outline:2px solid #fff;outline-offset:2px;}
+.dv-go{margin-top:16px;}
+.dv-go form{margin:0;}
+.dv-fine{margin:8px 0 0;font-size:13px;}
+.dv-when{display:flex;gap:10px;align-items:flex-start;font-size:14.5px;line-height:1.45;margin:0;}
+.dv-when .mb-ic{color:var(--acc);flex:none;}
+.dv-about{font-family:var(--mb-serif);font-size:18px;line-height:1.55;}
+.dv-about p{margin:16px 0 0;}
+.dv-prac{list-style:none;margin:0;padding:0;}
+.dv-prac li{display:flex;align-items:center;gap:12px;padding:12px 16px;position:relative;}
+.dv-prac li+li::before{left:40px;}
+.dv-dot{width:10px;height:10px;border-radius:50%;flex:none;background:var(--teal);margin:0 2px;}
+.dv-box{width:26px;height:26px;border-radius:8px;flex:none;display:grid;place-items:center;box-shadow:inset 0 0 0 2px var(--s3);color:transparent;}
+.dv-dl{padding:12px 16px;}
+.dv-dl .dv-c{width:36px;height:36px;border-radius:50%;flex:none;display:grid;place-items:center;background:var(--s2);color:var(--fg2);
+  font-size:14px;font-weight:700;}
+.dv-dl.is-done .dv-c{background:var(--acc-fill);color:var(--on-acc);}
+.dv-dl.is-shut .dv-t strong{color:var(--fg2);}
+.dv-dl>.mb-ic{color:var(--fg3);flex:none;}
+.dv-opens{flex:none;font-size:12.5px;color:var(--fg3);}
+.dv-strip{display:grid;grid-template-columns:repeat(var(--n),minmax(0,1fr));gap:6px;margin-top:16px;}
+.dv-strip.is-wide{display:flex;overflow-x:auto;scrollbar-width:none;margin:16px calc(var(--g) * -1) 0;padding:0 var(--g) 2px;}
+.dv-strip.is-wide::-webkit-scrollbar{display:none;}
+.dv-strip.is-wide .dv-d{flex:none;width:44px;}
+.dv-d{display:flex;flex-direction:column;align-items:center;gap:6px;font-size:11.5px;font-weight:650;color:var(--fg3);text-decoration:none;}
+.dv-d .dv-c{width:38px;height:38px;border-radius:50%;display:grid;place-items:center;font-size:14px;font-weight:700;background:var(--s1);color:var(--fg2);}
+.dv-d.is-done .dv-c{background:var(--acc-fill);color:var(--on-acc);}
+.dv-d.is-now{color:var(--acc);}
+.dv-d.is-now .dv-c{background:transparent;color:var(--acc);box-shadow:inset 0 0 0 2px var(--acc);}
+.dv-d.is-now.is-done .dv-c{background:var(--acc-fill);color:var(--on-acc);box-shadow:0 0 0 2px var(--bg),0 0 0 4px var(--acc);}
+.dv-strip .dv-d.is-shut .dv-c{opacity:.55;}
+a.dv-d:focus-visible{outline:2px solid var(--focus);outline-offset:2px;border-radius:12px;}
+.dv-mini{display:flex;gap:4px;min-width:0;}
+.dv-mini .dv-w{display:none;}
+.dv-mini .dv-d .dv-c{width:26px;height:26px;font-size:12px;background:var(--s2);}
+.dv-mini .dv-d .dv-c .mb-ic{width:13px;height:13px;}
+.dv-author{display:flex;align-items:center;gap:12px;margin-top:22px;}
+.dv-av{width:44px;height:44px;border-radius:50%;flex:none;display:grid;place-items:center;background:var(--acc-deep);color:var(--acc);
+  font-size:15px;font-weight:750;}
+.dv-listen{flex:none;display:inline-flex;align-items:center;gap:8px;min-height:40px;padding:0 14px 0 8px;border:0;border-radius:999px;
+  background:var(--acc-deep);color:var(--acc);font:inherit;font-size:14px;font-weight:650;cursor:pointer;}
+.dv-listen:disabled{opacity:.75;cursor:progress;}
+.dv-listen:focus-visible{outline:2px solid var(--focus);outline-offset:2px;}
+.dv-play{width:26px;height:26px;border-radius:50%;display:grid;place-items:center;background:var(--acc-fill);color:var(--on-acc);}
+.dv-play .mb-ic{margin-left:2px;}
+.dv-listen[aria-pressed=true] .dv-play .mb-ic{display:none;}
+.dv-listen[aria-pressed=true] .dv-play::before{content:"";width:9px;height:10px;box-sizing:border-box;border-left:3px solid currentColor;
+  border-right:3px solid currentColor;}
+.dv-scrip{margin-top:22px;padding:20px;border-radius:var(--r-lg);background:var(--gold-deep);}
+.dv-scrip .dv-eb{margin:0;color:var(--gold-ink);}
+.dv-scrip blockquote{margin:10px 0 0;font-family:var(--mb-serif);font-style:italic;font-weight:500;font-size:23px;line-height:1.3;}
+.dv-scrip-f{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-top:14px;font-size:13.5px;color:var(--fg2);}
+.dv-scrip-f a{display:inline-flex;align-items:center;gap:2px;color:var(--gold-ink);font-weight:600;text-decoration:none;}
+.dv-body{font-family:var(--mb-serif);font-size:19.5px;line-height:1.6;}
+.dv-body p{margin:18px 0 0;}
+.dv-pull{margin:26px 0 0;font-family:var(--mb-serif);font-style:italic;font-weight:500;font-size:24px;line-height:1.3;color:var(--acc);
+  text-wrap:balance;}
+.dv-blocks{display:flex;flex-direction:column;gap:10px;margin-top:28px;}
+.dv-blk{display:flex;gap:14px;padding:16px;border-radius:var(--r-md);background:var(--h-deep);}
+.dv-disc{width:40px;height:40px;border-radius:50%;flex:none;display:grid;place-items:center;background:var(--h);color:var(--on-h);}
+.dv-blk .dv-t small{font-weight:700;letter-spacing:.07em;}
+.dv-blk .dv-t>span{font-size:15.5px;line-height:1.5;color:var(--fg);}
+.dv-blk .dv-t>span.dv-serif{font-family:var(--mb-serif);font-size:18px;line-height:1.45;}
+.dv-check{margin-top:28px;border-radius:var(--r-md);background:var(--s1);overflow:hidden;}
+.dv-check-h{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:16px 16px 6px;}
+.dv-check-h h2{margin:0;font-size:17px;font-weight:700;letter-spacing:-.02em;}
+.dv-check-n{font-size:13px;color:var(--fg2);font-variant-numeric:tabular-nums;}
+.dv-ci{display:flex;align-items:center;gap:12px;width:100%;padding:12px 16px;position:relative;border:0;background:none;color:var(--fg);
+  font:inherit;text-align:left;cursor:pointer;}
+.dv-ci+.dv-ci::before{content:"";position:absolute;top:0;left:56px;right:0;height:.5px;background:var(--hair);}
+.dv-ci .dv-t strong{font-size:15.5px;font-weight:620;}
+.dv-ci[aria-pressed=true] .dv-box{background:var(--teal);color:var(--on-teal);box-shadow:none;}
+.dv-ci[aria-pressed=true] .dv-t strong{color:var(--fg2);}
+.dv-ci:disabled{cursor:default;}
+.dv-ci:focus-visible{outline:2px solid var(--focus);outline-offset:-2px;}
+.dv-journal{margin-top:28px;}
+.dv-journal h2{margin:0;font-size:17px;font-weight:700;letter-spacing:-.02em;}
+.dv-journal textarea{margin-top:10px;min-height:110px;resize:vertical;}
+.dv-saved{margin-left:auto;color:var(--fg3);}
+.dv-donebox{margin-top:26px;}
+.dv-donecard{display:flex;align-items:center;flex-wrap:wrap;gap:14px;padding:16px;border-radius:var(--r-md);background:var(--h-deep);}
+.dv-donecard .dv-t span{font-size:13.5px;}
+.dv-undo{margin-left:auto;font-size:13px;color:var(--fg2);}
+.dv-day [hidden],.dv-donecard[hidden]{display:none !important;}
+.dv-next{display:flex;align-items:center;gap:14px;margin-top:12px;padding:14px 16px;border-radius:var(--r-md);background:var(--s1);color:var(--fg);
+  text-decoration:none;}
+.dv-next .dv-t small{color:var(--fg3);}
+.dv-next>.mb-ic{color:var(--fg3);flex:none;}
+.dv-toast{position:fixed;z-index:31;left:50%;bottom:calc(96px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);margin:0;
+  padding:8px 14px;border-radius:999px;background:var(--fg);color:var(--bg);font-size:13.5px;font-weight:650;white-space:nowrap;}
+.mb-stop{margin:18px 0 0;text-align:center;}
+""")
 
 
 # The switcher (Church · Youth · Kids), for anyone with more than one space.

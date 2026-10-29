@@ -89,9 +89,11 @@ def _row(s: Dict[str, Any], lib: Dict[str, Any], pal: Dict[str, str], site=None,
 
 
 def latest_card(lib: Optional[Dict[str, Any]], pal: Dict[str, str], *, heading: str = "h2",
-                pool: Optional[List[str]] = None, used: Optional[set] = None, site=None) -> str:
+                pool: Optional[List[str]] = None, used: Optional[set] = None, site=None, more: int = 0) -> str:
     """Home's newest message, Subsplash-style: its art, the title under it.
-    '' when nothing is published (Home simply leaves it out)."""
+    `more` lists the next few under it on a computer only (hm-only), so it
+    stands as tall as the church's tiles beside it. '' when nothing is
+    published (Home simply leaves it out)."""
     import member_app_ui as ui
     from member_portal import _e
     if not lib or not lib["sermons"]:
@@ -106,12 +108,15 @@ def latest_card(lib: Optional[Dict[str, Any]], pal: Dict[str, str], *, heading: 
     from sermons_public import day_label
     when = day_label(s.get("preached_on"))
     sub = " · ".join(x for x in (sub, _e(when)) if x)
-    return f"""<section aria-labelledby="mb-latest">
+    after = lib["sermons"][1:1 + more]
+    extra = (f'<ul class="mb-list mb-cards hm-only hm-more" style="--inset:124px">'
+             f'{"".join(_row(x, lib, pal, site, pool) for x in after)}</ul>' if after else "")
+    return f"""<section class="h-violet" aria-labelledby="mb-latest">
   {ui.section("Latest message", "/my/sermons", "See all")}{hint}
   <a class="mb-mtile" href="{href}"><span class="mb-mtile-art">{_art(lib, s, pal, site, pool, used)}
   <span class="mb-play" aria-hidden="true">{ui.icon("play", 18)}</span>{ui.sample_tag() if sample else ''}</span>
   <span class="mb-mtile-b"><{heading} class="mp-sr" id="mb-latest">{_e(s.get('title'))}</{heading}>
-  <strong aria-hidden="true">{_e(s.get('title'))}</strong><span>{sub}</span></span></a>
+  <strong aria-hidden="true">{_e(s.get('title'))}</strong><span>{sub}</span></span></a>{extra}
 </section>"""
 
 
@@ -148,8 +153,8 @@ def render_library(biz, site, who, lib: Optional[Dict[str, Any]], series_id: str
         # it, never an empty list.
         import member_portal_bible as mpb
         church = _e(biz.get("name") or "the church")
-        pic = photos.pick(pool, "sermons-coming")
-        art = ui.photo(pic) if pic else ui.gen_art("S")
+        pic, look = photos.choose(biz, "watch", pool)
+        art = ui.picture(pic, look, "messages", night=True)
         body = (f'{head}{live_card(live, next_occ)}'
                 f'<section class="mb-soon" style="margin-top:12px">{art}<div class="mb-soon-in"><span class="mb-kick">Coming soon</span>'
                 f'<h2>Messages are on the way</h2><p>When {church} posts a message, it shows up here, '
@@ -168,11 +173,11 @@ def render_library(biz, site, who, lib: Optional[Dict[str, Any]], series_id: str
     feat = f"""<section class="mb-feat" aria-labelledby="mb-feat-h">{hint}
 <a class="mb-mtile-art" href="{href}" tabindex="-1" aria-hidden="true">{_art(lib, s, pal, site, pool, used)}
 <span class="mb-play">{ui.icon("play", 18)}</span>{ui.sample_tag() if sample else ''}</a>
-<span class="mb-kick">Latest · {_e(day_label(s.get("preached_on")))}</span>
+<div class="hm-txt"><span class="mb-kick">Latest · {_e(day_label(s.get("preached_on")))}</span>
 <h2 id="mb-feat-h"><a href="{href}">{_e(s.get("title"))}</a></h2>
 <p class="mb-meta">{_e(" · ".join(x for x in (s.get("speaker") or "", s.get("scripture") or "") if x))}</p>
 <div class="mb-acts"><a class="mp-go" href="{href}">{ui.icon("play", 15)}Watch</a>{listen}
-<button class="mp-go mp-go-2 mb-sq" type="button" data-share="/sermons/{_e(s["id"])}" data-title="{_e(s.get("title"))}" aria-label="Share">{ui.icon("share", 18)}</button></div>
+<button class="mp-go mp-go-2 mb-sq" type="button" data-share="/sermons/{_e(s["id"])}" data-title="{_e(s.get("title"))}" aria-label="Share">{ui.icon("share", 18)}</button></div></div>
 </section>"""
     by_series: Dict[str, List[Dict[str, Any]]] = {}
     for x in lib["sermons"]:
@@ -185,12 +190,15 @@ def render_library(biz, site, who, lib: Optional[Dict[str, Any]], series_id: str
         f'{_art(lib, by_series[sid][0], pal, site, pool, used)}</span><span class="mb-mtile-b"><strong>{_e(titles[sid])}</strong>'
         f'<span>{len(by_series[sid])} message{"" if len(by_series[sid]) == 1 else "s"}</span></span></a>'
         for sid in order)
-    parts = [head, live_card(live, next_occ), feat]
-    if shelf:
-        parts.append(f'{ui.section("Series")}<div class="mb-rail">{shelf}</div>')
-    parts.append(f'{ui.section("All messages")}<ul class="mb-list mb-cards" style="--inset:124px">'
-                 f'{"".join(_row(x, lib, pal, site, pool) for x in lib["sermons"])}</ul>')
-    return _shell(biz, site, "Watch", "".join(parts), tab="watch", who=who, script=SHARE_SCRIPT)
+    shelves = f'{ui.section("Series")}<div class="mb-rail">{shelf}</div>' if shelf else ""
+    every = (f'{ui.section("All messages")}<ul class="mb-list mb-cards wt-grid" style="--inset:124px">'
+             f'{"".join(_row(x, lib, pal, site, pool) for x in lib["sermons"])}</ul>')
+    # On a computer: the latest message as a cinema (its art beside its
+    # title, the next live under that), then the series, then every
+    # message on a grid. A phone reads them in this same order.
+    from member_portal import band
+    return _shell(biz, site, "Watch", head + band(live_card(live, next_occ) + feat, cls="wt-cine") + band(shelves) + band(every),
+                  tab="watch", who=who, script=SHARE_SCRIPT, wide=True)
 
 
 def render_sermon(biz, site, who, lib: Optional[Dict[str, Any]], sermon_id: str,
@@ -255,8 +263,9 @@ def render_sermon(biz, site, who, lib: Optional[Dict[str, Any]], sermon_id: str,
 def _art(lib: Dict[str, Any], s: Dict[str, Any], pal: Dict[str, str], site=None,
          pool: Optional[List[str]] = None, used: Optional[set] = None) -> str:
     """A message's picture: its series' own art from the church's site
-    (in colour), else one of the church's photos with the series name on
-    it, else a generated poster."""
+    (in colour), else a photo named for the series with the series name on
+    it, else a generated poster in the church's colour. Never a photo picked
+    by chance (Kevin, 2026-10-19)."""
     import member_app_ui as ui
     import member_app_photos as photos
     series = _titles(lib).get(str(s.get("series_id") or ""), "")
@@ -264,7 +273,7 @@ def _art(lib: Dict[str, Any], s: Dict[str, Any], pal: Dict[str, str], site=None,
     own = photos.series_art(site, series) if series else ""
     if own:
         return ui.art(own)
-    pic = photos.pick(pool or [], _key(lib, s), used or ()) if pool else ""
+    pic = photos.by_name(pool or [], name, used or ()) if pool else ""
     if pic:
         if used is not None:
             used.add(pic)
