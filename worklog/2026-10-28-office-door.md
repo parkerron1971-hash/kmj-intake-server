@@ -3,8 +3,8 @@ title: A church's office door (its own sign-in, invites and the lane by name)
 date: 2026-10-28
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-10-28: "should we consider change up solutionist key access for those that have a key so it doesn''t look like the admin access point?", then "yes build the church-branded office door"'
-status: in progress
-prs: ["kmj-intake-server (this PR)", "solutionist-studio (the door and the frame)"]
+status: shipped
+prs: [kmj-intake-server#1639, solutionist-studio#1401, solutionist-studio#1402]
 migrations: [supabase/APPLY-2026-10-28-seat-lane.sql]
 left_undone:
   - "The door's address is the app's (mysolutionist.app/office/<slug>); the church's own address only sends people there (a session lives on the app's address)"
@@ -19,3 +19,5 @@ decisions:
 ---
 
 Office logins signed in on Solutionist's own page, the owner's door. A church's office now has its own: its name, colours and logo, "Office", and invites that come from the church.
+
+Shipped 2026-10-29: #1639 merged at 00:48 UTC (deployed; migration applied before it), the app's half (solutionist-studio#1401) at 00:51, and #1402 (the door's logo up to 88px tall) at 01:06. Checked live, signed out: lovecityc.com/office opens Love City's door in black and magenta with its logo. Kevin then asked for the logo itself to be fixed: Love City's brand kit logo (a 1080x1080 square with the wordmark in its middle) was cropped to the wordmark (947x374), uploaded beside it, and set as logo_url and assets.primary; the original stays as assets.square.

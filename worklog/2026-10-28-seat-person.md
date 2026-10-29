@@ -3,13 +3,10 @@ title: Each office login is its own person (not the owner)
 date: 2026-10-28
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-10-28: "I sent the access for the others to get in. they went to sign up and it greeted them as Kevin. Which means they are not given the ability to set their account up as themselves or tie it to the account as a member". Also: a lane login''s phone should work for their lane, and should a key holder''s app look different from the admin''s'
-status: in progress
-prs: []
+status: shipped
+prs: [kmj-intake-server#1638, solutionist-studio#1400]
 migrations: [supabase/APPLY-2026-10-28-seat-person.sql]
 left_undone:
-  - "The app (solutionist-studio): every 'you' (the first greeting, Home, Chief's resting screen, the top-right picture, the morning briefing) reads /team/my-role's `me` for a seat, never settings.practitioner_name; the invite sign-up asks their name and welcomes them by it; the Team page lists names"
-  - "Chief says who it's helping and signs a seat's emails as the seat: the other session (kmj-intake-server-df) takes it on business_users_router.seat_person, in the turn tail next to its THIS LOGIN block"
-  - "A lane login's phone opens on Chief's full screen (the owner's asks and church-wide counts) instead of My week: the app's fix"
   - "A seat with no record and no name (signed up before this) is greeted by no name; nothing lets them set one yet"
   - "The member's photo isn't the seat's picture: member photos are served by the member app (/my/photo) behind its own sign-in"
 decisions:
@@ -20,3 +17,5 @@ decisions:
 ---
 
 Love City's office logins signed up and were greeted as Kevin: a seat had no name of its own, so the app used the business's name for its owner. Each seat is now tied to the church's record of that person.
+
+Shipped 2026-10-28: #1638 merged at 23:48 UTC (deployed; migration applied before it), the app's half (solutionist-studio#1400) at 23:52. Chief saying who it's helping came from the other session in #1641 (merged 2026-10-29 01:27 UTC), on seat_person. The church's own office door followed (worklog 2026-10-28-office-door).
