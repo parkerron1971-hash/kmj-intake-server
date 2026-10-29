@@ -15,8 +15,10 @@ i reveal the app?" ... "build the page and nightly text".
                            day each evening
     the word DAILY         texted to the church's own number does the same
                            (sms_routing, beside GIVE)
-    sweep_tick()           every 10 minutes; from 7:30 to 8 PM Eastern it
+    sweep_tick()           7:30, 7:35 ... 7:55 PM Eastern (on the clock);
                            texts each person tomorrow's day and its link
+    morning_tick()         9:00 ... 9:25 AM Eastern: a day whose evening
+                           text didn't go, as today's, to those who missed it
 
 A day opens on its date, and tomorrow's opens the evening before, so the
 text can be read that night and the morning's first look goes to God, not
@@ -66,6 +68,12 @@ FIRST_CHURCH = "009e9a2c-3e81-4bfc-a92a-205a8806aa99"   # Love City Church
 TZ = ZoneInfo("America/New_York")      # the same clock as texting's quiet hours
 SEND_FROM, SEND_UNTIL = time(19, 30), time(19, 58)    # quiet hours start at 8 PM
 SEND_AT = "7:30"
+# When the scheduler runs sweep_tick: every 5 minutes of the window, by
+# the Eastern clock (DST included), whenever the worker last booted.
+SWEEP_CRON = {"hour": 19, "minute": "30-55/5", "timezone": "America/New_York"}
+# A day whose evening text didn't go, the next morning once quiet hours end.
+MORNING_FROM, MORNING_UNTIL = time(9, 0), time(9, 28)
+MORNING_CRON = {"hour": 9, "minute": "0-25/5", "timezone": "America/New_York"}
 DAILY_WORDS = {"DAILY", "DEVOTION", "DEVOTIONAL"}
 CONSENT = ("Text me the daily devotional from {name}: one text each evening while the church reads a "
            "devotional together. Msg & data rates may apply. Reply STOP to stop, HELP for help.")
@@ -611,16 +619,22 @@ async def daily_join(request: Request):
 # ─── the evening text ────────────────────────────────────────────────
 
 
-def evening_text(name: str, dev: Dict[str, Any], n: int, day: Dict[str, Any], link: str) -> str:
+def evening_text(name: str, dev: Dict[str, Any], n: int, day: Dict[str, Any], link: str,
+                 *, morning: bool = False) -> str:
     import sms_service
     ref = str(day.get("scripture") or "").strip()
     what = f"{day.get('title') or ('Day ' + str(n))}" + (f", {ref}" if ref else "")
+    if morning:
+        return sms_service.compose_outbound_body(
+            name, f"Today's devotional ({label(dev, n)}): {what}. Read it: {link}", include_optout=True)
     return sms_service.compose_outbound_body(
         name, f"Tomorrow's devotional ({label(dev, n)}): {what}. Read it tonight: {link}", include_optout=True)
 
 
-def _plan(on: date) -> List[Dict[str, Any]]:
-    """Each church to text tonight: its people and tomorrow's text."""
+def _plan(on: date, *, morning: bool = False) -> List[Dict[str, Any]]:
+    """Each church to text: its people and the day's text. In the morning
+    each church also names `after`, the evening before's key: only someone
+    still on it missed this day's text."""
     rows = sb_clients.sb_get_as_service(
         "/devotional_texts?stopped_at=is.null&select=id,business_id,phone,last_key&order=joined_at.asc&limit=5000")
     if not isinstance(rows, list):
@@ -638,22 +652,31 @@ def _plan(on: date) -> List[Dict[str, Any]]:
         if not hit:
             continue
         dev, n = hit
+        after = None
+        if morning:
+            before = place(devs or [], on - timedelta(days=1))
+            if not before:
+                continue                         # a first day: no evening before to have missed
+            after = f"{before[0]['id']}_{before[1]}"
         full, _ = dv.one(biz_id, dev["id"])
         if not full or len(full.get("days") or []) < n:
             continue
         biz = sb_clients.sb_get_as_service(f"/businesses?id=eq.{_q(biz_id)}&select=name&limit=1")
         name = (biz[0].get("name") if isinstance(biz, list) and biz else "") or ""
-        out.append({"business_id": biz_id, "key": f"{dev['id']}_{n}", "people": people,
-                    "body": evening_text(name, full, n, full["days"][n - 1], page_link(biz_id, on))})
+        out.append({"business_id": biz_id, "key": f"{dev['id']}_{n}", "after": after, "people": people,
+                    "body": evening_text(name, full, n, full["days"][n - 1], page_link(biz_id, on),
+                                         morning=morning)})
     return out
 
 
-def _claim(row_id: str, key: str, at: str) -> bool:
+def _claim(row_id: str, key: str, at: str, after: Optional[str] = None) -> bool:
     """Move this person's last_key to tonight's key; True for the one
-    replica whose PATCH found it on something else."""
+    replica whose PATCH found it on something else (in the morning, on
+    the evening before's key and nothing else)."""
+    which = (f"&last_key=eq.{_q(after)}" if after
+             else f"&or=(last_key.is.null,last_key.neq.{_q(key)})")
     rows = sb_clients.sb_patch_as_service(
-        f"/devotional_texts?id=eq.{_q(row_id)}&stopped_at=is.null"
-        f"&or=(last_key.is.null,last_key.neq.{_q(key)})",
+        f"/devotional_texts?id=eq.{_q(row_id)}&stopped_at=is.null{which}",
         {"last_key": key, "last_sent_at": at})
     return isinstance(rows, list) and bool(rows)
 
@@ -666,6 +689,19 @@ def _unclaim(row_id: str, key: str, before: Optional[str]) -> None:
 
 async def sweep_tick(now: Optional[datetime] = None) -> Dict[str, int]:
     """From 7:30 to 8 PM Eastern, text everyone signed up tomorrow's day."""
+    return await _send_round(now, morning=False)
+
+
+async def morning_tick(now: Optional[datetime] = None) -> Dict[str, int]:
+    """From 9:00 to 9:30 AM Eastern, the day whose evening text never came
+    goes out as today's, to the people who had the evening before's and
+    to nobody else. 10-28 nobody got Day 4 at 7:30 and quiet hours had
+    begun by the time it was noticed; Kevin: "send the one that was
+    suppose to be sent out at 7:30pm as soon as you can"."""
+    return await _send_round(now, morning=True)
+
+
+async def _send_round(now: Optional[datetime], *, morning: bool) -> Dict[str, int]:
     import httpx
     import sms_alerts
     import sms_routing
@@ -674,23 +710,28 @@ async def sweep_tick(now: Optional[datetime] = None) -> Dict[str, int]:
     if (os.environ.get("DEVOTIONAL_DAILY") or "on").strip().lower() == "off" or not sms_alerts.alerts_enabled():
         return counts
     now = (now or now_local()).astimezone(TZ)
-    if not (SEND_FROM <= now.time() < SEND_UNTIL):
+    start, until = (MORNING_FROM, MORNING_UNTIL) if morning else (SEND_FROM, SEND_UNTIL)
+    if not (start <= now.time() < until):
         return counts
-    plan = await asyncio.to_thread(_plan, now.date() + timedelta(days=1))
+    what = "morning catch-up" if morning else "evening sweep"
+    # Every run in the window leaves a line, sent or not: 10-28's miss left
+    # no trace of whether the sweep ran at all.
+    plan = await asyncio.to_thread(_plan, now.date() + timedelta(days=0 if morning else 1), morning=morning)
     if not plan:
+        print(f"[daily] {what} {now:%H:%M}: no devotional day to send", flush=True)
         return counts
     at = datetime.now(timezone.utc).isoformat()
     async with httpx.AsyncClient(timeout=15) as client:
         for church in plan:
-            biz_id, key, body = church["business_id"], church["key"], church["body"]
+            biz_id, key, body, after = church["business_id"], church["key"], church["body"], church.get("after")
             for person in church["people"]:
-                if person.get("last_key") == key:
+                if person.get("last_key") == key or (morning and person.get("last_key") != after):
                     continue
                 phone = person["phone"]
                 if await sms_service.is_opted_out(client, phone, biz_id):
                     counts["skipped"] += 1
                     continue
-                if not await asyncio.to_thread(_claim, person["id"], key, at):
+                if not await asyncio.to_thread(_claim, person["id"], key, at, after):
                     continue                     # another replica has them
                 try:
                     sid = await sms_routing._send_platform_sms(phone, body, business_id=biz_id, client=client)
@@ -700,9 +741,8 @@ async def sweep_tick(now: Optional[datetime] = None) -> Dict[str, int]:
                     counts["sent"] += 1
                 except Exception as e:
                     counts["failed"] += 1
-                    print(f"[daily] evening text failed for biz {biz_id[:8]}: {e}", flush=True)
+                    print(f"[daily] {what} text failed for biz {biz_id[:8]}: {e}", flush=True)
                     await asyncio.to_thread(_unclaim, person["id"], key, person.get("last_key"))
                 await asyncio.sleep(0.25)
-    if counts["sent"] or counts["failed"]:
-        print(f"[daily] evening texts: {json.dumps(counts)}", flush=True)
+    print(f"[daily] {what} {now:%H:%M}: {json.dumps(counts)}", flush=True)
     return counts

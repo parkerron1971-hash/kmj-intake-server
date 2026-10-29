@@ -334,6 +334,10 @@ def _sweep(when):
     return asyncio.run(dd.sweep_tick(when))
 
 
+def _morning(when):
+    return asyncio.run(dd.morning_tick(when))
+
+
 def test_the_evening_text_is_tomorrows_day_once_a_person(world, signups):
     world["opted_out"].add("+12315550003")
     counts = _sweep(_at(2026, 10, 27, 19, 35))
@@ -355,6 +359,62 @@ def test_only_from_half_past_seven_until_quiet_hours(world, signups, monkeypatch
     monkeypatch.setenv("DEVOTIONAL_DAILY", "off")
     assert _sweep(_at(2026, 10, 27, 19, 35))["sent"] == 0
     assert world["texts"] == []
+
+
+def test_the_sweep_runs_on_the_clock_inside_the_window():
+    """10-28: nobody got Day 4 from a sweep that ran every 10 minutes from
+    whenever the worker booted. Now it runs at fixed Eastern times, six a
+    night, every one inside the window, before and after the clocks change."""
+    from apscheduler.triggers.cron import CronTrigger
+    trigger = CronTrigger(**dd.SWEEP_CRON)
+    for start in (datetime(2026, 10, 28, 12, 0, tzinfo=ET), datetime(2026, 11, 2, 12, 0, tzinfo=ET)):
+        runs, prev, t = [], None, start
+        while len(runs) < 6:
+            t = trigger.get_next_fire_time(prev, t)
+            runs.append(t.astimezone(ET).time())
+            prev, t = t, t + timedelta(seconds=1)
+        assert runs[0] == dd.SEND_FROM and all(dd.SEND_FROM <= r < dd.SEND_UNTIL for r in runs)
+        assert len({r.minute for r in runs}) == 6
+
+
+def test_a_missed_evening_goes_out_the_next_morning_to_those_who_missed_it(world, signups):
+    """10-28: nobody got Day 4 at 7:30; Kevin: "send the one that was
+    suppose to be sent out at 7:30pm as soon as you can". At 9 the next
+    morning, today's day goes to whoever had the evening before's text,
+    and to nobody who joined late (last_key None) or already has it."""
+    world["opted_out"].add("+12315550003")
+    signups[2]["last_key"] = f"{W2}_2"                                       # opted out since
+    signups[0]["last_key"] = None                                            # joined after 8 PM
+    # 10-28 morning: day 3 of Finance Week is today; r2 got day 2 the evening before, day 3 never came
+    assert _morning(_at(2026, 10, 28, 8, 59))["sent"] == 0 and world["texts"] == []      # quiet hours
+    counts = _morning(_at(2026, 10, 28, 9, 0))
+    assert counts == {"sent": 1, "skipped": 1, "failed": 0}
+    assert world["texts"] == [("+12315550002",
+                               "Love City Church: Today's devotional (Finance Week, day 3): First Fruits, "
+                               "Proverbs 3:9-10. Read it: https://lovecityc.com/daily?date=2026-10-28&t=1 "
+                               "Reply STOP to opt out.")]
+    assert signups[1]["last_key"] == f"{W2}_3" and signups[0]["last_key"] is None
+    assert _morning(_at(2026, 10, 28, 9, 5))["sent"] == 0                    # once
+    assert _morning(_at(2026, 10, 28, 9, 28))["sent"] == 0                   # the half hour is over
+    # that evening, tomorrow's day goes to everyone as always, r2 included
+    assert _sweep(_at(2026, 10, 28, 19, 30))["sent"] == 2
+    assert signups[1]["last_key"] == f"{W2}_4"
+
+
+def test_a_morning_after_an_evening_that_went_sends_nothing(world, signups):
+    for r in signups[:3]:
+        r["last_key"] = f"{W2}_3"                                            # day 3 went the evening before
+    assert _morning(_at(2026, 10, 28, 9, 0))["sent"] == 0
+    assert _morning(_at(2026, 10, 26, 9, 0))["sent"] == 0                    # a week's first day: across weeks,
+    assert world["texts"] == []                                              # only W1_7 holders, and nobody is
+
+
+def test_the_morning_catch_up_runs_on_the_clock_after_quiet_hours():
+    from apscheduler.triggers.cron import CronTrigger
+    trigger = CronTrigger(**dd.MORNING_CRON)
+    t = trigger.get_next_fire_time(None, datetime(2026, 10, 29, 0, 0, tzinfo=ET))
+    assert t.astimezone(ET).time() == dd.MORNING_FROM
+    assert dd.MORNING_FROM.hour >= __import__("sms_alerts").QUIET_SEND_START_HOUR
 
 
 def test_after_the_last_day_nobody_is_texted(world, signups):
