@@ -10,7 +10,9 @@
 #     reads, and a disconnect;
 #   * only TLS gets in: plain RTMP to the ingest port fails;
 #   * a key the backend refuses mid-stream is disconnected through
-#     MediaMTX's own API.
+#     MediaMTX's own API;
+#   * the hourly key re-check (every second here) runs alongside a live
+#     stream without disturbing it, and sends only the key's hash.
 #
 # Needs the binary and ffmpeg, so it skips unless MEDIAMTX_BIN is set:
 #   MEDIAMTX_BIN=/path/to/mediamtx python -m pytest __tests__/test_stream_relay_mediamtx.py
@@ -99,7 +101,7 @@ def test_the_secret_stays_out_of_every_log_and_a_refused_key_is_cut(tmp_path):
     ra.log.addHandler(handler)
     ra.log.setLevel(logging.DEBUG)
 
-    state = {"revoked": False, "calls": []}
+    state = {"revoked": False, "calls": [], "confirm_bodies": []}
     puts = {}
     copy_file = tmp_path / "youtube_copy.flv"
 
@@ -107,6 +109,12 @@ def test_the_secret_stays_out_of_every_log_and_a_refused_key_is_cut(tmp_path):
         async def backend(self, path, body):
             state["calls"].append(path)
             ok = body.get("key") == KEY and body.get("stream_id") == SID and not state["revoked"]
+            if path.endswith("/confirm"):          # the hourly re-check (every second here)
+                state["confirm_bodies"].append(repr(body))
+                good = ra.key_hash(KEY)
+                return 200, {"confirmed": [g["stream_id"] for g in body.get("grants") or []
+                                           if g.get("stream_id") == SID and g.get("key_hash") == good
+                                           and not state["revoked"]]}
             if path.endswith("/verify"):
                 return (200, {"destinations": [{"name": "youtube", "url": str(copy_file)}]}) if ok else (403, {})
             if path.endswith("/started"):
@@ -119,7 +127,7 @@ def test_the_secret_stays_out_of_every_log_and_a_refused_key_is_cut(tmp_path):
             puts[name] = len(body)
 
     cfg = ra.Config()
-    cfg.work, cfg.grace, cfg.beat_s = tmp_path / "work", 5, 2
+    cfg.work, cfg.grace, cfg.beat_s, cfg.grant_sync_s = tmp_path / "work", 5, 2, 1
     cfg.mtx_api, cfg.mtx_rtsp = f"http://127.0.0.1:{api}", f"rtsp://127.0.0.1:{rtsp}"
     agent = Agent(cfg)
 
@@ -193,3 +201,6 @@ def test_the_secret_stays_out_of_every_log_and_a_refused_key_is_cut(tmp_path):
         assert secret not in mtx_text, "MediaMTX logged a stream key"
         assert secret not in agent_text, "the agent logged a stream key"
     assert "disconnected" in agent_text and "/stream-relay/relay/started" in state["calls"]
+    # The good stream ran through re-checks, and they carried only the hash.
+    assert any(ra.key_hash(KEY) in b for b in state["confirm_bodies"])
+    assert all(KEY not in b for b in state["confirm_bodies"])

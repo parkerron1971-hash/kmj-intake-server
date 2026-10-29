@@ -7,14 +7,19 @@ logs paths) and hands the secret only to this agent, in the auth request's
 query. The agent does everything else:
 
   * decides who may stream (MediaMTX asks POST /auth; the backend knows the
-    keys). A key the backend confirmed in the last OFFLINE_GRANT_S (3 hours
+    keys). A key the backend confirmed in the last OFFLINE_GRANT_S (a day
     unless set) keeps working while the backend can't be reached, so a
-    service under way doesn't depend on Railway — but never past that
-    window, and never once the backend has said no. The window binds a
-    stream already running too: each confirmation (every heartbeat) moves
-    its deadline, and when the backend has been silent that long the
-    publisher is disconnected and every copy and the recording stop, on
-    the agent's own clock, whether or not MediaMTX's API answers;
+    Sunday doesn't depend on Railway — but never past that window, and
+    never once the backend has said no. Every GRANT_SYNC_S (an hour) the
+    agent re-confirms each key it remembers (POST /relay/confirm, sending
+    only sha256 of the secret, as the backend stores it): a confirmed key's
+    window starts again, and a key the backend leaves out is forgotten at
+    once — a replaced key, or streaming switched off, stops within the hour
+    while the backend is up. The window binds a stream already running too:
+    each confirmation (the heartbeat's, the re-check's) moves its deadline,
+    and when the backend has been silent that long the publisher is
+    disconnected and every copy and the recording stop, on the agent's own
+    clock, whether or not MediaMTX's API answers;
   * notices a stream come up (MediaMTX's local API lists publishers and
     their query), and starts one ffmpeg per destination (YouTube, Facebook)
     plus one that writes HLS for the member app. All copies are `-c copy`:
@@ -57,6 +62,7 @@ from __future__ import annotations
 import asyncio
 import collections
 import hashlib
+import hmac
 import json
 import logging
 import os
@@ -82,6 +88,7 @@ CONN_KINDS = ("rtmpsconns", "rtmpconns")
 ADMIT_HOLD_S = 30      # a church let in holds its place this long for MediaMTX to list it
 KICK_EVERY_S = 10      # a publisher that must go is disconnected again this often
 KILL_AFTER_S = 5       # a stopped ffmpeg gets this long to exit before it is killed
+CONFIRM_CHUNK = 200    # keys per /relay/confirm request
 
 
 # ─── pure helpers ────────────────────────────────────────────────────
@@ -182,9 +189,10 @@ def redact(text: str) -> str:
     return re.sub(r"(rtmps?://[^\s/]+(?::\d+)?/[^\s/]+/)[^\s]+", r"\g<1><key>", text)
 
 
-def key_id(key: str) -> str:
-    """A short, non-reversible name for a key (the cache's file names)."""
-    return hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
+def key_hash(key: str) -> str:
+    """sha256 of a church's secret, exactly as the backend stores it: what
+    the agent remembers and re-confirms, never the secret itself."""
+    return hashlib.sha256((key or "").encode("utf-8")).hexdigest()
 
 
 def ingest_mbps(samples: Deque[Tuple[float, int]]) -> float:
@@ -214,8 +222,10 @@ class Config:
         self.listen = e("AGENT_ADDR") or "127.0.0.1:9100"
         self.beat_s = float(e("BEAT_S") or 60)
         # How long the backend may be silent about a key before streams on
-        # it are refused (new) or cut (running): a service plus its warm-up.
-        self.offline_s = float(e("OFFLINE_GRANT_S") or 3 * 3600)
+        # it are refused (new) or cut (running), and how often every key the
+        # agent remembers is re-confirmed (Kevin, 2026-10-29: a day, hourly).
+        self.offline_s = float(e("OFFLINE_GRANT_S") or 24 * 3600)
+        self.grant_sync_s = float(e("GRANT_SYNC_S") or 3600)
         self.max_streams = int(e("MAX_STREAMS") or 4)
         self.reserve = int(float(e("DISK_RESERVE_GB") or 2) * 1e9)
         self.spool_max = int(float(e("SPOOL_MAX_GB") or 6) * 1e9)
@@ -397,6 +407,8 @@ class Agent:
         self.held: Dict[str, Tuple[float, str]] = {}
         self.admitting = asyncio.Lock()                 # one admission decided at a time
         self.turned_away: Dict[str, float] = {}         # past the limit: stream id -> next kick
+        self.next_sync = 0.0                            # the first re-check runs at start
+        self.syncing = False
 
     # ── the backend ──
 
@@ -410,30 +422,54 @@ class Agent:
             log.warning("backend %s failed: %s", path, type(e).__name__)
             return 0, {}
 
-    # Keys the backend confirmed, for when it can't be reached. Named by a
-    # hash of the key; holds the stream id and where copies go.
+    # Keys the backend confirmed, for when it can't be reached: ONE per
+    # church (the re-check answers by church), cache/<stream id>.json, with
+    # sha256 of the secret (never the secret), when the backend was asked,
+    # and where copies go.
 
-    def _cache_path(self, key: str) -> Path:
-        return self.cache_dir / f"{key_id(key)}.json"
+    def _cache_path(self, stream_id: str) -> Path:
+        if not STREAM_ID_RE.match(stream_id or ""):
+            raise ValueError("not a stream id")
+        return self.cache_dir / f"{stream_id}.json"
 
-    def remember(self, key: str, stream_id: str, dests: List[Dict[str, str]],
-                 seen: Optional[float] = None) -> None:
-        """`seen`: when the backend was ASKED (an answer is never newer than
-        its question), so an answer that crossed a cut-off can't outlive it."""
-        p = self._cache_path(key)
+    def _grant(self, stream_id: str) -> Optional[Dict[str, Any]]:
+        try:
+            data = json.loads(self._cache_path(stream_id).read_text())
+        except (OSError, ValueError):
+            return None
+        ok = isinstance(data, dict) and data.get("stream_id") == stream_id and isinstance(data.get("key_hash"), str)
+        return data if ok else None
+
+    def _keep(self, data: Dict[str, Any]) -> None:
+        p = self._cache_path(str(data["stream_id"]))
         tmp = p.with_suffix(".tmp")
-        tmp.write_text(json.dumps({"seen": time.time() if seen is None else seen,
-                                   "stream_id": stream_id, "dests": dests}))
+        tmp.write_text(json.dumps(data))
         os.chmod(tmp, 0o600)
         os.replace(tmp, p)
 
-    def recall(self, key: str, stream_id: str) -> Optional[Dict[str, Any]]:
+    def _drop(self, stream_id: str) -> None:
         try:
-            data = json.loads(self._cache_path(key).read_text())
+            self._cache_path(stream_id).unlink()
         except (OSError, ValueError):
+            pass
+
+    def _fresh(self, data: Dict[str, Any], now: Optional[float] = None) -> bool:
+        return (time.time() if now is None else now) - float(data.get("seen") or 0) < self.cfg.offline_s
+
+    def remember(self, key: str, stream_id: str, dests: List[Dict[str, str]],
+                 seen: Optional[float] = None) -> None:
+        """The church's remembered key: a newly confirmed key replaces the
+        old one. `seen`: when the backend was ASKED (an answer is never newer
+        than its question), so an answer that crossed a cut-off can't
+        outlive it."""
+        self._keep({"stream_id": stream_id, "key_hash": key_hash(key),
+                    "seen": time.time() if seen is None else seen, "dests": dests})
+
+    def recall(self, key: str, stream_id: str) -> Optional[Dict[str, Any]]:
+        data = self._grant(stream_id)
+        if not data or not hmac.compare_digest(data["key_hash"], key_hash(key)):
             return None
-        fresh = time.time() - float(data.get("seen") or 0) < self.cfg.offline_s
-        return data if fresh and data.get("stream_id") == stream_id else None
+        return data if self._fresh(data) else None
 
     def grant_until(self, key: Optional[str], stream_id: str) -> float:
         """Until when the backend's last confirmation of this key holds; 0
@@ -441,13 +477,68 @@ class Agent:
         data = self.recall(key, stream_id) if key else None
         return float(data.get("seen") or 0) + self.cfg.offline_s if data else 0.0
 
-    def forget(self, key: Optional[str]) -> None:
-        if not key:
-            return
+    def forget(self, key: Optional[str], stream_id: str) -> None:
+        """Forget the church's remembered key if it is THIS key: refusing an
+        old key never takes the church's new one with it."""
+        data = self._grant(stream_id)
+        if key and data and hmac.compare_digest(data["key_hash"], key_hash(key)):
+            self._drop(stream_id)
+
+    def remembered(self) -> List[Dict[str, Any]]:
+        """Every remembered key still within its window. One that ran out
+        isn't re-checked: it comes back only through /auth."""
+        out = []
+        for p in sorted(self.cache_dir.glob("*.json")):
+            data = self._grant(p.stem)
+            if data and self._fresh(data):
+                out.append(data)
+        return out
+
+    async def sync_grants(self) -> None:
+        """The hourly re-check: ask the backend about every remembered key,
+        CONFIRM_CHUNK at a time. A confirmed key's window starts again from
+        when it was asked; a key left out is forgotten and a stream on it is
+        cut. Any other answer (a timeout, a 5xx, a 404 from a backend
+        without the route yet, no `confirmed` list) changes nothing."""
         try:
-            self._cache_path(key).unlink()
-        except OSError:
-            pass
+            held = [(str(g["stream_id"]), str(g["key_hash"])) for g in self.remembered()]
+            for i in range(0, len(held), CONFIRM_CHUNK):
+                chunk = held[i:i + CONFIRM_CHUNK]
+                asked = time.time()
+                status, data = await self.backend("/stream-relay/relay/confirm", {
+                    "grants": [{"stream_id": sid, "key_hash": h} for sid, h in chunk]})
+                confirmed = data.get("confirmed") if status == 200 else None
+                if not isinstance(confirmed, list):
+                    log.warning("re-check of %d keys got no answer (%s); nothing changed", len(chunk), status)
+                    continue
+                await self.apply_confirm(chunk, {str(s) for s in confirmed}, asked)
+        finally:
+            self.syncing = False
+
+    async def apply_confirm(self, chunk: List[Tuple[str, str]], ok: set, asked: float) -> None:
+        now = time.time()
+        for sid, h in chunk:
+            grant = self._grant(sid)
+            mine = grant is not None and hmac.compare_digest(grant["key_hash"], h)
+            live = self.lives.get(sid)
+            on_it = (live is not None and live.key is not None and not live.revoked
+                     and hmac.compare_digest(key_hash(live.key), h))
+            if sid in ok:
+                # Only a key still within its window is renewed: an answer
+                # that comes in after it ran out brings nothing back.
+                if mine and self._fresh(grant, now):
+                    grant["seen"] = max(float(grant.get("seen") or 0), asked)
+                    self._keep(grant)
+                if on_it and now < live.auth_until:
+                    live.auth_until = max(live.auth_until, asked + self.cfg.offline_s)
+                continue
+            # Left out: forgotten, unless confirmed again since it was asked.
+            if mine and float(grant.get("seen") or 0) <= asked:
+                self._drop(sid)
+            if on_it and live.auth_until <= asked + self.cfg.offline_s:
+                log.warning("%s: the backend no longer confirms this stream's key; disconnecting", sid)
+                self.revoke(live, now)
+                await self.kick(sid, live.conn)
 
     async def may_publish(self, stream_id: str, key: str) -> bool:
         asked = time.time()
@@ -456,7 +547,7 @@ class Agent:
             self.remember(key, stream_id, list(data.get("destinations") or []), seen=asked)
             return True
         if status in REFUSED:
-            self.forget(key)
+            self.forget(key, stream_id)
             return False
         # The backend can't answer (0 / 5xx): a key it confirmed within the
         # offline window keeps working, so a service doesn't depend on Railway.
@@ -607,6 +698,9 @@ class Agent:
             if live.key and not live.beating and now - live.last_beat >= self.cfg.beat_s:
                 live.last_beat, live.beating = now, True
                 asyncio.create_task(self.beat(live))
+        if now >= self.next_sync and not self.syncing:
+            self.next_sync, self.syncing = now + self.cfg.grant_sync_s, True
+            asyncio.create_task(self.sync_grants())
         await self.enforce_grants(now)
         if now >= self.next_limits:
             self.next_limits = now + 10
@@ -722,7 +816,7 @@ class Agent:
                 self.split(live, data.get("detail") if isinstance(data.get("detail"), dict) else {})
             elif status in REFUSED:
                 log.warning("%s: the backend refused this stream's key (%s); disconnecting", live.stream_id, status)
-                self.forget(key)
+                self.forget(key, live.stream_id)
                 if live.key == key:
                     self.revoke(live, time.time())
                     await self.kick(live.stream_id, live.conn)

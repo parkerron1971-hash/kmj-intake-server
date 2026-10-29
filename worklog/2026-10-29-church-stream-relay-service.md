@@ -2,12 +2,12 @@
 title: Church stream relay server (the droplet), and Codex's re-check fixes R3-R and R6-R
 date: 2026-10-29
 agent: Claude Code (Claude Opus 5.5)
-asked: 'Kevin, 2026-10-29: "yes start on the fixes" (Codex re-check of 2026-10-16: R3-R and R6-R on #1461)'
+asked: 'Kevin, 2026-10-29: "yes start on the fixes" (Codex re-check of 2026-10-16: R3-R and R6-R on #1461); on the offline window: "make the best option"'
 status: waiting on Kevin
 prs: [kmj-intake-server#1461]
 migrations: []
 left_undone:
-  - "Kevin: accept (or change) the 3-hour offline window, OFFLINE_GRANT_S; it was 8 days, which Codex flagged as an unapproved multi-day revocation window"
+  - "#1460 adds POST /stream-relay/relay/confirm (the contract is in decisions); until it does, the hourly re-check gets a 404 and changes nothing (keys then last 24h from their last /auth or heartbeat)"
   - "Codex final review of #1461 at the new head; #1460's B2-R and B3-R are fixed in that PR, not here"
   - "Kevin: DigitalOcean droplet + reserved IP, private R2 bucket with CORS, two R2 tokens, DNS stream A record (stream_relay/README.md, One-time setup)"
   - "R9: recording retention and deleting a church's recordings with its account (needs Kevin's retention call)"
@@ -15,8 +15,11 @@ left_undone:
   - "standby droplet + reserved-IP watcher; uptime alert"
   - "a Linux Docker run of the real stack (the MediaMTX test runs the Windows binary)"
 decisions:
-  - "a key the backend confirmed keeps working 3 hours while it can't be reached, for a new stream and one already running; past that the publisher is disconnected and every copy and the recording stop"
-  - "a confirmation counts from when the backend was asked, so an answer that crossed a cut-off can't re-admit the key"
+  - "Kevin's call (2026-10-29, \"make the best option\"): the agent re-confirms every key it remembers hourly (GRANT_SYNC_S=3600) and a confirmed key works 24 hours while the backend can't be reached (OFFLINE_GRANT_S=86400). A key Kevin revokes stops within an hour while the backend is up; a Sunday outage that begins after Saturday's re-checks doesn't block the service"
+  - "the 24 hours bind a running stream too: past them the publisher is disconnected and every copy and the recording stop; a key the re-check leaves out is forgotten and its stream cut the same way"
+  - "the re-check contract: POST /stream-relay/relay/confirm, X-Relay-Secret, {grants: [{stream_id, key_hash (sha256 hex of the secret)}]} in chunks of 200; 200 {confirmed: [stream_id]} renews or drops; anything else changes nothing"
+  - "the agent remembers one key per church, as its sha256 (never the key); a newly confirmed key replaces the old one"
+  - "a confirmation counts from when the backend was asked, and an answer arriving after a key ran out brings nothing back"
   - "a church holds its place from the moment /auth lets it in, decided one at a time; a church waiting out its grace keeps its place; a publisher found past MAX_STREAMS is disconnected"
   - "a disk that can't be read counts as full: new streams are refused and recording stops"
 related: [2026-10-16-church-streaming-review-fixes.md]
@@ -37,8 +40,12 @@ R6-R: the limits run every pass whatever MediaMTX's API does, admission
 reserves a place under a lock before the backend is asked, and the cap also
 holds when publishers are found. Codex's own probes (`relay_bypass.py`) pass
 unchanged. A recording journal left untouched past the grace is now finished
-at restart instead of appended to (a residual of the bot's item 3). The
-backend contract is unchanged.
+at restart instead of appended to (a residual of the bot's item 3).
+
+Kevin then chose the window ("make the best option"): a short window AND a
+Sunday that survives a Railway outage. The agent re-confirms every key it
+remembers with the backend hourly (the one new route, `/relay/confirm`,
+which #1460 adds), and a confirmed key works for 24 hours.
 
 Before changing the agent's auth or publisher code, run
 `__tests__/test_stream_relay_mediamtx.py` with `MEDIAMTX_BIN` set to a

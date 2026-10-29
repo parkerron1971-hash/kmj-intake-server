@@ -9,7 +9,10 @@
 # forgotten; a key the backend refuses mid-stream is cut at the next
 # heartbeat (R3), and a running stream whose key the backend hasn't
 # confirmed within the window is cut too, on the agent's own clock (R3-R);
-# copies follow the backend's current destinations, and a stopped copy is
+# every remembered key (one per church, only its hash) is re-confirmed
+# hourly, in chunks of 200: confirmed keys start their day again, keys left
+# out are forgotten and their streams cut, and a failed or late re-check
+# changes nothing (Kevin's call, 2026-10-29); copies follow the backend's current destinations, and a stopped copy is
 # killed if it won't stop (R11); a dropped stream resumes the same
 # recording, a restarted agent picks up its journals and still finishes,
 # and a finish retries until it is acknowledged (R4); a finish only ever
@@ -20,6 +23,7 @@
 # once (R6-R).
 
 import asyncio
+import hashlib
 import importlib.util
 import json
 import os
@@ -665,11 +669,190 @@ def test_an_expired_grant_is_cut_even_while_mediamtx_cant_be_read(tmp_path, monk
 
 
 def test_the_offline_window_is_short_unless_set(monkeypatch):
-    """Codex R3-R: hours, not days, unless OFFLINE_GRANT_S says otherwise."""
-    monkeypatch.delenv("OFFLINE_GRANT_S", raising=False)
-    assert ra.Config().offline_s == 3 * 3600
+    """Codex R3-R, Kevin's call (2026-10-29): a day, re-confirmed every hour,
+    unless OFFLINE_GRANT_S / GRANT_SYNC_S say otherwise."""
+    for name in ("OFFLINE_GRANT_S", "GRANT_SYNC_S"):
+        monkeypatch.delenv(name, raising=False)
+    assert ra.Config().offline_s == 24 * 3600 and ra.Config().grant_sync_s == 3600
     monkeypatch.setenv("OFFLINE_GRANT_S", "600")
-    assert ra.Config().offline_s == 600
+    monkeypatch.setenv("GRANT_SYNC_S", "60")
+    assert ra.Config().offline_s == 600 and ra.Config().grant_sync_s == 60
+
+
+def sha(key):
+    return hashlib.sha256(key.encode("utf-8")).hexdigest()
+
+
+async def confirm_all(body):
+    """The backend's /relay/confirm when every key it's asked about is good."""
+    return 200, {"confirmed": [g["stream_id"] for g in body["grants"]]}
+
+
+def seen(tmp_path, sid):
+    return json.loads((tmp_path / "cache" / f"{sid}.json").read_text())["seen"]
+
+
+def test_an_hourly_reconfirm_keeps_every_remembered_key_fresh(tmp_path, monkeypatch):
+    """Kevin's call: the agent re-confirms every key it remembers with the
+    backend every GRANT_SYNC_S, sending only the hash the backend stores.
+    A confirmation counts from when it was asked, and moves a running
+    stream's deadline too: an outage that starts after the last re-check
+    still leaves the whole window."""
+    h = Harness(tmp_path, monkeypatch, offline_s=86400, grant_sync_s=3600, max_record_s=7 * 86400)
+    a = h.a
+    t0 = h.clock["t"]
+    a.remember(NEW_KEY, SID2, [])
+    h.answers["confirm"] = confirm_all
+
+    async def go():
+        h.publish()
+        await a.tick()
+        await settle()
+        live = a.lives[SID]
+        h.started({}, status=503)                                     # only the re-check confirms now
+        h.later(3600)
+        await a.tick()
+        await settle()
+        asked = h.said("confirm")
+        assert len(asked) == 2
+        assert sorted((g["stream_id"], g["key_hash"]) for g in asked[-1]["grants"]) == \
+            sorted([(SID, sha(KEY)), (SID2, sha(NEW_KEY))])
+        assert KEY not in json.dumps(asked) and NEW_KEY not in json.dumps(asked)
+        assert seen(tmp_path, SID) == seen(tmp_path, SID2) == t0 + 3600
+        h.answers["confirm"] = (0, {})                                # Railway goes down after that
+        h.answers["verify"] = (0, {})
+        h.later(86400 - 3600 + 60)                                    # a day and a minute since t0
+        await a.tick()
+        await settle()
+        assert await a.may_publish(SID2, NEW_KEY)                     # the 1-hour re-check still holds
+        assert h.running(live) == ["hls", "youtube"] and not h.kicks
+        h.later(3600)                                                 # a day past the last re-check
+        await a.tick()
+        await settle()
+        assert not await a.may_publish(SID2, NEW_KEY)
+        assert h.kicks == [SID] and h.running(live) == []
+    run(go())
+
+
+def test_a_reconfirm_that_leaves_a_church_out_drops_it_and_cuts_its_stream(tmp_path, monkeypatch):
+    """Kevin's call: a key the backend no longer confirms (replaced, or
+    streaming switched off) is forgotten at the re-check, and a stream on it
+    is cut as at expiry: disconnected, every copy and the recording stopped."""
+    h = Harness(tmp_path, monkeypatch, offline_s=86400, grant_sync_s=3600)
+    a = h.a
+    a.remember(NEW_KEY, SID2, [])
+
+    async def go():
+        h.publish()
+        await a.tick()
+        await settle()
+        live = a.lives[SID]
+        h.started({}, status=503)
+        h.answers["confirm"] = (200, {"confirmed": [SID2]})
+        h.later(3600)
+        await a.tick()
+        await settle()
+        assert a.recall(KEY, SID) is None and a.recall(NEW_KEY, SID2) is not None
+        assert h.kicks == [SID] and live.revoked and h.running(live) == []
+        h.answers["verify"] = (0, {})
+        assert (await a.handle_auth(Auth())).status == 401
+    run(go())
+
+
+@pytest.mark.parametrize("answer", [(503, {}), (0, {}), (404, {"detail": "Not Found"}), (200, {}),
+                                    (200, {"confirmed": SID})])
+def test_a_reconfirm_that_fails_changes_nothing(tmp_path, monkeypatch, answer):
+    """Kevin's call: a 5xx, a timeout, a backend without the route yet (404)
+    or an answer without a `confirmed` list neither drops nor refreshes."""
+    h = Harness(tmp_path, monkeypatch, offline_s=86400, grant_sync_s=3600)
+    a = h.a
+    t0 = h.clock["t"]
+
+    async def go():
+        h.publish()
+        await a.tick()
+        await settle()
+        live = a.lives[SID]
+        h.started({}, status=503)
+        h.answers["confirm"] = answer
+        h.later(3600)
+        await a.tick()
+        await settle()
+        assert len(h.said("confirm")) == 2
+        assert a.recall(KEY, SID) is not None and seen(tmp_path, SID) == t0
+        assert not h.kicks and not live.revoked and h.running(live) == ["hls", "youtube"]
+    run(go())
+
+
+def test_a_reconfirm_answered_after_the_key_ran_out_doesnt_bring_it_back(tmp_path, monkeypatch):
+    """Kevin's call: a re-check asked before a key ran out, and answered
+    after, re-admits nothing: the key stays unusable and the stream cut at
+    the deadline stays cut."""
+    h = Harness(tmp_path, monkeypatch, offline_s=120, grant_sync_s=100)
+    a = h.a
+
+    async def go():
+        h.publish()
+        await a.tick()
+        await settle()
+        live = a.lives[SID]
+        h.started({}, status=503)
+        h.answers["verify"] = (0, {})
+        gate = asyncio.Event()
+
+        async def late(body):
+            await gate.wait()
+            return await confirm_all(body)
+        h.answers["confirm"] = late
+        h.later(100)
+        await a.tick()                                                # the re-check is asked, unanswered
+        await settle()
+        assert len(h.said("confirm")) == 2
+        h.later(21)
+        await a.tick()                                                # 121 s: the key has run out
+        await settle()
+        assert live.revoked and h.running(live) == [] and h.kicks == [SID]
+        gate.set()                                                    # the answer comes in now
+        await settle()
+        assert a.recall(KEY, SID) is None
+        assert (await a.handle_auth(Auth())).status == 401
+        h.later(1)
+        await a.tick()
+        await settle()
+        assert live.revoked and h.running(live) == []
+    run(go())
+
+
+def test_reconfirms_go_in_chunks_of_200(tmp_path, monkeypatch):
+    h = Harness(tmp_path, monkeypatch, offline_s=86400, grant_sync_s=3600)
+    a = h.a
+    for i in range(450):
+        a.remember(f"{i:032d}", f"{i:020x}", [])
+    h.answers["confirm"] = confirm_all
+
+    async def go():
+        await a.tick()
+        await settle()
+        asked = h.said("confirm")
+        assert [len(b["grants"]) for b in asked] == [200, 200, 50]
+        assert len({g["stream_id"] for b in asked for g in b["grants"]}) == 450
+    run(go())
+
+
+def test_a_church_has_one_remembered_key(tmp_path, monkeypatch):
+    """The re-check answers by church, so the agent remembers one key per
+    church: a newly confirmed key replaces the old one, and refusing an old
+    key doesn't forget the new one."""
+    h = Harness(tmp_path, monkeypatch)
+    a = h.a
+    h.answers["verify"] = (200, {"destinations": []})
+    assert run(a.may_publish(SID, KEY)) and run(a.may_publish(SID, NEW_KEY))
+    h.answers["verify"] = (0, {})
+    assert run(a.may_publish(SID, NEW_KEY)) and not run(a.may_publish(SID, KEY))
+    h.answers["verify"] = (403, {})
+    assert not run(a.may_publish(SID, KEY))
+    h.answers["verify"] = (0, {})
+    assert run(a.may_publish(SID, NEW_KEY))
 
 
 @pytest.mark.parametrize("disk", ["full", "unreadable"])
