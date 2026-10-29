@@ -114,7 +114,7 @@ def test_the_cards_say_what_the_gates_and_dials_say():
 
 def test_a_gate_that_moves_takes_its_claim_with_it(monkeypatch):
     gates = dict(feature_gates.FEATURE_MIN_PLAN)
-    gates["dedicated_sms_number"] = "professional"
+    gates["dedicated_sms_number"] = "practice"      # it lives on Professional (Kevin, 2026-10-22)
     monkeypatch.setattr(feature_gates, "FEATURE_MIN_PLAN", gates)
     cards = v3._price_cards_html()
     assert "A texting number of your own" not in cards

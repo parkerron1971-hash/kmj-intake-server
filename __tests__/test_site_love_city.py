@@ -276,11 +276,27 @@ def test_home_marks_its_own_menu_link_as_the_current_page(pages):
 def test_every_internal_link_lands_on_a_page_the_site_builds(build, pages):
     for name, page in pages.items():
         for href in re.findall(r'href="(/[^"]*)"', page):
+            if href in build.CARDS.values():
+                continue  # one of the church's cards (next tests)
             path = href.split("#")[0].split("?")[0].strip("/")
             assert path == "" or path in build.PAGES, f"{name}: {href}"
             if "#" in href and path:
                 anchor = href.split("#", 1)[1]
                 assert f'id="{anchor}"' in pages[path], f"{name}: {href} has no target"
+
+
+CARD_RE = re.compile(r"/public/widget/form/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+
+
+def test_the_ministry_buttons_open_the_churchs_own_cards(build, pages):
+    """'I want to be baptized' and 'I want to serve' open the Baptism and
+    Serve with us cards made in the app, where the Next steps road counts
+    the answers, instead of the connect card with a box ticked."""
+    assert build.CARDS and all(CARD_RE.fullmatch(href) for href in build.CARDS.values())
+    page = pages["ministries"]
+    assert f'href="{build.CARDS["CARD_BAPTISM"]}">I want to be baptized</a>' in page
+    assert f'href="{build.CARDS["CARD_SERVE"]}">I want to serve</a>' in page
+    assert "interest=baptism" not in page and "interest=serve" not in page
 
 
 # Both ways a visitor reaches the church: its platform subdomain, and its
@@ -323,6 +339,48 @@ def test_every_page_path_reaches_the_church_site_through_the_real_routers(build,
             f"{path} on {hosts}: {r.status_code} {r.text[:120]}"
 
 
+@pytest.mark.parametrize("hosts", CHURCH_HOSTS.values(), ids=CHURCH_HOSTS.keys())
+def test_every_card_button_opens_its_card_or_its_closed_page(build, pages, real_app, hosts, monkeypatch):
+    """A card button, through the real routers on both church addresses,
+    opens that card. Switched off in the app, the same link shows the
+    card's closed page with the way back to lovecityc.com, never the JSON
+    "Form not found" a visitor saw before. Only the reads are stubbed."""
+    from fastapi.testclient import TestClient
+    import chief_form_actions
+    import intake_endpoint
+    import public_site
+
+    live = {"on": True}
+
+    async def db(client, method, path, body=None):
+        if path.startswith("/intake_forms"):
+            if ("is_active=eq.true" in path) != live["on"]:
+                return []
+            return [{"id": path.split("id=eq.", 1)[1].split("&", 1)[0], "business_id": build.BUSINESS_ID,
+                     "name": "Baptism", "fields": [{"name": "name", "label": "Your name"}], "settings": {}}]
+        if path.startswith("/businesses"):
+            return [{"id": build.BUSINESS_ID, "name": "Love City Church", "type": "church", "settings": {}}]
+        if path.startswith("/business_sites"):
+            return [{"business_id": build.BUSINESS_ID, "slug": build.SLUG, "status": "published",
+                     "html_content": pages["home"]}]
+        return []
+    monkeypatch.setattr(intake_endpoint, "supabase_request", db)
+    monkeypatch.setattr(chief_form_actions, "public_form_url",
+                        lambda b, f: f"https://lovecityc.com/public/widget/form/{f}")
+    monkeypatch.setattr(public_site, "_check_rate", lambda *a, **k: True)
+
+    client = TestClient(real_app)
+    for href in build.CARDS.values():
+        live["on"] = True
+        r = client.get(href, headers=hosts)
+        assert r.status_code == 200 and 'id="client-form"' in r.text, f"{href} on {hosts}: {r.status_code}"
+        live["on"] = False
+        r = client.get(href, headers=hosts)
+        assert r.status_code == 404 and r.headers["content-type"].startswith("text/html"), href
+        assert "isn’t taking answers right now" in r.text and 'id="client-form"' not in r.text
+        assert 'href="https://lovecityc.com/"' in r.text and "Back to Love City Church" in r.text
+
+
 def test_every_old_address_has_a_home_and_installs_cleanly(build, pages):
     from site_page_helpers import clean_redirects
     kept, skipped = clean_redirects(build.REDIRECTS, pages)
@@ -330,10 +388,15 @@ def test_every_old_address_has_a_home_and_installs_cleanly(build, pages):
     # The old paths the domain runbook names (risk R5).
     for old, new in {"/what-we-believe": "/beliefs", "/mission-and-vision": "/about",
                      "/connect-with-us": "/connect", "/prayer-request": "/connect",
-                     "/volunteer": "/connect", "/i-m-new": "/visit", "/welcomehome": "/visit",
+                     "/i-m-new": "/visit", "/welcomehome": "/visit",
                      "/services-and-events": "/events", "/media": "/sermons",
                      "/subsplash-media": "/sermons"}.items():
         assert build.REDIRECTS[old].split("?")[0].split("#")[0] == new, old
+    # The old sign-up pages open the church's cards, the same ones the
+    # Ministries buttons open.
+    for old, card in {"/baptism": "CARD_BAPTISM", "/volunteer": "CARD_SERVE",
+                      "/ministryworks": "CARD_SERVE", "/city-serve": "CARD_SERVE"}.items():
+        assert build.REDIRECTS[old] == build.CARDS[card], old
     # GET /live is an API route ahead of the site. Redirecting it needs the
     # Worker to vouch for the host first (worklog follow-up).
     assert "/live" not in build.REDIRECTS
@@ -484,11 +547,16 @@ def _context(browser, pages, **kw):
     return ctx
 
 
-def _send_prayer(page, response):
+SHARE_TEAM = '[name="share"][value="Our prayer team may pray over this with me"]'
+SHARE_PASTORS = '[name="share"][value="Keep this with the pastors only"]'
+
+
+def _send_prayer(page, response, share=SHARE_TEAM):
     page.evaluate("r => { window.__respond = r; }", response)
     page.fill("#pr-request", "Please pray for my mother's surgery on Friday.")
     page.fill("#pr-first", "Ann")
     page.fill("#pr-email", "ann@example.org")
+    page.check(share)                       # "Who prays with you?" is required
     page.click('[data-church-form="prayer-request"] button[type="submit"]')
     note = page.locator('[data-church-form="prayer-request"] [data-form-note]')
     page.wait_for_function("el => el.textContent && el.textContent !== 'Sending…'", arg=note.element_handle())
@@ -607,7 +675,8 @@ def test_structured_forms_succeed_when_saved_without_notification(browser, pages
         page.check("#pr-follow")
         note = _send_prayer(page, response)
         expected = {"request": "Please pray for my mother's surgery on Friday.",
-                    "first_name": "Ann", "follow_up": True}
+                    "first_name": "Ann", "follow_up": True,
+                    "share": "Our prayer team may pray over this with me"}
         empty_field = "#pr-request"
     else:
         page.evaluate("r => { window.__respond = r; }", response)

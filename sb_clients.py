@@ -51,6 +51,7 @@ import contextvars
 import json
 import logging
 import os
+import threading
 from typing import Any, Dict, Optional
 
 import httpx
@@ -492,6 +493,59 @@ def redacted_path(path: str) -> str:
     return base + "?" + "&".join(shown)
 
 
+class _KeptOpenTransport(httpx.HTTPTransport):
+    """A connection pool that outlives the Client wrapped around each call:
+    closing that Client leaves the pool and its open connections alone."""
+
+    def __exit__(self, *exc: Any) -> None:
+        return None
+
+    def close(self) -> None:
+        return None
+
+
+_POOL: Optional[httpx.HTTPTransport] = None
+_POOL_PID = 0
+_POOL_LOCK = threading.Lock()
+
+
+def _pool() -> httpx.HTTPTransport:
+    """The sync calls' shared connections to the database (2026-10-20).
+    Each call used to open its own: a fresh TCP + TLS handshake, three trips
+    between this server (us-west2) and the database (us-east-2) before the
+    query, ~0.3 s a call, and a member-app tab makes 5 to 15 calls. Kept-open
+    connections skip the handshake. Made on first use in each process, so a
+    forked worker never shares a socket with its parent. No cap on
+    connections (as before: a busy moment opens more); 32 stay open, each
+    for 30 s idle."""
+    global _POOL, _POOL_PID
+    pid = os.getpid()
+    if _POOL is None or _POOL_PID != pid:
+        with _POOL_LOCK:
+            if _POOL is None or _POOL_PID != pid:
+                _POOL = _KeptOpenTransport(limits=httpx.Limits(
+                    max_connections=None, max_keepalive_connections=32, keepalive_expiry=30.0))
+                _POOL_PID = pid
+    return _POOL
+
+
+def _send(client: httpx.Client, method: str, url: str, headers: Dict[str, str],
+          body: Any = None) -> httpx.Response:
+    """One call. A read that meets a kept-open connection the database had
+    just closed (disconnected, reset, broken pipe) is sent once more on a
+    fresh one; a write never is (it may have landed), and a timeout isn't a
+    dead connection."""
+    for attempt in (1, 2):
+        try:
+            if body is None:
+                return client.request(method, url, headers=headers)
+            return client.request(method, url, headers=headers, content=json.dumps(body))
+        except (httpx.RemoteProtocolError, httpx.ReadError, httpx.WriteError):
+            if attempt == 2 or method != "GET":
+                raise
+    raise AssertionError("unreachable")
+
+
 def _sync_request(
     method: str,
     path: str,
@@ -504,13 +558,8 @@ def _sync_request(
     status, and no response body (PostgREST errors echo the failing row)."""
     url = f"{sb_url()}/rest/v1{path}"
     try:
-        with httpx.Client(timeout=HTTP_TIMEOUT) as client:
-            if body is None:
-                resp = client.request(method, url, headers=headers)
-            else:
-                resp = client.request(
-                    method, url, headers=headers, content=json.dumps(body),
-                )
+        with httpx.Client(timeout=HTTP_TIMEOUT, transport=_pool()) as client:
+            resp = _send(client, method, url, headers, body)
     except httpx.HTTPError as e:
         if redact:
             logger.warning(f"sb_clients sync {method} {redacted_path(path)} transport error: "
@@ -557,7 +606,7 @@ def _sync_delete(path: str, headers: Dict[str, str]) -> bool:
     ambiguous, so DELETE uses this dedicated path."""
     url = f"{sb_url()}/rest/v1{path}"
     try:
-        with httpx.Client(timeout=HTTP_TIMEOUT) as client:
+        with httpx.Client(timeout=HTTP_TIMEOUT, transport=_pool()) as client:
             resp = client.request("DELETE", url, headers=headers)
     except httpx.HTTPError as e:
         logger.warning(f"sb_clients sync DELETE {path} transport error: {e}")

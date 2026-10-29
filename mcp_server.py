@@ -221,7 +221,7 @@ def _obj(props: Dict[str, Any], required: Optional[List[str]] = None) -> Dict[st
     return schema
 
 
-from chief_academy_actions import READ_SCHEMA as ACADEMY_READ_SCHEMA, WRITE_SCHEMA as ACADEMY_WRITE_SCHEMA
+from chief_academy_actions import READ_SCHEMA as ACADEMY_READ_SCHEMA, WRITE_SCHEMA as ACADEMY_WRITE_SCHEMA, SLIDES_WRITE_SCHEMA as ACADEMY_SLIDES_SCHEMA
 from chief_growth_intelligence_actions import READ_SCHEMA as GROWTH_READ_SCHEMA, WRITE_SCHEMA as GROWTH_WRITE_SCHEMA
 
 from booking_rehearsal import READ_SCHEMA as BOOKING_REHEARSAL_SCHEMA
@@ -343,12 +343,21 @@ TOOL_SCHEMAS: Dict[str, Tuple[str, Dict[str, Any]]] = {
         "last 3 meetings. section=attendance: each recent service's named "
         "check-ins in person and online, first-timers and counted heads. "
         "section=care: Prayer & care and children's check-in as counts only, "
-        "for the owner or a manager. Default overview = first_time + groups "
-        "+ attendance. Call it before answering any of these; never estimate.",
+        "for the owner or a manager. section=leaders: the church's roles "
+        "(each its title on a job), who holds each, who each answers to, what "
+        "each is handed, and which teams have no leader. section=shepherding "
+        "(owner or manager): who shepherds which member family, who is "
+        "drifting (missed three Sundays; never giving) and who hasn't been "
+        "reached; with name, one family or person. Default overview = "
+        "first_time + groups + attendance. Call it before answering any of "
+        "these; never estimate.",
         _obj({"section": {
             "type": "string",
-            "enum": ["overview", "first_time", "groups", "attendance", "care"],
-            "description": "Which part. Default overview."}})),
+            "enum": ["overview", "first_time", "groups", "attendance", "care", "leaders", "shepherding"],
+            "description": "Which part. Default overview."},
+              "name": {"type": "string",
+                       "description": "section=shepherding only: a family or member (\"the Carters\", "
+                                      "\"Calvin Carter\") to answer about."}})),
     "sms_status": (
         "Whether texting is actually working for this business: the keyword "
         "clients text to reach it, whether the provider is switched on, "
@@ -590,6 +599,7 @@ WRITE_TOOL_SCHEMAS: Dict[str, Tuple[str, Dict[str, Any]]] = {
         _obj({"url": {"type": "string", "description": "Public website/page URL supplied by the user or their verified business site. A path or fragment can target the relevant page/section."},
               "include_logo": {"type": "boolean", "description": "Defaults true. False for screenshot-only captures."}}, ["url"])),
     "save_course_content": ACADEMY_WRITE_SCHEMA,
+    "save_lesson_slides": ACADEMY_SLIDES_SCHEMA,
     "save_growth_record": GROWTH_WRITE_SCHEMA,
     # ── people ───────────────────────────────────────────────────────
     "create_contact": (

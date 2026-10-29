@@ -80,6 +80,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
+import church_keys
 import sb_clients
 from auth_supabase import AuthedUser, require_user
 from business_sites_helpers import PUBLIC_DOMAIN, ensure_business_site
@@ -1419,11 +1420,33 @@ def render_giving_unavailable_page(business: Dict[str, Any],
 def giving_records(business_id: str, year: Optional[int] = None, user: AuthedUser = Depends(require_user)):
     from giving_records import require_finance, read_gifts
     require_finance(business_id, user)
+    church_keys.wall(business_id, user, "giving_money")
     year = year or datetime.now(timezone.utc).year
     if not 2000 <= year <= 2200:
         raise HTTPException(400, "Choose a valid year")
     rows = read_gifts(business_id, f"{year}-01-01T00:00:00Z", f"{year+1}-01-01T00:00:00Z")
     return {"rows": rows, "year": year}
+
+
+# What a gift was worth, when, and to which fund: never who gave it, its
+# note, or its number. The Giving keeper guards the names, not the picture,
+# so this read has no wall: the church's Home, its giving goal and the
+# board's year stay right for an owner the keeper hasn't let in. The same
+# people as the records (owner, admin, the outside accountant).
+GIFT_AMOUNT_FIELDS = ("paid_at", "total", "refund_amount_cents", "gift_fund", "category")
+
+
+@router.get("/giving/{business_id}/amounts")
+def giving_amounts(business_id: str, year: Optional[int] = None, user: AuthedUser = Depends(require_user)):
+    from giving_records import require_finance, read_gifts
+    require_finance(business_id, user)
+    year = year or datetime.now(timezone.utc).year
+    if not 2000 <= year <= 2200:
+        raise HTTPException(400, "Choose a valid year")
+    rows = read_gifts(business_id, f"{year}-01-01T00:00:00Z", f"{year+1}-01-01T00:00:00Z")
+    return {"rows": [{**{k: r.get(k) for k in GIFT_AMOUNT_FIELDS},
+                      "manual": str(r.get("invoice_number") or "").startswith("GIVE-manual-")} for r in rows],
+            "year": year}
 
 
 def _manual_gift_fields(business_id, body):
@@ -1466,6 +1489,7 @@ def create_manual_gift(business_id: str, body: Dict[str, Any], user: AuthedUser 
     from giving_records import require_finance
     from vertical_family import is_nonprofit_like
     require_finance(business_id, user)
+    church_keys.wall(business_id, user, "giving_money")
     biz = sb_clients.sb_get_as_service(f"/businesses?id=eq.{business_id}&select=type&limit=1")
     if not biz or not is_nonprofit_like(biz[0].get("type")):
         raise HTTPException(409, "Giving is available to ministries and nonprofits")
@@ -1491,6 +1515,7 @@ def create_manual_gift(business_id: str, body: Dict[str, Any], user: AuthedUser 
 def correct_manual_gift(business_id: str, gift_id: str, body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
     from giving_records import require_finance
     require_finance(business_id, user)
+    church_keys.wall(business_id, user, "giving_money")
     try: gift_id = str(uuid.UUID(gift_id))
     except ValueError: raise HTTPException(400, "Invalid gift")
     rows = sb_clients.sb_get_as_service(f"/invoices?id=eq.{gift_id}&business_id=eq.{business_id}&is_gift=eq.true&select=*&limit=1")

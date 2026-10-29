@@ -170,12 +170,24 @@ def css(biz: Dict[str, Any], theme: Dict[str, Any]) -> str:
 
 
 def _pic(biz: Dict[str, Any], site) -> str:
+    """The sign-in photo: the one the church put there, else its own photo
+    of people together (member_app_photos.welcome). Its look is _look's."""
     import member_app_photos as photos
+    got = photos.assigned(biz, "signin")
+    if got is not None:
+        return got["url"]
     return photos.welcome(photos.photos(biz, site))
 
 
-def _top_art(pic: str) -> str:
-    inside = ui.photo(pic, eager=True) if pic else '<span class="si-glass"></span>'
+def _look(biz: Dict[str, Any]) -> str:
+    """The sign-in photo's look: the church's pick, else black and white."""
+    import member_app_photos as photos
+    got = photos.assigned(biz, "signin")
+    return got["look"] if got else "bw"
+
+
+def _top_art(pic: str, look: str = "bw") -> str:
+    inside = ui.photo(pic, eager=True, look=look) if pic else '<span class="si-glass"></span>'
     return f'<div class="si-photo" aria-hidden="true">{inside}</div>'
 
 
@@ -257,7 +269,7 @@ def signin_body(biz: Dict[str, Any], site, theme: Dict[str, Any], *, error: str 
     name = (biz.get("name") or "").strip() or "the church"
     err = f'<p class="mp-err" role="alert">{_e(error)}</p>' if error else ""
     return f"""<div class="si-first">
-{_top_art(_pic(biz, site))}
+{_top_art(_pic(biz, site), _look(biz))}
 {_brand(biz, site, theme)}
 <section class="si-in" aria-label="Sign in">
   <p class="si-eyebrow">{_e(name)}</p>

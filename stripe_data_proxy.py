@@ -29,6 +29,7 @@ from typing import Any, Dict, List, Optional
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
 
+import church_keys
 import sb_clients
 from auth_supabase import AuthedUser, require_user
 
@@ -64,6 +65,9 @@ def _require_owner_with_acct(business_id: str, user: AuthedUser) -> Dict[str, An
     biz = rows[0]
     if str(biz.get("owner_id")) != str(user.id):
         raise HTTPException(403, "not authorized")
+    # Charges, customers, refunds and payouts are who gave what and the
+    # payouts: a church's Giving keeper holds the owner to the key too.
+    church_keys.wall(business_id, user, "giving_money")
     if not biz.get("stripe_account_id"):
         raise HTTPException(409, "stripe account not connected")
     return biz

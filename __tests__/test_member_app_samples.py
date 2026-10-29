@@ -37,7 +37,7 @@ def test_home_in_preview_shows_every_block_tagged_with_where_to_add_it():
     assert occ[0]["title"] == "Sunday Worship" and occ[0]["date"] == "2026-10-18"
     page = mp.render_home(_biz(), None, me=ME, occasions=occ, groups=samples.groups(), library=samples.library(),
                           give_url="", reading=__import__("member_portal_reading").home_card(samples.plan_today(), set()))
-    body = page[page.index("<body>"):]
+    body = page[page.index("<body"):]
     assert body.count('class="mb-sample"') >= 4
     for where in ("events", "sermons", "week", "plan"):
         assert samples.WHERE[where].replace("'", "&#x27;") in body

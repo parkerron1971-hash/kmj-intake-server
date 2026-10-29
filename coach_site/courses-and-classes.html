@@ -1,0 +1,672 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>{{TITLE}}</title>
+<meta name="description" content="{{DESCRIPTION}}">
+<meta property="og:title" content="{{TITLE}}">
+<meta property="og:description" content="{{DESCRIPTION}}">
+<meta property="og:url" content="{{URL}}">
+<link rel="canonical" href="{{URL}}">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="The Solutionist System">
+<meta property="og:image" content="https://mysolutionist.app/assets/og.png?v=4">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="https://mysolutionist.app/assets/og.png?v=4">
+<link rel="icon" type="image/png" href="/favicon.png">
+<link rel="apple-touch-icon" href="/favicon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@300;400;500;600;700&amp;family=Inter:wght@400;500;600&amp;family=Instrument+Serif:ital@0;1&amp;family=JetBrains+Mono:wght@400;500&amp;family=Geist:wght@400..800&amp;family=Newsreader:ital,opsz,wght@0,6..72,400..600;1,6..72,400..600&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#07080B}
+a{color:#F5F6F8}a:hover{color:#FDBA74}
+.ow-grp{color:#8D93A1}
+
+/* a student's classroom on a phone: calc(var(--u)*15) is 15px on a 390-wide phone */
+.dv-ph{container-type:inline-size}
+.mx{--u:calc(100cqw / 390);--s1:#161618;--s2:#222225;--s3:#2f2f33;--line:#2c2c30;--fg:#f5f5f7;--fg2:#a8a8ae;--fg3:#8a8a90;--acc:#7EA6FF;--fill:#2F6BEA;--deep:#0a1429;position:relative;display:flex;flex-direction:column;background:#000;color:var(--fg);font-family:'Geist',sans-serif;font-size:calc(var(--u)*15);line-height:1.4;letter-spacing:-.006em;border-radius:33px;overflow:hidden}
+.mx p{margin:0}
+.mx-in{flex:1;min-height:0;overflow:hidden;padding:34px calc(var(--u)*18) calc(var(--u)*16);display:flex;flex-direction:column;gap:calc(var(--u)*12)}
+.mx-bar{display:flex;align-items:center;justify-content:space-between;gap:calc(var(--u)*10);min-height:calc(var(--u)*40);flex:none}
+.mx-brand{display:flex;align-items:center;gap:calc(var(--u)*10);min-width:0}
+.mx-mark{width:calc(var(--u)*34);height:calc(var(--u)*34);border-radius:calc(var(--u)*10);background:#2F6BEA;color:#fff;display:grid;place-items:center;font-weight:750;font-size:calc(var(--u)*13);flex:none}
+.mx-biz{font-size:calc(var(--u)*15);font-weight:700;letter-spacing:-.02em;white-space:nowrap}
+.mx-me{width:calc(var(--u)*38);height:calc(var(--u)*38);border-radius:50%;display:grid;place-items:center;background:var(--s2);font-size:calc(var(--u)*13);font-weight:650;flex:none}
+.mx-back{display:inline-flex;align-items:center;gap:calc(var(--u)*2);color:var(--acc);font-size:calc(var(--u)*16);margin-left:calc(var(--u)*-6);white-space:nowrap}
+.mx svg.i{width:calc(var(--u)*18);height:calc(var(--u)*18);fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;flex:none}
+.mx-lt{margin:0;font-size:calc(var(--u)*30);font-weight:720;letter-spacing:-.035em;line-height:1.06}
+.mx-lt em{font-family:'Newsreader',serif;font-style:italic;font-weight:500;letter-spacing:-.02em;color:var(--acc)}
+.mx-kick{font-size:calc(var(--u)*12);font-weight:650;letter-spacing:.08em;text-transform:uppercase;color:var(--fg3)}
+.mx-sh{flex:none;display:flex;justify-content:space-between;align-items:baseline;margin-top:calc(var(--u)*4)}
+.mx-sh b{font-size:calc(var(--u)*19);font-weight:700;letter-spacing:-.025em}
+.mx-sh span{font-size:calc(var(--u)*13.5);color:var(--acc)}
+.cr-next{flex:none;padding:calc(var(--u)*16);border-radius:calc(var(--u)*24);background:rgba(47,107,234,.18);border:1px solid rgba(47,107,234,.42);display:flex;flex-direction:column;gap:calc(var(--u)*7)}
+.cr-when{align-self:flex-start;display:inline-flex;align-items:center;gap:calc(var(--u)*6);height:calc(var(--u)*26);padding:0 calc(var(--u)*10);border-radius:999px;background:var(--fill);color:#fff;font-size:calc(var(--u)*12);font-weight:650}
+.cr-next b.t{font-size:calc(var(--u)*20);font-weight:720;letter-spacing:-.02em;line-height:1.15}
+.cr-next span.s{font-size:calc(var(--u)*13.5);color:var(--fg2)}
+.cr-go{display:flex;align-items:center;justify-content:center;gap:calc(var(--u)*8);height:calc(var(--u)*46);border-radius:999px;background:var(--fill);color:#fff;font-size:calc(var(--u)*15.5);font-weight:650;flex:none}
+.cr-go.soft{background:var(--s2);color:var(--fg)}
+.cr-row{flex:none;display:flex;align-items:center;gap:calc(var(--u)*13);padding:calc(var(--u)*12) calc(var(--u)*14);border-radius:calc(var(--u)*18);background:var(--s1)}
+.cr-disc{width:calc(var(--u)*40);height:calc(var(--u)*40);border-radius:calc(var(--u)*12);display:grid;place-items:center;flex:none}
+.cr-t{flex:1;min-width:0;display:flex;flex-direction:column;gap:calc(var(--u)*2)}
+.cr-t b{font-size:calc(var(--u)*15);font-weight:640}
+.cr-t span{font-size:calc(var(--u)*12.5);color:var(--fg2)}
+.cr-bar{display:block;height:calc(var(--u)*6);border-radius:999px;background:var(--s3);overflow:hidden}
+.cr-bar i{display:block;height:100%;background:var(--acc);border-radius:999px}
+.cr-card{flex:none;border-radius:calc(var(--u)*22);background:var(--s1);padding:calc(var(--u)*16);display:flex;flex-direction:column;gap:calc(var(--u)*10)}
+.cr-chips{display:flex;flex-wrap:wrap;gap:calc(var(--u)*6)}
+.cr-chip{display:inline-flex;align-items:center;gap:calc(var(--u)*5);height:calc(var(--u)*32);padding:0 calc(var(--u)*11);border-radius:999px;background:var(--s2);color:var(--fg2);font-size:calc(var(--u)*13);font-weight:620}
+.cr-chip.on{background:var(--deep);color:var(--acc);box-shadow:inset 0 0 0 1.5px var(--acc)}
+.cr-wave{display:flex;align-items:center;gap:calc(var(--u)*3);height:calc(var(--u)*44)}
+.cr-wave i{flex:1;border-radius:2px;background:var(--acc);min-height:2px}
+.cr-safe{display:flex;align-items:center;gap:calc(var(--u)*7);font-size:calc(var(--u)*12.5);color:var(--fg2)}
+
+/* Course Studio, drawn light */
+.cs{display:flex;flex-direction:column;background:#FFFFFF;color:#0B0C11;border:1px solid rgba(11,12,17,.1);border-radius:22px;overflow:hidden;box-shadow:0 40px 80px -48px rgba(60,30,0,.45)}
+.cs-top{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;padding:14px 18px;border-bottom:1px solid #ECEAE5;background:#FBFAF8}
+.cs-body{display:flex;min-height:0}
+.cs-list{flex:0 0 31%;padding:12px 10px;border-right:1px solid #ECEAE5;background:#FBFAF8;display:flex;flex-direction:column;gap:3px}
+.cs-ls{display:flex;align-items:center;gap:9px;padding:8px 9px;border-radius:10px;font-size:13px;color:#3B3F4A;line-height:1.25}
+.cs-ls i{font-style:normal;font-family:'JetBrains Mono',monospace;font-size:11px;color:#6B6F7A;flex:none;width:18px}
+.cs-ls.on{background:#FFF1E4;color:#7C2D12;font-weight:600}
+.cs-ls.on i{color:#C2410C}
+.cs-main{flex:1;min-width:0;padding:18px 20px;display:flex;flex-direction:column;gap:12px}
+.cs-k{font:500 10.5px/1 'JetBrains Mono',monospace;letter-spacing:.14em;text-transform:uppercase;color:#6B6F7A}
+.cs-box{border:1px solid #ECEAE5;border-radius:14px;padding:12px 13px;display:flex;flex-direction:column;gap:7px;min-width:0}
+.cs-box p{margin:0;font-size:12.5px;line-height:1.45;color:#3B3F4A}
+.cs-opt{display:flex;align-items:center;gap:7px;font-size:12px;color:#3B3F4A}
+.cs-opt i{width:12px;height:12px;border-radius:50%;border:1.5px solid #B7BAC2;flex:none}
+.cs-opt.ok i{border:4px solid #C2410C}
+.cs-slides{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:7px}
+.cs-sl{aspect-ratio:16/10;border-radius:7px;padding:7px;display:flex;flex-direction:column;justify-content:flex-end;gap:2px;overflow:hidden;position:relative;font-family:'Inter Tight',sans-serif;color:#FFFFFF}
+.cs-sl b{font-weight:600;font-size:9px;line-height:1.1}
+.cs-sl span{font-size:6.5px;opacity:.8;font-family:'JetBrains Mono',monospace;letter-spacing:.1em;text-transform:uppercase}
+
+/* the class page on Reyes Coaching's own site, in its own colours */
+.rc{background:#FAF8F4;color:#14161C;font-family:'Inter',sans-serif;line-height:1.45}
+.rc-nav{display:flex;flex-wrap:wrap;align-items:center;gap:8px 18px;padding:13px 22px;border-bottom:1px solid #E7E2D8;background:#FFFFFF}
+.rc-mark{width:28px;height:28px;border-radius:8px;background:#2F6BEA;color:#FFFFFF;display:grid;place-items:center;font-weight:800;font-size:11px;flex:none}
+.rc-name{font-family:'Newsreader',serif;font-weight:600;font-size:17px;letter-spacing:-.01em}
+.rc-links{display:flex;flex-wrap:wrap;gap:4px 16px;font-size:12.5px;color:#4A4E58;margin-left:auto}
+.rc-btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:36px;padding:0 16px;border-radius:999px;font-size:12.5px;font-weight:600;white-space:nowrap}
+.rc-serif{font-family:'Newsreader',serif}
+.rc-kick{font-size:10.5px;font-weight:700;letter-spacing:.14em;text-transform:uppercase}
+.rc-facts{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,1fr) minmax(0,1fr);border:1px solid #E2DDD2;border-radius:14px;overflow:hidden;background:#FFFFFF}
+.rc-fact{padding:11px 14px;border-right:1px solid #E2DDD2;display:flex;flex-direction:column;gap:1px}
+.rc-fact:last-child{border-right:0}
+.rc-fact b{font-size:13px;font-weight:650;line-height:1.3}
+.rc-fact span{font-size:11.5px;color:#5C6070}
+.rc-week{display:grid;grid-template-columns:86px minmax(0,1fr);gap:12px;padding:12px 0;border-top:1px solid #E7E2D8}
+.rc-wn{font-size:10.5px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:#1E4FC2}
+.rc-wd{font-size:11.5px;color:#5C6070}
+.rc-week h4{margin:0 0 7px;font-size:14.5px;font-weight:650;line-height:1.3}
+.rc-tags{display:flex;flex-wrap:wrap;gap:5px}
+.rc-tag{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;font-weight:600;padding:4px 10px;border-radius:999px;border:1px solid #E2DDD2;background:#FFFFFF;color:#2A2E38}
+.rc-tag i{width:7px;height:7px;border-radius:50%;flex:none}
+.rc-in{display:flex;align-items:center;height:38px;padding:0 12px;border-radius:10px;border:1px solid #D6D0C4;background:#FFFFFF;font-size:12.5px;color:#14161C;flex:1 1 140px;min-width:0}
+.mail{display:flex;flex-direction:column;gap:9px;padding:16px 18px;border-radius:20px;background:#FFFFFF;color:#14161C;box-shadow:0 34px 70px -24px rgba(0,0,0,.6);font-family:'Inter',sans-serif}
+.mail-h{display:flex;align-items:center;gap:10px}
+.mail-h small{display:block;font-size:11.5px;color:#5C6070}
+.mail p{margin:0;font-size:13px;line-height:1.5;color:#2A2E38}
+
+/* the live room, drawn from academy_live_router */
+.lv{background:#0E1016;color:#E4E6EB;font:12px/1.4 'Inter',sans-serif}
+.lv-top{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;padding:11px 14px;border-bottom:1px solid #1B1E28;background:#0A0B10}
+.lv-live{display:inline-flex;align-items:center;gap:6px;height:22px;padding:0 9px;border-radius:999px;background:#E5372B;color:#FFFFFF;font-size:11px;font-weight:700}
+.lv-body{display:flex;gap:12px;padding:12px}
+.lv-stage{flex:1.65;min-width:0;display:flex;flex-direction:column;gap:10px}
+.lv-slide{position:relative;aspect-ratio:16/9;border-radius:12px;overflow:hidden;background:radial-gradient(80% 90% at 92% 0%,rgba(249,115,22,.42) 0%,transparent 60%),linear-gradient(160deg,#16213D,#0B1022);padding:20px 22px;display:flex;flex-direction:column;justify-content:center;gap:10px;font-family:'Inter Tight',sans-serif}
+.lv-cam{position:absolute;right:10px;bottom:10px;width:17%;aspect-ratio:4/3;border-radius:9px;background:linear-gradient(140deg,#2F6BEA,#13275C);display:grid;place-items:center;font:700 15px/1 'Inter',sans-serif;color:#FFFFFF;box-shadow:0 0 0 2px rgba(255,255,255,.18)}
+.lv-cam-on{width:27%;overflow:hidden;background:#13275C}.lv-cam-on img{position:absolute;left:0;top:0;width:100%;height:100%;object-fit:cover;object-position:50% 26%}.lv-cam-on em{position:absolute;left:6px;bottom:5px;font:600 9.5px/1 'Inter',sans-serif;font-style:normal;padding:3px 6px;border-radius:6px;background:rgba(0,0,0,.55);color:#FFFFFF}
+.lv-side{flex:1;min-width:0;display:flex;flex-direction:column;gap:8px}
+.lv-tabs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:3px;padding:3px;border-radius:10px;background:#13151C;font-size:11px;font-weight:600;text-align:center}
+.lv-tabs span{padding:6px 0;border-radius:8px;color:#8D93A1}
+.lv-tabs span.on{background:#222533;color:#F5F6F8}
+.lv-msg{display:flex;flex-direction:column;gap:5px;padding:9px 10px;border-radius:10px;background:#13151C;border:1px solid #1E2130}
+.lv-msg b{font-size:11.5px;font-weight:600;color:#F5F6F8}
+.lv-msg p{margin:0;font-size:11.5px;color:#C9CDD6;line-height:1.4}
+.lv-act{display:flex;flex-wrap:wrap;gap:5px}
+.lv-act span{font-size:10.5px;font-weight:600;padding:4px 9px;border-radius:999px;background:#222533;color:#E4E6EB}
+.lv-act span.go{background:#F97316;color:#1C0A02}
+.lv-ans{display:flex;align-items:flex-start;gap:8px;padding:8px 10px;border-radius:10px;background:#13151C;border:1px solid #1E2130;font-size:11.5px}
+.lv-ans p{margin:0;flex:1;min-width:0;color:#C9CDD6}
+.lv-ans small{display:block;font-size:10px;color:#8D93A1;margin-bottom:1px}
+.lv-ans.on{border-color:rgba(249,115,22,.55);background:rgba(249,115,22,.08)}
+.lv-bot{display:flex;flex-wrap:wrap;gap:6px;padding:10px 12px 12px;border-top:1px solid #1B1E28}
+.lv-bot span{font-size:11px;font-weight:600;padding:6px 12px;border-radius:999px;border:1px solid #2A2E3A;color:#E4E6EB;white-space:nowrap}
+
+/* stacked visuals lie flat on a phone */
+.cal{display:flex;flex-direction:column;gap:0;border-radius:18px;background:#FFFFFF;color:#14161C;box-shadow:0 30px 60px -28px rgba(80,40,0,.45);overflow:hidden;font-family:'Inter',sans-serif}
+.cal-r{display:flex;align-items:center;gap:11px;padding:10px 14px;border-top:1px solid #F0EBE3}
+.cal-d{flex:0 0 36px;height:38px;border-radius:9px;background:#FFF1E4;display:flex;flex-direction:column;align-items:center;justify-content:center;line-height:1}
+.cal-d small{font-size:8.5px;font-weight:700;letter-spacing:.08em;color:#9A3412}
+.cal-d b{font-size:15px;font-weight:700;margin-top:2px}
+@media (max-width:760px){
+.stack{min-height:0 !important;display:flex;flex-direction:column;align-items:center;gap:18px}
+.stack>*{position:relative !important;left:auto !important;right:auto !important;top:auto !important;bottom:auto !important;transform:none !important}
+.stack>.dvw{width:min(290px,86%) !important}
+.stack>.flat{width:100% !important;max-width:none !important}
+.cs-list{display:none}
+.cs-slides{grid-template-columns:repeat(3,minmax(0,1fr))}
+.cs-slides>:nth-child(n+4){display:none}
+.rc-links{display:none}
+.rc-facts{grid-template-columns:minmax(0,1fr)}
+.rc-fact{border-right:0;border-bottom:1px solid #E2DDD2}
+.rc-week{grid-template-columns:minmax(0,1fr);gap:4px}
+.lv-body{flex-direction:column}
+}
+</style>
+<style>
+{{COACH_CSS}}
+.mc-strip a{color:#F5F6F8;font-weight:600;text-decoration:underline;text-underline-offset:4px;white-space:nowrap}
+</style>
+{{PIXEL}}
+</head>
+<body>
+<div class="pg" style="--p: #F97316; --pl: #FDBA74; --pd: #C2410C; --pg: rgba(249,115,22,0.28); --pt: #FFF4EA; --pf: rgba(249,115,22,0.15)">
+
+<!-- The Solutionist frame, lit in this room's colour -->
+<div class="strip"><div class="wrap strip-in">
+<a href="{{HOME}}/" data-home style="display: flex; align-items: center; gap: 8px; color: #F5F6F8; text-decoration: none">
+<svg width="8" height="13" viewBox="0 0 8 13" fill="none" stroke="#959BA8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6.5 1.5 1.5 6.5l5 5"></path></svg>
+<svg width="20" height="17" viewBox="8 36 496 424" aria-hidden="true"><defs><linearGradient id="mkg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#E040FB"></stop><stop offset=".55" stop-color="#7C5CFF"></stop><stop offset="1" stop-color="#22D3EE"></stop></linearGradient></defs><g fill="url(#mkg)" stroke="#fff" stroke-width="8" stroke-opacity=".92"><polygon points="18,46 175,232 237,231 133,98 376,99 356,131 412,167 494,49"></polygon><polygon points="205,138 338,241 232,391 274,449 435,221 319,137"></polygon><polygon points="264,274 149,279 201,359"></polygon></g></svg>
+<span style="font-weight: 600" data-home-label>Solutionist home</span>
+</a>
+<nav aria-label="Solutionist" style="display: flex; flex-wrap: wrap; gap: 6px 22px">
+<a href="{{HOME}}/churches">For churches</a>
+<a href="{{HOME}}/">All of Solutionist</a>
+<a href="{{APP_URL}}" style="color: #F5F6F8">Sign in</a>
+</nav>
+</div></div>
+
+<!-- HERO -->
+<section style="position: relative; overflow: hidden">
+<div class="aur" aria-hidden="true"><i></i><i></i><i></i></div>
+<div class="floor" aria-hidden="true"></div>
+<div class="blade" aria-hidden="true"></div>
+
+<header class="wrap" style="position: relative; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 14px 32px; padding-top: 20px; padding-bottom: 18px">
+<a href="/coaches" style="display: flex; align-items: baseline; gap: 10px; text-decoration: none; color: #F5F6F8">
+<span style="font-family: 'Inter Tight', sans-serif; font-weight: 700; font-size: 24px; letter-spacing: -0.02em">Solutionist</span>
+<span class="serif" style="font-size: 28px; color: #D9D2FF">Coaches &amp; Consultants</span>
+</a>
+<nav aria-label="Coaches and consultants" style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px 28px; font-size: 15px; font-weight: 500">
+<details class="pmenu"><summary>Products<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#E4E6EB" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg></summary><div class="pmenu-panel"><a href="/coaches"><i style="background: linear-gradient(135deg, #E040FB, #7C5CFF 55%, #22D3EE)"></i><b>Overview</b><span>Every part of your practice</span></a><a href="/coaches/bookings"><i style="background: #3B82F6"></i><b>Bookings</b><span>Your booking page and standing sessions</span></a><a href="/coaches/clients"><i style="background: #14B8A6"></i><b>Clients</b><span>One record, a brief before every session</span></a><a href="/coaches/proposals-and-contracts"><i style="background: #8B5CF6"></i><b>Proposals and Contracts</b><span>Drafted in your voice</span></a><a href="/coaches/billing-and-time"><i style="background: #22C55E"></i><b>Billing and Time</b><span>Invoices, pay links and your hours</span></a><a href="/coaches/courses-and-classes" aria-current="page"><i style="background: #F97316"></i><b>Courses and Classes</b><span>Live classes, recordings, homework</span></a><a href="/coaches/marketing-and-website"><i style="background: #EC4899"></i><b>Marketing and Website</b><span>Your site and a week of posts</span></a><a href="/coaches/office-and-books"><i style="background: #94A3B8"></i><b>Office and Books</b><span>The books, the close, the 1099s</span></a></div></details>
+<a href="/coaches#pricing" style="text-decoration: none; color: #E4E6EB">Pricing</a>
+<a href="{{HOME}}/start" class="btn btn-w btn-s">Start free</a>
+</nav>
+</header>
+
+<div class="wrap" style="position: relative">
+<div class="pbar">
+<div class="lock">
+<svg width="40" height="40" viewBox="0 0 48 48" aria-hidden="true"><defs><clipPath id="gt"><rect width="48" height="48" rx="12"></rect></clipPath></defs><g clip-path="url(#gt)" stroke="rgba(255,255,255,0.55)" stroke-width="1.1" stroke-linejoin="round"><polygon points="0,0 28,0 17,21 0,15" fill="#F97316"></polygon><polygon points="28,0 48,0 48,19 17,21" fill="#FDBA74"></polygon><polygon points="0,15 17,21 9,48 0,48" fill="#C2410C"></polygon><polygon points="17,21 48,19 48,48 9,48" fill="#F97316"></polygon><polygon points="17,21 33,31 24,48 9,48" fill="#C2410C" fill-opacity="0.6"></polygon></g><g transform="translate(12 12)" fill="none" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 9l10-5 10 5-10 5z"></path><path d="M6 11v5c3 2 9 2 12 0v-5"></path></g></svg>
+<span style="display: flex; flex-direction: column; gap: 1px"><b>Courses and Classes</b><span>Solutionist for Coaches and Consultants</span></span>
+</div>
+<nav aria-label="In this room">
+<span class="mono" style="font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: rgba(255,255,255,0.6)">In this room</span>
+<a href="#studio">Course Studio</a>
+<a href="#join">The class page</a>
+<a href="#between">Between classes</a>
+<a href="#live">Live classes</a>
+</nav>
+</div>
+</div>
+
+<div class="wrap" style="position: relative; padding-top: 72px; padding-bottom: 40px; display: flex; flex-direction: column; gap: 28px">
+<p class="eyebrow" style="color: #FDBA74; display: flex; align-items: center; gap: 10px"><span class="ping" style="background: #F97316"></span>Courses and Classes</p>
+<h1 class="h1" style="max-width: 1040px">Turn what you know <span class="serif glint" style="font-size: 1.06em; white-space: nowrap">into a class.</span></h1>
+<div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; gap: 24px 48px">
+<p class="lede" style="max-width: 640px">Chief drafts the course with you. People sign up on your website, meet you live with slides and questions, and hand in homework from their phones. For a coaching cohort, a team training for a client, or the workshop you run every quarter.</p>
+<div style="display: flex; flex-wrap: wrap; gap: 12px">
+<a href="{{HOME}}/start" class="btn btn-w">{{CTA_START}}</a>
+<a href="#join" class="btn btn-l">See a class page</a>
+</div>
+</div>
+<div class="facts">
+<div class="fact"><svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#FDBA74" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 4h6a4 4 0 0 1 4 4v13a3 3 0 0 0-3-3H2z"></path><path d="M22 4h-6a4 4 0 0 0-4 4v13a3 3 0 0 1 3-3h7z"></path></svg><span><b>Chief writes the first draft</b><span>Lessons, slides, homework and a quiz</span></span></div>
+<div class="fact"><svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#FDBA74" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4.5" width="18" height="12.5" rx="2.5"></rect><path d="M8 20.5h8M12 17v3.5"></path><path d="M8 9.5h5M8 12.5h8"></path></svg><span><b>One live room</b><span>Slides, chat, questions and hands up</span></span></div>
+<div class="fact"><svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#FDBA74" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 14a4.5 4.5 0 0 0 6.4 0l3-3a4.5 4.5 0 0 0-6.4-6.4l-1.2 1.2"></path><path d="M14 10a4.5 4.5 0 0 0-6.4 0l-3 3a4.5 4.5 0 0 0 6.4 6.4l1.2-1.2"></path></svg><span><b>One link, no passwords</b><span>It opens their class on any screen</span></span></div>
+</div>
+</div>
+
+<!-- The devices: the Courses room on a computer, and a student's classroom on a phone -->
+<div class="wrap" style="position: relative; padding-bottom: 80px">
+<div class="stage" style="aspect-ratio: 2.25" aria-label="The Courses room on a computer and a student's classroom on a phone. Sample.">
+<div class="st-lap" style="position: absolute; left: 4%; top: 0; width: 72%">
+<div class="dv-lid"><div class="dv-glass"></div><div style="aspect-ratio: 16 / 10">
+<div class="ow">
+<div class="ow-top">
+<svg width="11" height="10" viewBox="8 36 496 424" aria-hidden="true"><g fill="url(#mkg)"><polygon points="18,46 175,232 237,231 133,98 376,99 356,131 412,167 494,49"></polygon><polygon points="205,138 338,241 232,391 274,449 435,221 319,137"></polygon><polygon points="264,274 149,279 201,359"></polygon></g></svg>
+<span style="font-weight: 600; font-size: 9px; color: #F5F6F8">Reyes Coaching</span>
+<span style="margin-left: 10px; flex: 1; max-width: 46%; display: flex; align-items: center; gap: 5px; height: 15px; padding: 0 7px; border-radius: 999px; background: #13151C; border: 1px solid #1E2130; color: #8D93A1; font-size: 7.5px">Search clients, classes, invoices</span>
+<span style="margin-left: auto; display: flex; align-items: center; gap: 4px; height: 16px; padding: 0 8px; border-radius: 999px; background: linear-gradient(90deg, rgba(224,64,251,0.22), rgba(124,92,255,0.22), rgba(34,211,238,0.18)); border: 1px solid rgba(124,92,255,0.45); font-size: 7.5px; font-weight: 600; color: #F5F6F8"><span style="width: 7px; height: 7px; border-radius: 50%; background: linear-gradient(135deg, #E040FB, #7C5CFF 55%, #22D3EE)"></span>Ask Chief</span>
+</div>
+<div class="ow-body">
+<div class="ow-side">
+<span class="ow-grp">Operate</span>
+<span class="ow-nav"><i style="background: #7C5CFF"></i>This week</span>
+<span class="ow-nav"><i style="background: #3B82F6"></i>Bookings</span>
+<span class="ow-nav"><i style="background: #14B8A6"></i>Clients</span>
+<span class="ow-nav"><i style="background: #8B5CF6"></i>Proposals</span>
+<span class="ow-nav"><i style="background: #22C55E"></i>Billing</span>
+<span class="ow-grp">Grow</span>
+<span class="ow-nav on"><i style="background: #F97316"></i>Courses</span>
+<span class="ow-nav"><i style="background: #EC4899"></i>Marketing</span>
+<span class="ow-grp">Build</span>
+<span class="ow-nav"><i style="background: #EC4899"></i>Website</span>
+<span class="ow-nav"><i style="background: #94A3B8"></i>Books</span>
+</div>
+<div class="ow-main">
+<div style="display: flex; justify-content: space-between; align-items: center"><span class="ow-h">Courses and Classes</span><span style="display: flex; align-items: center; gap: 3px; font-size: 7.5px"><span style="padding: 3px 8px; border-radius: 999px; background: rgba(249,115,22,0.18); color: #FDBA74">Classes</span><span style="padding: 3px 8px; color: #8D93A1">Course Studio</span><span style="margin-left: 6px; padding: 3px 9px; border-radius: 999px; background: #F97316; color: #1C0A02; font-weight: 600">New class</span></span></div>
+<div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px">
+<div class="ow-card"><span class="ow-k" style="color: #FDBA74">Students</span><span class="ow-n">73</span><span class="ow-s">in 3 published classes</span></div>
+<div class="ow-card"><span class="ow-k" style="color: #FDBA74">Tonight</span><span class="ow-n">7 PM</span><span class="ow-s">Leading Through Change</span></div>
+<div class="ow-card"><span class="ow-k" style="color: #FDBA74">Homework in</span><span class="ow-n">9<span style="font-size: 9px; color: #8D93A1"> / 14</span></span><span class="ow-s">week 3, due Monday</span></div>
+<div class="ow-card"><span class="ow-k" style="color: #FDBA74">Recordings</span><span class="ow-n">11</span><span class="ow-s">to go back to</span></div>
+</div>
+<div style="display: flex; gap: 6px; flex: 1; min-height: 0">
+<div class="ow-card" style="flex: 1.5; gap: 2px">
+<span class="ow-k" style="color: #8D93A1; padding-bottom: 3px">Your classes</span>
+<div class="ow-row" style="border-top: 0; font-size: 6.5px; color: #8D93A1; padding: 3px 0 2px"><span style="flex: 1">Class</span><span style="width: 40px; text-align: right">Students</span><span style="width: 58px; text-align: right">Status</span></div>
+<div class="ow-row"><span style="flex: 1; min-width: 0; display: flex; flex-direction: column"><b style="font-weight: 600; color: #F5F6F8">Leading Through Change</b><span style="font-size: 7px; color: #8D93A1">Tuesdays 7 PM, since Oct 20 · 6 weeks</span></span><span class="mono" style="width: 40px; text-align: right">14</span><span style="width: 58px; text-align: right"><span class="ow-pill" style="background: rgba(249,115,22,0.2); color: #FDBA74">Live tonight</span></span></div>
+<div class="ow-row"><span style="flex: 1; min-width: 0; display: flex; flex-direction: column"><b style="font-weight: 600; color: #F5F6F8">Henderson Co. Manager Training</b><span style="font-size: 7px; color: #8D93A1">In their office and online · 4 sessions</span></span><span class="mono" style="width: 40px; text-align: right">22</span><span style="width: 58px; text-align: right"><span class="ow-pill" style="background: rgba(34,197,94,0.16); color: #86EFAC">Published</span></span></div>
+<div class="ow-row"><span style="flex: 1; min-width: 0; display: flex; flex-direction: column"><b style="font-weight: 600; color: #F5F6F8">The First 90 Days</b><span style="font-size: 7px; color: #8D93A1">Free · Wednesdays 12 PM, from Nov 4</span></span><span class="mono" style="width: 40px; text-align: right">37</span><span style="width: 58px; text-align: right"><span class="ow-pill" style="background: rgba(34,197,94,0.16); color: #86EFAC">Published</span></span></div>
+<div class="ow-row"><span style="flex: 1; min-width: 0; display: flex; flex-direction: column"><b style="font-weight: 600; color: #F5F6F8">Money Habits for Family Firms</b><span style="font-size: 7px; color: #8D93A1">5 lessons drafted by Chief</span></span><span class="mono" style="width: 40px; text-align: right">·</span><span style="width: 58px; text-align: right"><span class="ow-pill" style="background: #222533; color: #C9CDD6">Draft</span></span></div>
+<span class="ow-k" style="color: #8D93A1; margin-top: 6px; padding-bottom: 2px">Joined this week</span>
+<div class="ow-row"><span style="flex: 1">Priya Shah</span><span style="color: #8D93A1">The First 90 Days · from your class page</span></div>
+<div class="ow-row"><span style="flex: 1">Marcus Hale</span><span style="color: #8D93A1">Leading Through Change · paid $480</span></div>
+<div class="ow-row"><span style="flex: 1">Ada Okafor</span><span style="color: #8D93A1">Leading Through Change · paid $480</span></div>
+<div class="ow-row"><span style="flex: 1">Sam Ortiz</span><span style="color: #8D93A1">Henderson Co. Manager Training · from the class page</span></div>
+<div class="ow-row"><span style="flex: 1">Jordan Lee</span><span style="color: #8D93A1">The First 90 Days · from your class page</span></div>
+<span class="ow-k" style="color: #8D93A1; margin-top: 6px; padding-bottom: 2px">Course Studio</span>
+<div class="ow-row"><span style="flex: 1">Money Habits for Family Firms</span><span style="color: #8D93A1">Chief drafted 5 lessons and 48 slides · read them before you publish</span></div>
+</div>
+<div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px">
+<div class="ow-card" style="gap: 4px"><span class="ow-k" style="color: #FDBA74">Tonight · week 3</span><span style="font: 600 11.5px/1.2 'Inter Tight', sans-serif; color: #F5F6F8">The conversation you're avoiding</span>
+<span style="display: flex; align-items: center; gap: 5px; font-size: 7.5px; color: #C9CDD6"><i style="width: 5px; height: 5px; border-radius: 50%; background: #F97316; flex: none"></i>The room opens at 6:45 PM</span>
+<span style="display: flex; align-items: center; gap: 5px; font-size: 7.5px; color: #C9CDD6"><i style="width: 5px; height: 5px; border-radius: 50%; background: #F97316; flex: none"></i>Reminder went to 14 students at 4 PM</span>
+<span style="display: flex; align-items: center; gap: 5px; font-size: 7.5px; color: #C9CDD6"><i style="width: 5px; height: 5px; border-radius: 50%; background: #F97316; flex: none"></i>Recorded from the start</span>
+<span style="align-self: flex-start; margin-top: 3px; font-size: 7.5px; font-weight: 600; padding: 3px 9px; border-radius: 999px; background: #F97316; color: #1C0A02">Open the room</span></div>
+<div class="ow-card" style="gap: 2px; flex: 1"><span class="ow-k" style="color: #8D93A1; padding-bottom: 2px">Homework in</span>
+<div class="ow-row" style="border-top: 0"><span style="flex: 1">Priya Shah</span><span style="color: #8D93A1">voice note · 2:04</span></div>
+<div class="ow-row"><span style="flex: 1">Marcus Hale</span><span style="color: #8D93A1">photo</span></div>
+<div class="ow-row"><span style="flex: 1">Ada Okafor</span><span style="color: #8D93A1">PDF</span></div>
+<span class="ow-s" style="margin-top: 3px">Only you and your teaching team see these.</span></div>
+<div class="ow-card" style="gap: 2px"><span class="ow-k" style="color: #8D93A1; padding-bottom: 2px">Recordings</span>
+<div class="ow-row" style="border-top: 0"><span style="flex: 1">Week 2 · Naming what people lose</span><span class="mono" style="color: #8D93A1">58 min</span></div>
+<div class="ow-row"><span style="flex: 1">Week 1 · Why change stalls</span><span class="mono" style="color: #8D93A1">61 min</span></div>
+<span class="ow-s" style="margin-top: 3px">Students watch them from their class link.</span></div>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div></div>
+<div class="dv-base"></div>
+</div>
+
+<div class="st-ph" style="position: absolute; right: 3%; bottom: 0; width: 21%">
+<div class="dv-ph"><span class="dv-island"></span><div class="mx" style="aspect-ratio: 9 / 19.2">
+<div class="mx-in">
+<div class="mx-bar"><span class="mx-brand"><span class="mx-mark">RC</span><span class="mx-biz">Reyes Coaching</span></span><span class="mx-me">PS</span></div>
+<b class="mx-lt">Leading Through <em>Change</em></b>
+<div class="cr-next">
+<span class="cr-when"><span class="ping" style="background: #FFFFFF; width: calc(var(--u)*7); height: calc(var(--u)*7)"></span>Tonight · 7:00 PM</span>
+<b class="t">Week 3: The conversation you're avoiding</b>
+<span class="s">The room opens at 6:45. Join from here.</span>
+<span class="cr-go">Join class</span>
+</div>
+<div class="mx-sh"><b>This week</b><span>2 of 6 done</span></div>
+<span class="cr-bar"><i style="width: 34%"></i></span>
+<div class="cr-row"><span class="cr-disc" style="background: #2A1409; color: #FF9D6B"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4.5" width="18" height="12.5" rx="2.5"></rect><path d="M8 20.5h8M12 17v3.5"></path></svg></span><span class="cr-t"><b>Slides</b><span>12 slides to look back over</span></span></div>
+<div class="cr-row"><span class="cr-disc" style="background: #16122E; color: #A99BFF"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3z"></path><path d="M19 11a7 7 0 0 1-14 0M12 18v3"></path></svg></span><span class="cr-t"><b>Homework</b><span>A voice note, due Monday</span></span></div>
+<div class="cr-row"><span class="cr-disc" style="background: #0a1429; color: #7EA6FF"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M10 8.5l5 3.5-5 3.5z"></path></svg></span><span class="cr-t"><b>Week 2, recorded</b><span>Watch it again</span></span></div>
+<div class="cr-row"><span class="cr-disc" style="background: #08241F; color: #4FD8C4"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20.5l1.4-4.9A8 8 0 1 1 21 12z"></path></svg></span><span class="cr-t"><b>Discussion</b><span>Share one thing you tried</span></span></div>
+<span class="cr-go soft" style="margin-top: auto">Add to my calendar</span>
+</div>
+</div></div>
+</div>
+</div>
+</div>
+</section>
+
+<!-- COURSE STUDIO -->
+<section id="studio" class="sec light">
+<div class="wrap split">
+<div class="txt">
+<p class="eyebrow ink">Course Studio</p>
+<h2 class="h2">Your method, <span class="serif ink" style="font-size: 1.08em">written down.</span></h2>
+<p class="body">Tell Chief what you teach and who it's for. Chief drafts the course in Course Studio: each lesson's teaching, its homework, a workbook, a short quiz and the slides you'll present. A new course stays a draft until you publish it.</p>
+<ul class="ticks">
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Workbook prompts, links and live-class details for every lesson</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>A slide deck for each lesson, with notes only you can see</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Quizzes graded the way you choose: pass or fail, a percentage, or a letter</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Change one lesson by hand, or ask Chief to rework it</span></li>
+</ul>
+</div>
+<div class="vis">
+<div class="cs" aria-label="Sample of a lesson in Course Studio">
+<div class="cs-top">
+<span class="cs-k">Course Studio</span>
+<b style="font-family: 'Inter Tight', sans-serif; font-size: 16px; letter-spacing: -0.01em">Leading Through Change</b>
+<span style="font-size: 11px; font-weight: 600; padding: 3px 9px; border-radius: 999px; background: #FFF1E4; color: #9A3412">Draft</span>
+<span style="margin-left: auto; display: flex; gap: 6px"><span style="font-size: 12px; font-weight: 600; padding: 7px 13px; border-radius: 999px; border: 1px solid #DCD9D2; color: #3B3F4A">Preview</span><span style="font-size: 12px; font-weight: 600; padding: 7px 13px; border-radius: 999px; background: #0B0C11; color: #FFFFFF">Publish</span></span>
+</div>
+<div class="cs-body">
+<div class="cs-list">
+<span class="cs-k" style="padding: 4px 9px 6px">6 lessons</span>
+<span class="cs-ls"><i>01</i>Why change stalls</span>
+<span class="cs-ls"><i>02</i>Naming what people lose</span>
+<span class="cs-ls on"><i>03</i>The conversation you're avoiding</span>
+<span class="cs-ls"><i>04</i>Small wins, in public</span>
+<span class="cs-ls"><i>05</i>When the team pushes back</span>
+<span class="cs-ls"><i>06</i>Making it stick</span>
+<span style="margin-top: auto; display: flex; align-items: center; gap: 8px; padding: 10px 9px 4px; font-size: 11.5px; color: #5A5E6B"><span class="chief-av" style="width: 18px; height: 18px"></span>Drafted by Chief</span>
+</div>
+<div class="cs-main">
+<div style="display: flex; flex-direction: column; gap: 4px"><span class="cs-k" style="color: #C2410C">Lesson 3 · 45 minutes · live class</span><b style="font-family: 'Inter Tight', sans-serif; font-size: 21px; letter-spacing: -0.02em; line-height: 1.15">The conversation you're avoiding</b></div>
+<div class="cs-box" style="background: #FCFBF9"><span class="cs-k">Objective</span><p>Name one conversation you've been putting off, and plan the first two minutes of it.</p></div>
+<div style="display: flex; flex-wrap: wrap; gap: 10px">
+<div class="cs-box" style="flex: 1 1 200px"><span class="cs-k">Workbook</span><p>1. Who is it with, and what is it really about?<br>2. What are you afraid they'll say?<br>3. Write your first sentence, word for word.</p></div>
+<div class="cs-box" style="flex: 1 1 200px"><span style="display: flex; justify-content: space-between; align-items: baseline"><span class="cs-k">Quiz</span><span style="font-size: 11px; color: #5A5E6B">Pass at 70%</span></span><p style="font-weight: 600; color: #0B0C11">Which opening keeps the door open?</p>
+<span class="cs-opt"><i></i>"We need to talk about your attitude."</span>
+<span class="cs-opt ok"><i></i>"I've noticed something, and I'd like your view."</span>
+<span class="cs-opt"><i></i>"This is your last warning."</span></div>
+</div>
+<div style="display: flex; justify-content: space-between; align-items: baseline"><span class="cs-k">Slides · 12</span><span style="font-size: 11.5px; color: #5A5E6B">Your notes stay with you</span></div>
+<div class="cs-slides">
+<div class="cs-sl" style="background: radial-gradient(90% 90% at 90% 0%, rgba(249,115,22,0.6) 0%, transparent 65%), #16213D"><span style="position: absolute; left: 7px; top: 5px; font-family: 'Inter Tight', sans-serif; font-size: 15px; font-weight: 300; letter-spacing: -0.04em; opacity: 0.9; text-transform: none">03</span><b>The conversation you're avoiding</b></div>
+<div class="cs-sl" style="background: #F4EFE8; color: #16213D"><span>Point</span><b>Silence is a message too</b></div>
+<div class="cs-sl" style="background: #16213D"><span>Columns</span><b>What we say / what we mean</b></div>
+<div class="cs-sl" style="background: #C2410C"><span>Question</span><b>What are you putting off?</b></div>
+<div class="cs-sl" style="background: #0B1022"><span>Closing</span><b>Your first two minutes</b></div>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+</section>
+
+<!-- THE CLASS PAGE -->
+<section id="join" class="sec" style="background: #07080B">
+<div class="wrap split" style="flex-wrap: wrap-reverse">
+<div class="vis stack" style="min-height: 690px">
+<div class="dv-br flat" style="position: absolute; left: 0; top: 0; width: 100%" aria-label="Sample of a class page on a coach's own website">
+<div class="dv-br-top"><i></i><i></i><i></i><span class="dv-br-url">reyescoaching.com/academy</span></div>
+<div class="rc">
+<div class="rc-nav">
+<span style="display: flex; align-items: center; gap: 9px"><span class="rc-mark">RC</span><span class="rc-name">Reyes Coaching</span></span>
+<span class="rc-links"><span>Coaching</span><span>Workshops</span><span style="color: #14161C; font-weight: 600">Classes</span><span>About</span></span>
+<span class="rc-btn" style="background: #2F6BEA; color: #FFFFFF">Book a call</span>
+</div>
+<div style="padding: 20px 22px 22px; display: flex; flex-wrap: wrap; gap: 18px; align-items: flex-start">
+<div style="flex: 1.75 1 300px; min-width: 0; display: flex; flex-direction: column; gap: 13px">
+<div style="display: flex; flex-direction: column; gap: 5px">
+<span class="rc-kick" style="color: #1E4FC2">A free class · Reyes Coaching</span>
+<b class="rc-serif" style="font-size: 30px; font-weight: 600; letter-spacing: -0.02em; line-height: 1.04">The First 90 Days</b>
+<span style="font-size: 13px; color: #4A4E58">For new managers: the first conversations, the weekly rhythm and the first hard call that set the tone for a team.</span>
+</div>
+<div class="rc-facts">
+<div class="rc-fact"><b>Wednesdays 12 PM, from Nov 4</b><span>When</span></div>
+<div class="rc-fact"><b>4 weeks</b><span>One lesson a week, together</span></div>
+<div class="rc-fact"><b>Weekly homework</b><span>Each week</span></div>
+</div>
+<div style="display: flex; flex-direction: column">
+<b class="rc-serif" style="font-size: 18px; font-weight: 600; padding-bottom: 6px">Week by week</b>
+<div class="rc-week"><div><div class="rc-wn">Week 1</div><div class="rc-wd">Wed Nov 4</div></div><div><h4>Your first conversations</h4><div class="rc-tags"><span class="rc-tag"><i style="background: #2F6BEA"></i>Class Wed 12 PM</span><span class="rc-tag"><i style="background: #6a4c8c"></i>Your team's three worries</span></div></div></div>
+<div class="rc-week"><div><div class="rc-wn">Week 2</div><div class="rc-wd">Wed Nov 11</div></div><div><h4>Setting the rhythm</h4><div class="rc-tags"><span class="rc-tag"><i style="background: #2F6BEA"></i>Class Wed 12 PM</span><span class="rc-tag"><i style="background: #2f6f6a"></i>Discussion</span></div></div></div>
+<div class="rc-week"><div><div class="rc-wn">Week 3</div><div class="rc-wd">Wed Nov 18</div></div><div><h4>Your first hard call</h4><div class="rc-tags"><span class="rc-tag"><i style="background: #2F6BEA"></i>Class Wed 12 PM</span><span class="rc-tag"><i style="background: #b4532a"></i>90-day plan, step 1</span></div></div></div>
+<div class="rc-week"><div><div class="rc-wn">Week 4</div><div class="rc-wd">Wed Nov 25</div></div><div><h4>Your 90-day plan</h4><div class="rc-tags"><span class="rc-tag"><i style="background: #2F6BEA"></i>Class Wed 12 PM</span><span class="rc-tag"><i style="background: #b4532a"></i>90-day plan, step 2</span></div></div></div>
+</div>
+</div>
+<div style="flex: 1 1 170px; min-width: 0; display: flex; flex-direction: column; gap: 9px; padding: 15px; border-radius: 14px; background: #FFFFFF; border: 1px solid #E2DDD2">
+<b class="rc-serif" style="font-size: 19px; font-weight: 600; line-height: 1.1">Free to join</b>
+<span style="font-size: 12px; color: #4A4E58">Join, and your class link comes to your email.</span>
+<span class="rc-in" style="flex: none">Priya Shah</span>
+<span class="rc-in" style="flex: none">priya@example.com</span>
+<span class="rc-btn" style="height: 40px; background: #2F6BEA; color: #FFFFFF">Join the class</span>
+</div>
+</div>
+</div>
+</div>
+<div class="mail flat" style="position: absolute; right: -36px; bottom: 0; width: 300px" aria-label="Sample of the email a new student gets">
+<div class="mail-h"><span class="rc-mark" style="width: 32px; height: 32px; font-size: 12px">RC</span><span style="display: flex; flex-direction: column; min-width: 0"><b style="font-size: 13.5px">You're in: The First 90 Days</b><small>Reyes Coaching · to priya@example.com</small></span></div>
+<p>Hi Priya, you're in The First 90 Days with Reyes Coaching. The next class is Wednesday at 12 PM.</p>
+<p style="color: #5C6070; font-size: 12px">Keep this email. The button below opens your class on any phone or computer, any time.</p>
+<span class="rc-btn" style="align-self: flex-start; background: #2F6BEA; color: #FFFFFF">Open my class</span>
+</div>
+</div>
+<div class="txt">
+<p class="eyebrow" style="color: #FDBA74">The class page</p>
+<h2 class="h2">People sign up <span class="serif glint" style="font-size: 1.08em">on their own.</span></h2>
+<p class="body">Every published class gets its own page on your website. It says when the class meets, how its lessons open, and what each week asks, before anyone signs up. A free class takes a name and an email, and the class link goes to that email. A paid class takes payment on the page through Stripe, and the buyer is enrolled the moment they pay.</p>
+<ul class="ticks" style="color: #D5D8DF">
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>One lesson a week together, one a week from the day they join, or every lesson open at once</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Each week's live class, homework and discussion listed up front</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>No passwords: their class link opens the class on any phone or computer</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>You hear about every new student, and they join your client list</span></li>
+</ul>
+</div>
+</div>
+</section>
+
+<!-- BETWEEN CLASSES -->
+<section id="between" class="sec tint">
+<div class="wrap split">
+<div class="txt">
+<p class="eyebrow ink">Between classes</p>
+<h2 class="h2">Nothing slips <span class="serif ink" style="font-size: 1.08em; white-space: nowrap">between classes.</span></h2>
+<p class="body">Homework is handed in from a phone. Every class and due date sits on the student's own calendar, and a reminder goes out a few hours before you meet. Missed a night? The recording is there once class ends.</p>
+<ul class="ticks">
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Homework as a photo, a file, a voice note or a short video</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Classmates never see a file, and a photo's location is taken off before it reaches you</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>The class on their phone's calendar, and when a night moves, it moves there too</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>An email reminder before each class, and a morning class is told the evening before</span></li>
+</ul>
+</div>
+<div class="vis stack" style="min-height: 620px">
+<div class="dvw" style="position: absolute; left: 4%; top: 0; width: min(290px, 46%)">
+<div class="dv-ph" aria-label="Sample of homework handed in from a student's phone"><span class="dv-island"></span><div class="mx" style="aspect-ratio: 9 / 19.2">
+<div class="mx-in">
+<div class="mx-bar"><span class="mx-back"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"></path></svg>Week 3</span><span class="mx-me">PS</span></div>
+<span class="mx-kick">Homework · due Monday</span>
+<b class="mx-lt" style="font-size: calc(var(--u)*26)">The first <em>two minutes</em></b>
+<p style="font-size: calc(var(--u)*14.5); color: var(--fg2); line-height: 1.45">Record a short voice note: how you'd open the conversation you've been putting off.</p>
+<div class="cr-chips"><span class="cr-chip">Photo</span><span class="cr-chip">File</span><span class="cr-chip on">Voice note</span><span class="cr-chip">Video</span></div>
+<div class="cr-card">
+<div style="display: flex; justify-content: space-between; align-items: center"><b style="font-size: calc(var(--u)*15); font-weight: 650">Your voice note</b><span class="mono" style="font-size: calc(var(--u)*13); color: var(--fg2)">2:04</span></div>
+<div class="cr-wave" aria-hidden="true"><i style="height: 30%"></i><i style="height: 55%"></i><i style="height: 80%"></i><i style="height: 45%"></i><i style="height: 92%"></i><i style="height: 60%"></i><i style="height: 35%"></i><i style="height: 70%"></i><i style="height: 98%"></i><i style="height: 52%"></i><i style="height: 40%"></i><i style="height: 75%"></i><i style="height: 58%"></i><i style="height: 28%"></i><i style="height: 66%"></i><i style="height: 84%"></i><i style="height: 47%"></i><i style="height: 33%"></i><i style="height: 62%"></i><i style="height: 22%"></i></div>
+<div style="display: grid; grid-template-columns: 1fr 1.3fr; gap: calc(var(--u)*8)"><span class="cr-go soft">Record again</span><span class="cr-go">Hand it in</span></div>
+</div>
+<p class="cr-safe"><svg class="i" viewBox="0 0 24 24" aria-hidden="true" style="width: calc(var(--u)*15); height: calc(var(--u)*15)"><rect x="4" y="11" width="16" height="10" rx="2.5"></rect><path d="M8 11V7a4 4 0 0 1 8 0v4"></path></svg>Only Dana sees what you hand in.</p>
+<div class="cr-row"><span class="cr-disc" style="background: #08241F; color: #4FD8C4"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20.5l1.4-4.9A8 8 0 1 1 21 12z"></path></svg></span><span class="cr-t"><b>Discussion</b><span>What made last week's talk easier?</span></span></div>
+<div class="cr-row"><span class="cr-disc" style="background: #0a1429; color: #7EA6FF"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M10 8.5l5 3.5-5 3.5z"></path></svg></span><span class="cr-t"><b>Missed week 2?</b><span>The recording is here</span></span></div>
+<span class="cr-go soft" style="margin-top: auto">Add the class to my calendar</span>
+</div>
+</div></div>
+</div>
+<div class="mail flat" style="position: absolute; right: 0; top: 40px; width: 52%; max-width: 330px" aria-label="Sample of a class reminder email">
+<div class="mail-h"><span class="rc-mark" style="width: 32px; height: 32px; font-size: 12px">RC</span><span style="display: flex; flex-direction: column; min-width: 0"><b style="font-size: 13.5px">Tonight at 7 PM: Leading Through Change</b><small>Reyes Coaching · 4:02 PM</small></span></div>
+<p>Hi Marcus, your class meets tonight at 7 PM. Leading Through Change: The conversation you're avoiding.</p>
+<p style="color: #5C6070; font-size: 12px">When it's time, open your class and press Join to be there online.</p>
+<span class="rc-btn" style="align-self: flex-start; background: #2F6BEA; color: #FFFFFF">Open my class</span>
+</div>
+<div class="cal flat" style="position: absolute; right: 2%; bottom: 20px; width: 50%; max-width: 310px" aria-label="Sample of the class on a student's own calendar">
+<div style="display: flex; justify-content: space-between; align-items: baseline; padding: 13px 14px 9px"><b style="font-size: 14px">November</b><span style="font-size: 11.5px; color: #5C6070">From your class link</span></div>
+<div class="cal-r"><span class="cal-d"><small>TUE</small><b>3</b></span><span style="display: flex; flex-direction: column"><b style="font-size: 13px">Leading Through Change</b><span style="font-size: 11.5px; color: #5C6070">7:00 PM · week 3, live</span></span></div>
+<div class="cal-r"><span class="cal-d"><small>MON</small><b>9</b></span><span style="display: flex; flex-direction: column"><b style="font-size: 13px">Homework due</b><span style="font-size: 11.5px; color: #5C6070">The first two minutes</span></span></div>
+<div class="cal-r"><span class="cal-d"><small>TUE</small><b>10</b></span><span style="display: flex; flex-direction: column"><b style="font-size: 13px">Leading Through Change</b><span style="font-size: 11.5px; color: #5C6070">7:00 PM · week 4, live</span></span></div>
+</div>
+</div>
+</div>
+</section>
+
+<!-- LIVE CLASSES, WITH CHIEF -->
+<section id="live" class="sec" style="background: #07080B; overflow: hidden">
+<div class="aur" aria-hidden="true" style="opacity: 0.6"><i></i><i></i><i></i></div>
+<div class="wrap split" style="position: relative">
+<div class="txt">
+<p class="eyebrow" style="color: #FDBA74">Live classes</p>
+<h2 class="h2">Teach the room, <span class="serif glint" style="font-size: 1.08em">near and far.</span></h2>
+<p class="body">Start the class and people join from their class link, at home or at their desk, while the people in the room with you watch the slides on the TV. Chat and questions stay with the class. Answers to a question slide come only to you, until you put one on screen without a name.</p>
+<ul class="ticks" style="color: #D5D8DF">
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>The room opens 15 minutes before class</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>A hand goes up, and you invite them to speak</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>A student's message with a link waits for you first</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Recorded from the moment you start, for anyone who needs to go back</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Tonight's slides go to whoever missed it, when you ask</span></li>
+</ul>
+</div>
+<div class="vis stack" style="min-height: 700px">
+<div class="dv-br flat" style="position: absolute; left: 0; top: 0; width: 94%" aria-label="Sample of a live class from the teacher's side">
+<div class="dv-br-top"><i></i><i></i><i></i><span class="dv-br-url">system.mysolutionist.app</span></div>
+<div class="lv">
+<div class="lv-top">
+<span class="lv-live"><span class="ping" style="background: #FFFFFF; width: 6px; height: 6px"></span>Live</span>
+<b style="font-size: 12.5px; color: #F5F6F8">Leading Through Change · week 3</b>
+<span class="mono" style="font-size: 11px; color: #8D93A1">41:12</span>
+<span style="margin-left: auto; display: flex; align-items: center; gap: 10px; font-size: 11px; color: #C9CDD6"><span style="display: flex; align-items: center; gap: 5px"><i style="width: 7px; height: 7px; border-radius: 50%; background: #E5372B"></i>Recording</span><span>11 online · 3 in the room</span></span>
+</div>
+<div class="lv-body">
+<div class="lv-stage">
+<div class="lv-slide">
+<span class="mono" style="font-size: 10px; letter-spacing: 0.16em; text-transform: uppercase; color: #FDBA74">Question</span>
+<b style="font-weight: 600; font-size: clamp(17px, 1.9vw, 25px); line-height: 1.12; letter-spacing: -0.02em; color: #FFFFFF; max-width: 78%">What's one conversation you've been putting off?</b>
+<span style="align-self: flex-start; max-width: 58%; padding: 9px 12px; border-radius: 10px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); font-size: 12px; line-height: 1.4; color: #F5F6F8">"Waiting for the right moment means it never comes."</span>
+<span class="lv-cam lv-cam-on"><img src="/assets/home/p-maya.jpg" alt="The teacher, on camera"><em>You</em></span>
+</div>
+<div style="display: flex; justify-content: space-between; align-items: baseline"><b style="font-size: 12px; color: #F5F6F8">12 answers</b><span style="font-size: 10.5px; color: #8D93A1">Only you see names</span></div>
+<div class="lv-ans on"><p><small>Priya Shah · on screen, no name</small>Waiting for the right moment means it never comes.</p></div>
+<div class="lv-ans"><p><small>Marcus Hale</small>Telling my best person their workload isn't working.</p><span class="lv-act"><span>Put on screen</span></span></div>
+</div>
+<div class="lv-side">
+<div class="lv-tabs"><span class="on">Hands · 1</span><span>Questions · 2</span><span>Chat</span></div>
+<div class="lv-msg"><b>Ada Okafor raised a hand</b><span class="lv-act"><span class="go">Invite to speak</span><span>Lower</span></span></div>
+<div class="lv-msg"><b>In the room with you</b><p>3 people tapped "I'm in the room", so they count as here.</p><span class="lv-act"><span>See who</span></span></div>
+<div class="lv-msg" style="border-color: rgba(253,186,116,0.4)"><b>Held for you</b><p>A message with a link, from a student.</p><span class="lv-act"><span>Show</span><span>Hide</span></span></div>
+</div>
+</div>
+<div class="lv-bot"><span style="display: inline-flex; align-items: center; gap: 6px; border-color: rgba(124,92,255,0.6)"><i style="width: 9px; height: 9px; border-radius: 50%; background: linear-gradient(135deg, #E040FB, #7C5CFF 55%, #22D3EE)"></i>Sum up the answers</span><span>Previous</span><span style="background: #F97316; border-color: #F97316; color: #1C0A02">Next slide</span><span style="margin-left: auto; border-color: rgba(229,55,43,0.6); color: #FFB4AE">End class</span></div>
+</div>
+</div>
+<div class="chief flat" style="position: absolute; right: -20px; bottom: 0; width: 56%">
+<div class="chief-in">
+<div style="display: flex; align-items: center; gap: 10px"><span class="chief-av"></span><span style="display: flex; flex-direction: column"><b style="font-size: 14px">Chief</b><span style="font-size: 12px; color: #959BA8">For your eyes only · sample</span></span></div>
+<div style="display: flex; flex-direction: column; gap: 6px; font-size: 15px; line-height: 1.5">
+<span class="line" style="animation-delay: 0.2s">Most of the 12 are putting off a talk about workload, not about how someone is doing.</span>
+<span class="line" style="animation-delay: 1.4s">A few named their own manager, not someone on their team.<span class="caret"></span></span>
+</div>
+<div style="display: flex; flex-wrap: wrap; gap: 8px"><span class="btn btn-w btn-s">Put one on screen</span><span class="btn btn-l btn-s">Next slide</span></div>
+</div>
+</div>
+</div>
+</div>
+</section>
+
+<!-- CHIEF, EVERY ROOM -->
+<section style="background: #07080B; border-top: 1px solid #12141B">
+<div class="wrap" style="padding-top: 40px; padding-bottom: 8px">
+<div class="mc-strip" style="display: flex; flex-wrap: wrap; align-items: center; gap: 14px 22px; padding: 22px 26px; border-radius: 22px; background: #0D0F14; border: 1px solid #1F2330">
+<span style="width: 36px; height: 36px; border-radius: 50%; background: linear-gradient(135deg, #E040FB, #7C5CFF 55%, #22D3EE); flex: none"></span>
+<p style="margin: 0; flex: 1 1 420px; font-size: 16px; line-height: 1.55; color: #C9CDD6"><b style="color: #F5F6F8; font-weight: 600">Chief works the same way in every room.</b> It works from your practice's own records, waits for your yes before it sends anything or touches money, and lists what it does on your History page.</p>
+<a href="/coaches#chief">How Chief works</a>
+</div>
+</div>
+</section>
+<!-- /CHIEF, EVERY ROOM -->
+<!-- THE ROOMS NEXT DOOR -->
+<section class="sec" style="background: #07080B; padding-top: 40px; border-top: 1px solid #12141B">
+<div class="wrap" style="display: flex; flex-direction: column; gap: 32px">
+<div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; gap: 16px">
+<h2 class="h2" style="font-size: clamp(30px, 3.2vw, 44px)">The rooms <span class="serif" style="font-size: 1.08em; color: #D9D2FF">next door.</span></h2>
+<p class="body" style="max-width: 420px">Every student lands on the same client list as the rest of your work.</p>
+</div>
+<div class="doors">
+<a href="/coaches/clients" class="door"><span class="dglow" style="background: radial-gradient(circle, #14B8A6 0%, rgba(20,184,166,0) 70%)"></span>
+<svg width="44" height="44" viewBox="0 0 48 48" aria-hidden="true" style="position: relative"><defs><clipPath id="gd1"><rect width="48" height="48" rx="12"></rect></clipPath></defs><g clip-path="url(#gd1)" stroke="rgba(255,255,255,0.55)" stroke-width="1.1" stroke-linejoin="round"><polygon points="0,0 28,0 17,21 0,15" fill="#14B8A6"></polygon><polygon points="28,0 48,0 48,19 17,21" fill="#5EEAD4"></polygon><polygon points="0,15 17,21 9,48 0,48" fill="#0F766E"></polygon><polygon points="17,21 48,19 48,48 9,48" fill="#14B8A6"></polygon><polygon points="17,21 33,31 24,48 9,48" fill="#0F766E" fill-opacity="0.6"></polygon></g><g transform="translate(12 12)" fill="none" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.2"></circle><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"></path><path d="M16 4.5a3 3 0 0 1 0 6M18 14.5c1.9.8 3 2.8 3 5.5"></path></g></svg>
+<b>Clients</b><span>A student who signs up is found or added on your client list, beside their sessions and invoices.</span><em style="color: #5EEAD4">Go to Clients</em></a>
+<a href="/coaches/marketing-and-website" class="door"><span class="dglow" style="background: radial-gradient(circle, #EC4899 0%, rgba(236,72,153,0) 70%)"></span>
+<svg width="44" height="44" viewBox="0 0 48 48" aria-hidden="true" style="position: relative"><defs><clipPath id="gd2"><rect width="48" height="48" rx="12"></rect></clipPath></defs><g clip-path="url(#gd2)" stroke="rgba(255,255,255,0.55)" stroke-width="1.1" stroke-linejoin="round"><polygon points="0,0 28,0 17,21 0,15" fill="#EC4899"></polygon><polygon points="28,0 48,0 48,19 17,21" fill="#F9A8D4"></polygon><polygon points="0,15 17,21 9,48 0,48" fill="#BE185D"></polygon><polygon points="17,21 48,19 48,48 9,48" fill="#EC4899"></polygon><polygon points="17,21 33,31 24,48 9,48" fill="#BE185D" fill-opacity="0.6"></polygon></g><g transform="translate(12 12)" fill="none" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l15-6v14L3 13z"></path><path d="M7 13v5a2 2 0 0 0 4 0v-4"></path></g></svg>
+<b>Marketing and Website</b><span>Your class pages live on your own website, on your own address.</span><em style="color: #F9A8D4">Go to Marketing and Website</em></a>
+<a href="/coaches/billing-and-time" class="door"><span class="dglow" style="background: radial-gradient(circle, #22C55E 0%, rgba(34,197,94,0) 70%)"></span>
+<svg width="44" height="44" viewBox="0 0 48 48" aria-hidden="true" style="position: relative"><defs><clipPath id="gd3"><rect width="48" height="48" rx="12"></rect></clipPath></defs><g clip-path="url(#gd3)" stroke="rgba(255,255,255,0.55)" stroke-width="1.1" stroke-linejoin="round"><polygon points="0,0 28,0 17,21 0,15" fill="#22C55E"></polygon><polygon points="28,0 48,0 48,19 17,21" fill="#86EFAC"></polygon><polygon points="0,15 17,21 9,48 0,48" fill="#15803D"></polygon><polygon points="17,21 48,19 48,48 9,48" fill="#22C55E"></polygon><polygon points="17,21 33,31 24,48 9,48" fill="#15803D" fill-opacity="0.6"></polygon></g><g transform="translate(12 12)" fill="none" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="13" rx="2.5"></rect><path d="M3 10h18M7 15h3"></path></g></svg>
+<b>Billing and Time</b><span>Invoice a client company for the team training you ran for them.</span><em style="color: #86EFAC">Go to Billing and Time</em></a>
+</div>
+</div>
+</section>
+
+<!-- ON EVERY PLAN -->
+<section id="plans" class="sec light">
+<div class="wrap" style="display: flex; flex-direction: column; gap: 36px">
+<div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; gap: 20px 48px">
+<div style="display: flex; flex-direction: column; gap: 16px; max-width: 700px">
+<p class="eyebrow" style="color: #5A5E6B">Plans</p>
+<h2 class="h2">Courses and Classes come with <span class="serif ink" style="font-size: 1.08em">every plan.</span></h2>
+</div>
+<p class="body" style="max-width: 440px">Course Studio, class pages, live classes and recordings are on every plan. The bigger plans add logins for your team and more of Chief's help getting the word out.</p>
+</div>
+<div class="planrow">
+<div class="plan"><span class="pn">Starter</span><span class="pp">${{P_STARTER}} <small>a month</small></span><ul>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>Course Studio, with Chief drafting lessons and slides</li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>Class pages, free sign-ups and paid enrollment</li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>Live classes, recordings, homework and reminders</li>
+</ul></div>
+<div class="plan mid"><span class="pn">Professional</span><span class="pp">${{P_PRO}} <small>a month</small></span><ul>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>Everything in Starter</li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>Three logins for the people you work with</li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>Chief plans your week of posts, with flyers</li>
+</ul></div>
+<div class="plan"><span class="pn">Solutionist</span><span class="pp">${{P_SOL}} <small>a month</small></span><ul>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>Everything in Professional</li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>Short captioned clips from a recorded talk or workshop</li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>Seven logins, and a seat for your accountant</li>
+</ul></div>
+</div>
+<a href="/coaches#pricing" style="align-self: flex-start; font-weight: 600; color: #0B0C11">Compare every plan</a>
+</div>
+</section>
+
+<!-- CLOSING -->
+<section id="start" style="position: relative; overflow: hidden; background: #07080B">
+<div class="aur" aria-hidden="true"><i></i><i></i><i></i></div>
+<div class="floor" aria-hidden="true" style="height: 60%"></div>
+<div class="wrap" style="position: relative; padding-top: 150px; padding-bottom: 150px; display: flex; flex-direction: column; align-items: center; gap: 24px; text-align: center">
+<h2 class="h1" style="font-size: clamp(42px, 5.6vw, 84px); max-width: 960px">Your next cohort <span class="serif glint" style="font-size: 1.06em">starts here.</span></h2>
+<p class="lede">{{TRIAL_LINE}}</p>
+<a href="{{HOME}}/start" class="btn btn-w">Start free</a>
+</div>
+</section>
+
+<!-- Footer -->
+<footer class="foot"><div class="wrap foot-in">
+<div style="display: flex; flex-direction: column; gap: 10px; max-width: 360px">
+<div style="display: flex; align-items: center; gap: 8px; color: #F5F6F8"><svg width="22" height="19" viewBox="8 36 496 424" aria-hidden="true"><g fill="url(#mkg)" stroke="#fff" stroke-width="8" stroke-opacity=".92"><polygon points="18,46 175,232 237,231 133,98 376,99 356,131 412,167 494,49"></polygon><polygon points="205,138 338,241 232,391 274,449 435,221 319,137"></polygon><polygon points="264,274 149,279 201,359"></polygon></g></svg><span style="font-family: 'Inter Tight', sans-serif; font-weight: 600; font-size: 17px">Solutionist</span></div>
+<p style="margin: 0; font-size: 14px">Everything a small business runs on, in one place, with Chief running it beside you.</p>
+</div>
+<nav aria-label="Products for coaches and consultants"><b>For coaches and consultants</b><a href="/coaches/bookings">Bookings</a><a href="/coaches/clients">Clients</a><a href="/coaches/proposals-and-contracts">Proposals and Contracts</a><a href="/coaches/billing-and-time">Billing and Time</a><a href="/coaches/courses-and-classes">Courses and Classes</a><a href="/coaches/marketing-and-website">Marketing and Website</a><a href="/coaches/office-and-books">Office and Books</a></nav>
+<nav aria-label="Company"><b>Solutionist</b><a href="{{HOME}}/">Solutionist home</a><a href="{{HOME}}/churches">For churches</a><a href="/coaches#pricing">Pricing</a><a href="{{HOME}}/privacy">Privacy</a><a href="{{HOME}}/terms">Terms</a></nav>
+</div></footer>
+
+</div>
+{{ANALYTICS}}
+<script>
+/* Solutionist home: someone who came here from the main site goes back to the page they left */
+(function () {
+  try {
+    var a = document.querySelector("[data-home]");
+    if (!a || !document.referrer) return;
+    var r = new URL(document.referrer), h = new URL(a.href).hostname;
+    if (r.hostname !== h && r.hostname !== "www." + h) return;
+    if (/^\/(churches|coaches|consultants)(\/|$)/.test(r.pathname)) return;
+    a.href = r.href;
+    a.querySelector("[data-home-label]").textContent = "Back to Solutionist";
+  } catch (e) { /* the plain link still goes home */ }
+})();
+</script>
+</body>
+</html>

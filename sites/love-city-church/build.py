@@ -32,6 +32,7 @@ Build-time tokens (filled here):
                            CSS mask; {{MARK_SOLID_MASK}} its filled
                            silhouette (mark-solid.svg)
   {{API_BASE}} {{BUSINESS_ID}} and the outside links in LINKS
+  {{CARD_<NAME>}}          the address of one of the church's cards in CARDS
 
 REDIRECTS maps the old site's addresses to these pages (site_sync stores
 them with the pages).
@@ -99,11 +100,24 @@ LINKS = {
     "SERMON_LIBRARY": "https://subsplash.com/u/cityofloveministries/media",
 }
 
+# The church's own cards, made in the app (Build → Forms & classes → Cards;
+# intake_forms rows of BUSINESS_ID). Each answers on the site's own address,
+# lovecityc.com and the subdomain alike; a card switched off in the app
+# shows its "not open right now" page there, never an error. A visitor's
+# answers land on that card, and the Next steps road counts them.
+_CARD = "/public/widget/form/"
+CARDS = {
+    "CARD_BAPTISM": _CARD + "d5354342-8c59-4ec6-96be-31fffe2b676c",
+    "CARD_SERVE": _CARD + "18cf072d-f804-4890-9562-a1d5e7b86af3",
+}
+
 # The old SnapPages site's addresses (its sitemap, and the sermon library
 # under /media), each sent where that content lives now. site_sync stores
 # them; public_site answers each with a 301 wherever the site would
-# otherwise 404, keeping the visitor's own ?utm_… parameters. Old forms land
-# on the connect card with the same interest ticked. /my-love-nation, the
+# otherwise 404, keeping the visitor's own ?utm_… parameters. An old form
+# lands on the church's card for it when there is one (CARDS: baptism and
+# the three serving sign-ups), else on the connect card with the same
+# interest ticked. /my-love-nation, the
 # old members-only page, has no home here and stays a 404. /live is not
 # here: GET /live is an API route ahead of the site, and redirecting it
 # safely needs the Worker to vouch for the host (see the worklog).
@@ -125,11 +139,11 @@ REDIRECTS = {
     "/booking": "/connect#connect-card",
     "/prayer-request": "/connect#prayer",
     "/membership-form-update": "/connect?interest=membership#connect-card",
-    "/baptism": "/connect?interest=baptism#connect-card",
+    "/baptism": CARDS["CARD_BAPTISM"],
     "/membercare": "/connect?interest=pastoral-care#connect-card",
-    "/volunteer": "/connect?interest=serve#connect-card",
-    "/ministryworks": "/connect?interest=serve#connect-card",
-    "/city-serve": "/connect?interest=serve#connect-card",
+    "/volunteer": CARDS["CARD_SERVE"],
+    "/ministryworks": CARDS["CARD_SERVE"],
+    "/city-serve": CARDS["CARD_SERVE"],
     "/ns-sign-up": "/connect?interest=next-step#connect-card",
     "/next-step-ministry-training": "/ministries#training-title",
     "/leaderschool": "/ministries#training-title",
@@ -233,6 +247,7 @@ def render_pages(inline: bool = False) -> dict:
     refs = {token: _asset_ref(name, inline) for token, name in _assets().items()}
     refs.update(_mark_refs())
     refs.update(LINKS)
+    refs.update(CARDS)
     refs.update({"API_BASE": API_BASE, "BUSINESS_ID": BUSINESS_ID})
     return {p: assemble(p, parts, refs) for p in PAGES}
 

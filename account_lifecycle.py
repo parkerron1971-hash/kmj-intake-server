@@ -98,6 +98,15 @@ HTTP_TIMEOUT = httpx.Timeout(connect=10.0, read=60.0, write=30.0, pool=10.0)
 # belong here with a reason.
 
 EXPORT_EXCLUDED: Dict[str, str] = {
+    "church_keepers": "who keeps a church's guarded areas (church_keys.py): sign-in user ids that can't mean anything in another business; a restored church names its keepers again, and until it does nothing is locked; cascade on business deletion",
+    "church_area_keys": "asks for an hour's key to a guarded area and their answers: sign-in user ids and a hashed one-time code, over within a day; nothing to restore; cascade on business deletion",
+    "church_check_approvals": "each yes a check request has, at its step (church_money_levels.py): sign-in user ids that can't mean anything in another business; the export keeps the requests and where they stand; cascade with the request and on business deletion",
+    "church_check_approval_codes": "the one-time codes a board member is emailed to give a yes from the member app (church_money_levels.py): hashed, over in minutes; nothing to restore; cascade with the request, the person and on business deletion",
+    "devotional_texts": "who asked for the church's devotional by text each evening (devotional_daily.py): phone numbers and the words they agreed to, given to this account's texting; a restored account must not start texting them, so people sign up again; cascade on business deletion",
+    "worship_screens": "each screen's private link (a token); a copied link would show another church's Sunday, so screens are added again after a restore; cascade on business deletion",
+    "worship_live": "what was on screen at one moment of a service; nothing to restore; cascade on business deletion",
+    "worship_team": "who is on the church's Sunday team: sign-in user ids and invite links (tokens) that can't mean anything in another business; the church invites its team again after a restore; cascade on business deletion",
+    "academy_present_sessions": "a class presenting right now: a short-lived TV code and a copy of the slides without teacher notes (the deck itself is exported in academy_decks); expires within hours; cascade on business deletion",
     "chief_rail_practice": "the rail's practice record (chief_rail.py): a records-only answer next to Chief's, for deciding which question shapes may skip the full turn; platform tuning data, derived from records the export already carries; cascade on business deletion",
     "chief_reflection_runs": "nightly brain-pass run log (status, tokens, cost); operations metadata, not the business's content; the digest it wrote is exported in business_brain_versions; cascade on business deletion",
     "square_booking_sync": "temporary Square appointment copies; reconnect and opt in to sync; cascade through square_connections",
@@ -122,6 +131,7 @@ EXPORT_EXCLUDED: Dict[str, str] = {
     # (it reads their whole calendar), and the busy blocks are re-derived
     # from it on every sync; both cascade with the business.
     "calendar_feeds": "private calendar links (each one reads a whole calendar); never exported, cascade on business deletion",
+    "worship_calendar": "the church's calendar link for bringing events onto the announcements board (worship_announce_import.py); like calendar_feeds a secret that reads a whole calendar, so never exported; the church pastes it again after a restore; cascade on business deletion",
     "calendar_busy_blocks": "busy times re-derived from a private calendar link on every sync; cascade on feed/business deletion",
     # Platform books and metering — the platform must keep these for its
     # own accounts, whatever a business does with theirs.
@@ -148,6 +158,13 @@ EXPORT_EXCLUDED: Dict[str, str] = {
     "entity_groups":           "owner-keyed consolidation groups; die with the auth user",
     "mcp_oauth_codes":         "user-keyed OAuth codes; short-lived",
     "member_login_codes":      "member portal sign-in codes (hashed, 10-minute, pruned daily); credentials, not records, cascade on business deletion",
+    # A member's Bible highlights and notes are private to the member: the
+    # app tells them the church's staff can't read them, and an export
+    # the church downloads would. Cascade on member and business deletion.
+    "bible_marks":             "a member's own Bible highlights, private notes and saved verses; private to the member (staff can't read them), so never in the church's export; cascade on member/business deletion",
+    # The same for a member's devotional days: their journal is private.
+    "devotional_progress":     "a member's own devotional days: done, practices ticked and a private journal (staff can't read it), so never in the church's export; cascade on member/business/devotional deletion",
+    "member_plan_starts":      "the reading plans and devotionals a member started on their own day; keyed to devotional ids an import re-mints; cascade on member/business deletion",
     "mcp_oauth_refresh":       "user-keyed OAuth refresh tokens",
     "site_events":             "anonymous marketing-site traffic; no business_id by design",
     # The tamper-evident ledger has its own door. audit_log is exported
@@ -165,36 +182,120 @@ EXPORT_EXCLUDED: Dict[str, str] = {
     "ledger_erasure_tickets":  "tamper-evident ledger: erasure requests; evidence",
 }
 BUSINESS_CHILD_TABLES: List[str] = [
+    # Board & minutes (church_board.py): decisions and attendance before the
+    # items and members they cite, items before their meetings, meetings and
+    # members before their boards; all before the contacts and tasks they cite.
+    "church_board_decisions", "church_board_attendance", "church_board_items", "church_board_meetings",
+    "church_board_members", "church_boards",
+    # Help requests (church_help.py): what was given before its request, and
+    # both before the Prayer & care asks, contacts and expenses they cite.
+    # The fund's settings name nothing by id.
+    "church_help_given", "church_help_requests", "church_help_settings",
+    # Check requests (church_checks.py): a request cites its person and its
+    # expense, so it goes before contacts and expenses. The limit and the
+    # budget lines name nothing by id.
+    "church_check_requests", "church_check_settings",
+    # The church register (church_register.py): each entry cites its people
+    # and its Prayer & care ask by id, so it goes before both.
+    "church_register_entries",
     # Owner-only account export includes private care and finance history.
     # Erase children before their business, contact and invoice records.
     # A request's private notes go before the request.
     "ministry_care_notes", "ministry_care_requests", "ministry_gift_history",
     # Which givers were emailed a year-end statement; before contacts.
     "giving_statement_sends",
-    # Members' notification devices and choices (before contacts), and
-    # the log of what the church sent them.
-    "member_push_subscriptions", "member_push_prefs", "member_push_sends",
+    # Pledges and campaigns (church_pledges.py): each pledge cites a giver
+    # and a campaign by id, so pledges go before contacts and campaigns.
+    "church_pledges", "church_campaigns",
+    # Members' notification devices and choices (before contacts), the log
+    # of what the church sent them, and what waits through quiet hours.
+    "member_push_subscriptions", "member_push_prefs", "member_push_sends", "member_push_held",
     # Who was at each occasion; before module_entries and contacts.
     "attendance", "attendance_headcounts",
     # Which days of the reading plan each member has read; before contacts.
     "reading_progress",
+    # The church's own devotionals, their days inside each row (members'
+    # days cascade with them; see EXPORT_EXCLUDED).
+    "devotionals",
+    # The church's song library for Sunday screens: each song's words,
+    # orders and how often it was sung. Nothing points at it.
+    "worship_songs",
+    # Sunday teams and who serves when (sunday_planning.py): each ask and
+    # its answer, who's trained on each place, who's away, the places and
+    # the teams' turns, all before the services they're for, the teams'
+    # groups and contacts (see _IMPORT_SKIP).
+    "serve_notes", "serve_assignments", "serve_trained", "serve_away", "serve_prefs", "serve_positions", "serve_teams",
+    # Sundays on screens: the services (their order, notes and the songs
+    # they point at; see _IMPORT_SKIP) and the look every slide wears.
+    "worship_services", "worship_settings",
+    # The church's pictures and videos for Sunday's screens: the rows (name,
+    # type, size, link); the files themselves are in business-assets. Not
+    # re-imported (see _IMPORT_SKIP).
+    "worship_media",
+    # The announcements board: each announcement's words, dates, design and
+    # QR code. Not re-imported (see _IMPORT_SKIP).
+    "worship_announcements",
+    # The ministries that send announcements by a link: each one's name, its
+    # leader and the leader's email. Not re-imported (see _IMPORT_SKIP).
+    "worship_ministries",
     # Families and children: notes, pickups and children before their
     # household, and the household's adult links before contacts.
     "child_checkins",
-    # Groups: who came to each meeting, the meetings, the roster, then
-    # the groups — all before contacts.
-    "group_live_sessions", "group_meeting_attendance", "group_meetings", "group_members", "groups",
+    # News (church_news): reports, Loves and comments before their posts,
+    # reactions and who saw a post before it, the posts (which may be for
+    # one group) and the people who post to the whole church — all before
+    # groups and contacts.
+    "church_post_reports", "church_post_comment_loves", "church_post_comments", "church_post_reactions",
+    "church_post_seen", "church_posts", "church_news_posters",
+    # Celebrations (celebrations.py): what each member said yes to, and a
+    # couple's anniversary — both before contacts.
+    "member_celebrations", "member_anniversaries",
+    # The week's news by email (news_alerts): which week each person got
+    # it — before contacts.
+    "church_news_digests",
+    # Groups: who saw each Board post, the posts and who's asking to join
+    # (member_portal_groups), who came to each meeting, the meetings, the
+    # roster, then the groups — all before contacts.
+    "group_post_seen", "group_posts", "group_join_requests", "group_prayer_marks", "group_prayers", "group_rsvps",
+    "group_bring", "group_studies", "group_live_sessions", "group_meeting_guests", "group_meeting_attendance", "group_meetings", "group_members", "groups",
     "sermons", "sermon_series",   # sermons before the series they point at
     # Live: chat, pauses and presence before their session; all before
     # contacts and module_entries.
     "live_chat", "live_mutes", "live_presence", "live_sessions",
-    # Messaging: reports, staff looks, messages, people and blocks before
-    # their chats; links and switches before contacts.
-    "msg_reports", "msg_staff_views", "msg_messages", "msg_participants", "msg_blocks", "msg_threads",
-    "msg_guardians", "msg_members", "msg_safety_officers",
+    # Messaging: reports, staff looks, reactions, messages, people and blocks
+    # before their chats; links and switches before contacts.
+    "msg_reports", "msg_staff_views", "msg_reactions", "msg_poll_votes", "msg_polls", "msg_photos", "msg_messages", "msg_participants", "msg_blocks", "msg_threads",
+    "msg_guardians", "msg_members", "msg_safety_officers", "msg_member_officers",
     # Youth and Kids spaces: leaders' posts and the office's leader
     # approvals (with background-check dates); before contacts.
     "space_posts", "space_leaders",
+    # Leaders & follow-up: notes before their follow-up; follow-ups and
+    # the leaders' roles before contacts. The role library (each role's
+    # title, job and chain) and its settings name no contact.
+    "church_follow_up_notes", "church_follow_ups", "church_leader_roles",
+    "church_role_defs", "church_role_settings",
+    # The map (church_areas): which area the church put a role or a team in.
+    # It names no contact and cites role keys and team names, not ids, so
+    # it restores as it is.
+    "church_area_places",
+    # Rooms & spaces (church_spaces): the bookings before the spaces they're
+    # in, and before the contacts and invoices (a rental's bill) they cite.
+    "church_space_bookings", "church_spaces",
+    # Event sign-ups (church_event_signups): who signed up, what they paid
+    # and their answers, then the ticket types and each event's setup, all
+    # before the contacts and module entries (events) they cite.
+    "church_event_registrations", "church_event_ticket_types", "church_event_signup_setups",
+    # Sunday check-in's service (day, time, how long it stays open): no
+    # contact, nothing it cites; a restored church keeps its Sunday.
+    "church_checkin_settings",
+    # Shepherding: touches and who-shepherds-whom before the families and
+    # contacts they cite; the proposal, "Not a family" and the settings
+    # name no row a foreign key holds.
+    "church_shepherd_touches", "church_shepherds", "church_shepherd_drafts", "church_family_dismissals",
+    "church_shepherd_settings",
+    # Shepherding, round 2: a drifting family's signal cites its household;
+    # the sent-once ledger of emails cites nothing.
+    "church_shepherd_signals", "church_shepherd_notices",
     "child_care_notes", "household_pickups", "children", "household_adults", "households",
     "chief_errand_events", "chief_errands",  # preserve history; events before errands
     "agent_assignments",      # before connected_agents (foreign key)
@@ -353,10 +454,16 @@ BUSINESS_CHILD_TABLES: List[str] = [
     "support_tickets",
     "workflows",
     "workflow_definitions",
-    # Academy — lessons/enrollments reference courses.
+    # Academy — lessons/enrollments reference courses; a lesson's edited
+    # slides reference the lesson. A program (The Making) is the business's
+    # own series of classes; its tracks are rows keyed by course id. A
+    # class's schedule (homework, gatherings) hangs off its lessons.
+    "academy_decks",
+    "academy_schedule_items",
     "academy_lessons",
     "academy_enrollments",
     "academy_courses",
+    "academy_programs",
     "bank_accounts",
     "bank_transactions",
     "plaid_accounts",
@@ -429,7 +536,9 @@ USER_CHILD_TABLES: List[str] = [
 # ("{business_id}/{offering_id}/…"), which _delete_storage_objects
 # handles by descending one folder level.
 STORAGE_BUCKETS: List[str] = ["image-originals", "business-assets", "business-documents",
-                              "product-files", "program-media", "video-studio"]
+                              "product-files", "program-media", "video-studio",
+                              # Students' homework files: "{business_id}/{course_id}/…".
+                              "academy-work"]
 
 
 def _service_headers() -> Dict[str, str]:
@@ -462,6 +571,11 @@ async def _owned_businesses(client: httpx.AsyncClient, user_id: str) -> List[Dic
 _TABLE_SELECT = {"audit_log": LEDGER_EXPORT_SELECT}
 from media_library import PUBLIC_COLUMNS as MEDIA_EXPORT_COLUMNS
 _TABLE_SELECT['media_assets'] = MEDIA_EXPORT_COLUMNS
+# A devotional without its day count (the database works it out, and won't
+# take one) or its Listen files (made again from the words after a restore).
+_TABLE_SELECT['devotionals'] = (
+    'id,business_id,title,kind,author,about,practices,days,starts_on,voice,status,published_at,created_at,updated_at'
+)
 _TABLE_SELECT['connected_ai_devices'] = (
     'id,business_id,owner_id,provider,label,state,last_seen_at,expires_at,revoked_at,created_at'
 )
@@ -664,9 +778,25 @@ _IMPORT_SKIP = {
     # They remain in the owner archive and are explicitly reported as skipped.
     "ministry_care_notes", "ministry_care_requests", "ministry_gift_history",
     "giving_statement_sends",  # a send log: a restore must not claim statements went out
+    # A pledge cites its giver and its campaign by id, which the importer
+    # re-mints; the export keeps them, and the restored church records its
+    # pledge cards again. Campaigns name nothing by id, so they restore.
+    "church_pledges",
+    # A deck is keyed by its lesson's original id, which the importer re-mints;
+    # restored lessons rebuild their slides from the lesson text instead.
+    "academy_decks",
+    # A program's tracks are keyed by the original course ids, which the
+    # importer re-mints; the shelf offers the program again from the
+    # classes' series names ("The Making: …") after a restore.
+    "academy_programs",
+    # A schedule item is keyed by its class's and lesson's original ids,
+    # which the importer re-mints; it stays in the owner archive, and the
+    # restored class is scheduled again (or Chief drafts it again).
+    "academy_schedule_items",
     # Members' phones are devices, not records (like push_subscriptions);
-    # the send log must not claim a restored church already notified anyone.
-    "member_push_subscriptions", "member_push_prefs", "member_push_sends",
+    # the send log must not claim a restored church already notified anyone,
+    # and a note that waited through last night's quiet hours isn't news.
+    "member_push_subscriptions", "member_push_prefs", "member_push_sends", "member_push_held",
     "chief_errand_events", "chief_errands",  # never restore execution authority or private frames
     "connected_agents", "agent_assignments",  # execution authority must never be restored from a file
     # Preserve the archive, but never restore paid job state, publication
@@ -695,8 +825,19 @@ _IMPORT_SKIP = {
     # keeps them (children's allergies included) for the owner.
     "households", "household_adults", "children", "household_pickups", "child_care_notes",
     "child_checkins",
-    # Groups link contacts and each other by id; same reason.
+    # Groups link contacts and each other by id; same reason. So do a
+    # group's Board posts, who saw them, and who asked to join.
     "groups", "group_members", "group_meetings", "group_meeting_attendance", "group_live_sessions",
+    "group_join_requests", "group_posts", "group_post_seen", "group_prayers", "group_prayer_marks", "group_rsvps",
+    "group_bring", "group_studies", "group_meeting_guests",
+    # The church's news cites people, groups, posts and comments by id;
+    # same reason.
+    "church_posts", "church_post_reactions", "church_post_seen", "church_post_comments",
+    "church_post_comment_loves", "church_post_reports", "church_news_posters",
+    # Celebrations cite people by id; same reason.
+    "member_celebrations", "member_anniversaries",
+    # The week's email log cites people by id; same reason.
+    "church_news_digests",
     # Sermons cite their series by id; same reason.
     "sermon_series", "sermons",
     # Live sessions, chat and presence cite contacts and occasions by id;
@@ -705,10 +846,56 @@ _IMPORT_SKIP = {
     # Messaging cites people, groups and messages by id; same reason. Safety
     # officers are team logins, not records.
     "msg_threads", "msg_participants", "msg_messages", "msg_blocks", "msg_reports", "msg_staff_views",
-    "msg_guardians", "msg_members", "msg_safety_officers",
+    "msg_guardians", "msg_members", "msg_safety_officers", "msg_reactions", "msg_polls", "msg_poll_votes", "msg_photos",
+    # A member officer cites a contact by id; a restored church names its
+    # officers again.
+    "msg_member_officers",
     # Youth and Kids leaders and their posts cite contacts by id; same
     # reason. A restored church approves its leaders again.
     "space_leaders", "space_posts",
+    # Leaders & follow-up cite people (the person, the leader) and each
+    # other by id; same reason. A restored church names its leaders again.
+    # Its roles cite each other (the chain) and a class by id; a restored
+    # church's library fills again the first time Leaders & roles opens.
+    "church_follow_up_notes", "church_follow_ups", "church_leader_roles",
+    "church_role_defs", "church_role_settings",
+    # Shepherding cites families and shepherds by id, a proposal cites
+    # families and members by id, and "Not a family" is a hash of member
+    # ids; same reason. A restored church keeps its shepherding settings
+    # and asks Chief for families and a proposal again.
+    "church_shepherd_touches", "church_shepherds", "church_shepherd_drafts", "church_family_dismissals",
+    # A drifting family's signal cites its household by id; the emails'
+    # sent-once ledger names shepherds and follow-ups by id. A restored
+    # church's sweep starts its watch again.
+    "church_shepherd_signals", "church_shepherd_notices",
+    # A booking cites its space, the person it's for and a rental's bill by
+    # id; same reason. A restored church keeps its list of spaces (they cite
+    # nothing) and books them again.
+    "church_space_bookings",
+    # A board's members cite its people and logins by id; its meetings,
+    # agenda items (carried from one another, linked to tasks), attendance
+    # and decisions cite each other by id; same reason. The export keeps the
+    # minutes; a restored church keeps its boards and names their members
+    # again.
+    "church_board_decisions", "church_board_attendance", "church_board_items", "church_board_meetings",
+    "church_board_members",
+    # A help request cites its person and its Prayer & care ask by id, and
+    # help given cites its request and its expense; same reason. The export
+    # keeps them; a restored church keeps its fund's settings.
+    "church_help_given", "church_help_requests",
+    # A check request cites its person and its expense by id; same reason.
+    # The export keeps them; a restored church keeps its limit and budget
+    # lines. (Receipts live in business-documents under the church's own
+    # folder, which deleting the account empties one level down.)
+    "church_check_requests",
+    # A register entry cites its people and its Prayer & care ask by id;
+    # same reason. The export keeps the whole register.
+    "church_register_entries",
+    # Event sign-ups cite their event (a module entry) and the person by id,
+    # and a setup and its ticket types cite the event; the importer re-mints
+    # those ids, so the export keeps them and a restored church sets its
+    # sign-ups up again. A paid sign-up's money stays in Stripe either way.
+    "church_event_registrations", "church_event_ticket_types", "church_event_signup_setups",
     # A texting number belongs to the provider account that bought it;
     # a restored business provisions its own. Auditor links and push
     # subscriptions are credentials and devices, not records. The
@@ -743,6 +930,19 @@ _IMPORT_SKIP = {
     # business's accounts and photos. The owner sets the desk up again; the
     # export keeps the old settings for reference.
     "marketing_desks",
+    # A service's items point at song ids the import mints anew; the
+    # services stay in the archive, readable, and are planned again.
+    "worship_services",
+    # Who serves when cites people, services, places and teams by id; the
+    # export keeps it, and the church schedules again after a restore.
+    "serve_notes", "serve_assignments", "serve_trained", "serve_away", "serve_prefs", "serve_positions", "serve_teams",
+    # Rows that point at files under the OLD business's storage prefix; a
+    # copy would show another account's files and lose them when it goes.
+    # An announcement's picture is one of those files.
+    "worship_media", "worship_announcements",
+    # A ministry's link is signed for its row; a restore would mint new rows
+    # and new links, so the church adds its ministries again and sends them.
+    "worship_ministries",
 }
 
 # Columns the platform owns. Carrying them across would let an import

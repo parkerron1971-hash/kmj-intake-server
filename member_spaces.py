@@ -129,11 +129,32 @@ def resolve(business_id: str, me: Dict[str, Any], wanted: str = "") -> Dict[str,
     {space, youth, leader: {space: row}, kids_parent, options: [...]}.
     A read that fails leaves them in Church (never somewhere they may not be)."""
     if is_youth(me):
-        return {"space": "youth", "youth": True, "leader": {}, "kids_parent": False, "options": []}
+        return _placed(me, wanted, {}, False)
     # A leader must be an adult, whatever the table says (the office's
     # approval checked the birthdate; this holds if it later changes).
     leaders = (leader_rows(business_id, str(me["id"])) or {}) if is_adult(me) else {}
     parent = bool(has_children(business_id, str(me["id"]))) if KIDS_READY else False
+    return _placed(me, wanted, leaders, parent)
+
+
+async def resolve_async(business_id: str, me: Dict[str, Any], wanted: str = "") -> Dict[str, Any]:
+    """resolve, with its two reads (leader of a space? a parent?) made at
+    once rather than one after the other: every member page waits on this."""
+    import asyncio
+    if is_youth(me):
+        return _placed(me, wanted, {}, False)
+
+    async def nothing():
+        return None
+    leaders, parent = await asyncio.gather(
+        asyncio.to_thread(leader_rows, business_id, str(me["id"])) if is_adult(me) else nothing(),
+        asyncio.to_thread(has_children, business_id, str(me["id"])) if KIDS_READY else nothing())
+    return _placed(me, wanted, leaders or {}, bool(parent))
+
+
+def _placed(me: Dict[str, Any], wanted: str, leaders: Dict[str, Dict[str, Any]], parent: bool) -> Dict[str, Any]:
+    if is_youth(me):
+        return {"space": "youth", "youth": True, "leader": {}, "kids_parent": False, "options": []}
     options = ["church"]
     if "youth" in leaders:
         options.append("youth")
@@ -154,7 +175,9 @@ def switcher(ctx: Dict[str, Any], church_name: str) -> str:
     cur = ctx.get("space") or "church"
     leader = ctx.get("leader") or {}
     meta = {
-        "church": ("Church", escape(church_name or "Your church"), "LC"),
+        # The church's own initials (Love City Church → LC, Grace Fellowship → GF).
+        # It said "LC" for every church until 2026-10-23.
+        "church": ("Church", escape(church_name or "Your church"), escape(ui.initials(church_name or "Church"))),
         "youth": ("Youth", "Leading Youth", "Y"),
         "kids": ("Kids", "Your kids" if ctx.get("kids_parent") else "Your rooms", "★"),
     }
@@ -251,10 +274,9 @@ def render_youth_home(biz: Dict[str, Any], site, *, me: Dict[str, Any], occasion
     used: set = set()
     events = youth_events(occasions) or list(occasions or [])
     lead = events[0] if events else None
-    pic = (photos.named(biz, site, ("youth", "teen", "student"))
-           or photos.pick_for(pool, ("fellowship", "community", "together"), "youth-hero"))
-    used.add(pic)
-    art = ui.photo(pic, eager=True) if pic else ui.gen_art("Youth")
+    pic, look = photos.choose(biz, "youth", pool, fallback=photos.named(biz, site, ("youth", "teen", "student")),
+                              used=used)
+    art = ui.picture(pic, look, "youth", eager=True, night=True)
     hero = ""
     if lead:
         d = mpc._day(lead.get("date") or "")

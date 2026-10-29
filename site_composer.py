@@ -5701,24 +5701,45 @@ async def drop_upload(business_id: str = FormField(...),
                       ) -> Dict[str, Any]:
     """ONE gesture: the owner clicks a drop slot in the Studio, picks a
     photo, and this uploads it (site_images bucket) AND fills the frame
-    (fill_drop_slot persistence) in a single call."""
-    _require_owner(business_id, session.user.id)
-    ext = _DROP_UPLOAD_MIMES.get((file.content_type or "").lower())
-    if not ext:
-        raise HTTPException(400, "jpeg, png, webp, or avif only")
-    data = await file.read()
+    (fill_drop_slot persistence) in a single call.
+
+    The write is service-role, so the storage key is built from the
+    canonical business id and a sanitised slot name, and the stored type
+    comes from the bytes, not the browser's say-so."""
+    import storage_links
+    import upload_images
+    biz = storage_links.canonical_business_id(business_id)
+    if not biz:
+        raise HTTPException(status_code=404, detail="business not found")
+    _require_owner(biz, session.user.id)
+    if not _DROP_UPLOAD_MIMES.get((file.content_type or "").lower()):
+        raise HTTPException(400, "Use a JPG, PNG, WebP or AVIF photo.")
+    # One byte past the cap is enough to know it's too big.
+    data = await file.read(_DROP_UPLOAD_MAX + 1)
     if not data:
-        raise HTTPException(400, "empty file")
+        raise HTTPException(400, "That file is empty. Pick the photo again.")
     if len(data) > _DROP_UPLOAD_MAX:
-        raise HTTPException(400, "image too large (10 MB max)")
+        raise HTTPException(400, "That photo is over 10 MB. Try a smaller copy.")
+    verified = upload_images.verified_image(data, ("jpeg", "png", "webp", "avif"))
+    if not verified:
+        if upload_images.sniff(data) == "avif" and not upload_images.can_decode("avif"):
+            raise HTTPException(400, "AVIF photos can't be read here right now. "
+                                     "Save it as a JPG or PNG and try again.")
+        raise HTTPException(400, "That file isn't a photo we can read. "
+                                 "Use a JPG, PNG, WebP or AVIF.")
+    mime, ext = verified
     import time as _time
-    from agents.slot_system.dalle_client import _upload_site_image
+    from agents.slot_system.dalle_client import (
+        _upload_site_image_debug, upload_failure_words)
     safe_slot = re.sub(r"[^a-zA-Z0-9_-]", "_", slot)[:60]
-    path = f"{business_id}/drop_{safe_slot}_{int(_time.time())}.{ext}"
-    url = _upload_site_image(path, data, file.content_type or "image/jpeg")
+    path = f"{biz}/drop_{safe_slot}_{int(_time.time())}.{ext}"
+    up = _upload_site_image_debug(path, data, mime)
+    url = up.get("url") if up.get("status") == "ok" else None
     if not url:
-        raise HTTPException(502, "storage upload failed — try again")
-    fill = drop_fill(DropFillBody(business_id=business_id, slot=slot,
+        logger.warning("drop upload %s: %s %s %s", path, up.get("status"),
+                       up.get("http_status"), (up.get("body_excerpt") or "")[:200])
+        raise HTTPException(502, upload_failure_words(up))
+    fill = drop_fill(DropFillBody(business_id=biz, slot=slot,
                                   url=url), session)
     return {**fill, "url": url}
 

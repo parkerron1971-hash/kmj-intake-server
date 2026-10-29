@@ -1,0 +1,646 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>{{TITLE}}</title>
+<meta name="description" content="{{DESCRIPTION}}">
+<meta property="og:title" content="{{TITLE}}">
+<meta property="og:description" content="{{DESCRIPTION}}">
+<meta property="og:url" content="{{URL}}">
+<link rel="canonical" href="{{URL}}">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="The Solutionist System">
+<meta property="og:image" content="https://mysolutionist.app/assets/og.png?v=4">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="https://mysolutionist.app/assets/og.png?v=4">
+<link rel="icon" type="image/png" href="/favicon.png">
+<link rel="apple-touch-icon" href="/favicon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@300;400;500;600;700&amp;family=Inter:wght@400;500;600&amp;family=Instrument+Serif:ital@0;1&amp;family=JetBrains+Mono:wght@400;500&amp;family=Geist:wght@400..800&amp;family=Newsreader:ital,opsz,wght@0,6..72,400..600;1,6..72,400..600&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#07080B}
+a{color:#F5F6F8}a:hover{color:#93C5FD}
+.ow-grp{color:#858B98}
+.dv-ph{container-type:inline-size}
+
+/* the week, drawn small inside the laptop */
+.cal{flex:2.3;gap:5px}
+.cal-head{display:grid;grid-template-columns:20px repeat(5,minmax(0,1fr));gap:3px;font-size:7px;color:#8D93A1}
+.cal-head b{font-weight:600;color:#E4E6EB}
+.cal-head .on b{color:#93C5FD}
+.cal-body{flex:1;min-height:0;display:grid;grid-template-columns:20px repeat(5,minmax(0,1fr));gap:3px}
+.cal-hrs{position:relative}
+.cal-hrs span{position:absolute;left:0;margin-top:1px;font:500 6px/1 'JetBrains Mono',monospace;color:#8D93A1}
+.cal-day{position:relative;border-radius:4px;background-color:#0F1117;background-image:linear-gradient(#1B1E28 1px,transparent 1px);background-size:100% 12.5%}
+.ev{position:absolute;left:2px;right:2px;border-radius:4px;padding:2px 4px;font-size:6.5px;line-height:1.25;overflow:hidden;background:rgba(59,130,246,.22);border-left:2px solid #3B82F6;color:#C9D8F5}
+.ev b{display:flex;align-items:center;gap:2px;font-weight:600;color:#F5F6F8;white-space:nowrap;overflow:hidden}
+.ev b svg{flex:none;width:6px;height:6px;fill:none;stroke:#93C5FD;stroke-width:3;stroke-linecap:round;stroke-linejoin:round}
+.ev.busy{background:repeating-linear-gradient(135deg,#1A1D26 0 3px,#12141B 3px 6px);border-left-color:#3A3F4E;color:#8D93A1}
+.ev.busy b{color:#A9AEB9}
+.ev.call{border-left-color:#93C5FD;background:rgba(147,197,253,.13)}
+
+/* the client's booking page, on a phone: calc(var(--u)*15) is 15px on a 390-wide phone */
+.bp{--u:calc(100cqw / 390);background:#FFFFFF;color:#0B0C11;font-family:'Inter',sans-serif;font-size:calc(var(--u)*15);line-height:1.35;border-radius:33px;overflow:hidden;display:flex;flex-direction:column}
+.bp-in{flex:1;min-height:0;overflow:hidden;padding:calc(var(--u)*58) calc(var(--u)*20) calc(var(--u)*20);display:flex;flex-direction:column;gap:calc(var(--u)*12)}
+.bp-mark{width:calc(var(--u)*38);height:calc(var(--u)*38);border-radius:calc(var(--u)*11);background:#2F6BEA;color:#FFFFFF;display:grid;place-items:center;font-weight:800;font-size:calc(var(--u)*14);flex:none}
+.bp-k{font:500 calc(var(--u)*11.5)/1.2 'JetBrains Mono',monospace;letter-spacing:.1em;text-transform:uppercase;color:#5A5E6B}
+.bp-opt{display:flex;justify-content:space-between;align-items:center;gap:calc(var(--u)*10);padding:calc(var(--u)*11) calc(var(--u)*14);border-radius:calc(var(--u)*14);border:1px solid #DCDCE4}
+.bp-opt b{display:block;font-weight:600;font-size:calc(var(--u)*15)}
+.bp-opt span{font-size:calc(var(--u)*12.5);color:#5A5E6B}
+.bp-opt.on{border:2px solid #2F6BEA;background:#F2F6FF}
+.bp-days{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:calc(var(--u)*6)}
+.bp-days span{display:flex;flex-direction:column;align-items:center;gap:calc(var(--u)*2);padding:calc(var(--u)*8) 0;border-radius:calc(var(--u)*12);border:1px solid #DCDCE4;font-size:calc(var(--u)*11.5);color:#5A5E6B}
+.bp-days span b{font-size:calc(var(--u)*17);color:#0B0C11}
+.bp-days span.on{background:#2F6BEA;border-color:#2F6BEA;color:#FFFFFF}
+.bp-days span.on b{color:#FFFFFF}
+.bp-times{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:calc(var(--u)*7)}
+.bp-times span{padding:calc(var(--u)*10) 0;border-radius:calc(var(--u)*11);border:1px solid #DCDCE4;text-align:center;font-weight:600;font-size:calc(var(--u)*14)}
+.bp-times span.on{background:#2F6BEA;border-color:#2F6BEA;color:#FFFFFF}
+.bp-go{display:flex;align-items:center;justify-content:center;height:calc(var(--u)*52);flex:none;border-radius:calc(var(--u)*16);background:#2F6BEA;color:#FFFFFF;font-weight:600;font-size:calc(var(--u)*16)}
+
+/* a client's text messages, on a phone */
+.sm{--u:calc(100cqw / 390);background:#000000;color:#F5F5F7;font-family:'Geist',sans-serif;font-size:calc(var(--u)*15);line-height:1.38;border-radius:33px;overflow:hidden;display:flex;flex-direction:column}
+.sm-top{flex:none;padding:calc(var(--u)*58) calc(var(--u)*16) calc(var(--u)*12);display:flex;flex-direction:column;align-items:center;gap:calc(var(--u)*6);border-bottom:1px solid #1F1F22;background:#0B0B0D}
+.sm-av{width:calc(var(--u)*54);height:calc(var(--u)*54);border-radius:50%;background:#2F6BEA;color:#FFFFFF;display:grid;place-items:center;font-weight:700;font-size:calc(var(--u)*19)}
+.sm-body{flex:1;min-height:0;overflow:hidden;padding:calc(var(--u)*12) calc(var(--u)*14);display:flex;flex-direction:column;gap:calc(var(--u)*8)}
+.sm-ts{align-self:center;font-size:calc(var(--u)*12.5);color:#8E8E93;margin-top:calc(var(--u)*8)}
+.sm-in{align-self:flex-start;max-width:86%;padding:calc(var(--u)*11) calc(var(--u)*14);border-radius:calc(var(--u)*20);background:#26262A;font-size:calc(var(--u)*16.5)}
+.sm-out{align-self:flex-end;max-width:72%;padding:calc(var(--u)*11) calc(var(--u)*14);border-radius:calc(var(--u)*20);background:#2F6BEA;color:#FFFFFF;font-size:calc(var(--u)*16.5)}
+.sm-note{align-self:flex-end;font-size:calc(var(--u)*12);color:#8E8E93;margin-top:calc(var(--u)*-4)}
+.sm-bar{flex:none;margin:0 calc(var(--u)*14) calc(var(--u)*22);height:calc(var(--u)*38);border-radius:999px;border:1px solid #2C2C30;display:flex;align-items:center;padding:0 calc(var(--u)*14);color:#8E8E93;font-size:calc(var(--u)*14)}
+
+/* standing sessions */
+.wk{display:flex;flex-direction:column;gap:3px;padding:9px 10px;border-radius:12px;background:#12141B;border:1px solid #232735;min-width:0}
+.wk b{font-size:14px;font-weight:600}
+.wk span{font-size:12px;color:#A9AEB9}
+.wk.ok{border-color:rgba(59,130,246,0.45);background:rgba(59,130,246,0.1)}
+.wk.skip{border-style:dashed;border-color:#4A4F60;background:transparent}
+
+/* Chief, with a paper beside it */
+.bub{align-self:flex-end;max-width:86%;padding:9px 13px;border-radius:16px 16px 4px 16px;background:#1C1F2A;color:#E4E6EB;font-size:14px;line-height:1.45}
+.pair{display:flex;flex-direction:column;gap:22px}
+.pair .paper{width:80%;box-sizing:border-box;transform:rotate(-2deg)}
+.pair .chief{width:78%;align-self:flex-end;margin-top:-26px}
+@media (max-width:760px){.pair .paper{width:100%;transform:none}.pair .chief{width:100%;margin-top:0}}
+.rh{display:flex;gap:12px;padding:11px 0;border-top:1px solid #E5E5EB;font-size:13.5px}
+.chk{width:20px;height:20px;border-radius:50%;flex:none;display:grid;place-items:center;margin-top:1px}
+</style>
+<style>
+{{COACH_CSS}}
+.mc-strip a{color:#F5F6F8;font-weight:600;text-decoration:underline;text-underline-offset:4px;white-space:nowrap}
+</style>
+{{PIXEL}}
+</head>
+<body>
+<div class="pg" style="--p: #3B82F6; --pl: #93C5FD; --pd: #1D4ED8; --pg: rgba(59,130,246,0.30); --pt: #EEF4FF; --pf: rgba(59,130,246,0.16)">
+
+<!-- The Solutionist frame, lit in this room's colour -->
+<div class="strip"><div class="wrap strip-in">
+<a href="{{HOME}}/" data-home style="display: flex; align-items: center; gap: 8px; color: #F5F6F8; text-decoration: none">
+<svg width="8" height="13" viewBox="0 0 8 13" fill="none" stroke="#959BA8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6.5 1.5 1.5 6.5l5 5"></path></svg>
+<svg width="20" height="17" viewBox="8 36 496 424" aria-hidden="true"><defs><linearGradient id="mkg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#E040FB"></stop><stop offset=".55" stop-color="#7C5CFF"></stop><stop offset="1" stop-color="#22D3EE"></stop></linearGradient></defs><g fill="url(#mkg)" stroke="#fff" stroke-width="8" stroke-opacity=".92"><polygon points="18,46 175,232 237,231 133,98 376,99 356,131 412,167 494,49"></polygon><polygon points="205,138 338,241 232,391 274,449 435,221 319,137"></polygon><polygon points="264,274 149,279 201,359"></polygon></g></svg>
+<span style="font-weight: 600" data-home-label>Solutionist home</span>
+</a>
+<nav aria-label="Solutionist" style="display: flex; flex-wrap: wrap; gap: 6px 22px">
+<a href="{{HOME}}/churches">For churches</a>
+<a href="{{HOME}}/">All of Solutionist</a>
+<a href="{{APP_URL}}" style="color: #F5F6F8">Sign in</a>
+</nav>
+</div></div>
+
+<!-- HERO -->
+<section style="position: relative; overflow: hidden">
+<div class="aur" aria-hidden="true"><i></i><i></i><i></i></div>
+<div class="floor" aria-hidden="true"></div>
+<div class="blade" aria-hidden="true"></div>
+
+<header class="wrap" style="position: relative; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 14px 32px; padding-top: 20px; padding-bottom: 18px">
+<a href="/coaches" style="display: flex; align-items: baseline; gap: 10px; text-decoration: none; color: #F5F6F8">
+<span style="font-family: 'Inter Tight', sans-serif; font-weight: 700; font-size: 24px; letter-spacing: -0.02em">Solutionist</span>
+<span class="serif" style="font-size: 28px; color: #D9D2FF">Coaches &amp; Consultants</span>
+</a>
+<nav aria-label="Coaches and consultants" style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px 28px; font-size: 15px; font-weight: 500">
+<details class="pmenu"><summary>Products<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#E4E6EB" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg></summary><div class="pmenu-panel"><a href="/coaches"><i style="background: linear-gradient(135deg, #E040FB, #7C5CFF 55%, #22D3EE)"></i><b>Overview</b><span>Every part of your practice</span></a><a href="/coaches/bookings" aria-current="page"><i style="background: #3B82F6"></i><b>Bookings</b><span>Your booking page and standing sessions</span></a><a href="/coaches/clients"><i style="background: #14B8A6"></i><b>Clients</b><span>One record, a brief before every session</span></a><a href="/coaches/proposals-and-contracts"><i style="background: #8B5CF6"></i><b>Proposals and Contracts</b><span>Drafted in your voice</span></a><a href="/coaches/billing-and-time"><i style="background: #22C55E"></i><b>Billing and Time</b><span>Invoices, pay links and your hours</span></a><a href="/coaches/courses-and-classes"><i style="background: #F97316"></i><b>Courses and Classes</b><span>Live classes, recordings, homework</span></a><a href="/coaches/marketing-and-website"><i style="background: #EC4899"></i><b>Marketing and Website</b><span>Your site and a week of posts</span></a><a href="/coaches/office-and-books"><i style="background: #94A3B8"></i><b>Office and Books</b><span>The books, the close, the 1099s</span></a></div></details>
+<a href="/coaches#pricing" style="text-decoration: none; color: #E4E6EB">Pricing</a>
+<a href="{{HOME}}/start" class="btn btn-w btn-s">Start free</a>
+</nav>
+</header>
+
+<div class="wrap" style="position: relative">
+<div class="pbar">
+<div class="lock">
+<svg width="40" height="40" viewBox="0 0 48 48" aria-hidden="true"><defs><clipPath id="gt"><rect width="48" height="48" rx="12"></rect></clipPath></defs><g clip-path="url(#gt)" stroke="rgba(255,255,255,0.55)" stroke-width="1.1" stroke-linejoin="round"><polygon points="0,0 28,0 17,21 0,15" fill="#3B82F6"></polygon><polygon points="28,0 48,0 48,19 17,21" fill="#93C5FD"></polygon><polygon points="0,15 17,21 9,48 0,48" fill="#1D4ED8"></polygon><polygon points="17,21 48,19 48,48 9,48" fill="#3B82F6"></polygon><polygon points="17,21 33,31 24,48 9,48" fill="#1D4ED8" fill-opacity="0.6"></polygon></g><g transform="translate(12 12)" fill="none" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="3"></rect><path d="M16 2v4M8 2v4M3 10h18"></path><path d="M8 15h3"></path></g></svg>
+<span style="display: flex; flex-direction: column; gap: 1px"><b>Bookings</b><span>Solutionist for Coaches and Consultants</span></span>
+</div>
+<nav aria-label="In this room">
+<span class="mono" style="font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: rgba(255,255,255,0.6)">In this room</span>
+<a href="#page">The booking page</a>
+<a href="#standing">Standing sessions</a>
+<a href="#calendar">Your calendar</a>
+<a href="#reminders">Reminders</a>
+</nav>
+</div>
+</div>
+
+<div class="wrap" style="position: relative; padding-top: 72px; padding-bottom: 40px; display: flex; flex-direction: column; gap: 28px">
+<p class="eyebrow" style="color: #93C5FD; display: flex; align-items: center; gap: 10px"><span class="ping" style="background: #3B82F6"></span>Bookings</p>
+<h1 class="h1" style="max-width: 1100px">No more <span class="serif glint" style="font-size: 1.06em; padding-right: 0.12em">&ldquo;does Tuesday work?&rdquo;</span></h1>
+<div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; gap: 24px 48px">
+<p class="lede" style="max-width: 640px">A booking page of your own, where clients pick a session or a meeting, see only the times you are really free, and pay if you ask. Regulars are booked once for the season, and anyone who said yes to texts is reminded the day before.</p>
+<div style="display: flex; flex-wrap: wrap; gap: 12px">
+<a href="{{HOME}}/start" class="btn btn-w">{{CTA_START}}</a>
+<a href="#page" class="btn btn-l">See the booking page</a>
+</div>
+</div>
+<div class="facts">
+<div class="fact"><svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#93C5FD" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="17" rx="2.5"></rect><path d="M16 2v4M8 2v4M3 10h18"></path><path d="M9 15.5l2 2 4-4"></path></svg><span><b>Your own booking page</b><span>In your colours, at your own address</span></span></div>
+<div class="fact"><svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#93C5FD" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 2l3 3-3 3"></path><path d="M4 11V9a4 4 0 0 1 4-4h12"></path><path d="M7 22l-3-3 3-3"></path><path d="M20 13v2a4 4 0 0 1-4 4H4"></path></svg><span><b>Weekly regulars, booked once</b><span>Up to 26 weeks in one go</span></span></div>
+<div class="fact"><svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#93C5FD" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path><path d="M8 9h8M8 13h5"></path></svg><span><b>Reminded the day before</b><span>By text, to clients who said yes</span></span></div>
+</div>
+</div>
+
+<!-- The devices: the practice's week, and a client booking on a phone -->
+<div class="wrap" style="position: relative; padding-bottom: 80px">
+<div class="stage" style="aspect-ratio: 2.25" role="group" aria-label="The Bookings week on a computer, and a client booking from a phone. Sample.">
+<div class="st-lap" style="position: absolute; left: 4%; top: 0; width: 72%">
+<div class="dv-lid"><div class="dv-glass"></div><div style="aspect-ratio: 16 / 10">
+<div class="ow">
+<div class="ow-top">
+<svg width="11" height="10" viewBox="8 36 496 424" aria-hidden="true"><g fill="url(#mkg)"><polygon points="18,46 175,232 237,231 133,98 376,99 356,131 412,167 494,49"></polygon><polygon points="205,138 338,241 232,391 274,449 435,221 319,137"></polygon><polygon points="264,274 149,279 201,359"></polygon></g></svg>
+<span style="font-weight: 600; font-size: 9px; color: #F5F6F8">Reyes Coaching</span>
+<span style="margin-left: 10px; flex: 1; max-width: 46%; display: flex; align-items: center; gap: 5px; height: 15px; padding: 0 7px; border-radius: 999px; background: #13151C; border: 1px solid #1E2130; color: #8D93A1; font-size: 7.5px">Search clients, sessions, invoices</span>
+<span style="margin-left: auto; display: flex; align-items: center; gap: 4px; height: 16px; padding: 0 8px; border-radius: 999px; background: linear-gradient(90deg, rgba(224,64,251,0.22), rgba(124,92,255,0.22), rgba(34,211,238,0.18)); border: 1px solid rgba(124,92,255,0.45); font-size: 7.5px; font-weight: 600; color: #F5F6F8"><span style="width: 7px; height: 7px; border-radius: 50%; background: linear-gradient(135deg, #E040FB, #7C5CFF 55%, #22D3EE)"></span>Ask Chief</span>
+</div>
+<div class="ow-body">
+<div class="ow-side">
+<span class="ow-grp">Operate</span>
+<span class="ow-nav"><i style="background: #7C5CFF"></i>This week</span>
+<span class="ow-nav on"><i style="background: #3B82F6"></i>Bookings</span>
+<span class="ow-nav"><i style="background: #14B8A6"></i>Clients</span>
+<span class="ow-nav"><i style="background: #8B5CF6"></i>Proposals</span>
+<span class="ow-nav"><i style="background: #22C55E"></i>Billing and time</span>
+<span class="ow-grp">Grow</span>
+<span class="ow-nav"><i style="background: #F97316"></i>Courses</span>
+<span class="ow-nav"><i style="background: #EC4899"></i>Marketing</span>
+<span class="ow-grp">Build</span>
+<span class="ow-nav"><i style="background: #EC4899"></i>Website</span>
+<span class="ow-nav"><i style="background: #94A3B8"></i>Books</span>
+</div>
+<div class="ow-main">
+<div style="display: flex; justify-content: space-between; align-items: center"><span class="ow-h">Bookings</span><span style="display: flex; gap: 3px; font-size: 7.5px"><span style="padding: 3px 8px; border-radius: 999px; background: rgba(59,130,246,0.18); color: #93C5FD">Week</span><span style="padding: 3px 8px; color: #8D93A1">Month</span><span style="padding: 3px 8px; color: #8D93A1">Standing</span><span style="padding: 3px 8px; color: #8D93A1">Booking page</span></span></div>
+<div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px">
+<div class="ow-card"><span class="ow-k" style="color: #93C5FD">This week</span><span class="ow-n">9</span><span class="ow-s">sessions and meetings</span></div>
+<div class="ow-card"><span class="ow-k" style="color: #93C5FD">From your page</span><span class="ow-n">5</span><span class="ow-s">booked by clients</span></div>
+<div class="ow-card"><span class="ow-k" style="color: #93C5FD">Standing</span><span class="ow-n">4</span><span class="ow-s">weekly regulars</span></div>
+<div class="ow-card"><span class="ow-k" style="color: #93C5FD">Paid at booking</span><span class="ow-n">$600</span><span class="ow-s">deposits and full payments</span></div>
+</div>
+<div style="display: flex; gap: 6px; flex: 1; min-height: 0">
+<div class="ow-card cal">
+<div class="cal-head"><span></span><span><b>Mon</b> 26</span><span class="on"><b>Tue</b> 27</span><span><b>Wed</b> 28</span><span><b>Thu</b> 29</span><span><b>Fri</b> 30</span></div>
+<div class="cal-body">
+<div class="cal-hrs"><span style="top: 0%">9a</span><span style="top: 12.5%">10a</span><span style="top: 25%">11a</span><span style="top: 37.5%">12p</span><span style="top: 50%">1p</span><span style="top: 62.5%">2p</span><span style="top: 75%">3p</span><span style="top: 87.5%">4p</span></div>
+<div class="cal-day">
+<span class="ev" style="top: 12.5%; height: 12.5%"><b><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17 2l3 3-3 3M4 11V9a4 4 0 0 1 4-4h12M7 22l-3-3 3-3M20 13v2a4 4 0 0 1-4 4H4"></path></svg>Priya Shah</b>Coaching</span>
+<span class="ev busy" style="top: 37.5%; height: 12.5%"><b>Busy</b>other calendar</span>
+<span class="ev call" style="top: 75%; height: 6.25%"><b>Jordan Lee · call</b></span>
+</div>
+<div class="cal-day" style="background-color: #111522">
+<span class="ev" style="top: 0%; height: 12.5%"><b><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17 2l3 3-3 3M4 11V9a4 4 0 0 1 4-4h12M7 22l-3-3 3-3M20 13v2a4 4 0 0 1-4 4H4"></path></svg>Marcus Hale</b>Coaching</span>
+<span class="ev busy" style="top: 56.25%; height: 12.5%"><b>Busy</b>other calendar</span>
+<span class="ev" style="top: 87.5%; height: 12.5%"><b>Alana Cruz</b>Coaching · paid</span>
+</div>
+<div class="cal-day">
+<span class="ev call" style="top: 0%; height: 6.25%"><b>Sam Whitfield · call</b></span>
+<span class="ev" style="top: 62.5%; height: 18.75%"><b><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17 2l3 3-3 3M4 11V9a4 4 0 0 1 4-4h12M7 22l-3-3 3-3M20 13v2a4 4 0 0 1-4 4H4"></path></svg>Henderson Co.</b>Strategy meeting<br>90 min</span>
+</div>
+<div class="cal-day">
+<span class="ev" style="top: 12.5%; height: 12.5%"><b>Dev Patel</b>Coaching · paid</span>
+<span class="ev busy" style="top: 37.5%; height: 12.5%"><b>Busy</b>other calendar</span>
+<span class="ev busy" style="top: 62.5%; height: 12.5%"><b>Busy</b>other calendar</span>
+<span class="ev" style="top: 75%; height: 12.5%"><b><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17 2l3 3-3 3M4 11V9a4 4 0 0 1 4-4h12M7 22l-3-3 3-3M20 13v2a4 4 0 0 1-4 4H4"></path></svg>The Okafors</b>Family business</span>
+</div>
+<div class="cal-day">
+<span class="ev busy" style="top: 0%; height: 37.5%"><b>Busy</b>other calendar</span>
+<span class="ev" style="top: 50%; height: 12.5%"><b>Lena Park</b>Coaching · new</span>
+</div>
+</div>
+</div>
+<div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px">
+<div class="ow-card" style="gap: 4px">
+<span class="ow-k" style="color: #8D93A1">Tomorrow · Tue 27</span>
+<div class="ow-row"><span class="mono" style="flex: 0 0 26px; font-size: 7.5px; color: #93C5FD">9:00</span><span style="flex: 1; min-width: 0"><b style="font-weight: 600; color: #F5F6F8">Marcus Hale</b><span style="color: #8D93A1"> · weekly</span></span></div>
+<div class="ow-row"><span class="mono" style="flex: 0 0 26px; font-size: 7.5px; color: #93C5FD">4:00</span><span style="flex: 1; min-width: 0"><b style="font-weight: 600; color: #F5F6F8">Alana Cruz</b><span style="color: #8D93A1"> · paid</span></span></div>
+<span class="ow-s" style="margin-top: 2px">2 reminder texts go out today</span>
+</div>
+<div class="ow-card" style="gap: 4px; border-color: rgba(147,197,253,0.35)">
+<span class="ow-k" style="display: flex; align-items: center; gap: 4px; color: #93C5FD"><span style="width: 7px; height: 7px; border-radius: 50%; background: linear-gradient(135deg, #E040FB, #7C5CFF 55%, #22D3EE)"></span>Chief</span>
+<span style="font: 600 10.5px/1.2 'Inter Tight', sans-serif; color: #F5F6F8">Marcus Hale's brief is ready</span>
+<span class="ow-s">For your 9:00 tomorrow: where he is, and one question worth asking.</span>
+<span style="align-self: flex-start; margin-top: 3px; font-size: 7.5px; font-weight: 600; padding: 3px 8px; border-radius: 999px; background: #1D4ED8; color: #FFFFFF">Read the brief</span>
+</div>
+<div class="ow-card" style="gap: 4px">
+<span class="ow-k" style="color: #8D93A1">Your booking page</span>
+<span style="font-size: 8.5px; color: #E4E6EB">reyescoaching.com/book</span>
+<span style="display: flex; gap: 4px"><span class="ow-pill" style="background: #1B1E28; color: #C9CDD6">Copy link</span><span class="ow-pill" style="background: #1B1E28; color: #C9CDD6">QR code</span></span>
+</div>
+<div class="ow-card" style="gap: 4px; flex: 1">
+<span class="ow-k" style="display: flex; align-items: center; gap: 5px; color: #8D93A1"><span class="ping" style="width: 5px; height: 5px; background: #3B82F6"></span>Just booked</span>
+<span style="font-size: 8.5px; color: #E4E6EB"><b style="font-weight: 600; color: #F5F6F8">Lena Park</b> booked a coaching session for Fri 1:00</span>
+<span class="ow-s">$50 deposit paid · on your calendar</span>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div></div>
+<div class="dv-base"></div>
+</div>
+
+<div class="st-ph" style="position: absolute; right: 3%; bottom: 0; width: 21%">
+<div class="dv-ph"><span class="dv-island"></span><div class="bp" style="aspect-ratio: 9 / 19.2">
+<div class="bp-in">
+<div style="display: flex; align-items: center; gap: calc(var(--u) * 10)"><span class="bp-mark">RC</span><span style="display: flex; flex-direction: column; min-width: 0"><b style="font-size: calc(var(--u) * 16); font-weight: 700">Reyes Coaching</b><span style="font-size: calc(var(--u) * 12); color: #5A5E6B">Coaching for owners and their teams</span></span></div>
+<div style="font-family: 'Inter Tight', sans-serif; font-weight: 600; font-size: calc(var(--u) * 27); letter-spacing: -0.03em; line-height: 1.05">Book a time</div>
+<span class="bp-k">What would you like?</span>
+<div style="display: flex; flex-direction: column; gap: calc(var(--u) * 7)">
+<div class="bp-opt"><span style="display: flex; flex-direction: column"><b>Discovery call</b><span>30 min</span></span><b style="font-size: calc(var(--u) * 14)">Free</b></div>
+<div class="bp-opt on"><span style="display: flex; flex-direction: column"><b>Coaching session</b><span>60 min</span></span><b style="font-size: calc(var(--u) * 14)">$150</b></div>
+<div class="bp-opt"><span style="display: flex; flex-direction: column"><b>Strategy meeting</b><span>90 min</span></span><b style="font-size: calc(var(--u) * 14)">$375</b></div>
+</div>
+<span class="bp-k">Pick a day</span>
+<div class="bp-days"><span>Mon<b>26</b></span><span>Tue<b>27</b></span><span class="on">Wed<b>28</b></span><span>Thu<b>29</b></span><span>Fri<b>30</b></span></div>
+<div class="bp-times"><span>10:00</span><span class="on">11:00</span><span>12:00</span><span>1:00</span><span>3:30</span><span>4:00</span></div>
+<div style="display: flex; flex-direction: column; gap: calc(var(--u) * 3); margin-top: auto; padding: calc(var(--u) * 12) calc(var(--u) * 14); border-radius: calc(var(--u) * 14); background: #F4F6FB"><b style="font-size: calc(var(--u) * 14); font-weight: 600">Coaching session · Wed, Oct 28 · 11:00 AM</b><span style="font-size: calc(var(--u) * 12.5); color: #3F4450">$50 deposit to book, of $150</span></div>
+<span class="bp-go">Continue</span>
+<span style="text-align: center; font-size: calc(var(--u) * 12); color: #5A5E6B">No account needed. A confirmation comes by email.</span>
+</div>
+</div></div>
+</div>
+</div>
+</div>
+</section>
+
+<!-- THE BOOKING PAGE -->
+<section id="page" class="sec light">
+<div class="wrap split">
+<div class="txt">
+<p class="eyebrow ink">The booking page</p>
+<h2 class="h2">Booked in a minute. <span class="serif ink" style="font-size: 1.08em">Paid, if you like.</span></h2>
+<p class="body">Every practice gets a booking page with its own name, colours and tagline, at its own address, to share as a link or a QR code. A client picks what they are booking, sees only the times you are really free, and leaves a name and an email. No account, no password.</p>
+<ul class="ticks">
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Discovery calls, coaching sessions and strategy meetings, each with its own length and price</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Take payment when they book, or a deposit as a percent or a flat amount, on your own Stripe account</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Your hours, your days off and a minimum notice, so nobody books you for 7 tomorrow morning</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>It speaks your practice's language: a coach's clients book a session, a consultant's book a meeting</span></li>
+</ul>
+</div>
+<div class="vis">
+<div class="dv-br" role="group" aria-label="A practice's booking page in a browser. Sample.">
+<div class="dv-br-top"><i></i><i></i><i></i><span class="dv-br-url">reyescoaching.com/book</span></div>
+<div style="background: #FFFFFF; color: #0B0C11; padding: 30px 32px; display: flex; flex-direction: column; gap: 18px">
+<div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 10px">
+<div style="display: flex; align-items: center; gap: 10px"><span style="width: 36px; height: 36px; border-radius: 10px; background: #2F6BEA; color: #fff; display: grid; place-items: center; font-weight: 800; font-size: 13px">RC</span><span style="display: flex; flex-direction: column"><b style="font-family: 'Inter Tight', sans-serif; font-size: 18px">Reyes Coaching</b><span style="font-size: 13px; color: #5A5E6B">Coaching for owners, consulting for their teams</span></span></div>
+<span style="font-size: 12.5px; color: #5A5E6B">Times shown in Eastern Time</span>
+</div>
+<div style="font-family: 'Inter Tight', sans-serif; font-weight: 600; font-size: 28px; letter-spacing: -0.03em; line-height: 1.05">Book a time with Dana</div>
+<div style="display: flex; flex-wrap: wrap; gap: 18px">
+<div style="flex: 1 1 230px; min-width: 0; display: flex; flex-direction: column; gap: 8px">
+<span style="font-size: 13px; font-weight: 600; color: #5A5E6B">What would you like?</span>
+<span style="display: flex; justify-content: space-between; gap: 10px; padding: 12px 14px; border-radius: 12px; border: 1px solid #DCDCE4"><span style="display: flex; flex-direction: column"><b style="font-size: 15px; font-weight: 600">Discovery call</b><span style="font-size: 12.5px; color: #5A5E6B">30 min · a first conversation</span></span><b style="font-size: 14.5px">Free</b></span>
+<span style="display: flex; justify-content: space-between; gap: 10px; padding: 11px 13px; border-radius: 12px; border: 2px solid #2F6BEA; background: #F2F6FF"><span style="display: flex; flex-direction: column"><b style="font-size: 15px; font-weight: 600">Coaching session</b><span style="font-size: 12.5px; color: #1D4ED8">60 min · $50 deposit to book</span></span><b style="font-size: 14.5px">$150</b></span>
+<span style="display: flex; justify-content: space-between; gap: 10px; padding: 12px 14px; border-radius: 12px; border: 1px solid #DCDCE4"><span style="display: flex; flex-direction: column"><b style="font-size: 15px; font-weight: 600">Strategy meeting</b><span style="font-size: 12.5px; color: #5A5E6B">90 min · for teams and companies</span></span><b style="font-size: 14.5px">$375</b></span>
+</div>
+<div style="flex: 1 1 230px; min-width: 0; display: flex; flex-direction: column; gap: 8px">
+<span style="font-size: 13px; font-weight: 600; color: #5A5E6B">Pick a day</span>
+<div style="display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; text-align: center; font-size: 11.5px; color: #5A5E6B">
+<span style="padding: 7px 0; border-radius: 10px; border: 1px solid #DCDCE4">Mon<b style="display: block; font-size: 16px; color: #0B0C11">26</b></span>
+<span style="padding: 7px 0; border-radius: 10px; border: 1px solid #DCDCE4">Tue<b style="display: block; font-size: 16px; color: #0B0C11">27</b></span>
+<span style="padding: 7px 0; border-radius: 10px; background: #2F6BEA; border: 1px solid #2F6BEA; color: #FFFFFF">Wed<b style="display: block; font-size: 16px; color: #FFFFFF">28</b></span>
+<span style="padding: 7px 0; border-radius: 10px; border: 1px solid #DCDCE4">Thu<b style="display: block; font-size: 16px; color: #0B0C11">29</b></span>
+<span style="padding: 7px 0; border-radius: 10px; border: 1px solid #DCDCE4">Fri<b style="display: block; font-size: 16px; color: #0B0C11">30</b></span>
+</div>
+<span style="font-size: 13px; font-weight: 600; color: #5A5E6B; margin-top: 4px">Wednesday, October 28</span>
+<div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; text-align: center; font-size: 13.5px; font-weight: 600">
+<span style="padding: 9px 0; border-radius: 10px; border: 1px solid #DCDCE4">10:00 AM</span><span style="padding: 9px 0; border-radius: 10px; background: #2F6BEA; color: #FFFFFF">11:00 AM</span><span style="padding: 9px 0; border-radius: 10px; border: 1px solid #DCDCE4">12:00 PM</span>
+<span style="padding: 9px 0; border-radius: 10px; border: 1px solid #DCDCE4">1:00 PM</span><span style="padding: 9px 0; border-radius: 10px; border: 1px solid #DCDCE4">3:30 PM</span><span style="padding: 9px 0; border-radius: 10px; border: 1px solid #DCDCE4">4:00 PM</span>
+</div>
+</div>
+</div>
+<div style="display: flex; flex-wrap: wrap; gap: 10px">
+<div style="flex: 1 1 200px; display: flex; flex-direction: column; gap: 6px"><span style="font-size: 13px; font-weight: 600; color: #5A5E6B">Your name</span><span style="padding: 11px 14px; border-radius: 12px; border: 1px solid #DCDCE4; font-size: 15px">Marcus Hale</span></div>
+<div style="flex: 1 1 200px; display: flex; flex-direction: column; gap: 6px"><span style="font-size: 13px; font-weight: 600; color: #5A5E6B">Email</span><span style="padding: 11px 14px; border-radius: 12px; border: 1px solid #DCDCE4; font-size: 15px">marcus@halebuilds.com</span></div>
+</div>
+<div style="display: flex; align-items: center; gap: 10px; font-size: 14px; color: #3F4450"><span style="width: 18px; height: 18px; border-radius: 5px; background: #2F6BEA; display: grid; place-items: center; flex: none"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg></span>Text me a confirmation and a reminder</div>
+<div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; padding-top: 16px; border-top: 1px solid #E5E5EB">
+<span style="display: flex; flex-direction: column; gap: 2px"><b style="font-size: 15px; font-weight: 600">Coaching session · Wed, Oct 28 at 11:00 AM</b><span style="font-size: 13px; color: #5A5E6B">$50 deposit today, of $150</span></span>
+<span style="display: inline-flex; align-items: center; justify-content: center; height: 48px; padding: 0 22px; border-radius: 14px; background: #2F6BEA; color: #fff; font-weight: 600; font-size: 15.5px">Pay the $50 deposit</span>
+</div>
+<span style="text-align: center; font-size: 12px; color: #5A5E6B">Secure checkout by Stripe · a confirmation and a calendar invite come by email</span>
+</div>
+</div>
+</div>
+</div>
+</section>
+
+<!-- STANDING SESSIONS -->
+<section id="standing" class="sec" style="background: #07080B">
+<div class="wrap split" style="flex-wrap: wrap-reverse">
+<div class="vis">
+<div class="card-d" style="padding: 22px; display: flex; flex-direction: column; gap: 16px" role="group" aria-label="A standing weekly session booked for 12 weeks, with two weeks skipped. Sample.">
+<div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px">
+<span style="display: flex; flex-direction: column; gap: 3px"><span class="mono" style="font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase; color: #93C5FD">Standing session</span><b style="font-family: 'Inter Tight', sans-serif; font-size: 19px; font-weight: 600">Priya Shah · Coaching session</b><span style="font-size: 13px; color: #A9AEB9">Every Monday at 10:00 AM · 12 weeks from Nov 2</span></span>
+<span style="font-size: 12.5px; font-weight: 600; padding: 6px 12px; border-radius: 999px; background: rgba(59,130,246,0.16); border: 1px solid rgba(147,197,253,0.35); color: #BFD7FE">10 booked, 2 skipped</span>
+</div>
+<div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 8px">
+<div class="wk ok"><b>Nov 2</b><span>10:00 AM</span></div>
+<div class="wk ok"><b>Nov 9</b><span>10:00 AM</span></div>
+<div class="wk ok"><b>Nov 16</b><span>10:00 AM</span></div>
+<div class="wk ok"><b>Nov 23</b><span>10:00 AM</span></div>
+<div class="wk ok"><b>Nov 30</b><span>10:00 AM</span></div>
+<div class="wk ok"><b>Dec 7</b><span>10:00 AM</span></div>
+<div class="wk ok"><b>Dec 14</b><span>10:00 AM</span></div>
+<div class="wk skip"><b style="color: #C9CDD6">Dec 21</b><span style="color: #FFC9AE">Your time off</span></div>
+<div class="wk ok"><b>Dec 28</b><span>10:00 AM</span></div>
+<div class="wk ok"><b>Jan 4</b><span>10:00 AM</span></div>
+<div class="wk skip"><b style="color: #C9CDD6">Jan 11</b><span style="color: #FFC9AE">Already booked</span></div>
+<div class="wk ok"><b>Jan 18</b><span>10:00 AM</span></div>
+</div>
+<div style="display: flex; flex-wrap: wrap; gap: 8px">
+<span class="btn btn-l btn-s">Move one week</span>
+<span class="btn btn-l btn-s">Cancel from a date</span>
+</div>
+<div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 10px; padding: 14px 16px; border-radius: 14px; background: #12141B; border: 1px solid #232735">
+<span style="display: flex; flex-direction: column; gap: 2px"><b style="font-size: 15px; font-weight: 600">Henderson Co. · Strategy meeting</b><span style="font-size: 13px; color: #A9AEB9">Every Wednesday at 2:00 PM · 90 min · 26 weeks</span></span>
+<span style="font-size: 12.5px; font-weight: 600; padding: 5px 11px; border-radius: 999px; background: rgba(59,130,246,0.16); color: #BFD7FE">26 booked</span>
+</div>
+</div>
+</div>
+<div class="txt">
+<p class="eyebrow" style="color: #93C5FD">Standing sessions</p>
+<h2 class="h2">Every Monday, <span class="serif glint" style="font-size: 1.08em">booked once.</span></h2>
+<p class="body">A coaching client who comes every week, or a retainer client with a standing strategy meeting, shouldn't mean twelve bookings by hand. Book the slot once, from your calendar or by asking Chief, and every week lands on the calendar. A week that is already taken is skipped and named, never double-booked.</p>
+<ul class="ticks" style="color: #D5D8DF">
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Up to 26 weeks in one go</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Ten o'clock stays ten o'clock when the clocks change</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Move one week and the rest stay where they are</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Cancel from a date onward, and past sessions stay on the record</span></li>
+</ul>
+</div>
+</div>
+</section>
+
+<!-- YOUR OTHER CALENDAR -->
+<section id="calendar" class="sec tint">
+<div class="wrap split">
+<div class="txt">
+<p class="eyebrow ink">Your calendar</p>
+<h2 class="h2">Keep your calendar. <span class="serif ink" style="font-size: 1.08em">We'll work around it.</span></h2>
+<p class="body">Paste the private link to the calendar you already live in, from Google, Outlook, iCloud or Acuity. Its busy times close those hours on your booking page. If Calendly or Square already write into your Google or Outlook calendar, they come along too.</p>
+<ul class="ticks">
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Only start and end times are kept: never titles, guests or notes</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>The link is guarded like a password and never shown in full again</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Checked again every 15 minutes, or sync now</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Book over a busy time yourself and Chief says so out loud</span></li>
+</ul>
+</div>
+<div class="vis">
+<div class="card" style="padding: 26px; display: flex; flex-direction: column; gap: 18px" role="group" aria-label="Two outside calendars connected, and the times they leave open on Thursday. Sample.">
+<div style="display: flex; justify-content: space-between; align-items: center"><b style="font-family: 'Inter Tight', sans-serif; font-size: 20px">Your other calendars</b><span class="mono" style="font-size: 11px; color: #5A5E6B">SAMPLE</span></div>
+<div style="display: flex; flex-direction: column; gap: 10px">
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; padding: 12px 14px; border-radius: 14px; border: 1px solid #E3E5EA">
+<span style="width: 34px; height: 34px; border-radius: 10px; background: #EEF4FF; display: grid; place-items: center; flex: none"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#1D4ED8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="17" rx="2.5"></rect><path d="M16 2v4M8 2v4M3 10h18"></path></svg></span>
+<span style="flex: 1 1 180px; min-width: 0; display: flex; flex-direction: column; gap: 1px"><b style="font-size: 15px; font-weight: 600">Personal</b><span class="mono" style="font-size: 12px; color: #5A5E6B">calendar.google.com ····k3x9</span></span>
+<span style="font-size: 12.5px; color: #3F4450">Synced 4 min ago · 31 busy times</span>
+<span style="font-size: 12.5px; font-weight: 600; padding: 6px 12px; border-radius: 999px; border: 1px solid #DCDCE4">Sync now</span>
+</div>
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; padding: 12px 14px; border-radius: 14px; border: 1px solid #E3E5EA">
+<span style="width: 34px; height: 34px; border-radius: 10px; background: #EEF4FF; display: grid; place-items: center; flex: none"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#1D4ED8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="17" rx="2.5"></rect><path d="M16 2v4M8 2v4M3 10h18"></path></svg></span>
+<span style="flex: 1 1 180px; min-width: 0; display: flex; flex-direction: column; gap: 1px"><b style="font-size: 15px; font-weight: 600">Henderson Co. work</b><span class="mono" style="font-size: 12px; color: #5A5E6B">outlook.office365.com ····7Qa2</span></span>
+<span style="font-size: 12.5px; color: #3F4450">Synced 9 min ago · 12 busy times</span>
+<span style="font-size: 12.5px; font-weight: 600; padding: 6px 12px; border-radius: 999px; border: 1px solid #DCDCE4">Sync now</span>
+</div>
+</div>
+<div style="display: flex; flex-wrap: wrap; gap: 16px; padding-top: 18px; border-top: 1px solid #ECEEF1">
+<div style="flex: 1 1 230px; min-width: 0; display: flex; flex-direction: column; gap: 8px">
+<span style="font-size: 13px; font-weight: 600; color: #5A5E6B">Thursday, on every calendar</span>
+<div style="display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 6px 10px; font-size: 13px; align-items: center">
+<span class="mono" style="font-size: 11.5px; color: #5A5E6B">9:00</span><span style="height: 26px; border-radius: 8px; border: 1px dashed #CDD1D8"></span>
+<span class="mono" style="font-size: 11.5px; color: #5A5E6B">10:00</span><span style="display: flex; align-items: center; height: 26px; padding: 0 10px; border-radius: 8px; background: #DCE8FF; border-left: 3px solid #1D4ED8; font-weight: 600; color: #0B0C11">Dev Patel · Coaching</span>
+<span class="mono" style="font-size: 11.5px; color: #5A5E6B">11:00</span><span style="height: 26px; border-radius: 8px; border: 1px dashed #CDD1D8"></span>
+<span class="mono" style="font-size: 11.5px; color: #5A5E6B">12:00</span><span style="display: flex; align-items: center; height: 26px; padding: 0 10px; border-radius: 8px; background: repeating-linear-gradient(135deg, #ECEEF1 0 5px, #F6F7F9 5px 10px); color: #3F4450">Busy · Personal</span>
+<span class="mono" style="font-size: 11.5px; color: #5A5E6B">1:00</span><span style="height: 26px; border-radius: 8px; border: 1px dashed #CDD1D8"></span>
+<span class="mono" style="font-size: 11.5px; color: #5A5E6B">2:00</span><span style="display: flex; align-items: center; height: 26px; padding: 0 10px; border-radius: 8px; background: repeating-linear-gradient(135deg, #ECEEF1 0 5px, #F6F7F9 5px 10px); color: #3F4450">Busy · Henderson Co. work</span>
+<span class="mono" style="font-size: 11.5px; color: #5A5E6B">3:00</span><span style="display: flex; align-items: center; height: 26px; padding: 0 10px; border-radius: 8px; background: #DCE8FF; border-left: 3px solid #1D4ED8; font-weight: 600; color: #0B0C11">The Okafors · weekly</span>
+<span class="mono" style="font-size: 11.5px; color: #5A5E6B">4:00</span><span style="height: 26px; border-radius: 8px; border: 1px dashed #CDD1D8"></span>
+</div>
+</div>
+<div style="flex: 1 1 180px; min-width: 0; display: flex; flex-direction: column; gap: 8px">
+<span style="font-size: 13px; font-weight: 600; color: #5A5E6B">What clients can book</span>
+<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; text-align: center; font-weight: 600; font-size: 14px">
+<span style="padding: 10px 0; border-radius: 10px; border: 1.5px solid #1D4ED8; color: #1D4ED8">9:00 AM</span>
+<span style="padding: 10px 0; border-radius: 10px; border: 1.5px solid #1D4ED8; color: #1D4ED8">11:00 AM</span>
+<span style="padding: 10px 0; border-radius: 10px; border: 1.5px solid #1D4ED8; color: #1D4ED8">1:00 PM</span>
+<span style="padding: 10px 0; border-radius: 10px; border: 1.5px solid #1D4ED8; color: #1D4ED8">4:00 PM</span>
+</div>
+<span style="display: flex; gap: 8px; margin-top: 4px; padding: 11px 12px; border-radius: 12px; background: #EEF4FF; font-size: 13px; line-height: 1.45; color: #1E3A8A"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#1D4ED8" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex: none; margin-top: 2px"><rect x="5" y="11" width="14" height="10" rx="2"></rect><path d="M8 11V8a4 4 0 0 1 8 0v3"></path></svg>Clients never see why. Your page simply doesn't offer noon or two.</span>
+</div>
+</div>
+</div>
+</div>
+</div>
+</section>
+
+<!-- REMINDERS AND NO-SHOWS -->
+<section id="reminders" class="sec light">
+<div class="wrap split" style="flex-wrap: wrap-reverse">
+<div class="vis" style="display: flex; flex-wrap: wrap; gap: 24px; align-items: center; justify-content: center">
+<div style="flex: 0 1 270px; min-width: 230px">
+<div class="dv-ph"><span class="dv-island"></span><div class="sm" style="aspect-ratio: 9 / 19.2" role="group" aria-label="A client's text messages: a confirmation and a reminder. Sample.">
+<div class="sm-top"><span class="sm-av">RC</span><b style="font-size: calc(var(--u) * 14); font-weight: 600">Reyes Coaching</b></div>
+<div class="sm-body">
+<span class="sm-ts">Fri, Oct 23 · 4:12 PM</span>
+<span class="sm-in">Reyes Coaching: Hi Marcus, your booking is confirmed for Tuesday, October 27 at 9:00 AM. Reply to this message with any questions. Reply STOP to opt out.</span>
+<span class="sm-ts">Mon, Oct 26 · 10:05 AM</span>
+<span class="sm-in">Reminder from Reyes Coaching: your appointment is Tuesday at 9:00 AM. Reply to this message if you need to make a change. Reply STOP to unsubscribe.</span>
+<span class="sm-out">Thanks, see you then.</span>
+<span class="sm-note">Delivered</span>
+</div>
+<div class="sm-bar">Text message</div>
+</div></div>
+</div>
+<div style="flex: 1 1 280px; min-width: 0; display: flex; flex-direction: column; gap: 16px">
+<div class="card" style="padding: 22px; display: flex; flex-direction: column; gap: 10px; font-size: 14px" role="group" aria-label="A booking confirmation email. Sample.">
+<span style="display: flex; justify-content: space-between; align-items: center; gap: 10px"><span class="mono" style="font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase; color: #1D4ED8">Email · to Marcus</span><span style="font-size: 12px; color: #5A5E6B">Fri 4:12 PM</span></span>
+<b style="font-family: 'Inter Tight', sans-serif; font-size: 17px; line-height: 1.25">Your session with Reyes Coaching is confirmed</b>
+<span style="color: #3F4450">Coaching session · Tuesday, October 27 · 9:00 AM</span>
+<span style="color: #3F4450">Come ready with a goal or intention you want to work on today.</span>
+<span style="align-self: flex-start; display: flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600; padding: 6px 11px; border-radius: 999px; background: #EEF4FF; color: #1D4ED8"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#1D4ED8" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="17" rx="2.5"></rect><path d="M3 10h18"></path></svg>Add to calendar</span>
+<span style="padding-top: 10px; border-top: 1px solid #ECEEF1; font-size: 12.5px; color: #5A5E6B">We appreciate at least 24 hours' notice for cancellations or rescheduling, so we can offer the slot to someone else.</span>
+</div>
+<div class="card" style="padding: 22px; display: flex; flex-direction: column; gap: 12px; font-size: 14px" role="group" aria-label="A missed session, with a drafted note and a no-show fee waiting. Sample.">
+<span style="display: flex; justify-content: space-between; align-items: center; gap: 10px"><b style="font-size: 15px; font-weight: 600">Lena Park missed Thursday at 1</b><span style="flex: none; white-space: nowrap; font-size: 11.5px; font-weight: 600; padding: 3px 9px; border-radius: 999px; background: #FDE8DD; color: #A9471A">No-show</span></span>
+<span style="display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; border-radius: 12px; background: #F4F6FB; border: 1px solid #E3E8F4"><span style="display: flex; align-items: center; gap: 7px; font-size: 12px; color: #5A5E6B"><span class="chief-av" style="width: 16px; height: 16px"></span>Chief drafted · waiting for you</span><span style="line-height: 1.5; color: #0B0C11">Hi Lena, sorry we missed each other today. No worries at all. Pick a new time whenever it suits you, and I'll see you then. Dana</span></span>
+<span style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px"><span style="display: inline-flex; align-items: center; height: 34px; padding: 0 14px; border-radius: 999px; background: #1D4ED8; color: #FFFFFF; font-size: 13px; font-weight: 600">Send</span><span style="display: inline-flex; align-items: center; height: 34px; padding: 0 14px; border-radius: 999px; border: 1px solid #DCDCE4; font-size: 13px; font-weight: 600">Charge the $40 no-show fee</span></span>
+</div>
+</div>
+</div>
+<div class="txt">
+<p class="eyebrow ink">Reminders</p>
+<h2 class="h2">Fewer no-shows. <span class="serif ink" style="font-size: 1.08em">Kinder when they happen.</span></h2>
+<p class="body">The moment someone books, a confirmation goes out by email with a calendar invite, and by text if they ticked the box. The day before, a reminder text. If someone still misses, Chief can draft a gentle note offering a new time, and it waits for you.</p>
+<ul class="ticks">
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Texts only to clients who said yes, only in the daytime, and STOP always works</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>You hear the moment someone books, on your phone and in the app</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>A no-show fee, if you set one, is shown before they book, and charged only when you press the button</span></li>
+</ul>
+</div>
+</div>
+</section>
+
+<!-- CHIEF IN THIS ROOM -->
+<section id="chief" class="sec" style="background: #07080B; overflow: hidden">
+<div class="aur" aria-hidden="true" style="opacity: 0.6"><i></i><i></i><i></i></div>
+<div class="wrap split" style="position: relative">
+<div class="txt">
+<p class="eyebrow" style="color: #93C5FD">Chief</p>
+<h2 class="h2">Say it once. <span class="serif glint" style="font-size: 1.08em">It's booked.</span></h2>
+<p class="body">Chief books, moves and cancels on the same calendar your clients book on, through the same checks, so it can't double-book you. Ask it to try a few times first, and it checks them together and offers the free times that day for any that don't fit.</p>
+<ul class="ticks" style="color: #D5D8DF">
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Hours, days off and minimum notice, changed in a sentence</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>A taken time comes back with the next free ones</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Trying times never holds or books anything</span></li>
+</ul>
+</div>
+<div class="vis pair">
+<div class="paper" style="background: #FFFFFF; color: #0B0C11; border-radius: 8px; box-shadow: 0 40px 80px -30px rgba(0,0,0,0.7); padding: 22px 24px; display: flex; flex-direction: column; gap: 4px" role="group" aria-label="Three proposed planning calls checked against the week. Sample.">
+<div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; padding-bottom: 8px"><span style="display: flex; flex-direction: column; gap: 2px"><b style="font-family: 'Inter Tight', sans-serif; font-size: 15px">Three planning calls, checked together</b><span style="color: #5A5E6B; font-size: 12px">The Okafor family business · 60 min each</span></span><span style="width: 28px; height: 28px; border-radius: 8px; background: #2F6BEA; color: #fff; display: grid; place-items: center; font-weight: 800; font-size: 10px; flex: none">RC</span></div>
+<div class="rh"><span class="chk" style="background: #DCE8FF"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#1D4ED8" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg></span><span style="flex: 1; display: flex; flex-direction: column; gap: 1px"><b style="font-weight: 600">Tue, Oct 27 · 10:00 AM</b><span style="color: #3F4450">Fits</span></span></div>
+<div class="rh"><span class="chk" style="background: #FDE8DD"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#A9471A" stroke-width="3.4" stroke-linecap="round" aria-hidden="true"><path d="M7 7l10 10M17 7L7 17"></path></svg></span><span style="flex: 1; display: flex; flex-direction: column; gap: 1px"><b style="font-weight: 600">Wed, Oct 28 · 2:00 PM</b><span style="color: #3F4450">Taken by the Henderson Co. strategy meeting. Free that day: 10:00, 11:00, 4:00</span></span></div>
+<div class="rh"><span class="chk" style="background: #DCE8FF"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#1D4ED8" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg></span><span style="flex: 1; display: flex; flex-direction: column; gap: 1px"><b style="font-weight: 600">Thu, Oct 29 · 9:00 AM</b><span style="color: #3F4450">Fits</span></span></div>
+<span style="padding-top: 10px; border-top: 1px solid #E5E5EB; font-size: 12px; color: #5A5E6B">Nothing is booked or held until you say so.</span>
+</div>
+<div class="chief">
+<div class="chief-in">
+<div style="display: flex; align-items: center; gap: 10px"><span class="chief-av"></span><span style="display: flex; flex-direction: column"><b style="font-size: 14px">Chief</b><span style="font-size: 12px; color: #959BA8">Bookings · sample</span></span></div>
+<span class="bub">Will three planning calls with the Okafors fit: Tuesday at 10, Wednesday at 2, Thursday at 9?</span>
+<div style="display: flex; flex-direction: column; gap: 6px; font-size: 15px; line-height: 1.5">
+<span class="line" style="animation-delay: 0.2s">Tuesday and Thursday fit. Wednesday at 2 is your Henderson Co. meeting.</span>
+<span class="line" style="animation-delay: 1.4s">Wednesday is open at 10, 11 or 4. Nothing is booked yet.</span>
+</div>
+<span class="bub line" style="animation-delay: 2.6s">Make it 11, and book all three.</span>
+<span class="line" style="animation-delay: 3.8s; font-size: 15px; line-height: 1.5">Booked: Tuesday at 10, Wednesday at 11 and Thursday at 9.<span class="caret"></span></span>
+<div style="display: flex; flex-wrap: wrap; gap: 8px"><a href="#calendar" class="btn btn-w btn-s">See the week</a><button type="button" class="btn btn-l btn-s" style="font-family: inherit; cursor: pointer">Not now</button></div>
+</div>
+</div>
+</div>
+</div>
+</section>
+
+<!-- CHIEF, EVERY ROOM -->
+<section style="background: #07080B; border-top: 1px solid #12141B">
+<div class="wrap" style="padding-top: 40px; padding-bottom: 8px">
+<div class="mc-strip" style="display: flex; flex-wrap: wrap; align-items: center; gap: 14px 22px; padding: 22px 26px; border-radius: 22px; background: #0D0F14; border: 1px solid #1F2330">
+<span style="width: 36px; height: 36px; border-radius: 50%; background: linear-gradient(135deg, #E040FB, #7C5CFF 55%, #22D3EE); flex: none"></span>
+<p style="margin: 0; flex: 1 1 420px; font-size: 16px; line-height: 1.55; color: #C9CDD6"><b style="color: #F5F6F8; font-weight: 600">Chief works the same way in every room.</b> It works from your practice's own records, waits for your yes before it sends anything or touches money, and lists what it does on your History page.</p>
+<a href="/coaches#chief">How Chief works</a>
+</div>
+</div>
+</section>
+<!-- /CHIEF, EVERY ROOM -->
+<!-- THE ROOMS NEXT DOOR -->
+<section class="sec" style="background: #07080B; padding-top: 40px; border-top: 1px solid #12141B">
+<div class="wrap" style="display: flex; flex-direction: column; gap: 32px">
+<div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; gap: 16px">
+<h2 class="h2" style="font-size: clamp(30px, 3.2vw, 44px)">The rooms <span class="serif" style="font-size: 1.08em; color: #D9D2FF">next door.</span></h2>
+<p class="body" style="max-width: 420px">Bookings shares one list of clients with every other part of your practice.</p>
+</div>
+<div class="doors">
+<a href="/coaches/clients" class="door"><span class="dglow" style="background: radial-gradient(circle, #14B8A6 0%, rgba(20,184,166,0) 70%)"></span>
+<svg width="44" height="44" viewBox="0 0 48 48" aria-hidden="true" style="position: relative"><defs><clipPath id="gd1"><rect width="48" height="48" rx="12"></rect></clipPath></defs><g clip-path="url(#gd1)" stroke="rgba(255,255,255,0.55)" stroke-width="1.1" stroke-linejoin="round"><polygon points="0,0 28,0 17,21 0,15" fill="#14B8A6"></polygon><polygon points="28,0 48,0 48,19 17,21" fill="#5EEAD4"></polygon><polygon points="0,15 17,21 9,48 0,48" fill="#0F766E"></polygon><polygon points="17,21 48,19 48,48 9,48" fill="#14B8A6"></polygon><polygon points="17,21 33,31 24,48 9,48" fill="#0F766E" fill-opacity="0.6"></polygon></g><g transform="translate(12 12)" fill="none" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.2"></circle><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"></path><path d="M16 4.5a3 3 0 0 1 0 6M18 14.5c1.9.8 3 2.8 3 5.5"></path></g></svg>
+<b>Clients</b><span>Every booking lands on the client's own record, beside their forms, invoices and messages.</span><em style="color: #5EEAD4">Go to Clients</em></a>
+<a href="/coaches/billing-and-time" class="door"><span class="dglow" style="background: radial-gradient(circle, #22C55E 0%, rgba(34,197,94,0) 70%)"></span>
+<svg width="44" height="44" viewBox="0 0 48 48" aria-hidden="true" style="position: relative"><defs><clipPath id="gd2"><rect width="48" height="48" rx="12"></rect></clipPath></defs><g clip-path="url(#gd2)" stroke="rgba(255,255,255,0.55)" stroke-width="1.1" stroke-linejoin="round"><polygon points="0,0 28,0 17,21 0,15" fill="#22C55E"></polygon><polygon points="28,0 48,0 48,19 17,21" fill="#86EFAC"></polygon><polygon points="0,15 17,21 9,48 0,48" fill="#15803D"></polygon><polygon points="17,21 48,19 48,48 9,48" fill="#22C55E"></polygon><polygon points="17,21 33,31 24,48 9,48" fill="#15803D" fill-opacity="0.6"></polygon></g><g transform="translate(12 12)" fill="none" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="13" rx="2.5"></rect><path d="M3 10h18M7 15h3"></path></g></svg>
+<b>Billing and Time</b><span>What clients pay when they book reaches your books, and the rest goes on an invoice with a pay link.</span><em style="color: #86EFAC">Go to Billing and Time</em></a>
+<a href="/coaches/marketing-and-website" class="door"><span class="dglow" style="background: radial-gradient(circle, #EC4899 0%, rgba(236,72,153,0) 70%)"></span>
+<svg width="44" height="44" viewBox="0 0 48 48" aria-hidden="true" style="position: relative"><defs><clipPath id="gd3"><rect width="48" height="48" rx="12"></rect></clipPath></defs><g clip-path="url(#gd3)" stroke="rgba(255,255,255,0.55)" stroke-width="1.1" stroke-linejoin="round"><polygon points="0,0 28,0 17,21 0,15" fill="#EC4899"></polygon><polygon points="28,0 48,0 48,19 17,21" fill="#F9A8D4"></polygon><polygon points="0,15 17,21 9,48 0,48" fill="#BE185D"></polygon><polygon points="17,21 48,19 48,48 9,48" fill="#EC4899"></polygon><polygon points="17,21 33,31 24,48 9,48" fill="#BE185D" fill-opacity="0.6"></polygon></g><g transform="translate(12 12)" fill="none" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l15-6v14L3 13z"></path><path d="M7 13v5a2 2 0 0 0 4 0v-4"></path></g></svg>
+<b>Marketing and Website</b><span>Your booking page lives at your website's address, and a booking that came from a post is credited to it.</span><em style="color: #F9A8D4">Go to Marketing and Website</em></a>
+</div>
+</div>
+</section>
+
+<!-- ON EVERY PLAN -->
+<section id="plans" class="sec light">
+<div class="wrap" style="display: flex; flex-direction: column; gap: 36px">
+<div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; gap: 20px 48px">
+<div style="display: flex; flex-direction: column; gap: 16px; max-width: 700px">
+<p class="eyebrow" style="color: #5A5E6B">Plans</p>
+<h2 class="h2">Bookings comes with <span class="serif ink" style="font-size: 1.08em">every plan.</span></h2>
+</div>
+<p class="body" style="max-width: 440px">Payments go to your own Stripe account, and we take no cut of what clients pay you. Stripe's own card fees apply.</p>
+</div>
+<div class="planrow">
+<div class="plan"><span class="pn">Starter</span><span class="pp">${{P_STARTER}} <small>a month</small></span><ul>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>The booking page, payments and deposits</li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>Standing sessions and your other calendars</li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>Confirmations and day-before reminders</li>
+</ul></div>
+<div class="plan mid"><span class="pn">Professional</span><span class="pp">${{P_PRO}} <small>a month</small></span><ul>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>Everything in Starter</li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>Your own texting number</li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>A note with your booking link to clients with nothing booked</li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>Three logins, and Chief without a monthly cap</li>
+</ul></div>
+<div class="plan"><span class="pn">Solutionist</span><span class="pp">${{P_SOL}} <small>a month</small></span><ul>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>Everything in Professional</li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>Seven logins on one calendar</li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>A seat for your accountant, and an audit trail of every change to a closed month</li>
+</ul></div>
+</div>
+<a href="/coaches#pricing" style="align-self: flex-start; font-weight: 600; color: #0B0C11">Compare every plan</a>
+</div>
+</section>
+
+<!-- CLOSING -->
+<section id="start" style="position: relative; overflow: hidden; background: #07080B">
+<div class="aur" aria-hidden="true"><i></i><i></i><i></i></div>
+<div class="floor" aria-hidden="true" style="height: 60%"></div>
+<div class="wrap" style="position: relative; padding-top: 150px; padding-bottom: 150px; display: flex; flex-direction: column; align-items: center; gap: 24px; text-align: center">
+<h2 class="h1" style="font-size: clamp(42px, 5.6vw, 84px); max-width: 960px">Let clients <span class="serif glint" style="font-size: 1.06em">book themselves.</span></h2>
+<p class="lede">{{TRIAL_LINE}}</p>
+<a href="{{HOME}}/start" class="btn btn-w">Start free</a>
+</div>
+</section>
+
+<!-- Footer -->
+<footer class="foot"><div class="wrap foot-in">
+<div style="display: flex; flex-direction: column; gap: 10px; max-width: 360px">
+<div style="display: flex; align-items: center; gap: 8px; color: #F5F6F8"><svg width="22" height="19" viewBox="8 36 496 424" aria-hidden="true"><g fill="url(#mkg)" stroke="#fff" stroke-width="8" stroke-opacity=".92"><polygon points="18,46 175,232 237,231 133,98 376,99 356,131 412,167 494,49"></polygon><polygon points="205,138 338,241 232,391 274,449 435,221 319,137"></polygon><polygon points="264,274 149,279 201,359"></polygon></g></svg><span style="font-family: 'Inter Tight', sans-serif; font-weight: 600; font-size: 17px">Solutionist</span></div>
+<p style="margin: 0; font-size: 14px">Everything a small business runs on, in one place, with Chief running it beside you.</p>
+</div>
+<nav aria-label="Coach and consultant products"><b>For coaches and consultants</b><a href="/coaches/bookings">Bookings</a><a href="/coaches/clients">Clients</a><a href="/coaches/proposals-and-contracts">Proposals and Contracts</a><a href="/coaches/billing-and-time">Billing and Time</a></nav>
+<nav aria-label="More coach and consultant products"><span aria-hidden="true" style="display: block; height: 21px"></span><a href="/coaches/courses-and-classes">Courses and Classes</a><a href="/coaches/marketing-and-website">Marketing and Website</a><a href="/coaches/office-and-books">Office and Books</a></nav>
+<nav aria-label="Company"><b>Solutionist</b><a href="{{HOME}}/">Solutionist home</a><a href="{{HOME}}/churches">For churches</a><a href="/coaches#pricing">Pricing</a><a href="{{HOME}}/privacy">Privacy</a><a href="{{HOME}}/terms">Terms</a></nav>
+</div></footer>
+
+</div>
+{{ANALYTICS}}
+<script>
+/* Solutionist home: someone who came here from the main site goes back to the page they left */
+(function () {
+  try {
+    var a = document.querySelector("[data-home]");
+    if (!a || !document.referrer) return;
+    var r = new URL(document.referrer), h = new URL(a.href).hostname;
+    if (r.hostname !== h && r.hostname !== "www." + h) return;
+    if (/^\/(churches|coaches|consultants)(\/|$)/.test(r.pathname)) return;
+    a.href = r.href;
+    a.querySelector("[data-home-label]").textContent = "Back to Solutionist";
+  } catch (e) { /* the plain link still goes home */ }
+})();
+</script>
+</body>
+</html>

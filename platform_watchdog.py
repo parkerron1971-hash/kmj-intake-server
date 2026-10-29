@@ -408,3 +408,133 @@ def client_error(body: ClientErrorBody, request: Request,
     if msg:
         record_client_error(msg, source=(body.source or "").strip()[:120])
     return {"ok": True}
+
+
+# ─── CSP violation reports (anonymous; log lines only) ───────────────
+#
+# 2026-10-18: the frontend ships Content-Security-Policy-Report-Only
+# (vercel.json) so a policy is proven against real use before anything
+# enforces it. Browsers POST each violation here (report-uri) with no
+# credentials, so the route is anonymous: a per-IP courtesy bucket, and
+# always 204 — a browser ignores the answer.
+#
+# Nothing is stored. Each NEW (directive, blocked origin, page) in this
+# process logs one line, and again at 10, 100, 1000 sightings. A report
+# never reaches the ring buffer: these are not errors, and they must not
+# move the watchdog's client-error count. Full URLs never reach the log
+# either — a page path can carry a classroom or preview token and a
+# blocked URL a query string — so each field is cut to an allowlisted
+# directive, a scheme://host and a page's first path segment.
+# Read them with: railway logs --filter "[csp]"
+
+import json
+import re
+
+from fastapi import Response
+
+_CSP_DIRECTIVES = frozenset({
+    "default-src", "script-src", "script-src-elem", "script-src-attr",
+    "style-src", "style-src-elem", "style-src-attr", "img-src", "font-src",
+    "connect-src", "media-src", "frame-src", "child-src", "worker-src",
+    "manifest-src", "object-src", "base-uri", "form-action",
+    "frame-ancestors",
+})
+_CSP_KEYWORDS = frozenset({
+    "inline", "eval", "wasm-eval", "data", "blob", "self",
+    "trusted-types-policy", "trusted-types-sink",
+})
+_CSP_HOST = re.compile(r"[a-z0-9.-]{1,253}(:\d{1,5})?")
+_CSP_SEGMENT = re.compile(r"[a-z][a-z0-9-]{0,30}")
+_CSP_MAX_BODY = 16_384
+_CSP_SEEN_MAX = 2000
+_CSP_SEEN: Dict[tuple, int] = {}
+
+csp_logger = logging.getLogger("csp_report")
+if not csp_logger.handlers:
+    _csp_handler = logging.StreamHandler()
+    _csp_handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
+    csp_logger.addHandler(_csp_handler)
+    csp_logger.setLevel(logging.INFO)
+    csp_logger.propagate = False
+
+
+def _csp_blocked(value: Any) -> str:
+    """'inline' / 'eval' / 'data' / 'blob' … or scheme://host, else 'other'."""
+    v = str(value or "").strip().lower()
+    if not v:
+        return "none"
+    if v in _CSP_KEYWORDS:
+        return v
+    scheme, sep, rest = v.partition("://")
+    if not sep:
+        head = scheme.split(":", 1)[0]          # data:image/png;… → data
+        return head if head in _CSP_KEYWORDS else "other"
+    host = re.split(r"[/?#]", rest, maxsplit=1)[0].rsplit("@", 1)[-1]
+    if scheme not in ("http", "https", "ws", "wss") or not _CSP_HOST.fullmatch(host):
+        return "other"
+    return f"{scheme}://{host}"
+
+
+def _csp_page(value: Any) -> str:
+    """The violating document's first path segment: '/', '/classroom' …
+    A srcdoc iframe (a site preview) reports as 'about:srcdoc'."""
+    v = str(value or "").strip().lower()
+    if v.startswith("about:"):
+        return "about:srcdoc" if v.startswith("about:srcdoc") else "about:other"
+    _, sep, rest = v.partition("://")
+    if not sep:
+        return "other"
+    path = rest.split("/", 1)[1] if "/" in rest else ""
+    seg = re.split(r"[/?#]", path, maxsplit=1)[0]
+    if not seg:
+        return "/"
+    return f"/{seg}" if _CSP_SEGMENT.fullmatch(seg) else "/other"
+
+
+def _note_csp(directive: Any, blocked: Any, page: Any) -> None:
+    d = str(directive or "").strip().lower().split(" ", 1)[0]
+    if d not in _CSP_DIRECTIVES:
+        d = "other"
+    key = (d, _csp_blocked(blocked), _csp_page(page))
+    seen = _CSP_SEEN.get(key, 0)
+    if not seen and len(_CSP_SEEN) >= _CSP_SEEN_MAX:
+        return                                  # bounded: a flood of novel keys stops here
+    _CSP_SEEN[key] = seen + 1
+    if str(seen + 1).rstrip("0") == "1":       # 1, 10, 100, 1000 …
+        csp_logger.info("[csp] %s blocked=%s page=%s seen=%d", *key, seen + 1)
+
+
+def _csp_entries(data: Any) -> List[tuple]:
+    """Both wire shapes: report-uri's {"csp-report": {...}} and the
+    Reporting API's [{"type": "csp-violation", "body": {...}}]."""
+    out: List[tuple] = []
+    if isinstance(data, dict) and isinstance(data.get("csp-report"), dict):
+        r = data["csp-report"]
+        out.append((r.get("effective-directive") or r.get("violated-directive"),
+                    r.get("blocked-uri"), r.get("document-uri")))
+    elif isinstance(data, list):
+        for item in data[:20]:
+            body = item.get("body") if isinstance(item, dict) else None
+            if isinstance(body, dict) and item.get("type") == "csp-violation":
+                out.append((body.get("effectiveDirective"), body.get("blockedURL"),
+                            body.get("documentURL")))
+    return out
+
+
+@telemetry_router.post("/csp-report", status_code=204)
+async def csp_report(request: Request) -> Response:
+    """Report-Only CSP violations from browsers — see the block above."""
+    try:
+        import rate_limit
+        if not rate_limit.allow("csp_report", rate_limit.trusted_client_ip(request)):
+            return Response(status_code=204)
+        raw = b""
+        async for chunk in request.stream():
+            raw += chunk
+            if len(raw) > _CSP_MAX_BODY:
+                return Response(status_code=204)
+        for entry in _csp_entries(json.loads(raw or b"null")):
+            _note_csp(*entry)
+    except Exception:
+        pass                                    # a report must never become an error
+    return Response(status_code=204)

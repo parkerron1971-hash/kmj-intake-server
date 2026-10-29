@@ -31,6 +31,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 
+import church_keys
 import sb_clients
 from auth_supabase import AuthedUser, require_user
 import plaid_helpers
@@ -54,6 +55,8 @@ def _require_owner(business_id: str, user: AuthedUser) -> Dict[str, Any]:
         raise HTTPException(404, "business not found")
     if str(rows[0].get("owner_id")) != str(user.id):
         raise HTTPException(403, "not authorized")
+    # The bank is behind a church's Giving keeper, the owner included.
+    church_keys.wall(business_id, user, "giving_money")
     return rows[0]
 
 
@@ -71,13 +74,12 @@ def _require_reader(business_id: str, user: AuthedUser) -> Dict[str, Any]:
     row = rows[0]
     from giving_records import require_ministry_finance
     require_ministry_finance(business_id, user, row)
-    if str(row.get("owner_id")) == str(user.id):
-        return row
-    from business_collaborators_router import is_active_accountant
-    if is_active_accountant(business_id, str(user.id)):
-        return row
-    from business_users_router import require_role
-    require_role(business_id, str(user.id), "viewer")
+    if str(row.get("owner_id")) != str(user.id):
+        from business_collaborators_router import is_active_accountant
+        if not is_active_accountant(business_id, str(user.id)):
+            from business_users_router import require_role
+            require_role(business_id, str(user.id), "viewer")
+    church_keys.wall(business_id, user, "giving_money")
     return row
 
 

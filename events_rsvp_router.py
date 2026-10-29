@@ -427,6 +427,14 @@ async def public_event_rsvp(
     # public signup cannot reach it either — same answer as a wrong id.
     if not is_public(entry.get("data") or {}):
         raise HTTPException(404, "that occasion wasn't found")
+    # An event that takes sign-ups (church_event_signups: tickets, maybe a
+    # price, a waitlist) is joined through its sign-up, never the free RSVP;
+    # serving in a role still comes here. An event without one is exactly
+    # as before.
+    if not role_id:
+        import church_event_signups
+        if church_event_signups.blocks_free_rsvp(business_id, entry_id):
+            raise HTTPException(409, "This event takes sign-ups. Please use its sign-up form.")
 
     import hashlib
     # Stable registration identity survives duplicate contact-create races and
@@ -574,7 +582,12 @@ def _brand_font_links(business: Dict[str, Any]) -> str:
 
 def _occasion_card(o: Dict[str, Any]) -> str:
     """One occasion card: facts, open roles, and the signup form (or the
-    Full state)."""
+    Full state). An event that takes sign-ups draws its own card
+    (church_event_signups.public_card: price, places, deadline, tickets,
+    the questions, the waitlist)."""
+    if o.get("signup"):
+        import church_event_signups
+        return church_event_signups.public_card(o, _esc)
     loc = (f'<div class="ev-loc">{_esc(o["location"])}</div>'
            if o.get("location") else "")
 
@@ -661,6 +674,9 @@ def render_events_page(
         og_image_html = (f'<meta property="og:image" content="{_esc(logo_url)}">'
                          f'<link rel="icon" href="{_esc(logo_url)}">')
 
+    import church_event_signups
+    signup_css = church_event_signups.PUBLIC_CSS
+    signup_js = church_event_signups.public_script(api_origin, slug)
     if occasions:
         cards = "".join(_occasion_card(o) for o in occasions)
     else:
@@ -727,6 +743,7 @@ border:1px dashed var(--border);border-radius:16px;font-size:14px;line-height:1.
 .ev-footer{{text-align:center;font-size:11px;color:var(--text-muted);margin-top:28px;
 padding-top:14px;border-top:1px solid var(--border);}}
 .ev-footer a{{color:var(--text-muted);text-decoration:none;}}
+{signup_css}
 </style>
 </head>
 <body>
@@ -745,7 +762,7 @@ padding-top:14px;border-top:1px solid var(--border);}}
 (function() {{
   var API = {api_origin!r};
   var SLUG = {slug!r};
-  document.querySelectorAll('.ev-form').forEach(function(form) {{
+  document.querySelectorAll('.ev-form:not(.ev-su-form)').forEach(function(form) {{
     form.addEventListener('submit', function(ev) {{
       ev.preventDefault();
       var msg = form.querySelector('.ev-msg');
@@ -789,6 +806,7 @@ padding-top:14px;border-top:1px solid var(--border);}}
   }});
 }})();
 </script>
+{signup_js}
 </body>
 </html>"""
 

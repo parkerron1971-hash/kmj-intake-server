@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import functools
 import uuid
 import json
 import logging
@@ -260,7 +261,7 @@ from chief_giving_actions import (
 )
 # A church's people: first-time guests, group drift, attendance, and care
 # counts for the owner or a manager. Read-only; church_reads does the work.
-from chief_church_actions import handle_church_people
+from chief_church_actions import handle_church_people, handle_draft_church_role, handle_draft_shepherd_moves
 # Undo — makes action_registry's class A a thing a practitioner can press.
 from chief_undo_actions import (
     handle_undo_last,
@@ -562,6 +563,11 @@ class _SentenceStreamer:
         self._review_tasks = set()
         self._review_calls = 0
         self._blocked = False
+        # A turn that asked for tone notes (chief_tone): each sentence is
+        # checked and recorded without them, and goes out with them.
+        import chief_tone
+        self._tone = chief_tone.turn_enabled()
+        self._tone_carry = ""
         self.open = prover is not None and sink is not None
         from chief_invoice_readout import invoice_display_request
         # A pure display turn will speak the actual returned rows. Do not let
@@ -599,6 +605,17 @@ class _SentenceStreamer:
             if not m:
                 break
             sentence, self._buf = self._buf[:m.end()], self._buf[m.end():]
+            speech = None
+            if self._tone:
+                import chief_tone
+                speech = chief_tone.speech(self._tone_carry + sentence)
+                sentence = chief_tone.strip(sentence)
+                if speech and not sentence.strip():
+                    # Notes on a line of their own go with the next words.
+                    self._tone_carry = " ".join(
+                        f"[{n}]" for n in chief_tone.notes_in(speech)) + " "
+                    continue
+                self._tone_carry = ""
             import chief_speech_boundary as _speech
             if _speech.internal_scaffolding(sentence, self._message):
                 # Factual review cannot approve authoring instructions for
@@ -608,7 +625,8 @@ class _SentenceStreamer:
                 return
             import chief_truth as _truth
             accepted = not sentence.strip() or _truth.streamable_sentence(self._prover, sentence)
-            candidate = {"sentence": sentence, "accepted": True if accepted else None}
+            candidate = {"sentence": sentence, "speech": speech,
+                         "accepted": True if accepted else None}
             prefix = self.text + "".join(p["sentence"] for p in self._pending) + sentence
             self._pending.append(candidate)
             if not accepted:
@@ -632,7 +650,7 @@ class _SentenceStreamer:
                 self.close()
                 return
             self._pending.pop(0)
-            self._emit(candidate["sentence"])
+            self._emit(candidate["sentence"], candidate.get("speech"))
 
     async def _check(self, prefix: str, candidate) -> None:
         try:
@@ -649,9 +667,9 @@ class _SentenceStreamer:
         candidate["accepted"] = accepted is True
         self._release_checked()
 
-    def _emit(self, text: str) -> None:
+    def _emit(self, text: str, speech: Optional[str] = None) -> None:
         try:
-            self._sink(PROSE_PREFIX + text)
+            self._sink(PROSE_PREFIX + (speech or text))
             self.sent.append(text)
         except Exception:
             self.close()
@@ -745,6 +763,12 @@ def _stream_piece_events(piece: str, filt: "_ActionTagFilter") -> List[Dict[str,
         return [{"type": "step", **body}]
     if isinstance(piece, str) and piece.startswith(PROSE_PREFIX):
         txt = piece[len(PROSE_PREFIX):]
+        import chief_tone
+        speech = chief_tone.speech(txt)
+        if speech:
+            # A toned sentence: the words for the screen, the notes for the voice.
+            txt = chief_tone.strip(txt)
+            return [{"type": "delta", "text": txt, "checked": True, "speech": speech}] if txt else []
         return [{"type": "delta", "text": txt, "checked": True}] if txt else []
     txt = filt.feed(piece)
     return [{"type": "delta", "text": txt}] if txt else []
@@ -1382,6 +1406,19 @@ def _refusal_fallback_model(model: Optional[str]) -> Optional[str]:
     return fb
 
 
+def _without_tone_notes(call):
+    """Every Chief model call. A voice turn that asked for tone notes
+    (chief_tone) gets its answer back without them: the notes are kept
+    for the speech of the reply's tail, and nothing downstream — action
+    parsing, the answer check, the reply on file — ever reads one."""
+    @functools.wraps(call)
+    async def wrapped(*args, **kwargs):
+        import chief_tone
+        return chief_tone.take(await call(*args, **kwargs))
+    return wrapped
+
+
+@_without_tone_notes
 async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Dict],
                        max_tokens: int = 1600,
                        enable_web_search: bool = True,
@@ -4718,7 +4755,8 @@ async def handle_draft_nurture(client, biz, action) -> Dict:
 
     reason = action.get("reason", "regular check-in")
     voice = biz.get("voice_profile") or {}
-    practitioner = (biz.get("settings") or {}).get("practitioner_name", "the team")
+    import chief_areas   # the office login writing, when it isn't the owner
+    practitioner = chief_areas.speaker(biz, "the team") or "the team"
     tone = voice.get("tone", "warm and professional")
 
     # Pass 2.5b: bind the inner draft call to the practitioner's voice
@@ -4796,7 +4834,8 @@ async def handle_draft_email(client, biz, action) -> Dict:
         body = body_hint
     else:
         voice = biz.get("voice_profile") or {}
-        practitioner = (biz.get("settings") or {}).get("practitioner_name", "the team")
+        import chief_areas   # the office login writing, when it isn't the owner
+        practitioner = chief_areas.speaker(biz, "the team") or "the team"
         tone = voice.get("tone", "warm and professional")
         name = contact.get("name") if contact else "there"
         # Pass 2.5b: thread voice depth (samples, do's/don'ts, greeting,
@@ -6543,6 +6582,10 @@ async def handle_save_course_content(client, biz, action) -> Dict:
     from chief_academy_actions import handle_save_course_content as handler
     return await handler(client, biz, action)
 
+async def handle_save_lesson_slides(client, biz, action) -> Dict:
+    from chief_academy_actions import handle_save_lesson_slides as handler
+    return await handler(client, biz, action)
+
 
 async def handle_enroll_student(client, biz, action) -> Dict:
     """Enroll an existing contact into a course, by course_id or a
@@ -6993,7 +7036,8 @@ def _compose_body_with_signature(body: str, biz: Dict[str, Any]) -> str:
     body = body or ""
     et = (biz.get("settings") or {}).get("email_templates") or {}
     rules = et.get("global_rules") or {}
-    sig = et.get("signature") or {}
+    import chief_areas   # an office login's own name, not the owner's
+    sig = chief_areas.signature(et.get("signature") or {})
     out = body.rstrip()
 
     closing = (rules.get("closing_line") or "").strip()
@@ -7076,6 +7120,8 @@ async def _send_queued_email(client, biz: Dict[str, Any], item: Dict[str, Any],
     # '{business_name}' in the greeting until this line existed.
     import email_layout
     _values = email_layout.placeholder_values(biz, contact_name=contact.get("name"))
+    import chief_areas   # {practitioner_name} is the office login sending, when it isn't the owner
+    _values["practitioner_name"] = chief_areas.sender(biz, _values.get("practitioner_name", ""))
     composed_body = _compose_body_with_signature(
         email_layout.fill_placeholders(item.get("body") or "", _values), biz)
     _subject = email_layout.fill_placeholders(
@@ -7084,7 +7130,9 @@ async def _send_queued_email(client, biz: Dict[str, Any], item: Dict[str, Any],
     settings = biz.get("settings") or {}
     et = settings.get("email_templates") or {}
     sig = et.get("signature") or {}
-    from_name = (sig.get("name") or settings.get("practitioner_name") or biz.get("name") or "The Solutionist System").strip()
+    import chief_areas   # an office login sends as itself, never as the owner
+    from_name = chief_areas.sender(biz, (sig.get("name") or settings.get("practitioner_name") or biz.get("name")
+                                         or "The Solutionist System").strip())
     reply_to = (sig.get("email") or settings.get("contact_email") or "").strip() or None
 
     # Use the email_sender helper directly — no HTTP hop to ourselves.
@@ -8086,7 +8134,8 @@ async def handle_rewrite_draft(client, biz, action) -> Dict:
     old_body = item.get("body") or ""
 
     voice = biz.get("voice_profile") or {}
-    practitioner = (biz.get("settings") or {}).get("practitioner_name", "the team")
+    import chief_areas   # the office login writing, when it isn't the owner
+    practitioner = chief_areas.speaker(biz, "the team") or "the team"
     tone = voice.get("tone", "warm and professional")
 
     # Pass 2.5b: voice depth payload for the inner rewrite call. The
@@ -9456,7 +9505,9 @@ async def handle_batch_email(client, biz, action) -> Dict:
     settings = biz.get("settings") or {}
     et = (settings.get("email_templates") or {}) if isinstance(settings.get("email_templates"), dict) else {}
     sig = et.get("signature") or {}
-    from_name = (sig.get("name") or settings.get("practitioner_name") or biz.get("name") or "The Solutionist System").strip()
+    import chief_areas   # an office login sends as itself, never as the owner
+    from_name = chief_areas.sender(biz, (sig.get("name") or settings.get("practitioner_name") or biz.get("name")
+                                         or "The Solutionist System").strip())
     reply_to = (sig.get("email") or settings.get("contact_email") or "").strip() or None
     biz_name = biz.get("name") or ""
 
@@ -9930,6 +9981,8 @@ async def _send_invoice_email(
         f'<td style="padding:10px 0;border-bottom:1px solid #eee;text-align:right;font-weight:600;">${it.get("total",0):.2f}</td></tr>'
         for it in (invoice.get("items") or [])
     )
+    import chief_areas   # an office login sends as itself, never as the owner
+    _signed = chief_areas.sender(biz, sig.get("name") or biz_name)
 
     # Multi-provider payment buttons (Stripe / Square / PayPal). The
     # auto-generated invoice-specific Stripe link still wins over the
@@ -9967,7 +10020,7 @@ async def _send_invoice_email(
   </table>
   {payment_block}
   {f'<p style="margin-top:24px;padding:14px;background:#f9f7f2;border-left:3px solid {primary};font-size:13px;color:#666;line-height:1.6;font-style:italic;">{invoice.get("notes","")}</p>' if invoice.get("notes") else ''}
-  <p style="font-size:13px;color:#666;margin-top:24px;">Thank you,<br/><strong>{sig.get("name") or biz_name}</strong></p>
+  <p style="font-size:13px;color:#666;margin-top:24px;">Thank you,<br/><strong>{_signed}</strong></p>
 </div>
 </body></html>"""
 
@@ -9980,7 +10033,7 @@ async def _send_invoice_email(
             to_email=contact["email"],
             to_name=contact.get("name"),
             from_email=os.environ.get("RESEND_FROM_EMAIL") or "noreply@mysolutionist.app",
-            from_name=sig.get("name") or biz_name,
+            from_name=chief_areas.sender(biz, sig.get("name") or biz_name),
             subject=f"Invoice {invoice.get('invoice_number')} from {biz_name}",
             body=html,
             reply_to=routed or sig.get("email"),
@@ -11777,13 +11830,14 @@ async def handle_send_report(client, biz, action) -> Dict:
     # 5) Dispatch via send_via_resend (direct Python call — same as
     # handle_send_invoice).
     sig = (settings.get("email_templates") or {}).get("signature") or {}
+    import chief_areas   # an office login sends as itself, never as the owner
     try:
         from email_sender import send_via_resend
         data = await send_via_resend(
             to_email=to_email,
             to_name=None,
             from_email=os.environ.get("RESEND_FROM_EMAIL") or "noreply@mysolutionist.app",
-            from_name=sig.get("name") or biz_name,
+            from_name=chief_areas.sender(biz, sig.get("name") or biz_name),
             subject=subject,
             body=html,
             reply_to=sig.get("email") or None,
@@ -12085,6 +12139,7 @@ ACTION_HANDLERS = {
     "create_course":         handle_create_course,
     "inspect_course":        handle_inspect_course,
     "save_course_content":   handle_save_course_content,
+    "save_lesson_slides":    handle_save_lesson_slides,
     "enroll_student":        handle_enroll_student,
     "remember":              handle_remember,
     "save_note":             handle_save_note,
@@ -12224,6 +12279,8 @@ ACTION_HANDLERS = {
     "giving_statement":                handle_giving_statement,
     "giving_statements_run":           handle_giving_statements_run,
     "church_people":                   handle_church_people,
+    "draft_shepherd_moves":            handle_draft_shepherd_moves,
+    "draft_church_role":               handle_draft_church_role,
     # Marketing campaigns (S10). plan drafts and sends nothing; launch is
     # bulk class C and answers to the trust gate; pause is the protective
     # single-target C; status reads the sends ledger.
@@ -13182,6 +13239,13 @@ async def _execute_actions(client, biz, actions: List[Dict],
     import chief_build_runtime
     if chief_build_runtime.enabled() and turn_scope.get() and not worker_scope.get():
         actions = chief_build_runtime.route_actions(actions)
+    # A church login kept to its lane (chief_areas) acts only there: the
+    # chat's turn says whose it is; any other caller with a login (a tap in
+    # the Approval Queue) is looked up. With no login (the scheduler), none.
+    import chief_areas
+    area_scope = (chief_areas.TURN.get() if chief_areas.TURN.get() is not None or not user_id
+                  else await asyncio.to_thread(chief_areas.scope_for, (biz or {}).get("id"), user_id,
+                                               (biz or {}).get("owner_id")))
     for action in actions:
         _finish_pending()
         atype = action.get("type")
@@ -13194,6 +13258,10 @@ async def _execute_actions(client, biz, actions: List[Dict],
             results.append(_fail(atype, "Your build is already handling those steps. Check its progress card."))
             continue
         pending_step = _turn_step_start(atype, len(results), action)
+        why = chief_areas.refusal(atype or "", action, area_scope)
+        if why:
+            results.append(_fail(atype or "unknown", why))
+            continue
         handler = ACTION_HANDLERS.get(atype)
         if not handler:
             # Lookup MISS. Instead of dead-ending, REASON the intent into a
@@ -14416,6 +14484,9 @@ class ChatRequest(BaseModel):
     # ("Let me take a look.") — the reply continues from it instead of
     # opening with a second acknowledgement. Voice surface only.
     spoken_opener: Optional[str] = None
+    # The voice speaking this reply can change its tone (a featured
+    # voice), so Chief may mark how it should sound (chief_tone).
+    tone_notes: Optional[bool] = None
     # The phone composer's Ask · Do · Build dial (Chief Go, 9/23). A
     # closed set — anything else is ignored — so it steers the turn
     # without ever carrying free text into the prompt.
@@ -14474,6 +14545,23 @@ def _spoken_opener_block(opener: Optional[str]) -> str:
         "check\", \"one moment\", \"good question\"). Your first sentence is "
         "the substance."
     )
+
+
+async def _tone_notes_block(req, client, biz) -> str:
+    """The tone-notes rules for a spoken turn (chief_tone), or "". Only the
+    streaming endpoint can carry notes to the voice, only a featured voice
+    can perform them, and CHIEF_TONE_NOTES decides who hears them."""
+    import chief_tone
+    turn = chief_tone.TURN.get()
+    if turn is None or not getattr(req, "tone_notes", None):
+        return ""
+    mode = chief_tone.mode()
+    if mode == "off":
+        return ""
+    if mode == "owner" and not await _is_platform_owner_biz(client, biz):
+        return ""
+    turn.enabled = True
+    return chief_tone.PROMPT_BLOCK
 
 
 def _is_greeting(msg: str) -> bool:
@@ -14932,6 +15020,13 @@ async def chief_chat(
         'turn_id': image_studio.turn_id.get(), 'words':req.message or '',
         'surface':'desktop','submitted':False,
         'conversation_id':str(req.conversation_id or '')[:80]})
+    # Chief keeps to a church login's lane (chief_areas): None, and nothing
+    # changes, for the owner, an admin, or any business that isn't a church.
+    # And says who's talking when it isn't the owner (chief_areas.who_for).
+    import chief_areas
+    _area_scope, _who = await asyncio.to_thread(chief_areas.turn_for, req.business_id, str(user_session.user.id))
+    _area_token = chief_areas.TURN.set(_area_scope)
+    _who_token = chief_areas.WHO.set(_who)
     try:
         if not req.message:
             raise HTTPException(400, "message is required")
@@ -15128,6 +15223,10 @@ async def chief_chat(
             if not ctx:
                 raise HTTPException(404, "Business not found")
             biz = ctx["business"]
+            # A login kept to its lane reads only its own (chief_areas).
+            if chief_areas.TURN.get() is not None:
+                ctx = chief_areas.trim_context(ctx, chief_areas.TURN.get())
+                view_detail = chief_areas.trim_view(view_detail, chief_areas.TURN.get())
             # Only after the scoped context read: share delivery preferences, never records.
             try:
                 import chief_fast_track
@@ -15279,7 +15378,7 @@ async def chief_chat(
                 _enrich("business knowledge", _knowledge_probe(), None),
                 _enrich("first-run arc", _arc_probe(), None),
             )
-            _ctx_vals = dict(zip(_names, _results))
+            _ctx_vals = chief_areas.trim_sources(dict(zip(_names, _results)), chief_areas.TURN.get())
             for source_name, source_value in _ctx_vals.items():
                 if 'context:' + source_name not in chief_truth.unavailable_sources():
                     chief_truth.record('context:' + source_name, source_value, kind='context')
@@ -15386,6 +15485,11 @@ async def chief_chat(
             except Exception as e:  # pragma: no cover
                 logger.warning(f"marketing desk block failed: {e}")
 
+            # Whose login this is, when it isn't the owner's, and the lane it
+            # keeps to: the turn's tail, never a cached segment (it differs by login).
+            _login_block = chief_areas.block(chief_areas.TURN.get(), chief_areas.WHO.get(), biz)
+            if _login_block:
+                growth_turn_block = _login_block + "\n" + growth_turn_block
             system = _build_system_prompt(
                 ctx, is_greeting, req.current_context, view_detail,
                 time_of_day=tod, resume_note=req.resume_note,
@@ -15418,7 +15522,9 @@ async def chief_chat(
                 # JIT profile-capture emits operational [ACTION] tags
                 # (update_business_profile_field / remember) — never into
                 # the coach's context.
-                jit_directive = "" if is_coach_mode else _build_jit_directive(ctx, req.message or "")
+                # A lane's login never fills in the owner's profile.
+                jit_directive = ("" if is_coach_mode or chief_areas.TURN.get() is not None
+                                 else _build_jit_directive(ctx, req.message or ""))
                 if jit_directive:
                     # Cache round 3: the directive must land in the TURN
                     # tail, not at the head of the state snapshot — a
@@ -15546,6 +15652,7 @@ async def chief_chat(
                 system = system + chief_models.VOICE_DELIVERY_BLOCK
                 # After the delivery block, in the uncached tail with it.
                 system = system + _spoken_opener_block(req.spoken_opener)
+                system = system + await _tone_notes_block(req, client, biz)
             # The phone's Ask · Do · Build dial — any lane, uncached tail.
             system = system + _intent_block(req.intent)
             # Every writer follows the same latest conversational direction;
@@ -16065,6 +16172,8 @@ async def chief_chat(
         image_studio.turn_image_index.reset(_image_index_token)
         image_studio.turn_references.reset(_image_refs_token)
         turn_scope.reset(_build_turn_token)
+        chief_areas.TURN.reset(_area_token)
+        chief_areas.WHO.reset(_who_token)
         try:
             _TURN_USER_ID.reset(_uid_token)
             try:
@@ -16203,6 +16312,11 @@ async def chief_chat_stream(
         except Exception:
             pass
 
+    import chief_tone
+    # Notes this turn's model answers carried (chief_tone): the part of
+    # the reply that did not stream is said with them too.
+    tone_turn = chief_tone.ToneTurn()
+
     import chief_fast_track
     try:
         track = chief_fast_track.plan(req, user_session)
@@ -16218,6 +16332,7 @@ async def chief_chat_stream(
         if turn is not None:
             return turn
         token = _STREAM_SINK.set(_sink)
+        tone_token = chief_tone.TURN.set(tone_turn)
         bound = track.bind_turn_context() if track is not None else []
         try:
             # create_task snapshots the current context, so the sink rides
@@ -16235,6 +16350,7 @@ async def chief_chat_stream(
         finally:
             for _var, _tok in reversed(bound):
                 _var.reset(_tok)
+            chief_tone.TURN.reset(tone_token)
             _STREAM_SINK.reset(token)
         return turn
 
@@ -16243,6 +16359,10 @@ async def chief_chat_stream(
 
     def _evt(obj: Dict[str, Any]) -> str:
         return "data: " + json.dumps(jsonable_encoder(obj)) + "\n\n"
+
+    def _with_speech(ev: Dict[str, Any], final: str, start: int) -> Dict[str, Any]:
+        speech = chief_tone.tail_speech(final, start, tone_turn)
+        return {**ev, "speech": speech} if speech else ev
 
     async def _events():
         try:
@@ -16366,9 +16486,11 @@ async def chief_chat_stream(
                         payload = {**payload, "response": final_text}
                         rest = final_text[len(already):]
                         if rest:
-                            yield _evt({"type": "delta", "text": rest})
+                            yield _evt(_with_speech({"type": "delta", "text": rest},
+                                                    final_text, len(already)))
                     else:
-                        yield _evt(_shown({"type": "delta", "text": final_text}))
+                        yield _evt(_shown(_with_speech({"type": "delta", "text": final_text},
+                                                       final_text, 0)))
                 if lead:
                     # The reply on file is the reply as it was shown.
                     payload = {**payload, "response": chief_fast_track.join_reply(

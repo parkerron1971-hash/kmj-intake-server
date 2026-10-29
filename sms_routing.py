@@ -403,6 +403,27 @@ async def route_inbound(
                         provider_id=provider_id, media=media, business_id=business_id,
                     )
                     return {"action": "give_link", "business_id": business_id, "reply": reply}
+            # DAILY: the devotional the church reads together, tomorrow's
+            # day each evening (devotional_daily.py). Like GIVE, only on the
+            # church's own number; with nothing to send it's an ordinary text.
+            import devotional_daily
+            if devotional_daily.is_daily_word(body):
+                joined = await asyncio.to_thread(devotional_daily.join_by_text, business_id, phone)
+                if joined:
+                    own_name = await own_registration(client, business_id)
+                    reply = ((f"{joined['name']}: You're signed up for the daily devotional" if own_name else
+                              f"{sender_brand()}: You're signed up for {joined['name']}'s daily devotional")
+                             + f": 1 text each evening at {devotional_daily.SEND_AT} with the next day."
+                             + f" Today's is here:\n{joined['url']}\n"
+                             + "Msg & data rates may apply. Reply HELP for help, STOP to opt out.")
+                    logger.info(f"[ROUTE] DAILY from {phone} on biz {business_id[:8]}'s own number")
+                    await _bind(client, phone, business_id)
+                    await _ensure_contact(client, business_id, phone)
+                    await record_inbound_sms(
+                        client, from_number=phone, text=body,
+                        provider_id=provider_id, media=media, business_id=business_id,
+                    )
+                    return {"action": "daily_join", "business_id": business_id, "reply": reply}
             logger.info(f"[ROUTE] own-number {phone} → biz {business_id[:8]} (direct)")
             await _bind(client, phone, business_id)
             await _ensure_contact(client, business_id, phone)
@@ -672,11 +693,42 @@ class BroadcastBody(BaseModel):
     message: str
 
 
+async def _bulletin_list(client: httpx.AsyncClient, business_id: str):
+    """(everyone on this business's list with a number, the numbers that
+    said yes to its texts). The second is None when that couldn't be
+    checked (sms_alerts.said_yes_to_texts)."""
+    import sms_alerts
+    contacts = await _sb_get(
+        client,
+        f"/contacts?business_id=eq.{business_id}&phone=not.is.null"
+        f"&select=id,name,phone&limit=500",
+    ) or []
+    yes = await sms_alerts.said_yes_to_texts(
+        client, business_id, [c.get("phone") for c in contacts])
+    return contacts, yes
+
+
+@router.get("/sms/broadcast/reach")
+async def broadcast_reach(business_id: str, user: AuthedUser = Depends(require_user)):
+    """Who the bulletin would reach right now, before anything is written:
+    how many numbers are on the list and how many of them said yes."""
+    import business_access
+    business_access.assert_access(str(business_id), user, "admin")
+    async with httpx.AsyncClient() as client:
+        contacts, yes = await _bulletin_list(client, business_id)
+    if yes is None:
+        return JSONResponse({"error": "Couldn't check who has said yes to your texts. Try again in a minute."}, 503)
+    phones = {normalize_phone(c.get("phone")) for c in contacts} - {""}
+    return {"with_phone": len(phones), "said_yes": len(phones & yes)}
+
+
 @router.post("/sms/broadcast")
 async def broadcast(body: BroadcastBody, user: AuthedUser = Depends(require_user)):
-    """Send to every contact WITH a phone on THIS practitioner's list.
-    Scoping by business_id is what makes cross-contamination
-    structurally impossible; opted-out numbers are skipped."""
+    """Send to everyone on THIS practitioner's list who said yes to its
+    texts (sms_alerts.said_yes_to_texts). Scoping by business_id is what
+    makes cross-contamination structurally impossible; a number that
+    never said yes, or texted STOP, is skipped, and a number shared by
+    two contacts gets one text."""
     # THE ONE THIS MATTERS MOST FOR. The docstring says scoping by
     # business_id is "what makes cross-contamination structurally
     # impossible" — but the business_id was the CALLER'S to choose. Any
@@ -699,6 +751,14 @@ async def broadcast(body: BroadcastBody, user: AuthedUser = Depends(require_user
         return JSONResponse({"error": "Keep broadcasts under 1200 characters."}, 400)
 
     async with httpx.AsyncClient() as client:
+        # Only the people who said yes (Kevin, 2026-10-28). It used to text
+        # every number on the list and skip only STOP.
+        contacts, yes = await _bulletin_list(client, body.business_id)
+        if yes is None:
+            return JSONResponse(
+                {"error": "Couldn't check who has said yes to your texts, so nothing was sent. "
+                          "Try again in a minute."}, 503)
+
         # Sender identity. A broadcast goes to people who may not have
         # texted in for months, from a number shared with every other
         # business on the platform — it is the single most likely outbound
@@ -713,17 +773,17 @@ async def broadcast(body: BroadcastBody, user: AuthedUser = Depends(require_user
         from sms_service import compose_outbound_body
         msg = compose_outbound_body(biz_name, msg, include_optout=True)
 
-        contacts = await _sb_get(
-            client,
-            f"/contacts?business_id=eq.{body.business_id}&phone=not.is.null"
-            f"&select=id,name,phone&limit=500",
-        ) or []
-        sent, skipped, failed = 0, 0, 0
+        sent, skipped, failed, not_yes = 0, 0, 0, 0
+        texted: set = set()
         for c in contacts:
             phone = normalize_phone(c.get("phone"))
-            if not phone:
+            if not phone or phone in texted:
                 skipped += 1
                 continue
+            if phone not in yes:
+                not_yes += 1
+                continue
+            texted.add(phone)
             if await is_opted_out(client, phone, body.business_id):
                 skipped += 1
                 continue
@@ -743,7 +803,9 @@ async def broadcast(body: BroadcastBody, user: AuthedUser = Depends(require_user
 
         await _log_event(client, body.business_id, None, "sms_broadcast", {
             "preview": msg[:200], "sent": sent, "skipped": skipped, "failed": failed,
+            "not_yes": not_yes,
         })
-    logger.info(f"[ROUTE] broadcast biz {body.business_id[:8]}: sent={sent} skipped={skipped} failed={failed}")
+    logger.info(f"[ROUTE] broadcast biz {body.business_id[:8]}: sent={sent} skipped={skipped} "
+                f"failed={failed} not_yes={not_yes}")
     return {"ok": True, "sent": sent, "skipped": skipped, "failed": failed,
-            "total_contacts": len(contacts)}
+            "not_yes": not_yes, "total_contacts": len(contacts)}

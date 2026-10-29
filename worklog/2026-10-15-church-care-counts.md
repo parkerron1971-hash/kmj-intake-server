@@ -3,7 +3,7 @@ title: Prayer & care numbers for the church Operate overview (GET /church/care-c
 date: 2026-10-15
 agent: Claude Code (Claude Opus 5.5)
 asked: "add the count-only backend route the church Operate overview's Prayer & care card needs (Kevin approved)"
-status: waiting on Kevin
+status: shipped
 prs: [kmj-intake-server#1453]
 migrations: []
 left_undone: ["Frontend: wire the Operate overview's Prayer & care card to GET /church/care-counts (solutionist-studio worklog 2026-10-15-church-room-overviews.md)"]

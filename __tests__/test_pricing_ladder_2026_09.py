@@ -61,7 +61,7 @@ def test_the_founder_tank_is_read_off_the_price_id(prices):
     assert fg.monthly_credits(pro) == 7500
     assert fg.limit_for(founder, "chief_messages_monthly") == 6000
     assert fg.limit_for(pro, "chief_messages_monthly") == 7500
-    assert fg.limit_for(founder, "max_seats") == 1, "everything but the tank is Professional's"
+    assert fg.limit_for(founder, "max_seats") == fg.limit_for(pro, "max_seats") == 3,         "everything but the tank is Professional's"
     annual = {**founder, "subscription_plan": "price_founder_annual"}
     assert fg.monthly_credits(annual) == 6000
 

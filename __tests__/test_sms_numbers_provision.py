@@ -318,8 +318,10 @@ def test_get_number_names_the_plan_when_locked(world, monkeypatch):
 
 # ─── wiring ───────────────────────────────────────────────────────────
 
-def test_feature_is_gated_at_practice():
-    assert feature_gates.FEATURE_MIN_PLAN[nr.FEATURE] == "practice"
+def test_feature_is_gated_at_professional():
+    """Professional since 2026-10-22 (Kevin: the texting number comes
+    with Professional too)."""
+    assert feature_gates.FEATURE_MIN_PLAN[nr.FEATURE] == "professional"
 
 
 def test_router_and_sweep_are_mounted():

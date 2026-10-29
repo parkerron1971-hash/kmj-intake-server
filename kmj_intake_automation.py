@@ -187,6 +187,12 @@ app.add_middleware(GZipMiddleware, minimum_size=1024)
 # and strips Accept-Encoding before gzip decides. See sse_middleware.py.
 from sse_middleware import NoGzipForStreams
 app.add_middleware(NoGzipForStreams)
+# A custom domain's pages are never stored by Cloudflare: the SaaS Worker
+# fetches the Railway URL, so every custom domain shared one cache entry per
+# path (churchsavvy.app's home showed on lovecityc.com, 2026-10-25). See
+# custom_domain_cache.py. Outermost, so it sees the final headers.
+from custom_domain_cache import NoSharedCacheForCustomDomains
+app.add_middleware(NoSharedCacheForCustomDomains)
 # Guarantee CORS headers on ALL error responses (500/404/422/unhandled) — an
 # unhandled exception escapes CORSMiddleware otherwise, masking every error as
 # a browser CORS block. See cors_error_handlers.py.
@@ -322,6 +328,99 @@ app.include_router(image_studio_router)
 app.include_router(growth_intelligence_router)
 from academy_live_router import router as academy_live_router
 app.include_router(academy_live_router)
+from academy_slides_router import router as academy_slides_router
+app.include_router(academy_slides_router)
+# Sunday screens (ChurchSavvy step 2): the church song library, words in
+# any form, a church's own Proclaim files, and Scripture on the spot.
+# WORSHIP_SONGS=off|owner|on (default owner) until a Thursday release.
+from worship_router import router as worship_router
+app.include_router(worship_router)
+from worship_show_router import router as worship_show_router
+app.include_router(worship_show_router)
+from worship_media_router import router as worship_media_router
+app.include_router(worship_media_router)
+# The announcements board: made once, shown where they belong, gone when over.
+from worship_announce_router import router as worship_announce_router
+app.include_router(worship_announce_router)
+# Ministries send their own announcements by a link (round 5, board 20).
+from worship_ministries import router as worship_ministries_router
+app.include_router(worship_ministries_router)
+# "Bring in from the calendar" onto the announcements board (round 5, board 18).
+from worship_announce_import import router as worship_announce_import_router
+app.include_router(worship_announce_import_router)
+# Who does what in a church's ChurchSavvy: planner, worship leader, booth, admin.
+from worship_team import router as worship_team_router
+app.include_router(worship_team_router)
+# The map: every part of a church's system in one area, and who reaches it.
+from church_areas import router as church_areas_router
+app.include_router(church_areas_router)
+from church_keys import router as church_keys_router
+app.include_router(church_keys_router)
+# The Giving door's office pages: recurring gifts, pledges and campaigns
+# (2026-10-27; CHURCH_PLEDGES off | owner | on).
+from church_pledges import router as church_pledges_router
+app.include_router(church_pledges_router)
+# Rooms & spaces, with Rentals: booking the building (2026-10-27).
+from church_spaces import router as church_spaces_router
+app.include_router(church_spaces_router)
+# Serving hours and background checks, the Sunday door (2026-10-27;
+# CHURCH_SERVING off | owner | on).
+from church_serving import router as church_serving_router
+app.include_router(church_serving_router)
+# Help requests (benevolence): a fund, a limit, a keeper's yes, a record
+# (2026-10-27; CHURCH_HELP off | owner | on).
+from church_help import router as church_help_router
+app.include_router(church_help_router)
+# Check requests: money going out, a receipt, a limit and a keeper's yes
+# (2026-10-27; CHURCH_CHECKS off | owner | on).
+from church_checks import router as church_checks_router
+app.include_router(church_checks_router)
+# The church register: baptisms, dedications, weddings, funerals and
+# membership, with certificates (2026-10-27; CHURCH_REGISTER off | owner | on).
+from church_register import router as church_register_router
+app.include_router(church_register_router)
+# Board & minutes: boards, meetings, attendance and quorum, minutes, the
+# decisions log (2026-10-27; CHURCH_BOARD off | owner | on).
+from church_board import router as church_board_router
+app.include_router(church_board_router)
+# The Reports pack: the year's numbers a church is asked for, from tables the
+# app already keeps (2026-10-27; CHURCH_REPORTS off | owner | on).
+from church_reports import router as church_reports_router
+app.include_router(church_reports_router)
+# The Monday leaders note: this week, what's needed and one win, emailed to
+# the All group leaders room once a week (2026-10-27; CHURCH_LEADERS_NOTE
+# off | owner | on).
+from church_leaders_note import router as church_leaders_note_router
+app.include_router(church_leaders_note_router)
+# My week: a church login's first page (Who sees what, 2026-10-26).
+from church_my_week import router as church_my_week_router
+app.include_router(church_my_week_router)
+# Sermons from ChurchSavvy, for the team's Media part (no seat needed).
+from worship_sermons import router as worship_sermons_router
+app.include_router(worship_sermons_router)
+# ChurchSavvy Planning: Sunday teams and who serves when.
+# SUNDAY_PLANNING=off|owner|on (default owner) until Kevin turns it on.
+from sunday_planning import router as sunday_planning_router
+app.include_router(sunday_planning_router)
+# Its order of service: when each item starts, and a note for each team.
+from sunday_order import router as sunday_order_router
+app.include_router(sunday_order_router)
+# Answering an ask from its email, with no sign-in: Yes, Can't, their Sunday,
+# "Stop these emails" (the link names one church and one person).
+from serve_links import router as serve_links_router
+app.include_router(serve_links_router)
+# What a church on ChurchSavvy alone has paid for: its plan, and changing it.
+# CHURCHSAVVY_BILLING=off|owner|on (default off) until Kevin opens it.
+from churchsavvy_billing import router as churchsavvy_billing_router
+app.include_router(churchsavvy_billing_router)
+# Joining a free class from its public page (POST <class page>/join).
+from academy_join import router as academy_join_router
+app.include_router(academy_join_router)
+# A class on the student's own calendar (GET /academy-calendar/<class link>.ics).
+from academy_calendar import router as academy_calendar_router
+app.include_router(academy_calendar_router)
+from academy_work import router as academy_work_router
+app.include_router(academy_work_router)
 app.include_router(module_spec_router)
 app.include_router(module_check_router)
 # Phase C.1 — Bookings archetype
@@ -339,6 +438,12 @@ import booking_series; app.include_router(booking_series.router)  # weekly serie
 # Registered BEFORE public_site_router so its /booking-page/... routes
 # match before the public_site `/{path:path}` catch-all.
 app.include_router(booking_page_router)
+# ChurchSavvy's own website: its logo files (/churchsavvy-assets/...) and the
+# pages before churchsavvy.app is ours (/churchsavvy/site/...). BEFORE
+# public_site_router; churchsavvy.app itself is answered by public_site's
+# host rule (churchsavvy_site.respond).
+from churchsavvy_site import router as churchsavvy_site_router
+app.include_router(churchsavvy_site_router)
 # Online giving (ministry/nonprofit) — owner config (/giving/...) + the
 # anonymous checkout (/public/giving/...). Same discipline: BEFORE
 # public_site_router so nothing falls into the subdomain catch-all.
@@ -353,16 +458,101 @@ app.include_router(giving_statement_mail_router)
 # subdomain catch-all.
 from events_rsvp_router import router as events_rsvp_router
 app.include_router(events_rsvp_router)
+# Paid sign-ups for church events, with a waitlist (2026-10-27;
+# CHURCH_PAID_SIGNUPS off | owner | on): the office routes, the public
+# page's sign-up, offer and receipt, and the member app's form.
+from church_event_signups import router as church_event_signups_router
+app.include_router(church_event_signups_router)
 # A member's own page at <church site>/my — the POSTs (/my/code, /my/verify,
 # …) and the owner switch (/member-portal/...). BEFORE public_site_router.
 from member_portal import router as member_portal_router
 app.include_router(member_portal_router)
 from member_portal_church import router as member_portal_church_router
 app.include_router(member_portal_church_router)
+# The member directory (member_directory.py): a member's own yes and what
+# shows (POST /my/directory/me; GET /my/directory is member_portal.serve's),
+# and the office's switch, list and take-out (/member-portal/{biz}/directory).
+from member_directory import router as member_directory_router
+app.include_router(member_directory_router)
+# Ask the church (member_asks.py): a member's room, help, visit, life event
+# and pledge asks, and the office's choices. Before the site catch-all.
+from member_asks import router as member_asks_router
+app.include_router(member_asks_router)
+# A group's own page in the member app: its Board, who's in it, asking to
+# join (GET /my/groups/<id> is member_portal.serve's).
+from member_portal_groups import router as member_portal_groups_router
+app.include_router(member_portal_groups_router)
+# The church's news in the member app: reactions and comments (GET /my/news
+# is member_portal.serve's).
+from member_portal_news import router as member_portal_news_router
+app.include_router(member_portal_news_router)
+# Celebrations in the member app: Home's question, Me's choices, a couple's yes.
+from member_portal_celebrations import router as member_portal_celebrations_router
+app.include_router(member_portal_celebrations_router)
+# The office's celebrations: this week's, milestones, Sunday's post, stopping.
+from celebrations import router as celebrations_router
+app.include_router(celebrations_router)
+# Share good news: a member sends it (GET /my/news/share is member_portal.serve's).
+from member_portal_share import router as member_portal_share_router
+# My serving in the member app (ChurchSavvy Planning): answer an ask, a sub, away days.
+from member_portal_serving import router as member_portal_serving_router
+app.include_router(member_portal_serving_router)
+# Get paid back, under Serve: a volunteer's receipt (GET /my/paid-back is member_portal.serve's).
+from member_portal_checks import router as member_portal_checks_router
+app.include_router(member_portal_checks_router)
+from member_portal_board import router as member_portal_board_router
+app.include_router(member_portal_board_router)
+app.include_router(member_portal_share_router)
+# Posting to News from a phone, and Sign me up from a post (GET /my/news/write
+# is member_portal.serve's).
+from member_portal_write import router as member_portal_write_router
+app.include_router(member_portal_write_router)
+# Classes in the church member app: one-tap join (GET /my/classes is member_portal.serve's).
+from member_portal_classes import router as member_classes_router
+app.include_router(member_classes_router)
+# The Lead tab's actions (member_portal_lead.py): a leader answers an
+# invitation, logs a conversation, marks a step, hands someone back.
+from member_portal_lead import router as member_portal_lead_router
+app.include_router(member_portal_lead_router)
+# A Sunday team's leader schedules their team (Lead → Sundays; ChurchSavvy Planning).
+from member_portal_leading import router as member_portal_leading_router
+app.include_router(member_portal_leading_router)
+# The Safety room on a pastoral leader's Lead tab (member_portal_safety.py):
+# safety officers picked from the church's Pastors and Elders.
+from member_portal_safety import router as member_portal_safety_router
+app.include_router(member_portal_safety_router)
+# Sunday check-in (member_portal_checkin.py): POST /my/here, a member
+# counts their family "at church" or "watching online". BEFORE public_site.
+from member_portal_checkin import router as member_portal_checkin_router
+app.include_router(member_portal_checkin_router)
 # Members' profile photos (member_photos.py): POST /my/photo and the
 # staff view. BEFORE public_site_router.
 from member_photos import router as member_photos_router
 app.include_router(member_photos_router)
+# The app's own pictures (member_app_pictures.py): POST /my/pictures, for
+# the owner (from a preview) and the people the owner named. BEFORE
+# public_site_router.
+from member_app_pictures import router as member_app_pictures_router
+app.include_router(member_app_pictures_router)
+# A member's own highlights, notes and bookmarks in the Bible
+# (member_bible_marks.py): POST /my/bible/mark. BEFORE public_site_router.
+from member_bible_marks import router as member_bible_marks_router
+app.include_router(member_bible_marks_router)
+# Plans & devotionals (member_portal_devotionals.py): a member starts a plan,
+# keeps their devotional day, and Listens to it (devotional_voice.py).
+# BEFORE public_site_router. The church writes them in Solutionist
+# (devotionals.py, /church/devotionals).
+from member_portal_devotionals import router as member_portal_devotionals_router
+app.include_router(member_portal_devotionals_router)
+from devotional_voice import router as devotional_voice_router
+app.include_router(devotional_voice_router)
+from devotionals import router as devotionals_router
+app.include_router(devotionals_router)
+# The devotional a day at a time, before sign-in (devotional_daily.py):
+# /daily on the church's own address and its text sign-up. BEFORE
+# public_site_router; it answers only on a church's address.
+from devotional_daily import router as devotional_daily_router
+app.include_router(devotional_daily_router)
 # Church, Youth and Kids spaces (member_spaces.py): leaders' posts and the
 # office's leader approvals. BEFORE public_site_router.
 from member_spaces import router as member_spaces_router
@@ -421,6 +611,17 @@ from member_portal_messaging import router as member_portal_messaging_router
 app.include_router(member_portal_messaging_router)
 from messaging_router import router as messaging_router
 app.include_router(messaging_router)
+# The office's Groups page: how each group is doing, a word to every group,
+# a nudge to a leader (church_groups_office).
+from church_groups_office import router as church_groups_office_router
+app.include_router(church_groups_office_router)
+# The office's News & celebrations page: posting, how each post did, held
+# comments, who posts to the whole church (church_news).
+from church_news import router as church_news_router
+app.include_router(church_news_router)
+# What members share: the owner or an admin posts it, or saves it for later (news_share).
+from news_share import router as news_share_router
+app.include_router(news_share_router)
 # Phase D.4 PR 1 — Stripe Connect OAuth + webhook receiver. Same
 # discipline: BEFORE public_site_router so /payments/* doesn't fall
 # into the subdomain catch-all.
@@ -1592,6 +1793,149 @@ async def startup():
                               "interval", hours=1, id="notif_unanswered_leads")
         except Exception as e:
             print(f"   [warn] notification engine jobs not scheduled: {e}")
+    # Leaders & follow-up (2026-10-17): a church's card handed to a leader
+    # is told to them, and a late step climbs the ladder (nudge, pastors,
+    # "hand them on?"). Every 10 minutes so a new card reaches its leader
+    # soon; each message is sent once (church_follow_up.sweep).
+    try:
+        import church_follow_up as _cfu
+        scheduler.add_job(g("church_follow_up_sweep", _cfu.sweep), "interval", minutes=10,
+                          id="church_follow_up_sweep")
+    except Exception as e:
+        print(f"   [warn] church follow-up sweep not scheduled: {e}")
+    # Sunday check-in (2026-10-17): from two days before, each church's
+    # coming service has its occasion in Services & Events, so the Kids
+    # kiosk and Attendance find it on Sunday morning (church_checkin.sweep).
+    try:
+        import church_checkin as _cck
+        scheduler.add_job(g("church_checkin_sweep", _cck.sweep), "interval", hours=1,
+                          id="church_checkin_sweep")
+    except Exception as e:
+        print(f"   [warn] church check-in sweep not scheduled: {e}")
+    # Shepherding, round 2 (2026-10-18): a care need reaches the family's
+    # shepherd within the hour; on Monday morning (the church's clock)
+    # drifting families, the chain a week with no reach climbs, birthdays
+    # and the Lead Pastor's brief. Each email once (church_shepherd_signals).
+    try:
+        import church_shepherd_signals as _css
+        scheduler.add_job(g("church_shepherd_sweep", _css.sweep), "interval", hours=1,
+                          id="church_shepherd_sweep")
+    except Exception as e:
+        print(f"   [warn] church shepherding sweep not scheduled: {e}")
+    # My tasks for leaders (2026-10-27): a task the office handed to a leader
+    # is emailed to them within the hour, and one past due goes up once, in
+    # the church's morning, to whoever the leader answers to. Each claimed
+    # before it's sent, so it's sent once (church_leader_tasks.sweep_tick).
+    # CHURCH_LEADER_TASKS is read here, on the worker, too.
+    try:
+        import church_leader_tasks as _clt
+        scheduler.add_job(g("church_leader_tasks_sweep", _clt.sweep_tick), "interval", hours=1,
+                          id="church_leader_tasks_sweep")
+    except Exception as e:
+        print(f"   [warn] leader tasks sweep not scheduled: {e}")
+    # Homework files nothing points at any more (a deleted homework, student
+    # or class; an attach that never landed) leave the private bucket once a
+    # day (academy_work.sweep_tick).
+    try:
+        import academy_work as _academy_work
+        scheduler.add_job(g("academy_work_sweep", _academy_work.sweep_tick), "cron",
+                          hour=9, minute=15, id="academy_work_sweep")
+    except Exception as e:
+        print(f"   [warn] homework file sweep not scheduled: {e}")
+    # A church group's news by email: a leader's post an hour old, to the
+    # members who asked and haven't opened it (group_email.sweep_tick).
+    try:
+        import group_email as _group_email
+        scheduler.add_job(g("group_email_followup", _group_email.sweep_tick), "interval",
+                          minutes=15, id="group_email_followup")
+    except Exception as e:
+        print(f"   [warn] group email follow-up not scheduled: {e}")
+    # A Board post scheduled for later goes out at its time (group_post_later).
+    try:
+        import group_post_later as _group_post_later
+        scheduler.add_job(g("group_post_later", _group_post_later.sweep_tick), "interval",
+                          minutes=5, id="group_post_later")
+    except Exception as e:
+        print(f"   [warn] scheduled group posts not scheduled: {e}")
+    # This week's study: each group's draft questions from Sunday's message,
+    # for its leaders to post (group_study.sweep_tick; once per group per
+    # message).
+    try:
+        import group_study as _group_study
+        scheduler.add_job(g("group_study_drafts", _group_study.sweep_tick), "interval",
+                          minutes=30, id="group_study_drafts")
+    except Exception as e:
+        print(f"   [warn] group study drafts not scheduled: {e}")
+    # Event sign-ups: holds and waitlist offers that ran out give their
+    # places back, and the waitlist moves (church_event_signups.sweep_tick).
+    try:
+        import church_event_signups as _event_signups
+        scheduler.add_job(g("event_signups_sweep", _event_signups.sweep_tick), "interval",
+                          minutes=5, id="event_signups_sweep")
+    except Exception as e:
+        print(f"   [warn] event sign-ups sweep not scheduled: {e}")
+    # Celebrations: once a church's clock passes 7 AM, today's birthdays and
+    # anniversaries (only people who said yes) go up on its News
+    # (celebrations.sweep_tick; one post per person per day).
+    try:
+        import celebrations as _celebrations
+        scheduler.add_job(g("celebrations_today", _celebrations.sweep_tick), "interval",
+                          minutes=30, id="celebrations_today")
+    except Exception as e:
+        print(f"   [warn] celebrations not scheduled: {e}")
+    # News alerts: a post rings when it goes up (a scheduled one when its time
+    # comes), the 9 AM note about birthdays in your groups, Saturday's email
+    # (news_alerts.sweep_tick; each once).
+    try:
+        import news_alerts as _news_alerts
+        scheduler.add_job(g("news_alerts", _news_alerts.sweep_tick), "interval",
+                          minutes=15, id="news_alerts")
+    except Exception as e:
+        print(f"   [warn] news alerts not scheduled: {e}")
+    # News reaching the rest: an important post texted to the people without
+    # the app who said yes, emailed to the others; one held through quiet
+    # hours or scheduled goes when its time comes (news_reach.sweep_tick; once).
+    try:
+        import news_reach as _news_reach
+        scheduler.add_job(g("news_reach", _news_reach.sweep_tick), "interval",
+                          minutes=15, id="news_reach")
+    except Exception as e:
+        print(f"   [warn] news reach not scheduled: {e}")
+    # ChurchSavvy Planning: asks, a nudge, covers and the reminders before a
+    # Sunday reach people (sunday_serving_alerts.sweep_tick; each once, never
+    # in quiet hours; churches that switched Serving on).
+    # ChurchSavvy's ministries: Wednesday's "anything for Sunday?" to each
+    # leader who wants it (worship_ministries.sweep_tick; once a week).
+    try:
+        import worship_ministries as _ministries
+        scheduler.add_job(g("ministry_reminders", _ministries.sweep_tick), "interval",
+                          minutes=30, id="ministry_reminders")
+    except Exception as e:
+        print(f"   [warn] ministry reminders not scheduled: {e}")
+    try:
+        import sunday_serving_alerts as _serving_alerts
+        scheduler.add_job(g("serving_alerts", _serving_alerts.sweep_tick), "interval",
+                          minutes=15, id="serving_alerts")
+    except Exception as e:
+        print(f"   [warn] serving alerts not scheduled: {e}")
+    # Class-night reminders: a few hours before each live class, its students
+    # by email and a church's member app by its "Class nights" notification
+    # (academy_reminders.sweep_tick; each night once).
+    try:
+        import academy_reminders as _academy_reminders
+        scheduler.add_job(g("academy_class_reminders", _academy_reminders.sweep_tick), "interval",
+                          minutes=15, id="academy_class_reminders")
+    except Exception as e:
+        print(f"   [warn] class reminders not scheduled: {e}")
+    # Class nights after they end: a church's night counted in its
+    # attendance as its own occasion, and the slides to who missed it when
+    # the teacher asked (academy_class_nights.sweep_tick; each night once).
+    try:
+        import academy_class_nights as _academy_class_nights
+        scheduler.add_job(g("academy_class_nights", _academy_class_nights.sweep_tick), "interval",
+                          minutes=10, id="academy_class_nights")
+    except Exception as e:
+        print(f"   [warn] class nights not scheduled: {e}")
     # THE LEAD ARC PR 4 (2026-08-14) — the first-response clock.
     #
     # Nothing measured how long a lead waited before anyone answered.
@@ -2027,6 +2371,24 @@ async def startup():
                           "cron", minute=45, id="week_beats")
     except Exception as e:
         print(f"   [warn] lifecycle email sweep not scheduled: {e}")
+
+    # The devotional by text (devotional_daily.py): tomorrow's day, once a
+    # person, from 7:30 to 8 PM Eastern. On the clock, every 5 minutes of
+    # that half hour, not "every 10 minutes since the worker last booted":
+    # 2026-10-28 nobody got Day 4 although the worker was up the whole
+    # window. A run that starts late (a busy loop) still runs for 4
+    # minutes; the claim keeps a person to one text however many run.
+    try:
+        import devotional_daily as _devotional_daily
+        scheduler.add_job(g("devotional_daily_texts", _devotional_daily.sweep_tick),
+                          "cron", **_devotional_daily.SWEEP_CRON,
+                          misfire_grace_time=240, coalesce=True, id="devotional_daily_texts")
+        # A day whose evening text didn't go, at 9 the next morning.
+        scheduler.add_job(g("devotional_daily_morning", _devotional_daily.morning_tick),
+                          "cron", **_devotional_daily.MORNING_CRON,
+                          misfire_grace_time=240, coalesce=True, id="devotional_daily_morning")
+    except Exception as e:
+        print(f"   [warn] devotional evening texts not scheduled: {e}")
 
     _staggered = stagger_long_interval_first_runs(scheduler)
     if _staggered:

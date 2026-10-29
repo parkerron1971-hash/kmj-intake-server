@@ -399,7 +399,7 @@ Begin the actual conversation with one purposeful sentence, usually 12 to 24 wor
 It has to stay true whatever the records turn out to say, so it contains:
 - no answer, no yes or no, and no facts about their business, clients, money, dates or records;
 - no numbers, and no names they did not say themselves;
-- nothing about anything being done, sent, found, booked or paid.
+- nothing about anything being done, sent, found, booked or paid, and never the word "already".
 
 Do not presume a record exists just because they ask about its subject. For dates or statements that may be missing, describe the search: "I'll check what we have on when you started and how you've described the vision." Adapt that idea to the request, with your own wording. Do not promise to pull up their start date or "the vision statement you've set" before those records are available. Keep that uncertainty natural; you do not need a disclaimer.
 
@@ -932,7 +932,7 @@ class TwoTrack:
         direction = direction_for(self.message)
         fuller_voice = self.voice and not direction.brief_opener
         gate = mr.OpenerGate(self.message, max_words=VOICE_OPENER_MAX_WORDS if fuller_voice else mr.OpenerGate.MAX_WORDS,
-                             max_sentences=2 if fuller_voice else 1)
+                             max_sentences=2 if fuller_voice else 1, whole_sentences=self.voice)
         q: "asyncio.Queue[Optional[str]]" = asyncio.Queue()
         out: Dict[str, Any] = {}
         system = self.style + "\n\n" + (_VOICE_OPENER_SYSTEM if fuller_voice else _OPENER_SYSTEM)
@@ -952,8 +952,9 @@ class TwoTrack:
             while not gate.closed and not self.holder.frozen:
                 if self.holder.parallel_voice and not gate.dangling:
                     # If the answer wins, do not start another filler sentence
-                    # or wait on a stalled opener provider. Mid-sentence speech
-                    # is allowed to finish naturally within the hard deadline.
+                    # or wait on a stalled opener provider. A call says whole
+                    # sentences only, so a sentence still being checked is
+                    # simply never said.
                     incoming = asyncio.ensure_future(self._next(q, deadline, hard_stop))
                     ready = asyncio.ensure_future(self.holder.answer_ready.wait())
                     try:

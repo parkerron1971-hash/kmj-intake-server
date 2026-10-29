@@ -179,7 +179,8 @@ def _plan_allows(business_id: str) -> Optional[str]:
         return None
     except HTTPException as e:
         detail = e.detail if isinstance(e.detail, dict) else {}
-        return str(detail.get("required_plan") or "practice")
+        import feature_gates
+        return str(detail.get("required_plan") or feature_gates.FEATURE_MIN_PLAN[FEATURE])
 
 
 def _valid_area_code(code: str) -> None:
