@@ -103,8 +103,13 @@ class DB:
         if self._boom("POST", table):
             return None
         self.n += 1
+        # A stream session's start is pinned (its draft is dated by it); a
+        # live service's is the real clock, which the members' alert
+        # cooldown compares with now (pinned, it went stale after 10-18).
+        epoch = (datetime(2026, 10, 18, 15, tzinfo=timezone.utc) if table == "stream_sessions"
+                 else datetime.now(timezone.utc))
         row = {"id": f"00000000-0000-4000-8000-{self.n:012d}",
-               "started_at": (datetime(2026, 10, 18, 15, tzinfo=timezone.utc) + timedelta(seconds=self.n)).isoformat(),
+               "started_at": (epoch + timedelta(seconds=self.n)).isoformat(),
                **body}
         if any(r["id"] == row["id"] for r in self.t.setdefault(table, [])):
             return [] if "ignore-duplicates" in (prefer or "") else None
