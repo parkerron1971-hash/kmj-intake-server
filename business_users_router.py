@@ -192,7 +192,24 @@ def my_role(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[str, Any
         if view is not None:
             out["areas"] = view["areas"]
             out["areas_by"] = view["by"]
+            # Their lane's name, for the office's header ("Minnie · Treasurer").
+            if r != "owner":
+                out["lane"] = _lane_label(biz, str(user.id), r, view["areas"])
     return out
+
+
+def _lane_label(biz: str, user_id: str, role: str, areas: Any) -> Optional[str]:
+    """The lane a seat was given (stored at the invite or in Logins & areas),
+    else the lane its areas are exactly, else None. Only the stored one can
+    say Treasurer: an admin's areas are the whole church."""
+    import church_areas
+    seat = sb_clients.sb_get_as_service(
+        f"/business_users?business_id=eq.{quote(str(biz), safe='')}&user_id=eq.{quote(str(user_id), safe='')}"
+        f"&status=eq.active&select=lane&limit=1") or []
+    key = seat[0].get("lane") if seat else None
+    if key not in church_areas.LANES:
+        key = church_areas.lane_of(role, areas if isinstance(areas, list) else None)
+    return church_areas.LANES[key]["label"] if key in church_areas.LANES else None
 
 
 class InviteBody(BaseModel):
@@ -256,27 +273,41 @@ async def invite(biz: str, body: InviteBody, request: Request,
         "status": "invited", "invited_by": str(user.id),
         "invited_at": _now_iso(),
         **({"areas": lane["areas"]} if lane and lane["areas"] else {}),
+        **({"lane": lane["key"]} if lane else {}),
         **({"contact_id": str(person["id"])} if person else {}),
     })
     row = (res or [None])[0] if isinstance(res, list) else res
     if not row:
         raise HTTPException(500, "invite insert failed")
-    accept_url = f"{_APP_BASE}/?team_invite={row.get('token')}"
+    # A church's invite opens at its own office door (office_door).
+    import office_door
+    door = office_door.path_for(biz)
+    accept_url = f"{_APP_BASE}{door or '/'}?team_invite={row.get('token')}"
 
     email_sent = False
     try:
         from email_sender import send_via_resend
         biz_name = biz_row.get("name") or "a business"
         named = _person_of(person) if person else {}
+        hello = f"Hi {named['first_name']},\n\n" if named.get("first_name") else ""
+        as_what = lane["label"] if lane else "a " + role
+        if door:
+            # From the church, about its office: no Solutionist sign-up pitch.
+            sender = biz_name[:60]
+            subject = f"Your {biz_name} office login"
+            text = (f"{hello}{biz_name} has set up your office login, in {as_what}.\n\n"
+                    f"Open your invitation to make your account (or sign in if you have one):\n{accept_url}\n\n"
+                    f"— {biz_name}")
+        else:
+            sender = "Solutionist System"
+            subject = f"{biz_name} invited you to their team"
+            text = (f"{hello}You've been invited to join {biz_name} on Solutionist as {as_what}.\n\n"
+                    f"Accept your invitation (sign in or create your account first):\n{accept_url}\n\n"
+                    f"— The Solutionist System")
         await send_via_resend(
             to_email=email, to_name=named.get("name"),
-            from_email="invites@mysolutionist.app", from_name="Solutionist System",
-            reply_to=None,
-            subject=f"{biz_name} invited you to their team",
-            body=((f"Hi {named['first_name']},\n\n" if named.get("first_name") else "")
-                  + f"You've been invited to join {biz_name} on Solutionist as "
-                  f"{lane['label'] if lane else 'a ' + role}.\n\nAccept your invitation (sign in or create your "
-                  f"account first):\n{accept_url}\n\n— The Solutionist System"))
+            from_email="invites@mysolutionist.app", from_name=sender,
+            reply_to=None, subject=subject, body=text)
         email_sent = True
     except Exception as e:
         logger.warning(f"[team] invite email not sent: {e}")
@@ -317,7 +348,7 @@ def validate_invite(token: str) -> Dict[str, Any]:
     rows = sb_clients.sb_get_as_service(
         f"/business_users?token=eq.{quote(tok, safe='')}"
         f"&status=in.(invited,active)"
-        f"&select=invited_email,role,status,business_id,areas,contact_id,name&limit=1") or []
+        f"&select=invited_email,role,status,business_id,areas,contact_id,name,lane&limit=1") or []
     if not rows:
         return {"ok": True, "valid": False}
     inv = rows[0]
@@ -325,7 +356,10 @@ def validate_invite(token: str) -> Dict[str, Any]:
         f"/businesses?id=eq.{inv.get('business_id')}&select=name&limit=1") or []
     person = _person_for_seat(str(inv.get("business_id")), inv) or {}
     import church_areas
-    lane = church_areas.lane_of(inv.get("role"), inv.get("areas") if isinstance(inv.get("areas"), list) else None)
+    import office_door
+    lane = inv.get("lane") if inv.get("lane") in church_areas.LANES else church_areas.lane_of(
+        inv.get("role"), inv.get("areas") if isinstance(inv.get("areas"), list) else None)
+    church = office_door.church_by_business(inv.get("business_id"))
     return {"ok": True, "valid": True,
             "email": inv.get("invited_email"),
             "role": inv.get("role"),
@@ -333,7 +367,21 @@ def validate_invite(token: str) -> Dict[str, Any]:
             "name": person.get("name"),
             "first_name": person.get("first_name"),
             "lane": church_areas.LANES[lane]["label"] if lane else None,
+            # A church's invite opens at its office door, in its colours,
+            # even on a link sent before the door existed.
+            "door": office_door.brand(church) if church else None,
             "already_active": inv.get("status") == "active"}
+
+
+@router.get("/door")
+def office_door_look(church: str) -> Dict[str, Any]:
+    """A church's office door (office_door): its name, colours and logo, for
+    the app's sign-in at /office/<slug>. No auth: it is what the church's
+    public site already shows. {ok: false} for anything but a church's live
+    site, and the app shows its own sign-in."""
+    import office_door
+    found = office_door.church_by_slug(church)
+    return {"ok": True, "door": office_door.brand(found)} if found else {"ok": False}
 
 
 class AcceptBody(BaseModel):

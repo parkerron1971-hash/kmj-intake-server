@@ -8176,6 +8176,18 @@ async def subdomain_catch_all(request: Request, path: str):
     if request_path.rstrip("/") == "/here":
         return RedirectResponse(url="/my/here", status_code=302,
                                 headers={**_PUBLIC_SITE_NO_STORE_HEADERS, "Referrer-Policy": "no-referrer"})
+    # A church's office door (office_door.py): its address + /office opens the
+    # app's sign-in in the church's colours. Any other site keeps its own
+    # /office page, so this asks whose address it is first.
+    if request_path.rstrip("/") == "/office":
+        import member_portal
+        import office_door
+        found = member_portal._church_for_request(request)
+        door = office_door.path_for(found["business"]["id"]) if found else None
+        if door:
+            from app_base import app_base_url
+            return RedirectResponse(url=f"{app_base_url()}{door}", status_code=302,
+                                    headers={**_PUBLIC_SITE_NO_STORE_HEADERS, "Referrer-Policy": "no-referrer"})
 
     slug = extract_slug_from_host(request)
     if slug:
