@@ -2374,6 +2374,10 @@ async def startup():
         scheduler.add_job(g("devotional_daily_texts", _devotional_daily.sweep_tick),
                           "cron", **_devotional_daily.SWEEP_CRON,
                           misfire_grace_time=240, coalesce=True, id="devotional_daily_texts")
+        # A day whose evening text didn't go, at 9 the next morning.
+        scheduler.add_job(g("devotional_daily_morning", _devotional_daily.morning_tick),
+                          "cron", **_devotional_daily.MORNING_CRON,
+                          misfire_grace_time=240, coalesce=True, id="devotional_daily_morning")
     except Exception as e:
         print(f"   [warn] devotional evening texts not scheduled: {e}")
 
