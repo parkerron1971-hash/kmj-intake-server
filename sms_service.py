@@ -822,9 +822,79 @@ async def get_conversation(business_id: str, contact_id: str, user: AuthedUser =
         rows = await _sb_get(client,
             f"/sms_messages?business_id=eq.{business_id}&contact_id=eq.{contact_id}"
             f"&order=created_at.asc&limit=200"
-            f"&select=id,direction,phone_number,message,status,telnyx_id,media_urls,created_at,read"
+            # sent_by: the Text room labels Chief's texts and automatic ones
+            # ("Chief sent this for you"). Without it here, only texts from
+            # a number not in People ever carried the label.
+            f"&select=id,contact_id,direction,phone_number,message,status,telnyx_id,media_urls,created_at,read,sent_by"
         ) or []
     return {"messages": rows}
+
+
+# ─── Marking a conversation read ─────────────────────────────────────
+
+class MarkReadRequest(BaseModel):
+    business_id: str
+    contact_id: Optional[str] = None
+    # Texts from a number not yet tied to a contact (contact_id null).
+    phone: Optional[str] = None
+
+
+async def _sb_patch_rows(client: httpx.AsyncClient, path: str, body: Dict[str, Any]) -> Optional[List[Any]]:
+    """PATCH and return the changed rows, or None when the write failed
+    (unlike _sb_patch, the caller needs to know)."""
+    try:
+        r = await client.patch(f"{_sb_url()}/rest/v1{path}",
+                               headers=_sb_headers(),
+                               content=json.dumps(body),
+                               timeout=HTTP_TIMEOUT)
+        if r.status_code >= 400:
+            logger.warning(f"supabase PATCH {path}: {r.status_code} {r.text[:200]}")
+            return None
+        return r.json() if r.text else []
+    except httpx.HTTPError as e:
+        logger.warning(f"supabase PATCH {path} failed: {e}")
+        return None
+
+
+@router.post("/sms/read")
+async def mark_read(req: MarkReadRequest, user: AuthedUser = Depends(require_user)):
+    """Mark a conversation's incoming texts read, for the team as well as
+    the owner (Kevin, 2026-10-29).
+
+    The Text room used to PATCH sms_messages from the browser, and that
+    table's UPDATE policy is the owner's alone (APPLY-2026-07-10). Every
+    active seat can READ texts (tenant_member_read, APPLY-2026-07-31), so
+    an office login opened a conversation, its PATCH matched nothing, and
+    the texts stayed unread (the dot, the badge) until the owner opened
+    them too. A seat UPDATE policy would also let a seat rewrite a
+    message's body, since RLS can't narrow a write to one column; so the
+    server writes `read` and nothing else.
+
+    Member, not viewer: the people who can answer a text are the ones
+    whose reading should clear it. A view-only seat reads without
+    taking the conversation off everyone's list.
+    """
+    import business_access
+    business_access.assert_access(str(req.business_id), user, "member")
+    contact_id = (req.contact_id or "").strip()
+    phone = normalize_phone(req.phone) or (req.phone or "").strip()
+    if not contact_id and not phone:
+        return JSONResponse({"error": "contact_id or phone required"}, 400)
+    base = (f"/sms_messages?business_id=eq.{_pq(req.business_id)}"
+            f"&direction=eq.inbound&read=eq.false")
+    targets = []
+    if contact_id:
+        targets.append(f"{base}&contact_id=eq.{_pq(contact_id)}")
+    if phone:
+        targets.append(f"{base}&phone_number=eq.{_pq(phone)}&contact_id=is.null")
+    marked = 0
+    async with httpx.AsyncClient() as client:
+        for path in targets:
+            rows = await _sb_patch_rows(client, f"{path}&select=id", {"read": True})
+            if rows is None:
+                return JSONResponse({"error": "Couldn't mark those texts read. Try again in a minute."}, 503)
+            marked += len(rows)
+    return {"ok": True, "marked": marked}
 
 
 # ─── Session reminder ────────────────────────────────────────────────
