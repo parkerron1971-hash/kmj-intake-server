@@ -377,6 +377,7 @@ class Live:
         # its last confirmation + OFFLINE_GRANT_S. Past it, the stream is cut.
         self.auth_until = 0.0
         self.next_kick = 0.0
+        self.kick_pending = False                       # cut off, and not yet known to be gone
         self.last_beat = 0.0
         self.beating = False
         self.dests: List[Dict[str, str]] = []
@@ -498,8 +499,9 @@ class Agent:
         """The hourly re-check: ask the backend about every remembered key,
         CONFIRM_CHUNK at a time. A confirmed key's window starts again from
         when it was asked; a key left out is forgotten and a stream on it is
-        cut. Any other answer (a timeout, a 5xx, a 404 from a backend
-        without the route yet, no `confirmed` list) changes nothing."""
+        cut. Any other answer (a timeout, a 5xx, a 401, a 404 from a backend
+        without the route yet, no `confirmed` list, or a list with anything
+        in it but stream ids) changes nothing at all."""
         try:
             held = [(str(g["stream_id"]), str(g["key_hash"])) for g in self.remembered()]
             for i in range(0, len(held), CONFIRM_CHUNK):
@@ -508,10 +510,11 @@ class Agent:
                 status, data = await self.backend("/stream-relay/relay/confirm", {
                     "grants": [{"stream_id": sid, "key_hash": h} for sid, h in chunk]})
                 confirmed = data.get("confirmed") if status == 200 else None
-                if not isinstance(confirmed, list):
-                    log.warning("re-check of %d keys got no answer (%s); nothing changed", len(chunk), status)
+                if not (isinstance(confirmed, list)
+                        and all(isinstance(s, str) and STREAM_ID_RE.fullmatch(s) for s in confirmed)):
+                    log.warning("re-check of %d keys got no usable answer (%s); nothing changed", len(chunk), status)
                     continue
-                await self.apply_confirm(chunk, {str(s) for s in confirmed}, asked)
+                await self.apply_confirm(chunk, set(confirmed), asked)
         finally:
             self.syncing = False
 
@@ -538,7 +541,7 @@ class Agent:
             if on_it and live.auth_until <= asked + self.cfg.offline_s:
                 log.warning("%s: the backend no longer confirms this stream's key; disconnecting", sid)
                 self.revoke(live, now)
-                await self.kick(sid, live.conn)
+                await self.disconnect(live, now)
 
     async def may_publish(self, stream_id: str, key: str) -> bool:
         asked = time.time()
@@ -643,17 +646,19 @@ class Agent:
                                 "bytes": int(item.get("bytesReceived") or 0)}
         return out
 
-    async def kick(self, stream_id: str, conn: Optional[Tuple[str, str]]) -> None:
-        """Disconnect one publisher through MediaMTX's API. A kick that
-        fails is tried again (KICK_EVERY_S) while the publisher is listed."""
+    async def kick(self, stream_id: str, conn: Optional[Tuple[str, str]]) -> bool:
+        """Disconnect one publisher through MediaMTX's API. True when it is
+        known gone: MediaMTX closed it (200) or no longer has it (404)."""
         if not conn:
-            return
+            return False
         kind, cid = conn
         try:
             async with self.http.post(f"{self.cfg.mtx_api}/v3/{kind}/kick/{cid}", timeout=5) as r:
                 log.warning("%s disconnected (%s)", stream_id, r.status)
+                return r.status in (200, 404)
         except Exception as e:
             log.warning("%s kick failed: %s", stream_id, type(e).__name__)
+            return False
 
     # ── startup: pick up where the last agent left off ──
 
@@ -731,11 +736,11 @@ class Agent:
                 if p["key"] and (p["key"] != live.bad_key or self.confirmed_since(p["key"], sid, live.revoked_at)):
                     # Back on a new key, or the backend has confirmed this
                     # one since it was cut (a deadline that ran out).
-                    live.revoked, live.bad_key, live.up = False, None, False
+                    live.revoked, live.bad_key, live.up, live.kick_pending = False, None, False, False
                 else:
-                    if now >= live.next_kick:                  # still there on the cut-off key
-                        live.next_kick = now + KICK_EVERY_S
-                        await self.kick(sid, live.conn)
+                    # Still there on the cut-off key: enforce_grants goes on
+                    # disconnecting it, on the connection saved above.
+                    live.kick_pending = True
                     continue
             if p["key"] and p["key"] != live.key:
                 live.key = p["key"]
@@ -752,7 +757,7 @@ class Agent:
         for sid, live in list(self.lives.items()):
             if live.up and sid not in pubs:
                 log.info("%s dropped; waiting %ss before calling it over", sid, int(self.cfg.grace))
-                live.up, live.down_since = False, now
+                live.up, live.down_since, live.kick_pending = False, now, False   # known gone
                 self.stop_writers(live)
             elif not live.up and now - (live.down_since or now) >= self.cfg.grace:
                 self.lives.pop(sid, None)
@@ -768,19 +773,29 @@ class Agent:
         """Cut this stream off its key: every copy and the recording stop
         now, without waiting on MediaMTX; the caller disconnects it."""
         live.revoked, live.bad_key, live.key = True, live.key, None
-        live.revoked_at, live.next_kick = now, now + KICK_EVERY_S
+        live.revoked_at, live.next_kick, live.kick_pending = now, now, True
         self.stop_writers(live)
+
+    async def disconnect(self, live: Live, now: float) -> None:
+        """Kick a cut-off publisher on the connection the agent saved. Until
+        that takes, or the listing shows it gone, enforce_grants tries again
+        every KICK_EVERY_S, whether or not MediaMTX can list publishers."""
+        live.next_kick = now + KICK_EVERY_S
+        if await self.kick(live.stream_id, live.conn):
+            live.kick_pending = False
 
     async def enforce_grants(self, now: float) -> None:
         """A running stream whose key the backend hasn't confirmed within
         OFFLINE_GRANT_S is cut, on this clock alone: the backend may be
-        down, MediaMTX's API may be too."""
+        down, MediaMTX's API may be too. A cut-off publisher is disconnected
+        from here, again and again, until it is known gone."""
         for live in list(self.lives.values()):
             if live.up and not live.revoked and now >= live.auth_until:
                 log.warning("%s: the backend hasn't confirmed this stream's key for %.0f min; disconnecting",
                             live.stream_id, self.cfg.offline_s / 60)
                 self.revoke(live, now)
-                await self.kick(live.stream_id, live.conn)
+            if live.revoked and live.kick_pending and live.conn and now >= live.next_kick:
+                await self.disconnect(live, now)
 
     def begin(self, stream_id: str) -> Live:
         run = Run(self.cfg.work, stream_id)
@@ -808,10 +823,13 @@ class Agent:
                     run.session_id, run.playlist_path = data["session_id"], data.get("playlist_path")
                     run.save()
                 dests = list(data.get("destinations") or [])
-                self.remember(key, live.stream_id, dests, seen=asked)
-                if live.key == key and not live.revoked:
+                # Only a grant still standing when the answer comes in is
+                # renewed: one that ran out (or was cut) while the answer was
+                # on its way stays out; only a fresh /auth makes a new one.
+                if live.key == key and not live.revoked and time.time() < live.auth_until:
+                    self.remember(key, live.stream_id, dests, seen=asked)
                     live.auth_until = max(live.auth_until, asked + self.cfg.offline_s)
-                self.reconcile(live, dests)
+                    self.reconcile(live, dests)
             elif status == 409:
                 self.split(live, data.get("detail") if isinstance(data.get("detail"), dict) else {})
             elif status in REFUSED:
@@ -819,7 +837,7 @@ class Agent:
                 self.forget(key, live.stream_id)
                 if live.key == key:
                     self.revoke(live, time.time())
-                    await self.kick(live.stream_id, live.conn)
+                    await self.disconnect(live, time.time())
             elif run.session_id is None and run.key != key:
                 run.key = key                           # the backend is down: the finish will need it
                 run.save()

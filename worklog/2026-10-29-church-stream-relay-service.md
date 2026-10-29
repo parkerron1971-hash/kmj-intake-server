@@ -1,14 +1,14 @@
 ---
-title: Church stream relay server (the droplet), and Codex's re-check fixes R3-R and R6-R
+title: Church stream relay server (the droplet), and Codex's re-check fixes R3-R, R6-R, R3-F1, R3-F2 and C1-F
 date: 2026-10-29
 agent: Claude Code (Claude Opus 5.5)
-asked: 'Kevin, 2026-10-29: "yes start on the fixes" (Codex re-check of 2026-10-16: R3-R and R6-R on #1461); on the offline window: "make the best option"'
+asked: 'Kevin, 2026-10-29: "yes start on the fixes" (Codex re-check of 2026-10-16: R3-R and R6-R on #1461); on the offline window: "make the best option"; then "Fix the four findings in church-streaming-review.md (B3-F, R3-F1, R3-F2, C1-F)"'
 status: waiting on Kevin
 prs: [kmj-intake-server#1461]
 migrations: []
 left_undone:
   - "#1460 adds POST /stream-relay/relay/confirm (the contract is in decisions); until it does, the hourly re-check gets a 404 and changes nothing (keys then last 24h from their last /auth or heartbeat)"
-  - "Codex final review of #1461 at the new head; #1460's B2-R and B3-R are fixed in that PR, not here"
+  - "Codex re-check of #1461 at the new head (R3-F1, R3-F2, C1-F fixed); B3-F is #1460's, fixed in that PR, not here"
   - "Kevin: DigitalOcean droplet + reserved IP, private R2 bucket with CORS, two R2 tokens, DNS stream A record (stream_relay/README.md, One-time setup)"
   - "R9: recording retention and deleting a church's recordings with its account (needs Kevin's retention call)"
   - "R11 rest: a changed destination's old copy and its replacement can overlap for a moment (a stopped copy is now killed within 5 s)"
@@ -19,7 +19,9 @@ decisions:
   - "the 24 hours bind a running stream too: past them the publisher is disconnected and every copy and the recording stop; a key the re-check leaves out is forgotten and its stream cut the same way"
   - "the re-check contract: POST /stream-relay/relay/confirm, X-Relay-Secret, {grants: [{stream_id, key_hash (sha256 hex of the secret)}]} in chunks of 200; 200 {confirmed: [stream_id]} renews or drops; anything else changes nothing"
   - "the agent remembers one key per church, as its sha256 (never the key); a newly confirmed key replaces the old one"
-  - "a confirmation counts from when the backend was asked, and an answer arriving after a key ran out brings nothing back"
+  - "a confirmation counts from when the backend was asked, and an answer arriving after a key ran out brings nothing back, whether a re-check's or a heartbeat's; only a fresh /auth makes a new grant"
+  - "a cut-off publisher is disconnected again every 10 s from the agent's own pass, on its saved connection, until MediaMTX says it is gone (200/404) or the listing no longer has it"
+  - "a re-check answer is used only if every member of `confirmed` is a 20-hex stream id; otherwise the whole answer changes nothing"
   - "a church holds its place from the moment /auth lets it in, decided one at a time; a church waiting out its grace keeps its place; a publisher found past MAX_STREAMS is disconnected"
   - "a disk that can't be read counts as full: new streams are refused and recording stops"
 related: [2026-10-16-church-streaming-review-fixes.md]
@@ -46,6 +48,13 @@ Kevin then chose the window ("make the best option"): a short window AND a
 Sunday that survives a Railway outage. The agent re-confirms every key it
 remembers with the backend hourly (the one new route, `/relay/confirm`,
 which #1460 adds), and a confirmed key works for 24 hours.
+
+Codex's final re-check (same day, at c6814d93) closed R6-R and found three
+smaller gaps here, each reproduced by its own probe (`test_final_extra.py`,
+6 failing) before the fix. R3-F1: a failed disconnect is now retried from
+the agent's own pass, not from publisher discovery. R3-F2: a heartbeat
+answered after the key ran out no longer renews the remembered key. C1-F: a
+`confirmed` list with anything but stream ids in it is ignored whole.
 
 Before changing the agent's auth or publisher code, run
 `__tests__/test_stream_relay_mediamtx.py` with `MEDIAMTX_BIN` set to a

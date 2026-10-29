@@ -11,8 +11,11 @@
 # confirmed within the window is cut too, on the agent's own clock (R3-R);
 # every remembered key (one per church, only its hash) is re-confirmed
 # hourly, in chunks of 200: confirmed keys start their day again, keys left
-# out are forgotten and their streams cut, and a failed or late re-check
-# changes nothing (Kevin's call, 2026-10-29); copies follow the backend's current destinations, and a stopped copy is
+# out are forgotten and their streams cut, and a failed, late or malformed
+# re-check changes nothing (Kevin's call, 2026-10-29; C1-F); a heartbeat
+# answered after the key ran out renews nothing (R3-F2), and a failed
+# disconnect is retried from the agent's own pass (R3-F1);
+# copies follow the backend's current destinations, and a stopped copy is
 # killed if it won't stop (R11); a dropped stream resumes the same
 # recording, a restarted agent picks up its journals and still finishes,
 # and a finish retries until it is acknowledged (R4); a finish only ever
@@ -151,6 +154,7 @@ class Harness:
             self.kicks.append(sid)
             if self.kick_works:
                 self.pubs.pop(sid, None)
+            return self.kick_works
 
         async def put(name, body):
             self.puts[name] = body
@@ -853,6 +857,113 @@ def test_a_church_has_one_remembered_key(tmp_path, monkeypatch):
     assert not run(a.may_publish(SID, KEY))
     h.answers["verify"] = (0, {})
     assert run(a.may_publish(SID, NEW_KEY))
+
+
+@pytest.mark.parametrize("bad", [[None], [{"stream_id": SID}], [True], ["not-a-stream-id"], [SID2, None]],
+                         ids=["null", "object", "true", "not-a-stream-id", "one-bad-member"])
+def test_a_malformed_confirmed_list_changes_nothing(tmp_path, monkeypatch, bad):
+    """Codex C1-F: a `confirmed` list with any member that isn't a stream id
+    is a malformed answer, and a malformed answer changes nothing: no key is
+    renewed, none is dropped, no stream is cut."""
+    h = Harness(tmp_path, monkeypatch, offline_s=86400, grant_sync_s=3600)
+    a = h.a
+    t0 = h.clock["t"]
+    a.remember(NEW_KEY, SID2, [])
+
+    async def go():
+        h.publish()
+        await a.tick()
+        await settle()
+        live = a.lives[SID]
+        h.started({}, status=503)
+        h.answers["confirm"] = (200, {"confirmed": bad})
+        h.later(3600)
+        await a.tick()
+        await settle()
+        assert a.recall(KEY, SID) is not None and seen(tmp_path, SID) == t0
+        assert a.recall(NEW_KEY, SID2) is not None and seen(tmp_path, SID2) == t0
+        assert not live.revoked and not h.kicks and h.running(live) == ["hls", "youtube"]
+    run(go())
+
+
+def test_a_failed_disconnect_is_retried_while_mediamtx_cant_list_publishers(tmp_path, monkeypatch):
+    """Codex R3-F1: the disconnect of a stream whose key ran out is retried
+    every 10 s from the agent's own pass, on the connection it saved, until
+    it takes; it doesn't wait for MediaMTX's listing to come back. Once a
+    kick takes, the retries stop."""
+    h = Harness(tmp_path, monkeypatch, offline_s=120)
+    a = h.a
+
+    async def unreadable():
+        return None
+
+    async def go():
+        h.publish()
+        await a.tick()
+        await settle()
+        live = a.lives[SID]
+        h.started({}, status=503)
+        h.kick_works = False
+        a.publishers = unreadable
+        h.later(121)
+        await a.tick()
+        await settle()
+        for _ in range(3):
+            h.later(11)
+            await a.tick()
+            await settle()
+        assert h.kicks == [SID] * 4 and live.revoked and h.running(live) == []
+        h.kick_works = True                                           # MediaMTX's kick works again
+        h.later(11)
+        await a.tick()
+        await settle()
+        for _ in range(3):
+            h.later(11)
+            await a.tick()
+            await settle()
+        assert h.kicks == [SID] * 5                                   # it took: no more tries
+    run(go())
+
+
+def test_a_heartbeat_answered_after_the_key_ran_out_doesnt_bring_it_back(tmp_path, monkeypatch):
+    """Codex R3-F2: a heartbeat asked before the key ran out and answered
+    after renews nothing. The stream stays cut and the key can't get back in
+    while the backend is down; only a fresh /auth makes a new grant."""
+    h = Harness(tmp_path, monkeypatch, offline_s=120, grant_sync_s=3600)
+    a = h.a
+
+    async def go():
+        h.publish()
+        await a.tick()
+        await settle()
+        live = a.lives[SID]
+        gate = asyncio.Event()
+
+        async def late(body):
+            await gate.wait()
+            return 200, STARTED
+        h.answers["started"] = late
+        h.kick_works = False
+        h.later(115)
+        await a.tick()                                                # the heartbeat is asked at 115 s
+        await settle()
+        h.later(6)
+        await a.tick()                                                # 121 s: the key has run out
+        await settle()
+        assert live.revoked
+        gate.set()                                                    # the 200 comes in now
+        await settle()
+        h.started({}, status=503)
+        h.later(1)
+        await a.tick()
+        await settle()
+        assert live.revoked and h.running(live) == []
+        h.answers["verify"] = (503, {})
+        assert not await a.may_publish(SID, KEY)
+        assert a.recall(KEY, SID) is None
+        h.answers["verify"] = (200, {"destinations": []})             # a fresh /auth does
+        assert await a.may_publish(SID, KEY)
+    run(go())
 
 
 @pytest.mark.parametrize("disk", ["full", "unreadable"])
