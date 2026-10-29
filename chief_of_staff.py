@@ -13226,6 +13226,13 @@ async def _execute_actions(client, biz, actions: List[Dict],
     import chief_build_runtime
     if chief_build_runtime.enabled() and turn_scope.get() and not worker_scope.get():
         actions = chief_build_runtime.route_actions(actions)
+    # A church login kept to its lane (chief_areas) acts only there: the
+    # chat's turn says whose it is; any other caller with a login (a tap in
+    # the Approval Queue) is looked up. With no login (the scheduler), none.
+    import chief_areas
+    area_scope = (chief_areas.TURN.get() if chief_areas.TURN.get() is not None or not user_id
+                  else await asyncio.to_thread(chief_areas.scope_for, (biz or {}).get("id"), user_id,
+                                               (biz or {}).get("owner_id")))
     for action in actions:
         _finish_pending()
         atype = action.get("type")
@@ -13238,6 +13245,10 @@ async def _execute_actions(client, biz, actions: List[Dict],
             results.append(_fail(atype, "Your build is already handling those steps. Check its progress card."))
             continue
         pending_step = _turn_step_start(atype, len(results), action)
+        why = chief_areas.refusal(atype or "", action, area_scope)
+        if why:
+            results.append(_fail(atype or "unknown", why))
+            continue
         handler = ACTION_HANDLERS.get(atype)
         if not handler:
             # Lookup MISS. Instead of dead-ending, REASON the intent into a
@@ -14996,6 +15007,11 @@ async def chief_chat(
         'turn_id': image_studio.turn_id.get(), 'words':req.message or '',
         'surface':'desktop','submitted':False,
         'conversation_id':str(req.conversation_id or '')[:80]})
+    # Chief keeps to a church login's lane (chief_areas): None, and nothing
+    # changes, for the owner, an admin, or any business that isn't a church.
+    import chief_areas
+    _area_token = chief_areas.TURN.set(
+        await asyncio.to_thread(chief_areas.scope_for, req.business_id, str(user_session.user.id)))
     try:
         if not req.message:
             raise HTTPException(400, "message is required")
@@ -15192,6 +15208,10 @@ async def chief_chat(
             if not ctx:
                 raise HTTPException(404, "Business not found")
             biz = ctx["business"]
+            # A login kept to its lane reads only its own (chief_areas).
+            if chief_areas.TURN.get() is not None:
+                ctx = chief_areas.trim_context(ctx, chief_areas.TURN.get())
+                view_detail = chief_areas.trim_view(view_detail, chief_areas.TURN.get())
             # Only after the scoped context read: share delivery preferences, never records.
             try:
                 import chief_fast_track
@@ -15343,7 +15363,7 @@ async def chief_chat(
                 _enrich("business knowledge", _knowledge_probe(), None),
                 _enrich("first-run arc", _arc_probe(), None),
             )
-            _ctx_vals = dict(zip(_names, _results))
+            _ctx_vals = chief_areas.trim_sources(dict(zip(_names, _results)), chief_areas.TURN.get())
             for source_name, source_value in _ctx_vals.items():
                 if 'context:' + source_name not in chief_truth.unavailable_sources():
                     chief_truth.record('context:' + source_name, source_value, kind='context')
@@ -15450,6 +15470,11 @@ async def chief_chat(
             except Exception as e:  # pragma: no cover
                 logger.warning(f"marketing desk block failed: {e}")
 
+            # Whose login this is, when it's kept to a lane: the turn's tail,
+            # never a cached segment (it differs by login).
+            _login_block = chief_areas.block(chief_areas.TURN.get())
+            if _login_block:
+                growth_turn_block = _login_block + "\n" + growth_turn_block
             system = _build_system_prompt(
                 ctx, is_greeting, req.current_context, view_detail,
                 time_of_day=tod, resume_note=req.resume_note,
@@ -15482,7 +15507,9 @@ async def chief_chat(
                 # JIT profile-capture emits operational [ACTION] tags
                 # (update_business_profile_field / remember) — never into
                 # the coach's context.
-                jit_directive = "" if is_coach_mode else _build_jit_directive(ctx, req.message or "")
+                # A lane's login never fills in the owner's profile.
+                jit_directive = ("" if is_coach_mode or chief_areas.TURN.get() is not None
+                                 else _build_jit_directive(ctx, req.message or ""))
                 if jit_directive:
                     # Cache round 3: the directive must land in the TURN
                     # tail, not at the head of the state snapshot — a
@@ -16130,6 +16157,7 @@ async def chief_chat(
         image_studio.turn_image_index.reset(_image_index_token)
         image_studio.turn_references.reset(_image_refs_token)
         turn_scope.reset(_build_turn_token)
+        chief_areas.TURN.reset(_area_token)
         try:
             _TURN_USER_ID.reset(_uid_token)
             try:
