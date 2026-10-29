@@ -43,6 +43,7 @@ import sms_service
 GUARDED = [
     (sms_service, "send_sms", "member"),
     (sms_service, "get_conversation", "viewer"),
+    (sms_service, "mark_read", "member"),
     (sms_service, "send_session_reminder", "member"),
     (sms_routing, "get_keyword", "viewer"),
     (sms_routing, "set_keyword", "admin"),
