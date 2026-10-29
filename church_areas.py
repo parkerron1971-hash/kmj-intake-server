@@ -808,8 +808,12 @@ def place_login(body: Dict[str, Any], session: UserSession = Depends(sb_clients.
         if FINANCE_ONLY in areas:
             raise HTTPException(400, "Giving opens only for admins and the accountant")
         areas = [a for a in AREA_ORDER if a in areas]
+    # The lane is kept by name too, for the office's header (office_door):
+    # the lane these areas are exactly, else none.
+    kept = lane_of(seat[0].get("role"), areas)
     saved = sb_clients.sb_patch_as_service(
-        f"/business_users?business_id=eq.{_q(biz)}&user_id=eq.{_q(uid)}&status=eq.active", {"areas": areas})
+        f"/business_users?business_id=eq.{_q(biz)}&user_id=eq.{_q(uid)}&status=eq.active",
+        {"areas": areas, "lane": kept})
     if not isinstance(saved, list) or not saved:
         raise HTTPException(503, "That didn't save. Try again.")
     _forget(biz, uid)
