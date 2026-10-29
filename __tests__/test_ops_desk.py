@@ -432,8 +432,11 @@ def test_kai_note_and_moment_ack(fake):
     _run(od.kai_note(od.KaiNoteIn(text="Nothing needs you. Two PRs updated.", moment="morning_prep"),
                      authorization="Bearer x"))
     assert fake.settings["kai_note"]["text"].startswith("Nothing needs you")
-    _run(od.kai_moment_ack(od.AckIn(key="2026-10-20:morning_prep"), authorization="Bearer x"))
-    assert "2026-10-20:morning_prep" in fake.settings["moments"]
+    # The ack keeps eight days of keys by the real clock, so the key is
+    # today's: a fixed date fell out of the window on 2026-10-29.
+    key = f"{datetime.now(timezone.utc).date().isoformat()}:morning_prep"
+    _run(od.kai_moment_ack(od.AckIn(key=key), authorization="Bearer x"))
+    assert key in fake.settings["moments"]
 
 
 def test_hours_are_logged_by_week(fake):
