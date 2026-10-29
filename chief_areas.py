@@ -220,9 +220,10 @@ def _read_scope(business_id: str, user_id: str) -> Optional[Dict[str, Any]]:
 
 
 def forget(business_id: Any = None) -> None:
-    """Drop the kept scopes (a test, or a pick just saved)."""
-    for k in [k for k in _CACHE if business_id is None or k[0] == str(business_id)]:
-        _CACHE.pop(k, None)
+    """Drop the kept scopes and speakers (a test, or a pick just saved)."""
+    for cache in (_CACHE, _WHO_CACHE):
+        for k in [k for k in cache if business_id is None or k[0] == str(business_id)]:
+            cache.pop(k, None)
 
 
 def has(scope: Optional[Dict[str, Any]], *areas: str) -> bool:
@@ -416,23 +417,116 @@ def trim_result(verb: str, result: Any, scope: Optional[Dict[str, Any]]) -> Any:
     return out
 
 
-def block(scope: Optional[Dict[str, Any]]) -> str:
-    """The prompt's word on whose login this is. Rides the turn's tail: it
-    differs by login, so it never sits in a cached segment."""
-    if scope is None:
-        return ""
-    lane = lane_words(scope)
-    mine = areas_words(scope)
-    money = has(scope, *MONEY)
-    lines = [
-        "THIS LOGIN — not the owner. " + (f"It has the {lane} lane: " if lane else "It works in: ") + mine + ".",
-        "Answer and act within those areas, and with everyone's own work (tasks, notes, the calendar, writing to "
-        "people). For any other part of the church, say which area it is and that the owner, an admin or whoever "
-        "has that area handles it; don't take it on, and don't guess at what you can't see.",
-    ]
-    if not money:
-        lines.append("Money isn't this login's: you don't see gifts, giving, invoices, payments, the bank or the "
-                     "books, and you never say what anyone gave, what came in or what anything costs. If asked, "
-                     "say the owner, an admin or the treasurer can answer.")
-    lines.append("The owner's own memories and past conversations aren't shown to this login; don't mention them.")
-    return "\n".join(lines) + "\n"
+def block(scope: Optional[Dict[str, Any]], who: Optional[Dict[str, Any]] = None,
+          biz: Optional[Dict[str, Any]] = None) -> str:
+    """The prompt's word on whose login this is: who's talking (any login
+    that isn't the owner's), and the lane it keeps to. Rides the turn's
+    tail: it differs by login, so it never sits in a cached segment."""
+    lines = [talking_with(who, biz)] if who is not None else []
+    if scope is not None:
+        lane = lane_words(scope)
+        mine = areas_words(scope)
+        lines += [
+            "THIS LOGIN — not the owner. " + (f"It has the {lane} lane: " if lane else "It works in: ") + mine + ".",
+            "Answer and act within those areas, and with everyone's own work (tasks, notes, the calendar, writing "
+            "to people). For any other part of the church, say which area it is and that the owner, an admin or "
+            "whoever has that area handles it; don't take it on, and don't guess at what you can't see.",
+        ]
+        if not has(scope, *MONEY):
+            lines.append("Money isn't this login's: you don't see gifts, giving, invoices, payments, the bank or the "
+                         "books, and you never say what anyone gave, what came in or what anything costs. If asked, "
+                         "say the owner, an admin or the treasurer can answer.")
+        lines.append("The owner's own memories and past conversations aren't shown to this login; don't mention them.")
+    return "\n".join(lines) + "\n" if lines else ""
+
+
+# ─── Who's talking ────────────────────────────────────────────────────
+# Kevin, 2026-10-28 (through kmj-intake-server-60): Love City's new office
+# logins were greeted as Kevin, and an email Minnie had Chief send signed
+# off as him. Chief says the business's practitioner_name to everyone; a
+# login that isn't the owner's is its seat's person
+# (business_users_router.seat_person), and one nothing names is no one by
+# name, never the owner.
+
+# The turn's speaker (who_for), set once per Chief turn. None: the owner,
+# or no login (the scheduler), and nothing changes.
+WHO: contextvars.ContextVar[Optional[Dict[str, Any]]] = contextvars.ContextVar("chief_who", default=None)
+_WHO_CACHE: Dict[Tuple[str, str], Tuple[float, Optional[Dict[str, Any]]]] = {}
+
+
+def who_for(business_id: Any, user_id: Any, owner_id: Any = None) -> Optional[Dict[str, Any]]:
+    """{role, name, first_name} for a login on a business that isn't its
+    owner; name '' when nothing names them. None for the owner, no login,
+    or a login with no seat here. Kept a minute a replica."""
+    if not business_id or not user_id or (owner_id and str(owner_id) == str(user_id)):
+        return None
+    key = (str(business_id), str(user_id))
+    hit = _WHO_CACHE.get(key)
+    if hit and time.monotonic() - hit[0] < CACHE_SECONDS:
+        return hit[1]
+    import business_users_router
+    try:
+        role = business_users_router.role_of(*key)
+        person = (business_users_router.seat_person(*key) or {}) if role and role != "owner" else {}
+    except Exception:  # noqa: BLE001 — a failed read keeps today's Chief (it may be the owner)
+        logger.warning("chief areas: who read failed (business %s)", key[0][:8])
+        return None
+    who = None if not role or role == "owner" else {
+        "role": role, "name": _plain(person.get("name")),
+        "first_name": _plain(person.get("first_name")) or _plain(person.get("name")).split(" ")[0]}
+    _WHO_CACHE[key] = (time.monotonic(), who)
+    return who
+
+
+def turn_for(business_id: Any, user_id: Any) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
+    """(the lane scope, who's talking) for one Chief turn."""
+    return scope_for(business_id, user_id), who_for(business_id, user_id)
+
+
+def _plain(v: Any) -> str:
+    return re.sub(r"\s+", " ", str(v or "")).strip()
+
+
+def owner_name(biz: Optional[Dict[str, Any]]) -> str:
+    return _plain(((biz or {}).get("settings") or {}).get("practitioner_name"))
+
+
+def speaker(biz: Optional[Dict[str, Any]], fallback: str = "", *, short: bool = False) -> str:
+    """The name Chief greets and writes as: the seat that's talking (their
+    first name when short; '' when nothing names them), else the business's
+    practitioner_name exactly as before, else the fallback."""
+    who = WHO.get()
+    if who is None:
+        return ((biz or {}).get("settings") or {}).get("practitioner_name", fallback)
+    return (who.get("first_name") if short else who.get("name")) or ""
+
+
+def sender(biz: Optional[Dict[str, Any]], default: str) -> str:
+    """Who an email this turn sends is from: the seat that's talking (the
+    church's name when nothing names them), else the default as before."""
+    who = WHO.get()
+    if who is None:
+        return default
+    return who.get("name") or _plain((biz or {}).get("name")) or default
+
+
+def signature(sig: Any) -> Any:
+    """The church's signature, signed by the seat that's talking: their
+    name, without the owner's title. Unchanged for the owner."""
+    who = WHO.get()
+    if who is None or not isinstance(sig, dict):
+        return sig
+    return {**sig, "name": who.get("name") or "", "title": ""}
+
+
+def talking_with(who: Dict[str, Any], biz: Optional[Dict[str, Any]] = None) -> str:
+    owner = owner_name(biz) or "the owner"
+    church = _plain((biz or {}).get("name")) or "the church"
+    if who.get("name"):
+        first = who.get("first_name") or who["name"]
+        return (f"TALKING WITH: {who['name']}, an office login on {owner}'s team. This is not {owner}. Call them "
+                f"{first}, never {owner}. Anything you write or send for them is from {who['name']}: sign it with "
+                f"their name, not {owner}'s.")
+    return (f"TALKING WITH: someone with an office login on {owner}'s team. This is not {owner}. Their name isn't "
+            f"on file, so use no name for them and never call them {owner}. Sign anything you write for them "
+            f"from {church}, not from {owner}.")

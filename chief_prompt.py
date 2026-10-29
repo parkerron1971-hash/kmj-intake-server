@@ -465,7 +465,8 @@ def _format_priorities_block(priorities: List[str]) -> str:
 def _build_assistant_name_block(biz: Dict[str, Any]) -> str:
     prefs = (biz.get("settings") or {}).get("chief_preferences") or {}
     name = (prefs.get("assistant_name") or "").strip()
-    practitioner = (biz.get("settings") or {}).get("practitioner_name") or ""
+    import chief_areas   # an office login is greeted as itself (chief_areas.speaker)
+    practitioner = chief_areas.speaker(biz, "", short=True) or ""
     first_name = practitioner.split()[0] if practitioner else ""
     if name:
         return (
@@ -1165,7 +1166,15 @@ def _build_system_prompt(ctx: Dict[str, Any], is_greeting: bool,
 
     biz = ctx.get("business") or {}
     biz_name = biz.get("name", "the business")
-    practitioner = (biz.get("settings") or {}).get("practitioner_name", "the practitioner")
+    # The owner by the business's practitioner_name, as always; an office
+    # login by its own first name, and one nothing names by no name, never
+    # the owner's (chief_areas.speaker).
+    import chief_areas
+    practitioner = chief_areas.speaker(biz, "the practitioner", short=True)
+    _hello = f", {practitioner}" if practitioner else ""
+    _hey = f" {practitioner}" if practitioner else " there"
+    if not practitioner and chief_areas.WHO.get() is not None:
+        practitioner = "this team member"
     voice = biz.get("voice_profile") or {}
 
     # The snapshot splits in two (2026-10-07): what holds still between
@@ -1241,13 +1250,13 @@ def _build_system_prompt(ctx: Dict[str, Any], is_greeting: bool,
     # Time-of-day tailoring for greeting
     tod_guidance = ""
     if time_of_day == "morning":
-        tod_guidance = f" Start with 'Good morning, {practitioner}.' Focus on what to prioritize TODAY."
+        tod_guidance = f" Start with 'Good morning{_hello}.' Focus on what to prioritize TODAY."
     elif time_of_day == "afternoon":
         tod_guidance = f" Start with 'Good afternoon.' Focus on what's still pending from the morning."
     elif time_of_day == "evening":
-        tod_guidance = f" Start with 'Evening, {practitioner}.' Focus on what happened today and what carries to tomorrow."
+        tod_guidance = f" Start with 'Evening{_hello}.' Focus on what happened today and what carries to tomorrow."
     elif time_of_day == "night":
-        tod_guidance = f" Start with 'Hey {practitioner}.' Keep it very brief — just the one most important thing."
+        tod_guidance = f" Start with 'Hey{_hey}.' Keep it very brief — just the one most important thing."
 
     # Resumed conversation context
     resume_clause = ""

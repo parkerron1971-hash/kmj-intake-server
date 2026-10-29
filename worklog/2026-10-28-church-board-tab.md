@@ -3,8 +3,8 @@ title: The member app's Board tab — the board's meetings, agenda, minutes, dec
 date: 2026-10-28
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-10-28: "Please build step 2 (the board member''s yes from the member app ...) and then step 1 (a Board tab, with approvals inside it) ... build the Board tab for computers from the start and stay out of Home"; then "lets build the board tab"'
-status: in progress
-prs: ["kmj-intake-server (this PR)"]
+status: shipped
+prs: [kmj-intake-server#1636]
 migrations: []
 left_undone:
   - "Read-only: a board member can't mark attendance, write minutes, move or second from the member app; the secretary does it in the office (Board & minutes)"
