@@ -4,7 +4,7 @@ date: 2026-10-28
 agent: Claude Code (Claude Opus 5.5)
 asked: "the devotional didn't get pushed for tomorrow at 7:30pm" then "make sure you send the one that was suppose to be sent out at 7:30pm as soon as you can. (Kevin, 2026-10-28, 8:35 and 8:50 PM; Day 4 of Love City's 21 days)"
 status: done
-prs: [kmj-intake-server#TBD]
+prs: [kmj-intake-server#1642]
 migrations: []
 left_undone: ["the exact cause of 10-28's miss is not proven: the worker was up 7:14 to 7:50 PM, it was the leader (other jobs ran), the plan had 37 people due, and the logs show no exception, no 'missed', no 'max instances'; the sweep printed only when it sent, so a run that returned early or never started looked the same"]
 decisions: ["a cron trigger by the Eastern clock (7:30, 7:35 ... 7:55, DST included) instead of an interval that restarts with every deploy (that night: deploys at 7:10, 7:48, 8:05)", "misfire_grace_time 240 s so a run that starts late on a busy loop still runs; coalesce so a backlog runs once; last_key's claim still keeps it to one text a person", "every run in the window prints a line, sent or not, so the next miss has a trace", "Day 4 was not sent that night: Kevin asked at 8:50 PM, after texting's 8 PM quiet-hours cutoff. 'As soon as you can' = 9:00 AM, so the server does it: a morning catch-up (9:00 ... 9:25 AM ET) texts today's day, worded 'Today's devotional', only to people still on the evening before's key (they missed it), never to a late sign-up (last_key None) or anyone who has it; the claim moves only from that key"]
