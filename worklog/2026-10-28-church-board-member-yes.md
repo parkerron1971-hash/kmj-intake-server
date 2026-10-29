@@ -3,11 +3,11 @@ title: Church areas, step 2, part 4b — a board member says yes from the member
 date: 2026-10-28
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-10-28: "The 7 office logins are for the office only ... Everyone else uses the member app, by role, on phone or computer ... Please build step 2 (the board member''s yes from the member app, with a fresh code on every approval) and then step 1 (a Board tab, with approvals inside it) ... Board members are matched by their contact in church_board_members, so make sure each one has an email on file"; "yes start step 2"'
-status: in progress
-prs: ["kmj-intake-server (this PR)"]
+status: shipped
+prs: [kmj-intake-server#1633]
 migrations: ["supabase/APPLY-2026-10-28-church-board-member-yes.sql (applied 2026-10-28 before the code, verified)"]
 left_undone:
-  - "Step 1, the Board tab: meetings, minutes and these approvals in one tab of the member app (next PR). Until then the way in is the email's link"
+  - "Step 1, the Board tab: built next (2026-10-28-church-board-tab.md); the approvals sit inside it"
   - "A board member's no: they tell the treasurer, who declines it in the office with the reason the asker reads"
   - "The pastor's yes still comes from the office login (Kevin's); only the board's comes from the member app"
   - "A member's phone isn't alerted (member_push has no kind for it); they hear by email"
