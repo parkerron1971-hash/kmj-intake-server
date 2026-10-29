@@ -413,6 +413,12 @@ async def execute_tool_use(client, biz: Dict[str, Any],
     """
     import chief_of_staff  # runtime import — this module loads first
 
+    # A church login kept to its lane looks up and proposes only there.
+    import chief_areas
+    why = chief_areas.refusal(name, args, chief_areas.current())
+    if why:
+        return True, why
+
     import action_proposals
     if name in action_proposals.PROPOSALS:
         return await _file_proposal(client, biz, name, args)
@@ -454,7 +460,7 @@ async def execute_tool_use(client, biz: Dict[str, Any],
     # A read is a step on the stream too; the door does this for writes.
     step = chief_of_staff._turn_step_start(name)
     try:
-        result = await handler(client, biz, action)
+        result = chief_areas.trim_result(name, await handler(client, biz, action), chief_areas.current())
     except Exception as e:
         logger.warning(f"[tool-loop] {name} raised: {e}")
         chief_of_staff._turn_step_end(step, None)
@@ -659,9 +665,12 @@ async def run_tool_round(client, biz: Dict[str, Any],
             continue
         if b.get("name") == "view_website":
             # The one read whose result carries an image, not only text.
+            import chief_areas
             import chief_site_view
             _calls_this_turn.set(_calls_this_turn.get() + 1)
-            is_error, text = await chief_site_view.tool_result(biz, b.get("input") or {})
+            why = chief_areas.refusal("view_website", b.get("input") or {}, chief_areas.current())
+            is_error, text = ((True, why) if why else
+                              await chief_site_view.tool_result(biz, b.get("input") or {}))
         else:
             is_error, text = await execute_tool_use(
                 client, biz, b.get("name") or "", b.get("input") or {})
