@@ -7,10 +7,14 @@ logs paths) and hands the secret only to this agent, in the auth request's
 query. The agent does everything else:
 
   * decides who may stream (MediaMTX asks POST /auth; the backend knows the
-    keys). A key the backend confirmed in the last OFFLINE_GRANT_S keeps
-    working while the backend can't be reached, so a Sunday doesn't depend
-    on Railway — but never past that window, and never once the backend
-    has said no;
+    keys). A key the backend confirmed in the last OFFLINE_GRANT_S (3 hours
+    unless set) keeps working while the backend can't be reached, so a
+    service under way doesn't depend on Railway — but never past that
+    window, and never once the backend has said no. The window binds a
+    stream already running too: each confirmation (every heartbeat) moves
+    its deadline, and when the backend has been silent that long the
+    publisher is disconnected and every copy and the recording stop, on
+    the agent's own clock, whether or not MediaMTX's API answers;
   * notices a stream come up (MediaMTX's local API lists publishers and
     their query), and starts one ffmpeg per destination (YouTube, Facebook)
     plus one that writes HLS for the member app. All copies are `-c copy`:
@@ -34,11 +38,16 @@ never comes back), and a finish in progress carries on. A folder belongs
 to exactly one run, so a finish never touches the next stream's files.
 
 Limits, so one church can't fill the disk or the box for everyone: at most
-MAX_STREAMS at once; no new stream when free disk is under DISK_RESERVE_GB;
+MAX_STREAMS churches at once, counting those waiting out their grace and
+those just let in (a church holds its place from the moment /auth lets it
+in, and admissions are decided one at a time, so two at once can't both
+take the last place; a publisher found past the limit is disconnected);
+no new stream when free disk is under DISK_RESERVE_GB or can't be read;
 a recording stops (the copies to YouTube/Facebook keep going) past
 MAX_RECORD_S, when its not-yet-uploaded backlog passes SPOOL_MAX_GB, or
-while the disk is nearly full; a publisher sending more than
-MAX_INGEST_MBPS for half a minute is disconnected.
+while the disk is nearly full or can't be read; a publisher sending more
+than MAX_INGEST_MBPS for half a minute is disconnected. The limits and the
+key deadline are checked every pass, even while MediaMTX's API is down.
 
 Pure helpers sit at the top and import nothing outside the standard library,
 so __tests__/test_stream_relay_agent.py can test them without aiohttp/boto3.
@@ -70,6 +79,9 @@ PLAYLIST = "index.m3u8"
 JOURNAL = "run.json"
 REFUSED = (400, 401, 403, 404, 422)
 CONN_KINDS = ("rtmpsconns", "rtmpconns")
+ADMIT_HOLD_S = 30      # a church let in holds its place this long for MediaMTX to list it
+KICK_EVERY_S = 10      # a publisher that must go is disconnected again this often
+KILL_AFTER_S = 5       # a stopped ffmpeg gets this long to exit before it is killed
 
 
 # ─── pure helpers ────────────────────────────────────────────────────
@@ -201,7 +213,9 @@ class Config:
         self.grace = float(e("GRACE_S") or 600)
         self.listen = e("AGENT_ADDR") or "127.0.0.1:9100"
         self.beat_s = float(e("BEAT_S") or 60)
-        self.offline_s = float(e("OFFLINE_GRANT_S") or 8 * 86400)
+        # How long the backend may be silent about a key before streams on
+        # it are refused (new) or cut (running): a service plus its warm-up.
+        self.offline_s = float(e("OFFLINE_GRANT_S") or 3 * 3600)
         self.max_streams = int(e("MAX_STREAMS") or 4)
         self.reserve = int(float(e("DISK_RESERVE_GB") or 2) * 1e9)
         self.spool_max = int(float(e("SPOOL_MAX_GB") or 6) * 1e9)
@@ -268,6 +282,17 @@ class Run:
         run.stopped = str(data.get("stopped") or "")
         return run
 
+    def last_write(self) -> float:
+        """When this recording was last written to (ffmpeg's playlist, or
+        the journal), 0 if neither can be read."""
+        t = 0.0
+        for name in (PLAYLIST, JOURNAL):
+            try:
+                t = max(t, (self.dir / name).stat().st_mtime)
+            except OSError:
+                pass
+        return t
+
     def seconds(self) -> float:
         pl = self.dir / PLAYLIST
         try:
@@ -301,10 +326,26 @@ class Copy:
         self.tail: Deque[str] = collections.deque(maxlen=5)
 
     def stop(self) -> None:
+        """Ask ffmpeg to stop, and kill it if it hasn't within KILL_AFTER_S:
+        a copy that is stopped really ends."""
         self.stopped = True
-        if self.proc is not None and self.proc.returncode is None:
+        proc = self.proc
+        if proc is None or proc.returncode is not None:
+            return
+        try:
+            proc.terminate()
+        except ProcessLookupError:
+            return
+        try:
+            asyncio.get_running_loop().call_later(KILL_AFTER_S, Copy._kill, proc)
+        except RuntimeError:      # no loop: nothing is running to kill
+            pass
+
+    @staticmethod
+    def _kill(proc: Any) -> None:
+        if proc.returncode is None:
             try:
-                self.proc.terminate()
+                proc.kill()
             except ProcessLookupError:
                 pass
 
@@ -320,7 +361,11 @@ class Live:
         self.up = False
         self.down_since: Optional[float] = time.time()
         self.revoked = False
-        self.bad_key: Optional[str] = None              # the key the backend refused (memory only)
+        self.bad_key: Optional[str] = None              # the key cut off (memory only)
+        self.revoked_at = 0.0
+        # Until when the backend's last word on this stream's key holds:
+        # its last confirmation + OFFLINE_GRANT_S. Past it, the stream is cut.
+        self.auth_until = 0.0
         self.next_kick = 0.0
         self.last_beat = 0.0
         self.beating = False
@@ -347,6 +392,11 @@ class Agent:
         self.recovered = False
         self.born = time.time()
         self.next_limits = 0.0
+        # A church /auth let in, until MediaMTX lists it: stream id -> (held
+        # until, which admission). Counted against MAX_STREAMS.
+        self.held: Dict[str, Tuple[float, str]] = {}
+        self.admitting = asyncio.Lock()                 # one admission decided at a time
+        self.turned_away: Dict[str, float] = {}         # past the limit: stream id -> next kick
 
     # ── the backend ──
 
@@ -366,10 +416,14 @@ class Agent:
     def _cache_path(self, key: str) -> Path:
         return self.cache_dir / f"{key_id(key)}.json"
 
-    def remember(self, key: str, stream_id: str, dests: List[Dict[str, str]]) -> None:
+    def remember(self, key: str, stream_id: str, dests: List[Dict[str, str]],
+                 seen: Optional[float] = None) -> None:
+        """`seen`: when the backend was ASKED (an answer is never newer than
+        its question), so an answer that crossed a cut-off can't outlive it."""
         p = self._cache_path(key)
         tmp = p.with_suffix(".tmp")
-        tmp.write_text(json.dumps({"seen": time.time(), "stream_id": stream_id, "dests": dests}))
+        tmp.write_text(json.dumps({"seen": time.time() if seen is None else seen,
+                                   "stream_id": stream_id, "dests": dests}))
         os.chmod(tmp, 0o600)
         os.replace(tmp, p)
 
@@ -381,6 +435,12 @@ class Agent:
         fresh = time.time() - float(data.get("seen") or 0) < self.cfg.offline_s
         return data if fresh and data.get("stream_id") == stream_id else None
 
+    def grant_until(self, key: Optional[str], stream_id: str) -> float:
+        """Until when the backend's last confirmation of this key holds; 0
+        (already over) for a key it never confirmed or not within the window."""
+        data = self.recall(key, stream_id) if key else None
+        return float(data.get("seen") or 0) + self.cfg.offline_s if data else 0.0
+
     def forget(self, key: Optional[str]) -> None:
         if not key:
             return
@@ -390,30 +450,83 @@ class Agent:
             pass
 
     async def may_publish(self, stream_id: str, key: str) -> bool:
+        asked = time.time()
         status, data = await self.backend("/stream-relay/relay/verify", {"stream_id": stream_id, "key": key})
         if status == 200:
-            self.remember(key, stream_id, list(data.get("destinations") or []))
+            self.remember(key, stream_id, list(data.get("destinations") or []), seen=asked)
             return True
         if status in REFUSED:
             self.forget(key)
             return False
         # The backend can't answer (0 / 5xx): a key it confirmed within the
-        # offline window keeps working, so Sunday doesn't depend on Railway.
+        # offline window keeps working, so a service doesn't depend on Railway.
         return self.recall(key, stream_id) is not None
 
     def free_disk(self) -> int:
         return shutil.disk_usage(self.cfg.work).free
 
+    def disk_room(self) -> Optional[int]:
+        """Free bytes on the spool's disk, or None when that can't be read
+        (every limit then treats the disk as full)."""
+        try:
+            return int(self.free_disk())
+        except Exception as e:
+            log.error("the disk can't be read: %s", type(e).__name__)
+            return None
+
+    def places_taken(self, now: float, but: str = "") -> int:
+        """Churches counted against MAX_STREAMS: every one here (streaming,
+        or waiting out its grace to come back) and every one /auth let in
+        that MediaMTX doesn't list yet. A hold nobody connected on lapses."""
+        for sid, (until, _) in list(self.held.items()):
+            if until <= now or sid in self.lives:
+                self.held.pop(sid, None)
+        return len([s for s in set(self.lives) | set(self.held) if s != but])
+
     def refusal(self, stream_id: str) -> str:
         """Why a NEW stream can't start now ('' when it can). A church
-        already here (reconnecting within its grace) is always let back."""
-        if stream_id in self.lives:
+        already here (reconnecting within its grace), or let in a moment
+        ago, is always let back."""
+        now = time.time()
+        if stream_id in self.lives or self.held.get(stream_id, (0.0, ""))[0] > now:
             return ""
-        if sum(1 for lv in self.lives.values() if lv.up) >= self.cfg.max_streams:
+        if self.places_taken(now) >= self.cfg.max_streams:
             return f"already carrying {self.cfg.max_streams} streams"
-        if self.free_disk() < self.cfg.reserve:
+        free = self.disk_room()
+        if free is None:
+            return "the disk can't be read"
+        if free < self.cfg.reserve:
             return "the disk is nearly full"
         return ""
+
+    async def admit(self, stream_id: str, key: str) -> bool:
+        """One publish asking to come in. The place is taken BEFORE the
+        backend is asked, and the check and the taking are one step under a
+        lock, so two churches at once can't both get the last place. A
+        church the backend (or the cache) turns down gives it back."""
+        async with self.admitting:
+            why = self.refusal(stream_id)
+            if why:
+                log.warning("%s: not taking a new stream: %s", stream_id, why)
+                return False
+            hold: Optional[Tuple[float, str]] = None
+            if stream_id not in self.lives:
+                hold = (time.time() + ADMIT_HOLD_S, uuid.uuid4().hex)
+                self.held[stream_id] = hold
+        ok = False
+        try:
+            ok = await self.may_publish(stream_id, key)
+            return ok
+        finally:
+            if not ok and hold is not None and self.held.get(stream_id) == hold:
+                self.held.pop(stream_id, None)
+
+    def take_place(self, stream_id: str, now: float) -> bool:
+        """MediaMTX lists a publisher the agent isn't carrying yet: carry it
+        if /auth let it in (its held place) or there is still room."""
+        if self.held.pop(stream_id, None) is not None:
+            return True
+        return self.places_taken(now, but=stream_id) < self.cfg.max_streams
 
     # ── MediaMTX ──
 
@@ -439,22 +552,32 @@ class Agent:
                                 "bytes": int(item.get("bytesReceived") or 0)}
         return out
 
-    async def kick(self, live: Live) -> None:
-        if not live.conn:
+    async def kick(self, stream_id: str, conn: Optional[Tuple[str, str]]) -> None:
+        """Disconnect one publisher through MediaMTX's API. A kick that
+        fails is tried again (KICK_EVERY_S) while the publisher is listed."""
+        if not conn:
             return
-        kind, cid = live.conn
+        kind, cid = conn
         try:
             async with self.http.post(f"{self.cfg.mtx_api}/v3/{kind}/kick/{cid}", timeout=5) as r:
-                log.warning("%s disconnected (%s)", live.stream_id, r.status)
+                log.warning("%s disconnected (%s)", stream_id, r.status)
         except Exception as e:
-            log.warning("%s kick failed: %s", live.stream_id, type(e).__name__)
+            log.warning("%s kick failed: %s", stream_id, type(e).__name__)
 
     # ── startup: pick up where the last agent left off ──
 
     def recover(self) -> None:
         runs = [r for r in (Run.load(self.cfg.work, p) for p in (self.cfg.work / "streams").glob(f"*/*/{JOURNAL}")) if r]
         runs.sort(key=lambda r: r.created)
+        now = time.time()
         for run in runs:
+            if run.state == "recording" and now - run.last_write() > self.cfg.grace:
+                # Nothing written for longer than the grace (the agent was
+                # down that long): that service is over. Finish it; the
+                # church's next stream starts a recording of its own.
+                log.info("%s: recording %s untouched past the grace; finishing it", run.stream_id, run.run_id)
+                self.end_run(run)
+                continue
             if run.state == "recording" and run.stream_id in self.lives:
                 old = self.lives.pop(run.stream_id).run     # two open runs: only the newest goes on
                 self.end_run(old)
@@ -470,30 +593,64 @@ class Agent:
     # ── the loop ──
 
     async def tick(self) -> None:
-        pubs = await self.publishers()
-        if pubs is None:
-            return
+        """One pass, every second. Only finding publishers needs MediaMTX's
+        API; the heartbeat, the key deadline and the limits run every pass
+        whether or not it answers (a guard that waits on it is no guard)."""
+        try:
+            pubs = await self.publishers()
+            if pubs is not None:
+                await self.discover(pubs, time.time())
+        except Exception:
+            log.exception("finding publishers failed")
         now = time.time()
+        for live in list(self.lives.values()):
+            if live.key and not live.beating and now - live.last_beat >= self.cfg.beat_s:
+                live.last_beat, live.beating = now, True
+                asyncio.create_task(self.beat(live))
+        await self.enforce_grants(now)
+        if now >= self.next_limits:
+            self.next_limits = now + 10
+            await self.enforce_limits(now)
+
+    async def discover(self, pubs: Dict[str, Dict[str, Any]], now: float) -> None:
+        """Bring the agent in line with the publishers MediaMTX lists."""
+        for sid in list(self.turned_away):
+            if sid not in pubs:
+                self.turned_away.pop(sid, None)
         for sid, p in pubs.items():
-            live = self.lives.get(sid) or self.begin(sid)
+            live = self.lives.get(sid)
+            if live is None:
+                if not self.take_place(sid, now):
+                    # Past the limit (let in by an agent since restarted,
+                    # say): never carried, disconnected until it goes.
+                    if now >= self.turned_away.get(sid, 0.0):
+                        self.turned_away[sid] = now + KICK_EVERY_S
+                        log.warning("%s: already carrying %s streams; disconnecting", sid, self.cfg.max_streams)
+                        await self.kick(sid, p["conn"])
+                    continue
+                live = self.begin(sid)
             if live.conn != p["conn"]:
                 live.rate.clear()
             live.conn = p["conn"]
             live.rate.append((now, p["bytes"]))
             if live.revoked:
-                if p["key"] and p["key"] != live.bad_key:
-                    live.revoked, live.bad_key, live.up = False, None, False   # back on a new key
+                if p["key"] and (p["key"] != live.bad_key or self.confirmed_since(p["key"], sid, live.revoked_at)):
+                    # Back on a new key, or the backend has confirmed this
+                    # one since it was cut (a deadline that ran out).
+                    live.revoked, live.bad_key, live.up = False, None, False
                 else:
-                    if now >= live.next_kick:                  # still there on the refused key
-                        live.next_kick = now + 10
-                        await self.kick(live)
+                    if now >= live.next_kick:                  # still there on the cut-off key
+                        live.next_kick = now + KICK_EVERY_S
+                        await self.kick(sid, live.conn)
                     continue
-            if p["key"]:
+            if p["key"] and p["key"] != live.key:
                 live.key = p["key"]
+                live.auth_until = self.grant_until(live.key, sid)
             if not live.up:
                 if live.down_since is not None and live.run.created < now - 1:
                     log.info("%s back after %.0fs: same recording", sid, now - live.down_since)
                 live.up, live.down_since = True, None
+                live.auth_until = self.grant_until(live.key, sid)
                 if not live.dests and live.key:
                     live.dests = list((self.recall(live.key, sid) or {}).get("dests") or [])
                 self.start_writers(live)
@@ -507,13 +664,29 @@ class Agent:
                 self.lives.pop(sid, None)
                 self.stop_writers(live)
                 self.end_run(live.run)
+
+    def confirmed_since(self, key: str, stream_id: str, when: float) -> bool:
+        """Has the backend confirmed this key (asked after `when`)?"""
+        data = self.recall(key, stream_id)
+        return bool(data) and float(data.get("seen") or 0) > when
+
+    def revoke(self, live: Live, now: float) -> None:
+        """Cut this stream off its key: every copy and the recording stop
+        now, without waiting on MediaMTX; the caller disconnects it."""
+        live.revoked, live.bad_key, live.key = True, live.key, None
+        live.revoked_at, live.next_kick = now, now + KICK_EVERY_S
+        self.stop_writers(live)
+
+    async def enforce_grants(self, now: float) -> None:
+        """A running stream whose key the backend hasn't confirmed within
+        OFFLINE_GRANT_S is cut, on this clock alone: the backend may be
+        down, MediaMTX's API may be too."""
         for live in list(self.lives.values()):
-            if live.key and not live.beating and now - live.last_beat >= self.cfg.beat_s:
-                live.last_beat, live.beating = now, True
-                asyncio.create_task(self.beat(live))
-        if now >= self.next_limits:
-            self.next_limits = now + 10
-            await self.enforce_limits(now)
+            if live.up and not live.revoked and now >= live.auth_until:
+                log.warning("%s: the backend hasn't confirmed this stream's key for %.0f min; disconnecting",
+                            live.stream_id, self.cfg.offline_s / 60)
+                self.revoke(live, now)
+                await self.kick(live.stream_id, live.conn)
 
     def begin(self, stream_id: str) -> Live:
         run = Run(self.cfg.work, stream_id)
@@ -530,6 +703,7 @@ class Agent:
             run, key = live.run, live.key
             if not key:
                 return
+            asked = time.time()
             status, data = await self.backend("/stream-relay/relay/started", {
                 "stream_id": live.stream_id, "key": key, "run_id": run.run_id,
                 "recorded_s": int(run.seconds()), "bytes": run.bytes})
@@ -540,17 +714,18 @@ class Agent:
                     run.session_id, run.playlist_path = data["session_id"], data.get("playlist_path")
                     run.save()
                 dests = list(data.get("destinations") or [])
-                self.remember(key, live.stream_id, dests)
+                self.remember(key, live.stream_id, dests, seen=asked)
+                if live.key == key and not live.revoked:
+                    live.auth_until = max(live.auth_until, asked + self.cfg.offline_s)
                 self.reconcile(live, dests)
             elif status == 409:
                 self.split(live, data.get("detail") if isinstance(data.get("detail"), dict) else {})
             elif status in REFUSED:
                 log.warning("%s: the backend refused this stream's key (%s); disconnecting", live.stream_id, status)
                 self.forget(key)
-                live.revoked, live.bad_key, live.key = True, key, None
-                live.next_kick = time.time() + 10
-                self.stop_writers(live)
-                await self.kick(live)
+                if live.key == key:
+                    self.revoke(live, time.time())
+                    await self.kick(live.stream_id, live.conn)
             elif run.session_id is None and run.key != key:
                 run.key = key                           # the backend is down: the finish will need it
                 run.save()
@@ -665,16 +840,16 @@ class Agent:
     # ── limits ──
 
     async def enforce_limits(self, now: float) -> None:
-        free = self.free_disk()
+        free = self.disk_room()                          # None: can't be read, so full
         for live in list(self.lives.values()):
             run = live.run
             if live.up and ingest_mbps(live.rate) > self.cfg.max_mbps and len(live.rate) >= 30:
                 log.error("%s: sending %.0f Mbps (limit %.0f); disconnecting", live.stream_id,
                           ingest_mbps(live.rate), self.cfg.max_mbps)
                 live.rate.clear()
-                await self.kick(live)
+                await self.kick(live.stream_id, live.conn)
             reason = ""
-            if free < self.cfg.reserve // 2:
+            if free is None or free < self.cfg.reserve // 2:
                 reason = "disk"
             elif now - run.created > self.cfg.max_record_s:
                 reason = "length"
@@ -682,13 +857,17 @@ class Agent:
                 reason = "backlog"
             if reason and not run.stopped:
                 run.stopped = reason
-                run.save()
-                if live.hls:
+                if live.hls:                             # stop first: the journal may not save on a full disk
                     live.hls.stop()
                     live.hls = None
                 log.error("%s: recording %s stopped (%s); copies to YouTube/Facebook continue",
                           live.stream_id, run.run_id, reason)
-            elif run.stopped == "disk" and free > self.cfg.reserve and now - run.created <= self.cfg.max_record_s:
+                try:
+                    run.save()
+                except OSError as e:
+                    log.error("%s: journal not saved: %s", live.stream_id, type(e).__name__)
+            elif (run.stopped == "disk" and free is not None and free > self.cfg.reserve
+                  and now - run.created <= self.cfg.max_record_s):
                 run.stopped = ""
                 run.save()
                 if live.up and not live.revoked:
@@ -814,14 +993,8 @@ class Agent:
         verdict, cred = auth_decision(req)
         if verdict == "allow":
             return web.Response(status=200)
-        if verdict == "check" and cred:
-            sid, key = cred
-            why = self.refusal(sid)
-            if why:
-                log.warning("%s: not taking a new stream: %s", sid, why)
-                return web.Response(status=401)
-            if await self.may_publish(sid, key):
-                return web.Response(status=200)
+        if verdict == "check" and cred and await self.admit(*cred):
+            return web.Response(status=200)
         return web.Response(status=401)
 
     async def handle_health(self, request):

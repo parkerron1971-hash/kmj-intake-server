@@ -4,7 +4,8 @@ Our own server between a church's streaming software and YouTube/Facebook.
 Kevin chose it on 2026-10-16 over Cloudflare Stream (priced per viewer) and
 Railway (same platform as everything else; a Railway outage would take the
 app and Sunday down together). Codex reviewed it the same day; the fixes are
-in this version (findings R1–R11 in the review).
+in this version (findings R1–R11 in the review), and so are the two its
+re-check found (R3-R, R6-R; fixed 2026-10-29).
 
 ```
 Church's streaming software ── one encrypted stream (RTMPS) ──▶ stream.<domain>:443  (this droplet)
@@ -88,10 +89,11 @@ Keep a second saved profile in the streaming software, "Straight to YouTube". If
 | A copy (YouTube/Facebook) drops | The agent restarts that copy, waiting 1s, 2s, 4s… up to 30s | Nobody |
 | The church's internet blinks | The church's software reconnects; the agent keeps the **same** recording for up to `GRACE_S` (10 min) | Nobody |
 | The agent crashes or restarts | Docker restarts it in seconds. It reads its journals: a stream still coming in carries on in the same recording; one that doesn't come back is finished after the grace | Nobody |
-| Railway (the backend) is down | Keys the backend confirmed in the last 8 days (`OFFLINE_GRANT_S`) still work, and copies go to the remembered destinations. The recording uploads and the sermon draft is made once Railway is back; a finish retries until it is acknowledged | Nobody |
+| Railway (the backend) is down | A key the backend confirmed in the last 3 hours (`OFFLINE_GRANT_S`) still works: a stream under way carries on, and can reconnect after a blip, with copies to the remembered destinations. The recording uploads and the sermon draft is made once Railway is back; a finish retries until it is acknowledged. Three hours after the last confirmation, a stream still running is disconnected and its copies and recording stop (a key replaced during the outage can't stream on for days), and a stream starting after that is refused | Nobody during a service. A church starting while Railway has been down 3+ hours uses "Straight to YouTube" |
 | Railway is down for more than 45 minutes mid-service | The backend's sweep may close the session when it's back; the agent then carries on in a new recording (the service becomes two drafts) | Kevin merges the drafts if he wants one |
 | The droplet dies | **Not automatic yet:** the church clicks "Straight to YouTube"; I move the reserved IP to a new droplet. The backend closes the lost session after 45 minutes | The church, then me |
-| The disk fills, or a recording runs past 6 hours | New streams are refused while free disk is under 2 GB; a recording stops (copies to YouTube/Facebook continue) past 6 hours, a 6 GB upload backlog, or 1 GB free | Me, from the logs |
+| The disk fills, or a recording runs past 6 hours | New streams are refused while free disk is under 2 GB (or the disk can't be read); a recording stops (copies to YouTube/Facebook continue) past 6 hours, a 6 GB upload backlog, or 1 GB free. These checks run even while MediaMTX's API is down | Me, from the logs |
+| More churches start at once than `MAX_STREAMS` (4) | Each church holds its place from the moment it is let in, one admission at a time, and a church waiting out its grace keeps its place; the one past the limit is refused, and any publisher found past it is disconnected | Me, if it happens: a bigger droplet |
 
 ## Operating it
 

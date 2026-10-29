@@ -7,16 +7,22 @@
 # log; a key the backend confirmed keeps working while it is down — only
 # for its own church and only for a bounded window — and a refused key is
 # forgotten; a key the backend refuses mid-stream is cut at the next
-# heartbeat (R3); copies follow the backend's current destinations (R11);
-# a dropped stream resumes the same recording, a restarted agent picks up
-# its journals and still finishes, and a finish retries until it is
-# acknowledged (R4); a finish only ever removes its own run's folder (R5);
-# the disk, the recording's length and backlog, the number of streams and
-# the ingest rate are bounded (R6).
+# heartbeat (R3), and a running stream whose key the backend hasn't
+# confirmed within the window is cut too, on the agent's own clock (R3-R);
+# copies follow the backend's current destinations, and a stopped copy is
+# killed if it won't stop (R11); a dropped stream resumes the same
+# recording, a restarted agent picks up its journals and still finishes,
+# and a finish retries until it is acknowledged (R4); a finish only ever
+# removes its own run's folder (R5), and a journal left past the grace is
+# finished, never appended to; the disk, the recording's length and
+# backlog, the number of streams and the ingest rate are bounded (R6), with
+# MediaMTX's API down, a disk that can't be read, and churches arriving at
+# once (R6-R).
 
 import asyncio
 import importlib.util
 import json
+import os
 import pathlib
 import sys
 
@@ -29,11 +35,13 @@ _spec.loader.exec_module(ra)
 
 SID = "3f9a0c1d2e4b5a6c7d8e"
 SID2 = "0123456789abcdef0123"
+SID3 = "abcdefabcdefabcdef01"
 KEY = "AbCdEfGhIjKlMnOpQrStUvWxYz012345"
 NEW_KEY = "ZyXwVuTsRqPoNmLkJiHgFeDcBa543210"
 SESSION = "00000000-0000-4000-8000-000000000001"
 YT = {"name": "youtube", "label": "YouTube", "url": "rtmps://a.rtmps.youtube.com/live2/yt-1"}
 FB = {"name": "facebook", "label": "Facebook", "url": "rtmps://live-api-s.facebook.com:443/rtmp/FB-1?s=1"}
+STARTED = {"session_id": SESSION, "playlist_path": f"live/biz/{SESSION}/index.m3u8", "destinations": [YT]}
 
 
 # ─── pure helpers ────────────────────────────────────────────────────
@@ -111,7 +119,9 @@ class Harness:
     def __init__(self, tmp_path, monkeypatch, **cfg):
         c = ra.Config()
         c.work = tmp_path
-        c.grace, c.beat_s = 600, 60
+        # Long enough that a test jumping hours ahead isn't cut for silence;
+        # the tests of the window itself set their own.
+        c.grace, c.beat_s, c.offline_s = 600, 60, 7 * 86400
         for k, v in cfg.items():
             setattr(c, k, v)
         self.clock = {"t": 1_000_000.0}
@@ -122,6 +132,7 @@ class Harness:
         self.answers = {}                  # path's last part -> (status, data) or an async callable
         self.pubs = {}
         self.free = 50 * 10**9
+        self.kick_works = True             # False: MediaMTX's kick fails and the publisher stays
         a = self.a
 
         async def backend(path, body):
@@ -132,9 +143,10 @@ class Harness:
         async def publishers():
             return {sid: dict(p) for sid, p in self.pubs.items()}
 
-        async def kick(live):
-            self.kicks.append(live.stream_id)
-            self.pubs.pop(live.stream_id, None)
+        async def kick(sid, conn):
+            self.kicks.append(sid)
+            if self.kick_works:
+                self.pubs.pop(sid, None)
 
         async def put(name, body):
             self.puts[name] = body
@@ -146,13 +158,17 @@ class Harness:
 
         a.backend, a.publishers, a.kick, a.put, a.supervise = backend, publishers, kick, put, supervise
         a.free_disk = lambda: self.free
-        self.started({"session_id": SESSION, "playlist_path": f"live/biz/{SESSION}/index.m3u8",
-                      "destinations": [YT]})
+        self.started(STARTED)
 
     def started(self, data, status=200):
         self.answers["started"] = (status, data)
 
-    def publish(self, sid=SID, key=KEY, nbytes=0):
+    def publish(self, sid=SID, key=KEY, nbytes=0, admit=True):
+        """MediaMTX lists a publisher. It got in through /auth, so the
+        backend confirmed its key just now (admit=False: the test let it
+        in through handle_auth itself)."""
+        if admit:
+            self.a.remember(key, sid, [])
         self.pubs[sid] = {"key": key, "conn": ("rtmpsconns", f"conn-{sid}"), "bytes": nbytes}
 
     def later(self, s):
@@ -258,10 +274,7 @@ def test_a_refused_key_still_connected_is_disconnected_again_and_never_readmitte
     church's path (MediaMTX lets it replace the old publisher) carries on."""
     h = Harness(tmp_path, monkeypatch)
     a = h.a
-
-    async def kick_fails(live):
-        h.kicks.append(live.stream_id)                                # the publisher stays listed
-    a.kick = kick_fails
+    h.kick_works = False                                              # the publisher stays listed
 
     async def go():
         h.publish()
@@ -564,6 +577,248 @@ def test_a_publisher_sending_too_much_is_disconnected(tmp_path, monkeypatch):
             h.later(1)
         await settle()
         assert h.kicks == [SID]
+    run(go())
+
+
+class Auth:
+    """MediaMTX's auth request for a church's publish."""
+
+    def __init__(self, sid=SID, key=KEY):
+        self.body = {"action": "publish", "path": f"live/{sid}", "query": f"key={key}", "ip": "203.0.113.9"}
+
+    async def json(self):
+        return self.body
+
+
+def test_a_stream_whose_key_goes_unconfirmed_past_the_window_is_cut(tmp_path, monkeypatch):
+    """Codex R3-R: the backend stops answering mid-stream. The stream keeps
+    going for OFFLINE_GRANT_S after its key was last confirmed, then the
+    publisher is disconnected and every copy and the recording stop. It
+    can't come back on the stale grant, and carries on once the backend
+    confirms the key again."""
+    h = Harness(tmp_path, monkeypatch, offline_s=120)
+    a = h.a
+
+    async def go():
+        h.publish()
+        await a.tick()
+        await settle()
+        live = a.lives[SID]
+        assert h.running(live) == ["hls", "youtube"]
+        h.started({}, status=503)
+        h.answers["verify"] = (503, {})
+        h.later(61)
+        await a.tick()
+        await settle()
+        assert h.running(live) == ["hls", "youtube"] and not h.kicks      # inside the window
+        h.later(60)                                                       # 121 s since the last confirmation
+        await a.tick()
+        await settle()
+        assert a.recall(KEY, SID) is None
+        assert h.kicks == [SID] and live.revoked and h.running(live) == []
+        h.later(1)
+        await a.tick()
+        await settle()
+        assert h.running(live) == []                                      # nothing restarts
+        assert (await a.handle_auth(Auth())).status == 401                # no way back on the stale grant
+        h.answers["verify"] = (200, {"destinations": [YT]})
+        h.started(STARTED)
+        h.later(5)
+        assert (await a.handle_auth(Auth())).status == 200                # the backend knows the key again
+        h.publish(admit=False)
+        await a.tick()
+        await settle()
+        assert a.lives[SID] is live and not live.revoked and h.running(live) == ["hls", "youtube"]
+    run(go())
+
+
+def test_an_expired_grant_is_cut_even_while_mediamtx_cant_be_read(tmp_path, monkeypatch):
+    """Codex R3-R: the deadline keeps its own clock. With MediaMTX's API down
+    as well, the copies and the recording stop at expiry, and the
+    disconnect is tried again every 10 s until it takes."""
+    h = Harness(tmp_path, monkeypatch, offline_s=120)
+    a = h.a
+    listing = a.publishers
+
+    async def unreadable():
+        return None
+
+    async def go():
+        h.publish()
+        await a.tick()
+        await settle()
+        live = a.lives[SID]
+        h.started({}, status=0)
+        h.kick_works = False
+        a.publishers = unreadable
+        h.later(121)
+        await a.tick()
+        await settle()
+        assert live.revoked and h.running(live) == [] and h.kicks == [SID]
+        a.publishers = listing                                            # the API is back; still connected
+        for _ in range(3):
+            h.later(11)
+            await a.tick()
+            await settle()
+        assert h.kicks == [SID] * 4 and h.running(live) == []
+    run(go())
+
+
+def test_the_offline_window_is_short_unless_set(monkeypatch):
+    """Codex R3-R: hours, not days, unless OFFLINE_GRANT_S says otherwise."""
+    monkeypatch.delenv("OFFLINE_GRANT_S", raising=False)
+    assert ra.Config().offline_s == 3 * 3600
+    monkeypatch.setenv("OFFLINE_GRANT_S", "600")
+    assert ra.Config().offline_s == 600
+
+
+@pytest.mark.parametrize("disk", ["full", "unreadable"])
+def test_recording_limits_hold_while_mediamtx_cant_be_read(tmp_path, monkeypatch, disk):
+    """Codex R6-R: the limits don't wait on finding publishers, and a disk
+    that can't be read counts as full."""
+    h = Harness(tmp_path, monkeypatch, reserve=2 * 10**9)
+    a = h.a
+
+    async def unreadable():
+        return None
+
+    def broken():
+        raise OSError("I/O error")
+
+    async def go():
+        h.publish()
+        await a.tick()
+        await settle()
+        live = a.lives[SID]
+        a.publishers = unreadable
+        if disk == "full":
+            h.free = 0
+        else:
+            a.free_disk = broken
+        h.later(11)
+        await a.tick()
+        await settle()
+        assert live.run.stopped == "disk" and live.hls is None and h.running(live) == ["youtube"]
+    run(go())
+
+
+def test_a_disk_that_cant_be_read_refuses_new_streams(tmp_path, monkeypatch):
+    """Codex R6-R: a failed check of the disk refuses; it never lets in."""
+    h = Harness(tmp_path, monkeypatch)
+    a = h.a
+
+    def broken():
+        raise OSError("I/O error")
+    a.free_disk = broken
+    assert a.refusal(SID) != ""
+    assert run(a.handle_auth(Auth())).status == 401 and not h.said("verify")
+
+
+def test_simultaneous_new_streams_never_pass_the_limit(tmp_path, monkeypatch):
+    """Codex R6-R: three churches ask at once with room for one. A church
+    holds its place from the moment it is let in (before the backend has
+    answered), so the other two are refused without asking the backend. A
+    place nobody connects on is freed after a short hold, and a church the
+    backend turns down gives its place back at once."""
+    h = Harness(tmp_path, monkeypatch, max_streams=1)
+    a = h.a
+
+    async def go():
+        gate = asyncio.Event()
+
+        async def slow_verify(body):
+            await gate.wait()
+            return 200, {"destinations": []}
+        h.answers["verify"] = slow_verify
+        three = [asyncio.create_task(a.handle_auth(Auth(sid))) for sid in (SID, SID2, SID3)]
+        await settle()
+        gate.set()
+        replies = [(await t).status for t in three]
+        assert replies.count(200) == 1 and len(h.said("verify")) == 1
+        assert "streams" in a.refusal(SID2)                              # held, though not listed yet
+        h.later(ra.ADMIT_HOLD_S + 1)                                     # it never connected
+        assert a.refusal(SID2) == ""
+        h.answers["verify"] = (403, {})
+        assert (await a.handle_auth(Auth(SID2))).status == 401
+        h.answers["verify"] = (200, {})
+        assert (await a.handle_auth(Auth(SID3))).status == 200
+    run(go())
+
+
+def test_the_limit_holds_for_publishers_found_and_churches_waiting_to_come_back(tmp_path, monkeypatch):
+    """Codex R6-R: MediaMTX lists more publishers than the limit (let in by
+    an agent that then restarted, say): only the limit is carried and the
+    rest are disconnected. A church that dropped keeps its place for its
+    grace, so its return can't push the relay past the limit."""
+    h = Harness(tmp_path, monkeypatch, max_streams=1)
+    a = h.a
+
+    async def go():
+        h.publish(SID)
+        h.publish(SID2, key=NEW_KEY)                                  # each church has its own key
+        await a.tick()
+        await settle()
+        assert list(a.lives) == [SID] and h.kicks == [SID2]
+        assert h.running(a.lives[SID]) == ["hls", "youtube"]
+        h.pubs.clear()
+        h.later(5)
+        await a.tick()
+        assert not a.lives[SID].up and "streams" in a.refusal(SID2)
+        assert a.refusal(SID) == ""
+    run(go())
+
+
+def test_a_recording_left_longer_than_the_grace_is_finished_not_resumed(tmp_path, monkeypatch):
+    """Bot review on #1461: a church that streams after the agent was down
+    past the grace (a droplet off for days) gets a NEW recording; the old
+    one is finished, never appended to."""
+    h = Harness(tmp_path, monkeypatch)
+    h.answers["ended"] = (200, {})
+    old = ra.Run(tmp_path, SID)
+    old.session_id, old.playlist_path = SESSION, "p/index.m3u8"
+    old.save()
+    (old.dir / "index.m3u8").write_text("#EXTM3U\n#EXTINF:4.0,\nseg_000000.ts\n")
+    then = h.clock["t"] - 601
+    for f in old.dir.iterdir():
+        os.utime(f, (then, then))
+
+    async def go():
+        h.a.recover()
+        h.publish()
+        await h.a.tick()
+        await settle()
+        live = h.a.lives[SID]
+        assert live.run.run_id != old.run_id
+        assert h.said("ended") and h.said("ended")[0]["session_id"] == SESSION
+        hls = [cmd for name, _, cmd in h.copies if name == "hls"][0]
+        assert "discont_start" not in hls[hls.index("-hls_flags") + 1]
+    run(go())
+
+
+def test_a_stopped_copy_that_ignores_the_signal_is_killed(monkeypatch):
+    """Codex R11 follow-up: stopping a copy is bounded. It is asked to stop,
+    then killed, so a cut stream's copies really end."""
+    monkeypatch.setattr(ra, "KILL_AFTER_S", 0.01)
+
+    class Stubborn:
+        returncode = None
+
+        def __init__(self):
+            self.signals = []
+
+        def terminate(self):
+            self.signals.append("term")
+
+        def kill(self):
+            self.signals.append("kill")
+            self.returncode = -9
+
+    async def go():
+        c = ra.Copy("youtube", YT["url"])
+        c.proc = p = Stubborn()
+        c.stop()
+        await asyncio.sleep(0.05)
+        assert p.signals == ["term", "kill"]
     run(go())
 
 
