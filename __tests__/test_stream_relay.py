@@ -13,6 +13,13 @@
 # new run closes the old run's session and a silent one is swept; nothing
 # in the bucket is public — the player plays live, a published sermon, or a
 # manager's signed link, and every segment is a short-lived signed link (B1).
+# Codex's re-check (2026-10-16), fixed 10-29: an old run's late heartbeat or
+# finishing retry never retires the run that is live now, and a run only
+# takes over from one that stopped beating (B2-R); a start retry racing the
+# sweep can't open a live service for a finished session (B3-R). Those
+# changes of state are database functions under one lock per church; the
+# fake below mirrors them, and the same sequences were run against real
+# Postgres when they were written.
 
 import pathlib
 import sys
@@ -41,7 +48,9 @@ R2 = "https://acct123.r2.cloudflarestorage.com"
 RELAY = {"x-relay-secret": SECRET}
 RUN_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 RUN_B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+RUN_C = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
 EDT = timezone(timedelta(hours=-4))
+_REAL_CHURCH_TZ = sr._church_tz
 
 
 class _User:
@@ -55,22 +64,120 @@ def _params(path):
 
 
 class DB:
-    """Just enough PostgREST for these tables: eq/neq/gte/like filters,
-    explicit ids, ignore-duplicates, and the two one-live uniques."""
+    """Just enough PostgREST for these tables: eq/neq/gte/like/in filters,
+    explicit ids, ignore-duplicates, the two one-live uniques, and the
+    stream relay's four database functions
+    (APPLY-2026-10-29-stream-relay-transitions.sql), each one step, as the
+    church's lock makes them."""
 
     def __init__(self):
         self.t = {k: [] for k in ("church_streams", "stream_sessions", "live_sessions", "sermons",
                                   "business_users")}
         self.t["businesses"] = [{"id": BIZ, "owner_id": OWNER, "name": "First Light", "settings": {}}]
         self.n = 0
-        self.fail = {}          # (method, table) -> how many calls fail next
+        self.fail = {}          # (method, table or function) -> how many calls fail next, unsaved
+        self.lose = {}          # (method, table or function) -> how many save, then lose their answer
 
-    def _boom(self, method, table):
-        left = self.fail.get((method, table), 0)
+    def _boom(self, method, table, book=None):
+        book = self.fail if book is None else book
+        left = book.get((method, table), 0)
         if left:
-            self.fail[(method, table)] = left - 1
+            book[(method, table)] = left - 1
             return True
         return False
+
+    # ── the database functions ──
+
+    def _one(self, table, rid):
+        return next((r for r in self.t[table] if str(r["id"]) == str(rid)), None)
+
+    def _new_session(self, biz, sid, playlist, status, now, rec=0, size=0):
+        self.n += 1
+        start = datetime(2026, 10, 18, 15, tzinfo=timezone.utc) + timedelta(seconds=self.n - rec)
+        row = {"id": sid, "business_id": biz, "status": status, "live_session_id": None, "sermon_id": None,
+               "playlist_path": playlist, "duration_s": rec, "bytes": max(int(size or 0), 0),
+               "started_at": start.isoformat(), "last_seen_at": now.isoformat(),
+               "ended_at": now.isoformat() if status == "ending" else None}
+        self.t["stream_sessions"].append(row)
+        return row
+
+    def _retire(self, sid, prefix, at):
+        s = self._one("stream_sessions", sid)
+        if s is None:
+            return
+        if s["status"] == "live":
+            s["status"], s["ended_at"] = "ending", s.get("ended_at") or at
+        for live in self.t["live_sessions"]:
+            if live["business_id"] == s["business_id"] and live["status"] == "live" and (
+                    live["id"] == s.get("live_session_id") or live.get("stream_url") == prefix + s["id"]):
+                live.update(status="ended", ended_at=at, updated_at=at)
+
+    def stream_relay_claim(self, p_business, p_session, p_playlist, p_ending, p_recorded_s, p_bytes,
+                           p_quiet_s, p_watch_prefix):
+        now = datetime.now(timezone.utc)
+        s = self._one("stream_sessions", p_session)
+        if s is not None:
+            if s["business_id"] != p_business:
+                return {"outcome": "foreign"}
+            return {"outcome": "live" if s["status"] == "live" else "closed", "session": dict(s)}
+        if p_ending:
+            rec = max(int(p_recorded_s or 0), 0)
+            s = self._new_session(p_business, p_session, p_playlist, "ending", now, rec, p_bytes)
+            return {"outcome": "opened", "session": dict(s)}
+        cur = next((r for r in self.t["stream_sessions"]
+                    if r["business_id"] == p_business and r["status"] == "live"), None)
+        retired = None
+        if cur is not None:
+            seen = sr._parse_ts(cur.get("last_seen_at") or cur.get("started_at"))
+            if seen > now - timedelta(seconds=p_quiet_s):
+                return {"outcome": "busy", "holder": cur["id"]}
+            self._retire(cur["id"], p_watch_prefix, now.isoformat())
+            retired = dict(cur)
+        s = self._new_session(p_business, p_session, p_playlist, "live", now)
+        return {"outcome": "opened", "session": dict(s), "retired": retired}
+
+    def stream_relay_open_live(self, p_session, p_live, p_stream_url, p_title, p_watch_prefix):
+        s = self._one("stream_sessions", p_session)
+        if s is None:
+            return {"outcome": "missing"}
+        if s["status"] != "live":
+            return {"outcome": "closed", "session": dict(s)}
+        if s.get("live_session_id"):
+            return {"outcome": "linked", "live_id": s["live_session_id"]}
+        now = datetime.now(timezone.utc).isoformat()
+        cur = next((r for r in self.t["live_sessions"]
+                    if r["business_id"] == s["business_id"] and r["status"] == "live"), None)
+        if cur is not None:
+            if cur.get("stream_url") == p_stream_url:
+                s["live_session_id"] = cur["id"]
+                return {"outcome": "adopted", "live": dict(cur)}
+            if not str(cur.get("stream_url") or "").startswith(p_watch_prefix):
+                return {"outcome": "manual"}
+            cur.update(status="ended", ended_at=now, updated_at=now)
+        s["live_session_id"] = p_live
+        if self._one("live_sessions", p_live) is not None:
+            return {"outcome": "linked", "live_id": p_live}
+        self.n += 1
+        made = {"id": p_live, "business_id": s["business_id"], "title": p_title, "stream_url": p_stream_url,
+                "status": "live", "chat_open": True, "ended_at": None,
+                "started_at": (datetime.now(timezone.utc) + timedelta(seconds=self.n)).isoformat()}
+        self.t["live_sessions"].append(made)
+        return {"outcome": "opened", "live": dict(made)}
+
+    def stream_relay_close(self, p_session, p_watch_prefix):
+        s = self._one("stream_sessions", p_session)
+        if s is None:
+            return {"outcome": "missing"}
+        if s["status"] == "ended":
+            return {"outcome": "ended", "session": dict(s)}
+        self._retire(p_session, p_watch_prefix, datetime.now(timezone.utc).isoformat())
+        return {"outcome": "ending", "session": dict(s)}
+
+    def rpc(self, name, args):
+        if self._boom("RPC", name):
+            return None
+        out = getattr(self, name)(**args)
+        return None if self._boom("RPC", name, self.lose) else out
 
     def _match(self, row, q):
         for k, vals in q.items():
@@ -86,6 +193,8 @@ class DB:
                 return False
             if v.startswith("like.") and not fnmatch(str(cell or ""), v[5:]):
                 return False
+            if v.startswith("in.(") and str(cell).lower() not in v[4:-1].lower().split(","):
+                return False
         return True
 
     def get(self, path):
@@ -99,6 +208,8 @@ class DB:
         return rows[: int(q.get("limit", ["10000"])[0])]
 
     def post(self, path, body, prefer=None):
+        if path.startswith("/rpc/"):
+            return self.rpc(path[len("/rpc/"):], body)
         table, _ = _params(path)
         if self._boom("POST", table):
             return None
@@ -129,7 +240,7 @@ class DB:
                 row.setdefault(f"{k}_on", False)
                 row.setdefault(f"{k}_key_enc", "")
         self.t[table].append(row)
-        return [dict(row)]
+        return None if self._boom("POST", table, self.lose) else [dict(row)]
 
     def patch(self, path, body):
         table, q = _params(path)
@@ -138,7 +249,7 @@ class DB:
         hit = [r for r in self.t.get(table, []) if self._match(r, q)]
         for r in hit:
             r.update(body)
-        return [dict(r) for r in hit]
+        return None if self._boom("PATCH", table, self.lose) else [dict(r) for r in hit]
 
 
 @pytest.fixture
@@ -348,11 +459,13 @@ def test_a_service_the_team_started_by_hand_is_left_alone(db, ready):
     assert db.t["stream_sessions"][0].get("live_session_id") is None and out["session_id"]
 
 
-def test_a_failed_live_read_is_retried_not_taken_for_a_manual_service(db, ready):
-    """Codex B2: current() failing must not look like 'the team is live'."""
+def test_a_failed_live_service_step_is_retried_not_taken_for_a_manual_service(db, ready):
+    """Codex B2: the live-service step failing must not look like 'the team
+    is live'. (Its read of the live service now happens inside the
+    database step, under the church's lock.)"""
     c = _app()
     full = _key(c)
-    db.fail[("GET", "live_sessions")] = 1
+    db.fail[("RPC", "stream_relay_open_live")] = 1
     assert _start(c, full).status_code == 503
     assert db.t["live_sessions"] == []
     assert _start(c, full).status_code == 200
@@ -360,13 +473,18 @@ def test_a_failed_live_read_is_retried_not_taken_for_a_manual_service(db, ready)
     assert db.t["stream_sessions"][0]["live_session_id"] == db.t["live_sessions"][0]["id"]
 
 
-@pytest.mark.parametrize("step", [("POST", "live_sessions"), ("PATCH", "stream_sessions")])
-def test_a_half_finished_start_is_repaired_by_the_retry(db, ready, step):
-    """Codex B2: a failed live insert or a failed link is a 503, and the
-    relay's retry (same run) finishes the same session — no second one."""
+@pytest.mark.parametrize("how,step", [
+    ("fail", "stream_relay_claim"), ("fail", "stream_relay_open_live"),
+    ("lose", "stream_relay_claim"), ("lose", "stream_relay_open_live")])
+def test_a_half_finished_start_is_repaired_by_the_retry(db, ready, how, step):
+    """Codex B2: a step that failed, or that saved and then lost its answer
+    (Codex's commit-then-lose-link probe), is a 503, and the relay's retry
+    (same run) finishes the same session: one session, one linked live
+    service. The live service is opened and linked in one step, so there
+    is no half-linked service left to find."""
     c = _app()
     full = _key(c)
-    db.fail[step] = 1
+    (db.fail if how == "fail" else db.lose)[("RPC", step)] = 1
     assert _start(c, full).status_code == 503
     r = _start(c, full)
     assert r.status_code == 200, r.text
@@ -399,22 +517,91 @@ def test_a_failed_close_is_a_503_and_the_retry_closes_it(db, ready):
     c = _app()
     full = _key(c)
     sid = _start(c, full).json()["session_id"]
-    db.fail[("PATCH", "live_sessions")] = 1
+    db.fail[("RPC", "stream_relay_close")] = 1
     assert _end(c, sid).status_code == 503
     assert db.t["live_sessions"][0]["status"] == "live" and db.t["stream_sessions"][0]["status"] == "live"
     assert _end(c, sid).status_code == 200
     assert db.t["live_sessions"][0]["status"] == "ended" and len(db.t["sermons"]) == 1
 
 
-def test_a_failed_draft_is_a_503_and_the_retry_saves_it(db, ready):
+def test_a_close_that_saved_but_lost_its_answer_is_finished_by_the_retry(db, ready):
     c = _app()
     full = _key(c)
     sid = _start(c, full).json()["session_id"]
-    db.fail[("POST", "sermons")] = 1
+    db.lose[("RPC", "stream_relay_close")] = 1
     assert _end(c, sid).status_code == 503
-    assert db.t["stream_sessions"][0]["status"] == "live"
+    assert db.t["live_sessions"][0]["status"] == "ended" and _row(db, sid)["status"] == "ending"
+    assert _end(c, sid).status_code == 200
+    assert _row(db, sid)["status"] == "ended" and len(db.t["sermons"]) == 1
+
+
+@pytest.mark.parametrize("book", ["fail", "lose"])
+def test_a_failed_draft_is_a_503_and_the_retry_saves_it(db, ready, book):
+    """Failed, or saved with its answer lost (Codex's commit-then-lose-
+    sermon probe): one draft either way. The live service is closed
+    already, so members aren't left on "live" while it is retried."""
+    c = _app()
+    full = _key(c)
+    sid = _start(c, full).json()["session_id"]
+    getattr(db, book)[("POST", "sermons")] = 1
+    assert _end(c, sid).status_code == 503
+    assert db.t["stream_sessions"][0]["status"] == "ending" and _live_services(db) == []
     assert _end(c, sid).status_code == 200
     assert len(db.t["sermons"]) == 1 and db.t["stream_sessions"][0]["sermon_id"] == db.t["sermons"][0]["id"]
+
+
+@pytest.mark.parametrize("book", ["fail", "lose"])
+def test_a_failed_final_mark_is_a_503_and_the_retry_makes_no_second_draft(db, ready, book):
+    """The PR bot's item 2: the last write (ending -> ended, with the
+    draft's id) is checked, and its retry makes no second draft."""
+    c = _app()
+    full = _key(c)
+    sid = _start(c, full).json()["session_id"]
+    getattr(db, book)[("PATCH", "stream_sessions")] = 1
+    assert _end(c, sid).status_code == 503
+    assert len(db.t["sermons"]) == 1
+    r = _end(c, sid)
+    assert r.status_code == 200 and r.json()["sermon_id"] == db.t["sermons"][0]["id"]
+    assert len(db.t["sermons"]) == 1 and _row(db, sid)["status"] == "ended"
+    assert _row(db, sid)["sermon_id"] == db.t["sermons"][0]["id"]
+
+
+def test_two_ends_that_draft_together_make_one_draft(db, ready, monkeypatch):
+    """Both ends are past the close and saving the draft at once."""
+    c = _app()
+    full = _key(c)
+    sid = _start(c, full).json()["session_id"]
+    real = sr._sermon_draft
+    inner = []
+
+    def at_once(biz, s):
+        if not inner:
+            inner.append(None)
+            # The other end runs to completion in between (the route itself,
+            # called directly: a request inside a request stalls TestClient).
+            inner[0] = sr.relay_ended(sr.EndedIn(session_id=sid, duration_s=5400), x_relay_secret=SECRET)
+        return real(biz, s)
+    monkeypatch.setattr(sr, "_sermon_draft", at_once)
+    outer = _end(c, sid)
+    assert outer.status_code == 200 and inner[0]["ok"] is True
+    assert len(db.t["sermons"]) == 1
+    assert outer.json()["sermon_id"] == inner[0]["sermon_id"] == db.t["sermons"][0]["id"]
+    assert _row(db, sid)["sermon_id"] == db.t["sermons"][0]["id"]
+
+
+def test_a_service_left_ending_is_finished_by_the_sweep(db, ready):
+    """Its relay is gone after the live service closed but before the draft
+    saved: the sweep finishes it after ENDING_GRACE_S."""
+    c = _app()
+    full = _key(c)
+    sid = _start(c, full, recorded_s=2400).json()["session_id"]
+    db.fail[("POST", "sermons")] = 1
+    assert _end(c, sid, 2400).status_code == 503
+    s = _row(db, sid)
+    assert s["status"] == "ending" and sr.sweep_stale() == 0
+    s["ended_at"] = (datetime.now(timezone.utc) - timedelta(seconds=sr.ENDING_GRACE_S + 60)).isoformat()
+    assert sr.sweep_stale() == 1
+    assert s["status"] == "ended" and len(db.t["sermons"]) == 1 and s["sermon_id"] == db.t["sermons"][0]["id"]
 
 
 def test_two_ends_that_read_together_make_one_draft(db, ready, monkeypatch):
@@ -464,13 +651,16 @@ def test_members_hear_live_once_for_a_burst_of_starts(db, ready):
     assert len(db.t["live_sessions"]) == 3 and len(db.t["told"]) == 1
 
 
-def test_a_new_run_closes_the_old_runs_session_first(db, ready):
+def test_a_new_run_closes_a_quiet_old_runs_session_first(db, ready):
     """Codex R5 (backend half): a reconnect after the grace never lands in
-    the session that is being finished; the old run's late end is a no-op."""
+    the session that is being finished; the old run's late end is a no-op.
+    The new run waits (503) until the old one has missed its beats (B2-R)."""
     c = _app()
     full = _key(c)
     a = _start(c, full, RUN_A).json()["session_id"]
     _start(c, full, RUN_A, recorded_s=3600)               # its last beat: an hour in
+    assert _start(c, full, RUN_B).status_code == 503       # A only just beat
+    _row(db, a)["last_seen_at"] = (datetime.now(timezone.utc) - timedelta(minutes=4)).isoformat()
     b = _start(c, full, RUN_B).json()["session_id"]
     assert a != b
     old, new = db.t["stream_sessions"]
@@ -528,6 +718,222 @@ def test_the_sweep_does_nothing_before_its_column_exists(db, ready):
     del s["last_seen_at"]
     s["started_at"] = "2026-01-01T00:00:00+00:00"
     assert sr.sweep_stale() == 0 and s["status"] == "live"
+
+
+# ─── an old run never retires a newer one (Codex B2-R) ───────────────
+
+
+def _row(db, sid):
+    return next(s for s in db.t["stream_sessions"] if s["id"] == sid)
+
+
+def _live_services(db):
+    return [s for s in db.t["live_sessions"] if s["status"] == "live"]
+
+
+def _a_ended_then_b_live(c, full, db):
+    a = _start(c, full, RUN_A).json()["session_id"]
+    assert _end(c, a).status_code == 200
+    b = _start(c, full, RUN_B).json()["session_id"]
+    assert _row(db, b)["status"] == "live" and len(_live_services(db)) == 1
+    return a, b
+
+
+def test_an_old_runs_ending_retry_never_closes_the_live_run(db, ready):
+    """A's finisher without a saved session id asks for A as it ends,
+    after B went live. A is named back (409); B keeps its live service."""
+    c = _app()
+    full = _key(c)
+    a, b = _a_ended_then_b_live(c, full, db)
+    late = _start(c, full, RUN_A, ending=True, recorded_s=5400)
+    assert late.status_code == 409 and late.json()["detail"]["session_id"] == a
+    assert _row(db, b)["status"] == "live", "the old run's retry closed the live run"
+    assert [s["id"] for s in _live_services(db)] == [_row(db, b)["live_session_id"]]
+    assert _start(c, full, RUN_B).status_code == 200      # B's next beat is not told to split
+    assert len(db.t["sermons"]) == 1
+
+
+def test_an_old_runs_heartbeat_never_closes_the_live_run(db, ready):
+    c = _app()
+    full = _key(c)
+    a, b = _a_ended_then_b_live(c, full, db)
+    late = _start(c, full, RUN_A, recorded_s=600)
+    assert late.status_code == 409 and late.json()["detail"]["session_id"] == a
+    assert _row(db, b)["status"] == "live" and len(_live_services(db)) == 1
+    assert _start(c, full, RUN_B).status_code == 200
+
+
+def test_a_recording_the_backend_never_saw_finishes_beside_the_live_run(db, ready):
+    """The backend was down for all of C; C's finisher asks for a session
+    while B is live. C gets its own (already over), B is never touched."""
+    c = _app()
+    full = _key(c)
+    b = _start(c, full, RUN_B).json()["session_id"]
+    r = _start(c, full, RUN_C, ending=True, recorded_s=3600, bytes=99)
+    assert r.status_code == 200, r.text
+    sid = r.json()["session_id"]
+    assert sid == sr.session_id_for(BIZ, RUN_C) and _row(db, sid)["status"] != "live"
+    assert _row(db, b)["status"] == "live" and len(_live_services(db)) == 1
+    assert _end(c, sid, 3600).status_code == 200
+    assert _row(db, sid)["status"] == "ended" and len(db.t["sermons"]) == 1
+    assert _row(db, b)["status"] == "live" and len(_live_services(db)) == 1
+    assert db.t.get("told", []) == [_row(db, b)["live_session_id"]]
+
+
+def test_a_run_still_beating_is_never_taken_over(db, ready):
+    """A run the backend has never seen is not newer just because its id
+    differs: while B beats, C is told to ask again (503) and B is left
+    alone. Once B has missed its beats, C takes over."""
+    c = _app()
+    full = _key(c)
+    b = _start(c, full, RUN_B, recorded_s=3600).json()["session_id"]
+    r = _start(c, full, RUN_C)
+    assert r.status_code == 503
+    assert r.json()["detail"] == {"error": "another run is live", "key_ok": True,
+                                  "retry_after_s": sr.HANDOVER_QUIET_S}
+    assert _row(db, b)["status"] == "live" and len(_live_services(db)) == 1
+    assert all(s["id"] != sr.session_id_for(BIZ, RUN_C) for s in db.t["stream_sessions"])
+    _row(db, b)["last_seen_at"] = (datetime.now(timezone.utc) - timedelta(seconds=sr.HANDOVER_QUIET_S + 30)).isoformat()
+    r = _start(c, full, RUN_C)
+    assert r.status_code == 200, r.text
+    assert _row(db, b)["status"] == "ended" and _row(db, b)["sermon_id"]
+    assert [s["stream_url"] for s in _live_services(db)] == [sr.watch_url(r.json()["session_id"])]
+
+
+# ─── start, end and the sweep can't interleave (Codex B3-R) ──────────
+
+
+def _half_started(c, full, db, monkeypatch):
+    """A start that saved its session but stopped before its live service."""
+    real = sr._ensure_live_service
+
+    def stops(biz, s):
+        raise sr.HTTPException(503, "live read failed")
+    monkeypatch.setattr(sr, "_ensure_live_service", stops)
+    assert _start(c, full).status_code == 503
+    monkeypatch.setattr(sr, "_ensure_live_service", real)
+    s = db.t["stream_sessions"][0]
+    assert s["status"] == "live" and not s.get("live_session_id") and db.t["live_sessions"] == []
+    return s, real
+
+
+def test_a_start_retry_that_loses_the_race_with_the_sweep_opens_nothing(db, ready, monkeypatch):
+    """Codex's interleaving: the retry pauses just before its live service,
+    the sweep finishes the session, the retry resumes. It must not open a
+    live service nobody will ever close; it is told the session ended."""
+    c = _app()
+    full = _key(c)
+    s, real = _half_started(c, full, db, monkeypatch)
+    s["last_seen_at"] = "2000-01-01T00:00:00+00:00"
+
+    def sweep_wins(biz, sess):
+        assert sr.sweep_stale() == 1
+        return real(biz, sess)
+    monkeypatch.setattr(sr, "_ensure_live_service", sweep_wins)
+    r = _start(c, full)
+    assert r.status_code == 409 and r.json()["detail"]["session_id"] == s["id"]
+    assert _live_services(db) == [], "a live service was opened for a session already finished"
+    assert s["status"] == "ended" and db.t.get("told", []) == []
+
+
+def test_a_live_service_opened_just_before_the_sweep_is_closed_by_it(db, ready, monkeypatch):
+    """The other order: the sweep has read the session (no live service
+    yet), the retry opens one, then the sweep finishes. It closes it."""
+    c = _app()
+    full = _key(c)
+    s, _ = _half_started(c, full, db, monkeypatch)
+    s["last_seen_at"] = "2000-01-01T00:00:00+00:00"
+    real_finalize = sr.finalize
+
+    def retry_wins(sess, duration, size):
+        assert _start(c, full).status_code == 200
+        assert len(_live_services(db)) == 1
+        return real_finalize(sess, duration, size)
+    monkeypatch.setattr(sr, "finalize", retry_wins)
+    assert sr.sweep_stale() == 1
+    assert _live_services(db) == [] and s["status"] == "ended"
+
+
+# ─── every write checked, every failed read a retry (the PR bot) ────
+
+
+def test_a_failed_settings_read_at_the_end_is_a_503_never_a_draft(db, ready):
+    """Bot item 1: a church with drafts off whose settings didn't load is
+    not a church with drafts on."""
+    c = _app()
+    full = _key(c)
+    c.patch("/stream-relay/settings", json={"business_id": BIZ, "sermon_drafts": False})
+    sid = _start(c, full).json()["session_id"]
+    db.fail[("GET", "church_streams")] = 1
+    assert _end(c, sid).status_code == 503
+    assert db.t["sermons"] == [] and _row(db, sid)["status"] != "ended"
+    assert _live_services(db) == []                         # members aren't left watching "live"
+    assert _end(c, sid).status_code == 200
+    assert db.t["sermons"] == [] and _row(db, sid)["status"] == "ended"
+
+
+def _at_ten_thirty_pm_pacific(db, sid):
+    # 03:30 UTC on the 19th is 8:30 PM on the 18th in Los Angeles.
+    _row(db, sid)["started_at"] = "2026-10-19T03:30:00+00:00"
+    db.t["businesses"][0]["settings"] = {"availability": {"timezone": "America/Los_Angeles"}}
+
+
+def test_the_draft_is_dated_on_the_churchs_own_clock(db, ready, monkeypatch):
+    """The bot's 'worth a look': the real time-zone path, not a stand-in."""
+    monkeypatch.setattr(sr, "_church_tz", _REAL_CHURCH_TZ)
+    c = _app()
+    full = _key(c)
+    sid = _start(c, full).json()["session_id"]
+    _at_ten_thirty_pm_pacific(db, sid)
+    assert _end(c, sid).status_code == 200
+    assert db.t["sermons"][0]["preached_on"] == "2026-10-18"
+    assert db.t["sermons"][0]["title"] == "Service, October 18, 2026"
+
+
+def test_a_failed_time_zone_read_is_a_503_not_a_utc_date(db, ready, monkeypatch):
+    """A failed read was taken for 'no time zone' (UTC): near midnight the
+    sermon landed on the wrong day, for good."""
+    monkeypatch.setattr(sr, "_church_tz", _REAL_CHURCH_TZ)
+    c = _app()
+    full = _key(c)
+    sid = _start(c, full).json()["session_id"]
+    _at_ten_thirty_pm_pacific(db, sid)
+    db.fail[("GET", "businesses")] = 1
+    assert _end(c, sid).status_code == 503
+    assert db.t["sermons"] == []
+    assert _end(c, sid).status_code == 200
+    assert db.t["sermons"][0]["preached_on"] == "2026-10-18"
+
+
+def test_the_database_functions_take_what_the_router_sends(db, ready, monkeypatch):
+    """PostgREST finds a function by its argument names: one name off and
+    production answers 404 while the fake here still works. Pin every call
+    the router makes to the signatures in the migration itself."""
+    import re as _re
+    sql = (pathlib.Path(__file__).resolve().parent.parent / "supabase"
+           / "APPLY-2026-10-29-stream-relay-transitions.sql").read_text(encoding="utf-8")
+    signatures = {
+        name: {p.split()[0] for p in params.replace("\n", " ").split(",") if p.strip()}
+        for name, params in _re.findall(r"create or replace function public\.(\w+)\((.*?)\)\s*returns", sql, _re.S)}
+    assert set(signatures) == {"stream_relay_claim", "stream_relay_open_live", "stream_relay_close",
+                               "stream_relay_retire"}
+    calls = []
+    real = db.post
+
+    def post(path, body, prefer=None):
+        if path.startswith("/rpc/"):
+            calls.append((path[len("/rpc/"):], set(body)))
+        return real(path, body, prefer)
+    import sb_clients
+    monkeypatch.setattr(sb_clients, "sb_post_as_service", post)
+    c = _app()
+    full = _key(c)
+    sid = _start(c, full).json()["session_id"]
+    _end(c, sid)
+    _start(c, full, RUN_B, ending=True)
+    assert {name for name, _ in calls} == {"stream_relay_claim", "stream_relay_open_live", "stream_relay_close"}
+    for name, args in calls:
+        assert args == signatures[name], name
 
 
 # ─── playback: nothing in the bucket is public ──────────────────────

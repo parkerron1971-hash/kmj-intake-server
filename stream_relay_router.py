@@ -40,23 +40,43 @@ answers 403 while streaming is switched off):
         that the relay still holds it, and returns where copies go now (so
         a removed key or a rotated stream key takes effect within a minute).
         The session id is derived from the relay's run id, so a retry after
-        a half-finished start repairs the same session.
+        a half-finished start repairs the same session. Answers:
+          200  the session (live, or for `ending`, already over).
+          409  {detail: {session_id, playlist_path}}: this run's session is
+               over (ended, or being finished). Nothing else was touched.
+          503  try again: a failed read or write, or ANOTHER run of this
+               stream is live and still beating (HANDOVER_QUIET_S; detail
+               {error: "another run is live", key_ok: true,
+               retry_after_s}). A run the backend never saw takes over
+               only from one that has gone quiet; an `ending` request
+               never takes over at all.
   POST  /stream-relay/relay/ended       {session_id, duration_s, bytes}
         Close it: end the live service, save the draft, then mark it ended.
         200 only when all three are saved; a retry, or two at once, makes
         one draft (its id is derived from the session's). Works while
         switched off, so turning streaming off never strands a service.
 
+A session goes live -> ending -> ended. Every change of state is one
+database function under one lock per church
+(APPLY-2026-10-29-stream-relay-transitions.sql): a start, an end and the
+sweep can't interleave inside one, and an old run's late request can't
+retire a newer run (Codex B2-R/B3-R, 2026-10-16). 'ending' means the live
+service is closed and the draft isn't saved yet; it frees the church's one
+live slot.
+
 A live session the relay stops reporting (a lost droplet, an end that never
 got through) is closed by sweep_stale(), run every 10 minutes and before an
-overview, so it is never reused next Sunday.
+overview, so it is never reused next Sunday; an ending one whose draft
+never got saved is finished by it too.
 
 The church's stream key is `<stream_id>?key=<secret>`: the relay's path is
 the stream id (not secret; logs show it), the secret rides in the query
 (never logged). Only sha256(secret) is stored; the church sees it once.
 YouTube / Facebook keys are Fernet ciphertext (STREAM_DEST_ENCRYPTION_KEY)
-and are decrypted only for the relay. The tables are server-only
-(APPLY-2026-10-16-stream-relay.sql, APPLY-2026-10-16-stream-relay-heartbeat.sql).
+and are decrypted only for the relay. The tables and functions are
+server-only (APPLY-2026-10-16-stream-relay.sql, then
+APPLY-2026-10-29-stream-relay-transitions.sql, which also carries the
+heartbeat column).
 
 Env (all of them make the feature "ready"; without them it stays quiet):
   STREAM_RELAY_SECRET          shared with the relay server
@@ -98,6 +118,13 @@ DRAFT_MIN_SECONDS = 5 * 60
 # relay reports every minute, and waits 10 minutes for a dropped stream,
 # so this only fires for a lost relay or a finish that never got through.
 STALE_S = 45 * 60
+# A run the backend has never seen takes over a church's live session only
+# once that session has missed this many seconds of beats (one a minute):
+# a different run id alone is not proof of a newer run.
+HANDOVER_QUIET_S = 3 * 60
+# An ending session (live service closed, draft not saved) its relay hasn't
+# finished for this long is finished by the sweep.
+ENDING_GRACE_S = 15 * 60
 # Members hear "live now" at most once in this window per church: a
 # sound check and the service an hour later are one alert, not two.
 LIVE_ALERT_COOLDOWN_S = 3 * 3600
@@ -236,10 +263,16 @@ def playlist_path(business_id: str, session_id: str) -> str:
     return f"live/{business_id}/{session_id}/index.m3u8"
 
 
+def watch_prefix() -> str:
+    """Every watch link starts with this; the database functions use it to
+    tell our live services from a link the team went live with."""
+    return f"{player_base()}/stream-relay/watch/"
+
+
 def watch_url(session_id: str) -> str:
     """The recording's one link (a live service's stream_url, a draft's
     video_url). It is a page that checks, not a file anyone can fetch."""
-    return f"{player_base()}/stream-relay/watch/{session_id}"
+    return f"{watch_prefix()}{session_id}"
 
 
 def watch_session(url: str) -> Optional[str]:
@@ -808,18 +841,8 @@ def relay_started(body: StartIn, x_relay_secret: Optional[str] = Header(default=
     if not UUID_RE.match(run):
         raise HTTPException(400, "bad run id")
     sid = session_id_for(biz, run)
-    live = _sessions(biz, live=True, limit=1)
-    if live is None:
-        raise HTTPException(503, "read failed")
-    s = live[0] if live else None
-    if s and str(s["id"]) != sid:
-        # Another run's session: that relay run is over (its end may still
-        # be on the way) or that relay is gone. Close it before this one.
-        finalize(s, int(s.get("duration_s") or 0), int(s.get("bytes") or 0))
-        s = None
-    if s is None:
-        s = _open_session(biz, sid)
-    if not body.ending:
+    s = _claim(biz, sid, body)
+    if s.get("status") == "live" and not body.ending:
         _ensure_live_service(biz, s)
     _beat(sid, body.recorded_s, body.bytes)
     return {
@@ -831,53 +854,81 @@ def relay_started(body: StartIn, x_relay_secret: Optional[str] = Header(default=
     }
 
 
-def _open_session(biz: str, sid: str) -> Dict[str, Any]:
-    old = _session(sid)
-    if old is None:
-        raise HTTPException(503, "read failed")
-    if old:
-        # This run's session was already closed (by the sweep, after the
-        # relay went quiet too long). The relay finishes that recording
-        # under the session named here and starts a new run.
-        raise HTTPException(409, {"error": "session ended", "session_id": sid,
-                                  "playlist_path": old.get("playlist_path") or playlist_path(biz, sid)})
-    made = sb_clients.sb_post_as_service("/stream_sessions", {
-        "id": sid, "business_id": biz, "status": "live", "playlist_path": playlist_path(biz, sid),
-        "last_seen_at": now_iso()})
-    if not isinstance(made, list) or not made:
+def _rpc(name: str, args: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """One change of state, done by the database under the church's lock.
+    None when it failed or its answer was lost: the caller answers 503 and
+    the relay (or the sweep) asks again. Every function is safe to repeat."""
+    out = sb_clients.sb_post_as_service(f"/rpc/{name}", args)
+    return out if isinstance(out, dict) and out.get("outcome") else None
+
+
+def _closed(biz: str, s: Dict[str, Any]) -> HTTPException:
+    """This run's session is over. The relay finishes that recording under
+    the session named here and, if the stream is still up, starts a new
+    run."""
+    sid = str(s.get("id") or "")
+    return HTTPException(409, {"error": "session ended", "session_id": sid,
+                               "playlist_path": s.get("playlist_path") or playlist_path(biz, sid)})
+
+
+def _claim(biz: str, sid: str, body: StartIn) -> Dict[str, Any]:
+    """This run's session, found or opened. The run's OWN session is looked
+    at first: one already over is a 409 and nothing else is touched, so an
+    old run's delayed heartbeat or finishing retry can never retire the run
+    that is live now (Codex B2-R). A run never seen takes the live slot
+    only from a run that has stopped beating; one asked for only as it
+    finishes never takes it at all."""
+    out = _rpc("stream_relay_claim", {
+        "p_business": biz, "p_session": sid, "p_playlist": playlist_path(biz, sid),
+        "p_ending": bool(body.ending), "p_recorded_s": int(body.recorded_s), "p_bytes": int(body.bytes),
+        "p_quiet_s": HANDOVER_QUIET_S, "p_watch_prefix": watch_prefix()})
+    if out is None:
         raise HTTPException(503, "session didn't save")
-    return made[0]
+    s = out.get("session") if isinstance(out.get("session"), dict) else {}
+    if out["outcome"] == "closed":
+        raise _closed(biz, s)
+    if out["outcome"] == "busy":
+        # The key was checked (church_from_stream_key) before this: the
+        # relay may count this answer as "still allowed", not as an outage.
+        raise HTTPException(503, {"error": "another run is live", "key_ok": True,
+                                  "retry_after_s": HANDOVER_QUIET_S})
+    if out["outcome"] not in ("live", "opened") or not s:
+        raise HTTPException(503, "session didn't save")
+    retired = out.get("retired")
+    if isinstance(retired, dict) and retired.get("id"):
+        # The run this one took over from: its live service is already
+        # closed. Its draft is saved now if it can be; if not, its own
+        # relay's end or the sweep saves it.
+        try:
+            finalize(retired, int(retired.get("duration_s") or 0), int(retired.get("bytes") or 0))
+        except HTTPException:
+            pass
+    return s
 
 
 def _ensure_live_service(biz: str, s: Dict[str, Any]) -> None:
     """Go live in the member app with our own player, unless the team went
-    live with another link (theirs is left alone). A failed read is not
-    "the team went live" — it is a 503, and the relay asks again."""
+    live with another link (theirs is left alone). The database opens it
+    AND links it in one step, and only while this session is still live:
+    a retry that lost a race with the sweep or an end opens nothing and is
+    told the session is over (Codex B3-R). A failure is a 503, never "the
+    team went live"; the relay asks again."""
     if s.get("live_session_id"):
         return
     sid = str(s["id"])
-    import live_router
-    cur = live_router.current(biz)
-    if cur is None:
-        raise HTTPException(503, "live read failed")
-    ours = watch_url(sid)
-    if cur and cur.get("stream_url") != ours:
-        return
-    if cur:
-        live_row = cur                       # ours, opened before but never linked
-    else:
-        made = sb_clients.sb_post_as_service("/live_sessions", {
-            "id": derived_id("live", sid), "business_id": biz, "title": "Live now",
-            "stream_url": ours, "status": "live", "chat_open": True})
-        if not isinstance(made, list) or not made:
-            raise HTTPException(503, "live service didn't save")
-        live_row = made[0]
-    linked = sb_clients.sb_patch_as_service(f"/stream_sessions?id=eq.{_q(sid)}",
-                                            {"live_session_id": live_row["id"]})
-    if not isinstance(linked, list) or not linked:
-        raise HTTPException(503, "link didn't save")
-    s["live_session_id"] = live_row["id"]
-    _alert_members(biz, live_row)
+    out = _rpc("stream_relay_open_live", {
+        "p_session": sid, "p_live": derived_id("live", sid), "p_stream_url": watch_url(sid),
+        "p_title": "Live now", "p_watch_prefix": watch_prefix()})
+    if out is None or out["outcome"] == "missing":
+        raise HTTPException(503, "live service didn't save")
+    if out["outcome"] == "closed":
+        raise _closed(biz, out.get("session") if isinstance(out.get("session"), dict) else s)
+    if out["outcome"] == "opened":
+        live_row = out.get("live") if isinstance(out.get("live"), dict) else {}
+        s["live_session_id"] = live_row.get("id")
+        _alert_members(biz, live_row)
+    elif out["outcome"] in ("linked", "adopted"):
+        s["live_session_id"] = out.get("live_id") or (out.get("live") or {}).get("id")
 
 
 def _alert_members(biz: str, live_row: Dict[str, Any]) -> None:
@@ -923,47 +974,52 @@ def relay_ended(body: EndedIn, x_relay_secret: Optional[str] = Header(default=No
 
 
 def finalize(s: Dict[str, Any], duration_s: int, size: int) -> Optional[str]:
-    """Close one session, every step repeatable, 'ended' written LAST so a
-    failed step is retried rather than skipped. Raises 503 on any failed
-    write. Two at once make one draft: its id is the session's own."""
+    """Close one session in three repeatable steps: live -> ending (its
+    live service closed, in one database step under the church's lock, so
+    no start can open one for it afterwards), the draft, then ending ->
+    ended, written LAST so a failed step is retried rather than skipped.
+    Raises 503 on any failed read or write; the next try (the relay's end,
+    or the sweep) carries on from where this one stopped. Two at once make
+    one draft: its id is the session's own."""
     if s.get("status") == "ended":
         return s.get("sermon_id")
     sid, biz = str(s["id"]), str(s["business_id"])
-    ended = now_iso()
-    duration = max(int(duration_s or 0), int(s.get("duration_s") or 0))
-    for live_id in {derived_id("live", sid), str(s.get("live_session_id") or "")} - {""}:
-        closed = sb_clients.sb_patch_as_service(
-            f"/live_sessions?id=eq.{_q(live_id)}&status=eq.live",
-            {"status": "ended", "ended_at": ended, "updated_at": ended})
-        if not isinstance(closed, list):
-            raise HTTPException(503, "live service didn't close")
-    sermon_id = None
+    out = _rpc("stream_relay_close", {"p_session": sid, "p_watch_prefix": watch_prefix()})
+    if out is None or out["outcome"] not in ("ending", "ended"):
+        raise HTTPException(503, "live service didn't close")
+    with _cache.lock:
+        _cache.access.pop(sid, None)          # over: no longer public as "live"
+    cur = out.get("session") if isinstance(out.get("session"), dict) else {}
+    if out["outcome"] == "ended":
+        return cur.get("sermon_id")
+    duration = max(int(duration_s or 0), int(cur.get("duration_s") or 0), int(s.get("duration_s") or 0))
+    size = max(int(size or 0), int(cur.get("bytes") or 0), int(s.get("bytes") or 0))
     church = stream_row(biz)
     if church is None:
         raise HTTPException(503, "read failed")
+    sermon_id = None
     if church and church.get("sermon_drafts", True) and duration >= DRAFT_MIN_SECONDS:
-        sermon_id = _sermon_draft(biz, s)
-    done = sb_clients.sb_patch_as_service(f"/stream_sessions?id=eq.{_q(sid)}&status=eq.live", {
-        "status": "ended", "ended_at": ended, "duration_s": duration,
-        "bytes": max(int(size or 0), int(s.get("bytes") or 0)), "sermon_id": sermon_id})
+        sermon_id = _sermon_draft(biz, {**s, **cur})
+    done = sb_clients.sb_patch_as_service(f"/stream_sessions?id=eq.{_q(sid)}&status=eq.ending", {
+        "status": "ended", "duration_s": duration, "bytes": size, "sermon_id": sermon_id})
     if not isinstance(done, list):
         raise HTTPException(503, "session didn't close")
-    with _cache.lock:
-        _cache.access.pop(sid, None)
+    if not done:
+        # Finished by another end at the same moment: its answer stands.
+        again = _session(sid)
+        return again.get("sermon_id") if again else sermon_id
     return sermon_id
 
 
 def _church_tz(biz: str):
-    """The church's own clock (the marketing desk's one chain), UTC if unknown."""
-    try:
-        import business_marketing
-        rows = sb_clients.sb_get_as_service(
-            f"/businesses?id=eq.{_q(biz)}&select=id,owner_id,settings&limit=1") or []
-        if rows:
-            return business_marketing.business_tz(rows[0])
-    except Exception:
-        pass
-    return timezone.utc
+    """The church's own clock (the marketing desk's one chain; UTC when
+    the church has none). A failed read is a 503, never UTC: near midnight
+    the wrong clock files the service under the wrong day for good."""
+    import business_marketing
+    rows = sb_clients.sb_get_as_service(f"/businesses?id=eq.{_q(biz)}&select=id,owner_id,settings&limit=1")
+    if not isinstance(rows, list):
+        raise HTTPException(503, "read failed")
+    return business_marketing.business_tz(rows[0]) if rows else timezone.utc
 
 
 def _sermon_draft(biz: str, s: Dict[str, Any]) -> str:
@@ -983,22 +1039,28 @@ def _sermon_draft(biz: str, s: Dict[str, Any]) -> str:
 
 
 def sweep_stale(business_id: Optional[str] = None) -> int:
-    """Close live sessions the relay stopped reporting (STALE_S). Quiet on
-    any failure; the next sweep tries again. Before the heartbeat column
-    exists (APPLY-2026-10-16-stream-relay-heartbeat.sql) it does nothing."""
+    """Finish what nobody else will: a live session the relay stopped
+    reporting for STALE_S, and an ending one whose draft its relay hasn't
+    saved after ENDING_GRACE_S. Quiet on any failure; the next sweep tries
+    again. Before APPLY-2026-10-29-stream-relay-transitions.sql (the
+    heartbeat column) it does nothing."""
     if not is_ready():
         return 0
     only = f"&business_id=eq.{_q(business_id)}" if business_id else ""
-    rows = sb_clients.sb_get_as_service(f"/stream_sessions?status=eq.live{only}&select=*&limit=200")
+    rows = sb_clients.sb_get_as_service(
+        f"/stream_sessions?status=in.(live,ending){only}&select=*&order=started_at.asc&limit=200")
     if not isinstance(rows, list):
         return 0
-    cutoff = datetime.now(timezone.utc) - timedelta(seconds=STALE_S)
+    now = datetime.now(timezone.utc)
     closed = 0
     for s in rows:
         if "last_seen_at" not in s:
             return 0
-        seen = _parse_ts(s.get("last_seen_at") or s.get("started_at"))
-        if seen and seen < cutoff:
+        if s.get("status") == "live":
+            seen, wait = _parse_ts(s.get("last_seen_at") or s.get("started_at")), STALE_S
+        else:
+            seen, wait = _parse_ts(s.get("ended_at") or s.get("started_at")), ENDING_GRACE_S
+        if seen and seen < now - timedelta(seconds=wait):
             try:
                 finalize(s, int(s.get("duration_s") or 0), int(s.get("bytes") or 0))
                 closed += 1
