@@ -357,6 +357,22 @@ def test_only_from_half_past_seven_until_quiet_hours(world, signups, monkeypatch
     assert world["texts"] == []
 
 
+def test_the_sweep_runs_on_the_clock_inside_the_window():
+    """10-28: nobody got Day 4 from a sweep that ran every 10 minutes from
+    whenever the worker booted. Now it runs at fixed Eastern times, six a
+    night, every one inside the window, before and after the clocks change."""
+    from apscheduler.triggers.cron import CronTrigger
+    trigger = CronTrigger(**dd.SWEEP_CRON)
+    for start in (datetime(2026, 10, 28, 12, 0, tzinfo=ET), datetime(2026, 11, 2, 12, 0, tzinfo=ET)):
+        runs, prev, t = [], None, start
+        while len(runs) < 6:
+            t = trigger.get_next_fire_time(prev, t)
+            runs.append(t.astimezone(ET).time())
+            prev, t = t, t + timedelta(seconds=1)
+        assert runs[0] == dd.SEND_FROM and all(dd.SEND_FROM <= r < dd.SEND_UNTIL for r in runs)
+        assert len({r.minute for r in runs}) == 6
+
+
 def test_after_the_last_day_nobody_is_texted(world, signups):
     assert _sweep(_at(2026, 11, 8, 19, 35))["sent"] == 0                      # tomorrow is past week 3
     assert _sweep(_at(2026, 11, 1, 19, 35))["sent"] == 3                      # week 3's first day, the evening before

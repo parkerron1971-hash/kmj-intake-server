@@ -2363,12 +2363,17 @@ async def startup():
     except Exception as e:
         print(f"   [warn] lifecycle email sweep not scheduled: {e}")
 
-    # The devotional by text (devotional_daily.py): every 10 minutes; it
-    # sends only from 7:30 to 8 PM Eastern, tomorrow's day, once a person.
+    # The devotional by text (devotional_daily.py): tomorrow's day, once a
+    # person, from 7:30 to 8 PM Eastern. On the clock, every 5 minutes of
+    # that half hour, not "every 10 minutes since the worker last booted":
+    # 2026-10-28 nobody got Day 4 although the worker was up the whole
+    # window. A run that starts late (a busy loop) still runs for 4
+    # minutes; the claim keeps a person to one text however many run.
     try:
         import devotional_daily as _devotional_daily
         scheduler.add_job(g("devotional_daily_texts", _devotional_daily.sweep_tick),
-                          "interval", minutes=10, id="devotional_daily_texts")
+                          "cron", **_devotional_daily.SWEEP_CRON,
+                          misfire_grace_time=240, coalesce=True, id="devotional_daily_texts")
     except Exception as e:
         print(f"   [warn] devotional evening texts not scheduled: {e}")
 

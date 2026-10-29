@@ -15,7 +15,7 @@ i reveal the app?" ... "build the page and nightly text".
                            day each evening
     the word DAILY         texted to the church's own number does the same
                            (sms_routing, beside GIVE)
-    sweep_tick()           every 10 minutes; from 7:30 to 8 PM Eastern it
+    sweep_tick()           7:30, 7:35 ... 7:55 PM Eastern (on the clock);
                            texts each person tomorrow's day and its link
 
 A day opens on its date, and tomorrow's opens the evening before, so the
@@ -66,6 +66,9 @@ FIRST_CHURCH = "009e9a2c-3e81-4bfc-a92a-205a8806aa99"   # Love City Church
 TZ = ZoneInfo("America/New_York")      # the same clock as texting's quiet hours
 SEND_FROM, SEND_UNTIL = time(19, 30), time(19, 58)    # quiet hours start at 8 PM
 SEND_AT = "7:30"
+# When the scheduler runs sweep_tick: every 5 minutes of the window, by
+# the Eastern clock (DST included), whenever the worker last booted.
+SWEEP_CRON = {"hour": 19, "minute": "30-55/5", "timezone": "America/New_York"}
 DAILY_WORDS = {"DAILY", "DEVOTION", "DEVOTIONAL"}
 CONSENT = ("Text me the daily devotional from {name}: one text each evening while the church reads a "
            "devotional together. Msg & data rates may apply. Reply STOP to stop, HELP for help.")
@@ -676,8 +679,11 @@ async def sweep_tick(now: Optional[datetime] = None) -> Dict[str, int]:
     now = (now or now_local()).astimezone(TZ)
     if not (SEND_FROM <= now.time() < SEND_UNTIL):
         return counts
+    # Every run in the window leaves a line, sent or not: 10-28's miss left
+    # no trace of whether the sweep ran at all.
     plan = await asyncio.to_thread(_plan, now.date() + timedelta(days=1))
     if not plan:
+        print(f"[daily] evening sweep {now:%H:%M}: no devotional day to send", flush=True)
         return counts
     at = datetime.now(timezone.utc).isoformat()
     async with httpx.AsyncClient(timeout=15) as client:
@@ -703,6 +709,5 @@ async def sweep_tick(now: Optional[datetime] = None) -> Dict[str, int]:
                     print(f"[daily] evening text failed for biz {biz_id[:8]}: {e}", flush=True)
                     await asyncio.to_thread(_unclaim, person["id"], key, person.get("last_key"))
                 await asyncio.sleep(0.25)
-    if counts["sent"] or counts["failed"]:
-        print(f"[daily] evening texts: {json.dumps(counts)}", flush=True)
+    print(f"[daily] evening sweep {now:%H:%M}: {json.dumps(counts)}", flush=True)
     return counts
