@@ -4755,7 +4755,8 @@ async def handle_draft_nurture(client, biz, action) -> Dict:
 
     reason = action.get("reason", "regular check-in")
     voice = biz.get("voice_profile") or {}
-    practitioner = (biz.get("settings") or {}).get("practitioner_name", "the team")
+    import chief_areas   # the office login writing, when it isn't the owner
+    practitioner = chief_areas.speaker(biz, "the team") or "the team"
     tone = voice.get("tone", "warm and professional")
 
     # Pass 2.5b: bind the inner draft call to the practitioner's voice
@@ -4833,7 +4834,8 @@ async def handle_draft_email(client, biz, action) -> Dict:
         body = body_hint
     else:
         voice = biz.get("voice_profile") or {}
-        practitioner = (biz.get("settings") or {}).get("practitioner_name", "the team")
+        import chief_areas   # the office login writing, when it isn't the owner
+        practitioner = chief_areas.speaker(biz, "the team") or "the team"
         tone = voice.get("tone", "warm and professional")
         name = contact.get("name") if contact else "there"
         # Pass 2.5b: thread voice depth (samples, do's/don'ts, greeting,
@@ -7034,7 +7036,8 @@ def _compose_body_with_signature(body: str, biz: Dict[str, Any]) -> str:
     body = body or ""
     et = (biz.get("settings") or {}).get("email_templates") or {}
     rules = et.get("global_rules") or {}
-    sig = et.get("signature") or {}
+    import chief_areas   # an office login's own name, not the owner's
+    sig = chief_areas.signature(et.get("signature") or {})
     out = body.rstrip()
 
     closing = (rules.get("closing_line") or "").strip()
@@ -7117,6 +7120,8 @@ async def _send_queued_email(client, biz: Dict[str, Any], item: Dict[str, Any],
     # '{business_name}' in the greeting until this line existed.
     import email_layout
     _values = email_layout.placeholder_values(biz, contact_name=contact.get("name"))
+    import chief_areas   # {practitioner_name} is the office login sending, when it isn't the owner
+    _values["practitioner_name"] = chief_areas.sender(biz, _values.get("practitioner_name", ""))
     composed_body = _compose_body_with_signature(
         email_layout.fill_placeholders(item.get("body") or "", _values), biz)
     _subject = email_layout.fill_placeholders(
@@ -7125,7 +7130,9 @@ async def _send_queued_email(client, biz: Dict[str, Any], item: Dict[str, Any],
     settings = biz.get("settings") or {}
     et = settings.get("email_templates") or {}
     sig = et.get("signature") or {}
-    from_name = (sig.get("name") or settings.get("practitioner_name") or biz.get("name") or "The Solutionist System").strip()
+    import chief_areas   # an office login sends as itself, never as the owner
+    from_name = chief_areas.sender(biz, (sig.get("name") or settings.get("practitioner_name") or biz.get("name")
+                                         or "The Solutionist System").strip())
     reply_to = (sig.get("email") or settings.get("contact_email") or "").strip() or None
 
     # Use the email_sender helper directly — no HTTP hop to ourselves.
@@ -8127,7 +8134,8 @@ async def handle_rewrite_draft(client, biz, action) -> Dict:
     old_body = item.get("body") or ""
 
     voice = biz.get("voice_profile") or {}
-    practitioner = (biz.get("settings") or {}).get("practitioner_name", "the team")
+    import chief_areas   # the office login writing, when it isn't the owner
+    practitioner = chief_areas.speaker(biz, "the team") or "the team"
     tone = voice.get("tone", "warm and professional")
 
     # Pass 2.5b: voice depth payload for the inner rewrite call. The
@@ -9497,7 +9505,9 @@ async def handle_batch_email(client, biz, action) -> Dict:
     settings = biz.get("settings") or {}
     et = (settings.get("email_templates") or {}) if isinstance(settings.get("email_templates"), dict) else {}
     sig = et.get("signature") or {}
-    from_name = (sig.get("name") or settings.get("practitioner_name") or biz.get("name") or "The Solutionist System").strip()
+    import chief_areas   # an office login sends as itself, never as the owner
+    from_name = chief_areas.sender(biz, (sig.get("name") or settings.get("practitioner_name") or biz.get("name")
+                                         or "The Solutionist System").strip())
     reply_to = (sig.get("email") or settings.get("contact_email") or "").strip() or None
     biz_name = biz.get("name") or ""
 
@@ -9971,6 +9981,8 @@ async def _send_invoice_email(
         f'<td style="padding:10px 0;border-bottom:1px solid #eee;text-align:right;font-weight:600;">${it.get("total",0):.2f}</td></tr>'
         for it in (invoice.get("items") or [])
     )
+    import chief_areas   # an office login sends as itself, never as the owner
+    _signed = chief_areas.sender(biz, sig.get("name") or biz_name)
 
     # Multi-provider payment buttons (Stripe / Square / PayPal). The
     # auto-generated invoice-specific Stripe link still wins over the
@@ -10008,7 +10020,7 @@ async def _send_invoice_email(
   </table>
   {payment_block}
   {f'<p style="margin-top:24px;padding:14px;background:#f9f7f2;border-left:3px solid {primary};font-size:13px;color:#666;line-height:1.6;font-style:italic;">{invoice.get("notes","")}</p>' if invoice.get("notes") else ''}
-  <p style="font-size:13px;color:#666;margin-top:24px;">Thank you,<br/><strong>{sig.get("name") or biz_name}</strong></p>
+  <p style="font-size:13px;color:#666;margin-top:24px;">Thank you,<br/><strong>{_signed}</strong></p>
 </div>
 </body></html>"""
 
@@ -10021,7 +10033,7 @@ async def _send_invoice_email(
             to_email=contact["email"],
             to_name=contact.get("name"),
             from_email=os.environ.get("RESEND_FROM_EMAIL") or "noreply@mysolutionist.app",
-            from_name=sig.get("name") or biz_name,
+            from_name=chief_areas.sender(biz, sig.get("name") or biz_name),
             subject=f"Invoice {invoice.get('invoice_number')} from {biz_name}",
             body=html,
             reply_to=routed or sig.get("email"),
@@ -11818,13 +11830,14 @@ async def handle_send_report(client, biz, action) -> Dict:
     # 5) Dispatch via send_via_resend (direct Python call — same as
     # handle_send_invoice).
     sig = (settings.get("email_templates") or {}).get("signature") or {}
+    import chief_areas   # an office login sends as itself, never as the owner
     try:
         from email_sender import send_via_resend
         data = await send_via_resend(
             to_email=to_email,
             to_name=None,
             from_email=os.environ.get("RESEND_FROM_EMAIL") or "noreply@mysolutionist.app",
-            from_name=sig.get("name") or biz_name,
+            from_name=chief_areas.sender(biz, sig.get("name") or biz_name),
             subject=subject,
             body=html,
             reply_to=sig.get("email") or None,
@@ -15009,9 +15022,11 @@ async def chief_chat(
         'conversation_id':str(req.conversation_id or '')[:80]})
     # Chief keeps to a church login's lane (chief_areas): None, and nothing
     # changes, for the owner, an admin, or any business that isn't a church.
+    # And says who's talking when it isn't the owner (chief_areas.who_for).
     import chief_areas
-    _area_token = chief_areas.TURN.set(
-        await asyncio.to_thread(chief_areas.scope_for, req.business_id, str(user_session.user.id)))
+    _area_scope, _who = await asyncio.to_thread(chief_areas.turn_for, req.business_id, str(user_session.user.id))
+    _area_token = chief_areas.TURN.set(_area_scope)
+    _who_token = chief_areas.WHO.set(_who)
     try:
         if not req.message:
             raise HTTPException(400, "message is required")
@@ -15470,9 +15485,9 @@ async def chief_chat(
             except Exception as e:  # pragma: no cover
                 logger.warning(f"marketing desk block failed: {e}")
 
-            # Whose login this is, when it's kept to a lane: the turn's tail,
-            # never a cached segment (it differs by login).
-            _login_block = chief_areas.block(chief_areas.TURN.get())
+            # Whose login this is, when it isn't the owner's, and the lane it
+            # keeps to: the turn's tail, never a cached segment (it differs by login).
+            _login_block = chief_areas.block(chief_areas.TURN.get(), chief_areas.WHO.get(), biz)
             if _login_block:
                 growth_turn_block = _login_block + "\n" + growth_turn_block
             system = _build_system_prompt(
@@ -16158,6 +16173,7 @@ async def chief_chat(
         image_studio.turn_references.reset(_image_refs_token)
         turn_scope.reset(_build_turn_token)
         chief_areas.TURN.reset(_area_token)
+        chief_areas.WHO.reset(_who_token)
         try:
             _TURN_USER_ID.reset(_uid_token)
             try:

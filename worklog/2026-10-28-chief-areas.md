@@ -3,11 +3,11 @@ title: Chief keeps to a church login's lane — refuses other areas' actions and
 date: 2026-10-28
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-10-28, on whether office logins have Chief: "lets build the board tab and so we can add the lanes for chief"'
-status: in progress
-prs: ["kmj-intake-server (this PR)"]
+status: shipped
+prs: [kmj-intake-server#1637]
 migrations: []
 left_undone:
-  - "Who's talking: Chief still calls every login by the business's practitioner_name, and a seat's email signs off as the owner. Peer kmj-intake-server-60 adds business_users_router.seat_person (branch seat-person); Chief's part (name the person, sign as them) is promised as its own PR after that merges"
+  - "Who's talking: built next (2026-10-28-chief-who-is-talking.md), on business_users_router.seat_person (#1638)"
   - "The bell and the morning brief in the app are still church-wide (phone pushes already leave limited logins out)"
   - "A notification's tap runs its action with no login (notification_engine), so it isn't checked by lane"
   - "Admins (Kevin's wife, Minnie) keep everything, by design; a lane is for Manager logins"

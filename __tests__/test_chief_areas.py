@@ -286,6 +286,8 @@ def test_a_lanes_turn_reads_and_is_told_only_its_own(prep, monkeypatch):
     prep.context.return_value = {**_ctx(), "business": dict(biz), "contacts_total": 10, "sessions": []}
     monkeypatch.setattr(chief, "_sb", __import__("unittest.mock").mock.AsyncMock(return_value=[dict(biz)]))
     monkeypatch.setattr(ca, "scope_for", lambda b, uid, owner_id=None: CARE if uid == "carla" else None)
+    monkeypatch.setattr(ca, "who_for", lambda b, uid, owner_id=None: (
+        {"role": "manager", "name": "Carla Reyes", "first_name": "Carla"} if uid == "carla" else None))
     monkeypatch.setattr(chief, "_format_setup_block", lambda _: "")
     sources = {"voice_examples": "", "session_context": "", "mentor_active": False, "forecast": None,
                "relationship_insights": [], "time_block": "", "habit_block": "", "bookkeeping_block": "Cash: $9,000"}
@@ -298,7 +300,7 @@ def test_a_lanes_turn_reads_and_is_told_only_its_own(prep, monkeypatch):
     seen = {}
 
     def build(ctx, *a, **k):
-        seen.update(ctx=ctx, kw=k, turn=ca.TURN.get())
+        seen.update(ctx=ctx, kw=k, turn=ca.TURN.get(), who=ca.WHO.get())
         raise HTTPException(491, "the prompt was reached")
     monkeypatch.setattr(chief, "_build_system_prompt", build)
 
@@ -317,11 +319,150 @@ def test_a_lanes_turn_reads_and_is_told_only_its_own(prep, monkeypatch):
     assert seen["turn"] == CARE
     assert seen["ctx"]["open_invoices"] == [] and [x["event_type"] for x in seen["ctx"]["events"]] == ["contact_created"]
     assert seen["kw"]["bookkeeping_block"] == ""
-    assert seen["kw"]["growth_turn_block"].startswith("THIS LOGIN — not the owner. It has the People & Care lane")
+    assert seen["who"]["name"] == "Carla Reyes"
+    assert seen["kw"]["growth_turn_block"].startswith("TALKING WITH: Carla Reyes, an office login on ")
+    assert "THIS LOGIN — not the owner. It has the People & Care lane" in seen["kw"]["growth_turn_block"]
     assert seen["after"] is None, "the scope ends with the turn"
 
     seen.clear()
     with pytest.raises(HTTPException):
         asyncio.run(turn("owner"))
     assert seen["turn"] is None and seen["ctx"]["open_invoices"] and seen["kw"]["bookkeeping_block"] == "Cash: $9,000"
-    assert "THIS LOGIN" not in seen["kw"]["growth_turn_block"]
+    assert "THIS LOGIN" not in seen["kw"]["growth_turn_block"] and "TALKING WITH" not in seen["kw"]["growth_turn_block"]
+    assert seen["who"] is None
+
+
+# ─── Who's talking ────────────────────────────────────────────────────
+# Kevin 2026-10-28 (through kmj-intake-server-60): office logins were
+# greeted as Kevin, and an email Minnie had Chief send signed off as him.
+
+CHURCH = {"id": BIZ, "owner_id": OWNER, "name": "Love City Church", "type": "ministry",
+          "settings": {"practitioner_name": "Pastor Kevin",
+                       "email_templates": {"signature": {"name": "Pastor Kevin McCloud", "title": "Senior Pastor",
+                                                         "business": "Love City Church", "phone": "216-555-0100"}}}}
+MINNIE = {"role": "admin", "name": "Minnie Tatum", "first_name": "Minnie"}
+NAMELESS = {"role": "manager", "name": "", "first_name": ""}
+
+
+@pytest.fixture
+def seats(monkeypatch):
+    import business_users_router
+    roles = {OWNER: "owner", JESS: "admin", CARLA: "manager", NEW: "manager"}
+    people = {JESS: {"name": "Minnie Tatum", "first_name": "Minnie", "contact_id": "c1"}}
+    reads = []
+    monkeypatch.setattr(business_users_router, "role_of", lambda biz, uid: reads.append(uid) or roles.get(uid))
+    monkeypatch.setattr(business_users_router, "seat_person", lambda biz, uid: people.get(uid))
+    return reads
+
+
+def speaking(who):
+    class _As:
+        def __enter__(self):
+            self.t = ca.WHO.set(who)
+
+        def __exit__(self, *a):
+            ca.WHO.reset(self.t)
+    return _As()
+
+
+def test_who_is_talking(seats, monkeypatch):
+    assert ca.who_for(BIZ, JESS) == MINNIE
+    assert ca.who_for(BIZ, NEW) == NAMELESS, "a seat nothing names is no one by name"
+    assert ca.who_for(BIZ, OWNER) is None and ca.who_for(BIZ, "stranger") is None
+    n = len(seats)
+    assert ca.who_for(BIZ, OWNER, owner_id=OWNER) is None and len(seats) == n, "the owner costs no read"
+    ca.who_for(BIZ, JESS)
+    assert len(seats) == n, "kept a minute"
+    import business_users_router
+
+    def boom(biz, uid):
+        raise RuntimeError("down")
+    monkeypatch.setattr(business_users_router, "role_of", boom)
+    ca.forget()
+    assert ca.who_for(BIZ, JESS) is None, "a failed read keeps today's Chief: it may be the owner"
+
+
+def test_the_names_chief_writes_and_signs_with():
+    sig = CHURCH["settings"]["email_templates"]["signature"]
+    # The owner: exactly as before.
+    assert ca.speaker(CHURCH, "the team") == "Pastor Kevin" and ca.sender(CHURCH, "Pastor Kevin McCloud") ==         "Pastor Kevin McCloud" and ca.signature(sig) is sig
+    assert ca.speaker({"settings": {}}, "the practitioner") == "the practitioner"
+    with speaking(MINNIE):
+        assert ca.speaker(CHURCH, "the team") == "Minnie Tatum" and ca.speaker(CHURCH, short=True) == "Minnie"
+        assert ca.sender(CHURCH, "Pastor Kevin McCloud") == "Minnie Tatum"
+        assert ca.signature(sig) == {**sig, "name": "Minnie Tatum", "title": ""}
+    with speaking(NAMELESS):
+        assert ca.speaker(CHURCH, "the team") == "" and ca.sender(CHURCH, "Pastor Kevin McCloud") == "Love City Church"
+        assert ca.signature(sig)["name"] == "" and "Kevin" not in str(ca.signature(sig))
+
+    import chief_of_staff as cos
+    assert "Pastor Kevin McCloud" in cos._compose_body_with_signature("Hi Ruth,", CHURCH)
+    with speaking(MINNIE):
+        body = cos._compose_body_with_signature("Hi Ruth,", CHURCH)
+    assert "Minnie Tatum" in body and "Love City Church" in body and "Kevin" not in body and "Senior Pastor" not in body
+
+
+def test_the_prompt_says_who_is_talking():
+    text = ca.block(None, MINNIE, CHURCH)
+    assert text.startswith("TALKING WITH: Minnie Tatum, an office login on Pastor Kevin's team. This is not "
+                           "Pastor Kevin. Call them Minnie, never Pastor Kevin.")
+    assert "THIS LOGIN" not in text, "an admin keeps everything: no lane"
+    text = ca.block(None, NAMELESS, CHURCH)
+    assert "Their name isn't on file, so use no name for them and never call them Pastor Kevin" in text
+    assert "from Love City Church" in text
+    both = ca.block(CARE, {"role": "manager", "name": "Carla Reyes", "first_name": "Carla"}, CHURCH)
+    assert both.startswith("TALKING WITH: Carla Reyes") and "THIS LOGIN — not the owner." in both
+    assert ca.block(None, None, CHURCH) == ""
+
+
+class _EmptyCtx(dict):
+    def __missing__(self, key):
+        return []
+
+
+def test_the_greeting_uses_their_own_name():
+    import chief_of_staff as cos
+    biz = {**CHURCH, "voice_profile": {}}
+
+    def hello(tod):
+        return cos._build_system_prompt(_EmptyCtx(business=biz), True, time_of_day=tod)
+    owner = hello("morning")
+    assert "Start with 'Good morning, Pastor Kevin.'" in owner and "Pastor Kevin's operational partner" in owner
+    assert "Start with 'Hey Pastor Kevin.'" in hello("night")
+    with speaking(MINNIE):
+        p = hello("morning")
+        assert "Start with 'Good morning, Minnie.'" in p and "Minnie's operational partner" in p
+        assert "Good morning, Pastor Kevin" not in p
+    with speaking(NAMELESS):
+        p = hello("morning")
+        assert "Start with 'Good morning.'" in p and "this team member's operational partner" in p
+        assert "Start with 'Hey there.'" in hello("night")
+
+
+def test_an_email_an_office_login_sends_is_from_them(monkeypatch):
+    import chief_of_staff as cos
+    import email_sender
+    seen = []
+
+    async def _sb(client, method, path, body=None):
+        if method == "GET" and path.startswith("/contacts"):
+            return [{"id": "c1", "name": "Ruth Elder", "email": "ruth@example.com"}]
+        return []
+
+    async def _send(**kwargs):
+        seen.append(kwargs)
+        return {"id": "re_1"}
+    monkeypatch.setattr(cos, "_sb", _sb)
+    monkeypatch.setattr(email_sender, "send_via_resend", _send)
+    monkeypatch.setattr(email_sender, "build_routed_reply_to", lambda b, c: None)
+    monkeypatch.setenv("RESEND_API_KEY", "re_test")
+    row = {"id": "q1", "business_id": BIZ, "status": "draft", "subject": "Thinking of you",
+           "body": "Hi {contact_name}, we prayed for you Sunday.\n\n{practitioner_name}", "contact_id": "c1",
+           "action_type": "email"}
+    assert asyncio.run(cos._send_queued_email(None, CHURCH, dict(row)))["sent"] is True
+    with speaking(MINNIE):
+        assert asyncio.run(cos._send_queued_email(None, CHURCH, dict(row)))["sent"] is True
+    owner, minnie = seen
+    assert owner["from_name"] == "Pastor Kevin McCloud" and "Pastor Kevin McCloud" in owner["body"]
+    assert minnie["from_name"] == "Minnie Tatum"
+    assert "Minnie Tatum" in minnie["body"] and "Kevin" not in minnie["body"] and "Senior Pastor" not in minnie["body"]
