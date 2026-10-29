@@ -3,8 +3,8 @@ title: Chief says who's talking — an office login is greeted by its own name, 
 date: 2026-10-28
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-10-28 (through kmj-intake-server-60): Love City''s new office logins sign in and get greeted as Kevin, and an email Minnie had Chief send signed off as him; "lets build the board tab and so we can add the lanes for chief"'
-status: in progress
-prs: ["kmj-intake-server (this PR)"]
+status: shipped
+prs: [kmj-intake-server#1641]
 migrations: []
 left_undone:
   - "A draft approved from the Approval Queue page (outside a Chief turn) still signs as the church's signature, whoever taps it"
