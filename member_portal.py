@@ -562,10 +562,11 @@ def _body_class(door: bool, space: str, tab: Optional[str], wide: bool = False) 
 
 
 def _side(biz: Dict[str, Any], tab: Optional[str], space: str, brand: str,
-          who: Optional[Dict[str, Any]], pic: str) -> Tuple[str, str]:
+          who: Optional[Dict[str, Any]], pic: str, board: bool = False) -> Tuple[str, str]:
     """The sidebar's own parts on a computer (member_app_ui: from 1200px
     the tab bar is a sidebar): the church's logo or name at the top; under
-    "Your church", the pages with no tab of their own; who's signed in at
+    "Your church", the pages with no tab of their own (the Board, for a board
+    member whose last tab is Serve: member_portal_board); who's signed in at
     the foot by their first name (a group in first-names mode shows no full
     name anywhere on the page), which opens Me. A phone never shows them
     (mb-side)."""
@@ -579,6 +580,9 @@ def _side(biz: Dict[str, Any], tab: Optional[str], space: str, brand: str,
                 continue
             cur = ' aria-current="page"' if tab == key else ""
             links.append(f'<a href="{href}"{cur}>{ui.icon(ic, 20)}<span>{label}</span></a>')
+        if board:
+            cur = ' aria-current="page"' if tab == "board" else ""
+            links.append(f'<a href="/my/board"{cur}>{ui.icon("users", 20)}<span>Board</span></a>')
     more = (f'<div class="mb-side mb-side-more"><p class="mb-side-h">Your church</p>{"".join(links)}</div>'
             if links else "")
     me = ""
@@ -690,7 +694,9 @@ def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
   {'' if door else f'<footer class="mp-foot mp-noprint">Your page at {_e(name)} · Powered by Solutionist</footer>'}
 </main>
 {ui.nav(tab, space=space, kids_parent=bool(ctx.get("kids_parent")), lead=bool(ctx.get("lead")), biz=biz,
-        side=_side(biz, tab, space, brand, who, mine)) if signed_in and bar else ''}
+        board=bool(ctx.get("board")),
+        side=_side(biz, tab, space, brand, who, mine, board=bool(ctx.get("board") and ctx.get("lead"))))
+  if signed_in and bar else ''}
 {'' if bare or door else ui.SCROLL_JS}
 {script}
 {mai.REGISTER_JS}
@@ -1139,15 +1145,18 @@ async def serve(request: Request, path: str) -> HTMLResponse:
         # anyone else in the space they switched to, if it's theirs.
         import member_spaces as msp
         # A member who holds a church role (or is asked to) gets the Lead
-        # tab (member_portal_lead), in Church. The owner's preview never does.
-        # Read alongside the space, not after it: every tab waits on both.
+        # tab (member_portal_lead), in Church; one on a board, the Board tab
+        # (member_portal_board). The owner's preview never does. Read
+        # alongside the space, not after it: every tab waits on all three.
         import church_follow_up as cfu
+        import member_portal_board as mpb
         may_lead = not sess.get("preview") and cfu.is_church(biz) and not msp.is_youth(sess["me"])
-        ctx, lead = await asyncio.gather(
+        ctx, lead, board = await asyncio.gather(
             msp.resolve_async(biz["id"], sess["me"], request.cookies.get(msp.COOKIE) or ""),
-            _leads(biz["id"], str(sess["me"]["id"]), biz, sess["me"]) if may_lead else _nothing())
+            _leads(biz["id"], str(sess["me"]["id"]), biz, sess["me"]) if may_lead else _nothing(),
+            mpb.on_board(biz, sess["me"]) if may_lead else _nothing())
         if may_lead and ctx.get("space", "church") == "church":
-            ctx = dict(ctx, lead=lead)
+            ctx = dict(ctx, lead=lead, board=board)
         msp.CURRENT.set(ctx)
     resp = await _serve_page(request, church, sess, sub)
     if sess and sess.get("preview") and isinstance(resp, HTMLResponse):
@@ -1487,7 +1496,8 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
     if sub == "/my/paid-back" or sub.startswith("/my/paid-back/"):
         import member_portal_checks as mpck
         return await mpck.serve(request, church, me, sub, preview=preview)
-    # The board's money yes (church_money_levels.py, member_portal_board.py).
+    # The Board tab, and the board's money yes (church_board.py,
+    # church_money_levels.py, member_portal_board.py).
     if sub == "/my/board" or sub.startswith("/my/board/"):
         import member_portal_board as mpb
         return await mpb.serve(request, church, me, sub, preview=preview)

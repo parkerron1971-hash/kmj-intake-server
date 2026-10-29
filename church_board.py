@@ -36,8 +36,11 @@ Who: the owner and admins see every board and set boards up. Anyone else
 sees the boards they sit on (a member row with their login) and nothing
 else; a member-level login or above writes there, a viewer reads. The menu
 files it under Office (church_areas "office"), with this board-member
-check on top: the office area alone opens nothing. Members never see
-minutes in the member app; nothing here reaches it.
+check on top: the office area alone opens nothing. In the member app only
+the church's people on a board see it, and only their own boards: the
+Board tab (member_portal_board.py, Kevin 2026-10-28) reads the agenda, and
+the minutes once they're sent for approval, and writes nothing. Other
+members never see a board or its minutes.
 
   GET    /church/board/status?business_id=            {enabled, manage, member, boards}
   GET    /church/board?business_id=                   boards, members, meetings

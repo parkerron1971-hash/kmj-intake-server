@@ -127,7 +127,7 @@ KIDS_TAB_OF = {"home": "home", "watch": "watch", "sermons": "watch", "live": "wa
 TAB_OF = {"home": "home", "watch": "watch", "sermons": "watch", "live": "watch", "bible": "bible",
           "give": "give", "connect": "connect", "groups": "connect", "messages": "connect", "lead": "lead",
           "events": "home", "prayer": "home", "news": "home", "directory": "connect",
-          "ask": "home"}
+          "ask": "home", "board": "board"}
 # A member who holds a church role (church_follow_up) gets a sixth tab:
 # the people Chief hands them (member_portal_lead).
 LEAD_TAB = ("lead", "/my/lead", "Lead", '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/>')
@@ -186,6 +186,13 @@ ICONS = {
                  '<circle cx="12" cy="8" r="2"/>',
     "camera": '<path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3z"/><circle cx="12" cy="13" r="3.5"/>',
 }
+
+
+# A member who sits on one of the church's boards (Board & minutes) gets the
+# Board tab (member_portal_board, Kevin 2026-10-28), last. One who has Serve
+# too keeps Serve there: the phone's bar holds six, and the Board is at the
+# top of Serve and in a computer's sidebar instead.
+BOARD_TAB = ("board", "/my/board", "Board", ICONS["users"])
 
 
 def icon(name: str, size: int = 20) -> str:
@@ -596,13 +603,15 @@ def segmented(items: Tuple[Tuple[str, str, str], ...], current: str, label: str)
 
 
 def nav(active: Optional[str], *, give: bool = True, space: str = "church", kids_parent: bool = True,
-        lead: bool = False, biz: Optional[Dict[str, Any]] = None, side: Tuple[str, str] = ("", "")) -> str:
+        lead: bool = False, biz: Optional[Dict[str, Any]] = None, side: Tuple[str, str] = ("", ""),
+        board: bool = False) -> str:
     """The tab bar. Give is always there (Kevin, 2026-10-15): before the
     church takes gifts in the app, it says how to give
     (member_portal.render_give_off). Youth and Kids have their own bars;
     a Kids leader who isn't a parent gets Room, Watch and Stories. The
     church's bar is the one it picked (church_tabs; today's when it picked
-    none), and a church leader (lead=True) gets Lead last. On a wide
+    none), and a church leader (lead=True) gets Lead last, else a board
+    member (board=True) gets Board there. On a wide
     screen the bar is a rail down the left (Kevin, 2026-10-17: a desktop
     view too), and wider still a sidebar, with `side` = (what goes above
     the tabs, what goes below them) shown only there (member_portal._side)."""
@@ -614,8 +623,11 @@ def nav(active: Optional[str], *, give: bool = True, space: str = "church", kids
             tabs = ((tabs[0][0], tabs[0][1], "Room", tabs[0][3]),) + tabs[1:3]
     else:
         bar = church_tabs(biz) if biz else TABS
-        tabs, of = (bar + (SERVE_TAB if serve_mode() else LEAD_TAB,) if lead else bar), TAB_OF
+        last = (SERVE_TAB if serve_mode() else LEAD_TAB,) if lead else (BOARD_TAB,) if board else ()
+        tabs, of = bar + last, TAB_OF
     cur_tab = of.get(active or "", "")
+    if cur_tab == "board" and lead:
+        cur_tab = "lead"   # the Board sits at the top of Serve
     if space == "church" and any(t[0] == active for t in tabs):
         cur_tab = active   # Events, Prayer, News or Messages made a tab of its own
     items = []
