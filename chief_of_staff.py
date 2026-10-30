@@ -251,6 +251,7 @@ from chief_lane_wallet import handle_lane_wallet
 from chief_agentcard import handle_agentcard_wallet
 from chief_site_view import handle_view_website
 from chief_weather import handle_get_weather
+from chief_transactions import handle_search_transactions
 from chief_hand_actions import (handle_use_browser_hand, handle_plan_errand,
     handle_approve_errand, handle_stop_errand, handle_errand_status)
 # Contribution statements. Both verbs are SENSITIVE in the registry —
@@ -371,6 +372,7 @@ _ACTION_PHRASES = {
     "create_invoice": "writing the invoice",
     "send_invoice": "sending the invoice",
     "show_view": "pulling up the numbers",
+    "search_transactions": "looking through the bank",
     "summarize_module": "adding it up",
     "inspect_module": "checking the module",
     "check_module": "starting the design check",
@@ -12150,6 +12152,7 @@ ACTION_HANDLERS = {
     "agentcard_wallet":      handle_agentcard_wallet,
     "view_website":          handle_view_website,
     "get_weather":           handle_get_weather,
+    "search_transactions":   handle_search_transactions,
     "plan_errand":           handle_plan_errand,
     "approve_errand":        handle_approve_errand,
     "stop_errand":           handle_stop_errand,

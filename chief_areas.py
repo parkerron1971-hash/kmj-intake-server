@@ -122,7 +122,7 @@ VERBS: Dict[str, Tuple[str, ...]] = {
         "send_invoice", "mark_invoice_paid", "delete_invoice", "void_invoice", "archive_invoice", "restore_invoice",
         "cancel_recurring_invoice", "generate_payment_link", "show_revenue", "send_report", "review_books",
         "list_bookkeeping_proposals", "approve_bookkeeping_proposal", "reject_bookkeeping_proposal",
-        "log_expense", "list_expenses", "update_expense", "delete_expense", "grant_balance", "consume_balance",
+        "search_transactions", "log_expense", "list_expenses", "update_expense", "delete_expense", "grant_balance", "consume_balance",
         "check_balance", "log_time", "bill_time_to_retainer", "unbilled_time", "write_off_time", "create_product",
         "update_product", "list_products", "create_offering", "update_offering", "archive_offering",
         "list_offerings", "offering_readiness", "setup_store", "check_inventory", "adjust_stock",
