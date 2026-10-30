@@ -156,6 +156,15 @@ def gather_and_format(business_id: str, business_type: Optional[str] = None) -> 
             f"  Unreconciled deposits: {counts['unmatched']} (${counts['unmatched_total']:,.2f})",
             f"  Needs categorization: {counts['uncategorized']}",
         ]
+        import chief_transactions
+        if chief_transactions.switched_on(business_id):
+            lines.append("  These are counts. For the rows themselves, reconciled or not (who was paid, "
+                         "what came from whom, a year's total), call search_transactions and quote its "
+                         "totals. Never ask the practitioner to search the screen for you, and never "
+                         "add rows up yourself.")
+        else:
+            lines.append("  These are counts; you can't read single bank rows here yet. Say so at once "
+                         "(never 'let me search') and point them to Bookkeeping → Transactions search.")
         if signals:
             lines.append(f"  Recent practitioner overrides of your proposals: {len(signals)} "
                          "(respect their preferences when proposing).")
