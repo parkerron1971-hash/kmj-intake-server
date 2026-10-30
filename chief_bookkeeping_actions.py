@@ -32,6 +32,11 @@ records is exactly the action a practitioner cannot un-see, and Chief's
 confidence is not calibrated well enough to earn it. Proposals are approved one
 at a time, by id, each named in the result.
 
+Reconciling on request is a different thing (chief_reconcile.reconcile_books,
+Kevin 2026-10-30): it settles only rows whose answer is clear, records every
+row's before-values, and puts the whole batch back on undo. Categorization
+proposals stay one at a time.
+
 HTTPException containment: approve/reject_proposal raise FastAPI
 HTTPExceptions on a bad id. Inside a Chief handler that would 500 the whole
 chat turn instead of failing one action card, so every call is wrapped.

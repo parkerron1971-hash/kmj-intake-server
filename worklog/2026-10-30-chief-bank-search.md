@@ -3,13 +3,13 @@ title: Chief searches and totals bank transactions (search_transactions)
 date: 2026-10-30
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-10-30: Chief couldn''t total what was "given to kmj paypal kmj ministries kevin" this year: "can chief look at transactions that is not reconciled? ... build it now"'
-status: in review
+status: shipped
 prs: [kmj-intake-server#1649]
 migrations: []
 left_undone:
   - "CHIEF_BANK_SEARCH is owner (Kevin's businesses only) until a Thursday flip to on (Railway, both services)"
-  - "Kevin's wider rule, same day: Chief does anything he can do on request except what needs his permission, then shows what it did. First case: 'reconcile all the transactions' as one reviewable, undoable batch. Separate PR; it reverses chief_bookkeeping_actions' 'bulk approval is deliberately not offered'"
-  - "Custom categories and clergy housing allowance: surveyed, not built (findings in the PR thread / session summary)"
+  - "Reconcile on request: built next, 2026-10-30-chief-reconcile-all.md"
+  - "Custom categories and clergy housing allowance: surveyed, not built; in Try (see 2026-10-30-chief-reconcile-all.md)"
 decisions:
   - "A Chief-only, sensitive read: bank rows never go out on the agent (MCP/KAI) surface"
   - "Gate = the Transactions screen's own reader gate (plaid_router._require_reader), checked as the person talking; no person, no rows"
