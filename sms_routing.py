@@ -691,35 +691,118 @@ async def set_keyword(body: KeywordBody, user: AuthedUser = Depends(require_user
 class BroadcastBody(BaseModel):
     business_id: str
     message: str
+    # One group's members (a church's groups); everyone on the list when empty.
+    group_id: Optional[str] = None
+    # Later: an ISO time with its offset. Saved as a chief_scheduled_actions
+    # row of type ANNOUNCEMENT, which chief_scheduler sends when it's due.
+    send_at: Optional[str] = None
 
 
-async def _bulletin_list(client: httpx.AsyncClient, business_id: str):
-    """(everyone on this business's list with a number, the numbers that
-    said yes to its texts). The second is None when that couldn't be
-    checked (sms_alerts.said_yes_to_texts)."""
+# Not a Chief verb: only POST /sms/broadcast with send_at writes these rows
+# (Chief's schedule_action takes ACTION_HANDLERS verbs only, and Chief has
+# no broadcast verb, test_chief_sms_actions.test_no_broadcast_verb_exists).
+ANNOUNCEMENT = "sms_announcement"
+MAX_AHEAD_DAYS = 60
+_UUID = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+
+
+async def _group_ids(client: httpx.AsyncClient, business_id: str, group_id: str) -> Optional[set]:
+    """The contacts in one of this business's active groups; None when the
+    group isn't this business's (or couldn't be read)."""
+    if not _UUID.match(str(group_id or "")):
+        return None
+    g = await _sb_get(client, f"/groups?id=eq.{group_id}&business_id=eq.{business_id}&active=eq.true&select=id&limit=1")
+    if not g:
+        return None
+    rows = await _sb_get(client, f"/group_members?business_id=eq.{business_id}&group_id=eq.{group_id}"
+                                 f"&select=contact_id&limit=5000")
+    if rows is None:
+        return None
+    return {str(r["contact_id"]) for r in rows}
+
+
+async def _bulletin_list(client: httpx.AsyncClient, business_id: str, group_id: Optional[str] = None):
+    """(everyone on this business's list with a number, or everyone in one
+    of its groups with a number; the numbers that said yes to its texts).
+    The second is None when that couldn't be checked
+    (sms_alerts.said_yes_to_texts) or the group isn't this business's."""
     import sms_alerts
-    contacts = await _sb_get(
-        client,
-        f"/contacts?business_id=eq.{business_id}&phone=not.is.null"
-        f"&select=id,name,phone&limit=500",
-    ) or []
+    if group_id:
+        ids = await _group_ids(client, business_id, group_id)
+        if ids is None:
+            return [], None
+        contacts: List[Dict[str, Any]] = []
+        members = sorted(ids)
+        for k in range(0, len(members), 100):
+            chunk = ",".join(members[k:k + 100])
+            got = await _sb_get(client, f"/contacts?business_id=eq.{business_id}&id=in.({chunk})"
+                                        f"&phone=not.is.null&select=id,name,phone&limit=100")
+            if got is None:
+                return [], None
+            contacts += got
+    else:
+        contacts = await _sb_get(
+            client,
+            f"/contacts?business_id=eq.{business_id}&phone=not.is.null"
+            f"&select=id,name,phone&limit=500",
+        ) or []
     yes = await sms_alerts.said_yes_to_texts(
         client, business_id, [c.get("phone") for c in contacts])
     return contacts, yes
 
 
 @router.get("/sms/broadcast/reach")
-async def broadcast_reach(business_id: str, user: AuthedUser = Depends(require_user)):
+async def broadcast_reach(business_id: str, group_id: Optional[str] = None,
+                          user: AuthedUser = Depends(require_user)):
     """Who the bulletin would reach right now, before anything is written:
-    how many numbers are on the list and how many of them said yes."""
+    how many numbers are on the list (or in the group) and how many of
+    them said yes."""
     import business_access
     business_access.assert_access(str(business_id), user, "admin")
     async with httpx.AsyncClient() as client:
-        contacts, yes = await _bulletin_list(client, business_id)
+        contacts, yes = await _bulletin_list(client, business_id, group_id)
     if yes is None:
         return JSONResponse({"error": "Couldn't check who has said yes to your texts. Try again in a minute."}, 503)
     phones = {normalize_phone(c.get("phone")) for c in contacts} - {""}
     return {"with_phone": len(phones), "said_yes": len(phones & yes)}
+
+
+@router.get("/sms/groups")
+async def announcement_groups(business_id: str, user: AuthedUser = Depends(require_user)):
+    """A church's active groups, each with how many members have a number
+    and how many of those said yes: who an announcement to one group would
+    reach. An empty list for a business without groups."""
+    import business_access
+    import sms_alerts
+    business_access.assert_access(str(business_id), user, "admin")
+    async with httpx.AsyncClient() as client:
+        groups = await _sb_get(client, f"/groups?business_id=eq.{business_id}&active=eq.true"
+                                       f"&select=id,name&order=name.asc&limit=100")
+        if groups is None:
+            return JSONResponse({"error": "Couldn't read your groups. Try again in a minute."}, 503)
+        if not groups:
+            return {"groups": []}
+        members = await _sb_get(client, f"/group_members?business_id=eq.{business_id}"
+                                        f"&select=group_id,contact_id&limit=50000") or []
+        ids = sorted({str(m["contact_id"]) for m in members})
+        phone_of: Dict[str, str] = {}
+        for k in range(0, len(ids), 100):
+            got = await _sb_get(client, f"/contacts?business_id=eq.{business_id}&id=in.({','.join(ids[k:k + 100])})"
+                                        f"&phone=not.is.null&select=id,phone&limit=100") or []
+            for c in got:
+                p = normalize_phone(c.get("phone"))
+                if p:
+                    phone_of[str(c["id"])] = p
+        yes = await sms_alerts.said_yes_to_texts(client, business_id, list(set(phone_of.values())))
+    if yes is None:
+        return JSONResponse({"error": "Couldn't check who has said yes to your texts. Try again in a minute."}, 503)
+    out = []
+    for g in groups:
+        phones = {phone_of[str(m["contact_id"])] for m in members
+                  if str(m["group_id"]) == str(g["id"]) and str(m["contact_id"]) in phone_of}
+        out.append({"id": g["id"], "name": g.get("name") or "", "with_phone": len(phones),
+                    "said_yes": len(phones & yes)})
+    return {"groups": out}
 
 
 @router.post("/sms/broadcast")
@@ -749,15 +832,54 @@ async def broadcast(body: BroadcastBody, user: AuthedUser = Depends(require_user
         return JSONResponse({"error": "Message body required"}, 400)
     if len(msg) > 1200:
         return JSONResponse({"error": "Keep broadcasts under 1200 characters."}, 400)
+    group_id = (body.group_id or "").strip() or None
 
+    if body.send_at:
+        try:
+            when = datetime.fromisoformat(str(body.send_at).replace("Z", "+00:00"))
+        except ValueError:
+            return JSONResponse({"error": "That time isn't one we can read."}, 400)
+        if when.tzinfo is None:
+            return JSONResponse({"error": "Send the time with its time zone."}, 400)
+        now = datetime.now(timezone.utc)
+        if when <= now + timedelta(minutes=1):
+            return JSONResponse({"error": "Pick a time at least a few minutes from now, or send it now."}, 400)
+        if when > now + timedelta(days=MAX_AHEAD_DAYS):
+            return JSONResponse({"error": f"Pick a time in the next {MAX_AHEAD_DAYS} days."}, 400)
+        async with httpx.AsyncClient() as client:
+            if group_id and await _group_ids(client, body.business_id, group_id) is None:
+                return JSONResponse({"error": "That group isn't one of yours."}, 404)
+            row = await _sb_post(client, "/chief_scheduled_actions", {
+                "business_id": str(body.business_id),
+                "label": f"Announcement: {msg[:60]}",
+                "action": {"type": ANNOUNCEMENT, "message": msg, "group_id": group_id,
+                           "scheduled_by": str(user.id)},
+                "run_at": when.astimezone(timezone.utc).isoformat(),
+            })
+        if not isinstance(row, list) or not row:
+            return JSONResponse({"error": "Couldn't save the announcement for later. Try again in a minute."}, 503)
+        return {"ok": True, "scheduled": True, "id": row[0].get("id"), "run_at": row[0].get("run_at")}
+
+    out = await announce(str(body.business_id), msg, group_id)
+    if out.get("error"):
+        return JSONResponse({"error": out["error"]}, out.get("status", 503))
+    return out
+
+
+async def announce(business_id: str, message: str, group_id: Optional[str] = None) -> Dict[str, Any]:
+    """Text everyone on the list (or in one group) who said yes. The send
+    behind POST /sms/broadcast and a scheduled announcement alike; the
+    caller has checked who may send. {"error", "status"} when nothing went."""
+    msg = (message or "").strip()
     async with httpx.AsyncClient() as client:
         # Only the people who said yes (Kevin, 2026-10-28). It used to text
         # every number on the list and skip only STOP.
-        contacts, yes = await _bulletin_list(client, body.business_id)
+        contacts, yes = await _bulletin_list(client, business_id, group_id)
         if yes is None:
-            return JSONResponse(
-                {"error": "Couldn't check who has said yes to your texts, so nothing was sent. "
-                          "Try again in a minute."}, 503)
+            if group_id and await _group_ids(client, business_id, group_id) is None:
+                return {"error": "That group isn't one of yours, so nothing was sent.", "status": 404}
+            return {"error": "Couldn't check who has said yes to your texts, so nothing was sent. "
+                             "Try again in a minute.", "status": 503}
 
         # Sender identity. A broadcast goes to people who may not have
         # texted in for months, from a number shared with every other
@@ -769,7 +891,7 @@ async def broadcast(body: BroadcastBody, user: AuthedUser = Depends(require_user
         # recipient, and the opt-out tail is unconditional here rather than
         # first-contact-only. A broadcast is bulk unsolicited-feeling
         # traffic; every one of them carries the way out.
-        biz_name = await _biz_name(client, body.business_id)
+        biz_name = await _biz_name(client, business_id)
         from sms_service import compose_outbound_body
         msg = compose_outbound_body(biz_name, msg, include_optout=True)
 
@@ -784,14 +906,14 @@ async def broadcast(body: BroadcastBody, user: AuthedUser = Depends(require_user
                 not_yes += 1
                 continue
             texted.add(phone)
-            if await is_opted_out(client, phone, body.business_id):
+            if await is_opted_out(client, phone, business_id):
                 skipped += 1
                 continue
             try:
                 sid = await _send_platform_sms(
-                    phone, msg, business_id=body.business_id, client=client)
+                    phone, msg, business_id=business_id, client=client)
                 await _store_sms(
-                    client, business_id=body.business_id, contact_id=c.get("id"),
+                    client, business_id=business_id, contact_id=c.get("id"),
                     phone_number=phone, message=msg, direction="outbound",
                     telnyx_id=sid, status="sent", sent_by="practitioner",
                 )
@@ -801,11 +923,91 @@ async def broadcast(body: BroadcastBody, user: AuthedUser = Depends(require_user
                 logger.warning(f"[ROUTE] broadcast send failed to {phone}: {e}")
             await asyncio.sleep(0.25)   # gentle pacing — carrier-friendly
 
-        await _log_event(client, body.business_id, None, "sms_broadcast", {
+        await _log_event(client, business_id, None, "sms_broadcast", {
             "preview": msg[:200], "sent": sent, "skipped": skipped, "failed": failed,
-            "not_yes": not_yes,
+            "not_yes": not_yes, "group_id": group_id,
         })
-    logger.info(f"[ROUTE] broadcast biz {body.business_id[:8]}: sent={sent} skipped={skipped} "
+    logger.info(f"[ROUTE] broadcast biz {business_id[:8]}: sent={sent} skipped={skipped} "
                 f"failed={failed} not_yes={not_yes}")
     return {"ok": True, "sent": sent, "skipped": skipped, "failed": failed,
             "not_yes": not_yes, "total_contacts": len(contacts)}
+
+
+async def run_scheduled_announcement(biz: Dict[str, Any], action: Dict[str, Any]):
+    """chief_scheduler's runner for an announcement someone scheduled from
+    Text. At send time it checks again what sending now checks: the person
+    who scheduled it can still send announcements (admin), a card is on
+    file, and who said yes is read fresh (announce). (ok, what happened)."""
+    biz_id = str(biz.get("id") or "")
+    who = str(action.get("scheduled_by") or "")
+    import business_access
+    try:
+        role = business_access._resolve_role(biz_id, who) if who else None
+    except Exception:
+        return False, "Couldn't check who scheduled this announcement, so it wasn't sent."
+    if not role or business_access._rank(role) < business_access._rank("admin"):
+        return False, "The person who scheduled this announcement can't send announcements now, so it wasn't sent."
+    import billing_limits
+    try:
+        billing_limits.require_card(biz_id, "texts")
+    except Exception as e:
+        return False, f"Not sent: {getattr(e, 'detail', None) or 'add a card to send texts'}"
+    message = str(action.get("message") or "").strip()
+    if not message:
+        return False, "The announcement was empty, so nothing was sent."
+    out = await announce(biz_id, message, action.get("group_id") or None)
+    if out.get("error"):
+        return False, out["error"]
+    parts = [f"{out['sent']} sent"]
+    if out.get("not_yes"):
+        parts.append(f"{out['not_yes']} haven't said yes")
+    if out.get("failed"):
+        parts.append(f"{out['failed']} didn't go through")
+    return out["sent"] > 0 or not out.get("failed"), "Announcement sent: " + " · ".join(parts)
+
+
+@router.get("/sms/scheduled")
+async def scheduled_announcements(business_id: str, user: AuthedUser = Depends(require_user)):
+    """The announcements waiting to go out, soonest first."""
+    import business_access
+    business_access.assert_access(str(business_id), user, "admin")
+    async with httpx.AsyncClient() as client:
+        rows = await _sb_get(client, f"/chief_scheduled_actions?business_id=eq.{business_id}"
+                                     f"&status=eq.queued&action->>type=eq.{ANNOUNCEMENT}"
+                                     f"&select=id,run_at,action&order=run_at.asc&limit=50")
+        if rows is None:
+            return JSONResponse({"error": "Couldn't read what's scheduled. Try again in a minute."}, 503)
+        gids = sorted({str((r.get("action") or {}).get("group_id")) for r in rows
+                       if (r.get("action") or {}).get("group_id")})
+        names: Dict[str, str] = {}
+        if gids:
+            got = await _sb_get(client, f"/groups?business_id=eq.{business_id}&id=in.({','.join(gids)})"
+                                        f"&select=id,name&limit=100") or []
+            names = {str(g["id"]): g.get("name") or "" for g in got}
+    out = []
+    for r in rows:
+        a = r.get("action") or {}
+        gid = str(a.get("group_id") or "")
+        out.append({"id": r["id"], "run_at": r.get("run_at"), "message": a.get("message") or "",
+                    "group_id": gid or None, "group_name": names.get(gid) if gid else None})
+    return {"scheduled": out}
+
+
+@router.delete("/sms/scheduled/{schedule_id}")
+async def cancel_announcement(schedule_id: str, business_id: str, user: AuthedUser = Depends(require_user)):
+    """Cancel an announcement that hasn't gone out. Only this business's,
+    only announcements, only while queued."""
+    import business_access
+    business_access.assert_access(str(business_id), user, "admin")
+    if not _UUID.match(str(schedule_id or "")):
+        return JSONResponse({"error": "That isn't one of your announcements."}, 404)
+    async with httpx.AsyncClient() as client:
+        rows = await _sb_get(client, f"/chief_scheduled_actions?id=eq.{schedule_id}&business_id=eq.{business_id}"
+                                     f"&status=eq.queued&action->>type=eq.{ANNOUNCEMENT}&select=id&limit=1")
+        if rows is None:
+            return JSONResponse({"error": "Couldn't cancel it right now. Try again in a minute."}, 503)
+        if not rows:
+            return JSONResponse({"error": "That announcement has already gone out or been cancelled."}, 404)
+        await _sb_patch(client, f"/chief_scheduled_actions?id=eq.{schedule_id}&business_id=eq.{business_id}"
+                                f"&status=eq.queued", {"status": "cancelled"})
+    return {"ok": True}

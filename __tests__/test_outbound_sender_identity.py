@@ -132,7 +132,8 @@ def test_send_sms_core_composes_before_sending():
 def test_broadcast_composes_before_sending():
     import inspect
     import sms_routing
-    src = inspect.getsource(sms_routing.broadcast)
+    # broadcast (now or scheduled) sends through announce.
+    src = inspect.getsource(sms_routing.announce)
     assert "compose_outbound_body" in src, (
         "broadcast no longer brands its body — the single most spam-prone "
         "outbound on a shared campaign")
