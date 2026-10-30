@@ -4,7 +4,7 @@ date: 2026-10-30
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-10-30: "let''s work on the list you gave for not built..." and "On as they ship"'
 status: in review
-prs: []
+prs: [kmj-intake-server#1651]
 migrations: []
 left_undone:
   - "Batch 2: announcements to one group, and sending later"
