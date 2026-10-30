@@ -25,8 +25,9 @@ Members can't post links, a paused member can't post, a closed chat takes
 nothing, and the owner's preview reads but never writes.
 
 The live room (render_room, Kevin 2026-10-30) is the page's new design,
-behind LIVE_ROOM (off | owner | on): owner shows it only in the owner's
-preview until a Thursday; off is render_live, the page before it.
+on for everyone (Kevin: "turn it on for everyone now, don't wait").
+LIVE_ROOM (off | owner | on, default on) is the way back: owner shows it
+only in the owner's preview; off is render_live, the page before it.
 """
 from __future__ import annotations
 
@@ -207,13 +208,13 @@ _HEART = ('<svg width="{s}" height="{s}" viewBox="0 0 24 24" fill="currentColor"
 
 
 def room_mode() -> str:
-    m = (os.environ.get("LIVE_ROOM") or "owner").strip().lower()
+    m = (os.environ.get("LIVE_ROOM") or "on").strip().lower()
     return m if m in ("off", "owner", "on") else "off"
 
 
 def room_for(preview: bool) -> bool:
-    """The live room for this visit: everyone's once LIVE_ROOM=on, only
-    the owner's preview of the member app while it's owner."""
+    """The live room for this visit: everyone's while LIVE_ROOM is on (the
+    default), only the owner's preview of the member app when it's owner."""
     m = room_mode()
     return m == "on" or (m == "owner" and bool(preview))
 

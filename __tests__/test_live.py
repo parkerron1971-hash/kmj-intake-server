@@ -153,6 +153,9 @@ def db(monkeypatch):
     import giving_router
     monkeypatch.setattr(giving_router, "giving_is_active", lambda b: False)
     monkeypatch.setattr(mpc, "upcoming_for", lambda b, me: [])
+    # The tests above the live room's pin the page before it, which is
+    # LIVE_ROOM=off (the way back); the room's own tests turn it on.
+    monkeypatch.setenv("LIVE_ROOM", "off")
     import member_portal_sermons as mps
     monkeypatch.setattr(mps, "load_library", lambda b: {"sermons": [], "series": []})
     return d
@@ -321,8 +324,9 @@ def test_a_failed_read_is_said_never_off_air(db):
 
 
 # ─── the live room (LIVE_ROOM, Kevin 2026-10-30) ─────────────────────
-# Pins: it's the owner's preview only until LIVE_ROOM=on, and off is the
-# page before it; the host's newest message is pinned; the count of who's
+# Pins: it's everyone's by default (Kevin: "turn it on for everyone now"),
+# owner keeps it to the owner's preview, and off is the page before it;
+# the host's newest message is pinned; the count of who's
 # here is never "0" for a failed read; "I'm here", prayer and hearts
 # answer JSON so the video keeps playing; hearts are counted on the
 # service (clamped), ride the poll, and the preview never adds any; Give
@@ -336,18 +340,17 @@ def _room(monkeypatch, mode="on"):
     return m
 
 
-def test_the_room_is_the_owners_preview_until_switched_on(db, monkeypatch):
+def test_the_room_is_everyones_and_the_switch_is_the_way_back(db, monkeypatch):
     _go_live(_team())
     monkeypatch.delenv("LIVE_ROOM", raising=False)
     m = _member()
-    assert 'id="lv-room"' not in m.get("/my/live").text            # owner (the default): members keep today's page
+    assert 'id="lv-room"' in m.get("/my/live").text                # on (the default): every member has the room
+    monkeypatch.setenv("LIVE_ROOM", "owner")
+    assert 'id="lv-room"' not in m.get("/my/live").text            # owner: members keep the page before it...
     db.who["preview"] = True
-    assert 'id="lv-room"' in m.get("/my/live").text                # ...and the owner's preview has the room
+    assert 'id="lv-room"' in m.get("/my/live").text                # ...and only the owner's preview has the room
     monkeypatch.setenv("LIVE_ROOM", "off")
     assert 'id="lv-room"' not in m.get("/my/live").text
-    db.who["preview"] = False
-    monkeypatch.setenv("LIVE_ROOM", "on")
-    assert 'id="lv-room"' in m.get("/my/live").text
     monkeypatch.setenv("LIVE_ROOM", "sideways")                    # anything else is off
     assert mpl.room_mode() == "off"
 
