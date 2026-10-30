@@ -101,13 +101,17 @@ def test_a_later_announcement_is_saved_for_the_scheduler(monkeypatch):
     assert datetime.fromisoformat(row["run_at"]) == when and row["business_id"] == BIZ
 
 
-@pytest.mark.parametrize("send_at", [
-    (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(),
-    (datetime.now(timezone.utc) + timedelta(days=90)).isoformat(),
-    "2026-11-01T10:00:00",            # no time zone
-    "Saturday morning",
-])
-def test_a_time_that_cant_be_kept_is_refused(monkeypatch, send_at):
+# Stable ids: pytest-xdist workers must collect the same names, so the
+# times are made inside the test, not in the parameters.
+@pytest.mark.parametrize("case", ["an_hour_ago", "ninety_days_out", "no_time_zone", "not_a_time"])
+def test_a_time_that_cant_be_kept_is_refused(monkeypatch, case):
+    now = datetime.now(timezone.utc)
+    send_at = {
+        "an_hour_ago": (now - timedelta(hours=1)).isoformat(),
+        "ninety_days_out": (now + timedelta(days=90)).isoformat(),
+        "no_time_zone": "2026-11-01T10:00:00",
+        "not_a_time": "Saturday morning",
+    }[case]
     out, posted, _ = _schedule(monkeypatch, send_at)
     assert out.status_code == 400 and not posted
 
