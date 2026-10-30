@@ -92,6 +92,17 @@ class DB:
                     s["hearts"] = int(s.get("hearts") or 0) + max(1, min(int(body["p_n"]), 30))
                     return s["hearts"]
             return None
+        if table == "rpc/live_pin":                           # APPLY-2026-10-30-live-pin.sql
+            mid, sid, biz = body["p_message"], body["p_session"], body["p_business"]
+            if mid is not None and not any(c["id"] == mid and c["session_id"] == sid and c["business_id"] == biz
+                                           and not c.get("hidden") for c in self.t["live_chat"]):
+                return None                                   # raised: not this service's, or hidden
+            for s in self.t["live_sessions"]:
+                if s["id"] == sid and s["business_id"] == biz and s["status"] == "live":
+                    s["pinned_message_id"] = mid
+                    s["chat_version"] = int(s.get("chat_version") or 0) + 1
+                    return True
+            return None                                       # raised: the service has ended
         self.n += 1
         row = {"id": f"00000000-0000-4000-8000-{self.n:012d}",
                "created_at": (datetime(2026, 1, 1, tzinfo=timezone.utc) + timedelta(seconds=self.n)).isoformat(),
@@ -101,6 +112,7 @@ class DB:
         if table == "live_sessions":
             row.setdefault("chat_version", 0)
             row.setdefault("hearts", 0)
+            row.setdefault("pinned_message_id", None)
             if any(s["business_id"] == row["business_id"] and s["status"] == "live" for s in self.t[table]):
                 return None
         if table in ("live_presence", "live_mutes"):
@@ -457,3 +469,74 @@ def test_names_keep_their_colour_on_every_phone():
     total = sum(int.from_bytes(units[i:i + 2], "little") for i in range(0, len(units), 2))
     assert total != sum(map(ord, name)) and mpl.family_of(name) == mpl.FAMILIES[total % 4]
     assert mpl.family_of("Ana R.") == mpl.FAMILIES[sum(map(ord, "Ana R.")) % 4]
+
+
+# ─── the pin (Kevin 2026-10-30: "add the pin button and the hearts") ──
+# Pins: a host's message pins itself; a manager pins any visible message
+# of this service, or unpins; a pin moves every phone on (chat_version);
+# a hidden pin leaves every phone and comes back when shown; a pin older
+# than the feed's newest messages is still shown.
+
+
+def test_a_hosts_message_pins_itself_and_the_team_pins_any_other(db, monkeypatch):
+    t = _team()
+    sid = _go_live(t)
+    m = _room(monkeypatch)
+    r = t.post(f"/live/{sid}/chat", json={"business_id": BIZ, "body": "Welcome home!"})
+    assert r.json()["pinned"] is True
+    host_id = r.json()["message"]["id"]
+    m.post("/my/live/chat", data={"body": "This word is for me"}, headers=JSON)
+    ana_id = db.t["live_chat"][-1]["id"]
+    feed = m.get("/my/live/feed?v=0").json()
+    assert feed["pin"]["id"] == host_id and feed["pin"]["host"] is True
+    r = t.post(f"/live/{sid}/pin", json={"business_id": BIZ, "message_id": ana_id})
+    assert r.json() == {"ok": True, "pinned_message_id": ana_id}
+    moved = m.get(f"/my/live/feed?v={feed['v']}").json()
+    assert moved["same"] is False and moved["pin"]["body"] == "This word is for me" and moved["pin"]["mine"] is True
+    page = m.get("/my/live").text
+    assert 'id="lv-pin-who">You</b>' in page and 'id="lv-pin-b">This word is for me</span>' in page
+    assert t.post(f"/live/{sid}/pin", json={"business_id": BIZ, "message_id": None}).status_code == 200
+    assert m.get("/my/live/feed?v=0").json()["pin"] is None
+    assert '<div class="lv-pin" id="lv-pin" hidden>' in m.get("/my/live").text
+
+
+def test_only_a_manager_pins_and_only_this_services_visible_messages(db, monkeypatch):
+    t = _team()
+    sid = _go_live(t)
+    m = _room(monkeypatch)
+    m.post("/my/live/chat", data={"body": "hello"}, headers=JSON)
+    mid = db.t["live_chat"][-1]["id"]
+    stranger = _team(uid="99999999-9999-9999-9999-999999999999")
+    assert stranger.post(f"/live/{sid}/pin", json={"business_id": BIZ, "message_id": mid}).status_code == 403
+    t.post(f"/live/{sid}/messages/{mid}/hide", json={"business_id": BIZ, "hidden": True})
+    assert t.post(f"/live/{sid}/pin", json={"business_id": BIZ, "message_id": mid}).status_code == 409
+    other = "00000000-0000-4000-8000-999999999999"
+    assert t.post(f"/live/{sid}/pin", json={"business_id": BIZ, "message_id": other}).status_code == 409
+    assert db.t["live_sessions"][0]["pinned_message_id"] is None
+
+
+def test_a_hidden_pin_leaves_every_phone_and_comes_back_when_shown(db, monkeypatch):
+    t = _team()
+    sid = _go_live(t)
+    m = _room(monkeypatch)
+    m.post("/my/live/chat", data={"body": "Pin me"}, headers=JSON)
+    mid = db.t["live_chat"][-1]["id"]
+    assert t.post(f"/live/{sid}/pin", json={"business_id": BIZ, "message_id": mid}).status_code == 200
+    t.post(f"/live/{sid}/messages/{mid}/hide", json={"business_id": BIZ, "hidden": True})
+    assert m.get("/my/live/feed?v=0").json()["pin"] is None
+    t.post(f"/live/{sid}/messages/{mid}/hide", json={"business_id": BIZ, "hidden": False})
+    assert m.get("/my/live/feed?v=0").json()["pin"]["id"] == mid
+
+
+def test_a_pin_older_than_the_feed_is_still_shown(db, monkeypatch):
+    t = _team()
+    sid = _go_live(t)
+    m = _room(monkeypatch)
+    monkeypatch.setattr(mpl, "FEED_LIMIT", 2)
+    t.post(f"/live/{sid}/chat", json={"business_id": BIZ, "body": "Welcome home!"})
+    for i in range(3):
+        m.post("/my/live/chat", data={"body": f"message {i}"}, headers=JSON)
+    feed = m.get("/my/live/feed?v=0").json()
+    assert [x["body"] for x in feed["messages"]] == ["message 1", "message 2"]
+    assert feed["pin"]["body"] == "Welcome home!"
+    assert 'id="lv-pin-b">Welcome home!</span>' in m.get("/my/live").text

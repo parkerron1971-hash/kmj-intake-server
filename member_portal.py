@@ -1428,9 +1428,12 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
                 asyncio.to_thread(mpc.upcoming_for, biz["id"], me) if room else asyncio.sleep(0))
             if room:
                 from giving_router import giving_is_active
+                pinned = await asyncio.to_thread(mpl.pinned_row, biz["id"], cur,
+                                                 mpl.feed_rows(msgs or [], me["id"]), me["id"])
                 return _page(mpl.render_room(biz, site, request, me, cur, msgs=msgs, here_me=here_me,
                                              muted_me=muted_me, here_n=here_n, occasions=fill(occ, "occasions"),
-                                             give=mpl.give_choices(biz) if giving_is_active(biz) else None))
+                                             give=mpl.give_choices(biz) if giving_is_active(biz) else None,
+                                             pinned=pinned))
             return _page(mpl.render_live(biz, site, request, me, cur, msgs=msgs, here_me=here_me, muted_me=muted_me))
         occ, lib = (None, None)
         if cur == {}:
