@@ -15,7 +15,7 @@ RESERVED_PAGE_IDS = frozenset({
     "suppliers", "entities", "collaborators", "contractors", "chief-proposals",
     "chief-suggestions", "accounting-periods", "period-overrides", "module-specs",
     "agent-coordination", "live", "group-live", "my", "texting-terms",
-    "texting-privacy", "data", "news", "academy", "daily",
+    "texting-privacy", "data", "news", "academy", "daily", "stream-relay",
 })
 
 

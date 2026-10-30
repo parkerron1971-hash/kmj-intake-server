@@ -61,6 +61,9 @@ _REDACTIONS = (
     re.compile(r"(/public/audit/)(?!view(?:[/?#]|$))[^/?\s\"]+"),
     # /public/store/download/<order>/<token>/<offering>
     re.compile(r"(/public/store/download/[^/?\s\"]+/)[^/?\s\"]+"),
+    # A church manager's link to an unpublished recording (?t=, hours long):
+    # /stream-relay/watch/<session>?t=<token>, and its playlist.
+    re.compile(r"(/stream-relay/(?:watch|media)/[^?\s\"]*\?(?:[^\s\"#]*&)?t=)[^&\s\"#]+"),
 )
 
 _MASK = r"\1<redacted>"
