@@ -192,7 +192,8 @@ def test_reconcile_writes_records_and_lists_every_change(db, owner):
     fake = db(FakeDB([_tx("d1", -40.0, "PAYPAL TRANSFER", primary="TRANSFER_IN"),
                       _tx("d2", -60.0, "CHECK DEPOSIT")]))
     out = cr.reconcile("biz-1", {})
-    assert out["type"] == "show_view" and out["view"] == "reconciled"
+    assert out["type"] == "reconcile_books" and out["display"] == "table"
+    assert out["view"] == "reconciled" and out["columns"] and out["rows"]
     assert out["summary"]["count"] == 2 and len(out["changes"]) == 2
     assert out["batch_id"] and len(out["batch_id"]) == 32
     assert fake.rows["d1"]["reconciliation_status"] == "ignored"
@@ -200,6 +201,15 @@ def test_reconcile_writes_records_and_lists_every_change(db, owner):
     assert "2 deposits marked 'nothing to match'" in out["result"]
     assert "can be undone as one batch" in out["result"]
     assert "1 of the deposits" in out["note_for_chief"], "the PayPal transfer isn't income: ask"
+
+
+def test_the_answer_check_sees_a_write(db, owner):
+    """Live, 2026-10-30: typed show_view, the result counted as a read, and
+    "I reconciled 49 bank rows" was withheld as a claim with no write receipt."""
+    import chief_truth as truth
+    db(FakeDB([_tx("d1", -40.0, "CHECK DEPOSIT")]))
+    out = cr.reconcile("biz-1", {})
+    assert truth.wrote_anything(truth.evidence_for_review({}, {}, [out]))
 
 
 def test_a_row_changed_meanwhile_is_left_alone(db, owner, monkeypatch):
