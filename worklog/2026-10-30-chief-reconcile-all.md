@@ -3,10 +3,11 @@ title: Chief reconciles the bank on request, lists every change, undoes the batc
 date: 2026-10-30
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-10-30: "chief should be able to do pretty much all that i can do upon request except things that require my permission. so that way is someone say reconcile all the transaction it can and allow me to check what it done if I want." Then: "pick the best options for both questions"'
-status: in review
-prs: [kmj-intake-server#1653]
+status: shipped
+prs: [kmj-intake-server#1653, kmj-intake-server#TBD (receipt fix)]
 migrations: []
 left_undone:
+  - "First live run (Love City, 22:43 UTC): 49 rows reconciled, but the result was typed show_view, so the answer check saw a read and withheld 'I reconciled 49 bank rows'; Chief then told Kevin it couldn't confirm. Fixed: type reconcile_books + display: table. The app's card needs FE to draw display: table (solutionist-studio PR)"
   - "Switched with CHIEF_BANK_SEARCH (owner until the Thursday flip), the same switch as the bank search"
   - "Deposits the bank calls transfers (PayPal and the like) aren't counted as income; Chief asks whether they're giving instead of relabelling. A 'mark these as giving' batch with the same undo is the natural next verb"
   - "Categorization proposals are still one at a time (chief_bookkeeping_actions); a confident-categorize batch could reuse this module's record-and-undo"

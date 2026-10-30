@@ -381,7 +381,12 @@ def summarize(done: List[Dict[str, Any]], left: List[Dict[str, Any]], *, moved: 
                  "transfers (PayPal, Zelle and the like), so the books don't count them as income. "
                  "Ask whether they're giving or income; don't relabel them yourself.")
     out: Dict[str, Any] = {
-        "type": "show_view",
+        # The verb, not show_view: the answer check reads a result's effect
+        # from its type, and as show_view (a read) "I reconciled 49 bank
+        # rows" had no write receipt and was withheld (2026-10-30, live).
+        # `display: table` is what tells the app to draw the card.
+        "type": "reconcile_books",
+        "display": "table",
         "view": "reconciled",
         "filter": "batch",
         "title": "What I reconciled",
