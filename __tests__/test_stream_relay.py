@@ -1381,6 +1381,106 @@ def test_publishing_the_sermon_makes_it_public(db, ready, bucket):
     assert pl.status_code == 200 and pl.headers["cache-control"].startswith("private")
 
 
+# ─── a live service sends only its newest segments ──────────────────
+
+
+def _relay_playlist(n, resumes=(), ended=False):
+    """What the relay's ffmpeg writes (hls_cmd: an EVENT list, a date per
+    segment, a discontinuity where a dropped stream resumed). `resumes`
+    maps a segment to how many discontinuity tags it carries: ffmpeg
+    8's append_list was seen leaving two on the first segment after a
+    resume (a real run, 2026-10-30)."""
+    resumes = dict.fromkeys(resumes, 1) if not isinstance(resumes, dict) else resumes
+    lines = ["#EXTM3U", "#EXT-X-VERSION:3", "#EXT-X-TARGETDURATION:4", "#EXT-X-MEDIA-SEQUENCE:0",
+             "#EXT-X-PLAYLIST-TYPE:EVENT"]
+    for i in range(n):
+        lines += ["#EXT-X-DISCONTINUITY"] * resumes.get(i, 0)
+        lines += ["#EXTINF:4.000000,",
+                  f"#EXT-X-PROGRAM-DATE-TIME:2026-11-01T15:{i // 15 % 60:02d}:{i % 15 * 4:02d}.000+0000",
+                  f"seg_{i:06d}.ts"]
+    return "\n".join(lines + (["#EXT-X-ENDLIST"] if ended else [])) + "\n"
+
+
+def _as_a_player_reads_it(text):
+    """[(sequence number, discontinuity number, date, name)] as hls.js
+    numbers them: from the list's two sequence tags, each discontinuity tag
+    moving the count on by one for the segment after it."""
+    seq = disc = 0
+    out, date = [], None
+    for line in text.splitlines():
+        if line.startswith("#EXT-X-MEDIA-SEQUENCE:"):
+            seq = int(line.split(":", 1)[1])
+        elif line.startswith("#EXT-X-DISCONTINUITY-SEQUENCE:"):
+            disc = int(line.split(":", 1)[1])
+        elif line == "#EXT-X-DISCONTINUITY":
+            disc += 1
+        elif line.startswith("#EXT-X-PROGRAM-DATE-TIME:"):
+            date = line.split(":", 1)[1]
+        elif line and not line.startswith("#"):
+            out.append((seq, disc, date, line))
+            seq, date = seq + 1, None
+    return out
+
+
+def test_a_live_window_keeps_every_segments_numbers_at_every_length():
+    """Reloaded every few seconds as the service grows, the window must
+    give each segment the sequence and discontinuity numbers it has in the
+    whole list, or players skip or repeat video. Resumes fall inside,
+    at the start of, and out of the window along the way."""
+    resumes = {0: 2, 45: 1, 50: 1, 79: 2, 80: 1}
+    for n in range(0, 140):
+        full = _as_a_player_reads_it(_relay_playlist(n, resumes))
+        text = sr.live_window(_relay_playlist(n, resumes))
+        assert _as_a_player_reads_it(text) == full[-sr.LIVE_WINDOW_SEGMENTS:], n
+        assert "PLAYLIST-TYPE" not in text and "#EXT-X-TARGETDURATION:4" in text, n
+        assert text.count("#EXTINF") == min(n, sr.LIVE_WINDOW_SEGMENTS), n
+        assert "#EXT-X-ENDLIST" not in text
+        if n > sr.LIVE_WINDOW_SEGMENTS:
+            # Which number a player gives a discontinuity on a window's first
+            # segment is left open by RFC 8216, so it is counted instead.
+            assert "#EXT-X-DISCONTINUITY\n" not in text.split("#EXTINF", 1)[0], n
+
+
+def test_a_live_window_keeps_the_end_once_the_relay_writes_it():
+    text = sr.live_window(_relay_playlist(100, ended=True))
+    assert text.rstrip().endswith("#EXT-X-ENDLIST") and text.count("#EXTINF") == sr.LIVE_WINDOW_SEGMENTS
+
+
+def _serve(monkeypatch, text):
+    import httpx
+
+    class R:
+        status_code = 200
+
+        def __init__(self):
+            self.text = text
+    monkeypatch.setattr(httpx, "get", lambda url, timeout=None: R())
+
+
+def test_a_two_hour_live_service_sends_two_minutes_of_links(db, ready, monkeypatch):
+    c = _app()
+    sid = _start(c, _key(c)).json()["session_id"]
+    _serve(monkeypatch, _relay_playlist(1800))
+    pl = c.get(f"/stream-relay/media/{sid}/index.m3u8")
+    assert pl.status_code == 200 and pl.headers["cache-control"] == "no-store"
+    links = [ln for ln in pl.text.splitlines() if not ln.startswith("#")]
+    assert len(links) == sr.LIVE_WINDOW_SEGMENTS and "#EXT-X-MEDIA-SEQUENCE:1770" in pl.text
+    assert links[0].startswith(f"{R2}/media/live/{BIZ}/{sid}/seg_001770.ts?") and "X-Amz-Signature=" in links[-1]
+    assert len(pl.content) < 20_000, len(pl.content)        # was ~820 KB at the two-hour mark
+
+
+def test_the_recording_still_plays_whole_once_the_service_is_over(db, ready, monkeypatch):
+    c = _app()
+    sid = _ended_draft(c, db)
+    db.t["sermons"][0]["published"] = True
+    sr._cache.clear()
+    _serve(monkeypatch, _relay_playlist(1800, ended=True))
+    pl = c.get(f"/stream-relay/media/{sid}/index.m3u8")
+    assert pl.status_code == 200 and pl.headers["cache-control"].startswith("private")
+    assert len([ln for ln in pl.text.splitlines() if not ln.startswith("#")]) == 1800
+    assert "#EXT-X-PLAYLIST-TYPE:EVENT" in pl.text and pl.text.rstrip().endswith("#EXT-X-ENDLIST")
+
+
 def test_unknown_or_switched_off_recordings_are_not_found(db, ready, bucket, monkeypatch):
     c = _app()
     assert c.get("/stream-relay/watch/not-a-session").status_code == 404
