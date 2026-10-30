@@ -95,7 +95,7 @@ class DB:
         self.n += 1
         start = datetime(2026, 10, 18, 15, tzinfo=timezone.utc) + timedelta(seconds=self.n - rec)
         row = {"id": sid, "business_id": biz, "status": status, "live_session_id": None, "sermon_id": None,
-               "playlist_path": playlist, "duration_s": rec, "bytes": max(int(size or 0), 0),
+               "draft_owed": False, "playlist_path": playlist, "duration_s": rec, "bytes": max(int(size or 0), 0),
                "started_at": start.isoformat(), "last_seen_at": now.isoformat(),
                "ended_at": now.isoformat() if status == "ending" else None}
         self.t["stream_sessions"].append(row)
@@ -164,25 +164,26 @@ class DB:
         self.t["live_sessions"].append(made)
         return {"outcome": "opened", "live": dict(made)}
 
-    def stream_relay_close(self, p_session, p_watch_prefix, p_duration_s, p_bytes):
+    def stream_relay_close(self, p_session, p_watch_prefix, p_duration_s, p_bytes, p_min_s):
         s = self._one("stream_sessions", p_session)
         if s is None:
             return {"outcome": "missing"}
-        prev = s["duration_s"]
-        s["duration_s"] = max(s["duration_s"], int(p_duration_s or 0))
+        dur = int(p_duration_s or 0)
+        s["draft_owed"] = s.get("draft_owed") or (s["status"] == "ended" and s.get("sermon_id") is None
+                                                  and s["duration_s"] < p_min_s <= dur)
+        s["duration_s"] = max(s["duration_s"], dur)
         s["bytes"] = max(s["bytes"], int(p_bytes or 0))
         if s["status"] != "ended":
             self._retire(p_session, p_watch_prefix, datetime.now(timezone.utc).isoformat())
-        return {"outcome": "ended" if s["status"] == "ended" else "ending", "session": dict(s),
-                "prev_duration_s": prev}
+        return {"outcome": "ended" if s["status"] == "ended" else "ending", "session": dict(s)}
 
-    def stream_relay_finish(self, p_session, p_sermon, p_title, p_preached_on, p_video_url, p_min_s, p_late):
+    def stream_relay_finish(self, p_session, p_sermon, p_title, p_preached_on, p_video_url, p_min_s):
         s = self._one("stream_sessions", p_session)
         if s is None:
             return {"outcome": "missing"}
         if s["status"] == "live":
             return {"outcome": "live", "session": dict(s)}
-        if s["status"] == "ended" and not p_late:
+        if s["status"] == "ended" and not s.get("draft_owed"):
             return {"outcome": "ended", "session": dict(s)}
         church = next((r for r in self.t["church_streams"] if r["business_id"] == s["business_id"]), None)
         if s.get("sermon_id") is None and church and church.get("sermon_drafts") and s["duration_s"] >= p_min_s:
@@ -195,8 +196,7 @@ class DB:
                                           "preached_on": p_preached_on, "video_url": p_video_url,
                                           "published": False})
             s["sermon_id"] = p_sermon
-        if s["status"] == "ending":
-            s["status"] = "ended"
+        s["status"], s["draft_owed"] = "ended", False
         return {"outcome": "ended", "session": dict(s)}
 
     def stream_relay_beat(self, p_session, p_recorded_s, p_bytes):
@@ -268,6 +268,7 @@ class DB:
         if table == "stream_sessions":
             row.setdefault("live_session_id", None)
             row.setdefault("sermon_id", None)
+            row.setdefault("draft_owed", False)
             row.setdefault("last_seen_at", None)
         if table == "church_streams":
             row.setdefault("sermon_drafts", True)
@@ -1068,6 +1069,92 @@ def test_the_totals_never_go_down(db, ready):
     assert _end(c, sid, 100, bytes=1).status_code == 200                     # an end that counts less
     assert (_row(db, sid)["duration_s"], _row(db, sid)["bytes"]) == (600, 5000)
     assert len(db.t["sermons"]) == 1                                         # 600 s is a service
+
+
+def _ended_short(c, db):
+    """The sweep (or any finalizer on a heartbeat's 240 s) finished the
+    service with no draft; the relay's own end hasn't arrived yet."""
+    sid = _start(c, _key(c), recorded_s=240, bytes=100000).json()["session_id"]
+    assert _end(c, sid, 240, bytes=100000).status_code == 200
+    row = _row(db, sid)
+    assert row["status"] == "ended" and not row["sermon_id"] and db.t["sermons"] == []
+    return sid, row
+
+
+def _fail_once(db, monkeypatch, fault):
+    if fault == "draft_insert":
+        db.fail[("POST", "sermons")] = 1
+    elif fault == "close_response":
+        db.lose[("RPC", "stream_relay_close")] = 1
+    elif fault == "finish_rpc":
+        db.fail[("RPC", "stream_relay_finish")] = 1
+    else:
+        real = sr._church_tz
+
+        def once(biz):
+            monkeypatch.setattr(sr, "_church_tz", real)
+            raise sr.HTTPException(503, "time zone read failed")
+        monkeypatch.setattr(sr, "_church_tz", once)
+
+
+LATE_FAULTS = ["draft_insert", "close_response", "finish_rpc", "timezone"]
+
+
+@pytest.mark.parametrize("fault", LATE_FAULTS)
+def test_a_late_end_that_fails_partway_is_finished_by_its_retry(db, ready, monkeypatch, fault):
+    """Codex B3-F2 (its four failure points, as written): the late end's
+    close saved 360 s and then something failed. The retry's close sees
+    360 s already saved, so it can't tell from the totals that a draft is
+    owed; the owed mark, saved with the 360 s, tells it."""
+    c = _app()
+    sid, row = _ended_short(c, db)
+    _fail_once(db, monkeypatch, fault)
+    assert _end(c, sid, 360, bytes=123456).status_code == 503
+    assert row["duration_s"] == 360 and row["draft_owed"] is True
+    retry = _end(c, sid, 360, bytes=123456)
+    assert retry.status_code == 200
+    assert len(db.t["sermons"]) == 1, (row, retry.json())
+    assert row["sermon_id"] == db.t["sermons"][0]["id"] == retry.json()["sermon_id"]
+    assert row["draft_owed"] is False and row["status"] == "ended"
+
+
+@pytest.mark.parametrize("fault", LATE_FAULTS)
+def test_a_late_end_that_fails_partway_is_finished_by_the_sweep(db, ready, monkeypatch, fault):
+    """Its relay never comes back: the sweep reads the owed mark (the
+    session is ended, so the live/ending read alone never saw it)."""
+    c = _app()
+    sid, row = _ended_short(c, db)
+    _fail_once(db, monkeypatch, fault)
+    assert _end(c, sid, 360, bytes=123456).status_code == 503
+    assert sr.sweep_stale() == 1
+    assert len(db.t["sermons"]) == 1 and row["sermon_id"] == db.t["sermons"][0]["id"]
+    assert row["draft_owed"] is False and sr.sweep_stale() == 0
+    r = _end(c, sid, 360, bytes=123456)                     # the relay's retry, after all
+    assert r.status_code == 200 and r.json()["sermon_id"] == row["sermon_id"] and len(db.t["sermons"]) == 1
+
+
+def test_a_draft_made_by_a_late_end_and_then_deleted_stays_deleted(db, ready):
+    c = _app()
+    sid, row = _ended_short(c, db)
+    assert _end(c, sid, 360).status_code == 200 and len(db.t["sermons"]) == 1
+    db.t["sermons"].clear()
+    row["sermon_id"] = None                                 # deleted from Sermons: on delete set null
+    for duration in (360, 3600):                            # a retry, then an even later count
+        r = _end(c, sid, duration)
+        assert r.status_code == 200 and r.json()["sermon_id"] is None
+    assert db.t["sermons"] == [] and row["draft_owed"] is False and sr.sweep_stale() == 0
+
+
+def test_a_late_end_at_a_church_with_drafts_off_owes_nothing_for_long(db, ready):
+    """The mark is cleared without a draft, so the sweep doesn't keep
+    coming back to it."""
+    c = _app()
+    sid, row = _ended_short(c, db)
+    c.patch("/stream-relay/settings", json={"business_id": BIZ, "sermon_drafts": False})
+    db.fail[("RPC", "stream_relay_finish")] = 1
+    assert _end(c, sid, 360).status_code == 503 and row["draft_owed"] is True
+    assert sr.sweep_stale() == 1
+    assert db.t["sermons"] == [] and row["draft_owed"] is False and sr.sweep_stale() == 0
 
 
 # ─── start, end and the sweep can't interleave (Codex B3-R) ──────────

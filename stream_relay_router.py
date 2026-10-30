@@ -1056,41 +1056,42 @@ def finalize(s: Dict[str, Any], duration_s: int, size: int) -> Optional[str]:
     clock. Any failure is a 503, and the next try (the relay's end, or the
     sweep) carries on from what is saved; nothing is decided from what
     only one request knew. A caller that finds the session already ended
-    returns that answer, unless its own totals just took the saved length
-    past DRAFT_MIN_SECONDS with no draft linked (the sweep finished it on a
-    heartbeat's shorter count): that "late" end makes the draft. The
-    draft's id is the session's own, so any number of finalizers make one."""
+    returns that answer, unless the session still owes its draft: a late
+    end whose totals took the saved length past DRAFT_MIN_SECONDS after a
+    shorter count (the sweep, on a heartbeat's) had finished it with none.
+    Close marks that owed in the same step that saves the length, so this
+    try, its retry or the sweep makes the draft, whatever fails in between
+    (Codex B3-F2). The draft's id is the session's own, so any number of
+    finalizers make one."""
     sid, biz = str(s["id"]), str(s["business_id"])
     out = _rpc("stream_relay_close", {"p_session": sid, "p_watch_prefix": watch_prefix(),
                                       "p_duration_s": max(int(duration_s or 0), 0),
-                                      "p_bytes": max(int(size or 0), 0)})
+                                      "p_bytes": max(int(size or 0), 0), "p_min_s": DRAFT_MIN_SECONDS})
     if out is None or out["outcome"] not in ("ending", "ended"):
         raise HTTPException(503, "live service didn't close")
     with _cache.lock:
         _cache.access.pop(sid, None)          # over: no longer public as "live"
     cur = out.get("session") if isinstance(out.get("session"), dict) else {}
-    length = int(cur.get("duration_s") or 0)
-    late = (out["outcome"] == "ended" and not cur.get("sermon_id")
-            and int(out.get("prev_duration_s") or 0) < DRAFT_MIN_SECONDS <= length)
-    if out["outcome"] == "ended" and not late:
+    if out["outcome"] == "ended" and not cur.get("draft_owed"):
         return cur.get("sermon_id")
-    fin = _finish(sid, _sermon_draft(biz, cur) if length >= DRAFT_MIN_SECONDS else None, late)
+    length = int(cur.get("duration_s") or 0)
+    fin = _finish(sid, _sermon_draft(biz, cur) if length >= DRAFT_MIN_SECONDS else None)
     if fin["outcome"] == "needs_draft":
         # Another end raised the saved length past the line after this one
         # looked: once more, with the draft's title and date.
         now = fin.get("session") if isinstance(fin.get("session"), dict) else {}
-        fin = _finish(sid, _sermon_draft(biz, {**cur, **now}), late)
+        fin = _finish(sid, _sermon_draft(biz, {**cur, **now}))
     if fin["outcome"] != "ended":
         raise HTTPException(503, "session didn't close")
     done = fin.get("session") if isinstance(fin.get("session"), dict) else {}
     return done.get("sermon_id")
 
 
-def _finish(sid: str, draft: Optional[Dict[str, str]], late: bool) -> Dict[str, Any]:
+def _finish(sid: str, draft: Optional[Dict[str, str]]) -> Dict[str, Any]:
     out = _rpc("stream_relay_finish", {
         "p_session": sid, "p_sermon": derived_id("sermon", sid),
         "p_title": (draft or {}).get("title"), "p_preached_on": (draft or {}).get("preached_on"),
-        "p_video_url": (draft or {}).get("video_url"), "p_min_s": DRAFT_MIN_SECONDS, "p_late": bool(late)})
+        "p_video_url": (draft or {}).get("video_url"), "p_min_s": DRAFT_MIN_SECONDS})
     if out is None:
         raise HTTPException(503, "draft didn't save")
     return out
@@ -1120,27 +1121,31 @@ def _sermon_draft(biz: str, s: Dict[str, Any]) -> Dict[str, str]:
 
 def sweep_stale(business_id: Optional[str] = None) -> int:
     """Finish what nobody else will: a live session the relay stopped
-    reporting for STALE_S, and an ending one whose draft its relay hasn't
-    saved after ENDING_GRACE_S. Quiet on any failure; the next sweep tries
-    again. Before APPLY-2026-10-29-stream-relay-transitions.sql (the
-    heartbeat column) it does nothing."""
+    reporting for STALE_S, an ending one whose draft its relay hasn't
+    saved after ENDING_GRACE_S, and an ended one whose late end left its
+    draft owed (Codex B3-F2; at once, its relay may be gone). Quiet on any
+    failure; the next sweep tries again. Before
+    APPLY-2026-10-29-stream-relay-transitions.sql (the heartbeat and
+    draft_owed columns) it does nothing."""
     if not is_ready():
         return 0
     only = f"&business_id=eq.{_q(business_id)}" if business_id else ""
     rows = sb_clients.sb_get_as_service(
         f"/stream_sessions?status=in.(live,ending){only}&select=*&order=started_at.asc&limit=200")
-    if not isinstance(rows, list):
+    owed = sb_clients.sb_get_as_service(
+        f"/stream_sessions?status=eq.ended&draft_owed=eq.true{only}&select=*&order=started_at.asc&limit=200")
+    if not isinstance(rows, list) or not isinstance(owed, list):
         return 0
     now = datetime.now(timezone.utc)
     closed = 0
-    for s in rows:
+    for s in rows + owed:
         if "last_seen_at" not in s:
             return 0
         if s.get("status") == "live":
             seen, wait = _parse_ts(s.get("last_seen_at") or s.get("started_at")), STALE_S
         else:
             seen, wait = _parse_ts(s.get("ended_at") or s.get("started_at")), ENDING_GRACE_S
-        if seen and seen < now - timedelta(seconds=wait):
+        if s.get("status") == "ended" or (seen and seen < now - timedelta(seconds=wait)):
             try:
                 finalize(s, int(s.get("duration_s") or 0), int(s.get("bytes") or 0))
                 closed += 1
