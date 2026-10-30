@@ -1189,25 +1189,38 @@ async def rsvp(request: Request):
 
 @router.post("/my/prayer", include_in_schema=False)
 async def prayer(request: Request):
+    """The prayer page's form, and the live room's prayer sheet
+    (member_portal_live), which asks for JSON so the service keeps
+    playing while it sends."""
     import asyncio
+    from fastapi.responses import JSONResponse
+    as_json = "application/json" in (request.headers.get("accept") or "")
+
+    def answer(ok: bool, code: str, status: int = 400):
+        if as_json:
+            return (JSONResponse({"ok": True}) if ok else
+                    JSONResponse({"ok": False, "error": ERRORS.get(code, ERRORS["error"])}, status_code=status))
+        return _back("/my", done=code) if ok else _back("/my/prayer", err=code)
+
     church, me, unavailable = await _signed_in(request)
     if unavailable:
-        return _back("/my/prayer", err="preview" if unavailable == "preview" else "error")
+        return answer(False, "preview" if unavailable == "preview" else "error",
+                      403 if unavailable == "preview" else 503)
     if not me:
-        return _back("/my")
+        return answer(False, "signed_out", 401) if as_json else _back("/my")
     form = await request.form()
     text = str(form.get("request") or "").strip()
     if not text:
-        return _back("/my/prayer", err="empty")
+        return answer(False, "empty")
     if not _allowed(church, me):
-        return _back("/my/prayer", err="slow")
+        return answer(False, "slow", 429)
     full = await asyncio.to_thread(load_me, church["business"]["id"], me["id"]) or me
     # Shared with the prayer team only when they chose it; an older form
     # (or none chosen) stays with the pastors.
     ok = await asyncio.to_thread(save_prayer, church["business"]["id"], full, text,
                                  str(form.get("share") or "") != "team", str(form.get("for") or "") == "youth",
                                  str(form.get("wants_call") or "") == "yes")
-    return _back("/my", done="prayer") if ok else _back("/my/prayer", err="error")
+    return answer(True, "prayer") if ok else answer(False, "error", 503)
 
 
 @router.post("/my/details", include_in_schema=False)

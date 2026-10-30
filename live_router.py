@@ -130,10 +130,12 @@ def _unavailable() -> HTTPException:
 
 
 def current(business_id: str) -> Optional[Dict[str, Any]]:
-    """The church's live session, {} when none, None when the read failed."""
+    """The church's live session, {} when none, None when the read failed.
+    `hearts` (APPLY-2026-10-30-live-hearts.sql) rides along, so the live
+    room's poll reads the hearts with the chat's version."""
     rows = sb_clients.sb_get_as_service(
         f"/live_sessions?business_id=eq.{_q(business_id)}&status=eq.live"
-        f"&select=id,title,stream_url,entry_id,chat_open,chat_version,started_at&limit=1")
+        f"&select=id,title,stream_url,entry_id,chat_open,chat_version,started_at,hearts&limit=1")
     if not isinstance(rows, list):
         return None
     return rows[0] if rows else {}

@@ -183,6 +183,9 @@ _LIMITS: Dict[str, Tuple[int, int]] = {
     "chat_photos": (int(os.environ.get("RL_CHAT_PHOTOS_PER_HOUR", "20")), 3600),
     # Live chat, per member; "I'm here" rides member_action.
     "live_chat": (int(os.environ.get("RL_LIVE_CHAT_PER_MIN", "8")), 60),
+    # Hearts in the live room, per member: a phone sends its taps in
+    # batches of up to 30 at most every second or so.
+    "live_heart": (int(os.environ.get("RL_LIVE_HEART_PER_MIN", "40")), 60),
     # Homework handed in as a file, by the class link (academy_work.py):
     # per link (hashed), so a whole class on one church Wi-Fi isn't one
     # budget; and a wide per-IP ceiling beside it. Opening a file is a

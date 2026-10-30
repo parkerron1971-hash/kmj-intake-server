@@ -1413,14 +1413,24 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
                 v = int(request.query_params.get("v") or -1)
             except ValueError:
                 v = -1
-            data = await asyncio.to_thread(mpl.feed, biz["id"], me, v)
+            data = await asyncio.to_thread(mpl.feed, biz["id"], me, v, request.query_params.get("n") == "1")
             return JSONResponse(data, status_code=503 if data.get("error") else 200, headers=_SECURE_HEADERS)
         cur = await asyncio.to_thread(lr.current, biz["id"])
         if cur:
-            msgs, here_me, muted_me = await asyncio.gather(
+            # The live room (LIVE_ROOM) also shows how many are here and,
+            # on a computer, what's coming up: read beside the rest.
+            room = mpl.room_for(preview)
+            msgs, here_me, muted_me, here_n, occ = await asyncio.gather(
                 asyncio.to_thread(lr.messages, biz["id"], cur["id"], False, mpl.FEED_LIMIT),
                 asyncio.to_thread(mpl.i_am_here, biz["id"], cur["id"], me["id"]),
-                asyncio.to_thread(mpl.is_muted, biz["id"], cur["id"], me["id"]))
+                asyncio.to_thread(mpl.is_muted, biz["id"], cur["id"], me["id"]),
+                asyncio.to_thread(mpl.here_count, biz["id"], cur["id"]) if room else asyncio.sleep(0),
+                asyncio.to_thread(mpc.upcoming_for, biz["id"], me) if room else asyncio.sleep(0))
+            if room:
+                from giving_router import giving_is_active
+                return _page(mpl.render_room(biz, site, request, me, cur, msgs=msgs, here_me=here_me,
+                                             muted_me=muted_me, here_n=here_n, occasions=fill(occ, "occasions"),
+                                             give=mpl.give_choices(biz) if giving_is_active(biz) else None))
             return _page(mpl.render_live(biz, site, request, me, cur, msgs=msgs, here_me=here_me, muted_me=muted_me))
         occ, lib = (None, None)
         if cur == {}:
