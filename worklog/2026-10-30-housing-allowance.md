@@ -4,7 +4,7 @@ date: 2026-10-30
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-10-30: "I do have a housing allowance setup. so we need structure for this setup in the system". Paid: "Both / not sure". Who sees it: "Owner only"'
 status: in review
-prs: [kmj-intake-server#TBD]
+prs: [kmj-intake-server#1655]
 migrations: [supabase/APPLY-2026-10-30-housing-allowance.sql (not yet applied)]
 left_undone:
   - "Payroll (next PR): a minister flag on employees so Pay your team withholds no Social Security/Medicare (payroll_calc computes FICA and FUTA for everyone today), a housing part per pay run, and that part logged as 'paid' (source pay_run) when a run is marked paid"
