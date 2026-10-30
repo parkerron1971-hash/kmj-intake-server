@@ -253,6 +253,8 @@ from chief_site_view import handle_view_website
 from chief_weather import handle_get_weather
 from chief_transactions import handle_search_transactions
 from chief_reconcile import handle_reconcile_books, handle_undo_reconcile_books
+from housing_allowance import (handle_housing_allowance_status, handle_set_housing_allowance,
+    handle_log_housing_entry, handle_delete_housing_entry)
 from chief_hand_actions import (handle_use_browser_hand, handle_plan_errand,
     handle_approve_errand, handle_stop_errand, handle_errand_status)
 # Contribution statements. Both verbs are SENSITIVE in the registry —
@@ -12158,6 +12160,10 @@ ACTION_HANDLERS = {
     "search_transactions":   handle_search_transactions,
     "reconcile_books":       handle_reconcile_books,
     "undo_reconcile_books":  handle_undo_reconcile_books,
+    "housing_allowance_status": handle_housing_allowance_status,
+    "set_housing_allowance": handle_set_housing_allowance,
+    "log_housing_entry":     handle_log_housing_entry,
+    "delete_housing_entry":  handle_delete_housing_entry,
     "plan_errand":           handle_plan_errand,
     "approve_errand":        handle_approve_errand,
     "stop_errand":           handle_stop_errand,
