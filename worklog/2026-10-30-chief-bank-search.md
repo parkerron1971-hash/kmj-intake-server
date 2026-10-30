@@ -18,8 +18,8 @@ decisions:
   - "direction both by default: 'given to' is ambiguous, so in and out are reported apart instead of guessed"
 related: [2026-10-02-bookkeeping-redesign.md]
 ---
-Chief's prompt carried bookkeeping counts only (49 unreconciled deposits,
-$15,016.60), and no tool read a single bank row, so Chief said "let me
+Chief's prompt carried bookkeeping counts only (how many deposits were
+unreconciled, and their sum), and no tool read a single bank row, so Chief said "let me
 search" and then sent Kevin to the Transactions screen. `chief_transactions.py`
 adds `search_transactions`: words (any match on the bank description or
 merchant), in/out/both, dates (Jan 1 to today by default), and reconciled /

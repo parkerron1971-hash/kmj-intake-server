@@ -3,10 +3,11 @@ chief_transactions.py — Chief reads the bank, row by row.
 
 Kevin, 2026-10-30: "are you able to go through my transactions and get any
 that was given to kmj paypal kmj ministries kevin and give a total amount
-that was given so far for the year?" Chief had counts in its prompt (49
-unreconciled deposits, $15,016.60) and no way to read a single row, so it
-said "let me search" and then told him to search the Transactions screen
-himself, guessing along the way that "given to" meant money coming in.
+that was given so far for the year?" Chief had only counts in its prompt
+(how many deposits were unreconciled, and their sum) and no way to read a
+single row, so it said "let me search" and then told him to search the
+Transactions screen himself, guessing along the way that "given to" meant
+money coming in.
 
 search_transactions is that search, run by Chief:
 
