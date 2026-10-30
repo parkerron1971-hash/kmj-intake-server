@@ -94,7 +94,7 @@ def test_the_keywords_contact_is_named_not_duplicated(db):
     assert out["contact_id"] == "c-9" and out["created"] is False
     patches = [(p, b) for m, p, b in db.calls if m == "PATCH" and p.startswith("/contacts")]
     assert patches == [(f"/contacts?id=eq.c-9&business_id=eq.{BIZ}",
-                        {"name": "Jordan Miles", "tags": ["first-time guest"]})]
+                        {"name": "Jordan Miles", "status": "lead", "tags": ["first-time guest"]})]
     assert not [c for c in db.calls if c[0] == "POST" and c[1] == "/contacts"]
 
 

@@ -129,8 +129,12 @@ def save_guest(body: GuestIn, user: AuthedUser = Depends(require_user)):
     elif found:
         tags = [t for t in (found.get("tags") or []) if isinstance(t, str)]
         patch: Dict[str, Any] = {"name": name}
-        if church and "first-time guest" not in tags:
-            patch["tags"] = tags + ["first-time guest"]
+        if church:
+            # The keyword made them "active" as a placeholder; at a church a
+            # first-time texter is a guest, as one saved from scratch is.
+            patch["status"] = "lead"
+            if "first-time guest" not in tags:
+                patch["tags"] = tags + ["first-time guest"]
         if sb_clients.sb_patch_as_service(f"/contacts?id=eq.{_q(found['id'])}&business_id=eq.{_q(biz)}", patch) is None:
             raise _unavailable()
         cid = str(found["id"])
