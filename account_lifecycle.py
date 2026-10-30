@@ -490,6 +490,11 @@ BUSINESS_CHILD_TABLES: List[str] = [
     # employees; runs reference employees through the items. The W-4
     # profile (SSN ciphertext) is NOT exported — see EXPORT_EXCLUDED —
     # and cascades from employees on delete.
+    # A minister's housing allowance (housing_allowance.py): entries before
+    # their allowance, and both before the employees, people and Board
+    # decisions an allowance names (those links set null on delete anyway).
+    "minister_housing_entries",
+    "minister_housing_allowances",
     "pay_run_items",
     "pay_runs",
     "employees",
@@ -883,6 +888,11 @@ _IMPORT_SKIP = {
     # help given cites its request and its expense; same reason. The export
     # keeps them; a restored church keeps its fund's settings.
     "church_help_given", "church_help_requests",
+    # A housing allowance cites its minister's person, payroll employee and
+    # Board decision by id, and its entries cite it and their pay run or bank
+    # row; same reason. The export keeps them all; the owner records the
+    # year's allowance again after a restore.
+    "minister_housing_entries", "minister_housing_allowances",
     # A check request cites its person and its expense by id; same reason.
     # The export keeps them; a restored church keeps its limit and budget
     # lines. (Receipts live in business-documents under the church's own

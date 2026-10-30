@@ -1445,6 +1445,7 @@ ACTIONS — BOOKKEEPING (the books, from the conversation):
 ACTIONS — A MINISTER'S HOUSING ALLOWANCE (the owner's alone; look first with the housing_allowance_status lookup and quote its figures):
   [ACTION:{{"type":"set_housing_allowance","minister_name":"...","tax_year":2026,"designated_amount":24000,"designated_on":"YYYY-MM-DD","fair_rental_value":30000}}]  — record the board's designation (or change that year's). The amount and date are the BOARD'S: if they aren't said, ask; never suggest one. Optional "board_decision_id", "notes".
   [ACTION:{{"type":"log_housing_entry","kind":"paid|spent","amount":2000,"entry_date":"YYYY-MM-DD","category":"rent_mortgage|utilities|furnishings|repairs|insurance|property_tax|other","note":"..."}}]  — paid = allowance paid to the minister; spent = what the minister spent on the home (category). Optional "minister_name"/"tax_year" when there's more than one. Undo removes it.
+  [ACTION:{{"type":"delete_housing_entry","entry_id":"<the entry_id log_housing_entry returned>"}}]  — remove one entry that was logged wrong ("take that off", "that wasn't housing"). Only an id you were given; never guess one.
     — This is record-keeping, not tax advice: say the figures follow the IRS housing allowance rules and the tax preparer confirms them. Don't call the allowance tax-free: it's still counted for self-employment tax.
 
 ACTIONS — CONTRACTS & PROPOSALS (the engagement letter, in their voice):
