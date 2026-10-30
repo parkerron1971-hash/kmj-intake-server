@@ -736,6 +736,7 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
     "agentcard_wallet": {**_w("C", "prepare a customer-owned Agentcard cart or check status; confirmation and payment only in Wallet"), "chief_only": True},
     "link_wallet_pilot":    {**_w("C", "private owner-only Link authorization and simulated payment rehearsal; never live spending"), "chief_only": True},
     "get_weather": {**_r("reads timestamped public NWS observations and forecasts for Chief; external network requests are not exposed to outside agents", sensitive=True), "chief_only": True},
+    "search_transactions": {**_r("reads the business's bank transactions and adds them up, as the person talking, behind the Transactions screen's reader gate; bank rows never leave the app", sensitive=True), "chief_only": True},
     "plan_errand":          _w("A", "creates a cancellable plan only; no browser or purchase runs"),
     "approve_errand":       _w("C", "starts an explicitly approved external errand; may place an order"),
     "stop_errand":          _w("A", "stops further browser actions; does not reverse a submitted order"),

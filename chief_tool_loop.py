@@ -201,6 +201,8 @@ def read_tool_definitions() -> List[Dict[str, Any]]:
     out.append(chief_site_view.TOOL)  # Chief's own read: its image comes back via run_tool_round.
     import chief_weather
     out.append(chief_weather.TOOL)
+    import chief_transactions
+    out.append(chief_transactions.TOOL)  # bank rows: sensitive, so Chief's alone
     return out
 
 
@@ -389,6 +391,10 @@ def _shrink(result: Any) -> str:
     if isinstance(result, dict) and result.get('type') == 'responsibility_status':
         from chief_responsibilities import REPORT_MAX_RESULT_CHARS
         limit = REPORT_MAX_RESULT_CHARS
+    if isinstance(result, dict) and result.get('view') == 'transactions':
+        # 25 bank rows and the totals; cut short, the model would see a
+        # sample without the sums that say it is one.
+        limit = 12000
     if isinstance(result, dict) and result.get('type') in ('connected_agent_assignments', 'list_connected_agents'):
         # Targeted lookups include the entire bounded brief and result for review.
         limit = 48000
@@ -428,7 +434,8 @@ async def execute_tool_use(client, biz: Dict[str, Any],
         return await _execute_write(client, biz, name, args)
 
     if name in _EXCLUDED or (not action_registry.may_expose_to_agent(name)
-                             and name not in ("list_connected_agents", "connected_agent_assignments", "get_weather")):
+                             and name not in ("list_connected_agents", "connected_agent_assignments", "get_weather",
+                                              "search_transactions")):
         return True, (f"'{name}' is not a mid-turn lookup. Reads only here; "
                       f"operations go through [ACTION:] tags in your reply.")
     if effect != action_registry.READ:
