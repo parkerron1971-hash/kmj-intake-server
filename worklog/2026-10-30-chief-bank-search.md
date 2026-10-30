@@ -4,7 +4,7 @@ date: 2026-10-30
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-10-30: Chief couldn''t total what was "given to kmj paypal kmj ministries kevin" this year: "can chief look at transactions that is not reconciled? ... build it now"'
 status: in review
-prs: [kmj-intake-server#TBD]
+prs: [kmj-intake-server#1649]
 migrations: []
 left_undone:
   - "CHIEF_BANK_SEARCH is owner (Kevin's businesses only) until a Thursday flip to on (Railway, both services)"
