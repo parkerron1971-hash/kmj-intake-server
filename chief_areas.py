@@ -134,6 +134,8 @@ VERBS: Dict[str, Tuple[str, ...]] = {
 # errands. Listed so that a new verb is placed on purpose: a test fails
 # until every verb Chief has is in VERBS or here.
 OWNERS = frozenset({
+    # A minister's housing allowance: the owner's alone (the handlers refuse admins too).
+    "housing_allowance_status", "set_housing_allowance", "log_housing_entry", "delete_housing_entry",
     "abandon_mission", "accept_module_spec", "acknowledge_follow_up", "add_module_field", "add_voice_rule",
     "adopt_business_rule", "advance_business_phase", "advance_mission", "advance_phase", "agentcard_wallet",
     "analyze_trends", "approve_errand", "assignment_status", "business_session_summary",

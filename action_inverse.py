@@ -272,6 +272,11 @@ INVERSES: Dict[str, Inverse] = {
     # recorded every row's before-values, and the inverse is one class A,
     # non-bulk verb that restores exactly that batch and skips any row
     # changed since.
+    "log_housing_entry": Inverse(
+        "delete_housing_entry",
+        "remove that housing allowance entry",
+        lambda a, r: ({"type": "delete_housing_entry", "entry_id": _first_id(r, "entry_id")}
+                      if _first_id(r, "entry_id") else None)),
     "reconcile_books": Inverse(
         "undo_reconcile_books",
         "put those bank rows back the way they were before I reconciled them",
@@ -306,6 +311,7 @@ NOT_UNDOABLE_REASON: Dict[str, str] = {
     "update_practitioner_profile_field": "I'd need the previous value, and I don't keep those yet.",
     "write_off_time": "Re-opening written-off time isn't wired yet — edit the entry directly.",
     "set_business_policy": "I'd need the previous policy text, and I don't keep those yet.",
+    "set_housing_allowance": "I'd need the amount and date it held before; change it back on the Housing allowance screen.",
     # ── S11 audit (2026-07-31): class-A creates REVIEWED and refused. ──
     # Each of these was studied for an inverse; the refusal is a
     # documented judgment, not an oversight.

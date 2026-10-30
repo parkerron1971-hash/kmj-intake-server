@@ -747,6 +747,12 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
     "link_wallet_pilot":    {**_w("C", "private owner-only Link authorization and simulated payment rehearsal; never live spending"), "chief_only": True},
     "get_weather": {**_r("reads timestamped public NWS observations and forecasts for Chief; external network requests are not exposed to outside agents", sensitive=True), "chief_only": True},
     "search_transactions": {**_r("reads the business's bank transactions and adds them up, as the person talking, behind the Transactions screen's reader gate; bank rows never leave the app", sensitive=True), "chief_only": True},
+    # A minister's housing allowance (housing_allowance.py): the owner's alone,
+    # and a minister's own housing costs never leave the app.
+    "housing_allowance_status": {**_r("reads the owner's minister housing allowance records and their IRS figures; personal financial records, never on the agent surface", sensitive=True), "chief_only": True},
+    "set_housing_allowance": {**_w("A", "records or changes the board's designated amount and date for a minister's tax year; edited back on the Housing allowance screen"), "chief_only": True},
+    "log_housing_entry": {**_w("A", "adds one dated allowance-paid or housing-cost entry; delete_housing_entry removes it"), "chief_only": True},
+    "delete_housing_entry": {**_w("A", "removes one housing allowance entry by id"), "chief_only": True},
     "plan_errand":          _w("A", "creates a cancellable plan only; no browser or purchase runs"),
     "approve_errand":       _w("C", "starts an explicitly approved external errand; may place an order"),
     "stop_errand":          _w("A", "stops further browser actions; does not reverse a submitted order"),
