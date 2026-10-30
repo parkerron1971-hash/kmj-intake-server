@@ -86,6 +86,12 @@ class DB:
 
     def post(self, path, body, prefer=None):
         table, q = _params(path)
+        if table == "rpc/live_add_hearts":                    # APPLY-2026-10-30-live-hearts.sql
+            for s in self.t["live_sessions"]:
+                if s["id"] == body["p_session"] and s["business_id"] == body["p_business"] and s["status"] == "live":
+                    s["hearts"] = int(s.get("hearts") or 0) + max(1, min(int(body["p_n"]), 30))
+                    return s["hearts"]
+            return None
         self.n += 1
         row = {"id": f"00000000-0000-4000-8000-{self.n:012d}",
                "created_at": (datetime(2026, 1, 1, tzinfo=timezone.utc) + timedelta(seconds=self.n)).isoformat(),
@@ -94,6 +100,7 @@ class DB:
             row.setdefault("hidden", False)                   # the column's default
         if table == "live_sessions":
             row.setdefault("chat_version", 0)
+            row.setdefault("hearts", 0)
             if any(s["business_id"] == row["business_id"] and s["status"] == "live" for s in self.t[table]):
                 return None
         if table in ("live_presence", "live_mutes"):
@@ -146,6 +153,9 @@ def db(monkeypatch):
     import giving_router
     monkeypatch.setattr(giving_router, "giving_is_active", lambda b: False)
     monkeypatch.setattr(mpc, "upcoming_for", lambda b, me: [])
+    # The tests above the live room's pin the page before it, which is
+    # LIVE_ROOM=off (the way back); the room's own tests turn it on.
+    monkeypatch.setenv("LIVE_ROOM", "off")
     import member_portal_sermons as mps
     monkeypatch.setattr(mps, "load_library", lambda b: {"sermons": [], "series": []})
     return d
@@ -311,3 +321,139 @@ def test_a_failed_read_is_said_never_off_air(db):
     db.fail = True
     page = _member().get("/my/live")
     assert page.status_code == 503 and "couldn't load" in page.text and "No service is live" not in page.text
+
+
+# ─── the live room (LIVE_ROOM, Kevin 2026-10-30) ─────────────────────
+# Pins: it's everyone's by default (Kevin: "turn it on for everyone now"),
+# owner keeps it to the owner's preview, and off is the page before it;
+# the host's newest message is pinned; the count of who's
+# here is never "0" for a failed read; "I'm here", prayer and hearts
+# answer JSON so the video keeps playing; hearts are counted on the
+# service (clamped), ride the poll, and the preview never adds any; Give
+# opens the church's own funds and amounts, and only while it takes gifts.
+
+
+def _room(monkeypatch, mode="on"):
+    monkeypatch.setenv("LIVE_ROOM", mode)
+    m = _member()
+    m.app.include_router(mpc.router)
+    return m
+
+
+def test_the_room_is_everyones_and_the_switch_is_the_way_back(db, monkeypatch):
+    _go_live(_team())
+    monkeypatch.delenv("LIVE_ROOM", raising=False)
+    m = _member()
+    assert 'id="lv-room"' in m.get("/my/live").text                # on (the default): every member has the room
+    monkeypatch.setenv("LIVE_ROOM", "owner")
+    assert 'id="lv-room"' not in m.get("/my/live").text            # owner: members keep the page before it...
+    db.who["preview"] = True
+    assert 'id="lv-room"' in m.get("/my/live").text                # ...and only the owner's preview has the room
+    monkeypatch.setenv("LIVE_ROOM", "off")
+    assert 'id="lv-room"' not in m.get("/my/live").text
+    monkeypatch.setenv("LIVE_ROOM", "sideways")                    # anything else is off
+    assert mpl.room_mode() == "off"
+
+
+def test_the_room_pins_the_host_and_counts_whos_here(db, monkeypatch):
+    t = _team()
+    sid = _go_live(t)
+    m = _room(monkeypatch)
+    t.post(f"/live/{sid}/chat", json={"business_id": BIZ, "body": "Welcome home, church!"})
+    m.post("/my/live/chat", data={"body": "Good morning <b>church</b>"}, headers=JSON)
+    r = m.post("/my/live/here", headers=JSON)
+    assert r.status_code == 200 and r.json() == {"ok": True, "here": 1}
+    page = m.get("/my/live").text
+    assert 'id="lv-room"' in page and "youtube-nocookie.com/embed/abc123" in page
+    assert 'id="lv-pin-b">Welcome home, church!</span>' in page            # the host's newest message, pinned
+    assert '<b class="lv-who">First Light Church</b><span class="lv-tag">Host</span>' in page
+    assert '<b class="lv-who">You</b> Good morning &lt;b&gt;church&lt;/b&gt;' in page
+    assert "<b data-here-n>1</b> here" in page and "You&#x27;re here</span>" in page
+    assert 'action="/my/live/here"' not in page                            # already here: no button
+    assert 'name="body" value="Amen"' in page and 'aria-label="Send a heart"' in page
+    assert ANA not in page and 'data-sheet="lv-give"' not in page          # no record ids; no gifts in the app yet
+    assert '<a class="lv-pill" href="/my/give">' in page                   # Give still says how to give
+
+
+def test_a_failed_count_is_hidden_never_zero(db, monkeypatch):
+    _go_live(_team())
+    m = _room(monkeypatch)
+    monkeypatch.setattr(mpl, "here_count", lambda b, s: None)
+    page = m.get("/my/live").text
+    assert 'id="lv-herewrap" hidden' in page
+    assert "here" not in m.get("/my/live/feed?v=0&n=1").json()
+
+
+def test_a_closed_or_paused_chat_takes_no_replies_or_hearts(db, monkeypatch):
+    t = _team()
+    sid = _go_live(t)
+    m = _room(monkeypatch)
+    t.post(f"/live/{sid}/mute", json={"business_id": BIZ, "contact_id": ANA, "muted": True})
+    page = m.get("/my/live").text
+    assert "paused your chat" in page and 'id="lv-quick"' not in page and 'id="mb-compose"' not in page
+    t.patch(f"/live/{sid}", json={"business_id": BIZ, "chat_open": False})
+    assert "The chat is closed right now." in m.get("/my/live").text
+    r = m.post("/my/live/heart", data={"n": "3"}, headers=JSON)
+    assert r.status_code == 409 and db.t["live_sessions"][0]["hearts"] == 0
+
+
+def test_hearts_are_counted_on_the_service_and_ride_the_poll(db, monkeypatch):
+    _go_live(_team())
+    m = _room(monkeypatch)
+    assert m.post("/my/live/heart", data={"n": "5"}, headers=JSON).json() == {"ok": True, "hearts": 5}
+    assert m.post("/my/live/heart", data={"n": "999"}, headers=JSON).json()["hearts"] == 35   # a batch is 30 at most
+    assert m.post("/my/live/heart", data={"n": "lots"}, headers=JSON).json()["hearts"] == 36  # nonsense is one
+    feed = m.get("/my/live/feed?v=0").json()
+    assert feed["hearts"] == 36 and "here" not in feed                    # here only when asked
+    same = m.get(f"/my/live/feed?v={feed['v']}&n=1").json()
+    assert same["same"] is True and same["hearts"] == 36 and same["here"] == 0
+    assert db.t["live_chat"] == []                                        # a heart is never a message
+    db.who["preview"] = True
+    r = m.post("/my/live/heart", data={"n": "4"}, headers=JSON)
+    assert r.status_code == 403 and db.t["live_sessions"][0]["hearts"] == 36
+
+
+def test_the_prayer_sheet_sends_privately_without_leaving(db, monkeypatch):
+    _go_live(_team())
+    m = _room(monkeypatch)
+    sent = []
+    monkeypatch.setattr(mpc, "load_me", lambda b, c: {"id": ANA, "name": "Ana Rivers"})
+    monkeypatch.setattr(mpc, "save_prayer", lambda b, me, text, confidential, youth=False, wants_call=False:
+                        sent.append((text, confidential, wants_call)) or True)
+    page = m.get("/my/live").text
+    assert 'id="lv-prayer-f" method="post" action="/my/prayer"' in page and 'name="wants_call"' in page
+    r = m.post("/my/prayer", data={"request": "For my mother", "share": "pastors", "wants_call": "yes"}, headers=JSON)
+    assert r.status_code == 200 and r.json() == {"ok": True}
+    assert sent == [("For my mother", True, True)]
+    assert m.post("/my/prayer", data={"request": " "}, headers=JSON).json()["error"].startswith("Write your prayer")
+    r = m.post("/my/prayer", data={"request": "x"}, headers=ORIGIN, follow_redirects=False)
+    assert r.status_code in (302, 303) and r.headers["location"].startswith("/my")   # the page's own form still redirects
+    db.who["preview"] = True
+    r = m.post("/my/prayer", data={"request": "x", "share": "team"}, headers=JSON)
+    assert r.status_code == 403 and "preview" in r.json()["error"] and len(sent) == 2
+
+
+def test_give_opens_the_churchs_own_funds_and_amounts(db, monkeypatch):
+    _go_live(_team())
+    m = _room(monkeypatch)
+    import giving_router
+    monkeypatch.setattr(giving_router, "giving_is_active", lambda b: True)
+    settings = {"member_portal": {"enabled": True},
+                "giving": {"funds": ["Tithes & Offering", "Food Pantry"], "preset_amounts": [20, 40, 80, 150, 500]}}
+    monkeypatch.setattr(mp, "_church_for_request", lambda req: {"business": {
+        "id": BIZ, "name": "First Light Church", "type": "church", "owner_id": OWNER, "settings": settings,
+        "stripe_account_id": None}, "site": {"slug": "first-light"}})
+    page = m.get("/my/live").text
+    assert 'data-sheet="lv-give"' in page and 'id="lv-give-f" method="get" action="/my/give"' in page
+    assert 'name="fund" value="Food Pantry"' in page and 'value="Tithes &amp; Offering" checked' in page
+    assert 'value="40" checked><span>$40</span>' in page and "$500" not in page   # the first four amounts
+
+
+def test_names_keep_their_colour_on_every_phone():
+    assert mpl.initials_of("Ana R.") == "AR" and mpl.initials_of("Cher") == "C" and mpl.initials_of("") == "?"
+    # the page's script sums charCodeAt (UTF-16 units): an emoji counts as two
+    name = "Ana \U0001F64F R."
+    units = name.encode("utf-16-le")
+    total = sum(int.from_bytes(units[i:i + 2], "little") for i in range(0, len(units), 2))
+    assert total != sum(map(ord, name)) and mpl.family_of(name) == mpl.FAMILIES[total % 4]
+    assert mpl.family_of("Ana R.") == mpl.FAMILIES[sum(map(ord, "Ana R.")) % 4]
