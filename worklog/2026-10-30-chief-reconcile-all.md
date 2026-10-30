@@ -4,7 +4,7 @@ date: 2026-10-30
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-10-30: "chief should be able to do pretty much all that i can do upon request except things that require my permission. so that way is someone say reconcile all the transaction it can and allow me to check what it done if I want." Then: "pick the best options for both questions"'
 status: shipped
-prs: [kmj-intake-server#1653, kmj-intake-server#TBD (receipt fix)]
+prs: [kmj-intake-server#1653, kmj-intake-server#1654 (receipt fix)]
 migrations: []
 left_undone:
   - "First live run (Love City, 22:43 UTC): 49 rows reconciled, but the result was typed show_view, so the answer check saw a read and withheld 'I reconciled 49 bank rows'; Chief then told Kevin it couldn't confirm. Fixed: type reconcile_books + display: table. The app's card needs FE to draw display: table (solutionist-studio PR)"
