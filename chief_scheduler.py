@@ -134,7 +134,15 @@ async def _execute_row(row: Dict[str, Any]) -> None:
     # drift refusals this path already made.
     authorized_by = "scheduled"
     gate_refusal: Optional[str] = None
-    if atype not in CLIENT_ONLY_OR_NESTING:
+    # An announcement scheduled from Text (sms_routing.ANNOUNCEMENT) is not
+    # a Chief verb and never passes through Chief: a person who can send
+    # announcements wrote it and picked the time, and its runner checks
+    # again at send time that they still can. It skips the verb registry,
+    # which knows only Chief's verbs (and would refuse it as unknown).
+    announcement = atype == "sms_announcement"
+    if announcement:
+        authorized_by = "practitioner_scheduled"
+    if atype not in CLIENT_ONLY_OR_NESTING and not announcement:
         try:
             import policy_engine
             verdict = policy_engine.evaluate(
@@ -153,6 +161,12 @@ async def _execute_row(row: Dict[str, Any]) -> None:
     ok, detail = False, ""
     if gate_refusal:
         detail = gate_refusal
+    elif announcement:
+        try:
+            import sms_routing
+            ok, detail = await sms_routing.run_scheduled_announcement(biz, action)
+        except Exception as e:
+            ok, detail = False, f"announcement raised: {e}"
     elif atype in CLIENT_ONLY_OR_NESTING:
         detail = f"'{atype}' can't run server-side"
     else:

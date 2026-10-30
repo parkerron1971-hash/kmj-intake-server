@@ -306,6 +306,10 @@ app.include_router(consent_router)
 # the platform account, attached to the one Messaging Service.
 from sms_numbers_router import router as sms_numbers_router
 app.include_router(sms_numbers_router)
+# The Text room's people pieces (2026-10-30): save a guest (and a church's
+# welcome follow-up), the prayer list, saved replies.
+from text_room import router as text_room_router
+app.include_router(text_room_router)
 
 # A business connects its social accounts through Post for Me (part 1 of
 # practitioner posting; pilot until the Booked / Boss plans are on sale).
