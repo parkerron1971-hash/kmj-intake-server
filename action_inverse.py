@@ -267,6 +267,16 @@ INVERSES: Dict[str, Inverse] = {
                        "text": _first_id(r, "previous_text")}
                       if _first_id(r, "target_path") and _first_id(r, "previous_text")
                       else None)),
+    # A bulk verb with an inverse, on purpose (Kevin, 2026-10-30: reconcile
+    # on request, check after). It isn't forty separate undos: the batch
+    # recorded every row's before-values, and the inverse is one class A,
+    # non-bulk verb that restores exactly that batch and skips any row
+    # changed since.
+    "reconcile_books": Inverse(
+        "undo_reconcile_books",
+        "put those bank rows back the way they were before I reconciled them",
+        lambda a, r: ({"type": "undo_reconcile_books", "batch_id": r["batch_id"]}
+                      if isinstance(r.get("batch_id"), str) and r.get("changes") else None)),
 }
 
 # S11 resolution (2026-07-31): write_off_time is GONE from INVERSES. It

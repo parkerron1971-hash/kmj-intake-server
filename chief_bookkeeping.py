@@ -174,7 +174,9 @@ def gather_and_format(business_id: str, business_type: Optional[str] = None) -> 
             lines.append(f"  Seasonal nudges to weave in when relevant: {'; '.join(vbk['nudges'])}")
         lines += _gl_context_lines(business_id)
         lines.append("  Voice: warm, precise, practical. Cite real numbers. Offer to walk through "
-                     "unreconciled or uncategorized items; never auto-change books without approval.")
+                     "unreconciled or uncategorized items. Change the books only when asked (the ask "
+                     "is the approval); asked to reconcile, use reconcile_books, which settles only "
+                     "the clear rows and lists every change.")
         return "\n".join(lines)
     except Exception as e:  # never break the prompt
         logger.warning(f"[chief_bk] gather_and_format failed: {e}")
