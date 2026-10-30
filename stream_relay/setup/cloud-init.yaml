@@ -1,0 +1,45 @@
+#cloud-config
+# Paste this into DigitalOcean's "User data" box when creating the droplet
+# (Ubuntu 24.04, Basic $6). It installs Docker and certbot, locks the
+# firewall down to SSH, 443 (the churches' encrypted streams) and 80
+# (certificate renewals only; nothing else listens there), makes SSH
+# key-only, turns on automatic security updates, and makes the relay's own
+# user, which owns nothing but the recording spool. The relay itself is
+# copied on afterwards with setup/deploy.sh.
+package_update: true
+package_upgrade: true
+ssh_pwauth: false
+packages:
+  - docker.io
+  - docker-compose-v2
+  - ufw
+  - unattended-upgrades
+  - certbot
+write_files:
+  # Security updates install themselves. If one needs a reboot, it happens
+  # at 07:30 UTC (3:30am Eastern), hours before any service, and Docker
+  # brings the relay back up on its own (the agent picks up its journals).
+  - path: /etc/apt/apt.conf.d/52stream-relay
+    content: |
+      Unattended-Upgrade::Automatic-Reboot "true";
+      Unattended-Upgrade::Automatic-Reboot-Time "07:30";
+  # Keys only, never passwords (Codex R8).
+  - path: /etc/ssh/sshd_config.d/60-stream-relay.conf
+    content: |
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      PermitRootLogin prohibit-password
+runcmd:
+  - ufw default deny incoming
+  - ufw default allow outgoing
+  - ufw allow OpenSSH
+  - ufw allow 80/tcp
+  - ufw allow 443/tcp
+  - ufw --force enable
+  - systemctl reload ssh || systemctl reload sshd || true
+  - systemctl enable --now docker
+  - groupadd --gid 10001 relay
+  - useradd --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin relay
+  - mkdir -p /opt/stream_relay/tls /var/relay
+  - chown 10001:10001 /var/relay
+  - chmod 700 /var/relay
