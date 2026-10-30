@@ -474,6 +474,16 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
     "generate_insights":      _w("A", "runs the insight engine; writes insight memories, which "
                                       "forget deactivates. Model spend"),
     "review_books":           _w("A", "writes bookkeeping PROPOSALS only — inert until approved"),
+    # Kevin, 2026-10-30: Chief reconciles on request and he checks after.
+    # The same matcher the bank sync runs unattended, plus clear own-account
+    # transfers and 'nothing to match' for non-Stripe deposits; every row's
+    # before-values are recorded and undo_reconcile_books puts the batch back.
+    "reconcile_books":        _w("A", "settles bank rows only where the answer is clear (a Stripe payout or "
+                                      "sent transfer that matches, a move between the business's own "
+                                      "accounts, a deposit that can't be a payout); records each row's "
+                                      "before-values, and undo_reconcile_books restores them", bulk=True),
+    "undo_reconcile_books":   _w("A", "puts back exactly the rows one recorded reconcile batch changed, from "
+                                      "their before-values, skipping any row changed since"),
     "run_market_research":    _w("A", "writes analysis onto the strategy track. Model spend"),
     "save_business_model":    _w("A", "saves a strategy-track deliverable"),
     "save_launch_plan":       _w("A", "saves a strategy-track deliverable"),

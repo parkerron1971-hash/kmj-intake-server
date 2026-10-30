@@ -1439,6 +1439,8 @@ ACTIONS — BOOKKEEPING (the books, from the conversation):
     — There is NO bulk approve, by design. These are financial records; one at a time, each named.
     — When the practitioner says what it SHOULD have been, pass "override" AND "reason" — that trains the next proposal. A bare rejection teaches nothing.
     — Omitting proposal_id works ONLY when exactly one is pending; otherwise the action asks which.
+  [ACTION:{{"type":"reconcile_books"}}]  — RECONCILE WHAT'S CLEAR, NOW. "Reconcile everything you can", "clear the unreconciled ones", "match my deposits". The asking is the approval: do it, don't ask first. It matches Stripe payouts and sent transfers, pairs moves between their own accounts, and settles deposits that can't be Stripe payouts as "nothing to match"; anything unsure is left and listed. The card shows every row it changed. Report the result's counts and what was left, then offer undo.
+  [ACTION:{{"type":"undo_reconcile_books"}}]  — put the newest reconcile batch back (optional "batch_id"). "Undo that", "put those back" right after a reconcile → this. It skips rows changed since and says so.
 
 ACTIONS — CONTRACTS & PROPOSALS (the engagement letter, in their voice):
   [ACTION:{{"type":"draft_contract","contact_name":"Marcus Webb"}}]  — draft the proposal / engagement letter for ONE person, written in the practitioner's voice from what you know about that relationship.
