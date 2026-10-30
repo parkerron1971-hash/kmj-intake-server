@@ -16,8 +16,9 @@ in the chat; the member app sends it privately to Prayer & care.
   PATCH /live/{sid}                        {business_id, chat_open?, stream_url?, title?}
   POST  /live/{sid}/end                    {business_id}
   GET   /live/{sid}/chat?business_id=      every message (hidden ones flagged), who's here, who's paused
-  POST  /live/{sid}/chat                   {business_id, body}  — the host's own message
+  POST  /live/{sid}/chat                   {business_id, body}  — the host's own message (pins itself)
   POST  /live/{sid}/messages/{mid}/hide    {business_id, hidden}
+  POST  /live/{sid}/pin                    {business_id, message_id|null}  — pin to every member's chat, or unpin
   POST  /live/{sid}/mute                   {business_id, contact_id, muted}
 
 Seats: any member of the team can watch the chat; running the service
@@ -131,11 +132,12 @@ def _unavailable() -> HTTPException:
 
 def current(business_id: str) -> Optional[Dict[str, Any]]:
     """The church's live session, {} when none, None when the read failed.
-    `hearts` (APPLY-2026-10-30-live-hearts.sql) rides along, so the live
-    room's poll reads the hearts with the chat's version."""
+    `hearts` (APPLY-2026-10-30-live-hearts.sql) and `pinned_message_id`
+    (APPLY-2026-10-30-live-pin.sql) ride along, so the live room's poll
+    reads them with the chat's version."""
     rows = sb_clients.sb_get_as_service(
         f"/live_sessions?business_id=eq.{_q(business_id)}&status=eq.live"
-        f"&select=id,title,stream_url,entry_id,chat_open,chat_version,started_at,hearts&limit=1")
+        f"&select=id,title,stream_url,entry_id,chat_open,chat_version,started_at,hearts,pinned_message_id&limit=1")
     if not isinstance(rows, list):
         return None
     return rows[0] if rows else {}
@@ -144,7 +146,8 @@ def current(business_id: str) -> Optional[Dict[str, Any]]:
 def session(business_id: str, sid: str) -> Dict[str, Any]:
     rows = sb_clients.sb_get_as_service(
         f"/live_sessions?id=eq.{_q(sid)}&business_id=eq.{_q(business_id)}"
-        f"&select=id,title,stream_url,entry_id,status,chat_open,chat_version,started_at,ended_at&limit=1")
+        f"&select=id,title,stream_url,entry_id,status,chat_open,chat_version,started_at,ended_at,"
+        f"hearts,pinned_message_id&limit=1")
     if not isinstance(rows, list):
         raise _unavailable()
     if not rows:
@@ -252,6 +255,21 @@ class MuteIn(BaseModel):
     business_id: str
     contact_id: str
     muted: bool
+
+
+class PinIn(BaseModel):
+    business_id: str
+    message_id: Optional[str] = None
+
+
+def pin(business_id: str, sid: str, mid: Optional[str]) -> bool:
+    """Pin a message to the top of every member's chat (None unpins), on a
+    live service, bumping chat_version in the same update so every phone
+    picks it up (live_pin, APPLY-2026-10-30-live-pin.sql). False when it
+    didn't save: the message isn't this service's or is hidden, the
+    service has ended, or the database didn't answer."""
+    return sb_clients.sb_post_as_service(
+        "/rpc/live_pin", {"p_session": sid, "p_business": business_id, "p_message": mid}) is True
 
 
 def _saved_one(rows: Any) -> Dict[str, Any]:
@@ -405,7 +423,28 @@ def live_host_message(sid: str, body: ChatIn, user: AuthedUser = Depends(require
         raise HTTPException(400, "Write a message first.")
     row = _saved_one(sb_clients.sb_post_as_service("/live_chat", {
         "business_id": biz, "session_id": s["id"], "contact_id": None, "author": "Host", "host": True, "body": text}))
-    return {"ok": True, "message": row}
+    # The host's newest message pins itself, as the live room did before
+    # there was a pin; the team can unpin it or pin another. The message
+    # is saved either way, so a pin that didn't take is only said.
+    pinned = pin(biz, s["id"], str(row["id"]))
+    return {"ok": True, "message": row, "pinned": pinned}
+
+
+@router.post("/live/{sid}/pin")
+def live_pin(sid: str, body: PinIn, user: AuthedUser = Depends(require_user)):
+    """Pin one message (the host's or a member's) to the top of every
+    member's chat, or unpin with message_id null. A manager's, like the
+    rest of moderation."""
+    biz = _uuid(body.business_id, "business_id")
+    require(biz, user, "manager")
+    s = session(biz, _uuid(sid, "session"))
+    if s["status"] != "live":
+        raise HTTPException(409, "That service has ended.")
+    mid = _uuid(body.message_id, "message") if body.message_id else None
+    if not pin(biz, s["id"], mid):
+        raise HTTPException(409 if mid else 503, "That message can't be pinned. It may be hidden, or not in this service."
+                            if mid else "That didn't save. Please try again.")
+    return {"ok": True, "pinned_message_id": mid}
 
 
 @router.post("/live/{sid}/messages/{mid}/hide")

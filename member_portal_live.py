@@ -196,7 +196,8 @@ if(x.ok){{i.value='';poll();}}else{{err.textContent=x.d.error||'That didn\\'t se
 # service keeps playing, one-tap replies and hearts. Turned sideways the
 # video fills the screen with the chat over it; on a computer the video
 # and the buttons sit beside the chat, with what's coming up under them.
-# The host's newest message is pinned at the top of the chat.
+# The message the team pinned sits at the top of the chat (a host's new
+# message pins itself; live_router.pin).
 
 QUICK = ("Amen", "Good morning!", "Hallelujah", "Thank you, Jesus", "Watching from home")
 HEARTS_MAX = 30
@@ -333,11 +334,13 @@ def _give_sheet(church: str, give: Dict[str, Any]) -> str:
 
 def render_room(biz, site, request: Request, me: Dict[str, Any], cur: Dict[str, Any], *,
                 msgs=None, here_me=None, muted_me=None, here_n: Optional[int] = None,
-                occasions=None, give: Optional[Dict[str, Any]] = None) -> str:
+                occasions=None, give: Optional[Dict[str, Any]] = None,
+                pinned: Optional[Dict[str, Any]] = None) -> str:
     """The live room. `here_n` is how many said "I'm here" (None hides the
     count: a failed read never says nobody's here); `give` is
     give_choices() while the church takes gifts in the app, else None
-    (Give is then the link to /my/give, which says how to give)."""
+    (Give is then the link to /my/give, which says how to give);
+    `pinned` is pinned_row(): the message the team pinned, or None."""
     import live_router as lr
     import member_app_ui as ui
     import member_portal_church as mpc
@@ -374,10 +377,17 @@ def render_room(biz, site, request: Request, me: Dict[str, Any], cur: Dict[str, 
                f'{ui.icon("user", 17)}I&#x27;m here</button></form>')
     opens = ' data-sheet="lv-give" aria-haspopup="dialog"' if give else ""
     give_pill = f'<a class="lv-pill" href="/my/give"{opens}>{ui.icon("give", 17)}Give</a>'
-    host = [m for m in rows if m["host"]]
-    pin = (f'<div class="lv-pin" id="lv-pin"{"" if host else " hidden"}><span class="lv-av" aria-hidden="true">'
-           f'{_HEART.format(s=12)}</span><p><b class="lv-who">{_e(church)}</b><span class="lv-tag">Pinned</span>'
-           f'<span class="lv-pin-b" id="lv-pin-b">{_e(host[-1]["body"]) if host else ""}</span></p></div>')
+    p = pinned or {}
+    if p.get("host"):
+        p_cls, p_av, p_who = "lv-pin is-host", _HEART.format(s=12), (p["author"] if p["author"] not in ("", "Host") else church)
+    elif p:
+        p_cls, p_av = f"lv-pin h-{family_of(p['author'])}", _e(initials_of(p["author"]))
+        p_who = "You" if p.get("mine") else p["author"]
+    else:
+        p_cls, p_av, p_who = "lv-pin", "", ""
+    pin = (f'<div class="{p_cls}" id="lv-pin"{"" if p else " hidden"}><span class="lv-av" id="lv-pin-av" aria-hidden="true">'
+           f'{p_av}</span><p><b class="lv-who" id="lv-pin-who">{_e(p_who)}</b><span class="lv-tag">Pinned</span>'
+           f'<span class="lv-pin-b" id="lv-pin-b">{_e(p.get("body") or "")}</span></p></div>')
     if not cur.get("chat_open"):
         foot = '<p class="lv-note">The chat is closed right now.</p>'
     elif muted_me:
@@ -472,8 +482,8 @@ ROOM_CSS = """
 .lv-av{width:26px;height:26px;flex:none;border-radius:50%;display:grid;place-items:center;font-size:10px;font-weight:700;letter-spacing:.02em;
   background:var(--h-deep,var(--s2));color:var(--h-ink,var(--fg2));}
 .lv-who{font-weight:650;color:var(--h-ink,var(--fg));}
-.is-host .lv-av,.lv-pin .lv-av{background:var(--acc-fill);color:var(--on-acc);}
-.is-host .lv-who,.lv-pin .lv-who{color:var(--acc);}
+.is-host .lv-av{background:var(--acc-fill);color:var(--on-acc);}
+.is-host .lv-who{color:var(--acc);}
 .lv-tag{display:inline-block;margin:0 2px 0 6px;padding:1px 6px;border-radius:5px;background:var(--acc-soft);color:var(--acc);
   font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;vertical-align:1px;}
 .lv-empty{margin:auto;padding:24px 0;color:var(--fg3);font-size:14px;}
@@ -682,9 +692,14 @@ function draw(ms){
   var empty=list.querySelector('.lv-empty');
   if(ms.length&&empty)empty.remove();
   if(!ms.length&&!empty){var e=d.createElement('li');e.className='lv-empty';e.textContent='No messages yet. Say hello.';list.appendChild(e);}
-  var host=ms.filter(function(m){return m.host;}).pop();
-  if(pin){pin.hidden=!host;if(host)pinB.textContent=host.body;}
   if(stick||gone)down();else if(added&&newer)newer.hidden=false;}
+// the message the team pinned (or none), drawn like a chat line
+function setPin(m){if(!pin)return;pin.hidden=!m;if(!m)return;
+  var av=d.getElementById('lv-pin-av'),who=d.getElementById('lv-pin-who');
+  pin.className='lv-pin'+(m.host?' is-host':' h-'+fam(m.author));av.textContent='';
+  if(m.host)av.appendChild(heartNode());else av.textContent=ini(m.author);
+  who.textContent=m.host?((m.author&&m.author!=='Host')?m.author:C.church):(m.mine?'You':m.author);
+  pinB.textContent=m.body;}
 function setN(n){[].forEach.call(d.querySelectorAll('[data-here-n]'),function(e){e.textContent=n;});
   var w=d.getElementById('lv-herewrap');if(w)w.hidden=false;var h=d.querySelector('.lv-chat-h span');if(h)h.hidden=false;}
 function tell(m){if(!toast)return;toast.textContent=m;toast.hidden=false;clearTimeout(tell.t);tell.t=setTimeout(function(){toast.hidden=true;},3800);}
@@ -705,7 +720,7 @@ function poll(){if(d.hidden)return;ticks++;
     if(x.live===false){location.reload();return;}
     if(typeof x.hearts==='number')others(x.hearts);
     if(typeof x.here==='number')setN(x.here);
-    if(x.same===false){v=x.v;draw(x.messages||[]);}}).catch(function(){});}
+    if(x.same===false){v=x.v;draw(x.messages||[]);setPin(x.pin||null);}}).catch(function(){});}
 function oops(m){if(!err)return;var s=near();err.textContent=m||'That didn’t send. Please try again.';err.hidden=false;
   if(s)down();clearTimeout(oops.t);oops.t=setTimeout(function(){err.hidden=true;},6000);}
 function post(t,done){if(err)err.hidden=true;if(send)send.disabled=true;
@@ -769,12 +784,32 @@ down();setInterval(poll,C.poll);
 })();"""
 
 
+def pinned_row(business_id: str, cur: Dict[str, Any], rows: List[Dict[str, Any]],
+               me_id: str) -> Optional[Dict[str, Any]]:
+    """The message the team pinned, as a phone shows a chat line (feed_rows),
+    or None: nothing pinned, the pinned message is hidden, or reading it
+    failed (the pin card hides; the chat is untouched). It's read on its
+    own only when it has scrolled out of the newest FEED_LIMIT."""
+    pid = str(cur.get("pinned_message_id") or "")
+    if not pid:
+        return None
+    for m in rows:
+        if str(m["id"]) == pid:
+            return m
+    got = sb_clients.sb_get_as_service(
+        f"/live_chat?id=eq.{_q(pid)}&session_id=eq.{_q(cur['id'])}&business_id=eq.{_q(business_id)}"
+        f"&hidden=eq.false&select=id,contact_id,author,host,body,hidden,created_at&limit=1")
+    found = feed_rows(got, me_id) if isinstance(got, list) else []
+    return found[0] if found else None
+
+
 def feed(business_id: str, me: Dict[str, Any], v: int, with_here: bool = False) -> Dict[str, Any]:
     """The chat poll: {"live": False} once it ends; {"same": True} when
-    nothing changed; else the newest visible messages. Every answer while
-    live carries the service's hearts (the same read); `with_here` (the
-    live room asks every sixth poll) adds how many are here, left out
-    when that read fails."""
+    nothing changed; else the newest visible messages and the pinned one
+    (`pin`; pinning bumps chat_version). Every answer while live carries
+    the service's hearts (the same read); `with_here` (the live room asks
+    every sixth poll) adds how many are here, left out when that read
+    fails."""
     import live_router as lr
     cur = lr.current(business_id)
     if cur is None:
@@ -793,7 +828,8 @@ def feed(business_id: str, me: Dict[str, Any], v: int, with_here: bool = False) 
     msgs = lr.messages(business_id, cur["id"], False, FEED_LIMIT)
     if msgs is None:
         return {"error": "unavailable"}
-    return {**out, "same": False, "messages": feed_rows(msgs, me["id"])}
+    rows = feed_rows(msgs, me["id"])
+    return {**out, "same": False, "messages": rows, "pin": pinned_row(business_id, cur, rows, me["id"])}
 
 
 # ─── POST ─────────────────────────────────────────────────────────────
