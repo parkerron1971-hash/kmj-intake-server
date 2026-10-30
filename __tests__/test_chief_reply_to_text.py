@@ -201,7 +201,7 @@ def test_store_sms_tags_the_author_on_outbound_only(monkeypatch):
 @pytest.mark.parametrize("module, fn, author", [
     ("sms_alerts", "send_booking_confirmation", "system"),
     ("sms_alerts", "reminder_sweep", "system"),
-    ("sms_routing", "broadcast", "practitioner"),
+    ("sms_routing", "announce", "practitioner"),  # broadcast sends through announce
     ("campaigns_router", "_send_touch", "system"),
     ("chief_of_staff", "handle_send_sms", "chief"),
 ])
