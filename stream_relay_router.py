@@ -148,6 +148,13 @@ STAFF_LINK_S = 6 * 3600
 # after RESIGN_S so a link handed out is always good for hours.
 SEGMENT_LINK_S = 4 * 3600
 SEGMENT_RESIGN_S = 3600
+# While a service is live our player gets only its newest segments, the
+# last two minutes. Every viewer reloads the playlist every few seconds,
+# and the whole service's list (one signed link per 4 s segment) passes
+# 800 KB in the second hour: at 300 viewers that was most of what a
+# church's streaming cost us (Kevin 2026-10-30, "make fix"). The whole
+# list plays once the service is over.
+LIVE_WINDOW_SEGMENTS = 30
 
 DEST_KEY_MAX = 300
 _DEST_KEY_RE = re.compile(r"^[A-Za-z0-9_\-.?=&]+$")
@@ -382,6 +389,69 @@ def sign_playlist(text: str, prefix: str, link: Callable[[str], str]) -> str:
             out.append(link(f"{prefix}/{line}"))
         elif out and out[-1].startswith("#EXTINF"):
             out.pop()
+    return "\n".join(out) + "\n"
+
+
+# Tags that describe the whole playlist; every other tag belongs to the
+# segment after it (#EXTINF, #EXT-X-PROGRAM-DATE-TIME, #EXT-X-DISCONTINUITY)
+# or ends the list (#EXT-X-ENDLIST).
+_PLAYLIST_TAGS = frozenset({
+    "#EXTM3U", "#EXT-X-VERSION", "#EXT-X-TARGETDURATION", "#EXT-X-MEDIA-SEQUENCE",
+    "#EXT-X-DISCONTINUITY-SEQUENCE", "#EXT-X-PLAYLIST-TYPE", "#EXT-X-INDEPENDENT-SEGMENTS",
+    "#EXT-X-ALLOW-CACHE", "#EXT-X-START"})
+_WINDOW_DROPS = ("#EXT-X-PLAYLIST-TYPE", "#EXT-X-MEDIA-SEQUENCE", "#EXT-X-DISCONTINUITY-SEQUENCE")
+
+
+def _tag_int(lines: List[str], tag: str) -> int:
+    for line in lines:
+        name, _, value = line.partition(":")
+        if name == tag:
+            try:
+                return max(int(value), 0)
+            except ValueError:
+                return 0
+    return 0
+
+
+def live_window(text: str, keep: int = LIVE_WINDOW_SEGMENTS) -> str:
+    """The relay's EVENT playlist as a live sliding window of its newest
+    `keep` segments. Always a window while live, however short, so the
+    list never changes type between two reloads. A player keeps its place
+    because every segment keeps its numbers. The media sequence moves on
+    by the segments left out. The discontinuity sequence moves on by the
+    resumes left out with them; a resume at the window's first segment is
+    counted, not tagged. An EVENT list may never lose a segment, so the
+    type goes."""
+    head: List[str] = []
+    segs: List[List[str]] = []
+    pending: List[str] = []
+    for raw in (text or "").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if not line.startswith("#"):
+            segs.append(pending + [line])
+            pending = []
+        elif line.split(":", 1)[0] in _PLAYLIST_TAGS:
+            head.append(line)
+        else:
+            pending.append(line)
+    dropped, kept = segs[:-keep], segs[-keep:]
+    seq = _tag_int(head, "#EXT-X-MEDIA-SEQUENCE") + len(dropped)
+    disc = _tag_int(head, "#EXT-X-DISCONTINUITY-SEQUENCE") + sum(
+        tag == "#EXT-X-DISCONTINUITY" for seg in dropped for tag in seg)
+    if dropped and "#EXT-X-DISCONTINUITY" in kept[0]:
+        # Counted one by one, as players count them: ffmpeg's append_list
+        # can leave two on one segment.
+        disc += kept[0].count("#EXT-X-DISCONTINUITY")
+        kept[0] = [tag for tag in kept[0] if tag != "#EXT-X-DISCONTINUITY"]
+    out = [line for line in head if line.split(":", 1)[0] not in _WINDOW_DROPS]
+    out.append(f"#EXT-X-MEDIA-SEQUENCE:{seq}")
+    if disc:
+        out.append(f"#EXT-X-DISCONTINUITY-SEQUENCE:{disc}")
+    for seg in kept:
+        out.extend(seg)
+    out.extend(pending)
     return "\n".join(out) + "\n"
 
 
@@ -771,8 +841,8 @@ def media_playlist(session_id: str, t: str = Query(default="", max_length=200)):
     if text is None:
         raise HTTPException(404, "Not found")
     prefix = str(s.get("playlist_path") or playlist_path(str(s["business_id"]), sid)).rsplit("/", 1)[0]
-    body = sign_playlist(text, prefix, lambda k: _segment_link(sid, k))
     live = s.get("status") == "live"
+    body = sign_playlist(live_window(text) if live else text, prefix, lambda k: _segment_link(sid, k))
     return Response(body, media_type="application/vnd.apple.mpegurl", headers={
         "Cache-Control": "no-store" if live else "private, max-age=30",
         "Referrer-Policy": "no-referrer", "X-Content-Type-Options": "nosniff"})
