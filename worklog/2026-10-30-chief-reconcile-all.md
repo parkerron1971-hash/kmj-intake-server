@@ -4,7 +4,7 @@ date: 2026-10-30
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-10-30: "chief should be able to do pretty much all that i can do upon request except things that require my permission. so that way is someone say reconcile all the transaction it can and allow me to check what it done if I want." Then: "pick the best options for both questions"'
 status: in review
-prs: [kmj-intake-server#TBD]
+prs: [kmj-intake-server#1653]
 migrations: []
 left_undone:
   - "Switched with CHIEF_BANK_SEARCH (owner until the Thursday flip), the same switch as the bank search"
