@@ -253,6 +253,7 @@ from chief_site_view import handle_view_website
 from chief_weather import handle_get_weather
 from chief_transactions import handle_search_transactions
 from chief_reconcile import handle_reconcile_books, handle_undo_reconcile_books
+from chief_file_bank import handle_bank_to_file, handle_file_bank_rows, handle_undo_file_bank_rows
 from housing_allowance import (handle_housing_allowance_status, handle_set_housing_allowance,
     handle_log_housing_entry, handle_delete_housing_entry, handle_find_housing_payments,
     handle_attach_housing_payments, handle_detach_housing_payments)
@@ -385,6 +386,8 @@ _ACTION_PHRASES = {
     "find_fund_payments": "looking through the bank",
     "place_fund_payments": "placing them on the fund",
     "reconcile_books": "reconciling the bank",
+    "bank_to_file": "looking through the bank",
+    "file_bank_rows": "filing the bank rows",
     "undo_reconcile_books": "putting the bank rows back",
     "summarize_module": "adding it up",
     "inspect_module": "checking the module",
@@ -12168,6 +12171,9 @@ ACTION_HANDLERS = {
     "search_transactions":   handle_search_transactions,
     "reconcile_books":       handle_reconcile_books,
     "undo_reconcile_books":  handle_undo_reconcile_books,
+    "bank_to_file":          handle_bank_to_file,
+    "file_bank_rows":        handle_file_bank_rows,
+    "undo_file_bank_rows":   handle_undo_file_bank_rows,
     "housing_allowance_status": handle_housing_allowance_status,
     "set_housing_allowance": handle_set_housing_allowance,
     "log_housing_entry":     handle_log_housing_entry,
