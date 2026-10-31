@@ -602,7 +602,8 @@ def test_attach_ties_whole_payments_and_the_housing_part_of_a_paycheck(bank):
 
 @pytest.mark.parametrize("tid, says", [
     ("tx_in", "money coming in"), ("tx_pending", "still pending"), ("tx_2025", "outside 2026"),
-    ("tx_theirs", "isn't a bank payment of this business"), ("nope!", "needs the bank payment")])
+    ("tx_theirs", "isn't a bank payment of this business"), ("nope!", "needs the bank payment"),
+    ("tx_personal", "isn't in the books")])
 def test_attach_is_all_or_none(bank, tid, says):
     with pytest.raises(ha.HTTPException) as e:
         ha.attach_bank_payments(BIZ, OWNER, AID, [{"transaction_id": "tx_jul"}, {"transaction_id": tid}])
@@ -756,3 +757,52 @@ def test_the_bank_verbs_are_placed_and_one_undo_covers_the_batch():
     assert "find_housing_payments" in {t["name"] for t in ctl.read_tool_definitions()}
     assert action_inverse.can_undo("attach_housing_payments")
     assert action_inverse.build_inverse("attach_housing_payments", {}, {"created_ids": [], "restore": []}) is None
+
+
+def test_a_failed_bank_read_is_never_nothing(bank, monkeypatch):
+    real = sb_clients.sb_get_as_service
+
+    def no_bank(path, **kw):
+        return None if path.startswith("/plaid_transactions") else real(path, **kw)
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", no_bank)
+    with pytest.raises(ha.Unavailable):
+        ha.find_bank_payments(BIZ, AID)
+    assert _client(OWNER).get(f"/housing-allowance/{AID}/bank?business_id={BIZ}").status_code == 503
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", real)
+    ha.attach_bank_payments(BIZ, OWNER, AID, [{"transaction_id": "tx_aug"}])
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", no_bank)
+    a = next(x for x in ha.summary(BIZ, 2026)["allowances"] if x["id"] == AID)
+    assert a["bank_read"] is False and a["figures"]["paid"] == 1500      # the record still reads
+
+
+def test_tied_but_the_totals_unread_still_says_tied_and_keeps_the_undo(bank, monkeypatch):
+    real = sb_clients.sb_get_as_service
+    tied = {"done": False}
+    real_attach = ha.attach_bank_payments
+
+    def attach(*a, **kw):
+        out = real_attach(*a, **kw)
+        tied["done"] = True
+        return out
+
+    def after(path, **kw):
+        return None if tied["done"] and path.startswith("/minister_housing_entries") else real(path, **kw)
+    monkeypatch.setattr(ha, "attach_bank_payments", attach)
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", after)
+    r = _client(OWNER).post(f"/housing-allowance/{AID}/bank", json={
+        "business_id": BIZ, "items": [{"transaction_id": "tx_aug"}]})
+    assert r.status_code == 200 and r.json()["figures"] is None and len(r.json()["created_ids"]) == 1
+    tied["done"] = False
+    token = cos._TURN_USER_ID.set(OWNER)
+    try:
+        c = _run(ha.handle_attach_housing_payments, {"transaction_ids": ["tx_sep"], "minister_name": "kevin"})
+    finally:
+        cos._TURN_USER_ID.reset(token)
+    assert not c.get("failed") and c["result"].startswith("Tied 1 bank payment(s), $1,500.00")
+    assert "couldn't be read just now" in c["result"] and len(c["created_ids"]) == 1
+
+
+def test_a_formula_name_is_quoted_in_the_report(bank):
+    bank.t["minister_housing_allowances"][0]["minister_name"] = "=HYPERLINK(1)"
+    text, _ = ha.report_csv(BIZ, AID)
+    assert text.startswith("'=HYPERLINK(1): 2026 housing allowance")

@@ -961,6 +961,7 @@ def attach_bank_payments(business_id: str, user_id: Optional[str], allowance_id:
             raise HTTPException(400, "The same bank payment is in the list twice.")
         part = it.get("amount")
         want[tid] = None if part in (None, "") else _amount(part, what="the housing part")
+    accounts = set(_bank_accounts(business_id))
     bank = {str(t.get("transaction_id")): t for t in _get(
         f"/plaid_transactions?business_id=eq.{_q(business_id)}&transaction_id={_in(want)}"
         f"&select={_BANK_SELECT}&limit={len(want)}")}
@@ -972,6 +973,10 @@ def attach_bank_payments(business_id: str, user_id: Optional[str], allowance_id:
         t = bank.get(tid)
         if not t:
             raise HTTPException(400, "One of those isn't a bank payment of this business.")
+        if str(t.get("account_id") or "") not in accounts:
+            # Find offers only the accounts in the books; an account left out
+            # of them (a personal one) isn't the church's money.
+            raise HTTPException(400, "One of those is from an account that isn't in the books.")
         a, on = _num(t.get("amount")), _day_or_none(t.get("date"))
         when, desc = str(t.get("date") or "")[:10], _bank_words(t)
         if a <= 0:
@@ -1135,7 +1140,7 @@ def report_csv(business_id: str, allowance_id: str) -> Tuple[str, str]:
     state = _bank_state(business_id)
     buf = io.StringIO()
     w = csv.writer(buf)
-    w.writerow([f"{a['minister_name']}: {a['tax_year']} housing allowance"])
+    w.writerow([_cell(f"{a['minister_name']}: {a['tax_year']} housing allowance")])
     w.writerow(["Date", "Type", "Category", "Amount", "From", "Bank date", "Bank description",
                 "Bank amount", "Before the board's vote", "Receipt", "Note"])
     for e in sorted(entries, key=lambda e: (str(e.get("entry_date")), str(e.get("created_at")))):
@@ -1328,7 +1333,10 @@ def post_housing_bank(allowance_id: str, body: BankAttachBody,
                       user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     require_owner(body.business_id, user.id)
     done = _guard(attach_bank_payments, body.business_id, str(user.id), allowance_id, body.items)
-    f = _guard(lambda: figures(done["allowance"], entries_for(body.business_id, allowance_id)))
+    try:
+        f: Optional[Dict[str, Any]] = figures(done["allowance"], entries_for(body.business_id, allowance_id))
+    except Unavailable:
+        f = None   # tied all the same: the screen re-reads, and Undo has its lists
     return {"ok": True, "attached": done["attached"], "created_ids": done["created_ids"],
             "restore": done["restore"], "total": done["total"], "figures": f}
 
@@ -1649,12 +1657,14 @@ def _attach_sync(biz: Dict[str, Any], action: Dict[str, Any]) -> Dict[str, Any]:
         if not allowance:
             return _fail(atype, why)
         done = attach_bank_payments(str(biz["id"]), _TURN_USER_ID.get(), allowance["id"], items)
-        entries = entries_for(str(biz["id"]), allowance["id"])
     except HTTPException as e:
         return _fail(atype, str(e.detail) + " Nothing was tied")
     except Unavailable:
         return _fail(atype, "the housing allowance records couldn't be read just now; nothing was tied")
-    f, src = figures(allowance, entries), sources(entries)
+    try:
+        entries: Optional[List[Dict[str, Any]]] = entries_for(str(biz["id"]), allowance["id"])
+    except Unavailable:
+        entries = None   # tied all the same; only the new totals are unread
     rows = done["attached"]
     text = (f"Tied {len(rows)} bank payment(s), {_money(done['total'])}, to {allowance['minister_name']}'s "
             f"{allowance['tax_year']} housing allowance: "
@@ -1670,8 +1680,12 @@ def _attach_sync(biz: Dict[str, Any], action: Dict[str, Any]) -> Dict[str, Any]:
         text += (f" {len(early)} of them ({_money(round(sum(r['amount'] for r in early), 2))}) came before the "
                  f"board's vote on {_when(allowance['designated_on'])}, so that's taxable salary (W-2 Box 1), not "
                  "housing allowance.")
-    text += (f" Paid since the vote {_money(f['paid_since_designation'])} of {_money(f['designated'])}; tied to the "
-             f"bank {_money(src['bank']['amount'])} of {_money(f['paid'])} paid.")
+    if entries is None:
+        text += " The new totals couldn't be read just now; the Housing tab will show them."
+    else:
+        f, src = figures(allowance, entries), sources(entries)
+        text += (f" Paid since the vote {_money(f['paid_since_designation'])} of {_money(f['designated'])}; tied to "
+                 f"the bank {_money(src['bank']['amount'])} of {_money(f['paid'])} paid.")
     return {"type": atype, "result": text, "label": f"🏠 Tied {len(rows)} bank payment(s) to housing",
             "allowance_id": allowance["id"], "created_ids": done["created_ids"], "restore": done["restore"],
             "attached": rows, "nav": NAV}

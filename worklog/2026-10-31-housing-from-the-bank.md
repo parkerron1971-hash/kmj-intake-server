@@ -27,4 +27,4 @@ routes `GET/POST /housing-allowance/{id}/bank`,
 `POST /housing-allowance/bank/detach`, `GET /housing-allowance/{id}/report.csv`;
 Chief verbs `find_housing_payments` (a sensitive mid-turn read),
 `attach_housing_payments`, `detach_housing_payments`. Tests:
-`__tests__/test_housing_allowance.py` (12 new).
+`__tests__/test_housing_allowance.py` (15 new).
