@@ -319,6 +319,7 @@ def test_the_check_is_to_the_cent_and_the_printed_totals_must_agree():
     totals = bs.check(JULY, 5000, 2648, statement_out=5300)             # the other side unprinted: no split to lean on
     assert totals["state"] == "off" and totals["totals_agree"] is False and totals["difference"] == 0
     assert bs.check(JULY, opening=5000)["state"] == "one_balance"
+    assert all(k in bs.check(JULY) for k in ("totals_agree", "totals_split", "difference"))   # one shape every state
 
 
 def test_a_fee_line_printed_apart_is_not_a_missing_row():
