@@ -809,7 +809,8 @@ def _find_sync(biz: Dict[str, Any], action: Dict[str, Any]) -> Dict[str, Any]:
         text = (f"{fund['name']} ({data['year']}): {data['count']} transaction(s) {way} the bank aren't on it yet, "
                 f"{_money(data['total'])} in all.")
         if data["history_late"]:
-            text += f" The bank history in the app starts {data['history_starts']}; earlier ones aren't here."
+            text += (f" The bank history in the app starts {data['history_starts']}; earlier ones aren't here until "
+                     "the bank statements for those months are added (Bookkeeping, Transactions, Statements).")
         if data["repeats"]:
             text += " Repeating: " + "; ".join(
                 f"{_money(g['amount'])} × {g['count']} ({', '.join(g['dates'])}), \"{g['description']}\", "

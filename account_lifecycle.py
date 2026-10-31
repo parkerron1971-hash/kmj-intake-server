@@ -469,6 +469,8 @@ BUSINESS_CHILD_TABLES: List[str] = [
     "plaid_accounts",
     "plaid_items",
     "plaid_transactions",
+    # A statement's rows (plaid_transactions.statement_import_id) go before it.
+    "bank_statement_imports",
     "reconciliations",
     "connectors",
     # GL cluster — queue/alarms/pushed-entries cite journal entries, so
@@ -900,6 +902,10 @@ _IMPORT_SKIP = {
     # bank link gives new ids; same reason. The export keeps them; a
     # restored church places them again.
     "business_fund_items",
+    # A statement added to the books cites its bank account by id, which a
+    # restored bank link gives new ids; same reason. The export keeps them; a
+    # restored church adds its statements again.
+    "bank_statement_imports",
     # A check request cites its person and its expense by id; same reason.
     # The export keeps them; a restored church keeps its limit and budget
     # lines. (Receipts live in business-documents under the church's own
