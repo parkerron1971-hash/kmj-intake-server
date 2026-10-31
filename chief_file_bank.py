@@ -279,10 +279,13 @@ def plan(rows: List[Dict[str, Any]], items: List[Dict[str, Any]], kinds: bool) -
             if label and answer != "personal":
                 after["business_subcategory"] = label
             before = {k: (r.get(k) if k != "excluded_from_books" else False) for k in after}
-            if "money_kind" in after or "business_category" in after:
-                # What makes it "waiting": no money_kind, no bucket past 'other'.
+            # Every answer is guarded on what makes the row "waiting": in the
+            # books, no bucket past 'other', and (where the column is there)
+            # no money_kind. An answer given on screen meanwhile fails it.
+            before.setdefault("excluded_from_books", False)
+            before.setdefault("business_category", r.get("business_category"))
+            if kinds:
                 before.setdefault("money_kind", r.get("money_kind"))
-                before.setdefault("business_category", r.get("business_category"))
             taken[r["transaction_id"]] = {
                 "id": r["transaction_id"], "answer": answer, "before": before, "after": after,
                 "row": {"id": r["transaction_id"], "date": str(r.get("date") or "")[:10],
@@ -407,8 +410,10 @@ def undo(business_id: str, action: Dict[str, Any]) -> Dict[str, Any]:
     total = sum(len(cs) for cs in shapes.values())
     for cs in shapes.values():
         try:
-            # Guarded on what Chief wrote: a row answered since stays as it is now.
-            put_back += len(_write(business_id, [c["id"] for c in cs], cs[0]["after"], cs[0]["before"]))
+            # Guarded on the whole state Chief left (what it wrote, and what it
+            # found and kept): a row answered since stays as it is now.
+            left = {**cs[0]["before"], **cs[0]["after"]}
+            put_back += len(_write(business_id, [c["id"] for c in cs], left, cs[0]["before"]))
         except _Unavailable:
             failed += len(cs)
     skipped = total - put_back - (failed - bad)

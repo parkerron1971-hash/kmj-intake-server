@@ -145,7 +145,7 @@ def test_filing_writes_the_screens_answers_on_the_confirmed_payees(db):
     assert "Filed 6 bank rows: 3 as income (Giving); 2 as operating expense (Bank fees)" in got["result"]
     assert got["display"] == "table" and got["rows"][0]["filed"]
     assert {c["id"]: c["before"] for c in got["changes"]}["t1"] == {
-        "money_kind": None, "business_subcategory": None, "business_category": "other"}
+        "money_kind": None, "business_subcategory": None, "business_category": "other", "excluded_from_books": False}
 
 
 def test_money_in_is_never_an_expense_and_money_out_never_income(db):
@@ -169,6 +169,25 @@ def test_a_row_answered_meanwhile_is_left_as_it_is(db, monkeypatch):
     got = _run(cf.handle_file_bank_rows, {"items": [{"payee": "overdraft fee", "answer": "operating"}]})
     assert got["summary"]["count"] == 1 and "1 were answered by someone else" in got["result"]
     assert _row(db, "o1")["business_category"] == "tax"
+
+
+def test_personal_never_hides_a_row_answered_meanwhile(db, monkeypatch):
+    stale = cf.queue(BIZ)                                       # read before the screen answered c1
+    _row(db, "c1").update(money_kind="income", business_subcategory="Giving")
+    monkeypatch.setattr(cf, "queue", lambda biz: stale)
+    got = _run(cf.handle_file_bank_rows, {"items": [{"transaction_ids": ["c1"], "answer": "personal"}]})
+    assert _row(db, "c1")["excluded_from_books"] is False and "1 were answered by someone else" in got["result"]
+
+
+def test_without_the_money_kind_column_expenses_still_file(db, monkeypatch):
+    monkeypatch.setattr(bank_money, "state", lambda: False)
+    real = sb_clients.sb_patch_as_service
+    monkeypatch.setattr(sb_clients, "sb_patch_as_service",
+                        lambda path, body, **kw: None if "money_kind" in path else real(path, body, **kw))
+    got = _run(cf.handle_file_bank_rows, {"items": [
+        {"payee": "overdraft fee", "answer": "operating"}, {"payee": "tithely payout", "answer": "income"}]})
+    assert got["summary"]["count"] == 2 and _row(db, "o1")["business_category"] == "operating"
+    assert "needs the bank money update" in got["result"] and _row(db, "t1")["money_kind"] is None
 
 
 def test_personal_leaves_the_books_and_comes_back_on_undo(db):
