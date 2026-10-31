@@ -210,6 +210,8 @@ def read_tool_definitions() -> List[Dict[str, Any]]:
     out += [funds.STATUS_TOOL, funds.FIND_TOOL]  # the year's funds and the bank: the same
     import bank_statements
     out += [bank_statements.HISTORY_TOOL]  # which months of the bank the app has: the same
+    import chief_file_bank
+    out += [chief_file_bank.TO_FILE_TOOL]  # the To review queue by payee: the same
     return out
 
 
@@ -444,7 +446,7 @@ async def execute_tool_use(client, biz: Dict[str, Any],
                              and name not in ("list_connected_agents", "connected_agent_assignments", "get_weather",
                                               "search_transactions", "housing_allowance_status",
                                               "find_housing_payments", "fund_status",
-                                              "find_fund_payments", "bank_history")):
+                                              "find_fund_payments", "bank_history", "bank_to_file")):
         return True, (f"'{name}' is not a mid-turn lookup. Reads only here; "
                       f"operations go through [ACTION:] tags in your reply.")
     if effect != action_registry.READ:
