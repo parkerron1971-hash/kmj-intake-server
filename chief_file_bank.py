@@ -129,6 +129,16 @@ GIFTS_TWICE = ("this church records its gifts in Giving, where they already coun
                "giving match; if it isn't giving (rent, a sale), say so with not_a_gift")
 
 
+# How giving reaches a church's bank: a deposit that reads like one of these
+# is never filed as income where gifts are recorded, whatever the item says.
+_GIVING_CHANNEL = re.compile(r"subsplash|tithe|givelify|pushpay|cash ?app|zelle|venmo|paypal|square|stripe|"
+                             r"brch|branch|atm|offering|donat|\bgift", re.I)
+
+
+def looks_like_giving(name: str) -> bool:
+    return bool(_GIVING_CHANNEL.search(name or ""))
+
+
 def gifts_recorded(business_id: str) -> bool:
     """Does this business record its gifts in Giving (any paid gift in the
     last 400 days)? Then its giving deposits are those gifts arriving, never
@@ -194,9 +204,12 @@ def _to_file_sync(biz: Dict[str, Any], action: Dict[str, Any]) -> Dict[str, Any]
         return _fail(atype, refused)
     try:
         rows = queue(business_id)
-        gifts = gifts_recorded(business_id)
     except _Unavailable:
         return _fail(atype, "the bank rows couldn't be read just now. This is not 'nothing to file'")
+    try:
+        gifts: Optional[bool] = gifts_recorded(business_id)
+    except _Unavailable:
+        gifts = None                     # the groups still show; income waits on the check
     words = [w.lower() for w in (action.get("words") or []) if isinstance(w, str) and w.strip()][:6]
     if action.get("direction") in ("in", "out"):
         rows = [r for r in rows if r["direction"] == action["direction"]]
@@ -216,6 +229,9 @@ def _to_file_sync(biz: Dict[str, Any], action: Dict[str, Any]) -> Dict[str, Any]
             "owner confirms, with file_bank_rows (by payee, or by transaction_ids for part of a group). "
             "Never guess money in from a person or an app (Cash App, Zelle, PayPal, a transfer): ask "
             "whether it's giving, the owner's own money, or a move between accounts.")
+    if gifts is None:
+        text += " Whether this business records its gifts couldn't be checked just now, so nothing is filed as income."
+        note += " Don't file anything as income this turn: the gift check is unavailable."
     if gifts:
         text += (" This church records its gifts in Giving, so its giving deposits are those gifts arriving: "
                  "they aren't filed as income (that would count them twice).")
@@ -265,7 +281,7 @@ def _label(v: Any) -> Optional[str]:
 
 
 def plan(rows: List[Dict[str, Any]], items: List[Dict[str, Any]], kinds: bool,
-         gifts: bool = False) -> Tuple[List[Dict[str, Any]], List[str]]:
+         gifts: Optional[bool] = False) -> Tuple[List[Dict[str, Any]], List[str]]:
     """Which waiting rows get which answer. Returns (changes, problems)."""
     by_id = {r["transaction_id"]: r for r in rows}
     taken: Dict[str, Dict[str, Any]] = {}
@@ -282,8 +298,13 @@ def plan(rows: List[Dict[str, Any]], items: List[Dict[str, Any]], kinds: bool,
         if "money_kind" in write and not kinds:
             problems.append(f"item {n}: {SAID[answer]} needs the bank money update, which isn't on yet")
             continue
-        if answer == "income" and gifts and it.get("not_a_gift") is not True:
-            problems.append(f"item {n}: {GIFTS_TWICE}")
+        if answer == "income" and gifts is None:
+            problems.append(f"item {n}: whether this business records its gifts couldn't be checked just now, "
+                            "so nothing is filed as income; try again")
+            continue
+        if answer == "income" and gifts and (it.get("not_a_gift") is not True or not it.get("transaction_ids")):
+            problems.append(f"item {n}: {GIFTS_TWICE}" + ("" if it.get("not_a_gift") is not True else
+                            " (not_a_gift names rows one by one, never a whole payee)"))
             continue
         ids = [str(t) for t in (it.get("transaction_ids") or []) if isinstance(t, str) and _TX.match(t)]
         payee = " ".join(str(it.get("payee") or "").lower().split())
@@ -302,6 +323,10 @@ def plan(rows: List[Dict[str, Any]], items: List[Dict[str, Any]], kinds: bool,
             continue
         label = _label(it.get("label"))
         for r in picked:
+            if answer == "income" and gifts and looks_like_giving(str(r.get("name") or "")):
+                problems.append(f"{r.get('name')} on {str(r.get('date'))[:10]} reads like a giving deposit, so it "
+                                "isn't filed as income here; if it truly isn't giving, answer it on the screen")
+                continue
             if r["direction"] not in ways:
                 problems.append(f"{r.get('name')} on {str(r.get('date'))[:10]} is money {r['direction']}, "
                                 f"so it can't be {SAID[answer]}")
@@ -323,7 +348,8 @@ def plan(rows: List[Dict[str, Any]], items: List[Dict[str, Any]], kinds: bool,
                 "id": r["transaction_id"], "answer": answer, "before": before, "after": after,
                 "row": {"id": r["transaction_id"], "date": str(r.get("date") or "")[:10],
                         "description": str(r.get("name") or "")[:80], "amount": round(-float(r["amount"]), 2),
-                        "filed": (SAID[answer] + (f": {label}" if label and answer != "personal" else ""))[:80]}}
+                        "filed": (SAID[answer] + (" (not giving, per the owner)" if answer == "income" and gifts
+                                                  else "") + (f": {label}" if label and answer != "personal" else ""))[:80]}}
     return list(taken.values()), problems
 
 
@@ -338,9 +364,16 @@ def file_rows(business_id: str, action: Dict[str, Any]) -> Dict[str, Any]:
         return _fail(atype, "say which rows get which answer (items: payee or transaction_ids, and answer)")
     try:
         rows = queue(business_id)
-        gifts = gifts_recorded(business_id)
     except _Unavailable:
         return _fail(atype, "the bank rows couldn't be read just now, so nothing was filed. Try again")
+    # Gifts are looked up only when something would be filed as income; a
+    # spending-only batch never waits on them.
+    gifts: Optional[bool] = False
+    if any(isinstance(it, dict) and str(it.get("answer") or "").lower() == "income" for it in items[:100]):
+        try:
+            gifts = gifts_recorded(business_id)
+        except _Unavailable:
+            gifts = None
     changes, problems = plan(rows, items[:100], bank_money.supported(), gifts)
     if len(changes) > ROW_MAX:
         return _fail(atype, f"that's {len(changes)} rows; one batch files at most {ROW_MAX}. Split it")

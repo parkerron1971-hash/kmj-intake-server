@@ -248,17 +248,41 @@ def test_a_giving_deposit_is_never_filed_as_income_where_gifts_are_recorded(db):
         {"payee": "overdraft fee", "answer": "operating", "label": "Bank fees"}]})
     assert got["summary"]["count"] == 2 and "would count it twice" in got["result"]
     assert _row(db, "t1")["money_kind"] is None and _row(db, "o1")["business_category"] == "operating"
-    rent = _run(cf.handle_file_bank_rows, {"items": [
+    # not_a_gift: one row at a time, and never on a deposit that reads like giving.
+    whole = _run(cf.handle_file_bank_rows, {"items": [
+        {"payee": "duke energy util pymt", "answer": "income", "not_a_gift": True}]})
+    assert whole["failed"] and "never a whole payee" in whole["result"]
+    cashapp = _run(cf.handle_file_bank_rows, {"items": [
         {"transaction_ids": ["c1"], "answer": "income", "label": "Rent", "not_a_gift": True}]})
-    assert rent["summary"]["count"] == 1 and _row(db, "c1")["money_kind"] == "income"
+    assert cashapp["failed"] and "reads like a giving deposit" in cashapp["result"]
+    assert _row(db, "c1")["money_kind"] is None
+    db.t["plaid_transactions"].append(_tx("r1", "2026-01-26", -500, "CHECK DEPOSIT ACME PROPERTY RENT"))
+    rent = _run(cf.handle_file_bank_rows, {"items": [
+        {"transaction_ids": ["r1"], "answer": "income", "label": "Rent", "not_a_gift": True}]})
+    assert rent["summary"]["count"] == 1 and _row(db, "r1")["money_kind"] == "income"
+    assert "not giving, per the owner" in rent["rows"][0]["filed"]
 
 
-def test_a_failed_gift_read_files_nothing(db, monkeypatch):
+def test_old_unpaid_or_non_gift_invoices_dont_count_as_recorded_gifts(db):
+    db.t["invoices"] = [
+        {"id": "a", "business_id": BIZ, "is_gift": True, "status": "paid", "paid_at": "2020-01-04T12:00:00Z"},
+        {"id": "b", "business_id": BIZ, "is_gift": True, "status": "sent", "paid_at": None},
+        {"id": "c", "business_id": BIZ, "is_gift": False, "status": "paid", "paid_at": "2099-01-04T12:00:00Z"}]
+    assert cf.gifts_recorded(BIZ) is False
+    _records_gifts(db)
+    assert cf.gifts_recorded(BIZ) is True
+
+
+def test_a_failed_gift_read_blocks_only_income(db, monkeypatch):
     real = sb_clients.sb_get_as_service
     monkeypatch.setattr(sb_clients, "sb_get_as_service",
                         lambda path, **kw: None if path.startswith("/invoices") else real(path, **kw))
-    got = _run(cf.handle_file_bank_rows, {"items": [{"payee": "overdraft fee", "answer": "operating"}]})
-    assert got["failed"] and _row(db, "o1")["business_category"] == "other"
+    seen = _run(cf.handle_bank_to_file, {})
+    assert not seen.get("failed") and seen["gifts_recorded"] is None and "couldn't be checked" in seen["result"]
+    fees = _run(cf.handle_file_bank_rows, {"items": [{"payee": "overdraft fee", "answer": "operating"}]})
+    assert fees["summary"]["count"] == 2
+    inc = _run(cf.handle_file_bank_rows, {"items": [{"transaction_ids": ["c1"], "answer": "income"}]})
+    assert inc["failed"] and "couldn't be checked" in inc["result"] and _row(db, "c1")["money_kind"] is None
 
 
 # ─── Wiring ──────────────────────────────────────────────────────────
