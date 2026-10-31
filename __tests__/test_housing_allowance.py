@@ -264,3 +264,248 @@ def test_never_on_the_agent_surface_and_placed_for_lanes():
     assert "housing_allowance_status" in {t["name"] for t in ctl.read_tool_definitions()}
     assert action_inverse.can_undo("log_housing_entry")
     assert not action_inverse.can_undo("set_housing_allowance")
+
+
+# ─── The paper trail (2026-10-31) ────────────────────────────────────
+# Kevin: "add these structure and rules in there as well" (what the IRS
+# would ask to see).
+
+def _dated(kind, amount, on, category=None, **kw):
+    return {**_e(kind, amount, category), "entry_date": on, **kw}
+
+
+def test_allowance_paid_before_the_vote_is_taxable_salary():
+    """The board votes February 10; January's $2,000 was paid with no
+    designation in place, so it's salary, not housing allowance."""
+    a = _allowance(designated_amount=24000, designated_on="2026-02-10", fair_rental_value=None)
+    entries = [_dated("paid", 2000, "2026-01-31"), _dated("paid", 2000, "2026-02-28"),
+               _dated("spent", 30000, "2026-03-01", "rent_mortgage")]
+    f = ha.figures(a, entries, today=date(2027, 1, 15))
+    assert f["paid"] == 4000 and f["paid_before_designation"] == 2000
+    assert f["excludable"] == 2000 and f["limited_by"] == "paid"
+    assert f["taxable_excess"] == 2000                  # January's $2,000
+    assert f["box_14"] == 2000                          # it goes in Box 1, not 14
+    assert f["left_to_pay"] == 22000
+    assert "paid before the board's vote" in ha.describe(a, f)
+    (step,) = [s for s in ha.paper_trail(a, entries, f, today=date(2027, 1, 15)) if s["key"] == "in_advance"]
+    assert step["state"] == "warn" and "$2,000.00" in step["detail"] and "Box 1" in step["detail"]
+
+
+def test_a_fresh_record_lists_what_the_irs_would_ask_for():
+    a = _allowance(board_decision_id=None, fair_rental_value=None)
+    f = ha.figures(a, [], today=date(2026, 10, 31))
+    trail = {s["key"]: s for s in ha.paper_trail(a, [], f, today=date(2026, 10, 31))}
+    assert list(trail) == ["board_vote", "in_advance", "independent", "credential", "se_tax",
+                           "fair_rental", "receipts", "w2"]
+    assert trail["board_vote"]["state"] == "todo" and "Board & minutes" in trail["board_vote"]["detail"]
+    assert trail["in_advance"]["state"] == "done"
+    assert trail["independent"]["state"] == "todo"
+    assert "stepped out of the vote" in trail["independent"]["detail"]
+    assert "similar churches" in trail["independent"]["detail"]
+    assert trail["credential"]["state"] == "todo"
+    assert "ordained, licensed or commissioned" in trail["credential"]["detail"].lower()
+    assert trail["se_tax"]["state"] == "todo" and "January 15, 2027" in trail["se_tax"]["detail"]
+    assert trail["fair_rental"]["state"] == "todo"
+    assert trail["receipts"]["state"] == "later"
+    assert trail["w2"]["state"] == "later" and "January 2027" in trail["w2"]["label"]
+    assert ha.open_steps(list(trail.values())) == [trail[k]["label"] for k in
+                                                   ("board_vote", "independent", "credential", "se_tax",
+                                                    "fair_rental")]
+
+
+def test_a_complete_record_has_nothing_left():
+    a = _allowance(minister_recused=True, comparables_note="2026 survey: three churches our size",
+                   minister_credential="ordained", credential_detail="Ordained 2009, Love City",
+                   se_tax_plan="estimates", cash_salary=50000, fair_rental_basis="Realtor's letter, May 2026",
+                   receipts_kept_where=None, w2_checked_on="2027-01-30")
+    entries = [_dated("paid", 30000, "2026-06-01"),
+               _dated("spent", 26000, "2026-06-01", "rent_mortgage", receipt_path="x", receipt_type="pdf")]
+    f = ha.figures(a, entries, today=date(2027, 2, 1))
+    trail = ha.paper_trail(a, entries, f, today=date(2027, 2, 1))
+    assert {s["state"] for s in trail} == {"done"}
+    assert ha.open_steps(trail) == []
+    (se,) = [s for s in trail if s["key"] == "se_tax"]
+    assert "$11,303.64" in se["detail"]                 # 14.13% of $80,000
+    assert "next quarterly estimate" not in se["detail"]     # all four dates for 2026 have passed
+
+
+def test_the_minister_voting_on_their_own_allowance_is_a_warning():
+    a = _allowance(minister_recused=False, comparables_note="survey")
+    f = ha.figures(a, [])
+    (step,) = [s for s in ha.paper_trail(a, [], f) if s["key"] == "independent"]
+    assert step["state"] == "warn" and "vote again without Pastor Kevin" in step["detail"]
+
+
+def test_receipts_are_counted_or_said_where_they_are():
+    a = _allowance()
+    entries = [_dated("spent", 100, "2026-03-01", receipt_path="x", receipt_type="image"),
+               _dated("spent", 200, "2026-04-01")]
+    f = ha.figures(a, entries)
+    (step,) = [s for s in ha.paper_trail(a, entries, f) if s["key"] == "receipts"]
+    assert step["state"] == "todo" and step["detail"].startswith("1 of 2 housing costs have no receipt")
+    a["receipts_kept_where"] = "the blue folder in the office"
+    (step,) = [s for s in ha.paper_trail(a, entries, f) if s["key"] == "receipts"]
+    assert step["state"] == "done" and "blue folder" in step["detail"]
+
+
+def test_self_employment_tax_estimate_and_due_dates():
+    f = ha.figures(_allowance(designated_amount=30000), [])
+    assert ha.se_tax_estimate(_allowance(cash_salary=50000), f) == 11303.64
+    assert ha.se_tax_estimate(_allowance(), f) is None
+    # Over the Social Security wage base, only Medicare keeps going.
+    big = ha.se_tax_estimate(_allowance(cash_salary=300000), f)
+    assert big == round(0.124 * 184500 + 0.029 * 0.9235 * 330000, 2)
+    # The IRS's own dates: weekends, Martin Luther King Day, DC Emancipation Day.
+    assert ha.estimate_dates(2022) == [date(2022, 4, 18), date(2022, 6, 15), date(2022, 9, 15),
+                                       date(2023, 1, 17)]
+    assert ha.estimate_dates(2023)[0] == date(2023, 4, 18)
+    assert ha.estimate_dates(2023)[3] == date(2024, 1, 16)
+    assert ha.next_estimate(2026, today=date(2026, 10, 31)) == date(2027, 1, 15)
+    assert ha.next_estimate(2026, today=date(2027, 1, 16)) is None
+
+
+def test_the_owner_fills_in_the_paper_trail(db):
+    c = _client(OWNER)
+    aid = c.post("/housing-allowance", json=BODY).json()["allowance"]["id"]
+    r = c.patch(f"/housing-allowance/{aid}", json={
+        "business_id": BIZ, "minister_recused": True, "comparables_note": "  three   churches  ",
+        "minister_credential": "Licensed", "se_tax_plan": "withholding", "cash_salary": 42000,
+        "fair_rental_basis": "listings", "w2_checked_on": None})
+    assert r.status_code == 200, r.text
+    row = db.t["minister_housing_allowances"][0]
+    assert row["minister_credential"] == "licensed" and row["comparables_note"] == "three churches"
+    assert row["minister_recused"] is True and row["cash_salary"] == 42000
+    for bad in ({"minister_credential": "pastor"}, {"se_tax_plan": "later"}, {"cash_salary": -1},
+                {"w2_checked_on": "2999-01-01"}):
+        assert c.patch(f"/housing-allowance/{aid}", json={"business_id": BIZ, **bad}).status_code == 400, bad
+    (a,) = c.get(f"/housing-allowance?business_id={BIZ}").json()["allowances"]
+    keys = {s["key"]: s["state"] for s in a["paper_trail"]}
+    assert keys["independent"] == keys["credential"] == keys["se_tax"] == keys["fair_rental"] == "done"
+
+
+@pytest.fixture
+def bucket(db, monkeypatch):
+    import church_checks
+    import storage_links
+    files = {}
+
+    def put(path, data, media):
+        files[path] = data
+        return True, 200, ""
+    monkeypatch.setattr(church_checks, "_storage_put", put)
+    monkeypatch.setattr(church_checks, "_storage_get", lambda path: files.get(path))
+    monkeypatch.setattr(church_checks, "_storage_drop", lambda path: files.pop(path, None))
+    monkeypatch.setattr(storage_links, "has_service_key", lambda: True)
+    return files
+
+
+def test_a_housing_cost_keeps_its_receipt_for_the_owner_alone(bucket, db):
+    c = _client(OWNER)
+    aid = c.post("/housing-allowance", json=BODY).json()["allowance"]["id"]
+    paid = c.post(f"/housing-allowance/{aid}/entries", json={
+        "business_id": BIZ, "kind": "paid", "amount": 100, "entry_date": "2026-03-01"}).json()["entry"]
+    cost = c.post(f"/housing-allowance/{aid}/entries", json={
+        "business_id": BIZ, "kind": "spent", "amount": 1800, "category": "rent_mortgage",
+        "entry_date": "2026-03-01"}).json()["entry"]
+    assert cost["receipt"] is None and "receipt_path" not in cost
+    pdf = ("receipt.pdf", b"%PDF-1.4 mortgage statement", "application/pdf")
+    r = c.post(f"/housing-allowance/entries/{cost['id']}/receipt", data={"business_id": BIZ}, files={"file": pdf})
+    assert r.status_code == 200, r.text
+    assert r.json()["entry"]["receipt"] == "pdf" and "receipt_path" not in r.json()["entry"]
+    (path,) = bucket
+    assert path.startswith(f"{BIZ}/housing-receipts/") and path.endswith(".pdf")
+    # Not on allowance paid; not for anyone but the owner.
+    assert c.post(f"/housing-allowance/entries/{paid['id']}/receipt", data={"business_id": BIZ},
+                  files={"file": pdf}).status_code == 400
+    admin = _client(ADMIN).get(f"/housing-allowance/entries/{cost['id']}/receipt?business_id={BIZ}")
+    assert admin.status_code == 403
+    got = c.get(f"/housing-allowance/entries/{cost['id']}/receipt?business_id={BIZ}")
+    assert got.status_code == 200 and got.content.startswith(b"%PDF")
+    assert "no-store" in got.headers["cache-control"]
+    (a,) = c.get(f"/housing-allowance?business_id={BIZ}").json()["allowances"]
+    assert [e["receipt"] for e in a["entries"] if e["kind"] == "spent"] == ["pdf"]
+    assert {s["key"]: s["state"] for s in a["paper_trail"]}["receipts"] == "done"
+    # A replacement drops the old file; removing the entry drops its receipt.
+    c.post(f"/housing-allowance/entries/{cost['id']}/receipt", data={"business_id": BIZ}, files={"file": pdf})
+    assert len(bucket) == 1 and path not in bucket
+    assert c.delete(f"/housing-allowance/entries/{cost['id']}?business_id={BIZ}").status_code == 200
+    assert bucket == {}
+
+
+def test_a_receipt_path_from_elsewhere_is_never_served(bucket, db):
+    c = _client(OWNER)
+    aid = c.post("/housing-allowance", json=BODY).json()["allowance"]["id"]
+    cost = c.post(f"/housing-allowance/{aid}/entries", json={
+        "business_id": BIZ, "kind": "spent", "amount": 50, "category": "utilities",
+        "entry_date": "2026-03-01"}).json()["entry"]
+    row = next(e for e in db.t["minister_housing_entries"] if e["id"] == cost["id"])
+    row.update(receipt_path=f"{BIZ}/check-requests/{'a' * 32}.pdf", receipt_type="pdf")
+    bucket[row["receipt_path"]] = b"%PDF the treasurer's"
+    assert c.get(f"/housing-allowance/entries/{cost['id']}/receipt?business_id={BIZ}").status_code == 404
+
+
+def test_chief_names_whats_left_on_the_paper_trail_and_records_it(speaking):
+    _run(ha.handle_set_housing_allowance, {"minister_name": "Pastor Kevin", "tax_year": 2026,
+                                           "designated_amount": 30000, "designated_on": "2025-12-14"})
+    status = _run(ha.handle_housing_allowance_status, {"tax_year": 2026})
+    assert "Paper trail, still to do: Record the board's vote" in status["result"]
+    assert status["allowances"][0]["paper_trail"]
+    # No name: the year's only allowance.
+    r = _run(ha.handle_set_housing_allowance, {"tax_year": 2026, "minister_credential": "ordained",
+                                               "minister_recused": True})
+    assert r["result"].startswith("Changed"), r
+    status = _run(ha.handle_housing_allowance_status, {"tax_year": 2026})
+    assert "Say how" not in status["result"]
+
+
+def test_chief_says_allowance_logged_before_the_vote_is_salary(speaking):
+    _run(ha.handle_set_housing_allowance, {"minister_name": "Pastor Kevin", "tax_year": 2026,
+                                           "designated_amount": 24000, "designated_on": "2026-02-10"})
+    early = _run(ha.handle_log_housing_entry, {"kind": "paid", "amount": 2000, "entry_date": "2026-01-31",
+                                               "tax_year": 2026})
+    assert "before the board's vote on February 10, 2026" in early["result"]
+    assert "W-2 Box 1" in early["result"] and "Paid since the vote $0.00 of $24,000.00" in early["result"]
+    later = _run(ha.handle_log_housing_entry, {"kind": "paid", "amount": 2000, "entry_date": "2026-02-28",
+                                               "tax_year": 2026})
+    assert "before the board's vote" not in later["result"]
+    assert "Paid since the vote $2,000.00 of $24,000.00" in later["result"]
+
+
+def _a_cost(c):
+    aid = c.post("/housing-allowance", json=BODY).json()["allowance"]["id"]
+    return c.post(f"/housing-allowance/{aid}/entries", json={
+        "business_id": BIZ, "kind": "spent", "amount": 1800, "category": "rent_mortgage",
+        "entry_date": "2026-03-01"}).json()["entry"]
+
+
+PDF = ("receipt.pdf", b"%PDF-1.4 mortgage statement", "application/pdf")
+
+
+def test_a_receipt_the_record_wont_take_is_dropped_from_the_bucket(bucket, db, monkeypatch):
+    c = _client(OWNER)
+    cost = _a_cost(c)
+    monkeypatch.setattr(sb_clients, "sb_patch_as_service", lambda path, body: None)
+    r = c.post(f"/housing-allowance/entries/{cost['id']}/receipt", data={"business_id": BIZ}, files={"file": PDF})
+    assert r.status_code == 503
+    assert bucket == {}                                 # no orphaned private file
+
+
+def test_a_refused_upload_is_a_503_and_nothing_is_recorded(bucket, db, monkeypatch):
+    import church_checks
+    c = _client(OWNER)
+    cost = _a_cost(c)
+    monkeypatch.setattr(church_checks, "_storage_put", lambda path, data, media: (False, 403, "denied"))
+    r = c.post(f"/housing-allowance/entries/{cost['id']}/receipt", data={"business_id": BIZ}, files={"file": PDF})
+    assert r.status_code == 503
+    row = next(e for e in db.t["minister_housing_entries"] if e["id"] == cost["id"])
+    assert not row.get("receipt_path")
+
+
+def test_a_receipt_that_cant_be_read_is_a_503_not_an_empty_file(bucket, db, monkeypatch):
+    import church_checks
+    c = _client(OWNER)
+    cost = _a_cost(c)
+    assert c.post(f"/housing-allowance/entries/{cost['id']}/receipt", data={"business_id": BIZ},
+                  files={"file": PDF}).status_code == 200
+    monkeypatch.setattr(church_checks, "_storage_get", lambda path: None)
+    assert c.get(f"/housing-allowance/entries/{cost['id']}/receipt?business_id={BIZ}").status_code == 503
