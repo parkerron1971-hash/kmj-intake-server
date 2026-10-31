@@ -244,7 +244,7 @@ def test_a_pdf_is_read_by_claude_into_one_part_per_account(monkeypatch):
     assert ck["state"] == "balanced"
     payload, kw = calls[0]
     assert kw["business_id"] == BIZ
-    assert "trailing minus (205.41-)" in payload["system"]                 # Huntington prints overdrawn balances so
+    assert "trailing minus (12.34-)" in payload["system"]                  # how Huntington prints an overdrawn balance
     assert payload["messages"][0]["content"][0]["source"]["media_type"] == "application/pdf"
 
 
@@ -316,9 +316,29 @@ def test_the_check_is_to_the_cent_and_the_printed_totals_must_agree():
     assert bs.check(JULY, **JULY_BALANCES)["state"] == "balanced"
     off = bs.check(JULY, 5000, 2650)
     assert off["state"] == "off" and off["difference"] == -2
-    totals = bs.check(JULY, 5000, 2648, statement_in=3000, statement_out=5300)
+    totals = bs.check(JULY, 5000, 2648, statement_out=5300)             # the other side unprinted: no split to lean on
     assert totals["state"] == "off" and totals["totals_agree"] is False and totals["difference"] == 0
     assert bs.check(JULY, opening=5000)["state"] == "one_balance"
+
+
+def test_a_fee_line_printed_apart_is_not_a_missing_row():
+    """A Huntington summary prints Debits and Total Service Charges on lines of
+    their own (seen live 2026-10-31). The rows take out both and the balance
+    ties to the cent: the printed Debits alone is the bank's split, not a
+    missing row. Made-up figures."""
+    rows = [{"date": "2026-03-02", "description": "DEPOSIT", "amount": 1200},
+            {"date": "2026-03-05", "description": "CHECK 101", "amount": -900},
+            {"date": "2026-03-16", "description": "PC BANKING FEE", "amount": -15},
+            {"date": "2026-03-16", "description": "INTL DEBIT CARD TRANS FEE", "amount": -2.5}]
+    ck = bs.check(rows, 500, 782.5, statement_in=1200, statement_out=900)
+    assert ck["state"] == "balanced" and ck["totals_split"] is True and ck["totals_agree"] is False
+    # Both sides off, or the matching side unprinted, still waits for the owner.
+    assert bs.check(rows, 500, 782.5, statement_in=1100, statement_out=900)["state"] == "off"
+    assert bs.check(rows, 500, 782.5, statement_out=900)["state"] == "off"
+    # A balance that doesn't tie is never saved by the totals.
+    assert bs.check(rows[:-1], 500, 782.5, statement_in=1200, statement_out=900)["state"] == "off"
+    desc = bs.STATEMENT_TOOL["input_schema"]["properties"]["accounts"]["items"]["properties"]["total_withdrawals"]
+    assert "service charges or fees" in desc["description"]
 
 
 def test_the_same_row_gets_the_same_id_and_a_second_one_another():
