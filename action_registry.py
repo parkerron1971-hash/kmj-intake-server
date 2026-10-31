@@ -761,6 +761,8 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
     "set_fund": {**_w("A", "makes a fund for a year, or changes one's name, budget or notes; edited back on the Funds tab"), "chief_only": True},
     "find_fund_payments": {**_r("reads the business's bank transactions of a fund's year that aren't on it, adds them up and lists the repeats; bank rows never leave the app", sensitive=True), "chief_only": True},
     "place_fund_payments": {**_w("A", "places bank transactions the owner confirmed on a fund, all or none; unplace_fund_payments takes exactly that batch back", bulk=True), "chief_only": True},
+    # Kevin, 2026-10-31: the months before the bank feed, from the bank's statements.
+    "bank_history": {**_r("reads which days of the business's bank history the app has: where the feed starts, the statements added before it and the days still missing; bank rows never leave the app", sensitive=True), "chief_only": True},
     "unplace_fund_payments": {**_w("A", "takes placed bank transactions off their fund by id (one place batch, or one row); the bank isn't touched"), "chief_only": True},
     "detach_housing_payments": {**_w("A", "takes back exactly the payments one attach batch tied: the ones it added are removed, the typed-in ones it tied are typed-in again as they were"), "chief_only": True},
     "plan_errand":          _w("A", "creates a cancellable plan only; no browser or purchase runs"),

@@ -258,6 +258,7 @@ from housing_allowance import (handle_housing_allowance_status, handle_set_housi
     handle_attach_housing_payments, handle_detach_housing_payments)
 from funds import (handle_fund_status, handle_set_fund, handle_find_fund_payments, handle_place_fund_payments,
     handle_unplace_fund_payments)
+from bank_statements import handle_bank_history
 from chief_hand_actions import (handle_use_browser_hand, handle_plan_errand,
     handle_approve_errand, handle_stop_errand, handle_errand_status)
 # Contribution statements. Both verbs are SENSITIVE in the registry —
@@ -12179,6 +12180,7 @@ ACTION_HANDLERS = {
     "find_fund_payments":    handle_find_fund_payments,
     "place_fund_payments":   handle_place_fund_payments,
     "unplace_fund_payments": handle_unplace_fund_payments,
+    "bank_history":          handle_bank_history,
     "plan_errand":           handle_plan_errand,
     "approve_errand":        handle_approve_errand,
     "stop_errand":           handle_stop_errand,
