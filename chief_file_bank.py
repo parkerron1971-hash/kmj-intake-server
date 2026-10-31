@@ -132,7 +132,7 @@ GIFTS_TWICE = ("this church records its gifts in Giving, where they already coun
 # How giving reaches a church's bank: a deposit that reads like one of these
 # is never filed as income where gifts are recorded, whatever the item says.
 _GIVING_CHANNEL = re.compile(r"subsplash|tithe|givelify|pushpay|cash ?app|zelle|venmo|paypal|square|stripe|"
-                             r"brch|branch|atm|offering|donat|\bgift", re.I)
+                             r"brch|branch|\batm\b|offering|donat|\bgift", re.I)
 
 
 def looks_like_giving(name: str) -> bool:
