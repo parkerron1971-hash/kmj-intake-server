@@ -193,6 +193,14 @@ def test_an_ofx_download_reads_its_account_period_and_one_balance():
     assert bs.check(part["rows"], part["opening"], part["closing"])["state"] == "one_balance"
 
 
+def test_a_card_payment_is_never_turned_into_money_out():
+    raw = (b"Transaction Date,Description,Amount,Type\n"
+           b"03/01/2026,PAYMENT THANK YOU,500.00,Payment\n"
+           b"03/02/2026,OFFICE DEPOT,82.10,Debit\n")
+    (part,) = bs.parse_csv(raw)
+    assert [r["amount"] for r in part["rows"]] == [500, -82.1]
+
+
 def test_money_as_banks_print_it():
     assert [bs._money(v) for v in ("$1,234.50", "(12.00)", "12.00-", "-12", "12.00 CR", "45.10DR", "", "n/a")] == [
         1234.5, -12, -12, -12, 12, -45.1, None, None]
@@ -237,6 +245,22 @@ def test_a_pdf_is_read_by_claude_into_one_part_per_account(monkeypatch):
     payload, kw = calls[0]
     assert payload["tool_choice"] == {"type": "tool", "name": "statement"} and kw["business_id"] == BIZ
     assert payload["messages"][0]["content"][0]["source"]["media_type"] == "application/pdf"
+
+
+def test_the_scanner_stops_at_the_spend_cap_and_the_hourly_limit(monkeypatch):
+    import rate_limit
+    import spend_guard
+    calls = _fake_claude(monkeypatch, {"accounts": []})
+    monkeypatch.setattr(spend_guard, "over_budget", lambda biz=None: True)
+    with pytest.raises(HTTPException) as e:
+        asyncio.run(bs.read_pdf(BIZ, b"%PDF-1.7"))
+    assert e.value.status_code == 429 and "today's limit" in e.value.detail
+    monkeypatch.setattr(spend_guard, "over_budget", lambda biz=None: False)
+    monkeypatch.setattr(rate_limit, "allow", lambda bucket, key: bucket != "bank_statement_read")
+    with pytest.raises(HTTPException) as e:
+        asyncio.run(bs.read_pdf(BIZ, b"%PDF-1.7"))
+    assert e.value.status_code == 429 and calls == []                     # Claude was never asked
+    assert "bank_statement_read" in rate_limit._LIMITS
 
 
 def test_a_pdf_too_long_to_read_says_so(monkeypatch):
@@ -440,6 +464,19 @@ def test_the_owner_uploads_a_csv_and_adds_it(db):
     assert added.status_code == 200 and added.json()["added"] == 3
     gone = c.delete(f"/bank-statements/{added.json()['import']['id']}", params={"business_id": BIZ})
     assert gone.status_code == 200 and db.t["bank_statement_imports"] == []
+
+
+def test_a_year_that_isnt_one_is_refused(db):
+    assert _client(OWNER).get("/bank-statements", params={"business_id": BIZ, "year": 0}).status_code == 422
+    assert _run(bs.handle_bank_history, {"year": 99999})["failed"]
+
+
+def test_a_restore_leaves_out_the_rows_of_statements_it_doesnt_restore():
+    import inspect
+    import account_lifecycle as al
+    assert "bank_statement_imports" in al._IMPORT_SKIP
+    src = inspect.getsource(al.import_account)
+    assert 'table == "plaid_transactions" and r.get("statement_import_id")' in src
 
 
 def test_off_is_a_404_and_a_failed_read_a_503(db, monkeypatch):

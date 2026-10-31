@@ -268,7 +268,10 @@ _HEADS: Dict[str, Tuple[str, ...]] = {
     "check": ("check number", "check #", "check no.", "check no", "chk #", "check or slip #", "check"),
 }
 _PREFIX_OK = ("date", "amount", "debit", "credit", "balance")
-_DEBIT_WORDS = ("debit", "dr", "withdrawal", "check", "payment", "fee", "dbt")
+# A Type column that says money out, for a file whose amounts are all
+# positive. Whole words only: "payment" is a debit on a checking account and
+# a credit on a card, so it never decides.
+_DEBIT_WORDS = ("debit", "dr", "dbt", "withdrawal", "check", "fee")
 
 
 def _head(h: Any) -> str:
@@ -327,7 +330,7 @@ def parse_csv(raw: bytes) -> List[Dict[str, Any]]:
         if "amount" in cols:
             v = _money(cell(r, "amount"))
             kind = cell(r, "type").strip().lower()
-            if v is not None and v > 0 and kind and any(kind == w or kind.startswith(w) for w in _DEBIT_WORDS):
+            if v is not None and v > 0 and kind in _DEBIT_WORDS:
                 v = -v
         else:
             dv, cv = _money(cell(r, "debit")), _money(cell(r, "credit"))
@@ -468,7 +471,20 @@ async def read_pdf(business_id: str, raw: bytes) -> Tuple[str, List[Dict[str, An
     import model_ladder
     if not llm_call.api_key():
         raise HTTPException(503, "Reading PDF statements isn't set up here. Upload the bank's CSV download instead.")
+    import rate_limit
+    import spend_guard
     raw = await asyncio.to_thread(_pdf_ready, raw)
+    # The paid endpoints' brakes, failing open as they do everywhere.
+    try:
+        capped = await asyncio.to_thread(spend_guard.over_budget, business_id)
+    except Exception:  # noqa: BLE001
+        capped = False
+    if capped:
+        raise HTTPException(429, "Reading PDF statements has reached today's limit. Try again tomorrow, or upload "
+                                 "the bank's CSV download now.")
+    if not rate_limit.allow("bank_statement_read", str(business_id)):
+        raise HTTPException(429, "That's a lot of statements in an hour. Wait a little, or upload the bank's CSV "
+                                 "download instead.")
     await asyncio.to_thread(billing_limits.require_units, business_id)
     payload = {
         "model": _model(), "max_tokens": READ_MAX_TOKENS, "system": _READ_SYSTEM,
@@ -869,7 +885,7 @@ class AddBody(CheckBody):
 
 
 @router.get("")
-def get_statements(business_id: str = Query(...), year: Optional[int] = None,
+def get_statements(business_id: str = Query(...), year: Optional[int] = Query(None, ge=2000, le=2100),
                    user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     row = _gate(business_id, user, write=False)
     data = _guard(coverage, business_id, year)
@@ -966,7 +982,10 @@ def _history_sync(biz: Dict[str, Any], action: Dict[str, Any]) -> Dict[str, Any]
         detail = e.detail.get("message") if isinstance(e.detail, dict) else e.detail
         return _fail(atype, str(detail or "this login can't see the books"))
     try:
-        data = coverage(str(biz["id"]), int(action.get("year") or date.today().year))
+        year = int(action.get("year") or date.today().year)
+        if not 2000 <= year <= 2100:
+            return _fail(atype, "year must be a year")
+        data = coverage(str(biz["id"]), year)
     except (Unavailable, ValueError, TypeError):
         return _fail(atype, "the bank history couldn't be read just now (if this is new, its tables may not be set "
                             "up yet). This is not 'nothing is missing'")

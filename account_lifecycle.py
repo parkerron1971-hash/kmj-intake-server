@@ -1045,6 +1045,11 @@ async def import_account(body: ImportBody,
             for r in src_rows:
                 if not isinstance(r, dict):
                     continue
+                # A row added from a bank statement cites the statement, which
+                # isn't restored (_IMPORT_SKIP): it comes back with it, never
+                # pointing at nothing.
+                if table == "plaid_transactions" and r.get("statement_import_id"):
+                    continue
                 clean = {k: v for k, v in r.items() if k not in _IMPORT_STRIP}
                 clean["business_id"] = new_id
                 payload.append(clean)

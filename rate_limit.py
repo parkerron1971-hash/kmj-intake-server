@@ -34,6 +34,9 @@ _LIMITS: Dict[str, Tuple[int, int]] = {
     "proxy":  (int(os.environ.get("RL_PROXY_PER_MIN", "60")), 60),
     # Interview v3 (B3) — the follow-up probe's per-business hourly budget.
     "interview_probe": (int(os.environ.get("RL_INTERVIEW_PROBE_PER_HOUR", "6")), 3600),
+    # A PDF bank statement read by Claude (bank_statements.py), per business:
+    # a year of monthly statements is twelve; this stops an upload loop.
+    "bank_statement_read": (int(os.environ.get("RL_BANK_STATEMENT_READ_PER_HOUR", "30")), 3600),
     # The agent-facing MCP surface. Tighter than the practitioner buckets
     # and checked with allow_strict() — an external agent that loops is a
     # different problem from a person clicking twice.
