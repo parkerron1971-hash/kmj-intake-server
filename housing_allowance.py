@@ -70,9 +70,9 @@ _SOURCE_ID = re.compile(r"^[A-Za-z0-9_-]{1,120}$")
 _ALLOWANCE_SELECT = ("id,business_id,minister_name,contact_id,employee_id,tax_year,designated_amount,"
                      "designated_on,board_decision_id,fair_rental_value,notes,archived_at,created_at,updated_at")
 _ENTRY_SELECT = "id,allowance_id,kind,entry_date,amount,category,note,source,source_id,created_at"
-# Where Chief's receipts point. Bookkeeping until the app has its own
-# Housing allowance screen (a solutionist-studio PR).
-NAV = {"tab": "operate", "sub": "bookkeeping"}
+# Where Chief's receipts point: Bookkeeping's Housing tab (solutionist-studio
+# #1418). An app without the tab ignores bkTab and opens Bookkeeping.
+NAV = {"tab": "operate", "sub": "bookkeeping", "bkTab": "housing"}
 CARE = ("Figures follow the IRS housing allowance rules (§107); confirm them with your tax "
         "preparer. The allowance is still counted for self-employment tax.")
 

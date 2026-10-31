@@ -17,6 +17,14 @@ Roles (seat-access ladder, same as contractors): any seat reads; adding
 or editing people and drafting runs is manager+; approving or marking a
 run paid is admin; the tax profile (SSN) is the OWNER's act alone.
 
+A minister (2026-10-31): `minister` and `housing_allowance_per_period` on
+the employee, and a line's `housing_allowance`, are the OWNER's to set:
+they change how the pay is taxed. A minister's line owes no Social
+Security, Medicare or FUTA (payroll_calc). When a run is marked paid, each
+line's housing part is logged to that minister's housing allowance record
+for the year (housing_allowance.py, source pay_run); the answer says what
+was logged and what couldn't be.
+
   GET   /payroll/summary?biz=
   GET   /payroll/employees?biz=
   POST  /payroll/employees
@@ -31,6 +39,7 @@ run paid is admin; the tax profile (SSN) is the OWNER's act alone.
   PATCH /payroll/runs/{id}/items/{item_id}      (hours / withholding / deductions → recompute)
   POST  /payroll/runs/{id}/approve              (admin; every item complete)
   POST  /payroll/runs/{id}/mark-paid            (admin; "I paid this from my bank")
+  POST  /payroll/runs/{id}/log-housing          (owner; a paid run's housing parts, again)
   POST  /payroll/runs/{id}/cancel               (draft only)
   GET   /payroll/interest?biz=   POST /payroll/interest?biz=   (unchanged)
 """
@@ -211,6 +220,34 @@ class EmployeeBody(BaseModel):
     work_state: Optional[str] = None
     residence_state: Optional[str] = None
     notes: Optional[str] = None
+    minister: Optional[bool] = None
+    housing_allowance_per_period: Optional[float] = None
+
+
+def _minister_fields(biz_row: Dict[str, Any], user: AuthedUser, body: BaseModel,
+                     current: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """A minister's tax status and housing part, when the body names them.
+    The owner's alone: they decide how the pay is taxed. Only a minister
+    has a housing allowance; turning it off clears the housing part."""
+    given = body.model_dump(exclude_unset=True)
+    if "minister" not in given and "housing_allowance_per_period" not in given:
+        return {}
+    if str(biz_row.get("owner_id")) != str(user.id):
+        raise HTTPException(403, "Only the owner sets a minister's tax status and housing allowance.")
+    out: Dict[str, Any] = {}
+    minister = bool((current or {}).get("minister"))
+    if "minister" in given:
+        minister = bool(given["minister"])
+        out["minister"] = minister
+    if "housing_allowance_per_period" in given:
+        out["housing_allowance_per_period"] = _money(given["housing_allowance_per_period"],
+                                                     "housing_allowance_per_period")
+    if not minister:
+        if out.get("housing_allowance_per_period"):
+            raise HTTPException(400, "Only a minister has a housing allowance. Mark them as a minister first.")
+        if (current or {}).get("housing_allowance_per_period") or "housing_allowance_per_period" in out:
+            out["housing_allowance_per_period"] = None
+    return out
 
 
 def _employee_fields(body: EmployeeBody) -> Dict[str, Any]:
@@ -238,8 +275,9 @@ def _employee_fields(body: EmployeeBody) -> Dict[str, Any]:
 @router.post("/employees")
 def create_employee(body: EmployeeBody,
                     user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
-    _access(body.business_id, user, "manager")
+    biz_row = _access(body.business_id, user, "manager")
     fields = _employee_fields(body)
+    fields.update(_minister_fields(biz_row, user, body))
     res = sb_clients.sb_post_as_service("/employees", {
         "business_id": body.business_id, "status": "active", **fields,
     })
@@ -265,6 +303,8 @@ class EmployeePatch(BaseModel):
     work_state: Optional[str] = None
     residence_state: Optional[str] = None
     notes: Optional[str] = None
+    minister: Optional[bool] = None
+    housing_allowance_per_period: Optional[float] = None
 
 
 @router.patch("/employees/{employee_id}")
@@ -312,6 +352,9 @@ def update_employee(employee_id: str, body: EmployeePatch,
         patch["residence_state"] = _state(body.residence_state)
     if body.notes is not None:
         patch["notes"] = body.notes.strip()[:2000] or None
+    if {"minister", "housing_allowance_per_period"} & body.model_fields_set:
+        biz_row = _access(str(e["business_id"]), user, "manager")
+        patch.update(_minister_fields(biz_row, user, body, e))
     if not patch:
         return {"ok": True, "employee": e}
     patch["updated_at"] = _now_iso()
@@ -494,6 +537,7 @@ def _recompute_item(biz: str, run: Dict[str, Any], item: Dict[str, Any],
         state_withholding=merged.get("state_withholding"),
         other_deductions=float(merged.get("other_deductions") or 0),
         employer_suta=merged.get("employer_suta"),
+        housing_allowance=merged.get("housing_allowance"),
     )
 
 
@@ -560,7 +604,8 @@ def create_run(body: RunBody, user: AuthedUser = Depends(require_user)) -> Dict[
         calc = payroll_calc.compute_item(
             employee=emp, hours=_money(it.hours, "hours") or 0.0,
             overtime_hours=_money(it.overtime_hours, "overtime_hours") or 0.0,
-            ytd_gross_before=ytd, year=year)
+            ytd_gross_before=ytd, year=year,
+            housing_allowance=emp.get("housing_allowance_per_period"))
         r = sb_clients.sb_post_as_service("/pay_run_items", {
             "pay_run_id": run["id"], "business_id": biz, "employee_id": emp["id"], **calc,
         })
@@ -577,16 +622,114 @@ def create_run(body: RunBody, user: AuthedUser = Depends(require_user)) -> Dict[
 
 def _run_detail(run: Dict[str, Any]) -> Dict[str, Any]:
     items = _items_of(run["id"])
-    names: Dict[str, str] = {}
+    emps: Dict[str, Dict[str, Any]] = {}
     if items:
-        emps = sb_clients.sb_get_as_service(
-            f"/employees?business_id=eq.{run['business_id']}&select=id,first_name,last_name,pay_type,pay_rate&limit=1000") or []
-        for e in emps:
-            names[e["id"]] = f"{e.get('first_name', '')} {e.get('last_name', '')}".strip()
+        # select=*: `minister` exists only once its migration is applied.
+        emps = {e["id"]: e for e in sb_clients.sb_get_as_service(
+            f"/employees?business_id=eq.{run['business_id']}&select=*&limit=1000") or []}
     for i in items:
-        i["employee_name"] = names.get(i["employee_id"], "")
+        e = emps.get(i["employee_id"]) or {}
+        i["employee_name"] = _name(e)
+        i["minister"] = bool(e.get("minister"))
     totals = payroll_calc.run_totals(items)
-    return {"ok": True, "run": {**run, "totals": totals}, "items": items}
+    return {"ok": True, "run": {**run, "totals": totals}, "items": items,
+            "housing_notes": _housing_notes(run, items, emps)}
+
+
+# ─── A minister's housing allowance ─────────────────────────────────
+
+def _name(e: Dict[str, Any]) -> str:
+    return f"{e.get('first_name', '')} {e.get('last_name', '')}".strip()
+
+
+def _housing_record(biz: str, year: int, employee: Dict[str, Any]):
+    """The minister's housing allowance record for the year: the one linked
+    to this employee, else the one unlinked record whose name holds theirs
+    ("Pastor Ana Cruz" for Ana Cruz). (record, "") or (None, why)."""
+    import housing_allowance as ha
+    rows = ha.list_allowances(biz, year)
+    linked = [a for a in rows if str(a.get("employee_id") or "") == str(employee.get("id"))]
+    if len(linked) == 1:
+        return linked[0], ""
+    first = str(employee.get("first_name") or "").strip().lower()
+    last = str(employee.get("last_name") or "").strip().lower()
+    named = [a for a in rows if not a.get("employee_id") and first and last
+             and first in a["minister_name"].lower() and last in a["minister_name"].lower()]
+    if len(named) == 1:
+        return named[0], ""
+    who = _name(employee) or "this minister"
+    if len(linked) + len(named) > 1:
+        return None, f"more than one {year} housing allowance could be {who}'s"
+    return None, f"no {year} housing allowance is recorded for {who}"
+
+
+def _housing_notes(run: Dict[str, Any], items: List[Dict[str, Any]],
+                   emps: Dict[str, Dict[str, Any]]) -> List[str]:
+    """A line paying housing allowance with no designation on record: the
+    board designates it before it's paid, or that part is taxable."""
+    paying = [i for i in items if float(i.get("housing_allowance") or 0) > 0]
+    if not paying:
+        return []
+    import housing_allowance as ha
+    biz = str(run["business_id"])
+    year = int(str(run["pay_date"])[:4])
+    notes: List[str] = []
+    for i in paying:
+        try:
+            if not ha.switched_on(biz):
+                return []
+            rec, why = _housing_record(biz, year, emps.get(i["employee_id"]) or {"id": i["employee_id"]})
+        except Exception as e:  # a hint, never a failed run read
+            logger.warning(f"[payroll] housing notes skipped: {e}")
+            return []
+        if not rec:
+            notes.append(f"{why[0].upper()}{why[1:]}. The board designates it before it's paid; "
+                         "without a designation, the housing part is taxable income.")
+    return notes
+
+
+def _log_housing(run: Dict[str, Any], user: AuthedUser) -> Dict[str, List[Dict[str, Any]]]:
+    """Each line's housing part, logged to the minister's housing allowance
+    record as paid (source pay_run, the line's id: a second try counts it
+    once). Says what couldn't be logged and why; never fails the caller."""
+    import housing_allowance as ha
+    out: Dict[str, List[Dict[str, Any]]] = {"logged": [], "not_logged": []}
+    items = [i for i in _items_of(run["id"]) if float(i.get("housing_allowance") or 0) > 0]
+    if not items:
+        return out
+    biz = str(run["business_id"])
+    emps = {e["id"]: e for e in sb_clients.sb_get_as_service(
+        f"/employees?business_id=eq.{biz}&select=*&limit=1000") or []}
+    year = int(str(run["pay_date"])[:4])
+    on = ha.switched_on(biz)
+    for i in items:
+        emp = emps.get(i["employee_id"]) or {"id": i["employee_id"]}
+        line = {"employee_id": i["employee_id"], "name": _name(emp),
+                "amount": round(float(i["housing_allowance"]), 2)}
+        if not on:
+            out["not_logged"].append({**line, "reason": "the housing allowance records aren't switched on here"})
+            continue
+        try:
+            rec, why = _housing_record(biz, year, emp)
+            if not rec:
+                out["not_logged"].append({**line, "reason": why})
+                continue
+            ha.add_entry(biz, str(user.id), rec["id"], {
+                "kind": "paid", "amount": line["amount"], "entry_date": str(run["pay_date"])[:10],
+                "source": "pay_run", "source_id": str(i["id"]),
+                "note": f"Pay run, {str(run['pay_date'])[:10]}"})
+            out["logged"].append(line)
+        except HTTPException as e:
+            if e.status_code == 409:            # already counted: a retry
+                out["logged"].append(line)
+            else:
+                out["not_logged"].append({**line, "reason": str(e.detail)})
+        except ha.Unavailable:
+            out["not_logged"].append({**line, "reason": "the housing allowance records couldn't be read just now"})
+    if out["logged"] or out["not_logged"]:
+        logger.info(f"[payroll] housing run={str(run['id'])[:8]} logged={len(out['logged'])} "
+                    f"not_logged={len(out['not_logged'])}")
+    return out
 
 
 @router.get("/runs/{run_id}")
@@ -601,6 +744,7 @@ class ItemPatch(BaseModel):
     state_withholding: Optional[float] = None
     other_deductions: Optional[float] = None
     employer_suta: Optional[float] = None
+    housing_allowance: Optional[float] = None     # a minister's line; the owner's to set
 
 
 @router.patch("/runs/{run_id}/items/{item_id}")
@@ -625,7 +769,16 @@ def update_item(run_id: str, item_id: str, body: ItemPatch,
         v = getattr(body, k)
         if v is not None:
             overrides[k] = _money(v, k)
+    housing = body.housing_allowance
+    if housing is not None:
+        if not emp_rows[0].get("minister"):
+            raise HTTPException(400, "Only a minister's pay has a housing allowance.")
+        if str(_access(str(run["business_id"]), user, "manager").get("owner_id")) != str(user.id):
+            raise HTTPException(403, "Only the owner sets the housing allowance part of a check.")
+        overrides["housing_allowance"] = _money(housing, "housing_allowance")
     calc = _recompute_item(run["business_id"], run, item, emp_rows[0], **overrides)
+    if housing is not None and overrides["housing_allowance"] > calc["gross"]:
+        raise HTTPException(400, f"The housing part can't be more than the check (${calc['gross']:,.2f}).")
     calc["updated_at"] = _now_iso()
     sb_clients.sb_patch_as_service(f"/pay_run_items?id=eq.{item_id}", calc)
     items = _items_of(run_id)
@@ -696,7 +849,23 @@ def mark_paid(run_id: str, user: AuthedUser = Depends(require_user)) -> Dict[str
     _audit(biz, user, "pay_run_paid",
            f"Marked pay run for {run.get('pay_date')} as paid",
            target_type="pay_run", target_id=run_id)
-    return {"ok": True, "run": {**run, "status": "paid", "paid_at": when, "payout_rail": rail}}
+    try:
+        housing = _log_housing(run, user)
+    except Exception as e:  # the run is paid either way; log-housing can try again
+        logger.warning(f"[payroll] housing log failed run={run_id[:8]}: {e}")
+        housing = {"logged": [], "not_logged": [], "failed": True}
+    return {"ok": True, "run": {**run, "status": "paid", "paid_at": when, "payout_rail": rail},
+            "housing": housing}
+
+
+@router.post("/runs/{run_id}/log-housing")
+def log_housing(run_id: str, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    """Log a paid run's housing parts again: after the designation was
+    recorded, or a read failed. Each line counts once however often it runs."""
+    run = _run(run_id, user, "owner")
+    if run.get("status") != "paid":
+        raise HTTPException(409, "Only a paid run's housing allowance is logged.")
+    return {"ok": True, "housing": _log_housing(run, user)}
 
 
 @router.post("/runs/{run_id}/cancel")
