@@ -19,8 +19,13 @@ run paid is admin; the tax profile (SSN) is the OWNER's act alone.
 
 A minister (2026-10-31): `minister` and `housing_allowance_per_period` on
 the employee, and a line's `housing_allowance`, are the OWNER's to set:
-they change how the pay is taxed. A minister's line owes no Social
-Security, Medicare or FUTA (payroll_calc). When a run is marked paid, each
+they change how the pay is taxed. Only a church may mark someone a
+minister, and only with how they are one (`minister_credential`:
+ordained, licensed or commissioned; the IRS's test for a minister):
+a barbershop that ticked it would stop withholding Social Security and
+owe it with penalties. A minister's line owes no Social Security, Medicare
+or FUTA, and at a church no one's line owes FUTA (payroll_calc, `church=`).
+When a run is marked paid, each
 line's housing part is logged to that minister's housing allowance record
 for the year (housing_allowance.py, source pay_run); the answer says what
 was logged and what couldn't be.
@@ -74,7 +79,7 @@ def _now_iso() -> str:
 
 def _access(biz: str, user: AuthedUser, min_role: str = "viewer") -> Dict[str, Any]:
     rows = sb_clients.sb_get_as_service(
-        f"/businesses?id=eq.{biz}&select=id,name,owner_id,settings&limit=1") or []
+        f"/businesses?id=eq.{biz}&select=id,name,owner_id,settings,type&limit=1") or []
     if not rows:
         raise HTTPException(404, "business not found")
     row = rows[0]
@@ -221,32 +226,67 @@ class EmployeeBody(BaseModel):
     residence_state: Optional[str] = None
     notes: Optional[str] = None
     minister: Optional[bool] = None
+    minister_credential: Optional[str] = None
     housing_allowance_per_period: Optional[float] = None
+
+
+_MINISTER_KEYS = {"minister", "minister_credential", "housing_allowance_per_period"}
+MINISTER_CREDENTIALS = ("ordained", "licensed", "commissioned")
+
+
+def _is_church(biz_row: Optional[Dict[str, Any]]) -> bool:
+    import church_follow_up
+    return church_follow_up.is_church(biz_row or {})
+
+
+def _church_of(biz: str) -> bool:
+    """Whether the business paying is a church; a read that fails is a no
+    (its staff are then taxed like anyone's, the safe side)."""
+    rows = sb_clients.sb_get_as_service(f"/businesses?id=eq.{biz}&select=id,type&limit=1")
+    return isinstance(rows, list) and bool(rows) and _is_church(rows[0])
 
 
 def _minister_fields(biz_row: Dict[str, Any], user: AuthedUser, body: BaseModel,
                      current: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """A minister's tax status and housing part, when the body names them.
-    The owner's alone: they decide how the pay is taxed. Only a minister
-    has a housing allowance; turning it off clears the housing part."""
+    """A minister's tax status, how they're a minister, and housing part,
+    when the body names them. The owner's alone: they decide how the pay
+    is taxed. Only a church has ministers, and each says how they are one.
+    Only a minister has a housing allowance; turning it off clears the
+    housing part and the credential."""
     given = body.model_dump(exclude_unset=True)
-    if "minister" not in given and "housing_allowance_per_period" not in given:
+    if not _MINISTER_KEYS & given.keys():
         return {}
     if str(biz_row.get("owner_id")) != str(user.id):
         raise HTTPException(403, "Only the owner sets a minister's tax status and housing allowance.")
     out: Dict[str, Any] = {}
-    minister = bool((current or {}).get("minister"))
+    cur = current or {}
+    minister = bool(cur.get("minister"))
     if "minister" in given:
         minister = bool(given["minister"])
         out["minister"] = minister
+    if minister and not _is_church(biz_row):
+        raise HTTPException(400, "Only a church can mark someone as a minister. The tax rules that take "
+                                 "Social Security and Medicare off a minister's pay are for a church's ministers.")
+    credential = cur.get("minister_credential")
+    if "minister_credential" in given:
+        credential = (given["minister_credential"] or "").strip().lower() or None
+        if credential and credential not in MINISTER_CREDENTIALS:
+            raise HTTPException(400, "minister_credential must be ordained, licensed or commissioned")
+        out["minister_credential"] = credential
     if "housing_allowance_per_period" in given:
         out["housing_allowance_per_period"] = _money(given["housing_allowance_per_period"],
                                                      "housing_allowance_per_period")
-    if not minister:
-        if out.get("housing_allowance_per_period"):
-            raise HTTPException(400, "Only a minister has a housing allowance. Mark them as a minister first.")
-        if (current or {}).get("housing_allowance_per_period") or "housing_allowance_per_period" in out:
-            out["housing_allowance_per_period"] = None
+    if minister:
+        if credential not in MINISTER_CREDENTIALS:
+            raise HTTPException(400, "Say how they're a minister: ordained, licensed or commissioned. Only a "
+                                     "minister who is one of these, paid for ministry work, is taxed as one.")
+        return out
+    if out.get("housing_allowance_per_period"):
+        raise HTTPException(400, "Only a minister has a housing allowance. Mark them as a minister first.")
+    if cur.get("housing_allowance_per_period") or "housing_allowance_per_period" in out:
+        out["housing_allowance_per_period"] = None
+    if cur.get("minister_credential") or "minister_credential" in out:
+        out["minister_credential"] = None
     return out
 
 
@@ -304,6 +344,7 @@ class EmployeePatch(BaseModel):
     residence_state: Optional[str] = None
     notes: Optional[str] = None
     minister: Optional[bool] = None
+    minister_credential: Optional[str] = None
     housing_allowance_per_period: Optional[float] = None
 
 
@@ -352,7 +393,7 @@ def update_employee(employee_id: str, body: EmployeePatch,
         patch["residence_state"] = _state(body.residence_state)
     if body.notes is not None:
         patch["notes"] = body.notes.strip()[:2000] or None
-    if {"minister", "housing_allowance_per_period"} & body.model_fields_set:
+    if _MINISTER_KEYS & body.model_fields_set:
         biz_row = _access(str(e["business_id"]), user, "manager")
         patch.update(_minister_fields(biz_row, user, body, e))
     if not patch:
@@ -528,6 +569,7 @@ def _recompute_item(biz: str, run: Dict[str, Any], item: Dict[str, Any],
     year = int(str(run["pay_date"])[:4])
     ytd = _ytd_gross_before(biz, employee["id"], year, run["id"])
     merged = {**item, **overrides}
+    church = _church_of(biz)
     calc = payroll_calc.compute_item(
         employee=employee,
         hours=float(merged.get("hours") or 0),
@@ -538,10 +580,11 @@ def _recompute_item(biz: str, run: Dict[str, Any], item: Dict[str, Any],
         other_deductions=float(merged.get("other_deductions") or 0),
         employer_suta=merged.get("employer_suta"),
         housing_allowance=merged.get("housing_allowance"),
+        church=church,
     )
     # No longer a minister: the line's housing part goes with the setting,
     # or it would still be totalled and logged as housing allowance paid.
-    if not employee.get("minister") and float(item.get("housing_allowance") or 0):
+    if not (church and employee.get("minister")) and float(item.get("housing_allowance") or 0):
         calc["housing_allowance"] = 0.0
     return calc
 
@@ -571,7 +614,7 @@ class RunBody(BaseModel):
 @router.post("/runs")
 def create_run(body: RunBody, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     biz = body.business_id
-    _access(biz, user, "manager")
+    church = _is_church(_access(biz, user, "manager"))
     ps = _date(body.period_start, "period_start", required=True)
     pe = _date(body.period_end, "period_end", required=True)
     pd = _date(body.pay_date, "pay_date", required=True)
@@ -610,7 +653,7 @@ def create_run(body: RunBody, user: AuthedUser = Depends(require_user)) -> Dict[
             employee=emp, hours=_money(it.hours, "hours") or 0.0,
             overtime_hours=_money(it.overtime_hours, "overtime_hours") or 0.0,
             ytd_gross_before=ytd, year=year,
-            housing_allowance=emp.get("housing_allowance_per_period"))
+            housing_allowance=emp.get("housing_allowance_per_period"), church=church)
         r = sb_clients.sb_post_as_service("/pay_run_items", {
             "pay_run_id": run["id"], "business_id": biz, "employee_id": emp["id"], **calc,
         })
@@ -788,9 +831,10 @@ def update_item(run_id: str, item_id: str, body: ItemPatch,
             overrides[k] = _money(v, k)
     housing = body.housing_allowance
     if housing is not None:
-        if not emp_rows[0].get("minister"):
+        biz_row = _access(str(run["business_id"]), user, "manager")
+        if not (emp_rows[0].get("minister") and _is_church(biz_row)):
             raise HTTPException(400, "Only a minister's pay has a housing allowance.")
-        if str(_access(str(run["business_id"]), user, "manager").get("owner_id")) != str(user.id):
+        if str(biz_row.get("owner_id")) != str(user.id):
             raise HTTPException(403, "Only the owner sets the housing allowance part of a check.")
         overrides["housing_allowance"] = _money(housing, "housing_allowance")
     calc = _recompute_item(run["business_id"], run, item, emp_rows[0], **overrides)

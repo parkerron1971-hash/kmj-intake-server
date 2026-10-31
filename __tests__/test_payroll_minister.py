@@ -6,6 +6,8 @@ future i want accounted for". Pins:
   * the housing part rides the line (never more than the check); no one
     else's line carries the key, so a run saves before the migration
   * the minister setting and the housing part are the owner's alone
+  * only a church has ministers, each with how they are one (ordained,
+    licensed or commissioned), and a church owes no FUTA on anyone
   * marking a run paid logs each housing part to the minister's housing
     allowance record once, and says what it couldn't log
 """
@@ -27,11 +29,13 @@ import payroll_router as pr
 
 PASTOR = {"id": "emp9", "business_id": "biz1", "first_name": "Ana", "last_name": "Rivera",
           "status": "active", "pay_type": "salary", "pay_rate": 60000.0, "pay_frequency": "monthly",
-          "work_state": "TX", "minister": True, "housing_allowance_per_period": 2000.0}
+          "work_state": "TX", "minister": True, "minister_credential": "ordained",
+          "housing_allowance_per_period": 2000.0}
 
 
 @pytest.fixture
 def church(fake, monkeypatch):
+    fake.rows("businesses")[0]["type"] = "church"
     fake.rows("employees").append(dict(PASTOR))
     fake.rows("business_users").append({"business_id": "biz1", "user_id": "adm",
                                         "role": "admin", "status": "active"})
@@ -74,7 +78,8 @@ def test_a_ministers_pay_owes_no_fica_or_futa():
     t = pc.statutory(5000.0, 0.0, 2026, minister=True)
     assert set(t.values()) == {0.0}
     item = pc.compute_item(employee=PASTOR, hours=0, overtime_hours=0, ytd_gross_before=0, year=2026,
-                           federal_withholding=0.0, state_withholding=0.0, housing_allowance=2000.0)
+                           federal_withholding=0.0, state_withholding=0.0, housing_allowance=2000.0,
+                           church=True)
     assert item["gross"] == 5000.0 and item["housing_allowance"] == 2000.0
     assert item["social_security_employee"] == item["medicare_employee"] == 0.0
     assert item["employer_social_security"] == item["employer_medicare"] == item["employer_futa"] == 0.0
@@ -84,19 +89,20 @@ def test_a_ministers_pay_owes_no_fica_or_futa():
 def test_the_housing_part_is_never_more_than_the_check_and_only_a_ministers():
     hourly_minister = {**PASTOR, "pay_type": "hourly", "pay_rate": 20.0}
     item = pc.compute_item(employee=hourly_minister, hours=10, overtime_hours=0, ytd_gross_before=0,
-                           year=2026, housing_allowance=2000.0)
+                           year=2026, housing_allowance=2000.0, church=True)
     assert item["housing_allowance"] == item["gross"] == 200.0
     # Anyone else: FICA as before, and no housing key (a run saves before the column exists).
     lay = {"pay_type": "salary", "pay_rate": 60000.0, "pay_frequency": "monthly"}
     plain = pc.compute_item(employee=lay, hours=0, overtime_hours=0, ytd_gross_before=0, year=2026,
-                            housing_allowance=2000.0)
+                            housing_allowance=2000.0, church=True)
     assert "housing_allowance" not in plain
     assert plain["social_security_employee"] == 310.0
 
 
 def test_run_totals_carry_the_housing_and_leave_the_minister_out_of_the_941():
     items = [pc.compute_item(employee=PASTOR, hours=0, overtime_hours=0, ytd_gross_before=0, year=2026,
-                             federal_withholding=300.0, state_withholding=0.0, housing_allowance=2000.0)]
+                             federal_withholding=300.0, state_withholding=0.0, housing_allowance=2000.0,
+                             church=True)]
     t = pc.run_totals(items)
     assert t["housing_allowance"] == 2000.0
     assert t["deposits"]["federal_941"] == 300.0    # the income tax they asked to have withheld, alone
@@ -116,9 +122,10 @@ def test_the_minister_setting_is_the_owners_alone(church):
     with pytest.raises(HTTPException) as e:
         pr.create_employee(pr.EmployeeBody(**body, housing_allowance_per_period=500.0), user=_Owner())
     assert e.value.status_code == 400               # a housing allowance needs a minister
-    out = pr.create_employee(pr.EmployeeBody(**body, minister=True, housing_allowance_per_period=500.0),
-                             user=_Owner())
+    out = pr.create_employee(pr.EmployeeBody(**body, minister=True, minister_credential="Licensed",
+                                             housing_allowance_per_period=500.0), user=_Owner())
     assert out["employee"]["minister"] is True and out["employee"]["housing_allowance_per_period"] == 500.0
+    assert out["employee"]["minister_credential"] == "licensed"
 
     with pytest.raises(HTTPException) as e:
         pr.update_employee("emp9", pr.EmployeePatch(housing_allowance_per_period=10.0), user=_Manager())
@@ -127,6 +134,7 @@ def test_the_minister_setting_is_the_owners_alone(church):
     assert pr.update_employee("emp9", pr.EmployeePatch(phone="555"), user=_Manager())["employee"]["minister"]
     off = pr.update_employee("emp9", pr.EmployeePatch(minister=False), user=_Owner())["employee"]
     assert off["minister"] is False and off["housing_allowance_per_period"] is None
+    assert off["minister_credential"] is None
 
 
 def test_a_draft_line_takes_the_housing_part_and_only_the_owner_changes_it(church):
@@ -137,6 +145,7 @@ def test_a_draft_line_takes_the_housing_part_and_only_the_owner_changes_it(churc
     assert line["social_security_employee"] == 0.0 and line["employer_futa"] == 0.0
     lay = next(i for i in out["items"] if i["employee_id"] == "emp2")
     assert lay["social_security_employee"] > 0 and "housing_allowance" not in lay
+    assert lay["employer_futa"] == 0.0                  # a church owes no FUTA on anyone
 
     run_id = out["run"]["id"]
     with pytest.raises(HTTPException) as e:
@@ -257,3 +266,52 @@ def test_no_longer_a_minister_takes_the_housing_part_off_a_draft_line(church):
     assert upd["item"]["housing_allowance"] == 0.0
     assert upd["item"]["social_security_employee"] > 0                  # FICA again
     assert upd["totals"]["housing_allowance"] == 0.0
+
+
+# ─── Only a church, and how they're a minister (2026-10-31) ──────────
+
+def test_only_a_church_can_mark_someone_a_minister(fake):
+    """Fade Lab is a barbershop: ticking "minister" there would stop its
+    Social Security withholding and leave it owing that tax plus penalties."""
+    body = dict(business_id="biz1", first_name="Sam", last_name="Lee", pay_type="salary",
+                pay_rate=40000.0, pay_frequency="monthly")
+    with pytest.raises(HTTPException) as e:
+        pr.create_employee(pr.EmployeeBody(**body, minister=True, minister_credential="ordained"),
+                           user=_Owner())
+    assert e.value.status_code == 400 and "Only a church" in e.value.detail
+    # And a minister flag that is already there counts for nothing outside a church.
+    item = pc.compute_item(employee=PASTOR, hours=0, overtime_hours=0, ytd_gross_before=0, year=2026,
+                           housing_allowance=2000.0)
+    assert item["social_security_employee"] == 310.0 and item["employer_futa"] > 0
+    assert "housing_allowance" not in item
+    # Turning it off is always allowed.
+    fake.rows("employees").append({**PASTOR})
+    off = pr.update_employee("emp9", pr.EmployeePatch(minister=False), user=_Owner())["employee"]
+    assert off["minister"] is False
+
+
+def test_a_minister_says_how_they_are_one(church):
+    body = dict(business_id="biz1", first_name="Sam", last_name="Lee", pay_type="salary",
+                pay_rate=40000.0, pay_frequency="monthly")
+    with pytest.raises(HTTPException) as e:
+        pr.create_employee(pr.EmployeeBody(**body, minister=True), user=_Owner())
+    assert e.value.status_code == 400 and "ordained, licensed or commissioned" in e.value.detail
+    with pytest.raises(HTTPException) as e:
+        pr.create_employee(pr.EmployeeBody(**body, minister=True, minister_credential="pastor"), user=_Owner())
+    assert e.value.status_code == 400
+    with pytest.raises(HTTPException) as e:
+        pr.update_employee("emp9", pr.EmployeePatch(minister_credential=""), user=_Owner())
+    assert e.value.status_code == 400                   # a minister can't drop it
+    with pytest.raises(HTTPException) as e:
+        pr.update_employee("emp9", pr.EmployeePatch(minister_credential="commissioned"), user=_Manager())
+    assert e.value.status_code == 403                   # the owner's alone
+    upd = pr.update_employee("emp9", pr.EmployeePatch(minister_credential="commissioned"), user=_Owner())
+    assert upd["employee"]["minister_credential"] == "commissioned"
+
+
+def test_a_church_owes_no_futa_but_keeps_fica():
+    t = pc.statutory(5000.0, 0.0, 2026, church=True)
+    assert t["employer_futa"] == 0.0
+    assert t["social_security_employee"] == t["employer_social_security"] == 310.0
+    assert t["medicare_employee"] == t["employer_medicare"] == 72.5
+    assert pc.statutory(5000.0, 0.0, 2026)["employer_futa"] == 30.0     # anyone else, as before

@@ -12,7 +12,9 @@ cleanly into two kinds, and this module is honest about which is which.
     * Medicare — 1.45% employee + 1.45% employer, plus the 0.9% additional
       employee tax on wages over $200,000 in the year
     * FUTA — employer 0.6% on the first $7,000 (assumes the full state
-      credit; the 6.0% gross rate applies only in credit-reduction states)
+      credit; the 6.0% gross rate applies only in credit-reduction states).
+      A church owes none on anyone (IRC 3306(c)(8): service for a
+      501(c)(3), which a church is without applying), so `church=` zeroes it
 
   NOT COMPUTED HERE (tables that change every January, across 50 states
   and thousands of localities):
@@ -24,7 +26,9 @@ cleanly into two kinds, and this module is honest about which is which.
   owner types them from the engine's answer. Until one of those fills
   them, the item stays `needs_calculation` and the run cannot be approved.
 
-  A MINISTER (employees.minister, 2026-10-31): pay for ministerial
+  A MINISTER (employees.minister, 2026-10-31), at a church only (a
+  minister flag anywhere else is ignored here and refused in the router):
+  pay for ministerial
   services is not FICA or FUTA wages (IRC 3121(b)(8), 3306(c)(8)), so no
   Social Security, Medicare or FUTA, either half; the minister pays
   self-employment tax on their own. Federal income tax is withheld only
@@ -95,10 +99,11 @@ def gross_for(employee: Dict[str, Any], hours: float, overtime_hours: float = 0.
 # ─── Statutory taxes ────────────────────────────────────────────────
 
 def statutory(gross: float, ytd_gross_before: float, year: int,
-              minister: bool = False) -> Dict[str, float]:
+              minister: bool = False, church: bool = False) -> Dict[str, float]:
     """FICA + FUTA for one check, given wages already paid this year.
     Wage bases are applied against YTD so the cap lands mid-year the way
-    the IRS expects, not per check. A minister's pay owes none of it."""
+    the IRS expects, not per check. A minister's pay owes none of it; a
+    church owes no FUTA on its other staff either (FICA stays)."""
     if minister:
         return {"social_security_employee": 0.0, "medicare_employee": 0.0,
                 "employer_social_security": 0.0, "employer_medicare": 0.0, "employer_futa": 0.0}
@@ -115,7 +120,7 @@ def statutory(gross: float, ytd_gross_before: float, year: int,
     additional = _r((over_after - over_before) * ADDITIONAL_MEDICARE_RATE)
 
     futa_taxable = max(0.0, min(gross, FUTA_WAGE_BASE - ytd))
-    futa = _r(futa_taxable * FUTA_RATE)
+    futa = 0.0 if church else _r(futa_taxable * FUTA_RATE)
 
     return {
         "social_security_employee": ss,
@@ -176,15 +181,17 @@ def compute_item(*, employee: Dict[str, Any], hours: float, overtime_hours: floa
                  state_withholding: Optional[float] = None,
                  other_deductions: float = 0.0,
                  employer_suta: Optional[float] = None,
-                 housing_allowance: Optional[float] = None) -> Dict[str, Any]:
+                 housing_allowance: Optional[float] = None,
+                 church: bool = False) -> Dict[str, Any]:
     """Everything a pay_run_items row needs from the numbers we own.
     FIT/SIT pass through untouched (None = still needed). A minister's
     line also carries its housing part, never more than the check; no one
     else's has the key at all (so a row written before the column exists
-    still saves)."""
+    still saves). `church` is whether the business paying is a church:
+    only there does the minister flag count, and no one's line owes FUTA."""
     gross = gross_for(employee, hours, overtime_hours)
-    minister = bool(employee.get("minister"))
-    tax = statutory(gross, ytd_gross_before, year, minister=minister)
+    minister = church and bool(employee.get("minister"))
+    tax = statutory(gross, ytd_gross_before, year, minister=minister, church=church)
     fit = None if federal_withholding is None else _r(float(federal_withholding))
     sit = None if state_withholding is None else _r(float(state_withholding))
     other = _r(max(0.0, float(other_deductions or 0)))
