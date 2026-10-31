@@ -228,10 +228,13 @@ def _labelled(business_id: str, old_keys: set) -> List[Tuple[str, Dict[str, Any]
     return out
 
 
-def relabel(business_id: str, old_names: List[str], new_name: str, new_bucket: str) -> Tuple[List[Dict[str, Any]], int]:
+def relabel(business_id: str, old_names: List[str], new_name: str,
+            new_bucket: str) -> Tuple[List[Dict[str, Any]], int, int]:
     """Moves every row labelled with one of old_names to new_name under
-    new_bucket. Returns (changes for undo, rows that changed meanwhile)."""
-    changes, moved = [], 0
+    new_bucket. Returns (changes for undo, rows that changed meanwhile, rows
+    whose write failed). A failed write never stops the rest; the caller
+    leaves the category as it was, so asking again moves what's left."""
+    changes, moved, failed = [], 0, 0
     for table, row in _labelled(business_id, {key_of(n) for n in old_names}):
         key, (cat_f, sub_f) = _TABLES[table][0], _TABLES[table][1]
         before = {cat_f: row.get(cat_f), sub_f: row.get(sub_f)}
@@ -240,16 +243,29 @@ def relabel(business_id: str, old_names: List[str], new_name: str, new_bucket: s
             continue
         ok = _patch_row(business_id, table, str(row[key]), before, after)
         if ok is None:
-            raise Unavailable(table)
-        if ok:
+            failed += 1
+        elif ok:
             changes.append({"table": table, "id": str(row[key]), "before": before, "after": after})
         else:
             moved += 1
-    return changes, moved
+    return changes, moved, failed
 
 
 def _fail(atype: str, msg: str) -> Dict[str, Any]:
     return {"type": atype, "result": f"Failed: {msg}", "label": msg[:80], "failed": True, "nav": NAV}
+
+
+def _partial(atype: str, batch: str, changes: List[Dict[str, Any]], failed: int, what: str) -> Dict[str, Any]:
+    """Part of a rename or merge went through: what moved is recorded (one undo
+    takes it back), the category is left as it was, and asking again finishes."""
+    text = (f"Partway through {what}: {len(changes)} rows and rules moved, {failed} didn't save. The category "
+            "is as it was, so ask again to finish; one undo takes back what moved.")
+    out = {"type": atype, "result": text, "label": "🗂 Partly done", "nav": NAV}
+    if changes:
+        out.update(batch_id=batch, changes=changes)
+    else:
+        out.update(failed=True, result="Failed: " + text)
+    return out
 
 
 def _gate(business_id: str, *, write: bool) -> Optional[str]:
@@ -295,12 +311,15 @@ def set_category(business_id: str, action: Dict[str, Any]) -> Dict[str, Any]:
                 return _fail(atype, f"there's no category called '{name_of(action.get('into'))}' to merge into")
             if into["id"] == current["id"]:
                 return _fail(atype, "that's the same category")
-            changes, moved = relabel(business_id, [current["name"]], into["name"], into["bucket"])
+            changes, moved, failed = relabel(business_id, [current["name"]], into["name"], into["bucket"])
+            if failed:
+                return _partial(atype, batch, changes, failed, f"merging {current['name']} into {into['name']}")
             stamp = datetime.now(timezone.utc).isoformat()
-            if not _patch_row(business_id, "expense_categories", current["id"], {"archived_at": None}, {"archived_at": stamp}):
-                raise Unavailable("expense_categories")
-            changes.append({"table": "expense_categories", "id": current["id"], "before": {"archived_at": None},
-                            "after": {"archived_at": stamp}})
+            if _patch_row(business_id, "expense_categories", current["id"], {"archived_at": None}, {"archived_at": stamp}):
+                changes.append({"table": "expense_categories", "id": current["id"], "before": {"archived_at": None},
+                                "after": {"archived_at": stamp}})
+            else:
+                return _partial(atype, batch, changes, 1, f"merging {current['name']} into {into['name']}")
             text = (f"Merged {current['name']} into {into['name']}: {sum(1 for c in changes if c['table'] != 'expense_categories')} "
                     f"rows and rules now say {into['name']}, under {BUCKET_SAID[into['bucket']]}.")
         elif current:
@@ -315,11 +334,14 @@ def set_category(business_id: str, action: Dict[str, Any]) -> Dict[str, Any]:
                 return _fail(atype, f"{clash['name']} already exists; merge into it instead")
             body = {"name": new, "bucket": bucket}
             before = {"name": current["name"], "bucket": current["bucket"]}
+            # The rows first, the category last: if a write fails, the old
+            # name still stands, so asking again moves what's left.
+            moved_rows, moved, failed = relabel(business_id, [current["name"]], new, bucket)
+            if failed:
+                return _partial(atype, batch, moved_rows, failed, f"renaming {current['name']} to {new}")
             if not _patch_row(business_id, "expense_categories", current["id"], before, body):
-                raise Unavailable("expense_categories")
-            changes = [{"table": "expense_categories", "id": current["id"], "before": before, "after": body}]
-            moved_rows, moved = relabel(business_id, [current["name"]], new, bucket)
-            changes += moved_rows
+                return _partial(atype, batch, moved_rows, 1, f"renaming {current['name']} to {new}")
+            changes = moved_rows + [{"table": "expense_categories", "id": current["id"], "before": before, "after": body}]
             text = (f"{current['name']} is now {new} under {BUCKET_SAID[bucket]}: {len(moved_rows)} rows and rules "
                     "moved with it.")
         else:
@@ -440,12 +462,17 @@ def remember(business_id: str, action: Dict[str, Any]) -> Dict[str, Any]:
             "changes": [change], "nav": NAV}
 
 
-def rule_for(rule_map: Dict[str, Dict[str, Any]], merchant: Any, name: Any) -> Optional[Dict[str, Any]]:
-    """The bank feed's and statements' rule lookup: Plaid's merchant name, then
-    the payee's wording (Chief's rules are kept by payee key)."""
+def rule_for(rule_map: Dict[str, Dict[str, Any]], merchant: Any, name: Any,
+             money_out: bool = True) -> Optional[Dict[str, Any]]:
+    """The bank feed's and statements' rule lookup: Plaid's merchant name (as
+    it always matched, either way), then, for money out only, the payee's
+    wording (Chief's rules are kept by payee key): a refund from a payee is
+    never filed as its spending."""
     import bank_picks
-    for k in (str(merchant or "").strip().lower(), bank_picks.payee_key(str(merchant or "")),
-              bank_picks.payee_key(str(name or ""))):
+    hit = rule_map.get(str(merchant or "").strip().lower())
+    if hit or not money_out:
+        return hit
+    for k in (bank_picks.payee_key(str(merchant or "")), bank_picks.payee_key(str(name or ""))):
         if k and rule_map.get(k):
             return rule_map[k]
     return None

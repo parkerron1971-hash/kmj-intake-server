@@ -752,15 +752,16 @@ def add(business_id: str, user_id: Any, body: Dict[str, Any]) -> Dict[str, Any]:
     # The every-time rules file a statement's spending as they do the feed's
     # (expense_categories.rule_for); best-effort, never a reason to stop.
     rule_map: Dict[str, Dict[str, Any]] = {}
-    try:
-        for r in sb_clients.sb_get_as_service(
-                f"/category_rules?business_id=eq.{_q(business_id)}"
-                "&select=merchant_name,business_category,business_subcategory&limit=2000") or []:
-            k = str(r.get("merchant_name") or "").strip().lower()
-            if k:
-                rule_map[k] = {"cat": r.get("business_category"), "sub": r.get("business_subcategory")}
-    except Exception as e:
-        logger.warning("bank statements: rules unread: %s", e)
+    rule_rows = sb_clients.sb_get_as_service(
+        f"/category_rules?business_id=eq.{_q(business_id)}"
+        "&select=merchant_name,business_category,business_subcategory&limit=2000")
+    rules_read = isinstance(rule_rows, list)
+    if not rules_read:
+        print(f"[bank_statements] rules unread for {business_id}: rows added unfiled", flush=True)
+    for r in rule_rows or []:
+        k = str(r.get("merchant_name") or "").strip().lower()
+        if k:
+            rule_map[k] = {"cat": r.get("business_category"), "sub": r.get("business_subcategory")}
     import expense_categories
 
     def filed(s: Dict[str, Any]) -> Dict[str, Any]:
@@ -789,7 +790,7 @@ def add(business_id: str, user_id: Any, body: Dict[str, Any]) -> Dict[str, Any]:
     except Exception as e:
         logger.warning("bank statements: payout matching after an add failed: %s", e)
     return {"import": {**imp, "rows_added": added}, "added": added, "check": ck, "counts": seen["counts"],
-            "account": acct}
+            "account": acct, "rules_applied": rules_read}
 
 
 def _drop(business_id: str, import_id: str) -> bool:

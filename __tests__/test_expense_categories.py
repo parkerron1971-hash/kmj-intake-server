@@ -255,6 +255,55 @@ def test_a_rule_files_a_statements_spending_as_it_arrives(db, monkeypatch):
     assert rows["SOMETHING ELSE"]["business_category"] == "other"
 
 
+def test_a_rename_that_fails_partway_records_what_moved_and_finishes_on_asking_again(db, monkeypatch):
+    ec.create(BIZ, OWNER, "Office supplies", "operating")
+    real = ec._patch_row
+    calls = {"n": 0}
+
+    def flaky(business_id, table, rid, guard, body):
+        if table == "plaid_transactions":
+            calls["n"] += 1
+            if calls["n"] == 2:
+                return None                                    # one write fails
+        return real(business_id, table, rid, guard, body)
+    monkeypatch.setattr(ec, "_patch_row", flaky)
+    got = _run(ec.handle_set_expense_category, {"category": "Office supplies", "name": "Ministry supplies"})
+    assert not got.get("failed") and "Partway through" in got["result"] and got["changes"]
+    assert db.t["expense_categories"][0]["name"] == "Office supplies"          # the old name stands
+    again = _run(ec.handle_set_expense_category, {"category": "Office supplies", "name": "Ministry supplies"})
+    assert not again.get("failed") and db.t["expense_categories"][0]["name"] == "Ministry supplies"
+    assert {_row(db, t)["business_subcategory"] for t in ("p3", "p4")} == {"Ministry supplies"}
+
+
+def test_a_refund_from_a_remembered_payee_is_never_filed_as_its_spending():
+    rule_map = {"city water dept": {"cat": "operating", "sub": "Utilities"}}
+    assert ec.rule_for(rule_map, None, "CITY WATER DEPT REFUND", money_out=False) is None
+    assert ec.rule_for(rule_map, None, "CITY WATER DEPT 0407", money_out=True)
+    refund = SimpleNamespace(transaction_id="n2", account_id="acc", amount=-20.0, iso_currency_code="USD",
+                             date="2026-04-09", authorized_date=None, datetime=None, name="CITY WATER DEPT REFUND",
+                             merchant_name=None, personal_finance_category=None, pending=False)
+    assert plaid_router._tx_payload(refund, BIZ, rule_map)["business_subcategory"] is None
+
+
+def test_the_routes_let_readers_read_and_only_the_owner_add(db):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from auth_supabase import AuthedUser, require_user
+
+    def client(uid):
+        app = FastAPI()
+        app.include_router(ec.router)
+        app.dependency_overrides[require_user] = lambda: AuthedUser(id=uid, email="x@y.z", role="authenticated")
+        return TestClient(app)
+    got = client(READER).get("/expense-categories", params={"business_id": BIZ, "year": Y})
+    assert got.status_code == 200 and got.json()["can_change"] is False
+    assert client(READER).post("/expense-categories", json={"business_id": BIZ, "name": "X"}).status_code == 403
+    made = client(OWNER).post("/expense-categories", json={"business_id": BIZ, "name": "Benevolence"})
+    assert made.status_code == 200 and made.json()["made"] is True
+    assert client("00000000-0000-4000-8000-000000000009").get("/expense-categories",
+                                                               params={"business_id": BIZ}).status_code == 403
+
+
 # ─── Who may, and the wiring ─────────────────────────────────────────
 
 def test_readers_read_and_only_the_owner_changes(db):
