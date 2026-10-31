@@ -27,6 +27,10 @@ def store(monkeypatch):
     def forbidden(*a, **k):
         pytest.fail('Blocked financial action reached an external provider')
     monkeypatch.setattr(checkout.httpx, 'AsyncClient', forbidden)
+    # The contractor case is the platform owner's own business, so the
+    # financial policy (not the platform-money lock) is what stops it.
+    import member_asks
+    monkeypatch.setattr(member_asks, 'platform_church', lambda biz: True)
     return state
 
 

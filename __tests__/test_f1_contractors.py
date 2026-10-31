@@ -42,6 +42,11 @@ def fake(monkeypatch):
         "id": "con1", "business_id": "biz1", "name": "Jane Dev", "email": "jane@x.com",
         "stripe_account_id": "acct_jane", "onboarding_status": "active",
         "is_1099_eligible": True, "default_category": "operating", "onboarded_at": "2026-01-01"})
+    # biz1 is the platform owner's own business; a test takes it out to
+    # play another business.
+    fb.platform = {"biz1"}
+    import member_asks
+    monkeypatch.setattr(member_asks, "platform_church", lambda biz: str(biz) in fb.platform)
     return fb
 
 
@@ -126,3 +131,54 @@ def test_1099_summary_aggregates_and_thresholds(fake, stripe_ok):
     assert bob["total_paid"] == 200.0 and bob["reaches_threshold"] is False
     assert bob["stripe_managed"] is False
     assert out["total_paid"] == 900.0 and out["threshold_count"] == 1
+
+
+# ─── Locked to the platform owner's businesses (2026-10-31) ──────────
+
+def test_another_business_cannot_pay_from_the_platform_balance(fake, stripe_ok):
+    import asyncio
+    from fastapi import HTTPException
+    fake.platform.clear()
+    with pytest.raises(HTTPException) as e:
+        asyncio.run(cr.pay("con1", cr.PayBody(business_id="biz1", amount=300), request=_request(), user=_U()))
+    assert e.value.status_code == 403
+    assert "own bank" in e.value.detail
+    assert stripe_ok == []                              # Stripe never called
+    assert fake.rows("outbound_transfers") == []        # nothing recorded
+    assert fake.rows("bills") == []
+
+
+def test_another_business_cannot_open_a_payout_account(fake, stripe_ok):
+    import asyncio
+    from fastapi import HTTPException
+    fake.platform.clear()
+    fake.rows("contractors")[0].update(stripe_account_id=None, onboarding_status="none")
+    with pytest.raises(HTTPException) as e:
+        asyncio.run(cr.onboarding_link("con1", user=_U()))
+    assert e.value.status_code == 403
+    assert stripe_ok == []
+    assert fake.rows("contractors")[0]["stripe_account_id"] is None
+
+
+@pytest.mark.parametrize("path", ["/transfers", "/accounts"])
+def test_stripe_post_refuses_platform_money_for_another_business(fake, monkeypatch, path):
+    """The last check before Stripe: even a new caller that forgot the
+    route check can't spend the platform balance for someone else."""
+    import asyncio
+    from fastapi import HTTPException
+
+    def _no_network(*a, **k):
+        pytest.fail("reached Stripe")
+    monkeypatch.setattr(cr.httpx, "AsyncClient", _no_network)
+    with pytest.raises(HTTPException) as e:
+        asyncio.run(cr._stripe_post(path, {"metadata[business_id]": "someone-else"}))
+    assert e.value.status_code == 403
+    with pytest.raises(HTTPException) as e:
+        asyncio.run(cr._stripe_post(path, {}))           # no business named: a no
+    assert e.value.status_code == 403
+
+
+def test_contractor_records_stay_open_to_every_business(fake):
+    fake.platform.clear()
+    out = cr.list_contractors("biz1", user=_U())
+    assert out["ok"] and out["contractors"][0]["id"] == "con1"
