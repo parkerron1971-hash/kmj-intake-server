@@ -91,7 +91,7 @@ CHECKS = ("balanced", "off", "one_balance", "no_balances")
 
 # Where Chief's receipts point: Bookkeeping, Transactions, Statements. An app
 # without the view opens the Transactions room.
-NAV = {"tab": "operate", "sub": "bookkeeping", "bkTab": "transactions", "txView": "statements"}
+NAV = {"tab": "operate", "sub": "bookkeeping", "bkTab": "transactions", "bkView": "statements"}
 
 _IMPORT_SELECT = ("id,account_id,file_name,kind,period_start,period_end,opening_balance,closing_balance,"
                   "money_in,money_out,check_state,check_difference,rows_read,rows_added,feed_rows,"

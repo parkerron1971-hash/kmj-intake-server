@@ -497,7 +497,7 @@ def test_chief_names_the_feed_the_statements_and_whats_missing(db):
     assert "Business Checking ending 4417: the bank feed starts Jul 17, 2026." in text
     assert "Feb 1, 2026 to Feb 28, 2026 (2 rows, adds up)" in text
     assert "Still missing from 2026: Jan 1, 2026 to Jan 31, 2026; Apr 1, 2026 to Jul 16, 2026." in text
-    assert got["nav"]["txView"] == "statements"
+    assert got["nav"]["bkView"] == "statements"
 
 
 def test_chief_never_reads_the_bank_history_for_a_stranger(db):
