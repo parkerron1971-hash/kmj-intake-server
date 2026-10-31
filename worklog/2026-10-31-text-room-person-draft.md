@@ -4,7 +4,7 @@ date: 2026-10-31
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-10-31, on the two Text pieces still not built: "yes. work on those as well" (earlier: "On as they ship")'
 status: in review
-prs: [kmj-intake-server (this PR)]
+prs: [kmj-intake-server#1659]
 migrations: []
 left_undone:
   - "The frontend for both endpoints is a separate solutionist-studio PR"
