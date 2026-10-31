@@ -24,4 +24,4 @@ related: [2026-10-31-housing-from-the-bank.md]
 `funds.py` (figures, describe, find_bank, place, unplace, report_csv,
 summary, the routes, the Chief verbs), `bank_picks.py`; migration
 `supabase/APPLY-2026-10-31-funds-for-the-year.sql`. Tests:
-`__tests__/test_funds.py` (17).
+`__tests__/test_funds.py` (20).

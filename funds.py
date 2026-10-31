@@ -11,7 +11,9 @@ then "build that", wanting it "exactly based on transaction".
     PLACED ........ a bank transaction on a fund: all of it, or a part (the
                     housing part of a paycheck). Money out or in is the bank
                     row's own sign, kept with it. What all funds hold of one
-                    row never adds up past the row, and a row is on a fund once
+                    row never adds up past the row (checked, then written:
+                    best-effort against two placements at the same instant;
+                    only the owner places), and a row is on a fund once
     the FIGURES ... paid out, money in, what's left of the budget (budget less
                     paid out; over it, by how much), the balance (in less
                     out). The server adds up; the screen and Chief quote it
@@ -103,6 +105,14 @@ def _get(path: str) -> List[Dict[str, Any]]:
     return rows
 
 
+def _all(path: str) -> List[Dict[str, Any]]:
+    """A read that can pass 1,000 rows, paged; past the cap, unread."""
+    try:
+        return bank_picks.read_all(path, _get)
+    except bank_picks.TooMany as e:
+        raise Unavailable(str(e))
+
+
 def _gate(business_id: str, user: Any, *, write: bool) -> Dict[str, Any]:
     """The Transactions screen's own gates; 404 switched off."""
     if not business_id or not _UUID.match(str(business_id)):
@@ -138,8 +148,8 @@ def get_fund(business_id: str, fund_id: str) -> Dict[str, Any]:
 def items_for(business_id: str, fund_ids: List[str]) -> List[Dict[str, Any]]:
     if not fund_ids:
         return []
-    return _get(f"/business_fund_items?business_id=eq.{_q(business_id)}&fund_id={_in(fund_ids)}"
-                f"&select={_ITEM_SELECT}&order=entry_date.asc,created_at.asc&limit=10000")
+    return _all(f"/business_fund_items?business_id=eq.{_q(business_id)}&fund_id={_in(fund_ids)}"
+                f"&select={_ITEM_SELECT}&order=entry_date.asc,created_at.asc,id.asc")
 
 
 # ─── The figures (pure) ───────────────────────────────────────────────
@@ -241,45 +251,52 @@ def update_fund(business_id: str, fund_id: str, body: Dict[str, Any]) -> Dict[st
 
 def archive_fund(business_id: str, fund_id: str) -> None:
     """Removed from the year; its placements go with it (the bank rows are
-    untouched, and free to place again)."""
+    untouched, and free to place again). Archived first: placements left
+    behind by a failed delete belong to no live fund, so they hold nothing."""
     get_fund(business_id, fund_id)
-    if not sb_clients.sb_delete_as_service(
-            f"/business_fund_items?business_id=eq.{_q(business_id)}&fund_id=eq.{_q(fund_id)}"):
-        raise HTTPException(503, "That didn't remove. Try again.")
     res = sb_clients.sb_patch_as_service(
         f"/business_funds?id=eq.{_q(fund_id)}&business_id=eq.{_q(business_id)}",
         {"archived_at": datetime.now(timezone.utc).isoformat()})
     if not res:
         raise HTTPException(503, "That didn't remove. Try again.")
+    if not sb_clients.sb_delete_as_service(
+            f"/business_fund_items?business_id=eq.{_q(business_id)}&fund_id=eq.{_q(fund_id)}"):
+        logger.warning("funds: archived %s but its placements stay (they hold nothing)", fund_id)
 
 
 # ─── The bank ─────────────────────────────────────────────────────────
 
 def _used(business_id: str) -> Dict[str, Dict[str, Any]]:
-    """Per bank row: how much all funds hold, and which funds."""
+    """Per bank row: how much the live funds hold, and which. A removed
+    fund's placements are deleted with it; any left behind hold nothing.
+    Checked here, then written: two placements at the very same moment could
+    both pass, so it is best-effort against that (only the owner places)."""
+    live = {str(f["id"]) for f in _get(f"/business_funds?business_id=eq.{_q(business_id)}&archived_at=is.null"
+                                       "&select=id&limit=1000")}
     out: Dict[str, Dict[str, Any]] = {}
-    for i in _get(f"/business_fund_items?business_id=eq.{_q(business_id)}"
-                  "&select=fund_id,transaction_id,amount&limit=20000"):
+    for i in _all(f"/business_fund_items?business_id=eq.{_q(business_id)}"
+                  "&select=fund_id,transaction_id,amount&order=id.asc"):
+        if str(i.get("fund_id")) not in live:
+            continue
         u = out.setdefault(str(i.get("transaction_id")), {"amount": 0.0, "funds": set()})
         u["amount"] = round(u["amount"] + _num(i.get("amount")), 2)
         u["funds"].add(str(i.get("fund_id")))
     return out
 
 
-def _housing_rows(business_id: str) -> Dict[str, str]:
+def _housing_rows(business_id: str) -> Optional[Dict[str, str]]:
     """Bank rows tied to a housing allowance, with whose: the owner's to see.
-    No housing records (switched off, not set up) is no tags, never a failure."""
+    None when they couldn't be read (never "none are housing"); a business
+    with no housing records has none."""
     try:
-        rows = sb_clients.sb_get_as_service(
-            f"/minister_housing_entries?business_id=eq.{_q(business_id)}&source=eq.bank"
-            "&select=source_id,allowance_id&limit=10000")
+        rows = _all(f"/minister_housing_entries?business_id=eq.{_q(business_id)}&source=eq.bank"
+                    "&select=source_id,allowance_id&order=id.asc")
         if not rows:
             return {}
-        names = {str(a["id"]): a.get("minister_name") or "the minister" for a in (sb_clients.sb_get_as_service(
-            f"/minister_housing_allowances?business_id=eq.{_q(business_id)}&select=id,minister_name&limit=500")
-            or [])}
-    except Exception:
-        return {}
+        names = {str(a["id"]): a.get("minister_name") or "the minister" for a in _get(
+            f"/minister_housing_allowances?business_id=eq.{_q(business_id)}&select=id,minister_name&limit=1000")}
+    except Unavailable:
+        return None
     return {str(r["source_id"]): names.get(str(r.get("allowance_id")), "the minister") for r in rows
             if r.get("source_id")}
 
@@ -299,6 +316,10 @@ def find_bank(business_id: str, fund_id: str, *, words: Optional[List[str]] = No
     accts = bank_picks.accounts(business_id, _get)
     used = _used(business_id)
     housing = _housing_rows(business_id) if housing_view else {}
+    if housing is None:
+        if housing_only:
+            raise Unavailable("the housing allowance's payments couldn't be read")
+        housing = {}       # no tags this time; the rows are all still here
     names = {str(f["id"]): f["name"] for f in list_funds(business_id, year)}
     words = [w for w in (" ".join(str(x).split()).lower() for x in (words or [])) if w][:6]
     rows: List[Dict[str, Any]] = []

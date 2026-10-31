@@ -15,6 +15,9 @@ allowance's payments (housing_allowance.py) and the funds for the year
     repeats .......... rows of the same amount and the same payee (the
                        description without its reference numbers): a regular
                        transfer, offered first
+    read_all ......... any read that can pass 1,000 rows, paged: PostgREST
+                       answers at most that many whatever the limit asks,
+                       so one big limit quietly reads a part
 
 Each caller passes its own `get`, which raises that module's Unavailable on
 a failed read, so a failure there is never "no rows".
@@ -67,22 +70,27 @@ def history_starts(business_id: str, accts: List[str], get: Get) -> Optional[str
     return str(rows[0].get("date") or "")[:10] or None
 
 
+def read_all(path: str, get: Get, cap: int = CAP) -> List[Dict[str, Any]]:
+    """Every row of a read, a page at a time (an empty page proves the end);
+    past the cap a failure. `path` names a stable order and no limit."""
+    rows: List[Dict[str, Any]] = []
+    while True:
+        page = get(f"{path}&limit={PAGE}" + (f"&offset={len(rows)}" if rows else ""))
+        if not page:
+            return rows
+        rows.extend(page)
+        if len(rows) > cap:
+            raise TooMany(f"more than {cap:,} rows")
+
+
 def year_rows(business_id: str, accts: List[str], year: int, get: Get,
               direction: str = "out") -> List[Dict[str, Any]]:
     if not accts:
         return []
     sign = {"out": "&amount=gt.0", "in": "&amount=lt.0"}.get(direction, "")
-    base = (f"/plaid_transactions?business_id=eq.{q(business_id)}&account_id={in_(accts)}"
-            f"&date=gte.{year}-01-01&date=lte.{year}-12-31{sign}&pending=eq.false"
-            f"&select={SELECT}&order=date.asc,transaction_id.asc")
-    rows: List[Dict[str, Any]] = []
-    while True:
-        page = get(f"{base}&limit={PAGE}" + (f"&offset={len(rows)}" if rows else ""))
-        if not page:
-            return rows
-        rows.extend(page)
-        if len(rows) > CAP:
-            raise TooMany(f"more than {CAP:,} bank rows")
+    return read_all(f"/plaid_transactions?business_id=eq.{q(business_id)}&account_id={in_(accts)}"
+                    f"&date=gte.{year}-01-01&date=lte.{year}-12-31{sign}&pending=eq.false"
+                    f"&select={SELECT}&order=date.asc,transaction_id.asc", get)
 
 
 def words(t: Dict[str, Any]) -> str:

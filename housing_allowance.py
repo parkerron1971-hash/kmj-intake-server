@@ -519,10 +519,19 @@ def list_allowances(business_id: str, year: Optional[int] = None) -> List[Dict[s
     return _get(path)
 
 
+def _all(path: str) -> List[Dict[str, Any]]:
+    """A read that can pass 1,000 rows (PostgREST's most a read), paged."""
+    import bank_picks
+    try:
+        return bank_picks.read_all(path, _get)
+    except bank_picks.TooMany as e:
+        raise Unavailable(str(e))
+
+
 def entries_for(business_id: str, allowance_id: str) -> List[Dict[str, Any]]:
-    return _get(f"/minister_housing_entries?business_id=eq.{_q(business_id)}"
+    return _all(f"/minister_housing_entries?business_id=eq.{_q(business_id)}"
                 f"&allowance_id=eq.{_q(allowance_id)}&select={_ENTRY_SELECT}"
-                f"&order=entry_date.asc,created_at.asc&limit=5000")
+                f"&order=entry_date.asc,created_at.asc,id.asc")
 
 
 def get_allowance(business_id: str, allowance_id: str) -> Dict[str, Any]:
@@ -826,8 +835,8 @@ def _bank_used(business_id: str, allowance_id: str) -> Tuple[Dict[str, float], s
     business), and the rows this allowance already has."""
     used: Dict[str, float] = {}
     mine: set = set()
-    for e in _get(f"/minister_housing_entries?business_id=eq.{_q(business_id)}&source=eq.bank"
-                  "&select=allowance_id,source_id,amount&limit=10000"):
+    for e in _all(f"/minister_housing_entries?business_id=eq.{_q(business_id)}&source=eq.bank"
+                  "&select=allowance_id,source_id,amount&order=id.asc"):
         sid = str(e.get("source_id") or "")
         used[sid] = round(used.get(sid, 0.0) + _num(e.get("amount")), 2)
         if str(e.get("allowance_id")) == str(allowance_id):

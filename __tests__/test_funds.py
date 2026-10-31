@@ -308,3 +308,53 @@ def test_the_fund_verbs_are_placed():
     names = {t["name"] for t in ctl.read_tool_definitions()}
     assert {"fund_status", "find_fund_payments"} <= names
     assert action_inverse.can_undo("place_fund_payments")
+
+
+# ─── From the review on #1662 ────────────────────────────────────────
+
+def _paged(db, page):
+    """The fake answering like PostgREST: at most `page` rows a read, with
+    offset honoured, whatever the limit asks."""
+    import re as _re
+
+    def get(path, **kw):
+        m = _re.search(r"&offset=(\d+)", path)
+        off = int(m.group(1)) if m else 0
+        bare = _re.sub(r"&offset=\d+", "", _re.sub(r"&limit=\d+", "", path))
+        return db.get(bare)[off:off + page]
+    return get
+
+
+def test_more_placements_than_one_read_are_all_counted(db, monkeypatch):
+    import bank_picks
+    for n, tid in enumerate(("tx_jul", "tx_aug", "tx_sep", "tx_roof", "tx_first")):
+        db.t["business_fund_items"].append({"id": f"i{n}", "business_id": BIZ, "fund_id": STAFF, "transaction_id": tid,
+                                            "amount": 12 if tid == "tx_first" else (8000 if tid == "tx_roof" else 2500),
+                                            "direction": "out", "entry_date": "2026-08-01", "note": "",
+                                            "created_at": f"2026-08-01T00:0{n}:00Z"})
+    monkeypatch.setattr(bank_picks, "PAGE", 2)
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", _paged(db, 2))
+    assert len(funds._used(BIZ)) == 5
+    assert funds.figures(funds.get_fund(BIZ, STAFF), funds.items_for(BIZ, [STAFF]))["paid_out"] == 15512
+    with pytest.raises(HTTPException) as again:
+        funds.place(BIZ, OWNER, BUILDING, [{"transaction_id": "tx_roof"}])     # the 5th row read, all of it used
+    assert again.value.status_code == 409
+
+
+def test_a_failed_housing_read_is_never_none_are_housing(db, monkeypatch):
+    real = sb_clients.sb_get_as_service
+    monkeypatch.setattr(sb_clients, "sb_get_as_service",
+                        lambda path, **kw: None if path.startswith("/minister_housing") else real(path, **kw))
+    with pytest.raises(funds.Unavailable):
+        funds.find_bank(BIZ, STAFF, housing_view=True, housing_only=True)
+    got = funds.find_bank(BIZ, STAFF, housing_view=True)      # the rows still come, untagged
+    assert got["count"] == 6 and got["housing"] == []
+
+
+def test_a_fund_is_archived_before_its_placements_go(db, monkeypatch):
+    funds.place(BIZ, OWNER, STAFF, [{"transaction_id": "tx_jul"}])
+    monkeypatch.setattr(sb_clients, "sb_delete_as_service", lambda path, **kw: False)
+    funds.archive_fund(BIZ, STAFF)                             # the delete failed; the fund is gone all the same
+    assert next(f for f in db.t["business_funds"] if f["id"] == STAFF)["archived_at"]
+    assert len(db.t["business_fund_items"]) == 1               # left behind...
+    assert "tx_jul" in {r["transaction_id"] for r in funds.find_bank(BIZ, BUILDING)["rows"]}   # ...holding nothing
