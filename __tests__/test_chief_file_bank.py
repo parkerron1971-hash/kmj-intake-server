@@ -228,6 +228,39 @@ def test_a_failed_read_files_nothing(db, monkeypatch):
     assert got["failed"] and "nothing was filed" in got["result"]
 
 
+# ─── A church that records its gifts ─────────────────────────────────
+
+def _records_gifts(db):
+    db.t["invoices"] = [{"id": "g1", "business_id": BIZ, "is_gift": True, "status": "paid",
+                         "paid_at": "2099-01-04T12:00:00Z", "payment_method": "cash", "total": 650}]
+
+
+def test_a_giving_deposit_is_never_filed_as_income_where_gifts_are_recorded(db):
+    """Love City records its Sunday gifts by person (cash, check, Subsplash,
+    Cash App); each is income in the books already, so the bank deposit of
+    that money filed as income would count it twice (Kevin, 2026-10-31)."""
+    _records_gifts(db)
+    seen = _run(cf.handle_bank_to_file, {})
+    assert seen["gifts_recorded"] is True and "count them twice" in seen["result"]
+    assert "IMPORTANT" in seen["note_for_chief"]
+    got = _run(cf.handle_file_bank_rows, {"items": [
+        {"payee": "tithely payout", "answer": "income", "label": "Giving"},
+        {"payee": "overdraft fee", "answer": "operating", "label": "Bank fees"}]})
+    assert got["summary"]["count"] == 2 and "would count it twice" in got["result"]
+    assert _row(db, "t1")["money_kind"] is None and _row(db, "o1")["business_category"] == "operating"
+    rent = _run(cf.handle_file_bank_rows, {"items": [
+        {"transaction_ids": ["c1"], "answer": "income", "label": "Rent", "not_a_gift": True}]})
+    assert rent["summary"]["count"] == 1 and _row(db, "c1")["money_kind"] == "income"
+
+
+def test_a_failed_gift_read_files_nothing(db, monkeypatch):
+    real = sb_clients.sb_get_as_service
+    monkeypatch.setattr(sb_clients, "sb_get_as_service",
+                        lambda path, **kw: None if path.startswith("/invoices") else real(path, **kw))
+    got = _run(cf.handle_file_bank_rows, {"items": [{"payee": "overdraft fee", "answer": "operating"}]})
+    assert got["failed"] and _row(db, "o1")["business_category"] == "other"
+
+
 # ─── Wiring ──────────────────────────────────────────────────────────
 
 def test_the_verbs_are_wired():
