@@ -5,7 +5,7 @@ agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-10-31: "how about we upload all the statements that is missing so they can be added into the system itself. you want to put them inside the system yourself and then build a scanner or ability to upload?"'
 status: in review
 prs: [kmj-intake-server (this PR), solutionist-studio (the Statements view)]
-migrations: [supabase/APPLY-2026-10-31-bank-statements.sql]
+migrations: [supabase/APPLY-2026-10-31-bank-statements.sql (applied 2026-10-31, verified: 19 columns, the tag column, RLS on, 0 policies)]
 left_undone:
   - "Love City's own statements (January to mid-July 2026): Kevin downloads them from the bank; they go in through this screen, the same checks as anyone's"
   - "A bank that was never linked can't take statements: a statement's rows belong to an account in the books (plaid_accounts needs a Plaid item). Link first, then fill in before the feed"
