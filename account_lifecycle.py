@@ -474,6 +474,8 @@ BUSINESS_CHILD_TABLES: List[str] = [
     # The Sunday match (giving_deposits.py): items before their match.
     "gift_deposit_items",
     "gift_deposit_matches",
+    # A business's own expense categories: names and their line, portable.
+    "expense_categories",
     "reconciliations",
     "connectors",
     # GL cluster — queue/alarms/pushed-entries cite journal entries, so

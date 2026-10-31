@@ -155,6 +155,35 @@ def gifts_recorded(business_id: str) -> bool:
 
 # ─── The queue, grouped ───────────────────────────────────────────────
 
+def spending(business_id: str) -> List[Dict[str, Any]]:
+    """Rows already filed as spending (money out, in the books, no money_kind,
+    a bucket past 'other'), shaped like the waiting rows, for moving between
+    categories."""
+    import bank_picks
+    import bookkeeping_overview as bo
+
+    def get(path):
+        r = sb_clients.sb_get_as_service(path)
+        if r is None:
+            raise _Unavailable(path.split("?")[0])
+        return r
+    accts = bank_picks.accounts(business_id, get)
+    if not accts:
+        return []
+    try:
+        rows = bank_picks.read_all(
+            f"/plaid_transactions?business_id=eq.{quote(business_id, safe='')}&account_id={bank_picks.in_(accts)}"
+            "&amount=gt.0&pending=eq.false&excluded_from_books=eq.false&business_category=not.is.null"
+            "&business_category=neq.other&select=transaction_id,date,amount,name,merchant_name,business_category,"
+            "business_subcategory,money_kind&order=date.desc,transaction_id.asc", get, cap=20_000)
+    except bank_picks.TooMany as e:
+        raise _Unavailable(str(e))
+    return [{"transaction_id": t["transaction_id"], "date": t.get("date"), "name": bo.tx_name(t),
+             "amount": float(t.get("amount") or 0), "direction": "out", "business_category": t.get("business_category"),
+             "business_subcategory": t.get("business_subcategory"), "money_kind": t.get("money_kind")}
+            for t in rows if not t.get("money_kind")]
+
+
 def queue(business_id: str) -> List[Dict[str, Any]]:
     """The To review queue itself: every row still waiting, newest first."""
     import bookkeeping_overview as bo
@@ -220,14 +249,27 @@ def _to_file_sync(biz: Dict[str, Any], action: Dict[str, Any]) -> Dict[str, Any]
                 "result": "No bank rows are waiting for an answer" + (" that match" if words else "") + "."}
     groups = group(rows)
     shown = groups[:GROUPS_SHOWN]
+    import expense_categories as ec
+    ec.suggest(business_id, shown)                 # a saved rule, or how the payee was filed before
+    try:
+        cats = [{"name": c["name"], "bucket": c["bucket"]} for c in ec.categories(business_id)]
+    except ec.Unavailable:
+        cats = []
     ins = sum(1 for r in rows if r["direction"] == "in")
     text = (f"{len(rows)} bank rows wait for an answer ({ins} money in, {len(rows) - ins} money out), "
             f"in {len(groups)} groups by payee. Largest: " + "; ".join(
                 f"{g['names'][0] if g['names'] else g['payee']} ({g['count']}, money {g['direction']}, "
                 f"{_money(g['total'])})" for g in shown[:8]) + ".")
-    note = ("Propose an answer for each group in plain words and ASK before filing. File only what the "
-            "owner confirms, with file_bank_rows (by payee, or by transaction_ids for part of a group). "
-            "Never guess money in from a person or an app (Cash App, Zelle, PayPal, a transfer): ask "
+    known = sum(1 for g in shown if g.get("suggest"))
+    if known:
+        text += f" {known} of these payees have been filed before or have a rule, so there's a suggestion for each."
+    note = ("Propose an answer for each group in plain words and ASK before filing: where a group has 'suggest', "
+            "say so ('your last 6 Duke Energy payments went under Utilities; same here?'); otherwise propose one "
+            "from the payee's name and the saved categories. File only what the owner confirms, with "
+            "file_bank_rows (by payee, or by transaction_ids for part of a group). After filing a payee the owner "
+            "confirmed that has no rule, offer to remember it (save_category_rule) so its next payments file "
+            "themselves. ")
+    note += ("Never guess money in from a person or an app (Cash App, Zelle, PayPal, a transfer): ask "
             "whether it's giving, the owner's own money, or a move between accounts.")
     if gifts is None:
         text += " Whether this business records its gifts couldn't be checked just now, so nothing is filed as income."
@@ -239,7 +281,7 @@ def _to_file_sync(biz: Dict[str, Any], action: Dict[str, Any]) -> Dict[str, Any]
                  "spending and for money in that isn't giving; leave the giving deposits as they are.")
     return {"type": atype, "label": f"{len(rows)} bank rows to file", "result": text, "nav": NAV,
             "total": len(rows), "groups": shown, "more_groups": max(0, len(groups) - len(shown)),
-            "gifts_recorded": gifts, "note_for_chief": note}
+            "gifts_recorded": gifts, "categories": cats, "note_for_chief": note}
 
 
 # ─── Filing ───────────────────────────────────────────────────────────
@@ -280,17 +322,40 @@ def _label(v: Any) -> Optional[str]:
     return s or None
 
 
+REFILE_ANSWERS = ("operating", "tax", "owner_pay", "savings")
+
+
 def plan(rows: List[Dict[str, Any]], items: List[Dict[str, Any]], kinds: bool,
-         gifts: Optional[bool] = False) -> Tuple[List[Dict[str, Any]], List[str]]:
-    """Which waiting rows get which answer. Returns (changes, problems)."""
-    by_id = {r["transaction_id"]: r for r in rows}
+         gifts: Optional[bool] = False, cats: Optional[List[Dict[str, Any]]] = None,
+         filed: Optional[List[Dict[str, Any]]] = None) -> Tuple[List[Dict[str, Any]], List[str]]:
+    """Which rows get which answer: waiting rows, or (an item with "refile")
+    rows already filed as spending. Returns (changes, problems)."""
+    import expense_categories as ec
     taken: Dict[str, Dict[str, Any]] = {}
     problems: List[str] = []
     for n, it in enumerate(items, 1):
         if not isinstance(it, dict):
             problems.append(f"item {n} isn't an answer")
             continue
-        answer = str(it.get("answer") or "").strip().lower()
+        refile = it.get("refile") is True
+        source = (filed or []) if refile else rows
+        by_id = {r["transaction_id"]: r for r in source}
+        # A saved category names both the line and the bucket it rolls up to,
+        # and its spelling is the one written.
+        cat = ec.find(cats or [], it.get("category") or it.get("label"))
+        if it.get("category") and not cat:
+            problems.append(f"item {n}: there's no category called '{ec.name_of(it.get('category'))}' yet "
+                            "(make it with set_expense_category first)")
+            continue
+        answer = str(it.get("answer") or (cat or {}).get("bucket") or "").strip().lower()
+        if cat and answer != cat["bucket"]:
+            problems.append(f"item {n}: {cat['name']} is under {ec.BUCKET_SAID[cat['bucket']]}, not "
+                            f"{ec.BUCKET_SAID.get(answer, answer)}; leave the answer out, or pick another category")
+            continue
+        if refile and answer not in REFILE_ANSWERS:
+            problems.append(f"item {n}: moving filed rows changes their spending line only "
+                            f"({', '.join(REFILE_ANSWERS)}, or a saved category)")
+            continue
         if answer not in ANSWERS:
             problems.append(f"item {n}: '{answer}' isn't one of {', '.join(ANSWERS)}")
             continue
@@ -309,19 +374,25 @@ def plan(rows: List[Dict[str, Any]], items: List[Dict[str, Any]], kinds: bool,
         ids = [str(t) for t in (it.get("transaction_ids") or []) if isinstance(t, str) and _TX.match(t)]
         payee = " ".join(str(it.get("payee") or "").lower().split())
         direction = it.get("direction") if it.get("direction") in ("in", "out") else None
+        from_cat = ec.key_of(it.get("from_category")) if refile and it.get("from_category") else ""
+        where = "filed as spending" if refile else "waiting"
         if ids:
             picked = [by_id[t] for t in ids if t in by_id]
             if len(picked) < len(ids):
-                problems.append(f"item {n}: {len(ids) - len(picked)} of its rows aren't waiting any more "
-                                "(answered already, or not in the books)")
-        elif payee:
-            picked = [r for r in rows if _key(r) == payee and (direction is None or r["direction"] == direction)]
+                problems.append(f"item {n}: {len(ids) - len(picked)} of its rows aren't {where} "
+                                + ("(not money out filed as an expense)" if refile else
+                                   "any more (answered already, or not in the books)"))
+        elif payee or from_cat:
+            picked = [r for r in source if (not payee or _key(r) == payee)
+                      and (not from_cat or ec.key_of(r.get("business_subcategory")) == from_cat)
+                      and (direction is None or r["direction"] == direction)]
             if not picked:
-                problems.append(f"item {n}: nothing waiting is from '{payee}'")
+                problems.append(f"item {n}: nothing {where} matches" + (f" '{payee}'" if payee else "")
+                                + (f" in {ec.name_of(it.get('from_category'))}" if from_cat else ""))
         else:
-            problems.append(f"item {n} names no payee and no rows")
+            problems.append(f"item {n} names no payee, category or rows")
             continue
-        label = _label(it.get("label"))
+        label = (cat or {}).get("name") or _label(it.get("label"))
         for r in picked:
             if answer == "income" and gifts and looks_like_giving(str(r.get("name") or "")):
                 problems.append(f"{r.get('name')} on {str(r.get('date'))[:10]} reads like a giving deposit, so it "
@@ -336,6 +407,10 @@ def plan(rows: List[Dict[str, Any]], items: List[Dict[str, Any]], kinds: bool,
             after = dict(write)
             if label and answer != "personal":
                 after["business_subcategory"] = label
+            elif refile:
+                after["business_subcategory"] = None   # moved to a bucket alone: the old line goes
+            if refile and all(r.get(k) == v for k, v in after.items()):
+                continue                      # already there
             before = {k: (r.get(k) if k != "excluded_from_books" else False) for k in after}
             # Every answer is guarded on what makes the row "waiting": in the
             # books, no bucket past 'other', and (where the column is there)
@@ -362,10 +437,15 @@ def file_rows(business_id: str, action: Dict[str, Any]) -> Dict[str, Any]:
     items = action.get("items")
     if not isinstance(items, list) or not items:
         return _fail(atype, "say which rows get which answer (items: payee or transaction_ids, and answer)")
+    import expense_categories as ec
     try:
         rows = queue(business_id)
-    except _Unavailable:
-        return _fail(atype, "the bank rows couldn't be read just now, so nothing was filed. Try again")
+        filed = spending(business_id) if any(isinstance(it, dict) and it.get("refile") is True
+                                             for it in items[:100]) else []
+        cats = ec.categories(business_id) if any(isinstance(it, dict) and (it.get("category") or it.get("label"))
+                                                  for it in items[:100]) else []
+    except (_Unavailable, ec.Unavailable):
+        return _fail(atype, "the bank rows or the categories couldn't be read just now, so nothing was filed. Try again")
     # Gifts are looked up only when something would be filed as income; a
     # spending-only batch never waits on them.
     gifts: Optional[bool] = False
@@ -374,7 +454,7 @@ def file_rows(business_id: str, action: Dict[str, Any]) -> Dict[str, Any]:
             gifts = gifts_recorded(business_id)
         except _Unavailable:
             gifts = None
-    changes, problems = plan(rows, items[:100], bank_money.supported(), gifts)
+    changes, problems = plan(rows, items[:100], bank_money.supported(), gifts, cats, filed)
     if len(changes) > ROW_MAX:
         return _fail(atype, f"that's {len(changes)} rows; one batch files at most {ROW_MAX}. Split it")
     if not changes:

@@ -295,6 +295,16 @@ INVERSES: Dict[str, Inverse] = {
         "take those matches back: the deposits wait for an answer again and the gifts for a deposit",
         lambda a, r: ({"type": "unmatch_giving_deposits", "batch_id": r["batch_id"]}
                       if isinstance(r.get("batch_id"), str) and r.get("match_ids") else None)),
+    "set_expense_category": Inverse(
+        "undo_category_change",
+        "put the categories back the way they were",
+        lambda a, r: ({"type": "undo_category_change", "batch_id": r["batch_id"]}
+                      if isinstance(r.get("batch_id"), str) and r.get("changes") else None)),
+    "save_category_rule": Inverse(
+        "undo_category_change",
+        "forget that rule",
+        lambda a, r: ({"type": "undo_category_change", "batch_id": r["batch_id"]}
+                      if isinstance(r.get("batch_id"), str) and r.get("changes") else None)),
     "file_bank_rows": Inverse(
         "undo_file_bank_rows",
         "put those bank rows back in To review, unanswered",

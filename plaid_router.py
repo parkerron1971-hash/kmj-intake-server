@@ -1202,7 +1202,10 @@ def _tx_payload(tx, business_id: str, rule_map: Dict[str, Dict[str, Optional[str
         detail = getattr(pfc, "detailed", None) or None
 
     merchant = getattr(tx, "merchant_name", None) or None
-    rule = rule_map.get((merchant or "").strip().lower())
+    # Plaid's merchant name, then the payee's wording (Chief's remembered
+    # rules are kept by payee key: expense_categories.rule_for).
+    import expense_categories
+    rule = expense_categories.rule_for(rule_map, merchant, getattr(tx, "name", None))
     if rule and rule.get("cat"):
         bucket = rule["cat"]
         sub = rule.get("sub")

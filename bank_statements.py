@@ -749,9 +749,28 @@ def add(business_id: str, user_id: Any, body: Dict[str, Any]) -> Dict[str, Any]:
         raise Unavailable("bank_statement_imports")
     import plaid_categorization
     bucket = plaid_categorization.map_plaid_to_bucket(None, None)
+    # The every-time rules file a statement's spending as they do the feed's
+    # (expense_categories.rule_for); best-effort, never a reason to stop.
+    rule_map: Dict[str, Dict[str, Any]] = {}
+    try:
+        for r in sb_clients.sb_get_as_service(
+                f"/category_rules?business_id=eq.{_q(business_id)}"
+                "&select=merchant_name,business_category,business_subcategory&limit=2000") or []:
+            k = str(r.get("merchant_name") or "").strip().lower()
+            if k:
+                rule_map[k] = {"cat": r.get("business_category"), "sub": r.get("business_subcategory")}
+    except Exception as e:
+        logger.warning("bank statements: rules unread: %s", e)
+    import expense_categories
+
+    def filed(s: Dict[str, Any]) -> Dict[str, Any]:
+        rule = expense_categories.rule_for(rule_map, None, s["description"]) if s["amount"] < 0 else None
+        if rule and rule.get("cat"):
+            return {"business_category": rule["cat"], "business_subcategory": rule.get("sub")}
+        return {"business_category": bucket}
     payload = [{"transaction_id": s["id"], "account_id": acct["account_id"], "business_id": business_id,
                 "amount": round(-s["amount"], 2), "iso_currency_code": "USD", "date": s["date"],
-                "name": s["description"], "merchant_name": None, "business_category": bucket,
+                "name": s["description"], "merchant_name": None, **filed(s),
                 "pending": False, "statement_import_id": imp["id"]} for s in keep]
     added = 0
     for i in range(0, len(payload), CHUNK):

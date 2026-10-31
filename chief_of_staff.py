@@ -254,6 +254,8 @@ from chief_weather import handle_get_weather
 from chief_transactions import handle_search_transactions
 from chief_reconcile import handle_reconcile_books, handle_undo_reconcile_books
 from chief_file_bank import handle_bank_to_file, handle_file_bank_rows, handle_undo_file_bank_rows
+from expense_categories import (handle_expense_categories, handle_set_expense_category, handle_save_category_rule,
+    handle_undo_category_change)
 from giving_deposits import (handle_giving_deposits, handle_match_giving_deposits,
     handle_unmatch_giving_deposits)
 from housing_allowance import (handle_housing_allowance_status, handle_set_housing_allowance,
@@ -12178,6 +12180,10 @@ ACTION_HANDLERS = {
     "bank_to_file":          handle_bank_to_file,
     "file_bank_rows":        handle_file_bank_rows,
     "undo_file_bank_rows":   handle_undo_file_bank_rows,
+    "expense_categories":    handle_expense_categories,
+    "set_expense_category":  handle_set_expense_category,
+    "save_category_rule":    handle_save_category_rule,
+    "undo_category_change":  handle_undo_category_change,
     "giving_deposits":       handle_giving_deposits,
     "match_giving_deposits": handle_match_giving_deposits,
     "unmatch_giving_deposits": handle_unmatch_giving_deposits,

@@ -16,7 +16,7 @@ RESERVED_PAGE_IDS = frozenset({
     "chief-suggestions", "accounting-periods", "period-overrides", "module-specs",
     "agent-coordination", "live", "group-live", "my", "texting-terms",
     "texting-privacy", "data", "news", "academy", "daily", "stream-relay",
-    "housing-allowance", "year-funds", "bank-statements", "giving-deposits",
+    "housing-allowance", "year-funds", "bank-statements", "giving-deposits", "expense-categories",
 })
 
 
