@@ -487,19 +487,26 @@ async def read_pdf(business_id: str, raw: bytes) -> Tuple[str, List[Dict[str, An
         raise HTTPException(429, "That's a lot of statements in an hour. Wait a little, or upload the bank's CSV "
                                  "download instead.")
     await asyncio.to_thread(billing_limits.require_units, business_id)
+    model = _model()
+    # Sonnet 5.5 and Opus 5.5 answer a forced tool_choice with a 400; there
+    # the prompt names the tool, and only a statement tool call is read back.
+    forced = model_ladder.supports_forced_tool_choice(model)
+    system = _READ_SYSTEM if forced else (
+        _READ_SYSTEM + " Answer only by calling the statement tool, exactly once; never in plain text.")
     payload = {
-        "model": _model(), "max_tokens": READ_MAX_TOKENS, "system": _READ_SYSTEM,
-        "tools": [STATEMENT_TOOL], "tool_choice": {"type": "tool", "name": "statement"},
+        "model": model, "max_tokens": READ_MAX_TOKENS, "system": system, "tools": [STATEMENT_TOOL],
+        "tool_choice": {"type": "tool", "name": "statement"} if forced else {"type": "auto"},
         "messages": [{"role": "user", "content": [
             {"type": "document", "source": {"type": "base64", "media_type": "application/pdf",
                                             "data": base64.standard_b64encode(raw).decode("ascii")}},
             {"type": "text", "text": "Read this statement into the statement tool."}]}],
-        **model_ladder.thinking_off_kwargs(_model()),
+        **model_ladder.thinking_off_kwargs(model),
     }
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
         resp = await llm_call.apost(client, payload, task="bank_statement_read", business_id=business_id)
     if resp.status_code >= 400:
-        logger.error("bank statement read %s: %s", resp.status_code, resp.text[:300])
+        # print: only stdout reaches the Railway logs.
+        print(f"[bank_statements] read {resp.status_code}: {resp.text[:300]}", flush=True)
         raise HTTPException(502, "The statement couldn't be read just now. Try again, or upload the bank's CSV "
                                  "download instead.")
     data = resp.json()
@@ -509,6 +516,7 @@ async def read_pdf(business_id: str, raw: bytes) -> Tuple[str, List[Dict[str, An
     got = next((b.get("input") for b in data.get("content") or []
                 if b.get("type") == "tool_use" and b.get("name") == "statement"), None)
     if not isinstance(got, dict):
+        print(f"[bank_statements] read gave no statement call (stop {data.get('stop_reason')})", flush=True)
         raise HTTPException(502, "The statement couldn't be read just now. Try again.")
     parts: List[Dict[str, Any]] = []
     for a in got.get("accounts") or []:
