@@ -254,6 +254,8 @@ from chief_weather import handle_get_weather
 from chief_transactions import handle_search_transactions
 from chief_reconcile import handle_reconcile_books, handle_undo_reconcile_books
 from chief_file_bank import handle_bank_to_file, handle_file_bank_rows, handle_undo_file_bank_rows
+from giving_deposits import (handle_giving_deposits, handle_match_giving_deposits,
+    handle_unmatch_giving_deposits)
 from housing_allowance import (handle_housing_allowance_status, handle_set_housing_allowance,
     handle_log_housing_entry, handle_delete_housing_entry, handle_find_housing_payments,
     handle_attach_housing_payments, handle_detach_housing_payments)
@@ -388,6 +390,8 @@ _ACTION_PHRASES = {
     "reconcile_books": "reconciling the bank",
     "bank_to_file": "looking through the bank",
     "file_bank_rows": "filing the bank rows",
+    "giving_deposits": "checking the deposits against the gifts",
+    "match_giving_deposits": "matching the gifts to their deposits",
     "undo_reconcile_books": "putting the bank rows back",
     "summarize_module": "adding it up",
     "inspect_module": "checking the module",
@@ -12174,6 +12178,9 @@ ACTION_HANDLERS = {
     "bank_to_file":          handle_bank_to_file,
     "file_bank_rows":        handle_file_bank_rows,
     "undo_file_bank_rows":   handle_undo_file_bank_rows,
+    "giving_deposits":       handle_giving_deposits,
+    "match_giving_deposits": handle_match_giving_deposits,
+    "unmatch_giving_deposits": handle_unmatch_giving_deposits,
     "housing_allowance_status": handle_housing_allowance_status,
     "set_housing_allowance": handle_set_housing_allowance,
     "log_housing_entry":     handle_log_housing_entry,

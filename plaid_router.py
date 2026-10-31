@@ -748,6 +748,15 @@ def update_transaction(
     if body.money_kind is not None:
         if body.money_kind and body.money_kind not in bank_money.KINDS:
             raise HTTPException(400, f"money_kind must be one of {bank_money.KINDS}")
+        if body.money_kind in bank_money.MATCHED_ONLY:
+            raise HTTPException(400, "A deposit is marked as gifts by matching it to them under Giving, Deposits.")
+        now_kind = sb_clients.sb_get_as_service(
+            f"/plaid_transactions?transaction_id=eq.{transaction_id}&select=money_kind&limit=1")
+        if now_kind is None:
+            raise HTTPException(503, "That row couldn't be read just now. Try again.")
+        if now_kind and now_kind[0].get("money_kind") in bank_money.MATCHED_ONLY:
+            raise HTTPException(409, "This deposit is matched to recorded gifts. Unmatch it under Giving, "
+                                     "Deposits first, so the gifts aren't counted twice.")
         if not bank_money.supported():
             raise HTTPException(409, "Marking what a bank row is needs the 2026-10-02 bank money migration.")
         patch["money_kind"] = body.money_kind or None

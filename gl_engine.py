@@ -72,6 +72,10 @@ COA_LAWYER_EXTRA = [
 COA_NONPROFIT_EXTRA = [
     ("3300", "Net Assets — With Donor Restrictions", "equity", "credit", None, False),
     ("4200", "Restricted Contributions",             "income", "credit", None, False),
+    # A gift that isn't by card (cash, check, an app transfer, an online
+    # platform's payout) waits here until the bank deposit that carried it
+    # is matched to it (giving_deposits.py): undeposited funds.
+    ("1160", "Gifts to Deposit",                     "asset",  "debit",  None, False),
 ]
 
 _BUCKET_TO_EXPENSE = {
@@ -163,7 +167,7 @@ def _fetch_sources(biz: str) -> Dict[str, Any]:
     invoices = sb_clients.sb_get_as_service(
         f"/invoices?business_id=eq.{biz}"
         f"&select=id,total,status,paid_at,sent_at,created_at,due_date,payment_method,"
-        f"stripe_payment_url,refund_amount_cents,refunded_at,category&limit=10000") or []
+        f"stripe_payment_url,refund_amount_cents,refunded_at,category,is_gift&limit=10000") or []
     expenses = sb_clients.sb_get_as_service(
         f"/business_expenses?business_id=eq.{biz}"
         f"&select=id,amount,category,subcategory,vendor,date&limit=10000") or []
@@ -178,7 +182,7 @@ def _fetch_sources(biz: str) -> Dict[str, Any]:
             f"/plaid_transactions?business_id=eq.{biz}&{acct}"
             f"&pending=eq.false&excluded_from_books=eq.false"
             f"&select=transaction_id,account_id,amount,date,business_category,business_subcategory,"
-            f"plaid_category_primary,plaid_category_detail,reconciled_to_payout_id"
+            f"plaid_category_primary,plaid_category_detail,reconciled_to_payout_id,gift_match_fee"
             f"{bank_money.ledger_cols()}&limit=20000") or []
     # I.7 — trust accounts are a separate ledger: their balances back the
     # 1200/2200 pair, never the operating-cash (1000) opening plug.
@@ -242,6 +246,19 @@ def _income_code_for_invoice(inv: Dict[str, Any], business_type: Optional[str]) 
     return "4000"
 
 
+def _gift_waits(inv: Dict[str, Any], business_type: Optional[str]) -> bool:
+    """A church's gift not given by card: it waits in 1160 Gifts to Deposit
+    until the deposit that carried it is matched (giving_deposits.py), so the
+    deposit is never income a second time. Card gifts clear through 1150."""
+    if inv.get("is_gift") is not True:
+        return False
+    import vertical_family
+    if not vertical_family.is_nonprofit_like(business_type):
+        return False
+    pm = (inv.get("payment_method") or "").lower()
+    return not ("stripe" in pm or "card" in pm or inv.get("stripe_payment_url"))
+
+
 def desired_for_invoice(inv: Dict[str, Any],
                         business_type: Optional[str] = None) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
@@ -254,14 +271,15 @@ def desired_for_invoice(inv: Dict[str, Any],
         ed = _d(inv.get("sent_at")) or _d(inv.get("created_at")) or _d(inv.get("due_date"))
         out.append(_entry(ed, "invoice_issue", inv["id"], "Invoice issued",
                           [_line("1100", debit=total), _line(income_code, credit=total)]))
+    waits = _gift_waits(inv, business_type)
     if status == "paid" and inv.get("paid_at"):
-        cc = "1000" if _is_non_stripe_payment(inv) else "1150"
+        cc = "1160" if waits else ("1000" if _is_non_stripe_payment(inv) else "1150")
         out.append(_entry(_d(inv.get("paid_at")), "invoice_payment", inv["id"], "Invoice paid",
                           [_line(cc, debit=total), _line("1100", credit=total)]))
     rc = inv.get("refund_amount_cents")
     if rc and float(rc) > 0:
         amt = round(float(rc) / 100.0, 2)
-        cc = "1000" if _is_non_stripe_payment(inv) else "1150"
+        cc = "1160" if waits else ("1000" if _is_non_stripe_payment(inv) else "1150")
         out.append(_entry(_d(inv.get("refunded_at")) or _d(inv.get("paid_at")),
                           "invoice_refund", inv["id"], "Invoice refunded",
                           [_line(income_code, debit=amt), _line(cc, credit=amt)]))
@@ -329,6 +347,13 @@ def desired_for_plaid(t: Dict[str, Any],
         if t.get("reconciled_to_payout_id"):
             return [_entry(_d(t.get("date")), "plaid_transaction", sid, "Payout deposit",
                            [_line("1000", debit=inflow), _line("1150", credit=inflow)])]
+        if mk == "gifts":
+            # The recorded gifts this deposit carried leave 1160. Any fee the
+            # giving platform kept rides on the deposit (gift_match_fee) and is
+            # its own expense row (Dr expense, Cr Cash), so cash nets to the bank.
+            gross = round(inflow + float(t.get("gift_match_fee") or 0), 2)
+            return [_entry(_d(t.get("date")), "plaid_transaction", sid, "Deposit of recorded gifts",
+                           [_line("1000", debit=gross), _line("1160", credit=gross)])]
         if mk == "transfer":
             return [_entry(_d(t.get("date")), "plaid_transaction", sid,
                            "Transfer in from your own account",
@@ -827,13 +852,15 @@ from datetime import timedelta as _timedelta  # noqa: E402
 
 _SOURCE_FETCH = {
     "invoices": ("/invoices?id=eq.{id}&select=id,total,status,paid_at,sent_at,created_at,"
-                 "due_date,payment_method,stripe_payment_url,refund_amount_cents,refunded_at,category&limit=1"),
+                 "due_date,payment_method,stripe_payment_url,refund_amount_cents,refunded_at,category,"
+                 "is_gift&limit=1"),
     "business_expenses": "/business_expenses?id=eq.{id}&select=id,amount,category,subcategory,vendor,date&limit=1",
     "bills": ("/bills?id=eq.{id}&select=id,vendor_name,amount,category,subcategory,status,due_date,"
               "created_at,paid_at,paid_amount&limit=1"),
     "plaid_transactions": ("/plaid_transactions?transaction_id=eq.{id}&select=transaction_id,amount,date,"
                            "business_category,business_subcategory,plaid_category_primary,"
-                           "plaid_category_detail,reconciled_to_payout_id,pending,excluded_from_books,account_id&limit=1"),
+                           "plaid_category_detail,reconciled_to_payout_id,pending,excluded_from_books,account_id,"
+                           "gift_match_fee&limit=1"),
     # Arc 28b — store orders live-sync (queue trigger in
     # 2026_06_12_arc28b_orders_gl_trigger.sql).
     "orders": ("/orders?id=eq.{id}&select=id,status,subtotal_cents,tax_cents,"

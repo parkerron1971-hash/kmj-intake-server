@@ -290,6 +290,11 @@ INVERSES: Dict[str, Inverse] = {
         "take those bank transactions back off the fund",
         lambda a, r: ({"type": "unplace_fund_payments", "item_ids": list(r.get("created_ids") or [])}
                       if r.get("created_ids") else None)),
+    "match_giving_deposits": Inverse(
+        "unmatch_giving_deposits",
+        "take those matches back: the deposits wait for an answer again and the gifts for a deposit",
+        lambda a, r: ({"type": "unmatch_giving_deposits", "batch_id": r["batch_id"]}
+                      if isinstance(r.get("batch_id"), str) and r.get("match_ids") else None)),
     "file_bank_rows": Inverse(
         "undo_file_bank_rows",
         "put those bank rows back in To review, unanswered",
