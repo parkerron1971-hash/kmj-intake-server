@@ -243,9 +243,27 @@ def test_a_pdf_is_read_by_claude_into_one_part_per_account(monkeypatch):
     ck = bs.check(first["rows"], first["opening"], first["closing"], first["statement_in"], first["statement_out"])
     assert ck["state"] == "balanced"
     payload, kw = calls[0]
-    assert payload["tool_choice"] == {"type": "tool", "name": "statement"} and kw["business_id"] == BIZ
+    assert kw["business_id"] == BIZ
     assert "trailing minus (205.41-)" in payload["system"]                 # Huntington prints overdrawn balances so
     assert payload["messages"][0]["content"][0]["source"]["media_type"] == "application/pdf"
+
+
+def test_the_reader_never_forces_the_tool_on_a_model_that_refuses_it(monkeypatch):
+    """Sonnet 5.5 (the default) answers a forced tool_choice with a 400: the
+    first live statement came back 'couldn't be read' (2026-10-31)."""
+    import model_ladder
+    got = {"accounts": [{"name": "Checking", "last4": "5565", "period_start": "2026-01-01", "period_end": "2026-01-31",
+                         "transactions": [{"date": "2026-01-02", "description": "DEPOSIT", "amount": 10}]}]}
+    calls = _fake_claude(monkeypatch, got)
+    asyncio.run(bs.read_pdf(BIZ, b"%PDF-1.7"))
+    payload = calls[0][0]
+    assert bs.DEFAULT_MODEL == "claude-sonnet-5-5" and not model_ladder.supports_forced_tool_choice(bs.DEFAULT_MODEL)
+    assert payload["tool_choice"] == {"type": "auto"} and "calling the statement tool" in payload["system"]
+    assert payload["thinking"] == {"type": "between_tools"}
+    monkeypatch.setenv("STATEMENT_READ_MODEL", "claude-sonnet-5")                # a model that takes it is forced
+    calls.clear()
+    asyncio.run(bs.read_pdf(BIZ, b"%PDF-1.7"))
+    assert calls[0][0]["tool_choice"] == {"type": "tool", "name": "statement"}
 
 
 def test_the_scanner_stops_at_the_spend_cap_and_the_hourly_limit(monkeypatch):
