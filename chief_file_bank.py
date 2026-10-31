@@ -442,10 +442,18 @@ def file_rows(business_id: str, action: Dict[str, Any]) -> Dict[str, Any]:
         rows = queue(business_id)
         filed = spending(business_id) if any(isinstance(it, dict) and it.get("refile") is True
                                              for it in items[:100]) else []
-        cats = ec.categories(business_id) if any(isinstance(it, dict) and (it.get("category") or it.get("label"))
-                                                  for it in items[:100]) else []
-    except (_Unavailable, ec.Unavailable):
-        return _fail(atype, "the bank rows or the categories couldn't be read just now, so nothing was filed. Try again")
+    except _Unavailable:
+        return _fail(atype, "the bank rows couldn't be read just now, so nothing was filed. Try again")
+    # The saved list sets a label's spelling. Unreadable, a label is written as
+    # typed (as before the list existed); only an item naming a saved
+    # "category" needs it, and that one says so.
+    cats: List[Dict[str, Any]] = []
+    if any(isinstance(it, dict) and (it.get("category") or it.get("label")) for it in items[:100]):
+        try:
+            cats = ec.categories(business_id)
+        except ec.Unavailable:
+            if any(isinstance(it, dict) and it.get("category") for it in items[:100]):
+                return _fail(atype, "the saved categories couldn't be read just now, so nothing was filed. Try again")
     # Gifts are looked up only when something would be filed as income; a
     # spending-only batch never waits on them.
     gifts: Optional[bool] = False

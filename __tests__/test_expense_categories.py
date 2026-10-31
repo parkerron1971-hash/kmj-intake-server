@@ -194,6 +194,16 @@ def test_moving_filed_rows_between_categories(db):
     assert bad["failed"] and "spending line only" in bad["result"]
 
 
+def test_an_unreadable_list_never_stops_filing_by_label(db, monkeypatch):
+    real = sb_clients.sb_get_as_service
+    monkeypatch.setattr(sb_clients, "sb_get_as_service",
+                        lambda path, **kw: None if path.startswith("/expense_categories") else real(path, **kw))
+    got = _run(cf.handle_file_bank_rows, {"items": [{"payee": "overdraft fee", "answer": "operating", "label": "Bank fees"}]})
+    assert got["summary"]["count"] == 1 and _row(db, "w2")["business_subcategory"] == "Bank fees"
+    named = _run(cf.handle_file_bank_rows, {"items": [{"payee": "city water dept", "category": "Utilities"}]})
+    assert named["failed"] and "saved categories couldn't be read" in named["result"]
+
+
 # ─── Suggestions and remembering ─────────────────────────────────────
 
 def test_chief_suggests_from_how_a_payee_was_filed_and_from_rules(db):
