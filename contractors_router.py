@@ -9,6 +9,16 @@ production (LLC-consolidation ruling: the platform account is the money
 home). The multi-practitioner funding model (destination charges / account
 debits) is a surfaced fork for a future ruling.
 
+LOCKED to the platform owner's own businesses (Kevin, 2026-10-31). Because
+the money comes out of the platform's balance, a church paying its sound
+tech $300 here would pay with Solutionist's money, and Solutionist would be
+the payer on the 1099. Until the business doing the paying is the one
+charged, only the platform owner's businesses may open a payout account or
+send a payment (`_platform_money`); everyone else keeps the contractor
+records and the 1099 summary, and pays from their own bank. The check runs
+twice: in each route, before anything is recorded, and again in
+`_stripe_post` just before Stripe is called. A read that fails is a no.
+
 Every paid transfer auto-creates a PAID AP bill (is_1099_eligible=true,
 contractor linked, paid_via='stripe_transfer'), so the GL books
 Dr Expense / Cr AP + Dr AP / Cr Cash through the existing bills→GL pipeline
@@ -83,7 +93,21 @@ def _owner_for_contractor(contractor_id: str, user: AuthedUser,
     return rows[0]
 
 
+PLATFORM_MONEY_ONLY = ("Paying contractors through Solutionist isn't available for your business yet. "
+                       "Pay them from your own bank and record it as a bill; the 1099 summary still counts it.")
+
+
+def _platform_money(biz: Any) -> None:
+    """Payouts spend the platform's own Stripe balance, so only the platform
+    owner's businesses may open a payout account or send one."""
+    import member_asks
+    if not member_asks.platform_church(biz):
+        raise HTTPException(403, PLATFORM_MONEY_ONLY)
+
+
 async def _stripe_post(path: str, data: Dict[str, Any]) -> Dict[str, Any]:
+    if path in ('/transfers', '/accounts'):
+        _platform_money(data.get('metadata[business_id]'))
     if path == '/transfers':
         from financial_policy import require_operational_write
         require_operational_write(data.get('metadata[business_id]'))
@@ -181,6 +205,7 @@ async def onboarding_link(contractor_id: str,
     it manually (collaborators pattern)."""
     c = _owner_for_contractor(contractor_id, user, min_role="manager")
     billing_limits.require_feature(str(c["business_id"]), "contractor_payments")
+    _platform_money(c["business_id"])
     biz_rows = sb_clients.sb_get_as_service(
         f"/businesses?id=eq.{c['business_id']}&select=name&limit=1") or [{}]
     biz_name = biz_rows[0].get("name") or "the business"
@@ -278,6 +303,7 @@ async def pay(contractor_id: str, body: PayBody, request: Request,
     import ledger_unlock
     ledger_unlock.require_unlock(request, str(user.id), scope=ledger_unlock.SCOPE_DANGER)
     billing_limits.require_feature(body.business_id, "contractor_payments")
+    _platform_money(body.business_id)
     if body.amount <= 0:
         raise HTTPException(400, "amount must be positive")
     if c.get("onboarding_status") != "active" or not c.get("stripe_account_id"):
