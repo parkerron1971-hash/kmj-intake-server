@@ -896,7 +896,7 @@ def get_statements(business_id: str = Query(...), year: Optional[int] = Query(No
 async def post_read(business_id: str = Form(...), account_id: Optional[str] = Form(None),
                     file: UploadFile = File(...), user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     """A statement file, read and checked; nothing is written."""
-    await asyncio.to_thread(_gate, business_id, user, write=True)
+    _gate(business_id, user, write=True)         # called here, where the access sweep sees it
     raw = await file.read(PDF_MAX_BYTES + 1)
     name = " ".join(str(file.filename or "statement").split())[:200] or "statement"
     if not raw:
