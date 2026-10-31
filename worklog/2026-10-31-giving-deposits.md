@@ -3,9 +3,9 @@ title: The Sunday match, recorded gifts matched to the bank deposits that carrie
 date: 2026-10-31
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-10-31: everybody gives on Sunday (cash, check, card, Cash App), each gift recorded by person, the money deposited over Sunday to Tuesday; the gifts that tally to $650 should meet the deposits that make $650 and Chief should recognize it. Then: "yes build it but also make sure that chief can either do it for people, match what the person does or verify. make sure that there is no duplicates."'
-status: in review
-prs: [kmj-intake-server (this PR), solutionist-studio (Giving, Deposits)]
-migrations: [supabase/APPLY-2026-10-31-giving-deposits.sql (applied 2026-10-31, verified), supabase/APPLY-2026-10-31-giving-deposits-repost.sql (after the code deploys; again for every church at the switch-on)]
+status: shipped
+prs: [kmj-intake-server#1669, solutionist-studio#1424]
+migrations: [supabase/APPLY-2026-10-31-giving-deposits.sql (applied 2026-10-31, verified), supabase/APPLY-2026-10-31-giving-deposits-repost.sql (applied 2026-10-31 for the platform owner's churches; again for every church at the switch-on)]
 left_undone:
   - "Card gifts through the app stay with the Stripe payout matcher; gifts through another platform than Subsplash (Tithe.ly, Pushpay) aren't recorded per person, so their payouts aren't matched here"
   - "A deposit that doesn't add up to its gifts (a counting error) can't be matched until the gifts or the deposit are corrected; the screen says by how much"
@@ -29,3 +29,12 @@ change it); `chief_reconcile` (skips gift deposits). Wired: `chief_of_staff`,
 `action_registry`, `action_inverse`, `chief_areas`, `chief_tool_loop`,
 `chief_prompt`, `kmj_intake_automation`, `account_lifecycle`,
 `site_page_helpers`. Tests: `__tests__/test_giving_deposits.py` (17).
+
+**Live, 2026-10-31.** Merged #1669 (after the review's fixes: 1160 only where
+the switch is on, a partial batch keeps its undo, verify reads a match's own
+rows) and solutionist-studio#1424. Schema applied before the code; the repost
+queued Love City's 718 non-card gifts after it deployed, and the ledger drained
+them into 1160 at about a hundred a run. Love City's ledger has had an active
+divergence alarm since 2026-10-14 (revenue, cash, and a trial balance off),
+from before this work; not touched here.
+
