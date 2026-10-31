@@ -244,6 +244,7 @@ def test_a_pdf_is_read_by_claude_into_one_part_per_account(monkeypatch):
     assert ck["state"] == "balanced"
     payload, kw = calls[0]
     assert payload["tool_choice"] == {"type": "tool", "name": "statement"} and kw["business_id"] == BIZ
+    assert "trailing minus (205.41-)" in payload["system"]                 # Huntington prints overdrawn balances so
     assert payload["messages"][0]["content"][0]["source"]["media_type"] == "application/pdf"
 
 
