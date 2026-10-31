@@ -4,8 +4,8 @@ date: 2026-10-31
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-10-31, on his housing allowance: "right now i am not recieving and payment through the system not to say it''s something in the future i want accounted for."'
 status: in review
-prs: [kmj-intake-server (this PR), solutionist-studio#1418]
-migrations: [supabase/APPLY-2026-10-31-minister-payroll.sql]
+prs: [kmj-intake-server#1656, solutionist-studio#1418]
+migrations: [supabase/APPLY-2026-10-31-minister-payroll.sql (applied 2026-10-31, verified)]
 left_undone:
   - "The Pay your team screens (solutionist-studio): the owner's Minister switch and housing part on a person, the housing part on a draft line, and what mark-paid logged or couldn't (the API is here; the screens don't show it yet)"
   - "W-2s: nothing here makes a W-2 yet. When one does, Box 1 leaves out a minister's housing part and Box 14 shows it; Boxes 3-6 stay empty for a minister"
