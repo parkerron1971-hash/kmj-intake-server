@@ -456,3 +456,56 @@ def test_chief_names_whats_left_on_the_paper_trail_and_records_it(speaking):
     assert r["result"].startswith("Changed"), r
     status = _run(ha.handle_housing_allowance_status, {"tax_year": 2026})
     assert "Say how" not in status["result"]
+
+
+def test_chief_says_allowance_logged_before_the_vote_is_salary(speaking):
+    _run(ha.handle_set_housing_allowance, {"minister_name": "Pastor Kevin", "tax_year": 2026,
+                                           "designated_amount": 24000, "designated_on": "2026-02-10"})
+    early = _run(ha.handle_log_housing_entry, {"kind": "paid", "amount": 2000, "entry_date": "2026-01-31",
+                                               "tax_year": 2026})
+    assert "before the board's vote on February 10, 2026" in early["result"]
+    assert "W-2 Box 1" in early["result"] and "Paid since the vote $0.00 of $24,000.00" in early["result"]
+    later = _run(ha.handle_log_housing_entry, {"kind": "paid", "amount": 2000, "entry_date": "2026-02-28",
+                                               "tax_year": 2026})
+    assert "before the board's vote" not in later["result"]
+    assert "Paid since the vote $2,000.00 of $24,000.00" in later["result"]
+
+
+def _a_cost(c):
+    aid = c.post("/housing-allowance", json=BODY).json()["allowance"]["id"]
+    return c.post(f"/housing-allowance/{aid}/entries", json={
+        "business_id": BIZ, "kind": "spent", "amount": 1800, "category": "rent_mortgage",
+        "entry_date": "2026-03-01"}).json()["entry"]
+
+
+PDF = ("receipt.pdf", b"%PDF-1.4 mortgage statement", "application/pdf")
+
+
+def test_a_receipt_the_record_wont_take_is_dropped_from_the_bucket(bucket, db, monkeypatch):
+    c = _client(OWNER)
+    cost = _a_cost(c)
+    monkeypatch.setattr(sb_clients, "sb_patch_as_service", lambda path, body: None)
+    r = c.post(f"/housing-allowance/entries/{cost['id']}/receipt", data={"business_id": BIZ}, files={"file": PDF})
+    assert r.status_code == 503
+    assert bucket == {}                                 # no orphaned private file
+
+
+def test_a_refused_upload_is_a_503_and_nothing_is_recorded(bucket, db, monkeypatch):
+    import church_checks
+    c = _client(OWNER)
+    cost = _a_cost(c)
+    monkeypatch.setattr(church_checks, "_storage_put", lambda path, data, media: (False, 403, "denied"))
+    r = c.post(f"/housing-allowance/entries/{cost['id']}/receipt", data={"business_id": BIZ}, files={"file": PDF})
+    assert r.status_code == 503
+    row = next(e for e in db.t["minister_housing_entries"] if e["id"] == cost["id"])
+    assert not row.get("receipt_path")
+
+
+def test_a_receipt_that_cant_be_read_is_a_503_not_an_empty_file(bucket, db, monkeypatch):
+    import church_checks
+    c = _client(OWNER)
+    cost = _a_cost(c)
+    assert c.post(f"/housing-allowance/entries/{cost['id']}/receipt", data={"business_id": BIZ},
+                  files={"file": PDF}).status_code == 200
+    monkeypatch.setattr(church_checks, "_storage_get", lambda path: None)
+    assert c.get(f"/housing-allowance/entries/{cost['id']}/receipt?business_id={BIZ}").status_code == 503

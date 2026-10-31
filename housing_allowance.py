@@ -196,6 +196,7 @@ def figures(allowance: Dict[str, Any], entries: List[Dict[str, Any]],
         "designated": designated,
         "paid": paid,
         "paid_before_designation": early,
+        "paid_since_designation": paid_after,      # the "paid" limit
         "spent": spent,
         "spent_by_category": {k: v for k, v in spent_by.items() if v},
         "fair_rental_value": frv,
@@ -994,11 +995,16 @@ def _log_sync(biz: Dict[str, Any], action: Dict[str, Any]) -> Dict[str, Any]:
         return _fail(atype, "the housing allowance records couldn't be read just now; nothing was saved")
     what = ("allowance paid" if entry["kind"] == "paid"
             else CATEGORY_WORDS.get(entry["category"], "housing costs"))
+    early = ""
+    vote = _day_or_none(allowance.get("designated_on"))
+    if entry["kind"] == "paid" and vote and (_day_or_none(entry.get("entry_date")) or vote) < vote:
+        early = (f" That's before the board's vote on {_when(allowance['designated_on'])}, so it's taxable "
+                 f"salary (W-2 Box 1), not housing allowance.")
     return {"type": atype, "entry_id": entry["id"], "allowance_id": allowance["id"],
             "result": (f"Logged ${_num(entry['amount']):,.2f} of {what} on {entry['entry_date']} to "
-                       f"{allowance['minister_name']}'s {allowance['tax_year']} housing allowance. "
-                       f"Paid so far {_money(f['paid'])} of {_money(f['designated'])}; housing costs "
-                       f"{_money(f['spent'])}."),
+                       f"{allowance['minister_name']}'s {allowance['tax_year']} housing allowance.{early} "
+                       f"Paid since the vote {_money(f['paid_since_designation'])} of {_money(f['designated'])}; "
+                       f"housing costs {_money(f['spent'])}."),
             "label": f"🏠 Logged ${_num(entry['amount']):,.2f} ({what})",
             "nav": NAV}
 
