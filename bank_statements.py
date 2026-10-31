@@ -569,7 +569,7 @@ def check(rows: List[Dict[str, Any]], opening: Any = None, closing: Any = None,
     statement_in, statement_out = _r2(statement_in), _r2(statement_out)
     out: Dict[str, Any] = {"money_in": money_in, "money_out": money_out, "opening": opening, "closing": closing,
                            "statement_in": statement_in, "statement_out": statement_out, "difference": None,
-                           "totals_agree": None}
+                           "totals_agree": None, "totals_split": None}
     if opening is None or closing is None:
         out["state"] = "no_balances" if opening is None and closing is None else "one_balance"
         return out
