@@ -14,7 +14,9 @@ decisions:
   - "Minister = no Social Security, Medicare or FUTA, either half (IRC 3121(b)(8), 3306(c)(8)). Federal income tax stays typed in (0 unless they asked for withholding), so a line still needs it before approval"
   - "The minister setting, the per-check housing part and a line's housing part are the owner's alone (they change how pay is taxed); managers keep every other edit"
   - "Only a minister's line carries housing_allowance, never more than the check; everyone else's line is unchanged, so runs save before the migration"
-  - "Marking a run paid logs each housing part to the minister's record for that year (linked by employee, else the one unlinked record whose name holds theirs), source pay_run + the line id, so a retry counts once. It never fails the paid run; POST /payroll/runs/{id}/log-housing (owner) tries again"
+  - "Marking a run paid logs each housing part to the minister's record for that year (linked by employee, else the one unlinked record whose name holds theirs word for word), source pay_run + the line id, so a retry counts once. It never fails the paid run (a failed read says so: failed on mark-paid, 503 on the retry); POST /payroll/runs/{id}/log-housing (owner) tries again"
+  - "A line whose person is no longer a minister drops its housing part on the next recompute"
+  - "An admin who marks a run paid writes its housing lines into the owner-only record, and sees only the names and amounts already on the run; costs and fair rental value stay the owner's"
   - "A run paying housing allowance with no designation on record gets a housing_notes line: the board designates it before it's paid, or the part is taxable"
   - "housing_allowance.NAV now names bkTab housing, so Chief's receipts open the screen (solutionist-studio#1418)"
 related: [2026-10-30-housing-allowance.md]

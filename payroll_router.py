@@ -528,7 +528,7 @@ def _recompute_item(biz: str, run: Dict[str, Any], item: Dict[str, Any],
     year = int(str(run["pay_date"])[:4])
     ytd = _ytd_gross_before(biz, employee["id"], year, run["id"])
     merged = {**item, **overrides}
-    return payroll_calc.compute_item(
+    calc = payroll_calc.compute_item(
         employee=employee,
         hours=float(merged.get("hours") or 0),
         overtime_hours=float(merged.get("overtime_hours") or 0),
@@ -539,6 +539,11 @@ def _recompute_item(biz: str, run: Dict[str, Any], item: Dict[str, Any],
         employer_suta=merged.get("employer_suta"),
         housing_allowance=merged.get("housing_allowance"),
     )
+    # No longer a minister: the line's housing part goes with the setting,
+    # or it would still be totalled and logged as housing allowance paid.
+    if not employee.get("minister") and float(item.get("housing_allowance") or 0):
+        calc["housing_allowance"] = 0.0
+    return calc
 
 
 @router.get("/runs")
@@ -642,19 +647,23 @@ def _name(e: Dict[str, Any]) -> str:
     return f"{e.get('first_name', '')} {e.get('last_name', '')}".strip()
 
 
+def _words(s: Any) -> List[str]:
+    return re.findall(r"[^\W\d_]+", str(s or "").lower())
+
+
 def _housing_record(biz: str, year: int, employee: Dict[str, Any]):
     """The minister's housing allowance record for the year: the one linked
     to this employee, else the one unlinked record whose name holds theirs
-    ("Pastor Ana Cruz" for Ana Cruz). (record, "") or (None, why)."""
+    word for word ("Pastor Ana Cruz" for Ana Cruz; never "Susana Cruz-Lee").
+    (record, "") or (None, why)."""
     import housing_allowance as ha
     rows = ha.list_allowances(biz, year)
     linked = [a for a in rows if str(a.get("employee_id") or "") == str(employee.get("id"))]
     if len(linked) == 1:
         return linked[0], ""
-    first = str(employee.get("first_name") or "").strip().lower()
-    last = str(employee.get("last_name") or "").strip().lower()
+    first, last = _words(employee.get("first_name")), _words(employee.get("last_name"))
     named = [a for a in rows if not a.get("employee_id") and first and last
-             and first in a["minister_name"].lower() and last in a["minister_name"].lower()]
+             and set(first + last) <= set(_words(a["minister_name"]))]
     if len(named) == 1:
         return named[0], ""
     who = _name(employee) or "this minister"
@@ -691,15 +700,23 @@ def _housing_notes(run: Dict[str, Any], items: List[Dict[str, Any]],
 def _log_housing(run: Dict[str, Any], user: AuthedUser) -> Dict[str, List[Dict[str, Any]]]:
     """Each line's housing part, logged to the minister's housing allowance
     record as paid (source pay_run, the line's id: a second try counts it
-    once). Says what couldn't be logged and why; never fails the caller."""
+    once). Says what couldn't be logged and why. A failed read of the run's
+    lines or its people raises housing_allowance.Unavailable: it is never
+    "nothing to log"."""
     import housing_allowance as ha
     out: Dict[str, List[Dict[str, Any]]] = {"logged": [], "not_logged": []}
-    items = [i for i in _items_of(run["id"]) if float(i.get("housing_allowance") or 0) > 0]
+    lines = sb_clients.sb_get_as_service(
+        f"/pay_run_items?pay_run_id=eq.{run['id']}&select=*&order=created_at.asc&limit=500")
+    if lines is None:
+        raise ha.Unavailable("pay_run_items")
+    items = [i for i in lines if float(i.get("housing_allowance") or 0) > 0]
     if not items:
         return out
     biz = str(run["business_id"])
-    emps = {e["id"]: e for e in sb_clients.sb_get_as_service(
-        f"/employees?business_id=eq.{biz}&select=*&limit=1000") or []}
+    people = sb_clients.sb_get_as_service(f"/employees?business_id=eq.{biz}&select=*&limit=1000")
+    if people is None:
+        raise ha.Unavailable("employees")
+    emps = {e["id"]: e for e in people}
     year = int(str(run["pay_date"])[:4])
     on = ha.switched_on(biz)
     for i in items:
@@ -853,7 +870,8 @@ def mark_paid(run_id: str, user: AuthedUser = Depends(require_user)) -> Dict[str
         housing = _log_housing(run, user)
     except Exception as e:  # the run is paid either way; log-housing can try again
         logger.warning(f"[payroll] housing log failed run={run_id[:8]}: {e}")
-        housing = {"logged": [], "not_logged": [], "failed": True}
+        housing = {"logged": [], "not_logged": [], "failed": True,
+                   "reason": "the housing allowance couldn't be logged just now; the owner can try again"}
     return {"ok": True, "run": {**run, "status": "paid", "paid_at": when, "payout_rail": rail},
             "housing": housing}
 
@@ -865,7 +883,11 @@ def log_housing(run_id: str, user: AuthedUser = Depends(require_user)) -> Dict[s
     run = _run(run_id, user, "owner")
     if run.get("status") != "paid":
         raise HTTPException(409, "Only a paid run's housing allowance is logged.")
-    return {"ok": True, "housing": _log_housing(run, user)}
+    import housing_allowance as ha
+    try:
+        return {"ok": True, "housing": _log_housing(run, user)}
+    except ha.Unavailable:
+        raise HTTPException(503, "The pay run couldn't be read just now, so nothing was logged. Try again.")
 
 
 @router.post("/runs/{run_id}/cancel")

@@ -213,3 +213,47 @@ def test_a_failed_read_never_fails_the_paid_run(church, monkeypatch):
     assert out["run"]["status"] == "paid"
     assert out["housing"]["not_logged"][0]["reason"] == "the housing allowance records couldn't be read just now"
     assert pr.get_run(run_id, user=_Owner())["housing_notes"] == []     # a hint, skipped
+
+
+def test_a_failed_read_of_the_lines_is_not_nothing_to_log(church, monkeypatch):
+    _designate(church)
+    run_id, _ = _paid_run(church)
+    import sb_clients
+    real = sb_clients.sb_get_as_service
+
+    def failing(prefix):
+        return lambda p: None if p.startswith(prefix) else real(p)
+    # mark-paid: the run is paid, and the answer says the log failed.
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", failing("/pay_run_items?pay_run_id"))
+    out = pr.mark_paid(run_id, user=_Admin())
+    assert out["run"]["status"] == "paid" and out["housing"]["failed"] is True
+    # The owner's retry: a 503, for the lines or the people, never "nothing to log".
+    for prefix in ("/pay_run_items?pay_run_id", "/employees?business_id"):
+        monkeypatch.setattr(sb_clients, "sb_get_as_service", failing(prefix))
+        with pytest.raises(HTTPException) as e:
+            pr.log_housing(run_id, user=_Owner())
+        assert e.value.status_code == 503
+    assert church.rows("minister_housing_entries") == []
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", real)
+    assert pr.log_housing(run_id, user=_Owner())["housing"]["logged"][0]["amount"] == 2000.0
+
+
+def test_names_match_word_for_word(church):
+    _designate(church, minister_name="Pastor Susana Rivera-Cruz")
+    run_id, _ = _paid_run(church)
+    out = pr.mark_paid(run_id, user=_Admin())
+    assert out["housing"]["not_logged"][0]["reason"] == "no 2026 housing allowance is recorded for Ana Rivera"
+    assert church.rows("minister_housing_entries") == []
+
+
+def test_no_longer_a_minister_takes_the_housing_part_off_a_draft_line(church):
+    out = pr.create_run(pr.RunBody(business_id="biz1", period_start="2026-10-01", period_end="2026-10-31",
+                                   pay_date="2026-10-31", items=[pr.RunItemInput(employee_id="emp9")]),
+                        user=_Owner())
+    line = out["items"][0]
+    assert line["housing_allowance"] == 2000.0
+    pr.update_employee("emp9", pr.EmployeePatch(minister=False), user=_Owner())
+    upd = pr.update_item(out["run"]["id"], line["id"], pr.ItemPatch(federal_withholding=0.0), user=_Manager())
+    assert upd["item"]["housing_allowance"] == 0.0
+    assert upd["item"]["social_security_employee"] > 0                  # FICA again
+    assert upd["totals"]["housing_allowance"] == 0.0
