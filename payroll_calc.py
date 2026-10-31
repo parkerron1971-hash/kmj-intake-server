@@ -24,6 +24,14 @@ cleanly into two kinds, and this module is honest about which is which.
   owner types them from the engine's answer. Until one of those fills
   them, the item stays `needs_calculation` and the run cannot be approved.
 
+  A MINISTER (employees.minister, 2026-10-31): pay for ministerial
+  services is not FICA or FUTA wages (IRC 3121(b)(8), 3306(c)(8)), so no
+  Social Security, Medicare or FUTA, either half; the minister pays
+  self-employment tax on their own. Federal income tax is withheld only
+  if they ask (typed in, 0 when not). Part of the check may be the
+  housing allowance (IRC 107): `housing_allowance` on the line, W-2 Box 14,
+  left out of Box 1. It is still part of gross and of the net paid.
+
 Rail-agnostic: nothing in this module moves money or knows a bank account.
 """
 from __future__ import annotations
@@ -86,10 +94,14 @@ def gross_for(employee: Dict[str, Any], hours: float, overtime_hours: float = 0.
 
 # ─── Statutory taxes ────────────────────────────────────────────────
 
-def statutory(gross: float, ytd_gross_before: float, year: int) -> Dict[str, float]:
+def statutory(gross: float, ytd_gross_before: float, year: int,
+              minister: bool = False) -> Dict[str, float]:
     """FICA + FUTA for one check, given wages already paid this year.
     Wage bases are applied against YTD so the cap lands mid-year the way
-    the IRS expects, not per check."""
+    the IRS expects, not per check. A minister's pay owes none of it."""
+    if minister:
+        return {"social_security_employee": 0.0, "medicare_employee": 0.0,
+                "employer_social_security": 0.0, "employer_medicare": 0.0, "employer_futa": 0.0}
     gross = max(0.0, float(gross or 0))
     ytd = max(0.0, float(ytd_gross_before or 0))
 
@@ -163,11 +175,16 @@ def compute_item(*, employee: Dict[str, Any], hours: float, overtime_hours: floa
                  federal_withholding: Optional[float] = None,
                  state_withholding: Optional[float] = None,
                  other_deductions: float = 0.0,
-                 employer_suta: Optional[float] = None) -> Dict[str, Any]:
+                 employer_suta: Optional[float] = None,
+                 housing_allowance: Optional[float] = None) -> Dict[str, Any]:
     """Everything a pay_run_items row needs from the numbers we own.
-    FIT/SIT pass through untouched (None = still needed)."""
+    FIT/SIT pass through untouched (None = still needed). A minister's
+    line also carries its housing part, never more than the check; no one
+    else's has the key at all (so a row written before the column exists
+    still saves)."""
     gross = gross_for(employee, hours, overtime_hours)
-    tax = statutory(gross, ytd_gross_before, year)
+    minister = bool(employee.get("minister"))
+    tax = statutory(gross, ytd_gross_before, year, minister=minister)
     fit = None if federal_withholding is None else _r(float(federal_withholding))
     sit = None if state_withholding is None else _r(float(state_withholding))
     other = _r(max(0.0, float(other_deductions or 0)))
@@ -178,7 +195,7 @@ def compute_item(*, employee: Dict[str, Any], hours: float, overtime_hours: floa
         net = _r(gross - (fit or 0) - (sit or 0)
                  - tax["social_security_employee"] - tax["medicare_employee"] - other)
 
-    return {
+    out = {
         "hours": _r(float(hours or 0)),
         "overtime_hours": _r(float(overtime_hours or 0)),
         "gross": gross,
@@ -194,6 +211,9 @@ def compute_item(*, employee: Dict[str, Any], hours: float, overtime_hours: floa
         "employer_suta": None if employer_suta is None else _r(float(employer_suta)),
         "calc_status": "manual" if complete else "needs_calculation",
     }
+    if minister:
+        out["housing_allowance"] = _r(min(gross, max(0.0, float(housing_allowance or 0))))
+    return out
 
 
 # ─── Run totals + the deposit summary ───────────────────────────────
@@ -229,6 +249,8 @@ def run_totals(items: list[Dict[str, Any]]) -> Dict[str, Any]:
         "employer_futa": futa,
         "employer_suta": suta,
         "employer_cost": _r(gross + ss_r + med_r + futa + suta),
+        # The ministers' housing allowance inside gross (W-2 Box 14).
+        "housing_allowance": s("housing_allowance"),
         "deposits": {
             "federal_941": _r(fit + ss_e + ss_r + med_e + med_r),
             "federal_940_futa": futa,
