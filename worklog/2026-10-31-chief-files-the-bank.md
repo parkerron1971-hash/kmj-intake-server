@@ -23,3 +23,16 @@ related: [2026-10-30-chief-reconcile-all.md, 2026-10-31-bank-statements.md]
 handlers, TO_FILE_TOOL). Wired: `chief_of_staff`, `action_registry`,
 `action_inverse`, `chief_areas` (Giving & money), `chief_tool_loop`,
 `chief_prompt`. Tests: `__tests__/test_chief_file_bank.py` (11).
+
+**Fix, same day: a giving deposit is never income twice.** Kevin described
+Sunday giving (cash, check, card, Cash App, recorded by person, deposited
+over the next days) and asked for Chief to recognize those deposits. Love
+City records its gifts in Giving, and each gift is income in the books when
+recorded, so a giving deposit filed as income would count the same money
+twice; the first prompt said church giving deposits were income. Now
+`gifts_recorded()` (any paid gift in the last 400 days) makes bank_to_file
+say so, and file_bank_rows refuses `income` on money in there unless the
+item says `not_a_gift` (rent, a sale). A deposit left unanswered books as
+"uncategorized deposit", not income. Matching the deposits to the gifts
+they carry (the Sunday match) is proposed to Kevin, not built.
+
