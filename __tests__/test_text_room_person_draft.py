@@ -380,6 +380,8 @@ def test_someone_elses_person_gets_no_draft(drafting):
     ("Grace Grove: Hi Dana! See you Sunday.", "Hi Dana! See you Sunday."),
     ("Hi Dana! See you Sunday. Reply STOP to opt out.", "Hi Dana! See you Sunday."),
     ("Hi\n\n\n\nDana", "Hi\n\nDana"),
+    # One curly apostrophe would make each text 70 characters, not 160.
+    ("\u201cWe\u2019re praying \u2014 see you Sunday\u2026\u201d", "We're praying - see you Sunday..."),
 ])
 def test_the_box_gets_just_the_text(raw, want):
     assert text_room.clean_draft(raw, "Grace Grove") == want

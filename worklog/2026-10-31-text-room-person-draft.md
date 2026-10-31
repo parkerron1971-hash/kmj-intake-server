@@ -15,6 +15,7 @@ decisions:
   - "A fact it doesn't have is a [blank] (the response lists them so the box can hold the send until they're filled); it promises no call, visit or time unless the texts already did"
   - "No draft when their unanswered texts are about danger, abuse or a death (church_prayer.needs_pastor, which includes msg_screen.CRISIS_RE): held=true and a person answers"
   - "Metered as one AI action (llm_call.apost units=1, billing_limits.require_units first), spend_guard before the call, a fail-open per-person bucket text_draft (60/hour)"
+  - "The draft comes back with straight quotes and dashes: one curly apostrophe makes every text in it 70 characters instead of 160"
   - "Model: chief_models.model_for('draft') with model_ladder.thinking_off_kwargs, so thinking can't eat the reply"
   - "Ships on (Kevin: 'On as they ship')"
 related: [2026-10-30-text-room-people, 2026-10-30-text-room-announcements]
@@ -26,4 +27,4 @@ the panel and an announcement can't disagree.
 
 `text_room.py`: GET /sms/person, POST /sms/draft (async: they share the
 httpx reads with sms_alerts). `rate_limit.py`: the `text_draft` bucket.
-Tests: `__tests__/test_text_room_person_draft.py` (34).
+Tests: `__tests__/test_text_room_person_draft.py` (35).

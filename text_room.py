@@ -444,6 +444,8 @@ class DraftIn(BaseModel):
     phone: str = Field("", max_length=40)
 
 
+_PLAIN = str.maketrans({"\u2018": "'", "\u2019": "'", "\u201c": '"', "\u201d": '"',
+                       "\u2013": "-", "\u2014": "-", "\u2026": "..."})
 _BLANK = re.compile(r"\[[^\[\]\n]{1,40}\]")
 
 
@@ -453,10 +455,11 @@ def blanks(text: str) -> List[str]:
 
 
 def clean_draft(text: Any, business_name: str) -> str:
-    """The model's answer as it goes in the box: no quotes around it, and
+    """The model's answer as it goes in the box: no quotes around it,
     neither the name in front nor the opt-out line, which the send adds
-    (sms_service.compose_outbound_body)."""
-    s = str(text or "").strip().strip('"“”').strip()
+    (sms_service.compose_outbound_body), and straight quotes and dashes: one
+    curly apostrophe makes every text in it 70 characters, not 160."""
+    s = str(text or "").translate(_PLAIN).strip().strip('"').strip()
     name = (business_name or "").strip()
     if name and s.lower().startswith(name.lower() + ":"):
         s = s[len(name) + 1:].strip()
