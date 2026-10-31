@@ -72,6 +72,10 @@ COA_LAWYER_EXTRA = [
 COA_NONPROFIT_EXTRA = [
     ("3300", "Net Assets — With Donor Restrictions", "equity", "credit", None, False),
     ("4200", "Restricted Contributions",             "income", "credit", None, False),
+    # A gift that isn't by card (cash, check, an app transfer, an online
+    # platform's payout) waits here until the bank deposit that carried it
+    # is matched to it (giving_deposits.py): undeposited funds.
+    ("1160", "Gifts to Deposit",                     "asset",  "debit",  None, False),
 ]
 
 _BUCKET_TO_EXPENSE = {
@@ -163,7 +167,7 @@ def _fetch_sources(biz: str) -> Dict[str, Any]:
     invoices = sb_clients.sb_get_as_service(
         f"/invoices?business_id=eq.{biz}"
         f"&select=id,total,status,paid_at,sent_at,created_at,due_date,payment_method,"
-        f"stripe_payment_url,refund_amount_cents,refunded_at,category&limit=10000") or []
+        f"stripe_payment_url,refund_amount_cents,refunded_at,category,is_gift&limit=10000") or []
     expenses = sb_clients.sb_get_as_service(
         f"/business_expenses?business_id=eq.{biz}"
         f"&select=id,amount,category,subcategory,vendor,date&limit=10000") or []
@@ -178,7 +182,7 @@ def _fetch_sources(biz: str) -> Dict[str, Any]:
             f"/plaid_transactions?business_id=eq.{biz}&{acct}"
             f"&pending=eq.false&excluded_from_books=eq.false"
             f"&select=transaction_id,account_id,amount,date,business_category,business_subcategory,"
-            f"plaid_category_primary,plaid_category_detail,reconciled_to_payout_id"
+            f"plaid_category_primary,plaid_category_detail,reconciled_to_payout_id,gift_match_fee"
             f"{bank_money.ledger_cols()}&limit=20000") or []
     # I.7 — trust accounts are a separate ledger: their balances back the
     # 1200/2200 pair, never the operating-cash (1000) opening plug.
@@ -242,8 +246,40 @@ def _income_code_for_invoice(inv: Dict[str, Any], business_type: Optional[str]) 
     return "4000"
 
 
+class _AskOnce:
+    """A yes/no asked only when a row first needs it, then kept: whether the
+    Sunday match is on for this business. A read it can't make raises from
+    there, and that row stays queued."""
+    def __init__(self, ask):
+        self._ask, self._v = ask, None
+
+    def __bool__(self) -> bool:
+        if self._v is None:
+            self._v = bool(self._ask())
+        return self._v
+
+
+def gifts_wait_for(business_id: str) -> "_AskOnce":
+    import giving_deposits
+    return _AskOnce(lambda: giving_deposits.ledger_gifts_wait(business_id))
+
+
+def _gift_waits(inv: Dict[str, Any], business_type: Optional[str]) -> bool:
+    """A church's gift not given by card: it waits in 1160 Gifts to Deposit
+    until the deposit that carried it is matched (giving_deposits.py), so the
+    deposit is never income a second time. Card gifts clear through 1150."""
+    if inv.get("is_gift") is not True:
+        return False
+    import vertical_family
+    if not vertical_family.is_nonprofit_like(business_type):
+        return False
+    pm = (inv.get("payment_method") or "").lower()
+    return not ("stripe" in pm or "card" in pm or inv.get("stripe_payment_url"))
+
+
 def desired_for_invoice(inv: Dict[str, Any],
-                        business_type: Optional[str] = None) -> List[Dict[str, Any]]:
+                        business_type: Optional[str] = None,
+                        gifts_wait: Any = False) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     total = float(inv.get("total") or 0)
     status = (inv.get("status") or "").lower()
@@ -254,14 +290,17 @@ def desired_for_invoice(inv: Dict[str, Any],
         ed = _d(inv.get("sent_at")) or _d(inv.get("created_at")) or _d(inv.get("due_date"))
         out.append(_entry(ed, "invoice_issue", inv["id"], "Invoice issued",
                           [_line("1100", debit=total), _line(income_code, credit=total)]))
+    # Only where the Sunday match is on (giving_deposits.ledger_gifts_wait),
+    # since only there can a deposit clear 1160.
+    waits = _gift_waits(inv, business_type) and bool(gifts_wait)
     if status == "paid" and inv.get("paid_at"):
-        cc = "1000" if _is_non_stripe_payment(inv) else "1150"
+        cc = "1160" if waits else ("1000" if _is_non_stripe_payment(inv) else "1150")
         out.append(_entry(_d(inv.get("paid_at")), "invoice_payment", inv["id"], "Invoice paid",
                           [_line(cc, debit=total), _line("1100", credit=total)]))
     rc = inv.get("refund_amount_cents")
     if rc and float(rc) > 0:
         amt = round(float(rc) / 100.0, 2)
-        cc = "1000" if _is_non_stripe_payment(inv) else "1150"
+        cc = "1160" if waits else ("1000" if _is_non_stripe_payment(inv) else "1150")
         out.append(_entry(_d(inv.get("refunded_at")) or _d(inv.get("paid_at")),
                           "invoice_refund", inv["id"], "Invoice refunded",
                           [_line(income_code, debit=amt), _line(cc, credit=amt)]))
@@ -329,6 +368,13 @@ def desired_for_plaid(t: Dict[str, Any],
         if t.get("reconciled_to_payout_id"):
             return [_entry(_d(t.get("date")), "plaid_transaction", sid, "Payout deposit",
                            [_line("1000", debit=inflow), _line("1150", credit=inflow)])]
+        if mk == "gifts":
+            # The recorded gifts this deposit carried leave 1160. Any fee the
+            # giving platform kept rides on the deposit (gift_match_fee) and is
+            # its own expense row (Dr expense, Cr Cash), so cash nets to the bank.
+            gross = round(inflow + float(t.get("gift_match_fee") or 0), 2)
+            return [_entry(_d(t.get("date")), "plaid_transaction", sid, "Deposit of recorded gifts",
+                           [_line("1000", debit=gross), _line("1160", credit=gross)])]
         if mk == "transfer":
             return [_entry(_d(t.get("date")), "plaid_transaction", sid,
                            "Transfer in from your own account",
@@ -651,8 +697,9 @@ def generate_entries(sources: Dict[str, Any]) -> List[Dict[str, Any]]:
     """All source rows → balanced journal-entry specs (backfill path). Pure."""
     specs: List[Dict[str, Any]] = []
     btype = sources.get("business_type")
+    gifts_wait = sources.get("gifts_wait", False)
     for inv in sources["invoices"]:
-        specs += desired_for_invoice(inv, btype)
+        specs += desired_for_invoice(inv, btype, gifts_wait)
     for e in sources["expenses"]:
         specs += desired_for_expense(e)
     for b in sources["bills"]:
@@ -769,6 +816,7 @@ def backfill(business_id: str, business_type: Optional[str]) -> Dict[str, Any]:
     coa = ensure_chart_of_accounts(business_id, business_type)
     sources = _fetch_sources(business_id)
     sources["business_type"] = business_type
+    sources["gifts_wait"] = gifts_wait_for(business_id)
     specs = generate_entries(sources)
     existing = _existing_entry_keys(business_id)
     created = skipped = lines_created = 0
@@ -827,13 +875,15 @@ from datetime import timedelta as _timedelta  # noqa: E402
 
 _SOURCE_FETCH = {
     "invoices": ("/invoices?id=eq.{id}&select=id,total,status,paid_at,sent_at,created_at,"
-                 "due_date,payment_method,stripe_payment_url,refund_amount_cents,refunded_at,category&limit=1"),
+                 "due_date,payment_method,stripe_payment_url,refund_amount_cents,refunded_at,category,"
+                 "is_gift&limit=1"),
     "business_expenses": "/business_expenses?id=eq.{id}&select=id,amount,category,subcategory,vendor,date&limit=1",
     "bills": ("/bills?id=eq.{id}&select=id,vendor_name,amount,category,subcategory,status,due_date,"
               "created_at,paid_at,paid_amount&limit=1"),
     "plaid_transactions": ("/plaid_transactions?transaction_id=eq.{id}&select=transaction_id,amount,date,"
                            "business_category,business_subcategory,plaid_category_primary,"
-                           "plaid_category_detail,reconciled_to_payout_id,pending,excluded_from_books,account_id&limit=1"),
+                           "plaid_category_detail,reconciled_to_payout_id,pending,excluded_from_books,account_id,"
+                           "gift_match_fee&limit=1"),
     # Arc 28b — store orders live-sync (queue trigger in
     # 2026_06_12_arc28b_orders_gl_trigger.sql).
     "orders": ("/orders?id=eq.{id}&select=id,status,subtotal_cents,tax_cents,"
@@ -910,7 +960,8 @@ def _reverse_je(biz: str, je: Dict[str, Any], coa: Dict[str, str]) -> None:
 def process_source_row(biz: str, table: str, source_id: str, coa: Dict[str, str],
                        included_accounts: Optional[set] = None,
                        trust_accounts: Optional[set] = None,
-                       business_type: Optional[str] = None) -> None:
+                       business_type: Optional[str] = None,
+                       gifts_wait: Any = False) -> None:
     """Converge the GL for ONE source row to its desired state (idempotent)."""
     types = _TABLE_SOURCE_TYPES.get(table)
     if not types:
@@ -928,7 +979,7 @@ def process_source_row(biz: str, table: str, source_id: str, coa: Dict[str, str]
         elif table == "plaid_transactions":
             desired = desired_for_plaid(row, trust_accounts)
         elif table == "invoices":
-            desired = desired_for_invoice(row, business_type)
+            desired = desired_for_invoice(row, business_type, gifts_wait)
         else:
             desired = _TABLE_DESIRED[table](row)
     desired_by_type = {s["source_type"]: s for s in desired}
@@ -1055,13 +1106,17 @@ def process_queue(business_id: Optional[str] = None, *, limit: int = 500) -> Dic
             coa = ensure_chart_of_accounts(biz, btype)
             included = set(_included_account_ids(biz))
             trust = set(_trust_account_ids(biz))
+            # Asked once per business per drain, only when a gift needs it; a
+            # read it can't make raises in that row, which stays queued
+            # (never posted the other way on a blip).
+            gifts_wait = gifts_wait_for(biz)
             posted: Dict[tuple, bool] = {}
             for r in biz_rows:
                 key = (r["source_table"], r["source_id"])
                 if key not in posted:
                     try:
                         process_source_row(biz, r["source_table"], r["source_id"], coa,
-                                           included, trust, btype)
+                                           included, trust, btype, gifts_wait)
                         posted[key] = True
                     except Exception as e:
                         posted[key] = False

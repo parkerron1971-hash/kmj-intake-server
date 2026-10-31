@@ -471,6 +471,9 @@ BUSINESS_CHILD_TABLES: List[str] = [
     "plaid_transactions",
     # A statement's rows (plaid_transactions.statement_import_id) go before it.
     "bank_statement_imports",
+    # The Sunday match (giving_deposits.py): items before their match.
+    "gift_deposit_items",
+    "gift_deposit_matches",
     "reconciliations",
     "connectors",
     # GL cluster — queue/alarms/pushed-entries cite journal entries, so
@@ -906,6 +909,10 @@ _IMPORT_SKIP = {
     # restored bank link gives new ids; same reason. The export keeps them; a
     # restored church adds its statements again.
     "bank_statement_imports",
+    # A Sunday match cites gifts and bank rows by id, which a restore re-mints
+    # or a restored bank link renews; same reason. The export keeps them; a
+    # restored church matches its deposits again.
+    "gift_deposit_items", "gift_deposit_matches",
     # A check request cites its person and its expense by id; same reason.
     # The export keeps them; a restored church keeps its limit and budget
     # lines. (Receipts live in business-documents under the church's own

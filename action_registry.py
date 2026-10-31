@@ -494,6 +494,18 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
                        "chief_only": True},
     "undo_file_bank_rows": {**_w("A", "puts back exactly the rows one filing batch answered, skipping any answered "
                                       "since"), "chief_only": True},
+    # Kevin, 2026-10-31: the Sunday match, gifts recorded by person to the
+    # deposits that carried them; Chief does it, matches what a person says,
+    # or verifies; the database refuses a duplicate.
+    "giving_deposits": {**_r("reads the church's recorded gifts against the bank deposits that carried them, "
+                             "and verifies every match; gifts and bank rows never leave the app", sensitive=True),
+                        "chief_only": True},
+    "match_giving_deposits": {**_w("A", "matches recorded gifts to the deposits that carried them: only the clear "
+                                        "ones, or exactly what the owner names; never twice; "
+                                        "unmatch_giving_deposits takes the batch back", bulk=True),
+                              "chief_only": True},
+    "unmatch_giving_deposits": {**_w("A", "takes one batch of gift-to-deposit matches back: the deposits wait for an "
+                                          "answer again and the gifts for a deposit"), "chief_only": True},
     "run_market_research":    _w("A", "writes analysis onto the strategy track. Model spend"),
     "save_business_model":    _w("A", "saves a strategy-track deliverable"),
     "save_launch_plan":       _w("A", "saves a strategy-track deliverable"),

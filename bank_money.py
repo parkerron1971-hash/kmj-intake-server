@@ -36,7 +36,10 @@ from typing import Any, Dict, List, Optional
 import sb_clients
 import plaid_categorization
 
-KINDS = ("income", "owner", "transfer")
+KINDS = ("income", "owner", "transfer", "gifts")
+# Set only by the Sunday match (giving_deposits.py): a deposit that carried
+# gifts already recorded in Giving. Never income (the gifts are), never waiting.
+MATCHED_ONLY = ("gifts",)
 
 _PROBE_TTL = 300.0
 _probe: Dict[str, Any] = {"at": 0.0, "ok": False}

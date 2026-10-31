@@ -308,6 +308,8 @@ def reconcile(business_id: str, action: Dict[str, Any]) -> Dict[str, Any]:
         select = _ROW_SELECT + bank_money.cols()
         all_deposits = _read_all(f"/plaid_transactions?{scope}&amount=lt.0"
                                  f"&select={select}&order=date.desc,transaction_id.asc")
+        # A deposit matched to recorded gifts (giving_deposits.py) is answered.
+        all_deposits = [t for t in all_deposits if t.get("money_kind") not in bank_money.MATCHED_ONLY]
         deposits = all_deposits[:DEPOSIT_CAP]
         outs: List[Dict[str, Any]] = []
         if deposits:
