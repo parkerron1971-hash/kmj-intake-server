@@ -135,6 +135,9 @@ _LIMITS: Dict[str, Tuple[int, int]] = {
     "member_verify": (int(os.environ.get("RL_MEMBER_VERIFY_PER_10MIN", "60")), 600),
     # A signed-in member's writes (RSVP, prayer, details), per person.
     "member_action": (int(os.environ.get("RL_MEMBER_ACTION_PER_HOUR", "30")), 3600),
+    # Draft with Chief in the Text room (text_room.draft_reply), per person
+    # on the team: each is a model call, and a tap loop shouldn't be.
+    "text_draft": (int(os.environ.get("RL_TEXT_DRAFT_PER_HOUR", "60")), 3600),
     # Ask the church (member_asks.py), per member, on top of member_action:
     # a room, help, a visit, a life event or a pledge reaches the office, so
     # one member can't flood it. An hour's budget and a day's.
