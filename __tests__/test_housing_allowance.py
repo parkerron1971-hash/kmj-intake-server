@@ -509,3 +509,250 @@ def test_a_receipt_that_cant_be_read_is_a_503_not_an_empty_file(bucket, db, monk
                   files={"file": PDF}).status_code == 200
     monkeypatch.setattr(church_checks, "_storage_get", lambda path: None)
     assert c.get(f"/housing-allowance/entries/{cost['id']}/receipt?business_id={BIZ}").status_code == 503
+
+
+# ─── From the bank (2026-10-31) ──────────────────────────────────────
+# Kevin: "i want to know exactly based on transaction how much has been paid
+# out ... ask chief to go through the transaction and help me find what was
+# paid out and attach it to the housing payouts".
+
+AID = "aaaaaaaa-0000-4000-8000-000000000001"
+AID2 = "aaaaaaaa-0000-4000-8000-000000000002"
+TYPED = "eeeeeeee-0000-4000-8000-000000000001"
+
+
+def _tx(tid, on, amount, name="ONLINE TRANSFER TO CHK 4417 REF #IB%s", **kw):
+    return {"transaction_id": tid, "business_id": kw.pop("business_id", BIZ),
+            "account_id": kw.pop("account_id", "acc_books"), "date": on,
+            "name": name % tid[-2:] if "%s" in name else name, "merchant_name": None,
+            "amount": amount, "pending": False, "excluded_from_books": False, **kw}
+
+
+@pytest.fixture
+def bank(monkeypatch):
+    fake = FakeDB(
+        businesses=[{"id": BIZ, "owner_id": OWNER}, {"id": OTHER, "owner_id": ADMIN}],
+        plaid_accounts=[
+            {"account_id": "acc_books", "business_id": BIZ, "included_in_bookkeeping": True, "deleted_at": None},
+            {"account_id": "acc_personal", "business_id": BIZ, "included_in_bookkeeping": False, "deleted_at": None}],
+        plaid_transactions=[
+            _tx("tx_first", "2026-07-17", 40, name="BANK FEE"),   # the first day the app has
+            _tx("tx_jul", "2026-07-31", 1500), _tx("tx_aug", "2026-08-31", 1500), _tx("tx_sep", "2026-09-30", 1500),
+            _tx("tx_pay", "2026-10-15", 4200, name="GUSTO NET PAY 2210"),
+            _tx("tx_light", "2026-08-03", 212.40, name="=CLEVELAND ELECTRIC"),
+            _tx("tx_in", "2026-08-02", -900, name="SUNDAY DEPOSIT"),
+            _tx("tx_pending", "2026-10-30", 1500, pending=True),
+            _tx("tx_2025", "2025-12-31", 1500),
+            _tx("tx_personal", "2026-09-01", 1500, account_id="acc_personal"),
+            _tx("tx_theirs", "2026-09-01", 1500, business_id=OTHER)],
+        minister_housing_allowances=[
+            {"id": AID, "business_id": BIZ, "minister_name": "Pastor Kevin", "tax_year": 2026,
+             "designated_amount": 18000, "designated_on": "2026-08-15", "archived_at": None},
+            {"id": AID2, "business_id": BIZ, "minister_name": "Pastor Dee", "tax_year": 2026,
+             "designated_amount": 6000, "designated_on": "2026-01-05", "archived_at": None}],
+        minister_housing_entries=[])
+    for name in ("get", "post", "patch", "delete"):
+        monkeypatch.setattr(sb_clients, f"sb_{name}_as_service", getattr(fake, name))
+    monkeypatch.setenv("HOUSING_ALLOWANCE", "on")
+    return fake
+
+
+def _bank_entries(fake):
+    return sorted(fake.t["minister_housing_entries"], key=lambda e: e["entry_date"])
+
+
+def test_find_lists_the_years_payments_out_and_the_repeats(bank):
+    got = ha.find_bank_payments(BIZ, AID)
+    ids = {r["transaction_id"] for r in got["rows"]}
+    # Money in, pending, last year, an account outside the books and another
+    # business's rows are never candidates.
+    assert ids == {"tx_jul", "tx_aug", "tx_sep", "tx_pay", "tx_light", "tx_first"}
+    assert got["count"] == 6 and got["total"] == round(1500 * 3 + 4200 + 212.40 + 40, 2)
+    (rep,) = got["repeats"]
+    assert rep["amount"] == 1500 and rep["count"] == 3 and rep["transaction_ids"] == ["tx_jul", "tx_aug", "tx_sep"]
+    assert got["history_starts"] == "2026-07-17" and got["history_late"] is True
+    assert [r["transaction_id"] for r in got["rows"]][:2] == ["tx_pay", "tx_sep"]          # newest first
+    narrowed = ha.find_bank_payments(BIZ, AID, words=["gusto"])
+    assert [r["transaction_id"] for r in narrowed["rows"]] == ["tx_pay"]
+    assert {r["transaction_id"] for r in ha.find_bank_payments(BIZ, AID, amount=1500)["rows"]} == {
+        "tx_jul", "tx_aug", "tx_sep"}
+
+
+def test_attach_ties_whole_payments_and_the_housing_part_of_a_paycheck(bank):
+    done = ha.attach_bank_payments(BIZ, OWNER, AID, [
+        {"transaction_id": "tx_aug"}, {"transaction_id": "tx_sep"},
+        {"transaction_id": "tx_pay", "amount": 1500}])
+    assert done["total"] == 4500 and len(done["created_ids"]) == 3 and done["restore"] == []
+    rows = _bank_entries(bank)
+    assert [(e["entry_date"], e["amount"], e["source"], e["source_id"]) for e in rows] == [
+        ("2026-08-31", 1500, "bank", "tx_aug"), ("2026-09-30", 1500, "bank", "tx_sep"),
+        ("2026-10-15", 1500, "bank", "tx_pay")]
+    assert rows[2]["note"].startswith("Bank: GUSTO NET PAY") and "part of $4,200.00" in rows[2]["note"]
+    # Tied once: again is a 409, and the paycheck's other $2,700 is what's left
+    # for anyone else's allowance, never more.
+    with pytest.raises(ha.HTTPException) as again:
+        ha.attach_bank_payments(BIZ, OWNER, AID, [{"transaction_id": "tx_aug"}])
+    assert again.value.status_code == 409
+    left = {r["transaction_id"]: r for r in ha.find_bank_payments(BIZ, AID2)["rows"]}
+    assert left["tx_pay"]["left"] == 2700 and "tx_aug" not in left
+    with pytest.raises(ha.HTTPException) as over:
+        ha.attach_bank_payments(BIZ, OWNER, AID2, [{"transaction_id": "tx_pay", "amount": 3000}])
+    assert over.value.status_code == 400 and "$2,700.00 of it is left" in over.value.detail
+
+
+@pytest.mark.parametrize("tid, says", [
+    ("tx_in", "money coming in"), ("tx_pending", "still pending"), ("tx_2025", "outside 2026"),
+    ("tx_theirs", "isn't a bank payment of this business"), ("nope!", "needs the bank payment")])
+def test_attach_is_all_or_none(bank, tid, says):
+    with pytest.raises(ha.HTTPException) as e:
+        ha.attach_bank_payments(BIZ, OWNER, AID, [{"transaction_id": "tx_jul"}, {"transaction_id": tid}])
+    assert says in e.value.detail
+    assert bank.t["minister_housing_entries"] == []
+
+
+def test_a_typed_in_payment_is_tied_not_counted_twice_and_undo_puts_it_back(bank):
+    bank.t["minister_housing_entries"].append({
+        "id": TYPED, "business_id": BIZ, "allowance_id": AID, "kind": "paid", "category": "allowance",
+        "entry_date": "2026-09-28", "amount": 1500, "source": "manual", "source_id": None, "note": "Sept"})
+    found = {r["transaction_id"]: r for r in ha.find_bank_payments(BIZ, AID)["rows"]}
+    assert found["tx_sep"]["typed_in"] == {"entry_id": TYPED, "entry_date": "2026-09-28"}
+    token = cos._TURN_USER_ID.set(OWNER)
+    try:
+        r = _run(ha.handle_attach_housing_payments, {"transaction_ids": ["tx_aug", "tx_sep"], "minister_name": "kevin"})
+        assert not r.get("failed"), r["result"]
+        assert "1 of them were already typed in" in r["result"]
+        rows = _bank_entries(bank)
+        assert len(rows) == 2 and {e["source"] for e in rows} == {"bank"}
+        typed = next(e for e in rows if e["id"] == TYPED)
+        assert typed["source_id"] == "tx_sep" and typed["entry_date"] == "2026-09-30"
+        inv = action_inverse.build_inverse("attach_housing_payments", {}, r)
+        back = _run(ha.handle_detach_housing_payments, inv)
+    finally:
+        cos._TURN_USER_ID.reset(token)
+    assert "removed 1" in back["result"] and "1 are typed-in again" in back["result"]
+    (left,) = bank.t["minister_housing_entries"]
+    assert left["id"] == TYPED and left["source"] == "manual" and left["source_id"] is None
+    assert left["entry_date"] == "2026-09-28"
+
+
+def test_detach_never_touches_a_typed_in_or_pay_run_entry(bank):
+    bank.t["minister_housing_entries"].append({
+        "id": TYPED, "business_id": BIZ, "allowance_id": AID, "kind": "paid", "category": "allowance",
+        "entry_date": "2026-02-01", "amount": 1500, "source": "manual", "source_id": None, "note": ""})
+    assert ha.detach_bank_payments(BIZ, [TYPED], []) == {"removed": 0, "untied": 0}
+    assert len(bank.t["minister_housing_entries"]) == 1
+
+
+def test_a_failed_delete_is_a_503_not_success(bank, monkeypatch):
+    done = ha.attach_bank_payments(BIZ, OWNER, AID, [{"transaction_id": "tx_aug"}])
+    monkeypatch.setattr(sb_clients, "sb_delete_as_service", lambda path, **kw: False)
+    with pytest.raises(ha.HTTPException) as e:
+        ha.detach_bank_payments(BIZ, done["created_ids"], [])
+    assert e.value.status_code == 503
+    with pytest.raises(ha.HTTPException) as e:
+        ha.delete_entry(BIZ, done["created_ids"][0])
+    assert e.value.status_code == 503
+
+
+def test_the_record_shows_each_payments_bank_row_and_where_paid_came_from(bank):
+    ha.attach_bank_payments(BIZ, OWNER, AID, [{"transaction_id": "tx_aug"}, {"transaction_id": "tx_jul"}])
+    ha.add_entry(BIZ, OWNER, AID, {"kind": "paid", "amount": 1500, "entry_date": "2026-03-31"})
+    got = ha.summary(BIZ, 2026)
+    a = next(x for x in got["allowances"] if x["id"] == AID)
+    assert a["paid_from"]["bank"] == {"count": 2, "amount": 3000}
+    assert a["paid_from"]["manual"] == {"count": 1, "amount": 1500}
+    bank_rows = [e["bank"] for e in a["entries"] if e.get("bank")]
+    assert {"date": "2026-08-31", "description": "ONLINE TRANSFER TO CHK 4417 REF #IBug", "amount": 1500} in bank_rows
+    assert got["bank"] == {"accounts": 1, "history_starts": "2026-07-17"}
+    # July's $1,500 came before the August 15 vote: salary, not allowance.
+    assert a["figures"]["paid_before_designation"] == 3000
+    token = cos._TURN_USER_ID.set(OWNER)
+    try:
+        status = _run(ha.handle_housing_allowance_status, {"tax_year": 2026})
+    finally:
+        cos._TURN_USER_ID.reset(token)
+    assert "$3,000.00 tied to a bank payment, $1,500.00 typed in" in status["result"]
+
+
+def test_the_report_puts_each_payment_beside_its_bank_row(bank):
+    bank.t["minister_housing_entries"].append({
+        "id": TYPED, "business_id": BIZ, "allowance_id": AID, "kind": "spent", "category": "utilities",
+        "entry_date": "2026-08-03", "amount": 212.40, "source": "manual", "source_id": None,
+        "note": "-light bill", "receipt_path": None})
+    ha.attach_bank_payments(BIZ, OWNER, AID, [{"transaction_id": "tx_aug"}, {"transaction_id": "tx_jul"}])
+    c = _client(OWNER)
+    r = c.get(f"/housing-allowance/{AID}/report.csv?business_id={BIZ}")
+    assert r.status_code == 200, r.text
+    assert r.headers["content-type"].startswith("text/csv")
+    assert 'filename="housing-allowance-2026-pastor-kevin.csv"' in r.headers["content-disposition"]
+    assert r.headers["cache-control"] == "private, no-store"
+    text = r.content.decode("utf-8-sig")
+    assert "2026-08-31,Allowance paid,,1500.00,tied to a bank payment,2026-08-31,ONLINE TRANSFER" in text
+    assert "2026-07-31,Allowance paid,,1500.00,tied to a bank payment,2026-07-31" in text and ",Yes,," in text
+    assert "'-light bill" in text                       # never a formula
+    assert "Tied to a bank payment (2),,3000.00" in text
+    assert "Paid since the vote: W-2 Box 14,,1500.00" in text
+    assert "starts July 17, 2026" in text
+
+
+def test_the_bank_routes_are_the_owners_alone(bank):
+    for who in (ADMIN, "00000000-0000-4000-8000-000000000009"):
+        c = _client(who)
+        assert c.get(f"/housing-allowance/{AID}/bank?business_id={BIZ}").status_code == 403
+        assert c.post(f"/housing-allowance/{AID}/bank", json={
+            "business_id": BIZ, "items": [{"transaction_id": "tx_aug"}]}).status_code == 403
+        assert c.post("/housing-allowance/bank/detach", json={"business_id": BIZ, "remove_ids": [AID]}).status_code == 403
+        assert c.get(f"/housing-allowance/{AID}/report.csv?business_id={BIZ}").status_code == 403
+    assert bank.t["minister_housing_entries"] == []
+    c = _client(OWNER)
+    got = c.get(f"/housing-allowance/{AID}/bank?business_id={BIZ}&q=transfer&amount=1500").json()
+    assert got["count"] == 3 and "allowance" not in got
+    tied = c.post(f"/housing-allowance/{AID}/bank", json={
+        "business_id": BIZ, "items": [{"transaction_id": "tx_sep"}]}).json()
+    assert tied["total"] == 1500 and tied["figures"]["paid_since_designation"] == 1500
+    gone = c.post("/housing-allowance/bank/detach", json={"business_id": BIZ, "remove_ids": tied["created_ids"]})
+    assert gone.json() == {"ok": True, "removed": 1, "untied": 0}
+
+
+def test_chief_finds_with_the_servers_numbers_and_says_where_history_starts(bank):
+    token = cos._TURN_USER_ID.set(OWNER)
+    try:
+        r = _run(ha.handle_find_housing_payments, {"minister_name": "kevin"})
+        none = _run(ha.handle_find_housing_payments, {"tax_year": 2025})
+    finally:
+        cos._TURN_USER_ID.reset(token)
+    assert not r.get("failed"), r["result"]
+    assert r["result"].startswith("Pastor Kevin's 2026 housing allowance: 6 payment(s) out of the bank aren't on "
+                                  "its record yet, $8,952.40 in all.")
+    assert "starts July 17, 2026" in r["result"]
+    assert "$1,500.00 × 3 (Jul 31, Aug 31, Sep 30)" in r["result"]
+    assert "transaction_ids tx_jul, tx_aug, tx_sep" in r["result"]
+    assert "not proof" in r["note_for_chief"]
+    assert none["failed"] and "no 2025 housing allowance" in none["result"]
+
+
+def test_chief_refuses_anyone_but_the_owner_the_bank(bank):
+    token = cos._TURN_USER_ID.set(ADMIN)
+    try:
+        r = _run(ha.handle_find_housing_payments, {})
+        a = _run(ha.handle_attach_housing_payments, {"transaction_ids": ["tx_aug"]})
+    finally:
+        cos._TURN_USER_ID.reset(token)
+    assert r["failed"] and a["failed"] and "owner's alone" in a["result"]
+    assert bank.t["minister_housing_entries"] == []
+
+
+def test_the_bank_verbs_are_placed_and_one_undo_covers_the_batch():
+    import chief_areas
+    import chief_prompt
+    import chief_tool_loop as ctl
+    for verb in ("find_housing_payments", "attach_housing_payments", "detach_housing_payments"):
+        assert not action_registry.may_expose_to_agent(verb, allow_writes=True), verb
+        assert verb in chief_areas.OWNERS and verb in cos.ACTION_HANDLERS
+        assert f'"type":"{verb}"' in open(chief_prompt.__file__, encoding="utf-8").read(), verb
+    assert action_registry.is_sensitive("find_housing_payments")
+    assert action_registry.is_bulk("attach_housing_payments")
+    assert not action_registry.is_bulk("detach_housing_payments")
+    assert "find_housing_payments" in {t["name"] for t in ctl.read_tool_definitions()}
+    assert action_inverse.can_undo("attach_housing_payments")
+    assert action_inverse.build_inverse("attach_housing_payments", {}, {"created_ids": [], "restore": []}) is None

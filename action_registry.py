@@ -753,6 +753,10 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
     "set_housing_allowance": {**_w("A", "records or changes the board's designated amount and date for a minister's tax year; edited back on the Housing allowance screen"), "chief_only": True},
     "log_housing_entry": {**_w("A", "adds one dated allowance-paid or housing-cost entry; delete_housing_entry removes it"), "chief_only": True},
     "delete_housing_entry": {**_w("A", "removes one housing allowance entry by id"), "chief_only": True},
+    # Kevin, 2026-10-31: the allowance paid, tied to the bank payments it was.
+    "find_housing_payments": {**_r("reads the business's payments out of the bank that aren't yet on a minister's housing allowance record, adds them up and lists the repeats; bank rows and a minister's records never leave the app", sensitive=True), "chief_only": True},
+    "attach_housing_payments": {**_w("A", "ties bank payments the owner confirmed to a minister's housing allowance as allowance paid, all or none; detach_housing_payments takes exactly that batch back", bulk=True), "chief_only": True},
+    "detach_housing_payments": {**_w("A", "takes back exactly the payments one attach batch tied: the ones it added are removed, the typed-in ones it tied are typed-in again as they were"), "chief_only": True},
     "plan_errand":          _w("A", "creates a cancellable plan only; no browser or purchase runs"),
     "approve_errand":       _w("C", "starts an explicitly approved external errand; may place an order"),
     "stop_errand":          _w("A", "stops further browser actions; does not reverse a submitted order"),

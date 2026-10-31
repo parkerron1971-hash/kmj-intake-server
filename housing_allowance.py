@@ -48,6 +48,31 @@ there"). Each allowance carries what the IRS would ask to see, and
                       they're kept (receipts_kept_where)
     w2 .............. the W-2 checked once it comes (w2_checked_on)
 
+FROM THE BANK (Kevin, 2026-10-31: "i want to know exactly based on
+transaction how much has been paid out ... ask chief to go through the
+transaction and help me find what was paid out and attach it to the
+housing payouts"). The record is only as good as its tie to the bank:
+
+    find ............ the year's outgoing bank rows (the accounts in the
+                      books) not yet on the record, the server's count and
+                      total, and the ones that repeat (same amount, same
+                      description: a regular transfer). Words or an exact
+                      amount narrow it. Candidates, never proof: the owner
+                      says which were housing allowance
+    attach .......... ties the confirmed rows to the allowance as paid, the
+                      whole payment or the housing part of it (a transfer
+                      that was the whole paycheck). A typed-in payment of
+                      the same amount within a week is the same payment: it
+                      is tied, not counted twice. One batch, all or nothing;
+                      what one bank row pays never adds up past the row
+    detach .......... takes exactly one batch back: what it added is
+                      removed, what it tied is typed-in again as it was
+    the report ...... every payment beside its bank date, description and
+                      amount; what's tied to the bank, from pay runs, and
+                      typed in only; a CSV for the tax preparer. It says
+                      where the bank history in the app starts: a payment
+                      from before then can't be tied here
+
 THE TABLES (supabase/APPLY-2026-10-30-housing-allowance.sql), server-only:
 
     minister_housing_allowances  one minister, one tax year
@@ -68,6 +93,8 @@ migration the routes answer 503 and Chief says the records aren't set up.
 from __future__ import annotations
 
 import asyncio
+import csv
+import io
 import logging
 import os
 import re
@@ -678,8 +705,8 @@ def delete_entry(business_id: str, entry_id: str) -> Dict[str, Any]:
                 f"&select={_ENTRY_SELECT}&limit=1")
     if not rows:
         raise HTTPException(404, "entry not found")
-    if sb_clients.sb_delete_as_service(
-            f"/minister_housing_entries?id=eq.{_q(entry_id)}&business_id=eq.{_q(business_id)}") is None:
+    if not sb_clients.sb_delete_as_service(
+            f"/minister_housing_entries?id=eq.{_q(entry_id)}&business_id=eq.{_q(business_id)}"):
         raise HTTPException(503, "That didn't delete. Try again.")
     if receipt_key(business_id, rows[0].get("receipt_path")):
         import church_checks
@@ -763,17 +790,408 @@ def read_receipt(business_id: str, entry_id: str) -> Response:
         "Content-Disposition": f'inline; filename="housing-receipt.{ext}"'})
 
 
+# ─── From the bank ────────────────────────────────────────────────────
+
+BANK_MATCH_DAYS = 7      # a typed-in payment this close, same amount, is the same payment
+ATTACH_MAX = 60
+FIND_ROWS = 400
+_BANK_PAGE = 1000
+_BANK_CAP = 10_000
+_BANK_SELECT = "transaction_id,account_id,date,name,merchant_name,amount,pending,excluded_from_books"
+SOURCE_WORDS = {"bank": "tied to a bank payment", "pay_run": "from a pay run", "manual": "typed in"}
+
+
+def _in(ids: Any) -> str:
+    return "in.(" + ",".join(_q(i) for i in ids) + ")"
+
+
+def _bank_accounts(business_id: str) -> List[str]:
+    """The accounts in the books: the Transactions screen's own."""
+    rows = _get(f"/plaid_accounts?business_id=eq.{_q(business_id)}&included_in_bookkeeping=eq.true"
+                "&deleted_at=is.null&select=account_id")
+    return [str(r["account_id"]) for r in rows if r.get("account_id")]
+
+
+def bank_history_starts(business_id: str, accounts: List[str]) -> Optional[str]:
+    """The first day the app has bank rows for: a payment before it can't be
+    tied here, and the report says so."""
+    if not accounts:
+        return None
+    rows = _get(f"/plaid_transactions?business_id=eq.{_q(business_id)}&account_id={_in(accounts)}"
+                "&select=date&order=date.asc&limit=1")
+    if not rows:
+        return None
+    return str(rows[0].get("date") or "")[:10] or None
+
+
+def _bank_rows(business_id: str, accounts: List[str], year: int) -> List[Dict[str, Any]]:
+    """Every cleared payment out of those accounts in the year: paged (an
+    empty page proves the end), and past the cap a failure, never a part
+    passed off as the whole."""
+    if not accounts:
+        return []
+    base = (f"/plaid_transactions?business_id=eq.{_q(business_id)}&account_id={_in(accounts)}"
+            f"&date=gte.{year}-01-01&date=lte.{year}-12-31&amount=gt.0&pending=eq.false"
+            f"&select={_BANK_SELECT}&order=date.asc,transaction_id.asc")
+    rows: List[Dict[str, Any]] = []
+    while True:
+        page = _get(f"{base}&limit={_BANK_PAGE}" + (f"&offset={len(rows)}" if rows else ""))
+        if not page:
+            return rows
+        rows.extend(page)
+        if len(rows) > _BANK_CAP:
+            raise Unavailable("more bank rows than can be read at once")
+
+
+def _bank_words(t: Dict[str, Any]) -> str:
+    name = " ".join(str(t.get("name") or "").split())
+    merchant = " ".join(str(t.get("merchant_name") or "").split())
+    if merchant and name and merchant.lower() not in name.lower():
+        return f"{merchant} · {name}"[:120]
+    return (name or merchant or "(no description)")[:120]
+
+
+def _payee_key(desc: str) -> str:
+    """A description without its reference numbers: two transfers to the
+    same account read the same."""
+    words = [w for w in re.split(r"[^a-z]+", desc.lower()) if w]
+    return " ".join(words[:5])
+
+
+def _bank_used(business_id: str, allowance_id: str) -> Tuple[Dict[str, float], set]:
+    """How much of each bank row is already counted (any allowance of this
+    business), and the rows this allowance already has."""
+    used: Dict[str, float] = {}
+    mine: set = set()
+    for e in _get(f"/minister_housing_entries?business_id=eq.{_q(business_id)}&source=eq.bank"
+                  "&select=allowance_id,source_id,amount&limit=10000"):
+        sid = str(e.get("source_id") or "")
+        used[sid] = round(used.get(sid, 0.0) + _num(e.get("amount")), 2)
+        if str(e.get("allowance_id")) == str(allowance_id):
+            mine.add(sid)
+    return used, mine
+
+
+def _typed_twin(typed: List[Dict[str, Any]], amount: float, on: Optional[date],
+                claimed: set) -> Optional[Dict[str, Any]]:
+    """The typed-in payment that is this bank payment: the same amount within
+    a week, the closest first."""
+    if not on:
+        return None
+    best = None
+    for e in typed:
+        d = _day_or_none(e.get("entry_date"))
+        if e["id"] in claimed or not d or abs(_num(e.get("amount")) - amount) > 0.005:
+            continue
+        gap = abs((d - on).days)
+        if gap <= BANK_MATCH_DAYS and (best is None or gap < best[0]):
+            best = (gap, e)
+    return best[1] if best else None
+
+
+def _typed(entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return [e for e in entries if e.get("kind") == "paid" and (e.get("source") or "manual") == "manual"]
+
+
+def find_bank_payments(business_id: str, allowance_id: str, *, words: Optional[List[str]] = None,
+                       amount: Any = None) -> Dict[str, Any]:
+    allowance = get_allowance(business_id, allowance_id)
+    year = int(allowance["tax_year"])
+    accounts = _bank_accounts(business_id)
+    used, mine = _bank_used(business_id, allowance_id)
+    typed = _typed(entries_for(business_id, allowance_id))
+    want = None if amount in (None, "") else _amount(amount)
+    words = [w for w in (" ".join(str(x).split()).lower() for x in (words or [])) if w][:6]
+    rows: List[Dict[str, Any]] = []
+    for t in _bank_rows(business_id, accounts, year):
+        tid = str(t.get("transaction_id") or "")
+        a = _num(t.get("amount"))
+        left = round(a - used.get(tid, 0.0), 2)
+        if not tid or tid in mine or left <= 0:
+            continue
+        if words and not any(w in f"{t.get('name') or ''} {t.get('merchant_name') or ''}".lower() for w in words):
+            continue
+        if want is not None and abs(a - want) > 0.005 and abs(left - want) > 0.005:
+            continue
+        row = {"transaction_id": tid, "date": str(t.get("date") or "")[:10], "description": _bank_words(t),
+               "amount": a}
+        if left < a:
+            row["left"] = left
+        if t.get("excluded_from_books"):
+            row["excluded"] = True
+        twin = _typed_twin(typed, left, _day_or_none(row["date"]), set())
+        if twin:
+            row["typed_in"] = {"entry_id": twin["id"], "entry_date": str(twin.get("entry_date"))[:10]}
+        rows.append(row)
+    groups: Dict[Tuple[float, str], List[Dict[str, Any]]] = {}
+    for r in rows:
+        groups.setdefault((r.get("left", r["amount"]), _payee_key(r["description"])), []).append(r)
+    repeats = sorted((g for g in groups.values() if len(g) >= 2),
+                     key=lambda g: (-len(g), -g[0].get("left", g[0]["amount"])))
+    newest = sorted(rows, key=lambda r: (r["date"], r["transaction_id"]), reverse=True)
+    starts = bank_history_starts(business_id, accounts)
+    return {
+        "allowance": allowance, "tax_year": year, "accounts": len(accounts), "history_starts": starts,
+        "history_late": bool(starts and starts > f"{year}-01-01"),
+        "count": len(rows), "total": round(sum(r.get("left", r["amount"]) for r in rows), 2),
+        "repeats": [{"amount": g[0].get("left", g[0]["amount"]), "count": len(g),
+                     "total": round(sum(r.get("left", r["amount"]) for r in g), 2),
+                     "description": g[-1]["description"], "dates": [r["date"] for r in g],
+                     "transaction_ids": [r["transaction_id"] for r in g]} for g in repeats[:15]],
+        "rows": newest[:FIND_ROWS], "capped": len(newest) > FIND_ROWS,
+        "typed_in": {"count": len(typed), "amount": round(sum(_num(e.get("amount")) for e in typed), 2)},
+    }
+
+
+def attach_bank_payments(business_id: str, user_id: Optional[str], allowance_id: str,
+                         items: Any) -> Dict[str, Any]:
+    """Tie confirmed bank payments to the allowance as allowance paid: all of
+    them or none. Each item is {transaction_id, amount?}; no amount is the
+    whole payment (what's left of it)."""
+    allowance = get_allowance(business_id, allowance_id)
+    year = int(allowance["tax_year"])
+    if not isinstance(items, list) or not 1 <= len(items) <= ATTACH_MAX:
+        raise HTTPException(400, f"Pick from 1 to {ATTACH_MAX} bank payments.")
+    want: Dict[str, Optional[float]] = {}
+    for it in items:
+        tid = str((it or {}).get("transaction_id") or "").strip() if isinstance(it, dict) else ""
+        if not _SOURCE_ID.match(tid):
+            raise HTTPException(400, "Each one needs the bank payment it came from.")
+        if tid in want:
+            raise HTTPException(400, "The same bank payment is in the list twice.")
+        part = it.get("amount")
+        want[tid] = None if part in (None, "") else _amount(part, what="the housing part")
+    bank = {str(t.get("transaction_id")): t for t in _get(
+        f"/plaid_transactions?business_id=eq.{_q(business_id)}&transaction_id={_in(want)}"
+        f"&select={_BANK_SELECT}&limit={len(want)}")}
+    used, mine = _bank_used(business_id, allowance_id)
+    typed = _typed(entries_for(business_id, allowance_id))
+    claimed: set = set()
+    plan = []
+    for tid, part in want.items():
+        t = bank.get(tid)
+        if not t:
+            raise HTTPException(400, "One of those isn't a bank payment of this business.")
+        a, on = _num(t.get("amount")), _day_or_none(t.get("date"))
+        when, desc = str(t.get("date") or "")[:10], _bank_words(t)
+        if a <= 0:
+            raise HTTPException(400, f"The {_when(when)} bank row ({desc}) is money coming in, not a payment.")
+        if t.get("pending"):
+            raise HTTPException(400, f"The {_when(when)} payment is still pending at the bank; tie it once it clears.")
+        if not on or on.year != year:
+            raise HTTPException(400, f"The {_when(when)} payment is outside {year}; it belongs to that "
+                                     "year's allowance.")
+        if tid in mine:
+            raise HTTPException(409, f"The {_when(when)} payment of {_money(a)} is already counted.")
+        left = round(a - used.get(tid, 0.0), 2)
+        if left <= 0:
+            raise HTTPException(409, f"All of the {_when(when)} payment of {_money(a)} is already counted "
+                                     "on another allowance.")
+        part = left if part is None else part
+        if part > left + 0.005:
+            raise HTTPException(400, f"The {_when(when)} payment was {_money(a)}" + (
+                f"; {_money(left)} of it is left to count." if left < a else
+                "; the housing part can't be more than that."))
+        twin = _typed_twin(typed, part, on, claimed)
+        if twin:
+            claimed.add(twin["id"])
+        plan.append({"tid": tid, "date": when, "description": desc, "bank_amount": a, "amount": part,
+                     "twin": twin})
+    new_rows = [{
+        "business_id": business_id, "allowance_id": allowance_id, "kind": "paid", "category": "allowance",
+        "entry_date": p["date"], "amount": p["amount"], "source": "bank", "source_id": p["tid"],
+        "note": (f"Bank: {p['description']}" + (f" (part of {_money(p['bank_amount'])})"
+                                                 if p["amount"] < p["bank_amount"] else ""))[:500],
+        "created_by": user_id} for p in plan if not p["twin"]]
+    created: List[Dict[str, Any]] = []
+    if new_rows:
+        res = sb_clients.sb_post_as_service("/minister_housing_entries", new_rows)
+        if not res or not isinstance(res, list) or len(res) != len(new_rows):
+            raise HTTPException(503, "Those payments didn't save. Nothing was changed; try again.")
+        created = res
+    restore: List[Dict[str, Any]] = []
+    for p in plan:
+        twin = p["twin"]
+        if not twin:
+            continue
+        res = sb_clients.sb_patch_as_service(
+            f"/minister_housing_entries?id=eq.{_q(twin['id'])}&business_id=eq.{_q(business_id)}"
+            "&source=eq.manual", {"source": "bank", "source_id": p["tid"], "entry_date": p["date"]})
+        if not res:
+            _take_back(business_id, [c["id"] for c in created], restore)
+            raise HTTPException(503, "Those payments didn't save. Nothing was changed; try again.")
+        restore.append({"entry_id": twin["id"], "entry_date": str(twin.get("entry_date"))[:10]})
+    by_tid = {str(c.get("source_id")): c for c in created}
+    attached = []
+    for p in plan:
+        eid = p["twin"]["id"] if p["twin"] else by_tid.get(p["tid"], {}).get("id")
+        attached.append({"entry_id": eid, "transaction_id": p["tid"], "date": p["date"],
+                         "description": p["description"], "amount": p["amount"],
+                         "bank_amount": p["bank_amount"], "was_typed_in": bool(p["twin"])})
+    return {"allowance": allowance, "attached": attached, "created_ids": [c["id"] for c in created],
+            "restore": restore, "total": round(sum(p["amount"] for p in plan), 2)}
+
+
+def _take_back(business_id: str, remove_ids: List[str], restore: List[Dict[str, Any]]) -> Tuple[int, int]:
+    """Remove the entries a batch added and untie the ones it tied. Only
+    bank-tied entries are touched: never a typed-in or pay run one."""
+    removed = untied = 0
+    if remove_ids:
+        rows = _get(f"/minister_housing_entries?business_id=eq.{_q(business_id)}&id={_in(remove_ids)}"
+                    "&source=eq.bank&select=id&limit=500")
+        if rows:
+            if not sb_clients.sb_delete_as_service(
+                    f"/minister_housing_entries?business_id=eq.{_q(business_id)}"
+                    f"&id={_in([r['id'] for r in rows])}&source=eq.bank"):
+                raise HTTPException(503, "That didn't take back. Try again.")
+            removed = len(rows)
+    for r in restore:
+        patch: Dict[str, Any] = {"source": "manual", "source_id": None}
+        if _day_or_none(r.get("entry_date")):
+            patch["entry_date"] = str(r["entry_date"])[:10]
+        if sb_clients.sb_patch_as_service(
+                f"/minister_housing_entries?id=eq.{_q(r['entry_id'])}&business_id=eq.{_q(business_id)}"
+                "&source=eq.bank", patch):
+            untied += 1
+    return removed, untied
+
+
+def detach_bank_payments(business_id: str, remove_ids: Any = None, restore: Any = None) -> Dict[str, Any]:
+    """Take back what one batch did, or untie single entries (restore with
+    no date keeps the entry's own)."""
+    remove = [str(i) for i in (remove_ids or []) if _UUID.match(str(i))]
+    back = [{"entry_id": str(r.get("entry_id")), "entry_date": r.get("entry_date")}
+            for r in (restore or []) if isinstance(r, dict) and _UUID.match(str(r.get("entry_id") or ""))]
+    if not remove and not back:
+        raise HTTPException(400, "Say which payments to take back.")
+    if len(remove) + len(back) > ATTACH_MAX * 2:
+        raise HTTPException(400, "That's more than one batch.")
+    removed, untied = _take_back(business_id, remove, back)
+    return {"removed": removed, "untied": untied}
+
+
+def sources(entries: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    """Allowance paid by where it came from: tied to the bank, a pay run,
+    typed in only."""
+    out = {s: {"count": 0, "amount": 0.0} for s in SOURCES}
+    for e in entries:
+        if e.get("kind") != "paid":
+            continue
+        s = e.get("source") if e.get("source") in SOURCES else "manual"
+        out[s]["count"] += 1
+        out[s]["amount"] = round(out[s]["amount"] + _num(e.get("amount")), 2)
+    return out
+
+
+def _with_bank(business_id: str, entries: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], bool]:
+    """Each bank-tied entry with its bank row (date, description, amount).
+    A failed read leaves the entries as they are and says so."""
+    ids = sorted({str(e["source_id"]) for e in entries if e.get("source") == "bank" and e.get("source_id")})
+    if not ids:
+        return entries, True
+    rows: Dict[str, Dict[str, Any]] = {}
+    try:
+        for i in range(0, len(ids), 100):
+            chunk = ids[i:i + 100]
+            for t in _get(f"/plaid_transactions?business_id=eq.{_q(business_id)}&transaction_id={_in(chunk)}"
+                          f"&select=transaction_id,date,name,merchant_name,amount&limit={len(chunk)}"):
+                rows[str(t.get("transaction_id"))] = t
+    except Unavailable:
+        return entries, False
+    out = []
+    for e in entries:
+        if e.get("source") == "bank" and e.get("source_id"):
+            t = rows.get(str(e["source_id"]))
+            e = {**e, "bank": ({"date": str(t.get("date") or "")[:10], "description": _bank_words(t),
+                                "amount": _num(t.get("amount"))} if t else {"missing": True})}
+        out.append(e)
+    return out, True
+
+
+def _bank_state(business_id: str) -> Optional[Dict[str, Any]]:
+    try:
+        accounts = _bank_accounts(business_id)
+        return {"accounts": len(accounts), "history_starts": bank_history_starts(business_id, accounts)}
+    except Unavailable:
+        return None
+
+
+def _cell(v: Any) -> Any:
+    """A spreadsheet never runs a cell as a formula: a bank's description can
+    start with anything."""
+    if isinstance(v, str) and v[:1] in ("=", "+", "-", "@", "\t", "\r"):
+        return "'" + v
+    return v
+
+
+def report_csv(business_id: str, allowance_id: str) -> Tuple[str, str]:
+    """The year for the tax preparer: every entry beside its bank row, then
+    the figures."""
+    a = get_allowance(business_id, allowance_id)
+    entries, bank_ok = _with_bank(business_id, entries_for(business_id, allowance_id))
+    f = figures(a, entries)
+    src = sources(entries)
+    vote = _day_or_none(a.get("designated_on"))
+    state = _bank_state(business_id)
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow([f"{a['minister_name']}: {a['tax_year']} housing allowance"])
+    w.writerow(["Date", "Type", "Category", "Amount", "From", "Bank date", "Bank description",
+                "Bank amount", "Before the board's vote", "Receipt", "Note"])
+    for e in sorted(entries, key=lambda e: (str(e.get("entry_date")), str(e.get("created_at")))):
+        paid = e.get("kind") == "paid"
+        on = _day_or_none(e.get("entry_date"))
+        b = e.get("bank") or {}
+        w.writerow([
+            str(e.get("entry_date") or "")[:10], "Allowance paid" if paid else "Housing cost",
+            "" if paid else CATEGORY_WORDS.get(e.get("category"), "other housing costs"),
+            f"{_num(e.get('amount')):.2f}", SOURCE_WORDS.get(e.get("source") or "manual", "typed in"),
+            b.get("date", ""), _cell("(no longer in the bank feed)" if b.get("missing") else b.get("description", "")),
+            f"{b['amount']:.2f}" if "amount" in b else "",
+            ("Yes" if vote and on and on < vote else "No") if paid else "",
+            "" if paid else ("Yes" if e.get("receipt_path") else "No"),
+            _cell(str(e.get("note") or "")),
+        ])
+    w.writerow([])
+    lines = [
+        (f"Designated by the board ({_when(a.get('designated_on'))})", f["designated"]),
+        ("Allowance paid", f["paid"]),
+        ("Paid before the board's vote: taxable salary, W-2 Box 1", f["paid_before_designation"]),
+        ("Paid since the vote: W-2 Box 14", f["box_14"]),
+        (f"Tied to a bank payment ({src['bank']['count']})", src["bank"]["amount"]),
+        (f"From pay runs ({src['pay_run']['count']})", src["pay_run"]["amount"]),
+        (f"Typed in, not tied to the bank ({src['manual']['count']})", src["manual"]["amount"]),
+        ("Housing costs", f["spent"]),
+        ("Fair rental value", f["fair_rental_value"]),
+        (f"Excludable, limited by {_LIMIT_WORDS[f['limited_by']]}", f["excludable"]),
+        ("Taxable excess", f["taxable_excess"]),
+    ]
+    for label, n in lines:
+        w.writerow(["", label, "", "" if n is None else f"{n:.2f}"])
+    w.writerow([])
+    if state and state.get("history_starts") and state["history_starts"] > f"{a['tax_year']}-01-01":
+        w.writerow(["", f"The bank history in the app starts {_when(state['history_starts'])}: a payment "
+                        "from before then can't be tied to the bank here."])
+    if not bank_ok:
+        w.writerow(["", "The bank rows couldn't be read just now, so the bank columns are empty."])
+    w.writerow(["", CARE])
+    slug = re.sub(r"[^a-z0-9]+", "-", a["minister_name"].lower()).strip("-") or "minister"
+    return buf.getvalue(), f"housing-allowance-{a['tax_year']}-{slug}.csv"
+
+
 def summary(business_id: str, year: Optional[int] = None) -> Dict[str, Any]:
     allowances = list_allowances(business_id)
     shown = [a for a in allowances if not year or int(a["tax_year"]) == int(year)]
     out = []
     for a in shown:
-        entries = entries_for(business_id, a["id"])
+        entries, bank_ok = _with_bank(business_id, entries_for(business_id, a["id"]))
         f = figures(a, entries)
         trail = paper_trail(a, entries, f)
         out.append({**a, "figures": f, "summary": describe(a, f), "paper_trail": trail,
+                    "paid_from": sources(entries), "bank_read": bank_ok,
                     "entries": [_public_entry(e) for e in entries]})
-    return {"ok": True, "allowances": out, "reminders": reminders(allowances), "care": CARE}
+    return {"ok": True, "allowances": out, "reminders": reminders(allowances), "care": CARE,
+            "bank": _bank_state(business_id) if shown else None}
 
 
 def _guard(fn, *args):
@@ -884,6 +1302,53 @@ def get_housing_receipt(entry_id: str, business_id: str = Query(...),
     return _guard(read_receipt, business_id, entry_id)
 
 
+class BankAttachBody(BaseModel):
+    business_id: str
+    items: List[Dict[str, Any]] = Field(default_factory=list, max_length=ATTACH_MAX)
+
+
+class BankDetachBody(BaseModel):
+    business_id: str
+    remove_ids: List[str] = Field(default_factory=list, max_length=ATTACH_MAX * 2)
+    restore: List[Dict[str, Any]] = Field(default_factory=list, max_length=ATTACH_MAX * 2)
+
+
+@router.get("/{allowance_id}/bank")
+def get_housing_bank(allowance_id: str, business_id: str = Query(...), q: Optional[str] = None,
+                     amount: Optional[float] = None, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    """The year's payments out of the bank not yet on this allowance."""
+    require_owner(business_id, user.id)
+    data = _guard(lambda: find_bank_payments(business_id, allowance_id, words=(q or "").split(), amount=amount))
+    data.pop("allowance", None)
+    return {"ok": True, **data}
+
+
+@router.post("/{allowance_id}/bank")
+def post_housing_bank(allowance_id: str, body: BankAttachBody,
+                      user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    require_owner(body.business_id, user.id)
+    done = _guard(attach_bank_payments, body.business_id, str(user.id), allowance_id, body.items)
+    f = _guard(lambda: figures(done["allowance"], entries_for(body.business_id, allowance_id)))
+    return {"ok": True, "attached": done["attached"], "created_ids": done["created_ids"],
+            "restore": done["restore"], "total": done["total"], "figures": f}
+
+
+@router.post("/bank/detach")
+def post_housing_bank_detach(body: BankDetachBody, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    require_owner(body.business_id, user.id)
+    return {"ok": True, **_guard(detach_bank_payments, body.business_id, body.remove_ids, body.restore)}
+
+
+@router.get("/{allowance_id}/report.csv")
+def get_housing_report(allowance_id: str, business_id: str = Query(...),
+                       user: AuthedUser = Depends(require_user)) -> Response:
+    require_owner(business_id, user.id)
+    text, name = _guard(report_csv, business_id, allowance_id)
+    return Response(content=text.encode("utf-8-sig"), media_type="text/csv; charset=utf-8", headers={
+        "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff",
+        "Content-Disposition": f'attachment; filename="{name}"'})
+
+
 # ─── Chief ────────────────────────────────────────────────────────────
 
 TOOL = {
@@ -900,6 +1365,26 @@ TOOL = {
     "input_schema": {"type": "object", "properties": {
         "tax_year": {"type": "integer", "description": "Optional. Default: every year on record."}}},
 }
+
+FIND_TOOL = {
+    "name": "find_housing_payments",
+    "description": (
+        "Look through this business's payments out of the bank (the accounts in the books) for a "
+        "minister's housing allowance year: the ones not yet on its record, with the server's count "
+        "and total, the payments that repeat (same amount, same description: a regular transfer), "
+        "each one's transaction_id for attach_housing_payments, and where the bank history in the app "
+        "starts. Optional words (matched against the bank's description) or an exact amount narrow it. "
+        "Use it for 'find my housing payments in the bank', 'what was paid out for housing'. These are "
+        "candidates by amount and timing, not proof: show them and tie only the ones the owner "
+        "confirms. Owner only."),
+    "input_schema": {"type": "object", "properties": {
+        "words": {"type": "array", "items": {"type": "string"}, "maxItems": 6,
+                  "description": "Optional: words in the bank's description (a name, 'transfer', 'zelle')."},
+        "amount": {"type": "number", "description": "Optional: an exact amount, e.g. the monthly allowance."},
+        "minister_name": {"type": "string", "description": "Optional, when more than one minister has one."},
+        "tax_year": {"type": "integer", "description": "Optional. Default: this year."}}},
+}
+SHOW_ROWS = 25
 
 def _fail(atype: str, msg: str) -> Dict[str, Any]:
     return {"type": atype, "result": f"Failed: {msg}", "label": msg[:80], "failed": True,
@@ -949,6 +1434,15 @@ def _trail_words(row: Dict[str, Any]) -> str:
     return f" Paper trail, still to do: {'; '.join(still)}."
 
 
+def _from_words(row: Dict[str, Any]) -> str:
+    src = row.get("paid_from") or {}
+    if not row["figures"]["paid"]:
+        return ""
+    said = [f"{_money(src[k]['amount'])} {SOURCE_WORDS[k]}" for k in ("bank", "pay_run", "manual")
+            if (src.get(k) or {}).get("count")]
+    return f" Of what was paid: {', '.join(said)}." if said else ""
+
+
 def _status_sync(biz: Dict[str, Any], action: Dict[str, Any]) -> Dict[str, Any]:
     atype = "housing_allowance_status"
     refused = _chief_gate(biz, atype)
@@ -966,7 +1460,7 @@ def _status_sync(biz: Dict[str, Any], action: Dict[str, Any]) -> Dict[str, Any]:
                 ". The owner can add the board's designation on the Housing allowance screen, or ask "
                 "me to record it.")
     else:
-        text = " ".join(r["summary"] + _trail_words(r) for r in rows)
+        text = " ".join(r["summary"] + _from_words(r) + _trail_words(r) for r in rows)
     if data["reminders"]:
         text += " " + " ".join(data["reminders"])
     return {"type": atype, "result": text, "label": "🏠 Housing allowance",
@@ -1063,6 +1557,157 @@ def _set_sync(biz: Dict[str, Any], action: Dict[str, Any]) -> Dict[str, Any]:
                        f"{str(row.get('designated_on') or '')[:10]}."),
             "label": f"🏠 {verb} the {row.get('tax_year')} housing allowance",
             "nav": NAV}
+
+
+def _short(d: Any) -> str:
+    day = _day_or_none(d)
+    return f"{day:%b} {day.day}" if day else str(d or "")
+
+
+def _row_words(r: Dict[str, Any]) -> str:
+    s = f"{_short(r['date'])} {_money(r.get('left', r['amount']))} \"{r['description']}\" id {r['transaction_id']}"
+    if "left" in r:
+        s += f" (what's left of {_money(r['amount'])})"
+    if r.get("typed_in"):
+        s += f" (same as the typed-in {_short(r['typed_in']['entry_date'])} payment)"
+    if r.get("excluded"):
+        s += " (excluded from the books)"
+    return s
+
+
+def _find_sync(biz: Dict[str, Any], action: Dict[str, Any]) -> Dict[str, Any]:
+    atype = "find_housing_payments"
+    refused = _chief_gate(biz, atype)
+    if refused:
+        return refused
+    words = action.get("words")
+    words = [words] if isinstance(words, str) else words if isinstance(words, list) else None
+    try:
+        allowance, why = _pick(str(biz["id"]), action)
+        if not allowance:
+            return _fail(atype, why + ". Record the board's designation first (the amount and the day it voted)")
+        data = find_bank_payments(str(biz["id"]), allowance["id"], words=words, amount=action.get("amount"))
+    except HTTPException as e:
+        return _fail(atype, str(e.detail))
+    except Unavailable:
+        return _fail(atype, "the bank rows couldn't be read just now. This is not 'none found'")
+    who, year = allowance["minister_name"], data["tax_year"]
+    if not data["accounts"]:
+        text = ("No bank account is connected to the books, so there are no bank payments to look "
+                "through. The owner can connect one under Bookkeeping, Transactions.")
+    else:
+        narrow = []
+        if words:
+            narrow.append("mentioning " + " or ".join(f'"{w}"' for w in words))
+        if action.get("amount") not in (None, ""):
+            narrow.append(f"of exactly {_money(_num(action['amount']))}")
+        text = (f"{who}'s {year} housing allowance: {data['count']} payment(s) out of the bank "
+                f"{' '.join(narrow) + ' ' if narrow else ''}aren't on its record yet, "
+                f"{_money(data['total'])} in all.")
+        if data["history_late"]:
+            text += (f" The bank history in the app starts {_when(data['history_starts'])}, so payments before "
+                     "then aren't here; those can be typed in from the bank statement (log_housing_entry).")
+        if data["repeats"]:
+            text += " Repeating (same amount, same description): " + "; ".join(
+                f"{_money(g['amount'])} × {g['count']} ({', '.join(_short(d) for d in g['dates'])}), "
+                f"\"{g['description']}\", transaction_ids {', '.join(g['transaction_ids'])}"
+                for g in data["repeats"][:8]) + "."
+        shown = data["rows"][:SHOW_ROWS]
+        if shown:
+            text += f" Newest {len(shown)} of {data['count']}: " + "; ".join(_row_words(r) for r in shown) + "."
+    if data["typed_in"]["count"]:
+        text += (f" Typed-in payments on the record, not tied to the bank yet: {data['typed_in']['count']} "
+                 f"({_money(data['typed_in']['amount'])}).")
+    return {"type": atype, "result": text, "label": "🏠 Housing payments in the bank",
+            "allowance_id": allowance["id"], "count": data["count"], "total": data["total"],
+            "note_for_chief": ("Candidates by amount and timing, not proof. Show them and ask which were housing "
+                               "allowance; tie only the ones the owner confirms (attach_housing_payments). A "
+                               "transfer that was the whole paycheck needs the housing part as its amount. "
+                               "Quote the server's count and total; never add rows up yourself."),
+            "nav": NAV}
+
+
+def _attach_sync(biz: Dict[str, Any], action: Dict[str, Any]) -> Dict[str, Any]:
+    """Tie the bank payments the owner confirmed: one batch, one undo."""
+    atype = "attach_housing_payments"
+    refused = _chief_gate(biz, atype)
+    if refused:
+        return refused
+    from chief_of_staff import _TURN_USER_ID
+    items: List[Dict[str, Any]] = []
+    for p in action.get("parts") or []:
+        if isinstance(p, dict):
+            items.append({"transaction_id": p.get("transaction_id"), "amount": p.get("amount")})
+    each = action.get("amount_each")
+    ids = action.get("transaction_ids")
+    for tid in ([ids] if isinstance(ids, str) else ids or []):
+        items.append({"transaction_id": tid, "amount": each})
+    if not items:
+        return _fail(atype, "say which bank payments (their transaction_ids from find_housing_payments)")
+    try:
+        allowance, why = _pick(str(biz["id"]), action)
+        if not allowance:
+            return _fail(atype, why)
+        done = attach_bank_payments(str(biz["id"]), _TURN_USER_ID.get(), allowance["id"], items)
+        entries = entries_for(str(biz["id"]), allowance["id"])
+    except HTTPException as e:
+        return _fail(atype, str(e.detail) + " Nothing was tied")
+    except Unavailable:
+        return _fail(atype, "the housing allowance records couldn't be read just now; nothing was tied")
+    f, src = figures(allowance, entries), sources(entries)
+    rows = done["attached"]
+    text = (f"Tied {len(rows)} bank payment(s), {_money(done['total'])}, to {allowance['minister_name']}'s "
+            f"{allowance['tax_year']} housing allowance: "
+            + "; ".join(f"{_short(r['date'])} {_money(r['amount'])}"
+                        + (f" of {_money(r['bank_amount'])}" if r["amount"] < r["bank_amount"] else "")
+                        for r in rows) + ".")
+    twins = sum(1 for r in rows if r["was_typed_in"])
+    if twins:
+        text += f" {twins} of them were already typed in; those are now tied to their bank payment, not counted twice."
+    vote = _day_or_none(allowance.get("designated_on"))
+    early = [r for r in rows if vote and (_day_or_none(r["date"]) or vote) < vote]
+    if early:
+        text += (f" {len(early)} of them ({_money(round(sum(r['amount'] for r in early), 2))}) came before the "
+                 f"board's vote on {_when(allowance['designated_on'])}, so that's taxable salary (W-2 Box 1), not "
+                 "housing allowance.")
+    text += (f" Paid since the vote {_money(f['paid_since_designation'])} of {_money(f['designated'])}; tied to the "
+             f"bank {_money(src['bank']['amount'])} of {_money(f['paid'])} paid.")
+    return {"type": atype, "result": text, "label": f"🏠 Tied {len(rows)} bank payment(s) to housing",
+            "allowance_id": allowance["id"], "created_ids": done["created_ids"], "restore": done["restore"],
+            "attached": rows, "nav": NAV}
+
+
+def _detach_sync(biz: Dict[str, Any], action: Dict[str, Any]) -> Dict[str, Any]:
+    atype = "detach_housing_payments"
+    refused = _chief_gate(biz, atype)
+    if refused:
+        return refused
+    try:
+        done = detach_bank_payments(str(biz["id"]), action.get("entry_ids"), action.get("restore"))
+    except HTTPException as e:
+        return _fail(atype, str(e.detail))
+    except Unavailable:
+        return _fail(atype, "the housing allowance records couldn't be read just now; nothing changed")
+    parts = []
+    if done["removed"]:
+        parts.append(f"removed {done['removed']} that came from the bank")
+    if done["untied"]:
+        parts.append(f"{done['untied']} are typed-in again, as they were")
+    return {"type": atype, "result": ("Took those bank payments back: " + " and ".join(parts) + ".") if parts
+            else "Nothing to take back: those payments were already changed or removed.",
+            "label": "🏠 Took the bank payments back", "nav": NAV}
+
+
+async def handle_find_housing_payments(client, biz, action) -> Dict[str, Any]:
+    return await asyncio.to_thread(_find_sync, biz, action or {})
+
+
+async def handle_attach_housing_payments(client, biz, action) -> Dict[str, Any]:
+    return await asyncio.to_thread(_attach_sync, biz, action or {})
+
+
+async def handle_detach_housing_payments(client, biz, action) -> Dict[str, Any]:
+    return await asyncio.to_thread(_detach_sync, biz, action or {})
 
 
 async def handle_housing_allowance_status(client, biz, action) -> Dict[str, Any]:

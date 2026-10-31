@@ -205,6 +205,7 @@ def read_tool_definitions() -> List[Dict[str, Any]]:
     out.append(chief_transactions.TOOL)  # bank rows: sensitive, so Chief's alone
     import housing_allowance
     out.append(housing_allowance.TOOL)  # a minister's own housing costs: the same
+    out.append(housing_allowance.FIND_TOOL)  # the bank, for that record: the same
     return out
 
 
@@ -437,7 +438,8 @@ async def execute_tool_use(client, biz: Dict[str, Any],
 
     if name in _EXCLUDED or (not action_registry.may_expose_to_agent(name)
                              and name not in ("list_connected_agents", "connected_agent_assignments", "get_weather",
-                                              "search_transactions", "housing_allowance_status")):
+                                              "search_transactions", "housing_allowance_status",
+                                              "find_housing_payments")):
         return True, (f"'{name}' is not a mid-turn lookup. Reads only here; "
                       f"operations go through [ACTION:] tags in your reply.")
     if effect != action_registry.READ:
