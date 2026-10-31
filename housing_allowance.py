@@ -106,6 +106,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Upload
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
+import bank_picks
 import sb_clients
 from auth_supabase import AuthedUser, require_user
 
@@ -795,67 +796,29 @@ def read_receipt(business_id: str, entry_id: str) -> Response:
 BANK_MATCH_DAYS = 7      # a typed-in payment this close, same amount, is the same payment
 ATTACH_MAX = 60
 FIND_ROWS = 400
-_BANK_PAGE = 1000
-_BANK_CAP = 10_000
-_BANK_SELECT = "transaction_id,account_id,date,name,merchant_name,amount,pending,excluded_from_books"
 SOURCE_WORDS = {"bank": "tied to a bank payment", "pay_run": "from a pay run", "manual": "typed in"}
-
-
-def _in(ids: Any) -> str:
-    return "in.(" + ",".join(_q(i) for i in ids) + ")"
+# The bank is read the way the funds for the year read it (bank_picks.py).
+_in, _bank_words = bank_picks.in_, bank_picks.words
 
 
 def _bank_accounts(business_id: str) -> List[str]:
     """The accounts in the books: the Transactions screen's own."""
-    rows = _get(f"/plaid_accounts?business_id=eq.{_q(business_id)}&included_in_bookkeeping=eq.true"
-                "&deleted_at=is.null&select=account_id")
-    return [str(r["account_id"]) for r in rows if r.get("account_id")]
+    return bank_picks.accounts(business_id, _get)
 
 
 def bank_history_starts(business_id: str, accounts: List[str]) -> Optional[str]:
     """The first day the app has bank rows for: a payment before it can't be
     tied here, and the report says so."""
-    if not accounts:
-        return None
-    rows = _get(f"/plaid_transactions?business_id=eq.{_q(business_id)}&account_id={_in(accounts)}"
-                "&select=date&order=date.asc&limit=1")
-    if not rows:
-        return None
-    return str(rows[0].get("date") or "")[:10] or None
+    return bank_picks.history_starts(business_id, accounts, _get)
 
 
 def _bank_rows(business_id: str, accounts: List[str], year: int) -> List[Dict[str, Any]]:
-    """Every cleared payment out of those accounts in the year: paged (an
-    empty page proves the end), and past the cap a failure, never a part
-    passed off as the whole."""
-    if not accounts:
-        return []
-    base = (f"/plaid_transactions?business_id=eq.{_q(business_id)}&account_id={_in(accounts)}"
-            f"&date=gte.{year}-01-01&date=lte.{year}-12-31&amount=gt.0&pending=eq.false"
-            f"&select={_BANK_SELECT}&order=date.asc,transaction_id.asc")
-    rows: List[Dict[str, Any]] = []
-    while True:
-        page = _get(f"{base}&limit={_BANK_PAGE}" + (f"&offset={len(rows)}" if rows else ""))
-        if not page:
-            return rows
-        rows.extend(page)
-        if len(rows) > _BANK_CAP:
-            raise Unavailable("more bank rows than can be read at once")
-
-
-def _bank_words(t: Dict[str, Any]) -> str:
-    name = " ".join(str(t.get("name") or "").split())
-    merchant = " ".join(str(t.get("merchant_name") or "").split())
-    if merchant and name and merchant.lower() not in name.lower():
-        return f"{merchant} · {name}"[:120]
-    return (name or merchant or "(no description)")[:120]
-
-
-def _payee_key(desc: str) -> str:
-    """A description without its reference numbers: two transfers to the
-    same account read the same."""
-    words = [w for w in re.split(r"[^a-z]+", desc.lower()) if w]
-    return " ".join(words[:5])
+    """Every cleared payment out of those accounts in the year; past the cap
+    a failure, never a part passed off as the whole."""
+    try:
+        return bank_picks.year_rows(business_id, accounts, year, _get, "out")
+    except bank_picks.TooMany:
+        raise Unavailable("more bank rows than can be read at once")
 
 
 def _bank_used(business_id: str, allowance_id: str) -> Tuple[Dict[str, float], set]:
@@ -923,21 +886,13 @@ def find_bank_payments(business_id: str, allowance_id: str, *, words: Optional[L
         if twin:
             row["typed_in"] = {"entry_id": twin["id"], "entry_date": str(twin.get("entry_date"))[:10]}
         rows.append(row)
-    groups: Dict[Tuple[float, str], List[Dict[str, Any]]] = {}
-    for r in rows:
-        groups.setdefault((r.get("left", r["amount"]), _payee_key(r["description"])), []).append(r)
-    repeats = sorted((g for g in groups.values() if len(g) >= 2),
-                     key=lambda g: (-len(g), -g[0].get("left", g[0]["amount"])))
     newest = sorted(rows, key=lambda r: (r["date"], r["transaction_id"]), reverse=True)
     starts = bank_history_starts(business_id, accounts)
     return {
         "allowance": allowance, "tax_year": year, "accounts": len(accounts), "history_starts": starts,
         "history_late": bool(starts and starts > f"{year}-01-01"),
         "count": len(rows), "total": round(sum(r.get("left", r["amount"]) for r in rows), 2),
-        "repeats": [{"amount": g[0].get("left", g[0]["amount"]), "count": len(g),
-                     "total": round(sum(r.get("left", r["amount"]) for r in g), 2),
-                     "description": g[-1]["description"], "dates": [r["date"] for r in g],
-                     "transaction_ids": [r["transaction_id"] for r in g]} for g in repeats[:15]],
+        "repeats": bank_picks.repeats(rows),
         "rows": newest[:FIND_ROWS], "capped": len(newest) > FIND_ROWS,
         "typed_in": {"count": len(typed), "amount": round(sum(_num(e.get("amount")) for e in typed), 2)},
     }
@@ -964,7 +919,7 @@ def attach_bank_payments(business_id: str, user_id: Optional[str], allowance_id:
     accounts = set(_bank_accounts(business_id))
     bank = {str(t.get("transaction_id")): t for t in _get(
         f"/plaid_transactions?business_id=eq.{_q(business_id)}&transaction_id={_in(want)}"
-        f"&select={_BANK_SELECT}&limit={len(want)}")}
+        f"&select={bank_picks.SELECT}&limit={len(want)}")}
     used, mine = _bank_used(business_id, allowance_id)
     typed = _typed(entries_for(business_id, allowance_id))
     claimed: set = set()

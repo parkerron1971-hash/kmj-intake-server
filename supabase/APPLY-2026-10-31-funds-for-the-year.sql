@@ -9,9 +9,9 @@
 --                         a part (the housing part of a paycheck), with the
 --                         day, a note, and whether it was money out or in
 --                         (the bank row's sign, kept so the figures never
---                         hang on the bank feed); what all funds hold of one row never
---                         adds up past it (the server checks), and a row is
---                         on one fund once
+--                         hang on the bank feed). What all funds hold of
+--                         one row never adds up past it (the server
+--                         checks), and a row is on a fund once
 --
 -- Server-only: RLS on, no policies, browser roles revoked. funds.py is the
 -- only reader and writer: the Transactions screen's readers may read, the

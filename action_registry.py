@@ -756,6 +756,12 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
     # Kevin, 2026-10-31: the allowance paid, tied to the bank payments it was.
     "find_housing_payments": {**_r("reads the business's payments out of the bank that aren't yet on a minister's housing allowance record, adds them up and lists the repeats; bank rows and a minister's records never leave the app", sensitive=True), "chief_only": True},
     "attach_housing_payments": {**_w("A", "ties bank payments the owner confirmed to a minister's housing allowance as allowance paid, all or none; detach_housing_payments takes exactly that batch back", bulk=True), "chief_only": True},
+    # Kevin, 2026-10-31: funds for the year, each bank transaction placed on one.
+    "fund_status": {**_r("reads the business's funds for a year and what's placed on them, adds them up; bank figures never leave the app", sensitive=True), "chief_only": True},
+    "set_fund": {**_w("A", "makes a fund for a year, or changes one's name, budget or notes; edited back on the Funds tab"), "chief_only": True},
+    "find_fund_payments": {**_r("reads the business's bank transactions of a fund's year that aren't on it, adds them up and lists the repeats; bank rows never leave the app", sensitive=True), "chief_only": True},
+    "place_fund_payments": {**_w("A", "places bank transactions the owner confirmed on a fund, all or none; unplace_fund_payments takes exactly that batch back", bulk=True), "chief_only": True},
+    "unplace_fund_payments": {**_w("A", "takes placed bank transactions off their fund by id (one place batch, or one row); the bank isn't touched"), "chief_only": True},
     "detach_housing_payments": {**_w("A", "takes back exactly the payments one attach batch tied: the ones it added are removed, the typed-in ones it tied are typed-in again as they were"), "chief_only": True},
     "plan_errand":          _w("A", "creates a cancellable plan only; no browser or purchase runs"),
     "approve_errand":       _w("C", "starts an explicitly approved external errand; may place an order"),

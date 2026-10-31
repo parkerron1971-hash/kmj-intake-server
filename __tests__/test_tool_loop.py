@@ -62,7 +62,8 @@ def test_the_toolbox_is_the_mcp_read_surface_minus_display():
     # view_website drives the server's browser: Chief's own, never an outside agent's.
     # search_transactions reads bank rows: sensitive, so never an outside agent's.
     chief_only = private_coordination | {"view_website", "get_weather", "search_transactions",
-                                         "housing_allowance_status", "find_housing_payments"}
+                                         "housing_allowance_status", "find_housing_payments", "fund_status",
+                                         "find_fund_payments"}
     assert all(not action_registry.may_expose_to_agent(n) for n in chief_only)
     assert names == (exposed - {"show_view"}) | chief_only, (
         "The only extra reads are Chief's private ones: coordination tools (bots cannot see one "

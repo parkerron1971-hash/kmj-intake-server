@@ -285,6 +285,11 @@ INVERSES: Dict[str, Inverse] = {
         lambda a, r: ({"type": "detach_housing_payments", "entry_ids": list(r.get("created_ids") or []),
                        "restore": list(r.get("restore") or [])}
                       if r.get("created_ids") or r.get("restore") else None)),
+    "place_fund_payments": Inverse(
+        "unplace_fund_payments",
+        "take those bank transactions back off the fund",
+        lambda a, r: ({"type": "unplace_fund_payments", "item_ids": list(r.get("created_ids") or [])}
+                      if r.get("created_ids") else None)),
     "reconcile_books": Inverse(
         "undo_reconcile_books",
         "put those bank rows back the way they were before I reconciled them",
