@@ -5,7 +5,7 @@ agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-10-31: "is there a way to have now if we created a fund for the year. we can place all what was paid out or sent out aligned with that. wether it is housing pay etc...", then "build that", wanting it "exactly based on transaction"'
 status: in review
 prs: [kmj-intake-server (this PR), solutionist-studio (the Funds tab)]
-migrations: [supabase/APPLY-2026-10-31-funds-for-the-year.sql]
+migrations: [supabase/APPLY-2026-10-31-funds-for-the-year.sql (applied 2026-10-31, verified: 2 tables, RLS on, 0 policies)]
 left_undone:
   - "Typed-in expenses, bills and check requests aren't placed on funds: a fund holds bank transactions, so nothing is counted twice (a paid check request's expense and its cleared check are one payment). A cash payment that never reaches the bank has no fund yet"
   - "Gifts given through the app aren't counted on a fund by name; their payout is a deposit, placed as money in"
