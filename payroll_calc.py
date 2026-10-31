@@ -175,6 +175,17 @@ def active_calculator() -> Calculator:
 
 # ─── One line item ──────────────────────────────────────────────────
 
+MINISTER_CREDENTIALS = ("ordained", "licensed", "commissioned")
+
+
+def is_minister(employee: Dict[str, Any], church: bool) -> bool:
+    """Taxed as a minister: at a church, marked one, and with how they are
+    one on record (ordained, licensed or commissioned, Publication 517's
+    test). A flag without the credential is taxed like anyone's pay."""
+    return (church and bool(employee.get("minister"))
+            and employee.get("minister_credential") in MINISTER_CREDENTIALS)
+
+
 def compute_item(*, employee: Dict[str, Any], hours: float, overtime_hours: float,
                  ytd_gross_before: float, year: int,
                  federal_withholding: Optional[float] = None,
@@ -188,9 +199,10 @@ def compute_item(*, employee: Dict[str, Any], hours: float, overtime_hours: floa
     line also carries its housing part, never more than the check; no one
     else's has the key at all (so a row written before the column exists
     still saves). `church` is whether the business paying is a church:
-    only there does the minister flag count, and no one's line owes FUTA."""
+    only there does the minister flag count (with its credential, see
+    is_minister), and no one's line owes FUTA."""
     gross = gross_for(employee, hours, overtime_hours)
-    minister = church and bool(employee.get("minister"))
+    minister = is_minister(employee, church)
     tax = statutory(gross, ytd_gross_before, year, minister=minister, church=church)
     fit = None if federal_withholding is None else _r(float(federal_withholding))
     sit = None if state_withholding is None else _r(float(state_withholding))

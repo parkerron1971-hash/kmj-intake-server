@@ -231,7 +231,7 @@ class EmployeeBody(BaseModel):
 
 
 _MINISTER_KEYS = {"minister", "minister_credential", "housing_allowance_per_period"}
-MINISTER_CREDENTIALS = ("ordained", "licensed", "commissioned")
+MINISTER_CREDENTIALS = payroll_calc.MINISTER_CREDENTIALS
 
 
 def _is_church(biz_row: Optional[Dict[str, Any]]) -> bool:
@@ -240,10 +240,13 @@ def _is_church(biz_row: Optional[Dict[str, Any]]) -> bool:
 
 
 def _church_of(biz: str) -> bool:
-    """Whether the business paying is a church; a read that fails is a no
-    (its staff are then taxed like anyone's, the safe side)."""
+    """Whether the business paying is a church. A read that fails is a 503,
+    never "not a church": the answer rewrites a saved line, and guessing no
+    would put Social Security on a minister and drop their housing part."""
     rows = sb_clients.sb_get_as_service(f"/businesses?id=eq.{biz}&select=id,type&limit=1")
-    return isinstance(rows, list) and bool(rows) and _is_church(rows[0])
+    if not isinstance(rows, list):
+        raise HTTPException(503, "The business couldn't be read just now, so nothing was changed. Try again.")
+    return bool(rows) and _is_church(rows[0])
 
 
 def _minister_fields(biz_row: Dict[str, Any], user: AuthedUser, body: BaseModel,
@@ -321,6 +324,8 @@ def create_employee(body: EmployeeBody,
     res = sb_clients.sb_post_as_service("/employees", {
         "business_id": body.business_id, "status": "active", **fields,
     })
+    if res is None:
+        raise HTTPException(503, "They weren't added: the save didn't go through. Try again.")
     row = (res or [{}])[0]
     _audit(body.business_id, user, "employee_added",
            f"Added {fields['first_name']} {fields['last_name']} to the team",
@@ -399,7 +404,8 @@ def update_employee(employee_id: str, body: EmployeePatch,
     if not patch:
         return {"ok": True, "employee": e}
     patch["updated_at"] = _now_iso()
-    sb_clients.sb_patch_as_service(f"/employees?id=eq.{employee_id}", patch)
+    if sb_clients.sb_patch_as_service(f"/employees?id=eq.{employee_id}", patch) is None:
+        raise HTTPException(503, "The change didn't save. Try again.")
     return {"ok": True, "employee": {**e, **patch}}
 
 
@@ -584,7 +590,7 @@ def _recompute_item(biz: str, run: Dict[str, Any], item: Dict[str, Any],
     )
     # No longer a minister: the line's housing part goes with the setting,
     # or it would still be totalled and logged as housing allowance paid.
-    if not (church and employee.get("minister")) and float(item.get("housing_allowance") or 0):
+    if not payroll_calc.is_minister(employee, church) and float(item.get("housing_allowance") or 0):
         calc["housing_allowance"] = 0.0
     return calc
 
@@ -832,7 +838,7 @@ def update_item(run_id: str, item_id: str, body: ItemPatch,
     housing = body.housing_allowance
     if housing is not None:
         biz_row = _access(str(run["business_id"]), user, "manager")
-        if not (emp_rows[0].get("minister") and _is_church(biz_row)):
+        if not payroll_calc.is_minister(emp_rows[0], _is_church(biz_row)):
             raise HTTPException(400, "Only a minister's pay has a housing allowance.")
         if str(biz_row.get("owner_id")) != str(user.id):
             raise HTTPException(403, "Only the owner sets the housing allowance part of a check.")

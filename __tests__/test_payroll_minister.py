@@ -315,3 +315,41 @@ def test_a_church_owes_no_futa_but_keeps_fica():
     assert t["social_security_employee"] == t["employer_social_security"] == 310.0
     assert t["medicare_employee"] == t["employer_medicare"] == 72.5
     assert pc.statutory(5000.0, 0.0, 2026)["employer_futa"] == 30.0     # anyone else, as before
+
+
+def test_a_minister_without_the_credential_is_taxed_like_anyone():
+    """Flagged before the credential existed: Social Security and Medicare
+    stay until the owner says how they're a minister."""
+    flagged = {k: v for k, v in PASTOR.items() if k != "minister_credential"}
+    item = pc.compute_item(employee=flagged, hours=0, overtime_hours=0, ytd_gross_before=0, year=2026,
+                           housing_allowance=2000.0, church=True)
+    assert item["social_security_employee"] == 310.0 and "housing_allowance" not in item
+    assert item["employer_futa"] == 0.0                 # still a church
+
+
+def test_a_failed_church_read_changes_nothing_on_a_draft_line(church, monkeypatch):
+    out = pr.create_run(pr.RunBody(business_id="biz1", period_start="2026-10-01", period_end="2026-10-31",
+                                   pay_date="2026-10-31", items=[pr.RunItemInput(employee_id="emp9")]),
+                        user=_Owner())
+    run_id, line = out["run"]["id"], out["items"][0]
+    import sb_clients
+    real = sb_clients.sb_get_as_service
+    monkeypatch.setattr(sb_clients, "sb_get_as_service",
+                        lambda p: None if p.startswith("/businesses?id=eq.biz1&select=id,type") else real(p))
+    with pytest.raises(HTTPException) as e:
+        pr.update_item(run_id, line["id"], pr.ItemPatch(federal_withholding=0.0), user=_Manager())
+    assert e.value.status_code == 503
+    saved = next(i for i in church.rows("pay_run_items") if i["id"] == line["id"])
+    assert saved["housing_allowance"] == 2000.0 and saved["social_security_employee"] == 0.0
+
+
+def test_an_employee_save_that_fails_says_so(church, monkeypatch):
+    import sb_clients
+    monkeypatch.setattr(sb_clients, "sb_patch_as_service", lambda p, b: None)
+    with pytest.raises(HTTPException) as e:
+        pr.update_employee("emp9", pr.EmployeePatch(minister_credential="licensed"), user=_Owner())
+    assert e.value.status_code == 503
+    monkeypatch.setattr(sb_clients, "sb_post_as_service", lambda p, b, prefer="rep": None)
+    with pytest.raises(HTTPException) as e:
+        pr.create_employee(pr.EmployeeBody(business_id="biz1", first_name="Sam", last_name="Lee"), user=_Owner())
+    assert e.value.status_code == 503
