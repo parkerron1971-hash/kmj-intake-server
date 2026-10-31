@@ -5,11 +5,11 @@ agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-10-31: everybody gives on Sunday (cash, check, card, Cash App), each gift recorded by person, the money deposited over Sunday to Tuesday; the gifts that tally to $650 should meet the deposits that make $650 and Chief should recognize it. Then: "yes build it but also make sure that chief can either do it for people, match what the person does or verify. make sure that there is no duplicates."'
 status: in review
 prs: [kmj-intake-server (this PR), solutionist-studio (Giving, Deposits)]
-migrations: [supabase/APPLY-2026-10-31-giving-deposits.sql (before the code), supabase/APPLY-2026-10-31-giving-deposits-repost.sql (after the code deploys)]
+migrations: [supabase/APPLY-2026-10-31-giving-deposits.sql (applied 2026-10-31, verified), supabase/APPLY-2026-10-31-giving-deposits-repost.sql (after the code deploys; again for every church at the switch-on)]
 left_undone:
   - "Card gifts through the app stay with the Stripe payout matcher; gifts through another platform than Subsplash (Tithe.ly, Pushpay) aren't recorded per person, so their payouts aren't matched here"
   - "A deposit that doesn't add up to its gifts (a counting error) can't be matched until the gifts or the deposit are corrected; the screen says by how much"
-  - "Switched with GIVING_DEPOSITS (owner until a Thursday flip); What's New at the flip"
+  - "Switched with GIVING_DEPOSITS (owner until a Thursday flip); What's New at the flip. The ledger books 1160 only where it's on (giving_deposits.ledger_gifts_wait, asked once per business per drain, and a read it can't make leaves the rows queued), so at the flip the repost SQL runs again for every church, and again if it's ever switched off"
   - "Treasurer seats: matching is owner-only like every bank write; a finance seat matching is a later ruling"
 decisions:
   - "The books: a church's gift not given by card books into 1160 Gifts to Deposit (nonprofit chart), not Cash; a matched deposit is money_kind 'gifts' and books Dr Cash, Cr 1160 for the deposit plus any fee the platform kept (gift_match_fee); the fee is its own business_expenses row (Operating, 'Giving platform fees'), so the ledger and the H.3a reports agree and cash nets to the bank. Revenue still comes from the gift, once. This also ends 'other' gifts (Cash App) sitting in 1150 Stripe Clearing, which no payout ever cleared"

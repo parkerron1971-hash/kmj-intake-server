@@ -248,6 +248,38 @@ def test_unmatching_puts_it_all_back(db):
     assert len(gd.status(BIZ, year=2026)["proposals"]) == 3        # ready again
 
 
+def test_a_batch_that_fails_partway_keeps_what_it_made_and_its_undo(db, monkeypatch):
+    real = gd.write_match
+    calls = []
+
+    def flaky(*a, **kw):
+        calls.append(1)
+        if len(calls) == 2:
+            raise gd.Unavailable("plaid_transactions")
+        return real(*a, **kw)
+    monkeypatch.setattr(gd, "write_match", flaky)
+    got = _run(gd.handle_match_giving_deposits, {"year": 2026})
+    assert not got.get("failed") and got["summary"]["count"] == 2 and got["batch_id"]
+    assert "couldn't be saved just now" in got["result"]
+
+
+def test_verify_reads_a_matchs_own_gifts_wherever_they_fall(db):
+    # A person matched a gift from well before its deposit: not "gone".
+    db.t["invoices"].append(_gift(9, "2026-01-20", 75, "other", giver="Lee"))
+    db.t["plaid_transactions"].append(_dep("d_late", "2026-03-05", 75, "Cash App Love City"))
+    gd.match_named(BIZ, OWNER, [G(9)], ["d_late"], note="the owner said so")
+    st = gd.status(BIZ, start="2026-03-01", end="2026-03-31")
+    assert st["problems"] == [] and any(m["note"] == "the owner said so" for m in st["matched"])
+
+
+def test_a_deposit_a_payout_just_claimed_is_never_marked_gifts(db):
+    _dep_row(db, "d_app")["reconciled_to_payout_id"] = "po_1"
+    with pytest.raises(HTTPException):
+        gd.write_match(BIZ, [{"id": G(6), "kind": "transfer", "cents": 5000, "date": "2026-03-01", "giver": "Pat"}],
+                       [{"id": "d_app", "cents": 5000, "date": "2026-03-02"}], fee=0, made_by="person", user_id=OWNER)
+    assert db.t["gift_deposit_matches"] == [] and _dep_row(db, "d_app")["money_kind"] is None
+
+
 def test_verify_catches_what_changed_after_a_match(db):
     gd.match_clear(BIZ, OWNER, year=2026)
     next(i for i in db.t["invoices"] if i["id"] == G(1))["total"] = 450        # a gift edited after
@@ -262,18 +294,41 @@ def test_verify_catches_what_changed_after_a_match(db):
 
 # ─── The books ───────────────────────────────────────────────────────
 
-def test_a_churchs_non_card_gift_waits_in_gifts_to_deposit():
+def _paid(entries):
+    return [e for e in entries if e["source_type"] == "invoice_payment"][0]
+
+
+def test_a_churchs_non_card_gift_waits_in_gifts_to_deposit_only_where_the_match_is_on():
     gift = {"id": "i1", "total": 50, "status": "paid", "paid_at": "2026-03-01T12:00:00Z", "is_gift": True,
             "payment_method": "cash"}
-    pay = [e for e in gl_engine.desired_for_invoice(gift, "church") if e["source_type"] == "invoice_payment"][0]
+    pay = _paid(gl_engine.desired_for_invoice(gift, "church", gifts_wait=True))
     assert {(l["code"], l["debit"]) for l in pay["lines"] if l["debit"]} == {("1160", 50)}
-    card = [e for e in gl_engine.desired_for_invoice({**gift, "payment_method": "stripe"}, "church")
-            if e["source_type"] == "invoice_payment"][0]
+    # Switched off for this church: as before, so 1160 never fills where nothing clears it.
+    off = _paid(gl_engine.desired_for_invoice(gift, "church"))
+    assert {(l["code"], l["debit"]) for l in off["lines"] if l["debit"]} == {("1000", 50)}
+    card = _paid(gl_engine.desired_for_invoice({**gift, "payment_method": "stripe"}, "church", gifts_wait=True))
     assert any(l["code"] == "1150" and l["debit"] for l in card["lines"])
-    coach = [e for e in gl_engine.desired_for_invoice({**gift, "is_gift": False}, "coach")
-             if e["source_type"] == "invoice_payment"][0]
+    coach = _paid(gl_engine.desired_for_invoice({**gift, "is_gift": False}, "coach", gifts_wait=True))
     assert any(l["code"] == "1000" and l["debit"] for l in coach["lines"])
     assert "1160" in {c[0] for c in gl_engine._coa_for("church")}
+    specs = gl_engine.generate_entries({"invoices": [gift], "expenses": [], "bills": [], "plaid": [],
+                                        "business_type": "church", "gifts_wait": True, "cash_on_hand": 0})
+    assert any(l["code"] == "1160" for s in specs for l in s["lines"])
+
+
+def test_the_ledger_asks_the_switch_definitely_or_leaves_the_rows_queued(db, monkeypatch):
+    monkeypatch.setenv("GIVING_DEPOSITS", "on")
+    assert gd.ledger_gifts_wait(BIZ) is True
+    monkeypatch.setenv("GIVING_DEPOSITS", "off")
+    assert gd.ledger_gifts_wait(BIZ) is False
+    monkeypatch.setenv("GIVING_DEPOSITS", "owner")
+    db.t["businesses"] = [{"id": BIZ, "owner_id": cos.PLATFORM_OWNER_ID}]
+    assert gd.ledger_gifts_wait(BIZ) is True
+    db.t["businesses"] = [{"id": BIZ, "owner_id": STRANGER}]
+    assert gd.ledger_gifts_wait(BIZ) is False
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", lambda path, **kw: None)
+    with pytest.raises(gd.Unavailable):                 # can't tell: the ledger leaves the row queued
+        gd.ledger_gifts_wait(BIZ)
 
 
 def test_a_matched_deposit_clears_the_gifts_with_its_fee_and_is_never_income(monkeypatch):

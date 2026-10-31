@@ -109,6 +109,28 @@ def switched_on(business_id: Any) -> bool:
     return False
 
 
+def ledger_gifts_wait(business_id: Any) -> bool:
+    """For the ledger: does this business's non-card gift wait in 1160 Gifts to
+    Deposit? Only where the Sunday match is on, since only there can a deposit
+    clear it. Unlike switched_on, a read it can't make RAISES: the ledger then
+    leaves the rows queued for its next run instead of re-posting every gift
+    the other way on a blip."""
+    m = mode()
+    if m == "on":
+        return True
+    if m == "off":
+        return False
+    # "owner": the platform owner's churches, by the owner's user id (no
+    # email lookup to blip on); only the church's own read can fail.
+    rows = sb_clients.sb_get_as_service(f"/businesses?id=eq.{_q(business_id)}&select=owner_id&limit=1")
+    if not isinstance(rows, list):
+        raise Unavailable("businesses")
+    if not rows or not rows[0].get("owner_id"):
+        return False
+    from chief_of_staff import PLATFORM_OWNER_ID
+    return str(rows[0]["owner_id"]) == str(PLATFORM_OWNER_ID)
+
+
 def _gate(business_id: str, user: Any, *, write: bool) -> Dict[str, Any]:
     if not business_id or not _UUID.match(str(business_id)):
         raise HTTPException(400, "business_id must be a uuid")
@@ -195,23 +217,43 @@ def gifts(business_id: str, start: date, end: date) -> List[Dict[str, Any]]:
                                          f"{(end + timedelta(days=1)).isoformat()}T00:00:00Z")
     except HTTPException:
         raise Unavailable("invoices")
-    out = []
-    for r in rows:
-        kind = gift_kind(r.get("payment_method"))
-        if kind is None:
-            continue
-        total = _c(r.get("total")) - int(r.get("refund_amount_cents") or 0)
-        if total <= 0:
-            continue                         # refunded: nothing to deposit
-        fee = 0
-        if kind == "online":
-            m = _FEE_NOTE.search(str(r.get("notes") or ""))
-            fee = _c(m.group(1).replace(",", "")) if m else 0
-        contact = r.get("contacts") or {}
-        out.append({"id": str(r["id"]), "kind": kind, "date": str(r.get("paid_at") or "")[:10],
-                    "cents": total, "fee": min(fee, total), "method": r.get("payment_method"),
-                    "giver": (contact.get("name") if isinstance(contact, dict) else None) or "No giver"})
-    return out
+    return [g for g in (_gift_row(r) for r in rows) if g]
+
+
+def _gift_row(r: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """A paid gift as the match sees it; None for a card gift or one refunded."""
+    if r.get("is_gift") is False or (r.get("status") and r.get("status") != "paid"):
+        return None
+    kind = gift_kind(r.get("payment_method"))
+    if kind is None:
+        return None
+    total = _c(r.get("total")) - int(r.get("refund_amount_cents") or 0)
+    if total <= 0:
+        return None                          # refunded: nothing to deposit
+    fee = 0
+    if kind == "online":
+        m = _FEE_NOTE.search(str(r.get("notes") or ""))
+        fee = _c(m.group(1).replace(",", "")) if m else 0
+    contact = r.get("contacts") or {}
+    return {"id": str(r["id"]), "kind": kind, "date": str(r.get("paid_at") or "")[:10],
+            "cents": total, "fee": min(fee, total), "method": r.get("payment_method"),
+            "giver": (contact.get("name") if isinstance(contact, dict) else None) or "No giver"}
+
+
+def _dep_row(t: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """A bank row as the match sees it; None when it isn't money in the books."""
+    import bank_picks
+    if t.get("pending") or t.get("excluded_from_books") or _c(t.get("amount")) >= 0:
+        return None
+    name = bank_picks.words(t)
+    return {"id": str(t["transaction_id"]), "date": str(t.get("date") or "")[:10],
+            "cents": -_c(t.get("amount")), "name": name, "channel": deposit_channel(name),
+            "money_kind": t.get("money_kind"),
+            "waiting": not t.get("money_kind") and not t.get("reconciled_to_payout_id")}
+
+
+_DEP_SELECT = ("transaction_id,date,amount,name,merchant_name,money_kind,reconciled_to_payout_id,gift_match_fee,"
+               "pending,excluded_from_books")
 
 
 def deposits(business_id: str, start: date, end: date) -> List[Dict[str, Any]]:
@@ -223,16 +265,27 @@ def deposits(business_id: str, start: date, end: date) -> List[Dict[str, Any]]:
     rows = _all(f"/plaid_transactions?business_id=eq.{_q(business_id)}&account_id={bank_picks.in_(accts)}"
                 f"&amount=lt.0&pending=eq.false&excluded_from_books=eq.false"
                 f"&date=gte.{start.isoformat()}&date=lte.{end.isoformat()}"
-                "&select=transaction_id,date,amount,name,merchant_name,money_kind,reconciled_to_payout_id,"
-                "gift_match_fee&order=date.asc,transaction_id.asc")
-    out = []
-    for t in rows:
-        name = bank_picks.words(t)
-        out.append({"id": str(t["transaction_id"]), "date": str(t.get("date") or "")[:10],
-                    "cents": -_c(t.get("amount")), "name": name, "channel": deposit_channel(name),
-                    "money_kind": t.get("money_kind"),
-                    "waiting": not t.get("money_kind") and not t.get("reconciled_to_payout_id")})
-    return out
+                f"&select={_DEP_SELECT}&order=date.asc,transaction_id.asc")
+    return [d for d in (_dep_row(t) for t in rows) if d]
+
+
+def _by_ids(business_id: str, gift_ids: List[str], deposit_ids: List[str]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """A match's own gifts and deposits as they are now, wherever they fall;
+    one missing or no longer counted maps to None."""
+    import giving_records
+    gs: Dict[str, Any] = {x: None for x in gift_ids}
+    ds: Dict[str, Any] = {x: None for x in deposit_ids}
+    for i in range(0, len(gift_ids), 100):
+        part = gift_ids[i:i + 100]
+        for r in _get(f"/invoices?business_id=eq.{_q(business_id)}&id=in.({','.join(_q(x) for x in part)})"
+                      f"&select={giving_records.GIFT_FIELDS},status&limit=1000"):
+            gs[str(r["id"])] = _gift_row(r)
+    for i in range(0, len(deposit_ids), 100):
+        part = deposit_ids[i:i + 100]
+        for t in _get(f"/plaid_transactions?business_id=eq.{_q(business_id)}"
+                      f"&transaction_id=in.({','.join(_q(x) for x in part)})&select={_DEP_SELECT}&limit=1000"):
+            ds[str(t["transaction_id"])] = _dep_row(t)
+    return gs, ds
 
 
 def matches(business_id: str) -> List[Dict[str, Any]]:
@@ -400,6 +453,12 @@ def check_match(gs: List[Dict[str, Any]], ds: List[Dict[str, Any]], taken: set) 
             f"{_money(gross - dep)} may not be deposited yet, or a gift is recorded twice"), 0
 
 
+def _take_back(business_id: str, match_id: str, expense_id: Optional[str] = None) -> None:
+    if not _drop(business_id, match_id, expense_id):
+        raise HTTPException(503, "That match didn't finish, and part of it couldn't be taken back. It shows under "
+                                 "Deposits as a match that doesn't check out; unmatch it there.")
+
+
 def write_match(business_id: str, gs: List[Dict[str, Any]], ds: List[Dict[str, Any]], *, fee: int,
                 made_by: str, user_id: Any, batch_id: Optional[str] = None, note: str = "") -> Dict[str, Any]:
     """One match, all or nothing: the record, its items (the primary key
@@ -424,7 +483,7 @@ def write_match(business_id: str, gs: List[Dict[str, Any]], ds: List[Dict[str, A
              [{"business_id": business_id, "match_id": mid, "side": "deposit", "ref": d["id"], "amount": d["cents"] / 100}
               for d in ds])
     if not sb_clients.sb_post_as_service("/gift_deposit_items", items):
-        _drop(business_id, mid)
+        _take_back(business_id, mid)
         raise HTTPException(409, "one of those gifts or deposits was matched a moment ago; nothing changed")
     expense_id = None
     if fee:
@@ -435,7 +494,7 @@ def write_match(business_id: str, gs: List[Dict[str, Any]], ds: List[Dict[str, A
             "description": f"Fees kept from the {_day(last['date'])} payout ({len(gs)} gifts)"})
         e = (ex[0] if isinstance(ex, list) and ex else ex) if ex else None
         if not isinstance(e, dict) or not e.get("id"):
-            _drop(business_id, mid)
+            _take_back(business_id, mid)
             raise Unavailable("business_expenses")
         expense_id = str(e["id"])
         sb_clients.sb_patch_as_service(f"/gift_deposit_matches?id=eq.{_q(mid)}&business_id=eq.{_q(business_id)}",
@@ -445,10 +504,10 @@ def write_match(business_id: str, gs: List[Dict[str, Any]], ds: List[Dict[str, A
         share = fee if n == len(ds) - 1 else 0          # the fee rides on the last deposit
         res = sb_clients.sb_patch_as_service(
             f"/plaid_transactions?business_id=eq.{_q(business_id)}&transaction_id=eq.{_q(d['id'])}"
-            "&money_kind=is.null",
+            "&money_kind=is.null&reconciled_to_payout_id=is.null",
             {"money_kind": "gifts", "gift_match_fee": share / 100, "updated_at": stamp})
         if not res:
-            _drop(business_id, mid, expense_id)
+            _take_back(business_id, mid, expense_id)
             if res is None:
                 raise Unavailable("plaid_transactions")
             raise HTTPException(409, f"the deposit on {_day(d['date'])} was answered a moment ago; nothing changed")
@@ -558,6 +617,11 @@ def status(business_id: str, *, year: Optional[int] = None, start: Any = None, e
                       "&select=id,amount&limit=1000"):
             expenses[str(r["id"])] = _c(r.get("amount"))
     in_range = [m for m in ms if any(g["ref"] in g_by for g in m["gifts"]) or any(d["ref"] in d_by for d in m["deposits"])]
+    # Verify reads each match's own rows: one outside the window is never "gone".
+    vg, vd = _by_ids(business_id, sorted({g["ref"] for m in in_range for g in m["gifts"] if g["ref"] not in g_by}),
+                     sorted({d["ref"] for m in in_range for d in m["deposits"] if d["ref"] not in d_by}))
+    g_all = {**{k: v for k, v in vg.items()}, **g_by}
+    d_all = {**{k: v for k, v in vd.items()}, **d_by}
     proposed_g = {gid for p in proposals for gid in p["gifts"]}
     proposed_d = {did for p in proposals for did in p["deposits"]}
     waiting_g = [g for g in open_g if g["id"] not in proposed_g]
@@ -566,12 +630,12 @@ def status(business_id: str, *, year: Optional[int] = None, start: Any = None, e
         "from": s.isoformat(), "to": e.isoformat(),
         "matched": [{**m, "gifts_cents": sum(g["cents"] for g in m["gifts"]),
                      "deposits_cents": sum(d["cents"] for d in m["deposits"]),
-                     "deposit_rows": [d_by.get(d["ref"]) for d in m["deposits"] if d_by.get(d["ref"])]}
+                     "deposit_rows": [d_all.get(d["ref"]) for d in m["deposits"] if d_all.get(d["ref"])]}
                     for m in in_range],
         "proposals": [{**p, "gift_rows": [g_by[x] for x in p["gifts"]], "deposit_rows": [d_by[x] for x in p["deposits"]]}
                       for p in proposals],
         "waiting_gifts": waiting_g, "giving_deposits": giving_d,
-        "problems": verify(business_id, in_range, g_by, d_by, expenses),
+        "problems": verify(business_id, in_range, g_all, d_all, expenses),
         "totals": {"gifts": sum(g["cents"] for g in in_s) / 100,
                    "matched": sum(g["cents"] for m in in_range for g in m["gifts"]
                                   if g_by.get(g["ref"], {}).get("date", "") >= s.isoformat()) / 100,
@@ -595,6 +659,8 @@ def match_clear(business_id: str, user_id: Any, *, year: Optional[int] = None, s
                                     note=p["why"]))
         except HTTPException as e:
             skipped.append(f"{p['why']}: {e.detail}")
+        except Unavailable:
+            skipped.append(f"{p['why']}: couldn't be saved just now; ask again for it")
     return {"batch_id": batch if done else None, "matched": done, "skipped": skipped, "status": st}
 
 
@@ -782,6 +848,8 @@ def _match_sync(biz: Dict[str, Any], action: Dict[str, Any]) -> Dict[str, Any]:
                     done.append({**m, "why": str(it.get("note") or "as the owner said")})
                 except HTTPException as e:
                     skipped.append(str(e.detail))
+                except Unavailable:
+                    skipped.append("one match couldn't be saved just now; ask again for it")
             got = {"batch_id": batch if done else None, "matched": done, "skipped": skipped}
         else:
             got = match_clear(business_id, uid, year=action.get("year"), made_by="chief")
