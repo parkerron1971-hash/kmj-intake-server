@@ -484,6 +484,16 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
                                       "before-values, and undo_reconcile_books restores them", bulk=True),
     "undo_reconcile_books":   _w("A", "puts back exactly the rows one recorded reconcile batch changed, from "
                                       "their before-values, skipping any row changed since"),
+    # Kevin, 2026-10-31: "place in expense and revenue": the To review queue,
+    # filed in one batch the owner confirmed, one undo.
+    "bank_to_file": {**_r("reads the bank rows waiting for an answer, grouped by payee; bank rows never leave "
+                          "the app", sensitive=True), "chief_only": True},
+    "file_bank_rows": {**_w("A", "files the waiting bank rows the owner confirmed (income, owner money, transfer, "
+                                 "an expense bucket, or personal, with an optional label), each guarded on its "
+                                 "values from before; undo_file_bank_rows puts the batch back", bulk=True),
+                       "chief_only": True},
+    "undo_file_bank_rows": {**_w("A", "puts back exactly the rows one filing batch answered, skipping any answered "
+                                      "since"), "chief_only": True},
     "run_market_research":    _w("A", "writes analysis onto the strategy track. Model spend"),
     "save_business_model":    _w("A", "saves a strategy-track deliverable"),
     "save_launch_plan":       _w("A", "saves a strategy-track deliverable"),
