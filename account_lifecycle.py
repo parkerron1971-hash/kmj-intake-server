@@ -495,6 +495,9 @@ BUSINESS_CHILD_TABLES: List[str] = [
     # decisions an allowance names (those links set null on delete anyway).
     "minister_housing_entries",
     "minister_housing_allowances",
+    # Funds for the year (funds.py): placements before their fund.
+    "business_fund_items",
+    "business_funds",
     "pay_run_items",
     "pay_runs",
     "employees",
@@ -893,6 +896,10 @@ _IMPORT_SKIP = {
     # row; same reason. The export keeps them all; the owner records the
     # year's allowance again after a restore.
     "minister_housing_entries", "minister_housing_allowances",
+    # A fund's placements cite bank transactions by id, which a restored
+    # bank link gives new ids; same reason. The export keeps them; a
+    # restored church places them again.
+    "business_fund_items",
     # A check request cites its person and its expense by id; same reason.
     # The export keeps them; a restored church keeps its limit and budget
     # lines. (Receipts live in business-documents under the church's own

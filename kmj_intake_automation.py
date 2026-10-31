@@ -392,6 +392,8 @@ app.include_router(church_board_router)
 # HOUSING_ALLOWANCE off | owner | on).
 from housing_allowance import router as housing_allowance_router
 app.include_router(housing_allowance_router)
+from funds import router as funds_router
+app.include_router(funds_router)
 # The Reports pack: the year's numbers a church is asked for, from tables the
 # app already keeps (2026-10-27; CHURCH_REPORTS off | owner | on).
 from church_reports import router as church_reports_router
