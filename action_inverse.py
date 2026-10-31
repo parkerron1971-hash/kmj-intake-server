@@ -277,6 +277,14 @@ INVERSES: Dict[str, Inverse] = {
         "remove that housing allowance entry",
         lambda a, r: ({"type": "delete_housing_entry", "entry_id": _first_id(r, "entry_id")}
                       if _first_id(r, "entry_id") else None)),
+    # The same shape: attach records what it added and what it tied, and
+    # detach takes back exactly that batch.
+    "attach_housing_payments": Inverse(
+        "detach_housing_payments",
+        "take those bank payments back off the housing allowance",
+        lambda a, r: ({"type": "detach_housing_payments", "entry_ids": list(r.get("created_ids") or []),
+                       "restore": list(r.get("restore") or [])}
+                      if r.get("created_ids") or r.get("restore") else None)),
     "reconcile_books": Inverse(
         "undo_reconcile_books",
         "put those bank rows back the way they were before I reconciled them",

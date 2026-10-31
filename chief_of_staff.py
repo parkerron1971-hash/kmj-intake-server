@@ -254,7 +254,8 @@ from chief_weather import handle_get_weather
 from chief_transactions import handle_search_transactions
 from chief_reconcile import handle_reconcile_books, handle_undo_reconcile_books
 from housing_allowance import (handle_housing_allowance_status, handle_set_housing_allowance,
-    handle_log_housing_entry, handle_delete_housing_entry)
+    handle_log_housing_entry, handle_delete_housing_entry, handle_find_housing_payments,
+    handle_attach_housing_payments, handle_detach_housing_payments)
 from chief_hand_actions import (handle_use_browser_hand, handle_plan_errand,
     handle_approve_errand, handle_stop_errand, handle_errand_status)
 # Contribution statements. Both verbs are SENSITIVE in the registry —
@@ -376,6 +377,8 @@ _ACTION_PHRASES = {
     "send_invoice": "sending the invoice",
     "show_view": "pulling up the numbers",
     "search_transactions": "looking through the bank",
+    "find_housing_payments": "looking through the bank",
+    "attach_housing_payments": "tying the payments to the housing allowance",
     "reconcile_books": "reconciling the bank",
     "undo_reconcile_books": "putting the bank rows back",
     "summarize_module": "adding it up",
@@ -12164,6 +12167,9 @@ ACTION_HANDLERS = {
     "set_housing_allowance": handle_set_housing_allowance,
     "log_housing_entry":     handle_log_housing_entry,
     "delete_housing_entry":  handle_delete_housing_entry,
+    "find_housing_payments": handle_find_housing_payments,
+    "attach_housing_payments": handle_attach_housing_payments,
+    "detach_housing_payments": handle_detach_housing_payments,
     "plan_errand":           handle_plan_errand,
     "approve_errand":        handle_approve_errand,
     "stop_errand":           handle_stop_errand,
