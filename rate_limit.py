@@ -37,6 +37,9 @@ _LIMITS: Dict[str, Tuple[int, int]] = {
     # A PDF bank statement read by Claude (bank_statements.py), per business:
     # a year of monthly statements is twelve; this stops an upload loop.
     "bank_statement_read": (int(os.environ.get("RL_BANK_STATEMENT_READ_PER_HOUR", "30")), 3600),
+    # A photo of a paper count sheet read by Claude (giving_sheets.py), per
+    # church: a Sunday has a sheet or two; this stops a retake loop.
+    "giving_sheet_read": (int(os.environ.get("RL_GIVING_SHEET_READ_PER_HOUR", "20")), 3600),
     # The agent-facing MCP surface. Tighter than the practitioner buckets
     # and checked with allow_strict() — an external agent that loops is a
     # different problem from a person clicking twice.

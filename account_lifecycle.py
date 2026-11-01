@@ -478,7 +478,9 @@ BUSINESS_CHILD_TABLES: List[str] = [
     "expense_categories",
     # Its own names for the lines of its books, and lines of its own.
     "expense_lines",
-    # Giving by service (giving_services.py): a count cites its service.
+    # Giving by service (giving_services.py): a count cites its service, a
+    # sheet photo its count (the photos themselves are in giving-sheets).
+    "giving_count_photos",
     "giving_counts",
     "giving_services",
     "reconciliations",
@@ -558,7 +560,10 @@ USER_CHILD_TABLES: List[str] = [
 STORAGE_BUCKETS: List[str] = ["image-originals", "business-assets", "business-documents",
                               "product-files", "program-media", "video-studio",
                               # Students' homework files: "{business_id}/{course_id}/…".
-                              "academy-work"]
+                              "academy-work",
+                              # Count sheet photos (giving_sheets.py): "{business_id}/{count_id}/…".
+                              # Donors' names, amounts and check numbers: they go with the church.
+                              "giving-sheets"]
 
 
 def _service_headers() -> Dict[str, str]:
@@ -924,6 +929,9 @@ _IMPORT_SKIP = {
     # id; the export keeps them, and a restored church sets its services
     # again (its gifts come back without a count; see the import).
     "giving_counts", "giving_services",
+    # A sheet photo cites its count and the file under the old business's
+    # storage prefix; the export keeps the rows.
+    "giving_count_photos",
     # A check request cites its person and its expense by id; same reason.
     # The export keeps them; a restored church keeps its limit and budget
     # lines. (Receipts live in business-documents under the church's own
