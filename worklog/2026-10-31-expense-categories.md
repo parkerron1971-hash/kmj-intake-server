@@ -3,9 +3,9 @@ title: Chief makes expense categories, suggests where a payment goes, and rememb
 date: 2026-10-31
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-10-31: "can chief make expense catagories if i request it so transactions can go under there?" then "yes and also allow for chief to have suggestions on where things go ... hey, I noticed this transaction was to this particular business. Do you want me to add it to this category? ... do you want me to save this in my memory so I know to add this in the future"'
-status: in review
+status: shipped
 prs: [kmj-intake-server (this PR), solutionist-studio (the category names on To review)]
-migrations: [supabase/APPLY-2026-10-31-expense-categories.sql (before the code)]
+migrations: [supabase/APPLY-2026-10-31-expense-categories.sql (applied 2026-10-31, before the merge)]
 left_undone:
   - "No screen to manage the list yet (make/rename/merge are Chief's; the To review box offers the saved names); a Categories card in Rules is a follow-up"
   - "Money in has no categories: its answers stay income / owner / transfer, and giving deposits belong to the Sunday match"
@@ -25,4 +25,4 @@ verbs); `chief_file_bank` (suggestions, a saved category, refile, `spending`);
 `chief_bookkeeping` (the offer). Wired: `chief_of_staff`, `action_registry`,
 `action_inverse`, `chief_areas`, `chief_tool_loop`, `chief_prompt`,
 `kmj_intake_automation`, `account_lifecycle`, `site_page_helpers`. Tests:
-`__tests__/test_expense_categories.py` (12).
+`__tests__/test_expense_categories.py` (15).
