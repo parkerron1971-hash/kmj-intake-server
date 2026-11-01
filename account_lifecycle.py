@@ -478,6 +478,9 @@ BUSINESS_CHILD_TABLES: List[str] = [
     "expense_categories",
     # Its own names for the lines of its books, and lines of its own.
     "expense_lines",
+    # Giving by service (giving_services.py): a count cites its service.
+    "giving_counts",
+    "giving_services",
     "reconciliations",
     "connectors",
     # GL cluster — queue/alarms/pushed-entries cite journal entries, so
@@ -917,6 +920,10 @@ _IMPORT_SKIP = {
     # or a restored bank link renews; same reason. The export keeps them; a
     # restored church matches its deposits again.
     "gift_deposit_items", "gift_deposit_matches",
+    # Giving by service: a gift cites its count and a count its service by
+    # id; the export keeps them, and a restored church sets its services
+    # again (its gifts come back without a count; see the import).
+    "giving_counts", "giving_services",
     # A check request cites its person and its expense by id; same reason.
     # The export keeps them; a restored church keeps its limit and budget
     # lines. (Receipts live in business-documents under the church's own
@@ -1062,6 +1069,10 @@ async def import_account(body: ImportBody,
                 if table == "plaid_transactions" and r.get("statement_import_id"):
                     continue
                 clean = {k: v for k, v in r.items() if k not in _IMPORT_STRIP}
+                # A gift's service count isn't restored (_IMPORT_SKIP): the
+                # gift comes back, in no count.
+                if table == "invoices":
+                    clean.pop("giving_count_id", None)
                 clean["business_id"] = new_id
                 payload.append(clean)
             if not payload:
