@@ -70,6 +70,7 @@ NAV = {"tab": "operate", "sub": "bookkeeping", "bkTab": "transactions", "bkView"
 _TABLES = {
     "plaid_transactions": ("transaction_id", ("business_category", "business_subcategory")),
     "business_expenses": ("id", ("category", "subcategory")),
+    "bills": ("id", ("category", "subcategory")),           # a bill under a category moves with it
     "category_rules": ("id", ("business_category", "business_subcategory")),
     "expense_categories": ("id", ("name", "bucket", "archived_at", "line")),
     "expense_lines": ("id", ("name", "archived_at")),
@@ -231,7 +232,7 @@ def _patch_row(business_id: str, table: str, rid: str, guard: Dict[str, Any], bo
 
 
 def _labelled(business_id: str, old_keys: set) -> List[Tuple[str, Dict[str, Any]]]:
-    """Every expense row and rule whose label reads as one of old_keys."""
+    """Every expense row, bill and rule whose label reads as one of old_keys."""
     out: List[Tuple[str, Dict[str, Any]]] = []
     accts = _books_accounts(business_id)
     if accts:
@@ -245,6 +246,11 @@ def _labelled(business_id: str, old_keys: set) -> List[Tuple[str, Dict[str, Any]
                   "&select=id,category,subcategory&order=id.asc"):
         if key_of(e.get("subcategory")) in old_keys:
             out.append(("business_expenses", e))
+    # Bills under the category (the Bills tab files under the saved names too).
+    for b in _get(f"/bills?business_id=eq.{_q(business_id)}&subcategory=not.is.null"
+                  "&select=id,category,subcategory&limit=5000"):
+        if key_of(b.get("subcategory")) in old_keys:
+            out.append(("bills", b))
     for r in _get(f"/category_rules?business_id=eq.{_q(business_id)}&business_subcategory=not.is.null"
                   "&select=id,business_category,business_subcategory&limit=2000"):
         if key_of(r.get("business_subcategory")) in old_keys:

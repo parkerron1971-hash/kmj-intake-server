@@ -331,7 +331,8 @@ REFILE_ANSWERS = ("operating", "tax", "owner_pay", "savings")
 
 def plan(rows: List[Dict[str, Any]], items: List[Dict[str, Any]], kinds: bool,
          gifts: Optional[bool] = False, cats: Optional[List[Dict[str, Any]]] = None,
-         filed: Optional[List[Dict[str, Any]]] = None) -> Tuple[List[Dict[str, Any]], List[str]]:
+         filed: Optional[List[Dict[str, Any]]] = None,
+         paying: Optional[Dict[str, str]] = None) -> Tuple[List[Dict[str, Any]], List[str]]:
     """Which rows get which answer: waiting rows, or (an item with "refile")
     rows already filed as spending. Returns (changes, problems)."""
     import expense_categories as ec
@@ -406,6 +407,10 @@ def plan(rows: List[Dict[str, Any]], items: List[Dict[str, Any]], kinds: bool,
                 problems.append(f"{r.get('name')} on {str(r.get('date'))[:10]} is money {r['direction']}, "
                                 f"so it can't be {SAID[answer]}")
                 continue
+            if r["transaction_id"] in (paying or {}) and "business_category" not in write:
+                problems.append(f"{r.get('name')} on {str(r.get('date'))[:10]} paid a bill, so it stays money out "
+                                "in the books; unmatch it from the bill on the Bills tab first")
+                continue
             if r["transaction_id"] in taken:
                 continue                      # the first answer for a row stands
             after = dict(write)
@@ -466,7 +471,15 @@ def file_rows(business_id: str, action: Dict[str, Any]) -> Dict[str, Any]:
             gifts = gifts_recorded(business_id)
         except _Unavailable:
             gifts = None
-    changes, problems = plan(rows, items[:100], bank_money.supported(), gifts, cats, filed)
+    try:                                              # rows that paid a bill stay money out (bill_payments)
+        import bill_payments
+        paying = bill_payments._paying(business_id)
+    except Exception:
+        paying = None
+    if paying is None:
+        return {"type": atype, "result": "Failed: the bills couldn't be checked just now, so nothing was filed; "
+                                         "ask again", "label": "Not filed", "failed": True, "nav": NAV}
+    changes, problems = plan(rows, items[:100], bank_money.supported(), gifts, cats, filed, paying)
     if len(changes) > ROW_MAX:
         return _fail(atype, f"that's {len(changes)} rows; one batch files at most {ROW_MAX}. Split it")
     if not changes:

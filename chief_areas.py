@@ -124,6 +124,7 @@ VERBS: Dict[str, Tuple[str, ...]] = {
         "list_bookkeeping_proposals", "approve_bookkeeping_proposal", "reject_bookkeeping_proposal",
         "search_transactions", "reconcile_books", "undo_reconcile_books", "bank_to_file", "file_bank_rows",
         "undo_file_bank_rows", "giving_deposits", "match_giving_deposits", "unmatch_giving_deposits", "bills",
+        "match_bill_payment", "unmatch_bill_payment",
         "expense_categories", "set_expense_category", "save_category_rule", "undo_category_change",
         "set_expense_line",
         "fund_status", "set_fund",

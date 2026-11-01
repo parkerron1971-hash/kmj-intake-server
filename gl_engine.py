@@ -173,7 +173,8 @@ def _fetch_sources(biz: str) -> Dict[str, Any]:
         f"&select=id,amount,category,subcategory,vendor,date&limit=10000") or []
     bills = sb_clients.sb_get_as_service(
         f"/bills?business_id=eq.{biz}"
-        f"&select=id,vendor_name,amount,category,subcategory,status,due_date,created_at,paid_at,paid_amount&limit=10000") or []
+        f"&select=id,vendor_name,amount,category,subcategory,status,due_date,created_at,paid_at,paid_amount,"
+        f"paid_transaction_id&limit=10000") or []
     included = _included_account_ids(biz)
     plaid = []
     if included:
@@ -335,8 +336,21 @@ def desired_for_bill(b: Dict[str, Any]) -> List[Dict[str, Any]]:
                 _line("2000", credit=amt, vendor=b.get("vendor_name"))]))
     if (b.get("status") or "").lower() == "paid":
         pamt = float(b.get("paid_amount") if b.get("paid_amount") is not None else amt)
-        out.append(_entry(_d(b.get("paid_at")), "bill_payment", b["id"], "Bill paid",
-                   [_line("2000", debit=pamt), _line("1000", credit=pamt)]))
+        if b.get("paid_transaction_id"):
+            # Paid by a bank row (bill_payments.py): that row is the cash
+            # payment and books the expense on its date. This settles the
+            # bill instead of a second cash leg: Dr AP / Cr the bill's
+            # expense, so the expense counts once (at the bill on accrual, at
+            # the bank row on cash basis) and the cash goes out once.
+            # The whole bill settles (AP to zero) even when the bank paid a
+            # little more or less: the bank row is what was really spent.
+            out.append(_entry(_d(b.get("paid_at")), "bill_settle", b["id"], "Bill paid from the bank",
+                       [_line("2000", debit=amt, vendor=b.get("vendor_name")),
+                        _line(code, credit=amt, memo=b.get("vendor_name") or "",
+                              subcategory=b.get("subcategory"), vendor=b.get("vendor_name"))]))
+        else:
+            out.append(_entry(_d(b.get("paid_at")), "bill_payment", b["id"], "Bill paid",
+                       [_line("2000", debit=pamt), _line("1000", credit=pamt)]))
     return out
 
 
@@ -649,7 +663,7 @@ def fetch_booking_money(biz: str) -> List[Dict[str, Any]]:
 _TABLE_SOURCE_TYPES = {
     "invoices": ("invoice_issue", "invoice_payment", "invoice_refund"),
     "business_expenses": ("expense",),
-    "bills": ("bill_issue", "bill_payment"),
+    "bills": ("bill_issue", "bill_payment", "bill_settle"),
     "plaid_transactions": ("plaid_transaction",),
     "orders": ORDER_SOURCE_TYPES,
     "module_entries": BOOKING_SOURCE_TYPES,
@@ -879,7 +893,7 @@ _SOURCE_FETCH = {
                  "is_gift&limit=1"),
     "business_expenses": "/business_expenses?id=eq.{id}&select=id,amount,category,subcategory,vendor,date&limit=1",
     "bills": ("/bills?id=eq.{id}&select=id,vendor_name,amount,category,subcategory,status,due_date,"
-              "created_at,paid_at,paid_amount&limit=1"),
+              "created_at,paid_at,paid_amount,paid_transaction_id&limit=1"),
     "plaid_transactions": ("/plaid_transactions?transaction_id=eq.{id}&select=transaction_id,amount,date,"
                            "business_category,business_subcategory,plaid_category_primary,"
                            "plaid_category_detail,reconciled_to_payout_id,pending,excluded_from_books,account_id,"

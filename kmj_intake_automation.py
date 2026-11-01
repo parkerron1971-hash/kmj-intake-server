@@ -698,6 +698,9 @@ app.include_router(structure_import_router)
 # Phase H.1 — Accounts Payable (bills + recurring bills)
 from bills_router import router as bills_router
 app.include_router(bills_router)
+# Bills step 2: a bill matched to the bank payment that paid it.
+from bill_payments import router as bill_payments_router
+app.include_router(bill_payments_router)
 # THE SOURCING DESK stage 0 — a vendor as an entity instead of two free-text
 # columns on a product. offerings.supplier_name/email stay as a cache of the
 # primary link, and suppliers_router is the only thing that maintains them.
