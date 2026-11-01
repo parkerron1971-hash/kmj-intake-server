@@ -5,7 +5,7 @@ agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-11-01: "how can the roll up list can change?" then "yes build option 1 with church names as default but allow for them to be changed because other business would want different names also allow for there to be added more to this list."'
 status: in review
 prs: [kmj-intake-server (this PR), solutionist-studio (the card and every screen's names)]
-migrations: [supabase/APPLY-2026-11-01-expense-lines.sql (before the code)]
+migrations: [supabase/APPLY-2026-11-01-expense-lines.sql (applied 2026-11-01, before the merge)]
 left_undone:
   - "Switched with Chief's categories (CHIEF_BANK_SEARCH: owner until a Thursday flip); off, every business keeps the standard five names"
   - "The ledger's own account names (5000 Operating Expenses ...) and the trial balance stay standard: an accountant's view doesn't move"
