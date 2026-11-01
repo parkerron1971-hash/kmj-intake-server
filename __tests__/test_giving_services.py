@@ -35,8 +35,14 @@ def _cmp(row, col, op, val):
         return str(v) in set(_split(val.strip("()")))
     if op == "eq":
         return str(v).lower() == val.lower() if isinstance(v, bool) else str(v) == val
+    if op == "ilike":                                   # * wildcards, any case
+        import fnmatch
+        return v is not None and fnmatch.fnmatch(" ".join(str(v).lower().split()), val.lower())
     if v is None:
         return False
+    if isinstance(v, (int, float)) and not isinstance(v, bool):
+        n = float(val)
+        return {"gt": v > n, "lt": v < n, "gte": v >= n, "lte": v <= n}[op]
     return {"gt": str(v) > val, "lt": str(v) < val, "gte": str(v) >= val, "lte": str(v) <= val}[op]
 
 
@@ -382,3 +388,70 @@ def test_a_failed_read_is_never_shown_as_nothing(db, monkeypatch):
     db.t["giving_counts"] = [{"id": "c", "business_id": BIZ, "starts_at": "2026-11-01T16:00:00+00:00"}]
     monkeypatch.setattr(db, "sb_get_as_service", down("invoices"))
     assert gs._unplaced_count(BIZ, db.t["giving_counts"]) is None
+
+
+# ─── Zelle from the bank ───────────────────────────────────────────────
+
+ZELLE_COUNT = "c0000000-0000-4000-8000-0000000000aa"
+
+
+@pytest.fixture
+def bank(db):
+    sun = datetime(2026, 11, 1, 16, tzinfo=timezone.utc)
+    db.t["giving_counts"] = [{"id": ZELLE_COUNT, "business_id": BIZ, "status": "open", "collects_online": True,
+                              "starts_at": sun.isoformat(), "service_date": "2026-11-01", "name": "Sunday Worship"}]
+    db.t["plaid_accounts"] = [{"business_id": BIZ, "account_id": "acc1", "included_in_bookkeeping": True,
+                               "deleted_at": None}]
+    row = lambda tid, day, amt, name, **k: {"business_id": BIZ, "account_id": "acc1", "transaction_id": tid,
+                                            "date": day, "amount": amt, "name": name, "merchant_name": None,
+                                            "pending": False, "excluded_from_books": False, "money_kind": None, **k}
+    db.t["plaid_transactions"] = [
+        row("z1", "2026-10-28", -50.0, "Zelle payment from GRACE HOLLOWAY Conf# 8812"),
+        row("z2", "2026-10-29", -25.0, "ZELLE FROM UNKNOWN PERSON"),
+        row("z3", "2026-10-30", -40.0, "Zelle from Grace Holloway", money_kind="gifts"),     # already matched
+        row("z4", "2026-10-30", -10.0, "ATM deposit"),                                      # not Zelle
+        row("z5", "2026-10-20", -30.0, "Zelle from Grace Holloway"),                        # last week
+        row("z6", "2026-10-31", -15.0, "Zelle from Grace Holloway"),
+    ]
+    db.t["gift_deposit_items"] = []
+    db.t["contacts"] = [{"id": "a0000000-0000-4000-8000-000000000001", "business_id": BIZ, "name": "Grace Holloway"}]
+    return db
+
+
+def test_the_sender_is_read_from_the_bank_words():
+    assert gs.zelle_sender("Zelle payment from GRACE HOLLOWAY Conf# 8812") == "Grace Holloway"
+    assert gs.zelle_sender("ZELLE FROM MARCUS T. REED ON 10/29") == "Marcus T. Reed"
+    assert gs.zelle_sender("Zelle Transfer 8812") == ""
+
+
+def test_the_weeks_zelle_money_is_suggested_with_its_giver(bank):
+    out = gs.count_bank_suggestions(BIZ, ZELLE_COUNT, USER)["suggestions"]
+    assert [s["bank_ref"] for s in out] == ["z1", "z2", "z6"]
+    assert out[0]["contact_id"] == "a0000000-0000-4000-8000-000000000001" and out[0]["amount_cents"] == 5000
+    assert out[1]["name_match"] == "none" and out[1]["sender"] == "Unknown Person"
+
+
+def test_a_zelle_gift_is_dated_when_the_money_came_and_never_recorded_twice(bank):
+    row = {"request_id": str(uuid.uuid4()), "amount_cents": 5000, "fund": "General", "method": "zelle",
+           "contact_id": "a0000000-0000-4000-8000-000000000001", "bank_ref": "z1"}
+    out = gs.record_gifts(BIZ, ZELLE_COUNT, {"rows": [row]}, USER)
+    assert out["saved"] == 1
+    gift = [r for r in bank.t["invoices"] if r.get("giving_count_id") == ZELLE_COUNT][0]
+    assert gift["paid_at"].startswith("2026-10-28") and "Bank row z1" in gift["notes"]
+    assert [s["bank_ref"] for s in gs.count_bank_suggestions(BIZ, ZELLE_COUNT, USER)["suggestions"]] == ["z2", "z6"]
+    again = gs.record_gifts(BIZ, ZELLE_COUNT, {"rows": [{**row, "request_id": str(uuid.uuid4())}]}, USER)
+    assert again["saved"] == 0 and "already recorded" in again["results"][0]["error"]
+
+
+def test_a_zelle_gift_must_be_the_deposits_amount(bank):
+    row = {"request_id": str(uuid.uuid4()), "amount_cents": 4000, "fund": "General", "method": "zelle", "bank_ref": "z1"}
+    out = gs.record_gifts(BIZ, ZELLE_COUNT, {"rows": [row]}, USER)
+    assert out["saved"] == 0 and "$50.00" in out["results"][0]["error"]
+    bad = gs.record_gifts(BIZ, ZELLE_COUNT, {"rows": [{**row, "bank_ref": "z4", "amount_cents": 1000}]}, USER)
+    assert "isn't Zelle" in bad["results"][0]["error"]
+
+
+def test_no_suggestions_for_a_closed_or_non_collecting_count(bank):
+    bank.t["giving_counts"][0]["status"] = "closed"
+    assert gs.count_bank_suggestions(BIZ, ZELLE_COUNT, USER)["suggestions"] == []
+

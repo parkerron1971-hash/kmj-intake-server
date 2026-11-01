@@ -512,6 +512,10 @@ def _clean_row(raw: Dict[str, Any]) -> Dict[str, Any]:
         raise ValueError("A check number is up to 20 letters or numbers.")
     out["check_number"] = cn or None
     out["loose"] = raw.get("loose") is True
+    ref = str(raw.get("bank_ref") or "").strip()
+    if ref and not BANK_REF.match(ref):
+        raise ValueError("That bank row isn't one this screen made.")
+    out["bank_ref"] = ref or None
     return out
 
 
@@ -549,8 +553,15 @@ def record_gifts(business_id: str, count_id: str, body: Dict[str, Any],
                 notes.append("Loose offering")
             if row["check_number"]:
                 notes.append(f"Check #{row['check_number']}")
+            received = day
+            if row["bank_ref"]:
+                # Added from a Zelle bank row: dated the day the money arrived.
+                bank = _bank_row_for(business_id, row["bank_ref"], int(row.get("amount_cents") or 0))
+                received = str(bank.get("date"))[:10]
+                notes.append(f"Bank row {row['bank_ref']}")
+            row.pop("bank_ref", None)
             out = giving_router.record_manual_gift(
-                business_id, {**row, "received_on": day}, user,
+                business_id, {**row, "received_on": received}, user,
                 extra={"giving_count_id": count_id}, notes=notes, type_checked=True, latest=today)
             results.append({"request_id": rid, "ok": True, "id": out.get("id"), "already": bool(out.get("already"))})
         except ValueError as e:
@@ -728,3 +739,127 @@ def gift_in_closed_count(business_id: str, gift: Dict[str, Any]) -> Optional[str
     if rows and rows[0].get("status") == "closed":
         return f"{rows[0].get('name')} ({str(rows[0].get('service_date'))[:10]})"
     return None
+
+
+# ─── Zelle from the bank (Kevin, 2026-11-01) ──────────────────────────
+# Zelle gifts go straight to the church's bank account, so the bank feed
+# shows each one with the sender's name ("Zelle from Grace Holloway").
+# The week's collecting count lists the Zelle money in that came in during
+# its online window, not yet a gift and not yet matched to one, with the
+# sender matched to the church's people when it's one person. "Add"
+# records it like any other row, with bank_ref: the gift is dated the day
+# the money arrived (so the Sunday match pairs it with that same deposit),
+# its note names the bank row, and a bank row is never recorded twice.
+# (Cash App reaches the bank as one transfer with no names; it isn't here.)
+
+_ZELLE = re.compile(r"\bzelle\b", re.I)
+_ZELLE_FROM = re.compile(r"\bzelle\b.*?\bfrom\s+(.+)$", re.I)
+_ZELLE_TAIL = re.compile(r"\s+(?:on|conf(?:irmation)?|ref|id|trn|memo|for|#)\b.*$", re.I)
+BANK_REF = re.compile(r"^[A-Za-z0-9_-]{1,120}$")
+
+
+def zelle_sender(desc: Any) -> str:
+    """The sender's name in a Zelle bank description, or ''."""
+    m = _ZELLE_FROM.search(str(desc or ""))
+    if not m:
+        return ""
+    name = _ZELLE_TAIL.sub("", m.group(1))
+    name = " ".join(re.sub(r"[^A-Za-z .'-]", " ", name).split()).strip(" .-")
+    return name.title()[:80] if len(name) >= 2 else ""
+
+
+def _norm_name(s: Any) -> str:
+    return " ".join(re.sub(r"[^a-z ]", " ", str(s or "").lower()).split())
+
+
+def who_is(name: str, contacts: List[Dict[str, Any]]) -> Tuple[str, Optional[str]]:
+    """('one', id) for exactly one person by whole name, else by first and
+    last; ('several', None) or ('none', None) otherwise."""
+    n = _norm_name(name)
+    if not n:
+        return "none", None
+    full = sorted({str(c["id"]) for c in contacts if _norm_name(c.get("name")) == n})
+    if not full and len(n.split()) >= 2:
+        p = n.split()
+        full = sorted({str(c["id"]) for c in contacts
+                       if len(_norm_name(c.get("name")).split()) >= 2
+                       and (lambda q: q[0] == p[0] and q[-1] == p[-1])(_norm_name(c.get("name")).split())})
+    if len(full) == 1:
+        return "one", full[0]
+    return ("several" if full else "none"), None
+
+
+def _recorded_refs(business_id: str, since: datetime) -> set:
+    """Bank rows already recorded as gifts (their note names them)."""
+    rows = _need(f"/invoices?business_id=eq.{_q(business_id)}&is_gift=eq.true&notes=ilike.{_q('*Bank row *')}"
+                 f"&paid_at=gte.{_q(since.isoformat())}&select=notes&limit=2000")
+    out: set = set()
+    for r in rows:
+        out.update(re.findall(r"^Bank row (\S+)$", str(r.get("notes") or ""), re.M))
+    return out
+
+
+def bank_suggestions(biz: Dict[str, Any], count: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """The Zelle money in during this open, collecting count's window that
+    isn't a gift or matched yet, oldest first."""
+    if count.get("status") != "open" or not count.get("collects_online"):
+        return []
+    import bank_picks
+    starts = datetime.fromisoformat(str(count["starts_at"]).replace("Z", "+00:00"))
+    lo, hi = online_window(starts, _collecting_starts(biz["id"]))
+    accts = bank_picks.accounts(biz["id"], _need)
+    if not accts:
+        return []
+    rows = _need(f"/plaid_transactions?business_id=eq.{_q(biz['id'])}&account_id={bank_picks.in_(accts)}"
+                 f"&amount=lt.0&pending=eq.false&excluded_from_books=eq.false&money_kind=is.null"
+                 f"&date=gte.{lo.date().isoformat()}&date=lte.{hi.date().isoformat()}"
+                 f"&select=transaction_id,date,amount,name,merchant_name&order=date.asc&limit=500")
+    zelle = [r for r in rows if _ZELLE.search(bank_picks.words(r)) and r.get("transaction_id")]
+    if not zelle:
+        return []
+    ids = [str(r["transaction_id"]) for r in zelle]
+    matched = {str(r.get("ref")) for r in _need(
+        f"/gift_deposit_items?business_id=eq.{_q(biz['id'])}&side=eq.deposit"
+        f"&ref=in.({','.join(_q(i) for i in ids)})&select=ref&limit=500")}
+    done = matched | _recorded_refs(biz["id"], lo - timedelta(days=14))
+    contacts = _need(f"/contacts?business_id=eq.{_q(biz['id'])}&select=id,name&limit=10000")
+    out: List[Dict[str, Any]] = []
+    for r in zelle:
+        ref = str(r["transaction_id"])
+        if ref in done:
+            continue
+        sender = zelle_sender(bank_picks.words(r))
+        kind, cid = who_is(sender, contacts)
+        out.append({"bank_ref": ref, "date": str(r.get("date"))[:10],
+                    "amount_cents": round(abs(float(r.get("amount") or 0)) * 100),
+                    "sender": sender, "contact_id": cid, "name_match": kind,
+                    "description": bank_picks.words(r)})
+    return out
+
+
+@router.get("/giving/{business_id}/counts/{count_id}/bank")
+def count_bank_suggestions(business_id: str, count_id: str, user: AuthedUser = Depends(require_user)):
+    """Zelle money in for this count's week, ready to add as gifts."""
+    biz = _gate(business_id, user)
+    count = _count(business_id, count_id)
+    return {"suggestions": bank_suggestions(biz, count)}
+
+
+def _bank_row_for(business_id: str, ref: str, amount_cents: int) -> Dict[str, Any]:
+    """The Zelle bank row a gift is added from: this business's, money in,
+    the same amount, and never already a gift. Raises ValueError in words."""
+    rows = _need(f"/plaid_transactions?business_id=eq.{_q(business_id)}&transaction_id=eq.{_q(ref)}"
+                 f"&select=transaction_id,date,amount,name,merchant_name,money_kind&limit=1")
+    if not rows:
+        raise ValueError("That bank deposit wasn't found.")
+    r = rows[0]
+    import bank_picks
+    cents = round(-float(r.get("amount") or 0) * 100)
+    if cents <= 0 or not _ZELLE.search(bank_picks.words(r)):
+        raise ValueError("That bank row isn't Zelle money in.")
+    if cents != int(amount_cents or 0):
+        raise ValueError(f"That Zelle deposit is ${cents / 100:,.2f}; the gift must be the same.")
+    since = datetime.fromisoformat(str(r.get("date"))[:10]).replace(tzinfo=timezone.utc) - timedelta(days=60)
+    if ref in _recorded_refs(business_id, since):
+        raise ValueError("That Zelle deposit is already recorded as a gift.")
+    return r
