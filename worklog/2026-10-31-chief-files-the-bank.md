@@ -3,8 +3,8 @@ title: Chief files the waiting bank rows as income or expense, in one batch the 
 date: 2026-10-31
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-10-31, with Love City''s January to July statements just added: "NOW CAN I ASK CHIEF TO PLACE IN EXPENSE AND REVENUE ETC WOULD CHIEF DO THAT?"'
-status: in review
-prs: [kmj-intake-server (this PR)]
+status: shipped
+prs: [kmj-intake-server#1667, kmj-intake-server#1668]
 migrations: []
 left_undone:
   - "Only rows still waiting (To review) are filed; changing an answer already given stays on the Transactions screen"
