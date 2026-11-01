@@ -5,7 +5,7 @@ agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-11-01: "I want to create a way for churches that have sheets they want to feel out as hard copy for their records to be able to print out a sheet they want to use that the system produced and then have a way to take a picture of those sheets and it upload into the system and automatically updated based on that person giving... we could store those pictures and the data for future checks and balances" then "build everything"'
 status: in review
 prs: ["kmj-intake-server (this PR)"]
-migrations: [supabase/APPLY-2026-11-01-giving-sheet-photos.sql]
+migrations: [supabase/APPLY-2026-11-01-giving-sheet-photos.sql (applied 2026-11-01)]
 left_undone:
   - "Switched with GIVING_SERVICES (owner until a Thursday flip)"
   - "The screens (Print sheet, Photo of the sheet, the draft beside the photo) are the front end PR"
