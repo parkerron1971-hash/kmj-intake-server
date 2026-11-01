@@ -333,8 +333,9 @@ def test_a_closed_month_keeps_its_answers(db, monkeypatch):
 def test_answers_wait_for_the_month_to_end(db, monkeypatch):
     _as_manager(monkeypatch)
     monkeypatch.setattr(bc, "checklist_supported", lambda: True)
+    this_month = datetime.now(timezone.utc).strftime("%Y-%m")   # the clock _ended_month reads
     with pytest.raises(HTTPException) as e:
-        bc.save_reviewed(bc.ReviewedBody(business_id="biz", month="2026-10"), user=U())
+        bc.save_reviewed(bc.ReviewedBody(business_id="biz", month=this_month), user=U())
     assert e.value.status_code == 400
 
 
