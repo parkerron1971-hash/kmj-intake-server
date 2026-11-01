@@ -71,12 +71,13 @@ _TABLES = {
     "plaid_transactions": ("transaction_id", ("business_category", "business_subcategory")),
     "business_expenses": ("id", ("category", "subcategory")),
     "category_rules": ("id", ("business_category", "business_subcategory")),
-    "expense_categories": ("id", ("name", "bucket", "archived_at")),
+    "expense_categories": ("id", ("name", "bucket", "archived_at", "line")),
+    "expense_lines": ("id", ("name", "archived_at")),
 }
+_ARCHIVED = ("expense_categories", "expense_lines")      # unmade by archiving, never deleted
 
 
-class Unavailable(Exception):
-    """A read or write failed: never shown as nothing."""
+from expense_lines import Unavailable  # noqa: E402  (one failure type for categories and lines)
 
 
 def _q(v: Any) -> str:
@@ -115,7 +116,7 @@ def key_of(v: Any) -> str:
 
 def categories(business_id: str) -> List[Dict[str, Any]]:
     return _get(f"/expense_categories?business_id=eq.{_q(business_id)}&archived_at=is.null"
-                "&select=id,name,bucket,created_at&order=name.asc&limit=500")
+                "&select=id,name,bucket,line,created_at&order=name.asc&limit=500")
 
 
 def find(cats: List[Dict[str, Any]], name: Any) -> Optional[Dict[str, Any]]:
@@ -158,36 +159,55 @@ def usage(business_id: str, year: int) -> Dict[Tuple[str, str], Dict[str, Any]]:
     return out
 
 
+def line_of(c: Dict[str, Any], keys: set) -> str:
+    """The line a category rolls up to: its own line when that's one of the
+    business's live lines, else its bucket's built-in line."""
+    return c["line"] if c.get("line") in keys else str(c.get("bucket") or "other")
+
+
 def picture(business_id: str, year: Optional[int] = None) -> Dict[str, Any]:
+    import expense_lines
     year = int(year or date.today().year)
+    ls = expense_lines.lines(business_id, strict=True)
+    keys = {ln["key"] for ln in ls}
     cats = categories(business_id)
     used = usage(business_id, year)
     listed = []
     for c in cats:
         k = key_of(c["name"])
         rows = [u for (b, lab), u in used.items() if key_of(lab) == k]
-        listed.append({**c, "count": sum(u["count"] for u in rows), "total": round(sum(u["total"] for u in rows), 2)})
+        listed.append({**c, "line": line_of(c, keys), "count": sum(u["count"] for u in rows),
+                       "total": round(sum(u["total"] for u in rows), 2)})
     unsaved = []
     for (bucket, lab), u in sorted(used.items(), key=lambda kv: -kv[1]["total"]):
         if find(cats, lab):
             continue
-        unsaved.append({"label": lab, "bucket": bucket, **u})
-    return {"year": year, "categories": listed, "unsaved": unsaved}
+        unsaved.append({"label": lab, "bucket": bucket, "line": bucket if bucket in keys else "other", **u})
+    return {"year": year, "categories": listed, "unsaved": unsaved,
+            "lines": [{k: ln[k] for k in ("key", "name", "base", "builtin")} for ln in ls]}
 
 
-def create(business_id: str, user_id: Any, name: Any, bucket: Any) -> Tuple[Dict[str, Any], bool]:
-    """(the category, made now). One of the same name is the one returned."""
+def create(business_id: str, user_id: Any, name: Any, bucket: Any, line: Any = None) -> Tuple[Dict[str, Any], bool]:
+    """(the category, made now). One of the same name is the one returned. It
+    rolls up to `line` (a key or a name: one of the five or the business's
+    own), else to `bucket`; its bucket is always that line's base."""
+    import expense_lines
     nm = name_of(name)
     if not nm:
         raise HTTPException(422, "Give the category a name.")
-    b = str(bucket or "operating").strip().lower()
-    if b not in BUCKETS:
-        raise HTTPException(422, f"A category rolls up to one of: {', '.join(BUCKETS)}.")
+    ls = expense_lines.lines(business_id, strict=True)
+    tl = expense_lines.find(ls, line or bucket or "operating")
+    if not tl:
+        raise HTTPException(422, "A category rolls up to one of your lines: "
+                                 f"{', '.join(ln['name'] for ln in ls)}.")
+    b = tl["base"]
     have = find(categories(business_id), nm)
     if have:
         return have, False
-    made = sb_clients.sb_post_as_service("/expense_categories", {
-        "business_id": business_id, "name": nm, "bucket": b, "created_by": str(user_id) if user_id else None})
+    body = {"business_id": business_id, "name": nm, "bucket": b, "created_by": str(user_id) if user_id else None}
+    if not tl["builtin"]:
+        body["line"] = tl["key"]
+    made = sb_clients.sb_post_as_service("/expense_categories", body)
     row = (made[0] if isinstance(made, list) and made else made) if made else None
     if not isinstance(row, dict) or not row.get("id"):
         have = find(categories(business_id), nm)          # made a moment ago elsewhere
@@ -310,8 +330,11 @@ def change(business_id: str, user_id: Any, action: Dict[str, Any], *, say_undo: 
     """The change itself, for Chief's verb and the screen's card (each gates
     first). "category" may also be a label in use that isn't on the list, to
     merge it "into" a saved one ('Utility bills' into 'Utilities')."""
+    import expense_lines
     atype = "set_expense_category"
     try:
+        ls = expense_lines.lines(business_id, strict=True)
+        keys = {ln["key"] for ln in ls}
         cats = categories(business_id)
         current = find(cats, action.get("category")) if action.get("category") else None
         loose = None                                    # a label in use, not on the list
@@ -341,19 +364,26 @@ def change(business_id: str, user_id: Any, action: Dict[str, Any], *, say_undo: 
             elif not changes and not moved:
                 return _fail(atype, f"nothing is filed under '{loose}'")
             text = (f"Merged {old} into {into['name']}: {sum(1 for c in changes if c['table'] != 'expense_categories')} "
-                    f"rows and rules now say {into['name']}, under {BUCKET_SAID[into['bucket']]}.")
+                    f"rows and rules now say {into['name']}, under {expense_lines.said(ls, line_of(into, keys))}.")
         elif current:
-            new = name_of(action.get("name"))
-            bucket = str(action.get("bucket") or current["bucket"]).lower()
-            if bucket not in BUCKETS:
-                return _fail(atype, f"a category rolls up to one of: {', '.join(BUCKETS)}")
-            if not new:
-                return _fail(atype, "say the new name, or 'into' to merge it into another category")
+            new = name_of(action.get("name")) or current["name"]
+            want = action.get("line") or action.get("bucket")
+            if want:
+                tl = expense_lines.find(ls, want)
+                if not tl:
+                    return _fail(atype, f"there's no line called '{name_of(want)}'; your lines are "
+                                        f"{', '.join(ln['name'] for ln in ls)}")
+                bucket, line = tl["base"], (None if tl["builtin"] else tl["key"])
+            else:
+                bucket, line = current["bucket"], (current.get("line") if current.get("line") in keys else None)
             clash = find(cats, new)
             if clash and clash["id"] != current["id"]:
                 return _fail(atype, f"{clash['name']} already exists; merge into it instead")
-            body = {"name": new, "bucket": bucket}
-            before = {"name": current["name"], "bucket": current["bucket"]}
+            body = {"name": new, "bucket": bucket, "line": line}
+            before = {"name": current["name"], "bucket": current["bucket"], "line": current.get("line")}
+            if body == before:
+                return _fail(atype, "say the new name, the line to move it to, or 'into' to merge it into another "
+                                    "category")
             # The rows first, the category last: if a write fails, the old
             # name still stands, so asking again moves what's left.
             moved_rows, moved, failed = relabel(business_id, [current["name"]], new, bucket)
@@ -362,18 +392,21 @@ def change(business_id: str, user_id: Any, action: Dict[str, Any], *, say_undo: 
             if not _patch_row(business_id, "expense_categories", current["id"], before, body):
                 return _partial(atype, batch, moved_rows, 1, f"renaming {current['name']} to {new}")
             changes = moved_rows + [{"table": "expense_categories", "id": current["id"], "before": before, "after": body}]
-            text = (f"{current['name']} is now {new} under {BUCKET_SAID[bucket]}: {len(moved_rows)} rows and rules "
-                    "moved with it.")
+            on = expense_lines.said(ls, line or bucket)
+            text = (f"{new} now rolls up to {on}." if new == current["name"]
+                    else f"{current['name']} is now {new} under {on}.")
+            if moved_rows:
+                text += f" {len(moved_rows)} rows and rules moved with it."
         else:
-            row, made = create(business_id, user_id, action.get("name"), action.get("bucket"))
+            row, made = create(business_id, user_id, action.get("name"), action.get("bucket"), action.get("line"))
             if not made:
                 return {"type": atype, "result": f"{row['name']} is already a category, under "
-                                                  f"{BUCKET_SAID.get(row['bucket'], row['bucket'])}.",
+                                                  f"{expense_lines.said(ls, line_of(row, keys))}.",
                         "label": f"🗂 {row['name']}", "nav": NAV}
             changes, moved = [{"table": "expense_categories", "id": str(row["id"]), "before": None,
                                "after": {"name": row["name"]}}], 0
-            text = (f"Made the category {row['name']}, under {BUCKET_SAID[row['bucket']]}. Payments filed with it "
-                    "show as their own line in the Profit & Loss.")
+            text = (f"Made the category {row['name']}, under {expense_lines.said(ls, line_of(row, keys))}. "
+                    "Payments filed with it show as their own line in the Profit & Loss.")
     except HTTPException as e:
         return _fail(atype, str(e.detail))
     except Unavailable:
@@ -448,10 +481,14 @@ def remember(business_id: str, action: Dict[str, Any]) -> Dict[str, Any]:
     payee = bank_picks.payee_key(str(action.get("payee") or "")) or ""
     if not payee:
         return _fail(atype, "say which payee (its payee key from bank_to_file)")
+    import expense_lines
     try:
+        ls = expense_lines.lines(business_id)
         cats = categories(business_id)
         cat = find(cats, action.get("category") or action.get("label"))
         bucket = str(action.get("answer") or (cat or {}).get("bucket") or "").lower()
+        if bucket not in BUCKETS and expense_lines.find(ls, action.get("answer")):
+            bucket = expense_lines.find(ls, action.get("answer"))["base"]
         if bucket not in BUCKETS[:4]:
             return _fail(atype, "a rule files spending: operating, tax, owner_pay or savings, or a saved category")
         label = (cat or {}).get("name") or name_of(action.get("label")) or None
@@ -475,10 +512,10 @@ def remember(business_id: str, action: Dict[str, Any]) -> Dict[str, Any]:
             change = {"table": "category_rules", "id": str(row["id"]), "before": None, "after": body}
     except Unavailable:
         return _fail(atype, "the rule couldn't be saved just now")
-    said = f"{BUCKET_SAID[bucket]}" + (f", {label}" if label else "")
+    said = expense_lines.said(ls, line_of(cat, {ln["key"] for ln in ls}) if cat else bucket) + (f", {label}" if label else "")
     return {"type": atype, "result": f"Remembered: payments to {payee} file as {said} from now on, as they arrive "
                                      "from the bank or a statement. One undo forgets it.",
-            "label": f"🧠 {payee} → {label or BUCKET_SAID[bucket]}"[:120], "batch_id": uuid.uuid4().hex,
+            "label": f"🧠 {payee} → {label or expense_lines.said(ls, bucket)}"[:120], "batch_id": uuid.uuid4().hex,
             "changes": [change], "nav": NAV}
 
 
@@ -517,7 +554,7 @@ def take_back(business_id: str, batch_id: Any) -> Dict[str, Any]:
     since = (datetime.now(timezone.utc) - timedelta(days=UNDO_DAYS)).strftime("%Y-%m-%dT%H:%M:%SZ")
     try:
         logs = _get(f"/chief_undo_log?business_id=eq.{_q(business_id)}"
-                    "&action_type=in.(set_expense_category,save_category_rule)&status=eq.undoable"
+                    "&action_type=in.(set_expense_category,save_category_rule,set_expense_line)&status=eq.undoable"
                     f"&created_at=gte.{since}&order=created_at.desc&limit=50&select=id,result_json")
     except Unavailable:
         return _fail(atype, "the record of that change couldn't be read just now; nothing changed")
@@ -533,7 +570,7 @@ def take_back(business_id: str, batch_id: Any) -> Dict[str, Any]:
         fields = _TABLES[table][1]
         after = {k: v for k, v in (c.get("after") or {}).items() if k in fields}
         if c.get("before") is None:                          # made by the change: unmade
-            if table == "expense_categories":
+            if table in _ARCHIVED:
                 ok = _patch_row(business_id, table, rid, {"archived_at": None},
                                 {"archived_at": datetime.now(timezone.utc).isoformat()})
             else:
@@ -541,7 +578,7 @@ def take_back(business_id: str, batch_id: Any) -> Dict[str, Any]:
         else:
             before = {k: v for k, v in c["before"].items() if k in fields}
             ok = _patch_row(business_id, table, rid, after, before)
-        if ok is None or ok is False and table == "expense_categories" and c.get("before") is None:
+        if ok is None or ok is False and table in _ARCHIVED and c.get("before") is None:
             failed += 1
         elif ok:
             back += 1
@@ -563,6 +600,7 @@ class CategoryBody(BaseModel):
     business_id: str
     name: str = Field(max_length=NAME_MAX * 2)
     bucket: str = Field(default="operating", max_length=12)
+    line: Optional[str] = Field(default=None, max_length=80)      # a line's key or name; wins over bucket
 
 
 def _route_gate(business_id: str, user: Any, *, write: bool) -> Dict[str, Any]:
@@ -593,7 +631,7 @@ def get_categories(business_id: str = Query(...), year: Optional[int] = Query(No
 def post_category(body: CategoryBody, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     _route_gate(body.business_id, user, write=True)
     try:
-        row, made = create(body.business_id, user.id, body.name, body.bucket)
+        row, made = create(body.business_id, user.id, body.name, body.bucket, body.line)
     except Unavailable:
         raise HTTPException(503, "The category didn't save. Try again.")
     return {"ok": True, "category": row, "made": made}
@@ -605,6 +643,7 @@ class ChangeBody(BaseModel):
     name: Optional[str] = Field(default=None, max_length=NAME_MAX * 2)
     bucket: Optional[str] = Field(default=None, max_length=12)
     into: Optional[str] = Field(default=None, max_length=NAME_MAX * 2)
+    line: Optional[str] = Field(default=None, max_length=80)
 
 
 class UndoBody(BaseModel):
@@ -624,14 +663,15 @@ def _said(out: Dict[str, Any]) -> str:
     return r[:1].upper() + r[1:]
 
 
-def _record(business_id: str, user_id: Any, action: Dict[str, Any], out: Dict[str, Any]) -> bool:
+def _record(business_id: str, user_id: Any, action: Dict[str, Any], out: Dict[str, Any],
+            action_type: str = "set_expense_category") -> bool:
     """The card's change goes in the same undo log as Chief's, so its Undo
     button and 'Chief, undo that' both take it back."""
     if out.get("failed") or not out.get("batch_id") or not out.get("changes"):
         return False
     try:
         res = sb_clients.sb_post_as_service("/chief_undo_log", {
-            "business_id": business_id, "user_id": str(user_id), "action_type": "set_expense_category",
+            "business_id": business_id, "user_id": str(user_id), "action_type": action_type,
             "action_json": action, "result_json": out, "status": "undoable"})
     except Exception as e:                                # the change stands; only its undo is lost
         print(f"[expense_categories] undo log write failed: {e}")
@@ -646,19 +686,59 @@ def post_change(body: ChangeBody, user: AuthedUser = Depends(require_user)) -> D
     _card_gate(body.business_id, user)
     if not name_of(body.category):
         raise HTTPException(422, "Say which category to change.")
-    if not (name_of(body.name) or name_of(body.into)):
-        raise HTTPException(422, "Give it a new name, or say which category to merge it into.")
+    if not (name_of(body.name) or name_of(body.into) or body.line or body.bucket):
+        raise HTTPException(422, "Give it a new name or line, or say which category to merge it into.")
     action = {k: v for k, v in {"category": body.category, "name": body.name, "bucket": body.bucket,
-                                "into": body.into}.items() if v}
-    out = change(body.business_id, user.id, action, say_undo=False)
+                                "into": body.into, "line": body.line}.items() if v}
+    return _answer(body.business_id, user.id, action, change(body.business_id, user.id, action, say_undo=False),
+                   "set_expense_category")
+
+
+def _answer(business_id: str, user_id: Any, action: Dict[str, Any], out: Dict[str, Any], atype: str) -> Dict[str, Any]:
     if out.get("failed"):
         raise HTTPException(409, _said(out))
-    logged = _record(body.business_id, user.id, action, out)
+    logged = _record(business_id, user_id, action, out, atype)
     text = _said(out)
     if out.get("changes") and not logged:               # it stands, but nothing can take it back: say so
         text += " Its undo record didn't save, so this one can't be undone from here or by Chief."
     return {"ok": True, "said": text, "batch_id": out["batch_id"] if logged else None,
             "partial": bool(out.get("partial"))}
+
+
+# ─── The lines (expense_lines.py) ─────────────────────────────────────
+
+class LineBody(BaseModel):
+    business_id: str
+    line: Optional[str] = Field(default=None, max_length=80)      # which line: its key or name
+    name: Optional[str] = Field(default=None, max_length=80)      # its new name, or a new line's
+    base: Optional[str] = Field(default=None, max_length=80)      # a new line counts as this one in the books
+    remove: bool = False
+
+
+@router.get("/lines")
+def get_lines(business_id: str = Query(...), user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    """The business's lines and their names, for every screen that shows one."""
+    import expense_lines
+    row = _route_gate(business_id, user, write=False)
+    try:
+        ls = expense_lines.lines(business_id, strict=True)
+    except Unavailable:
+        raise HTTPException(503, "The lines can't be read just now.")
+    return {"ok": True, "lines": [{k: ln[k] for k in ("key", "name", "base", "builtin")} for ln in ls],
+            "card": _card_on(business_id), "can_change": str(row.get("owner_id")) == str(user.id)}
+
+
+@router.post("/lines")
+def post_line(body: LineBody, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    """Rename a line, add one, or remove one of the business's own, from the card."""
+    import expense_lines
+    _card_gate(body.business_id, user)
+    action = {k: v for k, v in {"line": body.line, "name": body.name, "base": body.base,
+                                "remove": body.remove}.items() if v}
+    if not (body.line or name_of(body.name)):
+        raise HTTPException(422, "Say which line, or give a new line its name.")
+    return _answer(body.business_id, user.id, action,
+                   expense_lines.change(body.business_id, user.id, action, say_undo=False), "set_expense_line")
 
 
 @router.post("/undo")
@@ -694,19 +774,24 @@ def _list_sync(biz: Dict[str, Any], action: Dict[str, Any]) -> Dict[str, Any]:
     except (Unavailable, ValueError, TypeError):
         return _fail(atype, "the categories couldn't be read just now (if this is new, its table may not be set up "
                             "yet). This is not 'no categories'")
-    cats = p["categories"]
-    text = (f"{len(cats)} categories: " + "; ".join(
-        f"{c['name']} ({BUCKET_SAID.get(c['bucket'], c['bucket'])}, {c['count']} this year, ${c['total']:,.2f})"
+    import expense_lines
+    cats, ls = p["categories"], p["lines"]
+    text = ("Lines: " + "; ".join(
+        ln["name"] + ("" if ln["builtin"] else f" (counts as {expense_lines.said(ls, ln['base'])})") for ln in ls) + ". ")
+    text += (f"{len(cats)} categories: " + "; ".join(
+        f"{c['name']} ({expense_lines.said(ls, c['line'])}, {c['count']} this year, ${c['total']:,.2f})"
         for c in cats[:25]) + "." if cats else "No categories saved yet.")
     if p["unsaved"]:
         text += " In use but not on the list: " + "; ".join(
-            f"{u['label']} ({BUCKET_SAID.get(u['bucket'], u['bucket'])}, {u['count']})" for u in p["unsaved"][:10]) + "."
+            f"{u['label']} ({expense_lines.said(ls, u['line'])}, {u['count']})" for u in p["unsaved"][:10]) + "."
     text += f" {len(rs)} every-time rule(s)."
-    return {"type": atype, "result": text, "label": "🗂 Categories", "categories": cats, "unsaved": p["unsaved"][:30],
+    return {"type": atype, "result": text, "label": "🗂 Categories", "lines": ls, "categories": cats,
+            "unsaved": p["unsaved"][:30],
             "rules": [{"payee": r["merchant_name"], "answer": r["business_category"],
                        "label": r.get("business_subcategory")} for r in rs[:60]],
             "note_for_chief": ("File under the saved names exactly. Offer to save a label that's in use but not "
-                               "listed, and to merge two that mean the same thing; ask first."),
+                               "listed, and to merge two that mean the same thing; ask first. Say the lines by "
+                               "these names, never Operating/Owner pay/Tax/Savings when they're named otherwise."),
             "nav": NAV}
 
 
@@ -724,3 +809,16 @@ async def handle_save_category_rule(client, biz, action) -> Dict[str, Any]:
 
 async def handle_undo_category_change(client, biz, action) -> Dict[str, Any]:
     return await asyncio.to_thread(undo, str(biz["id"]), action or {})
+
+
+def set_line(business_id: str, action: Dict[str, Any]) -> Dict[str, Any]:
+    """Chief's verb: rename a line, add one, or remove one of the business's own."""
+    refused = _gate(business_id, write=True)
+    if refused:
+        return _fail("set_expense_line", refused.replace("Categories", "Lines").replace("categories", "lines"))
+    import expense_lines
+    return expense_lines.change(business_id, _uid(), action)
+
+
+async def handle_set_expense_line(client, biz, action) -> Dict[str, Any]:
+    return await asyncio.to_thread(set_line, str(biz["id"]), action or {})

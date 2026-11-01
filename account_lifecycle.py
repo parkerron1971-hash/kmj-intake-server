@@ -476,6 +476,8 @@ BUSINESS_CHILD_TABLES: List[str] = [
     "gift_deposit_matches",
     # A business's own expense categories: names and their line, portable.
     "expense_categories",
+    # Its own names for the lines of its books, and lines of its own.
+    "expense_lines",
     "reconciliations",
     "connectors",
     # GL cluster — queue/alarms/pushed-entries cite journal entries, so

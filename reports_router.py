@@ -199,7 +199,8 @@ def pl(biz: str, period: str = "this_month", comparison: Optional[str] = None,
         lambda: reports_engine.profit_and_loss(biz, period, comparison, from_, to))
     out.setdefault("basis", b if out.get("source") == "gl" else "cash")
     out["currency"] = "USD"   # Category E — explicit until multi-currency lands
-    return out
+    import expense_lines      # the business's own names for its lines, and its added lines
+    return expense_lines.present(biz, out)
 
 
 @router.get("/ar-aging")
@@ -1030,6 +1031,8 @@ def export(biz: str, report: str, format: str = "csv",
                 biz, lambda: gl_reports.gl_profit_and_loss(biz, period, comparison, from_, to,
                                                            basis=b),
                 lambda: reports_engine.profit_and_loss(biz, period, comparison, from_, to))
+            import expense_lines
+            data = expense_lines.present(biz, data)
         elif report == "cash_flow":
             data = _gl_or_fallback(
                 biz, lambda: gl_reports.gl_cash_flow(biz, period, from_, to),

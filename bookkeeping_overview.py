@@ -567,7 +567,8 @@ def year_so_far(biz: str, biz_row: Dict[str, Any]) -> Dict[str, Any]:
         biz,
         lambda: gl_reports.gl_profit_and_loss(biz, period, None, from_, to, basis=basis),
         lambda: reports_engine.profit_and_loss(biz, period, None, from_, to))
-    cur = out.get("current") or {}
+    import expense_lines      # the five lines by the business's names (added lines stay in theirs here)
+    cur = expense_lines.present(biz, out, split=False).get("current") or {}
     rev, exp = cur.get("revenue") or {}, cur.get("expenses") or {}
     return {
         "range": out.get("range"), "source": out.get("source"),
