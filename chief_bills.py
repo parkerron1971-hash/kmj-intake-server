@@ -359,16 +359,17 @@ def add_sync(business_id: str, action: Dict[str, Any]) -> Dict[str, Any]:
                  "the bank, and copies for them would count twice.")
     out = {"type": atype, "result": text + " One undo removes it.", "label": f"🧾 {vendor} {_money(amount)}",
            "bill_id": str(row["id"]), "nav": NAV}
-    if not every:
-        try:
-            import bill_payments
-            fit = bill_payments.clear_one(bill_payments.candidates(business_id, row))
-        except Exception:
-            fit = None
-        if fit:
-            out["looks_paid_by"] = {k: fit[k] for k in ("transaction_id", "date", "description", "amount")}
-            out["result"] += (f" It looks already paid by the {_money(fit['amount'])} bank payment on {fit['date']} "
-                              f"({fit['description']}): offer to match it so it counts once.")
+    # One-time or the first copy of a recurring bill: a bank payment that
+    # already fits is offered for the match, so it never counts twice.
+    try:
+        import bill_payments
+        fit = bill_payments.clear_one(bill_payments.candidates(business_id, row))
+    except Exception:
+        fit = None
+    if fit:
+        out["looks_paid_by"] = {k: fit[k] for k in ("transaction_id", "date", "description", "amount")}
+        out["result"] += (f" It looks already paid by the {_money(fit['amount'])} bank payment on {fit['date']} "
+                          f"({fit['description']}): offer to match it so it counts once.")
     return out
 
 
@@ -401,10 +402,14 @@ def remove_sync(business_id: str, action: Dict[str, Any]) -> Dict[str, Any]:
             period_lock.guard(business_id, str(g.get("created_at") or "")[:10], source_type="bill",
                               source_id=str(g["id"]), reason=None, override_by=str(_TURN_USER_ID.get() or ""),
                               pre=g, post=None)
+        done = 0
         for g in reversed(gone):                     # copies first, the bill last
             if not sb_clients.sb_delete_as_service(f"/bills?id=eq.{quote(str(g['id']), safe='')}&business_id=eq.{q}"
                                                    "&paid_transaction_id=is.null"):
-                return _fail(atype, "the bill didn't delete just now; ask again")
+                return _fail(atype, (f"only {done} of the {len(gone)} owed copies came out before a delete failed; "
+                                     "the bill itself is still there, so ask again to finish") if done else
+                             "the bill didn't delete just now; nothing changed, so ask again")
+            done += 1
     except HTTPException as e:
         detail = e.detail.get("message") if isinstance(e.detail, dict) else e.detail
         return _fail(atype, str(detail or "that month is closed"))

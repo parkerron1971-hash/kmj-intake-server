@@ -146,6 +146,41 @@ def test_undo_removes_an_owed_bill_and_a_paid_one_stays(db, monkeypatch):
     assert locked["failed"] and "closed period" in locked["result"] and _bill(db, again["bill_id"])
 
 
+def test_a_recurring_bills_first_copy_offers_the_match_too(db):
+    got = _run(chief_bills.handle_add_bill, {"vendor": "City Water Dept", "amount": 61.25, "every": "monthly",
+                                             "due_date": (T + timedelta(days=10)).isoformat(), "category": "Utilities"})
+    assert not got.get("failed") and got["looks_paid_by"]["transaction_id"] == "w1"   # paid 5 days ago, due in 10
+
+
+def test_failures_are_said_never_half_done_in_silence(db, monkeypatch):
+    monkeypatch.setattr(sb_clients, "sb_post_as_service", lambda path, body, *a, **k: None)
+    got = _run(chief_bills.handle_add_bill, {"vendor": "X", "amount": 5, "due_date": T.isoformat()})
+    assert got["failed"] and "didn't save" in got["result"]
+    monkeypatch.setattr(sb_clients, "sb_post_as_service", db.post)
+    db.t["bills"] += [{"id": "tpl", "business_id": BIZ, "vendor_name": "Lawn", "amount": 50, "status": "pending",
+                       "is_recurring": True, "recurrence_parent_id": None, "paid_transaction_id": None,
+                       "created_at": f"{T}T00:00:00Z", "due_date": T.isoformat()},
+                      {"id": "k1", "business_id": BIZ, "vendor_name": "Lawn", "amount": 50, "status": "pending",
+                       "is_recurring": False, "recurrence_parent_id": "tpl", "paid_transaction_id": None,
+                       "created_at": f"{T}T00:00:00Z", "due_date": T.isoformat()}]
+    calls = {"n": 0}
+
+    def flaky(path, *a, **k):
+        calls["n"] += 1
+        return db.delete(path) if calls["n"] == 1 else False         # the copy goes, the bill fails
+    monkeypatch.setattr(sb_clients, "sb_delete_as_service", flaky)
+    half = _run(chief_bills.handle_remove_bill, {"bill_id": "tpl"})
+    assert half["failed"] and "only 1 of the 2" in half["result"] and _bill(db, "tpl")
+    monkeypatch.setattr(sb_clients, "sb_get_as_service",
+                        lambda path, *a, **k: None if path.startswith("/plaid_transactions") else db.get(path))
+    look = _run(chief_bills.handle_bills, {})
+    assert not look.get("failed") and look["could_be_bills"] == []                   # a suggestion never breaks it
+    monkeypatch.setattr(sb_clients, "sb_get_as_service",
+                        lambda path, *a, **k: None if path.startswith("/bills") else db.get(path))
+    gone = _run(chief_bills.handle_remove_bill, {"bill_id": "tpl"})
+    assert gone["failed"] and "nothing was removed" in gone["result"]
+
+
 def test_only_the_owner_and_only_where_on(db, monkeypatch):
     import bills_router
 
