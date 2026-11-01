@@ -455,3 +455,29 @@ def test_no_suggestions_for_a_closed_or_non_collecting_count(bank):
     bank.t["giving_counts"][0]["status"] = "closed"
     assert gs.count_bank_suggestions(BIZ, ZELLE_COUNT, USER)["suggestions"] == []
 
+
+def test_a_retry_of_a_saved_zelle_row_answers_already(bank):
+    row = {"request_id": str(uuid.uuid4()), "amount_cents": 5000, "fund": "General", "method": "zelle", "bank_ref": "z1"}
+    assert gs.record_gifts(BIZ, ZELLE_COUNT, {"rows": [row]}, USER)["saved"] == 1
+    again = gs.record_gifts(BIZ, ZELLE_COUNT, {"rows": [row]}, USER)            # the same request, retried
+    assert again["results"][0]["ok"] is True and again["results"][0]["already"] is True
+
+
+@pytest.mark.parametrize("change,word", [
+    ({"money_kind": "transfer"}, "already filed"),
+    ({"pending": True}, "isn't in the books"),
+    ({"account_id": "other-acct"}, "isn't in the books"),
+])
+def test_a_deposit_filed_matched_or_outside_the_books_is_refused(bank, change, word):
+    bank.t["plaid_transactions"][0].update(change)
+    row = {"request_id": str(uuid.uuid4()), "amount_cents": 5000, "fund": "General", "method": "zelle", "bank_ref": "z1"}
+    out = gs.record_gifts(BIZ, ZELLE_COUNT, {"rows": [row]}, USER)
+    assert out["saved"] == 0 and word in out["results"][0]["error"]
+
+
+def test_a_deposit_already_matched_to_gifts_is_refused(bank):
+    bank.t["gift_deposit_items"] = [{"business_id": BIZ, "side": "deposit", "ref": "z1"}]
+    row = {"request_id": str(uuid.uuid4()), "amount_cents": 5000, "fund": "General", "method": "zelle", "bank_ref": "z1"}
+    out = gs.record_gifts(BIZ, ZELLE_COUNT, {"rows": [row]}, USER)
+    assert out["saved"] == 0 and "already matched" in out["results"][0]["error"]
+

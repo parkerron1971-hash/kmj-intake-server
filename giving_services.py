@@ -554,8 +554,9 @@ def record_gifts(business_id: str, count_id: str, body: Dict[str, Any],
             if row["check_number"]:
                 notes.append(f"Check #{row['check_number']}")
             received = day
-            if row["bank_ref"]:
+            if row["bank_ref"] and not _saved_before(business_id, rid):
                 # Added from a Zelle bank row: dated the day the money arrived.
+                # (A retry of a row that saved skips this and answers already.)
                 bank = _bank_row_for(business_id, row["bank_ref"], int(row.get("amount_cents") or 0))
                 received = str(bank.get("date"))[:10]
                 notes.append(f"Bank row {row['bank_ref']}")
@@ -789,10 +790,16 @@ def who_is(name: str, contacts: List[Dict[str, Any]]) -> Tuple[str, Optional[str
     return ("several" if full else "none"), None
 
 
+RECORDED_CAP = 2000
+
+
 def _recorded_refs(business_id: str, since: datetime) -> set:
-    """Bank rows already recorded as gifts (their note names them)."""
+    """Bank rows already recorded as gifts (their note names them). Past the
+    cap it refuses (503) rather than miss an older one and record it again."""
     rows = _need(f"/invoices?business_id=eq.{_q(business_id)}&is_gift=eq.true&notes=ilike.{_q('*Bank row *')}"
-                 f"&paid_at=gte.{_q(since.isoformat())}&select=notes&limit=2000")
+                 f"&paid_at=gte.{_q(since.isoformat())}&select=notes&limit={RECORDED_CAP + 1}")
+    if len(rows) > RECORDED_CAP:
+        raise HTTPException(503, "Too many gifts from the bank to check at once. Record this one by hand.")
     out: set = set()
     for r in rows:
         out.update(re.findall(r"^Bank row (\S+)$", str(r.get("notes") or ""), re.M))
@@ -845,11 +852,23 @@ def count_bank_suggestions(business_id: str, count_id: str, user: AuthedUser = D
     return {"suggestions": bank_suggestions(biz, count)}
 
 
+def _saved_before(business_id: str, request_id: str) -> bool:
+    """This row's request already recorded a gift (a retry after a dropped
+    answer): it then answers already, never "already recorded" as an error."""
+    try:
+        rid = str(uuid.UUID(str(request_id)))
+    except ValueError:
+        return False
+    return bool(_need(f"/invoices?business_id=eq.{_q(business_id)}&invoice_number=eq.GIVE-manual-{rid}"
+                      f"&select=id&limit=1"))
+
+
 def _bank_row_for(business_id: str, ref: str, amount_cents: int) -> Dict[str, Any]:
     """The Zelle bank row a gift is added from: this business's, money in,
     the same amount, and never already a gift. Raises ValueError in words."""
     rows = _need(f"/plaid_transactions?business_id=eq.{_q(business_id)}&transaction_id=eq.{_q(ref)}"
-                 f"&select=transaction_id,date,amount,name,merchant_name,money_kind&limit=1")
+                 f"&select=transaction_id,account_id,date,amount,name,merchant_name,money_kind,pending,"
+                 f"excluded_from_books&limit=1")
     if not rows:
         raise ValueError("That bank deposit wasn't found.")
     r = rows[0]
@@ -857,6 +876,14 @@ def _bank_row_for(business_id: str, ref: str, amount_cents: int) -> Dict[str, An
     cents = round(-float(r.get("amount") or 0) * 100)
     if cents <= 0 or not _ZELLE.search(bank_picks.words(r)):
         raise ValueError("That bank row isn't Zelle money in.")
+    if r.get("pending") or r.get("excluded_from_books") or str(r.get("account_id")) not in set(
+            bank_picks.accounts(business_id, _need)):
+        raise ValueError("That deposit isn't in the books (pending, or an account the books don't use).")
+    if r.get("money_kind"):
+        raise ValueError("That deposit is already filed in the books; it isn't a new gift.")
+    if _need(f"/gift_deposit_items?business_id=eq.{_q(business_id)}&side=eq.deposit&ref=eq.{_q(ref)}"
+             f"&select=ref&limit=1"):
+        raise ValueError("That deposit is already matched to gifts.")
     if cents != int(amount_cents or 0):
         raise ValueError(f"That Zelle deposit is ${cents / 100:,.2f}; the gift must be the same.")
     since = datetime.fromisoformat(str(r.get("date"))[:10]).replace(tzinfo=timezone.utc) - timedelta(days=60)

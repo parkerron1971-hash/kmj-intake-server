@@ -12,7 +12,9 @@ left_undone:
   - "Switched with GIVING_SERVICES (owner until a Thursday flip)"
 decisions:
   - "GET /giving/{id}/counts/{count}/bank: Zelle money in (the books' accounts, cleared, not filed as anything, never matched to a gift) during the open collecting count's online window, with the sender read from the bank words and matched to one person"
-  - "A row added with bank_ref is checked against that bank row (this church's, Zelle money in, the same amount, not already a gift), dated the day the money arrived (so the Sunday match pairs it with that deposit), and its note names the bank row; a bank row is never recorded twice"
+  - "A row added with bank_ref is checked against that bank row (this church's, in the books' accounts, cleared, Zelle money in, not filed as anything, not matched to gifts, the same amount, not already a gift), dated the day the money arrived (so the Sunday match pairs it with that deposit), and its note names the bank row"
+  - "A retry of a row that already saved (same request id) answers already before any bank check"
+  - "Accepted: two taps at the same moment with different request ids could both record one deposit (no unique key on a note); the Sunday match then shows a gift with no deposit to clear. The already-a-gift read fails closed past 2,000 gifts"
 related: [2026-11-01-giving-services.md, 2026-10-31-giving-deposits.md]
 ---
 `giving_services.py` (zelle_sender, who_is, bank_suggestions, the bank route, record_gifts
