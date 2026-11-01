@@ -500,6 +500,15 @@ def _giving_checkout_form(
     return form
 
 
+def _refused_params(resp: Any) -> List[str]:
+    """The request field Stripe's 400 names (error.param), else none."""
+    try:
+        param = str(((resp.json() or {}).get("error") or {}).get("param") or "")
+    except Exception:
+        return []
+    return [param.split("[")[0]] if param else []
+
+
 async def create_giving_checkout(
     *,
     stripe_account_id: str,
@@ -526,8 +535,10 @@ async def create_giving_checkout(
     as create_checkout_session).
 
     `extra_form`: giving_ways.checkout_extras (card-or-bank filter and the
-    giving payment set). If Stripe refuses one of those fields by name, the
-    gift is retried once without them, so a filter can never stop a gift."""
+    giving payment set). If Stripe's 400 names one of those fields
+    (error.param), a card gift is retried once without that field alone, so
+    a filter can't stop a gift; a bank gift is never retried without its
+    filter (it would become a card gift with the bank fee covered)."""
     if not stripe_account_id:
         raise ValueError("stripe_account_id required")
     form = _giving_checkout_form(
@@ -556,15 +567,20 @@ async def create_giving_checkout(
             headers=_giving_checkout_headers(stripe_account_id, embedded),
             data={**form, **extras},
         )
-        if extras and resp.status_code == 400 and any(
-                k.split("[")[0] in resp.text for k in extras):
-            logger.warning(f"create_giving_checkout: Stripe refused the pay filter, "
+        refused = sorted({k.split("[")[0] for k in extras} & set(_refused_params(resp)))             if extras and resp.status_code == 400 else []
+        bank = "us_bank_account" in extras.values()
+        if refused and not (bank and "allowed_payment_method_types" in refused):
+            # Only the field Stripe named comes out (the giving set stays if
+            # it was the filter, and the reverse), the session says so in
+            # its metadata, and a bank gift is never turned into a card one.
+            kept = {k: v for k, v in extras.items() if k.split("[")[0] not in refused}
+            logger.warning(f"create_giving_checkout: Stripe refused {refused}; "
                            f"retrying without it: {resp.text[:200]}")
             resp = await client.post(
                 f"{STRIPE_API_BASE}/checkout/sessions",
                 auth=(_secret_key(), ""),
                 headers=_giving_checkout_headers(stripe_account_id, embedded),
-                data=form,
+                data={**form, **kept, "metadata[pay_filter_fallback]": ",".join(refused)},
             )
     if resp.status_code >= 400:
         logger.warning(

@@ -158,6 +158,18 @@ def test_the_ways_menu_follows_the_switch(monkeypatch):
     assert on_["on"] is True and "zelle" in [m["id"] for m in on_["methods"]]
 
 
+def test_the_ways_menu_says_so_when_the_church_cant_be_read(monkeypatch, on):
+    class Down(FakeSB):
+        def sb_get_as_service(self, path):
+            return None if path.startswith("/businesses?") else super().sb_get_as_service(path)
+    monkeypatch.setattr(giving_router, "sb_clients", Down(business=_church()))
+    import giving_records
+    monkeypatch.setattr(giving_records, "require_finance", lambda b, u: "owner")
+    with pytest.raises(HTTPException) as e:
+        giving_router.giving_ways_menu(BIZ, SimpleNamespace(id="u1"))
+    assert e.value.status_code == 503
+
+
 def test_a_recorded_gift_takes_the_way_and_names_an_other_app(monkeypatch, on):
     fake = FakeSB(business=_church())
     monkeypatch.setattr(giving_router, "sb_clients", fake)
@@ -298,7 +310,8 @@ class _Resp:
         return self._data
 
 
-def test_a_refused_filter_never_stops_a_gift(monkeypatch):
+def _stripe(monkeypatch, refuse):
+    """A Stripe that 400s naming `refuse` while that field is sent."""
     sent = []
 
     class Client:
@@ -313,20 +326,53 @@ def test_a_refused_filter_never_stops_a_gift(monkeypatch):
 
         async def post(self, url, auth=None, headers=None, data=None):
             sent.append(dict(data))
-            if "allowed_payment_method_types[0]" in data:
-                return _Resp(400, '{"error":{"param":"allowed_payment_method_types"}}')
+            if any(k.split("[")[0] == refuse for k in data):
+                return _Resp(400, "refused", {"error": {"param": refuse, "message": "Received unknown parameter"}})
             return _Resp(200, "", {"id": "cs_1", "url": "https://checkout.stripe.com/x"})
 
     monkeypatch.setattr(stripe_checkout_helpers.httpx, "AsyncClient", Client)
     monkeypatch.setattr(stripe_checkout_helpers, "require_stripe_write", lambda acct: None)
     monkeypatch.setattr(stripe_checkout_helpers, "_secret_key", lambda: "sk_test_x")
-    out = asyncio.run(stripe_checkout_helpers.create_giving_checkout(
+    return sent
+
+
+def _gift(extras):
+    return asyncio.run(stripe_checkout_helpers.create_giving_checkout(
         stripe_account_id="acct_1", gift_id="g", business_id="b", amount_cents=5000, fund="General",
         fund_label="General Fund", fund_kind="general", monthly=False, giver_name=None, giver_email=None,
-        success_url="https://x/give?thanks=1", cancel_url="https://x/give?canceled=1",
-        extra_form=giving_ways.checkout_extras("card")))
-    assert out["id"] == "cs_1" and len(sent) == 2
-    assert "allowed_payment_method_types[0]" in sent[0] and "allowed_payment_method_types[0]" not in sent[1]
+        success_url="https://x/give?thanks=1", cancel_url="https://x/give?canceled=1", extra_form=extras))
+
+
+def test_a_refused_card_filter_never_stops_a_gift_and_keeps_the_giving_set(monkeypatch):
+    monkeypatch.setenv("STRIPE_GIVING_PMC", "pmc_1GivingSetAbc")
+    sent = _stripe(monkeypatch, "allowed_payment_method_types")
+    assert _gift(giving_ways.checkout_extras("card"))["id"] == "cs_1" and len(sent) == 2
+    assert "allowed_payment_method_types[0]" not in sent[1]
+    assert sent[1]["payment_method_configuration"] == "pmc_1GivingSetAbc"
+    assert sent[1]["metadata[pay_filter_fallback]"] == "allowed_payment_method_types"
+
+
+def test_a_refused_giving_set_keeps_the_filter(monkeypatch):
+    monkeypatch.setenv("STRIPE_GIVING_PMC", "pmc_1GivingSetAbc")
+    sent = _stripe(monkeypatch, "payment_method_configuration")
+    assert _gift(giving_ways.checkout_extras("card"))["id"] == "cs_1"
+    assert "payment_method_configuration" not in sent[1]
+    assert sent[1]["allowed_payment_method_types[0]"] == "card"
+
+
+def test_a_bank_gift_is_never_turned_into_a_card_gift(monkeypatch):
+    monkeypatch.setenv("STRIPE_GIVING_PMC", "pmc_1GivingSetAbc")
+    sent = _stripe(monkeypatch, "allowed_payment_method_types")
+    with pytest.raises(RuntimeError):
+        _gift(giving_ways.checkout_extras("bank"))
+    assert len(sent) == 1
+
+
+def test_a_400_that_names_no_extra_is_not_retried(monkeypatch):
+    sent = _stripe(monkeypatch, "line_items")
+    with pytest.raises(RuntimeError):
+        _gift(giving_ways.checkout_extras("card"))
+    assert len(sent) == 1
 
 
 # ─── The give page ─────────────────────────────────────────────────────
