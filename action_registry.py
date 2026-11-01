@@ -506,6 +506,11 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
                                      "undo_category_change forgets it"), "chief_only": True},
     "undo_category_change": {**_w("A", "puts back one change to the categories or rules, skipping rows changed since"),
                              "chief_only": True},
+    # Kevin, 2026-11-01: the business's own names for the lines of its books
+    # (a church starts with church names), and lines of its own.
+    "set_expense_line": {**_w("A", "renames one of the lines spending rolls up to, adds a line of the business's own "
+                                   "(it counts as one of the five in the books), or removes an added one; "
+                                   "undo_category_change puts it back"), "chief_only": True},
     # Kevin, 2026-10-31: the Sunday match, gifts recorded by person to the
     # deposits that carried them; Chief does it, matches what a person says,
     # or verifies; the database refuses a duplicate.

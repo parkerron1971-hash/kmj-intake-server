@@ -255,6 +255,8 @@ def _to_file_sync(biz: Dict[str, Any], action: Dict[str, Any]) -> Dict[str, Any]
         cats = [{"name": c["name"], "bucket": c["bucket"]} for c in ec.categories(business_id)]
     except ec.Unavailable:
         cats = []
+    import expense_lines
+    lines = expense_lines.names(business_id)       # the business's own names for the answers' lines
     ins = sum(1 for r in rows if r["direction"] == "in")
     text = (f"{len(rows)} bank rows wait for an answer ({ins} money in, {len(rows) - ins} money out), "
             f"in {len(groups)} groups by payee. Largest: " + "; ".join(
@@ -281,7 +283,9 @@ def _to_file_sync(biz: Dict[str, Any], action: Dict[str, Any]) -> Dict[str, Any]
                  "spending and for money in that isn't giving; leave the giving deposits as they are.")
     return {"type": atype, "label": f"{len(rows)} bank rows to file", "result": text, "nav": NAV,
             "total": len(rows), "groups": shown, "more_groups": max(0, len(groups) - len(shown)),
-            "gifts_recorded": gifts, "categories": cats, "note_for_chief": note}
+            "gifts_recorded": gifts, "categories": cats, "lines": lines,
+            "note_for_chief": note + " Say a spending answer by its line's name in 'lines' (the answer key stays "
+                                     "operating, tax, owner_pay or savings)."}
 
 
 # ─── Filing ───────────────────────────────────────────────────────────

@@ -139,6 +139,8 @@ def _package_reports(biz: str, year: int) -> Dict[str, Dict[str, Any]]:
         pl = reports_engine.profit_and_loss(biz, "custom", None, y_from, y_to)
         bs = reports_engine.balance_sheet(biz, y_to)
         cf = reports_engine.cash_flow(biz, "custom", y_from, y_to)
+    import expense_lines      # the P&L in the business's own lines
+    pl = expense_lines.present(biz, pl)
     out = {"pl": pl, "balance_sheet": bs, "cash_flow": cf,
            "ar_aging": reports_engine.ar_aging(biz, y_to),
            "ap_aging": reports_engine.ap_aging(biz, y_to)}

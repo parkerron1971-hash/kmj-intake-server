@@ -300,6 +300,11 @@ INVERSES: Dict[str, Inverse] = {
         "put the categories back the way they were",
         lambda a, r: ({"type": "undo_category_change", "batch_id": r["batch_id"]}
                       if isinstance(r.get("batch_id"), str) and r.get("changes") else None)),
+    "set_expense_line": Inverse(
+        "undo_category_change",
+        "put the lines back the way they were",
+        lambda a, r: ({"type": "undo_category_change", "batch_id": r["batch_id"]}
+                      if isinstance(r.get("batch_id"), str) and r.get("changes") else None)),
     "save_category_rule": Inverse(
         "undo_category_change",
         "forget that rule",
