@@ -35,6 +35,7 @@ import sb_clients
 
 OPEN = ("pending", "scheduled", "overdue")
 SHOWN = 40
+CAP = 2000
 NAV = {"tab": "operate", "sub": "bookkeeping", "bkTab": "bills"}
 
 TOOL = {
@@ -88,16 +89,27 @@ def _gate(business_id: str) -> Optional[str]:
 
 
 def _next_due(b: Dict[str, Any], today: date) -> Optional[date]:
-    """A recurring bill's next due date on or after today (from its start)."""
+    """A recurring bill's next due date on or after today (from its start),
+    by the Bills tab's own rules: none once paused, cancelled or past its end
+    (an end date, or a number of bills)."""
     import bills_router
     start = _d(b.get("recurrence_start") or b.get("due_date"))
     freq = b.get("recurrence_frequency")
-    if not start or freq not in bills_router._FREQS:
+    if not start or freq not in bills_router._FREQS or b.get("recurrence_paused") or b.get("status") == "cancelled":
         return None
     n, d = 0, start
     while d < today and n < 400:
         n += 1
         d = bills_router._step(start, freq, n)
+    end_type, end_val = b.get("recurrence_end_type") or "never", b.get("recurrence_end_value")
+    if end_type == "on_date" and _d(end_val) and d > _d(end_val):
+        return None
+    if end_type == "after_count":
+        try:
+            if n >= int(end_val):
+                return None
+        except (TypeError, ValueError):
+            pass
     return d
 
 
@@ -111,18 +123,29 @@ def status(business_id: str) -> Dict[str, Any]:
     try:
         rows = _get(f"/bills?business_id=eq.{quote(business_id, safe='')}"
                     "&select=id,vendor_name,amount,category,subcategory,status,due_date,paid_at,paid_amount,"
-                    "is_recurring,recurrence_frequency,recurrence_start,recurrence_paused,recurrence_parent_id"
-                    "&order=due_date.asc.nullslast&limit=2000")
+                    "is_recurring,recurrence_frequency,recurrence_start,recurrence_paused,recurrence_parent_id,"
+                    f"recurrence_end_type,recurrence_end_value&order=due_date.desc.nullsfirst&limit={CAP}")
     except _Unavailable:
         return {"type": atype, "result": "Failed: the bills couldn't be read just now. This is not 'no bills'.",
                 "label": "Bills", "failed": True, "nav": NAV}
+    cut = len(rows) >= CAP                           # read newest first, so a cap drops the oldest
+    rows.sort(key=lambda b: (b.get("due_date") is None, str(b.get("due_date") or "")))   # shown by due date
     names = expense_lines.names(business_id)
+    # A bill under a saved category on a line of the business's own shows on
+    # that line, as the Profit & Loss shows it (expense_lines.present).
+    import expense_categories as ec
+    try:
+        own = {ec.key_of(c["name"]): c["line"] for c in ec.categories(business_id) if c.get("line") in names}
+    except Exception:
+        own = {}
 
     def line(b: Dict[str, Any]) -> str:
-        on = names.get(b.get("category") or "operating") or "Operating"
+        key = own.get(ec.key_of(b.get("subcategory"))) if b.get("subcategory") else None
+        on = names.get(key or b.get("category") or "operating") or "Operating"
         return f"{on}, {b['subcategory']}" if b.get("subcategory") else on
 
-    templates = [b for b in rows if b.get("is_recurring") and not b.get("recurrence_parent_id")]
+    templates = [b for b in rows if b.get("is_recurring") and not b.get("recurrence_parent_id")
+                 and b.get("status") != "cancelled"]
     # A recurring bill's template is its first copy (due on its start): owed like any other.
     owed = [b for b in rows if (b.get("status") or "pending") in OPEN]
     late = [b for b in owed if b.get("status") == "overdue" or ((_d(b.get("due_date")) or today) < today)]
@@ -149,6 +172,8 @@ def status(business_id: str) -> Dict[str, Any]:
         if soon:
             text += " Coming up: " + "; ".join(f"{b.get('vendor_name')} {_money(b.get('amount'))} on {b.get('due_date')}"
                                                for b in soon[:6]) + "."
+    if cut:
+        text += f" Only the newest {CAP} bills were read, so the oldest aren't counted here."
     return {"type": atype, "label": f"Bills · {len(owed)} owed", "result": text, "nav": NAV,
             "owed": [row(b) for b in owed[:SHOWN]], "recurring": repeat[:SHOWN], "total_owed": total,
             "overdue": len(late), "due_30_days": len(soon), "paid_30_days": len(paid),

@@ -94,8 +94,34 @@ def test_the_lookup_reads_the_bills_tab_without_writing(db):
     assert water["line"] == "Ministry & operations, Utilities"                       # the church's own names
     stream = got["recurring"][0]
     assert stream["every"] == "monthly" and date.fromisoformat(stream["next_due"]) >= T
-    assert "Overdue: Grace Lawn Care $300.00" in got["result"]
+    assert "Overdue: Streamyard $49.00" in got["result"] and "Grace Lawn Care $300.00 (due" in got["result"]
     assert next(b for b in db.t["bills"] if b["id"] == "b1")["status"] == "pending"   # said, never written
+
+
+def test_ended_cancelled_or_paused_recurring_bills_have_no_next_due(db):
+    base = dict(is_recurring=True, recurrence_frequency="monthly", recurrence_start=(T - timedelta(days=90)).isoformat())
+    db.t["bills"] += [
+        _bill("r1", "Ended Co", 10, T - timedelta(days=90), recurrence_end_type="on_date",
+              recurrence_end_value=(T - timedelta(days=1)).isoformat(), **base),
+        _bill("r2", "Counted Co", 10, T - timedelta(days=90), recurrence_end_type="after_count",
+              recurrence_end_value="2", **base),
+        _bill("r3", "Paused Co", 10, T - timedelta(days=90), recurrence_paused=True, **base),
+        _bill("r4", "Cancelled Co", 10, T - timedelta(days=90), status="cancelled", **base),
+    ]
+    rec = {r["vendor"]: r for r in _run()["recurring"]}
+    assert "Cancelled Co" not in rec
+    assert rec["Ended Co"]["next_due"] is None and rec["Counted Co"]["next_due"] is None
+    assert rec["Paused Co"]["next_due"] is None and rec["Streamyard"]["next_due"]
+
+
+def test_a_bill_under_a_category_on_an_added_line_shows_on_that_line(db):
+    db.t["expense_lines"].append({"id": "x", "business_id": BIZ, "key": "l_0000abcd", "base": "operating",
+                                  "name": "Missions", "created_at": "2026-01-01T00:00:00Z"})
+    db.t["expense_categories"].append({"id": "c3", "business_id": BIZ, "name": "Mission trips", "bucket": "operating",
+                                       "line": "l_0000abcd"})
+    db.t["bills"].append(_bill("m1", "Airline", 500, T + timedelta(days=3), subcategory="Mission trips"))
+    trip = next(b for b in _run()["owed"] if b["vendor"] == "Airline")
+    assert trip["line"] == "Missions, Mission trips"
 
 
 def test_an_empty_tab_says_so_and_a_failed_read_is_never_no_bills(db, monkeypatch):
