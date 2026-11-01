@@ -351,6 +351,14 @@ def _store(path: str, raw: bytes, media_type: str) -> bool:
 PHOTO_FIELDS = "id,count_id,path,media_type,status,draft,error,created_by,created_at,used_at,gift_ids"
 
 
+async def _mark_unread(pid: str, msg: str) -> None:
+    """A photo that couldn't be read says why, never sits at 'reading'."""
+    out = await asyncio.to_thread(sb_clients.sb_patch_as_service, f"/giving_count_photos?id=eq.{pid}",
+                                  {"status": "unread", "error": msg[:300]})
+    if not out:
+        print(f"[giving_sheets] photo {pid} couldn't be marked unread", flush=True)
+
+
 @router.post("/giving/{business_id}/counts/{count_id}/photos")
 async def upload_photo(business_id: str, count_id: str, photo: UploadFile = File(...),
                        user: AuthedUser = Depends(require_user)):
@@ -383,9 +391,14 @@ async def upload_photo(business_id: str, count_id: str, photo: UploadFile = File
         draft = draft_from(got, contacts, _funds(biz))
     except HTTPException as e:
         msg = e.detail.get("message") if isinstance(e.detail, dict) else str(e.detail)
-        await asyncio.to_thread(sb_clients.sb_patch_as_service, f"/giving_count_photos?id=eq.{pid}",
-                                {"status": "unread", "error": str(msg)[:300]})
+        await _mark_unread(pid, str(msg))
         raise
+    except Exception as e:  # noqa: BLE001 — a timeout or a dropped connection: the photo stays, said so
+        print(f"[giving_sheets] read failed for photo {pid}: {e}", flush=True)
+        await _mark_unread(pid, "The sheet couldn't be read just now. The photo is kept; try reading it again, "
+                                "or type the gifts in.")
+        raise HTTPException(502, "The sheet couldn't be read just now. The photo is kept. Try again, or type the "
+                                 "gifts in.")
     saved = await asyncio.to_thread(sb_clients.sb_patch_as_service, f"/giving_count_photos?id=eq.{pid}",
                                     {"status": "read", "draft": draft})
     if not saved:

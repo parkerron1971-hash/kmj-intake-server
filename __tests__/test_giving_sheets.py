@@ -156,3 +156,21 @@ def test_photos_follow_the_gate(db, monkeypatch):
     with pytest.raises(HTTPException) as e:
         sh.count_sheet(BIZ, COUNT, USER)
     assert e.value.status_code == 404
+
+
+def test_a_read_that_times_out_keeps_the_photo_and_says_so(db, monkeypatch):
+    async def read(biz, raw, mt):
+        raise TimeoutError("read timed out")
+    monkeypatch.setattr(sh, "read_photo", read)
+    with pytest.raises(HTTPException) as e:
+        asyncio.run(sh.upload_photo(BIZ, COUNT, _upload(), USER))
+    assert e.value.status_code == 502 and "photo is kept" in e.value.detail
+    row = db.t["giving_count_photos"][0]
+    assert row["status"] == "unread" and row["error"]
+
+
+def test_deleting_a_church_takes_its_sheet_photos_too():
+    import account_lifecycle
+    assert "giving-sheets" in account_lifecycle.STORAGE_BUCKETS
+    assert "giving_count_photos" in account_lifecycle.BUSINESS_CHILD_TABLES
+

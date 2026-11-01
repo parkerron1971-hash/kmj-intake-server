@@ -560,7 +560,10 @@ USER_CHILD_TABLES: List[str] = [
 STORAGE_BUCKETS: List[str] = ["image-originals", "business-assets", "business-documents",
                               "product-files", "program-media", "video-studio",
                               # Students' homework files: "{business_id}/{course_id}/…".
-                              "academy-work"]
+                              "academy-work",
+                              # Count sheet photos (giving_sheets.py): "{business_id}/{count_id}/…".
+                              # Donors' names, amounts and check numbers: they go with the church.
+                              "giving-sheets"]
 
 
 def _service_headers() -> Dict[str, str]:
