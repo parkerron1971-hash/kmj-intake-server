@@ -518,11 +518,16 @@ async def create_giving_checkout(
     frequency: Optional[str] = None,
     cover_fee_cents: int = 0,
     embedded: bool = False,
+    extra_form: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
     """Create the gift Checkout Session on the connected account.
     Returns the Stripe session dict (key fields: id, url; client_secret
     when embedded). Raises RuntimeError on Stripe error (same contract
-    as create_checkout_session)."""
+    as create_checkout_session).
+
+    `extra_form`: giving_ways.checkout_extras (card-or-bank filter and the
+    giving payment set). If Stripe refuses one of those fields by name, the
+    gift is retried once without them, so a filter can never stop a gift."""
     if not stripe_account_id:
         raise ValueError("stripe_account_id required")
     form = _giving_checkout_form(
@@ -542,14 +547,25 @@ async def create_giving_checkout(
         cover_fee_cents=cover_fee_cents,
         embedded=embedded,
     )
+    extras = {k: v for k, v in (extra_form or {}).items() if v}
     require_stripe_write(stripe_account_id)
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
         resp = await client.post(
             f"{STRIPE_API_BASE}/checkout/sessions",
             auth=(_secret_key(), ""),
             headers=_giving_checkout_headers(stripe_account_id, embedded),
-            data=form,
+            data={**form, **extras},
         )
+        if extras and resp.status_code == 400 and any(
+                k.split("[")[0] in resp.text for k in extras):
+            logger.warning(f"create_giving_checkout: Stripe refused the pay filter, "
+                           f"retrying without it: {resp.text[:200]}")
+            resp = await client.post(
+                f"{STRIPE_API_BASE}/checkout/sessions",
+                auth=(_secret_key(), ""),
+                headers=_giving_checkout_headers(stripe_account_id, embedded),
+                data=form,
+            )
     if resp.status_code >= 400:
         logger.warning(
             f"create_giving_checkout failed: {resp.status_code} {resp.text[:300]}"

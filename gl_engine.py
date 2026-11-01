@@ -88,7 +88,10 @@ _ACCOUNT_BUCKET = {c[0]: c[4] for c in (COA_SEED + COA_LAWYER_EXTRA + COA_NONPRO
 _INCOME_CODES = {"4000", "4100", "4200", "4300", "4900"}
 _EXPENSE_CODES = set(_BUCKET_TO_EXPENSE.values())
 _INVOICE_ISSUE_STATUSES = ("sent", "viewed", "paid", "overdue")
-_NON_STRIPE_PAYMENT_HINTS = ("cash", "check", "bank", "manual", "ach", "venmo", "zelle")
+# PayPal and "other" (an app named under Other, giving_ways) are money that
+# never came through our Stripe account either (2026-11-01).
+_NON_STRIPE_PAYMENT_HINTS = ("cash", "check", "bank", "manual", "ach", "venmo", "zelle",
+                             "paypal", "other")
 
 
 def _now_iso() -> str:
