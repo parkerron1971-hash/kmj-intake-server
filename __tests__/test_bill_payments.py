@@ -134,6 +134,17 @@ def test_a_bank_paid_bill_settles_instead_of_paying_cash_twice():
     assert "bill_settle" in gl_engine._TABLE_SOURCE_TYPES["bills"]
 
 
+def test_a_near_amount_settles_the_whole_bill_and_the_books_show_what_was_paid():
+    near = {"id": "b", "vendor_name": "Grace Lawn Care", "amount": 100.0, "category": "operating", "subcategory": None,
+            "status": "paid", "created_at": "2026-10-01T00:00:00Z", "due_date": "2026-10-10",
+            "paid_at": "2026-10-09T12:00:00+00:00", "paid_amount": 95.0, "paid_transaction_id": "t9"}
+    both = gl_engine.desired_for_bill(near) + gl_engine.desired_for_plaid(
+        {"transaction_id": "t9", "account_id": "acc", "amount": 95.0, "date": "2026-10-09",
+         "business_category": "operating", "business_subcategory": None, "money_kind": None})
+    assert _sum(both, "2000", "debit") == _sum(both, "2000", "credit") == 100.0          # AP clears
+    assert round(_sum(both, "5000", "debit") - _sum(both, "5000", "credit"), 2) == 95.0  # what was spent
+
+
 # ─── Candidates and the match ────────────────────────────────────────
 
 def test_candidates_by_amount_and_name_and_the_plain_one(db):
@@ -173,6 +184,62 @@ def test_unmatch_owes_it_again_or_puts_it_back(db):
     assert got["ok"] and _b(db, "b3")["paid_via"] == "bank"
     bp.unmatch(BIZ, "b3", got["changes"][0]["before"])
     assert (_b(db, "b3")["status"], _b(db, "b3")["paid_via"]) == ("paid", "manual")
+
+
+def test_an_undo_puts_back_only_the_payment_fields(db):
+    got = bp.match(BIZ, "b1", "t1")
+    forged = {"status": "paid", "paid_via": "manual", "paid_at": "2026-01-01", "paid_amount": 1,
+              "amount": 1, "business_id": "someone-else", "vendor_name": "X"}
+    bp.unmatch(BIZ, "b1", forged)
+    b = _b(db, "b1")
+    assert (b["amount"], b["business_id"], b["vendor_name"]) == (61.25, BIZ, "City Water Dept")
+    assert (b["status"], b["paid_amount"], b["paid_via"]) == ("paid", 1, "manual")      # the four fields, checked
+    bp.match(BIZ, "b1", "t5") if False else None
+    _b(db, "b1").update(status="pending", paid_at=None, paid_amount=None, paid_via=None)
+    assert bp.match(BIZ, "b1", "t1")["ok"]
+    bp.unmatch(BIZ, "b1", {"status": "hacked", "paid_via": "bank"})
+    assert _b(db, "b1")["status"] == "overdue" and got["ok"]                           # not restorable: owed
+
+
+def test_a_closed_month_needs_a_reason_and_chief_says_so(db, monkeypatch):
+    import importlib
+    real = importlib.reload(period_lock)
+    monkeypatch.setattr(real, "locked_period", lambda biz, day: {"id": "p1", "period_start": "2026-01-01",
+                                                                  "period_end": "2099-12-31"})
+    monkeypatch.setattr(real, "lock_mode", lambda biz: "soft")
+    logged = []
+    monkeypatch.setattr(real, "record_override", lambda *a, **k: logged.append(k))
+    with pytest.raises(HTTPException) as e:
+        bp.match(BIZ, "b1", "t1", by=OWNER)
+    assert e.value.status_code == 409 and _b(db, "b1")["paid_transaction_id"] is None
+    assert bp.match(BIZ, "b1", "t1", by=OWNER, reason="paid late, closing fix")["ok"] and logged
+    said = _chief(bp.handle_match_bill_payment, {"items": [{"bill_id": "b2", "transaction_id": "t2"}]})
+    assert said["failed"] and "closed period" in said["result"]
+
+
+def test_a_waiting_other_row_is_filed_a_failed_filing_is_said_and_a_null_status_matches(db, monkeypatch):
+    _t(db, "t3").update(business_category="other")
+    _b(db, "b3").update(status=None, subcategory="Lawn care")
+    got = bp.match(BIZ, "b3", "t3")
+    assert got["ok"] and _t(db, "t3")["business_subcategory"] == "Lawn care" and not got["note"]
+    real = sb_clients.sb_patch_as_service
+    monkeypatch.setattr(sb_clients, "sb_patch_as_service",
+                        lambda path, body, *a, **k: None if path.startswith("/plaid_transactions") else real(path, body, *a, **k))
+    got = bp.match(BIZ, "b1", "t1")
+    assert got["ok"] and "still waits in To review" in got["note"]
+
+
+def test_chief_filing_never_moves_a_bills_payment_out_of_the_books():
+    import chief_file_bank as cf
+    row = {"transaction_id": "t1", "name": "CITY WATER DEPT AUTOPAY", "date": "2026-10-09", "direction": "out",
+           "amount": 61.25, "business_category": None, "business_subcategory": None, "money_kind": None,
+           "excluded_from_books": False}
+    for answer in ("transfer", "owner", "personal"):
+        changes, problems = cf.plan([row], [{"transaction_ids": ["t1"], "answer": answer}], True, paying={"t1": "b1"})
+        assert not changes and "paid a bill" in problems[0], answer
+    changes, problems = cf.plan([row], [{"transaction_ids": ["t1"], "answer": "operating", "label": "Utilities"}],
+                                True, paying={"t1": "b1"})
+    assert changes and not problems                                                     # spending is fine
 
 
 # ─── The Bills tab's routes ──────────────────────────────────────────

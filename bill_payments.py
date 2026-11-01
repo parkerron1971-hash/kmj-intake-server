@@ -23,6 +23,12 @@ it must count once:
     THE BANK ROW .... still waiting for an answer: it takes the bill's line and
                       category. Already filed: left as filed. It must be money
                       out, in the books, and not owner/transfer/gift money
+    A NEAR AMOUNT ... a $100 bill paid by $95 (a discount, a credit): the settle
+                      clears the whole bill (AP to zero) and the bank row is
+                      what was spent, so the books show $95
+    CLOSED MONTHS ... a match or unmatch changes the books on the bill's day
+                      and the payment's day: the period lock applies, as to
+                      every bill edit (a reason on screen; Chief says so)
     CANDIDATES ...... money out within 20 days before to 45 after the bill's
                       due date (or entry), not already paying a bill; scored by
                       the amount (exact, or within 10%) and the payee's words
@@ -180,17 +186,29 @@ def clear_one(cands: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
 
 # ─── The match ───────────────────────────────────────────────────────
 
-def match(business_id: str, bill_id: str, transaction_id: str) -> Dict[str, Any]:
+def _lock(business_id: str, days: List[str], bill_id: str, by: Any, reason: Optional[str],
+          pre: Any, post: Any) -> None:
+    """The closed-month lock, as every bill edit has it (bills_router): the
+    bill's own day and the day its payment books on."""
+    import period_lock
+    for day in sorted({d[:10] for d in days if d}):
+        period_lock.guard(business_id, day, source_type="bill", source_id=str(bill_id), reason=reason,
+                          override_by=str(by or ""), pre=pre, post=post)
+
+
+def match(business_id: str, bill_id: str, transaction_id: str, *, by: Any = None,
+          reason: Optional[str] = None) -> Dict[str, Any]:
     """{ok, bill, row, changes} or {ok: False, said}. Guarded: the bill must be
     owed (or paid by hand, never from the bank yet) and the row money out in
-    the books, not paying another bill."""
+    the books, not paying another bill; a closed month needs a reason
+    (period_lock raises)."""
     b = bill(business_id, bill_id)
     if not b:
         return {"ok": False, "said": "That bill isn't here any more."}
     if b.get("paid_transaction_id"):
         return {"ok": False, "said": f"The {b.get('vendor_name')} bill is already matched to a bank payment."}
-    status = b.get("status") or "pending"
-    if status not in OPEN and not (status == "paid" and (b.get("paid_via") or "manual") == "manual"):
+    status = b.get("status")
+    if (status or "pending") not in OPEN and not (status == "paid" and (b.get("paid_via") or "manual") == "manual"):
         return {"ok": False, "said": f"The {b.get('vendor_name')} bill is {status}, so it has no payment to match."}
     rows = _get(f"/plaid_transactions?business_id=eq.{_q(business_id)}&transaction_id=eq.{_q(transaction_id)}"
                 "&select=transaction_id,account_id,date,name,merchant_name,amount,pending,excluded_from_books,"
@@ -208,38 +226,69 @@ def match(business_id: str, bill_id: str, transaction_id: str) -> Dict[str, Any]
     before = {k: b.get(k) for k in ("status", "paid_at", "paid_amount", "paid_via", "paid_transaction_id")}
     after = {"status": "paid", "paid_at": f"{t['date']}T12:00:00+00:00", "paid_amount": float(t["amount"]),
              "paid_via": "bank", "paid_transaction_id": str(transaction_id)}
+    _lock(business_id, [str(b.get("created_at") or ""), str(t.get("date") or "")], bill_id, by, reason, before, after)
     res = sb_clients.sb_patch_as_service(
         f"/bills?id=eq.{_q(bill_id)}&business_id=eq.{_q(business_id)}&paid_transaction_id=is.null"
-        f"&status=eq.{_q(status)}", {**after, "updated_at": stamp})
+        + ("&status=is.null" if status is None else f"&status=eq.{_q(status)}"), {**after, "updated_at": stamp})
     if res is None:
         raise Unavailable("bills")
     if isinstance(res, list) and not res:
         return {"ok": False, "said": f"The {b.get('vendor_name')} bill changed a moment ago; look again."}
     changes = [{"table": "bills", "id": str(bill_id), "before": before, "after": after}]
-    # A row still waiting for an answer takes the bill's line and category.
-    if not t.get("business_category"):
+    note = None
+    # A row still waiting for an answer (no bucket past 'other', as To review
+    # reads it) takes the bill's line and category.
+    was = t.get("business_category")
+    if not was or was == "other":
         filed = {"business_category": b.get("category") or "operating", "business_subcategory": b.get("subcategory")}
         r2 = sb_clients.sb_patch_as_service(
             f"/plaid_transactions?business_id=eq.{_q(business_id)}&transaction_id=eq.{_q(transaction_id)}"
-            "&business_category=is.null", filed)
+            + ("&business_category=is.null" if not was else "&business_category=eq.other"), filed)
         if isinstance(r2, list) and r2:
             changes.append({"table": "plaid_transactions", "id": str(transaction_id),
-                            "before": {"business_category": None, "business_subcategory": t.get("business_subcategory")},
+                            "before": {"business_category": was, "business_subcategory": t.get("business_subcategory")},
                             "after": filed})
-    return {"ok": True, "bill": b, "row": t, "changes": changes}
+        else:
+            note = ("The bank payment's own category didn't save, so it still waits in To review: file it under "
+                    f"{b.get('subcategory') or b.get('category') or 'its line'} there.")
+    return {"ok": True, "bill": b, "row": t, "changes": changes, "note": note}
 
 
-def unmatch(business_id: str, bill_id: str, before: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+RESTORABLE_STATUS = ("pending", "scheduled", "overdue", "paid", "draft")
+
+
+def _restorable(before: Any) -> Optional[Dict[str, Any]]:
+    """What a match's undo may put back: the four payment fields only, each
+    checked (the record comes back through Chief's action, so it's never
+    trusted as written). Anything else: none, and the bill is simply owed."""
+    if not isinstance(before, dict) or before.get("status") not in RESTORABLE_STATUS:
+        return None
+    if before.get("paid_via") not in (None, "manual") or before.get("paid_transaction_id"):
+        return None
+    amt = before.get("paid_amount")
+    if amt is not None and not isinstance(amt, (int, float)):
+        return None
+    when = before.get("paid_at")
+    if when is not None and not (isinstance(when, str) and _d(when)):
+        return None
+    if before["status"] == "paid" and (amt is None or when is None):
+        return None
+    return {"status": before["status"], "paid_at": when, "paid_amount": amt, "paid_via": before.get("paid_via")}
+
+
+def unmatch(business_id: str, bill_id: str, before: Optional[Dict[str, Any]] = None, *, by: Any = None,
+            reason: Optional[str] = None) -> Dict[str, Any]:
     """The bill owed again (or back as it was, with `before` from the match);
-    the bank row keeps its filing."""
+    the bank row keeps its filing. A closed month needs a reason."""
     b = bill(business_id, bill_id)
     if not b or not b.get("paid_transaction_id"):
         return {"ok": False, "said": "That bill isn't matched to a bank payment."}
     due = _d(b.get("due_date"))
-    back = dict(before) if before else {
+    back = _restorable(before) or {
         "status": "overdue" if due and due < _today() else "pending",
         "paid_at": None, "paid_amount": None, "paid_via": None}
     back["paid_transaction_id"] = None
+    _lock(business_id, [str(b.get("created_at") or ""), str(b.get("paid_at") or "")], bill_id, by, reason, b, back)
     res = sb_clients.sb_patch_as_service(
         f"/bills?id=eq.{_q(bill_id)}&business_id=eq.{_q(business_id)}"
         f"&paid_transaction_id=eq.{_q(b['paid_transaction_id'])}",
@@ -256,10 +305,12 @@ def unmatch(business_id: str, bill_id: str, before: Optional[Dict[str, Any]] = N
 class MatchBody(BaseModel):
     business_id: str
     transaction_id: str = Field(max_length=200)
+    override_reason: Optional[str] = Field(default=None, max_length=500)   # a closed month
 
 
 class UnmatchBody(BaseModel):
     business_id: str
+    override_reason: Optional[str] = Field(default=None, max_length=500)
 
 
 def _gate(business_id: str, user: Any) -> None:
@@ -287,20 +338,21 @@ def get_matches(bill_id: str, biz: str = Query(...), user: AuthedUser = Depends(
 def post_match(bill_id: str, body: MatchBody, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     _gate(body.business_id, user)
     try:
-        got = match(body.business_id, bill_id, body.transaction_id)
+        got = match(body.business_id, bill_id, body.transaction_id, by=user.id, reason=body.override_reason)
     except Unavailable:
         raise HTTPException(503, "The match didn't save. Try again.")
     if not got["ok"]:
         raise HTTPException(409, got["said"])
     return {"ok": True, "said": f"The {got['bill'].get('vendor_name')} bill is paid by the {_money(got['row']['amount'])} "
-                                f"bank payment on {got['row']['date']}. It counts once in your books."}
+                                f"bank payment on {got['row']['date']}. It counts once in your books."
+                                + (f" {got['note']}" if got.get("note") else "")}
 
 
 @router.post("/{bill_id}/bank-unmatch")
 def post_unmatch(bill_id: str, body: UnmatchBody, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     _gate(body.business_id, user)
     try:
-        got = unmatch(body.business_id, bill_id)
+        got = unmatch(body.business_id, bill_id, by=user.id, reason=body.override_reason)
     except Unavailable:
         raise HTTPException(503, "That didn't save. Try again.")
     if not got["ok"]:
@@ -370,13 +422,22 @@ def match_sync(business_id: str, action: Dict[str, Any]) -> Dict[str, Any]:
         if not pairs:
             return {"type": atype, "label": "Nothing to match", "nav": NAV,
                     "result": "No bill has one plain bank payment to match; nothing changed."}
+        from chief_of_staff import _TURN_USER_ID
+        who = _TURN_USER_ID.get()
         done, problems, changes = [], [], []
         for bid, tid in pairs[:50]:
-            got = match(business_id, bid, tid)
+            try:
+                got = match(business_id, bid, tid, by=who)
+            except HTTPException as e:                # a closed month: the owner reopens or gives a reason on screen
+                detail = e.detail.get("message") if isinstance(e.detail, dict) else e.detail
+                problems.append(str(detail or "that month is closed"))
+                continue
             if got["ok"]:
                 done.append({"bill_id": bid, "vendor": got["bill"].get("vendor_name"), "amount": got["row"]["amount"],
                              "date": got["row"]["date"], "before": got["changes"][0]["before"]})
                 changes += got["changes"]
+                if got.get("note"):
+                    problems.append(got["note"])
             else:
                 problems.append(got["said"])
     except Unavailable:
@@ -401,10 +462,17 @@ def unmatch_sync(business_id: str, action: Dict[str, Any]) -> Dict[str, Any]:
             [{"bill_id": str(b)} for b in action.get("bill_ids") or []]
     if not items:
         return _fail(atype, "say which bill (bill_ids), or undo a match right after making it")
+    from chief_of_staff import _TURN_USER_ID
+    who = _TURN_USER_ID.get()
     back, problems = [], []
     try:
         for m in items[:50]:
-            got = unmatch(business_id, m["bill_id"], m.get("before"))
+            try:
+                got = unmatch(business_id, str(m["bill_id"]), m.get("before"), by=who)
+            except HTTPException as e:
+                detail = e.detail.get("message") if isinstance(e.detail, dict) else e.detail
+                problems.append(str(detail or "that month is closed"))
+                continue
             (back if got["ok"] else problems).append(got.get("bill", {}).get("vendor_name") if got["ok"] else got["said"])
     except Unavailable:
         return _fail(atype, "the bills couldn't be saved just now; ask again to finish")

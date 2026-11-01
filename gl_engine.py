@@ -342,9 +342,11 @@ def desired_for_bill(b: Dict[str, Any]) -> List[Dict[str, Any]]:
             # bill instead of a second cash leg: Dr AP / Cr the bill's
             # expense, so the expense counts once (at the bill on accrual, at
             # the bank row on cash basis) and the cash goes out once.
+            # The whole bill settles (AP to zero) even when the bank paid a
+            # little more or less: the bank row is what was really spent.
             out.append(_entry(_d(b.get("paid_at")), "bill_settle", b["id"], "Bill paid from the bank",
-                       [_line("2000", debit=pamt, vendor=b.get("vendor_name")),
-                        _line(code, credit=pamt, memo=b.get("vendor_name") or "",
+                       [_line("2000", debit=amt, vendor=b.get("vendor_name")),
+                        _line(code, credit=amt, memo=b.get("vendor_name") or "",
                               subcategory=b.get("subcategory"), vendor=b.get("vendor_name"))]))
         else:
             out.append(_entry(_d(b.get("paid_at")), "bill_payment", b["id"], "Bill paid",
