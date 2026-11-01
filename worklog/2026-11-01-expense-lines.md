@@ -24,4 +24,4 @@ related: [2026-10-31-expense-categories.md, 2026-11-01-categories-card.md]
 `accountant_export.py` + `bookkeeping_overview.py` (names in the P&L),
 `chief_file_bank.py` (the names for Chief). Wired: `chief_of_staff`,
 `action_registry`, `action_inverse`, `chief_areas`, `chief_prompt`,
-`account_lifecycle`. Tests: `__tests__/test_expense_lines.py` (9).
+`account_lifecycle`. Tests: `__tests__/test_expense_lines.py` (11).

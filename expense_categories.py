@@ -392,8 +392,11 @@ def change(business_id: str, user_id: Any, action: Dict[str, Any], *, say_undo: 
             if not _patch_row(business_id, "expense_categories", current["id"], before, body):
                 return _partial(atype, batch, moved_rows, 1, f"renaming {current['name']} to {new}")
             changes = moved_rows + [{"table": "expense_categories", "id": current["id"], "before": before, "after": body}]
-            text = (f"{current['name']} is now {new} under {expense_lines.said(ls, line or bucket)}: "
-                    f"{len(moved_rows)} rows and rules moved with it.")
+            on = expense_lines.said(ls, line or bucket)
+            text = (f"{new} now rolls up to {on}." if new == current["name"]
+                    else f"{current['name']} is now {new} under {on}.")
+            if moved_rows:
+                text += f" {len(moved_rows)} rows and rules moved with it."
         else:
             row, made = create(business_id, user_id, action.get("name"), action.get("bucket"), action.get("line"))
             if not made:

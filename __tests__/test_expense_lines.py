@@ -223,6 +223,46 @@ def test_the_five_stay_and_names_never_clash(db):
     assert _run(ec.handle_set_expense_line, {"name": "Anything"}, who=READER)["failed"]
 
 
+# ─── A failed read or write is never "no lines" or "done" ────────────
+
+def test_an_unreadable_lines_table_is_said_never_shown_as_no_lines(db, monkeypatch):
+    real = sb_clients.sb_get_as_service
+    monkeypatch.setattr(sb_clients, "sb_get_as_service",
+                        lambda path, *a, **k: None if path.startswith("/expense_lines") else real(path, *a, **k))
+    with pytest.raises(el.Unavailable):
+        el.lines(BIZ, strict=True)
+    assert _names() == ["Operating", "Owner pay", "Tax", "Savings", "Other"]     # a label: the standard names
+    got = _run(ec.handle_set_expense_line, {"name": "Missions", "base": "operating"})
+    assert got["failed"] and "nothing changed" in got["result"] and db.t["expense_lines"] == []
+    pl = _pl([{"bucket": "operating", "label": "Operating", "total": 10.0, "pct": 100.0,
+               "lines": [{"subcategory": "Utilities", "amount": 10.0}]}])
+    assert el.present(BIZ, copy.deepcopy(pl)) == pl                                # the report untouched
+    with pytest.raises(ec.Unavailable):
+        ec.picture(BIZ, Y)                                                          # the card says it didn't load
+
+
+def test_a_removal_that_fails_partway_records_what_moved_and_keeps_the_line(db, monkeypatch):
+    _run(ec.handle_set_expense_line, {"name": "Missions", "base": "operating"})
+    _run(ec.handle_set_expense_category, {"name": "Mission trips", "line": "Missions"})
+    _run(ec.handle_set_expense_category, {"name": "Short-term teams", "line": "Missions"})
+    real, calls = sb_clients.sb_patch_as_service, {"n": 0}
+
+    def flaky(path, body, *a, **k):
+        if path.startswith("/expense_categories"):
+            calls["n"] += 1
+            if calls["n"] == 2:
+                return None                                  # the second category's write fails
+        return real(path, body, *a, **k)
+    monkeypatch.setattr(sb_clients, "sb_patch_as_service", flaky)
+    got = _run(ec.handle_set_expense_line, {"line": "Missions", "remove": True})
+    assert not got.get("failed") and got.get("partial") and "Partway through removing Missions" in got["result"]
+    assert len(got["changes"]) == 1 and "Missions" in _names()                     # the line stands
+    monkeypatch.setattr(sb_clients, "sb_patch_as_service", real)
+    again = _run(ec.handle_set_expense_line, {"line": "Missions", "remove": True})  # asking again finishes
+    assert not again.get("failed") and "Missions" not in _names()
+    assert all(c["line"] is None for c in ec.categories(BIZ))
+
+
 # ─── The card ────────────────────────────────────────────────────────
 
 def _client(uid):
