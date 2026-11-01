@@ -285,7 +285,23 @@ def _config_payload(biz: Dict[str, Any], site: Dict[str, Any]) -> Dict[str, Any]
         "message": cfg.get("message") or "",
         "slug": site.get("slug"),
         "url": give_url_for_site(site),
+        **_ways_payload(biz, cfg),
     }
+
+
+def _ways_payload(biz: Dict[str, Any], cfg: Dict[str, Any]) -> Dict[str, Any]:
+    """The ways people give and card-or-bank, where they're switched on
+    (giving_ways). `bank_possible`: the platform's giving payment set
+    exists, so the church can turn bank payments on."""
+    import giving_ways
+    if not giving_ways.switched_on(biz.get("id")):
+        return {"ways_on": False}
+    return {"ways_on": True,
+            "ways": giving_ways.stored_ways(cfg),
+            "apps": [{"app": k, "label": v["label"], "handle": v["handle"]}
+                     for k, v in giving_ways.APPS.items()],
+            "bank_payments": giving_ways.bank_ready(biz, cfg),
+            "bank_possible": bool(giving_ways.giving_config_id())}
 
 
 @router.get("/giving/{business_id}")
@@ -375,6 +391,28 @@ def patch_giving_config(
 
     if "message" in body:
         cfg["message"] = str(body.get("message") or "").strip()[:200] or None
+
+    if "ways" in body or "bank_payments" in body:
+        import giving_ways
+        if not giving_ways.switched_on(business_id):
+            raise HTTPException(409, "Ways to give aren't switched on here yet")
+        if "ways" in body:
+            try:
+                cfg["ways"] = giving_ways.clean_ways(body.get("ways"))
+            except giving_ways.WayError as e:
+                raise HTTPException(400, str(e))
+        if "bank_payments" in body:
+            want = body.get("bank_payments") is True
+            if want:
+                if not giving_ways.giving_config_id():
+                    raise HTTPException(409, "Bank payments for giving aren't set up on the platform yet")
+                ok = giving_ways.bank_available(str(biz.get("stripe_account_id") or ""))
+                if ok is None:
+                    raise HTTPException(503, "Stripe couldn't be checked just now. Please try again.")
+                if not ok:
+                    raise HTTPException(409, "Your Stripe account can't take bank payments yet. "
+                                             "Stripe has to approve ACH Direct Debit for the church first.")
+            cfg["bank_payments"] = want
 
     settings["giving"] = cfg
     sb_clients.sb_patch_as_service(
@@ -496,6 +534,9 @@ async def public_giving_checkout(
     frequency = str(body.get("frequency") or "once").strip().lower()
     if frequency not in _FREQUENCIES:
         raise HTTPException(400, "frequency must be once, weekly, biweekly or monthly")
+    pay_with = str(body.get("pay_with") or "card").strip().lower()
+    if pay_with not in ("card", "bank"):
+        raise HTTPException(400, "pay_with must be card or bank")
     fee_cents = covered_fee_cents(amount_cents) if body.get("cover_fee") is True else 0
 
     giver_name = str(body.get("name") or "").strip()[:120]
@@ -538,6 +579,15 @@ async def public_giving_checkout(
     else:
         fund = funds[0]
 
+    # Card or bank, never pay-later (giving_ways), where switched on.
+    import giving_ways
+    ways_on = giving_ways.switched_on(biz.get("id"))
+    if pay_with == "bank" and not giving_ways.bank_ready(biz, cfg):
+        raise HTTPException(400, "bank payments aren't available here")
+    if ways_on and body.get("cover_fee") is True:
+        fee_cents = giving_ways.fee_cents(amount_cents, pay_with)
+    extras = giving_ways.checkout_extras(pay_with) if ways_on else None
+
     canonical = f"https://{sites[0].get('slug') or slug}.{PUBLIC_DOMAIN}/give"
     if body.get("return_to") in ("app", "site"):
         # The member app's give screen, or a hand-built site's own give
@@ -568,9 +618,10 @@ async def public_giving_checkout(
             cover_fee_cents=fee_cents,
             giver_name=giver_name or None,
             giver_email=giver_email or None,
-            success_url=f"{canonical}?thanks=1",
+            success_url=f"{canonical}?thanks=1" + ("&bank=1" if pay_with == "bank" else ""),
             cancel_url=f"{canonical}?canceled=1",
             embedded=embedded,
+            **({"extra_form": extras} if extras else {}),
         )
     except HTTPException:
         raise
@@ -914,10 +965,33 @@ def _brand_font_links(business: Dict[str, Any]) -> str:
     return _font_links(_brand_kit(business))
 
 
-def _give_body(preset_btns: str, fund_block: str, pay_note: str, name: str = "", email: str = "") -> str:
+PAY_WITH_BLOCK = (
+    '<label class="gv-label">Pay with</label>'
+    '<div class="gv-paywith" role="group" aria-label="Pay with">'
+    '<button type="button" data-pay="card" class="on" aria-pressed="true">Card, Apple Pay or Google Pay</button>'
+    '<button type="button" data-pay="bank" aria-pressed="false">Bank account</button></div>'
+    '<p class="gv-note" id="gv-bank-note" hidden>A bank payment costs the church less in fees. '
+    'It takes a few business days to clear.</p>')
+
+
+def _ways_blocks(business: Dict[str, Any]) -> tuple:
+    """(the pay-with choice, "Other ways to give", their CSS) where
+    giving_ways is switched on for this church; empty strings otherwise."""
+    import giving_ways
+    if not giving_ways.switched_on(business.get("id")):
+        return "", "", ""
+    cfg = giving_settings(business.get("settings"))
+    pay = PAY_WITH_BLOCK if giving_ways.bank_ready(business, cfg) else ""
+    ways = giving_ways.ways_html(giving_ways.stored_ways(cfg))
+    return pay, ways, giving_ways.WAYS_CSS
+
+
+def _give_body(preset_btns: str, fund_block: str, pay_note: str, name: str = "", email: str = "",
+               pay_block: str = "", ways_block: str = "") -> str:
     """The give form's markup: the thank-you and no-gift notes, the form,
     "Change my gift", and the box the payment form mounts in. Shared by
-    the give page and a hand-built site's own give page."""
+    the give page and a hand-built site's own give page. `pay_block`: the
+    card-or-bank choice; `ways_block`: "Other ways to give" (giving_ways)."""
     return f"""  <div id="gv-thanks" class="gv-banner">Thank you — your gift has been received.
   If you shared your email, a receipt is on its way.</div>
   <div id="gv-canceled" class="gv-banner">No gift was made. You're welcome to
@@ -935,6 +1009,7 @@ def _give_body(preset_btns: str, fund_block: str, pay_note: str, name: str = "",
       <button type="button" data-freq="biweekly" aria-pressed="false">Every 2 weeks</button>
       <button type="button" data-freq="monthly" aria-pressed="false">Monthly</button>
     </div>
+    {pay_block}
     <label class="gv-cover"><input type="checkbox" id="gv-fee">
       <span id="gv-fee-txt">Add a little to cover the processing fee, so your whole gift arrives</span></label>
     <label class="gv-label" for="gv-nm">Name <span style="text-transform:none;font-weight:400">(optional)</span></label>
@@ -948,6 +1023,7 @@ def _give_body(preset_btns: str, fund_block: str, pay_note: str, name: str = "",
   </form>
   <button type="button" class="gv-back" id="gv-back" hidden>&larr; Change my gift</button>
   <div class="gv-pay" id="gv-pay" hidden></div>
+  {ways_block}
 """
 
 
@@ -960,16 +1036,49 @@ def _give_script(*, api_origin: str, slug: str, embed_json: str, app: bool = Fal
 (function() {{
   var API = {api_origin!r};
   var SLUG = {slug!r};
-  var cents = 0, freq = 'once';
+  var cents = 0, freq = 'once', pay = 'card';
   var EVERY = {{once: '', weekly: ' weekly', biweekly: ' every 2 weeks', monthly: ' monthly'}};
   var feeBox = document.getElementById('gv-fee');
   var feeTxt = document.getElementById('gv-fee-txt');
   var feeDefault = feeTxt.textContent;
-  // Same arithmetic as the server (giving_router.covered_fee_cents).
-  function fee(c) {{ return c > 0 ? Math.ceil((c + 30) / (1 - 0.029)) - c : 0; }}
+  // Same arithmetic as the server (giving_ways.fee_cents): card 2.9% + 30c,
+  // bank 0.8% at most $5.
+  function fee(c) {{
+    if (c <= 0) return 0;
+    if (pay === 'bank') return Math.min(Math.ceil(c / (1 - 0.008)) - c, 500);
+    return Math.ceil((c + 30) / (1 - 0.029)) - c;
+  }}
+  var payWith = document.querySelector('.gv-paywith');
+  var payBtns = document.querySelectorAll('.gv-paywith button');
+  var bankNote = document.getElementById('gv-bank-note');
+  payBtns.forEach(function(b) {{
+    b.addEventListener('click', function() {{
+      pay = b.getAttribute('data-pay') === 'bank' ? 'bank' : 'card';
+      payBtns.forEach(function(x) {{
+        var on = x === b; x.classList.toggle('on', on); x.setAttribute('aria-pressed', on ? 'true' : 'false');
+      }});
+      if (bankNote) bankNote.hidden = pay !== 'bank';
+      label();
+    }});
+  }});
+  // Other ways to give: Cash App and PayPal.Me links carry the amount.
+  var wayLinks = document.querySelectorAll('[data-way-amt]');
+  function wayAmounts() {{
+    var part = cents >= 100 ? '/' + (cents % 100 ? (cents / 100).toFixed(2) : String(cents / 100)) : '';
+    wayLinks.forEach(function(a) {{ a.href = a.getAttribute('data-way-base') + part; }});
+  }}
+  document.querySelectorAll('.gv-copy').forEach(function(b) {{
+    b.addEventListener('click', function() {{
+      try {{ navigator.clipboard.writeText(b.getAttribute('data-copy')); b.textContent = 'Copied'; }}
+      catch (e) {{}}
+    }});
+  }});
   function money(c) {{ return '$' + (c / 100).toLocaleString(undefined,
     {{minimumFractionDigits: (c % 100 ? 2 : 0), maximumFractionDigits: 2}}); }}
   var q = new URLSearchParams(location.search);
+  if (q.get('thanks') && q.get('bank')) document.getElementById('gv-thanks').textContent =
+    'Thank you. Your bank gift is on its way: bank payments take a few business days to clear, ' +
+    'and if you shared your email, your receipt comes when it does.';
   if (q.get('thanks')) document.getElementById('gv-thanks').classList.add('show');
   if (q.get('canceled')) document.getElementById('gv-canceled').classList.add('show');
   var amts = document.querySelectorAll('.gv-amt');
@@ -1013,6 +1122,7 @@ def _give_script(*, api_origin: str, slug: str, embed_json: str, app: bool = Fal
       ? 'Add about ' + money(fee(cents)) + ' to cover the processing fee, so your whole gift arrives'
       : feeDefault;
     go.textContent = cents > 0 ? ('Give ' + money(cents + add) + EVERY[freq]) : 'Give';
+    wayAmounts();
   }}
   feeBox.addEventListener('change', label);
   amts.forEach(function(b) {{
@@ -1056,6 +1166,7 @@ def _give_script(*, api_origin: str, slug: str, embed_json: str, app: bool = Fal
         fund: fundSel ? fundSel.value : undefined,
         frequency: freq,
         cover_fee: feeBox.checked,
+        pay_with: payWith ? pay : undefined,
         name: document.getElementById('gv-nm').value.trim() || undefined,
         email: email || undefined,
         embedded: embedOn() || undefined,
@@ -1186,8 +1297,10 @@ def render_give_page(
         og_image_html = (f'<meta property="og:image" content="{_esc(logo_url)}">'
                          f'<link rel="icon" href="{_esc(logo_url)}">')
 
+    pay_block, ways_block, ways_css = _ways_blocks(business)
     body_html = _give_body(preset_btns, fund_block, pay_note,
-                           (app or {}).get("name") or "", (app or {}).get("email") or "")
+                           (app or {}).get("name") or "", (app or {}).get("email") or "",
+                           pay_block=pay_block, ways_block=ways_block)
     script_html = _give_script(api_origin=api_origin, slug=slug, embed_json=embed_json, app=bool(app),
                                preview=bool((app or {}).get("preview")))
     return f"""<!DOCTYPE html>
@@ -1252,6 +1365,7 @@ padding-top:14px;border-top:1px solid var(--border);}}
 .gv-back{{background:none;border:0;padding:10px 0;margin-bottom:6px;font-size:14px;font-weight:600;
 color:var(--text-secondary);cursor:pointer;min-height:44px;font-family:var(--font-body);}}
 .gv-pay{{border-radius:16px;overflow:hidden;}}
+{ways_css}
 </style>
 {app["head"] if app else ""}
 </head>
@@ -1345,8 +1459,9 @@ def render_give_embed(business: Dict[str, Any], slug: str, *, api_origin: str) -
         fund_block = ('<label class="gv-label" for="gv-fund">Designate my gift to</label>'
                       f'<select id="gv-fund" class="gv-input">{opts}</select>')
     brand_vars = _brand_css_vars(business).replace(":root{", ".gv-embed{", 1)
-    return (f'<div class="gv-embed">{stripe_js}<style>{brand_vars}{_GIVE_EMBED_CSS}</style>'
-            f'{_give_body(preset_btns, fund_block, pay_note)}'
+    pay_block, ways_block, ways_css = _ways_blocks(business)
+    return (f'<div class="gv-embed">{stripe_js}<style>{brand_vars}{_GIVE_EMBED_CSS}{ways_css}</style>'
+            f'{_give_body(preset_btns, fund_block, pay_note, pay_block=pay_block, ways_block=ways_block)}'
             f'{_give_script(api_origin=api_origin, slug=slug, embed_json=embed_json, site=True)}</div>')
 
 
@@ -1449,6 +1564,22 @@ def giving_amounts(business_id: str, year: Optional[int] = None, user: AuthedUse
             "year": year}
 
 
+@router.get("/giving/{business_id}/ways")
+def giving_ways_menu(business_id: str, user: AuthedUser = Depends(require_user)):
+    """The treasurer's "how it was given" menu: Cash, Check, the church's
+    ways (giving_ways), Bank transfer, Other. `on` false: the plain four."""
+    from giving_records import require_finance
+    import giving_ways
+    require_finance(business_id, user)
+    if not giving_ways.switched_on(business_id):
+        return {"on": False, "methods": giving_ways.BASE_METHODS + giving_ways.TAIL_METHODS}
+    rows = sb_clients.sb_get_as_service(f"/businesses?id=eq.{business_id}&select=settings&limit=1")
+    if rows is None:
+        raise HTTPException(503, "The ways to give couldn't be loaded. Please retry.")
+    cfg = giving_settings((rows[0] if rows else {}).get("settings"))
+    return {"on": True, "methods": giving_ways.method_menu(giving_ways.stored_ways(cfg))}
+
+
 def _manual_gift_fields(business_id, body):
     from decimal import Decimal, InvalidOperation
     from datetime import date
@@ -1461,8 +1592,16 @@ def _manual_gift_fields(business_id, body):
             raise ValueError()
     except (ValueError, InvalidOperation):
         raise HTTPException(400, "Enter a valid amount and received date (not in the future)")
-    method = body.get("method")
-    if method not in ("cash", "check", "bank_transfer", "other"):
+    import giving_ways
+    method, way_name = body.get("method"), None
+    if giving_ways.switched_on(business_id):
+        # The church's ways (giving_ways.method_menu): Cash App, Zelle, ...,
+        # or an app named under Other.
+        try:
+            method, way_name = giving_ways.parse_method(method)
+        except giving_ways.WayError as e:
+            raise HTTPException(400, str(e))
+    elif method not in ("cash", "check", "bank_transfer", "other"):
         raise HTTPException(400, "Choose cash, check, bank transfer, or other")
     fund = str(body.get("fund") or "General").strip()
     if not fund or len(fund) > MAX_FUND_NAME_LEN:
@@ -1477,7 +1616,8 @@ def _manual_gift_fields(business_id, body):
         if not contact:
             raise HTTPException(400, "Choose a giver from this business")
     amount = float(cents / 100)
-    return {"contact_id": cid, "total": amount, "subtotal": amount,
+    return {"_way_name": way_name,
+            "contact_id": cid, "total": amount, "subtotal": amount,
             "paid_at": f"{day.isoformat()}T12:00:00Z", "due_date": day.isoformat(),
             "payment_method": method, "gift_fund": fund,
             "category": RESTRICTED_CATEGORY if is_designated(fund) else None,
@@ -1497,6 +1637,7 @@ def create_manual_gift(business_id: str, body: Dict[str, Any], user: AuthedUser 
     except ValueError: raise HTTPException(400, "A request identifier is required")
     number = f"GIVE-manual-{request_id}"
     fields = _manual_gift_fields(business_id, body)
+    way_name = fields.pop("_way_name", None)
     existing = sb_clients.sb_get_as_service(f"/invoices?business_id=eq.{business_id}&invoice_number=eq.{number}&select=id&limit=1")
     if existing is None:
         raise HTTPException(503, "Giving records are temporarily unavailable")
@@ -1504,7 +1645,7 @@ def create_manual_gift(business_id: str, body: Dict[str, Any], user: AuthedUser 
         return {"ok": True, "id": existing[0]["id"], "already": True}
     row = {**fields, "business_id": business_id, "invoice_number": number, "is_gift": True,
            "status": "paid", "tax_rate": 0, "tax_amount": 0, "currency": "USD",
-           "notes": f"Manual gift recorded by {user.id}"}
+           "notes": f"Manual gift recorded by {user.id}" + (f"\nGiven through {way_name}" if way_name else "")}
     saved = sb_clients.sb_post_as_service("/invoices", row)
     if not saved:
         raise HTTPException(503, "Gift could not be saved. Retry with the same request.")
@@ -1528,6 +1669,7 @@ def correct_manual_gift(business_id: str, gift_id: str, body: Dict[str, Any], us
     if not reason:
         raise HTTPException(400, "Enter the reason for this correction")
     fields = _manual_gift_fields(business_id, body)
+    way_name = fields.pop("_way_name", None)
     refund = body.get("refund_amount_cents", 0)
     if not isinstance(refund, int) or isinstance(refund, bool) or not 0 <= refund <= round(fields["total"] * 100):
         raise HTTPException(400, "Refund must be between zero and the gift amount")
@@ -1537,7 +1679,8 @@ def correct_manual_gift(business_id: str, gift_id: str, body: Dict[str, Any], us
     fields.update(refund_amount_cents=refund, refunded_at=_now_iso() if refund else None)
     # Preserve the prior financial entry and reason in the existing audit trail.
     # The database trigger retains the old/new values, including manual corrections.
-    fields["notes"] = (original.get("notes") or "") + f"\nCorrection by {user.id}: " + reason[:300]
+    fields["notes"] = ((original.get("notes") or "") + f"\nCorrection by {user.id}: " + reason[:300]
+                       + (f"\nGiven through {way_name}" if way_name else ""))
     saved = sb_clients.sb_patch_as_service(f"/invoices?id=eq.{gift_id}&business_id=eq.{business_id}&updated_at=eq.{urllib.parse.quote(str(version), safe='')}", fields)
     if saved is None:
         raise HTTPException(503, "The gift could not be saved. Reload and retry.")
