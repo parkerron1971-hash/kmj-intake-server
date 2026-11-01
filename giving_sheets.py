@@ -57,6 +57,9 @@ from fastapi.responses import HTMLResponse
 
 import sb_clients
 from auth_supabase import AuthedUser, require_user
+# The same gate, count read and helpers as the counts (by name, so the
+# access sweep follows the gate into giving_services).
+from giving_services import UUID_RE, _count, _gate, _need, _q
 
 logger = logging.getLogger("giving_sheets")
 router = APIRouter(tags=["giving"])
@@ -145,10 +148,9 @@ def dayLabel_long(day: str) -> str:
 
 @router.get("/giving/{business_id}/counts/{count_id}/sheet", response_class=HTMLResponse)
 def count_sheet(business_id: str, count_id: str, user: AuthedUser = Depends(require_user)):
-    import giving_services as gs
-    biz = gs._gate(business_id, user)
-    count = gs._count(business_id, count_id)
-    names = sb_clients.sb_get_as_service(f"/businesses?id=eq.{gs._q(business_id)}&select=name&limit=1") or []
+    biz = _gate(business_id, user)
+    count = _count(business_id, count_id)
+    names = sb_clients.sb_get_as_service(f"/businesses?id=eq.{_q(business_id)}&select=name&limit=1") or []
     page = sheet_html({**biz, "name": (names[0] if names else {}).get("name")}, count)
     return HTMLResponse(page, headers={"Cache-Control": "no-store", "X-Robots-Tag": "noindex"})
 
@@ -364,9 +366,8 @@ async def upload_photo(business_id: str, count_id: str, photo: UploadFile = File
                        user: AuthedUser = Depends(require_user)):
     """Keep the photo (always, first), then read it into a draft. A photo
     that can't be read is still kept, with what went wrong."""
-    import giving_services as gs
-    biz = await asyncio.to_thread(gs._gate, business_id, user)
-    count = await asyncio.to_thread(gs._count, business_id, count_id)
+    biz = await asyncio.to_thread(lambda: _gate(business_id, user))
+    count = await asyncio.to_thread(lambda: _count(business_id, count_id))
     raw = await photo.read(MAX_PHOTO_BYTES + 1)
     if len(raw) > MAX_PHOTO_BYTES:
         raise HTTPException(413, "That photo is over 8 MB. Take it again a little farther away.")
@@ -387,7 +388,7 @@ async def upload_photo(business_id: str, count_id: str, photo: UploadFile = File
             raise HTTPException(422, "That doesn't look like a count sheet, or it can't be read. Take the photo "
                                      "again from straight above, in good light.")
         contacts = await asyncio.to_thread(
-            gs._need, f"/contacts?business_id=eq.{gs._q(business_id)}&select=id,name&limit=10000")
+            _need, f"/contacts?business_id=eq.{_q(business_id)}&select=id,name&limit=10000")
         draft = draft_from(got, contacts, _funds(biz))
     except HTTPException as e:
         msg = e.detail.get("message") if isinstance(e.detail, dict) else str(e.detail)
@@ -408,12 +409,11 @@ async def upload_photo(business_id: str, count_id: str, photo: UploadFile = File
 
 @router.get("/giving/{business_id}/counts/{count_id}/photos")
 async def list_photos(business_id: str, count_id: str, user: AuthedUser = Depends(require_user)):
-    import giving_services as gs
     import storage_links
-    await asyncio.to_thread(gs._gate, business_id, user)
-    await asyncio.to_thread(gs._count, business_id, count_id)
+    await asyncio.to_thread(lambda: _gate(business_id, user))
+    await asyncio.to_thread(lambda: _count(business_id, count_id))
     rows = await asyncio.to_thread(
-        gs._need, f"/giving_count_photos?business_id=eq.{gs._q(business_id)}&count_id=eq.{gs._q(count_id)}"
+        _need, f"/giving_count_photos?business_id=eq.{_q(business_id)}&count_id=eq.{_q(count_id)}"
                   f"&select={PHOTO_FIELDS}&order=created_at.asc&limit=50")
     async with httpx.AsyncClient() as client:
         urls = await asyncio.gather(*(storage_links.signed_url(client, BUCKET, r["path"], ttl=900) for r in rows))
@@ -427,19 +427,18 @@ def photo_used(business_id: str, count_id: str, photo_id: str, body: Dict[str, A
                user: AuthedUser = Depends(require_user)):
     """Tie the photo to the gifts its draft became (the checks and balances
     trail: the sheet, its photo, the gifts)."""
-    import giving_services as gs
-    gs._gate(business_id, user)
-    if not gs.UUID_RE.match(photo_id):
+    _gate(business_id, user)
+    if not UUID_RE.match(photo_id):
         raise HTTPException(404, "Photo not found")
-    ids = [str(i) for i in ((body or {}).get("gift_ids") or []) if gs.UUID_RE.match(str(i))][:200]
+    ids = [str(i) for i in ((body or {}).get("gift_ids") or []) if UUID_RE.match(str(i))][:200]
     keep: List[str] = []
     if ids:
-        rows = gs._need(f"/invoices?business_id=eq.{gs._q(business_id)}&giving_count_id=eq.{gs._q(count_id)}"
+        rows = _need(f"/invoices?business_id=eq.{_q(business_id)}&giving_count_id=eq.{_q(count_id)}"
                         f"&id=in.({','.join(ids)})&select=id&limit=200")
         keep = [r["id"] for r in rows]
     saved = sb_clients.sb_patch_as_service(
-        f"/giving_count_photos?id=eq.{gs._q(photo_id)}&business_id=eq.{gs._q(business_id)}"
-        f"&count_id=eq.{gs._q(count_id)}",
+        f"/giving_count_photos?id=eq.{_q(photo_id)}&business_id=eq.{_q(business_id)}"
+        f"&count_id=eq.{_q(count_id)}",
         {"status": "used", "used_at": datetime.now(timezone.utc).isoformat(), "gift_ids": keep})
     if saved is None:
         raise HTTPException(503, "The photo couldn't be updated. Please try again.")
