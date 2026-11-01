@@ -237,6 +237,7 @@ def _gift_row(r: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     contact = r.get("contacts") or {}
     return {"id": str(r["id"]), "kind": kind, "date": str(r.get("paid_at") or "")[:10],
             "cents": total, "fee": min(fee, total), "method": r.get("payment_method"),
+            "count": str(r["giving_count_id"]) if r.get("giving_count_id") else None,
             "giver": (contact.get("name") if isinstance(contact, dict) else None) or "No giver"}
 
 
@@ -330,9 +331,12 @@ def _proposal(kind: str, gs: List[Dict[str, Any]], ds: List[Dict[str, Any]], why
             "date": min(g["date"] for g in gs), "why": why}
 
 
-def plan(gs: List[Dict[str, Any]], ds: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def plan(gs: List[Dict[str, Any]], ds: List[Dict[str, Any]],
+         counts: Optional[Dict[str, Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
     """The clear matches among unmatched gifts and waiting deposits. Each gift
-    and each deposit is used at most once; anything ambiguous is left."""
+    and each deposit is used at most once; anything ambiguous is left.
+    `counts`: closed service counts by id ({name, date}), whose cash and
+    checks are tried first, as one deposit slip (giving_services)."""
     used_d: set = set()
     used_g: set = set()
     out: List[Dict[str, Any]] = []
@@ -352,6 +356,20 @@ def plan(gs: List[Dict[str, Any]], ds: List[Dict[str, Any]]) -> List[Dict[str, A
                 days.setdefault(g["date"], []).append(g)
         return sorted(days.items())
 
+    # A closed service count: the counters' cash and checks, as one slip.
+    by_count: Dict[str, List[Dict[str, Any]]] = {}
+    for g in gs:
+        if g["kind"] == "plate" and g.get("count") in (counts or {}):
+            by_count.setdefault(g["count"], []).append(g)
+    for cid, group in sorted(by_count.items(), key=lambda kv: min(g["date"] for g in kv[1])):
+        day = min(g["date"] for g in group)
+        total = sum(g["cents"] for g in group)
+        cands = [d for d in free("plate") if _within(d["date"], day, PLATE_DAYS)]
+        combo = _unique_combo(cands, total, range(1, COMBO_MAX + 1))
+        if combo:
+            c = (counts or {})[cid]
+            take(_proposal("plate", group, combo, f"{c.get('name') or 'The service'}, {_day(day)}: "
+                                                  f"the counted cash and checks, {_money(total)}"))
     # Plate: a day's cash and check, in one to three deposits soon after.
     for day, group in by_day("plate"):
         total = sum(g["cents"] for g in group)
@@ -595,6 +613,17 @@ def verify(business_id: str, ms: List[Dict[str, Any]], g_by: Dict[str, Dict[str,
     return out
 
 
+def _closed_counts(business_id: str, gs: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    """The closed service counts these gifts sit in, by id ({name, date})."""
+    ids = sorted({g["count"] for g in gs if g.get("count") and g["kind"] == "plate"})
+    out: Dict[str, Dict[str, Any]] = {}
+    for i in range(0, len(ids), 100):
+        for r in _get(f"/giving_counts?business_id=eq.{_q(business_id)}&status=eq.closed"
+                      f"&id=in.({','.join(_q(x) for x in ids[i:i + 100])})&select=id,name,service_date&limit=100"):
+            out[str(r["id"])] = {"name": r.get("name"), "date": str(r.get("service_date"))[:10]}
+    return out
+
+
 def status(business_id: str, *, year: Optional[int] = None, start: Any = None, end: Any = None) -> Dict[str, Any]:
     s, e = _window(year, start, end)
     # Two weeks early too: a Sunday's gifts before the range can ride in a
@@ -609,7 +638,7 @@ def status(business_id: str, *, year: Optional[int] = None, start: Any = None, e
     d_by = {d["id"]: d for d in ds}
     open_g = [g for g in gs if ("gift", g["id"]) not in taken]
     open_d = [d for d in ds if d["waiting"] and ("deposit", d["id"]) not in taken]
-    proposals = plan(open_g, open_d)
+    proposals = plan(open_g, open_d, _closed_counts(business_id, open_g))
     fee_ids = [str(m["fee_expense_id"]) for m in ms if m.get("fee_expense_id")]
     expenses: Dict[str, int] = {}
     for i in range(0, len(fee_ids), 100):

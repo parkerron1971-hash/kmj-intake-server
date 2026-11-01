@@ -592,3 +592,139 @@ def move_gift(business_id: str, gift_id: str, body: Dict[str, Any], user: Authed
     if not saved:
         raise HTTPException(409, "That gift just changed. Reload and try again.")
     return {"ok": True, "count_id": target}
+
+
+# ─── Closing a count (step 3) ─────────────────────────────────────────
+# The standard church money control: the counters count the plate before
+# anything is itemized, two of them sign, and the itemized cash and checks
+# must equal what they counted. A closed count is locked. A change after
+# that means reopening it with a reason (owner or admin), and the reason
+# stays on the count.
+
+MAX_COUNTERS = 4
+
+
+def _counters(raw: Any) -> List[str]:
+    if not isinstance(raw, list):
+        raise HTTPException(400, "Name who counted.")
+    out: List[str] = []
+    for n in raw:
+        name = " ".join(str(n or "").split())
+        if not name:
+            continue
+        if len(name) > 60:
+            raise HTTPException(400, "Keep each counter's name to 60 characters.")
+        if name.lower() not in (o.lower() for o in out):
+            out.append(name)
+    if not out:
+        raise HTTPException(400, "Name who counted.")
+    if len(out) > MAX_COUNTERS:
+        raise HTTPException(400, f"Name up to {MAX_COUNTERS} counters.")
+    return out
+
+
+def _cents_in(raw: Any, what: str) -> int:
+    if isinstance(raw, bool) or not isinstance(raw, int) or not 0 <= raw <= 100_000_000:
+        raise HTTPException(400, f"Enter the counted {what} (zero if none).")
+    return raw
+
+
+@router.post("/giving/{business_id}/counts/{count_id}/close")
+def close_count(business_id: str, count_id: str, body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
+    """{counted_cash_cents, counted_checks_cents, counters: [names], note?}.
+    Refused (409, with the differences) when the cash or checks recorded
+    don't equal what was counted."""
+    _gate(business_id, user)
+    body = body or {}
+    count = _count(business_id, count_id)
+    if count.get("status") != "open":
+        raise HTTPException(409, "This count is already closed.")
+    cash = _cents_in(body.get("counted_cash_cents"), "cash")
+    checks = _cents_in(body.get("counted_checks_cents"), "checks")
+    counters = _counters(body.get("counters"))
+    note = " ".join(str(body.get("note") or "").split())[:500]
+    t = totals(_gifts_of(business_id, [count_id]))
+    off_cash, off_checks = cash - t["cash"], checks - t["check"]
+    if off_cash or off_checks:
+        parts = []
+        if off_cash:
+            parts.append(f"cash is {usd_text(abs(off_cash))} {'more' if off_cash > 0 else 'less'} than recorded")
+        if off_checks:
+            parts.append(f"checks are {usd_text(abs(off_checks))} {'more' if off_checks > 0 else 'less'} than recorded")
+        raise HTTPException(409, {
+            "error": "count_differs",
+            "message": "The count doesn't match what's recorded: " + " and ".join(parts) + ".",
+            "cash_difference_cents": off_cash, "checks_difference_cents": off_checks,
+            "recorded_cash_cents": t["cash"], "recorded_checks_cents": t["check"]})
+    now = datetime.now(timezone.utc).isoformat()
+    saved = sb_clients.sb_patch_as_service(
+        f"/giving_counts?id=eq.{_q(count_id)}&business_id=eq.{_q(business_id)}&status=eq.open",
+        {"status": "closed", "counted_cash_cents": cash, "counted_checks_cents": checks, "counters": counters,
+         "closed_at": now, "closed_by": str(user.id), "updated_at": now,
+         "note": _note_add(count.get("note"), f"Closed {now[:10]}" + (f": {note}" if note else ""))})
+    if saved is None:
+        raise HTTPException(503, "The count couldn't be closed. Please try again.")
+    if not saved:
+        raise HTTPException(409, "This count just changed. Reload it.")
+    # A gift recorded (or placed) between the totals read above and the
+    # close would sit in a closed count the counters never signed for: read
+    # again, and if the cash or checks moved, open it again and say so.
+    after = _gifts_of(business_id, [count_id])
+    t2 = totals(after)
+    if (t2["cash"], t2["check"]) != (t["cash"], t["check"]):
+        back = sb_clients.sb_patch_as_service(
+            f"/giving_counts?id=eq.{_q(count_id)}&business_id=eq.{_q(business_id)}&status=eq.closed",
+            {"status": "open", "updated_at": datetime.now(timezone.utc).isoformat(),
+             "note": _note_add(saved[0].get("note"), "Opened again: a gift came in while it was closing")})
+        if not back:
+            logger.warning(f"[giving_services] count {count_id} closed against old totals and couldn't be reopened")
+        raise HTTPException(409, "A gift was added while the count was closing, so it stays open. Check the rows "
+                                 "and close it again.")
+    return {"ok": True, "count": _count_out(saved[0], after)}
+
+
+@router.post("/giving/{business_id}/counts/{count_id}/reopen")
+def reopen_count(business_id: str, count_id: str, body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
+    """Owner or admin, with a reason that stays on the count. The counted
+    totals and counters stay until it's closed again."""
+    from giving_records import require_finance
+    _gate(business_id, user)
+    if require_finance(business_id, user) not in ("owner", "admin"):
+        raise HTTPException(403, "Only the owner or an admin can reopen a closed count.")
+    reason = " ".join(str((body or {}).get("reason") or "").split())[:300]
+    if not reason:
+        raise HTTPException(400, "Say why the count is being reopened. The reason stays with it.")
+    count = _count(business_id, count_id)
+    if count.get("status") != "closed":
+        raise HTTPException(409, "This count is already open.")
+    now = datetime.now(timezone.utc).isoformat()
+    saved = sb_clients.sb_patch_as_service(
+        f"/giving_counts?id=eq.{_q(count_id)}&business_id=eq.{_q(business_id)}&status=eq.closed",
+        {"status": "open", "updated_at": now,
+         "note": _note_add(count.get("note"), f"Reopened {now[:10]}: {reason}")})
+    if saved is None:
+        raise HTTPException(503, "The count couldn't be reopened. Please try again.")
+    if not saved:
+        raise HTTPException(409, "This count just changed. Reload it.")
+    return {"ok": True}
+
+
+def _note_add(old: Any, line: str) -> str:
+    text = (str(old or "").strip() + "\n" + line).strip()
+    return text[-1000:]
+
+
+def usd_text(cents: int) -> str:
+    return f"${cents / 100:,.2f}"
+
+
+def gift_in_closed_count(business_id: str, gift: Dict[str, Any]) -> Optional[str]:
+    """The closed count's name when this gift sits in one, else None. For the
+    correction endpoint: a closed count is locked."""
+    cid = gift.get("giving_count_id")
+    if not cid:
+        return None
+    rows = _need(f"/giving_counts?id=eq.{_q(cid)}&business_id=eq.{_q(business_id)}&select=name,service_date,status&limit=1")
+    if rows and rows[0].get("status") == "closed":
+        return f"{rows[0].get('name')} ({str(rows[0].get('service_date'))[:10]})"
+    return None
