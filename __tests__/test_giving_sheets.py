@@ -51,7 +51,8 @@ def test_the_sheet_names_the_service_its_funds_and_two_counters(db):
     assert "Love City Church" in page and "Sunday Worship" in page and "Sunday, November 1, 2026" in page
     assert "Tithes · Building · Missions" in page
     assert page.count("Counted by (print and sign)") == 2
-    assert page.count('<td class="n">') == sh.SHEET_LINES
+    assert page.count('<td class="n">') == sh.SHEET_LINES + sh.APP_LINES
+    assert "Given by app (not in the plate)" in page and page.count("&#9744; Cash App") == sh.APP_LINES
     assert resp.headers["cache-control"] == "no-store"
 
 
@@ -84,7 +85,7 @@ def test_a_draft_matches_names_splits_cash_and_check_and_checks_totals():
     assert rows[4]["loose"] is True and rows[4]["contact_id"] is None
     assert rows[5]["name_match"] == "none"
     assert d["cash_cents"] == 11850 and d["checks_cents"] == 20000
-    assert {c["what"]: c["agrees"] for c in d["checks"]} == {"cash": True, "checks": True, "total": False}
+    assert {c["what"]: c["agrees"] for c in d["checks"]} == {"cash": True, "checks": True, "plate total": False}
     assert d["agrees"] is False and d["counters"] == ["Ann Lee", "Bo Price"]
     assert d["unsure"] == 2      # Ann Lee's line (unsure, two people, unknown fund), Someone New
 
@@ -173,4 +174,45 @@ def test_deleting_a_church_takes_its_sheet_photos_too():
     import account_lifecycle
     assert "giving-sheets" in account_lifecycle.STORAGE_BUCKETS
     assert "giving_count_photos" in account_lifecycle.BUSINESS_CHILD_TABLES
+
+
+def test_the_sheet_offers_the_churchs_own_apps(db):
+    db.t["businesses"][0]["settings"]["giving"]["ways"] = [
+        {"app": "zelle", "handle": "give@lovecity.org"}, {"app": "subsplash"},
+        {"app": "other", "label": "Givelify"}]
+    page = sh.count_sheet(BIZ, COUNT, USER).body.decode()
+    assert "&#9744; Zelle" in page and "&#9744; Givelify" in page
+    assert "Subsplash" not in page and "&#9744; Cash App" not in page
+
+
+def test_app_lines_become_rows_on_the_churchs_apps():
+    apps = [{"id": "cashapp", "label": "Cash App"}, {"id": "zelle", "label": "Zelle"},
+            {"id": "other:Givelify", "label": "Givelify"}]
+    got = {"lines": [{"name": "Ann Lee", "cash": 20, "check": 0}],
+           "app_lines": [{"line": "A1", "name": "Grace Holloway", "app": "cashapp", "fund": "Building",
+                          "amount": 50, "note": "...4821"},
+                         {"line": "A2", "name": "Marcus Reed", "app": "Zelle", "amount": 25},
+                         {"line": "A3", "name": "Grace Holloway", "app": "givelify", "amount": 10},
+                         {"line": "A4", "name": "Grace Holloway", "app": "Venmo", "amount": 5, "unsure": True}],
+           "written_apps_total": 90, "written_total": 20}
+    d = sh.draft_from(got, PEOPLE, ["Tithes", "Building", "Missions"], apps)
+    app_rows = [r for r in d["rows"] if r["method"] not in ("cash", "check")]
+    assert [(r["line"], r["method"], r["amount_cents"]) for r in app_rows] == [
+        ("A1", "cashapp", 5000), ("A2", "zelle", 2500), ("A3", "other:Givelify", 1000), ("A4", "other:Venmo", 500)]
+    assert app_rows[0]["contact_id"] == "p1" and app_rows[0]["fund"] == "Building" and app_rows[0]["note"] == "...4821"
+    assert app_rows[3]["app_known"] is False and app_rows[3]["app"] == "Venmo"      # not one of the church's apps
+    assert d["cash_cents"] == 2000 and d["apps_cents"] == 9000                     # apps never in the plate
+    assert {c["what"]: c["agrees"] for c in d["checks"]} == {"plate total": True, "apps": True}
+
+
+def test_many_long_app_names_stay_on_one_line_of_boxes(db):
+    db.t["businesses"][0]["settings"]["giving"]["ways"] = [
+        {"app": "cashapp"}, {"app": "zelle"}, {"app": "venmo"}, {"app": "paypal"},
+        {"app": "other", "label": "A Very Long Giving App Name Here"},
+        {"app": "other", "label": "Another Long Giving Platform Name"}, {"app": "other", "label": "Third App"}]
+    page = sh.count_sheet(BIZ, COUNT, USER).body.decode()
+    first_line = page.split('<td class="n">A1</td>', 1)[1].split("</tr>", 1)[0]
+    assert first_line.count("&#9744;") == sh.APP_BOXES + 1 and "Other ______" in first_line
+    assert "A Very Long Giving App N" in first_line and "Third App" not in first_line
+    assert "td.apps { font-size: 10px; line-height: 1.25; }" in page        # the cell wraps
 

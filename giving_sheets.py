@@ -67,7 +67,11 @@ router = APIRouter(tags=["giving"])
 BUCKET = "giving-sheets"
 MAX_PHOTO_BYTES = 8 * 1024 * 1024
 TYPES = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp"}
-SHEET_LINES = 24
+SHEET_LINES = 15          # the plate: cash and checks counted at the service
+APP_LINES = 6             # gifts by app, copied from the app's activity (Kevin, 2026-11-01)
+APP_BOXES = 5             # app checkboxes on a line; more apps: "Other ____" (one page)
+DEFAULT_APPS = [{"id": "cashapp", "label": "Cash App"}, {"id": "zelle", "label": "Zelle"},
+                {"id": "paypal", "label": "PayPal"}, {"id": "venmo", "label": "Venmo"}]
 DEFAULT_MODEL = "claude-sonnet-5-5"
 READ_MAX_TOKENS = 8000
 HTTP_TIMEOUT = httpx.Timeout(connect=10.0, read=180.0, write=60.0, pool=10.0)
@@ -86,7 +90,20 @@ def _funds(business: Dict[str, Any]) -> List[str]:
     return configured_funds(giving_settings(business.get("settings")))
 
 
-def sheet_html(business: Dict[str, Any], count: Dict[str, Any], *, lines: int = SHEET_LINES) -> str:
+def sheet_apps(business: Dict[str, Any]) -> List[Dict[str, str]]:
+    """The apps the sheet's app section offers: the church's own ways
+    (Settings, Giving) that are apps people send to directly, else the
+    usual four. Subsplash isn't one: its gifts arrive on their own."""
+    import giving_ways
+    from giving_router import giving_settings
+    ways = giving_ways.stored_ways(giving_settings(business.get("settings")))
+    menu = [m for m in giving_ways.method_menu(ways)
+            if m["id"] in ("cashapp", "zelle", "venmo", "paypal") or m["id"].startswith("other:")]
+    return menu or list(DEFAULT_APPS)
+
+
+def sheet_html(business: Dict[str, Any], count: Dict[str, Any], *, lines: int = SHEET_LINES,
+               app_lines: int = APP_LINES) -> str:
     """The printable sheet for one count. Pure."""
     e = lambda s: html.escape(str(s or ""), quote=True)  # noqa: E731
     name = e(business.get("name") or "Church")
@@ -94,12 +111,19 @@ def sheet_html(business: Dict[str, Any], count: Dict[str, Any], *, lines: int = 
     rows = "".join(
         f'<tr><td class="n">{i}</td><td></td><td></td><td class="m"></td><td class="m"></td><td></td></tr>'
         for i in range(1, lines + 1))
+    apps = sheet_apps(business)
+    shown = apps[:APP_BOXES]
+    boxes = " ".join(f'<span class="box">&#9744; {e(a["label"][:24])}</span>' for a in shown)
+    if len(apps) > APP_BOXES:
+        boxes += ' <span class="box">&#9744; Other ______</span>'
+    app_rows = "".join(
+        f'<tr><td class="n">A{i}</td><td></td><td class="apps">{boxes}</td><td></td><td class="m"></td><td></td></tr>'
+        for i in range(1, app_lines + 1))
     denoms = "".join(f'<tr><th>{e(label)}</th><td class="m"></td></tr>' for label, _ in DENOMS)
     return f"""<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Count sheet: {e(count.get('name'))}, {e(dayLabel_long(str(count.get('service_date'))[:10]))}</title>
 <style>
-@page {{ size: letter; margin: 12mm; }}
 * {{ box-sizing: border-box; }}
 body {{ font: 12px/1.35 -apple-system, "Segoe UI", Roboto, Arial, sans-serif; color: #111; margin: 0; padding: 16px; background: #fff; }}
 .bar {{ display: flex; justify-content: space-between; align-items: flex-end; gap: 12px; border-bottom: 2px solid #111; padding-bottom: 8px; }}
@@ -108,14 +132,22 @@ h1 {{ font-size: 18px; margin: 0; }}
 .code {{ font: 11px ui-monospace, Menlo, monospace; color: #444; text-align: right; }}
 .funds {{ margin: 8px 0; font-size: 11px; color: #333; }}
 table {{ width: 100%; border-collapse: collapse; }}
-th, td {{ border: 1px solid #555; padding: 0 6px; height: 26px; text-align: left; }}
+th, td {{ border: 1px solid #555; padding: 0 6px; height: 22px; text-align: left; }}
 th {{ font-size: 11px; background: #f2f2f2; }}
 td.n {{ width: 28px; text-align: center; color: #666; }}
 .m {{ width: 90px; }}
 .grid {{ display: grid; grid-template-columns: 1fr 220px; gap: 14px; margin-top: 12px; align-items: start; }}
-.sign {{ display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-top: 18px; }}
+.sign {{ display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-top: 14px; }}
 .sign div {{ border-top: 1px solid #111; padding-top: 4px; font-size: 11px; }}
 .note {{ font-size: 10px; color: #555; margin-top: 10px; }}
+h2 {{ font-size: 13px; margin: 10px 0 2px; }}
+.why {{ font-size: 10px; color: #444; margin: 0 0 4px; }}
+td.apps {{ font-size: 10px; line-height: 1.25; }}
+.box {{ display: inline-block; white-space: nowrap; }}
+.box {{ margin-right: 6px; }}
+.appt th:nth-child(2) {{ width: 30%; }}
+.grid th, .grid td {{ height: 17px; }}
+@page {{ size: letter; margin: 10mm; }}
 .print {{ margin: 0 0 12px; padding: 8px 14px; font: inherit; font-size: 14px; cursor: pointer; }}
 @media print {{ .print {{ display: none; }} body {{ padding: 0; }} }}
 </style></head><body>
@@ -124,17 +156,23 @@ td.n {{ width: 28px; text-align: center; color: #666; }}
 <p class="sub">{e(count.get('name'))} · {e(dayLabel_long(str(count.get('service_date'))[:10]))}</p></div>
 <div class="code">Count sheet<br>{e(str(count.get('id'))[:8].upper())}</div></div>
 <p class="funds"><strong>Funds:</strong> {funds}. Write one per line; leave Fund empty for {e(_funds(business)[0])}.</p>
+<h2>In the plate</h2>
 <table><thead><tr><th>#</th><th>Name (or "Loose offering")</th><th>Fund</th><th class="m">Cash</th><th class="m">Check</th><th>Check #</th></tr></thead>
 <tbody>{rows}</tbody></table>
+<h2>Given by app (not in the plate)</h2>
+<p class="why">Gifts sent straight to the church's Cash App, Zelle or other app this week: copy them from the app's activity. Tick the app. They aren't counted with the cash.</p>
+<table class="appt"><thead><tr><th>#</th><th>Name</th><th>App</th><th>Fund</th><th class="m">Amount</th><th>Note (e.g. last 4)</th></tr></thead>
+<tbody>{app_rows}</tbody></table>
 <div class="grid">
 <table><thead><tr><th colspan="2">Totals</th></tr></thead><tbody>
 <tr><th>Cash (from the lines)</th><td class="m"></td></tr><tr><th>Checks (from the lines)</th><td class="m"></td></tr>
-<tr><th>Total</th><td class="m"></td></tr></tbody></table>
+<tr><th>Plate total</th><td class="m"></td></tr>
+<tr><th>Apps (from the app lines)</th><td class="m"></td></tr></tbody></table>
 <table><thead><tr><th colspan="2">Cash counted</th></tr></thead><tbody>{denoms}
 <tr><th>Cash total</th><td class="m"></td></tr></tbody></table>
 </div>
 <div class="sign"><div>Counted by (print and sign)</div><div>Counted by (print and sign)</div></div>
-<p class="note">Online gifts are recorded on their own: don't write them here. Take a clear photo of this sheet from straight above, in good light, and upload it to this service's count.</p>
+<p class="note">More gifts than lines? Print another sheet for this service: every photo goes into the same count. Online gifts are recorded on their own: don't write them here. Take a clear photo of this sheet from straight above, in good light, and upload it to this service's count.</p>
 </body></html>"""
 
 
@@ -172,9 +210,20 @@ SHEET_TOOL = {
                 "check_number": {"type": "string"},
                 "unsure": {"type": "boolean", "description": "True when any part of this line was hard to read."},
             }, "required": ["name", "cash", "check"]}},
+            "app_lines": {"type": "array", "description": "The 'Given by app' section: one per filled line.",
+                          "items": {"type": "object", "properties": {
+                "line": {"type": "string", "description": "The printed line label, e.g. A1."},
+                "name": {"type": "string", "description": "The giver's name as written."},
+                "app": {"type": "string", "description": "The app ticked (or written), e.g. Cash App, Zelle; '' if none."},
+                "fund": {"type": "string", "description": "The fund as written, empty if none."},
+                "amount": {"type": "number", "description": "The amount in dollars."},
+                "note": {"type": "string", "description": "The note as written (e.g. last 4)."},
+                "unsure": {"type": "boolean", "description": "True when any part of this line was hard to read."},
+            }, "required": ["name", "app", "amount"]}},
+            "written_apps_total": {"type": "number", "description": "The 'Apps (from the app lines)' box, if filled."},
             "written_cash_total": {"type": "number"},
             "written_checks_total": {"type": "number"},
-            "written_total": {"type": "number"},
+            "written_total": {"type": "number", "description": "The 'Plate total' box (cash and checks), if filled."},
             "counted_cash_total": {"type": "number", "description": "The 'Cash counted' box total, if filled."},
             "counters": {"type": "array", "items": {"type": "string"}},
             "readable": {"type": "boolean", "description": "False when this isn't a count sheet or can't be read."},
@@ -187,7 +236,9 @@ _READ_SYSTEM = (
     "One entry per filled line, in order. Amounts in dollars as numbers. Never guess a name or an amount: "
     "copy what is written, and mark the line unsure when any part is hard to read. A line with only an "
     "amount and no name is a giver whose name wasn't written: name ''. Leave blank lines out. Read the "
-    "totals boxes and the counters' printed names when they are filled. If the picture isn't a count "
+    "totals boxes and the counters' printed names when they are filled. The sheet has two sections: "
+    "'In the plate' (cash and checks) goes in lines; 'Given by app' (Cash App, Zelle and the like) goes in "
+    "app_lines, each with the app that is ticked or written. If the picture isn't a count "
     "sheet or can't be read, set readable false.")
 
 
@@ -234,9 +285,31 @@ def match_names(lines: List[Dict[str, Any]], contacts: List[Dict[str, Any]]) -> 
         ln["name_match"] = "one" if one else ("several" if ids else "none")
 
 
-def draft_from(got: Dict[str, Any], contacts: List[Dict[str, Any]], funds: List[str]) -> Dict[str, Any]:
+def _app_of(raw: Any, apps: List[Dict[str, str]]) -> Optional[Dict[str, str]]:
+    """The church's app the line names (its label, any case; 'cashapp' for
+    'Cash App'), else None."""
+    t = re.sub(r"[^a-z0-9]", "", str(raw or "").lower())
+    if not t:
+        return None
+    for a in apps:
+        if t in (re.sub(r"[^a-z0-9]", "", a["label"].lower()), re.sub(r"[^a-z0-9]", "", a["id"].lower())):
+            return a
+    return None
+
+
+def _other_method(raw: Any) -> Optional[str]:
+    """An app the church doesn't list, as an Other app by name."""
+    name = " ".join(re.sub(r"[^A-Za-z0-9 .&'-]", " ", str(raw or "")).split())[:40]
+    return f"other:{name}" if name else None
+
+
+def draft_from(got: Dict[str, Any], contacts: List[Dict[str, Any]], funds: List[str],
+               apps: Optional[List[Dict[str, str]]] = None) -> Dict[str, Any]:
     """The tool's reading → the draft the screen shows. Pure. A line with
-    both cash and a check becomes two rows."""
+    both cash and a check becomes two rows. An app line becomes one row
+    whose method is the church's app (its menu id), flagged when the app
+    isn't one of the church's."""
+    apps = apps if apps is not None else list(DEFAULT_APPS)
     rows: List[Dict[str, Any]] = []
     fund_by = {f.lower(): f for f in funds}
     for i, ln in enumerate(got.get("lines") or []):
@@ -255,25 +328,46 @@ def draft_from(got: Dict[str, Any], contacts: List[Dict[str, Any]], funds: List[
         if check:
             cn = re.sub(r"[^A-Za-z0-9-]", "", str(ln.get("check_number") or ""))[:20] or None
             rows.append({**base, "method": "check", "amount_cents": check, "check_number": cn})
+    for i, ln in enumerate(got.get("app_lines") or []):
+        if not isinstance(ln, dict):
+            continue
+        amount = _money_c(ln.get("amount"))
+        if not amount:
+            continue
+        fund_raw = " ".join(str(ln.get("fund") or "").split())[:40]
+        app = _app_of(ln.get("app"), apps)
+        rows.append({"line": str(ln.get("line") or f"A{i + 1}")[:6],
+                     "name": " ".join(str(ln.get("name") or "").split())[:120], "loose": False,
+                     "fund": fund_by.get(fund_raw.lower()) or (fund_raw or funds[0]),
+                     "fund_known": not fund_raw or fund_raw.lower() in fund_by,
+                     # An app the church doesn't list keeps its name (other:<name>); the screen asks.
+                     "unsure": ln.get("unsure") is True,
+                     "method": app["id"] if app else (_other_method(ln.get("app")) or "other"),
+                     "app": app["label"] if app else " ".join(str(ln.get("app") or "").split())[:40],
+                     "app_known": bool(app), "amount_cents": amount, "check_number": None,
+                     "note": " ".join(str(ln.get("note") or "").split())[:60] or None})
     match_names([r for r in rows if not r["loose"]], contacts)
     for r in rows:
+        r.setdefault("app_known", True)
         if r["loose"]:
             r.update(contact_id=None, name_match="loose")
     cash_sum = sum(r["amount_cents"] for r in rows if r["method"] == "cash")
     check_sum = sum(r["amount_cents"] for r in rows if r["method"] == "check")
+    apps_sum = sum(r["amount_cents"] for r in rows if r["method"] not in ("cash", "check"))
     checks = []
     for label, written, ours in (("cash", got.get("written_cash_total"), cash_sum),
                                  ("checks", got.get("written_checks_total"), check_sum),
-                                 ("total", got.get("written_total"), cash_sum + check_sum),
+                                 ("plate total", got.get("written_total"), cash_sum + check_sum),
+                                 ("apps", got.get("written_apps_total"), apps_sum),
                                  ("counted cash", got.get("counted_cash_total"), cash_sum)):
         if written is not None and _money_c(written):
             checks.append({"what": label, "written_cents": _money_c(written), "lines_cents": ours,
                            "agrees": _money_c(written) == ours})
     counters = [" ".join(str(c or "").split())[:60] for c in (got.get("counters") or []) if str(c or "").strip()][:4]
-    return {"rows": rows, "cash_cents": cash_sum, "checks_cents": check_sum, "checks": checks,
-            "agrees": all(c["agrees"] for c in checks), "counters": counters,
+    return {"rows": rows, "cash_cents": cash_sum, "checks_cents": check_sum, "apps_cents": apps_sum,
+            "checks": checks, "agrees": all(c["agrees"] for c in checks), "counters": counters,
             "unsure": sum(1 for r in rows if r["unsure"] or r["name_match"] in ("several", "none")
-                          or not r["fund_known"])}
+                          or not r["fund_known"] or not r["app_known"])}
 
 
 async def read_photo(business_id: str, raw: bytes, media_type: str) -> Dict[str, Any]:
@@ -389,7 +483,7 @@ async def upload_photo(business_id: str, count_id: str, photo: UploadFile = File
                                      "again from straight above, in good light.")
         contacts = await asyncio.to_thread(
             _need, f"/contacts?business_id=eq.{_q(business_id)}&select=id,name&limit=10000")
-        draft = draft_from(got, contacts, _funds(biz))
+        draft = draft_from(got, contacts, _funds(biz), sheet_apps(biz))
     except HTTPException as e:
         msg = e.detail.get("message") if isinstance(e.detail, dict) else str(e.detail)
         await _mark_unread(pid, str(msg))
