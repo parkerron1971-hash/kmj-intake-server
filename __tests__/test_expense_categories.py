@@ -359,6 +359,20 @@ def test_the_card_moves_a_bucket_and_merges_a_label_not_on_the_list(db):
     assert missing.status_code == 409 and "no category called" in missing.json()["detail"]
 
 
+def test_a_card_change_whose_undo_record_fails_says_it_cant_be_undone(db, monkeypatch):
+    ec.create(BIZ, OWNER, "Utilities", "operating")
+    real = sb_clients.sb_post_as_service
+    monkeypatch.setattr(sb_clients, "sb_post_as_service",
+                        lambda path, body, *a, **k: None if path.startswith("/chief_undo_log") else real(path, body, *a, **k))
+    got = _client(OWNER).post("/expense-categories/change", json={
+        "business_id": BIZ, "category": "Utilities", "name": "Power"})
+    assert got.status_code == 200, got.text
+    body = got.json()
+    assert body["batch_id"] is None and "can't be undone" in body["said"]
+    assert _row(db, "p1")["business_subcategory"] == "Power"              # the change itself stands
+    assert db.t["chief_undo_log"] == []
+
+
 def test_the_card_changes_only_for_the_owner_and_only_where_switched_on(db, monkeypatch):
     ec.create(BIZ, OWNER, "Utilities", "operating")
     ask = {"business_id": BIZ, "category": "Utilities", "name": "Power"}

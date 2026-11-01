@@ -654,7 +654,10 @@ def post_change(body: ChangeBody, user: AuthedUser = Depends(require_user)) -> D
     if out.get("failed"):
         raise HTTPException(409, _said(out))
     logged = _record(body.business_id, user.id, action, out)
-    return {"ok": True, "said": _said(out), "batch_id": out["batch_id"] if logged else None,
+    text = _said(out)
+    if out.get("changes") and not logged:               # it stands, but nothing can take it back: say so
+        text += " Its undo record didn't save, so this one can't be undone from here or by Chief."
+    return {"ok": True, "said": text, "batch_id": out["batch_id"] if logged else None,
             "partial": bool(out.get("partial"))}
 
 

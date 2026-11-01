@@ -18,4 +18,4 @@ related: [2026-10-31-expense-categories.md]
 ---
 `expense_categories.py` (change, take_back, the card routes, `card` on the
 GET, NAV, wording that reads for both Chief and the screen). Tests:
-`__tests__/test_expense_categories.py` (19; 3 new for the card).
+`__tests__/test_expense_categories.py` (20; 4 new for the card).
