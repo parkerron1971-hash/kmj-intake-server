@@ -537,6 +537,15 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
                               "chief_only": True},
     "unmatch_giving_deposits": {**_w("A", "takes one batch of gift-to-deposit matches back: the deposits wait for an "
                                           "answer again and the gifts for a deposit"), "chief_only": True},
+    "giving_counts": {**_r("reads the church's service counts: each service day's giving recorded together, "
+                           "online gifts placed in the week's service, what's coming up", sensitive=True),
+                      "chief_only": True},
+    "record_service_gifts": {**_w("A", "records the gifts a person names into one service's open count, dated its "
+                                       "day; every name must be one of the church's people or loose/anonymous; "
+                                       "undo_service_gifts takes the batch back", bulk=True),
+                             "chief_only": True},
+    "undo_service_gifts": {**_w("A", "takes one batch of gifts Chief recorded back out of a service count that is "
+                                     "still open"), "chief_only": True},
     "run_market_research":    _w("A", "writes analysis onto the strategy track. Model spend"),
     "save_business_model":    _w("A", "saves a strategy-track deliverable"),
     "save_launch_plan":       _w("A", "saves a strategy-track deliverable"),

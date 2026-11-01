@@ -259,6 +259,8 @@ from expense_categories import (handle_expense_categories, handle_set_expense_ca
 from giving_deposits import (handle_giving_deposits, handle_match_giving_deposits,
     handle_unmatch_giving_deposits)
 from chief_bills import handle_bills, handle_add_bill, handle_remove_bill
+from chief_giving_counts import (handle_giving_counts, handle_record_service_gifts,
+    handle_undo_service_gifts)
 from bill_payments import handle_match_bill_payment, handle_unmatch_bill_payment
 from housing_allowance import (handle_housing_allowance_status, handle_set_housing_allowance,
     handle_log_housing_entry, handle_delete_housing_entry, handle_find_housing_payments,
@@ -397,6 +399,8 @@ _ACTION_PHRASES = {
     "giving_deposits": "checking the deposits against the gifts",
     "bills": "reading your bills",
     "add_bill": "adding the bill",
+    "giving_counts": "reading the service counts",
+    "record_service_gifts": "recording the gifts to the service",
     "match_bill_payment": "matching bills to the bank",
     "match_giving_deposits": "matching the gifts to their deposits",
     "undo_reconcile_books": "putting the bank rows back",
@@ -12194,6 +12198,9 @@ ACTION_HANDLERS = {
     "bills":                 handle_bills,
     "add_bill":              handle_add_bill,
     "remove_bill":           handle_remove_bill,
+    "giving_counts":         handle_giving_counts,
+    "record_service_gifts":  handle_record_service_gifts,
+    "undo_service_gifts":    handle_undo_service_gifts,
     "match_bill_payment":    handle_match_bill_payment,
     "unmatch_bill_payment":  handle_unmatch_bill_payment,
     "match_giving_deposits": handle_match_giving_deposits,

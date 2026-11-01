@@ -64,7 +64,8 @@ def test_the_toolbox_is_the_mcp_read_surface_minus_display():
     chief_only = private_coordination | {"view_website", "get_weather", "search_transactions",
                                          "housing_allowance_status", "find_housing_payments", "fund_status",
                                          "find_fund_payments", "bank_history", "bank_to_file",
-                                         "giving_deposits", "expense_categories", "bills"}
+                                         "giving_deposits", "expense_categories", "bills",
+                                         "giving_counts"}
     assert all(not action_registry.may_expose_to_agent(n) for n in chief_only)
     assert names == (exposed - {"show_view"}) | chief_only, (
         "The only extra reads are Chief's private ones: coordination tools (bots cannot see one "

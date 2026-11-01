@@ -3,7 +3,7 @@ from urllib.parse import quote
 from fastapi import HTTPException
 import sb_clients
 
-GIFT_FIELDS = "id,invoice_number,is_gift,gift_fund,updated_at,payment_method,total,paid_at,category,notes,refund_amount_cents,contact_id,contacts(name,email)"
+GIFT_FIELDS = "id,invoice_number,is_gift,gift_fund,updated_at,payment_method,total,paid_at,category,notes,refund_amount_cents,contact_id,giving_count_id,contacts(name,email)"
 
 def is_gift(row):
     return row.get("is_gift") is True
