@@ -198,9 +198,21 @@ def test_app_lines_become_rows_on_the_churchs_apps():
     d = sh.draft_from(got, PEOPLE, ["Tithes", "Building", "Missions"], apps)
     app_rows = [r for r in d["rows"] if r["method"] not in ("cash", "check")]
     assert [(r["line"], r["method"], r["amount_cents"]) for r in app_rows] == [
-        ("A1", "cashapp", 5000), ("A2", "zelle", 2500), ("A3", "other:Givelify", 1000), ("A4", "other", 500)]
+        ("A1", "cashapp", 5000), ("A2", "zelle", 2500), ("A3", "other:Givelify", 1000), ("A4", "other:Venmo", 500)]
     assert app_rows[0]["contact_id"] == "p1" and app_rows[0]["fund"] == "Building" and app_rows[0]["note"] == "...4821"
     assert app_rows[3]["app_known"] is False and app_rows[3]["app"] == "Venmo"      # not one of the church's apps
     assert d["cash_cents"] == 2000 and d["apps_cents"] == 9000                     # apps never in the plate
     assert {c["what"]: c["agrees"] for c in d["checks"]} == {"plate total": True, "apps": True}
+
+
+def test_many_long_app_names_stay_on_one_line_of_boxes(db):
+    db.t["businesses"][0]["settings"]["giving"]["ways"] = [
+        {"app": "cashapp"}, {"app": "zelle"}, {"app": "venmo"}, {"app": "paypal"},
+        {"app": "other", "label": "A Very Long Giving App Name Here"},
+        {"app": "other", "label": "Another Long Giving Platform Name"}, {"app": "other", "label": "Third App"}]
+    page = sh.count_sheet(BIZ, COUNT, USER).body.decode()
+    first_line = page.split('<td class="n">A1</td>', 1)[1].split("</tr>", 1)[0]
+    assert first_line.count("&#9744;") == sh.APP_BOXES + 1 and "Other ______" in first_line
+    assert "A Very Long Giving App N" in first_line and "Third App" not in first_line
+    assert "td.apps { font-size: 10px; line-height: 1.25; }" in page        # the cell wraps
 

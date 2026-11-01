@@ -69,6 +69,7 @@ MAX_PHOTO_BYTES = 8 * 1024 * 1024
 TYPES = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp"}
 SHEET_LINES = 15          # the plate: cash and checks counted at the service
 APP_LINES = 6             # gifts by app, copied from the app's activity (Kevin, 2026-11-01)
+APP_BOXES = 5             # app checkboxes on a line; more apps: "Other ____" (one page)
 DEFAULT_APPS = [{"id": "cashapp", "label": "Cash App"}, {"id": "zelle", "label": "Zelle"},
                 {"id": "paypal", "label": "PayPal"}, {"id": "venmo", "label": "Venmo"}]
 DEFAULT_MODEL = "claude-sonnet-5-5"
@@ -110,7 +111,11 @@ def sheet_html(business: Dict[str, Any], count: Dict[str, Any], *, lines: int = 
     rows = "".join(
         f'<tr><td class="n">{i}</td><td></td><td></td><td class="m"></td><td class="m"></td><td></td></tr>'
         for i in range(1, lines + 1))
-    boxes = " ".join(f'<span class="box">&#9744; {e(a["label"])}</span>' for a in sheet_apps(business))
+    apps = sheet_apps(business)
+    shown = apps[:APP_BOXES]
+    boxes = " ".join(f'<span class="box">&#9744; {e(a["label"][:24])}</span>' for a in shown)
+    if len(apps) > APP_BOXES:
+        boxes += ' <span class="box">&#9744; Other ______</span>'
     app_rows = "".join(
         f'<tr><td class="n">A{i}</td><td></td><td class="apps">{boxes}</td><td></td><td class="m"></td><td></td></tr>'
         for i in range(1, app_lines + 1))
@@ -137,7 +142,8 @@ td.n {{ width: 28px; text-align: center; color: #666; }}
 .note {{ font-size: 10px; color: #555; margin-top: 10px; }}
 h2 {{ font-size: 13px; margin: 10px 0 2px; }}
 .why {{ font-size: 10px; color: #444; margin: 0 0 4px; }}
-td.apps {{ font-size: 10px; white-space: nowrap; }}
+td.apps {{ font-size: 10px; line-height: 1.25; }}
+.box {{ display: inline-block; white-space: nowrap; }}
 .box {{ margin-right: 6px; }}
 .appt th:nth-child(2) {{ width: 30%; }}
 .grid th, .grid td {{ height: 17px; }}
@@ -166,7 +172,7 @@ td.apps {{ font-size: 10px; white-space: nowrap; }}
 <tr><th>Cash total</th><td class="m"></td></tr></tbody></table>
 </div>
 <div class="sign"><div>Counted by (print and sign)</div><div>Counted by (print and sign)</div></div>
-<p class="note">Online gifts are recorded on their own: don't write them here. Take a clear photo of this sheet from straight above, in good light, and upload it to this service's count.</p>
+<p class="note">More gifts than lines? Print another sheet for this service: every photo goes into the same count. Online gifts are recorded on their own: don't write them here. Take a clear photo of this sheet from straight above, in good light, and upload it to this service's count.</p>
 </body></html>"""
 
 
@@ -291,6 +297,12 @@ def _app_of(raw: Any, apps: List[Dict[str, str]]) -> Optional[Dict[str, str]]:
     return None
 
 
+def _other_method(raw: Any) -> Optional[str]:
+    """An app the church doesn't list, as an Other app by name."""
+    name = " ".join(re.sub(r"[^A-Za-z0-9 .&'-]", " ", str(raw or "")).split())[:40]
+    return f"other:{name}" if name else None
+
+
 def draft_from(got: Dict[str, Any], contacts: List[Dict[str, Any]], funds: List[str],
                apps: Optional[List[Dict[str, str]]] = None) -> Dict[str, Any]:
     """The tool's reading → the draft the screen shows. Pure. A line with
@@ -328,7 +340,9 @@ def draft_from(got: Dict[str, Any], contacts: List[Dict[str, Any]], funds: List[
                      "name": " ".join(str(ln.get("name") or "").split())[:120], "loose": False,
                      "fund": fund_by.get(fund_raw.lower()) or (fund_raw or funds[0]),
                      "fund_known": not fund_raw or fund_raw.lower() in fund_by,
-                     "unsure": ln.get("unsure") is True, "method": app["id"] if app else "other",
+                     # An app the church doesn't list keeps its name (other:<name>); the screen asks.
+                     "unsure": ln.get("unsure") is True,
+                     "method": app["id"] if app else (_other_method(ln.get("app")) or "other"),
                      "app": app["label"] if app else " ".join(str(ln.get("app") or "").split())[:40],
                      "app_known": bool(app), "amount_cents": amount, "check_number": None,
                      "note": " ".join(str(ln.get("note") or "").split())[:60] or None})
