@@ -184,3 +184,41 @@ def test_chief_says_where_its_switched_off(chief, monkeypatch):
     monkeypatch.setattr(giving_ways, "switched_on", lambda b: False)
     out = cgc.counts_sync(BIZ, {})
     assert out["failed"] and "isn't switched on" in out["result"]
+
+
+# ─── Review on #1680 ───────────────────────────────────────────────────
+
+def test_a_gift_that_lands_while_closing_keeps_the_count_open(db, monkeypatch):
+    db.t["invoices"] = [_gift("cash", 2000)]
+    real = gs._gifts_of
+    calls = {"n": 0}
+
+    def gifts_of(biz, ids):
+        calls["n"] += 1
+        if calls["n"] == 2:                      # after the close: a gift arrived
+            db.t["invoices"].append(_gift("cash", 500))
+        return real(biz, ids)
+    monkeypatch.setattr(gs, "_gifts_of", gifts_of)
+    with pytest.raises(HTTPException) as e:
+        gs.close_count(BIZ, COUNT, {"counted_cash_cents": 2000, "counted_checks_cents": 0, "counters": ["Ann"]}, USER)
+    assert e.value.status_code == 409 and "stays open" in e.value.detail
+    c = db.t["giving_counts"][0]
+    assert c["status"] == "open" and "came in while it was closing" in c["note"]
+
+
+def test_close_says_so_when_it_couldnt_be_saved(db, monkeypatch):
+    monkeypatch.setattr(db, "sb_patch_as_service", lambda path, body: None)
+    with pytest.raises(HTTPException) as e:
+        gs.close_count(BIZ, COUNT, {"counted_cash_cents": 0, "counted_checks_cents": 0, "counters": ["Ann"]}, USER)
+    assert e.value.status_code == 503
+
+
+def test_chief_asks_when_more_than_one_open_service_fits(chief):
+    chief.t["giving_counts"].append({**chief.t["giving_counts"][0], "id": "c0000000-0000-4000-8000-000000000002",
+                                     "name": "Sunday Evening", "service_id": "s2",
+                                     "starts_at": "2026-11-01T23:00:00+00:00"})
+    for action in ({"service": "sunday", "date": "2026-11-01"}, {}):
+        out = cgc.record_sync(BIZ, {**action, "gifts": [{"name": "loose", "amount": 5}]})
+        assert out["failed"] and "Say which" in out["result"]
+    assert not chief.t["invoices"]
+

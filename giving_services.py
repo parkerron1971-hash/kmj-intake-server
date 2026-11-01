@@ -666,7 +666,21 @@ def close_count(business_id: str, count_id: str, body: Dict[str, Any], user: Aut
         raise HTTPException(503, "The count couldn't be closed. Please try again.")
     if not saved:
         raise HTTPException(409, "This count just changed. Reload it.")
-    return {"ok": True, "count": _count_out(saved[0], _gifts_of(business_id, [count_id]))}
+    # A gift recorded (or placed) between the totals read above and the
+    # close would sit in a closed count the counters never signed for: read
+    # again, and if the cash or checks moved, open it again and say so.
+    after = _gifts_of(business_id, [count_id])
+    t2 = totals(after)
+    if (t2["cash"], t2["check"]) != (t["cash"], t["check"]):
+        back = sb_clients.sb_patch_as_service(
+            f"/giving_counts?id=eq.{_q(count_id)}&business_id=eq.{_q(business_id)}&status=eq.closed",
+            {"status": "open", "updated_at": datetime.now(timezone.utc).isoformat(),
+             "note": _note_add(saved[0].get("note"), "Opened again: a gift came in while it was closing")})
+        if not back:
+            logger.warning(f"[giving_services] count {count_id} closed against old totals and couldn't be reopened")
+        raise HTTPException(409, "A gift was added while the count was closing, so it stays open. Check the rows "
+                                 "and close it again.")
+    return {"ok": True, "count": _count_out(saved[0], after)}
 
 
 @router.post("/giving/{business_id}/counts/{count_id}/reopen")

@@ -179,12 +179,10 @@ def _target(data: Dict[str, Any], action: Dict[str, Any]) -> Tuple[Optional[Dict
         return None, "no service count matches that" + (f" ({day})" if day else "")
     if not open_:
         return None, "that service's count is closed; reopen it on the screen first"
-    if len(open_) > 1 and not (day and name):
-        choices = ", ".join(f"{c['name']} {_day(c['date'])}" for c in open_[:5])
-        if day or name:
-            return None, f"more than one open count fits: {choices}. Say which"
-        open_ = sorted(open_, key=lambda c: c["date"], reverse=True)
-        return open_[0], ""
+    if len(open_) > 1:
+        # Money never goes to a guessed service: ask, whatever was said.
+        choices = ", ".join(f"{c['name']} {_day(c['date'])}" for c in open_[:6])
+        return None, f"more than one open service count fits ({choices}). Say which service and date"
     return open_[0], ""
 
 
@@ -310,16 +308,24 @@ def undo_sync(biz_id: str, action: Dict[str, Any]) -> Dict[str, Any]:
                           reason=None, override_by=str(user.id))
     except HTTPException:
         return _fail(atype, "that day is in a closed period of the books; correct the gifts on the screen instead")
+    try:
+        if gs._count(biz_id, count_id).get("status") != "open":
+            return _fail(atype, f"{count.get('name')}'s count was just closed; reopen it on the screen to take gifts out")
+    except HTTPException:
+        return _fail(atype, "that service count can't be read just now; nothing changed")
     if ids:
         ok = sb_clients.sb_delete_as_service(
             f"/invoices?business_id=eq.{gs._q(biz_id)}&giving_count_id=eq.{gs._q(count_id)}"
             f"&invoice_number=like.GIVE-manual-*&id=in.({','.join(gs._q(i) for i in ids)})")
         if not ok:
             return _fail(atype, "the gifts couldn't be taken back just now; nothing changed")
-    sb_clients.sb_patch_as_service(f"/chief_undo_log?id=eq.{log['id']}", {
+    marked = sb_clients.sb_patch_as_service(f"/chief_undo_log?id=eq.{log['id']}", {
         "status": "undone", "undone_at": datetime.now(timezone.utc).isoformat()})
-    return {"type": atype, "result": f"Took back {len(ids)} gift{'' if len(ids) == 1 else 's'} from {count.get('name')}.",
-            "label": f"↩ {len(ids)} gifts", "nav": NAV}
+    text = f"Took back {len(ids)} gift{'' if len(ids) == 1 else 's'} from {count.get('name')}."
+    if not marked:
+        # The gifts are gone; a second undo of this batch finds nothing to delete.
+        print(f"[chief_giving_counts] undo log {log['id']} not marked undone", flush=True)
+    return {"type": atype, "result": text, "label": f"↩ {len(ids)} gifts", "nav": NAV}
 
 
 async def handle_giving_counts(client, biz, action) -> Dict[str, Any]:
