@@ -153,6 +153,7 @@ def test_the_ways_menu_follows_the_switch(monkeypatch):
     monkeypatch.setattr(giving_ways, "switched_on", lambda bid: False)
     off = giving_router.giving_ways_menu(BIZ, user)
     assert off["on"] is False and [m["id"] for m in off["methods"]] == ["cash", "check", "bank_transfer", "other"]
+    assert off["funds"] == ["General"]                    # no funds set: the default
     monkeypatch.setattr(giving_ways, "switched_on", lambda bid: True)
     on_ = giving_router.giving_ways_menu(BIZ, user)
     assert on_["on"] is True and "zelle" in [m["id"] for m in on_["methods"]]
@@ -412,3 +413,14 @@ def test_a_handle_is_escaped_on_the_page(on):
     ways = [{"app": "other", "label": "Give<b>", "handle": "a\"b<script>", "show": True}]
     html = giving_ways.ways_html(ways)
     assert "<script>" not in html and "&lt;b&gt;" in html
+
+
+def test_the_treasurer_gets_every_fund_the_church_set(monkeypatch):
+    fake = FakeSB(business=_church(settings={"giving": {"funds": ["Tithes", "Outreach", "Youth Department", "Offering"]}}))
+    monkeypatch.setattr(giving_router, "sb_clients", fake)
+    import giving_records
+    monkeypatch.setattr(giving_records, "require_finance", lambda b, u: "owner")
+    for on_ in (True, False):
+        monkeypatch.setattr(giving_ways, "switched_on", lambda bid, v=on_: v)
+        got = giving_router.giving_ways_menu(BIZ, SimpleNamespace(id="u1"))
+        assert got["funds"] == ["Tithes", "Outreach", "Youth Department", "Offering"]

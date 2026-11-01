@@ -1566,18 +1566,22 @@ def giving_amounts(business_id: str, year: Optional[int] = None, user: AuthedUse
 
 @router.get("/giving/{business_id}/ways")
 def giving_ways_menu(business_id: str, user: AuthedUser = Depends(require_user)):
-    """The treasurer's "how it was given" menu: Cash, Check, the church's
-    ways (giving_ways), Bank transfer, Other. `on` false: the plain four."""
+    """The treasurer's lists: "how it was given" (Cash, Check, the church's
+    ways, Bank transfer, Other; `on` false: the plain four) and `funds`, the
+    church's own funds as Settings, Giving lists them, so the treasurer
+    picks from all of them, not only the ones already on a gift (Kevin,
+    2026-11-01: "only general can be click the others are not showing up")."""
     from giving_records import require_finance
     import giving_ways
     require_finance(business_id, user)
-    if not giving_ways.switched_on(business_id):
-        return {"on": False, "methods": giving_ways.BASE_METHODS + giving_ways.TAIL_METHODS}
     rows = sb_clients.sb_get_as_service(f"/businesses?id=eq.{business_id}&select=settings&limit=1")
     if rows is None:
         raise HTTPException(503, "The ways to give couldn't be loaded. Please retry.")
     cfg = giving_settings((rows[0] if rows else {}).get("settings"))
-    return {"on": True, "methods": giving_ways.method_menu(giving_ways.stored_ways(cfg))}
+    funds = configured_funds(cfg)
+    if not giving_ways.switched_on(business_id):
+        return {"on": False, "methods": giving_ways.BASE_METHODS + giving_ways.TAIL_METHODS, "funds": funds}
+    return {"on": True, "methods": giving_ways.method_menu(giving_ways.stored_ways(cfg)), "funds": funds}
 
 
 def _manual_gift_fields(business_id, body, latest=None):
