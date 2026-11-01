@@ -165,6 +165,10 @@ def gather_and_format(business_id: str, business_type: Optional[str] = None) -> 
         else:
             lines.append("  These are counts; you can't read single bank rows here yet. Say so at once "
                          "(never 'let me search') and point them to Bookkeeping → Transactions search.")
+        if counts["uncategorized"] and chief_transactions.switched_on(business_id):
+            lines.append(f"  {counts['uncategorized']} bank rows wait for a category. When it fits the moment, "
+                         "offer to go through them: bank_to_file suggests where each payee went before, and you can "
+                         "remember a payee for next time (save_category_rule). Ask before filing.")
         if signals:
             lines.append(f"  Recent practitioner overrides of your proposals: {len(signals)} "
                          "(respect their preferences when proposing).")

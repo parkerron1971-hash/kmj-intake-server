@@ -398,6 +398,8 @@ from bank_statements import router as bank_statements_router
 app.include_router(bank_statements_router)
 from giving_deposits import router as giving_deposits_router
 app.include_router(giving_deposits_router)
+from expense_categories import router as expense_categories_router
+app.include_router(expense_categories_router)
 # The Reports pack: the year's numbers a church is asked for, from tables the
 # app already keeps (2026-10-27; CHURCH_REPORTS off | owner | on).
 from church_reports import router as church_reports_router

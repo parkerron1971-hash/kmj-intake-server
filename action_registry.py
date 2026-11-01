@@ -494,6 +494,18 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
                        "chief_only": True},
     "undo_file_bank_rows": {**_w("A", "puts back exactly the rows one filing batch answered, skipping any answered "
                                       "since"), "chief_only": True},
+    # Kevin, 2026-10-31: his own expense categories, Chief's suggestions of
+    # where a payment goes, and remembering it for next time.
+    "expense_categories": {**_r("reads the business's own expense categories with this year's totals, the labels in "
+                                "use and the every-time rules; bank figures never leave the app", sensitive=True),
+                           "chief_only": True},
+    "set_expense_category": {**_w("A", "makes, renames or merges an expense category; a rename or merge moves its "
+                                       "rows and rules in one batch that undo_category_change puts back"),
+                             "chief_only": True},
+    "save_category_rule": {**_w("A", "remembers where a payee's payments go: a rule that files its next payments; "
+                                     "undo_category_change forgets it"), "chief_only": True},
+    "undo_category_change": {**_w("A", "puts back one change to the categories or rules, skipping rows changed since"),
+                             "chief_only": True},
     # Kevin, 2026-10-31: the Sunday match, gifts recorded by person to the
     # deposits that carried them; Chief does it, matches what a person says,
     # or verifies; the database refuses a duplicate.
