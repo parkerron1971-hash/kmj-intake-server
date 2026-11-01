@@ -81,6 +81,21 @@ def _reader(biz: str, user: AuthedUser) -> Dict[str, Any]:
     return row
 
 
+def _saved_category(biz: str, category: Optional[str], subcategory: Optional[str]):
+    """A bill filed under one of the business's saved categories takes its
+    spelling and its line (expense_categories), the same as a bank row filed
+    under it, so the Profit & Loss never splits 'Utilities' from 'utilities'.
+    Anything else, or a list that can't be read, is kept as typed."""
+    if not (subcategory or "").strip():
+        return category, subcategory
+    try:
+        import expense_categories
+        hit = expense_categories.find(expense_categories.categories(biz), subcategory)
+    except Exception:
+        return category, subcategory
+    return (hit["bucket"], hit["name"]) if hit else (category, subcategory)
+
+
 def _owner_for_bill(bill_id: str, user: AuthedUser) -> Dict[str, Any]:
     rows = sb_clients.sb_get_as_service(
         f"/bills?id=eq.{bill_id}&select=id,business_id&limit=1") or []
@@ -230,7 +245,8 @@ class BillBody(BaseModel):
 @router.post("")
 def create_bill(body: BillBody, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     _owner(body.business_id, user)
-    if body.category not in _BUCKETS:
+    category, subcategory = _saved_category(body.business_id, body.category, body.subcategory)
+    if category not in _BUCKETS:
         raise HTTPException(400, f"category must be one of {_BUCKETS}")
     if body.is_recurring and body.recurrence_frequency not in _FREQS:
         raise HTTPException(400, f"recurring bills need a frequency in {_FREQS}")
@@ -239,8 +255,8 @@ def create_bill(body: BillBody, user: AuthedUser = Depends(require_user)) -> Dic
         "vendor_name": body.vendor_name,
         "description": body.description,
         "amount": body.amount,
-        "category": body.category,
-        "subcategory": body.subcategory,
+        "category": category,
+        "subcategory": subcategory,
         "due_date": body.due_date,
         "status": body.status if body.status in
             ("draft", "pending", "scheduled", "paid", "overdue", "cancelled") else "pending",
@@ -285,6 +301,10 @@ def update_bill(bill_id: str, body: BillPatchBody,
                       source_type="bill", source_id=bill_id, reason=body.override_reason,
                       override_by=str(user.id), pre=cur, post=body.model_dump())
     patch: Dict[str, Any] = {"updated_at": _now_iso()}
+    if body.subcategory:
+        saved_cat, body.subcategory = _saved_category(body.business_id, body.category, body.subcategory)
+        if saved_cat != body.category and saved_cat in _BUCKETS:
+            body.category = saved_cat
     for f in ("vendor_name", "amount", "description", "subcategory", "due_date",
               "is_1099_eligible", "recurrence_paused", "notes"):
         v = getattr(body, f)

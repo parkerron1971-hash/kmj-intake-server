@@ -514,6 +514,9 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
     # Kevin, 2026-10-31: the Sunday match, gifts recorded by person to the
     # deposits that carried them; Chief does it, matches what a person says,
     # or verifies; the database refuses a duplicate.
+    # Kevin, 2026-11-01: "it doesn't see the bill tab": Chief reads the Bills tab.
+    "bills": {**_r("reads the Bills tab: bills owed, overdue and due soon, the recurring ones and the total owed; "
+                   "never leaves the app", sensitive=True), "chief_only": True},
     "giving_deposits": {**_r("reads the church's recorded gifts against the bank deposits that carried them, "
                              "and verifies every match; gifts and bank rows never leave the app", sensitive=True),
                         "chief_only": True},
