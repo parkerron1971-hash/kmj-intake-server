@@ -218,6 +218,8 @@ def read_tool_definitions() -> List[Dict[str, Any]]:
     out += [giving_deposits.STATUS_TOOL]  # the Sunday match and its verification: the same
     import chief_bills
     out += [chief_bills.TOOL]  # the Bills tab (what's owed): the same
+    import chief_giving_counts
+    out += [chief_giving_counts.TOOL]  # the service counts (giving by service): the same
     return out
 
 
@@ -453,7 +455,8 @@ async def execute_tool_use(client, biz: Dict[str, Any],
                                               "search_transactions", "housing_allowance_status",
                                               "find_housing_payments", "fund_status",
                                               "find_fund_payments", "bank_history", "bank_to_file",
-                                              "giving_deposits", "expense_categories", "bills")):
+                                              "giving_deposits", "expense_categories", "bills",
+                                              "giving_counts")):
         return True, (f"'{name}' is not a mid-turn lookup. Reads only here; "
                       f"operations go through [ACTION:] tags in your reply.")
     if effect != action_registry.READ:

@@ -1679,6 +1679,13 @@ def correct_manual_gift(business_id: str, gift_id: str, body: Dict[str, Any], us
     original = rows[0]
     if not str(original.get("invoice_number", "")).startswith("GIVE-manual-"):
         raise HTTPException(409, "Online gifts are corrected through the payment provider")
+    # A gift in a closed service count is locked with the count
+    # (giving_services: the counters signed for it).
+    if original.get("giving_count_id"):
+        import giving_services
+        closed = giving_services.gift_in_closed_count(business_id, original)
+        if closed:
+            raise HTTPException(409, f"This gift is in {closed}'s closed count. Reopen the count to correct it.")
     reason = str(body.get("reason") or "").strip()
     if not reason:
         raise HTTPException(400, "Enter the reason for this correction")
