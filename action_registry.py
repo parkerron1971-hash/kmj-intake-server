@@ -517,6 +517,12 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
     # Kevin, 2026-11-01: "it doesn't see the bill tab": Chief reads the Bills tab.
     "bills": {**_r("reads the Bills tab: bills owed, overdue and due soon, the recurring ones and the total owed; "
                    "never leaves the app", sensitive=True), "chief_only": True},
+    # Bills step 2: a bill matched to the bank payment that paid it, so it counts once.
+    "match_bill_payment": {**_w("A", "matches owed bills to the bank payments that paid them (the ones the owner "
+                                     "confirmed, or only the plain ones); the bills read paid and count once in the "
+                                     "books; unmatch_bill_payment takes them back", bulk=True), "chief_only": True},
+    "unmatch_bill_payment": {**_w("A", "takes bill matches back: the bills are owed again, the bank payments keep "
+                                       "their filing"), "chief_only": True},
     "giving_deposits": {**_r("reads the church's recorded gifts against the bank deposits that carried them, "
                              "and verifies every match; gifts and bank rows never leave the app", sensitive=True),
                         "chief_only": True},

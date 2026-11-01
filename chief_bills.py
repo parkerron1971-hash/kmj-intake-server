@@ -154,9 +154,21 @@ def status(business_id: str) -> Dict[str, Any]:
             _d(b.get("paid_at")) >= today - timedelta(days=30)]
     total = round(sum(float(b.get("amount") or 0) for b in owed), 2)
 
+    # Bills step 2: an owed bill with one plain bank payment that paid it.
+    try:
+        import bill_payments
+        paid_by = bill_payments.suggestions(business_id, owed[:SHOWN])
+    except Exception as e:                           # a suggestion never breaks the lookup
+        print(f"[chief_bills] bank suggestions skipped for {business_id}: {e}")
+        paid_by = {}
+
     def row(b: Dict[str, Any]) -> Dict[str, Any]:
-        return {"id": b["id"], "vendor": b.get("vendor_name"), "amount": float(b.get("amount") or 0),
-                "due": b.get("due_date"), "line": line(b), "overdue": b in late}
+        out = {"id": b["id"], "vendor": b.get("vendor_name"), "amount": float(b.get("amount") or 0),
+               "due": b.get("due_date"), "line": line(b), "overdue": b in late}
+        hit = paid_by.get(str(b["id"]))
+        if hit:
+            out["looks_paid_by"] = {k: hit[k] for k in ("transaction_id", "date", "description", "amount")}
+        return out
     repeat = [{"vendor": b.get("vendor_name"), "amount": float(b.get("amount") or 0),
                "every": b.get("recurrence_frequency"), "paused": bool(b.get("recurrence_paused")),
                "next_due": (lambda d: d.isoformat() if d else None)(_next_due(b, today)), "line": line(b)}
@@ -169,6 +181,9 @@ def status(business_id: str) -> Dict[str, Any]:
         if late:
             text += " Overdue: " + "; ".join(f"{b.get('vendor_name')} {_money(b.get('amount'))} (due {b.get('due_date')})"
                                              for b in late[:6]) + "."
+        if paid_by:
+            text += (f" {len(paid_by)} owed bill(s) look already paid from the bank (see looks_paid_by): matching "
+                     "them makes each count once.")
         if soon:
             text += " Coming up: " + "; ".join(f"{b.get('vendor_name')} {_money(b.get('amount'))} on {b.get('due_date')}"
                                                for b in soon[:6]) + "."
@@ -182,7 +197,8 @@ def status(business_id: str) -> Dict[str, Any]:
                 "can file under one of the business's categories (its line and name). Adding a bill from chat isn't "
                 "here yet: say it's added on the Bills tab (Bookkeeping, Bills, New bill), where the category box "
                 "offers their saved categories. Don't suggest entering a bill for something already paid from the "
-                "bank and filed: the bank payment is already in the books.")}
+                "bank and filed: the bank payment is already in the books. Where a bill has looks_paid_by, offer to "
+                "match it (match_bill_payment) so it counts once; ask first.")}
 
 
 async def handle_bills(client, biz, action) -> Dict[str, Any]:

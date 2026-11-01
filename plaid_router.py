@@ -732,6 +732,17 @@ def update_transaction(
                       source_type="plaid_transaction", source_id=transaction_id,
                       reason=body.override_reason, override_by=str(user.id),
                       pre=cur[0], post=body.model_dump())
+    if body.excluded_from_books or body.money_kind:
+        # A payment that paid a bill (bill_payments.py) stays money out in the
+        # books: taking it out would leave the bill settled with no cash leg.
+        pays = sb_clients.sb_get_as_service(
+            f"/bills?business_id=eq.{tx.get('business_id')}&paid_transaction_id=eq.{transaction_id}"
+            "&select=id,vendor_name&limit=1")
+        if pays is None:
+            raise HTTPException(503, "That row couldn't be checked just now. Try again.")
+        if pays:
+            raise HTTPException(409, f"This payment paid the {pays[0].get('vendor_name') or 'a'} bill. Unmatch it on "
+                                     "the Bills tab first, so the bill isn't left paid with no payment.")
     patch: Dict[str, Any] = {"updated_at": _now_iso()}
     if body.business_category is not None:
         if body.business_category not in plaid_categorization.ALL_BUCKETS:
