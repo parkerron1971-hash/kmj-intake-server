@@ -470,6 +470,9 @@ app.include_router(giving_router)
 # schedule, each service day's count, online gifts placed in it.
 from giving_services import router as giving_services_router
 app.include_router(giving_services_router)
+# The paper count sheet and its photo, read into a draft (giving_sheets.py).
+from giving_sheets import router as giving_sheets_router
+app.include_router(giving_sheets_router)
 # Year-end giving statements by email (finance seats, explicit confirm).
 from giving_statement_mail import router as giving_statement_mail_router
 app.include_router(giving_statement_mail_router)

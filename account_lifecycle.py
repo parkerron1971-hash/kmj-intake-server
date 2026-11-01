@@ -478,7 +478,9 @@ BUSINESS_CHILD_TABLES: List[str] = [
     "expense_categories",
     # Its own names for the lines of its books, and lines of its own.
     "expense_lines",
-    # Giving by service (giving_services.py): a count cites its service.
+    # Giving by service (giving_services.py): a count cites its service, a
+    # sheet photo its count (the photos themselves are in giving-sheets).
+    "giving_count_photos",
     "giving_counts",
     "giving_services",
     "reconciliations",
@@ -924,6 +926,9 @@ _IMPORT_SKIP = {
     # id; the export keeps them, and a restored church sets its services
     # again (its gifts come back without a count; see the import).
     "giving_counts", "giving_services",
+    # A sheet photo cites its count and the file under the old business's
+    # storage prefix; the export keeps the rows.
+    "giving_count_photos",
     # A check request cites its person and its expense by id; same reason.
     # The export keeps them; a restored church keeps its limit and budget
     # lines. (Receipts live in business-documents under the church's own
