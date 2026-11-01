@@ -4,7 +4,7 @@ date: 2026-11-01
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-11-01: "if tithes and offering coming in sunday and it''s time to record that the system ask or allow selection for sunday or where ever type of service it is and they can record the giving for that sunday and put in mutliple people that sunday or service... the system should be able to recognize Sunday and already prepare for that service for giving. and when someone gives online the system see that and automatic connect the only giving to that service as a prefill... the treasurer should be able to set dates for possible services that are not reacurring... allow for them to set a reacurring service and time" then "build everything"'
 status: in review
-prs: [kmj-intake-server (this PR), solutionist-studio #1432 (the screens)]
+prs: ["kmj-intake-server (this PR)", "solutionist-studio #1432 (the screens)"]
 migrations: [supabase/APPLY-2026-11-01-giving-services.sql (applied 2026-11-01)]
 left_undone:
   - "Switched with GIVING_SERVICES (owner until a Thursday flip)"
