@@ -284,3 +284,101 @@ def test_nothing_answers_where_the_switch_is_off(db, monkeypatch):
     with pytest.raises(HTTPException) as e:
         gs.list_counts(BIZ, USER)
     assert e.value.status_code == 404
+
+
+# ─── Review on #1679 ───────────────────────────────────────────────────
+
+def test_windows_come_from_the_counts_made_not_todays_schedule(db):
+    """A removed service's closed count keeps its window: a gift left out of
+    it doesn't slide into the next count."""
+    sun1 = datetime(2026, 10, 25, 15, tzinfo=timezone.utc)
+    sun2 = datetime(2026, 11, 1, 16, tzinfo=timezone.utc)
+    wed = datetime(2026, 10, 28, 23, tzinfo=timezone.utc)      # a midweek service, since removed
+    db.t["giving_counts"] = [
+        {"id": "c-sun1", "business_id": BIZ, "collects_online": True, "status": "closed", "starts_at": sun1.isoformat()},
+        {"id": "c-wed", "business_id": BIZ, "collects_online": True, "status": "closed", "starts_at": wed.isoformat()},
+        {"id": "c-sun2", "business_id": BIZ, "collects_online": True, "status": "open", "starts_at": sun2.isoformat(),
+         "service_date": "2026-11-01"},
+    ]
+    db.t["invoices"] = [
+        {"id": "left-out", "business_id": BIZ, "is_gift": True, "giving_count_id": None, "invoice_number": "GIVE-pi_x",
+         "payment_method": "stripe", "paid_at": (sun1 + timedelta(days=2)).isoformat()},   # in Wednesday's window
+        {"id": "this-week", "business_id": BIZ, "is_gift": True, "giving_count_id": None, "invoice_number": "GIVE-pi_y",
+         "payment_method": "stripe", "paid_at": (sun2 - timedelta(days=1)).isoformat()},
+    ]
+    starts = gs._collecting_starts(BIZ)
+    assert gs.attach_online(db.t["businesses"][0], db.t["giving_counts"][2], starts) == 1
+    got = {r["id"]: r["giving_count_id"] for r in db.t["invoices"]}
+    assert got == {"left-out": None, "this-week": "c-sun2"}
+
+
+def test_a_moved_service_makes_no_counts_for_the_weeks_before_the_change(db):
+    svc = _service(created_at="2026-09-01T12:00:00+00:00", updated_at="2026-10-28T12:00:00+00:00")
+    gs.ensure_counts(db.t["businesses"][0], [svc], NY, date(2026, 11, 1))
+    assert [c["service_date"] for c in db.t["giving_counts"]] == ["2026-11-01"]
+
+
+def test_a_church_ahead_of_utc_records_sunday_on_sunday_morning(db, monkeypatch):
+    db.t["businesses"][0]["settings"] = {"timezone": "Pacific/Guam"}
+    count = {"id": str(uuid.uuid4()), "business_id": BIZ, "status": "open", "service_date": "2026-11-01",
+             "starts_at": "2026-10-31T23:00:00+00:00", "collects_online": False, "name": "Sunday Worship"}
+    db.t["giving_counts"] = [count]
+    real = gs.datetime
+
+    class Clock(real):                       # Sunday 9 AM in Guam is still Saturday in UTC
+        @classmethod
+        def now(cls, tz=None):
+            at = real(2026, 10, 31, 23, 0, tzinfo=timezone.utc)
+            return at.astimezone(tz) if tz else at.replace(tzinfo=None)
+    monkeypatch.setattr(gs, "datetime", Clock)
+    import giving_router as gr
+    monkeypatch.setattr(gr, "datetime", Clock)
+    out = gs.record_gifts(BIZ, count["id"], {"rows": [{"request_id": str(uuid.uuid4()), "amount_cents": 2000,
+                                                       "fund": "General", "method": "cash"}]}, USER)
+    assert out["saved"] == 1, out
+
+
+def test_someone_without_giving_access_is_refused(db, monkeypatch):
+    import giving_records
+
+    def refuse(b, u):
+        raise HTTPException(403, "Giving records require owner, admin, or accountant access.")
+    monkeypatch.setattr(giving_records, "require_finance", refuse)
+    for call in (lambda: gs.list_counts(BIZ, USER), lambda: gs.list_services(BIZ, USER),
+                 lambda: gs.record_gifts(BIZ, str(uuid.uuid4()), {"rows": [{}]}, USER)):
+        with pytest.raises(HTTPException) as e:
+            call()
+        assert e.value.status_code == 403
+
+
+def test_another_churchs_count_and_gift_are_not_found(db):
+    other = "0b1c2d3e-0000-4000-8000-000000000002"
+    theirs = {"id": str(uuid.uuid4()), "business_id": other, "status": "open", "service_date": "2026-11-01"}
+    gift = {"id": str(uuid.uuid4()), "business_id": other, "is_gift": True, "giving_count_id": theirs["id"]}
+    mine = {"id": str(uuid.uuid4()), "business_id": BIZ, "status": "open"}
+    db.t["giving_counts"] = [theirs, mine]
+    db.t["invoices"] = [gift]
+    for call in (lambda: gs.get_count(BIZ, theirs["id"], USER),
+                 lambda: gs.record_gifts(BIZ, theirs["id"], {"rows": [{"amount_cents": 100}]}, USER),
+                 lambda: gs.move_gift(BIZ, gift["id"], {"count_id": mine["id"]}, USER)):
+        with pytest.raises(HTTPException) as e:
+            call()
+        assert e.value.status_code == 404
+
+
+def test_a_failed_read_is_never_shown_as_nothing(db, monkeypatch):
+    db.t["giving_services"] = [_service()]
+    real_get = db.sb_get_as_service
+
+    def down(table):
+        def get(path, **k):
+            return None if path.startswith(f"/{table}?") else real_get(path, **k)
+        return get
+    monkeypatch.setattr(db, "sb_get_as_service", down("giving_counts"))
+    with pytest.raises(HTTPException) as e:
+        gs.list_counts(BIZ, USER)
+    assert e.value.status_code == 503
+    monkeypatch.setattr(db, "sb_get_as_service", real_get)
+    db.t["giving_counts"] = [{"id": "c", "business_id": BIZ, "starts_at": "2026-11-01T16:00:00+00:00"}]
+    monkeypatch.setattr(db, "sb_get_as_service", down("invoices"))
+    assert gs._unplaced_count(BIZ, db.t["giving_counts"]) is None

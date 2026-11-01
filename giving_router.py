@@ -1580,7 +1580,9 @@ def giving_ways_menu(business_id: str, user: AuthedUser = Depends(require_user))
     return {"on": True, "methods": giving_ways.method_menu(giving_ways.stored_ways(cfg))}
 
 
-def _manual_gift_fields(business_id, body):
+def _manual_gift_fields(business_id, body, latest=None):
+    """`latest`: the last day a gift may be dated (default UTC's today; a
+    service count passes the church's own today)."""
     from decimal import Decimal, InvalidOperation
     from datetime import date
     try:
@@ -1588,7 +1590,7 @@ def _manual_gift_fields(business_id, body):
         if not cents.is_finite() or cents != cents.to_integral_value() or not 1 <= cents <= MAX_GIFT_CENTS:
             raise ValueError()
         day = date.fromisoformat(str(body.get("received_on", "")))
-        if day.year < 2000 or day > datetime.now(timezone.utc).date():
+        if day.year < 2000 or day > (latest or datetime.now(timezone.utc).date()):
             raise ValueError()
     except (ValueError, InvalidOperation):
         raise HTTPException(400, "Enter a valid amount and received date (not in the future)")
@@ -1634,7 +1636,7 @@ def create_manual_gift(business_id: str, body: Dict[str, Any], user: AuthedUser 
 
 def record_manual_gift(business_id: str, body: Dict[str, Any], user: AuthedUser, *,
                        extra: Optional[Dict[str, Any]] = None, notes: Optional[List[str]] = None,
-                       type_checked: bool = False) -> Dict[str, Any]:
+                       type_checked: bool = False, latest: Optional[Any] = None) -> Dict[str, Any]:
     """The one way a gift is recorded by hand: the form above, and a service
     count (giving_services.record_gifts, which passes the count in `extra`
     and checks the business once for all its rows). The caller has checked
@@ -1648,7 +1650,7 @@ def record_manual_gift(business_id: str, body: Dict[str, Any], user: AuthedUser,
     try: request_id = str(uuid.UUID(str(body.get("request_id"))))
     except ValueError: raise HTTPException(400, "A request identifier is required")
     number = f"GIVE-manual-{request_id}"
-    fields = _manual_gift_fields(business_id, body)
+    fields = _manual_gift_fields(business_id, body, latest=latest)
     way_name = fields.pop("_way_name", None)
     existing = sb_clients.sb_get_as_service(f"/invoices?business_id=eq.{business_id}&invoice_number=eq.{number}&select=id&limit=1")
     if existing is None:

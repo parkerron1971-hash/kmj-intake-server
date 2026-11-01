@@ -204,21 +204,24 @@ def totals(gifts: List[Dict[str, Any]]) -> Dict[str, int]:
 
 def _services(business_id: str) -> List[Dict[str, Any]]:
     return _need(f"/giving_services?business_id=eq.{_q(business_id)}&archived_at=is.null"
-                 f"&select=id,name,kind,weekday,on_date,start_time,collects_online,created_at,archived_at"
+                 f"&select=id,name,kind,weekday,on_date,start_time,collects_online,created_at,updated_at,archived_at"
                  f"&order=created_at.asc&limit={MAX_SERVICES * 2}")
 
 
 def _first_day(service: Dict[str, Any], tz: ZoneInfo) -> date:
-    """A weekly service counts from the day it was added, never before; a
-    one-time service from its own date (it may be a past night being
-    recorded now)."""
+    """A weekly service counts from the day it was added or last changed,
+    never before: a service moved from Wednesday to Sunday makes no Sunday
+    counts for the weeks before the change. A one-time service counts from
+    its own date (it may be a past night being recorded now)."""
     if service.get("kind") == "once":
         return date.min
-    try:
-        made = datetime.fromisoformat(str(service.get("created_at")).replace("Z", "+00:00"))
-        return made.astimezone(tz).date()
-    except ValueError:
-        return date.min
+    days = []
+    for key in ("created_at", "updated_at"):
+        try:
+            days.append(datetime.fromisoformat(str(service.get(key)).replace("Z", "+00:00")).astimezone(tz).date())
+        except ValueError:
+            continue
+    return max(days) if days else date.min
 
 
 def ensure_counts(biz: Dict[str, Any], services: List[Dict[str, Any]], tz: ZoneInfo,
@@ -279,9 +282,20 @@ def attach_online(biz: Dict[str, Any], count: Dict[str, Any], collecting_starts:
     return len(out)
 
 
-def _collecting_starts(services: List[Dict[str, Any]], tz: ZoneInfo, around: date) -> List[datetime]:
-    occ = occurrences(services, tz, around - timedelta(days=LOOK_BACK_DAYS + 14), around + timedelta(days=COMING_DAYS))
-    return [o["starts_at"] for o in occ if o["collects_online"]]
+def _collecting_starts(business_id: str) -> List[datetime]:
+    """When each collecting count that exists started. The windows come from
+    the counts already made, never from today's schedule: a service removed
+    or moved keeps its past windows, so a gift left out of a closed count
+    stays out instead of sliding into the next one."""
+    rows = _need(f"/giving_counts?business_id=eq.{_q(business_id)}&collects_online=eq.true"
+                 f"&select=starts_at&order=starts_at.desc&limit=1000")
+    out: List[datetime] = []
+    for r in rows:
+        try:
+            out.append(datetime.fromisoformat(str(r.get("starts_at")).replace("Z", "+00:00")))
+        except ValueError:
+            continue
+    return out
 
 
 def _gift_out(g: Dict[str, Any]) -> Dict[str, Any]:
@@ -432,7 +446,7 @@ def list_counts(business_id: str, user: AuthedUser = Depends(require_user)):
     counts = _need(f"/giving_counts?business_id=eq.{_q(business_id)}&service_date=gte.{start.isoformat()}"
                    f"&select={COUNT_FIELDS}&order=starts_at.desc&limit=200")
     counts.sort(key=lambda c: str(c.get("starts_at") or ""), reverse=True)
-    starts = _collecting_starts(services, tz, today)
+    starts = _collecting_starts(business_id)
     for c in counts:
         if c.get("status") == "open" and c.get("collects_online"):
             attach_online(biz, c, starts)
@@ -451,15 +465,18 @@ def list_counts(business_id: str, user: AuthedUser = Depends(require_user)):
             "unplaced": _unplaced_count(business_id, counts)}
 
 
-def _unplaced_count(business_id: str, counts: List[Dict[str, Any]]) -> int:
-    """Online gifts since the oldest count listed that no count holds."""
+def _unplaced_count(business_id: str, counts: List[Dict[str, Any]]) -> Optional[int]:
+    """Online gifts since the oldest count listed that no count holds. None
+    when they couldn't be read: never "0" for a read that failed."""
     if not counts:
         return 0
     oldest = min(str(c.get("starts_at")) for c in counts)
     rows = sb_clients.sb_get_as_service(
         f"/invoices?business_id=eq.{_q(business_id)}&is_gift=eq.true&giving_count_id=is.null"
         f"&paid_at=gte.{_q(oldest)}&select=id,invoice_number,payment_method&limit=1000")
-    return sum(1 for r in (rows or []) if is_online(r))
+    if rows is None:
+        return None
+    return sum(1 for r in rows if is_online(r))
 
 
 @router.get("/giving/{business_id}/counts/{count_id}")
@@ -468,8 +485,7 @@ def get_count(business_id: str, count_id: str, user: AuthedUser = Depends(requir
     tz = zone_of(biz)
     count = _count(business_id, count_id)
     if count.get("status") == "open" and count.get("collects_online"):
-        attach_online(biz, count, _collecting_starts(_services(business_id), tz,
-                                                     date.fromisoformat(str(count["service_date"])[:10])))
+        attach_online(biz, count, _collecting_starts(business_id))
     gifts = sorted(_gifts_of(business_id, [count_id]), key=lambda g: (not is_online(g), str(g.get("paid_at"))))
     return {"count": _count_out(count, gifts), "gifts": [_gift_out(g) for g in gifts]}
 
@@ -520,6 +536,9 @@ def record_gifts(business_id: str, count_id: str, body: Dict[str, Any],
         raise HTTPException(400, f"Record up to {MAX_ROWS} gifts at a time.")
     import giving_router
     day = str(count["service_date"])[:10]
+    # A count's day is never after the church's today; a church ahead of UTC
+    # records Sunday's gifts on Sunday morning, before UTC's Sunday.
+    today = datetime.now(zone_of(biz)).date()
     results: List[Dict[str, Any]] = []
     for raw in rows:
         rid = str((raw or {}).get("request_id") or "") if isinstance(raw, dict) else ""
@@ -532,7 +551,7 @@ def record_gifts(business_id: str, count_id: str, body: Dict[str, Any],
                 notes.append(f"Check #{row['check_number']}")
             out = giving_router.record_manual_gift(
                 business_id, {**row, "received_on": day}, user,
-                extra={"giving_count_id": count_id}, notes=notes, type_checked=True)
+                extra={"giving_count_id": count_id}, notes=notes, type_checked=True, latest=today)
             results.append({"request_id": rid, "ok": True, "id": out.get("id"), "already": bool(out.get("already"))})
         except ValueError as e:
             results.append({"request_id": rid, "ok": False, "error": str(e)})
