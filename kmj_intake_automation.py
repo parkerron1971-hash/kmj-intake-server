@@ -466,6 +466,10 @@ app.include_router(churchsavvy_site_router)
 # public_site_router so nothing falls into the subdomain catch-all.
 from giving_router import router as giving_router
 app.include_router(giving_router)
+# Giving recorded by service (/giving/{id}/services, /counts, ...): the
+# schedule, each service day's count, online gifts placed in it.
+from giving_services import router as giving_services_router
+app.include_router(giving_services_router)
 # Year-end giving statements by email (finance seats, explicit confirm).
 from giving_statement_mail import router as giving_statement_mail_router
 app.include_router(giving_statement_mail_router)

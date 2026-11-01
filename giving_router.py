@@ -1627,12 +1627,24 @@ def _manual_gift_fields(business_id, body):
 @router.post("/giving/{business_id}/records")
 def create_manual_gift(business_id: str, body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
     from giving_records import require_finance
-    from vertical_family import is_nonprofit_like
     require_finance(business_id, user)
     church_keys.wall(business_id, user, "giving_money")
-    biz = sb_clients.sb_get_as_service(f"/businesses?id=eq.{business_id}&select=type&limit=1")
-    if not biz or not is_nonprofit_like(biz[0].get("type")):
-        raise HTTPException(409, "Giving is available to ministries and nonprofits")
+    return record_manual_gift(business_id, body, user)
+
+
+def record_manual_gift(business_id: str, body: Dict[str, Any], user: AuthedUser, *,
+                       extra: Optional[Dict[str, Any]] = None, notes: Optional[List[str]] = None,
+                       type_checked: bool = False) -> Dict[str, Any]:
+    """The one way a gift is recorded by hand: the form above, and a service
+    count (giving_services.record_gifts, which passes the count in `extra`
+    and checks the business once for all its rows). The caller has checked
+    who may record. `request_id` makes it safe to repeat: a second call
+    with the same id answers {already: True} and records nothing."""
+    from vertical_family import is_nonprofit_like
+    if not type_checked:
+        biz = sb_clients.sb_get_as_service(f"/businesses?id=eq.{business_id}&select=type&limit=1")
+        if not biz or not is_nonprofit_like(biz[0].get("type")):
+            raise HTTPException(409, "Giving is available to ministries and nonprofits")
     try: request_id = str(uuid.UUID(str(body.get("request_id"))))
     except ValueError: raise HTTPException(400, "A request identifier is required")
     number = f"GIVE-manual-{request_id}"
@@ -1643,9 +1655,9 @@ def create_manual_gift(business_id: str, body: Dict[str, Any], user: AuthedUser 
         raise HTTPException(503, "Giving records are temporarily unavailable")
     if existing:
         return {"ok": True, "id": existing[0]["id"], "already": True}
-    row = {**fields, "business_id": business_id, "invoice_number": number, "is_gift": True,
-           "status": "paid", "tax_rate": 0, "tax_amount": 0, "currency": "USD",
-           "notes": f"Manual gift recorded by {user.id}" + (f"\nGiven through {way_name}" if way_name else "")}
+    lines = [f"Manual gift recorded by {user.id}"] + ([f"Given through {way_name}"] if way_name else []) + list(notes or [])
+    row = {**fields, **(extra or {}), "business_id": business_id, "invoice_number": number, "is_gift": True,
+           "status": "paid", "tax_rate": 0, "tax_amount": 0, "currency": "USD", "notes": "\n".join(lines)}
     saved = sb_clients.sb_post_as_service("/invoices", row)
     if not saved:
         raise HTTPException(503, "Gift could not be saved. Retry with the same request.")
