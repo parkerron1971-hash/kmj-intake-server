@@ -32,6 +32,10 @@ Who may: the Transactions screen's readers read; the owner changes
 (plaid_router gates, the church money wall included), as the person talking.
 Switched with the bank search (CHIEF_BANK_SEARCH). Table:
 supabase/APPLY-2026-10-31-expense-categories.sql.
+
+THE CARD (Bookkeeping -> Transactions -> Rules, 2026-11-01): the same list,
+add, rename, merge and undo on screen (POST /expense-categories/change and
+/undo). Its changes go in Chief's undo log, so either one takes them back.
 """
 from __future__ import annotations
 
@@ -61,7 +65,7 @@ NAME_MAX = 60
 HISTORY_ROWS = 5000
 UNDO_DAYS = 30
 _UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
-NAV = {"tab": "operate", "sub": "bookkeeping", "bkTab": "reports"}
+NAV = {"tab": "operate", "sub": "bookkeeping", "bkTab": "transactions", "bkView": "rules"}   # the card
 # The rows a rename or merge may touch, and the fields an undo may put back.
 _TABLES = {
     "plaid_transactions": ("transaction_id", ("business_category", "business_subcategory")),
@@ -260,7 +264,7 @@ def _partial(atype: str, batch: str, changes: List[Dict[str, Any]], failed: int,
     takes it back), the category is left as it was, and asking again finishes."""
     text = (f"Partway through {what}: {len(changes)} rows and rules moved, {failed} didn't save. The category "
             "is as it was, so ask again to finish; one undo takes back what moved.")
-    out = {"type": atype, "result": text, "label": "🗂 Partly done", "nav": NAV}
+    out = {"type": atype, "result": text, "label": "🗂 Partly done", "partial": True, "nav": NAV}
     if changes:
         out.update(batch_id=batch, changes=changes)
     else:
@@ -293,34 +297,50 @@ def _uid() -> Any:
 
 
 def set_category(business_id: str, action: Dict[str, Any]) -> Dict[str, Any]:
-    """Make one ("name", "bucket"); rename one ("category", "name"); merge one
-    into another ("category", "into"). Rename and merge move its rows."""
-    atype = "set_expense_category"
+    """Chief's verb: make one ("name", "bucket"); rename one ("category",
+    "name"); merge one into another ("category", "into"). Rename and merge
+    move its rows."""
     refused = _gate(business_id, write=True)
     if refused:
-        return _fail(atype, refused)
+        return _fail("set_expense_category", refused)
+    return change(business_id, _uid(), action)
+
+
+def change(business_id: str, user_id: Any, action: Dict[str, Any], *, say_undo: bool = True) -> Dict[str, Any]:
+    """The change itself, for Chief's verb and the screen's card (each gates
+    first). "category" may also be a label in use that isn't on the list, to
+    merge it "into" a saved one ('Utility bills' into 'Utilities')."""
+    atype = "set_expense_category"
     try:
         cats = categories(business_id)
         current = find(cats, action.get("category")) if action.get("category") else None
+        loose = None                                    # a label in use, not on the list
         if action.get("category") and not current:
-            return _fail(atype, f"there's no category called '{name_of(action.get('category'))}' yet")
+            if not action.get("into"):
+                return _fail(atype, f"there's no category called '{name_of(action.get('category'))}' yet")
+            loose = name_of(action.get("category"))
         batch = uuid.uuid4().hex
-        if current and action.get("into"):
+        if (current or loose) and action.get("into"):
             into = find(cats, action.get("into"))
             if not into:
                 return _fail(atype, f"there's no category called '{name_of(action.get('into'))}' to merge into")
-            if into["id"] == current["id"]:
+            if current and into["id"] == current["id"]:
                 return _fail(atype, "that's the same category")
-            changes, moved, failed = relabel(business_id, [current["name"]], into["name"], into["bucket"])
+            old = current["name"] if current else loose
+            changes, moved, failed = relabel(business_id, [old], into["name"], into["bucket"])
             if failed:
-                return _partial(atype, batch, changes, failed, f"merging {current['name']} into {into['name']}")
-            stamp = datetime.now(timezone.utc).isoformat()
-            if _patch_row(business_id, "expense_categories", current["id"], {"archived_at": None}, {"archived_at": stamp}):
-                changes.append({"table": "expense_categories", "id": current["id"], "before": {"archived_at": None},
-                                "after": {"archived_at": stamp}})
-            else:
-                return _partial(atype, batch, changes, 1, f"merging {current['name']} into {into['name']}")
-            text = (f"Merged {current['name']} into {into['name']}: {sum(1 for c in changes if c['table'] != 'expense_categories')} "
+                return _partial(atype, batch, changes, failed, f"merging {old} into {into['name']}")
+            if current:
+                stamp = datetime.now(timezone.utc).isoformat()
+                if _patch_row(business_id, "expense_categories", current["id"], {"archived_at": None},
+                              {"archived_at": stamp}):
+                    changes.append({"table": "expense_categories", "id": current["id"],
+                                    "before": {"archived_at": None}, "after": {"archived_at": stamp}})
+                else:
+                    return _partial(atype, batch, changes, 1, f"merging {old} into {into['name']}")
+            elif not changes and not moved:
+                return _fail(atype, f"nothing is filed under '{loose}'")
+            text = (f"Merged {old} into {into['name']}: {sum(1 for c in changes if c['table'] != 'expense_categories')} "
                     f"rows and rules now say {into['name']}, under {BUCKET_SAID[into['bucket']]}.")
         elif current:
             new = name_of(action.get("name"))
@@ -345,7 +365,7 @@ def set_category(business_id: str, action: Dict[str, Any]) -> Dict[str, Any]:
             text = (f"{current['name']} is now {new} under {BUCKET_SAID[bucket]}: {len(moved_rows)} rows and rules "
                     "moved with it.")
         else:
-            row, made = create(business_id, _uid(), action.get("name"), action.get("bucket"))
+            row, made = create(business_id, user_id, action.get("name"), action.get("bucket"))
             if not made:
                 return {"type": atype, "result": f"{row['name']} is already a category, under "
                                                   f"{BUCKET_SAID.get(row['bucket'], row['bucket'])}.",
@@ -359,8 +379,8 @@ def set_category(business_id: str, action: Dict[str, Any]) -> Dict[str, Any]:
     except Unavailable:
         return _fail(atype, "the categories couldn't be read or saved just now; ask again to finish")
     if moved:
-        text += f" {moved} changed while I worked and were left as they are."
-    return {"type": atype, "result": text + " One undo puts it back.", "label": "🗂 Categories",
+        text += f" {moved} changed meanwhile and were left as they are."
+    return {"type": atype, "result": text + (" One undo puts it back." if say_undo else ""), "label": "🗂 Categories",
             "batch_id": batch, "changes": changes, "nav": NAV}
 
 
@@ -481,13 +501,19 @@ def rule_for(rule_map: Dict[str, Dict[str, Any]], merchant: Any, name: Any,
 # ─── Undo ─────────────────────────────────────────────────────────────
 
 def undo(business_id: str, action: Dict[str, Any]) -> Dict[str, Any]:
-    atype = "undo_category_change"
     refused = _gate(business_id, write=True)
     if refused:
-        return _fail(atype, refused)
-    batch_id = str(action.get("batch_id") or "").strip()
+        return _fail("undo_category_change", refused)
+    return take_back(business_id, action.get("batch_id"))
+
+
+def take_back(business_id: str, batch_id: Any) -> Dict[str, Any]:
+    """Puts one recorded change back (Chief's or the card's), skipping a row
+    changed since. Each caller gates first."""
+    atype = "undo_category_change"
+    batch_id = str(batch_id or "").strip()
     if not re.fullmatch(r"[0-9a-f]{32}", batch_id):
-        return _fail(atype, "that isn't a change to the categories I recorded")
+        return _fail(atype, "that isn't a recorded change to the categories")
     since = (datetime.now(timezone.utc) - timedelta(days=UNDO_DAYS)).strftime("%Y-%m-%dT%H:%M:%SZ")
     try:
         logs = _get(f"/chief_undo_log?business_id=eq.{_q(business_id)}"
@@ -497,7 +523,7 @@ def undo(business_id: str, action: Dict[str, Any]) -> Dict[str, Any]:
         return _fail(atype, "the record of that change couldn't be read just now; nothing changed")
     log = next((r for r in logs if (r.get("result_json") or {}).get("batch_id") == batch_id), None)
     if not log:
-        return _fail(atype, f"there's no such change of mine from the last {UNDO_DAYS} days left to undo")
+        return _fail(atype, f"there's no such change from the last {UNDO_DAYS} days left to undo")
     back, skipped, failed = 0, 0, 0
     for c in reversed(log["result_json"].get("changes") or []):
         table, rid = c.get("table"), str(c.get("id") or "")
@@ -525,9 +551,9 @@ def undo(business_id: str, action: Dict[str, Any]) -> Dict[str, Any]:
         return _fail(atype, f"only part of it went back ({back} rows); ask again to finish")
     sb_clients.sb_patch_as_service(f"/chief_undo_log?id=eq.{log['id']}", {
         "status": "undone", "undone_at": datetime.now(timezone.utc).isoformat()})
-    text = f"Put back {back} change(s) to the categories."
+    text = f"Put back {back} change{'' if back == 1 else 's'} to the categories."
     if skipped:
-        text += f" {skipped} had been changed since, so I left them as they are now."
+        text += f" {skipped} had been changed since, so they were left as they are now."
     return {"type": atype, "result": text, "label": f"↩ Put back {back}", "nav": NAV}
 
 
@@ -546,12 +572,19 @@ def _route_gate(business_id: str, user: Any, *, write: bool) -> Dict[str, Any]:
     return (plaid_router._require_owner if write else plaid_router._require_reader)(business_id, user)
 
 
+def _card_on(business_id: str) -> bool:
+    """The card switches on with Chief's categories (CHIEF_BANK_SEARCH)."""
+    import chief_transactions
+    return bool(chief_transactions.switched_on(business_id))
+
+
 @router.get("")
 def get_categories(business_id: str = Query(...), year: Optional[int] = Query(None, ge=2000, le=2100),
                    user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     row = _route_gate(business_id, user, write=False)
     try:
-        return {"ok": True, "can_change": str(row.get("owner_id")) == str(user.id), **picture(business_id, year)}
+        return {"ok": True, "can_change": str(row.get("owner_id")) == str(user.id),
+                "card": _card_on(business_id), **picture(business_id, year)}
     except Unavailable:
         raise HTTPException(503, "The categories can't be read just now. If this is new, its table may not be set up yet.")
 
@@ -564,6 +597,77 @@ def post_category(body: CategoryBody, user: AuthedUser = Depends(require_user)) 
     except Unavailable:
         raise HTTPException(503, "The category didn't save. Try again.")
     return {"ok": True, "category": row, "made": made}
+
+
+class ChangeBody(BaseModel):
+    business_id: str
+    category: str = Field(max_length=NAME_MAX * 2)
+    name: Optional[str] = Field(default=None, max_length=NAME_MAX * 2)
+    bucket: Optional[str] = Field(default=None, max_length=12)
+    into: Optional[str] = Field(default=None, max_length=NAME_MAX * 2)
+
+
+class UndoBody(BaseModel):
+    business_id: str
+    batch_id: str = Field(max_length=64)
+
+
+def _card_gate(business_id: str, user: Any) -> None:
+    _route_gate(business_id, user, write=True)
+    if not _card_on(business_id):
+        raise HTTPException(403, "Changing categories here isn't switched on for this business yet.")
+
+
+def _said(out: Dict[str, Any]) -> str:
+    r = str(out.get("result") or "")
+    r = r[len("Failed: "):] if r.startswith("Failed: ") else r
+    return r[:1].upper() + r[1:]
+
+
+def _record(business_id: str, user_id: Any, action: Dict[str, Any], out: Dict[str, Any]) -> bool:
+    """The card's change goes in the same undo log as Chief's, so its Undo
+    button and 'Chief, undo that' both take it back."""
+    if out.get("failed") or not out.get("batch_id") or not out.get("changes"):
+        return False
+    try:
+        res = sb_clients.sb_post_as_service("/chief_undo_log", {
+            "business_id": business_id, "user_id": str(user_id), "action_type": "set_expense_category",
+            "action_json": action, "result_json": out, "status": "undoable"})
+    except Exception as e:                                # the change stands; only its undo is lost
+        print(f"[expense_categories] undo log write failed: {e}")
+        return False
+    return bool(res)
+
+
+@router.post("/change")
+def post_change(body: ChangeBody, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    """Rename one (a new name and/or bucket) or merge one into another, from
+    the card. A label in use but not on the list can be merged too."""
+    _card_gate(body.business_id, user)
+    if not name_of(body.category):
+        raise HTTPException(422, "Say which category to change.")
+    if not (name_of(body.name) or name_of(body.into)):
+        raise HTTPException(422, "Give it a new name, or say which category to merge it into.")
+    action = {k: v for k, v in {"category": body.category, "name": body.name, "bucket": body.bucket,
+                                "into": body.into}.items() if v}
+    out = change(body.business_id, user.id, action, say_undo=False)
+    if out.get("failed"):
+        raise HTTPException(409, _said(out))
+    logged = _record(body.business_id, user.id, action, out)
+    text = _said(out)
+    if out.get("changes") and not logged:               # it stands, but nothing can take it back: say so
+        text += " Its undo record didn't save, so this one can't be undone from here or by Chief."
+    return {"ok": True, "said": text, "batch_id": out["batch_id"] if logged else None,
+            "partial": bool(out.get("partial"))}
+
+
+@router.post("/undo")
+def post_undo(body: UndoBody, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    _card_gate(body.business_id, user)
+    out = take_back(body.business_id, body.batch_id)
+    if out.get("failed"):
+        raise HTTPException(409, _said(out))
+    return {"ok": True, "said": out["result"]}
 
 
 # ─── Chief ────────────────────────────────────────────────────────────

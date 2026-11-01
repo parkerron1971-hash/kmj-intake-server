@@ -18,6 +18,8 @@ Pins:
   * remembering: a rule by the payee's wording that the bank feed and
     statements apply; one undo forgets it
   * readers read, the owner changes; the wiring holds
+  * the card: rename, a new bucket, merge (a label not on the list too),
+    its Undo button through Chief's undo log; owner only, where switched on
 """
 from __future__ import annotations
 
@@ -302,6 +304,89 @@ def test_the_routes_let_readers_read_and_only_the_owner_add(db):
     assert made.status_code == 200 and made.json()["made"] is True
     assert client("00000000-0000-4000-8000-000000000009").get("/expense-categories",
                                                                params={"business_id": BIZ}).status_code == 403
+
+
+# ─── The card ────────────────────────────────────────────────────────
+
+def _client(uid):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from auth_supabase import AuthedUser, require_user
+    app = FastAPI()
+    app.include_router(ec.router)
+    app.dependency_overrides[require_user] = lambda: AuthedUser(id=uid, email="x@y.z", role="authenticated")
+    return TestClient(app)
+
+
+def test_the_card_renames_and_its_undo_button_puts_it_back(db):
+    ec.create(BIZ, OWNER, "Office supplies", "operating")
+    got = _client(OWNER).post("/expense-categories/change", json={
+        "business_id": BIZ, "category": "office supplies", "name": "Ministry supplies", "bucket": "operating"})
+    assert got.status_code == 200, got.text
+    body = got.json()
+    assert body["said"].startswith("Office supplies is now Ministry supplies") and "undo" not in body["said"].lower()
+    assert {_row(db, t)["business_subcategory"] for t in ("p3", "p4")} == {"Ministry supplies"}
+    # Recorded in Chief's undo log, by the person who clicked.
+    log = db.t["chief_undo_log"][-1]
+    assert (log["action_type"], log["user_id"], log["status"]) == ("set_expense_category", OWNER, "undoable")
+    assert log["result_json"]["batch_id"] == body["batch_id"]
+    log["created_at"] = "2099-01-01T00:00:00Z"
+    back = _client(OWNER).post("/expense-categories/undo", json={"business_id": BIZ, "batch_id": body["batch_id"]})
+    assert back.status_code == 200, back.text
+    assert {_row(db, t)["business_subcategory"] for t in ("p3", "p4")} == {"Office supplies", "office supply"}
+    assert db.t["expense_categories"][0]["name"] == "Office supplies"
+    again = _client(OWNER).post("/expense-categories/undo", json={"business_id": BIZ, "batch_id": body["batch_id"]})
+    assert again.status_code == 409 and "no such change" in again.json()["detail"]
+
+
+def test_the_card_moves_a_bucket_and_merges_a_label_not_on_the_list(db):
+    ec.create(BIZ, OWNER, "Office supplies", "operating")
+    ec.create(BIZ, OWNER, "Utilities", "operating")
+    moved = _client(OWNER).post("/expense-categories/change", json={
+        "business_id": BIZ, "category": "Utilities", "name": "Utilities", "bucket": "tax"})
+    assert moved.status_code == 200 and (_row(db, "p1")["business_category"], _row(db, "p1")["business_subcategory"])         == ("tax", "Utilities")
+    _row(db, "p3")["business_subcategory"] = "Supplies misc"            # in use, never saved
+    merged = _client(OWNER).post("/expense-categories/change", json={
+        "business_id": BIZ, "category": "supplies misc", "into": "office supplies"})
+    assert merged.status_code == 200, merged.text
+    assert _row(db, "p3")["business_subcategory"] == "Office supplies"
+    assert [c["name"] for c in ec.categories(BIZ)] == ["Office supplies", "Utilities"]      # nothing archived
+    nothing = _client(OWNER).post("/expense-categories/change", json={
+        "business_id": BIZ, "category": "never used", "into": "Utilities"})
+    assert nothing.status_code == 409 and nothing.json()["detail"] == "Nothing is filed under 'never used'"
+    missing = _client(OWNER).post("/expense-categories/change", json={
+        "business_id": BIZ, "category": "never used", "name": "X"})
+    assert missing.status_code == 409 and "no category called" in missing.json()["detail"]
+
+
+def test_a_card_change_whose_undo_record_fails_says_it_cant_be_undone(db, monkeypatch):
+    ec.create(BIZ, OWNER, "Utilities", "operating")
+    real = sb_clients.sb_post_as_service
+    monkeypatch.setattr(sb_clients, "sb_post_as_service",
+                        lambda path, body, *a, **k: None if path.startswith("/chief_undo_log") else real(path, body, *a, **k))
+    got = _client(OWNER).post("/expense-categories/change", json={
+        "business_id": BIZ, "category": "Utilities", "name": "Power"})
+    assert got.status_code == 200, got.text
+    body = got.json()
+    assert body["batch_id"] is None and "can't be undone" in body["said"]
+    assert _row(db, "p1")["business_subcategory"] == "Power"              # the change itself stands
+    assert db.t["chief_undo_log"] == []
+
+
+def test_the_card_changes_only_for_the_owner_and_only_where_switched_on(db, monkeypatch):
+    ec.create(BIZ, OWNER, "Utilities", "operating")
+    ask = {"business_id": BIZ, "category": "Utilities", "name": "Power"}
+    assert _client(READER).post("/expense-categories/change", json=ask).status_code == 403
+    assert _client(READER).post("/expense-categories/undo",
+                                json={"business_id": BIZ, "batch_id": "a" * 32}).status_code == 403
+    assert _client(OWNER).post("/expense-categories/change",
+                               json={"business_id": BIZ, "category": "Utilities"}).status_code == 422
+    assert _client(READER).get("/expense-categories", params={"business_id": BIZ}).json()["card"] is True
+    monkeypatch.setattr(chief_transactions, "switched_on", lambda biz: False)
+    off = _client(OWNER).post("/expense-categories/change", json=ask)
+    assert off.status_code == 403 and "switched on" in off.json()["detail"]
+    assert _client(OWNER).get("/expense-categories", params={"business_id": BIZ}).json()["card"] is False
+    assert db.t["expense_categories"][0]["name"] == "Utilities"
 
 
 # ─── Who may, and the wiring ─────────────────────────────────────────
