@@ -214,6 +214,18 @@ def my_role(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[str, Any
             # Their lane's name, for the office's header ("Minnie · Treasurer").
             if r != "owner":
                 out["lane"] = _lane_label(biz, str(user.id), r, view["areas"])
+    # A church login's duties (church_duties): the jobs it does, so the app
+    # shows each button to the login that does the job; every key for the
+    # owner and the admins. Absent when they don't apply, and when they
+    # couldn't be read: my-role never fails for them.
+    if r:
+        try:
+            import church_duties
+            duties = church_duties.duties_of(biz, str(user.id), r)
+            if duties is not None:
+                out["duties"] = duties
+        except Exception as e:  # noqa: BLE001 — my-role runs on every app load
+            logger.warning(f"[team] my-role duties not read for {biz}: {e}")
     return out
 
 
