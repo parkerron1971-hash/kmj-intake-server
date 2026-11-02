@@ -97,6 +97,54 @@ great, but you would make the changes for love city directly but chief would do 
   the admins': the lanes don't take it back by themselves. The page marks it `needs_someone` (and
   lists those duties at the top) so the owner names someone or puts it back to the lanes.
 
+## Step 2b: media's jobs and ChurchSavvy's parts (built 2026-11-01)
+
+Kevin, 2026-11-01: "church savvy should be connected with shapretta mcclain right from the list
+since she over media". Only churches change; every other business keeps its gate exactly. In a
+church a gate opens to the owner, an Admin, or a login that `holds()` the duty
+(`church_duties.does_job`). A Manager whose job it isn't gets `refusal()`'s words; a Member, a
+Viewer or a stranger gets the gate's own refusal, never whose job it is. A failed duties read is a
+503. Every other check a route makes stays (switches, billing, spend guards, the seat on that
+church, posting only to the church's own connected accounts).
+
+| Duty | Gate |
+|---|---|
+| posts | The marketing desk's writes (`business_marketing._poster_row`; the planner's run and preview use the same check) and GET /engine's `can_edit`; Chief's desk verbs (`chief_marketing_actions`) and picture posts (`image_posting`, `chief_social_actions`) |
+| clips | Posting a clip (`clip_posting`, Chief's `post_clip`); covers with Find my best clips (`clip_finder.start_run`), Make cover and the cover worker (`clip_covers`), made as the owner's on the church's credits (`clip_finder.church_cover_owner`) |
+| website | The site builder (`public_site._require_business_owner`, and set-site-type and expand-design-brief, which were Admin and up); the events page config (`events_rsvp_router`) |
+
+Kept as they were: offers (`business_marketing._owner_row`, what customers pay, the owner's);
+any site_config key naming the domain (`custom_domain`, `custom_domain_status`, the Cloudflare ids)
+in smart-config, refused for a website Manager and left to the owner and the admins; the composer's
+own routes, including domain connect, verify and disconnect (`site_composer`, already Member and
+up, untouched); the speaker photo for covers (Image Studio's owner check); the livestream and the
+media library (seat checks plus ChurchSavvy parts, as before).
+
+**ChurchSavvy parts** (`worship_team.PARTS_FROM_DUTIES`, read by `roles_of`): the owner and an
+Admin seat keep every part. A church's Manager gets:
+
+| Duty | Part |
+|---|---|
+| churchsavvy_team | admin (everything, who's on the team too) |
+| sunday_plan, serve_schedule | planner |
+| stream | media and booth |
+
+plus any parts the team gave it. A Manager with none of those reads ChurchSavvy only, the way a
+viewer seat does: Tiara and Naiya no longer change the Sunday plan. Shapretta (Media) and Laquesha
+(Sunday & Serving) are ChurchSavvy admins, and so is Jessica (the Executive Pastor covers every
+lane). Volunteers (team rows, no seat) are unchanged. A Manager of a business that isn't a church
+keeps every part.
+
+**The team list** (`GET /worship/team`) names each office login by its person
+(`business_users_router.seat_person`), else the name it gave, and only a login nothing names by its
+email. Each staff entry keeps `name`, `kind` and `you`, and gains `role`, `email`, `lane` (the label:
+the stored lane, else the picked areas', and Executive Pastor), `lanes` (keys) and `parts`.
+
+**Clip alerts** (`clip_finder.notify`): "clips are ready" goes to whoever started the run, then, in a
+church, to every other login that does the clips duty (`church_duties.holders_of`: the owner, the
+admins, and each Manager that holds it), once each. A read that fails sends it to the starter alone,
+as before.
+
 ## The catalog (first cut)
 
 | Duty | Area | Lane by default | Opens | Day |

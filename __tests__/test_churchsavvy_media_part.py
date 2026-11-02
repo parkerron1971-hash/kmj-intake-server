@@ -16,7 +16,8 @@ Pins:
   * Go live lists the church's services for a part with no seat, and counts
     attendance only for one of the church's own
   * "Your clips are ready" reaches a volunteer by email, opening ChurchSavvy's
-    Clips; an office login hears by phone as before
+    Clips; an office login hears by phone as before, and in a church so does
+    every other login that does the clips duty (church_duties), once each
 """
 from __future__ import annotations
 
@@ -61,7 +62,11 @@ def db(monkeypatch):
     )
     monkeypatch.setattr(sb_clients, "sb_get_as_service", fake.get)
     monkeypatch.setenv("WORSHIP_SONGS", "on")
-    return fake
+    monkeypatch.delenv("CHURCH_AREAS", raising=False)
+    import church_duties
+    church_duties._CACHE.clear()
+    yield fake
+    church_duties._CACHE.clear()
 
 
 def _refused(fn, *args, **kw):
@@ -235,12 +240,21 @@ def _ready(who):
 
 
 def test_clips_ready_reaches_an_office_login_by_phone_and_a_volunteer_by_email(heard):
-    _ready(PEOPLE["manager"].id)
+    """Whoever started the run hears first; in a church every other Manager
+    that does the clips duty hears too (this Manager no lane names, whose
+    areas are the whole church), once each. The owner hears for their own
+    run, as before, not for everyone's."""
+    manager = PEOPLE["manager"].id
+    _ready(manager)
+    assert heard["push"] == [(manager, "grow:video-clips")]
+    heard["push"].clear()
     _ready(OWNER)
-    assert heard["push"] == [(PEOPLE["manager"].id, "grow:video-clips"), (OWNER, "grow:video-clips")]
+    assert heard["push"] == [(OWNER, "grow:video-clips"), (manager, "grow:video-clips")]
     assert heard["email"] == []
+    heard["push"].clear()
     _ready(PEOPLE["mo"].id)
-    assert len(heard["push"]) == 2, "a volunteer can't turn on phone alerts, so none is sent"
+    assert heard["push"] == [(manager, "grow:video-clips")], (
+        "a volunteer can't turn on phone alerts, so none is sent to them; the office's clip people hear")
     [mail] = heard["email"]
     assert mail["to_email"] == "mo@lovecity.org" and mail["from_name"] == "Love City Church"
     assert mail["subject"] == "12 clips are ready" and mail["idempotency_key"] == f"clips-ready-run-{PEOPLE['mo'].id}"
@@ -258,4 +272,5 @@ def test_clips_ready_goes_by_phone_as_before_when_the_seat_read_fails(heard, db,
 def test_a_volunteer_with_no_email_on_the_team_hears_nothing_and_nothing_breaks(heard, db):
     db.t["worship_team"][0]["email"] = ""
     _ready(PEOPLE["mo"].id)
-    assert heard == {"push": [], "email": []}
+    assert heard["email"] == [] and PEOPLE["mo"].id not in {uid for uid, _ in heard["push"]}
+    assert heard["push"] == [(PEOPLE["manager"].id, "grow:video-clips")]

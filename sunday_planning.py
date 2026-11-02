@@ -29,7 +29,10 @@
 # leaders and thread are the group's own, and serve_teams holds only its
 # turns. A volunteer is a contact (they answer in the member app), never a
 # business_users seat. Who may schedule comes from worship_team: the owner,
-# an admin or a manager, and a ChurchSavvy admin or planner ("serve").
+# an admin or a manager, and a ChurchSavvy admin or planner ("serve"). In a
+# church a manager schedules only when its duties make it a planner or an
+# admin (sunday_plan, serve_schedule or churchsavvy_team; worship_team.
+# PARTS_FROM_DUTIES).
 # Every other part, and a viewer seat, reads only.
 from __future__ import annotations
 
