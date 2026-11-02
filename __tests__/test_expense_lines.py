@@ -87,6 +87,7 @@ def _db(monkeypatch, kind="ministry", on=True):
         return {"id": BIZ, "owner_id": OWNER}
     monkeypatch.setattr(plaid_router, "_require_reader", reader)
     monkeypatch.setattr(plaid_router, "_require_owner", owner)
+    monkeypatch.setattr(plaid_router, "_require_money_writer", owner)
     return fake
 
 

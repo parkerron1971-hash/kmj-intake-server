@@ -33,9 +33,9 @@ settles payouts but never says what money IS. This is the batch, under his
                         guarded on what Chief wrote, so a later answer stays
 
 The ledger re-posts each row itself (the bank table's update trigger watches
-these columns). Who may: the Transactions screen's readers read; the owner
-alone files (plaid_router gates, the church money wall included), as the
-person talking. Bulk, so it never runs unprompted. Switched with the bank
+these columns). Who may: the Transactions screen's readers read; the owner,
+or a church's Admin seat (the treasurer), files (plaid_router gates, the
+church money wall included), as the person talking. Bulk, so it never runs unprompted. Switched with the bank
 search: CHIEF_BANK_SEARCH.
 """
 from __future__ import annotations
@@ -112,11 +112,16 @@ def _gate(business_id: str, *, write: bool) -> Optional[str]:
         return "The bank rows are read and filed only for a signed-in person who can see the books."
     from fastapi import HTTPException
     import plaid_router
+    who = SimpleNamespace(id=uid)
     try:
-        (plaid_router._require_owner if write else plaid_router._require_reader)(business_id, SimpleNamespace(id=uid))
+        if write:
+            plaid_router._require_money_writer(business_id, who)
+        else:
+            plaid_router._require_reader(business_id, who)
     except HTTPException as e:
         if write and e.status_code == 403 and not isinstance(e.detail, dict):
-            return "Only the owner files the bank rows, the same as on the To review screen."
+            return ("Only the owner, or a church's Admin, files the bank rows, the same as on the To review "
+                    "screen.")
         detail = e.detail.get("message") if isinstance(e.detail, dict) else e.detail
         return str(detail or "This login can't see the books.")
     return None

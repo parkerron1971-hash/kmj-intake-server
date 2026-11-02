@@ -76,14 +76,48 @@ def _now() -> str:
 # that teammate, and only that one. A seat with nothing handed to it sees
 # an empty inbox, never a count of what it can't see.
 
+#
+# Kevin, 2026-11-01 (Love City's office checkup): the People & Care login
+# works the care board, so it also sees what people agreed to share with
+# the prayer team. A request kept private, or one that needs a pastor
+# (church_prayer.consent_columns never shares those), stays with the
+# owner or the People & care keeper, who can still hand it over.
+
 class CareCaller:
-    def __init__(self, user_id: str, owner: bool):
+    def __init__(self, user_id: str, owner: bool, shared: bool = False):
         self.user_id = str(user_id)
         self.owner = owner
+        self.shared = bool(shared) and not owner
 
     @property
     def scope(self) -> str:
-        return "all" if self.owner else "assigned"
+        if self.owner:
+            return "all"
+        return "shared" if self.shared else "assigned"
+
+
+# What a People & care login sees beyond what was handed to it: requests
+# the person agreed to share with the prayer team, never one that needs a
+# pastor. A PostgREST `or=` body, beside `assigned_to.eq.<them>`.
+SHARED = "and(prayer_team.is.true,needs_pastor.is.false)"
+
+
+def _works_care(biz: str, user_id: str, role: Optional[str]) -> bool:
+    """Whether this church login's own areas name People & care (picked by
+    the church, or Chief's guess from their roles). The owner and Admins
+    see the whole church in the menu, but a care request is the pastor's
+    unless it was shared, so "the whole church" doesn't count here; only
+    an area that names People & care does. Not a church, the switch off,
+    or a failed read: no."""
+    if not role or role == "owner":
+        return False
+    try:
+        import church_areas
+        view = church_areas.my_areas(biz, str(user_id), role)
+    except Exception:
+        return False
+    areas = (view or {}).get("areas")
+    return isinstance(areas, list) and "people_care" in areas
 
 
 def care_access(business_id: str, user) -> CareCaller:
@@ -91,8 +125,9 @@ def care_access(business_id: str, user) -> CareCaller:
 
     Who sees every request (Church Areas step 2, church_keys): the owner,
     until the church names a keeper for People & care; from then on that
-    keeper, and anyone holding their key, the owner included. Everyone else
-    sees what was handed to them."""
+    keeper, and anyone holding their key, the owner included. A church
+    login that works People & care also sees the requests shared with the
+    prayer team. Everyone else sees what was handed to them."""
     biz = _uuid(business_id, "business")
     rows = sb_clients.sb_get_as_service(
         f"/businesses?id=eq.{biz}&select=id,owner_id&limit=1")
@@ -101,6 +136,7 @@ def care_access(business_id: str, user) -> CareCaller:
     if not rows:
         raise HTTPException(404, "business not found")
     owner = str(rows[0].get("owner_id")) == str(user.id)
+    role: Optional[str] = "owner" if owner else None
     if not owner:
         seats = sb_clients.sb_get_as_service(
             f"/business_users?business_id=eq.{biz}&user_id=eq.{_uuid(user.id, 'user')}"
@@ -109,9 +145,11 @@ def care_access(business_id: str, user) -> CareCaller:
             raise HTTPException(503, "Private care is temporarily unavailable")
         if not seats:
             raise HTTPException(403, "Prayer & care requests are for this church's team")
+        role = seats[0].get("role")
     import church_keys
     kept = church_keys.opened(biz, user, "people_care")
-    return CareCaller(user.id, owner if kept is None else kept)
+    sees_all = owner if kept is None else kept
+    return CareCaller(user.id, sees_all, shared=not sees_all and _works_care(biz, str(user.id), role))
 
 
 def _team(biz: str) -> List[Dict[str, Any]]:
@@ -130,10 +168,21 @@ def list_requests(business_id: str, caller: Optional[CareCaller] = None) -> Dict
     `caller=None` is the owner (every request), kept for older callers."""
     biz = _uuid(business_id, "business")
     mine = caller is not None and not caller.owner
-    base = f"/ministry_care_requests?business_id=eq.{biz}&order=created_at.desc&limit=100"
-    if mine:
-        base += f"&assigned_to=eq.{_uuid(caller.user_id, 'user')}"
-    rows = sb_clients.sb_get_as_service(f"{base}&select={_FIELDS}{_PRAYER_FIELDS}")
+    scope = caller.scope if caller is not None else "all"
+    root = f"/ministry_care_requests?business_id=eq.{biz}&order=created_at.desc&limit=100"
+    base = root + (f"&assigned_to=eq.{_uuid(caller.user_id, 'user')}" if mine else "")
+    rows = None
+    if scope == "shared":
+        # The prayer-team columns say what was shared. If they can't be
+        # read, nothing counts as shared: the login sees what was handed
+        # to it, as before, never more.
+        rows = sb_clients.sb_get_as_service(
+            f"{root}&or=(assigned_to.eq.{_uuid(caller.user_id, 'user')},{SHARED})"
+            f"&select={_FIELDS}{_PRAYER_FIELDS}")
+        if not isinstance(rows, list):
+            scope = "assigned"
+    if scope != "shared":
+        rows = sb_clients.sb_get_as_service(f"{base}&select={_FIELDS}{_PRAYER_FIELDS}")
     prayer = isinstance(rows, list)
     if not prayer:
         rows = sb_clients.sb_get_as_service(f"{base}&select={_FIELDS}")
@@ -167,20 +216,35 @@ def list_requests(business_id: str, caller: Optional[CareCaller] = None) -> Dict
         except Exception:
             pass
     return {"requests": [dict(r, notes=notes.get(str(r.get("id")), [])) for r in rows],
-            "actions": True, "scope": "assigned" if mine else "all",
+            "actions": True, "scope": scope,
             "team": [] if mine else _team(biz)}
 
 
+def _may_touch(row: Dict[str, Any], caller: Optional[CareCaller]) -> bool:
+    """Whether this caller may see and act on one request: the owner (or
+    keeper) always; a teammate when it was handed to them; a People & care
+    login also when the person shared it with the prayer team and it
+    doesn't need a pastor."""
+    if caller is None or caller.owner:
+        return True
+    if str(row.get("assigned_to") or "") == caller.user_id:
+        return True
+    return caller.shared and row.get("prayer_team") is True and row.get("needs_pastor") is not True
+
+
 def _request(biz: str, request_id: str, caller: Optional[CareCaller] = None) -> Dict[str, Any]:
-    rows = sb_clients.sb_get_as_service(
-        f"/ministry_care_requests?id=eq.{request_id}&business_id=eq.{biz}"
-        "&select=id,status,prayed_at,status_changed_at,assigned_to,contact_id&limit=1")
+    one = (f"/ministry_care_requests?id=eq.{request_id}&business_id=eq.{biz}"
+           "&select=id,status,prayed_at,status_changed_at,assigned_to,contact_id")
+    rows = None
+    if caller is not None and caller.shared:
+        rows = sb_clients.sb_get_as_service(one + ",prayer_team,needs_pastor&limit=1")
+    if rows is None:
+        rows = sb_clients.sb_get_as_service(one + "&limit=1")
     if rows is None:
         raise HTTPException(503, "That request couldn't be reached. Nothing was changed — try again.")
-    # A request not handed to this teammate reads exactly like one that
+    # A request this caller may not see reads exactly like one that
     # doesn't exist: they learn nothing about what they can't see.
-    if not rows or (caller is not None and not caller.owner
-                    and str(rows[0].get("assigned_to") or "") != caller.user_id):
+    if not rows or not _may_touch(rows[0], caller):
         raise HTTPException(404, "That request isn't here any more")
     return rows[0]
 

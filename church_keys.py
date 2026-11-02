@@ -40,8 +40,11 @@ as the backup, and a yes opens the area for one hour.
 Every read that fails is a 503, never "no keeper" (which would open the
 lock) and never "locked" for someone who keeps the area. Switched by
 CHURCH_KEYS: off | owner | on (owner until a Thursday). Off takes every
-lock away; owner shows the routes to the platform owner only, while a
-church that has keepers stays locked either way.
+lock away; owner shows the routes to the platform owner, and to the logins
+and accountants of the platform owner's own churches, while a church that
+has keepers stays locked either way. (2026-11-01: owner used to show them
+to the platform owner's email alone, so a treasurer the Giving keeper had
+locked out at Love City couldn't even ask for a key.)
 """
 from __future__ import annotations
 
@@ -90,9 +93,24 @@ def open_to(user: AuthedUser) -> bool:
     return False
 
 
-def _gate(user: AuthedUser) -> None:
-    if not open_to(user):
-        raise HTTPException(404, "Not Found")
+def platform_church(business_id: str) -> bool:
+    """Whether the platform owner owns this business (chief_of_staff.
+    PLATFORM_OWNER_ID, the same "owner" as giving_deposits'): where an owner
+    switch opens the key routes to everyone with a login there, since its
+    locks are already live. A read that fails is a 503, never a yes."""
+    rows = _need(f"/businesses?id=eq.{_q(business_id)}&select=owner_id&limit=1")
+    if not rows or not rows[0].get("owner_id"):
+        return False
+    from chief_of_staff import PLATFORM_OWNER_ID
+    return str(rows[0]["owner_id"]) == str(PLATFORM_OWNER_ID)
+
+
+def _gate(user: AuthedUser, business_id: Optional[str] = None) -> None:
+    if open_to(user):
+        return
+    if mode() == "owner" and business_id and platform_church(business_id):
+        return
+    raise HTTPException(404, "Not Found")
 
 
 # ─── Reads ────────────────────────────────────────────────────────────
@@ -533,8 +551,14 @@ def overview(business_id: str, user: AuthedUser) -> Dict[str, Any]:
 # ─── Routes ───────────────────────────────────────────────────────────
 
 def _member(business_id: Any, user: AuthedUser, minimum: str = "member", accountant: bool = False) -> str:
-    _gate(user)
-    biz = _uuid(business_id, "business")
+    try:
+        biz = _uuid(business_id, "business")
+    except HTTPException:
+        _gate(user)            # a switch closed to them is a 404 whatever they send
+        raise
+    # Who has a login here is asked next, so "owner" opens the platform
+    # owner's churches to their own people and accountants, nobody else.
+    _gate(user, biz)
     try:
         business_access.assert_access(biz, user, minimum)
     except HTTPException as e:
