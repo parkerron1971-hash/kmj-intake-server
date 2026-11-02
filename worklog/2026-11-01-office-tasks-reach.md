@@ -5,7 +5,7 @@ agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-11-01: "go through each admin that is connected and make sure that there access point have everything that is connected to there role" … "Jessica will be over the admin team as well" … "every area that is block setup or partly. lets make sure we build"'
 status: in review
 prs: [kmj-intake-server (this PR)]
-migrations: [supabase/APPLY-2026-11-01-office-task-told.sql (apply before merge)]
+migrations: [supabase/APPLY-2026-11-01-office-task-told.sql (applied 2026-11-01)]
 left_undone:
   - "Chief's create_task can't hand a task to a person yet (B9 Later in the office checkup artifact)"
   - "The admins' own church roles (Leaders & roles), so the chain of who answers to whom covers them: with the duties layer"
