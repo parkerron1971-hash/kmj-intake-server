@@ -64,10 +64,27 @@ def _source(mod, fn):
     return inspect.getsource(getattr(mod, fn))
 
 
+# A handler may hand its check to one named gate in its own module: the
+# announcements do (sms_routing._may_announce: an admin, or in a church a
+# Manager that does the weekly text, church_duties). The gate's own source
+# must carry the check, and the handler must call it before the work.
+DELEGATED = ("_may_announce",)
+
+
+def _check(mod, fn):
+    """(where the check starts in the handler's source, the source that
+    holds the check: the handler's own, or its named gate's)."""
+    src = _source(mod, fn)
+    for gate in DELEGATED:
+        if f"{gate}(" in src and hasattr(mod, gate):
+            return src.index(f"{gate}("), _source(mod, gate)
+    return src.find("assert_access"), src
+
+
 @pytest.mark.parametrize("mod,fn,role", GUARDED,
                          ids=[f"{m.__name__}.{f}" for m, f, _ in GUARDED])
 def test_the_handler_resolves_the_callers_relationship_to_the_business(mod, fn, role):
-    src = _source(mod, fn)
+    _, src = _check(mod, fn)
     assert "assert_access" in src, (
         f"{mod.__name__}.{fn} takes a business id and does not check it")
     assert f'"{role}"' in src, (
@@ -84,7 +101,8 @@ def test_the_check_runs_before_the_work(mod, fn, role):
     below the loop would refuse a caller who had already spent the
     practitioner's carrier reputation."""
     src = _source(mod, fn)
-    gate = src.index("assert_access")
+    gate, _ = _check(mod, fn)
+    assert gate != -1, f"{mod.__name__}.{fn} has no check at all"
     for marker in ("httpx.AsyncClient()", "_sb_get(", "_sb_post(",
                    "send_sms_core("):
         at = src.find(marker)
@@ -98,8 +116,9 @@ def test_the_bulk_one_is_not_merely_member():
     practitioner's brand. Its docstring calls business_id scoping "what
     makes cross-contamination structurally impossible" — which was true
     of the QUERY and false of the authorisation, because the id was the
-    caller's to choose."""
-    src = _source(sms_routing, "broadcast")
+    caller's to choose. In a church a Manager that does the weekly text
+    sends it too (church_duties), never a Member."""
+    _, src = _check(sms_routing, "broadcast")
     assert '"admin"' in src and '"member"' not in src
 
 
