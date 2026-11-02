@@ -26,13 +26,17 @@ that's the bar. Filed under the Build item "Love City leaves Subsplash (M-1)".
                     already sends (a church calls them Bills), linked to the
                     booking so its page shows whether it's paid
 
-Who: the owner and admins, and the church's office logins whose areas include
-the Office (church_areas, "Who sees what"). The owner, admins and managers
-book straight away, approve and keep the list of spaces; any other office
-login asks (a request). A viewer login only looks. Money (a rental's fee,
-deposit and bill) is the owner's and admins', as gifts are
-(ministry_finance_access); everyone else sees a rental without its amounts.
-Members can't book from their app in this version.
+Who: the owner and admins; a Manager that does the rooms (church_duties
+"rooms": the Office & Leadership and Sunday & Serving lanes' by default, or
+whoever it was given to; a Manager no lane names, by the areas it works);
+and the church's Member and Viewer logins whose areas include the Office
+(church_areas, "Who sees what"). The owner, admins and those Managers book
+straight away, approve and keep the list of spaces; any other office login
+asks (a request). A viewer login only looks. Money (a rental's fee, deposit
+and bill) is the owner's and admins', as gifts are (ministry_finance_access);
+everyone else sees a rental without its amounts, and a Manager that does the
+rooms reads the Rentals list that way too. Members can't book from their
+app in this version.
 
   GET   /church/spaces/status?business_id=          {enabled, book, approve, rentals}
   GET   /church/spaces?business_id=                 the spaces and what this login may do
@@ -68,6 +72,7 @@ from fastapi import APIRouter, Depends, HTTPException
 import business_access
 import sb_clients
 from auth_supabase import AuthedUser, require_user
+from church_duties import holds, refusal
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/church/spaces", tags=["church"])
@@ -79,6 +84,7 @@ WRITERS = ("owner", "admin", "manager", "member")   # book, or ask
 APPROVERS = ("owner", "admin", "manager")           # book straight away, approve, keep the spaces
 FINANCE = ("owner", "admin")                        # a rental's money, as ministry_finance_access
 KEEPS_ALL = ("owner", "admin")
+ROOMS = "rooms"             # the church duty a Manager books and approves by (church_duties)
 
 MAX_REPEATS = 53            # a weekly repeat runs at most a year
 MAX_DAYS = 14               # one booking runs at most two weeks
@@ -219,10 +225,11 @@ def expand_weekly(start: datetime, end: datetime, until: Optional[date], tz: Zon
 # ─── Who's asking ─────────────────────────────────────────────────────
 
 def _office(biz_id: str, uid: str, role: str) -> bool:
-    """Whether this login works the office: the owner and admins always;
-    any login while Who sees what is off (everyone sees the whole church,
-    as before); else a login whose areas are the whole church or include
-    the Office. A view that couldn't be read is a 503, never a yes."""
+    """Whether a Member or Viewer login works the office (it holds no duty,
+    so its areas still decide): the owner and admins always; any login
+    while Who sees what is off (everyone sees the whole church, as before);
+    else a login whose areas are the whole church or include the Office. A
+    view that couldn't be read is a 503, never a yes."""
     if role in KEEPS_ALL:
         return True
     import church_areas
@@ -244,7 +251,13 @@ def _business(biz_id: str) -> Dict[str, Any]:
 def _access(business_id: Any, user: AuthedUser) -> Dict[str, Any]:
     """The church, and this login's standing in its building. 404 when the
     switch is closed to them, they have no login here, or it isn't a
-    church; 403 for a login that doesn't work the office."""
+    church; 403 for a Manager that doesn't do the rooms, or a Member or
+    Viewer login that doesn't work the office.
+
+    A Manager books, approves and keeps the spaces by the rooms duty
+    (church_duties: the Office & Leadership and Sunday & Serving lanes' by
+    default, or whoever it was given to; a Manager no lane names, by the
+    areas it works, as before). A failed read of it is a 503."""
     if not open_to(user):
         raise HTTPException(404, "Not Found")
     biz_id = _uuid(business_id, "church")
@@ -253,9 +266,14 @@ def _access(business_id: Any, user: AuthedUser) -> Dict[str, Any]:
     import church_follow_up as cfu
     if not cfu.is_church(biz):
         raise HTTPException(404, "Rooms & spaces are for churches")
-    if not _office(biz_id, str(user.id), role):
+    rooms = role in KEEPS_ALL
+    if role == "manager":
+        if not holds(biz_id, user, ROOMS):
+            raise HTTPException(403, refusal(biz_id, ROOMS))
+        rooms = True
+    elif not _office(biz_id, str(user.id), role):
         raise HTTPException(403, "Rooms & spaces belong to the office. An admin can add the Office to your areas.")
-    return {"biz": biz, "role": role, "uid": str(user.id)}
+    return {"biz": biz, "role": role, "uid": str(user.id), "rooms": rooms}
 
 
 def _may(me: Dict[str, Any], roles: Sequence[str], why: str) -> None:
@@ -264,7 +282,11 @@ def _may(me: Dict[str, Any], roles: Sequence[str], why: str) -> None:
 
 
 def _can(me: Dict[str, Any]) -> Dict[str, bool]:
-    return {"book": me["role"] in WRITERS, "approve": me["role"] in APPROVERS, "rentals": me["role"] in FINANCE}
+    """What this login may do here. `rentals` is the Rentals page with its
+    money (the owner and admins); `rental_list` is the list itself, which
+    whoever does the rooms reads without the amounts."""
+    return {"book": me["role"] in WRITERS, "approve": me["role"] in APPROVERS, "rentals": me["role"] in FINANCE,
+            "rental_list": me["role"] in FINANCE or bool(me.get("rooms"))}
 
 
 def _ready(biz_id: str) -> bool:
@@ -931,8 +953,12 @@ def bookings_bill(booking_id: str, body: Dict[str, Any], user: AuthedUser = Depe
 
 @router.get("/rentals")
 def rentals_read(business_id: str, when: str = "upcoming", user: AuthedUser = Depends(require_user)):
+    """The rentals: the owner and admins with their money; whoever does the
+    rooms reads them without it (shown() leaves out the fee, the deposit and
+    the bill for anyone else)."""
     me = _access(business_id, user)
-    _may(me, FINANCE, "Rentals carry money: the owner and admins keep them.")
+    if me["role"] not in FINANCE and not me["rooms"]:
+        raise HTTPException(403, "Rentals carry money: the owner and admins keep them.")
     biz = str(me["biz"]["id"])
     now = _q(_iso(_now()))
     if when == "past":

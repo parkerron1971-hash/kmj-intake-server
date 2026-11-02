@@ -84,6 +84,27 @@ great, but you would make the changes for love city directly but chief would do 
 - `require()` refuses with whose job it is: "“The weekly text” is Naiya's job here. The owner or an
   admin can give it to you in Logins & areas."
 
+## The office's gates (step 2a, 2026-11-01)
+
+In a church (`church_follow_up.is_church`) each job below opens to the owner, an Admin, or a login
+that `holds()` its duty; a Manager without it gets `require()`'s 403, naming whose job it is. A
+failed duties read is a 503. Any other business keeps its gate exactly, and every other check the
+route made stays (the switch, the card, the seat on that church, the keepers).
+
+| Duty | Where | What it opens in a church | What stays as it was |
+|---|---|---|---|
+| weekly_text | `sms_routing._may_announce` | `/sms/broadcast` (now or later), `/sms/broadcast/reach`, `/sms/groups`, `/sms/scheduled` (list, cancel); the scheduled send checks the duty again at send time | The keyword (`/sms/keyword`) stays an admin's: it is the church's inbound identity, not the weekly text |
+| meetings | `church_board._access` | Counts as a boss: sets boards up (new, rename, archive, seats, the people list) and sees and writes every board, as the owner and Admins do (meetings, attendance, minutes, sending them, recording their approval, tasks) | Board members keep their own boards; a viewer reads; the member app's Board tab and its money yes are untouched |
+| chat_rules | `messaging_router._chat_rules_keeper` | `PATCH /messaging/settings` (on or off, how long chats are kept), still needing its two safety officers to turn on | Naming safety officers and the Safety room: the owner and the named officers |
+| rooms | `church_spaces._access` | Booking straight away, approving, keeping the spaces; the Rentals list without one amount (`rental_list` in `me`) | Fees, deposits and bills: the owner and Admins (`rentals` in `me` still means the page with its money); Member and Viewer logins still go by the Office area |
+| events | `church_event_signups._office` | The sign-ups' status, summary and each event's sign-ups | Prices, places, cancelling and the export: the owner and Admins (one PUT carries prices with the rest) |
+| leaders_note | `church_leaders_note._access` | The draft and the send | Once a week; the leaders room as the list |
+
+A Manager no lane names keeps what its areas gave it: the duty's own area decides, as `holds()`
+says. Event sign-ups were the one job whose old area (the Office) isn't its duty's (Website &
+outreach), so for them a Manager no lane names also keeps the Office area's yes until the church
+moves the events.
+
 ## Moving a duty
 
 - `PUT /church/duties/{duty}` with `{business_id, user_ids}`. `[]` or `null` puts the duty back to

@@ -32,9 +32,12 @@ Subsplash (M-1)".
                     marks them approved, and approved minutes no longer
                     change
 
-Who: the owner and admins see every board and set boards up. Anyone else
-sees the boards they sit on (a member row with their login) and nothing
-else; a member-level login or above writes there, a viewer reads. The menu
+Who: the owner and admins see every board and set boards up, and so does a
+Manager that does the church's meetings (church_duties "meetings": the
+Office & Leadership lane's by default, or whoever it was given to; a failed
+read of it is a 503). Anyone else sees the boards they sit on (a member row
+with their login) and nothing else; a member-level login or above writes
+there, a viewer reads. The menu
 files it under Office (church_areas "office"), with this board-member
 check on top: the office area alone opens nothing. In the member app only
 the church's people on a board see it, and only their own boards: the
@@ -44,7 +47,7 @@ members never see a board or its minutes.
 
   GET    /church/board/status?business_id=            {enabled, manage, member, boards}
   GET    /church/board?business_id=                   boards, members, meetings
-  GET    /church/board/people?business_id=&q=         who can join a board (owner, admins)
+  GET    /church/board/people?business_id=&q=         who can join a board (owner, admins, the meetings' keeper)
   POST   /church/board/boards                         {business_id, name, quorum_kind, quorum_count?}
   PATCH  /church/board/boards/{id}                    {business_id, name?, quorum_kind?, quorum_count?, archived?}
   POST   /church/board/boards/{id}/members            {business_id, contact_id? | user_id?, title?}
@@ -89,6 +92,7 @@ from fastapi import APIRouter, Depends, HTTPException
 import business_access
 import sb_clients
 from auth_supabase import AuthedUser, require_user
+from church_duties import holds, refusal
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/church/board", tags=["church"])
@@ -101,6 +105,7 @@ ATTENDS = ("present", "absent", "excused")
 RESULTS = ("carried", "failed", "tabled")
 WRITERS = ("owner", "admin", "manager", "member")
 BOSSES = ("owner", "admin")                # every board, and setting boards up
+MEETINGS = "meetings"                      # the church duty that keeps them too (church_duties)
 
 NAME_MAX, TITLE_MAX, MEMBER_TITLE_MAX, ITEM_MAX = 80, 120, 60, 200
 NOTES_MAX, MINUTES_MAX, MOTION_MAX, PLACE_MAX, LINK_MAX = 4000, 20000, 1000, 160, 500
@@ -258,8 +263,8 @@ def boards_of_login(biz_id: str, uid: str) -> Set[str]:
 def _access(business_id: Any, user: AuthedUser) -> Dict[str, Any]:
     """The church, and this login's standing on its boards. 404 when the
     switch is closed to them, they have no login here, or it isn't a
-    church; 403 for a login that is neither the owner, an admin, nor on a
-    board."""
+    church; 403 for a login that is neither the owner, an admin, one that
+    keeps the meetings, nor on a board."""
     if not open_to(user):
         raise HTTPException(404, "Not Found")
     biz_id = _uuid(business_id, "church")
@@ -269,15 +274,22 @@ def _access(business_id: Any, user: AuthedUser) -> Dict[str, Any]:
     if not cfu.is_church(biz):
         raise HTTPException(404, NOT_CHURCH)
     mine = boards_of_login(biz_id, str(user.id))
-    boss = role in BOSSES
+    # The owner and admins set the boards up and see every one. So does a
+    # Manager that does the church's meetings (church_duties: the Office &
+    # Leadership lane's by default, or whoever it was given to): the Church
+    # Administrator keeps every board's minutes. A board's own members keep
+    # their boards as before. A duty that can't be read is a 503.
+    boss = role in BOSSES or (role == "manager" and holds(biz_id, user, MEETINGS))
     if not boss and not mine:
-        raise HTTPException(403, NOT_YOURS)
+        raise HTTPException(403, refusal(biz_id, MEETINGS) if role == "manager" else NOT_YOURS)
     return {"biz": biz, "role": role, "uid": str(user.id), "user": user, "boss": boss, "mine": mine,
             "writer": role in WRITERS}
 
 
 def _boss(me: Dict[str, Any], why: str = "Only the owner or an admin sets up the church's boards.") -> None:
     if not me["boss"]:
+        if me["role"] == "manager":
+            raise HTTPException(403, refusal(str(me["biz"]["id"]), MEETINGS))
         raise HTTPException(403, why)
 
 

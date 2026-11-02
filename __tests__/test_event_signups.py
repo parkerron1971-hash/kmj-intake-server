@@ -19,6 +19,11 @@ Pins:
     platform owner owns
   * the public sign-up is rate-limited before anything is read
   * a refund frees the place; the CSV can't carry a formula
+  * the office reads sign-ups by the events duty (church_duties): Sunday &
+    Serving and Media & Communications by default, refused (naming whose
+    job it is) once it moves away, a Manager no lane names by its areas or
+    the Office area as before, a 503 when it can't be read; prices, places,
+    cancelling and the export stay the owner's and admins'
 The SQL itself (locks, order, hashes, grants) is pinned on PGlite in
 __tests__/church_event_signups_db.mjs; here the fake follows its rules.
 """
@@ -586,6 +591,96 @@ def test_only_the_office_sees_sign_ups_and_only_owner_and_admins_change_them(db)
     assert office("manager").put("/church/events/signups/setup", json=body).status_code == 403
     assert office("admin").put("/church/events/signups/setup", json=body).status_code == 200
     assert office("manager").get(f"/church/events/signups/export?business_id={BIZ}&entry_id={VBS}").status_code == 403
+
+
+# ─── Who does the events (church_duties, docs/CHURCH_DUTIES.md step 2) ─
+
+def _lane(db, name, lane):
+    import church_duties
+    for s in db.t["business_users"]:
+        if s["user_id"] == ID[name]:
+            s["lane"] = lane
+    church_duties._CACHE.clear()
+
+
+def _reads(name="manager"):
+    c = office(name)
+    return (c.get(f"/church/events/signups?business_id={BIZ}&entry_id={VBS}"),
+            c.get(f"/church/events/signups/summary?business_id={BIZ}"))
+
+
+def test_a_manager_reads_the_sign_ups_by_the_events_duty(db):
+    import church_duties
+    signup()
+    # Sunday & Serving and Media & Communications do the events by default.
+    for lane in ("sunday_serving", "media_comms"):
+        _lane(db, "manager", lane)
+        assert all(r.status_code == 200 for r in _reads()), lane
+        assert office("manager").get(f"/church/events/signups/status?business_id={BIZ}").json()["enabled"] is True
+    # The Office & Leadership lane doesn't, any more than People & Care.
+    for lane in ("office_leadership", "people_care"):
+        _lane(db, "manager", lane)
+        got, summary = _reads()
+        assert got.status_code == summary.status_code == 403, lane
+        assert got.json()["detail"] == church_duties.refusal(BIZ, "events")
+        assert office("manager").get(f"/church/events/signups/status?business_id={BIZ}").json()["enabled"] is False
+    for who in ("owner", "admin"):
+        assert all(r.status_code == 200 for r in _reads(who)), who
+
+
+def test_prices_places_cancelling_and_the_export_stay_the_owners_and_admins(db):
+    _lane(db, "manager", "sunday_serving")
+    signup()
+    [r] = regs(db)
+    body = {"business_id": BIZ, "entry_id": VBS, "types": [{"label": "Adult", "price_cents": 0}]}
+    assert office("manager").put("/church/events/signups/setup", json=body).status_code == 403
+    assert office("manager").post(f"/church/events/signups/{r['id']}/cancel", json={"business_id": BIZ}).status_code == 403
+    assert office("manager").get(f"/church/events/signups/export?business_id={BIZ}&entry_id={VBS}").status_code == 403
+    assert office("manager").get(f"/church/events/signups/status?business_id={BIZ}").json()["can_price"] is False
+    assert r["status"] == "held"
+
+
+def test_a_manager_the_events_moved_away_from_is_refused_naming_whose_job_it_is(db):
+    import church_duties
+    _lane(db, "manager", "sunday_serving")
+    db.t["church_duty_holders"] = [{"business_id": BIZ, "duty": "events", "user_id": ID["admin"]}]
+    church_duties._CACHE.clear()
+    got, _ = _reads()
+    assert got.status_code == 403 and got.json()["detail"] == church_duties.refusal(BIZ, "events")
+    assert "admin@lovecity.org's job" in got.json()["detail"]
+    assert all(r.status_code == 200 for r in _reads("admin"))
+
+
+def test_a_manager_no_lane_names_keeps_the_sign_ups_its_areas_gave_it(db, monkeypatch):
+    # By the events duty's own area (Website & outreach), and by the Office
+    # area that opened them before duties, until the church moves the events.
+    import church_duties
+    monkeypatch.setenv("CHURCH_AREAS", "on")
+    areas = {"now": ["website_outreach"]}
+    monkeypatch.setattr(church_areas, "my_areas", lambda biz, uid, role: {"areas": areas["now"], "by": "picked"})
+    assert _reads()[0].status_code == 200
+    areas["now"] = ["office", "messages_safety"]
+    church_duties._CACHE.clear()
+    assert _reads()[0].status_code == 200
+    areas["now"] = ["people_care"]
+    church_duties._CACHE.clear()
+    assert _reads()[0].status_code == 403
+    areas["now"] = ["office"]
+    db.t["church_duty_holders"] = [{"business_id": BIZ, "duty": "events", "user_id": ID["admin"]}]
+    church_duties._CACHE.clear()
+    got = _reads()[0]
+    assert got.status_code == 403 and got.json()["detail"] == church_duties.refusal(BIZ, "events")
+
+
+def test_an_events_duty_that_cant_be_read_is_a_503_never_a_yes(db, monkeypatch):
+    _lane(db, "manager", "sunday_serving")
+    real = db.get
+    monkeypatch.setattr(sb_clients, "sb_get_as_service",
+                        lambda path, **k: None if path.startswith("/church_duty_holders") else real(path, **k))
+    got, summary = _reads()
+    assert got.status_code == summary.status_code == 503
+    assert office("manager").get(f"/church/events/signups/status?business_id={BIZ}").status_code == 503
+    assert all(r.status_code == 200 for r in _reads("owner"))
 
 
 # ─── The switch ──────────────────────────────────────────────────────

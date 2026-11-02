@@ -10,7 +10,9 @@ people in that chat are told (member_portal_messaging shows the notice).
   GET   /messaging/settings?business_id=        on/off, keep-for days, officers (any team member;
                                                 the owner also gets the team and the church's
                                                 pastoral leaders to choose from)
-  PATCH /messaging/settings                     {business_id, enabled?, retention_days?} — the owner
+  PATCH /messaging/settings                     {business_id, enabled?, retention_days?} — the owner;
+                                                in a church also an admin or whoever does the
+                                                chat rules (church_duties "chat_rules")
   POST  /messaging/officers                     {business_id, user_id | contact_id, officer} — the owner
   GET   /messaging/safety?business_id=          held messages + open reports — officers only
   POST  /messaging/safety/open                  {business_id, thread_id, reason} — logged
@@ -153,12 +155,34 @@ def team(business_id: str, owner_id: str, viewer: AuthedUser) -> List[Dict[str, 
 
 
 def _biz_settings(business_id: str) -> Dict[str, Any]:
-    rows = sb_clients.sb_get_as_service(f"/businesses?id=eq.{_q(business_id)}&select=id,owner_id,settings&limit=1")
+    rows = sb_clients.sb_get_as_service(f"/businesses?id=eq.{_q(business_id)}&select=id,type,owner_id,settings&limit=1")
     if not isinstance(rows, list):
         raise _unavailable()
     if not rows:
         raise HTTPException(404, "business not found")
     return rows[0]
+
+
+CHAT_RULES = "chat_rules"      # the church duty that keeps the member chat's rules (church_duties)
+
+
+def _chat_rules_keeper(biz_id: str, user: AuthedUser) -> Dict[str, Any]:
+    """Who changes the member chat's rules (on or off, how long it keeps
+    chats), and the business row: the owner. In a church, also an admin or a
+    Manager that does the chat rules (church_duties: the Office & Leadership
+    lane's by default, or whoever it was given to); a duty that can't be read
+    is a 503. Any other business keeps its owner-only gate exactly. Naming
+    the safety officers stays the owner's."""
+    role = require(biz_id, user, "viewer")
+    biz = _biz_settings(biz_id)
+    if role != "owner":
+        import church_follow_up as cfu
+        if role in ("admin", "manager") and cfu.is_church(biz):
+            import church_duties
+            church_duties.require(biz_id, user, CHAT_RULES)
+        else:
+            require(biz_id, user, "owner")
+    return biz
 
 
 def _names(business_id: str, ids) -> Dict[str, str]:
@@ -212,8 +236,7 @@ def get_settings(business_id: str = Query(...), user: AuthedUser = Depends(requi
 @router.patch("/messaging/settings")
 def patch_settings(body: SettingsIn, user: AuthedUser = Depends(require_user)):
     biz_id = _uuid(body.business_id, "business_id")
-    require(biz_id, user, "owner")
-    biz = _biz_settings(biz_id)
+    biz = _chat_rules_keeper(biz_id, user)
     settings = dict(biz.get("settings") or {})
     cfg = dict(settings.get("messaging") or {})
     if body.enabled is True and officer_count(biz_id) < MIN_OFFICERS:

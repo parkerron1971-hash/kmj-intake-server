@@ -56,6 +56,22 @@ def _fresh_chief_turn():
     yield
 
 
+# church_duties keeps a login's duties a minute per process, keyed by the
+# church and the login. The job gates ask it (board, rooms, sign-ups, the
+# leaders note, the weekly text, chat rules), and test files share church
+# and login ids, so one file's fake office would answer the next's. Only a
+# module already imported is cleared: importing it here would bind it to
+# whatever sb_clients a test file had not stubbed yet.
+@pytest.fixture(autouse=True)
+def _fresh_church_duties():
+    import sys as _sys
+    _cd = _sys.modules.get("church_duties")
+    if _cd is not None:
+        _cd._CACHE.clear()
+        _cd._FAILED.clear()
+    yield
+
+
 # bank_money caches "does plaid_transactions.money_kind exist?" for five
 # minutes. In one test process that cache would carry one test's fake
 # database into the next, so every test starts unprobed.

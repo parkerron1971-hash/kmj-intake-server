@@ -5,18 +5,31 @@ those who said yes) and a send time. A later one is a
 chief_scheduled_actions row of type sms_announcement that only this
 endpoint writes; Chief can't schedule one, and at send time the scheduler
 checks again that its author can still send announcements.
+
+Who sends one (church_duties, docs/CHURCH_DUTIES.md step 2): the owner or
+an admin; in a church also a Manager that does the weekly text (the Office
+& Leadership lane by default; refused, naming whose job it is, once it
+moves away; by its areas when no lane names it; a 503 when it can't be
+read). Any other business keeps its admin gate exactly, and the scheduler
+checks the duty again at send time.
 """
 from __future__ import annotations
 
 import asyncio
 import inspect
+import os
+import sys
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
 
-import chief_scheduler
-import sms_routing
+HERE = os.path.dirname(os.path.abspath(__file__))
+if HERE not in sys.path:
+    sys.path.insert(0, HERE)
+
+import chief_scheduler  # noqa: E402
+import sms_routing  # noqa: E402
 
 BIZ = "7c0de000-0000-4000-8000-000000000001"
 GROUP = "22222222-2222-4222-8222-222222222222"
@@ -217,9 +230,167 @@ def test_cancel_touches_only_this_business_queued_announcement(monkeypatch):
     assert body == {"status": "cancelled"} and f"business_id=eq.{BIZ}" in path and "status=eq.queued" in path
 
 
-@pytest.mark.parametrize("fn", ["announcement_groups", "scheduled_announcements", "cancel_announcement", "broadcast_reach"])
+@pytest.mark.parametrize("fn", ["announcement_groups", "scheduled_announcements", "cancel_announcement",
+                                "broadcast_reach", "broadcast"])
 def test_every_new_handler_needs_someone_who_can_send_announcements(fn):
     src = inspect.getsource(getattr(sms_routing, fn))
-    assert '"admin")' in src
-    gate = src.index("assert_access")
-    assert gate < src.index("httpx.AsyncClient()")
+    gate = src.index("_may_announce(")
+    assert gate < src.index("httpx.AsyncClient()") and "assert_access" not in src
+    # The gate asks for an admin first: any business but a church stops there.
+    may = inspect.getsource(sms_routing._may_announce)
+    assert may.index('assert_access(biz, user, "admin")') < may.index("require(biz, user, WEEKLY_TEXT)")
+
+
+# ─── who does the weekly text (church_duties, docs/CHURCH_DUTIES.md step 2) ─
+
+CHURCH = "7c0de000-0000-4000-8000-0000000000c1"
+SHOP = "7c0de000-0000-4000-8000-0000000000c2"
+OWNER_ID, ADMIN_ID, NAIYA_ID, TIARA_ID, MEMBER_ID, STRANGER_ID = (
+    f"0f0f0f0f-0000-4000-8000-00000000000{i}" for i in range(1, 7))
+
+
+def _who(uid):
+    from auth_supabase import AuthedUser
+    return AuthedUser(id=uid, email=None, role="authenticated")
+
+
+@pytest.fixture
+def office(monkeypatch):
+    """A church (Love City's office: the owner, an admin, Naiya in Office &
+    Leadership, Tiara in People & Care, a Member login) and a barbershop with
+    the same logins, in the role tests' in-memory PostgREST."""
+    import church_duties
+    import sb_clients
+    from test_church_roles import FakeDB
+
+    def seats(biz):
+        return [{"business_id": biz, "user_id": u, "role": r, "status": "active", "lane": ln,
+                 "invited_email": f"{n}@lovecity.org"}
+                for u, r, ln, n in ((ADMIN_ID, "admin", None, "admin"), (NAIYA_ID, "manager", "office_leadership", "naiya"),
+                                    (TIARA_ID, "manager", "people_care", "tiara"), (MEMBER_ID, "member", None, "web"))]
+    fake = FakeDB(businesses=[{"id": CHURCH, "name": "Love City Church", "type": "ministry", "owner_id": OWNER_ID,
+                               "settings": {}},
+                              {"id": SHOP, "name": "Fade Shop", "type": "barber", "owner_id": OWNER_ID, "settings": {}}],
+                  business_users=seats(CHURCH) + seats(SHOP), church_duty_holders=[])
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", fake.get)
+    monkeypatch.delenv("CHURCH_AREAS", raising=False)
+    church_duties._CACHE.clear()
+    return fake
+
+
+def _may(biz, uid):
+    from fastapi import HTTPException
+    try:
+        return sms_routing._may_announce(biz, _who(uid))
+    except HTTPException as e:
+        return e.status_code, e.detail
+
+
+def test_in_a_church_whoever_does_the_weekly_text_sends_announcements(office):
+    import church_duties
+    assert [_may(CHURCH, u) for u in (OWNER_ID, ADMIN_ID, NAIYA_ID)] == ["owner", "admin", "manager"]
+    assert _may(CHURCH, TIARA_ID) == (403, church_duties.refusal(CHURCH, "weekly_text"))
+    assert "Office & Leadership" in _may(CHURCH, TIARA_ID)[1]
+    # Below a Manager, and a stranger: the same 404 as before.
+    assert _may(CHURCH, MEMBER_ID) == _may(CHURCH, STRANGER_ID) == (404, "business not found")
+
+
+def test_any_other_business_keeps_its_admin_gate(office):
+    assert [_may(SHOP, u) for u in (OWNER_ID, ADMIN_ID)] == ["owner", "admin"]
+    for uid in (NAIYA_ID, TIARA_ID, MEMBER_ID, STRANGER_ID):
+        assert _may(SHOP, uid) == (404, "business not found"), uid
+    assert _may("7c0de000-0000-4000-8000-0000000000ff", OWNER_ID) == (404, "business not found")
+
+
+def test_a_manager_the_weekly_text_moved_away_from_is_refused(office):
+    import church_duties
+    office.t["church_duty_holders"] = [{"business_id": CHURCH, "duty": "weekly_text", "user_id": TIARA_ID}]
+    church_duties._CACHE.clear()
+    status, detail = _may(CHURCH, NAIYA_ID)
+    assert status == 403 and detail == church_duties.refusal(CHURCH, "weekly_text") and "tiara@lovecity.org's job" in detail
+    assert _may(CHURCH, TIARA_ID) == "manager" and _may(CHURCH, ADMIN_ID) == "admin"
+
+
+def test_a_manager_no_lane_names_keeps_the_weekly_text_its_areas_give_it(office, monkeypatch):
+    import church_areas
+    import church_duties
+    office.t["business_users"][1]["lane"] = None             # Naiya at the church, no lane
+    monkeypatch.setenv("CHURCH_AREAS", "on")
+    areas = {"now": ["office"]}
+    monkeypatch.setattr(church_areas, "my_areas", lambda biz, uid, role: {"areas": areas["now"], "by": "picked"})
+    church_duties._CACHE.clear()
+    assert _may(CHURCH, NAIYA_ID) == "manager"
+    areas["now"] = ["worship_media"]
+    church_duties._CACHE.clear()
+    assert _may(CHURCH, NAIYA_ID)[0] == 403
+
+
+def test_a_weekly_text_duty_that_cant_be_read_is_a_503_never_a_yes(office, monkeypatch):
+    import sb_clients
+    monkeypatch.setattr(sb_clients, "sb_get_as_service",
+                        lambda p, **k: None if p.startswith("/church_duty_holders") else office.get(p, **k))
+    assert _may(CHURCH, NAIYA_ID)[0] == 503
+    assert _may(CHURCH, ADMIN_ID) == "admin"
+    # And whether it's a church at all, the same.
+    monkeypatch.setattr(sb_clients, "sb_get_as_service",
+                        lambda p, **k: None if "select=id,type" in p else office.get(p, **k))
+    assert _may(SHOP, NAIYA_ID)[0] == 503
+
+
+def test_a_church_manager_schedules_an_announcement_by_the_duty(office, monkeypatch):
+    import billing_limits
+    monkeypatch.setattr(billing_limits, "require_card", lambda b, k: None)
+    posted = []
+
+    async def sb_post(client, path, body):
+        posted.append(body)
+        return [{"id": "sched-1", "run_at": body["run_at"]}]
+    monkeypatch.setattr(sms_routing, "_sb_post", sb_post)
+    when = (datetime.now(timezone.utc) + timedelta(days=2)).replace(microsecond=0).isoformat()
+    body = sms_routing.BroadcastBody(business_id=CHURCH, message="Fall Fest is Saturday!", send_at=when)
+    out = asyncio.run(sms_routing.broadcast(body, user=_who(NAIYA_ID)))
+    assert out["scheduled"] is True and posted[0]["action"]["scheduled_by"] == NAIYA_ID
+    from fastapi import HTTPException
+    with pytest.raises(HTTPException) as e:
+        asyncio.run(sms_routing.broadcast(body, user=_who(TIARA_ID)))
+    assert e.value.status_code == 403 and len(posted) == 1
+
+
+def _due(monkeypatch, biz, who):
+    sent = []
+
+    async def announce(business_id, message, group_id=None):
+        sent.append(business_id)
+        return {"ok": True, "sent": 4, "not_yes": 0, "failed": 0, "skipped": 0}
+    import billing_limits
+    monkeypatch.setattr(billing_limits, "require_card", lambda b, k: None)
+    monkeypatch.setattr(sms_routing, "announce", announce)
+    action = {"type": "sms_announcement", "message": "Fall Fest!", "group_id": None, "scheduled_by": who}
+    ok, detail = asyncio.run(sms_routing.run_scheduled_announcement(biz, action))
+    return ok, detail, sent
+
+
+def test_a_scheduled_announcement_goes_while_its_author_still_does_the_weekly_text(office, monkeypatch):
+    import church_duties
+    church = next(b for b in office.t["businesses"] if b["id"] == CHURCH)
+    shop = next(b for b in office.t["businesses"] if b["id"] == SHOP)
+    ok, _, sent = _due(monkeypatch, church, NAIYA_ID)
+    assert ok and sent == [CHURCH]
+    # A barbershop's Manager never could; a church's Manager whose lane doesn't do it can't.
+    for biz, who in ((shop, NAIYA_ID), (church, TIARA_ID)):
+        ok, detail, sent = _due(monkeypatch, biz, who)
+        assert not ok and not sent and "can't send announcements now" in detail
+    # The weekly text moved to someone else between scheduling and sending.
+    office.t["church_duty_holders"] = [{"business_id": CHURCH, "duty": "weekly_text", "user_id": TIARA_ID}]
+    church_duties._CACHE.clear()
+    ok, _, sent = _due(monkeypatch, church, NAIYA_ID)
+    assert not ok and not sent
+
+
+def test_a_scheduled_announcement_whose_duty_cant_be_read_stays_unsent(office, monkeypatch):
+    import sb_clients
+    monkeypatch.setattr(sb_clients, "sb_get_as_service",
+                        lambda p, **k: None if p.startswith("/church_duty_holders") else office.get(p, **k))
+    church = next(b for b in office.t["businesses"] if b["id"] == CHURCH)
+    ok, detail, sent = _due(monkeypatch, church, NAIYA_ID)
+    assert not ok and not sent and detail.startswith("Couldn't check who scheduled")
