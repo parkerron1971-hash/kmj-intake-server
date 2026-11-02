@@ -407,16 +407,16 @@ def _ready(biz, who):
                        {"id": "s1", "name": "Sunday"}, 8, 0)
 
 
-def test_clips_ready_reaches_everyone_who_does_clips_once_each(db, pushed):
+def test_clips_ready_reaches_the_media_team_once_each_never_the_owner_or_admins(db, pushed):
     _ready(BIZ, SHAP)
-    assert pushed == [SHAP, OWNER, ADMIN, JESS], "the starter first, then the owner, the admins, the Managers"
+    assert pushed == [SHAP, JESS], "the starter first, then the other Managers who do clips; not the owner or the treasurer"
     pushed.clear()
     _ready(BIZ, OWNER)
-    assert pushed == [OWNER, ADMIN, JESS, SHAP]
+    assert pushed == [OWNER, JESS, SHAP], "the owner's own run tells the owner, then the media team"
     pushed.clear()
     _move(db, "clips", SHAP)
     _ready(BIZ, SHAP)
-    assert pushed == [SHAP, OWNER, ADMIN], "moved to Shapretta alone: Jessica no longer hears"
+    assert pushed == [SHAP], "moved to Shapretta alone: Jessica no longer hears"
 
 
 def test_clips_ready_outside_a_church_reaches_only_the_starter(db, pushed):

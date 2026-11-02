@@ -613,16 +613,21 @@ def notify(run, source, filed, flagged):
 
 
 def clip_office(business_id, starter):
-    """In a church, every other login that does the clips duty
-    (church_duties.holders_of: the owner, the admins, and each Manager who
-    holds it), once each and never the one who started the run. [] for any
-    other business, and when who does it can't be read: the alert still
-    goes to whoever started the run, as before."""
+    """In a church, every other Manager login that does the clips duty (the
+    media team, church_duties.holders_of), once each and never the one who
+    started the run. The owner and the Admins hold every duty, but the clips
+    aren't their job: the treasurer doesn't get "clips are ready" on her
+    phone, and the owner hears as before (the bell, or a push for their own
+    run). [] for any other business, and when who does it can't be read: the
+    alert still goes to whoever started the run, as before."""
     try:
         import church_duties
+        biz = media_library.key(business_id)
+        managers = {str(s.get('user_id')) for s in (sb_clients.sb_get_as_service(
+            f'/business_users?business_id=eq.{biz}&status=eq.active&role=eq.manager&select=user_id&limit=200') or [])}
         out = []
-        for uid in church_duties.holders_of(media_library.key(business_id), 'clips'):
-            if uid and uid != str(starter) and uid not in out:
+        for uid in church_duties.holders_of(biz, 'clips'):
+            if uid and uid in managers and uid != str(starter) and uid not in out:
                 out.append(uid)
         return out
     except Exception:

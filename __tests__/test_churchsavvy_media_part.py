@@ -240,19 +240,20 @@ def _ready(who):
 
 
 def test_clips_ready_reaches_an_office_login_by_phone_and_a_volunteer_by_email(heard):
-    """Whoever started the run hears first; in a church every other login
-    that does the clips duty hears too (the owner, and this Manager no lane
-    names, whose areas are the whole church), once each."""
+    """Whoever started the run hears first; in a church every other Manager
+    that does the clips duty hears too (this Manager no lane names, whose
+    areas are the whole church), once each. The owner hears for their own
+    run, as before, not for everyone's."""
     manager = PEOPLE["manager"].id
     _ready(manager)
-    assert heard["push"] == [(manager, "grow:video-clips"), (OWNER, "grow:video-clips")]
+    assert heard["push"] == [(manager, "grow:video-clips")]
     heard["push"].clear()
     _ready(OWNER)
     assert heard["push"] == [(OWNER, "grow:video-clips"), (manager, "grow:video-clips")]
     assert heard["email"] == []
     heard["push"].clear()
     _ready(PEOPLE["mo"].id)
-    assert heard["push"] == [(OWNER, "grow:video-clips"), (manager, "grow:video-clips")], (
+    assert heard["push"] == [(manager, "grow:video-clips")], (
         "a volunteer can't turn on phone alerts, so none is sent to them; the office's clip people hear")
     [mail] = heard["email"]
     assert mail["to_email"] == "mo@lovecity.org" and mail["from_name"] == "Love City Church"
@@ -272,4 +273,4 @@ def test_a_volunteer_with_no_email_on_the_team_hears_nothing_and_nothing_breaks(
     db.t["worship_team"][0]["email"] = ""
     _ready(PEOPLE["mo"].id)
     assert heard["email"] == [] and PEOPLE["mo"].id not in {uid for uid, _ in heard["push"]}
-    assert heard["push"] == [(OWNER, "grow:video-clips"), (PEOPLE["manager"].id, "grow:video-clips")]
+    assert heard["push"] == [(PEOPLE["manager"].id, "grow:video-clips")]
