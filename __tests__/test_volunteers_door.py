@@ -26,8 +26,8 @@ Pins:
   * before the migration every team is Volunteers' and nothing is a 500
   * a duties read that fails is a 503, never a yes
 
-The duties are monkeypatched (church_duties.standing), so these hold before
-and after the duty split adds production_schedule to the catalog."""
+The duties each login holds are the test's (church_duties.standing, as the
+split lanes give them); the refusals are church_duties.refusal's own words."""
 from __future__ import annotations
 
 import os
@@ -236,9 +236,10 @@ def test_a_manager_with_neither_hears_whose_job_each_team_is(church):
         assert r.status_code == 403 and r.json()["detail"] == refused(VOL), path
 
 
-def test_shapretta_before_the_split_holds_churchsavvy_team(church):
-    """On main today the catalog has no production_schedule: churchsavvy_team
-    opens ChurchSavvy's teams, and serve_schedule (still Media's too) Volunteers'."""
+def test_churchsavvy_team_alone_opens_churchsavvys_teams_and_a_moved_duty_moves_them(church):
+    """A login given churchsavvy_team (without production_schedule) changes
+    ChurchSavvy's teams, and serve_schedule moved to it Volunteers' too; with
+    neither, it's told whose job they are."""
     church.standing["duties"]["u-shapretta"] = {"churchsavvy_team", "serve_schedule", "stream"}
     c = church.as_("shapretta")
     for team in (PRODUCTION, WELCOME):

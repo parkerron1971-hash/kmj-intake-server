@@ -7,8 +7,7 @@ status: in progress
 prs: [kmj-intake-server#1700, solutionist-studio (the Volunteers door, to come)]
 migrations: [supabase/APPLY-2026-11-02-serve-team-owner.sql (NOT applied; Kevin applies it)]
 left_undone:
-  - "Apply supabase/APPLY-2026-11-02-serve-team-owner.sql (Kevin). Until then every team reads as Volunteers', so a production_schedule-only login changes none"
-  - "Merge after the duty split (production_schedule in church_duties.CATALOG); until then churchsavvy_team opens ChurchSavvy's teams"
+  - "Apply supabase/APPLY-2026-11-02-serve-team-owner.sql (Kevin), best before or with the merge: SUNDAY_PLANNING is on, and until the column exists every team reads as Volunteers', so Shapretta (production_schedule, churchsavvy_team) changes none"
   - "Order-of-service notes (sunday_order PUT /planning/order/notes) still follow CAN['serve'] alone, not the team's owner"
 decisions:
   - "One schedule (sunday_planning), two doors: serve_teams.owner is churchsavvy (worship and production) or volunteers (every other team)"

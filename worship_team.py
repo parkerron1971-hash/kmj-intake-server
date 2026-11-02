@@ -109,8 +109,7 @@ REFUSED = {
     "serve": "Your part on the team doesn't schedule people. A planner or an admin does.",
 }
 # A church Manager's parts, from the duties it holds (church_duties.CATALOG).
-# production_schedule (the worship and production teams' Sundays) arrives
-# with the duty split; until the catalog has it, nobody holds it.
+# production_schedule is the worship and production teams' Sundays.
 PARTS_FROM_DUTIES: Dict[str, Tuple[str, ...]] = {
     "churchsavvy_team": ("admin",),
     "sunday_plan": ("planner",),

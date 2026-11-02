@@ -129,8 +129,8 @@ OWNERS = (CHURCHSAVVY, VOLUNTEERS)
 CHURCHSAVVY_WORDS = ("worship", "praise", "band", "choir", "music", "singers", "production", "sound", "audio",
                      "camera", "stream", "media", "tech", "booth", "lights", "slides", "projection")
 # The duties (church_duties.CATALOG) that change each owner's teams, the
-# first named in a refusal. production_schedule comes with the duty split;
-# until the catalog has it nobody holds it, and churchsavvy_team is named.
+# first named in a refusal. A key the catalog doesn't have is held by
+# nobody, and the next one is named.
 OWNER_DUTIES: Dict[str, Tuple[str, ...]] = {
     CHURCHSAVVY: ("production_schedule", "churchsavvy_team"),
     VOLUNTEERS: ("serve_schedule",),
