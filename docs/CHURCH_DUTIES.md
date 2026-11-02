@@ -274,3 +274,24 @@ the duty's whole list in one PUT: moving weekly_text to Naiya alone takes it fro
 - Review (2026-11-01): the Executive Pastor's defaults are every non-money duty (she covers any
   lane), and a Manager no lane names does the duties in the areas it works, so wiring a gate to
   `require()` never takes away what an area check gave.
+
+## Step 6b: the monthly report (built 2026-11-02)
+
+Kevin, 2026-11-01: "gathering the reports from admin should be Jessica", with "nothing about money".
+Whoever holds `monthly_report` (the Executive Pastor by default), the owner or an Admin works it in
+`church_monthly_report.py`, switched by `CHURCH_MONTHLY_REPORT` (off | owner | on; owner is the
+platform owner's own church):
+
+- `GET /church/monthly-report?business_id=&month=YYYY-MM` (last month by default): one section a lane,
+  from numbers the app already keeps. Office & Leadership: tasks from meetings done and late, rooms
+  booked, new leaders. People & Care: first-time guests and how many were reached since, Prayer &
+  care received and closed (People & care's counts, as in the Reports pack), people drifting from
+  their groups (today's, so only this month and the one before). Sunday & Serving: attendance at each
+  service, serving places filled and open, people new to a Sunday team. Media & Communications:
+  sermons, clips and posts. A number the church doesn't keep, or whose read failed, is left out
+  (a failed one is named in the section's `missing`). Counts only, and nothing about money.
+- `PUT /church/monthly-report`: a note per lane, kept in `church_monthly_reports`
+  (`supabase/APPLY-2026-11-02-church-monthly-report.sql`).
+- `POST /church/monthly-report/send`: the numbers and the notes, emailed to the owner from the
+  church (the leaders note's path), once a month; a resend needs `force`.
+- My week: due on the first Monday, to the Manager who does it, until it's sent.

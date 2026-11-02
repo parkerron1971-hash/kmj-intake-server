@@ -204,9 +204,16 @@ def build(business: Dict[str, Any], user_id: str, email: str, role: str) -> Dict
             for gap in (by_key[a["key"]].get("gaps") or [])[:2]:
                 needs.append({"kind": "gap", "late": False, "area": a["key"], "title": gap, "detail": a["label"],
                               "door": a["door"]})
+    # Last month's report, due on this month's first Monday, for the Manager
+    # who does monthly_report (church_monthly_report), until it's sent. A read
+    # that fails leaves this one line out; the week stands.
+    import church_monthly_report
+    report = church_monthly_report.week_item(business, user_id, role, today)
+    if report:
+        needs.append(report)
 
     handed = _handed(biz, now, whole, set(mine_areas))
-    order = {"follow_up": 0, "no_one": 1, "care": 2, "task": 3, "gap": 4, "late": 5, "logins": 6}
+    order = {"follow_up": 0, "no_one": 1, "care": 2, "task": 3, "report": 3, "gap": 4, "late": 5, "logins": 6}
     needs.sort(key=lambda n: (not n["late"], order.get(n["kind"], 9)))
     return {
         "me": {"role": role, "areas": view["areas"], "by": view["by"], "why": view["why"], "name": me_name},

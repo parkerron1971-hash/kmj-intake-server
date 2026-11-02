@@ -280,6 +280,10 @@ BUSINESS_CHILD_TABLES: List[str] = [
     # It names no contact and cites role keys and team names, not ids, so
     # it restores as it is.
     "church_area_places",
+    # The monthly report (church_monthly_report): the Executive Pastor's notes
+    # for each lane, a month a row, and the last send. It cites nothing by a
+    # foreign key but the business.
+    "church_monthly_reports",
     # Rooms & spaces (church_spaces): the bookings before the spaces they're
     # in, and before the contacts and invoices (a rental's bill) they cite.
     "church_space_bookings", "church_spaces",
@@ -805,6 +809,11 @@ _IMPORT_SKIP = {
     # They remain in the owner archive and are explicitly reported as skipped.
     "ministry_care_notes", "ministry_care_requests", "ministry_gift_history",
     "giving_statement_sends",  # a send log: a restore must not claim statements went out
+    # The monthly report's notes name their writer and its last send its
+    # sender by sign-in id, and a restore must not claim a report went to the
+    # pastor; the export keeps them, and the restored church writes its notes
+    # again.
+    "church_monthly_reports",
     # A pledge cites its giver and its campaign by id, which the importer
     # re-mints; the export keeps them, and the restored church records its
     # pledge cards again. Campaigns name nothing by id, so they restore.

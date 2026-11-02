@@ -408,6 +408,11 @@ app.include_router(expense_categories_router)
 # app already keeps (2026-10-27; CHURCH_REPORTS off | owner | on).
 from church_reports import router as church_reports_router
 app.include_router(church_reports_router)
+# The monthly report: the Executive Pastor gathers the month from the admin
+# lanes, with nothing about money, and sends it to the pastor (2026-11-02;
+# CHURCH_MONTHLY_REPORT off | owner | on).
+from church_monthly_report import router as church_monthly_report_router
+app.include_router(church_monthly_report_router)
 # The Monday leaders note: this week, what's needed and one win, emailed to
 # the All group leaders room once a week (2026-10-27; CHURCH_LEADERS_NOTE
 # off | owner | on).
