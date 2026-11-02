@@ -554,6 +554,19 @@ def holders_of(business_id: str, duty: str) -> List[str]:
     return out
 
 
+def manager_holders(business_id: str, duty: str) -> List[str]:
+    """The Manager logins that do this duty at this church today (holds()
+    says yes), without the owner and the admins: who the Executive Pastor's
+    Monday roll-up goes to (church_team_week). [] for a business that isn't a
+    church. A failed read is a 503."""
+    _known(duty)
+    biz = str(business_id)
+    if not _is_church(_business(biz)):
+        return []
+    return [str(s["user_id"]) for s in _seats(biz)
+            if s.get("role") == "manager" and duty in standing(biz, str(s["user_id"]))["duties"]]
+
+
 def duties_of(business_id: str, user_id: str, role: Optional[str]) -> Optional[List[str]]:
     """This login's duty keys, in the catalog's order, for /team/my-role:
     every key for the owner and the admins. None when they don't apply (not
