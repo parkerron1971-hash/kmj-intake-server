@@ -4,7 +4,7 @@ date: 2026-11-01
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-11-01: "church savvy should be connected with shapretta mcclain right from the list since she over media" (step 2b of docs/CHURCH_DUTIES.md, approved)'
 status: in progress
-prs: [kmj-intake-server (this PR)]
+prs: [kmj-intake-server#1692]
 migrations: []
 left_undone:
   - "FE: the marketing desk, Video Clips and the site builder show their buttons to a church login whose duties open them (GET /engine can_edit already says so); ChurchSavvy's team list shows each office login's lane and parts (the new staff fields)"
