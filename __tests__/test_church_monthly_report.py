@@ -492,13 +492,45 @@ def test_a_failed_email_frees_the_month(app, rdb):
     assert _send(app).status_code == 200 and len(rdb.sent) == 1
 
 
-def test_a_send_in_flight_is_a_409_and_a_stale_one_can_go_again(app, rdb):
+def test_a_send_in_flight_is_a_409_and_a_stale_one_goes_again_only_by_name(app, rdb):
     rdb.t[cmr.TABLE].append({"business_id": BIZ, "month": "2026-10", "notes": {}, "send_id": "a" * 32,
                              "send_state": "sending", "sent_at": "2026-11-02T14:55:00Z", "sends": 1})
     r = _send(app)
     assert r.status_code == 409 and "right now" in r.json()["detail"] and not rdb.sent
     rdb.t[cmr.TABLE][0]["sent_at"] = "2026-11-02T13:00:00Z"
-    assert _send(app).status_code == 200 and len(rdb.sent) == 1
+    r = _send(app)
+    assert r.status_code == 409 and "may have gone" in r.json()["detail"] and not rdb.sent
+    assert _send(app, force=True).status_code == 200 and len(rdb.sent) == 1
+    assert rdb.t[cmr.TABLE][0]["send_state"] == "sent" and rdb.t[cmr.TABLE][0]["sends"] == 2
+
+
+def _patch_fails_for(rdb, monkeypatch, when):
+    real = rdb.patch
+
+    def patch(path, body, **kw):
+        return None if path.startswith(f"/{cmr.TABLE}") and when(body) else real(path, body, **kw)
+    monkeypatch.setattr(sb_clients, "sb_patch_as_service", patch)
+
+
+def test_a_send_that_went_but_wasnt_noted_says_so_and_never_goes_twice_unasked(app, rdb, monkeypatch):
+    _patch_fails_for(rdb, monkeypatch, lambda body: body == {"send_state": "sent"})
+    r = _send(app)
+    assert r.status_code == 200 and r.json()["sent"] and r.json()["recorded"] is False
+    assert "no need to send it again" in r.json()["warning"]
+    assert rdb.t[cmr.TABLE][0]["send_state"] == "sending" and len(rdb.sent) == 1
+    assert cmr.week_item(_biz(rdb), JESS, "manager", date(2026, 11, 5)) is None, "it went: My week doesn't nag"
+    assert _get(app)["sending"] is True
+    assert _send(app).status_code == 409, "in the hold"
+    rdb.t[cmr.TABLE][0]["sent_at"] = "2026-11-02T13:00:00Z"
+    assert _send(app).status_code == 409 and len(rdb.sent) == 1, "after it: only by name"
+
+
+def test_a_failed_email_whose_claim_cant_be_let_go_says_when_to_try(app, rdb, monkeypatch):
+    rdb.fail = True
+    _patch_fails_for(rdb, monkeypatch, lambda body: body.get("send_state") is None and "sends" in body)
+    r = _send(app)
+    assert r.status_code == 503 and "tried again in 10 minutes" in r.json()["detail"]
+    assert not rdb.sent
 
 
 def test_no_owner_email_sends_nothing(app, monkeypatch, rdb):

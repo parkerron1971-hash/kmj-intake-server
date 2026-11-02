@@ -43,7 +43,10 @@ Who: the owner, an admin, or a Manager that does monthly_report (a Manager
 without it is told whose job it is). The send emails the finished page (the
 numbers and the notes) to the owner, from the church, through the leaders
 note's email path, once a month: the last send is kept on the month's row, and
-a resend needs `force`. My week shows it as due on the first Monday to the
+a resend needs `force`. Every write after the email is checked: one that went
+but wasn't noted says so (`recorded` false) and leaves the month "sending", and
+a send still "sending" past its ten-minute hold goes again only with `force`,
+so the pastor never gets it twice unasked. My week shows it as due on the first Monday to the
 Manager who does it (church_my_week), until it's sent.
 
 Notes and sends live in church_monthly_reports (supabase/APPLY-2026-11-02-
@@ -613,6 +616,7 @@ def build(me: Dict[str, Any], month: Any = None) -> Dict[str, Any]:
                         if row and row.get("notes_at") else None),
         "care": bool(me["care"]),
         "sent": sent is not None, "last_send": sent,
+        "sending": bool(row and row.get("send_state") == "sending"),
         "due": {"day": due.isoformat(), "words": day_words(due)},
         "to": {"name": owner_name(biz)},
     }
@@ -726,8 +730,14 @@ def send(me: Dict[str, Any], body: Dict[str, Any]) -> Dict[str, Any]:
     row = _row(biz_id, month)
     was = last_send(row, tz)
     started = _at((row or {}).get("sent_at"))
-    if (row or {}).get("send_state") == "sending" and started and _now() - started < SENDING_HOLD:
-        raise HTTPException(409, "Someone else is sending this report right now. Open it again in a moment.")
+    if (row or {}).get("send_state") == "sending":
+        if started and _now() - started < SENDING_HOLD:
+            raise HTTPException(409, "Someone else is sending this report right now. Open it again in a moment.")
+        # Older than the hold: it was cut off, or it went and wasn't noted.
+        # Either way, only a send asked for by name goes again.
+        if not body.get("force"):
+            raise HTTPException(409, "The last send of this report may have gone without being noted. Send it again "
+                                     "only if the pastor didn't get it.")
     if was and not body.get("force"):
         raise HTTPException(409, f"{report['month_words']}'s report already went to {report['to']['name']} "
                                  f"({was['sent_words']}{', by ' + was['by_name'] if was['by_name'] else ''}). "
@@ -761,13 +771,34 @@ def send(me: Dict[str, Any], body: Dict[str, Any]) -> Dict[str, Any]:
         logger.warning("monthly report: the email failed (business %s)", biz_id[:8], exc_info=True)
         back = {k: (row or {}).get(k) for k in ("send_id", "send_state", "sent_at", "sent_by", "sent_by_name", "sends")}
         back["sends"] = int(back.get("sends") or 0)
-        sb_clients.sb_patch_as_service(f"/{TABLE}?business_id=eq.{_q(biz_id)}&month=eq.{_q(month)}"
-                                       f"&send_id=eq.{_q(claim['send_id'])}", back)
+        if not _mark(biz_id, month, claim["send_id"], back):
+            print(f"[church_monthly_report] {biz_id[:8]} {month}: a failed send's claim wasn't let go; "
+                  f"it is held for {int(SENDING_HOLD.total_seconds() // 60)} minutes")
+            raise HTTPException(503, "The report didn't reach the pastor just now, so nothing was sent. It can be "
+                                     f"tried again in {int(SENDING_HOLD.total_seconds() // 60)} minutes.")
         raise HTTPException(503, "The report didn't reach the pastor just now, so nothing was sent. Try again in a moment.")
     done = {**claim, "send_state": "sent"}
-    sb_clients.sb_patch_as_service(f"/{TABLE}?business_id=eq.{_q(biz_id)}&month=eq.{_q(month)}"
-                                   f"&send_id=eq.{_q(claim['send_id'])}", {"send_state": "sent"})
-    return {"ok": True, "month": month, "to": report["to"]["name"], "last_send": last_send(done, tz), "sent": True}
+    recorded = _mark(biz_id, month, claim["send_id"], {"send_state": "sent"})
+    out = {"ok": True, "month": month, "to": report["to"]["name"], "last_send": last_send(done, tz), "sent": True,
+           "recorded": recorded}
+    if not recorded:
+        # The pastor has it; the month still says "sending". A send after the
+        # hold asks for force (send() above), so this never goes twice unasked.
+        print(f"[church_monthly_report] {biz_id[:8]} {month}: SENT, but the send wasn't recorded "
+              f"(send {claim['send_id'][:12]})")
+        out["warning"] = "It went to the pastor, but the app couldn't note that it went. There's no need to send it again."
+    return out
+
+
+def _mark(biz_id: str, month: str, send_id: str, fields: Dict[str, Any]) -> bool:
+    """Write what became of this send, only while the month is still this
+    send's. Tried twice; False when neither write landed."""
+    where = f"/{TABLE}?business_id=eq.{_q(biz_id)}&month=eq.{_q(month)}&send_id=eq.{_q(send_id)}"
+    for _ in range(2):
+        got = sb_clients.sb_patch_as_service(where, fields)
+        if isinstance(got, list) and got:
+            return True
+    return False
 
 
 # ─── My week: due on the first Monday ─────────────────────────────────
@@ -792,8 +823,8 @@ def week_item(business: Dict[str, Any], user_id: str, role: Optional[str], today
     except Exception:
         logger.info("monthly report: My week's line failed (business %s)", biz_id[:8], exc_info=True)
         return None
-    if last_send(row, timezone.utc):
-        return None
+    if (row or {}).get("send_id"):
+        return None      # sent, or sending (one that went but wasn't noted never nags)
     due = first_monday(this)
     words = MONTH_NAMES[first.month - 1]
     if today < due:
