@@ -402,6 +402,11 @@ def my_week(business_id: str, as_user: Optional[str] = None, session: UserSessio
         if overseer and seat[0].get("role") != "manager":
             raise HTTPException(403, OVERSEER_ONLY)
         out = build(biz, uid, seat[0].get("invited_email") or "", seat[0].get("role") or "viewer")
+        if overseer:
+            # A duty never widens what a login sees: the overseer reads the
+            # other Manager's week inside her own areas.
+            import church_team_week
+            out = church_team_week.within(out, church_team_week.view_of(bid, str(session.user.id), role))
         out["seeing_as"] = seeing_as(bid, uid, seat[0], out)
         return out
     return build(biz, str(session.user.id), session.user.email or "", role)

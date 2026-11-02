@@ -50,6 +50,8 @@ MEMBER = "a7000000-0000-4000-8000-000000000007"     # a Member login
 C_JESS = "c5000000-0000-4000-8000-000000000005"
 C_NAIYA = "c2000000-0000-4000-8000-000000000002"
 MONDAY = datetime(2026, 11, 2, 14, 0, tzinfo=timezone.utc)     # Monday, 8:00 AM in Chicago
+EVERY_AREA = [a for a in ("worship_media", "people_care", "kids_youth", "groups_classes", "messages_safety",
+                          "website_outreach", "office")]
 MONEY = re.compile(r"amount|cents|fee|giving|gift|fund|deposit|bank|money|price|pledge|donat|payout|\bpay\b|total")
 
 
@@ -80,8 +82,9 @@ def team(week, monkeypatch):
     t["businesses"][0]["settings"] = {"practitioner_name": "Pastor Kevin",
                                       "availability": {"timezone": "America/Chicago"}}
     t["business_users"] += [
+        # The leadership plan: "Manager login with every area picked".
         {"business_id": BIZ, "user_id": JESS, "invited_email": "jessica@lovecity.org", "role": "manager",
-         "status": "active", "areas": None, "lane": None, "contact_id": None, "name": None},
+         "status": "active", "areas": EVERY_AREA, "lane": None, "contact_id": None, "name": None},
         {"business_id": BIZ, "user_id": NAIYA, "invited_email": "naiya@lovecity.org", "role": "manager",
          "status": "active", "areas": None, "lane": "office_leadership", "contact_id": C_NAIYA, "name": None},
         {"business_id": BIZ, "user_id": ADMIN, "invited_email": "minnie@lovecity.org", "role": "admin",
@@ -234,6 +237,29 @@ def test_the_switch_closes_the_overseers_see_as(app, monkeypatch):
     assert _see(app, MARCUS_SEAT).status_code == 403
     monkeypatch.setattr(member_asks, "platform_church", lambda b: str(b) == BIZ)
     assert _see(app, MARCUS_SEAT).status_code == 200, "owner: the platform owner's own church"
+
+
+def _jess_works(team, areas):
+    import church_areas
+    next(s for s in team.t["business_users"] if s["user_id"] == JESS)["areas"] = areas
+    church_areas._MY_CACHE.clear()
+    cd._CACHE.clear()
+
+
+def test_see_as_stays_inside_her_own_areas(app, team):
+    """A duty never widens what a login sees: over the lanes but working only
+    the Office, she sees Marcus's own tasks, never his People & care or Kids
+    & youth."""
+    _jess_works(team, ["office"])
+    w = _see(app, MARCUS_SEAT).json()
+    assert w["areas"] == [] and w["handed"] == []
+    items = [w["next"]] + w["needs"]
+    assert [i["kind"] for i in items] == ["task"] and items[0]["title"] == "Print the youth flyers"
+    assert "Robert" not in str(w) and "background check" not in str(w)
+    assert w["seeing_as"]["name"] == "Marcus Taylor"
+    _jess_works(team, EVERY_AREA)
+    w = _see(app, MARCUS_SEAT).json()
+    assert [a["key"] for a in w["areas"]] == ["kids_youth"] and "Robert Hayes was handed to you." in str(w)
 
 
 def test_a_failed_duty_read_is_a_503_never_a_yes(app, team, monkeypatch):
@@ -408,6 +434,44 @@ def test_the_roll_up_switch(team, monkeypatch):
     assert ctw.rollup_tick(MONDAY)["sent"] == 0 and not team.sent
     monkeypatch.setattr(member_asks, "platform_church", lambda b: str(b) == BIZ)
     assert ctw.rollup_tick(MONDAY)["sent"] == 1
+
+
+def test_follow_up_and_care_counts_are_people_and_cares(app, team):
+    _jess_works(team, ["office"])
+    page = _team(app)
+    assert page["care"] is False
+    assert all("follow_ups" not in r and "care" not in r for r in page["team"])
+    assert next(r for r in page["team"] if r["user_id"] == NAIYA)["tasks"]["late"] == 1, "her team's tasks stand"
+    ctw.rollup_tick(MONDAY)
+    html = team.sent[0]["html"]
+    assert "follow-up" not in html and "care request" not in html and "Book the fellowship hall" in html
+
+
+def test_a_week_that_reached_some_tries_the_rest_and_no_one_twice(team):
+    team.t["church_duty_holders"] = [{"business_id": BIZ, "duty": "oversee_lanes", "user_id": u} for u in (JESS, NAIYA)]
+    team.fail_to = {"naiya@lovecity.org"}
+    first = ctw.rollup_tick(MONDAY)
+    assert first["sent"] == 1 and first["unsent"] == 1
+    rec = team.t["businesses"][0]["settings"][ctw.KEY]
+    assert rec["state"] == "partial" and rec["to"] == [JESS]
+    team.fail_to = set()
+    again = ctw.rollup_tick(MONDAY + timedelta(hours=1))
+    assert again["sent"] == 1 and [m["to"] for m in team.sent] == ["jessica@lovecity.org", "naiya@lovecity.org"]
+    rec = team.t["businesses"][0]["settings"][ctw.KEY]
+    assert rec["state"] == "sent" and sorted(rec["to"]) == sorted([JESS, NAIYA])
+    assert ctw.rollup_tick(MONDAY + timedelta(hours=2))["already"] == 1 and len(team.sent) == 2
+
+
+def test_a_record_that_doesnt_save_is_counted(team, monkeypatch):
+    real = ctw.swap
+    calls = []
+
+    def swap(b, expect, rec):
+        calls.append(rec)
+        return real(b, expect, rec) if len(calls) == 1 else False
+    monkeypatch.setattr(ctw, "swap", swap)
+    stats = ctw.rollup_tick(MONDAY)
+    assert stats["sent"] == 1 and stats["unrecorded"] == 1
 
 
 def test_a_claim_another_replica_took_sends_nothing(team, monkeypatch):

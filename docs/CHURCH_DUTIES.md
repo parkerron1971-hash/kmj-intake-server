@@ -184,6 +184,11 @@ switched by `CHURCH_TEAM_ROLLUP` (off | owner | on; owner is the platform owner'
   a push to My week for each Manager over the lanes (`church_duties.manager_holders`), never the owner
   or an admin. Once per church per ISO week, kept in `businesses.settings.church_team_rollup`.
 
+A duty never widens what a login sees: the overseer's See as is cut to her own areas (her own
+team's tasks always; follow-ups, care, each area's line and gaps only where she works), and the
+follow-up and care counts on the team page and in the roll-up go only to an overseer who works
+People & care. A roll-up that reached some holders and not others tries the rest the next hour.
+
 A Manager no lane names holds every duty in the areas it works (the rule above), so with Who sees
 what off, or nothing placing it, it is over the lanes too until a church moves `oversee_lanes`.
 

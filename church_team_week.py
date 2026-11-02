@@ -8,7 +8,10 @@ view, without the monthly report (its own PR).
     SEE AS ......... GET /church/my-week?as_user= opens to whoever is over the
                      lanes, for another Manager login on the same church only,
                      never an Admin or the owner (church_my_week). The page
-                     says whose week it is (`seeing_as`).
+                     says whose week it is (`seeing_as`). A duty never widens
+                     what a login sees: the week is cut to the overseer's own
+                     areas (within), so a follow-up's name reaches her only if
+                     she works People & care herself.
     THE TEAM ....... GET /church/my-week/team?business_id= (whoever is over the
                      lanes, the owner, an admin): each office Manager login,
                      with its name and lane; its open tasks and how many are
@@ -17,9 +20,10 @@ view, without the monthly report (its own PR).
                      and what's due this week from its duties (each duty's day
                      in the catalog: "Wed: The weekly text"). No money, and
                      nothing behind a keeper wall: no names of the people in
-                     follow-up, nothing of what a care request asked. A failed
-                     read of one login's data is a 503 for that row, never a
-                     row that looks empty.
+                     follow-up, nothing of what a care request asked, and the
+                     follow-up and care counts only for an overseer who works
+                     People & care herself. A failed read of one login's data
+                     is a 503 for that row, never a row that looks empty.
     MONDAY ......... rollup_tick, hourly on the worker: on Monday in each
                      church's morning (its own clock, church_leader_tasks'
                      LATE_FROM to LATE_UNTIL), one email to each Manager over
@@ -29,7 +33,10 @@ view, without the monthly report (its own PR).
                      has chief_week). Claimed once per church per ISO week in
                      businesses.settings.church_team_rollup, swapped only when
                      nobody else changed it (church_leaders_note's way), so two
-                     replicas send once. Quiet when no Manager is over the lanes.
+                     replicas send once. A week that reached some holders and not
+                     others is `partial`: the next hour tries only the rest. A
+                     record that doesn't save is logged and counted. Quiet when
+                     no Manager is over the lanes.
 
 Switched by CHURCH_TEAM_ROLLUP: off | owner | on. Owner (the default) means
 the platform owner's own church (member_asks.platform_church), for the
@@ -101,6 +108,44 @@ def overseer(business_id: Any, user: AuthedUser, role: Optional[str]) -> bool:
     if role != "manager":
         return False
     return cd.holds(str(business_id), user, OVERSEE)
+
+
+CARE = "people_care"
+
+
+def view_of(business_id: Any, user_id: str, role: Optional[str]) -> Optional[List[str]]:
+    """The areas this login sees itself, or None for the whole church (the
+    owner and the admins always; anyone while Who sees what is off). A duty
+    never widens what a login sees (docs/CHURCH_DUTIES.md, rule 5), so what
+    the overseer reads of her team stays inside her own areas. A view that
+    can't be read is a 503, never everything."""
+    if role in KEEPS_ALL or church_areas.mode() != "on":
+        return None
+    view = church_areas.my_areas(str(business_id), str(user_id), role)
+    if view is None:
+        raise HTTPException(503, "Your areas couldn't be read just now. Try again.")
+    areas = view.get("areas")
+    return None if areas is None else [str(a) for a in areas]
+
+
+def within(week: Dict[str, Any], areas: Optional[List[str]]) -> Dict[str, Any]:
+    """Another Manager's week (church_my_week.build) as the overseer may
+    read it: only what lies in the areas she sees herself. Her own view the
+    whole church: the week as it is. A task handed to the login is its own,
+    whatever area it's filed under, so it always shows; people in follow-up
+    and care handed to them are People & care's; a first check-in is Kids &
+    youth's too; each area's line and gaps are that area's."""
+    if areas is None:
+        return week
+    mine = set(areas)
+    items = [n for n in ([week["next"]] if week.get("next") else []) + list(week.get("needs") or [])
+             if n.get("kind") == "task" or n.get("area") in mine]
+    handed = list(week.get("handed") or [])
+    if CARE not in mine:
+        handed = [h for h in handed if h.get("from") == "Kids check-in"] if "kids_youth" in mine else []
+    shown = [a for a in week.get("areas") or [] if a.get("key") in mine]
+    return {**week, "areas": shown, "next": items[0] if items else None, "needs": items[1:], "handed": handed,
+            "counts": {"needs": len(items), "areas": len(shown), "handed": len(handed)}}
 
 
 # ─── Small things ─────────────────────────────────────────────────────
@@ -230,8 +275,10 @@ def _person_ids(biz: str, seat: Dict[str, Any]) -> List[str]:
 
 
 def row(biz: Dict[str, Any], seat: Dict[str, Any], name: str, now: datetime, today: date,
-        monday: date) -> Dict[str, Any]:
-    """One Manager login's week, in counts. Raises a 503 when a read fails."""
+        monday: date, care: bool = True) -> Dict[str, Any]:
+    """One Manager login's week, in counts. Raises a 503 when a read fails.
+    `care` False (an overseer whose areas leave People & care out): no
+    follow-up or care counts, and nothing is read for them."""
     b, uid = str(biz["id"]), str(seat["user_id"])
     s = cd.standing(b, uid)
     clt = _clt()
@@ -242,24 +289,31 @@ def row(biz: Dict[str, Any], seat: Dict[str, Any], name: str, now: datetime, tod
         items.append({"title": _plain(t.get("title"))[:200] or "A task", "due": due or None,
                       "due_text": clt.due_words(due, today)["text"], "late": bool(due and due < today.isoformat())})
     items.sort(key=lambda i: (not i["late"], i["due"] or "9999-12-31"))
-    ids = _person_ids(b, seat)
-    fu_open = fu_late = 0
-    if ids:
-        fus = _need(f"/church_follow_ups?business_id=eq.{_q(b)}&leader_contact_id=in.({','.join(_q(i) for i in ids)})"
-                    "&status=eq.open&select=id,due_at&limit=1000")
-        fu_open = len(fus)
-        fu_late = sum(1 for f in fus if (_at(f.get("due_at")) or now) < now)
-    care = _need(f"/ministry_care_requests?business_id=eq.{_q(b)}&assigned_to=eq.{_q(uid)}"
-                 "&status=in.(new,reviewed)&select=id&limit=500")
     week = due_this_week(s["duties"], monday)
     late = sum(1 for i in items if i["late"])
-    return {"user_id": uid, "name": name, "lane": _lane_words(s["lanes"]), "lanes": list(s["lanes"]),
-            "ok": True, "status": 200,
-            "tasks": {"open": len(items), "late": late, "items": items[:TASKS_SHOWN],
-                      "late_items": [i for i in items if i["late"]][:LATE_NAMED]},
-            "follow_ups": {"open": fu_open, "late": fu_late},
-            "care": {"open": len(care)},
-            "this_week": week, "this_week_text": " · ".join(w["text"] for w in week)}
+    out = {"user_id": uid, "name": name, "lane": _lane_words(s["lanes"]), "lanes": list(s["lanes"]),
+           "ok": True, "status": 200,
+           "tasks": {"open": len(items), "late": late, "items": items[:TASKS_SHOWN],
+                     "late_items": [i for i in items if i["late"]][:LATE_NAMED]},
+           "this_week": week, "this_week_text": " · ".join(w["text"] for w in week)}
+    if care:
+        ids = _person_ids(b, seat)
+        fu_open = fu_late = 0
+        if ids:
+            fus = _need(f"/church_follow_ups?business_id=eq.{_q(b)}&leader_contact_id=in.({','.join(_q(i) for i in ids)})"
+                        "&status=eq.open&select=id,due_at&limit=1000")
+            fu_open = len(fus)
+            fu_late = sum(1 for f in fus if (_at(f.get("due_at")) or now) < now)
+        asked = _need(f"/ministry_care_requests?business_id=eq.{_q(b)}&assigned_to=eq.{_q(uid)}"
+                      "&status=in.(new,reviewed)&select=id&limit=500")
+        out["follow_ups"] = {"open": fu_open, "late": fu_late}
+        out["care"] = {"open": len(asked)}
+    return out
+
+
+def without_care(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """The rows without their follow-up and care counts (People & care's)."""
+    return [{k: v for k, v in r.items() if k not in ("follow_ups", "care")} for r in rows]
 
 
 def unread_row(seat: Dict[str, Any], name: str, err: HTTPException) -> Dict[str, Any]:
@@ -272,12 +326,14 @@ def unread_row(seat: Dict[str, Any], name: str, err: HTTPException) -> Dict[str,
 
 # ─── The team ─────────────────────────────────────────────────────────
 
-def team(biz: Dict[str, Any], now: Optional[datetime] = None, exclude: Optional[str] = None) -> Dict[str, Any]:
+def team(biz: Dict[str, Any], now: Optional[datetime] = None, exclude: Optional[str] = None,
+         care: bool = True) -> Dict[str, Any]:
     """Every active Manager login on the church but `exclude` (the overseer
     asking: her own week is My week), each a row. The seats and the church's
     clock must answer (a 503 for the page); one login's own reads failing is
     a 503 for its row alone. A name that can't be read is the part of the
-    login's email before the @."""
+    login's email before the @. `care` False leaves out the follow-up and
+    care counts (an overseer whose own areas leave People & care out)."""
     now = now or _now()
     b = str(biz["id"])
     tz = _zone(biz)
@@ -288,7 +344,7 @@ def team(biz: Dict[str, Any], now: Optional[datetime] = None, exclude: Optional[
     for s in seats:
         name = seat_name(b, s)
         try:
-            rows.append(row(biz, s, name, now, today, monday))
+            rows.append(row(biz, s, name, now, today, monday, care))
         except HTTPException as e:
             if e.status_code != 503:
                 raise
@@ -300,6 +356,7 @@ def team(biz: Dict[str, Any], now: Optional[datetime] = None, exclude: Optional[
         "today": today.isoformat(),
         "week": {"monday": monday.isoformat(), "words": f"the week of {monday:%B} {monday.day}"},
         "team": rows,
+        "care": care,
         "counts": {"logins": len(rows), "late_tasks": sum(r["tasks"]["late"] for r in rows if r["ok"]),
                    "unread": sum(1 for r in rows if not r["ok"])},
     }
@@ -323,7 +380,8 @@ def my_team(business_id: str, session: UserSession = Depends(sb_clients.authed_r
     role = church_my_week._role(biz, uid)
     if not overseer(bid, session.user, role):
         raise HTTPException(403, cd.refusal(bid, OVERSEE))
-    return team(biz, exclude=uid if role == "manager" else None)
+    areas = view_of(bid, uid, role)
+    return team(biz, exclude=uid if role == "manager" else None, care=areas is None or CARE in areas)
 
 
 # ─── Monday: the roll-up ──────────────────────────────────────────────
@@ -348,10 +406,10 @@ def _line(r: Dict[str, Any]) -> str:
     counts = []
     if t["open"]:
         counts.append(_n(t["open"], "open task", "open tasks") + (f", {t['late']} late" if t["late"] else ""))
-    fu = r["follow_ups"]
-    if fu["open"]:
+    fu = r.get("follow_ups") or {}
+    if fu.get("open"):
         counts.append(_n(fu["open"], "follow-up", "follow-ups") + " open" + (f", {fu['late']} late" if fu["late"] else ""))
-    if r["care"]["open"]:
+    if (r.get("care") or {}).get("open"):
         counts.append(_n(r["care"]["open"], "prayer or care request", "prayer or care requests") + " open")
     if counts:
         lines.append(("" if late else "Nothing late. ") + "; ".join(counts) + ".")
@@ -430,9 +488,14 @@ def run_church(biz: Dict[str, Any], now: datetime, stats: Dict[str, int]) -> Non
         return
     week = week_key(local.date())
     last = last_of(biz)
+    # This week's roll-up went to everyone it could, or is going now: done.
+    # One that reached some and not others (`partial`) tries the rest again.
+    told: List[str] = []
     if last and last.get("week") == week:
-        stats["already"] += 1
-        return
+        if last.get("state") != "partial":
+            stats["already"] += 1
+            return
+        told = [str(u) for u in last.get("to") or []]
     try:
         holders = cd.manager_holders(b, OVERSEE)
         if not holders:
@@ -443,12 +506,15 @@ def run_church(biz: Dict[str, Any], now: datetime, stats: Dict[str, int]) -> Non
         stats["unread"] += 1
         return  # the next hour of the morning tries again
     names = {r["user_id"]: r["name"] for r in page["team"]}
-    letters = [(uid, [r for r in page["team"] if r["user_id"] != uid]) for uid in holders]
+    letters = [(uid, [r for r in page["team"] if r["user_id"] != uid]) for uid in holders if uid not in told]
     letters = [(uid, rows) for uid, rows in letters if rows]
     if not letters:
-        stats["no_team"] += 1
+        if told:
+            _record(b, last, {**last, "state": "sent"}, stats)   # whoever was left has no team to hear about
+        else:
+            stats["no_team"] += 1
         return
-    claim = {"id": uuid.uuid4().hex, "week": week, "state": "sending", "at": _iso(now), "sent": 0, "to": []}
+    claim = {"id": uuid.uuid4().hex, "week": week, "state": "sending", "at": _iso(now), "sent": len(told), "to": told}
     if not swap(b, (last or {}).get("id"), claim):
         return
     import church_office_tasks as cot
@@ -461,6 +527,14 @@ def run_church(biz: Dict[str, Any], now: datetime, stats: Dict[str, int]) -> Non
         if not email:
             stats["no_email"] += 1
             continue
+        # Each holder reads only what her own areas hold: People & care's
+        # counts stay out for one whose areas leave it out (or can't be read).
+        try:
+            areas = view_of(b, uid, "manager")
+        except HTTPException:
+            areas = []
+        if areas is not None and CARE not in areas:
+            rows = without_care(rows)
         name = names.get(uid, "")
         subject = rollup_subject(rows)
         try:
@@ -475,13 +549,22 @@ def run_church(biz: Dict[str, Any], now: datetime, stats: Dict[str, int]) -> Non
         _push(uid, b, "Your team this week",
               f"{_n(late, 'task', 'tasks')} late on the team." if late else "Nothing late on the team.",
               f"team-{week}")
-    if not sent and unsent:
-        swap(b, claim["id"], last)       # nothing went: the week is free for the next hour
-        stats["unsent"] += unsent
-        return
-    swap(b, claim["id"], {**claim, "state": "sent", "sent": len(sent), "to": sent})
     stats["sent"] += len(sent)
     stats["unsent"] += unsent
+    if not sent and unsent:
+        _record(b, claim, last, stats)    # nothing went: the week is as it was, for the next hour
+        return
+    everyone = told + sent
+    _record(b, claim, {**claim, "state": "partial" if unsent else "sent", "sent": len(everyone), "to": everyone}, stats)
+
+
+def _record(biz_id: str, claim: Dict[str, Any], rec: Optional[Dict[str, Any]], stats: Dict[str, int]) -> None:
+    """Swap the week's claim for what happened. A write that doesn't land is
+    said in the log and the stats: the week would otherwise sit as sending,
+    with nobody told, until next Monday."""
+    if not swap(biz_id, claim["id"], rec):
+        stats["unrecorded"] += 1
+        print(f"[church_team_week] {biz_id[:8]}: the roll-up's record didn't save (week {claim.get('week')})")
 
 
 def rollup_tick(now: Optional[datetime] = None) -> Dict[str, int]:
@@ -489,7 +572,7 @@ def rollup_tick(now: Optional[datetime] = None) -> Dict[str, int]:
     Manager login, its roll-up in its Monday morning. A church that fails
     never stops the others. Quiet with the switch off."""
     stats = {"churches": 0, "sent": 0, "unsent": 0, "no_email": 0, "no_one": 0, "no_team": 0,
-             "already": 0, "unread": 0}
+             "already": 0, "unread": 0, "unrecorded": 0}
     if mode() == "off":
         return stats
     now = now or _now()
