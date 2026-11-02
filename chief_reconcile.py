@@ -32,8 +32,9 @@ batch back (the newest, or a batch_id), row by row, and skips any row that
 someone changed since, so an undo never overwrites a later decision. undo_last
 reaches it too, for a day; asked by name, for RECONCILE_UNDO_DAYS.
 
-Who may: the owner, the same gate as the Reconciliation screen's writes
-(plaid_router._require_owner, the church money wall included), as the person
+Who may: the owner, or a church's Admin seat (the treasurer), the same gate
+as the Reconciliation screen's writes (plaid_router._require_money_writer,
+the church money wall included), as the person
 talking. Bulk, so it never runs unprompted (policy_engine). Same switch as
 the bank search: CHIEF_BANK_SEARCH.
 """
@@ -241,14 +242,15 @@ def _owner(business_id: str) -> Optional[str]:
     from chief_of_staff import _TURN_USER_ID
     user_id = _TURN_USER_ID.get()
     if not user_id:
-        return "Reconciling is done only for the signed-in owner."
+        return "Reconciling is done only for a signed-in person who keeps the books."
     from fastapi import HTTPException
     import plaid_router
     try:
-        plaid_router._require_owner(business_id, SimpleNamespace(id=user_id))
+        plaid_router._require_money_writer(business_id, SimpleNamespace(id=user_id))
     except HTTPException as e:
         if e.status_code == 403 and not isinstance(e.detail, dict):
-            return "Only the owner can reconcile the books, the same as on the Reconciliation screen."
+            return ("Only the owner, or a church's Admin, can reconcile the books, the same as on the "
+                    "Reconciliation screen.")
         detail = e.detail.get("message") if isinstance(e.detail, dict) else e.detail
         return str(detail or "This login can't change the bank rows.")
     return None
