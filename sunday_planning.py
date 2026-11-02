@@ -29,26 +29,32 @@
 # leaders and thread are the group's own, and serve_teams holds only its
 # turns. A volunteer is a contact (they answer in the member app), never a
 # business_users seat. Who may schedule comes from worship_team: the owner,
-# an admin or a manager, and a ChurchSavvy admin or planner ("serve"). In a
-# church a manager schedules only when its duties make it a planner or an
-# admin (sunday_plan, serve_schedule or churchsavvy_team; worship_team.
-# PARTS_FROM_DUTIES).
+# an admin or a manager, and a ChurchSavvy admin, planner or scheduler
+# ("serve"). In a church a manager schedules only when its duties give it
+# one of those parts (sunday_plan, production_schedule, serve_schedule or
+# churchsavvy_team; worship_team.PARTS_FROM_DUTIES).
 # Every other part, and a viewer seat, reads only.
+#
+# In a church, each Sunday team belongs to ChurchSavvy or to Volunteers
+# (serve_teams.owner; "whose team it is" below), and each person changes
+# only their own teams. GET /teams and /schedule take owner=churchsavvy or
+# owner=volunteers for one door's teams; without it, the whole Sunday.
 from __future__ import annotations
 
 import logging
 import os
 import re
+import time as clock
 import uuid
 from datetime import date, datetime, time, timedelta, timezone
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, FrozenSet, Iterable, List, Optional, Set, Tuple
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException
 
 import sb_clients
 from auth_supabase import AuthedUser, require_user
-from worship_team import can, require, roles_of
+from worship_team import REFUSED, can, parts_of, require, roles_of
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/planning", tags=["planning"])
@@ -94,6 +100,194 @@ def open_to(user: AuthedUser) -> bool:
 def _gate(user: AuthedUser) -> None:
     if not open_to(user):
         raise HTTPException(404, "Not Found")
+
+
+# ─── whose team it is ────────────────────────────────────────────────
+# One schedule, two doors (Kevin, 2026-11-02: "churchsavvy is shapretta
+# because that has to do with the service projection and order of service
+# for production team and partnering with worship team. volunteers and roles
+# laquesha is doing is her assignment", then "yes churchsavvy for worship
+# team, announcements to shapretta. go"; supabase/APPLY-2026-11-02-serve-
+# team-owner.sql). In a church each Sunday team has an owner:
+#   churchsavvy   the worship and production teams: changed by a login that
+#                 does production_schedule or churchsavvy_team (the Media &
+#                 Communications lane), and by ChurchSavvy's own team (a
+#                 planner or an admin it invited: the worship pastor)
+#   volunteers    every other team (greeters, ushers, kids, parking,
+#                 hospitality, outreach): changed by a login that does
+#                 serve_schedule (the Sunday & Serving lane)
+# The owner and every Admin login change any team; anyone else is refused
+# with whose job it is (church_duties.refusal). Changing a team is its turns,
+# its places, who's trained, an ask, an offer, an answer, taking an ask back
+# and filling its Sundays. Reading is as before: everyone who opens Planning
+# sees every team, so the whole Sunday shows and nobody is double-booked.
+# A business that isn't a church, and a church on ChurchSavvy alone, are
+# unchanged: whoever schedules changes every team.
+CHURCHSAVVY, VOLUNTEERS = "churchsavvy", "volunteers"
+OWNERS = (CHURCHSAVVY, VOLUNTEERS)
+# A team nobody gave an owner, by its name: the migration's backfill too.
+CHURCHSAVVY_WORDS = ("worship", "praise", "band", "choir", "music", "singers", "production", "sound", "audio",
+                     "camera", "stream", "media", "tech", "booth", "lights", "slides", "projection")
+# The duties (church_duties.CATALOG) that change each owner's teams, the
+# first named in a refusal. production_schedule comes with the duty split;
+# until the catalog has it nobody holds it, and churchsavvy_team is named.
+OWNER_DUTIES: Dict[str, Tuple[str, ...]] = {
+    CHURCHSAVVY: ("production_schedule", "churchsavvy_team"),
+    VOLUNTEERS: ("serve_schedule",),
+}
+
+
+def owner_by_name(name: Any) -> str:
+    """ChurchSavvy's when the team's name says worship or production, else
+    Volunteers'."""
+    low = str(name or "").lower()
+    return CHURCHSAVVY if any(w in low for w in CHURCHSAVVY_WORDS) else VOLUNTEERS
+
+
+# Before the migration serve_teams.owner isn't there, and asking for it
+# makes PostgREST refuse the whole read: then every team reads as
+# Volunteers' and a new team is saved without it. Only PostgREST's own "no
+# such column" (42703) says so, and it's asked again a minute later, so the
+# owners show soon after the migration runs.
+NO_COLUMN_SECONDS = 60.0
+_no_column: Dict[str, float] = {"at": 0.0}
+
+
+def _column_missing() -> Optional[bool]:
+    """True: serve_teams.owner doesn't exist (42703). False: it answers.
+    None: couldn't tell (a blip), which is never read as missing."""
+    import httpx
+    try:
+        resp = httpx.get(f"{sb_clients.sb_url()}/rest/v1/serve_teams?select=owner&limit=1",
+                         headers=sb_clients.sb_headers_service(), timeout=10.0)
+    except Exception:
+        return None
+    if resp.status_code < 300:
+        return False
+    if resp.status_code == 400 and "42703" in resp.text:
+        return True
+    return None
+
+
+def _owner_missing() -> bool:
+    at = _no_column["at"]
+    return bool(at) and clock.monotonic() - at < NO_COLUMN_SECONDS
+
+
+def _serve_rows(path: str, fields: str) -> List[Dict[str, Any]]:
+    """serve_teams rows (`path` has no select) with each one's `owner`.
+    Before the migration they're read without it, each Volunteers'. Any
+    other failed read is a 503."""
+    if not _owner_missing():
+        rows = sb_clients.sb_get_as_service(f"{path}&select={fields},owner")
+        if rows is not None:
+            return [{**r, "owner": r.get("owner") if r.get("owner") in OWNERS else VOLUNTEERS} for r in rows]
+        if _column_missing() is not True:
+            raise HTTPException(503, "The schedule couldn't be read just now. Try again.")
+        _no_column["at"] = clock.monotonic()
+    return [{**r, "owner": VOLUNTEERS} for r in _read(f"{path}&select={fields}")]
+
+
+def _office(biz: str) -> bool:
+    """Whether this church's Sunday teams have owners: a church
+    (church_follow_up.is_church), and not one on ChurchSavvy alone."""
+    import church_follow_up
+    import churchsavvy_billing
+    rows = _read(f"/businesses?id=eq.{_q(biz)}&select=id,type,settings&limit=1")
+    return bool(rows) and church_follow_up.is_church(rows[0]) and not churchsavvy_billing.standalone(rows[0])
+
+
+def _owners_for(biz: str, user: AuthedUser) -> Tuple[FrozenSet[str], Optional[str]]:
+    """(whose teams this person changes in a church, their office role).
+    The owner and an Admin login: every team. Otherwise the owners whose
+    duties they hold (OWNER_DUTIES), and ChurchSavvy's teams for ChurchSavvy's
+    own team when its parts schedule. A duties read that fails is a 503."""
+    import church_duties
+    standing = church_duties.standing(biz, str(user.id))
+    role = standing.get("role")
+    if role in ("owner", "admin"):
+        return frozenset(OWNERS), role
+    held = standing.get("duties") or frozenset()
+    mine = {owner for owner, duties in OWNER_DUTIES.items() if any(d in held for d in duties)}
+    if can(parts_of(biz, user.id), "serve"):
+        mine.add(CHURCHSAVVY)
+    return frozenset(mine), role
+
+
+def _scheduler(biz: str, user: AuthedUser) -> Dict[str, Any]:
+    """Who is changing the schedule, before any team is read: {roles,
+    office, owners, role}. Outside a church's teams with owners: whoever
+    schedules (CAN["serve"]) changes every team, as before. In one: whoever
+    may change some team (_owners_for). A Manager who may change none hears
+    whose job it is from the team it tried (_team_gate); anyone else with
+    none (a viewer seat, a booth volunteer) hears the part's refusal now."""
+    roles = roles_of(biz, user, part="planning")
+    if not _office(biz):
+        if not can(roles, "serve"):
+            raise HTTPException(403, REFUSED["serve"])
+        return {"roles": roles, "office": False, "owners": frozenset(OWNERS), "role": None}
+    owners, role = _owners_for(biz, user)
+    if not owners and role != "manager":
+        raise HTTPException(403, REFUSED["serve"])
+    return {"roles": roles, "office": True, "owners": owners, "role": role}
+
+
+def _refusal(biz: str, owner: str) -> str:
+    """Whose job this owner's teams are, in church_duties' words."""
+    import church_duties
+    duty = next((d for d in OWNER_DUTIES[owner] if d in church_duties.CATALOG), None)
+    return church_duties.refusal(biz, duty) if duty else REFUSED["serve"]
+
+
+def _team_gate(biz: str, who: Dict[str, Any], owner: str) -> None:
+    """403 unless `who` (_scheduler) changes this owner's teams."""
+    if who["office"] and owner not in who["owners"]:
+        raise HTTPException(403, _refusal(biz, owner))
+
+
+def _place_gate(biz: str, who: Dict[str, Any], group_id: Any) -> None:
+    """_team_gate for the team a place is on."""
+    if who["office"]:
+        _team_gate(biz, who, _team_row(biz, str(group_id))["owner"])
+
+
+def _new_owner(who: Dict[str, Any], given: Any, name: str) -> str:
+    """A new team's owner: the one asked for; else, in a church, the one
+    door its maker schedules for; else by its name."""
+    if given is not None:
+        if given not in OWNERS:
+            raise HTTPException(400, "A Sunday team is ChurchSavvy's or Volunteers'")
+        return given
+    if who["office"] and len(who["owners"]) == 1:
+        return next(iter(who["owners"]))
+    return owner_by_name(name)
+
+
+def _doors(biz: str, user: AuthedUser, roles: Set[str]) -> Dict[str, Any]:
+    """For the pages: whether this church's teams have owners (two_doors),
+    whose this person changes, and whose a team they make is by default
+    (None: they choose, by its name unless they say). A read that fails
+    shows nothing as theirs to change; every write still asks for itself."""
+    try:
+        office = _office(biz)
+    except HTTPException:
+        return {"two_doors": False, "change": [], "new_team_owner": None}
+    if not office:
+        return {"two_doors": False, "change": list(OWNERS) if can(roles, "serve") else [], "new_team_owner": None}
+    try:
+        mine, _role = _owners_for(biz, user)
+    except HTTPException:
+        mine = frozenset()
+    return {"two_doors": True, "change": [o for o in OWNERS if o in mine],
+            "new_team_owner": next(iter(mine)) if len(mine) == 1 else None}
+
+
+def _which(owner: Optional[str]) -> Optional[str]:
+    if owner in (None, ""):
+        return None
+    if owner not in OWNERS:
+        raise HTTPException(400, "owner is churchsavvy or volunteers")
+    return owner
 
 
 # ─── helpers ─────────────────────────────────────────────────────────
@@ -188,9 +382,10 @@ def _hhmm(t: Any) -> Optional[str]:
 
 
 def _teams(biz: str) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
-    """(the Sunday teams with their places, people and who's trained;
-    the church's other serving teams that could become one)."""
-    serve = _read(f"/serve_teams?business_id=eq.{_q(biz)}&select=group_id,call_time,max_month,swap_needs_ok,families,sort")
+    """(the Sunday teams with their places, people and who's trained, and
+    whose each is; the church's other serving teams that could become one,
+    each with whose it would be by its name)."""
+    serve = _serve_rows(f"/serve_teams?business_id=eq.{_q(biz)}", "group_id,call_time,max_month,swap_needs_ok,families,sort")
     groups = _read(f"/groups?business_id=eq.{_q(biz)}&kind=eq.team&active=eq.true&select=id,name&order=name.asc")
     by_group = {str(s["group_id"]): s for s in serve}
     names = {str(g["id"]): g["name"] for g in groups}
@@ -217,7 +412,7 @@ def _teams(biz: str) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
                           "often": often.get(str(m["contact_id"]))}
                          for m in mine), key=lambda p: (not p["leader"], p["name"].lower()))
         out.append({
-            "group_id": gid, "name": names[gid], "call_time": _hhmm(s.get("call_time")),
+            "group_id": gid, "name": names[gid], "owner": s["owner"], "call_time": _hhmm(s.get("call_time")),
             "max_month": s.get("max_month", 2), "swap_needs_ok": bool(s.get("swap_needs_ok")),
             "families": bool(s.get("families", True)), "sort": s.get("sort") or 0,
             "people": people,
@@ -231,12 +426,13 @@ def _teams(biz: str) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
             } for p in places if str(p["group_id"]) == gid],
         })
     out.sort(key=lambda t: (t["sort"], t["name"].lower()))
-    others = [{"group_id": str(g["id"]), "name": g["name"]} for g in groups if str(g["id"]) not in by_group]
+    others = [{"group_id": str(g["id"]), "name": g["name"], "owner": owner_by_name(g["name"])}
+              for g in groups if str(g["id"]) not in by_group]
     return out, others
 
 
 def _team_row(biz: str, gid: str) -> Dict[str, Any]:
-    rows = _read(f"/serve_teams?group_id=eq.{_q(gid)}&business_id=eq.{_q(biz)}&select=group_id,max_month&limit=1")
+    rows = _serve_rows(f"/serve_teams?group_id=eq.{_q(gid)}&business_id=eq.{_q(biz)}&limit=1", "group_id,max_month")
     if not rows:
         raise HTTPException(404, "That Sunday team isn't here")
     return rows[0]
@@ -270,7 +466,7 @@ def status(business_id: Optional[str] = None, user: AuthedUser = Depends(require
     portal = settings.get("member_portal") if isinstance(settings.get("member_portal"), dict) else {}
     return {"enabled": True, "can_write": can(roles, "serve"), "roles": sorted(roles),
             "can_setup": can(roles, "setup"), "email_asks": cs.get("planning_email") is True,
-            "member_app": portal.get("enabled") is True}
+            "member_app": portal.get("enabled") is True, **_doors(biz, user, roles)}
 
 
 @router.put("/email")
@@ -296,45 +492,60 @@ def set_email_asks(body: Dict[str, Any], user: AuthedUser = Depends(require_user
 
 
 @router.get("/teams")
-def list_teams(business_id: str, user: AuthedUser = Depends(require_user)):
+def list_teams(business_id: str, owner: Optional[str] = None, user: AuthedUser = Depends(require_user)):
+    """The Sunday teams; with owner=, only ChurchSavvy's or only Volunteers'.
+    `change` is whose teams this person may change (every team's still read)."""
     _gate(user)
     biz = _uuid(business_id)
+    which = _which(owner)
     roles = _staff(biz, user, write=False)
     teams, others = _teams(biz)
-    return {"teams": teams, "other_teams": others, "starters": STARTERS, "can_write": can(roles, "serve")}
+    if which:
+        teams = [t for t in teams if t["owner"] == which]
+    return {"teams": teams, "other_teams": others, "starters": STARTERS, "can_write": can(roles, "serve"),
+            "owner": which, "owner_words": list(CHURCHSAVVY_WORDS), **_doors(biz, user, roles)}
 
 
 @router.post("/teams")
 def add_team(body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
     """Schedule a serving team on Sundays: one the church has (group_id), or
-    a new one by name, with the places it starts with."""
+    a new one by name, with the places it starts with. In a church it's
+    ChurchSavvy's or Volunteers' (`owner`): the one asked for, else the one
+    door its maker schedules for, else by its name."""
     _gate(user)
     body = body or {}
     biz = _uuid(body.get("business_id"))
-    _staff(biz, user, write=True)
-    have = _read(f"/serve_teams?business_id=eq.{_q(biz)}&select=group_id")
+    who = _scheduler(biz, user)
+    have = _serve_rows(f"/serve_teams?business_id=eq.{_q(biz)}", "group_id")
     if len(have) >= MAX_TEAMS:
         raise HTTPException(400, f"A church schedules at most {MAX_TEAMS} Sunday teams")
     places = body.get("places") or []
     if not isinstance(places, list) or len(places) > 12:
         raise HTTPException(400, "A team starts with at most 12 places")
     places = [_clean_name(p, "place", 40) for p in places]
+    gid: Optional[str] = None
     if body.get("group_id"):
         gid = _uuid(body["group_id"], "team")
-        rows = _read(f"/groups?id=eq.{_q(gid)}&business_id=eq.{_q(biz)}&kind=eq.team&active=eq.true&select=id&limit=1")
+        rows = _read(f"/groups?id=eq.{_q(gid)}&business_id=eq.{_q(biz)}&kind=eq.team&active=eq.true&select=id,name&limit=1")
         if not rows:
             raise HTTPException(404, "That serving team isn't here")
         if any(str(h["group_id"]) == gid for h in have):
             raise HTTPException(409, "That team is already on Sundays")
+        name = str(rows[0].get("name") or "")
     else:
         name = _clean_name(body.get("name"), "team", 80)
+    owner = _new_owner(who, body.get("owner"), name)
+    _team_gate(biz, who, owner)
+    if gid is None:
         made = sb_clients.sb_post_as_service("/groups?select=id",
                                              {"business_id": biz, "name": name, "kind": "team", "join_mode": "ask"})
         if not isinstance(made, list) or not made:
             raise HTTPException(503, "The team didn't save. Try again.")
         gid = str(made[0]["id"])
-    saved = sb_clients.sb_post_as_service("/serve_teams?select=group_id",
-                                          {"group_id": gid, "business_id": biz, "sort": len(have)})
+    row: Dict[str, Any] = {"group_id": gid, "business_id": biz, "sort": len(have)}
+    if not _owner_missing():
+        row["owner"] = owner
+    saved = sb_clients.sb_post_as_service("/serve_teams?select=group_id", row)
     if not isinstance(saved, list) or not saved:
         raise HTTPException(503, "The team didn't save. Try again.")
     if places:
@@ -352,13 +563,25 @@ def add_team(body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
 
 @router.patch("/teams/{group_id}")
 def change_team(group_id: str, body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
+    """A team's turns. In a church, `owner` moves it to the other door: only
+    for someone who changes both doors' teams (the owner, an Admin)."""
     _gate(user)
     body = body or {}
     biz = _uuid(body.get("business_id"))
-    _staff(biz, user, write=True)
+    who = _scheduler(biz, user)
     gid = _uuid(group_id, "team")
-    _team_row(biz, gid)
+    team = _team_row(biz, gid)
+    _team_gate(biz, who, team["owner"])
     fields: Dict[str, Any] = {}
+    if "owner" in body:
+        to = body["owner"]
+        if to not in OWNERS:
+            raise HTTPException(400, "A Sunday team is ChurchSavvy's or Volunteers'")
+        if to != team["owner"]:
+            _team_gate(biz, who, to)
+            if _owner_missing():
+                raise HTTPException(409, "A team can't move between ChurchSavvy and Volunteers just yet. Try again soon.")
+            fields["owner"] = to
     if "call_time" in body:
         ct = body["call_time"]
         if ct in (None, ""):
@@ -399,9 +622,9 @@ def drop_team(group_id: str, business_id: str, user: AuthedUser = Depends(requir
     Refused once anyone was asked: their Sundays would vanish with it."""
     _gate(user)
     biz = _uuid(business_id)
-    _staff(biz, user, write=True)
+    who = _scheduler(biz, user)
     gid = _uuid(group_id, "team")
-    _team_row(biz, gid)
+    _team_gate(biz, who, _team_row(biz, gid)["owner"])
     places = _read(f"/serve_positions?group_id=eq.{_q(gid)}&business_id=eq.{_q(biz)}&select=id")
     if places and _read(f"/serve_assignments?business_id=eq.{_q(biz)}&position_id=in.({_ids(p['id'] for p in places)})"
                         f"&select=id&limit=1"):
@@ -416,9 +639,9 @@ def add_place(body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
     _gate(user)
     body = body or {}
     biz = _uuid(body.get("business_id"))
-    _staff(biz, user, write=True)
+    who = _scheduler(biz, user)
     gid = _uuid(body.get("group_id"), "team")
-    _team_row(biz, gid)
+    _team_gate(biz, who, _team_row(biz, gid)["owner"])
     name = _clean_name(body.get("name"), "place", 40)
     needed = body.get("needed", 1)
     if not isinstance(needed, int) or isinstance(needed, bool) or not 1 <= needed <= 10:
@@ -445,9 +668,10 @@ def change_place(position_id: str, body: Dict[str, Any], user: AuthedUser = Depe
     _gate(user)
     body = body or {}
     biz = _uuid(body.get("business_id"))
-    _staff(biz, user, write=True)
+    who = _scheduler(biz, user)
     pid = _uuid(position_id, "place")
     place = _place_row(biz, pid)
+    _place_gate(biz, who, place["group_id"])
     fields: Dict[str, Any] = {}
     if "name" in body:
         name = _clean_name(body["name"], "place", 40)
@@ -483,9 +707,9 @@ def retire_place(position_id: str, business_id: str, user: AuthedUser = Depends(
     """Retire a place: it leaves the schedule; who served there stays."""
     _gate(user)
     biz = _uuid(business_id)
-    _staff(biz, user, write=True)
+    who = _scheduler(biz, user)
     pid = _uuid(position_id, "place")
-    _place_row(biz, pid)
+    _place_gate(biz, who, _place_row(biz, pid)["group_id"])
     saved = sb_clients.sb_patch_as_service(
         f"/serve_positions?id=eq.{_q(pid)}&business_id=eq.{_q(biz)}&select=id", {"active": False})
     if not isinstance(saved, list) or not saved:
@@ -500,9 +724,10 @@ def set_trained(position_id: str, body: Dict[str, Any], user: AuthedUser = Depen
     _gate(user)
     body = body or {}
     biz = _uuid(body.get("business_id"))
-    _staff(biz, user, write=True)
+    who = _scheduler(biz, user)
     pid = _uuid(position_id, "place")
     place = _place_row(biz, pid)
+    _place_gate(biz, who, place["group_id"])
     raw = body.get("people")
     if not isinstance(raw, list) or len(raw) > MAX_TRAINED:
         raise HTTPException(400, f"A place lists at most {MAX_TRAINED} people")
@@ -714,25 +939,31 @@ def _assignment_out(r: Dict[str, Any], who: Dict[str, Dict[str, Any]]) -> Dict[s
 
 @router.get("/schedule")
 def schedule(business_id: str, user: AuthedUser = Depends(require_user), weeks: int = 5,
-             start: Optional[str] = None):
+             start: Optional[str] = None, owner: Optional[str] = None):
+    """The coming services, each team's places and who's on them; with
+    owner=, only ChurchSavvy's or only Volunteers' teams and their asks."""
     _gate(user)
     biz = _uuid(business_id)
+    which = _which(owner)
     roles = _staff(biz, user, write=False)
     if not 1 <= weeks <= MAX_WEEKS:
         raise HTTPException(400, f"Show 1 to {MAX_WEEKS} weeks")
     board = _Board(biz, start, weeks)
+    teams = [t for t in board.teams if not which or t["owner"] == which]
+    places = {p["id"] for t in teams for p in t["places"]}
     shown = {s["id"] for s in board.services}
-    rows = [r for r in board.rows if str(r["service_id"]) in shown]
+    rows = [r for r in board.rows if str(r["service_id"]) in shown and (not which or str(r["position_id"]) in places)]
     who = _people(biz, [r.get("contact_id") for r in rows] + [r.get("swap_to") for r in rows]
                   + [a["contact_id"] for a in board.away])
     return {
         "from": board.first.isoformat(), "weeks": weeks,
         "services": board.services,
-        "teams": board.teams,
+        "teams": teams,
         "assignments": [_assignment_out(r, who) for r in rows],
         "away": [{"contact_id": str(a["contact_id"]), "name": (who.get(str(a["contact_id"])) or {}).get("name"),
                   "starts_on": a["starts_on"], "ends_on": a["ends_on"]} for a in board.away],
         "can_write": can(roles, "serve"),
+        "owner": which, **_doors(biz, user, roles),
     }
 
 
@@ -831,9 +1062,10 @@ def ask(body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
     _gate(user)
     body = body or {}
     biz = _uuid(body.get("business_id"))
-    _staff(biz, user, write=True)
+    who = _scheduler(biz, user)
     sid, pid = _uuid(body.get("service_id"), "service"), _uuid(body.get("position_id"), "place")
     cid = _uuid(body.get("contact_id"), "person")
+    _place_gate(biz, who, _place_row(biz, pid)["group_id"])
     return do_ask(biz, sid, pid, body.get("slot", 1), cid, _asker(biz, user))
 
 
@@ -863,8 +1095,9 @@ def offer(body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
     _gate(user)
     body = body or {}
     biz = _uuid(body.get("business_id"))
-    _staff(biz, user, write=True)
+    who = _scheduler(biz, user)
     sid, pid = _uuid(body.get("service_id"), "service"), _uuid(body.get("position_id"), "place")
+    _place_gate(biz, who, _place_row(biz, pid)["group_id"])
     return do_offer(biz, sid, pid, body.get("slot", 1), _asker(biz, user))
 
 
@@ -883,15 +1116,26 @@ def _assignment(biz: str, aid: str) -> Dict[str, Any]:
     return rows[0]
 
 
+def _asked_gate(biz: str, who: Dict[str, Any], row: Dict[str, Any]) -> None:
+    """_team_gate for the team an ask is on (its place retired or not)."""
+    if not who["office"]:
+        return
+    places = _read(f"/serve_positions?id=eq.{_q(row['position_id'])}&business_id=eq.{_q(biz)}&select=group_id&limit=1")
+    if not places:
+        raise HTTPException(404, "That isn't on the schedule anymore")
+    _place_gate(biz, who, places[0]["group_id"])
+
+
 @router.post("/assignments/{assignment_id}/answer")
 def mark_answer(assignment_id: str, body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
     """Their answer, when they gave it in person or by phone."""
     _gate(user)
     body = body or {}
     biz = _uuid(body.get("business_id"))
-    _staff(biz, user, write=True)
+    who = _scheduler(biz, user)
     aid = _uuid(assignment_id, "schedule")
     row = _assignment(biz, aid)
+    _asked_gate(biz, who, row)
     status_ = body.get("status")
     if status_ not in ("yes", "no"):
         raise HTTPException(400, "The answer is yes or no")
@@ -910,8 +1154,10 @@ def mark_answer(assignment_id: str, body: Dict[str, Any], user: AuthedUser = Dep
 def take_back(assignment_id: str, business_id: str, user: AuthedUser = Depends(require_user)):
     _gate(user)
     biz = _uuid(business_id)
-    _staff(biz, user, write=True)
-    return do_take_back(biz, _uuid(assignment_id, "schedule"))
+    who = _scheduler(biz, user)
+    aid = _uuid(assignment_id, "schedule")
+    _asked_gate(biz, who, _assignment(biz, aid))
+    return do_take_back(biz, aid)
 
 
 def do_take_back(biz: str, aid: str) -> Dict[str, Any]:
@@ -927,25 +1173,41 @@ def fill(body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
     someone trained, free that hour and not away, never past their team's
     Sundays a month, and the most rested first. New people learning a place
     are left for a leader to pair with someone. Nothing goes out until the
-    next sweep, so the whole fill can be taken back."""
+    next sweep, so the whole fill can be taken back. In a church, only the
+    teams this person changes: one asked for (group_id), else every one of
+    theirs."""
     _gate(user)
     body = body or {}
     biz = _uuid(body.get("business_id"))
-    _staff(biz, user, write=True)
+    who = _scheduler(biz, user)
     weeks = body.get("weeks", 4)
     if not isinstance(weeks, int) or isinstance(weeks, bool) or not 1 <= weeks <= MAX_WEEKS:
         raise HTTPException(400, f"Fill 1 to {MAX_WEEKS} weeks")
     only = _uuid(body["group_id"], "team") if body.get("group_id") else None
-    return do_fill(biz, weeks, body.get("start"), only)
+    owners: Optional[FrozenSet[str]] = None
+    if who["office"]:
+        if only:
+            _place_gate(biz, who, only)
+        elif not who["owners"]:
+            raise HTTPException(403, _refusal(biz, VOLUNTEERS))
+        elif set(who["owners"]) != set(OWNERS):
+            owners = who["owners"]
+    return do_fill(biz, weeks, body.get("start"), only, owners=owners)
 
 
-def do_fill(biz: str, weeks: int, start: Optional[str], only: Optional[str], asker: str = FILLED_BY) -> Dict[str, Any]:
+def do_fill(biz: str, weeks: int, start: Optional[str], only: Optional[str], asker: str = FILLED_BY,
+            owners: Optional[Iterable[str]] = None) -> Dict[str, Any]:
+    """Fill the open places; `owners` keeps it to those owners' teams. The
+    board is every team either way, so nobody is asked twice the same hour."""
     board = _Board(biz, start, weeks)
+    keep = set(owners) if owners is not None else None
     fresh: List[Dict[str, Any]] = []
     left = 0
     for svc in board.services:
         for team in board.teams:
             if only and team["group_id"] != only:
+                continue
+            if keep is not None and team["owner"] not in keep:
                 continue
             for place in team["places"]:
                 for slot in range(1, (place["needed"] or 1) + 1):
@@ -974,15 +1236,36 @@ def do_fill(biz: str, weeks: int, start: Optional[str], only: Optional[str], ask
 
 @router.post("/unfill")
 def unfill(body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
-    """Take back asks that haven't gone out yet (and nobody answered)."""
+    """Take back asks that haven't gone out yet (and nobody answered). In a
+    church, only asks on the teams this person changes."""
     _gate(user)
     body = body or {}
     biz = _uuid(body.get("business_id"))
-    _staff(biz, user, write=True)
+    who = _scheduler(biz, user)
     raw = body.get("ids")
     if not isinstance(raw, list) or not raw or len(raw) > 400:
         raise HTTPException(400, "Which asks to take back?")
-    return do_unfill(biz, [_uuid(i, "schedule") for i in raw])
+    ids = [_uuid(i, "schedule") for i in raw]
+    if who["office"] and set(who["owners"]) != set(OWNERS):
+        if not who["owners"]:
+            raise HTTPException(403, _refusal(biz, VOLUNTEERS))
+        ids = _asks_on(biz, ids, who["owners"])
+    return do_unfill(biz, ids)
+
+
+def _asks_on(biz: str, ids: List[str], owners: Iterable[str]) -> List[str]:
+    """Which of these asks are on the teams of these owners."""
+    keep = set(owners)
+    teams = {str(t["group_id"]) for t in _serve_rows(f"/serve_teams?business_id=eq.{_q(biz)}", "group_id")
+             if t["owner"] in keep}
+    out: List[str] = []
+    for i in range(0, len(ids), 100):
+        rows = _read(f"/serve_assignments?business_id=eq.{_q(biz)}&id=in.({_ids(ids[i:i + 100])})&select=id,position_id")
+        pids = sorted({str(r["position_id"]) for r in rows})
+        places = {str(p["id"]): str(p["group_id"]) for p in (_read(
+            f"/serve_positions?business_id=eq.{_q(biz)}&id=in.({_ids(pids)})&select=id,group_id") if pids else [])}
+        out += [str(r["id"]) for r in rows if places.get(str(r["position_id"])) in teams]
+    return out
 
 
 def do_unfill(biz: str, ids: List[str]) -> Dict[str, Any]:
