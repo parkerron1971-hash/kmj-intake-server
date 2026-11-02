@@ -192,13 +192,25 @@ def test_money_is_only_the_treasurers_and_only_in_giving():
 
 
 def test_each_lanes_starter_set_is_read_from_the_catalog():
-    assert cd.STARTER["office_leadership"] == ["weekly_text", "leaders_note", "meetings", "rooms", "chat_rules",
-                                               "leaders_list"]
-    assert cd.STARTER["people_care"] == ["care_board", "shepherding", "kids"]
-    assert cd.STARTER["sunday_serving"] == ["rooms", "sunday_plan", "serve_schedule", "events", "attendance",
-                                            "churchsavvy_team"]
-    assert cd.STARTER["media_comms"] == ["serve_schedule", "events", "posts", "clips", "stream", "website",
-                                         "churchsavvy_team"]
+    # Love City's office split into the real jobs each admin does (Kevin, 2026-11-02).
+    assert cd.STARTER["office_leadership"] == ["front_desk", "leaders_note", "meetings", "decisions", "weekly_text",
+                                               "calendar", "rooms", "building", "records", "chat_rules",
+                                               "leaders_list", "new_leaders", "supplies"]
+    assert cd.STARTER["people_care"] == ["first_guests", "care_visits", "prayer", "help_requests", "shepherding",
+                                         "groups", "member_records", "kids", "youth", "devotionals"]
+    # The volunteers: rooms are the Office's alone, and ChurchSavvy's jobs Media's.
+    assert cd.STARTER["sunday_serving"] == ["serve_schedule", "serve_teams", "new_volunteers", "background_checks",
+                                            "serving_thanks", "events", "outreach_nights", "attendance"]
+    # ChurchSavvy and production (Kevin, 2026-11-02: "churchsavvy is shapretta").
+    assert cd.STARTER["media_comms"] == ["sunday_plan", "production_schedule", "churchsavvy_team", "announcements",
+                                         "stream", "sermons", "clips", "posts", "flyers", "website"]
+    # Each lane's duties are its own: nothing is in two lanes now.
+    lanes = ("office_leadership", "people_care", "sunday_serving", "media_comms", "treasurer")
+    assert [len(cd.STARTER[ln]) for ln in lanes] == [13, 10, 8, 10, 4]
+    assert all(len(d["lanes"]) == 1 for d in cd.CATALOG.values())
+    # The care board is the People & Care lane's jobs now, one by one.
+    assert "care_board" not in cd.CATALOG and "sunday_ready" not in cd.CATALOG
+    assert len(cd.CATALOG) == 47
     # The Executive Pastor covers any lane: every duty but money (the plan Kevin approved 10-27).
     assert cd.STARTER["executive_pastor"] == [k for k, d in cd.CATALOG.items() if not d["money"]]
     assert [k for k, d in cd.CATALOG.items() if d["lanes"] == ["executive_pastor"]] == ["monthly_report", "oversee_lanes"]
@@ -275,7 +287,8 @@ def test_a_row_moves_a_duty_and_the_lane_default_no_longer_decides_it(db):
     # Only that duty moved: the rest of each lane is as it was.
     assert _held(NAIYA) == set(cd.STARTER["office_leadership"]) - {"weekly_text"}
     assert _held(TIARA) == set(cd.STARTER["people_care"]) | {"weekly_text"}
-    # Rooms is two lanes' by default; moved to Laquesha, it's hers alone.
+    # Rooms is the Office's by default; moved to Laquesha, it's hers alone.
+    assert not cd.holds(BIZ, _u(LAQ), "rooms")
     _move(db, "rooms", LAQ)
     assert cd.holds(BIZ, _u(LAQ), "rooms") and not cd.holds(BIZ, _u(NAIYA), "rooms")
 
@@ -385,7 +398,7 @@ def test_a_logins_duties_are_kept_a_minute(db, monkeypatch):
 
 def test_the_minute_old_answers_are_dropped_as_new_ones_come(db, monkeypatch):
     cd.holds(BIZ, _u(NAIYA), "weekly_text")
-    cd.holds(BIZ, _u(TIARA), "care_board")
+    cd.holds(BIZ, _u(TIARA), "care_visits")
     assert len(cd._CACHE) == 2
     now = cd.time.monotonic()
     monkeypatch.setattr(cd.time, "monotonic", lambda: now + cd.CACHE_SECONDS + 1)
@@ -400,20 +413,23 @@ def test_require_says_whose_job_it_is(db):
     with pytest.raises(HTTPException) as e:
         cd.require(BIZ, _u(TIARA), "weekly_text")
     assert e.value.status_code == 403
-    assert e.value.detail == ("“The weekly text” is the Office & Leadership lane's job here. "
+    assert e.value.detail == ("“The weekly text and email” is the Office & Leadership lane's job here. "
                               "The owner or an admin can give it to you in Logins & areas.")
     _move(db, "weekly_text", NAIYA)
     with pytest.raises(HTTPException) as e:
         cd.require(BIZ, _u(TIARA), "weekly_text")
-    assert e.value.detail.startswith("“The weekly text” is Naiya's job here.")
+    assert e.value.detail.startswith("“The weekly text and email” is Naiya's job here.")
     _move(db, "weekly_text", LAQ, OWNER)
     with pytest.raises(HTTPException) as e:
         cd.require(BIZ, _u(TIARA), "weekly_text")
-    assert e.value.detail.startswith("“The weekly text” is ") and "'s job here." in e.value.detail
+    assert e.value.detail.startswith("“The weekly text and email” is ") and "'s job here." in e.value.detail
     assert all(n in e.value.detail for n in ("Naiya", "Laquesha", "Pastor Kevin"))
-    with pytest.raises(HTTPException) as e:
-        cd.require(BIZ, _u(TIARA), "rooms")
-    assert "the Office & Leadership and Sunday & Serving lanes' job" in e.value.detail
+    # Every room is booked from one place (2026-11-02): Sunday & Serving sends a request.
+    for who in (TIARA, LAQ):
+        with pytest.raises(HTTPException) as e:
+            cd.require(BIZ, _u(who), "rooms")
+        assert e.value.detail == ("“Rooms” is the Office & Leadership lane's job here. "
+                                  "The owner or an admin can give it to you in Logins & areas.")
     with pytest.raises(HTTPException) as e:
         cd.require(BIZ, _u(NAIYA), "monthly_report")
     assert e.value.detail.startswith("“The monthly report” is the Executive Pastor's job here.")
@@ -453,7 +469,10 @@ def test_the_page_lists_each_duty_and_who_does_it(office, db):
     # The Office lane, and the Executive Pastor, who covers every lane.
     assert {h["user_id"]: h["name"] for h in wt["holders"]}[NAIYA] == "Naiya Clark"
     assert {h["user_id"] for h in wt["holders"]} == {NAIYA, JESS}
-    assert {h["user_id"] for h in _duty(page, "rooms")["holders"]} == {NAIYA, LAQ, JESS}
+    assert {h["user_id"] for h in _duty(page, "rooms")["holders"]} == {NAIYA, JESS}
+    # Sunday's schedule, split by team: the volunteers' and ChurchSavvy's.
+    assert {h["user_id"] for h in _duty(page, "serve_schedule")["holders"]} == {LAQ, JESS}
+    assert {h["user_id"] for h in _duty(page, "production_schedule")["holders"]} == {SHAP, JESS}
     assert {h["user_id"] for h in _duty(page, "monthly_report")["holders"]} == {JESS}
     # Money by default: the Treasurer's Admin login.
     assert [(h["user_id"], h["active"]) for h in _duty(page, "books")["holders"]] == [(ADMIN, True)]

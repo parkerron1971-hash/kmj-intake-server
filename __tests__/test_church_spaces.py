@@ -480,20 +480,21 @@ def _lane(db, name, lane):
 def test_a_manager_books_approves_and_keeps_the_spaces_by_the_rooms_duty(db):
     import church_duties
     st = lambda: client("manager").get(f"/church/spaces/status?business_id={BIZ}").json()
-    # The Office & Leadership and Sunday & Serving lanes do the rooms by default.
-    for lane in ("office_leadership", "sunday_serving"):
-        _lane(db, "manager", lane)
-        assert st() == {"enabled": True, "book": True, "approve": True, "rentals": False, "rental_list": True}, lane
+    # The Office & Leadership lane does the rooms by default: every room is booked from one place
+    # (2026-11-02), and the other lanes send a room request.
+    _lane(db, "manager", "office_leadership")
+    assert st() == {"enabled": True, "book": True, "approve": True, "rentals": False, "rental_list": True}
     got = _book("manager")
     assert got.status_code == 200 and got.json()["status"] == "booked"
     # A lane that doesn't: refused, told whose job it is, and the menu hides it.
-    _lane(db, "manager", "people_care")
-    refused = client("manager").get(f"/church/spaces?business_id={BIZ}")
-    assert refused.status_code == 403 and refused.json()["detail"] == church_duties.refusal(BIZ, "rooms")
-    assert "Sunday & Serving" in refused.json()["detail"]
-    assert _book("manager", start_at=_ny(2026, 11, 2, 9), end_at=_ny(2026, 11, 2, 10)).status_code == 403
-    assert client("manager").get(f"/church/spaces/rentals?business_id={BIZ}").status_code == 403
-    assert st()["enabled"] is False
+    for lane in ("sunday_serving", "people_care"):
+        _lane(db, "manager", lane)
+        refused = client("manager").get(f"/church/spaces?business_id={BIZ}")
+        assert refused.status_code == 403 and refused.json()["detail"] == church_duties.refusal(BIZ, "rooms"), lane
+        assert "the Office & Leadership lane's job" in refused.json()["detail"]
+        assert _book("manager", start_at=_ny(2026, 11, 2, 9), end_at=_ny(2026, 11, 2, 10)).status_code == 403
+        assert client("manager").get(f"/church/spaces/rentals?business_id={BIZ}").status_code == 403
+        assert st()["enabled"] is False, lane
     # The owner and admins do every duty, whatever the lanes say.
     for who in ("owner", "admin"):
         assert client(who).get(f"/church/spaces?business_id={BIZ}").status_code == 200

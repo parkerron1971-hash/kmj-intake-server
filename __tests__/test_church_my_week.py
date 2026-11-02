@@ -117,7 +117,9 @@ def test_care_handed_to_your_login_is_one_line_with_nothing_of_what_was_asked(cl
     w = _get(client)
     care = [n for n in [w["next"]] + w["needs"] if n["kind"] == "care"]
     assert care and care[0]["title"] == "A prayer or care request was handed to you."
-    assert "hospital" not in str(w)
+    # The request's own words never; the week's training lines say "the
+    # hospital" (Care and visits), so the check is on what was asked.
+    assert "My mother" not in str(w) and "mother" not in str(w).lower()
 
 
 def test_what_was_handed_across_this_week_says_where_it_went_and_where_it_is(client):

@@ -265,7 +265,7 @@ def test_see_as_stays_inside_her_own_areas(app, team):
 def test_how_their_week_goes_stays_inside_her_own_areas_too(app, team):
     """The rhythm (church_my_week.rhythm) follows within's rule: over the
     lanes but working only the Office, she sees Naiya's office jobs, never
-    the member chat's rules (Messages & safety) or Marcus's Kids check-in."""
+    the member chat's rules (Messages & safety) or Marcus's kids' jobs."""
     _jess_works(team, ["office"])
     naiya = _see(app, NAIYA).json()["rhythm"]
     jobs = {i["key"] for d in naiya["days"] for i in d["items"]}
@@ -275,7 +275,7 @@ def test_how_their_week_goes_stays_inside_her_own_areas_too(app, team):
     assert marcus["days"] == [] and marcus["count"] == 0
     _jess_works(team, EVERY_AREA)
     marcus = _see(app, MARCUS_SEAT).json()["rhythm"]
-    assert [i["key"] for d in marcus["days"] for i in d["items"]] == ["kids"]
+    assert [i["key"] for d in marcus["days"] for i in d["items"]] == ["kids", "youth", "background_checks"]
 
 
 def test_a_failed_duty_read_is_a_503_never_a_yes(app, team, monkeypatch):
@@ -303,8 +303,9 @@ def test_the_team_page_says_each_managers_week_in_counts(app):
     assert n["tasks"]["items"][0] == {"title": "Book the fellowship hall", "due": "2026-10-30",
                                       "due_text": "3 days late", "late": True}
     assert n["follow_ups"] == {"open": 1, "late": 1} and n["care"] == {"open": 1}
-    assert n["this_week_text"] == ("Mon: The Monday leaders note · Tue: Meetings and minutes · Wed: The weekly text"
-                                   " · Fri: Rooms")
+    assert n["this_week_text"] == ("Mon: The front desk · Mon: The Monday leaders note · Tue: Meetings and minutes"
+                                   " · Tue: Decisions to done · Wed: The weekly text and email"
+                                   " · Fri: The church calendar · Fri: Rooms")
     m = rows[MARCUS_SEAT]
     assert m["name"] == "Marcus Taylor" and m["tasks"]["late"] == 1 and m["follow_ups"] == {"open": 1, "late": 0}
     assert page["week"] == {"monday": "2026-11-02", "words": "the week of November 2"}
@@ -324,8 +325,12 @@ def test_the_team_page_has_no_money_no_emails_and_no_names_from_follow_up_or_car
 
 def test_whats_due_this_week_follows_the_catalogs_days():
     from datetime import date
-    first = ctw.due_this_week(["monthly_report", "stream", "website", "care_board"], date(2026, 11, 2))
-    assert [w["text"] for w in first] == ["Mon, Tue: The care board", "Mon: The monthly report", "Sat, Sun: The livestream"]
+    first = ctw.due_this_week(["monthly_report", "stream", "website", "care_visits", "first_guests", "prayer"],
+                              date(2026, 11, 2))
+    assert [w["text"] for w in first] == ["Mon: First-time guests and welcome calls", "Mon: The monthly report",
+                                          "Tue: Care and visits", "Sat, Sun: The livestream"]
+    # "weekly" names no day, like "as needed": the week has it, not a day.
+    assert ctw.due_this_week(["prayer", "devotionals", "building"], date(2026, 11, 2)) == []
     later = ctw.due_this_week(["monthly_report", "deposit"], date(2026, 11, 9))
     assert later == [], "the first Monday only, and never money"
 
@@ -384,7 +389,7 @@ def test_on_the_churchs_monday_morning_she_gets_one_email_and_a_push(team):
     html = m["html"]
     assert "Hi Jessica" in html and "Naiya Clark, Office &amp; Leadership" in html
     assert "Late: “Book the fellowship hall” (due Friday, October 30)." in html
-    assert "This week: Mon: The Monday leaders note" in html and "Print the youth flyers" in html
+    assert "This week: Mon: The front desk · Mon: The Monday leaders note" in html and "Print the youth flyers" in html
     assert "Jessica's own" not in html, "her own week is My week"
     assert "$" not in html and "deposit" not in html.lower() and "Treasurer" not in html, "no money"
     assert "surgery" not in html and "Tasha" not in html and "@" not in re.sub(r"<[^>]+>", " ", html).split("You’re")[0]
