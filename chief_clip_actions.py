@@ -38,7 +38,9 @@ posting service with the post, where it can be cancelled in Video Clips.
 THE ACTING USER is the signed-in person driving this chat turn
 (chief_of_staff._TURN_USER_ID, bound from the verified JWT in chief_chat).
 No turn, no post. post_clip_for checks them against businesses.owner_id with
-the service role, like the endpoint.
+the service role, like the endpoint; in a church, an Admin or a login that
+does the clips duty (church_duties) posts too, and a Manager whose job it
+isn't hears whose it is.
 
 NEVER TWICE. The post's request id is derived from the turn (image_studio's
 turn id: the chat request's own id, so a retried request is the same turn),
@@ -143,6 +145,9 @@ async def _require_owner(business_id: str, user_id: str) -> None:
     try:
         await asyncio.to_thread(clip_posting._require_owner, business_id, SimpleNamespace(id=user_id))
     except HTTPException as e:
+        if e.status_code == 403 and e.detail != clip_posting.OWNER_ONLY and isinstance(e.detail, str):
+            # A church's Manager whose job clips aren't: whose it is (church_duties.refusal).
+            raise Refusal(f"{e.detail} So nothing was posted.", "Someone else's job here")
         if e.status_code == 403:
             raise Refusal("Only the business owner can post its clips, so nothing was posted.",
                           "Only the owner can post clips")

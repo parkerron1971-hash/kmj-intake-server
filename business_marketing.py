@@ -22,6 +22,10 @@ WHO. Reading the desk is for the owner and the business's members
 (require_user) plus an owner check, a service-role read of
 businesses.owner_id, like contacts_router and clip_posting. Posting puts the
 business's name on public feeds; a member never approves, edits or posts.
+In a church (docs/CHURCH_DUTIES.md step 2b) the owner, an Admin, or a login
+that does the posts duty (church_duties): a Manager whose job it isn't is
+told whose it is, and a failed duties read is a 503. Offers stay the
+owner's (_owner_row); the desk's accounts are still the church's own.
 
 NOTHING SENDS HERE. This module saves drafts, records approvals and moves
 times. The sender (B5, `marketing_claim_due` every minute) is what hands an
@@ -140,7 +144,7 @@ def publishing_on() -> bool:
 
 # ── who ───────────────────────────────────────────────────────────────
 
-def _owner_row(business_id: str, user_id: str) -> Dict[str, Any]:
+def _desk_business(business_id: str) -> Dict[str, Any]:
     rows = sb_clients.sb_get_as_service(
         f'/businesses?id=eq.{business_id}&select=id,owner_id,type,availability:settings->availability,'
         'booking_page:settings->booking_page&limit=1')
@@ -148,15 +152,51 @@ def _owner_row(business_id: str, user_id: str) -> Dict[str, Any]:
         raise HTTPException(503, "Couldn't confirm this business just now. Nothing was changed. Try again in a minute.")
     if not rows:
         raise HTTPException(404, 'Business not found.')
-    if str(rows[0].get('owner_id')) != str(user_id):
-        raise HTTPException(403, OWNER_ONLY)
     return rows[0]
 
 
+def _owner_row(business_id: str, user_id: str) -> Dict[str, Any]:
+    """The owner alone (Chief's offers use it too: what customers pay stays
+    the owner's). Returns the business row."""
+    row = _desk_business(business_id)
+    if str(row.get('owner_id')) != str(user_id):
+        raise HTTPException(403, OWNER_ONLY)
+    return row
+
+
+def _poster_row(business_id: str, user_id: str) -> Dict[str, Any]:
+    """Who changes the desk: the owner. In a church, also an Admin or a login
+    that does the posts duty (church_duties, docs/CHURCH_DUTIES.md step 2b);
+    a Manager it isn't is told whose job it is. Every other business: the
+    owner alone, as before. Returns the business row."""
+    row = _desk_business(business_id)
+    if str(row.get('owner_id')) != str(user_id):
+        import church_duties
+        if not church_duties.does_job(business_id, user_id, 'posts', row):
+            raise HTTPException(403, OWNER_ONLY)
+    return row
+
+
 async def _require_owner(business_id: str, user: AuthedUser) -> Dict[str, Any]:
-    """The owner check: a service-role read of businesses.owner_id against
-    the signed-in person, independent of RLS. Returns the business row."""
-    return await asyncio.to_thread(_owner_row, str(business_id), str(user.id))
+    """The desk's write check (_poster_row): a service-role read of
+    businesses.owner_id against the signed-in person, independent of RLS,
+    and in a church the posts duty. Returns the business row."""
+    return await asyncio.to_thread(_poster_row, str(business_id), str(user.id))
+
+
+def _may_post(business_id: str, user_id: Any, biz: Dict[str, Any]) -> bool:
+    """Whether the desk's buttons are this person's (GET /engine's can_edit):
+    the owner, or in a church a login that does the posts duty. A read that
+    fails says no: the write itself checks again."""
+    if user_id is None:
+        return False
+    if str(biz.get('owner_id')) == str(user_id):
+        return True
+    import church_duties
+    try:
+        return bool(church_duties.does_job(business_id, user_id, 'posts', biz))
+    except HTTPException:
+        return False
 
 
 async def _call(awaitable, *, down: str = STORE_DOWN):
@@ -837,11 +877,17 @@ class Settings(BaseModel):
 # ── read ──────────────────────────────────────────────────────────────
 
 @router.get('/engine')
-async def engine(business_id: UUID, biz: dict = Depends(business_access('viewer'))):
+async def engine(business_id: UUID, biz: dict = Depends(business_access('viewer')),
+                 session: Any = Depends(sb_clients.authed_request)):
     """The desk for this business: its settings, this week's and next week's
     posts, Chief's read and what needs a look, how much Chief does (level)
-    and the next step up (upgrade), and its connected accounts."""
+    and the next step up (upgrade), and its connected accounts. `can_edit`
+    is the owner's, and in a church a login's that does the posts duty.
+    Called directly (Chief, Mission Control), `session` is whoever the
+    caller says, or nobody."""
     bid = str(business_id)
+    user_id = getattr(getattr(session, 'user', None), 'id', None)
+    may_edit = await asyncio.to_thread(_may_post, bid, user_id, biz)
     at = now()
     tz = await asyncio.to_thread(business_tz, biz)
     plan = await asyncio.to_thread(level_for, biz)
@@ -856,7 +902,7 @@ async def engine(business_id: UUID, biz: dict = Depends(business_access('viewer'
     role = biz.get('_caller_role')
     desk = state['desk']
     return {
-        'business_id': bid, 'role': role, 'can_edit': role == 'owner',
+        'business_id': bid, 'role': role, 'can_edit': role == 'owner' or may_edit,
         **plan,
         'time_zone': tz.key,
         'desk': public_desk(desk),

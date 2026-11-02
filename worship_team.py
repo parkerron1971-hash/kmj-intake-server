@@ -22,8 +22,20 @@
 #             and Keys"): the livestream, sermons, video clips and the
 #             screens' library; never the plan or the screens
 #   admin     everything, the setup and who's on the team
-# The owner, an admin or a manager of the church in Solutionist is an
-# admin here without being invited.
+# The owner or an admin of the church in Solutionist is an admin here
+# without being invited, and so is a manager of any other business.
+#
+# A church's Manager logins get their parts from the duties they hold
+# (church_duties, docs/CHURCH_DUTIES.md step 2b; Kevin 2026-11-01: "church
+# savvy should be connected with shapretta mcclain right from the list since
+# she over media"), PARTS_FROM_DUTIES below:
+#   churchsavvy_team             admin (everything, who's on the team too)
+#   sunday_plan, serve_schedule  planner
+#   stream                       media and booth
+# plus any parts the team gave them. With none of those, a Manager reads
+# ChurchSavvy only, as a viewer seat does. A duties read that fails is a 503.
+# The team list names each office login (business_users_router.seat_person)
+# with its lane and the parts its duties give it.
 #
 # A volunteer is NOT a Solutionist seat. A seat (business_users) is read
 # access to the whole business through the database's own rules
@@ -37,7 +49,7 @@ import logging
 import re
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -82,6 +94,13 @@ REFUSED = {
     "clips": "Your part on the team doesn't work on video clips. Media does.",
     "sermons": "Your part on the team doesn't change sermons. Media does.",
     "serve": "Your part on the team doesn't schedule people. A planner or an admin does.",
+}
+# A church Manager's parts, from the duties it holds (church_duties.CATALOG).
+PARTS_FROM_DUTIES: Dict[str, Tuple[str, ...]] = {
+    "churchsavvy_team": ("admin",),
+    "sunday_plan": ("planner",),
+    "serve_schedule": ("planner",),
+    "stream": ("media", "booth"),
 }
 MAX_TEAM = 60
 INVITE_DAYS = 30
@@ -156,11 +175,43 @@ def team_can(biz: str, user: AuthedUser, what: str) -> bool:
     return can(parts_of(biz, user.id), what)
 
 
+def duty_parts(duties: Iterable[str]) -> Set[str]:
+    """The ChurchSavvy parts these church duties give (PARTS_FROM_DUTIES)."""
+    return {p for d in duties for p in PARTS_FROM_DUTIES.get(d, ())}
+
+
+def _business(biz: str) -> Dict[str, Any]:
+    """The church's row for who-may-do-what (its type says whether it's a
+    church). A failed read is a 503, never "every part"."""
+    rows = sb_clients.sb_get_as_service(f"/businesses?id=eq.{_q(biz)}&select=id,type,owner_id&limit=1")
+    if rows is None:
+        raise HTTPException(503, "access check unavailable")
+    return rows[0] if rows else {}
+
+
+def _is_church(row: Dict[str, Any]) -> bool:
+    import church_follow_up as cfu
+    return bool(row) and cfu.is_church(row)
+
+
+def _manager_parts(biz: str, user: AuthedUser) -> Set[str]:
+    """A manager seat's parts: every part outside a church. In a church, the
+    parts its duties give it (church_duties.standing; a failed read is a
+    503) and any the team gave it."""
+    if not _is_church(_business(biz)):
+        return set(ROLES)
+    import church_duties
+    held = church_duties.standing(biz, str(user.id))["duties"]
+    return duty_parts(held) | _team_roles(biz, user)
+
+
 def roles_of(biz: str, user: AuthedUser, part: Optional[str] = "screens") -> Set[str]:
     """This person's parts in a church's ChurchSavvy: every part for the
-    owner, an admin or a manager; their team parts for anyone else (none
-    for a viewer or member seat, who reads only). A stranger gets the same
-    404 as a church that isn't there.
+    owner or an admin (and a manager of a business that isn't a church); a
+    church's manager, the parts its duties give it (PARTS_FROM_DUTIES) and
+    its team parts; their team parts for anyone else (none for a viewer or
+    member seat, who reads only). A stranger gets the same 404 as a church
+    that isn't there.
 
     `part` is the piece of a ChurchSavvy plan the route belongs to: the
     screens (the default, every worship route), "planning", or None for
@@ -168,8 +219,10 @@ def roles_of(biz: str, user: AuthedUser, part: Optional[str] = "screens") -> Set
     first). A church on ChurchSavvy alone without it in its plan is
     answered 402 (churchsavvy_billing), after who they are is settled."""
     seat = _seat(biz, user)
-    if seat in STAFF_ROLES:
+    if seat in ("owner", "admin"):
         roles = set(ROLES)
+    elif seat == "manager":
+        roles = _manager_parts(biz, user)
     else:
         roles = set(_team_roles(biz, user))
         if not seat and not roles:
@@ -239,7 +292,7 @@ def _out(row: Dict[str, Any], me: str) -> Dict[str, Any]:
 
 
 def _church(biz: str) -> Dict[str, Any]:
-    rows = sb_clients.sb_get_as_service(f"/businesses?id=eq.{_q(biz)}&select=id,name,owner_id,settings&limit=1") or []
+    rows = sb_clients.sb_get_as_service(f"/businesses?id=eq.{_q(biz)}&select=id,name,type,owner_id,settings&limit=1") or []
     return rows[0] if rows else {}
 
 
@@ -262,15 +315,55 @@ def list_team(business_id: str, user: AuthedUser = Depends(require_user)):
         f"/worship_team?business_id=eq.{_q(biz)}&status=in.(invited,active)&select={_FIELDS}&order=invited_at.asc")
     if rows is None:
         raise HTTPException(503, "The team couldn't be read. Try again.")
-    # The church's own admins in Solutionist: admins here without an invite.
+    return {"team": [_out(r, str(user.id)) for r in rows], "staff": _staff(biz, user), "roles": list(ROLES)}
+
+
+def _staff(biz: str, user: AuthedUser) -> List[Dict[str, Any]]:
+    """The church's own office logins in Solutionist, who are on ChurchSavvy
+    without an invite: each by name (business_users_router.seat_person), with
+    its lane (church_duties: the one stored on the login, else its picked
+    areas', and the Executive Pastor's) and the parts it has here. In a
+    church a Manager's parts come from its duties ([] reads only); an Admin
+    or the owner has every part. A duties read that fails is a 503."""
     church = _church(biz)
+    in_church = _is_church(church)
     settings = church.get("settings") if isinstance(church.get("settings"), dict) else {}
+    owner = str(church.get("owner_id") or "")
     staff: List[Dict[str, Any]] = [{"name": (settings.get("practitioner_name") or "").strip() or "The owner",
-                                    "kind": "owner", "you": str(church.get("owner_id")) == str(user.id)}]
+                                    "kind": "owner", "you": owner == str(user.id), "role": "owner", "email": None,
+                                    "lane": None, "lanes": [], "parts": list(ROLES)}]
     seats = sb_clients.sb_get_as_service(
-        f"/business_users?business_id=eq.{_q(biz)}&status=eq.active&role=in.(admin,manager)&select=invited_email,user_id") or []
-    staff += [{"name": s.get("invited_email") or "", "kind": "seat", "you": str(s.get("user_id")) == str(user.id)} for s in seats]
-    return {"team": [_out(r, str(user.id)) for r in rows], "staff": staff, "roles": list(ROLES)}
+        f"/business_users?business_id=eq.{_q(biz)}&status=eq.active&role=in.(admin,manager)"
+        "&select=invited_email,user_id,role,lane,areas,contact_id,name")
+    if seats is None:
+        raise HTTPException(503, "The team couldn't be read. Try again.")
+    import business_users_router
+    import church_duties
+    for s in seats:
+        uid = str(s.get("user_id") or "")
+        if not uid or uid == owner:
+            continue
+        role = s.get("role")
+        lanes: List[str] = []
+        parts = set(ROLES)
+        if in_church and role == "manager":
+            standing = church_duties.standing(biz, uid)
+            lanes = list(standing["lanes"])
+            parts = duty_parts(standing["duties"])
+        elif in_church:
+            # An admin's lane is only ever the one stored on it (the Treasurer).
+            stored = church_duties._seat_lane(s)
+            lanes = [stored] if stored else []
+        person = business_users_router.seat_person(biz, uid) or {}
+        email = (s.get("invited_email") or "").strip() or None
+        # The person's name, else the name the login gave; only a login
+        # nothing names is shown by its email.
+        name = person.get("name") or (s.get("name") or "").strip() or email or "An office login"
+        labels = [church_duties.lane_label(k) for k in lanes]
+        staff.append({"name": name, "kind": "seat", "you": uid == str(user.id), "role": role, "email": email,
+                      "lane": " · ".join(labels) or None, "lanes": lanes,
+                      "parts": [r for r in ROLES if r in parts]})
+    return staff
 
 
 @router.post("/team/invite")
