@@ -416,6 +416,10 @@ app.include_router(church_leaders_note_router)
 # My week: a church login's first page (Who sees what, 2026-10-26).
 from church_my_week import router as church_my_week_router
 app.include_router(church_my_week_router)
+# The Executive Pastor's team page (/church/my-week/team): each Manager login's
+# week in counts, for whoever is over the lanes (2026-11-02; CHURCH_TEAM_ROLLUP).
+from church_team_week import router as church_team_week_router
+app.include_router(church_team_week_router)
 # Sermons from ChurchSavvy, for the team's Media part (no seat needed).
 from worship_sermons import router as worship_sermons_router
 app.include_router(worship_sermons_router)
@@ -1877,6 +1881,17 @@ async def startup():
                           id="church_office_tasks_sweep")
     except Exception as e:
         print(f"   [warn] office tasks sweep not scheduled: {e}")
+    # The Executive Pastor's Monday roll-up (2026-11-02): in each church's
+    # Monday morning, its own clock, one email and a push to each Manager over
+    # the lanes, with who's late on what and what's due this week. Claimed once
+    # per church per ISO week (church_team_week; CHURCH_TEAM_ROLLUP, read here
+    # on the worker too).
+    try:
+        import church_team_week as _ctw
+        scheduler.add_job(g("church_team_rollup", _ctw.rollup_tick), "interval", hours=1,
+                          id="church_team_rollup")
+    except Exception as e:
+        print(f"   [warn] team roll-up not scheduled: {e}")
     # Homework files nothing points at any more (a deleted homework, student
     # or class; an attach that never landed) leave the private bucket once a
     # day (academy_work.sweep_tick).

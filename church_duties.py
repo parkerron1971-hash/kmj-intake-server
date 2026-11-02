@@ -201,6 +201,10 @@ STARTER: Dict[str, List[str]] = {ln: [k for k, d in CATALOG.items() if ln in d["
 # default (the leadership plan Kevin approved 2026-10-27: "Manager login with
 # every area picked"), never money. A duty moved to named logins is theirs.
 STARTER[EXEC] = [k for k, d in CATALOG.items() if not d["money"]]
+# The Executive Pastor's own: overseeing the lanes and gathering their
+# report. They open other logins' weeks, so a Manager never gets them from
+# its areas (_area_duties), only from the role or a move.
+OVERSIGHT: FrozenSet[str] = frozenset(k for k, d in CATALOG.items() if d["lanes"] == [EXEC])
 
 ALL: FrozenSet[str] = frozenset(CATALOG)
 MAX_HOLDERS = 12
@@ -382,9 +386,12 @@ def _area_duties(biz: str, uid: str, role: Optional[str]) -> FrozenSet[str]:
     as each job's area check decided before duties (church_leaders_note's
     _office, church_spaces'). Its view is the church's pick, else Chief's
     guess; the whole church, or Who sees what not on, is every duty. A view
-    that can't be read is a 503, never a yes."""
+    that can't be read is a 503, never a yes. Overseeing the lanes and
+    gathering their report (OVERSIGHT) never come from areas: they open
+    other logins' weeks, so only the Executive Pastor's role or a move
+    names who does them."""
     import church_areas
-    every = frozenset(k for k, d in CATALOG.items() if not d["money"])
+    every = frozenset(k for k, d in CATALOG.items() if not d["money"] and k not in OVERSIGHT)
     if church_areas.mode() != "on":
         return every
     view = church_areas.my_areas(biz, uid, role)
@@ -552,6 +559,19 @@ def holders_of(business_id: str, duty: str) -> List[str]:
         if s.get("role") == "admin" or duty in standing(biz, uid)["duties"]:
             out.append(uid)
     return out
+
+
+def manager_holders(business_id: str, duty: str) -> List[str]:
+    """The Manager logins that do this duty at this church today (holds()
+    says yes), without the owner and the admins: who the Executive Pastor's
+    Monday roll-up goes to (church_team_week). [] for a business that isn't a
+    church. A failed read is a 503."""
+    _known(duty)
+    biz = str(business_id)
+    if not _is_church(_business(biz)):
+        return []
+    return [str(s["user_id"]) for s in _seats(biz)
+            if s.get("role") == "manager" and duty in standing(biz, str(s["user_id"]))["duties"]]
 
 
 def duties_of(business_id: str, user_id: str, role: Optional[str]) -> Optional[List[str]]:
