@@ -138,22 +138,41 @@ def _contact(biz: str, contact_id: Any) -> Optional[Dict[str, Any]]:
     return rows[0] if rows else None
 
 
-def _person_for_seat(biz: str, seat: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    c = _contact(biz, seat.get("contact_id")) or match_contact(biz, seat.get("invited_email"), seat.get("name"))
+def _person_for_seat(biz: str, seat: Dict[str, Any], keep: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    c = _contact(biz, seat.get("contact_id"))
+    if not c:
+        c = match_contact(biz, seat.get("invited_email"), seat.get("name"))
+        if c and keep and not seat.get("contact_id"):
+            _keep_contact(biz, keep, str(c.get("id")))
     if c:
         return _person_of(c)
     name = _clean_name(seat.get("name"))
     return {"name": name, "first_name": name.split(" ")[0], "contact_id": None} if name else None
 
 
+def _keep_contact(biz: str, user_id: str, contact_id: str) -> None:
+    """An active seat its email matched to one member record keeps that
+    record (Love City's office checkup, 2026-11-01: three of five logins
+    were tied by email alone, so changing the email on the record would
+    have lost the name). Only where nothing is tied yet; a failed write
+    costs nothing, and the next read matches again."""
+    try:
+        sb_clients.sb_patch_as_service(
+            f"/business_users?business_id=eq.{quote(str(biz), safe='')}&user_id=eq.{quote(str(user_id), safe='')}"
+            f"&status=eq.active&contact_id=is.null", {"contact_id": contact_id})
+    except Exception:
+        logger.warning("seat person: couldn't keep the matched record for a seat on %s", str(biz)[:8], exc_info=True)
+
+
 def seat_person(biz: str, user_id: str) -> Optional[Dict[str, Any]]:
     """Who an active seat on a business is: {name, first_name, contact_id},
     or None when nothing names them (and for the owner, whom the business's
-    settings name). The app greets with it, and Chief says who it's helping."""
+    settings name). The app greets with it, and Chief says who it's helping.
+    A seat its email matches to one record keeps that record from then on."""
     seat = sb_clients.sb_get_as_service(
         f"/business_users?business_id=eq.{quote(str(biz), safe='')}&user_id=eq.{quote(str(user_id), safe='')}"
         f"&status=eq.active&select=invited_email,contact_id,name&limit=1") or []
-    return _person_for_seat(biz, seat[0]) if seat else None
+    return _person_for_seat(biz, seat[0], keep=str(user_id)) if seat else None
 
 
 def _owner(biz: str, user: AuthedUser) -> Dict[str, Any]:
