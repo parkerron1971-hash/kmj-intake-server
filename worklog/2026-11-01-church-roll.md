@@ -3,11 +3,10 @@ title: The roll — a church's People page in one read (server)
 date: 2026-11-01
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, on the Members Roll Redesign canvas (BF38H75nNDSaxEC1ZJFFoe): "the design works ... the design is good", the person page bigger, then "build this"'
-status: in progress
-prs: [kmj-intake-server (this PR), solutionist-studio (the page)]
+status: shipped
+prs: [kmj-intake-server#1685, solutionist-studio#1439, solutionist-studio#1441, solutionist-studio#1444]
 migrations: []
 left_undone:
-  - "Switched to the platform owner only (CHURCH_ROLL defaults to owner). The Thursday switch-on sets CHURCH_ROLL=on on kmj-intake-server and kmj-intake-worker, flips OPEN_TO_EVERYONE in the app's rollRollout.ts, and adds the What's New entry"
   - "Not yet run against Love City's real rows: a read-only production probe was refused by the permission system. The office page will show it the first time Kevin opens People"
   - "Who serves when (serve_positions, serve_trained) has no ledger row in docs/MIGRATIONS.md; the roll reads it softly and goes on without it"
 decisions:
@@ -29,3 +28,8 @@ Lately, Chief's next step, a care flag, giving for money logins).
 
 Tests: `__tests__/test_church_roll.py` (18), alarms rehearsed (in person
 over online; an import is never "before a first visit").
+
+Switched on for everyone 2026-11-01 (Kevin: "switch it on for everyone"),
+ahead of the usual Thursday at his word: CHURCH_ROLL=on set on
+kmj-intake-server and kmj-intake-worker (both redeployed), and the app's
+switch with its What's New entry (solutionist-studio#1444).
