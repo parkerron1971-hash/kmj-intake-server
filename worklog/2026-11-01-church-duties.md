@@ -5,7 +5,7 @@ agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-11-01: "a general structure plan and customize roles as well" ... "yes the duties part would be great, but you would make the changes for love city directly but chief would do other churches"'
 status: in review
 prs: [kmj-intake-server (this PR)]
-migrations: [supabase/APPLY-2026-11-01-church-duties.sql (not applied)]
+migrations: [supabase/APPLY-2026-11-01-church-duties.sql (applied 2026-11-01)]
 left_undone:
   - "Apply supabase/APPLY-2026-11-01-church-duties.sql, then set Love City's rows (docs/CHURCH_DUTIES.md, Love City's structure: naming Jessica on a duty moves it, so each covered duty names its lane's person too)"
   - "Step 2: the job gates read duties (the weekly text, boards, chat rules, rooms, event sign-ups, the marketing desk, clips, the site and the events page, ChurchSavvy parts) through church_duties.require; decide what a Manager with no lane keeps"
