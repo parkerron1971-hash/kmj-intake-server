@@ -7,7 +7,9 @@ handed to them, one line for each area they work in, and what crossed from
 one area to another this week. The owner and admins see the whole church,
 an area to a line; a login that works some areas sees only those.
 
-    GET /church/my-week?business_id=          the page (any office login)
+    GET /church/my-week?business_id=          the page (any office login), with
+                                              `rhythm`: How your week goes, from
+                                              the duties the login holds (below)
     GET /church/my-week/status?business_id=   whether this app shows it
     GET /church/my-week/people?business_id=   who a task can be handed to (and
                                               the church's leaders: church_leader_tasks)
@@ -28,7 +30,7 @@ from __future__ import annotations
 import logging
 import uuid
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, FrozenSet, List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -58,6 +60,37 @@ DOOR = {
     "office": {"area": "operate", "id": "tasks", "label": "Open Tasks"},
     "giving_money": {"area": "operate", "id": "bookkeeping", "label": "Open Giving"},
     "tasks": {"area": "operate", "id": "tasks", "label": "Open Tasks"},
+    # Each duty's page (church_duties.CATALOG), for How your week goes. A
+    # duty with no door here fails test_church_week_rhythm.
+    "weekly_text": {"area": "operate", "id": "sms", "label": "Open Texts"},
+    "leaders_note": {"area": "operate", "id": "leaders-note", "label": "Open the leaders note"},
+    "meetings": {"area": "operate", "id": "board", "label": "Open Board & minutes"},
+    "rooms": {"area": "operate", "id": "spaces", "label": "Open Rooms & spaces"},
+    "chat_rules": {"area": "operate", "id": "messaging", "label": "Open Member messaging"},
+    "leaders_list": {"area": "operate", "id": "leaders", "label": "Open Leaders & roles"},
+    "care_board": {"area": "operate", "id": "follow-up", "label": "Open the Follow-up board"},
+    "shepherding": {"area": "operate", "id": "shepherding", "label": "Open Shepherding"},
+    "kids": {"area": "operate", "id": "kids", "label": "Open Kids check-in"},
+    "sunday_plan": {"area": "operate", "id": "sundays", "label": "Open Sundays"},
+    "serve_schedule": {"area": "operate", "id": "serve-schedule", "label": "Open Who serves when"},
+    # The sign-ups an event takes are set on the events page (the app's
+    # search sends "sign up" there too).
+    "events": {"area": "build", "id": "events-page", "label": "Open the events page"},
+    "attendance": {"area": "operate", "id": "attendance", "label": "Open Attendance"},
+    # The marketing desk, or Posts where the desk is closed: the same page id.
+    "posts": {"area": "grow", "id": "marketing", "label": "Open the marketing desk"},
+    "clips": {"area": "grow", "id": "video-clips", "label": "Open Video clips"},
+    "stream": {"area": "grow", "id": "live", "label": "Open Live"},
+    "website": {"area": "build", "id": "my-site", "label": "Open the website"},
+    # Who's on ChurchSavvy's team is the Team part of Setup.
+    "churchsavvy_team": {"area": "operate", "id": "worship-setup", "label": "Open ChurchSavvy setup"},
+    "monthly_report": {"area": "operate", "id": "monthly-report", "label": "Open the monthly report"},
+    "oversee_lanes": {"area": "operate", "id": "team", "label": "Open the office team"},
+    # Money: the owner's and the admins'. The books are Giving's other tabs.
+    "deposit": {"area": "operate", "id": "bookkeeping", "label": "Open Giving"},
+    "books": {"area": "operate", "id": "bookkeeping", "label": "Open Giving"},
+    "pay": {"area": "operate", "id": "checks", "label": "Open Check requests"},
+    "store": {"area": "operate", "id": "offerings-manager", "label": "Open the store"},
 }
 
 
@@ -342,6 +375,158 @@ def _handed(biz: str, now: datetime, whole: bool, mine: set) -> List[Dict[str, A
     return out
 
 
+# ─── How your week goes (docs/CHURCH_DUTIES.md step 7) ────────────────
+# Kevin, 2026-11-01: "a way for some sort of video or training or something
+# that can be given so they know how there week will go so they can see what
+# they suppose to do with no problem." Each duty a login holds, on its day,
+# with its training line (`does`) and the page it opens; the app plays it as
+# a walkthrough. The owner and every Admin hold every duty (`every_job`).
+
+WEEKDAYS: Tuple[str, ...] = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+DAY_NAMES = {"Mon": "Monday", "Tue": "Tuesday", "Wed": "Wednesday", "Thu": "Thursday", "Fri": "Friday",
+             "Sat": "Saturday", "Sun": "Sunday"}
+MONTH, ANY_DAY = "month", "any"
+GROUP_LABEL = {**DAY_NAMES, MONTH: "Once a month", ANY_DAY: "Any day"}
+GROUP_ORDER: Tuple[str, ...] = WEEKDAYS + (MONTH, ANY_DAY)
+
+
+def _and(words: List[str]) -> str:
+    return words[0] if len(words) == 1 else ", ".join(words[:-1]) + " and " + words[-1]
+
+
+def placed(day: Any) -> Tuple[str, List[str], str]:
+    """Where a duty's catalog day puts it: (group, weekdays, said).
+    "first Monday" and anything "monthly" are the Month's ("Tue, monthly" is
+    a Tuesday once a month, never every Tuesday); days of the week are each
+    of those days; "as needed", or a day this doesn't know, is Any day."""
+    toks = [t.strip() for t in str(day or "").split(",") if t.strip()]
+    low = {t.lower() for t in toks}
+    days = list(dict.fromkeys(t for t in toks if t in WEEKDAYS))     # as the catalog says them: "Sun, Mon"
+    if "first monday" in low:
+        return MONTH, ["Mon"], "The first Monday of the month"
+    if "monthly" in low:
+        return MONTH, days, ("Once a month, on a " + " or a ".join(DAY_NAMES[d] for d in days)) if days else "Once a month"
+    if days:
+        return days[0], days, _and([DAY_NAMES[d] + "s" for d in days])
+    return ANY_DAY, [], "Whenever it comes up"
+
+
+def _held(biz: str, uid: str, role: str) -> FrozenSet[str]:
+    """The duties this login holds (church_duties.standing). The owner and
+    the admins hold every one, without a read."""
+    import church_duties
+    if role in church_duties.KEEPS_ALL:
+        return church_duties.ALL
+    return frozenset(church_duties.standing(biz, uid)["duties"])
+
+
+def _done(business: Dict[str, Any], keys: FrozenSet[str], today: date, now: datetime, tz) -> Dict[str, bool]:
+    """Whether this week's (or this month's) job is already done, where a
+    cheap read the job already keeps tells: the leaders note sent this week
+    (its own last send, on its own clock), last month's report sent (or
+    sending) this month, a text announcement that reached someone since
+    Monday. Any other duty isn't here. A read that fails leaves its duty
+    out, never a guess: the week stands."""
+    biz = str(business["id"])
+    out: Dict[str, bool] = {}
+    if "leaders_note" in keys:
+        try:
+            import church_leaders_note as ln
+            monday = ln.monday_of(now.astimezone(ln._zone(business)).date())
+            last = ln.last_of(business)
+            out["leaders_note"] = bool(last and last.get("week") == monday.isoformat())
+        except Exception:
+            print(f"[church_my_week] {biz[:8]}: the leaders note's last send wasn't read for the rhythm")
+    if "monthly_report" in keys:
+        try:
+            import church_monthly_report as cmr
+            first = cmr.prev_month(date(today.year, today.month, 1))
+            row = cmr._row(biz, first.strftime("%Y-%m"))
+            out["monthly_report"] = bool((row or {}).get("send_id"))
+        except Exception:
+            print(f"[church_my_week] {biz[:8]}: the monthly report's row wasn't read for the rhythm")
+    if "weekly_text" in keys:
+        try:
+            import chief_assignments
+            since, _ = chief_assignments.day_bounds(today - timedelta(days=today.weekday()), today, tz)
+            rows = sb_clients.sb_get_as_service(
+                f"/events?business_id=eq.{_q(biz)}&event_type=eq.sms_broadcast&created_at=gte.{_q(since.isoformat())}"
+                "&select=data,created_at&order=created_at.desc&limit=20")
+            if not isinstance(rows, list):
+                raise RuntimeError("events unread")
+            out["weekly_text"] = any(int(((r.get("data") or {}) if isinstance(r.get("data"), dict) else {})
+                                         .get("sent") or 0) > 0 for r in rows)
+        except Exception:
+            print(f"[church_my_week] {biz[:8]}: this week's announcements weren't read for the rhythm")
+    return out
+
+
+def rhythm(business: Dict[str, Any], user_id: str, role: str, now: Optional[datetime] = None) -> Optional[Dict[str, Any]]:
+    """How this login's week goes: the duties it holds, in the catalog's
+    order, by day (Monday to Sunday, then Once a month, then Any day; only
+    the days with something on them), each with its training line, its door
+    and whether it's today on the church's own day. `every_job`: the owner
+    or an Admin, who holds every duty. None for a business that isn't a
+    church, and when the duties can't be read (My week stands without it)."""
+    import church_duties
+    import church_follow_up as cfu
+    if not cfu.is_church(business):
+        return None
+    biz = str(business["id"])
+    now = now or _now()
+    try:
+        held = _held(biz, str(user_id), role)
+    except HTTPException:
+        print(f"[church_my_week] {biz[:8]}: a login's duties weren't read; no rhythm")
+        return None
+    import chief_assignments
+    tz = chief_assignments._tz_for(biz)
+    today = now.astimezone(tz).date()
+    key_today = WEEKDAYS[today.weekday()]
+    import church_monthly_report as cmr
+    first_monday = cmr.first_monday(date(today.year, today.month, 1))
+    done = _done(business, held, today, now, tz)
+    groups: Dict[str, List[Dict[str, Any]]] = {g: [] for g in GROUP_ORDER}
+    for key, d in church_duties.CATALOG.items():
+        if key not in held:
+            continue
+        group, days, said = placed(d["day"])
+        if group == MONTH:
+            is_today = d["day"].strip().lower() == "first monday" and today == first_monday
+        else:
+            is_today = key_today in days
+        item = {"key": key, "label": d["label"], "does": d["does"], "area": d["area"], "when": said, "days": days,
+                "door": DOOR.get(key), "today": is_today}
+        if key in done:
+            item["done"] = done[key]
+        for g in (days if group in WEEKDAYS else [group]):
+            groups[g].append(item)
+    out_days = [{"key": g, "label": GROUP_LABEL[g], "today": g == key_today or (g == MONTH and any(i["today"] for i in groups[g])),
+                 "items": groups[g]} for g in GROUP_ORDER if groups[g]]
+    return {
+        "every_job": role in church_duties.KEEPS_ALL,
+        "today": {"key": key_today, "label": DAY_NAMES[key_today], "date": today.isoformat()},
+        "days": out_days,
+        "count": sum(1 for k in church_duties.CATALOG if k in held),
+    }
+
+
+def _with_rhythm(week: Dict[str, Any], business: Dict[str, Any], user_id: str, role: str) -> Dict[str, Any]:
+    r = rhythm(business, user_id, role)
+    if r is not None:
+        week["rhythm"] = r
+    return week
+
+
+def rhythm_within(r: Dict[str, Any], areas: List[str]) -> Dict[str, Any]:
+    """Another Manager's rhythm as whoever is over the lanes may read it
+    (church_team_week.within's rule): only the jobs in her own areas."""
+    mine = set(areas)
+    days = [{**d, "items": [i for i in d["items"] if i.get("area") in mine]} for d in r.get("days") or []]
+    days = [{**d, "today": any(i["today"] for i in d["items"])} if d["key"] == MONTH else d for d in days if d["items"]]
+    return {**r, "days": days, "count": len({i["key"] for d in days for i in d["items"]})}
+
+
 # ─── Routes ───────────────────────────────────────────────────────────
 
 @router.get("/my-week/status")
@@ -409,14 +594,21 @@ def my_week(business_id: str, as_user: Optional[str] = None, session: UserSessio
         if overseer and seat[0].get("role") != "manager":
             raise HTTPException(403, OVERSEER_ONLY)
         out = build(biz, uid, seat[0].get("invited_email") or "", seat[0].get("role") or "viewer")
+        view: Optional[List[str]] = None
         if overseer:
             # A duty never widens what a login sees: the overseer reads the
             # other Manager's week inside her own areas.
             import church_team_week
-            out = church_team_week.within(out, church_team_week.view_of(bid, str(session.user.id), role))
+            view = church_team_week.view_of(bid, str(session.user.id), role)
+            out = church_team_week.within(out, view)
         out["seeing_as"] = seeing_as(bid, uid, seat[0], out)
+        # How their week goes: the seen login's duties (the overseer's, only
+        # the jobs in her own areas).
+        out = _with_rhythm(out, biz, uid, seat[0].get("role") or "viewer")
+        if overseer and view is not None and out.get("rhythm"):
+            out["rhythm"] = rhythm_within(out["rhythm"], view)
         return out
-    return build(biz, str(session.user.id), session.user.email or "", role)
+    return _with_rhythm(build(biz, str(session.user.id), session.user.email or "", role), biz, str(session.user.id), role)
 
 
 OVERSEER_ONLY = "Over the lanes, you see the Manager logins' weeks. An Admin's week, and the owner's, stay theirs."

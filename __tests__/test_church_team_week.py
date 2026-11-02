@@ -262,6 +262,22 @@ def test_see_as_stays_inside_her_own_areas(app, team):
     assert [a["key"] for a in w["areas"]] == ["kids_youth"] and "Robert Hayes was handed to you." in str(w)
 
 
+def test_how_their_week_goes_stays_inside_her_own_areas_too(app, team):
+    """The rhythm (church_my_week.rhythm) follows within's rule: over the
+    lanes but working only the Office, she sees Naiya's office jobs, never
+    the member chat's rules (Messages & safety) or Marcus's Kids check-in."""
+    _jess_works(team, ["office"])
+    naiya = _see(app, NAIYA).json()["rhythm"]
+    jobs = {i["key"] for d in naiya["days"] for i in d["items"]}
+    assert "weekly_text" in jobs and "leaders_note" in jobs and "chat_rules" not in jobs
+    assert naiya["count"] == len(jobs) and naiya["every_job"] is False
+    marcus = _see(app, MARCUS_SEAT).json()["rhythm"]
+    assert marcus["days"] == [] and marcus["count"] == 0
+    _jess_works(team, EVERY_AREA)
+    marcus = _see(app, MARCUS_SEAT).json()["rhythm"]
+    assert [i["key"] for d in marcus["days"] for i in d["items"]] == ["kids"]
+
+
 def test_a_failed_duty_read_is_a_503_never_a_yes(app, team, monkeypatch):
     real = team.get
     monkeypatch.setattr(sb_clients, "sb_get_as_service",
