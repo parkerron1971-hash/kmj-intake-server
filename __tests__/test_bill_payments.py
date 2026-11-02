@@ -300,7 +300,8 @@ def test_the_verbs_are_wired():
 
 def test_a_bills_bank_payment_stays_in_the_books_and_a_rename_moves_bills(db, monkeypatch):
     from auth_supabase import AuthedUser
-    monkeypatch.setattr(plaid_router, "_require_owner_for_tx", lambda tid, user: {"transaction_id": tid, "business_id": BIZ})
+    monkeypatch.setattr(plaid_router, "_require_money_writer_for_tx",
+                        lambda tid, user: {"transaction_id": tid, "business_id": BIZ})
     bp.match(BIZ, "b1", "t1")
     owner = AuthedUser(id=OWNER, email="x@y.z", role="authenticated")
     with pytest.raises(HTTPException) as e:
@@ -311,6 +312,7 @@ def test_a_bills_bank_payment_stays_in_the_books_and_a_rename_moves_bills(db, mo
     token = cos._TURN_USER_ID.set(OWNER)
     try:
         monkeypatch.setattr(plaid_router, "_require_owner", lambda biz, user: {"id": BIZ, "owner_id": OWNER})
+        monkeypatch.setattr(plaid_router, "_require_money_writer", lambda biz, user: {"id": BIZ, "owner_id": OWNER})
         got = ec.set_category(BIZ, {"category": "Utilities", "name": "Utilities & water"})
     finally:
         cos._TURN_USER_ID.reset(token)

@@ -8,7 +8,10 @@
 # Pins, both directions:
 #   * _require_reader admits owner / accountant / team seat, 403s strangers
 #   * every plaid GET goes through the reader gate; every write still
-#     goes through _require_owner (source sweep with a hard floor)
+#     goes through _require_owner (linking and unlinking a bank) or
+#     _require_money_writer (the owner, or a church's Admin: the
+#     bookkeeping writes, 2026-11-01), never the reader gate (source sweep
+#     with a hard floor)
 
 import pathlib
 import re
@@ -73,9 +76,18 @@ def test_plaid_reads_are_reader_gated_and_writes_stay_owner():
     for fn in reads:
         assert "_require_reader" in bodies[fn], f"{fn} is not reader-gated"
 
-    writes = ["unlink", "delete_rule"]
-    for fn in writes:
+    owner_only = ["create_link_token", "exchange_public_token", "relink", "unlink",
+                  "update_account", "remove_account"]
+    for fn in owner_only:
         assert "_require_owner" in bodies[fn], f"{fn} lost its owner gate"
+        assert "_require_money_writer" not in bodies[fn], f"{fn} opened past the owner"
+        assert "_require_reader(" not in bodies[fn], f"{fn} opened to readers"
+
+    money_writes = ["sync_business", "update_transaction", "bulk_categorize", "bulk_exclude",
+                    "upsert_rule", "delete_rule", "reconciliation_match", "reconciliation_unmatch",
+                    "reconciliation_ignore", "reconciliation_run"]
+    for fn in money_writes:
+        assert "_require_money_writer" in bodies[fn], f"{fn} lost its writer gate"
         assert "_require_reader(" not in bodies[fn], f"{fn} opened to readers"
 
     # Hard floor: the reader gate covers at least the 11 reads above, so
@@ -87,7 +99,7 @@ def test_plaid_reads_are_reader_gated_and_writes_stay_owner():
 def test_bills_list_is_reader_gated_and_writes_stay_owner():
     bodies = _fn_bodies(bills_router)
     assert "_reader(biz, user)" in bodies["list_bills"]
-    owner_calls = sum("_owner(" in b or "_owner_for_bill(" in b
-                      for name, b in bodies.items()
-                      if name not in ("list_bills", "_reader", "_owner", "_owner_for_bill"))
-    assert owner_calls >= 3  # create / patch / mark-paid / delete keep their gates
+    # Every write takes _writer: the owner, or a church's Admin (2026-11-01).
+    for fn in ("create_bill", "update_bill", "mark_paid", "delete_bill"):
+        assert "_writer(" in bodies[fn] or "_writer_for_bill(" in bodies[fn], f"{fn} lost its gate"
+        assert "_reader(" not in bodies[fn], f"{fn} opened to readers"

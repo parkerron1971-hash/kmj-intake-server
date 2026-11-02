@@ -38,7 +38,9 @@ matched deposit books Dr Cash, Cr 1160 for the deposit and its fee, and the
 fee's expense row books Dr Operating Expenses, Cr Cash, so cash is the bank
 and income is counted once. Who may: the Transactions screen's readers read
 (plaid_router._require_reader, the church's finance gate and Giving wall
-included); the owner alone matches and unmatches. Switched by GIVING_DEPOSITS:
+included); the owner, or the church's Admin seat (the treasurer, through
+plaid_router._require_money_writer, the same wall), matches and unmatches.
+Switched by GIVING_DEPOSITS:
 off | owner | on, owner when unset. Tables:
 supabase/APPLY-2026-10-31-giving-deposits.sql.
 """
@@ -137,7 +139,9 @@ def _gate(business_id: str, user: Any, *, write: bool) -> Dict[str, Any]:
     if not switched_on(business_id):
         raise HTTPException(404, "Not Found")
     import plaid_router
-    return (plaid_router._require_owner if write else plaid_router._require_reader)(business_id, user)
+    if write:
+        return plaid_router._require_money_writer(business_id, user)
+    return plaid_router._require_reader(business_id, user)
 
 
 def _q(v: Any) -> str:
@@ -750,7 +754,8 @@ class MatchBody(BaseModel):
 def get_status(business_id: str = Query(...), year: Optional[int] = Query(None, ge=2000, le=2100),
                user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     row = _gate(business_id, user, write=False)
-    return {"ok": True, "can_change": str(row.get("owner_id")) == str(user.id),
+    import church_money_gate
+    return {"ok": True, "can_change": church_money_gate.can_write(business_id, user, row),
             **_guard(status, business_id, year=year)}
 
 
@@ -806,7 +811,7 @@ def _chief(biz: Dict[str, Any], atype: str, *, write: bool) -> Tuple[Optional[Di
         if e.status_code == 404:
             return _fail(atype, "the Sunday match isn't switched on for this business yet"), None
         if write and e.status_code == 403 and not isinstance(e.detail, dict):
-            return _fail(atype, "only the owner matches gifts to deposits"), None
+            return _fail(atype, "only the owner or the church's Admin matches gifts to deposits"), None
         detail = e.detail.get("message") if isinstance(e.detail, dict) else e.detail
         return _fail(atype, str(detail or "this login can't see the books")), None
     return None, uid
