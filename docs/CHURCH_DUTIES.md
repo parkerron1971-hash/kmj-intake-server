@@ -261,7 +261,8 @@ the duty's whole list in one PUT: moving weekly_text to Naiya alone takes it fro
 5. The member app's "Request a pay-back" goes to the treasurer's queue.
 6. Jessica's view: See as, the roll-up, Tasks by person, and the monthly report. (See as, the
    team page and the roll-up built 2026-11-02: step 6a.)
-7. "Your week": each duty's day and training line make the week band and the walkthrough.
+7. "Your week": each duty's day and training line make the week band and the walkthrough. (My
+   week's `rhythm` built 2026-11-02: step 7a.)
 
 ## What changed from the plan (2026-11-01, step 1)
 
@@ -329,3 +330,28 @@ platform owner's own church):
 - `POST /church/monthly-report/send`: the numbers and the notes, emailed to the owner from the
   church (the leaders note's path), once a month; a resend needs `force`.
 - My week: due on the first Monday, to the Manager who does it, until it's sent.
+
+## Step 7a: How your week goes, on My week (built 2026-11-02)
+
+Kevin, 2026-11-01: "a way for some sort of video or training or something that can be given so
+they know how there week will go so they can see what they suppose to do with no problem."
+`GET /church/my-week` gains `rhythm` for a church login (and for the login seen with `as_user`),
+built in `church_my_week.rhythm` from the duties it holds (`church_duties.standing`):
+
+- `every_job`: the owner or an Admin, who holds every duty (all of them are listed too).
+- `today`: the church's own day (`{key: "Mon", label, date}`, on the clock My week already reads).
+- `days`: Monday to Sunday, then Once a month (`month`: anything "monthly", and "first Monday"),
+  then Any day (`any`: "as needed"); only the days with something on them. A duty on two days
+  ("Mon, Tue") is on both; "Tue, monthly" is a Tuesday once a month, never every Tuesday.
+- Each item: `key`, `label`, `does` (the training line), `area`, `when` (said: "Sundays and
+  Mondays", "The first Monday of the month"), `days`, `door` (`church_my_week.DOOR`, one per duty;
+  a test fails when a duty has none), `today`, and `done` only where a read the job already keeps
+  tells: the leaders note sent this week (its own last send, on its own clock), last month's report
+  sent (or sending), a text announcement that reached someone since Monday. Every other duty leaves
+  `done` out.
+- A `done` read that fails leaves that duty's `done` out; a duties read that fails leaves `rhythm`
+  out. My week stands either way. A business that isn't a church gets none.
+- See as: the seen login's rhythm. Whoever is over the lanes sees only the jobs in her own areas
+  (`church_my_week.rhythm_within`, the rule `church_team_week.within` keeps for the rest of the week).
+
+The app's band and walkthrough read this (solutionist-studio, "How your week goes").
