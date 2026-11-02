@@ -198,6 +198,63 @@ async def artwork(client, business_id, asset_id):
     return rows[0]
 
 
+# A church's pictures, read by the logins whose job they are. In a church the
+# posts and the clips are duties a login holds (church_duties, #1691-#1693),
+# and the covers and pictures made for them are the owner's images
+# (clip_finder.church_cover_owner: the engine makes them only for the owner),
+# so the owner-scoped reads above hid them from the person who made them.
+# The gallery and one image open to them; every write stays as it was.
+READER_DUTIES = ('posts', 'clips')
+
+
+def church_reader(business_id, user) -> bool:
+    """Whether this login reads this church's pictures without being its
+    owner: an Admin, or a login that holds() the posts or the clips duty.
+
+    False for the owner (their path is unchanged), for any business that
+    isn't a church (church_follow_up.is_church), and for a Member, a Viewer
+    or a login with no seat there: the owner-only check answers them, as
+    before. A Manager that holds neither is refused (403). A duties read that
+    fails is a 503, never a yes; a business read that fails falls through to
+    the owner-only check, which is never a yes either."""
+    import church_duties
+    import church_follow_up
+    biz, uid = str(UUID(str(business_id))), str(user.id)
+    rows = sb_clients.sb_get_as_service(f'/businesses?id=eq.{biz}&select=id,type,owner_id&limit=1')
+    if not isinstance(rows, list) or not rows:
+        return False
+    if str(rows[0].get('owner_id') or '') == uid or not church_follow_up.is_church(rows[0]):
+        return False
+    if any(church_duties.holds(biz, user, duty) for duty in READER_DUTIES):
+        return True
+    if church_duties.standing(biz, uid)['role'] == 'manager':
+        labels = [church_duties.CATALOG[duty]['label'] for duty in READER_DUTIES]
+        raise HTTPException(403, f"The church's pictures are for whoever does “{labels[0]}” or “{labels[1]}”. "
+                                 'The owner or an admin can give you one in Logins & areas.')
+    return False
+
+
+async def reader_rows(client, business_id, query):
+    """image_artworks for a login church_reader said yes to, read as the
+    service role (the table's RLS is the owner's alone), always pinned to
+    this business. GET only."""
+    biz = str(UUID(str(business_id)))
+    rows = await sb_clients.sb_as_service(client, 'GET', f'/image_artworks?business_id=eq.{biz}&{query}')
+    if rows is None:
+        raise HTTPException(503, 'Image storage is unavailable.')
+    return [row for row in rows if str(row.get('business_id')) == biz]
+
+
+def reader_storage_headers(row, business_id):
+    """Signing one picture's preview for a church reader: the service role,
+    and only for a row of this business whose original is in its folder (the
+    bucket's policy is the owner's alone)."""
+    biz = str(UUID(str(business_id)))
+    if str(row.get('business_id')) != biz or not str(row.get('storage_path') or '').startswith(biz + '/'):
+        raise HTTPException(403, 'Image access denied.')
+    return sb_clients.sb_headers_service()
+
+
 def storage_url(path):
     return f"{os.environ.get('SUPABASE_URL', '').rstrip('/')}/storage/v1/{path}"
 
@@ -218,7 +275,11 @@ async def original(client, row):
     return r.content
 
 
-async def present(client, row):
+async def present(client, row, *, reader=None):
+    """One artwork as the app shows it, never with owner_id or storage_path.
+    `reader` is the business id a church reader was checked against
+    (church_reader): its preview is signed as the service role, in that
+    business's folder only. Everyone else's is signed as before."""
     result = {k: v for k, v in row.items() if k not in ('owner_id', 'storage_path')}
     if row.get('director'):
         from creative_director import public_state
@@ -236,7 +297,8 @@ async def present(client, row):
     if row['status'] in ('queued', 'working') and (datetime.now(timezone.utc) - datetime.fromisoformat(row['created_at'].replace('Z', '+00:00'))).total_seconds() > (1200 if row.get('director') else 600):
         result.update(status='failed', error='This generation was interrupted. Start a new request; the original may still have incurred provider charges.')
     if row.get('storage_path') and row['status'] == 'ready':
-        r = await client.post(storage_url(f"object/sign/{BUCKET}/{row['storage_path']}"), headers=storage_headers(row['storage_path']), json={'expiresIn': 3600})
+        headers = reader_storage_headers(row, reader) if reader else storage_headers(row['storage_path'])
+        r = await client.post(storage_url(f"object/sign/{BUCKET}/{row['storage_path']}"), headers=headers, json={'expiresIn': 3600})
         if not r.is_success:
             raise HTTPException(502, 'The image preview could not be opened.')
         signed = r.json().get('signedURL') or r.json().get('signedUrl')
@@ -434,6 +496,10 @@ async def generate(req: CreateImage, session: UserSession = Depends(sb_clients.a
 @router.get('/gallery/{business_id}')
 async def gallery(business_id: UUID, session: UserSession = Depends(sb_clients.authed_request)):
     async with httpx.AsyncClient(timeout=30) as client:
+        # In a church, an Admin or whoever does the posts or the clips.
+        if await asyncio.to_thread(church_reader, business_id, session.user):
+            rows = await reader_rows(client, business_id, 'order=created_at.desc&limit=100')
+            return await asyncio.gather(*(present(client, row, reader=business_id) for row in rows))
         await business(client, business_id)
         rows = await db(client, 'GET', f'/image_artworks?business_id=eq.{business_id}&order=created_at.desc&limit=100')
         return await asyncio.gather(*(present(client, row) for row in rows))
@@ -442,6 +508,11 @@ async def gallery(business_id: UUID, session: UserSession = Depends(sb_clients.a
 @router.get('/{business_id}/{image_id}')
 async def get_image(business_id: UUID, image_id: UUID, session: UserSession = Depends(sb_clients.authed_request)):
     async with httpx.AsyncClient(timeout=30) as client:
+        if await asyncio.to_thread(church_reader, business_id, session.user):
+            rows = await reader_rows(client, business_id, f'id=eq.{UUID(str(image_id))}')
+            if not rows:
+                raise HTTPException(404, 'Image not found in this business gallery.')
+            return await present(client, rows[0], reader=business_id)
         return await present(client, await artwork(client, business_id, image_id))
 
 

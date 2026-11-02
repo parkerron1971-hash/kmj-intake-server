@@ -134,6 +134,12 @@ church, posting only to the church's own connected accounts).
 | clips | Posting a clip (`clip_posting`, Chief's `post_clip`); covers with Find my best clips (`clip_finder.start_run`), Make cover and the cover worker (`clip_covers`), made as the owner's on the church's credits (`clip_finder.church_cover_owner`) |
 | website | The site builder (`public_site._require_business_owner`, and set-site-type and expand-design-brief, which were Admin and up); the events page config (`events_rsvp_router`) |
 
+Image Studio's reads (2026-11-02): covers and post pictures are made as the owner's images, so
+the gallery and one image (`GET /ai/images/gallery/{id}`, `GET /ai/images/{id}/{image_id}`) open
+to an Admin or a login that holds posts or clips (`image_studio.church_reader`). They are read as
+the service role, pinned to that church, and each preview is signed in that church's folder only.
+Image Studio's writes (generate, upload, publish) stay the owner's.
+
 Kept as they were: offers (`business_marketing._owner_row`, what customers pay, the owner's);
 any site_config key naming the domain (`custom_domain`, `custom_domain_status`, the Cloudflare ids)
 in smart-config, refused for a website Manager and left to the owner and the admins; the composer's
@@ -165,6 +171,32 @@ the stored lane, else the picked areas', and Executive Pastor), `lanes` (keys) a
 church, to every other login that does the clips duty (`church_duties.holders_of`: the owner, the
 admins, and each Manager that holds it), once each. A read that fails sends it to the starter alone,
 as before.
+
+## Step 6a: over the lanes (built 2026-11-02)
+
+Kevin, 2026-11-01: "Jessica will be over the admin team". Whoever holds `oversee_lanes` (the
+Executive Pastor by default, or whoever it moves to) gets three things, in `church_team_week.py`,
+switched by `CHURCH_TEAM_ROLLUP` (off | owner | on; owner is the platform owner's own church):
+
+- **See as** (`GET /church/my-week?as_user=`): another Manager login's week, never an Admin's,
+  the owner's or a Member's. The page carries `seeing_as` (name, role, lane). The owner and the
+  admins see as anyone, whatever the switch says.
+- **The team page** (`GET /church/my-week/team`, also the owner's and the admins'): each Manager
+  login with its name and lane, its open and late tasks (the church's day), the follow-ups and the
+  prayer and care requests handed to it that are still open (counts, never names or what was
+  asked), and what's due this week from its duties (each duty's catalog `day`). No money. One
+  login's failed read is a 503 for its row; the overseer's own row is left out (that's My week).
+- **The Monday roll-up**: in each church's Monday morning (its own clock, 8 to noon), one email and
+  a push to My week for each Manager over the lanes (`church_duties.manager_holders`), never the owner
+  or an admin. Once per church per ISO week, kept in `businesses.settings.church_team_rollup`.
+
+A duty never widens what a login sees: the overseer's See as is cut to her own areas (her own
+team's tasks always; follow-ups, care, each area's line and gaps only where she works), and the
+follow-up and care counts on the team page and in the roll-up go only to an overseer who works
+People & care. A roll-up that reached some holders and not others tries the rest the next hour.
+
+A Manager no lane names holds every duty in the areas it works (the rule above), so with Who sees
+what off, or nothing placing it, it is over the lanes too until a church moves `oversee_lanes`.
 
 ## The catalog (first cut)
 
@@ -225,7 +257,8 @@ the duty's whole list in one PUT: moving weekly_text to Naiya alone takes it fro
 4. FE: Settings → Logins & areas gains Duties per login; buttons follow `my-role.duties`;
    ChurchSavvy's team list shows lanes.
 5. The member app's "Request a pay-back" goes to the treasurer's queue.
-6. Jessica's view: See as, the roll-up, Tasks by person, and the monthly report.
+6. Jessica's view: See as, the roll-up, Tasks by person, and the monthly report. (See as, the
+   team page and the roll-up built 2026-11-02: step 6a.)
 7. "Your week": each duty's day and training line make the week band and the walkthrough.
 
 ## What changed from the plan (2026-11-01, step 1)

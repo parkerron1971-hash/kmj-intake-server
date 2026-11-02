@@ -227,8 +227,12 @@ def test_a_manager_holds_its_lanes_duties_by_default(db):
 NON_MONEY = {k for k, d in cd.CATALOG.items() if not d["money"]}
 
 
+# What a Manager no lane names gets from its areas: never the oversight duties.
+BY_AREA = NON_MONEY - set(cd.OVERSIGHT)
+
+
 def _in_areas(*areas):
-    return {k for k in NON_MONEY if cd.CATALOG[k]["area"] in areas}
+    return {k for k in BY_AREA if cd.CATALOG[k]["area"] in areas}
 
 
 def test_a_member_a_login_that_left_and_a_stranger_hold_none(db):
@@ -242,11 +246,12 @@ def test_a_manager_no_lane_names_does_the_duties_in_the_areas_it_works(db, monke
     areas placed, or Who sees what not on) is every non-money duty; picked
     areas that aren't exactly a lane are the duties in those areas."""
     db.t["church_leader_roles"].clear()
-    assert _held(JESS) == NON_MONEY                              # Who sees what not on
+    assert _held(JESS) == BY_AREA                                # Who sees what not on
+    assert not _held(JESS) & set(cd.OVERSIGHT), "overseeing others never comes from areas"
     monkeypatch.setenv("CHURCH_AREAS", "on")
     ca._MY_CACHE.clear()
     cd._CACHE.clear()
-    assert _held(JESS) == NON_MONEY                              # on, but nothing places her: the whole church
+    assert _held(JESS) == BY_AREA                                # on, but nothing places her: the whole church
     next(s for s in db.t["business_users"] if s["user_id"] == TIARA)["areas"] = ["people_care"]
     ca._MY_CACHE.clear()
     cd._CACHE.clear()

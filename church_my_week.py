@@ -11,6 +11,9 @@ an area to a line; a login that works some areas sees only those.
     GET /church/my-week/status?business_id=   whether this app shows it
     GET /church/my-week/people?business_id=   who a task can be handed to (and
                                               the church's leaders: church_leader_tasks)
+    GET /church/my-week/team?business_id=     the office's Manager logins' weeks, in
+                                              counts, for whoever is over the lanes
+                                              (church_team_week)
 
 Everything is read from where it already lives: the areas map
 (church_areas.build: who works each area and what's missing), follow-ups
@@ -374,9 +377,12 @@ def my_week_people(business_id: str, session: UserSession = Depends(sb_clients.a
 @router.get("/my-week")
 def my_week(business_id: str, as_user: Optional[str] = None, session: UserSession = Depends(sb_clients.authed_request),
             biz: Dict[str, Any] = Depends(business_access("viewer"))):
-    """The caller's week, or, for the owner or an admin seeing as another
-    office login (See as), that login's week: what it's shown, what's
-    handed to it. Admins already see the whole church."""
+    """The caller's week, or, seeing as another office login (See as), that
+    login's week: what it's shown, what's handed to it, and `seeing_as`,
+    whose week it is. The owner and an admin can see as any office login.
+    Whoever is over the lanes (the oversee_lanes duty: the Executive Pastor
+    by default; church_team_week, while CHURCH_TEAM_ROLLUP is open to the
+    church) can see as another Manager login, never an Admin or the owner."""
     church_areas._gate(session.user)
     import church_follow_up as cfu
     if not cfu.is_church(biz):
@@ -384,15 +390,51 @@ def my_week(business_id: str, as_user: Optional[str] = None, session: UserSessio
     bid = str(biz["id"])
     role = _role(biz, str(session.user.id))
     if as_user and as_user != str(session.user.id):
+        overseer = False
         if role not in FINANCE_ROLES:
-            raise HTTPException(403, "Only the owner or an admin can see as someone else")
+            import church_team_week
+            if not (church_team_week.overseer(bid, session.user, role) and church_team_week.church_open(bid)):
+                raise HTTPException(403, "Only the owner, an admin or whoever is over the lanes can see as someone else")
+            overseer = True
         try:
             uid = str(uuid.UUID(as_user))
         except (ValueError, TypeError):
             raise HTTPException(400, "That login isn't valid")
+        if overseer and uid == str(biz.get("owner_id") or ""):
+            raise HTTPException(403, OVERSEER_ONLY)
         seat = _need(f"/business_users?business_id=eq.{_q(bid)}&user_id=eq.{_q(uid)}&status=eq.active"
-                     "&select=role,invited_email&limit=1")
+                     "&select=role,invited_email,contact_id,name,lane,areas&limit=1")
         if not seat:
             raise HTTPException(404, "That login isn't on this church")
-        return build(biz, uid, seat[0].get("invited_email") or "", seat[0].get("role") or "viewer")
+        if overseer and seat[0].get("role") != "manager":
+            raise HTTPException(403, OVERSEER_ONLY)
+        out = build(biz, uid, seat[0].get("invited_email") or "", seat[0].get("role") or "viewer")
+        if overseer:
+            # A duty never widens what a login sees: the overseer reads the
+            # other Manager's week inside her own areas.
+            import church_team_week
+            out = church_team_week.within(out, church_team_week.view_of(bid, str(session.user.id), role))
+        out["seeing_as"] = seeing_as(bid, uid, seat[0], out)
+        return out
     return build(biz, str(session.user.id), session.user.email or "", role)
+
+
+OVERSEER_ONLY = "Over the lanes, you see the Manager logins' weeks. An Admin's week, and the owner's, stay theirs."
+
+
+def seeing_as(biz: str, uid: str, seat: Dict[str, Any], week: Dict[str, Any]) -> Dict[str, Any]:
+    """Whose week a See as page is: their name (their person's, else the
+    name the login gave, else the part of the email before the @, never the
+    whole address), their role and their lane's label."""
+    import business_users_router
+    import church_duties
+    try:
+        who = business_users_router.seat_person(biz, uid) or {}
+    except Exception:
+        who = {}   # the name is a label: the week itself already read
+    email = (seat.get("invited_email") or "").strip()
+    name = (str(who.get("name") or "").strip() or str((week.get("me") or {}).get("name") or "").strip()
+            or email.split("@")[0] or "An office login")
+    lane = church_duties._seat_lane(seat) if seat.get("role") == "manager" else None
+    return {"user_id": uid, "name": name, "role": seat.get("role") or "viewer",
+            "lane": church_duties.lane_label(lane) if lane else None}
