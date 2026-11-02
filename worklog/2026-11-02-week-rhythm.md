@@ -4,10 +4,10 @@ date: 2026-11-02
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-11-01: "a way for some sort of video or training or something that can be given so they know how there week will go so they can see what they suppose to do with no problem." Approved: the band and a narrated walkthrough on My week (docs/CHURCH_DUTIES.md step 7)'
 status: in review
-prs: [kmj-intake-server (this PR), solutionist-studio (How your week goes)]
+prs: [kmj-intake-server (this PR), solutionist-studio#1447]
 migrations: []
 left_undone:
-  - "The walkthrough and the band are the app's (solutionist-studio PR, How your week goes)"
+  - "The walkthrough and the band are the app's (solutionist-studio#1447)"
   - "The events duty opens the events page: a church's Services & Events room has its own module id, so no fixed door reaches its sign-ups"
   - "serve_schedule opens Who serves when, which shows only where Sunday Planning (SUNDAY_PLANNING) is on"
   - "A scheduled announcement doesn't make the weekly text done until it goes"
