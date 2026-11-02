@@ -213,6 +213,12 @@ def put_note(body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
         team = _uuid(team, "team")
         if not _read(f"/serve_teams?business_id=eq.{_q(biz)}&group_id=eq.{_q(team)}&select=group_id&limit=1"):
             raise HTTPException(404, "That Sunday team isn't here")
+    # In a church whose Sunday teams have owners (Kevin, 2026-11-02: the
+    # order of service is ChurchSavvy's), a team's note follows its team:
+    # a Volunteers team's is whoever schedules the volunteers; a ChurchSavvy
+    # team's, and a note for every team ("all"), is ChurchSavvy's.
+    who = sp._scheduler(biz, user)
+    sp._team_gate(biz, who, sp.CHURCHSAVVY if team == "all" else sp._team_row(biz, team)["owner"])
     key = f"business_id=eq.{_q(biz)}&service_id=eq.{_q(sid)}&item_id=eq.{_q(item_id)}&team=eq.{_q(team)}"
     if not note:
         if not sb_clients.sb_delete_as_service(f"/serve_notes?{key}"):

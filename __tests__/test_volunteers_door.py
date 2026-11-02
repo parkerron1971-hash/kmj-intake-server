@@ -490,3 +490,33 @@ def test_a_failed_duties_read_is_a_503_never_a_yes(church):
     # A page that reads it shows nothing as theirs to change; the write asks again.
     j = church.as_("pastor").get(f"/planning/teams?business_id={BIZ}").json()
     assert j["change"] == [] and j["two_doors"] is True
+
+
+# ─── order-of-service notes follow their team ─────────────────────────
+
+def test_an_order_note_follows_its_team_and_every_teams_note_is_churchsavvys(church):
+    """The order of service is ChurchSavvy's (Kevin, 2026-11-02): a note for
+    a Volunteers team is whoever schedules the volunteers'; a ChurchSavvy
+    team's, and a note for every team, is ChurchSavvy's."""
+    import sunday_order as so
+    svc = next(s for s in church.db.t["worship_services"] if s["id"] == church.s1)
+    svc["items"] = [{"id": "ff", "kind": "song", "title": "Firm Foundation", "minutes": 4}]
+    church.db.KEYS = {**church.db.KEYS, "serve_notes": ("service_id", "item_id", "team")}
+    church.db.t["serve_notes"] = []
+    app = FastAPI()
+    app.include_router(so.router)
+    who = {"user": PEOPLE["owner"]}
+    app.dependency_overrides[require_user] = lambda: who["user"]
+    c = TestClient(app)
+
+    def note(name, team):
+        who["user"] = PEOPLE[name]
+        return c.put("/planning/order/notes", json={"business_id": BIZ, "service_id": church.s1, "item_id": "ff",
+                                                    "team": team, "note": "Doors open at 9:40"})
+    assert note("laquesha", WELCOME).status_code == 200
+    assert note("laquesha", PRODUCTION).status_code == 403
+    assert note("laquesha", "all").status_code == 403
+    assert note("shapretta", PRODUCTION).status_code == 200
+    assert note("shapretta", "all").status_code == 200
+    assert note("shapretta", WELCOME).status_code == 403
+    assert note("owner", WELCOME).status_code == 200 and note("admin", "all").status_code == 200
