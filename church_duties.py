@@ -349,11 +349,27 @@ def _exec_users(biz: str, seats: Iterable[Dict[str, Any]]) -> Set[str]:
 # church's at once.
 CACHE_SECONDS = 60
 _CACHE: Dict[Tuple[str, str], Tuple[float, Dict[str, Any]]] = {}
+# my-role's read that failed (the tables before their migration, a database
+# hiccup) isn't tried again on every app load: it waits this long. holds()
+# never uses it, so a job gate still asks, and still answers 503.
+FAILED_SECONDS = 45
+_FAILED: Dict[Tuple[str, str], float] = {}
 
 
 def _forget(biz: str) -> None:
     for k in [k for k in _CACHE if k[0] == str(biz)]:
         _CACHE.pop(k, None)
+    for k in [k for k in _FAILED if k[0] == str(biz)]:
+        _FAILED.pop(k, None)
+
+
+def _prune(now: float) -> None:
+    """Drop what's past its minute, so a long-lived replica keeps only the
+    logins it has seen lately."""
+    for k in [k for k, (at, _) in _CACHE.items() if now - at >= CACHE_SECONDS]:
+        _CACHE.pop(k, None)
+    for k in [k for k, at in _FAILED.items() if now - at >= FAILED_SECONDS]:
+        _FAILED.pop(k, None)
 
 
 def _manager_duties(lanes: Set[str], uid: str, moved: Dict[str, List[str]]) -> FrozenSet[str]:
@@ -405,7 +421,9 @@ def standing(business_id: str, user_id: str) -> Dict[str, Any]:
     else:
         duties = frozenset()
     out = {"church": church, "role": role, "lanes": sorted(lanes), "duties": duties}
-    _CACHE[key] = (time.monotonic(), out)
+    now = time.monotonic()
+    _prune(now)
+    _CACHE[key] = (now, out)
     return out
 
 
@@ -470,10 +488,22 @@ def require(business_id: str, user: AuthedUser, duty: str) -> None:
 def duties_of(business_id: str, user_id: str, role: Optional[str]) -> Optional[List[str]]:
     """This login's duty keys, in the catalog's order, for /team/my-role:
     every key for the owner and the admins. None when they don't apply (not
-    a church, or no standing here). Raises 503 when a read fails."""
+    a church, or no standing here) and when a read fails, which then isn't
+    tried again for FAILED_SECONDS: my-role runs on every app load, and the
+    app shows what it showed before."""
     if not role:
         return None
-    s = standing(str(business_id), str(user_id))
+    key = (str(business_id), str(user_id))
+    failed = _FAILED.get(key)
+    if failed is not None and time.monotonic() - failed < FAILED_SECONDS:
+        return None
+    try:
+        s = standing(*key)
+    except HTTPException:
+        _FAILED[key] = time.monotonic()
+        print(f"[church_duties] my-role duties not read for {key[0]}; trying again in {FAILED_SECONDS}s")
+        return None
+    _FAILED.pop(key, None)
     if not s["church"] or not s["role"]:
         return None
     return [k for k in CATALOG if k in s["duties"]]
@@ -550,7 +580,10 @@ def build(business: Dict[str, Any]) -> Dict[str, Any]:
                        if ln & set(d["lanes"]) and (role_of.get(uid) == "admin" or not d["money"])]
         mine = [c for c in changes if c.get("duty") == key]
         last = mine[0] if mine else None
+        # Moved to logins that have all left (or can't do it now): the lanes
+        # don't take it back by themselves, so the page says it needs someone.
         duties.append({**d, "follows_lanes": key not in moved, "holders": holders,
+                       "needs_someone": key in moved and not any(h["active"] for h in holders),
                        "last_change": ({"at": last.get("changed_at"), "by": names.get(str(last.get("changed_by") or ""), ""),
                                         "undo": bool(last.get("undoes"))} if last else None),
                        "can_undo": _undoable(mine) is not None})
@@ -565,6 +598,7 @@ def build(business: Dict[str, Any]) -> Dict[str, Any]:
         "logins": logins,
         "lanes": [{"key": k, "label": lane_label(k), "duties": STARTER[k]} for k in LANE_KEYS],
         "always": "The owner and every Admin login do every duty, money ones too.",
+        "needs_someone": [d["key"] for d in duties if d["needs_someone"]],
         "area_order": list(AREA_ORDER),
     }
 

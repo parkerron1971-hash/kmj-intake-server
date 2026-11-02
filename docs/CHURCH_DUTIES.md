@@ -53,7 +53,9 @@ great, but you would make the changes for love city directly but chief would do 
   With no row for a duty, the lane defaults decide, so nothing changes until a church moves a duty.
 - `/team/my-role` returns `duties` (every key for the owner and Admins), so the app can show each
   button to the login that does the job. Left out for a business that isn't a church, and whenever
-  the read fails: my-role never fails for it.
+  the read fails: my-role never fails for it, and a failed read waits 45 seconds before my-role
+  tries again (before the migration, that's every Manager's app load). A job gate never waits: it
+  asks every time, and a failed read is a 503.
 - Switched by `CHURCH_DUTIES` (off | owner | on; owner until a Thursday). The switch gates the
   routes only; `holds()` answers whatever it says, since it reads only rows an owner or admin wrote.
 
@@ -85,6 +87,9 @@ great, but you would make the changes for love city directly but chief would do 
 - `POST /church/duties/{duty}/undo` with `{business_id}` puts the newest change back, and again
   the one before it. It won't hand a duty back to someone who can't hold it now (409, name who
   does it instead). Nothing left: 404.
+- A duty moved to logins that have all left (or been made Members) is nobody's but the owner's and
+  the admins': the lanes don't take it back by themselves. The page marks it `needs_someone` (and
+  lists those duties at the top) so the owner names someone or puts it back to the lanes.
 
 ## The catalog (first cut)
 

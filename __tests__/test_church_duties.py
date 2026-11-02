@@ -147,8 +147,10 @@ def db(monkeypatch):
 @pytest.fixture(autouse=True)
 def _fresh_cache():
     cd._CACHE.clear()
+    cd._FAILED.clear()
     yield
     cd._CACHE.clear()
+    cd._FAILED.clear()
 
 
 def _u(uid, email=None):
@@ -337,6 +339,16 @@ def test_a_logins_duties_are_kept_a_minute(db, monkeypatch):
     now = cd.time.monotonic()
     monkeypatch.setattr(cd.time, "monotonic", lambda: now + cd.CACHE_SECONDS + 1)
     assert not cd.holds(BIZ, _u(NAIYA), "weekly_text")
+
+
+def test_the_minute_old_answers_are_dropped_as_new_ones_come(db, monkeypatch):
+    cd.holds(BIZ, _u(NAIYA), "weekly_text")
+    cd.holds(BIZ, _u(TIARA), "care_board")
+    assert len(cd._CACHE) == 2
+    now = cd.time.monotonic()
+    monkeypatch.setattr(cd.time, "monotonic", lambda: now + cd.CACHE_SECONDS + 1)
+    cd.holds(BIZ, _u(LAQ), "rooms")
+    assert list(cd._CACHE) == [(BIZ, LAQ)]
 
 
 # ─── require() ────────────────────────────────────────────────────────
@@ -540,6 +552,38 @@ def test_a_write_that_fails_is_a_503_and_changes_nothing_remembered(office, db, 
     assert r.status_code == 503
 
 
+@pytest.mark.parametrize("table", ["business_users", "church_duty_holders"])
+def test_a_move_whose_check_cant_be_read_is_a_503_and_writes_nothing(office, db, monkeypatch, table):
+    real = db.get
+    monkeypatch.setattr(sb_clients, "sb_get_as_service",
+                        lambda path, **kw: None if path.lstrip("/").startswith(table + "?") else real(path, **kw))
+    r = office.put("/church/duties/weekly_text", json={"business_id": BIZ, "user_ids": [TIARA]})
+    assert r.status_code == 503
+    assert db.rpcs == [] and db.t["church_duty_holders"] == []
+
+
+def test_an_undo_whose_log_cant_be_read_is_a_503(office, db, monkeypatch):
+    office.put("/church/duties/weekly_text", json={"business_id": BIZ, "user_ids": [TIARA]})
+    real = db.get
+    monkeypatch.setattr(sb_clients, "sb_get_as_service",
+                        lambda path, **kw: None if path.lstrip("/").startswith("church_duty_changes?") else real(path, **kw))
+    assert office.post("/church/duties/weekly_text/undo", json={"business_id": BIZ}).status_code == 503
+    assert len(db.rpcs) == 1
+
+
+def test_a_duty_moved_to_logins_that_all_left_says_it_needs_someone(office, db):
+    office.put("/church/duties/rooms", json={"business_id": BIZ, "user_ids": [LAQ]})
+    page = office.get(f"/church/duties?business_id={BIZ}").json()
+    assert not _duty(page, "rooms")["needs_someone"] and page["needs_someone"] == []
+    next(s for s in db.t["business_users"] if s["user_id"] == LAQ)["status"] = "revoked"
+    page = office.get(f"/church/duties?business_id={BIZ}").json()
+    rooms = _duty(page, "rooms")
+    assert rooms["needs_someone"] and page["needs_someone"] == ["rooms"]
+    assert [(h["name"], h["active"]) for h in rooms["holders"]] == [("Someone who has left the office", False)]
+    # The lanes don't take it back by themselves: only the owner and the admins do it now.
+    assert not cd.holds(BIZ, _u(NAIYA), "rooms")
+
+
 # ─── /team/my-role ────────────────────────────────────────────────────
 
 def _my_role(uid):
@@ -562,10 +606,28 @@ def test_my_role_carries_the_logins_duties(db):
 
 def test_my_role_never_fails_for_its_duties(db, monkeypatch):
     real = db.get
-    monkeypatch.setattr(sb_clients, "sb_get_as_service",
-                        lambda path, **kw: None if path.lstrip("/").startswith("church_duty_holders") else real(path, **kw))
+    asked = []
+
+    def get(path, **kw):
+        if path.lstrip("/").startswith("church_duty_holders"):
+            asked.append(path)
+            return None   # the table before its migration
+        return real(path, **kw)
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", get)
     out = _my_role(NAIYA)
     assert out["ok"] and out["role"] == "manager" and "duties" not in out
+    # The next app loads don't try again for a while...
+    assert "duties" not in _my_role(NAIYA) and len(asked) == 1
+    # ...but a job gate always asks, and a failed read is still a 503.
+    with pytest.raises(HTTPException) as e:
+        cd.holds(BIZ, _u(NAIYA), "weekly_text")
+    assert e.value.status_code == 503 and len(asked) == 2
+    # Once the wait is over, my-role asks again, and answers once it can.
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", real)
+    now = cd.time.monotonic()
+    monkeypatch.setattr(cd.time, "monotonic", lambda: now + cd.FAILED_SECONDS + 1)
+    assert _my_role(NAIYA)["duties"] == cd.STARTER["office_leadership"]
+    assert not cd._FAILED
     monkeypatch.setattr(cd, "duties_of", lambda *a: 1 / 0)
     out = _my_role(OWNER)
     assert out["ok"] and out["role"] == "owner" and "duties" not in out
