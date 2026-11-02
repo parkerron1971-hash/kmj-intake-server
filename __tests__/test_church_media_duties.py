@@ -324,7 +324,8 @@ def test_each_churchsavvy_duty_gives_its_parts():
     assert wt.duty_parts(["sunday_plan"]) == {"planner"}
     assert wt.duty_parts(["serve_schedule"]) == {"planner"}
     assert wt.duty_parts(["stream"]) == {"media", "booth"}
-    assert wt.duty_parts(["posts", "clips", "website", "weekly_text", "care_board", "kids"]) == set()
+    assert wt.duty_parts(["posts", "clips", "website", "weekly_text", "care_visits", "kids", "sermons",
+                          "announcements", "serve_teams", "background_checks"]) == set()
     assert set(wt.PARTS_FROM_DUTIES) <= set(cd.CATALOG)
     assert {p for ps_ in wt.PARTS_FROM_DUTIES.values() for p in ps_} <= set(wt.ROLES)
 
@@ -332,11 +333,14 @@ def test_each_churchsavvy_duty_gives_its_parts():
 def test_each_office_login_gets_its_churchsavvy_parts_from_its_duties(db):
     parts = lambda uid: wt.roles_of(BIZ, _u(uid), part=None)  # noqa: E731
     assert parts(OWNER) == set(wt.ROLES) and parts(ADMIN) == set(wt.ROLES)
-    # Shapretta (Media & Communications) and Laquesha (Sunday & Serving) are ChurchSavvy admins.
+    # Shapretta (Media & Communications) is ChurchSavvy's admin (Kevin, 2026-11-02: "churchsavvy is
+    # shapretta"). Laquesha (Sunday & Serving, the volunteers) plans by serve_schedule alone, until
+    # worship_team.PARTS_FROM_DUTIES moves the planner part to production_schedule.
     assert parts(SHAP) == {"admin", "planner", "media", "booth"}
-    assert parts(LAQ) == {"admin", "planner"}
+    assert parts(LAQ) == {"planner"}
     assert parts(JESS) == {"admin", "planner", "media", "booth"}, "the Executive Pastor covers every lane"
-    assert all(wt.can(parts(u), k) for u in (SHAP, LAQ) for k in wt.CAN)
+    assert all(wt.can(parts(SHAP), k) for k in wt.CAN)
+    assert wt.can(parts(LAQ), "serve") and not wt.can(parts(LAQ), "setup")
     # Tiara and Naiya read ChurchSavvy only: no plan, no schedule, no setup.
     for uid in (TIARA, NAIYA):
         assert parts(uid) == set(), uid
@@ -373,7 +377,7 @@ def test_the_team_list_names_each_office_login_with_its_lane_and_parts(db):
         ("Minnie Tatum", "admin", "Treasurer", list(wt.ROLES)),
         ("Naiya Clark", "manager", "Office & Leadership", []),
         ("Tiara Adams", "manager", "People & Care", []),
-        ("Laquesha Bailey-Smith", "manager", "Sunday & Serving", ["planner", "admin"]),
+        ("Laquesha Bailey-Smith", "manager", "Sunday & Serving", ["planner"]),
         ("Jessica McCloud", "manager", "Executive Pastor", ["planner", "booth", "media", "admin"]),
         ("Shapretta McClain", "manager", "Media & Communications", ["planner", "booth", "media", "admin"]),
     ]

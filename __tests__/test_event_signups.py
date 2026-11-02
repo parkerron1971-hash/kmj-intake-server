@@ -612,13 +612,12 @@ def _reads(name="manager"):
 def test_a_manager_reads_the_sign_ups_by_the_events_duty(db):
     import church_duties
     signup()
-    # Sunday & Serving and Media & Communications do the events by default.
-    for lane in ("sunday_serving", "media_comms"):
-        _lane(db, "manager", lane)
-        assert all(r.status_code == 200 for r in _reads()), lane
-        assert office("manager").get(f"/church/events/signups/status?business_id={BIZ}").json()["enabled"] is True
-    # The Office & Leadership lane doesn't, any more than People & Care.
-    for lane in ("office_leadership", "people_care"):
+    # Sunday & Serving does the events by default (since the split, 2026-11-02, its alone).
+    _lane(db, "manager", "sunday_serving")
+    assert all(r.status_code == 200 for r in _reads())
+    assert office("manager").get(f"/church/events/signups/status?business_id={BIZ}").json()["enabled"] is True
+    # Media & Communications, the Office & Leadership lane and People & Care don't.
+    for lane in ("media_comms", "office_leadership", "people_care"):
         _lane(db, "manager", lane)
         got, summary = _reads()
         assert got.status_code == summary.status_code == 403, lane

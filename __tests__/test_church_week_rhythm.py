@@ -7,11 +7,15 @@ they suppose to do with no problem."
 
 Pins:
   * every duty in the catalog has a door (a new duty with no page fails here)
+  * the doors are pages the app's church menu has (each id checked against
+    solutionist-studio's churchStructure.tsx, 2026-11-02)
   * the owner and the admins: every duty, `every_job`; a Manager its lane's,
-    in the catalog's order; a login that works only the kids, Kids check-in
-  * by day, Monday to Sunday, then Once a month ("monthly", "first Monday",
-    never every Tuesday), then Any day ("as needed"); only days with
-    something on them; a duty on two days is on both
+    in the catalog's order; a login that works only the kids, the kids'
+    jobs
+  * by day, Monday to Sunday, then Each week ("weekly", no day said: never
+    today), then Once a month ("monthly", "first Monday", never every
+    Tuesday), then Any day ("as needed"); only days with something on them;
+    a duty on two days is on both
   * today is the church's own day, not UTC's; the first Monday is the
     monthly report's day
   * `done` only where a read tells: the leaders note sent this week, last
@@ -111,6 +115,63 @@ def test_the_doors_open_the_pages_the_jobs_are_done_on():
     assert {ids[k] for k in ("deposit", "books", "pay", "store")} == {"bookkeeping", "checks", "offerings-manager"}
 
 
+def test_the_split_jobs_open_their_own_pages():
+    """Love City's office split into the real jobs (Kevin, 2026-11-02): each
+    new job's door, at a page id the app's church menu has (churchStructure:
+    its table, More, or the doors)."""
+    doors = {k: (mw.DOOR[k]["area"], mw.DOOR[k]["id"]) for k in cd.CATALOG}
+    # Supplies are tracked in Tasks (Kevin, 2026-11-02: "track supplies in tasks").
+    assert {k: doors[k] for k in ("front_desk", "decisions", "calendar", "building", "records", "new_leaders",
+                                  "supplies")} == {
+        "front_desk": ("operate", "queue"), "decisions": ("operate", "tasks"), "calendar": ("operate", "calendar"),
+        "building": ("operate", "tasks"), "records": ("operate", "documents"), "new_leaders": ("operate", "leaders"),
+        "supplies": ("operate", "tasks")}
+    assert {k: doors[k] for k in ("first_guests", "care_visits", "prayer", "help_requests", "groups",
+                                  "member_records", "youth", "devotionals")} == {
+        "first_guests": ("operate", "follow-up"), "care_visits": ("operate", "care"), "prayer": ("operate", "care"),
+        "help_requests": ("operate", "help"), "groups": ("operate", "groups"),
+        "member_records": ("operate", "directory"), "youth": ("operate", "groups"),
+        "devotionals": ("build", "devotionals")}
+    assert {k: doors[k] for k in ("serve_schedule", "serve_teams", "new_volunteers", "background_checks",
+                                  "serving_thanks", "outreach_nights")} == {
+        "serve_schedule": ("operate", "serve-schedule"), "serve_teams": ("operate", "serve-teams"),
+        "new_volunteers": ("operate", "serve-teams"), "background_checks": ("operate", "serving"),
+        "serving_thanks": ("operate", "serving"), "outreach_nights": ("operate", "serve-schedule")}
+    # The order is built in ChurchSavvy's Sundays; Planning's Order of service only shows it.
+    assert {k: doors[k] for k in ("sunday_plan", "production_schedule", "announcements", "sermons", "flyers")} == {
+        "sunday_plan": ("operate", "sundays"), "production_schedule": ("operate", "serve-schedule"),
+        "announcements": ("operate", "worship-announcements"), "sermons": ("grow", "sermons"),
+        "flyers": ("grow", "create")}
+    assert "care_board" not in mw.DOOR and "sunday_ready" not in mw.DOOR
+
+
+# ─── Each week ────────────────────────────────────────────────────────
+
+def test_weekly_is_each_week_with_no_day_said():
+    assert mw.placed("weekly") == ("week", [], "Once a week, any day")
+    assert mw.placed("Weekly") == ("week", [], "Once a week, any day")
+    # A day named is that day; "monthly" still wins over "weekly".
+    assert mw.placed("Tue, weekly")[0] == "Tue"
+    assert mw.placed("weekly, monthly")[0] == "month"
+    assert mw.placed("as needed")[0] == "any"
+    assert mw.GROUP_ORDER.index("Sun") < mw.GROUP_ORDER.index("week") < mw.GROUP_ORDER.index("month")
+    assert mw.GROUP_LABEL["week"] == "Each week"
+
+
+def test_each_week_comes_after_sunday_and_before_the_month(client, week):
+    _as_manager(client, week, lane="people_care")
+    r = _rhythm(client)
+    order = [d["key"] for d in r["days"]]
+    assert order == ["Mon", "Tue", "Thu", "Sun", "week", "any"]
+    each = _day(r, "week")
+    assert each["label"] == "Each week" and each["today"] is False
+    assert [i["key"] for i in each["items"]] == ["prayer", "youth", "devotionals"]
+    prayer = _item(r, "prayer")
+    assert prayer["when"] == "Once a week, any day" and prayer["days"] == [] and prayer["today"] is False
+    assert prayer["door"]["id"] == "care"
+    assert "prayer" not in [i["key"] for d in r["days"] if d["key"] in mw.WEEKDAYS for i in d["items"]]
+
+
 # ─── Who gets what ────────────────────────────────────────────────────
 
 def test_the_owner_does_every_job_by_day(client):
@@ -118,22 +179,28 @@ def test_the_owner_does_every_job_by_day(client):
     assert r["every_job"] is True and r["count"] == len(cd.CATALOG)
     assert set(_keys(r)) == set(cd.CATALOG)
     order = [d["key"] for d in r["days"]]
-    assert order == [g for g in mw.GROUP_ORDER if g in order], "Monday to Sunday, then the month, then any day"
-    assert order[-2:] == ["month", "any"] and [d["label"] for d in r["days"]][-2:] == ["Once a month", "Any day"]
+    assert order == [g for g in mw.GROUP_ORDER if g in order], "Monday to Sunday, each week, the month, any day"
+    assert order[-3:] == ["week", "month", "any"]
+    assert [d["label"] for d in r["days"]][-3:] == ["Each week", "Once a month", "Any day"]
     # Within a day, the catalog's order.
     mon = [i["key"] for i in _day(r, "Mon")["items"]]
     assert mon == [k for k in cd.CATALOG if k in mon]
-    assert mon == ["leaders_note", "care_board", "clips", "oversee_lanes", "deposit"]
+    assert mon == ["front_desk", "leaders_note", "first_guests", "sermons", "clips", "oversee_lanes", "deposit"]
     # A duty on two days is on both; said as the catalog says it.
     assert "stream" in [i["key"] for i in _day(r, "Sat")["items"]] and "stream" in [i["key"] for i in _day(r, "Sun")["items"]]
     assert _item(r, "deposit")["when"] == "Sundays and Mondays" and _item(r, "deposit")["days"] == ["Sun", "Mon"]
+    # Each week: no day said.
+    assert [i["key"] for i in _day(r, "week")["items"]] == ["building", "prayer", "youth", "devotionals"]
     # Once a month: monthly, the first Monday, never every Tuesday.
     month = [i["key"] for i in _day(r, "month")["items"]]
-    assert month == ["meetings", "monthly_report", "books"]
+    assert month == ["meetings", "records", "serve_teams", "background_checks", "serving_thanks", "monthly_report",
+                     "books"]
     assert "meetings" not in [i["key"] for i in _day(r, "Tue")["items"]]
     assert _item(r, "meetings")["when"] == "Once a month, on a Tuesday"
     assert _item(r, "monthly_report")["when"] == "The first Monday of the month"
-    assert [i["key"] for i in _day(r, "any")["items"]] == ["chat_rules", "leaders_list", "website", "churchsavvy_team", "store"]
+    assert [i["key"] for i in _day(r, "any")["items"]] == [
+        "chat_rules", "leaders_list", "new_leaders", "supplies", "help_requests", "member_records", "new_volunteers",
+        "churchsavvy_team", "website", "store"]
     one = _item(r, "rooms")
     assert one["label"] == "Rooms" and one["does"] == cd.CATALOG["rooms"]["does"] and one["door"]["id"] == "spaces"
 
@@ -149,15 +216,37 @@ def test_a_manager_gets_its_lanes_duties_and_nothing_else(client, week):
     r = _rhythm(client)
     assert r["every_job"] is False
     assert sorted(_keys(r)) == sorted(cd.STARTER["media_comms"]) and r["count"] == len(cd.STARTER["media_comms"])
-    assert [d["key"] for d in r["days"]] == ["Mon", "Wed", "Thu", "Sat", "Sun", "any"], "only the days with a job"
-    assert [i["key"] for i in _day(r, "Thu")["items"]] == ["events", "posts"]
+    assert [d["key"] for d in r["days"]] == ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun", "any"], \
+        "only the days with a job"
+    assert [i["key"] for i in _day(r, "Mon")["items"]] == ["sermons", "clips"]
+    # ChurchSavvy and production: the order, the worship and production teams, the announcements.
+    assert [i["key"] for i in _day(r, "Tue")["items"]] == ["sunday_plan"]
+    assert [i["key"] for i in _day(r, "Wed")["items"]] == ["production_schedule"]
+    assert [i["key"] for i in _day(r, "Thu")["items"]] == ["posts", "flyers"]
+    assert [i["key"] for i in _day(r, "Fri")["items"]] == ["announcements"]
+    assert [i["key"] for i in _day(r, "any")["items"]] == ["churchsavvy_team", "website"]
     assert not any(cd.CATALOG[k]["money"] for k in _keys(r))
 
 
-def test_a_login_that_works_only_the_kids_does_kids_check_in_on_sunday(client, week):
+def test_sunday_and_servings_week_is_the_volunteers(client, week):
+    _as_manager(client, week, lane="sunday_serving")
+    r = _rhythm(client)
+    assert sorted(_keys(r)) == sorted(cd.STARTER["sunday_serving"]) and r["count"] == 8
+    assert [d["key"] for d in r["days"]] == ["Wed", "Thu", "Sun", "month", "any"]
+    assert [i["key"] for i in _day(r, "Wed")["items"]] == ["serve_schedule"]
+    assert [i["key"] for i in _day(r, "Thu")["items"]] == ["events", "outreach_nights"]
+    assert [i["key"] for i in _day(r, "month")["items"]] == ["serve_teams", "background_checks", "serving_thanks"]
+    assert [i["key"] for i in _day(r, "any")["items"]] == ["new_volunteers"]
+    # Rooms are the Office's now, and ChurchSavvy's jobs Media's.
+    assert not {"rooms", "sunday_plan", "churchsavvy_team", "announcements"} & set(_keys(r))
+
+
+def test_a_login_that_works_only_the_kids_does_the_kids_jobs(client, week):
     _as_manager(client, week)                    # no lane, its areas guessed: Kids & youth
     r = _rhythm(client)
-    assert _keys(r) == ["kids"] and [d["key"] for d in r["days"]] == ["Sun"]
+    # The jobs that live in Kids & youth: Sunday's rooms, youth, and the checks.
+    assert _keys(r) == ["kids", "youth", "background_checks"]
+    assert [d["key"] for d in r["days"]] == ["Sun", "week", "month"]
 
 
 def test_a_viewer_holds_no_duties(client):

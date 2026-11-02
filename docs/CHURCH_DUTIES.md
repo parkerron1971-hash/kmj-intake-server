@@ -82,8 +82,8 @@ great, but you would make the changes for love city directly but chief would do 
 - Members, Viewers, logins that left, and anyone outside a church: none.
 - A read that fails is a 503, never a yes. A login's duties are kept a minute per replica; a change
   clears that replica's at once.
-- `require()` refuses with whose job it is: "“The weekly text” is Naiya's job here. The owner or an
-  admin can give it to you in Logins & areas."
+- `require()` refuses with whose job it is: "“The weekly text and email” is Naiya's job here. The
+  owner or an admin can give it to you in Logins & areas."
 
 ## The office's gates (step 2a, 2026-11-01)
 
@@ -97,7 +97,7 @@ route made stays (the switch, the card, the seat on that church, the keepers).
 | weekly_text | `sms_routing._may_announce` | `/sms/broadcast` (now or later), `/sms/broadcast/reach`, `/sms/groups`, `/sms/scheduled` (list, cancel); the scheduled send checks the duty again at send time | The keyword (`/sms/keyword`) stays an admin's: it is the church's inbound identity, not the weekly text |
 | meetings | `church_board._access` | Counts as a boss: sets boards up (new, rename, archive, seats, the people list) and sees and writes every board, as the owner and Admins do (meetings, attendance, minutes, sending them, recording their approval, tasks) | Board members keep their own boards; a viewer reads; the member app's Board tab and its money yes are untouched |
 | chat_rules | `messaging_router._chat_rules_keeper` | `PATCH /messaging/settings` (on or off, how long chats are kept), still needing its two safety officers to turn on | Naming safety officers and the Safety room: the owner and the named officers |
-| rooms | `church_spaces._access` | Booking straight away, approving, keeping the spaces; the Rentals list without one amount (`rental_list` in `me`) | Fees, deposits and bills: the owner and Admins (`rentals` in `me` still means the page with its money); Member and Viewer logins still go by the Office area |
+| rooms | `church_spaces._access` | Booking straight away, approving, keeping the spaces; the Rentals list without one amount (`rental_list` in `me`). The Office's alone since the split (2026-11-02): every room is booked from one place | Fees, deposits and bills: the owner and Admins (`rentals` in `me` still means the page with its money); Member and Viewer logins still go by the Office area |
 | events | `church_event_signups._office` | The sign-ups' status, summary and each event's sign-ups | Prices, places, cancelling and the export: the owner and Admins (one PUT carries prices with the rest) |
 | leaders_note | `church_leaders_note._access` | The draft and the send | Once a week; the leaders room as the list |
 
@@ -105,6 +105,29 @@ A Manager no lane names keeps what its areas gave it: the duty's own area decide
 says. Event sign-ups were the one job whose old area (the Office) isn't its duty's (Website &
 outreach), so for them a Manager no lane names also keeps the Office area's yes until the church
 moves the events.
+
+### Background checks (2026-11-02)
+
+Kevin, 2026-11-02: "laquesha is the right choice" for background checks. `church_serving._access`
+and `_may_write` (Sunday › Serving, which is only for churches):
+
+- **Recording a check** (`POST /church/serving/checks`), the reminders (`/checks/remind`), and the
+  check link and years in `PUT /church/serving/settings`: the owner, an Admin, or a Manager that
+  `holds()` `background_checks` (the Sunday & Serving lane's by default, so Laquesha; the Executive
+  Pastor's; a Manager no lane names whose areas include Kids & youth or the whole church). A Manager
+  that doesn't hold it, Kids & youth or People & care in its areas or not, gets `refusal()`'s words:
+  "“Background checks” is the Sunday & Serving lane's job here." A Member or Viewer keeps "Only the
+  owner, an admin or a manager changes this." The page's `can.remind` is this, so the record and
+  remind buttons show only to who does it.
+- **Reading who's cleared** (`checks` in the page and the status): Kids & youth's and People &
+  care's logins as before, **and** whoever holds the duty, so Tiara still sees who's cleared for the
+  kids' rooms, and Laquesha (Worship & media alone) sees the checks she records. A holder whose areas
+  leave Serving out (the duty moved to the Office's login) reaches the page by the duty.
+- The hours (adding, taking off, the team and group lengths) stay any manager's, as before.
+- A failed duties read is a 503 for a Manager (the status says no, quietly); the owner and Admins
+  read no duties. A business that isn't a church is a 404 before any duty is read.
+- Moving `background_checks` moves both: named to Tiara alone, Laquesha (and the Executive Pastor's
+  default) no longer record or, by the duty, read them.
 
 ## Moving a duty
 
@@ -158,10 +181,12 @@ Admin seat keep every part. A church's Manager gets:
 | stream | media and booth |
 
 plus any parts the team gave it. A Manager with none of those reads ChurchSavvy only, the way a
-viewer seat does: Tiara and Naiya no longer change the Sunday plan. Shapretta (Media) and Laquesha
-(Sunday & Serving) are ChurchSavvy admins, and so is Jessica (the Executive Pastor covers every
-lane). Volunteers (team rows, no seat) are unchanged. A Manager of a business that isn't a church
-keeps every part.
+viewer seat does: Tiara and Naiya no longer change the Sunday plan. Since the split (2026-11-02,
+"churchsavvy is shapretta"), `churchsavvy_team` and `sunday_plan` are Media's alone: Shapretta is
+ChurchSavvy's admin, and so is Jessica (the Executive Pastor covers every lane). Laquesha (Sunday &
+Serving) is a planner by `serve_schedule` alone until the Volunteers PR moves that part to
+`production_schedule` (see "Where the lanes meet"). Volunteers (team rows, no seat) are unchanged.
+A Manager of a business that isn't a church keeps every part.
 
 **The team list** (`GET /worship/team`) names each office login by its person
 (`business_users_router.seat_person`), else the name it gave, and only a login nothing names by its
@@ -199,53 +224,137 @@ People & care. A roll-up that reached some holders and not others tries the rest
 A Manager no lane names holds every duty in the areas it works (the rule above), so with Who sees
 what off, or nothing placing it, it is over the lanes too until a church moves `oversee_lanes`.
 
-## The catalog (first cut)
+## The catalog
 
-| Duty | Area | Lane by default | Opens | Day |
+Kevin, 2026-11-02: "yes fold it in, and track supplies in tasks", "churchsavvy is shapretta", and
+"yes churchsavvy for worship team, announcements to shapretta. go". The first cut's coarse duties
+are split into the real jobs each admin does: 47 duties (43 that aren't money), each in one lane.
+The care board became People & Care's jobs one by one. Production has no `church_duty_holders`
+rows (nothing has ever moved a duty), so renaming or taking a key out changed no one's job. Each
+new duty gates nothing but `background_checks` (above): the rest are the week's jobs, their day,
+their training line and their page. Two keys that gate already changed lanes: `rooms` is the
+Office's alone (Sunday & Serving sends a room request), and `events` is Sunday & Serving's alone.
+`churchsavvy_team` and `sunday_plan` are Media's alone, so Shapretta (and Jessica) are ChurchSavvy's
+admins and Laquesha isn't.
+
+"Day" is the catalog's: a weekday (or two), "weekly" (Each week, no day said), "monthly" or
+"first Monday" (Once a month), or "as needed" (Any day). The door is the page How your week goes
+opens (`church_my_week.DOOR`, `area:id` in the app's church menu, each checked against
+churchStructure on module-system).
+
+**Office & Leadership** (Naiya's lane; area Office unless said): 13
+
+| Duty | Label | Day | Door | Gates |
 |---|---|---|---|---|
-| weekly_text | Office | Office & Leadership | Announcements: send, schedule, to a group (`sms_routing`) | Wed |
-| leaders_note | Office | Office & Leadership | The Monday leaders note (`church_leaders_note`) | Mon |
-| meetings | Office | Office & Leadership | New boards, seats, minutes, tasks from decisions (`church_board`) | Tue, monthly |
-| rooms | Office | Office & Leadership, Sunday & Serving | Book and approve rooms; the rentals list without amounts (`church_spaces`) | Fri |
-| chat_rules | Messages & safety | Office & Leadership | Member chat rules (`messaging_router`) | as needed |
-| leaders_list | Office | Office & Leadership | Leaders & roles | as needed |
-| care_board | People & care | People & Care | Follow-up, care inbox (shared), help requests | Mon, Tue |
-| shepherding | People & care | People & Care | Shepherding, groups who missed weeks | Thu |
-| kids | Kids & youth | People & Care | Kids check-in, rooms, approved adults | Sun |
-| sunday_plan | Worship & media | Sunday & Serving | ChurchSavvy planning: order of service (planner part) | Tue |
-| serve_schedule | Worship & media | Sunday & Serving, Media (production) | Who serves when (`sunday_planning`) | Wed |
-| events | Website & outreach | Sunday & Serving, Media | Event sign-ups, a room for the event | Thu |
-| attendance | Worship & media | Sunday & Serving | Record Sunday attendance | Sun |
-| posts | Website & outreach | Media & Communications | The marketing desk, posts and Chief's post actions (`business_marketing`) | Thu |
-| clips | Website & outreach | Media & Communications | Post clips and make covers (`clip_posting`, `clip_finder`) | Mon |
-| stream | Worship & media | Media & Communications | The livestream, the booth, the media library (ChurchSavvy media and booth parts) | Sat, Sun |
-| website | Website & outreach | Media & Communications | The site builder and the events page (`public_site`, `events_rsvp_router`) | as needed |
-| churchsavvy_team | Worship & media | Media & Communications, Sunday & Serving | Who's on ChurchSavvy's team (ChurchSavvy admin part) | as needed |
-| monthly_report | Office | Executive Pastor | Gather the monthly report from the admin lanes, no money | first Monday |
-| oversee_lanes | Office | Executive Pastor | See as over the lanes, the Monday team roll-up | Mon |
-| deposit (money) | Giving & money | Treasurer | Service counts, the Sunday deposit match | Sun, Mon |
-| books (money) | Giving & money | Treasurer | Bank matching, reconcile, categories, statements | Mon, monthly |
-| pay (money) | Giving & money | Treasurer | Bills, pay-backs and check requests to approve | Wed |
-| store (money) | Giving & money | Treasurer | Store orders | as needed |
+| front_desk | The front desk | Mon | operate:queue | |
+| leaders_note | The Monday leaders note | Mon | operate:leaders-note | `church_leaders_note` |
+| meetings | Meetings and minutes (the huddle, the all-leaders meeting, each board's minutes) | Tue, monthly | operate:board | `church_board` |
+| decisions | Decisions to done | Tue | operate:tasks | |
+| weekly_text | The weekly text and email (and the week's news list) | Wed | operate:sms | `sms_routing` |
+| calendar | The church calendar | Fri | operate:calendar | |
+| rooms | Rooms (every room booked from one place) | Fri | operate:spaces | `church_spaces` |
+| building | The building and safety | weekly | operate:tasks | |
+| records | Records, files and policies | monthly | operate:documents | |
+| chat_rules | Chat rules (Messages & safety) | as needed | operate:messaging | `messaging_router` |
+| leaders_list | The leaders list and department sheet | as needed | operate:leaders | |
+| new_leaders | Welcoming new leaders | as needed | operate:leaders | |
+| supplies | Supplies (tracked in Tasks) | as needed | operate:tasks | |
+
+**People & Care** (Tiara's lane; area People & care unless said): 10
+
+| Duty | Label | Day | Door |
+|---|---|---|---|
+| first_guests | First-time guests and welcome calls | Mon | operate:follow-up |
+| care_visits | Care and visits (the care board, with the deacons) | Tue | operate:care |
+| prayer | Prayer | weekly | operate:care |
+| help_requests | Help requests | as needed | operate:help |
+| shepherding | Shepherding | Thu | operate:shepherding |
+| groups | Groups and classes (Groups & classes) | Thu | operate:groups |
+| member_records | Member records and the directory | as needed | operate:directory (one of the doors) |
+| kids | Kids: check-in, pickup, the rooms open (Kids & youth; the workers are Sunday & Serving's) | Sun | operate:kids |
+| youth | Youth and Teen Bible Study (Kids & youth) | weekly | operate:groups |
+| devotionals | Devotionals and the reading plan | weekly | build:devotionals |
+
+**Sunday & Serving** (Laquesha's lane, the volunteers; area Worship & media unless said): 8
+
+| Duty | Label | Day | Door | Gates |
+|---|---|---|---|---|
+| serve_schedule | Who serves when (the volunteer teams) | Wed | operate:serve-schedule | ChurchSavvy planner part, until the Volunteers PR |
+| serve_teams | Teams and team leaders | monthly | operate:serve-teams | |
+| new_volunteers | New volunteers | as needed | operate:serve-teams | |
+| background_checks | Background checks (Kids & youth) | monthly | operate:serving | `church_serving` (recording) |
+| serving_thanks | Serving hours and thank-yous | monthly | operate:serving | |
+| events | Events and sign-ups (Website & outreach) | Thu | build:events-page | `church_event_signups` |
+| outreach_nights | Outreach nights: Love Works and City Serve (Website & outreach) | Thu | operate:serve-schedule | |
+| attendance | Sunday attendance | Sun | operate:attendance | |
+
+**Media & Communications** (Shapretta's lane: ChurchSavvy and production): 10
+
+| Duty | Label | Area | Day | Door | Gates |
+|---|---|---|---|---|---|
+| sunday_plan | The order of service | Worship & media | Tue | operate:sundays | ChurchSavvy planner part |
+| production_schedule | Worship and production teams | Worship & media | Wed | operate:serve-schedule | (the Volunteers PR gives it the planner part) |
+| churchsavvy_team | ChurchSavvy's team | Worship & media | as needed | operate:worship-setup | ChurchSavvy admin part |
+| announcements | Sunday announcements | Worship & media | Fri | operate:worship-announcements | |
+| stream | The livestream | Worship & media | Sat, Sun | grow:live | ChurchSavvy media and booth parts |
+| sermons | Sermon up | Worship & media | Mon | grow:sermons | |
+| clips | Clips and covers | Website & outreach | Mon | grow:video-clips | `clip_posting`, `clip_finder` |
+| posts | Posts | Website & outreach | Thu | grow:marketing | `business_marketing` and the rest (step 2b) |
+| flyers | Flyers and graphics | Website & outreach | Thu | grow:create | |
+| website | The website | Website & outreach | as needed | build:my-site | `public_site`, `events_rsvp_router` |
+
+The order of service opens Sundays (ChurchSavvy's Plan), where the order is built. Planning's
+Order of service (`serve-order`) shows that same plan with each team's notes and sends a change to
+ChurchSavvy, so it isn't where the job is done.
+
+**The Executive Pastor** (Jessica): monthly_report (first Monday, operate:monthly-report) and
+oversee_lanes (Mon, operate:team) are hers alone, and by default she covers every non-money duty.
+
+**The Treasurer** (an Admin login), money: deposit (Sun, Mon), books (Mon, monthly), pay (Wed),
+store (as needed).
 
 The area is where the job lives (the app's grouping). It opens nothing: a duty never widens what a
 login sees.
 
-## Love City's structure (to set directly once the migration is applied)
+## Love City's structure (the lanes' defaults; nothing has moved)
 
-- **Naiya Clark**, Office & Leadership: weekly_text, leaders_note, meetings, rooms, chat_rules,
-  leaders_list.
-- **Tiara Adams**, People & Care: care_board, shepherding, kids.
-- **Laquesha Bailey-Smith**, Sunday & Serving: sunday_plan, serve_schedule, events, attendance,
-  rooms.
-- **Shapretta McClain**, Media & Communications: posts, clips, stream, website, churchsavvy_team,
-  serve_schedule (the production team).
-- **Jessica McCloud**, Executive Pastor: every non-money duty by default (monthly_report and
+- **Naiya Clark**, Office & Leadership (13): front_desk, leaders_note, meetings, decisions,
+  weekly_text, calendar, rooms, building, records, chat_rules, leaders_list, new_leaders, supplies.
+- **Tiara Adams**, People & Care (10): first_guests, care_visits, prayer, help_requests, shepherding,
+  groups, member_records, kids, youth, devotionals. She reads who's cleared for the kids' rooms;
+  recording a check is Laquesha's.
+- **Laquesha Bailey-Smith**, Sunday & Serving, the volunteers (8): serve_schedule, serve_teams,
+  new_volunteers, background_checks, serving_thanks, events, outreach_nights, attendance.
+- **Shapretta McClain**, Media & Communications, ChurchSavvy and production (10): sunday_plan,
+  production_schedule, churchsavvy_team, announcements, stream, sermons, clips, posts, flyers,
+  website.
+- **Jessica McCloud**, Executive Pastor: every non-money duty by default (43; monthly_report and
   oversee_lanes are hers alone).
-- **The treasurer** (an Admin login): every money duty.
+- **The treasurer** (an Admin login): every duty; the money ones (deposit, books, pay, store) are
+  the lane's.
 
 All of this is the lanes' defaults, so Love City needs no rows until a duty moves. A move names
 the duty's whole list in one PUT: moving weekly_text to Naiya alone takes it from Jessica too.
+
+## Where the lanes meet
+
+Every duty is in one lane. Two things are still shared, and each is split so one person answers
+for each part:
+
+1. **Sunday's schedule, split by team.** The volunteer teams (greeters, ushers, kids workers,
+   parking, hospitality, outreach) are Laquesha's: `serve_schedule`. The worship and production
+   teams are Shapretta's, with the worship pastor: `production_schedule`. Both open Who serves
+   when. Until the Volunteers PR lands, `worship_team.PARTS_FROM_DUTIES` still maps
+   `serve_schedule` to the ChurchSavvy planner part (so Laquesha schedules in Planning); that PR
+   moves the part to `production_schedule`.
+2. **The week's news list** is Naiya's, with the weekly text and email (`weekly_text`). Shapretta's
+   posts and Sunday announcements draw from it; they don't keep their own list.
+
+Everything else that crosses a lane is a hand-off, not a shared job: a leader or an event sends
+Naiya a room request (`rooms`); a new leader's background check is asked of Sunday & Serving
+(`new_leaders` to `background_checks`); the kids' rooms are Tiara's (`kids`) and the workers in them
+Laquesha's (`serve_schedule`); a help request over the fund's limit goes to the treasurer and the
+pastor.
 
 ## Build order
 
@@ -340,9 +449,11 @@ built in `church_my_week.rhythm` from the duties it holds (`church_duties.standi
 
 - `every_job`: the owner or an Admin, who holds every duty (all of them are listed too).
 - `today`: the church's own day (`{key: "Mon", label, date}`, on the clock My week already reads).
-- `days`: Monday to Sunday, then Once a month (`month`: anything "monthly", and "first Monday"),
-  then Any day (`any`: "as needed"); only the days with something on them. A duty on two days
-  ("Mon, Tue") is on both; "Tue, monthly" is a Tuesday once a month, never every Tuesday.
+- `days`: Monday to Sunday, then Each week (`week`: "weekly" with no day said, 2026-11-02; its
+  jobs are never `today`, since the day isn't said), then Once a month (`month`: anything
+  "monthly", and "first Monday"), then Any day (`any`: "as needed"); only the days with something
+  on them. A duty on two days ("Mon, Tue") is on both; "Tue, monthly" is a Tuesday once a month,
+  never every Tuesday. The team page's "due this week" names days only, so a weekly job isn't on it.
 - Each item: `key`, `label`, `does` (the training line), `area`, `when` (said: "Sundays and
   Mondays", "The first Monday of the month"), `days`, `door` (`church_my_week.DOOR`, one per duty;
   a test fails when a duty has none), `today`, and `done` only where a read the job already keeps

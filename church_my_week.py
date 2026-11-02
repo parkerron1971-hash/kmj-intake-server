@@ -61,29 +61,62 @@ DOOR = {
     "giving_money": {"area": "operate", "id": "bookkeeping", "label": "Open Giving"},
     "tasks": {"area": "operate", "id": "tasks", "label": "Open Tasks"},
     # Each duty's page (church_duties.CATALOG), for How your week goes. A
-    # duty with no door here fails test_church_week_rhythm.
-    "weekly_text": {"area": "operate", "id": "sms", "label": "Open Texts"},
+    # duty with no door here fails test_church_week_rhythm. Each id is a page
+    # the app's church menu has (solutionist-studio churchStructure.tsx, its
+    # table or the doors; checked 2026-11-02).
+    # Office & Leadership. The front desk starts at Approvals, where what came
+    # in waits for someone; decisions, the building and supplies are tracked
+    # in Tasks (Kevin, 2026-11-02: "track supplies in tasks").
+    "front_desk": {"area": "operate", "id": "queue", "label": "Open Approvals"},
     "leaders_note": {"area": "operate", "id": "leaders-note", "label": "Open the leaders note"},
     "meetings": {"area": "operate", "id": "board", "label": "Open Board & minutes"},
+    "decisions": {"area": "operate", "id": "tasks", "label": "Open Tasks"},
+    "weekly_text": {"area": "operate", "id": "sms", "label": "Open Texts"},
+    "calendar": {"area": "operate", "id": "calendar", "label": "Open the calendar"},
     "rooms": {"area": "operate", "id": "spaces", "label": "Open Rooms & spaces"},
+    "building": {"area": "operate", "id": "tasks", "label": "Open Tasks"},
+    "records": {"area": "operate", "id": "documents", "label": "Open Files & policies"},
     "chat_rules": {"area": "operate", "id": "messaging", "label": "Open Member messaging"},
     "leaders_list": {"area": "operate", "id": "leaders", "label": "Open Leaders & roles"},
-    "care_board": {"area": "operate", "id": "follow-up", "label": "Open the Follow-up board"},
+    "new_leaders": {"area": "operate", "id": "leaders", "label": "Open Leaders & roles"},
+    "supplies": {"area": "operate", "id": "tasks", "label": "Open Tasks"},
+    # People & Care. The member directory is one of the church's doors.
+    "first_guests": {"area": "operate", "id": "follow-up", "label": "Open the Follow-up board"},
+    "care_visits": {"area": "operate", "id": "care", "label": "Open Prayer & care"},
+    "prayer": {"area": "operate", "id": "care", "label": "Open Prayer & care"},
+    "help_requests": {"area": "operate", "id": "help", "label": "Open Help requests"},
     "shepherding": {"area": "operate", "id": "shepherding", "label": "Open Shepherding"},
+    "groups": {"area": "operate", "id": "groups", "label": "Open Groups"},
+    "member_records": {"area": "operate", "id": "directory", "label": "Open the member directory"},
     "kids": {"area": "operate", "id": "kids", "label": "Open Kids check-in"},
-    "sunday_plan": {"area": "operate", "id": "sundays", "label": "Open Sundays"},
+    "youth": {"area": "operate", "id": "groups", "label": "Open Groups"},
+    "devotionals": {"area": "build", "id": "devotionals", "label": "Open Devotionals"},
+    # Sunday & Serving: the volunteers.
     "serve_schedule": {"area": "operate", "id": "serve-schedule", "label": "Open Who serves when"},
+    "serve_teams": {"area": "operate", "id": "serve-teams", "label": "Open Teams"},
+    "new_volunteers": {"area": "operate", "id": "serve-teams", "label": "Open Teams"},
+    "background_checks": {"area": "operate", "id": "serving", "label": "Open Serving"},
+    "serving_thanks": {"area": "operate", "id": "serving", "label": "Open Serving"},
     # The sign-ups an event takes are set on the events page (the app's
     # search sends "sign up" there too).
     "events": {"area": "build", "id": "events-page", "label": "Open the events page"},
+    "outreach_nights": {"area": "operate", "id": "serve-schedule", "label": "Open Who serves when"},
     "attendance": {"area": "operate", "id": "attendance", "label": "Open Attendance"},
-    # The marketing desk, or Posts where the desk is closed: the same page id.
-    "posts": {"area": "grow", "id": "marketing", "label": "Open the marketing desk"},
-    "clips": {"area": "grow", "id": "video-clips", "label": "Open Video clips"},
-    "stream": {"area": "grow", "id": "live", "label": "Open Live"},
-    "website": {"area": "build", "id": "my-site", "label": "Open the website"},
+    # Media & Communications: ChurchSavvy and production. The order is built
+    # in ChurchSavvy's Sundays (Plan); Planning's Order of service only shows
+    # it with each team's notes, and changes it in ChurchSavvy.
+    "sunday_plan": {"area": "operate", "id": "sundays", "label": "Open Sundays"},
+    "production_schedule": {"area": "operate", "id": "serve-schedule", "label": "Open Who serves when"},
     # Who's on ChurchSavvy's team is the Team part of Setup.
     "churchsavvy_team": {"area": "operate", "id": "worship-setup", "label": "Open ChurchSavvy setup"},
+    "announcements": {"area": "operate", "id": "worship-announcements", "label": "Open Announcements"},
+    "stream": {"area": "grow", "id": "live", "label": "Open Live"},
+    "sermons": {"area": "grow", "id": "sermons", "label": "Open Sermons"},
+    "clips": {"area": "grow", "id": "video-clips", "label": "Open Video clips"},
+    # The marketing desk, or Posts where the desk is closed: the same page id.
+    "posts": {"area": "grow", "id": "marketing", "label": "Open the marketing desk"},
+    "flyers": {"area": "grow", "id": "create", "label": "Open Create"},
+    "website": {"area": "build", "id": "my-site", "label": "Open the website"},
     "monthly_report": {"area": "operate", "id": "monthly-report", "label": "Open the monthly report"},
     "oversee_lanes": {"area": "operate", "id": "team", "label": "Open the office team"},
     # Money: the owner's and the admins'. The books are Giving's other tabs.
@@ -385,9 +418,9 @@ def _handed(biz: str, now: datetime, whole: bool, mine: set) -> List[Dict[str, A
 WEEKDAYS: Tuple[str, ...] = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 DAY_NAMES = {"Mon": "Monday", "Tue": "Tuesday", "Wed": "Wednesday", "Thu": "Thursday", "Fri": "Friday",
              "Sat": "Saturday", "Sun": "Sunday"}
-MONTH, ANY_DAY = "month", "any"
-GROUP_LABEL = {**DAY_NAMES, MONTH: "Once a month", ANY_DAY: "Any day"}
-GROUP_ORDER: Tuple[str, ...] = WEEKDAYS + (MONTH, ANY_DAY)
+WEEK, MONTH, ANY_DAY = "week", "month", "any"
+GROUP_LABEL = {**DAY_NAMES, WEEK: "Each week", MONTH: "Once a month", ANY_DAY: "Any day"}
+GROUP_ORDER: Tuple[str, ...] = WEEKDAYS + (WEEK, MONTH, ANY_DAY)
 
 
 def _and(words: List[str]) -> str:
@@ -398,7 +431,9 @@ def placed(day: Any) -> Tuple[str, List[str], str]:
     """Where a duty's catalog day puts it: (group, weekdays, said).
     "first Monday" and anything "monthly" are the Month's ("Tue, monthly" is
     a Tuesday once a month, never every Tuesday); days of the week are each
-    of those days; "as needed", or a day this doesn't know, is Any day."""
+    of those days; "weekly" with no day is Each week (some day in the week,
+    which one isn't said); "as needed", or a day this doesn't know, is Any
+    day."""
     toks = [t.strip() for t in str(day or "").split(",") if t.strip()]
     low = {t.lower() for t in toks}
     days = list(dict.fromkeys(t for t in toks if t in WEEKDAYS))     # as the catalog says them: "Sun, Mon"
@@ -408,6 +443,8 @@ def placed(day: Any) -> Tuple[str, List[str], str]:
         return MONTH, days, ("Once a month, on a " + " or a ".join(DAY_NAMES[d] for d in days)) if days else "Once a month"
     if days:
         return days[0], days, _and([DAY_NAMES[d] + "s" for d in days])
+    if "weekly" in low:
+        return WEEK, [], "Once a week, any day"
     return ANY_DAY, [], "Whenever it comes up"
 
 
@@ -463,9 +500,10 @@ def _done(business: Dict[str, Any], keys: FrozenSet[str], today: date, now: date
 
 def rhythm(business: Dict[str, Any], user_id: str, role: str, now: Optional[datetime] = None) -> Optional[Dict[str, Any]]:
     """How this login's week goes: the duties it holds, in the catalog's
-    order, by day (Monday to Sunday, then Once a month, then Any day; only
-    the days with something on them), each with its training line, its door
-    and whether it's today on the church's own day. `every_job`: the owner
+    order, by day (Monday to Sunday, then Each week, then Once a month, then
+    Any day; only the days with something on them), each with its training
+    line, its door and whether it's today on the church's own day (an Each
+    week job is never today: its day isn't said). `every_job`: the owner
     or an Admin, who holds every duty. None for a business that isn't a
     church, and when the duties can't be read (My week stands without it)."""
     import church_duties

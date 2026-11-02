@@ -218,7 +218,7 @@ def due_this_week(duties: Iterable[str], monday: date) -> List[Dict[str, Any]]:
     """Each duty's day in the catalog, for the week that starts `monday`:
     [{duty, label, days, text}], by the first day, catalog order within it.
     "first Monday" is this week's only when this Monday is the month's first;
-    "monthly" and "as needed" name no day. Never a money duty."""
+    "weekly", "monthly" and "as needed" name no day. Never a money duty."""
     have = set(duties)
     out = []
     for key, d in cd.CATALOG.items():

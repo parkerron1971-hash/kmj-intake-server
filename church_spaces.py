@@ -27,7 +27,8 @@ that's the bar. Filed under the Build item "Love City leaves Subsplash (M-1)".
                     booking so its page shows whether it's paid
 
 Who: the owner and admins; a Manager that does the rooms (church_duties
-"rooms": the Office & Leadership and Sunday & Serving lanes' by default, or
+"rooms": the Office & Leadership lane's by default (2026-11-02: every room
+is booked from one place, and the other lanes send a room request), or
 whoever it was given to; a Manager no lane names, by the areas it works);
 and the church's Member and Viewer logins whose areas include the Office
 (church_areas, "Who sees what"). The owner, admins and those Managers book
@@ -255,8 +256,8 @@ def _access(business_id: Any, user: AuthedUser) -> Dict[str, Any]:
     Viewer login that doesn't work the office.
 
     A Manager books, approves and keeps the spaces by the rooms duty
-    (church_duties: the Office & Leadership and Sunday & Serving lanes' by
-    default, or whoever it was given to; a Manager no lane names, by the
+    (church_duties: the Office & Leadership lane's by default, or whoever
+    it was given to; a Manager no lane names, by the
     areas it works, as before). A failed read of it is a 503."""
     if not open_to(user):
         raise HTTPException(404, "Not Found")
