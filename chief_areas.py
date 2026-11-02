@@ -40,7 +40,8 @@ that isn't a church: scope_for() says None and nothing here changes.
                        with people (People & care or Office)
     the prompt ....... block() tells Chief whose login this is and which
                        areas it works in, so it answers within them and
-                       says who handles the rest
+                       says who handles the rest; and its jobs, the duties
+                       it does (chief_duties.jobs_line, via turn_for)
 
 Switched by CHIEF_AREAS: on (the default) | off.
 """
@@ -83,7 +84,10 @@ VERBS: Dict[str, Tuple[str, ...]] = {
         "show_view", "notify_practitioner", "recall_business_knowledge", "schedule_action", "cancel_scheduled",
         "list_scheduled", "create_module_entry", "update_module_entry", "delete_module_entry",
         "list_module_entries", "inspect_module", "summarize_module", "draft_email", "draft_and_send", "send_sms",
-        "save_draft", "generate_document")},
+        "save_draft", "generate_document",
+        # Who does which office duty: any login that may open the duties page
+        # may ask (the handler keeps it to a Manager seat and above).
+        "list_duties")},
     # People & care: the church's people, their care and their follow-up.
     **{v: PEOPLE for v in (
         "create_contact", "update_contact", "update_contact_status", "update_contact_health", "delete_contact",
@@ -141,6 +145,10 @@ VERBS: Dict[str, Tuple[str, ...]] = {
 # errands. Listed so that a new verb is placed on purpose: a test fails
 # until every verb Chief has is in VERBS or here.
 OWNERS = frozenset({
+    # Moving a church's duty, and putting one back: the owner's and admins'
+    # (chief_duties). Here rather than in the Office, so a lane's login is
+    # told it's the owner's or an admin's, never "ask whoever has the Office".
+    "move_duty", "undo_duty",
     # A minister's housing allowance: the owner's alone (the handlers refuse admins too).
     "housing_allowance_status", "set_housing_allowance", "log_housing_entry", "delete_housing_entry",
     "find_housing_payments", "attach_housing_payments", "detach_housing_payments",
@@ -442,11 +450,16 @@ def block(scope: Optional[Dict[str, Any]], who: Optional[Dict[str, Any]] = None,
             "to people). For any other part of the church, say which area it is and that the owner, an admin or "
             "whoever has that area handles it; don't take it on, and don't guess at what you can't see.",
         ]
+        if (who or {}).get("jobs"):
+            lines.append(who["jobs"])
         if not has(scope, *MONEY):
             lines.append("Money isn't this login's: you don't see gifts, giving, invoices, payments, the bank or the "
                          "books, and you never say what anyone gave, what came in or what anything costs. If asked, "
                          "say the owner, an admin or the treasurer can answer.")
         lines.append("The owner's own memories and past conversations aren't shown to this login; don't mention them.")
+    elif (who or {}).get("jobs"):
+        # A login nothing keeps to a lane still has its jobs.
+        lines.append(who["jobs"])
     return "\n".join(lines) + "\n" if lines else ""
 
 
@@ -489,8 +502,25 @@ def who_for(business_id: Any, user_id: Any, owner_id: Any = None) -> Optional[Di
 
 
 def turn_for(business_id: Any, user_id: Any) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
-    """(the lane scope, who's talking) for one Chief turn."""
-    return scope_for(business_id, user_id), who_for(business_id, user_id)
+    """(the lane scope, who's talking) for one Chief turn. A church login
+    that isn't the owner or an Admin also carries `jobs`: its duties, one
+    line for the THIS LOGIN block (chief_duties.jobs_line), read fresh each
+    turn so a duty just moved shows at once."""
+    scope, who = scope_for(business_id, user_id), who_for(business_id, user_id)
+    if who is not None and who.get("role") not in ("owner", "admin"):
+        line = _jobs(business_id, user_id)
+        if line:
+            who = {**who, "jobs": line}
+    return scope, who
+
+
+def _jobs(business_id: Any, user_id: Any) -> Optional[str]:
+    try:
+        import chief_duties
+        return chief_duties.jobs_line(business_id, user_id)
+    except Exception:  # noqa: BLE001 — a failed read leaves the line out, never the turn
+        logger.warning("chief areas: duties line failed (business %s)", str(business_id)[:8])
+        return None
 
 
 def _plain(v: Any) -> str:

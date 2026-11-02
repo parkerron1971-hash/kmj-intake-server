@@ -41,6 +41,9 @@ Who holds a duty (holds):
   POST /church/duties/{duty}/undo          {business_id} (the owner or an
                                            admin): puts the last change back
 
+Chief reads and moves duties through the same functions (chief_duties.py:
+list_duties reads build(), move_duty and undo_duty call move() and undo()).
+
 The switch, CHURCH_DUTIES (off | owner | on; owner until a Thursday), gates
 these routes only. holds() answers whatever it says: it only reads rows an
 owner or an admin wrote here, and with none it is the lanes' defaults.
@@ -779,6 +782,51 @@ def _result(duty: str, holders: List[str], change: Optional[Dict[str, Any]]) -> 
             "changed": change is not None, "change": change}
 
 
+# ─── Moving and putting back: the routes' and Chief's one code path ───
+
+def move(business: Dict[str, Any], duty: str, user_ids: List[Any], by: str) -> Dict[str, Any]:
+    """Name who does one duty at this church: the PUT and Chief's move_duty
+    (chief_duties). `business` is the church's row and `by` the owner or an
+    admin making the change; each caller checked both. [] puts the duty back
+    to its lanes' defaults. Refused (400): more than MAX_HOLDERS, a login id
+    that isn't valid, or a login that can't hold it (_why_not). The same
+    names again change nothing and log nothing. A read or a save that fails
+    is a 503."""
+    _known(duty)
+    if len(user_ids) > MAX_HOLDERS:
+        raise HTTPException(400, f"Name up to {MAX_HOLDERS} logins, or none to follow the lanes")
+    biz = str(business["id"])
+    ids = sorted({_uuid(u, "login") for u in user_ids})
+    why = _check(biz, business, ids, duty)
+    if why:
+        raise HTTPException(400, why)
+    if _moved(biz).get(duty, []) == ids:
+        return _result(duty, ids, None)
+    return _result(duty, ids, _write(biz, duty, ids, str(by)))
+
+
+def undo(business: Dict[str, Any], duty: str, by: str, change_id: Optional[str] = None) -> Dict[str, Any]:
+    """Put the last change to one duty back (the undo route and Chief's
+    undo_duty); again puts back the one before. With `change_id`, only while
+    that change is still the one an undo puts back (409 once another came
+    after it). Nothing to put back is a 404; a login it would hand the duty
+    back to that can't hold it now is a 409."""
+    _known(duty)
+    biz = str(business["id"])
+    last = _undoable(_changes(biz, duty))
+    if not last:
+        raise HTTPException(404, f"Nothing to put back for “{CATALOG[duty]['label']}”.")
+    if change_id and str(last.get("id")) != str(change_id):
+        raise HTTPException(409, f"“{CATALOG[duty]['label']}” has changed again since then, so that change "
+                                 "isn't the one to put back now. Say who does it instead.")
+    was = last.get("from_holders")
+    restore = sorted({str(u) for u in was}) if isinstance(was, list) else []
+    why = _check(biz, business, restore, duty)
+    if why:
+        raise HTTPException(409, f"That can't be put back: {why} Name who does it instead.")
+    return _result(duty, restore, _write(biz, duty, restore, str(by), undoes=str(last["id"])))
+
+
 @router.put("/duties/{duty}")
 def give_duty(duty: str, body: Dict[str, Any], session: UserSession = Depends(sb_clients.authed_request)):
     """Name who does one duty. [] or null puts it back to the lanes'
@@ -786,34 +834,18 @@ def give_duty(duty: str, body: Dict[str, Any], session: UserSession = Depends(sb
     Admin login; only logins on this church's office."""
     user = session.user
     body = body or {}
-    biz, business = _church_for_change(body, user, duty)
+    _, business = _church_for_change(body, user, duty)
     raw = body.get("user_ids")
     if raw is None:
         raw = []
     if not isinstance(raw, list) or len(raw) > MAX_HOLDERS:
         raise HTTPException(400, f"Name up to {MAX_HOLDERS} logins, or none to follow the lanes")
-    user_ids = sorted({_uuid(u, "login") for u in raw})
-    why = _check(biz, business, user_ids, duty)
-    if why:
-        raise HTTPException(400, why)
-    if _moved(biz).get(duty, []) == user_ids:
-        return _result(duty, user_ids, None)
-    change = _write(biz, duty, user_ids, str(user.id))
-    return _result(duty, user_ids, change)
+    return move(business, duty, raw, str(user.id))
 
 
 @router.post("/duties/{duty}/undo")
 def undo_duty(duty: str, body: Dict[str, Any], session: UserSession = Depends(sb_clients.authed_request)):
     """Put the last change to one duty back. Again puts back the one before."""
     user = session.user
-    biz, business = _church_for_change(body or {}, user, duty)
-    last = _undoable(_changes(biz, duty))
-    if not last:
-        raise HTTPException(404, f"Nothing to put back for “{CATALOG[duty]['label']}”.")
-    was = last.get("from_holders")
-    restore = sorted({str(u) for u in was}) if isinstance(was, list) else []
-    why = _check(biz, business, restore, duty)
-    if why:
-        raise HTTPException(409, f"That can't be put back: {why} Name who does it instead.")
-    change = _write(biz, duty, restore, str(user.id), undoes=str(last["id"]))
-    return _result(duty, restore, change)
+    _, business = _church_for_change(body or {}, user, duty)
+    return undo(business, duty, str(user.id))
