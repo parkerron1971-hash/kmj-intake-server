@@ -134,6 +134,12 @@ church, posting only to the church's own connected accounts).
 | clips | Posting a clip (`clip_posting`, Chief's `post_clip`); covers with Find my best clips (`clip_finder.start_run`), Make cover and the cover worker (`clip_covers`), made as the owner's on the church's credits (`clip_finder.church_cover_owner`) |
 | website | The site builder (`public_site._require_business_owner`, and set-site-type and expand-design-brief, which were Admin and up); the events page config (`events_rsvp_router`) |
 
+Image Studio's reads (2026-11-02): covers and post pictures are made as the owner's images, so
+the gallery and one image (`GET /ai/images/gallery/{id}`, `GET /ai/images/{id}/{image_id}`) open
+to an Admin or a login that holds posts or clips (`image_studio.church_reader`). They are read as
+the service role, pinned to that church, and each preview is signed in that church's folder only.
+Image Studio's writes (generate, upload, publish) stay the owner's.
+
 Kept as they were: offers (`business_marketing._owner_row`, what customers pay, the owner's);
 any site_config key naming the domain (`custom_domain`, `custom_domain_status`, the Cloudflare ids)
 in smart-config, refused for a website Manager and left to the owner and the admins; the composer's
