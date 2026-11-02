@@ -136,18 +136,49 @@ from fastapi.responses import (HTMLResponse, JSONResponse, PlainTextResponse,
 from auth_supabase import AuthedUser, require_user
 
 
-def _require_business_owner(business_id: str, user: AuthedUser) -> None:
+def _require_business_owner(business_id: str, user: AuthedUser) -> str:
     """Owner gate for destructive/expensive site endpoints (mirrors
     /composer/rationale's check): 404 for an unknown business, 403 when
     the verified caller isn't its owner. These endpoints trigger
-    service-role writes / LLM composes — session auth alone isn't enough."""
+    service-role writes / LLM composes — session auth alone isn't enough.
+    In a church (docs/CHURCH_DUTIES.md step 2b), also an Admin or a login
+    that does the website duty (church_duties); a Manager whose job it isn't
+    is told whose it is. Returns the caller's role ('owner', 'admin' or
+    'manager'), so a route can keep the domain to the owner and the admins."""
     import sb_clients
     rows = sb_clients.sb_get_as_service(
-        f"/businesses?id=eq.{business_id}&select=owner_id&limit=1") or []
+        f"/businesses?id=eq.{business_id}&select=id,type,owner_id&limit=1") or []
     if not rows:
         raise HTTPException(status_code=404, detail="business not found")
-    if str(rows[0].get("owner_id")) != str(user.id):
+    if str(rows[0].get("owner_id")) == str(user.id):
+        return "owner"
+    import church_duties
+    role = church_duties.does_job(business_id, user.id, "website", rows[0])
+    if not role:
         raise HTTPException(status_code=403, detail="not authorized for this business")
+    return role
+
+
+def _site_admin(business_id: str, biz: Dict[str, Any], user_id: Any) -> None:
+    """The site routes an admin or the owner works (business_access("admin")
+    before step 2b): in a church, also a Manager that does the website duty.
+    Anyone else gets the same 404 business_access gave them."""
+    if biz.get("_caller_role") in ("owner", "admin"):
+        return
+    import church_duties
+    if biz.get("_caller_role") == "manager" and church_duties.does_job(business_id, user_id, "website", biz):
+        return
+    raise HTTPException(status_code=404, detail="business not found")
+
+
+# A site_config key that names the site's domain stays with the owner and
+# the admins: connecting, moving or dropping a domain is theirs, not a
+# website duty's (docs/CHURCH_DUTIES.md step 2b).
+DOMAIN_KEYS_REFUSED = "The website's domain stays with the owner and the admins. Nothing was saved."
+
+
+def _touches_domain(body: Any) -> bool:
+    return isinstance(body, dict) and any("domain" in str(k).lower() for k in body)
 from pydantic import BaseModel
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -2087,8 +2118,11 @@ async def save_smart_config_endpoint(business_id: str, body: Dict[str, Any], use
     user merge arbitrary keys into ANOTHER business's site_config —
     including custom_domain, offline, and use_smart_sites (which shadows
     a composed page with the retired Smart Sites renderer). Cross-tenant
-    write, closed."""
-    _require_business_owner(business_id, user)
+    write, closed. A church login that does the website duty saves too,
+    but never a domain key: those stay the owner's and the admins'."""
+    role = _require_business_owner(business_id, user)
+    if role == "manager" and _touches_domain(body):
+        raise HTTPException(403, DOMAIN_KEYS_REFUSED)
     try:
         from smart_sites import save_smart_config
         result = save_smart_config(business_id, body or {})
@@ -3523,13 +3557,16 @@ async def promote_alternative_endpoint(business_id: str, alternative_index: int,
 
 @router.post("/sites/{business_id}/set-site-type")
 async def set_site_type_endpoint(business_id: str, site_type: str,
-                                 _biz: dict = Depends(business_access("admin"))):
+                                 _biz: dict = Depends(business_access("manager")),
+                                 user: AuthedUser = Depends(require_user)):
     """Switch a business between landing-page and multi-page rendering.
 
     Persists site_config.site_type. Routing reads this on every public
     page load. Switching to multi-page does NOT immediately generate
-    pages — the user must call /generate-multi-page.
+    pages — the user must call /generate-multi-page. An admin or the
+    owner; in a church, also a Manager that does the website duty.
     """
+    _site_admin(business_id, _biz, user.id)
     if site_type not in ("landing-page", "multi-page"):
         raise HTTPException(
             status_code=400,
@@ -3680,15 +3717,18 @@ async def design_signals_endpoint(business_id: str):
 
 @router.post("/sites/{business_id}/expand-design-brief")
 async def expand_brief_endpoint(business_id: str,
-                                _biz: dict = Depends(business_access("admin"))):
+                                _biz: dict = Depends(business_access("manager")),
+                                user: AuthedUser = Depends(require_user)):
     """Pass 3.8b — manual idempotent Brief Expander call.
 
     Reads the persisted design_recommendation, runs LLM #2 to expand it
     into a full DesignBrief, and persists at site_config.design_brief.
     Used when the auto-fire chain in /generate-design-recommendation
     failed, OR when the user wants to regenerate just the brief without
-    regenerating the strand pick.
+    regenerating the strand pick. An admin or the owner; in a church,
+    also a Manager that does the website duty.
     """
+    _site_admin(business_id, _biz, user.id)
     can_expand, seconds_remaining = _check_brief_expand_cooldown(business_id)
     if not can_expand:
         raise HTTPException(

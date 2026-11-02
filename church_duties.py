@@ -510,6 +510,50 @@ def require(business_id: str, user: AuthedUser, duty: str) -> None:
         raise HTTPException(403, refusal(business_id, duty))
 
 
+def does_job(business_id: str, user_id: Any, duty: str, business: Optional[Dict[str, Any]]) -> Optional[str]:
+    """For a job gate that was the owner's alone (or the owner's and the
+    admins'), step 2b: in a church, the login's role when it does this job:
+    the owner, an Admin, or a Manager that holds the duty. A Manager that
+    doesn't is refused (403) with whose job it is. None for anyone else there
+    (no seat, a Member, a Viewer) and for any business that isn't a church,
+    so the gate's own rule and its own refusal stand. `business` is the row
+    the gate already read (type and owner_id). A failed read is a 503."""
+    _known(duty)
+    if not business or not _is_church(business):
+        return None
+    biz, uid = str(business_id), str(user_id or "")
+    if not uid:
+        return None
+    if str(business.get("owner_id") or "") == uid:
+        return "owner"
+    s = standing(biz, uid)
+    if duty in s["duties"]:
+        return s["role"]
+    if s["role"] == "manager":
+        raise HTTPException(403, refusal(biz, duty))
+    return None
+
+
+def holders_of(business_id: str, duty: str) -> List[str]:
+    """Every login that does this duty at this church today, the owner
+    first: the owner, each Admin login, and each Manager holds() says yes
+    for. [] for a business that isn't a church. A failed read is a 503."""
+    _known(duty)
+    biz = str(business_id)
+    b = _business(biz)
+    if not _is_church(b):
+        return []
+    owner = str(b.get("owner_id") or "")
+    out = [owner] if owner else []
+    for s in _seats(biz):
+        uid = str(s["user_id"])
+        if uid in out or s.get("role") not in ("admin", "manager"):
+            continue
+        if s.get("role") == "admin" or duty in standing(biz, uid)["duties"]:
+            out.append(uid)
+    return out
+
+
 def duties_of(business_id: str, user_id: str, role: Optional[str]) -> Optional[List[str]]:
     """This login's duty keys, in the catalog's order, for /team/my-role:
     every key for the owner and the admins. None when they don't apply (not

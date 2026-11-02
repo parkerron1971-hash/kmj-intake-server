@@ -11,7 +11,8 @@ One verb, post_image:
            "caption":"Saturday fades, $20. Book at the link.",
            "when":"2026-10-08T09:00:00-04:00"}]     # optional ISO with a zone; null = now
 
-THE POST ITSELF is image_posting.post_image_for: owner only, the design a
+THE POST ITSELF is image_posting.post_image_for: owner only (in a church, also
+an Admin or a login that does the posts duty, church_duties), the design a
 ready artwork of THIS business, the JPEG made under the build actor, the
 shared door (social_publish_router.send_post), the 24-hour duplicate guard.
 This module turns Chief's words into that call and its answer into plain
@@ -99,6 +100,9 @@ async def _require_owner(business_id: str, user_id: str) -> None:
     try:
         await asyncio.to_thread(image_posting._require_owner, business_id, user_id)
     except HTTPException as e:
+        if e.status_code == 403 and e.detail != image_posting.OWNER_ONLY and isinstance(e.detail, str):
+            # A church's Manager whose job posting isn't: whose it is (church_duties.refusal).
+            raise Refusal(f"{e.detail} So nothing was posted.", "Someone else's job here")
         if e.status_code == 403:
             raise Refusal("Only the business owner can post for it, so nothing was posted.",
                           "Only the owner can post")

@@ -509,13 +509,27 @@ def words_for(row, words=None):
 async def make_cover(business_id: UUID, asset_id: UUID, body: Cover,
                      session: UserSession = Depends(sb_clients.authed_request)):
     sizes = [SHAPES[shape] for shape in dict.fromkeys(body.sizes)] if body.sizes else [body.size]
+    # In a church, an Admin or a login that does the clips duty makes covers
+    # too: as the owner's, on the church's credits, through the same build
+    # actor the cover worker uses. Anyone else goes through the owner check
+    # below, as before.
+    acting = await asyncio.to_thread(clip_finder.church_cover_owner, business_id, session.user.id)
+    actor = images.build_actor.set({'business_id': str(business_id), 'user_id': acting}) if acting else None
+    try:
+        return await _make_cover(business_id, asset_id, body, sizes, acting or session.user.id)
+    finally:
+        if actor is not None:
+            images.build_actor.reset(actor)
+
+
+async def _make_cover(business_id, asset_id, body, sizes, user_id):
     async with httpx.AsyncClient(timeout=60) as client:
         # The owner only, checked before anything about the clip is read or
         # revealed: a cover spends the business's credits, like Image Studio.
         biz = await images.business(client, business_id)
         row = await asyncio.to_thread(clip_row, business_id, asset_id)
         words = words_for(row, body.words)
-        references = await subject_references(client, biz, row, session.user.id)
+        references = await subject_references(client, biz, row, user_id)
         busy = await asyncio.to_thread(designing_now, business_id, asset_id)
         covers, errors, result = {}, {}, None
         for size in sizes:
@@ -596,7 +610,11 @@ async def cover_run(client, run):
     if len(_tries) > 5000:
         _tries.clear()
     # The run's owner, checked again by images.business: covers spend credits.
-    actor = images.build_actor.set({'business_id': str(run['business_id']), 'user_id': str(run['created_by'])})
+    # In a church, whoever started the run must still do the clips duty, and
+    # the covers are made as the owner's (clip_finder.church_cover_owner).
+    acting = await asyncio.to_thread(clip_finder.church_cover_owner, run['business_id'], run['created_by'])
+    maker = acting or str(run['created_by'])
+    actor = images.build_actor.set({'business_id': str(run['business_id']), 'user_id': maker})
     made, reason, pictures = 0, None, {}
     try:
         biz = await images.business(client, run['business_id'])
@@ -605,7 +623,7 @@ async def cover_run(client, run):
             _tries[key] = _tries.get(key, 0) + 1
             try:
                 if key[0] not in pictures:
-                    pictures[key[0]] = await subject_references(client, biz, row, run['created_by'])
+                    pictures[key[0]] = await subject_references(client, biz, row, maker)
                 action = cover_action(row, size=SHAPES[shape], words=words_for(row), references=pictures[key[0]],
                                       style_image_id=plan.get('style_image_id'), note=plan.get('note'))
                 await design(client, biz, action, f'clip-cover:{row["id"]}:auto-{run["id"]}:{shape}')

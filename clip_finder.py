@@ -414,10 +414,12 @@ def start_run(business_id, source_id, body, user):
     if library_bytes(business_id) + int(seconds / 3600 * 600 * 1024 ** 2) > LIBRARY_BYTES:
         raise HTTPException(409, 'This media library is nearly full. Remove recordings or clips you no longer need first.')
     if body.covers:
-        # Covers spend the business's credits, so only its owner can ask for them.
+        # Covers spend the business's credits, so only its owner can ask for
+        # them; in a church, also a login that does the clips duty.
         owner = sb_clients.sb_get_as_service(f'/businesses?id=eq.{media_library.key(business_id)}&select=owner_id&limit=1') or []
         if not owner or str(owner[0].get('owner_id')) != str(user.id):
-            raise HTTPException(403, 'Only the owner can have covers designed with the clips.')
+            if not church_cover_owner(business_id, user.id):
+                raise HTTPException(403, 'Only the owner can have covers designed with the clips.')
         if not cover_offer()['available']:
             raise HTTPException(409, 'Designed covers are switched off right now. Find the clips without them.')
     row = sb_clients.sb_post_as_service('/media_clip_runs', {
@@ -594,14 +596,59 @@ def notify(run, source, filed, flagged):
             'data': {'kind': 'clips_ready', 'run_id': str(run['id']), 'source_id': str(source['id'])}})
     except Exception:
         log.warning('Clip run %s notification failed', run['id'])
+    starter = str(run['created_by'])
+    # In a church, everyone else who does the clips job hears too.
+    office = clip_office(run['business_id'], starter)
     if office_login(run['business_id'], run['created_by']) is False:
         tell_team_member(run, title, body)
-        return
+        phones = office
+    else:
+        phones = [starter] + office
+    for uid in phones:
+        try:
+            import push_notifications
+            push_notifications.send_to_user(uid, title=title, body=body[:160], nav='grow:video-clips', tag=f'clips-{run["id"]}')
+        except Exception:
+            log.warning('Clip run %s push failed', run['id'])
+
+
+def clip_office(business_id, starter):
+    """In a church, every other login that does the clips duty
+    (church_duties.holders_of: the owner, the admins, and each Manager who
+    holds it), once each and never the one who started the run. [] for any
+    other business, and when who does it can't be read: the alert still
+    goes to whoever started the run, as before."""
     try:
-        import push_notifications
-        push_notifications.send_to_user(str(run['created_by']), title=title, body=body[:160], nav='grow:video-clips', tag=f'clips-{run["id"]}')
+        import church_duties
+        out = []
+        for uid in church_duties.holders_of(media_library.key(business_id), 'clips'):
+            if uid and uid != str(starter) and uid not in out:
+                out.append(uid)
+        return out
     except Exception:
-        log.warning('Clip run %s push failed', run['id'])
+        log.warning('Clip run alert: who does clips at %s could not be read', str(business_id)[:8])
+        return []
+
+
+def church_cover_owner(business_id, user_id):
+    """In a church, an Admin or a login that does the clips duty
+    (church_duties) has covers designed too. Covers spend the church's
+    credits and the image engine makes them only for its owner, so they are
+    made as the owner's: this is the owner's id to make them as. None for the
+    owner themself, and for any other business, whose own check stands. A
+    Manager whose job clips aren't is refused (403) with whose job it is; a
+    failed read is a 503."""
+    import church_duties
+    rows = sb_clients.sb_get_as_service(
+        f'/businesses?id=eq.{media_library.key(business_id)}&select=id,type,owner_id&limit=1')
+    if not isinstance(rows, list):
+        raise HTTPException(503, "Couldn't confirm who makes covers here just now. Try again in a minute.")
+    owner = str(rows[0].get('owner_id') or '') if rows else ''
+    if not owner or owner == str(user_id):
+        return None
+    if church_duties.does_job(media_library.key(business_id), user_id, 'clips', rows[0]):
+        return owner
+    return None
 
 
 def office_login(business_id, user_id):

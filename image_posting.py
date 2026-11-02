@@ -29,7 +29,9 @@ is never sent to TikTok or YouTube for the same reason.
 
 OWNER ONLY. Posting puts the business's name on public feeds. An owner check
 (service-role read of businesses.owner_id), like every write that must not
-slide to members, then the posting pilot gate.
+slide to members, then the posting pilot gate. In a church, also an Admin or
+a login that does the posts duty (church_duties); still only to the church's
+own connected accounts.
 
 NEVER TWICE. The post's id is a uuid5 of the caller's request id, so a
 retried request returns the first post instead of a second. The same picture,
@@ -66,16 +68,22 @@ COLUMNS = ('id,business_id,status,size,storage_path,prompt,model,created_at,'
 # _check only needs to know a picture goes with the post; its real link is
 # made after every check has passed, then checked again.
 _PICTURE_TO_COME = {'url': 'https://picture.pending/design.jpg', 'kind': 'image'}
+OWNER_ONLY = 'Only the business owner can post for it. Nothing was posted.'
 
 
 def _require_owner(business_id: str, user_id: str) -> None:
-    rows = sb_clients.sb_get_as_service(f'/businesses?id=eq.{business_id}&select=owner_id&limit=1')
+    """The owner; in a church, also an Admin or a login that does the posts
+    duty (church_duties, docs/CHURCH_DUTIES.md step 2b), who is told whose
+    job it is when it isn't theirs."""
+    rows = sb_clients.sb_get_as_service(f'/businesses?id=eq.{business_id}&select=id,type,owner_id&limit=1')
     if rows is None:
         raise HTTPException(503, "Couldn't confirm this business just now. Nothing was posted. Try again in a minute.")
     if not rows:
         raise HTTPException(404, 'Business not found. Nothing was posted.')
     if str(rows[0].get('owner_id')) != str(user_id):
-        raise HTTPException(403, 'Only the business owner can post for it. Nothing was posted.')
+        import church_duties
+        if not church_duties.does_job(business_id, user_id, 'posts', rows[0]):
+            raise HTTPException(403, OWNER_ONLY)
 
 
 def ready_artwork(business_id: str, image_id: Any) -> Dict[str, Any]:

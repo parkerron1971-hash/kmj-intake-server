@@ -45,8 +45,10 @@ mid-turn lets Chief answer from the desk instead of guessing.
 WHO. Reading is for the owner and the business's members (the API reads
 with business_access viewer); the read says whether the person asking can
 change it. Every change is the owner's: the turn's signed-in person against
-businesses.owner_id, read as the service role (business_marketing._owner_row,
-the API's own check). No turn, no change.
+businesses.owner_id, read as the service role (business_marketing._poster_row,
+the API's own check). In a church, also an Admin or a login that does the
+posts duty (church_duties); a Manager whose job it isn't hears whose it is.
+No turn, no change.
 
 THE GATE. The desk is behind MARKETING_DESK (business_marketing_planner.
 desk_on_for, read in marketing_switches): unset, it covers every business
@@ -237,12 +239,15 @@ def _acting_user(nothing: str) -> str:
 
 
 async def _owner(business_id: str, user_id: str, nothing: str) -> Dict[str, Any]:
-    """The API's own owner check (a service-role read of businesses.owner_id).
-    Returns the business row the desk's functions take."""
+    """The API's own check (a service-role read of businesses.owner_id; in a
+    church, the posts duty). Returns the business row the desk's functions take."""
     import business_marketing as bm
     try:
-        return await asyncio.to_thread(bm._owner_row, business_id, user_id)
+        return await asyncio.to_thread(bm._poster_row, business_id, user_id)
     except HTTPException as e:
+        if e.status_code == 403 and e.detail != bm.OWNER_ONLY and isinstance(e.detail, str):
+            # A church's Manager whose job this isn't: whose it is (church_duties.refusal).
+            raise Refusal(_with_nothing(e.detail, nothing), "Someone else's job here", DESK_NAV)
         if e.status_code == 403:
             raise Refusal(f"Only the business owner can change its marketing, so {nothing}. I can still "
                           "tell you what's on the desk.", "Only the owner can change the desk", DESK_NAV)
@@ -619,7 +624,10 @@ async def read_engine(business_id: str) -> Dict[str, Any]:
     row = await asyncio.to_thread(_business_row, business_id)
     uid = str(cos._TURN_USER_ID.get() or "")
     role = "owner" if uid and uid == str(row.get("owner_id")) else ("member" if uid else None)
-    return await bm.engine(UUID(str(business_id)), biz={**row, "_caller_role": role})
+    # Whoever drives the turn, so a church login that does the posts duty
+    # reads the desk as one that can change it.
+    who = SimpleNamespace(user=SimpleNamespace(id=uid)) if uid else None
+    return await bm.engine(UUID(str(business_id)), biz={**row, "_caller_role": role}, session=who)
 
 
 def _posts_of(payload: Dict[str, Any], now: datetime) -> List[Dict[str, Any]]:

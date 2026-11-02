@@ -29,7 +29,10 @@ path Image Studio publishes an artwork to (a Reel cover must be a JPEG).
 
 OWNER ONLY. Posting puts the business's name on public feeds, and covers are
 the owner's (they spend credits). Auth + an owner check (service-role read of
-businesses.owner_id), like every write that must not slide to members.
+businesses.owner_id), like every write that must not slide to members. In a
+church (docs/CHURCH_DUTIES.md step 2b), also an Admin or a login that does
+the clips duty (church_duties); a Manager whose job it isn't is told whose
+it is, and a failed duties read is a 503.
 
 IDEMPOTENT. The app sends a request_id per Post tap; the post's id is derived
 from it, so a retried tap returns the first post instead of a second. The same
@@ -103,12 +106,18 @@ class ClipPost(BaseModel):
     covers: Optional[Dict[Shape, UUID]] = None
 
 
+OWNER_ONLY = 'Only the business owner can post its clips.'
+
+
 def _require_owner(business_id: str, user) -> None:
-    rows = sb_clients.sb_get_as_service(f'/businesses?id=eq.{business_id}&select=owner_id&limit=1') or []
+    """The owner; in a church, also an Admin or a login that does the clips duty."""
+    rows = sb_clients.sb_get_as_service(f'/businesses?id=eq.{business_id}&select=id,type,owner_id&limit=1') or []
     if not rows:
         raise HTTPException(404, 'Business not found.')
     if str(rows[0].get('owner_id')) != str(user.id):
-        raise HTTPException(403, 'Only the business owner can post its clips.')
+        import church_duties
+        if not church_duties.does_job(business_id, user.id, 'clips', rows[0]):
+            raise HTTPException(403, OWNER_ONLY)
 
 
 def _clip(business_id: str, asset_id: str) -> Dict[str, Any]:
