@@ -4,7 +4,7 @@ date: 2026-11-01
 agent: Claude Code (Claude Opus 5.5)
 asked: "Kevin approved: Love City's treasurer holds an Admin seat and must be able to do the money week (match the deposit, the bank matching, reconcile, categories, bills, store orders); and the Keys dead end, where someone the Giving keeper locked out couldn't even ask for a key"
 status: waiting on Kevin
-prs: [kmj-intake-server (this PR)]
+prs: [kmj-intake-server#1688]
 migrations: []
 left_undone:
   - "The screens: giving deposits and the categories card now answer can_change true for a church's Admin; any front-end check that hides a button from a non-owner (Bills, Transactions, Reconciliation, store orders) still needs the same rule"
