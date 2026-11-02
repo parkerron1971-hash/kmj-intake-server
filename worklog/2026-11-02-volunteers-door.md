@@ -5,7 +5,7 @@ agent: Claude Code (Claude Opus 5.5)
 asked: '"volunteers and roles laquesha is doing is her assignment. so maybe we create a volunteers service thing that is like churchsavvy but with the minus of production part", then "yes churchsavvy for worship team, announcements to shapretta. go"'
 status: in progress
 prs: [kmj-intake-server#1700, solutionist-studio#1450]
-migrations: [supabase/APPLY-2026-11-02-serve-team-owner.sql (NOT applied; Kevin applies it)]
+migrations: [supabase/APPLY-2026-11-02-serve-team-owner.sql (applied 2026-11-02)]
 left_undone:
   - "Apply supabase/APPLY-2026-11-02-serve-team-owner.sql (Kevin), best before or with the merge: SUNDAY_PLANNING is on, and until the column exists every team reads as Volunteers', so Shapretta (production_schedule, churchsavvy_team) changes none"
   - "Order-of-service notes (sunday_order PUT /planning/order/notes) still follow CAN['serve'] alone, not the team's owner"
