@@ -5,7 +5,7 @@ agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-11-01: "gathering the reports from admin should be Jessica", and the monthly report has "nothing about money" (docs/CHURCH_DUTIES.md step 6)'
 status: in review
 prs: [kmj-intake-server (this PR)]
-migrations: [supabase/APPLY-2026-11-02-church-monthly-report.sql (NOT APPLIED)]
+migrations: [supabase/APPLY-2026-11-02-church-monthly-report.sql (applied 2026-11-02)]
 left_undone:
   - "Apply supabase/APPLY-2026-11-02-church-monthly-report.sql (until then the page and the send are a 503 and My week leaves the line out)"
   - "FE: the monthly report page (GET/PUT/send) and its door (My week's line opens operate:monthly-report, a leaf the app doesn't have yet)"
