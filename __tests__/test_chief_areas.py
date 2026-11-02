@@ -288,6 +288,7 @@ def test_a_lanes_turn_reads_and_is_told_only_its_own(prep, monkeypatch):
     monkeypatch.setattr(ca, "scope_for", lambda b, uid, owner_id=None: CARE if uid == "carla" else None)
     monkeypatch.setattr(ca, "who_for", lambda b, uid, owner_id=None: (
         {"role": "manager", "name": "Carla Reyes", "first_name": "Carla"} if uid == "carla" else None))
+    monkeypatch.setattr(ca, "_jobs", lambda b, uid: "Their jobs here: The care board." if uid == "carla" else None)
     monkeypatch.setattr(chief, "_format_setup_block", lambda _: "")
     sources = {"voice_examples": "", "session_context": "", "mentor_active": False, "forecast": None,
                "relationship_insights": [], "time_block": "", "habit_block": "", "bookkeeping_block": "Cash: $9,000"}
@@ -322,6 +323,7 @@ def test_a_lanes_turn_reads_and_is_told_only_its_own(prep, monkeypatch):
     assert seen["who"]["name"] == "Carla Reyes"
     assert seen["kw"]["growth_turn_block"].startswith("TALKING WITH: Carla Reyes, an office login on ")
     assert "THIS LOGIN — not the owner. It has the People & Care lane" in seen["kw"]["growth_turn_block"]
+    assert "Their jobs here: The care board." in seen["kw"]["growth_turn_block"], "and the duties she does"
     assert seen["after"] is None, "the scope ends with the turn"
 
     seen.clear()

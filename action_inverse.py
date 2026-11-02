@@ -290,6 +290,14 @@ INVERSES: Dict[str, Inverse] = {
         "take those bank transactions back off the fund",
         lambda a, r: ({"type": "unplace_fund_payments", "item_ids": list(r.get("created_ids") or [])}
                       if r.get("created_ids") else None)),
+    # A church duty moved (chief_duties): its undo is the duties page's own,
+    # and only while that move is still the last change to the duty.
+    "move_duty": Inverse(
+        "undo_duty",
+        "put that duty back the way it was",
+        lambda a, r: ({"type": "undo_duty", "duty": r["duty"], "change_id": r["change_id"]}
+                      if r.get("changed") and isinstance(r.get("duty"), str) and isinstance(r.get("change_id"), str)
+                      and r["change_id"] else None)),
     "add_bill": Inverse(
         "remove_bill",
         "take that bill back out",
