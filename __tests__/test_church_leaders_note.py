@@ -4,9 +4,11 @@ church's leaders (this week, what's needed, one win), drafted from the
 church's own data, read over, and sent.
 
 Pins:
-  * who: the owner, admins and managers; a member or a viewer seat is
-    refused, so is another church's login, and (Who sees what on) a
-    manager who doesn't work the Office
+  * who: the owner, admins and a Manager that does the leaders note
+    (church_duties: the Office & Leadership lane by default; refused, naming
+    whose job it is, once it moves away; by its areas when no lane names it,
+    as the Office area decided before; a 503 when it can't be read); a
+    member or a viewer seat is refused, and so is another church's login
   * a business that isn't a church, and the switch (off, owner, on)
   * the draft, from the church's rows: the days on its own clock (across
     the clocks changing), a plan and its own occasion said once, a room
@@ -251,8 +253,11 @@ def test_the_owner_an_admin_and_a_manager_get_the_note_and_nobody_else_does(db):
     assert not db.sent and note(db) is None
 
 
-def test_a_manager_who_doesnt_work_the_office_is_refused_while_who_sees_what_is_on(db, monkeypatch):
+def test_a_manager_no_lane_names_keeps_the_note_its_office_area_gave_it(db, monkeypatch):
+    # The clerk's login names no lane, so its areas decide its duties
+    # (church_duties), as the Office area decided the note before them.
     import church_areas
+    import church_duties
     monkeypatch.setenv("CHURCH_AREAS", "on")
     areas = {"areas": ["worship_media"]}
     monkeypatch.setattr(church_areas, "my_areas", lambda biz, uid, role: areas)
@@ -261,11 +266,56 @@ def test_a_manager_who_doesnt_work_the_office_is_refused_while_who_sees_what_is_
     assert send("clerk").status_code == 403
     assert status("admin") is True          # admins work every area
     areas["areas"] = ["worship_media", "office"]
+    church_duties._CACHE.clear()
     assert status("clerk") is True
     areas["areas"] = None                   # the whole church
+    church_duties._CACHE.clear()
     assert status("clerk") is True
     monkeypatch.setattr(church_areas, "my_areas", lambda biz, uid, role: None)
+    church_duties._CACHE.clear()
     assert page("clerk").status_code == 503   # couldn't read their areas: never a yes
+
+
+def _lane(db, name, lane):
+    import church_duties
+    for s in db.t["business_users"]:
+        if s["user_id"] == ID[name]:
+            s["lane"] = lane
+    church_duties._CACHE.clear()
+
+
+def test_a_manager_sends_the_note_by_the_leaders_note_duty(db):
+    import church_duties
+    _lane(db, "clerk", "office_leadership")
+    assert status("clerk") is True and ok(page("clerk"))["church"] == "Love City Church"
+    _lane(db, "clerk", "media_comms")       # a lane that doesn't do the note
+    got = page("clerk")
+    assert got.status_code == 403 and got.json()["detail"] == church_duties.refusal(BIZ, "leaders_note")
+    assert "Office & Leadership" in got.json()["detail"]
+    assert status("clerk") is False and send("clerk").status_code == 403
+    for who in ("owner", "admin"):
+        assert status(who) is True, who
+    assert not db.sent
+
+
+def test_a_manager_the_note_moved_away_from_is_refused_naming_whose_job_it_is(db):
+    import church_duties
+    _lane(db, "clerk", "office_leadership")
+    db.t["church_duty_holders"] = [{"business_id": BIZ, "duty": "leaders_note", "user_id": ID["admin"]}]
+    church_duties._CACHE.clear()
+    got = send("clerk")
+    assert got.status_code == 403 and got.json()["detail"] == church_duties.refusal(BIZ, "leaders_note")
+    assert "admin@lovecity.org's job" in got.json()["detail"]
+    assert not db.sent and note(db) is None
+    assert status("admin") is True
+
+
+def test_a_leaders_note_duty_that_cant_be_read_is_a_503_never_a_yes(db):
+    _lane(db, "clerk", "office_leadership")
+    db.failing.add("church_duty_holders")
+    assert page("clerk").status_code == 503 and send("clerk").status_code == 503
+    assert status("clerk") is False and not db.sent
+    ok(page("owner"))
 
 
 def test_a_business_that_isnt_a_church_has_no_leaders_note(db):

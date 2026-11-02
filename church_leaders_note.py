@@ -30,10 +30,12 @@ only, through the path the Board's "Send minutes" uses (email_layout +
 email_sender.send_via_resend, the church's identity, a key per send). The
 leaders' chat can't carry it: a chat message needs a member sender.
 
-Who sends it: the owner, admins and Manager seats, at churches, and (while
-Who sees what is on) only a login whose areas include the Office, the same
-rule as Rooms & spaces. Once a week: one send per church per Monday-start
-week on the church's clock. The last send (when, who, how many, the words)
+Who sends it: the owner, admins, and a Manager seat that does the leaders
+note (church_duties "leaders_note": the Office & Leadership lane's by
+default, or whoever it was given to; a Manager no lane names, by the areas
+it works, as the Office area decided before duties). Once a week: one send
+per church per Monday-start week on the church's clock. The last send (when,
+who, how many, the words)
 is kept in businesses.settings.church_leaders_note, merged into the live
 settings and swapped only when nobody else changed it in between, so two
 people pressing Send at once send once. No table, no migration.
@@ -62,6 +64,7 @@ from fastapi import APIRouter, Depends, HTTPException
 import business_access
 import sb_clients
 from auth_supabase import AuthedUser, require_user
+from church_duties import holds, refusal
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/church/leaders-note", tags=["church"])
@@ -73,6 +76,7 @@ GROUPS_NAMED = 8                     # the groups line names this many, then "an
 SAME_GATHERING = timedelta(hours=2)  # a plan and its occasion, as the calendar says
 HEADINGS = ("This week", "What’s needed", "One win")
 KEEPS_ALL = ("owner", "admin")
+LEADERS_NOTE = "leaders_note"        # the church duty that sends it (church_duties)
 NOT_CHURCH = "The leaders note is for churches"
 DAY_RE = re.compile(r"^(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday), [A-Z][a-z]+ \d{1,2}$")
 
@@ -180,27 +184,14 @@ def _business(biz_id: str) -> Dict[str, Any]:
     return rows[0]
 
 
-def _office(biz_id: str, uid: str, role: str) -> bool:
-    """Whether this login works the office (church_spaces' rule): the owner
-    and admins always; any login while Who sees what is off; else a login
-    whose areas are the whole church or include the Office. A view that
-    couldn't be read is a 503, never a yes."""
-    if role in KEEPS_ALL:
-        return True
-    import church_areas
-    if church_areas.mode() != "on":
-        return True
-    view = church_areas.my_areas(biz_id, uid, role)
-    if view is None:
-        raise HTTPException(503, "Your areas couldn't be read just now. Try again.")
-    return view.get("areas") is None or "office" in (view.get("areas") or [])
-
-
 def _access(business_id: Any, user: AuthedUser) -> Dict[str, Any]:
-    """The church, and the login sending its note: the owner, an admin or a
-    manager. 404 when the switch is closed to them, they have no such seat
-    here, or it isn't a church; 403 for a manager who doesn't work the
-    office."""
+    """The church, and the login sending its note: the owner, an admin, or a
+    Manager that does the leaders note (church_duties "leaders_note": the
+    Office & Leadership lane's by default, or whoever it was given to; a
+    Manager no lane names, by the areas it works, as before). 404 when the
+    switch is closed to them, they have no such seat here, or it isn't a
+    church; 403 for a Manager that doesn't do it, naming whose job it is; a
+    failed read of the duty is a 503, never a yes."""
     if not open_to(user):
         raise HTTPException(404, "Not Found")
     biz_id = _uuid(business_id, "church")
@@ -209,8 +200,8 @@ def _access(business_id: Any, user: AuthedUser) -> Dict[str, Any]:
     import church_follow_up as cfu
     if not cfu.is_church(biz):
         raise HTTPException(404, NOT_CHURCH)
-    if not _office(biz_id, str(user.id), role):
-        raise HTTPException(403, "The leaders note belongs to the office. An admin can add the Office to your areas.")
+    if role not in KEEPS_ALL and not holds(biz_id, user, LEADERS_NOTE):
+        raise HTTPException(403, refusal(biz_id, LEADERS_NOTE))
     return {"biz": biz, "role": role, "uid": str(user.id), "user": user}
 
 

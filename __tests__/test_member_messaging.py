@@ -427,3 +427,99 @@ def test_the_owner_names_safety_officers_and_never_drops_below_two_while_on(env)
     env.biz["settings"]["messaging"]["enabled"] = False
     assert owner.post("/messaging/officers", json={"business_id": BIZ, "user_id": OFF2, "officer": False}).json() == {
         "officers": [OFF1], "member_officers": []}
+
+
+# ─── who keeps the chat rules (church_duties, docs/CHURCH_DUTIES.md step 2) ─
+
+ADMIN_U, NAIYA_U, TIARA_U, MEM_U = ("aaaaaaaa-0000-4000-8000-0000000000f%d" % i for i in range(1, 5))
+
+
+def _office(env, uid, *, church=True):
+    """One of the church's office logins on the Messaging page: an admin,
+    a Manager in the Office & Leadership lane (Naiya), one in People & Care
+    (Tiara), a Member login."""
+    import church_duties
+    from auth_supabase import require_user
+    env.t["businesses"][0]["type"] = "ministry" if church else "salon"
+    env.t["business_users"] = [
+        {"business_id": BIZ, "user_id": ADMIN_U, "role": "admin", "status": "active", "invited_email": "admin@lc.org"},
+        {"business_id": BIZ, "user_id": NAIYA_U, "role": "manager", "status": "active", "lane": "office_leadership",
+         "invited_email": "naiya@lc.org"},
+        {"business_id": BIZ, "user_id": TIARA_U, "role": "manager", "status": "active", "lane": "people_care",
+         "invited_email": "tiara@lc.org"},
+        {"business_id": BIZ, "user_id": MEM_U, "role": "member", "status": "active", "invited_email": "web@lc.org"}]
+    church_duties._CACHE.clear()
+    app = FastAPI()
+    app.include_router(mr.router)
+    app.dependency_overrides[require_user] = lambda: _User(uid)
+    return TestClient(app)
+
+
+def _keep(client, days=180):
+    return client.patch("/messaging/settings", json={"business_id": BIZ, "retention_days": days})
+
+
+def test_in_a_church_the_chat_rules_open_to_an_admin_and_whoever_does_them(env):
+    import church_duties
+    for uid in (OWNER, ADMIN_U, NAIYA_U):
+        r = _keep(_office(env, uid))
+        assert r.status_code == 200 and r.json()["retention_days"] == 180, uid
+    tiara = _keep(_office(env, TIARA_U))
+    assert tiara.status_code == 403 and tiara.json()["detail"] == church_duties.refusal(BIZ, "chat_rules")
+    assert "Office & Leadership" in tiara.json()["detail"]
+    member = _keep(_office(env, MEM_U))
+    assert member.status_code == 403 and member.json()["detail"] == "Only a manager or the owner can do that."
+    # Turning it on still needs its two safety officers, whoever asks.
+    env.biz["settings"]["messaging"]["enabled"] = False
+    on = _office(env, NAIYA_U).patch("/messaging/settings", json={"business_id": BIZ, "enabled": True})
+    assert on.status_code == 409 and "2 safety officers" in on.json()["detail"]
+    # Naming the safety officers stays the owner's.
+    for uid in (ADMIN_U, NAIYA_U):
+        named = _office(env, uid).post("/messaging/officers", json={"business_id": BIZ, "user_id": uid, "officer": True})
+        assert named.status_code == 403, uid
+    assert env.t["msg_safety_officers"] == []
+
+
+def test_any_other_business_keeps_the_owner_only_rules(env):
+    for uid in (ADMIN_U, NAIYA_U, TIARA_U, MEM_U):
+        r = _keep(_office(env, uid, church=False))
+        assert r.status_code == 403 and r.json()["detail"] == "Only a manager or the owner can do that.", uid
+    assert _keep(_office(env, OWNER, church=False)).status_code == 200
+    assert _keep(_office(env, "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", church=False)).status_code == 403
+
+
+def test_a_manager_the_chat_rules_moved_away_from_is_refused(env):
+    import church_duties
+    naiya = _office(env, NAIYA_U)
+    env.t["church_duty_holders"] = [{"business_id": BIZ, "duty": "chat_rules", "user_id": TIARA_U}]
+    church_duties._CACHE.clear()
+    r = _keep(naiya)
+    assert r.status_code == 403 and r.json()["detail"] == church_duties.refusal(BIZ, "chat_rules")
+    assert "tiara@lc.org's job" in r.json()["detail"]
+    assert _keep(_office(env, TIARA_U)).status_code == 200
+    assert _keep(_office(env, ADMIN_U)).status_code == 200
+
+
+def test_a_manager_no_lane_names_keeps_the_chat_rules_its_areas_give_it(env, monkeypatch):
+    import church_areas
+    import church_duties
+    client = _office(env, NAIYA_U)
+    env.t["business_users"][1]["lane"] = None
+    monkeypatch.setenv("CHURCH_AREAS", "on")
+    areas = {"now": ["messages_safety", "people_care"]}
+    monkeypatch.setattr(church_areas, "my_areas", lambda biz, uid, role: {"areas": areas["now"], "by": "picked"})
+    church_duties._CACHE.clear()
+    assert _keep(client).status_code == 200
+    areas["now"] = ["office"]
+    church_duties._CACHE.clear()
+    assert _keep(client).status_code == 403
+
+
+def test_a_chat_rules_duty_that_cant_be_read_is_a_503_never_a_yes(env, monkeypatch):
+    import sb_clients
+    client = _office(env, NAIYA_U)
+    real = sb_clients.sb_get_as_service
+    monkeypatch.setattr(sb_clients, "sb_get_as_service",
+                        lambda p: None if p.startswith("/church_duty_holders") else real(p))
+    assert _keep(client).status_code == 503
+    assert _keep(_office(env, OWNER)).status_code == 200

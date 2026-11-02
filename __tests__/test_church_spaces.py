@@ -17,6 +17,11 @@ Pins:
   * a member-level office login asks (a request); an approver books
   * a rental's bill is made once, through the invoices, and linked; its
     money is the owner's and admins'
+  * a Manager books, approves and keeps the spaces by the rooms duty
+    (church_duties): the Office & Leadership and Sunday & Serving lanes by
+    default, refused (naming whose job it is) once it moves away, by its
+    areas when no lane names it, a 503 when the duty can't be read; it reads
+    the Rentals list without a single amount
   * the status is false while the switch is off or the tables aren't made,
     and nothing answers 500
 """
@@ -196,11 +201,14 @@ def test_status_is_false_until_the_tables_are_made_and_nothing_answers_500(db):
 def test_status_says_what_each_login_may_do(db):
     def status(name):
         return client(name).get(f"/church/spaces/status?business_id={BIZ}").json()
-    assert status("owner") == {"enabled": True, "book": True, "approve": True, "rentals": True}
-    assert status("admin") == {"enabled": True, "book": True, "approve": True, "rentals": True}
-    assert status("manager") == {"enabled": True, "book": True, "approve": True, "rentals": False}
-    assert status("secretary") == {"enabled": True, "book": True, "approve": False, "rentals": False}
-    assert status("viewer") == {"enabled": True, "book": False, "approve": False, "rentals": False}
+    assert status("owner") == {"enabled": True, "book": True, "approve": True, "rentals": True, "rental_list": True}
+    assert status("admin") == {"enabled": True, "book": True, "approve": True, "rentals": True, "rental_list": True}
+    # A Manager no lane names, working the whole church: the rooms duty by its areas.
+    assert status("manager") == {"enabled": True, "book": True, "approve": True, "rentals": False, "rental_list": True}
+    assert status("secretary") == {"enabled": True, "book": True, "approve": False, "rentals": False,
+                                   "rental_list": False}
+    assert status("viewer") == {"enabled": True, "book": False, "approve": False, "rentals": False,
+                                "rental_list": False}
     assert status("singer")["enabled"] is False, "their areas leave out the office"
     assert client("owner").get(f"/church/spaces/status?business_id={SALON}").json()["enabled"] is False
 
@@ -423,9 +431,17 @@ def test_a_rentals_money_stays_with_the_owner_and_admins(db):
     seen = week[0]
     assert seen["kind"] == "rental" and seen["renter_name"] == "Ana Carter"
     assert not {"fee_cents", "deposit_cents", "invoice_id", "bill"} & set(seen)
+    assert client("secretary").get(f"/church/spaces/rentals?business_id={BIZ}").status_code == 403
+    # Whoever does the rooms reads the Rentals list, without a single amount.
+    listed = client("manager").get(f"/church/spaces/rentals?business_id={BIZ}")
+    assert listed.status_code == 200, listed.text
+    [row] = listed.json()["rentals"]
+    assert row["renter_name"] == "Ana Carter" and not {"fee_cents", "deposit_cents", "invoice_id", "bill"} & set(row)
+    assert listed.json()["me"]["rentals"] is False and listed.json()["me"]["rental_list"] is True
     for who in ("secretary", "manager"):
-        assert client(who).get(f"/church/spaces/rentals?business_id={BIZ}").status_code == 403
         assert client(who).post(f"/church/spaces/bookings/{r['id']}/bill", json={"business_id": BIZ}).status_code == 403
+    assert _rental("manager", start_at=_ny(2026, 11, 8, 17), end_at=_ny(2026, 11, 8, 20)).status_code == 403, \
+        "setting a fee stays the owner's and admins'"
     assert db.t["invoices"] == []
     # A rental the office takes without its amounts: an admin sets them later.
     ask = _book("secretary", kind="rental", title="Garcia birthday", renter_name="Luis Garcia",
@@ -449,3 +465,68 @@ def test_approvers_keep_the_list_of_spaces(db):
     off = client("admin").patch(f"/church/spaces/{VAN}", json={"business_id": BIZ, "active": False})
     assert off.json()["space"]["active"] is False
     assert _book("admin", space_id=VAN).status_code == 400, "a retired space takes no new bookings"
+
+
+# ─── Who does the rooms (church_duties, docs/CHURCH_DUTIES.md step 2) ─
+
+def _lane(db, name, lane):
+    import church_duties
+    for s in db.t["business_users"]:
+        if s["user_id"] == ID[name]:
+            s["lane"] = lane
+    church_duties._CACHE.clear()
+
+
+def test_a_manager_books_approves_and_keeps_the_spaces_by_the_rooms_duty(db):
+    import church_duties
+    st = lambda: client("manager").get(f"/church/spaces/status?business_id={BIZ}").json()
+    # The Office & Leadership and Sunday & Serving lanes do the rooms by default.
+    for lane in ("office_leadership", "sunday_serving"):
+        _lane(db, "manager", lane)
+        assert st() == {"enabled": True, "book": True, "approve": True, "rentals": False, "rental_list": True}, lane
+    got = _book("manager")
+    assert got.status_code == 200 and got.json()["status"] == "booked"
+    # A lane that doesn't: refused, told whose job it is, and the menu hides it.
+    _lane(db, "manager", "people_care")
+    refused = client("manager").get(f"/church/spaces?business_id={BIZ}")
+    assert refused.status_code == 403 and refused.json()["detail"] == church_duties.refusal(BIZ, "rooms")
+    assert "Sunday & Serving" in refused.json()["detail"]
+    assert _book("manager", start_at=_ny(2026, 11, 2, 9), end_at=_ny(2026, 11, 2, 10)).status_code == 403
+    assert client("manager").get(f"/church/spaces/rentals?business_id={BIZ}").status_code == 403
+    assert st()["enabled"] is False
+    # The owner and admins do every duty, whatever the lanes say.
+    for who in ("owner", "admin"):
+        assert client(who).get(f"/church/spaces?business_id={BIZ}").status_code == 200
+
+
+def test_a_manager_the_rooms_were_moved_away_from_is_refused(db):
+    import church_duties
+    _lane(db, "manager", "office_leadership")
+    db.t["church_duty_holders"] = [{"business_id": BIZ, "duty": "rooms", "user_id": ID["admin"]}]
+    church_duties._CACHE.clear()
+    got = client("manager").get(f"/church/spaces?business_id={BIZ}")
+    assert got.status_code == 403 and got.json()["detail"] == church_duties.refusal(BIZ, "rooms")
+    assert "admin@lovecity.org's job" in got.json()["detail"]
+    assert _book("manager").status_code == 403 and _rows(db) == []
+    assert client("admin").get(f"/church/spaces?business_id={BIZ}").status_code == 200
+
+
+def test_a_manager_no_lane_names_keeps_the_rooms_its_areas_gave_it(db, monkeypatch):
+    import church_duties
+    areas = {"now": ["office", "people_care"]}
+    monkeypatch.setattr(church_areas, "my_areas", lambda biz, uid, role: {"areas": areas["now"], "by": "picked"})
+    assert client("manager").get(f"/church/spaces?business_id={BIZ}").json()["me"]["approve"] is True
+    areas["now"] = ["people_care", "worship_media"]
+    church_duties._CACHE.clear()
+    assert client("manager").get(f"/church/spaces?business_id={BIZ}").status_code == 403
+
+
+def test_a_rooms_duty_that_cant_be_read_is_a_503_never_a_yes(db, monkeypatch):
+    _lane(db, "manager", "office_leadership")
+    real = sb_clients.sb_get_as_service
+    monkeypatch.setattr(sb_clients, "sb_get_as_service",
+                        lambda path, **k: None if path.startswith("/church_duty_holders") else real(path, **k))
+    assert client("manager").get(f"/church/spaces?business_id={BIZ}").status_code == 503
+    assert _book("manager").status_code == 503 and _rows(db) == []
+    # The owner's and the admins' answer reads no duty.
+    assert client("admin").get(f"/church/spaces?business_id={BIZ}").status_code == 200
