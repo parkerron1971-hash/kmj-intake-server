@@ -612,6 +612,10 @@ app.include_router(kids_station_router)
 # public_site_router.
 from church_router import router as church_router
 app.include_router(church_router)
+# The roll: a church's People page in one read (people, their last 8
+# Sundays, families, groups, serving, This week). Read-only; CHURCH_ROLL.
+from church_roll import router as church_roll_router
+app.include_router(church_roll_router)
 # Live: the team runs a live service and moderates its chat (live_router);
 # members watch, chat and say "I'm here" in the member app. Kevin, 2026-09-30.
 from live_router import router as live_router
