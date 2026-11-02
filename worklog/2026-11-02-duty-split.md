@@ -4,7 +4,7 @@ date: 2026-11-02
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-11-02: "yes fold it in, and track supplies in tasks", "churchsavvy is shapretta", "yes churchsavvy for worship team, announcements to shapretta. go". Earlier the same day: "laquesha is the right choice" for background checks, and drop "Ready for Sunday"'
 status: in review
-prs: ["kmj-intake-server (this PR)", "solutionist-studio (duty-split-ui)"]
+prs: [kmj-intake-server#1699, solutionist-studio#1449]
 migrations: []
 left_undone:
   - "worship_team.PARTS_FROM_DUTIES still maps serve_schedule to the ChurchSavvy planner part, so Laquesha schedules in Planning until the Volunteers PR (another session) moves that part to production_schedule. worship_team.py and sunday_planning.py are that PR's and weren't touched here"
