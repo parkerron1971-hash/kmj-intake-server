@@ -4,7 +4,7 @@ date: 2026-11-02
 agent: Claude Code (Claude Opus 5.5)
 asked: "The Media & Communications login's covers and pictures show as unreadable in the media library and the Create desk (follow-up to the duties work Kevin approved, #1691-#1693)"
 status: in progress
-prs: [kmj-intake-server (this PR)]
+prs: [kmj-intake-server#1696]
 migrations: []
 left_undone:
   - "Uploading a picture (POST /ai/images/upload, the marketing desk's 'add a photo') is still the owner's: a write, left as it was"
