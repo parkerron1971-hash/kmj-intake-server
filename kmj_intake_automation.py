@@ -1864,6 +1864,15 @@ async def startup():
                           id="church_leader_tasks_sweep")
     except Exception as e:
         print(f"   [warn] leader tasks sweep not scheduled: {e}")
+    # A task handed to an office login reaches them (2026-11-01): told once
+    # by email and push; past due, it goes up once, in the church's morning,
+    # to whoever handed it and the Executive Pastor (church_office_tasks).
+    try:
+        import church_office_tasks as _cot
+        scheduler.add_job(g("church_office_tasks_sweep", _cot.sweep_tick), "interval", hours=1,
+                          id="church_office_tasks_sweep")
+    except Exception as e:
+        print(f"   [warn] office tasks sweep not scheduled: {e}")
     # Homework files nothing points at any more (a deleted homework, student
     # or class; an attach that never landed) leave the private bucket once a
     # day (academy_work.sweep_tick).
