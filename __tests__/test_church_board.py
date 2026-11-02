@@ -3,9 +3,13 @@ Prototypes ("Board & minutes" tab): "lets go with your list". Elders and
 deacons meet, decide and need a record.
 
 Pins:
-  * who: the owner and admins see every board; anyone else only the boards
-    they sit on (a member row with their login), a viewer reads; a login on
-    no board, an office manager included, is refused
+  * who: the owner and admins see every board; so does a Manager that keeps
+    the meetings (church_duties "meetings": the Office & Leadership lane by
+    default; refused, naming whose job it is, once it moves away; by its
+    areas when no lane names it; a 503 when it can't be read); anyone else
+    only the boards they sit on (a member row with their login), a viewer
+    reads; a login on no board, a Manager without the duty included, is
+    refused
   * another church's boards, meetings, items, people and files are
     unreachable
   * the quorum: a majority is more than half (4 of 7, 4 of 6), a count is
@@ -136,14 +140,16 @@ class BoardDB(FakeDB):
 
 @pytest.fixture
 def db(monkeypatch):
-    seats = (("admin", "admin"), ("deacon", "member"), ("elder", "member"), ("clerk", "manager"),
-             ("watcher", "viewer"))
+    # The clerk is a Manager in the People & Care lane: no meetings duty
+    # (church_duties), so the board is the board members' and the bosses'.
+    seats = (("admin", "admin", None), ("deacon", "member", None), ("elder", "member", None),
+             ("clerk", "manager", "people_care"), ("watcher", "viewer", None))
     fake = BoardDB(
         businesses=[{"id": BIZ, "name": "Love City Church", "type": "ministry", "owner_id": ID["owner"],
                      "settings": {"practitioner_name": "Pastor Kevin"}},
                     {"id": OTHER, "name": "Grace Chapel", "type": "ministry", "owner_id": ID["other_owner"], "settings": {}}],
-        business_users=[{"business_id": BIZ, "user_id": ID[n], "role": r, "status": "active",
-                         "invited_email": f"{n}@lovecity.org"} for n, r in seats],
+        business_users=[{"business_id": BIZ, "user_id": ID[n], "role": r, "status": "active", "lane": lane,
+                         "invited_email": f"{n}@lovecity.org"} for n, r, lane in seats],
         contacts=[{"id": HAYES, "business_id": BIZ, "name": "Darnell Hayes", "email": "deacon@lovecity.org"},
                   {"id": MOORE, "business_id": BIZ, "name": "Dana Moore", "email": "dana.moore@example.com"},
                   {"id": PRICE, "business_id": BIZ, "name": "Noah Price", "email": None},
@@ -227,7 +233,7 @@ def _decide(item_id, who="owner", **kw):
 
 # ─── Who ──────────────────────────────────────────────────────────────
 
-def test_a_login_on_no_board_is_refused_even_an_office_manager(db):
+def test_a_login_on_no_board_is_refused_even_a_manager_that_doesnt_keep_the_meetings(db):
     b, _ = _deacons()
     for who in ("clerk", "watcher"):
         assert client(who).get(f"/church/board?business_id={BIZ}").status_code == 403
@@ -573,3 +579,79 @@ def test_sending_is_held_to_a_few_an_hour_and_each_send_is_its_own(db, monkeypat
         assert send().status_code == 200
     assert send().status_code == 429
     assert len({x["key"] for x in db.sent}) == len(db.sent) == 6 * 2
+
+
+# ─── Who keeps the meetings (church_duties, docs/CHURCH_DUTIES.md step 2) ─
+
+def _lane(db, name, lane):
+    import church_duties
+    for s in db.t["business_users"]:
+        if s["user_id"] == ID[name]:
+            s["lane"] = lane
+    church_duties._CACHE.clear()
+
+
+def test_a_manager_that_keeps_the_meetings_sets_up_and_sees_every_board(db):
+    deacons, ids = _deacons()
+    _lane(db, "clerk", "office_leadership")      # the Church Administrator's lane
+    st = ok(client("clerk").get(f"/church/board/status?business_id={BIZ}"))
+    assert st == {"enabled": True, "manage": True, "member": False, "boards": 0}
+    elders = ok(client("clerk").post("/church/board/boards", json={"business_id": BIZ, "name": "Elders"}))["board"]
+    ok(_member(elders["id"], who="clerk", contact_id=REED))
+    page = ok(client("clerk").get(f"/church/board?business_id={BIZ}"))
+    assert sorted(x["name"] for x in page["boards"]) == ["Deacons", "Elders"] and page["me"]["manage"] is True
+    ok(client("clerk").get(f"/church/board/people?business_id={BIZ}"))
+    # She keeps every board's minutes, on boards she doesn't sit on.
+    m = _meeting(deacons["id"], who="clerk")["meeting"]
+    assert _item(m["id"], "Roof bids", who="clerk")["title"] == "Roof bids"
+    ok(client("clerk").patch(f"/church/board/boards/{elders['id']}", json={"business_id": BIZ, "archived": True}))
+    # The owner and admins, as always.
+    for who in ("owner", "admin"):
+        assert ok(client(who).get(f"/church/board/status?business_id={BIZ}"))["manage"] is True
+    # A board's own members keep exactly what they had.
+    assert ok(client("deacon").get(f"/church/board/status?business_id={BIZ}"))["manage"] is False
+    assert client("deacon").post("/church/board/boards", json={"business_id": BIZ, "name": "Mine"}).status_code == 403
+
+
+def test_a_manager_the_meetings_moved_away_from_is_refused_naming_whose_job_it_is(db):
+    import church_duties
+    deacons, _ = _deacons()
+    _lane(db, "clerk", "office_leadership")
+    db.t["church_duty_holders"] = [{"business_id": BIZ, "duty": "meetings", "user_id": ID["admin"]}]
+    church_duties._CACHE.clear()
+    got = client("clerk").get(f"/church/board?business_id={BIZ}")
+    assert got.status_code == 403 and got.json()["detail"] == church_duties.refusal(BIZ, "meetings")
+    assert "admin@lovecity.org's job" in got.json()["detail"]
+    assert ok(client("clerk").get(f"/church/board/status?business_id={BIZ}"))["enabled"] is False
+    # On a board herself, she keeps that board as its member, and still sets none up.
+    ok(_member(deacons["id"], user_id=ID["clerk"]))
+    assert [x["name"] for x in ok(client("clerk").get(f"/church/board?business_id={BIZ}"))["boards"]] == ["Deacons"]
+    made = client("clerk").post("/church/board/boards", json={"business_id": BIZ, "name": "Trustees"})
+    assert made.status_code == 403 and made.json()["detail"] == church_duties.refusal(BIZ, "meetings")
+    assert ok(client("admin").get(f"/church/board/status?business_id={BIZ}"))["manage"] is True
+
+
+def test_a_manager_no_lane_names_keeps_the_meetings_its_areas_gave_it(db, monkeypatch):
+    import church_areas
+    import church_duties
+    _deacons()
+    _lane(db, "clerk", None)
+    monkeypatch.setenv("CHURCH_AREAS", "on")
+    areas = {"now": ["office", "messages_safety"]}
+    monkeypatch.setattr(church_areas, "my_areas", lambda biz, uid, role: {"areas": areas["now"], "by": "picked"})
+    assert ok(client("clerk").get(f"/church/board/status?business_id={BIZ}"))["manage"] is True
+    areas["now"] = ["people_care"]
+    church_duties._CACHE.clear()
+    assert client("clerk").get(f"/church/board?business_id={BIZ}").status_code == 403
+
+
+def test_a_meetings_duty_that_cant_be_read_is_a_503_never_a_yes(db, monkeypatch):
+    _deacons()
+    _lane(db, "clerk", "office_leadership")
+    real = db.get
+    monkeypatch.setattr(sb_clients, "sb_get_as_service",
+                        lambda path, **k: None if path.startswith("/church_duty_holders") else real(path, **k))
+    assert client("clerk").get(f"/church/board?business_id={BIZ}").status_code == 503
+    assert client("clerk").post("/church/board/boards", json={"business_id": BIZ, "name": "Elders"}).status_code == 503
+    assert [b["name"] for b in db.t["church_boards"]] == ["Deacons"]
+    assert ok(client("owner").get(f"/church/board?business_id={BIZ}"))["me"]["manage"] is True

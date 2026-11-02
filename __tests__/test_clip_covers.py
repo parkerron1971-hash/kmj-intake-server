@@ -30,6 +30,9 @@ def app(monkeypatch):
                         faces=False, extra=False, backfilled=[], patched_rows=[])
     monkeypatch.setattr(cc.media_library, 'read', lambda path: list(s.rows))
     monkeypatch.setattr(cc, 'designing_now', lambda biz, clip_id: set(s.busy))
+    # The business, as clip_finder.church_cover_owner reads it: not a church.
+    monkeypatch.setattr(cc.sb_clients, 'sb_get_as_service',
+                        lambda path, **kw: [{'id': BIZ, 'owner_id': OWNER}] if path.startswith('/businesses') else [])
     monkeypatch.setattr(cc.sb_clients, 'sb_patch_as_service', lambda path, body: s.patched.append((path, body)) or [body])
     monkeypatch.setattr(images, 'business', AsyncMock(return_value={'id': BIZ, 'owner_id': OWNER}))
 

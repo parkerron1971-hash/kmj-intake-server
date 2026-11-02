@@ -109,6 +109,7 @@ def db(monkeypatch):
         return {"id": BIZ, "owner_id": OWNER}
     monkeypatch.setattr(plaid_router, "_require_reader", reader)
     monkeypatch.setattr(plaid_router, "_require_owner", owner)
+    monkeypatch.setattr(plaid_router, "_require_money_writer", owner)
     return fake
 
 
@@ -342,7 +343,7 @@ def test_a_matched_deposit_clears_the_gifts_with_its_fee_and_is_never_income(mon
 
 def test_the_screen_never_sets_or_undoes_gifts_on_a_bank_row(db, monkeypatch):
     import period_lock
-    monkeypatch.setattr(plaid_router, "_require_owner_for_tx", lambda tid, user: {"business_id": BIZ})
+    monkeypatch.setattr(plaid_router, "_require_money_writer_for_tx", lambda tid, user: {"business_id": BIZ})
     monkeypatch.setattr(period_lock, "guard", lambda *a, **k: None)
     monkeypatch.setattr(bank_money, "state", lambda: True)
     user = AuthedUser(id=OWNER, email="x@y.z", role="authenticated")

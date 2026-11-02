@@ -53,7 +53,14 @@ RSVP for attending (serving in a role still works) and shows its sign-up.
   GET  /church/events/signups?business_id=&entry_id=       one event: setup, sign-ups, totals
   PUT  /church/events/signups/setup                        {business_id, entry_id, ...}   owner, admin
   POST /church/events/signups/{id}/cancel                  {business_id}                  owner, admin
-  GET  /church/events/signups/export?business_id=&entry_id=   a CSV
+  GET  /church/events/signups/export?business_id=&entry_id=   a CSV               owner, admin
+
+The office's reads (status, summary, one event) are the owner's, the admins'
+and a Manager's that does the events (church_duties "events": the Sunday &
+Serving and Media & Communications lanes' by default, or whoever it was
+given to; a Manager no lane names, by the areas it works). A failed read of
+the duty is a 503. Prices, places, cancelling and the export stay the owner's
+and the admins': they carry the money.
 
   POST /public/events/{slug}/signup      {entry_id, tickets: {type_id: qty}, name, email, phone?,
                                           texts_ok?, answers?, waitlist?, request_id?}
@@ -92,6 +99,7 @@ from fastapi.responses import JSONResponse, Response
 
 import sb_clients
 from auth_supabase import AuthedUser, require_user
+from church_duties import holds, refusal
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["church"])
@@ -114,6 +122,7 @@ LIVE = ("held", "offered", "paid", "confirmed", "waiting")
 QUESTION_KINDS = ("text", "choice", "yes_no")
 VIEWERS = ("owner", "admin", "manager")     # who sees the sign-ups
 KEEPERS = ("owner", "admin")                # who sets prices, cancels, exports
+EVENTS = "events"                           # the church duty a Manager sees them by (church_duties)
 
 SETUP_FIELDS = "id,entry_id,open,capacity,deadline,questions,waitlist,offer_hours,bring,updated_at"
 TYPE_FIELDS = "id,setup_id,label,price_cents,seats,max_per_signup,active,sort_order"
@@ -1452,7 +1461,24 @@ def _in_office(biz_id: str, uid: str, role: str) -> bool:
     return view.get("areas") is None or "office" in (view.get("areas") or [])
 
 
+def _office_before_duties(biz_id: str, user: AuthedUser, role: str) -> bool:
+    """A Manager no lane names keeps what the Office area gave it here
+    before duties, until the church names who does the events: the events
+    duty's own area is Website & outreach, so its areas alone could take
+    the sign-ups from a Manager that had them. A read that fails is a 503."""
+    import church_duties
+    if church_duties.standing(biz_id, str(user.id))["lanes"] or EVENTS in church_duties._moved(biz_id):
+        return False
+    return _in_office(biz_id, str(user.id), role)
+
+
 def _office(business_id: Any, user: AuthedUser, *, keep: bool = False) -> Dict[str, Any]:
+    """The church and the office login reading its sign-ups: the owner and
+    admins always; a Manager while it does the events (church_duties; a
+    Manager no lane names, by the areas it works, or by the Office area as
+    before, until the events move; a failed read of either is a 503). With
+    `keep`, the owner and admins only: prices, places, cancelling and the
+    export carry the money."""
     import business_access
     import church_follow_up as cfu
     biz_id = _uuid(business_id, "church")
@@ -1462,8 +1488,10 @@ def _office(business_id: Any, user: AuthedUser, *, keep: bool = False) -> Dict[s
         raise HTTPException(404, "Sign-ups are for churches")
     if not business_open(biz):
         raise HTTPException(404, "Not Found")
-    if role not in VIEWERS or not _in_office(biz_id, str(user.id), role):
+    if role not in VIEWERS:
         raise HTTPException(403, "Event sign-ups belong to the office. An admin can add the Office to your areas.")
+    if role not in KEEPERS and not holds(biz_id, user, EVENTS) and not _office_before_duties(biz_id, user, role):
+        raise HTTPException(403, refusal(biz_id, EVENTS))
     if keep and role not in KEEPERS:
         raise HTTPException(403, "Only the owner and admins can change sign-ups and prices.")
     return {"biz": biz, "role": role, "uid": str(user.id)}

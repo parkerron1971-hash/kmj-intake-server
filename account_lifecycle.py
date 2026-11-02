@@ -100,6 +100,8 @@ HTTP_TIMEOUT = httpx.Timeout(connect=10.0, read=60.0, write=30.0, pool=10.0)
 EXPORT_EXCLUDED: Dict[str, str] = {
     "church_keepers": "who keeps a church's guarded areas (church_keys.py): sign-in user ids that can't mean anything in another business; a restored church names its keepers again, and until it does nothing is locked; cascade on business deletion",
     "church_area_keys": "asks for an hour's key to a guarded area and their answers: sign-in user ids and a hashed one-time code, over within a day; nothing to restore; cascade on business deletion",
+    "church_duty_holders": "who a church moved each office duty to (church_duties.py): sign-in user ids that can't mean anything in another business; a restored church follows its lanes' defaults until it moves its duties again; cascade on business and login deletion",
+    "church_duty_changes": "the log of those moves, from and to as sign-in user ids (church_duties.py): meaningless in another business, and nothing to restore once the moves are gone; cascade on business deletion",
     "church_check_approvals": "each yes a check request has, at its step (church_money_levels.py): sign-in user ids that can't mean anything in another business; the export keeps the requests and where they stand; cascade with the request and on business deletion",
     "church_check_approval_codes": "the one-time codes a board member is emailed to give a yes from the member app (church_money_levels.py): hashed, over in minutes; nothing to restore; cascade with the request, the person and on business deletion",
     "devotional_texts": "who asked for the church's devotional by text each evening (devotional_daily.py): phone numbers and the words they agreed to, given to this account's texting; a restored account must not start texting them, so people sign up again; cascade on business deletion",
@@ -278,6 +280,10 @@ BUSINESS_CHILD_TABLES: List[str] = [
     # It names no contact and cites role keys and team names, not ids, so
     # it restores as it is.
     "church_area_places",
+    # The monthly report (church_monthly_report): the Executive Pastor's notes
+    # for each lane, a month a row, and the last send. It cites nothing by a
+    # foreign key but the business.
+    "church_monthly_reports",
     # Rooms & spaces (church_spaces): the bookings before the spaces they're
     # in, and before the contacts and invoices (a rental's bill) they cite.
     "church_space_bookings", "church_spaces",
@@ -803,6 +809,11 @@ _IMPORT_SKIP = {
     # They remain in the owner archive and are explicitly reported as skipped.
     "ministry_care_notes", "ministry_care_requests", "ministry_gift_history",
     "giving_statement_sends",  # a send log: a restore must not claim statements went out
+    # The monthly report's notes name their writer and its last send its
+    # sender by sign-in id, and a restore must not claim a report went to the
+    # pastor; the export keeps them, and the restored church writes its notes
+    # again.
+    "church_monthly_reports",
     # A pledge cites its giver and its campaign by id, which the importer
     # re-mints; the export keeps them, and the restored church records its
     # pledge cards again. Campaigns name nothing by id, so they restore.

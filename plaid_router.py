@@ -20,6 +20,13 @@ webhook + the Cash Flow dashboard:
 
 T9-α: pgp_sym_encrypt RPCs from the migration handle access_token
 encryption at rest. The router never logs raw tokens.
+
+Who may write (2026-11-01, the treasurer's money week): the bank's
+bookkeeping writes (sync, categorize, exclude, rules, the payout matching)
+take _require_money_writer: the owner, or a church's Admin seat
+(church_money_gate), behind the Giving wall. Linking and unlinking a bank
+(link-token, exchange, relink, item removal) and which accounts count in the
+books (account toggle and removal) stay on _require_owner.
 """
 from __future__ import annotations
 
@@ -32,6 +39,7 @@ from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 
 import church_keys
+import church_money_gate
 import sb_clients
 from auth_supabase import AuthedUser, require_user
 import plaid_helpers
@@ -60,12 +68,23 @@ def _require_owner(business_id: str, user: AuthedUser) -> Dict[str, Any]:
     return rows[0]
 
 
+def _require_money_writer(business_id: str, user: AuthedUser) -> Dict[str, Any]:
+    """The bank's bookkeeping writes (categorize, match, sync, rules): the
+    owner, or in a church an active Admin seat, the treasurer's
+    (church_money_gate). Behind the same Giving wall as _require_owner, so a
+    church that names a Giving keeper holds its Admins at the door until
+    they get a key. Linking and unlinking a bank stay on _require_owner."""
+    row = church_money_gate.require_money_writer(business_id, user)
+    church_keys.wall(business_id, user, "giving_money")
+    return row
+
+
 def _require_reader(business_id: str, user: AuthedUser) -> Dict[str, Any]:
     """Seat-access arc follow-up (7/31): bank-data READS for the
     financial-read tier — owner, active accountant collaborator, or any
     active team seat (viewer+), same ladder as gl_router._access.
-    Every write (link, sync, categorize, match, delete) stays on
-    _require_owner."""
+    Writes take _require_money_writer (the owner, or a church's Admin) or,
+    for linking and unlinking a bank, _require_owner."""
     rows = sb_clients.sb_get_as_service(
         f"/businesses?id=eq.{business_id}&select=id,name,type,owner_id&limit=1"
     ) or []
@@ -118,14 +137,14 @@ def _require_owner_for_account(account_id: str, user: AuthedUser) -> Dict[str, A
     return rows[0]
 
 
-def _require_owner_for_tx(transaction_id: str, user: AuthedUser) -> Dict[str, Any]:
+def _require_money_writer_for_tx(transaction_id: str, user: AuthedUser) -> Dict[str, Any]:
     rows = sb_clients.sb_get_as_service(
         f"/plaid_transactions?transaction_id=eq.{transaction_id}"
         f"&select=transaction_id,business_id&limit=1"
     ) or []
     if not rows:
         raise HTTPException(404, "transaction not found")
-    _require_owner(str(rows[0].get("business_id")), user)
+    _require_money_writer(str(rows[0].get("business_id")), user)
     return rows[0]
 
 
@@ -352,7 +371,7 @@ def sync_business(
     user: AuthedUser = Depends(require_user),
 ) -> Dict[str, Any]:
     """Manual cursor advance across every linked item for the business."""
-    _require_owner(body.business_id, user)
+    _require_money_writer(body.business_id, user)
     _ensure_plaid_configured()
 
     items = sb_clients.sb_get_as_service(
@@ -723,7 +742,7 @@ def update_transaction(
 ) -> Dict[str, Any]:
     """Per-transaction edit from the detail drawer: bucket, subcategory,
     exclude-from-books, notes. Only provided fields are written."""
-    tx = _require_owner_for_tx(transaction_id, user)
+    tx = _require_money_writer_for_tx(transaction_id, user)
     # Phase I.3 PR2 — soft-lock: edits to a closed-period transaction need a reason.
     import period_lock
     cur = sb_clients.sb_get_as_service(
@@ -793,7 +812,7 @@ def bulk_categorize(
 ) -> Dict[str, Any]:
     """Categorize many transactions in one atomic UPDATE (single PostgREST
     request → single SQL statement → all-or-none)."""
-    _require_owner(body.business_id, user)
+    _require_money_writer(body.business_id, user)
     if body.business_category not in plaid_categorization.ALL_BUCKETS:
         raise HTTPException(400, f"business_category must be one of {plaid_categorization.ALL_BUCKETS}")
     ids = [t for t in body.transaction_ids if t]
@@ -823,7 +842,7 @@ def bulk_exclude(
     user: AuthedUser = Depends(require_user),
 ) -> Dict[str, Any]:
     """Exclude/include many transactions in one atomic UPDATE."""
-    _require_owner(body.business_id, user)
+    _require_money_writer(body.business_id, user)
     ids = [t for t in body.transaction_ids if t]
     if not ids:
         return {"ok": True, "updated": 0}
@@ -951,7 +970,7 @@ def upsert_rule(
     body: RuleBody,
     user: AuthedUser = Depends(require_user),
 ) -> Dict[str, Any]:
-    _require_owner(body.business_id, user)
+    _require_money_writer(body.business_id, user)
     if body.business_category not in plaid_categorization.ALL_BUCKETS:
         raise HTTPException(400, f"business_category must be one of {plaid_categorization.ALL_BUCKETS}")
     # Upsert via PostgREST: conflict on (business_id, merchant_name).
@@ -982,7 +1001,7 @@ def upsert_rule(
 
 @router.delete("/category-rules/{rule_id}")
 def delete_rule(rule_id: str, biz: str, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
-    _require_owner(biz, user)
+    _require_money_writer(biz, user)
     sb_clients.sb_delete_as_service(
         f"/category_rules?id=eq.{rule_id}&business_id=eq.{biz}"
     )
@@ -1603,8 +1622,8 @@ def reconciliation_match(
 ) -> Dict[str, Any]:
     """Create a manual match. Idempotent: re-matching the same pair is a
     no-op; matching a payout already bound to a *different* deposit → 409."""
-    _require_owner(body.business_id, user)
-    _require_owner_for_tx(body.plaid_transaction_id, user)
+    _require_money_writer(body.business_id, user)
+    _require_money_writer_for_tx(body.plaid_transaction_id, user)
 
     existing = sb_clients.sb_get_as_service(
         f"/plaid_transactions?business_id=eq.{body.business_id}"
@@ -1643,8 +1662,8 @@ def reconciliation_unmatch(
     body: UnmatchBody, user: AuthedUser = Depends(require_user),
 ) -> Dict[str, Any]:
     """Reverse a match (auto or manual) back to unmatched."""
-    _require_owner(body.business_id, user)
-    _require_owner_for_tx(body.plaid_transaction_id, user)
+    _require_money_writer(body.business_id, user)
+    _require_money_writer_for_tx(body.plaid_transaction_id, user)
     sb_clients.sb_patch_as_service(
         f"/plaid_transactions?transaction_id=eq.{body.plaid_transaction_id}"
         f"&business_id=eq.{body.business_id}",
@@ -1671,8 +1690,8 @@ def reconciliation_ignore(
     body: IgnoreBody, user: AuthedUser = Depends(require_user),
 ) -> Dict[str, Any]:
     """Mark a Plaid deposit as deliberately not-reconcilable."""
-    _require_owner(body.business_id, user)
-    _require_owner_for_tx(body.plaid_transaction_id, user)
+    _require_money_writer(body.business_id, user)
+    _require_money_writer_for_tx(body.plaid_transaction_id, user)
     sb_clients.sb_patch_as_service(
         f"/plaid_transactions?transaction_id=eq.{body.plaid_transaction_id}"
         f"&business_id=eq.{body.business_id}",
@@ -1691,7 +1710,7 @@ def reconciliation_run(
     body: SyncBody, user: AuthedUser = Depends(require_user),
 ) -> Dict[str, Any]:
     """Trigger the auto-match worker over the business's unmatched deposits."""
-    _require_owner(body.business_id, user)
+    _require_money_writer(body.business_id, user)
     attempted, matched = plaid_reconciliation.reconcile_business(body.business_id)
     return {"ok": True, "attempted": attempted, "matched": matched}
 

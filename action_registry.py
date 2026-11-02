@@ -522,6 +522,18 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
                            "remove_bill takes it out"), "chief_only": True},
     "remove_bill": {**_w("A", "removes a bill still owed and never matched (and a recurring one's owed copies); "
                               "paid bills stay"), "chief_only": True},
+    # Kevin, 2026-11-01: "give chief the ability to make adjustment and help the churches make
+    # adjustments like these": a church's duties (chief_duties). Each needs the signed-in person
+    # (an owner or an admin moves one), so Chief's alone: an outside agent carries no turn.
+    "list_duties": {**_r("reads who does each of a church's office duties, by lane: following the lanes or moved "
+                         "to named logins, which need someone, and the office logins by name; no money amounts. "
+                         "Staff names, read for the signed-in person, so never an outside agent's",
+                         sensitive=True), "chief_only": True},
+    "move_duty": {**_w("A", "names who does one church duty, or puts it back to the lanes, through the duties "
+                            "page's own move (owner or admin; money duties only to money logins); logged, and "
+                            "undo_duty puts it back"), "chief_only": True},
+    "undo_duty": {**_w("A", "puts the last change to one church duty back from its log (owner or admin); the "
+                            "put-back is logged too"), "chief_only": True},
     # Bills step 2: a bill matched to the bank payment that paid it, so it counts once.
     "match_bill_payment": {**_w("A", "matches owed bills to the bank payments that paid them (the ones the owner "
                                      "confirmed, or only the plain ones); the bills read paid and count once in the "

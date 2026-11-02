@@ -162,7 +162,8 @@ def test_an_admin_invites_by_link_and_email(api):
     assert j["member"]["roles"] == ["worship", "booth"] and j["member"]["status"] == "invited"
     team = as_("owner").get(f"/worship/team?business_id={BIZ}").json()
     assert [m["name"] for m in team["team"]] == ["Sam"] and team["team"][0]["link"] == j["link"]
-    assert team["staff"][0] == {"name": "Pastor Kevin", "kind": "owner", "you": True}
+    assert team["staff"][0] == {"name": "Pastor Kevin", "kind": "owner", "you": True, "role": "owner", "email": None,
+                                "lane": None, "lanes": [], "parts": list(wt.ROLES)}
     # Without an email: a link to send any way they like.
     r2 = invite(as_, name="Jo", roles=["planner"])
     assert r2.status_code == 200 and r2.json()["emailed"] is False and len(mail) == 1

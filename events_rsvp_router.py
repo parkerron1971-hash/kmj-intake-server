@@ -498,7 +498,10 @@ async def public_event_rsvp(
 
 
 def _require_owner(business_id: str, user: AuthedUser) -> Dict[str, Any]:
-    """Owner gate — same shape as giving_router._require_owner."""
+    """Owner gate — same shape as giving_router._require_owner. In a church
+    (docs/CHURCH_DUTIES.md step 2b), also an Admin or a login that does the
+    website duty (church_duties); a Manager whose job it isn't is told whose
+    it is, and a failed duties read is a 503."""
     rows = sb_clients.sb_get_as_service(
         f"/businesses?id=eq.{business_id}"
         f"&select=id,name,type,owner_id,settings&limit=1"
@@ -506,7 +509,9 @@ def _require_owner(business_id: str, user: AuthedUser) -> Dict[str, Any]:
     if not rows:
         raise HTTPException(404, "business not found")
     if str(rows[0].get("owner_id")) != str(user.id):
-        raise HTTPException(status_code=403, detail="not authorized")
+        import church_duties
+        if not church_duties.does_job(business_id, user.id, "website", rows[0]):
+            raise HTTPException(status_code=403, detail="not authorized")
     return rows[0]
 
 

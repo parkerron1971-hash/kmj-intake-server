@@ -59,7 +59,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 import httpx
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from auth_supabase import require_user, AuthedUser
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -704,6 +704,45 @@ class BroadcastBody(BaseModel):
 ANNOUNCEMENT = "sms_announcement"
 MAX_AHEAD_DAYS = 60
 _UUID = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+WEEKLY_TEXT = "weekly_text"          # the church duty that sends announcements (church_duties)
+
+
+def _is_church(biz: Dict[str, Any]) -> bool:
+    import church_follow_up as cfu
+    return cfu.is_church(biz)
+
+
+def _church(business_id: str) -> bool:
+    """Whether this business is a church. A read that fails is a 503:
+    never a guess either way."""
+    import sb_clients
+    if not _UUID.match(str(business_id or "")):
+        return False
+    rows = sb_clients.sb_get_as_service(f"/businesses?id=eq.{business_id}&select=id,type&limit=1")
+    if not isinstance(rows, list):
+        raise HTTPException(503, "Couldn't check who can send announcements just now. Try again in a minute.")
+    return bool(rows) and _is_church(rows[0])
+
+
+def _may_announce(business_id: str, user: AuthedUser) -> str:
+    """Who sends announcements, sees who one would reach and keeps the ones
+    waiting: the owner or an admin. In a church, also an office login that
+    does the weekly text (church_duties: the Office & Leadership lane's by
+    default, or whoever it was given to). Any other business keeps its admin
+    gate exactly. A duty that can't be read is a 503, never a yes."""
+    import business_access
+    biz = str(business_id)
+    try:
+        return business_access.assert_access(biz, user, "admin")
+    except HTTPException as below_admin:
+        if below_admin.status_code != 404 or not _church(biz):
+            raise
+    # A church's Manager seat (below that it's the same 404 as before), and
+    # only while it does the weekly text.
+    role = business_access.assert_access(biz, user, "manager")
+    from church_duties import require
+    require(biz, user, WEEKLY_TEXT)
+    return role
 
 
 async def _group_ids(client: httpx.AsyncClient, business_id: str, group_id: str) -> Optional[set]:
@@ -757,8 +796,7 @@ async def broadcast_reach(business_id: str, group_id: Optional[str] = None,
     """Who the bulletin would reach right now, before anything is written:
     how many numbers are on the list (or in the group) and how many of
     them said yes."""
-    import business_access
-    business_access.assert_access(str(business_id), user, "admin")
+    _may_announce(str(business_id), user)
     async with httpx.AsyncClient() as client:
         contacts, yes = await _bulletin_list(client, business_id, group_id)
     if yes is None:
@@ -772,9 +810,8 @@ async def announcement_groups(business_id: str, user: AuthedUser = Depends(requi
     """A church's active groups, each with how many members have a number
     and how many of those said yes: who an announcement to one group would
     reach. An empty list for a business without groups."""
-    import business_access
     import sms_alerts
-    business_access.assert_access(str(business_id), user, "admin")
+    _may_announce(str(business_id), user)
     async with httpx.AsyncClient() as client:
         groups = await _sb_get(client, f"/groups?business_id=eq.{business_id}&active=eq.true"
                                        f"&select=id,name&order=name.asc&limit=100")
@@ -820,9 +857,9 @@ async def broadcast(body: BroadcastBody, user: AuthedUser = Depends(require_user
     # practitioner's brand name, billed to the platform and charged
     # against their 10DLC standing. The scoping was real; the
     # authorisation for it was missing. Admin, because this is bulk
-    # outbound to the whole list.
-    import business_access
-    business_access.assert_access(str(body.business_id), user, "admin")
+    # outbound to the whole list; in a church, also whoever does the weekly
+    # text (_may_announce).
+    _may_announce(str(body.business_id), user)
     # No card on file yet (no_card_trial.py): refuse once, up front, rather
     # than fail at sender_for once per contact.
     import billing_limits
@@ -936,7 +973,8 @@ async def announce(business_id: str, message: str, group_id: Optional[str] = Non
 async def run_scheduled_announcement(biz: Dict[str, Any], action: Dict[str, Any]):
     """chief_scheduler's runner for an announcement someone scheduled from
     Text. At send time it checks again what sending now checks: the person
-    who scheduled it can still send announcements (admin), a card is on
+    who scheduled it can still send announcements (the owner or an admin,
+    or in a church a Manager who still does the weekly text), a card is on
     file, and who said yes is read fresh (announce). (ok, what happened)."""
     biz_id = str(biz.get("id") or "")
     who = str(action.get("scheduled_by") or "")
@@ -946,7 +984,15 @@ async def run_scheduled_announcement(biz: Dict[str, Any], action: Dict[str, Any]
     except Exception:
         return False, "Couldn't check who scheduled this announcement, so it wasn't sent."
     if not role or business_access._rank(role) < business_access._rank("admin"):
-        return False, "The person who scheduled this announcement can't send announcements now, so it wasn't sent."
+        still = False
+        if role == "manager" and _is_church(biz):
+            from church_duties import holds
+            try:
+                still = holds(biz_id, AuthedUser(id=who, email=None, role="authenticated"), WEEKLY_TEXT)
+            except Exception:
+                return False, "Couldn't check who scheduled this announcement, so it wasn't sent."
+        if not still:
+            return False, "The person who scheduled this announcement can't send announcements now, so it wasn't sent."
     import billing_limits
     try:
         billing_limits.require_card(biz_id, "texts")
@@ -969,8 +1015,7 @@ async def run_scheduled_announcement(biz: Dict[str, Any], action: Dict[str, Any]
 @router.get("/sms/scheduled")
 async def scheduled_announcements(business_id: str, user: AuthedUser = Depends(require_user)):
     """The announcements waiting to go out, soonest first."""
-    import business_access
-    business_access.assert_access(str(business_id), user, "admin")
+    _may_announce(str(business_id), user)
     async with httpx.AsyncClient() as client:
         rows = await _sb_get(client, f"/chief_scheduled_actions?business_id=eq.{business_id}"
                                      f"&status=eq.queued&action->>type=eq.{ANNOUNCEMENT}"
@@ -997,8 +1042,7 @@ async def scheduled_announcements(business_id: str, user: AuthedUser = Depends(r
 async def cancel_announcement(schedule_id: str, business_id: str, user: AuthedUser = Depends(require_user)):
     """Cancel an announcement that hasn't gone out. Only this business's,
     only announcements, only while queued."""
-    import business_access
-    business_access.assert_access(str(business_id), user, "admin")
+    _may_announce(str(business_id), user)
     if not _UUID.match(str(schedule_id or "")):
         return JSONResponse({"error": "That isn't one of your announcements."}, 404)
     async with httpx.AsyncClient() as client:
