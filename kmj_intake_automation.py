@@ -360,6 +360,10 @@ from church_areas import router as church_areas_router
 app.include_router(church_areas_router)
 from church_keys import router as church_keys_router
 app.include_router(church_keys_router)
+# What each office login does, one duty at a time (2026-11-01; CHURCH_DUTIES
+# off | owner | on).
+from church_duties import router as church_duties_router
+app.include_router(church_duties_router)
 # The Giving door's office pages: recurring gifts, pledges and campaigns
 # (2026-10-27; CHURCH_PLEDGES off | owner | on).
 from church_pledges import router as church_pledges_router
