@@ -320,8 +320,11 @@ def test_a_persons_page_family_church_reach_lately_and_chief(db):
     words = [x["t"] for x in page["lately"]]
     assert "Texted by the church" in words and "Note: Asked about the men's retreat." in words
     assert not any("PRIVATE" in w for w in words)
-    assert page["chief"]["text"].startswith("Calvin came 3 of the 5 Sundays before, then missed the last 3.")
+    # Judged on the family's Sundays over the rule's own span: never "Dana
+    # came 0" when the family came.
+    assert page["chief"]["text"].startswith("The Carter family came 3 of the 6 Sundays before, then missed the last 3.")
     assert "Marcus Grant" in page["chief"]["text"]
+    assert cr.person_view(ctx, DANA, can_care=True, can_give=False)["chief"]["text"].startswith("The Carter family came 3 of the 6")
     assert page["chief"]["actions"][0]["label"] == "Draft a text to Calvin"
     assert page["sundays"][-1] == {"date": "2026-11-01", "k": "M"}
     assert page["giving"] == [] and page["care_open"] is False
@@ -336,6 +339,9 @@ def test_a_care_card_is_a_flag_never_its_words(db):
     want = cfu.stream_for("care", db.t["church_follow_ups"][0]["answers"])[0] == "care_need"
     assert page["care_open"] is want
     assert "SECRET" not in str(page)
+    # A read that fails is "couldn't check", never "no card".
+    db.broken = {"church_follow_ups"}
+    assert cr.person_view(cr.build(dict(BUSINESS)), CALVIN, can_care=False, can_give=False)["care_open"] is None
 
 
 def test_giving_shows_for_a_money_login_only(db):

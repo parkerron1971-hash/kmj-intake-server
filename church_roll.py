@@ -408,8 +408,7 @@ def build(biz: Dict[str, Any], *, now: Optional[datetime] = None) -> Dict[str, A
                 on_teams.setdefault(cid, set()).add(_plain(groups[gid].get("name")) or "A team")
 
     # Leaders by role
-    role_rows = _all(f"/church_leader_roles?business_id=eq.{_q(b)}&status=eq.active&select=contact_id,role",
-                     order="contact_id.asc")
+    role_rows = _all(f"/church_leader_roles?business_id=eq.{_q(b)}&status=eq.active&select=id,contact_id,role")
     roles_of: Dict[str, List[str]] = {}
     for r in role_rows:
         cid = str(r.get("contact_id") or "")
@@ -611,18 +610,20 @@ def roll_view(ctx: Dict[str, Any], *, can_care: bool, can_give: bool) -> Dict[st
 
 # ─── One person ───────────────────────────────────────────────────────
 
-def _care_open(b: str, cid: str) -> bool:
-    """Someone has an open care card for them (never what it says)."""
+def _care_open(b: str, cid: str) -> Optional[bool]:
+    """Someone has an open care card for them (never what it says). None
+    when it couldn't be checked: a wrong "no" is the costly answer here, so
+    the page says it couldn't check rather than that there is nothing."""
     try:
         import church_follow_up as cfu
         rows = sb_clients.sb_get_as_service(
             f"/church_follow_ups?business_id=eq.{_q(b)}&contact_id=eq.{_q(cid)}&status=in.(open,handed_back)"
             "&select=id,path_kind,answers&limit=50")
         if not isinstance(rows, list):
-            return False
+            return None
         return any(cfu.stream_for(r.get("path_kind") or "", r.get("answers") or [])[0] == "care_need" for r in rows)
     except Exception:
-        return False
+        return None
 
 
 def _member_since(b: str, cid: str) -> Optional[date]:
@@ -738,11 +739,20 @@ def _chief(ctx: Dict[str, Any], p: Dict[str, Any], shepherd: str) -> Dict[str, A
     of = sum(1 for k in s if k != "N")
     today: date = ctx["today"]
     if p["drifting"]:
-        before = s[:-3]
-        came = sum(1 for k in before if k in "PO")
-        size = sum(1 for k in before if k != "N")
-        who = f"Their family’s shepherd is {shepherd}." if shepherd else "Their family has no shepherd yet."
-        return {"text": f"{first} came {came} of the {size} Sundays before, then missed the last 3. {who}",
+        # The same days the rule judged (church_shepherd_signals.drift): the
+        # family's Sundays when they have one, over the guard span before
+        # the 3 missed, so the sentence never contradicts the flag.
+        import church_shepherd_signals as sig
+        hid = p["family"]["id"]
+        ids = ctx["members_of"].get(hid, []) if hid else [p["id"]]
+        came_days: Set[date] = set()
+        for mid in ids:
+            came_days |= set(ctx["marks"].get(mid, {}))
+        before = ctx["all_days"][sig.MISSED:sig.MISSED + sig.GUARD_SPAN]
+        came = sum(1 for d in before if d in came_days)
+        subject = p["family"]["name"] if hid and p["family"]["name"] else first
+        who = f"Their family’s shepherd is {shepherd}." if shepherd else ("Their family has no shepherd yet." if hid else "They have no family or shepherd on file yet.")
+        return {"text": f"{subject} came {came} of the {len(before)} Sundays before, then missed the last 3. {who}",
                 "actions": [{"label": f"Draft a text to {first}", "ask": f"Draft a short, warm text to {name}, who has missed the last 3 Sundays. No guilt, just that we miss them. Show me before it sends."},
                             {"label": "Who should call?", "ask": f"Who should call {name} this week? They have missed the last 3 Sundays."}]}
     if p["new_unreached"]:
