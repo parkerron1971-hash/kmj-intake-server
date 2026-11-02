@@ -299,7 +299,11 @@ def leaders(business_id: Any) -> Optional[List[Dict[str, Any]]]:
     room = mpm.leaders_room_people(b)
     if room is None:
         return None
-    ids = sorted({str(p.get("contact_id")) for p in room if p.get("contact_id")})
+    # The office logins are in the room too (2026-11-01), but the Hand to
+    # list already has them as logins: a task for one lands in their office
+    # My week, not a Lead tab they don't use.
+    office = mpm.office_contacts(b) or set()
+    ids = sorted({str(p.get("contact_id")) for p in room if p.get("contact_id")} - office)
     if not ids:
         return []
     names: Dict[str, str] = {}

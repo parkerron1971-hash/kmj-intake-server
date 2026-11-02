@@ -186,7 +186,38 @@ def leaders_room_people(business_id: str) -> Optional[List[Dict[str, Any]]]:
     on = {str(g["id"]) for g in active}
     ids = {str(r["contact_id"]) for r in leads if str(r["group_id"]) in on}
     ids |= {str(r["contact_id"]) for r in roles if leads_something(r["role"])}
+    # The office: it runs the leaders' meetings and sends their Monday note
+    # (Kevin, 2026-11-01). A failed read of the logins leaves the room as
+    # the leaders alone, never empty.
+    ids |= office_contacts(business_id) or set()
     return [{"contact_id": i, "role": "leader"} for i in sorted(ids)]
+
+
+def office_contacts(business_id: str) -> Optional[Set[str]]:
+    """The church's office logins (its active Admin and Manager seats) as
+    its people: the member record each login is tied to, or the one its
+    email names (business_users_router.match_contact, which names no one
+    for a family address it can't tell apart). They're in the leaders room
+    and get the Monday leaders note; the Hand to list keeps them as logins
+    (church_leader_tasks.leaders). None on a failed read."""
+    seats = sb_clients.sb_get_as_service(
+        f"/business_users?business_id=eq.{_q(business_id)}&status=eq.active&role=in.(admin,manager)"
+        "&select=contact_id,invited_email,name&limit=200")
+    if not isinstance(seats, list):
+        return None
+    import business_users_router as bur
+    out: Set[str] = set()
+    for s in seats:
+        if s.get("contact_id"):
+            out.add(str(s["contact_id"]))
+            continue
+        try:
+            c = bur.match_contact(str(business_id), s.get("invited_email"), s.get("name"))
+        except Exception:
+            c = None
+        if c and c.get("id"):
+            out.add(str(c["id"]))
+    return out
 
 
 def in_leaders_room(business_id: str, me_id: str) -> Optional[bool]:
