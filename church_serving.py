@@ -58,11 +58,16 @@ recorded here and when a reminder last went live in contacts.metadata.serving.
   POST   /church/serving/checks                       {business_id, contact_id, on}   a check date
   POST   /church/serving/checks/remind                {business_id, contact_ids?}
 
-Who: the owner and admins, and office logins whose areas (church_areas, Who
+Who: the owner and admins, office logins whose areas (church_areas, Who
 sees what) are the whole church or include Worship & media, Kids & youth or
-People & care. The checks are Kids & youth's and People & care's (and the
-owner's and admins'): anyone else gets the hours without them. Changing
-anything is the owner's, an admin's or a manager's.
+People & care, and a Manager that does the background checks. Reading who's
+cleared is Kids & youth's and People & care's (and the owner's, the admins'
+and whoever does the checks): anyone else gets the hours without them.
+Changing the hours is the owner's, an admin's or a manager's. Recording a
+check, the reminders, and the check link and years are the owner's, an
+admin's, or the Manager's that holds the background_checks duty
+(church_duties, Kevin 2026-11-02: Sunday & Serving's by default); a Manager
+that doesn't is told whose job it is. Serving is only for churches.
 
 Switched by CHURCH_SERVING: off | owner | on (owner until a Thursday). The
 member's own hours on My serving (member_portal_serving) follow the same
@@ -86,12 +91,14 @@ from fastapi import APIRouter, Depends, HTTPException
 import business_access
 import sb_clients
 from auth_supabase import AuthedUser, require_user
+from church_duties import holds, refusal
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/church/serving", tags=["church"])
 
 HOURS_AREAS = ("worship_media", "kids_youth", "people_care")
 CHECK_AREAS = ("kids_youth", "people_care")
+BACKGROUND_CHECKS = "background_checks"   # the church duty that records them (church_duties)
 KEEPS_ALL = ("owner", "admin")
 WRITERS = ("owner", "admin", "manager")
 
@@ -373,7 +380,16 @@ def _areas(biz_id: str, uid: str, role: str) -> Optional[List[str]]:
 def _access(business_id: Any, user: AuthedUser) -> Dict[str, Any]:
     """The church, and what this login may see and do here. 404 when the
     switch is closed to them, they have no login here, or it isn't a church;
-    403 for a login whose areas leave Serving out."""
+    403 for a login whose areas leave Serving out and that doesn't do the
+    background checks.
+
+    `checks` (reading who's cleared): the owner and admins, a login whose
+    areas include Kids & youth or People & care, and a Manager that does the
+    background checks. `record` (recording a check, the reminders, the check
+    link and years): the owner, an admin, or a Manager that holds the
+    background_checks duty (church_duties: the Sunday & Serving lane's by
+    default, the Executive Pastor's, or whoever it was given to; a Manager no
+    lane names, by the areas it works). A failed read of it is a 503."""
     if not open_to(user):
         raise HTTPException(404, "Not Found")
     biz_id = _uuid(business_id, "church")
@@ -383,18 +399,22 @@ def _access(business_id: Any, user: AuthedUser) -> Dict[str, Any]:
     if not cfu.is_church(biz):
         raise HTTPException(404, "Serving hours are for churches")
     areas = _areas(biz_id, str(user.id), role)
-    if areas is not None and not set(areas) & set(HOURS_AREAS):
+    record = role in KEEPS_ALL or (role == "manager" and holds(biz_id, user, BACKGROUND_CHECKS))
+    if areas is not None and not set(areas) & set(HOURS_AREAS) and not record:
         raise HTTPException(403, "Serving belongs to Worship & media, Kids & youth and People & care. "
                                  "An admin can add one of them to your areas.")
-    checks = areas is None or bool(set(areas) & set(CHECK_AREAS))
-    return {"biz": biz, "role": role, "uid": str(user.id), "checks": checks, "write": role in WRITERS}
+    checks = areas is None or bool(set(areas) & set(CHECK_AREAS)) or record
+    return {"biz": biz, "role": role, "uid": str(user.id), "checks": checks, "record": record,
+            "write": role in WRITERS}
 
 
 def _may_write(me: Dict[str, Any], checks: bool = False) -> None:
+    """`checks`: a write to the background checks, which is whoever does
+    them (`record`); a Manager that doesn't is told whose job it is."""
     if not me["write"]:
         raise HTTPException(403, "Only the owner, an admin or a manager changes this.")
-    if checks and not me["checks"]:
-        raise HTTPException(403, "Background checks belong to Kids & youth and People & care.")
+    if checks and not me["record"]:
+        raise HTTPException(403, refusal(str(me["biz"]["id"]), BACKGROUND_CHECKS))
 
 
 # ─── Hours: the reads ─────────────────────────────────────────────────
@@ -731,7 +751,9 @@ def overview(me: Dict[str, Any], year: Optional[int] = None) -> Dict[str, Any]:
                      "check_years": settings["check_years"] if me["checks"] else None,
                      "check_link": settings["check_link"] if me["checks"] else None,
                      "default_minutes": DEFAULT_SERVICE_MINUTES},
-        "can": {"write": me["write"], "checks": me["checks"], "remind": me["write"] and me["checks"]},
+        # `remind`: recording a check and sending the reminders, whoever does
+        # the background checks (`record`).
+        "can": {"write": me["write"], "checks": me["checks"], "remind": me["record"]},
     }
 
 

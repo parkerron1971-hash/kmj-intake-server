@@ -125,7 +125,7 @@ def test_list_duties_is_a_mid_turn_read_and_moving_goes_through_a_tag(church):
     import chief_tool_loop as ctl
     with signed_in(OWNER):
         err, text = asyncio.run(ctl.execute_tool_use(None, {"id": BIZ}, "list_duties", {}))
-        assert not err and "The weekly text" in text and "Office logins" in text
+        assert not err and "The weekly text and email" in text and "Office logins" in text
         err, text = asyncio.run(ctl.execute_tool_use(None, {"id": BIZ}, "move_duty", ASK))
         assert err and "[ACTION:]" in text
         ctl.reset_turn(writes_allowed=True)
@@ -182,11 +182,11 @@ def test_a_manager_is_refused_a_move_plainly(church):
 
 def test_the_owner_moves_a_duty_by_name_and_hears_the_record(church):
     assert cd.holds(BIZ, _u(NAIYA), "weekly_text")
-    out = run("move_duty", {"duty": "The weekly text", "to": ["tiara  ADAMS"]}, OWNER)
+    out = run("move_duty", {"duty": "The weekly text and email", "to": ["tiara  ADAMS"]}, OWNER)
     assert not out.get("failed"), out
-    assert out["result"] == (f"Moved “The weekly text”. Before: {BEFORE_WT}. Now: Tiara Adams. The owner and every "
+    assert out["result"] == (f"Moved “The weekly text and email”. Before: {BEFORE_WT}. Now: Tiara Adams. The owner and every "
                              "Admin still do it too. It's in the duties' change log, and undo_duty puts it back.")
-    assert out["label"] == "“The weekly text” → Tiara"
+    assert out["label"] == "“The weekly text and email” → Tiara"
     assert out["from"] == ["Naiya Clark", "Jessica McCloud"] and out["to"] == ["Tiara Adams"]
     assert out["holders"] == [TIARA] and out["changed"] and not out["follows_lanes"]
     # One change through the duties page's own move, and its log row.
@@ -203,8 +203,8 @@ def test_the_owner_moves_a_duty_by_name_and_hears_the_record(church):
     assert len(church.t["church_duty_changes"]) == 1
     # [] puts it back to the lanes, logged by the admin who did it.
     back = run("move_duty", {"duty": "weekly_text", "to": []}, ADMIN)
-    assert back["result"].startswith(f"Put “The weekly text” back to the lanes. Before: Tiara Adams. Now: {BEFORE_WT}.")
-    assert back["label"] == "“The weekly text” → the lanes" and back["follows_lanes"]
+    assert back["result"].startswith(f"Put “The weekly text and email” back to the lanes. Before: Tiara Adams. Now: {BEFORE_WT}.")
+    assert back["label"] == "“The weekly text and email” → the lanes" and back["follows_lanes"]
     assert church.t["church_duty_changes"][-1]["changed_by"] == ADMIN and church.t["church_duty_holders"] == []
 
 
@@ -248,15 +248,15 @@ def test_a_money_duty_never_goes_to_a_manager_nor_any_duty_to_a_member(church):
 def test_undo_puts_it_back_and_undo_last_only_while_it_is_the_last_change(church):
     import action_inverse as ai
     run("move_duty", ASK, ADMIN)
-    out = run("undo_duty", {"duty": "The weekly text"}, ADMIN)
+    out = run("undo_duty", {"duty": "The weekly text and email"}, ADMIN)
     assert not out.get("failed"), out
-    assert out["result"].startswith(f"Put back the last change to “The weekly text”. Before: Tiara Adams. Now: {BEFORE_WT}.")
-    assert out["label"] == "Put back “The weekly text”" and out["follows_lanes"]
+    assert out["result"].startswith(f"Put back the last change to “The weekly text and email”. Before: Tiara Adams. Now: {BEFORE_WT}.")
+    assert out["label"] == "Put back “The weekly text and email”" and out["follows_lanes"]
     assert church.t["church_duty_holders"] == [] and cd.holds(BIZ, _u(NAIYA), "weekly_text")
     first, second = church.t["church_duty_changes"]
     assert second["undoes"] == first["id"] and first["undone_at"] and second["changed_by"] == ADMIN
     again = run("undo_duty", {"duty": "weekly_text"}, ADMIN)
-    assert again["failed"] and again["result"] == "Failed: Nothing to put back for “The weekly text”."
+    assert again["failed"] and again["result"] == "Failed: Nothing to put back for “The weekly text and email”."
     # undo_last's inverse names its change: once another came after, it's refused.
     one = run("move_duty", {"duty": "rooms", "to": ["Laquesha"]}, OWNER)
     two = run("move_duty", {"duty": "rooms", "to": ["Naiya"]}, OWNER)
@@ -281,9 +281,13 @@ def test_list_duties_by_lane_with_who_does_each_and_what_needs_someone(church):
     heads = [ln for ln in lines if ln.endswith(":") and not ln.startswith("-")]
     assert heads == ["Office & Leadership:", "People & Care:", "Sunday & Serving:", "Media & Communications:",
                      "Treasurer:", "Executive Pastor:"]
-    assert "- The weekly text (weekly_text; Wed): lanes: Naiya Clark, Jessica McCloud." in lines
-    assert ("- Rooms (rooms; Fri; also Sunday & Serving): moved to nobody who can do it now (named but can't do it "
+    assert "- The weekly text and email (weekly_text; Wed): lanes: Naiya Clark, Jessica McCloud." in lines
+    assert ("- Rooms (rooms; Fri): moved to nobody who can do it now (named but can't do it "
             "now: Someone who has left the office).") in lines
+    # Sunday's schedule, split by team: one line under each lane.
+    assert "- Who serves when (serve_schedule; Wed): lanes: Jessica McCloud." in lines
+    assert "- Worship and production teams (production_schedule; Wed): lanes: Jessica McCloud, Shapretta McClain." \
+        in lines
     assert "- The books (books; Mon, monthly; money): lanes: Minnie Tatum." in lines
     assert "- The monthly report (monthly_report; first Monday): lanes: Jessica McCloud." in lines
     assert any(ln.startswith("Needs someone (") and ln.endswith(": Rooms.") for ln in lines)
@@ -315,8 +319,11 @@ def test_a_bigger_churchs_list_reaches_chief_whole(church):
 
 def test_a_church_login_is_told_its_jobs(church, monkeypatch):
     line = chd.jobs_line(BIZ, NAIYA)
-    assert line.startswith("Their jobs here: The weekly text; The Monday leaders note; Meetings and minutes; Rooms; "
-                           "Chat rules; The leaders list. Any other duty is someone else's")
+    assert line.startswith("Their jobs here: The front desk; The Monday leaders note; Meetings and minutes; "
+                           "Decisions to done; The weekly text and email; The church calendar; Rooms; "
+                           "The building and safety; Records, files and policies; Chat rules; "
+                           "The leaders list and department sheet; Welcoming new leaders; Supplies. "
+                           "Any other duty is someone else's")
     for uid in (OWNER, ADMIN, STRANGER):
         assert chd.jobs_line(BIZ, uid) is None, uid
     assert chd.jobs_line(BIZ, MEM) == "Their jobs here: none. A Member or Viewer login doesn't do the office's duties."
@@ -324,9 +331,11 @@ def test_a_church_login_is_told_its_jobs(church, monkeypatch):
     assert chd.jobs_line(BIZ, EXTRA).startswith("Their jobs here: none of the office's duties yet.")
     # A duty just moved shows on the next turn.
     run("move_duty", ASK, OWNER)
-    assert "The weekly text" not in chd.jobs_line(BIZ, NAIYA)
-    assert chd.jobs_line(BIZ, TIARA).startswith("Their jobs here: The weekly text; The care board; Shepherding; "
-                                                "Kids check-in.")
+    assert "The weekly text and email" not in chd.jobs_line(BIZ, NAIYA)
+    assert chd.jobs_line(BIZ, TIARA).startswith(
+        "Their jobs here: The weekly text and email; First-time guests and welcome calls; Care and visits; "
+        "Prayer; Help requests; Shepherding; Groups and classes; Member records and the directory; Kids; "
+        "Youth and Teen Bible Study; Devotionals and the reading plan.")
 
     # In the THIS LOGIN block, after the lane's words; and without a lane too.
     who = {"role": "manager", "name": "Naiya Clark", "first_name": "Naiya", "jobs": line}
@@ -389,4 +398,4 @@ def test_the_switch_follows_the_routes(church, monkeypatch):
     assert len(church.rpcs) == 1
     # The line isn't switched: the job gates read duties whatever it says.
     monkeypatch.setenv("CHURCH_DUTIES", "off")
-    assert chd.jobs_line(BIZ, TIARA).startswith("Their jobs here: The weekly text;")
+    assert chd.jobs_line(BIZ, TIARA).startswith("Their jobs here: The weekly text and email;")

@@ -93,83 +93,194 @@ def _duty(label: str, area: str, lanes: List[str], day: str, does: str, opens: L
             "opens": list(opens)}
 
 
+# Love City's office split into the real jobs each admin does (Kevin,
+# 2026-11-02: "yes fold it in, and track supplies in tasks"; "churchsavvy is
+# shapretta"; "yes churchsavvy for worship team, announcements to shapretta").
+# Each lane's section is in the order its week runs. Two things are still
+# shared: Sunday's schedule, split by team (serve_schedule is the volunteer
+# teams', production_schedule worship and production's), and the week's news
+# list, which is the weekly text's (Office & Leadership); the posts and the
+# announcements draw from it.
 CATALOG: Dict[str, Dict[str, Any]] = {
     # Office & Leadership
-    "weekly_text": _duty(
-        "The weekly text", "office", ["office_leadership"], "Wed",
-        "Write the church's weekly text and send it, or schedule it for a day or a group.",
-        ["Announcements by text: send, schedule, to a group"]),
+    "front_desk": _duty(
+        "The front desk", "office", ["office_leadership"], "Mon",
+        "Everything that came in over the weekend has an owner, and each new ask, card, email and text gets one "
+        "within a day.",
+        ["Approvals", "What came in: asks, cards, email and texts"]),
     "leaders_note": _duty(
         "The Monday leaders note", "office", ["office_leadership"], "Mon",
         "Read over the week Chief gathered for the leaders, add a word, and send it on Monday.",
         ["The Monday leaders note"]),
     "meetings": _duty(
         "Meetings and minutes", "office", ["office_leadership"], "Tue, monthly",
-        "Set up each board's meeting, take attendance and the minutes, and turn its decisions into tasks.",
-        ["Boards and their seats", "Meetings, attendance and minutes", "Tasks from the decisions"]),
+        "Set up the huddle, the all-leaders meeting and each board's meeting, and take the attendance and the "
+        "minutes.",
+        ["Boards and their seats", "Meetings, attendance and minutes"]),
+    "decisions": _duty(
+        "Decisions to done", "office", ["office_leadership"], "Tue",
+        "Each decision from the huddle and the leaders meeting becomes a task with one owner; follow it until it's "
+        "done.",
+        ["Tasks from the decisions"]),
+    "weekly_text": _duty(
+        "The weekly text and email", "office", ["office_leadership"], "Wed",
+        "Write the church's weekly text and email from the week's news, and send them or schedule them for a day "
+        "or a group.",
+        ["Announcements by text: send, schedule, to a group", "The church's email", "The week's news list"]),
+    "calendar": _duty(
+        "The church calendar", "office", ["office_leadership"], "Fri",
+        "Next week's services, events and meetings are on the calendar, each with its room.",
+        ["The church calendar"]),
     "rooms": _duty(
-        "Rooms", "office", ["office_leadership", "sunday_serving"], "Fri",
-        "Book the rooms for the week ahead and say yes or no to each ask for one.",
+        "Rooms", "office", ["office_leadership"], "Fri",
+        "Every room is booked from one place: leaders send a room request, and the booking goes on the calendar.",
         ["Booking and approving rooms", "The rentals list, without the amounts"]),
+    "building": _duty(
+        "The building and safety", "office", ["office_leadership"], "weekly",
+        "With the facilities lead and the safety officers: what's broken or unsafe has an owner.",
+        ["Tasks for the building"]),
+    "records": _duty(
+        "Records, files and policies", "office", ["office_leadership"], "monthly",
+        "The register, the church's files, and its policies (child safety, building use, member privacy) kept "
+        "current in Files & policies.",
+        ["Files & policies", "Church records"]),
     "chat_rules": _duty(
         "Chat rules", "messages_safety", ["office_leadership"], "as needed",
         "Keep the member chat's rules current: who can message whom, and what gets held.",
         ["The member chat's rules"]),
     "leaders_list": _duty(
-        "The leaders list", "office", ["office_leadership"], "as needed",
-        "Keep the leaders and their roles current, and ask a new leader to take a role.",
+        "The leaders list and department sheet", "office", ["office_leadership"], "as needed",
+        "Keep the leaders, their roles and the department sheet current, and ask a new leader to take a role.",
+        ["Leaders & roles", "The department sheet"]),
+    "new_leaders": _duty(
+        "Welcoming new leaders", "office", ["office_leadership"], "as needed",
+        "Each new leader's role, covenant and first meeting, and their background check asked of Sunday & "
+        "Serving.",
         ["Leaders & roles"]),
+    "supplies": _duty(
+        "Supplies", "office", ["office_leadership"], "as needed",
+        "What's low gets counted and ordered, tracked in Tasks.",
+        ["Tasks for supplies"]),
     # People & Care
-    "care_board": _duty(
-        "The care board", "people_care", ["people_care"], "Mon, Tue",
-        "Work the follow-up board and the shared care inbox, and answer the help requests.",
-        ["Follow-up", "The shared care inbox", "Help requests"]),
+    "first_guests": _duty(
+        "First-time guests and welcome calls", "people_care", ["people_care"], "Mon",
+        "Every first-time guest has a person and a call date on Monday, and the calls are made by Wednesday.",
+        ["Follow-up"]),
+    "care_visits": _duty(
+        "Care and visits", "people_care", ["people_care"], "Tue",
+        "The care board: visits, meals, the hospital and the grieving, with the deacons.",
+        ["Prayer & care", "The shared care inbox"]),
+    "prayer": _duty(
+        "Prayer", "people_care", ["people_care"], "weekly",
+        "Requests people shared with the prayer team reach the intercessor leader, and each is marked prayed.",
+        ["Prayer & care"]),
+    "help_requests": _duty(
+        "Help requests", "people_care", ["people_care"], "as needed",
+        "Each help request gets a call; over the help fund's limit, the treasurer and the pastor approve it.",
+        ["Help requests"]),
     "shepherding": _duty(
         "Shepherding", "people_care", ["people_care"], "Thu",
         "Check on the families drifting and the groups who missed weeks, and log each touch.",
         ["Shepherding", "Groups who missed weeks"]),
+    "groups": _duty(
+        "Groups and classes", "groups_classes", ["people_care"], "Thu",
+        "Who missed three weeks, and the Next Step, Leaderschool and Bible study rosters.",
+        ["Groups", "Class rosters"]),
+    "member_records": _duty(
+        "Member records and the directory", "people_care", ["people_care"], "as needed",
+        "New members, changes and the directory kept right.",
+        ["Members", "The member directory"]),
+    # The kids' workers are Sunday & Serving's (serve_schedule); the rooms,
+    # check-in and the families' details are People & Care's.
     "kids": _duty(
-        "Kids check-in", "kids_youth", ["people_care"], "Sun",
-        "Open Sunday's kids check-in, keep the rooms staffed and the approved adults current.",
+        "Kids", "kids_youth", ["people_care"], "Sun",
+        "Kids check-in, pickup and the rooms open on Sunday, with the families' details right.",
         ["Kids check-in", "Kids rooms", "Approved adults"]),
-    # Sunday & Serving
-    "sunday_plan": _duty(
-        "The Sunday plan", "worship_media", ["sunday_serving"], "Tue",
-        "Build Sunday's order of service in ChurchSavvy.",
-        ["ChurchSavvy planning: the order of service"]),
+    "youth": _duty(
+        "Youth and Teen Bible Study", "kids_youth", ["people_care"], "weekly",
+        "Youth and Teen Bible Study has its leaders, its room and its people.",
+        ["Groups"]),
+    "devotionals": _duty(
+        "Devotionals and the reading plan", "people_care", ["people_care"], "weekly",
+        "This week's devotional and reading plan are set.",
+        ["Devotionals", "The Bible reading plan"]),
+    # Sunday & Serving: the volunteers
     "serve_schedule": _duty(
-        "Who serves when", "worship_media", ["sunday_serving", "media_comms"], "Wed",
-        "Fill Sunday's places, ask whoever is missing, and send the reminders.",
-        ["Who serves when"]),
+        "Who serves when", "worship_media", ["sunday_serving"], "Wed",
+        "Every spot on the volunteer teams has a yes: greeters, ushers, kids workers, parking, hospitality, "
+        "outreach. Worship and production are ChurchSavvy's.",
+        ["Who serves when: the volunteer teams"]),
+    "serve_teams": _duty(
+        "Teams and team leaders", "worship_media", ["sunday_serving"], "monthly",
+        "Each volunteer team has a leader and its places.",
+        ["Teams"]),
+    "new_volunteers": _duty(
+        "New volunteers", "worship_media", ["sunday_serving"], "as needed",
+        "Each new volunteer is placed on a team, welcomed, and trained.",
+        ["Teams"]),
+    # Recording a check is this duty's (church_serving); reading who's
+    # cleared stays Kids & youth's and People & care's too.
+    "background_checks": _duty(
+        "Background checks", "kids_youth", ["sunday_serving"], "monthly",
+        "Every kids worker and team member who needs one has a current background check.",
+        ["Recording background checks", "Check reminders", "The check link and how long a check is good"]),
+    "serving_thanks": _duty(
+        "Serving hours and thank-yous", "worship_media", ["sunday_serving"], "monthly",
+        "Serving hours kept, and each team thanked.",
+        ["Serving hours"]),
     "events": _duty(
-        "Events and sign-ups", "website_outreach", ["sunday_serving", "media_comms"], "Thu",
-        "Open the sign-ups for the next event, book its room, and watch who is coming.",
-        ["Event sign-ups", "A room for the event"]),
+        "Events and sign-ups", "website_outreach", ["sunday_serving"], "Thu",
+        "Each event, from plan to day-of: sign-ups, a room request, and volunteers.",
+        ["Event sign-ups", "A room request for the event"]),
+    "outreach_nights": _duty(
+        "Outreach nights", "website_outreach", ["sunday_serving"], "Thu",
+        "Love Works and City Serve nights have their volunteers and a room.",
+        ["Who serves when", "A room request for the night"]),
     "attendance": _duty(
         "Sunday attendance", "worship_media", ["sunday_serving"], "Sun",
         "Record Sunday's count before the day is out.",
         ["Sunday attendance"]),
-    # Media & Communications
-    "posts": _duty(
-        "Posts", "website_outreach", ["media_comms"], "Thu",
-        "Plan the week's posts on the marketing desk and send them out.",
-        ["The marketing desk", "Posts", "Chief's post actions"]),
-    "clips": _duty(
-        "Clips and covers", "website_outreach", ["media_comms"], "Mon",
-        "Cut Sunday's best clips, make their covers and post them.",
-        ["Posting clips", "Making covers"]),
+    # Media & Communications: ChurchSavvy and production
+    "sunday_plan": _duty(
+        "The order of service", "worship_media", ["media_comms"], "Tue",
+        "Next Sunday's order is set with the worship pastor in ChurchSavvy.",
+        ["ChurchSavvy planning: the order of service"]),
+    "production_schedule": _duty(
+        "Worship and production teams", "worship_media", ["media_comms"], "Wed",
+        "The worship and production teams' Sunday spots have a yes, with the worship pastor.",
+        ["Who serves when: the worship and production teams"]),
+    "churchsavvy_team": _duty(
+        "ChurchSavvy's team", "worship_media", ["media_comms"], "as needed",
+        "Who's on ChurchSavvy's worship and production team, and their parts.",
+        ["Who's on ChurchSavvy's team"]),
+    "announcements": _duty(
+        "Sunday announcements", "worship_media", ["media_comms"], "Fri",
+        "Sunday's announcements are set for the screens and the bulletin.",
+        ["Sunday's announcements"]),
     "stream": _duty(
         "The livestream", "worship_media", ["media_comms"], "Sat, Sun",
         "Test the stream on Saturday, run it from the booth on Sunday, and file the replay.",
         ["The livestream", "The booth", "The media library"]),
+    "sermons": _duty(
+        "Sermon up", "worship_media", ["media_comms"], "Mon",
+        "Sunday's sermon is posted with its notes.",
+        ["Sermons"]),
+    "clips": _duty(
+        "Clips and covers", "website_outreach", ["media_comms"], "Mon",
+        "Cut Sunday's best clips, make their covers and post them.",
+        ["Posting clips", "Making covers"]),
+    "posts": _duty(
+        "Posts", "website_outreach", ["media_comms"], "Thu",
+        "Plan the week's posts on the marketing desk and send them out.",
+        ["The marketing desk", "Posts", "Chief's post actions"]),
+    "flyers": _duty(
+        "Flyers and graphics", "website_outreach", ["media_comms"], "Thu",
+        "The weekend's flyers and graphics are made in Create.",
+        ["Create: flyers and graphics"]),
     "website": _duty(
         "The website", "website_outreach", ["media_comms"], "as needed",
         "Keep the website and its events page current.",
         ["The site builder", "The events page"]),
-    "churchsavvy_team": _duty(
-        "ChurchSavvy's team", "worship_media", ["media_comms", "sunday_serving"], "as needed",
-        "Invite people to ChurchSavvy's team and give each of them their parts.",
-        ["Who's on ChurchSavvy's team"]),
     # The Executive Pastor
     "monthly_report": _duty(
         "The monthly report", "office", [EXEC], "first Monday",

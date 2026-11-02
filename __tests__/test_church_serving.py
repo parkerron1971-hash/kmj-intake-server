@@ -16,6 +16,12 @@ Pins:
     go once a week at most, only to those who need one
   * another church is unreachable; a login whose areas leave Serving out is
     refused; the checks are Kids & youth's, People & care's and the owner's
+  * recording a check (and the reminders, the link and the years) is the
+    owner's, an admin's, or whoever holds the background_checks duty
+    (Laquesha's lane, the Executive Pastor's); Tiara reads who's cleared and
+    is told whose job recording is; a moved duty moves it; a holder outside
+    Serving's areas reaches the checks; a failed duties read is a 503;
+    outside a church nothing reads the duties
   * the switch: off is a 404 and a quiet status; owner mode is the platform
     owner alone, and the member's side shows only in their own preview
   * a member sees only their own hours
@@ -430,6 +436,169 @@ def test_areas_decide_who_sees_hours_and_who_sees_checks(db):
     assert not [n for n in media["needs"] if n["kind"] == "check"], "no check leaks through what needs someone"
     assert _person(media, DANA)["minutes"] == 370, "hours are theirs to see"
     assert client("media").post("/church/serving/checks/remind", json={"business_id": BIZ}).status_code == 403
+
+
+# ─── Who records a check: the background_checks duty ─────────────────
+# Kevin, 2026-11-02: "laquesha is the right choice" for background checks.
+# Recording one is the owner's, an admin's, or whoever holds the duty (the
+# Sunday & Serving lane's by default, and the Executive Pastor's); reading
+# who's cleared stays Kids & youth's and People & care's too.
+
+def _office_login(name, n, areas, lane=None, contact_id=None):
+    PEOPLE[name] = AuthedUser(id=f"0000000b-0000-4000-8000-{n:012d}", email=f"{name}@lovecity.org", role="authenticated")
+    ID[name] = PEOPLE[name].id
+    AREAS[ID[name]] = areas
+    return {"business_id": BIZ, "user_id": ID[name], "role": "manager", "status": "active", "lane": lane,
+            "areas": areas, "contact_id": contact_id, "name": name.title(), "invited_email": f"{name}@lovecity.org"}
+
+
+C_JESSICA = "cccccccc-0000-4000-8000-0000000000e1"
+CHECKS_LANE = ("“Background checks” is the Sunday & Serving lane's job here. "
+               "The owner or an admin can give it to you in Logins & areas.")
+
+
+@pytest.fixture
+def office(db):
+    """Love City's lanes: Laquesha (Sunday & Serving, stored; Worship & media
+    only), Tiara (People & Care, by her picked areas) and Jessica (the
+    Executive Pastor, by her role; every area)."""
+    import church_duties
+    church_duties._CACHE.clear()
+    church_duties._FAILED.clear()
+    db.t["business_users"] += [
+        _office_login("laquesha", 1, ["worship_media"], lane="sunday_serving"),
+        _office_login("tiara", 2, ["people_care", "kids_youth", "groups_classes"]),
+        _office_login("jessica", 3, list(church_areas.AREA_ORDER), contact_id=C_JESSICA)]
+    db.t["contacts"].append({"id": C_JESSICA, "business_id": BIZ, "name": "Jessica McCloud",
+                             "email": "jessica@lovecity.org", "metadata": {}, "updated_at": "2026-10-01T00:00:00+00:00"})
+    db.t["church_role_defs"] = [{"business_id": BIZ, "key": "executive_pastor", "catalog_key": "executive_pastor",
+                                 "title": "Executive Pastor", "job": "pastoral", "status": "active"}]
+    db.t["church_leader_roles"] = [{"business_id": BIZ, "contact_id": C_JESSICA, "role": "executive_pastor",
+                                    "status": "active"}]
+    db.t["church_duty_holders"] = []
+    yield db
+    church_duties._CACHE.clear()
+    church_duties._FAILED.clear()
+
+
+def _record(name, cid=DANA, on="2026-10-20"):
+    return client(name).post("/church/serving/checks", json={"business_id": BIZ, "contact_id": cid, "on": on})
+
+
+def _status(name):
+    return client(name).get(f"/church/serving/status?business_id={BIZ}").json()
+
+
+def _quiet_reminders(monkeypatch):
+    import member_push
+    monkeypatch.setattr(member_push, "send", lambda biz, kind, **kw: 1)
+
+    async def mail(*a):
+        return True
+    monkeypatch.setattr(cs, "_email_one", mail)
+
+
+def test_the_owner_and_an_admin_record_checks_whatever_the_duties_say(office):
+    assert _record("owner").status_code == 200
+    assert _record("admin", cid=MIA).status_code == 200
+    office.t["church_duty_holders"].append({"business_id": BIZ, "duty": "background_checks", "user_id": ID["tiara"]})
+    assert _record("owner", cid=NONE).status_code == 200 and _record("admin", cid=OLD).status_code == 200
+
+
+def test_laquesha_records_and_reminds_though_her_areas_are_worship_and_media(office, monkeypatch):
+    assert _status("laquesha") == {"enabled": True, "checks": True, "write": True}
+    page = _read("laquesha").json()
+    assert {c["contact_id"] for c in page["checks"]} == {DANA, MIA, TEEN, NONE, KEPT, OLD}, "she reads who's cleared"
+    assert page["can"]["remind"] is True and page["settings"]["check_years"] == 2
+    got = _record("laquesha")
+    assert got.status_code == 200, got.text
+    assert _mine_check(office, DANA) == "2026-10-20"
+    _quiet_reminders(monkeypatch)
+    assert client("laquesha").post("/church/serving/checks/remind", json={"business_id": BIZ}).status_code == 200
+    assert client("laquesha").put("/church/serving/settings",
+                                  json={"business_id": BIZ, "check_years": 3}).status_code == 200
+
+
+def _mine_check(db, cid):
+    return next(c for c in db.t["contacts"] if c["id"] == cid)["metadata"].get("serving", {}).get("check_on")
+
+
+def test_tiara_sees_whos_cleared_for_the_kids_rooms_but_doesnt_record(office, monkeypatch):
+    assert _status("tiara") == {"enabled": True, "checks": True, "write": True}
+    page = _read("tiara").json()
+    assert {c["contact_id"] for c in page["checks"]} == {DANA, MIA, TEEN, NONE, KEPT, OLD}, "Kids & youth reads them"
+    assert page["can"] == {"write": True, "checks": True, "remind": False}, "no record or remind buttons"
+    got = _record("tiara")
+    assert got.status_code == 403 and got.json()["detail"] == CHECKS_LANE
+    assert _mine_check(office, DANA) is None, "nothing written"
+    _quiet_reminders(monkeypatch)
+    remind = client("tiara").post("/church/serving/checks/remind", json={"business_id": BIZ})
+    assert remind.status_code == 403 and remind.json()["detail"] == CHECKS_LANE
+    link = client("tiara").put("/church/serving/settings", json={"business_id": BIZ, "check_link": "https://x.example"})
+    assert link.status_code == 403 and link.json()["detail"] == CHECKS_LANE
+    # The hours stay a manager's.
+    assert client("tiara").put("/church/serving/settings",
+                               json={"business_id": BIZ, "group_minutes": 120}).status_code == 200
+
+
+def test_jessica_over_the_lanes_records_them(office):
+    assert _status("jessica") == {"enabled": True, "checks": True, "write": True}
+    assert _read("jessica").json()["can"]["remind"] is True
+    assert _record("jessica").status_code == 200
+
+
+def test_a_manager_no_lane_names_keeps_what_its_areas_gave_it(office):
+    # The whole church: every duty, the checks too. Worship & media alone: no checks.
+    assert _record("manager").status_code == 200
+    got = _record("media")
+    assert got.status_code == 403 and got.json()["detail"] == CHECKS_LANE
+
+
+def test_a_moved_duty_moves_the_recording_and_the_reading(office):
+    import church_duties
+    office.t["church_duty_holders"].append({"business_id": BIZ, "duty": "background_checks", "user_id": ID["tiara"]})
+    church_duties._CACHE.clear()
+    assert _record("tiara").status_code == 200
+    got = _record("laquesha", cid=MIA)
+    assert got.status_code == 403 and got.json()["detail"].startswith("“Background checks” is Tiara's job here.")
+    # Her areas never read the checks: with the duty gone, neither does she.
+    assert _status("laquesha") == {"enabled": True, "checks": False, "write": True}
+    assert _read("laquesha").json()["checks"] is None
+    assert _record("jessica", cid=MIA).status_code == 403, "moved to Tiara alone: the Executive Pastor's default too"
+
+
+def test_a_holder_outside_servings_areas_reaches_the_checks(office):
+    import church_duties
+    assert _status("office")["enabled"] is False
+    office.t["church_duty_holders"].append({"business_id": BIZ, "duty": "background_checks", "user_id": ID["office"]})
+    church_duties._CACHE.clear()
+    assert _status("office") == {"enabled": True, "checks": True, "write": True}
+    page = _read("office").json()
+    assert page["checks"] and page["can"]["remind"] is True
+    assert _record("office").status_code == 200
+
+
+def test_a_failed_duties_read_is_a_503_never_a_yes(office, monkeypatch):
+    real = office.get
+    monkeypatch.setattr(sb_clients, "sb_get_as_service",
+                        lambda path, **kw: None if path.startswith("/church_duty_holders") else real(path, **kw))
+    for name in ("laquesha", "tiara"):
+        got = _record(name)
+        assert got.status_code == 503, name
+        assert _status(name)["enabled"] is False, "the status says no quietly"
+    assert _mine_check(office, DANA) is None
+    # The owner and the admins read no duties.
+    assert _record("owner").status_code == 200 and _record("admin", cid=MIA).status_code == 200
+
+
+def test_outside_a_church_nothing_reads_the_duties(office, monkeypatch):
+    office.t["businesses"][0]["type"] = "salon"
+    seen = []
+    real = office.get
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", lambda path, **kw: (seen.append(path), real(path, **kw))[1])
+    for name in ("owner", "laquesha", "tiara"):
+        assert _record(name).status_code == 404, name
+    assert not [p for p in seen if p.startswith(("/church_duty_holders", "/church_role_defs"))]
 
 
 # ─── The switch ──────────────────────────────────────────────────────

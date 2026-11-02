@@ -57,8 +57,8 @@ RSVP for attending (serving in a role still works) and shows its sign-up.
 
 The office's reads (status, summary, one event) are the owner's, the admins'
 and a Manager's that does the events (church_duties "events": the Sunday &
-Serving and Media & Communications lanes' by default, or whoever it was
-given to; a Manager no lane names, by the areas it works). A failed read of
+Serving lane's by default, 2026-11-02, or whoever it was given to; a
+Manager no lane names, by the areas it works). A failed read of
 the duty is a 503. Prices, places, cancelling and the export stay the owner's
 and the admins': they carry the money.
 
