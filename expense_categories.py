@@ -28,8 +28,9 @@ want me to save this in my memory so I know to add this in the future".
                      payments themselves. Chief's rules match the payee's
                      wording (its payee key) as well as Plaid's merchant name
 
-Who may: the Transactions screen's readers read; the owner changes
-(plaid_router gates, the church money wall included), as the person talking.
+Who may: the Transactions screen's readers read; the owner, or a church's
+Admin seat (the treasurer), changes (plaid_router gates, the church money
+wall included), as the person talking.
 Switched with the bank search (CHIEF_BANK_SEARCH). Table:
 supabase/APPLY-2026-10-31-expense-categories.sql.
 
@@ -307,11 +308,16 @@ def _gate(business_id: str, *, write: bool) -> Optional[str]:
     if not uid:
         return "Categories are read and changed only for a signed-in person who can see the books."
     import plaid_router
+    who = SimpleNamespace(id=uid)
     try:
-        (plaid_router._require_owner if write else plaid_router._require_reader)(business_id, SimpleNamespace(id=uid))
+        if write:
+            plaid_router._require_money_writer(business_id, who)
+        else:
+            plaid_router._require_reader(business_id, who)
     except HTTPException as e:
         if write and e.status_code == 403 and not isinstance(e.detail, dict):
-            return "Only the owner changes the categories, the same as on the Transactions screen."
+            return ("Only the owner, or a church's Admin, changes the categories, the same as on the "
+                    "Transactions screen.")
         detail = e.detail.get("message") if isinstance(e.detail, dict) else e.detail
         return str(detail or "This login can't see the books.")
     return None
@@ -613,7 +619,14 @@ def _route_gate(business_id: str, user: Any, *, write: bool) -> Dict[str, Any]:
     if not _UUID.match(str(business_id or "")):
         raise HTTPException(400, "business_id must be a uuid")
     import plaid_router
-    return (plaid_router._require_owner if write else plaid_router._require_reader)(business_id, user)
+    if write:
+        return plaid_router._require_money_writer(business_id, user)
+    return plaid_router._require_reader(business_id, user)
+
+
+def _can_change(business_id: str, user: Any, row: Dict[str, Any]) -> bool:
+    import church_money_gate
+    return church_money_gate.can_write(business_id, user, row)
 
 
 def _card_on(business_id: str) -> bool:
@@ -627,7 +640,7 @@ def get_categories(business_id: str = Query(...), year: Optional[int] = Query(No
                    user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     row = _route_gate(business_id, user, write=False)
     try:
-        return {"ok": True, "can_change": str(row.get("owner_id")) == str(user.id),
+        return {"ok": True, "can_change": _can_change(business_id, user, row),
                 "card": _card_on(business_id), **picture(business_id, year)}
     except Unavailable:
         raise HTTPException(503, "The categories can't be read just now. If this is new, its table may not be set up yet.")
@@ -731,7 +744,7 @@ def get_lines(business_id: str = Query(...), user: AuthedUser = Depends(require_
     except Unavailable:
         raise HTTPException(503, "The lines can't be read just now.")
     return {"ok": True, "lines": [{k: ln[k] for k in ("key", "name", "base", "builtin")} for ln in ls],
-            "card": _card_on(business_id), "can_change": str(row.get("owner_id")) == str(user.id)}
+            "card": _card_on(business_id), "can_change": _can_change(business_id, user, row)}
 
 
 @router.post("/lines")

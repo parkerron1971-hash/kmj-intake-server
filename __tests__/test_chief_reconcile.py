@@ -129,6 +129,7 @@ def owner(monkeypatch):
     token = cos._TURN_USER_ID.set("owner-1")
     import plaid_router
     monkeypatch.setattr(plaid_router, "_require_owner", lambda biz, user: {"id": biz})
+    monkeypatch.setattr(plaid_router, "_require_money_writer", lambda biz, user: {"id": biz})
     yield
     cos._TURN_USER_ID.reset(token)
 
@@ -306,6 +307,7 @@ def test_a_seat_that_isnt_the_owner_is_refused_before_any_read(monkeypatch):
     def refuse(biz, user):
         raise HTTPException(403, "not authorized")
     monkeypatch.setattr(plaid_router, "_require_owner", refuse)
+    monkeypatch.setattr(plaid_router, "_require_money_writer", refuse)
     monkeypatch.setattr(cr.sb_clients, "sb_get_as_service",
                         lambda *a, **k: (_ for _ in ()).throw(AssertionError("read before the gate")))
     token = cos._TURN_USER_ID.set("seat-3")

@@ -16,8 +16,10 @@ the bill tab." Chief answered that it had no lookup for Bills, which was true.
                       reads: a pending bill past due is SAID overdue, nothing
                       is written
 
-Who may: the Bills tab's readers (owner, accountant, a seat with view);
-switched with Chief's categories (CHIEF_BANK_SEARCH).
+Who may: the Bills tab's readers (owner, accountant, a seat with view; in a
+church the owner, an Admin or the accountant); switched with Chief's
+categories (CHIEF_BANK_SEARCH). Adding and removing: the Bills tab's writers
+(bills_router._writer: the owner, or a church's Admin seat).
 
 STEP 3 (2026-11-01), Chief adds bills:
     ADD ............. add_bill: a one-time or recurring bill, under a saved
@@ -290,13 +292,26 @@ def _owner_gate(business_id: str) -> Optional[str]:
     from chief_of_staff import _TURN_USER_ID
     uid = _TURN_USER_ID.get()
     if not uid:
-        return "Bills are added only by a signed-in owner."
+        return "Bills are added only by a signed-in person who keeps the books."
     import bills_router
     try:
-        bills_router._owner(business_id, SimpleNamespace(id=uid))
+        bills_router._writer(business_id, SimpleNamespace(id=uid))
     except HTTPException:
-        return "Only the owner adds or removes bills, the same as on the Bills tab."
+        return "Only the owner, or a church's Admin, adds or removes bills, the same as on the Bills tab."
     return None
+
+
+def _matches_bank(business_id: str) -> bool:
+    """Whether the person talking may match a bill to the bank (bill_payments:
+    the owner alone, the same as on the Bills tab). Only they are shown a
+    bank payment that fits a new bill."""
+    from chief_of_staff import _TURN_USER_ID
+    import bills_router
+    try:
+        bills_router._owner(business_id, SimpleNamespace(id=_TURN_USER_ID.get()))
+    except HTTPException:
+        return False
+    return True
 
 
 def _fail(atype: str, msg: str) -> Dict[str, Any]:
@@ -363,7 +378,8 @@ def add_sync(business_id: str, action: Dict[str, Any]) -> Dict[str, Any]:
     # already fits is offered for the match, so it never counts twice.
     try:
         import bill_payments
-        fit = bill_payments.clear_one(bill_payments.candidates(business_id, row))
+        fit = (bill_payments.clear_one(bill_payments.candidates(business_id, row))
+               if _matches_bank(business_id) else None)
     except Exception:
         fit = None
     if fit:

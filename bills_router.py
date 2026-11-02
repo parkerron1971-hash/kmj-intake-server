@@ -4,6 +4,13 @@ bills_router.py — Phase H.1 v1 — Accounts Payable.
 Owner-gated CRUD over the bills table + lazy recurring-bill generation
 (mirrors the invoices recurrence model). Sync sb_clients service-role with
 explicit business_id scoping (Chief/Phase-G pattern).
+
+Who may (2026-11-01, the treasurer's money week): every bill write (add,
+edit, mark paid, delete) takes _writer: the owner, or in a church an active
+Admin seat (church_money_gate). The list (_reader): the owner, the outside
+accountant and any seat; in a church, only the owner, an Admin or the
+accountant. _owner stays the owner alone, for matching a bill to the bank
+(bill_payments), which reads the bank rows outside the Giving wall.
 """
 from __future__ import annotations
 
@@ -14,6 +21,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+import church_money_gate
 import sb_clients
 from auth_supabase import AuthedUser, require_user
 import period_lock
@@ -61,13 +69,21 @@ def _owner(biz: str, user: AuthedUser) -> Dict[str, Any]:
     return rows[0]
 
 
+def _writer(biz: str, user: AuthedUser) -> Dict[str, Any]:
+    """Every bill write: the owner, or a church's Admin seat (the
+    treasurer). Anyone else, and any seat outside a church, the same 403."""
+    return church_money_gate.require_money_writer(biz, user)
+
+
 def _reader(biz: str, user: AuthedUser) -> Dict[str, Any]:
     """Seat-access arc follow-up (7/31): the bills LIST for the
     financial-read tier (owner / accountant / team seat) — AP aging was
     already readable via reports, the list behind it should match.
-    All bill writes stay on _owner."""
+    A church's list (2026-11-01) is narrower: the owner, an Admin or the
+    outside accountant, since who the church pays is the treasurer's.
+    Bill writes take _writer."""
     rows = sb_clients.sb_get_as_service(
-        f"/businesses?id=eq.{biz}&select=id,owner_id&limit=1") or []
+        f"/businesses?id=eq.{biz}&select=id,owner_id,type&limit=1") or []
     if not rows:
         raise HTTPException(404, "business not found")
     row = rows[0]
@@ -76,8 +92,9 @@ def _reader(biz: str, user: AuthedUser) -> Dict[str, Any]:
     from business_collaborators_router import is_active_accountant
     if is_active_accountant(biz, str(user.id)):
         return row
+    import church_follow_up
     from business_users_router import require_role
-    require_role(biz, str(user.id), "viewer")
+    require_role(biz, str(user.id), "admin" if church_follow_up.is_church(row) else "viewer")
     return row
 
 
@@ -96,12 +113,12 @@ def _saved_category(biz: str, category: Optional[str], subcategory: Optional[str
     return (hit["bucket"], hit["name"]) if hit else (category, subcategory)
 
 
-def _owner_for_bill(bill_id: str, user: AuthedUser) -> Dict[str, Any]:
+def _writer_for_bill(bill_id: str, user: AuthedUser) -> Dict[str, Any]:
     rows = sb_clients.sb_get_as_service(
         f"/bills?id=eq.{bill_id}&select=id,business_id&limit=1") or []
     if not rows:
         raise HTTPException(404, "bill not found")
-    _owner(str(rows[0].get("business_id")), user)
+    _writer(str(rows[0].get("business_id")), user)
     return rows[0]
 
 
@@ -244,7 +261,7 @@ class BillBody(BaseModel):
 
 @router.post("")
 def create_bill(body: BillBody, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
-    _owner(body.business_id, user)
+    _writer(body.business_id, user)
     category, subcategory = _saved_category(body.business_id, body.category, body.subcategory)
     if category not in _BUCKETS:
         raise HTTPException(400, f"category must be one of {_BUCKETS}")
@@ -295,7 +312,7 @@ class BillPatchBody(BaseModel):
 @router.patch("/{bill_id}")
 def update_bill(bill_id: str, body: BillPatchBody,
                 user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
-    _owner_for_bill(bill_id, user)
+    _writer_for_bill(bill_id, user)
     cur = _bill_row(bill_id)
     period_lock.guard(body.business_id, (cur.get("created_at") or "")[:10],
                       source_type="bill", source_id=bill_id, reason=body.override_reason,
@@ -333,7 +350,7 @@ class MarkPaidBody(BaseModel):
 @router.post("/{bill_id}/mark-paid")
 def mark_paid(bill_id: str, body: MarkPaidBody,
               user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
-    _owner_for_bill(bill_id, user)
+    _writer_for_bill(bill_id, user)
     cur = _bill_row(bill_id)
     period_lock.guard(body.business_id, (cur.get("created_at") or "")[:10],
                       source_type="bill", source_id=bill_id, reason=body.override_reason,
@@ -350,7 +367,7 @@ def mark_paid(bill_id: str, body: MarkPaidBody,
 @router.delete("/{bill_id}")
 def delete_bill(bill_id: str, biz: str, override_reason: Optional[str] = None,
                 user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
-    _owner(biz, user)
+    _writer(biz, user)
     cur = _bill_row(bill_id)
     period_lock.guard(biz, (cur.get("created_at") or "")[:10],
                       source_type="bill", source_id=bill_id, reason=override_reason,
