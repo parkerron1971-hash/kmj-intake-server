@@ -29,11 +29,19 @@
 # (church_duties, docs/CHURCH_DUTIES.md step 2b; Kevin 2026-11-01: "church
 # savvy should be connected with shapretta mcclain right from the list since
 # she over media"), PARTS_FROM_DUTIES below:
-#   churchsavvy_team             admin (everything, who's on the team too)
-#   sunday_plan, serve_schedule  planner
-#   stream                       media and booth
+#   churchsavvy_team                      admin (everything, who's on the team too)
+#   sunday_plan, production_schedule      planner
+#   serve_schedule                        scheduler
+#   stream                                media and booth
 # plus any parts the team gave them. With none of those, a Manager reads
 # ChurchSavvy only, as a viewer seat does. A duties read that fails is a 503.
+#
+# A scheduler (Kevin 2026-11-02: "volunteers and roles laquesha is doing is
+# her assignment") schedules who serves when (CAN["serve"]) and nothing
+# else: never the plan, the songs, the screens or the setup. It is a duty's
+# part only, never an invite (the team's own rows hold ROLES). Which Sunday
+# teams each person schedules is sunday_planning's (ChurchSavvy's or
+# Volunteers').
 # The team list names each office login (business_users_router.seat_person)
 # with its lane and the parts its duties give it.
 #
@@ -64,9 +72,13 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/worship", tags=["worship"])
 
 STAFF_ROLES = ("owner", "admin", "manager")
+# The parts the team invites people to (worship_team.roles holds only these).
 ROLES = ("planner", "worship", "booth", "media", "admin")
+# A part only a church's duties give (PARTS_FROM_DUTIES), never an invite.
+DUTY_ONLY = ("scheduler",)
+PARTS = ROLES + DUTY_ONLY
 ROLE_LABEL = {"planner": "Planner", "worship": "Worship leader", "booth": "Booth", "media": "Media",
-              "admin": "Admin"}
+              "admin": "Admin", "scheduler": "Scheduler"}
 # What each part may change. Reading is open to every part.
 CAN: Dict[str, Set[str]] = {
     "plan": {"admin", "planner", "worship"},
@@ -81,7 +93,8 @@ CAN: Dict[str, Set[str]] = {
     "clips": {"admin", "media"},
     "sermons": {"admin", "media"},
     # ChurchSavvy Planning (sunday_planning.py): who's asked to serve when.
-    "serve": {"admin", "planner"},
+    # A scheduler does only this.
+    "serve": {"admin", "planner", "scheduler"},
 }
 REFUSED = {
     "plan": "Your part on the team doesn't change the plan. A planner or the worship leader does.",
@@ -96,10 +109,12 @@ REFUSED = {
     "serve": "Your part on the team doesn't schedule people. A planner or an admin does.",
 }
 # A church Manager's parts, from the duties it holds (church_duties.CATALOG).
+# production_schedule is the worship and production teams' Sundays.
 PARTS_FROM_DUTIES: Dict[str, Tuple[str, ...]] = {
     "churchsavvy_team": ("admin",),
     "sunday_plan": ("planner",),
-    "serve_schedule": ("planner",),
+    "production_schedule": ("planner",),
+    "serve_schedule": ("scheduler",),
     "stream": ("media", "booth"),
 }
 MAX_TEAM = 60
@@ -362,7 +377,7 @@ def _staff(biz: str, user: AuthedUser) -> List[Dict[str, Any]]:
         labels = [church_duties.lane_label(k) for k in lanes]
         staff.append({"name": name, "kind": "seat", "you": uid == str(user.id), "role": role, "email": email,
                       "lane": " · ".join(labels) or None, "lanes": lanes,
-                      "parts": [r for r in ROLES if r in parts]})
+                      "parts": [r for r in PARTS if r in parts]})
     return staff
 
 

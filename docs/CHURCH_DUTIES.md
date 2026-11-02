@@ -177,15 +177,17 @@ Admin seat keep every part. A church's Manager gets:
 | Duty | Part |
 |---|---|
 | churchsavvy_team | admin (everything, who's on the team too) |
-| sunday_plan, serve_schedule | planner |
+| sunday_plan, production_schedule | planner |
+| serve_schedule | scheduler (who serves when, never the plan, songs, screens or setup) |
 | stream | media and booth |
 
 plus any parts the team gave it. A Manager with none of those reads ChurchSavvy only, the way a
 viewer seat does: Tiara and Naiya no longer change the Sunday plan. Since the split (2026-11-02,
 "churchsavvy is shapretta"), `churchsavvy_team` and `sunday_plan` are Media's alone: Shapretta is
 ChurchSavvy's admin, and so is Jessica (the Executive Pastor covers every lane). Laquesha (Sunday &
-Serving) is a planner by `serve_schedule` alone until the Volunteers PR moves that part to
-`production_schedule` (see "Where the lanes meet"). Volunteers (team rows, no seat) are unchanged.
+Serving) is a scheduler by `serve_schedule`: she schedules, and never changes the order of service.
+A scheduler is a duty's part only, never an invite. Which teams each person schedules is
+`sunday_planning`'s (see "Where the lanes meet"). Volunteers (team rows, no seat) are unchanged.
 A Manager of a business that isn't a church keeps every part.
 
 **The team list** (`GET /worship/team`) names each office login by its person
@@ -279,7 +281,7 @@ churchStructure on module-system).
 
 | Duty | Label | Day | Door | Gates |
 |---|---|---|---|---|
-| serve_schedule | Who serves when (the volunteer teams) | Wed | operate:serve-schedule | ChurchSavvy planner part, until the Volunteers PR |
+| serve_schedule | Who serves when (the volunteer teams) | Wed | operate:serve-schedule | ChurchSavvy scheduler part; Volunteers' teams in sunday_planning |
 | serve_teams | Teams and team leaders | monthly | operate:serve-teams | |
 | new_volunteers | New volunteers | as needed | operate:serve-teams | |
 | background_checks | Background checks (Kids & youth) | monthly | operate:serving | `church_serving` (recording) |
@@ -344,9 +346,10 @@ for each part:
 1. **Sunday's schedule, split by team.** The volunteer teams (greeters, ushers, kids workers,
    parking, hospitality, outreach) are Laquesha's: `serve_schedule`. The worship and production
    teams are Shapretta's, with the worship pastor: `production_schedule`. Both open Who serves
-   when. Until the Volunteers PR lands, `worship_team.PARTS_FROM_DUTIES` still maps
-   `serve_schedule` to the ChurchSavvy planner part (so Laquesha schedules in Planning); that PR
-   moves the part to `production_schedule`.
+   when, one schedule with two doors: each Sunday team is ChurchSavvy's or Volunteers'
+   (`serve_teams.owner`, supabase/APPLY-2026-11-02-serve-team-owner.sql), and `sunday_planning`
+   lets each login change only its own teams, while everyone reads the whole Sunday.
+   `serve_schedule` gives the ChurchSavvy scheduler part, `production_schedule` the planner.
 2. **The week's news list** is Naiya's, with the weekly text and email (`weekly_text`). Shapretta's
    posts and Sunday announcements draw from it; they don't keep their own list.
 

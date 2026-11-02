@@ -14,8 +14,9 @@ Pins, for a church (the owner, an Admin, or a login that holds the duty):
   * a business that isn't a church keeps its gate exactly
   * a duties read that fails is a 503, never a yes
   * ChurchSavvy parts by duty: churchsavvy_team admin; sunday_plan and
-    serve_schedule planner; stream media and booth. A Manager with none reads
-    only (Tiara, Naiya); volunteers are unchanged
+    production_schedule planner; serve_schedule scheduler (who serves when,
+    never the plan); stream media and booth. A Manager with none reads only
+    (Tiara, Naiya); volunteers are unchanged
   * the team list names each office login, with its lane and its parts
   * "clips are ready" reaches everyone who does the clips duty, once each
 
@@ -322,25 +323,26 @@ def test_a_failed_duties_read_is_a_503_never_a_yes(db, monkeypatch):
 def test_each_churchsavvy_duty_gives_its_parts():
     assert wt.duty_parts(["churchsavvy_team"]) == {"admin"}
     assert wt.duty_parts(["sunday_plan"]) == {"planner"}
-    assert wt.duty_parts(["serve_schedule"]) == {"planner"}
+    assert wt.duty_parts(["serve_schedule"]) == {"scheduler"}
     assert wt.duty_parts(["stream"]) == {"media", "booth"}
+    assert wt.duty_parts(["production_schedule"]) == {"planner"}
     assert wt.duty_parts(["posts", "clips", "website", "weekly_text", "care_visits", "kids", "sermons",
                           "announcements", "serve_teams", "background_checks"]) == set()
     assert set(wt.PARTS_FROM_DUTIES) <= set(cd.CATALOG)
-    assert {p for ps_ in wt.PARTS_FROM_DUTIES.values() for p in ps_} <= set(wt.ROLES)
+    assert {p for ps_ in wt.PARTS_FROM_DUTIES.values() for p in ps_} <= set(wt.PARTS)
 
 
 def test_each_office_login_gets_its_churchsavvy_parts_from_its_duties(db):
     parts = lambda uid: wt.roles_of(BIZ, _u(uid), part=None)  # noqa: E731
     assert parts(OWNER) == set(wt.ROLES) and parts(ADMIN) == set(wt.ROLES)
     # Shapretta (Media & Communications) is ChurchSavvy's admin (Kevin, 2026-11-02: "churchsavvy is
-    # shapretta"). Laquesha (Sunday & Serving, the volunteers) plans by serve_schedule alone, until
-    # worship_team.PARTS_FROM_DUTIES moves the planner part to production_schedule.
+    # shapretta"). Laquesha (Sunday & Serving, the volunteers) schedules who serves when by
+    # serve_schedule, and nothing else of ChurchSavvy's: never the order of service.
     assert parts(SHAP) == {"admin", "planner", "media", "booth"}
-    assert parts(LAQ) == {"planner"}
-    assert parts(JESS) == {"admin", "planner", "media", "booth"}, "the Executive Pastor covers every lane"
+    assert parts(LAQ) == {"scheduler"}
+    assert parts(JESS) == {"admin", "planner", "scheduler", "media", "booth"}, "the Executive Pastor covers every lane"
     assert all(wt.can(parts(SHAP), k) for k in wt.CAN)
-    assert wt.can(parts(LAQ), "serve") and not wt.can(parts(LAQ), "setup")
+    assert wt.can(parts(LAQ), "serve") and not wt.can(parts(LAQ), "setup") and not wt.can(parts(LAQ), "plan")
     # Tiara and Naiya read ChurchSavvy only: no plan, no schedule, no setup.
     for uid in (TIARA, NAIYA):
         assert parts(uid) == set(), uid
@@ -355,6 +357,7 @@ def test_each_office_login_gets_its_churchsavvy_parts_from_its_duties(db):
 def test_a_moved_duty_moves_the_part(db):
     _move(db, "churchsavvy_team", LAQ)
     assert wt.roles_of(BIZ, _u(SHAP), part=None) == {"planner", "media", "booth"}
+    assert wt.roles_of(BIZ, _u(LAQ), part=None) == {"admin", "scheduler"}
     assert _status(wt.require, BIZ, _u(SHAP), "setup") == (403, wt.REFUSED["setup"])
     _move(db, "stream", NAIYA)
     assert wt.roles_of(BIZ, _u(NAIYA), part=None) == {"media", "booth"}
@@ -377,10 +380,11 @@ def test_the_team_list_names_each_office_login_with_its_lane_and_parts(db):
         ("Minnie Tatum", "admin", "Treasurer", list(wt.ROLES)),
         ("Naiya Clark", "manager", "Office & Leadership", []),
         ("Tiara Adams", "manager", "People & Care", []),
-        ("Laquesha Bailey-Smith", "manager", "Sunday & Serving", ["planner"]),
-        ("Jessica McCloud", "manager", "Executive Pastor", ["planner", "booth", "media", "admin"]),
+        ("Laquesha Bailey-Smith", "manager", "Sunday & Serving", ["scheduler"]),
+        ("Jessica McCloud", "manager", "Executive Pastor", ["planner", "booth", "media", "admin", "scheduler"]),
         ("Shapretta McClain", "manager", "Media & Communications", ["planner", "booth", "media", "admin"]),
     ]
+    assert "scheduler" in got[4][3], "Laquesha's list says she schedules"
     assert not any("@" in s["name"] for s in staff), "never a bare email"
     shap = next(s for s in staff if s["name"] == "Shapretta McClain")
     assert shap["kind"] == "seat" and shap["email"] == "shapretta@lovecity.org" and shap["lanes"] == ["media_comms"]
