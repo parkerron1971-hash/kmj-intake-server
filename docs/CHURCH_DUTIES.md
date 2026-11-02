@@ -25,8 +25,9 @@ great, but you would make the changes for love city directly but chief would do 
    the PUT refuses it, and `holds()` says no to a Manager for a money duty even if a row names them.
 2. Whoever asks for money never approves it. The money ladder (`church_money_levels`) is
    untouched.
-3. The owner, or an Admin, makes every change. Chief proposes and the owner says yes. For Love
-   City, the session sets it directly, at Kevin's word.
+3. The owner, or an Admin, makes every change. Chief moves a duty only on the owner's or an
+   admin's word, and suggests anything it thinks of first. For Love City, the session sets it
+   directly, at Kevin's word.
 4. Every change is recorded (who, what, when, from and to) and can be undone.
 5. Area walls stay walls. A duty never opens an area's guarded part. Giving names, kids' medical
    notes and pastors-only notes keep their keepers.
@@ -253,7 +254,8 @@ the duty's whole list in one PUT: moving weekly_text to Naiya alone takes it fro
 2. The job gates read duties: the weekly text, boards, chat rules, rooms, event sign-ups, the
    marketing desk, clips, the site and the events page, ChurchSavvy parts. A Manager no lane
    names keeps what its areas gave it (decided in review, 2026-11-01).
-3. Chief: `list_duties` and `move_duty` (a proposal the owner approves), for other churches.
+3. Chief: `list_duties`, `move_duty` and `undo_duty`, for other churches. (Built 2026-11-02: step 3
+   below.)
 4. FE: Settings → Logins & areas gains Duties per login; buttons follow `my-role.duties`;
    ChurchSavvy's team list shows lanes.
 5. The member app's "Request a pay-back" goes to the treasurer's queue.
@@ -275,6 +277,38 @@ the duty's whole list in one PUT: moving weekly_text to Naiya alone takes it fro
 - Review (2026-11-01): the Executive Pastor's defaults are every non-money duty (she covers any
   lane), and a Manager no lane names does the duties in the areas it works, so wiring a gate to
   `require()` never takes away what an area check gave.
+
+## Step 3: Chief reads and moves duties (built 2026-11-02)
+
+Kevin, 2026-11-01: "give chief the ability to make adjustment and help the churches make
+adjustments like these … you would make the changes for love city directly but chief would do
+other churches". `chief_duties.py`:
+
+- **`list_duties`** (a read, also mid-turn): each duty under its lane, with who does it ("lanes:"
+  for the defaults today, "moved to" for named logins, and logins named that can't do it now), which
+  need someone, and the office logins by name, role and lane. For anyone who may open the duties page
+  (a Manager seat or above). No money amounts.
+- **`move_duty`** `{duty, to: [names or login ids]}`, `[]` back to the lanes: the owner or an Admin
+  only; a Manager is told "Moving a duty is the owner's or an admin's." `duty` is a key or a label.
+  Names resolve to the church's logins exactly: a whole name, or a first name only one login has, or
+  a login id; an unknown or shared name changes nothing and says which. Then `church_duties.move()`,
+  the PUT's own code (the route now calls it too), so every rule above holds: money only to a money
+  login, never a Member or Viewer, one log row, the same names again change nothing. The reply is
+  the record: before, now, logged, and `undo_duty` puts it back. Never on nobody's word (an unattended
+  call is refused).
+- **`undo_duty`** `{duty}`: `church_duties.undo()`, the undo route's code. `undo_last` reaches it too
+  (`action_inverse`: a move's inverse names its change, and is refused once another change came after).
+- **The THIS LOGIN line**: a church login that isn't the owner or an Admin is told "Their jobs
+  here: …" in the turn's tail (`chief_areas.turn_for` → `block`), so "is the weekly text my job?" gets
+  the church's own answer. A church whose duties can't be read says so instead of guessing.
+- Switched with the routes, `CHURCH_DUTIES` (owner: the platform owner's own login, read by the
+  signed-in person's id); off, Chief says duties aren't on yet. The line isn't switched, since the
+  job gates read duties whatever it says.
+- Action tags only, never native write tools: `mcp_server.WRITE_TOOL_SCHEMAS` is also the outside
+  agent's list, which carries no signed-in person. All three are `chief_only` in the registry.
+- `chief_areas`: `list_duties` is every office login's (the handler keeps it to a Manager seat and
+  above); `move_duty` and `undo_duty` are the owner's and admins' (`OWNERS`), so a lane's login is
+  told it's the owner's or an admin's, never "ask whoever has the Office".
 
 ## Step 6b: the monthly report (built 2026-11-02)
 
