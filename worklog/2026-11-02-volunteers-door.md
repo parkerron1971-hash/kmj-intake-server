@@ -2,9 +2,9 @@
 title: Volunteers, beside ChurchSavvy - Sunday's teams each have an owner, and each person schedules their own
 date: 2026-11-02
 agent: Claude Code (Claude Opus 5.5)
-asked: "volunteers and roles laquesha is doing is her assignment. so maybe we create a volunteers service thing that is like churchsavvy but with the minus of production part"; "yes churchsavvy for worship team, announcements to shapretta. go"
+asked: '"volunteers and roles laquesha is doing is her assignment. so maybe we create a volunteers service thing that is like churchsavvy but with the minus of production part", then "yes churchsavvy for worship team, announcements to shapretta. go"'
 status: in progress
-prs: [kmj-intake-server (this PR), solutionist-studio (the Volunteers door)]
+prs: [kmj-intake-server#1700, solutionist-studio (the Volunteers door, to come)]
 migrations: [supabase/APPLY-2026-11-02-serve-team-owner.sql (NOT applied; Kevin applies it)]
 left_undone:
   - "Apply supabase/APPLY-2026-11-02-serve-team-owner.sql (Kevin). Until then every team reads as Volunteers', so a production_schedule-only login changes none"
