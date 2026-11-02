@@ -78,7 +78,8 @@ router = APIRouter(prefix="/church", tags=["church"])
 EXEC = "executive_pastor"
 PSEUDO_LANES: Dict[str, Dict[str, Any]] = {
     EXEC: {"label": "Executive Pastor", "role": "manager",
-           "does": "Over the office's lanes: the monthly report and the Monday roll-up, no money"},
+           "does": "Over the office's lanes: covers any lane's work, gathers the monthly report and reads "
+                   "the Monday roll-up. No money"},
 }
 LANE_KEYS: Tuple[str, ...] = tuple(LANES) + tuple(PSEUDO_LANES)
 
@@ -196,6 +197,10 @@ CATALOG: Dict[str, Dict[str, Any]] = {
 
 # Each lane's default duties: the general structure a church starts from.
 STARTER: Dict[str, List[str]] = {ln: [k for k, d in CATALOG.items() if ln in d["lanes"]] for ln in LANE_KEYS}
+# The Executive Pastor is over every lane, so she covers any lane's work by
+# default (the leadership plan Kevin approved 2026-10-27: "Manager login with
+# every area picked"), never money. A duty moved to named logins is theirs.
+STARTER[EXEC] = [k for k, d in CATALOG.items() if not d["money"]]
 
 ALL: FrozenSet[str] = frozenset(CATALOG)
 MAX_HOLDERS = 12
@@ -372,7 +377,27 @@ def _prune(now: float) -> None:
         _FAILED.pop(k, None)
 
 
-def _manager_duties(lanes: Set[str], uid: str, moved: Dict[str, List[str]]) -> FrozenSet[str]:
+def _area_duties(biz: str, uid: str, role: Optional[str]) -> FrozenSet[str]:
+    """A Manager no lane names: the non-money duties in the areas it works,
+    as each job's area check decided before duties (church_leaders_note's
+    _office, church_spaces'). Its view is the church's pick, else Chief's
+    guess; the whole church, or Who sees what not on, is every duty. A view
+    that can't be read is a 503, never a yes."""
+    import church_areas
+    every = frozenset(k for k, d in CATALOG.items() if not d["money"])
+    if church_areas.mode() != "on":
+        return every
+    view = church_areas.my_areas(biz, uid, role)
+    if view is None:
+        raise HTTPException(503, "Your areas couldn't be read just now. Try again.")
+    areas = view.get("areas")
+    if areas is None:
+        return every
+    return frozenset(k for k in every if CATALOG[k]["area"] in areas)
+
+
+def _manager_duties(lanes: Set[str], uid: str, moved: Dict[str, List[str]],
+                    by_area: Optional[FrozenSet[str]] = None) -> FrozenSet[str]:
     out = set()
     for key, d in CATALOG.items():
         if d["money"]:
@@ -380,7 +405,7 @@ def _manager_duties(lanes: Set[str], uid: str, moved: Dict[str, List[str]]) -> F
         if key in moved:
             if uid in moved[key]:
                 out.add(key)
-        elif lanes & set(d["lanes"]):
+        elif any(key in STARTER.get(ln, ()) for ln in lanes) or (by_area is not None and key in by_area):
             out.add(key)
     return frozenset(out)
 
@@ -411,13 +436,11 @@ def standing(business_id: str, user_id: str) -> Dict[str, Any]:
         duties = ALL
     elif role == "manager" and church:
         moved = _moved(biz)
-        # The Executive Pastor's role is read only when it could still give
-        # this login a duty: a church that moved every one of them never asks.
-        if any(EXEC in d["lanes"] and k not in moved and not (lanes & set(d["lanes"]))
-               for k, d in CATALOG.items() if not d["money"]):
-            if uid in _exec_users(biz, [seat]):
-                lanes.add(EXEC)
-        duties = _manager_duties(lanes, uid, moved)
+        if uid in _exec_users(biz, [seat]):
+            lanes.add(EXEC)
+        # No lane at all: the areas it works decide, as before duties.
+        by_area = None if lanes else _area_duties(biz, uid, role)
+        duties = _manager_duties(lanes, uid, moved, by_area)
     else:
         duties = frozenset()
     out = {"church": church, "role": role, "lanes": sorted(lanes), "duties": duties}
@@ -435,8 +458,10 @@ def _known(duty: str) -> Dict[str, Any]:
 
 def holds(business_id: str, user: AuthedUser, duty: str) -> bool:
     """Whether this login does this duty at this church. The owner and the
-    admins always; a Manager by its lane until the duty moves, then by a row
-    naming it; never a money duty for a Manager. A failed read is a 503."""
+    admins always; a Manager by its lane (the Executive Pastor's covers every
+    non-money duty), or with no lane by the areas it works, until the duty
+    moves, then by a row naming it; never a money duty for a Manager. A
+    failed read is a 503."""
     _known(duty)
     return duty in standing(str(business_id), str(user.id))["duties"]
 
@@ -562,6 +587,17 @@ def build(business: Dict[str, Any]) -> Dict[str, Any]:
     for uid in _exec_users(biz, [s for s in seats if s.get("role") == "manager"]):
         lanes_of[uid].add(EXEC)
     role_of = {str(s["user_id"]): s.get("role") for s in seats}
+    # What each login does until a duty moves: its lanes' starter duties (the
+    # Executive Pastor's are every non-money one), else, for a Manager no lane
+    # names, the duties in the areas it works. The same defaults holds() uses.
+    default_of: Dict[str, Set[str]] = {}
+    for uid, ln in lanes_of.items():
+        if ln:
+            default_of[uid] = {k for one in ln for k in STARTER.get(one, ())}
+        elif role_of.get(uid) == "manager":
+            default_of[uid] = set(_area_duties(biz, uid, "manager"))
+        else:
+            default_of[uid] = set()
 
     def person(uid: str, money: bool) -> Dict[str, Any]:
         # `active`: whether holds() says yes for them. A login that left the
@@ -576,8 +612,8 @@ def build(business: Dict[str, Any]) -> Dict[str, Any]:
         if key in moved:
             holders = [person(u, d["money"]) for u in moved[key]]
         else:
-            holders = [person(uid, d["money"]) for uid, ln in lanes_of.items()
-                       if ln & set(d["lanes"]) and (role_of.get(uid) == "admin" or not d["money"])]
+            holders = [person(uid, d["money"]) for uid in lanes_of
+                       if key in default_of.get(uid, ()) and (role_of.get(uid) == "admin" or not d["money"])]
         mine = [c for c in changes if c.get("duty") == key]
         last = mine[0] if mine else None
         # Moved to logins that have all left (or can't do it now): the lanes

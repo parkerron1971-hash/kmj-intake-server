@@ -15,6 +15,7 @@ left_undone:
   - "Step 6: Jessica's view: See as, the roll-up, Tasks by person, and the monthly report"
   - "Step 7: Your week: each duty's day and training line make the week band and the walkthrough"
 decisions:
+  - "Review: the Executive Pastor covers every non-money duty by default; a Manager no lane names does the duties in the areas it works (church_areas view; a failed read is a 503), so step 2 never takes away what an area check gave"
   - "The owner and Admins hold every duty; a Manager its lane's defaults until a duty moves, then only rows decide that duty; a money duty is never a Manager's, whatever a row says"
   - "A Manager's lane is business_users.lane, else the lane its picked areas are exactly; Chief's guess at areas never makes a lane"
   - "The Executive Pastor is a pseudo-lane: the login whose person holds the role (key or catalog_key, said yes to); a login tied to a contact is only that contact; else one email naming exactly one person"

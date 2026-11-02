@@ -66,10 +66,16 @@ great, but you would make the changes for love city directly but chief would do 
   does a duty, only the rows decide it.
 - A Manager's lane is the one stored on its login (`business_users.lane`, set at the invite or in
   Logins & areas), else the lane its **picked** areas are exactly (`church_areas.lane_of`). Chief's
-  guess at a login's areas never makes a lane. A Manager with no lane holds no duty by default.
+  guess at a login's areas never makes a lane.
+- **A Manager no lane names** does the non-money duties in the areas it works (its view: the
+  church's pick, else Chief's guess), as each job's area check decided before duties. The whole
+  church (nothing places it), or Who sees what not on, is every non-money duty. A view that can't
+  be read is a 503.
 - **The Executive Pastor** is a lane no login is given (`executive_pastor`): a login whose person
   holds the Executive Pastor role (by its key or the catalog's, said yes to) is in it, on top of any
-  lane of its own. A login tied to its person (`business_users.contact_id`) is only that person; one
+  lane of its own. She covers any lane: her defaults are **every non-money duty** (the leadership
+  plan Kevin approved 10-27, "Manager login with every area picked"; Kevin 11-01: "Jessica will be
+  over the admin team"). A login tied to its person (`business_users.contact_id`) is only that person; one
   that isn't is found by its email, and only when the email names exactly one of the church's
   people, or the one whose first name the login gave.
 - Members, Viewers, logins that left, and anyone outside a church: none.
@@ -132,21 +138,20 @@ login sees.
   rooms.
 - **Shapretta McClain**, Media & Communications: posts, clips, stream, website, churchsavvy_team,
   serve_schedule (the production team).
-- **Jessica McCloud**, Executive Pastor: monthly_report, oversee_lanes (plus every non-money duty
-  to cover a lane).
+- **Jessica McCloud**, Executive Pastor: every non-money duty by default (monthly_report and
+  oversee_lanes are hers alone).
 - **The treasurer** (an Admin login): every money duty.
 
-Most of this is already the lanes' defaults. Jessica's cover is not: naming her on a duty moves
-it, so each duty she covers must name its lane's person too (weekly_text: Naiya and Jessica),
-or the lane's person loses it. Set each duty's whole list in one PUT.
+All of this is the lanes' defaults, so Love City needs no rows until a duty moves. A move names
+the duty's whole list in one PUT: moving weekly_text to Naiya alone takes it from Jessica too.
 
 ## Build order
 
 1. `church_duties.py`, the tables, the routes, and Love City's rows. Tests. (Built, except Love
    City's rows, which wait on the migration.)
 2. The job gates read duties: the weekly text, boards, chat rules, rooms, event sign-ups, the
-   marketing desk, clips, the site and the events page, ChurchSavvy parts. Decide there what a
-   Manager with no lane keeps: today's area checks let them in, and duties alone would not.
+   marketing desk, clips, the site and the events page, ChurchSavvy parts. A Manager no lane
+   names keeps what its areas gave it (decided in review, 2026-11-01).
 3. Chief: `list_duties` and `move_duty` (a proposal the owner approves), for other churches.
 4. FE: Settings → Logins & areas gains Duties per login; buttons follow `my-role.duties`;
    ChurchSavvy's team list shows lanes.
@@ -164,3 +169,6 @@ or the lane's person loses it. Set each duty's whole list in one PUT.
   `[]` puts it back to the lanes.
 - A Member or Viewer login can't be given a duty (they hold none).
 - Love City's rows aren't in this step: the tables don't exist until the migration is applied.
+- Review (2026-11-01): the Executive Pastor's defaults are every non-money duty (she covers any
+  lane), and a Manager no lane names does the duties in the areas it works, so wiring a gate to
+  `require()` never takes away what an area check gave.

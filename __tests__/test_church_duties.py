@@ -199,7 +199,9 @@ def test_each_lanes_starter_set_is_read_from_the_catalog():
                                             "churchsavvy_team"]
     assert cd.STARTER["media_comms"] == ["serve_schedule", "events", "posts", "clips", "stream", "website",
                                          "churchsavvy_team"]
-    assert cd.STARTER["executive_pastor"] == ["monthly_report", "oversee_lanes"]
+    # The Executive Pastor covers any lane: every duty but money (the plan Kevin approved 10-27).
+    assert cd.STARTER["executive_pastor"] == [k for k, d in cd.CATALOG.items() if not d["money"]]
+    assert [k for k, d in cd.CATALOG.items() if d["lanes"] == ["executive_pastor"]] == ["monthly_report", "oversee_lanes"]
     assert cd.STARTER["treasurer"] == ["deposit", "books", "pay", "store"]
     # Every duty starts with somebody.
     assert set(cd.CATALOG) == {k for keys in cd.STARTER.values() for k in keys}
@@ -222,16 +224,43 @@ def test_a_manager_holds_its_lanes_duties_by_default(db):
     assert _held(SHAP) == set(cd.STARTER["media_comms"])
 
 
-def test_a_manager_with_no_lane_a_member_a_login_that_left_and_a_stranger_hold_none(db):
-    db.t["church_leader_roles"].clear()
-    assert _held(JESS) == set()
+NON_MONEY = {k for k, d in cd.CATALOG.items() if not d["money"]}
+
+
+def _in_areas(*areas):
+    return {k for k in NON_MONEY if cd.CATALOG[k]["area"] in areas}
+
+
+def test_a_member_a_login_that_left_and_a_stranger_hold_none(db):
     assert _held(MEM) == set()
     assert _held(GONE) == set()
     assert _held(STRANGER) == set()
-    # Areas that aren't exactly a lane make no lane.
-    next(s for s in db.t["business_users"] if s["user_id"] == TIARA)["areas"] = ["people_care"]
+
+
+def test_a_manager_no_lane_names_does_the_duties_in_the_areas_it_works(db, monkeypatch):
+    """As each job's area check decided before duties: the whole church (no
+    areas placed, or Who sees what not on) is every non-money duty; picked
+    areas that aren't exactly a lane are the duties in those areas."""
+    db.t["church_leader_roles"].clear()
+    assert _held(JESS) == NON_MONEY                              # Who sees what not on
+    monkeypatch.setenv("CHURCH_AREAS", "on")
+    ca._MY_CACHE.clear()
     cd._CACHE.clear()
-    assert _held(TIARA) == set()
+    assert _held(JESS) == NON_MONEY                              # on, but nothing places her: the whole church
+    next(s for s in db.t["business_users"] if s["user_id"] == TIARA)["areas"] = ["people_care"]
+    ca._MY_CACHE.clear()
+    cd._CACHE.clear()
+    assert _held(TIARA) == _in_areas("people_care")
+    assert not _held(TIARA) & {"weekly_text", "posts", "deposit"}
+
+
+def test_a_view_that_cant_be_read_is_a_503_for_a_manager_no_lane_names(db, monkeypatch):
+    db.t["church_leader_roles"].clear()
+    monkeypatch.setenv("CHURCH_AREAS", "on")
+    monkeypatch.setattr(ca, "my_areas", lambda *a, **k: None)
+    with pytest.raises(HTTPException) as e:
+        cd.holds(BIZ, _u(JESS), "weekly_text")
+    assert e.value.status_code == 503 and not cd._CACHE
 
 
 def test_a_row_moves_a_duty_and_the_lane_default_no_longer_decides_it(db):
@@ -257,53 +286,61 @@ def test_a_money_duty_is_never_a_managers_whatever_a_row_says(db):
     assert cd.holds(BIZ, _u(ADMIN), "books")
 
 
-def test_the_executive_pastor_is_a_lane_by_her_record(db):
+def _not_exec(db, monkeypatch):
+    """Without the role, Jessica is a Manager no lane names: whole-church
+    areas, so the area defaults would also give her everything. Put her in
+    one area so the Executive Pastor's lane is what's being tested."""
+    monkeypatch.setenv("CHURCH_AREAS", "on")
+    next(s for s in db.t["business_users"] if s["user_id"] == JESS)["areas"] = ["office"]
+    ca._MY_CACHE.clear()
+    cd._CACHE.clear()
+
+
+def test_the_executive_pastor_covers_every_lane_but_no_money(db, monkeypatch):
+    _not_exec(db, monkeypatch)
     # No contact tied to her login: her email names exactly one person, who holds the role.
-    assert _held(JESS) == {"monthly_report", "oversee_lanes"}
+    assert _held(JESS) == NON_MONEY == set(cd.STARTER[cd.EXEC])
+    assert "monthly_report" in _held(JESS) and "monthly_report" not in _held(NAIYA)
     # Tied to her record, the record decides, not the email.
     seat = next(s for s in db.t["business_users"] if s["user_id"] == JESS)
     seat["contact_id"] = C_NAIYA
     cd._CACHE.clear()
-    assert _held(JESS) == set()
+    assert _held(JESS) == _in_areas("office")                     # not her: her one picked area decides
     seat["contact_id"] = C_JESS
     cd._CACHE.clear()
-    assert _held(JESS) == {"monthly_report", "oversee_lanes"}
-    # On top of a lane of her own.
-    seat["lane"] = "people_care"
-    cd._CACHE.clear()
-    assert _held(JESS) == {"monthly_report", "oversee_lanes", *cd.STARTER["people_care"]}
+    assert _held(JESS) == NON_MONEY
 
 
-def test_the_executive_pastor_by_the_catalogs_key_and_only_once_she_said_yes(db):
+def test_a_duty_moved_to_the_lanes_person_is_no_longer_hers_unless_named(db, monkeypatch):
+    _not_exec(db, monkeypatch)
+    _move(db, "weekly_text", NAIYA)
+    assert not cd.holds(BIZ, _u(JESS), "weekly_text")
+    _move(db, "weekly_text", JESS)
+    assert cd.holds(BIZ, _u(JESS), "weekly_text") and cd.holds(BIZ, _u(NAIYA), "weekly_text")
+
+
+def test_the_executive_pastor_by_the_catalogs_key_and_only_once_she_said_yes(db, monkeypatch):
+    _not_exec(db, monkeypatch)
     db.t["church_role_defs"][0].update({"key": "exec_pastor_lc", "title": "Executive Pastor"})
     db.t["church_leader_roles"][0]["role"] = "exec_pastor_lc"
-    assert _held(JESS) == {"monthly_report", "oversee_lanes"}
+    assert _held(JESS) == NON_MONEY
     db.t["church_leader_roles"][0]["status"] = "invited"
     cd._CACHE.clear()
-    assert _held(JESS) == set()
+    assert _held(JESS) == _in_areas("office")
     db.t["church_leader_roles"][0]["status"] = "active"
     db.t["church_role_defs"][0]["status"] = "archived"
     cd._CACHE.clear()
-    assert _held(JESS) == set()
+    assert _held(JESS) == _in_areas("office")
 
 
-def test_a_shared_family_email_names_no_one_but_the_name_they_gave(db):
+def test_a_shared_family_email_names_no_one_but_the_name_they_gave(db, monkeypatch):
+    _not_exec(db, monkeypatch)
     db.t["contacts"].append({"id": str(uuid.uuid4()), "business_id": BIZ, "name": "Jerome McCloud",
                              "email": "jessica@lovecity.org"})
-    assert _held(JESS) == set()
+    assert _held(JESS) == _in_areas("office")
     next(s for s in db.t["business_users"] if s["user_id"] == JESS)["name"] = "Jessica"
     cd._CACHE.clear()
-    assert _held(JESS) == {"monthly_report", "oversee_lanes"}
-
-
-def test_once_every_executive_duty_has_moved_her_role_isnt_read(db, monkeypatch):
-    _move(db, "monthly_report", JESS)
-    _move(db, "oversee_lanes", JESS)
-    real = db.get
-    monkeypatch.setattr(sb_clients, "sb_get_as_service",
-                        lambda path, **kw: pytest.fail(path) if "church_role_defs" in path else real(path, **kw))
-    assert _held(NAIYA) == set(cd.STARTER["office_leadership"])
-    assert _held(JESS) == {"monthly_report", "oversee_lanes"}
+    assert _held(JESS) == NON_MONEY
 
 
 @pytest.mark.parametrize("table", ["businesses", "business_users", "church_duty_holders", "church_role_defs",
@@ -408,8 +445,10 @@ def test_the_page_lists_each_duty_and_who_does_it(office, db):
     wt = _duty(page, "weekly_text")
     assert wt["follows_lanes"] and wt["day"] == "Wed" and wt["lane_labels"] == ["Office & Leadership"]
     assert wt["area_label"] == "Office"
-    assert [(h["user_id"], h["name"]) for h in wt["holders"]] == [(NAIYA, "Naiya Clark")]
-    assert {h["user_id"] for h in _duty(page, "rooms")["holders"]} == {NAIYA, LAQ}
+    # The Office lane, and the Executive Pastor, who covers every lane.
+    assert {h["user_id"]: h["name"] for h in wt["holders"]}[NAIYA] == "Naiya Clark"
+    assert {h["user_id"] for h in wt["holders"]} == {NAIYA, JESS}
+    assert {h["user_id"] for h in _duty(page, "rooms")["holders"]} == {NAIYA, LAQ, JESS}
     assert {h["user_id"] for h in _duty(page, "monthly_report")["holders"]} == {JESS}
     # Money by default: the Treasurer's Admin login.
     assert [(h["user_id"], h["active"]) for h in _duty(page, "books")["holders"]] == [(ADMIN, True)]
@@ -595,7 +634,7 @@ def test_my_role_carries_the_logins_duties(db):
     assert _my_role(OWNER)["duties"] == list(cd.CATALOG)
     assert _my_role(ADMIN)["duties"] == list(cd.CATALOG)
     assert _my_role(NAIYA)["duties"] == cd.STARTER["office_leadership"]
-    assert _my_role(JESS)["duties"] == ["monthly_report", "oversee_lanes"]
+    assert _my_role(JESS)["duties"] == cd.STARTER["executive_pastor"]
     assert _my_role(MEM)["duties"] == []
     # No standing here, or not a church: no duties at all.
     assert "duties" not in _my_role(STRANGER)
