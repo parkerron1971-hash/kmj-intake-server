@@ -248,7 +248,8 @@ def _love_city(db):
     # rule, so its Prophets, with no shepherd word, don't shepherd (a new
     # custom pastoral role would: decision 2).
     for title, job, said in (("Prophets", "pastoral", {"can_shepherd": False}), ("Evangelists", "welcome", {})):
-        cr.create_role(c.row, {"title": title, "job": job, **said})
+        # Before the migration a role names no switch (naming one is a 503).
+        cr.create_role(c.row, {"title": title, "job": job, **(said if cr._live() else {})})
     for key, *who in (("pastor", "kevin"), ("executive_pastor", "jessica"), ("associate_pastor", "andre"),
                       ("elders", "marcus", "tanya"), ("ministers", "angela"), ("intercessor_leader", "ruth"),
                       ("intercessors", "iris", "ivy"), ("prophets", "paul"), ("evangelists", "eve"),

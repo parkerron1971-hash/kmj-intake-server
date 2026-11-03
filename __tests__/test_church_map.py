@@ -87,7 +87,7 @@ def test_before_the_migration_every_role_write_leaves_the_new_columns_out(monkey
     test), and no row or page carries a switch."""
     db = build(monkeypatch, filled=False, migrated=False)
     nh = church(db, NEW_HOPE)
-    made = cr.create_role(nh, {"title": "Care Ministers", "job": "care", "can_shepherd": True, "made_for": ["care_need"]})
+    made = cr.create_role(nh, {"title": "Care Ministers", "job": "care"})   # naming a switch is a 503: the next test
     cr.update_role(NEW_HOPE, _role(db, NEW_HOPE, "deacons")["id"], {"handles": ["care_need"]})
     cr.set_type(nh, "baptist", ["mothers_board"])
     cr.chief_draft(church(db, GRACE), "Armor Bearer", "team")
@@ -113,6 +113,12 @@ def test_an_update_naming_a_switch_it_cant_write_says_so_and_changes_nothing(mon
         assert _role(db, GRACE, "deacons") == before, "nothing half-saved"
     assert cr.update_role(GRACE, deacons["id"], {"title": "Deacon Council"})["title"] == "Deacon Council", \
         "an update naming no switch saves"
+    # A new role naming a switch, the same: refused, and nothing added.
+    count = len(db.t["church_role_defs"])
+    with pytest.raises(HTTPException) as e:
+        cr.create_role(church(db, GRACE), {"title": "Visitation team", "job": "care", "can_shepherd": True})
+    assert (e.value.status_code, e.value.detail) == (503, "Couldn’t save that just now; try again.")
+    assert len(db.t["church_role_defs"]) == count, "no role added without its switch"
 
 
 # ─── The catalog, and what a new church is filled with ────────────────
