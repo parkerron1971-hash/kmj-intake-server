@@ -16,11 +16,16 @@
     POST /church/map/changes/{id}/apply?...         make a waiting change, or finish a failed one
     POST /church/map/changes/{id}/discard?...       let a waiting change go; these three the
                                                     owner or an admin, a money one the owner
+    GET  /church/map/templates?business_id=&q=&kind=  the ready-made directory's search (B4a:
+                                                    church_templates); a manager seat and up
+    GET  /church/map/templates/{kind}/{key}?...     one ready-made, and what adopting it would
+                                                    add here (read only); a manager seat and up
 
 Once step 2's file is applied (church_map.step2_state()), each save above is
 logged as one change (church_map_batch, origin 'office'), so the sheet's Undo
 covers edits made on screen. Before it a save runs as it always has and logs
-nothing; a failed probe is a 503. The changes routes are a 503 until then.
+nothing; a failed probe is a 503. The changes and ready-made routes are a 503
+until then.
 
 Behind CHURCH_MAP: a 404 unless church_map.open_to(user), so with `owner`
 only the platform owner's login reaches these; a 503 before the migration,
@@ -40,6 +45,7 @@ from pydantic import BaseModel, Field
 
 import church_map as cm
 import church_map_batch as batch
+import church_templates as ct
 import sb_clients
 from auth_supabase import AuthedUser, require_user
 from business_access import assert_access
@@ -180,3 +186,43 @@ def change_apply(change_id: str, business_id: str = Query(...), user: AuthedUser
 def change_discard(change_id: str, business_id: str = Query(...), user: AuthedUser = Depends(require_user)):
     biz, role = _church(business_id, user, "admin")
     return {"ok": True, **batch.discard(biz, change_id, user.id, role=role)}
+
+
+# ─── The ready-made directory (B4a; adopting is B4b) ──────────────────
+
+def _directory(business_id: str, user: AuthedUser) -> Tuple[Dict[str, Any], Dict[str, Any], str]:
+    """The church, its role settings and its tradition, once step 2's file is
+    there (§1.3). A read only: nothing is seeded."""
+    biz, _role = _church(business_id, user, "manager")
+    s = cm.step2_state()
+    if s is not True:
+        raise HTTPException(503, cm.UNREAD if s is None else "The ready-made list isn’t set up yet. Try again later.")
+    import church_roles as cr
+    st = cr.settings(biz["id"])
+    if st is None:
+        raise HTTPException(503, cm.UNREAD)
+    return biz, st, ct.tradition_of(biz, st)
+
+
+def _tradition(key: str) -> Dict[str, str]:
+    import church_roles as cr
+    return {"key": key, "label": cr.TYPES[key]["label"]}
+
+
+@router.get("/templates")
+def templates_search(business_id: str = Query(...), q: str = Query("", max_length=80),
+                     kind: str = Query("", max_length=12), user: AuthedUser = Depends(require_user)):
+    biz, _st, tradition = _directory(business_id, user)
+    if kind not in ("", *ct.KINDS):
+        raise HTTPException(400, "Look through whole churches, ministries or roles")
+    return {"tradition": _tradition(tradition), "results": ct.search(q, kind, tradition, biz.get("name") or "")}
+
+
+@router.get("/templates/{kind}/{key}")
+def template_detail(kind: str, key: str, business_id: str = Query(...), user: AuthedUser = Depends(require_user)):
+    biz, st, tradition = _directory(business_id, user)
+    t = ct.get(kind, key)
+    if t is None:
+        raise HTTPException(404, "That ready-made isn’t here")
+    return {"tradition": _tradition(tradition), "ready_made": ct.card(t, tradition, biz.get("name") or ""),
+            "here": ct.here(biz, t, tradition, st)}

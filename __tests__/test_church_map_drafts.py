@@ -285,6 +285,46 @@ def test_before_step_2_or_with_the_map_closed_a_switch_save_is_todays_and_logs_n
     assert r.status_code == 200 and "change" not in r.json() and role(db, "team_leader")["can_oversee"] is True
     assert not db.t["church_map_changes"]
     assert o.as_(LC, "naiya").patch("team_leader", {"can_oversee": False}).status_code == 403, "the seat rule holds"
+    assert (o.patch("deacons", {"job": "pastoral"}).status_code, role(db, "deacons")["job"]) == (403, "care"),         "a job change too"
+    r = o.as_(LC, "minnie").patch("deacons", {"job": "pastoral"})
+    assert r.status_code == 200 and role(db, "deacons")["job"] == "pastoral" and not db.t["church_map_changes"]
+
+
+SW3 = ("can_shepherd", "can_oversee", "can_lead")
+
+
+def test_a_job_change_is_an_admins_and_the_switches_it_resets_are_one_change_undo_puts_back(lc):
+    """A new job resets a role's switches to the new job's (#1726 review): an
+    admin's or the owner's to make, logged as a role part with each switch's
+    before and after. Undo puts the switches back and leaves the job, a field
+    a part doesn't keep."""
+    o = Desk(lc).as_(LC, "naiya")
+    r = o.patch("deacons", {"job": "pastoral"})
+    assert (r.status_code, r.json()["detail"]) == (403, batch.JOB_SEAT)
+    assert o.patch("deacons", {"job": "care", "definition": "Serve."}).status_code == 200, "the same job: no change"
+    assert role(lc, "deacons")["job"] == "care" and not lc.t["church_map_changes"]
+    r = o.as_(LC, "minnie").patch("deacons", {"job": "pastoral", "term_months": 24})
+    assert r.status_code == 200 and role(lc, "deacons")["job"] == "pastoral"
+    row = next(x for x in lc.t["church_map_changes"] if x["id"] == r.json()["change"]["id"])
+    assert (row["origin"], row["money"], row["parts"][0]["before"], row["parts"][0]["after"]) == (
+        "office", False, dict.fromkeys(SW3, False), dict.fromkeys(SW3, True))
+    assert o.c.post(f"/church/map/changes/{row['id']}/undo?business_id={LC}").status_code == 200
+    d = role(lc, "deacons")
+    assert ({k: d[k] for k in SW3}, d["job"], d["term_months"]) == (dict.fromkeys(SW3, False), "pastoral", 24)
+    r = o.as_(NH, "tessa").patch("elders", {"job": "care"}, NH)
+    assert (r.status_code, r.json()["detail"]) == (403, batch.BOARD_YES), "a new job would take its board yes away"
+
+
+def test_a_save_its_check_refuses_leaves_nothing_saved(lc):
+    """The whole save is checked first and written at once (#1726 review):
+    before, the fields a part doesn't keep went in, then the part was refused."""
+    o = Desk(lc).as_(LC, "minnie")
+    before = dict(role(lc, "team_leader"))
+    for body in ({"term_months": 12, "can_oversee": True, "title": ""},
+                 {"term_months": 6, "can_lead": False, "reports_to": before["id"]}):
+        r = o.patch("team_leader", body)
+        assert r.status_code == 400, r.json()
+        assert role(lc, "team_leader") == before and not lc.t["church_map_changes"], body
 
 
 # ─── A team role is named by its team, not its key (rule a) ───────────
