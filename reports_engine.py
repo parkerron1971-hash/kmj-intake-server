@@ -141,33 +141,33 @@ def _plaid_tx_in_period(biz: str, start: _date, end: _date) -> List[Dict[str, An
     if not included:
         return []
     acct = "account_id=in.(" + ",".join(included) + ")"
-    return sb_clients.sb_get_as_service(
+    return sb_clients.sb_get_all_as_service(
         f"/plaid_transactions?business_id=eq.{biz}&{acct}"
         f"&excluded_from_books=eq.false&pending=eq.false"
         f"&date=gte.{_iso(start)}&date=lte.{_iso(end)}"
-        f"&select=amount,business_category,business_subcategory,"
+        f"&select=transaction_id,amount,business_category,business_subcategory,"
         f"plaid_category_primary,plaid_category_detail,reconciled_to_payout_id"
-        f"{bank_money.cols()}&limit=5000"
+        f"{bank_money.cols()}", key="transaction_id", strict=True,
     ) or []
 
 
 def _paid_invoices_in_period(biz: str, start: _date, end: _date) -> List[Dict[str, Any]]:
     end_excl = end + timedelta(days=1)
-    return sb_clients.sb_get_as_service(
+    return sb_clients.sb_get_all_as_service(
         f"/invoices?business_id=eq.{biz}&status=eq.paid"
         f"&paid_at=gte.{_iso(start)}&paid_at=lt.{_iso(end_excl)}"
-        f"&select=total,paid_at,refund_amount_cents,refunded_at&limit=5000"
+        f"&select=id,total,paid_at,refund_amount_cents,refunded_at", strict=True,
     ) or []
 
 
 def _outstanding_invoices(biz: str) -> List[Dict[str, Any]]:
     """Apply the ruled outstanding rule. PostgREST handles paid_at/status;
     the column-to-column refund check is finished in Python."""
-    rows = sb_clients.sb_get_as_service(
+    rows = sb_clients.sb_get_all_as_service(
         f"/invoices?business_id=eq.{biz}"
         f"&paid_at=is.null&status=not.in.({','.join(_OUTSTANDING_EXCLUDED_STATUSES)})"
         f"&select=id,invoice_number,total,due_date,status,refund_amount_cents,"
-        f"created_at,contact_id,contacts(name)&limit=5000"
+        f"created_at,contact_id,contacts(name)", strict=True,
     ) or []
     out = []
     for r in rows:
@@ -185,10 +185,10 @@ _BILL_OUTSTANDING_EXCLUDED = ("paid", "cancelled", "draft")
 
 
 def _outstanding_bills(biz: str) -> List[Dict[str, Any]]:
-    return sb_clients.sb_get_as_service(
+    return sb_clients.sb_get_all_as_service(
         f"/bills?business_id=eq.{biz}"
         f"&status=not.in.({','.join(_BILL_OUTSTANDING_EXCLUDED)})"
-        f"&select=id,vendor_name,amount,due_date,status&limit=5000"
+        f"&select=id,vendor_name,amount,due_date,status", strict=True,
     ) or []
 
 
@@ -248,10 +248,10 @@ def _pl_for_window(biz: str, start: _date, end: _date) -> Dict[str, Any]:
             _add(bucket, t.get("business_subcategory"), a)
 
     # Manual expenses.
-    exp = sb_clients.sb_get_as_service(
+    exp = sb_clients.sb_get_all_as_service(
         f"/business_expenses?business_id=eq.{biz}"
         f"&date=gte.{_iso(start)}&date=lte.{_iso(end)}"
-        f"&select=amount,category,subcategory&limit=5000"
+        f"&select=id,amount,category,subcategory", strict=True,
     ) or []
     for e in exp:
         _add(e.get("category") or "other", e.get("subcategory"), float(e.get("amount") or 0))

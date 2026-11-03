@@ -52,7 +52,8 @@ import json
 import logging
 import os
 import threading
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
+from urllib.parse import quote as _quote
 
 import httpx
 
@@ -631,6 +632,57 @@ def sb_get_as_service(path: str, *, redact: bool = False) -> Optional[Any]:
     """RLS-bypassing sync GET. Server-initiated paths only. `redact` keeps
     filter values and error bodies out of the failure log."""
     return _sync_request("GET", path, sb_headers_service(), redact=redact)
+
+
+# ─── Every row, not the first 1,000 ──────────────────────────────────
+# PostgREST returns at most the project's max-rows (1,000 on this Supabase
+# project) whatever `limit` asks for, and says nothing about the rest. A
+# read that can pass that has to page. 2026-11-03: Love City's trial
+# balance read 1,000 of its 6,802 ledger lines and called balanced books
+# "Out of balance". Pages go by a unique key (key > the last one seen), so
+# a row added or removed mid-read is never skipped or counted twice the
+# way an offset page can be.
+PAGE_ROWS = 1000            # never above the project's max-rows: a short page means "the end"
+ALL_ROWS_CEILING = 500_000
+
+
+class PartialRead(RuntimeError):
+    """A paged read stopped part-way: a later page failed, or the ceiling.
+    Raised instead of handing back a list that is quietly missing rows."""
+
+
+def sb_get_all_as_service(path: str, *, key: str = "id", strict: bool = False,
+                          redact: bool = False) -> Optional[List[Dict[str, Any]]]:
+    """Every row a service GET matches, in `key` order, page by page.
+
+    `path` carries the filters and a select that includes `key` (a unique
+    column), never its own limit, offset or order. PartialRead when a later
+    page fails or the ceiling is reached. When the first page fails: None,
+    as sb_get_as_service does, or with `strict` PartialRead too. Use strict
+    wherever the rows decide what is shown or posted, so a failed read is
+    never read as "no rows" (a report of zeros, a check that skips)."""
+    sep = "&" if "?" in path else "?"
+    rows: List[Dict[str, Any]] = []
+    after: Optional[str] = None
+    while True:
+        cursor = f"&{key}=gt.{_quote(str(after), safe='')}" if after is not None else ""
+        page_path = f"{path}{sep}order={key}.asc&limit={PAGE_ROWS}{cursor}"
+        # Through sb_get_as_service, so a test's stand-in for it sees every page.
+        page = sb_get_as_service(page_path, redact=True) if redact else sb_get_as_service(page_path)
+        if not isinstance(page, list):
+            if after is None:
+                if strict:
+                    raise PartialRead("the first page failed")
+                return None
+            raise PartialRead(f"a later page failed after {len(rows)} rows")
+        rows.extend(page)
+        if len(page) < PAGE_ROWS:
+            return rows
+        if key not in page[-1]:
+            raise ValueError(f"sb_get_all_as_service: the select must include {key!r}")
+        after = page[-1][key]
+        if len(rows) >= ALL_ROWS_CEILING:
+            raise PartialRead(f"stopped at the {ALL_ROWS_CEILING}-row ceiling")
 
 
 def sb_patch_as_service(path: str, body: Dict[str, Any]) -> Optional[Any]:
