@@ -80,6 +80,70 @@ def test_a_group_that_isnt_theirs_reaches_no_one(monkeypatch):
     assert asyncio.run(sms_routing._bulletin_list(None, BIZ, "not-a-uuid")) == ([], None)
 
 
+def _numbers(n, start=0):
+    return [{"id": f"c-{i:05d}", "name": "", "phone": f"+1555{i:07d}"} for i in range(start, start + n)]
+
+
+def test_everyone_is_every_number_not_the_first_500(monkeypatch):
+    # A church with 1,300 numbers: it read `limit=500`, no order, and texted those.
+    book = _numbers(1300)
+    paths = []
+
+    async def sb_get(client, path):
+        paths.append(path)
+        after = path.split("&id=gt.")[1] if "&id=gt." in path else ""
+        rest = [c for c in book if c["id"] > after]
+        return rest[:1000]
+
+    async def said_yes(client, business_id, phones):
+        return set(phones)
+
+    import sms_alerts
+    monkeypatch.setattr(sms_routing, "_sb_get", sb_get)
+    monkeypatch.setattr(sms_alerts, "said_yes_to_texts", said_yes)
+    contacts, yes = asyncio.run(sms_routing._bulletin_list(None, BIZ))
+    assert len(contacts) == 1300 and len(yes) == 1300
+    assert len(paths) == 2 and all("order=id.asc&limit=1000" in p for p in paths)
+    assert "&id=gt.c-00999" in paths[1] and "limit=500" not in "".join(paths)
+
+
+def test_a_page_that_fails_sends_to_no_one(monkeypatch):
+    # Never "part of the list": the second page failing is the same as the first.
+    book = _numbers(1000)
+
+    async def sb_get(client, path):
+        return None if "&id=gt." in path else book
+
+    monkeypatch.setattr(sms_routing, "_sb_get", sb_get)
+    assert asyncio.run(sms_routing._bulletin_list(None, BIZ)) == ([], None)
+
+
+def test_a_group_past_1000_members_is_every_member(monkeypatch):
+    members = [{"contact_id": f"m-{i:05d}"} for i in range(1200)]
+
+    async def sb_get(client, path):
+        if path.startswith("/groups?"):
+            return [{"id": GROUP}]
+        after = path.split("&contact_id=gt.")[1] if "&contact_id=gt." in path else ""
+        return [m for m in members if m["contact_id"] > after][:1000]
+
+    monkeypatch.setattr(sms_routing, "_sb_get", sb_get)
+    assert len(asyncio.run(sms_routing._group_ids(None, BIZ, GROUP))) == 1200
+
+
+def test_group_counts_that_cant_be_read_are_a_503_never_zero(monkeypatch):
+    _gate(monkeypatch)
+
+    async def sb_get(client, path):
+        if path.startswith("/groups?"):
+            return [{"id": GROUP, "name": "Youth"}]
+        return None
+
+    monkeypatch.setattr(sms_routing, "_sb_get", sb_get)
+    out = asyncio.run(sms_routing.announcement_groups(BIZ, user=USER))
+    assert out.status_code == 503
+
+
 # ─── sent later ──────────────────────────────────────────────────────
 
 def _schedule(monkeypatch, send_at, group_id=None):
