@@ -38,9 +38,14 @@ Y = {LC: ("yolanda", "youth_pastor"), GR: ("yvette", "youth_minister"), NH: ("yu
 ALL = pytest.mark.parametrize("biz", CHURCHES, ids=[NAMES[b] for b in CHURCHES])
 
 
-@pytest.fixture(params=[False, True], ids=["map_off", "map_open_empty"])
+@pytest.fixture(params=[(False, True), (True, True), (True, False)],
+                ids=["map_off", "map_open_empty", "map_open_not_migrated"])
 def db(request, monkeypatch):
-    return build(monkeypatch, map_on=request.param, filled=False)
+    """Closed, open on an empty map, and open on a database without the
+    map's migration (church_map.ready() false: every write leaves its
+    columns out, every reader runs today's path)."""
+    map_on, migrated = request.param
+    return build(monkeypatch, map_on=map_on, filled=False, migrated=migrated)
 
 
 def _names(db, ids):
