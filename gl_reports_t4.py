@@ -114,10 +114,10 @@ def trust_reconciliation(biz: str, as_of: Optional[str] = None) -> Dict[str, Any
         "untagged_balance": round((untagged or {}).get("balance", 0.0) + plug, 2),
         "opening_plug": plug,
         "activity": activity[:200],
-        "note": ("A compliant trust book tags every transaction with its client. "
-                 "Untagged funds (including pre-history balances) are listed so "
-                 "nothing hides. Per-jurisdiction IOLTA report formats are an "
-                 "SME ruling — this is the bookkeeping substance."),
+        "note": ("A trust account tags every transaction with the client it belongs to. "
+                 "Money without a client, including balances from before the books "
+                 "started, is listed so nothing hides. Your state bar's own report "
+                 "format may differ; these are the numbers it is built from."),
     }
 
 
@@ -191,10 +191,10 @@ def donor_report(biz: str, period: str = "this_year",
         "unrestricted_gifts": round(total_gifts - restricted_gifts, 2),
         "gl_split": {"restricted_4200": gl_restricted, "unrestricted": gl_unrestricted},
         "donors": sorted(donors.values(), key=lambda d: -d["total"]),
-        "note": ("Mark a gift restricted by setting the invoice category to "
-                 "\"restricted\" — it then books to 4200 Restricted "
-                 "Contributions automatically. Releases from restriction "
-                 "(3300 → unrestricted net assets) are an SME ruling."),
+        "note": ("A gift to any fund other than the general fund (tithes and offerings "
+                 "count as general) is designated: it's counted as restricted here and "
+                 "recorded in the books as restricted contributions (4200). When designated "
+                 "money is spent for its purpose, your accountant records the release."),
     }
 
 
@@ -221,6 +221,8 @@ def prep_990(biz: str, year: Optional[int] = None) -> Dict[str, Any]:
                 + float(l["debit"]) - float(l["credit"]), 2)
 
     names = {c[0]: c[1] for c in (gl_engine.COA_SEED + gl_engine.COA_NONPROFIT_EXTRA)}
+    import report_words
+    names.update(report_words.account_names(biz))
     equity_codes = ("3000", "3100", "3200", "3300", "3900")
     net_assets = []
     for code in equity_codes:
@@ -262,12 +264,13 @@ def prep_990(biz: str, year: Optional[int] = None) -> Dict[str, Any]:
         "change_in_net_assets": round(total_income - total_expense, 2),
         "net_assets": net_assets,
         "sme_flags": [
-            "Functional expense allocation (program / management & general / "
-            "fundraising — 990 Part IX) needs an SME mapping from the "
-            "Profit-First buckets; the prep totals above are the inputs.",
-            "Restricted-release schedule (3300 → unrestricted) is an SME ruling.",
-            "990 line-number mappings are intentionally NOT asserted here — "
-            "this packet gives the accountant the substance, not the form.",
+            "Form 990 (Part IX) asks for spending split into programs, management & "
+            "general, and fundraising. The totals above are by your spending lines; "
+            "your accountant assigns them.",
+            "When designated money is spent for its purpose, your accountant records "
+            "the release (from 3300 to unrestricted net assets).",
+            "This gives your accountant the numbers, not the filled-in form: 990 line "
+            "numbers aren't assigned here.",
         ],
     }
 
@@ -333,10 +336,10 @@ def bank_reconciliation(biz: str, period: str = "this_month",
         "accounts": out_accts,
         "operating_ending_total": op_total,
         "gl_cash": gl_cash,
-        "note": ("Beginning/ending balances are computed from the current "
-                 "synced balance and settled activity (Plaid does not expose "
-                 "historical statement balances). Pending and excluded "
-                 "transactions are listed as reconciling items."),
+        "note": ("Starting and ending balances are worked back from today's bank "
+                 "balance and the cleared activity, because the bank feed doesn't send "
+                 "past statement balances. Pending and excluded transactions are listed "
+                 "as the items that don't line up yet."),
     }
 
 
