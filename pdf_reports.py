@@ -634,6 +634,35 @@ def _summary_1099_body(d, s, money_cell, accent, stripe, rule, danger, colors, T
     return out
 
 
+def _funds_body(d, s, money_cell, accent, stripe, rule, danger, colors, Table, TableStyle,
+                Paragraph, Spacer, inch, meta):
+    """Each giving fund: given, spent (the year fund of the same name), left."""
+    head = [Paragraph(h, s["th"] if i == 0 else s["thr"]) for i, h in enumerate(("Fund", "Given", "Spent", "Left"))]
+    rows = [head]
+    for f in d.get("funds") or []:
+        name = f"{f.get('fund')}" + ("  <font size=7 color='#9A9A9A'>· designated</font>" if f.get("designated") else "")
+        rows.append([Paragraph(name, s["row"]), money_cell(f.get("given")),
+                     money_cell(f.get("spent")) if f.get("spent") is not None else Paragraph("—", s["amt"]),
+                     money_cell(f.get("left")) if f.get("left") is not None else Paragraph("—", s["amt"])])
+    rows.append([Paragraph("Total", s["totlbl"]), money_cell(d.get("total_given"), bold=True),
+                 money_cell(d.get("total_spent"), bold=True), Paragraph("", s["amt"])])
+    t = Table(rows, colWidths=[None, 1.1 * inch, 1.1 * inch, 1.1 * inch], repeatRows=1)
+    t.setStyle(TableStyle([("ALIGN", (1, 0), (-1, -1), "RIGHT"), ("LINEBELOW", (0, 0), (-1, 0), 0.6, rule),
+                           ("ROWBACKGROUNDS", (0, 1), (-1, -2), [colors.white, stripe])]))
+    out = [Paragraph("FUNDS", s["section"]), t, Spacer(1, 0.12 * inch)]
+    others = d.get("other_funds") or []
+    if others:
+        out.append(Paragraph("OTHER FUNDS (SPENDING PLACED IN BOOKKEEPING, FUNDS)", s["section"]))
+        orows = [[Paragraph("Fund", s["th"]), Paragraph("Spent", s["thr"])]]
+        orows += [[Paragraph(str(o.get("fund")), s["row"]), money_cell(o.get("spent"))] for o in others]
+        ot = Table(orows, colWidths=[None, 1.2 * inch])
+        ot.setStyle(TableStyle([("ALIGN", (1, 0), (1, -1), "RIGHT"), ("LINEBELOW", (0, 0), (-1, 0), 0.6, rule)]))
+        out += [ot, Spacer(1, 0.1 * inch)]
+    if d.get("note"):
+        out.append(Paragraph(d["note"], s["note"]))
+    return out
+
+
 def _generic_body(d, s, money_cell, accent, stripe, rule, danger, colors, Table, TableStyle,
                   Paragraph, Spacer, inch, meta):
     return [Paragraph("Report data:", s["section"]),
@@ -662,7 +691,8 @@ def _breakdown_table(title, head_label, rows_data, key, s, money_cell, stripe, r
 
 def _revenue_body(d, s, money_cell, accent, stripe, rule, danger, colors, Table, TableStyle,
                   Paragraph, Spacer, inch, meta):
-    out = [Paragraph("TOTAL REVENUE", s["section"]),
+    faith = report_words.is_faith(meta.get("voice"))
+    out = [Paragraph("TOTAL GIVING & INCOME" if faith else "TOTAL REVENUE", s["section"]),
            Paragraph(fmt_money(d.get("total_revenue")), s["kpi"] if "kpi" in s else s["section"]),
            Spacer(1, 0.12 * inch)]
     args = (s, money_cell, stripe, rule, colors, Table, TableStyle, Paragraph, Spacer, inch)
@@ -671,8 +701,14 @@ def _revenue_body(d, s, money_cell, accent, stripe, rule, danger, colors, Table,
                               "amount": a.get("amount")} for a in d.get("by_account") or []],
                             "label", *args)
     out += _breakdown_table("BY SOURCE", "Source", d.get("by_source") or [], "source", *args)
-    out += _breakdown_table("BY CUSTOMER", "Customer", d.get("by_customer") or [], "customer", *args)
-    out += _breakdown_table("BY OFFERING", "Offering / Category", d.get("by_offering") or [],
+    if d.get("by_fund"):
+        out += _breakdown_table("GIFTS BY FUND", "Fund", d["by_fund"], "fund", *args)
+    if d.get("by_way"):
+        out += _breakdown_table("GIFTS BY HOW THEY WERE GIVEN", "Way", d["by_way"], "way", *args)
+    out += _breakdown_table("BY PERSON" if faith else "BY CUSTOMER", "Person" if faith else "Customer",
+                            d.get("by_customer") or [], "customer", *args)
+    out += _breakdown_table("BY ITEM PAID FOR" if faith else "BY OFFERING",
+                            "Item" if faith else "Offering / Category", d.get("by_offering") or [],
                             "offering", *args)
     out += _breakdown_table("BY MONTH", "Month", d.get("monthly") or [], "month", *args)
     return out
@@ -993,6 +1029,7 @@ _BUILDERS = {
     "trends": _trends_body,
     "trust_reconciliation": _trust_reconciliation_body,
     "donors": _donors_body,
+    "funds": _funds_body,
     "prep_990": _prep_990_body,
     "bank_reconciliation": _bank_reconciliation_body,
     "audit_trail": _audit_trail_body,

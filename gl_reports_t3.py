@@ -141,13 +141,20 @@ def budget_vs_actual(biz: str, biz_row: Dict[str, Any], period: str = "this_mont
                                     + float(l["debit"]) - float(l["credit"]), 2)
 
     budgets = _budgets_in_window(biz, start, end)
-    pcts = _allocator_pcts(biz_row)
+    import report_words
+    voice = report_words.voice_of(biz_row.get("type"))
+    faith = report_words.is_faith(voice)
+    names = report_words.line_names(biz, voice)
+    # A church or nonprofit budgets what it sets; Profit First percentages
+    # are a business's allocator, never a church's budget.
+    pcts = {} if faith else _allocator_pcts(biz_row)
     n_months = len(list(_month_iter(start, end)))
 
     rows: List[Dict[str, Any]] = []
     rev_budget = budgets.get("revenue")
     rows.append({
-        "category": "revenue", "label": "Revenue",
+        "category": "revenue",
+        "label": ("Giving & income" if voice == report_words.CHURCH else "Income") if faith else "Revenue",
         "actual": actual_rev, "budget": rev_budget,
         "budget_source": "set" if rev_budget is not None else None,
         "variance": round(actual_rev - rev_budget, 2) if rev_budget is not None else None,
@@ -160,7 +167,7 @@ def budget_vs_actual(biz: str, biz_row: Dict[str, Any], period: str = "this_mont
             budget = round(actual_rev * pcts[cat] / 100.0, 2)
             source = "profit_first"  # derived from allocator % × actual revenue
         rows.append({
-            "category": cat, "label": cat.replace("_", " ").title(),
+            "category": cat, "label": names.get(cat) or cat.replace("_", " ").title(),
             "actual": actual, "budget": budget, "budget_source": source,
             # Expenses: positive variance = OVER budget (worth attention).
             "variance": round(actual - budget, 2) if budget is not None else None,
@@ -173,6 +180,7 @@ def budget_vs_actual(biz: str, biz_row: Dict[str, Any], period: str = "this_mont
         "rows": rows,
         "has_any_budget": bool(budgets),
         "allocator_pcts": pcts,
+        "voice": voice,
     }
 
 
