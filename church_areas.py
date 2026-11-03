@@ -636,7 +636,13 @@ def _need(path: str) -> List[Dict[str, Any]]:
 
 
 def _places(biz: str) -> Dict[Tuple[str, str], str]:
-    rows = _need(f"/church_area_places?business_id=eq.{_q(biz)}&select=kind,key,area&limit=500")
+    """The church's own picks (the closed map's path). Once the map's columns
+    are there, a guess Chief stored while a church's map was open (by='guess')
+    is never read as the church's pick, so turning the map off again can't
+    label a guess "your church placed it here"."""
+    import church_map
+    picks = "&by=eq.church" if church_map.ready() else ""
+    rows = _need(f"/church_area_places?business_id=eq.{_q(biz)}{picks}&select=kind,key,area&limit=500")
     return {(r.get("kind") or "", r.get("key") or ""): r.get("area") or "" for r in rows}
 
 

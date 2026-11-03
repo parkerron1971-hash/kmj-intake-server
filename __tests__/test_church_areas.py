@@ -230,8 +230,9 @@ def test_roles_and_teams_say_where_they_are_and_what_has_no_place(db):
 
 
 def test_the_churchs_pick_moves_a_team_and_its_leader(db):
+    # As a migrated row has it: every pick is by='church' (APPLY-2026-11-04-church-map.sql).
     db.t["church_area_places"].append({"business_id": BIZ, "kind": "team", "key": "youth ministry (ywd)",
-                                       "area": "worship_media"})
+                                       "area": "worship_media", "by": "church"})
     m = ca.build(db.t["businesses"][0])
     assert "Marcus Taylor" in _names(_area(m, "worship_media"))
     assert next(t for t in m["teams"] if t["name"] == "Youth Ministry (YWD)")["by"] == "church"

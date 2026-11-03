@@ -157,6 +157,18 @@ def test_a_filled_map_closed_is_todays(monkeypatch):
     assert _areas(build(monkeypatch, map_on=False), LC) == today
 
 
+def test_turned_off_again_a_stored_guess_is_never_read_as_the_churchs_pick(monkeypatch):
+    """Guesses stored while the map was open (by='guess') are not the church's
+    own picks: with CHURCH_MAP off again the areas page and every login's
+    view are today's, not labeled "your church placed it here"."""
+    today = _areas(build(monkeypatch, map_on=False, filled=False), LC)
+    db = build(monkeypatch, map_on=True, filled=False)
+    ca.build(church(db, LC))                       # open: each guess stored once
+    assert _guesses(db, LC), "guesses were stored while open"
+    monkeypatch.setenv("CHURCH_MAP", "off")
+    assert _areas(db, LC) == today
+
+
 def test_before_the_migration_the_areas_and_a_pick_are_todays(monkeypatch):
     today = _areas(build(monkeypatch, map_on=False, filled=False), LC)
     db = build(monkeypatch, filled=False, migrated=False)
