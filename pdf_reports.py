@@ -820,21 +820,74 @@ def _profitability_body(d, s, money_cell, accent, stripe, rule, danger, colors, 
 
 def _trends_body(d, s, money_cell, accent, stripe, rule, danger, colors, Table,
                  TableStyle, Paragraph, Spacer, inch, meta):
-    out = [Paragraph("TRAILING 12 MONTHS", s["section"])]
+    """The last 12 months, not the calendar year (2026-11-03, as on screen):
+    months by name with their year, the month still going marked so far, a
+    12-month total, and momentum naming the months it compares. A church's
+    columns read in its words."""
+    L = report_words.rows(meta.get("voice"))
+    monthly = d.get("monthly") or []
+    cur = str(d.get("as_of") or "")[:7]
+    span = (f" · {report_words.month_label(monthly[0].get('month'))} – "
+            f"{report_words.month_label(monthly[-1].get('month'))}") if monthly else ""
+    out = [Paragraph(f"LAST 12 MONTHS{span.upper()}", s["section"])]
     head = [Paragraph("Month", s["th"])] + \
-           [Paragraph(h, s["thr"]) for h in ("Revenue", "Expenses", "Net")]
+           [Paragraph(_x(h), s["thr"]) for h in (L["money_in"], L["money_out"], L["left_over"])]
     rows = [head]
-    for m in d.get("monthly") or []:
-        rows.append([Paragraph(str(m.get("month")), s["rowind"]),
-                     money_cell(m.get("revenue")), money_cell(m.get("expenses")),
-                     money_cell(m.get("net"))])
-    tbl = Table(rows, colWidths=[None, 1.1 * inch, 1.1 * inch, 1.1 * inch], repeatRows=1)
-    tbl.setStyle(TableStyle([
-        ("ALIGN", (1, 0), (3, -1), "RIGHT"), ("LINEBELOW", (0, 0), (-1, 0), 0.6, rule),
-        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, stripe]),
-    ]))
+    t_in = t_out = 0.0
+    for m in monthly:
+        label = report_words.month_label(m.get("month"))
+        if cur and m.get("month") == cur:
+            label += " (so far)"
+        rows.append([Paragraph(label, s["row"]), money_cell(m.get("revenue")),
+                     money_cell(m.get("expenses")), money_cell(m.get("net"))])
+        t_in += float(m.get("revenue") or 0)
+        t_out += float(m.get("expenses") or 0)
+    style = [("ALIGN", (1, 0), (3, -1), "RIGHT"), ("LINEBELOW", (0, 0), (-1, 0), 0.6, rule),
+             ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, stripe])]
+    if monthly:
+        rows.append([Paragraph("12 months", s["totlbl"]), money_cell(round(t_in, 2), True),
+                     money_cell(round(t_out, 2), True), money_cell(round(t_in - t_out, 2), True)])
+        style.append(("LINEABOVE", (0, -1), (-1, -1), 0.8, rule))
+    tbl = Table(rows, colWidths=[None, 1.3 * inch, 1.3 * inch, 1.3 * inch], repeatRows=1)
+    tbl.setStyle(TableStyle(style))
     out.append(tbl)
+
+    # Momentum: the last three finished months against the three before.
+    finished = [m.get("month") for m in monthly if m.get("month") and (not cur or m.get("month") < cur)]
+    last3, prior3 = finished[-3:], finished[-6:-3]
+    if last3:
+        mom = d.get("momentum") or {}
+        ccy = meta.get("currency", "USD")
+        out.append(Spacer(1, 0.16 * inch))
+        out.append(Paragraph(
+            f"MOMENTUM: {report_words.month_span(last3).upper()} VS "
+            f"{(report_words.month_span(prior3) or 'before').upper()}", s["section"]))
+        for label, k in ((L["money_in"], "revenue"), (L["money_out"], "expenses")):
+            out.append(Paragraph(
+                f"{_x(label)}: {fmt_money(mom.get(f'{k}_last3_avg'), ccy)} a month, "
+                f"{_change(mom.get(f'{k}_change_pct'))} (was {fmt_money(mom.get(f'{k}_prior3_avg'), ccy)} a month)",
+                s["row"]))
+        out.append(Paragraph(
+            "Average per month over the last three finished months, against the three before."
+            + (f" {report_words.month_label(cur).split()[0]} isn't in it yet." if cur else ""), s["note"]))
     return out
+
+
+def _x(text: Any) -> str:
+    """Text for a Paragraph: & < > escaped (reportlab reads markup)."""
+    from xml.sax.saxutils import escape
+    return escape(str(text))
+
+
+def _change(pct: Any) -> str:
+    """A momentum change in words (Helvetica has no arrow glyphs)."""
+    if pct is None:
+        return "nothing earlier to compare"
+    try:
+        p = float(pct)
+    except (TypeError, ValueError):
+        return "nothing earlier to compare"
+    return f"up {p:g}%" if p >= 0 else f"down {abs(p):g}%"
 
 
 def _kv_table(pairs, s, money_cell, stripe, rule, colors, Table, TableStyle, Paragraph, inch):
