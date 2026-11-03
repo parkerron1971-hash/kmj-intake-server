@@ -22,6 +22,7 @@ import gl_reports
 import gl_reports_t2
 import gl_reports_t3
 import gl_reports_t4
+import report_words
 
 logger = logging.getLogger("reports_router")
 
@@ -956,6 +957,7 @@ def export(biz: str, report: str, format: str = "csv",
            from_: Optional[str] = Query(None, alias="from"), to: Optional[str] = None,
            user: AuthedUser = Depends(require_user)) -> Response:
     biz_row = _owner_or_reader(biz, user)
+    voice = report_words.voice_of(biz_row.get("type"))   # a church's rows read in its words
     if report == "donors":
         from giving_records import require_finance
         require_finance(biz, user)
@@ -1067,10 +1069,12 @@ def export(biz: str, report: str, format: str = "csv",
             pass
         meta = pdf_reports.build_meta(
             business_name=biz_name, settings=biz_row.get("settings"),
-            report_title=_REPORT_TITLES[report], period_label=period_label,
+            report_title=report_words.title(report, _REPORT_TITLES[report], voice),
+            period_label=period_label,
             basis_label=("Accrual Basis" if data.get("basis") == "accrual"
                          else "Cash Basis"), currency="USD",
             generated_by=_generated_by(biz_row, user))
+        meta["voice"] = voice
         try:
             pdf = pdf_reports.render(report, data, meta)
         except ImportError:
@@ -1078,7 +1082,7 @@ def export(biz: str, report: str, format: str = "csv",
         return Response(content=pdf, media_type="application/pdf",
                         headers={"Content-Disposition": f'attachment; filename="{report}.pdf"'})
 
-    rows = _csv_rows(report, data)
+    rows = _csv_rows(report, data, voice)
 
     import csv
     import io
@@ -1090,23 +1094,25 @@ def export(biz: str, report: str, format: str = "csv",
                     headers={"Content-Disposition": f'attachment; filename="{report}.csv"'})
 
 
-def _csv_rows(report: str, data: Dict[str, Any]) -> list:
-    """Flatten a report into [header, *rows] for CSV + PDF table reuse."""
+def _csv_rows(report: str, data: Dict[str, Any], voice: Optional[str] = None) -> list:
+    """Flatten a report into [header, *rows] for CSV + PDF table reuse.
+    `voice`: a church's rows read in its words (report_words)."""
+    L = report_words.rows(voice)
     rows = []
     if report == "pl":
         cur = data.get("current") or {}
         rev = cur.get("revenue") or {}
         rows.append(["Section", "Line", "Amount"])
-        rows.append(["Revenue", "Invoiced", rev.get("invoiced", 0)])
-        rows.append(["Revenue", "Refunds", -rev.get("refunds", 0)])
-        rows.append(["Revenue", "Other (non-Stripe) income", rev.get("plaid_other_income", 0)])
-        rows.append(["Revenue", "Gross Revenue", rev.get("gross_revenue", 0)])
+        rows.append([L["revenue"], L["invoiced"], rev.get("invoiced", 0)])
+        rows.append([L["revenue"], L["refunds"], -rev.get("refunds", 0)])
+        rows.append([L["revenue"], L["other_income"], rev.get("plaid_other_income", 0)])
+        rows.append([L["revenue"], L["gross"], rev.get("gross_revenue", 0)])
         for b in (cur.get("expenses") or {}).get("by_bucket", []):
-            rows.append(["Expense", b["label"], b["total"]])
+            rows.append([L["expense"], b["label"], b["total"]])
             for ln in b.get("lines", []):
-                rows.append(["Expense", f"  {b['label']} · {ln['subcategory']}", ln["amount"]])
-        rows.append(["Expense", "Total Expenses", (cur.get("expenses") or {}).get("total", 0)])
-        rows.append(["Net", "Net Income", cur.get("net_income", 0)])
+                rows.append([L["expense"], f"  {b['label']} · {ln['subcategory']}", ln["amount"]])
+        rows.append([L["expense"], L["total_expenses"], (cur.get("expenses") or {}).get("total", 0)])
+        rows.append([L["net"], L["net_income"], cur.get("net_income", 0)])
     elif report == "revenue":
         rows.append(["Breakdown", "Item", "Amount"])
         for a in data.get("by_account", []):
@@ -1219,21 +1225,21 @@ def _csv_rows(report: str, data: Dict[str, Any]) -> list:
         rows.append(["AT RISK (60+)", data.get("at_risk", 0), "", "", ""])
     elif report == "cash_flow":
         op = data.get("operating") or {}
-        rows.append(["Operating Activity", "Amount"])
-        rows.append(["Cash from customers", op.get("cash_from_customers", 0)])
-        rows.append(["Cash to suppliers", -op.get("cash_to_suppliers", 0)])
-        rows.append(["Net cash from operations", op.get("net_cash_from_operations", 0)])
+        rows.append([L["operating_row"], "Amount"])
+        rows.append([L["cash_in"], op.get("cash_from_customers", 0)])
+        rows.append([L["cash_out"], -op.get("cash_to_suppliers", 0)])
+        rows.append([L["net_cash"], op.get("net_cash_from_operations", 0)])
     elif report == "balance_sheet":
         a, li, eq = data.get("assets") or {}, data.get("liabilities") or {}, data.get("equity") or {}
         rows.append(["Section", "Line", "Amount"])
-        rows.append(["Assets", "Cash", a.get("cash", 0)])
-        rows.append(["Assets", "Accounts Receivable", a.get("accounts_receivable", 0)])
+        rows.append([L["assets"], L["cash"], a.get("cash", 0)])
+        rows.append([L["assets"], L["ar"], a.get("accounts_receivable", 0)])
         if a.get("stripe_clearing"):
-            rows.append(["Assets", "Stripe Clearing (in transit, informational)", a.get("stripe_clearing", 0)])
-        rows.append(["Assets", "Total Assets", a.get("total", 0)])
-        rows.append(["Liabilities", "Accounts Payable", li.get("accounts_payable", 0)])
-        rows.append(["Liabilities", "Total Liabilities", li.get("total", 0)])
-        rows.append(["Equity", "Retained Earnings", eq.get("retained_earnings", 0)])
+            rows.append([L["assets"], L["clearing"], a.get("stripe_clearing", 0)])
+        rows.append([L["assets"], L["total_assets"], a.get("total", 0)])
+        rows.append([L["liabilities"], L["ap"], li.get("accounts_payable", 0)])
+        rows.append([L["liabilities"], L["total_liabilities"], li.get("total", 0)])
+        rows.append([L["equity"], L["retained"], eq.get("retained_earnings", 0)])
     elif report == "trial_balance":
         rows.append(["Code", "Account", "Type", "Debits", "Credits", "Balance"])
         for a in data.get("accounts", []):
