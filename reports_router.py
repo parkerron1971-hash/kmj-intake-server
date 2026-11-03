@@ -23,6 +23,7 @@ import gl_reports_t2
 import gl_reports_t3
 import gl_reports_t4
 import report_words
+import giving_reports
 
 logger = logging.getLogger("reports_router")
 
@@ -40,7 +41,7 @@ _REPORT_FEATURES: Dict[str, str] = {
     "budget_vs_actual": "reports_full", "profitability": "reports_full",
     "trends": "reports_full",
     "summary_1099": "contractor_payments",
-    "trust_reconciliation": "vertical_reports", "donors": "vertical_reports",
+    "trust_reconciliation": "vertical_reports", "funds": "vertical_reports", "donors": "vertical_reports",
     "prep_990": "vertical_reports",
     "audit_trail": "audit_trail",
 }
@@ -585,6 +586,7 @@ _REPORT_TITLES = {
     "donors": "Donor Report", "prep_990": "Form 990 Prep",
     "bank_reconciliation": "Bank Reconciliation",
     "audit_trail": "Closed-Period Edit Audit Trail",
+    "funds": "Funds",
 }
 
 
@@ -607,7 +609,18 @@ def revenue(biz: str, period: str = "this_month",
         return _needs_gl("revenue", total_revenue=0, by_account=[], by_source=[],
                          by_customer=[], by_offering=[], monthly=[])
     try:
-        return _givers_hidden(biz, user, gl_reports_t2.revenue_report(biz, period, from_, to))
+        data = gl_reports_t2.revenue_report(biz, period, from_, to)
+        if report_words.is_faith(report_words.voice_of(biz_row.get("type"))):
+            # Totals by fund and by way: no names, so outside the Giving lock.
+            # A failed gifts read leaves the two tables out (and says so);
+            # the ledger's report still stands.
+            start, end = reports_engine.period_bounds(period, from_, to)
+            try:
+                data.update(giving_reports.by_fund_and_way(biz, start, end))
+            except HTTPException:
+                print(f"[reports] gifts by fund unavailable for {biz}", flush=True)
+                data["gift_tables_unavailable"] = True
+        return _givers_hidden(biz, user, data)
     except ValueError as e:
         raise HTTPException(400, str(e))
 
@@ -740,6 +753,67 @@ def donors(biz: str, period: str = "this_year",
         return gl_reports_t4.donor_report(biz, period, from_, to)
     except ValueError as e:
         raise HTTPException(400, str(e))
+
+
+# ─── Step 4 (2026-11-03): the reports a church needs ──────────────────
+# Funds (given, spent, left), and one person's giving. The same people as
+# Givers: owner, admin or the accountant, behind the Giving & money keeper.
+
+def _funds_or_503(fn, *a):
+    import funds
+    try:
+        return fn(*a)
+    except funds.Unavailable:
+        raise HTTPException(503, "The Funds tab couldn't be read just now. Try again.")
+
+
+@router.get("/funds")
+def funds_report(biz: str, period: str = "this_year",
+                 from_: Optional[str] = Query(None, alias="from"), to: Optional[str] = None,
+                 user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    from giving_records import require_finance
+    require_finance(biz, user)
+    biz_row = _owner_or_reader(biz, user)
+    _giving_wall(biz, user)
+    billing_limits.require_feature(biz, "vertical_reports")
+    period, from_, to = _fiscal_period(biz_row, period, from_, to)
+    try:
+        return _funds_or_503(giving_reports.funds_report, biz, period, from_, to)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+def _report_year(year: Optional[int]) -> int:
+    from datetime import datetime as _dt3, timezone as _tz3
+    y = year or _dt3.now(_tz3.utc).year
+    if not 2000 <= int(y) <= 2200:
+        raise HTTPException(400, "Choose a valid year")
+    return int(y)
+
+
+@router.get("/givers")
+def givers_list(biz: str, year: Optional[int] = None,
+                user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    from giving_records import require_finance
+    require_finance(biz, user)
+    _owner_or_reader(biz, user)
+    _giving_wall(biz, user)
+    billing_limits.require_feature(biz, "vertical_reports")
+    return giving_reports.givers(biz, _report_year(year))
+
+
+@router.get("/giver-history")
+def giver_history(biz: str, contact_id: str, year: Optional[int] = None,
+                  user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    from giving_records import require_finance
+    import re as _re
+    require_finance(biz, user)
+    _owner_or_reader(biz, user)
+    _giving_wall(biz, user)
+    billing_limits.require_feature(biz, "vertical_reports")
+    if not _re.match(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", contact_id or "", _re.I):
+        raise HTTPException(400, "contact_id must be a uuid")
+    return giving_reports.giver_history(biz, contact_id, _report_year(year))
 
 
 @router.get("/990-prep")
@@ -958,10 +1032,10 @@ def export(biz: str, report: str, format: str = "csv",
            user: AuthedUser = Depends(require_user)) -> Response:
     biz_row = _owner_or_reader(biz, user)
     voice = report_words.voice_of(biz_row.get("type"))   # a church's rows read in its words
-    if report == "donors":
+    if report in ("donors", "funds"):
         from giving_records import require_finance
         require_finance(biz, user)
-    if report in ("donors", "customer_statement", "bank_reconciliation"):
+    if report in ("donors", "funds", "customer_statement", "bank_reconciliation"):
         _giving_wall(biz, user)
     if report not in _REPORT_TITLES:
         raise HTTPException(400, "unknown report")
@@ -1016,6 +1090,8 @@ def export(biz: str, report: str, format: str = "csv",
                                                    "activity": [], "accounts": []}
         elif report == "donors":
             data = gl_reports_t4.donor_report(biz, period, from_, to)
+        elif report == "funds":
+            data = _funds_or_503(giving_reports.funds_report, biz, period, from_, to)
         elif report == "prep_990":
             from datetime import datetime as _dt2, timezone as _tz2
             y2 = int((as_of or "")[:4]) if (as_of or "")[:4].isdigit() else _dt2.now(_tz2.utc).year
@@ -1180,6 +1256,14 @@ def _csv_rows(report: str, data: Dict[str, Any], voice: Optional[str] = None) ->
         for a in data.get("activity", []):
             rows.append([a.get("date"), a.get("description"), a.get("type"),
                          a.get("amount"), a.get("client")])
+    elif report == "funds":
+        rows.append(["Fund", "Designated", "Gifts", "Given", "Spent", "Left"])
+        for f in data.get("funds", []):
+            rows.append([f.get("fund"), "yes" if f.get("designated") else "no", f.get("gifts"),
+                         f.get("given"), f.get("spent"), f.get("left")])
+        for o in data.get("other_funds", []):
+            rows.append([o.get("fund"), "", "", "", o.get("spent"), ""])
+        rows.append(["TOTAL", "", "", data.get("total_given", 0), data.get("total_spent", 0), ""])
     elif report == "donors":
         rows.append([data.get("donor_label") or "Donor", "Gifts", "Total", "Restricted"])
         for d2 in data.get("donors", []):
