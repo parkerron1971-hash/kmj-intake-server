@@ -3,8 +3,8 @@ title: Church leaders map, PR 2 — the migration (role switches, answers-to, ch
 date: 2026-11-04
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-11-03: take the leaders flow further, for every church that subscribes ("what i don''t want is what i build works for love city but is broken and messed up for other churches"); design 4V41zJz1kEJGdeo4J9D2Ym approved'
-status: in review (migration APPLIED 2026-11-03, verified)
-prs: ["kmj-intake-server (this PR)"]
+status: shipped
+prs: [kmj-intake-server#1709]
 migrations: [supabase/APPLY-2026-11-04-church-map.sql (not yet applied; applied by hand after review, before PR 3 merges)]
 left_undone:
   - "Apply supabase/APPLY-2026-11-04-church-map.sql by hand after review and before PR 3 merges; run the ledger row's before/after checks, then mark the row APPLIED"

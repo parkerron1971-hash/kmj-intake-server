@@ -3,8 +3,8 @@ title: Church leaders step 2, PR B1 — the step 2 spec, Riverside (a fourth tes
 date: 2026-11-04
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-11-03: approved step 2 (design 4V41zJz1kEJGdeo4J9D2Ym, "Your two ideas"): church setup sessions on the Academy engine, a ready-made directory, Chief verbs with undo, the department sheet, drafts for new churches'
-status: in review
-prs: ["kmj-intake-server (this PR)"]
+status: shipped
+prs: [kmj-intake-server#1720]
 migrations: []
 left_undone:
   - "B2: supabase/APPLY-2026-11-xx-church-map-step2.sql (church_map_changes, church_setup_tracks, template and unfinished_at columns), its PGlite check and a MIGRATIONS.md row; applied by hand before B3a merges"
