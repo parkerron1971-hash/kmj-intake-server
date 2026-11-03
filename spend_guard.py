@@ -35,6 +35,10 @@ Fail-OPEN by doctrine: any error in the check ALLOWS the call. A
 bookkeeping hiccup must never brick Chief. The ceiling is a backstop
 against runaways, not a billing gate.
 
+AI only. Outbound texts write api_usage rows too (endpoint "sms",
+sms_usage.py) so the Costs view sees them, and they are left out here: a
+church texting its members must never pause its Chief, or everyone's.
+
 Env:
   DAILY_SPEND_CAP_USD               platform-wide ceiling (default 50).
   DAILY_SPEND_CAP_PER_BUSINESS_USD  per-tenant ceiling (default 25).
@@ -49,6 +53,7 @@ from typing import Dict, Optional, Tuple
 
 import billing_context
 import sb_clients
+import sms_usage
 
 logger = logging.getLogger("spend_guard")
 
@@ -117,12 +122,18 @@ def _refresh(force: bool = False) -> Tuple[float, Dict[str, float]]:
     if not force and (now - _cache_at) < _CACHE_TTL_S:
         return _cache_total_cents, _cache_by_business
     try:
+        # Texts are not AI spend (sms_usage.py): a church's 2,000-text
+        # announcement is ~$25, the per-business ceiling. They are left out
+        # in the query, so they never crowd AI rows out of PostgREST's
+        # 1,000-row window, and again below.
         rows = sb_clients.sb_get_as_service(
-            f"/api_usage?created_at=gte.{_utc_day_start_iso()}"
-            f"&select=cost_cents,business_id&limit=100000") or []
+            f"/api_usage?created_at=gte.{_utc_day_start_iso()}&{sms_usage.NOT_SMS}"
+            f"&select=cost_cents,business_id,endpoint&limit=100000") or []
         total = 0.0
         by_biz: Dict[str, float] = {}
         for r in rows:
+            if sms_usage.is_sms_row(r):
+                continue
             c = float(r.get("cost_cents") or 0)
             total += c
             biz = r.get("business_id")

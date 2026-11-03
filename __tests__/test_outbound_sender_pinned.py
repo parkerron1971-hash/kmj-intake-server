@@ -107,8 +107,9 @@ def test_send_platform_sms_passes_sender_for(monkeypatch):
         seen["business_id"] = business_id
         return "+15550001111"
 
-    def fake_send(to, body, *, from_number=None):
+    def fake_send(to, body, *, from_number=None, business_id=None, kind="message"):
         seen["from_number"] = from_number
+        seen["billed_to"] = business_id      # the text's cost row (sms_usage)
         return "SM1"
 
     monkeypatch.setattr(sms_routing, "sender_for", fake_sender_for)
@@ -118,7 +119,7 @@ def test_send_platform_sms_passes_sender_for(monkeypatch):
 
     sid = _run(sms_routing._send_platform_sms("+15559998888", "hi", business_id="biz-7"))
     assert sid == "SM1"
-    assert seen == {"business_id": "biz-7", "from_number": "+15550001111"}
+    assert seen == {"business_id": "biz-7", "from_number": "+15550001111", "billed_to": "biz-7"}
 
 
 # ─── 3. business_id is not optional ───────────────────────────────────

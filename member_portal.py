@@ -1671,7 +1671,8 @@ async def _send_code_text(biz: Dict[str, Any], phone: str, code: str) -> None:
             sender = await sms_service.sender_for(client, str(biz["id"]))
         body = (f"{church}: {code} is your sign-in code for your member page. "
                 f"It works for 10 minutes. Didn't ask for it? Ignore this. Reply STOP to opt out.")
-        await run_in_threadpool(twilio_sms.send_sms, phone, body, from_number=sender)
+        await run_in_threadpool(twilio_sms.send_sms, phone, body, from_number=sender,
+                                business_id=str(biz["id"]), kind="signin_code")
     except Exception as e:
         logger.warning("member code text failed (%s) for business %s", type(e).__name__, biz.get("id"))
 

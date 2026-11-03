@@ -217,7 +217,8 @@ async def _send_platform_sms(to_number: str, body: str, *,
     import twilio_sms
     from_number = await sender_for(client, business_id)
     return await run_in_threadpool(
-        twilio_sms.send_sms, to_number, body, from_number=from_number)
+        twilio_sms.send_sms, to_number, body, from_number=from_number,
+        business_id=business_id, kind="automated")
 
 
 # ─── Routing helpers ──────────────────────────────────────────────────

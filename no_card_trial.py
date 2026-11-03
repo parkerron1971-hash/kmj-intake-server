@@ -591,7 +591,10 @@ def send_phone_code(business_id: str, phone: str) -> Dict[str, Any]:
     body = (f"Solutionist: {code} is your code to unlock your free site build. "
             f"It works for 10 minutes. Didn't ask for it? Ignore this.")
     try:
-        twilio_sms.send_sms(e164, body, from_number=twilio_sms.platform_number() or None)
+        # The platform's own check, from the platform line: its cost is
+        # the platform's (no business), not a text the trial sent.
+        twilio_sms.send_sms(e164, body, from_number=twilio_sms.platform_number() or None,
+                            business_id=None, kind="trial_check")
     except Exception as e:
         logger.warning(f"[no-card] phone code send failed for {business_id[:8]}: "
                        f"{type(e).__name__}")

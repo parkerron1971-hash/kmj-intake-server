@@ -271,16 +271,18 @@ def can_create_business(owner_id: str) -> Dict[str, Any]:
 def chief_messages_this_month(business_id: str) -> int:
     """Count of AI calls logged for this business since the 1st (UTC).
     The window is computed, so the counter 'resets' on the first of the
-    month with no state to maintain."""
+    month with no state to maintain. Texts are not AI calls: their rows
+    (sms_usage.py) are left out."""
+    import sms_usage
     # Paginated: the old single limit=5000 read silently under-counted
     # past 5k rows/month. Terminates on the first short page.
     total, offset, page = 0, 0, 5000
     while offset <= 200_000:
         rows = sb_clients.sb_get_as_service(
             f"/api_usage?business_id=eq.{business_id}"
-            f"&created_at=gte.{_month_start_iso()}&select=id"
+            f"&created_at=gte.{_month_start_iso()}&{sms_usage.NOT_SMS}&select=id,endpoint"
             f"&limit={page}&offset={offset}") or []
-        total += len(rows)
+        total += sum(1 for r in rows if not sms_usage.is_sms_row(r))
         if len(rows) < page:
             break
         offset += page

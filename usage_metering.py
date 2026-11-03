@@ -33,6 +33,7 @@ import sb_clients
 import feature_gates
 import credit_ledger
 import pricing_config
+import sms_usage
 
 logger = logging.getLogger("usage_metering")
 
@@ -135,8 +136,16 @@ def weight_for(endpoint: Optional[str]) -> int:
     """Price of an action from its endpoint alone — the FALLBACK path.
 
     Prefer weight_for_row() wherever the whole row is in hand: a row
-    carrying explicit `units` overrides this table."""
-    return unit_weights().get((endpoint or "").strip(), DEFAULT_WEIGHT)
+    carrying explicit `units` overrides this table.
+
+    A text (sms_usage.ENDPOINT) is never a credit action: a church plan
+    carries a text allowance, counted in texts, not Chief credits. Its
+    rows carry units=0 and the reads below leave them out; this is the
+    third lock."""
+    ep = (endpoint or "").strip()
+    if ep == sms_usage.ENDPOINT:
+        return 0
+    return unit_weights().get(ep, DEFAULT_WEIGHT)
 
 
 def weight_for_row(row: Optional[Dict[str, Any]]) -> int:
@@ -182,9 +191,12 @@ def weighted_usage_since(business_id: str, since_iso: str) -> int:
     page; the offset ceiling is a runaway guard, not a real bound."""
     total, offset, page = 0, 0, 10000
     while offset <= 200_000:
+        # Texts left out in the query (sms_usage.NOT_SMS): they cost no
+        # credits, and a month of them would crowd the AI rows out of
+        # PostgREST's 1,000-row window.
         rows = sb_clients.sb_get_as_service(
             f"/api_usage?business_id=eq.{business_id}"
-            f"&created_at=gte.{since_iso}&select=endpoint,units"
+            f"&created_at=gte.{since_iso}&{sms_usage.NOT_SMS}&select=endpoint,units"
             f"&limit={page}&offset={offset}") or []
         total += sum(weight_for_row(r) for r in rows)
         if len(rows) < page:
@@ -642,7 +654,7 @@ def check_low_credit(business_id: str,
         # have been above the threshold.
         last = sb_clients.sb_get_as_service(
             f"/api_usage?business_id=eq.{business_id}"
-            f"&created_at=gte.{_month_start_iso()}&select=endpoint"
+            f"&created_at=gte.{_month_start_iso()}&{sms_usage.NOT_SMS}&select=endpoint"
             f"&order=created_at.desc&limit=1") or []
         w = weight_for(last[0].get("endpoint")) if last else 0
         if w <= 0 or (remaining + w) <= threshold:

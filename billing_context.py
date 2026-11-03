@@ -100,3 +100,26 @@ def bill_to(business_id: Optional[str]) -> Iterator[None]:
                 _CURRENT.reset(token)
             except Exception:  # pragma: no cover - defensive
                 pass
+
+
+@contextlib.contextmanager
+def unattributed() -> Iterator[None]:
+    """Run a block with NO billing tenant, restoring the previous one.
+
+    For a row that names its business itself or is the platform's own
+    (sms_usage: a text is billed to the line that sent it, and the trial
+    phone check is the platform's), so it never borrows the tenant of the
+    request it happened inside. Never raises."""
+    token = None
+    try:
+        token = _CURRENT.set(None)
+    except Exception as e:     # pragma: no cover - defensive
+        logger.warning("[billing] could not clear context: %s", e)
+    try:
+        yield
+    finally:
+        if token is not None:
+            try:
+                _CURRENT.reset(token)
+            except Exception:  # pragma: no cover - defensive
+                pass
