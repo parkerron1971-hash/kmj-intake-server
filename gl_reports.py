@@ -413,9 +413,14 @@ def journal_report(biz: str, limit: int = 50, offset: int = 0) -> Dict[str, Any]
         inv_ids = sorted({str(j.get("source_id")) for j in jes
                           if str(j.get("source_type") or "").startswith("invoice_") and j.get("source_id")})
         for i in range(0, len(inv_ids), 100):
-            for r in sb_clients.sb_get_as_service(
-                    f"/invoices?business_id=eq.{biz}&id=in.({','.join(inv_ids[i:i + 100])})"
-                    f"&select=id,is_gift&limit=100") or []:
+            got = sb_clients.sb_get_as_service(
+                f"/invoices?business_id=eq.{biz}&id=in.({','.join(inv_ids[i:i + 100])})"
+                f"&select=id,is_gift&limit=100")
+            if got is None:
+                # Wording only: those entries read neutral ("Payment received").
+                print(f"[journal] gift lookup failed for {biz}; neutral labels", flush=True)
+                continue
+            for r in got:
                 gift_of[str(r["id"])] = bool(r.get("is_gift"))
     line_map: Dict[str, List[Dict[str, Any]]] = {}
     if jes:

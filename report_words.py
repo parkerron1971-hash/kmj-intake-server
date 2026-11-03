@@ -106,10 +106,10 @@ _FAITH_JOURNAL = {
     "Payout deposit": "Online gifts deposited (Stripe payout)",
 }
 _INVOICE_JOURNAL = {
-    # source_type: (a gift, a charge)
-    "invoice_issue": ("Gift recorded", "Charge recorded"),
-    "invoice_payment": ("Gift received", "Charge paid"),
-    "invoice_refund": ("Gift refunded", "Charge refunded"),
+    # source_type: (a gift, a charge, not known: the lookup failed)
+    "invoice_issue": ("Gift recorded", "Charge recorded", "Recorded"),
+    "invoice_payment": ("Gift received", "Charge paid", "Payment received"),
+    "invoice_refund": ("Gift refunded", "Charge refunded", "Refunded"),
 }
 
 
@@ -117,9 +117,11 @@ def journal_label(description: str, source_type: Optional[str], voice: Optional[
                   is_gift: Optional[bool] = None) -> str:
     if not is_faith(voice):
         return description
-    pair = _INVOICE_JOURNAL.get(source_type or "")
-    if pair and is_gift is not None:
-        return pair[0] if is_gift else pair[1]
+    trio = _INVOICE_JOURNAL.get(source_type or "")
+    if trio:
+        # Not known (the gift lookup failed): a neutral church word, never
+        # "Invoice", so the page reads the same everywhere.
+        return trio[2] if is_gift is None else trio[0] if is_gift else trio[1]
     return _FAITH_JOURNAL.get(description, description)
 
 

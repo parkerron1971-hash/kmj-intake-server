@@ -15,6 +15,7 @@ decisions:
   - "Applied in the trial balance and general ledger (_account_meta), Giving & income and Spending by account, and the 990 packet"
   - "The journal reads Gift recorded / Gift received / Charge paid (one read of the page's invoices for is_gift), Paid from the bank, Deposit not sorted yet and the like for a church"
   - "Exports: a church's CSV and PDF rows and titles for Income & spending, Cash in and out, and What the church has and owes"
+  - "Review: the year-end accountant ZIP reads in the church's words too (titles, CSV and PDF rows); its IIF keeps the chart's stored names because QuickBooks matches accounts by name. A failed gift lookup in the journal reads neutral (Payment received, Recorded), never Invoice, and logs"
   - "Every voice: the build-note footnotes are plain words (balance sheet, cash flow x2, forecast method, trust, givers, the 990 notes, bank reconciliation), and the PDF balance sheet no longer says Contact support"
 related: [2026-11-03-reports-read-every-row.md]
 ---
