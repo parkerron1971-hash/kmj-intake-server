@@ -3,8 +3,8 @@ title: Church leaders map, PR 1 — three test churches, today's routing pinned,
 date: 2026-11-04
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-11-03: take the leaders flow further, for every church that subscribes ("what i don''t want is what i build works for love city but is broken and messed up for other churches"); design 4V41zJz1kEJGdeo4J9D2Ym approved'
-status: in review
-prs: ["kmj-intake-server (this PR)"]
+status: shipped
+prs: [kmj-intake-server#1707]
 migrations: []
 left_undone:
   - "PR 2: supabase/APPLY-2026-11-04-church-map.sql, its PGlite check and backfill vectors (applied by hand before PR 3 merges)"
