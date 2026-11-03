@@ -295,6 +295,13 @@ footer nav a:hover{text-decoration-color:#C9CDD6 !important}
 /* pricing, in the main site's cards */
 .plans{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;align-items:stretch}
 @media (max-width:980px){.plans{grid-template-columns:minmax(0,1fr)}.pc.mid{transform:none !important}}
+/* four cards: the church plans by size, two across on a tablet, one on a phone */
+.plans.four{grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}
+.plans.four .pc{padding:26px 22px 24px}
+.plans.four .pz{flex-wrap:wrap}
+.plans.four .pz b{font-size:clamp(46px,3.9vw,60px)}
+@media (max-width:1100px){.plans.four{grid-template-columns:repeat(2,minmax(0,1fr))}.plans.four .pc.mid{transform:none}}
+@media (max-width:640px){.plans.four{grid-template-columns:minmax(0,1fr)}}
 .pc{position:relative;display:flex;flex-direction:column;padding:28px 28px 26px;border-radius:28px;background:#FFFFFF;color:#0B0C11;border:1px solid rgba(11,12,17,.12);box-shadow:0 30px 60px -40px rgba(20,16,60,.35)}
 .pc>*{position:relative;z-index:1}
 .pc.mid{background:#0B0D12;color:#F5F6F8;border-color:transparent;box-shadow:0 70px 130px -40px rgba(60,40,160,.7);transform:translateY(-16px)}
@@ -635,7 +642,7 @@ footer nav a:hover{text-decoration-color:#C9CDD6 !important}
 <div class="mc-pt"><svg width="40" height="40" viewBox="0 0 48 48" aria-hidden="true"><defs><clipPath id="mct4"><rect width="48" height="48" rx="12"></rect></clipPath></defs><g clip-path="url(#mct4)" stroke="rgba(255,255,255,0.55)" stroke-width="1.1" stroke-linejoin="round"><polygon points="0,0 28,0 17,21 0,15" fill="#E040FB"></polygon><polygon points="28,0 48,0 48,19 17,21" fill="#22D3EE"></polygon><polygon points="0,15 17,21 9,48 0,48" fill="#7C5CFF"></polygon><polygon points="17,21 48,19 48,48 9,48" fill="#A78BFA"></polygon><polygon points="17,21 33,31 24,48 9,48" fill="#5B3FE0" fill-opacity="0.6"></polygon></g><g transform="translate(12 12)" fill="none" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"></path><path d="M14 2v5h6"></path><path d="M8 13h8M8 17h5"></path></g></svg><b>Shows its work</b><span>What Chief does, including anything that failed, is listed in plain words on your History page. Many changes, like tasks and website text, can be undone for a day. Anything sent or paid can't.</span></div>
 </div>
 </div>
-<p class="mc-foot">Chief comes with every plan. A plan's AI actions pay for Chief's work: about {{CONV_STARTER}} conversations a month on Starter, {{CONV_PRO}} on Professional and {{CONV_SOL}} on Solutionist, and the morning notes don't use any. The bigger plans also think deeper in long planning sessions and the weekly look-back. Everyday answers are the same on every plan. <a href="#pricing">Compare the plans</a></p>
+<p class="mc-foot">Chief comes with every plan. A plan's AI actions pay for Chief's work: about {{#CONV_LINE}}{{CONV_STARTER}} conversations a month on Starter, {{CONV_PRO}} on Professional and {{CONV_SOL}} on Solutionist{{/CONV_LINE}}, and the morning notes don't use any. The bigger plans also think deeper in long planning sessions and the weekly look-back. Everyday answers are the same on every plan. <a href="#pricing">Compare the plans</a></p>
 </div>
 </section>
 <!-- /MEET CHIEF -->
@@ -1036,8 +1043,8 @@ footer nav a:hover{text-decoration-color:#C9CDD6 !important}
 <div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; gap: 24px 56px">
 <div style="flex: 1.2 1 480px; min-width: 0; display: flex; flex-direction: column; gap: 18px">
 <p class="eyebrow" style="margin: 0; color: #5A5E6B">Pricing</p>
-<h2 style="margin: 0; font-family: 'Inter Tight', sans-serif; font-weight: 400; font-size: clamp(40px, 4.8vw, 68px); line-height: 1; letter-spacing: -0.045em">Every plan is <b style="font-weight: 600">the whole church.</b></h2>
-<p style="margin: 0; font-size: 18px; color: #5A5E6B; max-width: 560px">Every part of church life comes with every plan. The plans change who can log in, how much Chief does each month, and how deep the books go.</p>
+<h2 style="margin: 0; font-family: 'Inter Tight', sans-serif; font-weight: 400; font-size: clamp(40px, 4.8vw, 68px); line-height: 1; letter-spacing: -0.045em">{{#PRICING_H2}}Every plan is <b style="font-weight: 600">the whole church.</b>{{/PRICING_H2}}</h2>
+<p style="margin: 0; font-size: 18px; color: #5A5E6B; max-width: 560px">{{#PRICING_LEDE}}Every part of church life comes with every plan. The plans change who can log in, how much Chief does each month, and how deep the books go.{{/PRICING_LEDE}}</p>
 </div>
 <div style="flex: 0.8 1 300px; min-width: 0; display: flex; flex-direction: column; gap: 14px; align-items: flex-end">
 <div role="group" aria-label="Billing period" data-billing style="display: inline-flex; padding: 4px; border-radius: 999px; background: #E5E5EB; gap: 2px">
@@ -1048,7 +1055,7 @@ footer nav a:hover{text-decoration-color:#C9CDD6 !important}
 </div>
 </div>
 
-<div class="plans">
+{{#PLAN_CARDS}}<div class="plans">
 <div class="pc">
 <div style="display: flex; justify-content: space-between; align-items: center; min-height: 24px"><span class="pname">Starter</span></div>
 <div class="pz"><b>$<span class="pnum" data-m="{{P_STARTER}}" data-y="{{Y_STARTER}}">{{P_STARTER}}</span></b><span class="pper">a month</span></div>
@@ -1103,7 +1110,7 @@ footer nav a:hover{text-decoration-color:#C9CDD6 !important}
 </ul>
 <a href="{{HOME}}/start" class="pbtn" style="border: 1px solid rgba(11,12,17,0.2); color: #0B0C11">Start free</a>
 </div>
-</div>
+</div>{{/PLAN_CARDS}}
 
 <div style="display: flex; flex-direction: column; gap: 14px">
 <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 10px 20px; padding: 18px 22px; border-radius: 18px; background: #FFFFFF; border: 1px solid rgba(11,12,17,0.12)">
@@ -1118,7 +1125,7 @@ footer nav a:hover{text-decoration-color:#C9CDD6 !important}
 <span style="display: flex; align-items: center; gap: 7px"><i style="width: 8px; height: 8px; border-radius: 50%; background: #94A3B8"></i>Office and Books</span>
 </span>
 </div>
-{{FOUNDER_STRIP}}
+{{#FOUNDER}}{{FOUNDER_STRIP}}{{/FOUNDER}}
 <p class="mono" style="margin: 4px 0 0; text-align: center; font-size: 12.5px; color: #5A5E6B">{{TRIAL_FINE}} · month to month · your own Stripe, no cut of giving · switch or cancel inside the app</p>
 </div>
 </div>
