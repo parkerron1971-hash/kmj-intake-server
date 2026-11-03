@@ -19,6 +19,8 @@ decisions:
   - "One Stripe invoice item on the church's subscription, so it lands on the next invoice. Once per month: the month is claimed in settings.church_texts_bill with a write filtered on the record it read, the Stripe call carries an idempotency key, and a run that finds its own unfinished claim first looks for the item it already made (including one an invoice already took) before making one"
   - "A count that can't be read sends no heads-up and bills nothing (tried again tomorrow)"
   - "CHURCH_TEXT_BILLING=off stops the bill; the count and heads-up keep going"
+  - "The plan comes from church_plan_of: businesses.subscription_plan holds the Stripe PRICE id (the webhook writes the price), mapped through feature_gates.price_to_plan; comp_tier wins. The first push read the column as a plan key, so it would have found no paying church (caught by the frontend helper before merge). The tick finds churches by their church price ids or a church comp_tier"
+  - "A comped church (any comp_tier) gets the count and the heads-up but is never billed"
 related: [2026-11-03-church-plans-by-size.md, 2026-11-03-sms-metering.md]
 ---
 `church_texts.py`: `summary`, `check_allowance`, `bill_month`, `bill_tick`.

@@ -828,7 +828,7 @@ async def broadcast_reach(business_id: str, group_id: Optional[str] = None,
     _may_announce(str(business_id), user)
     async with httpx.AsyncClient() as client:
         contacts, yes = await _bulletin_list(client, business_id, group_id)
-        plan_rows = await _sb_get(client, f"/businesses?id=eq.{business_id}&select=subscription_plan&limit=1")
+        plan_rows = await _sb_get(client, f"/businesses?id=eq.{business_id}&select=comp_tier,subscription_plan&limit=1")
     if yes is None:
         return JSONResponse({"error": "Couldn't check who has said yes to your texts. Try again in a minute."}, 503)
     phones = {normalize_phone(c.get("phone")) for c in contacts} - {""}
@@ -837,7 +837,7 @@ async def broadcast_reach(business_id: str, group_id: Optional[str] = None,
     texts = None
     try:
         import church_texts
-        plan = plan_rows[0].get("subscription_plan") if isinstance(plan_rows, list) and plan_rows else None
+        plan = church_texts.church_plan_of(plan_rows[0]) if isinstance(plan_rows, list) and plan_rows else None
         texts = await asyncio.to_thread(church_texts.summary, str(business_id), plan)
     except Exception:  # noqa: BLE001
         texts = None

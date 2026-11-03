@@ -112,8 +112,44 @@ def _z(dt: datetime) -> str:
 
 # ─── The plan's texts ────────────────────────────────────────────────
 
+def church_plan_of(row: Optional[Dict[str, Any]]) -> Optional[str]:
+    """Which church plan a business row is on, or None.
+
+    businesses.subscription_plan holds the Stripe PRICE id, not the plan key
+    (stripe_billing._apply_subscription_state writes the price), so it is
+    mapped through feature_gates.price_to_plan. An owner-set comp_tier wins,
+    as in feature_gates.plan_of. The subscription status isn't checked: a
+    past-due church still sees its count."""
+    import feature_gates
+    if not row:
+        return None
+    comp = (row.get("comp_tier") or "").strip().lower()
+    if comp in feature_gates.CHURCH_PLANS:
+        return comp
+    plan = feature_gates.price_to_plan().get((row.get("subscription_plan") or "").strip())
+    return plan if plan in feature_gates.CHURCH_PLANS else None
+
+
+def paid_church_plan_of(row: Optional[Dict[str, Any]]) -> Optional[str]:
+    """The church plan a business PAYS for through Stripe, or None. A comped
+    church (any comp_tier) is never billed for texts."""
+    import feature_gates
+    if not row or (row.get("comp_tier") or "").strip():
+        return None
+    plan = feature_gates.price_to_plan().get((row.get("subscription_plan") or "").strip())
+    return plan if plan in feature_gates.CHURCH_PLANS else None
+
+
+def church_price_ids() -> List[str]:
+    """The Stripe price ids (monthly and annual) that are church plans."""
+    import feature_gates
+    return sorted(pid for pid, plan in feature_gates.price_to_plan().items()
+                  if plan in feature_gates.CHURCH_PLANS)
+
+
 def included_for(plan: Optional[str]) -> Optional[int]:
-    """The plan's texts a month; None for anything that isn't a church plan."""
+    """The plan's texts a month; None for anything that isn't a church plan.
+    `plan` is a plan KEY (church_plan_of), never the stored price id."""
     import feature_gates
     if plan not in feature_gates.CHURCH_PLANS:
         return None
@@ -235,13 +271,14 @@ def check_allowance(business_id: str, plan: Optional[str] = None, *,
                     now: Optional[datetime] = None) -> Optional[int]:
     """Send the 80% or 100% heads-up if this month has just crossed one and
     it hasn't been sent yet. Returns the level sent, or None. Never raises,
-    never blocks a text. Blocking (call it in a thread from async code)."""
+    never blocks a text. `plan` is a plan key (church_plan_of); without one,
+    the business row is read. Blocking (call it in a thread from async code)."""
     try:
         import sb_clients
         if plan is None:
             rows = sb_clients.sb_get_as_service(
-                f"/businesses?id=eq.{_q(business_id)}&select=subscription_plan&limit=1") or []
-            plan = rows[0].get("subscription_plan") if rows else None
+                f"/businesses?id=eq.{_q(business_id)}&select=comp_tier,subscription_plan&limit=1") or []
+            plan = church_plan_of(rows[0]) if rows else None
         included = included_for(plan)
         if included is None:
             return None
@@ -355,12 +392,15 @@ async def _existing_item(customer: str, business_id: str, month: str, since: dat
 
 async def bill_month(row: Dict[str, Any], *, now: Optional[datetime] = None) -> Dict[str, Any]:
     """Bill one church for the month that just ended. The row needs id,
-    name, settings, subscription_plan, subscription_status,
-    stripe_customer_id and stripe_subscription_id. Returns what happened:
-    {"state": "billed"|"none"|"skipped", ...}. Never charges twice for a
-    month, and never charges from a count it couldn't read."""
+    name, settings, comp_tier, subscription_plan (the Stripe price id),
+    subscription_status, stripe_customer_id and stripe_subscription_id.
+    Returns what happened: {"state": "billed"|"none"|"skipped", ...}. Never
+    charges twice for a month, never charges a comped church, and never
+    charges from a count it couldn't read."""
     business_id = str(row.get("id") or "")
-    plan = row.get("subscription_plan")
+    if (row.get("comp_tier") or "").strip():
+        return {"state": "skipped", "why": "comped"}
+    plan = paid_church_plan_of(row)
     included = included_for(plan)
     if not business_id or included is None:
         return {"state": "skipped", "why": "not_church_plan"}
@@ -423,14 +463,23 @@ async def bill_month(row: Dict[str, Any], *, now: Optional[datetime] = None) -> 
     return {"state": "billed", "invoice_item": item_id, **base}
 
 
-def _church_rows() -> Optional[List[Dict[str, Any]]]:
+def _church_rows_path() -> str:
+    """Every business on a church plan: paying through one of the church
+    prices (subscription_plan holds the PRICE id), or comped to a church plan
+    (heads-up only; bill_month never bills a comp)."""
     import feature_gates
+    match = [f"comp_tier.in.({','.join(feature_gates.CHURCH_PLANS)})"]
+    prices = church_price_ids()
+    if prices:
+        match.insert(0, f"subscription_plan.in.({','.join(_q(p) for p in prices)})")
+    return (f"/businesses?or=({','.join(match)})"
+            f"&select=id,name,settings,comp_tier,subscription_plan,subscription_status,"
+            f"stripe_customer_id,stripe_subscription_id")
+
+
+def _church_rows() -> Optional[List[Dict[str, Any]]]:
     import sb_clients
-    plans = ",".join(feature_gates.CHURCH_PLANS)
-    return sb_clients.sb_get_all_as_service(
-        f"/businesses?subscription_plan=in.({plans})&stripe_subscription_id=not.is.null"
-        f"&select=id,name,settings,subscription_plan,subscription_status,"
-        f"stripe_customer_id,stripe_subscription_id", key="id", strict=True)
+    return sb_clients.sb_get_all_as_service(_church_rows_path(), key="id", strict=True)
 
 
 async def bill_tick(now: Optional[datetime] = None) -> Dict[str, Any]:
@@ -459,7 +508,10 @@ async def bill_tick(now: Optional[datetime] = None) -> Dict[str, Any]:
             except Exception as e:  # noqa: BLE001
                 out["errors"] += 1
                 logger.warning(f"[church_texts] bill failed {bid[:8]}: {type(e).__name__}: {e}")
-        level = await asyncio.to_thread(check_allowance, bid, row.get("subscription_plan"), now=now)
+        plan = church_plan_of(row)
+        if not plan:
+            continue
+        level = await asyncio.to_thread(check_allowance, bid, plan, now=now)
         if level:
             out["notices"] += 1
     return out

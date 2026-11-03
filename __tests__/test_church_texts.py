@@ -24,12 +24,60 @@ import sb_clients
 NOV = datetime(2026, 11, 3, 9, 15, tzinfo=timezone.utc)
 
 
+@pytest.fixture(autouse=True)
+def _church_prices(monkeypatch):
+    """businesses.subscription_plan holds the Stripe PRICE id (the webhook
+    writes the price), so the tests use price ids the way production does."""
+    for key in ("SMALL", "GROWING", "ESTABLISHED", "LARGE"):
+        monkeypatch.setenv(f"STRIPE_PRICE_ID_CHURCH_{key}", f"price_{key.lower()}")
+        monkeypatch.setenv(f"STRIPE_PRICE_ID_CHURCH_{key}_ANNUAL", f"price_{key.lower()}_yr")
+    monkeypatch.setenv("STRIPE_PRICE_ID_PROFESSIONAL", "price_pro")
+
+
 def _row(**kw):
     row = {"id": "biz-1", "name": "Grace Church", "settings": {"theme": "dark"},
-           "subscription_plan": "church_growing", "subscription_status": "active",
+           "comp_tier": None, "subscription_plan": "price_growing", "subscription_status": "active",
            "stripe_customer_id": "cus_1", "stripe_subscription_id": "sub_1"}
     row.update(kw)
     return row
+
+
+# ─── Which plan: the stored value is a price id ──────────────────────
+
+@pytest.mark.parametrize("stored,plan", [("price_small", "church_small"), ("price_growing", "church_growing"),
+                                         ("price_large_yr", "church_large"), ("price_pro", None),
+                                         ("price_unknown", None), (None, None)])
+def test_the_plan_comes_from_the_price(stored, plan):
+    assert ct.church_plan_of({"subscription_plan": stored}) == plan
+
+
+def test_a_plan_key_in_the_price_column_is_not_trusted():
+    # The webhook only ever writes a price there; a bare key is not a church.
+    assert ct.church_plan_of({"subscription_plan": "church_growing"}) is None
+
+
+def test_a_comp_wins_and_is_never_billed():
+    row = _row(comp_tier="church_established", subscription_plan="price_small")
+    assert ct.church_plan_of(row) == "church_established"
+    assert ct.paid_church_plan_of(row) is None
+    assert ct.paid_church_plan_of(_row()) == "church_growing"
+
+
+def test_the_tick_finds_churches_by_their_prices_and_comps():
+    path = ct._church_rows_path()
+    assert path.startswith("/businesses?or=(subscription_plan.in.(")
+    for pid in ("price_small", "price_growing_yr", "price_established", "price_large"):
+        assert pid in path
+    assert "price_pro" not in path
+    assert "comp_tier.in.(church_small,church_growing,church_established,church_large)" in path
+    assert "comp_tier" in path.split("select=")[1]
+
+
+def test_with_no_church_prices_set_the_tick_still_finds_comps(monkeypatch):
+    for key in ("SMALL", "GROWING", "ESTABLISHED", "LARGE"):
+        monkeypatch.delenv(f"STRIPE_PRICE_ID_CHURCH_{key}", raising=False)
+        monkeypatch.delenv(f"STRIPE_PRICE_ID_CHURCH_{key}_ANNUAL", raising=False)
+    assert ct._church_rows_path().startswith("/businesses?or=(comp_tier.in.(")
 
 
 # ─── The plan's texts and the price ──────────────────────────────────
@@ -107,7 +155,7 @@ def test_heads_up_levels(used, level):
 class _Sb:
     """Stand-ins for the service reads and writes, recording each."""
 
-    def __init__(self, count=1200, sent=(), plan="church_growing", fail_sent=False):
+    def __init__(self, count=1200, sent=(), plan="price_growing", fail_sent=False):
         self.count, self.sent, self.plan, self.fail_sent = count, list(sent), plan, fail_sent
         self.posts = []
 
@@ -173,7 +221,7 @@ def test_no_heads_up_from_an_unread_count(monkeypatch):
 
 
 def test_no_heads_up_off_a_church_plan(monkeypatch):
-    sb = _Sb(count=99999, plan="professional").install(monkeypatch)
+    sb = _Sb(count=99999, plan="price_pro").install(monkeypatch)
     assert ct.check_allowance("biz-1", now=NOV) is None
     assert sb.posts == []
 
@@ -361,7 +409,10 @@ def test_a_crashed_run_with_no_item_makes_it(monkeypatch):
 
 
 @pytest.mark.parametrize("kw,why", [
-    ({"subscription_plan": "professional"}, "not_church_plan"),
+    ({"subscription_plan": "price_pro"}, "not_church_plan"),
+    ({"subscription_plan": "church_growing"}, "not_church_plan"),
+    ({"comp_tier": "church_growing"}, "comped"),
+    ({"comp_tier": "professional"}, "comped"),
     ({"subscription_status": "trialing"}, "not_active"),
     ({"subscription_status": "canceled"}, "not_active"),
     ({"stripe_subscription_id": None}, "no_subscription"),
@@ -462,5 +513,29 @@ def test_the_tick_is_scheduled_on_the_leader():
 
 
 def test_billing_usage_and_the_composer_show_the_texts():
-    assert 's["texts"] = await asyncio.to_thread(church_texts.summary' in _src("stripe_billing.py")
+    assert "church_texts.church_plan_of(biz_row)" in _src("stripe_billing.py")
+    assert "church_texts.church_plan_of(plan_rows[0])" in _src("sms_routing.py")
     assert '"texts": texts' in _src("sms_routing.py")
+
+
+def test_the_tick_hands_the_heads_up_the_plan_not_the_price(monkeypatch):
+    monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test_x")
+    seen = []
+    monkeypatch.setattr(ct, "_church_rows", lambda: [
+        _row(id="paid"), _row(id="comped", comp_tier="church_small", stripe_subscription_id=None),
+        _row(id="other", subscription_plan="price_pro")])
+
+    async def fake_bill(row, now=None):
+        return {"state": "skipped"}
+
+    monkeypatch.setattr(ct, "bill_month", fake_bill)
+    monkeypatch.setattr(ct, "check_allowance", lambda bid, plan=None, now=None: seen.append((bid, plan)) or None)
+    _run(ct.bill_tick(now=NOV))
+    assert seen == [("paid", "church_growing"), ("comped", "church_small")]
+
+
+def test_a_church_paying_by_price_is_billed(monkeypatch):
+    # The regression: the stored value is "price_growing", and it must bill.
+    w = _Bill(monkeypatch, count=1600)
+    out = _run(ct.bill_month(_row(subscription_plan="price_growing_yr"), now=NOV))
+    assert out["state"] == "billed" and out["included"] == 1500
