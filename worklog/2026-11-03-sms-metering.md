@@ -4,7 +4,7 @@ date: 2026-11-03
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-11-03: "make the fixes" (texts cost money at Twilio and none of it was recorded; church plans will carry a monthly text allowance of 500 / 1,500 / 3,000 / 8,000)'
 status: in review
-prs: ["kmj-intake-server (this PR)"]
+prs: [kmj-intake-server#1705]
 migrations: []
 left_undone:
   - "Frontend: the Costs panel (CostsPanel.tsx) shows only the totals, which now include texts; /platform/costs/summary also returns sms_30d {texts, segments, cost_cents} and ai_cost_cents for a line of its own"
