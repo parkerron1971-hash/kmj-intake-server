@@ -286,6 +286,7 @@ Every department names an overseer, and an overseer changes who hears about a la
 - **A pick** (`PUT /church/areas/place`) writes `by='church'` once the columns are there, so a pick over a stored guess is a pick. "Back to Chief's guess" deletes only a pick. The next read stores a guess afresh from the current name.
 - **Closed** is today's `_places`, which reads every row. If `CHURCH_MAP` is turned back off, an opened church's stored guesses read as its picks: the same areas, but labeled "Your church placed it here". `church_serving._kids_teams` still reads `_places` and the words for Sunday teams, which are groups the places don't key; it waits for PR 9.
 - **`guess_job`:** `prophet|apostle|overseer` is the last word line, so any title an earlier line matched keeps its job ("Youth Overseer" stays ministry). Only the old "care" fallback changes, to None.
+- **A fix to PR 5's settings check (#1717 notes).** Whenever a level changes, `save_settings` compares the two as they take effect, reading an unset level as the platform's. So a pastor's level above $2,500 with the board's unset is refused with the same 400.
 
 Unchanged; these become the map's sources: group leaders (group_lead.py:36-39), serve teams (sunday_leading.py:25-38), church_board_members, space_leaders and worship_ministries. `member_portal._leads` (:1172-1194) needs no change either: department people must hold an active role, which already opens the Lead tab.
 

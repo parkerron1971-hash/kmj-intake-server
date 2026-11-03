@@ -245,6 +245,22 @@ def test_only_the_owner_changes_money_and_a_change_is_stamped_and_logged(lc, cap
         "pastor_yes_roles"] == [pick], "an admin picks the roles"
 
 
+def test_a_level_left_unset_is_the_platforms_when_the_two_are_compared(lc):
+    """#1717's note: a pastor's level above the platform's $2,500, with the
+    board's unset, would ask for a board member's yes before the pastor's."""
+    biz, owner = church(lc, LC), _owner(lc, LC)
+    st = next(s for s in lc.t["church_role_settings"] if s["business_id"] == LC)
+    for body in ({"pastor_from_cents": 300_000}, {"board_over_cents": 40_000},
+                 {"pastor_from_cents": 300_000, "board_over_cents": None}):
+        assert "at or above the pastor’s" in _refused(cm.save_settings, biz, body, owner, "owner"), body
+    assert (st.get("pastor_from_cents"), st.get("board_over_cents")) == (None, None), "nothing saved"
+    assert cm.save_settings(biz, {"pastor_from_cents": 250_000}, owner, "owner")["changed"], "equal is fine"
+    assert cm.save_settings(biz, {"pastor_from_cents": 300_000, "board_over_cents": 300_000}, owner, "owner")["changed"]
+    assert "at or above" in _refused(cm.save_settings, biz, {"board_over_cents": None}, owner, "owner"), \
+        "unset, the board's would be $2,500, under the pastor's $3,000"
+    assert cm.save_settings(biz, {"pastor_yes_roles": []}, "u-admin", "admin")["changed"], "a role pick isn't a level"
+
+
 # ─── The map read back, and its gaps ──────────────────────────────────
 
 def test_the_map_reads_back_by_name_and_each_gap_shows(lc):

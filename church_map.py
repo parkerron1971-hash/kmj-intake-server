@@ -801,9 +801,14 @@ def save_settings(biz: Any, body: Dict[str, Any], by: Any, role: str) -> Dict[st
                 out[k] = v
     if any(k in out for k in LEVELS) and role != "owner":
         raise HTTPException(403, "Only the owner changes the church’s money levels.")
-    pastor, board = (out.get(k, cur.get(k)) for k in LEVELS)
-    if pastor is not None and board is not None and board < pastor:
-        _bad("The board’s level starts at or above the pastor’s")
+    if any(k in out for k in LEVELS):
+        # A level left unset is the platform's (church_money_levels), so a
+        # pastor's above $2,500 with the board's unset would ask for a board
+        # member's yes before the pastor's (#1717 notes).
+        import church_money_levels as cml
+        pastor, board = (out.get(k, cur.get(k)) for k in LEVELS)
+        if (cml.BOARD_OVER_CENTS if board is None else board) < (cml.PASTOR_FROM_CENTS if pastor is None else pastor):
+            _bad("The board’s level starts at or above the pastor’s")
     active = {rid for rid, r in m.roles.items() if r.get("status") == "active"}
     for k in PICKS:
         if k in body:
