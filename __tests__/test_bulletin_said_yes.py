@@ -210,4 +210,6 @@ def test_the_reach_counts_numbers_not_rows(monkeypatch):
     monkeypatch.setattr(sms_routing, "_sb_get", sb_get)
     monkeypatch.setattr(sms_alerts, "said_yes_to_texts", said_yes)
     out = asyncio.run(sms_routing.broadcast_reach("biz-1", user=SimpleNamespace(id="u1")))
-    assert out == {"with_phone": 2, "said_yes": 1}
+    # "texts" is the church plan's count this month (church_texts.py): None
+    # here, where the business row read carries no church plan.
+    assert out == {"with_phone": 2, "said_yes": 1, "texts": None}
