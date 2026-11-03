@@ -278,16 +278,19 @@ def stream_for(kind: str, answers: List[Dict[str, str]]) -> Tuple[str, str]:
 def _effective_defs(all_defs: Optional[List[Dict[str, Any]]], roles: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """The church's roles, plus the first version's four for any key its
     holders carry that its library doesn't have yet (a church whose page
-    was never opened still routes as it did)."""
+    was never opened still routes as it did), each with its catalog row's
+    switches, which church_map reads where the map is open."""
     import church_roles as cr
     out = list(all_defs or [])
     have = {d["key"] for d in out}
     for k in sorted({str(r.get("role") or "") for r in roles}):
         if k and k not in have and k in cr.LEGACY:
             leg = cr.LEGACY[k]
+            handles = cr.clean_handles(leg["job"], leg["handles"])
             out.append({"id": f"legacy:{k}", "key": k, "title": leg["title"], "job": leg["job"],
                         "covers": leg["covers"], "reports_to": None, "oversees_teams": [],
-                        "handles": cr.clean_handles(leg["job"], leg["handles"]), "sees": [], "status": "active"})
+                        "handles": handles, "sees": [], "status": "active",
+                        **{s: leg[s] for s in cr.SWITCHES}, "made_for": [s for s in handles if s in leg["made_for"]]})
     return out
 
 
@@ -305,7 +308,7 @@ _STREAM_WORDS = {"baptism": "Baptism cards", "visit": "Plan your visit cards", "
 
 def choose(kind: str, answers: List[Dict[str, str]], roles: List[Dict[str, Any]],
            load: Optional[Dict[str, int]] = None, all_defs: Optional[List[Dict[str, Any]]] = None,
-           *, what: str = "") -> Dict[str, Any]:
+           *, what: str = "", m: Any = None) -> Dict[str, Any]:
     """{leader: holder row or None, role: its key, reason}. The church's own
     roles decide: the ones whose job takes what the card asks for (its
     stream), the holder with the fewest open follow-ups first. A team's
@@ -313,7 +316,8 @@ def choose(kind: str, answers: List[Dict[str, str]], roles: List[Dict[str, Any]]
     up the chain. Nobody for it: the senior role, else the office. The
     reason is said to the leader and shown to the office, so it names what
     decided it. `what` names the cards in that reason when they aren't the
-    stream's own ("First check-ins go to …" rides the connect stream)."""
+    stream's own ("First check-ins go to …" rides the connect stream). `m`
+    is the church's map where it is open (church_map.opened)."""
     import church_roles as cr
     load = load or {}
     defs = _effective_defs(all_defs, roles)
@@ -382,10 +386,19 @@ def choose(kind: str, answers: List[Dict[str, str]], roles: List[Dict[str, Any]]
     if found:
         # The role made for this (handling the fewest streams) before a
         # broader one: a Baptism minister before Ministers who also take
-        # pastor requests, a Welcome Team lead before a pastor.
+        # pastor requests, a Welcome Team lead before a pastor. Where the
+        # church's map is open, the role's made_for says which (§0 rule a);
+        # else the stream's word in its key and title (until PR 9).
         word = stream.split("_")[0][:6]
-        found.sort(key=lambda t: (t[0]["job"] == "senior", len(t[0].get("handles") or []),
-                                  word not in (t[0]["key"] + " " + t[0]["title"].casefold())))
+        if m:
+            import church_map
+
+            def unmade(d: Dict[str, Any]) -> bool:
+                return stream not in church_map.made_for(m, d)
+        else:
+            def unmade(d: Dict[str, Any]) -> bool:
+                return word not in (d["key"] + " " + d["title"].casefold())
+        found.sort(key=lambda t: (t[0]["job"] == "senior", len(t[0].get("handles") or []), unmade(t[0])))
         d, rows = found[0]
         if stream == "pastor_ask":
             return to(rows, why)
@@ -511,13 +524,14 @@ def start(business_id: str, contact_id: str, *, card_key: str, card_name: str, k
         # The church's roles as they stand. A card never fills the library
         # (the office's first visit to Leaders & roles does); before then
         # the first version's roles its holders carry decide, as they did.
+        import church_map
         import church_roles as cr
-        all_roles, load, all_defs = roles(biz), _load(biz), cr.defs(biz)
-        if all_roles is None or load is None or all_defs is None:
+        all_roles, load, all_defs, mp = roles(biz), _load(biz), cr.defs(biz), church_map.opened(biz)
+        if all_roles is None or load is None or all_defs is None or mp is None:
             logger.warning("church follow-up skipped: roles could not be read (business %s)", biz[:8])
             return None
         pick = choose(kind, answers if route_answers is None else route_answers, all_roles, load, all_defs,
-                      what=what)
+                      what=what, m=mp)
         steps = PATHS.get(kind) or PATHS["general"]
         now = _now()
         leader = pick["leader"]

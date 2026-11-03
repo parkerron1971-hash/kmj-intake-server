@@ -27,6 +27,7 @@ for p in (os.path.dirname(HERE), HERE):
 import church_areas as ca  # noqa: E402
 import church_duties as cd  # noqa: E402
 import church_follow_up as cfu  # noqa: E402
+import church_map as cm  # noqa: E402
 import church_office_tasks as cot  # noqa: E402
 import church_roles as cr  # noqa: E402
 import church_shepherding as shep  # noqa: E402
@@ -58,7 +59,8 @@ SHEPHERDING = {
     LC: ({"pastor": (True, None), "executive_pastor": (True, None), "associate_pastor": (True, None),
           "elders": (True, None), "ministers": (False, "ministers"), "prophets": (False, None)},
          ["Andre", "Jessica", "Kevin", "Marcus", "Tanya"]),
-    # WRONG for Grace (PR 4): the Deacon Board shepherds there, but a care job never does today.
+    # Grace's Deacon Board shepherds once its map flips can_shepherd (PR 4, test_church_map_switches);
+    # on an empty map a care job's switch is off, as today.
     GR: ({"pastor": (True, None), "associate_ministers": (False, "ministers")}, ["Samuel"]),
     NH: ({"pastor": (True, None), "executive_pastor": (True, None), "associate_pastor": (True, None),
           "elders": (True, None), "ministers": (False, "ministers")},
@@ -68,11 +70,12 @@ SHEPHERDING = {
 
 @ALL
 def test_who_shepherds_today(db, biz):
-    defs, st = cr.defs(biz), shep.settings(biz)
-    rows = shep.role_rows(defs, st)
-    holders = cr.active_holders(cfu.roles(biz))
-    assert ({r["def"]["key"]: (r["shepherds"], r["switch"]) for r in rows},
-            _names(db, shep.shepherds_from(rows, holders, st))) == SHEPHERDING[biz]
+    """Through the office's read and the shepherd's own (PR 4: where the map
+    is open, the roles' switches decide; empty, they are today's rule)."""
+    ctx = shep.load(biz)
+    assert ({r["def"]["key"]: (r["shepherds"], r["switch"]) for r in ctx["roles"]},
+            _names(db, ctx["shepherds"])) == SHEPHERDING[biz]
+    assert _names(db, shep._member_ctx(biz)["shepherds"]) == SHEPHERDING[biz][1]
 
 
 # ─── The leaders room ─────────────────────────────────────────────────
@@ -80,7 +83,8 @@ def test_who_shepherds_today(db, biz):
 ROOM = {
     LC: ["Andre", "Angela", "Cora", "Eve", "Gloria", "Jessica", "Kevin", "Laquesha", "Marcus", "Minnie", "Naiya",
          "Paul", "Ruth", "Shapretta", "Tanya", "Tasha", "Tiara", "Tyrone", "Yolanda"],
-    # WRONG for Grace (PR 4): the Deacon Board leads, but nothing answers to it, so it isn't in.
+    # Grace on a filled map (PR 4): Youth's overseer D1 (Daniel) is in; the Deacon Board leads only if
+    # its can_lead is flipped, since nothing answers to it.
     GR: ["Samuel", "Sharon", "Thelma", "Yvette"],
     NH: ["Abel", "Amara", "Asher", "Celia", "Eden", "Elena", "Elliot", "Esther", "Ezra", "Kara", "Kira", "Mila",
          "Nathan", "Olive", "Owen", "Paige", "Sunny", "Tessa", "Wren", "Yusuf"],
@@ -133,11 +137,13 @@ CHOOSE = {
 
 @ALL
 def test_where_each_card_goes_today(db, biz):
-    holders, defs = cfu.roles(biz), cr.defs(biz)
+    """choose is handed the map as start() hands it (PR 4: made_for breaks
+    the tie where it's open; empty, it is today's word)."""
+    holders, defs, m = cfu.roles(biz), cr.defs(biz), cm.opened(biz)
     asks = dict(ASK, **{t: ("serve", [{"q": "Where would you like to serve?", "a": t}]) for t in cfu.teams(biz)})
     got = {}
     for label, (kind, answers) in asks.items():
-        pick = cfu.choose(kind, answers, holders, {}, defs)
+        pick = cfu.choose(kind, answers, holders, {}, defs, m=m)
         got[label] = (db.label.get((pick["leader"] or {}).get("contact_id")), pick["role"], pick["reason"])
     assert got == CHOOSE[biz]
 
@@ -168,7 +174,7 @@ def test_late_work_climbs_the_chain_today(db, biz, monkeypatch):
 
 DRIFT = {
     LC: [["Marcus"], ["Kevin"], []],      # Marcus answers to Jessica on the map (PR 6)
-    GR: [[], [], []],                     # WRONG (PR 4, 6): D2 (Doris) shepherds them, but a deacon can't today
+    GR: [[], [], []],                     # D2 (Doris) shepherds them once the map flips it (PR 4; need 2)
     NH: [["Elena"], ["Nathan"], []],      # WRONG (PR 6): Elena answers to A2 (Amara)
 }
 

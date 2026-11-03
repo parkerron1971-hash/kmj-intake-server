@@ -869,6 +869,10 @@ def create_role(business: Dict[str, Any], body: Dict[str, Any], *, by_user: str 
         raise HTTPException(503, "Your roles couldn’t be checked. Try again in a moment.")
     import church_follow_up as cfu
     live = _live()
+    if not live and any(k in body for k in (*SWITCHES, "made_for")):
+        # As update_role: a switch it can't write is never dropped and the
+        # role answered as saved without it.
+        raise HTTPException(503, "Couldn’t save that just now; try again.")
     patch = _clean(biz, body, None, all_defs, cfu.teams(biz) or [], live=live)
     if not patch.get("definition"):
         patch["definition"] = definition_for(patch["job"], patch["title"], _plain(business.get("name")))
@@ -910,7 +914,11 @@ def update_role(business_id: str, role_id: str, body: Dict[str, Any]) -> Dict[st
         raise HTTPException(404, "That role isn’t here")
     import church_follow_up as cfu
     live = _live()
-    want = {k: v for k, v in body.items() if k in _FIELDS and (live or k not in (*SWITCHES, "made_for"))}
+    if not live and any(k in body for k in (*SWITCHES, "made_for")):
+        # A switch it can't write (before the migration, or a failed probe)
+        # is never dropped and answered as saved.
+        raise HTTPException(503, "Couldn’t save that just now; try again.")
+    want = {k: v for k, v in body.items() if k in _FIELDS}
     made_for_now = None
     if live and "made_for" not in want and ("handles" in want or "job" in want):
         got = _rows(f"/church_role_defs?id=eq.{_q(rid)}&business_id=eq.{_q(biz)}&select=made_for&limit=1")

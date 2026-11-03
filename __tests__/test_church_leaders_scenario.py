@@ -57,8 +57,10 @@ DRIFT = {LC: [["Marcus"], ["Jessica"], ["Kevin"]], GR: [["Doris"], ["Samuel"], [
          NH: [["Elena"], ["Amara"], ["Nathan"]]}
 
 
-@pytest.mark.parametrize("biz", [case(LC, 6, "Marcus answers to Jessica"),
-                                 case(GR, 6, "the Deacon Board shepherds (PR 4), and D2's line is the Pastor"),
+# Grace passes from PR 4: its Deacon Board shepherds once the map says so, and
+# D2 leads no department and answers to no one, so today's chain (the Deacon
+# Board answers to the Pastor) is already the line PR 6's would give.
+@pytest.mark.parametrize("biz", [case(LC, 6, "Marcus answers to Jessica"), case(GR),
                                  case(NH, 6, "each elder answers to one associate pastor")])
 def test_2_a_drifting_youth_family_climbs_the_shepherds_own_line(db, monkeypatch, biz):
     assert drift_told(monkeypatch, db, biz) == DRIFT[biz]
