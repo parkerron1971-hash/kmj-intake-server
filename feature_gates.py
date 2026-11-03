@@ -27,7 +27,12 @@ PLANS = ("starter", "professional", "practice")   # the public ladder
 # Professional's AI surfaces, which a single minimum-tier rank can't say.
 # PLANS stays the public ladder, so the site and the compare table are
 # untouched; ALL_PLANS is every key a subscription or comp can resolve to.
-AUDIENCE_PLANS = ("solo", "booked", "boss")
+# Churches by size (Kevin, 2026-11-03): Small $79 / Growing $149 /
+# Established $299 / Large $599, sold only to churches and ministries. Same
+# machinery as the barber plans: their own features (every church feature on
+# all four), limits and checkout rule. pricing_config holds the numbers.
+CHURCH_PLANS = pricing_config.CHURCH_PLAN_KEYS
+AUDIENCE_PLANS = ("solo", "booked", "boss") + CHURCH_PLANS
 # ChurchSavvy on its own (2026-10-24, Kevin: "the pricing is good"): a
 # church that uses ChurchSavvy without Solutionist buys the screens ($20),
 # Planning ($15) or both ($29). They carry ChurchSavvy's parts and nothing
@@ -39,6 +44,7 @@ ALL_PLANS = PLANS + AUDIENCE_PLANS + CHURCHSAVVY_PLANS
 # rehearsal). Access comes from plan_features(), never from this number.
 _PLAN_RANK = {"starter": 1, "professional": 2, "practice": 3,
               "solo": 1, "booked": 1, "boss": 2,
+              "church_small": 1, "church_growing": 2, "church_established": 3, "church_large": 3,
               "cs_screens": 1, "cs_planning": 1, "cs_both": 1}
 
 # Gate-ready map: feature → minimum tier. Working pricing hypothesis
@@ -151,6 +157,10 @@ MARKETING_LADDER: Dict[str, str] = {
     "professional": MARKETING_WEEK_WORDS,
     "boss": MARKETING_OPENINGS_WORDS,
     "practice": MARKETING_AUTOPILOT_WORDS,
+    "church_small": MARKETING_WEEK_WORDS,
+    "church_growing": MARKETING_WEEK_WORDS,
+    "church_established": MARKETING_AUTOPILOT_WORDS,
+    "church_large": MARKETING_AUTOPILOT_WORDS,
 }
 
 # ─── Plans for one kind of business ──────────────────────────────────
@@ -171,6 +181,19 @@ AUDIENCE_PLAN_FEATURES: Dict[str, frozenset] = {
                                    # (open chairs, work photos, three posts).
                                    "marketing_week"},
 }
+# Churches: every church feature on every plan. Small and Growing carry all
+# of Professional plus what a church needs at any size that sat higher: the
+# donors report (vertical_reports) and sermon clips, in fewer hours.
+# Established and Large carry everything, which adds the audit trail, the
+# outside accountant and marketing autopilot.
+_UP_TO_PROFESSIONAL = frozenset(f for f, mp in FEATURE_MIN_PLAN.items() if _PLAN_RANK[mp] <= 2)
+_EVERYTHING = frozenset(FEATURE_MIN_PLAN)
+AUDIENCE_PLAN_FEATURES.update({
+    "church_small":       _UP_TO_PROFESSIONAL | {"vertical_reports", "ai_clips"},
+    "church_growing":     _UP_TO_PROFESSIONAL | {"vertical_reports", "ai_clips"},
+    "church_established": _EVERYTHING,
+    "church_large":       _EVERYTHING,
+})
 
 # Who may buy each audience plan: canonical vertical keys
 # (vertical_registry.resolve — barber, salon, spa all land on
@@ -180,6 +203,9 @@ PLAN_AUDIENCE: Dict[str, frozenset] = {
     "solo": frozenset({"personal_services"}),
     "booked": frozenset({"personal_services"}),
     "boss": frozenset({"personal_services"}),
+    # church, faith, religious and ministry all resolve to ministry. Not
+    # nonprofits: the plans are sized by people on a Sunday.
+    **{p: frozenset({"ministry"}) for p in CHURCH_PLANS},
 }
 
 
@@ -211,7 +237,10 @@ def upgrade_plan_for(feature: str, current_plan: Optional[str]) -> Optional[str]
     Boss, not at Professional."""
     p = (current_plan or "").strip().lower()
     if p in AUDIENCE_PLANS:
-        for cand in AUDIENCE_PLANS[AUDIENCE_PLANS.index(p):]:
+        # Only up THIS plan's own ladder: a Boss barber is never pointed
+        # at a church plan that happens to come next in AUDIENCE_PLANS.
+        ladder = [c for c in AUDIENCE_PLANS if PLAN_AUDIENCE[c] == PLAN_AUDIENCE[p]]
+        for cand in ladder[ladder.index(p):]:
             if feature in AUDIENCE_PLAN_FEATURES[cand]:
                 return cand
     return FEATURE_MIN_PLAN.get(feature)
@@ -253,8 +282,27 @@ def plan_limits() -> Dict[str, Dict[str, Optional[int]]]:
                          "max_seats": 7, "plaid_connections": None,
                          "open_assignments": 10},
         **_audience_limits(),
+        **_church_limits(),
         **_churchsavvy_limits(),
     }
+
+
+def _church_limits() -> Dict[str, Dict[str, Optional[int]]]:
+    """Small / Growing / Established / Large. Office logins and texts are
+    the size; leaders, volunteers and members use the member app and never
+    count. A plan with no texts_monthly (every other plan) isn't held to a
+    text count. clip_hours_monthly is read by clip_finder (10 elsewhere)."""
+    credits = pricing_config.church_credits()
+    seats = pricing_config.church_seats()
+    texts = pricing_config.church_texts_monthly()
+    clips = pricing_config.church_clip_hours()
+    shape = {"church_small":       {"max_businesses": 1, "plaid_connections": 2, "open_assignments": 1},
+             "church_growing":     {"max_businesses": 1, "plaid_connections": 5, "open_assignments": 3},
+             "church_established": {"max_businesses": 1, "plaid_connections": None, "open_assignments": 10},
+             "church_large":       {"max_businesses": 3, "plaid_connections": None, "open_assignments": 15}}
+    return {p: {**shape[p], "chief_messages_monthly": credits[p], "max_seats": seats[p],
+                "texts_monthly": texts[p], "clip_hours_monthly": clips[p]}
+            for p in CHURCH_PLANS}
 
 
 def _churchsavvy_limits() -> Dict[str, Dict[str, Optional[int]]]:
@@ -352,6 +400,15 @@ PRICE_ENV_TO_PLAN: Dict[str, str] = {
     "BOOKED_ANNUAL":       "booked",
     "BOSS":                "boss",
     "BOSS_ANNUAL":         "boss",
+    # Churches by size. Checkout holds them to churches and ministries.
+    "CHURCH_SMALL":              "church_small",
+    "CHURCH_SMALL_ANNUAL":       "church_small",
+    "CHURCH_GROWING":            "church_growing",
+    "CHURCH_GROWING_ANNUAL":     "church_growing",
+    "CHURCH_ESTABLISHED":        "church_established",
+    "CHURCH_ESTABLISHED_ANNUAL": "church_established",
+    "CHURCH_LARGE":              "church_large",
+    "CHURCH_LARGE_ANNUAL":       "church_large",
     # ChurchSavvy on its own. Checkout (churchsavvy_billing) enforces churches only.
     "CS_SCREENS":          "cs_screens",
     "CS_PLANNING":         "cs_planning",

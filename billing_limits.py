@@ -31,7 +31,9 @@ logger = logging.getLogger("billing_limits")
 # message still saying "Practice-plan feature".
 PLAN_DISPLAY = {"starter": "Starter", "professional": "Professional",
                 "practice": "Solutionist",
-                "solo": "Solo", "booked": "Booked", "boss": "Boss"}
+                "solo": "Solo", "booked": "Booked", "boss": "Boss",
+                "church_small": "Small Church", "church_growing": "Growing Church",
+                "church_established": "Established Church", "church_large": "Large Church"}
 
 
 def require_feature(business_id: str, feature: str) -> None:

@@ -68,7 +68,9 @@ OVERAGE_CENTS = {"starter": 40, "professional": 30, "practice": 25}
 TIER_PRICE_CENTS = {**{k: v for k, v in pricing_config.tier_price_cents().items()
                        if k in ("starter", "professional", "practice")},
                     # Solo / Booked / Boss count toward MRR at their own price.
-                    **pricing_config.audience_price_cents()}
+                    **pricing_config.audience_price_cents(),
+                    # Churches by size, the same way.
+                    **pricing_config.church_price_cents()}
 
 # % of allotment that notifies, once each per month; 200 ≈ the cap
 # milestone. Read at import — Railway env is fixed for a process life.
