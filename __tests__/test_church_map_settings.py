@@ -197,6 +197,26 @@ def test_a_room_request_phones_only_the_rooms_dutys_holders(monkeypatch, biz):
     assert not {"Tiara", "Paige", "Naiya", "Olive", "Jessica", "Owen"} & set(got)
 
 
+def test_who_holds_a_duty_reads_the_map_once_for_every_manager(monkeypatch):
+    """#1717 review: each Manager's standing reads overseer_keys (and, with
+    no lane, its areas), which load the map; one holders_of call, a room
+    request and the duties page each load it once."""
+    import church_areas as ca
+    import member_asks
+    db = build(monkeypatch)
+    loads, real = [], cm.load
+    monkeypatch.setattr(cm, "load", lambda biz: loads.append(str(biz)) or real(biz))
+    for biz, ask in ((LC, lambda: cd.holders_of(LC, "rooms")), (NH, lambda: cd.holders_of(NH, "rooms")),
+                     (LC, lambda: member_asks.room_phones(LC)), (LC, lambda: cd.build(church(db, LC)))):
+        cd._CACHE.clear()
+        ca._MY_CACHE.clear()
+        loads.clear()
+        ask()
+        assert loads == [biz], (NAMES[biz], len(loads))
+    assert len([s for s in db.t["business_users"] if s["business_id"] == NH and s["role"] == "manager"]) == 6
+    assert _names(db, member_asks.room_phones(LC)) == ROOMS_OPEN[LC]
+
+
 # ─── The switch, a failed read ────────────────────────────────────────
 
 @pytest.mark.parametrize("mode", ["off", "owner"])

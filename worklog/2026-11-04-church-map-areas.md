@@ -17,6 +17,7 @@ decisions:
   - "PUT /church/areas/place writes by='church' once migrated; putting back deletes only a pick"
   - "guess_job adds prophet|apostle|overseer -> pastoral as the last line; no match is None; job_for_title returns '' and chief_draft asks the owner to pick a job (400 -> Chief's _fail)"
   - "Separate commit: save_settings compares the effective money levels (null is the platform's) when a level changes"
+  - "Separate commit, #1717 review: church_map.once() reads each church's map once per holders_of / manager_holders / duties page / room request (was once per Manager seat); a failed draft mark is logged and its 503 says to archive the empty department; a retry stays a draft until its units save"
 related: [2026-11-04-church-map-fixture.md, 2026-11-04-church-map-core.md, 2026-11-04-church-map-switches.md, 2026-11-04-church-map-writes.md, 2026-11-04-church-map-chain.md, 2026-11-04-church-map-settings.md]
 ---
 Where `church_map.opened(biz)` is a Map, words no longer place a role or a Serve team at read time.

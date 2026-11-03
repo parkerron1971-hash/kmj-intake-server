@@ -684,12 +684,14 @@ def holders_of(business_id: str, duty: str) -> List[str]:
         return []
     owner = str(b.get("owner_id") or "")
     out = [owner] if owner else []
-    for s in _seats(biz):
-        uid = str(s["user_id"])
-        if uid in out or s.get("role") not in ("admin", "manager"):
-            continue
-        if s.get("role") == "admin" or duty in standing(biz, uid)["duties"]:
-            out.append(uid)
+    import church_map
+    with church_map.once():         # each Manager's standing reads the map: once for them all
+        for s in _seats(biz):
+            uid = str(s["user_id"])
+            if uid in out or s.get("role") not in ("admin", "manager"):
+                continue
+            if s.get("role") == "admin" or duty in standing(biz, uid)["duties"]:
+                out.append(uid)
     return out
 
 
@@ -702,8 +704,10 @@ def manager_holders(business_id: str, duty: str) -> List[str]:
     biz = str(business_id)
     if not _is_church(_business(biz)):
         return []
-    return [str(s["user_id"]) for s in _seats(biz)
-            if s.get("role") == "manager" and duty in standing(biz, str(s["user_id"]))["duties"]]
+    import church_map
+    with church_map.once():
+        return [str(s["user_id"]) for s in _seats(biz)
+                if s.get("role") == "manager" and duty in standing(biz, str(s["user_id"]))["duties"]]
 
 
 def duties_of(business_id: str, user_id: str, role: Optional[str]) -> Optional[List[str]]:
@@ -769,7 +773,14 @@ def _undoable(changes: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
 
 
 def build(business: Dict[str, Any]) -> Dict[str, Any]:
-    """The catalog for one church, and who does each duty today."""
+    """The catalog for one church, and who does each duty today, with the
+    map read once for all its logins (church_map.once)."""
+    import church_map
+    with church_map.once():
+        return _build(business)
+
+
+def _build(business: Dict[str, Any]) -> Dict[str, Any]:
     biz = str(business["id"])
     seats = _seats(biz)
     moved = _moved(biz)

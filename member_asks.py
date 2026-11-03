@@ -569,17 +569,19 @@ def room_phones(business_id: str) -> Set[str]:
     the logins that do the rooms duty (church_duties.holders_of: the owner,
     the admins, the Managers who hold it; docs/CHURCH_LEADERS_MAP.md §3,
     PR 7); closed, everyone who works the office, as before. A read that
-    fails, the map's too, phones the owner alone, as recipients does."""
+    fails, the map's too, phones the owner alone, as recipients does. The
+    map is read once for every login (church_map.once)."""
     import church_map
-    m = church_map.opened(business_id)
-    if m is False:
-        return recipients(business_id, "office")
-    if m is not None:
-        import church_duties
-        try:
-            return set(church_duties.holders_of(business_id, "rooms"))
-        except HTTPException:
-            pass
+    with church_map.once():
+        m = church_map.opened(business_id)
+        if m is False:
+            return recipients(business_id, "office")
+        if m is not None:
+            import church_duties
+            try:
+                return set(church_duties.holders_of(business_id, "rooms"))
+            except HTTPException:
+                pass
     rows = sb_clients.sb_get_as_service(f"/businesses?id=eq.{_q(business_id)}&select=owner_id&limit=1")
     return {str(rows[0]["owner_id"])} if isinstance(rows, list) and rows and rows[0].get("owner_id") else set()
 

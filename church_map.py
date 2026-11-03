@@ -45,9 +45,11 @@ Server-only tables, read through the service role, always by business_id.
 """
 from __future__ import annotations
 
+import contextvars
 import os
 import re
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional
@@ -239,13 +241,44 @@ def state() -> Optional[bool]:
     return False if isinstance(base, list) else None
 
 
+_ONCE: "contextvars.ContextVar[Optional[Dict[str, Any]]]" = contextvars.ContextVar("church_map_once", default=None)
+
+
+@contextmanager
+def once():
+    """Inside this block opened(biz) reads each church's map once, and every
+    reader gets that answer: a caller that asks about many logins
+    (church_duties.holders_of, whose standing() reads overseer_keys for each
+    Manager seat) loads it once, not once a login (#1717 review). A block
+    inside another shares the outer one."""
+    if _ONCE.get() is not None:
+        yield
+        return
+    token = _ONCE.set({})
+    try:
+        yield
+    finally:
+        _ONCE.reset(token)
+
+
 def opened(biz: Any) -> "Map | None | bool":
     """What a reader takes, in §3's order: False where the map is closed for
     this church or its columns aren't there (today's code runs as it is);
     else load(biz): the Map, or None when a read failed (a failed probe
     included), and the caller then does what it does today on a failed
     read, never today's people. A blip after a restart must not send an
-    open church back to the title rules for a moment (#1714 review)."""
+    open church back to the title rules for a moment (#1714 review). Inside
+    once(), each church's answer is read once."""
+    memo, bid = _ONCE.get(), _bid(biz)
+    if memo is not None and bid in memo:
+        return memo[bid]
+    got = _open(biz)
+    if memo is not None:
+        memo[bid] = got
+    return got
+
+
+def _open(biz: Any) -> "Map | None | bool":
     if not church_open(biz):
         return False
     s = state()
@@ -467,6 +500,8 @@ _WORD = {"group": "group", "role": "role", "board": "board", "worship_ministry":
 UNREAD = "Your leaders map couldn’t be read just now. Try again in a moment."
 UNSAVED = "That didn’t save. Try again."
 UNFINISHED = "That couldn’t finish saving. Try again in a moment."
+LEFT_EMPTY = ("That didn’t finish saving. {name} was made with nothing in it: archive it on your leaders map, then "
+              "try again.")
 
 
 def _plain(v: Any) -> str:
@@ -675,11 +710,11 @@ def save_department(biz: Any, body: Dict[str, Any], by: Any) -> Dict[str, Any]:
         row["name"] = _plain(body.get("name"))
         if not 1 <= len(row["name"]) <= 80:
             _bad("Name the department (up to 80 letters)")
+    finish = None                           # a retry's status, set once its units are in
     if cur is None and isinstance(body.get("units"), list) and body["units"]:
         left = _clash(m, None, row["name"])
         if _left_behind(left, by):          # the retry of a save that couldn't finish
-            did, cur = left["id"], left
-            row["status"] = "active"        # what the first try made it, unless this one says
+            did, cur, finish = left["id"], left, "active"     # what the first try made it, unless this one says
     for k, allowed, say in (("status", STATUSES, "A department is a draft, active or archived"),
                             ("source", SOURCES, "A department comes from the office, Chief or a template"),
                             ("area", (None, *ca.AREA_ORDER), "Pick one of the eight areas"),
@@ -692,6 +727,10 @@ def save_department(biz: Any, body: Dict[str, Any], by: Any) -> Dict[str, Any]:
         if not isinstance(body["sort"], int) or isinstance(body["sort"], bool) or not 0 <= body["sort"] <= 999:
             _bad("The order is a number from 0 to 999")
         row["sort"] = body["sort"]
+    if finish:      # it stays a draft, which routes nothing, until its units are in (#1717 review)
+        finish = row.pop("status", finish)
+        if finish == "archived":
+            row["status"], finish = finish, None
     named = {k: _id(body[k], "person") if body[k] else None
              for k in ("leader_contact_id", "overseer_contact_id") if k in body}
     if any(named.values()):
@@ -742,14 +781,24 @@ def save_department(biz: Any, body: Dict[str, Any], by: Any) -> Dict[str, Any]:
             # of this save finishes it (_left_behind).
             if cur is None and not sb_clients.sb_delete_as_service(
                     f"/church_departments?id=eq.{_q(did)}&business_id=eq.{q}"):
-                sb_clients.sb_patch_as_service(f"/church_departments?id=eq.{_q(did)}&business_id=eq.{q}",
-                                               {"status": "draft", **stamp})
+                marked = sb_clients.sb_patch_as_service(f"/church_departments?id=eq.{_q(did)}&business_id=eq.{q}",
+                                                        {"status": "draft", **stamp})
+                if not isinstance(marked, list) or not marked:     # it is left active, with nothing in it
+                    print(f"[church_map] department {did} at {bid} left active and empty: its units, taking it "
+                          "out and marking it a draft all failed", flush=True)
+                    raise HTTPException(503, LEFT_EMPTY.format(name=after["name"]))
                 raise HTTPException(503, UNFINISHED)
             raise _refused(bid, did, units=new)
     gone = [u["id"] for u in have if _ukey(u) not in keep]
     if gone and not sb_clients.sb_delete_as_service(
             f"/church_department_units?business_id=eq.{q}&department_id=eq.{did}&id=in.({_in(gone)})"):
         raise HTTPException(503, UNSAVED)
+    if finish and finish != "draft":
+        done = sb_clients.sb_patch_as_service(f"/church_departments?id=eq.{_q(did)}&business_id=eq.{q}",
+                                              {"status": finish, **stamp})
+        if not isinstance(done, list) or not done:
+            raise HTTPException(503, UNFINISHED)
+        saved = done
     return _dept(saved[0], [u for u in have if _ukey(u) in keep] + [_unit(u) for u in made])
 
 
@@ -854,7 +903,8 @@ def view(biz: Dict[str, Any]) -> Dict[str, Any]:
                      [x[k] for x in m.links for k in ("contact_id", "answers_to_contact_id")])
     duties = sorted({d["support_duty"] for d in m.departments if d["support_duty"] in cd.CATALOG})
     logins = cd._names(bid, biz, cd._seats(bid)) if duties else {}
-    helpers = {k: [{"user_id": u, "name": logins.get(u, "")} for u in cd.holders_of(bid, k)] for k in duties}
+    with once():
+        helpers = {k: [{"user_id": u, "name": logins.get(u, "")} for u in cd.holders_of(bid, k)] for k in duties}
     gaps: List[Dict[str, Any]] = []
     out = []
     for d in m.departments:
