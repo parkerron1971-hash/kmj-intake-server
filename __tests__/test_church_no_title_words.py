@@ -33,7 +33,9 @@ READERS = [
     # (module, function or "" for the whole module, the read, what decides instead, the PR that deletes it)
     ("church_shepherding", "", r"\b(SHEPHERD|MINISTER)_TITLE\b", "can_shepherd decides", 9),
     ("church_follow_up", "choose", r"""split\("_"\)\[0\]|\["title"\]\.casefold\(\)""", "made_for decides", 9),
-    ("church_duties", "_exec_users", r"\bkey\.eq\.|catalog_key", "office_overseer_roles decides", 9),
+    # PR 7 moved the key query out of _exec_users into overseer_keys, where it is
+    # the closed map's path until PR 9.
+    ("church_duties", "overseer_keys", r"\bkey\.eq\.|catalog_key", "office_overseer_roles decides", 9),
     ("church_office_tasks", "overseers", r"\bOVERSEER_KEYS\b|catalog_key", "office_overseer_roles decides", 9),
     ("church_areas", "place_role", r"\bguess_area\(|_AREA_WORDS", "the department's area, then a stored guess", 9),
     ("church_areas", "place_team", r"\bguess_area\(|_AREA_WORDS", "the department's area, then a stored guess", 9),
