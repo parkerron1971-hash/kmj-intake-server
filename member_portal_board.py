@@ -298,7 +298,8 @@ def render_page(biz: Dict[str, Any], site, request: Request, person: Dict[str, A
     code_id = (q.get("k") or "") if chosen and _ID.match(q.get("k") or "") else ""
     head = ('<header class="ld-head"><div><p class="bd-eb">The board · money going out</p>'
             '<h1 class="ld-hello">Waiting on <em>your yes</em></h1></div></header>'
-            f'<p class="bd-lede">Over {_e(_usd(cml.BOARD_OVER_CENTS))}, or past a ministry’s budget, a check request '
+            f'<p class="bd-lede">Over {_e(_usd(view.get("board_over_cents", cml.BOARD_OVER_CENTS)))}, or past a '
+            'ministry’s budget, a check request '
             'needs a board member’s yes too. Each yes takes a fresh code we email you, for that request alone.</p>')
     if not every:
         body = ('<div class="bd-empty"><b>Nothing is waiting on the board.</b>'
@@ -588,22 +589,23 @@ def _search(q: str = "", board_id: str = "") -> str:
             'placeholder="Search what the board decided"><button type="submit">Search</button></form>')
 
 
-def _money_door(waiting: Optional[int]) -> str:
-    """Into the board's approvals, while check requests show here."""
+def _money_door(waiting: Optional[int], over: int = cml.BOARD_OVER_CENTS) -> str:
+    """Into the board's approvals, while check requests show here: `over`
+    is the church's board level (church_money_levels.levels_of)."""
     if waiting is None:
         return ""
     import member_portal_checks as mpck
     word = (f"{waiting} check request{'s' if waiting != 1 else ''} {'wait' if waiting != 1 else 'waits'} on your yes"
             if waiting else "Board approvals")
     small = ("Each yes takes a fresh code we email you" if waiting else
-             f"Over {_usd(cml.BOARD_OVER_CENTS)}, or past a ministry’s budget, a board member says yes too")
+             f"Over {_usd(over)}, or past a ministry’s budget, a board member says yes too")
     return (f'<style>{mpck.DOOR_CSS}</style><a class="ck-door" href="{PATH}">'
             f'<span class="ck-door-ic" aria-hidden="true">{mpck._ic("check", 20)}</span>'
             f'<span class="t"><b>{_e(word)}</b><small>{_e(small)}</small></span>{mpck._ic("chevron", 18)}</a>')
 
 
 def render_board(biz: Dict[str, Any], site, person: Dict[str, Any], view: Dict[str, Any],
-                 waiting: Optional[int] = None) -> str:
+                 waiting: Optional[int] = None, over: int = cml.BOARD_OVER_CENTS) -> str:
     from member_portal import _shell
     from member_portal_lead import LEAD_CSS
     board, zone = view["board"], view["zone"]
@@ -632,7 +634,7 @@ def render_board(biz: Dict[str, Any], site, person: Dict[str, Any], view: Dict[s
     grid = (f'<div class="ld-grid{" has-sel" if view["asked"] else ""}"><div class="ld-list">{lst}</div>'
             f'<div class="ld-file">{pane}</div></div>')
     return _shell(biz, site, "Board", f'<style>{LEAD_CSS}{BOARD_CSS}</style><div class="ld-wide">'
-                  f'{chips}{head}{_money_door(waiting)}{grid}</div>', tab="board", who=person)
+                  f'{chips}{head}{_money_door(waiting, over)}{grid}</div>', tab="board", who=person)
 
 
 def render_decisions(biz: Dict[str, Any], site, person: Dict[str, Any], view: Dict[str, Any],
@@ -725,13 +727,14 @@ async def _tab(request: Request, biz: Dict[str, Any], site, me: Dict[str, Any], 
         logger.warning("board tab: didn't load (%s, business %s)", e.status_code, str(biz.get("id"))[:8])
         return _page(_shell(biz, site, "Board", '<p class="mp-err" role="alert">The board’s pages couldn’t load '
                             'just now. Please try again in a moment.</p>', tab="board", who=me), 503)
-    waiting = None
+    waiting, over = None, cml.BOARD_OVER_CENTS
     if shown_here(request, biz):
         try:
-            waiting = _waiting_on(await asyncio.to_thread(cml.member_view, biz, me))
+            money = await asyncio.to_thread(cml.member_view, biz, me)
+            waiting, over = _waiting_on(money), money.get("board_over_cents", over)
         except Exception:  # noqa: BLE001 — the board stands without its approvals row
             waiting = None
-    return _page(render_board(biz, site, me, view, waiting))
+    return _page(render_board(biz, site, me, view, waiting, over))
 
 
 # ─── POST ────────────────────────────────────────────────────────────

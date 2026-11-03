@@ -114,8 +114,8 @@ KEEPS_ALL = ("owner", "admin")                          # the limit, the budgets
 MONEY_AREA = "giving_money"
 
 DEFAULT_LIMIT_CENTS = 25000
-LEVELS_ON = ("The money levels say who says yes: the treasurer, the pastor too from $500, and a board member "
-             "too over $2,500. The limit and the Giving keeper don't decide while they're on.")
+LEVELS_ON = ("The money levels say who says yes: the treasurer, the pastor too from {pastor}, and a board member "
+             "too over {board}. The limit and the Giving keeper don't decide while they're on.")
 MONEY_MAX_CENTS = 10_000_000
 NAME_MAX, ABOUT_MAX, PAYEE_MAX, REASON_MAX, LINE_MAX, CHECK_NO_MAX = 120, 200, 120, 300, 60, 20
 LINES_MAX = 40
@@ -329,6 +329,13 @@ def _access(business_id: Any, user: AuthedUser) -> Dict[str, Any]:
         raise HTTPException(403, "Check requests are kept with the treasurer: the owner, admins, the accountant, "
                                  "or a login that works Giving & money.")
     return me
+
+
+def levels_on(me: Dict[str, Any]) -> str:
+    """LEVELS_ON in the church's own levels (church_money_levels.levels_of:
+    where its leaders map is open and sets them; else $500 and $2,500)."""
+    pastor, board = church_money_levels.levels_of(me)
+    return LEVELS_ON.format(pastor=usd(pastor), board=usd(board))
 
 
 def _writer(me: Dict[str, Any]) -> None:
@@ -988,7 +995,7 @@ def put_settings(me: Dict[str, Any], body: Dict[str, Any]) -> Dict[str, Any]:
     if "limit" in body:
         limit = cents(body.get("limit"), "limit", allow_none=False)
         if church_money_levels.on() and limit != have["limit_cents"]:
-            raise HTTPException(400, {"code": "levels_on", "message": LEVELS_ON})
+            raise HTTPException(400, {"code": "levels_on", "message": levels_on(me)})
         if limit > have["limit_cents"]:
             ks = keeper_state(me)
             import church_keys
@@ -1018,7 +1025,7 @@ def ask_keeper(me: Dict[str, Any], rid: str) -> Dict[str, Any]:
     biz = str(me["biz"]["id"])
     row = resolve(me, rid)
     if church_money_levels.on():
-        raise HTTPException(409, {"code": "levels_on", "message": LEVELS_ON})
+        raise HTTPException(409, {"code": "levels_on", "message": levels_on(me)})
     if row["status"] != "new":
         raise HTTPException(409, "Only a request waiting for a yes needs a keeper.")
     s = settings(biz)
@@ -1043,7 +1050,7 @@ def key_code(me: Dict[str, Any], key_id: Any, code: Any) -> Dict[str, Any]:
     """The code a keeper read out, for this login's ask for Giving & money."""
     _writer(me)
     if church_money_levels.on():
-        raise HTTPException(409, {"code": "levels_on", "message": LEVELS_ON})
+        raise HTTPException(409, {"code": "levels_on", "message": levels_on(me)})
     biz = str(me["biz"]["id"])
     kid = _uuid(key_id, "ask")
     rows = _need(f"/church_area_keys?id=eq.{_q(kid)}&business_id=eq.{_q(biz)}&select=area,user_id&limit=1")

@@ -43,6 +43,13 @@ person (contact_id), and the member app's codes in church_check_approval_codes
 APPLY-2026-10-28-church-board-member-yes.sql). Switched by
 CHURCH_MONEY_LEVELS: on (the default, and what any other value reads as) |
 off, which goes back to the one limit and the Giving keeper above it.
+
+Where a church's leaders map is open (church_map.opened; docs/CHURCH_LEADERS_
+MAP.md §3, PR 7) its own settings decide: its two levels (null is the
+platform's), the roles that give the pastor's yes (pastor_yes_roles; null is
+the senior role, and none named is the owner), and every active holder of a
+role whose board-yes switch is on gives a board member's yes, as a board
+member by their person does. Closed, all of it is as above.
 """
 from __future__ import annotations
 
@@ -76,6 +83,7 @@ CODE_MINUTES = 10           # a code from the member app works this long
 CODE_TRIES = 5              # and takes this many wrong tries
 CODES_PER_HOUR = 6          # one person asks for at most this many an hour
 MEMBER_PATH = "/my/board/approvals"
+UNREAD = "Who says yes couldn't be read just now. Try again."
 
 
 def mode() -> str:
@@ -110,7 +118,7 @@ def _need(path: str) -> List[Dict[str, Any]]:
     """A read that must answer: a failed one is a 503, never "nobody"."""
     rows = sb_clients.sb_get_as_service(path)
     if not isinstance(rows, list):
-        raise HTTPException(503, "Who says yes couldn't be read just now. Try again.")
+        raise HTTPException(503, UNREAD)
     return rows
 
 
@@ -129,14 +137,59 @@ def words(steps: Iterable[str]) -> str:
     return " and ".join(said) if len(said) < 3 else f"{', '.join(said[:-1])} and {said[-1]}"
 
 
-def required(counted_cents: int, *, over_budget: bool = False) -> List[str]:
-    """The steps a request needs, by what it counts as."""
+def required(counted_cents: int, *, over_budget: bool = False,
+             levels: Optional[Tuple[int, int]] = None) -> List[str]:
+    """The steps a request needs, by what it counts as: `levels` is the
+    church's (levels_of), else the platform's."""
+    pastor_from, board_over = levels or (PASTOR_FROM_CENTS, BOARD_OVER_CENTS)
     steps = ["treasurer"]
-    if counted_cents >= PASTOR_FROM_CENTS:
+    if counted_cents >= pastor_from:
         steps.append("pastor")
-    if counted_cents > BOARD_OVER_CENTS or over_budget:
+    if counted_cents > board_over or over_budget:
         steps.append("board")
     return steps
+
+
+# ─── The church's own settings, where its map is open ─────────────────
+
+def _map(me: Dict[str, Any]) -> Any:
+    """The church's leaders map where it's open for it (church_map.opened):
+    False where it's closed or not set up, so today's levels and people
+    stand; else the Map. A failed read is a 503, as every read here."""
+    if "_map" not in me:
+        import church_map
+        m = church_map.opened(me["biz"])
+        if m is None:
+            raise HTTPException(503, UNREAD)
+        me["_map"] = m
+    return me["_map"]
+
+
+def levels_of(me: Dict[str, Any]) -> Tuple[int, int]:
+    """(the pastor's yes from, a board member's over), in cents: the
+    church's own where its map is open and sets them, else the platform's."""
+    m = _map(me)
+    p, b = (m.settings.get(k) if m else None for k in ("pastor_from_cents", "board_over_cents"))
+    return (PASTOR_FROM_CENTS if p is None else int(p), BOARD_OVER_CENTS if b is None else int(b))
+
+
+def _board_yes(me: Dict[str, Any]) -> Dict[str, Dict[str, str]]:
+    """contact id → {name, email}, for each person holding an active role
+    whose board-yes switch is on, where the church's map is open."""
+    if "_board_yes" in me:
+        return me["_board_yes"]
+    m, out = _map(me), {}
+    keys = _ids(r.get("key") for r in m.roles.values() if r.get("status") == "active" and r.get("can_board_yes")) \
+        if m else ""
+    if keys:
+        b = _q(me["biz"]["id"])
+        ids = _ids(h.get("contact_id") for h in _need(
+            f"/church_leader_roles?business_id=eq.{b}&role=in.({keys})&status=eq.active&select=contact_id&limit=500"))
+        for c in _need(f"/contacts?business_id=eq.{b}&id=in.({ids})&select=id,name,email&limit=500") if ids else []:
+            out[str(c["id"])] = {"name": _plain(c.get("name")) or "A board member",
+                                 "email": (c.get("email") or "").strip().lower()}
+    me["_board_yes"] = out
+    return out
 
 
 # ─── Who can give each step ───────────────────────────────────────────
@@ -158,14 +211,28 @@ def _seats(me: Dict[str, Any]) -> Dict[str, str]:
 
 
 def pastors(me: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """The church's people who hold the senior role: their name, and the
-    login that is theirs (by email), if any."""
+    """The church's people who hold the senior role (where its map is open
+    and names the roles that give the pastor's yes, those; none named, the
+    owner): their name, and the login that is theirs (by email), if any."""
     if "_pastors" in me:
         return me["_pastors"]
     b = _q(me["biz"]["id"])
     out: List[Dict[str, Any]] = []
-    defs = _need(f"/church_role_defs?business_id=eq.{b}&job=eq.senior&status=eq.active&select=key&limit=20")
-    keys = _ids(d.get("key") for d in defs)
+    m = _map(me)
+    named = None
+    if m:
+        import church_map
+        named = church_map.picked(m, "pastor_yes_roles")
+    if named == []:
+        owner = str(me["biz"].get("owner_id") or "")
+        st = me["biz"].get("settings") if isinstance(me["biz"].get("settings"), dict) else {}
+        me["_pastors"] = [{"name": _plain(st.get("practitioner_name")) or "The owner",
+                           "email": _seats(me).get(owner, ""), "logins": [owner]}] if owner else []
+        return me["_pastors"]
+    if named is None:
+        named = [d.get("key") for d in _need(
+            f"/church_role_defs?business_id=eq.{b}&job=eq.senior&status=eq.active&select=key&limit=20")]
+    keys = _ids(named)
     holders = _need(f"/church_leader_roles?business_id=eq.{b}&role=in.({keys})&status=eq.active"
                     "&select=contact_id&limit=50") if keys else []
     ids = _ids(h.get("contact_id") for h in holders)
@@ -192,7 +259,9 @@ def _open_boards(me: Dict[str, Any]) -> str:
 
 
 def board(me: Dict[str, Any]) -> Dict[str, str]:
-    """user id → name, for each login on one of the church's boards."""
+    """user id → name, for each login on one of the church's boards, and
+    (where its map is open) each login whose email is a board-yes role
+    holder's."""
     if "_board" in me:
         return me["_board"]
     b = _q(me["biz"]["id"])
@@ -206,6 +275,10 @@ def board(me: Dict[str, Any]) -> Dict[str, str]:
     for r in rows:
         uid = str(r["user_id"])
         out.setdefault(uid, names.get(str(r.get("contact_id") or "")) or _plain(r.get("name")) or "A board member")
+    by_email = {x["email"]: x["name"] for x in _board_yes(me).values() if "@" in x["email"]}
+    for uid, email in (_seats(me).items() if by_email else ()):
+        if email in by_email:
+            out.setdefault(uid, by_email[email])
     me["_board"] = out
     return out
 
@@ -213,8 +286,9 @@ def board(me: Dict[str, Any]) -> Dict[str, str]:
 def board_people(me: Dict[str, Any]) -> Dict[str, Dict[str, str]]:
     """contact id → {name, email}, for each of the church's people on one of
     its boards (Kevin, 2026-10-28: "Board members are matched by their
-    contact in church_board_members"). The email is how the member app
-    reaches them, and where their code goes."""
+    contact in church_board_members"), and (where its map is open) each
+    board-yes role holder. The email is how the member app reaches them,
+    and where their code goes: /my/board/approvals opens to them by this."""
     if "_board_people" in me:
         return me["_board_people"]
     b = _q(me["biz"]["id"])
@@ -231,6 +305,8 @@ def board_people(me: Dict[str, Any]) -> Dict[str, Dict[str, str]]:
         if c and cid not in out:
             out[cid] = {"name": _plain(c.get("name")) or _plain(r.get("name")) or "A board member",
                         "email": (c.get("email") or "").strip().lower()}
+    for cid, x in _board_yes(me).items():
+        out.setdefault(cid, x)
     me["_board_people"] = out
     return out
 
@@ -306,25 +382,26 @@ def page_view(me: Dict[str, Any]) -> Dict[str, Any]:
     if not on():
         return {"on": False}
     ps = pastors(me)
+    pastor_from, board_over = levels_of(me)
     with_login = [p["name"] for p in ps if p["logins"]]
     gaps: List[str] = []
     if not ps:
-        gaps.append(f"No one holds the senior pastor's role yet, so {usd(PASTOR_FROM_CENTS)} and up can't be "
+        gaps.append(f"No one holds the senior pastor's role yet, so {usd(pastor_from)} and up can't be "
                     "approved. Name who does on the Lead tab.")
     elif not with_login:
-        gaps.append(f"{ps[0]['name']}, the pastor, has no login here by their email, so {usd(PASTOR_FROM_CENTS)} "
+        gaps.append(f"{ps[0]['name']}, the pastor, has no login here by their email, so {usd(pastor_from)} "
                     "and up can't be approved. Give them one in Logins & areas.")
     bd, bp = board(me), board_people(me)
     reachable = sorted({*bd.values(), *(x["name"] for x in bp.values() if "@" in x["email"])}, key=str.lower)
     if not reachable:
-        gaps.append(f"No board member has an email on file, so over {usd(BOARD_OVER_CENTS)}, or past a ministry's "
+        gaps.append(f"No board member has an email on file, so over {usd(board_over)}, or past a ministry's "
                     "budget, can't be approved. Add the board in Board & minutes, each with an email on their person.")
     no_email = sorted(x["name"] for x in bp.values() if "@" not in x["email"])
     if no_email:
         gaps.append(f"{', '.join(no_email[:3])}{' and others' if len(no_email) > 3 else ''} "
                     f"{'is' if len(no_email) == 1 else 'are'} on the board with no email on file, so they can't say "
                     "yes from the member app. Add an email to their person.")
-    return {"on": True, "pastor_from_cents": PASTOR_FROM_CENTS, "board_over_cents": BOARD_OVER_CENTS,
+    return {"on": True, "pastor_from_cents": pastor_from, "board_over_cents": board_over,
             "split_days": SPLIT_DAYS, "pastors": with_login, "board": reachable,
             "gaps": gaps, "mine": [s for s in STEPS if s in steps_of(me)]}
 
@@ -450,7 +527,7 @@ def of(me: Dict[str, Any], row: Dict[str, Any], ctx: Dict[str, Any],
                 "others_cents": 0, "over_budget": False, "mine": None, "why_not": None}
     total, more = counted(row, ctx["rows"])
     over = over_budget(row, ctx["lines"])
-    needs = required(total, over_budget=over)
+    needs = required(total, over_budget=over, levels=levels_of(me))
     filled = {a["step"] for a in have}
     missing = [s for s in needs if s not in filled]
     mine, why = None, None
@@ -681,7 +758,8 @@ def member_view(biz: Dict[str, Any], person: Dict[str, Any]) -> Dict[str, Any]:
         x["who"] = asker_names.get(str(r.get("contact_id") or "")) or r.get("asker_name") or "The office"
     waiting.sort(key=lambda x: str(x["row"].get("created_at") or ""))
     said.sort(key=lambda x: str(x["row"].get("decided_at") or x["row"].get("created_at") or ""), reverse=True)
-    return {"me": me, "waiting": waiting, "said": said[:20], "email": masked(_my_email(me))}
+    return {"me": me, "waiting": waiting, "said": said[:20], "email": masked(_my_email(me)),
+            "board_over_cents": levels_of(me)[1]}
 
 
 def send_code(biz: Dict[str, Any], person: Dict[str, Any], rid: Any) -> Dict[str, Any]:

@@ -28,7 +28,8 @@ Who holds a duty (holds):
   * a Manager's lane is the one stored on its login (business_users.lane),
     else the lane its picked areas are exactly (church_areas.lane_of); a
     login whose person holds the Executive Pastor role (by its key or the
-    catalog's) is in the Executive Pastor's lane too
+    catalog's; where the church's leaders map is open, a role the church
+    named to oversee the office) is in the Executive Pastor's lane too
   * a money duty is never a Manager's, whatever a row says
   * a Member or a Viewer holds none, and nor does anyone outside a church
   * a read that fails is a 503, never a yes
@@ -426,17 +427,34 @@ def _seat_lane(seat: Dict[str, Any]) -> Optional[str]:
     return lane_of(seat.get("role"), areas if isinstance(areas, list) else None)
 
 
+def overseer_keys(biz: str) -> List[str]:
+    """The keys of the roles whose holders oversee the office: where the
+    church's leaders map is open and names them (office_overseer_roles,
+    docs/CHURCH_LEADERS_MAP.md §3, PR 7; none named is nobody), those; else
+    the Executive Pastor role, by its key or the catalog's. A failed read,
+    the map's too, is a 503."""
+    import church_map
+    m = church_map.opened(biz)
+    if m is None:
+        raise HTTPException(503, "Who does what couldn't be read just now. Try again.")
+    named = church_map.picked(m, "office_overseer_roles") if m else None
+    if named is not None:
+        return named
+    defs = _need(f"/church_role_defs?business_id=eq.{_q(biz)}&status=eq.active"
+                 f"&or=(key.eq.{EXEC},catalog_key.eq.{EXEC})&select=key&limit=50")
+    return sorted({str(d["key"]) for d in defs if d.get("key")})
+
+
 def _exec_users(biz: str, seats: Iterable[Dict[str, Any]]) -> Set[str]:
     """Which of these logins are the Executive Pastor: their person holds
-    the role, by its key or the catalog's, and has said yes to it. A login
-    tied to its person (business_users.contact_id) is only that person; one
-    that isn't is found by its email, and only when the email names exactly
-    one of the church's people (or the one whose first name the login gave)."""
+    a role that oversees the office (overseer_keys) and has said yes to it.
+    A login tied to its person (business_users.contact_id) is only that
+    person; one that isn't is found by its email, and only when the email
+    names exactly one of the church's people (or the one whose first name
+    the login gave)."""
     seats = list(seats)
     b = _q(biz)
-    defs = _need(f"/church_role_defs?business_id=eq.{b}&status=eq.active"
-                 f"&or=(key.eq.{EXEC},catalog_key.eq.{EXEC})&select=key&limit=50")
-    keys = sorted({str(d["key"]) for d in defs if d.get("key")})
+    keys = overseer_keys(biz)
     if not keys or not seats:
         return set()
     holders = _need(f"/church_leader_roles?business_id=eq.{b}&status=eq.active"

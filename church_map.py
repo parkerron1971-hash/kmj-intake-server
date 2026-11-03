@@ -17,6 +17,8 @@ church's structure is data (supabase/APPLY-2026-11-04-church-map.sql).
     opened(biz) ..... what a reader takes: False (closed, or not ready),
                       else load(biz)
     can(m, role) .... a role's seven switches; made_for(m, role) its streams
+    picked(m, k) .... the roles a setting names (PR 7: who gives the pastor's
+                      yes, who oversees the office); None = today's rule
     chain_for(...) .. who hears, step by step up from a person (PR 6): their
                       department's overseer, the item's department's leader
                       then overseer, the person they answer to, then
@@ -296,6 +298,18 @@ def can(m: Optional[Map], d: Dict[str, Any], *, ministers: Optional[bool] = None
     return {"shepherd": shepherd, "oversee": bool(row.get("can_oversee")), "lead": bool(row.get("can_lead")),
             "board_yes": bool(row.get("can_board_yes")), "see_all": bool(row.get("can_see_all")),
             "prayer": "prayer_shared" in handles, "care": "care_need" in handles}
+
+
+def picked(m: Map, setting: str) -> Optional[List[str]]:
+    """The keys of the church's active roles a role pick names
+    (pastor_yes_roles, office_overseer_roles: PR 7), sorted; [] when it
+    names none still active, which each reader takes as "none named"; None
+    when the church never set it, so today's rule stands (§2)."""
+    ids = m.settings.get(setting)
+    if ids is None:
+        return None
+    rows = (m.roles.get(str(i)) for i in ids)
+    return sorted({str(r["key"]) for r in rows if r and r.get("status") == "active" and r.get("key")})
 
 
 _SAYS = (("oversee", "can oversee a department"), ("lead", "leads (the leaders room)"),
