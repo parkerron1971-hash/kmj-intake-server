@@ -19,6 +19,7 @@ decisions:
   - "account_lifecycle.py lists both new tables at the head of BUSINESS_CHILD_TABLES and in _IMPORT_SKIP (they cite people, roles and departments by id; a restored church starts its setup again): the one production Python change, required by test_export_import's list check"
 related: [2026-11-04-church-step2-fixture.md, 2026-11-04-church-map-migration.md, 2026-11-04-church-map-writes.md]
 ---
+The migration was APPLIED to production on 2026-11-03 and verified (see the docs/MIGRATIONS.md row).
 The data for step 2 of the leaders map (`docs/CHURCH_LEADERS_STEP2.md` §1.2, §1.3, B2 in §7):
 `template_key`/`template_version` on departments and roles, `unfinished_at` on departments, 'template' as a
 role source, `seeded_as`/`confirmed_at`/`shape_key`/`shape_version` on the church settings, and two
