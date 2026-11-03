@@ -138,6 +138,15 @@ class _RoleDef(BaseModel):
     term_months: Optional[int] = Field(None, ge=0, le=120)
     needs_class: Optional[str] = None
     status: Optional[str] = Field(None, max_length=10)
+    # The role's switches (docs/CHURCH_LEADERS_MAP.md §3); a null
+    # can_shepherd follows the church's Ministers setting. Written once the
+    # map's columns are there (church_map.ready); nothing reads them yet.
+    can_shepherd: Optional[bool] = None
+    can_oversee: Optional[bool] = None
+    can_lead: Optional[bool] = None
+    can_board_yes: Optional[bool] = None
+    can_see_all: Optional[bool] = None
+    made_for: Optional[List[str]] = Field(None, max_length=12)
 
 
 class _Type(BaseModel):
@@ -241,7 +250,10 @@ def role_create(body: _RoleDef, business_id: str = Query(...),
     uid, _name = _who(session)
     if church_roles.ensure_library(biz) is None:
         raise HTTPException(503, "Your roles couldn't be loaded. Try again in a moment.")
-    row = church_roles.create_role(biz, body.model_dump(exclude_none=True), by_user=uid)
+    fields = body.model_dump(exclude_none=True)
+    if "can_shepherd" in body.model_fields_set:     # null, said, is "follows the Ministers setting"
+        fields["can_shepherd"] = body.can_shepherd
+    row = church_roles.create_role(biz, fields, by_user=uid)
     return {"ok": True, "role": _role_out(biz, row["id"])}
 
 
