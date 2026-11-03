@@ -177,6 +177,7 @@ _ROWS: Dict[str, Dict[str, str]] = {
         "total_liabilities": "Total Liabilities", "equity": "Equity", "equity_head": "EQUITY",
         "retained": "Retained Earnings", "total_equity": "Total Equity",
         "balanced": "✓ Balanced — Liabilities + Equity = Total Assets",
+        "money_in": "Revenue", "money_out": "Expenses", "left_over": "Net",
     },
 }
 
@@ -202,6 +203,7 @@ def _faith_rows(voice: str) -> Dict[str, str]:
         "equity": "Net assets", "equity_head": "NET ASSETS",
         "retained": "Net assets", "total_equity": "Total net assets",
         "balanced": "✓ The books balance: what is owed plus net assets equals what it has",
+        "money_in": f"{giving.capitalize()} & income", "money_out": "Spending", "left_over": "Left over",
     }
 
 
@@ -212,3 +214,48 @@ _ROWS[NONPROFIT] = _faith_rows(NONPROFIT)
 def rows(voice: Optional[str]) -> Dict[str, str]:
     """The row labels for a report export in this voice."""
     return _ROWS.get(voice or BUSINESS, _ROWS[BUSINESS])
+
+
+# ─── Months (Trends) ────────────────────────────────────────────────
+# Trends is the last 12 months, not the calendar year (Kevin, 2026-11-03:
+# "is the numbers for giving trends for this year??"), so its exports name
+# each month with its year, as the screen does: "2026-11" reads "Nov 2026".
+
+_MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+
+
+def _month_num(key: str) -> int:
+    try:
+        n = int(key[5:7]) if len(key) >= 7 and key[4] == "-" and key[:4].isdigit() else 0
+    except ValueError:
+        return 0
+    return n if 1 <= n <= 12 else 0
+
+
+def month_label(key: Optional[str]) -> str:
+    """'2026-11' (or '2026-11-03') is 'Nov 2026'. Anything else comes back as it was."""
+    k = str(key or "")
+    n = _month_num(k)
+    return f"{_MONTHS[n - 1]} {k[:4]}" if n else k
+
+
+def day_label(day: Optional[str]) -> str:
+    """'2026-11-03' is 'Nov 3, 2026'. Anything else comes back as it was."""
+    d = str(day or "")
+    n = _month_num(d)
+    if not n or len(d) < 10 or not d[8:10].isdigit():
+        return d
+    return f"{_MONTHS[n - 1]} {int(d[8:10])}, {d[:4]}"
+
+
+def month_span(keys) -> str:
+    """A run of months: 'Aug–Oct', or 'Nov 2025–Jan 2026' across a new year."""
+    ks = [str(k) for k in (keys or []) if k]
+    if not ks:
+        return ""
+    a, b = ks[0], ks[-1]
+    if len(ks) == 1:
+        return month_label(a)
+    if a[:4] == b[:4] and _month_num(a) and _month_num(b):
+        return f"{_MONTHS[_month_num(a) - 1]}–{_MONTHS[_month_num(b) - 1]}"
+    return f"{month_label(a)}–{month_label(b)}"
