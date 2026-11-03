@@ -4,7 +4,7 @@ date: 2026-11-05
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-11-03: approved step 2 (design 4V41zJz1kEJGdeo4J9D2Ym, "Your two ideas"): a searchable ready-made directory'
 status: in progress
-prs: []
+prs: [kmj-intake-server#1727]
 migrations: [supabase/APPLY-2026-11-05-church-map-step2.sql (applied 2026-11-03, B2)]
 left_undone:
   - "B4b: POST /church/map/templates/adopt (a role, a department, a shape), built on church_templates.mine, SEATS and here()'s waits"
