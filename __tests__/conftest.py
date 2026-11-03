@@ -69,6 +69,11 @@ def _fresh_church_duties():
     if _cd is not None:
         _cd._CACHE.clear()
         _cd._FAILED.clear()
+    # church_map remembers, per process, that the map's columns answered:
+    # every test asks its own fake again.
+    _cm = _sys.modules.get("church_map")
+    if _cm is not None:
+        _cm._READY.clear()
     yield
 
 
