@@ -245,9 +245,8 @@ def gl_balance_sheet(biz: str, as_of: Optional[str] = None) -> Dict[str, Any]:
                    "stripe_clearing": clearing},
         "liabilities": {"accounts_payable": ap, "total": total_liabilities},
         "equity": {"retained_earnings": equity, "total": equity},
-        "note": "From the General Ledger. Stripe Clearing shows customer payments in "
-                "transit to your bank (informational; folded into assets when accrual "
-                "view lands). Cash is the latest balance snapshot.",
+        "note": "From the books. Cash is the latest bank balance. Card and online "
+                "payments still on their way from Stripe aren't in these totals yet.",
     }
 
 
@@ -274,8 +273,9 @@ def gl_cash_flow(biz: str, period: str, custom_from: Optional[str] = None,
             "cash_to_suppliers": round(cash_out, 2),
             "net_cash_from_operations": round(cash_in - cash_out, 2),
         },
-        "note": "Operating activities only, from the General Ledger (bank-level cash "
-                "movements). Investing + financing land in v1.5.",
+        "note": "Day-to-day money only (operating activities), from the books: what "
+                "moved through the bank. Investing and financing, like equipment, "
+                "property or loans, aren't on this report yet.",
     }
 
 
@@ -290,7 +290,12 @@ def _account_meta(biz: str) -> Dict[str, Dict[str, Any]]:
     rows = sb_clients.sb_get_as_service(
         f"/chart_of_accounts?business_id=eq.{biz}"
         f"&select=code,name,type,normal_balance&limit=500") or []
-    return {r["code"]: r for r in rows}
+    meta = {r["code"]: r for r in rows}
+    # A church reads its own names (4000 Contributions, not Service Revenue).
+    import report_words
+    for code, name in report_words.account_names(biz).items():
+        meta[code] = {**meta.get(code, {}), "name": name}
+    return meta
 
 
 def trial_balance_report(biz: str, as_of: Optional[str] = None) -> Dict[str, Any]:
@@ -397,10 +402,21 @@ def journal_report(biz: str, limit: int = 50, offset: int = 0) -> Dict[str, Any]
     jes = sb_clients.sb_get_as_service(
         f"/journal_entries?business_id=eq.{biz}"
         f"&order=entry_date.desc,created_at.desc"
-        f"&select=id,entry_date,description,source_type,status,is_reversal"
+        f"&select=id,entry_date,description,source_type,source_id,status,is_reversal"
         f"&limit={capped + 1}&offset={int(offset)}") or []
     has_more = len(jes) > capped
     jes = jes[:capped]
+    import report_words
+    voice = report_words.voice_for(biz)
+    gift_of: Dict[str, bool] = {}
+    if report_words.is_faith(voice):
+        inv_ids = sorted({str(j.get("source_id")) for j in jes
+                          if str(j.get("source_type") or "").startswith("invoice_") and j.get("source_id")})
+        for i in range(0, len(inv_ids), 100):
+            for r in sb_clients.sb_get_as_service(
+                    f"/invoices?business_id=eq.{biz}&id=in.({','.join(inv_ids[i:i + 100])})"
+                    f"&select=id,is_gift&limit=100") or []:
+                gift_of[str(r["id"])] = bool(r.get("is_gift"))
     line_map: Dict[str, List[Dict[str, Any]]] = {}
     if jes:
         ids = ",".join(j["id"] for j in jes)
@@ -415,7 +431,10 @@ def journal_report(biz: str, limit: int = 50, offset: int = 0) -> Dict[str, Any]
     for j in jes:
         entries.append({
             "id": j["id"], "date": j.get("entry_date"),
-            "description": j.get("description") or "", "source_type": j.get("source_type"),
+            "description": report_words.journal_label(
+                j.get("description") or "", j.get("source_type"), voice,
+                gift_of.get(str(j.get("source_id")))),
+            "source_type": j.get("source_type"),
             "status": j.get("status"), "is_reversal": bool(j.get("is_reversal")),
             "lines": sorted(line_map.get(j["id"], []), key=lambda x: -x["debit"]),
         })

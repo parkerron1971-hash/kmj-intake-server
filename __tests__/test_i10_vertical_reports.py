@@ -117,7 +117,7 @@ def test_prep_990_packet_and_sme_flags(fake):
     fx = {f["bucket"]: f["amount"] for f in out["functional_expenses"]}
     assert fx["operating"] == 120.0
     assert out["change_in_net_assets"] == 380.0
-    assert any("Functional expense" in f for f in out["sme_flags"])
+    assert any("Part IX" in f and "programs" in f for f in out["sme_flags"])   # the functional-expense note
     assert any(n["code"] == "3300" for n in out["net_assets"])  # always listed
 
 
