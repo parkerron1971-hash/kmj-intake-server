@@ -625,6 +625,10 @@ app.include_router(kids_station_router)
 # public_site_router.
 from church_router import router as church_router
 app.include_router(church_router)
+# The leaders map's office routes (/church/map; CHURCH_MAP). BEFORE
+# public_site_router.
+from church_map_router import router as church_map_router
+app.include_router(church_map_router)
 # The roll: a church's People page in one read (people, their last 8
 # Sundays, families, groups, serving, This week). Read-only; CHURCH_ROLL.
 from church_roll import router as church_roll_router

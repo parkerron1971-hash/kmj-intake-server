@@ -18,6 +18,12 @@ church's structure is data (supabase/APPLY-2026-11-04-church-map.sql).
                       else load(biz)
     can(m, role) .... a role's seven switches; made_for(m, role) its streams
     propose(biz) .... a read-only draft of departments, step 2's hook
+    the writes ...... save_department, archive_department, set_answers_to,
+                      save_settings (PR 5; church_map_router's routes): each
+                      checks what it names against the church's own rows
+                      and answers with what it saved, never with success on
+                      a failed write (503)
+    view(biz) ....... the office's map, with its gaps
 
 Every reader takes it in this order (§3): closed, or not ready, runs today's
 code; open and ready, the map decides wherever it knows, then the role's
@@ -32,9 +38,14 @@ Server-only tables, read through the service role, always by business_id.
 from __future__ import annotations
 
 import os
+import re
+import uuid
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from datetime import datetime, timezone
+from typing import Any, Dict, Iterable, List, Optional
 from urllib.parse import quote
+
+from fastapi import HTTPException
 
 import church_roles as cr
 import sb_clients
@@ -161,9 +172,22 @@ def role_switches(biz: Any) -> Optional[Dict[str, Dict[str, Any]]]:
                  f"&select={ROLE_COLS}&limit=300")
     if rows is None:
         return None
-    return {str(r["id"]): {"key": r.get("key"), "job": r.get("job"), "handles": list(r.get("handles") or []),
+    return {str(r["id"]): {"key": r.get("key"), "job": r.get("job"), "status": r.get("status"),
+                           "handles": list(r.get("handles") or []),
                            **{k: r.get(k) for k in cr.SWITCHES}, "made_for": list(r.get("made_for") or [])}
             for r in rows}
+
+
+def _unit(u: Dict[str, Any]) -> Dict[str, Any]:
+    ref = u.get(UNIT_REF[u["kind"]]) if u.get("kind") in UNIT_REF else None
+    return {"id": str(u["id"]), "kind": u.get("kind"), "ref": str(ref) if ref else "", "label": u.get("label") or ""}
+
+
+def _dept(d: Dict[str, Any], units: List[Dict[str, Any]]) -> Dict[str, Any]:
+    return {**{k: d.get(k) for k in DEPT_COLS.split(",")}, "id": str(d["id"]),
+            "leader_contact_id": str(d["leader_contact_id"]) if d.get("leader_contact_id") else None,
+            "overseer_contact_id": str(d["overseer_contact_id"]) if d.get("overseer_contact_id") else None,
+            "status": d.get("status") or "active", "units": units}
 
 
 def load(biz: Any) -> Optional[Map]:
@@ -183,20 +207,14 @@ def load(biz: Any) -> Optional[Map]:
         return None
     under: Dict[str, List[Dict[str, Any]]] = {}
     for u in units:
-        ref = u.get(UNIT_REF[u["kind"]]) if u.get("kind") in UNIT_REF else None
-        under.setdefault(str(u.get("department_id")), []).append({
-            "id": str(u["id"]), "kind": u.get("kind"), "ref": str(ref) if ref else "", "label": u.get("label") or ""})
+        under.setdefault(str(u.get("department_id")), []).append(_unit(u))
     return Map(
         business_id=bid, roles=roles,
         links=[{"id": str(x["id"]), "contact_id": str(x["contact_id"]), "role": str(x.get("role") or ""),
                 "answers_to_contact_id": str(x["answers_to_contact_id"])}
                for x in links if x.get("status") == "active" and x.get("answers_to_contact_id")],
         settings={k: (st[0] if st else {}).get(k) for k in SETTINGS_COLS.split(",")},
-        departments=[{**{k: d.get(k) for k in DEPT_COLS.split(",")}, "id": str(d["id"]),
-                      "leader_contact_id": str(d["leader_contact_id"]) if d.get("leader_contact_id") else None,
-                      "overseer_contact_id": str(d["overseer_contact_id"]) if d.get("overseer_contact_id") else None,
-                      "status": d.get("status") or "active", "units": under.get(str(d["id"]), [])}
-                     for d in depts])
+        departments=[_dept(d, under.get(str(d["id"]), [])) for d in depts])
 
 
 def state() -> Optional[bool]:
@@ -300,3 +318,412 @@ def propose(biz: Any) -> Dict[str, Any]:
     names one: docs/CHURCH_LEADERS_MAP.md §2). Until then it drafts nothing,
     and it never writes."""
     return {}
+
+
+# ─── The office's writes (PR 5) ───────────────────────────────────────
+#
+# The triggers and unique indexes check what these check; a write they refuse
+# comes back from sb_clients as None, which is a 503 unless a re-read shows a
+# conflict someone made meanwhile (then the same plain 400 as before the write).
+
+STATUSES = ("draft", "active", "archived")
+SOURCES = ("office", "chief", "template")
+KINDS = (*UNIT_REF, "serve_option", "space", "check_line")
+LEVELS = ("pastor_from_cents", "board_over_cents")
+PICKS = ("pastor_yes_roles", "office_overseer_roles")
+LEVEL_MAX_CENTS = 10_000_000          # $100,000, the migration's check
+UNITS_MAX, PICKS_MAX = 60, 20
+# A unit's thing: its table, its name, and what still counts as there.
+_THINGS = {"group": ("groups", "name", "&active=eq.true"),
+           "role": ("church_role_defs", "title", "&status=in.(active,draft)"),
+           "board": ("church_boards", "name", "&archived=eq.false"),
+           "worship_ministry": ("worship_ministries", "name", "&archived_at=is.null")}
+_WORD = {"group": "group", "role": "role", "board": "board", "worship_ministry": "worship ministry",
+         "serve_option": "serve team", "space": "space", "check_line": "budget line"}
+UNREAD = "Your leaders map couldn’t be read just now. Try again in a moment."
+UNSAVED = "That didn’t save. Try again."
+
+
+def _plain(v: Any) -> str:
+    return re.sub(r"\s+", " ", str(v or "")).strip()
+
+
+def _bad(msg: str) -> None:
+    raise HTTPException(400, msg)
+
+
+def _id(v: Any, what: str) -> str:
+    try:
+        return str(uuid.UUID(str(v or "")))
+    except (ValueError, TypeError):
+        raise HTTPException(400, f"That {what} isn’t valid")
+
+
+def _need(path: str) -> List[Dict[str, Any]]:
+    rows = _rows(path)
+    if rows is None:
+        raise HTTPException(503, UNREAD)
+    return rows
+
+
+def _tables_open() -> None:
+    """The map's tables answer: a 503 before the migration, and when the
+    probe itself failed (state() None), a blip is a failed read, never a yes."""
+    s = state()
+    if s is not True:
+        raise HTTPException(503, UNREAD if s is None else "The leaders map isn’t set up yet. Try again later.")
+
+
+def _map(bid: str) -> Map:
+    _tables_open()
+    m = load(bid)
+    if m is None:
+        raise HTTPException(503, UNREAD)
+    return m
+
+
+def _in(ids: Iterable[str]) -> str:
+    return ",".join(_q(i) for i in ids)
+
+
+def _people(bid: str, ids: Iterable[Any]) -> Dict[str, str]:
+    """contact id -> name, for this church's people only."""
+    ids = sorted({str(i) for i in ids if i})
+    if not ids:
+        return {}
+    rows = _need(f"/contacts?business_id=eq.{_q(bid)}&id=in.({_in(ids)})&select=id,name&limit=1000")
+    return {str(r["id"]): _plain(r.get("name")) for r in rows}
+
+
+def _holders(bid: str) -> List[Dict[str, Any]]:
+    return _need(f"/church_leader_roles?business_id=eq.{_q(bid)}&status=eq.active&select={LINK_COLS}&limit=2000")
+
+
+def qualifies(m: Map, holders: List[Dict[str, Any]], contact_id: Any, switch: str = "") -> bool:
+    """Whether this person holds an active role here, with `switch` ("lead",
+    "oversee") on when one is named: who may lead or oversee a department,
+    and who the chain passes over once they no longer may (§3)."""
+    by_key = {r["key"]: r for r in m.roles.values() if r.get("status") == "active"}
+    for h in holders:
+        if str(h["contact_id"]) == str(contact_id):
+            d = by_key.get(h.get("role")) or cr.LEGACY.get(str(h.get("role") or ""))
+            if d and (not switch or can(m, d)[switch]):
+                return True
+    return False
+
+
+def _things(bid: str, kind: str, ids: Iterable[str]) -> Dict[str, str]:
+    """id -> name of each one still here; a deleted or archived one isn't."""
+    ids = sorted({str(i) for i in ids if i})
+    if not ids:
+        return {}
+    table, col, live = _THINGS[kind]
+    rows = _need(f"/{table}?business_id=eq.{_q(bid)}&id=in.({_in(ids)}){live}&select=id,{col}&limit=500")
+    return {str(r["id"]): _plain(r.get(col)) for r in rows}
+
+
+def _labels(bid: str, kind: str) -> Dict[str, str]:
+    """The labels a unit of this kind may carry, folded -> the church's own
+    spelling: the Serve card's teams, the budget lines (church_checks), or
+    youth and kids."""
+    if kind == "serve_option":
+        import church_follow_up as cfu
+        got = cfu.teams(bid)
+        if got is None:
+            raise HTTPException(503, UNREAD)
+    elif kind == "check_line":
+        import church_checks
+        got = [x["name"] for x in church_checks.settings(bid)["lines"]]
+    else:
+        got = ["youth", "kids"]
+    return {_plain(x).casefold(): _plain(x) for x in got}
+
+
+def _ukey(u: Dict[str, Any]) -> tuple:
+    return (u["kind"], u["ref"] or u["label"].casefold())
+
+
+def _hung(m: Map, u: Dict[str, Any], did: Optional[str]) -> Optional[Dict[str, Any]]:
+    """The other department (draft or active) this thing already hangs from."""
+    return next((d for d in m.departments if d["id"] != did for x in d["units"] if _ukey(x) == _ukey(u)), None)
+
+
+def _clash(m: Map, did: Optional[str], name: str) -> Optional[Dict[str, Any]]:
+    return next((d for d in m.departments if d["id"] != did and d["name"].strip().casefold() == name.casefold()),
+                None)
+
+
+def _units_in(bid: str, m: Map, did: Optional[str], raw: Any) -> List[Dict[str, Any]]:
+    """A department's units as asked, each checked: the church's own thing,
+    still here; a serve option on the Serve card, a budget line in the
+    church's settings, a space youth or kids; not hanging from another
+    department already."""
+    if not isinstance(raw, list) or len(raw) > UNITS_MAX:
+        _bad(f"A department holds up to {UNITS_MAX} things")
+    want: Dict[tuple, Dict[str, Any]] = {}
+    for u in raw:
+        kind = u.get("kind") if isinstance(u, dict) else None
+        if kind not in KINDS:
+            _bad("That isn’t something a department can hold")
+        ref = _id(u.get("ref"), _WORD[kind]) if kind in UNIT_REF else ""
+        x = {"kind": kind, "ref": ref, "label": "" if ref else _plain(u.get("label"))[:120]}
+        want.setdefault(_ukey(x), x)
+    out = list(want.values())
+    kinds = {u["kind"] for u in out}
+    names = {k: _things(bid, k, [u["ref"] for u in out if u["kind"] == k]) if k in UNIT_REF else _labels(bid, k)
+             for k in kinds}
+    for u in out:
+        k = u["kind"]
+        u["name"] = names[k].get(u["ref"] or u["label"].casefold())
+        if not u["name"]:
+            _bad({"serve_option": f"“{u['label']}” isn’t a team on your Serve card",
+                  "check_line": f"“{u['label']}” isn’t one of your budget lines",
+                  "space": "A space is youth or kids"}.get(k, f"That {_WORD[k]} isn’t one of this church’s"))
+        if k not in UNIT_REF:
+            u["label"] = u["name"]
+        other = _hung(m, u, did)
+        if other:
+            _bad(f"{u['name']} already hangs from {other['name']}. Take it off there first: a thing hangs from "
+                 "one department.")
+    return out
+
+
+def _refused(bid: str, did: Optional[str], name: str = "", units: Iterable[Dict[str, Any]] = ()) -> HTTPException:
+    """A write the database refused: the plain 400 when a re-read shows a
+    department of that name, or one of these things taken, meanwhile (the
+    unique indexes); else a 503."""
+    m = load(bid)
+    why = None
+    if m is not None:
+        clash = _clash(m, did, name) if name else None
+        taken = next(((u, d) for u in units for d in [_hung(m, u, did)] if d), None)
+        why = (f"There’s already a department called {clash['name']}" if clash else
+               f"{taken[0]['name']} already hangs from {taken[1]['name']}" if taken else None)
+    return HTTPException(400, why) if why else HTTPException(503, UNSAVED)
+
+
+def save_department(biz: Any, body: Dict[str, Any], by: Any) -> Dict[str, Any]:
+    """Make (no `id`) or change a department, and replace what hangs from it
+    when `units` is given ([{kind, ref | label}]). Only what the request
+    names is checked and changed; the rest is the gaps list's to flag. The
+    leader must hold an active role that leads, the overseer one that can
+    oversee, and they are two people; the duty is one of church_duties'; the
+    area one of the eight. Archived, a department lets go of what hung from
+    it. Returns the saved row with its units."""
+    import church_areas as ca
+    import church_duties as cd
+    bid, body = _bid(biz), dict(body or {})
+    q = _q(bid)
+    m = _map(bid)
+    did = _id(body["id"], "department") if body.get("id") else None
+    cur = next((d for d in m.departments if d["id"] == did), None) if did else None
+    if did and cur is None:          # archived ones aren't on the map
+        got = _need(f"/church_departments?id=eq.{_q(did)}&business_id=eq.{q}&select={DEPT_COLS}&limit=1")
+        if not got:
+            raise HTTPException(404, "That department isn’t here")
+        cur = _dept(got[0], [])
+    row: Dict[str, Any] = {}
+    if "name" in body or cur is None:
+        row["name"] = _plain(body.get("name"))
+        if not 1 <= len(row["name"]) <= 80:
+            _bad("Name the department (up to 80 letters)")
+    for k, allowed, say in (("status", STATUSES, "A department is a draft, active or archived"),
+                            ("source", SOURCES, "A department comes from the office, Chief or a template"),
+                            ("area", (None, *ca.AREA_ORDER), "Pick one of the eight areas"),
+                            ("support_duty", (None, *cd.CATALOG), "Pick one of the office’s duties to help it")):
+        if k in body:
+            row[k] = (body[k] or None) if k in ("area", "support_duty") else body[k]
+            if row[k] not in allowed:
+                _bad(say)
+    if "sort" in body:
+        if not isinstance(body["sort"], int) or isinstance(body["sort"], bool) or not 0 <= body["sort"] <= 999:
+            _bad("The order is a number from 0 to 999")
+        row["sort"] = body["sort"]
+    named = {k: _id(body[k], "person") if body[k] else None
+             for k in ("leader_contact_id", "overseer_contact_id") if k in body}
+    if any(named.values()):
+        people, holders = _people(bid, named.values()), _holders(bid)
+        for k, cid in named.items():
+            who, switch, does = (("leader", "lead", "leads") if k == "leader_contact_id" else
+                                 ("overseer", "oversee", "can oversee a department"))
+            if cid and cid not in people:
+                _bad(f"That {who} isn’t one of this church’s people")
+            if cid and not qualifies(m, holders, cid, switch):
+                _bad(f"{people[cid]} doesn’t hold a role that {does}. Turn that on for their role in Leaders & "
+                     f"roles, or pick another {who}.")
+    row.update(named)
+    after = {**(cur or {}), **row}
+    if after.get("leader_contact_id") and after["leader_contact_id"] == after.get("overseer_contact_id"):
+        _bad("A department’s leader and its overseer are two people")
+    status = after.get("status") or "active"
+    clash = _clash(m, did, after["name"]) if status != "archived" else None
+    if clash:
+        _bad(f"There’s already a department called {clash['name']}")
+    units = _units_in(bid, m, did, body["units"]) if body.get("units") is not None and status != "archived" else None
+    stamp = {"updated_by": str(by) if by else None, "updated_at": datetime.now(timezone.utc).isoformat()}
+    if cur is None:
+        saved = sb_clients.sb_post_as_service("/church_departments", {
+            "business_id": bid, "status": "active", "source": "office", "sort": 0, **row, **stamp})
+    else:
+        saved = sb_clients.sb_patch_as_service(f"/church_departments?id=eq.{_q(did)}&business_id=eq.{q}",
+                                               {**row, **stamp})
+    if not isinstance(saved, list) or not saved:
+        raise _refused(bid, did, after["name"] if status != "archived" else "")
+    did, have = str(saved[0]["id"]), (cur or {}).get("units") or []
+    if status == "archived":        # what hung from it is free to hang elsewhere
+        if not sb_clients.sb_delete_as_service(f"/church_department_units?business_id=eq.{q}&department_id=eq.{did}"):
+            raise HTTPException(503, UNSAVED)
+        return _dept(saved[0], [])
+    if units is None:
+        return _dept(saved[0], have)
+    keep, old = {_ukey(u) for u in units}, {_ukey(u) for u in have}
+    new = [u for u in units if _ukey(u) not in old]
+    made: List[Dict[str, Any]] = []
+    if new:
+        made = sb_clients.sb_post_as_service("/church_department_units", [{
+            "business_id": bid, "department_id": did, "kind": u["kind"], "label": "" if u["ref"] else u["label"],
+            **{c: (u["ref"] if UNIT_REF.get(u["kind"]) == c else None) for c in UNIT_REF.values()}} for u in new])
+        if not isinstance(made, list) or len(made) != len(new):
+            if cur is None:         # a new department doesn't stay half made
+                sb_clients.sb_delete_as_service(f"/church_departments?id=eq.{_q(did)}&business_id=eq.{q}")
+            raise _refused(bid, did, units=new)
+    gone = [u["id"] for u in have if _ukey(u) not in keep]
+    if gone and not sb_clients.sb_delete_as_service(
+            f"/church_department_units?business_id=eq.{q}&department_id=eq.{did}&id=in.({_in(gone)})"):
+        raise HTTPException(503, UNSAVED)
+    return _dept(saved[0], [u for u in have if _ukey(u) in keep] + [_unit(u) for u in made])
+
+
+def archive_department(biz: Any, department_id: Any, by: Any) -> Dict[str, Any]:
+    """Archive a department. What hung from it can hang elsewhere; its name
+    is free for a new one. Again on an archived one lets go of anything left."""
+    return save_department(biz, {"id": department_id, "status": "archived"}, by)
+
+
+def set_answers_to(biz: Any, holder_id: Any, answers_to: Any) -> Dict[str, Any]:
+    """Who one holder row (a person in a role) answers to, or nobody (None):
+    a person here who holds an active role, never the holder themselves.
+    Returns the saved row."""
+    _tables_open()
+    bid = _bid(biz)
+    hid = _id(holder_id, "role holder")
+    rows = _need(f"/church_leader_roles?id=eq.{_q(hid)}&business_id=eq.{_q(bid)}&select={LINK_COLS}&limit=1")
+    if not rows or rows[0].get("status") != "active":
+        raise HTTPException(404, "That person doesn’t hold that role here")
+    to = _id(answers_to, "person") if answers_to else None
+    if to and to == str(rows[0]["contact_id"]):
+        _bad("A leader can’t answer to themselves")
+    if to and not any(str(h["contact_id"]) == to for h in _holders(bid)):
+        _bad("They don’t hold a role here yet, so nobody can answer to them. Give them a role first.")
+    if (str(rows[0].get("answers_to_contact_id") or "") or None) == to:
+        return rows[0]
+    saved = sb_clients.sb_patch_as_service(f"/church_leader_roles?id=eq.{_q(hid)}&business_id=eq.{_q(bid)}",
+                                           {"answers_to_contact_id": to})
+    if not isinstance(saved, list) or not saved:
+        raise HTTPException(503, UNSAVED)
+    return saved[0]
+
+
+def save_settings(biz: Any, body: Dict[str, Any], by: Any, role: str) -> Dict[str, Any]:
+    """The church's money levels (cents; None is the platform's) and its
+    role picks: who gives the pastor's yes, who oversees the office (lists of
+    the church's active roles; [] is "none named"). Only the owner changes a
+    money level (decision 3). A change stamps map_by/map_at and logs a line
+    with what it was and is; the same values again change nothing."""
+    bid, body = _bid(biz), dict(body or {})
+    m = _map(bid)
+    cur, out = m.settings, {}
+    for k in LEVELS:
+        if k in body:
+            v = body[k]
+            if v is not None and (not isinstance(v, int) or isinstance(v, bool) or not 0 <= v <= LEVEL_MAX_CENTS):
+                _bad("A money level is from $0 to $100,000")
+            if v != cur.get(k):
+                out[k] = v
+    if any(k in out for k in LEVELS) and role != "owner":
+        raise HTTPException(403, "Only the owner changes the church’s money levels.")
+    pastor, board = (out.get(k, cur.get(k)) for k in LEVELS)
+    if pastor is not None and board is not None and board < pastor:
+        _bad("The board’s level starts at or above the pastor’s")
+    active = {rid for rid, r in m.roles.items() if r.get("status") == "active"}
+    for k in PICKS:
+        if k in body:
+            raw = body[k] or []
+            if not isinstance(raw, list) or len(raw) > PICKS_MAX:
+                _bad(f"Pick up to {PICKS_MAX} roles")
+            ids = list(dict.fromkeys(_id(x, "role") for x in raw))
+            if any(i not in active for i in ids):
+                _bad("Pick from this church’s own roles")
+            if ids != cur.get(k):
+                out[k] = ids
+    if not out:
+        return {"settings": cur, "changed": False}
+    saved = sb_clients.sb_post_as_service("/church_role_settings?on_conflict=business_id", {
+        "business_id": bid, **out, "map_by": str(by), "map_at": datetime.now(timezone.utc).isoformat()},
+        prefer="resolution=merge-duplicates,return=representation")
+    if not isinstance(saved, list) or not saved:
+        raise HTTPException(503, UNSAVED)
+    print(f"[church_map] settings {bid} by {by}: " + "; ".join(f"{k} {cur.get(k)!r} -> {v!r}" for k, v in out.items()),
+          flush=True)
+    return {"settings": {k: saved[0].get(k) for k in SETTINGS_COLS.split(",")}, "changed": True}
+
+
+# ─── The office's map ─────────────────────────────────────────────────
+
+def view(biz: Dict[str, Any]) -> Dict[str, Any]:
+    """GET /church/map: each department with its people's names, its duty
+    (label and who does it today, church_duties.holders_of) and its units by
+    name; each role's switches; who answers to whom; the settings; and the
+    gaps: a department missing a leader, an overseer or a duty, a leader or
+    overseer who no longer qualifies, a serve option no longer on the Serve
+    card, a budget line gone, a unit whose thing is gone."""
+    import church_duties as cd
+    import church_money_levels as cml
+    bid = _bid(biz)
+    m, roles, holders = _map(bid), cr.defs(bid, with_drafts=True), _holders(bid)
+    if roles is None:
+        raise HTTPException(503, UNREAD)
+    units = [u for d in m.departments for u in d["units"]]
+    names = {k: _things(bid, k, [u["ref"] for u in units if u["kind"] == k]) if k in UNIT_REF else _labels(bid, k)
+             for k in {u["kind"] for u in units}}
+    people = _people(bid, [d[k] for d in m.departments for k in ("leader_contact_id", "overseer_contact_id")] +
+                     [x[k] for x in m.links for k in ("contact_id", "answers_to_contact_id")])
+    duties = sorted({d["support_duty"] for d in m.departments if d["support_duty"] in cd.CATALOG})
+    logins = cd._names(bid, biz, cd._seats(bid)) if duties else {}
+    helpers = {k: [{"user_id": u, "name": logins.get(u, "")} for u in cd.holders_of(bid, k)] for k in duties}
+    gaps: List[Dict[str, Any]] = []
+    out = []
+    for d in m.departments:
+        said = []
+        for k, who, switch, does in (("leader_contact_id", "leader", "lead", "leads"),
+                                     ("overseer_contact_id", "overseer", "oversee", "can oversee")):
+            if not d[k]:
+                said.append((f"no_{who}", f"{d['name']} has no {who}."))
+            elif not qualifies(m, holders, d[k], switch):
+                said.append((f"{who}_off", f"{people.get(d[k]) or 'Its ' + who} no longer holds a role that {does}."))
+        if d["support_duty"] not in cd.CATALOG:
+            said.append(("no_duty", f"No office duty is named to help {d['name']}."))
+        shown = []
+        for u in d["units"]:
+            name = names[u["kind"]].get(u["ref"] or u["label"].casefold())
+            if not name:
+                said.append(("unit_gone", {"serve_option": f"“{u['label']}” is no longer on the Serve card.",
+                                           "check_line": f"“{u['label']}” is no longer one of the budget lines."}
+                             .get(u["kind"], f"A {_WORD[u['kind']]} that hung from {d['name']} is gone.")))
+            shown.append({**u, "name": name or u["label"]})
+        gaps += [{"department_id": d["id"], "kind": k, "text": t} for k, t in said]
+        duty = d["support_duty"] if d["support_duty"] in cd.CATALOG else None
+        out.append({**{k: d[k] for k in ("id", "name", "status", "source", "sort", "area", "updated_at")},
+                    **{w: {"contact_id": d[k], "name": people.get(d[k], "")} if d[k] else None
+                       for w, k in (("leader", "leader_contact_id"), ("overseer", "overseer_contact_id"))},
+                    "support_duty": {"key": duty, "label": cd.CATALOG[duty]["label"], "holders": helpers[duty]}
+                    if duty else None, "units": shown})
+    return {"departments": out, "gaps": gaps,
+            "roles": [{**{k: r[k] for k in ("id", "key", "title", "job", "status")}, "switches": can(m, r)}
+                      for r in roles],
+            "answers_to": [{"holder_id": x["id"], "role": x["role"], "contact_id": x["contact_id"],
+                            "name": people.get(x["contact_id"], ""),
+                            "answers_to": {"contact_id": x["answers_to_contact_id"],
+                                           "name": people.get(x["answers_to_contact_id"], "")}} for x in m.links],
+            "settings": {**m.settings, "platform": {"pastor_from_cents": cml.PASTOR_FROM_CENTS,
+                                                    "board_over_cents": cml.BOARD_OVER_CENTS}}}
