@@ -4,7 +4,7 @@ date: 2026-11-05
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-11-03: approved step 2 (design 4V41zJz1kEJGdeo4J9D2Ym, "Your two ideas"): launching with leaders who have not said yes, and switch changes for an Admin seat (decisions 2 and 3)'
 status: in progress
-prs: []
+prs: [kmj-intake-server#1726]
 migrations: [supabase/APPLY-2026-11-05-church-map-step2.sql (applied 2026-11-03, B2)]
 left_undone:
   - "B10: the gap line for a planned ask (asked into X at launch), once B9 gives the track's asks a shape"
