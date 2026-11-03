@@ -5460,6 +5460,26 @@ def render_compare() -> str:
 # FAQ
 # ══════════════════════════════════════════════════════════════════════
 
+def _church_logins_in_words() -> str:
+    """The church answer's last word on logins, from the plan limits. It
+    said "The Solutionist plan adds staff seats", which stopped being true
+    when every plan got its own logins (1 / 3 / 7, 2026-10-22). Once the
+    church plans by size are on sale, churches see those instead."""
+    import billing_limits
+    import church_site
+    import feature_gates as fg
+    import pricing_config
+    lim = fg.plan_limits()
+    after = " Leaders, volunteers and members use the member app and never need one."
+    if pricing_config.church_plans_offered():
+        seats = [f"{lim[p]['max_seats']:,} on {church_site._short(p)}" for p in fg.CHURCH_PLANS]
+        return ("Churches pick a plan by how many people come on a Sunday, and each plan comes with its office "
+                f"logins: {church_site._and(seats)}." + after)
+    seats = [f"{church_site._words(lim[p]['max_seats'])} on {billing_limits.PLAN_DISPLAY.get(p, p.title())}"
+             for p in fg.PLANS]
+    return f"Office logins come with every plan: {church_site._and(seats)}." + after
+
+
 def render_faq() -> str:
     extra_css = """
       /* Ten closed headings in one flat run gave nobody a way to find the
@@ -5551,7 +5571,7 @@ def render_faq() -> str:
       </details>
       <details class="faq-item" data-g="fit">
         <summary>Does it work for churches and ministries?</summary>
-        <div class="faq-body"><p>Yes. Churches get their own edition, in church words: Members, Giving, Serving, Care. Members sign in to the church&rsquo;s own member page with a code (no password) to watch live with chat, find sermons, read the Bible, join groups and give. Your team checks people in to services and children in to their rooms, with pickup codes. Group chats follow safety rules for teens, prayer requests go to a private care inbox, and giving runs through your church&rsquo;s own Stripe account with year-end statements. Home puts the first-time guests nobody has called yet at the top, and Chief helps with the follow-up. The Solutionist plan adds staff seats when you need them.</p></div>
+        <div class="faq-body"><p>Yes. Churches get their own edition, in church words: Members, Giving, Serving, Care. Members sign in to the church&rsquo;s own member page with a code (no password) to watch live with chat, find sermons, read the Bible, join groups and give. Your team checks people in to services and children in to their rooms, with pickup codes. Group chats follow safety rules for teens, prayer requests go to a private care inbox, and giving runs through your church&rsquo;s own Stripe account with year-end statements. Home puts the first-time guests nobody has called yet at the top, and Chief helps with the follow-up. __CHURCH_LOGINS__</p></div>
       </details>
       <details class="faq-item" data-g="how">
         <summary>What does Chief do while I&rsquo;m not logged in?</summary>
@@ -5589,7 +5609,8 @@ def render_faq() -> str:
 </section>
 """
     body = (body.replace("__MARKETING_LADDER__", _marketing_ladder_html())
-                .replace("__SOCIAL_NETWORKS__", _networks_in_words()))
+                .replace("__SOCIAL_NETWORKS__", _networks_in_words())
+                .replace("__CHURCH_LOGINS__", _church_logins_in_words()))
     return _render_shell(
         title="FAQ",
         description="Answers to common questions about the Solutionist System: who it's for, pricing, how it compares to other tools, security, and signup.",

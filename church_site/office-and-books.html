@@ -288,7 +288,7 @@ in exchange for these contributions.</div>
 <li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Stripe payouts matched to the deposits in the bank</span></li>
 <li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Profit and loss, balance sheet, cash flow and the full ledger on every plan</span></li>
 <li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Reports to PDF or CSV, whenever the board asks</span></li>
-<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Budget against actual on Professional and up</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>{{#BUDGET_PLAN}}Budget against actual on Professional and up{{/BUDGET_PLAN}}</span></li>
 </ul>
 </div>
 <div class="vis">
@@ -341,7 +341,7 @@ in exchange for these contributions.</div>
 <li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Each account's statement balance checked against the books</span></li>
 <li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>The year-end close posts the closing entry for you</span></li>
 <li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>A year-end package, ready to email to your accountant</span></li>
-<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>On the Professional plan and up</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>{{#CLOSE_PLAN}}On the Professional plan and up{{/CLOSE_PLAN}}</span></li>
 </ul>
 </div>
 </div>
@@ -356,8 +356,8 @@ in exchange for these contributions.</div>
 <p class="body">Who gave what is walled off in the database itself: only the owner, an admin and the church's accountant can see it. Leaders do their work from the member app's Lead tab, which never shows giving.</p>
 <ul class="ticks">
 <li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Your church's own titles, from Elders to Trustees, each on a job Chief understands</span></li>
-<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>1 login on Starter, 3 on Professional, 7 on Solutionist</span></li>
-<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>A seat for your accountant on Solutionist</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>{{#LOGINS_LINE}}1 login on Starter, 3 on Professional, 7 on Solutionist{{/LOGINS_LINE}}</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>{{#ACCOUNTANT_PLAN}}A seat for your accountant on Solutionist{{/ACCOUNTANT_PLAN}}</span></li>
 <li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Every change to a recorded gift is kept, with who made it</span></li>
 </ul>
 </div>
@@ -389,7 +389,7 @@ in exchange for these contributions.</div>
 <li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Matches, categories, and moves between your own accounts</span></li>
 <li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>When nothing fits, it leaves the row for you instead of guessing</span></li>
 <li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>It tells you when a month is ready to close</span></li>
-<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>On the Professional plan and up</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>{{#SORTING_PLAN}}On the Professional plan and up{{/SORTING_PLAN}}</span></li>
 </ul>
 </div>
 <div class="vis vs" style="min-height: 600px">
@@ -459,9 +459,9 @@ in exchange for these contributions.</div>
 <p class="eyebrow" style="color: #5A5E6B">Plans</p>
 <h2 class="h2">The books come with <span class="serif ink" style="font-size: 1.08em">every plan.</span></h2>
 </div>
-<p class="body" style="max-width: 440px">Every church sees its own full ledger, on every plan. The bigger plans add the month-end close, Chief's sorting, and the work your accountant does at year-end.</p>
+<p class="body" style="max-width: 440px">{{#BOOKS_PLANS_LEDE}}Every church sees its own full ledger, on every plan. The bigger plans add the month-end close, Chief's sorting, and the work your accountant does at year-end.{{/BOOKS_PLANS_LEDE}}</p>
 </div>
-<div class="planrow">
+{{#PLAN_STRIP}}<div class="planrow">
 <div class="plan"><span class="pn">Starter</span><span class="pp">${{P_STARTER}} <small>a month</small></span><ul>
 <li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>Bank rows, categories and reconciliation</li>
 <li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>Profit and loss, balance sheet and the full ledger</li>
@@ -480,7 +480,7 @@ in exchange for these contributions.</div>
 <li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>A seat for your accountant</li>
 <li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>7 logins and unlimited bank connections</li>
 </ul></div>
-</div>
+</div>{{/PLAN_STRIP}}
 <a href="/churches#pricing" style="align-self: flex-start; font-weight: 600; color: #0B0C11">Compare every plan</a>
 </div>
 </section>
