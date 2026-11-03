@@ -347,14 +347,28 @@ def seat_count(business_id: str) -> int:
     return 1 + len(rows)
 
 
+def _extra_logins(business_id: str, biz_row: Optional[Dict[str, Any]]) -> int:
+    """Extra office logins on this business (0 when none). Read fresh when the
+    row the caller passed doesn't carry settings, so a login a church paid
+    for is never refused for want of a column in someone's select."""
+    import church_billing
+    if biz_row is not None and "settings" in biz_row:
+        return church_billing.extra_logins(biz_row)
+    rows = sb_clients.sb_get_as_service(f"/businesses?id=eq.{business_id}&select=settings&limit=1") or []
+    return church_billing.extra_logins(rows[0] if rows else None)
+
+
 def can_add_seat(business_id: str, biz_row: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     if biz_row is None:
         rows = sb_clients.sb_get_as_service(
             f"/businesses?id=eq.{business_id}"
-            f"&select=id,subscription_status,subscription_plan,comp_tier&limit=1") or []
+            f"&select=id,subscription_status,subscription_plan,comp_tier,settings&limit=1") or []
         biz_row = rows[0] if rows else None
     count = seat_count(business_id)
     limit = feature_gates.limit_for(biz_row, "max_seats")
+    if limit is not None:
+        # Office logins a church bought on top of its plan (church_billing).
+        limit += _extra_logins(business_id, biz_row)
     allowed = (limit is None) or (count < limit)
     return {"ok": True, "allowed": allowed, "count": count, "limit": limit,
             "enforce": feature_gates.enforcement_on()}
