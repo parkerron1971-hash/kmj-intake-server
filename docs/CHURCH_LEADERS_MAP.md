@@ -277,6 +277,7 @@ Every department names an overseer, and an overseer changes who hears about a la
 - **A null level** is the platform's, even when the other level is set. `LEVELS_ON` and the member app's "Over $2,500" read the church's levels.
 - **Correction to §5 item 7:** room asks go to the rooms duty wherever the map is open, an empty map included. That is not a setting. So Love City's room alerts with its map open and empty add Jessica, who holds Rooms by the Executive Pastor's lane, and test_church_three_today pins that (`ROOMS_OPEN`). Only Love City's money and office-overseer outputs equal the baseline.
 - **A failed map read** is each reader's own failed read. The money levels and the duties return a 503. `overseers` and `room_phones` go to the owner alone, as a failed read there always has.
+- **A fix to PR 6's retry (#1716 review).** A new department whose units fail, and whose clean-up delete also fails, is now marked `status='draft'` (its source stays 'office'), so it routes nothing. A retry takes over only a draft from the office, saved by the same login within ten minutes, with nothing hung from it. A department that a login made active on purpose with nothing hung from it gets the name clash's 400, as it did before PR 6.
 
 Unchanged; these become the map's sources: group leaders (group_lead.py:36-39), serve teams (sunday_leading.py:25-38), church_board_members, space_leaders and worship_ministries. `member_portal._leads` (:1172-1194) needs no change either: department people must hold an active role, which already opens the Lead tab.
 

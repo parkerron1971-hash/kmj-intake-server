@@ -148,6 +148,7 @@ def test_a_half_made_department_that_cant_be_taken_out_is_finished_by_the_retry(
     body = {"name": "Kids", "units": [{"kind": "space", "label": "kids"}]}
     assert _refused(_save, lc, body, code=503) == "That couldn’t finish saving. Try again in a moment."
     left = _dept(lc, LC, "Kids")
+    assert (left["status"], left["source"]) == ("draft", "office"), "marked half made: a draft routes nothing"
     other = dict(body, name="Teens")
     _refused(_save, lc, other, code=503)
     _dept(lc, LC, "Teens")["updated_by"] = "someone-else"
@@ -155,8 +156,22 @@ def test_a_half_made_department_that_cant_be_taken_out_is_finished_by_the_retry(
     monkeypatch.setattr(sb_clients, "sb_delete_as_service", delete)
     again = _save(lc, body)
     assert (again["id"], [u["label"] for u in again["units"]]) == (left["id"], ["kids"]), "the retry finishes it"
+    assert again["status"] == _dept(lc, LC, "Kids")["status"] == "active"
     assert [d["name"] for d in lc.t["church_departments"] if d["business_id"] == LC].count("Kids") == 1
     assert _refused(_save, lc, other) == "There’s already a department called Teens", "another login's isn't theirs"
+
+
+def test_a_department_made_on_purpose_with_nothing_in_it_is_never_taken_for_a_half_made_one(lc):
+    """The same login, within the ten minutes, with no units: an active
+    department it meant to make. A same-name save is the 400, and it is
+    left as it was (#1716 review)."""
+    made = _save(lc, {"name": "Kids"})
+    assert (made["status"], made["units"]) == ("active", [])
+    body = {"name": "Kids", "units": [{"kind": "space", "label": "kids"}]}
+    assert _refused(_save, lc, body) == "There’s already a department called Kids"
+    kids = [(d["status"], d["id"]) for d in lc.t["church_departments"] if d["business_id"] == LC and d["name"] == "Kids"]
+    assert kids == [("active", made["id"])]
+    assert not [u for u in lc.t["church_department_units"] if u["department_id"] == made["id"]]
 
 
 def test_the_people_on_a_big_map_are_read_fifty_at_a_time(lc, monkeypatch):

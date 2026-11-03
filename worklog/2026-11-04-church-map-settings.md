@@ -17,6 +17,7 @@ decisions:
   - "/my/board/approvals opens through church_money_levels.board_people, not boards_of: board-yes holders are added there and to board (a login by its email); the Board tab stays church_board_members"
   - "Room asks phone church_duties.holders_of(biz, 'rooms') wherever the map is open, empty too, so Love City's open empty map adds Jessica (ROOMS_OPEN in test_church_three_today); the bell is unchanged"
   - "A failed map read is the reader's own: money levels and duties 503; overseers and room_phones the owner alone"
+  - "#1716 review fix, a separate commit: a half-made department (units and clean-up both failed) is marked a draft from the office, and only such a draft is taken over by the same login's retry; an active unit-less department gets the 400"
 related: [2026-11-04-church-map-fixture.md, 2026-11-04-church-map-core.md, 2026-11-04-church-map-switches.md, 2026-11-04-church-map-writes.md, 2026-11-04-church-map-chain.md]
 ---
 Where `church_map.opened(biz)` is a Map, the church's own settings decide. Its money levels apply to
