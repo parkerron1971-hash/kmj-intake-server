@@ -83,11 +83,12 @@ def test_ready_is_one_probe_remembered_once_true_and_false_on_any_error(monkeypa
 
 def test_before_the_migration_every_role_write_leaves_the_new_columns_out(monkeypatch):
     """The fake refuses a read or write naming them, as PostgREST would; every
-    write still saves, and no row or page carries a switch."""
+    write still saves (an update naming a switch says it can't: the next
+    test), and no row or page carries a switch."""
     db = build(monkeypatch, filled=False, migrated=False)
     nh = church(db, NEW_HOPE)
     made = cr.create_role(nh, {"title": "Care Ministers", "job": "care", "can_shepherd": True, "made_for": ["care_need"]})
-    cr.update_role(NEW_HOPE, _role(db, NEW_HOPE, "deacons")["id"], {"can_shepherd": True, "handles": ["care_need"]})
+    cr.update_role(NEW_HOPE, _role(db, NEW_HOPE, "deacons")["id"], {"handles": ["care_need"]})
     cr.set_type(nh, "baptist", ["mothers_board"])
     cr.chief_draft(church(db, GRACE), "Armor Bearer", "team")
     assert made["key"] == "care_ministers" and _role(db, NEW_HOPE, "mothers_board")
@@ -95,6 +96,23 @@ def test_before_the_migration_every_role_write_leaves_the_new_columns_out(monkey
     lib = cr.library(nh)
     assert lib and not [k for r in lib["roles"] for k in r if MAP_NEW.search(k)]
     assert not any("Switches:" in line for line in cr.chief_lines(church(db, LC))), "Love City's map is open"
+
+
+@pytest.mark.parametrize("migrated", [False, True], ids=["before_the_migration", "a_failed_probe"])
+def test_an_update_naming_a_switch_it_cant_write_says_so_and_changes_nothing(monkeypatch, migrated):
+    """ready() is false before the migration and on a failed probe (a blip):
+    an update naming a switch is a 503, never dropped and answered as saved."""
+    db = build(monkeypatch, filled=False, migrated=migrated)
+    monkeypatch.setattr(cm, "ready", lambda: False)
+    deacons = _role(db, GRACE, "deacons")
+    before = dict(deacons)
+    for body in ({"can_shepherd": True}, {"title": "Deacon Council", "made_for": ["care_need"]}):
+        with pytest.raises(HTTPException) as e:
+            cr.update_role(GRACE, deacons["id"], body)
+        assert (e.value.status_code, e.value.detail) == (503, "Couldn’t save that just now; try again.")
+        assert _role(db, GRACE, "deacons") == before, "nothing half-saved"
+    assert cr.update_role(GRACE, deacons["id"], {"title": "Deacon Council"})["title"] == "Deacon Council", \
+        "an update naming no switch saves"
 
 
 # ─── The catalog, and what a new church is filled with ────────────────
@@ -119,7 +137,7 @@ def test_a_church_filled_after_the_migration_gets_what_the_backfill_gives(monkey
         assert {d["key"]: _sw(d) for d in db.t["church_role_defs"] if d["business_id"] == b} == \
             {r["key"]: _sw(r) for r in want["roles"]}, NAMES[b]
         st = next(s for s in db.t["church_role_settings"] if s["business_id"] == b)
-        assert [keys[i] for i in st.get("office_overseer_roles") or []] or None == want["office_overseer_roles"]
+        assert ([keys[i] for i in st.get("office_overseer_roles") or []] or None) == want["office_overseer_roles"]
     grace = church(db, GRACE)
     cr.set_type(grace, "nondenom", ["executive_pastor"])
     st = next(s for s in db.t["church_role_settings"] if s["business_id"] == GRACE)
