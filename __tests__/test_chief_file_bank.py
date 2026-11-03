@@ -300,3 +300,24 @@ def test_the_verbs_are_wired():
     import chief_prompt
     src = open(chief_prompt.__file__, encoding="utf-8").read().replace("{{", "{")
     assert '"type":"file_bank_rows"' in src and '"type":"undo_file_bank_rows"' in src and '"type":"bank_to_file"' in src
+
+
+def test_a_past_answer_is_said_by_the_churchs_line_name(db, monkeypatch):
+    """Chief told Kevin a payee "was filed under operating all 3 times
+    before" (2026-11-03): the suggestion carried the key alone."""
+    import expense_categories as ec
+    import expense_lines
+
+    def suggest(business_id, groups):
+        for g in groups:
+            if g["payee"].startswith("duke energy"):
+                g["suggest"] = {"from": "history", "answer": "operating", "label": None, "times": 3, "of": 3}
+    monkeypatch.setattr(ec, "suggest", suggest)
+    monkeypatch.setattr(expense_lines, "names", lambda biz: {
+        "operating": "Ministry & operations", "owner_pay": "Pastor & staff pay", "tax": "Taxes",
+        "savings": "Reserves", "other": "Other"})
+    got = _run(cf.handle_bank_to_file, {}, who=READER)
+    duke = next(g for g in got["groups"] if g["payee"].startswith("duke energy"))
+    assert duke["suggest"]["line"] == "Ministry & operations" and duke["suggest"]["answer"] == "operating"
+    assert "'line' name" in got["note_for_chief"] and "never its answer key" in got["note_for_chief"]
+

@@ -65,7 +65,7 @@ def test_totals_cover_every_match_in_and_out_apart():
 
 def test_a_row_is_shown_from_the_business_side():
     row = ct.display_row(_tx(1, -40.0, "PAYPAL *KMJMIN"))
-    assert row["way"] == "In" and row["amount"] == 40.0 and row["status"] == "No"
+    assert row["way"] == "In" and row["amount"] == 40.0 and row["status"] == "—"
     row = ct.display_row(_tx(2, 15.5, "KMJ CREATIVE", status="auto_matched"))
     assert row["way"] == "Out" and row["amount"] == -15.5 and row["status"] == "Yes"
 
@@ -263,3 +263,63 @@ def test_it_is_a_lookup_in_the_turn():
 def test_a_church_login_outside_the_money_lane_is_refused():
     import chief_areas
     assert chief_areas.VERBS["search_transactions"] == chief_areas.MONEY
+
+
+# ─── 7. Filed is not matched (2026-11-03) ────────────────────────────
+# Kevin: why are the rows Chief filed "still under all transactions like we
+# didn't do any transaction?" Chief read "Reconciled: No" off every row.
+
+CHURCH_LINES = {"operating": "Ministry & operations", "owner_pay": "Pastor & staff pay", "tax": "Taxes",
+                "savings": "Reserves", "other": "Other"}
+
+
+def _filed(i, amount, name, cat, sub=None, kind=None, status="unmatched"):
+    return {**_tx(i, amount, name, status=status), "business_category": cat,
+            "business_subcategory": sub, "money_kind": kind}
+
+
+def test_each_row_says_what_it_is_filed_under_in_the_churchs_words():
+    assert ct.filed_as(_filed(1, 112.27, "Comcast", "operating", "Utilities"), CHURCH_LINES) ==         "Ministry & operations · Utilities"
+    assert ct.filed_as(_filed(2, 296.0, "DTE ENERGY", "operating"), CHURCH_LINES) == "Ministry & operations"
+    assert ct.filed_as(_filed(3, 61.17, "DTE Energy", "other")) == "Waiting"
+    assert ct.filed_as(_filed(4, 61.17, "DTE Energy", None)) == "Waiting"
+    assert ct.filed_as(_filed(5, -400.0, "City of Love Out SUBSPLASH", None, kind="gifts")) == "Gifts arriving"
+    assert ct.filed_as(_filed(6, 50.0, "X", "operating")) == "Operating", "no names: the key, readable"
+
+
+def test_a_filed_bill_with_nothing_to_match_shows_a_dash_not_no():
+    row = ct.display_row(_filed(1, 112.27, "Comcast", "operating", "Utilities"), CHURCH_LINES)
+    assert row["filed"] == "Ministry & operations · Utilities" and row["status"] == "—"
+    assert ct.display_row(_filed(2, -5.0, "x", None, status="ignored"))["status"] == "Set aside"
+    labels = [c["label"] for c in ct.COLUMNS]
+    assert "Filed under" in labels and "Matched" in labels and "Reconciled" not in labels
+
+
+def test_the_totals_count_filed_and_waiting_not_unreconciled():
+    rows = [_filed(1, 112.27, "Comcast", "operating", "Utilities"),
+            _filed(2, 296.0, "DTE ENERGY", "operating"),
+            _filed(3, 61.17, "DTE Energy", "other")]
+    out = ct.summarize(_args(), ct.tally(rows, []), CHURCH_LINES)
+    assert out["totals"]["filed"]["count"] == 2 and out["totals"]["waiting"]["count"] == 1
+    assert "Filed: 2. Still waiting for a category (in To review): 1 ($0.00 in and $61.17 out)" in out["result"]
+    assert "Not reconciled" not in out["result"]
+    assert "not a to-do list" in out["note_for_chief"]
+    assert [r["filed"] for r in out["rows"]] == ["Ministry & operations · Utilities", "Ministry & operations", "Waiting"]
+
+
+def test_status_waiting_and_filed_are_read_from_the_rows(monkeypatch, speaker):
+    rows = [_filed(1, 112.27, "Comcast", "operating", "Utilities"), _filed(2, 61.17, "DTE Energy", "other")]
+    for status, want in (("waiting", ["tx2"]), ("filed", ["tx1"])):
+        seen = _serve(monkeypatch, {"/plaid_accounts": [[{"account_id": "a1"}]],
+                                    "/plaid_transactions": [list(rows), []]})
+        out = ct.search("biz-1", {"status": status})
+        assert [r["id"] for r in out["rows"]] == want
+        assert not any("reconciliation_status" in p.split("select=")[0] for p in seen if p.startswith("/plaid_transactions"))
+
+
+def test_the_tool_explains_filed_and_matched():
+    d = ct.TOOL["description"]
+    assert "FILED" in d and "MATCHED" in d and "not a to-do list" in d
+    assert ct.TOOL["input_schema"]["properties"]["status"]["enum"] == list(ct.STATUSES)
+    assert "waiting" in ct.STATUSES and "filed" in ct.STATUSES
+

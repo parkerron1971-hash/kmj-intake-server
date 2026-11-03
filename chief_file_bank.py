@@ -262,6 +262,10 @@ def _to_file_sync(biz: Dict[str, Any], action: Dict[str, Any]) -> Dict[str, Any]
         cats = []
     import expense_lines
     lines = expense_lines.names(business_id)       # the business's own names for the answers' lines
+    for g in shown:                                # a past answer said by its line's name, never its key
+        s = g.get("suggest")
+        if s and s.get("answer") in lines:
+            s["line"] = lines[s["answer"]]
     ins = sum(1 for r in rows if r["direction"] == "in")
     text = (f"{len(rows)} bank rows wait for an answer ({ins} money in, {len(rows) - ins} money out), "
             f"in {len(groups)} groups by payee. Largest: " + "; ".join(
@@ -271,7 +275,8 @@ def _to_file_sync(biz: Dict[str, Any], action: Dict[str, Any]) -> Dict[str, Any]
     if known:
         text += f" {known} of these payees have been filed before or have a rule, so there's a suggestion for each."
     note = ("Propose an answer for each group in plain words and ASK before filing: where a group has 'suggest', "
-            "say so ('your last 6 Duke Energy payments went under Utilities; same here?'); otherwise propose one "
+            "say so by its 'line' name and label ('your last 6 Duke Energy payments went under Utilities; same "
+            "here?'), never its answer key; otherwise propose one "
             "from the payee's name and the saved categories. File only what the owner confirms, with "
             "file_bank_rows (by payee, or by transaction_ids for part of a group). After filing a payee the owner "
             "confirmed that has no rule, offer to remember it (save_category_rule) so its next payments file "
