@@ -161,6 +161,43 @@ def test_a_half_made_department_that_cant_be_taken_out_is_finished_by_the_retry(
     assert _refused(_save, lc, other) == "There’s already a department called Teens", "another login's isn't theirs"
 
 
+def _units_fail(monkeypatch):
+    post = sb_clients.sb_post_as_service
+    monkeypatch.setattr(sb_clients, "sb_post_as_service", lambda path, body, prefer=None, **k: None
+                        if path.startswith("/church_department_units") else post(path, body, prefer, **k))
+    monkeypatch.setattr(sb_clients, "sb_delete_as_service", lambda path, **k: False)
+    return post
+
+
+def test_a_half_made_department_that_cant_be_marked_a_draft_says_so(lc, monkeypatch, capsys):
+    """#1717 review: units, clean-up and the draft mark all failed, so it is
+    left active with nothing in it, and the 503 says what to do."""
+    _units_fail(monkeypatch)
+    patch = sb_clients.sb_patch_as_service
+    monkeypatch.setattr(sb_clients, "sb_patch_as_service", lambda path, body, **k: None
+                        if path.startswith("/church_departments") else patch(path, body, **k))
+    says = _refused(_save, lc, {"name": "Kids", "units": [{"kind": "space", "label": "kids"}]}, code=503)
+    assert says == ("That didn’t finish saving. Kids was made with nothing in it: archive it on your leaders map, "
+                    "then try again.")
+    assert _dept(lc, LC, "Kids")["status"] == "active" and "left active and empty" in capsys.readouterr().out
+
+
+def test_a_retry_whose_units_fail_again_stays_a_draft(lc, monkeypatch):
+    """#1717 review: the retry keeps the department a draft until its units
+    are in, then makes it what the first try would have."""
+    post = _units_fail(monkeypatch)
+    body = {"name": "Kids", "units": [{"kind": "space", "label": "kids"}]}
+    _refused(_save, lc, body, code=503)
+    left = _dept(lc, LC, "Kids")
+    assert _refused(_save, lc, body, code=503) == "That didn’t save. Try again.", "the retry's units fail too"
+    kids = [d for d in lc.t["church_departments"] if d["business_id"] == LC and d["name"] == "Kids"]
+    assert [(d["id"], d["status"]) for d in kids] == [(left["id"], "draft")], "still a draft, which routes nothing"
+    assert not [u for u in lc.t["church_department_units"] if u["department_id"] == left["id"]]
+    monkeypatch.setattr(sb_clients, "sb_post_as_service", post)
+    again = _save(lc, body)
+    assert (again["id"], again["status"], _dept(lc, LC, "Kids")["status"]) == (left["id"], "active", "active")
+
+
 def test_a_department_made_on_purpose_with_nothing_in_it_is_never_taken_for_a_half_made_one(lc):
     """The same login, within the ten minutes, with no units: an active
     department it meant to make. A same-name save is the 400, and it is
@@ -243,6 +280,22 @@ def test_only_the_owner_changes_money_and_a_change_is_stamped_and_logged(lc, cap
     pick = _role(lc, GRACE, "pastor")["id"]
     assert cm.save_settings(biz, {"pastor_yes_roles": [pick, pick]}, "u-admin", "admin")["settings"][
         "pastor_yes_roles"] == [pick], "an admin picks the roles"
+
+
+def test_a_level_left_unset_is_the_platforms_when_the_two_are_compared(lc):
+    """#1717's note: a pastor's level above the platform's $2,500, with the
+    board's unset, would ask for a board member's yes before the pastor's."""
+    biz, owner = church(lc, LC), _owner(lc, LC)
+    st = next(s for s in lc.t["church_role_settings"] if s["business_id"] == LC)
+    for body in ({"pastor_from_cents": 300_000}, {"board_over_cents": 40_000},
+                 {"pastor_from_cents": 300_000, "board_over_cents": None}):
+        assert "at or above the pastor’s" in _refused(cm.save_settings, biz, body, owner, "owner"), body
+    assert (st.get("pastor_from_cents"), st.get("board_over_cents")) == (None, None), "nothing saved"
+    assert cm.save_settings(biz, {"pastor_from_cents": 250_000}, owner, "owner")["changed"], "equal is fine"
+    assert cm.save_settings(biz, {"pastor_from_cents": 300_000, "board_over_cents": 300_000}, owner, "owner")["changed"]
+    assert "at or above" in _refused(cm.save_settings, biz, {"board_over_cents": None}, owner, "owner"), \
+        "unset, the board's would be $2,500, under the pastor's $3,000"
+    assert cm.save_settings(biz, {"pastor_yes_roles": []}, "u-admin", "admin")["changed"], "a role pick isn't a level"
 
 
 # ─── The map read back, and its gaps ──────────────────────────────────

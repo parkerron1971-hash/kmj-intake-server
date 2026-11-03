@@ -3,9 +3,11 @@ title or a key may suggest a value once, when the thing first appears; no code
 reads a title word or a role key at read time to decide behavior.
 
 Each reader §0's first table names is listed with the words it reads. Each is
-xfail(strict=True) until the PR that deletes it: PR 9, after CHURCH_MAP=on
-everywhere, for all but job_for_title's "care", which §4 drops in PR 8. Words
-that only change wording on screen are display, and aren't here."""
+xfail(strict=True) until the PR that deletes it (DONE is the last one merged
+here): PR 9, after CHURCH_MAP=on everywhere, for all but job_for_title's
+"care", which §4 dropped in PR 8. The areas' read-time words stay as the
+closed map's path until PR 9. Words that only change wording on screen are
+display, and aren't here."""
 from __future__ import annotations
 
 import ast
@@ -29,6 +31,7 @@ def source(module: str, func: str = "") -> str:
     return ""
 
 
+DONE = 8
 READERS = [
     # (module, function or "" for the whole module, the read, what decides instead, the PR that deletes it)
     ("church_shepherding", "", r"\b(SHEPHERD|MINISTER)_TITLE\b", "can_shepherd decides", 9),
@@ -45,7 +48,8 @@ READERS = [
 
 @pytest.mark.parametrize("module,func,read", [
     pytest.param(m, f, rx, id=f"{m}.{f or '*'}",
-                 marks=pytest.mark.xfail(strict=True, raises=AssertionError, reason=f"PR {pr}: {why}"))
+                 marks=() if pr <= DONE else pytest.mark.xfail(strict=True, raises=AssertionError,
+                                                               reason=f"PR {pr}: {why}"))
     for m, f, rx, why, pr in READERS])
 def test_no_reader_decides_by_a_title_word_or_a_role_key(module, func, read):
     assert not re.search(read, source(module, func)), f"{module}.{func or '*'} still reads /{read}/"

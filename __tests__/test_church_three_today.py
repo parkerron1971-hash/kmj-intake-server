@@ -247,8 +247,11 @@ PLACES = {
 
 @ALL
 def test_where_each_role_sits_today(db, biz):
-    places, got = ca._places(biz), {}
-    for d in cr.defs(biz):
+    """Through places_for, as the areas read it (PR 8: where the map is open,
+    each role's stored guess; empty, those are today's words)."""
+    defs, got = cr.defs(biz), {}
+    places = ca.places_for(biz, defs)
+    for d in defs:
         got.setdefault(ca.place_role(d, places)["area"], []).append(d["key"])
     assert got == PLACES[biz]
 
