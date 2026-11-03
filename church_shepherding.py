@@ -11,7 +11,9 @@ Who shepherds: a role on the senior job, and pastoral roles titled pastor,
 elder, bishop, overseer or shepherd; roles titled minister only when the
 church turns Ministers on. Only people who said yes (active holders).
 Deacons and the Care team take care needs, not families. Visitors stay
-with the Welcome role.
+with the Welcome role. Where the church's leaders map is open
+(church_map), each role's own can_shepherd says instead of its title, on
+any job, so a church can say its Deacon Board shepherds.
 
 What a shepherd is given is a unit: a recorded family with a member in it
 (`h:<household id>`), or a member in no family at all (`c:<contact id>`, a
@@ -160,9 +162,22 @@ def save_settings(biz_id: str, body: Dict[str, Any], by_user: Optional[str]) -> 
 
 # ─── who shepherds ────────────────────────────────────────────────────
 
-def role_rows(all_defs: List[Dict[str, Any]], st: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """The senior and pastoral roles, each with whether it shepherds."""
+def role_rows(all_defs: List[Dict[str, Any]], st: Dict[str, Any], m: Any = None) -> List[Dict[str, Any]]:
+    """The senior and pastoral roles, each with whether it shepherds. Where
+    the church's map is open (`m`, church_map.opened), each role's own
+    can_shepherd says, on any job: None follows the Ministers setting, and
+    no title is read (docs/CHURCH_LEADERS_MAP.md §0 rule a). Else the
+    titles, as before (the closed path, until PR 9)."""
     out = []
+    if m:
+        import church_map
+        for d in all_defs:
+            said = church_map.can(m, d)["shepherd"]
+            if d.get("job") not in ("senior", "pastoral") and said is False:
+                continue
+            out.append({"def": d, "shepherds": bool(st.get("ministers")) if said is None else bool(said),
+                        "switch": "ministers" if said is None else None, "lead": d.get("job") == "senior"})
+        return out
     for d in all_defs:
         if d.get("job") not in ("senior", "pastoral"):
             continue
@@ -208,12 +223,14 @@ def load(biz_id: str, *, now: Optional[datetime] = None) -> Optional[Dict[str, A
     """One read of the church: roles, shepherds, members, families, who has
     whom. None when any read failed (never read a failure as "nobody")."""
     import church_follow_up as cfu
+    import church_map
     import church_roles as cr
     b = str(biz_id)
     now = now or _now()
     all_defs = cr.defs(b)
     holder_rows = cfu.roles(b)
     st = settings(b)
+    mp = church_map.opened(b)
     members = cf.members(b)
     homes = _rows(f"/households?business_id=eq.{_q(b)}&select=id,name,created_at&limit=10000")
     adults = _rows(f"/household_adults?business_id=eq.{_q(b)}&select=household_id,contact_id,relationship&limit=20000")
@@ -224,10 +241,10 @@ def load(biz_id: str, *, now: Optional[datetime] = None) -> Optional[Dict[str, A
     since = _iso(now - timedelta(days=400))
     touches = _rows(f"/church_shepherd_touches?business_id=eq.{_q(b)}&created_at=gte.{_q(since)}"
                     "&select=household_id,kind,created_at,shepherd_contact_id&order=created_at.desc&limit=20000")
-    if any(x is None for x in (all_defs, holder_rows, st, members, homes, adults, kids, assigned, touches)):
+    if any(x is None for x in (all_defs, holder_rows, st, mp, members, homes, adults, kids, assigned, touches)):
         return None
     holders = cr.active_holders(holder_rows)
-    roles = role_rows(all_defs, st)
+    roles = role_rows(all_defs, st, mp)
     shepherds = shepherds_from(roles, holders, st)
     member_by = {str(m["id"]): m for m in members}
     home_by = {str(h["id"]): h for h in homes}
@@ -900,15 +917,17 @@ def office_family(biz: Dict[str, Any], household_id: str) -> Dict[str, Any]:
 
 def _member_ctx(b: str) -> Optional[Dict[str, Any]]:
     import church_follow_up as cfu
+    import church_map
     import church_roles as cr
     all_defs = cr.defs(b)
     holder_rows = cfu.roles(b)
     st = settings(b)
-    if all_defs is None or holder_rows is None or st is None:
+    mp = church_map.opened(b)
+    if all_defs is None or holder_rows is None or st is None or mp is None:
         return None
     holders = cr.active_holders(holder_rows)
     return {"defs": all_defs, "holders": holders, "settings": st,
-            "shepherds": shepherds_from(role_rows(all_defs, st), holders, st)}
+            "shepherds": shepherds_from(role_rows(all_defs, st, mp), holders, st)}
 
 
 def _lead_names(mctx: Dict[str, Any], skip: str = "") -> List[Dict[str, Any]]:

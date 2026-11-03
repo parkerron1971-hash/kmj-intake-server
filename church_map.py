@@ -14,14 +14,18 @@ church's structure is data (supabase/APPLY-2026-11-04-church-map.sql).
     load(biz) ....... a church's map: its roles' switches, who a holder
                       answers to, its settings, its departments and what
                       hangs from each. None on a failed read, never empty
-    can(m, role) .... a role's seven switches
+    opened(biz) ..... what a reader takes: False (closed, or not ready),
+                      else load(biz)
+    can(m, role) .... a role's seven switches; made_for(m, role) its streams
     propose(biz) .... a read-only draft of departments, step 2's hook
 
 Every reader takes it in this order (§3): closed, or not ready, runs today's
 code; open and ready, the map decides wherever it knows, then the role's
 switches, then today's rule; open and ready but load() failed, the caller
-does what it does today on a failed read. Nothing reads it to decide
-anything yet (PR 4 on); church_roles writes the switches once ready().
+does what it does today on a failed read. The switches decide who shepherds
+(church_shepherding.role_rows), choose's tie-break (church_follow_up) and
+the leaders room (member_portal_messaging); church_roles writes them once
+ready().
 
 Server-only tables, read through the service role, always by business_id.
 """
@@ -195,15 +199,22 @@ def load(biz: Any) -> Optional[Map]:
                      for d in depts])
 
 
+def opened(biz: Any) -> "Map | None | bool":
+    """What a reader takes, in §3's order: False where the map is closed for
+    this church or its columns aren't there yet (today's code runs as it
+    is); else load(biz): the Map, or None when a read failed, and the caller
+    then does what it does today on a failed read, never today's people."""
+    if not church_open(biz) or not ready():
+        return False
+    return load(biz)
+
+
 # ─── A role's switches ────────────────────────────────────────────────
 
-def can(m: Optional[Map], d: Dict[str, Any], *, ministers: Optional[bool] = None) -> Dict[str, Any]:
-    """A role's seven switches: shepherd (None = it follows the church's
-    Ministers setting; given `ministers`, that setting), oversee, lead,
-    board_yes, see_all, and prayer and care, which are its handles (it takes
-    shared prayer requests, care needs), bounded by its job. From the map's
-    row for the role; else a legacy role's catalog row (church_follow_up.
-    _effective_defs), or a row that carries its own; else its job's."""
+def _row(m: Optional[Map], d: Dict[str, Any]) -> Dict[str, Any]:
+    """Where a role's switches are read: the map's row for it; else a legacy
+    role's catalog row (church_follow_up._effective_defs), or a row that
+    carries its own; else its job's."""
     rid = str(d.get("id") or "")
     row = m.roles.get(rid) if m else None
     if row is None and rid.startswith("legacy:"):
@@ -212,7 +223,28 @@ def can(m: Optional[Map], d: Dict[str, Any], *, ministers: Optional[bool] = None
         row = d
     if row is None:
         row = cr.JOBS.get(str(d.get("job") or ""), cr.JOBS["office"])["switches"]
-    handles = d.get("handles") if d.get("handles") is not None else (row.get("handles") or [])
+    return row
+
+
+def _handles(row: Dict[str, Any], d: Dict[str, Any]) -> List[str]:
+    return d.get("handles") if d.get("handles") is not None else (row.get("handles") or [])
+
+
+def made_for(m: Optional[Map], d: Dict[str, Any]) -> List[str]:
+    """The streams a role is the one made for (choose's tie-break where the
+    map is open), always among its handles."""
+    row = _row(m, d)
+    return [s for s in _handles(row, d) if s in (row.get("made_for") or [])]
+
+
+def can(m: Optional[Map], d: Dict[str, Any], *, ministers: Optional[bool] = None) -> Dict[str, Any]:
+    """A role's seven switches: shepherd (None = it follows the church's
+    Ministers setting; given `ministers`, that setting), oversee, lead,
+    board_yes, see_all, and prayer and care, which are its handles (it takes
+    shared prayer requests, care needs), bounded by its job. Read as _row
+    says."""
+    row = _row(m, d)
+    handles = _handles(row, d)
     shepherd = row.get("can_shepherd")
     if shepherd is None and ministers is not None:
         shepherd = bool(ministers)

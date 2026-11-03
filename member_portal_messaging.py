@@ -155,7 +155,9 @@ LEADERS_ROOM = "All group leaders"
 # belong in the leaders chat, not only group leaders and pastors. A role
 # on any other job (prayer, care, kids, office) is in only when another
 # role answers to it: the Intercessor leader and the Deacons are, the
-# Intercessors, the Care team and the kids workers aren't.
+# Intercessors, the Care team and the kids workers aren't. Where the
+# church's leaders map is open (church_map), a role's own can_lead says
+# instead of its job; the answers-to rule stays, as structure.
 LEADER_JOBS = ("senior", "pastoral", "ministry", "team", "welcome", "teach")
 
 
@@ -163,9 +165,12 @@ def leaders_room_people(business_id: str) -> Optional[List[Dict[str, Any]]]:
     """Who is in the church's All group leaders room, read live (Kevin,
     2026-10-20: "yes all group leaders room would be great"; 2026-10-27:
     department leaders too): everyone who leads one of its active groups,
-    and everyone holding an active role that leads (LEADER_JOBS, or one
-    another role answers to). [{'contact_id', 'role': 'leader'}], or None
-    on a failed read."""
+    and everyone holding an active role that leads (LEADER_JOBS, or its
+    can_lead where the map is open; or one another role answers to), and,
+    on an open map, each active department's leader and overseer while they
+    hold an active role. [{'contact_id', 'role': 'leader'}], or None on a
+    failed read."""
+    import church_map
     import church_roles as cr
     leads = sb_clients.sb_get_as_service(
         f"/group_members?business_id=eq.{_q(business_id)}&role=eq.leader&select=contact_id,group_id&limit=5000")
@@ -174,18 +179,24 @@ def leaders_room_people(business_id: str) -> Optional[List[Dict[str, Any]]]:
     roles = sb_clients.sb_get_as_service(
         f"/church_leader_roles?business_id=eq.{_q(business_id)}&status=eq.active&select=contact_id,role&limit=1000")
     defs = cr.defs(str(business_id))
-    if not isinstance(leads, list) or not isinstance(active, list) or not isinstance(roles, list) or defs is None:
+    mp = church_map.opened(str(business_id))
+    if not isinstance(leads, list) or not isinstance(active, list) or not isinstance(roles, list) or defs is None \
+            or mp is None:
         return None
     by = cr.by_key(defs)
     led = {str(d["reports_to"]) for d in defs if d.get("reports_to")}
 
     def leads_something(key: str) -> bool:
         d = by.get(key) or cr.LEGACY.get(key) or {}
-        return d.get("job") in LEADER_JOBS or (bool(d.get("id")) and str(d["id"]) in led)
+        lead = church_map.can(mp, d)["lead"] if mp else d.get("job") in LEADER_JOBS
+        return lead or (bool(d.get("id")) and str(d["id"]) in led)
 
     on = {str(g["id"]) for g in active}
     ids = {str(r["contact_id"]) for r in leads if str(r["group_id"]) in on}
     ids |= {str(r["contact_id"]) for r in roles if leads_something(r["role"])}
+    if mp:
+        held = {str(r["contact_id"]) for r in roles}
+        ids |= {p for d in mp.active() for p in (d["leader_contact_id"], d["overseer_contact_id"]) if p in held}
     # The office: it runs the leaders' meetings and sends their Monday note
     # (Kevin, 2026-11-01). A failed read of the logins leaves the room as
     # the leaders alone, never empty.

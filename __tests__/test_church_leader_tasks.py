@@ -43,6 +43,7 @@ for p in (ROOT, HERE):
 
 import church_leader_tasks as clt  # noqa: E402
 import church_my_week as mw  # noqa: E402
+import church_roles as cr  # noqa: E402
 import member_asks  # noqa: E402
 import member_portal_church as mpc  # noqa: E402
 import member_portal_lead as mpl  # noqa: E402
@@ -71,9 +72,12 @@ def _task(tid, who, title, due=None, biz=BIZ, **kw):
 
 
 def _def(key, title, job, reports_to=None):
+    """A role row as the database holds it since the leaders map's migration:
+    with its job's switches (the backfill's), which the leaders room reads
+    where the map is open, as it is for this church (the platform's)."""
     return {"id": f"def-{key}", "business_id": BIZ, "key": key, "title": title, "job": job, "status": "active",
             "covers": "church", "oversees_teams": [], "handles": [], "sees": [], "reports_to": reports_to,
-            "sort": 0, "created_at": "2026-10-01T00:00:00+00:00"}
+            "sort": 0, "created_at": "2026-10-01T00:00:00+00:00", **cr.JOBS[job]["switches"], "made_for": []}
 
 
 def _role(contact, role, biz=BIZ):

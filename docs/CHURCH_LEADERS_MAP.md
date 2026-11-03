@@ -240,6 +240,14 @@ Every department names an overseer, and an overseer changes who hears about a la
 - **`propose(biz)`** is a stub that returns `{}`. Step 2 drafts from ministry groups and `oversees_teams`, naming a leader only where one person holds the source and never an overseer.
 - **The fixture:** Love City's Prophets is made with `can_shepherd: false`, since it predates the map and the backfill gave it today's rule. `build(..., migrated=False)` is the database before the file, and every baseline runs that way too.
 
+**As built in PR 4:**
+- **`church_map.opened(biz)`** is each reader's one entry: False when closed or not `ready()` (today's code, untouched), else `load(biz)`. A None goes into the reader's own failed-read check. The Shepherding reads return None (the page's 503; the sweeps skip). `start` skips the hand-off with its log line, as it does on any failed read. The leaders room returns None.
+- **`role_rows` on an open map** lists every senior and pastoral role, as today, plus a role on any other job whose `can_shepherd` isn't false (Grace's Deacon Board). `switch: 'ministers'` marks a null. `lead` is still the senior job. No title is read.
+- **`choose`** takes the map as `m`. `church_map.made_for` reads the map's row, or a legacy role's catalog row, trimmed to the role's handles. The sort order is otherwise unchanged. `_effective_defs` gives legacy roles their catalog switches and `made_for`.
+- **The leaders room** reads `can_lead` and keeps the answers-to seat. It adds each **active** department's leader and overseer who holds any active role. The room doesn't ask for `can_lead` or `can_oversee`: those are the person chain's test (PR 6).
+- **Correction to §5 item 6:** scenario need 2 passes at Grace from PR 4. D2 leads no department and answers to no one, so today's chain (Deacon Board → Pastor) is already the line `chain_for` gives. Its strict xfail is removed. Love City's and New Hope's need 2 still wait on PR 6.
+- **Test fakes:** a fake that answers any select passes `ready()`. So where a test makes its church the platform's, its role rows must carry the switches the backfill gave them (test_church_leader_tasks' `_def` does now). Otherwise the open map reads no role as leading.
+
 Unchanged; these become the map's sources: group leaders (group_lead.py:36-39), serve teams (sunday_leading.py:25-38), church_board_members, space_leaders and worship_ministries. `member_portal._leads` (:1172-1194) needs no change either: department people must hold an active role, which already opens the Lead tab.
 
 Frontend: nothing is required in step 1. `AREA_OF` (churchStructure.tsx:330-380) maps pages to areas and reads no role title or job. Step 2 covers the department sheet, switch toggles in RoleDetail.tsx, a per-role shepherd switch, and LeadersRoles.tsx:119.
