@@ -906,9 +906,9 @@ a{color:#F5F6F8}a:hover{color:#F9A8D4}
 <p class="eyebrow" style="color: #5A5E6B">Plans</p>
 <h2 class="h2">The Member App comes with <span class="serif ink" style="font-size: 1.08em">every plan.</span></h2>
 </div>
-<p class="body" style="max-width: 440px">Every tab, every space and every alert is on every plan, for every member you have. The plans change who signs in at the office and where sign-in texts come from.</p>
+<p class="body" style="max-width: 440px">{{#APP_PLANS_LEDE}}Every tab, every space and every alert is on every plan, for every member you have. The plans change who signs in at the office and where sign-in texts come from.{{/APP_PLANS_LEDE}}</p>
 </div>
-<div class="planrow">
+{{#PLAN_STRIP}}<div class="planrow">
 <div class="plan"><span class="pn">Starter</span><span class="pp">${{P_STARTER}} <small>a month</small></span><ul>
 <li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>The whole app: Home, Watch, Bible, Give, Connect</li>
 <li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>Phone alerts, and Youth and Kids spaces</li>
@@ -924,7 +924,7 @@ a{color:#F5F6F8}a:hover{color:#F9A8D4}
 <li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>7 logins, and a seat for your accountant</li>
 <li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>{{C_SOL}} AI actions a month, Chief across every ministry</li>
 </ul></div>
-</div>
+</div>{{/PLAN_STRIP}}
 <a href="/churches#pricing" style="align-self: flex-start; font-weight: 600; color: #0B0C11">Compare every plan</a>
 </div>
 </section>
