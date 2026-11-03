@@ -170,14 +170,14 @@ def _fetch_sources(biz: str) -> Dict[str, Any]:
     invoices = sb_clients.sb_get_all_as_service(
         f"/invoices?business_id=eq.{biz}"
         f"&select=id,total,status,paid_at,sent_at,created_at,due_date,payment_method,"
-        f"stripe_payment_url,refund_amount_cents,refunded_at,category,is_gift") or []
+        f"stripe_payment_url,refund_amount_cents,refunded_at,category,is_gift", strict=True) or []
     expenses = sb_clients.sb_get_all_as_service(
         f"/business_expenses?business_id=eq.{biz}"
-        f"&select=id,amount,category,subcategory,vendor,date") or []
+        f"&select=id,amount,category,subcategory,vendor,date", strict=True) or []
     bills = sb_clients.sb_get_all_as_service(
         f"/bills?business_id=eq.{biz}"
         f"&select=id,vendor_name,amount,category,subcategory,status,due_date,created_at,paid_at,paid_amount,"
-        f"paid_transaction_id") or []
+        f"paid_transaction_id", strict=True) or []
     included = _included_account_ids(biz)
     plaid = []
     if included:
@@ -187,7 +187,7 @@ def _fetch_sources(biz: str) -> Dict[str, Any]:
             f"&pending=eq.false&excluded_from_books=eq.false"
             f"&select=transaction_id,account_id,amount,date,business_category,business_subcategory,"
             f"plaid_category_primary,plaid_category_detail,reconciled_to_payout_id,gift_match_fee"
-            f"{bank_money.ledger_cols()}", key="transaction_id") or []
+            f"{bank_money.ledger_cols()}", key="transaction_id", strict=True) or []
     # I.7 — trust accounts are a separate ledger: their balances back the
     # 1200/2200 pair, never the operating-cash (1000) opening plug.
     cash_accts = sb_clients.sb_get_as_service(
@@ -634,6 +634,8 @@ def fetch_orders(biz: str) -> List[Dict[str, Any]]:
             f"/orders?business_id=eq.{biz}"
             f"&select=id,status,subtotal_cents,tax_cents,shipping_cents,total_cents,"
             f"paid_at,refund_amount_cents,refunded_at,payment_method") or []
+    except sb_clients.PartialRead:
+        raise                      # part of the orders is not "no orders"
     except Exception:
         return []
 
@@ -658,6 +660,8 @@ def fetch_booking_money(biz: str) -> List[Dict[str, Any]]:
             f"/module_entries?business_id=eq.{biz}"
             f"&or=(stripe_payment_intent_id.not.is.null,data->>no_show_fee_charged_at.not.is.null)"
             f"&select=id,paid_at,stripe_payment_intent_id,data") or []
+    except sb_clients.PartialRead:
+        raise                      # part of the bookings is not "no bookings"
     except Exception:
         return []
 
@@ -823,12 +827,10 @@ def gl_pl_cash_basis(lines: List[Dict[str, Any]], start: _date, end: _date) -> D
 # ─── Persistence / backfill / reverse ────────────────────────────────
 
 def _existing_entry_keys(biz: str) -> set:
-    """Every (source_type, source_id) already posted. A failed read raises:
-    an empty set here would post every source a second time."""
+    """Every (source_type, source_id) already posted. A failed read raises
+    (strict): an empty set here would post every source a second time."""
     rows = sb_clients.sb_get_all_as_service(
-        f"/journal_entries?business_id=eq.{biz}&select=id,source_type,source_id")
-    if rows is None:
-        raise RuntimeError("couldn't read the existing journal entries; nothing posted")
+        f"/journal_entries?business_id=eq.{biz}&select=id,source_type,source_id", strict=True)
     return {(r["source_type"], r["source_id"]) for r in rows}
 
 
@@ -883,7 +885,7 @@ def read_ledger(business_id: str) -> List[Dict[str, Any]]:
     return sb_clients.sb_get_all_as_service(
         f"/ledger_entries?business_id=eq.{business_id}"
         f"&select=id,account_code,account_type,profit_first_bucket,source_type,debit,credit,"
-        f"entry_date,subcategory,vendor,memo,journal_entry_id") or []
+        f"entry_date,subcategory,vendor,memo,journal_entry_id", strict=True) or []
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -1211,7 +1213,7 @@ def run_divergence_check(biz: str) -> Dict[str, Any]:
 
 def _backfilled_businesses() -> List[str]:
     rows = sb_clients.sb_get_all_as_service(
-        "/journal_entries?status=eq.active&select=id,business_id") or []
+        "/journal_entries?status=eq.active&select=id,business_id", strict=True) or []
     return list({r["business_id"] for r in rows if r.get("business_id")})
 
 
@@ -1314,7 +1316,7 @@ def _ledger_in_range(biz: str, start: str, end: str, codes) -> List[Dict[str, An
         f"/ledger_entries?business_id=eq.{biz}"
         f"&entry_date=gte.{start}&entry_date=lte.{end}"
         f"&account_code=in.({','.join(codes)})"
-        f"&select=id,account_code,debit,credit") or []
+        f"&select=id,account_code,debit,credit", strict=True) or []
 
 
 def _closing_entry_spec(biz: str, period: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -1423,7 +1425,7 @@ def period_counts(business_id: str, start: str, end: str) -> Dict[str, int]:
         f"/plaid_transactions?business_id=eq.{business_id}&{acct}"
         f"&excluded_from_books=eq.false&pending=eq.false"
         f"&date=gte.{start}&date=lte.{end}&select=transaction_id,reconciliation_status",
-        key="transaction_id") or []
+        key="transaction_id", strict=True) or []
     reconciled = sum(1 for t in txs if t.get("reconciliation_status") in ("auto_matched", "manual_matched"))
     unmatched = sum(1 for t in txs if t.get("reconciliation_status") == "unmatched")
     return {"transactions": len(txs), "reconciled": reconciled, "unmatched": unmatched}

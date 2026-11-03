@@ -15,6 +15,7 @@ decisions:
   - "sb_clients.sb_get_all_as_service: pages by a unique key (key > the last one seen), in key order, 1,000 a page. None when the first page fails (like a single read), PartialRead when a later page fails or at the 500,000-row ceiling: never a quietly short list"
   - "Moved to it: the ledger and journal reads behind every GL report, backfill's already-posted set, the divergence checker's business list (it read 1,000 of 2,972 active entries platform-wide), the backfill sources (gifts, bills, expenses, bank rows, orders, bookings), the period counts, the source-table reports (P&L, AR, AP, expenses), the 1099 bills and the accountant export"
   - "Backfill's already-posted read now raises on a failed read: an empty set there would have posted every source a second time"
+  - "Review: strict=True wherever the rows decide what is shown or posted (reports, backfill, the year-end close, the divergence list, the export): a failed first page raises too, so a report errors instead of showing zeros. Orders and bookings keep their soft catch for a missing table but let a PartialRead through"
 related: []
 ---
 `sb_clients.py` (sb_get_all_as_service, PartialRead), `gl_reports.py`, `gl_engine.py`,

@@ -147,7 +147,7 @@ def _plaid_tx_in_period(biz: str, start: _date, end: _date) -> List[Dict[str, An
         f"&date=gte.{_iso(start)}&date=lte.{_iso(end)}"
         f"&select=transaction_id,amount,business_category,business_subcategory,"
         f"plaid_category_primary,plaid_category_detail,reconciled_to_payout_id"
-        f"{bank_money.cols()}", key="transaction_id"
+        f"{bank_money.cols()}", key="transaction_id", strict=True,
     ) or []
 
 
@@ -156,7 +156,7 @@ def _paid_invoices_in_period(biz: str, start: _date, end: _date) -> List[Dict[st
     return sb_clients.sb_get_all_as_service(
         f"/invoices?business_id=eq.{biz}&status=eq.paid"
         f"&paid_at=gte.{_iso(start)}&paid_at=lt.{_iso(end_excl)}"
-        f"&select=id,total,paid_at,refund_amount_cents,refunded_at"
+        f"&select=id,total,paid_at,refund_amount_cents,refunded_at", strict=True,
     ) or []
 
 
@@ -167,7 +167,7 @@ def _outstanding_invoices(biz: str) -> List[Dict[str, Any]]:
         f"/invoices?business_id=eq.{biz}"
         f"&paid_at=is.null&status=not.in.({','.join(_OUTSTANDING_EXCLUDED_STATUSES)})"
         f"&select=id,invoice_number,total,due_date,status,refund_amount_cents,"
-        f"created_at,contact_id,contacts(name)"
+        f"created_at,contact_id,contacts(name)", strict=True,
     ) or []
     out = []
     for r in rows:
@@ -188,7 +188,7 @@ def _outstanding_bills(biz: str) -> List[Dict[str, Any]]:
     return sb_clients.sb_get_all_as_service(
         f"/bills?business_id=eq.{biz}"
         f"&status=not.in.({','.join(_BILL_OUTSTANDING_EXCLUDED)})"
-        f"&select=id,vendor_name,amount,due_date,status"
+        f"&select=id,vendor_name,amount,due_date,status", strict=True,
     ) or []
 
 
@@ -251,7 +251,7 @@ def _pl_for_window(biz: str, start: _date, end: _date) -> Dict[str, Any]:
     exp = sb_clients.sb_get_all_as_service(
         f"/business_expenses?business_id=eq.{biz}"
         f"&date=gte.{_iso(start)}&date=lte.{_iso(end)}"
-        f"&select=id,amount,category,subcategory"
+        f"&select=id,amount,category,subcategory", strict=True,
     ) or []
     for e in exp:
         _add(e.get("category") or "other", e.get("subcategory"), float(e.get("amount") or 0))

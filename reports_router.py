@@ -300,7 +300,7 @@ def _summary_1099(biz: str, year: int) -> Dict[str, Any]:
     bills = sb_clients.sb_get_all_as_service(
         f"/bills?business_id=eq.{biz}&status=eq.paid&is_1099_eligible=eq.true"
         f"&paid_at=gte.{start}&paid_at=lte.{end}T23:59:59"
-        f"&select=id,vendor_name,paid_amount,amount,contractor_id") or []
+        f"&select=id,vendor_name,paid_amount,amount,contractor_id", strict=True) or []
     contractors = sb_clients.sb_get_as_service(
         f"/contractors?business_id=eq.{biz}"
         f"&select=id,name,email,onboarding_status,stripe_account_id&limit=500") or []

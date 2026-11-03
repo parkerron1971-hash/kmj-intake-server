@@ -651,14 +651,16 @@ class PartialRead(RuntimeError):
     Raised instead of handing back a list that is quietly missing rows."""
 
 
-def sb_get_all_as_service(path: str, *, key: str = "id",
+def sb_get_all_as_service(path: str, *, key: str = "id", strict: bool = False,
                           redact: bool = False) -> Optional[List[Dict[str, Any]]]:
     """Every row a service GET matches, in `key` order, page by page.
 
     `path` carries the filters and a select that includes `key` (a unique
-    column), never its own limit, offset or order. None when the first
-    page fails, as sb_get_as_service does; PartialRead when a later page
-    fails or the ceiling is reached."""
+    column), never its own limit, offset or order. PartialRead when a later
+    page fails or the ceiling is reached. When the first page fails: None,
+    as sb_get_as_service does, or with `strict` PartialRead too. Use strict
+    wherever the rows decide what is shown or posted, so a failed read is
+    never read as "no rows" (a report of zeros, a check that skips)."""
     sep = "&" if "?" in path else "?"
     rows: List[Dict[str, Any]] = []
     after: Optional[str] = None
@@ -669,6 +671,8 @@ def sb_get_all_as_service(path: str, *, key: str = "id",
         page = sb_get_as_service(page_path, redact=True) if redact else sb_get_as_service(page_path)
         if not isinstance(page, list):
             if after is None:
+                if strict:
+                    raise PartialRead("the first page failed")
                 return None
             raise PartialRead(f"a later page failed after {len(rows)} rows")
         rows.extend(page)

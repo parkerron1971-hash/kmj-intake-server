@@ -134,3 +134,28 @@ def test_backfill_never_reads_a_failed_list_as_nothing_posted(db):
 def test_backfill_sees_entries_past_the_cap(db):
     keys = gl_engine._existing_entry_keys(BIZ)
     assert len(keys) == 1600 and ("invoice_paid", "inv1599") in keys
+
+
+def test_strict_reads_raise_when_the_first_page_fails(db):
+    # A report or a check must never read a failed read as "no rows".
+    db.fail_on_call = 1
+    with pytest.raises(sb_clients.PartialRead):
+        sb_clients.sb_get_all_as_service(f"/ledger_entries?business_id=eq.{BIZ}&select=id", strict=True)
+
+
+def test_a_report_errors_instead_of_showing_zeros(db):
+    db.fail_on_call = 2                               # the journal read (after the chart of accounts) fails
+    with pytest.raises(sb_clients.PartialRead):
+        gl_reports.trial_balance_report(BIZ, "2026-12-31")
+
+
+def test_orders_keep_their_soft_catch_but_not_for_a_partial_read(monkeypatch):
+    orders = {"orders": [{"id": f"o{i:05d}", "business_id": BIZ} for i in range(1500)]}
+    fake = CappedDB(orders)
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", fake.get)
+    fake.fail_on_call = 2                             # the second page fails
+    with pytest.raises(sb_clients.PartialRead):
+        gl_engine.fetch_orders(BIZ)
+    fake.calls.clear()
+    fake.fail_on_call = 1                             # a missing table: still "no orders"
+    assert gl_engine.fetch_orders(BIZ) == []
