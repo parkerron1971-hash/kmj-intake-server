@@ -3,8 +3,8 @@ title: Church leaders step 2, PR B2 — the migration (change log, setup session
 date: 2026-11-05
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-11-03: approved step 2 (design 4V41zJz1kEJGdeo4J9D2Ym, "Your two ideas"): church setup sessions on the Academy engine, a ready-made directory, Chief verbs with undo, the department sheet, drafts for new churches'
-status: in review
-prs: ["kmj-intake-server (this PR)"]
+status: in progress
+prs: [kmj-intake-server#1723]
 migrations: [supabase/APPLY-2026-11-05-church-map-step2.sql (not yet applied; applied by hand after review, before B3a merges)]
 left_undone:
   - "Apply supabase/APPLY-2026-11-05-church-map-step2.sql by hand after review and before B3a merges: run the ledger row's four checks first (the source check's name and values, the departments trigger, the rows the backfill will mark, neither table there yet), then its checks after, then mark the row APPLIED"
