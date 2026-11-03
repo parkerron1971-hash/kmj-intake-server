@@ -159,7 +159,7 @@ A shape's switch overrides apply only to the church's copy. For example, Deacons
 
 ### 2.2 Seed list
 
-**Roles:** the 85 TYPES rows (8 traditions, 60 titles), plus six that the departments need and no tradition names:
+**Roles:** the 101 TYPES rows (8 traditions; 85 written out plus 16 from `_prayer_rows()`, 69 distinct titles), plus six that the departments need and no tradition names:
 - `any.media_lead` (team)
 - `any.facilities_lead` (team)
 - `any.outreach_lead` (welcome)
@@ -514,7 +514,7 @@ Every other church takes today's path, byte for byte. That includes every seeded
 Confirming and changing type:
 - `POST /church/map/confirm` (owner or admin) makes the kept seed drafts active as one undoable change, applies the office-overseer rule, and stamps `confirmed_at`.
 - `set_type` on an unconfirmed library swaps the seed drafts (which have no holders) for the new type's. Today it only adds (:992-1044).
-- Leaders & roles shows one "Your draft leaders" section (Confirm, Set up with Chief, Change type) instead of 17 Draft cards (LeadersRoles.tsx:174, :429).
+- Leaders & roles shows one "Your draft leaders" section (Confirm, Set up with Chief, Change type) instead of a Draft card per role (17 for a non-denominational church, 14 for AME) (LeadersRoles.tsx:174, :429).
 - Until it confirms, every card goes to the office, as for a church whose roles nobody holds yet.
 
 Tests:
@@ -560,5 +560,5 @@ Rollout:
 3. **Templates drifting from TYPES.** The backfill vectors and the version hashes fail loudly.
 4. **The coach.** Cost is high on Fable plans, and a coach that wrote live rows by mistake would be a surprise. The turn cap, stage-only verbs, and launching only from the screen guard against both.
 5. **Chief naming the wrong person.** Exact matching, refusing ambiguity, before → now receipts, and Undo.
-6. **New-church drafts and readers that assume an active senior role** (inferred). The Riverside tests cover this.
+6. **New-church drafts and readers that assume an active senior role.** Confirmed by B1's baseline: with nobody holding the senior role, `church_money_levels.pastors` has no one, so a request at or above the pastor's level can't pass (owner only when `pastor_yes_roles` is `'{}'`). Fixed separately: with no active senior holder, the owner gives the pastor's yes. The Riverside tests cover the rest.
 7. **Two editors at once** (the coach and the office). The before-state checks give a 409, never a silent overwrite.
