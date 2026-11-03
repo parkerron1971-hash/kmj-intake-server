@@ -424,7 +424,23 @@ def _plan_detail(fg, limits: Dict[str, Any], p: str) -> Dict[str, Any]:
         "bank_connections": lim.get("plaid_connections"),
         "deep_analysis": chief_models.deep_analysis_label(p),
         "deep_model": chief_models.tier_deep_model_label(p),
+        # Church plans: the size each is for, the texts and sermon clip hours
+        # it includes. None on every other plan (not held to a text count).
+        "texts_monthly": lim.get("texts_monthly"),
+        "clip_hours_monthly": lim.get("clip_hours_monthly"),
+        "people_on_sunday": _people_on_sunday(p),
     }
+
+
+def _plan_display(plan: str) -> str:
+    import billing_limits
+    return billing_limits.PLAN_DISPLAY.get(plan, plan.title())
+
+
+def _people_on_sunday(plan: str) -> Optional[Dict[str, int]]:
+    import pricing_config
+    band = pricing_config.church_size_bands().get(plan)
+    return {"from": band[0], "to": band[1]} if band else None
 
 
 @router.get("/plans")
@@ -474,9 +490,19 @@ async def billing_plans(for_type: Optional[str] = None):
     marketing_by_plan = {p: fg.MARKETING_LADDER[p] for p in list(fg.PLANS) + audience_keys
                          if p in fg.MARKETING_LADDER}
 
+    # A church sees its own ladder (Small / Growing / Established / Large)
+    # once offered, and the numbers around it: texts past the plan, one more
+    # login, the move, and where a Multi-site quote starts.
+    church_offer = None
+    if any(p in fg.CHURCH_PLANS for p in audience_keys):
+        import pricing_config
+        church_offer = {**pricing_config.church_offer(),
+                        "names": {p: _plan_display(p) for p in fg.CHURCH_PLANS}}
+
     any_configured = any(e["configured"] for e in out)
     return {"ok": True, "plans": out, "founder": founder,
             "audience_plans": audience,
+            "church_offer": church_offer,
             "features_by_plan": features_by_plan,
             "marketing_by_plan": marketing_by_plan,
             "plan_details": plan_details,
@@ -595,8 +621,15 @@ async def create_checkout(body: CheckoutBody, user: AuthedUser = Depends(require
     resolved = feature_gates.price_to_plan().get(price_id)
     if resolved in feature_gates.AUDIENCE_PLANS:
         if resolved not in feature_gates.audience_plans_for(biz.get("type")):
+            import billing_limits
+            name = billing_limits.PLAN_DISPLAY.get(resolved, resolved.title())
             raise HTTPException(
-                409, f"The {resolved.title()} plan isn't available for this business.")
+                409, f"The {name} plan isn't available for this business.")
+    # Church plans are priced by size with nothing held back, so no codes:
+    # MINISTRY20 (20% off forever, open to any business) retires for them.
+    church_plan = resolved in feature_gates.CHURCH_PLANS
+    if church_plan and body.promotion_code:
+        raise HTTPException(409, "Church plans don't take discount codes; the price is set by your church's size.")
     # ChurchSavvy on its own: churches on ChurchSavvy alone, once the
     # switch opens it, back to ChurchSavvy's own page (churchsavvy_billing).
     church_savvy = None
@@ -624,7 +657,7 @@ async def create_checkout(body: CheckoutBody, user: AuthedUser = Depends(require
     # PAYG overage line item is GONE — usage beyond the allowance draws
     # down prepaid credit packs instead. See /billing/credits/checkout.)
     line_items: list = [{"price": price_id, "quantity": 1}]
-    discount_options = {"allow_promotion_codes": not church_savvy}
+    discount_options = {"allow_promotion_codes": not (church_savvy or church_plan)}
     if body.promotion_code:
         from stripe_discounts import resolve_code
         promo = await resolve_code(body.promotion_code)
@@ -1450,6 +1483,16 @@ BOOTSTRAP_CATALOG = [
     ("STRIPE_PRICE_ID_CS_SCREENS",          "churchsavvy_screens_monthly",      "ChurchSavvy",               2000,   "month"),
     ("STRIPE_PRICE_ID_CS_PLANNING",         "churchsavvy_planning_monthly",     "ChurchSavvy Planning",      1500,   "month"),
     ("STRIPE_PRICE_ID_CS_BOTH",             "churchsavvy_both_monthly",         "ChurchSavvy and Planning",  2900,   "month"),
+    # Churches by size (2026-11-03). Creating them sells nothing: checkout
+    # refuses them until PLAN_CHURCH_OFFERED=1, and only to churches.
+    ("STRIPE_PRICE_ID_CHURCH_SMALL",              "solutionist_church_small_monthly",       "Solutionist Small Church",       7900,   "month"),
+    ("STRIPE_PRICE_ID_CHURCH_SMALL_ANNUAL",       "solutionist_church_small_annual",        "Solutionist Small Church",       79000,  "year"),
+    ("STRIPE_PRICE_ID_CHURCH_GROWING",            "solutionist_church_growing_monthly",     "Solutionist Growing Church",     14900,  "month"),
+    ("STRIPE_PRICE_ID_CHURCH_GROWING_ANNUAL",     "solutionist_church_growing_annual",      "Solutionist Growing Church",     149000, "year"),
+    ("STRIPE_PRICE_ID_CHURCH_ESTABLISHED",        "solutionist_church_established_monthly", "Solutionist Established Church", 29900,  "month"),
+    ("STRIPE_PRICE_ID_CHURCH_ESTABLISHED_ANNUAL", "solutionist_church_established_annual",  "Solutionist Established Church", 299000, "year"),
+    ("STRIPE_PRICE_ID_CHURCH_LARGE",              "solutionist_church_large_monthly",       "Solutionist Large Church",       59900,  "month"),
+    ("STRIPE_PRICE_ID_CHURCH_LARGE_ANNUAL",       "solutionist_church_large_annual",        "Solutionist Large Church",       599000, "year"),
 ]
 
 
@@ -1475,12 +1518,16 @@ async def bootstrap_prices(_owner=Depends(require_owner)):
         raise HTTPException(409, "STRIPE_SECRET_KEY is not set on the server.")
 
     # 1. What already exists, by lookup key.
+    # Stripe takes at most 10 lookup keys per list call; the catalog has
+    # grown past 25, so ask ten at a time.
     existing: Dict[str, Dict[str, Any]] = {}
-    params = [("lookup_keys[]", lk) for (_e, lk, _n, _a, _i) in BOOTSTRAP_CATALOG]
-    params.append(("limit", "100"))
-    for price in (await _stripe_get("/prices", params)).get("data", []):
-        if price.get("lookup_key"):
-            existing[price["lookup_key"]] = price
+    keys = [lk for (_e, lk, _n, _a, _i) in BOOTSTRAP_CATALOG]
+    for i in range(0, len(keys), 10):
+        params = [("lookup_keys[]", lk) for lk in keys[i:i + 10]]
+        params.append(("limit", "100"))
+        for price in (await _stripe_get("/prices", params)).get("data", []):
+            if price.get("lookup_key"):
+                existing[price["lookup_key"]] = price
 
     # 2. Existing products by exact name, so a partial earlier run (or a
     #    hand-made product) is reused rather than duplicated.

@@ -12,6 +12,8 @@ paying for the recording twice.
 
 Plan: Growth (the Solutionist plan, feature key `ai_clips`). Ten hours of
 recordings a month are included; each hour past that costs 75 actions.
+Church plans carry it at every size with their own hours (2 / 5 / 10 / 20,
+the plan's clip_hours_monthly); see included_seconds.
 """
 from __future__ import annotations
 
@@ -113,11 +115,25 @@ def seconds_this_month(business_id):
     return sum(float(r.get('source_seconds') or 0) for r in rows)
 
 
-def extra_units(used_seconds, seconds):
+def extra_units(used_seconds, seconds, included=INCLUDED_SECONDS):
     """Actions owed for the part of this recording past the month's included hours."""
-    before = max(0.0, used_seconds - INCLUDED_SECONDS)
-    after = max(0.0, used_seconds + seconds - INCLUDED_SECONDS)
+    before = max(0.0, used_seconds - included)
+    after = max(0.0, used_seconds + seconds - included)
     return math.ceil((after - before) / 3600 * UNITS_PER_EXTRA_HOUR) if after > before else 0
+
+
+def included_seconds(business_id):
+    """The recording time this business's plan includes a month: a church
+    plan's own hours (clip_hours_monthly), ten on every other plan. A lookup
+    error keeps the ten, so a billing hiccup never charges for a free hour."""
+    try:
+        import feature_gates
+        import usage_metering
+        plan = feature_gates.plan_of(usage_metering._biz_row(str(business_id)))
+        hours = (feature_gates.plan_limits().get(plan or '') or {}).get('clip_hours_monthly')
+        return int(hours) * 3600 if hours is not None else INCLUDED_SECONDS
+    except Exception:
+        return INCLUDED_SECONDS
 
 
 def plan_allows(business_id):
@@ -156,7 +172,7 @@ def configuration(business_id):
     # locked: switched on, but the business's plan does not include it, so the
     # app shows what it comes with instead of a button that would refuse.
     return {'available': available, 'locked': switched and not available, 'required_plan': required_plan_name(),
-            'included_hours': INCLUDED_SECONDS // 3600,
+            'included_hours': included_seconds(business_id) // 3600,
             'used_hours': round(used / 3600, 1), 'actions_per_extra_hour': UNITS_PER_EXTRA_HOUR,
             'max_upload_bytes': MAX_UPLOAD_BYTES, 'caption_styles': list(CAPTION_STYLES), 'lengths': ['short', 'medium', 'long'],
             'covers': cover_offer()}
@@ -408,7 +424,7 @@ def start_run(business_id, source_id, body, user):
     seconds = float(source.get('duration_seconds') or 0)
     if not 0 < seconds <= media_library.MAX_SECONDS:
         raise HTTPException(409, 'Recordings can be up to 2 hours long.')
-    if extra_units(seconds_this_month(business_id), seconds):
+    if extra_units(seconds_this_month(business_id), seconds, included_seconds(business_id)):
         billing_limits.require_units(str(business_id))
     # About 0.4 GB of clips per hour of recording; leave room before starting.
     if library_bytes(business_id) + int(seconds / 3600 * 600 * 1024 ** 2) > LIBRARY_BYTES:
@@ -571,7 +587,7 @@ def file_clips(run, source, result):
 def units_for(run):
     """Actions owed for this run: only the part past the month's included hours."""
     used_before = seconds_this_month(run['business_id']) - float(run['source_seconds'])
-    return extra_units(max(0.0, used_before), float(run['source_seconds']))
+    return extra_units(max(0.0, used_before), float(run['source_seconds']), included_seconds(run['business_id']))
 
 
 def meter(run, result, units):

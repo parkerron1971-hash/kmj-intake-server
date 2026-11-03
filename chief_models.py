@@ -143,6 +143,12 @@ _TIER_LADDER = {
     "solo":         "claude-sonnet-5",
     "booked":       "claude-sonnet-5",
     "boss":         "claude-sonnet-5",
+    # Churches think on the ladder their price matches (Small $79 = Starter,
+    # Growing $149 = Professional, Established and Large = the top).
+    "church_small":       "claude-sonnet-5",
+    "church_growing":     "claude-opus-5-5",
+    "church_established": "claude-fable-5",
+    "church_large":       "claude-fable-5",
 }
 _LADDER_LANES = ("deep", "insight")
 
@@ -167,6 +173,10 @@ _TIER_ANALYSIS_LABELS = {
     "solo": "Standard",
     "booked": "Standard",
     "boss": "Standard",
+    "church_small": "Standard",
+    "church_growing": "Advanced",
+    "church_established": "Maximum",
+    "church_large": "Maximum",
 }
 
 

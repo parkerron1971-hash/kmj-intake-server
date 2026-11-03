@@ -117,7 +117,10 @@ def _plan_tokens() -> Dict[str, str]:
     import marketing_pages as mp
     import pricing_config
     dials = mp._tier_dials()
-    credits = {p: int(str(d["credits"]).replace(",", "")) for p, d in dials.items()}
+    # The three cards this page draws, measured against each other: the
+    # dials also carry every audience plan (a Large Church's 30,000 credits
+    # would shrink every bar here).
+    credits = {p: int(str(dials[p]["credits"]).replace(",", "")) for p in ("starter", "professional", "practice")}
     top = max(credits.values()) or 1
     per_turn = max(1, pricing_config.chat_price())
     out: Dict[str, str] = {}
