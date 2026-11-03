@@ -18,6 +18,7 @@ decisions:
   - "pass_targets adds holders who answer to the leader as a person, still only on roles that take passed-on prayer"
   - "A group leader with no role: their group's department (leader, else overseer) before handed_by; a failed groups read skips that leader until the next sweep"
   - "A failed map read is the reader's failed read: the follow-up and prayer sweeps skip the church, tell_late returns, pass_targets is None"
+  - "#1715 review fixes, a separate commit here: a new department whose units fail and whose clean-up delete fails is a 503, and the same login's retry within ten minutes finishes it instead of a name clash; _people and _things read ids 50 at a time"
 related: [2026-11-04-church-map-fixture.md, 2026-11-04-church-map-core.md, 2026-11-04-church-map-switches.md, 2026-11-04-church-map-writes.md]
 ---
 `church_map.chain_for` walks up from a person. It goes to their department's overseer first, then the

@@ -47,7 +47,7 @@ import os
 import re
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional
 from urllib.parse import quote
 
@@ -441,6 +441,8 @@ LEVELS = ("pastor_from_cents", "board_over_cents")
 PICKS = ("pastor_yes_roles", "office_overseer_roles")
 LEVEL_MAX_CENTS = 10_000_000          # $100,000, the migration's check
 UNITS_MAX, PICKS_MAX = 60, 20
+IDS_PER_READ = 50                     # ids in one id=in.(...) read
+LEFT_FOR = timedelta(minutes=10)      # how long a half-made department waits for its retry
 # A unit's thing: its table, its name, and what still counts as there.
 _THINGS = {"group": ("groups", "name", "&active=eq.true"),
            "role": ("church_role_defs", "title", "&status=in.(active,draft)"),
@@ -450,6 +452,7 @@ _WORD = {"group": "group", "role": "role", "board": "board", "worship_ministry":
          "serve_option": "serve team", "space": "space", "check_line": "budget line"}
 UNREAD = "Your leaders map couldn’t be read just now. Try again in a moment."
 UNSAVED = "That didn’t save. Try again."
+UNFINISHED = "That couldn’t finish saving. Try again in a moment."
 
 
 def _plain(v: Any) -> str:
@@ -494,12 +497,19 @@ def _in(ids: Iterable[str]) -> str:
     return ",".join(_q(i) for i in ids)
 
 
+def _by_ids(path: Any, ids: Iterable[Any]) -> List[Dict[str, Any]]:
+    """`path(ids)` read IDS_PER_READ ids at a time and merged, so a big
+    church's map stays under the proxy's URL limit; a 503 when any read fails."""
+    ids = sorted({str(i) for i in ids if i})
+    out: List[Dict[str, Any]] = []
+    for n in range(0, len(ids), IDS_PER_READ):
+        out += _need(path(_in(ids[n:n + IDS_PER_READ])))
+    return out
+
+
 def _people(bid: str, ids: Iterable[Any]) -> Dict[str, str]:
     """contact id -> name, for this church's people only."""
-    ids = sorted({str(i) for i in ids if i})
-    if not ids:
-        return {}
-    rows = _need(f"/contacts?business_id=eq.{_q(bid)}&id=in.({_in(ids)})&select=id,name&limit=1000")
+    rows = _by_ids(lambda part: f"/contacts?business_id=eq.{_q(bid)}&id=in.({part})&select=id,name&limit=1000", ids)
     return {str(r["id"]): _plain(r.get("name")) for r in rows}
 
 
@@ -522,11 +532,9 @@ def qualifies(m: Map, holders: List[Dict[str, Any]], contact_id: Any, switch: st
 
 def _things(bid: str, kind: str, ids: Iterable[str]) -> Dict[str, str]:
     """id -> name of each one still here; a deleted or archived one isn't."""
-    ids = sorted({str(i) for i in ids if i})
-    if not ids:
-        return {}
     table, col, live = _THINGS[kind]
-    rows = _need(f"/{table}?business_id=eq.{_q(bid)}&id=in.({_in(ids)}){live}&select=id,{col}&limit=500")
+    rows = _by_ids(lambda part: f"/{table}?business_id=eq.{_q(bid)}&id=in.({part}){live}&select=id,{col}&limit=500",
+                   ids)
     return {str(r["id"]): _plain(r.get(col)) for r in rows}
 
 
@@ -559,6 +567,19 @@ def _hung(m: Map, u: Dict[str, Any], did: Optional[str]) -> Optional[Dict[str, A
 def _clash(m: Map, did: Optional[str], name: str) -> Optional[Dict[str, Any]]:
     return next((d for d in m.departments if d["id"] != did and d["name"].strip().casefold() == name.casefold()),
                 None)
+
+
+def _left_behind(d: Optional[Dict[str, Any]], by: Any) -> bool:
+    """A department this login's own save made in the last ten minutes and
+    couldn't finish: its units failed, and so did taking it back out. A retry
+    of that save takes it as its own instead of hitting its name."""
+    if not d or d["units"] or not by or str(d.get("updated_by") or "") != str(by):
+        return False
+    try:
+        at = datetime.fromisoformat(str(d.get("updated_at") or "").replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return datetime.now(timezone.utc) - (at if at.tzinfo else at.replace(tzinfo=timezone.utc)) <= LEFT_FOR
 
 
 def _units_in(bid: str, m: Map, did: Optional[str], raw: Any) -> List[Dict[str, Any]]:
@@ -635,6 +656,10 @@ def save_department(biz: Any, body: Dict[str, Any], by: Any) -> Dict[str, Any]:
         row["name"] = _plain(body.get("name"))
         if not 1 <= len(row["name"]) <= 80:
             _bad("Name the department (up to 80 letters)")
+    if cur is None and isinstance(body.get("units"), list) and body["units"]:
+        left = _clash(m, None, row["name"])
+        if _left_behind(left, by):          # the retry of a save that couldn't finish
+            did, cur = left["id"], left
     for k, allowed, say in (("status", STATUSES, "A department is a draft, active or archived"),
                             ("source", SOURCES, "A department comes from the office, Chief or a template"),
                             ("area", (None, *ca.AREA_ORDER), "Pick one of the eight areas"),
@@ -692,8 +717,11 @@ def save_department(biz: Any, body: Dict[str, Any], by: Any) -> Dict[str, Any]:
             "business_id": bid, "department_id": did, "kind": u["kind"], "label": "" if u["ref"] else u["label"],
             **{c: (u["ref"] if UNIT_REF.get(u["kind"]) == c else None) for c in UNIT_REF.values()}} for u in new])
         if not isinstance(made, list) or len(made) != len(new):
-            if cur is None:         # a new department doesn't stay half made
-                sb_clients.sb_delete_as_service(f"/church_departments?id=eq.{_q(did)}&business_id=eq.{q}")
+            # A new department doesn't stay half made. When it can't be taken
+            # back out, a retry of this save finishes it (_left_behind).
+            if cur is None and not sb_clients.sb_delete_as_service(
+                    f"/church_departments?id=eq.{_q(did)}&business_id=eq.{q}"):
+                raise HTTPException(503, UNFINISHED)
             raise _refused(bid, did, units=new)
     gone = [u["id"] for u in have if _ukey(u) not in keep]
     if gone and not sb_clients.sb_delete_as_service(

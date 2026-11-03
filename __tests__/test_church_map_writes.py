@@ -31,7 +31,7 @@ import church_map_router  # noqa: E402
 import church_roles as cr  # noqa: E402
 import sb_clients  # noqa: E402
 from auth_supabase import AuthedUser, require_user  # noqa: E402
-from church_three import CHURCHES, GRACE, LOVE_CITY as LC, NAMES, OWNER_EMAIL, build, church  # noqa: E402
+from church_three import CHURCHES, GRACE, LOVE_CITY as LC, NAMES, NEW_HOPE as NH, OWNER_EMAIL, build, church  # noqa: E402
 
 K = (*cr.SWITCHES, "made_for")
 
@@ -138,6 +138,39 @@ def test_a_conflict_the_database_catches_is_the_same_400_and_a_failed_write_a_50
     assert len(lc.t["church_departments"]) == n, "a new department never stays half made"
     monkeypatch.setattr(sb_clients, "sb_patch_as_service", lambda *a, **k: None)
     assert _refused(_save, lc, {"id": youth["id"], "sort": 5}, code=503) == "That didn’t save. Try again."
+
+
+def test_a_half_made_department_that_cant_be_taken_out_is_finished_by_the_retry(lc, monkeypatch):
+    post, delete = sb_clients.sb_post_as_service, sb_clients.sb_delete_as_service
+    monkeypatch.setattr(sb_clients, "sb_post_as_service", lambda path, body, prefer=None, **k: None
+                        if path.startswith("/church_department_units") else post(path, body, prefer, **k))
+    monkeypatch.setattr(sb_clients, "sb_delete_as_service", lambda path, **k: False)
+    body = {"name": "Kids", "units": [{"kind": "space", "label": "kids"}]}
+    assert _refused(_save, lc, body, code=503) == "That couldn’t finish saving. Try again in a moment."
+    left = _dept(lc, LC, "Kids")
+    other = dict(body, name="Teens")
+    _refused(_save, lc, other, code=503)
+    _dept(lc, LC, "Teens")["updated_by"] = "someone-else"
+    monkeypatch.setattr(sb_clients, "sb_post_as_service", post)
+    monkeypatch.setattr(sb_clients, "sb_delete_as_service", delete)
+    again = _save(lc, body)
+    assert (again["id"], [u["label"] for u in again["units"]]) == (left["id"], ["kids"]), "the retry finishes it"
+    assert [d["name"] for d in lc.t["church_departments"] if d["business_id"] == LC].count("Kids") == 1
+    assert _refused(_save, lc, other) == "There’s already a department called Teens", "another login's isn't theirs"
+
+
+def test_the_people_on_a_big_map_are_read_fifty_at_a_time(lc, monkeypatch):
+    real, urls = sb_clients.sb_get_as_service, []
+
+    def spy(path, **k):
+        if path.startswith("/contacts?"):
+            urls.append(path.split("id=in.(")[1].split(")")[0].count(",") + 1)
+        return real(path, **k)
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", spy)
+    ids = [c["id"] for c in lc.t["contacts"] if c["business_id"] == NH][:120]
+    assert len(cm._people(NH, ids + ids[:5])) == 120 and urls == [50, 50, 20]
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", lambda path, **k: None if "id=in." in path else real(path, **k))
+    assert _refused(cm._people, NH, ids, code=503) == cm.UNREAD
 
 
 def test_archiving_lets_go_of_what_hung_from_it(lc):
