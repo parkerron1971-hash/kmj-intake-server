@@ -746,6 +746,33 @@ def _may_announce(business_id: str, user: AuthedUser) -> str:
     return role
 
 
+async def _read_every(client: httpx.AsyncClient, path: str, key: str = "id") -> Optional[List[Dict[str, Any]]]:
+    """Every row `path` matches, page by page in `key` order (`key` unique
+    within the filter, in the select; the path carries no limit or order).
+    PostgREST hands back at most 1,000 rows whatever `limit` asks for, so a
+    single read of a big church's list quietly stopped short: the whole-church
+    announcement asked for 500 and texted those, in no set order, and nobody
+    else. None when any page fails, so the caller sends nothing rather than
+    texting part of the list."""
+    from sb_clients import PAGE_ROWS
+    rows: List[Dict[str, Any]] = []
+    after: Optional[str] = None
+    while True:
+        cursor = f"&{key}=gt.{after}" if after is not None else ""
+        page = await _sb_get(client, f"{path}&order={key}.asc&limit={PAGE_ROWS}{cursor}")
+        if not isinstance(page, list):
+            return None
+        rows.extend(page)
+        if len(page) < PAGE_ROWS:
+            return rows
+        after = page[-1].get(key)
+        if after is None or len(rows) >= _EVERY_CEILING:
+            return None
+
+
+_EVERY_CEILING = 100_000
+
+
 async def _group_ids(client: httpx.AsyncClient, business_id: str, group_id: str) -> Optional[set]:
     """The contacts in one of this business's active groups; None when the
     group isn't this business's (or couldn't be read)."""
@@ -754,8 +781,8 @@ async def _group_ids(client: httpx.AsyncClient, business_id: str, group_id: str)
     g = await _sb_get(client, f"/groups?id=eq.{group_id}&business_id=eq.{business_id}&active=eq.true&select=id&limit=1")
     if not g:
         return None
-    rows = await _sb_get(client, f"/group_members?business_id=eq.{business_id}&group_id=eq.{group_id}"
-                                 f"&select=contact_id&limit=5000")
+    rows = await _read_every(client, f"/group_members?business_id=eq.{business_id}&group_id=eq.{group_id}"
+                                     f"&select=contact_id", key="contact_id")
     if rows is None:
         return None
     return {str(r["contact_id"]) for r in rows}
@@ -781,11 +808,12 @@ async def _bulletin_list(client: httpx.AsyncClient, business_id: str, group_id: 
                 return [], None
             contacts += got
     else:
-        contacts = await _sb_get(
-            client,
-            f"/contacts?business_id=eq.{business_id}&phone=not.is.null"
-            f"&select=id,name,phone&limit=500",
-        ) or []
+        # Everyone, not the first 500 (it read `limit=500` with no order, so
+        # a church past about 500 numbers texted an arbitrary 500 of them).
+        contacts = await _read_every(
+            client, f"/contacts?business_id=eq.{business_id}&phone=not.is.null&select=id,name,phone")
+        if contacts is None:
+            return [], None
     yes = await sms_alerts.said_yes_to_texts(
         client, business_id, [c.get("phone") for c in contacts])
     return contacts, yes
@@ -820,13 +848,22 @@ async def announcement_groups(business_id: str, user: AuthedUser = Depends(requi
             return JSONResponse({"error": "Couldn't read your groups. Try again in a minute."}, 503)
         if not groups:
             return {"groups": []}
-        members = await _sb_get(client, f"/group_members?business_id=eq.{business_id}"
-                                        f"&select=group_id,contact_id&limit=50000") or []
+        # One group at a time, every member (a single read stopped at 1,000
+        # rows across all groups, and a failed read counted as nobody).
+        members: List[Dict[str, Any]] = []
+        for g in groups:
+            rows = await _read_every(client, f"/group_members?business_id=eq.{business_id}&group_id=eq.{g['id']}"
+                                             f"&select=group_id,contact_id", key="contact_id")
+            if rows is None:
+                return JSONResponse({"error": "Couldn't read your groups. Try again in a minute."}, 503)
+            members += rows
         ids = sorted({str(m["contact_id"]) for m in members})
         phone_of: Dict[str, str] = {}
         for k in range(0, len(ids), 100):
             got = await _sb_get(client, f"/contacts?business_id=eq.{business_id}&id=in.({','.join(ids[k:k + 100])})"
-                                        f"&phone=not.is.null&select=id,phone&limit=100") or []
+                                        f"&phone=not.is.null&select=id,phone&limit=100")
+            if got is None:
+                return JSONResponse({"error": "Couldn't read your groups. Try again in a minute."}, 503)
             for c in got:
                 p = normalize_phone(c.get("phone"))
                 if p:
