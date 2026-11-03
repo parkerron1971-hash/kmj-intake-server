@@ -1741,6 +1741,13 @@ async def startup():
             import money_auditor as _money
             scheduler.add_job(g("money_auditor", _money.audit_tick), "cron",
                               hour=10, minute=0, id="money_auditor")
+            # A church plan's texts (church_texts.py): last month's extra texts
+            # onto the next bill, once, and the 80% / 100% heads-up. Daily, so a
+            # church that failed on the 1st is tried again on the 2nd. Never
+            # stops a text. CHURCH_TEXT_BILLING=off stops the bill only.
+            import church_texts as _church_texts
+            scheduler.add_job(g("church_texts", _church_texts.bill_tick), "cron",
+                              hour=9, minute=15, id="church_texts")
             # Member messages are kept a year (each church can change it).
             import member_portal_messaging as _msgs
             scheduler.add_job(g("msg_retention", _msgs.retention_tick), "cron",

@@ -787,6 +787,11 @@ async def billing_usage(biz: str, user: AuthedUser = Depends(require_user)) -> D
     s = usage_metering.usage_summary(biz, biz_row)
     s["credits"] = credit_ledger.summary(biz)
     s["packs"] = credit_ledger.credit_packs()
+    # A church plan's texts this month (church_texts.py); None on any other plan.
+    import asyncio
+    import church_texts
+    s["texts"] = await asyncio.to_thread(church_texts.summary, biz,
+                                         biz_row.get("subscription_plan"))
     return s
 
 
