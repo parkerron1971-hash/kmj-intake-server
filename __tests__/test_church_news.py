@@ -42,6 +42,13 @@ P_LATER = "dddddddd-1111-0000-0000-000000000003"
 P_PINNED = "dddddddd-1111-0000-0000-000000000004"
 
 
+def _recent() -> str:
+    """An hour ago. The bell counts posts from the last two weeks, so a
+    fixed date (2026-10-20) aged out of it on 2026-11-03 and broke these."""
+    from datetime import datetime, timedelta, timezone
+    return (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+
+
 def _post(pid, **k):
     row = {"id": pid, "business_id": BIZ, "kind": "announcement", "title": "Baptism Sunday is November 9",
            "body": "Sign up by November 2.", "group_id": None, "posted_by": None, "office_user": "u1",
@@ -280,7 +287,8 @@ def test_a_post_page_checks_a_comment_first_and_says_so(fake):
 
 def test_home_shows_nothing_when_there_is_no_news(fake):
     assert mpn.home_block(BUSINESS, [], [], True) == ""
-    fake.t["church_posts"] += [_post(P_CHURCH), _post(P_PINNED, title="Second")]
+    fake.t["church_posts"] += [_post(P_CHURCH, created_at=_recent()),
+                               _post(P_PINNED, title="Second", created_at=_recent())]
     posts, unseen = cn.home_view(BIZ, MONIQUE)
     block = mpn.home_block(BUSINESS, posts, [], True)
     assert "From the church" in block and "All news" in block and "Second" in block
@@ -293,7 +301,7 @@ def test_the_bell_leads_to_news_even_before_the_first_post(fake):
     # Kevin, 2026-10-23, signed in as a pastor: "I don't see where I can post".
     # With no posts yet, Home had no bell, so News (and Post) was out of reach.
     assert mpn.home_bell(cn.home_view(BIZ, MONIQUE)) == 0             # no news yet: the bell, no number
-    fake.t["church_posts"].append(_post(P_CHURCH))
+    fake.t["church_posts"].append(_post(P_CHURCH, created_at=_recent()))
     assert mpn.home_bell(cn.home_view(BIZ, MONIQUE)) == 1
     fake.fail.add("church_posts")
     assert mpn.home_bell(cn.home_view(BIZ, MONIQUE)) is None          # a failed read: no bell
