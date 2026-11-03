@@ -34,7 +34,7 @@ One rule: every department has one leader, one overseer and one office helper (a
 |---|---|---|
 | `SHEPHERD_TITLE`/`MINISTER_TITLE` on titles, church_shepherding.py:61-62, :163-178 | `can_shepherd` | 4 |
 | The stream's word in key+title as a tie-break, church_follow_up.py:386-388 | `made_for` | 4 |
-| The `executive_pastor` key/catalog_key, church_duties.py:81, :437-438; church_office_tasks.py:45, :83-85 | the `office_overseer_roles` setting | 7 |
+| The `executive_pastor` key/catalog_key query, church_duties.py:437-438 (`_exec_users`); church_office_tasks.py:45, :83-85. (church_duties.py:81 is the same string used as the pseudo-lane key for the lanes and starter sets; it is not a role read, and PR 9 decides whether to rename it.) | the `office_overseer_roles` setting | 7 |
 | `_AREA_WORDS` on titles and team names at read time, church_areas.py:140-202. It sets a login's default areas through `_guesses` :295-330, so it is behavior | the department's area, then a stored guess | 8 |
 | `job_for_title` falling back to "care", church_roles.py:1093 | §4 | 8 |
 
@@ -217,10 +217,10 @@ Every department names an overseer, and an overseer changes who hears about a la
 
 | Module | What changes (map first) | PR |
 |---|---|---|
-| church_roles.py | Jobs get default switches. Every TYPES row carries explicit switch values, pinned equal to the backfill oracle; the nondenom Executive Pastor row gets `office=True`. `ensure_library`/`set_type`/`create_role` write the switches, and an `office` row adds itself to `office_overseer_roles`. `_FIELDS`/`_RoleDef` (church_router.py:128-140) accept `can_*` and `made_for` (trimmed when handles change). `library`/`chief_lines` show them. New columns are left out of writes until `ready()`. A new custom pastoral role shepherds by default (decision 2). | 3 |
+| church_roles.py | Jobs get default switches. Every TYPES row carries explicit switch values, pinned equal to the backfill oracle; the nondenom Executive Pastor row gets `office=True`. `ensure_library`/`set_type`/`create_role` write the switches, and an `office` row adds itself to `office_overseer_roles`. `_FIELDS` (church_roles.py:722-723) and `_RoleDef` (church_router.py:128-140) accept `can_*` and `made_for` (trimmed when handles change). `library`/`chief_lines` show them. New columns are left out of writes until `ready()`. A new custom pastoral role shepherds by default (decision 2). | 3 |
 | church_shepherding.py | `role_rows` covers any role with `can_shepherd` true, or null with Ministers on; `lead` stays the senior job. `_chain` (:922-933) uses `chain_for`. | 4, 6 |
 | church_follow_up.py | The `choose` tie-break becomes "stream in `made_for`". A Serve sign-up with no team leader (:358-377) goes to the team's department leader, then its overseer, before `oversees_teams`. `_sweep_church` (:1333-1340) uses `chain_for`. `_effective_defs` gives legacy roles their job's switches. | 4, 6 |
-| member_portal_messaging.py | The leaders room (:182-188) uses `can_lead` instead of the job list, and adds the leaders and overseers of active departments. | 4 |
+| member_portal_messaging.py | The leaders room (:182-188) uses `can_lead` instead of the job list, and keeps today's structural rule that also seats a role another role answers to (:180-184; Love City's Intercessor leader, New Hope's Deacons in the fixture). It adds the leaders and overseers of active departments. | 4 |
 | church_prayer.py | The late ladder (:430-448) uses `chain_for`. `pass_targets` (:279-292) also offers holders who answer to this leader as a person. | 6 |
 | church_shepherd_signals.py | `_chain` (:255-260) drives `told_name` and the climb (:495-507). | 6 |
 | church_leader_tasks.py | `overseer` (:565-584) takes the first step of `chain_for`. A group leader with no role goes to their group's department (leader, then overseer) before `handed_by` (:641-654). | 6 |
@@ -272,7 +272,7 @@ Each PR is independently mergeable and about 700 lines or fewer.
 - `filled=False` is the "map empty" mode that every preservation test uses.
 
 **Love City** (nondenom; the owner is the platform owner):
-- Holders: Kevin (Lead Pastor), Jessica (Executive Pastor), Andre (Associate Pastor), two Elders (Marcus answers to Jessica), Ministers (setting off), the Intercessor leader and Intercessors, Prophets (custom, pastoral, can oversee), Evangelists (welcome, overseeing flipped on), Youth Pastor Y, the Children's Director, and team leaders for "Hospitality Team" and "Youth Ministry (YWD)".
+- Holders: Kevin (Lead Pastor), Jessica (Executive Pastor), Andre (Associate Pastor), two Elders (Marcus answers to Jessica), Ministers (setting off), the Intercessor leader and Intercessors, Prophets (custom, pastoral; "can oversee" comes from the backfill for every pastoral role, not a flip), Evangelists (welcome, overseeing flipped on), Youth Pastor Y, the Children's Director, and team leaders for "Hospitality Team" and "Youth Ministry (YWD)".
 - Office: the five lane logins from docs/CHURCH_DUTIES.md:321-336, plus the treasurer's Admin login (reuse the constants in test_church_duties.py).
 - Departments: Prayer (overseer a Prophet), Outreach & Welcome (overseer an Evangelist), and Youth (leader Y, overseer Andre, duty `youth`; units: the YWD serve option, the Youth group, space 'youth').
 - An elder board in church_boards.
@@ -296,7 +296,7 @@ Each PR is independently mergeable and about 700 lines or fewer.
 
 **The scenario test** (parametrized over the three churches, for Y):
 
-1. **A room request.** Its phone alerts go to the Manager holders of the rooms duty: Naiya and Jessica, the secretary, and New Hope's office-lane login. The People & Care login is not among them.
+1. **A room request.** Its phone alerts go to the holders of the rooms duty (`church_duties.holders_of(biz, "rooms")`): the owner and admins, plus the Manager holders, who are Naiya and Jessica, the secretary, and New Hope's office-lane login and its office overseer (the Director of Operations holds Rooms by default). The People & Care login is not among them.
 2. **A drifting youth family.** `monday_plan` over three Mondays goes to the shepherd, then the shepherd's overseer, then the senior pastor:
    - Love City: Marcus → Jessica → Kevin.
    - Grace: D2 → Pastor, and it stops there.
