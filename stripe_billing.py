@@ -787,6 +787,13 @@ async def billing_usage(biz: str, user: AuthedUser = Depends(require_user)) -> D
     s = usage_metering.usage_summary(biz, biz_row)
     s["credits"] = credit_ledger.summary(biz)
     s["packs"] = credit_ledger.credit_packs()
+    # A church plan's texts this month (church_texts.py); None on any other plan.
+    import asyncio
+    import church_texts
+    # subscription_plan holds the Stripe price id, so the plan comes from
+    # church_plan_of (price -> plan, comp_tier first), never the column itself.
+    s["texts"] = await asyncio.to_thread(church_texts.summary, biz,
+                                         church_texts.church_plan_of(biz_row))
     return s
 
 
