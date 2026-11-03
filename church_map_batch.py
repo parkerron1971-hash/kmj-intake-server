@@ -575,52 +575,77 @@ def undo(biz: Dict[str, Any], change_id: Any, by: Any, *, role: str, origin: str
 
 SWITCH_KEYS = (*cr.SWITCHES, "made_for")
 SWITCH_SEAT = "Only the owner or an admin changes what a role can do."
+JOB_SEAT = "Only the owner or an admin changes a role’s job, because its job sets what the role can do."
 BOARD_YES = "Only the owner changes who gives the board’s yes on money."
 
 
-def switch_seat(bid: str, rid: Optional[str], changes: Dict[str, Any], role: str) -> None:
+def _role_now(bid: str, rid: str, cols: str) -> Dict[str, Any]:
+    got = cm._rows(f"/church_role_defs?id=eq.{cm._q(rid)}&business_id=eq.{cm._q(bid)}&select={cols}&limit=1")
+    if got is None:
+        raise HTTPException(503, "Couldn’t save that just now; try again.")
+    return got[0] if got else {}
+
+
+def switch_seat(bid: str, rid: Optional[str], changes: Dict[str, Any], role: str) -> bool:
     """Decision 3: a role's switches (can_*, made_for) are the owner's or an
     admin's to change; its board yes, a yes on money, the owner's. Sending a
     board yes as it already reads is no change (as a money level the same
-    again: CHURCH_LEADERS_MAP.md "As built in PR 5"). `rid` None: a new role."""
-    if not any(k in changes for k in SWITCH_KEYS):
-        return
+    again: CHURCH_LEADERS_MAP.md "As built in PR 5"). A new job resets a
+    role's switches to that job's (church_roles._clean_switches), so once the
+    map's columns are there a job change is a switch change too, and one that
+    would take away a board yes is the owner's (#1726 review). `rid` None: a
+    new role, whose job only starts it. Returns whether the job moves."""
+    cur = _role_now(bid, rid, "job,can_board_yes") if rid and changes.get("job") and cr._live() else {}
+    moves = bool(cur) and changes["job"] != cur.get("job")
+    named = any(k in changes for k in SWITCH_KEYS)
+    if not moves and not named:
+        return False
     if role not in ("owner", "admin"):
-        raise HTTPException(403, SWITCH_SEAT)
-    if role == "owner" or "can_board_yes" not in changes:
-        return
-    now = False
-    if rid:
-        got = cm._rows(f"/church_role_defs?id=eq.{cm._q(rid)}&business_id=eq.{cm._q(bid)}&select=can_board_yes&limit=1")
-        if got is None:
-            raise HTTPException(503, "Couldn’t save that just now; try again.")
-        now = bool(got and got[0].get("can_board_yes"))
-    if bool(changes["can_board_yes"]) != now:
+        raise HTTPException(403, SWITCH_SEAT if named else JOB_SEAT)
+    if role == "owner" or ("can_board_yes" not in changes and not moves):
+        return moves
+    if rid and not cur:
+        cur = _role_now(bid, rid, "can_board_yes")
+    job = cr.JOBS.get(str(changes.get("job") or ""), {}).get("switches") or {}
+    want = changes["can_board_yes"] if "can_board_yes" in changes else job.get("can_board_yes")
+    if bool(want) != bool(cur.get("can_board_yes")):
         raise HTTPException(403, BOARD_YES)
+    return moves
 
 
 def save_role(biz: Dict[str, Any], role_id: Any, changes: Dict[str, Any], user: Any, *, role: str) -> Dict[str, Any]:
     """PATCH /church/roles/{id}: {role: the saved row, change}. A change of
-    its switches needs the seat switch_seat says, everywhere; every other
-    field keeps the route's. Where the map is open to this login
-    (church_map.open_to) and step 2's file is there, a save that names a
-    switch is one change (origin 'office', a role part, with the fields a
-    part keeps), so the sheet's Undo puts it back; the role's other fields go
-    in first, as today. Else it saves as it always has, logging nothing."""
+    its switches, or of its job, needs the seat switch_seat says, everywhere;
+    every other field keeps the route's. Where the map is open to this login
+    (church_map.open_to) and step 2's file is there, such a save is one change
+    (origin 'office', a role part with the fields a part keeps; a job's
+    switches among them), so the sheet's Undo puts it back. The whole save is
+    checked first, by the batch's own dry run, and then written at once: a
+    part refused leaves nothing saved (#1726 review). Its other fields go in
+    with it, unlogged, as today. Else it saves as it always has, logging
+    nothing."""
     bid, by = cm._bid(biz), user.id
     rid = cr._uid(role_id, "role")
-    switch_seat(bid, rid, changes, role)
-    s = cm.step2_state() if any(k in changes for k in SWITCH_KEYS) and cm.open_to(user) else False
+    moves = switch_seat(bid, rid, changes, role)
+    s = cm.step2_state() if (moves or any(k in changes for k in SWITCH_KEYS)) and cm.open_to(user) else False
     if s is None:
         raise HTTPException(503, cm.UNREAD)
     if not s:
         return {"role": cr.update_role(bid, rid, changes), "change": None}
-    rest = {k: v for k, v in changes.items() if k not in FIELDS["role"]}
-    if rest:
-        cr.update_role(bid, rid, rest)
-    out = apply(biz, [{"kind": "role", "id": rid, **{k: v for k, v in changes.items() if k in FIELDS["role"]}}],
-                by, "office", role=role)
-    return {"role": out["results"][0], "change": out["change"]}
+    _may(role)
+    now, said = _Now(biz), dict(changes)
+    if moves:                       # the new job's switches, as this save leaves them
+        full = cr.update_role(bid, rid, changes, dry=True)
+        said.update({k: full[k] for k in SWITCH_KEYS if k in full and k not in said})
+    plan = _plan(now, [{"kind": "role", "id": rid, "set": said}], by, role, "office")
+    parts = [p for _o, p in plan if p]
+    money = _money(parts)
+    _may(role, money)
+    results, err = _write(now, plan, by, role, "office")
+    if err is not None:
+        raise _failed(now.bid, parts, by, "office", err, money=money)
+    return {"role": results[0], "change": _brief(_log(now.bid, "applied", parts, by, "office", money=money))
+            if parts else None}
 
 
 # ─── The sheet's list ─────────────────────────────────────────────────

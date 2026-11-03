@@ -487,6 +487,10 @@ How it puts things back:
 - **Logged switch saves:** where the map is open and `step2_state()` is True, a PATCH that names a switch is one change (origin `'office'`, a `role` part) holding the fields a role part keeps: title, definition, reports_to, status, the switches and made_for. Its other fields (job, covers, handles, sees, oversees_teams, term_months, needs_class) are written first through `update_role`, unlogged as today, so Undo leaves them. A PATCH without a switch is today's write.
 - **`role_name`** reads `covers` from the definition it is given, or else from the LEGACY row for the stored key (structure, §0 rule (a)). test_church_no_title_words never listed it (it is display), so its marks are unchanged.
 
+**Corrected in B4a** (#1726's review; `church_map_batch.switch_seat`, `save_role`):
+- **A job change is a switch change** once the map's columns are there, since it resets the switches to the new job's. It needs an admin seat (a 403: "Only the owner or an admin changes a role's job…"), and one that would take a board yes away needs the owner. Where the map is open and step 2 is there, it is one change: a role part with each switch's before and after. Undo puts the switches back and leaves the job. B3b's "a Manager's job change still resets a role's switches" no longer holds: a Manager's job change on Leaders & roles is now refused at every church, the one visible change.
+- **A switch save is checked whole and written at once.** The batch's dry run checks the whole PATCH, then one `update_role` writes it, its unlogged fields with it. A refused part no longer leaves them saved (B3b wrote them first).
+
 ## 5. The department sheet (frontend, Leaders & roles)
 
 `LibView` (LeadersRoles.tsx:36-40) gains the views `map`, `dept`, `ready` and `setup`. When `GET /church/map` answers 404, the switch is closed for this login and none of them show.
