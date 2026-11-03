@@ -199,12 +199,33 @@ def load(biz: Any) -> Optional[Map]:
                      for d in depts])
 
 
+def state() -> Optional[bool]:
+    """ready(), told apart from a blip: True when the map's columns answer;
+    False when the table answers but its new columns don't (the migration
+    isn't applied, so today's code is right); None when the probe itself
+    failed, and nothing can be said either way."""
+    if ready():
+        return True
+    try:
+        base = sb_clients.sb_get_as_service("/church_role_defs?select=id&limit=1")
+    except Exception:
+        return None
+    return False if isinstance(base, list) else None
+
+
 def opened(biz: Any) -> "Map | None | bool":
     """What a reader takes, in §3's order: False where the map is closed for
-    this church or its columns aren't there yet (today's code runs as it
-    is); else load(biz): the Map, or None when a read failed, and the caller
-    then does what it does today on a failed read, never today's people."""
-    if not church_open(biz) or not ready():
+    this church or its columns aren't there (today's code runs as it is);
+    else load(biz): the Map, or None when a read failed (a failed probe
+    included), and the caller then does what it does today on a failed
+    read, never today's people. A blip after a restart must not send an
+    open church back to the title rules for a moment (#1714 review)."""
+    if not church_open(biz):
+        return False
+    s = state()
+    if s is None:
+        return None
+    if s is False:
         return False
     return load(biz)
 

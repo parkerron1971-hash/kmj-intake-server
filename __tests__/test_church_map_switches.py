@@ -178,3 +178,26 @@ def test_a_failed_map_read_is_a_failed_read_never_todays_people(monkeypatch):
                      answers=CARE) is None and len(db.t["church_follow_ups"]) == n, "the card waits, as on any failed read"
     monkeypatch.setenv("CHURCH_MAP", "off")
     assert shep.load(LC) and mpm.leaders_room_people(LC) is not None, "closed, the map is never read"
+
+
+def test_a_failed_probe_after_a_restart_is_a_failed_read_not_the_title_rules(monkeypatch):
+    """#1714 review: ready() is remembered only once true, so the first probe
+    after a restart can fail on a blip. For an open church that is a failed
+    read, never a quiet fall back to the title rules; a database whose
+    columns are simply missing still runs today's code."""
+    db = build(monkeypatch)
+    monkeypatch.setenv("CHURCH_MAP", "owner")     # Love City's map open, Grace's closed
+    cm._READY.clear()
+    real = sb_clients.sb_get_as_service
+    monkeypatch.setattr(sb_clients, "sb_get_as_service",
+                        lambda p, **k: None if p.startswith("/church_role_defs?select=") else real(p, **k))
+    assert cm.state() is None and cm.opened(LC) is None and cm.opened(GRACE) is False
+    assert (shep.load(LC), mpm.leaders_room_people(LC)) == (None, None), "Love City's map is open: a failed read"
+    assert shep.load(GRACE) is not None, "Grace's map is closed: today's code"
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", real)
+    cm._READY.clear()
+    assert cm.state() is True and isinstance(cm.opened(LC), cm.Map), "the next probe recovers"
+    nodb = build(monkeypatch, filled=False, migrated=False)
+    cm._READY.clear()
+    assert cm.state() is False and cm.opened(LC) is False, "columns missing: today's code, not a failed read"
+    assert nodb and shep.load(LC) is not None
