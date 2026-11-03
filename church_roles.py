@@ -700,7 +700,7 @@ def ensure_library(business: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     team_names = cfu.teams(biz) or []
     existing = by_key(have)
     created: Dict[str, str] = {k: v["id"] for k, v in existing.items()}
-    live, office = _live(), []
+    live, office, new = _live(), [], []
     for n, row in enumerate(rows):
         if row["key"] in existing:
             continue
@@ -717,8 +717,11 @@ def ensure_library(business: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             }, prefer="resolution=ignore-duplicates,return=representation")
         if isinstance(made, list) and made:
             created[row["key"]] = str(made[0]["id"])
+            new.append(made[0])
             if live and row["office"]:
                 office.append(created[row["key"]])
+    import church_areas
+    church_areas.guess_new(business, new)            # their areas' guesses, stored once (PR 8)
     # The chain: each title to the one it answers to (the senior role when
     # it names none), now that every id is known.
     top = created.get("pastor")
@@ -901,6 +904,8 @@ def create_role(business: Dict[str, Any], body: Dict[str, Any], *, by_user: str 
         "sort": 1000 + len(all_defs) * 10, "status": patch.pop("status", "active"), **patch})
     if not isinstance(rows, list) or not rows:
         raise HTTPException(503, "That role didn’t save. Try again.")
+    import church_areas
+    church_areas.guess_new(business, rows[:1])      # its area's guess, stored once (PR 8)
     return rows[0]
 
 
@@ -1002,7 +1007,7 @@ def set_type(business: Dict[str, Any], type_key: str, add: Iterable[str] = (), *
     import church_follow_up as cfu
     team_names = cfu.teams(biz) or []
     rows = {r["key"]: r for r in TYPES[type_key]["rows"]}
-    added, live, office = 0, _live(), []
+    added, live, office, new = 0, _live(), [], []
     top = next((d for d in all_defs if d["job"] == "senior"), None)
     for k in add:
         row = rows.get(str(k))
@@ -1022,8 +1027,11 @@ def set_type(business: Dict[str, Any], type_key: str, add: Iterable[str] = (), *
         if isinstance(made, list) and made:
             added += 1
             have[row["key"]] = made[0]
+            new.append(made[0])
             if live and row["office"]:
                 office.append(str(made[0]["id"]))
+    import church_areas
+    church_areas.guess_new(business, new)            # their areas' guesses, stored once (PR 8)
     out = sb_clients.sb_post_as_service("/church_role_settings?on_conflict=business_id", {
         "business_id": biz, "church_type": type_key, "set_by": "owner", "set_at": _iso(_now()),
         "updated_at": _iso(_now()), **_office_overseers(st, office)},
@@ -1199,6 +1207,9 @@ def chief_draft(business: Dict[str, Any], title: str, job: str = "", definition:
         raise HTTPException(400, "Name the role")
     if job not in JOBS:
         job = job_for_title(title)
+    if not job:         # chief_church_actions turns this into a fail, and Chief asks the owner
+        raise HTTPException(400, f"Chief can’t tell what job {'an' if title[0].casefold() in 'aeiou' else 'a'} "
+                                 f"{title} does here. Pick one: " + ", ".join(JOBS[k]["label"] for k in JOB_ORDER) + ".")
     st = ensure_library(business)
     if st is None:
         raise HTTPException(503, "Your roles couldn’t be checked. Try again in a moment.")
@@ -1206,14 +1217,18 @@ def chief_draft(business: Dict[str, Any], title: str, job: str = "", definition:
                        source="chief")
 
 
-def job_for_title(title: str) -> str:
-    """The job a title most likely does, from every tradition's titles,
-    then from words in it. Chief's first guess; the owner can change it."""
+def guess_job(title: str) -> Tuple[Optional[str], str]:
+    """(the job a title most likely does, why): every tradition's titles
+    first, then words in it. None when nothing says: a board seat, say, is
+    Board & minutes or a board-yes role, not a job (docs/CHURCH_LEADERS_MAP.md
+    §4). Chief's first guess; the owner can change it."""
     t = _plain(title).casefold()
     for k in TYPE_ORDER:
         for r in TYPES[k]["rows"]:
             if r["title"].casefold() == t:
-                return r["job"]
+                return r["job"], f"{TYPES[k]['label']} churches use the title “{r['title']}”"
+    # The last line is new in PR 8, after the others, so a title any of them
+    # matched keeps its job.
     for rx, job in ((r"pastor|bishop|rector|priest|shepherd", "senior" if re.search(r"\b(lead|senior)\b", t) else "pastoral"),
                     (r"elder|minister|chaplain|steward\b|evangel", "pastoral"),
                     (r"interces|prayer", "prayer"),
@@ -1222,7 +1237,14 @@ def job_for_title(title: str) -> str:
                     (r"usher|greet|welcome|hospitality|connect|guest", "welcome"),
                     (r"teach|class|school|group", "teach"),
                     (r"trustee|treasur|clerk|secretar|admin|finance", "office"),
-                    (r"team|leader|captain|armor", "team")):
-        if re.search(rx, t):
-            return job
-    return "care"
+                    (r"team|leader|captain|armor", "team"),
+                    (r"prophet|apostle|overseer", "pastoral")):
+        hit = re.search(rx, t)
+        if hit:
+            return job, f"its title says “{hit.group(0)}”"
+    return None, "nothing in its title says which job"
+
+
+def job_for_title(title: str) -> str:
+    """guess_job's job, or "" when it can't tell."""
+    return guess_job(title)[0] or ""

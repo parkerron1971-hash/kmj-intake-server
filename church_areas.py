@@ -14,7 +14,9 @@ section." The proposal is the artifact "Church Areas and Keys"
                       yes (step 2 enforces that; this step only names it)
     a PLACE ......... the area a role or a Serve team belongs to: the
                       church's own pick (church_area_places), else a guess
-                      from its words, else its job; unplaced says so
+                      from its words, else its job; unplaced says so. Where
+                      the leaders map is open (places_for), the pick, then
+                      its department's area, then Chief's guess stored once
     WHO'S IN IT ..... read live from where each kind of person already
                       lives: ChurchSavvy's team (worship_team), the Lead tab
                       roles (church_leader_roles), kids workers
@@ -176,10 +178,14 @@ def guess_area(text: str) -> Optional[Tuple[str, str]]:
 
 def place_role(d: Dict[str, Any], places: Dict[Tuple[str, str], str]) -> Dict[str, Any]:
     """Where a role belongs, and why: {area, why, by} with `by` one of
-    church (its own pick), words, job; area None when nothing places it."""
+    church (its own pick), department, words, job; area None when nothing
+    places it. On an open leaders map (places_for gives a Places) the words
+    aren't read here: see _after_pick."""
     picked = places.get(("role", d.get("key") or ""))
     if picked in AREAS:
         return {"area": picked, "by": "church", "why": "Your church placed it here"}
+    if isinstance(places, Places):
+        return _after_pick(("role", d.get("key") or ""), places, d.get("job") or "")
     job = d.get("job") or ""
     if job in _JOB_FIXED:
         return {"area": _JOB_FIXED[job], "by": "job", "why": "Its job works here"}
@@ -196,6 +202,8 @@ def place_team(name: str, places: Dict[Tuple[str, str], str]) -> Dict[str, Any]:
     picked = places.get(("team", team_key(name)))
     if picked in AREAS:
         return {"area": picked, "by": "church", "why": "Your church placed it here"}
+    if isinstance(places, Places):
+        return _after_pick(("team", team_key(name)), places)
     hit = guess_area(name)
     if hit:
         return {"area": hit[0], "by": "words", "why": f"Chief's guess, from “{hit[1]}”"}
@@ -205,6 +213,132 @@ def place_team(name: str, places: Dict[Tuple[str, str], str]) -> Dict[str, Any]:
 def team_key(name: str) -> str:
     """A Serve team's key for a place: its name, lowercased and spaced once."""
     return re.sub(r"\s+", " ", (name or "").strip().casefold())[:80]
+
+
+# ─── Places on an open leaders map (docs/CHURCH_LEADERS_MAP.md §3, PR 8) ─
+#
+# Words suggest once, data decides (§0 rule a). Where the church's leaders map
+# is open (church_map.opened is a Map), Chief's guess for a role or a Serve
+# team is stored in church_area_places (by 'guess', word = what suggested it)
+# when it first appears, and from then on the row decides: renaming a role
+# never moves it. After the church's own pick: the area of the active
+# department it hangs from, a job that works in one place, the stored guess,
+# then its job.
+
+class Places(dict):
+    """The church's picks, (kind, key) -> area, as _places reads them, and
+    what comes after a pick on an open map: `departments`, (kind, key) ->
+    (area, department name), and `guesses`, (kind, key) -> (area, word)."""
+
+    def __init__(self, picks: Dict[Tuple[str, str], str], departments: Dict[Tuple[str, str], Tuple[str, str]],
+                 guesses: Dict[Tuple[str, str], Tuple[str, str]]):
+        super().__init__(picks)
+        self.departments, self.guesses = departments, guesses
+
+
+def _after_pick(k: Tuple[str, str], places: Places, job: str = "") -> Dict[str, Any]:
+    dept = places.departments.get(k)
+    if dept:
+        return {"area": dept[0], "by": "department", "why": f"Its department, {dept[1]}, works here"}
+    if job in _JOB_FIXED:
+        return {"area": _JOB_FIXED[job], "by": "job", "why": "Its job works here"}
+    hit = places.guesses.get(k)
+    if hit and hit[0] in AREAS:
+        return {"area": hit[0], "by": "words", "why": f"Chief's guess, from “{hit[1]}”" if hit[1] else "Chief's guess"}
+    if job in _JOB_AREA:
+        return {"area": _JOB_AREA[job], "by": "job", "why": "Its job works here"}
+    return {"area": None, "by": "", "why": "Nothing says where it belongs yet"}
+
+
+def suggest(kind: str, thing: Any) -> Optional[Tuple[str, str, str]]:
+    """Chief's guess for a role (its row) or a Serve team (its name), as the
+    (key, area, word) to store: today's words, read once. None when they say
+    nothing, or a role's job already works in one place (_JOB_FIXED)."""
+    if kind == "role":
+        if (thing.get("job") or "") in _JOB_FIXED:
+            return None
+        key = thing.get("key") or ""
+        hit = guess_area(" ".join([thing.get("title") or ""] + list(thing.get("oversees_teams") or [])))
+    else:
+        key, hit = team_key(thing), guess_area(thing)
+    return (key, hit[0], hit[1][:40]) if key and hit else None
+
+
+def store_guesses(biz: Any, roles: Iterable[Dict[str, Any]] = (), teams: Iterable[str] = (),
+                  have: Iterable[Tuple[str, str]] = ()) -> Dict[Tuple[str, str], Tuple[str, str]]:
+    """Store Chief's guess for each role and team here with no row yet: an
+    insert that never overwrites a pick or a guess already stored. Returns
+    what it suggested, (kind, key) -> (area, word); the caller reads that as
+    stored, and a write that failed is tried again by the next read."""
+    have, out = set(have), {}
+    for kind, things in (("role", roles), ("team", teams)):
+        for x in things:
+            s = suggest(kind, x)
+            if s and (kind, s[0]) not in have and (kind, s[0]) not in out:
+                out[(kind, s[0])] = s[1:]
+    if out:
+        sb_clients.sb_post_as_service("/church_area_places?on_conflict=business_id,kind,key", [
+            {"business_id": _bid(biz), "kind": k, "key": key, "area": a, "by": "guess", "word": w}
+            for (k, key), (a, w) in out.items()], prefer="resolution=ignore-duplicates,return=representation")
+    return out
+
+
+def guess_new(biz: Any, roles: Iterable[Dict[str, Any]]) -> None:
+    """New roles' guesses, stored as they are made (church_roles) where the
+    church's leaders map is open; a read stores any this misses."""
+    import church_map
+    roles = list(roles)
+    try:
+        if roles and church_map.church_open(biz) and church_map.ready():
+            store_guesses(biz, roles=roles)
+    except Exception as e:      # a guess never stops a role being made
+        print(f"[church_areas] guess for {_bid(biz)}'s new roles not stored: {e}")
+
+
+def _departments(m: Any) -> Dict[Tuple[str, str], Tuple[str, str]]:
+    """(kind, key) -> (area, name): each role and Serve team that hangs from
+    an active department with an area."""
+    out: Dict[Tuple[str, str], Tuple[str, str]] = {}
+    for d in m.active():
+        if d.get("area") not in AREAS:
+            continue
+        for u in d["units"]:
+            key = (m.roles.get(u["ref"]) or {}).get("key") if u["kind"] == "role" else \
+                team_key(u["label"]) if u["kind"] == "serve_option" else ""
+            if key:
+                out.setdefault(("role" if u["kind"] == "role" else "team", key), (d["area"], d["name"]))
+    return out
+
+
+def places_for(biz: Any, roles: Iterable[Dict[str, Any]] = (), teams: Iterable[str] = ()) -> Dict[Tuple[str, str], str]:
+    """What places this church's roles and teams. Where its leaders map is
+    closed or not ready: its picks, as today (_places). Open: a Places, with
+    a guess stored now for any of these `roles` and `teams` that has no row
+    (store_guesses). A failed map read is a failed read (the 503)."""
+    import church_map
+    m = church_map.opened(biz)
+    if m is False:
+        return _places(_bid(biz))
+    if m is None:
+        raise HTTPException(503, "The areas couldn't be read just now. Try again.")
+    rows = _need(f"/church_area_places?business_id=eq.{_q(_bid(biz))}&select=kind,key,area,by,word&limit=500")
+    picks: Dict[Tuple[str, str], str] = {}
+    guesses: Dict[Tuple[str, str], Tuple[str, str]] = {}
+    for r in rows:
+        k = (r.get("kind") or "", r.get("key") or "")
+        if r.get("by") == "guess":
+            guesses[k] = (r.get("area") or "", r.get("word") or "")
+        else:
+            picks[k] = r.get("area") or ""
+    guesses.update(store_guesses(biz, roles, teams, have=[*picks, *guesses]))
+    return Places(picks, _departments(m), guesses)
+
+
+def _team_scopes(holders: Iterable[Dict[str, Any]], defs: Iterable[Dict[str, Any]]) -> List[str]:
+    """The teams team leaders' holder rows name, which are placed as teams."""
+    jobs = {d["key"]: d.get("job") for d in defs}
+    return [_plain(h.get("scope")) for h in holders
+            if _plain(h.get("scope")) and jobs.get(h.get("role") or "") == "team"]
 
 
 # Which ChurchSavvy parts a role in Worship & media would start with, from
@@ -431,7 +565,7 @@ def view_for(business_id: str, user_id: str, role: Optional[str]) -> Optional[Di
                 keys = ",".join(_q(k) for k in sorted({h.get("role") or "" for h in holders}) if k)
                 defs = _need(f"/church_role_defs?business_id=eq.{biz}&key=in.({keys})"
                              "&select=key,title,job,oversees_teams&limit=100") if keys else []
-                places = _places(business_id)
+                places = places_for(business_id, defs, _team_scopes(holders, defs))
             kids = _need(f"/space_leaders?business_id=eq.{biz}&contact_id=in.({ids})&select=contact_id&limit=50")
             leads = _need(f"/group_members?business_id=eq.{biz}&contact_id=in.({ids})&role=eq.leader"
                           "&select=group_id,contact_id&limit=50")
@@ -484,6 +618,10 @@ def _q(v: Any) -> str:
     return quote(str(v), safe="")
 
 
+def _bid(biz: Any) -> str:
+    return str(biz.get("id") if isinstance(biz, dict) else biz)
+
+
 def _plain(v: Any) -> str:
     return re.sub(r"\s+", " ", str(v or "")).strip()
 
@@ -529,7 +667,6 @@ def build(business: Dict[str, Any]) -> Dict[str, Any]:
     settings = business.get("settings") if isinstance(business.get("settings"), dict) else {}
     owner_name = _plain(settings.get("practitioner_name")) or "The account owner"
 
-    places = _places(biz)
     if cr.ensure_library(business) is None:
         raise HTTPException(503, "The areas couldn't be read just now. Try again.")
     defs = _need(f"/church_role_defs?business_id=eq.{_q(biz)}&status=eq.active"
@@ -552,6 +689,7 @@ def build(business: Dict[str, Any]) -> Dict[str, Any]:
     team_names = cfu.teams(biz)
     if team_names is None:
         raise HTTPException(503, "The areas couldn't be read just now. Try again.")
+    places = places_for(biz, defs, list(team_names) + _team_scopes(holders, defs))
 
     people = _contacts(biz, [h.get("contact_id") for h in holders] + [k.get("contact_id") for k in kids]
                        + [x.get("contact_id") for x in leads] + [o.get("contact_id") for o in officer_members])
@@ -756,15 +894,21 @@ def place(body: Dict[str, Any], session: UserSession = Depends(sb_clients.authed
     area = body.get("area")
     if area is not None and area not in AREAS:
         raise HTTPException(400, "That isn't one of the areas")
+    # Once the map's columns are there a row is a pick or Chief's stored guess
+    # (places_for): a pick over a guess becomes the church's, and putting one
+    # back takes away only a pick; the next read stores a guess afresh.
+    import church_map
+    picks = church_map.ready()
     if area is None:
         ok = sb_clients.sb_delete_as_service(
-            f"/church_area_places?business_id=eq.{_q(biz)}&kind=eq.{_q(kind)}&key=eq.{_q(key)}")
+            f"/church_area_places?business_id=eq.{_q(biz)}&kind=eq.{_q(kind)}&key=eq.{_q(key)}"
+            + ("&by=eq.church" if picks else ""))
         if ok is False or ok is None:
             raise HTTPException(503, "That didn't save. Try again.")
         return {"ok": True, "kind": kind, "key": key, "area": None}
     saved = sb_clients.sb_post_as_service("/church_area_places?on_conflict=business_id,kind,key", {
         "business_id": biz, "kind": kind, "key": key, "area": area,
-        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(), **({"by": "church", "word": ""} if picks else {}),
     }, prefer="resolution=merge-duplicates,return=representation")
     if not isinstance(saved, list) or not saved:
         raise HTTPException(503, "That didn't save. Try again.")

@@ -106,7 +106,23 @@ class ThreeDB(DutyDB):
 
     def _refused(self, path, body=None):
         names = path + " " + " ".join(k for b in (body if isinstance(body, list) else [body or {}]) for k in b)
-        return not self.migrated and MAP_NEW.search(names)
+        return not self.migrated and (MAP_NEW.search(names) or path.startswith("/church_area_places")
+                                      and re.search(r"\b(by|word)\b", names))
+
+    def _place(self, body, prefer):
+        """church_area_places' primary key (business_id, kind, key), and its
+        by/word defaults once migrated: ignore-duplicates keeps the row,
+        merge-duplicates updates it."""
+        have, out = self.t.setdefault("church_area_places", []), []
+        for b in body if isinstance(body, list) else [body]:
+            old = next((r for r in have if all(r[k] == b[k] for k in ("business_id", "kind", "key"))), None)
+            if old is None:
+                have.append(dict({"by": "church", "word": ""} if self.migrated else {}, **b))
+                out.append(dict(have[-1]))
+            elif "merge-duplicates" in (prefer or ""):
+                old.update(b)
+                out.append(dict(old))
+        return out
 
     def nid(self, table):
         self.made = getattr(self, "made", 0) + 1
@@ -118,6 +134,8 @@ class ThreeDB(DutyDB):
     def post(self, path, body, prefer=None, **kw):
         if self._refused(path, body):
             return None
+        if path.startswith("/church_area_places"):
+            return self._place(body, prefer)
         if isinstance(body, dict) and "id" not in body and not path.startswith("/rpc/"):
             body = dict(body, id=self.nid(path.lstrip("/").split("?")[0]))
         if self.migrated and path.startswith("/church_role_defs") and isinstance(body, dict):
