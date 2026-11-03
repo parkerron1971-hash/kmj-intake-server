@@ -9,6 +9,17 @@
     PUT  /church/map/settings?business_id=          the pastor's-yes and office-overseer roles
                                                     (the owner or an admin); the money levels
                                                     (the owner only: decision 3)
+    GET  /church/map/changes?business_id=           what waits for a yes, and the recent
+                                                    changes in plain words; a manager seat up
+    POST /church/map/changes/{id}/undo?...          put one change back (church_map_batch)
+    POST /church/map/changes/{id}/apply?...         make a waiting change, or finish a failed one
+    POST /church/map/changes/{id}/discard?...       let a waiting change go; these three the
+                                                    owner or an admin, a money one the owner
+
+Once step 2's file is applied (church_map.step2_state()), each save above is
+logged as one change (church_map_batch, origin 'office'), so the sheet's Undo
+covers edits made on screen. Before it a save runs as it always has and logs
+nothing; a failed probe is a 503. The changes routes are a 503 until then.
 
 Behind CHURCH_MAP: a 404 unless church_map.open_to(user), so with `owner`
 only the platform owner's login reaches these; a 503 before the migration,
@@ -27,6 +38,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 import church_map as cm
+import church_map_batch as batch
 import sb_clients
 from auth_supabase import AuthedUser, require_user
 from business_access import assert_access
@@ -51,6 +63,19 @@ def _church(business_id: str, user: AuthedUser, min_role: str) -> Tuple[Dict[str
     if not rows or not cfu.is_church(rows[0]):
         raise HTTPException(404, "The leaders map is for churches.")
     return rows[0], role
+
+
+def _logged(biz: Dict[str, Any], role: str, user: AuthedUser, part: Dict[str, Any]) -> Optional[Tuple[Any, Any]]:
+    """One office save as one change, once step 2's file is applied: (the
+    write's own answer, the change). None before it: the caller saves as it
+    always has, logging nothing. A failed probe is a 503, never "not yet"."""
+    s = cm.step2_state()
+    if s is None:
+        raise HTTPException(503, cm.UNREAD)
+    if not s:
+        return None
+    out = batch.apply(biz, [part], user.id, "office", role=role)
+    return out["results"][0], out["change"]
 
 
 class _Unit(BaseModel):
@@ -92,24 +117,63 @@ def map_view(business_id: str = Query(...), user: AuthedUser = Depends(require_u
 
 @router.put("/departments")
 def department_save(body: _Department, business_id: str = Query(...), user: AuthedUser = Depends(require_user)):
-    biz, _role = _church(business_id, user, "admin")
-    return {"ok": True, "department": cm.save_department(biz, body.model_dump(exclude_unset=True), user.id)}
+    biz, role = _church(business_id, user, "admin")
+    said = body.model_dump(exclude_unset=True)
+    got = _logged(biz, role, user, {"kind": "department", **said})
+    if got is None:
+        return {"ok": True, "department": cm.save_department(biz, said, user.id)}
+    return {"ok": True, "department": got[0], "change": got[1]}
 
 
 @router.post("/departments/{department_id}/archive")
 def department_archive(department_id: str, business_id: str = Query(...),
                        user: AuthedUser = Depends(require_user)):
-    biz, _role = _church(business_id, user, "admin")
-    return {"ok": True, "department": cm.archive_department(biz, department_id, user.id)}
+    biz, role = _church(business_id, user, "admin")
+    got = _logged(biz, role, user, {"kind": "department", "id": department_id, "status": "archived"})
+    if got is None:
+        return {"ok": True, "department": cm.archive_department(biz, department_id, user.id)}
+    return {"ok": True, "department": got[0], "change": got[1]}
 
 
 @router.put("/answers-to")
 def answers_to_save(body: _AnswersTo, business_id: str = Query(...), user: AuthedUser = Depends(require_user)):
-    biz, _role = _church(business_id, user, "admin")
-    return {"ok": True, "holder": cm.set_answers_to(biz, body.holder_id, body.answers_to_contact_id)}
+    biz, role = _church(business_id, user, "admin")
+    got = _logged(biz, role, user, {"kind": "answers_to", "holder_id": body.holder_id,
+                                    "answers_to_contact_id": body.answers_to_contact_id})
+    if got is None:
+        return {"ok": True, "holder": cm.set_answers_to(biz, body.holder_id, body.answers_to_contact_id)}
+    return {"ok": True, "holder": got[0], "change": got[1]}
 
 
 @router.put("/settings")
 def settings_save(body: _Settings, business_id: str = Query(...), user: AuthedUser = Depends(require_user)):
     biz, role = _church(business_id, user, "admin")
-    return {"ok": True, **cm.save_settings(biz, body.model_dump(exclude_unset=True), user.id, role)}
+    said = body.model_dump(exclude_unset=True)
+    got = _logged(biz, role, user, {"kind": "settings", **said})
+    if got is None:
+        return {"ok": True, **cm.save_settings(biz, said, user.id, role)}
+    return {"ok": True, **got[0], "change": got[1]}
+
+
+@router.get("/changes")
+def changes_list(business_id: str = Query(...), user: AuthedUser = Depends(require_user)):
+    biz, role = _church(business_id, user, "manager")
+    return batch.recent(biz, role)
+
+
+@router.post("/changes/{change_id}/undo")
+def change_undo(change_id: str, business_id: str = Query(...), user: AuthedUser = Depends(require_user)):
+    biz, role = _church(business_id, user, "admin")
+    return {"ok": True, **batch.undo(biz, change_id, user.id, role=role)}
+
+
+@router.post("/changes/{change_id}/apply")
+def change_apply(change_id: str, business_id: str = Query(...), user: AuthedUser = Depends(require_user)):
+    biz, role = _church(business_id, user, "admin")
+    return {"ok": True, **batch.apply_pending(biz, change_id, user.id, role=role)}
+
+
+@router.post("/changes/{change_id}/discard")
+def change_discard(change_id: str, business_id: str = Query(...), user: AuthedUser = Depends(require_user)):
+    biz, role = _church(business_id, user, "admin")
+    return {"ok": True, **batch.discard(biz, change_id, user.id, role=role)}

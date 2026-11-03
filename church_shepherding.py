@@ -136,7 +136,8 @@ def settings(biz_id: str) -> Optional[Dict[str, Any]]:
     return out
 
 
-def save_settings(biz_id: str, body: Dict[str, Any], by_user: Optional[str]) -> Dict[str, Any]:
+def save_settings(biz_id: str, body: Dict[str, Any], by_user: Optional[str], *, dry: bool = False) -> Dict[str, Any]:
+    """`dry` (church_map_batch's check first): checked, and what it would save."""
     cur = settings(biz_id)
     if cur is None:
         raise _unavailable()
@@ -152,6 +153,8 @@ def save_settings(biz_id: str, body: Dict[str, Any], by_user: Optional[str]) -> 
             if not 1 <= n <= 40:
                 raise HTTPException(400, f"{what[0].upper() + what[1:]} is between 1 and 40.")
             row[key] = n
+    if dry:
+        return row
     row.update({"business_id": str(biz_id), "updated_by": by_user, "updated_at": _iso(_now())})
     saved = sb_clients.sb_post_as_service("/church_shepherd_settings?on_conflict=business_id", row,
                                           prefer="return=representation,resolution=merge-duplicates")

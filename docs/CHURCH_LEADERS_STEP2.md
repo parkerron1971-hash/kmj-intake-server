@@ -441,6 +441,17 @@ How it puts things back:
 - **Money levels:** the owner only, as in step 1 (church_map.py:882). Undoing or launching a change that touches money is owner only too; the `money` column marks those changes.
 - **Role switches (decision 3, B3b):** today any Manager seat can PATCH a role's switches (`CARE_MIN_ROLE="manager"`, church_router.py:68 and :261-266), though no screen offers it yet. After B3b, a PATCH carrying `can_*` or `made_for` needs an admin seat, and `can_board_yes` needs the owner.
 
+**As built in B3a** (`church_map_batch.py`; the routes in church_map_router.py):
+- **Checked first** means each part's own write run with `dry=True` (new on `save_department`, `set_answers_to`, `save_settings`, `update_role`, `create_role` and Shepherding's `save_settings`) against a copy of the map that the earlier parts have moved on. So order matters: in "Make Deacon Brown the overseer of Youth", the `role` part goes before the `department` part.
+- **A part** is `{kind, id, label, before, after}` with only the fields it changes. `label` is the thing's name when logged, for the sheet and the 409s. A failed change marks the parts that didn't go in `done: false`; a draft taken out by an undo is `deleted: true` (after null).
+- **Nothing is logged for nothing.** A part that changes nothing is left out, and a change of nothing writes no row (the same levels again; archiving an archived department). A single part whose write fails logs nothing and answers as the write does, so every step-1 message is unchanged. A failure after another part went in keeps the change `failed`, and the answer ends "apply it again to finish it".
+- **Running it again** is `POST …/{id}/apply` on a failed change too. A part already as its after is passed over; one whose fields each read as before or after is written; anything else is a 409. A pending change whose fields changed after it was saved is a 409 as well (risk 7: never a silent overwrite).
+- **Money** also covers a role part that changes `can_board_yes` (decision 3). Discarding a money change is owner-only too. Every call takes the caller's seat as `role` (owner or admin, else 403), which §4.1's signature didn't have.
+- **Undo** works only on an applied change that isn't itself an undo, within 30 days of `applied_at`. A write's own refusal during the check, such as a name or thing someone has taken since, is a 409 ("That can't be put back: …").
+- **Names** are minimal: `department`, `role` (key or title), `person`, `leader`, `overseer` and `to` take an id or an exact name, and B5 replaces this. The step-1 keys (`id`, `*_contact_id`, `holder_id`, role id lists) pass through to the writes unchanged.
+- **The row is written after the parts**, since there is no transaction. If that insert fails, the save stands, `change` is null and a `[church_map_batch]` line is printed. Once logged, the step-1 routes add `change: {id, status, money}` to their answers.
+- **Fixture:** `build(..., migrated2=False)` refuses the two tables and B2's columns. ThreeDB now merges a `merge-duplicates` post on `on_conflict=business_id` (Shepherding's settings), as PostgREST does.
+
 ## 5. The department sheet (frontend, Leaders & roles)
 
 `LibView` (LeadersRoles.tsx:36-40) gains the views `map`, `dept`, `ready` and `setup`. When `GET /church/map` answers 404, the switch is closed for this login and none of them show.

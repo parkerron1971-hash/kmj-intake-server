@@ -865,7 +865,9 @@ def _clean(biz: str, body: Dict[str, Any], current: Optional[Dict[str, Any]], al
 
 
 def create_role(business: Dict[str, Any], body: Dict[str, Any], *, by_user: str = "",
-                source: str = "custom") -> Dict[str, Any]:
+                source: str = "custom", dry: bool = False) -> Dict[str, Any]:
+    """A new role. `dry` (church_map_batch's check first) checks it and
+    returns the row it would make, writing nothing."""
     biz = str(business["id"])
     all_defs = defs(biz, with_drafts=True)
     if all_defs is None:
@@ -899,6 +901,8 @@ def create_role(business: Dict[str, Any], body: Dict[str, Any], *, by_user: str 
     if "reports_to" not in patch and patch["job"] != "senior":
         top = next((d for d in all_defs if d["job"] == "senior" and d["status"] == "active"), None)
         patch["reports_to"] = top["id"] if top else None
+    if dry:
+        return {"id": "", "key": key, "source": source, "status": "active", **patch}
     rows = sb_clients.sb_post_as_service("/church_role_defs", {
         "business_id": biz, "key": key, "source": source, "created_by": by_user or None,
         "sort": 1000 + len(all_defs) * 10, "status": patch.pop("status", "active"), **patch})
@@ -909,7 +913,8 @@ def create_role(business: Dict[str, Any], body: Dict[str, Any], *, by_user: str 
     return rows[0]
 
 
-def update_role(business_id: str, role_id: str, body: Dict[str, Any]) -> Dict[str, Any]:
+def update_role(business_id: str, role_id: str, body: Dict[str, Any], *, dry: bool = False) -> Dict[str, Any]:
+    """Change a role. `dry` checks it and returns the row as it would be."""
     biz, rid = str(business_id), _uid(role_id, "role")
     all_defs = defs(biz, with_drafts=True)
     if all_defs is None:
@@ -939,8 +944,8 @@ def update_role(business_id: str, role_id: str, body: Dict[str, Any]) -> Dict[st
         held = _rows(f"/church_leader_roles?business_id=eq.{_q(biz)}&role=eq.{_q(cur['key'])}&status=neq.declined&select=id&limit=1")
         if held is None or held:
             raise HTTPException(400, f"Take the people out of this role before changing {moving[0]}")
-    if not patch:
-        return cur
+    if not patch or dry:
+        return {**cur, **patch}
     rows = sb_clients.sb_patch_as_service(f"/church_role_defs?id=eq.{_q(rid)}&business_id=eq.{_q(biz)}",
                                           {**patch, "updated_at": _iso(_now())})
     if not isinstance(rows, list) or not rows:

@@ -6,7 +6,7 @@ of 60 people that nobody has set up. It has no role settings row, no roles and
 no holders, its owner is not the platform owner, and build() never seeds it.
 CHURCHES stays the three, so step 1's tests are untouched; FOUR adds Riverside.
 
-    build(monkeypatch, *, map_on=True, filled=True, migrated=True) -> db
+    build(monkeypatch, *, map_on=True, filled=True, migrated=True, migrated2=True) -> db
 
 Each library is filled by the real church_roles.ensure_library; then the
 custom roles, the holders, the households and Sunday attendance, the office
@@ -20,7 +20,9 @@ role key and person id, and with filled=True written into the map's tables
 filled=False is the empty map every preservation test uses (`db.intent` keeps
 it either way, for the office's routes to enter). migrated=False is
 the database before that file: a read or write naming its columns or tables
-fails as PostgREST's would. CHURCH_MAP follows map_on.
+fails as PostgREST's would. migrated2=False is the database before step 2's
+file (APPLY-2026-11-05-church-map-step2.sql): its two tables and new columns
+are refused the same way (migrated=False implies it). CHURCH_MAP follows map_on.
 
     db.who[church][handle] -> a person's (or a login's) id
     db.label[id]           -> that person's first name, or a login's name
@@ -79,11 +81,15 @@ TABLES = ("business_sites business_users contacts church_leader_roles church_rol
           "church_duty_changes church_boards church_board_members church_check_approvals church_follow_ups "
           "church_follow_up_notes church_area_places groups group_members tasks space_leaders academy_courses "
           "academy_enrollments worship_team msg_member_officers msg_safety_officers church_space_bookings events "
-          "business_collaborators church_departments church_department_units").split()
+          "business_collaborators church_departments church_department_units church_map_changes "
+          "church_setup_tracks").split()
 # What the map's migration adds: before it, PostgREST refuses any read or write that names one.
 MAP_NEW = re.compile(r"\b(can_shepherd|can_oversee|can_lead|can_board_yes|can_see_all|made_for|answers_to_contact_id|"
                      r"pastor_from_cents|board_over_cents|pastor_yes_roles|office_overseer_roles|map_by|map_at|"
                      r"church_departments|church_department_units)\b")
+# What step 2's migration adds (B2), refused the same way before it.
+STEP2_NEW = re.compile(r"\b(church_map_changes|church_setup_tracks|template_key|template_version|unfinished_at|"
+                       r"seeded_as|confirmed_at|shape_key|shape_version)\b")
 
 
 def pid(church: int, n: int) -> str:
@@ -102,7 +108,7 @@ class ThreeDB(DutyDB):
     live trigger's fill (church_role_defs_switches): a row with none of its
     switches said, all at their column defaults, gets today's rule. Each
     insert's body, as sent, is kept in `role_inserts`."""
-    migrated = True
+    migrated = migrated2 = True
 
     def _switches_trigger(self, row):
         self.role_inserts = getattr(self, "role_inserts", []) + [dict(row)]
@@ -114,8 +120,9 @@ class ThreeDB(DutyDB):
 
     def _refused(self, path, body=None):
         names = path + " " + " ".join(k for b in (body if isinstance(body, list) else [body or {}]) for k in b)
-        return not self.migrated and (MAP_NEW.search(names) or path.startswith("/church_area_places")
-                                      and re.search(r"\b(by|word)\b", names))
+        return bool(not self.migrated and (MAP_NEW.search(names) or path.startswith("/church_area_places")
+                                           and re.search(r"\b(by|word)\b", names))
+                    or not self.migrated2 and STEP2_NEW.search(names))
 
     def _place(self, body, prefer):
         """church_area_places' primary key (business_id, kind, key), and its
@@ -144,6 +151,13 @@ class ThreeDB(DutyDB):
             return None
         if path.startswith("/church_area_places"):
             return self._place(body, prefer)
+        if re.search(r"on_conflict=business_id(&|$)", path) and "merge-duplicates" in (prefer or "") \
+                and isinstance(body, dict):                                  # one row a church, merged
+            have = next((r for r in self.t.setdefault(path.lstrip("/").split("?")[0], [])
+                         if r.get("business_id") == body.get("business_id")), None)
+            if have is not None:
+                have.update(body)
+                return [dict(have)]
         if isinstance(body, dict) and "id" not in body and not path.startswith("/rpc/"):
             body = dict(body, id=self.nid(path.lstrip("/").split("?")[0]))
         if self.migrated and path.startswith("/church_role_defs") and isinstance(body, dict):
@@ -572,7 +586,8 @@ def write_map(db, biz, m):
     st.update(said, map_by=church(db, biz)["owner_id"], map_at="2026-11-03T12:00:00+00:00")
 
 
-def build(monkeypatch, *, map_on: bool = True, filled: bool = True, migrated: bool = True) -> ThreeDB:
+def build(monkeypatch, *, map_on: bool = True, filled: bool = True, migrated: bool = True,
+          migrated2: bool = True) -> ThreeDB:
     assert migrated or not filled, "a map needs its tables"
     db = ThreeDB(**{t: [] for t in TABLES}, businesses=[
         {"id": LOVE_CITY, "name": "Love City Church", "type": "ministry", "owner_id": LC_OWNER,
@@ -589,6 +604,7 @@ def build(monkeypatch, *, map_on: bool = True, filled: bool = True, migrated: bo
                                               "Parking Team"])]
     db.who, db.label, db.migrated = {}, {LC_OWNER: "owner", G_OWNER: "owner", NH_OWNER: "owner",
                                          R_OWNER: "owner"}, migrated
+    db.migrated2 = migrated and migrated2
     for name in ("get", "post", "patch", "delete"):
         monkeypatch.setattr(sb_clients, f"sb_{name}_as_service", getattr(db, name))
     for k in ("CHURCH_DUTIES", "CHURCH_MONEY_LEVELS"):
