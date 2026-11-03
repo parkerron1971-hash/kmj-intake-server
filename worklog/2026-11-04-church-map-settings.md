@@ -3,8 +3,8 @@ title: Church leaders map, PR 7 — the church's settings take effect (money lev
 date: 2026-11-04
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-11-03: take the leaders flow further, for every church that subscribes ("what i don''t want is what i build works for love city but is broken and messed up for other churches"); design 4V41zJz1kEJGdeo4J9D2Ym approved'
-status: in review
-prs: ["kmj-intake-server (this PR)"]
+status: shipped
+prs: [kmj-intake-server#1717]
 migrations: [supabase/APPLY-2026-11-04-church-map.sql (applied 2026-11-03 with PR 2; nothing new here)]
 left_undone:
   - "CHURCH_MAP defaults to owner (Love City only). When it goes on, set it on BOTH Railway services (server and worker); nothing was set here"
