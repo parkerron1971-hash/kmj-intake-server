@@ -73,6 +73,24 @@ _NONPROFIT_LINES = {"operating": "Programs & operations", "owner_pay": "Staff pa
                     "savings": "Reserves", "other": "Other"}
 
 
+def line_names(biz: str, voice: str) -> Dict[str, str]:
+    """The five built-in spending lines (operating, owner_pay, tax, savings,
+    other) by a church's or nonprofit's names. A line the church renamed
+    keeps its own name; one still on the standard name ("Owner pay") reads
+    as the church's. {} for a business."""
+    if not is_faith(voice):
+        return {}
+    import expense_lines
+    lines = dict(expense_lines.CHURCH if voice == CHURCH else _NONPROFIT_LINES)
+    try:
+        for key, name in expense_lines.names(biz).items():
+            if key in lines and name and name != expense_lines.STANDARD.get(key):
+                lines[key] = name
+    except Exception:
+        pass
+    return lines
+
+
 def account_names(biz: str, voice: Optional[str] = None) -> Dict[str, str]:
     """code -> the name this business reads, for the codes whose name
     changes. {} for a business: its chart's names stand."""
@@ -81,13 +99,7 @@ def account_names(biz: str, voice: Optional[str] = None) -> Dict[str, str]:
         return {}
     out = dict(_FAITH_ACCOUNTS)
     try:
-        import expense_lines
-        lines = dict(expense_lines.CHURCH if v == CHURCH else _NONPROFIT_LINES)
-        # A line the church renamed keeps its own name; one still on the
-        # standard name ("Owner pay") reads as the church's.
-        for key, name in expense_lines.names(biz).items():
-            if key in lines and name and name != expense_lines.STANDARD.get(key):
-                lines[key] = name
+        lines = line_names(biz, v)
         for code, key in _EXPENSE_LINE_OF.items():
             out[code] = lines[key]
     except Exception:
@@ -143,6 +155,7 @@ def title(report: str, default: str, voice: Optional[str]) -> str:
         "budget_vs_actual": "Budget vs Actual",
         "summary_1099": "1099s: Speakers & Contractors",
         "donors": "Givers" if voice == CHURCH else "Donor Report",
+        "funds": "Funds: Given, Spent and Left",
     }.get(report, default)
 
 
