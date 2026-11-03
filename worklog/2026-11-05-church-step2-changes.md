@@ -4,6 +4,7 @@ date: 2026-11-05
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-11-03: approved step 2 (design 4V41zJz1kEJGdeo4J9D2Ym, "Your two ideas"): Chief verbs with undo, the department sheet, setup sessions, a ready-made directory, drafts for new churches'
 status: in progress
+prs: [kmj-intake-server#1725]
 migrations: [supabase/APPLY-2026-11-05-church-map-step2.sql (applied 2026-11-03, B2)]
 left_undone:
   - "B3b: people on drafts, the activation check, unfinished_at, ?with=choices, switch permissions on PATCH /church/roles (and logging role-switch saves through church_map_batch), role_name off team_leader"
