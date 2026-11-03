@@ -250,6 +250,18 @@ All go in `church_map_router.py`, behind `CHURCH_MAP`.
 | `GET /church/map/templates/{kind}/{key}?business_id` (includes what adopting would add here) | manager seat and up |
 | `POST /church/map/templates/adopt` `{kind, key, tradition?, name?}` | owner or admin |
 
+**As built in B4a** (`church_templates.py`; the two GET routes in church_map_router.py):
+- **Seats.** A department's leader and a shape's roles name a seat (`SEATS`): each tradition's own row, else a stated fallback. The youth seat is Love City's Youth Pastor and Grace's Youth Minister; a tradition without the row takes the fallback's (an AME church's Deacons are the non-denominational row).
+- **Support duties picked:** Worship & Arts `production_schedule`, Media & Production `stream`, Youth `youth`, Children `kids`, Prayer `prayer`, Care & Visitation `care_visits`, Welcome & Guest Services `first_guests`, Ushers & Greeters `serve_schedule`, Classes & Groups `groups`, Facilities & Safety `building`; Outreach & Evangelism, Men's, Women's and Missions `events` (`outreach_nights` names Love City's own nights).
+- **A department's overseer** is the church's senior role unless a shape picks one. Prayer's leader is a prayer job, which doesn't lead, so Prayer carries `lead_can: {can_lead: true}`, as Love City's fixture flips it: in B4b a flip on a new copy, a pending change on a live role.
+- **Who shepherds** in a shape is read off its roles with its flips, per tradition, never stored, so the two can't disagree. Pastor & deacons flips Deacons to shepherd and oversee (Grace's fixture). Multi-staff gives the Elders the board's yes, a switch and so the owner's in B4b, never a level.
+- **Versions:** each `version` comes from `VERSIONS`, and the hash is sha256 of the canonical JSON of the rest. `python church_templates.py` prints the pins and bumps each one that changed. Roles hash their TYPES rows, so an edit to TYPES fails the pin test too.
+- **Search** ranks four ways, not three: an exact title, a word of its name (title, row key, tradition, search words), a word like one (`WORDS`), a word in what it says. Only the query's own words are looked for in what it says, so "greeter" returns exactly the four titles. The plural rule also takes -sses and -ies (classes, ministries). There is one card per title and job (69 titles, Deacons on two jobs), shown as the church's own tradition's row when it has one, with `also` naming the other traditions.
+- **The church's tradition** is its type, else Chief's guess, else its name's (`guess_type` on the name alone). The routes read only: Riverside stays unseeded.
+- **Already the church's own** (`church_templates.mine`, for B4b's adopt too): the same `template_key`, the same title or name casefolded, or, extending §2.4, a role seeded from the same row on the same job (`catalog_key`), so New Hope's retitled Youth Director is its Youth Pastor.
+- **`here`** lists `new`, `yours` and `waits`: a flip an active role of the church's doesn't have yet, and a shape's picks the settings don't name, each in before → after words. A draft of the church's gets no waits.
+- **Both routes are a 503 before step 2's file** (§1.3), though search names no step-2 column.
+
 ## 3. Church setup sessions
 
 ### 3.1 Reusing the Academy engine
