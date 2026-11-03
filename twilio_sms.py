@@ -220,10 +220,15 @@ def webhook_token(account_sid: Optional[str]) -> Optional[str]:
         return None
 
 
-def send_sms(to: str, body: str, *, from_number: Optional[str] = None) -> str:
+def send_sms(to: str, body: str, *, from_number: Optional[str] = None,
+             business_id: Optional[str] = None, kind: str = "message") -> str:
     """Send one SMS through the Messaging Service, PINNED to a sender.
     Returns the created Message SID. Blocking — call via
     run_in_threadpool from async handlers.
+
+    Every text Twilio accepts writes one cost row against `business_id`
+    (the business whose line sent it; None for the platform's own texts),
+    tagged with `kind` (sms_usage.py). A send that raises writes nothing.
 
     Why pinned (2026-09-02, dedicated numbers phase A): a send through
     a Messaging Service with no from_ lets Twilio pick ANY number in
@@ -240,16 +245,19 @@ def send_sms(to: str, body: str, *, from_number: Optional[str] = None) -> str:
     stopping texts; provisioning a dedicated number refuses to run in
     that state, which is what keeps the old path safe."""
     global _warned_unpinned
+    import sms_usage
+    text = gsm_safe(body)
     sender = (from_number or "").strip() or platform_number()
     route = own_account_route(sender) if sender and sender != platform_number() else None
     if route:
         # The business's own number, in its own sub-account and campaign.
         message = _account_client(route["account_sid"]).messages.create(
-            to=to, body=gsm_safe(body), messaging_service_sid=route["service_sid"], from_=sender)
+            to=to, body=text, messaging_service_sid=route["service_sid"], from_=sender)
         logger.info(f"sent SMS to={to} from={sender} (own account) sid={message.sid}")
+        sms_usage.record_send(business_id, text, sid=message.sid, kind=kind)
         return message.sid
     messaging_service_sid = _require_env("TWILIO_MESSAGING_SERVICE_SID")
-    kwargs = dict(to=to, body=gsm_safe(body), messaging_service_sid=messaging_service_sid)
+    kwargs = dict(to=to, body=text, messaging_service_sid=messaging_service_sid)
     if sender:
         kwargs["from_"] = sender
     elif not _warned_unpinned:
@@ -260,6 +268,7 @@ def send_sms(to: str, body: str, *, from_number: Optional[str] = None) -> str:
             "number joins the pool.")
     message = _twilio_client().messages.create(**kwargs)
     logger.info(f"sent SMS to={to} from={sender or 'pool'} sid={message.sid}")
+    sms_usage.record_send(business_id, text, sid=message.sid, kind=kind)
     return message.sid
 
 
@@ -368,6 +377,7 @@ async def twilio_test_send(_owner=Depends(require_owner)):
         sid = await run_in_threadpool(
             send_sms, to,
             "The Solutionist System: Twilio SMS is wired up correctly. ✔",
+            kind="test",
         )
         return {"status": "sent", "message_sid": sid}
     except Exception as e:
@@ -455,6 +465,9 @@ async def twilio_inbound_sms(request: Request):
                     '<?xml version="1.0" encoding="UTF-8"?>'
                     f"<Response><Message>{escape(gsm_safe(reply))}</Message></Response>"
                 )
+                # Twilio sends (and bills) this reply like any other text.
+                import sms_usage
+                await sms_usage.record_send_async(result.get("business_id"), gsm_safe(reply), kind="reply")
                 return Response(content=twiml, media_type="application/xml")
         except Exception as e:
             # Never bounce Twilio — a failed insert would trigger

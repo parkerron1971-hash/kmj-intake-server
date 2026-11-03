@@ -544,7 +544,7 @@ def phone_env(monkeypatch):
     sent = []
     monkeypatch.setattr(rate_limit, "allow_strict", lambda bucket, key: True)
     monkeypatch.setattr(twilio_sms, "send_sms",
-                        lambda to, body, from_number=None: sent.append((to, body)) or "SM1")
+                        lambda to, body, from_number=None, **kw: sent.append((to, body)) or "SM1")
     monkeypatch.setattr(twilio_sms, "platform_number", lambda: "+12165550000")
     monkeypatch.setenv("CUSTOMER_TOKEN_SECRET", "test-root-secret")
     return sent
