@@ -81,6 +81,8 @@ def revenue_report(biz: str, period: str = "this_month",
                    custom_to: Optional[str] = None) -> Dict[str, Any]:
     start, end = reports_engine.period_bounds(period, custom_from, custom_to)
     lines = _window_lines(biz, start, end)
+    import report_words
+    names = report_words.account_names(biz)
 
     by_account: Dict[str, Dict[str, Any]] = {}
     by_source: Dict[str, float] = {}
@@ -92,7 +94,7 @@ def revenue_report(biz: str, period: str = "this_month",
         net = round(float(l["credit"]) - float(l["debit"]), 2)
         code = l["account_code"]
         acc = by_account.setdefault(code, {
-            "code": code, "name": ACCOUNT_NAMES.get(code, code), "amount": 0.0})
+            "code": code, "name": names.get(code) or ACCOUNT_NAMES.get(code, code), "amount": 0.0})
         acc["amount"] = round(acc["amount"] + net, 2)
         src = _base_source(str(l.get("source_type") or ""))
         label = _SOURCE_LABELS.get(src, src or "Other")
@@ -151,6 +153,8 @@ def expense_report(biz: str, period: str = "this_month",
                    custom_to: Optional[str] = None) -> Dict[str, Any]:
     start, end = reports_engine.period_bounds(period, custom_from, custom_to)
     lines = _window_lines(biz, start, end)
+    import report_words
+    names = report_words.account_names(biz)
 
     by_account: Dict[str, Dict[str, Any]] = {}
     by_vendor: Dict[str, Dict[str, Any]] = {}
@@ -163,7 +167,7 @@ def expense_report(biz: str, period: str = "this_month",
         net = round(float(l["debit"]) - float(l["credit"]), 2)
         code = l["account_code"]
         acc = by_account.setdefault(code, {
-            "code": code, "name": ACCOUNT_NAMES.get(code, code),
+            "code": code, "name": names.get(code) or ACCOUNT_NAMES.get(code, code),
             "bucket": l.get("profit_first_bucket"), "amount": 0.0})
         acc["amount"] = round(acc["amount"] + net, 2)
         vendor = l.get("vendor") or "(no vendor)"

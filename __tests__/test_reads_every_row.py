@@ -30,12 +30,15 @@ class CappedDB:
         self.t = tables
         self.calls = []
         self.fail_on_call = None
+        self.fail_table = None                       # fail every read of this table
 
     def get(self, path, **_):
         self.calls.append(path)
         if self.fail_on_call == len(self.calls):
             return None
         table, _, query = path.lstrip("/").partition("?")
+        if table == self.fail_table:
+            return None
         rows = list(self.t.get(table, []))
         order, limit = None, None
         for part in query.split("&"):
@@ -144,7 +147,7 @@ def test_strict_reads_raise_when_the_first_page_fails(db):
 
 
 def test_a_report_errors_instead_of_showing_zeros(db):
-    db.fail_on_call = 2                               # the journal read (after the chart of accounts) fails
+    db.fail_table = "journal_entries"                 # the journal read fails, whatever reads come first
     with pytest.raises(sb_clients.PartialRead):
         gl_reports.trial_balance_report(BIZ, "2026-12-31")
 
