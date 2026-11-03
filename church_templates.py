@@ -26,6 +26,9 @@ table and no admin screen. A church copies a ready-made as its own draft
                                    answers to, what it sees, what it can do
     here(biz, t, tradition, st) .. what adopting it would add at a church,
                                    read only
+    adopt(biz, kind, key, ...) ... the church's own copy (B4b): drafts, in one
+                                   change Undo takes back out, and what it
+                                   would change on a live row waiting for a yes
 """
 from __future__ import annotations
 
@@ -33,6 +36,8 @@ import hashlib
 import json
 import re
 from typing import Any, Dict, Iterable, List, Optional, Tuple
+
+from fastapi import HTTPException
 
 import church_areas as ca
 import church_duties as cd
@@ -479,18 +484,21 @@ def mine(rows: List[Dict[str, Any]], t: Dict[str, Any]) -> Optional[Dict[str, An
     return next((r for test in tests for r in rows if test(r)), None)
 
 
-def here(biz: Dict[str, Any], t: Dict[str, Any], tradition: str, st: Dict[str, Any]) -> Dict[str, Any]:
-    """What adopting `t` would add at this church, read only: each role and
-    department it names, new or already the church's own; and what would
-    wait for a yes: a flip on an active role it already has, and a shape's
-    picks. 503 when a read fails."""
-    import church_map_batch as batch
+def _reads(biz: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """The church's roles and departments, drafts too, as mine() reads them; a 503 when a read fails."""
     q = cm._q(cm._bid(biz))
-    roles = cm._need(f"/church_role_defs?business_id=eq.{q}&status=in.(active,draft)&select=id,key,title,job,status,"
-                     f"catalog_key,template_key,{','.join(cr.SWITCHES)}&limit=300")
-    depts = cm._need(f"/church_departments?business_id=eq.{q}&status=neq.archived&select=id,name,status,template_key"
-                     "&limit=200")
-    home = _trad(tradition)
+    return (cm._need(f"/church_role_defs?business_id=eq.{q}&status=in.(active,draft)&select=id,key,title,job,status,"
+                     f"catalog_key,template_key,{','.join(cr.SWITCHES)}&limit=300"),
+            cm._need(f"/church_departments?business_id=eq.{q}&status=neq.archived&select=id,name,status,"
+                     "template_key&limit=200"))
+
+
+def _sort(t: Dict[str, Any], home: str, roles: List[Dict[str, Any]], depts: List[Dict[str, Any]],
+          name: str = "") -> List[Tuple[Dict[str, Any], Dict[str, Any], Optional[Dict[str, Any]]]]:
+    """(each role and department `t` names, its flips here, the church's own
+    copy or None when it has none). A role or a department the church already
+    has names only itself: adopting it adds nothing. `name`, a second copy,
+    takes `t` itself as new."""
     if t["kind"] == "role":
         things = [(t, {})]
     elif t["kind"] == "department":
@@ -498,22 +506,47 @@ def here(biz: Dict[str, Any], t: Dict[str, Any], tradition: str, st: Dict[str, A
     else:
         things = [(ROLES[k], f) for k, f in seats_of(t, home)] + [(DEPARTMENTS[d["department"]], {})
                                                                   for d in t["departments"]]
+    out = []
+    for n, (x, flips) in enumerate(things):
+        got = None if n == 0 and name else mine(roles if x["kind"] == "role" else depts, x)
+        out.append((x, flips, got))
+        if n == 0 and got is not None and t["kind"] != "shape":
+            break
+    return out
+
+
+def _waiting(x: Dict[str, Any], flips: Dict[str, Any], got: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """The flips that wait for a yes: on an active copy, each it doesn't have
+    yet; on a new copy, the board's yes (money, so the owner's). A draft of
+    the church's gets none."""
+    if got is None:
+        return {k: v for k, v in flips.items() if k == "can_board_yes" and x.get(k) != v}
+    return {k: v for k, v in flips.items() if got.get("status") == "active" and got.get(k) != v}
+
+
+def here(biz: Dict[str, Any], t: Dict[str, Any], tradition: str, st: Dict[str, Any]) -> Dict[str, Any]:
+    """What adopting `t` would add at this church, read only, as adopt()
+    does it: each role and department it names, new or already the church's
+    own; and what would wait for a yes: a flip on an active role it already
+    has, the board's yes on a new one, and a shape's picks. 503 when a read
+    fails."""
+    import church_map_batch as batch
+    roles, depts = _reads(biz)
+    home = _trad(tradition)
     out: Dict[str, List[Dict[str, Any]]] = {"new": [], "yours": [], "waits": []}
     have: Dict[str, Dict[str, Any]] = {}
-    for x, flips in things:
-        name = x.get("title") or x["name"]
-        got = mine(roles if x["kind"] == "role" else depts, x)
-        item = {"kind": x["kind"], "key": x["key"], "name": name}
+    for x, flips, got in _sort(t, home, roles, depts):
+        item = {"kind": x["kind"], "key": x["key"], "name": x.get("title") or x["name"]}
         if got is None:
             out["new"].append(item)
-            continue
-        have[x["key"]] = got
-        out["yours"].append({**item, "id": str(got["id"]), "yours": got.get("title") or got.get("name"),
-                             "status": got.get("status")})
-        moved = {k: v for k, v in flips.items() if got.get("status") == "active" and got.get(k) != v}
-        for k, v in moved.items():
-            out["waits"].append({"kind": "role", "id": str(got["id"]), "money": k == "can_board_yes",
-                                 "line": f"{got['title']}: {batch.WORD[k]} {batch._say(k, got.get(k), {})} → "
+        else:
+            have[x["key"]] = got
+            out["yours"].append({**item, "id": str(got["id"]), "yours": got.get("title") or got.get("name"),
+                                 "status": got.get("status")})
+        for k, v in _waiting(x, flips, got).items():
+            was = got or x
+            out["waits"].append({"kind": "role", "id": str(got["id"]) if got else None, "money": k == "can_board_yes",
+                                 "line": f"{was['title']}: {batch.WORD[k]} {batch._say(k, was.get(k), {})} → "
                                          f"{batch._say(k, v, {})}"})
     if t["kind"] == "shape":
         names = {str(r["id"]): r["title"] for r in roles}
@@ -525,6 +558,152 @@ def here(biz: Dict[str, Any], t: Dict[str, Any], tradition: str, st: Dict[str, A
                     f"Your church: {batch.WORD[f]} {batch._say(f, st.get(f), names)} → "
                     + ", ".join(_title(s, home) for s in seats))})
     return out
+
+
+# ─── Adopting: the church's own copy (§2.4, B4b) ──────────────────────
+
+def _units(x: Dict[str, Any], teams: List[str], groups: List[Dict[str, Any]], taken: set) -> List[Dict[str, Any]]:
+    """What a department ready-made suggests hanging from it, each only where
+    exactly one of the church's own things matches (its space; one Serve
+    team; one group) and no department holds that thing yet. The words
+    suggest once; what's stored is the church's thing (§0 rule a)."""
+    s = x["units"]
+    found = [[{"kind": "space", "ref": "", "label": s["space"]}] if s["space"] else []]
+    for kind, have, said in (("serve_option", [("", n) for n in teams], s["serve"]),
+                             ("group", [(str(g["id"]), cm._plain(g.get("name"))) for g in groups], s["group"])):
+        want = {w for p in said for w in words(p)}
+        found.append([{"kind": kind, "ref": ref, "label": "" if ref else label} for ref, label in have
+                      if want & set(words(label))])
+    out = []
+    for hits in found:
+        if len(hits) == 1 and cm._ukey(hits[0]) not in taken:
+            taken.add(cm._ukey(hits[0]))
+            out.append(hits[0])
+    return out
+
+
+def _make(x: Dict[str, Any], flips: Dict[str, Any], name: str, roles: List[Dict[str, Any]], teams: List[str],
+          groups: List[Dict[str, Any]], taken: set, church: str) -> Dict[str, Any]:
+    """The batch part that makes a new copy of `x`, a draft. A role is made as
+    ensure_library makes its row (its handles and the teams under it by the
+    church's Serve card; its row's switches with this ready-made's flips, but
+    the board's yes, which waits), answering to the church's own copy of the
+    role its row names, else the senior's (create_role's rule)."""
+    stamp = {"template_key": x["key"], "template_version": x["version"]}
+    if x["kind"] == "department":
+        return {"kind": "department", "id": None, "set": {
+            "name": name or x["name"], "area": x["area"], "support_duty": x["support_duty"], "status": "draft",
+            "units": _units(x, teams, groups, taken), **stamp}}
+    title, under = name or x["title"], cr._team_match(x["teams"], teams)
+    handles = cr._seed_handles(x, under)
+    up = next((r for r in roles if x["reports"] and x["reports"] in (r.get("catalog_key"), r.get("key"))), None)
+    return {"kind": "role", "id": None, "set": {
+        "title": title, "job": x["job"], "definition": cr._fill(x["definition"], title, church, x["lead"] or "leader"),
+        "covers": x["covers"], "handles": handles, "oversees_teams": under, **cr._catalog_switches(x, handles),
+        **{k: v for k, v in flips.items() if k != "can_board_yes"}, **({"reports_to": str(up["id"])} if up else {}),
+        "catalog_key": x["row"], **stamp}}
+
+
+def _unsaid(bid: str, parts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """The parts no change from a ready-made already waits with: adopting the
+    same thing again stages nothing twice."""
+    import church_map_batch as batch
+    rows = cm._need(f"/church_map_changes?business_id=eq.{cm._q(bid)}&status=eq.pending&origin=eq.template"
+                    "&select=parts&limit=50")
+    held = [p for r in rows for p in r.get("parts") or [] if p.get("after")]
+    return [p for p in parts if not any(
+        h["kind"] == p["kind"] and h.get("id") == p["id"] and
+        all(f in h["after"] and batch._same(f, h["after"][f], v) for f, v in p["after"].items()) for h in held)]
+
+
+def adopt(biz: Dict[str, Any], kind: str, key: str, by: Any, *, role: str, tradition: str = "",
+          name: str = "") -> Dict[str, Any]:
+    """POST /church/map/templates/adopt (§2.4): the church's own copy of a
+    ready-made. What it lacks is made as drafts (source 'template', with
+    template_key and template_version), in one change (origin 'template')
+    that Undo takes back out. What it would change on a live row (a flip an
+    active role doesn't have, a shape's picks), and the board's yes on a new
+    copy (money), wait as one more change for a yes: it never edits a live
+    row. What the church already has is named and left alone, so adopting
+    the same thing again makes nothing and logs nothing; `name` makes a
+    second copy of a role or a department. A role keeps its row's title (the
+    key names the tradition); `tradition` picks a department's or a shape's
+    seats, else the church's own. The owner or an admin; an admin's money
+    part waits for the owner, as every money change does to be made. {made,
+    yours, change, waiting, said}."""
+    import church_follow_up as cfu
+    import church_map_batch as batch
+    batch._open()
+    batch._may(role)
+    t = get(kind, key)
+    if t is None:
+        raise HTTPException(404, "That ready-made isn’t here")
+    if tradition and tradition not in cr.TYPES:
+        cm._bad("That isn’t one of the church types")
+    name = cm._plain(name)[:80]
+    if name and kind == "shape":
+        cm._bad("Name a role or a ministry, not a whole church")
+    bid = cm._bid(biz)
+    st = cr.settings(bid)
+    if st is None:
+        raise HTTPException(503, cm.UNREAD)
+    home = _trad(tradition or tradition_of(biz, st))
+    roles, depts = _reads(biz)
+    if name and kind == "role" and any(_fold(r["title"]) == _fold(name) for r in roles):
+        cm._bad(f"There’s already a role called {name}")
+    things, now = _sort(t, home, roles, depts, name), batch._Now(biz)
+    new = sorted(((x, f) for x, f, got in things if got is None), key=lambda xf: xf[0]["kind"] != "role")
+    ops: List[Dict[str, Any]] = []
+    if new:
+        teams = cfu.teams(bid)
+        if teams is None:
+            raise HTTPException(503, cm.UNREAD)
+        groups = cm._need(f"/groups?business_id=eq.{cm._q(bid)}&active=eq.true&select=id,name&limit=500")
+        taken = {cm._ukey(u) for d in now.m.departments for u in d["units"]}
+        ops = [_make(x, f, name if x is t else "", roles, teams, groups, taken, cm._plain(biz.get("name")))
+               for x, f in new]
+    said = f"Ready-made: {t.get('label') or t.get('name') or t['title']}"
+    plan = batch._plan(now, ops, by, role, "template")
+    parts = [p for _o, p in plan if p]
+    more = {"said": said, "money": batch._money(parts)}     # never money: the board's yes waits
+    batch._may(role, more["money"])
+    results, err = batch._write(now, plan, by, role, "template")
+    if err is not None:
+        raise batch._failed(bid, parts, by, "template", err, **more)
+    change = batch._log(bid, "applied", parts, by, "template", **more) if parts else None
+    ids = {x["key"]: str(got["id"]) for x, _f, got in things if got is not None}
+    ids.update({x["key"]: str(r["id"]) for (x, _f), r in zip(new, results)})
+    # What waits for a yes, read with the new drafts in.
+    now = batch._Now(biz)
+    waits = [{"kind": "role", "id": ids[x["key"]], "set": w}
+             for x, f, got in things for w in [_waiting(x, f, got)] if w]
+    later = [p for _o, p in batch._plan(now, waits, by, role, "template") if p]
+    if t["kind"] == "shape":
+        picks = {f: list(dict.fromkeys(ids[SEATS[s][home]] for s in seats)) for f, seats in (
+            ("pastor_yes_roles", t["pastor_yes"]), ("office_overseer_roles", t["office_overseer"]))}
+        # Not checked now: a pick may be a draft this made, which goes live at launch before this is made.
+        p = batch._part(now, {"kind": "settings", "id": bid, "set": picks}, now.get("settings", bid),
+                        {"settings": {**now.m.settings, **picks}})
+        later += [p] if p else []
+    later = _unsaid(bid, later) if later else []
+    waiting = batch._log(bid, "pending", later, by, "template", said=said, money=batch._money(later)) if later else None
+    if later and waiting is None:
+        raise HTTPException(503, "The drafts are in, but what waits for your yes didn’t save. Add it again to finish.")
+    made = [{"kind": op["kind"], "key": x["key"], "id": ids[x["key"]],
+             "name": op["set"].get("title") or op["set"]["name"]} for (x, _f), op in zip(new, ops)]
+    yours = [{"kind": x["kind"], "key": x["key"], "name": x.get("title") or x["name"], "id": str(got["id"]),
+              "yours": got.get("title") or got.get("name"), "status": got.get("status")} for x, _f, got in things if got]
+    if made:
+        line = f"Added {len(made)} draft{'s' if len(made) > 1 else ''}: {', '.join(m['name'] for m in made)}."
+    elif t["kind"] != "shape":
+        line = f"{yours[0]['name']} is already yours" + (
+            "." if _fold(yours[0]["yours"]) == _fold(yours[0]["name"]) else f", as {yours[0]['yours']}.")
+    else:
+        line = "Everything in it is already yours."
+    if waiting:
+        line += " What it would change on your live roles waits for your yes."
+    return {"made": made, "yours": yours, "change": batch._brief(change), "waiting": batch._brief(waiting),
+            "said": line}
 
 
 _IDX: Dict[str, Tuple[str, set, set]] = {}

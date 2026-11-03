@@ -798,6 +798,8 @@ def save_department(biz: Any, body: Dict[str, Any], by: Any, *, m: Optional[Map]
         row["name"] = _plain(body.get("name"))
         if not 1 <= len(row["name"]) <= 80:
             _bad("Name the department (up to 80 letters)")
+    if cur is None and body.get("template_key"):    # a ready-made's copy: where it came from (step 2, B4b)
+        row.update({k: body.get(k) for k in ("template_key", "template_version")})
     finish = None                           # a retry's status, set once its units are in
     if cur is None and isinstance(body.get("units"), list) and body["units"]:
         left = _clash(m, None, row["name"])
@@ -960,8 +962,9 @@ def save_settings(biz: Any, body: Dict[str, Any], by: Any, role: str, *, m: Opti
             if not isinstance(raw, list) or len(raw) > PICKS_MAX:
                 _bad(f"Pick up to {PICKS_MAX} roles")
             ids = list(dict.fromkeys(_id(x, "role") for x in raw))
-            if any(i not in active for i in ids):
-                _bad("Pick from this church’s own roles")
+            if any(i not in active for i in ids):     # a ready-made's pick may be a draft until launch (B4b)
+                _bad("A draft role can be picked once it’s live" if any(
+                    (m.roles.get(i) or {}).get("status") == "draft" for i in ids) else "Pick from this church’s own roles")
             if ids != cur.get(k):
                 out[k] = ids
     if not out:

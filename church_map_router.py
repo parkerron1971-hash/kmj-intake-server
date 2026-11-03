@@ -20,6 +20,9 @@
                                                     church_templates); a manager seat and up
     GET  /church/map/templates/{kind}/{key}?...     one ready-made, and what adopting it would
                                                     add here (read only); a manager seat and up
+    POST /church/map/templates/adopt?business_id=   {kind, key, tradition?, name?}: the church's
+                                                    own copy, as drafts (B4b: church_templates.
+                                                    adopt); the owner or an admin
 
 Once step 2's file is applied (church_map.step2_state()), each save above is
 logged as one change (church_map_batch, origin 'office'), so the sheet's Undo
@@ -188,7 +191,7 @@ def change_discard(change_id: str, business_id: str = Query(...), user: AuthedUs
     return {"ok": True, **batch.discard(biz, change_id, user.id, role=role)}
 
 
-# ─── The ready-made directory (B4a; adopting is B4b) ──────────────────
+# ─── The ready-made directory (B4a) and adopting one (B4b) ────────────
 
 def _directory(business_id: str, user: AuthedUser) -> Tuple[Dict[str, Any], Dict[str, Any], str]:
     """The church, its role settings and its tradition, once step 2's file is
@@ -226,3 +229,17 @@ def template_detail(kind: str, key: str, business_id: str = Query(...), user: Au
         raise HTTPException(404, "That ready-made isn’t here")
     return {"tradition": _tradition(tradition), "ready_made": ct.card(t, tradition, biz.get("name") or ""),
             "here": ct.here(biz, t, tradition, st)}
+
+
+class _Adopt(BaseModel):
+    kind: str = Field(..., max_length=12)
+    key: str = Field(..., max_length=60)
+    tradition: Optional[str] = Field(None, max_length=12)
+    name: Optional[str] = Field(None, max_length=80)
+
+
+@router.post("/templates/adopt")
+def template_adopt(body: _Adopt, business_id: str = Query(...), user: AuthedUser = Depends(require_user)):
+    biz, role = _church(business_id, user, "admin")
+    return {"ok": True, **ct.adopt(biz, body.kind, body.key, user.id, role=role, tradition=body.tradition or "",
+                                   name=body.name or "")}

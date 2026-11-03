@@ -867,8 +867,12 @@ def _clean(biz: str, body: Dict[str, Any], current: Optional[Dict[str, Any]], al
 def create_role(business: Dict[str, Any], body: Dict[str, Any], *, by_user: str = "",
                 source: str = "custom", dry: bool = False) -> Dict[str, Any]:
     """A new role. `dry` (church_map_batch's check first) checks it and
-    returns the row it would make, writing nothing."""
+    returns the row it would make, writing nothing. A ready-made's copy
+    (source 'template': church_templates.adopt) also keeps the row it came
+    from: catalog_key, template_key and template_version."""
     biz = str(business["id"])
+    made_from = {k: body[k] for k in ("catalog_key", "template_key", "template_version") if body.get(k)} \
+        if source == "template" else {}
     all_defs = defs(biz, with_drafts=True)
     if all_defs is None:
         raise HTTPException(503, "Your roles couldn’t be checked. Try again in a moment.")
@@ -902,10 +906,10 @@ def create_role(business: Dict[str, Any], body: Dict[str, Any], *, by_user: str 
         top = next((d for d in all_defs if d["job"] == "senior" and d["status"] == "active"), None)
         patch["reports_to"] = top["id"] if top else None
     if dry:
-        return {"id": "", "key": key, "source": source, "status": "active", **patch}
+        return {"id": "", "key": key, "source": source, "status": "active", **patch, **made_from}
     rows = sb_clients.sb_post_as_service("/church_role_defs", {
         "business_id": biz, "key": key, "source": source, "created_by": by_user or None,
-        "sort": 1000 + len(all_defs) * 10, "status": patch.pop("status", "active"), **patch})
+        "sort": 1000 + len(all_defs) * 10, "status": patch.pop("status", "active"), **patch, **made_from})
     if not isinstance(rows, list) or not rows:
         raise HTTPException(503, "That role didn’t save. Try again.")
     import church_areas
