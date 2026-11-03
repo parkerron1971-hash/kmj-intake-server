@@ -913,8 +913,9 @@ async def gather(c: httpx.AsyncClient, settings: Dict[str, Any], tasks: List[Dic
     day7, day14 = _z(now - timedelta(days=7)), _z(now - timedelta(days=14))
 
     async def spend():
-        rows = await _select(c, "api_usage", {"created_at": f"gte.{day7}", "select": "cost_cents",
-                                              "limit": "100000"})
+        # AI spend: texts (sms_usage.py) are their own cost, in the Costs view.
+        rows = await _select(c, "api_usage", {"created_at": f"gte.{day7}", "endpoint": "neq.sms",
+                                              "select": "cost_cents", "limit": "100000"})
         return sum(float(r.get("cost_cents") or 0) for r in rows)
 
     async def chief():

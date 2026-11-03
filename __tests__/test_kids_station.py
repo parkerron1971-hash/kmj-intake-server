@@ -89,7 +89,7 @@ def _texts(monkeypatch):
         return "+15550009999"
     monkeypatch.setattr(sms_service, "is_opted_out", opted_out)
     monkeypatch.setattr(sms_service, "sender_for", sender_for)
-    monkeypatch.setattr(twilio_sms, "send_sms", lambda to, body, from_number=None: sent["to"].append((to, body)) or "SM1")
+    monkeypatch.setattr(twilio_sms, "send_sms", lambda to, body, from_number=None, **kw: sent["to"].append((to, body)) or "SM1")
     return sent
 
 

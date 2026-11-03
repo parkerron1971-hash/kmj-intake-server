@@ -605,7 +605,8 @@ async def send_sms_core(client: httpx.AsyncClient, *, business_id: str,
         # delivery receipts by matching on it.
         from_number = await sender_for(client, business_id)
         telnyx_id = await run_in_threadpool(
-            twilio_sms.send_sms, to_clean, message, from_number=from_number)
+            twilio_sms.send_sms, to_clean, message, from_number=from_number,
+            business_id=business_id, kind="message")
     except Exception as e:
         logger.warning(f"[SMS] twilio send failed: {e}")
         raise SmsSendError(str(e)[:300], 502)

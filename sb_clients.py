@@ -634,6 +634,26 @@ def sb_get_as_service(path: str, *, redact: bool = False) -> Optional[Any]:
     return _sync_request("GET", path, sb_headers_service(), redact=redact)
 
 
+def sb_count_as_service(path: str) -> Optional[int]:
+    """How many rows a service GET of `path` would match, counted by the
+    database (HEAD with `Prefer: count=exact`): no rows are read, so the
+    1,000-row cap below never applies. None when the count can't be read,
+    never 0 for a failure. Server-initiated paths only."""
+    try:
+        headers = sb_headers_service(prefer="count=exact")
+        headers["Range"] = "0-0"
+        with httpx.Client(timeout=HTTP_TIMEOUT, transport=_pool()) as client:
+            resp = client.request("HEAD", f"{sb_url()}/rest/v1{path}", headers=headers)
+    except (httpx.HTTPError, RuntimeError) as e:
+        logger.warning(f"sb_clients sync HEAD {redacted_path(path)} failed: {type(e).__name__}")
+        return None
+    if resp.status_code >= 400:
+        logger.warning(f"sb_clients sync HEAD {redacted_path(path)}: {resp.status_code}")
+        return None
+    total = (resp.headers.get("content-range") or "").rsplit("/", 1)[-1]
+    return int(total) if total.isdigit() else None
+
+
 # ─── Every row, not the first 1,000 ──────────────────────────────────
 # PostgREST returns at most the project's max-rows (1,000 on this Supabase
 # project) whatever `limit` asks for, and says nothing about the rest. A

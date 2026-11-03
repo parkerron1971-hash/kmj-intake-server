@@ -725,8 +725,9 @@ def billing_readiness(_owner=Depends(require_owner)) -> Dict[str, Any]:
             by_plan[plan] = by_plan.get(plan, 0) + 1
         elif str(b.get("owner_id")) not in gf_ids:
             unsubscribed.append(b["id"])
+    import sms_usage
     month_usage = sb_clients.sb_get_as_service(
-        f"/api_usage?created_at=gte.{usage_metering._month_start_iso()}"
+        f"/api_usage?created_at=gte.{usage_metering._month_start_iso()}&{sms_usage.NOT_SMS}"
         f"&select=endpoint,units&limit=10000") or []
     weighted = sum(usage_metering.weight_for_row(r) for r in month_usage)
 

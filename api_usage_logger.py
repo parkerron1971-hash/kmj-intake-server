@@ -156,6 +156,10 @@ MODEL_PRICING_CENTS: Dict[str, tuple[float, float]] = {
     "gpt-4o-mini-transcribe": (0.0, 0.0),    # per-minute — via cost_cents_override
     "gpt-4o-mini":       (15.0, 60.0),       # $0.15/$0.60 (fallback brain)
     "gpt-4o":            (250.0, 1000.0),    # $2.50/$10 (fallback brain)
+    # ── Not a model: one outbound text (sms_usage.py). Priced per segment
+    #    through cost_cents_override (pricing_config.sms_segment_cost_cents);
+    #    the row is here so a text is never priced as an unknown model.
+    "twilio-sms":        (0.0, 0.0),
 }
 
 # Anthropic prompt-cache multipliers (relative to base input rate):
@@ -300,6 +304,7 @@ _PROVIDER_PREFIXES = (
     ("gpt-", "openai"), ("text-embedding", "openai"), ("tts-", "openai"),
     ("whisper", "openai"), ("dall-e", "openai"), ("o1", "openai"), ("o3", "openai"), ("o4", "openai"),
     ("eleven", "elevenlabs"), ("inworld", "inworld"), ("kimi", "moonshot"), ("moonshot", "moonshot"),
+    ("twilio", "twilio"),
 )
 
 

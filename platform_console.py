@@ -923,7 +923,13 @@ async def subscriptions_list(_owner=Depends(require_owner)):
 @router.get("/costs/summary")
 async def costs_summary(_owner=Depends(require_owner)):
     """Aggregate api_usage_summary_30d (created by api-usage-migration.sql).
-    Falls back to zeros if the migration hasn't been run yet."""
+    Falls back to zeros if the migration hasn't been run yet.
+
+    Texts write api_usage rows too (sms_usage.py, since 2026-11-03), so the
+    totals and each business's line include what its texts cost. `sms_30d`
+    is texting's own line: {texts, segments, cost_cents}, or None when it
+    couldn't be read; `ai_cost_cents` is the total without it."""
+    import sms_usage
     headers = _service_headers()
     rows: List[Dict[str, Any]] = []
     view_present = True
@@ -960,6 +966,8 @@ async def costs_summary(_owner=Depends(require_owner)):
                 "last_call_at":  row.get("last_call_at"),
             })
 
+    sms = await asyncio.to_thread(sms_usage.cost_since, 30)   # never raises; None = unread
+
     return {
         "view_present":      view_present,
         "window_days":       30,
@@ -967,6 +975,8 @@ async def costs_summary(_owner=Depends(require_owner)):
         "total_calls":       total_calls,
         "top_by_business":   by_business[:10],
         "business_count":    len(by_business),
+        "sms_30d":           sms,
+        "ai_cost_cents":     (round(total_cents - sms["cost_cents"], 2) if sms else None),
     }
 
 
