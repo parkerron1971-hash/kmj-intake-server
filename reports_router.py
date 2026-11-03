@@ -135,6 +135,12 @@ def _owner_or_reader(biz: str, user: AuthedUser) -> Dict[str, Any]:
 
 
 def _period_label(report: str, data: Dict[str, Any]) -> str:
+    if report == "trends" and data.get("monthly"):
+        # The last 12 months, not the calendar year: say which twelve.
+        m = data["monthly"]
+        span = (f"Last 12 months: {report_words.month_label(m[0].get('month'))} – "
+                f"{report_words.month_label(m[-1].get('month'))}")
+        return f"{span} (as of {report_words.day_label(data['as_of'])})" if data.get("as_of") else span
     if data.get("as_of"):
         return f"As of {data['as_of']}"
     rng = data.get("range") or {}
@@ -1237,9 +1243,14 @@ def _csv_rows(report: str, data: Dict[str, Any], voice: Optional[str] = None) ->
                          o.get("contribution")])
         rows.append(["", "METHOD", data.get("method", ""), "", "", ""])
     elif report == "trends":
-        rows.append(["Month", "Revenue", "Expenses", "Net"])
+        # Months by name ("Nov 2026"); the month still going says so.
+        cur = str(data.get("as_of") or "")[:7]
+        rows.append(["Month", L["money_in"], L["money_out"], L["left_over"]])
         for m in data.get("monthly", []):
-            rows.append([m.get("month"), m.get("revenue"), m.get("expenses"), m.get("net")])
+            label = report_words.month_label(m.get("month"))
+            if cur and m.get("month") == cur:
+                label += " (so far)"
+            rows.append([label, m.get("revenue"), m.get("expenses"), m.get("net")])
     elif report == "trust_reconciliation":
         tw = data.get("three_way") or {}
         rows.append(["Three-Way Check", "Amount"])
