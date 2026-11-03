@@ -209,13 +209,36 @@ JOBS: Dict[str, Dict[str, Any]] = {
     },
 }
 
+# ─── Switches: what a role is, as data (docs/CHURCH_LEADERS_MAP.md §3) ─
+# Each job's switches for a role a church adds. No title decides them at
+# read time (§0 rule a): each catalog row below carries its own, equal to the
+# backfill's (__tests__/fixtures/church_map_backfill_vectors.json), and a role
+# the church makes starts from its job's; a pastoral role shepherds (decision
+# 2). can_shepherd None follows the church's Ministers setting, which only a
+# pastoral role can. made_for: the streams it is the role made for, always
+# among its handles. Written only once church_map.ready().
+SWITCHES = ("can_shepherd", "can_oversee", "can_lead", "can_board_yes", "can_see_all")
+for _job, _sw in {"senior": (True, True, True, False, True), "pastoral": (True, True, True, False, False),
+                  "ministry": (False, False, True, False, False), "team": (False, False, True, False, False),
+                  "welcome": (False, False, True, False, False), "teach": (False, False, True, False, False)}.items():
+    JOBS[_job]["switches"] = dict(zip(SWITCHES, _sw))
+for _job in ("prayer", "care", "kids", "office"):
+    JOBS[_job]["switches"] = dict.fromkeys(SWITCHES, False)
+del _job, _sw
+
 
 # ─── Church types: the titles each tradition uses ─────────────────────
 
 def _r(key: str, title: str, job: str, note: str = "", *, handles: Optional[List[str]] = None,
-       reports: str = "", covers: str = "church", definition: str = "", teams: str = "") -> Dict[str, Any]:
+       reports: str = "", covers: str = "church", definition: str = "", teams: str = "",
+       shepherd: Any = "job", made_for: Optional[List[str]] = None, office: bool = False) -> Dict[str, Any]:
+    """A catalog row, with its switches spelled out: its job's, but for a
+    `shepherd` or `made_for` it says. `office` marks the row that oversees
+    the office for a church that names none (office_overseer_roles)."""
+    sw = dict(JOBS[job]["switches"], **({} if shepherd == "job" else {"can_shepherd": shepherd}))
     return {"key": key, "title": title, "job": job, "note": note, "handles": handles,
-            "reports": reports, "covers": covers, "definition": definition, "teams": teams}
+            "reports": reports, "covers": covers, "definition": definition, "teams": teams,
+            **sw, "made_for": list(made_for or []), "office": office}
 
 
 _INTERCESSOR_DEF = ("Leads {church} in prayer. Receives the prayer requests people agreed to share with the prayer "
@@ -230,11 +253,12 @@ _YOUTH, _KIDS, _WORSHIP = r"youth|teen|student", r"kid|child|nursery", r"worship
 _WELCOME = r"welcome|hospitality|usher|greet|guest"
 
 
-def _prayer_rows(lead_title: str = "Intercessor leader", team_title: str = "Intercessors") -> List[Dict[str, Any]]:
+def _prayer_rows(lead_title: str = "Intercessor leader", team_title: str = "Intercessors", *,
+                 made_for: bool = False) -> List[Dict[str, Any]]:
     return [_r("intercessor_leader", lead_title, "prayer", "Oversees prayer under the pastor.",
-               handles=["prayer_shared"], definition=_INTERCESSOR_DEF),
+               handles=["prayer_shared"], definition=_INTERCESSOR_DEF, made_for=["prayer_shared"] if made_for else []),
             _r("intercessors", team_title, "prayer", handles=["prayer_passed"], reports="intercessor_leader",
-               definition=_INTERCESSORS_DEF)]
+               definition=_INTERCESSORS_DEF, made_for=["prayer_passed"] if made_for else [])]
 
 
 TYPES: Dict[str, Dict[str, Any]] = {
@@ -242,17 +266,18 @@ TYPES: Dict[str, Dict[str, Any]] = {
         "label": "Non-denominational",
         "about": "Usually led by a Lead Pastor with elders beside them, and staff pastors over the ministries.",
         "rows": [
-            _r("pastor", "Lead Pastor", "senior"),
-            _r("executive_pastor", "Executive Pastor", "pastoral", "Often also given an office login to run staff and operations.", handles=[]),
-            _r("associate_pastor", "Associate Pastor", "pastoral", handles=["pastor_ask", "care_need"],
+            _r("pastor", "Lead Pastor", "senior", made_for=["pastor_ask"]),
+            _r("executive_pastor", "Executive Pastor", "pastoral", "Often also given an office login to run staff and operations.", handles=[],
+               office=True),
+            _r("associate_pastor", "Associate Pastor", "pastoral", handles=["pastor_ask", "care_need"], made_for=["pastor_ask"],
                definition="{title} shares the pastor’s care of the church; the ministry leads answer to them."),
             _r("elders", "Elders", "pastoral", "Pray for and oversee the church with the pastor.", handles=["pastor_ask"],
                definition="The {title} pray for the church and watch over it with the pastor."),
-            _r("ministers", "Ministers", "pastoral", handles=["baptism"],
+            _r("ministers", "Ministers", "pastoral", handles=["baptism"], shepherd=None,
                definition="{title} preach, teach and serve at the pastor’s side. Baptism cards go to them."),
             *_prayer_rows(),
             _r("deacons", "Deacons", "care", definition="{title} serve the church’s practical and care needs."),
-            _r("care_team", "Care team", "care", reports="deacons",
+            _r("care_team", "Care team", "care", reports="deacons", made_for=["care_need"],
                definition="The {title} visit, call and bring meals when someone is sick or grieving."),
             _r("worship_leader", "Worship Leader", "ministry", "Or Worship Pastor.", reports="associate_pastor", teams=_WORSHIP,
                definition="{title} leads Praise and Worship and the teams on the platform."),
@@ -274,13 +299,13 @@ TYPES: Dict[str, Dict[str, Any]] = {
         "label": "Baptist",
         "about": "The congregation governs; the Pastor leads with a board of deacons, and trustees keep the property and money.",
         "rows": [
-            _r("pastor", "Pastor", "senior"),
-            _r("associate_ministers", "Associate Ministers", "pastoral", handles=["pastor_ask", "baptism"]),
+            _r("pastor", "Pastor", "senior", made_for=["pastor_ask"]),
+            _r("associate_ministers", "Associate Ministers", "pastoral", handles=["pastor_ask", "baptism"], shepherd=None),
             _r("deacons", "Deacon Board", "care", "In many Baptist churches deacons also help govern.",
                definition="The {title} serve the church’s care needs and stand with the pastor."),
             _r("deaconesses", "Deaconesses", "care"),
             _r("mothers_board", "Mothers’ Board", "care", "Counsel and prayer for the church."),
-            *_prayer_rows("Prayer ministry leader", "Prayer warriors"),
+            *_prayer_rows("Prayer ministry leader", "Prayer warriors", made_for=True),
             _r("minister_of_music", "Minister of Music", "ministry", teams=_WORSHIP),
             _r("youth_minister", "Youth Minister", "ministry", "Background check.", teams=_YOUTH),
             _r("team_leader", "Team leader", "team", covers="team"),
@@ -297,13 +322,14 @@ TYPES: Dict[str, Dict[str, Any]] = {
         "about": "A Pastor (often also a Bishop or Superintendent) with ordained Elders, licensed Ministers, and a "
                  "strong prayer and mothers’ tradition.",
         "rows": [
-            _r("pastor", "Pastor", "senior", "Often also a Bishop or Superintendent."),
+            _r("pastor", "Pastor", "senior", "Often also a Bishop or Superintendent.", made_for=["pastor_ask"]),
             _r("elders", "Elders", "pastoral", "Ordained ministers.", handles=["pastor_ask", "baptism"]),
-            _r("ministers", "Ministers", "pastoral", "Licensed ministers.", handles=["pastor_ask"]),
+            _r("ministers", "Ministers", "pastoral", "Licensed ministers.", handles=["pastor_ask"], shepherd=None),
             _r("church_mother", "Church Mother", "care", "Counsel and prayer for the church.",
                definition="The {title} is a woman of mature faith who counsels the church’s women and young "
                           "families, and stands with the pastor in caring for the flock."),
-            _r("missionaries", "Missionaries", "pastoral", "Women who teach, visit and evangelize.", handles=["care_need"]),
+            _r("missionaries", "Missionaries", "pastoral", "Women who teach, visit and evangelize.", handles=["care_need"],
+               shepherd=False),
             _r("evangelists", "Evangelists", "welcome", "Reach and follow up new people."),
             _r("deacons", "Deacons", "care"),
             *_prayer_rows("Intercessor leader", "Intercessors"),
@@ -320,14 +346,16 @@ TYPES: Dict[str, Dict[str, Any]] = {
         "about": "The Bishop appoints the Pastor. Stewards, Stewardesses and Class Leaders carry the church’s care; "
                  "Trustees keep the property.",
         "rows": [
-            _r("pastor", "Pastor", "senior", "Appointed by the Bishop."),
-            _r("associate_ministers", "Associate Ministers", "pastoral", "And Local Preachers.", handles=["pastor_ask", "baptism"]),
-            _r("stewards", "Stewards", "pastoral", "Help the pastor with the church’s spiritual life.", handles=["pastor_ask"]),
+            _r("pastor", "Pastor", "senior", "Appointed by the Bishop.", made_for=["pastor_ask"]),
+            _r("associate_ministers", "Associate Ministers", "pastoral", "And Local Preachers.", handles=["pastor_ask", "baptism"],
+               shepherd=None),
+            _r("stewards", "Stewards", "pastoral", "Help the pastor with the church’s spiritual life.", handles=["pastor_ask"],
+               shepherd=False),
             _r("stewardesses", "Stewardesses", "care", "Prepare communion and care for members."),
             _r("class_leaders", "Class Leaders", "care", "Each watches over a class of members.",
                definition="Each of the {title} watches over a class of members: calls them, visits them, and "
                           "tells the pastor who needs care."),
-            *_prayer_rows("Prayer leader", "Prayer band"),
+            *_prayer_rows("Prayer leader", "Prayer band", made_for=True),
             _r("missionary_society", "Missionary Society president", "care"),
             _r("minister_of_music", "Minister of Music", "ministry", teams=_WORSHIP),
             _r("ypd_director", "YPD director", "ministry", "Youth. Background check.", teams=_YOUTH),
@@ -341,11 +369,11 @@ TYPES: Dict[str, Dict[str, Any]] = {
         "label": "Presbyterian",
         "about": "Elders govern together as the Session; deacons lead care and mercy.",
         "rows": [
-            _r("pastor", "Pastor (Teaching Elder)", "senior"),
-            _r("associate_pastor", "Associate Pastor", "pastoral", handles=["pastor_ask", "baptism"]),
+            _r("pastor", "Pastor (Teaching Elder)", "senior", made_for=["pastor_ask"]),
+            _r("associate_pastor", "Associate Pastor", "pastoral", handles=["pastor_ask", "baptism"], made_for=["pastor_ask"]),
             _r("ruling_elders", "Ruling Elders (the Session)", "pastoral", handles=["pastor_ask"]),
             _r("deacons", "Deacons", "care", "Mercy and practical care."),
-            *_prayer_rows("Prayer leader", "Prayer team"),
+            *_prayer_rows("Prayer leader", "Prayer team", made_for=True),
             _r("christian_ed", "Director of Christian Education", "ministry", reports="associate_pastor"),
             _r("music_director", "Music Director", "ministry", teams=_WORSHIP),
             _r("team_leader", "Team leader", "team", covers="team"),
@@ -359,13 +387,13 @@ TYPES: Dict[str, Dict[str, Any]] = {
         "about": "Elders (shepherds) oversee together; there is no “pastor” title. A preaching minister preaches, "
                  "and deacons lead ministries.",
         "rows": [
-            _r("pastor", "Elders (Shepherds)", "senior", "Several people share the top of the chain.",
+            _r("pastor", "Elders (Shepherds)", "senior", "Several people share the top of the chain.", made_for=["pastor_ask"],
                definition="The {title} oversee the congregation together, and every leader answers to them."),
-            _r("preaching_minister", "Preaching Minister", "pastoral", handles=["pastor_ask", "baptism"]),
+            _r("preaching_minister", "Preaching Minister", "pastoral", handles=["pastor_ask", "baptism"], shepherd=None),
             _r("youth_minister", "Youth Minister", "ministry", "Background check.", teams=_YOUTH),
             _r("deacons", "Deacons", "ministry", "Each leads a ministry: benevolence, building, education.",
                definition="Each of the {title} leads one of the congregation’s ministries."),
-            *_prayer_rows("Prayer leader", "Prayer team"),
+            *_prayer_rows("Prayer leader", "Prayer team", made_for=True),
             _r("song_leaders", "Song leaders", "team", handles=[]),
             _r("team_leader", "Team leader", "team", covers="team"),
             _r("welcome_lead", "Welcome Team lead", "welcome", teams=_WELCOME),
@@ -376,11 +404,12 @@ TYPES: Dict[str, Dict[str, Any]] = {
         "label": "Episcopal, Lutheran & Catholic",
         "about": "A Rector, Pastor or Priest with ordained deacons; a vestry or council governs alongside.",
         "rows": [
-            _r("pastor", "Rector, Pastor or Priest", "senior"),
-            _r("associate_rector", "Associate Rector, Curate or Parochial Vicar", "pastoral", handles=["pastor_ask", "baptism"]),
-            _r("deacon_ordained", "Deacon (ordained)", "pastoral", handles=["pastor_ask"]),
+            _r("pastor", "Rector, Pastor or Priest", "senior", made_for=["pastor_ask"]),
+            _r("associate_rector", "Associate Rector, Curate or Parochial Vicar", "pastoral", handles=["pastor_ask", "baptism"],
+               shepherd=False),
+            _r("deacon_ordained", "Deacon (ordained)", "pastoral", handles=["pastor_ask"], shepherd=False),
             _r("eucharistic_ministers", "Lay Eucharistic Ministers", "care", "Bring communion to the homebound."),
-            *_prayer_rows("Prayer chain leader", "Prayer chain"),
+            *_prayer_rows("Prayer chain leader", "Prayer chain", made_for=True),
             _r("religious_ed", "Director of Religious Education", "ministry"),
             _r("music_director", "Music Director or Organist", "ministry", teams=_WORSHIP),
             _r("altar_guild", "Altar Guild", "team", handles=[]),
@@ -394,8 +423,8 @@ TYPES: Dict[str, Dict[str, Any]] = {
         "about": "Seventh-day Adventist, an apostolic network, a house church, or your own way: start from the jobs "
                  "and name every role yourself. Chief understands each one by its job.",
         "rows": [
-            _r("pastor", "Senior pastor", "senior", "Over the whole church."),
-            *_prayer_rows("Prayer leader", "Prayer team"),
+            _r("pastor", "Senior pastor", "senior", "Over the whole church.", made_for=["pastor_ask"]),
+            *_prayer_rows("Prayer leader", "Prayer team", made_for=True),
             _r("team_leader", "Team leader", "team", covers="team"),
             _r("welcome_lead", "Welcome Team lead", "welcome", teams=_WELCOME),
         ],
@@ -406,8 +435,9 @@ TYPE_ORDER = ("nondenom", "baptist", "cogic", "ame", "presby", "coc", "liturgica
 # The four keys the first version gave out, as roles, for a church that
 # already uses them under a type that names them differently.
 LEGACY: Dict[str, Dict[str, Any]] = {
-    "pastor": _r("pastor", "Lead Pastor", "senior"),
-    "baptism_minister": _r("baptism_minister", "Baptism minister", "pastoral", handles=["baptism"],
+    "pastor": _r("pastor", "Lead Pastor", "senior", made_for=["pastor_ask"]),
+    "baptism_minister": _r("baptism_minister", "Baptism minister", "pastoral", handles=["baptism"], shepherd=None,
+                           made_for=["baptism"],
                            definition="{title} walks everyone who asks to be baptized through it, from the first "
                                       "talk to the Sunday they are baptized."),
     "welcome_lead": _r("welcome_lead", "Welcome Team lead", "welcome", teams=_WELCOME),
@@ -517,6 +547,56 @@ def clean_sees(job: str, sees: Optional[Iterable[str]]) -> List[str]:
     return [s for s in spec["sees_options"] if s in want]
 
 
+def _live() -> bool:
+    """Whether the map's columns are there to write (church_map.ready);
+    before the migration every write leaves them out."""
+    import church_map
+    return church_map.ready()
+
+
+def _made_for(want: Optional[Iterable[str]], handles: List[str]) -> List[str]:
+    want = {str(s) for s in want or []}
+    return [s for s in handles if s in want]
+
+
+def suggest_made_for(key: str, title: str, handles: List[str]) -> List[str]:
+    """The streams a NEW role's own words say it is made for: the tie-break
+    church_follow_up.choose reads today (:386-388), suggested once, when the
+    role is made, then stored as data the church can change (§0 rule a)."""
+    words = f"{key} {_plain(title).casefold()}"
+    return [s for s in handles if s.split("_")[0][:6] in words]
+
+
+def _catalog_switches(row: Dict[str, Any], handles: List[str]) -> Dict[str, Any]:
+    return {**{k: row[k] for k in SWITCHES}, "made_for": _made_for(row["made_for"], handles)}
+
+
+def _clean_switches(body: Dict[str, Any], current: Optional[Dict[str, Any]], job: str, handles: List[str],
+                    handles_move: bool, made_for_now: Optional[List[str]]) -> Dict[str, Any]:
+    """The switches a write sets. A new role starts from its job's, and so
+    does a role whose job changes (only while no one holds it); what the same
+    request says wins either way. Only a pastoral role follows the Ministers
+    setting (None). made_for stays among the role's handles when they move."""
+    out: Dict[str, Any] = dict(JOBS[job]["switches"]) if not current or job != current.get("job") else {}
+    for k in SWITCHES:
+        if k in body:
+            out[k] = None if k == "can_shepherd" and body[k] is None else bool(body[k])
+    if "can_shepherd" in out and out["can_shepherd"] is None and job != "pastoral":
+        out["can_shepherd"] = False
+    if "made_for" in body:
+        out["made_for"] = _made_for(body["made_for"], handles)
+    elif handles_move and made_for_now is not None:
+        out["made_for"] = _made_for(made_for_now, handles)
+    return out
+
+
+def _office_overseers(st: Dict[str, Any], ids: List[str]) -> Dict[str, Any]:
+    """A catalog row marked `office` names itself to oversee the office for a
+    church that never named anyone (null), as the backfill did; a church's
+    own list, '{}' too, is left alone."""
+    return {"office_overseer_roles": ids[:20]} if ids and st.get("office_overseer_roles") is None else {}
+
+
 # ─── Reads ────────────────────────────────────────────────────────────
 
 _DEF_SELECT = ("id,key,title,job,definition,covers,reports_to,oversees_teams,handles,sees,term_months,needs_class,"
@@ -620,22 +700,25 @@ def ensure_library(business: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     team_names = cfu.teams(biz) or []
     existing = by_key(have)
     created: Dict[str, str] = {k: v["id"] for k, v in existing.items()}
+    live, office = _live(), []
     for n, row in enumerate(rows):
         if row["key"] in existing:
             continue
+        handles = _seed_handles(row, _team_match(row["teams"], team_names))
         made = sb_clients.sb_post_as_service(
             "/church_role_defs?on_conflict=business_id,key", {
                 "business_id": biz, "key": row["key"], "title": row["title"], "job": row["job"],
                 "definition": _fill(row["definition"] or JOBS[row["job"]]["definition"], row["title"], church,
                                     next((x["title"] for x in rows if x["key"] == "intercessor_leader"), "leader")),
-                "covers": row["covers"],
-                "handles": _seed_handles(row, _team_match(row["teams"], team_names)),
+                "covers": row["covers"], "handles": handles,
                 "sees": clean_sees(row["job"], None), "oversees_teams": _team_match(row["teams"], team_names),
                 "status": "active", "source": "legacy" if row is LEGACY.get(row["key"]) else "catalog",
-                "catalog_key": row["key"], "sort": n * 10,
+                "catalog_key": row["key"], "sort": n * 10, **(_catalog_switches(row, handles) if live else {}),
             }, prefer="resolution=ignore-duplicates,return=representation")
         if isinstance(made, list) and made:
             created[row["key"]] = str(made[0]["id"])
+            if live and row["office"]:
+                office.append(created[row["key"]])
     # The chain: each title to the one it answers to (the senior role when
     # it names none), now that every id is known.
     top = created.get("pastor")
@@ -651,7 +734,7 @@ def ensure_library(business: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     out = sb_clients.sb_post_as_service("/church_role_settings?on_conflict=business_id", {
         "business_id": biz, "church_type": key, "guessed_type": gkey, "guess_reason": why[:300],
         "set_by": st.get("set_by") or "chief", "set_at": st.get("set_at") or _iso(_now()),
-        "seeded_at": _iso(_now()), "updated_at": _iso(_now()),
+        "seeded_at": _iso(_now()), "updated_at": _iso(_now()), **_office_overseers(st, office),
     }, prefer="resolution=merge-duplicates,return=representation")
     return out[0] if isinstance(out, list) and out else {"church_type": key, "guessed_type": gkey,
                                                           "guess_reason": why, "set_by": "chief"}
@@ -720,11 +803,11 @@ def _descendants(role_id: str, all_defs: List[Dict[str, Any]]) -> set:
 # ─── Writes ───────────────────────────────────────────────────────────
 
 _FIELDS = ("title", "job", "definition", "covers", "reports_to", "oversees_teams", "handles", "sees",
-           "term_months", "needs_class", "status")
+           "term_months", "needs_class", "status", *SWITCHES, "made_for")
 
 
 def _clean(biz: str, body: Dict[str, Any], current: Optional[Dict[str, Any]], all_defs: List[Dict[str, Any]],
-           team_names: List[str]) -> Dict[str, Any]:
+           team_names: List[str], *, live: bool = False, made_for_now: Optional[List[str]] = None) -> Dict[str, Any]:
     out: Dict[str, Any] = {}
     job = str(body.get("job") or (current or {}).get("job") or "")
     if job not in JOBS:
@@ -772,6 +855,9 @@ def _clean(biz: str, body: Dict[str, Any], current: Optional[Dict[str, Any]], al
     if "status" in body:
         s = str(body.get("status") or "active")
         out["status"] = s if s in ("active", "draft") else "active"
+    if live:
+        out.update(_clean_switches(body, current, job, out.get("handles", (current or {}).get("handles") or []),
+                                   "handles" in out, made_for_now))
     return out
 
 
@@ -782,7 +868,8 @@ def create_role(business: Dict[str, Any], body: Dict[str, Any], *, by_user: str 
     if all_defs is None:
         raise HTTPException(503, "Your roles couldn’t be checked. Try again in a moment.")
     import church_follow_up as cfu
-    patch = _clean(biz, body, None, all_defs, cfu.teams(biz) or [])
+    live = _live()
+    patch = _clean(biz, body, None, all_defs, cfu.teams(biz) or [], live=live)
     if not patch.get("definition"):
         patch["definition"] = definition_for(patch["job"], patch["title"], _plain(business.get("name")))
     archived = _rows(f"/church_role_defs?business_id=eq.{_q(biz)}&status=eq.archived&select=key&limit=300")
@@ -794,6 +881,14 @@ def create_role(business: Dict[str, Any], body: Dict[str, Any], *, by_user: str 
     while key in taken:
         key = f"{base[:36]}_{n}"
         n += 1
+    if live:
+        if "made_for" not in patch:
+            patch["made_for"] = suggest_made_for(key, patch["title"], patch["handles"])
+        # The insert names all six. The live trigger (church_role_defs_switches)
+        # reads a null can_shepherd with every other one off and no made_for as
+        # "none said" and fills today's rule, so that role is saved as false.
+        if patch["can_shepherd"] is None and not patch["made_for"] and not any(patch[k] for k in SWITCHES[1:]):
+            patch["can_shepherd"] = False
     if "reports_to" not in patch and patch["job"] != "senior":
         top = next((d for d in all_defs if d["job"] == "senior" and d["status"] == "active"), None)
         patch["reports_to"] = top["id"] if top else None
@@ -814,11 +909,23 @@ def update_role(business_id: str, role_id: str, body: Dict[str, Any]) -> Dict[st
     if not cur:
         raise HTTPException(404, "That role isn’t here")
     import church_follow_up as cfu
-    patch = _clean(biz, {k: v for k, v in body.items() if k in _FIELDS}, cur, all_defs, cfu.teams(biz) or [])
-    if patch.get("covers") and patch["covers"] != cur.get("covers"):
+    live = _live()
+    want = {k: v for k, v in body.items() if k in _FIELDS and (live or k not in (*SWITCHES, "made_for"))}
+    made_for_now = None
+    if live and "made_for" not in want and ("handles" in want or "job" in want):
+        got = _rows(f"/church_role_defs?id=eq.{_q(rid)}&business_id=eq.{_q(biz)}&select=made_for&limit=1")
+        if not got:
+            raise HTTPException(503, "Your roles couldn’t be checked. Try again in a moment.")
+        made_for_now = list(got[0].get("made_for") or [])
+    patch = _clean(biz, want, cur, all_defs, cfu.teams(biz) or [], live=live, made_for_now=made_for_now)
+    # What it covers and its job are what its holders were handed: both
+    # change only while no one holds it (the page says so too).
+    moving = [what for k, what in (("covers", "what it covers"), ("job", "its job"))
+              if patch.get(k) and patch[k] != cur.get(k)]
+    if moving:
         held = _rows(f"/church_leader_roles?business_id=eq.{_q(biz)}&role=eq.{_q(cur['key'])}&status=neq.declined&select=id&limit=1")
         if held is None or held:
-            raise HTTPException(400, "Take the people out of this role before changing what it covers")
+            raise HTTPException(400, f"Take the people out of this role before changing {moving[0]}")
     if not patch:
         return cur
     rows = sb_clients.sb_patch_as_service(f"/church_role_defs?id=eq.{_q(rid)}&business_id=eq.{_q(biz)}",
@@ -887,29 +994,32 @@ def set_type(business: Dict[str, Any], type_key: str, add: Iterable[str] = (), *
     import church_follow_up as cfu
     team_names = cfu.teams(biz) or []
     rows = {r["key"]: r for r in TYPES[type_key]["rows"]}
-    added = 0
+    added, live, office = 0, _live(), []
     top = next((d for d in all_defs if d["job"] == "senior"), None)
     for k in add:
         row = rows.get(str(k))
         if not row or row["key"] in have:
             continue
         up = have.get(row["reports"]) if row["reports"] else None
+        handles = _seed_handles(row, _team_match(row["teams"], team_names))
         made = sb_clients.sb_post_as_service("/church_role_defs?on_conflict=business_id,key", {
             "business_id": biz, "key": row["key"], "title": row["title"], "job": row["job"],
             "definition": _fill(row["definition"] or JOBS[row["job"]]["definition"], row["title"], church),
-            "covers": row["covers"],
-            "handles": _seed_handles(row, _team_match(row["teams"], team_names)),
+            "covers": row["covers"], "handles": handles,
             "sees": clean_sees(row["job"], None), "oversees_teams": _team_match(row["teams"], team_names),
             "reports_to": (up or top or {}).get("id") if row["job"] != "senior" else None,
             "status": "active", "source": "catalog", "catalog_key": row["key"], "created_by": by_user or None,
-            "sort": 500 + added * 10,
+            "sort": 500 + added * 10, **(_catalog_switches(row, handles) if live else {}),
         }, prefer="resolution=ignore-duplicates,return=representation")
         if isinstance(made, list) and made:
             added += 1
             have[row["key"]] = made[0]
+            if live and row["office"]:
+                office.append(str(made[0]["id"]))
     out = sb_clients.sb_post_as_service("/church_role_settings?on_conflict=business_id", {
         "business_id": biz, "church_type": type_key, "set_by": "owner", "set_at": _iso(_now()),
-        "updated_at": _iso(_now())}, prefer="resolution=merge-duplicates,return=representation")
+        "updated_at": _iso(_now()), **_office_overseers(st, office)},
+        prefer="resolution=merge-duplicates,return=representation")
     if not isinstance(out, list) or not out:
         raise HTTPException(503, "That didn’t save. Try again.")
     return {"settings": out[0], "added": added}
@@ -918,7 +1028,7 @@ def set_type(business: Dict[str, Any], type_key: str, add: Iterable[str] = (), *
 # ─── The office's page ────────────────────────────────────────────────
 
 def _view(d: Dict[str, Any], all_defs: List[Dict[str, Any]], holders: List[Dict[str, Any]],
-          classes: Dict[str, str]) -> Dict[str, Any]:
+          classes: Dict[str, str], switches: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     ids = {x["id"]: x for x in all_defs}
     up = ids.get(d.get("reports_to") or "")
     created = d.get("created_at")
@@ -935,6 +1045,7 @@ def _view(d: Dict[str, Any], all_defs: List[Dict[str, Any]], holders: List[Dict[
         "holders": [{k: h.get(k) for k in ("id", "contact_id", "name", "email", "phone", "status", "scope",
                                            "invited_at", "answered_at", "term_ends_at")}
                     for h in holders if h.get("role") == d["key"]],
+        **({k: switches.get(k) for k in (*SWITCHES, "made_for")} if switches else {}),
     }
 
 
@@ -982,6 +1093,12 @@ def library(business: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     team_names = cfu.teams(biz)
     if all_defs is None or holders is None or team_names is None:
         return None
+    switches: Dict[str, Dict[str, Any]] = {}
+    if _live():                     # each role's switches, once the map's columns are there
+        import church_map
+        switches = church_map.role_switches(biz)
+        if switches is None:
+            return None
     classes = _classes(biz)
     cmap = {c["id"]: c["title"] for c in classes}
     keys = {d["key"] for d in all_defs}
@@ -994,7 +1111,7 @@ def library(business: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         "job_order": list(JOB_ORDER),
         "streams": dict(STREAMS, serve_overseer=SERVE_OVERSEER_LABEL),
         "sees_options": SEES_OPTIONS,
-        "roles": [_view(d, all_defs, holders, cmap) for d in all_defs],
+        "roles": [_view(d, all_defs, holders, cmap, switches.get(d["id"])) for d in all_defs],
         "teams": team_names,
         "groups": _groups(biz),
         "kids_leaders": _kids(biz),
@@ -1025,6 +1142,15 @@ def chief_lines(business: Dict[str, Any]) -> Optional[List[str]]:
     team_names = cfu.teams(biz)
     if st is None or all_defs is None or holders is None or team_names is None:
         return None
+    # Each role's switches, where the map is open for this church: Chief
+    # reads them as the engine will (docs/CHURCH_LEADERS_MAP.md §3).
+    import church_map
+    m = None
+    if church_map.ready() and church_map.church_open(biz):
+        sw = church_map.role_switches(biz)
+        if sw is None:
+            return None
+        m = church_map.Map(biz, roles=sw)
     all_defs = cfu._effective_defs(all_defs, holders)
     if not all_defs:
         return ["The church hasn't set up its roles yet: no one holds a role, so every card goes to the office. "
@@ -1045,7 +1171,8 @@ def chief_lines(business: Dict[str, Any]) -> Optional[List[str]]:
                      + (f"; asked, not yet answered: {', '.join(asked)}" if asked else "")
                      + (f"; answers to {up['title']}" if up else "")
                      + (f"; teams under it: {', '.join(d['oversees_teams'])}" if d.get("oversees_teams") else "")
-                     + f". Handed: {gets}. Definition: {d.get('definition') or ''}")
+                     + f". Handed: {gets}." + (f" {church_map.says(m, d)}." if m else "")
+                     + f" Definition: {d.get('definition') or ''}")
     led = {h["scope"].casefold() for h in holders if h["role"] == "team_leader" and h["status"] == "active" and h.get("scope")}
     if team_names:
         lines.append("Teams (from the Serve with us card): " + "; ".join(

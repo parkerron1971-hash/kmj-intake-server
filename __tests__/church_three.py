@@ -2,18 +2,20 @@
 Baptist and New Hope, all in one in-memory PostgREST, so every reader runs its
 real path and a read that leaks across churches shows.
 
-    build(monkeypatch, *, map_on=True, filled=True) -> db
+    build(monkeypatch, *, map_on=True, filled=True, migrated=True) -> db
 
 Each library is filled by the real church_roles.ensure_library; then the
 custom roles, the holders, the households and Sunday attendance, the office
 logins and the duty moves. The people are made up, except Love City's office
 (test_church_duties' logins). Who sees what is on, as production runs it.
 
-The map (departments, answers-to links, money levels, office-overseer roles,
-the switches flipped) has no tables yet. With filled=True it is kept in
-`db.map_intent`, by role key and person id, for the PR that adds the tables
-(PR 2) and church_map (PR 3) to write; filled=False is the empty map every
-preservation test uses. CHURCH_MAP follows map_on; nothing reads it yet.
+The map (departments and their units, answers-to links, money levels,
+office-overseer roles, the switches flipped) is kept in `db.map_intent`, by
+role key and person id, and with filled=True written into the map's tables
+(supabase/APPLY-2026-11-04-church-map.sql) as the office will write it (PR 5);
+filled=False is the empty map every preservation test uses. migrated=False is
+the database before that file: a read or write naming its columns or tables
+fails as PostgREST's would. CHURCH_MAP follows map_on.
 
     db.who[church][handle] -> a person's (or a login's) id
     db.label[id]           -> that person's first name, or a login's name
@@ -23,6 +25,7 @@ from __future__ import annotations
 import asyncio
 import fnmatch
 import os
+import re
 import sys
 import uuid
 from datetime import date, datetime, timedelta, timezone
@@ -39,6 +42,7 @@ import church_checks  # noqa: E402
 import church_duties as cd  # noqa: E402
 import church_follow_up as cfu  # noqa: E402
 import church_leader_tasks as clt  # noqa: E402
+import church_map  # noqa: E402
 import church_money_levels as cml  # noqa: E402
 import church_roles as cr  # noqa: E402
 import church_shepherd_signals as sig  # noqa: E402
@@ -66,7 +70,11 @@ TABLES = ("business_sites business_users contacts church_leader_roles church_rol
           "church_duty_changes church_boards church_board_members church_check_approvals church_follow_ups "
           "church_follow_up_notes church_area_places groups group_members tasks space_leaders academy_courses "
           "academy_enrollments worship_team msg_member_officers msg_safety_officers church_space_bookings events "
-          "business_collaborators").split()
+          "business_collaborators church_departments church_department_units").split()
+# What the map's migration adds: before it, PostgREST refuses any read or write that names one.
+MAP_NEW = re.compile(r"\b(can_shepherd|can_oversee|can_lead|can_board_yes|can_see_all|made_for|answers_to_contact_id|"
+                     r"pastor_from_cents|board_over_cents|pastor_yes_roles|office_overseer_roles|map_by|map_at|"
+                     r"church_departments|church_department_units)\b")
 
 
 def pid(church: int, n: int) -> str:
@@ -80,16 +88,43 @@ def uid(church: int, n: int) -> str:
 class ThreeDB(DutyDB):
     """test_church_duties' fake (the role tests' PostgREST with church_duty_set),
     plus `like`, which the shepherding emails' sent-once ledger reads by, and
-    ids that come out the same on every run."""
+    ids that come out the same on every run, and (migrated=False) the
+    database before the map's migration. Migrated, a role insert runs the
+    live trigger's fill (church_role_defs_switches): a row with none of its
+    switches said, all at their column defaults, gets today's rule. Each
+    insert's body, as sent, is kept in `role_inserts`."""
+    migrated = True
+
+    def _switches_trigger(self, row):
+        self.role_inserts = getattr(self, "role_inserts", []) + [dict(row)]
+        if row.get("can_shepherd") is None and not row.get("made_for") and \
+                not any(row.get(k) for k in ("can_oversee", "can_lead", "can_board_yes", "can_see_all")):
+            from test_church_map_vectors import switches as todays_rule
+            row.update(todays_rule({"handles": [], **row}))
+        return row
+
+    def _refused(self, path, body=None):
+        names = path + " " + " ".join(k for b in (body if isinstance(body, list) else [body or {}]) for k in b)
+        return not self.migrated and MAP_NEW.search(names)
 
     def nid(self, table):
         self.made = getattr(self, "made", 0) + 1
         return str(uuid.uuid5(uuid.NAMESPACE_URL, f"church-three/{table}/{self.made}"))
 
+    def get(self, path, **kw):
+        return None if self._refused(path) else super().get(path, **kw)
+
     def post(self, path, body, prefer=None, **kw):
+        if self._refused(path, body):
+            return None
         if isinstance(body, dict) and "id" not in body and not path.startswith("/rpc/"):
             body = dict(body, id=self.nid(path.lstrip("/").split("?")[0]))
+        if self.migrated and path.startswith("/church_role_defs") and isinstance(body, dict):
+            body = self._switches_trigger(dict(body))
         return super().post(path, body, prefer, **kw)
+
+    def patch(self, path, body, **kw):
+        return None if self._refused(path, body) else super().patch(path, body, **kw)
 
     def _match(self, row, filters):
         rest = []
@@ -122,7 +157,8 @@ class _Church:
         for h in handles:
             self.db.t["church_leader_roles"].append({
                 "id": self.db.nid("church_leader_roles"), "business_id": self.biz, "contact_id": self.who[h], "role": key,
-                "scope": scope, "status": "active", "invited_at": "2026-10-01T00:00:00+00:00", "answered_at": None})
+                "scope": scope, "status": "active", "invited_at": "2026-10-01T00:00:00+00:00", "answered_at": None,
+                "answers_to_contact_id": None})
 
     def login(self, n, handle, role, *, lane=None, areas=None, tie=False):
         u = {"minnie": ADMIN, "naiya": NAIYA, "tiara": TIARA, "laquesha": LAQ, "jessica": JESS,
@@ -208,8 +244,11 @@ def _love_city(db):
     c.person(0, "Jessica McCloud", email="Jessica@LoveCity.org", cid=C_JESS)
     c.person(0, "Naiya Clark", cid=C_NAIYA)
     c.person(30, "Jaylen Owens", born="2011-03-14")
-    for title, job in (("Prophets", "pastoral"), ("Evangelists", "welcome")):
-        cr.create_role(c.row, {"title": title, "job": job})
+    # Love City made these before the map: the backfill gave them today's
+    # rule, so its Prophets, with no shepherd word, don't shepherd (a new
+    # custom pastoral role would: decision 2).
+    for title, job, said in (("Prophets", "pastoral", {"can_shepherd": False}), ("Evangelists", "welcome", {})):
+        cr.create_role(c.row, {"title": title, "job": job, **said})
     for key, *who in (("pastor", "kevin"), ("executive_pastor", "jessica"), ("associate_pastor", "andre"),
                       ("elders", "marcus", "tanya"), ("ministers", "angela"), ("intercessor_leader", "ruth"),
                       ("intercessors", "iris", "ivy"), ("prophets", "paul"), ("evangelists", "eve"),
@@ -454,7 +493,36 @@ def _serve(biz, teams):
     return form
 
 
-def build(monkeypatch, *, map_on: bool = True, filled: bool = True) -> ThreeDB:
+def write_map(db, biz, m):
+    """A church's map_intent into the map's tables: departments and their
+    units, holders' answers-to, the settings, and the switches flipped
+    (through church_roles.update_role, the office's own write)."""
+    defs = {d["key"]: d for d in db.t["church_role_defs"] if d["business_id"] == biz}
+    for n, d in enumerate(m["departments"]):
+        did = db.nid("church_departments")
+        db.t["church_departments"].append({
+            "id": did, "business_id": biz, "name": d["name"], "leader_contact_id": d["leader"],
+            "overseer_contact_id": d["overseer"], "support_duty": d["duty"], "area": d["area"], "status": "active",
+            "source": "office", "sort": n * 10, "updated_by": None, "updated_at": "2026-11-03T12:00:00+00:00"})
+        for kind, ref in d["units"]:
+            db.t["church_department_units"].append({
+                "id": db.nid("church_department_units"), "business_id": biz, "department_id": did, "kind": kind,
+                "group_id": ref if kind == "group" else None, "role_id": defs[ref]["id"] if kind == "role" else None,
+                "board_id": None, "worship_ministry_id": None, "label": "" if kind in ("group", "role") else ref})
+    for h in db.t["church_leader_roles"]:
+        if h["business_id"] == biz and h["contact_id"] in m["answers_to"]:
+            h["answers_to_contact_id"] = m["answers_to"][h["contact_id"]]
+    for key, flips in m["roles"].items():
+        cr.update_role(biz, defs[key]["id"], flips)
+    st = next(s for s in db.t["church_role_settings"] if s["business_id"] == biz)
+    said = dict(m["settings"])
+    if "office_overseer_roles" in said:
+        said["office_overseer_roles"] = [defs[k]["id"] for k in said["office_overseer_roles"]]
+    st.update(said, map_by=church(db, biz)["owner_id"], map_at="2026-11-03T12:00:00+00:00")
+
+
+def build(monkeypatch, *, map_on: bool = True, filled: bool = True, migrated: bool = True) -> ThreeDB:
+    assert migrated or not filled, "a map needs its tables"
     db = ThreeDB(**{t: [] for t in TABLES}, businesses=[
         {"id": LOVE_CITY, "name": "Love City Church", "type": "ministry", "owner_id": LC_OWNER,
          "settings": {"practitioner_name": "Pastor Kevin", "timezone": "America/Detroit"}},
@@ -466,7 +534,7 @@ def build(monkeypatch, *, map_on: bool = True, filled: bool = True) -> ThreeDB:
                             _serve(GRACE, ["Usher Board", "Youth Ministry", "Kitchen Committee"]),
                             _serve(NEW_HOPE, ["Worship Team", "Youth Volunteers", "Kids Check-in", "Guest Experience",
                                               "Parking Team"])]
-    db.who, db.label = {}, {LC_OWNER: "owner", G_OWNER: "owner", NH_OWNER: "owner"}
+    db.who, db.label, db.migrated = {}, {LC_OWNER: "owner", G_OWNER: "owner", NH_OWNER: "owner"}, migrated
     for name in ("get", "post", "patch", "delete"):
         monkeypatch.setattr(sb_clients, f"sb_{name}_as_service", getattr(db, name))
     for k in ("CHURCH_DUTIES", "CHURCH_MONEY_LEVELS"):
@@ -478,10 +546,13 @@ def build(monkeypatch, *, map_on: bool = True, filled: bool = True) -> ThreeDB:
     monkeypatch.setattr(church_checks, "_church_owner_email", lambda u: OWNER_EMAIL.get(str(u), ""))
     # Fresh per-replica caches, put back after the test: this fake's answers
     # never reach the next test file on the same worker.
-    for mod, name in ((ca, "_MY_CACHE"), (cd, "_CACHE"), (cd, "_FAILED"), (member_asks, "_OWNER_CACHE")):
+    for mod, name in ((ca, "_MY_CACHE"), (cd, "_CACHE"), (cd, "_FAILED"), (member_asks, "_OWNER_CACHE"),
+                      (church_map, "_READY")):
         monkeypatch.setattr(mod, name, {})
     for b in db.t["businesses"]:
         cr.ensure_library(b)
     intent = {LOVE_CITY: _love_city(db), GRACE: _grace(db), NEW_HOPE: _new_hope(db)}
     db.map_intent = intent if filled else {}
+    for biz, m in db.map_intent.items():
+        write_map(db, biz, m)
     return db
