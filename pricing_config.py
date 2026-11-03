@@ -69,6 +69,26 @@ def _dial(bare: str, prefix: str, default: int) -> int:
     return _int_env([f"{prefix}{bare}", bare], default)
 
 
+def _float_dial(bare: str, prefix: str, default: float) -> float:
+    """_dial for a figure that isn't a whole number (a cost in cents).
+    Same names, same order, same rule: a value that doesn't parse, or is
+    below zero, logs a warning and falls back to the default."""
+    for name in (f"{prefix}{bare}", bare):
+        raw = (os.environ.get(name) or "").strip()
+        if not raw:
+            continue
+        try:
+            value = float(raw)
+        except ValueError:
+            value = -1.0
+        if 0 <= value < float("inf"):
+            return value
+        logger.warning(
+            f"[pricing] {name}={raw!r} is not a number of cents — "
+            f"falling back to default {default}")
+    return default
+
+
 # ─── Tier grants — monthly included credits ──────────────────────────
 # Replaces the 300/1000/3000 allowances from the 2026-07-12 spec. The
 # ~10x rescale is what makes per-action pricing expressible: at 300, a
@@ -489,6 +509,22 @@ def voice_input_price() -> int:
     2.63c at the Starter rate against 2.47c of cost, which is roughly
     break-even, and 3 is where it earns the same ~3x as everything else."""
     return _dial("VOICE_INPUT_PRICE", "PRICE_", 0)
+
+
+# ─── What a text costs us ────────────────────────────────────────────
+# A COST, not a price: what the platform pays Twilio for one billable
+# segment of an outbound text (twilio_sms.segments counts them). Texts are
+# never charged in credits; a church's plan carries a monthly text
+# allowance instead (sms_usage.texts_this_month). This dial only prices
+# the api_usage row each text writes, which is what the Costs view and
+# margin read.
+
+def sms_segment_cost_cents() -> float:
+    """One outbound segment, in cents. Default 1.25: Twilio's US list
+    price of $0.0083 a segment plus about $0.004 of carrier fees (10DLC
+    pass-through), rounded up so the books never read low. Move it with
+    COST_SMS_SEGMENT_CENTS when an invoice says otherwise."""
+    return _float_dial("SMS_SEGMENT_CENTS", "COST_", 1.25)
 
 
 # ─── The trial tank ──────────────────────────────────────────────────
@@ -950,6 +986,9 @@ def snapshot() -> Dict[str, object]:
             "chat": chat_price(),
             "concierge": concierge_price(),
             "premium_voice": premium_voice_price(),
+        },
+        "costs": {
+            "sms_segment_cents": sms_segment_cost_cents(),
         },
         "chat_daily_soft_ceiling": chat_daily_soft_ceiling(),
         "chat_ceiling_enforced": chat_ceiling_enforced(),

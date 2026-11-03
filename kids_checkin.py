@@ -188,7 +188,8 @@ async def text_code(biz: Dict[str, Any], phone: str, code: str, names: List[str]
             if await sms_service.is_opted_out(client, phone, str(biz["id"])):
                 return "opted_out"
             sender = await sms_service.sender_for(client, str(biz["id"]))
-        await run_in_threadpool(twilio_sms.send_sms, phone, body, from_number=sender)
+        await run_in_threadpool(twilio_sms.send_sms, phone, body, from_number=sender,
+                                business_id=str(biz["id"]), kind="pickup_code")
         return "sent"
     except Exception as e:
         logger.warning("pickup code text failed (%s) for business %s", type(e).__name__, biz.get("id"))

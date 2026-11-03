@@ -192,7 +192,7 @@ def test_the_text_skips_history_and_opt_outs(monkeypatch):
         raise AssertionError("sign-in codes must not go through the stored-history sender")
     monkeypatch.setattr(sms_service, "sender_for", _sender)
     monkeypatch.setattr(sms_service, "send_sms_core", _core)
-    monkeypatch.setattr(twilio_sms, "send_sms", lambda to, body, from_number=None: sent.append((to, body, from_number)) or "SM1")
+    monkeypatch.setattr(twilio_sms, "send_sms", lambda to, body, from_number=None, **kw: sent.append((to, body, from_number)) or "SM1")
     biz = {"id": BIZ, "name": "First Light"}
 
     async def _opted(client, phone, biz_id=None):

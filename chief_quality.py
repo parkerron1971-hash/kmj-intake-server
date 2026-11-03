@@ -213,6 +213,9 @@ async def report(c: httpx.AsyncClient, headers: Dict[str, str],
 
     usage = await _rows(c, headers, "api_usage", {
         "select": "endpoint,cost_cents,business_id",
+        # AI spend only, like the cap it is read against: texts are their
+        # own cost (sms_usage.py).
+        "endpoint": "neq.sms",
         "created_at": f"gte.{day_start.isoformat()}", "limit": "20000"})
     if usage is None:
         unseen.append("spend")

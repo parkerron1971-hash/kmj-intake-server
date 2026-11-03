@@ -34,6 +34,9 @@ which parts.
 COGS is api_usage.cost_cents, which as of the seam-metering change
 includes the 23 modules that never used to write a row. Numbers from
 before 2026-08-09 undercount; do not compare across that boundary.
+Since 2026-11-03 it also includes every outbound text (sms_usage.py),
+which is a cost of serving a business like its AI is; before that day
+texting cost was in no row at all.
 
 Everything is cents, integers where possible, and every function
 degrades to zeros rather than raising — a billing panel that 500s tells
