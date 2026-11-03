@@ -71,10 +71,11 @@ def build_iif(biz: str, year: Optional[int] = None) -> str:
         for a in accounts
     }
 
-    jes = sb_clients.sb_get_as_service(
+    # Every entry (paged past the 1,000-row cap), then in date order.
+    jes = sb_clients.sb_get_all_as_service(
         f"/journal_entries?business_id=eq.{biz}&status=eq.active"
-        f"&order=entry_date.asc,created_at.asc"
-        f"&select=id,entry_date,description,source_type,is_reversal&limit=50000") or []
+        f"&select=id,entry_date,created_at,description,source_type,is_reversal") or []
+    jes.sort(key=lambda j: (j.get("entry_date") or "", j.get("created_at") or ""))
     # Reversal entries filtered in Python (missing field == not a reversal).
     jes = [j for j in jes if not j.get("is_reversal")]
     if year:

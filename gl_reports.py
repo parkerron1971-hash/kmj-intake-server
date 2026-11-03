@@ -49,9 +49,9 @@ def gl_active(biz: str) -> bool:
 
 def effective_lines(biz: str) -> List[Dict[str, Any]]:
     """Ledger lines of ACTIVE, NON-REVERSAL journal entries only."""
-    jes = sb_clients.sb_get_as_service(
+    jes = sb_clients.sb_get_all_as_service(
         f"/journal_entries?business_id=eq.{biz}"
-        f"&select=id,status,is_reversal&limit=100000") or []
+        f"&select=id,status,is_reversal") or []
     # Missing status (pre-I.2 rows / DB default not echoed) counts as active.
     active: Set[str] = {j["id"] for j in jes
                         if (j.get("status") or "active") == "active"

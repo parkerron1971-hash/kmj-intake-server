@@ -297,10 +297,10 @@ def _summary_1099(biz: str, year: int) -> Dict[str, Any]:
     (the single source of truth — Stripe-transfer payments auto-create these;
     manual 1099 bills count too). $600 = the IRS 1099-NEC threshold."""
     start, end = f"{year}-01-01", f"{year}-12-31"
-    bills = sb_clients.sb_get_as_service(
+    bills = sb_clients.sb_get_all_as_service(
         f"/bills?business_id=eq.{biz}&status=eq.paid&is_1099_eligible=eq.true"
         f"&paid_at=gte.{start}&paid_at=lte.{end}T23:59:59"
-        f"&select=vendor_name,paid_amount,amount,contractor_id&limit=10000") or []
+        f"&select=id,vendor_name,paid_amount,amount,contractor_id") or []
     contractors = sb_clients.sb_get_as_service(
         f"/contractors?business_id=eq.{biz}"
         f"&select=id,name,email,onboarding_status,stripe_account_id&limit=500") or []
