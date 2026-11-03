@@ -36,8 +36,12 @@ fall retreat by Nov 15" couldn't be handed to the youth pastor. Now it can
                  the leader answers to (church_roles.chain_above from the
                  roles they hold, an empty role passed over; one email per
                  leader for all their newly late tasks). late_told_at is
-                 claimed the same way. A leader who holds no role with anyone
-                 above them (a group leader only) has no one to go up to: it
+                 claimed the same way. Where the church's map is open, the
+                 first step of their person chain (church_map.chain_for),
+                 and a group leader with no role goes to the department their
+                 group hangs from (its leader, else its overseer). A leader
+                 who holds no role with anyone above them (a group leader
+                 only) has no one to go up to: it
                  goes back to whoever handed it out (tasks.handed_by, stamped
                  by the database, APPLY-2026-10-27-task-handed-by.sql). With
                  no one to tell, late_told_at is set so it's never asked
@@ -562,12 +566,15 @@ def tell_new(biz: Dict[str, Any], rows: List[Dict[str, Any]], now: datetime, sta
             stats["unsent"] += 1
 
 
-def overseer(leader_id: str, all_roles: List[Dict[str, Any]], defs: List[Dict[str, Any]]
+def overseer(leader_id: str, all_roles: List[Dict[str, Any]], defs: List[Dict[str, Any]], m: Any = None
              ) -> Tuple[Optional[Dict[str, Any]], List[Dict[str, Any]]]:
     """Who this leader answers to: from the roles they hold (the church's
     library order), the nearest role above that someone holds (an empty one
-    passed over; the senior role tops every chain). (None, []) when they
-    hold no role with anyone above."""
+    passed over; the senior role tops every chain). Where the church's map
+    is open (`m`), the first step of their person chain instead
+    (church_map.chain_for: their department's overseer, the person they
+    answer to). (None, []) when they hold no role with anyone above."""
+    import church_map
     import church_roles as cr
     held = cr.active_holders(all_roles)
     by = cr.by_key(defs)
@@ -578,8 +585,33 @@ def overseer(leader_id: str, all_roles: List[Dict[str, Any]], defs: List[Dict[st
         role = by.get(str(r.get("role") or ""))
         if not role:
             continue
-        chain = cr.chain_above(role, defs, held, team=r.get("scope") or "", skip={leader_id})
+        if m:
+            chain = church_map.chain_for(m, defs, held, leader_id, role, team=r.get("scope") or "", skip={leader_id})
+        else:
+            chain = cr.chain_above(role, defs, held, team=r.get("scope") or "", skip={leader_id})
         if chain:
+            return chain[0]
+    return None, []
+
+
+def group_department(m: Any, business_id: str, leader_id: str, all_roles: List[Dict[str, Any]],
+                     defs: List[Dict[str, Any]]) -> Optional[Tuple[Optional[Dict[str, Any]], List[Dict[str, Any]]]]:
+    """A group leader who holds no role, where the church's map is open: the
+    first step to a department one of their groups hangs from (its leader,
+    else its overseer). (None, []) when none says; None when their groups
+    couldn't be read."""
+    import church_map
+    import church_roles as cr
+    import group_lead
+    if any(str(r.get("contact_id")) == leader_id and r.get("status") == "active" for r in all_roles):
+        return None, []
+    groups = group_lead.led_groups(business_id, leader_id)
+    if groups is None:
+        return None
+    held = cr.active_holders(all_roles)
+    for g in groups:
+        chain = church_map.chain_for(m, defs, held, leader_id, None, group_id=str(g["id"]), skip={leader_id})
+        if chain and chain[0][0].get("department_id"):
             return chain[0]
     return None, []
 
@@ -607,10 +639,12 @@ def tell_late(biz: Dict[str, Any], rows: List[Dict[str, Any]], now: datetime, st
     if not due:
         return
     b = str(biz["id"])
+    import church_map
     import church_roles as cr
     all_roles = cfu.roles(b)
     defs = cr.defs(b)
-    if all_roles is None or defs is None:
+    mp = church_map.opened(b)
+    if all_roles is None or defs is None or mp is None:
         return  # the chain can't be read now; the next sweep tries again
     eff = cfu._effective_defs(defs, all_roles)
     by_leader: Dict[str, List[Dict[str, Any]]] = {}
@@ -621,7 +655,12 @@ def tell_late(biz: Dict[str, Any], rows: List[Dict[str, Any]], now: datetime, st
         return
     reply_to = _office_email(biz)
     for lid, tasks in by_leader.items():
-        role, above = overseer(lid, all_roles, eff)
+        role, above = overseer(lid, all_roles, eff, mp)
+        if mp and not above:
+            got = group_department(mp, b, lid, all_roles, eff)
+            if got is None:
+                continue  # their groups couldn't be read; the next sweep tries again
+            role, above = got
         stamp = _iso(now)
         claimed = [t for t in tasks if _claim(b, t, "late_told_at", stamp)]
         if not claimed:

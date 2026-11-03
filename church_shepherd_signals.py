@@ -16,7 +16,8 @@ month. Then the late chain the church already uses, applied to shepherds.
   Who is told    the shepherd, in Monday's email. A week with no call,
                  visit, text or talk logged since the first missed Sunday:
                  the person the shepherd answers to (church_roles.
-                 chain_above, vacant roles passed over). A week more: one
+                 chain_above, vacant roles passed over; where the church's
+                 map is open, church_map.chain_for). A week more: one
                  step up. It stops at the top. They come back to church:
                  resolved.
   Birthdays      this week's, in the shepherd's Monday email (a child by
@@ -253,10 +254,16 @@ def open_signals(b: str) -> Optional[Dict[str, Dict[str, Any]]]:
 
 
 def _chain(ctx: Dict[str, Any], sid: str) -> List[Tuple[Dict[str, Any], List[Dict[str, Any]]]]:
+    """Each step above the shepherd: the map's person chain where the
+    church's map is open (church_map.chain_for: the person they answer to,
+    then on up), else the roles' chain."""
+    import church_map
     import church_roles as cr
     s = ctx["shepherds"].get(sid)
     if not s:
         return []
+    if ctx.get("map"):
+        return church_map.chain_for(ctx["map"], ctx["defs"], ctx["holders"], sid, s["role_def"], skip=[sid])
     return cr.chain_above(s["role_def"], ctx["defs"], ctx["holders"], skip=[sid])
 
 

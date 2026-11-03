@@ -59,9 +59,10 @@ DRIFT = {LC: [["Marcus"], ["Jessica"], ["Kevin"]], GR: [["Doris"], ["Samuel"], [
 
 # Grace passes from PR 4: its Deacon Board shepherds once the map says so, and
 # D2 leads no department and answers to no one, so today's chain (the Deacon
-# Board answers to the Pastor) is already the line PR 6's would give.
-@pytest.mark.parametrize("biz", [case(LC, 6, "Marcus answers to Jessica"), case(GR),
-                                 case(NH, 6, "each elder answers to one associate pastor")])
+# Board answers to the Pastor) is already the line PR 6's gives. Love City's
+# Marcus answers to Jessica, and each New Hope elder to one associate pastor
+# (PR 6, church_map.chain_for).
+@pytest.mark.parametrize("biz", [case(LC), case(GR), case(NH)])
 def test_2_a_drifting_youth_family_climbs_the_shepherds_own_line(db, monkeypatch, biz):
     assert drift_told(monkeypatch, db, biz) == DRIFT[biz]
 
@@ -85,12 +86,12 @@ def test_3_a_pay_back_asks_the_churchs_own_levels(db, biz):
 
 
 # 4. Y's late task, and Y's late follow-up a day on, email exactly Youth's
-# overseer; three days on, one person further up.
+# overseer (Grace's deacon D1; New Hope's A2 alone, never A1 or A3: PR 6);
+# three days on, one person further up.
 LATE = {LC: (["Andre"], ["Kevin"]), GR: (["Daniel"], ["Samuel"]), NH: (["Amara"], ["Nathan"])}
 
 
-@pytest.mark.parametrize("biz", [case(LC), case(GR, 6, "deacon D1 oversees Youth"),
-                                 case(NH, 6, "A2 alone oversees Youth; A1 and A3 are never emailed")])
+@pytest.mark.parametrize("biz", [case(LC), case(GR), case(NH)])
 def test_4_late_work_goes_to_youths_overseer_then_one_further(db, monkeypatch, biz):
     one, three = LATE[biz]
     assert late_task(monkeypatch, db, biz) == one

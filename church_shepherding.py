@@ -288,7 +288,7 @@ def load(biz_id: str, *, now: Optional[datetime] = None) -> Optional[Dict[str, A
     return {"biz": b, "now": now, "settings": st, "defs": all_defs, "holders": holders, "roles": roles,
             "shepherds": shepherds, "members": member_by, "homes": home_by, "adults_of": adults_of,
             "kids_of": kids_of, "homes_of": homes_of, "units": units, "assigned": assigned_by,
-            "last_touch": last_touch}
+            "last_touch": last_touch, "map": mp}
 
 
 def _placed(ctx: Dict[str, Any], u: Dict[str, Any]) -> Optional[str]:
@@ -926,7 +926,7 @@ def _member_ctx(b: str) -> Optional[Dict[str, Any]]:
     if all_defs is None or holder_rows is None or st is None or mp is None:
         return None
     holders = cr.active_holders(holder_rows)
-    return {"defs": all_defs, "holders": holders, "settings": st,
+    return {"defs": all_defs, "holders": holders, "settings": st, "map": mp,
             "shepherds": shepherds_from(role_rows(all_defs, st, mp), holders, st)}
 
 
@@ -939,12 +939,18 @@ def _lead_names(mctx: Dict[str, Any], skip: str = "") -> List[Dict[str, Any]]:
 
 
 def _chain(mctx: Dict[str, Any], me_id: str) -> List[str]:
+    """Who the shepherd answers to, nearest first: the map's person chain
+    where it is open (church_map.chain_for), else the roles' chain."""
+    import church_map
     import church_roles as cr
     s = mctx["shepherds"].get(me_id)
     if not s:
         return []
     names: List[str] = []
-    for _role, people in cr.chain_above(s["role_def"], mctx["defs"], mctx["holders"], skip=[me_id]):
+    m = mctx.get("map")
+    up = (church_map.chain_for(m, mctx["defs"], mctx["holders"], me_id, s["role_def"], skip=[me_id]) if m else
+          cr.chain_above(s["role_def"], mctx["defs"], mctx["holders"], skip=[me_id]))
+    for _role, people in up:
         for p in people:
             n = _plain(p.get("name"))
             if n and n not in names:
