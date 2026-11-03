@@ -190,13 +190,17 @@ def build_package_zip(biz: str, biz_name: str, settings: Optional[Dict[str, Any]
                       year: int, generated_by: str = "") -> Tuple[bytes, Dict[str, Dict[str, Any]]]:
     """Build the year-end ZIP. Returns (zip_bytes, report_payloads)."""
     import pdf_reports
+    import report_words
     from reports_router import _csv_rows, _REPORT_TITLES
 
+    # A church's package reads in its words, like its reports. (The IIF keeps
+    # the chart's stored names: QuickBooks matches accounts by name.)
+    voice = report_words.voice_for(biz)
     reports = _package_reports(biz, year)
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
         for key, data in reports.items():
-            title = _REPORT_TITLES.get(key, key)
+            title = report_words.title(key, _REPORT_TITLES.get(key, key), voice)
             label = (f"Period: {year}-01-01 – {year}-12-31"
                      if key in ("pl", "cash_flow", "general_ledger")
                      else f"As of {year}-12-31" if key != "summary_1099" else f"Tax year {year}")
@@ -206,6 +210,7 @@ def build_package_zip(biz: str, biz_name: str, settings: Optional[Dict[str, Any]
                     business_name=biz_name, settings=settings, report_title=title,
                     period_label=label, basis_label="Cash Basis", currency="USD",
                     generated_by=generated_by)
+                meta["voice"] = voice
                 z.writestr(f"{year}_{key}.pdf", pdf_reports.render(key, data, meta))
             except Exception as e:
                 logger.warning(f"[i6] PDF for {key} skipped: {e}")
@@ -214,7 +219,7 @@ def build_package_zip(biz: str, biz_name: str, settings: Optional[Dict[str, Any]
                 import csv as _csv
                 sbuf = io.StringIO()
                 w = _csv.writer(sbuf)
-                for r in _csv_rows(key, data):
+                for r in _csv_rows(key, data, voice):
                     w.writerow(r)
                 z.writestr(f"{year}_{key}.csv", sbuf.getvalue())
         # QuickBooks IIF of the ledger.

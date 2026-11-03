@@ -245,10 +245,9 @@ def cash_flow_forecast(biz: str) -> Dict[str, Any]:
         "monthly_history": [{"month": k, "net_flow": v} for k, v in hist],
         "trend": {"mean_monthly_flow": mean, "stdev": stdev, "months_used": n},
         "horizons": horizons,
-        "method": ("Trend from the last "
-                   f"{n} full months of GL cash activity (mean ± 1σ band). "
-                   "Open invoices/bills due in each horizon are shown "
-                   "separately — collection timing is yours to judge."),
+        "method": (f"Based on the last {n} full months of money in and out of the bank, "
+                   "with a likely range around it. Money already owed and bills already "
+                   "due are shown on their own, since when they get paid is up to people."),
     }
 
 
