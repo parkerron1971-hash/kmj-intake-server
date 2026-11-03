@@ -653,8 +653,10 @@ def _left_behind(d: Optional[Dict[str, Any]], by: Any) -> bool:
     was marked a draft from the office (save_department). A retry of that
     save takes it as its own instead of hitting its name. A department made
     on purpose with nothing hung from it is active, so it isn't one
-    (#1716 review)."""
-    if not d or d["units"] or d.get("status") != "draft" or d.get("source") != "office":
+    (#1716 review). A retry whose units saved but whose last "make it active"
+    patch failed is a draft WITH units; the same login's next save within
+    the window finishes it too, rather than hitting the name (#1718 review)."""
+    if not d or d.get("status") != "draft" or d.get("source") != "office":
         return False
     if not by or str(d.get("updated_by") or "") != str(by):
         return False

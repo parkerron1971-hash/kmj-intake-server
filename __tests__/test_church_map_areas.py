@@ -229,3 +229,19 @@ def test_a_chief_draft_of_a_title_it_cant_place_asks_the_owner(monkeypatch):
     made = asyncio.run(cca.handle_draft_church_role(None, church(db, LC), {"title": "First Lady", "job": "care"}))
     assert "Drafted the role “First Lady” on the Care job" in made["result"]
     assert len(db.t["church_role_defs"]) == before + 1 and _role(db, LC, "first_lady")["status"] == "draft"
+
+
+def test_a_failed_probe_is_a_503_never_a_pick_in_the_old_shape(monkeypatch):
+    """#1718 review: with state() unknown (a failed probe), placing or putting
+    back is a 503, never a write without by='church' (which would merge a
+    pick into a stored guess, or take a guess away)."""
+    import church_map as cm
+    db = build(monkeypatch, filled=False)
+    ca.build(church(db, LC))                       # a guess stored for each
+    before = [dict(r) for r in db.t["church_area_places"]]
+    monkeypatch.setattr(cm, "state", lambda: None)
+    for area in ("office", None):
+        with pytest.raises(HTTPException) as e:
+            _place(db, monkeypatch, "role", "evangelists", area)
+        assert e.value.status_code == 503
+    assert db.t["church_area_places"] == before, "nothing written"

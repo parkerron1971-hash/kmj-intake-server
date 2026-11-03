@@ -467,3 +467,26 @@ def test_the_routes_are_mounted_before_the_catch_all():
                      "/church/map/answers-to", "/church/map/settings"}
     src = open(os.path.join(ROOT, "kmj_intake_automation.py"), encoding="utf-8").read()
     assert src.index("app.include_router(church_map_router)") < src.rindex("app.include_router(public_site_router)")
+
+
+def test_a_retry_whose_last_make_it_active_fails_is_finished_by_the_next_save(lc, monkeypatch):
+    """#1718 review: the retry's units went in but the patch that makes it
+    active failed, leaving a draft WITH units. The same login's next save
+    within the window finishes it, rather than hitting its own name."""
+    post = _units_fail(monkeypatch)
+    body = {"name": "Kids", "units": [{"kind": "space", "label": "kids"}]}
+    _refused(_save, lc, body, code=503)
+    left = _dept(lc, LC, "Kids")
+    monkeypatch.setattr(sb_clients, "sb_post_as_service", post)
+    real, failed = sb_clients.sb_patch_as_service, []
+
+    def patch(path, body=None, *a, **k):
+        if isinstance(body, dict) and body.get("status") == "active" and not failed:
+            failed.append(path)
+            return None
+        return real(path, body, *a, **k)
+    monkeypatch.setattr(sb_clients, "sb_patch_as_service", patch)
+    _refused(_save, lc, body, code=503)
+    assert failed and _dept(lc, LC, "Kids")["status"] == "draft", "units in, still a draft"
+    again = _save(lc, body)
+    assert (again["id"], _dept(lc, LC, "Kids")["status"]) == (left["id"], "active")
