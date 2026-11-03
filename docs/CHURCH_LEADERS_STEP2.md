@@ -262,6 +262,19 @@ All go in `church_map_router.py`, behind `CHURCH_MAP`.
 - **`here`** lists `new`, `yours` and `waits`: a flip an active role of the church's doesn't have yet, and a shape's picks the settings don't name, each in before → after words. A draft of the church's gets no waits.
 - **Both routes are a 503 before step 2's file** (§1.3), though search names no step-2 column.
 
+**As built in B4b** (`church_templates.adopt`; `POST /church/map/templates/adopt`):
+- **Up to two rows, not one.** The drafts are one applied change (origin `'template'`), which Undo takes out. What a live row would get waits as a second, pending change: a flip an active copy lacks, a shape's two picks, and the board's yes even on a new copy. That covers a department too: Prayer's `can_lead` on a live leader role waits. A draft the church already has gets no waits and is never edited.
+- **Money.** The board's yes always waits for the owner. An admin may adopt multi-staff: staging isn't making, and only the owner applies or discards it (B3a's rule).
+- **Picks** go in unchecked, since a pick may be a draft this adoption made. B10's launch makes roles live before it applies changes. Applying sooner is a 409 ("A draft role can be picked once it’s live", new `save_settings` wording).
+- **Already yours** (`mine`) means nothing is made. For a role or a department the church has, that includes its leader role: correcting B4a's `here()`, which listed that leader as new. `here()` and `adopt()` now share one reading, so the waits `here()` lists are the pending change's lines.
+- **`name`** makes a second copy of a role or a department. A role whose title is taken is a 400 like a department's ("There’s already a role called …"). A shape takes no name, and `tradition` picks only a department's or a shape's seats: a role's key names its row.
+- **A role copy** is made as `ensure_library` makes the row, through `create_role` (key from the title):
+  - its handles and teams come from the Serve card, its switches are its row's plus the flips (but the board's yes), and its definition is filled;
+  - it answers to the church's copy of the role its row names, else to the active senior role;
+  - a draft made in the same adoption isn't linked yet (session 3, or launch).
+- **Units:** a suggestion fills a unit only when exactly one of the church's things matches it: the space, one Serve team, one group (by `words`). A thing that already hangs from a department, or that an earlier department in the same adoption took, is passed over.
+- **Again** stages nothing that a waiting ready-made change already holds. After a discard, adopting again suggests it again.
+
 ## 3. Church setup sessions
 
 ### 3.1 Reusing the Academy engine
