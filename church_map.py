@@ -243,6 +243,23 @@ def state() -> Optional[bool]:
     return False if isinstance(base, list) else None
 
 
+def step2_state() -> Optional[bool]:
+    """state(), for step 2's file (APPLY-2026-11-05-church-map-step2.sql):
+    True when church_map_changes answers (remembered once it does); False
+    when it doesn't but the roles table does (the file isn't applied, so a
+    save runs as before and logs nothing); None when the probe itself failed."""
+    if _READY.get("step2"):
+        return True
+    try:
+        if isinstance(sb_clients.sb_get_as_service("/church_map_changes?select=id&limit=1"), list):
+            _READY["step2"] = True
+            return True
+        base = sb_clients.sb_get_as_service("/church_role_defs?select=id&limit=1")
+    except Exception:
+        return None
+    return False if isinstance(base, list) else None
+
+
 _ONCE: "contextvars.ContextVar[Optional[Dict[str, Any]]]" = contextvars.ContextVar("church_map_once", default=None)
 
 
@@ -716,19 +733,22 @@ def _refused(bid: str, did: Optional[str], name: str = "", units: Iterable[Dict[
     return HTTPException(400, why) if why else HTTPException(503, UNSAVED)
 
 
-def save_department(biz: Any, body: Dict[str, Any], by: Any) -> Dict[str, Any]:
+def save_department(biz: Any, body: Dict[str, Any], by: Any, *, m: Optional[Map] = None,
+                    dry: bool = False) -> Dict[str, Any]:
     """Make (no `id`) or change a department, and replace what hangs from it
     when `units` is given ([{kind, ref | label}]). Only what the request
     names is checked and changed; the rest is the gaps list's to flag. The
     leader must hold an active role that leads, the overseer one that can
     oversee, and they are two people; the duty is one of church_duties'; the
     area one of the eight. Archived, a department lets go of what hung from
-    it. Returns the saved row with its units."""
+    it. Returns the saved row with its units. `dry` (church_map_batch's
+    check first) runs every check against `m` and returns what it would
+    save, writing nothing."""
     import church_areas as ca
     import church_duties as cd
     bid, body = _bid(biz), dict(body or {})
     q = _q(bid)
-    m = _map(bid)
+    m = m if m is not None else _map(bid)
     did = _id(body["id"], "department") if body.get("id") else None
     cur = next((d for d in m.departments if d["id"] == did), None) if did else None
     if did and cur is None:          # archived ones aren't on the map
@@ -783,6 +803,10 @@ def save_department(biz: Any, body: Dict[str, Any], by: Any) -> Dict[str, Any]:
     if clash:
         _bad(f"There’s already a department called {clash['name']}")
     units = _units_in(bid, m, did, body["units"]) if body.get("units") is not None and status != "archived" else None
+    if dry:
+        return {"leader_contact_id": None, "overseer_contact_id": None, "support_duty": None, "area": None,
+                "source": "office", "sort": 0, **after, "id": did or "", "status": status,
+                "units": [] if status == "archived" else units if units is not None else (cur or {}).get("units") or []}
     stamp = {"updated_by": str(by) if by else None, "updated_at": datetime.now(timezone.utc).isoformat()}
     if cur is None:
         saved = sb_clients.sb_post_as_service("/church_departments", {
@@ -839,10 +863,10 @@ def archive_department(biz: Any, department_id: Any, by: Any) -> Dict[str, Any]:
     return save_department(biz, {"id": department_id, "status": "archived"}, by)
 
 
-def set_answers_to(biz: Any, holder_id: Any, answers_to: Any) -> Dict[str, Any]:
+def set_answers_to(biz: Any, holder_id: Any, answers_to: Any, *, dry: bool = False) -> Dict[str, Any]:
     """Who one holder row (a person in a role) answers to, or nobody (None):
     a person here who holds an active role, never the holder themselves.
-    Returns the saved row."""
+    Returns the saved row (`dry`: checked, and the row it would save)."""
     _tables_open()
     bid = _bid(biz)
     hid = _id(holder_id, "role holder")
@@ -856,6 +880,8 @@ def set_answers_to(biz: Any, holder_id: Any, answers_to: Any) -> Dict[str, Any]:
         _bad("They don’t hold a role here yet, so nobody can answer to them. Give them a role first.")
     if (str(rows[0].get("answers_to_contact_id") or "") or None) == to:
         return rows[0]
+    if dry:
+        return {**rows[0], "answers_to_contact_id": to}
     saved = sb_clients.sb_patch_as_service(f"/church_leader_roles?id=eq.{_q(hid)}&business_id=eq.{_q(bid)}",
                                            {"answers_to_contact_id": to})
     if not isinstance(saved, list) or not saved:
@@ -863,14 +889,16 @@ def set_answers_to(biz: Any, holder_id: Any, answers_to: Any) -> Dict[str, Any]:
     return saved[0]
 
 
-def save_settings(biz: Any, body: Dict[str, Any], by: Any, role: str) -> Dict[str, Any]:
+def save_settings(biz: Any, body: Dict[str, Any], by: Any, role: str, *, m: Optional[Map] = None,
+                  dry: bool = False) -> Dict[str, Any]:
     """The church's money levels (cents; None is the platform's) and its
     role picks: who gives the pastor's yes, who oversees the office (lists of
     the church's active roles; [] is "none named"). Only the owner changes a
     money level (decision 3). A change stamps map_by/map_at and logs a line
-    with what it was and is; the same values again change nothing."""
+    with what it was and is; the same values again change nothing. `dry`
+    checks against `m` and returns what it would save."""
     bid, body = _bid(biz), dict(body or {})
-    m = _map(bid)
+    m = m if m is not None else _map(bid)
     cur, out = m.settings, {}
     for k in LEVELS:
         if k in body:
@@ -902,6 +930,8 @@ def save_settings(biz: Any, body: Dict[str, Any], by: Any, role: str) -> Dict[st
                 out[k] = ids
     if not out:
         return {"settings": cur, "changed": False}
+    if dry:
+        return {"settings": {**cur, **out}, "changed": True}
     saved = sb_clients.sb_post_as_service("/church_role_settings?on_conflict=business_id", {
         "business_id": bid, **out, "map_by": str(by), "map_at": datetime.now(timezone.utc).isoformat()},
         prefer="resolution=merge-duplicates,return=representation")
