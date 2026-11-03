@@ -448,7 +448,7 @@ a{color:#F5F6F8}a:hover{color:#FCD34D}
 <li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Answers only from what's public on your site</span></li>
 <li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Never makes up a time or a price</span></li>
 <li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Passes anything hard to a person at the church</span></li>
-<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>On the Professional plan and up</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>{{#VISITORS_PLAN}}On the Professional plan and up{{/VISITORS_PLAN}}</span></li>
 </ul>
 </div>
 <div class="vis vs" style="min-height: 540px">
@@ -526,9 +526,9 @@ a{color:#F5F6F8}a:hover{color:#FCD34D}
 <p class="eyebrow" style="color: #5A5E6B">Plans</p>
 <h2 class="h2">The website comes with <span class="serif ink" style="font-size: 1.08em">every plan.</span></h2>
 </div>
-<p class="body" style="max-width: 440px">The site, sermons and events are on every plan. The bigger plans add Chief's help with visitors, with posts and with clips.</p>
+<p class="body" style="max-width: 440px">{{#SITE_PLANS_LEDE}}The site, sermons and events are on every plan. The bigger plans add Chief's help with visitors, with posts and with clips.{{/SITE_PLANS_LEDE}}</p>
 </div>
-<div class="planrow">
+{{#PLAN_STRIP}}<div class="planrow">
 <div class="plan"><span class="pn">Starter</span><span class="pp">${{P_STARTER}} <small>a month</small></span><ul>
 <li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>Your website, on your own domain</li>
 <li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>Sermons by series, on the site and in the app</li>
@@ -544,7 +544,7 @@ a{color:#F5F6F8}a:hover{color:#FCD34D}
 <li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>Short captioned clips from your sermon recordings</li>
 <li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>Ten hours of recordings a month included</li>
 </ul></div>
-</div>
+</div>{{/PLAN_STRIP}}
 <a href="/churches#pricing" style="align-self: flex-start; font-weight: 600; color: #0B0C11">Compare every plan</a>
 </div>
 </section>

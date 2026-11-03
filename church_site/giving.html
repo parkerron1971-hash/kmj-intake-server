@@ -282,11 +282,11 @@ a{color:#F5F6F8}a:hover{color:#86EFAC}
 <div class="txt">
 <p class="eyebrow ink">Funds</p>
 <h2 class="h2">Funds kept apart. <span class="serif ink" style="font-size: 1.08em">Books that balance.</span></h2>
-<p class="body">Givers pick the fund on every plan. On Professional and up, the books keep each restricted fund apart for you, so the building fund never pays the light bill.</p>
+<p class="body">{{#FUNDS_LEDE}}Givers pick the fund on every plan. On Professional and up, the books keep each restricted fund apart for you, so the building fund never pays the light bill.{{/FUNDS_LEDE}}</p>
 <ul class="ticks">
 <li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Your own funds, named the way your church says them</span></li>
 <li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Restricted gifts posted to their own line in the books</span></li>
-<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Month-end and year-end close on Professional</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>{{#FUNDS_CLOSE}}Month-end and year-end close on Professional{{/FUNDS_CLOSE}}</span></li>
 </ul>
 </div>
 <div class="vis">
@@ -314,7 +314,7 @@ a{color:#F5F6F8}a:hover{color:#86EFAC}
 <ul class="ticks" style="color: #D5D8DF">
 <li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>One statement per giver, every gift and fund listed</span></li>
 <li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>Emailed to every giver at once</span></li>
-<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>990 prep on the Solutionist plan</span></li>
+<li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg><span>{{#PREP_990}}990 prep on the Solutionist plan{{/PREP_990}}</span></li>
 </ul>
 </div>
 <div class="vis" style="min-height: 520px">
@@ -382,7 +382,7 @@ a{color:#F5F6F8}a:hover{color:#86EFAC}
 </div>
 <p class="body" style="max-width: 440px">No platform fee on any plan. Stripe's own card fees apply, and registered nonprofits can ask Stripe for its lower rate.</p>
 </div>
-<div class="planrow">
+{{#PLAN_STRIP}}<div class="planrow">
 <div class="plan"><span class="pn">Starter</span><span class="pp">${{P_STARTER}} <small>a month</small></span><ul>
 <li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>The give page and giving in the app</li>
 <li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>Funds and monthly gifts</li>
@@ -398,7 +398,7 @@ a{color:#F5F6F8}a:hover{color:#86EFAC}
 <li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>990 prep, and an audit trail of every change to a closed month</li>
 <li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>A seat for your accountant</li>
 </ul></div>
-</div>
+</div>{{/PLAN_STRIP}}
 <a href="/churches#pricing" style="align-self: flex-start; font-weight: 600; color: #0B0C11">Compare every plan</a>
 </div>
 </section>

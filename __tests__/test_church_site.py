@@ -12,6 +12,10 @@ Holds:
      a real anchor on it); ChurchSavvy is linked only once it has a site.
   4. THE ROUTES: switched on, the section serves; switched off, /churches
      is the old edition and the product paths go to the catch-all as before.
+  6. THE CHURCH PLANS BY SIZE: while PLAN_CHURCH_OFFERED is off the pages
+     are what they were; on, the overview draws Small / Growing /
+     Established / Large from the dials, the product pages' strips and
+     plan prose follow, and the founding seat gives way to the move.
 """
 from __future__ import annotations
 
@@ -38,6 +42,8 @@ def _defaults(monkeypatch):
     import stripe_billing
     monkeypatch.setenv("CHURCH_SITE", "on")
     monkeypatch.delenv("CHURCHSAVVY_URL", raising=False)
+    monkeypatch.delenv("PLAN_CHURCH_OFFERED", raising=False)
+    monkeypatch.delenv("CHURCH_OFFERED", raising=False)
     monkeypatch.setitem(mp._FOUNDER_CACHE, "taken", None)
     monkeypatch.setitem(mp._FOUNDER_CACHE, "at", 0.0)
     monkeypatch.setattr(stripe_billing, "_founder_price_ids", lambda: [])
@@ -52,6 +58,7 @@ def _all():
 def test_every_page_fills_every_token_and_drops_the_canvas():
     for path, html in _all().items():
         assert not re.search(r"\{\{\s*[A-Za-z_]+\s*\}\}", html), path
+        assert "{{" not in html, path                                       # no section marker either
         for leftover in (".dc.html", "/_blob/", "<x-dc>", "<helmet>", "support.js", 'href="#start"',
                          'href="#signin"', 'href="#founder"', "data-dc-script"):
             assert leftover not in html, (path, leftover)
@@ -278,3 +285,184 @@ def test_the_main_site_menus_lead_to_the_churches():
         assert 'href="/churches">Churches</a>' in block and 'href="/coaches">Coaches</a>' in block
     for page in (mp.render_features(), mp.render_compare(), mp.render_faq(), mp.render_about()):
         assert page.count('<a href="/churches">Churches</a>') == 2          # the top menu and the phone menu
+
+
+# ─── 6. the church plans by size ────────────────────────────────────
+
+_SIZES = ("Up to 100 people on a Sunday", "100–250 people on a Sunday", "250–500 people on a Sunday",
+          "500–1,500 people on a Sunday")
+
+
+@pytest.fixture
+def by_size(monkeypatch):
+    monkeypatch.setenv("PLAN_CHURCH_OFFERED", "1")
+
+
+def _cards(html):
+    start = html.index('<div class="plans four">')
+    block = html[start:html.index("On every plan</b>", start)]
+    return re.split(r'(?=<div class="pc[ "])', block)[1:]
+
+
+def _strip(html):
+    return re.search(r'<div class="planrow[^"]*">.*?\n</div>\n', html, flags=re.S).group(0)
+
+
+def test_switched_off_the_pages_keep_the_public_ladder():
+    assert not cs.plans_by_size()
+    html = cs.render("")
+    assert '<div class="plans">' in html and 'class="plans four"' not in html
+    assert "Every plan is <b" in html and "Priced by" not in html
+    for name in ("Starter", "Professional", "Solutionist"):
+        assert f'<span class="pname">{name}</span>' in html, name
+    assert "Small Church" not in html and "Multi-site" not in html
+    assert "on Starter, " in html                                         # the conversations line
+    for slug in cs.PRODUCTS:
+        page = cs.render(slug)
+        assert '<div class="planrow">' in page and 'class="planrow four"' not in page, slug
+        assert '<span class="pn">Professional</span>' in page and "Small Church" not in page, slug
+
+
+def test_switched_off_a_page_is_its_template_without_the_markers():
+    """Off, a section's own words stand, character for character."""
+    for slug, meta in cs.PAGES.items():
+        raw = cs._read(meta["file"])
+        assert cs._sections(raw) == cs._SECTION.sub(lambda m: m.group(2), raw)
+        assert "{{#" not in cs._sections(raw) and "{{/" not in cs._sections(raw), slug
+
+
+def test_every_section_has_words_for_the_church_plans(by_size):
+    named = set()
+    for meta in cs.PAGES.values():
+        names = cs._SECTION.findall(cs._read(meta["file"]))
+        assert names, meta["file"]
+        named |= {n for n, _ in names}
+    assert named == set(cs._by_size()), named ^ set(cs._by_size())
+
+
+def test_the_overview_draws_four_plans_from_the_dials(by_size):
+    html = cs.render("")
+    cards = _cards(html)
+    assert len(cards) == 4
+    assert [re.search(r'class="pname">([^<]+)<', c).group(1) for c in cards] == [
+        "Small Church", "Growing Church", "Established Church", "Large Church"]
+    assert [c.startswith('<div class="pc mid">') for c in cards] == [False, True, False, False]   # Growing is lit
+    for price, year in (("79", "790"), ("149", "1,490"), ("299", "2,990"), ("599", "5,990")):
+        assert f'data-m="{price}" data-y="{year}">{price}<' in html, price
+    for card, size, logins, texts, hours in zip(cards, _SIZES, (3, 8, 15, 35), ("500", "1,500", "3,000", "8,000"),
+                                                (2, 5, 10, 20)):
+        assert f'<div class="pds">{size}.</div>' in card
+        assert f"<span>{logins} office logins</span>" in card
+        assert f"<span>{texts} texts a month</span>" in card
+        assert f"<span>Clips from {hours} hours of sermons a month</span>" in card
+        assert "<span>Your own texting number and text-to-give</span>" in card
+        assert "<span>Full books, budgets and the donors report</span>" in card
+    assert [("an audit trail" in c.lower()) for c in cards] == [False, False, True, True]
+    assert [("Up to 3 organizations, like a church and its school" in c) for c in cards] == [False, False, False, True]
+    assert [re.search(r"Chief thinks <b>(\w+)</b>", c).group(1) for c in cards] == \
+        ["Standard", "Advanced", "Maximum", "Maximum"]
+    # Meters measured against the four church plans: 3,000 / 7,500 / 17,500 of 30,000.
+    assert [re.search(r'class="mbar"><i style="width: (\d+)%"', c).group(1) for c in cards] == ["10", "25", "58", "100"]
+    assert [re.search(r"<b>([\d,]+)</b><span>AI actions", c).group(1) for c in cards] == \
+        ["3,000", "7,500", "17,500", "30,000"]
+    # The heading, the lede and the conversations line speak in sizes.
+    assert "Priced by <b style=\"font-weight: 600\">your church's size.</b>" in html
+    assert "Your plan is set by how many people come on a Sunday" in html
+    assert "about 250 conversations a month on Small, 625 on Growing, 1,450 on Established and 2,500 on Large" in html
+    for gone in ("Starter", "Professional", "Every plan is <b", "Founding seat"):
+        assert gone not in html, gone
+
+
+def test_the_move_takes_the_founding_seats_place(by_size, monkeypatch):
+    monkeypatch.setattr(v3, "_founder_state",
+                        lambda: {"limit": 50, "taken": 3, "left": 47, "next": 4, "price": 99,
+                                 "list_price": 149, "credits": 5000})
+    html = cs.render("")
+    assert "Founding seat" not in html and "Claim seat" not in html and "plan=founder" not in html
+    assert ("Over 1,500 people or more than one campus? Multi-site starts at $999 a month. Extra texts are $20 per "
+            "1,000. One more office login is $15 a month. Moving from another system costs three months of your "
+            "plan, and the first five churches move free.") in html
+    assert "On every plan</b>" in html                                      # the strip stays
+    assert "no cut of giving" in html                                       # and the fine print
+
+
+def test_moving_a_dial_moves_the_page(by_size, monkeypatch):
+    monkeypatch.setenv("PRICE_TIER_CHURCH_GROWING_CENTS", "15900")
+    monkeypatch.setenv("LIMIT_CHURCH_GROWING_SEATS", "9")
+    monkeypatch.setenv("LIMIT_CHURCH_SMALL_TEXTS", "600")
+    monkeypatch.setenv("LIMIT_CHURCH_LARGE_CLIP_HOURS", "1")
+    monkeypatch.setenv("CREDITS_CHURCH_LARGE_CREDITS", "35000")
+    monkeypatch.setenv("PRICE_MULTI_SITE_FROM_CENTS", "120000")
+    monkeypatch.setenv("PRICE_EXTRA_LOGIN_CENTS", "1250")
+    monkeypatch.setenv("LIMIT_FOUNDING_CHURCH_MOVES", "1")
+    html = cs.render("")
+    cards = _cards(html)
+    assert 'data-m="159" data-y="1,590">159<' in html and 'data-m="149"' not in html
+    assert "<span>9 office logins</span>" in cards[1] and "<span>600 texts a month</span>" in cards[0]
+    assert "<span>Clips from 1 hour of sermons a month</span>" in cards[3]
+    assert "<b>35,000</b>" in cards[3] and 'style="width: 50%"' in cards[2]  # 17,500 of 35,000
+    assert "Multi-site starts at $1,200 a month" in html and "One more office login is $12.50 a month" in html
+    assert "and the first church moves free." in html
+    assert "$159" in cs.render("giving") and "9 office logins" in cs.render("member-app")
+
+
+def test_the_product_pages_strips_follow(by_size):
+    for slug in cs.PRODUCTS:
+        page = cs.render(slug)
+        strip = _strip(page)
+        assert strip.startswith('<div class="planrow four">'), slug
+        assert re.findall(r'<span class="pn">([^<]+)</span>', strip) == [
+            "Small Church", "Growing Church", "Established Church", "Large Church"], slug
+        assert re.findall(r'<span class="pp">\$(\d+) <small>', strip) == ["79", "149", "299", "599"], slug
+        for words in (*_SIZES, "3 office logins", "8 office logins", "15 office logins", "35 office logins",
+                      "1,500 texts a month", "7,500 AI actions a month", "Clips from 20 hours of sermons a month"):
+            assert words in strip, (slug, words)
+        assert strip.count('class="plan mid"') == 1 and '<div class="plan mid"><span class="pn">Growing' in strip
+        for gone in ("Starter", "Professional", "Solutionist plan", "on Solutionist"):
+            assert gone not in page, (slug, gone)
+        assert 'href="/churches#pricing"' in page                           # Compare every plan stays
+
+
+def test_the_plan_prose_is_held_to_the_gates(by_size):
+    """The product pages say 'every plan' only where every church plan has
+    it, and name the plans that carry the rest."""
+    import feature_gates as fg
+    every = ("vertical_ledgers", "period_close", "vertical_reports", "reports_full", "chief_bookkeeping",
+             "site_concierge", "marketing_week", "ai_clips", "dedicated_sms_number")
+    for feature in every:
+        assert all(feature in fg.plan_features(p) for p in fg.CHURCH_PLANS), feature
+    assert [("accountant_collaborator" in fg.plan_features(p)) for p in fg.CHURCH_PLANS] == [False, False, True, True]
+    giving, books, site, app = (cs.render(s) for s in ("giving", "office-and-books", "website-and-sermons", "member-app"))
+    assert "the books keep each restricted fund apart for you, on every plan" in giving
+    assert "Month-end and year-end close on every plan" in giving and "990 prep on every plan" in giving
+    assert "Budget against actual on every plan" in books
+    assert "3 office logins on Small, 8 on Growing, 15 on Established and 35 on Large" in books
+    assert "A seat for your accountant on Established and Large" in books
+    assert "Established and Large add an audit trail and a seat for your accountant." in books
+    assert books.count("<span>On every plan</span>") == 2                  # the close and Chief's sorting
+    assert "<span>On every plan</span>" in site and "sermon clips are on every plan" in site
+    assert "sign-in codes are texted from your church's own number" in app
+
+
+def test_by_size_every_page_is_whole_true_and_linked(by_size):
+    pages = _all()
+    for path, html in pages.items():
+        assert "{{" not in html, path
+        assert brand_voice.offenses(html) == [], path
+        for target in re.findall(r'href="(/churches[^"]*)"', html):
+            page, _, anchor = target.partition("#")
+            assert page in pages and (not anchor or f'id="{anchor}"' in pages[page]), (path, target)
+        assert "love-city" not in html.lower(), path
+    assert pages["/churches"].count('href="https://mysolutionist.app/start" class="pbtn"') == 4
+
+
+def test_the_faq_says_how_logins_come(monkeypatch):
+    html = mp.render_faq()
+    assert "adds staff seats" not in html
+    assert ("Office logins come with every plan: one on Starter, three on Professional and seven on "
+            "Solutionist.") in html
+    monkeypatch.setenv("PLAN_CHURCH_OFFERED", "1")
+    html = mp.render_faq()
+    assert ("Churches pick a plan by how many people come on a Sunday, and each plan comes with its office logins: "
+            "3 on Small, 8 on Growing, 15 on Established and 35 on Large.") in html
+    assert "Office logins come with every plan: one on Starter" not in html
