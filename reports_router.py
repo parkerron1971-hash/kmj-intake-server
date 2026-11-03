@@ -41,7 +41,7 @@ _REPORT_FEATURES: Dict[str, str] = {
     "budget_vs_actual": "reports_full", "profitability": "reports_full",
     "trends": "reports_full",
     "summary_1099": "contractor_payments",
-    "trust_reconciliation": "vertical_reports", "donors": "vertical_reports",
+    "trust_reconciliation": "vertical_reports", "funds": "vertical_reports", "donors": "vertical_reports",
     "prep_990": "vertical_reports",
     "audit_trail": "audit_trail",
 }
@@ -612,8 +612,14 @@ def revenue(biz: str, period: str = "this_month",
         data = gl_reports_t2.revenue_report(biz, period, from_, to)
         if report_words.is_faith(report_words.voice_of(biz_row.get("type"))):
             # Totals by fund and by way: no names, so outside the Giving lock.
+            # A failed gifts read leaves the two tables out (and says so);
+            # the ledger's report still stands.
             start, end = reports_engine.period_bounds(period, from_, to)
-            data.update(giving_reports.by_fund_and_way(biz, start, end))
+            try:
+                data.update(giving_reports.by_fund_and_way(biz, start, end))
+            except HTTPException:
+                print(f"[reports] gifts by fund unavailable for {biz}", flush=True)
+                data["gift_tables_unavailable"] = True
         return _givers_hidden(biz, user, data)
     except ValueError as e:
         raise HTTPException(400, str(e))
@@ -769,6 +775,7 @@ def funds_report(biz: str, period: str = "this_year",
     require_finance(biz, user)
     biz_row = _owner_or_reader(biz, user)
     _giving_wall(biz, user)
+    billing_limits.require_feature(biz, "vertical_reports")
     period, from_, to = _fiscal_period(biz_row, period, from_, to)
     try:
         return _funds_or_503(giving_reports.funds_report, biz, period, from_, to)
@@ -791,6 +798,7 @@ def givers_list(biz: str, year: Optional[int] = None,
     require_finance(biz, user)
     _owner_or_reader(biz, user)
     _giving_wall(biz, user)
+    billing_limits.require_feature(biz, "vertical_reports")
     return giving_reports.givers(biz, _report_year(year))
 
 
@@ -802,6 +810,7 @@ def giver_history(biz: str, contact_id: str, year: Optional[int] = None,
     require_finance(biz, user)
     _owner_or_reader(biz, user)
     _giving_wall(biz, user)
+    billing_limits.require_feature(biz, "vertical_reports")
     if not _re.match(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", contact_id or "", _re.I):
         raise HTTPException(400, "contact_id must be a uuid")
     return giving_reports.giver_history(biz, contact_id, _report_year(year))

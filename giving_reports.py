@@ -54,9 +54,16 @@ def _window(period: str, custom_from: Optional[str], custom_to: Optional[str]) -
 # ─── Funds ────────────────────────────────────────────────────────────
 
 def _configured(biz: str) -> List[str]:
+    """The church's funds from Settings, Giving. A failed read is a 503:
+    never the default list standing in for the church's own."""
     import sb_clients
+    from fastapi import HTTPException
+    from urllib.parse import quote
     from giving_router import configured_funds
-    rows = sb_clients.sb_get_as_service(f"/businesses?id=eq.{biz}&select=settings&limit=1") or []
+    rows = sb_clients.sb_get_as_service(
+        f"/businesses?id=eq.{quote(str(biz), safe='')}&select=settings&limit=1")
+    if rows is None:
+        raise HTTPException(503, "Your funds couldn't be read just now. Try again.")
     settings = (rows[0].get("settings") if rows else None) or {}
     return configured_funds((settings.get("giving") or {}) if isinstance(settings, dict) else {})
 

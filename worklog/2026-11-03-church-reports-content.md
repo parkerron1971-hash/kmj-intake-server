@@ -15,6 +15,7 @@ decisions:
   - "Giving & income for a church or nonprofit adds by_fund and by_way (giving_ways.method_label: Online, Cash, Check, Cash App...). Totals without names, so outside the Giving lock like the other totals"
   - "GET /reports/funds, /reports/givers?year, /reports/giver-history?contact_id&year: the Givers gates (require_finance, _owner_or_reader, the Giving & money keeper). A failed Funds-tab read is a 503, never no spending"
   - "Budget for a church or nonprofit: rows in its own line names (report_words.line_names, shared with the account names), income as Giving & income; no Profit First amounts made up from a business allocator. A business is unchanged"
+  - "Review: the three routes and the Funds export are on the vertical_reports plan like Givers; a failed gifts read leaves the two Giving & income tables out (gift_tables_unavailable) instead of breaking the report; a failed settings read is a 503, never the default fund list"
   - "Funds exports as CSV and PDF (its own PDF table); the Giving & income PDF gains the two gift tables and church headings"
 related: [2026-11-03-reports-church-labels.md, 2026-10-31-funds-for-the-year.md]
 ---
