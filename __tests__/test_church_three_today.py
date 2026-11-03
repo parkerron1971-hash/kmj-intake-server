@@ -190,8 +190,8 @@ T, P, B = "treasurer", "pastor", "board"
 MONEY = {
     LC: ({18_000: [T], 25_000: [T], 60_000: [T, P]},
          {T: ["Minnie", "owner"], P: ["owner"], B: [], "board people": ["Marcus", "Tanya"]}),
-    # WRONG for Grace and New Hope (PR 7): the platform's $500 / $2,500, not $200 / $1,000 or $1,000 / $5,000;
-    # and New Hope's elders give no board yes (can_board_yes).
+    # Grace's $200 / $1,000, New Hope's $1,000 / $5,000 and its elders' board yes are its map's settings and
+    # switches: on an empty map, the platform's $500 / $2,500 and the boards (PR 7, test_church_map_settings).
     GR: ({18_000: [T], 25_000: [T], 60_000: [T, P]}, {T: ["Thelma", "owner"], P: ["owner"], B: [], "board people": []}),
     NH: ({18_000: [T], 25_000: [T], 60_000: [T, P]}, {T: ["Tessa", "owner"], P: ["owner"], B: [], "board people": []}),
 }
@@ -205,18 +205,24 @@ def test_money_levels_today(db, biz):
 # ─── The office's overseers, and a room request ───────────────────────
 
 OFFICE = {
-    LC: (["Jessica"], ["Jessica"], ["Minnie", "Naiya", "owner"]),  # Jessica holds Rooms but isn't phoned (PR 7)
+    LC: (["Jessica"], ["Jessica"], ["Minnie", "Naiya", "owner"]),  # Jessica holds Rooms but isn't phoned
     GR: ([], ["owner"], ["Sharon", "Thelma", "owner"]),
-    # WRONG for New Hope (PR 7): the Director of Operations (Owen) oversees the office.
+    # New Hope's Director of Operations (Owen) oversees the office once its map names the role (PR 7).
     NH: ([], ["owner"], ["Olive", "Owen", "Tessa", "owner"]),
 }
+# Where the map is open, empty too, a room request phones the rooms duty's holders (PR 7, member_asks.room_phones):
+# Love City's Jessica holds Rooms (the Executive Pastor's lane). It is not a map setting, so it doesn't wait on one.
+ROOMS_OPEN = {LC: ["Jessica", "Minnie", "Naiya", "owner"]}
 
 
 @ALL
 def test_the_office_overseers_and_who_a_room_request_phones_today(db, biz, monkeypatch):
     seats = cd._seats(biz)
+    want = OFFICE[biz]
+    if cm.opened(biz):
+        want = (*want[:2], ROOMS_OPEN.get(biz, want[2]))
     assert (_names(db, cd._exec_users(biz, seats)), _names(db, cot.overseers(church(db, biz))),
-            room_alerts(monkeypatch, db, biz)) == OFFICE[biz]
+            room_alerts(monkeypatch, db, biz)) == want
 
 
 # ─── Where each role sits ─────────────────────────────────────────────

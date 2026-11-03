@@ -17,6 +17,8 @@ church's structure is data (supabase/APPLY-2026-11-04-church-map.sql).
     opened(biz) ..... what a reader takes: False (closed, or not ready),
                       else load(biz)
     can(m, role) .... a role's seven switches; made_for(m, role) its streams
+    picked(m, k) .... the roles a setting names (PR 7: who gives the pastor's
+                      yes, who oversees the office); None = today's rule
     chain_for(...) .. who hears, step by step up from a person (PR 6): their
                       department's overseer, the item's department's leader
                       then overseer, the person they answer to, then
@@ -298,6 +300,18 @@ def can(m: Optional[Map], d: Dict[str, Any], *, ministers: Optional[bool] = None
             "prayer": "prayer_shared" in handles, "care": "care_need" in handles}
 
 
+def picked(m: Map, setting: str) -> Optional[List[str]]:
+    """The keys of the church's active roles a role pick names
+    (pastor_yes_roles, office_overseer_roles: PR 7), sorted; [] when it
+    names none still active, which each reader takes as "none named"; None
+    when the church never set it, so today's rule stands (§2)."""
+    ids = m.settings.get(setting)
+    if ids is None:
+        return None
+    rows = (m.roles.get(str(i)) for i in ids)
+    return sorted({str(r["key"]) for r in rows if r and r.get("status") == "active" and r.get("key")})
+
+
 _SAYS = (("oversee", "can oversee a department"), ("lead", "leads (the leaders room)"),
          ("board_yes", "gives the board’s yes on money"), ("see_all", "sees everything"))
 
@@ -571,9 +585,14 @@ def _clash(m: Map, did: Optional[str], name: str) -> Optional[Dict[str, Any]]:
 
 def _left_behind(d: Optional[Dict[str, Any]], by: Any) -> bool:
     """A department this login's own save made in the last ten minutes and
-    couldn't finish: its units failed, and so did taking it back out. A retry
-    of that save takes it as its own instead of hitting its name."""
-    if not d or d["units"] or not by or str(d.get("updated_by") or "") != str(by):
+    couldn't finish: its units failed, and so did taking it back out, so it
+    was marked a draft from the office (save_department). A retry of that
+    save takes it as its own instead of hitting its name. A department made
+    on purpose with nothing hung from it is active, so it isn't one
+    (#1716 review)."""
+    if not d or d["units"] or d.get("status") != "draft" or d.get("source") != "office":
+        return False
+    if not by or str(d.get("updated_by") or "") != str(by):
         return False
     try:
         at = datetime.fromisoformat(str(d.get("updated_at") or "").replace("Z", "+00:00"))
@@ -660,6 +679,7 @@ def save_department(biz: Any, body: Dict[str, Any], by: Any) -> Dict[str, Any]:
         left = _clash(m, None, row["name"])
         if _left_behind(left, by):          # the retry of a save that couldn't finish
             did, cur = left["id"], left
+            row["status"] = "active"        # what the first try made it, unless this one says
     for k, allowed, say in (("status", STATUSES, "A department is a draft, active or archived"),
                             ("source", SOURCES, "A department comes from the office, Chief or a template"),
                             ("area", (None, *ca.AREA_ORDER), "Pick one of the eight areas"),
@@ -718,9 +738,12 @@ def save_department(biz: Any, body: Dict[str, Any], by: Any) -> Dict[str, Any]:
             **{c: (u["ref"] if UNIT_REF.get(u["kind"]) == c else None) for c in UNIT_REF.values()}} for u in new])
         if not isinstance(made, list) or len(made) != len(new):
             # A new department doesn't stay half made. When it can't be taken
-            # back out, a retry of this save finishes it (_left_behind).
+            # back out it is marked a draft, which routes nothing, and a retry
+            # of this save finishes it (_left_behind).
             if cur is None and not sb_clients.sb_delete_as_service(
                     f"/church_departments?id=eq.{_q(did)}&business_id=eq.{q}"):
+                sb_clients.sb_patch_as_service(f"/church_departments?id=eq.{_q(did)}&business_id=eq.{q}",
+                                               {"status": "draft", **stamp})
                 raise HTTPException(503, UNFINISHED)
             raise _refused(bid, did, units=new)
     gone = [u["id"] for u in have if _ukey(u) not in keep]

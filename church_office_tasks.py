@@ -77,12 +77,24 @@ def person(biz: Dict[str, Any], user_id: str, names: Dict[str, str]) -> Dict[str
 
 def overseers(biz: Dict[str, Any]) -> List[str]:
     """Who a late office task goes up to: the logins whose member record
-    holds the Executive Pastor role (by its key or the catalog's), else the
-    owner. Read every time: [] only when the church has neither."""
+    holds the Executive Pastor role (by its key or the catalog's; where the
+    church's leaders map is open and names the roles that oversee the
+    office, office_overseer_roles, one of those), else the owner. Read
+    every time: [] only when the church has neither. A failed read, the
+    map's too, leaves the owner, as it always has."""
+    import church_map
     b = str(biz["id"])
-    defs = _rows(f"/church_role_defs?business_id=eq.{_q(b)}&status=eq.active&select=key,catalog_key&limit=500") or []
-    keys = sorted({str(d.get("key")) for d in defs
-                   if d.get("key") in OVERSEER_KEYS or d.get("catalog_key") in OVERSEER_KEYS})
+    m = church_map.opened(biz)
+    keys: Optional[List[str]] = None
+    if m is None:
+        keys = []           # a failed map read names nobody, as any failed read here
+    elif m:
+        keys = church_map.picked(m, "office_overseer_roles")
+    if keys is None:
+        defs = _rows(f"/church_role_defs?business_id=eq.{_q(b)}&status=eq.active&select=key,catalog_key"
+                     "&limit=500") or []
+        keys = sorted({str(d.get("key")) for d in defs
+                       if d.get("key") in OVERSEER_KEYS or d.get("catalog_key") in OVERSEER_KEYS})
     out: List[str] = []
     if keys:
         holders = _rows(f"/church_leader_roles?business_id=eq.{_q(b)}&status=eq.active"

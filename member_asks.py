@@ -10,9 +10,9 @@ Every ask lands in the office queue that already handles it. Nothing new
 for the office to learn:
 
     ASK                 LANDS IN                                 WHO HEARS
-    room ............   church_space_bookings, status requested,  the office
-                        kind use, for the member (Rooms & spaces'
-                        requests waiting for a yes)
+    room ............   church_space_bookings, status requested,  the office (where
+                        kind use, for the member (Rooms & spaces'  the leaders map is
+                        requests waiting for a yes)               open, the rooms duty)
     help ............   ministry_care_requests, kind "help",      People & care
                         confidential (Prayer & care, marked Help)
     visit ...........   ministry_care_requests, kind "visit"      People & care
@@ -413,11 +413,12 @@ def recipients(business_id: str, area: str) -> Set[str]:
 
 
 def notify(business_id: str, area: str, title: str, body: str, nav: str, key: str,
-           priority: str = "normal") -> None:
+           priority: str = "normal", to: Optional[Callable[[], Set[str]]] = None) -> None:
     """The bell (the office's alerts, one per ask) and a phone alert to each
-    login that handles it. Never the member's words; for care and giving,
-    never their name either (both are guarded areas, and the bell is the
-    whole church's). Off the request; never raises."""
+    login that handles it (`to`, read off the request; else recipients).
+    Never the member's words; for care and giving, never their name either
+    (both are guarded areas, and the bell is the whole church's). Off the
+    request; never raises."""
     def run() -> None:
         try:
             import httpx
@@ -433,7 +434,7 @@ def notify(business_id: str, area: str, title: str, body: str, nav: str, key: st
             logger.warning("member asks: the bell failed", exc_info=True)
         try:
             import push_notifications
-            for uid in sorted(recipients(str(business_id), area)):
+            for uid in sorted(to() if to else recipients(str(business_id), area)):
                 try:
                     push_notifications.send_to_user(uid, title=title, body=body[:160], nav=nav, tag=key,
                                                     business_id=str(business_id))
@@ -559,8 +560,28 @@ def ask_room(biz: Dict[str, Any], me: Dict[str, Any], form: Dict[str, Any]) -> T
     room = _plain(rooms[sid].get("name"), 80) or "A room"
     notify(str(biz["id"]), "office", "A room request",
            f"{who} asked for {room}, {church_spaces.when_text(start, end, tz)}. Say yes or no in Rooms & spaces.",
-           NAV["room"], f"ask-room-{me['id']}-{s_utc}")
+           NAV["room"], f"ask-room-{me['id']}-{s_utc}", to=lambda: room_phones(str(biz["id"])))
     return True, "ask_room", keep
+
+
+def room_phones(business_id: str) -> Set[str]:
+    """Who a room request phones. Where the church's leaders map is open,
+    the logins that do the rooms duty (church_duties.holders_of: the owner,
+    the admins, the Managers who hold it; docs/CHURCH_LEADERS_MAP.md §3,
+    PR 7); closed, everyone who works the office, as before. A read that
+    fails, the map's too, phones the owner alone, as recipients does."""
+    import church_map
+    m = church_map.opened(business_id)
+    if m is False:
+        return recipients(business_id, "office")
+    if m is not None:
+        import church_duties
+        try:
+            return set(church_duties.holders_of(business_id, "rooms"))
+        except HTTPException:
+            pass
+    rows = sb_clients.sb_get_as_service(f"/businesses?id=eq.{_q(business_id)}&select=owner_id&limit=1")
+    return {str(rows[0]["owner_id"])} if isinstance(rows, list) and rows and rows[0].get("owner_id") else set()
 
 
 def _first(name: Any) -> str:

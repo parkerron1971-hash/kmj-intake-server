@@ -37,14 +37,14 @@ def db(monkeypatch):
 
 # 1. A room request: its phone alerts go to the rooms duty's holders (the
 # owner, the admins, and its Manager holders: Naiya and Jessica, the
-# secretary, New Hope's office-lane login and its office overseer), never the
-# People & Care login.
+# secretary, New Hope's office-lane login and its office overseer, the
+# Director of Operations through office_overseer_roles), never the People &
+# Care login (PR 7, member_asks.room_phones).
 ROOMS = {LC: ["Jessica", "Minnie", "Naiya", "owner"], GR: ["Sharon", "Thelma", "owner"],
          NH: ["Olive", "Owen", "Tessa", "owner"]}
 
 
-@pytest.mark.parametrize("biz", [case(LC, 7, "a room ask phones the rooms duty, not everyone who sees the office"),
-                                 case(GR), case(NH)])
+@pytest.mark.parametrize("biz", [case(LC), case(GR), case(NH)])
 def test_1_a_room_request_phones_the_rooms_duty(db, monkeypatch, biz):
     got = room_alerts(monkeypatch, db, biz)
     assert got == sorted(db.label[u] for u in cd.holders_of(biz, "rooms")) == ROOMS[biz]
@@ -70,15 +70,15 @@ def test_2_a_drifting_youth_family_climbs_the_shepherds_own_line(db, monkeypatch
 # 3. A pay-back: $180 is the treasurer's alone everywhere; $250 needs Grace's
 # pastor too ($200 there) and nobody else's; $600 is still the treasurer's
 # alone at New Hope ($1,000 there). A Manager, the secretary too, never gives
-# the treasurer's step.
+# the treasurer's step. Each church's own levels (PR 7, church_money_levels.
+# levels_of).
 T, P = "treasurer", "pastor"
 NEEDS = {LC: {18_000: [T], 25_000: [T], 60_000: [T, P]}, GR: {18_000: [T], 25_000: [T, P], 60_000: [T, P]},
          NH: {18_000: [T], 25_000: [T], 60_000: [T]}}
 TREASURERS = {LC: ["Minnie", "owner"], GR: ["Thelma", "owner"], NH: ["Tessa", "owner"]}
 
 
-@pytest.mark.parametrize("biz", [case(LC), case(GR, 7, "Grace's levels are $200 / $1,000"),
-                                 case(NH, 7, "New Hope's levels are $1,000 / $5,000")])
+@pytest.mark.parametrize("biz", [case(LC), case(GR), case(NH)])
 def test_3_a_pay_back_asks_the_churchs_own_levels(db, biz):
     needs, who = money(db, biz)
     assert needs == NEEDS[biz]
