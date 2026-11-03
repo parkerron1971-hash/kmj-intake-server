@@ -135,8 +135,140 @@ def audience_price_cents() -> Dict[str, int]:
 
 
 def audience_plan_offered(plan: str) -> bool:
-    """PLAN_<KEY>_OFFERED=1 puts a plan on sale. Off by default."""
-    return _dial(f"{(plan or '').upper()}_OFFERED", "PLAN_", 0) != 0
+    """PLAN_<KEY>_OFFERED=1 puts a plan on sale. Off by default. The church
+    plans also open together with PLAN_CHURCH_OFFERED=1."""
+    p = (plan or "").strip().lower()
+    if p in CHURCH_PLAN_KEYS and church_plans_offered():
+        return True
+    return _dial(f"{p.upper()}_OFFERED", "PLAN_", 0) != 0
+
+
+# ─── Church plans by size (Kevin, 2026-11-03: "I agree with the plan") ──
+# A church picks its plan by how many people come on a Sunday. Every church
+# feature is on every one; the plan sets the room: office logins, Chief's
+# credits, texts, sermon clip hours. Leaders, volunteers and members in the
+# member app are unlimited on all four and never count as a login. Priced
+# against what churches pay now (Planning Center's own size bands, Tithely,
+# ChurchTrac; the review artifact Pdg8hF4pB5n6efoFQmzd8d): at or under
+# Planning Center for the same church at every size. Multi-site (1,500+, or
+# two campuses) is a quote and waits for a campus view, so it isn't a plan.
+CHURCH_PLAN_KEYS = ("church_small", "church_growing", "church_established", "church_large")
+
+
+def church_price_cents() -> Dict[str, int]:
+    """church plan key -> monthly list price, cents (annual = 10x)."""
+    return {
+        "church_small":       _dial("TIER_CHURCH_SMALL_CENTS", "PRICE_", 7900),
+        "church_growing":     _dial("TIER_CHURCH_GROWING_CENTS", "PRICE_", 14900),
+        "church_established": _dial("TIER_CHURCH_ESTABLISHED_CENTS", "PRICE_", 29900),
+        "church_large":       _dial("TIER_CHURCH_LARGE_CENTS", "PRICE_", 59900),
+    }
+
+
+def church_credits() -> Dict[str, int]:
+    """church plan key -> monthly included credits (the public ladder's
+    3,000 / 7,500 / 17,500, then 30,000 for a Large church)."""
+    return {
+        "church_small":       _dial("CHURCH_SMALL_CREDITS", "CREDITS_", 3000),
+        "church_growing":     _dial("CHURCH_GROWING_CREDITS", "CREDITS_", 7500),
+        "church_established": _dial("CHURCH_ESTABLISHED_CREDITS", "CREDITS_", 17500),
+        "church_large":       _dial("CHURCH_LARGE_CREDITS", "CREDITS_", 30000),
+    }
+
+
+def church_seats() -> Dict[str, int]:
+    """Office logins. Small fits the pastor, an admin and the treasurer;
+    Growing fits the whole Love City setup (pastor, executive pastor, four
+    lane admins, treasurer) with one to spare."""
+    return {
+        "church_small":       _dial("CHURCH_SMALL_SEATS", "LIMIT_", 3),
+        "church_growing":     _dial("CHURCH_GROWING_SEATS", "LIMIT_", 8),
+        "church_established": _dial("CHURCH_ESTABLISHED_SEATS", "LIMIT_", 15),
+        "church_large":       _dial("CHURCH_LARGE_SEATS", "LIMIT_", 35),
+    }
+
+
+def church_texts_monthly() -> Dict[str, int]:
+    """Texts a month included: about one weekly text to everyone who comes,
+    with room to spare. Past it, extra_texts_cents_per_thousand()."""
+    return {
+        "church_small":       _dial("CHURCH_SMALL_TEXTS", "LIMIT_", 500),
+        "church_growing":     _dial("CHURCH_GROWING_TEXTS", "LIMIT_", 1500),
+        "church_established": _dial("CHURCH_ESTABLISHED_TEXTS", "LIMIT_", 3000),
+        "church_large":       _dial("CHURCH_LARGE_TEXTS", "LIMIT_", 8000),
+    }
+
+
+def church_clip_hours() -> Dict[str, int]:
+    """Sermon clip hours a month (Find my best clips); past them, the same
+    actions per extra hour every plan pays."""
+    return {
+        "church_small":       _dial("CHURCH_SMALL_CLIP_HOURS", "LIMIT_", 2),
+        "church_growing":     _dial("CHURCH_GROWING_CLIP_HOURS", "LIMIT_", 5),
+        "church_established": _dial("CHURCH_ESTABLISHED_CLIP_HOURS", "LIMIT_", 10),
+        "church_large":       _dial("CHURCH_LARGE_CLIP_HOURS", "LIMIT_", 20),
+    }
+
+
+def church_size_bands() -> Dict[str, tuple]:
+    """People on a Sunday each plan is for: (from, up to); None = no top."""
+    return {
+        "church_small":       (0, 100),
+        "church_growing":     (100, 250),
+        "church_established": (250, 500),
+        "church_large":       (500, 1500),
+    }
+
+
+def church_plan_for_size(people: int) -> str:
+    """The plan a church of `people` on a Sunday belongs on. Past the Large
+    band it's still Large here: Multi-site is a conversation, not a plan."""
+    n = max(0, int(people or 0))
+    for key, (_low, high) in church_size_bands().items():
+        if n <= high:
+            return key
+    return "church_large"
+
+
+def church_plans_offered() -> bool:
+    """PLAN_CHURCH_OFFERED=1 puts all four church plans on sale together."""
+    return _dial("CHURCH_OFFERED", "PLAN_", 0) != 0
+
+
+def extra_texts_cents_per_thousand() -> int:
+    """Texts past a church plan's monthly count: $20 per 1,000, what Planning
+    Center ($0.02 a text) and Tithely ($10 per 500) charge."""
+    return _dial("EXTRA_TEXTS_CENTS_PER_THOUSAND", "PRICE_", 2000)
+
+
+def extra_login_cents() -> int:
+    """One more office login a month, for a church between sizes."""
+    return _dial("EXTRA_LOGIN_CENTS", "PRICE_", 1500)
+
+
+def church_move_months() -> int:
+    """The move from another system costs this many months of the plan
+    (Subsplash can charge up to three to leave)."""
+    return _dial("CHURCH_MOVE_MONTHS", "PRICE_", 3)
+
+
+def founding_church_moves() -> int:
+    """The first churches moved for free (the founding churches)."""
+    return _dial("FOUNDING_CHURCH_MOVES", "LIMIT_", 5)
+
+
+def multi_site_from_cents() -> int:
+    """Where a Multi-site quote starts (1,500+ on a Sunday, or two campuses)."""
+    return _dial("MULTI_SITE_FROM_CENTS", "PRICE_", 99900)
+
+
+def church_offer() -> Dict[str, int]:
+    """The numbers around the church plans, for the plan cards and the site."""
+    return {"extra_texts_cents_per_thousand": extra_texts_cents_per_thousand(),
+            "extra_login_cents": extra_login_cents(),
+            "move_months": church_move_months(),
+            "founding_moves": founding_church_moves(),
+            "multi_site_from_cents": multi_site_from_cents()}
 
 
 # ─── Action prices ───────────────────────────────────────────────────
