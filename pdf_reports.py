@@ -23,6 +23,8 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+import report_words
+
 logger = logging.getLogger("pdf_reports")
 
 # Solutionist System defaults (refined muted gold + neutral ink).
@@ -312,23 +314,24 @@ def _balance_sheet_body(d, s, money_cell, accent, stripe, rule, danger, colors, 
         out.append(_amount_table(body, money_cell, Table, TableStyle, colors, rule, stripe,
                                  total_idx=[len(body) - 1]))
 
-    section("ASSETS", [("Cash (bank balances)", a.get("cash")),
-                       ("Accounts Receivable", a.get("accounts_receivable"))],
-            "Total Assets", a.get("total"))
-    section("LIABILITIES", [("Accounts Payable", li.get("accounts_payable"))],
-            "Total Liabilities", li.get("total"))
-    section("EQUITY", [("Retained Earnings", eq.get("retained_earnings"))],
-            "Total Equity", eq.get("total"))
+    L = report_words.rows(meta.get("voice"))
+    section(L["assets_head"], [(L["cash_bank"], a.get("cash")),
+                               (L["ar"], a.get("accounts_receivable"))],
+            L["total_assets"], a.get("total"))
+    section(L["liabilities_head"], [(L["ap"], li.get("accounts_payable"))],
+            L["total_liabilities"], li.get("total"))
+    section(L["equity_head"], [(L["retained"], eq.get("retained_earnings"))],
+            L["total_equity"], eq.get("total"))
 
     le = round(float(li.get("total") or 0) + float(eq.get("total") or 0), 2)
     ta = round(float(a.get("total") or 0), 2)
     out.append(Spacer(1, 0.1 * inch))
     if abs(le - ta) < 0.01:
-        out.append(Paragraph(f"✓ Balanced — Liabilities + Equity = Total Assets "
-                             f"({fmt_money(le, meta['currency'])})", s["row"]))
+        out.append(Paragraph(f"{L['balanced']} ({fmt_money(le, meta['currency'])})", s["row"]))
     else:
-        out.append(Paragraph("Books not balanced — Liabilities + Equity ≠ Total Assets. "
-                             "Contact support.", s["danger"]))
+        out.append(Paragraph("Books not balanced: what is owed plus equity doesn't equal what "
+                             "is owned. Ask Chief to review the ledger, or send this to your "
+                             "accountant.", s["danger"]))
     return out
 
 
@@ -337,23 +340,24 @@ def _pl_body(d, s, money_cell, accent, stripe, rule, danger, colors, Table, Tabl
     cur = d.get("current") or {}
     rev, exp = cur.get("revenue") or {}, cur.get("expenses") or {}
     cmp_ = (d.get("comparison") or {}).get("change") or {}
-    out = [Paragraph("REVENUE", s["section"])]
-    rrows = [(Paragraph("Invoiced (paid)", s["row"]), money_cell(rev.get("invoiced")))]
+    L = report_words.rows(meta.get("voice"))
+    out = [Paragraph(L["revenue_head"], s["section"])]
+    rrows = [(Paragraph(L["invoiced_paid"], s["row"]), money_cell(rev.get("invoiced")))]
     if float(rev.get("refunds") or 0) > 0:
-        rrows.append((Paragraph("Less refunds", s["rowind"]), money_cell(-float(rev.get("refunds") or 0))))
+        rrows.append((Paragraph(L["less_refunds"], s["rowind"]), money_cell(-float(rev.get("refunds") or 0))))
     # Booking, tip and store-sale lines show only when there is money in
     # them, so a business that takes none of these reads as before.
     for key, label in (("bookings", "Bookings paid online"), ("tips", "Tips"),
                        ("store_sales", "Store & counter sales")):
         if float(rev.get(key) or 0) != 0:
             rrows.append((Paragraph(label, s["row"]), money_cell(rev.get(key))))
-    rrows.append((Paragraph("Other (non-Stripe) income", s["row"]), money_cell(rev.get("plaid_other_income"))))
-    rrows.append((Paragraph("Gross Revenue", s["totlbl"]),
+    rrows.append((Paragraph(L["other_income"], s["row"]), money_cell(rev.get("plaid_other_income"))))
+    rrows.append((Paragraph(L["gross"], s["totlbl"]),
                   money_cell(rev.get("gross_revenue"), bold=True)))
     out.append(_amount_table(rrows, money_cell, Table, TableStyle, colors, rule, stripe,
                              total_idx=[len(rrows) - 1]))
 
-    out.append(Paragraph("EXPENSES", s["section"]))
+    out.append(Paragraph(L["expenses"], s["section"]))
     erows = []
     for b in (exp.get("by_bucket") or []):
         erows.append((Paragraph(f"{b['label']}  <font size=7 color='#9A9A9A'>· {b.get('pct',0)}%</font>", s["row"]),
@@ -362,15 +366,15 @@ def _pl_body(d, s, money_cell, accent, stripe, rule, danger, colors, Table, Tabl
             if ln.get("subcategory") and ln["subcategory"] != "—":
                 erows.append((Paragraph(ln["subcategory"], s["rowind"]), money_cell(ln["amount"])))
     if not erows:
-        erows.append((Paragraph("No expenses in this period", s["rowind"]), Paragraph("—", s["amt"])))
-    erows.append((Paragraph("Total Expenses", s["totlbl"]),
+        erows.append((Paragraph(L["no_expenses"], s["rowind"]), Paragraph("—", s["amt"])))
+    erows.append((Paragraph(L["total_expenses"], s["totlbl"]),
                   money_cell(exp.get("total"), bold=True)))
     out.append(_amount_table(erows, money_cell, Table, TableStyle, colors, rule, stripe,
                              total_idx=[len(erows) - 1]))
 
     out.append(Spacer(1, 0.12 * inch))
     out.append(_amount_table(
-        [(Paragraph("NET INCOME", s["netlbl"]),
+        [(Paragraph(L["net_income_head"], s["netlbl"]),
           money_cell(cur.get("net_income"), bold=True))],
         money_cell, Table, TableStyle, colors, rule, stripe, total_idx=[0]))
 
@@ -378,8 +382,8 @@ def _pl_body(d, s, money_cell, accent, stripe, rule, danger, colors, Table, Tabl
         out.append(Spacer(1, 0.2 * inch))
         out.append(Paragraph("VS PRIOR PERIOD", s["section"]))
         cmp_rows = [[Paragraph("Metric", s["th"]), Paragraph("Change", s["thr"])]]
-        for k, label in (("gross_revenue", "Gross Revenue"), ("total_expenses", "Total Expenses"),
-                         ("net_income", "Net Income")):
+        for k, label in (("gross_revenue", L["gross"]), ("total_expenses", L["total_expenses"]),
+                         ("net_income", L["net_income"])):
             cmp_rows.append([Paragraph(label, s["row"]),
                              Paragraph(fmt_pct(cmp_.get(k)), s["amt"])])
         t = Table(cmp_rows, colWidths=[None, 1.6 * inch])
@@ -452,11 +456,12 @@ def _ap_body(d, *a, **k):
 def _cash_flow_body(d, s, money_cell, accent, stripe, rule, danger, colors, Table, TableStyle,
                     Paragraph, Spacer, inch, meta):
     op = d.get("operating") or {}
-    out = [Paragraph("OPERATING ACTIVITIES", s["section"])]
+    L = report_words.rows(meta.get("voice"))
+    out = [Paragraph(L["operating_head"], s["section"])]
     out.append(_amount_table([
-        (Paragraph("Cash from customers", s["row"]), money_cell(op.get("cash_from_customers"))),
-        (Paragraph("Cash to suppliers", s["row"]), money_cell(-float(op.get("cash_to_suppliers") or 0))),
-        (Paragraph("Net cash from operations", s["totlbl"]),
+        (Paragraph(L["cash_in"], s["row"]), money_cell(op.get("cash_from_customers"))),
+        (Paragraph(L["cash_out"], s["row"]), money_cell(-float(op.get("cash_to_suppliers") or 0))),
+        (Paragraph(L["net_cash"], s["totlbl"]),
          money_cell(op.get("net_cash_from_operations"), bold=True))],
         money_cell, Table, TableStyle, colors, rule, stripe, total_idx=[2]))
     out.append(Spacer(1, 0.1 * inch))

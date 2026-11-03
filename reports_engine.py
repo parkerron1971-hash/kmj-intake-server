@@ -424,7 +424,9 @@ def cash_flow(biz: str, period: str, custom_from: Optional[str] = None,
             "cash_to_suppliers": cash_out,
             "net_cash_from_operations": round(cash_in - cash_out, 2),
         },
-        "note": "Operating activities only. Investing + financing land in v1.5.",
+        "note": ("Day-to-day money only (operating activities): what moved through the "
+                 "bank. Investing and financing, like equipment, property or loans, aren't "
+                 "on this report yet."),
     }
 
 
