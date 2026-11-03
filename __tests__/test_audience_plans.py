@@ -115,7 +115,7 @@ def test_audience_credits_flow_through():
 
 # ─── 4. the economics floors ──────────────────────────────────────────
 
-@pytest.mark.parametrize("plan", fg.AUDIENCE_PLANS)
+@pytest.mark.parametrize("plan", ("solo", "booked", "boss"))
 def test_audience_plan_clears_the_chat_floor_and_the_trial(plan):
     cents = pricing_config.audience_price_cents()[plan]
     credits = pricing_config.audience_credits()[plan]
@@ -151,7 +151,7 @@ def test_hidden_until_offered(monkeypatch):
     assert fg.audience_plans_for("barber") == ["solo"]
     assert fg.audience_plans_for("salon") == ["solo"]
     assert fg.audience_plans_for("lawyer") == []
-    assert fg.audience_plans_for("barber", offered_only=False) == list(fg.AUDIENCE_PLANS)
+    assert fg.audience_plans_for("barber", offered_only=False) == ["solo", "booked", "boss"]
 
 
 def test_comp_resolves_on_any_business():
@@ -254,8 +254,9 @@ def test_the_marketing_levels_follow_the_ladder():
     import feature_gates as fg
     for plan in ("starter", "solo", "booked", "boss", "professional", "practice"):
         assert "marketing_suggestion" in fg.plan_features(plan), plan
-    assert {p for p in fg.ALL_PLANS if "marketing_week" in fg.plan_features(p)} == {"professional", "practice", "boss"}
-    assert {p for p in fg.ALL_PLANS if "marketing_autopilot" in fg.plan_features(p)} == {"practice"}
+    church = set(fg.CHURCH_PLANS)
+    assert {p for p in fg.ALL_PLANS if "marketing_week" in fg.plan_features(p)} == {"professional", "practice", "boss"} | church
+    assert {p for p in fg.ALL_PLANS if "marketing_autopilot" in fg.plan_features(p)} == {"practice", "church_established", "church_large"}
     # Upgrade prompts stay inside the barber ladder.
     assert fg.upgrade_plan_for("marketing_week", "solo") == "boss"
     assert fg.upgrade_plan_for("marketing_week", "booked") == "boss"

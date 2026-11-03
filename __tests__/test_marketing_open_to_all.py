@@ -125,7 +125,7 @@ def test_the_levels_are_announced():
 
 
 def test_the_ladder_covers_every_plan_on_sale():
-    assert set(fg.MARKETING_LADDER) == set(fg.PLANS) | {"solo", "booked", "boss"}
+    assert set(fg.MARKETING_LADDER) == set(fg.PLANS) | {"solo", "booked", "boss"} | set(fg.CHURCH_PLANS)
 
 
 @pytest.mark.parametrize("plan,words", [
