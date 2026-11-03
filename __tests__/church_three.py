@@ -13,7 +13,8 @@ The map (departments and their units, answers-to links, money levels,
 office-overseer roles, the switches flipped) is kept in `db.map_intent`, by
 role key and person id, and with filled=True written into the map's tables
 (supabase/APPLY-2026-11-04-church-map.sql) as the office will write it (PR 5);
-filled=False is the empty map every preservation test uses. migrated=False is
+filled=False is the empty map every preservation test uses (`db.intent` keeps
+it either way, for the office's routes to enter). migrated=False is
 the database before that file: a read or write naming its columns or tables
 fails as PostgREST's would. CHURCH_MAP follows map_on.
 
@@ -283,7 +284,9 @@ def _love_city(db):
         {"name": "Youth", "leader": w["yolanda"], "overseer": w["andre"], "duty": "youth", "area": "kids_youth",
          "units": [("serve_option", "Youth Ministry (YWD)"), ("group", youth), ("space", "youth")]}],
         "answers_to": {w["marcus"]: w["jessica"]},
-        "roles": {"prophets": {"can_oversee": True}, "evangelists": {"can_oversee": True}},
+        # The Prayer leader's role turns "leads" on: a department's leader holds a role that leads (§3).
+        "roles": {"prophets": {"can_oversee": True}, "evangelists": {"can_oversee": True},
+                  "intercessor_leader": {"can_lead": True}},
         "settings": {"office_overseer_roles": ["executive_pastor"]}}
 
 
@@ -360,7 +363,7 @@ def _new_hope(db):
                             for n, ld, ov, du, ar, un in dept],
             "answers_to": {w[e]: w[a] for e, a in (("elena", "amara"), ("elliot", "abel"), ("esther", "asher"),
                                                     ("ezra", "abel"), ("eden", "asher"))},
-            "roles": {"elders": {"can_board_yes": True}},
+            "roles": {"elders": {"can_board_yes": True}, "deacons": {"can_lead": True}},     # Care's leader
             "settings": {"pastor_from_cents": 100_000, "board_over_cents": 500_000,
                          "office_overseer_roles": ["director_of_operations"]}}
 
@@ -553,7 +556,7 @@ def build(monkeypatch, *, map_on: bool = True, filled: bool = True, migrated: bo
     for b in db.t["businesses"]:
         cr.ensure_library(b)
     intent = {LOVE_CITY: _love_city(db), GRACE: _grace(db), NEW_HOPE: _new_hope(db)}
-    db.map_intent = intent if filled else {}
+    db.intent, db.map_intent = intent, (intent if filled else {})
     for biz, m in db.map_intent.items():
         write_map(db, biz, m)
     return db
