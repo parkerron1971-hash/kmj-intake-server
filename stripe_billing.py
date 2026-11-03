@@ -1284,11 +1284,18 @@ async def _apply_subscription_state(event_type: str, sub_obj: Dict[str, Any], bu
     if event_type == "customer.subscription.deleted":
         status_value = "canceled"
 
-    # Plan: subscription.items.data[0].price.id (and product nickname,
+    # Plan: the item whose price is one of our plans (and product nickname,
     # if available). We just store the price id as the "plan" string;
-    # frontend can map to a human-friendly name later.
+    # frontend can map to a human-friendly name later. A church's extra
+    # logins are a second item on the same subscription, in no promised
+    # order, so items[0] could be the logins; the first item that maps to a
+    # plan wins, and items[0] only when none does (the old behavior).
     items = ((sub_obj.get("items") or {}).get("data")) or []
-    price_id = ((items[0].get("price") or {}).get("id")) if items else None
+    import feature_gates as fg
+    _plans = fg.price_to_plan()
+    _plan_item = next((it for it in items if ((it.get("price") or {}).get("id")) in _plans),
+                      items[0] if items else None)
+    price_id = (((_plan_item or {}).get("price") or {}).get("id")) if _plan_item else None
 
     patch = {
         "stripe_subscription_id":  sub_obj.get("id"),
@@ -1305,8 +1312,7 @@ async def _apply_subscription_state(event_type: str, sub_obj: Dict[str, Any], bu
     # subscriptions drop back to 'starter'. Requires the 2026-07-30
     # tier-vocab migration (the old CHECK only allowed starter|pro|
     # enterprise) — fails soft via retry-without-tier if unapplied.
-    import feature_gates as fg
-    plan_key = fg.price_to_plan().get(price_id or "")
+    plan_key = _plans.get(price_id or "")
     if status_value == "canceled":
         patch["tier"] = "starter"
     elif plan_key and status_value in ("trialing", "active"):
@@ -1319,6 +1325,10 @@ async def _apply_subscription_state(event_type: str, sub_obj: Dict[str, Any], bu
         patch.pop("tier", None)
         await _patch_business(business_id, patch)
     logger.info(f"Updated business {business_id} → {status_value} ({price_id})")
+    # A church's extra office logins, as the subscription carries them now.
+    import church_billing
+    if plan_key in fg.CHURCH_PLANS or church_billing.extra_login_quantity(items):
+        await church_billing.sync_extra_logins(business_id, items, status_value)
     # A card arrived: a no-card trial's "coming soon" lifts now, not when
     # this process's cache expires (other replicas follow within a minute).
     try:
@@ -1493,6 +1503,8 @@ BOOTSTRAP_CATALOG = [
     ("STRIPE_PRICE_ID_CHURCH_ESTABLISHED_ANNUAL", "solutionist_church_established_annual",  "Solutionist Established Church", 299000, "year"),
     ("STRIPE_PRICE_ID_CHURCH_LARGE",              "solutionist_church_large_monthly",       "Solutionist Large Church",       59900,  "month"),
     ("STRIPE_PRICE_ID_CHURCH_LARGE_ANNUAL",       "solutionist_church_large_annual",        "Solutionist Large Church",       599000, "year"),
+    # One more office login on a church plan, $15 a month each (church_billing).
+    ("STRIPE_PRICE_ID_EXTRA_LOGIN",               "solutionist_extra_login_monthly",        "Solutionist extra office login", 1500,   "month"),
 ]
 
 
@@ -1700,6 +1712,14 @@ async def stripe_webhook(request: Request, stripe_signature: Optional[str] = Hea
                                          source="stripe_webhook")
                 elif not business_id:
                     error_msg = "credit_pack session missing business_id"
+            elif meta.get("kind") == "church_move":
+                # A church paid for its move (church_billing): its record and
+                # the Mission Control ticket, once per session.
+                if business_id:
+                    import church_billing
+                    error_msg = await church_billing.record_paid_move(business_id, obj)
+                else:
+                    error_msg = "church_move session missing business_id"
             # Subscription checkouts: the subsequent
             # customer.subscription.created carries the real state —
             # this event stays audit-only for those, EXCEPT the Meta
@@ -1735,6 +1755,9 @@ async def stripe_webhook(request: Request, stripe_signature: Optional[str] = Hea
                     event_spine.emit("credits_granted", business_id,
                                      {"credit_pack": meta.get("credit_pack") or ""},
                                      source="stripe_webhook")
+            elif meta.get("kind") == "church_move" and business_id:
+                import church_billing
+                error_msg = await church_billing.record_paid_move(business_id, obj)
         else:
             logger.info(f"Ignoring unhandled event type: {event_type}")
     except HTTPException as e:
