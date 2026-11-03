@@ -903,10 +903,15 @@ def add_role(business_id: str, contact_id: str, role: str, scope: str = "", *, b
 def role_name(role_row: Dict[str, Any]) -> str:
     """What someone is asked to lead, as a sentence says it: "the
     Hospitality Team", "the Youth Ministry (YWD) team", "Intercessor
-    leader"."""
+    leader". A role that covers a team is named by its team: its own
+    definition says so, or, with none given, the first version's (LEGACY,
+    by the key a holder row stores: structure, not a word read for meaning).
+    So a church's own team role names right, whatever its key (§0 rule a)."""
+    import church_roles as cr
     scope = _plain(role_row.get("scope"))
     d = role_row.get("def") or {}
-    if (d.get("covers") == "team" or role_row.get("role") == "team_leader") and scope:
+    covers = d.get("covers") if d else (cr.LEGACY.get(str(role_row.get("role") or "")) or {}).get("covers")
+    if covers == "team" and scope:
         return f"the {scope}" if re.search(r"\bteam\b", scope, re.I) else f"the {scope} team"
     return d.get("title") or role_row.get("label") or ROLE_LABELS.get(role_row.get("role"), "a leader")
 

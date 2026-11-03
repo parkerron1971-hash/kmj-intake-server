@@ -452,6 +452,29 @@ How it puts things back:
 - **The row is written after the parts**, since there is no transaction. If that insert fails, the save stands, `change` is null and a `[church_map_batch]` line is printed. Once logged, the step-1 routes add `change: {id, status, money}` to their answers.
 - **Fixture:** `build(..., migrated2=False)` refuses the two tables and B2's columns. ThreeDB now merges a `merge-duplicates` post on `on_conflict=business_id` (Shepherding's settings), as PostgREST does.
 
+**As built in B3b** (church_map.py, `church_map_batch.save_role`, church_router.py):
+- **People on a draft** must be among the church's people, nothing more. The gaps say what each needs: "Gloria Hunt needs a role that leads." (`leader_needs`, `overseer_needs`), and, on a draft or an active department, "… was asked into Associate Pastor and hasn't said yes yet." (`leader_asked`, `overseer_asked`). "Asked into Youth Pastor at launch" is a planned ask, which lives in the track's `asks`; they have no shape until B9, so B10 adds that line.
+- **An active department** takes a person who holds, or has an `invited` row on, an active role with the switch. Going live checks the leader and overseer even when the request names neither: a draft made active, a retry finished as active, and an Undo that brings an archived department back (a 409 when its people no longer qualify). Archiving keeps step 1's rule (only what it names).
+- **The chain:** `_seat` now passes over a holder row that isn't `active` too, so `chain_for` and `team_head` skip someone asked even if a caller hands in invited rows. Every caller already passes `active_holders`. The tests swap each church's Youth overseer for someone asked: the late task and follow-up go exactly where they go with the seat vacant.
+- **`unfinished_at`:**
+  - Set only by `save_department`'s failure path, and only once `step2_state()` is True.
+  - Read only by the same-name check of a new save with units: a one-row read. `load()`'s select is unchanged, so the engine never names B2's columns.
+  - The retry clears it in its last patch, once its units are in. A save to a draft by its id clears it as well, because the office then owns that draft.
+  - The ten-minute, same-login guess is gone. The mark decides, so another login's retry finishes the department too.
+- **Correction (before step 2's file):** nothing can be marked. The failure path still makes the department a draft and answers LEFT_EMPTY's 503 ("archive it … then try again"), and no retry takes anything over. This is the one change to the step-2-absent path, and it is deliberate: B2 is applied.
+- **`?with=choices`** returns `{kind: [{ref, label, department}]}` for the seven unit kinds:
+  - by id: active groups, active and draft roles, boards, worship ministries;
+  - by label: Serve teams, budget lines, youth and kids.
+  `department` is `{id, name, status}` (draft or active), else null. Any other `with` value is ignored.
+- **Switch seats:**
+  - A refusal is a 403 with words, as for money levels, not business_access's 404, because the seat already reaches the route.
+  - A board yes sent as it already reads isn't a change, as with a money level.
+  - **Extension to §4.3:** `POST /church/roles` takes the same rule. Otherwise a Manager could make a new role with the board's yes.
+  - A Manager's job change still resets a role's switches to the new job's defaults (PR 3). No job's defaults turn on the board's yes.
+- **The seat rule holds at every church; the log only where the map is open.** The 403s apply whether or not `CHURCH_MAP` is open: no screen sends a switch yet, so nothing visible changes. Logging follows the change routes: only where `open_to(user)`.
+- **Logged switch saves:** where the map is open and `step2_state()` is True, a PATCH that names a switch is one change (origin `'office'`, a `role` part) holding the fields a role part keeps: title, definition, reports_to, status, the switches and made_for. Its other fields (job, covers, handles, sees, oversees_teams, term_months, needs_class) are written first through `update_role`, unlogged as today, so Undo leaves them. A PATCH without a switch is today's write.
+- **`role_name`** reads `covers` from the definition it is given, or else from the LEGACY row for the stored key (structure, §0 rule (a)). test_church_no_title_words never listed it (it is display), so its marks are unchanged.
+
 ## 5. The department sheet (frontend, Leaders & roles)
 
 `LibView` (LeadersRoles.tsx:36-40) gains the views `map`, `dept`, `ready` and `setup`. When `GET /church/map` answers 404, the switch is closed for this login and none of them show.

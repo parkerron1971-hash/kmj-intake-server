@@ -53,7 +53,7 @@ import re
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional
 from urllib.parse import quote
 
@@ -402,11 +402,13 @@ def _ranked(defs: List[Dict[str, Any]], holders: Dict[str, List[Dict[str, Any]]]
 def _seat(m: Map, by: Dict[str, Dict[str, Any]], rows: List[Dict[str, Any]], cid: str,
           switch: str = "") -> Optional[tuple]:
     """(their role, their holder row): the first active role, in the
-    library's order, this person holds with `switch` on; None when none."""
+    library's order, this person holds with `switch` on; None when none.
+    Only a row they said yes to counts: someone asked who hasn't said yes is
+    passed over (step 2, decision 2), whatever rows the caller handed in."""
     for h in rows:
         d = by.get(str(h.get("role") or ""))
-        if cid and str(h["contact_id"]) == cid and d and d.get("status", "active") == "active" \
-                and (not switch or can(m, d)[switch]):
+        if cid and str(h["contact_id"]) == cid and h.get("status", "active") == "active" and d \
+                and d.get("status", "active") == "active" and (not switch or can(m, d)[switch]):
             return d, h
     return None
 
@@ -535,7 +537,8 @@ PICKS = ("pastor_yes_roles", "office_overseer_roles")
 LEVEL_MAX_CENTS = 10_000_000          # $100,000, the migration's check
 UNITS_MAX, PICKS_MAX = 60, 20
 IDS_PER_READ = 50                     # ids in one id=in.(...) read
-LEFT_FOR = timedelta(minutes=10)      # how long a half-made department waits for its retry
+PEOPLE = (("leader_contact_id", "leader", "lead", "leads"), ("overseer_contact_id", "overseer", "oversee",
+                                                             "can oversee a department"))
 # A unit's thing: its table, its name, and what still counts as there.
 _THINGS = {"group": ("groups", "name", "&active=eq.true"),
            "role": ("church_role_defs", "title", "&status=in.(active,draft)"),
@@ -608,21 +611,31 @@ def _people(bid: str, ids: Iterable[Any]) -> Dict[str, str]:
     return {str(r["id"]): _plain(r.get("name")) for r in rows}
 
 
-def _holders(bid: str) -> List[Dict[str, Any]]:
-    return _need(f"/church_leader_roles?business_id=eq.{_q(bid)}&status=eq.active&select={LINK_COLS}&limit=2000")
+def _holders(bid: str, *, asked: bool = False) -> List[Dict[str, Any]]:
+    """The church's holder rows: those who said yes; `asked`, those still
+    asked too (invited)."""
+    st = "in.(active,invited)" if asked else "eq.active"
+    return _need(f"/church_leader_roles?business_id=eq.{_q(bid)}&status={st}&select={LINK_COLS}&limit=2000")
+
+
+def _held(m: Map, holders: List[Dict[str, Any]], contact_id: Any, switch: str = "",
+          status: str = "active") -> Optional[str]:
+    """The key of the first active role this person has a `status` row in
+    (active: said yes; invited: asked), with `switch` on when one is named."""
+    by_key = {r["key"]: r for r in m.roles.values() if r.get("status") == "active"}
+    for h in holders:
+        if str(h["contact_id"]) == str(contact_id) and h.get("status", "active") == status:
+            d = by_key.get(h.get("role")) or cr.LEGACY.get(str(h.get("role") or ""))
+            if d and (not switch or can(m, d)[switch]):
+                return str(h.get("role"))
+    return None
 
 
 def qualifies(m: Map, holders: List[Dict[str, Any]], contact_id: Any, switch: str = "") -> bool:
     """Whether this person holds an active role here, with `switch` ("lead",
     "oversee") on when one is named: who may lead or oversee a department,
     and who the chain passes over once they no longer may (§3)."""
-    by_key = {r["key"]: r for r in m.roles.values() if r.get("status") == "active"}
-    for h in holders:
-        if str(h["contact_id"]) == str(contact_id):
-            d = by_key.get(h.get("role")) or cr.LEGACY.get(str(h.get("role") or ""))
-            if d and (not switch or can(m, d)[switch]):
-                return True
-    return False
+    return _held(m, holders, contact_id, switch) is not None
 
 
 def _things(bid: str, kind: str, ids: Iterable[str]) -> Dict[str, str]:
@@ -664,24 +677,48 @@ def _clash(m: Map, did: Optional[str], name: str) -> Optional[Dict[str, Any]]:
                 None)
 
 
-def _left_behind(d: Optional[Dict[str, Any]], by: Any) -> bool:
-    """A department this login's own save made in the last ten minutes and
-    couldn't finish: its units failed, and so did taking it back out, so it
-    was marked a draft from the office (save_department). A retry of that
-    save takes it as its own instead of hitting its name. A department made
-    on purpose with nothing hung from it is active, so it isn't one
-    (#1716 review). A retry whose units saved but whose last "make it active"
-    patch failed is a draft WITH units; the same login's next save within
-    the window finishes it too, rather than hitting the name (#1718 review)."""
-    if not d or d.get("status") != "draft" or d.get("source") != "office":
+def _left_behind(bid: str, d: Optional[Dict[str, Any]]) -> bool:
+    """A department a save made and couldn't finish: its units failed, and so
+    did taking it back out, so it was marked a draft with `unfinished_at`
+    (step 2's column, set only there: save_department). A retry of that save
+    takes it as its own instead of hitting its name, and clears the mark once
+    its units are in; until then it stays a draft, so a retry whose units or
+    last "make it active" fail is finished by the next one (#1718). A
+    department saved as a draft on purpose, or made active with nothing in
+    it, has no mark, so it is never taken over (§1.3). Before step 2's file
+    nothing is marked, and nothing is taken over."""
+    if not d or d.get("status") != "draft" or not _uuid(d.get("id")) or step2_state() is not True:
         return False
-    if not by or str(d.get("updated_by") or "") != str(by):
-        return False
+    got = _need(f"/church_departments?id=eq.{_q(d['id'])}&business_id=eq.{_q(bid)}&select=unfinished_at&limit=1")
+    return bool(got and got[0].get("unfinished_at"))
+
+
+def _uuid(v: Any) -> bool:
     try:
-        at = datetime.fromisoformat(str(d.get("updated_at") or "").replace("Z", "+00:00"))
-    except ValueError:
+        uuid.UUID(str(v))
+    except (ValueError, TypeError):
         return False
-    return datetime.now(timezone.utc) - (at if at.tzinfo else at.replace(tzinfo=timezone.utc)) <= LEFT_FOR
+    return True
+
+
+def _check_people(bid: str, m: Map, check: Dict[str, Optional[str]], goes: str) -> None:
+    """The people a department names (§3.2). Anyone named is one of this
+    church's people. A draft may name someone who doesn't qualify yet: the
+    map lists what they'll need. One that is or goes active needs each to
+    hold an active role with the switch (a leader leads, an overseer can
+    oversee), or to have been asked into one and not said yes yet (an
+    invited row: decision 2). chain_for passes over them until they do."""
+    if not any(check.values()):
+        return
+    people, holders = _people(bid, check.values()), _holders(bid, asked=True)
+    for k, who, switch, does in PEOPLE:
+        cid = check.get(k)
+        if cid and cid not in people:
+            _bad(f"That {who} isn’t one of this church’s people")
+        if cid and goes != "draft" and not (qualifies(m, holders, cid, switch) or
+                                            _held(m, holders, cid, switch, "invited")):
+            _bad(f"{people[cid]} doesn’t hold a role that {does}. Turn that on for their role in Leaders & "
+                 f"roles, or pick another {who}.")
 
 
 def _units_in(bid: str, m: Map, did: Optional[str], raw: Any) -> List[Dict[str, Any]]:
@@ -764,7 +801,7 @@ def save_department(biz: Any, body: Dict[str, Any], by: Any, *, m: Optional[Map]
     finish = None                           # a retry's status, set once its units are in
     if cur is None and isinstance(body.get("units"), list) and body["units"]:
         left = _clash(m, None, row["name"])
-        if _left_behind(left, by):          # the retry of a save that couldn't finish
+        if _left_behind(bid, left):         # the retry of a save that couldn't finish
             did, cur, finish = left["id"], left, "active"     # what the first try made it, unless this one says
     for k, allowed, say in (("status", STATUSES, "A department is a draft, active or archived"),
                             ("source", SOURCES, "A department comes from the office, Chief or a template"),
@@ -782,23 +819,17 @@ def save_department(biz: Any, body: Dict[str, Any], by: Any, *, m: Optional[Map]
         finish = row.pop("status", finish)
         if finish == "archived":
             row["status"], finish = finish, None
-    named = {k: _id(body[k], "person") if body[k] else None
-             for k in ("leader_contact_id", "overseer_contact_id") if k in body}
-    if any(named.values()):
-        people, holders = _people(bid, named.values()), _holders(bid)
-        for k, cid in named.items():
-            who, switch, does = (("leader", "lead", "leads") if k == "leader_contact_id" else
-                                 ("overseer", "oversee", "can oversee a department"))
-            if cid and cid not in people:
-                _bad(f"That {who} isn’t one of this church’s people")
-            if cid and not qualifies(m, holders, cid, switch):
-                _bad(f"{people[cid]} doesn’t hold a role that {does}. Turn that on for their role in Leaders & "
-                     f"roles, or pick another {who}.")
+    named = {k: _id(body[k], "person") if body[k] else None for k, *_w in PEOPLE if k in body}
     row.update(named)
     after = {**(cur or {}), **row}
+    status = after.get("status") or "active"
+    goes = finish or status                 # what it is once saved
+    if goes == "active" and (finish or (cur or {}).get("status") != "active"):
+        # It goes live (from a draft, or made active): its people are checked too (§3.2).
+        named = {**{k: after.get(k) for k, *_w in PEOPLE}, **named}
+    _check_people(bid, m, named, goes)
     if after.get("leader_contact_id") and after["leader_contact_id"] == after.get("overseer_contact_id"):
         _bad("A department’s leader and its overseer are two people")
-    status = after.get("status") or "active"
     clash = _clash(m, did, after["name"]) if status != "archived" else None
     if clash:
         _bad(f"There’s already a department called {clash['name']}")
@@ -812,8 +843,11 @@ def save_department(biz: Any, body: Dict[str, Any], by: Any, *, m: Optional[Map]
         saved = sb_clients.sb_post_as_service("/church_departments", {
             "business_id": bid, "status": "active", "source": "office", "sort": 0, **row, **stamp})
     else:
+        # A save to a draft by its id is the office's own: it is no half-made one for a retry to take.
+        mine = {"unfinished_at": None} if not finish and cur.get("status") == "draft" and step2_state() is True \
+            else {}
         saved = sb_clients.sb_patch_as_service(f"/church_departments?id=eq.{_q(did)}&business_id=eq.{q}",
-                                               {**row, **stamp})
+                                               {**row, **mine, **stamp})
     if not isinstance(saved, list) or not saved:
         raise _refused(bid, did, after["name"] if status != "archived" else "")
     did, have = str(saved[0]["id"]), (cur or {}).get("units") or []
@@ -832,25 +866,27 @@ def save_department(biz: Any, body: Dict[str, Any], by: Any, *, m: Optional[Map]
             **{c: (u["ref"] if UNIT_REF.get(u["kind"]) == c else None) for c in UNIT_REF.values()}} for u in new])
         if not isinstance(made, list) or len(made) != len(new):
             # A new department doesn't stay half made. When it can't be taken
-            # back out it is marked a draft, which routes nothing, and a retry
-            # of this save finishes it (_left_behind).
+            # back out it is marked a draft, which routes nothing, and
+            # unfinished, so a retry of this save finishes it (_left_behind).
+            # Before step 2's file it can't be marked so: archive it, then try again.
             if cur is None and not sb_clients.sb_delete_as_service(
                     f"/church_departments?id=eq.{_q(did)}&business_id=eq.{q}"):
-                marked = sb_clients.sb_patch_as_service(f"/church_departments?id=eq.{_q(did)}&business_id=eq.{q}",
-                                                        {"status": "draft", **stamp})
+                two = step2_state() is True
+                marked = sb_clients.sb_patch_as_service(f"/church_departments?id=eq.{_q(did)}&business_id=eq.{q}", {
+                    "status": "draft", **({"unfinished_at": stamp["updated_at"]} if two else {}), **stamp})
                 if not isinstance(marked, list) or not marked:     # it is left active, with nothing in it
                     print(f"[church_map] department {did} at {bid} left active and empty: its units, taking it "
                           "out and marking it a draft all failed", flush=True)
                     raise HTTPException(503, LEFT_EMPTY.format(name=after["name"]))
-                raise HTTPException(503, UNFINISHED)
+                raise HTTPException(503, UNFINISHED if two else LEFT_EMPTY.format(name=after["name"]))
             raise _refused(bid, did, units=new)
     gone = [u["id"] for u in have if _ukey(u) not in keep]
     if gone and not sb_clients.sb_delete_as_service(
             f"/church_department_units?business_id=eq.{q}&department_id=eq.{did}&id=in.({_in(gone)})"):
         raise HTTPException(503, UNSAVED)
-    if finish and finish != "draft":
-        done = sb_clients.sb_patch_as_service(f"/church_departments?id=eq.{_q(did)}&business_id=eq.{q}",
-                                              {"status": finish, **stamp})
+    if finish:      # the retry's units are in: finished, and what the first try would have made it
+        done = sb_clients.sb_patch_as_service(f"/church_departments?id=eq.{_q(did)}&business_id=eq.{q}", {
+            **({} if finish == "draft" else {"status": finish}), "unfinished_at": None, **stamp})
         if not isinstance(done, list) or not done:
             raise HTTPException(503, UNFINISHED)
         saved = done
@@ -944,17 +980,41 @@ def save_settings(biz: Any, body: Dict[str, Any], by: Any, role: str, *, m: Opti
 
 # ─── The office's map ─────────────────────────────────────────────────
 
-def view(biz: Dict[str, Any]) -> Dict[str, Any]:
+def _choices(bid: str, m: Map) -> Dict[str, List[Dict[str, Any]]]:
+    """GET /church/map?with=choices: what each of the department editor's
+    pickers offers, by unit kind: the church's groups, roles (drafts too),
+    boards and worship ministries by id, its Serve card's teams, budget lines
+    and the two spaces by label; each with the department, draft or active,
+    it already hangs from (a thing hangs from one), or None."""
+    hung = {_ukey(u): {"id": d["id"], "name": d["name"], "status": d["status"]}
+            for d in m.departments for u in d["units"]}
+    out: Dict[str, List[Dict[str, Any]]] = {}
+    for kind in KINDS:
+        if kind in UNIT_REF:
+            table, col, live = _THINGS[kind]
+            rows = _need(f"/{table}?business_id=eq.{_q(bid)}{live}&select=id,{col}&order={col}.asc&limit=500")
+            got = sorted(((str(r["id"]), _plain(r.get(col))) for r in rows), key=lambda x: x[1].casefold())
+        else:
+            got = [("", x) for x in _labels(bid, kind).values()]
+        out[kind] = [{"ref": ref, "label": label, "department": hung.get((kind, ref or label.casefold()))}
+                     for ref, label in got]
+    return out
+
+
+def view(biz: Dict[str, Any], *, choices: bool = False) -> Dict[str, Any]:
     """GET /church/map: each department with its people's names, its duty
     (label and who does it today, church_duties.holders_of) and its units by
     name; each role's switches; who answers to whom; the settings; and the
     gaps: a department missing a leader, an overseer or a duty, a leader or
     overseer who no longer qualifies, a serve option no longer on the Serve
-    card, a budget line gone, a unit whose thing is gone."""
+    card, a budget line gone, a unit whose thing is gone. Step 2 (§3.2): a
+    person asked into a role that would qualify them, who hasn't said yes
+    (the chain passes over them until then), and on a draft, what each named
+    person needs before it goes live. `choices`: the pickers' (_choices)."""
     import church_duties as cd
     import church_money_levels as cml
     bid = _bid(biz)
-    m, roles, holders = _map(bid), cr.defs(bid, with_drafts=True), _holders(bid)
+    m, roles, holders = _map(bid), cr.defs(bid, with_drafts=True), _holders(bid, asked=True)
     if roles is None:
         raise HTTPException(503, UNREAD)
     units = [u for d in m.departments for u in d["units"]]
@@ -972,10 +1032,18 @@ def view(biz: Dict[str, Any]) -> Dict[str, Any]:
         said = []
         for k, who, switch, does in (("leader_contact_id", "leader", "lead", "leads"),
                                      ("overseer_contact_id", "overseer", "oversee", "can oversee")):
+            name, asked = people.get(d[k] or "") or "Its " + who, _held(m, holders, d[k], switch, "invited")
             if not d[k]:
                 said.append((f"no_{who}", f"{d['name']} has no {who}."))
-            elif not qualifies(m, holders, d[k], switch):
-                said.append((f"{who}_off", f"{people.get(d[k]) or 'Its ' + who} no longer holds a role that {does}."))
+            elif qualifies(m, holders, d[k], switch):
+                continue
+            elif asked:             # passed over by the chain until they say yes (decision 2)
+                said.append((f"{who}_asked", f"{name} was asked into {cr.title_of(asked, roles)} and hasn’t said "
+                                             "yes yet."))
+            elif d["status"] == "draft":        # what they'll need before it goes live (§3.2)
+                said.append((f"{who}_needs", f"{name} needs a role that {does}."))
+            else:
+                said.append((f"{who}_off", f"{name} no longer holds a role that {does}."))
         if d["support_duty"] not in cd.CATALOG:
             said.append(("no_duty", f"No office duty is named to help {d['name']}."))
         shown = []
@@ -993,7 +1061,7 @@ def view(biz: Dict[str, Any]) -> Dict[str, Any]:
                        for w, k in (("leader", "leader_contact_id"), ("overseer", "overseer_contact_id"))},
                     "support_duty": {"key": duty, "label": cd.CATALOG[duty]["label"], "holders": helpers[duty]}
                     if duty else None, "units": shown})
-    return {"departments": out, "gaps": gaps,
+    return {"departments": out, "gaps": gaps, **({"choices": _choices(bid, m)} if choices else {}),
             "roles": [{**{k: r[k] for k in ("id", "key", "title", "job", "status")}, "switches": can(m, r)}
                       for r in roles],
             "answers_to": [{"holder_id": x["id"], "role": x["role"], "contact_id": x["contact_id"],
