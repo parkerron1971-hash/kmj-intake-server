@@ -184,6 +184,10 @@ EXPORT_EXCLUDED: Dict[str, str] = {
     "ledger_erasure_tickets":  "tamper-evident ledger: erasure requests; evidence",
 }
 BUSINESS_CHILD_TABLES: List[str] = [
+    # The leaders map (church_map, docs/CHURCH_LEADERS_MAP.md): a department's
+    # units before the department, and both before the boards, ministries,
+    # groups, roles and contacts they cite.
+    "church_department_units", "church_departments",
     # Board & minutes (church_board.py): decisions and attendance before the
     # items and members they cite, items before their meetings, meetings and
     # members before their boards; all before the contacts and tasks they cite.
@@ -895,6 +899,10 @@ _IMPORT_SKIP = {
     # church's library fills again the first time Leaders & roles opens.
     "church_follow_up_notes", "church_follow_ups", "church_leader_roles",
     "church_role_defs", "church_role_settings",
+    # The leaders map's departments cite their leader and overseer by
+    # contact id, and their units cite groups, roles, boards and ministries
+    # by id; same reason. A restored church draws its map again.
+    "church_department_units", "church_departments",
     # Shepherding cites families and shepherds by id, a proposal cites
     # families and members by id, and "Not a family" is a hash of member
     # ids; same reason. A restored church keeps its shepherding settings

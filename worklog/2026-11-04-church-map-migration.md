@@ -3,15 +3,15 @@ title: Church leaders map, PR 2 — the migration (role switches, answers-to, ch
 date: 2026-11-04
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-11-03: take the leaders flow further, for every church that subscribes ("what i don''t want is what i build works for love city but is broken and messed up for other churches"); design 4V41zJz1kEJGdeo4J9D2Ym approved'
-status: waiting on Kevin
+status: in review
 prs: ["kmj-intake-server (this PR)"]
 migrations: [supabase/APPLY-2026-11-04-church-map.sql (not yet applied; applied by hand after review, before PR 3 merges)]
 left_undone:
   - "Apply supabase/APPLY-2026-11-04-church-map.sql by hand after review and before PR 3 merges; run the ledger row's before/after checks, then mark the row APPLIED"
-  - "BLOCKS THIS PR (CI): account_lifecycle.py must list church_departments and church_department_units, or test_export_import.py::TestTheListCannotRot fails (every business_id table is exported or excluded with a reason). Proposed: both at the head of BUSINESS_CHILD_TABLES (units, then departments: before the boards, ministries, groups, roles and contacts they cite) and both in _IMPORT_SKIP beside church_role_defs (they cite people, groups, roles, boards and ministries by id). Held because PR 2's brief allows no production Python"
   - "PR 3: update_role leaves the switches alone when a role's job changes; decide whether a job change writes the new job's defaults (until PR 4 the leaders room still reads the job, so a role re-jobbed in between drifts at PR 4)"
   - "PR 9: drop church_role_defs_switches' insert fill and church_role_switches_today once every write names the switches (the trim of made_for stays)"
 decisions:
+  - "account_lifecycle.py lists both new tables: at the head of BUSINESS_CHILD_TABLES (units, then departments, before the boards, ministries, groups, roles and contacts they cite) and in _IMPORT_SKIP beside church_role_defs (they cite people, groups, roles, boards and ministries by id; a restored church draws its map again). The one production Python line in this PR, required by test_export_import's list check"
   - "The guard's real name is church_role_defs_guard (APPLY-2026-10-17-church-role-library.sql:102-104); it is disabled only for the one backfill update, inside the block, under the ALTER's lock"
   - "Today's rule lives in one SQL function, church_role_switches_today(job, key, title, handles), used by the backfill and by a new insert trigger; test_church_map_vectors.py pins its literals to SHEPHERD_TITLE, MINISTER_TITLE, LEADER_JOBS and the Executive Pastor key"
   - "Added beyond §1: a role inserted with none of the switches said gets today's rule (otherwise a library filled between this migration and PR 3 gets can_shepherd null and can_lead false), and made_for is trimmed to handles on every write (otherwise the check refuses today's role edits that drop a stream)"
