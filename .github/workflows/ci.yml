@@ -237,3 +237,4 @@ jobs:
           node __tests__/church_duties_db.mjs
           node __tests__/serve_team_owner_db.mjs
           node __tests__/church_map_db.mjs
+          node __tests__/church_map_step2_db.mjs
