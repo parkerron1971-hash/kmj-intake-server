@@ -278,18 +278,25 @@ async def send_note(business: Dict[str, Any], leader: Dict[str, Any], request_id
 
 def pass_targets(business_id: str, leader: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
     """Who a prayer leader can pass a request to: members holding a role
-    that takes passed-on prayer and answers to one of this leader's roles."""
+    that takes passed-on prayer and answers to one of this leader's roles,
+    or, where the church's map is open, to this leader as a person (their
+    holder row's answers-to)."""
     import church_follow_up as cfu
+    import church_map
     import church_roles as cr
     biz, lid = str(business_id), str(leader["id"])
-    defs, holders = cr.defs(biz), cfu.roles(biz)
-    if defs is None or holders is None:
+    defs, holders, mp = cr.defs(biz), cfu.roles(biz), church_map.opened(biz)
+    if defs is None or holders is None or mp is None:
         return None
     mine = {d["id"] for d in defs if any(h["contact_id"] == lid and h["status"] == "active" and h["role"] == d["key"]
                                           for h in holders)}
-    keys = {d["key"] for d in defs if d.get("reports_to") in mine and "prayer_passed" in (d.get("handles") or [])}
+    passed = {d["key"] for d in defs if "prayer_passed" in (d.get("handles") or [])}
+    keys = {d["key"] for d in defs if d.get("reports_to") in mine and d["key"] in passed}
+
+    def under(h: Dict[str, Any]) -> bool:
+        return h["role"] in keys or bool(mp and h["role"] in passed and mp.answers_to(h["contact_id"], h["role"]) == lid)
     return [{"contact_id": h["contact_id"], "name": h["name"], "role": h["role"]}
-            for h in holders if h["status"] == "active" and h["role"] in keys and h["contact_id"] != lid]
+            for h in holders if h["status"] == "active" and under(h) and h["contact_id"] != lid]
 
 
 def pass_on(business_id: str, leader: Dict[str, Any], request_id: str, to_contact_id: str) -> Dict[str, Any]:
@@ -389,9 +396,11 @@ async def _sweep_church(biz_id: str, items: List[Dict[str, Any]], now: datetime,
     if not bizs:
         return
     biz = bizs[0]
+    import church_map
     defs = await asyncio.to_thread(cr.defs, biz_id)
     holders = await asyncio.to_thread(cfu.roles, biz_id)
-    if defs is None or holders is None:
+    mp = await asyncio.to_thread(church_map.opened, biz_id)
+    if defs is None or holders is None or mp is None:
         return
     held = cr.active_holders(holders)
     people = {h["contact_id"]: h for h in holders}
@@ -428,7 +437,10 @@ async def _sweep_church(biz_id: str, items: List[Dict[str, Any]], now: datetime,
         level, kind = rung
         delivered = False
         role = dmap.get(r.get("leader_role") or "")
-        above = cr.chain_above(role, defs, held, skip={lid})
+        # Where the church's map is open, the leader's person chain
+        # (church_map.chain_for): their department, or who they answer to.
+        above = (church_map.chain_for(mp, defs, held, lid, role, skip={lid}) if mp
+                 else cr.chain_above(role, defs, held, skip={lid}))
         if kind == "nudged":
             if leader and leader.get("email"):
                 delivered = await cfu._email(biz, leader["email"], leader["name"], f"{who}’s prayer request is due today",

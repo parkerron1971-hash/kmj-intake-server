@@ -17,6 +17,10 @@ church's structure is data (supabase/APPLY-2026-11-04-church-map.sql).
     opened(biz) ..... what a reader takes: False (closed, or not ready),
                       else load(biz)
     can(m, role) .... a role's seven switches; made_for(m, role) its streams
+    chain_for(...) .. who hears, step by step up from a person (PR 6): their
+                      department's overseer, the item's department's leader
+                      then overseer, the person they answer to, then
+                      church_roles.chain_above, today's chain
     propose(biz) .... a read-only draft of departments, step 2's hook
     the writes ...... save_department, archive_department, set_answers_to,
                       save_settings (PR 5; church_map_router's routes): each
@@ -31,7 +35,9 @@ switches, then today's rule; open and ready but load() failed, the caller
 does what it does today on a failed read. The switches decide who shepherds
 (church_shepherding.role_rows), choose's tie-break (church_follow_up) and
 the leaders room (member_portal_messaging); church_roles writes them once
-ready().
+ready(). chain_for is who a late item, a drifting family or a waiting
+prayer goes up to (Shepherding, the follow-up and prayer sweeps, the
+shepherd signals, leader tasks).
 
 Server-only tables, read through the service role, always by business_id.
 """
@@ -305,6 +311,108 @@ def says(m: Optional[Map], d: Dict[str, Any]) -> str:
     if made:
         words.append("first in line for: " + "; ".join(cr.STREAMS[s] for s in made if s in cr.STREAMS))
     return "Switches: " + (", ".join(words) if words else "none")
+
+
+# ─── The person chain (PR 6) ──────────────────────────────────────────
+
+CHAIN_MAX = 12      # map steps; naming each person once already ends every walk
+
+
+def _step(depts: List[Dict[str, Any]], who: str, people: int, seat_role: Dict[str, Any]) -> Dict[str, Any]:
+    """A department step, shaped like a role so a caller reads its title and
+    job as it reads chain_above's: "Youth overseer"."""
+    names = list(dict.fromkeys(d["name"] for d in depts))
+    return {"id": f"department:{depts[0]['id']}:{who}", "key": "", "job": seat_role.get("job") or "",
+            "title": f"{' and '.join(names)} {who}{'s' if people > 1 else ''}", "department_id": depts[0]["id"]}
+
+
+def chain_for(m: Map, defs: List[Dict[str, Any]], holders: Dict[str, List[Dict[str, Any]]], person: Any,
+              role: Optional[Dict[str, Any]], *, team: str = "", group_id: Any = None,
+              skip: Iterable[Any] = ()) -> List[tuple]:
+    """Who hears, nearest first, up from `person` holding `role` for an item
+    (its team, its group), in chain_above's shape: (step, [holder rows]),
+    where a step is a role, or a department step (_step), or the role the
+    answers-to person holds. Each step up from a person P (§3):
+
+      1. P leads active departments: their overseer (the one whose units
+         hold the item's group, team or role; else every one, once each);
+      2. from the item's own person only: the item's department, which P
+         neither leads nor oversees: its leader, then its overseer
+         (decision 1);
+      3. P's holder row for the role names who they answer to: that person;
+      4. else church_roles.chain_above from P's role, past anyone named.
+
+    A person counts while they hold an active role here with the switch
+    the step asks (an overseer can_oversee, a leader can_lead, an answers-to
+    person any role); else they are passed over, like an empty role. Each
+    person is named once and each department climbed once, so a loop ends;
+    the support duty is never a step: support helps and never directs."""
+    by = {d["key"]: d for d in defs}
+    rank = {d["key"]: n for n, d in enumerate(defs)}
+    rows = sorted((h for hs in holders.values() for h in hs), key=lambda h: rank.get(str(h.get("role") or ""), 999))
+    named = {str(x) for x in skip if x}
+    out: List[tuple] = []
+    done: set = set()
+
+    def seat(cid: Any, switch: str = "") -> Optional[tuple]:
+        """(their role, their holder row): the first active role, in the
+        library's order, this person holds with `switch` on. None when there
+        is none, or they were named already."""
+        cid = str(cid or "")
+        if not cid or cid in named:
+            return None
+        for h in rows:
+            d = by.get(str(h.get("role") or ""))
+            if str(h["contact_id"]) == cid and d and d.get("status", "active") == "active" \
+                    and (not switch or can(m, d)[switch]):
+                return d, h
+        return None
+
+    def up(depts: List[Dict[str, Any]], who: str) -> Optional[tuple]:
+        """One step to these departments' leader or overseers, each person
+        once; the one who doesn't qualify is passed over. Its first person's
+        seat, or None when nobody qualified."""
+        said, people = [], {}
+        for d in depts:
+            done.add(d["id"])
+            s = seat(d[f"{who}_contact_id"], "lead" if who == "leader" else "oversee")
+            if s:
+                said.append(d)
+                people.setdefault(str(s[1]["contact_id"]), s)
+        if not people:
+            return None
+        head = next(iter(people.values()))
+        out.append((_step(said, who, len(people), head[0]), [s[1] for s in people.values()]))
+        named.update(people)
+        return head
+
+    item = [d for d in (m.department_of("group", group_id) if group_id else None,
+                        m.department_of("serve_option", team) if team else None,
+                        m.department_of("role", role["id"]) if role and role.get("id") else None) if d]
+    ids = {d["id"] for d in item}
+    cur, cur_role, cur_team, first = str(person or ""), role, team, True
+    if cur:
+        named.add(cur)
+    while cur:
+        if len(out) >= CHAIN_MAX:
+            return out
+        led = [d for d in m.led_by(cur) if d["id"] not in done]
+        nxt = up([d for d in led if d["id"] in ids] or led, "overseer") if led else None
+        mine = item[0] if item and first else None
+        if not nxt and mine and mine["id"] not in done and cur != mine["overseer_contact_id"]:
+            lead = up([mine], "leader")
+            nxt = up([mine], "overseer") or lead
+        if not nxt:
+            s = seat(m.answers_to(cur, cur_role["key"]) if cur_role else m.answers_to(cur))
+            if s:
+                out.append(({**s[0], "answers_to": str(s[1]["contact_id"])}, [s[1]]))
+                named.add(str(s[1]["contact_id"]))
+                nxt = s
+        if not nxt:
+            break
+        cur_role, row = nxt
+        cur, cur_team, first = str(row["contact_id"]), row.get("scope") or "", False
+    return out + cr.chain_above(cur_role, defs, holders, team=cur_team, skip=named)
 
 
 # ─── A draft ──────────────────────────────────────────────────────────

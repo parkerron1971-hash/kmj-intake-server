@@ -1242,10 +1242,12 @@ async def _sweep_church(biz_id: str, items: List[Dict[str, Any]], now: datetime,
         return
     biz = bizs[0]
     ids = {str(r["contact_id"]) for r in items} | {str(r["leader_contact_id"]) for r in items if r.get("leader_contact_id")}
+    import church_map
     import church_roles as cr
     all_roles = await asyncio.to_thread(roles, biz_id)
     all_defs = await asyncio.to_thread(cr.defs, biz_id)
-    if all_roles is None or all_defs is None:
+    mp = await asyncio.to_thread(church_map.opened, biz_id)
+    if all_roles is None or all_defs is None or mp is None:
         return  # the chain can't be read today; next sweep
     held = cr.active_holders(all_roles)
     defs = _effective_defs(all_defs, all_roles)
@@ -1343,13 +1345,20 @@ async def _sweep_church(biz_id: str, items: List[Dict[str, Any]], now: datetime,
             # Up the leader's own chain: a day late, the role they answer to;
             # three days late, one more step up. An empty role is passed
             # over; with no one above, the senior role is asked to hand them
-            # on. No leader at all: the senior role from the start.
+            # on. No leader at all: the senior role from the start. Where the
+            # church's map is open, the leader's person chain first
+            # (church_map.chain_for): their department's overseer, or their
+            # team's department's leader, then its overseer.
             who = leader["name"] if leader else "No one"
             role = dmap.get(r.get("leader_role") or "") if leader else None
             team = next((h.get("scope") or "" for h in all_roles
                          if h["contact_id"] == lid and h["role"] == (r.get("leader_role") or "")), "")
-            above = cr.chain_above(role, defs, held,
-                                   team=team, skip={lid} if lid else ())
+            if mp:
+                above = church_map.chain_for(mp, defs, held, lid if leader else None, role,
+                                             team=team, skip={lid} if lid else ())
+            else:
+                above = cr.chain_above(role, defs, held,
+                                       team=team, skip={lid} if lid else ())
             n = 0 if kind == "overseer_told" else 1
             rung_role, rung_people = above[min(n, len(above) - 1)] if above else (None, [])
             top = bool(rung_role and rung_role["job"] == "senior")
