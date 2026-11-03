@@ -1,6 +1,10 @@
 """The three test churches (docs/CHURCH_LEADERS_MAP.md §6): Love City, Grace
 Baptist and New Hope, all in one in-memory PostgREST, so every reader runs its
-real path and a read that leaks across churches shows.
+real path and a read that leaks across churches shows. Step 2 adds a fourth,
+Riverside (docs/CHURCH_LEADERS_STEP2.md §0.1), in the same fake: an AME church
+of 60 people that nobody has set up. It has no role settings row, no roles and
+no holders, its owner is not the platform owner, and build() never seeds it.
+CHURCHES stays the three, so step 1's tests are untouched; FOUR adds Riverside.
 
     build(monkeypatch, *, map_on=True, filled=True, migrated=True) -> db
 
@@ -55,11 +59,15 @@ from test_church_follow_up import BIZ as LOVE_CITY, OWNER as LC_OWNER, SERVE  # 
 
 GRACE = "2b000000-0000-4000-8000-000000000000"
 NEW_HOPE = "3b000000-0000-4000-8000-000000000000"
+RIVERSIDE = "4b000000-0000-4000-8000-000000000000"
 G_OWNER = "2a000000-0000-4000-8000-000000000000"
 NH_OWNER = "3a000000-0000-4000-8000-000000000000"
+R_OWNER = "4a000000-0000-4000-8000-000000000000"
 CHURCHES = (LOVE_CITY, GRACE, NEW_HOPE)
-NAMES = {LOVE_CITY: "love_city", GRACE: "grace", NEW_HOPE: "new_hope"}
-OWNER_EMAIL = {LC_OWNER: PLATFORM, G_OWNER: "pastor@gracebaptist.org", NH_OWNER: "nathan@newhope.church"}
+FOUR = (*CHURCHES, RIVERSIDE)
+NAMES = {LOVE_CITY: "love_city", GRACE: "grace", NEW_HOPE: "new_hope", RIVERSIDE: "riverside"}
+OWNER_EMAIL = {LC_OWNER: PLATFORM, G_OWNER: "pastor@gracebaptist.org", NH_OWNER: "nathan@newhope.church",
+               R_OWNER: "pastor@riversideame.org"}
 # Every Sunday the senior pastor checked in, 8/23 to 11/1; the drifting
 # family came 9/20 and 9/27, then missed 10/4, 10/11 and 10/18.
 SUNDAYS = [date(2026, 11, 1) - timedelta(weeks=i) for i in range(11)]
@@ -386,6 +394,27 @@ def _new_hope(db):
                          "office_overseer_roles": ["director_of_operations"]}}
 
 
+def _riverside(db):
+    """Riverside AME (step 2, §0.1): 60 people, 40 of them in 20 households,
+    and nothing set up. The pastor owns the account, which is not the
+    platform's. No one holds a role, there are no office logins and no
+    Serve card, and the library was never filled: no role settings row, no
+    roles, no area guesses. It has no map."""
+    c = _Church(db, RIVERSIDE, 4, "riversideame.org")
+    c.person(1, "Clara Whitfield", email=OWNER_EMAIL[R_OWNER])
+    for n, name in enumerate(["Henry Dawson", "Lois Carter", "Walter Grimes", "Bernice Moody", "Odell Freeman",
+                              "Hattie Lyons", "Curtis Bland", "Nell Bland"], 2):
+        c.person(n, name)
+    rest = [c.person(n, f"R{n:02d} Member") for n in range(10, 61)]       # 60 people in all
+    homes = [("The Bland family", [c.who["curtis"], c.who["nell"]])] + [
+        (f"Household {i}", rest[2 * i:2 * i + 2]) for i in range(19)]
+    for i, (name, adults) in enumerate(homes):                             # 20 households, 40 adults
+        hid = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{RIVERSIDE}-home-{i}"))
+        db.t["households"].append({"id": hid, "business_id": RIVERSIDE, "name": name, "created_at": "2026-10-25"})
+        db.t["household_adults"] += [{"household_id": hid, "contact_id": a, "business_id": RIVERSIDE,
+                                      "relationship": "parent"} for a in adults]
+
+
 # ─── Probes: who hears, through each path's real entry point ──────────
 
 MONDAYS = [datetime(2026, 10, 19, 15, tzinfo=timezone.utc) + timedelta(weeks=i) for i in range(3)]
@@ -551,12 +580,15 @@ def build(monkeypatch, *, map_on: bool = True, filled: bool = True, migrated: bo
         {"id": GRACE, "name": "Grace Baptist Church", "type": "ministry", "owner_id": G_OWNER,
          "settings": {"practitioner_name": "Pastor Gray", "timezone": "America/Chicago"}},
         {"id": NEW_HOPE, "name": "New Hope Church", "type": "ministry", "owner_id": NH_OWNER,
-         "settings": {"practitioner_name": "Pastor Nathan", "timezone": "America/New_York"}}])
+         "settings": {"practitioner_name": "Pastor Nathan", "timezone": "America/New_York"}},
+        {"id": RIVERSIDE, "name": "Riverside AME Church", "type": "ministry", "owner_id": R_OWNER,
+         "settings": {"practitioner_name": "Pastor Whitfield", "timezone": "America/New_York"}}])
     db.t["intake_forms"] = [_serve(LOVE_CITY, SERVE["fields"][2]["options"]),
                             _serve(GRACE, ["Usher Board", "Youth Ministry", "Kitchen Committee"]),
                             _serve(NEW_HOPE, ["Worship Team", "Youth Volunteers", "Kids Check-in", "Guest Experience",
                                               "Parking Team"])]
-    db.who, db.label, db.migrated = {}, {LC_OWNER: "owner", G_OWNER: "owner", NH_OWNER: "owner"}, migrated
+    db.who, db.label, db.migrated = {}, {LC_OWNER: "owner", G_OWNER: "owner", NH_OWNER: "owner",
+                                         R_OWNER: "owner"}, migrated
     for name in ("get", "post", "patch", "delete"):
         monkeypatch.setattr(sb_clients, f"sb_{name}_as_service", getattr(db, name))
     for k in ("CHURCH_DUTIES", "CHURCH_MONEY_LEVELS"):
@@ -572,9 +604,12 @@ def build(monkeypatch, *, map_on: bool = True, filled: bool = True, migrated: bo
                       (church_map, "_READY")):
         monkeypatch.setattr(mod, name, {})
     for b in db.t["businesses"]:
-        cr.ensure_library(b)
+        if b["id"] in CHURCHES:                  # Riverside is never seeded: its first open does that
+            cr.ensure_library(b)
     intent = {LOVE_CITY: _love_city(db), GRACE: _grace(db), NEW_HOPE: _new_hope(db)}
     db.intent, db.map_intent = intent, (intent if filled else {})
     for biz, m in db.map_intent.items():
         write_map(db, biz, m)
+    # Riverside last, and it takes no ids from the counter (nid): the three's rows come out as before it.
+    _riverside(db)
     return db
