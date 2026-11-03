@@ -312,8 +312,9 @@ def choose(kind: str, answers: List[Dict[str, str]], roles: List[Dict[str, Any]]
     """{leader: holder row or None, role: its key, reason}. The church's own
     roles decide: the ones whose job takes what the card asks for (its
     stream), the holder with the fewest open follow-ups first. A team's
-    sign-up goes to its leader, else the role with the team under it, else
-    up the chain. Nobody for it: the senior role, else the office. The
+    sign-up goes to its leader, else (the map open) its department's leader
+    or overseer, else the role with the team under it, else up the chain.
+    Nobody for it: the senior role, else the office. The
     reason is said to the leader and shown to the office, so it names what
     decided it. `what` names the cards in that reason when they aren't the
     stream's own ("First check-ins go to …" rides the connect stream). `m`
@@ -367,6 +368,13 @@ def choose(kind: str, answers: List[Dict[str, str]], roles: List[Dict[str, Any]]
         if leads:
             rows = [r for _d, rs in leads for r in rs]
             return to(rows, f"They picked {team}, and {first_name(best(rows)[0].get('name') or '')} leads it.")
+        if m:
+            # Where the map is open: the department its Serve option hangs
+            # from, its leader, else its overseer, before oversees_teams.
+            import church_map
+            head = church_map.team_head(m, defs, cr.active_holders(held), team)
+            if head:
+                return to([head[1]], f"They picked {team}, which has no leader yet; it goes to the {head[0]['title']}.")
         over = takers("serve", team)
         if over:
             d, rows = over[0]

@@ -23,6 +23,8 @@ church's structure is data (supabase/APPLY-2026-11-04-church-map.sql).
                       department's overseer, the item's department's leader
                       then overseer, the person they answer to, then
                       church_roles.chain_above, today's chain
+    team_head(...) .. who a Serve sign-up for a team with no leader goes to:
+                      its department's leader, else its overseer
     propose(biz) .... a read-only draft of departments, step 2's hook
     the writes ...... save_department, archive_department, set_answers_to,
                       save_settings (PR 5; church_map_router's routes): each
@@ -373,6 +375,44 @@ def _step(depts: List[Dict[str, Any]], who: str, people: int, seat_role: Dict[st
             "title": f"{' and '.join(names)} {who}{'s' if people > 1 else ''}", "department_id": depts[0]["id"]}
 
 
+def _ranked(defs: List[Dict[str, Any]], holders: Dict[str, List[Dict[str, Any]]]) -> tuple:
+    """(role key -> role, every holder row in the library's order)."""
+    rank = {d["key"]: n for n, d in enumerate(defs)}
+    return ({d["key"]: d for d in defs},
+            sorted((h for hs in holders.values() for h in hs), key=lambda h: rank.get(str(h.get("role") or ""), 999)))
+
+
+def _seat(m: Map, by: Dict[str, Dict[str, Any]], rows: List[Dict[str, Any]], cid: str,
+          switch: str = "") -> Optional[tuple]:
+    """(their role, their holder row): the first active role, in the
+    library's order, this person holds with `switch` on; None when none."""
+    for h in rows:
+        d = by.get(str(h.get("role") or ""))
+        if cid and str(h["contact_id"]) == cid and d and d.get("status", "active") == "active" \
+                and (not switch or can(m, d)[switch]):
+            return d, h
+    return None
+
+
+def team_head(m: Map, defs: List[Dict[str, Any]], holders: Dict[str, List[Dict[str, Any]]],
+              team: str) -> Optional[tuple]:
+    """Who a Serve sign-up goes to when its team has no leader of its own and
+    its Serve option hangs from an active department: that department's
+    leader while they hold an active role that leads, else its overseer while
+    they hold one that oversees (decision 1). (step, holder row), the step
+    shaped as chain_for's ("Youth leader"). None when the team hangs from no
+    active department or neither person qualifies: today's rule goes on."""
+    d = m.department_of("serve_option", team) if team else None
+    if not d:
+        return None
+    by, rows = _ranked(defs, holders)
+    for who, switch in (("leader", "lead"), ("overseer", "oversee")):
+        s = _seat(m, by, rows, str(d[f"{who}_contact_id"] or ""), switch)
+        if s:
+            return _step([d], who, 1, s[0]), s[1]
+    return None
+
+
 def chain_for(m: Map, defs: List[Dict[str, Any]], holders: Dict[str, List[Dict[str, Any]]], person: Any,
               role: Optional[Dict[str, Any]], *, team: str = "", group_id: Any = None,
               skip: Iterable[Any] = ()) -> List[tuple]:
@@ -394,26 +434,15 @@ def chain_for(m: Map, defs: List[Dict[str, Any]], holders: Dict[str, List[Dict[s
     person any role); else they are passed over, like an empty role. Each
     person is named once and each department climbed once, so a loop ends;
     the support duty is never a step: support helps and never directs."""
-    by = {d["key"]: d for d in defs}
-    rank = {d["key"]: n for n, d in enumerate(defs)}
-    rows = sorted((h for hs in holders.values() for h in hs), key=lambda h: rank.get(str(h.get("role") or ""), 999))
+    by, rows = _ranked(defs, holders)
     named = {str(x) for x in skip if x}
     out: List[tuple] = []
     done: set = set()
 
     def seat(cid: Any, switch: str = "") -> Optional[tuple]:
-        """(their role, their holder row): the first active role, in the
-        library's order, this person holds with `switch` on. None when there
-        is none, or they were named already."""
+        """_seat, or None when they were named already."""
         cid = str(cid or "")
-        if not cid or cid in named:
-            return None
-        for h in rows:
-            d = by.get(str(h.get("role") or ""))
-            if str(h["contact_id"]) == cid and d and d.get("status", "active") == "active" \
-                    and (not switch or can(m, d)[switch]):
-                return d, h
-        return None
+        return None if not cid or cid in named else _seat(m, by, rows, cid, switch)
 
     def up(depts: List[Dict[str, Any]], who: str) -> Optional[tuple]:
         """One step to these departments' leader or overseers, each person
@@ -624,8 +653,10 @@ def _left_behind(d: Optional[Dict[str, Any]], by: Any) -> bool:
     was marked a draft from the office (save_department). A retry of that
     save takes it as its own instead of hitting its name. A department made
     on purpose with nothing hung from it is active, so it isn't one
-    (#1716 review)."""
-    if not d or d["units"] or d.get("status") != "draft" or d.get("source") != "office":
+    (#1716 review). A retry whose units saved but whose last "make it active"
+    patch failed is a draft WITH units; the same login's next save within
+    the window finishes it too, rather than hitting the name (#1718 review)."""
+    if not d or d.get("status") != "draft" or d.get("source") != "office":
         return False
     if not by or str(d.get("updated_by") or "") != str(by):
         return False

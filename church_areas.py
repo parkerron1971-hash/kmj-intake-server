@@ -641,7 +641,9 @@ def _places(biz: str) -> Dict[Tuple[str, str], str]:
     is never read as the church's pick, so turning the map off again can't
     label a guess "your church placed it here"."""
     import church_map
-    picks = "&by=eq.church" if church_map.ready() else ""
+    # state(): only a database known to lack the columns reads every row; a
+    # failed probe still asks for picks alone (#1718 review).
+    picks = "&by=eq.church" if church_map.state() is not False else ""
     rows = _need(f"/church_area_places?business_id=eq.{_q(biz)}{picks}&select=kind,key,area&limit=500")
     return {(r.get("kind") or "", r.get("key") or ""): r.get("area") or "" for r in rows}
 
@@ -904,7 +906,13 @@ def place(body: Dict[str, Any], session: UserSession = Depends(sb_clients.authed
     # (places_for): a pick over a guess becomes the church's, and putting one
     # back takes away only a pick; the next read stores a guess afresh.
     import church_map
-    picks = church_map.ready()
+    # A failed probe (state() None) is a 503, never a write in the old shape:
+    # that would merge a pick into a stored guess row, or take a guess away
+    # on "back to Chief's guess" (#1718 review).
+    known = church_map.state()
+    if known is None:
+        raise HTTPException(503, "That didn't save. Try again.")
+    picks = known is True
     if area is None:
         ok = sb_clients.sb_delete_as_service(
             f"/church_area_places?business_id=eq.{_q(biz)}&kind=eq.{_q(kind)}&key=eq.{_q(key)}"
