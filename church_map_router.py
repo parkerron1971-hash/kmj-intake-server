@@ -1,7 +1,8 @@
 """church_map_router.py — the office's leaders map (docs/CHURCH_LEADERS_MAP.md §3, PR 5).
 
     GET  /church/map?business_id=                   the map and its gaps (church_map.view);
-                                                    a manager seat and up
+                                                    a manager seat and up; &with=choices adds
+                                                    what the editor's pickers offer (B3b)
     PUT  /church/map/departments?business_id=       make or change a department, and what
                                                     hangs from it; the owner or an admin
     POST /church/map/departments/{id}/archive?...   archive one; what hung from it is free
@@ -110,9 +111,11 @@ class _Settings(BaseModel):
 
 
 @router.get("")
-def map_view(business_id: str = Query(...), user: AuthedUser = Depends(require_user)):
+def map_view(business_id: str = Query(...), with_: str = Query("", alias="with", max_length=20),
+             user: AuthedUser = Depends(require_user)):
     biz, role = _church(business_id, user, "manager")
-    return {**cm.view(biz), "you": {"role": role, "writes": role in ("owner", "admin"), "money": role == "owner"}}
+    return {**cm.view(biz, choices=with_ == "choices"),
+            "you": {"role": role, "writes": role in ("owner", "admin"), "money": role == "owner"}}
 
 
 @router.put("/departments")

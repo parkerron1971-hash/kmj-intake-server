@@ -149,16 +149,19 @@ def test_a_half_made_department_that_cant_be_taken_out_is_finished_by_the_retry(
     assert _refused(_save, lc, body, code=503) == "That couldn’t finish saving. Try again in a moment."
     left = _dept(lc, LC, "Kids")
     assert (left["status"], left["source"]) == ("draft", "office"), "marked half made: a draft routes nothing"
-    other = dict(body, name="Teens")
+    assert left["unfinished_at"], "and unfinished (step 2's column): only this path sets it"
+    other = dict(body, name="Teens", units=[{"kind": "check_line", "label": "youth"}])
     _refused(_save, lc, other, code=503)
-    _dept(lc, LC, "Teens")["updated_by"] = "someone-else"
     monkeypatch.setattr(sb_clients, "sb_post_as_service", post)
     monkeypatch.setattr(sb_clients, "sb_delete_as_service", delete)
     again = _save(lc, body)
     assert (again["id"], [u["label"] for u in again["units"]]) == (left["id"], ["kids"]), "the retry finishes it"
     assert again["status"] == _dept(lc, LC, "Kids")["status"] == "active"
+    assert _dept(lc, LC, "Kids")["unfinished_at"] is None, "finished: the mark is cleared"
     assert [d["name"] for d in lc.t["church_departments"] if d["business_id"] == LC].count("Kids") == 1
-    assert _refused(_save, lc, other) == "There’s already a department called Teens", "another login's isn't theirs"
+    teens = _dept(lc, LC, "Teens")["id"]
+    assert cm.save_department(church(lc, LC), other, lc.who[LC]["minnie@"])["id"] == teens, \
+        "the mark decides, not who saved or when (§1.3): another login's retry finishes it too"
 
 
 def _units_fail(monkeypatch):
@@ -199,9 +202,9 @@ def test_a_retry_whose_units_fail_again_stays_a_draft(lc, monkeypatch):
 
 
 def test_a_department_made_on_purpose_with_nothing_in_it_is_never_taken_for_a_half_made_one(lc):
-    """The same login, within the ten minutes, with no units: an active
-    department it meant to make. A same-name save is the 400, and it is
-    left as it was (#1716 review)."""
+    """The same login, at once, with no units: an active department it meant
+    to make. A same-name save is the 400, and it is left as it was (#1716
+    review)."""
     made = _save(lc, {"name": "Kids"})
     assert (made["status"], made["units"]) == ("active", [])
     body = {"name": "Kids", "units": [{"kind": "space", "label": "kids"}]}

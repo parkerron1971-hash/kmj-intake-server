@@ -140,7 +140,8 @@ class _RoleDef(BaseModel):
     status: Optional[str] = Field(None, max_length=10)
     # The role's switches (docs/CHURCH_LEADERS_MAP.md §3); a null
     # can_shepherd follows the church's Ministers setting. Written once the
-    # map's columns are there (church_map.ready); nothing reads them yet.
+    # map's columns are there (church_map.ready). Saying one needs an admin
+    # seat, and changing can_board_yes the owner (step 2, decision 3).
     can_shepherd: Optional[bool] = None
     can_oversee: Optional[bool] = None
     can_lead: Optional[bool] = None
@@ -247,22 +248,32 @@ def role_create(body: _RoleDef, business_id: str = Query(...),
                 biz: Dict[str, Any] = Depends(business_access(CARE_MIN_ROLE)),
                 session: UserSession = Depends(sb_clients.authed_request)):
     """Make a role: the church's own title on one of the jobs."""
+    import church_map_batch
     uid, _name = _who(session)
-    if church_roles.ensure_library(biz) is None:
-        raise HTTPException(503, "Your roles couldn't be loaded. Try again in a moment.")
     fields = body.model_dump(exclude_none=True)
     if "can_shepherd" in body.model_fields_set:     # null, said, is "follows the Ministers setting"
         fields["can_shepherd"] = body.can_shepherd
+    # What a new role can do is an admin's to say, and its board yes the owner's (decision 3).
+    church_map_batch.switch_seat(_uuid(business_id), None, fields, biz.get("_caller_role") or "")
+    if church_roles.ensure_library(biz) is None:
+        raise HTTPException(503, "Your roles couldn't be loaded. Try again in a moment.")
     row = church_roles.create_role(biz, fields, by_user=uid)
     return {"ok": True, "role": _role_out(biz, row["id"])}
 
 
 @router.patch("/roles/{role_id}")
 def role_update(role_id: str, body: _RoleDef, business_id: str = Query(...),
-                biz: Dict[str, Any] = Depends(business_access(CARE_MIN_ROLE))):
-    changes = body.model_dump(exclude_unset=True)
-    row = church_roles.update_role(_uuid(business_id), role_id, changes)
-    return {"ok": True, "role": _role_out(biz, row["id"])}
+                biz: Dict[str, Any] = Depends(business_access(CARE_MIN_ROLE)),
+                session: UserSession = Depends(sb_clients.authed_request)):
+    """Change a role. Its switches (can_*, made_for) need an admin seat, and
+    its board yes the owner (decision 3, church_map_batch.save_role), at
+    every church; where the leaders map is open and its change log is there,
+    a switch save is one change the map's Undo puts back."""
+    import church_map_batch
+    out = church_map_batch.save_role(biz, role_id, body.model_dump(exclude_unset=True), session.user,
+                                     role=biz.get("_caller_role") or "")
+    return {"ok": True, "role": _role_out(biz, out["role"]["id"]),
+            **({"change": out["change"]} if out["change"] else {})}
 
 
 @router.delete("/roles/{role_id}")

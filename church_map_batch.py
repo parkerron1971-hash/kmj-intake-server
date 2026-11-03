@@ -571,6 +571,58 @@ def undo(biz: Dict[str, Any], change_id: Any, by: Any, *, role: str, origin: str
     return {"change": _brief(new), "undone": str(row["id"]), "results": results}
 
 
+# ─── A role's switches, saved on Leaders & roles (decision 3) ─────────
+
+SWITCH_KEYS = (*cr.SWITCHES, "made_for")
+SWITCH_SEAT = "Only the owner or an admin changes what a role can do."
+BOARD_YES = "Only the owner changes who gives the board’s yes on money."
+
+
+def switch_seat(bid: str, rid: Optional[str], changes: Dict[str, Any], role: str) -> None:
+    """Decision 3: a role's switches (can_*, made_for) are the owner's or an
+    admin's to change; its board yes, a yes on money, the owner's. Sending a
+    board yes as it already reads is no change (as a money level the same
+    again: CHURCH_LEADERS_MAP.md "As built in PR 5"). `rid` None: a new role."""
+    if not any(k in changes for k in SWITCH_KEYS):
+        return
+    if role not in ("owner", "admin"):
+        raise HTTPException(403, SWITCH_SEAT)
+    if role == "owner" or "can_board_yes" not in changes:
+        return
+    now = False
+    if rid:
+        got = cm._rows(f"/church_role_defs?id=eq.{cm._q(rid)}&business_id=eq.{cm._q(bid)}&select=can_board_yes&limit=1")
+        if got is None:
+            raise HTTPException(503, "Couldn’t save that just now; try again.")
+        now = bool(got and got[0].get("can_board_yes"))
+    if bool(changes["can_board_yes"]) != now:
+        raise HTTPException(403, BOARD_YES)
+
+
+def save_role(biz: Dict[str, Any], role_id: Any, changes: Dict[str, Any], user: Any, *, role: str) -> Dict[str, Any]:
+    """PATCH /church/roles/{id}: {role: the saved row, change}. A change of
+    its switches needs the seat switch_seat says, everywhere; every other
+    field keeps the route's. Where the map is open to this login
+    (church_map.open_to) and step 2's file is there, a save that names a
+    switch is one change (origin 'office', a role part, with the fields a
+    part keeps), so the sheet's Undo puts it back; the role's other fields go
+    in first, as today. Else it saves as it always has, logging nothing."""
+    bid, by = cm._bid(biz), user.id
+    rid = cr._uid(role_id, "role")
+    switch_seat(bid, rid, changes, role)
+    s = cm.step2_state() if any(k in changes for k in SWITCH_KEYS) and cm.open_to(user) else False
+    if s is None:
+        raise HTTPException(503, cm.UNREAD)
+    if not s:
+        return {"role": cr.update_role(bid, rid, changes), "change": None}
+    rest = {k: v for k, v in changes.items() if k not in FIELDS["role"]}
+    if rest:
+        cr.update_role(bid, rid, rest)
+    out = apply(biz, [{"kind": "role", "id": rid, **{k: v for k, v in changes.items() if k in FIELDS["role"]}}],
+                by, "office", role=role)
+    return {"role": out["results"][0], "change": out["change"]}
+
+
 # ─── The sheet's list ─────────────────────────────────────────────────
 
 def _say(f: str, v: Any, names: Dict[str, str]) -> str:
