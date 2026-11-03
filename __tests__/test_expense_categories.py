@@ -214,9 +214,11 @@ def test_chief_suggests_from_how_a_payee_was_filed_and_from_rules(db):
                                    "business_category": "operating", "business_subcategory": "Bank fees"})
     got = _run(cf.handle_bank_to_file, {}, who=READER)
     by = {g["payee"]: g for g in got["groups"]}
+    # Each carries its line's name too ("line"), so Chief never says the key (2026-11-03).
     assert by["duke energy util pymt"]["suggest"] == {"from": "history", "answer": "operating", "label": "Utilities",
-                                                      "times": 2, "of": 2}
-    assert by["overdraft fee"]["suggest"] == {"from": "rule", "answer": "operating", "label": "Bank fees"}
+                                                      "times": 2, "of": 2, "line": "Operating"}
+    assert by["overdraft fee"]["suggest"] == {"from": "rule", "answer": "operating", "label": "Bank fees",
+                                              "line": "Operating"}
     assert "suggest" not in by["city water dept"]
     assert "2 of these payees have been filed before or have a rule" in got["result"]
     assert "save_category_rule" in got["note_for_chief"]
