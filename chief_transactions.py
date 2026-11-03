@@ -39,6 +39,18 @@ transactions), so the table lands under Chief's words.
 
 Switched by CHIEF_BANK_SEARCH: off | owner | on, owner when unset (the
 businesses the platform owner owns, until a Thursday flip).
+
+FILED IS NOT MATCHED (2026-11-03). Kevin asked why the rows Chief filed were
+"still under all transactions like we didn't do any transaction". Chief
+answered from this card's "Reconciled: No" on every row, as if filing were
+half the job. It isn't: All transactions lists every bank row for good;
+filing (a category, or what the money is) takes a row out of To review.
+"Reconciled" here was reconciliation_status, which only says whether a row
+was tied to a payout, invoice, bill or a deposit of gifts; a bill paid
+straight from the bank has nothing to tie to and stays unmatched, and that
+is normal. So each row now says what it's filed under (or Waiting), the
+totals count filed and waiting, the old column reads Matched, and status
+can ask for waiting or filed rows.
 """
 from __future__ import annotations
 
@@ -61,26 +73,36 @@ _PAGE = 1000
 _ROW_CAP = 5000
 
 DIRECTIONS = ("both", "in", "out")
-STATUSES = ("all", "unreconciled", "reconciled")
+STATUSES = ("all", "unreconciled", "reconciled", "waiting", "filed")
+FILED_STATUSES = ("waiting", "filed")      # read from the rows, not the query
 
 _SELECT = ("select=transaction_id,date,name,merchant_name,amount,pending,"
-           "excluded_from_books,reconciliation_status,business_category")
+           "excluded_from_books,reconciliation_status,business_category,business_subcategory")
 
 COLUMNS = [
     {"key": "date", "label": "Date", "kind": "date"},
     {"key": "description", "label": "Description", "kind": "text"},
     {"key": "way", "label": "In / out", "kind": "text"},
     {"key": "amount", "label": "Amount", "kind": "money"},
-    {"key": "status", "label": "Reconciled", "kind": "text"},
+    {"key": "filed", "label": "Filed under", "kind": "text"},
+    {"key": "status", "label": "Matched", "kind": "text"},
 ]
+
+# What the money IS, when the answer was a kind rather than a spending line.
+_KIND_WORDS = {"income": "Income", "owner": "Owner's money", "transfer": "Move between accounts",
+               "gifts": "Gifts arriving"}
 
 TOOL = {
     "name": "search_transactions",
     "description": (
-        "Search this business's bank transactions (the linked accounts in the books), "
-        "reconciled or not, and get exact totals. Use it for any question about specific "
-        "bank rows: 'what did we pay KMJ this year', 'deposits from PayPal', 'show me the "
-        "unreconciled ones'. words: any of them matches the bank description or merchant "
+        "Search this business's bank transactions (the linked accounts in the books) and get "
+        "exact totals, with what each row is filed under. Use it for any question about specific "
+        "bank rows: 'what did we pay KMJ this year', 'deposits from PayPal', 'which of these are "
+        "filed'. FILED means the row has an answer (a category, or what the money is): it has left "
+        "To review, and it stays in All transactions for good (the full list, not a to-do list). "
+        "MATCHED (status reconciled) only means tied to a payout, invoice, bill or a deposit of "
+        "gifts; a bill paid from the bank has nothing to tie to and stays unmatched, which is "
+        "normal, never unfinished. words: any of them matches the bank description or merchant "
         "name (leave empty for every transaction in the dates). direction: in, out or both; "
         "use both when 'given to'/'from' could mean either. Dates default to Jan 1 through "
         "today. The totals cover EVERY match, not just the rows shown: quote them, never "
@@ -96,7 +118,8 @@ TOOL = {
             "date_from": {"type": "string", "description": "YYYY-MM-DD. Default Jan 1 this year."},
             "date_to": {"type": "string", "description": "YYYY-MM-DD. Default today."},
             "status": {"type": "string", "enum": list(STATUSES),
-                       "description": "unreconciled, reconciled, or all (default)."},
+                       "description": "waiting (no category yet), filed, unreconciled (not tied to a "
+                                      "payout, bill or gifts), reconciled (tied to one), or all (default)."},
         },
     },
 }
@@ -190,7 +213,8 @@ def query_path(business_id: str, account_ids: List[str], args: Dict[str, Any]) -
             q = quote(w, safe="'-")
             terms += [f"name.ilike.*{q}*", f"merchant_name.ilike.*{q}*"]
         parts.append("or=(" + ",".join(terms) + ")")
-    parts.append(_SELECT)
+    import bank_money
+    parts.append(_SELECT + bank_money.cols())
     parts.append("order=date.desc,transaction_id.asc")
     return "/plaid_transactions?" + "&".join(parts)
 
@@ -225,15 +249,37 @@ def _rounded(side: Dict[str, Any]) -> Dict[str, Any]:
     return {**side, "money_in": round(side["money_in"], 2), "money_out": round(side["money_out"], 2)}
 
 
+def waiting(t: Dict[str, Any]) -> bool:
+    """Still in To review: no answer yet (the screen's own rule)."""
+    import bank_money
+    return bank_money.needs_category(t)
+
+
+def filed_as(t: Dict[str, Any], names: Optional[Dict[str, str]] = None) -> str:
+    """What a row is filed under, in the business's words: its spending line
+    (and label), what the money is, or Waiting."""
+    import bank_money
+    k = bank_money.kind(t)
+    if k:
+        return _KIND_WORDS.get(k, k)
+    if waiting(t):
+        return "Waiting"
+    cat = str(t.get("business_category") or "")
+    line = (names or {}).get(cat) or cat.replace("_", " ").capitalize()
+    sub = str(t.get("business_subcategory") or "").strip()
+    return f"{line} · {sub}" if sub else line
+
+
 def tally(rows: List[Dict[str, Any]], words: List[str]) -> Dict[str, Any]:
     """Every total the answer may quote. `counted` is the books' view:
     posted and not excluded."""
     counted = [t for t in rows if not t.get("pending") and not t.get("excluded_from_books")]
-    total, unrec, rec = _side(), _side(), _side()
+    total, unrec, rec, filed, wait = _side(), _side(), _side(), _side(), _side()
     by_word = {w: _side() for w in words}
     for t in counted:
         _add(total, t)
         _add(unrec if t.get("reconciliation_status") == "unmatched" else rec, t)
+        _add(wait if waiting(t) else filed, t)
         text = _text(t)
         for w in words:
             if w in text:
@@ -249,13 +295,18 @@ def tally(rows: List[Dict[str, Any]], words: List[str]) -> Dict[str, Any]:
         "total": _rounded(total),
         "unreconciled": _rounded(unrec),
         "reconciled": _rounded(rec),
+        "filed": _rounded(filed),
+        "waiting": _rounded(wait),
         "by_word": {w: _rounded(s) for w, s in by_word.items()},
         "pending": _rounded(pending),
         "excluded": _rounded(excluded),
     }
 
 
-def display_row(t: Dict[str, Any]) -> Dict[str, Any]:
+_MATCHED = {"auto_matched": "Yes", "manual_matched": "Yes", "ignored": "Set aside"}
+
+
+def display_row(t: Dict[str, Any], names: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
     a = _amount(t)
     name = (t.get("name") or "").strip()
     merchant = (t.get("merchant_name") or "").strip()
@@ -269,7 +320,9 @@ def display_row(t: Dict[str, Any]) -> Dict[str, Any]:
         "way": "In" if a < 0 else "Out",
         # The business's view: money in is positive, money out negative.
         "amount": round(-a, 2),
-        "status": "No" if t.get("reconciliation_status") == "unmatched" else "Yes",
+        "filed": filed_as(t, names),
+        # Tied to a payout, bill or gifts. Nothing to tie to is normal: a dash, not "No".
+        "status": _MATCHED.get(str(t.get("reconciliation_status") or ""), "—"),
     }
 
 
@@ -286,25 +339,27 @@ def _sides_text(side: Dict[str, Any], direction: str) -> str:
     return " and ".join(bits)
 
 
-def summarize(args: Dict[str, Any], t: Dict[str, Any]) -> Dict[str, Any]:
+def summarize(args: Dict[str, Any], t: Dict[str, Any],
+              names: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
     """The payload: card fields, the totals, and the sentences."""
     words, direction = args["words"], args["direction"]
     span = f"{args['date_from'].isoformat()} to {args['date_to'].isoformat()}"
     what = ("matching " + " or ".join(f"'{w}'" for w in words)) if words else "of every kind"
-    status_word = {"all": "", "unreconciled": "unreconciled ", "reconciled": "reconciled "}[args["status"]]
+    status_word = {"unreconciled": "unmatched ", "reconciled": "matched "}.get(args["status"], "")
+    tail = {"waiting": " still waiting for a category", "filed": " already filed"}.get(args["status"], "")
     total = t["total"]
     counted = t["counted"]
-    rows = [display_row(r) for r in counted[:ROWS_SHOWN]]
+    rows = [display_row(r, names) for r in counted[:ROWS_SHOWN]]
 
     if not counted:
-        result = f"No {status_word}bank transactions {what} from {span} are in the books."
+        result = f"No {status_word}bank transactions{tail} {what} from {span} are in the books."
     else:
-        result = (f"{total['count']} {status_word}bank transactions {what} from {span}: "
+        result = (f"{total['count']} {status_word}bank transactions{tail} {what} from {span}: "
                   f"{_sides_text(total, direction)}.")
-        if args["status"] == "all":
-            u = t["unreconciled"]
-            result += (f" Not reconciled: {u['count']}" +
-                       (f" ({_sides_text(u, direction)})" if u["count"] else "") + ".")
+        if args["status"] not in FILED_STATUSES:
+            f, w = t["filed"], t["waiting"]
+            result += (f" Filed: {f['count']}. Still waiting for a category (in To review): {w['count']}" +
+                       (f" ({_sides_text(w, direction)})" if w["count"] else "") + ".")
         if len(words) > 1:
             per = "; ".join(f"'{w}' {s['count']} ({_sides_text(s, direction)})"
                             for w, s in t["by_word"].items())
@@ -335,7 +390,8 @@ def summarize(args: Dict[str, Any], t: Dict[str, Any]) -> Dict[str, Any]:
         "limit_reached": total["count"] > len(rows),
         "result": result,
         "label": label[:120],
-        "totals": {k: t[k] for k in ("total", "unreconciled", "reconciled", "by_word", "pending", "excluded")},
+        "totals": {k: t[k] for k in ("total", "unreconciled", "reconciled", "filed", "waiting",
+                                     "by_word", "pending", "excluded")},
         "search": {"words": words, "direction": direction, "status": args["status"],
                    "date_from": args["date_from"].isoformat(), "date_to": args["date_to"].isoformat()},
         # The second pass reads this when the card was drawn by a tag.
@@ -346,12 +402,20 @@ def summarize(args: Dict[str, Any], t: Dict[str, Any]) -> Dict[str, Any]:
         payload["note_for_chief"] = (
             "These totals are the server's, over every match: quote them, do not re-add the rows. "
             "A word match can include refunds or moves between the business's own accounts; say "
-            "so if it matters and offer to look at any row.")
+            "so if it matters and offer to look at any row. " + FILED_NOTE)
     else:
         payload["note_for_chief"] = (
             "Genuinely nothing matched in these dates: say so plainly. Offer other words or dates "
             "(banks often shorten names, e.g. 'PAYPAL *KMJMIN'); never invent rows.")
     return payload
+
+
+FILED_NOTE = (
+    "'Filed under' is what each row was answered as; Waiting means it is still in To review. A filed "
+    "row stays in All transactions for good: that tab is the whole bank list, not a to-do list. "
+    "'Matched' only means tied to a payout, invoice, bill or a deposit of gifts; a bill paid from the "
+    "bank has nothing to tie to, so a dash there is normal. Never call filed rows unreconciled or "
+    "unfinished. For what still needs an answer, search with status waiting, or use bank_to_file.")
 
 
 # ─── Reading ──────────────────────────────────────────────────────────
@@ -427,7 +491,15 @@ def search(business_id: str, action: Dict[str, Any]) -> Dict[str, Any]:
     if rows is None:
         return _fail(f"More than {_ROW_CAP:,} transactions match, too many to add up in one search. "
                      "Narrow the dates or add words.")
-    return summarize(args, tally(rows, args["words"]))
+    if args["status"] in FILED_STATUSES:
+        want = args["status"] == "waiting"
+        rows = [r for r in rows if waiting(r) == want]
+    try:
+        import expense_lines
+        names = expense_lines.names(business_id)   # a church reads Ministry & operations, not operating
+    except Exception:
+        names = {}
+    return summarize(args, tally(rows, args["words"]), names)
 
 
 async def handle_search_transactions(client, biz, action) -> Dict[str, Any]:
