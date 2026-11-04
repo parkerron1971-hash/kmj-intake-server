@@ -169,9 +169,17 @@ def audience_plan_offered(plan: str) -> bool:
 # credits, texts, sermon clip hours. Leaders, volunteers and members in the
 # member app are unlimited on all four and never count as a login. Priced
 # against what churches pay now (Planning Center's own size bands, Tithely,
-# ChurchTrac; the review artifact Pdg8hF4pB5n6efoFQmzd8d): at or under
-# Planning Center for the same church at every size. Multi-site (1,500+, or
-# two campuses) is a quote and waits for a campus view, so it isn't a plan.
+# ChurchTrac; the review artifact Pdg8hF4pB5n6efoFQmzd8d). Growing went
+# from $149 to $199 the day it went on sale, before any church was on it
+# (Kevin, 2026-11-03): a 148-person church pays Subsplash about $317 a month
+# for less, and Planning Center charges up to $265 at 250 people. The same
+# evening Established went to $399 and Large to $699, with 15,000 and 27,500
+# credits (were $299 / $599 with 17,500 / 30,000), from measured cost: a
+# Chief credit costs ~0.82c (cold ~2.8c, warm ~0.4c), so a full tank stays
+# near 31% of the price on all four plans (about 38 credits a dollar), with
+# room for the deep lanes, which run on the top model and charge no credits.
+# Multi-site (1,500+, or two campuses) is a quote and waits for a campus
+# view, so it isn't a plan.
 CHURCH_PLAN_KEYS = ("church_small", "church_growing", "church_established", "church_large")
 
 
@@ -179,20 +187,20 @@ def church_price_cents() -> Dict[str, int]:
     """church plan key -> monthly list price, cents (annual = 10x)."""
     return {
         "church_small":       _dial("TIER_CHURCH_SMALL_CENTS", "PRICE_", 7900),
-        "church_growing":     _dial("TIER_CHURCH_GROWING_CENTS", "PRICE_", 14900),
-        "church_established": _dial("TIER_CHURCH_ESTABLISHED_CENTS", "PRICE_", 29900),
-        "church_large":       _dial("TIER_CHURCH_LARGE_CENTS", "PRICE_", 59900),
+        "church_growing":     _dial("TIER_CHURCH_GROWING_CENTS", "PRICE_", 19900),
+        "church_established": _dial("TIER_CHURCH_ESTABLISHED_CENTS", "PRICE_", 39900),
+        "church_large":       _dial("TIER_CHURCH_LARGE_CENTS", "PRICE_", 69900),
     }
 
 
 def church_credits() -> Dict[str, int]:
     """church plan key -> monthly included credits (the public ladder's
-    3,000 / 7,500 / 17,500, then 30,000 for a Large church)."""
+    3,000 / 7,500, then 15,000 and 27,500: about 38 credits a dollar on every church plan)."""
     return {
         "church_small":       _dial("CHURCH_SMALL_CREDITS", "CREDITS_", 3000),
         "church_growing":     _dial("CHURCH_GROWING_CREDITS", "CREDITS_", 7500),
-        "church_established": _dial("CHURCH_ESTABLISHED_CREDITS", "CREDITS_", 17500),
-        "church_large":       _dial("CHURCH_LARGE_CREDITS", "CREDITS_", 30000),
+        "church_established": _dial("CHURCH_ESTABLISHED_CREDITS", "CREDITS_", 15000),
+        "church_large":       _dial("CHURCH_LARGE_CREDITS", "CREDITS_", 27500),
     }
 
 

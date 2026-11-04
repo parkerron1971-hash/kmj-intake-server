@@ -347,7 +347,7 @@ def test_the_overview_draws_four_plans_from_the_dials(by_size):
     assert [re.search(r'class="pname">([^<]+)<', c).group(1) for c in cards] == [
         "Small Church", "Growing Church", "Established Church", "Large Church"]
     assert [c.startswith('<div class="pc mid">') for c in cards] == [False, True, False, False]   # Growing is lit
-    for price, year in (("79", "790"), ("149", "1,490"), ("299", "2,990"), ("599", "5,990")):
+    for price, year in (("79", "790"), ("199", "1,990"), ("399", "3,990"), ("699", "6,990")):
         assert f'data-m="{price}" data-y="{year}">{price}<' in html, price
     for card, size, logins, texts, hours in zip(cards, _SIZES, (3, 8, 15, 35), ("500", "1,500", "3,000", "8,000"),
                                                 (2, 5, 10, 20)):
@@ -361,14 +361,14 @@ def test_the_overview_draws_four_plans_from_the_dials(by_size):
     assert [("Up to 3 organizations, like a church and its school" in c) for c in cards] == [False, False, False, True]
     assert [re.search(r"Chief thinks <b>(\w+)</b>", c).group(1) for c in cards] == \
         ["Standard", "Advanced", "Maximum", "Maximum"]
-    # Meters measured against the four church plans: 3,000 / 7,500 / 17,500 of 30,000.
-    assert [re.search(r'class="mbar"><i style="width: (\d+)%"', c).group(1) for c in cards] == ["10", "25", "58", "100"]
+    # Meters measured against the four church plans: 3,000 / 7,500 / 15,000 of 27,500.
+    assert [re.search(r'class="mbar"><i style="width: (\d+)%"', c).group(1) for c in cards] == ["11", "27", "55", "100"]
     assert [re.search(r"<b>([\d,]+)</b><span>AI actions", c).group(1) for c in cards] == \
-        ["3,000", "7,500", "17,500", "30,000"]
+        ["3,000", "7,500", "15,000", "27,500"]
     # The heading, the lede and the conversations line speak in sizes.
     assert "Priced by <b style=\"font-weight: 600\">your church's size.</b>" in html
     assert "Your plan is set by how many people come on a Sunday" in html
-    assert "about 250 conversations a month on Small, 625 on Growing, 1,450 on Established and 2,500 on Large" in html
+    assert "about 250 conversations a month on Small, 625 on Growing, 1,250 on Established and 2,275 on Large" in html
     for gone in ("Starter", "Professional", "Every plan is <b", "Founding seat"):
         assert gone not in html, gone
 
@@ -397,10 +397,10 @@ def test_moving_a_dial_moves_the_page(by_size, monkeypatch):
     monkeypatch.setenv("LIMIT_FOUNDING_CHURCH_MOVES", "1")
     html = cs.render("")
     cards = _cards(html)
-    assert 'data-m="159" data-y="1,590">159<' in html and 'data-m="149"' not in html
+    assert 'data-m="159" data-y="1,590">159<' in html and 'data-m="199"' not in html
     assert "<span>9 office logins</span>" in cards[1] and "<span>600 texts a month</span>" in cards[0]
     assert "<span>Clips from 1 hour of sermons a month</span>" in cards[3]
-    assert "<b>35,000</b>" in cards[3] and 'style="width: 50%"' in cards[2]  # 17,500 of 35,000
+    assert "<b>35,000</b>" in cards[3] and 'style="width: 43%"' in cards[2]  # 15,000 of 35,000
     assert "Multi-site starts at $1,200 a month" in html and "One more office login is $12.50 a month" in html
     assert "and the first church moves free." in html
     assert "$159" in cs.render("giving") and "9 office logins" in cs.render("member-app")
@@ -413,7 +413,7 @@ def test_the_product_pages_strips_follow(by_size):
         assert strip.startswith('<div class="planrow four">'), slug
         assert re.findall(r'<span class="pn">([^<]+)</span>', strip) == [
             "Small Church", "Growing Church", "Established Church", "Large Church"], slug
-        assert re.findall(r'<span class="pp">\$(\d+) <small>', strip) == ["79", "149", "299", "599"], slug
+        assert re.findall(r'<span class="pp">\$(\d+) <small>', strip) == ["79", "199", "399", "699"], slug
         for words in (*_SIZES, "3 office logins", "8 office logins", "15 office logins", "35 office logins",
                       "1,500 texts a month", "7,500 AI actions a month", "Clips from 20 hours of sermons a month"):
             assert words in strip, (slug, words)

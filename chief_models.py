@@ -143,8 +143,9 @@ _TIER_LADDER = {
     "solo":         "claude-sonnet-5",
     "booked":       "claude-sonnet-5",
     "boss":         "claude-sonnet-5",
-    # Churches think on the ladder their price matches (Small $79 = Starter,
-    # Growing $149 = Professional, Established and Large = the top).
+    # Churches think on the ladder by size: Small ($79) on Starter's lane,
+    # Growing on Professional's, Established and Large on the top one.
+    # Growing went from $149 to $199 on 2026-11-03 and kept its lane.
     "church_small":       "claude-sonnet-5",
     "church_growing":     "claude-opus-5-5",
     "church_established": "claude-fable-5",
