@@ -5,10 +5,9 @@ agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-11-03: "yes to both, build it" (docs/CHURCH_LEADERS_STEP2.md §10): Chief introduces itself to an office login from the login, and their corrections arrive as one-tap edits'
 status: in progress
 prs: [kmj-intake-server#1731]
-migrations: [supabase/APPLY-2026-11-05-church-map-asks.sql (NOT applied; Kevin applies it by hand)]
+migrations: [supabase/APPLY-2026-11-05-church-map-asks.sql (APPLIED 2026-11-03, verified)]
 left_undone:
   - "F8 (solutionist-studio): Is this right? on My week (GET /church/map/asks/mine: checked_at, due) and From your team on the department sheet (GET /church/map/asks, POST …/{id}/apply|done|discard), checked at 1280px and 390px; show an ask's waiting change once, under From your team, by change.id"
-  - "Apply supabase/APPLY-2026-11-05-church-map-asks.sql; until then every B11 verb says it isn't ready and its routes answer 503"
   - "No What's New entry until CHURCH_MAP switches on (F2's rule)"
 decisions:
   - "church_map_asks.py: my_work and list_asks (sensitive reads, mid-turn too); confirm_my_work, suggest_work_change, note_gap (an office seat: Manager or Admin); answer_ask (the owner or an admin; a sixth verb so Chief answers through the routes' own code)"
