@@ -23,6 +23,13 @@
     POST /church/map/templates/adopt?business_id=   {kind, key, tradition?, name?}: the church's
                                                     own copy, as drafts (B4b: church_templates.
                                                     adopt); the owner or an admin
+    GET  /church/map/asks?business_id=              Is this right? (B11, church_map_asks): what
+                                                    the office suggested, waiting for a yes; the
+                                                    owner or an admin
+    GET  /church/map/asks/mine?business_id=         an office login's own asks and its last check
+    POST /church/map/asks/{id}/apply|done|discard?  answer one; the owner or an admin, money the
+                                                    owner. These open by the church
+                                                    (church_map.church_open), not the login
 
 Once step 2's file is applied (church_map.step2_state()), each save above is
 logged as one change (church_map_batch, origin 'office'), so the sheet's Undo
@@ -47,6 +54,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 import church_map as cm
+import church_map_asks as asks
 import church_map_batch as batch
 import church_templates as ct
 import sb_clients
@@ -243,3 +251,54 @@ def template_adopt(body: _Adopt, business_id: str = Query(...), user: AuthedUser
     biz, role = _church(business_id, user, "admin")
     return {"ok": True, **ct.adopt(biz, body.kind, body.key, user.id, role=role, tradition=body.tradition or "",
                                    name=body.name or "")}
+
+
+# ─── Is this right? (B11): what the office suggests, for a yes ────────
+
+def _asks(business_id: str, user: AuthedUser, least: str) -> Tuple[Dict[str, Any], str]:
+    """Opened by the church (church_map.church_open), not by the login, since its office logins are the
+    point: a 404 where it's closed, as for a stranger or too low a seat. Then a church and the file
+    (church_map_asks.church: a 503 before it)."""
+    try:
+        bid = str(uuid.UUID(str(business_id)))
+    except (ValueError, TypeError):
+        raise HTTPException(400, "That business id isn't valid")
+    if not cm.church_open(bid):
+        raise HTTPException(404, "Not Found")
+    role = assert_access(bid, user, least)
+    return asks.church(bid), role
+
+
+def _gates(user: AuthedUser) -> Dict[str, bool]:
+    """What this login may make from an ask, as the sheet's and the duties page's own routes decide it: the
+    map's change routes (open_to) and the duties' (church_duties.open_to). What it can't make or undo
+    there, it can't make through an ask (#1731 review)."""
+    import church_duties as cd
+    return {"map": cm.open_to(user), "duty": cd.open_to(user)}
+
+
+@router.get("/asks")
+def asks_open(business_id: str = Query(...), user: AuthedUser = Depends(require_user)):
+    """What the team suggested, waiting for a yes: the owner or an admin."""
+    biz, role = _asks(business_id, user, "admin")
+    return asks.open_asks(biz, role, str(user.id), _gates(user))
+
+
+@router.get("/asks/mine")
+def asks_mine(business_id: str = Query(...), user: AuthedUser = Depends(require_user)):
+    """An office login's own asks, how each went, and its last check (`checked_at`, `due`)."""
+    biz, role = _asks(business_id, user, "manager")
+    if role not in asks.OFFICE:
+        raise HTTPException(403, asks.OWNER_HERE)
+    return asks.mine(biz, str(user.id), role)
+
+
+@router.post("/asks/{ask_id}/{how}")
+def asks_answer(ask_id: str, how: str, business_id: str = Query(...), user: AuthedUser = Depends(require_user)):
+    """apply | done | discard one: the owner or an admin; a change with money in it, the owner."""
+    if how not in ("apply", "done", "discard"):
+        raise HTTPException(404, "Not Found")
+    biz, role = _asks(business_id, user, "admin")
+    out = asks.answer(biz, ask_id, str(user.id), role, how, _gates(user))
+    out.pop("row", None)
+    return {"ok": True, **out}

@@ -224,6 +224,8 @@ def read_tool_definitions() -> List[Dict[str, Any]]:
     out += [chief_duties.TOOL]  # a church's duties: needs the signed-in person, so Chief's alone
     import chief_map
     out += [chief_map.LIST_TOOL, chief_map.SEARCH_TOOL]  # a church's leaders map and the ready-mades: the same
+    import church_map_asks
+    out += [church_map_asks.WORK_TOOL, church_map_asks.LIST_TOOL]  # an office login's work, the team's asks: the same
     return out
 
 
@@ -412,7 +414,7 @@ def _shrink(result: Any) -> str:
     if isinstance(result, dict) and result.get('type') == 'responsibility_status':
         from chief_responsibilities import REPORT_MAX_RESULT_CHARS
         limit = REPORT_MAX_RESULT_CHARS
-    if isinstance(result, dict) and result.get('type') in ('list_duties', 'list_map'):
+    if isinstance(result, dict) and result.get('type') in ('list_duties', 'list_map', 'my_work', 'list_asks'):
         # Every duty and who does it (every department and role); cut short,
         # the model would guess at whose job the missing ones are.
         limit = 12000
@@ -465,7 +467,7 @@ async def execute_tool_use(client, biz: Dict[str, Any],
                                               "find_fund_payments", "bank_history", "bank_to_file",
                                               "giving_deposits", "expense_categories", "bills",
                                               "giving_counts", "list_duties", "list_map",
-                                              "search_templates")):
+                                              "search_templates", "my_work", "list_asks")):
         return True, (f"'{name}' is not a mid-turn lookup. Reads only here; "
                       f"operations go through [ACTION:] tags in your reply.")
     if effect != action_registry.READ:

@@ -170,6 +170,9 @@ def _run(atype: str, biz: Any, action: Any, body: Callable[..., Dict[str, Any]])
         said, more = str(e.detail), {}
         if getattr(e, "change_id", None):       # a part went in: the change this call acted on, kept failed
             more["change_id"] = e.change_id
+        if getattr(e, "ask_id", None):          # an office login's suggestion: answered as theirs (B11)
+            more["note_for_chief"] = (f"It's someone's suggestion: answer it with answer_ask (ask {e.ask_id}) "
+                                      "once the owner or an admin says so, naming whose it is.")
         if "doesn’t hold a role that" in said:
             more["note_for_chief"] = ("Ask the owner whether that person's role may do it. If yes, send the same "
                                       "change again with a role part turning it on, placed before this part.")
@@ -306,6 +309,8 @@ def _said(lines: Optional[List[str]]) -> str:
 
 
 UNLOGGED = "Its record didn’t save, so Undo can’t put it back from the map’s list: to reverse it, ask for it the other way."
+UNMARKED = ("It still reads as waiting on the map’s list, because marking it made didn’t save, so Undo can’t put it "
+            "back yet: apply it again to finish marking it.")
 
 
 def _change(business: Dict[str, Any], seat: str, action: Dict[str, Any], *, stage: bool, origin: str,
@@ -356,11 +361,16 @@ def _undo(business: Dict[str, Any], seat: str, action: Dict[str, Any]) -> Dict[s
 def _apply(business: Dict[str, Any], seat: str, action: Dict[str, Any]) -> Dict[str, Any]:
     cid = _change_id(action)
     undoes = batch._row(business, cid).get("undoes")       # finishing an undo: nothing to undo again
-    batch.apply_pending(business, cid, _turn_user(), role=seat)
+    out = batch.apply_pending(business, cid, _turn_user(), role=seat)
     if undoes:
-        return {"result": f"Finished putting a change back. {_said(_lines(business, cid))} Putting it back is a "
-                          "change too; to change it again, ask for the change.",
-                "label": "Finished putting a change back", "changed": True, "undoes": str(undoes)}
+        gone = " The change that waited for a yes on what it took out was let go too." if out.get("let_go") else ""
+        return {"result": f"Finished putting a change back. {_said(_lines(business, cid))}{gone} Putting it back is "
+                          "a change too; to change it again, ask for the change.",
+                "label": "Finished putting a change back", "changed": True, "undoes": str(undoes),
+                "let_go": out.get("let_go") or []}
+    if (out.get("change") or {}).get("status") != "applied":       # made, but its mark didn't save
+        return {"result": f"Made the change that was waiting. {_said(_lines(business, cid))} {UNMARKED}",
+                "label": "Made a waiting change (not marked)", "changed": True}
     return {"result": f"Made the change that was waiting. {_said(_lines(business, cid))} {UNDO}",
             "label": "Made a waiting change", "changed": True, "change_id": cid}
 
@@ -439,15 +449,19 @@ def _dept_line(d: Dict[str, Any], needs: List[str]) -> str:
 
 
 def _change_line(c: Dict[str, Any]) -> str:
+    import church_map_asks as asks
     at = batch._parse(c.get("made_at"))
-    how = [_ORIGIN.get(c.get("origin"), ""), f"{at:%b} {at.day}" if at else ""]
+    ask = c.get("suggested_by")          # an office login's, never Chief's own idea (#1731 review)
+    how = [f"suggested by {asks.fence(ask['name'])}, ask {ask['ask_id']}: answer it with answer_ask" if ask else
+           _ORIGIN.get(c.get("origin"), ""), f"{at:%b} {at.day}" if at else ""]
     if c["status"] != "pending":
         how.insert(0, "an undo" if c.get("undoes") else _STATUS.get(c["status"], c["status"]))
     if c.get("money"):
         how.append("money: the owner’s")
     if c.get("can_undo"):
         how.append("Undo can put it back")
-    return f"- change {c['id']} ({', '.join(w for w in how if w)}): {'; '.join(c['lines'])}"
+    lines = [asks.fence(x) for x in c["lines"]] if ask else c["lines"]       # their words, as data
+    return f"- change {c['id']} ({', '.join(w for w in how if w)}): {'; '.join(lines)}"
 
 
 def _list(business: Dict[str, Any], seat: str, action: Dict[str, Any]) -> Dict[str, Any]:

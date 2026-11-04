@@ -502,6 +502,8 @@ def _forget(biz: str) -> None:
         _CACHE.pop(k, None)
     for k in [k for k in _FAILED if k[0] == str(biz)]:
         _FAILED.pop(k, None)
+    import church_map_asks          # a duty that moved changes a login's work: its check is due again
+    church_map_asks.forget(biz)
 
 
 def _prune(now: float) -> None:

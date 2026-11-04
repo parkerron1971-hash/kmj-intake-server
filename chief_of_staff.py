@@ -262,6 +262,8 @@ from chief_bills import handle_bills, handle_add_bill, handle_remove_bill
 from chief_duties import handle_list_duties, handle_move_duty, handle_undo_duty
 from chief_map import (handle_list_map, handle_change_map, handle_draft_map, handle_undo_map_change,
     handle_apply_map_change, handle_discard_map_change, handle_search_templates, handle_adopt_template)
+from church_map_asks import (handle_my_work, handle_confirm_my_work, handle_suggest_work_change, handle_note_gap,
+    handle_list_asks, handle_answer_ask, handle_undo_ask)
 from chief_giving_counts import (handle_giving_counts, handle_record_service_gifts,
     handle_undo_service_gifts)
 from bill_payments import handle_match_bill_payment, handle_unmatch_bill_payment
@@ -410,6 +412,9 @@ _ACTION_PHRASES = {
     "undo_map_change": "putting the change back",
     "search_templates": "looking through the ready-mades",
     "adopt_template": "adding the ready-made as a draft",
+    "my_work": "reading what you do here",
+    "suggest_work_change": "sending it for a yes",
+    "list_asks": "reading what your team suggested",
     "giving_counts": "reading the service counts",
     "record_service_gifts": "recording the gifts to the service",
     "match_bill_payment": "matching bills to the bank",
@@ -12220,6 +12225,13 @@ ACTION_HANDLERS = {
     "discard_map_change":    handle_discard_map_change,
     "search_templates":      handle_search_templates,
     "adopt_template":        handle_adopt_template,
+    "my_work":               handle_my_work,
+    "confirm_my_work":       handle_confirm_my_work,
+    "suggest_work_change":   handle_suggest_work_change,
+    "note_gap":              handle_note_gap,
+    "list_asks":             handle_list_asks,
+    "answer_ask":            handle_answer_ask,
+    "undo_ask":              handle_undo_ask,
     "giving_counts":         handle_giving_counts,
     "record_service_gifts":  handle_record_service_gifts,
     "undo_service_gifts":    handle_undo_service_gifts,
@@ -15117,6 +15129,7 @@ async def chief_chat(
     _area_scope, _who = await asyncio.to_thread(chief_areas.turn_for, req.business_id, str(user_session.user.id))
     _area_token = chief_areas.TURN.set(_area_scope)
     _who_token = chief_areas.WHO.set(_who)
+    _asks_read, _asks_told = None, []      # Is this right? (church_map_asks): its lines, and the asks they tell
     try:
         if not req.message:
             raise HTTPException(400, "message is required")
@@ -15307,7 +15320,15 @@ async def chief_chat(
             _turn_status("reading your business")
             ctx_task = preparation.start(_gather_context(client, req.business_id, query_text=req.message))
             view_task = preparation.start(_fetch_view_detail(client, req.business_id, req.current_context))
-            ctx, view_detail = await asyncio.gather(ctx_task, view_task)
+            # Is this right? (church_map_asks): this login's lines, read alongside the context and done with it,
+            # so their time is the context stage's (a church's only).
+            import church_follow_up as _cfu
+            if biz_lite and _cfu.is_church(biz_lite):
+                import church_map_asks
+                ctx, view_detail, _asks_read = await asyncio.gather(ctx_task, view_task, asyncio.to_thread(
+                    church_map_asks.turn_lines, biz_lite, str(user_session.user.id), chief_areas.WHO.get()))
+            else:
+                ctx, view_detail = await asyncio.gather(ctx_task, view_task)
             _t.mark("context")
 
             if not ctx:
@@ -15578,6 +15599,17 @@ async def chief_chat(
             # Whose login this is, when it isn't the owner's, and the lane it
             # keeps to: the turn's tail, never a cached segment (it differs by login).
             _login_block = chief_areas.block(chief_areas.TURN.get(), chief_areas.WHO.get(), biz)
+            # Is this right? (church_map_asks): an office login's check of its work, what came of its asks,
+            # and for the owner and an admin how many wait. Read alongside the context; a read that fails adds
+            # nothing. What it tells is marked told once the reply is out (below).
+            import church_follow_up as _cfu
+            if _asks_read is None and _cfu.is_church(biz):      # its row wasn't read up front: read them now
+                import church_map_asks
+                _asks_read = await asyncio.to_thread(church_map_asks.turn_lines, biz, str(user_session.user.id),
+                                                     chief_areas.WHO.get())
+            if _asks_read is not None:
+                _asks_text, _asks_told = _asks_read
+                _login_block += _asks_text
             if _login_block:
                 growth_turn_block = _login_block + "\n" + growth_turn_block
             system = _build_system_prompt(
@@ -16229,6 +16261,10 @@ async def chief_chat(
             # drops, so this is the point the reply is delivered on both.
             if intro_owed and _intro_went_out(response_text, grounding):
                 _note_intro_delivered(biz.get("id"))
+            # The answered asks this reply told an office login about: told now, once (church_map_asks).
+            if _asks_told and str(response_text or "").strip():
+                import church_map_asks
+                await asyncio.to_thread(church_map_asks.mark_told, biz.get("id"), _asks_told)
 
             result = {
                 "response": response_text,

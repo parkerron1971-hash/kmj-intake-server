@@ -88,7 +88,10 @@ VERBS: Dict[str, Tuple[str, ...]] = {
         # Who does which office duty: any login that may open the duties page
         # may ask (the handler keeps it to a Manager seat and above). The
         # leaders map and the ready-mades likewise (chief_map).
-        "list_duties", "list_map", "search_templates")},
+        "list_duties", "list_map", "search_templates",
+        # Is this right? An office login's own work, its check and its suggestions (church_map_asks): the
+        # handlers keep them to a Manager or an Admin seat, and nothing they say makes anything.
+        "my_work", "confirm_my_work", "suggest_work_change", "note_gap")},
     # People & care: the church's people, their care and their follow-up.
     **{v: PEOPLE for v in (
         "create_contact", "update_contact", "update_contact_status", "update_contact_health", "delete_contact",
@@ -152,6 +155,8 @@ OWNERS = frozenset({
     "move_duty", "undo_duty",
     # Changing a church's leaders map, its waiting changes and its ready-mades (chief_map), the same.
     "change_map", "draft_map", "undo_map_change", "apply_map_change", "discard_map_change", "adopt_template",
+    # Reading and answering what the office suggested (church_map_asks), the same.
+    "list_asks", "answer_ask", "undo_ask",
     # A minister's housing allowance: the owner's alone (the handlers refuse admins too).
     "housing_allowance_status", "set_housing_allowance", "log_housing_entry", "delete_housing_entry",
     "find_housing_payments", "attach_housing_payments", "detach_housing_payments",

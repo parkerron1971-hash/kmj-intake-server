@@ -185,6 +185,9 @@ EXPORT_EXCLUDED: Dict[str, str] = {
     "ledger_erasure_tickets":  "tamper-evident ledger: erasure requests; evidence",
 }
 BUSINESS_CHILD_TABLES: List[str] = [
+    # The office's asks (Is this right?, §10) cite a change by id, so they go
+    # before it; their duty moves and checks cite logins and roles by key.
+    "church_map_asks",
     # The map's change log and setup sessions (docs/CHURCH_LEADERS_STEP2.md):
     # they cite people, roles and departments by id inside their jsonb.
     "church_map_changes", "church_setup_tracks",
@@ -908,8 +911,10 @@ _IMPORT_SKIP = {
     # by id; same reason. A restored church draws its map again.
     "church_department_units", "church_departments",
     # The map's changes and setup sessions cite people, roles and departments
-    # by id; same reason. A restored church starts its setup again.
-    "church_map_changes", "church_setup_tracks",
+    # by id; same reason. A restored church starts its setup again. The
+    # office's asks cite a change and logins by id; same reason, and a
+    # restored church's office checks its work again.
+    "church_map_asks", "church_map_changes", "church_setup_tracks",
     # Shepherding cites families and shepherds by id, a proposal cites
     # families and members by id, and "Not a family" is a hash of member
     # ids; same reason. A restored church keeps its shepherding settings
