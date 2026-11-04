@@ -347,7 +347,7 @@ def test_the_overview_draws_four_plans_from_the_dials(by_size):
     assert [re.search(r'class="pname">([^<]+)<', c).group(1) for c in cards] == [
         "Small Church", "Growing Church", "Established Church", "Large Church"]
     assert [c.startswith('<div class="pc mid">') for c in cards] == [False, True, False, False]   # Growing is lit
-    for price, year in (("79", "790"), ("149", "1,490"), ("299", "2,990"), ("599", "5,990")):
+    for price, year in (("79", "790"), ("199", "1,990"), ("299", "2,990"), ("599", "5,990")):
         assert f'data-m="{price}" data-y="{year}">{price}<' in html, price
     for card, size, logins, texts, hours in zip(cards, _SIZES, (3, 8, 15, 35), ("500", "1,500", "3,000", "8,000"),
                                                 (2, 5, 10, 20)):
@@ -397,7 +397,7 @@ def test_moving_a_dial_moves_the_page(by_size, monkeypatch):
     monkeypatch.setenv("LIMIT_FOUNDING_CHURCH_MOVES", "1")
     html = cs.render("")
     cards = _cards(html)
-    assert 'data-m="159" data-y="1,590">159<' in html and 'data-m="149"' not in html
+    assert 'data-m="159" data-y="1,590">159<' in html and 'data-m="199"' not in html
     assert "<span>9 office logins</span>" in cards[1] and "<span>600 texts a month</span>" in cards[0]
     assert "<span>Clips from 1 hour of sermons a month</span>" in cards[3]
     assert "<b>35,000</b>" in cards[3] and 'style="width: 50%"' in cards[2]  # 17,500 of 35,000
@@ -413,7 +413,7 @@ def test_the_product_pages_strips_follow(by_size):
         assert strip.startswith('<div class="planrow four">'), slug
         assert re.findall(r'<span class="pn">([^<]+)</span>', strip) == [
             "Small Church", "Growing Church", "Established Church", "Large Church"], slug
-        assert re.findall(r'<span class="pp">\$(\d+) <small>', strip) == ["79", "149", "299", "599"], slug
+        assert re.findall(r'<span class="pp">\$(\d+) <small>', strip) == ["79", "199", "299", "599"], slug
         for words in (*_SIZES, "3 office logins", "8 office logins", "15 office logins", "35 office logins",
                       "1,500 texts a month", "7,500 AI actions a month", "Clips from 20 hours of sermons a month"):
             assert words in strip, (slug, words)
