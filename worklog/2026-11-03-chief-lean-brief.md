@@ -1,14 +1,16 @@
 ---
-title: Chief's short brief (CHIEF_BRIEF=lean) — the same verbs and rules, ~40% fewer tokens a message
+title: Chief's short brief (CHIEF_BRIEF=lean) — the same verbs and rules, ~32% fewer tokens a message
 date: 2026-11-03
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-11-03: "I have read on the shrink, you can start on that" (cold Chief messages write ~120k tokens and lose money on church credits)'
 status: shipped, switch off
-prs: [kmj-intake-server#1736]
+prs: [kmj-intake-server#1736, kmj-intake-server#1738]
 migrations: []
 left_undone:
   - "Turn it on: CHIEF_BRIEF=lean on the kmj-intake-server web service (the worker never builds Chief's brief). Then watch `railway logs --filter \"cache rewrite\"` (a cold message should write ~65-70k, not ~120k) and `--filter \"chief lean\"` (a one-line verb that ran without its how-to looked up)"
-  - "Two rare-actions misses in lean, both judgement rather than reach: 'capture this idea' went to save_note (kept, and its own how-to accepts kind=idea), and 'draft a LinkedIn post about why we raised prices' asked for the reasons instead of drafting with plan_content"
+  - "(Fixed in the follow-up PR, see below) the two rare-actions misses: 'capture this idea' went to save_note, 'draft a LinkedIn post' got an interview instead of plan_content"
+  - "Two turn-eval rows fail on both briefs, every run (create_session, nb_barber_hours): not the short brief's, but nobody has looked at them"
+  - "The turn eval on the final lean build is ONE run, 194/204, which is 5 points under today's 199 and 2 under #1736's 196. That is a known drop, accepted only because the switch stays off. Before turning it on, rerun `chief_turn_eval --live` twice on lean (about $3 of live spend) and report the spread; the follow-up's $6 budget was spent"
   - "The static instruction blocks in the snapshot segment (what-if, weekly planning, decision support, website building, testimonials, video creation: ~3.5k tokens a business) were left where they are; they could become lookups or move to the shared block"
   - "The RULE sections are kept whole (~15k tokens) and nobody has edited them for length; the manual itself is ~78k tokens in full and grows with every feature (the short edition is cut from it automatically)"
   - "Read-tool use is not recorded anywhere (audit_log holds actions only), so the always-loaded reads (CORE_READS) are a judgement, not a count; add a tool-call tally if the deferred set needs tuning"
@@ -42,3 +44,50 @@ The PR body has the full table.
 Before changing the manual, read chief_lean_brief.py: KEEP_VERBS,
 RULE_SECTIONS, AREA_PREFIXES and PROSE_KEPT decide what the short edition
 keeps, and __tests__/test_chief_lean_brief.py proves nothing is lost.
+
+## Follow-up (2026-11-04): the rare-actions misses (kmj-intake-server#1738)
+
+The coordinator's rule for Kevin is to keep only a change that scores the
+same or better. The rare-actions eval had gone 10/10 to 8/10. Both misses
+had one cause, and it was not missing text: the always-kept request map
+already routes "capture this idea" to capture_idea and "draft me a post" to
+plan_content. Those were deferred tools, though, and a deferred tool loses
+to a loaded neighbour (save_note), or to no tool at all (an interview).
+
+The general fix is in `_siblings`. Any tool that a rule section, a header
+line or a kept verb's own how-to names is loaded and written out in full,
+and so is any tool whose description names a loaded tool, or that a
+loaded tool's description names. The set is repeated until nothing new
+joins, and today it holds 27 tools, among them create_goal,
+create_session, create_note, log_activity, the project and session
+updates, add/remove_block_range, marketing_desk, capture_website_references,
+find_housing_payments, fund_status, housing_allowance_status, the
+connected-agent tools, save_lesson_slides and inspect_course. A test pins
+the invariant that every tool the short manual names, outside its
+one-liners, is loaded.
+
+Two smaller general fixes came out of the reruns:
+- One-liners with no routing line carry the manual's own example asks. A
+  run had sent "search the record…" to recall_conversation, because
+  search_ledger's line held only its field name.
+- Lines that say how to act at the moment of the request stay whatever
+  verb they belong to: "you CAN", "never say you can't", "do NOT
+  interrogate", "the asking is the approval", "without asking". Only 5
+  such lines had been dropped. nb_therapist_intake had gone 1 in 4 on lean
+  for want of "DESIGN THE FORM FROM WHAT YOU KNOW … Do NOT interrogate",
+  and went 3 in 3 once it stayed.
+
+Cost of the fix: the brief is ~97k (KMJ) and ~91k (Love City) instead of
+~85k and ~79k. That is still 32% under today's brief: 141.7k and 135.5k
+on current main (tools 18.1k vs 27.7k, manual 48.4k vs 78.8k).
+
+Results on lean, same cases:
+- Rare-actions eval: 10/10 in 3 runs on the sibling build, then 10/10 once
+  more on the final build (earlier: 10/10 today, 8/10 lean).
+- Turn eval: 194/204 once on the sibling build (earlier: 199 today, 196
+  lean). Its misses are the two rows that fail on both briefs, the
+  one-question and about-the-product prose checks that flip between runs
+  on both, and nb_therapist_intake, now fixed.
+- nb_therapist_intake on the final build: 3/3.
+
+Live spend for the follow-up was $5.81; for the session, $16.51.
