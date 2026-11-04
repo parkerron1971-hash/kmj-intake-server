@@ -28,7 +28,7 @@ PLANS = ("starter", "professional", "practice")   # the public ladder
 # PLANS stays the public ladder, so the site and the compare table are
 # untouched; ALL_PLANS is every key a subscription or comp can resolve to.
 # Churches by size (Kevin, 2026-11-03): Small $79 / Growing $199 /
-# Established $299 / Large $599, sold only to churches and ministries. Same
+# Established $399 / Large $699, sold only to churches and ministries. Same
 # machinery as the barber plans: their own features (every church feature on
 # all four), limits and checkout rule. pricing_config holds the numbers.
 CHURCH_PLANS = pricing_config.CHURCH_PLAN_KEYS
