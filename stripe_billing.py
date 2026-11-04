@@ -1506,10 +1506,10 @@ BOOTSTRAP_CATALOG = [
     ("STRIPE_PRICE_ID_CHURCH_SMALL_ANNUAL",       "solutionist_church_small_annual",        "Solutionist Small Church",       79000,  "year"),
     ("STRIPE_PRICE_ID_CHURCH_GROWING",            "solutionist_church_growing_monthly",     "Solutionist Growing Church",     19900,  "month"),
     ("STRIPE_PRICE_ID_CHURCH_GROWING_ANNUAL",     "solutionist_church_growing_annual",      "Solutionist Growing Church",     199000, "year"),
-    ("STRIPE_PRICE_ID_CHURCH_ESTABLISHED",        "solutionist_church_established_monthly", "Solutionist Established Church", 29900,  "month"),
-    ("STRIPE_PRICE_ID_CHURCH_ESTABLISHED_ANNUAL", "solutionist_church_established_annual",  "Solutionist Established Church", 299000, "year"),
-    ("STRIPE_PRICE_ID_CHURCH_LARGE",              "solutionist_church_large_monthly",       "Solutionist Large Church",       59900,  "month"),
-    ("STRIPE_PRICE_ID_CHURCH_LARGE_ANNUAL",       "solutionist_church_large_annual",        "Solutionist Large Church",       599000, "year"),
+    ("STRIPE_PRICE_ID_CHURCH_ESTABLISHED",        "solutionist_church_established_monthly", "Solutionist Established Church", 39900,  "month"),
+    ("STRIPE_PRICE_ID_CHURCH_ESTABLISHED_ANNUAL", "solutionist_church_established_annual",  "Solutionist Established Church", 399000, "year"),
+    ("STRIPE_PRICE_ID_CHURCH_LARGE",              "solutionist_church_large_monthly",       "Solutionist Large Church",       69900,  "month"),
+    ("STRIPE_PRICE_ID_CHURCH_LARGE_ANNUAL",       "solutionist_church_large_annual",        "Solutionist Large Church",       699000, "year"),
     # One more office login on a church plan, $15 a month each (church_billing).
     ("STRIPE_PRICE_ID_EXTRA_LOGIN",               "solutionist_extra_login_monthly",        "Solutionist extra office login", 1500,   "month"),
 ]
