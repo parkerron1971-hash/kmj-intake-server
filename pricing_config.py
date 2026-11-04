@@ -169,9 +169,12 @@ def audience_plan_offered(plan: str) -> bool:
 # credits, texts, sermon clip hours. Leaders, volunteers and members in the
 # member app are unlimited on all four and never count as a login. Priced
 # against what churches pay now (Planning Center's own size bands, Tithely,
-# ChurchTrac; the review artifact Pdg8hF4pB5n6efoFQmzd8d): at or under
-# Planning Center for the same church at every size. Multi-site (1,500+, or
-# two campuses) is a quote and waits for a campus view, so it isn't a plan.
+# ChurchTrac; the review artifact Pdg8hF4pB5n6efoFQmzd8d). Growing went
+# from $149 to $199 the day it went on sale, before any church was on it
+# (Kevin, 2026-11-03): a 148-person church pays Subsplash about $317 a month
+# for less, and Planning Center charges up to $265 at 250 people. Multi-site
+# (1,500+, or two campuses) is a quote and waits for a campus view, so it
+# isn't a plan.
 CHURCH_PLAN_KEYS = ("church_small", "church_growing", "church_established", "church_large")
 
 
@@ -179,7 +182,7 @@ def church_price_cents() -> Dict[str, int]:
     """church plan key -> monthly list price, cents (annual = 10x)."""
     return {
         "church_small":       _dial("TIER_CHURCH_SMALL_CENTS", "PRICE_", 7900),
-        "church_growing":     _dial("TIER_CHURCH_GROWING_CENTS", "PRICE_", 14900),
+        "church_growing":     _dial("TIER_CHURCH_GROWING_CENTS", "PRICE_", 19900),
         "church_established": _dial("TIER_CHURCH_ESTABLISHED_CENTS", "PRICE_", 29900),
         "church_large":       _dial("TIER_CHURCH_LARGE_CENTS", "PRICE_", 59900),
     }

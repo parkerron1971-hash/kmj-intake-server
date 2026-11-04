@@ -226,7 +226,7 @@ def test_after_five_the_move_is_three_months_of_the_plan(stripe, monkeypatch):
     out = _move(moving_from="Planning Center")
     [(_, path, data)] = [c for c in calls if c[0] == "post"]
     assert path == "/checkout/sessions" and data["mode"] == "payment"
-    assert data["line_items"][0]["price_data"]["unit_amount"] == 3 * 14900 == out["price_cents"]
+    assert data["line_items"][0]["price_data"]["unit_amount"] == 3 * 19900 == out["price_cents"]
     assert data["metadata"]["kind"] == "church_move" and data["metadata"]["plan"] == "church_growing"
     assert "church_move" not in state["biz"]["settings"]         # recorded only once it's paid
 
@@ -264,10 +264,10 @@ def test_the_ticket_says_who_from_where_and_how(monkeypatch):
     posted = []
     monkeypatch.setattr(sb_clients, "sb_post_as_service", lambda path, body, *a, **k: posted.append((path, body)))
     cb._ticket({"id": BIZ, "name": "Grace Fellowship", "comp_tier": "church_growing"},
-               {"founding": False, "amount_cents": 44700, "moving_from": "Subsplash", "plan": "church_growing"})
+               {"founding": False, "amount_cents": 59700, "moving_from": "Subsplash", "plan": "church_growing"})
     [(path, body)] = posted
     assert path == "/support_tickets" and body["category"] == "billing"
-    assert body["subject"] == "MOVE: Grace Fellowship from Subsplash (paid $447)"
+    assert body["subject"] == "MOVE: Grace Fellowship from Subsplash (paid $597)"
     assert "Growing Church" in body["message"] and body["context"]["kind"] == "church_move"
 
 
