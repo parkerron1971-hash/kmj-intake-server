@@ -534,6 +534,29 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
                             "undo_duty puts it back"), "chief_only": True},
     "undo_duty": {**_w("A", "puts the last change to one church duty back from its log (owner or admin); the "
                             "put-back is logged too"), "chief_only": True},
+    # Step 2, decision 1 (Kevin, 2026-11-03): Chief changes a church's leaders map in plain words, with Undo
+    # (chief_map). Each needs the signed-in person (an owner or an admin changes it), so Chief's alone.
+    "list_map": {**_r("reads a church's leaders map: its departments and who leads and oversees each, every role "
+                      "with who holds it and what it can do, the settings, what waits for a yes and the recent "
+                      "changes. Staff and members' names, read for the signed-in person", sensitive=True),
+                 "chief_only": True},
+    "search_templates": {**_r("searches the platform's ready-made church shapes, ministries and roles; names no "
+                              "one, but it is read for the signed-in person's church (its tradition first)",
+                              sensitive=True), "chief_only": True},
+    "change_map": {**_w("A", "makes one change to a church's leaders map through its change log (owner or admin; a "
+                             "money level or the board's yes the owner's); undo_map_change puts it back; staged, it "
+                             "only waits for a yes"), "chief_only": True},
+    "draft_map": {**_w("A", "the setup coach's: one change to the leaders map that always waits for a yes; nothing "
+                            "is made"), "chief_only": True},
+    "undo_map_change": {**_w("A", "puts one change to the leaders map back, whole or not at all, while nothing it "
+                                  "touched has changed since; the put-back is a change too"), "chief_only": True},
+    "apply_map_change": {**_w("A", "makes a change to the leaders map that waits for a yes, or finishes a failed "
+                                   "one; undo_map_change puts it back"), "chief_only": True},
+    "discard_map_change": {**_w("A", "lets a change to the leaders map that waits for a yes go, unmade"),
+                           "chief_only": True},
+    "adopt_template": {**_w("A", "copies a ready-made role, ministry or whole-church shape into a church as drafts "
+                                 "that route nothing, in one change undo_map_change takes back out; what it would "
+                                 "change on a live role only waits for a yes"), "chief_only": True},
     # Bills step 2: a bill matched to the bank payment that paid it, so it counts once.
     "match_bill_payment": {**_w("A", "matches owed bills to the bank payments that paid them (the ones the owner "
                                      "confirmed, or only the plain ones); the bills read paid and count once in the "

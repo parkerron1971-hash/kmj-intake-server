@@ -260,6 +260,8 @@ from giving_deposits import (handle_giving_deposits, handle_match_giving_deposit
     handle_unmatch_giving_deposits)
 from chief_bills import handle_bills, handle_add_bill, handle_remove_bill
 from chief_duties import handle_list_duties, handle_move_duty, handle_undo_duty
+from chief_map import (handle_list_map, handle_change_map, handle_draft_map, handle_undo_map_change,
+    handle_apply_map_change, handle_discard_map_change, handle_search_templates, handle_adopt_template)
 from chief_giving_counts import (handle_giving_counts, handle_record_service_gifts,
     handle_undo_service_gifts)
 from bill_payments import handle_match_bill_payment, handle_unmatch_bill_payment
@@ -403,6 +405,11 @@ _ACTION_PHRASES = {
     "list_duties": "reading who does what",
     "move_duty": "moving the duty",
     "undo_duty": "putting the duty back",
+    "list_map": "reading the leaders map",
+    "change_map": "changing the leaders map",
+    "undo_map_change": "putting the change back",
+    "search_templates": "looking through the ready-mades",
+    "adopt_template": "adding the ready-made as a draft",
     "giving_counts": "reading the service counts",
     "record_service_gifts": "recording the gifts to the service",
     "match_bill_payment": "matching bills to the bank",
@@ -12205,6 +12212,14 @@ ACTION_HANDLERS = {
     "list_duties":           handle_list_duties,
     "move_duty":             handle_move_duty,
     "undo_duty":             handle_undo_duty,
+    "list_map":              handle_list_map,
+    "change_map":            handle_change_map,
+    "draft_map":             handle_draft_map,
+    "undo_map_change":       handle_undo_map_change,
+    "apply_map_change":      handle_apply_map_change,
+    "discard_map_change":    handle_discard_map_change,
+    "search_templates":      handle_search_templates,
+    "adopt_template":        handle_adopt_template,
     "giving_counts":         handle_giving_counts,
     "record_service_gifts":  handle_record_service_gifts,
     "undo_service_gifts":    handle_undo_service_gifts,

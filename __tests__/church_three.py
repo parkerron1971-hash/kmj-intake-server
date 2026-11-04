@@ -37,6 +37,7 @@ import sys
 import uuid
 from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
+from urllib.parse import unquote
 from zoneinfo import ZoneInfo
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -107,8 +108,11 @@ class ThreeDB(DutyDB):
     database before the map's migration. Migrated, a role insert runs the
     live trigger's fill (church_role_defs_switches): a row with none of its
     switches said, all at their column defaults, gets today's rule. Each
-    insert's body, as sent, is kept in `role_inserts`."""
+    insert's body, as sent, is kept in `role_inserts`. A read keeps its
+    `order` and gets at most MAX_ROWS rows whatever its limit, and `ilike`
+    takes `*` wildcards, as PostgREST does (#1729 review)."""
     migrated = migrated2 = True
+    MAX_ROWS = 1000                 # the project's max-rows
 
     def _switches_trigger(self, row):
         self.role_inserts = getattr(self, "role_inserts", []) + [dict(row)]
@@ -144,7 +148,14 @@ class ThreeDB(DutyDB):
         return str(uuid.uuid5(uuid.NAMESPACE_URL, f"church-three/{table}/{self.made}"))
 
     def get(self, path, **kw):
-        return None if self._refused(path) else super().get(path, **kw)
+        if self._refused(path):
+            return None
+        qs = dict(p.partition("=")[::2] for p in path.partition("?")[2].split("&") if p)
+        rows = super().get(re.sub(r"\blimit=\d+", "limit=1000000", path), **kw)
+        for col, _, how in reversed([o.partition(".") for o in unquote(qs.get("order", "")).split(",") if o]):
+            rows.sort(key=lambda r: (r.get(col) is None, (0, r[col]) if isinstance(r.get(col), (int, float))
+                                     else (1, str(r.get(col) or ""))), reverse=how.startswith("desc"))
+        return rows[:min(int(qs.get("limit") or self.MAX_ROWS), self.MAX_ROWS)]
 
     def post(self, path, body, prefer=None, **kw):
         if self._refused(path, body):
@@ -172,6 +183,10 @@ class ThreeDB(DutyDB):
         for f in filters:
             if f[0] != "or" and f[1] == "like":
                 if not fnmatch.fnmatchcase(str(row.get(f[0]) or ""), f[2]):
+                    return False
+            elif f[0] != "or" and f[1] == "ilike" and "*" in f[2]:
+                rx = ".*".join(re.escape(x.replace("\\_", "_")) for x in f[2].split("*"))
+                if row.get(f[0]) is None or not re.fullmatch(rx, str(row[f[0]]), re.I | re.S):
                     return False
             else:
                 rest.append(f)

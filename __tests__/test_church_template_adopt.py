@@ -20,9 +20,11 @@ for p in (os.path.dirname(HERE), HERE):
     if p not in sys.path:
         sys.path.insert(0, p)
 
+import church_map as cm  # noqa: E402
 import church_map_batch as batch  # noqa: E402
 import church_roles as cr  # noqa: E402
 import church_templates as ct  # noqa: E402
+import sb_clients  # noqa: E402
 from church_three import (CHURCHES, FOUR, GRACE, LOVE_CITY as LC, NAMES, NEW_HOPE as NH,  # noqa: E402
                           RIVERSIDE as RV, build, church)
 from test_church_map_changes import changes, owner, refused, state  # noqa: E402
@@ -174,6 +176,39 @@ def test_a_shape_waits_for_a_yes_on_each_live_change_and_the_boards_yes_is_the_o
     made = adopt(db, RV, "department", "prayer")["made"]
     assert [(m["kind"], m["name"]) for m in made] == [("role", "Prayer leader"), ("department", "Prayer")]
     assert row(db, made[0])["can_lead"] is True and not changes(db, RV)[0]["money"]
+
+
+def test_a_failed_read_of_what_waits_stops_before_any_draft_is_made(db, monkeypatch):
+    real = db.get
+    monkeypatch.setattr(sb_clients, "sb_get_as_service",
+                        lambda path, **k: None if "origin=eq.template" in path else real(path, **k))
+    before = state(db, GRACE)
+    assert refused(adopt, db, GRACE, "shape", "multi_staff", code=503) == cm.UNREAD
+    assert state(db, GRACE) == before and not changes(db, GRACE), "the plain 503, and nothing made"
+
+
+def test_when_what_waits_didnt_save_adding_it_again_finishes_it(db, monkeypatch):
+    """#1728 review: the drafts went in and the waiting change's row failed
+    once. Its words say "Add it again to finish", and that does: the board's
+    yes on the new Elders draft waits for the owner, once."""
+    real, fails = db.post, [1]
+
+    def post(path, body, prefer=None, **k):
+        if path.startswith("/church_map_changes") and body.get("status") == "pending" and fails:
+            return fails.pop() and None
+        return real(path, body, prefer, **k)
+    monkeypatch.setattr(sb_clients, "sb_post_as_service", post)
+    assert refused(adopt, db, GRACE, "shape", "multi_staff", code=503).endswith("Add it again to finish.")
+    assert [c["status"] for c in changes(db, GRACE)] == ["applied"], "the drafts are in, nothing waits"
+    out = adopt(db, GRACE, "shape", "multi_staff")
+    assert out["made"] == [] and out["change"] is None and out["waiting"]
+    w = next(r for r in changes(db, GRACE) if r["id"] == out["waiting"]["id"])
+    assert (w["status"], w["money"]) == ("pending", True), "the owner's to make"
+    assert waiting_lines(db, GRACE) == ["Prayer ministry leader: leads off → on",
+                                        "Elders: gives the board’s yes on money off → on",
+                                        "Your church: who gives the pastor’s yes the usual → Pastor",
+                                        "Your church: who oversees the office the usual → Executive Pastor"]
+    assert adopt(db, GRACE, "shape", "multi_staff")["waiting"] is None, "and only once"
 
 
 def test_a_pick_of_a_draft_waits_until_that_role_is_live(db):

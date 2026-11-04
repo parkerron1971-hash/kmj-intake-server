@@ -515,12 +515,19 @@ def _sort(t: Dict[str, Any], home: str, roles: List[Dict[str, Any]], depts: List
     return out
 
 
+WAITS = ("can_board_yes",)       # what a new copy never gets made with: it waits for a yes (money, the owner's)
+
+
 def _waiting(x: Dict[str, Any], flips: Dict[str, Any], got: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     """The flips that wait for a yes: on an active copy, each it doesn't have
-    yet; on a new copy, the board's yes (money, so the owner's). A draft of
-    the church's gets none."""
+    yet; on a new copy, the board's yes (WAITS). A draft of the church's gets
+    none, but a draft copy of this ready-made still waits for what a new copy
+    would, while it isn't set: a retry after the waiting change failed to
+    save rebuilds it (#1728 review)."""
     if got is None:
-        return {k: v for k, v in flips.items() if k == "can_board_yes" and x.get(k) != v}
+        return {k: v for k, v in flips.items() if k in WAITS and x.get(k) != v}
+    if got.get("status") == "draft" and got.get("template_key") == x["key"]:
+        return {k: v for k, v in flips.items() if k in WAITS and got.get(k) != v}
     return {k: v for k, v in flips.items() if got.get("status") == "active" and got.get(k) != v}
 
 
@@ -604,13 +611,17 @@ def _make(x: Dict[str, Any], flips: Dict[str, Any], name: str, roles: List[Dict[
         "catalog_key": x["row"], **stamp}}
 
 
-def _unsaid(bid: str, parts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def _held(bid: str) -> List[Dict[str, Any]]:
+    """The parts the church's waiting ready-made changes hold; a 503 when the read fails."""
+    rows = cm._need(f"/church_map_changes?business_id=eq.{cm._q(bid)}&status=eq.pending&origin=eq.template"
+                    "&select=parts&limit=50")
+    return [p for r in rows for p in r.get("parts") or [] if p.get("after")]
+
+
+def _unsaid(held: List[Dict[str, Any]], parts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """The parts no change from a ready-made already waits with: adopting the
     same thing again stages nothing twice."""
     import church_map_batch as batch
-    rows = cm._need(f"/church_map_changes?business_id=eq.{cm._q(bid)}&status=eq.pending&origin=eq.template"
-                    "&select=parts&limit=50")
-    held = [p for r in rows for p in r.get("parts") or [] if p.get("after")]
     return [p for p in parts if not any(
         h["kind"] == p["kind"] and h.get("id") == p["id"] and
         all(f in h["after"] and batch._same(f, h["after"][f], v) for f, v in p["after"].items()) for h in held)]
@@ -649,6 +660,7 @@ def adopt(biz: Dict[str, Any], kind: str, key: str, by: Any, *, role: str, tradi
         raise HTTPException(503, cm.UNREAD)
     home = _trad(tradition or tradition_of(biz, st))
     roles, depts = _reads(biz)
+    held = _held(bid)       # read before any draft is written: a failed read stops everything (#1728 review)
     if name and kind == "role" and any(_fold(r["title"]) == _fold(name) for r in roles):
         cm._bad(f"There’s already a role called {name}")
     things, now = _sort(t, home, roles, depts, name), batch._Now(biz)
@@ -685,7 +697,7 @@ def adopt(biz: Dict[str, Any], kind: str, key: str, by: Any, *, role: str, tradi
         p = batch._part(now, {"kind": "settings", "id": bid, "set": picks}, now.get("settings", bid),
                         {"settings": {**now.m.settings, **picks}})
         later += [p] if p else []
-    later = _unsaid(bid, later) if later else []
+    later = _unsaid(held, later)
     waiting = batch._log(bid, "pending", later, by, "template", said=said, money=batch._money(later)) if later else None
     if later and waiting is None:
         raise HTTPException(503, "The drafts are in, but what waits for your yes didn’t save. Add it again to finish.")
