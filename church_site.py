@@ -320,9 +320,14 @@ def _plan_cards() -> str:
 
 def _offer_line() -> str:
     """What sits around the four plans, from pricing_config.church_offer():
-    Multi-site, extra texts, one more login, and the move. It takes the
-    founding seat's place under the cards: for churches the founding offer
-    is the free move."""
+    Multi-site, extra texts and what a text is, one more login, and the
+    move. It takes the founding seat's place under the cards: for churches
+    the founding offer is the free move.
+
+    What a text is: texts are counted by 160-character part, the way they
+    are billed (church_texts.py). It's said here, under the cards, and once
+    in the FAQ, not on every line that says "texts"."""
+    import church_texts
     import pricing_config
     o = pricing_config.church_offer()
     top = max(h for (_low, h) in pricing_config.church_size_bands().values() if h is not None)
@@ -336,7 +341,7 @@ def _offer_line() -> str:
         move += "."
     text = (f"Over {top:,} people or more than one campus? Multi-site starts at "
             f"${_dollars(o['multi_site_from_cents'])} a month. "
-            f"Extra texts are ${_dollars(o['extra_texts_cents_per_thousand'])} per 1,000. "
+            f"Extra texts are ${_dollars(o['extra_texts_cents_per_thousand'])} per 1,000. {church_texts.UNIT_LINE} "
             f"One more office login is ${_dollars(o['extra_login_cents'])} a month. {move}")
     return ('<div style="display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px 20px; padding: 18px 22px; '
             'border-radius: 18px; background: #FFFFFF; border: 1px solid rgba(11,12,17,0.12)">'

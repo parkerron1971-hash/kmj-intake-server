@@ -20,11 +20,23 @@ WHAT IS COUNTED
 Every text the church's line sent this calendar month (UTC), from the
 api_usage rows twilio_sms.send_sms writes (sms_usage.py), EXCEPT sign-in
 codes. A sign-in code is how a member gets into the app; a church shouldn't
-pay because its people logged in. Texts, not segments: a 300-character
-announcement is one text toward the count. The database does the counting
-(sb_count_as_service), so the 1,000-row read limit doesn't apply. A count
-that can't be read is None, never 0: no heads-up and no bill is ever based
-on a failed read.
+pay because its people logged in.
+
+A text is counted by 160-character part, the way Twilio bills it (Kevin,
+2026-11-03: "count what Twilio bills"). A message up to 160 characters is
+1 text; a longer one is split into parts of 153 characters, each 1 text (70
+and 67 when it carries an emoji or another character outside the plain
+texting alphabet). So a 300-character announcement is 2 texts toward the
+count. Each row's input_tokens is the parts Twilio bills
+(twilio_sms.segments); a row without a number counts as 1. Before this a
+message was 1 text however long it was, and at 1.26 cents a part and 1.93
+parts a message, every extra text cost more than the 2 cents it was billed.
+The plan numbers and the $20 per 1,000 didn't change, only the unit.
+
+Every row is read (paged by id, sb_get_all_as_service, strict), since
+PostgREST hands back at most 1,000 rows a read and the parts are summed
+here. A count that can't be read, in whole, is None, never 0: no heads-up
+and no bill is ever based on a failed or partial read.
 
 THE BILL
 --------
@@ -32,17 +44,18 @@ bill_tick runs once a day on the scheduler's leader. For each church on a
 church plan with an active (or past-due) subscription, it bills the month
 that just ended:
 
-  extra = texts sent - the plan's texts
+  extra = texts (parts) sent - the plan's texts
   cents = extra x 2 cents  (the $20-per-1,000 dial, priced per text rather
           than per started thousand, so 40 texts over cost 80 cents, not $20)
 
 Under the minimum (CHURCH_TEXT_BILL_MIN_CENTS, default $1) nothing is
 charged. Otherwise one Stripe invoice item goes on the church's subscription
-and lands on its next invoice.
+and lands on its next invoice, saying how many messages went out as how many
+texts.
 
 It's billed once per month. The record lives in
-businesses.settings.church_texts_bill = {month, state, texts, included,
-extra, cents, invoice_item}:
+businesses.settings.church_texts_bill = {month, state, texts (parts),
+messages, included, extra, cents, invoice_item}:
   * The month is claimed (state "billing") with a write filtered on the
     previous record, so two runs can't both claim it.
   * The Stripe call carries an idempotency key for the church and month.
@@ -71,6 +84,9 @@ NOTICE_TYPE = "text_allowance"
 SETTINGS_KEY = "church_texts_bill"
 NOT_COUNTED_KINDS = ("sms_signin_code",)
 BILLABLE_STATUSES = ("active", "past_due")
+# The unit in plain words: the heads-up, the church plan cards' "Good to
+# know" line (church_site) and the FAQ's church answer (marketing_pages).
+UNIT_LINE = "A text is up to 160 characters; a longer one counts as 2 or more."
 
 
 def _q(v: Any) -> str:
@@ -193,34 +209,63 @@ def _count_path(business_id: str, start: datetime, end: Optional[datetime]) -> s
         path += f"&created_at=lt.{_z(end)}"
     for kind in NOT_COUNTED_KINDS:
         path += f"&task_type=neq.{kind}"
-    return path + "&select=id"
+    return path + "&select=id,input_tokens"
 
 
-def counted_texts(business_id: str, start: datetime, end: Optional[datetime] = None) -> Optional[int]:
-    """Texts that count toward the plan, from `start` up to `end`. None when
-    the count can't be read. Blocking."""
+def parts_of(row: Dict[str, Any]) -> int:
+    """How many texts one message counts as: the parts Twilio billed for it
+    (input_tokens, sms_usage.usage_row). A row without a number still went
+    out, so it counts as 1."""
+    try:
+        n = int((row or {}).get("input_tokens") or 0)
+    except (TypeError, ValueError):
+        n = 0
+    return n if n > 0 else 1
+
+
+def counted(business_id: str, start: datetime,
+            end: Optional[datetime] = None) -> Optional[Tuple[int, int]]:
+    """(messages, texts) that count toward the plan, from `start` up to
+    `end`: how many messages went out, and how many texts (160-character
+    parts) they came to. Every row is read, page by page. None when any page
+    can't be read: never a short count, never 0 for a failure. Blocking."""
     if not business_id:
         return None
     try:
         import sb_clients
-        return sb_clients.sb_count_as_service(_count_path(business_id, start, end))
-    except Exception as e:  # noqa: BLE001
+        rows = sb_clients.sb_get_all_as_service(_count_path(business_id, start, end),
+                                                key="id", strict=True)
+    except Exception as e:  # noqa: BLE001  (PartialRead included)
         logger.warning(f"[church_texts] count failed: {type(e).__name__}")
         return None
+    if not isinstance(rows, list):
+        return None
+    return len(rows), sum(parts_of(r) for r in rows)
+
+
+def counted_texts(business_id: str, start: datetime, end: Optional[datetime] = None) -> Optional[int]:
+    """Texts (160-character parts) that count toward the plan, from `start`
+    up to `end`. None when the count can't be read. Blocking."""
+    got = counted(business_id, start, end)
+    return None if got is None else got[1]
 
 
 def summary(business_id: str, plan: Optional[str], *, now: Optional[datetime] = None) -> Optional[Dict[str, Any]]:
     """This month's texts for the Billing page and the announcement composer.
-    None for a business that isn't on a church plan. `used` is None when the
-    count can't be read, and then nothing derived from it is filled in."""
+    None for a business that isn't on a church plan. `used` is texts, which
+    are 160-character parts; `messages` is how many messages they came from.
+    Both are None when the count can't be read, and then nothing derived
+    from it is filled in."""
     included = included_for(plan)
     if included is None:
         return None
     start = month_start(now)
-    used = counted_texts(business_id, start)
+    got = counted(business_id, start)
+    messages, used = got if got is not None else (None, None)
     out: Dict[str, Any] = {
         "included": included,
         "used": used,
+        "messages": messages,
         "left": None,
         "extra": None,
         "extra_cents": None,
@@ -249,20 +294,35 @@ def level_for(used: Optional[int], included: Optional[int]) -> Optional[int]:
     return None
 
 
-def notice(level: int, used: int, included: int, start: datetime) -> Tuple[str, str]:
+def _messages(n: int) -> str:
+    return f"{n:,} message" + ("" if n == 1 else "s")
+
+
+def _per_k_words() -> str:
+    """The price in words: '$20', or '$12.50' when the dial isn't whole."""
     per_k = price_per_thousand_cents() / 100
-    per_k_s = f"${per_k:,.0f}" if per_k == int(per_k) else f"${per_k:,.2f}"
+    return f"${per_k:,.0f}" if per_k == int(per_k) else f"${per_k:,.2f}"
+
+
+def notice(level: int, used: int, included: int, start: datetime,
+           messages: Optional[int] = None) -> Tuple[str, str]:
+    """The heads-up's title and body. `used` is texts (parts); `messages`,
+    when known, is how many messages they came from, so a church that sent
+    600 long messages can see why it has used 1,200 texts."""
+    per_k_s = _per_k_words()
     resets = month_name(next_month_start(start))
     if level >= 100:
         title = f"You've used this month's {included:,} texts"
-        body = (f"{used:,} texts so far in {month_name(start)}. Every text still goes out: "
-                f"pickup codes, sign-in codes, announcements. The ones past {included:,} are "
-                f"{per_k_s} per 1,000, added to your next bill. The count starts over on "
-                f"{resets} 1.")
+        sent = f", from {_messages(messages)}" if messages else ""
+        body = (f"{used:,} texts so far in {month_name(start)}{sent}. {UNIT_LINE} Every text "
+                f"still goes out: pickup codes, sign-in codes, announcements. The ones past "
+                f"{included:,} are {per_k_s} per 1,000, added to your next bill. The count starts "
+                f"over on {resets} 1.")
     else:
-        title = f"{used:,} of your {included:,} texts sent this month"
-        body = (f"You're past 80% of this month's texts. Nothing stops when you reach "
-                f"{included:,}: extra texts are {per_k_s} per 1,000 on your next bill. "
+        title = f"{used:,} of your {included:,} texts used this month"
+        sent = f" ({_messages(messages)} so far)" if messages else ""
+        body = (f"You're past 80% of this month's texts{sent}. {UNIT_LINE} Nothing stops when "
+                f"you reach {included:,}: extra texts are {per_k_s} per 1,000 on your next bill. "
                 f"The count starts over on {resets} 1.")
     return title, body
 
@@ -283,7 +343,8 @@ def check_allowance(business_id: str, plan: Optional[str] = None, *,
         if included is None:
             return None
         start = month_start(now)
-        used = counted_texts(business_id, start)
+        got = counted(business_id, start)
+        messages, used = got if got is not None else (None, None)
         level = level_for(used, included)
         if level is None:
             return None
@@ -299,7 +360,7 @@ def check_allowance(business_id: str, plan: Optional[str] = None, *,
                     return None
             except (TypeError, ValueError):
                 continue
-        title, body = notice(level, int(used), included, start)
+        title, body = notice(level, int(used), included, start, messages)
         sb_clients.sb_post_as_service("/chief_notifications", {
             "business_id": business_id,
             "type": NOTICE_TYPE,
@@ -308,7 +369,7 @@ def check_allowance(business_id: str, plan: Optional[str] = None, *,
             "priority": "high" if level >= 100 else "normal",
             "status": "unread",
             "created_at": _utc(now).isoformat(),
-            "data": {"month": month_key(start), "level": level, "used": used,
+            "data": {"month": month_key(start), "level": level, "used": used, "messages": messages,
                      "included": included, "per_thousand_cents": price_per_thousand_cents()},
         }, prefer=None)
         return level
@@ -390,6 +451,20 @@ async def _existing_item(customer: str, business_id: str, month: str, since: dat
     return None
 
 
+def item_description(start: datetime, rec: Dict[str, Any]) -> str:
+    """The invoice line: what was over, the price, and the unit: how many
+    messages went out as how many texts. A claim recorded before texts were
+    counted by part has no `messages` and was counted by message, so its
+    line doesn't claim a unit it wasn't counted in."""
+    out = (f"Extra texts, {month_name(start)} {start.year}: {int(rec['extra']):,} past the "
+           f"plan's {int(rec['included']):,} ({_per_k_words()} per 1,000).")
+    messages = rec.get("messages")
+    if messages:
+        out += (f" Counted by 160-character part: {_messages(int(messages))} went out as "
+                f"{int(rec['texts']):,} texts.")
+    return out
+
+
 async def bill_month(row: Dict[str, Any], *, now: Optional[datetime] = None) -> Dict[str, Any]:
     """Bill one church for the month that just ended. The row needs id,
     name, settings, comp_tier, subscription_plan (the Stripe price id),
@@ -417,13 +492,14 @@ async def bill_month(row: Dict[str, Any], *, now: Optional[datetime] = None) -> 
         return {"state": "skipped", "why": "done", "month": month}
     resuming = bool(have and have.get("month") == month and have.get("state") == "billing")
 
-    used = await asyncio.to_thread(counted_texts, business_id, start, next_month_start(start))
-    if used is None:
+    got = await asyncio.to_thread(counted, business_id, start, next_month_start(start))
+    if got is None:
         return {"state": "skipped", "why": "count_unread", "month": month}
+    messages, used = got
     extra = max(0, used - included)
     cents = extra_cents(extra)
-    base = {"month": month, "texts": used, "included": included, "extra": extra, "cents": cents,
-            "at": _utc(now).isoformat()}
+    base = {"month": month, "texts": used, "messages": messages, "included": included,
+            "extra": extra, "cents": cents, "at": _utc(now).isoformat()}
 
     if cents < max(1, bill_min_cents()) and not resuming:
         ok = await asyncio.to_thread(_write_record, business_id,
@@ -438,23 +514,25 @@ async def bill_month(row: Dict[str, Any], *, now: Optional[datetime] = None) -> 
         if not claimed:
             return {"state": "skipped", "why": "claimed", "month": month}
     else:
+        # The claim's numbers, so a resumed run charges what was claimed
+        # (and a claim without messages was counted by message, not part).
         base.update({k: have.get(k) for k in ("texts", "included", "extra", "cents") if have.get(k) is not None})
+        base["messages"] = have.get("messages")
         extra, cents = int(base["extra"]), int(base["cents"])
 
     item_id = (await _existing_item(customer, business_id, month, next_month_start(start))
                if resuming else None)
     if not item_id:
-        per_k = price_per_thousand_cents() / 100
-        desc = (f"Extra texts, {month_name(start)} {start.year}: {extra:,} past the plan's "
-                f"{included:,} (${per_k:,.0f} per 1,000)")
         item = await _stripe("POST", "/invoiceitems", {
             "customer": customer,
             "subscription": sub,
             "amount": cents,
             "currency": "usd",
-            "description": desc,
+            "description": item_description(start, base),
             "metadata": {"kind": KIND, "month": month, "business_id": business_id,
-                         "texts": base["texts"], "included": base["included"], "extra": extra},
+                         "texts": base["texts"], "messages": base.get("messages"),
+                         "included": base["included"], "extra": extra,
+                         "unit": "160-character part" if base.get("messages") is not None else None},
         }, idempotency_key=f"church-texts-{business_id}-{month}")
         item_id = item.get("id")
 

@@ -380,10 +380,29 @@ def test_the_move_takes_the_founding_seats_place(by_size, monkeypatch):
     html = cs.render("")
     assert "Founding seat" not in html and "Claim seat" not in html and "plan=founder" not in html
     assert ("Over 1,500 people or more than one campus? Multi-site starts at $999 a month. Extra texts are $20 per "
-            "1,000. One more office login is $15 a month. Moving from another system costs three months of your "
+            "1,000. A text is up to 160 characters; a longer one counts as 2 or more. "
+            "One more office login is $15 a month. Moving from another system costs three months of your "
             "plan, and the first five churches move free.") in html
     assert "On every plan</b>" in html                                      # the strip stays
     assert "no cut of giving" in html                                       # and the fine print
+
+
+def test_what_a_text_is_is_said_once_under_the_plans(by_size):
+    """Texts are counted by 160-character part (church_texts.py): the page
+    says so once, under the cards, and not on every line that says texts."""
+    unit = "A text is up to 160 characters; a longer one counts as 2 or more."
+    html = cs.render("")
+    assert html.count(unit) == 1
+    assert html.index(unit) > html.index('<div class="plans four">')
+    for slug in cs.PRODUCTS:
+        assert unit not in cs.render(slug), slug
+
+
+def test_switched_off_no_page_speaks_of_parts(monkeypatch):
+    monkeypatch.delenv("PLAN_CHURCH_OFFERED", raising=False)
+    for slug in cs.PAGES:
+        assert "160 characters" not in cs.render(slug), slug
+    assert "160 characters" not in mp.render_faq()
 
 
 def test_moving_a_dial_moves_the_page(by_size, monkeypatch):
@@ -466,3 +485,16 @@ def test_the_faq_says_how_logins_come(monkeypatch):
     assert ("Churches pick a plan by how many people come on a Sunday, and each plan comes with its office logins: "
             "3 on Small, 8 on Growing, 15 on Established and 35 on Large.") in html
     assert "Office logins come with every plan: one on Starter" not in html
+
+
+def test_the_faq_says_what_a_text_is(monkeypatch):
+    assert "texts a month" not in mp.render_faq()                         # no allowance off the church plans
+    monkeypatch.setenv("PLAN_CHURCH_OFFERED", "1")
+    html = mp.render_faq()
+    assert ("never need one. Each plan comes with its texts a month too: 500 on Small, 1,500 on Growing, "
+            "3,000 on Established and 8,000 on Large, and extra texts are $20 per 1,000. A text is up to "
+            "160 characters; a longer one counts as 2 or more.</p>") in html
+    assert html.count("A text is up to 160 characters") == 1
+    monkeypatch.setenv("LIMIT_CHURCH_SMALL_TEXTS", "600")
+    assert "600 on Small" in mp.render_faq()
+    assert brand_voice.offenses(mp.render_faq()) == []
