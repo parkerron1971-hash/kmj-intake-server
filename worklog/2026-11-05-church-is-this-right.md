@@ -16,6 +16,12 @@ decisions:
   - "A suggestion's map part is a waiting change made by the speaker (church_map_batch.suggest); parts Chief can't make send nothing and say why; a duty move keeps who had it then and never moves over a later move"
   - "Who sees what (about: access, or a can_see_all part) goes as words only; money parts are the owner's; ten a day; the same gap inside 7 days joins the open one"
   - "Separate commits, B5's #1729 review leftovers: apply_pending lets go of what waited on drafts a finished undo took out; a change whose final mark didn't save never promises Undo"
+  - "#1731 review: apply and discard follow the map's and the duties' switches for the login that answers (open_to); nobody says yes to their own; undo_ask (a seventh verb, answer_ask's inverse) puts back both parts, each through its own undo and switch"
+  - "#1731 review: who gives the pastor's yes (pastor_yes_roles), and a role giving a money yes going live, draft or out, are money: the owner's everywhere, change_map and the settings route included; office_overseer_roles isn't (no money step)"
+  - "#1731 review: a new department's or role's line lists every field it sets, units named one by one, on the sheet and in every receipt"
+  - "#1731 review: their words, names and change lines are fenced (tags out, every quote mark a plain letter) and quoted; Chief answers an ask only when the person's own words this turn name whose it is and the answer"
+  - "#1731 review: a suggested change is answered only as a suggestion (apply_pending/discard refuse it elsewhere; list_map says suggested by); the duty move is dry-checked first; told is marked after the reply goes out; a change made on the map's list settles its ask; the check's due is kept a minute and cleared by a confirm, a duty move or a map write, and read alongside the context"
+  - "Not fixed: the 10-a-day cap is check-then-insert, so two at once could pass it (low)"
 related: [2026-11-05-church-step2-chief.md, 2026-11-02-chief-duties.md, 2026-10-28-chief-who-is-talking.md]
 ---
 An office login (Tiara, People & Care) opens Chief. The THIS LOGIN block offers the check once, early. Chief

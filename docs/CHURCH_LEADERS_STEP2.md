@@ -677,8 +677,8 @@ Rollout:
 - **F8** (frontend): Is this right? on My week and From your team on the department sheet, against B11's route shapes; checked at 1280px and 390px.
 
 **As built in B11** (`church_map_asks.py`; the routes in church_map_router.py; `supabase/APPLY-2026-11-05-church-map-asks.sql`):
-- **Open by the church.** Every verb and route follows `church_map.church_open` (rule 1), not `open_to(user)` as B5's do, since the office logins are the point. With `CHURCH_MAP=owner`, Love City's logins reach it, and an admin can apply an ask's change though the sheet's own change routes stay the platform owner's until `CHURCH_MAP` is on. Closed: the verbs say it isn't on, and the routes are a 404. Before this file, or step 2's: the verbs say it isn't ready (`ready()`), and the routes are a 503.
-- **A sixth verb, `answer_ask`** `{ask_id, answer: apply|done|discard}`: how the owner's or an admin's Chief answers an ask, through the routes' own code (`answer`), on request only. Its inverse is the map change's `undo_map_change`, else the duty move's `undo_duty`.
+- **Open by the church.** Every verb and route follows `church_map.church_open` (rule 1), not `open_to(user)` as B5's do, since the office logins are the point. With `CHURCH_MAP=owner`, Love City's logins reach it. Making or letting go of what an ask carries still follows the sheet's own switch for the login that answers (corrected below). Closed: the verbs say it isn't on, and the routes are a 404. Before this file, or step 2's: the verbs say it isn't ready (`ready()`), and the routes are a 503.
+- **A sixth verb, `answer_ask`** `{ask_id, answer: apply|done|discard}`: how the owner's or an admin's Chief answers an ask, through the routes' own code (`answer`), on request only. Its inverse is a seventh verb, `undo_ask`, which puts back both parts it made (corrected below).
 - **What `work` reads** (my_work and the check share it):
   - The duties as My week walks them (`church_my_week._held` and `placed`), so the days are the walkthrough's words.
   - An Admin may do every duty, so its list is the ones the church gave it: moved to it by name, or its stored lane's (Minnie: the Treasurer's four). It is never "none".
@@ -694,27 +694,48 @@ Rollout:
   - Parts that change nothing, and a duty already going to them, are a note.
   - The duty move keeps `was`: who it was moved to then, `[]` for the lanes. Apply refuses with a 409 when the duty moved again since, never moving over a later move.
 - **Who sees what** is `"about":"access"`, or any part naming `can_see_all` (a role's "sees everything"). Either one goes as words only, and Done means it was handled.
-- **Money.** A money part is the owner's to apply or discard (the batch's seats). A money **duty** follows chief_duties' own rule: an admin may apply a move of it to an Admin login.
+- **Money.** A money part is the owner's to apply or discard (the batch's seats), and who gives a money yes is a money part (corrected below). A money **duty** follows chief_duties' own rule: an admin may apply a move of it to an Admin login.
 - **Done, discard and changes made elsewhere.**
   - Done never closes an ask whose change still waits (a 409: apply or discard it).
   - Discard lets that change go too. It isn't allowed once part of the change went in: Apply finishes it.
-  - A change applied on the sheet itself is passed over at Apply; one let go or put back there is a 409.
+  - An ask's change is answered as their suggestion, never on the sheet's own list (corrected below). One made there anyway, or let go by an undo, settles its ask unless a duty is still to move: the ask then reads as its change does.
   - `GET /church/map/changes` lists an ask's waiting change too, so F8 shows it once, under From your team (by `change.id`).
 - **The limits.**
-  - Ten a day counts fixes and gaps in the last 24 hours (a 429). Confirming isn't counted.
+  - Ten a day counts fixes and gaps in the last 24 hours (a 429). Confirming isn't counted. It is checked, then saved, so two sent at the same moment could pass it (not fixed: low).
   - The same gap is the same words (case, punctuation and spacing aside) in an open gap from anyone at the church inside 7 days. Joining adds nothing, so it isn't counted.
 - **The lines.**
-  - chief_of_staff adds `turn_block` to the THIS LOGIN block, for churches only and off the event loop. A read that fails leaves the lines out.
+  - chief_of_staff reads `turn_lines` alongside the context and adds them to the THIS LOGIN block, for churches only. A read that fails leaves the lines out.
   - The first check is offered on every turn while it's due; its words tell Chief to offer it once, early.
-  - Told marks `told_at` as the line is built.
+  - Told is marked (`mark_told`) only once the reply that said it has gone out.
   - The owner and an admin get the count on every turn, with "say so once in this conversation". That is the owner's brief.
-- **Their words** are kept as said (400 at most). Wherever the owner's or an admin's Chief reads them (list_asks, the told line, answer_ask's receipt), they are defused (`untrusted_text.defuse`) and quoted.
+- **Their words** are kept as said (400 at most). Wherever the owner's or an admin's Chief reads them, they are fenced and quoted (corrected below).
 - **Route shapes** (F8 builds against these):
-  - `GET /church/map/asks` (the owner or an admin) → `{asks: [{id, kind, said, asked_at, who: {user_id, name}, change: {id, status, money, lines, can_apply} | null, duty_move: {duty, label, from: [names], follows_lanes, to, to_user_id} | null, words_only, can_apply, can_done, can_discard}], count}`.
+  - `GET /church/map/asks` (the owner or an admin) → `{asks: [{id, kind, said, asked_at, who: {user_id, name}, change: {id, status, money, lines, can_apply} | null, duty_move: {duty, label, from: [names], follows_lanes, to, to_user_id} | null, words_only, yours, can_apply, can_done, can_discard}], count}`. `can_*` follow the caller's seat, the map's and the duties' switches for them, and `yours` (nobody says yes to their own).
   - `GET /church/map/asks/mine` (an office seat; the owner gets a 403) → `{asks: [{id, kind, said, asked_at, status, resolved_at}], checked_at, due}`.
-  - `POST /church/map/asks/{id}/apply|done|discard` (the owner or an admin) → `{ok, ask: {id, status}, change, duty: {duty, label, to_user_id, changed, change_id} | null, finished}`. When `finished` is false, something went in but the ask still reads open: answering again finishes it.
+  - `POST /church/map/asks/{id}/apply|done|discard` (the owner or an admin) → `{ok, ask: {id, status}, change, duty: {duty, label, to_user_id, changed, change_id} | null, finished}`. When `finished` is false, something went in but the ask still reads open: answering again finishes it. A 403 says why it can't be made by this login (their own, money, a switch).
+  - `GET /church/map/changes` adds `suggested_by: {ask_id, name, status} | null` to each change, and an open ask's change has no Apply or Discard there.
 - **Not in B11:** F8, and the What's New entry (F2's rule).
 
 **Corrected in B11** (#1729's two review leftovers, each its own commit):
 - `apply_pending` finishing a failed undo lets go of the waiting changes that name a draft it took out, as `undo()` does, and says which (`let_go`).
 - `apply_pending` answers the change's real status and `marked`. When its final mark didn't save, the change still reads waiting, so `apply_map_change` promises no Undo and gives no inverse, and says to apply it again, which passes over every part and marks it.
+
+**Corrected in B11** (#1731's review, before merge):
+1. **Who may say yes.**
+   - Apply and discard pass the same switch the sheet's change routes use for the login that answers (`open_to`; for Chief, `_switched_on`). A login that can't make or undo a map change there can't through an ask (403, "Changing the leaders map isn't open to this login yet").
+   - Nobody says yes to their own suggestion (403), in Chief and the routes.
+   - Every answer that makes something has an Undo that login can use: undo_ask runs undo_map_change and undo_duty, each with its own switch and seat, and it is promised only when the change reads applied.
+   - Who gives the pastor's yes on money (`pastor_yes_roles`) is money, so it is the owner's everywhere: `church_map.save_settings`, the batch, `change_map`, a suggestion. A role part that turns a money-yes role live, draft or archived is money too: one the pick names, the senior role while nothing is picked, or one with the board's yes. `office_overseer_roles` feeds no money step (it picks the Executive Pastor's lane), so it stays an admin's.
+   - A change is checked as money again when it is applied, so one saved before this reads right.
+2. **What the approver sees is what apply makes.** A new department or role's line lists every field it sets ("Made Care Calls: leader Ruth Okafor; overseer Paul Mensah; office helper Kids; area People & care; holds the kids space"), with a definition cut to 120 letters. What hangs from a department is named one by one, added and taken off, never counted. These are the sheet's lines and every receipt's, change_map's included.
+3. **Their words stay data.**
+   - `fence` takes out action tags and makes every quote mark (straight or curly, single or double, guillemets) a plain letter (ʺ ʼ), so nothing they wrote closes the quotes it sits in.
+   - list_asks quotes their words, their names and every line of what they'd change, and says that everything in quotes is what they wrote.
+   - An answer from Chief waits for the person's own words this turn, naming whose it is (a first name or the ask's id) and giving that answer ("yes to Tiara's"); otherwise it is held and nothing is answered. This is stricter than the taint counter, which holds only class-C sends: every ask reaches Chief through list_asks or the count line, so every answer_ask is held until the person names it.
+4. **Whose it is.** An office login's waiting change is answered as their suggestion. `apply_pending` and `discard` refuse it anywhere else (409, naming whose, with a note pointing Chief to answer_ask). list_map says "suggested by <name>" instead of "by Chief", and its lines are fenced.
+5. **Undo puts back both parts:** answer_ask's inverse is `undo_ask` (the duty first; if it can't go back, nothing does).
+6. **The duty move is checked first** (it moved again since, or it can't go to that login), before the map change is made.
+7. **Told is marked after the reply goes out**, so a read that fails while the lines are built loses nothing.
+8. **Discard never lets go a change that was made.** It is refused once the change was made, and an ask whose change was made or let go on the map's own list settles to match (above), so its asker hears what really happened.
+9. **The duties' switch** (`CHURCH_DUTIES`) decides who moves a duty through an ask, as move_duty's. With duties off, a suggestion's duty move goes as their words.
+10. **One read a turn, not a dozen.** Whether a login's check is due is kept a minute per replica (`_due_now`). A confirm, a duty move (`church_duties._forget`) and any logged map change (`church_map_batch._log`) clear it. chief_of_staff starts the lines alongside the context gather.
