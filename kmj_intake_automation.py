@@ -1680,6 +1680,18 @@ async def startup():
                           "interval", minutes=10, id="autopilot_sweep")
     except Exception as e:
         print(f"   [warn] autopilot sweep job not scheduled: {e}")
+    # Chief's keep-warm pings (chief_keep_warm.py, 2026-11-03). The web
+    # writes each business's cached brief to chief_keep_warm after a main
+    # Chief call; this pings it when the copy is ~50 minutes old. They were
+    # tasks in the web process, which every deploy restarted (a median of
+    # 26 minutes apart), so the first ping almost never came. Every 2
+    # minutes, so a deploy of this worker skips a tick, not the copy.
+    try:
+        import chief_keep_warm as _keep_warm
+        scheduler.add_job(g("chief_keep_warm", _keep_warm.tick), "interval",
+                          minutes=_keep_warm.TICK_MIN, id="chief_keep_warm", max_instances=1)
+    except Exception as e:
+        print(f"   [warn] chief keep-warm job not scheduled: {e}")
     # Phase I.2 — GL live sync: drain the gl_sync_queue (no LISTEN/NOTIFY —
     # PostgREST only) + periodic divergence reconciliation. Env kill-switch:
     # GL_SYNC_POLLER=off disables both jobs without a code change.

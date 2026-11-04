@@ -84,6 +84,8 @@ def _wire(monkeypatch, responses, every=0.01, window=1.0):
     monkeypatch.setattr(spend_guard, "over_budget", lambda *a, **k: False)
     monkeypatch.setattr(kw, "every_s", lambda: every)
     monkeypatch.setattr(kw, "window_s", lambda: window)
+    # These pin the in-process chain: the table isn't there.
+    monkeypatch.setattr(kw, "record", lambda *a, **k: False)
     kw._tasks.clear()
     return sent
 
@@ -257,3 +259,371 @@ def test_a_daily_users_pings_outlast_the_short_window(monkeypatch):
         kw._tasks["biz-daily"].cancel()
     asyncio.run(run())
     assert len(sent) >= 2
+
+
+# ── Held in the database (2026-11-03) ────────────────────────────────
+# 475 deploys in 30 days, a median of 26 minutes apart, and the pings were
+# tasks in the web process that every deploy killed before the first one
+# (due at 55 minutes) went out: 33 pings in 30 days, and 4 of the 5
+# messages 1-4 h after the last one were full re-writes. The web now writes
+# the ping to chief_keep_warm and the worker sends it, so a deploy costs a
+# tick, not the copy. And the copy is gone after 00:00 UTC (all 3 pings
+# that crossed it paid for a whole new copy), so no ping crosses it.
+
+import json  # noqa: E402
+from datetime import datetime, timedelta, timezone  # noqa: E402
+from urllib.parse import parse_qsl  # noqa: E402
+
+T0 = datetime(2026, 11, 3, 15, 0, tzinfo=timezone.utc)
+_real_record = kw.record
+
+
+def _when(v):
+    return datetime.fromisoformat(str(v).replace("Z", "+00:00"))
+
+
+class _Table:
+    """chief_keep_warm as PostgREST would answer the calls the module makes."""
+
+    def __init__(self):
+        import threading
+        self.rows = {}
+        self.calls = []
+        self.lock = threading.Lock()   # one statement at a time, as Postgres locks the row
+
+    @staticmethod
+    def _match(row, filters):
+        for col, cond in filters:
+            op, _, val = cond.partition(".")
+            have = row.get(col)
+            if op == "is":
+                if have is not None:
+                    return False
+            elif col in ("touched_at", "last_call_at", "window_ends_at", "stopped_at"):
+                if have is None:
+                    return False
+                if op == "eq" and _when(have) != _when(val):
+                    return False
+                if op == "lt" and not _when(have) < _when(val):
+                    return False
+            elif op == "eq" and str(have) != val:
+                return False
+        return True
+
+    @staticmethod
+    def _parse(path):
+        assert path.startswith("/chief_keep_warm"), path
+        q = dict(parse_qsl(path.partition("?")[2], keep_blank_values=True))
+        select = q.pop("select", "*").split(",")
+        for k in ("order", "limit", "on_conflict"):
+            q.pop(k, None)
+        return list(q.items()), select
+
+    @staticmethod
+    def _shape(row, select):
+        return dict(row) if select == ["*"] else {k: row.get(k) for k in select}
+
+    def get(self, path, **_):
+        self.calls.append(("GET", path))
+        filters, select = self._parse(path)
+        rows = sorted((r for r in self.rows.values() if self._match(r, filters)),
+                      key=lambda r: _when(r["touched_at"]))
+        return [self._shape(r, select) for r in rows]
+
+    def patch(self, path, body):
+        self.calls.append(("PATCH", path, dict(body)))
+        filters, select = self._parse(path)
+        out = []
+        with self.lock:
+            for r in self.rows.values():
+                if self._match(r, filters):
+                    r.update(body)
+                    out.append(self._shape(r, select))
+        return out
+
+    def post(self, path, body, prefer=None, redact=False):
+        self.calls.append(("POST", path, dict(body), prefer, redact))
+        _, select = self._parse(path)
+        row = self.rows.setdefault(body["business_id"], {})
+        row.update(body)
+        return [self._shape(row, select)]
+
+
+def _db(monkeypatch):
+    import sb_clients
+    t = _Table()
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", t.get)
+    monkeypatch.setattr(sb_clients, "sb_patch_as_service", t.patch)
+    monkeypatch.setattr(sb_clients, "sb_post_as_service", t.post)
+    monkeypatch.setattr(kw, "table_state", lambda: True)
+    monkeypatch.setattr(kw, "window_for", lambda b: 4 * 3600.0)
+    kw._stored.clear()
+    kw._latest.clear()
+    return t
+
+
+def _row(biz="biz-w", touched=T0, ends=None, ping=None):
+    ping = ping or kw.ping_payload(_payload())
+    return {"business_id": biz, "payload": kw.ping_text(ping), "headers": {"anthropic-beta": "x"},
+            "prefix_hash": "0" * 64, "last_call_at": touched.isoformat(),
+            "touched_at": touched.isoformat(),
+            "window_ends_at": (ends or touched + timedelta(hours=4)).isoformat(),
+            "pings": 0, "stopped_at": None, "stopped_reason": None}
+
+
+def test_the_ping_is_kept_as_the_text_it_was_sent_as():
+    """jsonb would sort a tool schema's keys, and a schema with its keys
+    moved is another prompt to the cache: the ping would pay to write a
+    copy instead of reading one."""
+    ping = kw.ping_payload(_payload())
+    ping["tools"] = [{"name": "z_tool", "input_schema": {"type": "object",
+                                                         "properties": {"zeta": {}, "alpha": {}}}}]
+    back = json.loads(kw.ping_text(ping))
+    assert json.dumps(back) == json.dumps(ping)
+    assert list(back["tools"][0]["input_schema"]["properties"]) == ["zeta", "alpha"]
+
+
+def test_record_hands_the_ping_to_the_worker(monkeypatch):
+    t = _db(monkeypatch)
+    ping = kw.ping_payload(_payload())
+    assert kw.record("biz-r", ping, {"anthropic-beta": "extended-cache-ttl-2025-04-11"}) is True
+    row = t.rows["biz-r"]
+    assert json.loads(row["payload"]) == ping
+    assert row["headers"] == {"anthropic-beta": "extended-cache-ttl-2025-04-11"}
+    assert row["touched_at"] == row["last_call_at"] and row["stopped_at"] is None and row["pings"] == 0
+    assert _when(row["window_ends_at"]) - _when(row["last_call_at"]) == timedelta(hours=4)
+    post = [c for c in t.calls if c[0] == "POST"][0]
+    assert "on_conflict=business_id" in post[1] and "select=business_id" in post[1]
+    assert "merge-duplicates" in post[3] and post[4] is True   # the brief never reaches a log
+
+
+def test_the_brief_is_sent_again_only_when_it_changed(monkeypatch):
+    t = _db(monkeypatch)
+    ping = kw.ping_payload(_payload())
+    kw.record("biz-s", ping, {})
+    t.rows["biz-s"].update(stopped_at="2026-11-03T10:00:00+00:00", stopped_reason="window")
+    kw.record("biz-s", ping, {})
+    assert [c[0] for c in t.calls] == ["POST", "PATCH"]
+    assert "payload" not in t.calls[1][2] and "prefix_hash=eq." in t.calls[1][1]
+    assert t.rows["biz-s"]["stopped_at"] is None            # a new message restarts the chain
+    moved = kw.ping_payload(_payload())
+    moved["system"][1]["text"] = "MANUAL, CHANGED"
+    kw.record("biz-s", moved, {})
+    assert t.calls[-1][0] == "POST" and json.loads(t.rows["biz-s"]["payload"]) == moved
+
+
+def test_a_row_another_process_rewrote_gets_the_whole_brief(monkeypatch):
+    t = _db(monkeypatch)
+    ping = kw.ping_payload(_payload())
+    kw.record("biz-o", ping, {})
+    t.rows["biz-o"]["prefix_hash"] = "f" * 64                # another deploy's brief
+    kw.record("biz-o", ping, {})
+    assert [c[0] for c in t.calls] == ["POST", "PATCH", "POST"]
+
+
+def test_an_older_call_never_replaces_a_newer_brief(monkeypatch):
+    t = _db(monkeypatch)
+    kw._latest["biz-n"] = 7
+    assert kw.record("biz-n", kw.ping_payload(_payload()), {}, seq=6) is True
+    assert t.calls == []
+
+
+def test_no_table_means_the_web_pings_as_before(monkeypatch):
+    sent = _wire(monkeypatch, [], every=0.01, window=30)
+    monkeypatch.setattr(kw, "record", _real_record)
+    monkeypatch.setattr(kw, "table_state", lambda: False)
+
+    async def run():
+        kw.remember("biz-old", _payload())
+        for _ in range(200):
+            if sent:
+                break
+            await asyncio.sleep(0.02)
+        kw._tasks["biz-old"].cancel()
+    asyncio.run(run())
+    assert sent
+
+
+def test_a_recorded_brief_is_not_pinged_by_the_web(monkeypatch):
+    sent = _wire(monkeypatch, [], every=0.01, window=30)
+    monkeypatch.setattr(kw, "record", lambda *a, **k: True)
+
+    async def run():
+        kw.remember("biz-rec", _payload())
+        for _ in range(20):
+            if "biz-rec" not in kw._tasks:
+                break
+            await asyncio.sleep(0.02)
+        await asyncio.sleep(0.05)
+    asyncio.run(run())
+    assert "biz-rec" not in kw._tasks and sent == []
+
+
+def test_the_webs_pings_stop_at_midnight_utc(monkeypatch):
+    sent = _wire(monkeypatch, [], every=0.01, window=30)
+    monkeypatch.setattr(kw, "crosses_midnight", lambda a, b: True)
+
+    async def run():
+        kw.remember("biz-mid", _payload())
+        for _ in range(100):
+            if "biz-mid" not in kw._tasks:
+                break
+            await asyncio.sleep(0.02)
+    asyncio.run(run())
+    assert sent == [] and "biz-mid" not in kw._tasks
+
+
+def test_crossing_midnight_is_by_the_utc_date():
+    late = datetime(2026, 11, 3, 23, 30, tzinfo=timezone.utc)
+    assert kw.crosses_midnight(late, late + timedelta(minutes=50))
+    assert not kw.crosses_midnight(late, late + timedelta(minutes=20))
+    eastern = timezone(timedelta(hours=-5))
+    # 19:30 and 20:10 Eastern are 00:30 and 01:10 UTC: the same UTC day
+    assert not kw.crosses_midnight(datetime(2026, 11, 3, 19, 30, tzinfo=eastern),
+                                   datetime(2026, 11, 3, 20, 10, tzinfo=eastern))
+
+
+def test_what_happens_to_a_due_copy():
+    due = T0 + timedelta(minutes=51)
+    assert kw.verdict(_row(), due) == "ping"
+    assert kw.verdict(_row(), T0 + timedelta(minutes=56)) == "lapsed"
+    late = datetime(2026, 11, 3, 23, 30, tzinfo=timezone.utc)
+    assert kw.verdict(_row(touched=late), late + timedelta(minutes=51)) == "midnight"
+    assert kw.verdict(_row(ends=T0 + timedelta(minutes=30)), due) == "window"
+    assert kw.verdict({"touched_at": None, "window_ends_at": None}, due) == "lapsed"
+
+
+def test_the_ping_interval_never_outruns_the_late_line(monkeypatch):
+    monkeypatch.setenv("CHIEF_KEEP_WARM_EVERY_MIN", "59")
+    assert kw.every_s() + 2 * kw.TICK_MIN * 60 <= kw.LATE_S   # two looks before the line
+    monkeypatch.delenv("CHIEF_KEEP_WARM_EVERY_MIN")
+    assert kw.every_s() == 50 * 60
+
+
+def _worker(monkeypatch, rows, outcomes=None, now=None):
+    t = _db(monkeypatch)
+    for r in rows:
+        t.rows[r["business_id"]] = r
+    sent = []
+
+    async def send(biz, ping, headers):
+        sent.append((biz, ping, headers))
+        return (outcomes or {}).get(biz, "read")
+    monkeypatch.setattr(kw, "send_ping", send)
+    at = now or T0 + timedelta(minutes=51)
+
+    class _Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return at
+    monkeypatch.setattr(kw, "datetime", _Clock)
+    return t, sent
+
+
+def test_the_worker_pings_a_due_copy_with_the_brief_as_sent(monkeypatch):
+    ping = kw.ping_payload(_payload())
+    t, sent = _worker(monkeypatch, [_row("biz-a", ping=ping),
+                                    _row("biz-fresh", touched=T0 + timedelta(minutes=30))])
+    assert asyncio.run(kw.tick()) == {"read": 1}
+    assert sent == [("biz-a", ping, {"anthropic-beta": "x"})]
+    assert json.dumps(sent[0][1]) == json.dumps(ping)        # same bytes, same cache key
+    row = t.rows["biz-a"]
+    assert _when(row["touched_at"]) == T0 + timedelta(minutes=51) and row["pings"] == 1
+    assert t.rows["biz-fresh"]["pings"] == 0                 # not due yet
+
+
+def test_a_ping_that_writes_ends_the_chain(monkeypatch):
+    t, sent = _worker(monkeypatch, [_row("biz-b")], {"biz-b": "wrote"})
+    assert asyncio.run(kw.tick()) == {"wrote": 1}
+    assert t.rows["biz-b"]["stopped_reason"] == "wrote" and t.rows["biz-b"]["stopped_at"]
+
+
+def test_a_refused_ping_ends_the_chain(monkeypatch):
+    t, _ = _worker(monkeypatch, [_row("biz-c")], {"biz-c": "refused"})
+    asyncio.run(kw.tick())
+    assert t.rows["biz-c"]["stopped_reason"] == "refused"
+
+
+def test_a_busy_api_gets_one_more_try_while_the_copy_lasts(monkeypatch):
+    t, sent = _worker(monkeypatch, [_row("biz-d")], {"biz-d": "busy"})
+    assert asyncio.run(kw.tick()) == {"busy": 1}
+    row = t.rows["biz-d"]
+    assert row["stopped_at"] is None and _when(row["touched_at"]) == T0 and row["pings"] == 0
+
+
+def test_no_ping_crosses_midnight_utc(monkeypatch):
+    late = datetime(2026, 11, 3, 23, 30, tzinfo=timezone.utc)
+    t, sent = _worker(monkeypatch, [_row("biz-e", touched=late, ends=late + timedelta(hours=24))],
+                      now=late + timedelta(minutes=51))
+    assert asyncio.run(kw.tick()) == {"midnight": 1}
+    assert sent == [] and t.rows["biz-e"]["stopped_reason"] == "midnight"
+
+
+def test_a_copy_too_old_to_trust_is_never_pinged(monkeypatch):
+    """A worker down past the hour (a long deploy) must not ping a copy
+    that may be gone: the ping would pay for a whole new one."""
+    t, sent = _worker(monkeypatch, [_row("biz-f")], now=T0 + timedelta(minutes=58))
+    assert asyncio.run(kw.tick()) == {"lapsed": 1}
+    assert sent == [] and t.rows["biz-f"]["stopped_reason"] == "lapsed"
+
+
+def test_the_window_still_ends_the_pings(monkeypatch):
+    t, sent = _worker(monkeypatch, [_row("biz-g", ends=T0 + timedelta(minutes=40))])
+    assert asyncio.run(kw.tick()) == {"window": 1}
+    assert sent == []
+
+
+def test_a_message_during_the_ping_keeps_its_own_chain(monkeypatch):
+    """The ping found the old copy gone, but a message landed meanwhile
+    and wrote its own: the stop is for the chain the ping claimed, and
+    the message's chain lives on."""
+    t, _ = _worker(monkeypatch, [_row("biz-h")])
+    fresh = (T0 + timedelta(minutes=52)).isoformat()
+
+    async def send(biz, ping, headers):
+        t.rows[biz].update(touched_at=fresh, last_call_at=fresh, pings=0)
+        return "wrote"
+    monkeypatch.setattr(kw, "send_ping", send)
+    asyncio.run(kw.tick())
+    assert t.rows["biz-h"]["stopped_at"] is None and t.rows["biz-h"]["touched_at"] == fresh
+
+
+def test_two_workers_ping_a_copy_once(monkeypatch):
+    t, sent = _worker(monkeypatch, [_row("biz-i")])
+
+    async def both():
+        return await asyncio.gather(kw.tick(), kw.tick())
+    asyncio.run(both())
+    assert len(sent) == 1
+
+
+def test_nothing_runs_without_the_table_or_when_off(monkeypatch):
+    t, sent = _worker(monkeypatch, [_row("biz-j")])
+    monkeypatch.setattr(kw, "table_state", lambda: False)
+    assert asyncio.run(kw.tick()) == {} and sent == [] and t.calls == []
+    monkeypatch.setattr(kw, "table_state", lambda: True)
+    monkeypatch.setenv("CHIEF_KEEP_WARM", "off")
+    assert asyncio.run(kw.tick()) == {} and sent == []
+
+
+def test_table_state_remembers_yes_and_asks_again_after_no(monkeypatch):
+    import sb_clients
+    kw._table.clear()
+    answers = {"/chief_keep_warm": None, "/businesses": [{"id": "b"}]}
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", lambda p: answers[p.split("?")[0]])
+    assert kw.table_state() is False
+    answers["/chief_keep_warm"] = []
+    assert kw.table_state() is False                        # remembered for 10 minutes
+    kw._table["missing_until"] = 0
+    assert kw.table_state() is True
+    answers["/chief_keep_warm"] = None
+    assert kw.table_state() is True                         # once yes, always yes
+    kw._table.clear()
+    answers["/businesses"] = None
+    assert kw.table_state() is None                         # the probe itself failed
+    kw._table.clear()
+
+
+def test_the_worker_job_is_registered_and_leader_gated():
+    src = (pathlib.Path(__file__).resolve().parent.parent / "kmj_intake_automation.py").read_text(encoding="utf-8")
+    assert 'g("chief_keep_warm", _keep_warm.tick)' in src and 'id="chief_keep_warm"' in src
