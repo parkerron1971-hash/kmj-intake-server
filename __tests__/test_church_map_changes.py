@@ -208,6 +208,34 @@ def test_a_part_that_fails_leaves_the_change_failed_and_applying_it_again_finish
         (False, db.who[LC]["paul"])
 
 
+def test_finishing_a_failed_undo_lets_go_of_what_waits_on_the_drafts_it_took_out(db, monkeypatch):
+    """#1729 review: apply_pending finishing an undo lets go, as undo() does, so no dead change stays waiting."""
+    import church_templates as ct
+    biz, by = church(db, GRACE), owner(db, GRACE)
+    out = ct.adopt(biz, "shape", "multi_staff", by, role="owner")
+    waiting = out["waiting"]["id"]
+    real, calls = sb_clients.sb_delete_as_service, []
+
+    def delete(path, **k):          # the first draft role goes, the next one doesn't
+        if path.startswith("/church_role_defs"):
+            calls.append(path)
+            if len(calls) > 1:
+                return False
+        return real(path, **k)
+    monkeypatch.setattr(sb_clients, "sb_delete_as_service", delete)
+    assert "apply it again to finish it" in refused(batch.undo, biz, out["change"]["id"], by, role="owner", code=503)
+    half = next(r for r in changes(db, GRACE) if r["status"] == "failed")
+    assert half["undoes"] == out["change"]["id"]
+    assert next(r for r in changes(db, GRACE) if r["id"] == waiting)["status"] == "pending", "nothing let go yet"
+    monkeypatch.setattr(sb_clients, "sb_delete_as_service", real)
+    done = batch.apply_pending(biz, half["id"], by, role="owner")
+    assert done["let_go"] == [waiting] and done["change"]["status"] == "applied"
+    assert next(r for r in changes(db, GRACE) if r["id"] == waiting)["status"] == "discarded"
+    assert next(r for r in changes(db, GRACE) if r["id"] == out["change"]["id"])["status"] == "undone"
+    other = apply(db, KINDS["shepherding"], stage=True, biz=GRACE)["change"]
+    assert batch.apply_pending(biz, other["id"], by, role="owner")["let_go"] == [], "only an undo lets go"
+
+
 def test_a_lone_part_that_fails_logs_nothing_and_answers_as_its_write_does(db, monkeypatch):
     monkeypatch.setattr(sb_clients, "sb_patch_as_service", lambda *a, **k: None)
     assert refused(apply, db, KINDS["department_changed"], code=503) == "That didn’t save. Try again."

@@ -356,11 +356,13 @@ def _undo(business: Dict[str, Any], seat: str, action: Dict[str, Any]) -> Dict[s
 def _apply(business: Dict[str, Any], seat: str, action: Dict[str, Any]) -> Dict[str, Any]:
     cid = _change_id(action)
     undoes = batch._row(business, cid).get("undoes")       # finishing an undo: nothing to undo again
-    batch.apply_pending(business, cid, _turn_user(), role=seat)
+    out = batch.apply_pending(business, cid, _turn_user(), role=seat)
     if undoes:
-        return {"result": f"Finished putting a change back. {_said(_lines(business, cid))} Putting it back is a "
-                          "change too; to change it again, ask for the change.",
-                "label": "Finished putting a change back", "changed": True, "undoes": str(undoes)}
+        gone = " The change that waited for a yes on what it took out was let go too." if out.get("let_go") else ""
+        return {"result": f"Finished putting a change back. {_said(_lines(business, cid))}{gone} Putting it back is "
+                          "a change too; to change it again, ask for the change.",
+                "label": "Finished putting a change back", "changed": True, "undoes": str(undoes),
+                "let_go": out.get("let_go") or []}
     return {"result": f"Made the change that was waiting. {_said(_lines(business, cid))} {UNDO}",
             "label": "Made a waiting change", "changed": True, "change_id": cid}
 

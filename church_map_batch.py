@@ -528,7 +528,10 @@ def apply_pending(biz: Dict[str, Any], change_id: Any, by: Any, *, role: str) ->
     if not saved:
         print(f"[church_map_batch] change {row['id']} at {now.bid} was made but isn’t marked so", flush=True)
     _done_undo(now.bid, row)
-    return {"change": _brief((saved or [None])[0] or {**row, "status": "applied"}), "results": results}
+    # Finishing an undo lets go of what waits on a draft it took out, as undo() does (#1729 review).
+    gone = _let_go(now.bid, {str(p["id"]) for p in parts if p.get("deleted")}) if row.get("undoes") else []
+    return {"change": _brief((saved or [None])[0] or {**row, "status": "applied"}), "results": results,
+            "let_go": gone}
 
 
 def discard(biz: Dict[str, Any], change_id: Any, by: Any, *, role: str) -> Dict[str, Any]:
