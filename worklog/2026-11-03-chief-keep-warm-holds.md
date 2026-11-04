@@ -4,7 +4,7 @@ date: 2026-11-03
 agent: Claude Code (Claude Opus 5.5)
 asked: "go on all" (approved fix: Chief's keep-warm ping isn't keeping the cache warm)
 status: waiting on Kevin
-prs: [kmj-intake-server#TBD]
+prs: [kmj-intake-server#1734]
 migrations: [supabase/APPLY-2026-11-03-chief-keep-warm.sql (NOT applied)]
 left_undone:
   - "Apply supabase/APPLY-2026-11-03-chief-keep-warm.sql. Until then the web pings in its own process as before (with the new midnight rule) and the worker job does nothing."
