@@ -4,7 +4,7 @@ date: 2026-11-03
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-11-03: "I have read on the shrink, you can start on that" (cold Chief messages write ~120k tokens and lose money on church credits)'
 status: shipped, switch off
-prs: [kmj-intake-server#1736, kmj-intake-server#PR2]
+prs: [kmj-intake-server#1736, kmj-intake-server#1738]
 migrations: []
 left_undone:
   - "Turn it on: CHIEF_BRIEF=lean on the kmj-intake-server web service (the worker never builds Chief's brief). Then watch `railway logs --filter \"cache rewrite\"` (a cold message should write ~65-70k, not ~120k) and `--filter \"chief lean\"` (a one-line verb that ran without its how-to looked up)"
@@ -44,7 +44,7 @@ Before changing the manual, read chief_lean_brief.py: KEEP_VERBS,
 RULE_SECTIONS, AREA_PREFIXES and PROSE_KEPT decide what the short edition
 keeps, and __tests__/test_chief_lean_brief.py proves nothing is lost.
 
-## Follow-up (2026-11-04): the rare-actions misses (kmj-intake-server#PR2)
+## Follow-up (2026-11-04): the rare-actions misses (kmj-intake-server#1738)
 
 The coordinator's rule for Kevin is to keep only a change that scores the
 same or better. The rare-actions eval had gone 10/10 to 8/10. Both misses
