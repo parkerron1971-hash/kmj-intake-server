@@ -19,7 +19,10 @@ for byte; nothing here runs):
    work in the 60 days to 2026-11-03 (USAGE_VERBS, from audit_log
    actor_type='chief': 358 actions, 65 verbs, 7 businesses, churches
    included) and the verbs whose how-to carries an approval, money, send
-   or undo rule (ALWAYS_VERBS) keep every line of their how-to. Every
+   or undo rule (ALWAYS_VERBS) keep every line of their how-to, and so
+   do their SIBLINGS: every tool a rule section, a header line or a kept
+   verb's own how-to names, or whose description names a loaded tool
+   (_siblings; a deferred tool loses to a loaded neighbour). Every
    RULE section (RULE_SECTIONS: trust, approvals, money, voice, the build
    bridge, earned permission, the request map) is kept whole. Every other
    verb keeps ONE line in its section (`· verb — for "the words people
@@ -158,6 +161,19 @@ INTRO = (
 )
 
 GLOSS_CHARS = 48
+# Lines that say how to act at the moment of the request stay in the short
+# manual whatever verb they belong to, because they bind before any lookup
+# would be made: "you CAN do this" (against a false refusal), and "build it,
+# don't interview / the asking is the approval / never without asking".
+# 2026-11-03: with only a one-line entry, the intake-form turn (eval
+# nb_therapist_intake) drafted the questions in chat and asked, 3 times in
+# 4, instead of building the form; the how-to it lacked says "YOU CAN BUILD
+# CLIENT FORMS" and "DESIGN THE FORM FROM WHAT YOU KNOW … Do NOT
+# interrogate them field by field".
+_CAPABILITY = re.compile(
+    r"\bYOU CAN\b|THIS EXISTS|[Nn]ever say (?:you|it) can'?t"
+    r"|[Dd]o NOT (?:interrogate|interview|ask)|[Dd]on'?t (?:just )?(?:chat|interview|interrogate)"
+    r"|[Nn]ever ask\b|without asking|instead of asking|[Dd]o not ask|[Tt]he asking is the approval")
 _TAG = re.compile(r'\[ACTION:\s*\{\s*"type"\s*:\s*"([a-z0-9_]+)"')
 _SNAKE = re.compile(r"(?<![A-Za-z0-9_])([a-z][a-z0-9]*(?:_[a-z0-9]+)+)(?![A-Za-z0-9_])")
 
@@ -363,22 +379,138 @@ def _asked_as(section: _Section, verb: str) -> str:
             out.append(piece)
         if out:
             return ", ".join(out)
+    # No routing line: the manual's own example asks for this entry (the
+    # quoted requests on the first line of its how-to under the tag), so the
+    # one-liner still matches the way a practitioner says it.
+    # 2026-11-03: "search the record: what did you change on Monica's
+    # invoices?" went to recall_conversation while search_ledger's line
+    # carried only its field name.
+    for line, own in zip(section.lines, section.owners):
+        # Only a line of this verb's how-to alone that OPENS with its asks
+        # (`— "When did you…", "what failed…"`), so a quote never comes
+        # from a shared line about a neighbour, or from mid-rule prose.
+        body = line.strip().lstrip("—-–").strip()
+        # …or with a short label and then its asks (`— Tells: "make me…"`).
+        label = re.match(r"[A-Za-z ]{1,16}:\s*(?=[\"“])", body)
+        if label:
+            body = body[label.end():]
+        if own != frozenset({verb}) or _TAG.search(line) or not body[:1] in ('"', "“"):
+            continue
+        quotes = [q for q in _QUOTED.findall(body[:200]) if " " in q.strip() and "_" not in q]
+        out = []
+        for q in quotes[:3]:
+            piece = f'"{q.strip()}"'
+            if sum(len(x) + 2 for x in out) + len(piece) > ASKS_CHARS:
+                break
+            out.append(piece)
+        if out:
+            return ", ".join(out)
     return ""
 
 
-_LEAN_CACHE: Dict[str, Tuple[str, List[_Section]]] = {}
+_LEAN_CACHE: Dict[str, Tuple[str, List[_Section], FrozenSet[str]]] = {}
 _LAST_FULL: List[str] = []
 
 
+def _tool_registry() -> Dict[str, str]:
+    """Every tool Chief can be offered, by name, with its description: the
+    read surface, the reviewed writes, the build, delegation and image
+    tools. Static (no turn gates), so the short manual cut from it is the
+    same for every business."""
+    out: Dict[str, str] = {}
+    try:
+        import chief_tool_loop
+        out.update({t["name"]: t.get("description") or ""
+                    for t in chief_tool_loop.read_tool_definitions() if t.get("name")})
+        img = chief_tool_loop.image_tool_definition()
+        out[img["name"]] = img.get("description") or ""
+    except Exception:  # pragma: no cover - import order in odd harnesses
+        pass
+    for mod, attr in (("mcp_server", "WRITE_TOOL_SCHEMAS"), ("chief_build_runtime", "BUILD_TOOLS"),
+                      ("agent_coordination", "CHIEF_TOOLS")):
+        try:
+            table = getattr(__import__(mod), attr)
+            out.update({n: (v[0] if isinstance(v, (tuple, list)) else "") or "" for n, v in table.items()})
+        except Exception:  # pragma: no cover
+            pass
+    return out
+
+
+SIBLING_PASSES = 4
+
+
+def _siblings(sections: List[_Section], registry: Dict[str, str]) -> FrozenSet[str]:
+    """The tools a kept verb or a rule points at, which must be callable
+    without a lookup and written out in full like it.
+
+    Measured 2026-11-03 (rare-actions eval, 10/10 -> 8/10): a deferred
+    tool loses to a loaded neighbour even when the kept request map names
+    it. "Capture this idea" went to the loaded save_note, not the deferred
+    capture_idea the map routes it to; "draft a LinkedIn post" got an
+    interview instead of plan_content. So a tool is a sibling when:
+      - a RULE section names it (the request map routes a request to it);
+      - a line of a kept verb's own how-to names it ("…use X for that");
+      - its description names a loaded tool, or a loaded tool's names it.
+    Repeated until nothing new joins (add_block_range brings its
+    remove_block_range), at most SIBLING_PASSES times."""
+    names = set(registry)
+    kept = set(KEEP_VERBS)
+    loaded = set(LOADED_TOOLS)
+    found: set = set()
+
+    def named(text: str, n: str) -> bool:
+        return re.search(r"(?<![a-z0-9_])" + re.escape(n) + r"(?![a-z0-9_])", text) is not None
+
+    for _ in range(SIBLING_PASSES):
+        new: set = set()
+        for sec in sections:
+            for i, (line, own) in enumerate(zip(sec.lines, sec.owners)):
+                rare = {m for m in _SNAKE.findall(line) if m in names} - kept - loaded
+                # A header line always stays, so a tool it names is in the
+                # short manual's text as much as a rule's is.
+                if rare and (sec.rule or (i == 0 and sec.header) or (own and own & kept)
+                             or _CAPABILITY.search(line)):
+                    new |= rare
+        for n, desc in registry.items():
+            if n in kept or n in loaded or n in new:
+                continue
+            if any(named(desc, k) for k in loaded if k in registry) or \
+                    any(named(registry[k], n) for k in loaded if k in registry):
+                new.add(n)
+        new -= found
+        if not new:
+            break
+        found |= new
+        kept |= new
+        loaded |= new
+    return frozenset(found)
+
+
 def _parsed(manual: str) -> List[_Section]:
+    return _entry(manual)[1]
+
+
+def _entry(manual: str) -> Tuple[str, List[_Section], FrozenSet[str]]:
     key = hashlib.sha256(manual.encode("utf-8")).hexdigest()
     hit = _LEAN_CACHE.get(key)
     if hit is None:
         sections = _parse(manual, _known_verbs())
-        hit = (_render_lean(sections), sections)
+        kept = KEEP_VERBS | _siblings(sections, _tool_registry())
+        hit = (_render_lean(sections, kept), sections, kept)
         _LEAN_CACHE.clear()
         _LEAN_CACHE[key] = hit
-    return hit[1]
+    return hit
+
+
+def kept_verbs(manual: Optional[str] = None) -> FrozenSet[str]:
+    """Written out in full in the short manual and never deferred:
+    KEEP_VERBS plus the siblings this manual points at."""
+    manual = manual if manual is not None else full_manual()
+    return _entry(manual)[2] if manual else KEEP_VERBS
+
+
+def siblings(manual: Optional[str] = None) -> FrozenSet[str]:
+    return kept_verbs(manual) - KEEP_VERBS
 
 
 def prose_to_lookup(manual: str) -> List[str]:
@@ -386,14 +518,15 @@ def prose_to_lookup(manual: str) -> List[str]:
     none of whose verbs is kept). Pinned by a test, so a new section that
     would lose its prose is a decision someone makes, not a side effect."""
     out = []
+    kept = kept_verbs(manual)
     for s in _parsed(manual):
-        if s.area and not any(own and own & KEEP_VERBS for own in s.owners) and any(
+        if s.area and not any(own and own & kept for own in s.owners) and any(
                 own is None and line.strip() for line, own in list(zip(s.lines, s.owners))[1:]):
             out.append(s.header[:48])
     return out
 
 
-def _render_lean(sections: List[_Section]) -> str:
+def _render_lean(sections: List[_Section], keep: FrozenSet[str] = KEEP_VERBS) -> str:
     out: List[str] = []
     intro_done = False
     for s in sections:
@@ -404,14 +537,15 @@ def _render_lean(sections: List[_Section]) -> str:
             dropped: List[str] = []
             # An area none of whose verbs is kept keeps only its header line:
             # its unlabelled prose is that area's how-to, and goes with it.
-            keep_prose = not s.area or any(own and own & KEEP_VERBS for own in s.owners)
+            keep_prose = not s.area or any(own and own & keep for own in s.owners)
             for i, (line, own) in enumerate(zip(s.lines, s.owners)):
-                if i == 0 or (own is None and (keep_prose or not line.strip())) or (own and own & KEEP_VERBS):
+                if (i == 0 or (own is None and (keep_prose or not line.strip())) or (own and own & keep)
+                        or _CAPABILITY.search(line)):
                     kept.append(line)
                 else:
                     for v in sorted(own or (), key=lambda v: (v not in s.tag_verbs,
                                                         s.tag_verbs.index(v) if v in s.tag_verbs else 0, v)):
-                        if v not in KEEP_VERBS and v not in dropped:
+                        if v not in keep and v not in dropped:
                             dropped.append(v)
             while kept and not kept[-1].strip():
                 kept.pop()
@@ -436,9 +570,7 @@ def lean_manual(full: str) -> str:
     """The short manual for this full manual (memoised: it is the same
     text for every business, so it is cut once per process)."""
     _LAST_FULL[:] = [full]
-    key = hashlib.sha256(full.encode("utf-8")).hexdigest()
-    _parsed(full)
-    return _LEAN_CACHE[key][0]
+    return _entry(full)[0]
 
 
 def lean_prompt(system: str) -> str:
@@ -511,12 +643,13 @@ def guide_names(manual: Optional[str] = None) -> List[str]:
     """Every verb the lean manual lists by name only."""
     manual = manual if manual is not None else full_manual()
     names: List[str] = []
+    kept = kept_verbs(manual) if manual else KEEP_VERBS
     for s in _parsed(manual) if manual else []:
         if s.rule:
             continue
         for own in s.owners:
             for v in sorted(own or ()):
-                if v not in KEEP_VERBS and v not in names:
+                if v not in kept and v not in names:
                     names.append(v)
     return names
 
@@ -568,9 +701,10 @@ def tools_for_request(tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     deferred: List[Dict[str, Any]] = []
     manual = full_manual()
+    loaded = LOADED_TOOLS | (kept_verbs(manual) if manual else frozenset())
     for t in tools:
         name = t.get("name")
-        if t.get("type") or not name or name in LOADED_TOOLS or name == TOOL_NAME:
+        if t.get("type") or not name or name in loaded or name == TOOL_NAME:
             out.append(t)
             continue
         d = dict(t)
@@ -600,7 +734,7 @@ def tool_result(args: Dict[str, Any]) -> Tuple[bool, Any]:
     text = guide(name)
     if text:
         return False, ("How-to from Chief's manual (instructions, follow them):\n" + text)
-    known = sorted(set(guide_names()) | set(_DEFERRED.get()) | set(LOADED_TOOLS))
+    known = sorted(set(guide_names()) | set(_DEFERRED.get()) | set(LOADED_TOOLS) | set(kept_verbs()))
     close = difflib.get_close_matches(name, known, n=5, cutoff=0.5)
     hint = (" Close names: " + ", ".join(close) + ".") if close else ""
     return True, f"No how-to called '{raw}' in the manual.{hint}"
@@ -617,7 +751,7 @@ def reset_turn() -> None:
 def note_action(verb: Optional[str]) -> None:
     """Print (only print() reaches Railway logs) when a verb the short
     manual lists by name only runs without its how-to looked up this turn."""
-    if not verb or not enabled() or verb in KEEP_VERBS or verb in CORE_READS:
+    if not verb or not enabled() or verb in kept_verbs() or verb in CORE_READS:
         return
     if verb in _LOOKED_UP.get() or verb not in guide_names():
         return

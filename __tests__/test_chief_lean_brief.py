@@ -147,7 +147,8 @@ def test_every_tool_is_still_sent_and_every_deferred_one_can_be_loaded(on):
     assert deferred and loaded
     assert not any("cache_control" in t for t in deferred)
     for t in loaded:
-        assert t["name"] in lean.LOADED_TOOLS or t["name"] == lean.TOOL_NAME or t.get("type")
+        assert (t["name"] in lean.LOADED_TOOLS | lean.kept_verbs() or t["name"] == lean.TOOL_NAME
+                or t.get("type"))
     listing = out[-1]["description"]
     for t in deferred:
         assert t["name"] in listing
@@ -178,7 +179,7 @@ def test_the_kept_verbs_and_every_rule_section_are_written_out_in_full(on):
             assert "\n".join(s.lines).strip() in short, s.header[:60]
         else:
             for line, own in zip(s.lines, s.owners):
-                if own and own & lean.KEEP_VERBS:
+                if own and own & lean.kept_verbs(full):
                     assert line in short, line[:120]
     for rule in ("TRUST BOUNDARY", "ACTIONS — BUILDER BRIDGE", "STANDING PERMISSIONS",
                  "ADAPTIVE EXECUTION", "SMS & consent", "Autonomy:", "Deflection"):
@@ -197,7 +198,44 @@ def test_which_areas_send_their_prose_to_the_lookup_is_a_decision(on):
     ]
 
 
+def test_a_tool_the_short_manual_names_is_loaded_and_written_out_in_full(on):
+    """A deferred tool loses to a loaded neighbour even when the manual
+    names it (2026-11-03: "capture this idea" went to save_note, not the
+    capture_idea the request map routes it to). So every tool the short
+    manual names outside its one-line entries is a loaded tool, and every
+    line of its how-to is in the short manual."""
+    full = _full_manual()
+    short = lean.lean_manual(full)
+    registry = lean._tool_registry()
+    loaded = lean.LOADED_TOOLS | lean.kept_verbs(full)
+    for line in short.splitlines():
+        if line.startswith("  · ") or not line.strip():
+            continue
+        for name in lean._SNAKE.findall(line):
+            if name in registry:
+                assert name in loaded, (name, line[:120])
+    for verb in lean.siblings(full):
+        for s in lean._parsed(full):
+            for line, own in zip(s.lines, s.owners):
+                if own and verb in own:
+                    assert line in short, (verb, line[:120])
+
+
+def test_the_two_measured_misses_are_written_out_and_loaded(on):
+    full = _full_manual()
+    short = lean.lean_manual(full)
+    assert {"capture_idea", "plan_content"} <= lean.siblings(full)
+    assert "IDEAS VS POSTS" in short and "CONTENT WRITING + SCHEDULING" in short
+    ctl.reset_turn(writes_allowed=True)
+    out = {t["name"]: t for t in lean.tools_for_request(ctl.tool_definitions_for_turn(True))}
+    for name in ("capture_idea", "plan_content", "save_note"):
+        assert name in out and not out[name].get("defer_loading"), name
+
+
 def test_the_rare_actions_eval_asks_only_for_verbs_outside_the_kept_set():
+    """Outside the USAGE-based set (KEEP_VERBS). Some of these rows are now
+    written out in full as siblings (plan_content, capture_idea, create_goal):
+    that is the fix the rows measured, so they stay, comparable run to run."""
     import chief_rare_actions_eval as rare
     for case in rare.CASES:
         assert case["expect_any"]
