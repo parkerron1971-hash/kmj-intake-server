@@ -135,7 +135,9 @@ def test_bulk_send_is_held_on_a_tainted_turn(monkeypatch):
 
 def test_trust_boundary_block_is_in_the_universal_segment():
     src = chief_source()
-    assert src.index("TRUST BOUNDARY — WHO IS TALKING TO YOU") < src.index("\n[[CHIEF_GLOBAL_SPLIT]]\n")
+    # Since CHIEF_BRIEF=lean (2026-11-03) the universal block is its own
+    # string and the per-business one opens with the marker.
+    assert src.index("TRUST BOUNDARY — WHO IS TALKING TO YOU") < src.index('f"""[[CHIEF_GLOBAL_SPLIT]]\n')
 
 
 def test_trust_boundary_block_reaches_the_prompt():
