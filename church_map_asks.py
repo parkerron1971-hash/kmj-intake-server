@@ -491,13 +491,16 @@ def mine(business: Dict[str, Any], uid: str, seat: str) -> Dict[str, Any]:
     bid = str(business["id"])
     rows = _need(f"/church_map_asks?business_id=eq.{_q(bid)}&asked_by=eq.{_q(uid)}&kind=in.(fix,gap)"
                  f"&select={COLS}&order=asked_at.desc&limit=50")
+    chs = _changes(bid, rows)
     waiting = [r for r in rows if r["status"] == "open"]
-    if len(_settle(bid, waiting, _changes(bid, waiting))) != len(waiting):     # one answered on the map's list
+    if len(_settle(bid, waiting, chs)) != len(waiting):     # one answered on the map's list
         rows = _need(f"/church_map_asks?business_id=eq.{_q(bid)}&asked_by=eq.{_q(uid)}&kind=in.(fix,gap)"
                      f"&select={COLS}&order=asked_at.desc&limit=50")
     last = _checked(bid, uid)
-    return {"asks": [{k: (str(r[k]) if k == "id" else r.get(k)) for k in ("id", "kind", "said", "asked_at", "status",
-                                                                         "resolved_at")} for r in rows],
+    return {"asks": [{**{k: (str(r[k]) if k == "id" else r.get(k)) for k in ("id", "kind", "said", "asked_at", "status",
+                                                                            "resolved_at")},
+                      "put_back": (chs.get(str(r.get("change_id") or "")) or {}).get("status") == "undone"}
+                     for r in rows],
             "checked_at": (last or {}).get("asked_at"), "due": _due_now(business, uid, seat)[0]}
 
 
@@ -608,10 +611,15 @@ _DUE: Dict[Tuple[str, str], Tuple[float, Tuple[bool, bool]]] = {}
 
 
 def forget(business_id: Any = None, user_id: Any = None) -> None:
-    """Drop the kept checks: one login's (it confirmed), a church's (a duty moved, the map changed), or all."""
-    for k in [k for k in _DUE if (business_id is None or k[0] == str(business_id))
-              and (user_id is None or k[1] == str(user_id))]:
-        _DUE.pop(k, None)
+    """Drop the kept checks: one login's (it confirmed), a church's (a duty moved, the map changed), or all.
+    Called right after writes that already saved, from any thread: it reads a copy of the keys and never
+    raises (#1731 review)."""
+    try:
+        for k in list(_DUE):
+            if (business_id is None or k[0] == str(business_id)) and (user_id is None or k[1] == str(user_id)):
+                _DUE.pop(k, None)
+    except Exception as e:  # noqa: BLE001 — a check kept a minute too long beats a save that reads as failed
+        print(f"[church_map_asks] forgetting kept checks failed: {type(e).__name__}", flush=True)
 
 
 def _due_now(business: Dict[str, Any], uid: str, seat: str) -> Tuple[bool, bool]:
@@ -642,16 +650,19 @@ def _told(business: Dict[str, Any], uid: str) -> Tuple[List[str], List[str]]:
     reply that says it has gone out (mark_told), never here (#1731 review)."""
     bid, q = str(business["id"]), _q(business["id"])
     rows = _need(f"/church_map_asks?business_id=eq.{q}&asked_by=eq.{_q(uid)}&kind=in.(fix,gap)"
-                 "&status=in.(applied,done,discarded)&told_at=is.null&select=id,kind,said,status,resolved_by"
+                 "&status=in.(applied,done,discarded)&told_at=is.null&select=id,kind,said,status,resolved_by,change_id"
                  "&order=resolved_at.asc&limit=20")
     if not rows:
         return [], []
     names = cd._names(bid, business, cd._seats(bid))
+    back = {c for c, ch in _changes(bid, rows).items() if ch.get("status") == "undone"}    # made, then put back
     said = []
     for r in rows:
         who, thing, words = (fence(names.get(str(r.get("resolved_by") or "")) or "The owner or an admin"),
                              "suggestion" if r["kind"] == "fix" else "note", _quoted(r.get("said")))
-        said.append({"applied": f"{who} said yes to their {thing} {words}, and it’s made",
+        said.append({"applied": f"{who} said yes to their {thing} {words}, and it’s made"
+                     if str(r.get("change_id") or "") not in back else
+                     f"their {thing} {words} was made, then put back on the leaders map",
                      "done": f"{who} marked their {thing} {words} as handled",
                      "discarded": f"{who} let their {thing} {words} go"}[r["status"]])
     return (["SINCE THEY LAST TALKED WITH YOU: " + "; ".join(said) + ". Tell them once, plainly, early in your reply."],
@@ -847,20 +858,45 @@ def _list(business: Dict[str, Any], uid: str, seat: str, action: Dict[str, Any])
             "asks": [a["id"] for a in asks]}
 
 
-_SAYS = {"apply": re.compile(r"\b(yes|yeah|yep|apply|approve|accept|make|do it|go ahead|ok|okay|sure)\b", re.I),
-         "done": re.compile(r"\b(done|handled|taken care|mark)\b", re.I),
-         "discard": re.compile(r"\b(no|discard|let (?:it |that |them )?go|drop|decline|reject|dismiss)\b", re.I)}
+# The answer, said right before whose it is ("yes to Tiara's", "approve Tiara's", "no to Tiara's"), or for
+# done right after it ("Tiara's is done"). {who} is the name; an answer word anywhere else doesn't count.
+_YES = r"(?:yes|yep|yeah|approve|apply|accept|make|go ahead with|say yes to)"
+_NO = r"(?:no|nope|discard|decline|reject|drop|dismiss|let go of|say no to)"
+_PHRASE = {"apply": _YES + r"[\s,:-]*(?:to\s+)?(?:the\s+)?{who}",
+           "discard": _NO + r"[\s,:-]*(?:to\s+)?(?:the\s+)?{who}",
+           "done": r"(?:{who}(?:\s+(?:one|suggestion|note))?\s+(?:is|was)\s+(?:done|handled|taken care of)"
+                   r"|mark\s+{who}(?:\s+(?:one|suggestion|note))?\s+(?:as\s+)?(?:done|handled))"}
+# A name that is itself an answer can't name anyone safely ("Sure Thing", "Yes Adams").
+_ANSWERS = set("yes yep yeah sure ok okay no nope done handled approve apply accept discard decline reject dismiss".split())
 
 
-def _their_say(row: Dict[str, Any], who: str, how: str) -> bool:
-    """Whether the signed-in person's own words this turn name this ask (whose it is, or its id) and give
-    this answer. A turn that read the team's words (list_asks, the count line) holds an answer until they
-    do: Chief never answers one because something in someone's words said to (#1731 review)."""
+def _speaker_name(bid: str, uid: str, fallback: str) -> str:
+    """Whose an ask is, by the seat's own name (business_users.name), else the church's name for them: a
+    contact's name is the office's to edit, so it can't be what releases a hold (#1731 review)."""
+    rows = _need(f"/business_users?business_id=eq.{_q(bid)}&user_id=eq.{_q(uid)}&select=name&limit=1") if uid else []
+    return _plain((rows[0] if rows else {}).get("name")) or fallback
+
+
+def _their_say(row: Dict[str, Any], who: str, how: str) -> Optional[str]:
+    """None when the signed-in person's own words this turn give this answer to this ask, said right
+    against whose it is ("yes to Tiara's") or its id; else why not, for the hold. Never a question, and never
+    a name that is itself an answer. A turn that read the team's words (list_asks, the count line) holds an
+    answer until they do: Chief never answers one because something in someone's words said to (#1731)."""
     import chief_truth
-    said = _plain(getattr(chief_truth._turn.get(), "message", "")).casefold()
-    first = who.split(" ")[0].casefold() if who and who != GONE else ""
-    named = str(row["id"]) in said or (len(first) > 1 and re.search(rf"\b{re.escape(first)}\b", said))
-    return bool(named) and bool(_SAYS[how].search(said))
+    said = _plain(getattr(chief_truth._turn.get(), "message", "")).casefold().replace("’", "'")
+    if "?" in said:
+        return "it was asked as a question"
+    parts = [w for w in re.split(r"[^\w'-]+", (who if who != GONE else "").casefold()) if w]
+    answer_like = any(w in _ANSWERS for w in parts)
+    whose = [re.escape(str(row["id"]))] if str(row["id"]) in said else []
+    if parts and len(parts[0]) > 1 and not answer_like:      # whose it is, said as theirs: "Tiara's"
+        whose.append(r"(?:" + re.escape(parts[0]) + r"(?:\s+" + r"\s+".join(map(re.escape, parts[1:])) + r")?"
+                     r"(?:'s|'))")
+    if any(re.search(r"\b" + _PHRASE[how].format(who=w) + r"(?![\w'])", said) for w in whose):
+        return None
+    if answer_like and not whose:
+        return "their name reads like an answer, so say it with the suggestion’s id, or answer it on the sheet"
+    return "it didn’t say that answer right against whose it is"
 
 
 def _answer(business: Dict[str, Any], uid: str, seat: str, action: Dict[str, Any]) -> Dict[str, Any]:
@@ -873,12 +909,14 @@ def _answer(business: Dict[str, Any], uid: str, seat: str, action: Dict[str, Any
     names = cd._names(bid, business, cd._seats(bid))
     row = _row(bid, action["ask_id"])
     who, thing = names.get(str(row.get("asked_by") or "")) or GONE, "suggestion" if row["kind"] == "fix" else "note"
-    if not _their_say(row, who, how):
-        first = fence(who.split(" ")[0])
-        return {"result": f"Failed: HELD. This answer waits for your own words, because the suggestion came from the "
-                          f"team: say it naming whose it is, like “yes to {first}’s”, “{first}’s is done” or “no to "
-                          f"{first}’s”. Nothing was answered.", "label": f"Say yes or no to {first}’s in your words"[:80],
-                "failed": True, "held": True}
+    speaker = _speaker_name(bid, str(row.get("asked_by") or ""), who)
+    held = _their_say(row, speaker, how)
+    if held:
+        first = fence(speaker.split(" ")[0])
+        return {"result": f"Failed: HELD ({held}). This answer waits for your own words, because the suggestion came "
+                          f"from the team: say it right against whose it is, like “yes to {first}’s”, “{first}’s is "
+                          f"done” or “no to {first}’s”, not as a question. Nothing was answered.",
+                "label": f"Say yes or no to {first}’s in your words"[:80], "failed": True, "held": True}
     out = answer(business, action["ask_id"], uid, seat, how, _gates(uid))
     who, words = fence(who), f"their words: {_quoted(row.get('said'))}"
     if not out["finished"]:
@@ -911,12 +949,33 @@ def _answer(business: Dict[str, Any], uid: str, seat: str, action: Dict[str, Any
 
 def _undo_ask(business: Dict[str, Any], uid: str, seat: str, action: Dict[str, Any]) -> Dict[str, Any]:
     """answer_ask's inverse: what saying yes made, both parts, each through its own undo and its own seats
-    (chief_duties' undo_duty, chief_map's undo_map_change). The duty first: if it can't go back, nothing does."""
+    (chief_duties' undo_duty, chief_map's undo_map_change). Both are checked first (the switches, the map
+    change's own undo run dry, the duty's last change and who it goes back to), so it puts back both or
+    neither (#1731 review)."""
     import chief_duties
     import chief_map
     cid, duty, dcid = _uuid(action.get("change_id")), action.get("duty"), _uuid(action.get("duty_change_id"))
     if not cid and not (duty and dcid):
         cm._bad("Say what to put back: the change and the duty move that saying yes made")
+    bid, gates = str(business["id"]), _gates(uid)
+    if cid and not gates["map"] or duty and dcid and not gates["duty"]:
+        raise HTTPException(403, (MAP_CLOSED if cid and not gates["map"] else DUTY_CLOSED) + " Nothing was put back.")
+    try:
+        if cid:
+            batch.undo(business, cid, uid, role=seat, origin="chief", dry=True)
+        if duty and dcid:
+            last = cd._undoable(cd._changes(bid, find_duty(duty) or str(duty)))
+            if not last or str(last.get("id")) != dcid:
+                raise HTTPException(409, f"“{(cd.CATALOG.get(find_duty(duty) or '') or {}).get('label', duty)}” has "
+                                         "changed again since then")
+            back = sorted({str(u) for u in last.get("from_holders") or []})
+            why = cd._check(bid, business, back, last["duty"])
+            if why:
+                raise HTTPException(409, why.rstrip("."))
+    except HTTPException as e:
+        if e.status_code >= 500:
+            raise
+        raise HTTPException(e.status_code, f"{str(e.detail).rstrip('.')}. Nothing was put back.") from None
     said = []
     if duty and dcid:
         got = chief_duties.undo_sync(str(business["id"]), {"duty": duty, "change_id": dcid})

@@ -609,8 +609,10 @@ def discard(biz: Dict[str, Any], change_id: Any, by: Any, *, role: str, via_ask:
     return {"change": _brief(saved[0])}
 
 
-def undo(biz: Dict[str, Any], change_id: Any, by: Any, *, role: str, origin: str = "office") -> Dict[str, Any]:
-    """Put one change back, whole or not at all."""
+def undo(biz: Dict[str, Any], change_id: Any, by: Any, *, role: str, origin: str = "office",
+         dry: bool = False) -> Dict[str, Any]:
+    """Put one change back, whole or not at all. `dry`: every check, nothing written (undo_ask checks the
+    map before it puts a duty back, #1731 review)."""
     _open()
     _may(role)
     row = _row(biz, change_id)
@@ -630,6 +632,8 @@ def undo(biz: Dict[str, Any], change_id: Any, by: Any, *, role: str, origin: str
         if f:
             raise HTTPException(409, _since(p, f, cur, "changed again") + "; change it directly.")
     plan = _checked(now, [_back(p) for p in reversed(row["parts"])], by, role, origin, "That can’t be put back")
+    if dry:
+        return {"change": None, "undone": str(row["id"]), "dry": True}
     parts = [p for _o, p in plan if p]
     more = {"money": bool(row.get("money")) or _money(parts, now.m), "undoes": str(row["id"])}
     results, err = _write(now, plan, by, role, origin)

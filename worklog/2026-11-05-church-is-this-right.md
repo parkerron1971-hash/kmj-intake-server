@@ -21,6 +21,7 @@ decisions:
   - "#1731 review: a new department's or role's line lists every field it sets, units named one by one, on the sheet and in every receipt"
   - "#1731 review: their words, names and change lines are fenced (tags out, every quote mark a plain letter) and quoted; Chief answers an ask only when the person's own words this turn name whose it is and the answer"
   - "#1731 review: a suggested change is answered only as a suggestion (apply_pending/discard refuse it elsewhere; list_map says suggested by); the duty move is dry-checked first; told is marked after the reply goes out; a change made on the map's list settles its ask; the check's due is kept a minute and cleared by a confirm, a duty move or a map write, and read alongside the context"
+  - "#1731 round two: an answer from Chief needs the answer said against whose it is (\"yes to Tiara's\", the seat's own name, never a question or an answer-like name); undo_ask checks both undos first; a change put back says so (put_back); forget never raises; the lines are read inside the context stage"
   - "Not fixed: the 10-a-day cap is check-then-insert, so two at once could pass it (low)"
 related: [2026-11-05-church-step2-chief.md, 2026-11-02-chief-duties.md, 2026-10-28-chief-who-is-talking.md]
 ---

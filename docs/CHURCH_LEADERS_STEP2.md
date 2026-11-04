@@ -731,11 +731,21 @@ Rollout:
 3. **Their words stay data.**
    - `fence` takes out action tags and makes every quote mark (straight or curly, single or double, guillemets) a plain letter (ʺ ʼ), so nothing they wrote closes the quotes it sits in.
    - list_asks quotes their words, their names and every line of what they'd change, and says that everything in quotes is what they wrote.
-   - An answer from Chief waits for the person's own words this turn, naming whose it is (a first name or the ask's id) and giving that answer ("yes to Tiara's"); otherwise it is held and nothing is answered. This is stricter than the taint counter, which holds only class-C sends: every ask reaches Chief through list_asks or the count line, so every answer_ask is held until the person names it.
+   - An answer from Chief waits for the person's own words this turn, naming whose it is and giving that answer ("yes to Tiara's"); otherwise it is held and nothing is answered (tightened in round two, below). This is stricter than the taint counter, which holds only class-C sends: every ask reaches Chief through list_asks or the count line, so every answer_ask is held until the person names it.
 4. **Whose it is.** An office login's waiting change is answered as their suggestion. `apply_pending` and `discard` refuse it anywhere else (409, naming whose, with a note pointing Chief to answer_ask). list_map says "suggested by <name>" instead of "by Chief", and its lines are fenced.
 5. **Undo puts back both parts:** answer_ask's inverse is `undo_ask` (the duty first; if it can't go back, nothing does).
 6. **The duty move is checked first** (it moved again since, or it can't go to that login), before the map change is made.
 7. **Told is marked after the reply goes out**, so a read that fails while the lines are built loses nothing.
 8. **Discard never lets go a change that was made.** It is refused once the change was made, and an ask whose change was made or let go on the map's own list settles to match (above), so its asker hears what really happened.
 9. **The duties' switch** (`CHURCH_DUTIES`) decides who moves a duty through an ask, as move_duty's. With duties off, a suggestion's duty move goes as their words.
-10. **One read a turn, not a dozen.** Whether a login's check is due is kept a minute per replica (`_due_now`). A confirm, a duty move (`church_duties._forget`) and any logged map change (`church_map_batch._log`) clear it. chief_of_staff starts the lines alongside the context gather.
+10. **One read a turn, not a dozen.** Whether a login's check is due is kept a minute per replica (`_due_now`). A confirm, a duty move (`church_duties._forget`) and any logged map change (`church_map_batch._log`) clear it. chief_of_staff reads the lines in the context gather itself, so their time is the context stage's (round two, below).
+
+**Corrected in B11** (#1731's review, round two):
+- **The hold needs an explicit phrase.**
+  - An answer is released only by the answer said right against whose it is, possessive: "yes to Tiara's", "approve Tiara's", "no to Tiara's", "Tiara's is done", or the same with the ask's id.
+  - It is never released by a question, nor by a name with an answer word anywhere in it (that one takes the id, or the sheet).
+  - The name matched is the seat's own (`business_users.name`), never the contact record the office can edit. A renamed "Sure Thing" can't turn the owner's "sure, send the newsletter" into a yes.
+- **undo_ask puts back both or neither.** It checks the map change's own undo (run dry: `church_map_batch.undo(dry=True)`), the duty's last change, who the duty would go back to, and both switches before it puts anything back.
+- **A change put back says so.** An ask whose change was made and then undone still reads applied, because it was made. Its told line says "was made, then put back on the leaders map", and `GET /church/map/asks/mine` adds `put_back`.
+- **`forget` never raises.** It reads a copy of the keys and swallows any failure, since it runs right after writes that already saved.
+- **CI timing.** test_chief_turn_timing failed with 570ms in the model stage on a coach business, where these lines never run. A local probe shows no read of this PR's in any stage there (the model stage reads nothing, only the two-track opener runs), so that number is the CI runner's DNS failures in other reads. For a church, the lines are now read inside the context gather and done before the context stage ends, never in the model's.

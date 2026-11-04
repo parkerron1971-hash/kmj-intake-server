@@ -15129,7 +15129,7 @@ async def chief_chat(
     _area_scope, _who = await asyncio.to_thread(chief_areas.turn_for, req.business_id, str(user_session.user.id))
     _area_token = chief_areas.TURN.set(_area_scope)
     _who_token = chief_areas.WHO.set(_who)
-    _asks_task, _asks_told = None, []      # Is this right? (church_map_asks): its lines, and the asks they tell
+    _asks_read, _asks_told = None, []      # Is this right? (church_map_asks): its lines, and the asks they tell
     try:
         if not req.message:
             raise HTTPException(400, "message is required")
@@ -15320,13 +15320,15 @@ async def chief_chat(
             _turn_status("reading your business")
             ctx_task = preparation.start(_gather_context(client, req.business_id, query_text=req.message))
             view_task = preparation.start(_fetch_view_detail(client, req.business_id, req.current_context))
-            # Is this right? (church_map_asks): this login's lines, read alongside the context, a church's only.
+            # Is this right? (church_map_asks): this login's lines, read alongside the context and done with it,
+            # so their time is the context stage's (a church's only).
             import church_follow_up as _cfu
             if biz_lite and _cfu.is_church(biz_lite):
                 import church_map_asks
-                _asks_task = asyncio.ensure_future(asyncio.to_thread(
+                ctx, view_detail, _asks_read = await asyncio.gather(ctx_task, view_task, asyncio.to_thread(
                     church_map_asks.turn_lines, biz_lite, str(user_session.user.id), chief_areas.WHO.get()))
-            ctx, view_detail = await asyncio.gather(ctx_task, view_task)
+            else:
+                ctx, view_detail = await asyncio.gather(ctx_task, view_task)
             _t.mark("context")
 
             if not ctx:
@@ -15601,12 +15603,12 @@ async def chief_chat(
             # and for the owner and an admin how many wait. Read alongside the context; a read that fails adds
             # nothing. What it tells is marked told once the reply is out (below).
             import church_follow_up as _cfu
-            if _asks_task is None and _cfu.is_church(biz):      # its row wasn't read up front: read them now
+            if _asks_read is None and _cfu.is_church(biz):      # its row wasn't read up front: read them now
                 import church_map_asks
-                _asks_task = asyncio.to_thread(church_map_asks.turn_lines, biz, str(user_session.user.id),
-                                               chief_areas.WHO.get())
-            if _asks_task is not None:
-                _asks_text, _asks_told = await _asks_task
+                _asks_read = await asyncio.to_thread(church_map_asks.turn_lines, biz, str(user_session.user.id),
+                                                     chief_areas.WHO.get())
+            if _asks_read is not None:
+                _asks_text, _asks_told = _asks_read
                 _login_block += _asks_text
             if _login_block:
                 growth_turn_block = _login_block + "\n" + growth_turn_block

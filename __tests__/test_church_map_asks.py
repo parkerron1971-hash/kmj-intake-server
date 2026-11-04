@@ -184,10 +184,11 @@ def test_chief_reads_the_lines_alongside_the_context_and_marks_told_after_the_re
     import inspect
     import chief_of_staff as cos
     src = inspect.getsource(cos.chief_chat)
-    started, gathered = src.index("church_map_asks.turn_lines, biz_lite"), src.index("await asyncio.gather(ctx_task")
-    assert src.index("view_task = preparation.start(") < started < gathered, "begun before the context is awaited"
+    gathered = src.index("ctx, view_detail, _asks_read = await asyncio.gather(ctx_task, view_task, asyncio.to_thread(")
+    assert gathered < src.index("church_map_asks.turn_lines, biz_lite") < src.index('_t.mark("context")') < \
+        src.index('_t.mark("model")'), "read and done inside the context stage, never the model's (#1731 CI)"
     block = src.index("chief_areas.block(chief_areas.TURN.get()")
-    assert block < src.index("await _asks_task", block) < block + 900
+    assert block < src.index("_asks_text, _asks_told = _asks_read", block) < block + 900
     assert src.index("church_map_asks.mark_told") > src.index("await _archive_turn(client, biz, req.message, response_text"), \
         "told only once the reply is out"
     monkeypatch.setattr(asks, "work", lambda *a: 1 / 0)
@@ -519,6 +520,58 @@ def test_undo_puts_back_both_parts(db):
     assert not next(d for d in cr.defs(LC) if d["key"] == "team_leader")["can_oversee"], "and the map change"
 
 
+@pytest.mark.parametrize("stale", ["map", "duty"])
+def test_undo_puts_back_both_or_neither(db, stale):
+    """#1731 review, round 2: the duty went back before the map undo was refused, leaving it half undone."""
+    import action_inverse as ai
+    import church_roles as cr
+    ok(run(db, "suggest_work_change", {**TEAM_OVERSEES, "duty_move": KIDS["duty_move"]}, LC, "tiara"))
+    inv = ai.build_inverse("answer_ask", {}, ok(say(db, rows(db)[0]["id"], "apply", "yes to Tiara's")))
+    if stale == "map":          # the role changed again since: its undo is refused
+        ok(run(db, "change_map", {"changes": [{"kind": "role", "role": "Team leader", "can_oversee": False}]}, LC))
+    else:                       # the duty moved again since
+        cd.move(church(db, LC), "kids", [db.who[LC]["naiya@"]], church(db, LC)["owner_id"])
+    r = run(db, "undo_ask", inv, LC)
+    assert r.get("failed") and r["result"].endswith("Nothing was put back.") and r["label"], r
+    assert not holds(db, LC, "tiara", "kids"), "the duty stayed where it was"
+    assert next(d for d in cr.defs(LC) if d["key"] == "team_leader")["can_oversee"] == (stale == "duty"), \
+        "and so did the map"
+
+
+def test_a_change_put_back_says_so_never_that_its_made(db):
+    """#1731 review, round 2: an undone change settled its ask as applied, so the asker heard "it's made"."""
+    import action_inverse as ai
+    import church_map_batch as batch
+    out = ok(run(db, "suggest_work_change", TEAM_OVERSEES, LC, "tiara"))
+    biz, owner = church(db, LC), church(db, LC)["owner_id"]
+    batch.apply_pending(biz, out["waiting_id"], owner, role="owner", via_ask=True)       # made on the map's list
+    batch.undo(biz, out["waiting_id"], owner, role="owner")                              # and put back there
+    assert asks.open_asks(biz, "owner")["asks"] == [] and rows(db)[0]["status"] == "applied"
+    line = told(db, LC, "tiara")
+    assert "their suggestion “Team leaders oversee now” was made, then put back on the leaders map" in line
+    assert "and it’s made" not in line
+    mine = Office(db).as_(LC, "tiara").c.get(f"/church/map/asks/mine?business_id={LC}").json()
+    assert [(a["status"], a["put_back"]) for a in mine["asks"]] == [("applied", True)]
+    ok(run(db, "suggest_work_change", {**TEAM_OVERSEES, "said": "Team leaders oversee, really"}, LC, "naiya"))
+    made = ok(say(db, rows(db)[-1]["id"], "apply", "yes to Naiya's"))
+    ok(run(db, "undo_ask", ai.build_inverse("answer_ask", {}, made), LC))
+    assert "was made, then put back" in told(db, LC, "naiya"), "an Undo after the yes, the same"
+
+
+def test_forget_never_fails_the_save_that_called_it(db, monkeypatch):
+    """#1731 review, round 2: forget() looped over _DUE while other threads wrote to it."""
+    class Shifting(dict):
+        def __iter__(self):
+            raise RuntimeError("dictionary changed size during iteration")
+    monkeypatch.setattr(asks, "_DUE", Shifting({(LC, "a"): (0.0, (True, False))}))
+    assert asks.forget(LC) is None and asks.forget() is None
+    ok(run(db, "change_map", {"changes": [{"kind": "department", "department": "Youth", "sort": 9}]}, LC)), \
+        "a map write that already saved still answers as made"
+    monkeypatch.setattr(asks, "_DUE", {(LC, "a"): (0.0, (True, False)), (GRACE, "b"): (0.0, (True, False))})
+    asks.forget(LC)
+    assert list(asks._DUE) == [(GRACE, "b")]
+
+
 def test_a_stale_duty_move_stops_it_before_the_map_change_is_made(db):
     """#1731 review: the map change went in, then the move failed, leaving the ask open and no Undo."""
     out = ok(run(db, "suggest_work_change", {**TEAM_OVERSEES, "duty_move": KIDS["duty_move"]}, LC, "tiara"))
@@ -607,15 +660,43 @@ def test_chief_answers_only_on_the_persons_own_words_naming_whose_it_is(db):
     """#1731 review: list_asks's prose could drive class-A answer_ask in the same turn."""
     ok(run(db, "suggest_work_change", TEAM_OVERSEES, LC, "tiara"))
     aid = rows(db)[0]["id"]
-    for said in ("", "what's waiting?", "apply them all", "Tiara's is done", "Tell me about Tiara's"):
+    for said in ("", "what's waiting?", "apply them all", "Tiara's is done", "Tell me about Tiara's",
+                 # round 2: met by accident before
+                 "What is Tiara asking for? Is it ok?", "Tiara's, I have no idea what that means",
+                 "what would Tiara's make?", "ok, Tiara asked something", "yes. Tiara can wait",
+                 "Should I say yes to Tiara's?", "yes, Tiara can wait", "yes, Tiara"):
         r = say(db, aid, "apply", said)
-        assert r["failed"] and r.get("held") and r["result"].startswith("Failed: HELD.") and "yes to Tiara’s" in r[
+        assert r["failed"] and r.get("held") and r["result"].startswith("Failed: HELD (") and "yes to Tiara’s" in r[
             "result"], said
     assert rows(db)[0]["status"] == "open" and next(c for c in changes(db))["status"] == "pending", "nothing answered"
     assert ok(say(db, aid, "apply", "Yes, make Tiara's one"))["changed"]
     gap = ok(run(db, "note_gap", {"said": "Who orders cups?"}, LC, "naiya"))["ask_id"]
     assert say(db, gap, "done", "yes to Naiya's")["held"]
-    assert not say(db, gap, "done", "Naiya's is handled").get("failed")
+    assert say(db, gap, "done", "Is Naiya's done?")["held"], "never a question"
+    assert not say(db, gap, "done", "Naiya’s is handled").get("failed")
+    by_id = ok(run(db, "note_gap", {"said": "Who orders plates?"}, LC, "naiya"))["ask_id"]
+    assert not say(db, by_id, "discard", f"no to {by_id}").get("failed"), "its id names it too"
+
+
+def test_a_name_the_office_can_edit_or_that_reads_like_an_answer_never_releases_a_hold(db):
+    """#1731 review, round 2: with Naiya's record renamed "Sure Thing" (update_contact is People & care's),
+    the owner's "sure, send the newsletter" applied her suggestion."""
+    naiya = next(s for s in db.t["business_users"] if s["user_id"] == db.who[LC]["naiya@"])
+    next(c for c in db.t["contacts"] if c["id"] == naiya["contact_id"])["name"] = "Sure Thing"
+    ok(run(db, "suggest_work_change", TEAM_OVERSEES, LC, "naiya"))
+    aid = rows(db)[0]["id"]
+    for said in ("sure, send the newsletter", "yes to Sure's", "Yes to Sure Thing's"):
+        r = say(db, aid, "apply", said)
+        assert r["failed"] and r.get("held"), said
+    assert "yes to Naiya’s" in say(db, aid, "apply", "sure")["result"], "the seat's own name is whose it is"
+    assert ok(say(db, aid, "apply", "yes to Naiya's"))["changed"]
+    naiya["name"] = "Sure Thing"                     # a seat whose own name is an answer
+    ok(run(db, "suggest_work_change", {**TEAM_OVERSEES, "changes": [{"kind": "role", "role": "Team leader",
+                                                                     "can_oversee": False}]}, LC, "naiya"))
+    aid = rows(db)[-1]["id"]
+    r = say(db, aid, "apply", "yes to Sure's")
+    assert r["held"] and "their name reads like an answer" in r["result"]
+    assert ok(say(db, aid, "apply", f"yes to {aid}"))["changed"], "said by its id instead"
 
 
 # ─── Ten a day, and one gap a week ────────────────────────────────────
