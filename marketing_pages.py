@@ -5483,6 +5483,24 @@ def _church_logins_in_words() -> str:
     return f"Office logins come with every plan: {church_site._and(seats)}." + after
 
 
+def _church_texts_in_words() -> str:
+    """The church answer's word on texts, once the church plans by size are
+    on sale: each plan's texts a month, the price past them, and what a text
+    is (counted by 160-character part, the way they're billed; church_texts.py).
+    Nothing while they're off: the public ladder carries no text allowance."""
+    import church_site
+    import church_texts
+    import feature_gates as fg
+    import pricing_config
+    if not pricing_config.church_plans_offered():
+        return ""
+    lim = fg.plan_limits()
+    texts = [f"{lim[p]['texts_monthly']:,} on {church_site._short(p)}" for p in fg.CHURCH_PLANS]
+    per_k = church_site._dollars(pricing_config.extra_texts_cents_per_thousand())
+    return (f" Each plan comes with its texts a month too: {church_site._and(texts)}, and extra texts are "
+            f"${per_k} per 1,000. {church_texts.UNIT_LINE}")
+
+
 def render_faq() -> str:
     extra_css = """
       /* Ten closed headings in one flat run gave nobody a way to find the
@@ -5613,7 +5631,7 @@ def render_faq() -> str:
 """
     body = (body.replace("__MARKETING_LADDER__", _marketing_ladder_html())
                 .replace("__SOCIAL_NETWORKS__", _networks_in_words())
-                .replace("__CHURCH_LOGINS__", _church_logins_in_words()))
+                .replace("__CHURCH_LOGINS__", _church_logins_in_words() + _church_texts_in_words()))
     return _render_shell(
         title="FAQ",
         description="Answers to common questions about the Solutionist System: who it's for, pricing, how it compares to other tools, security, and signup.",

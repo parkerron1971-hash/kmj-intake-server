@@ -536,7 +536,8 @@ def voice_input_price() -> int:
 # A COST, not a price: what the platform pays Twilio for one billable
 # segment of an outbound text (twilio_sms.segments counts them). Texts are
 # never charged in credits; a church's plan carries a monthly text
-# allowance instead (sms_usage.texts_this_month). This dial only prices
+# allowance instead, counted in these same segments (church_texts.py:
+# 160-character parts, the way Twilio bills). This dial only prices
 # the api_usage row each text writes, which is what the Costs view and
 # margin read.
 
