@@ -1180,8 +1180,14 @@ def _build_system_prompt(ctx: Dict[str, Any], is_greeting: bool,
     # The snapshot splits in two (2026-10-07): what holds still between
     # messages stays in the cached state segment; what moves (unread items,
     # recent activity, the screen they are on) rides the per-message tail.
-    _parts = _format_context_parts(ctx)
+    # CHIEF_BRIEF=lean: the snapshot is formatted from its digest (the long
+    # lists cut to their head); the answer check reviews the same digest.
+    import chief_lean_brief
+    _lean_brief = chief_lean_brief.enabled()
+    _parts = _format_context_parts(chief_lean_brief.digest_for_prompt(ctx) if _lean_brief else ctx)
     context_block, live_context_block = (_parts if isinstance(_parts, tuple) else (_parts, ""))
+    if _lean_brief:
+        context_block = chief_lean_brief.with_digest_note(context_block, ctx)
     view_block = _format_view_block(view, view_detail or {})
     strategy_block = _format_strategy_block(biz, ctx.get("strategy_track"), mode=mode)
     # What the Business Coach already learned. Empty string when there is no
@@ -1354,7 +1360,7 @@ RULES:
 - Keep it under 4 sentences
 Lead with what needs attention. If there are pending drafts, mention the count. If there are at-risk contacts, name one. If there's an unread insight worth flagging, reference it. Do NOT just say "how can I help" — give them a real read on their business. Do NOT emit actions in the greeting (including navigate).{launch_clause}{week_clause}"""
 
-    return f"""{CHIEF_IDENTITY}
+    _universal = f"""{CHIEF_IDENTITY}
 
 {CHIEF_SHARED_CORE}
 
@@ -2385,7 +2391,12 @@ Practitioners can connect Stripe, Square, and/or PayPal in BUILD → Integration
 AGENT ACTIVITY AWARENESS:
 Reference RECENT AGENT ACTIVITY. If an agent created drafts the practitioner hasn't reviewed, mention it: "The nurture agent drafted a check-in for Deacon Harris earlier — still in your queue. Want me to show it?"
 
-[[CHIEF_GLOBAL_SPLIT]]
+"""
+    # CHIEF_BRIEF=lean: the short edition of the same manual (every rule,
+    # the most-used verbs in full, the rest by name with the lookup).
+    if _lean_brief:
+        _universal = chief_lean_brief.lean_manual(_universal)
+    return _universal + f"""[[CHIEF_GLOBAL_SPLIT]]
 
 {archetype_block}For this practitioner, you operate as Chief of Staff for {biz_name}. You are {practitioner}'s operational partner — you see everything happening in their business and help them manage it through conversation.
 

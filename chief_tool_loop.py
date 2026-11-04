@@ -159,6 +159,8 @@ def reset_turn(writes_allowed: bool = False, *, surface: str = "chat",
     _turn_prompted.set(bool(prompted))
     import chief_site_view
     chief_site_view.reset()
+    import chief_lean_brief
+    chief_lean_brief.reset_turn()
 
 
 def calls_this_turn() -> int:
@@ -694,8 +696,21 @@ async def run_tool_round(client, biz: Dict[str, Any],
         return None
 
     results: List[Dict[str, Any]] = []
+    import chief_lean_brief
+    guides = 0
     for b in tool_uses:
-        if calls_so_far + len(results) >= MAX_TOOL_CALLS:
+        if b.get("name") == chief_lean_brief.TOOL_NAME:
+            # The short manual's lookup (CHIEF_BRIEF=lean): a page of the
+            # manual, or a tool_reference that loads a deferred tool. It
+            # reads nothing about the business, so it spends no lookup.
+            guides += 1
+            is_error, content = chief_lean_brief.tool_result(b.get("input") or {})
+            entry = {"type": "tool_result", "tool_use_id": b.get("id"), "content": content}
+            if is_error:
+                entry["is_error"] = True
+            results.append(entry)
+            continue
+        if calls_so_far + len(results) - guides >= MAX_TOOL_CALLS:
             results.append({
                 "type": "tool_result", "tool_use_id": b.get("id"),
                 "is_error": True,
@@ -724,4 +739,4 @@ async def run_tool_round(client, biz: Dict[str, Any],
               if isinstance(b, dict) and b.get("type") in ("text", "tool_use")]
     return ({"role": "assistant", "content": replay},
             {"role": "user", "content": results},
-            len(tool_uses))
+            len(tool_uses) - guides)

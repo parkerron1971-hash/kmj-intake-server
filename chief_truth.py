@@ -1744,7 +1744,11 @@ def evidence_for_review(ctx, view_detail, taken):
         'projects', 'open_missions', 'open_assignments', 'open_cases', 'products', 'offerings', 'contacts_lookup',
         'contacts_by_status', 'avg_health', 'at_risk', 'open_invoices', 'invoice_summary', 'sessions',
         'contacts_total', 'contacts_loaded', 'contacts_complete', 'context_quality')
-    context = [(name, ctx[name]) for name in context_fields if name in (ctx or {})]
+    # CHIEF_BRIEF=lean: the digest Chief was shown, not the whole snapshot,
+    # so a fact the digest dropped is supported only by a read this turn.
+    import chief_lean_brief
+    shown = chief_lean_brief.digest_for(ctx)
+    context = [(name, shown[name]) for name in context_fields if name in (shown or {})]
     biz = (ctx or {}).get('business') or {}
     if biz:
         context.append(('business_identity', {k: biz[k] for k in ('name', 'type') if k in biz}))
@@ -1754,9 +1758,9 @@ def evidence_for_review(ctx, view_detail, taken):
     # that same text (including scope/date/read failures), never raw inbox
     # rows or full message bodies. Keep it near the end so large unrelated
     # context cannot evict the evidence for an email answer first.
-    if 'email_replies' in (ctx or {}):
+    if 'email_replies' in (shown or {}):
         import chief_of_staff as chief
-        context.append(('email_replies', chief._format_email_replies_block(ctx)))
+        context.append(('email_replies', chief._format_email_replies_block(shown)))
     import chief_of_staff as chief
     # The lists read in full, and the ones whose read failed. "You have no
     # open invoices yet" is true of a business that signed up today, and

@@ -1667,6 +1667,13 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
         _tools_arr.append(WEB_SEARCH_TOOL)
     if tool_rounds_on:
         _tools_arr.extend(read_tools or [])
+    # CHIEF_BRIEF=lean (chief_lean_brief): the same tools, the rarely used
+    # ones deferred, plus the action_guide lookup — only with the short
+    # manual that explains it, and only when the turn can call tools.
+    import chief_lean_brief
+    _lean_tools = tool_rounds_on and chief_lean_brief.active_for(system)
+    if _lean_tools:
+        _tools_arr = chief_lean_brief.tools_for_request(_tools_arr)
     if _tools_arr:
         payload["tools"] = _tools_arr
     # Which part of the request the prompt cache is keyed on moved since
@@ -1720,7 +1727,9 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
         # and continues instead of returning.
         turn_parts: List[str] = []
         turn_streamed = False
-        rounds_cap = chief_tool_loop.MAX_TOOL_ROUNDS if tool_rounds_on else 1
+        # A lookup in the short manual is a round of its own.
+        rounds_cap = (chief_tool_loop.MAX_TOOL_ROUNDS + (1 if _lean_tools else 0)
+                      if tool_rounds_on else 1)
         tool_calls_done = 0
         for _round in range(rounds_cap):
           round_done = False
@@ -2010,7 +2019,9 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
     # backoff. Hard client errors (400/401/403/404) are OUR bugs or key
     # problems — never retried, fail fast and loud in the logs.
     _tool_calls_done = 0
-    for _round in range(chief_tool_loop.MAX_TOOL_ROUNDS if tool_rounds_on else 1):
+    _rounds_cap = (chief_tool_loop.MAX_TOOL_ROUNDS + (1 if _lean_tools else 0)
+                   if tool_rounds_on else 1)
+    for _round in range(_rounds_cap):
       resp = None
       last_err = ""
       for attempt in range(3):
@@ -2147,7 +2158,7 @@ async def _call_claude(client: httpx.AsyncClient, system: str, messages: List[Di
           return COURSE_INCOMPLETE_REPLY
       if (tool_rounds_on and isinstance(data, dict)
               and data.get("stop_reason") == "tool_use"
-              and _round < chief_tool_loop.MAX_TOOL_ROUNDS - 1):
+              and _round < _rounds_cap - 1):
           step = await chief_tool_loop.run_tool_round(
               client, tool_biz, content, _tool_calls_done)
           if step is not None:
@@ -13360,6 +13371,11 @@ async def _execute_actions(client, biz, actions: List[Dict],
             results.append(_fail(atype, "Your build is already handling those steps. Check its progress card."))
             continue
         pending_step = _turn_step_start(atype, len(results), action)
+        # CHIEF_BRIEF=lean: a verb the short manual lists by name only, run
+        # without its how-to looked up this turn. Log-only, so the rollout
+        # can see whether the lookup is being used.
+        import chief_lean_brief
+        chief_lean_brief.note_action(atype)
         why = chief_areas.refusal(atype or "", action, area_scope)
         if why:
             results.append(_fail(atype or "unknown", why))
