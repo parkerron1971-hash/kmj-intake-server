@@ -174,3 +174,13 @@ def test_legacy_founder_seats_count_but_do_not_route_or_grant(monkeypatch):
     assert not feature_gates.is_founder_price({"subscription_plan": "price_old"})
     assert feature_gates.is_founder_price({"subscription_plan": "price_new"})
     assert stripe_billing.FOUNDER_LEGACY_PRICE_IDS  # the default pair is on record
+
+
+def test_a_message_charges_22_credits_unless_the_dial_moves(monkeypatch):
+    # Measured 2026-11-03: a message to Chief charges about 22 credits (two or
+    # three model calls plus the answer check), not the chat price of 12.
+    monkeypatch.delenv("CREDITS_PER_MESSAGE", raising=False)
+    assert pricing_config.credits_per_message() == 22
+    monkeypatch.setenv("CREDITS_PER_MESSAGE", "30")
+    assert pricing_config.credits_per_message() == 30
+    assert mp._credits_in_words(3000, chief_works=False).startswith("about 100 messages to Chief")
