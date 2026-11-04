@@ -508,11 +508,19 @@ How it puts things back:
 
 **As built in B5** (`chief_map.py`):
 - **Names, extended.** A person may also be a role's title (its key, or the start of its title) and a last name, among that role's holders: "Deacon Brown", which finds Grace's Deacon Board. Holders include someone asked who hasn't said yes. A role or a department matches exactly first (case aside), then by the same words (a plural s aside); a unit's group, role, board or worship ministry by its name. The batch still gets ids.
-- **Receipts** are the sheet's own lines (`church_map_batch.recent`). A made change ends "Undo puts it back."; one that waits says where it waits and who says yes, never Undo; an undo says it is a change too. A failure after a part went in carries that change's id, so `apply_map_change` finishes it.
+- **Receipts** are the sheet's own lines, read by the change's id (`church_map_batch.lines_of`). A made change ends "Undo puts it back."; one that waits says where it waits and who says yes, never Undo; an undo, and a finished undo, say it is a change too. A failure after a part went in carries the id of the change that call acted on (`_failed`'s `change_id`: the waiting or failed change applied, else its new failed row), so `apply_map_change` finishes it.
 - **The reads are mid-turn too** (list_duties' pattern), and both are `sensitive`: every Chief-only read is, and the search reads the turn's church. Every verb refuses an unattended run, the reads included. Before step 2's file every verb says the map isn't ready.
 - **`draft_map`** is registered (origin `'session'`, always waiting). Its words are `chief_map.COACH_WORDS`, for B9's coach prompt; the main prompt teaches `change_map`'s `stage` for Chief's own idea.
-- **Inverses:** `apply_map_change` → `undo_map_change` too, since it ends "Undo puts it back". A change that only waits has none.
+- **Inverses:** `apply_map_change` → `undo_map_change` too, since it ends "Undo puts it back". A change that only waits has none, nor one whose row didn't save, nor a finished undo (`undoes`: the batch refuses to undo an undo).
 - **`adopt_template`** also takes a ready-made's name as its key (a role's among the church's tradition and any church's).
+
+**Corrected in B5 (#1729's review):**
+- **The change acted on.** A part that went in names the change that call acted on, never the newest failed one. When its failed row didn't save there is none to name, and the batch says so (`UNLOGGED`: "…its record didn’t save: look at the map, then make the rest again"), the routes too.
+- **Made, but not logged.** `apply` now returns `made`, so a change whose row didn't save ("the save stands") is a success that says Undo can't put it back from the list, never "Nothing changed". An adoption whose row didn't save says to remove the drafts on Leaders & roles.
+- **A receipt that can't be read back** after the write is still a success, with its inverse and the app's refresh: plain words without the before → now lines.
+- **People past 1,000 rows.** A person not among the holders is found by the server: `name=ilike.<the words, * between>*`, its own wildcards taken out, `_` escaped, the value URL-quoted (a plain filter, so commas, brackets and quotes are taken as written). A thousand matches asks for the whole name.
+- **An undo lets go** of every waiting change that names a draft it took out (a ready-made's board's yes on the drafts it made), whoever undoes it, money included: that change can never be made. Adopting again stages one.
+- **The fixture** keeps a read's `order`, gives 1,000 rows at most and takes `ilike` wildcards, as PostgREST does.
 
 ## 5. The department sheet (frontend, Leaders & roles)
 

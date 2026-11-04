@@ -12,11 +12,18 @@ Pins:
     shepherding, a Media department from a ready-made; each before → now and
     "Undo puts it back", and Undo through the inverse
   * names: a whole name, a unique first name, a title and last name, holders
-    first, then the church's people; none or two changes nothing
+    first, then the church's people (found by the server, past 1,000 rows);
+    none or two changes nothing
   * seats: a Manager reads and can't write; an admin writes; money is the
-    owner's; nobody signed in, a stranger, an unattended run are refused
+    owner's; a Member, a stranger, nobody signed in, an unattended run are
+    refused
   * Chief's own idea waits; apply and discard; draft_map always waits
-  * a part that went in: the change id, and applying it again finishes it
+  * a part that went in: the id of the change it acted on (none when its
+    row didn't save), and applying it again finishes it; a receipt that
+    can't be read back, or a change whose row didn't save, is still a
+    success, the second promising no Undo; a finished undo promises none;
+    undoing an adopted ready-made lets its waiting change go; an older
+    waiting change, once made, still gets its lines (#1729 review)
   * the switch (off, the platform owner's login) and step 2's file
   * the reads write nothing at any of the four churches"""
 from __future__ import annotations
@@ -44,6 +51,7 @@ from test_church_map_changes import changes, state  # noqa: E402
 VERBS = ("list_map", "change_map", "draft_map", "undo_map_change", "apply_map_change", "discard_map_change",
          "search_templates", "adopt_template")
 STRANGER = "9a000000-0000-4000-8000-000000000009"
+MEMBER = "9a000000-0000-4000-8000-000000000008"
 
 
 @pytest.fixture
@@ -232,14 +240,38 @@ def test_names_resolve_exactly_holders_first_or_nothing_changes(db):
     assert (d["leader_contact_id"], d["area"], d["source"]) == (db.who[RV]["henry"], "kids_youth", "chief")
 
 
+def test_a_name_past_the_first_thousand_people_is_found_by_the_server(db):
+    """#1729 review: one read gets 1,000 rows at most, so the server filters by the name."""
+    def person(n, name):
+        cid = f"4c000000-0000-4000-9000-{n:012d}"
+        db.t["contacts"].append({"id": cid, "business_id": RV, "name": name, "status": "active", "metadata": {}})
+        return cid
+    for n in range(1100):
+        person(n, f"R Filler {n}")
+    zora, ann = person(2000, "Zora  Quill"), person(2001, "Ann O'Hara, Jr.")
+    n = chm._Names(RV)
+    assert n.person("zora quill") == n.person("Zora") == zora and n.person("ann o'hara, jr.") == ann
+    person(2002, "Zora Banks")
+    out = run(db, "change_map", {"changes": [{"kind": "department", "name": "Youth", "status": "draft",
+                                              "leader": "Zora"}]}, RV)
+    assert out["result"] == "Failed: “Zora” could be Zora Banks and Zora Quill", "its twin past row 1,000 too"
+
+
 # ─── Seats and money ──────────────────────────────────────────────────
 
 def test_a_manager_reads_an_admin_writes_and_money_is_the_owners(db):
     oversee = {"changes": [{"kind": "role", "role": "Team leader", "can_oversee": True}]}
+    db.t["business_users"].append({"business_id": LC, "user_id": MEMBER, "role": "member", "status": "active",
+                                   "invited_email": "web@lovecity.org", "lane": None, "areas": None,
+                                   "contact_id": None, "name": "Web Team"})
+    db.who[LC]["web@"] = MEMBER
     assert ok(run(db, "list_map", {}, LC, "naiya"))["label"] == "Leaders map"
-    for verb in chm.WRITES:
-        assert run(db, verb, oversee, LC, "naiya")["result"] == "Failed: " + chm.NOT_YOURS, verb
-    assert "its admins and its Manager logins" in run(db, "list_map", {}, LC, "stranger")["result"]
+    for who in ("naiya", "web", "stranger"):
+        for verb in chm.WRITES:
+            assert run(db, verb, oversee, LC, who)["result"] == "Failed: " + chm.NOT_YOURS, (who, verb)
+    for who in ("web", "stranger"):
+        assert "its admins and its Manager logins" in run(db, "list_map", {}, LC, who)["result"], who
+    assert not changes(db, LC) and not role_row(db, "team_leader", LC)["can_oversee"]
     assert "signed in" in run(db, "list_map", {}, LC, "nobody")["result"]
     assert ok(run(db, "change_map", oversee, LC, "minnie"))["changed"], "an admin changes the map"
     for part, says in (({"kind": "settings", "pastor_from_cents": 30_000}, "Only the owner changes the church’s money"),
@@ -273,18 +305,108 @@ def test_chiefs_own_idea_waits_then_is_made_or_let_go(db):
     assert [r["status"] for r in changes(db, GRACE)] == ["undone", "applied", "discarded", "pending"]
 
 
-def test_a_part_that_went_in_names_the_change_and_applying_it_again_finishes_it(db, monkeypatch):
+def _departments_fail(db, monkeypatch):
     real = db.patch
     monkeypatch.setattr(sb_clients, "sb_patch_as_service", lambda path, body, **k: None if path.startswith(
         "/church_departments") else real(path, body, **k))
-    two = {"changes": [{"kind": "role", "role": "Team leader", "can_oversee": True},
-                       {"kind": "department", "department": "Youth", "support_duty": "first_guests"}]}
-    out = run(db, "change_map", two, LC)
-    assert out["failed"] and out["result"].endswith("apply it again to finish it.")
-    assert out["change_id"] == changes(db, LC)[0]["id"] and changes(db, LC)[0]["status"] == "failed"
-    monkeypatch.setattr(sb_clients, "sb_patch_as_service", real)
-    ok(run(db, "apply_map_change", {"change_id": out["change_id"]}, LC))
-    assert changes(db, LC)[0]["status"] == "applied"
+    return lambda: monkeypatch.setattr(sb_clients, "sb_patch_as_service", real)
+
+
+def _log_fails(db, monkeypatch):
+    real = db.post
+    monkeypatch.setattr(sb_clients, "sb_post_as_service", lambda path, body, prefer=None, **k: None if (
+        path.startswith("/church_map_changes")) else real(path, body, prefer, **k))
+    return lambda: monkeypatch.setattr(sb_clients, "sb_post_as_service", real)
+
+
+def test_a_part_that_went_in_names_the_change_it_acted_on_and_applying_it_again_finishes_it(db, monkeypatch):
+    """#1729 review: the change this call was, never the newest failed one."""
+    a = ok(run(db, "change_map", {"stage": True, "changes": [
+        {"kind": "role", "role": "deacons", "can_shepherd": True},
+        {"kind": "department", "department": "Youth", "support_duty": "first_guests"}]}, LC))
+    mend = _departments_fail(db, monkeypatch)
+    b = run(db, "change_map", {"changes": [{"kind": "role", "role": "Team leader", "can_oversee": True},
+                                           {"kind": "department", "department": "Youth", "area": "office"}]}, LC)
+    assert b["failed"] and b["result"].endswith("apply it again to finish it.")
+    assert b["change_id"] == changes(db, LC)[-1]["id"] != a["change_id"]
+    out = run(db, "apply_map_change", {"change_id": a["change_id"]}, LC)
+    assert out["failed"] and out["change_id"] == a["change_id"], "the change it was asked to make, not B"
+    logged = _log_fails(db, monkeypatch)
+    out = run(db, "change_map", {"changes": [{"kind": "role", "role": "Elders", "can_lead": False},
+                                             {"kind": "department", "department": "Prayer", "area": "office"}]}, LC)
+    assert out["failed"] and "its record didn’t save" in out["result"] and "change_id" not in out, \
+        "no row: it says so, and names no other change"
+    logged()
+    mend()
+    for c in (a, b):
+        ok(run(db, "apply_map_change", {"change_id": c["change_id"]}, LC))
+    assert [c["status"] for c in changes(db, LC)] == ["applied", "applied"]
+
+
+def test_a_receipt_that_cant_be_read_back_still_says_it_was_made(db, monkeypatch):
+    import action_inverse as ai
+    import chief_of_staff as cos
+    import church_map_batch as batch
+
+    def unread(*a, **k):
+        raise chm.HTTPException(503, "Your leaders map couldn’t be read just now. Try again in a moment.")
+    monkeypatch.setattr(batch, "lines_of", unread)
+    out = run(db, "change_map", {"changes": [{"kind": "role", "role": "deacons", "can_shepherd": True}]}, LC)
+    assert out["result"] == ("Changed the leaders map. Its details couldn’t be read back just now; the map’s list "
+                             "of changes shows them. It’s one change in the map’s list. Undo puts it back.")
+    assert not cos._action_failed(out) and out["label"] == "A change to the map", "a success: data_changed is set"
+    assert ai.build_inverse("change_map", {}, out)["change_id"] == out["change_id"]
+    assert not cos._action_failed(undo(db, out, LC))
+
+
+def test_a_change_whose_record_didnt_save_is_made_and_promises_no_undo(db, monkeypatch):
+    import action_inverse as ai
+    _log_fails(db, monkeypatch)
+    out = ok(run(db, "change_map", {"changes": [{"kind": "role", "role": "deacons", "can_shepherd": True}]}, LC))
+    assert out["result"] == ("Changed the leaders map as asked. Its record didn’t save, so Undo can’t put it back "
+                             "from the map’s list: to reverse it, ask for it the other way.")
+    assert out["changed"] and role_row(db, "deacons", LC)["can_shepherd"] is True
+    assert ai.build_inverse("change_map", {}, out) is None and not changes(db, LC)
+    out = ok(run(db, "adopt_template", {"kind": "role", "key": "any.media_lead"}, LC))
+    assert out["result"].endswith("Their record didn’t save, so Undo can’t take them out: remove the drafts in "
+                                  "Leaders & roles.") and ai.build_inverse("adopt_template", {}, out) is None
+
+
+def test_finishing_an_undo_promises_no_undo_of_it(db, monkeypatch):
+    import action_inverse as ai
+    made = ok(run(db, "change_map", {"changes": [
+        {"kind": "department", "department": "Youth", "support_duty": "first_guests"},
+        {"kind": "role", "role": "Team leader", "can_oversee": True}]}, LC))
+    mend = _departments_fail(db, monkeypatch)
+    half = run(db, "undo_map_change", {"change_id": made["change_id"]}, LC)
+    assert half["failed"] and half["change_id"] == changes(db, LC)[-1]["id"]
+    mend()
+    done = ok(run(db, "apply_map_change", {"change_id": half["change_id"]}, LC))
+    assert done["result"].startswith("Finished putting a change back. ") and "Undo puts it back" not in done["result"]
+    assert ai.build_inverse("apply_map_change", {}, done) is None
+    assert ai.build_inverse("apply_map_change", {}, {"changed": True, "change_id": "c1", "undoes": "c0"}) is None
+    assert changes(db, LC)[0]["status"] == "undone"
+
+
+def test_undoing_an_adopted_ready_made_lets_its_waiting_change_go(db):
+    out = ok(run(db, "adopt_template", {"kind": "shape", "key": "multi_staff"}, GRACE))
+    put = undo(db, out, GRACE)
+    assert put["let_go"] == [out["waiting_id"]] and "was let go too" in put["result"]
+    assert run(db, "apply_map_change", {"change_id": out["waiting_id"]}, GRACE)["result"] == \
+        "Failed: That change isn’t waiting to be made."
+    ok(run(db, "adopt_template", {"kind": "shape", "key": "multi_staff"}, GRACE))
+    assert [c["status"] for c in changes(db, GRACE)].count("pending") == 1, "adopting again waits once"
+
+
+def test_an_older_waiting_change_still_gets_its_lines(db):
+    import church_map_batch as batch
+    a = ok(run(db, "change_map", {"stage": True, "changes": [
+        {"kind": "role", "role": "Team leader", "can_oversee": True}]}, LC))
+    for i in range(31):         # more than the sheet's recent list
+        batch.apply(church(db, LC), [{"kind": "shepherding", "cap": 9 + i % 2}], church(db, LC)["owner_id"],
+                    "office", role="owner")
+    out = ok(run(db, "apply_map_change", {"change_id": a["change_id"]}, LC))
+    assert "Team leader: can oversee a department off → on." in out["result"]
 
 
 # ─── The switch and step 2's file ─────────────────────────────────────

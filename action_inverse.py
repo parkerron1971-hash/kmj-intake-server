@@ -300,11 +300,12 @@ INVERSES: Dict[str, Inverse] = {
                       and r["change_id"] else None)),
     # A change to a church's leaders map (chief_map): its undo is the change
     # log's own, whole or not at all, only while nothing it touched has
-    # changed since. A change that only waits for a yes has no undo.
+    # changed since. A change that only waits for a yes, one whose record
+    # didn't save, and a finished undo (`undoes`) have none.
     **{verb: Inverse("undo_map_change", "put that change to the leaders map back",
                      lambda a, r: ({"type": "undo_map_change", "change_id": r["change_id"]}
                                    if r.get("changed") and isinstance(r.get("change_id"), str) and r["change_id"]
-                                   else None))
+                                   and not r.get("undoes") else None))
        for verb in ("change_map", "adopt_template", "apply_map_change")},
     "add_bill": Inverse(
         "remove_bill",

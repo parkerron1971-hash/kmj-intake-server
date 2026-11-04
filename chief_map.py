@@ -37,6 +37,7 @@ tags, never native write tools; list_map and search_templates are mid-turn reads
 from __future__ import annotations
 
 import asyncio
+import re
 import uuid
 from types import SimpleNamespace
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -167,10 +168,8 @@ def _run(atype: str, biz: Any, action: Any, body: Callable[..., Dict[str, Any]])
         return refused or {"type": atype, "nav": NAV, **body(business, seat, action)}
     except HTTPException as e:
         said, more = str(e.detail), {}
-        if said.endswith(batch.WENT_IN.strip()):          # a part went in: the change is kept failed
-            got = cm._rows(f"/church_map_changes?business_id=eq.{cm._q((biz or {}).get('id'))}&status=eq.failed"
-                           "&select=id&order=made_at.desc&limit=1") or []
-            more = {"change_id": str(got[0]["id"])} if got else {}
+        if getattr(e, "change_id", None):       # a part went in: the change this call acted on, kept failed
+            more["change_id"] = e.change_id
         if "doesn’t hold a role that" in said:
             more["note_for_chief"] = ("Ask the owner whether that person's role may do it. If yes, send the same "
                                       "change again with a role part turning it on, placed before this part.")
@@ -235,8 +234,12 @@ class _Names:
         if _uuid(w):
             return _uuid(w)
         hit = self._named(self.held, w) or self._titled(w)
-        if not hit:
-            rows = cm._need(f"/contacts?business_id=eq.{cm._q(self.bid)}&select=id,name&limit=5000")
+        if not hit:     # the server finds who it could be: a church's people run past one read's 1,000 rows
+            pat = "*".join(re.sub(r"[*%\\]", "", x).replace("_", "\\_") for x in w.split(" ")) + "*"
+            rows = cm._need(f"/contacts?business_id=eq.{cm._q(self.bid)}&name=ilike.{cm._q(pat)}"
+                            "&select=id,name&order=id.asc&limit=1000")
+            if len(rows) >= 1000:
+                _bad(f"Too many people here are called “{_plain(raw)}” to tell apart: say their whole name")
             hit = self._named({str(r["id"]): _plain(r.get("name")) for r in rows}, w)
         if len(hit) > 1:
             _bad(f"“{_plain(raw)}” could be {_join(sorted({n for _c, n in hit}))}")
@@ -287,13 +290,22 @@ class _Names:
 
 # ─── The record, in before → now words ────────────────────────────────
 
-def _lines(business: Dict[str, Any], seat: str, change_id: Any) -> List[str]:
-    got = batch.recent(business, seat)
-    return next((c["lines"] for c in got["pending"] + got["recent"] if c["id"] == str(change_id)), [])
+def _lines(business: Dict[str, Any], change_id: Any) -> Optional[List[str]]:
+    """A change's lines, read by its id once it's written. None when that read fails: the change stands, and
+    its receipt says so in plain words (as chief_duties' read after a move)."""
+    try:
+        return batch.lines_of(business, change_id)
+    except HTTPException:
+        return None
 
 
-def _said(lines: List[str]) -> str:
+def _said(lines: Optional[List[str]]) -> str:
+    if lines is None:
+        return "Its details couldn’t be read back just now; the map’s list of changes shows them."
     return ". ".join(lines) + "." if lines else ""
+
+
+UNLOGGED = "Its record didn’t save, so Undo can’t put it back from the map’s list: to reverse it, ask for it the other way."
 
 
 def _change(business: Dict[str, Any], seat: str, action: Dict[str, Any], *, stage: bool, origin: str,
@@ -306,11 +318,15 @@ def _change(business: Dict[str, Any], seat: str, action: Dict[str, Any], *, stag
     out = batch.apply(business, [n.part(p) for p in raw], _turn_user(), origin, stage=stage, phase=phase,
                       role=seat, said=_plain(action.get("said"))[:400])
     ch = out["change"]
+    if ch is None and out.get("made"):          # made, but its row didn't save: no change to undo
+        return {"result": f"Changed the leaders map as asked. {UNLOGGED}", "label": "Changed the map (not logged)",
+                "changed": True}
     if ch is None:
         return {"result": "Nothing changed: the leaders map already reads that way.", "label": "No change to the map",
                 "changed": False}
-    lines = _lines(business, seat, ch["id"])
-    label = (lines[0] if len(lines) == 1 else f"{len(lines)} changes to the map")[:80]
+    lines = _lines(business, ch["id"])
+    label = (lines[0] if lines and len(lines) == 1 else
+             f"{len(lines)} changes to the map" if lines else "A change to the map")[:80]
     if ch["status"] == "pending":
         who = "the owner says yes" if ch["money"] else "the owner or an admin says yes"
         return {"result": f"Saved for a yes; nothing changed yet. {_said(lines)} It waits under “Waiting for your yes” "
@@ -329,24 +345,31 @@ def _change_id(action: Dict[str, Any]) -> str:
 
 def _undo(business: Dict[str, Any], seat: str, action: Dict[str, Any]) -> Dict[str, Any]:
     out = batch.undo(business, _change_id(action), _turn_user(), role=seat, origin="chief")
-    lines = _lines(business, seat, out["change"]["id"]) if out["change"] else []
-    return {"result": f"Put that change back. {_said(lines)} Putting it back is a change too; to change it again, "
+    ch = out["change"]
+    said = _said(_lines(business, ch["id"])) if ch else "Its record didn’t save, so the map’s list won’t show it."
+    gone = " The change that waited for a yes on what it took out was let go too." if out.get("let_go") else ""
+    return {"result": f"Put that change back. {said}{gone} Putting it back is a change too; to change it again, "
                       "ask for the change.", "label": "Put back a change to the map", "changed": True,
-            "undone": out["undone"], "change_id": (out["change"] or {}).get("id")}
+            "undone": out["undone"], "let_go": out.get("let_go") or []}
 
 
 def _apply(business: Dict[str, Any], seat: str, action: Dict[str, Any]) -> Dict[str, Any]:
-    out = batch.apply_pending(business, _change_id(action), _turn_user(), role=seat)
-    lines = _lines(business, seat, out["change"]["id"])
-    return {"result": f"Made the change that was waiting. {_said(lines)} {UNDO}", "label": "Made a waiting change",
-            "changed": True, "change_id": out["change"]["id"]}
+    cid = _change_id(action)
+    undoes = batch._row(business, cid).get("undoes")       # finishing an undo: nothing to undo again
+    batch.apply_pending(business, cid, _turn_user(), role=seat)
+    if undoes:
+        return {"result": f"Finished putting a change back. {_said(_lines(business, cid))} Putting it back is a "
+                          "change too; to change it again, ask for the change.",
+                "label": "Finished putting a change back", "changed": True, "undoes": str(undoes)}
+    return {"result": f"Made the change that was waiting. {_said(_lines(business, cid))} {UNDO}",
+            "label": "Made a waiting change", "changed": True, "change_id": cid}
 
 
 def _discard(business: Dict[str, Any], seat: str, action: Dict[str, Any]) -> Dict[str, Any]:
-    out = batch.discard(business, _change_id(action), _turn_user(), role=seat)
-    lines = _lines(business, seat, out["change"]["id"])
-    return {"result": f"Let the waiting change go; nothing on the map changed. It was: {_said(lines)}",
-            "label": "Let a waiting change go", "changed": False, "change_id": out["change"]["id"]}
+    cid = _change_id(action)
+    batch.discard(business, cid, _turn_user(), role=seat)
+    return {"result": f"Let the waiting change go; nothing on the map changed. It was: {_said(_lines(business, cid))}",
+            "label": "Let a waiting change go", "changed": False, "change_id": cid}
 
 
 # ─── The ready-mades ──────────────────────────────────────────────────
@@ -395,8 +418,10 @@ def _adopt(business: Dict[str, Any], seat: str, action: Dict[str, Any]) -> Dict[
                    name=str(action.get("name") or ""))
     ch = (out["change"] or {}).get("id")
     tail = " They come in as drafts: nothing goes to them until they’re live." if out["made"] else ""
+    if out["made"] and not ch:
+        tail += " Their record didn’t save, so Undo can’t take them out: remove the drafts in Leaders & roles."
     return {"result": out["said"] + tail + (f" {UNDO}" if ch else ""), "label": out["said"][:80],
-            "changed": bool(ch), "change_id": ch, "waiting_id": (out["waiting"] or {}).get("id"),
+            "changed": bool(out["made"]), "change_id": ch, "waiting_id": (out["waiting"] or {}).get("id"),
             "made": [m["name"] for m in out["made"]]}
 
 

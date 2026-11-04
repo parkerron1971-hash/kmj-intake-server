@@ -25,7 +25,8 @@ Undo (docs/CHURCH_LEADERS_STEP2.md §4.1-§4.3, PR B3a).
                          a draft it made is deleted, an active department it
                          made archived, every other field back to before. The
                          undo is a change too (`undoes`); the original gets
-                         undone_at.
+                         undone_at. A waiting change that names a draft it
+                         took out is let go (discarded).
     recent(biz, role) .. the sheet's list: what waits for a yes, and the
                          recent changes, in plain words
 
@@ -76,6 +77,7 @@ WORD = {"name": "name", "leader_contact_id": "leader", "overseer_contact_id": "o
         "cap": "families per shepherd", "lead_cap": "families for the lead pastor"}
 NOT_READY = "The leaders map’s changes aren’t set up yet. Try again later."
 WENT_IN = " Part of this change went in: apply it again to finish it."
+UNLOGGED = " Part of this change went in, but its record didn’t save: look at the map, then make the rest again."
 
 
 def _open() -> None:
@@ -370,22 +372,27 @@ def _failed(bid: str, parts: List[Dict[str, Any]], by: Any, origin: str, err: HT
             **more: Any) -> HTTPException:
     """A write failed. When nothing got in, the write's own answer stands
     and nothing is logged (a waiting change still waits); else the change is
-    kept failed, with what got in."""
+    kept failed, with what got in. The answer carries `change_id`: the change
+    this was (the one acted on, or its new failed row), None when that row
+    didn't save, and then it says so (#1729 review)."""
     if all(p.get("done") is False for p in parts):
         return err
     said = {"status": "failed", "parts": parts, "error": str(err.detail)[:400]}
     if row is None:
-        _log(bid, "failed", parts, by, origin, error=said["error"], **more)
+        row = _log(bid, "failed", parts, by, origin, error=said["error"], **more)
     elif _set(bid, row["id"], said, ("pending", "failed")) is None:
         print(f"[church_map_batch] change {row['id']} at {bid} failed and couldn’t be marked so", flush=True)
-    return HTTPException(err.status_code, f"{err.detail}{WENT_IN}")
+    out = HTTPException(err.status_code, f"{err.detail}{WENT_IN if row else UNLOGGED}")
+    out.change_id = str(row["id"]) if row else None
+    return out
 
 
 def apply(biz: Dict[str, Any], changes: List[Dict[str, Any]], by: Any, origin: str, stage: bool = False,
           phase: Optional[str] = None, *, role: str, said: str = "") -> Dict[str, Any]:
     """Make one change (or, staged, keep it waiting for a yes). {change:
-    {id, status, money} or None when it changed nothing, results: each
-    part's write's own answer}."""
+    {id, status, money} or None when it changed nothing, or when its row
+    didn't save; made: whether anything changed, so those two are told
+    apart; results: each part's write's own answer}."""
     _open()
     if origin not in ORIGINS or phase not in (None, *PHASES):
         cm._bad("That change says where it came from in a way this doesn’t know")
@@ -405,12 +412,12 @@ def apply(biz: Dict[str, Any], changes: List[Dict[str, Any]], by: Any, origin: s
         row = _log(now.bid, "pending", parts, by, origin, **more) if parts else None
         if parts and row is None:
             raise HTTPException(503, cm.UNSAVED)
-        return {"change": _brief(row), "results": []}
+        return {"change": _brief(row), "results": [], "made": bool(parts)}
     results, err = _write(now, plan, by, role, origin)
     if err is not None:
         raise _failed(now.bid, parts, by, origin, err, **more)
     return {"change": _brief(_log(now.bid, "applied", parts, by, origin, **more)) if parts else None,
-            "results": results}
+            "results": results, "made": bool(parts)}
 
 
 # ─── A change already logged ──────────────────────────────────────────
@@ -568,7 +575,23 @@ def undo(biz: Dict[str, Any], change_id: Any, by: Any, *, role: str, origin: str
         raise _failed(now.bid, parts, by, origin, err, **more)
     new = _log(now.bid, "applied", parts, by, origin, **more)
     _done_undo(now.bid, {"undoes": str(row["id"])})
-    return {"change": _brief(new), "undone": str(row["id"]), "results": results}
+    return {"change": _brief(new), "undone": str(row["id"]), "results": results,
+            "let_go": _let_go(now.bid, {str(p["id"]) for p in parts if p.get("deleted")})}
+
+
+def _let_go(bid: str, gone: set) -> List[str]:
+    """The waiting changes that name a draft an undo just took out can never
+    be made: they are let go (a ready-made's board's yes on the drafts it
+    made, #1729 review). Their ids; a failed read or write lets go nothing."""
+    rows = cm._rows(f"/church_map_changes?business_id=eq.{cm._q(bid)}&status=eq.pending&select=id,parts"
+                    "&limit=50") if gone else []
+    out = []
+    for r in rows or []:
+        named = {str(x) for p in r.get("parts") or [] for x in [p.get("id")] + [
+            y for k in cm.PICKS for y in (p.get("after") or {}).get(k) or []]}
+        if named & gone and _set(bid, r["id"], {"status": "discarded"}, ("pending",)):
+            out.append(str(r["id"]))
+    return out
 
 
 # ─── A role's switches, saved on Leaders & roles (decision 3) ─────────
@@ -683,6 +706,25 @@ def _lines(p: Dict[str, Any], names: Dict[str, str]) -> List[str]:
             for f, v in a.items()]
 
 
+def _names(bid: str, rows: List[Dict[str, Any]]) -> Dict[str, str]:
+    """The people and roles these changes' parts name, id -> name, for their lines."""
+    sides = [s for r in rows for p in r.get("parts") or [] for s in (p.get("before"), p.get("after")) if s]
+    people = {str(s[f]) for s in sides for f in PEOPLE if s.get(f)}
+    roles = {str(x) for s in sides for f in ("reports_to", *cm.PICKS) for x in
+             (s.get(f) if isinstance(s.get(f), list) else [s.get(f)]) if x}
+    names = cm._people(bid, people) if people else {}
+    if roles:
+        names.update({d["id"]: d["title"] for d in cr.defs(bid, with_drafts=True) or []})
+    return names
+
+
+def lines_of(biz: Dict[str, Any], change_id: Any) -> List[str]:
+    """One change's parts in the sheet's plain words, read by its id (B5's receipts)."""
+    row = _row(biz, change_id)
+    names = _names(cm._bid(biz), [row])
+    return [x for p in row.get("parts") or [] for x in _lines(p, names)]
+
+
 def recent(biz: Dict[str, Any], role: str) -> Dict[str, Any]:
     """GET /church/map/changes: what waits for a yes, and the last changes,
     newest first, each part a line in plain words."""
@@ -691,13 +733,7 @@ def recent(biz: Dict[str, Any], role: str) -> Dict[str, Any]:
     q = f"/church_map_changes?business_id=eq.{cm._q(bid)}&select={COLS}&order=made_at.desc"
     newest = lambda rows: sorted(rows, key=lambda r: str(r.get("made_at") or ""), reverse=True)  # noqa: E731
     waiting, rows = newest(cm._need(f"{q}&status=eq.pending&limit=50")), newest(cm._need(f"{q}&limit={RECENT}"))
-    sides = [s for r in waiting + rows for p in r.get("parts") or [] for s in (p.get("before"), p.get("after")) if s]
-    people = {str(s[f]) for s in sides for f in PEOPLE if s.get(f)}
-    roles = {str(x) for s in sides for f in ("reports_to", *cm.PICKS) for x in
-             (s.get(f) if isinstance(s.get(f), list) else [s.get(f)]) if x}
-    names = cm._people(bid, people) if people else {}
-    if roles:
-        names.update({d["id"]: d["title"] for d in cr.defs(bid, with_drafts=True) or []})
+    names = _names(bid, waiting + rows)
 
     def show(r: Dict[str, Any]) -> Dict[str, Any]:
         at, may = _parse(r.get("applied_at")), role in ("owner", "admin") and (not r.get("money") or role == "owner")
