@@ -473,6 +473,19 @@ def chat_price() -> int:
     return _dial("CHAT_PRICE", "PRICE_", 12)
 
 
+def credits_per_message() -> int:
+    """What one message to Chief charges on average, in credits: the divisor
+    behind every plan card's "about N messages" line.
+
+    Not chat_price(). A message is often two or three model calls, each
+    charged chat_price(), plus the answer check, so dividing a plan's credits
+    by chat_price() promised about twice the messages the plan holds.
+    Measured 2026-11-03 over 30 days of production api_usage (171 messages,
+    weight_for_row on every row of each turn): about 22. Move it with
+    CREDITS_PER_MESSAGE when a new measurement says otherwise."""
+    return max(1, _dial("PER_MESSAGE", "CREDITS_", 22))
+
+
 def concierge_price() -> int:
     """One customer-facing website reply.
 

@@ -365,10 +365,10 @@ def test_the_overview_draws_four_plans_from_the_dials(by_size):
     assert [re.search(r'class="mbar"><i style="width: (\d+)%"', c).group(1) for c in cards] == ["11", "27", "55", "100"]
     assert [re.search(r"<b>([\d,]+)</b><span>AI actions", c).group(1) for c in cards] == \
         ["3,000", "7,500", "15,000", "27,500"]
-    # The heading, the lede and the conversations line speak in sizes.
+    # The heading, the lede and the messages line speak in sizes.
     assert "Priced by <b style=\"font-weight: 600\">your church's size.</b>" in html
     assert "Your plan is set by how many people come on a Sunday" in html
-    assert "about 250 conversations a month on Small, 625 on Growing, 1,250 on Established and 2,275 on Large" in html
+    assert "about 125 messages a month on Small, 325 on Growing, 675 on Established and 1,250 on Large" in html
     for gone in ("Starter", "Professional", "Every plan is <b", "Founding seat"):
         assert gone not in html, gone
 
