@@ -43,6 +43,7 @@ SECTIONS = {"churches": church_site, "coaches": coach_site}
 def _defaults(monkeypatch):
     import stripe_billing
     monkeypatch.setenv("CHURCH_SITE", "on")
+    monkeypatch.delenv("HOME_EDITION", raising=False)
     monkeypatch.delenv("COACH_SITE", raising=False)
     monkeypatch.delenv("CHURCHSAVVY_URL", raising=False)
     monkeypatch.setitem(mp._FOUNDER_CACHE, "taken", None)
@@ -184,13 +185,18 @@ HOME = "https://mysolutionist.app/"
 @pytest.mark.parametrize("section", list(SECTIONS))
 def test_every_page_leads_home_by_the_main_sites_own_address(section):
     for path, html in _pages(SECTIONS[section]).items():
-        strip = html[html.index("<!-- The Solutionist frame"):]
-        assert re.search(rf'<a href="{HOME}" data-home[^>]*>.*?<span[^>]*data-home-label>Solutionist home</span>',
-                         strip[:4000], flags=re.S), path
-        footer = html[html.index("<footer"):]
-        assert f'<a href="{HOME}"' in footer and ">Solutionist home</a>" in footer, path
         for rel in ('href="/"', 'href="/start"', 'href="/privacy"', 'href="/terms"', 'href="/start?'):
             assert rel not in html, (path, rel)                       # "/" would be the serving domain's
+        strip = html[html.index("<!-- The Solutionist frame"):]
+        footer = html[html.index("<footer"):]
+        if section == "churches" and path == "/churches" and church_site.is_home():
+            # the church overview IS the home page (2026-11-04): no link back to itself, the coaches door instead
+            assert "Solutionist home" not in strip[:4000] and "Solutionist home" not in footer, path
+            assert f'<a class="strip-coach" href="{HOME}coaches">' in strip[:4000], path
+            continue
+        assert re.search(rf'<a href="{HOME}" data-home[^>]*>.*?<span[^>]*data-home-label>Solutionist home</span>',
+                         strip[:4000], flags=re.S), path
+        assert f'<a href="{HOME}"' in footer and ">Solutionist home</a>" in footer, path
 
 
 def _home_script():
