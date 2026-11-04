@@ -18,6 +18,8 @@ Undo (docs/CHURCH_LEADERS_STEP2.md §4.1-§4.3, PR B3a).
                          already as its after is passed over, one whose
                          fields read as before (or already as after) is
                          written, any other is a 409. Safe to run again.
+                         `marked` False: made, but marking it so didn't
+                         save, so it still reads as it did (no Undo yet)
     discard(...) ....... a pending change, never made
     undo(...) .......... for UNDO_DAYS, only while every field it touched
                          reads as it left it, else a 409 naming what changed
@@ -530,8 +532,9 @@ def apply_pending(biz: Dict[str, Any], change_id: Any, by: Any, *, role: str) ->
     _done_undo(now.bid, row)
     # Finishing an undo lets go of what waits on a draft it took out, as undo() does (#1729 review).
     gone = _let_go(now.bid, {str(p["id"]) for p in parts if p.get("deleted")}) if row.get("undoes") else []
-    return {"change": _brief((saved or [None])[0] or {**row, "status": "applied"}), "results": results,
-            "let_go": gone}
+    # Made but not marked: it still reads as it did, so nobody is told Undo can put it back. Applying it
+    # again passes over every part (all in) and marks it.
+    return {"change": _brief(saved[0] if saved else row), "results": results, "marked": bool(saved), "let_go": gone}
 
 
 def discard(biz: Dict[str, Any], change_id: Any, by: Any, *, role: str) -> Dict[str, Any]:

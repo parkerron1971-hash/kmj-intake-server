@@ -306,6 +306,8 @@ def _said(lines: Optional[List[str]]) -> str:
 
 
 UNLOGGED = "Its record didn’t save, so Undo can’t put it back from the map’s list: to reverse it, ask for it the other way."
+UNMARKED = ("It still reads as waiting on the map’s list, because marking it made didn’t save, so Undo can’t put it "
+            "back yet: apply it again to finish marking it.")
 
 
 def _change(business: Dict[str, Any], seat: str, action: Dict[str, Any], *, stage: bool, origin: str,
@@ -363,6 +365,9 @@ def _apply(business: Dict[str, Any], seat: str, action: Dict[str, Any]) -> Dict[
                           "a change too; to change it again, ask for the change.",
                 "label": "Finished putting a change back", "changed": True, "undoes": str(undoes),
                 "let_go": out.get("let_go") or []}
+    if (out.get("change") or {}).get("status") != "applied":       # made, but its mark didn't save
+        return {"result": f"Made the change that was waiting. {_said(_lines(business, cid))} {UNMARKED}",
+                "label": "Made a waiting change (not marked)", "changed": True}
     return {"result": f"Made the change that was waiting. {_said(_lines(business, cid))} {UNDO}",
             "label": "Made a waiting change", "changed": True, "change_id": cid}
 
