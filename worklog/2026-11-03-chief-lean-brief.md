@@ -4,7 +4,7 @@ date: 2026-11-03
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-11-03: "I have read on the shrink, you can start on that" (cold Chief messages write ~120k tokens and lose money on church credits)'
 status: shipped, switch off
-prs: [kmj-intake-server#PR_NUMBER]
+prs: [kmj-intake-server#1736]
 migrations: []
 left_undone:
   - "Turn it on: CHIEF_BRIEF=lean on the kmj-intake-server web service (the worker never builds Chief's brief). Then watch `railway logs --filter \"cache rewrite\"` (a cold message should write ~65-70k, not ~120k) and `--filter \"chief lean\"` (a one-line verb that ran without its how-to looked up)"
