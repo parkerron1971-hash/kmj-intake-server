@@ -86,8 +86,9 @@ VERBS: Dict[str, Tuple[str, ...]] = {
         "list_module_entries", "inspect_module", "summarize_module", "draft_email", "draft_and_send", "send_sms",
         "save_draft", "generate_document",
         # Who does which office duty: any login that may open the duties page
-        # may ask (the handler keeps it to a Manager seat and above).
-        "list_duties")},
+        # may ask (the handler keeps it to a Manager seat and above). The
+        # leaders map and the ready-mades likewise (chief_map).
+        "list_duties", "list_map", "search_templates")},
     # People & care: the church's people, their care and their follow-up.
     **{v: PEOPLE for v in (
         "create_contact", "update_contact", "update_contact_status", "update_contact_health", "delete_contact",
@@ -149,6 +150,8 @@ OWNERS = frozenset({
     # (chief_duties). Here rather than in the Office, so a lane's login is
     # told it's the owner's or an admin's, never "ask whoever has the Office".
     "move_duty", "undo_duty",
+    # Changing a church's leaders map, its waiting changes and its ready-mades (chief_map), the same.
+    "change_map", "draft_map", "undo_map_change", "apply_map_change", "discard_map_change", "adopt_template",
     # A minister's housing allowance: the owner's alone (the handlers refuse admins too).
     "housing_allowance_status", "set_housing_allowance", "log_housing_entry", "delete_housing_entry",
     "find_housing_payments", "attach_housing_payments", "detach_housing_payments",

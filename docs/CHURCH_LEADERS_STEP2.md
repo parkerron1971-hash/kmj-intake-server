@@ -275,6 +275,8 @@ All go in `church_map_router.py`, behind `CHURCH_MAP`.
 - **Units:** a suggestion fills a unit only when exactly one of the church's things matches it: the space, one Serve team, one group (by `words`). A thing that already hangs from a department, or that an earlier department in the same adoption took, is passed over.
 - **Again** stages nothing that a waiting ready-made change already holds. After a discard, adopting again suggests it again.
 
+**Corrected in B5** (#1728's review): `adopt()` reads what already waits before it makes any draft, so a failed read is the plain 503 with nothing made. And a draft copy of the same ready-made (its `template_key`) still waits for what a new copy would (`WAITS`: the board's yes) while that isn't set, so when the waiting change's row failed to save after the drafts went in, "Add it again to finish" finishes it, once. `here()` lists that wait too (amending B4a's "a draft of the church's gets no waits"), so the two still share one reading.
+
 ## 3. Church setup sessions
 
 ### 3.1 Reusing the Academy engine
@@ -503,6 +505,14 @@ How it puts things back:
 **Corrected in B4a** (#1726's review; `church_map_batch.switch_seat`, `save_role`):
 - **A job change is a switch change** once the map's columns are there, since it resets the switches to the new job's. It needs an admin seat (a 403: "Only the owner or an admin changes a role's job…"), and one that would take a board yes away needs the owner. Where the map is open and step 2 is there, it is one change: a role part with each switch's before and after. Undo puts the switches back and leaves the job. B3b's "a Manager's job change still resets a role's switches" no longer holds: a Manager's job change on Leaders & roles is now refused at every church, the one visible change.
 - **A switch save is checked whole and written at once.** The batch's dry run checks the whole PATCH, then one `update_role` writes it, its unlogged fields with it. A refused part no longer leaves them saved (B3b wrote them first).
+
+**As built in B5** (`chief_map.py`):
+- **Names, extended.** A person may also be a role's title (its key, or the start of its title) and a last name, among that role's holders: "Deacon Brown", which finds Grace's Deacon Board. Holders include someone asked who hasn't said yes. A role or a department matches exactly first (case aside), then by the same words (a plural s aside); a unit's group, role, board or worship ministry by its name. The batch still gets ids.
+- **Receipts** are the sheet's own lines (`church_map_batch.recent`). A made change ends "Undo puts it back."; one that waits says where it waits and who says yes, never Undo; an undo says it is a change too. A failure after a part went in carries that change's id, so `apply_map_change` finishes it.
+- **The reads are mid-turn too** (list_duties' pattern), and both are `sensitive`: every Chief-only read is, and the search reads the turn's church. Every verb refuses an unattended run, the reads included. Before step 2's file every verb says the map isn't ready.
+- **`draft_map`** is registered (origin `'session'`, always waiting). Its words are `chief_map.COACH_WORDS`, for B9's coach prompt; the main prompt teaches `change_map`'s `stage` for Chief's own idea.
+- **Inverses:** `apply_map_change` → `undo_map_change` too, since it ends "Undo puts it back". A change that only waits has none.
+- **`adopt_template`** also takes a ready-made's name as its key (a role's among the church's tradition and any church's).
 
 ## 5. The department sheet (frontend, Leaders & roles)
 
