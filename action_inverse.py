@@ -307,6 +307,16 @@ INVERSES: Dict[str, Inverse] = {
                                    if r.get("changed") and isinstance(r.get("change_id"), str) and r["change_id"]
                                    and not r.get("undoes") else None))
        for verb in ("change_map", "adopt_template", "apply_map_change")},
+    # Saying yes to an office login's suggestion (church_map_asks): its map change's own undo; with no map
+    # change, its duty move's (undo_duty, only while that move is still the duty's last change). Both class A.
+    "answer_ask": Inverse(
+        "undo_map_change",
+        "put back what saying yes to that suggestion made",
+        lambda a, r: ({"type": "undo_map_change", "change_id": r["change_id"]}
+                      if r.get("changed") and isinstance(r.get("change_id"), str) and r["change_id"] else
+                      {"type": "undo_duty", "duty": r["duty"], "change_id": r["duty_change_id"]}
+                      if r.get("changed") and isinstance(r.get("duty"), str) and isinstance(r.get("duty_change_id"), str)
+                      and r["duty_change_id"] else None)),
     "add_bill": Inverse(
         "remove_bill",
         "take that bill back out",

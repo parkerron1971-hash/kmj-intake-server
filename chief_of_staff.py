@@ -262,6 +262,8 @@ from chief_bills import handle_bills, handle_add_bill, handle_remove_bill
 from chief_duties import handle_list_duties, handle_move_duty, handle_undo_duty
 from chief_map import (handle_list_map, handle_change_map, handle_draft_map, handle_undo_map_change,
     handle_apply_map_change, handle_discard_map_change, handle_search_templates, handle_adopt_template)
+from church_map_asks import (handle_my_work, handle_confirm_my_work, handle_suggest_work_change, handle_note_gap,
+    handle_list_asks, handle_answer_ask)
 from chief_giving_counts import (handle_giving_counts, handle_record_service_gifts,
     handle_undo_service_gifts)
 from bill_payments import handle_match_bill_payment, handle_unmatch_bill_payment
@@ -410,6 +412,9 @@ _ACTION_PHRASES = {
     "undo_map_change": "putting the change back",
     "search_templates": "looking through the ready-mades",
     "adopt_template": "adding the ready-made as a draft",
+    "my_work": "reading what you do here",
+    "suggest_work_change": "sending it for a yes",
+    "list_asks": "reading what your team suggested",
     "giving_counts": "reading the service counts",
     "record_service_gifts": "recording the gifts to the service",
     "match_bill_payment": "matching bills to the bank",
@@ -12220,6 +12225,12 @@ ACTION_HANDLERS = {
     "discard_map_change":    handle_discard_map_change,
     "search_templates":      handle_search_templates,
     "adopt_template":        handle_adopt_template,
+    "my_work":               handle_my_work,
+    "confirm_my_work":       handle_confirm_my_work,
+    "suggest_work_change":   handle_suggest_work_change,
+    "note_gap":              handle_note_gap,
+    "list_asks":             handle_list_asks,
+    "answer_ask":            handle_answer_ask,
     "giving_counts":         handle_giving_counts,
     "record_service_gifts":  handle_record_service_gifts,
     "undo_service_gifts":    handle_undo_service_gifts,
@@ -15578,6 +15589,13 @@ async def chief_chat(
             # Whose login this is, when it isn't the owner's, and the lane it
             # keeps to: the turn's tail, never a cached segment (it differs by login).
             _login_block = chief_areas.block(chief_areas.TURN.get(), chief_areas.WHO.get(), biz)
+            # Is this right? (church_map_asks): an office login's check of its work, what came of its asks,
+            # and for the owner and an admin how many wait. A church's only; a read that fails adds nothing.
+            import church_follow_up as _cfu
+            if _cfu.is_church(biz):
+                import church_map_asks
+                _login_block += await asyncio.to_thread(church_map_asks.turn_block, biz, str(user_session.user.id),
+                                                        chief_areas.WHO.get())
             if _login_block:
                 growth_turn_block = _login_block + "\n" + growth_turn_block
             system = _build_system_prompt(

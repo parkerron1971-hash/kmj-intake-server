@@ -14,6 +14,9 @@ Undo (docs/CHURCH_LEADERS_STEP2.md §4.1-§4.3, PR B3a).
         sheet); failed when a write failed after another got in, with what
         got in (`done: false` on the rest). A part that changes nothing is
         left out, and a change of nothing logs nothing.
+    suggest(...) ....... an office login's suggestion (B11, church_map_asks):
+                         one waiting change, made by them whatever their
+                         seat, checked as the owner would make it
     apply_pending(...) . a pending change, or a failed one again: a part
                          already as its after is passed over, one whose
                          fields read as before (or already as after) is
@@ -420,6 +423,28 @@ def apply(biz: Dict[str, Any], changes: List[Dict[str, Any]], by: Any, origin: s
         raise _failed(now.bid, parts, by, origin, err, **more)
     return {"change": _brief(_log(now.bid, "applied", parts, by, origin, **more)) if parts else None,
             "results": results, "made": bool(parts)}
+
+
+def suggest(biz: Dict[str, Any], changes: List[Dict[str, Any]], by: Any, *, said: str = "") -> Dict[str, Any]:
+    """An office login's suggestion (church_map_asks, B11): one change that waits for a yes, made by them,
+    whatever their seat. Every part is checked first as the owner would make it, since staging isn't making:
+    the owner or an admin applies it, a money part the owner (apply_pending's own seats). Nothing is written
+    but the waiting row. {change: {id, status, money}, or None when it would change nothing}."""
+    _open()
+    if not isinstance(changes, list) or not 1 <= len(changes) <= PARTS_MAX:
+        cm._bad(f"A change has 1 to {PARTS_MAX} parts")
+    now = _Now(biz)
+    ops = [_op(now, c) for c in changes]
+    named = [(o["kind"], o["id"]) for o in ops if o["id"]]
+    if len(named) != len(set(named)):
+        cm._bad("Name each department, role, person and setting once in a change")
+    parts = [p for _o, p in _plan(now, ops, by, "owner", "chief") if p]
+    if not parts:
+        return {"change": None}
+    row = _log(now.bid, "pending", parts, by, "chief", said=cm._plain(said)[:400], money=_money(parts))
+    if row is None:
+        raise HTTPException(503, cm.UNSAVED)
+    return {"change": _brief(row)}
 
 
 # ─── A change already logged ──────────────────────────────────────────

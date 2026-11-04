@@ -469,7 +469,8 @@ def test_the_routes_are_mounted_before_the_catch_all():
     assert paths == {"/church/map", "/church/map/departments", "/church/map/departments/{department_id}/archive",
                      "/church/map/answers-to", "/church/map/settings", "/church/map/changes",
                      *(f"/church/map/changes/{{change_id}}/{a}" for a in ("undo", "apply", "discard")),
-                     "/church/map/templates", "/church/map/templates/{kind}/{key}", "/church/map/templates/adopt"}
+                     "/church/map/templates", "/church/map/templates/{kind}/{key}", "/church/map/templates/adopt",
+                     "/church/map/asks", "/church/map/asks/mine", "/church/map/asks/{ask_id}/{how}"}
     src = open(os.path.join(ROOT, "kmj_intake_automation.py"), encoding="utf-8").read()
     assert src.index("app.include_router(church_map_router)") < src.rindex("app.include_router(public_site_router)")
 
