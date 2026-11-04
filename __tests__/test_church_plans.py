@@ -1,10 +1,10 @@
 """Church plans by size (Kevin, 2026-11-03: "I agree with the plan").
 
-Small $79 (up to 100 on a Sunday), Growing $199 (100-250), Established $299
-(250-500), Large $599 (500-1,500), sold only to churches and ministries.
+Small $79 (up to 100 on a Sunday), Growing $199 (100-250), Established $399
+(250-500), Large $699 (500-1,500), sold only to churches and ministries.
 Every church feature on every plan; the plan sets the room: office logins
 3 / 8 / 15 / 35, texts 500 / 1,500 / 3,000 / 8,000, sermon clip hours
-2 / 5 / 10 / 20, Chief credits 3,000 / 7,500 / 17,500 / 30,000. Leaders,
+2 / 5 / 10 / 20, Chief credits 3,000 / 7,500 / 15,000 / 27,500. Leaders,
 volunteers and members use the member app and never count as a login.
 Pinned here:
   1. Kevin's numbers, and the economics floor the public ladder holds.
@@ -43,11 +43,11 @@ SMALL, GROWING, ESTABLISHED, LARGE = fg.CHURCH_PLANS
 
 def test_the_ladder_is_kevins():
     assert fg.CHURCH_PLANS == ("church_small", "church_growing", "church_established", "church_large")
-    assert pricing_config.church_price_cents() == {SMALL: 7900, GROWING: 19900, ESTABLISHED: 29900, LARGE: 59900}
+    assert pricing_config.church_price_cents() == {SMALL: 7900, GROWING: 19900, ESTABLISHED: 39900, LARGE: 69900}
     assert pricing_config.church_seats() == {SMALL: 3, GROWING: 8, ESTABLISHED: 15, LARGE: 35}
     assert pricing_config.church_texts_monthly() == {SMALL: 500, GROWING: 1500, ESTABLISHED: 3000, LARGE: 8000}
     assert pricing_config.church_clip_hours() == {SMALL: 2, GROWING: 5, ESTABLISHED: 10, LARGE: 20}
-    assert pricing_config.church_credits() == {SMALL: 3000, GROWING: 7500, ESTABLISHED: 17500, LARGE: 30000}
+    assert pricing_config.church_credits() == {SMALL: 3000, GROWING: 7500, ESTABLISHED: 15000, LARGE: 27500}
     assert pricing_config.church_offer() == {"extra_texts_cents_per_thousand": 2000, "extra_login_cents": 1500,
                                              "move_months": 3, "founding_moves": 5,
                                              "multi_site_from_cents": 99900}
@@ -119,7 +119,7 @@ def test_limits_are_the_size():
     assert [lim[p]["max_seats"] for p in fg.CHURCH_PLANS] == [3, 8, 15, 35]
     assert [lim[p]["texts_monthly"] for p in fg.CHURCH_PLANS] == [500, 1500, 3000, 8000]
     assert [lim[p]["clip_hours_monthly"] for p in fg.CHURCH_PLANS] == [2, 5, 10, 20]
-    assert [lim[p]["chief_messages_monthly"] for p in fg.CHURCH_PLANS] == [3000, 7500, 17500, 30000]
+    assert [lim[p]["chief_messages_monthly"] for p in fg.CHURCH_PLANS] == [3000, 7500, 15000, 27500]
     # No other plan is held to a text count.
     for plan in fg.PLANS + ("solo", "booked", "boss"):
         assert lim[plan].get("texts_monthly") is None, plan
@@ -127,7 +127,7 @@ def test_limits_are_the_size():
 
 def test_a_church_comp_gets_its_plan_and_tank():
     assert fg.plan_of({"comp_tier": GROWING, "type": "church"}) == GROWING
-    assert fg.monthly_credits({"comp_tier": LARGE}) == 30000
+    assert fg.monthly_credits({"comp_tier": LARGE}) == 27500
 
 
 def test_upgrades_stay_on_the_church_ladder():
