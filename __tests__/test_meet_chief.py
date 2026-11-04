@@ -83,7 +83,7 @@ def test_every_product_page_points_to_how_chief_works(section):
 # ─── 2. the band's claims are the product's ─────────────────────────
 
 @pytest.mark.parametrize("section", list(SECTIONS))
-def test_the_conversations_come_from_the_dials_and_the_chat_price(section, monkeypatch):
+def test_the_messages_come_from_the_dials_and_what_a_message_charges(section, monkeypatch):
     import pricing_config
     real = mp._tier_dials
 
@@ -94,11 +94,11 @@ def test_the_conversations_come_from_the_dials_and_the_chat_price(section, monke
         d["practice"].update(credits="20,000")
         return d
     monkeypatch.setattr(mp, "_tier_dials", dials)
-    monkeypatch.setattr(pricing_config, "chat_price", lambda: 10)
+    monkeypatch.setattr(pricing_config, "credits_per_message", lambda: 10)
     html = SECTIONS[section].render("")
-    assert "about 200 conversations a month on Starter, 500 on Professional and 2,000 on Solutionist" in html
-    assert "About 200 conversations with Chief." in html and "About 500 conversations, room to draft" in html
-    assert "About 2,000 conversations, Chief across every" in html
+    assert "about 200 messages a month on Starter, 500 on Professional and 2,000 on Solutionist" in html
+    assert "About 200 messages to Chief." in html and "About 500 messages, room to draft" in html
+    assert "About 2,000 messages, Chief across every" in html
     assert "250 conversations" not in html
 
 

@@ -116,16 +116,16 @@ def test_the_words_come_from_the_dials(monkeypatch):
     seg = _pricing(mp.render_home())
     words = re.findall(r"<small>([^<]+)</small>", seg)
     credits = pricing_config.tier_credits()
-    per = pricing_config.chat_price()
+    per = pricing_config.credits_per_message()
     build = pricing_config.build_base()
-    assert words[0] == f"about {mp._about(credits['starter'] // per):,} conversations, or a site build and {mp._about((credits['starter'] - build) // per):,}"
-    assert words[1].startswith(f"about {mp._about(credits['professional'] // per):,} conversations") and "Chief works between them" in words[1]
+    assert words[0] == f"about {mp._about(credits['starter'] // per):,} messages to Chief, or a site build and {mp._about((credits['starter'] - build) // per):,}"
+    assert words[1].startswith(f"about {mp._about(credits['professional'] // per):,} messages to Chief") and "Chief works between them" in words[1]
     assert "three site builds" in words[2]
     assert "Chief works between them" not in words[0]
-    assert mp._credits_in_words(3000, chief_works=False) == "about 250 conversations, or a site build and 200"
+    assert mp._credits_in_words(3000, chief_works=False) == "about 125 messages to Chief, or a site build and 100"
     # 2026-09-11: no dash-joined sentences on the site (Kevin); a comma carries the clause
-    assert mp._credits_in_words(7500, chief_works=True) == "about 625 conversations, or a site build and 575, and Chief works between them"
-    assert mp._credits_in_words(17500, chief_works=True, builds=3) == "about 1,450 conversations, or three site builds and 1,300, and Chief works between them"
+    assert mp._credits_in_words(7500, chief_works=True) == "about 325 messages to Chief, or a site build and 300, and Chief works between them"
+    assert mp._credits_in_words(17500, chief_works=True, builds=3) == "about 775 messages to Chief, or three site builds and 700, and Chief works between them"
 
 
 # ─── 4. the annual figure ────────────────────────────────────────────

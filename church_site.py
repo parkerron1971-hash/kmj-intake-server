@@ -122,9 +122,10 @@ def _read(name: str) -> str:
 
 
 def _plan_tokens() -> Dict[str, str]:
-    """Prices, yearly prices, AI actions, conversations and meter widths, from
-    the dials. A conversation is one Chief turn at the chat price, rounded
-    down the way the main site's plan cards round it (_credits_in_words)."""
+    """Prices, yearly prices, AI actions, messages to Chief and meter widths,
+    from the dials. Messages are credits over what a message charges on
+    average (pricing_config.credits_per_message), rounded down the way the
+    main site's plan cards round it (_credits_in_words)."""
     import marketing_pages as mp
     import pricing_config
     dials = mp._tier_dials()
@@ -133,7 +134,7 @@ def _plan_tokens() -> Dict[str, str]:
     # would shrink every bar here).
     credits = {p: int(str(dials[p]["credits"]).replace(",", "")) for p in ("starter", "professional", "practice")}
     top = max(credits.values()) or 1
-    per_turn = max(1, pricing_config.chat_price())
+    per_turn = pricing_config.credits_per_message()
     out: Dict[str, str] = {}
     for key, plan in (("STARTER", "starter"), ("PRO", "professional"), ("SOL", "practice")):
         price = int(dials[plan]["price_num"])
@@ -189,7 +190,7 @@ def _founder_strip() -> str:
 _TICK = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"></path></svg>'
 _WORDS = ("no", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten")
 # The line under each overview card's meter, smallest church to largest.
-_METER_LINES = (" with Chief.", ", room to draft for every shepherd and leader.",
+_METER_LINES = (" to Chief.", ", room to draft for every shepherd and leader.",
                 ", Chief across every ministry.", ", Chief beside a large staff.")
 _DEPTH_DOTS = {"Standard": 1, "Advanced": 2, "Maximum": 3}
 
@@ -287,7 +288,7 @@ def _plan_cards() -> str:
     prices = pricing_config.church_price_cents()
     credits = pricing_config.church_credits()
     top = max(credits.values()) or 1
-    per_turn = max(1, pricing_config.chat_price())
+    per_turn = pricing_config.credits_per_message()
     cards = []
     for i, plan in enumerate(plans):
         lit = i == 1
@@ -309,7 +310,7 @@ def _plan_cards() -> str:
             '<div class="pbl">Billed monthly · cancel anytime</div>\n'
             f'<div class="pds">{_people(plan)}.</div>\n'
             f'<div class="mtr"><div class="mrow"><b>{credits[plan]:,}</b><span>AI actions a month</span></div>'
-            f'<div class="mbar"><i style="width: {width}%"></i></div><small>About {conv} conversations{line}</small></div>\n'
+            f'<div class="mbar"><i style="width: {width}%"></i></div><small>About {conv} messages{line}</small></div>\n'
             f'<div class="dep"><span>Chief thinks <b>{escape(label)}</b></span><span class="dd">{dots}</span></div>\n'
             '<div class="pinc">Includes</div>\n'
             f'<ul>\n{items}\n</ul>\n'
@@ -373,9 +374,9 @@ def _by_size() -> Dict[str, str]:
     plans = fg.CHURCH_PLANS
     lim = fg.plan_limits()
     credits = pricing_config.church_credits()
-    per_turn = max(1, pricing_config.chat_price())
+    per_turn = pricing_config.credits_per_message()
     conv = [f"{mp._about(credits[p] // per_turn):,} on {_short(p)}" for p in plans]
-    conv[0] = conv[0].replace(" on ", " conversations a month on ", 1)
+    conv[0] = conv[0].replace(" on ", " messages a month on ", 1)
     logins = [f"{lim[p]['max_seats']:,} on {_short(p)}" for p in plans]
     logins[0] = logins[0].replace(" on ", " office logins on ", 1)
     funds = _on("vertical_ledgers")

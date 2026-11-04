@@ -2240,17 +2240,20 @@ def _about(n: int) -> int:
 
 def _credits_in_words(credits: int, *, chief_works: bool, builds: int = 1) -> str:
     """The line under the credit number: what a month looks like. A
-    conversation is one chat turn at the chat price; a site build is
-    the base build price. Kevin's framing (2026-09-04): a plan that
-    says "3,000 credits" invites the arithmetic; one that says "about
-    250 conversations, and Chief works between them" does not."""
+    message is what one message to Chief charges on average
+    (pricing_config.credits_per_message, measured); a site build is the
+    base build price. Kevin's framing (2026-09-04): a plan that says
+    "3,000 credits" invites the arithmetic; one that says "about 125
+    messages to Chief, and Chief works between them" does not. Until
+    2026-11-03 this divided by the chat price alone and promised about
+    twice the messages a plan holds."""
     import pricing_config
-    per_turn = max(1, pricing_config.chat_price())
+    per_turn = pricing_config.credits_per_message()
     build = max(1, pricing_config.build_base())
     conversations = _about(credits // per_turn)
     after = _about(max(0, (credits - builds * build) // per_turn))
     noun = "a site build" if builds == 1 else f"{ {2: 'two', 3: 'three'}.get(builds, builds)} site builds"
-    out = f"about {conversations:,} conversations, or {noun} and {after:,}"
+    out = f"about {conversations:,} messages to Chief, or {noun} and {after:,}"
     return out + (", and Chief works between them" if chief_works else "")
 
 
