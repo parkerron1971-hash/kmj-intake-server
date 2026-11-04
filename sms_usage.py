@@ -152,10 +152,12 @@ def _business_path(business_id: str, now: Optional[datetime], select: str) -> st
 
 
 def texts_this_month(business_id: str, *, now: Optional[datetime] = None) -> Optional[int]:
-    """Texts this business has sent since the 1st (UTC). Texts, not
-    segments: the plan allowance is counted in texts. Counted by the
-    database (HEAD, count=exact), so no 1,000-row cap applies. Served by
-    idx_api_usage_business_created (business_id, created_at).
+    """Messages this business has sent since the 1st (UTC), however long
+    each one was. A church plan's allowance is NOT this: since 2026-11-03 it
+    counts 160-character parts, the way Twilio bills (church_texts.counted).
+    Counted by the database (HEAD, count=exact), so no 1,000-row cap
+    applies. Served by idx_api_usage_business_created (business_id,
+    created_at).
 
     None when the count can't be read. A caller holding an allowance must
     read None as "unknown", never as 0: a failed read is not an empty
@@ -172,7 +174,8 @@ def texts_this_month(business_id: str, *, now: Optional[datetime] = None) -> Opt
 
 def segments_this_month(business_id: str, *, now: Optional[datetime] = None) -> Optional[int]:
     """Billable segments this business has sent since the 1st (UTC): what
-    Twilio bills, where texts_this_month is what the allowance counts.
+    Twilio bills, and the unit a church plan's texts are counted in
+    (church_texts.counted, which also leaves out sign-in codes).
     Reads every row (paged); None when any page fails. Blocking."""
     if not business_id:
         return None
