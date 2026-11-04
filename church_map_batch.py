@@ -95,7 +95,8 @@ def _may(role: str, money: bool = False) -> None:
     if role not in ("owner", "admin"):
         raise HTTPException(403, "Only the owner or an admin changes the leaders map.")
     if money and role != "owner":
-        raise HTTPException(403, "Only the owner changes the church’s money levels, or who gives the board’s yes.")
+        raise HTTPException(403, "Only the owner changes the church’s money levels, or who gives the board’s yes or "
+                                 "the pastor’s yes.")
 
 
 def _now() -> str:
@@ -346,12 +347,24 @@ def _write(now: _Now, plan: Plan, by: Any, role: str, origin: str) -> Tuple[List
     return out, None
 
 
-def _money(parts: List[Optional[Dict[str, Any]]]) -> bool:
-    """Whether a change touches money: a level, or a role's board yes."""
+MONEY_PICKS = ("pastor_yes_roles",)       # who gives the pastor's yes on money (church_money_levels.pastors)
+
+
+def _money(parts: List[Optional[Dict[str, Any]]], m: Optional[cm.Map] = None) -> bool:
+    """Whether a change touches money, and so is the owner's alone: a level, who gives the pastor's yes, a
+    role's board yes, or (given the map) a role that gives a money yes going live, back to a draft or out:
+    one the pastor's-yes pick names, the senior role while nothing is picked, a role with the board's yes
+    (#1731 review). Who oversees the office feeds no money step (it picks the Executive Pastor's lane)."""
+    picked = (m.settings.get("pastor_yes_roles") if m else None)
     for p in filter(None, parts):
-        a = p["after"] or {}
-        if p["kind"] == "settings" and any(k in a for k in cm.LEVELS) or \
-                p["kind"] == "role" and "can_board_yes" in a and (p["before"] is not None or a["can_board_yes"]):
+        a, b = p["after"] or {}, p["before"]
+        if p["kind"] == "settings" and any(k in a for k in (*cm.LEVELS, *MONEY_PICKS)) or \
+                p["kind"] == "role" and "can_board_yes" in a and (b is not None or a["can_board_yes"]):
+            return True
+        r = (m.roles.get(str(p.get("id"))) or {}) if m and p["kind"] == "role" and b is not None and "status" in a \
+            else None
+        if r and (r.get("can_board_yes") or str(p["id"]) in {str(x) for x in picked or []}
+                  or picked is None and r.get("job") == "senior"):
             return True
     return False
 
@@ -363,6 +376,8 @@ def _log(bid: str, status: str, parts: List[Dict[str, Any]], by: Any, origin: st
     if status == "applied":
         row.update(applied_by=by, applied_at=at)
     got = sb_clients.sb_post_as_service("/church_map_changes", row)
+    import church_map_asks          # a map change may change an office login's work: its check is due again
+    church_map_asks.forget(bid)
     if isinstance(got, list) and got:
         return got[0]
     print(f"[church_map_batch] a {status} change at {bid} by {by} wasn’t logged ({len(parts)} parts)", flush=True)
@@ -411,7 +426,7 @@ def apply(biz: Dict[str, Any], changes: List[Dict[str, Any]], by: Any, origin: s
         cm._bad("Name each department, role, person and setting once in a change")
     plan = _plan(now, ops, by, role, origin)
     parts = [p for _o, p in plan if p]
-    more = {"phase": phase, "said": cm._plain(said)[:400], "money": _money(parts)}
+    more = {"phase": phase, "said": cm._plain(said)[:400], "money": _money(parts, now.m)}
     _may(role, more["money"])
     if stage:
         row = _log(now.bid, "pending", parts, by, origin, **more) if parts else None
@@ -441,7 +456,7 @@ def suggest(biz: Dict[str, Any], changes: List[Dict[str, Any]], by: Any, *, said
     parts = [p for _o, p in _plan(now, ops, by, "owner", "chief") if p]
     if not parts:
         return {"change": None}
-    row = _log(now.bid, "pending", parts, by, "chief", said=cm._plain(said)[:400], money=_money(parts))
+    row = _log(now.bid, "pending", parts, by, "chief", said=cm._plain(said)[:400], money=_money(parts, now.m))
     if row is None:
         raise HTTPException(503, cm.UNSAVED)
     return {"change": _brief(row)}
@@ -528,15 +543,30 @@ def _done_undo(bid: str, row: Dict[str, Any]) -> None:
         print(f"[church_map_batch] change {row['undoes']} at {bid} was put back but isn’t marked so", flush=True)
 
 
-def apply_pending(biz: Dict[str, Any], change_id: Any, by: Any, *, role: str) -> Dict[str, Any]:
+def _suggested(biz: Dict[str, Any], row: Dict[str, Any], via_ask: bool) -> None:
+    """A change an office login suggested is answered as their suggestion (church_map_asks.answer), so
+    whoever says yes sees whose words they were (#1731 review): a 409 anywhere else."""
+    if via_ask:
+        return
+    import church_map_asks as asks
+    ask = asks.linked(biz, [row["id"]]).get(str(row["id"]))
+    if ask and ask["status"] == "open":
+        e = HTTPException(409, f"That change is {ask['name']}’s suggestion. Answer it under From your team, where "
+                               "their words are, rather than here.")
+        e.ask_id = ask["id"]
+        raise e
+
+
+def apply_pending(biz: Dict[str, Any], change_id: Any, by: Any, *, role: str, via_ask: bool = False) -> Dict[str, Any]:
     """Make a change that waits for a yes, or finish one that failed."""
     _open()
     _may(role)
     row = _row(biz, change_id)
     if row["status"] not in ("pending", "failed"):
         raise HTTPException(409, "That change isn’t waiting to be made.")
-    _may(role, bool(row.get("money")))
+    _suggested(biz, row, via_ask)
     now, parts, plan = _Now(biz), [dict(p) for p in row["parts"]], []
+    _may(role, bool(row.get("money")) or _money(parts, now.m))      # as it reads today, for one saved before
     for p in parts:
         cur = now.get(p["kind"], p["id"]) if p.get("id") else None
         p.pop("done", None)
@@ -562,14 +592,15 @@ def apply_pending(biz: Dict[str, Any], change_id: Any, by: Any, *, role: str) ->
     return {"change": _brief(saved[0] if saved else row), "results": results, "marked": bool(saved), "let_go": gone}
 
 
-def discard(biz: Dict[str, Any], change_id: Any, by: Any, *, role: str) -> Dict[str, Any]:
+def discard(biz: Dict[str, Any], change_id: Any, by: Any, *, role: str, via_ask: bool = False) -> Dict[str, Any]:
     """Let a change that waits for a yes go, unmade."""
     _open()
     _may(role)
     row = _row(biz, change_id)
     if row["status"] != "pending":
         raise HTTPException(409, "Only a change that waits for a yes can be discarded.")
-    _may(role, bool(row.get("money")))
+    _suggested(biz, row, via_ask)
+    _may(role, bool(row.get("money")) or _money(row["parts"]))
     saved = _set(cm._bid(biz), row["id"], {"status": "discarded"}, ("pending",))
     if saved is None:
         raise HTTPException(503, cm.UNSAVED)
@@ -600,7 +631,7 @@ def undo(biz: Dict[str, Any], change_id: Any, by: Any, *, role: str, origin: str
             raise HTTPException(409, _since(p, f, cur, "changed again") + "; change it directly.")
     plan = _checked(now, [_back(p) for p in reversed(row["parts"])], by, role, origin, "That can’t be put back")
     parts = [p for _o, p in plan if p]
-    more = {"money": bool(row.get("money")) or _money(parts), "undoes": str(row["id"])}
+    more = {"money": bool(row.get("money")) or _money(parts, now.m), "undoes": str(row["id"])}
     results, err = _write(now, plan, by, role, origin)
     if err is not None:
         raise _failed(now.bid, parts, by, origin, err, **more)
@@ -693,7 +724,7 @@ def save_role(biz: Dict[str, Any], role_id: Any, changes: Dict[str, Any], user: 
         said.update({k: full[k] for k in SWITCH_KEYS if k in full and k not in said})
     plan = _plan(now, [{"kind": "role", "id": rid, "set": said}], by, role, "office")
     parts = [p for _o, p in plan if p]
-    money = _money(parts)
+    money = _money(parts, now.m)
     _may(role, money)
     results, err = _write(now, plan, by, role, "office")
     if err is not None:
@@ -716,7 +747,12 @@ def _say(f: str, v: Any, names: Dict[str, str]) -> str:
     if f in cm.LEVELS:
         return f"${v / 100:,.0f}"
     if f == "units":
-        return str(len(v))
+        return _and(_unit_names(v, names))
+    if f == "definition":
+        text = cm._plain(v)
+        return text if len(text) <= SHOWN else text[:SHOWN].rsplit(" ", 1)[0] + "…"
+    if f == "job":
+        return (cr.JOBS.get(v) or {}).get("label") or str(v)
     if f in ("support_duty", "area"):
         return ((cd.CATALOG if f == "support_duty" else ca.AREAS).get(v) or {}).get("label", str(v))
     if f == "made_for":
@@ -726,26 +762,73 @@ def _say(f: str, v: Any, names: Dict[str, str]) -> str:
     return names.get(str(v), "someone") if f in PEOPLE else str(v)
 
 
+SHOWN = 120                       # letters of a role's definition a line shows
+_QUIET = ("name", "title", "status", "source", "sort")      # a new thing's label, or what goes without saying
+
+
+def _and(words: List[str]) -> str:
+    words = [w for w in words if w]
+    return ", ".join(words[:-1]) + " and " + words[-1] if len(words) > 1 else "".join(words) or "none"
+
+
+def _ukey(u: Dict[str, Any]) -> tuple:
+    return (u.get("kind"), str(u.get("ref") or "") or cm._plain(u.get("label")).casefold())
+
+
+def _unit_names(units: Any, names: Dict[str, str]) -> List[str]:
+    return [(names.get(str(u["ref"])) or f"a {cm._WORD.get(u.get('kind'), 'thing')}") if u.get("ref")
+            else f"the {cm._plain(u.get('label'))} space" if u.get("kind") == "space"
+            else cm._plain(u.get("label")) for u in units or []]
+
+
+def _set_words(f: str, v: Any, names: Dict[str, str]) -> str:
+    """One field a new thing is made with: "leads", "leader Ruth Okafor", "holds Youth and the youth space"."""
+    if v is True:
+        return WORD.get(f) or f
+    if f == "units":
+        return "holds " + _and(_unit_names(v, names))
+    return f"{WORD.get(f) or f} {_say(f, v, names)}"
+
+
 def _lines(p: Dict[str, Any], names: Dict[str, str]) -> List[str]:
+    """One part in plain words, the whole of what it makes or moves: a new department or role with every
+    field it sets, and what hangs from a department named one by one, added and taken off (#1731 review)."""
     label, b, a = p.get("label") or "It", p.get("before"), p.get("after")
     left = " (this part didn’t go in)" if p.get("done") is False else ""
     if b is None:
-        return [f"Made {label}{' as a draft' if (a or {}).get('status') == 'draft' else ''}{left}"]
+        set_ = [_set_words(f, v, names) for f, v in (a or {}).items()
+                if f not in _QUIET and v not in (None, False, "", [])]
+        return [f"Made {label}{' as a draft' if (a or {}).get('status') == 'draft' else ''}"
+                + (": " + "; ".join(set_) if set_ else "") + left]
     if a is None:
         return [f"{'Took out the draft' if p.get('deleted') else 'Archived'} {label}{left}"]
-    return [f"{label}: {WORD[f] + ' ' if WORD.get(f) else ''}{_say(f, b.get(f), names)} → {_say(f, v, names)}{left}"
-            for f, v in a.items()]
+    out = []
+    for f, v in a.items():
+        if f == "units":
+            old, new = {_ukey(u): u for u in b.get(f) or []}, {_ukey(u): u for u in v or []}
+            moves = ([f"added {_and(_unit_names([u for k, u in new.items() if k not in old], names))}"]
+                     if set(new) - set(old) else []) + (
+                [f"took off {_and(_unit_names([u for k, u in old.items() if k not in new], names))}"]
+                if set(old) - set(new) else [])
+            out.append(f"{label}: {WORD[f]}: {'; '.join(moves) or 'the same'}{left}")
+        else:
+            out.append(f"{label}: {WORD[f] + ' ' if WORD.get(f) else ''}{_say(f, b.get(f), names)} → "
+                       f"{_say(f, v, names)}{left}")
+    return out
 
 
 def _names(bid: str, rows: List[Dict[str, Any]]) -> Dict[str, str]:
-    """The people and roles these changes' parts name, id -> name, for their lines."""
+    """The people, roles and things these changes' parts name, id -> name, for their lines."""
     sides = [s for r in rows for p in r.get("parts") or [] for s in (p.get("before"), p.get("after")) if s]
     people = {str(s[f]) for s in sides for f in PEOPLE if s.get(f)}
     roles = {str(x) for s in sides for f in ("reports_to", *cm.PICKS) for x in
              (s.get(f) if isinstance(s.get(f), list) else [s.get(f)]) if x}
+    units = [u for s in sides for u in s.get("units") or [] if u.get("ref")]
     names = cm._people(bid, people) if people else {}
-    if roles:
+    if roles or any(u["kind"] == "role" for u in units):
         names.update({d["id"]: d["title"] for d in cr.defs(bid, with_drafts=True) or []})
+    for kind in {u["kind"] for u in units if u["kind"] in cm._THINGS and u["kind"] != "role"}:
+        names.update(cm._things(bid, kind, [u["ref"] for u in units if u["kind"] == kind]))
     return names
 
 
@@ -765,12 +848,18 @@ def recent(biz: Dict[str, Any], role: str) -> Dict[str, Any]:
     newest = lambda rows: sorted(rows, key=lambda r: str(r.get("made_at") or ""), reverse=True)  # noqa: E731
     waiting, rows = newest(cm._need(f"{q}&status=eq.pending&limit=50")), newest(cm._need(f"{q}&limit={RECENT}"))
     names = _names(bid, waiting + rows)
+    import church_map_asks as asks
+    asked = asks.linked(biz, [r["id"] for r in waiting + rows])     # an office login's suggestions (B11)
 
     def show(r: Dict[str, Any]) -> Dict[str, Any]:
         at, may = _parse(r.get("applied_at")), role in ("owner", "admin") and (not r.get("money") or role == "owner")
+        ask = asked.get(str(r["id"]))
+        theirs = bool(ask) and ask["status"] == "open"          # answered as their suggestion, never here
         return {**{k: r.get(k) for k in COLS.split(",") if k != "parts"}, "id": str(r["id"]),
                 "lines": [x for p in r.get("parts") or [] for x in _lines(p, names)],
+                "suggested_by": {"ask_id": ask["id"], "name": ask["name"], "status": ask["status"]} if ask else None,
                 "can_undo": may and r["status"] == "applied" and not r.get("undoes") and bool(at)
                 and datetime.now(timezone.utc) - at <= timedelta(days=UNDO_DAYS),
-                "can_apply": may and r["status"] in ("pending", "failed"), "can_discard": may and r["status"] == "pending"}
+                "can_apply": may and r["status"] in ("pending", "failed") and not theirs,
+                "can_discard": may and r["status"] == "pending" and not theirs}
     return {"pending": [show(r) for r in waiting], "recent": [show(r) for r in rows if r["status"] != "pending"]}

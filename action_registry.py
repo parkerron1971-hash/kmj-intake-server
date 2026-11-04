@@ -575,7 +575,10 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
                   "chief_only": True},
     "answer_ask": {**_w("A", "says yes to (makes), marks done or lets go of one office suggestion, through the map's "
                              "change log and the duties page's own move (owner or admin; money the owner's); "
-                             "undo_map_change or undo_duty puts what it made back"), "chief_only": True},
+                             "undo_ask puts what it made back"), "chief_only": True},
+    "undo_ask": {**_w("A", "puts back what saying yes to an office suggestion made, both parts: its map change "
+                           "(undo_map_change's own) and its duty move (undo_duty's own), each with its own seats"),
+                 "chief_only": True},
     # Bills step 2: a bill matched to the bank payment that paid it, so it counts once.
     "match_bill_payment": {**_w("A", "matches owed bills to the bank payments that paid them (the ones the owner "
                                      "confirmed, or only the plain ones); the bills read paid and count once in the "

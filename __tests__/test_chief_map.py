@@ -235,7 +235,8 @@ def test_names_resolve_exactly_holders_first_or_nothing_changes(db):
     # Riverside holds no roles: its people, by a first name only one has, on a draft.
     out = ok(run(db, "change_map", {"changes": [{"kind": "department", "name": "Youth", "status": "draft",
                                                  "area": "Kids & youth", "leader": "Henry"}]}, RV))
-    assert out["result"].startswith("Changed the leaders map. Made Youth as a draft.")
+    assert out["result"].startswith("Changed the leaders map. Made Youth as a draft: leader Henry Dawson; area Kids & "
+                                    "youth."), "every field it sets (#1731 review)"
     d = next(d for d in db.t["church_departments"] if d["business_id"] == RV)
     assert (d["leader_contact_id"], d["area"], d["source"]) == (db.who[RV]["henry"], "kids_youth", "chief")
 

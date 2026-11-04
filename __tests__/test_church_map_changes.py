@@ -128,7 +128,7 @@ def test_the_parts_record_before_and_after_and_read_in_plain_words(db):
     lines = batch.recent(church(db, LC), "owner")["recent"][0]["lines"]
     assert lines == ["Youth: leader Yolanda Reed → Tasha Williams",
                      "Youth: office helper Youth and Teen Bible Study → First-time guests and welcome calls",
-                     "Youth: teams, groups and spaces 3 → 1",
+                     "Youth: teams, groups and spaces: took off Youth and the youth space",
                      "Tanya Brooks (Elders): who they answer to nobody → Jessica McCloud"]
     apply(db, KINDS["settings"] + KINDS["shepherding"])
     assert batch.recent(church(db, LC), "owner")["recent"][0]["lines"] == [

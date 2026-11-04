@@ -967,6 +967,8 @@ def save_settings(biz: Any, body: Dict[str, Any], by: Any, role: str, *, m: Opti
                     (m.roles.get(i) or {}).get("status") == "draft" for i in ids) else "Pick from this church’s own roles")
             if ids != cur.get(k):
                 out[k] = ids
+    if "pastor_yes_roles" in out and role != "owner":       # a yes on money, as the levels (#1731 review)
+        raise HTTPException(403, "Only the owner changes who gives the pastor’s yes on money.")
     if not out:
         return {"settings": cur, "changed": False}
     if dry:

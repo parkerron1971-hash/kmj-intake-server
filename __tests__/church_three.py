@@ -635,8 +635,9 @@ def build(monkeypatch, *, map_on: bool = True, filled: bool = True, migrated: bo
     monkeypatch.setattr(church_checks, "_church_owner_email", lambda u: OWNER_EMAIL.get(str(u), ""))
     # Fresh per-replica caches, put back after the test: this fake's answers
     # never reach the next test file on the same worker.
+    import church_map_asks
     for mod, name in ((ca, "_MY_CACHE"), (cd, "_CACHE"), (cd, "_FAILED"), (member_asks, "_OWNER_CACHE"),
-                      (church_map, "_READY")):
+                      (church_map, "_READY"), (church_map_asks, "_DUE")):
         monkeypatch.setattr(mod, name, {})
     for b in db.t["businesses"]:
         if b["id"] in CHURCHES:                  # Riverside is never seeded: its first open does that

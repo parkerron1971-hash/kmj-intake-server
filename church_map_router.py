@@ -269,11 +269,19 @@ def _asks(business_id: str, user: AuthedUser, least: str) -> Tuple[Dict[str, Any
     return asks.church(bid), role
 
 
+def _gates(user: AuthedUser) -> Dict[str, bool]:
+    """What this login may make from an ask, as the sheet's and the duties page's own routes decide it: the
+    map's change routes (open_to) and the duties' (church_duties.open_to). What it can't make or undo
+    there, it can't make through an ask (#1731 review)."""
+    import church_duties as cd
+    return {"map": cm.open_to(user), "duty": cd.open_to(user)}
+
+
 @router.get("/asks")
 def asks_open(business_id: str = Query(...), user: AuthedUser = Depends(require_user)):
     """What the team suggested, waiting for a yes: the owner or an admin."""
     biz, role = _asks(business_id, user, "admin")
-    return asks.open_asks(biz, role)
+    return asks.open_asks(biz, role, str(user.id), _gates(user))
 
 
 @router.get("/asks/mine")
@@ -291,6 +299,6 @@ def asks_answer(ask_id: str, how: str, business_id: str = Query(...), user: Auth
     if how not in ("apply", "done", "discard"):
         raise HTTPException(404, "Not Found")
     biz, role = _asks(business_id, user, "admin")
-    out = asks.answer(biz, ask_id, str(user.id), role, how)
+    out = asks.answer(biz, ask_id, str(user.id), role, how, _gates(user))
     out.pop("row", None)
     return {"ok": True, **out}

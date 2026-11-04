@@ -281,8 +281,12 @@ def test_only_the_owner_changes_money_and_a_change_is_stamped_and_logged(lc, cap
     assert line.startswith(f"[church_map] settings {GRACE} by {owner}: pastor_from_cents 20000 -> 30000; "
                            "board_over_cents 100000 -> None; office_overseer_roles None -> []")
     pick = _role(lc, GRACE, "pastor")["id"]
-    assert cm.save_settings(biz, {"pastor_yes_roles": [pick, pick]}, "u-admin", "admin")["settings"][
-        "pastor_yes_roles"] == [pick], "an admin picks the roles"
+    assert _refused(cm.save_settings, biz, {"pastor_yes_roles": [pick]}, "u-admin", "admin", code=403) == \
+        "Only the owner changes who gives the pastor’s yes on money.", "a yes on money is the owner's (#1731 review)"
+    assert cm.save_settings(biz, {"pastor_yes_roles": [pick, pick]}, owner, "owner")["settings"][
+        "pastor_yes_roles"] == [pick]
+    assert cm.save_settings(biz, {"office_overseer_roles": [pick]}, "u-admin", "admin")["changed"], \
+        "an admin picks who oversees the office: no money step"
 
 
 def test_a_level_left_unset_is_the_platforms_when_the_two_are_compared(lc):
@@ -298,7 +302,7 @@ def test_a_level_left_unset_is_the_platforms_when_the_two_are_compared(lc):
     assert cm.save_settings(biz, {"pastor_from_cents": 300_000, "board_over_cents": 300_000}, owner, "owner")["changed"]
     assert "at or above" in _refused(cm.save_settings, biz, {"board_over_cents": None}, owner, "owner"), \
         "unset, the board's would be $2,500, under the pastor's $3,000"
-    assert cm.save_settings(biz, {"pastor_yes_roles": []}, "u-admin", "admin")["changed"], "a role pick isn't a level"
+    assert cm.save_settings(biz, {"pastor_yes_roles": []}, owner, "owner")["changed"], "a role pick isn't a level"
 
 
 # ─── The map read back, and its gaps ──────────────────────────────────
