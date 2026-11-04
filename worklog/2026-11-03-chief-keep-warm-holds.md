@@ -2,7 +2,7 @@
 title: Chief's keep-warm survives deploys (held in the database, pinged by the worker)
 date: 2026-11-03
 agent: Claude Code (Claude Opus 5.5)
-asked: "go on all" (approved fix: Chief's keep-warm ping isn't keeping the cache warm)
+asked: "go on all (the approved fix: Chief's keep-warm ping isn't keeping the cache warm)"
 status: waiting on Kevin
 prs: [kmj-intake-server#1734]
 migrations: [supabase/APPLY-2026-11-03-chief-keep-warm.sql (NOT applied)]
@@ -13,6 +13,7 @@ decisions:
   - "Pings never cross 00:00 UTC: the cached copy is gone after it, so the day's first message writes its own."
   - "The ping is stored as JSON text, not jsonb: jsonb reorders tool-schema keys, which is another prompt to the cache."
   - "Stop-on-write kept. New stops: lapsed (copy last used 56+ minutes ago), midnight. A 429/5xx gets one more try while the copy lasts."
+  - "A ping holds its row for 90 s (pinging_at) and moves touched_at only after it has read, so a worker that dies mid-ping never records a use the API didn't see (PR review, round 1)."
 related: []
 ---
 Measured cause (30 days to 2026-11-03, production api_usage plus the Railway
@@ -39,9 +40,13 @@ What changed: the web writes the ping to `chief_keep_warm` after each main
 Chief call (`record`; the ~0.5 MB brief only when it changed, otherwise just
 the times). The worker's `chief_keep_warm` job, every 2 minutes on the
 scheduler leader, pings each copy at ~50 minutes and ends chains that are
-over (window, midnight, lapsed, wrote, refused). Each ping claims its row on
-`touched_at`, so two workers never ping one copy and a message that lands
-meanwhile keeps its own chain. The in-process chain stays as the fallback
+over (window, midnight, lapsed, wrote, refused). Each ping holds its row
+for 90 seconds (`pinging_at`, on the `touched_at` it saw) and moves
+`touched_at` only once it has read: two workers never ping one copy, a
+worker that dies mid-ping leaves the true last use, and a message that
+lands meanwhile keeps its own chain. A failed database call is never read
+as "no row": it is logged and the next look tries again, early rather than
+late. The in-process chain stays as the fallback
 until the table exists, now also stopping at 00:00 UTC.
 
 Expected (replayed on the same 30 days): 9 of the 33 cold messages turn warm

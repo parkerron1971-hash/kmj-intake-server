@@ -285,28 +285,37 @@ def _when(v):
 class _Table:
     """chief_keep_warm as PostgREST would answer the calls the module makes."""
 
+    TIMES = ("touched_at", "last_call_at", "window_ends_at", "stopped_at", "pinging_at")
+
     def __init__(self):
         import threading
         self.rows = {}
         self.calls = []
         self.lock = threading.Lock()   # one statement at a time, as Postgres locks the row
+        # (method, path) -> True for a call that fails: the sb_clients helpers
+        # then answer None, never [] (a failure is not "no rows").
+        self.fail = lambda method, path: False
 
-    @staticmethod
-    def _match(row, filters):
+    @classmethod
+    def _cond(cls, row, col, cond):
+        op, _, val = cond.partition(".")
+        have = row.get(col)
+        if op == "is":
+            return have is None
+        if col in cls.TIMES:
+            if have is None:
+                return False
+            return _when(have) == _when(val) if op == "eq" else _when(have) < _when(val)
+        return str(have) == val
+
+    @classmethod
+    def _match(cls, row, filters):
         for col, cond in filters:
-            op, _, val = cond.partition(".")
-            have = row.get(col)
-            if op == "is":
-                if have is not None:
+            if col == "or":
+                parts = [p.split(".", 1) for p in cond.strip("()").split(",")]
+                if not any(cls._cond(row, c, rest) for c, rest in parts):
                     return False
-            elif col in ("touched_at", "last_call_at", "window_ends_at", "stopped_at"):
-                if have is None:
-                    return False
-                if op == "eq" and _when(have) != _when(val):
-                    return False
-                if op == "lt" and not _when(have) < _when(val):
-                    return False
-            elif op == "eq" and str(have) != val:
+            elif not cls._cond(row, col, cond):
                 return False
         return True
 
@@ -325,6 +334,8 @@ class _Table:
 
     def get(self, path, **_):
         self.calls.append(("GET", path))
+        if self.fail("GET", path):
+            return None
         filters, select = self._parse(path)
         rows = sorted((r for r in self.rows.values() if self._match(r, filters)),
                       key=lambda r: _when(r["touched_at"]))
@@ -332,6 +343,8 @@ class _Table:
 
     def patch(self, path, body):
         self.calls.append(("PATCH", path, dict(body)))
+        if self.fail("PATCH", path):
+            return None
         filters, select = self._parse(path)
         out = []
         with self.lock:
@@ -343,6 +356,8 @@ class _Table:
 
     def post(self, path, body, prefer=None, redact=False):
         self.calls.append(("POST", path, dict(body), prefer, redact))
+        if self.fail("POST", path):
+            return None
         _, select = self._parse(path)
         row = self.rows.setdefault(body["business_id"], {})
         row.update(body)
@@ -368,7 +383,7 @@ def _row(biz="biz-w", touched=T0, ends=None, ping=None):
             "prefix_hash": "0" * 64, "last_call_at": touched.isoformat(),
             "touched_at": touched.isoformat(),
             "window_ends_at": (ends or touched + timedelta(hours=4)).isoformat(),
-            "pings": 0, "stopped_at": None, "stopped_reason": None}
+            "pings": 0, "pinging_at": None, "stopped_at": None, "stopped_reason": None}
 
 
 def test_the_ping_is_kept_as_the_text_it_was_sent_as():
@@ -529,13 +544,31 @@ def test_the_worker_pings_a_due_copy_with_the_brief_as_sent(monkeypatch):
     assert json.dumps(sent[0][1]) == json.dumps(ping)        # same bytes, same cache key
     row = t.rows["biz-a"]
     assert _when(row["touched_at"]) == T0 + timedelta(minutes=51) and row["pings"] == 1
+    assert row["pinging_at"] is None                         # the hold let go
     assert t.rows["biz-fresh"]["pings"] == 0                 # not due yet
+
+
+def test_the_last_use_moves_only_once_the_ping_has_read(monkeypatch):
+    """While the ping is out the row says when the copy was really last
+    used, so a worker that dies mid-ping (it deploys as often as the web)
+    never leaves a later use the API didn't see."""
+    t, _ = _worker(monkeypatch, [_row("biz-z")])
+    during = {}
+
+    async def send(biz, ping, headers):
+        during.update(t.rows[biz])
+        return "read"
+    monkeypatch.setattr(kw, "send_ping", send)
+    asyncio.run(kw.tick())
+    assert _when(during["touched_at"]) == T0 and during["pinging_at"]
+    assert _when(t.rows["biz-z"]["touched_at"]) == T0 + timedelta(minutes=51)
 
 
 def test_a_ping_that_writes_ends_the_chain(monkeypatch):
     t, sent = _worker(monkeypatch, [_row("biz-b")], {"biz-b": "wrote"})
     assert asyncio.run(kw.tick()) == {"wrote": 1}
     assert t.rows["biz-b"]["stopped_reason"] == "wrote" and t.rows["biz-b"]["stopped_at"]
+    assert t.rows["biz-b"]["pinging_at"] is None
 
 
 def test_a_refused_ping_ends_the_chain(monkeypatch):
@@ -549,6 +582,7 @@ def test_a_busy_api_gets_one_more_try_while_the_copy_lasts(monkeypatch):
     assert asyncio.run(kw.tick()) == {"busy": 1}
     row = t.rows["biz-d"]
     assert row["stopped_at"] is None and _when(row["touched_at"]) == T0 and row["pings"] == 0
+    assert row["pinging_at"] is None
 
 
 def test_no_ping_crosses_midnight_utc(monkeypatch):
@@ -581,7 +615,7 @@ def test_a_message_during_the_ping_keeps_its_own_chain(monkeypatch):
     fresh = (T0 + timedelta(minutes=52)).isoformat()
 
     async def send(biz, ping, headers):
-        t.rows[biz].update(touched_at=fresh, last_call_at=fresh, pings=0)
+        t.rows[biz].update(touched_at=fresh, last_call_at=fresh, pings=0, pinging_at=None)
         return "wrote"
     monkeypatch.setattr(kw, "send_ping", send)
     asyncio.run(kw.tick())
@@ -595,6 +629,77 @@ def test_two_workers_ping_a_copy_once(monkeypatch):
         return await asyncio.gather(kw.tick(), kw.tick())
     asyncio.run(both())
     assert len(sent) == 1
+
+
+def test_another_workers_live_hold_is_left_alone_and_a_dead_one_runs_out(monkeypatch):
+    held = _row("biz-k")
+    held["pinging_at"] = (T0 + timedelta(minutes=50, seconds=30)).isoformat()   # 30 s ago
+    t, sent = _worker(monkeypatch, [held])
+    assert asyncio.run(kw.tick()) == {"taken": 1} and sent == []
+    held["pinging_at"] = (T0 + timedelta(minutes=48)).isoformat()                # 3 min ago: it died
+    assert asyncio.run(kw.tick()) == {"read": 1} and len(sent) == 1
+
+
+# A failed call answers None in sb_clients, never []: none of these may be
+# read as "no row" or "nothing due".
+
+def test_a_failed_read_of_the_due_copies_is_not_nothing_due(monkeypatch):
+    t, sent = _worker(monkeypatch, [_row("biz-l")])
+    t.fail = lambda method, path: method == "GET"
+    assert asyncio.run(kw.tick()) == {"unread": 1} and sent == []
+    assert t.rows["biz-l"]["stopped_at"] is None
+
+
+def test_a_failed_hold_sends_no_ping(monkeypatch):
+    t, sent = _worker(monkeypatch, [_row("biz-m")])
+    t.fail = lambda method, path: method == "PATCH"
+    assert asyncio.run(kw.tick()) == {"error": 1} and sent == []
+    assert _when(t.rows["biz-m"]["touched_at"]) == T0
+
+
+def test_a_read_that_was_not_noted_brings_the_next_ping_early_never_late(monkeypatch):
+    t, sent = _worker(monkeypatch, [_row("biz-p")])
+    t.fail = lambda method, path: method == "PATCH" and "pinging_at=eq." in path
+    assert asyncio.run(kw.tick()) == {"read": 1}
+    assert _when(t.rows["biz-p"]["touched_at"]) == T0        # the older use: early, never late
+    t.fail = lambda method, path: False
+    t2, sent2 = _worker(monkeypatch, [t.rows["biz-p"]], now=T0 + timedelta(minutes=53))
+    assert asyncio.run(kw.tick()) == {"read": 1} and len(sent2) == 1
+
+
+def test_a_busy_ping_whose_let_go_failed_tries_again_once_the_hold_runs_out(monkeypatch):
+    t, sent = _worker(monkeypatch, [_row("biz-q")], {"biz-q": "busy"})
+    t.fail = lambda method, path: method == "PATCH" and "pinging_at=eq." in path
+    assert asyncio.run(kw.tick()) == {"busy": 1}
+    assert t.rows["biz-q"]["pinging_at"]                     # still held
+    t2, sent2 = _worker(monkeypatch, [t.rows["biz-q"]], now=T0 + timedelta(minutes=53))
+    assert asyncio.run(kw.tick()) == {"read": 1} and len(sent2) == 1
+
+
+def test_a_failed_stop_is_said_and_tried_again(monkeypatch):
+    t, sent = _worker(monkeypatch, [_row("biz-u", ends=T0 + timedelta(minutes=40))])
+    t.fail = lambda method, path: method == "PATCH"
+    assert asyncio.run(kw.tick()) == {"error": 1}
+    t.fail = lambda method, path: False
+    assert asyncio.run(kw.tick()) == {"window": 1} and sent == []
+
+
+def test_a_failed_record_falls_back_to_the_webs_own_pings(monkeypatch):
+    sent = _wire(monkeypatch, [], every=0.01, window=30)
+    t = _db(monkeypatch)
+    monkeypatch.setattr(kw, "record", _real_record)
+    t.fail = lambda method, path: True
+    assert kw.record("biz-v", kw.ping_payload(_payload()), {}) is False
+
+    async def run():
+        kw.remember("biz-v", _payload())
+        for _ in range(200):
+            if sent:
+                break
+            await asyncio.sleep(0.02)
+        kw._tasks["biz-v"].cancel()
+    asyncio.run(run())
+    assert sent and "biz-v" not in t.rows
 
 
 def test_nothing_runs_without_the_table_or_when_off(monkeypatch):

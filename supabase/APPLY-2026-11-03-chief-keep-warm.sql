@@ -28,6 +28,9 @@
 --   window_ends_at     the pings stop after this (4 h; 24 h for a business
 --                      that uses Chief most days)
 --   pings              pings since last_call_at
+--   pinging_at         a worker's hold while its ping is out (90 s at most):
+--                      touched_at moves only once the ping has read, so a
+--                      worker that dies mid-ping leaves the true last use
 --   stopped_at,        why the chain ended: wrote (a ping found no copy and
 --   stopped_reason     paid for one), lapsed, window, midnight (the copy is
 --                      gone at 00:00 UTC), refused, budget, off
@@ -48,6 +51,7 @@ create table if not exists public.chief_keep_warm(
   touched_at timestamptz not null,
   window_ends_at timestamptz not null,
   pings integer not null default 0 check (pings >= 0),
+  pinging_at timestamptz,
   stopped_at timestamptz,
   stopped_reason text check (stopped_reason is null or stopped_reason in
     ('wrote', 'lapsed', 'window', 'midnight', 'refused', 'budget', 'off'))

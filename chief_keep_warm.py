@@ -36,8 +36,10 @@ of the 4 had a deploy land 3 to 42 minutes after that last message, before
 its first ping. Now the web writes the ping to chief_keep_warm after each
 main call (record) and the worker sends it (tick, every TICK_MIN minutes,
 scheduler leader only), so a deploy of either service costs a tick, not
-the copy. Each ping claims the row on its touched_at, so two workers never
-ping the same copy, and a message that lands meanwhile keeps its own
+the copy. A ping holds its row for LEASE_S (pinging_at) and moves
+touched_at only once it has read, both on the touched_at it saw: two
+workers never ping the same copy, a worker that dies mid-ping leaves the
+true last use behind, and a message that lands meanwhile keeps its own
 chain. The ping is stored as the JSON text it was sent as: a tool schema
 with its keys in another order is another prompt to the cache. Until
 supabase/APPLY-2026-11-03-chief-keep-warm.sql is applied, the web keeps
@@ -86,6 +88,10 @@ TICK_MIN = 2
 # the API's use, a moment before we note it), and a ping then could pay
 # for a whole new one: the chain ends instead.
 LATE_S = 56 * 60
+# A worker's hold on a row while its ping is out (the ping times out at
+# 30 s). touched_at moves only once the ping has read, so a worker that
+# dies mid-ping leaves the true last use behind, and its hold runs out.
+LEASE_S = 90
 # Pings the worker sends at once.
 _PARALLEL = 8
 
@@ -264,7 +270,7 @@ def record(business_id: str, ping: Dict[str, Any], headers: Dict[str, str],
         now = datetime.now(timezone.utc)
         times = {"last_call_at": _iso(now), "touched_at": _iso(now),
                  "window_ends_at": _iso(now + timedelta(seconds=window_for(b))),
-                 "pings": 0, "stopped_at": None, "stopped_reason": None}
+                 "pings": 0, "pinging_at": None, "stopped_at": None, "stopped_reason": None}
         text = ping_text(ping)
         h = prefix_hash(text, headers)
         try:
@@ -394,58 +400,84 @@ def verdict(row: Dict[str, Any], now: datetime) -> str:
     return "ping"
 
 
-def _due(now: datetime) -> List[Dict[str, Any]]:
-    """Live chains whose copy was last used every_s() or more ago."""
+def _due(now: datetime) -> Optional[List[Dict[str, Any]]]:
+    """Live chains whose copy was last used every_s() or more ago; None when
+    the read failed (never read as "nothing is due")."""
     import sb_clients
     cutoff = _q(_iso(now - timedelta(seconds=every_s())))
     rows = sb_clients.sb_get_as_service(
         f"/{TABLE}?stopped_at=is.null&touched_at=lt.{cutoff}"
         "&select=business_id,touched_at,window_ends_at,pings&order=touched_at.asc&limit=500")
-    return [r for r in rows if isinstance(r, dict) and r.get("business_id")] if isinstance(rows, list) else []
+    if not isinstance(rows, list):
+        return None
+    return [r for r in rows if isinstance(r, dict) and r.get("business_id")]
 
 
-def _set(business_id: str, touched_at: Any, body: Dict[str, Any],
-         select: str = "business_id") -> Optional[Dict[str, Any]]:
-    """Change a live row only if its copy was last used at `touched_at`: a
-    message since then (or another worker's ping) moved it, and that chain
-    is left alone. The row as changed, or None when nothing matched."""
+def _set(business_id: str, touched_at: Any, body: Dict[str, Any], select: str = "business_id", *,
+         lease: Optional[str] = None, free_before: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """Change a live row only if its copy was last used at `touched_at` (a
+    message since then moved it, and that chain is left alone); with
+    `lease`, only while this worker's hold is still on it; with
+    `free_before`, only if no other worker's hold is newer than that. The
+    row as changed, {} when nothing matched, None when the write failed."""
     import sb_clients
-    rows = sb_clients.sb_patch_as_service(
-        f"/{TABLE}?business_id=eq.{_q(business_id)}&stopped_at=is.null"
-        f"&touched_at=eq.{_q(touched_at)}&select={select}", body)
-    return rows[0] if isinstance(rows, list) and rows and isinstance(rows[0], dict) else None
+    path = (f"/{TABLE}?business_id=eq.{_q(business_id)}&stopped_at=is.null"
+            f"&touched_at=eq.{_q(touched_at)}")
+    if lease is not None:
+        path += f"&pinging_at=eq.{_q(lease)}"
+    if free_before is not None:
+        path += f"&or=(pinging_at.is.null,pinging_at.lt.{_q(free_before)})"
+    rows = sb_clients.sb_patch_as_service(f"{path}&select={select}", body)
+    if not isinstance(rows, list):
+        return None
+    return rows[0] if rows and isinstance(rows[0], dict) else {}
 
 
 async def _one(row: Dict[str, Any], now: datetime) -> str:
     b = str(row["business_id"])
+    seen = row["touched_at"]
     why = verdict(row, now)
     if why != "ping":
-        await asyncio.to_thread(_set, b, row["touched_at"], {"stopped_at": _iso(now), "stopped_reason": why})
+        if await asyncio.to_thread(_set, b, seen, {"stopped_at": _iso(now), "stopped_reason": why}) is None:
+            logger.warning("keep-warm biz=%s: could not end the chain (%s); the next look tries again", b[:8], why)
+            return "error"
         logger.info("keep-warm biz=%s: chain over (%s)", b[:8], why)
         return why
-    claimed_at = _iso(now)
-    pings = int(row.get("pings") or 0)
-    got = await asyncio.to_thread(_set, b, row["touched_at"],
-                                  {"touched_at": claimed_at, "pings": pings + 1}, "payload,headers")
+    # Hold the row while the ping is out. touched_at moves only once it has
+    # read: a worker that dies mid-ping leaves the true last use, and its
+    # hold runs out after LEASE_S.
+    lease = _iso(now)
+    free_before = _iso((now - timedelta(seconds=LEASE_S)).replace(microsecond=0))
+    got = await asyncio.to_thread(_set, b, seen, {"pinging_at": lease}, "payload,headers",
+                                  free_before=free_before)
+    if got is None:
+        logger.warning("keep-warm biz=%s: could not hold the row; the next look tries again", b[:8])
+        return "error"
     if not got:
         return "taken"
     try:
         ping = json.loads(got.get("payload") or "")
     except (TypeError, ValueError):
         ping = None
-    if not isinstance(ping, dict):
-        await asyncio.to_thread(_set, b, claimed_at, {"stopped_at": _iso(now), "stopped_reason": "refused"})
-        return "refused"
-    outcome = await send_ping(b, ping, got.get("headers") or {})
+    outcome = await send_ping(b, ping, got.get("headers") or {}) if isinstance(ping, dict) else "refused"
     if outcome == "read":
+        body = {"touched_at": lease, "pings": int(row.get("pings") or 0) + 1, "pinging_at": None}
+        if await asyncio.to_thread(_set, b, seen, body, lease=lease) is None:
+            # The copy was read; the row still has the older use, so the next
+            # look pings early. Never late.
+            logger.warning("keep-warm biz=%s: the read was not noted; the next ping comes early", b[:8])
         return "read"
     if outcome == "busy":
-        # Put the last use back, so the next look tries once more while the
-        # copy lasts (LATE_S ends the chain if the API stays busy).
-        await asyncio.to_thread(_set, b, claimed_at, {"touched_at": row["touched_at"], "pings": pings})
+        # Let go, so the next look tries once more while the copy lasts
+        # (LATE_S ends the chain if the API stays busy). If this fails, the
+        # hold runs out by itself.
+        if await asyncio.to_thread(_set, b, seen, {"pinging_at": None}, lease=lease) is None:
+            logger.warning("keep-warm biz=%s: could not let go; the hold runs out in %ds", b[:8], LEASE_S)
         return "busy"
-    await asyncio.to_thread(_set, b, claimed_at, {"stopped_at": _iso(datetime.now(timezone.utc)),
-                                                  "stopped_reason": outcome})
+    stop = {"stopped_at": _iso(datetime.now(timezone.utc)), "stopped_reason": outcome, "pinging_at": None}
+    if await asyncio.to_thread(_set, b, seen, stop, lease=lease) is None:
+        logger.warning("keep-warm biz=%s: could not end the chain (%s); the next look tries again",
+                       b[:8], outcome)
     return outcome
 
 
@@ -461,7 +493,10 @@ async def tick() -> Dict[str, int]:
         rows = await asyncio.to_thread(_due, now)
     except Exception as e:
         logger.warning("keep-warm tick: read failed (%s)", type(e).__name__)
-        return counts
+        rows = None
+    if rows is None:
+        logger.warning("keep-warm tick: could not read the due copies; the next look tries again")
+        return {"unread": 1}
     gate = asyncio.Semaphore(_PARALLEL)
 
     async def one(row: Dict[str, Any]) -> str:
