@@ -4,7 +4,7 @@ date: 2026-11-05
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-11-03: approved step 2 (design 4V41zJz1kEJGdeo4J9D2Ym, "Your two ideas"), decision 1: Chief changes the map at once when the owner or an admin asks, with Undo; its own idea waits'
 status: in progress
-prs: []
+prs: [kmj-intake-server#1729]
 migrations: [supabase/APPLY-2026-11-05-church-map-step2.sql (applied 2026-11-03, B2)]
 left_undone:
   - "B6: ask_into_role (class C, it sends an email)"
