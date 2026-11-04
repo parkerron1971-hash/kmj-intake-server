@@ -235,7 +235,8 @@ def test_names_resolve_exactly_holders_first_or_nothing_changes(db):
     # Riverside holds no roles: its people, by a first name only one has, on a draft.
     out = ok(run(db, "change_map", {"changes": [{"kind": "department", "name": "Youth", "status": "draft",
                                                  "area": "Kids & youth", "leader": "Henry"}]}, RV))
-    assert out["result"].startswith("Changed the leaders map. Made Youth as a draft.")
+    assert out["result"].startswith("Changed the leaders map. Made Youth as a draft: leader Henry Dawson; area Kids & "
+                                    "youth."), "every field it sets (#1731 review)"
     d = next(d for d in db.t["church_departments"] if d["business_id"] == RV)
     assert (d["leader_contact_id"], d["area"], d["source"]) == (db.who[RV]["henry"], "kids_youth", "chief")
 
@@ -370,6 +371,28 @@ def test_a_change_whose_record_didnt_save_is_made_and_promises_no_undo(db, monke
     out = ok(run(db, "adopt_template", {"kind": "role", "key": "any.media_lead"}, LC))
     assert out["result"].endswith("Their record didn’t save, so Undo can’t take them out: remove the drafts in "
                                   "Leaders & roles.") and ai.build_inverse("adopt_template", {}, out) is None
+
+
+def test_a_waiting_change_whose_mark_didnt_save_promises_no_undo_until_it_reads_made(db, monkeypatch):
+    """#1729 review: apply_pending made it, but marking it applied failed, so it still reads waiting."""
+    import action_inverse as ai
+    idea = ok(run(db, "change_map", {"stage": True, "changes": [
+        {"kind": "role", "role": "Youth Minister", "can_oversee": True}]}, GRACE))
+    real = db.patch
+    monkeypatch.setattr(sb_clients, "sb_patch_as_service", lambda path, body, **k: None if path.startswith(
+        "/church_map_changes") else real(path, body, **k))
+    made = ok(run(db, "apply_map_change", {"change_id": idea["change_id"]}, GRACE))
+    assert made["result"].endswith(chm.UNMARKED) and "Undo puts it back" not in made["result"]
+    assert made["changed"] and "change_id" not in made and ai.build_inverse("apply_map_change", {}, made) is None
+    assert role_row(db, "youth_minister", GRACE)["can_oversee"] is True, "it was made"
+    assert run(db, "undo_map_change", {"change_id": idea["change_id"]}, GRACE)["result"] == \
+        "Failed: Only a change that was made can be put back.", "which is why no Undo was promised"
+    monkeypatch.setattr(sb_clients, "sb_patch_as_service", real)
+    again = ok(run(db, "apply_map_change", {"change_id": idea["change_id"]}, GRACE))
+    assert again["result"].endswith("Undo puts it back.") and again["change_id"] == idea["change_id"]
+    assert [c["status"] for c in changes(db, GRACE)] == ["applied"], "applying it again only marked it"
+    undo(db, again, GRACE)
+    assert not role_row(db, "youth_minister", GRACE)["can_oversee"]
 
 
 def test_finishing_an_undo_promises_no_undo_of_it(db, monkeypatch):

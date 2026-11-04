@@ -557,6 +557,28 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
     "adopt_template": {**_w("A", "copies a ready-made role, ministry or whole-church shape into a church as drafts "
                                  "that route nothing, in one change undo_map_change takes back out; what it would "
                                  "change on a live role only waits for a yes"), "chief_only": True},
+    # Is this right? (Kevin, 2026-11-03, "yes to both, build it"; church_map_asks): an office login checks
+    # its work, and what it says is wrong goes to the owner and the admins for a yes. Each needs the
+    # signed-in person, so Chief's alone. Nothing an office login says makes anything.
+    "my_work": {**_r("reads the signed-in office login's own work: its seat, areas, duties, departments, roles, who "
+                     "it answers to and its suggestions waiting. Staff names, read for the signed-in person",
+                     sensitive=True), "chief_only": True},
+    "confirm_my_work": {**_w("A", "records that an office login said its work is right; changes nothing else"),
+                        "chief_only": True},
+    "suggest_work_change": {**_w("A", "saves an office login's correction, in their words, with a change to the "
+                                      "leaders map or a duty move that only waits for the owner's or an admin's "
+                                      "yes; nothing is made"), "chief_only": True},
+    "note_gap": {**_w("A", "puts something nobody seems to do on the owner's and admins' list; the same words "
+                           "within a week join the one already there"), "chief_only": True},
+    "list_asks": {**_r("reads what a church's office logins suggested, waiting for a yes, with their words quoted. "
+                       "Staff names and their words, read for the owner or an admin", sensitive=True),
+                  "chief_only": True},
+    "answer_ask": {**_w("A", "says yes to (makes), marks done or lets go of one office suggestion, through the map's "
+                             "change log and the duties page's own move (owner or admin; money the owner's); "
+                             "undo_ask puts what it made back"), "chief_only": True},
+    "undo_ask": {**_w("A", "puts back what saying yes to an office suggestion made, both parts: its map change "
+                           "(undo_map_change's own) and its duty move (undo_duty's own), each with its own seats"),
+                 "chief_only": True},
     # Bills step 2: a bill matched to the bank payment that paid it, so it counts once.
     "match_bill_payment": {**_w("A", "matches owed bills to the bank payments that paid them (the ones the owner "
                                      "confirmed, or only the plain ones); the bills read paid and count once in the "
