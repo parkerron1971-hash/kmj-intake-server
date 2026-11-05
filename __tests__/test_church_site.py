@@ -500,3 +500,11 @@ def test_the_faq_says_what_a_text_is(monkeypatch):
     monkeypatch.setenv("LIMIT_CHURCH_SMALL_TEXTS", "600")
     assert "600 on Small" in mp.render_faq()
     assert brand_voice.offenses(mp.render_faq()) == []
+
+
+def test_the_kids_cards_carry_their_own_dark_text():
+    """2026-11-04: the pickup mock's white cards inherited the dark section's white text, so names and the
+    leader's note read as blank. The card and the note set their own ink."""
+    page = cs.render("kids-and-youth")
+    assert re.search(r"\.k-card\{[^}]*background:#ffffff;color:#2b1d0e", page)
+    assert 'background: #fff3d6; color: #5c3d00' in page
