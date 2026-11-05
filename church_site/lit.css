@@ -33,8 +33,8 @@
 .lit-status{display:flex;justify-content:space-between;align-items:center;padding:15px 26px 0;font-size:13px;font-weight:600;height:30px}
 .lit-status i{display:inline-block;width:22px;height:11px;border-radius:3px;border:1.4px solid currentColor;position:relative}
 .lit-status i::after{content:"";position:absolute;inset:1.5px 4px 1.5px 1.5px;background:currentColor;border-radius:1px}
-.lit-tabs{position:absolute;left:0;right:0;bottom:0;display:flex;justify-content:space-around;padding:10px 8px 22px;border-top:1px solid #16181d;background:rgba(0,0,0,.92);font-size:10.5px;color:#7d828d;z-index:6}
-.lit-screen.lt .lit-tabs{background:rgba(251,248,241,.95);border-top-color:#ece6d8}
+.lit-tabs{position:absolute;left:0;right:0;bottom:0;display:flex;justify-content:space-around;padding:10px 8px 22px;border-top:1px solid #16181d;background:#000;font-size:10.5px;color:#7d828d;z-index:6}
+.lit-screen.lt .lit-tabs{background:#FBF8F1;border-top-color:#ece6d8}
 .lit-tabs span{display:flex;flex-direction:column;align-items:center;gap:4px}
 .lit-tabs span.on{color:var(--tab,#7CB0FF)}
 .lit-tabs svg{width:20px;height:20px}
