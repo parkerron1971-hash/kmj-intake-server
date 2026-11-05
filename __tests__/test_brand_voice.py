@@ -132,7 +132,8 @@ def test_an_edition_is_the_home_with_its_own_first_screen(key, first, trades):
     assert "Every problem</span>" not in html                        # the home's first screen is gone
     assert '<div class="wrap ticker" hidden role="group"' in html    # the list of every kind is the home's
     assert "const run = !ED && " in html                             # and it stays on its own kind
-    assert 'href="/">See every kind of business' in html             # and the way back to it is there
+    import church_site                                               # and the way back to it is there:
+    assert f'href="{church_site.business_path()}">See every kind of business' in html   # /business while / is churches
     assert "Every problem has a solution." in html                   # the brand line stays in the footer
     word = re.search(r"\{ id: '" + trades[0] + r"', chip: '[^']*', word: '([^']*)'", html).group(1)
     assert f'<span class="tell-typed" id="typed">{word}</span>' in html

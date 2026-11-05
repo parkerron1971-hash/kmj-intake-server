@@ -7965,6 +7965,8 @@ async def public_sitemap(request: Request):
     entries = [(origin + p, pri) for p, pri in _MARKETING_SITEMAP_PATHS]
     import church_site
     import coach_site
+    if church_site.is_home():       # the business home has its own address only while / is the church page
+        entries.append((origin + church_site.BUSINESS_PATH, "0.8"))
     if church_site.enabled():
         entries.extend((origin + church_site.path_of(s), "0.8") for s in church_site.PRODUCTS)
     if coach_site.enabled():
@@ -8008,6 +8010,14 @@ async def public_about(request: Request):
 # instead: an overview and seven product pages, each lit in its own colour.
 # COACH_SITE (coach_site.py) does the same for coaches and consultants;
 # /consultants serves the same overview, whose canonical link is /coaches.
+#
+# /business (2026-11-04): / is the church overview, so the page for every kind
+# of business (barbers, law, contracting, coaches) has its own address
+# (marketing_pages.render_business).
+@router.get("/business", include_in_schema=False)
+async def public_business_home(request: Request):
+    return await _platform_page_or_site(request, marketing_pages.render_business)
+
 @router.get("/churches", include_in_schema=False)
 async def public_edition_churches(request: Request):
     import church_site

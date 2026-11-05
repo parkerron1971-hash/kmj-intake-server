@@ -2645,6 +2645,19 @@ def render_home() -> str:
     return marketing_home_v3.render_home_v3()
 
 
+def render_business() -> str:
+    """The business home by its own address, mysolutionist.app/business (2026-11-04). While the church
+    overview is the home (church_site.is_home) this page's canonical and og:url are /business; with a
+    business home back at / (HOME_EDITION=v3 or v2) /business is the same page and points search to /."""
+    page = render_home()
+    import church_site
+    if church_site.is_home():
+        url = "https://mysolutionist.app" + church_site.BUSINESS_PATH
+        page = page.replace('<link rel="canonical" href="https://mysolutionist.app/">', f'<link rel="canonical" href="{url}">')
+        page = page.replace('<meta property="og:url" content="https://mysolutionist.app/">', f'<meta property="og:url" content="{url}">')
+    return page
+
+
 def render_home_v1() -> str:
     #      1. blue leads (see :root) — the ember/brass pass read purple-
     #         adjacent to him and he asked to flip the original palette

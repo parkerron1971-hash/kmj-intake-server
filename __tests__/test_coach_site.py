@@ -37,6 +37,8 @@ import marketing_pages as mp  # noqa: E402
 def _defaults(monkeypatch):
     import stripe_billing
     monkeypatch.delenv("COACH_SITE", raising=False)
+    monkeypatch.delenv("HOME_EDITION", raising=False)
+    monkeypatch.delenv("CHURCH_SITE", raising=False)
     monkeypatch.setitem(mp._FOUNDER_CACHE, "taken", None)
     monkeypatch.setitem(mp._FOUNDER_CACHE, "at", 0.0)
     monkeypatch.setattr(stripe_billing, "_founder_price_ids", lambda: [])
@@ -198,9 +200,13 @@ def test_every_page_has_the_products_menu_with_every_page():
         assert [p for p, here in links if here] == [path], path            # this page marked
 
 
-def test_the_pages_lead_to_the_churches_and_back_to_the_main_site():
+def test_the_pages_lead_to_the_churches_and_back_to_the_main_site(monkeypatch):
+    # / is the church page (2026-11-04), so the main site for a coach is the business home at /business
     for path, html in _all().items():
-        assert 'href="https://mysolutionist.app/churches"' in html and 'href="https://mysolutionist.app/"' in html, path
+        assert 'href="https://mysolutionist.app/churches"' in html and 'href="https://mysolutionist.app/business"' in html, path
+    monkeypatch.setenv("HOME_EDITION", "v3")                                # a business home back at /
+    for path, html in _all().items():
+        assert 'href="https://mysolutionist.app/"' in html, path
 
 
 # ─── 4. the routes ──────────────────────────────────────────────────

@@ -99,14 +99,77 @@ def test_one_address_for_the_overview(monkeypatch):
 
 
 def test_no_link_leads_back_to_the_page_it_is_on(monkeypatch):
-    for slug in cs.PRODUCTS:
-        assert "All of Solutionist" not in cs.render(slug), slug
+    for slug in cs.PRODUCTS:                                                     # the business home, by its own address
+        assert '<a href="https://mysolutionist.app/business">All of Solutionist</a>' in cs.render(slug), slug
     overview = cs.render("")
     assert "All of Solutionist" not in overview and "Solutionist home" not in overview
     assert 'href="https://mysolutionist.app/coaches"' in overview                 # the coaches door, in the strip
     monkeypatch.setenv("HOME_EDITION", "v3")
-    for slug in cs.PRODUCTS:
-        assert "All of Solutionist" in cs.render(slug), slug                     # back while / is the business home
+    for slug in cs.PRODUCTS:                                                     # / while / is the business home
+        assert '<a href="https://mysolutionist.app/">All of Solutionist</a>' in cs.render(slug), slug
+
+
+# ─── 1b. the business home at /business ─────────────────────────────
+
+def _ps():
+    try:
+        import public_site as ps
+    except ImportError as e:
+        pytest.skip(f"public_site needs {e.name}")
+    return ps
+
+
+def _get(ps, route, path):
+    from starlette.requests import Request
+    req = Request({"type": "http", "method": "GET", "path": path, "query_string": b"",
+                   "headers": [(b"host", b"mysolutionist.app")]})
+    return asyncio.run(route(req)).body.decode()
+
+
+def test_the_business_home_has_its_own_address(monkeypatch):
+    ps = _ps()
+    page = _get(ps, ps.public_business_home, "/business")
+    assert "Every problem" in page and "Many pieces." not in page
+    assert '<link rel="canonical" href="https://mysolutionist.app/business">' in page
+    assert '<meta property="og:url" content="https://mysolutionist.app/business">' in page
+    assert 'href="https://mysolutionist.app/">' not in page                    # nothing in it points search at /
+    monkeypatch.setenv("HOME_EDITION", "v3")                                    # rolled back: / is this page again
+    page = _get(ps, ps.public_business_home, "/business")
+    assert page == mp.render_home() and '<link rel="canonical" href="https://mysolutionist.app/">' in page
+
+
+def test_the_business_route_is_ahead_of_the_catch_all():
+    ps = _ps()
+    paths = [getattr(r, "path", "") for r in ps.router.routes]
+    assert "/business" in paths and paths.index("/business") < paths.index("/{path:path}")
+
+
+def test_the_coach_pages_lead_to_the_business_home(monkeypatch):
+    import coach_site
+    for slug in coach_site.PAGES:
+        page = coach_site.render(slug)
+        assert 'href="https://mysolutionist.app/"' not in page, slug            # not the church page
+        assert page.count('href="https://mysolutionist.app/business"') == 3, slug  # strip, footer twice
+    monkeypatch.setenv("HOME_EDITION", "v3")
+    assert 'href="https://mysolutionist.app/business"' not in coach_site.render("")
+
+
+def test_the_sitemap_lists_business_only_while_the_church_page_is_home(monkeypatch):
+    ps = _ps()
+
+    async def no_news():
+        return []
+    monkeypatch.setattr(ps, "_platform_news_posts", no_news)
+    assert "https://mysolutionist.app/business</loc>" in _get(ps, ps.public_sitemap, "/sitemap.xml")
+    monkeypatch.setenv("HOME_EDITION", "v3")
+    assert "/business</loc>" not in _get(ps, ps.public_sitemap, "/sitemap.xml")
+
+
+def test_an_edition_sends_every_kind_of_business_to_the_business_home(monkeypatch):
+    import marketing_home_v3
+    assert f'href="/business">See every kind of business' in marketing_home_v3.render_edition("coaches")
+    monkeypatch.setenv("HOME_EDITION", "v3")
+    assert 'href="/">See every kind of business' in marketing_home_v3.render_edition("coaches")
 
 
 # ─── 2. the approved design, and only it ────────────────────────────
