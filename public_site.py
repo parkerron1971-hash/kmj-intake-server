@@ -7365,9 +7365,14 @@ async def subdomain_root(request: Request):
     if _is_api_host(host):
         raise HTTPException(404, "Not found")
 
-    # Known base domain with no subdomain — serve the new multi-page
-    # home (from marketing_pages.py). The legacy MARKETING_HTML
-    # constant stays defined for reference but is no longer served.
+    # Known base domain with no subdomain: the front door. Since 2026-11-04
+    # that's the church overview (church_site.is_home; churches first, coaches
+    # through the strip). HOME_EDITION=v3 or v2 puts the business home back
+    # (marketing_pages.render_home). The legacy MARKETING_HTML constant stays
+    # defined for reference but is no longer served.
+    import church_site
+    if church_site.is_home():
+        return HTMLResponse(content=church_site.render(""), media_type="text/html")
     from marketing_pages import render_home
     return HTMLResponse(content=render_home(), media_type="text/html")
 

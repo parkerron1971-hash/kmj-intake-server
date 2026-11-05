@@ -34,6 +34,19 @@ On by default since 2026-10-23 (Kevin: "I should be able to get to
 churches page and any other page from mysolutionist.app"). CHURCH_SITE=off
 is the rollback: /churches goes back to marketing_home_v3's church edition
 and the product paths fall through to the catch-all as before.
+
+The church page is the front door (2026-11-04). Kevin narrowed Solutionist
+to churches first, then approved the church-first mock
+(claude.ai/artifact/CgBg3zVjHSQ2EFgaZyHdUy): "this design will work for
+now. build it and merge it." mysolutionist.app/ now serves the overview
+(is_home), with the Sunday Light hero ("Many pieces. One light."), Why
+Solutionist exists (grow, belong, serve; the mission and the vision), a week
+at a sample church, the move, and the size picker. Its new parts' style and
+behaviour sit beside the template in overview.css and overview.js.
+HOME_EDITION=v3 (or v2) is the rollback, a Railway value rather than a
+deploy: / goes back to the business home, and the church page stays at
+/churches. The picker's plans, the move's offer and the hero's "priced by
+the size of your Sunday" come from the same dials as the cards.
 """
 from __future__ import annotations
 
@@ -110,6 +123,17 @@ _CHURCHSAVVY_LINK = re.compile(r'<a href="\{\{CHURCHSAVVY_URL\}\}"[^>]*>.*?</a>\
 
 def enabled() -> bool:
     return (os.environ.get("CHURCH_SITE") or "on").strip().lower() not in ("off", "0", "false", "no")
+
+
+def is_home() -> bool:
+    """Whether mysolutionist.app/ is the church overview: unless HOME_EDITION
+    names one of the business homes (v3, v2), and while the section is on."""
+    edition = (os.environ.get("HOME_EDITION") or "").strip().lower()
+    return enabled() and edition in ("", "churches")
+
+
+# The product pages' strip link to the business home: with the church page at /, it would lead back here.
+_ALL_OF_SOLUTIONIST = re.compile(r'<a href="\{\{HOME\}\}/"[^>]*>All of Solutionist</a>\s*')
 
 
 def path_of(slug: str) -> str:
@@ -370,6 +394,100 @@ def _plan_strip() -> str:
     return '<div class="planrow four">\n' + "\n".join(out) + "\n</div>"
 
 
+# The picker's slider, 0 to 1,000: one even stretch per plan, the last one stopping short so the
+# top of the track is the church past the largest plan. Its colours are the four cards' rooms.
+_PICK_COLOURS = ("#14B8A6", "#22C55E", "#3B82F6", "#EC4899")
+_PICK_START = 160          # the size the picker opens on: a Growing church
+
+
+def _picker_data() -> Dict[str, object]:
+    """What the size picker draws, from the dials the cards read: each plan's
+    people band, its price a month and a year, and what it holds (the same
+    lines as the cards: logins, texts, messages to Chief, sermon clips). Past
+    the largest band is Multi-site, priced from church_offer()."""
+    import feature_gates as fg
+    import marketing_pages as mp
+    import pricing_config
+    plans = fg.CHURCH_PLANS
+    prices = pricing_config.church_price_cents()
+    credits = pricing_config.church_credits()
+    bands = pricing_config.church_size_bands()
+    lim = fg.plan_limits()
+    per_turn = pricing_config.credits_per_message()
+    top = max(h for (_low, h) in bands.values() if h is not None)
+    n = len(plans)
+    stops = [round(i * 1000 / n) for i in range(n)] + [980]
+    out, seg, marks = [], [], []
+    for i, plan in enumerate(plans):
+        low, high = bands[plan]
+        high = high if high is not None else top
+        lp = lim[plan]
+        conv = f"{mp._about(credits[plan] // per_turn):,}"
+        out.append({
+            "name": _name(plan), "short": _short(plan), "max": high,
+            "m": f"${_dollars(prices[plan])}", "y": f"${_dollars(prices[plan] * mp.ANNUAL_MONTHS)}",
+            "col": _PICK_COLOURS[min(i, len(_PICK_COLOURS) - 1)],
+            "items": [_count(lp["max_seats"], "office login"), _count(lp["texts_monthly"], "text") + " a month",
+                      f"About {conv} messages to Chief", _clips(lp["clip_hours_monthly"])],
+        })
+        seg.append([stops[i], stops[i + 1], max(20, low) if i == 0 else low, high])
+        marks.append(f"Up to {high:,}" if not low else f"{low:,} to {high:,}")
+    o = pricing_config.church_offer()
+    multi = {"name": "Multi-site", "price": f"From ${_dollars(o['multi_site_from_cents'])}", "per": "a month",
+             "items": [f"Over {top:,} people, or more than one campus", "Talk to us: info@mysolutionist.app"]}
+    return {"plans": out, "seg": seg, "top": top, "multi": multi, "marks": marks}
+
+
+def _picker() -> str:
+    """How many on a Sunday: drag the number, the sanctuary fills seat by
+    seat, and the matching card below lights up. The page opens on a Growing
+    church; the script takes it from there with the same numbers."""
+    import json
+    d = _picker_data()
+    start = next((p for p in d["plans"] if _PICK_START <= p["max"]), d["plans"][-1])
+    marks = "".join(f"<span>{escape(m)}</span>" for m in d["marks"])
+    items = "".join(f"<li>{escape(x)}</li>" for x in start["items"])
+    data = json.dumps({k: d[k] for k in ("plans", "seg", "top", "multi")}).replace("</", "<\\/")
+    return (
+        '<div style="position: relative; display: flex; flex-direction: column; gap: 14px">\n'
+        '<div class="pk" id="picker">\n<div class="pk-l">\n'
+        '<label for="pk-range">How many on a Sunday?</label>\n'
+        f'<div class="pk-num"><output id="pk-out" for="pk-range">{_PICK_START}</output><span id="pk-unit">people</span></div>\n'
+        '<input type="range" id="pk-range" min="0" max="1000" step="1" value="380" aria-describedby="pk-plan">\n'
+        f'<div class="pk-marks" aria-hidden="true">{marks}</div>\n'
+        '<div class="pk-plan" id="pk-plan" aria-live="polite">\n'
+        f'<div class="top"><span class="nm" id="pk-name">{escape(start["name"])}</span>'
+        f'<span class="pr"><b id="pk-price">{escape(start["m"])}</b><span id="pk-per">a month</span></span></div>\n'
+        f'<ul id="pk-list">{items}</ul>\n'
+        f'<a id="pk-go" href="{{{{HOME}}}}/start">Start free on {escape(start["short"])}</a>\n'
+        '</div>\n</div>\n<div class="pk-room">\n'
+        '<canvas id="pk-canvas" aria-label="A sanctuary drawn as seats. Lit seats are your people on a Sunday; '
+        'the room is the size of your plan."></canvas>\n'
+        f'<div class="pk-cap"><span id="pk-cap"><b>{escape(start["name"])}</b> · room for {start["max"]:,}</span>'
+        '<span>One dot is one person</span></div>\n'
+        '</div>\n</div>\n'
+        f'<script type="application/json" id="pk-data">{data}</script>\n'
+        '</div>')
+
+
+def _move_tokens() -> Dict[str, str]:
+    """The move's offer, in the moving-over section's words, from
+    pricing_config.church_offer(): how many churches move free (one glass
+    pane each, up to five), and what the move costs after them."""
+    import pricing_config
+    o = pricing_config.church_offer()
+    months, moves = o["move_months"], o["founding_moves"]
+    cost = f"{_words(months)} month{'' if months == 1 else 's'} of your plan, paid once"
+    if moves and months:
+        free = "The first church moves free." if moves == 1 else f"The first {_words(moves)} churches move free."
+        after = f"After that, the move is {cost}. Either way, people do it with you."
+    elif months:
+        free, after = f"The move is {cost}.", "People do it with you, by hand."
+    else:
+        free, after = "Moving over is free.", "People do it with you, by hand."
+    return {"MOVE_FREE": free, "MOVE_AFTER": after, "MOVE_PANES": "<i></i>" * min(moves, 5)}
+
+
 def _by_size() -> Dict[str, str]:
     """Every section's words once the church plans are on sale. The prose
     that says 'every plan' is held to feature_gates by the tests."""
@@ -387,7 +505,10 @@ def _by_size() -> Dict[str, str]:
     funds = _on("vertical_ledgers")
     accountant = _on("accountant_collaborator")
     return {
-        # overview
+        # overview: the hero and the size picker say "by size" only while the plans by size are on sale
+        "HERO_KICK": "For churches, priced by the size of your Sunday",
+        "PROOF_SIZE": "Priced by your size",
+        "PICKER": _picker(),
         "PRICING_H2": 'Priced by <b style="font-weight: 600">your church\'s size.</b>',
         "PRICING_LEDE": ("Every part of church life comes with every plan. Your plan is set by how many people come "
                          "on a Sunday, and it sets the room: office logins, texts, Chief's work and sermon clips. "
@@ -436,10 +557,14 @@ def render(slug: str) -> str:
     partner = (os.environ.get("CHURCHSAVVY_URL") or "").strip()
     if not partner.startswith("https://"):
         page = _CHURCHSAVVY_LINK.sub("", page)
+    home = is_home()
+    if home and slug:
+        page = _ALL_OF_SOLUTIONIST.sub("", page)
     tokens = {
         "TITLE": escape(meta["title"]),
         "DESCRIPTION": escape(meta["description"]),
-        "URL": ORIGIN + path_of(slug),
+        # the overview is the home page while is_home(): one address for search, wherever it's served
+        "URL": ORIGIN + ("/" if home and not slug else path_of(slug)),
         # the main site, always by its own address: these pages may one day
         # be served from a church's own domain, where "/" is not Solutionist
         "HOME": ORIGIN,
@@ -451,6 +576,11 @@ def render(slug: str) -> str:
     }
     if "{{FOUNDER_STRIP}}" in page:
         tokens["FOUNDER_STRIP"] = _founder_strip()
+    if "{{OVERVIEW_CSS}}" in page:
+        tokens["OVERVIEW_CSS"] = _read("overview.css")
+        tokens["OVERVIEW_JS"] = _read("overview.js")
+    if "{{MOVE_FREE}}" in page:
+        tokens.update(_move_tokens())
     tokens["PIXEL"] = mp._pixel_script()
     tokens["ANALYTICS"] = v2._analytics_scripts()
     return _TOKEN.sub(lambda m: tokens.get(m.group(0)[2:-2], m.group(0)), page)

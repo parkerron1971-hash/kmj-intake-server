@@ -41,6 +41,7 @@ import marketing_pages as mp  # noqa: E402
 def _defaults(monkeypatch):
     import stripe_billing
     monkeypatch.setenv("CHURCH_SITE", "on")
+    monkeypatch.delenv("HOME_EDITION", raising=False)
     monkeypatch.delenv("CHURCHSAVVY_URL", raising=False)
     monkeypatch.delenv("PLAN_CHURCH_OFFERED", raising=False)
     monkeypatch.delenv("CHURCH_OFFERED", raising=False)
@@ -63,7 +64,8 @@ def test_every_page_fills_every_token_and_drops_the_canvas():
                          'href="#signin"', 'href="#founder"', "data-dc-script"):
             assert leftover not in html, (path, leftover)
         assert '<meta name="viewport" content="width=device-width,initial-scale=1.0">' in html, path
-        assert f'<link rel="canonical" href="https://mysolutionist.app{path}">' in html, path
+        canon = "/" if path == "/churches" else path            # the overview is the home page (is_home)
+        assert f'<link rel="canonical" href="https://mysolutionist.app{canon}">' in html, path
         assert html.count("<title>") == 1 and "Solutionist for Churches" in html, path
 
 
@@ -88,7 +90,7 @@ def test_the_billing_switch_parses():
     if not shutil.which("node"):
         pytest.skip("node is not installed")
     html = cs.render("")
-    js = [s for s in re.findall(r"<script>(.*?)</script>", html, flags=re.S) if "data-billing" in s]
+    js = [s for s in re.findall(r"<script>(.*?)</script>", html, flags=re.S) if "/* the billing switch" in s]
     assert len(js) == 1
     res = subprocess.run(["node", "--check", "-"], input=js[0], capture_output=True, encoding="utf-8", timeout=30)
     assert res.returncode == 0, res.stderr
