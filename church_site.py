@@ -47,6 +47,15 @@ HOME_EDITION=v3 (or v2) is the rollback, a Railway value rather than a
 deploy: / goes back to the business home, and the church page stays at
 /churches. The picker's plans, the move's offer and the hero's "priced by
 the size of your Sunday" come from the same dials as the cards.
+
+The product pages become lit rooms (2026-11-05), Giving first. Kevin, on the
+Giving mock (claude.ai/artifact/NHKdhA7FbSsaaR788at2Zn): "the design is good!
+love it. let's build it". A lit room carries {{LIT_CSS}} / {{LIT_JS}} (the
+shared kit in lit.css and lit.js: devices at a size people can read, the
+room's own stained glass and light, a sticky story in steps, the ring a
+finger leaves) and {{ROOM_CSS}} / {{ROOM_JS}} (its own parts, beside its
+template: giving.css, giving.js). Every sample on a lit room is labeled or
+plainly a sample church; every claim is one the page already made.
 """
 from __future__ import annotations
 
@@ -590,6 +599,11 @@ def render(slug: str) -> str:
     if "{{OVERVIEW_CSS}}" in page:
         tokens["OVERVIEW_CSS"] = _read("overview.css")
         tokens["OVERVIEW_JS"] = _read("overview.js")
+    if "{{LIT_CSS}}" in page:
+        # a lit room: the shared kit, then the room's own parts beside its template (giving.css, giving.js)
+        room = meta["file"].rsplit(".", 1)[0]
+        tokens.update(LIT_CSS=_read("lit.css"), LIT_JS=_read("lit.js"),
+                      ROOM_CSS=_read(room + ".css"), ROOM_JS=_read(room + ".js"))
     if "{{MOVE_FREE}}" in page:
         tokens.update(_move_tokens())
     tokens["PIXEL"] = mp._pixel_script()

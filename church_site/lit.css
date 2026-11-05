@@ -1,0 +1,140 @@
+/* lit.css: the lit rooms kit shared by every church product page (2026-11-04).
+   Devices people can read, the room's own stained glass and light, a sticky story, and the ring a finger leaves.
+   Colours come from the page root (--p, --pl, --pd, --pg; --p2 and --p3 tint the glass), so one kit lights every room. */
+.pg{overflow:visible!important;overflow-x:clip!important}   /* hidden would make .pg a scroller and stop sticky */
+.lit{--p2:#2DD4BF;--p3:#F5C451;--mut:#A9AEB9}
+.lit-sec{position:relative;padding:130px 0}
+.lit-dark{background:#07080B;color:#F5F6F8}
+.lit-deep{background:radial-gradient(90% 70% at 85% 10%,color-mix(in srgb,var(--p) 11%,transparent),transparent 60%),#06080a;color:#F5F6F8}
+.lit-paper{background:#F7F6F3;color:#0B0C11}
+.lit-paper .body,.lit-paper .lede{color:#5A5E6B}
+.lit-head{display:grid;grid-template-columns:1.1fr .9fr;gap:24px 60px;align-items:end;margin-bottom:70px}
+.lit-head .lede{max-width:520px}
+.lit-split{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:60px;align-items:center}
+.lit-list{list-style:none;margin:28px 0 0;padding:0;display:grid;gap:12px}
+.lit-list li{display:flex;gap:12px;align-items:flex-start;font-size:16px;line-height:1.5}
+.lit-list svg{flex:none;margin-top:4px}
+.lit-dark .lit-list li,.lit-deep .lit-list li{color:#E4E6EB}
+.lit-paper .lit-list li{color:#1b1d24}
+.lit-sample{font:500 11px 'JetBrains Mono',monospace;letter-spacing:.12em;color:#9aa0ab;text-transform:uppercase}
+
+/* ── devices ─────────────────────────────────────────────── */
+.lit-phone{position:relative;width:300px;aspect-ratio:300/640;border-radius:54px;padding:11px;flex:none;
+  background:linear-gradient(150deg,#5b5f68 0%,#1b1c20 18%,#0c0d10 50%,#24262c 78%,#6a6e78 100%);
+  box-shadow:inset 0 0 0 1.5px rgba(255,255,255,.22),inset 0 0 0 5px #050506,0 1px 0 rgba(255,255,255,.08),
+    0 50px 90px -30px rgba(0,0,0,.85),0 22px 40px -18px rgba(0,0,0,.7)}
+.lit-phone::before{content:"";position:absolute;right:-3px;top:150px;width:3px;height:74px;border-radius:0 3px 3px 0;background:linear-gradient(#4a4d55,#2a2c31)}
+.lit-phone::after{content:"";position:absolute;left:-3px;top:120px;width:3px;height:44px;border-radius:3px 0 0 3px;background:#3a3d44;box-shadow:0 62px 0 #3a3d44}
+.lit-screen{position:relative;height:100%;border-radius:44px;overflow:hidden;background:#000;color:#F5F6F8;font-family:Inter,system-ui,sans-serif;isolation:isolate}
+.lit-screen.lt{background:#FBF8F1;color:#16171c}
+.lit-screen::after{content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;z-index:20;
+  background:linear-gradient(118deg,rgba(255,255,255,.13) 0%,rgba(255,255,255,.03) 26%,transparent 40%)}
+.lit-island{position:absolute;top:11px;left:50%;transform:translateX(-50%);width:96px;height:28px;border-radius:20px;background:#000;z-index:21}
+.lit-status{display:flex;justify-content:space-between;align-items:center;padding:15px 26px 0;font-size:13px;font-weight:600;height:30px}
+.lit-status i{display:inline-block;width:22px;height:11px;border-radius:3px;border:1.4px solid currentColor;position:relative}
+.lit-status i::after{content:"";position:absolute;inset:1.5px 4px 1.5px 1.5px;background:currentColor;border-radius:1px}
+.lit-tabs{position:absolute;left:0;right:0;bottom:0;display:flex;justify-content:space-around;padding:10px 8px 22px;border-top:1px solid #16181d;background:#000;font-size:10.5px;color:#7d828d;z-index:6}
+.lit-screen.lt .lit-tabs{background:#FBF8F1;border-top-color:#ece6d8}
+.lit-tabs span{display:flex;flex-direction:column;align-items:center;gap:4px}
+.lit-tabs span.on{color:var(--tab,#7CB0FF)}
+.lit-tabs svg{width:20px;height:20px}
+.lit-win{position:relative;border-radius:18px;background:#0D0F14;border:1px solid rgba(255,255,255,.09);overflow:hidden;font-family:Inter,system-ui,sans-serif;color:#F5F6F8;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.06),0 50px 100px -40px rgba(0,0,0,.9),0 24px 50px -24px rgba(0,0,0,.7)}
+.lit-bar{display:flex;align-items:center;gap:8px;padding:12px 16px;border-bottom:1px solid rgba(255,255,255,.07);background:linear-gradient(#12151b,#0f1116);font-size:13px;color:#C9CDD6}
+.lit-bar i{width:11px;height:11px;border-radius:50%;background:#2a2d35}
+.lit-bar i:nth-child(1){background:#3b3f48}
+.lit-bar span{margin-left:10px;font-weight:600;color:#F5F6F8}
+.lit-pill{margin-left:auto;font-size:12px;padding:5px 11px;border-radius:999px;background:color-mix(in srgb,var(--p) 15%,transparent);color:var(--pl);font-weight:600}
+.lit-pill+.lit-pill{margin-left:0;background:transparent;color:#7d828d}
+.lit-card{border:1px solid rgba(255,255,255,.07);background:#11141a;border-radius:14px;padding:16px}
+.lit-card h4{margin:0 0 10px;font:600 14px 'Inter Tight',sans-serif;display:flex;align-items:center;gap:8px;color:#E4E6EB}
+.lit-live{width:7px;height:7px;border-radius:50%;background:var(--p);animation:lit-ping 2s infinite}
+@keyframes lit-ping{0%{box-shadow:0 0 0 0 color-mix(in srgb,var(--p) 60%,transparent)}70%,100%{box-shadow:0 0 0 8px transparent}}
+
+/* ── the room's light: a pane of its own glass with sun through it ── */
+.lit-light{position:absolute;inset:0;pointer-events:none;overflow:visible}
+.lit-pane{position:absolute;right:-60px;top:-40px;width:520px;height:auto;opacity:.26;
+  -webkit-mask-image:radial-gradient(closest-side,#000 25%,transparent 100%);mask-image:radial-gradient(closest-side,#000 25%,transparent 100%)}
+.lit-pane .a{fill:var(--p)}.lit-pane .b{fill:var(--pl)}.lit-pane .c{fill:var(--pd)}.lit-pane .d{fill:var(--p2)}.lit-pane .e{fill:var(--p3)}
+.lit-pane g,.lit-pane path{stroke:#07080B}
+.lit-beam{position:absolute;top:-10%;right:8%;width:180px;height:140%;transform-origin:top center;mix-blend-mode:screen;filter:blur(18px);
+  background:linear-gradient(180deg,color-mix(in srgb,var(--pl) 30%,transparent),color-mix(in srgb,var(--p) 10%,transparent) 45%,transparent 80%);animation:lit-sway 14s ease-in-out infinite alternate}
+.lit-beam.b1{transform:rotate(32deg)}
+.lit-beam.b2{right:20%;width:110px;transform:rotate(38deg);opacity:.7;animation-duration:18s;background:linear-gradient(180deg,color-mix(in srgb,var(--p2) 28%,transparent),transparent 80%)}
+.lit-beam.b3{right:-2%;width:90px;transform:rotate(26deg);opacity:.6;animation-duration:11s;background:linear-gradient(180deg,color-mix(in srgb,var(--p3) 22%,transparent),transparent 70%)}
+@keyframes lit-sway{from{opacity:.55;translate:0 0}to{opacity:1;translate:-26px 0}}
+.lit-floor{position:absolute;left:8%;right:4%;bottom:-40px;height:160px;border-radius:50%;background:radial-gradient(closest-side,color-mix(in srgb,var(--p) 22%,transparent),transparent 75%);filter:blur(10px);pointer-events:none}
+
+/* ── a finger's tap ──────────────────────────────────────── */
+.lit-tap{position:absolute;width:46px;height:46px;border-radius:50%;border:2px solid rgba(255,255,255,.85);background:rgba(255,255,255,.18);opacity:0;pointer-events:none;z-index:30;transform:scale(.6)}
+.lit-screen.lt .lit-tap,.lit-paper .lit-tap{border-color:rgba(11,12,17,.55);background:rgba(11,12,17,.1)}
+@keyframes lit-tapit{0%{opacity:0;transform:scale(.5)}30%{opacity:1;transform:scale(.9)}100%{opacity:0;transform:scale(1.4)}}
+
+/* ── a story told in steps: words scroll, the stage stays ── */
+.lit-path{display:grid;grid-template-columns:minmax(0,.9fr) minmax(0,1.1fr);gap:60px;position:relative}
+.lit-steps{position:relative;padding-left:46px}
+.lit-rail{position:absolute;left:11px;top:12px;bottom:40vh;width:2px;background:#1a1d24;border-radius:2px}
+.lit-paper .lit-rail{background:#e3e0d7}
+.lit-rail i{position:absolute;left:0;top:0;width:100%;height:var(--fill,0%);background:linear-gradient(var(--pl),var(--p));border-radius:2px;box-shadow:0 0 12px color-mix(in srgb,var(--p) 60%,transparent);transition:height .6s cubic-bezier(.2,.8,.2,1)}
+.lit-step{min-height:78vh;padding-top:8px;position:relative;opacity:.38;transition:opacity .5s ease}
+.lit-step:last-child{min-height:60vh}
+.lit-step.on{opacity:1}
+.lit-step .n{position:absolute;left:-46px;top:6px;width:24px;height:24px;border-radius:50%;display:grid;place-items:center;background:#07080B;border:2px solid #2a2e37;font:600 11px 'JetBrains Mono',monospace;color:#7d828d;transition:all .4s ease}
+.lit-paper .lit-step .n{background:#F7F6F3;border-color:#d6d2c7}
+.lit-step.on .n,.lit-step.done .n{border-color:var(--p);color:#0B0C11;background:var(--p);box-shadow:0 0 0 6px color-mix(in srgb,var(--p) 15%,transparent)}
+.lit-step .k{font:500 12px 'JetBrains Mono',monospace;letter-spacing:.16em;text-transform:uppercase;color:var(--pl);margin:0 0 12px}
+.lit-paper .lit-step .k{color:var(--pd)}
+.lit-step h3{margin:0 0 14px;font:600 clamp(28px,2.6vw,38px)/1.08 'Inter Tight',sans-serif;letter-spacing:-.03em;text-wrap:balance}
+.lit-step p{margin:0;font-size:17px;line-height:1.6;color:var(--mut);max-width:440px}
+.lit-paper .lit-step p{color:#5A5E6B}
+.lit-step .inline{display:none}
+.lit-stage{position:sticky;top:11vh;height:78vh;min-height:600px;display:grid;place-items:center;align-self:start}
+.lit-stage .lit-pane{right:-40px;top:-30px;width:440px;opacity:.2}
+.lit-scene{position:absolute;inset:0;display:grid;place-items:center;opacity:0;transform:translateY(26px) scale(.98);transition:opacity .55s ease,transform .7s cubic-bezier(.2,.8,.2,1);pointer-events:none}
+.lit-stage[data-step="1"] .s1,.lit-stage[data-step="2"] .s2,.lit-stage[data-step="3"] .s3,
+.lit-stage[data-step="4"] .s4,.lit-stage[data-step="5"] .s5{opacity:1;transform:none}
+
+/* ── glass chips that float beside a device ─────────────── */
+.lit-chips{position:relative;z-index:4;display:flex;flex-direction:column;gap:18px}
+.lit-chips .lit-chip:nth-child(2){margin-left:28px}
+.lit-chip{position:relative;display:flex;align-items:center;gap:10px;padding:12px 16px;border-radius:16px;font-size:14px;font-weight:500;color:#E4E6EB;
+  background:linear-gradient(180deg,#14181a,#0e1213);border:1px solid color-mix(in srgb,var(--pl) 22%,transparent);box-shadow:0 24px 50px -24px rgba(0,0,0,.9);animation:lit-bob 7s ease-in-out infinite}
+.lit-paper .lit-chip{background:#fff;color:#1b1d24;border-color:color-mix(in srgb,var(--pd) 18%,transparent);box-shadow:0 20px 40px -24px color-mix(in srgb,var(--pd) 45%,transparent)}
+.lit-chip svg{flex:none}
+.lit-chip:nth-child(2){animation-delay:-2.3s}.lit-chip:nth-child(3){animation-delay:-4.6s}
+@keyframes lit-bob{50%{transform:translateY(-8px)}}
+.lit-duo{position:relative;min-height:720px;display:flex;align-items:center;justify-content:center;gap:26px}
+.lit-duo .lit-pane{right:auto;left:-80px;top:-10px;width:520px;opacity:.24}
+
+/* ── paper: statements, labels, printouts ───────────────── */
+.lit-sheet{position:relative;width:min(440px,92%);background:#FBFAF6;color:#16171c;border-radius:6px;padding:34px 34px 30px;font-family:Inter,sans-serif;
+  background-image:radial-gradient(rgba(0,0,0,.025) 1px,transparent 1px);background-size:5px 5px;
+  box-shadow:0 1px 0 #fff inset,0 60px 90px -40px rgba(0,0,0,.85),0 20px 40px -24px rgba(0,0,0,.6);transform:rotate(-1.4deg)}
+
+@media (max-width:980px){
+  .lit-sec{padding:96px 0}
+  .lit-head,.lit-split{grid-template-columns:1fr}
+  .lit-path{grid-template-columns:1fr}
+  .lit-stage{display:none}
+  .lit-steps{padding-left:40px}
+  .lit-rail{bottom:0}
+  .lit-step,.lit-step:last-child{min-height:0;opacity:1;padding-bottom:70px}
+  .lit-step .n{left:-40px}
+  .lit-step .inline{display:grid;place-items:center;position:relative;margin-top:30px}
+  .lit-step .inline .lit-scene{position:relative;inset:auto;opacity:1;transform:none}
+  .lit-split>.lit-duo,.lit-split>.lit-stage-r{order:2}
+  .lit-duo{flex-direction:column;min-height:0;padding:40px 0}
+  .lit-chips{flex-direction:row;flex-wrap:wrap;justify-content:center;gap:10px}
+  .lit-chips .lit-chip:nth-child(2){margin-left:0}
+}
+@media (max-width:560px){
+  .lit-phone{width:280px;border-radius:50px}
+  .lit-screen{border-radius:40px}
+  .lit-bar .lit-pill{display:none}
+  .lit-chip{font-size:13px;padding:10px 12px}
+  .lit-sheet{padding:26px 22px}
+}
+@media (prefers-reduced-motion:reduce){
+  .lit-beam,.lit-chip,.lit-live{animation:none}
+  .lit-scene{transition:none}
+}
