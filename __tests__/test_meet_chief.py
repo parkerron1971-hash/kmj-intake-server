@@ -194,9 +194,11 @@ def test_every_page_leads_home_by_the_main_sites_own_address(section):
             assert "Solutionist home" not in strip[:4000] and "Solutionist home" not in footer, path
             assert f'<a class="strip-coach" href="{HOME}coaches">' in strip[:4000], path
             continue
-        assert re.search(rf'<a href="{HOME}" data-home[^>]*>.*?<span[^>]*data-home-label>Solutionist home</span>',
+        # with the church page at /, a coach's way home is the business home at /business (2026-11-04)
+        home = HOME + "business" if section == "coaches" and church_site.is_home() else HOME
+        assert re.search(rf'<a href="{home}" data-home[^>]*>.*?<span[^>]*data-home-label>Solutionist home</span>',
                          strip[:4000], flags=re.S), path
-        assert f'<a href="{HOME}"' in footer and ">Solutionist home</a>" in footer, path
+        assert f'<a href="{home}"' in footer and ">Solutionist home</a>" in footer, path
 
 
 def _home_script():

@@ -132,8 +132,19 @@ def is_home() -> bool:
     return enabled() and edition in ("", "churches")
 
 
-# The product pages' strip link to the business home: with the church page at /, it would lead back here.
-_ALL_OF_SOLUTIONIST = re.compile(r'<a href="\{\{HOME\}\}/"[^>]*>All of Solutionist</a>\s*')
+# The business home's own address while the church page is the home (Kevin, 2026-11-04: "give the
+# business home its own page at /business for now"). With a business home back at / (HOME_EDITION=v3
+# or v2), / is its address again and /business serves the same page with "/" as its canonical.
+BUSINESS_PATH = "/business"
+
+
+def business_path() -> str:
+    """Where the business home lives right now: /business while the church page is the home, / otherwise."""
+    return BUSINESS_PATH if is_home() else "/"
+
+
+# The product pages' strip link to the business home: with the church page at /, it goes to /business.
+_ALL_OF_SOLUTIONIST = re.compile(r'<a href="\{\{HOME\}\}/"([^>]*>All of Solutionist</a>)')
 
 
 def path_of(slug: str) -> str:
@@ -559,7 +570,7 @@ def render(slug: str) -> str:
         page = _CHURCHSAVVY_LINK.sub("", page)
     home = is_home()
     if home and slug:
-        page = _ALL_OF_SOLUTIONIST.sub("", page)
+        page = _ALL_OF_SOLUTIONIST.sub(lambda m: '<a href="{{HOME}}' + BUSINESS_PATH + '"' + m.group(1), page)
     tokens = {
         "TITLE": escape(meta["title"]),
         "DESCRIPTION": escape(meta["description"]),

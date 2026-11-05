@@ -109,6 +109,10 @@ def render(slug: str) -> str:
     import marketing_pages as mp
     meta = PAGES[slug]
     page = _read(meta["file"])
+    if church_site.is_home():
+        # / is the church page (2026-11-04): a coach's way back to the main site is the business home,
+        # at its own address, so "Solutionist home" and "All of Solutionist" don't land on churches
+        page = page.replace('href="{{HOME}}/"', 'href="{{HOME}}' + church_site.BUSINESS_PATH + '"')
     tokens = {
         "TITLE": escape(meta["title"]),
         "DESCRIPTION": escape(meta["description"]),

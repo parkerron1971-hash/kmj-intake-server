@@ -364,8 +364,9 @@ def _edition_markup(page: str, ed: dict, trades: tuple) -> str:
     page = _swap(page, '<div class="wrap ticker" role="group"', '<div class="wrap ticker" hidden role="group"')
     i = page.index(_HOME_WHO)
     j = page.index("</span></p>", i) + len("</span>")
+    import church_site      # every kind of business is the business home, at /business while / is the church page
     page = (page[:i] + _html.escape(ed["who"], quote=False)
-            + f'<span class="ed-go"><a class="arrow-link" href="/">See every kind of business {_ARROW}</a></span>'
+            + f'<span class="ed-go"><a class="arrow-link" href="{church_site.business_path()}">See every kind of business {_ARROW}</a></span>'
             + page[j:])
     if ed.get("pricing"):
         page = _swap(page, _HOME_PRICING, _html.escape(ed["pricing"], quote=False))
