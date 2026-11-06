@@ -364,6 +364,8 @@ app.include_router(church_keys_router)
 # off | owner | on).
 from church_duties import router as church_duties_router
 app.include_router(church_duties_router)
+from church_covenant import router as church_covenant_router
+app.include_router(church_covenant_router)
 # The Giving door's office pages: recurring gifts, pledges and campaigns
 # (2026-10-27; CHURCH_PLEDGES off | owner | on).
 from church_pledges import router as church_pledges_router
