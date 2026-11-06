@@ -135,16 +135,6 @@
 .gu-year{display:flex;gap:12px;align-items:center;padding:13px 14px;border-radius:15px;background:#14171c;border:1px solid #1f232b;font-size:13.5px}
 .gu-year i{width:34px;height:34px;border-radius:10px;background:rgba(245,196,81,.14);display:grid;place-items:center;flex:none}
 .gu-year small{display:block;font:500 10.5px 'JetBrains Mono',monospace;letter-spacing:.1em;color:#7d828d;text-transform:uppercase}
-.gu-sheetup{position:absolute;left:0;right:0;bottom:0;z-index:13;padding:12px 18px 34px;border-radius:26px 26px 0 0;background:#16191f;border-top:1px solid #262a33;
-  transform:translateY(105%);transition:transform .5s cubic-bezier(.2,.8,.2,1);box-shadow:0 -30px 60px rgba(0,0,0,.6)}
-.gu-sheetup::before{content:"";display:block;width:38px;height:5px;border-radius:3px;background:#3a3e47;margin:0 auto 16px}
-.gu-sheetup h6{margin:0 0 6px;font:600 20px 'Inter Tight',sans-serif}
-.gu-sheetup p{margin:0 0 16px;font-size:14px;color:#A9AEB9;line-height:1.5}
-.gu-sheetup .go{position:relative;padding:15px 0;border-radius:14px;background:#F5F6F8;color:#0B0C11;text-align:center;font-weight:600;font-size:15px}
-.gu-sheetup .no{padding:13px 0 0;text-align:center;font-size:14px;color:#A9AEB9}
-.gu-dim{position:absolute;inset:0;z-index:12;background:rgba(0,0,0,.5);opacity:0;transition:opacity .4s ease}
-.gu-recur.sheet .gu-sheetup{transform:none}
-.gu-recur.sheet .gu-dim{opacity:1}
 .gu-recur.paused .gu-paused{display:flex}
 .gu-recur.paused .gu-gift .acts,.gu-recur.paused .gu-gift .gu-cardln{display:none}
 .gu-recur.paused .gu-gift .row span:last-child{color:#F5D88A}
@@ -223,5 +213,5 @@
   .gu-mail,.gu-chief{width:min(300px,86vw)}
 }
 @media (prefers-reduced-motion:reduce){
-  .gu-thanks,.gu-sheetup,.gu-jar .fill,.gu-mail{transition:none}
+  .gu-thanks,.gu-jar .fill,.gu-mail{transition:none}
 }

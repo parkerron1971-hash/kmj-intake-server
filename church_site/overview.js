@@ -368,7 +368,7 @@
       var P = PLANS[i];
       nm.textContent = P.name; pr.textContent = yearly ? P.y : P.m; per.textContent = yearly ? 'a year' : 'a month';
       fill(ul, P.items);
-      go.hidden = false; go.textContent = 'Start free on ' + P.short;
+      go.hidden = false; go.textContent = 'Start free';
     }
     cards.forEach(function (c, ci) { c.classList.toggle('is-you', ci === i); });
     var cap = document.getElementById('pk-cap');
@@ -606,7 +606,7 @@
         row('BC', '#5EEAD4', 'Bri Carter', 'With Sam T.', 'Note ready', 'wait') +
         row('LO', '#99F6E4', 'Luis Ortega', 'With Paul O.', 'Text sent', 'ok') + '</div>' },
     { d: 'Tue', date: 'Tuesday, November 10', p: 'community', rail: 1, t: 'No family is forgotten', h: 'Care this week',
-      chief: '<b>3 families</b> have missed three Sundays. Their shepherds each have a note ready.',
+      chief: '<b>3 families</b> have missed three Sundays. Their shepherds heard Monday morning.',
       body: '<div class="wk-rows">' +
         row('RF', '#5EEAD4', 'The Reyes family', 'Missed 3 Sundays · shepherd Angela W.', 'Note ready', 'wait') +
         row('RE', '#99F6E4', 'Raymond Ellis', 'Missed 3 Sundays · shepherd Tony M.', 'Called', 'ok') +
@@ -627,21 +627,21 @@
         row('5/5', '#FDBA74', 'Worship', 'Set list shared Tuesday', 'Full', 'ok', true) +
         row('3/4', '#FED7AA', 'Parking', 'One spot open on the Serve tab', '1 open', 'wait', true) + '</div>' },
     { d: 'Fri', date: 'Friday, November 13', p: 'stewardship', rail: 3, t: 'Giving, counted and matched', h: 'Giving this week',
-      chief: '<b>$4,820</b> came in this week on your own Stripe. It matches Friday\'s deposit, and the books are current.',
+      chief: '<b>$4,820</b> came in this week on your own Stripe. Its payouts match the bank, and the books are current.',
       body: tiles([['General', '$3,640', '58 gifts', '#4ADE80'], ['Missions', '$780', '19 gifts', '#86EFAC'], ['Building', '$400', '7 gifts', '#BBF7D0']]) +
         '<div class="wk-rows">' +
-        row('$', '#4ADE80', "Friday's deposit", '$4,820 · every gift accounted for', 'Matched', 'ok', true) +
+        row('$', '#4ADE80', 'Stripe payout', 'Matched to the deposit in the bank', 'Matched', 'ok', true) +
         row('2', '#CBD5E1', 'Bills paid', 'Electric and the copier lease', 'Booked', 'ok', true) + '</div>' },
     { d: 'Sat', date: 'Saturday, November 14', p: 'faith', rail: 5, t: 'Tomorrow is ready', h: 'Ready for Sunday',
       chief: "Tomorrow's announcements are scheduled, the sermon notes are up, and the stream is set for <b>11:00</b>.",
       body: '<div class="wk-rows">' +
-        row('&#9788;', '#F9A8D4', "Today's devotional", 'Sent by text and in the app · 142 opened', 'Sent', 'ok', true) +
+        row('&#9788;', '#F9A8D4', "Today's devotional", 'Sent by text and in the app', 'Sent', 'ok', true) +
         row('&#9993;', '#F472B6', 'Announcements', 'To every phone · Sunday 8:00 AM', 'Scheduled', 'go', true) +
         row('&#10070;', '#FDE68A', 'Sermon notes', 'Romans 8:18&ndash;30 · under Watch', 'Ready', 'ok', true) +
-        row('&#9654;', '#F9A8D4', 'Live stream', 'The app and the website · 11:00 AM', 'Set', 'ok', true) + '</div>' },
+        row('&#9654;', '#F9A8D4', 'Live stream', 'In the app · 11:00 AM', 'Set', 'ok', true) + '</div>' },
     { d: 'Sun', date: 'Sunday, November 15', p: 'all', rail: 0, t: 'The church gathers', h: 'Good morning, Pastor James',
       chief: 'Everything is set for 11:00. <b>The welcome team</b> has the guest cards, and the kids rooms are staffed.',
-      body: tiles([['Here', '214', 'checked in', '#A78BFA'], ['Kids', '38', 'pickup codes printed', '#FDBA74'], ['Online', '86', 'watching live', '#F9A8D4']]) +
+      body: tiles([['Here', '214', 'checked in', '#A78BFA'], ['Kids', '38', 'pickup codes printed', '#FDBA74'], ['Online', '86', "said I'm here", '#F9A8D4']]) +
         '<div class="wk-rows">' +
         row('&#10022;', '#F4C04E', '4 prayer requests', 'With the intercessors', 'New', 'go') +
         row('6', '#5EEAD4', 'Guest cards', 'On Monday\'s list for the welcome team', 'Saved', 'ok', true) + '</div>' }
@@ -672,7 +672,7 @@
     cap.style.setProperty('--c', p[1]); cap.style.setProperty('--d', p[2]);
     cap.innerHTML = day.t + ' <span class="p">' + p[0] + '</span>';
     main.classList.remove('in'); void main.offsetWidth;
-    main.innerHTML = '<div class="wk-top"><span class="s"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#8D93A1" stroke-width="2.4" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>Search people, groups, gifts</span><span>Grace Fellowship</span></div>' +
+    main.innerHTML = '<div class="wk-top"><span class="s"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#8D93A1" stroke-width="2.4" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>Search people and pages</span><span>Grace Fellowship</span></div>' +
       '<div class="wk-date">' + day.date + '</div><div class="wk-h">' + day.h + '</div>' +
       '<div class="wk-chief"><span class="o" aria-hidden="true"></span><span>' + day.chief + '</span></div>' + day.body;
     if (!reduce) main.classList.add('in');
