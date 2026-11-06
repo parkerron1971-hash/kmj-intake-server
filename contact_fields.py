@@ -40,6 +40,7 @@ AN IMPORT CAN ONLY EVER TAKE PERMISSION AWAY
 from __future__ import annotations
 
 import re
+from datetime import date
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 # ─── The vocabulary ──────────────────────────────────────────────────
@@ -52,6 +53,9 @@ FIELDS: Tuple[Dict[str, str], ...] = (
     {"id": "email",        "label": "Email",               "lands": "Their email"},
     {"id": "phone",        "label": "Phone",               "lands": "Their phone"},
     {"id": "status",       "label": "Status",              "lands": "Their status"},
+    # Church only (CHURCH_FIELDS): a business never sees these two.
+    {"id": "household",    "label": "Household",           "lands": "Puts them in a family"},
+    {"id": "household_role", "label": "Adult or child",    "lands": "Whether they join their family as an adult or a child"},
     {"id": "tags",         "label": "Tags",                "lands": "Kept as tags"},
     {"id": "note",         "label": "Note",                "lands": "Kept as a note on their record"},
     {"id": "company",      "label": "Company",             "lands": "Their company"},
@@ -78,6 +82,14 @@ IDENTITY = ("name", "first_name", "last_name", "email", "phone")
 # Fields a column can claim at most once in the auto-guess; a second
 # column that wants the same field is kept as a detail instead.
 MULTI = frozenset({"detail", "skip", "tags", "note", "email_optout", "sms_optout", "optout_all"})
+# Fields only a church's import offers: a family is a church thing here
+# (households, household_adults, children — what Kids check-in reads).
+CHURCH_FIELDS = frozenset({"household", "household_role"})
+
+
+def fields_for(church: bool) -> List[Dict[str, str]]:
+    """The field vocabulary one business is offered."""
+    return [dict(f) for f in FIELDS if church or f["id"] not in CHURCH_FIELDS]
 ADDRESS_PARTS = ("address", "address2", "city", "region", "postal_code", "country")
 OPTOUT_FIELDS = ("email_optout", "sms_optout", "optout_all")
 
@@ -122,6 +134,18 @@ _SYN: Dict[str, Tuple[str, ...]] = {
               "home phone", "work phone", "business phone", "phone 2 value", "other phone"),
     "status": ("status", "stage", "client status", "customer status", "contact status", "lead status",
                "lifecycle stage", "client type", "customer type"),
+    # Church exports (Subsplash household_id, Planning Center "Household
+    # Name", Breeze "Family"). "Family Name" stays a LAST name: that is
+    # what Google and Outlook mean by it.
+    "household": ("household", "household name", "household id", "family", "family id",
+                  "family group", "family unit", "household number", "family number",
+                  "household key", "family key", "home id", "household identifier"),
+    "household_role": ("household role", "household position", "family role", "family position",
+                       "household relationship", "family relationship", "relationship to head",
+                       "relationship to head of household", "position in household",
+                       "position in family", "role in household", "role in family",
+                       "family member type", "household member type", "child", "is child",
+                       "is a child", "kid", "minor", "adult or child", "age group", "age category"),
     "tags": ("tags", "tag", "labels", "label", "groups", "group", "group membership", "categories",
              "category", "segments", "segment", "lists", "customer groups"),
     "note": ("notes", "note", "comments", "comment", "memo", "description", "remarks",
@@ -189,6 +213,20 @@ _SYN: Dict[str, Tuple[str, ...]] = {
              "photo", "instant profile", "priority", "sensitivity", "private"),
 }
 
+# A church's membership column is its status, and it beats a plain
+# "Status" column (Planning Center exports both: Membership = Member /
+# Regular Attender / Visitor, Status = active / inactive). Only a church
+# reads them this way: a gym's "Membership" is the plan someone is on.
+_CHURCH_STATUS = ("membership status", "membership", "membership type", "member status",
+                  "member type", "church status", "attendance status", "attender status",
+                  "connection status", "membership stage", "membership level",
+                  "membership classification", "member classification")
+_SYN_CHURCH: Dict[str, Tuple[str, ...]] = {**_SYN, "status": _CHURCH_STATUS + _SYN["status"]}
+
+
+def _syn(church: bool) -> Dict[str, Tuple[str, ...]]:
+    return _SYN_CHURCH if church else _SYN
+
 # Word-count below which a synonym must match exactly. One-word
 # synonyms ("last", "state", "cell", "email") may also CONTAIN-match
 # when they are in _CONTAIN_OK — a header like "Client Email (work)".
@@ -209,18 +247,19 @@ _MAILCHIMP_STATUS = frozenset({"subscribed", "unsubscribed", "cleaned", "pending
                                "non subscribed", "nonsubscribed", "archived", "not subscribed"})
 
 
-def _match(h: str) -> Optional[Tuple[str, int, int]]:
+def _match(h: str, church: bool = False) -> Optional[Tuple[str, int, int]]:
     """Best (field, kind, rank) for one normalized header. kind 0 =
     exact, 1 = contained; lower rank = earlier synonym."""
     if not h:
         return None
     if _DESCRIBES_RE.match(h):
         return ("skip", 0, 0)
-    for f, syns in _SYN.items():
+    table = _syn(church)
+    for f, syns in table.items():
         if h in syns:
             return (f, 0, syns.index(h))
     best: Optional[Tuple[int, str, int]] = None   # (-len, field, rank)
-    for f, syns in _SYN.items():
+    for f, syns in table.items():
         for rank, s in enumerate(syns):
             if " " not in s and s not in _CONTAIN_OK:
                 continue
@@ -245,7 +284,7 @@ def _is_phone(v: str) -> bool:
 
 
 def guess_columns(headers: Sequence[Any], sample_rows: Sequence[Sequence[Any]] = (),
-                  filled: Optional[Sequence[int]] = None) -> List[Dict[str, Any]]:
+                  filled: Optional[Sequence[int]] = None, *, church: bool = False) -> List[Dict[str, Any]]:
     """headers (+ a sample of rows) → one decision per column:
     {index, header, field, label, note}. The header is read first; the
     VALUES settle what the header cannot (an unlabelled email column, a
@@ -253,14 +292,19 @@ def guess_columns(headers: Sequence[Any], sample_rows: Sequence[Sequence[Any]] =
 
     `filled` — how many rows of the WHOLE file have a value in each
     column, when the caller knows. Without it, emptiness is judged on
-    the sample, and a column filled only on row 57 would look empty."""
+    the sample, and a column filled only on row 57 would look empty.
+
+    `church` — a church's file: its membership column is the status, and
+    a household column makes families. Anywhere else those are details."""
     hs = [str(h if h is not None else "").strip() for h in headers]
     samples = [[_cell(r, i) for r in (sample_rows or [])] for i in range(len(hs))]
     have_samples = any(any(v for v in col) for col in samples)
 
     picks: List[Optional[Tuple[str, int, int]]] = []
     for i, h in enumerate(hs):
-        m = _match(norm_header(h))
+        m = _match(norm_header(h), church)
+        if m and m[0] in CHURCH_FIELDS and not church:
+            m = ("detail", 0, 0)
         vals = samples[i]
         # Mailchimp's "Status" column holds subscription state, not a stage.
         if m and m[0] == "status" and vals and all(norm_header(v) in _MAILCHIMP_STATUS for v in vals if v) \
@@ -464,12 +508,111 @@ _STATUS_WORDS = {
     "vip": "vip", "inactive": "inactive", "past": "inactive", "former": "inactive",
     "lapsed": "inactive", "archived": "inactive", "paused": "inactive",
     "churned": "churned", "lost": "churned", "cancelled": "churned", "canceled": "churned",
+    # A church's words. Member, Guest, Leader and Inactive are what its
+    # roll shows (church_roll.STATUS).
+    "members": "active", "full member": "active", "church member": "active",
+    "active member": "active", "baptized member": "active", "covenant member": "active",
+    "guest": "lead", "visitor": "lead", "first time guest": "lead", "first time visitor": "lead",
+    "first timer": "lead", "newcomer": "lead",
+    "leader": "vip",
 }
+# Church words that land in the nearest place on the roll but say more
+# than it does: the church's own word stays on the record as a detail.
+_STATUS_WORDS_KEPT = {
+    "regular attender": "lead", "regular attendee": "lead", "attender": "lead", "attendee": "lead",
+    "participant": "lead", "friend": "lead", "seeker": "lead", "in progress": "lead",
+    "pending member": "lead", "prospective member": "lead", "membership class": "lead",
+    "elder": "vip", "deacon": "vip", "deaconess": "vip", "staff": "vip", "pastor": "vip",
+    "minister": "vip", "ministry leader": "vip",
+    "inactive member": "inactive", "former member": "inactive", "transferred": "inactive",
+    "transferred out": "inactive", "moved": "inactive", "moved away": "inactive",
+    "removed": "inactive", "deceased": "inactive",
+}
+_STATUS_IDS = frozenset({"active", "lead", "vip", "inactive", "churned"})
+# "Child" in a membership column is a place in the family, not a status.
+_CHILD_STATUS = frozenset({"child", "children", "kid", "kids", "minor", "dependent", "dependant"})
 _TAG_NOISE = frozenset({"mycontacts", "my contacts", "starred", "* mycontacts", "* starred"})
 
 
 def normalize_status(v: str) -> str:
-    return _STATUS_WORDS.get(_nv(v), _nv(v))
+    w = _nv(v)
+    return _STATUS_WORDS.get(w) or _STATUS_WORDS_KEPT.get(w) or w
+
+
+# ─── Families (a church's import) ────────────────────────────────────
+
+_CHILD_WORDS = frozenset({"child", "children", "kid", "kids", "minor", "son", "daughter", "dependent",
+                          "dependant", "youth", "infant", "baby", "toddler", "grandchild", "grandson",
+                          "granddaughter", "stepchild", "stepson", "stepdaughter", "foster child",
+                          "ward", "teen", "teenager", "preschool", "preschooler", "nursery",
+                          "kindergarten", "elementary", "boy", "girl"})
+_ADULT_WORDS = frozenset({"adult", "head", "head of household", "head of house", "household head",
+                          "primary", "primary contact", "primary adult", "spouse", "husband", "wife",
+                          "partner", "parent", "mother", "father", "mom", "dad", "guardian",
+                          "grandparent", "grandmother", "grandfather", "single", "other adult",
+                          "senior", "adult child", "self"})
+_ADULT_HINTS = frozenset({"adult", "head", "spouse", "husband", "wife", "parent", "mother", "father",
+                          "guardian", "grandparent", "grandmother", "grandfather"})
+
+
+def household_role_of(header: Any, value: Any) -> str:
+    """'child', 'adult' or '' for one cell of a household-role column:
+    "Child", "Head of Household", "Spouse", or a yes/no under a "Child"
+    header (Planning Center). '' when the cell doesn't say."""
+    v = _nv(value)
+    if not v:
+        return ""
+    if v in _CHILD_WORDS:
+        return "child"
+    if v in _ADULT_WORDS:
+        return "adult"
+    if re.search(r"(^| )(child|kid|minor)( |$)", norm_header(header)):
+        if v in _YES:
+            return "child"
+        if v in _NO:
+            return "adult"
+    words = set(v.split())
+    if "adult" in words:
+        return "adult"            # "Adult child", "Other adult"
+    if words & _CHILD_WORDS:
+        return "child"            # "Child of head"
+    if words & _ADULT_HINTS:
+        return "adult"
+    return ""
+
+
+_MONTHS = {m: i for i, m in enumerate(
+    ("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"), 1)}
+
+
+def iso_birthdate(value: Any, today: Optional[date] = None) -> str:
+    """A full date of birth as YYYY-MM-DD, or '' when the cell isn't one
+    (no year, a two-digit year, a date in the future). "3/14/1979" reads
+    month first, as US exports write it, unless the first number can't
+    be a month ("14/3/1979")."""
+    s = str(value if value is not None else "").strip()
+    y = mo = d = 0
+    m = re.match(r"^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})(?:$|[T\s])", s)
+    if m:
+        y, mo, d = int(m[1]), int(m[2]), int(m[3])
+    else:
+        m = re.match(r"^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})(?:$|\s)", s)
+        if m:
+            a, b, y = int(m[1]), int(m[2]), int(m[3])
+            mo, d = (b, a) if a > 12 >= b else (a, b)
+        else:
+            m = (re.match(r"^([A-Za-z]{3,9})\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4})$", s)
+                 or re.match(r"^(\d{1,2})\s+([A-Za-z]{3,9})\.?,?\s+(\d{4})$", s))
+            if m:
+                month, day = (m[1], m[2]) if m[1][:1].isalpha() else (m[2], m[1])
+                mo, d, y = _MONTHS.get(month[:3].lower(), 0), int(day), int(m[3])
+    try:
+        born = date(y, mo, d)
+    except ValueError:
+        return ""
+    if not (date(1900, 1, 2) <= born <= (today or date.today())):
+        return ""
+    return born.isoformat()
 
 
 def validate_fields(headers: Sequence[Any], fields: Sequence[str]) -> str:
@@ -572,11 +715,32 @@ def _build_row(got: Dict[str, List[Tuple[str, str]]]) -> Dict[str, Any]:
             if f in ("sms_optout", "optout_all") and not sms_out:
                 sms_out = why
 
+    # Status, and a church's place in the family.
+    status_raw = _first(got, "status", details) if got.get("status") else ""
+    status = normalize_status(status_raw) if status_raw else ""
+    role = ""
+    if status in _CHILD_STATUS:
+        status, role = "", "child"
+    elif status_raw and (_nv(status_raw) in _STATUS_WORDS_KEPT or status not in _STATUS_IDS):
+        # "Regular Attender" lands as a Guest and "Gold" lands nowhere:
+        # the word the old system used stays on the record either way.
+        details.setdefault(got["status"][0][0], status_raw)
+    said = False
+    for h, v in got.get("household_role") or []:
+        r = household_role_of(h, v)
+        if r and not said:
+            role, said = r, True          # the file's own column beats a "Child" status
+        if _nv(v) not in _YES | _NO:
+            details.setdefault(h, v)      # "Spouse", "Head of Household" stay on the record
+    household = _first(got, "household", details)[:120]
+
     capped = {str(k)[:80]: str(v)[:MAX_DETAIL_CHARS] for k, v in list(details.items())[:MAX_DETAILS]}
     return {
         "name": name, "first_name": first, "last_name": last,
         "email": email, "phone": phone,
-        "status": normalize_status(_first(got, "status", details)) if got.get("status") else "",
+        "status": status,
+        "household": household, "household_role": role,
+        "birthdate": iso_birthdate(_first(got, "birthday", {})) if got.get("birthday") else "",
         "tags": tags[:20], "note": note,
         "company": _first(got, "company", details), "title": _first(got, "title", details),
         "birthday": _first(got, "birthday", details), "address": address,

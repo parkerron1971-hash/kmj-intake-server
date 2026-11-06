@@ -120,6 +120,13 @@ class ImportRow(BaseModel):
     # that means "they agreed": an import can only take permission away.
     email_opt_out: str = ""
     sms_opt_out: str = ""
+    # 2026-11-06 — a church's file (contact_fields CHURCH_FIELDS). People
+    # who share a household become one family: households +
+    # household_adults + children, what Kids check-in reads. Ignored for
+    # a business. `birthdate` is the birthday as a full date, or "".
+    household: str = ""
+    household_role: str = ""   # 'adult' | 'child' | ''
+    birthdate: str = ""
 
 
 class ImportTable(BaseModel):
@@ -158,12 +165,30 @@ class ColumnsBody(BaseModel):
 
 def _gate(biz_id: str, user: AuthedUser, min_role: str = "member") -> Dict[str, Any]:
     rows = sb_clients.sb_get_as_service(
-        f"/businesses?id=eq.{biz_id}&select=id,name,owner_id&limit=1") or []
+        f"/businesses?id=eq.{biz_id}&select=id,name,owner_id,type&limit=1") or []
     if not rows:
         raise HTTPException(404, "business not found")
     from business_users_router import require_role
     require_role(biz_id, str(user.id), min_role)
     return rows[0]
+
+
+def _is_church(biz: Dict[str, Any]) -> bool:
+    import vertical_registry
+    return vertical_registry.resolve(str(biz.get("type") or "")) == "ministry"
+
+
+def _plural(n: int, one: str, many: str) -> str:
+    return f"{n} {one if n == 1 else many}"
+
+
+def _families_line(families: List[Dict[str, Any]]) -> str:
+    """The household column's line in the preview."""
+    if not families:
+        return "No families: nobody here shares a household with someone else"
+    kids = sum(len(f["children"]) for f in families)
+    line = f"Makes {_plural(len(families), 'family', 'families')}"
+    return line + (f", with {_plural(kids, 'child', 'children')} for Kids check-in" if kids else "")
 
 
 def _escape_ilike(s: str) -> str:
@@ -176,8 +201,17 @@ def _norm_phone(raw: str) -> str:
     return contact_fields.phone_key(raw)
 
 
-def _preload_existing(biz_id: str) -> Tuple[Dict[str, str], Dict[str, str], bool]:
+def _name_key(name: str) -> str:
+    return " ".join(str(name or "").split()).casefold()
+
+
+def _preload_existing(biz_id: str, by_name: Optional[Dict[str, List[Tuple[str, str]]]] = None
+                      ) -> Tuple[Dict[str, str], Dict[str, str], bool]:
     """(email -> id, phone match key -> id, complete?).
+
+    `by_name`, when given, is filled with name -> [(id, birthdate)]: a
+    church's children come with no email or phone, and a second import
+    of the same file must not add them twice.
 
     `complete` is False when the business has more contacts than
     PRELOAD_CAP, which tells the caller it must fall back to per-row
@@ -193,10 +227,14 @@ def _preload_existing(biz_id: str) -> Tuple[Dict[str, str], Dict[str, str], bool
     while offset < PRELOAD_CAP:
         rows = sb_clients.sb_get_as_service(
             f"/contacts?business_id=eq.{biz_id}&select=id,email,phone"
-            f"&order=created_at.asc&limit={PAGE}&offset={offset}") or []
+            + (",name,birthdate" if by_name is not None else "")
+            + f"&order=created_at.asc&limit={PAGE}&offset={offset}") or []
         for r in rows:
             em = (r.get("email") or "").strip().lower()
             ph = contact_fields.phone_match_key(r.get("phone") or "")
+            if by_name is not None and _name_key(r.get("name")):
+                by_name.setdefault(_name_key(r.get("name")), []).append(
+                    (r["id"], str(r.get("birthdate") or "")[:10]))
             # First writer wins — matches "oldest contact is the real one".
             if em and em not in by_email:
                 by_email[em] = r["id"]
@@ -282,22 +320,23 @@ def guess_columns(business_id: str, body: ColumnsBody,
     """Headers (+ a sample) in → what each column probably is, out. Reads
     and writes nothing; it is here so the dialog and the Structure Import
     read a Square or Google export the same way (contact_fields)."""
-    _gate(business_id, user, "member")
+    church = _is_church(_gate(business_id, user, "member"))
     if len(body.headers) > contact_fields.MAX_COLUMNS:
         raise HTTPException(400, f"{len(body.headers)} columns is over the "
                                  f"{contact_fields.MAX_COLUMNS}-column limit")
     headers = [str(h or "")[:200] for h in body.headers]
     sample = [[str(v if v is not None else "")[:300] for v in (r or [])[:len(headers)]]
               for r in body.sample_rows[:25]]
-    return {"ok": True,
-            "fields": [dict(f) for f in contact_fields.FIELDS],
-            "columns": contact_fields.guess_columns(headers, sample, body.filled)}
+    return {"ok": True, "church": church,
+            "fields": contact_fields.fields_for(church),
+            "columns": contact_fields.guess_columns(headers, sample, body.filled, church=church)}
 
 
 @router.post("/{business_id}")
 def import_contacts(business_id: str, body: ImportBody,
                     user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     biz = _gate(business_id, user, "member")
+    church = _is_church(biz)
 
     source = body.source if body.source in ("file", "phone", "structure_import") else "file"
     columns: Optional[List[Dict[str, Any]]] = None
@@ -311,8 +350,12 @@ def import_contacts(business_id: str, body: ImportBody,
         problem = contact_fields.validate_fields(t.headers, t.fields)
         if problem:
             raise HTTPException(400, problem)
-        rows_in = [ImportRow(**r) for r in contact_fields.rows_from_table(t.headers, t.rows, t.fields)]
-        columns = contact_fields.column_report(t.headers, t.rows, t.fields)
+        fields = [("detail" if f in contact_fields.CHURCH_FIELDS and not church else f) for f in t.fields]
+        rows_in = [ImportRow(**r) for r in contact_fields.rows_from_table(t.headers, t.rows, fields)]
+        columns = contact_fields.column_report(t.headers, t.rows, fields)
+    if not church:
+        rows_in = [r.model_copy(update={"household": "", "household_role": "", "birthdate": ""})
+                   for r in rows_in]
 
     if not rows_in:
         raise HTTPException(400, "no rows supplied")
@@ -323,7 +366,8 @@ def import_contacts(business_id: str, body: ImportBody,
     if body.on_duplicate not in ("skip", "fill"):
         raise HTTPException(400, "on_duplicate must be 'skip' or 'fill'")
 
-    by_email, by_phone, complete = _preload_existing(business_id)
+    by_name: Optional[Dict[str, List[Tuple[str, str]]]] = {} if church else None
+    by_email, by_phone, complete = _preload_existing(business_id, by_name)
     if not complete:
         logger.info(f"[import] biz={business_id[:8]} over preload cap — "
                     f"falling back to per-row lookups on misses")
@@ -345,6 +389,11 @@ def import_contacts(business_id: str, body: ImportBody,
     # Every phone the file says must not be texted: E.164 → reason. Kept
     # even when the row itself is skipped — a STOP is never dropped.
     sms_phones: Dict[str, str] = {}
+    # A church's file: one entry per person it brings or matches, for the
+    # families (church_families.plan_from_file). Rows with no status of
+    # their own ("Child") take their family's.
+    people: List[Dict[str, Any]] = []
+    no_status: set = set()
 
     def carry(target: Tuple[str, Any], email_out: str, sms_out: str) -> None:
         kind, ref = target
@@ -428,6 +477,13 @@ def import_contacts(business_id: str, body: ImportBody,
             existing_id = by_phone.get(phone_key)
         if not existing_id and not complete:
             existing_id = _lookup_one(business_id, email, phone)
+        if not existing_id and by_name is not None and not email and not phone_key:
+            # A church's child, with no email or phone: the same name, and
+            # no birthdate that says otherwise, is the same person.
+            born = contact_fields.iso_birthdate(raw.birthdate)
+            same = [cid for cid, b in by_name.get(_name_key(name), []) if not b or not born or b == born]
+            if len(same) == 1:
+                existing_id = same[0]
 
         if email:
             seen_email[email] = i
@@ -458,9 +514,13 @@ def import_contacts(business_id: str, body: ImportBody,
             if email_out or sms_out:
                 row_out["opt_out"] = [c for c, v in (("email", email_out), ("sms", sms_out)) if v]
             results.append(row_out)
+            if church and (raw.household or "").strip():
+                people.append(_person(i, existing_id, name, raw, now_iso, source))
             continue
 
         status = contact_fields.normalize_status(raw.status or "")
+        if not (raw.status or "").strip():
+            no_status.add(i)
         if status not in VALID_STATUSES:
             status = "lead"
         tags = [str(t).strip()[:40] for t in (raw.tags or []) if str(t).strip()][:20]
@@ -477,6 +537,13 @@ def import_contacts(business_id: str, body: ImportBody,
         }
         if (raw.title or "").strip():
             payload["role"] = raw.title.strip()[:120]
+        if church and status == "lead":
+            # Brought over, not waiting on a reply: an imported guest never
+            # sits in "nobody has replied" (subsplash_import does the same).
+            payload["first_response_at"] = now_iso
+        born = contact_fields.iso_birthdate(raw.birthdate) if church else ""
+        if born:
+            payload["birthdate"] = born
         to_create.append((i, payload))
         owner[i] = ("create", payload)
         row_out = {"row": i, "name": name, "action": "create"}
@@ -485,6 +552,11 @@ def import_contacts(business_id: str, body: ImportBody,
         if email_out or sms_out:
             row_out["opt_out"] = [c for c, v in (("email", email_out), ("sms", sms_out)) if v]
         results.append(row_out)
+        if church and (raw.household or "").strip():
+            people.append({**_person(i, None, name, raw, now_iso, source), "payload": payload})
+
+    # Families, from the church's own Household column.
+    families, families_not_made = _plan_families(business_id, people, to_create, no_status, results)
 
     # Opted-out people, counted once each whatever path brought them in.
     email_out_n = sum(1 for _, p in to_create if (p.get("metadata") or {}).get("email_opt_out")) \
@@ -500,11 +572,25 @@ def import_contacts(business_id: str, body: ImportBody,
         "email_opt_outs": email_out_n,
         "sms_opt_outs": sms_out_n,
     }
+    if church:
+        summary["families"] = len(families)
+        summary["family_children"] = sum(len(f["children"]) for f in families)
+        if columns is not None:
+            for c in columns:
+                if c["field"] == "household":
+                    c["lands"] = _families_line(families)
+
+    def family_list() -> List[Dict[str, Any]]:
+        return [{"name": f["name"], "adults": len(f["adults"]), "children": len(f["children"]),
+                 "joins": bool(f.get("household_id"))} for f in families]
 
     if body.dry_run:
         out = {"ok": True, "dry_run": True, "summary": summary, "results": results}
         if columns is not None:
             out["columns"] = columns
+        if church:
+            out["families"] = family_list()
+            out["families_not_made"] = families_not_made
         return out
 
     created_ids: List[str] = []
@@ -614,10 +700,20 @@ def import_contacts(business_id: str, body: ImportBody,
                     "sms_numbers_opted_out": sms_recorded, "opt_out_failed": opt_out_failed})
     summary.pop("to_create", None)
 
+    families_made = 0
+    if church and families:
+        families_made, more_not_made = _make_families(business_id, families, results)
+        families_not_made = families_not_made + more_not_made
+        summary["families"] = families_made
+        summary["family_children"] = sum(len(f["children"]) for f in families if f.get("made"))
+        summary["families_failed"] = len(more_not_made)
+
     n = len(created_ids)
     line = f"Imported {n} contact{'' if n == 1 else 's'} from {'phone contacts' if source == 'phone' else 'a file'}"
     if summary["matched"]:
         line += f", {summary['matched']} already known"
+    if families_made:
+        line += f", {_plural(families_made, 'family', 'families')} made"
     if email_out_n or sms_out_n:
         line += f", opt-outs carried (email {email_out_n}, texts {sms_out_n})"
     if failed:
@@ -637,4 +733,92 @@ def import_contacts(business_id: str, body: ImportBody,
            "results": results, "created_ids": created_ids}
     if columns is not None:
         out["columns"] = columns
+    if church:
+        out["families"] = [f for f, fam in zip(family_list(), families) if fam.get("made")]
+        out["families_not_made"] = families_not_made
     return out
+
+
+# ─── A church's families ─────────────────────────────────────────────
+
+def _person(i: int, contact_id: Optional[str], name: str, raw: ImportRow,
+            now_iso: str, source: str) -> Dict[str, Any]:
+    """One person in the file, the shape church_families reads."""
+    md = _metadata_for(raw.model_copy(update={"email_opt_out": "", "sms_opt_out": ""}), now_iso, source, {})
+    return {"ref": i, "id": contact_id, "name": name, "metadata": md,
+            "birthdate": contact_fields.iso_birthdate(raw.birthdate) or None,
+            "household": (raw.household or "").strip()[:120],
+            "role": raw.household_role if raw.household_role in ("adult", "child") else ""}
+
+
+def _plan_families(business_id: str, people: List[Dict[str, Any]],
+                   to_create: List[Tuple[int, Dict[str, Any]]], no_status: set,
+                   results: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], List[Dict[str, str]]]:
+    """Who becomes a family, before anything is written. A child the file
+    gave no status of its own takes the family's, so a member family's
+    children are members on the roll and a visiting family's are guests."""
+    if not people:
+        return [], []
+    import church_families
+    homes = church_families.family_of(business_id)
+    if homes is None:
+        return [], [{"name": "Families", "why": "families couldn't be read just now, so none were made"}]
+    families, not_made = church_families.plan_from_file(people, homes)
+    existing = [p["id"] for f in families for p in f["adults"] if p.get("id")]         + [i for f in families for i in f.get("already") or []]
+    status_of: Dict[str, str] = {}
+    if existing:
+        rows = sb_clients.sb_get_as_service(
+            f"/contacts?business_id=eq.{business_id}&id=in.({','.join(existing)})&select=id,status") or []
+        status_of = {str(r["id"]): str(r.get("status") or "") for r in rows}
+    by_row = {r["row"]: r for r in results}
+    for f in families:
+        said = [p["payload"]["status"] if p.get("payload") else status_of.get(str(p["id"]), "")
+                for p in f["adults"] if p["ref"] not in no_status]             + [status_of.get(i, "") for i in f.get("already") or []]
+        said = [x for x in said if x]
+        family_status = "active" if any(s in ("active", "vip") for s in said) else (said[0] if said else "")
+        for p in f["adults"] + f["children"]:
+            row = by_row.get(p["ref"])
+            if row is not None:
+                row["family"] = f["name"]
+                row["family_as"] = "child" if p in f["children"] else "adult"
+        for p in f["children"]:
+            if p.get("payload") and p["ref"] in no_status and family_status in VALID_STATUSES:
+                p["payload"]["status"] = family_status
+                if family_status != "lead":
+                    p["payload"].pop("first_response_at", None)
+    return families, not_made
+
+
+def _make_families(business_id: str, families: List[Dict[str, Any]],
+                   results: List[Dict[str, Any]]) -> Tuple[int, List[Dict[str, str]]]:
+    """Write the planned families once their people exist. Someone whose
+    record didn't save leaves the family; a family left with fewer than
+    two people, or no adult, isn't made."""
+    import church_families
+    made_id = {r["row"]: r.get("contact_id") for r in results if r.get("action") in ("created", "matched")}
+    made = 0
+    not_made: List[Dict[str, str]] = []
+    for f in families:
+        def ready(people: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+            out = []
+            for p in people:
+                cid = p.get("id") or made_id.get(p["ref"])
+                if cid:
+                    out.append({**p, "id": cid})
+            return out
+        adults, kids = ready(f["adults"]), ready(f["children"])
+        hid = f.get("household_id")
+        if not hid and (not adults or len(adults) + len(kids) < 2):
+            if f["adults"] or f["children"]:
+                not_made.append({"name": f["name"], "why": "some of them didn't save"})
+            continue
+        if hid:
+            ok = church_families.join_family(business_id, hid, adults, kids) if (adults or kids) else False
+        else:
+            ok = bool(church_families.make_family(business_id, f["name"], adults, kids))
+        if ok:
+            f["made"] = True
+            made += 1
+        else:
+            not_made.append({"name": f["name"], "why": "it didn't save; make it on the Families page"})
+    return made, not_made
