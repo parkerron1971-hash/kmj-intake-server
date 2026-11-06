@@ -99,8 +99,11 @@ def spy(monkeypatch):
     # These tests are about the second door, not the signature.
     monkeypatch.delenv("DOCUSEAL_WEBHOOK_SECRET", raising=False)
 
-    monkeypatch.setattr(dr.sb_clients, "sb_patch_as_service",
-                        lambda path, body: s.patched.append((path, body)))
+    def _patch(path, body):
+        s.patched.append((path, body))
+        return [{"id": "row"}]          # PostgREST hands back the row it changed
+
+    monkeypatch.setattr(dr.sb_clients, "sb_patch_as_service", _patch)
 
     import event_spine
     monkeypatch.setattr(event_spine, "emit",
@@ -419,3 +422,43 @@ def test_a_dead_email_provider_does_not_break_a_signature(monkeypatch):
     monkeypatch.setattr(dr, "_owner_email", _owner)
 
     asyncio.run(dr._send_completion_emails(BIZ, _doc()))   # must not raise
+
+
+# ── Three deliveries at once ─────────────────────────────────────────
+
+def _racing(spy, monkeypatch, patched):
+    """Every delivery read the row as "sent" before any of them wrote."""
+    monkeypatch.setattr(dr.sb_clients, "sb_patch_as_service", lambda path, body: patched(path, body))
+    return {"id": "row", "document_id": "13222878", "status": "sent", "title": "Covenant"}
+
+
+def test_only_the_delivery_that_claims_the_row_fires_the_completion(spy, monkeypatch):
+    """A real signature, 2026-11-06: three webhooks in the same second, each
+    reading "sent", sent three copies of both emails and three contract_signed."""
+    claims = iter([[{"id": "row"}], [], []])
+    doc = _racing(spy, monkeypatch, lambda path, body: next(claims))
+    biz = {"id": "b1", "name": "Grace", "owner_id": "o1"}
+    results = [asyncio.run(dr._apply_status(doc, biz, "completed")) for _ in range(3)]
+    assert [r["changed"] for r in results] == [True, False, False]
+    assert len(spy.emitted) == 1
+    assert len(spy.emails) == 1
+    assert len(spy.audited) == 1
+
+
+def test_the_patch_only_matches_a_row_not_already_there(spy, monkeypatch):
+    paths = []
+
+    def patched(path, body):
+        paths.append(path)
+        return [{"id": "row"}]
+
+    doc = _racing(spy, monkeypatch, patched)
+    asyncio.run(dr._apply_status(doc, {"id": "b1"}, "completed"))
+    assert paths == ["/esign_documents?id=eq.row&status=neq.completed"]
+
+
+def test_a_failed_write_fires_nothing(spy, monkeypatch):
+    doc = _racing(spy, monkeypatch, lambda path, body: None)
+    out = asyncio.run(dr._apply_status(doc, {"id": "b1"}, "completed"))
+    assert out["changed"] is False
+    assert spy.emitted == [] and spy.emails == [] and spy.audited == []
