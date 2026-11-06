@@ -68,6 +68,55 @@ an email, a text, an invoice, a document — is yours to check. The ledger
 records what was sent; it does not make it correct.
 """
 
+# ── The same notice, for a church ─────────────────────────────────────
+# Kevin, 2026-11-06. A church read about "your clients", "your business"
+# and "an invoice". It is a separate document, not an edit: PRACTITIONER_V1
+# is what every business has accepted, and a church's own words have their
+# own hash. It is a VERSION of the practitioner document ("church-1"), so
+# consent_records (audience in practitioner, client) needs no migration.
+#
+# Every sentence is checked against what the code does for a church, so
+# this is not a find-and-replace of V1:
+#   - V1's "regulated field" line is left out: a church isn't one
+#     (policy_engine._REGULATED_HINTS), so that promise isn't a church's.
+#   - Bulk: policy_engine refuses a bulk verb unattended ("bulk:never-
+#     unattended"), and a person asking runs it; V1's "confirming the list
+#     on screen" no longer covers work done on request (Kevin, 2026-10-30).
+#   - Deleting: handle_delete_contact keeps a record with anything attached.
+PRACTITIONER_CHURCH_V1 = """\
+How AI works in the Solutionist System
+
+Chief is an AI assistant. It reads your church's data to answer you, and
+it can take actions on your behalf.
+
+WHAT IT DOES ON ITS OWN
+Chief drafts, summarises, and prepares work without asking. It can send
+routine follow-ups and reminders where you have switched that on.
+
+WHAT IT NEVER DOES ON ITS OWN
+It does not run anything that affects many records at once unless
+someone asked it to. It does not delete a person's record that still has
+history attached to it.
+
+WHAT IS WRITTEN DOWN
+Every action Chief takes is recorded in an append-only ledger with the
+model that made the decision, whether it succeeded, and what authorised
+it. You can read it, and so can an auditor you invite. The record cannot
+be edited, including by us.
+
+WHAT YOU CAN TURN OFF
+Messages Chief sends to your people on its own, scheduled work, and AI
+voice are all yours to disable. Turning them off never stops you doing
+the same work yourself.
+
+AI GETS THINGS WRONG
+Chief can be confidently wrong. Anything that leaves your church — an
+email, a text, a receipt, a giving statement — is yours to check. The
+ledger records what was sent; it does not make it correct. Chief does
+not replace your judgment in pastoral care, money, or the safety of
+children.
+"""
+
 # ── The client-facing disclosure ──────────────────────────────────────
 # Deliberately short. This is read on a phone, mid-conversation, by
 # somebody who did not come here to read a policy.
@@ -108,13 +157,22 @@ to any text to stop receiving them.
 CLIENT_SMS_V1 = "Replies here are AI-generated. Ask for a human any time."
 
 _DOCUMENTS: Dict[str, Dict[str, str]] = {
-    "practitioner": {"1": PRACTITIONER_V1},
+    "practitioner": {"1": PRACTITIONER_V1, "church-1": PRACTITIONER_CHURCH_V1},
     "client": {"1": CLIENT_V1},
     "client_sms": {"1": CLIENT_SMS_V1},
 }
 
 CURRENT: Dict[str, str] = {"practitioner": "1", "client": "1",
                            "client_sms": "1"}
+# What a church reads instead, where it has its own words.
+CURRENT_CHURCH: Dict[str, str] = {"practitioner": "church-1"}
+
+
+def version_for(audience: str, church: bool = False) -> str:
+    """The version this reader is held to."""
+    if church and audience in CURRENT_CHURCH:
+        return CURRENT_CHURCH[audience]
+    return CURRENT.get(audience) or ""
 
 
 def text_hash(text: str) -> str:
@@ -143,13 +201,16 @@ def get(audience: str, version: Optional[str] = None) -> Optional[Dict[str, str]
             "hash": text_hash(body)}
 
 
-def current(audience: str) -> Optional[Dict[str, str]]:
-    return get(audience, CURRENT.get(audience))
+def current(audience: str, *, church: bool = False) -> Optional[Dict[str, str]]:
+    return get(audience, version_for(audience, church))
 
 
 def is_current(audience: str, version: Optional[str],
-               accepted_hash: Optional[str] = None) -> bool:
+               accepted_hash: Optional[str] = None, *, church: bool = False) -> bool:
     """Whether an acceptance still stands.
+
+    A church is held to its own words: someone who accepted the business
+    text hasn't read them yet, so they see it once more.
 
     A version match is NOT enough on its own. If a hash was recorded and
     no longer matches the text we ship, the document changed underneath
@@ -157,7 +218,7 @@ def is_current(audience: str, version: Optional[str],
     though the number is right. Returning True there would be the whole
     failure this module exists to prevent.
     """
-    cur = current(audience)
+    cur = current(audience, church=church)
     if not cur or str(version or "") != cur["version"]:
         return False
     if accepted_hash and accepted_hash != cur["hash"]:

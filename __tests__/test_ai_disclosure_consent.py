@@ -31,6 +31,9 @@ PINNED = {
 }
 
 
+CHURCH_PINNED = "b4d71bd1664fdf48da6a02197a4323f9"
+
+
 class TestTheDocuments:
     @pytest.mark.parametrize("audience", ["practitioner", "client"])
     def test_a_current_version_exists(self, audience):
@@ -67,6 +70,127 @@ class TestTheDocuments:
         t = " ".join(d.current("practitioner")["text"].lower().split())
         assert "never does on its own" in t
         assert "wrong" in t, "an AI disclosure that omits fallibility is marketing"
+
+
+class TestAChurchsOwnWords:
+    """Kevin, 2026-11-06. A church read about clients and invoices. Its
+    notice is its own document with its own hash; the business text and
+    every acceptance of it are untouched."""
+
+    def _church(self):
+        return " ".join(d.current("practitioner", church=True)["text"].lower().split())
+
+    def test_a_church_has_its_own_version_and_a_business_keeps_v1(self):
+        assert d.current("practitioner", church=True)["version"] == "church-1"
+        assert d.current("practitioner")["version"] == "1"
+        assert d.current("practitioner", church=True)["hash"] != d.current("practitioner")["hash"]
+
+    def test_a_churchs_text_is_pinned(self):
+        assert d.current("practitioner", church=True)["hash"].startswith(CHURCH_PINNED), (
+            "the church's disclosure text changed. ADD a version instead.")
+
+    @pytest.mark.parametrize("word", ["client", "business", "invoice", "customer", "regulated"])
+    def test_a_churchs_text_has_no_business_words(self, word):
+        assert word not in self._church()
+
+    def test_it_still_states_the_limits(self):
+        t = self._church()
+        assert "never does on its own" in t and "wrong" in t
+
+    def test_it_promises_only_what_the_code_does(self):
+        """A church isn't a regulated field, and bulk work runs when a person
+        asks, so neither V1 line is promised here."""
+        import policy_engine
+        assert not policy_engine.is_regulated({"type": "church"})
+        assert "regulated" not in self._church()
+        assert "confirming the list" not in self._church()
+        assert "unless someone asked it to" in self._church()
+
+    def test_someone_who_accepted_the_business_text_sees_the_churchs_once(self):
+        v1 = d.current("practitioner")
+        assert d.is_current("practitioner", v1["version"], v1["hash"], church=True) is False
+        c = d.current("practitioner", church=True)
+        assert d.is_current("practitioner", c["version"], c["hash"], church=True) is True
+
+    def test_a_business_is_never_held_to_the_churchs_text(self):
+        v1 = d.current("practitioner")
+        assert d.is_current("practitioner", v1["version"], v1["hash"]) is True
+
+    def test_both_versions_stay_readable_for_the_record(self):
+        assert d.get("practitioner", "1")["text"].startswith("How AI works")
+        assert d.get("practitioner", "church-1")["text"].startswith("How AI works")
+
+
+class TestAChurchThroughTheEndpoints:
+    BIZ = "11111111-1111-1111-1111-111111111111"
+
+    @pytest.fixture
+    def env(self, monkeypatch):
+        import business_access
+        import consent_router as cr
+        import sb_clients
+        rows = {"type": "church", "records": [], "writes": []}
+
+        def get(path):
+            if path.startswith("/businesses"):
+                return [{"type": rows["type"]}]
+            if path.startswith("/consent_records"):
+                return rows["records"]
+            return []
+
+        def post(path, body, prefer=None):
+            rows["writes"].append(body)
+            return [{"id": "r1"}]
+
+        monkeypatch.setattr(sb_clients, "sb_get_as_service", get)
+        monkeypatch.setattr(sb_clients, "sb_post_as_service", post)
+        monkeypatch.setattr(business_access, "assert_access", lambda *a, **k: None)
+        return cr, rows
+
+    class _User:
+        id = "u1"
+
+    class _Req:
+        headers = {}
+
+    def test_status_names_the_churchs_version(self, env):
+        cr, rows = env
+        out = cr.status(self.BIZ, "practitioner", self._User())
+        assert out["current"] is False and out["required_version"] == "church-1"
+
+    def test_a_past_acceptance_of_the_business_text_is_superseded(self, env):
+        cr, rows = env
+        v1 = d.current("practitioner")
+        rows["records"] = [{"version": "1", "text_hash": v1["hash"], "accepted_at": "2026-10-01"}]
+        out = cr.status(self.BIZ, "practitioner", self._User())
+        assert out["current"] is False and out["reason"] == "version_superseded"
+
+    def test_the_public_route_serves_the_named_version(self, env):
+        cr, _ = env
+        assert cr.disclosure("practitioner", "church-1")["version"] == "church-1"
+        assert cr.disclosure("practitioner")["version"] == "1"
+
+    def test_accepting_records_the_hash_of_the_churchs_words(self, env):
+        cr, rows = env
+        cr.accept(cr.AcceptBody(business_id=self.BIZ, version="church-1"), self._Req(), self._User())
+        assert rows["writes"][0]["version"] == "church-1"
+        assert rows["writes"][0]["text_hash"] == d.current("practitioner", church=True)["hash"]
+
+    def test_a_church_cant_accept_the_business_text(self, env):
+        """An old tab showed the business words. The record has to hash what
+        was shown, so that acceptance is refused, not filed as the church's."""
+        from fastapi import HTTPException
+        cr, rows = env
+        with pytest.raises(HTTPException) as e:
+            cr.accept(cr.AcceptBody(business_id=self.BIZ), self._Req(), self._User())
+        assert e.value.status_code == 409 and rows["writes"] == []
+
+    def test_a_business_is_unchanged(self, env):
+        cr, rows = env
+        rows["type"] = "barber"
+        assert cr.status(self.BIZ, "practitioner", self._User())["required_version"] == "1"
+        cr.accept(cr.AcceptBody(business_id=self.BIZ), self._Req(), self._User())
+        assert rows["writes"][0]["version"] == "1"
 
 
 class TestStalenessIsDetected:
