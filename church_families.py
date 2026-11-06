@@ -378,28 +378,146 @@ def accept(biz_id: str, body: Dict[str, Any], *, today: Optional[date] = None) -
     for i in kids:
         if not is_child(found[i], today):
             raise HTTPException(400, f"{first_name(found[i])} is 18 or older, so they join as an adult.")
-    made = sb_clients.sb_post_as_service("/households", {"business_id": biz, "name": name})
-    if not isinstance(made, list) or not made:
-        raise HTTPException(503, "That family didn't save. Try again in a moment.")
-    hid = str(made[0]["id"])
-    rel = "parent" if kids else "other"
-    ok = True
-    for i in adults:
-        saved = sb_clients.sb_post_as_service("/household_adults", {"household_id": hid, "contact_id": i,
-                                                                    "business_id": biz, "relationship": rel})
-        ok = ok and isinstance(saved, list) and bool(saved)
-    for i in kids:
-        r = found[i]
-        saved = sb_clients.sb_post_as_service("/children", {
-            "business_id": biz, "household_id": hid, "contact_id": i,
-            "first_name": first_name(r)[:80], "last_name": " ".join(_cased(w) for w in _surname_words(r))[:80],
-            "birthdate": str(r.get("birthdate"))[:10] if r.get("birthdate") else None})
-        ok = ok and isinstance(saved, list) and bool(saved)
-    if not ok:
-        # All or nothing: a half-made family is worse than none.
-        sb_clients.sb_delete_as_service(f"/households?id=eq.{_q(hid)}&business_id=eq.{_q(biz)}")
+    hid = make_family(biz, name, [found[i] for i in adults], [found[i] for i in kids])
+    if not hid:
         raise HTTPException(503, "That family didn't save. Nothing was kept. Try again in a moment.")
     return {"household_id": hid, "name": name}
+
+
+def _add_people(biz: str, hid: str, adults: List[Dict[str, Any]], kids: List[Dict[str, Any]],
+                rel: str) -> List[Tuple[str, str]]:
+    """Write adults and children into one household. Returns what was
+    written, as (table, contact_id), and stops at the first failure."""
+    done: List[Tuple[str, str]] = []
+    for r in adults:
+        saved = sb_clients.sb_post_as_service("/household_adults", {"household_id": hid, "contact_id": str(r["id"]),
+                                                                    "business_id": biz, "relationship": rel})
+        if not (isinstance(saved, list) and saved):
+            return done + [("", "")]
+        done.append(("household_adults", str(r["id"])))
+    for r in kids:
+        saved = sb_clients.sb_post_as_service("/children", {
+            "business_id": biz, "household_id": hid, "contact_id": str(r["id"]),
+            "first_name": first_name(r)[:80], "last_name": " ".join(_cased(w) for w in _surname_words(r))[:80],
+            "birthdate": str(r.get("birthdate"))[:10] if r.get("birthdate") else None})
+        if not (isinstance(saved, list) and saved):
+            return done + [("", "")]
+        done.append(("children", str(r["id"])))
+    return done
+
+
+def make_family(biz_id: str, name: str, adults: List[Dict[str, Any]], kids: List[Dict[str, Any]]) -> Optional[str]:
+    """One new household: its adults as household adults, its children as
+    children linked to their record. All or nothing: the household id, or
+    None with nothing kept. Rows need id, name, metadata, birthdate."""
+    biz = str(biz_id)
+    made = sb_clients.sb_post_as_service("/households", {"business_id": biz, "name": _plain(name)[:120] or "A family"})
+    if not isinstance(made, list) or not made:
+        return None
+    hid = str(made[0]["id"])
+    done = _add_people(biz, hid, adults, kids, "parent" if kids else "other")
+    if done and done[-1] == ("", ""):
+        # A half-made family is worse than none.
+        sb_clients.sb_delete_as_service(f"/households?id=eq.{_q(hid)}&business_id=eq.{_q(biz)}")
+        return None
+    return hid
+
+
+def join_family(biz_id: str, hid: str, adults: List[Dict[str, Any]], kids: List[Dict[str, Any]]) -> bool:
+    """Add people to a household that already exists (a second import of
+    the same file brings a new baby). Nothing half-added: on a failure
+    the rows this call wrote are taken back out."""
+    biz = str(biz_id)
+    done = _add_people(biz, str(hid), adults, kids, "parent")
+    if done and done[-1] == ("", ""):
+        for table, cid in done[:-1]:
+            sb_clients.sb_delete_as_service(f"/{table}?household_id=eq.{_q(hid)}&contact_id=eq.{_q(cid)}"
+                                            f"&business_id=eq.{_q(biz)}")
+        return False
+    return True
+
+
+def family_of(biz: str) -> Optional[Dict[str, str]]:
+    """contact_id → household_id for everyone already in a family."""
+    adults = _rows(f"/household_adults?business_id=eq.{_q(biz)}&select=contact_id,household_id&limit=20000")
+    kids = _rows(f"/children?business_id=eq.{_q(biz)}&contact_id=not.is.null"
+                 "&select=contact_id,household_id&limit=20000")
+    if adults is None or kids is None:
+        return None
+    out = {str(r["contact_id"]).lower(): str(r["household_id"]) for r in adults if r.get("contact_id")}
+    out.update({str(r["contact_id"]).lower(): str(r["household_id"]) for r in kids if r.get("contact_id")})
+    return out
+
+
+# ─── families a church's own file names (contacts_import_router) ─────
+# The file says who lives together (a Household column), so nothing is
+# guessed and status doesn't gate it: a visiting family with a child is
+# exactly who Kids check-in has to find on Sunday.
+
+def family_name_from_file(value: Any, people: List[Dict[str, Any]]) -> str:
+    """'Hale' → 'The Hale family'; 'The Hale Family' and 'Marcus & Denise
+    Hale' as written; an id ('HH-1023', '4471') → from their last names."""
+    v = _plain(value)[:120]
+    if not re.search(r"[A-Za-z]", v) or (re.search(r"\d", v) and " " not in v):
+        return _family_name(people)
+    if re.search(r"\b(family|household|home)\b|&|\band\b|,", v, re.I) or len(v.split()) > 3:
+        return v
+    return f"The {' '.join(_cased(w) for w in v.split())} family"
+
+
+def _child_in_file(p: Dict[str, Any], today: date) -> bool:
+    """A birthdate decides; without one, the file's word does."""
+    a = age(p.get("birthdate"), today)
+    if a is not None:
+        return a < CHILD_AGE
+    return p.get("role") == "child"
+
+
+def plan_from_file(people: List[Dict[str, Any]], family_of_ids: Dict[str, str],
+                   today: Optional[date] = None) -> Tuple[List[Dict[str, Any]], List[Dict[str, str]]]:
+    """people: one per person in the file — {ref, id (None until made),
+    name, metadata, birthdate, household, role}. Returns (families,
+    not_made). A family is {name, household_id (set when it joins one
+    that exists), adults, children, already (ids of the people in the
+    file who are in it already)}. Two or more people make a family; a
+    household of one stays a person. Someone already in a family stays
+    in it."""
+    today = today or _today()
+    groups: Dict[str, List[Dict[str, Any]]] = {}
+    for p in people:
+        k = _plain(p.get("household")).casefold()
+        if k:
+            groups.setdefault(k, []).append(p)
+    families: List[Dict[str, Any]] = []
+    not_made: List[Dict[str, str]] = []
+    for group in groups.values():
+        if len(group) < 2:
+            continue
+        name = family_name_from_file(group[0].get("household"), group)
+        homes = {family_of_ids[str(p["id"]).lower()] for p in group
+                 if p.get("id") and str(p["id"]).lower() in family_of_ids}
+        free = [p for p in group if not (p.get("id") and str(p["id"]).lower() in family_of_ids)]
+        if not free:
+            continue                                  # already a family: nothing to do
+        if len(homes) > 1:
+            not_made.append({"name": name, "why": "some of them are already in different families"})
+            continue
+        if len(free) > FAMILY_MAX:
+            not_made.append({"name": name, "why": f"{len(free)} people is more than one family"})
+            continue
+        adults = [p for p in free if not _child_in_file(p, today)]
+        kids = [p for p in free if _child_in_file(p, today)]
+        hid = next(iter(homes)) if homes else None
+        if not hid and not adults:
+            not_made.append({"name": name, "why": "nobody in it is an adult"})
+            continue
+        if not hid and len(free) < 2:
+            continue
+        already = [str(p["id"]) for p in group if p.get("id") and str(p["id"]).lower() in family_of_ids]
+        families.append({"name": name, "household_id": hid, "adults": adults, "children": kids,
+                         "already": already})
+    families.sort(key=lambda f: f["name"].casefold())
+    return families, not_made
 
 
 def accept_sure(biz_id: str, *, today: Optional[date] = None) -> int:

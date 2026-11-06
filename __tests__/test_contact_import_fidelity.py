@@ -333,7 +333,8 @@ def test_import_and_column_guess_are_gated(fake):
         cir.guess_columns(BIZ, cir.ColumnsBody(headers=["Name"]), _Stranger())
     assert e2.value.status_code == 403
     out = cir.guess_columns(BIZ, cir.ColumnsBody(headers=SQUARE, sample_rows=[square_row("A", "B", "a@x.com", "")]), _Owner())
-    assert {f["id"] for f in out["fields"]} == set(cf.FIELD_IDS)
+    # A barber is offered every field but a church's two (household, adult or child).
+    assert {f["id"] for f in out["fields"]} == set(cf.FIELD_IDS) - cf.CHURCH_FIELDS
     assert out["columns"][1]["field"] == "first_name"
     with pytest.raises(HTTPException):
         cir.import_contacts(BIZ, cir.ImportBody(table=cir.ImportTable(
