@@ -134,7 +134,7 @@ def _wire_refresh(monkeypatch, provider):
         return [{"id": "biz-1", "name": "KMJ", "owner_id": "owner-1"}]
     monkeypatch.setattr(docuseal_router.sb_clients, "sb_get_as_service", _get)
     monkeypatch.setattr(docuseal_router.sb_clients, "sb_patch_as_service",
-                        lambda *a, **k: None)
+                        lambda *a, **k: [{"id": "row"}])
 
 
 def test_refresh_of_a_retired_provider_row_never_asks_docuseal(monkeypatch):
