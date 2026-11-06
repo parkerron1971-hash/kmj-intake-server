@@ -461,8 +461,8 @@ def test_the_plan_prose_is_held_to_the_gates(by_size):
     assert "3 office logins on Small, 8 on Growing, 15 on Established and 35 on Large" in books
     assert "A seat for your accountant on Established and Large" in books
     assert "Established and Large add an audit trail and a seat for your accountant." in books
-    assert books.count("<span>On every plan</span>") == 2                  # the close and Chief's sorting
-    assert "<span>On every plan</span>" in site and "sermon clips are on every plan" in site
+    assert books.count(">On every plan<") == 2                             # the close and Chief's sorting
+    assert ">On every plan<" in site and "sermon clips are on every plan" in site
     assert "sign-in codes are texted from your church's own number" in app
 
 
@@ -521,4 +521,4 @@ def test_the_kids_cards_carry_their_own_dark_text():
     leader's note read as blank. The card and the note set their own ink."""
     page = cs.render("kids-and-youth")
     assert re.search(r"\.k-card\{[^}]*background:#ffffff;color:#2b1d0e", page)
-    assert 'background: #fff3d6; color: #5c3d00' in page
+    assert re.search(r"\.ky-hold\{[^}]*background:#FFF1DA;color:#5c3d00", page)
