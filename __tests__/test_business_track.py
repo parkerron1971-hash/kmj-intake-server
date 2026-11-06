@@ -84,12 +84,12 @@ BUILD_PAGES = {
     "print-materials", "my-site", "link-page", "booking", "booking-share",
     "intake-forms", "custom-modules", "module-builder", "structure-import",
     "social-media", "email-templates", "resources", "products", "analytics",
-    "integrations", "settings",
+    "integrations", "settings", "member-app",
 }
 OPERATE_SUBS = {
     "dashboard", "queue", "contacts", "email", "sms", "projects", "calendar",
     "invoices", "payments", "bookkeeping", "tasks", "documents", "agents",
-    "history", "offerings-manager",
+    "history", "offerings-manager", "attendance", "messaging",
 }
 
 
@@ -146,7 +146,8 @@ def test_vertical_filter_returns_real_keys_heaviest_first():
         keys = bta.plugins_for_vertical(vertical)
         assert keys, f"{vertical!r} got an empty plug-in list"
         assert all(k in bta.PLUGIN_CATALOG for k in keys)
-        weights = [bta.PLUGIN_CATALOG[k]["weight"] for k in keys]
+        # A vertical can weigh a step differently (VERTICAL_WORDS).
+        weights = [bta.words_for(k, vertical).get("weight") or bta.PLUGIN_CATALOG[k]["weight"] for k in keys]
         assert weights == sorted(weights, reverse=True)
 
 

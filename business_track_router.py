@@ -247,7 +247,38 @@ def _done_concierge(biz: Dict[str, Any]) -> bool:
     return bool(cfg.get("enabled"))
 
 
+# What a church switches on: read from where each feature reads it, so a
+# step can't say done while the feature stays off.
+
+def _member_portal(biz: Dict[str, Any]) -> Dict[str, Any]:
+    cfg = (biz.get("settings") or {}).get("member_portal")
+    return cfg if isinstance(cfg, dict) else {}
+
+
+def _done_member_app(biz: Dict[str, Any]) -> bool:
+    return bool(_member_portal(biz).get("enabled"))
+
+
+def _done_member_alerts(biz: Dict[str, Any]) -> bool:
+    import member_push
+    return bool(member_push.church_kinds(biz.get("settings") or {}))
+
+
+def _done_sunday_checkin(biz: Dict[str, Any]) -> bool:
+    return _exists(f"/church_checkin_settings?business_id=eq.{biz['id']}"
+                   "&enabled=is.true&select=business_id&limit=1")
+
+
+def _done_messaging(biz: Dict[str, Any]) -> bool:
+    cfg = (biz.get("settings") or {}).get("messaging")
+    return isinstance(cfg, dict) and bool(cfg.get("enabled"))
+
+
 PROBES = {
+    "member_app":      _done_member_app,
+    "member_alerts":   _done_member_alerts,
+    "sunday_checkin":  _done_sunday_checkin,
+    "messaging":       _done_messaging,
     "import_contacts": _done_import_contacts,
     "offerings":       _done_offerings,
     "intake_form":     _done_intake_form,
@@ -326,6 +357,8 @@ def resolve_plugins(biz: Dict[str, Any]) -> List[Dict[str, Any]]:
 
     if not chosen:
         chosen = bta.plugins_for_vertical(biz.get("type"))
+    # A coach's plan can't know these exist unless someone asks about them.
+    chosen += [k for k in bta.always_shown(biz.get("type")) if k not in chosen]
 
     done_map = {k: _probe(k, biz) for k in chosen}
 
