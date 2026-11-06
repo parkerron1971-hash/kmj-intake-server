@@ -63,7 +63,7 @@ def _esign_env(monkeypatch, ledger, pdf_b64):
     import docuseal_router as dr
     import event_spine
     sent, fetches = [], []
-    monkeypatch.setattr(dr.sb_clients, 'sb_patch_as_service', lambda path, body: None)
+    monkeypatch.setattr(dr.sb_clients, 'sb_patch_as_service', lambda path, body: [{'id': 'row'}])
     monkeypatch.setattr(event_spine, 'emit', lambda *a, **k: None)
 
     async def fetch(document_id):

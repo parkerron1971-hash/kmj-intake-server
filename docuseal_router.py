@@ -496,7 +496,15 @@ async def _apply_status(doc: Dict[str, Any], biz: Dict[str, Any],
     """Persist a provider status and fire everything a completion owes.
 
     Idempotent: an unchanged status is a no-op, so a redelivery costs
-    one comparison and nothing else."""
+    one comparison and nothing else.
+
+    THE WRITE IS THE CLAIM. DocuSeal sends form.completed and
+    submission.completed together, and several replicas take them at
+    once, so each read the row as still "sent". Comparing that read was
+    not enough: a real signature (2026-11-06) sent three copies of both
+    confirmation emails and fired contract_signed three times. The patch
+    only matches a row not already in this status, so exactly one
+    delivery gets a row back and goes on; the rest stop here."""
     biz_id = str(biz.get("id") or "")
     if not new_status or new_status == doc.get("status"):
         return {"status": doc.get("status"), "changed": False}
@@ -504,7 +512,13 @@ async def _apply_status(doc: Dict[str, Any], biz: Dict[str, Any],
     patch: Dict[str, Any] = {"status": new_status, "updated_at": _now_iso()}
     if new_status == "completed":
         patch["completed_at"] = _now_iso()
-    sb_clients.sb_patch_as_service(f"/esign_documents?id=eq.{doc['id']}", patch)
+    claimed = sb_clients.sb_patch_as_service(
+        f"/esign_documents?id=eq.{doc['id']}&status=neq.{new_status}", patch)
+    if not claimed:
+        # [] = another delivery got here first. None = the write failed,
+        # and nothing owed should fire over a status we didn't save:
+        # refresh and the next delivery still can.
+        return {"status": doc.get("status"), "changed": False}
 
     if new_status == "completed":
         import event_spine
