@@ -56,6 +56,12 @@ def fake(monkeypatch):
 
     def post(p, b, prefer="rep"):
         if isinstance(b, list):
+            # PostgREST refuses a bulk insert whose rows don't share their
+            # keys (PGRST102, "All object keys must match"), and
+            # sb_post_as_service turns that into None. A fake that accepts
+            # them hid exactly that bug in the 11-05 church import.
+            if len({frozenset(x) for x in b}) > 1:
+                return None
             return [fb.post(p, x, prefer)[0] for x in b]
         return fb.post(p, b, prefer)
 
@@ -323,6 +329,15 @@ def test_a_bad_email_no_longer_throws_the_person_away(fake):
     assert out["results"][0]["action"] == "created"
     c = fake.rows("contacts")[0]
     assert c["email"] is None and c["metadata"]["imported"]["Email (as written)"] == "tom at gmail"
+
+
+def test_a_job_title_on_only_some_rows_saves_everyone(fake):
+    headers = ["Name", "Email", "Job Title"]
+    rows = [["Dana Whitfield", "dana@x.com", "Owner"], ["Marcus Lee", "marcus@x.com", ""]]
+    out = cir.import_contacts(BIZ, _table_body(headers, rows, False), _Owner())
+    assert out["summary"]["created"] == 2 and out["summary"]["failed"] == 0
+    roles = {c["name"]: c.get("role") for c in fake.rows("contacts")}
+    assert roles == {"Dana Whitfield": "Owner", "Marcus Lee": None}
 
 
 def test_import_and_column_guess_are_gated(fake):
