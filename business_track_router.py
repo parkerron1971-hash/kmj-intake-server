@@ -332,6 +332,8 @@ def resolve_plugins(biz: Dict[str, Any]) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     for key in chosen:
         spec = bta.PLUGIN_CATALOG[key]
+        # A church's own words for the step, where it has them.
+        words = bta.words_for(key, biz.get("type"))
         # A prerequisite that isn't met yet is worth SAYING, not hiding —
         # "point your domain at your site" makes no sense before there is
         # a site, and silently dropping it looks like the list forgot.
@@ -342,8 +344,8 @@ def resolve_plugins(biz: Dict[str, Any]) -> List[Dict[str, Any]]:
                    if not (done_map[n] if n in done_map else _probe(n, biz))]
         out.append({
             "key": key,
-            "title": spec["title"],
-            "why": reasons.get(key) or spec["why"],
+            "title": words.get("title") or spec["title"],
+            "why": reasons.get(key) or words.get("why") or spec["why"],
             "nav": spec["nav"],
             "done": done_map[key],
             "blocked_by": blocked,

@@ -714,6 +714,53 @@ def sendable_artifact_for(business_type: Optional[str]) -> Dict[str, Any]:
     return SENDABLE_ARTIFACT.get(canonical) or SENDABLE_ARTIFACT.get(raw) or SENDABLE_ARTIFACT["custom"]
 
 
+# A vertical's own words for the steps it shares with every business.
+# A church was told "Bring your client list over" because "everything ...
+# invoices ... reads from your contacts", and "Connect how you get paid"
+# because it "turns an invoice into money" (run-through, 2026-11-05).
+# Only title / why / chief are overridden; the step, its door and its
+# done-probe stay the catalog's.
+VERTICAL_WORDS: Dict[str, Dict[str, Dict[str, str]]] = {
+    "ministry": {
+        "import_contacts": {
+            "title": "Bring your people over",
+            "why": "Members, guests and families from Subsplash, Planning Center or a "
+                   "spreadsheet. Shepherding, Kids check-in, giving statements and the "
+                   "morning brief all read from your people.",
+        },
+        "payments": {
+            "title": "Connect Stripe for giving",
+            "why": "Gifts given online need somewhere to land. Stripe pays them out to "
+                   "the church's bank.",
+            "chief": ("DOOR. navigate build/integrations, say what it unlocks (gifts given "
+                      "online reach the church's bank, and the giving page can go on), and "
+                      "ask them to tell you when it is connected — you will see it on the "
+                      "next turn."),
+        },
+        "site": {
+            "why": "The front door: when you meet, where to find you, and how to give.",
+        },
+        "brand": {
+            "why": "Everything the system makes for you inherits this — site, bulletins, "
+                   "PDFs, posts.",
+        },
+    },
+}
+
+
+def words_for(key: str, business_type: Optional[str]) -> Dict[str, str]:
+    """This vertical's title / why / chief for a step, where it has its
+    own; {} where the catalog's words are its words too."""
+    raw = (business_type or "").strip().lower()
+    try:
+        import vertical_registry
+        canonical = vertical_registry.resolve(raw)
+    except Exception:
+        canonical = raw
+    table = VERTICAL_WORDS.get(canonical) or VERTICAL_WORDS.get(raw) or {}
+    return dict(table.get(key) or {})
+
+
 def plugins_for_vertical(business_type: Optional[str]) -> List[str]:
     """Catalog keys applicable to this vertical, most valuable first.
 
@@ -759,7 +806,8 @@ def plugin_how(key: str, sources: Optional[List[str]] = None,
     says the vertical's own word for them."""
     if key == "import_contacts":
         return import_contacts_how(sources, other, business_type)
-    return str((PLUGIN_CATALOG.get(key) or {}).get("chief") or "")
+    return str(words_for(key, business_type).get("chief")
+               or (PLUGIN_CATALOG.get(key) or {}).get("chief") or "")
 
 
 def _plugin_menu_for_prompt(business_type: Optional[str]) -> str:
@@ -768,7 +816,8 @@ def _plugin_menu_for_prompt(business_type: Optional[str]) -> str:
         spec = PLUGIN_CATALOG[k]
         needs = needs_for(k, business_type)
         need = (" (only after: %s)" % ", ".join(needs)) if needs else ""
-        lines.append(f"    {k} — {spec['title']}{need}")
+        title = words_for(k, business_type).get("title") or spec["title"]
+        lines.append(f"    {k} — {title}{need}")
     return "\n".join(lines)
 
 
