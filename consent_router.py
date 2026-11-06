@@ -38,14 +38,23 @@ class AcceptBody(BaseModel):
     version: Optional[str] = None
 
 
+def _is_church(business_id: str) -> bool:
+    """A church reads the notice in its own words (ai_disclosure)."""
+    import vertical_registry
+    rows = sb_clients.sb_get_as_service(
+        f"/businesses?id=eq.{business_id}&select=type&limit=1") or []
+    return bool(rows) and vertical_registry.resolve(str(rows[0].get("type") or "")) == "ministry"
+
+
 @router.get("/disclosure/{audience}")
-def disclosure(audience: str) -> Dict[str, Any]:
-    """The current disclosure for an audience. PUBLIC by design.
+def disclosure(audience: str, version: Optional[str] = None) -> Dict[str, Any]:
+    """A disclosure: the current one, or the `version` /consent/status
+    named for this reader (a church's own words). PUBLIC by design.
 
     Returns the hash alongside the text so a reader can check later that
     what they were shown is what a consent record claims they were shown.
     """
-    doc = ai_disclosure.current(audience)
+    doc = ai_disclosure.get(audience, version) if version else ai_disclosure.current(audience)
     if not doc:
         raise HTTPException(404, f"no disclosure for audience {audience!r}")
     return doc
@@ -64,7 +73,8 @@ def status(business_id: str, audience: str = "practitioner",
     import business_access
     business_access.assert_access(business_id, user, "viewer")
 
-    cur = ai_disclosure.current(audience)
+    church = _is_church(business_id)
+    cur = ai_disclosure.current(audience, church=church)
     if not cur:
         raise HTTPException(404, f"no disclosure for audience {audience!r}")
 
@@ -79,7 +89,7 @@ def status(business_id: str, audience: str = "practitioner",
                 "required_version": cur["version"], "accepted": None}
 
     ok = ai_disclosure.is_current(audience, latest.get("version"),
-                                  latest.get("text_hash"))
+                                  latest.get("text_hash"), church=church)
     return {
         "current": ok,
         "reason": (None if ok else
@@ -106,9 +116,11 @@ def accept(body: AcceptBody, request: Request,
     doc = ai_disclosure.get(body.audience, body.version)
     if not doc:
         raise HTTPException(404, "unknown disclosure audience or version")
-    if doc["version"] != (ai_disclosure.CURRENT.get(body.audience) or ""):
+    if doc["version"] != ai_disclosure.version_for(body.audience, _is_church(body.business_id)):
         # Accepting a superseded version would satisfy the check while
-        # leaving the person unaware of what actually changed.
+        # leaving the person unaware of what actually changed. A church
+        # accepting the business text lands here too: the record has to
+        # hash the words they were shown, and those are the church's.
         raise HTTPException(409, "that version has been superseded")
 
     written = sb_clients.sb_post_as_service("/consent_records?select=id", {
