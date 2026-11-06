@@ -2,7 +2,7 @@
 title: The covenant's Send popup names the Executive Pastor
 date: 2026-11-06
 agent: Claude Code (Claude Opus 5.5)
-asked: 'Kevin, 2026-11-06: "i want to use e-signature. can you see if it's working right?"'
+asked: 'Kevin, 2026-11-06: "i want to use e-signature. can you see if it''s working right?"'
 status: shipped
 prs: [kmj-intake-server (this PR), solutionist-studio covenant-names-pastor (the popup)]
 migrations: []
