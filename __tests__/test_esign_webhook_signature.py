@@ -95,7 +95,7 @@ def wired(monkeypatch):
             return [_doc(status="sent")]
         return [BIZ]
     monkeypatch.setattr(dr.sb_clients, "sb_get_as_service", _get)
-    monkeypatch.setattr(dr.sb_clients, "sb_patch_as_service", lambda *a, **k: None)
+    monkeypatch.setattr(dr.sb_clients, "sb_patch_as_service", lambda *a, **k: [{"id": "row"}])
 
     async def _completed(document_id):
         return "completed"
