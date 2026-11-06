@@ -413,3 +413,34 @@ def release(body: ReleaseIn, user: AuthedUser = Depends(require_user)):
     role = require(biz, user, "member")
     return do_release(biz, _occasion(biz, body.entry_id), body.code, body.checkin_ids, body.released_to,
                       _RANK[role] >= _RANK["manager"], str(user.id))
+
+
+# ─── This week's service, when there isn't one ───────────────────────
+# A new church has a Services & Events room and nothing in it, and
+# Sunday check-in (church_checkin) only makes the week's service once a
+# church switches members' check-in on. Kids check-in had nothing to
+# check children in to (run-through, 2026-11-05). One tap makes this
+# week's service at the church's service time, the same occasion the
+# hourly sweep would have made, once (church_checkin.ensure_occasion).
+
+class ThisWeekIn(BaseModel):
+    business_id: str
+
+
+@router.post("/this-week")
+def this_week(body: ThisWeekIn, user: AuthedUser = Depends(require_user)):
+    import church_checkin
+    biz = _uuid(body.business_id, "business")
+    require(biz, user, "member")
+    row = _one(f"/businesses?id=eq.{biz}&select=id,settings&limit=1", "That church isn't here any more")
+    st = church_checkin.settings(row)
+    if st is None:
+        raise _unavailable()
+    w = church_checkin.window(st)
+    occ = church_checkin.ensure_occasion(biz, st, w["day"])
+    if not occ:
+        raise HTTPException(409, "There's no Services & Events room to put the service in. "
+                                 "Open Services & Events, add a service, then check children in to it here.")
+    return {"occasion": {"id": occ["id"], "title": occ["title"], "date": occ["date"],
+                         "day": w["day"].isoformat(), "weekday": w["weekday"],
+                         "time": church_checkin.clock(w["start"])}}
