@@ -201,6 +201,15 @@ def _norm_phone(raw: str) -> str:
     return contact_fields.phone_key(raw)
 
 
+def _same_keys(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """PostgREST refuses a bulk insert whose rows don't share their keys
+    (PGRST102, "All object keys must match"), which loses the whole chunk.
+    role, birthdate and first_response_at are on only some rows, so every
+    row carries every key, null where it has none."""
+    keys = sorted({k for r in rows for k in r})
+    return [{k: r.get(k) for k in keys} for r in rows]
+
+
 def _name_key(name: str) -> str:
     return " ".join(str(name or "").split()).casefold()
 
@@ -603,7 +612,7 @@ def import_contacts(business_id: str, body: ImportBody,
         chunk = to_create[start:start + CHUNK]
         try:
             rows = sb_clients.sb_post_as_service(
-                "/contacts", [p for _, p in chunk])
+                "/contacts", _same_keys([p for _, p in chunk]))
             made = rows if isinstance(rows, list) else []
             if len(made) != len(chunk):
                 raise RuntimeError(f"{len(made)} of {len(chunk)} rows came back")
