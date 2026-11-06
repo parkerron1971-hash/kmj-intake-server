@@ -83,7 +83,7 @@ import json
 import logging
 import re
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger("business_track_actions")
 
@@ -650,10 +650,56 @@ PLUGIN_CATALOG: Dict[str, Dict[str, Any]] = {
         "chief": ('DOOR. navigate build/settings; it answers visitors at 11pm so they do not have to. Only after the site is up.'),
         "title": "Turn on the website concierge",
         "why": "Answers your visitors' questions at 11pm so you don't have to.",
-        "nav": {"tab": "build", "page": "settings"},
+        "nav": {"tab": "build", "page": "settings", "section": "concierge"},
         "verticals": "*",
         "needs": ["site"],
         "weight": 30,
+    },
+    # What a church has to switch on before its people feel anything
+    # (Kevin, 2026-11-06: "they might not know to turn them on"). All of it
+    # starts off, on purpose: the church decides what reaches a phone.
+    "member_app": {
+        "chief": ('DOOR. navigate build/member-app; say this is the page their people sign in to with a code, and that nothing reaches members until it is on. Ask them to tell you when it is on; you will see it next turn.'),
+        "title": "Turn on your member app",
+        "why": "Your people sign in with a code and find the news, Sunday's message, "
+               "giving and their groups. Nothing reaches them until it's on.",
+        "nav": {"tab": "build", "page": "member-app"},
+        "verticals": ["ministry"],
+        "needs": [],
+        "weight": 89,
+    },
+    "member_alerts": {
+        "chief": ('DOOR. navigate build/member-app; every kind of alert starts off, so nothing rings a phone until they choose. Walk them down the list (news, live, sermons, events, prayer and the rest), and say each member still chooses their own.'),
+        "title": "Choose your phone alerts",
+        "why": "Every alert starts off, so nothing rings a phone until you pick what "
+               "can: news, going live, new sermons, events, prayer and more. Each "
+               "member still chooses their own.",
+        "nav": {"tab": "build", "page": "member-app"},
+        "verticals": ["ministry"],
+        "needs": ["member_app"],
+        "weight": 88,
+    },
+    "sunday_checkin": {
+        "chief": ('DOOR. navigate operate/attendance; Sunday check-in is on that page: they set the service day and time once and turn it on, and a code on the welcome slide lets members count their own family, in the building or online. Only after the member app is on.'),
+        "title": "Set up Sunday check-in",
+        "why": "Set your service once. A code on the welcome slide lets members count "
+               "their own family, in the building or watching online, and this week's "
+               "service is made for you.",
+        "nav": {"tab": "operate", "sub": "attendance"},
+        "verticals": ["ministry"],
+        "needs": ["member_app"],
+        "weight": 87,
+    },
+    "messaging": {
+        "chief": ('DOOR. navigate operate/messaging; it stays off until two safety officers are named, because every message is checked and a held one needs someone to review it. Ask who those two people are. Only after the member app is on.'),
+        "title": "Set up member messaging",
+        "why": "Group chats and messages, each one checked before anyone sees it. It "
+               "needs two safety officers before it can turn on, and comments on your "
+               "news need them too.",
+        "nav": {"tab": "operate", "sub": "messaging"},
+        "verticals": ["ministry"],
+        "needs": ["member_app"],
+        "weight": 86,
     },
 }
 
@@ -744,8 +790,33 @@ VERTICAL_WORDS: Dict[str, Dict[str, Dict[str, str]]] = {
             "why": "Everything the system makes for you inherits this — site, bulletins, "
                    "PDFs, posts.",
         },
+        "concierge": {
+            "title": "Turn on your website assistant",
+            "why": "It answers visitors from your church's details and the FAQ you give "
+                   "it, day or night, and passes a name and email to the office.",
+            "chief": ("DOOR. navigate build/settings to the Website concierge; it answers "
+                      "visitors from the church's details and FAQ, so ask them to fill those "
+                      "in. Only after the site is up."),
+            "weight": 78,
+        },
     },
 }
+
+# Steps a church always sees, even when a coach's plan picked its own list:
+# the point of them is that nobody knows to ask.
+ALWAYS_SHOWN: Dict[str, Tuple[str, ...]] = {
+    "ministry": ("member_app", "member_alerts", "sunday_checkin", "messaging", "concierge"),
+}
+
+
+def always_shown(business_type: Optional[str]) -> Tuple[str, ...]:
+    raw = (business_type or "").strip().lower()
+    try:
+        import vertical_registry
+        canonical = vertical_registry.resolve(raw)
+    except Exception:
+        canonical = raw
+    return ALWAYS_SHOWN.get(canonical) or ALWAYS_SHOWN.get(raw) or ()
 
 
 def words_for(key: str, business_type: Optional[str]) -> Dict[str, str]:
@@ -786,7 +857,7 @@ def plugins_for_vertical(business_type: Optional[str]) -> List[str]:
         return v["verticals"] == "*" or raw in v["verticals"] or canonical in v["verticals"]
 
     keys = [k for k, v in PLUGIN_CATALOG.items() if applies(v)]
-    return sorted(keys, key=lambda k: -PLUGIN_CATALOG[k]["weight"])
+    return sorted(keys, key=lambda k: -(words_for(k, business_type).get("weight") or PLUGIN_CATALOG[k]["weight"]))
 
 
 def needs_for(key: str, business_type: Optional[str]) -> List[str]:
