@@ -234,7 +234,8 @@ def _viewer_role(row: Dict[str, Any], uid: str, owner_id: str, exec_id: str) -> 
 @router.get("")
 async def mine(business_id: str, user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     """What this login owes now: {on, sign: [...], send: [...]}. `send` is
-    the owner's: the admins who haven't been asked yet."""
+    the owner's: the admins who haven't been asked yet, with `pastor` beside
+    it, the Executive Pastor who would sign after them (None if none is found)."""
     import business_users_router as bur
     off: Dict[str, Any] = {"on": False, "sign": [], "send": []}
     b = _business(business_id)
@@ -260,7 +261,13 @@ async def mine(business_id: str, user: AuthedUser = Depends(require_user)) -> Di
     asked = {_user_of(r.get("source_ref")) for r in rows}
     send = ([{"name": a["name"], "lane": a["lane_label"]} for a in who["admins"] if a["user_id"] not in asked]
             if uid == owner_id else [])
-    return {"on": True, "sign": sign, "send": send, "title": f"{b.get('name') or 'Your church'} Admin Covenant"}
+    out: Dict[str, Any] = {"on": True, "sign": sign, "send": send,
+                           "title": f"{b.get('name') or 'Your church'} Admin Covenant"}
+    if send:
+        # Names the second signer before anything goes out. Without one the
+        # form skips that signature, and a covenant sent once isn't sent again.
+        out["pastor"] = (who.get("exec") or {}).get("name")
+    return out
 
 
 class SendBody(BaseModel):

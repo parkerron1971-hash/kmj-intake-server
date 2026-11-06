@@ -100,6 +100,25 @@ def test_before_it_is_sent_an_admin_sees_nothing_and_the_owner_is_asked(env):
     assert [a["name"] for a in mine(OWNER)["send"]] == ["Naiya Clark", "Tiara Adams"]
 
 
+def test_the_owner_sees_who_signs_second_before_sending(env):
+    assert mine(OWNER)["pastor"] == "Jessica McCloud"
+
+
+def test_no_executive_pastor_found_is_said_before_sending(env, monkeypatch):
+    monkeypatch.setattr(cc, "people", lambda b: {"admins": ADMINS, "exec": None})
+    out = mine(OWNER)
+    assert "pastor" in out and out["pastor"] is None
+
+
+def test_only_the_owner_is_told_who_signs_second(env):
+    assert "pastor" not in mine(NAIYA)
+
+
+def test_with_nobody_left_to_ask_the_pastor_is_not_mentioned(env):
+    env["rows"] = [_row(NAIYA), _row(TIARA)]
+    assert "pastor" not in mine(OWNER)
+
+
 def test_only_the_owner_can_send(env):
     with pytest.raises(HTTPException) as e:
         send(NAIYA)
