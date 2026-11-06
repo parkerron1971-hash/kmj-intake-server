@@ -138,6 +138,13 @@ NOT_WHAT_IT_DOES = {
     "website-and-sermons": ["gracefellowship.org/visit", "what your site already says", "will look for you at 11",
                             "Cars leave the church", "42 going", "pick another job", "38 min", "/sermons/rooted-in-love"],
     "member-app": ["from the member app</small>", "at the welcome desk"],
+    # A covered fee is 2.9% + 30c on the gift, and the gift is recorded at the full amount.
+    "giving": ["$3.20", "$103.20", "never pays the light bill", "Pause this gift?", "January 1 to December 31",
+               "Your statement is attached", "Preview one", "Chief puts them together", "file with their taxes",
+               "Sarah Kim · posted to the books", "first gift this month", "before it sends anything"],
+    "": ["have a note ready", "142 opened", "watching live", "every gift accounted for", "the only color on",
+         "Search people, groups, gifts", "Start free on", "drafts for shepherds", "Monthly givers come too",
+         "Start free, then ask for the move", "The app and the website"],
 }
 
 
@@ -148,13 +155,29 @@ def test_a_room_says_only_what_the_product_does(slug, lines):
         assert line not in page, (slug, line)
 
 
+@pytest.mark.parametrize("slug", LIT)
+def test_a_pastor_is_never_called_a_small_business(slug):
+    page = cs.render(slug)
+    assert "small business" not in page.lower(), slug
+    assert "before it sends anything or touches money" not in page, slug
+
+
+def test_the_covered_fee_is_the_one_the_giving_code_charges():
+    import giving_router
+    fee = giving_router.covered_fee_cents(10000)
+    assert fee == 330
+    page = cs.render("giving")
+    assert f"Add about ${fee / 100:.2f} to cover the card fee" in page
+    assert f"${(10000 + fee) / 100:.2f}" in page
+
+
 # ─── 4. the plan-by-size words ──────────────────────────────────────
 
 def test_the_funds_words_follow_the_plans(monkeypatch):
     off = cs.render("giving")
-    assert "On Professional and up, the books keep each restricted fund apart" in off
+    assert "On Professional and up, restricted gifts post to Restricted Contributions" in off
     assert "Month-end and year-end close on Professional" in off and "990 prep on the Solutionist plan" in off
     monkeypatch.setenv("PLAN_CHURCH_OFFERED", "1")
     on = cs.render("giving")
-    assert "the books keep each restricted fund apart for you, on every plan" in on
+    assert "each gift stays counted in it, on every plan" in on
     assert "990 prep on every plan" in on

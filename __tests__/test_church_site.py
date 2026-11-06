@@ -455,7 +455,7 @@ def test_the_plan_prose_is_held_to_the_gates(by_size):
         assert all(feature in fg.plan_features(p) for p in fg.CHURCH_PLANS), feature
     assert [("accountant_collaborator" in fg.plan_features(p)) for p in fg.CHURCH_PLANS] == [False, False, True, True]
     giving, books, site, app = (cs.render(s) for s in ("giving", "office-and-books", "website-and-sermons", "member-app"))
-    assert "the books keep each restricted fund apart for you, on every plan" in giving
+    assert "each gift stays counted in it, on every plan" in giving
     assert "Month-end and year-end close on every plan" in giving and "990 prep on every plan" in giving
     assert "Budget against actual on every plan" in books
     assert "3 office logins on Small, 8 on Growing, 15 on Established and 35 on Large" in books

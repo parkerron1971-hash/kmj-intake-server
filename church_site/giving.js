@@ -22,14 +22,12 @@
   if (rec) {
     var rs = rec.querySelector('.lit-screen'), q = function (k) { return rec.querySelector('[data-t="' + k + '"]'); };
     L.loop(rec, [
-      [0, function () { rec.classList.remove('sheet', 'paused'); }],
+      [0, function () { rec.classList.remove('paused'); }],
       [1400, function () { L.tap(rs, q('pause')); }],
-      [1800, function () { rec.classList.add('sheet'); }],
-      [3400, function () { L.tap(rs, q('go')); }],
-      [3800, function () { rec.classList.remove('sheet'); rec.classList.add('paused'); }],
-      [6600, function () { L.tap(rs, q('res')); }],
-      [7000, function () { rec.classList.remove('paused'); }]
-    ], 9400);
+      [1800, function () { rec.classList.add('paused'); }],
+      [4600, function () { L.tap(rs, q('res')); }],
+      [5000, function () { rec.classList.remove('paused'); }]
+    ], 7400);
   }
 
   /* funds: full at rest; once the script is watching, the glass fills when it's seen */

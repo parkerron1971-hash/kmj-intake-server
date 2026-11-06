@@ -117,7 +117,7 @@ PAGES: Dict[str, Dict[str, str]] = {
     "office-and-books": {
         "file": "office-and-books.html",
         "title": "Office and Books · Solutionist for Churches",
-        "description": ("The church's books on the same system as its giving: funds kept apart, a month-end "
+        "description": ("The church's books on the same system as its giving: gifts counted by fund, a month-end "
                         "close, statements in January, and giving seen only by the people who should see it."),
     },
 }
@@ -484,7 +484,7 @@ def _picker() -> str:
         f'<div class="top"><span class="nm" id="pk-name">{escape(start["name"])}</span>'
         f'<span class="pr"><b id="pk-price">{escape(start["m"])}</b><span id="pk-per">a month</span></span></div>\n'
         f'<ul id="pk-list">{items}</ul>\n'
-        f'<a id="pk-go" href="{{{{HOME}}}}/start">Start free on {escape(start["short"])}</a>\n'
+        f'<a id="pk-go" href="{{{{HOME}}}}/start">Start free</a>\n'
         '</div>\n</div>\n<div class="pk-room">\n'
         '<canvas id="pk-canvas" aria-label="A sanctuary drawn as seats. Lit seats are your people on a Sunday; '
         'the room is the size of your plan."></canvas>\n'
@@ -550,17 +550,18 @@ def _by_size() -> Dict[str, str]:
         "PICKER": _picker(),
         "PRICING_H2": 'Priced by <b style="font-weight: 600">your church\'s size.</b>',
         "PRICING_LEDE": ("Every part of church life comes with every plan. Your plan is set by how many people come "
-                         "on a Sunday, and it sets the room: office logins, texts, Chief's work and sermon clips. "
+                         "on a Sunday, and it sets the room: office logins, texts, Chief's work and sermon clips, and "
+                         "from Established up, an audit trail and a seat for your accountant. "
                          "Leaders, volunteers and members use the member app free, on every plan."),
         "PLAN_CARDS": _plan_cards(),
         "FOUNDER": _offer_line(),
         "CONV_LINE": _and(conv),
         # the product pages
         "PLAN_STRIP": _plan_strip(),
-        "FUNDS_LEDE": ("Givers pick the fund, and the books keep each restricted fund apart for you, on every plan, "
-                       "so the building fund never pays the light bill." if funds == "every plan" else
-                       f"Givers pick the fund on every plan. On {funds}, the books keep each restricted fund apart "
-                       "for you, so the building fund never pays the light bill."),
+        "FUNDS_LEDE": ("Givers pick the fund, and each gift stays counted in it, on every plan. Restricted gifts "
+                       "post to Restricted Contributions, apart from General." if funds == "every plan" else
+                       f"Givers pick the fund on every plan, and each gift stays counted in it. On {funds}, "
+                       "restricted gifts post to Restricted Contributions, apart from General."),
         "FUNDS_CLOSE": f"Month-end and year-end close on {_on('period_close')}",
         "PREP_990": f"990 prep on {_on('vertical_reports')}",
         "BUDGET_PLAN": f"Budget against actual on {_on('reports_full')}",
