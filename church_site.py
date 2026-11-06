@@ -379,9 +379,10 @@ def _offer_line() -> str:
     months, moves = o["move_months"], o["founding_moves"]
     move = f"Moving from another system costs {_words(months)} month{'' if months == 1 else 's'} of your plan"
     if moves == 1:
-        move += ", and the first church moves free."
+        move += ", and the first church moves free and keeps the price it starts at, for as long as it stays."
     elif moves:
-        move += f", and the first {_words(moves)} churches move free."
+        move += (f", and the first {_words(moves)} churches move free and keep the price they start at, "
+                 "for as long as they stay.")
     else:
         move += "."
     text = (f"Over {top:,} people or more than one campus? Multi-site starts at "
@@ -490,17 +491,31 @@ def _picker() -> str:
         '</div>')
 
 
+def _kept_price(moves: int) -> str:
+    """The founding churches' price (Kevin, 2026-11-05): the first churches
+    keep the price they start at, for as long as they stay. Nothing has to
+    run for this to hold: when a price goes up, a new Stripe price takes the
+    lookup key and every subscription stays on the price it has (see
+    pricing_config.founding_church_moves). Empty with no founding churches."""
+    if not moves:
+        return ""
+    if moves == 1:
+        return "It also keeps the price it starts at, for as long as it stays. "
+    return "They also keep the price they start at, for as long as they stay. "
+
+
 def _move_tokens() -> Dict[str, str]:
     """The move's offer, in the moving-over section's words, from
     pricing_config.church_offer(): how many churches move free (one glass
-    pane each, up to five), and what the move costs after them."""
+    pane each, up to five), that they keep their price, and what the move
+    costs after them."""
     import pricing_config
     o = pricing_config.church_offer()
     months, moves = o["move_months"], o["founding_moves"]
     cost = f"{_words(months)} month{'' if months == 1 else 's'} of your plan, paid once"
     if moves and months:
         free = "The first church moves free." if moves == 1 else f"The first {_words(moves)} churches move free."
-        after = f"After that, the move is {cost}. Either way, people do it with you."
+        after = f"{_kept_price(moves)}After that, the move is {cost}. Either way, people do it with you."
     elif months:
         free, after = f"The move is {cost}.", "People do it with you, by hand."
     else:
