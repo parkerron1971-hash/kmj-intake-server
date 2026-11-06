@@ -27,7 +27,8 @@ import pytest  # noqa: E402
 import church_site as cs  # noqa: E402
 import marketing_pages as mp  # noqa: E402
 
-LIT = ["giving"]
+LIT = ["giving", "member-app", "kids-and-youth", "people-and-care", "groups-and-classes",
+       "website-and-sermons", "office-and-books"]
 
 
 @pytest.fixture(autouse=True)
@@ -97,6 +98,54 @@ def test_giving_keeps_its_sample_labels_and_names_no_one():
     assert "Grace Fellowship" in page and "SAMPLE" in page and "Giving · sample" in page
     for gone in ("Love City", "Kevin"):
         assert gone not in page
+
+
+@pytest.mark.parametrize("slug", LIT)
+def test_every_room_names_no_one_and_says_its_samples_are_samples(slug):
+    page = cs.render(slug)
+    for gone in ("Love City", "Kevin", "office work"):
+        assert gone not in page, (slug, gone)
+    assert "Grace Fellowship" in page or "sample" in page.lower(), slug
+
+
+@pytest.mark.parametrize("slug", LIT)
+def test_every_room_reads_without_its_script(slug):
+    """Complete at rest: no room hides its words until a script runs."""
+    page = cs.render(slug)
+    body = re.sub(r"(?s)<(script|style)\b.*?</\1>", "", page)
+    assert len(re.sub(r"<[^>]+>", " ", body).split()) > 250, slug
+    assert re.search(r"<h1\b", body), slug
+
+
+@pytest.mark.parametrize("slug", LIT)
+def test_every_rooms_start_button_says_church(slug):
+    page = cs.render(slug)
+    assert 'href="https://mysolutionist.app/start"' not in page
+    assert "/start?for=church" in page
+
+
+# Each of these read well in a mock and isn't what the product does (the claims
+# review, 2026-11-06). A Stripe payout is matched to a payout, never to a Sunday:
+# that match is GIVING_DEPOSITS, and it isn't on for every church.
+NOT_WHAT_IT_DOES = {
+    "office-and-books": ["Sunday Oct 25 giving", "Sunday's giving", "Sunday's gifts", "(PDF)", "Here 3 of the last 4",
+                         "with who made it", "moved from General to Building fund", "Given this year"],
+    "kids-and-youth": ["from their own phones", "not in yet", "which leader", "by Denise R.", "leaders Denise",
+                       "second leader", "one tap"],
+    "people-and-care": ["or in the app", "Talk with a pastor", "Monday 8:00", "Came for the first time",
+                        "checked in at Kids", "Chief reads what they wrote", "Deacon · 12 families"],
+    "groups-and-classes": ["7 people are praying", "go first, when"],
+    "website-and-sermons": ["gracefellowship.org/visit", "what your site already says", "will look for you at 11",
+                            "Cars leave the church", "42 going", "pick another job", "38 min", "/sermons/rooted-in-love"],
+    "member-app": ["from the member app</small>", "at the welcome desk"],
+}
+
+
+@pytest.mark.parametrize("slug,lines", sorted(NOT_WHAT_IT_DOES.items()))
+def test_a_room_says_only_what_the_product_does(slug, lines):
+    page = cs.render(slug)
+    for line in lines:
+        assert line not in page, (slug, line)
 
 
 # ─── 4. the plan-by-size words ──────────────────────────────────────
