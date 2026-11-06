@@ -50,6 +50,12 @@ def fake(monkeypatch):
 
     def post(p, b, prefer="rep"):
         if isinstance(b, list):
+            # PostgREST refuses a bulk insert whose rows don't share their
+            # keys (PGRST102, "All object keys must match"), and
+            # sb_post_as_service turns that into None. A fake that accepts
+            # them hid exactly that bug in the 11-05 church import.
+            if len({frozenset(x) for x in b}) > 1:
+                return None
             return [fb.post(p, x, prefer)[0] for x in b]
         return fb.post(p, b, prefer)
 
@@ -195,7 +201,7 @@ def test_the_import_makes_members_guests_leaders_and_families(fake):
     assert _by_name(fake, "Jordan Hale")["birthdate"] == "2016-05-02"
     # Imported guests are not waiting on a reply.
     assert _by_name(fake, "Lena Brooks")["first_response_at"]
-    assert "first_response_at" not in _by_name(fake, "Jordan Hale")
+    assert not _by_name(fake, "Jordan Hale").get("first_response_at")
 
     homes = {h["name"]: h["id"] for h in fake.rows("households")}
     assert set(homes) == {"The Hale family", "The Brooks family"}
@@ -212,6 +218,19 @@ def test_the_import_makes_members_guests_leaders_and_families(fake):
     assert len(fake.rows("households")) == 2
     audit = fake.rows("audit_log")
     assert not audit or "2 families made" in audit[-1].get("summary", "")
+
+
+def test_members_guests_and_people_with_no_birthdate_save_in_one_batch(fake):
+    """One chunk holds rows with and without birthdate, first_response_at
+    and role. PostgREST takes that only when every row carries every key."""
+    headers = ["Name", "Email", "Membership Status", "Birthdate", "Job Title"]
+    rows = [["Ana Diaz", "ana@x.com", "Member", "1980-01-01", "Teacher"],
+            ["Bo Reed", "bo@x.com", "Visitor", "", ""]]
+    out = cir.import_contacts(CHURCH, _body(True, False, headers, rows), _Owner())
+    assert out["summary"]["created"] == 2 and out["summary"]["failed"] == 0
+    ana, bo = _by_name(fake, "Ana Diaz"), _by_name(fake, "Bo Reed")
+    assert ana["birthdate"] == "1980-01-01" and ana["first_response_at"] is None and ana["role"] == "Teacher"
+    assert bo["birthdate"] is None and bo["first_response_at"] and bo["role"] is None
 
 
 def test_without_a_birthdate_the_files_word_decides(fake):
@@ -248,7 +267,7 @@ def test_a_business_gets_no_families_even_if_the_browser_sends_them(fake):
     assert out["summary"]["created"] == 8 and "families" not in out
     assert fake.rows("households") == [] and fake.rows("children") == []
     marcus = _by_name(fake, "Marcus Hale")
-    assert "birthdate" not in marcus and "first_response_at" not in marcus
+    assert not marcus.get("birthdate") and not marcus.get("first_response_at")
     assert marcus["metadata"]["imported"]["Household"] == "Hale"
 
 
