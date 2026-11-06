@@ -35,7 +35,7 @@ _STYLE = """
 <style>
   body { font-family: Georgia, 'Times New Roman', serif; font-size: 13px; line-height: 1.5; color: #16171c; }
   h1 { font-size: 24px; margin: 0 0 4px; }
-  h2 { font-size: 16px; margin: 20px 0 6px; break-after: avoid; page-break-after: avoid; }
+  h2 { font-size: 16px; margin: 15px 0 5px; break-after: avoid; page-break-after: avoid; }
   h3 { font-size: 13px; margin: 14px 0 4px; break-after: avoid; page-break-after: avoid; }
   ul { margin: 4px 0 8px; padding-left: 18px; }
   li { margin: 2px 0; }
