@@ -236,10 +236,14 @@ def test_the_picker_and_by_size_lines_only_while_the_plans_are_on_sale(monkeypat
 
 
 @pytest.mark.parametrize("moves,months,free,after", [
-    (5, 3, "The first five churches move free.", "After that, the move is three months of your plan, paid once."),
-    (1, 2, "The first church moves free.", "After that, the move is two months of your plan, paid once."),
-    (0, 3, "The move is three months of your plan, paid once.", "People do it with you, by hand."),
-    (0, 0, "Moving over is free.", "People do it with you, by hand."),
+    (5, 3, "The first five churches move free.",
+     "<span>They also keep the price they start at, for as long as they stay. "
+     "After that, the move is three months of your plan, paid once."),
+    (1, 2, "The first church moves free.",
+     "<span>It also keeps the price it starts at, for as long as it stays. "
+     "After that, the move is two months of your plan, paid once."),
+    (0, 3, "The move is three months of your plan, paid once.", "<span>People do it with you, by hand."),
+    (0, 0, "Moving over is free.", "<span>People do it with you, by hand."),
 ])
 def test_the_move_offer_is_church_offer(monkeypatch, moves, months, free, after):
     import pricing_config
@@ -247,6 +251,9 @@ def test_the_move_offer_is_church_offer(monkeypatch, moves, months, free, after)
     monkeypatch.setattr(pricing_config, "church_offer", lambda: {**real(), "founding_moves": moves, "move_months": months})
     html = cs.render("")
     assert f"<b>{free}</b>" in html and after in html
+    # the founding churches keep their price only while there are founding churches
+    kept = "keep the price they start at" in html or "keeps the price it starts at" in html
+    assert kept == bool(moves)
     assert re.search(r'<span class="five" aria-hidden="true">((?:<i></i>)*)</span>', html).group(1) == "<i></i>" * min(moves, 5)
 
 
