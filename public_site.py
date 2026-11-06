@@ -8104,6 +8104,11 @@ async def public_start(request: Request):
     # startswith "founder") and enforces the seat cap.
     if plan in ("starter", "professional", "practice", "founder"):
         carried["plan"] = plan
+    # `for` says what the Start button was on: the church pages send for=church
+    # (church_site.START_PATH) and the app's signup and setup speak church.
+    # Whitelisted like plan.
+    if (request.query_params.get("for") or "").strip().lower() == "church":
+        carried["for"] = "church"
     # Everyone who reaches /start pressed a "start" button, so the app opens on
     # Create account. Without this it opened on "Welcome back / Sign in" and the
     # 21 people who clicked Start in September all stopped there (2026-10-01).

@@ -187,6 +187,15 @@ def test_start_carries_the_campaign_across_the_origin_hop(client):
     assert "utm_source=meta" in loc and "utm_campaign=aug" in loc and "gclid=xyz" in loc
 
 
+def test_start_carries_a_church_start_and_nothing_else(client):
+    """The church pages' Start buttons send for=church (church_site.START_PATH)
+    so the app's signup and setup speak church. Only that value rides."""
+    loc = client.get("/start?for=church", headers=HOST).headers["location"]
+    assert loc == "https://system.mysolutionist.app/?for=church&signup=1"
+    for other in ("barbers", "//example.com", "church%22"):
+        assert "for=" not in client.get(f"/start?for={other}", headers=HOST).headers["location"]
+
+
 def test_start_carries_which_price_was_clicked(client):
     loc = client.get("/start?plan=professional", headers=HOST).headers["location"]
     assert "plan=professional" in loc

@@ -475,7 +475,20 @@ def test_by_size_every_page_is_whole_true_and_linked(by_size):
             page, _, anchor = target.partition("#")
             assert page in pages and (not anchor or f'id="{anchor}"' in pages[page]), (path, target)
         assert "love-city" not in html.lower(), path
-    assert pages["/churches"].count('href="https://mysolutionist.app/start" class="pbtn"') == 4
+    assert pages["/churches"].count('href="https://mysolutionist.app/start?for=church" class="pbtn"') == 4
+
+
+def test_every_start_button_on_a_church_page_says_church(monkeypatch):
+    """A pastor who pressed Start used to be asked to set up a business
+    (Kevin's run-through, 2026-11-05). Every Start button on every church
+    page goes to /start?for=church, which the app reads (lib/signupKind)."""
+    for by_size in (False, True):
+        if by_size:
+            monkeypatch.setenv("PLAN_CHURCH_OFFERED", "1")
+        for slug in cs.PAGES:
+            html = cs.render(slug)
+            assert 'href="https://mysolutionist.app/start"' not in html, slug
+            assert 'href="https://mysolutionist.app/start?for=church"' in html, slug
 
 
 def test_the_faq_says_how_logins_come(monkeypatch):
