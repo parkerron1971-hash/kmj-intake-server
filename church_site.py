@@ -146,6 +146,10 @@ def is_home() -> bool:
 # or v2), / is its address again and /business serves the same page with "/" as its canonical.
 BUSINESS_PATH = "/business"
 
+# Where a church page's Start buttons go: public_site's /start carries for=church to the
+# app, whose signup and setup then speak church (Kevin's run-through, 2026-11-05).
+START_PATH = "/start?for=church"
+
 
 def business_path() -> str:
     """Where the business home lives right now: /business while the church page is the home, / otherwise."""
@@ -623,4 +627,9 @@ def render(slug: str) -> str:
         tokens.update(_move_tokens())
     tokens["PIXEL"] = mp._pixel_script()
     tokens["ANALYTICS"] = v2._analytics_scripts()
-    return _TOKEN.sub(lambda m: tokens.get(m.group(0)[2:-2], m.group(0)), page)
+    page = _TOKEN.sub(lambda m: tokens.get(m.group(0)[2:-2], m.group(0)), page)
+    # Every Start button here says it is a church (/start?for=church), so the
+    # app's signup, Chief's welcome and the setup speak church and Ministry /
+    # Church starts picked (the app's lib/signupKind). Before 2026-11-05 a
+    # pastor who pressed Start was asked to set up a business.
+    return page.replace(f'href="{ORIGIN}/start"', f'href="{ORIGIN}{START_PATH}"')
