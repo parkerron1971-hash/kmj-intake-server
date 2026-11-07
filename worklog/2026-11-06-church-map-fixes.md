@@ -4,7 +4,7 @@ date: 2026-11-06
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin: fix what was found live on 11-03/11-04 (Chief refused to hang Love City''s Serve teams on its departments; Jessica got a 404 on the leaders map) and in the F8 frontend review (no made flag, no Undo for an answered ask, asks/mine says only a status)'
 status: in progress
-prs: [kmj-intake-server#PR]
+prs: [kmj-intake-server#1761]
 migrations: []
 left_undone:
   - "Frontend (solutionist-studio): show GET /church/map/asks `answered` (happened, put_back) with an Undo that posts /church/map/asks/{id}/undo (both parts, so an answer that moved a duty gets Undo too); use the apply answer's can_undo for the inline Undo; show `cant_apply` on an ask where Apply isn't offered; show asks/mine `happened` on My week; read a save's made/can_undo/note (DepartmentEditor, useMap.ts)"
