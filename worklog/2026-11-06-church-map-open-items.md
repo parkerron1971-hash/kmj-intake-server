@@ -4,7 +4,7 @@ date: 2026-11-06
 agent: Claude Code (Claude Opus 5.5)
 asked: "Kevin: close #1761's open items: Love City's admin can't move a duty (duties page, Chief, a From your team suggestion); an answered ask's change has two Undos that disagree; the ten-a-day cap can be passed by two saves at once"
 status: in progress
-prs: [kmj-intake-server#PENDING]
+prs: [kmj-intake-server#1762]
 migrations: [supabase/APPLY-2026-11-06-church-map-asks-cap.sql (not yet applied)]
 left_undone:
   - "Kevin applies supabase/APPLY-2026-11-06-church-map-asks-cap.sql by hand after the PR merges (verify query in docs/MIGRATIONS.md); until then the code's check-before and recount-after hold the cap as before"
