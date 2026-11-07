@@ -468,13 +468,8 @@ def assemble_knowledge(business_id: str,
         if isinstance(v, str) and v.strip():
             policies[k] = v.strip()[:600]
 
-    faq: List[Dict[str, str]] = []
-    for source in (concierge_settings(biz).get("faq"), bp.get("faq")):
-        for item in (source or []):
-            if isinstance(item, dict) and item.get("q") and item.get("a"):
-                faq.append({"q": str(item["q"]).strip()[:300],
-                            "a": str(item["a"]).strip()[:600]})
-    faq = faq[:24]
+    import business_faq
+    faq = business_faq.rows(settings)
 
     # In-chat booking: live only when the walk-in flow is live AND at
     # least one offering is booked by the slot. Read through agent_site
@@ -1429,6 +1424,7 @@ def get_concierge(business_id: str,
     biz = _biz_row(business_id)
     if not biz:
         raise HTTPException(404, "business not found")
+    import business_faq
     cs = concierge_settings(biz)
     # Is the in-chat picker live? Same door check the widget uses, so
     # the panel never claims a button the visitor will not see.
@@ -1443,8 +1439,8 @@ def get_concierge(business_id: str,
         "enabled": bool(cs.get("enabled")),
         "greeting": (cs.get("greeting") or "").strip(),
         "daily_cap": _daily_cap(biz),
-        "faq": [f for f in (cs.get("faq") or [])
-                if isinstance(f, dict) and f.get("q") and f.get("a")],
+        # The one FAQ, Chief's answers included (business_faq).
+        "faq": business_faq.rows(biz.get("settings")),
         "qualifying": concierge_qualify.clean_questions(cs.get("qualifying")),
         "booking_inline": booking_inline,
     }
@@ -1478,28 +1474,26 @@ def patch_concierge(business_id: str, body: ConciergeSettingsPatch,
                                          BUSINESS_CAP_CEILING))
         except Exception:
             raise HTTPException(400, "daily_cap must be a number")
-    if body.faq is not None:
-        cleaned = []
-        for item in body.faq[:24]:
-            if not isinstance(item, dict):
-                continue
-            q = str(item.get("q") or "").strip()[:300]
-            a = str(item.get("a") or "").strip()[:600]
-            if q and a:
-                cleaned.append({"q": q, "a": a})
-        cs["faq"] = cleaned
     if body.qualifying is not None:
         cs["qualifying"] = concierge_qualify.clean_questions(body.qualifying)
     settings["concierge"] = cs
-    sb_clients.sb_patch_as_service(
-        f"/businesses?id=eq.{business_id}", {"settings": settings})
+    import business_faq
+    if body.faq is not None:
+        business_faq.replace_all(settings, body.faq)
+    if not sb_clients.sb_patch_as_service(
+            f"/businesses?id=eq.{business_id}", {"settings": settings}):
+        raise HTTPException(502, "That didn't save. Please try again.")
     # Settings changed — drop the caches so the widget follows promptly.
     _knowledge_cache.pop(business_id, None)
     _snippet_cache.pop(business_id, None)
+    if body.faq is not None:
+        # A composed site holds its FAQ in the stored page.
+        from site_composer import refresh_if_composed_async
+        refresh_if_composed_async(business_id)
     return {"ok": True, "enabled": bool(cs.get("enabled")),
             "greeting": (cs.get("greeting") or "").strip(),
             "daily_cap": _daily_cap({"settings": settings}),
-            "faq": cs.get("faq") or [],
+            "faq": business_faq.rows(settings),
             "qualifying": cs.get("qualifying") or []}
 
 

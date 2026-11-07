@@ -203,6 +203,11 @@ An action claim asserts an operation was performed or started. A capability stat
 ("I can text an invoice"), conditional offer or clarification question is NOT an
 executed action: classify any capability assertion as fact and check capability sources.
 An explicit statement that no action ran is a fact supported by turn execution state.
+What a saved record holds now ("your FAQ has...", "both are in that answer", and "yes" when
+that is what it means) is a fact: cite the record and quote it, even when the owner asked
+"did you add...?". The record proves that it holds this and nothing else: "I also texted
+them", "it's on your website" and every other operation remain action or fact claims of
+their own, each needing its own support.
 Every executed action claim needs a matching receipt: a draft/queued/running/held/failed receipt
 does NOT establish sent/published/completed. Navigation and reads do not prove a write.
 A view: receipt records a web page Chief looked at: it supports "I looked at / I can see"
@@ -1068,6 +1073,9 @@ def _trim_unsupported(raw, reply, sources, reason, max_cuts=3, keep_ratio=0.4, u
         if not sentence or sentence not in draft:
             return _no_trim('sentence not located', reason)
         draft = re.sub(r'[ \t]*\n{3,}', '\n\n', draft.replace(sentence, '', 1)).strip()
+        # A sentence that led into a list ends in a colon the split left
+        # behind ("Yes, it's all there:" cut, ":" opening the reply).
+        draft = re.sub(r'(?m)^[ \t]*[:;,][ \t]*$\n?', '', draft).strip()
         cuts += 1
         if len(draft) < keep_ratio * len(reply or ''):
             return _no_trim('too little left after %d cut(s)' % cuts, reason)
@@ -1752,6 +1760,10 @@ def evidence_for_review(ctx, view_detail, taken):
     biz = (ctx or {}).get('business') or {}
     if biz:
         context.append(('business_identity', {k: biz[k] for k in ('name', 'type') if k in biz}))
+        import chief_of_staff as chief
+        picture = chief.business_picture_lines(biz, (ctx or {}).get('site'))
+        if picture:
+            context.append(('business_picture', '\n'.join(picture)))
     if view_detail:
         context.append(('current_view', view_detail))
     # The author sees policy-filtered, bounded email text. Review exactly
@@ -1798,7 +1810,7 @@ def evidence_for_review(ctx, view_detail, taken):
             # sample exhaustive. Explicit scalar metadata is complete, and so
             # is a list whose read came back under its limit.
             exhaustive = name in whole or name in ('contacts_total', 'contacts_loaded', 'contacts_complete',
-                                                   'context_quality', 'business_identity')
+                                                   'context_quality', 'business_identity', 'business_picture')
             sources['context:' + name] = {'kind': 'context', 'text': text[:MAX_SOURCE_CHARS],
                                          'complete': exhaustive and len(text) <= MAX_SOURCE_CHARS,
                                          **({'unread': True} if name in unread else {})}
