@@ -340,8 +340,9 @@ def test_a_care_card_is_a_flag_never_its_words(db):
     assert page["care_open"] is want
     assert "SECRET" not in str(page)
     # A read that fails is "couldn't check", never "no card".
+    ctx = cr.build(dict(BUSINESS))   # the Roll itself reads follow-ups too, for New guests
     db.broken = {"church_follow_ups"}
-    assert cr.person_view(cr.build(dict(BUSINESS)), CALVIN, can_care=False, can_give=False)["care_open"] is None
+    assert cr.person_view(ctx, CALVIN, can_care=False, can_give=False)["care_open"] is None
 
 
 def test_giving_shows_for_a_money_login_only(db):
