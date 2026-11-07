@@ -1952,6 +1952,7 @@ async def get_site_page_html(slug: str, page_path: str, pv: Optional[str] = None
             html = _apply_manual_source(
                 html, biz_id, (biz_rows[0].get("settings") if biz_rows else {}) or {})
             html = await _fill_give_slots(client, biz_id, slug, html)
+            html = await _fill_faq_slot(client, biz_id, html)
         # page_path makes this page canonical to ITSELF. Without it every
         # secondary page claimed to be the home page, telling Google the
         # site has one page and three duplicates. The clean-path handlers
@@ -5789,6 +5790,23 @@ async def _fill_give_slots(client: httpx.AsyncClient, biz_id: Optional[str], slu
     return fill_give_slots(html, business, slug, api_origin=_EMBED_ORIGIN)
 
 
+async def _fill_faq_slot(client: httpx.AsyncClient, biz_id: Optional[str], html: str) -> str:
+    """A hand-built page's FAQ section, from the business's one FAQ, read on
+    every serve so an answer saved in Chief or Settings is there at once.
+    Only a page that marks the slot pays for the read."""
+    import business_faq
+    if not html or business_faq.SLOT not in html:
+        return html
+    try:
+        rows = (await _sb_service(client, f"/businesses?id=eq.{biz_id}&select=settings&limit=1")
+                if biz_id else None)
+    except Exception as e:
+        logger.info(f"[manual-site] FAQ: business read failed: {e}")
+        rows = None
+    settings = rows[0].get("settings") if isinstance(rows, list) and rows else None
+    return business_faq.fill_slots(html, settings)
+
+
 async def _augment_html(client: httpx.AsyncClient, biz_id: Optional[str], slug: str, html: str,
                         custom_domain: Optional[str] = None,
                         page_path: str = "",
@@ -5832,6 +5850,7 @@ async def _augment_html(client: httpx.AsyncClient, biz_id: Optional[str], slug: 
     if manual:
         html = _apply_manual_source(html, biz_id, biz_settings)
         html = await _fill_give_slots(client, biz_id, slug, html)
+        html = await _fill_faq_slot(client, biz_id, html)
     html = _inject_canonical(html, slug, custom_domain, page_path)
     # Pass 3: activate the Pass 2.5a `_brand_head_meta_tags` helper for
     # legacy sites too — favicons + OG + Twitter Cards now render for

@@ -868,9 +868,9 @@ WRITE_TOOL_SCHEMAS: Dict[str, Tuple[str, Dict[str, Any]]] = {
               "pillar_name": {"type": "string"}},
              ["title", "platform", "scheduled_date"])),
     "add_faq": (
-        "Add or replace one question-and-answer on the business's public "
-        "FAQ. Live on the website at once, and Chief uses it when clients "
-        "ask.",
+        "Add or replace one question-and-answer on the business's FAQ. "
+        "Chief uses it when clients ask, and the result says where it can "
+        "be seen.",
         _obj({"question": {"type": "string"},
               "answer": {"type": "string"}},
              ["question", "answer"])),
@@ -965,8 +965,8 @@ WRITE_TOOL_SCHEMAS: Dict[str, Tuple[str, Dict[str, Any]]] = {
               "quote": {"type": "string", "description": "A fragment of the quote."}})),
     "set_business_policy": (
         "Record one policy in the practitioner's words: cancellation, "
-        "deposit, lateness, refunds or no-show. Goes on the website FAQ "
-        "and Chief answers clients with it.",
+        "deposit, lateness, refunds or no-show. Chief answers clients "
+        "with it, and the result says where it can be seen.",
         _obj({"policy": {"type": "string",
                          "enum": ["cancellation", "deposit", "lateness", "refunds", "no_show"]},
               "text": {"type": "string"}},

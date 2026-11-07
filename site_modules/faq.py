@@ -50,7 +50,7 @@ def render(variant: str, content: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[
       <summary>{safe(r["q"])}<span class="sxm-faq-mark" aria-hidden="true">+</span></summary>
       <p>{safe(r["a"])}</p>
     </details>'''
-        for i, r in enumerate(rows[:10]))
+        for i, r in enumerate(rows))
 
     html = f"""
 <section class="sxm-section sxm-faq sxm-reveal" id="faq">

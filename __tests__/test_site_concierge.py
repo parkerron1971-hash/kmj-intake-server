@@ -81,7 +81,9 @@ def fake(monkeypatch):
     monkeypatch.setattr(sb_clients, "sb_get_as_service", fb.get)
     monkeypatch.setattr(sb_clients, "sb_post_as_service",
                         lambda p, b, prefer="rep": fb.post(p, b, prefer))
-    monkeypatch.setattr(sb_clients, "sb_patch_as_service", fb.patch)
+    # PostgREST answers a PATCH with the rows it changed.
+    monkeypatch.setattr(sb_clients, "sb_patch_as_service",
+                        lambda path, body: (fb.patch(path, body), fb.get(path))[1])
     monkeypatch.setattr(sb_clients, "sb_delete_as_service", fb.delete)
     monkeypatch.delenv("BILLING_ENFORCE", raising=False)
     fb.rows("businesses").append({
