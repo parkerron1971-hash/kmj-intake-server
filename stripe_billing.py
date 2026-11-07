@@ -71,6 +71,7 @@ import logging
 import os
 import time
 from typing import Any, Dict, Optional
+from urllib.parse import quote
 
 import ledger_unlock
 import httpx
@@ -567,10 +568,63 @@ def _price_for_plan(plan):
     return (os.environ.get("STRIPE_PRICE_ID_DEFAULT") or "").strip()
 
 
+# ─── One subscription per business ────────────────────────────────────
+# Checkout always makes a NEW subscription, so "Switch plan" sent to
+# Checkout left a business with two: two charges a month, the row following
+# whichever Stripe wrote last, and a later cancel of the old one marking the
+# business canceled while the new one went on charging. A plan change moves
+# the plan item of the subscription it already has: the same card, the same
+# renewal day, any extra logins left where they are, and a trial stays a
+# trial.
+HOLDS_A_SUBSCRIPTION = ("trialing", "active", "past_due", "unpaid", "paused", "incomplete")
+
+
+def _held_subscription(biz: Dict[str, Any]) -> str:
+    """The subscription this business already has, or "". A row with a
+    status but no subscription id is a no-card trial, which has nothing to
+    move and still buys through Checkout."""
+    sub_id = (biz.get("stripe_subscription_id") or "").strip()
+    return sub_id if sub_id and biz.get("subscription_status") in HOLDS_A_SUBSCRIPTION else ""
+
+
+async def _switch_plan(biz: Dict[str, Any], sub_id: str, price_id: str,
+                       plan: Optional[str]) -> Optional[Dict[str, Any]]:
+    """Move the business's one subscription to this price. None when Stripe
+    says that subscription has already ended, so the row was behind and
+    Checkout is the right door after all. The webhook writes the change too;
+    this writes it now so the page shows it at once."""
+    import billing_limits
+    import feature_gates
+    path = f"/subscriptions/{quote(sub_id, safe='')}"
+    sub = await _stripe_get(path, [])
+    if sub.get("status") in ("canceled", "incomplete_expired"):
+        return None
+    if sub.get("status") not in ("trialing", "active"):
+        raise HTTPException(409, "Your last payment didn't go through. "
+                                 "Fix your card under Manage Subscription, then switch.")
+    catalog = feature_gates.price_to_plan()
+    items = ((sub.get("items") or {}).get("data")) or []
+    item = next((it for it in items if ((it.get("price") or {}).get("id")) in catalog), None)
+    if not item:
+        raise HTTPException(409, "We can't change this subscription from here. Write to us and we'll do it for you.")
+    name = billing_limits.PLAN_DISPLAY.get(plan or "", (plan or "your new plan").title())
+    if (item.get("price") or {}).get("id") == price_id:
+        return {"switched": True, "changed": False, "plan": plan, "plan_name": name}
+    updated = await _stripe_post(path, {
+        "items": [{"id": item["id"], "price": price_id}],
+        "proration_behavior": "create_prorations",
+        "cancel_at_period_end": False,
+    })
+    await _apply_subscription_state("customer.subscription.updated", updated, biz["id"])
+    return {"switched": True, "changed": True, "plan": plan, "plan_name": name}
+
+
 @router.post("/checkout")
 async def create_checkout(body: CheckoutBody, user: AuthedUser = Depends(require_user)):
     """Mint a Stripe Customer (if needed) + Checkout Session for a
-    subscription. Returns the Checkout URL the frontend opens."""
+    subscription, and return the Checkout URL the frontend opens. A business
+    that already has a subscription gets no URL: its plan moves in place and
+    the answer says `switched`."""
     import feature_gates
     requested = (body.plan or "").strip().lower()
     requested_base = requested[:-len("_annual")] if requested.endswith("_annual") else requested
@@ -636,6 +690,15 @@ async def create_checkout(body: CheckoutBody, user: AuthedUser = Depends(require
     if resolved in feature_gates.CHURCHSAVVY_PLANS:
         import churchsavvy_billing
         church_savvy = churchsavvy_billing.checkout_rules(biz, user, resolved)
+    # One business, one subscription: a plan change moves the subscription
+    # it already has, and only a business without one goes on to Checkout.
+    sub_id = _held_subscription(biz)
+    if sub_id:
+        if body.promotion_code:
+            raise HTTPException(409, "A code goes on a new subscription, and yours is already running.")
+        switched = await _switch_plan(biz, sub_id, price_id, resolved)
+        if switched is not None:
+            return switched
 
     customer_id = biz.get("stripe_customer_id")
     if not customer_id:
