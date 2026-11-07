@@ -30,10 +30,12 @@ it's logged, and that undo_duty puts it back.
                       owner or an Admin, in the THIS LOGIN block
                       (chief_areas.turn_for, block)
 
-Switched with the routes: CHURCH_DUTIES (off | owner | on). Owner is the
-platform owner's own login, as church_duties.open_to says for the routes,
-read by the signed-in person's id. Off: Chief says duties aren't on yet.
-jobs_line() isn't switched: the job gates read duties whatever it says.
+Switched with the routes: CHURCH_DUTIES (off | owner | on), for the person
+or their church (church_duties.office_open). Owner is the platform owner's
+own login, read by the signed-in person's id, or the platform owner's own
+church, so Love City's admins move its duties through Chief as on screen.
+Off: Chief says duties aren't on yet. jobs_line() isn't switched: the job
+gates read duties whatever it says.
 
 Action tags only, never native write tools: mcp_server.WRITE_TOOL_SCHEMAS is
 also the outside agent's list and carries no signed-in person, and each of
@@ -96,8 +98,8 @@ _EMAILS: Dict[str, str] = {}
 
 
 def _switched_on(uid: str) -> Optional[bool]:
-    """Whether the duties are on for this person, as the routes decide it
-    (church_duties.open_to). None when owner mode can't read who they are."""
+    """Whether the duties are on for this person's login (church_duties.open_to). None when owner mode can't
+    read who they are."""
     m = cd.mode()
     if m == "on":
         return True
@@ -110,6 +112,13 @@ def _switched_on(uid: str) -> Optional[bool]:
         except Exception:  # noqa: BLE001 — unread is not a yes
             return None
     return cd.open_to(SimpleNamespace(email=_EMAILS[uid]))
+
+
+def _duties_open(uid: str, business_id: str) -> Optional[bool]:
+    """church_duties.office_open for a Chief turn, as the routes decide it: the church (church_open: with
+    `owner`, the platform owner's church, so its admins' Chief agrees with their screen), else the person
+    (_switched_on). None when that can't be told."""
+    return True if cd.church_open(business_id) else _switched_on(uid)
 
 
 def _role(business: Dict[str, Any], uid: str) -> Optional[str]:
@@ -125,7 +134,7 @@ def _open(atype: str, business_id: str, least: str) -> Tuple[Optional[Dict[str, 
     uid = _turn_user()
     if not uid:
         return _fail(atype, "duties are read and moved only by someone signed in to the church's office."), {}, ""
-    on = _switched_on(uid)
+    on = _duties_open(uid, business_id)
     if on is None:
         return _fail(atype, "whether duties are on couldn't be checked just now. Try again."), {}, ""
     if not on:

@@ -141,6 +141,11 @@ def db(monkeypatch):
     for k in ("CHURCH_DUTIES", "CHURCH_AREAS"):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.setenv("PLATFORM_OWNER_EMAIL", PLATFORM)
+    # Which church is the platform owner's (church_duties.church_open): none, unless a test says so.
+    import member_asks
+    import messaging_router
+    monkeypatch.setattr(member_asks, "_OWNER_CACHE", {})
+    monkeypatch.setattr(messaging_router, "_owner_email", lambda uid: "")
     return fake
 
 
@@ -509,6 +514,32 @@ def test_the_switch_keeps_the_routes_to_the_platform_owner_then_everyone_or_no_o
     assert cd.holds(BIZ, _u(NAIYA), "weekly_text") and not cd.holds(BIZ, _u(LAQ), "weekly_text")
     monkeypatch.setenv("CHURCH_DUTIES", "sometimes")
     assert office.get(f"/church/duties?business_id={BIZ}").status_code == 404
+
+
+def test_the_platform_owners_church_opens_the_routes_to_its_own_office(office, db, monkeypatch):
+    """11-06 (church_duties.office_open): under `owner` the duties open to the platform owner's login or the
+    platform owner's own church, as the leaders map does. Love City's admin moves a duty and puts it back, a
+    Manager reads the page and moves nothing, and a church that isn't the platform owner's stays closed."""
+    import member_asks
+    import messaging_router
+    owner_is = {"email": PLATFORM}
+    monkeypatch.setattr(messaging_router, "_owner_email", lambda uid: owner_is["email"] if uid == OWNER else "")
+    monkeypatch.setenv("CHURCH_MAP", "off")             # this fake has no leaders map (church_three has)
+    put = lambda: office.put("/church/duties/weekly_text", json={"business_id": BIZ, "user_ids": [TIARA]})  # noqa: E731
+    undo = lambda: office.post("/church/duties/weekly_text/undo", json={"business_id": BIZ})  # noqa: E731
+    office.who.update(role="admin", id=ADMIN, email="minnie@lovecity.org")
+    assert put().status_code == 200 and cd.holds(BIZ, _u(TIARA), "weekly_text")
+    assert undo().status_code == 200 and not cd.holds(BIZ, _u(TIARA), "weekly_text")
+    office.who.update(role="manager", id=NAIYA, email="naiya@lovecity.org")
+    assert office.get(f"/church/duties?business_id={BIZ}").status_code == 200, "a Manager reads it"
+    assert (put().status_code, undo().status_code, len(db.rpcs)) == (404, 404, 2), "and moves nothing"
+    owner_is["email"] = "pastor@lovecity.org"
+    monkeypatch.setattr(member_asks, "_OWNER_CACHE", {})
+    office.who.update(role="admin", id=ADMIN, email="minnie@lovecity.org")
+    assert (office.get(f"/church/duties?business_id={BIZ}").status_code, put().status_code, undo().status_code) == (
+        404, 404, 404), "another church's admin"
+    assert office.put("/church/duties/weekly_text", json={"business_id": "nope", "user_ids": []}).status_code == 404
+    assert len(db.rpcs) == 2
 
 
 def test_an_admin_moves_a_duty_and_it_is_logged_once(office, db):

@@ -16,7 +16,10 @@ Chief's own idea waits on the sheet for a yes.
                           stage (Chief's own idea) leaves it waiting for a yes
     draft_map ........... the same with `phase`, always waiting: the setup
                           coach's (B9), registered now (origin 'session')
-    undo_map_change ..... {change_id}: church_map_batch.undo
+    undo_map_change ..... {change_id}: church_map_batch.undo; a change that saying
+                          yes to someone's suggestion made with a duty move goes
+                          back with it (church_map_asks.ask_of_change: both or
+                          neither, as Recent changes' Undo on screen)
     apply_map_change .... {change_id}: a waiting change made, a failed one finished
     discard_map_change .. {change_id}: a waiting change let go
     search_templates .... {q, kind?}: the ready-made list's search (church_templates)
@@ -433,6 +436,18 @@ def _change_id(action: Dict[str, Any]) -> str:
 
 
 def _undo(business: Dict[str, Any], seat: str, action: Dict[str, Any]) -> Dict[str, Any]:
+    """undo_map_change. A change that saying yes to someone's suggestion made together with a duty move goes
+    back with that move, both or neither (church_map_asks.ask_of_change, undo_ask's way), as on screen."""
+    import church_map_asks as asks
+    cid = _change_id(action)
+    found = asks.ask_of_change(business, cid)
+    if found:
+        return asks.chief_undo_with_ask(business, _turn_user(), seat, found)
+    return _undo_alone(business, seat, {"change_id": cid})
+
+
+def _undo_alone(business: Dict[str, Any], seat: str, action: Dict[str, Any]) -> Dict[str, Any]:
+    """The map change's own undo (church_map_batch.undo), whatever else came with it."""
     out = batch.undo(business, _change_id(action), _turn_user(), role=seat, origin="chief")
     ch = out["change"]
     said = _said(_lines(business, ch["id"])) if ch else "Its record didn’t save, so the map’s list won’t show it."
@@ -542,6 +557,8 @@ def _change_line(c: Dict[str, Any]) -> str:
         how.insert(0, "an undo" if c.get("undoes") else _STATUS.get(c["status"], c["status"]))
     if c.get("money"):
         how.append("money: the owner’s")
+    if (c.get("ask") or {}).get("duty"):        # saying yes moved a duty with it: one Undo puts back both
+        how.append(f"saying yes also moved “{c['ask']['duty']}”: undo_map_change puts both back")
     if c.get("can_undo"):
         how.append("Undo can put it back")
     lines = [asks.fence(x) for x in c["lines"]] if ask else c["lines"]       # their words, as data
@@ -562,8 +579,10 @@ def _free(v: Dict[str, Any]) -> str:
 
 
 def _list(business: Dict[str, Any], seat: str, action: Dict[str, Any]) -> Dict[str, Any]:
+    import church_map_asks as asks
     bid = str(business["id"])
-    v, rec, m = cm.view(business, choices=True), batch.recent(business, seat), cm._map(bid)
+    v, m = cm.view(business, choices=True), cm._map(bid)
+    rec = batch.recent(business, seat, asks._gates(_turn_user(), bid))
     holders = cm._holders(bid, asked=True)
     people = cm._people(bid, {h["contact_id"] for h in holders}) if holders else {}
     sh = shep.settings(bid)

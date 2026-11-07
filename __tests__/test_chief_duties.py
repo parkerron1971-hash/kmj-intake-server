@@ -399,3 +399,28 @@ def test_the_switch_follows_the_routes(church, monkeypatch):
     # The line isn't switched: the job gates read duties whatever it says.
     monkeypatch.setenv("CHURCH_DUTIES", "off")
     assert chd.jobs_line(BIZ, TIARA).startswith("Their jobs here: The weekly text and email;")
+
+
+def test_the_platform_owners_church_moves_its_duties_through_its_own_admins_chief(church, monkeypatch):
+    """11-06 (church_duties.office_open): under `owner` Chief's duty verbs follow the login or the church,
+    as the routes and the leaders map do, so Love City's admin moves and puts back a duty through Chief; a
+    Manager there reads them and moves nothing; a church that isn't the platform owner's stays closed (the
+    three churches: test_church_map_asks)."""
+    import member_asks
+    import messaging_router
+    import platform_suite
+    emails = {OWNER: PLATFORM, ADMIN: "minnie@lovecity.org", NAIYA: "naiya@lovecity.org"}
+    monkeypatch.setattr(platform_suite, "_owner_email", lambda uid: emails.get(uid))
+    monkeypatch.setattr(messaging_router, "_owner_email", lambda uid: emails.get(str(uid), ""))
+    monkeypatch.setenv("CHURCH_DUTIES", "owner")
+    monkeypatch.setenv("CHURCH_MAP", "off")             # this fake has no leaders map
+    moved = run("move_duty", ASK, ADMIN)
+    assert not moved.get("failed") and moved["changed"], moved["result"]
+    assert run("undo_duty", {"duty": "weekly_text"}, ADMIN)["changed"]
+    assert not run("list_duties", {}, NAIYA).get("failed"), "a Manager reads them"
+    assert run("move_duty", ASK, NAIYA)["result"] == "Failed: " + chd.NOT_YOURS
+    emails[OWNER] = "pastor@lovecity.org"
+    monkeypatch.setattr(member_asks, "_OWNER_CACHE", {})
+    for verb, action in (("list_duties", {}), ("move_duty", ASK), ("undo_duty", {"duty": "weekly_text"})):
+        assert run(verb, action, ADMIN)["result"] == "Failed: " + chd.NOT_ON, verb
+    assert len(church.rpcs) == 2

@@ -549,7 +549,9 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
     "draft_map": {**_w("A", "the setup coach's: one change to the leaders map that always waits for a yes; nothing "
                             "is made"), "chief_only": True},
     "undo_map_change": {**_w("A", "puts one change to the leaders map back, whole or not at all, while nothing it "
-                                  "touched has changed since; the put-back is a change too"), "chief_only": True},
+                                  "touched has changed since; the put-back is a change too. One that saying yes to "
+                                  "an office suggestion made with a duty move goes back with it, both or neither"),
+                        "chief_only": True},
     "apply_map_change": {**_w("A", "makes a change to the leaders map that waits for a yes, or finishes a failed "
                                    "one; undo_map_change puts it back"), "chief_only": True},
     "discard_map_change": {**_w("A", "lets a change to the leaders map that waits for a yes go, unmade"),
