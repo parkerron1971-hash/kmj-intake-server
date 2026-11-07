@@ -59,6 +59,11 @@ great, but you would make the changes for love city directly but chief would do 
   asks every time, and a failed read is a 503.
 - Switched by `CHURCH_DUTIES` (off | owner | on; owner until a Thursday). The switch gates the
   routes only; `holds()` answers whatever it says, since it reads only rows an owner or admin wrote.
+  Since 2026-11-06 it opens by the login or the church (`church_duties.office_open`, as
+  `church_map.office_open` opens the leaders map): with `owner`, the platform owner's login and the
+  platform owner's own church, so Love City's admins move its duties (on the page, through Chief, and
+  by saying yes to a "From your team" suggestion that moves one) and its Managers read the page. The
+  seats are unchanged, and every other church stays closed.
 
 ## Who holds a duty
 
@@ -414,8 +419,9 @@ other churches". `chief_duties.py`:
   here: …" in the turn's tail (`chief_areas.turn_for` → `block`), so "is the weekly text my job?" gets
   the church's own answer. A church whose duties can't be read says so instead of guessing.
 - Switched with the routes, `CHURCH_DUTIES` (owner: the platform owner's own login, read by the
-  signed-in person's id); off, Chief says duties aren't on yet. The line isn't switched, since the
-  job gates read duties whatever it says.
+  signed-in person's id, or since 2026-11-06 the platform owner's own church: `chief_duties._duties_open`);
+  off, Chief says duties aren't on yet. The line isn't switched, since the job gates read duties
+  whatever it says.
 - Action tags only, never native write tools: `mcp_server.WRITE_TOOL_SCHEMAS` is also the outside
   agent's list, which carries no signed-in person. All three are `chief_only` in the registry.
 - `chief_areas`: `list_duties` is every office login's (the handler keeps it to a Manager seat and

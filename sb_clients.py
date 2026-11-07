@@ -547,6 +547,30 @@ def _send(client: httpx.Client, method: str, url: str, headers: Dict[str, str],
     raise AssertionError("unreachable")
 
 
+# This thread's last sync request's PostgREST refusal (last_error()).
+_LAST = threading.local()
+
+
+def last_error() -> Optional[Dict[str, Any]]:
+    """Why this thread's last sync request (sb_get/patch/post_as_*) came back
+    with nothing: {status, code, message} from PostgREST's error body (code
+    is Postgres's SQLSTATE, so a trigger's own RAISE ... ERRCODE is told from
+    an outage), or None when it succeeded or never reached the database. The
+    request helpers still answer None on any failure; read this right after
+    one, in the same thread, before any other call."""
+    return getattr(_LAST, "error", None)
+
+
+def _refusal(resp: httpx.Response) -> Dict[str, Any]:
+    try:
+        body = resp.json()
+    except Exception:  # noqa: BLE001 — a body that isn't JSON says only its status
+        body = None
+    body = body if isinstance(body, dict) else {}
+    return {"status": resp.status_code, "code": str(body.get("code") or ""),
+            "message": str(body.get("message") or "")}
+
+
 def _sync_request(
     method: str,
     path: str,
@@ -556,7 +580,9 @@ def _sync_request(
     redact: bool = False,
 ) -> Optional[Any]:
     """`redact`: a failure logs the path with its filter values hidden, the
-    status, and no response body (PostgREST errors echo the failing row)."""
+    status, and no response body (PostgREST errors echo the failing row).
+    A refusal's code and message are kept for last_error()."""
+    _LAST.error = None
     url = f"{sb_url()}/rest/v1{path}"
     try:
         with httpx.Client(timeout=HTTP_TIMEOUT, transport=_pool()) as client:
@@ -569,6 +595,7 @@ def _sync_request(
             logger.warning(f"sb_clients sync {method} {path} transport error: {e}")
         return None
     if resp.status_code >= 400:
+        _LAST.error = _refusal(resp)
         if redact:
             logger.warning(f"sb_clients sync {method} {redacted_path(path)}: {resp.status_code}")
         else:

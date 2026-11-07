@@ -846,9 +846,13 @@ def lines_of(biz: Dict[str, Any], change_id: Any) -> List[str]:
     return [x for p in row.get("parts") or [] for x in _lines(p, names)]
 
 
-def recent(biz: Dict[str, Any], role: str) -> Dict[str, Any]:
+def recent(biz: Dict[str, Any], role: str, gates: Optional[Dict[str, bool]] = None) -> Dict[str, Any]:
     """GET /church/map/changes: what waits for a yes, and the last changes,
-    newest first, each part a line in plain words."""
+    newest first, each part a line in plain words. A change an office login
+    suggested names its ask (`ask`: {id, who, duty}); when saying yes to it
+    moved a duty too (`duty`, its label), Undo here puts back both, so its
+    `can_undo` is the ask's own (church_map_asks.on_recent), read with
+    `gates`: whether the map and the duties are open to this login."""
     _open()
     bid = cm._bid(biz)
     q = f"/church_map_changes?business_id=eq.{cm._q(bid)}&select={COLS}&order=made_at.desc"
@@ -857,16 +861,19 @@ def recent(biz: Dict[str, Any], role: str) -> Dict[str, Any]:
     names = _names(bid, waiting + rows)
     import church_map_asks as asks
     asked = asks.linked(biz, [r["id"] for r in waiting + rows])     # an office login's suggestions (B11)
+    both = asks.on_recent(biz, {str(r["id"]): r for r in waiting + rows}, asked, role, gates) if asked else {}
 
     def show(r: Dict[str, Any]) -> Dict[str, Any]:
         at, may = _parse(r.get("applied_at")), role in ("owner", "admin") and (not r.get("money") or role == "owner")
-        ask = asked.get(str(r["id"]))
+        ask, with_duty = asked.get(str(r["id"])), both.get(str(r["id"]))
         theirs = bool(ask) and ask["status"] == "open"          # answered as their suggestion, never here
         return {**{k: r.get(k) for k in COLS.split(",") if k != "parts"}, "id": str(r["id"]),
                 "lines": [x for p in r.get("parts") or [] for x in _lines(p, names)],
                 "suggested_by": {"ask_id": ask["id"], "name": ask["name"], "status": ask["status"]} if ask else None,
-                "can_undo": may and r["status"] == "applied" and not r.get("undoes") and bool(at)
-                and datetime.now(timezone.utc) - at <= timedelta(days=UNDO_DAYS),
+                "ask": {"id": ask["id"], "who": ask["name"], "duty": (with_duty or {}).get("duty")} if ask else None,
+                "can_undo": with_duty["can_undo"] if with_duty else (
+                    may and r["status"] == "applied" and not r.get("undoes") and bool(at)
+                    and datetime.now(timezone.utc) - at <= timedelta(days=UNDO_DAYS)),
                 "can_apply": may and r["status"] in ("pending", "failed") and not theirs,
                 "can_discard": may and r["status"] == "pending" and not theirs}
     return {"pending": [show(r) for r in waiting], "recent": [show(r) for r in rows if r["status"] != "pending"]}

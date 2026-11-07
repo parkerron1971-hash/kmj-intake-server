@@ -3,14 +3,13 @@ title: Leaders map fixes - Serve teams hang by name, saves say what they did, an
 date: 2026-11-06
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin: fix what was found live on 11-03/11-04 (Chief refused to hang Love City''s Serve teams on its departments; Jessica got a 404 on the leaders map) and in the F8 frontend review (no made flag, no Undo for an answered ask, asks/mine says only a status)'
-status: in progress
+status: shipped
 prs: [kmj-intake-server#1761]
 migrations: []
 left_undone:
-  - "Frontend (solutionist-studio): show GET /church/map/asks `answered` (happened, put_back) with an Undo that posts /church/map/asks/{id}/undo (both parts, so an answer that moved a duty gets Undo too); use the apply answer's can_undo for the inline Undo; show `cant_apply` on an ask where Apply isn't offered; show asks/mine `happened` on My week; read a save's made/can_undo/note (DepartmentEditor, useMap.ts)"
-  - "The duties keep their own login switch (CHURCH_DUTIES=owner): Love City's admin still can't apply or undo an ask that moves a duty, and the sheet says why (cant_apply). Widening it is the duties' own switch-on, not this"
+  - "Frontend (solutionist-studio): show GET /church/map/asks `answered` (happened, put_back) with an Undo that posts /church/map/asks/{id}/undo (both parts, so an answer that moved a duty gets Undo too); use the apply answer's can_undo for the inline Undo; show `cant_apply` on an ask where Apply isn't offered; show asks/mine `happened` on My week; read a save's made/can_undo/note (DepartmentEditor, useMap.ts): solutionist-studio#1489"
   - "No What's New: the map is still CHURCH_MAP=owner (Love City only)"
-  - "The ten-a-day cap is recounted after the save, first sent first; two saves stamped and inserted in opposite order within the same instant could still both stay (no unique constraint without a migration)"
+  - "Picked up in 2026-11-06-church-map-open-items.md: the duties' login-only switch (Love City's admin couldn't move a duty through an ask), the two Undos for an ask's change, and the ten-a-day cap's same-instant race"
 decisions:
   - "church_map.office_open(user, biz) = open_to(user) or church_open(biz): the map routes, the asks' map gate, Chief's map verbs (chief_map._map_open) and the role page's change log all follow it; seats unchanged (Manager reads, owner/admin writes, money the owner)"
   - "A unit's kind is taken in Chief's words (serve team, team, Serve teams, group, budget line, ...) or left out; a Serve team is the Serve card's team (the editor's Teams), else a Sunday team, which is a group; a name with no kind must fit exactly one kind; a kind that is none is a 400 in words"
@@ -23,5 +22,5 @@ related: [2026-11-05-church-is-this-right.md, 2026-11-05-church-step2-chief.md, 
 ---
 Seven fixes to the leaders map and Is this right?, in church_map.py, church_map_router.py, church_map_asks.py,
 chief_map.py, church_map_batch.py and one chief_prompt line. The response shapes the frontend needs are in the PR
-body and in docs/CHURCH_LEADERS_STEP2.md §10 ("Fixed 2026-11-06"). Before building more here: the duties' switch
-is still the login's, so an admin's duty moves from an ask wait for CHURCH_DUTIES.
+body and in docs/CHURCH_LEADERS_STEP2.md §10 ("Fixed 2026-11-06"). The duties' switch was still the login's when
+this merged; 2026-11-06-church-map-open-items.md opens it by the church too.

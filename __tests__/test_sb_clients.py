@@ -20,6 +20,8 @@ import os
 import unittest
 from unittest.mock import patch, MagicMock
 
+import httpx
+
 import sb_clients
 
 
@@ -149,6 +151,30 @@ class SyncRequestTests(unittest.TestCase):
         with patch.dict(os.environ, _env(), clear=False):
             result = sb_clients.sb_get_as_user("/businesses", USER_JWT)
         self.assertIsNone(result)
+
+    @patch("sb_clients.httpx.Client")
+    def test_a_refusal_keeps_its_code_and_message_for_last_error(self, mock_client_cls):
+        """A trigger's own RAISE (church_map_asks_cap: SQLSTATE PT429) is told from an outage: the helper
+        still answers None, and last_error() says why, until the next call (2026-11-06)."""
+        request = mock_client_cls.return_value.__enter__.return_value.request
+        refused = MagicMock(status_code=429, text='{"code":"PT429","message":"church_map_asks_cap: ten"}')
+        refused.json.return_value = {"code": "PT429", "message": "church_map_asks_cap: ten", "details": None}
+        request.return_value = refused
+        with patch.dict(os.environ, _env(), clear=False):
+            self.assertIsNone(sb_clients.sb_post_as_service("/church_map_asks", {"kind": "gap"}))
+            self.assertEqual(sb_clients.last_error(),
+                             {"status": 429, "code": "PT429", "message": "church_map_asks_cap: ten"})
+            unreadable = MagicMock(status_code=503, text="<html>")
+            unreadable.json.side_effect = ValueError("not json")
+            request.return_value = unreadable
+            self.assertIsNone(sb_clients.sb_get_as_service("/businesses"))
+            self.assertEqual(sb_clients.last_error(), {"status": 503, "code": "", "message": ""})
+            request.return_value = MagicMock(status_code=200, text="[]")
+            self.assertEqual(sb_clients.sb_get_as_service("/businesses"), [])
+            self.assertIsNone(sb_clients.last_error(), "a call that worked clears it")
+            request.side_effect = httpx.ConnectError("down")
+            self.assertIsNone(sb_clients.sb_get_as_service("/businesses"))
+            self.assertIsNone(sb_clients.last_error(), "never reached the database: no refusal to read")
 
 
 class AsyncRequestTests(unittest.IsolatedAsyncioTestCase):

@@ -31,12 +31,19 @@ too. An answer from Chief waits for the person's own words naming whose it is (_
 to their own; what the map or the duties' switch keeps from a login there, it can't make here; every answer
 that makes something has an Undo that login can use (undo_ask). Who sees what (a login's areas or keys, a
 role's "sees everything") stays words only. A money part is the owner's to apply. At most CAP fixes and
-gaps a seat a day: checked before, and counted again once saved, so of two sent at once the one past the
-cap is taken back (_held_to_cap); the same gap from the same church inside GAP_DAYS joins the open one.
+gaps a seat a day: checked before, held by the database once supabase/APPLY-2026-11-06-church-map-asks-cap.sql
+is applied (its trigger counts under one lock, so of two sent at once the eleventh never saves, and _insert
+answers its refusal with the cap's words), and until then counted again once saved, the one past the cap
+taken back (_held_to_cap); the same gap from the same church inside GAP_DAYS joins the open one.
 
 Switched with the map, for the church: CHURCH_MAP through church_map.church_open, so Love City's office
-logins reach it while the switch is `owner`. Before the file is applied (ready()) every verb and route says
-it isn't ready.
+logins reach it while the switch is `owner`. Making what an ask carries follows the map's and the duties'
+own switches the same way, the login or the church (_gates), so Love City's admins apply and undo an ask that
+moves a duty too. Before the file is applied (ready()) every verb and route says it isn't ready.
+
+One Undo for an ask's change: a change to the map that saying yes made together with a duty move is put back
+with that move from Recent changes too (ask_of_change: the route and Chief's undo_map_change run the ask's
+undo, both or neither), and Recent changes' line names the ask (on_recent).
 """
 from __future__ import annotations
 
@@ -297,11 +304,31 @@ def _said(action: Dict[str, Any]) -> str:
     return said
 
 
-def _insert(bid: str, uid: str, kind: str, said: str, **more: Any) -> Optional[Dict[str, Any]]:
-    row = {"business_id": bid, "kind": kind, "said": said, "asked_by": uid, "asked_at": _now().isoformat(),
-           "status": "open", "change_id": None, "duty_move": None, "work": None, "told_at": None, **more}
+# The cap's own refusal, once supabase/APPLY-2026-11-06-church-map-asks-cap.sql is applied: its trigger
+# (church_map_asks_cap) raises this SQLSTATE, with a message that starts with its name, when a login already
+# sent CAP fixes and gaps in the last 24 hours. PostgREST answers it as HTTP 429 and keeps both in the body.
+CAP_CODE = "PT429"
+CAP_WORD = "church_map_asks_cap"
+
+
+def _cap_refused() -> bool:
+    """Whether the save that just failed was the cap's own refusal (sb_clients.last_error), not an outage."""
+    err = sb_clients.last_error() or {}
+    return err.get("code") == CAP_CODE or str(err.get("message") or "").startswith(CAP_WORD)
+
+
+def _insert(business: Dict[str, Any], uid: str, kind: str, said: str, **more: Any) -> Dict[str, Any]:
+    """One ask saved, or why not: the database's cap (the trigger, two at once held to it under one lock) is
+    the cap's 429, in the same words as the check before it; any other failure is a 503."""
+    row = {"business_id": str(business["id"]), "kind": kind, "said": said, "asked_by": uid,
+           "asked_at": _now().isoformat(), "status": "open", "change_id": None, "duty_move": None, "work": None,
+           "told_at": None, **more}
     got = sb_clients.sb_post_as_service("/church_map_asks", row)
-    return got[0] if isinstance(got, list) and got else None
+    if isinstance(got, list) and got:
+        return got[0]
+    if kind in ("fix", "gap") and _cap_refused():
+        raise _capped(business)
+    raise HTTPException(503, UNSAVED)
 
 
 def _capped(business: Dict[str, Any]) -> HTTPException:
@@ -321,7 +348,8 @@ def _under_cap(business: Dict[str, Any], uid: str) -> None:
 
 
 def _held_to_cap(business: Dict[str, Any], uid: str, row: Dict[str, Any], ch: Optional[Dict[str, Any]] = None) -> None:
-    """The cap, once saved: two quick turns can both pass _under_cap before either saves, so the day's asks
+    """The cap, once saved, the belt for before the cap's trigger is applied (with it, the eleventh never
+    saves: _insert): two quick turns can both pass _under_cap before either saves, so the day's asks
     are counted again, first sent first (when, then id), and one past the first CAP is taken back with the
     change it carried, and refused as the cap is. A recount or a take-back that fails keeps it: the check
     before it passed, and a suggestion kept beats one said to be sent and lost."""
@@ -416,9 +444,10 @@ def _duty_move(business: Dict[str, Any], raw: Any, notes: List[str]) -> Tuple[Op
 
 # ─── The owner's and admins' side ─────────────────────────────────────
 
-MAP_CLOSED = ("Changing the leaders map isn’t open to this login yet, so that can’t be made or let go from here. The "
-              "owner can.")
-DUTY_CLOSED = "Moving duties isn’t open to this login yet, so that can’t be made from here. The owner can."
+# The map and the duties open by the login or the church (church_map.office_open, church_duties.office_open), so
+# where one is closed to an admin it's closed to the whole church: nobody there makes it from here yet.
+MAP_CLOSED = "Changing the leaders map isn’t on at this church yet, so that can’t be made or let go from here."
+DUTY_CLOSED = "Moving duties isn’t on at this church yet, so that can’t be made from here."
 SELF = "That’s your own suggestion: the owner or another admin says yes to it."
 MONEY = "Only the owner says yes to a change with money in it."
 NOT_MADE = "Only a suggestion that was applied has something to put back."
@@ -434,17 +463,18 @@ def _row(bid: str, ask_id: Any) -> Dict[str, Any]:
 
 
 def linked(business: Dict[str, Any], change_ids: Any) -> Dict[str, Dict[str, Any]]:
-    """change id → {id, status, name}: the ask that carries each of these changes, and whose it is. {} before
-    this file; a read that fails once it's there is a 503 (church_map_batch's list and its apply)."""
+    """change id → {id, status, name, row}: the ask that carries each of these changes, whose it is, and its
+    row (on_recent reads what its yes made). {} before this file; a read that fails once it's there is a 503
+    (church_map_batch's list and its apply)."""
     ids = sorted({str(c) for c in change_ids or [] if c})
     if not ids or ready() is not True:
         return {}
     bid = str(business["id"])
     rows = cm._by_ids(lambda part: f"/church_map_asks?business_id=eq.{_q(bid)}&change_id=in.({part})"
-                                   "&select=id,change_id,status,asked_by&limit=100", ids)
+                                   f"&select={COLS}&limit=100", ids)
     names = cd._names(bid, business, cd._seats(bid)) if rows else {}
     return {str(r["change_id"]): {"id": str(r["id"]), "status": r["status"],
-                                  "name": names.get(str(r.get("asked_by") or "")) or GONE} for r in rows}
+                                  "name": names.get(str(r.get("asked_by") or "")) or GONE, "row": r} for r in rows}
 
 
 def _changes(bid: str, rows: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
@@ -813,6 +843,86 @@ def undo_answer(business: Dict[str, Any], ask_id: Any, by: str, role: str, gates
     return out
 
 
+# ─── One Undo for an ask's change (Recent changes and From your team) ─
+
+def _both(row: Dict[str, Any], chs: Dict[str, Dict[str, Any]],
+          moves: Dict[str, List[Dict[str, Any]]]) -> Optional[Tuple[str, str, str]]:
+    """(its change to the map, the duty, that move's change) when saying yes to this ask made both: an
+    Undo of the map change is then the ask's own (undo_answer, both parts or neither). None otherwise: an
+    ask whose yes made only the map change has nothing more to put back, so the change's own undo is it."""
+    if row.get("status") != "applied":
+        return None
+    cid, duty, dcid = _made_by(row, chs, moves)
+    return (cid, str(duty), dcid) if cid and duty and dcid else None
+
+
+def ask_of_change(business: Dict[str, Any], change_id: Any) -> Optional[Dict[str, Any]]:
+    """The answered ask whose yes made this change to the map and moved a duty with it: {row, duty,
+    duty_change_id, who, names}. POST /church/map/changes/{id}/undo and Chief's undo_map_change run the
+    ask's undo then, so Recent changes' Undo never puts the map half back alone. None for any other change,
+    and before this file; a read that fails, or a probe that can't tell, is a 503 (never half)."""
+    cid = _uuid(change_id)
+    s = ready()
+    if s is None:
+        raise HTTPException(503, UNREAD)
+    if not cid or not s:
+        return None
+    bid = str(business["id"])
+    rows = _need(f"/church_map_asks?business_id=eq.{_q(bid)}&change_id=eq.{_q(cid)}&status=eq.applied"
+                 f"&select={COLS}&limit=1")
+    if not rows or not isinstance(rows[0].get("duty_move"), dict):
+        return None
+    row = rows[0]
+    both = _both(row, _changes(bid, [row]), _duty_log(bid, [row]))
+    if not both or both[0] != cid:
+        return None
+    names = cd._names(bid, business, cd._seats(bid))
+    return {"row": row, "duty": both[1], "duty_change_id": both[2], "names": names,
+            "who": names.get(str(row.get("asked_by") or "")) or GONE}
+
+
+def on_recent(business: Dict[str, Any], chs: Dict[str, Dict[str, Any]], asked: Dict[str, Dict[str, Any]],
+              role: str, gates: Optional[Dict[str, bool]]) -> Dict[str, Dict[str, Any]]:
+    """Recent changes' side of one Undo (church_map_batch.recent): change id → {duty, can_undo} for each of
+    these changes an answered ask's yes made together with a duty move (_both). Its Undo there is the ask's,
+    so `can_undo` is the ask's own (_can_undo: both parts, both switches for this login) and `duty` is the
+    duty's label, which goes back with it."""
+    rows = [a["row"] for a in asked.values() if a.get("row") and a["row"].get("status") == "applied"
+            and isinstance(a["row"].get("duty_move"), dict)]
+    if not rows:
+        return {}
+    moves = _duty_log(str(business["id"]), rows)
+    out: Dict[str, Dict[str, Any]] = {}
+    for r in rows:
+        both = _both(r, chs, moves)
+        if both and both[0] == str(r.get("change_id") or ""):
+            out[both[0]] = {"duty": cd.CATALOG[both[1]]["label"], "can_undo": _can_undo(r, chs, moves, role, gates or {})}
+    return out
+
+
+def _back_words(d: Optional[Dict[str, Any]], names: Dict[str, str]) -> str:
+    """Where a duty an undo put back goes now, in words (names read before anything was put back)."""
+    if not d:
+        return ""
+    if d.get("follows_lanes"):
+        return f"“{d['label']}” follows the lanes again"
+    return f"“{d['label']}” is back with {_join([names.get(u) or GONE for u in d.get('holders') or []])}"
+
+
+def undo_with_ask(business: Dict[str, Any], found: Dict[str, Any], by: str, role: str,
+                  gates: Dict[str, bool]) -> Dict[str, Any]:
+    """POST /church/map/changes/{id}/undo for a change ask_of_change found: the ask's undo (undo_answer:
+    both parts or neither), answered as the change undo is ({change, undone, let_go}) with `duty` (what went
+    back), `ask` {id, who}, `both` True and a `note` in words saying both went back."""
+    row = found["row"]
+    out = undo_answer(business, row["id"], by, role, gates)
+    out["ask"] = {"id": str(row["id"]), "who": found["who"]}
+    out["both"] = True
+    out["note"] = (f"That change came from {found['who']}’s suggestion, and saying yes to it moved a duty too, so "
+                   f"both went back: the change to the leaders map, and {_back_words(out['duty'], found['names'])}.")
+    return out
+
+
 # ─── The turn's lines ─────────────────────────────────────────────────
 
 DUE_SECONDS = 60
@@ -962,10 +1072,10 @@ LIST_TOOL = {
 
 def _gates(uid: str, bid: str) -> Dict[str, bool]:
     """Whether the map and the duties are open to this person here, as the sheet's and the duties page's
-    own routes decide it (chief_map's switch: the login or the church; chief_duties': the login's)."""
+    own routes decide it (chief_map's switch and chief_duties': the login or the church)."""
     import chief_duties
     import chief_map
-    return {"map": chief_map._map_open(uid, bid) is True, "duty": chief_duties._switched_on(uid) is True}
+    return {"map": chief_map._map_open(uid, bid) is True, "duty": chief_duties._duties_open(uid, bid) is True}
 
 
 def _my_work(business: Dict[str, Any], uid: str, seat: str, action: Dict[str, Any]) -> Dict[str, Any]:
@@ -990,9 +1100,8 @@ def _confirm(business: Dict[str, Any], uid: str, seat: str, action: Dict[str, An
     w, last = work(business, uid, seat), _checked(bid, uid)
     if _due(business, uid, seat, last, w):         # the same work checked again keeps the one check
         at = _now().isoformat()
-        if _insert(bid, uid, "confirmed", _plain(action.get("said"))[:SAID_MAX], work=w["print"], status="done",
-                   asked_at=at, resolved_at=at, told_at=at) is None:
-            raise HTTPException(503, UNSAVED)
+        _insert(business, uid, "confirmed", _plain(action.get("said"))[:SAID_MAX], work=w["print"], status="done",
+                asked_at=at, resolved_at=at, told_at=at)
     forget(bid, uid)
     return {"result": "Got it. I’ll tell you if any of it changes.", "label": "Your work is checked", "checked": True}
 
@@ -1004,11 +1113,12 @@ def _suggest(business: Dict[str, Any], uid: str, seat: str, action: Dict[str, An
     notes: List[str] = []
     mv, to = (None, "") if access else _duty_move(business, action.get("duty_move"), notes)
     ch = None if access else _staged(business, uid, said, action.get("changes"), notes)
-    row = _insert(bid, uid, "fix", said, change_id=(ch or {}).get("id"), duty_move=mv)
-    if row is None:
+    try:
+        row = _insert(business, uid, "fix", said, change_id=(ch or {}).get("id"), duty_move=mv)
+    except HTTPException:           # not saved (the cap, or a failure): the change it would carry goes too
         if ch and not batch._set(bid, ch["id"], {"status": "discarded"}, ("pending",)):
             print(f"[church_map_asks] suggested change {ch['id']} at {bid[:8]} kept waiting without its ask", flush=True)
-        raise HTTPException(503, UNSAVED)
+        raise
     _held_to_cap(business, uid, row, ch)
     if access:
         return {"result": f"Sent to {owner} as your words: {_own(said, True)} Who sees what is the owner’s to set, in "
@@ -1034,9 +1144,7 @@ def _gap(business: Dict[str, Any], uid: str, seat: str, action: Dict[str, Any]) 
         return {"result": f"That’s already on the list (asked {_when(same['asked_at'])}): it waits for {owner} and the "
                           "admins.", "label": "Already on the list", "ask_id": str(same["id"]), "sent": False}
     _under_cap(business, uid)
-    row = _insert(bid, uid, "gap", said)
-    if row is None:
-        raise HTTPException(503, UNSAVED)
+    row = _insert(business, uid, "gap", said)
     _held_to_cap(business, uid, row)
     return {"result": f"Added to the list for {owner} and the admins: {_own(said, True)} Nothing changes until one of "
                       "them looks at it.", "label": "On the list for a yes", "ask_id": str(row["id"]), "sent": True}
@@ -1177,13 +1285,29 @@ def _undo_ask(business: Dict[str, Any], uid: str, seat: str, action: Dict[str, A
             return {"result": f"{got['result']} Nothing was put back.", "label": "Nothing was put back", "failed": True}
         said.append(got["result"])
     if cid:
-        got = chief_map._run("undo_map_change", business, {"change_id": cid}, chief_map._undo)
+        # The map change's own undo (not undo_map_change's ask-aware one: the duty went back just now).
+        got = chief_map._run("undo_map_change", business, {"change_id": cid}, chief_map._undo_alone)
         if got.get("failed"):
             return {"result": f"Failed: the duty went back, but the change to the map couldn’t: "
                               f"{got['result'].removeprefix('Failed: ')}" if said else got["result"],
                     "label": "Only part was put back" if said else got["label"], "failed": True}
         said.append(got["result"])
     return {"result": " ".join(said), "label": "Put back what saying yes made", "changed": True}
+
+
+def chief_undo_with_ask(business: Dict[str, Any], uid: str, seat: str, found: Dict[str, Any]) -> Dict[str, Any]:
+    """Chief's undo_map_change for a change ask_of_change found: undo_ask's own way (both parts or neither,
+    each through its own undo and seats), and the receipt says it was someone's suggestion and both went back."""
+    row = found["row"]
+    cid = str(row["change_id"])
+    got = _undo_ask(business, uid, seat, {"change_id": cid, "duty": found["duty"],
+                                          "duty_change_id": found["duty_change_id"]})
+    if got.get("failed"):
+        return got
+    who, label = fence(found["who"]), cd.CATALOG[found["duty"]]["label"]
+    return {**got, "result": f"That change came from {who}’s suggestion, and saying yes to it moved “{label}” too, so "
+                             f"both went back. {got['result']}",
+            "label": "Put back the change and its duty move", "undone": cid, "ask_id": str(row["id"]), "both": True}
 
 
 def _run(atype: str, biz: Any, action: Any, body: Callable[..., Dict[str, Any]], seats: Tuple[str, ...]) -> Dict[str, Any]:

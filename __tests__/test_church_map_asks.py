@@ -21,7 +21,11 @@ Pins:
     the duty move is checked before anything is made; one made on the map's list settles the ask
   * ten a day; the same gap inside seven days joins the open one
   * apply, done, discard, and each failure path; the routes' seats, switch and 503s
-  * the owner's and an admin's count line"""
+  * the owner's and an admin's count line
+  * 11-06: the duties open by the church as the map does (Love City's admin applies and undoes an ask that
+    moves a duty, on screen and through Chief; Grace stays closed, its owner too); one Undo for an ask's
+    change (Recent changes names the ask, and its Undo, on screen or Chief's, is the ask's: both or neither,
+    the seats kept); the database's cap answered in the cap's words, never as a failed save"""
 from __future__ import annotations
 
 import asyncio
@@ -494,17 +498,29 @@ def test_the_maps_switch_decides_who_makes_and_undoes_it_and_undo_is_never_a_dea
     assert run(db, "change_map", {"changes": TEAM_OVERSEES["changes"]}, LC, "minnie")["failed"], "off is off"
 
 
+GRACE_TEXT = {"said": "The weekly text is Thelma's now", "duty_move": {"duty": "weekly_text", "to": "Thelma Ross"}}
+
+
 def test_the_duties_switch_decides_who_moves_a_duty(db, monkeypatch):
-    """#1731 review: duty moves skipped CHURCH_DUTIES."""
+    """#1731 review: duty moves skipped CHURCH_DUTIES. 11-06: the duties open by the login or the church
+    (church_duties.office_open), as the map does, so under `owner` Love City's admin moves one through an ask,
+    and another church stays closed, its own owner too."""
     ok(run(db, "suggest_work_change", KIDS, LC, "tiara"))
     aid = rows(db)[0]["id"]
     monkeypatch.setenv("CHURCH_DUTIES", "owner")
-    r = say(db, aid, "apply", "Yes to Tiara's", LC, "minnie")
-    assert r["failed"] and r["result"] == "Failed: " + asks.DUTY_CLOSED and holds(db, LC, "tiara", "kids")
+    ok(run(db, "suggest_work_change", GRACE_TEXT, GRACE, "sharon"))
+    gid = rows(db, GRACE)[0]["id"]
+    for who in ("thelma", None):
+        r = say(db, gid, "apply", "Yes to Sharon's", GRACE, who)
+        assert r["failed"] and r["result"] == "Failed: " + asks.DUTY_CLOSED, who
+    assert holds(db, GRACE, "sharon", "weekly_text"), "nothing moved at Grace"
+    [g] = asks.open_asks(church(db, GRACE), "admin", db.who[GRACE]["thelma@"], asks._gates(db.who[GRACE]["thelma@"],
+                                                                                           GRACE))["asks"]
+    assert (g["can_apply"], g["cant_apply"], g["can_done"]) == (False, asks.DUTY_CLOSED, True)
     assert not asks.open_asks(church(db, LC), "admin", db.who[LC]["minnie@"], {"map": True, "duty": False})[
-        "asks"][0]["can_apply"]
-    assert ok(say(db, aid, "apply", "Yes to Tiara's"))["changed"] and holds(db, LC, "laquesha", "kids"), \
-        "the platform owner's login"
+        "asks"][0]["can_apply"], "where the duties are closed, Apply isn't offered"
+    assert ok(say(db, aid, "apply", "Yes to Tiara's", LC, "minnie"))["changed"] and holds(db, LC, "laquesha", "kids"), \
+        "the platform owner's church: its own admin"
     monkeypatch.setenv("CHURCH_DUTIES", "off")
     out = ok(run(db, "suggest_work_change", KIDS, LC, "naiya"))
     assert "Duties aren’t on at this church, so that part goes as their words." in out["result"]
@@ -944,12 +960,17 @@ def test_putting_back_an_answered_ask_refuses_in_words_and_puts_back_both_or_nei
     ok(run(db, "suggest_work_change", BOTH, LC, "tiara"))
     aid = rows(db)[-1]["id"]
     assert o.c.post(f"/church/map/asks/{aid}/apply?business_id={LC}").json()["can_undo"]
-    # The duties page isn't open to Minnie's login: she can't put back the duty, so neither part goes back.
+    # Under `owner` the duties are Love City's own admin's too (11-06): her screen offers Undo.
     monkeypatch.setenv("CHURCH_DUTIES", "owner")
     mo = Office(db).as_(LC, "minnie")
-    assert answered(mo, aid)["can_undo"] is False
-    r = mo.c.post(undo_url(aid))
-    assert (r.status_code, r.json()["detail"]) == (403, asks.DUTY_CLOSED + " Nothing was put back.")
+    assert answered(mo, aid)["can_undo"] is True
+    # Where the duties are closed to her, she can't put back the duty, so neither part goes back.
+    closed = {"map": True, "duty": False}
+    assert next(a for a in asks._answered(church(db, LC), "admin", closed) if a["id"] == aid)["can_undo"] is False
+    with pytest.raises(asks.HTTPException) as e:
+        asks.undo_answer(church(db, LC), aid, db.who[LC]["minnie@"], "admin", closed)
+    assert (e.value.status_code, e.value.detail) == (403, asks.DUTY_CLOSED + " Nothing was put back.")
+    assert team_oversees(db) and holds(db, LC, "laquesha", "kids"), "both stayed"
     monkeypatch.setenv("CHURCH_DUTIES", "on")
     # The duty moved again since: neither part goes back.
     cd.move(church(db, LC), "kids", [db.who[LC]["naiya@"]], church(db, LC)["owner_id"])
@@ -1012,30 +1033,40 @@ def test_an_ask_applied_before_its_duty_change_was_kept_is_still_put_back(db):
     assert holds(db, LC, "tiara", "kids") and not team_oversees(db)
 
 
-def test_love_citys_admin_reaches_the_sheet_and_an_ask_she_cant_apply_says_why(db, monkeypatch):
+def test_love_citys_admin_reaches_the_sheet_and_applies_and_undoes_an_ask_that_moves_a_duty(db, monkeypatch):
     """F8 review, 11-04: with CHURCH_MAP=owner, Love City's admin got a 404 on GET /church/map (the map
     opened by the login) while its asks opened by the church, so she never saw the sheet or From your team.
-    Both open by the church now; the duties keep their own switch, and an ask that would move one says why
-    it can't be applied, on screen and from Chief alike."""
+    Both open by the church now. 11-06: so do the duties (church_duties.office_open), so an ask that moves
+    one is hers to apply and undo too, on screen and from Chief alike; the seats are as they were."""
     monkeypatch.setenv("CHURCH_MAP", "owner")
     monkeypatch.setenv("CHURCH_DUTIES", "owner")
     ok(run(db, "suggest_work_change", KIDS, LC, "tiara"))
     ok(run(db, "suggest_work_change", TEAM_OVERSEES, LC, "naiya"))
+    ok(run(db, "suggest_work_change", {"said": "Kids check-in is mine", "duty_move": {
+        "duty": "kids", "to": "Minnie Tatum"}}, LC, "minnie"))
     o = Office(db).as_(LC, "minnie")
     assert o.get(LC).json()["you"] == {"role": "admin", "writes": True, "money": False}
     assert o.as_(LC, "jessica").get(LC).json()["you"]["writes"] is False, "a Manager reads it"
     o.as_(LC, "minnie")
     by = {a["who"]["name"]: a for a in o.c.get(f"/church/map/asks?business_id={LC}").json()["asks"]}
-    kids, team = by["Tiara Adams"], by["Naiya Clark"]
-    assert (kids["can_apply"], kids["cant_apply"], kids["can_done"]) == (False, asks.DUTY_CLOSED, True)
+    kids, team, own = by["Tiara Adams"], by["Naiya Clark"], by["Minnie Tatum"]
+    assert (kids["can_apply"], kids["cant_apply"], kids["can_done"]) == (True, None, True)
     assert (team["can_apply"], team["cant_apply"]) == (True, None)
-    r = o.c.post(f"/church/map/asks/{kids['id']}/apply?business_id={LC}")
-    assert (r.status_code, r.json()["detail"]) == (403, asks.DUTY_CLOSED)
-    assert say(db, kids["id"], "apply", "Yes to Tiara's", LC, "minnie")["result"] == "Failed: " + asks.DUTY_CLOSED, \
-        "her Chief says the same"
-    got = o.c.post(f"/church/map/asks/{team['id']}/apply?business_id={LC}").json()
-    assert got["finished"] and got["can_undo"] and team_oversees(db)
-    assert holds(db, LC, "tiara", "kids"), "nothing moved"
+    assert (own["can_apply"], own["cant_apply"]) == (False, asks.SELF), "nobody says yes to their own"
+    got = o.c.post(f"/church/map/asks/{kids['id']}/apply?business_id={LC}").json()
+    assert got["finished"] and got["duty"]["changed"] and got["can_undo"] is True
+    assert holds(db, LC, "laquesha", "kids") and not holds(db, LC, "tiara", "kids"), "the duty moved"
+    assert answered(o, kids["id"])["can_undo"] is True
+    back = o.c.post(undo_url(kids["id"])).json()
+    assert back["ok"] and back["duty"]["duty"] == "kids" and holds(db, LC, "tiara", "kids"), "and her Undo works"
+    r = o.c.post(f"/church/map/asks/{own['id']}/apply?business_id={LC}")
+    assert (r.status_code, r.json()["detail"]) == (403, asks.SELF)
+    made = ok(say(db, team["id"], "apply", "Yes to Naiya's", LC, "minnie"))
+    assert made["result"].endswith("Undo puts it back.") and team_oversees(db), "her Chief says yes too"
+    for h in ("jessica", "tiara"):
+        assert o.as_(LC, h).c.post(f"/church/map/asks/{own['id']}/apply?business_id={LC}").status_code == 404, h
+        assert say(db, own["id"], "apply", "Yes to Minnie's", LC, h)["result"] == "Failed: " + asks.OWNERS_ONLY, h
+    assert rows(db)[2]["status"] == "open", "a Manager answered nothing"
     assert Office(db).as_(GRACE).get(GRACE).status_code == 404, "another church stays closed"
 
 
@@ -1071,8 +1102,8 @@ def test_the_cap_holds_when_two_quick_turns_both_pass_the_check(db, monkeypatch)
     tiara, biz = db.who[LC]["tiara@"], church(db, LC)
     for n in range(9):
         ok(run(db, "note_gap", {"said": f"Who runs the {n} ministry?"}, LC, "tiara"))
-    a = asks._insert(LC, tiara, "gap", "Turn A")        # both turns read nine, then each saved
-    b = asks._insert(LC, tiara, "gap", "Turn B")
+    a = asks._insert(biz, tiara, "gap", "Turn A")       # both turns read nine, then each saved
+    b = asks._insert(biz, tiara, "gap", "Turn B")
     with pytest.raises(asks.HTTPException) as e:
         asks._held_to_cap(biz, tiara, b)                 # B counts first: it's the eleventh
     assert e.value.status_code == 429 and "That’s 10 suggestions today" in e.value.detail
@@ -1093,3 +1124,205 @@ def test_the_cap_holds_when_two_quick_turns_both_pass_the_check(db, monkeypatch)
                         else get(path, **k))
     assert ok(run(db, "note_gap", {"said": "Kept, since it couldn't be counted"}, LC, "tiara"))["sent"]
     assert sum(r["said"].startswith("Kept") for r in rows(db)) == 2, "a failed recount or take-back keeps it"
+
+
+# ─── 11-06: the duties open by the church, one Undo, the database's cap ─
+
+GRACE_BOTH = {"said": "The youth minister oversees, and the weekly text is Thelma's",
+              "changes": [{"kind": "role", "role": "Youth Minister", "can_oversee": True}],
+              "duty_move": GRACE_TEXT["duty_move"]}
+
+
+def change_undo_url(cid, biz=LC):
+    return f"/church/map/changes/{cid}/undo?business_id={biz}"
+
+
+def recent_of(o, cid, biz=LC):
+    return next(c for c in o.c.get(f"/church/map/changes?business_id={biz}").json()["recent"] if c["id"] == cid)
+
+
+def youth_oversees(db):
+    import church_roles as cr
+    return next(d for d in cr.defs(GRACE) if d["key"] == "youth_minister")["can_oversee"]
+
+
+def test_another_church_stays_closed_to_moving_duties_while_the_switch_is_owner(db, monkeypatch):
+    """11-06: under `owner` the duties open to the platform owner's church, never another's. At Grace an
+    answer that moved a duty can't be put back by its admin, from From your team, Recent changes or Chief
+    (both parts or neither), and Chief's duty verbs say they aren't on, its own owner's too."""
+    import chief_duties
+    ok(run(db, "suggest_work_change", GRACE_BOTH, GRACE, "sharon"))
+    gid = rows(db, GRACE)[0]["id"]
+    o = Office(db).as_(GRACE, "thelma")
+    got = o.c.post(f"/church/map/asks/{gid}/apply?business_id={GRACE}").json()      # duties on: made
+    assert got["finished"] and got["can_undo"] and holds(db, GRACE, "thelma", "weekly_text") and youth_oversees(db)
+    cid = got["change"]["id"]
+    monkeypatch.setenv("CHURCH_DUTIES", "owner")
+    assert answered(o, gid, GRACE)["can_undo"] is False and recent_of(o, cid, GRACE)["can_undo"] is False
+    for url in (undo_url(gid, GRACE), change_undo_url(cid, GRACE)):
+        r = o.c.post(url)
+        assert (r.status_code, r.json()["detail"]) == (403, asks.DUTY_CLOSED + " Nothing was put back."), url
+    r = run(db, "undo_map_change", {"change_id": cid}, GRACE, "thelma")
+    assert r["failed"] and r["result"] == "Failed: " + asks.DUTY_CLOSED + " Nothing was put back."
+    assert holds(db, GRACE, "thelma", "weekly_text") and not holds(db, GRACE, "sharon", "weekly_text") and \
+        youth_oversees(db), "both stayed"
+    for who in ("thelma", None):
+        assert run(db, "move_duty", {"duty": "weekly_text", "to": ["Sharon Wells"]}, GRACE, who)["result"] == \
+            "Failed: " + chief_duties.NOT_ON, who
+    assert ok(run(db, "move_duty", {"duty": "weekly_text", "to": ["Laquesha Bailey-Smith"]}, LC, "minnie"))["changed"], \
+        "Love City's own admin"
+    assert run(db, "move_duty", {"duty": "weekly_text", "to": ["Tiara Adams"]}, LC, "naiya")["result"] == \
+        "Failed: " + chief_duties.NOT_YOURS, "a Manager still moves nothing"
+
+
+def test_recent_changes_names_the_ask_and_its_undo_puts_back_both_parts(db):
+    """11-06, one Undo: an answered ask's change showed in Recent changes too, where Undo put back the map
+    change alone and left the duty it moved. Its line names the ask (`ask`: id, who, duty), and its Undo is
+    the ask's own: both parts or neither, and the answer says both went back."""
+    o = Office(db).as_(LC)
+    ok(run(db, "suggest_work_change", BOTH, LC, "tiara"))
+    aid = rows(db)[0]["id"]
+    cid = o.c.post(f"/church/map/asks/{aid}/apply?business_id={LC}").json()["change"]["id"]
+    c = recent_of(o, cid)
+    assert c["ask"] == {"id": aid, "who": "Tiara Adams", "duty": "Kids"} and c["can_undo"] is True
+    assert c["suggested_by"] == {"ask_id": aid, "name": "Tiara Adams", "status": "applied"}, "as before"
+    jo = Office(db).as_(LC, "jessica")
+    assert recent_of(jo, cid)["can_undo"] is False and jo.c.post(change_undo_url(cid)).status_code == 404, \
+        "a Manager reads it and puts nothing back"
+    back = o.c.post(change_undo_url(cid)).json()
+    assert back["ok"] and back["both"] is True and back["undone"] == cid and back["change"]["status"] == "applied"
+    assert back["ask"] == {"id": aid, "who": "Tiara Adams"}
+    assert (back["duty"]["duty"], back["duty"]["follows_lanes"]) == ("kids", True)
+    assert back["note"] == ("That change came from Tiara Adams’s suggestion, and saying yes to it moved a duty too, so "
+                            "both went back: the change to the leaders map, and “Kids” follows the lanes again.")
+    assert holds(db, LC, "tiara", "kids") and not holds(db, LC, "laquesha", "kids") and not team_oversees(db)
+    a = answered(o, aid)
+    assert (a["put_back"], a["can_undo"]) == (True, False), "From your team agrees"
+    assert a["happened"] == MADE_BOTH + " Then it was put back."
+    assert recent_of(o, cid)["can_undo"] is False
+    r = o.c.post(change_undo_url(cid))
+    assert (r.status_code, r.json()["detail"]) == (409, "That change was put back already. Nothing was put back.")
+
+
+def test_an_asks_change_with_no_duty_part_is_its_own_undo(db):
+    o = Office(db).as_(LC)
+    ok(run(db, "suggest_work_change", TEAM_OVERSEES, LC, "tiara"))
+    aid = rows(db)[0]["id"]
+    cid = o.c.post(f"/church/map/asks/{aid}/apply?business_id={LC}").json()["change"]["id"]
+    c = recent_of(o, cid)
+    assert c["ask"] == {"id": aid, "who": "Tiara Adams", "duty": None} and c["can_undo"] is True
+    back = o.c.post(change_undo_url(cid)).json()
+    assert back["ok"] and back["undone"] == cid and "both" not in back and not team_oversees(db)
+    assert answered(o, aid)["put_back"] is True, "the ask reads put back, as its own Undo would leave it"
+    made = ok(run(db, "change_map", {"changes": TEAM_OVERSEES["changes"]}, LC))
+    assert recent_of(o, made["change_id"])["ask"] is None, "a change nobody suggested names no ask"
+
+
+@pytest.mark.parametrize("stale", ["map", "duty"])
+def test_recent_changes_undo_of_an_asks_change_puts_back_both_or_neither(db, stale):
+    o = Office(db).as_(LC)
+    ok(run(db, "suggest_work_change", BOTH, LC, "tiara"))
+    aid = rows(db)[0]["id"]
+    cid = o.c.post(f"/church/map/asks/{aid}/apply?business_id={LC}").json()["change"]["id"]
+    if stale == "map":          # the role changed again since: told when Undo runs, as for any change
+        ok(run(db, "change_map", {"changes": [{"kind": "role", "role": "Team leader", "can_oversee": False}]}, LC))
+    else:                       # the duty moved again since: Undo isn't offered
+        cd.move(church(db, LC), "kids", [db.who[LC]["naiya@"]], church(db, LC)["owner_id"])
+    assert recent_of(o, cid)["can_undo"] is (stale == "map")
+    r = o.c.post(change_undo_url(cid))
+    assert r.status_code == 409 and r.json()["detail"].endswith("Nothing was put back."), r.json()
+    assert holds(db, LC, "naiya" if stale == "duty" else "laquesha", "kids"), "the duty stayed where it was"
+    assert team_oversees(db) == (stale == "duty"), "and so did the map"
+
+
+def test_recent_changes_undo_of_an_asks_change_keeps_the_seats(db):
+    """Money is the owner's: an admin can't put back an ask's change with money in it, nor its duty move."""
+    o, mo = Office(db).as_(LC), Office(db).as_(LC, "minnie")
+    ok(run(db, "suggest_work_change", {"said": "Elders give the pastor's yes, and kids are Laquesha's", "changes": [
+        {"kind": "settings", "pastor_yes_roles": ["Elders"]}], "duty_move": KIDS["duty_move"]}, LC, "naiya"))
+    aid = rows(db)[0]["id"]
+    cid = o.c.post(f"/church/map/asks/{aid}/apply?business_id={LC}").json()["change"]["id"]
+    assert recent_of(mo, cid)["can_undo"] is False and recent_of(o, cid)["can_undo"] is True
+    r = mo.c.post(change_undo_url(cid))
+    assert r.status_code == 403 and r.json()["detail"].startswith("Only the owner") and \
+        r.json()["detail"].endswith("Nothing was put back.")
+    assert holds(db, LC, "laquesha", "kids"), "the duty stayed too"
+    assert o.c.post(change_undo_url(cid)).json()["both"] and holds(db, LC, "tiara", "kids"), "the owner may"
+
+
+def test_chiefs_undo_map_change_on_an_asks_change_puts_back_both(db):
+    """11-06, one Undo: Chief's undo_map_change on an answered ask's change runs undo_ask's way, both parts or
+    neither, and says whose suggestion it was; list_map says so too."""
+    ok(run(db, "suggest_work_change", BOTH, LC, "tiara"))
+    aid = rows(db)[0]["id"]
+    made = ok(say(db, aid, "apply", "yes to Tiara's", LC, "minnie"))
+    listed = ok(run(db, "list_map", {}, LC, "minnie"))["result"]
+    line = next(x for x in listed.splitlines() if x.startswith(f"- change {made['change_id']} "))
+    assert "saying yes also moved “Kids”: undo_map_change puts both back" in line, line
+    cd.move(church(db, LC), "kids", [db.who[LC]["naiya@"]], church(db, LC)["owner_id"])     # moved again since
+    r = run(db, "undo_map_change", {"change_id": made["change_id"]}, LC, "minnie")
+    assert r["failed"] and r["result"].endswith("Nothing was put back.") and team_oversees(db), r["result"]
+    cd.undo(church(db, LC), "kids", church(db, LC)["owner_id"])          # that move put back: the yes's is last again
+    back = ok(run(db, "undo_map_change", {"change_id": made["change_id"]}, LC, "minnie"))
+    assert back["result"].startswith("That change came from Tiara Adams’s suggestion, and saying yes to it moved "
+                                     "“Kids” too, so both went back. Put back the last change to “Kids”."), back["result"]
+    assert (back["both"], back["ask_id"], back["undone"]) == (True, aid, made["change_id"])
+    assert holds(db, LC, "tiara", "kids") and not team_oversees(db)
+    assert answered(Office(db).as_(LC), aid)["put_back"] is True
+
+
+def database_cap(db, monkeypatch):
+    """The cap's trigger (supabase/APPLY-2026-11-06-church-map-asks-cap.sql) on the fake: a fix or gap from a
+    login that already sent CAP in the last 24 hours isn't saved, and PostgREST's refusal keeps the trigger's
+    SQLSTATE and message (sb_clients.last_error), as __tests__/church_map_asks_cap_db.mjs pins on Postgres."""
+    post, err = sb_clients.sb_post_as_service, {}
+
+    def capped(path, body, prefer=None, **k):
+        err.clear()
+        if path == "/church_map_asks" and body.get("kind") in ("fix", "gap"):
+            since = (datetime.fromisoformat(body["asked_at"]) - timedelta(days=1)).isoformat()
+            sent = [r for r in rows(db, body["business_id"]) if r["asked_by"] == body["asked_by"]
+                    and r["kind"] in ("fix", "gap") and r["asked_at"] >= since]
+            if len(sent) >= asks.CAP:
+                err.update(status=429, code=asks.CAP_CODE,
+                           message="church_map_asks_cap: this login sent ten fixes and gaps in the last 24 hours")
+                return None
+        return post(path, body, prefer, **k)
+    monkeypatch.setattr(sb_clients, "sb_post_as_service", capped)
+    monkeypatch.setattr(sb_clients, "last_error", lambda: dict(err) or None)
+
+
+def test_the_databases_cap_answers_in_the_caps_words_and_sends_nothing(db, monkeypatch):
+    """11-06: two turns at once could both pass the check before either saved. Once the cap's trigger is
+    applied the eleventh never saves, and its refusal is the cap's 429 in the same words, never "didn't
+    save"; a suggestion's change goes with it. Any other failure still says it didn't save."""
+    import itertools
+    t0, tick = datetime(2026, 11, 4, 15, tzinfo=timezone.utc), itertools.count()
+    monkeypatch.setattr(asks, "_now", lambda: t0 + timedelta(seconds=next(tick)))
+    for n in range(10):
+        ok(run(db, "note_gap", {"said": f"Who runs the {n} ministry?"}, LC, "tiara"))
+    database_cap(db, monkeypatch)
+    monkeypatch.setattr(asks, "_under_cap", lambda *a: None)      # a turn that read the count before the tenth saved
+    words = "Failed: " + asks._capped(church(db, LC)).detail
+    out = run(db, "suggest_work_change", TEAM_OVERSEES, LC, "tiara")
+    assert out["failed"] and out["result"] == words and "Tell Pastor Kevin" in words
+    assert [c["status"] for c in changes(db)] == ["discarded"], "the change it carried went too"
+    assert run(db, "note_gap", {"said": "One past it"}, LC, "tiara")["result"] == words
+    with pytest.raises(asks.HTTPException) as e:
+        asks._insert(church(db, LC), db.who[LC]["tiara@"], "fix", "Straight in")
+    assert (e.value.status_code, e.value.detail) == (429, words.removeprefix("Failed: "))
+    assert sum(r["kind"] in ("fix", "gap") for r in rows(db)) == 10, "nothing past the cap was saved"
+    assert ok(run(db, "confirm_my_work", {}, LC, "tiara"))["checked"], "a check isn't counted"
+    assert ok(run(db, "note_gap", {"said": "Who orders the cups?"}, LC, "naiya"))["sent"], "the cap is a seat's"
+    # A save that fails for any other reason says it didn't save, the cap's code or not.
+    post = db.post
+    monkeypatch.setattr(sb_clients, "sb_post_as_service", lambda path, body, prefer=None, **k: None if path.startswith(
+        "/church_map_asks") else post(path, body, prefer, **k))
+    monkeypatch.setattr(sb_clients, "last_error", lambda: {"status": 503, "code": "", "message": ""})
+    r = run(db, "suggest_work_change", TEAM_OVERSEES, LC, "naiya")
+    assert r["failed"] and r["result"] == "Failed: " + asks.UNSAVED
+    assert [c["status"] for c in changes(db)] == ["discarded", "discarded"], "its change went too"
+    assert run(db, "note_gap", {"said": "Who locks up?"}, LC, "naiya")["result"] == "Failed: " + asks.UNSAVED
+    monkeypatch.setattr(sb_clients, "last_error", lambda: {"status": 429, "code": asks.CAP_CODE, "message": ""})
+    assert run(db, "confirm_my_work", {}, LC, "naiya")["result"] == "Failed: " + asks.UNSAVED, \
+        "a check is never the cap"

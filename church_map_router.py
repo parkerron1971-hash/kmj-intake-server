@@ -12,7 +12,9 @@
                                                     (the owner only: decision 3)
     GET  /church/map/changes?business_id=           what waits for a yes, and the recent
                                                     changes in plain words; a manager seat up
-    POST /church/map/changes/{id}/undo?...          put one change back (church_map_batch)
+    POST /church/map/changes/{id}/undo?...          put one change back (church_map_batch); one
+                                                    an ask's yes made with a duty move goes back
+                                                    with it, both or neither (the ask's Undo)
     POST /church/map/changes/{id}/apply?...         make a waiting change, or finish a failed one
     POST /church/map/changes/{id}/discard?...       let a waiting change go; these three the
                                                     owner or an admin, a money one the owner
@@ -49,9 +51,12 @@ login (open_to) or the church (church_open), so with `owner` the platform
 owner's login and the platform owner's church (Love City: its admins and
 Managers too) reach these, the asks routes the same way. The seats still
 decide: a Manager seat reads, the owner or an admin writes, money is the
-owner's. Moving a duty from an ask follows the duties' own switch for the
-login (church_duties.open_to), unwidened: an ask that would move one says why
-it can't be applied (`cant_apply`). A 503 before the migration, when the probe
+owner's. Moving a duty from an ask follows the duties' own switch the same
+way (church_duties.office_open: the login or the church); where it's closed
+an ask that would move one says why it can't be applied (`cant_apply`). A
+change that saying yes to an ask made together with a duty move goes back
+with it from Recent changes too (one Undo: church_map_asks.ask_of_change),
+and its line names the ask (`ask`). A 503 before the migration, when the probe
 itself fails (church_map.state() None) or when the map can't be read:
 church_map's writes and view refuse then. The business id is checked as
 church_router checks it, and the seat by business_access.assert_access: no
@@ -207,13 +212,21 @@ def settings_save(body: _Settings, business_id: str = Query(...), user: AuthedUs
 
 @router.get("/changes")
 def changes_list(business_id: str = Query(...), user: AuthedUser = Depends(require_user)):
+    """What waits, and the recent changes; one an office login suggested names its ask (`ask`: {id, who,
+    duty}), and where saying yes to it moved a duty too, its `can_undo` is the ask's (both parts)."""
     biz, role = _church(business_id, user, "manager")
-    return batch.recent(biz, role)
+    return batch.recent(biz, role, _gates(user, biz["id"]))
 
 
 @router.post("/changes/{change_id}/undo")
 def change_undo(change_id: str, business_id: str = Query(...), user: AuthedUser = Depends(require_user)):
+    """Put one change back. One that saying yes to someone's suggestion made together with a duty move goes
+    back with that move, both or neither, as the ask's own Undo (church_map_asks.undo_with_ask): the answer
+    adds `duty`, `ask` {id, who}, `both` True and a `note`. Any other change, its own undo."""
     biz, role = _church(business_id, user, "admin")
+    found = asks.ask_of_change(biz, change_id)
+    if found:
+        return {"ok": True, **asks.undo_with_ask(biz, found, str(user.id), role, _gates(user, biz["id"]))}
     return {"ok": True, **batch.undo(biz, change_id, user.id, role=role)}
 
 
@@ -301,11 +314,10 @@ def _asks(business_id: str, user: AuthedUser, least: str) -> Tuple[Dict[str, Any
 
 def _gates(user: AuthedUser, bid: str) -> Dict[str, bool]:
     """What this login may make from an ask, as the sheet's and the duties page's own routes decide it: the
-    map's change routes (office_open: the login or the church) and the duties' (church_duties.open_to, the
-    login's, not widened here). What it can't make or undo there, it can't make through an ask (#1731
-    review)."""
+    map's change routes and the duties' (church_map.office_open and church_duties.office_open: the login or
+    the church). What it can't make or undo there, it can't make through an ask (#1731 review)."""
     import church_duties as cd
-    return {"map": cm.office_open(user, bid), "duty": cd.open_to(user)}
+    return {"map": cm.office_open(user, bid), "duty": cd.office_open(user, bid)}
 
 
 @router.get("/asks")

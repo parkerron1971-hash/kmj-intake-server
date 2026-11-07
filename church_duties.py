@@ -46,9 +46,11 @@ Chief reads and moves duties through the same functions (chief_duties.py:
 list_duties reads build(), move_duty and undo_duty call move() and undo()).
 
 The switch, CHURCH_DUTIES (off | owner | on; owner until a Thursday), gates
-these routes only. holds() answers whatever it says: it only reads rows an
-owner or an admin wrote here, and with none it is the lanes' defaults.
-Nothing calls require() yet; the job gates move onto it in step 2.
+these routes only, for the login or the church (office_open): with `owner`,
+the platform owner's login and the platform owner's own church (Love City:
+its admins move a duty, its Managers read the page). holds() answers
+whatever it says: it only reads rows an owner or an admin wrote here, and
+with none it is the lanes' defaults.
 
 Server-only tables (RLS on, no policies): supabase/APPLY-2026-11-01-church-
 duties.sql. Before it is applied, a Manager's holds() is a 503 and my-role
@@ -344,6 +346,7 @@ def mode() -> str:
 
 
 def open_to(user: AuthedUser) -> bool:
+    """The duties, for this login: on, or (owner) the platform owner's own login."""
     m = mode()
     if m == "on":
         return True
@@ -353,8 +356,28 @@ def open_to(user: AuthedUser) -> bool:
     return False
 
 
-def _gate(user: AuthedUser) -> None:
-    if not open_to(user):
+def church_open(biz: Any) -> bool:
+    """The duties, for this church: on, or (owner) the platform owner's own church (member_asks.platform_church,
+    as church_map.church_open). An id that isn't one is a no."""
+    m = mode()
+    if m == "on":
+        return True
+    if m == "owner":
+        import member_asks
+        return member_asks.platform_church(biz.get("id") if isinstance(biz, dict) else biz)
+    return False
+
+
+def office_open(user: AuthedUser, biz: Any) -> bool:
+    """What the duties routes, Chief's duty verbs and an ask's duty move follow: the login (open_to) or the
+    church (church_open), as church_map.office_open opens the map. With `owner`, Love City's own admins move
+    its duties too; the seats still decide who may (the owner or an admin moves one, money only to a money
+    login), and every other church stays closed."""
+    return open_to(user) or church_open(biz)
+
+
+def _gate(user: AuthedUser, biz: Any) -> None:
+    if not office_open(user, biz):
         raise HTTPException(404, "Not Found")
 
 
@@ -853,7 +876,7 @@ def _build(business: Dict[str, Any]) -> Dict[str, Any]:
 @router.get("/duties")
 def list_duties(business_id: str, session: UserSession = Depends(sb_clients.authed_request),
                 biz: Dict[str, Any] = Depends(business_access("manager"))):
-    _gate(session.user)
+    _gate(session.user, biz)
     if not _is_church(biz):
         raise HTTPException(404, NOT_CHURCH)
     return build(biz)
@@ -868,7 +891,7 @@ def _uuid(v: Any, what: str) -> str:
 
 def _church_for_change(body: Dict[str, Any], user: AuthedUser, duty: str) -> Tuple[str, Dict[str, Any]]:
     """The church a change is for, and the owner or an admin making it."""
-    _gate(user)
+    _gate(user, (body or {}).get("business_id"))
     biz = _uuid((body or {}).get("business_id"), "church")
     assert_access(biz, user, "admin")
     if duty not in CATALOG:
