@@ -706,7 +706,7 @@ def save_role(biz: Dict[str, Any], role_id: Any, changes: Dict[str, Any], user: 
     """PATCH /church/roles/{id}: {role: the saved row, change}. A change of
     its switches, or of its job, needs the seat switch_seat says, everywhere;
     every other field keeps the route's. Where the map is open to this login
-    (church_map.open_to) and step 2's file is there, such a save is one change
+    (church_map.office_open) and step 2's file is there, such a save is one change
     (origin 'office', a role part with the fields a part keeps; a job's
     switches among them), so the sheet's Undo puts it back. The whole save is
     checked first, by the batch's own dry run, and then written at once: a
@@ -716,7 +716,7 @@ def save_role(biz: Dict[str, Any], role_id: Any, changes: Dict[str, Any], user: 
     bid, by = cm._bid(biz), user.id
     rid = cr._uid(role_id, "role")
     moves = switch_seat(bid, rid, changes, role)
-    s = cm.step2_state() if (moves or any(k in changes for k in SWITCH_KEYS)) and cm.open_to(user) else False
+    s = cm.step2_state() if (moves or any(k in changes for k in SWITCH_KEYS)) and cm.office_open(user, bid) else False
     if s is None:
         raise HTTPException(503, cm.UNREAD)
     if not s:
@@ -790,7 +790,7 @@ def _set_words(f: str, v: Any, names: Dict[str, str]) -> str:
     if v is True:
         return WORD.get(f) or f
     if f == "units":
-        return "holds " + _and(_unit_names(v, names))
+        return "holds " + (_and(_unit_names(v, names)) if v else "nothing yet")
     return f"{WORD.get(f) or f} {_say(f, v, names)}"
 
 
@@ -800,8 +800,11 @@ def _lines(p: Dict[str, Any], names: Dict[str, str]) -> List[str]:
     label, b, a = p.get("label") or "It", p.get("before"), p.get("after")
     left = " (this part didn’t go in)" if p.get("done") is False else ""
     if b is None:
+        # A new department says all it got, set or not (leader nobody, office helper none, holds nothing yet), so
+        # a receipt never reads as if something said was set when it wasn't; a new role, the fields it sets.
+        every = p.get("kind") == "department"
         set_ = [_set_words(f, v, names) for f, v in (a or {}).items()
-                if f not in _QUIET and v not in (None, False, "", [])]
+                if f not in _QUIET and (every or v not in (None, False, "", []))]
         return [f"Made {label}{' as a draft' if (a or {}).get('status') == 'draft' else ''}"
                 + (": " + "; ".join(set_) if set_ else "") + left]
     if a is None:

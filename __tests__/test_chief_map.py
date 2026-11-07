@@ -235,10 +235,74 @@ def test_names_resolve_exactly_holders_first_or_nothing_changes(db):
     # Riverside holds no roles: its people, by a first name only one has, on a draft.
     out = ok(run(db, "change_map", {"changes": [{"kind": "department", "name": "Youth", "status": "draft",
                                                  "area": "Kids & youth", "leader": "Henry"}]}, RV))
-    assert out["result"].startswith("Changed the leaders map. Made Youth as a draft: leader Henry Dawson; area Kids & "
-                                    "youth."), "every field it sets (#1731 review)"
+    assert out["result"].startswith("Changed the leaders map. Made Youth as a draft: leader Henry Dawson; overseer "
+                                    "nobody; office helper none; area Kids & youth; holds nothing yet."), \
+        "all it got, set or not (#1731 review; 11-04 a receipt that named only what was set read as a hedge)"
     d = next(d for d in db.t["church_departments"] if d["business_id"] == RV)
     assert (d["leader_contact_id"], d["area"], d["source"]) == (db.who[RV]["henry"], "kids_youth", "chief")
+
+
+TEAMS = {LC: ("Graphic and web design", "Hospitality Team", "Outreach & Welcome"),
+         NH: ("Guest Experience", "Worship Team", "Worship")}       # (on no department, hanging, from where)
+
+
+def _units(db, biz, name):
+    did = next(d["id"] for d in db.t["church_departments"] if d["business_id"] == biz and d["name"] == name
+               and d["status"] != "archived")
+    return sorted((u["kind"], u["label"] or u["group_id"] or u["role_id"]) for u in db.t["church_department_units"]
+                  if u["department_id"] == did)
+
+
+@pytest.mark.parametrize("biz", (LC, NH), ids=lambda b: NAMES[b])
+def test_serve_teams_hang_from_departments_by_name(db, biz):
+    """11-04, Kevin's login: asked to hang Love City's Serve teams on its departments, change_map refused
+    them ("That isn't something a department can hold") and they were dropped. A Serve team is named by
+    name, in Chief's words for its kind or none, as the editor's Teams picker offers it: the Serve card's
+    team, else a Sunday team (a group)."""
+    import church_map as cm
+    free, held, where = TEAMS[biz]
+    listed = ok(run(db, "list_map", {}, biz))["result"]
+    assert f"{held} (serve team)" in listed, "what a department holds, with its kind"
+    assert f"On no department yet: Serve teams: {free}" in listed, "and what's free to hang"
+    for kind in ("serve_team", "Serve teams", "team", "serve_option", None):
+        unit = {"kind": kind, "name": free.upper()} if kind else free.lower()
+        out = ok(run(db, "change_map", {"changes": [{"kind": "department", "name": "Creative", "units": [unit]}]}, biz))
+        assert out["result"] == (f"Changed the leaders map. Made Creative: leader nobody; overseer nobody; office "
+                                 f"helper none; area none; holds {free}. It’s one change in the map’s list. Undo puts "
+                                 "it back."), kind
+        assert _units(db, biz, "Creative") == [("serve_option", free)], "the Serve card's own spelling"
+        undo(db, out, biz)
+    # Kevin's case: onto a department that holds things already, its whole list sent with the team added.
+    d = next(x for x in cm.view(church(db, biz))["departments"] if x["name"] == where)
+    have = [{"kind": u["kind"], "name": u["name"]} for u in d["units"]]
+    out = ok(run(db, "change_map", {"changes": [{"kind": "department", "department": where,
+                                                 "units": have + [{"kind": "serve team", "name": free}]}]}, biz))
+    assert out["result"].startswith(f"Changed the leaders map. {where}: teams, groups and spaces: added {free}. ")
+    assert ("serve_option", free) in _units(db, biz, where) and len(_units(db, biz, where)) == len(have) + 1
+    # A Sunday team is a group (serve_teams hang from groups): found when the Serve card has no such team.
+    gid = "5d000000-0000-4000-8000-0000000000aa"
+    db.t["groups"].append({"id": gid, "business_id": biz, "name": "Greeters", "active": True, "kind": "team"})
+    ok(run(db, "change_map", {"changes": [{"kind": "department", "name": "Welcome",
+                                           "units": [{"kind": "serve team", "name": "greeters"}]}]}, biz))
+    assert _units(db, biz, "Welcome") == [("group", gid)]
+
+
+def test_what_a_department_cant_hold_is_refused_in_words_and_changes_nothing(db):
+    before = len(changes(db, LC))
+    for unit, says in (
+            ({"kind": "parking lot", "name": "North lot"},
+             "A department holds a Serve team, a group, a role, a board, a worship ministry, the youth or kids space, "
+             "or a budget line: “parking lot” isn’t one of those"),
+            ({"kind": "serve team", "name": "Choir"}, "“Choir” isn’t a team on your Serve card or one of your groups"),
+            ({"name": "Zebra Crossing"}, "Nothing called “Zebra Crossing” here is something a department holds"),
+            ("Youth", "“Youth” could be "),
+            ({"kind": "group", "name": "Choir"}, "There’s no group called “Choir” here"),
+            ({"kind": "team", "name": "Hospitality Team"}, "Hospitality Team already hangs from Outreach & Welcome")):
+        out = run(db, "change_map", {"changes": [{"kind": "department", "name": "Creative", "units": [unit]}]}, LC)
+        assert out["failed"] and says in out["result"], (unit, out["result"])
+    assert "the group" in run(db, "change_map", {"changes": [{"kind": "department", "name": "Creative",
+                                                              "units": ["Youth"]}]}, LC)["result"], "say which"
+    assert len(changes(db, LC)) == before and not any(d["name"] == "Creative" for d in db.t["church_departments"])
 
 
 def test_a_name_past_the_first_thousand_people_is_found_by_the_server(db):
@@ -443,9 +507,18 @@ def test_the_switch_follows_the_routes_and_needs_step_2s_file(db, monkeypatch):
     monkeypatch.setenv("CHURCH_MAP", "owner")
     assert ok(run(db, "list_map", {}))
     assert run(db, "list_map", {}, GRACE)["result"] == "Failed: " + chm.NOT_ON, "not the platform owner's login"
+    # 11-04: Love City's admin got a 404 on the sheet while her asks opened by the church. Now the map opens
+    # by the church too, as the routes do, and the seats still decide.
+    assert ok(run(db, "list_map", {}, LC, "minnie")) and ok(run(db, "list_map", {}, LC, "naiya")), \
+        "the platform owner's church: its admin and its Managers"
+    assert ok(run(db, "change_map", {"changes": [{"kind": "role", "role": "Team leader", "can_oversee": True}]}, LC,
+                  "minnie"))["changed"], "its admin changes it"
+    assert run(db, "change_map", {"changes": [{"kind": "role", "role": "Team leader", "can_oversee": False}]}, LC,
+               "naiya")["result"] == "Failed: " + chm.NOT_YOURS, "a Manager reads only"
     chm._EMAILS.clear()
     monkeypatch.setattr(platform_suite, "_owner_email", lambda uid: 1 / 0)
-    assert "couldn't be checked" in run(db, "list_map", {})["result"]
+    assert ok(run(db, "list_map", {})), "open by the church: the login's email isn't needed"
+    assert "couldn't be checked" in run(db, "list_map", {}, GRACE)["result"]
 
 
 def test_before_step_2s_file_chief_says_the_map_isnt_ready(monkeypatch):

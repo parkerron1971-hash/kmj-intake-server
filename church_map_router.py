@@ -26,22 +26,35 @@
     GET  /church/map/asks?business_id=              Is this right? (B11, church_map_asks): what
                                                     the office suggested, waiting for a yes; the
                                                     owner or an admin
-    GET  /church/map/asks/mine?business_id=         an office login's own asks and its last check
+    GET  /church/map/asks/mine?business_id=         an office login's own asks, each answered one
+                                                    with `happened` (what came of it, in words),
+                                                    and its last check
     POST /church/map/asks/{id}/apply|done|discard?  answer one; the owner or an admin, money the
-                                                    owner. These open by the church
-                                                    (church_map.church_open), not the login
+                                                    owner
+    POST /church/map/asks/{id}/undo?business_id=    put back what saying yes to one made, both
+                                                    parts or neither (undo_ask's rules); the owner
+                                                    or an admin, money the owner
 
 Once step 2's file is applied (church_map.step2_state()), each save above is
 logged as one change (church_map_batch, origin 'office'), so the sheet's Undo
-covers edits made on screen. Before it a save runs as it always has and logs
-nothing; a failed probe is a 503. The changes and ready-made routes are a 503
-until then.
+covers edits made on screen. Each logged save answers with `change` (its id,
+for Undo, or None), `made` (whether anything changed: False with no change is
+"nothing changed", True with no change is "saved, but its record didn't
+save"), `can_undo` and, for those two, a `note` in words. Before it a save
+runs as it always has, logs nothing and says `made` None; a failed probe is a
+503. The changes and ready-made routes are a 503 until then.
 
-Behind CHURCH_MAP: a 404 unless church_map.open_to(user), so with `owner`
-only the platform owner's login reaches these; a 503 before the migration,
-when the probe itself fails (church_map.state() None) or when the map can't
-be read: church_map's writes and view refuse then. The business id is checked
-as church_router checks it, and the seat by business_access.assert_access: no
+Behind CHURCH_MAP: a 404 unless church_map.office_open(user, church): the
+login (open_to) or the church (church_open), so with `owner` the platform
+owner's login and the platform owner's church (Love City: its admins and
+Managers too) reach these, the asks routes the same way. The seats still
+decide: a Manager seat reads, the owner or an admin writes, money is the
+owner's. Moving a duty from an ask follows the duties' own switch for the
+login (church_duties.open_to), unwidened: an ask that would move one says why
+it can't be applied (`cant_apply`). A 503 before the migration, when the probe
+itself fails (church_map.state() None) or when the map can't be read:
+church_map's writes and view refuse then. The business id is checked as
+church_router checks it, and the seat by business_access.assert_access: no
 seat, or too low a one, is the same 404 a stranger gets. Reads and writes go
 through the service role, always by business_id.
 """
@@ -65,14 +78,15 @@ router = APIRouter(prefix="/church/map", tags=["church"])
 
 
 def _church(business_id: str, user: AuthedUser, min_role: str) -> Tuple[Dict[str, Any], str]:
-    """The switch, then the business id, the seat and a church (church_map
-    checks its own tables). Returns the church's row and the caller's role."""
-    if not cm.open_to(user):
-        raise HTTPException(404, "Not Found")
+    """The business id, the switch (for this login or this church), the seat
+    and a church (church_map checks its own tables). Returns the church's row
+    and the caller's role."""
     try:
         bid = str(uuid.UUID(str(business_id)))
     except (ValueError, TypeError):
         raise HTTPException(400, "That business id isn't valid")
+    if not cm.office_open(user, bid):
+        raise HTTPException(404, "Not Found")
     role = assert_access(bid, user, min_role)
     rows = sb_clients.sb_get_as_service(f"/businesses?id=eq.{bid}&select=id,name,type,owner_id,settings&limit=1")
     if not isinstance(rows, list):
@@ -83,17 +97,32 @@ def _church(business_id: str, user: AuthedUser, min_role: str) -> Tuple[Dict[str
     return rows[0], role
 
 
-def _logged(biz: Dict[str, Any], role: str, user: AuthedUser, part: Dict[str, Any]) -> Optional[Tuple[Any, Any]]:
+NOTHING = "Nothing changed: it already read that way."
+UNLOGGED = "Saved, but its record didn’t save, so Undo can’t put it back from Recent changes."
+# A save before step 2's file: nothing is logged, so whether it changed anything isn't told.
+NOT_LOGGED = {"change": None, "made": None, "can_undo": False, "note": ""}
+
+
+def _told(change: Optional[Dict[str, Any]], made: bool, role: str) -> Dict[str, Any]:
+    """What a logged save tells the page: the change it was logged as (Undo posts its id), `made`, whether
+    Undo can put it back, and a `note` when there's no change to undo, saying which of the two it is."""
+    return {"change": change, "made": bool(made),
+            "can_undo": bool(change) and change["status"] == "applied" and (not change["money"] or role == "owner"),
+            "note": "" if change else UNLOGGED if made else NOTHING}
+
+
+def _logged(biz: Dict[str, Any], role: str, user: AuthedUser,
+            part: Dict[str, Any]) -> Optional[Tuple[Any, Dict[str, Any]]]:
     """One office save as one change, once step 2's file is applied: (the
-    write's own answer, the change). None before it: the caller saves as it
-    always has, logging nothing. A failed probe is a 503, never "not yet"."""
+    write's own answer, what _told says). None before it: the caller saves as
+    it always has, logging nothing. A failed probe is a 503, never "not yet"."""
     s = cm.step2_state()
     if s is None:
         raise HTTPException(503, cm.UNREAD)
     if not s:
         return None
     out = batch.apply(biz, [part], user.id, "office", role=role)
-    return out["results"][0], out["change"]
+    return out["results"][0], _told(out["change"], out["made"], role)
 
 
 class _Unit(BaseModel):
@@ -141,8 +170,8 @@ def department_save(body: _Department, business_id: str = Query(...), user: Auth
     said = body.model_dump(exclude_unset=True)
     got = _logged(biz, role, user, {"kind": "department", **said})
     if got is None:
-        return {"ok": True, "department": cm.save_department(biz, said, user.id)}
-    return {"ok": True, "department": got[0], "change": got[1]}
+        return {"ok": True, "department": cm.save_department(biz, said, user.id), **NOT_LOGGED}
+    return {"ok": True, "department": got[0], **got[1]}
 
 
 @router.post("/departments/{department_id}/archive")
@@ -151,8 +180,8 @@ def department_archive(department_id: str, business_id: str = Query(...),
     biz, role = _church(business_id, user, "admin")
     got = _logged(biz, role, user, {"kind": "department", "id": department_id, "status": "archived"})
     if got is None:
-        return {"ok": True, "department": cm.archive_department(biz, department_id, user.id)}
-    return {"ok": True, "department": got[0], "change": got[1]}
+        return {"ok": True, "department": cm.archive_department(biz, department_id, user.id), **NOT_LOGGED}
+    return {"ok": True, "department": got[0], **got[1]}
 
 
 @router.put("/answers-to")
@@ -161,8 +190,9 @@ def answers_to_save(body: _AnswersTo, business_id: str = Query(...), user: Authe
     got = _logged(biz, role, user, {"kind": "answers_to", "holder_id": body.holder_id,
                                     "answers_to_contact_id": body.answers_to_contact_id})
     if got is None:
-        return {"ok": True, "holder": cm.set_answers_to(biz, body.holder_id, body.answers_to_contact_id)}
-    return {"ok": True, "holder": got[0], "change": got[1]}
+        return {"ok": True, "holder": cm.set_answers_to(biz, body.holder_id, body.answers_to_contact_id),
+                **NOT_LOGGED}
+    return {"ok": True, "holder": got[0], **got[1]}
 
 
 @router.put("/settings")
@@ -171,8 +201,8 @@ def settings_save(body: _Settings, business_id: str = Query(...), user: AuthedUs
     said = body.model_dump(exclude_unset=True)
     got = _logged(biz, role, user, {"kind": "settings", **said})
     if got is None:
-        return {"ok": True, **cm.save_settings(biz, said, user.id, role)}
-    return {"ok": True, **got[0], "change": got[1]}
+        return {"ok": True, **cm.save_settings(biz, said, user.id, role), **NOT_LOGGED}
+    return {"ok": True, **got[0], **got[1]}
 
 
 @router.get("/changes")
@@ -269,19 +299,20 @@ def _asks(business_id: str, user: AuthedUser, least: str) -> Tuple[Dict[str, Any
     return asks.church(bid), role
 
 
-def _gates(user: AuthedUser) -> Dict[str, bool]:
+def _gates(user: AuthedUser, bid: str) -> Dict[str, bool]:
     """What this login may make from an ask, as the sheet's and the duties page's own routes decide it: the
-    map's change routes (open_to) and the duties' (church_duties.open_to). What it can't make or undo
-    there, it can't make through an ask (#1731 review)."""
+    map's change routes (office_open: the login or the church) and the duties' (church_duties.open_to, the
+    login's, not widened here). What it can't make or undo there, it can't make through an ask (#1731
+    review)."""
     import church_duties as cd
-    return {"map": cm.open_to(user), "duty": cd.open_to(user)}
+    return {"map": cm.office_open(user, bid), "duty": cd.open_to(user)}
 
 
 @router.get("/asks")
 def asks_open(business_id: str = Query(...), user: AuthedUser = Depends(require_user)):
     """What the team suggested, waiting for a yes: the owner or an admin."""
     biz, role = _asks(business_id, user, "admin")
-    return asks.open_asks(biz, role, str(user.id), _gates(user))
+    return asks.open_asks(biz, role, str(user.id), _gates(user, biz["id"]), answered=True)
 
 
 @router.get("/asks/mine")
@@ -293,12 +324,22 @@ def asks_mine(business_id: str = Query(...), user: AuthedUser = Depends(require_
     return asks.mine(biz, str(user.id), role)
 
 
+@router.post("/asks/{ask_id}/undo")
+def asks_undo(ask_id: str, business_id: str = Query(...), user: AuthedUser = Depends(require_user)):
+    """Put back what saying yes to one made: its change to the map and the duty it moved, both or neither,
+    each through its own undo (church_map_asks.undo_answer, undo_ask's rules). The owner or an admin; a
+    change with money in it, the owner. Registered before the answer route, whose {how} would take it."""
+    biz, role = _asks(business_id, user, "admin")
+    return {"ok": True, **asks.undo_answer(biz, ask_id, str(user.id), role, _gates(user, biz["id"]))}
+
+
 @router.post("/asks/{ask_id}/{how}")
 def asks_answer(ask_id: str, how: str, business_id: str = Query(...), user: AuthedUser = Depends(require_user)):
-    """apply | done | discard one: the owner or an admin; a change with money in it, the owner."""
+    """apply | done | discard one: the owner or an admin; a change with money in it, the owner. `can_undo`:
+    whether POST /church/map/asks/{id}/undo can put back what it made."""
     if how not in ("apply", "done", "discard"):
         raise HTTPException(404, "Not Found")
     biz, role = _asks(business_id, user, "admin")
-    out = asks.answer(biz, ask_id, str(user.id), role, how, _gates(user))
+    out = asks.answer(biz, ask_id, str(user.id), role, how, _gates(user, biz["id"]))
     out.pop("row", None)
     return {"ok": True, **out}

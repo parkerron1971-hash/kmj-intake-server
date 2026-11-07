@@ -9,7 +9,8 @@ church's structure is data (supabase/APPLY-2026-11-04-church-map.sql).
     the switch ...... CHURCH_MAP = off | owner | on (default owner):
                       open_to(user) opens the office's routes to a login,
                       church_open(biz) the engine (sweeps, the member side)
-                      to a church
+                      to a church; office_open(user, biz), either, is what
+                      the office's routes and Chief's map verbs follow
     ready() ......... the migration's columns answer
     load(biz) ....... a church's map: its roles' switches, who a holder
                       answers to, its settings, its departments and what
@@ -101,6 +102,15 @@ def church_open(biz: Any) -> bool:
         import member_asks
         return member_asks.platform_church(biz.get("id") if isinstance(biz, dict) else biz)
     return False
+
+
+def office_open(user: AuthedUser, biz: Any) -> bool:
+    """The office's map routes and Chief's map verbs, for this login at this
+    church: open_to(user), or church_open(biz), so with `owner` the platform
+    owner's church is open to its own office logins too (an admin there sees
+    the sheet and From your team; the seat checks still decide what each may
+    do), as the asks routes already were."""
+    return open_to(user) or church_open(biz)
 
 
 # ─── Ready ────────────────────────────────────────────────────────────
