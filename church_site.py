@@ -81,8 +81,8 @@ PAGES: Dict[str, Dict[str, str]] = {
     "people-and-care": {
         "file": "people-and-care.html",
         "title": "People and Care · Solutionist for Churches",
-        "description": ("Every guest card becomes someone's job, every family has a shepherd who hears early "
-                        "when they stop coming, and prayer reaches the person who will pray."),
+        "description": ("Every guest card becomes someone's job, every member family can have a shepherd who hears "
+                        "early when they stop coming, and prayer reaches the person who will pray."),
     },
     "giving": {
         "file": "giving.html",

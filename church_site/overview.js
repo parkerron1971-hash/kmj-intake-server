@@ -153,7 +153,7 @@
   var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
   var ROOMS = {
-    people: { name: 'People and Care', line: 'Every family has a shepherd', slug: 'people-and-care', t: ['#5EEAD4', '#14B8A6', '#0F766E'] },
+    people: { name: 'People and Care', line: 'Every member family can have a shepherd', slug: 'people-and-care', t: ['#5EEAD4', '#14B8A6', '#0F766E'] },
     giving: { name: 'Giving', line: 'Your own Stripe, no cut of giving', slug: 'giving', t: ['#86EFAC', '#22C55E', '#15803D'] },
     kids: { name: 'Kids and Youth', line: 'Check-in, tags and safe pickup', slug: 'kids-and-youth', t: ['#FDBA74', '#F97316', '#C2410C'] },
     groups: { name: 'Groups and Classes', line: "This week's study, from Sunday's message", slug: 'groups-and-classes', t: ['#93C5FD', '#3B82F6', '#1D4ED8'] },
