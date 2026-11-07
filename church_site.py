@@ -549,9 +549,10 @@ def _by_size() -> Dict[str, str]:
         "PROOF_SIZE": "Priced by your size",
         "PICKER": _picker(),
         "PRICING_H2": 'Priced by <b style="font-weight: 600">your church\'s size.</b>',
-        "PRICING_LEDE": ("Every part of church life comes with every plan. Your plan is set by how many people come "
-                         "on a Sunday, and it sets the room: office logins, texts, Chief's work and sermon clips, and "
-                         "from Established up, an audit trail and a seat for your accountant. "
+        "PRICING_LEDE": ("People, Giving, Kids, Groups, your app and your site come with every plan. Your plan is set "
+                         "by how many people come on a Sunday, and it sets the room: office logins, texts, Chief's "
+                         "work and sermon clips, and from Established up, an audit trail, a seat for your accountant "
+                         "and hands-off marketing. "
                          "Leaders, volunteers and members use the member app free, on every plan."),
         "PLAN_CARDS": _plan_cards(),
         "FOUNDER": _offer_line(),
