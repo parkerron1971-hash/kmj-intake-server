@@ -44,6 +44,27 @@ def credit_packs() -> Dict[str, Dict[str, int]]:
     return pricing_config.credit_packs()
 
 
+def flyer_credits() -> Optional[int]:
+    """What one flyer takes. A design is drawn at High and charged once,
+    however many repairs it needs. Read live so "about 24 flyers" moves
+    with the dial; None when it can't be read, so a surface drops the
+    count rather than state one it can't back up."""
+    try:
+        import image_studio
+        return image_studio.image_units("high")
+    except Exception as e:
+        logger.warning(f"[credit_ledger] flyer price unreadable: {e}")
+        return None
+
+
+def pack_name(units: int) -> str:
+    """A pack on Stripe's page and the receipt, in the same words as the
+    app's Buy credits buttons."""
+    flyer = flyer_credits()
+    name = f"{units:,} Solutionist credits"
+    return f"{name}, about {units // flyer} flyers" if flyer else name
+
+
 # Back-compat snapshot for import-time readers. Prefer credit_packs() —
 # this cannot see an env change made after import.
 CREDIT_PACKS: Dict[str, Dict[str, int]] = pricing_config.credit_packs()
