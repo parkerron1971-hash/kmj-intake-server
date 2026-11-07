@@ -161,11 +161,27 @@ def test_the_prose_matches_the_plan_dials():
 
 
 def test_the_church_features_are_on_every_plan():
-    """The overview says every part of church life comes with every plan."""
+    """The overview says People, Giving, Kids, Groups, the app and the site
+    come with every plan."""
     import feature_gates as fg
     gated = set(fg.FEATURE_MIN_PLAN)
     for feature in ("giving", "kids_checkin", "member_app", "groups", "shepherding", "church_news"):
         assert feature not in gated, feature
+
+
+def test_the_overview_says_only_what_the_chain_does(monkeypatch):
+    """A kiosk finds a family on file and can't add one; shepherds are for
+    member families the church approves; plans do differ at the top; and a
+    switch or a cancel starts in Billing. Each line once read wider than that."""
+    monkeypatch.setenv("PLAN_CHURCH_OFFERED", "1")   # as it is live
+    html = cs.render("")
+    for said in ("The desk adds the family once", "Every member family can have a shepherd you approve",
+                 "your welcome lead or your office", "People, Giving, Kids, Groups, your app and your site come with",
+                 "hands-off marketing", "switch or cancel from Billing"):
+        assert said in html, said
+    for gone in ("Their kids check in at the kiosk", "Every family has a shepherd",
+                 "Every part of church life comes with every plan", "inside the app"):
+        assert gone not in html, gone
 
 
 # ─── 3. the links go somewhere ──────────────────────────────────────
