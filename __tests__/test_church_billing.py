@@ -8,6 +8,9 @@
   4. The move: free for the first five churches, then three months of the
      plan at Checkout; asking twice returns the first ask; a paid move is
      recorded once per session and reaches Mission Control as a ticket.
+  5. A founding place waits for the first payment: a church on its trial is
+     told so and takes the place by paying today, and a card that fails takes
+     nothing.
 """
 from __future__ import annotations
 
@@ -275,3 +278,100 @@ def test_the_move_and_logins_are_mounted():
     import kmj_intake_automation as app_mod
     paths = {getattr(r, "path", "") for r in app_mod.app.routes}
     assert {"/billing/church/move", "/billing/church/extra-logins"} <= paths
+
+
+# ─── 5. a founding place waits for the first payment ──────────────────
+
+@pytest.fixture
+def trial(stripe, monkeypatch):
+    calls, state = stripe
+    state["biz"] = {**state["biz"], "subscription_status": "trialing"}
+    state["tickets"] = []
+    state["stripe_status"] = "trialing"
+    state["after_charge"] = "active"
+
+    async def get(path, params):
+        calls.append(("get", path))
+        return {"id": "sub_1", "status": state["stripe_status"], "items": {"data": []}}
+
+    async def post(path, data):
+        calls.append(("post", path, data))
+        return {"id": "sub_1", "status": state["after_charge"], "items": {"data": []}}
+
+    async def applied(event, sub_obj, bid):
+        state["biz"] = {**state["biz"], "subscription_status": sub_obj["status"]}
+
+    monkeypatch.setattr(sb, "_stripe_get", get)
+    monkeypatch.setattr(sb, "_stripe_post", post)
+    monkeypatch.setattr(sb, "_apply_subscription_state", applied)
+    monkeypatch.setattr(cb, "_founding_taken", lambda: 2)
+    monkeypatch.setattr(cb, "_ticket", lambda biz, rec: state["tickets"].append(rec))
+    return calls, state
+
+
+def _ended_a_trial(calls):
+    return ("post", "/subscriptions/sub_1", {"trial_end": "now"}) in calls
+
+
+def test_a_trial_takes_no_place_and_is_told_what_it_takes(trial):
+    calls, state = trial
+    out = _move(moving_from="Subsplash")
+    assert out["pay_first"] is True and out["first_payment_cents"] == fg.pricing_config.church_price_cents()["church_growing"]
+    assert "church_move" not in state["biz"]["settings"]
+    assert state["tickets"] == [] and not _ended_a_trial(calls)
+
+
+def test_paying_today_ends_the_trial_and_takes_the_place(trial):
+    calls, state = trial
+    out = _move(moving_from="Subsplash", pay_today=True)
+    assert out["founding"] is True and _ended_a_trial(calls)
+    assert state["biz"]["settings"]["church_move"]["founding"] is True
+    assert len(state["tickets"]) == 1
+
+
+@pytest.mark.parametrize("after", ["past_due", "incomplete"])
+def test_a_card_that_fails_takes_no_place(trial, after):
+    _calls, state = trial
+    state["after_charge"] = after
+    with pytest.raises(HTTPException) as e:
+        _move(pay_today=True)
+    assert e.value.status_code == 402
+    assert "church_move" not in state["biz"]["settings"] and state["tickets"] == []
+
+
+def test_a_trial_that_already_ended_at_stripe_is_not_charged_twice(trial):
+    calls, state = trial
+    state["stripe_status"] = "active"
+    out = _move(pay_today=True)
+    assert out["founding"] is True and not _ended_a_trial(calls)
+
+
+def test_no_place_left_means_no_charge_for_one(trial, monkeypatch):
+    calls, state = trial
+    monkeypatch.setattr(cb, "_founding_taken", lambda: 5)
+    out = _move(pay_today=True)
+    assert "pay_first" not in out and not _ended_a_trial(calls)
+    assert "church_move" not in state["biz"]["settings"]
+
+
+def test_a_paying_church_is_asked_nothing_more(trial):
+    calls, state = trial
+    state["biz"] = {**state["biz"], "subscription_status": "active"}
+    out = _move()
+    assert out["founding"] is True and not _ended_a_trial(calls)
+
+
+def test_a_comped_church_owes_no_first_payment(trial):
+    calls, state = trial
+    state["biz"] = {**state["biz"], "comp_tier": "church_growing"}
+    out = _move()
+    assert out["founding"] is True and not _ended_a_trial(calls)
+
+
+def test_the_move_card_learns_what_is_due(trial):
+    _calls, state = trial
+    out = asyncio.run(cb.move_status(BIZ, user=USER))
+    assert out["first_payment_due"] is True
+    assert out["first_payment_cents"] == fg.pricing_config.church_price_cents()["church_growing"]
+    state["biz"] = {**state["biz"], "subscription_status": "active"}
+    assert asyncio.run(cb.move_status(BIZ, user=USER))["first_payment_due"] is False
