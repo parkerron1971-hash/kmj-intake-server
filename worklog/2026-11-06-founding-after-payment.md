@@ -4,7 +4,7 @@ date: 2026-11-06
 agent: Claude Code (Claude Opus 5.5)
 asked: 'yes. go ahead with all 4'
 status: shipped
-prs: [kmj-intake-server#PENDING, solutionist-studio#PENDING]
+prs: [kmj-intake-server#1758, solutionist-studio#1488]
 migrations: []
 ---
 
