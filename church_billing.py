@@ -26,6 +26,7 @@ import logging
 import os
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
+from urllib.parse import quote
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
@@ -169,6 +170,38 @@ class MoveBody(BaseModel):
     business_id: str
     # Where the church is moving from, in its own words ("Subsplash", "Planning Center").
     moving_from: Optional[str] = Field(default=None, max_length=80)
+    # A church on its trial chose to pay its first month now, for a founding place.
+    pay_today: bool = False
+
+
+def _first_payment_due(biz: Dict[str, Any]) -> bool:
+    """Still on a carded trial, so nothing has been paid. A founding place
+    waits for the first payment: a free move is real work, and a trial costs
+    nothing to start or to walk away from. A comped church owes no payment."""
+    comped = (biz.get("comp_tier") or "").strip().lower() in feature_gates.ALL_PLANS
+    return not comped and biz.get("subscription_status") == "trialing"
+
+
+def _first_payment_cents(plan: Optional[str]) -> int:
+    return pricing_config.church_price_cents().get(plan or "", 0)
+
+
+async def _pay_first_month(biz: Dict[str, Any]) -> None:
+    """End the church's trial now, which charges its first month to the card
+    it put down. Raises 402 unless the subscription comes back paid, so a
+    place is never taken on a card that failed."""
+    import stripe_billing as sb
+    sub_id = (biz.get("stripe_subscription_id") or "").strip()
+    if not sub_id:
+        raise HTTPException(409, "Add a card by choosing your plan, then ask for the move.")
+    path = f"/subscriptions/{quote(sub_id, safe='')}"
+    sub = await sb._stripe_get(path, [])
+    if sub.get("status") == "trialing":
+        sub = await sb._stripe_post(path, {"trial_end": "now"})
+    await sb._apply_subscription_state("customer.subscription.updated", sub, biz["id"])
+    if sub.get("status") != "active":
+        raise HTTPException(402, "Your card didn't go through, so nothing is held yet. "
+                                 "Update it under Manage Subscription, then ask again.")
 
 
 def _founding_taken() -> Optional[int]:
@@ -219,14 +252,18 @@ async def move_status(business_id: str, user: AuthedUser = Depends(require_user)
     return {"ok": True, "move": _settings(biz).get(MOVE),
             "on_church_plan": plan in feature_gates.CHURCH_PLANS,
             "founding_left": left,
-            "price_cents": _move_cents(plan) if plan in feature_gates.CHURCH_PLANS else None}
+            "price_cents": _move_cents(plan) if plan in feature_gates.CHURCH_PLANS else None,
+            "first_payment_due": _first_payment_due(biz),
+            "first_payment_cents": _first_payment_cents(plan)}
 
 
 @router.post("/move")
 async def request_move(body: MoveBody, user: AuthedUser = Depends(require_user)):
     """Ask for the move. A founding church (one of the first five) is moved
-    free; after that it's three months of the plan, paid at Stripe Checkout.
-    Asking twice returns the first request."""
+    free once its first month is paid; after that it's three months of the
+    plan, paid at Stripe Checkout. A church on its trial with a founding place
+    open is told so, and takes the place by paying today. Asking twice returns
+    the first request."""
     import stripe_billing as sb
     biz = await _church_on_a_plan(body.business_id, user)
     now = _settings(biz).get(MOVE)
@@ -238,6 +275,10 @@ async def request_move(body: MoveBody, user: AuthedUser = Depends(require_user))
     if taken is None:
         raise HTTPException(503, "Couldn't check the founding churches. Try again in a minute.")
     if taken < pricing_config.founding_church_moves():
+        if _first_payment_due(biz):
+            if not body.pay_today:
+                return {"ok": True, "pay_first": True, "first_payment_cents": _first_payment_cents(plan)}
+            await _pay_first_month(biz)
         record = {"state": "requested", "founding": True, "plan": plan,
                   "moving_from": moving_from, "requested_at": _now()}
         await _merge_setting(str(biz["id"]), MOVE, record)
