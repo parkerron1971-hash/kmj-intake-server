@@ -4,7 +4,7 @@ date: 2026-11-07
 agent: Claude Code (Claude Opus 5.5)
 asked: "change the credit packs to say flyers"
 status: shipped
-prs: [solutionist-studio#pack-flyers]
+prs: [kmj-intake-server#1767, solutionist-studio#1491]
 migrations: []
 left_undone: ["MoneyWebsitePanel in Mission Control still quotes the old pack numbers ($12·740 / $25·1,555 / $50·3,120)"]
 decisions: ["Packs still sell credits and flyers stay in every plan: the count is a way to picture a pack, so credits stay beside it", "Stripe's page and the receipt use the same words as the app's button", "No add-on: Kevin floated $10 for 30 flyers; 33c a flyer undercuts the pack's 53c and the rule that nothing sells below a plan credit, and $10 tops out near 18 flyers"]
