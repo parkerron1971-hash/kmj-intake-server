@@ -968,6 +968,54 @@ def _subscription_data(biz, user, skip_trial: bool = False):
 
 
 # ─── Portal (authed) ───────────────────────────────────────────────────
+# Stripe opens a portal session with the settings it's handed, or the
+# account's saved default, and refuses when there is neither. The live
+# account never saved a default (2026-11-06: no configurations at all), so
+# the portal's settings live here and every session carries them. Plan
+# changes stay in the app, where a church's extra logins are looked after
+# and the price is shown first: the portal is the card, the invoices and
+# cancelling, which runs to the end of the paid period.
+PORTAL_MARK = "solutionist_billing"
+_portal_configuration_id: Optional[str] = None
+
+
+def _portal_settings() -> Dict[str, Any]:
+    return {
+        "metadata": {"made_by": PORTAL_MARK},
+        "business_profile": {
+            "headline": "Your plan, your card and your invoices",
+            "privacy_policy_url": "https://mysolutionist.app/privacy",
+            "terms_of_service_url": "https://mysolutionist.app/terms",
+        },
+        "features": {
+            "customer_update": {"enabled": True, "allowed_updates": ["email", "address"]},
+            "invoice_history": {"enabled": True},
+            "payment_method_update": {"enabled": True},
+            "subscription_cancel": {"enabled": True, "mode": "at_period_end"},
+            "subscription_update": {"enabled": False},
+        },
+    }
+
+
+async def _portal_configuration() -> Optional[str]:
+    """The id of our portal settings, made once if Stripe doesn't hold them.
+    Remembered per process; replicas find the same one by its mark. None when
+    Stripe won't answer, so the session falls back to the account's default
+    rather than a read here costing someone the portal."""
+    global _portal_configuration_id
+    if _portal_configuration_id:
+        return _portal_configuration_id
+    try:
+        got = await _stripe_get("/billing_portal/configurations",
+                                [("active", "true"), ("limit", "100")])
+        ours = next((c for c in got.get("data") or []
+                     if (c.get("metadata") or {}).get("made_by") == PORTAL_MARK), None)
+        ours = ours or await _stripe_post("/billing_portal/configurations", _portal_settings())
+        _portal_configuration_id = ours.get("id")
+    except Exception as e:
+        logger.error(f"portal configuration failed: {type(e).__name__}: {e}")
+    return _portal_configuration_id
+
 
 class PortalBody(BaseModel):
     business_id: str
@@ -993,6 +1041,7 @@ async def create_portal(body: PortalBody, request: Request,
     import churchsavvy_billing
     session = await _stripe_post("/billing_portal/sessions", {
         "customer": customer_id,
+        "configuration": await _portal_configuration(),
         "return_url": churchsavvy_billing.billing_page() if churchsavvy_billing.standalone(biz)
                       else _portal_return_url(),
     })
