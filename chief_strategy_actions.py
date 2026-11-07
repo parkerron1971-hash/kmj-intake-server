@@ -304,24 +304,55 @@ async def handle_list_scheduled(client, biz, action) -> Dict:
 _VALID_POLICY_KEYS = {"cancellation", "deposit", "lateness", "refunds", "no_show"}
 
 
-async def _save_business_picture(client, biz, mutate) -> Dict[str, Any]:
-    """Read-modify-write settings.business_picture (Arc S). `mutate`
-    receives the picture dict and edits in place. Updates biz in-memory
-    so same-turn reads see the change."""
-    settings = dict(biz.get("settings") or {})
-    bp = dict(settings.get("business_picture") or {})
-    mutate(bp)
-    settings["business_picture"] = bp
-    await _sb(client, "PATCH", f"/businesses?id=eq.{biz['id']}",
-              {"settings": settings})
+def _save_settings(biz, mutate) -> bool:
+    """Read-modify-write settings for the business picture (Arc S). `mutate`
+    edits settings in place and returns False to leave them unwritten.
+
+    Written as the server, like Chief's other settings saves, because the
+    door has already let this person in and RLS on businesses lets only an
+    owner or admin through: a manager's write came back empty and the
+    receipt still said it was saved. Read just before the write, so a
+    change made since this turn began isn't undone by a whole-object write
+    from its older copy. True only when the row came back saved; biz
+    follows, so same-turn reads see the change."""
+    path = f"/businesses?id=eq.{biz['id']}"
+    rows = sb_clients.sb_get_as_service(f"{path}&select=settings&limit=1")
+    if not isinstance(rows, list) or not rows:
+        return False
+    settings = dict(rows[0].get("settings") or {})
+    if mutate(settings) is False:
+        return True
+    if not sb_clients.sb_patch_as_service(path, {"settings": settings}):
+        return False
     biz["settings"] = settings
-    return bp
+    return True
+
+
+def _where_it_shows(biz) -> str:
+    """Where the FAQ can be seen, said from the site as it stands. A composed
+    site holds its FAQ in the stored page, so it re-renders here (no model
+    call); a hand-built page reads the list when it's served. Runs after
+    the save, so nothing here can turn a saved answer into a failure."""
+    import business_faq
+    try:
+        rows = sb_clients.sb_get_as_service(
+            f"/business_sites?business_id=eq.{biz['id']}&order=updated_at.desc&limit=1"
+            "&select=status,html_content,site_config")
+        site = (rows[0] if rows else {}) if isinstance(rows, list) else None
+        if (business_faq.site_shows(site)
+                and (site.get("site_config") or {}).get("html_source") != "manual"):
+            from site_composer import refresh_if_composed_async
+            refresh_if_composed_async(str(biz["id"]))
+        return " ".join(business_faq.where_it_shows(biz, site))
+    except Exception as e:
+        logger.info(f"[chief] FAQ state skipped: {e}")
+        return "Your FAQ is listed in Settings → Website concierge."
 
 
 async def handle_set_business_policy(client, biz, action) -> Dict:
-    """Arc S Business Picture — capture a rule of engagement. Feeds the
-    website FAQ automatically AND becomes what Chief answers when a
-    client asks (including by text)."""
+    """Arc S Business Picture — capture a rule of engagement. A website
+    that shows the FAQ shows it, and it is what Chief answers when a client
+    asks (including by text)."""
     key = (str(action.get("policy") or "").strip().lower()
            .replace("-", "_").replace(" ", "_"))
     text = str(action.get("text") or action.get("value") or "").strip()
@@ -331,50 +362,51 @@ async def handle_set_business_policy(client, biz, action) -> Dict:
     if not text:
         return _fail("set_business_policy", "policy text required")
 
-    def _mut(bp):
+    def _mut(settings):
+        bp = dict(settings.get("business_picture") or {})
         pol = dict(bp.get("policies") or {})
         pol[key] = text[:600]
         bp["policies"] = pol
+        settings["business_picture"] = bp
 
-    await _save_business_picture(client, biz, _mut)
+    if not await asyncio.to_thread(_save_settings, biz, _mut):
+        return _fail("set_business_policy", "That didn't save. Please try again.")
+    where = await asyncio.to_thread(_where_it_shows, biz)
     label_key = key.replace("_", "-")
     return {"type": "set_business_policy",
-            "result": (f"{label_key} policy saved — it now appears in the "
-                       f"website FAQ and I'll answer clients with it"),
+            "result": f"{label_key} policy saved, and I'll answer clients with it. {where}",
             "label": f"📋 {label_key.title()} policy saved",
             "nav": None}
 
 
 async def handle_add_faq(client, biz, action) -> Dict:
-    """Arc S Business Picture — add an owner-authored Q&A. Renders on
-    the website FAQ; Chief answers clients with it."""
+    """Arc S Business Picture — add an owner-authored Q&A to the business's
+    one FAQ (business_faq). The receipt carries the answer and says where it
+    can be seen, so a later turn never has to guess at either."""
+    import business_faq
     q = str(action.get("question") or "").strip()
     a = str(action.get("answer") or "").strip()
     if not q or not a:
         return _fail("add_faq", "both question and answer are required")
 
-    def _norm(s):
-        return " ".join(s.lower().split()).strip("?.! ")
+    outcome = {}
 
-    replaced = {"v": False}
+    def _mut(settings):
+        outcome["v"] = business_faq.put(settings, q, a)
+        return outcome["v"] != "full"
 
-    def _mut(bp):
-        rows = [r for r in (bp.get("faq") or []) if isinstance(r, dict)]
-        kept = []
-        for r in rows:
-            if _norm(str(r.get("q") or "")) == _norm(q):
-                replaced["v"] = True
-                continue   # same question → the new answer replaces it
-            kept.append(r)
-        kept.append({"q": q[:200], "a": a[:600]})
-        bp["faq"] = kept[-12:]   # newest 12 keep their seats
-
-    await _save_business_picture(client, biz, _mut)
-    verb = "updated" if replaced["v"] else "added"
+    if not await asyncio.to_thread(_save_settings, biz, _mut):
+        return _fail("add_faq", "That didn't save. Please try again.")
+    if outcome.get("v") == "full":
+        return _fail("add_faq",
+                     f"Your FAQ is full at {business_faq.FAQ_LIMIT} answers, so this one "
+                     "wasn't added. Take one off in Settings → Website concierge first.")
+    where = await asyncio.to_thread(_where_it_shows, biz)
     return {"type": "add_faq",
-            "result": f"FAQ {verb}: \"{q[:80]}\" — live on the website FAQ "
-                      f"and in my answers to clients",
-            "label": f"❓ FAQ {verb}: {q[:60]}",
+            "result": f"FAQ {outcome['v']}: \"{q[:80]}\". {where}",
+            "label": f"❓ FAQ {outcome['v']}: {q[:60]}",
+            "question": q,
+            "answer": a,
             "nav": None}
 
 

@@ -3997,6 +3997,30 @@ def _format_email_replies_block(ctx: Dict[str, Any]) -> str:
     return scope_header + "\n".join(lines) + "\n"
 
 
+def business_picture_lines(biz: Dict[str, Any], site: Optional[Dict[str, Any]]) -> List[str]:
+    """Arc S — the Business Picture (rules of engagement + FAQ) the
+    practitioner has captured, and where it can be seen. Chief ANSWERS
+    clients from these (including by text) and knows what's still missing.
+    The answer check reads these same lines: with only Chief reading them, a
+    true "the kids answer has both" was withheld as unproven (2026-11-07)."""
+    import business_faq
+    settings = (biz or {}).get("settings")
+    settings = settings if isinstance(settings, dict) else {}
+    picture = settings.get("business_picture")
+    policies = picture.get("policies") if isinstance(picture, dict) else None
+    policies = policies if isinstance(policies, dict) else {}
+    lines = [f"  - {str(k).replace('_', ' ')}: {v}" for k, v in policies.items()]
+    lines += [f"  - Q: {r['q']} — A: {r['a']}" for r in business_faq.rows(settings)]
+    if not lines:
+        lines = ["  (none captured yet — capture policies conversationally when they come up)"]
+    try:
+        where = " ".join(business_faq.where_it_shows(biz, site))
+    except Exception as e:
+        logger.info(f"[chief] FAQ state skipped: {e}")
+        return lines
+    return lines + [f"  (Where the FAQ shows: {where})"]
+
+
 def _format_site_info(ctx: Dict[str, Any]) -> str:
     site = ctx.get("site")
     if not site or not site.get("slug"):
@@ -4171,16 +4195,7 @@ def _format_context_parts(ctx: Dict[str, Any]):
         parts = ", ".join(f"{cnt} {st}" for st, cnt in sorted(statuses.items()))
         activity_lines.append(f"  - {ag}: {parts}")
 
-    # Arc S — the Business Picture (rules of engagement + FAQ) the
-    # practitioner has captured. Chief ANSWERS clients from these
-    # (including by text) and knows what's still missing.
-    _bp = (biz.get("settings") or {}).get("business_picture") or {}
-    bp_lines: List[str] = []
-    for _pk, _pv in ((_bp.get("policies") or {}) if isinstance(_bp.get("policies"), dict) else {}).items():
-        bp_lines.append(f"  - {str(_pk).replace('_', ' ')}: {_pv}")
-    for _fr in (_bp.get("faq") or [])[:12]:
-        if isinstance(_fr, dict) and _fr.get("q"):
-            bp_lines.append(f"  - Q: {_fr.get('q')} — A: {_fr.get('a')}")
+    bp_lines = business_picture_lines(biz, ctx.get("site"))
 
     # Standing instructions (from memories). From 2026-09-04 to 2026-10-11
     # this block printed the standing PERMISSIONS instead (the variable
@@ -4422,7 +4437,7 @@ LONGITUDINAL INSIGHTS (your own weekly analysis of this business's trends — br
 {chr(10).join(longitudinal_lines) if longitudinal_lines else '  (none yet — the weekly analysis runs once enough history accumulates)'}
 
 BUSINESS PICTURE — rules of engagement + FAQ (answer client questions with EXACTLY these; gathered via set_business_policy / add_faq):
-{chr(10).join(bp_lines) if bp_lines else '  (none captured yet — capture policies conversationally when they come up)'}
+{chr(10).join(bp_lines)}
 
 STANDING INSTRUCTIONS (execute when triggered):
 {chr(10).join(standing_lines) if standing_lines else '  (none set)'}
