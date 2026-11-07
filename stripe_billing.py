@@ -795,9 +795,10 @@ async def create_credit_checkout(body: CreditCheckoutBody,
                 "currency": "usd",
                 "unit_amount": p["cents"],
                 "product_data": {
-                    "name": f"Solutionist credits — {p['units']} units",
-                    "description": ("Prepaid AI-action credits. They never expire; "
-                                    "your monthly plan allowance is always used first."),
+                    "name": credit_ledger.pack_name(p["units"]),
+                    "description": ("Prepaid credits for anything that uses them, not "
+                                    "just flyers. They never expire; your monthly plan "
+                                    "allowance is always used first."),
                 },
             },
         }],

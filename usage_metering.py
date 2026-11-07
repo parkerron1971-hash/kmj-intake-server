@@ -619,6 +619,8 @@ def credits_overview(business_id: str,
         # Live table, not the import-time snapshot — /billing/usage and
         # this overview must not quote two different catalogues.
         "catalog": credit_ledger.credit_packs(),
+        # What the card divides a pack by to say it in flyers.
+        "flyer_credits": credit_ledger.flyer_credits(),
         "weights": s["weights"],
     }
 

@@ -100,6 +100,33 @@ def _burn_rows(fb):
 
 # ═══ Balance math — allowance first, packs after ═════════════════════
 
+def test_a_pack_is_said_in_flyers_off_the_live_price(fake, monkeypatch):
+    """The count follows the flyer's own dial, so the button, Stripe's page
+    and the charge can't disagree."""
+    fb = fake
+    _biz(fb)
+    assert um.credits_overview("b1")["flyer_credits"] == 30
+    assert [cl.pack_name(p["units"]) for p in cl.credit_packs().values()] == [
+        "740 Solutionist credits, about 24 flyers",
+        "1,440 Solutionist credits, about 48 flyers",
+        "2,880 Solutionist credits, about 96 flyers",
+    ]
+
+    monkeypatch.setenv("PRICE_IMAGE_HIGH", "60")
+    assert um.credits_overview("b1")["flyer_credits"] == 60
+    assert cl.pack_name(740) == "740 Solutionist credits, about 12 flyers"
+
+
+def test_an_unreadable_flyer_price_drops_the_count_not_the_sale(fake, monkeypatch):
+    """A typo'd dial must not stop the card loading or a pack selling, and
+    neither may state a count nothing backs up."""
+    fb = fake
+    _biz(fb)
+    monkeypatch.setenv("PRICE_IMAGE_HIGH", "3o")
+    assert um.credits_overview("b1")["flyer_credits"] is None
+    assert cl.pack_name(740) == "740 Solutionist credits"
+
+
 def test_overview_allowance_first_then_packs(fake):
     fb = fake
     _biz(fb)
@@ -214,6 +241,9 @@ def test_credit_checkout_builds_pack_session(fake, monkeypatch):
     assert form["metadata"]["business_id"] == "b1"
     pd = form["line_items"][0]["price_data"]
     assert pd["unit_amount"] == cl.CREDIT_PACKS["small"]["cents"]
+    # Stripe's page says the pack the way the app's button does.
+    assert pd["product_data"]["name"] == "740 Solutionist credits, about 24 flyers"
+    assert "not just flyers" in pd["product_data"]["description"]
 
     # Unknown pack → 400; non-owner → 403.
     with pytest.raises(HTTPException) as e:
