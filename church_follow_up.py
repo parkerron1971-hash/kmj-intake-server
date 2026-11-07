@@ -188,6 +188,29 @@ def kind_for_form(form: Dict[str, Any]) -> Optional[str]:
     return "general"
 
 
+MAX_NOTE_FACTS = 25
+
+
+def welcome_note_rules(form: Dict[str, Any], facts: Iterable[str]) -> str:
+    """What a drafted reply to a church's card must hold to. Renee's card
+    (2026-11-06) came back as a reply to a sales lead: it told someone who
+    had just visited "before you ever walk in the door", and told her it
+    didn't want to guess at service times. A connect card comes from someone
+    who has usually been here, and the church's public facts are on file."""
+    lines = ["Church rules for this note. They beat the guidelines above:",
+             "- Keep it under 120 words. It comes from a pastor, not a sales team.",
+             "- Never tell the reader what you don't know, won't guess at or can't confirm. "
+             "If a detail isn't in the church facts below, leave it out and say nothing about it.",
+             "- Use only the church facts below for service times, places and programs."]
+    if kind_for_form(form) == "connect":
+        lines.append("- This is a connect card. If their answers show they've visited, including \"This is "
+                     "my first time\", thank them for coming and never write as if they haven't come yet. "
+                     "If the card doesn't say, welcome them without saying whether they've been.")
+    known = [_plain(f) for f in facts if _plain(f)][:MAX_NOTE_FACTS]
+    lines.append("Church facts:\n" + ("\n".join(f"- {f}" for f in known) if known else "- None on file."))
+    return "\n".join(lines)
+
+
 def _answer_text(value: Any) -> str:
     if isinstance(value, list):
         value = ", ".join(_plain(v) for v in value if _plain(v))
