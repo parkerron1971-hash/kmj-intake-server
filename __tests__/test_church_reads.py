@@ -208,3 +208,100 @@ def test_the_endpoint_is_mounted_before_the_catch_all_and_needs_a_sign_in():
     r = TestClient(kmj_intake_automation.app).get(
         f"/church/first-time-guests?business_id={BIZ}")
     assert r.status_code in (401, 403)
+
+
+# ─── A card or a first kids check-in is a guest too ───────────────────
+# Neither writes attendance.first_time, so someone who filled out a card
+# used to be missing here while their follow-up sat waiting.
+
+def _follow_up(id_, contact, at, *, answers=(), card_key="web:connect_card",
+               card_name="Connect card", kind="connect"):
+    return {"id": id_, "contact_id": contact, "card_key": card_key, "card_name": card_name,
+            "path_kind": kind, "answers": list(answers), "created_at": _iso(at)}
+
+
+def _person(id_, made):
+    return dict(_people(id_)[0], created_at=_iso(made))
+
+
+FIRST_TIME = [{"q": "How many times have you visited?", "a": "This is my first time"}]
+A_FEW = [{"q": "How many times have you visited?", "a": "A few times"}]
+
+
+def test_a_card_that_says_first_time_is_a_guest(db):
+    db(church_follow_ups=[_follow_up("fu-1", ANNA, SUNDAY, answers=FIRST_TIME)],
+       contacts=[_person(ANNA, SUNDAY)])
+    rows = C.first_time_guests(BIZ, now=NOW)
+    assert [r["name"] for r in rows] == ["Anna Reed"]
+    assert rows[0]["id"] == "fu-1" and rows[0]["contact_id"] == ANNA
+    assert rows[0]["occasion"] == "Connect card" and rows[0]["detail"].startswith("Connect card, Oct 4")
+    assert rows[0]["has_phone"] is True
+
+
+def test_a_first_check_in_at_the_kids_desk_is_a_guest(db):
+    old = NOW - timedelta(days=400)
+    db(church_follow_ups=[_follow_up("fu-1", ANNA, SUNDAY, card_key="checkin:first", card_name="First check-in",
+                                     answers=[{"q": "First visit", "a": "Sunday Service, Oct 4"}])],
+       contacts=[_person(ANNA, old)])
+    assert [r["occasion"] for r in C.first_time_guests(BIZ, now=NOW)] == ["First check-in"]
+
+
+def test_a_card_that_says_a_few_times_is_not(db):
+    db(church_follow_ups=[_follow_up("fu-1", ANNA, SUNDAY, answers=A_FEW)],
+       contacts=[_person(ANNA, SUNDAY)])
+    assert C.first_time_guests(BIZ, now=NOW) == []
+
+
+def test_a_card_that_never_asked_goes_by_whether_the_record_is_new(db):
+    made = [_follow_up("fu-1", ANNA, SUNDAY), _follow_up("fu-2", BEN, SUNDAY)]
+    db(church_follow_ups=made, contacts=[_person(ANNA, SUNDAY), _person(BEN, NOW - timedelta(days=400))])
+    assert [r["name"] for r in C.first_time_guests(BIZ, now=NOW)] == ["Anna Reed"]
+
+
+def test_a_yes_to_a_first_visit_question_counts(db):
+    yes = [{"q": "Is this your first visit?", "a": "Yes"}]
+    no = [{"q": "Is this your first visit?", "a": "No"}]
+    db(church_follow_ups=[_follow_up("fu-1", ANNA, SUNDAY, answers=yes), _follow_up("fu-2", BEN, SUNDAY, answers=no)],
+       contacts=[_person(ANNA, SUNDAY), _person(BEN, SUNDAY)])
+    assert [r["name"] for r in C.first_time_guests(BIZ, now=NOW)] == ["Anna Reed"]
+
+
+def test_a_no_to_been_here_before_counts(db):
+    no = [{"q": "Have you been here before?", "a": "No"}]
+    yes = [{"q": "Have you been here before?", "a": "Yes"}]
+    db(church_follow_ups=[_follow_up("fu-1", ANNA, SUNDAY, answers=no), _follow_up("fu-2", BEN, SUNDAY, answers=yes)],
+       contacts=[_person(ANNA, SUNDAY), _person(BEN, SUNDAY)])
+    assert [r["name"] for r in C.first_time_guests(BIZ, now=NOW)] == ["Anna Reed"]
+
+
+def test_a_card_someone_is_answering_about_something_else_is_not(db):
+    db(church_follow_ups=[_follow_up("fu-1", ANNA, SUNDAY, card_name="Baptism", kind="baptism", answers=FIRST_TIME)],
+       contacts=[_person(ANNA, SUNDAY)])
+    assert C.first_time_guests(BIZ, now=NOW) == []
+
+
+def test_a_marked_first_visit_keeps_its_service_and_shows_once(db):
+    db(attendance_first=[_visit("v1", ANNA, SUNDAY)],
+       church_follow_ups=[_follow_up("fu-1", ANNA, SUNDAY + timedelta(hours=1), answers=FIRST_TIME)],
+       contacts=[_person(ANNA, SUNDAY)])
+    rows = C.first_time_guests(BIZ, now=NOW)
+    assert len(rows) == 1 and rows[0]["id"] == "v1" and rows[0]["occasion"] == "Sunday Service"
+
+
+def test_a_card_guest_drops_off_once_someone_reaches_out(db):
+    db(church_follow_ups=[_follow_up("fu-1", ANNA, SUNDAY, answers=FIRST_TIME)],
+       contacts=[_person(ANNA, SUNDAY)],
+       sms_messages=[{"contact_id": ANNA, "created_at": _iso(SUNDAY + timedelta(days=1))}])
+    assert C.first_time_guests(BIZ, now=NOW) == []
+
+
+def test_only_open_follow_ups_still_on_reach_out_are_read(db):
+    fake = db()
+    C.first_time_guests(BIZ, now=NOW)
+    read = next(c for c in fake.calls if c.startswith("/church_follow_ups"))
+    assert "status=in.(open,handed_back)" in read and "step=eq.0" in read
+
+
+def test_follow_ups_unreadable_is_unknown_never_nobody(db):
+    db(church_follow_ups=None)
+    assert C.first_time_guests(BIZ, now=NOW) is None
