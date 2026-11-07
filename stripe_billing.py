@@ -71,6 +71,7 @@ import logging
 import os
 import time
 from typing import Any, Dict, Optional
+from urllib.parse import quote
 
 import ledger_unlock
 import httpx
@@ -567,10 +568,63 @@ def _price_for_plan(plan):
     return (os.environ.get("STRIPE_PRICE_ID_DEFAULT") or "").strip()
 
 
+# ─── One subscription per business ────────────────────────────────────
+# Checkout always makes a NEW subscription, so "Switch plan" sent to
+# Checkout left a business with two: two charges a month, the row following
+# whichever Stripe wrote last, and a later cancel of the old one marking the
+# business canceled while the new one went on charging. A plan change moves
+# the plan item of the subscription it already has: the same card, the same
+# renewal day, any extra logins left where they are, and a trial stays a
+# trial.
+HOLDS_A_SUBSCRIPTION = ("trialing", "active", "past_due", "unpaid", "paused", "incomplete")
+
+
+def _held_subscription(biz: Dict[str, Any]) -> str:
+    """The subscription this business already has, or "". A row with a
+    status but no subscription id is a no-card trial, which has nothing to
+    move and still buys through Checkout."""
+    sub_id = (biz.get("stripe_subscription_id") or "").strip()
+    return sub_id if sub_id and biz.get("subscription_status") in HOLDS_A_SUBSCRIPTION else ""
+
+
+async def _switch_plan(biz: Dict[str, Any], sub_id: str, price_id: str,
+                       plan: Optional[str]) -> Optional[Dict[str, Any]]:
+    """Move the business's one subscription to this price. None when Stripe
+    says that subscription has already ended, so the row was behind and
+    Checkout is the right door after all. The webhook writes the change too;
+    this writes it now so the page shows it at once."""
+    import billing_limits
+    import feature_gates
+    path = f"/subscriptions/{quote(sub_id, safe='')}"
+    sub = await _stripe_get(path, [])
+    if sub.get("status") in ("canceled", "incomplete_expired"):
+        return None
+    if sub.get("status") not in ("trialing", "active"):
+        raise HTTPException(409, "Your last payment didn't go through. "
+                                 "Fix your card under Manage Subscription, then switch.")
+    catalog = feature_gates.price_to_plan()
+    items = ((sub.get("items") or {}).get("data")) or []
+    item = next((it for it in items if ((it.get("price") or {}).get("id")) in catalog), None)
+    if not item:
+        raise HTTPException(409, "We can't change this subscription from here. Write to us and we'll do it for you.")
+    name = billing_limits.PLAN_DISPLAY.get(plan or "", (plan or "your new plan").title())
+    if (item.get("price") or {}).get("id") == price_id:
+        return {"switched": True, "changed": False, "plan": plan, "plan_name": name}
+    updated = await _stripe_post(path, {
+        "items": [{"id": item["id"], "price": price_id}],
+        "proration_behavior": "create_prorations",
+        "cancel_at_period_end": False,
+    })
+    await _apply_subscription_state("customer.subscription.updated", updated, biz["id"])
+    return {"switched": True, "changed": True, "plan": plan, "plan_name": name}
+
+
 @router.post("/checkout")
 async def create_checkout(body: CheckoutBody, user: AuthedUser = Depends(require_user)):
     """Mint a Stripe Customer (if needed) + Checkout Session for a
-    subscription. Returns the Checkout URL the frontend opens."""
+    subscription, and return the Checkout URL the frontend opens. A business
+    that already has a subscription gets no URL: its plan moves in place and
+    the answer says `switched`."""
     import feature_gates
     requested = (body.plan or "").strip().lower()
     requested_base = requested[:-len("_annual")] if requested.endswith("_annual") else requested
@@ -636,6 +690,15 @@ async def create_checkout(body: CheckoutBody, user: AuthedUser = Depends(require
     if resolved in feature_gates.CHURCHSAVVY_PLANS:
         import churchsavvy_billing
         church_savvy = churchsavvy_billing.checkout_rules(biz, user, resolved)
+    # One business, one subscription: a plan change moves the subscription
+    # it already has, and only a business without one goes on to Checkout.
+    sub_id = _held_subscription(biz)
+    if sub_id:
+        if body.promotion_code:
+            raise HTTPException(409, "A code goes on a new subscription, and yours is already running.")
+        switched = await _switch_plan(biz, sub_id, price_id, resolved)
+        if switched is not None:
+            return switched
 
     customer_id = biz.get("stripe_customer_id")
     if not customer_id:
@@ -905,6 +968,54 @@ def _subscription_data(biz, user, skip_trial: bool = False):
 
 
 # ─── Portal (authed) ───────────────────────────────────────────────────
+# Stripe opens a portal session with the settings it's handed, or the
+# account's saved default, and refuses when there is neither. The live
+# account never saved a default (2026-11-06: no configurations at all), so
+# the portal's settings live here and every session carries them. Plan
+# changes stay in the app, where a church's extra logins are looked after
+# and the price is shown first: the portal is the card, the invoices and
+# cancelling, which runs to the end of the paid period.
+PORTAL_MARK = "solutionist_billing"
+_portal_configuration_id: Optional[str] = None
+
+
+def _portal_settings() -> Dict[str, Any]:
+    return {
+        "metadata": {"made_by": PORTAL_MARK},
+        "business_profile": {
+            "headline": "Your plan, your card and your invoices",
+            "privacy_policy_url": "https://mysolutionist.app/privacy",
+            "terms_of_service_url": "https://mysolutionist.app/terms",
+        },
+        "features": {
+            "customer_update": {"enabled": True, "allowed_updates": ["email", "address"]},
+            "invoice_history": {"enabled": True},
+            "payment_method_update": {"enabled": True},
+            "subscription_cancel": {"enabled": True, "mode": "at_period_end"},
+            "subscription_update": {"enabled": False},
+        },
+    }
+
+
+async def _portal_configuration() -> Optional[str]:
+    """The id of our portal settings, made once if Stripe doesn't hold them.
+    Remembered per process; replicas find the same one by its mark. None when
+    Stripe won't answer, so the session falls back to the account's default
+    rather than a read here costing someone the portal."""
+    global _portal_configuration_id
+    if _portal_configuration_id:
+        return _portal_configuration_id
+    try:
+        got = await _stripe_get("/billing_portal/configurations",
+                                [("active", "true"), ("limit", "100")])
+        ours = next((c for c in got.get("data") or []
+                     if (c.get("metadata") or {}).get("made_by") == PORTAL_MARK), None)
+        ours = ours or await _stripe_post("/billing_portal/configurations", _portal_settings())
+        _portal_configuration_id = ours.get("id")
+    except Exception as e:
+        logger.error(f"portal configuration failed: {type(e).__name__}: {e}")
+    return _portal_configuration_id
+
 
 class PortalBody(BaseModel):
     business_id: str
@@ -930,6 +1041,7 @@ async def create_portal(body: PortalBody, request: Request,
     import churchsavvy_billing
     session = await _stripe_post("/billing_portal/sessions", {
         "customer": customer_id,
+        "configuration": await _portal_configuration(),
         "return_url": churchsavvy_billing.billing_page() if churchsavvy_billing.standalone(biz)
                       else _portal_return_url(),
     })
