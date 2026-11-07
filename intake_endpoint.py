@@ -660,6 +660,18 @@ async def submit_intake(req: IntakeSubmission, request: Request):
             personality = voice_profile.get("personality", "helpful")
             audience = voice_profile.get("audience", "clients")
 
+            # A church's card is a welcome from its pastor, not a sales reply.
+            church_rules = ""
+            import church_follow_up
+            if church_follow_up.is_church(business):
+                facts: List[str] = []
+                try:
+                    import text_room
+                    facts = await asyncio.to_thread(text_room.public_facts, str(req.business_id), business)
+                except Exception as e:
+                    logger.warning(f"[intake] church facts skipped: {type(e).__name__}")
+                church_rules = church_follow_up.welcome_note_rules(dict(form_config), facts)
+
             draft_system = f"""You are the Intake Agent for {business_name}.
 Write a personalized email response to a new form submission.
 
@@ -677,6 +689,7 @@ prospect and a roofing estimate both want `book_time`:
 - answer_then_offer: They asked something concrete. Answer that first,
   in the first two lines. Only then offer the next step.
 - nurture: Light touch. Acknowledge interest. No hard sell.
+{church_rules}
 
 RESPOND ONLY WITH VALID JSON:
 {{
