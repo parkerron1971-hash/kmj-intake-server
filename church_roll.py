@@ -57,6 +57,7 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
+import church_families
 import sb_clients
 from auth_supabase import UserSession
 from business_access import business_access
@@ -73,8 +74,7 @@ CACHE_SECONDS = 90              # a person's page reuses the roll just read
 
 STATUS = {"active": "member", "lead": "guest", "vip": "leader", "inactive": "inactive", "churned": "inactive"}
 STATUS_WORD = {"member": "Member", "guest": "Guest", "leader": "Leader", "inactive": "Inactive"}
-MINOR_TAGS = {"youth", "kids", "kid", "teen", "teens", "child", "children", "minor", "minors", "under 18",
-              "youth member", "kids ministry"}
+MINOR_TAGS = church_families.MINOR_TAGS
 MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
 DAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
 

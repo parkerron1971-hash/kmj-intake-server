@@ -24,6 +24,7 @@ the general insights feed (the `insight_type` CHECK constraint does not
 allow 'weekly_briefing' directly).
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -460,18 +461,28 @@ async def _generate_briefing_actions(client: httpx.AsyncClient, biz: Dict) -> Di
     def _cap_reached() -> bool:
         return (total_created + total_skipped) >= ACTION_TOTAL_CAP
 
+    # A child gets no automated note from an adult at their church, and a
+    # failed read of who is a child stops the check-ins for this briefing.
+    import church_families
+    import church_follow_up
+    church = church_follow_up.is_church(biz)
+    minors = await asyncio.to_thread(church_families.minor_ids, str(biz_id)) if church else set()
+
+    def _is_minor(c: Dict) -> bool:
+        return church and church_families.is_minor(c, minors)
+
     # ── 1. At-risk contacts (health < 40) ─────────────────────────────
-    at_risk = await _sb(client, "GET",
+    at_risk = [] if minors is None else await _sb(client, "GET",
         f"/contacts?business_id=eq.{biz_id}&health_score=lt.40"
         f"&status=in.(active,lead,vip)&order=health_score.asc&limit={ACTION_CAP_AT_RISK}"
-        f"&select=id,name,role,health_score,last_interaction,metadata"
+        f"&select=id,name,role,health_score,last_interaction,metadata,birthdate,tags"
     ) or []
 
     import contact_fields
     for c in at_risk:
         if _cap_reached(): break
         # An unsubscribe holds: no automated check-in is drafted for them.
-        if contact_fields.email_opted_out(c):
+        if contact_fields.email_opted_out(c) or _is_minor(c):
             continue
         existing = await _existing_draft(client, biz_id, c["id"], "nurture", "check_in", dedup_cutoff)
         if existing:
@@ -509,17 +520,17 @@ async def _generate_briefing_actions(client: httpx.AsyncClient, biz: Dict) -> Di
 
     # ── 2. Inactive contacts (health >= 40, no contact in 14+ days) ───
     inactive_cutoff = (now - timedelta(days=INACTIVE_THRESHOLD_DAYS)).isoformat()
-    inactive = await _sb(client, "GET",
+    inactive = [] if minors is None else await _sb(client, "GET",
         f"/contacts?business_id=eq.{biz_id}&health_score=gte.40"
         f"&status=in.(active,lead,vip)"
         f"&last_interaction=lt.{inactive_cutoff}"
         f"&order=last_interaction.asc&limit={ACTION_CAP_INACTIVE}"
-        f"&select=id,name,role,health_score,last_interaction,metadata"
+        f"&select=id,name,role,health_score,last_interaction,metadata,birthdate,tags"
     ) or []
 
     for c in inactive:
         if _cap_reached(): break
-        if contact_fields.email_opted_out(c):
+        if contact_fields.email_opted_out(c) or _is_minor(c):
             continue
         existing = await _existing_draft(client, biz_id, c["id"], "nurture", "check_in", dedup_cutoff)
         if existing:

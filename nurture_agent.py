@@ -30,6 +30,7 @@ DEPLOYMENT
            scheduler.start()
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -38,6 +39,8 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 
+import church_families
+import church_follow_up
 import llm_call
 from fastapi import APIRouter, Depends, HTTPException
 from auth_supabase import AuthedUser, require_user
@@ -69,6 +72,14 @@ MAX_HEALTH = 100
 HEALTH_DECAY_PER_DAY = 2
 HEALTH_BOOST_PER_INTERACTION = 5
 RECENT_OUTREACH_COOLDOWN_DAYS = 7
+# A church's sweep (2026-11-06, the Renee run): 18 "Checking in" drafts for
+# about 20 people swamped Approvals, a 10-year-old among them ("I've been
+# thinking about you"), and everyone just imported read as gone quiet. At a
+# church the sweep never writes to a child, reads only people who have an
+# interaction to have gone quiet from, and keeps this many waiting at most, so
+# a pastor reads each one. The next ones come as these are dealt with.
+CHURCH_WAITING_CHECK_INS = 5
+CHURCH_SWEEP_LIMIT = 100
 
 logger = logging.getLogger("nurture_agent")
 if not logger.handlers:
@@ -291,19 +302,48 @@ async def _run_nurture(client: httpx.AsyncClient, business: Dict) -> Dict:
         f"/contacts?business_id=eq.{biz_id}&select=id,name,status,health_score,last_interaction&limit=50"
     ) or []
 
+    # A failed read of who is a child, or of what's waiting, stops a church's
+    # sweep: nothing is drafted on a guess about a child.
+    church = church_follow_up.is_church(business)
+    minors: Any = set()
+    room: Optional[int] = None
+    if church:
+        minors = await asyncio.to_thread(church_families.minor_ids, str(biz_id))
+        waiting = await _sb(client, "GET",
+            f"/agent_queue?business_id=eq.{biz_id}&agent=eq.nurture&status=eq.draft"
+            f"&select=id&limit={CHURCH_WAITING_CHECK_INS}"
+        )
+        room = None if waiting is None else max(0, CHURCH_WAITING_CHECK_INS - len(waiting))
+
     # Get contacts needing attention
-    contacts = await _sb(client, "GET",
-        f"/contacts?business_id=eq.{biz_id}&status=in.(active,lead,vip)"
-        f"&or=(last_interaction.is.null,last_interaction.lt.{cutoff})"
-        f"&order=health_score.asc&limit=20"
-    ) or []
+    contacts: List[Dict] = []
+    if not church:
+        contacts = await _sb(client, "GET",
+            f"/contacts?business_id=eq.{biz_id}&status=in.(active,lead,vip)"
+            f"&or=(last_interaction.is.null,last_interaction.lt.{cutoff})"
+            f"&order=health_score.asc&limit=20"
+        ) or []
+    elif minors is None or room is None:
+        logger.warning(f"Nurture stopped for church {biz_id}: children or waiting drafts unreadable")
+    elif room > 0:
+        contacts = await _sb(client, "GET",
+            f"/contacts?business_id=eq.{biz_id}&status=in.(active,lead,vip)"
+            f"&last_interaction=lt.{cutoff}"
+            f"&order=health_score.asc&limit={CHURCH_SWEEP_LIMIT}"
+        ) or []
 
     drafts_created = 0
     flagged = []
 
     import contact_fields
     for contact in contacts:
+        if room is not None and drafts_created >= room:
+            break
         cid = contact["id"]
+
+        # A child gets no automated note from an adult at their church.
+        if church and church_families.is_minor(contact, minors):
+            continue
 
         # Someone who unsubscribed gets no automated re-engagement mail —
         # the sweep does not even draft it (contact_fields.email_opted_out;

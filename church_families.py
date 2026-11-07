@@ -39,6 +39,9 @@ from fastapi import HTTPException
 
 import sb_clients
 
+MINOR_TAGS = {"youth", "kids", "kid", "teen", "teens", "child", "children", "minor", "minors", "under 18",
+              "youth member", "kids ministry"}
+
 logger = logging.getLogger("church_families")
 
 CHILD_AGE = 18
@@ -93,6 +96,23 @@ def age(birthdate: Any, today: Optional[date] = None) -> Optional[int]:
 def is_child(row: Dict[str, Any], today: Optional[date] = None) -> bool:
     a = age(row.get("birthdate"), today)
     return a is not None and a < CHILD_AGE
+
+
+def minor_ids(biz: str) -> Optional[Set[str]]:
+    """Everyone a church holds as a child of a family, by their member record.
+    None when the read failed, so a caller stops rather than taking a failed
+    read for "no children"."""
+    rows = _rows(f"/children?business_id=eq.{_q(biz)}&contact_id=not.is.null&select=contact_id&limit=20000")
+    return None if rows is None else {str(r["contact_id"]).lower() for r in rows}
+
+
+def is_minor(row: Dict[str, Any], ids: Set[str]) -> bool:
+    """A child by any sign the church has: on a family as a child (`ids`,
+    from minor_ids), under 18 by birthdate, or tagged so. A row needs its
+    birthdate and tags read for the last two."""
+    tags = row.get("tags")
+    named = {str(t).strip().lower() for t in tags} if isinstance(tags, list) else set()
+    return str(row.get("id") or "").lower() in ids or is_child(row) or bool(named & MINOR_TAGS)
 
 
 def first_name(row: Dict[str, Any]) -> str:
