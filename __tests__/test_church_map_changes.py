@@ -299,7 +299,8 @@ def test_the_changes_routes_seats_switch_and_503s(monkeypatch):
     saved = o.put(LC, "departments", {"name": "Kitchen"}).json()
     assert saved["department"]["name"] == "Kitchen" and saved["change"]["status"] == "applied"
     got = o.c.get(f"/church/map/changes?business_id={LC}").json()
-    assert got["recent"][0]["lines"] == ["Made Kitchen"] and got["recent"][0]["can_undo"]
+    assert got["recent"][0]["lines"] == ["Made Kitchen: leader nobody; overseer nobody; office helper none; area none; "
+                                         "holds nothing yet"] and got["recent"][0]["can_undo"], "all it got (11-04)"
     assert o.as_(LC, "naiya").c.get(f"/church/map/changes?business_id={LC}").status_code == 200, "a manager reads"
     url = f"/church/map/changes/{saved['change']['id']}/undo?business_id={LC}"
     assert o.c.post(url).status_code == 404, "and puts nothing back"
@@ -308,7 +309,8 @@ def test_the_changes_routes_seats_switch_and_503s(monkeypatch):
     for act in ("apply", "discard"):
         assert o.c.post(f"/church/map/changes/{saved['change']['id']}/{act}?business_id={LC}").status_code == 409
     monkeypatch.setenv("CHURCH_MAP", "owner")
-    assert o.c.get(f"/church/map/changes?business_id={LC}").status_code == 404, "owner: the platform owner only"
+    assert o.c.get(f"/church/map/changes?business_id={LC}").status_code == 200,         "owner: the platform owner's church, Love City's admin too (11-04)"
+    assert o.as_(GRACE).c.get(f"/church/map/changes?business_id={GRACE}").status_code == 404, "no other church"
     monkeypatch.setenv("CHURCH_MAP", "on")
     cm._READY.clear()
     real = sb_clients.sb_get_as_service
@@ -337,7 +339,7 @@ def test_the_step1_routes_log_one_change_a_save_once_step2_is_there(monkeypatch,
     archived = o.c.post(f"/church/map/departments/{made['id']}/archive?business_id={LC}").json()
     assert archived["department"]["status"] == "archived"
     if not migrated2:
-        assert "change" not in archived and not db.t["church_map_changes"], "as today: nothing logged"
+        assert (archived["change"], archived["made"], archived["can_undo"]) == (None, None, False) and             not db.t["church_map_changes"], "as today: nothing logged, so whether it changed isn't told"
         return
     rows = sorted(db.t["church_map_changes"], key=lambda r: r["made_at"])
     assert [(r["origin"], r["status"], r["money"], [p["kind"] for p in r["parts"]]) for r in rows] == [
@@ -345,3 +347,44 @@ def test_the_step1_routes_log_one_change_a_save_once_step2_is_there(monkeypatch,
         ("office", "applied", False, ["answers_to"]), ("office", "applied", True, ["settings"]),
         ("office", "applied", False, ["department"])], "one a save; the same levels again log nothing"
     assert archived["change"]["id"] == rows[-1]["id"] and rows[-1]["parts"][0]["after"] is None
+
+
+def test_every_logged_save_says_whether_it_made_anything_and_whether_undo_can_put_it_back(monkeypatch):
+    """F8 review, 11-04: the logged saves dropped the batch's `made`, so the page couldn't tell "nothing
+    changed" from "saved, but its record didn't save", and said "Saved" with no Undo either way. Each now
+    answers with change, made, can_undo and, without a change, a note saying which."""
+    import church_map_router as r
+    db = build(monkeypatch, filled=False)
+    o, w = Office(db).as_(LC), db.who[LC]
+    made = o.put(LC, "departments", {"name": "Kitchen"}).json()
+    assert (made["made"], made["can_undo"], made["note"], made["change"]["status"]) == (True, True, "", "applied")
+    kid = made["department"]["id"]
+    same = o.put(LC, "departments", {"id": kid, "name": "Kitchen"}).json()
+    assert (same["ok"], same["made"], same["change"], same["can_undo"], same["note"]) == (True, False, None, False,
+                                                                                         r.NOTHING)
+    holder = next(h["id"] for h in db.t["church_leader_roles"] if h["contact_id"] == w["tanya"])
+    to = {"holder_id": holder, "answers_to_contact_id": w["jessica"]}
+    first = o.put(LC, "answers-to", to).json()
+    assert first["made"] and first["can_undo"] and first["holder"]["answers_to_contact_id"] == w["jessica"]
+    assert (o.put(LC, "answers-to", to).json()["note"]) == r.NOTHING
+    money = o.put(LC, "settings", {"pastor_from_cents": 40_000}).json()
+    assert money["made"] and money["change"]["money"] and money["can_undo"], "the owner's own money change"
+    again = o.put(LC, "settings", {"pastor_from_cents": 40_000}).json()
+    assert (again["made"], again["changed"], again["note"]) == (False, False, r.NOTHING), "the old field stays"
+    admin = o.as_(LC, "minnie").put(LC, "settings", {"office_overseer_roles": []}).json()
+    assert (admin["made"], admin["can_undo"], admin["change"]["money"]) == (True, True, False), "an admin's, no money"
+    o.as_(LC)
+    real = db.post
+    monkeypatch.setattr(sb_clients, "sb_post_as_service", lambda path, body, prefer=None, **k: None if path.startswith(
+        "/church_map_changes") else real(path, body, prefer, **k))
+    lost = o.put(LC, "departments", {"id": kid, "area": "office"}).json()
+    assert (lost["made"], lost["change"], lost["can_undo"], lost["note"]) == (True, None, False, r.UNLOGGED)
+    assert next(d for d in db.t["church_departments"] if d["id"] == kid)["area"] == "office", "it saved"
+    url = f"/church/map/departments/{kid}/archive?business_id={LC}"
+    gone = o.c.post(url).json()
+    assert (gone["made"], gone["change"], gone["can_undo"], gone["note"]) == (True, None, False, r.UNLOGGED), \
+        "archived, its record lost"
+    monkeypatch.setattr(sb_clients, "sb_post_as_service", real)
+    twice = o.c.post(url).json()
+    assert (twice["made"], twice["change"], twice["can_undo"], twice["note"]) == (False, None, False, r.NOTHING), \
+        "archived already"
