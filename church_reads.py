@@ -24,6 +24,7 @@ when it worked, so a caller can tell "nobody" from "couldn't look".
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -88,23 +89,65 @@ def _times(n: int) -> str:
     return "once" if n == 1 else "twice" if n == 2 else f"{n} times"
 
 
+# A card's follow-up says whether its person is new: the words they chose, a
+# yes to a first-visit question, or, when the card never asked, a record made
+# by the card itself. Someone who answered "A few times" is not a first-timer,
+# and neither is a long-standing member sending in a card.
+_FIRST_WORDS = re.compile(r"\bfirst[- ](time|visit|sunday|service)\b|\bnew here\b", re.I)
+_VISIT_QUESTION = re.compile(r"first|visit|been here|how (often|many times|long)|attend", re.I)
+_GUEST_CARD = re.compile(r"\bguest\b|\bfirst[- ](time|visit)\b", re.I)
+_FIRST_CHECK_IN = "checkin:first"   # church_follow_up.FIRST_CHECK_IN_KEY
+
+
+def _card_is_for_guests(row: Dict[str, Any]) -> bool:
+    return (row.get("card_key") == _FIRST_CHECK_IN or row.get("path_kind") == "connect"
+            or bool(_GUEST_CARD.search(str(row.get("card_name") or ""))))
+
+
+def _card_says_first(row: Dict[str, Any], person: Optional[Dict[str, Any]], since: datetime) -> bool:
+    """Whether this follow-up's person came for the first time. A first
+    check-in says so outright."""
+    if row.get("card_key") == _FIRST_CHECK_IN:
+        return True
+    asked = False
+    for pair in row.get("answers") or []:
+        question, answer = str(pair.get("q") or ""), str(pair.get("a") or "")
+        if _FIRST_WORDS.search(answer):
+            return True
+        if _VISIT_QUESTION.search(question):
+            asked = True
+            said = answer.strip().lower()
+            if ("first" in question.lower() and said in ("yes", "y", "true"))                     or ("before" in question.lower() and said in ("no", "n", "false")):
+                return True
+    if asked:
+        return False
+    made = _parse((person or {}).get("created_at"))
+    return bool(made and made >= since)
+
+
 def first_time_guests(business_id: str, *, days: int = FIRST_VISIT_WINDOW_DAYS,
                       limit: int = 20, now: Optional[datetime] = None
                       ) -> Optional[List[Dict[str, Any]]]:
     """First-time guests nobody has reached out to since their first visit.
 
-    A guest is someone checked in with `first_time` set inside the window.
+    A guest is someone checked in with `first_time` set inside the window,
+    or someone with a welcome follow-up from that window whose "Reach out"
+    is still open: a card that says they're new, or a family's first check-in
+    at the kids desk or kiosk. Neither of those writes attendance.first_time,
+    so a person who filled out a card used to be missing here while their
+    follow-up sat waiting.
+
     They drop off the list the moment anyone reaches out after that visit:
     an outbound text (not a failed one), or a logged call, visit, email or
     message (REACH_OUT_EVENTS). Coming back again does not take them off,
     because coming back is not the same as being called; it is shown.
 
     Longest waiting first. Each row:
-        id              the first-visit attendance row
+        id              the first-visit attendance row, or the follow-up
         contact_id      their record, or None for a name-only check-in
         name
         first_visit_at  ISO timestamp
-        occasion        what they came to
+        occasion        what they came to, or the card they filled out
         came_back       visits since the first
         has_phone, has_email
         detail          one line for a list ("Sunday Service, Oct 5 · came back once")
@@ -134,10 +177,25 @@ def first_time_guests(business_id: str, *, days: int = FIRST_VISIT_WINDOW_DAYS,
             continue
         if key not in firsts:
             firsts[key] = dict(v, _at=at)
-    if not firsts:
+
+    # Follow-ups nobody has finished reaching out on. Someone with a marked
+    # first visit keeps that row: it names the service they came to.
+    cards = _get(
+        f"/church_follow_ups?business_id=eq.{biz}&status=in.(open,handed_back)&step=eq.0"
+        f"&created_at=gte.{_iso(cutoff)}"
+        "&select=id,contact_id,card_key,card_name,path_kind,answers,created_at"
+        "&order=created_at.asc&limit=500")
+    if cards is None:
+        return None
+    waiting: Dict[str, Dict[str, Any]] = {}
+    for c in cards:
+        cid = str(c.get("contact_id") or "")
+        if cid and _card_is_for_guests(c) and f"c:{cid}" not in firsts and cid not in waiting:
+            waiting[cid] = c
+    if not firsts and not waiting:
         return []
 
-    contact_ids = [f["contact_id"] for f in firsts.values() if f.get("contact_id")]
+    contact_ids = [f["contact_id"] for f in firsts.values() if f.get("contact_id")] + list(waiting)
     reached: Dict[str, datetime] = {}
     later: Dict[str, List[datetime]] = {}
     contacts: Dict[str, Dict[str, Any]] = {}
@@ -157,7 +215,7 @@ def first_time_guests(business_id: str, *, days: int = FIRST_VISIT_WINDOW_DAYS,
             "&select=contact_id,checked_in_at&limit=5000")
         people = _get(
             f"/contacts?business_id=eq.{biz}&id=in.({ids})"
-            "&select=id,name,phone,email,status&limit=500")
+            "&select=id,name,phone,email,status,created_at&limit=1000")
         if texts is None or logged is None or again is None or people is None:
             return None
         for r in texts + logged:
@@ -170,6 +228,12 @@ def first_time_guests(business_id: str, *, days: int = FIRST_VISIT_WINDOW_DAYS,
             if at:
                 later.setdefault(str(r.get("contact_id")), []).append(at)
         contacts = {str(p["id"]): p for p in people if p.get("id")}
+
+    for cid, c in waiting.items():
+        at = _parse(c.get("created_at"))
+        if at and _card_says_first(c, contacts.get(cid), cutoff):
+            firsts[f"c:{cid}"] = {"id": c.get("id"), "contact_id": cid, "_at": at,
+                                  "_card": " ".join(str(c.get("card_name") or "").split()) or "A card"}
 
     entry_ids = _in(f.get("entry_id") for f in firsts.values())
     entries = _get(f"/module_entries?business_id=eq.{biz}&id=in.({entry_ids})"
@@ -188,7 +252,7 @@ def first_time_guests(business_id: str, *, days: int = FIRST_VISIT_WINDOW_DAYS,
         if cid and cid in reached and reached[cid] >= first_at:
             continue
         came_back = len([t for t in later.get(cid or "", []) if t > first_at])
-        occasion = titles.get(str(f.get("entry_id")), "a service")
+        occasion = f.get("_card") or titles.get(str(f.get("entry_id")), "a service")
         detail = f"{occasion}, {_day_label(first_at)}"
         if came_back:
             detail += f" · came back {_times(came_back)}"
