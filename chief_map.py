@@ -26,13 +26,19 @@ A part names things in words, and they resolve here before the batch sees ids:
 a department by its name, a role by its title or key, a person by a whole name,
 a first name only one person has, or a role's title and a last name ("Deacon
 Moore"), the role holders first, then the church's people. None, or more than
-one, changes nothing and says who it could be (risk 5).
+one, changes nothing and says who it could be (risk 5). What a department holds
+is named too, by its kind in Chief's words (a Serve team, a group, a role, a
+board, a worship ministry, the youth or kids space, a budget line) or by its
+name alone: a Serve team is the Serve card's team the editor offers under
+Teams, else a Sunday team (a group). list_map says each held thing's kind, and
+what hangs from no department yet.
 
 Reads are a Manager seat's and up; every write the owner's or an admin's, a
 money part (a level, the board's yes) the owner's alone (the batch's own seats).
 Every verb needs someone signed in, refuses an unattended run, follows
-CHURCH_MAP for that person (church_map.open_to) and needs step 2's file. Action
-tags, never native write tools; list_map and search_templates are mid-turn reads.
+CHURCH_MAP for that person or their church, as the routes do
+(church_map.office_open), and needs step 2's file. Action tags, never native
+write tools; list_map and search_templates are mid-turn reads.
 """
 from __future__ import annotations
 
@@ -61,6 +67,15 @@ WRITES = ("change_map", "draft_map", "undo_map_change", "apply_map_change", "dis
 _RANK = {"viewer": 1, "member": 2, "manager": 3, "admin": 4, "owner": 5}
 _KINDS = {"shape": "shape", "church": "shape", "whole church": "shape", "department": "department",
           "ministry": "department", "role": "role"}
+# What a department holds, in the words Chief may use for each kind (folded: case, punctuation and a plural s
+# aside). A name with no kind must fit exactly one.
+_UNIT_KINDS = {_w: k for k, ws in (
+    ("serve_option", ("serve option", "serve team", "team", "serve", "sunday team", "serving team", "volunteer team",
+                      "ministry team")),
+    ("group", ("group", "small group")), ("role", ("role",)), ("board", ("board",)),
+    ("worship_ministry", ("worship ministry", "worship")), ("space", ("space",)),
+    ("check_line", ("check line", "budget line", "line"))) for _w in ws}
+HOLDS = ("a Serve team, a group, a role, a board, a worship ministry, the youth or kids space, or a budget line")
 _ORIGIN = {"office": "made on screen", "chief": "by Chief", "session": "in a setup session",
            "template": "from a ready-made", "launch": "at launch"}
 _STATUS = {"applied": "made", "undone": "put back", "discarded": "let go", "failed": "part went in"}
@@ -130,13 +145,19 @@ def _switched_on(uid: str) -> Optional[bool]:
     return cm.open_to(SimpleNamespace(email=_EMAILS[uid]))
 
 
+def _map_open(uid: str, business_id: str) -> Optional[bool]:
+    """church_map.office_open for a Chief turn: the church (church_open: with `owner`, the platform owner's
+    church, so its admins' Chief agrees with their screen), else the person (_switched_on)."""
+    return True if cm.church_open(business_id) else _switched_on(uid)
+
+
 def _open(atype: str, business_id: str, least: str) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any], str]:
     """(a refusal or None, the church's row, the person's seat). A read that fails raises 503."""
     uid = _turn_user()
     if not uid:
         return _fail(atype, "the leaders map is read and changed only by someone signed in to the church's "
                      "office."), {}, ""
-    on = _switched_on(uid)
+    on = _map_open(uid, business_id)
     if on is None:
         return _fail(atype, "whether the leaders map is on couldn't be checked just now. Try again."), {}, ""
     if not on:
@@ -193,8 +214,10 @@ class _Names:
         self.held = cm._people(bid, {h["contact_id"] for h in self.holders}) if self.holders else {}
         self._m: Optional[cm.Map] = None
 
-    def pick(self, rows: List[Dict[str, Any]], raw: Any, what: str, *cols: str) -> str:
-        """One row's id: its id, its exact name (case aside), else the same words (a plural s aside)."""
+    @staticmethod
+    def _find(rows: List[Dict[str, Any]], raw: Any, *cols: str) -> Optional[str]:
+        """One row's id: its id, its exact name (case aside), else the same words (a plural s aside); None
+        when none is; two is a 400 saying which they could be."""
         if _uuid(raw):
             return _uuid(raw)
         for same in (lambda v: _norm(v) == _norm(raw), lambda v: _fold(raw) and _fold(v) == _fold(raw)):
@@ -203,7 +226,13 @@ class _Names:
                 _bad(f"“{_plain(raw)}” could be {_join(sorted({_plain(r[cols[0]]) for r in hit.values()}))}")
             if hit:
                 return next(iter(hit))
-        _bad(f"There’s no {what} called “{_plain(raw)}” here")
+        return None
+
+    def pick(self, rows: List[Dict[str, Any]], raw: Any, what: str, *cols: str) -> str:
+        got = self._find(rows, raw, *cols)
+        if got is None:
+            _bad(f"There’s no {what} called “{_plain(raw)}” here")
+        return got
 
     def role(self, raw: Any) -> str:
         return self.pick(self.defs, raw, "role", "title", "key")
@@ -250,17 +279,72 @@ class _Names:
             _bad(f"Nobody at this church is called “{_plain(raw)}”")
         return hit[0][0]
 
+    @staticmethod
+    def _kind(raw: Any) -> Optional[str]:
+        """A unit's kind as Chief said it ("serve team", "Teams", "group") -> the map's; None when none was said;
+        a word that is none of them is a 400 saying what a department holds."""
+        if not raw:
+            return None
+        if raw in cm.KINDS:
+            return raw
+        kind = _UNIT_KINDS.get(_fold(raw))
+        if not kind:
+            _bad(f"A department holds {HOLDS}: “{_plain(raw)}” isn’t one of those")
+        return kind
+
+    def _label(self, kind: str, raw: Any) -> Optional[str]:
+        """A label kind's own spelling (the Serve card's team, a budget line, youth or kids): the same, case
+        aside, else the same words; "the kids space" is kids. None when it isn't one."""
+        labels, want = cm._labels(self.bid, kind), _fold(raw)
+        if kind == "space" and want.endswith(" space"):
+            want = want[:-len(" space")]
+        hit = labels.get(_plain(raw).casefold()) or next(iter(sorted({v for v in labels.values() if want and
+                                                                      _fold(v) == want})), None)
+        return hit
+
+    def _thing(self, kind: str, raw: Any) -> Optional[Dict[str, Any]]:
+        """One kind's unit by name, or None when this church has none called that."""
+        if kind in ("serve_option", "space", "check_line"):
+            label = self._label(kind, raw)
+            return {"kind": kind, "label": label} if label else None
+        if kind == "role":
+            rid = self._find(self.defs, raw, "title", "key")
+        else:
+            table, col, live = cm._THINGS[kind]
+            rid = self._find(cm._need(f"/{table}?business_id=eq.{cm._q(self.bid)}{live}&select=id,{col}&limit=500"),
+                             raw, col)
+        return {"kind": kind, "ref": rid} if rid else None
+
     def unit(self, u: Any) -> Any:
-        """A unit by name: a role by its title, a group, board or worship ministry by its name, a label kind's label."""
-        if not isinstance(u, dict) or u.get("ref") or not u.get("name"):
+        """A unit by name, as the department editor picks one: a Serve team (the Serve card's, the editor's
+        Teams; else a Sunday team, which is a group), a group, role, board or worship ministry by its name, a
+        space or budget line by its label; a name with no kind, the one kind that has it. By id (`ref`), as
+        given: the batch checks it."""
+        u = {"name": u} if isinstance(u, str) else u
+        if not isinstance(u, dict):
             return u
-        if u.get("kind") not in cm.UNIT_REF:
-            return {"kind": u.get("kind"), "label": u.get("label") or u["name"]}
-        if u["kind"] == "role":
-            return {"kind": "role", "ref": self.role(u["name"])}
-        table, col, live = cm._THINGS[u["kind"]]
-        rows = cm._need(f"/{table}?business_id=eq.{cm._q(self.bid)}{live}&select=id,{col}&limit=500")
-        return {"kind": u["kind"], "ref": self.pick(rows, u["name"], cm._WORD[u["kind"]], col)}
+        kind, name = self._kind(u.get("kind")), _plain(u.get("name") or ("" if u.get("ref") else u.get("label")))
+        if u.get("ref") or not name:
+            return {**u, "kind": kind or u.get("kind")}
+        if kind == "serve_option":
+            got = self._thing("serve_option", name) or self._thing("group", name)
+            if not got:
+                _bad(f"“{name}” isn’t a team on your Serve card or one of your groups")
+            return got
+        if kind:
+            got = self._thing(kind, name)
+            if not got:
+                if kind in ("space", "check_line"):        # the batch's own words for these
+                    return {"kind": kind, "label": name}
+                _bad(f"There’s no {cm._WORD[kind]} called “{name}” here")
+            return got
+        hits = [x for x in (self._thing(k, name) for k in cm.KINDS) if x]
+        if len(hits) > 1:
+            _bad(f"“{name}” could be " + " or ".join(f"the {cm._WORD[k]}" for k in sorted({h["kind"] for h in hits}))
+                 + ": say which")
+        if not hits:
+            _bad(f"Nothing called “{name}” here is something a department holds ({HOLDS})")
+        return hits[0]
 
     def part(self, raw: Any) -> Dict[str, Any]:
         """One part as Chief said it -> as church_map_batch takes it (ids)."""
@@ -442,7 +526,7 @@ def _dept_line(d: Dict[str, Any], needs: List[str]) -> str:
     who = ", ".join(h["name"] for h in (duty or {}).get("holders") or [] if h["name"]) or "the owner and the admins"
     helps = f"{duty['label']} ({who})" if duty else "none"
     area = (ca.AREAS.get(d["area"] or "") or {}).get("label", "no area")
-    units = ", ".join(u["name"] for u in d["units"]) or "nothing yet"
+    units = ", ".join(f"{u['name']} ({cm._WORD.get(u['kind'], u['kind'])})" for u in d["units"]) or "nothing yet"
     return (f"- {d['name']} ({area}): leader {(d['leader'] or {}).get('name') or 'none'}; overseer "
             f"{(d['overseer'] or {}).get('name') or 'none'}; office help: {helps}; holds: {units}."
             + (f" Needs: {' '.join(needs)}" if needs else ""))
@@ -464,9 +548,22 @@ def _change_line(c: Dict[str, Any]) -> str:
     return f"- change {c['id']} ({', '.join(w for w in how if w)}): {'; '.join(lines)}"
 
 
+_FREE = (("serve_option", "Serve teams"), ("group", "groups"), ("board", "boards"),
+         ("worship_ministry", "worship ministries"), ("space", "spaces"), ("check_line", "budget lines"))
+
+
+def _free(v: Dict[str, Any]) -> str:
+    """What hangs from no department yet, by kind, from the editor's own pickers (church_map._choices); the
+    roles are in their own list."""
+    said = [f"{word}: " + ", ".join(c["label"] for c in got[:30]) + (f" and {len(got) - 30} more" if len(got) > 30
+                                                                    else "")
+            for k, word in _FREE for got in [[c for c in v["choices"].get(k) or [] if not c["department"]]] if got]
+    return "On no department yet: " + ("; ".join(said) or "nothing") + "."
+
+
 def _list(business: Dict[str, Any], seat: str, action: Dict[str, Any]) -> Dict[str, Any]:
     bid = str(business["id"])
-    v, rec, m = cm.view(business), batch.recent(business, seat), cm._map(bid)
+    v, rec, m = cm.view(business, choices=True), batch.recent(business, seat), cm._map(bid)
     holders = cm._holders(bid, asked=True)
     people = cm._people(bid, {h["contact_id"] for h in holders}) if holders else {}
     sh = shep.settings(bid)
@@ -482,6 +579,7 @@ def _list(business: Dict[str, Any], seat: str, action: Dict[str, Any]) -> Dict[s
         out += [f"{head}:"] + [_dept_line(d, needs.get(d["id"], [])) for d in ds] if ds else []
     if not v["departments"]:
         out.append("Departments: none yet.")
+    out.append(_free(v))
     out.append("Roles (who holds each; what it can do):")
     for r in v["roles"]:
         mine = [h for h in holders if h.get("role") == r["key"]]
@@ -507,8 +605,10 @@ def _list(business: Dict[str, Any], seat: str, action: Dict[str, Any]) -> Dict[s
             "Leaders map", "gaps": len(v["gaps"]), "pending": [c["id"] for c in rec["pending"]],
             "note_for_chief": (
                 "Name people and roles from this. Only the owner or an admin changes the map (change_map), at once "
-                "when they ask; your own idea goes in with stage:true and waits for their yes. A money level or the "
-                "board's yes is the owner's alone. Say draft, ready-made, change and Undo; never template or switch.")}
+                "when they ask; your own idea goes in with stage:true and waits for their yes. A department's units "
+                "are its whole list: send what it holds now, by name and kind, with what's added. A money level or "
+                "the board's yes is the owner's alone. Say draft, ready-made, change and Undo; never template or "
+                "switch.")}
 
 
 # ─── The handlers ─────────────────────────────────────────────────────

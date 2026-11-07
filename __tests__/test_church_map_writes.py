@@ -448,7 +448,14 @@ def test_the_switch_the_seats_and_the_503s(monkeypatch):
     assert o.c.post(f"/church/map/departments/{kid}/archive?business_id={LC}").json()["department"]["status"] == "archived"
     monkeypatch.setenv("CHURCH_MAP", "owner")
     assert o.get(LC).status_code == 200, "owner: the platform owner's login"
-    assert o.as_(LC, "minnie").get(LC).status_code == 404, "owner: no one else's"
+    # 11-04: Love City's admin got a 404 here while its asks opened by the church. Now the map opens by the
+    # church too (church_map.office_open), and the seats still decide.
+    assert o.as_(LC, "minnie").get(LC).json()["you"] == {"role": "admin", "writes": True, "money": False}, \
+        "owner: the platform owner's church, its admin too"
+    assert o.put(LC, "departments", {"name": "Pantry"}).json()["department"]["name"] == "Pantry", "who writes"
+    assert o.put(LC, "settings", {"pastor_from_cents": 45_000}).status_code == 403, "but not money"
+    assert o.as_(LC, "naiya").get(LC).status_code == 200 and \
+        o.put(LC, "departments", {"name": "Pantry 2"}).status_code == 404, "a Manager reads, and writes nothing"
     assert o.as_(GRACE).get(GRACE).status_code == 404, "owner: not even another church's own owner"
     monkeypatch.setenv("CHURCH_MAP", "off")
     assert o.as_(LC).get(LC).status_code == 404 and o.put(LC, "departments", kitchen).status_code == 404
@@ -474,7 +481,11 @@ def test_the_routes_are_mounted_before_the_catch_all():
                      "/church/map/answers-to", "/church/map/settings", "/church/map/changes",
                      *(f"/church/map/changes/{{change_id}}/{a}" for a in ("undo", "apply", "discard")),
                      "/church/map/templates", "/church/map/templates/{kind}/{key}", "/church/map/templates/adopt",
-                     "/church/map/asks", "/church/map/asks/mine", "/church/map/asks/{ask_id}/{how}"}
+                     "/church/map/asks", "/church/map/asks/mine", "/church/map/asks/{ask_id}/undo",
+                     "/church/map/asks/{ask_id}/{how}"}
+    routes = [r.path for r in church_map_router.router.routes]
+    assert routes.index("/church/map/asks/{ask_id}/undo") < routes.index("/church/map/asks/{ask_id}/{how}"), \
+        "the undo route first: the answer route's {how} would take it"
     src = open(os.path.join(ROOT, "kmj_intake_automation.py"), encoding="utf-8").read()
     assert src.index("app.include_router(church_map_router)") < src.rindex("app.include_router(public_site_router)")
 
