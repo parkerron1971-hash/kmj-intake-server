@@ -3,11 +3,10 @@ title: Leaders map open items - Love City's admins move duties, one Undo for an 
 date: 2026-11-06
 agent: Claude Code (Claude Opus 5.5)
 asked: "Kevin: close #1761's open items: Love City's admin can't move a duty (duties page, Chief, a From your team suggestion); an answered ask's change has two Undos that disagree; the ten-a-day cap can be passed by two saves at once"
-status: in progress
+status: shipped
 prs: [kmj-intake-server#1762]
-migrations: [supabase/APPLY-2026-11-06-church-map-asks-cap.sql (not yet applied)]
+migrations: [supabase/APPLY-2026-11-06-church-map-asks-cap.sql (applied 2026-11-06, verified)]
 left_undone:
-  - "Kevin applies supabase/APPLY-2026-11-06-church-map-asks-cap.sql by hand after the PR merges (verify query in docs/MIGRATIONS.md); until then the code's check-before and recount-after hold the cap as before"
   - "Frontend (solutionist-studio): Recent changes can say “From Tiara's suggestion” from `ask.who` and, where `ask.duty` is set, that Undo puts back the duty move too; read the change undo's `both`/`note`; nothing else changes shape (`cant_apply` words changed, the field didn't)"
   - "No What's New: the map and the duties are still `owner` (Love City only)"
 decisions:
