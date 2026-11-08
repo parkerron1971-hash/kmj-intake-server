@@ -197,6 +197,18 @@ def test_the_overview_says_only_what_the_chain_does(monkeypatch):
         assert gone not in html, gone
 
 
+def test_history_is_promised_only_for_what_you_ask_chief():
+    """History is the audit log. Chief's chat, jobs and errands write to it;
+    the church card, shepherd and prayer hand-offs (church_follow_up,
+    church_shepherding, church_prayer) don't. So no page promises that
+    everything Chief does is listed there."""
+    for path, html in _all().items():
+        for wider in ("It lists what it does on your History page", "What Chief does, including anything that failed",
+                      "Everything it does, listed"):
+            assert wider not in html, (path, wider)
+    assert "What you ask Chief to do, including anything that failed" in cs.render("")
+
+
 # ─── 3. the links go somewhere ──────────────────────────────────────
 
 def test_every_church_link_is_a_real_page_and_anchor():

@@ -1,151 +1,3 @@
-/* ===== Sunday Light: the window, its light, the still life ===== */
-
-(function () {
-  'use strict';
-  if (!document.getElementById('hero-v3')) return;
-  var NS = 'http://www.w3.org/2000/svg', reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  function el(n, a, p) { var e = document.createElementNS(NS, n); for (var k in a) e.setAttribute(k, a[k]); if (p) p.appendChild(e); return e; }
-  function rng(s) { return function () { s |= 0; s = s + 0x6D2B79F5 | 0; var t = Math.imul(s ^ s >>> 15, 1 | s); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
-  /* ---------- the window: a tall lancet with two lights and a rose, leaded quarry glass at sunrise ---------- */
-  function lancet(x0, x1, ys, yb, r) { var h = (x1 - x0) / 2, ax = (x0 + x1) / 2, ay = ys - Math.sqrt(r * r - (r - h) * (r - h)); return { d: 'M' + x0 + ',' + yb + ' L' + x0 + ',' + ys + ' A' + r + ',' + r + ' 0 0 1 ' + ax + ',' + ay + ' A' + r + ',' + r + ' 0 0 1 ' + x1 + ',' + ys + ' L' + x1 + ',' + yb + ' Z', ay: ay }; }
-  var OUT = lancet(14, 586, 420, 1100, 430), L = lancet(52, 292, 560, 1100, 250), R = lancet(308, 548, 560, 1100, 250);
-  var ROSE = { cx: 300, cy: 232, r: 118 };
-  // dawn palette, top to bottom: violet night, rose, gold sun low in the glass
-  var SKY = ['#3B1A7A', '#5B21B6', '#7C5CFF', '#6D28D9', '#3B82F6', '#22D3EE', '#14B8A6', '#EC4899', '#F472B6', '#F97316', '#F6C66B', '#FDE68A'];
-  function build(svg, bloom) {
-    var R0 = rng(31), defs = el('defs', {}, svg), id = bloom ? 'slb' : 'slg';
-    [['o', OUT], ['l', L], ['r', R]].forEach(function (c) { var cp = el('clipPath', { id: id + c[0] }, defs); el('path', { d: c[1].d }, cp); });
-    var lg = el('linearGradient', { id: id + 'mk', x1: 0, y1: 0, x2: 1, y2: 1 }, defs); el('stop', { offset: 0, 'stop-color': '#E040FB' }, lg); el('stop', { offset: .55, 'stop-color': '#7C5CFF' }, lg); el('stop', { offset: 1, 'stop-color': '#22D3EE' }, lg);
-    el('path', { d: OUT.d, fill: '#0C0B14' }, svg);
-    // the head around the rose: small deep panes
-    var head = el('g', { 'clip-path': 'url(#' + id + 'o)' }, svg);
-    for (var y = 0; y < 600; y += 34) for (var x = 0; x < 600; x += 34) {
-      var p = (y / 600) * 4 + R0() * 3, c = SKY[Math.min(SKY.length - 1, Math.floor(p))];
-      el('rect', { x: x + (y / 34 % 2) * 17, y: y, width: 33, height: 33, fill: c, stroke: '#0A0B10', 'stroke-width': bloom ? 0 : 3, transform: 'rotate(45 ' + (x + 17) + ' ' + (y + 17) + ')', class: 'pane' }, head);
-    }
-    // the two lights: diamond quarries, night at the top and sun at the bottom
-    [['l', L], ['r', R]].forEach(function (c, side) {
-      var g = el('g', { 'clip-path': 'url(#' + id + c[0] + ')' }, svg);
-      for (var yy = 300; yy < 1110; yy += 44) for (var xx = 0; xx < 620; xx += 52) {
-        var off = ((yy - 300) / 44) % 2 ? 26 : 0, cx = xx + off, cy = yy;
-        var t = (yy - 300) / 800, idx = Math.floor(t * (SKY.length - 1) + (R0() - .5) * 2.4);
-        var col = SKY[Math.max(0, Math.min(SKY.length - 1, idx))];
-        if (R0() < .07) col = '#FFF4DC';
-        el('polygon', { points: cx + ',' + (cy - 26) + ' ' + (cx + 26) + ',' + cy + ' ' + cx + ',' + (cy + 26) + ' ' + (cx - 26) + ',' + cy, fill: col, stroke: '#0A0B10', 'stroke-width': bloom ? 0 : 3.2, class: 'pane', 'data-i': side }, g);
-      }
-      // a light streak down each light, where the sun is brightest
-      var sg = el('linearGradient', { id: id + 'st' + side, x1: 0, y1: 0, x2: 0, y2: 1 }, defs);
-      el('stop', { offset: 0, 'stop-color': '#fff', 'stop-opacity': 0 }, sg); el('stop', { offset: .7, 'stop-color': '#FFF1D2', 'stop-opacity': .42 }, sg); el('stop', { offset: 1, 'stop-color': '#FFF1D2', 'stop-opacity': .7 }, sg);
-      el('rect', { x: 0, y: 300, width: 600, height: 800, fill: 'url(#' + id + 'st' + side + ')', style: 'mix-blend-mode:screen' }, g);
-    });
-    // the rose: seven petals around the mark
-    var rose = el('g', {}, svg), ROOM = ['#14B8A6', '#22C55E', '#F97316', '#3B82F6', '#EC4899', '#EAB308', '#94A3B8'];
-    el('circle', { cx: ROSE.cx, cy: ROSE.cy, r: ROSE.r + 6, fill: '#0A0B10' }, rose);
-    ROOM.forEach(function (c, i) {
-      var a0 = (-90 + (i - .5) * 360 / 7 + 2) * Math.PI / 180, a1 = (-90 + (i + .5) * 360 / 7 - 2) * Math.PI / 180, ri = 34, ro = ROSE.r - 4;
-      function P(r, a) { return (ROSE.cx + r * Math.cos(a)).toFixed(1) + ',' + (ROSE.cy + r * Math.sin(a)).toFixed(1); }
-      el('path', { d: 'M' + P(ri, a0) + ' L' + P(ro, a0) + ' A' + ro + ',' + ro + ' 0 0 1 ' + P(ro, a1) + ' L' + P(ri, a1) + ' A' + ri + ',' + ri + ' 0 0 0 ' + P(ri, a0) + ' Z', fill: c, stroke: '#0A0B10', 'stroke-width': bloom ? 0 : 3.4 }, rose);
-      var am = (a0 + a1) / 2; el('circle', { cx: ROSE.cx + 82 * Math.cos(am), cy: ROSE.cy + 82 * Math.sin(am), r: 11, fill: '#FFF4DC', opacity: .85, stroke: '#0A0B10', 'stroke-width': bloom ? 0 : 3 }, rose);
-    });
-    el('circle', { cx: ROSE.cx, cy: ROSE.cy, r: 32, fill: '#0A0B10', stroke: 'url(#' + id + 'mk)', 'stroke-width': 2.5 }, rose);
-    var mk = el('svg', { x: ROSE.cx - 24, y: ROSE.cy - 21, width: 48, height: 42, viewBox: '8 36 496 424' }, rose), mg = el('g', { fill: 'url(#' + id + 'mk)', stroke: '#fff', 'stroke-width': 14 }, mk);
-    ['18,46 175,232 237,231 133,98 376,99 356,131 412,167 494,49', '205,138 338,241 232,391 274,449 435,221 319,137', '264,274 149,279 201,359'].forEach(function (pp) { el('polygon', { points: pp }, mg); });
-    if (bloom) return;
-    // the stone tracery
-    var st = el('g', { fill: 'none', stroke: '#14131C', 'stroke-linejoin': 'round' }, svg);
-    el('path', { d: L.d, 'stroke-width': 13 }, st); el('path', { d: R.d, 'stroke-width': 13 }, st);
-    el('rect', { x: 292, y: 560, width: 16, height: 560, fill: '#14131C', stroke: 'none' }, st);
-    el('circle', { cx: ROSE.cx, cy: ROSE.cy, r: ROSE.r + 3, 'stroke-width': 12 }, st);
-    el('path', { d: OUT.d, 'stroke-width': 26 }, st);
-    el('path', { d: OUT.d, 'stroke-width': 1.5, stroke: 'rgba(255,230,190,.35)' }, st);
-    el('path', { d: L.d, 'stroke-width': 1.2, stroke: 'rgba(255,230,190,.25)' }, st); el('path', { d: R.d, 'stroke-width': 1.2, stroke: 'rgba(255,230,190,.25)' }, st);
-  }
-  build(document.getElementById('slWinBloom'), true);
-  build(document.getElementById('slWinGlass'), false);
-
-  var hero = document.getElementById('hero-v3'), box = document.getElementById('slLight'), win = document.getElementById('slWin');
-  function shown() { return true; }
-
-  /* ---------- the still life scales as one piece ---------- */
-  var still = document.getElementById('slStill'), stillIn = document.getElementById('slStillIn');
-  function fitStill() {
-    if (!still.clientWidth) return;
-    if (window.innerWidth <= 560) { var kp = still.clientWidth / 330; stillIn.style.transform = 'scale(' + kp + ') translateX(-362px)'; return; }
-    var k = still.clientWidth / 700; stillIn.style.transform = 'scale(' + k + ')';
-  }
-
-  /* ---------- sunlight: the window's own shape, cast in parallel down and to the left ---------- */
-  var shafts = document.getElementById('slShafts'), glassSVG = document.getElementById('slWinGlass'), glassImg = null;
-  function loadGlass(cb) {
-    var xml = new XMLSerializer().serializeToString(glassSVG);
-    if (xml.indexOf('xmlns="http://www.w3.org/2000/svg"') < 0) xml = xml.replace('<svg', '<svg xmlns="http://www.w3.org/2000/svg"');
-    xml = xml.replace('<svg', '<svg width="600" height="1100"');
-    var img = new Image(); img.onload = function () { glassImg = img; cb(); }; img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(xml);
-  }
-  var light = { x: 0, y: 0 };
-  function drawShafts() {
-    if (!glassImg || !shown()) return;
-    var hr = box.getBoundingClientRect();
-    if (hr.width < 2 || hr.height < 2) return;
-    var wr = win.getBoundingClientRect(), S = .5;
-    var W = Math.round(hr.width * S), H = Math.round(hr.height * S);
-    shafts.width = W; shafts.height = H;
-    // 1. the window as the sun sees it: its glass washed toward warm white, faded where the window fades
-    var src = document.createElement('canvas'); src.width = W; src.height = H; var s = src.getContext('2d');
-    var x = (wr.left - hr.left) * S, y = (wr.top - hr.top) * S, w = wr.width * S, h = wr.height * S;
-    s.drawImage(glassImg, x, y, w, h);
-    s.globalCompositeOperation = 'source-atop'; s.fillStyle = 'rgba(255,236,204,.55)'; s.fillRect(0, 0, W, H);
-    s.globalCompositeOperation = 'destination-in';
-    var fade = s.createLinearGradient(x + w, 0, x, 0); fade.addColorStop(0, 'rgba(0,0,0,1)'); fade.addColorStop(.55, 'rgba(0,0,0,.9)'); fade.addColorStop(1, 'rgba(0,0,0,.25)');
-    s.fillStyle = fade; s.fillRect(0, 0, W, H);
-    // 2. soften it, so the shafts carry the window's shape without its fine detail
-    var soft = document.createElement('canvas'); soft.width = W; soft.height = H; var o = soft.getContext('2d');
-    try { o.filter = 'blur(3px)'; } catch (e) { /* fine without */ }
-    o.drawImage(src, 0, 0); o.filter = 'none';
-    // 3. cast it: many faint copies along the light's direction, fading as they go
-    var g = shafts.getContext('2d'); g.clearRect(0, 0, W, H); g.globalCompositeOperation = 'lighter';
-    var dir = [-.79, .61], N = 96, step = Math.hypot(W, H) * 1.05 / N, power = hr.width < 600 ? .28 : hr.width < 1100 ? .7 : 1;
-    for (var k = 1; k <= N; k++) { var t = k / N; g.globalAlpha = .11 * power * Math.pow(1 - t, 1.35); g.drawImage(soft, dir[0] * step * k, dir[1] * step * k); }
-    // 4. a few finer streaks inside the light, the way dust shows it
-    var r = rng(11); g.globalAlpha = 1; g.globalCompositeOperation = 'lighter';
-    for (var i = 0; i < 22; i++) {
-      var sx = x + w * (.25 + r() * .6), sy = y + h * (.1 + r() * .75), len = (300 + r() * 600) * S, wid = (1 + r() * 4) * S;
-      var lg = g.createLinearGradient(sx, sy, sx + dir[0] * len, sy + dir[1] * len); lg.addColorStop(0, 'rgba(255,236,206,' + (.04 + r() * .05).toFixed(3) + ')'); lg.addColorStop(1, 'rgba(255,236,206,0)');
-      g.strokeStyle = lg; g.lineWidth = wid; g.beginPath(); g.moveTo(sx, sy); g.lineTo(sx + dir[0] * len, sy + dir[1] * len); g.stroke();
-    }
-    // 5. where the light lands: the window's colours stretched across the floor
-    g.globalCompositeOperation = 'lighter'; g.globalAlpha = .1;
-    try { g.filter = 'blur(' + Math.round(10 * S * 2) + 'px)'; } catch (e) { /* fine without */ }
-    g.setTransform(.75, 0, -1.25, .26, x + w * .08 - W * .18, H * .7); g.drawImage(src, 0, -y * .4); g.setTransform(1, 0, 0, 1, 0, 0); g.filter = 'none'; g.globalAlpha = 1;
-    light.x = (x + w * .5) / S; light.y = (y + h * .3) / S;
-  }
-
-  /* ---------- a little dust in the light, on computers ---------- */
-  var cv = document.getElementById('slMotes'), mc = cv.getContext('2d'), dots = [], MW = 0, MH = 0, dpr = 1, running = false;
-  function sizeMotes() { dpr = Math.min(2, window.devicePixelRatio || 1); MW = box.clientWidth; MH = box.clientHeight; cv.width = MW * dpr; cv.height = MH * dpr; dots = []; var n = MW < 700 ? 0 : 30; for (var i = 0; i < n; i++) dots.push(spawn()); }
-  function spawn() { var d = Math.random() * MW * .9, side = (Math.random() - .5) * 260; return { x: light.x - .79 * d + .61 * side, y: light.y + .61 * d + .79 * side, r: .5 + Math.random() * 1.2, vx: -.03 - Math.random() * .04, vy: .01 + Math.random() * .03, ph: Math.random() * 6.3, life: 600 + Math.random() * 900 }; }
-  function frame(t) {
-    if (!running) return;
-    mc.setTransform(dpr, 0, 0, dpr, 0, 0); mc.clearRect(0, 0, MW, MH);
-    for (var i = 0; i < dots.length; i++) { var m = dots[i]; m.x += m.vx; m.y += m.vy; m.life--; if (m.life < 0 || m.x < 0 || m.y > MH) { dots[i] = spawn(); continue; } var al = .16 + .14 * Math.sin(t / 2600 + m.ph); mc.beginPath(); mc.arc(m.x, m.y, m.r, 0, 6.283); mc.fillStyle = 'rgba(255,238,205,' + al.toFixed(3) + ')'; mc.fill(); }
-    requestAnimationFrame(frame);
-  }
-  if (!reduce && 'IntersectionObserver' in window) new IntersectionObserver(function (es) { var was = running; running = es[0].isIntersecting && shown(); if (running && !was) requestAnimationFrame(frame); }).observe(hero);
-
-  window.addEventListener('pointermove', function (e) { if (!shown()) return; var r = box.getBoundingClientRect(); if (e.clientY > r.bottom) return; hero.style.setProperty('--slx', ((e.clientX - r.left) / r.width - .5).toFixed(3)); hero.style.setProperty('--sly', ((e.clientY - r.top) / r.height - .5).toFixed(3)); }, { passive: true });
-
-  function hdr() { var h = document.querySelector('#top > header'); if (h) hero.style.setProperty('--slhdr', h.offsetHeight + 'px'); }
-  function layout() { if (!shown()) return; hdr(); fitStill(); drawShafts(); sizeMotes(); }
-  var rt; window.addEventListener('resize', function () { clearTimeout(rt); rt = setTimeout(layout, 140); });
-  fitStill();
-  loadGlass(function () { layout(); if (document.fonts && document.fonts.ready) document.fonts.ready.then(layout); });
-
-  /* ---------- the sunrise ---------- */
-  function sunrise() { hero.classList.add('sl-dawn'); void hero.offsetWidth; setTimeout(function () { hero.classList.remove('sl-dawn'); }, reduce ? 0 : 160); }
-  if (shown()) sunrise();
-
-})();
-
 /* The church overview: the closing window, the move and the size picker. */
 (function () {
   'use strict';
@@ -677,9 +529,15 @@
       keys.forEach(function (el, i) { el.classList.toggle('lit', i === show); });
       petals.forEach(function (a, i) { a.classList.toggle('on', hover >= 0 && i === hover); a.classList.toggle('named', hover < 0 && i === glass); });
     }
-    requestAnimationFrame(tick);
+    if (heroOn) requestAnimationFrame(tick); else ticking = false;
   }
-  if (!reduce) requestAnimationFrame(tick);
+  // the walk only runs while the window is on screen (the browser already rests it in a hidden tab)
+  var heroOn = true, ticking = false;
+  function startTick() { if (!ticking) { ticking = true; requestAnimationFrame(tick); } }
+  if (!reduce) {
+    startTick();
+    if ('IntersectionObserver' in window) new IntersectionObserver(function (e) { heroOn = e[0].isIntersecting; if (heroOn) startTick(); }).observe(media);
+  }
   else keys.forEach(function (el, k) { el.addEventListener('mouseenter', function () { petals[k].classList.add('on'); }); el.addEventListener('mouseleave', function () { petals[k].classList.remove('on'); }); });
 
   var lb = document.getElementById('hxLb'), film = document.getElementById('hxFilm'), x = document.getElementById('hxX');
