@@ -50,7 +50,7 @@ _NO_STORE = {"Cache-Control": "no-store", "Referrer-Policy": "no-referrer", "X-R
 def join_open(course: Dict[str, Any]) -> bool:
     """public.academy_course_open, for the page that shows the form."""
     return (course.get("status") == "published" and course.get("self_join") is not False
-            and not course.get("product_id"))
+            and not course.get("product_id") and not course.get("private"))
 
 
 def clean_name(raw: Any) -> str:
@@ -285,7 +285,7 @@ def _course(course_id: str):
     import sb_clients
     return sb_clients.sb_get_as_service(
         f"/academy_courses?id=eq.{course_id}&limit=1"
-        f"&select=id,business_id,title,status,self_join,product_id") or []
+        f"&select=id,business_id,title,status,self_join,product_id,private") or []
 
 
 def enroll(course: Dict[str, Any], name: str, email: str) -> Optional[Dict[str, Any]]:

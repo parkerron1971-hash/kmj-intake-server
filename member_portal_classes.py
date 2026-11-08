@@ -20,8 +20,10 @@ email too when they have one.
 
 One read, academy_member_classes (service-only;
 APPLY-2026-10-18-academy-member-classes.sql). The Classes tab shows when the
-church has a published class (classes_on, kept a minute) or in the owner's
-preview, so a church without classes never shows an empty tab.
+church has a published class anyone can see (classes_on, kept a minute), to a
+member who is in a private one (in_a_class), or in the owner's preview, so a
+church without classes never shows an empty tab, and a private class never
+turns the tab on for the people it isn't for.
 """
 from __future__ import annotations
 
@@ -52,19 +54,36 @@ _on_cache: Dict[str, Tuple[float, bool]] = {}
 
 
 def classes_on(business_id: str) -> bool:
-    """Does the church have a published class? Kept a minute; a failed read
-    hides the tab for that page only (it isn't kept)."""
+    """Does the church have a published class that isn't private? Kept a
+    minute; a failed read hides the tab for that page only (it isn't kept)."""
     now = time.monotonic()
     hit = _on_cache.get(business_id)
     if hit and hit[0] > now:
         return hit[1]
     rows = sb_clients.sb_get_as_service(
-        f"/academy_courses?business_id=eq.{business_id}&status=eq.published&select=id&limit=1")
+        f"/academy_courses?business_id=eq.{business_id}&status=eq.published&private=is.false&select=id&limit=1")
     if rows is None:
         return False
     on = bool(rows)
     _on_cache[business_id] = (now + _ON_TTL, on)
     return on
+
+
+def in_a_class(business_id: str, me: Optional[Dict[str, Any]]) -> bool:
+    """Is this member in a published class? A private class's one student
+    still finds it, at a church with no other class to show the tab."""
+    cid = str((me or {}).get("id") or "")
+    if not _UUID.fullmatch(cid):
+        return False
+    rows = sb_clients.sb_get_as_service(
+        f"/academy_enrollments?business_id=eq.{business_id}&contact_id=eq.{cid}&status=in.(active,completed)"
+        f"&select=id,academy_courses!inner(status)&academy_courses.status=eq.published&limit=1")
+    return bool(rows)
+
+
+def tab_on(business_id: str, me: Optional[Dict[str, Any]]) -> bool:
+    """Whether this member's Connect pages carry the Classes tab."""
+    return classes_on(business_id) or in_a_class(business_id, me)
 
 
 def classes_for(business_id: str, me: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -94,7 +113,7 @@ def join_class(business_id: str, me: Dict[str, Any], course_id: str) -> Tuple[bo
     import academy_join
     rows = sb_clients.sb_get_as_service(
         f"/academy_courses?id=eq.{course_id}&business_id=eq.{business_id}&limit=1"
-        f"&select=id,business_id,title,status,self_join,product_id")
+        f"&select=id,business_id,title,status,self_join,product_id,private")
     if rows is None:
         return False, "error", None
     if not rows or not academy_join.join_open(rows[0]):

@@ -351,8 +351,13 @@ def office_view(business: Dict[str, Any]) -> Dict[str, Any]:
         decided = {str((h.get("attach") or {}).get("enrollment") or "") for h in had}
         done = [d for d in done if str(d["id"]) not in decided]
         if done:
-            courses = _get(f"/academy_courses?business_id=eq.{b}&id=in.({_ids(d['course_id'] for d in done)})&select=id,title")
+            # A private class is never a milestone: the office drafts these, so
+            # its name and who finished it stop here.
+            courses = _get(f"/academy_courses?business_id=eq.{b}&id=in.({_ids(d['course_id'] for d in done)})"
+                           f"&private=is.false&select=id,title")
             titles = {str(c["id"]): c.get("title") or "a class" for c in courses}
+            done = [d for d in done if str(d["course_id"]) in titles]
+        if done:
             who = cn._people(biz_id, [d["contact_id"] for d in done]) or {}
             for d in done:
                 name = (who.get(str(d["contact_id"])) or {}).get("name") or "Someone"
@@ -485,7 +490,9 @@ def milestone(body: MilestoneIn, user: AuthedUser = Depends(require_user)):
     had = _get(f"/church_posts?business_id=eq.{_q(biz_id)}&kind=eq.milestone&attach->>enrollment=eq.{_q(eid)}&select=id&limit=1")
     if had:
         raise HTTPException(409, "That milestone was already decided.")
-    course = _get(f"/academy_courses?id=eq.{_q(e['course_id'])}&business_id=eq.{_q(biz_id)}&select=title&limit=1")
+    course = _get(f"/academy_courses?id=eq.{_q(e['course_id'])}&business_id=eq.{_q(biz_id)}&select=title,private&limit=1")
+    if course and course[0].get("private"):
+        raise HTTPException(404, "That class isn't finished, or isn't yours.")
     title = (course[0].get("title") if course else "") or "a class"
     person = (cn._people(biz_id, [e["contact_id"]]) or {}).get(str(e["contact_id"])) or {}
     text = " ".join((body.text or milestone_text(person.get("name") or "", title)).split())[:cn.BODY_MAX]

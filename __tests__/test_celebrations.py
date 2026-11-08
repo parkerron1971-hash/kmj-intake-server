@@ -288,7 +288,7 @@ def test_an_admin_sets_how_the_church_celebrates(fake, monkeypatch):
 
 
 def test_a_milestone_only_for_someone_who_said_yes(fake, monkeypatch):
-    fake.t["academy_courses"].append({"id": "c0c0c0c0-0000-0000-0000-000000000001", "business_id": BIZ, "title": "The Making: Foundations"})
+    fake.t["academy_courses"].append({"id": "c0c0c0c0-0000-0000-0000-000000000001", "business_id": BIZ, "title": "The Making: Foundations", "private": False})
     fake.t["academy_enrollments"].append({"id": "e0e0e0e0-0000-0000-0000-000000000001", "business_id": BIZ, "contact_id": MONIQUE,
                                           "course_id": "c0c0c0c0-0000-0000-0000-000000000001",
                                           "completed_at": datetime.now(timezone.utc).isoformat()})
@@ -300,6 +300,19 @@ def test_a_milestone_only_for_someone_who_said_yes(fake, monkeypatch):
     assert _office(monkeypatch, "member").post("/church/news/celebrations/milestone", json=body).status_code == 200
     p = fake.t["church_posts"][0]
     assert (p["kind"], p["status"], p["title"]) == ("milestone", "posted", "Monique Brown finished The Making: Foundations")
+
+
+def test_a_private_class_is_never_a_milestone_for_the_office(fake, monkeypatch):
+    fake.t["academy_courses"].append({"id": "c0c0c0c0-0000-0000-0000-000000000002", "business_id": BIZ, "title": "Ordination Training", "private": True})
+    fake.t["academy_enrollments"].append({"id": "e0e0e0e0-0000-0000-0000-000000000002", "business_id": BIZ, "contact_id": MONIQUE,
+                                          "course_id": "c0c0c0c0-0000-0000-0000-000000000002",
+                                          "completed_at": datetime.now(timezone.utc).isoformat()})
+    _yes(fake, MONIQUE, milestones=True)
+    v = _office(monkeypatch, "viewer").get(f"/church/news/celebrations?business_id={BIZ}").json()
+    assert v["milestones"] == [], "she said yes to milestones, but this class stays between the two of them"
+    body = {"business_id": BIZ, "enrollment_id": "e0e0e0e0-0000-0000-0000-000000000002"}
+    assert _office(monkeypatch, "member").post("/church/news/celebrations/milestone", json=body).status_code == 404
+    assert fake.t["church_posts"] == [], "and it can't be posted by its id either"
 
 
 def test_sundays_post_names_who_said_yes(fake, monkeypatch):

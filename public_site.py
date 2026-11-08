@@ -6512,7 +6512,7 @@ async def _serve_academy(client, biz_id, path: str, standalone: bool,
         crows = await _sb_service(
             client,
             f"/academy_courses?id=eq.{course_id}&business_id=eq.{biz_id}"
-            f"&status=eq.published&limit=1"
+            f"&status=eq.published&private=is.false&limit=1"
             f"&select=id,title,description,drip_mode,opens_from,opens_tz,product_id,self_join") or []
         if crows:
             import academy_join
@@ -6613,7 +6613,7 @@ async def _serve_academy(client, biz_id, path: str, standalone: bool,
     if kind == "catalog":
         courses = await _sb_service(
             client,
-            f"/academy_courses?business_id=eq.{biz_id}&status=eq.published"
+            f"/academy_courses?business_id=eq.{biz_id}&status=eq.published&private=is.false"
             f"&order=created_at.desc&limit=50"
             f"&select=id,title,description,product_id,self_join,drip_mode,opens_from,opens_tz") or []
         import academy_site

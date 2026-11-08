@@ -111,7 +111,7 @@ def door_facts(business_id: str) -> Dict[str, Any]:
         "sermons": _rows(f"/sermons?business_id=eq.{business_id}"
                          "&select=published&limit=50"),
         "courses": _rows(f"/academy_courses?business_id=eq.{business_id}"
-                         "&select=status&limit=50"),
+                         "&private=is.false&select=status&limit=50"),
     }
 
 
