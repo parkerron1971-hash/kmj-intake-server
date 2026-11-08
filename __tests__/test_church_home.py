@@ -1,16 +1,19 @@
 """The church page is the front door (church_site.is_home, 2026-11-04).
 
 Kevin approved the church-first mock (claude.ai/artifact/CgBg3zVjHSQ2EFgaZyHdUy): "this design will work for
-now. build it and merge it."
+now. build it and merge it." On 2026-11-08 he approved the next round (claude.ai/artifact/ACaUESdWrwfCyh5ZsLYGQT,
+version 8): the window hero, the week as seven windows and the rooms tour. "merge it. i think this is good"
 
 Holds:
   1. THE FRONT DOOR: mysolutionist.app/ serves the church overview; HOME_EDITION=v3 or v2 (or the church
      section switched off) puts the business home back, with no deploy. The overview's canonical address
      follows: / while it's the home, /churches when it isn't. The product pages drop their "All of
      Solutionist" link while it would lead back to the church page.
-  2. THE PAGE IS THE APPROVED DESIGN, AND ONLY IT: the Sunday Light hero, why we exist, a week at church,
-     the move, the size picker; none of the mock's own furniture (its bar, what's-new tags, the letter,
-     the earlier heroes, the switches), no Love City and no founder by name.
+  2. THE PAGE IS THE APPROVED DESIGN, AND ONLY IT: the window hero (each pane a room, named in the
+     sentence in the same order and colour), why we exist, the week as seven windows, the rooms tour, the
+     move, the size picker; none of the mock's own furniture (its bar, what's-new tags, the letter, the
+     earlier heroes, the switches, the notes and their Listen button), no Love City and no founder by name.
+     The tour says what each room's own page says: its headline is that page's h1.
   3. THE NUMBERS ARE THE PRODUCT'S: the size picker's plans, prices, logins, texts and Multi-site price
      come from the dials; the move's offer from church_offer(); the hero says "priced by the size of your
      Sunday" only while the plans by size are on sale, and the picker only shows then.
@@ -81,7 +84,7 @@ def _root(monkeypatch):
 
 def test_the_root_serves_the_church_page_and_rolls_back_without_a_deploy(monkeypatch):
     church = _root(monkeypatch)
-    assert "Many pieces." in church and 'id="hero-v3"' in church and 'id="mission"' in church
+    assert "Many pieces." in church and 'id="hero-rooms"' in church and 'id="mission"' in church
     monkeypatch.setenv("HOME_EDITION", "v3")
     business = _root(monkeypatch)
     assert "Many pieces." not in business and business == mp.render_home()
@@ -176,20 +179,72 @@ def test_an_edition_sends_every_kind_of_business_to_the_business_home(monkeypatc
 
 def test_the_page_is_the_approved_design(by_size):
     html = cs.render("")
-    for part in ('id="hero-v3"', "Many pieces. <em>One light.</em>", 'id="mission"', "Grow.</b>", 'id="msn-map"',
-                 "No one unknown.", 'id="week"', "Sunday is one day.", 'id="move"', 'id="picker"',
+    for part in ('id="hero-rooms"', '<p class="hx-tag">Many pieces. One light.</p>', "Your whole church office, in one place.",
+                 'id="mission"', "Grow.</b>", 'id="msn-map"', "No one unknown.", 'id="week" class="lw"', "Sunday is one day.",
+                 'id="products" class="tour"', 'id="tourRose"', 'id="move"', 'id="picker"',
                  'No one unknown. No gift unused. <span class="serif glint"', 'class="glassbar"'):
         assert part in html, part
-    order = [html.index(x) for x in ('id="hero-v3"', 'id="mission"', 'id="week"', 'id="chief"', 'id="move"',
-                                     'id="pricing"', 'id="start"')]
+    order = [html.index(x) for x in ('id="hero-rooms"', 'id="mission"', 'id="week"', 'id="chief"', 'id="products"',
+                                     'id="move"', 'id="pricing"', 'id="start"')]
     assert order == sorted(order)
+    assert html.count('<button class="lwp-tab"') == 7 and html.count('<button class="tour-tab') == 8
+
+
+def test_the_hero_names_the_rooms_in_the_windows_order(by_size):
+    """The sentence under the headline and the tour name the same rooms, in the order the window's panes go
+    round (People at the top, clockwise), so a pane, a word and a tab always mean the same room."""
+    html = cs.render("")
+    sub = re.search(r'<p class="hx-sub">(.*?)</p>', html, flags=re.S).group(1)
+    said = re.findall(r'href="/churches/([a-z-]+)"', sub)
+    tabs = re.findall(r'aria-controls="tourPanel\d"[^>]*>.*?<span>([^<]+)</span>', html, flags=re.S)
+    assert said == ["people-and-care", "kids-and-youth", "giving", "groups-and-classes", "member-app",
+                    "website-and-sermons", "office-and-books"]
+    assert tabs == ["People", "Kids", "Giving", "Groups", "Member app", "Website", "Office", "Chief"]
+
+
+def test_the_tour_says_what_each_room_page_says(by_size):
+    """Each room in the tour carries its own page's headline, and links to that page."""
+    html = cs.render("")
+    for slug in ("people-and-care", "kids-and-youth", "giving", "groups-and-classes", "member-app",
+                 "website-and-sermons", "office-and-books"):
+        h1 = re.search(r"<h1[^>]*>(.*?)</h1>", cs.render(slug), flags=re.S).group(1)
+        h1 = " ".join(re.sub(r"<[^>]+>", " ", h1).split())
+        assert f"<h3>{h1}</h3>" in html, (slug, h1)
+        assert f'class="tour-more" href="/churches/{slug}"' in html, slug
+
+
+def test_the_window_film_and_the_tour_screens_are_served(by_size):
+    """Every file the hero and the tour ask for is on disk and served from /assets/home/: the films with
+    byte ranges (a phone won't play a video whose server ignores Range), the screens as webp. A name
+    outside the pattern still can't reach anything."""
+    try:
+        import public_site as ps
+    except ImportError as e:
+        pytest.skip(f"public_site needs {e.name}")
+    from starlette.requests import Request
+    html = cs.render("")
+    wanted = set(re.findall(r'/assets/home/([a-z0-9-]+\.(?:webp|jpg|mp4))', html))
+    wanted |= {f"hero3-{k}-{p}-{s}.mp4" for k, s in (("wide", 1920), ("wide", 1280), ("square", 720)) for p in ("intro", "hold")}
+    wanted |= {"hero3-wide-poster.jpg", "hero3-square-poster.jpg", "church-film.mp4", "church-film-poster.jpg"}
+    for name in wanted:
+        assert ps._home_asset_path(name) is not None, name
+    for bad in ("../brand/favicon.png", "x.png", "tour-giving.WEBP", "church-film.mov", "..%2fchurch-film.mp4"):
+        assert ps._home_asset_path(bad) is None, bad
+
+    def req(headers=()):
+        return Request({"type": "http", "method": "GET", "path": "/", "query_string": b"", "headers": list(headers)})
+    film = asyncio.run(ps.asset_home_photo("church-film.mp4", req([(b"range", b"bytes=0-99")])))
+    assert film.status_code == 206 and film.headers["content-range"].startswith("bytes 0-99/") and film.media_type == "video/mp4"
+    assert asyncio.run(ps.asset_home_photo("tour-giving.webp", req())).media_type == "image/webp"
+    assert asyncio.run(ps.asset_home_photo("p-james.jpg", req())).media_type == "image/jpeg"
 
 
 def test_none_of_the_mock_furniture_and_no_one_named(by_size):
     html = cs.render("")
     for gone in ("newtag", "mockbar", "mb-hero", "mb-mid", "hero-v1", "hero-v2", "mid-letter", 'id="pastor"',
                  "Draft in your words", "churchHomeHero", "speechSynthesis", "Love City", "Kevin",
-                 'class="ribbon"', "the church office", "Chief keeps the office"):
+                 'class="ribbon"', "the church office", "Chief keeps the office", "dl-mock", "dlNotes",
+                 'id="hero-v3"', 'id="wk-days"'):
         assert gone not in html, gone
 
 

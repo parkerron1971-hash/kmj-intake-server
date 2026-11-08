@@ -75,8 +75,15 @@ def test_every_page_speaks_in_the_voice():
 
 
 def test_no_love_city_photos_and_one_photo_only():
+    """One photo (Pastor James), plus, on the overview, the rooms tour's screens: pictures of each room's
+    own page devices (2026-11-08), not photos. Each one is on disk."""
+    tour = re.compile(r"^/assets/home/(tour-[a-z]+(?:-phone)?\.webp)$")
     for path, html in _all().items():
         assert "love-city" not in html.lower() and "lovecity" not in html.lower(), path
+        for src in set(re.findall(r'<img[^>]*\ssrc="([^"]+)"', html)) - {"/assets/home/p-james.jpg"}:
+            m = tour.match(src)
+            assert m and path == "/churches" and (_here.parent / "static" / "home" / m.group(1)).is_file(), (path, src)
+        html = re.sub(r'<img[^>]*\ssrc="/assets/home/tour-[^"]+"[^>]*>', "", html)
         assert set(re.findall(r'<img[^>]*\ssrc="([^"]+)"', html)) <= {"/assets/home/p-james.jpg"}, path
 
 
@@ -172,16 +179,34 @@ def test_the_church_features_are_on_every_plan():
 def test_the_overview_says_only_what_the_chain_does(monkeypatch):
     """A kiosk finds a family on file and can't add one; shepherds are for
     member families the church approves; plans do differ at the top; and a
-    switch or a cancel starts in Billing. Each line once read wider than that."""
+    switch or a cancel starts in Billing. A card goes to the leader whose role
+    takes it (a pastor ask to a pastor), not always the welcome lead; a sent
+    statement reaches givers with an email (the rest are listed to print); and
+    Chief takes a kind of send on itself only once you say it may. Each line
+    once read wider than that."""
     monkeypatch.setenv("PLAN_CHURCH_OFFERED", "1")   # as it is live
     html = cs.render("")
     for said in ("The desk adds the family once", "Every member family can have a shepherd you approve",
-                 "your welcome lead or your office", "People, Giving, Kids, Groups, your app and your site come with",
-                 "hands-off marketing", "switch or cancel from Billing"):
+                 "Chief hands it to the right leader", "People, Giving, Kids, Groups, your app and your site come with",
+                 "hands-off marketing", "switch or cancel from Billing", "givers with an email on file",
+                 "until you tell it it may"):
         assert said in html, said
     for gone in ("Their kids check in at the kiosk", "Every family has a shepherd",
-                 "Every part of church life comes with every plan", "inside the app"):
+                 "Every part of church life comes with every plan", "inside the app",
+                 "every giver on file", "anything with money, waits for you", "Everything it does, listed"):
         assert gone not in html, gone
+
+
+def test_history_is_promised_only_for_what_you_ask_chief():
+    """History is the audit log. Chief's chat, jobs and errands write to it;
+    the church card, shepherd and prayer hand-offs (church_follow_up,
+    church_shepherding, church_prayer) don't. So no page promises that
+    everything Chief does is listed there."""
+    for path, html in _all().items():
+        for wider in ("It lists what it does on your History page", "What Chief does, including anything that failed",
+                      "Everything it does, listed"):
+            assert wider not in html, (path, wider)
+    assert "What you ask Chief to do, including anything that failed" in cs.render("")
 
 
 # ─── 3. the links go somewhere ──────────────────────────────────────

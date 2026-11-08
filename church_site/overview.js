@@ -1,151 +1,3 @@
-/* ===== Sunday Light: the window, its light, the still life ===== */
-
-(function () {
-  'use strict';
-  if (!document.getElementById('hero-v3')) return;
-  var NS = 'http://www.w3.org/2000/svg', reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  function el(n, a, p) { var e = document.createElementNS(NS, n); for (var k in a) e.setAttribute(k, a[k]); if (p) p.appendChild(e); return e; }
-  function rng(s) { return function () { s |= 0; s = s + 0x6D2B79F5 | 0; var t = Math.imul(s ^ s >>> 15, 1 | s); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
-  /* ---------- the window: a tall lancet with two lights and a rose, leaded quarry glass at sunrise ---------- */
-  function lancet(x0, x1, ys, yb, r) { var h = (x1 - x0) / 2, ax = (x0 + x1) / 2, ay = ys - Math.sqrt(r * r - (r - h) * (r - h)); return { d: 'M' + x0 + ',' + yb + ' L' + x0 + ',' + ys + ' A' + r + ',' + r + ' 0 0 1 ' + ax + ',' + ay + ' A' + r + ',' + r + ' 0 0 1 ' + x1 + ',' + ys + ' L' + x1 + ',' + yb + ' Z', ay: ay }; }
-  var OUT = lancet(14, 586, 420, 1100, 430), L = lancet(52, 292, 560, 1100, 250), R = lancet(308, 548, 560, 1100, 250);
-  var ROSE = { cx: 300, cy: 232, r: 118 };
-  // dawn palette, top to bottom: violet night, rose, gold sun low in the glass
-  var SKY = ['#3B1A7A', '#5B21B6', '#7C5CFF', '#6D28D9', '#3B82F6', '#22D3EE', '#14B8A6', '#EC4899', '#F472B6', '#F97316', '#F6C66B', '#FDE68A'];
-  function build(svg, bloom) {
-    var R0 = rng(31), defs = el('defs', {}, svg), id = bloom ? 'slb' : 'slg';
-    [['o', OUT], ['l', L], ['r', R]].forEach(function (c) { var cp = el('clipPath', { id: id + c[0] }, defs); el('path', { d: c[1].d }, cp); });
-    var lg = el('linearGradient', { id: id + 'mk', x1: 0, y1: 0, x2: 1, y2: 1 }, defs); el('stop', { offset: 0, 'stop-color': '#E040FB' }, lg); el('stop', { offset: .55, 'stop-color': '#7C5CFF' }, lg); el('stop', { offset: 1, 'stop-color': '#22D3EE' }, lg);
-    el('path', { d: OUT.d, fill: '#0C0B14' }, svg);
-    // the head around the rose: small deep panes
-    var head = el('g', { 'clip-path': 'url(#' + id + 'o)' }, svg);
-    for (var y = 0; y < 600; y += 34) for (var x = 0; x < 600; x += 34) {
-      var p = (y / 600) * 4 + R0() * 3, c = SKY[Math.min(SKY.length - 1, Math.floor(p))];
-      el('rect', { x: x + (y / 34 % 2) * 17, y: y, width: 33, height: 33, fill: c, stroke: '#0A0B10', 'stroke-width': bloom ? 0 : 3, transform: 'rotate(45 ' + (x + 17) + ' ' + (y + 17) + ')', class: 'pane' }, head);
-    }
-    // the two lights: diamond quarries, night at the top and sun at the bottom
-    [['l', L], ['r', R]].forEach(function (c, side) {
-      var g = el('g', { 'clip-path': 'url(#' + id + c[0] + ')' }, svg);
-      for (var yy = 300; yy < 1110; yy += 44) for (var xx = 0; xx < 620; xx += 52) {
-        var off = ((yy - 300) / 44) % 2 ? 26 : 0, cx = xx + off, cy = yy;
-        var t = (yy - 300) / 800, idx = Math.floor(t * (SKY.length - 1) + (R0() - .5) * 2.4);
-        var col = SKY[Math.max(0, Math.min(SKY.length - 1, idx))];
-        if (R0() < .07) col = '#FFF4DC';
-        el('polygon', { points: cx + ',' + (cy - 26) + ' ' + (cx + 26) + ',' + cy + ' ' + cx + ',' + (cy + 26) + ' ' + (cx - 26) + ',' + cy, fill: col, stroke: '#0A0B10', 'stroke-width': bloom ? 0 : 3.2, class: 'pane', 'data-i': side }, g);
-      }
-      // a light streak down each light, where the sun is brightest
-      var sg = el('linearGradient', { id: id + 'st' + side, x1: 0, y1: 0, x2: 0, y2: 1 }, defs);
-      el('stop', { offset: 0, 'stop-color': '#fff', 'stop-opacity': 0 }, sg); el('stop', { offset: .7, 'stop-color': '#FFF1D2', 'stop-opacity': .42 }, sg); el('stop', { offset: 1, 'stop-color': '#FFF1D2', 'stop-opacity': .7 }, sg);
-      el('rect', { x: 0, y: 300, width: 600, height: 800, fill: 'url(#' + id + 'st' + side + ')', style: 'mix-blend-mode:screen' }, g);
-    });
-    // the rose: seven petals around the mark
-    var rose = el('g', {}, svg), ROOM = ['#14B8A6', '#22C55E', '#F97316', '#3B82F6', '#EC4899', '#EAB308', '#94A3B8'];
-    el('circle', { cx: ROSE.cx, cy: ROSE.cy, r: ROSE.r + 6, fill: '#0A0B10' }, rose);
-    ROOM.forEach(function (c, i) {
-      var a0 = (-90 + (i - .5) * 360 / 7 + 2) * Math.PI / 180, a1 = (-90 + (i + .5) * 360 / 7 - 2) * Math.PI / 180, ri = 34, ro = ROSE.r - 4;
-      function P(r, a) { return (ROSE.cx + r * Math.cos(a)).toFixed(1) + ',' + (ROSE.cy + r * Math.sin(a)).toFixed(1); }
-      el('path', { d: 'M' + P(ri, a0) + ' L' + P(ro, a0) + ' A' + ro + ',' + ro + ' 0 0 1 ' + P(ro, a1) + ' L' + P(ri, a1) + ' A' + ri + ',' + ri + ' 0 0 0 ' + P(ri, a0) + ' Z', fill: c, stroke: '#0A0B10', 'stroke-width': bloom ? 0 : 3.4 }, rose);
-      var am = (a0 + a1) / 2; el('circle', { cx: ROSE.cx + 82 * Math.cos(am), cy: ROSE.cy + 82 * Math.sin(am), r: 11, fill: '#FFF4DC', opacity: .85, stroke: '#0A0B10', 'stroke-width': bloom ? 0 : 3 }, rose);
-    });
-    el('circle', { cx: ROSE.cx, cy: ROSE.cy, r: 32, fill: '#0A0B10', stroke: 'url(#' + id + 'mk)', 'stroke-width': 2.5 }, rose);
-    var mk = el('svg', { x: ROSE.cx - 24, y: ROSE.cy - 21, width: 48, height: 42, viewBox: '8 36 496 424' }, rose), mg = el('g', { fill: 'url(#' + id + 'mk)', stroke: '#fff', 'stroke-width': 14 }, mk);
-    ['18,46 175,232 237,231 133,98 376,99 356,131 412,167 494,49', '205,138 338,241 232,391 274,449 435,221 319,137', '264,274 149,279 201,359'].forEach(function (pp) { el('polygon', { points: pp }, mg); });
-    if (bloom) return;
-    // the stone tracery
-    var st = el('g', { fill: 'none', stroke: '#14131C', 'stroke-linejoin': 'round' }, svg);
-    el('path', { d: L.d, 'stroke-width': 13 }, st); el('path', { d: R.d, 'stroke-width': 13 }, st);
-    el('rect', { x: 292, y: 560, width: 16, height: 560, fill: '#14131C', stroke: 'none' }, st);
-    el('circle', { cx: ROSE.cx, cy: ROSE.cy, r: ROSE.r + 3, 'stroke-width': 12 }, st);
-    el('path', { d: OUT.d, 'stroke-width': 26 }, st);
-    el('path', { d: OUT.d, 'stroke-width': 1.5, stroke: 'rgba(255,230,190,.35)' }, st);
-    el('path', { d: L.d, 'stroke-width': 1.2, stroke: 'rgba(255,230,190,.25)' }, st); el('path', { d: R.d, 'stroke-width': 1.2, stroke: 'rgba(255,230,190,.25)' }, st);
-  }
-  build(document.getElementById('slWinBloom'), true);
-  build(document.getElementById('slWinGlass'), false);
-
-  var hero = document.getElementById('hero-v3'), box = document.getElementById('slLight'), win = document.getElementById('slWin');
-  function shown() { return true; }
-
-  /* ---------- the still life scales as one piece ---------- */
-  var still = document.getElementById('slStill'), stillIn = document.getElementById('slStillIn');
-  function fitStill() {
-    if (!still.clientWidth) return;
-    if (window.innerWidth <= 560) { var kp = still.clientWidth / 330; stillIn.style.transform = 'scale(' + kp + ') translateX(-362px)'; return; }
-    var k = still.clientWidth / 700; stillIn.style.transform = 'scale(' + k + ')';
-  }
-
-  /* ---------- sunlight: the window's own shape, cast in parallel down and to the left ---------- */
-  var shafts = document.getElementById('slShafts'), glassSVG = document.getElementById('slWinGlass'), glassImg = null;
-  function loadGlass(cb) {
-    var xml = new XMLSerializer().serializeToString(glassSVG);
-    if (xml.indexOf('xmlns="http://www.w3.org/2000/svg"') < 0) xml = xml.replace('<svg', '<svg xmlns="http://www.w3.org/2000/svg"');
-    xml = xml.replace('<svg', '<svg width="600" height="1100"');
-    var img = new Image(); img.onload = function () { glassImg = img; cb(); }; img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(xml);
-  }
-  var light = { x: 0, y: 0 };
-  function drawShafts() {
-    if (!glassImg || !shown()) return;
-    var hr = box.getBoundingClientRect();
-    if (hr.width < 2 || hr.height < 2) return;
-    var wr = win.getBoundingClientRect(), S = .5;
-    var W = Math.round(hr.width * S), H = Math.round(hr.height * S);
-    shafts.width = W; shafts.height = H;
-    // 1. the window as the sun sees it: its glass washed toward warm white, faded where the window fades
-    var src = document.createElement('canvas'); src.width = W; src.height = H; var s = src.getContext('2d');
-    var x = (wr.left - hr.left) * S, y = (wr.top - hr.top) * S, w = wr.width * S, h = wr.height * S;
-    s.drawImage(glassImg, x, y, w, h);
-    s.globalCompositeOperation = 'source-atop'; s.fillStyle = 'rgba(255,236,204,.55)'; s.fillRect(0, 0, W, H);
-    s.globalCompositeOperation = 'destination-in';
-    var fade = s.createLinearGradient(x + w, 0, x, 0); fade.addColorStop(0, 'rgba(0,0,0,1)'); fade.addColorStop(.55, 'rgba(0,0,0,.9)'); fade.addColorStop(1, 'rgba(0,0,0,.25)');
-    s.fillStyle = fade; s.fillRect(0, 0, W, H);
-    // 2. soften it, so the shafts carry the window's shape without its fine detail
-    var soft = document.createElement('canvas'); soft.width = W; soft.height = H; var o = soft.getContext('2d');
-    try { o.filter = 'blur(3px)'; } catch (e) { /* fine without */ }
-    o.drawImage(src, 0, 0); o.filter = 'none';
-    // 3. cast it: many faint copies along the light's direction, fading as they go
-    var g = shafts.getContext('2d'); g.clearRect(0, 0, W, H); g.globalCompositeOperation = 'lighter';
-    var dir = [-.79, .61], N = 96, step = Math.hypot(W, H) * 1.05 / N, power = hr.width < 600 ? .28 : hr.width < 1100 ? .7 : 1;
-    for (var k = 1; k <= N; k++) { var t = k / N; g.globalAlpha = .11 * power * Math.pow(1 - t, 1.35); g.drawImage(soft, dir[0] * step * k, dir[1] * step * k); }
-    // 4. a few finer streaks inside the light, the way dust shows it
-    var r = rng(11); g.globalAlpha = 1; g.globalCompositeOperation = 'lighter';
-    for (var i = 0; i < 22; i++) {
-      var sx = x + w * (.25 + r() * .6), sy = y + h * (.1 + r() * .75), len = (300 + r() * 600) * S, wid = (1 + r() * 4) * S;
-      var lg = g.createLinearGradient(sx, sy, sx + dir[0] * len, sy + dir[1] * len); lg.addColorStop(0, 'rgba(255,236,206,' + (.04 + r() * .05).toFixed(3) + ')'); lg.addColorStop(1, 'rgba(255,236,206,0)');
-      g.strokeStyle = lg; g.lineWidth = wid; g.beginPath(); g.moveTo(sx, sy); g.lineTo(sx + dir[0] * len, sy + dir[1] * len); g.stroke();
-    }
-    // 5. where the light lands: the window's colours stretched across the floor
-    g.globalCompositeOperation = 'lighter'; g.globalAlpha = .1;
-    try { g.filter = 'blur(' + Math.round(10 * S * 2) + 'px)'; } catch (e) { /* fine without */ }
-    g.setTransform(.75, 0, -1.25, .26, x + w * .08 - W * .18, H * .7); g.drawImage(src, 0, -y * .4); g.setTransform(1, 0, 0, 1, 0, 0); g.filter = 'none'; g.globalAlpha = 1;
-    light.x = (x + w * .5) / S; light.y = (y + h * .3) / S;
-  }
-
-  /* ---------- a little dust in the light, on computers ---------- */
-  var cv = document.getElementById('slMotes'), mc = cv.getContext('2d'), dots = [], MW = 0, MH = 0, dpr = 1, running = false;
-  function sizeMotes() { dpr = Math.min(2, window.devicePixelRatio || 1); MW = box.clientWidth; MH = box.clientHeight; cv.width = MW * dpr; cv.height = MH * dpr; dots = []; var n = MW < 700 ? 0 : 30; for (var i = 0; i < n; i++) dots.push(spawn()); }
-  function spawn() { var d = Math.random() * MW * .9, side = (Math.random() - .5) * 260; return { x: light.x - .79 * d + .61 * side, y: light.y + .61 * d + .79 * side, r: .5 + Math.random() * 1.2, vx: -.03 - Math.random() * .04, vy: .01 + Math.random() * .03, ph: Math.random() * 6.3, life: 600 + Math.random() * 900 }; }
-  function frame(t) {
-    if (!running) return;
-    mc.setTransform(dpr, 0, 0, dpr, 0, 0); mc.clearRect(0, 0, MW, MH);
-    for (var i = 0; i < dots.length; i++) { var m = dots[i]; m.x += m.vx; m.y += m.vy; m.life--; if (m.life < 0 || m.x < 0 || m.y > MH) { dots[i] = spawn(); continue; } var al = .16 + .14 * Math.sin(t / 2600 + m.ph); mc.beginPath(); mc.arc(m.x, m.y, m.r, 0, 6.283); mc.fillStyle = 'rgba(255,238,205,' + al.toFixed(3) + ')'; mc.fill(); }
-    requestAnimationFrame(frame);
-  }
-  if (!reduce && 'IntersectionObserver' in window) new IntersectionObserver(function (es) { var was = running; running = es[0].isIntersecting && shown(); if (running && !was) requestAnimationFrame(frame); }).observe(hero);
-
-  window.addEventListener('pointermove', function (e) { if (!shown()) return; var r = box.getBoundingClientRect(); if (e.clientY > r.bottom) return; hero.style.setProperty('--slx', ((e.clientX - r.left) / r.width - .5).toFixed(3)); hero.style.setProperty('--sly', ((e.clientY - r.top) / r.height - .5).toFixed(3)); }, { passive: true });
-
-  function hdr() { var h = document.querySelector('#top > header'); if (h) hero.style.setProperty('--slhdr', h.offsetHeight + 'px'); }
-  function layout() { if (!shown()) return; hdr(); fitStill(); drawShafts(); sizeMotes(); }
-  var rt; window.addEventListener('resize', function () { clearTimeout(rt); rt = setTimeout(layout, 140); });
-  fitStill();
-  loadGlass(function () { layout(); if (document.fonts && document.fonts.ready) document.fonts.ready.then(layout); });
-
-  /* ---------- the sunrise ---------- */
-  function sunrise() { hero.classList.add('sl-dawn'); void hero.offsetWidth; setTimeout(function () { hero.classList.remove('sl-dawn'); }, reduce ? 0 : 160); }
-  if (shown()) sunrise();
-
-})();
-
 /* The church overview: the closing window, the move and the size picker. */
 (function () {
   'use strict';
@@ -568,126 +420,271 @@
   }).observe(map);
 })();
 
-/* A WEEK AT CHURCH: one office app screen per day, tagged with the part of church life it served.
-   Moves on by itself every seven seconds until someone taps a day; rests when it's off screen. */
+/* ===== Hero, take three: the intro plays once, the hold loops; the window is the map of the rooms ===== */
 (function () {
   'use strict';
-  var sec = document.getElementById('week');
-  if (!sec) return;
-  var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-
-  var P = {
-    faith: ['Faith', '#EAB308', '#A16207'],
-    community: ['Community', '#14B8A6', '#0F766E'],
-    serving: ['Serving', '#F97316', '#C2410C'],
-    stewardship: ['Stewardship', '#22C55E', '#15803D'],
-    all: ['All together', '#7C5CFF', '#5B3FE0']
-  };
-  // rail colours, as on the hero's tablet: this week, people, groups, giving, kids and serving, member app, website, books
-  var RAIL = ['#7C5CFF', '#14B8A6', '#3B82F6', '#22C55E', '#F97316', '#EC4899', '#EAB308', '#94A3B8'];
-
-  function row(av, c, name, sub, chip, kind, sq) {
-    return '<div class="wk-row"><span class="wk-av' + (sq ? ' sq' : '') + '" style="background:' + c + '">' + av + '</span><span class="wk-tx"><b>' + name + '</b><small>' + sub + '</small></span>' +
-      (chip ? '<em class="wk-chip ' + kind + '">' + chip + '</em>' : '<i></i>') + '</div>';
+  var reduce = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var phone = function () { return innerWidth <= 760; };
+  var intro = document.getElementById('hxIntro'), hold = document.getElementById('hxHold');
+  var kind = phone() ? 'square' : 'wide', size = phone() ? 720 : (innerWidth * (devicePixelRatio || 1) > 1500 ? 1920 : 1280);
+  var base = '/assets/home/hero3-' + kind + '-';
+  hold.poster = base + 'poster.jpg';
+  hold.src = base + 'hold-' + size + '.mp4';
+  function play(v) { var p = v.play(); if (p && p.catch) p.catch(function () {}); }
+  var still = document.getElementById('slStill'), stillIn = document.getElementById('slStillIn');
+  function fit() {
+    if (!still || !still.clientWidth) return;
+    if (innerWidth <= 560) { stillIn.style.transform = 'scale(' + (still.clientWidth / 330) + ') translateX(-362px)'; return; }
+    stillIn.style.transform = 'scale(' + (still.clientWidth / 700) + ')';
   }
-  function tiles(list) {
-    return '<div class="wk-tiles" style="--n:' + list.length + '">' + list.map(function (t) {
-      return '<div style="--c:' + t[3] + '"><small>' + t[0] + '</small><b>' + t[1] + '</b><span>' + t[2] + '</span></div>';
-    }).join('') + '</div>';
+  fit(); addEventListener('resize', fit);
+  var objs = [].slice.call(document.querySelectorAll('#hxDevices .hx-rv')), notes = [].slice.call(document.querySelectorAll('#hxDevices .sl-notes li')), tiles = document.querySelector('#hxDevices .sl-tiles');
+  function arrive(now) {
+    var at = now ? [0, 0, 0] : [0, 300, 700];
+    objs.forEach(function (o, i) { setTimeout(function () { o.classList.add('on'); }, at[i] || 0); });
+    notes.forEach(function (li, i) { setTimeout(function () { li.classList.add('on'); }, now ? 0 : 1100 + i * 420); });
+    if (tiles) setTimeout(function () { tiles.classList.add('on'); }, now ? 0 : 2400);
   }
+  if (reduce) { intro.remove(); intro = null; arrive(true); }
+  else {
+    intro.src = base + 'intro-' + size + '.mp4';
+    hold.load();
+    var started = false;
+    intro.addEventListener('ended', function () { hold.currentTime = 0; play(hold); requestAnimationFrame(function () { intro.style.opacity = '0'; }); });
+    intro.addEventListener('playing', function () { if (started) return; started = true; setTimeout(function () { arrive(false); }, 2600); });
+    // if the intro can't play (autoplay refused, slow network), show the held window and the devices anyway
+    setTimeout(function () { if (!started) { intro.style.opacity = '0'; play(hold); arrive(true); started = true; } }, 4500);
+    play(intro);
+  }
+  if ('IntersectionObserver' in window && !reduce) new IntersectionObserver(function (e) {
+    if (intro && !intro.ended && intro.style.opacity !== '0') return;
+    if (e[0].isIntersecting) play(hold); else hold.pause();
+  }).observe(hold);
 
-  var DAYS = [
-    { d: 'Mon', date: 'Monday, November 9', p: 'community', rail: 1, t: 'Every guest has a person', h: 'First-time guests from Sunday',
-      chief: '<b>6 guests</b> filled out cards on Sunday. Each one is with someone from the welcome team.',
-      body: '<div class="wk-rows">' +
-        row('JP', '#5EEAD4', 'Jordan and Alexis Price', 'Family of four · with Denise R.', 'Text sent', 'ok') +
-        row('AH', '#99F6E4', 'Andre Hill', 'With Paul O.', 'Coffee Thursday', 'go') +
-        row('TN', '#2DD4BF', 'The Nguyen family', 'Two kids in Little Lambs · with Denise R.', 'Text sent', 'ok') +
-        row('BC', '#5EEAD4', 'Bri Carter', 'With Sam T.', 'Note ready', 'wait') +
-        row('LO', '#99F6E4', 'Luis Ortega', 'With Paul O.', 'Text sent', 'ok') + '</div>' },
-    { d: 'Tue', date: 'Tuesday, November 10', p: 'community', rail: 1, t: 'No family is forgotten', h: 'Care this week',
-      chief: '<b>3 families</b> have missed three Sundays. Their shepherds heard Monday morning.',
-      body: '<div class="wk-rows">' +
-        row('RF', '#5EEAD4', 'The Reyes family', 'Missed 3 Sundays · shepherd Angela W.', 'Note ready', 'wait') +
-        row('RE', '#99F6E4', 'Raymond Ellis', 'Missed 3 Sundays · shepherd Tony M.', 'Called', 'ok') +
-        row('OF', '#2DD4BF', 'The Okafor family', 'Missed 4 Sundays · shepherd Angela W.', 'Note ready', 'wait') +
-        row('&#10022;', '#F4C04E', '4 new prayer requests', 'With the intercessors', 'Praying', 'go') + '</div>' },
-    { d: 'Wed', date: 'Wednesday, November 11', p: 'faith', rail: 2, t: "Sunday's message keeps going", h: "This week's group study",
-      chief: "This week's study is drawn from <b>Sunday's message on Romans 8</b>. It's posted in all 12 groups.",
-      body: '<div class="wk-study"><small>Romans 8 · four questions</small><b>No condemnation</b><ol><li>What does &ldquo;no condemnation&rdquo; change about how you see this week?</li><li>Where do you still live like the verdict is out?</li></ol></div>' +
-        '<div class="wk-rows">' +
-        row('TW', '#93C5FD', 'Tuesday Women', '14 members · meets tonight', 'Posted', 'ok', true) +
-        row('YA', '#60A5FA', 'Young Adults', '22 members · Thursday', 'Posted', 'ok', true) +
-        row('+9', '#BFDBFE', '9 more groups', 'Each with the study and its prayer wall', 'Posted', 'ok', true) + '</div>' },
-    { d: 'Thu', date: 'Thursday, November 12', p: 'serving', rail: 4, t: 'Every team is ready to serve', h: "Sunday's serving teams",
-      chief: 'Every team is full for Sunday except <b>parking</b>, which has one spot open.',
-      body: '<div class="wk-rows">' +
-        row('6/6', '#FDBA74', 'Welcome team', 'Doors, greeters and the guest table', 'Full', 'ok', true) +
-        row('8/8', '#FB923C', 'Kids', 'Background checks current for all eight', 'Full', 'ok', true) +
-        row('5/5', '#FDBA74', 'Worship', 'Set list shared Tuesday', 'Full', 'ok', true) +
-        row('3/4', '#FED7AA', 'Parking', 'One spot open on the Serve tab', '1 open', 'wait', true) + '</div>' },
-    { d: 'Fri', date: 'Friday, November 13', p: 'stewardship', rail: 3, t: 'Giving, counted and matched', h: 'Giving this week',
-      chief: '<b>$4,820</b> came in this week on your own Stripe. Its payouts match the bank, and the books are current.',
-      body: tiles([['General', '$3,640', '58 gifts', '#4ADE80'], ['Missions', '$780', '19 gifts', '#86EFAC'], ['Building', '$400', '7 gifts', '#BBF7D0']]) +
-        '<div class="wk-rows">' +
-        row('$', '#4ADE80', 'Stripe payout', 'Matched to the deposit in the bank', 'Matched', 'ok', true) +
-        row('2', '#CBD5E1', 'Bills paid', 'Electric and the copier lease', 'Booked', 'ok', true) + '</div>' },
-    { d: 'Sat', date: 'Saturday, November 14', p: 'faith', rail: 5, t: 'Tomorrow is ready', h: 'Ready for Sunday',
-      chief: "Tomorrow's announcements are scheduled, the sermon notes are up, and the stream is set for <b>11:00</b>.",
-      body: '<div class="wk-rows">' +
-        row('&#9788;', '#F9A8D4', "Today's devotional", 'Sent by text and in the app', 'Sent', 'ok', true) +
-        row('&#9993;', '#F472B6', 'Announcements', 'To every phone · Sunday 8:00 AM', 'Scheduled', 'go', true) +
-        row('&#10070;', '#FDE68A', 'Sermon notes', 'Romans 8:18&ndash;30 · under Watch', 'Ready', 'ok', true) +
-        row('&#9654;', '#F9A8D4', 'Live stream', 'In the app · 11:00 AM', 'Set', 'ok', true) + '</div>' },
-    { d: 'Sun', date: 'Sunday, November 15', p: 'all', rail: 0, t: 'The church gathers', h: 'Good morning, Pastor James',
-      chief: 'Everything is set for 11:00. <b>The welcome team</b> has the guest cards, and the kids rooms are staffed.',
-      body: tiles([['Here', '214', 'checked in', '#A78BFA'], ['Kids', '38', 'pickup codes printed', '#FDBA74'], ['Online', '86', "said I'm here", '#F9A8D4']]) +
-        '<div class="wk-rows">' +
-        row('&#10022;', '#F4C04E', '4 prayer requests', 'With the intercessors', 'New', 'go') +
-        row('6', '#5EEAD4', 'Guest cards', 'On Monday\'s list for the welcome team', 'Saved', 'ok', true) + '</div>' }
-  ];
-
-  var list = document.getElementById('wk-days'), scr = document.getElementById('wk-scr'), cap = document.getElementById('wk-cap');
-  var mark = '<svg viewBox="8 36 496 424" aria-hidden="true"><defs><linearGradient id="wkmk" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#E040FB"/><stop offset=".55" stop-color="#7C5CFF"/><stop offset="1" stop-color="#22D3EE"/></linearGradient></defs><g fill="url(#wkmk)" stroke="#fff" stroke-width="10"><polygon points="18,46 175,232 237,231 133,98 376,99 356,131 412,167 494,49"/><polygon points="205,138 338,241 232,391 274,449 435,221 319,137"/><polygon points="264,274 149,279 201,359"/></g></svg>';
-  scr.innerHTML = '<div class="wk-rail">' + mark + RAIL.map(function (c) { return '<i style="--c:' + c + '"></i>'; }).join('') + '</div><div class="wk-main" id="wk-main"></div>';
-  var main = document.getElementById('wk-main'), dots = scr.querySelectorAll('.wk-rail i');
-
-  var buttons = DAYS.map(function (day, i) {
-    var p = P[day.p], li = document.createElement('li'), b = document.createElement('button');
-    b.type = 'button'; b.setAttribute('role', 'tab'); b.id = 'wk-tab-' + i; b.setAttribute('aria-controls', 'wk-scr');
-    b.style.setProperty('--c', p[1]); b.style.setProperty('--d', p[2]);
-    b.innerHTML = '<span class="d">' + day.d + '</span><span class="t">' + day.t + '</span><span class="p">' + p[0] + '</span>';
-    b.setAttribute('aria-label', day.date.split(',')[0] + ': ' + day.t + '. ' + p[0] + '.');
-    li.appendChild(b); list.appendChild(li); return b;
+  /* ── the map: each petal of the window is a room. The words in the sentence name them, in the same order. ── */
+  var ROOMS = [['People and care', 'people-and-care', '#14B8A6'], ['Kids', 'kids-and-youth', '#F97316'], ['Giving', 'giving', '#22C55E'], ['Groups', 'groups-and-classes', '#3B82F6'],
+    ['Member app', 'member-app', '#EC4899'], ['Website', 'website-and-sermons', '#EAB308'], ['Office', 'office-and-books', '#94A3B8'], ['Chief', '', '#7C5CFF']];
+  // the camera the window was filmed with (src/OneLight/heroLoop.ts, frameHeroIntro), so the petals land exactly
+  var CAM = kind === 'wide' ? { look: [-0.27, -0.06, -1], tan: 0.45, asp: 16 / 9 } : { look: [0, -0.085, -1], tan: 0.43, asp: 1 };
+  var Ri = 0.335, RH = 0.17, TIP = 0.72, TH = Math.PI / 4;
+  function nrm(v) { var l = Math.hypot(v[0], v[1], v[2]); return [v[0] / l, v[1] / l, v[2] / l]; }
+  function dot(a, b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
+  function cross(a, b) { return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]; }
+  var f0 = nrm(CAM.look), rt = nrm(cross(f0, [0, 1, 0])), u0 = cross(rt, f0);
+  function petalR(p) { return RH + (TIP - RH) * Math.pow(Math.max(0, 1 - Math.pow(Math.abs(p), 1.3)), 0.72); }
+  function polar(k, p, r) { var a = Math.PI / 2 - k * TH - p * TH / 2; return [Math.cos(a) * r, Math.sin(a) * r]; }
+  function proj(X, Y) { var d = [X * Ri, Y * Ri, -1], z = dot(d, f0); return [0.5 + dot(d, rt) / (z * CAM.tan * CAM.asp) * 0.5, 0.5 - dot(d, u0) / (z * CAM.tan) * 0.5]; }
+  var media = document.querySelector('.hx-media'), NS = 'http://www.w3.org/2000/svg';
+  var map = document.createElementNS(NS, 'svg'); map.setAttribute('class', 'hx-map'); map.setAttribute('aria-hidden', 'true');
+  // a soft dark pool behind each name, so the serif reads on yellow and grey glass as well as on blue
+  map.innerHTML = '<defs><filter id="hxPool" x="-40%" y="-80%" width="180%" height="260%"><feMorphology in="SourceAlpha" operator="dilate" radius="2.5" result="d"/>' +
+    '<feGaussianBlur in="d" stdDeviation="5.5" result="b"/><feFlood flood-color="#06070A" flood-opacity=".78"/><feComposite in2="b" operator="in" result="sh"/>' +
+    '<feMerge><feMergeNode in="sh"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs>';
+  media.appendChild(map);
+  var keys = [].slice.call(document.querySelectorAll('.hx-sub .rk')), petals = [];
+  ROOMS.forEach(function (r, k) {
+    var a = document.createElementNS(NS, 'a'); a.setAttribute('href', r[1] ? '/churches/' + r[1] : '#chief'); a.setAttribute('tabindex', '-1');
+    a.style.setProperty('--c', r[2]);
+    var p = document.createElementNS(NS, 'path'), t = document.createElementNS(NS, 'text'); t.setAttribute('text-anchor', 'middle'); t.setAttribute('dominant-baseline', 'central'); t.textContent = r[0];
+    a.appendChild(p); a.appendChild(t); map.appendChild(a); petals.push(a);
+    a.addEventListener('mouseenter', function () { hover = k; }); a.addEventListener('mouseleave', function () { hover = -1; });
   });
-
-  var active = -1, auto = !reduce;
-  function show(i, user) {
-    if (user) { auto = false; buttons.forEach(function (b) { b.classList.remove('run'); }); }
-    active = i; var day = DAYS[i], p = P[day.p];
-    buttons.forEach(function (b, k) { var on = k === i; b.setAttribute('aria-selected', String(on)); b.tabIndex = on ? 0 : -1; b.classList.remove('run'); });
-    if (auto) { void buttons[i].offsetWidth; buttons[i].classList.add('run'); }
-    scr.setAttribute('aria-labelledby', buttons[i].id);
-    for (var k = 0; k < dots.length; k++) dots[k].classList.toggle('on', k === day.rail);
-    cap.style.setProperty('--c', p[1]); cap.style.setProperty('--d', p[2]);
-    cap.innerHTML = day.t + ' <span class="p">' + p[0] + '</span>';
-    main.classList.remove('in'); void main.offsetWidth;
-    main.innerHTML = '<div class="wk-top"><span class="s"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#8D93A1" stroke-width="2.4" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>Search people and pages</span><span>Grace Fellowship</span></div>' +
-      '<div class="wk-date">' + day.date + '</div><div class="wk-h">' + day.h + '</div>' +
-      '<div class="wk-chief"><span class="o" aria-hidden="true"></span><span>' + day.chief + '</span></div>' + day.body;
-    if (!reduce) main.classList.add('in');
+  keys.forEach(function (el, k) {
+    el.addEventListener('mouseenter', function () { hover = k; }); el.addEventListener('mouseleave', function () { hover = -1; });
+    el.addEventListener('focus', function () { hover = k; }); el.addEventListener('blur', function () { hover = -1; });
+  });
+  function draw() {
+    var W = media.clientWidth, H = media.clientHeight; if (!W || !H) return;
+    var A = CAM.asp, dw, dh; if (W / H > A) { dw = W; dh = W / A; } else { dh = H; dw = H * A; }
+    var pos = (getComputedStyle(hold).objectPosition || '50% 50%').split(' ').map(function (s) { return parseFloat(s) / 100; });
+    var ox = (W - dw) * (isNaN(pos[0]) ? 0.5 : pos[0]), oy = (H - dh) * (isNaN(pos[1]) ? 0.5 : pos[1]);
+    function pt(X, Y) { var s = proj(X, Y); return [ox + s[0] * dw, oy + s[1] * dh]; }
+    map.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+    petals.forEach(function (a, k) {
+      var d = '', i, q;
+      for (i = 0; i <= 40; i++) { var ph = -1 + i / 20; q = polar(k, ph, petalR(ph)); q = pt(q[0], q[1]); d += (i ? 'L' : 'M') + q[0].toFixed(1) + ' ' + q[1].toFixed(1); }
+      for (i = 1; i < 8; i++) { q = polar(k, 1 - i / 4, RH); q = pt(q[0], q[1]); d += 'L' + q[0].toFixed(1) + ' ' + q[1].toFixed(1); }
+      a.firstChild.setAttribute('d', d + 'Z');
+      q = polar(k, 0, (RH + TIP) / 2 + 0.06); q = pt(q[0], q[1]);
+      a.lastChild.setAttribute('x', q[0].toFixed(1)); a.lastChild.setAttribute('y', q[1].toFixed(1));
+    });
   }
-  buttons.forEach(function (b, i) {
-    b.addEventListener('click', function () { show(i, true); });
-    b.addEventListener('animationend', function () { if (auto && i === active) show((i + 1) % DAYS.length, false); });
-    b.addEventListener('keydown', function (e) {
-      var k = e.key === 'ArrowDown' || e.key === 'ArrowRight' ? 1 : e.key === 'ArrowUp' || e.key === 'ArrowLeft' ? -1 : 0;
-      if (!k) return; e.preventDefault(); var n = (active + k + DAYS.length) % DAYS.length; show(n, true); buttons[n].focus();
+  draw(); addEventListener('resize', draw);
+  // the light walks the petals: as it crosses one, its name lights in the sentence. For the first two
+  // trips round the window, the name also shows on the glass; after that the light walks quietly.
+  var hover = -1, last = '', laps = 0, prevK = -1, NAMED_LAPS = 2;
+  function sm(x) { x = Math.max(0, Math.min(1, x)); return x * x * x * (x * (x * 6 - 15) + 10); }
+  function tick() {
+    var k = -1, glass = -1;
+    if (intro && intro.style.opacity !== '0' && !intro.paused) { var u = 8 * sm((intro.currentTime - 1.0) / 2.4); k = u > 0 && u < 8 ? Math.floor(u) : -1; }
+    else if (!hold.paused && hold.currentTime > 0) {
+      k = Math.floor(8 * ((hold.currentTime % 16) / 16)) % 8;
+      if (prevK === 7 && k === 0) laps++;
+      prevK = k;
+      if (laps < NAMED_LAPS) glass = k;
+    }
+    var show = hover >= 0 ? hover : k, key = show + '|' + hover + '|' + glass;
+    if (key !== last) {
+      last = key;
+      keys.forEach(function (el, i) { el.classList.toggle('lit', i === show); });
+      petals.forEach(function (a, i) { a.classList.toggle('on', hover >= 0 && i === hover); a.classList.toggle('named', hover < 0 && i === glass); });
+    }
+    if (heroOn) requestAnimationFrame(tick); else ticking = false;
+  }
+  // the walk only runs while the window is on screen (the browser already rests it in a hidden tab)
+  var heroOn = true, ticking = false;
+  function startTick() { if (!ticking) { ticking = true; requestAnimationFrame(tick); } }
+  if (!reduce) {
+    startTick();
+    if ('IntersectionObserver' in window) new IntersectionObserver(function (e) { heroOn = e[0].isIntersecting; if (heroOn) startTick(); }).observe(media);
+  }
+  else keys.forEach(function (el, k) { el.addEventListener('mouseenter', function () { petals[k].classList.add('on'); }); el.addEventListener('mouseleave', function () { petals[k].classList.remove('on'); }); });
+
+  var lb = document.getElementById('hxLb'), film = document.getElementById('hxFilm'), x = document.getElementById('hxX');
+  function open() { film.src = '/assets/home/church-film.mp4'; lb.hidden = false; document.body.style.overflow = 'hidden'; play(film); x.focus(); }
+  function close() { film.pause(); lb.hidden = true; document.body.style.overflow = ''; }
+  [].forEach.call(document.querySelectorAll('[data-film]'), function (b) { b.addEventListener('click', open); });
+  x.addEventListener('click', close);
+  lb.addEventListener('click', function (e) { if (e.target === lb) close(); });
+  addEventListener('keydown', function (e) { if (e.key === 'Escape' && !lb.hidden) close(); });
+  var menu = document.getElementById('lvMenu');
+  if (menu) menu.addEventListener('click', function (e) { if (e.target.closest('a')) menu.open = false; });
+})();
+
+/* ===== The rooms tour: the window is the map. A pane or a tab opens its room; it walks on by itself until you choose ===== */
+(function () {
+  'use strict';
+  var sec = document.getElementById('products'); if (!sec || !sec.classList.contains('tour')) return;
+  var ROOMS = JSON.parse(document.getElementById('tourData').textContent);
+  var reduce = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var tabs = [].slice.call(sec.querySelectorAll('.tour-tab')), panels = [].slice.call(sec.querySelectorAll('.tour-panel')), shots = [].slice.call(sec.querySelectorAll('.tour-shot'));
+  var stage = document.getElementById('tourStage'), rose = document.getElementById('tourRose'), NS = 'http://www.w3.org/2000/svg';
+
+  /* the window, flat: the same petal shape as the hero's glass (src/OneLight/window.ts), in the rooms' colours */
+  var RH = 0.17, TIP = 0.72, TH = Math.PI / 4;
+  function petalR(p) { return RH + (TIP - RH) * Math.pow(Math.max(0, 1 - Math.pow(Math.abs(p), 1.3)), 0.72); }
+  function polar(k, p, r) { var a = Math.PI / 2 - k * TH - p * TH / 2; return [Math.cos(a) * r, -Math.sin(a) * r]; }
+  function f(n) { return n.toFixed(4); }
+  function petalPath(k) {
+    var d = '', i, q;
+    for (i = 0; i <= 40; i++) { var ph = -1 + i / 20; q = polar(k, ph, petalR(ph)); d += (i ? 'L' : 'M') + f(q[0]) + ' ' + f(q[1]); }
+    for (i = 1; i < 8; i++) { q = polar(k, 1 - i / 4, RH); d += 'L' + f(q[0]) + ' ' + f(q[1]); }
+    return d + 'Z';
+  }
+  var svg = '<defs><filter id="tourGlow" x="-60%" y="-60%" width="220%" height="220%"><feGaussianBlur in="SourceGraphic" stdDeviation=".05" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>' +
+    '<radialGradient id="tourHub"><stop offset="0" stop-color="#FFF4D6"/><stop offset=".55" stop-color="#F3C77A"/><stop offset="1" stop-color="#B07A26"/></radialGradient>' +
+    '<radialGradient id="tourSp"><stop offset=".2" stop-color="#0F1536"/><stop offset="1" stop-color="#17113A"/></radialGradient>';
+  ROOMS.forEach(function (r, k) {
+    var a = polar(k, 0, RH), b = polar(k, 0, TIP);
+    svg += '<linearGradient id="tourP' + k + '" gradientUnits="userSpaceOnUse" x1="' + f(a[0]) + '" y1="' + f(a[1]) + '" x2="' + f(b[0]) + '" y2="' + f(b[1]) + '">' +
+      '<stop offset="0" stop-color="' + r.t[0] + '"/><stop offset=".55" stop-color="' + r.t[1] + '"/><stop offset="1" stop-color="' + r.t[2] + '"/></linearGradient>';
+  });
+  svg += '</defs>';
+  // the frame: the outer ring of small panes, then the deep glass the petals sit in
+  svg += '<circle r="1" fill="#0B0C12" stroke="rgba(255,255,255,.16)" stroke-width=".014"/>';
+  for (var j = 0; j < 24; j++) {
+    var a0 = j / 24 * Math.PI * 2, a1 = (j + 1) / 24 * Math.PI * 2, r0 = 0.8, r1 = 0.95;
+    var p = function (a, r) { return f(Math.cos(a) * r) + ' ' + f(Math.sin(a) * r); };
+    svg += '<path d="M' + p(a0, r0) + 'L' + p(a0, r1) + 'A' + r1 + ' ' + r1 + ' 0 0 1 ' + p(a1, r1) + 'L' + p(a1, r0) + 'A' + r0 + ' ' + r0 + ' 0 0 0 ' + p(a0, r0) + 'Z" fill="' + ROOMS[(j * 3) % 8].c + '" fill-opacity=".22" stroke="rgba(255,255,255,.16)" stroke-width=".01"/>';
+  }
+  svg += '<circle r=".79" fill="url(#tourSp)" stroke="rgba(255,255,255,.2)" stroke-width=".012"/>';
+  ROOMS.forEach(function (r, k) {
+    var d = petalPath(k), c = polar(k, 0, RH + 0.02), t = polar(k, 0, TIP - 0.03), m1 = polar(k, -0.55, 0.42), m2 = polar(k, 0.55, 0.42);
+    svg += '<g class="pt" data-k="' + k + '"><path d="' + d + '" fill="url(#tourP' + k + ')"/>' +
+      '<path class="vein" d="M' + f(c[0]) + ' ' + f(c[1]) + 'L' + f(t[0]) + ' ' + f(t[1]) + 'M' + f(m1[0]) + ' ' + f(m1[1]) + 'L' + f(t[0] * 0.78) + ' ' + f(t[1] * 0.78) + 'L' + f(m2[0]) + ' ' + f(m2[1]) + '"/>' +
+      '<path class="lead" d="' + d + '"/></g>';
+  });
+  svg += '<circle r=".17" fill="url(#tourHub)" stroke="rgba(255,255,255,.5)" stroke-width=".012"/>';
+  for (var h = 0; h < 8; h++) { var e = polar(h, 1, 0.17); svg += '<path class="vein" d="M0 0L' + f(e[0]) + ' ' + f(e[1]) + '" style="stroke:rgba(120,80,20,.35)"/>'; }
+  svg += '<circle r=".05" fill="#FFF8E6"/>';
+  rose.innerHTML = svg;
+  var pts = [].slice.call(rose.querySelectorAll('.pt'));
+  // each pane names its room on hover (made here, so the page's markup carries one title only)
+  pts.forEach(function (p, k) { var t = document.createElementNS(NS, 'title'); t.textContent = ROOMS[k].tab; p.insertBefore(t, p.firstChild); });
+
+  var cur = 0, DUR = 7000, timer = null, chosen = false, inView = false, hover = false, started = false;
+  function show(i, fromUser) {
+    cur = (i + ROOMS.length) % ROOMS.length;
+    tabs.forEach(function (t, n) { var on = n === cur; t.classList.toggle('on', on); t.setAttribute('aria-selected', on ? 'true' : 'false'); t.tabIndex = on ? 0 : -1; });
+    panels.forEach(function (p, n) { var on = n === cur; p.classList.toggle('on', on); if (on) p.removeAttribute('inert'); else p.setAttribute('inert', ''); });
+    shots.forEach(function (s, n) { s.classList.toggle('on', n === cur); });
+    pts.forEach(function (p, n) { p.classList.toggle('on', n === cur); });
+    sec.style.setProperty('--tc', ROOMS[cur].c);
+    if (fromUser) { chosen = true; stop(); }
+    else restartBar();
+    // on phones the names scroll sideways: keep the room that's showing in view (the strip only, never the page)
+    var strip = tabs[0].parentNode;
+    if (strip.scrollWidth > strip.clientWidth + 4 && started) {
+      var pad = parseFloat(getComputedStyle(strip).paddingLeft) || 0, tr = tabs[cur].getBoundingClientRect(), sr = strip.getBoundingClientRect();
+      strip.scrollTo({ left: strip.scrollLeft + tr.left - sr.left - pad, behavior: reduce ? 'auto' : 'smooth' });
+    }
+    started = true;
+    // fetch the next room's screen early, so the crossfade never waits on the network
+    var nx = shots[(cur + 1) % shots.length].querySelector('img'); if (nx && nx.loading === 'lazy') nx.loading = 'eager';
+  }
+  function restartBar() { var b = tabs[cur].querySelector('.tour-bar'); b.style.animation = 'none'; void b.offsetWidth; b.style.animation = ''; }
+  var narrow = window.matchMedia ? matchMedia('(max-width: 760px)') : { matches: false };
+  function playing() { return !reduce && !narrow.matches && !chosen && inView && !hover && !document.hidden; }
+  function tick() { timer = null; if (playing()) { show(cur + 1); schedule(); } }
+  function schedule() { clearTimeout(timer); timer = playing() ? setTimeout(tick, DUR) : null; sec.classList.toggle('playing', !reduce && !narrow.matches && !chosen); sec.classList.toggle('paused', !playing()); }
+  function stop() { clearTimeout(timer); timer = null; sec.classList.remove('playing'); sec.classList.remove('paused'); }
+  sec.style.setProperty('--dur', DUR + 'ms');
+
+  tabs.forEach(function (t, n) {
+    t.addEventListener('click', function () { show(n, true); });
+    t.addEventListener('keydown', function (e) {
+      var to = e.key === 'ArrowRight' || e.key === 'ArrowDown' ? cur + 1 : e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? cur - 1 : e.key === 'Home' ? 0 : e.key === 'End' ? ROOMS.length - 1 : null;
+      if (to === null) return; e.preventDefault(); show(to, true); tabs[cur].focus();
     });
   });
-  show(0, false);
-  // rest while off screen
-  sec.classList.add('paused');
-  if ('IntersectionObserver' in window) new IntersectionObserver(function (es) { sec.classList.toggle('paused', !es[0].isIntersecting); }, { threshold: .35 }).observe(sec);
-  else sec.classList.remove('paused');
+  pts.forEach(function (p, n) { p.addEventListener('click', function () { show(n, true); }); });
+  [stage, sec.querySelector('.tour-tabs')].forEach(function (el) {
+    el.addEventListener('mouseenter', function () { hover = true; schedule(); });
+    el.addEventListener('mouseleave', function () { hover = false; schedule(); });
+  });
+  sec.addEventListener('focusin', function () { if (!chosen) { hover = true; schedule(); } });
+  sec.addEventListener('focusout', function () { hover = false; schedule(); });
+  document.addEventListener('visibilitychange', schedule);
+  if ('IntersectionObserver' in window) new IntersectionObserver(function (es) { inView = es[0].isIntersecting; schedule(); }, { threshold: 0.45 }).observe(stage);
+  show(0); schedule();
+})();
+
+/* ===== The week in seven windows: it walks the days by itself until someone opens one ===== */
+(function () {
+  'use strict';
+  var sec = document.getElementById('week'); if (!sec || !sec.classList.contains('lw')) return;
+  var reduce = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var narrow = window.matchMedia ? matchMedia('(max-width: 900px)') : { matches: false };
+  var panes = [].slice.call(sec.querySelectorAll('.lwp')), tabs = panes.map(function (p) { return p.querySelector('.lwp-tab'); }), list = sec.querySelector('.lw-row');
+  var cur = 0, DUR = 7000, timer = null, chosen = false, inView = false, hover = false;
+  sec.style.setProperty('--dur', DUR + 'ms');
+  function show(i, user) {
+    cur = (i + panes.length) % panes.length;
+    panes.forEach(function (p, n) {
+      var on = n === cur, panel = p.querySelector('.lwp-panel');
+      p.classList.toggle('on', on); tabs[n].setAttribute('aria-selected', on ? 'true' : 'false'); tabs[n].tabIndex = on ? 0 : -1;
+      if (on) panel.removeAttribute('inert'); else panel.setAttribute('inert', '');
+    });
+    if (user) { chosen = true; clearTimeout(timer); timer = null; sec.classList.remove('playing', 'paused'); }
+    else { var b = panes[cur].querySelector('.lwp-bar'); b.style.animation = 'none'; void b.offsetWidth; b.style.animation = ''; }
+  }
+  function playing() { return !reduce && !narrow.matches && !chosen && inView && !hover && !document.hidden; }
+  function schedule() {
+    clearTimeout(timer); timer = playing() ? setTimeout(function () { timer = null; if (playing()) { show(cur + 1); schedule(); } }, DUR) : null;
+    sec.classList.toggle('playing', !reduce && !narrow.matches && !chosen); sec.classList.toggle('paused', !playing());
+  }
+  tabs.forEach(function (t, n) {
+    t.addEventListener('click', function () { if (n !== cur || !chosen) show(n, true); });
+    t.addEventListener('keydown', function (e) {
+      var to = e.key === 'ArrowRight' || e.key === 'ArrowDown' ? cur + 1 : e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? cur - 1 : e.key === 'Home' ? 0 : e.key === 'End' ? panes.length - 1 : null;
+      if (to === null) return; e.preventDefault(); show(to, true); tabs[cur].focus();
+    });
+  });
+  list.addEventListener('mouseenter', function () { hover = true; schedule(); });
+  list.addEventListener('mouseleave', function () { hover = false; schedule(); });
+  sec.addEventListener('focusin', function () { hover = true; schedule(); });
+  sec.addEventListener('focusout', function () { hover = false; schedule(); });
+  document.addEventListener('visibilitychange', schedule);
+  if ('IntersectionObserver' in window) new IntersectionObserver(function (es) { inView = es[0].isIntersecting; schedule(); }, { threshold: 0.4 }).observe(list);
+  show(0); schedule();
 })();
