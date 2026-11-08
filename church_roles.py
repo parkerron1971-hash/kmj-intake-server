@@ -1102,7 +1102,7 @@ def _office(biz: str) -> List[Dict[str, Any]]:
 
 
 def _classes(biz: str) -> List[Dict[str, Any]]:
-    rows = _rows(f"/academy_courses?business_id=eq.{_q(biz)}&status=neq.archived&select=id,title&order=title.asc&limit=200") or []
+    rows = _rows(f"/academy_courses?business_id=eq.{_q(biz)}&status=neq.archived&private=is.false&select=id,title&order=title.asc&limit=200") or []
     return [{"id": str(r["id"]), "title": _plain(r.get("title")) or "Class"} for r in rows]
 
 

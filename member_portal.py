@@ -1301,10 +1301,11 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
         html, status = await mpl.serve(request, biz, site, me, sub)
         return _page(html, status)
     if sub in ("/my/groups", "/my/classes", "/my/messages", "/my/directory") or sub.startswith("/my/messages/"):
-        # Connect's Classes tab: when the church has a published class, or
-        # in the owner's preview (member_portal_classes).
+        # Connect's Classes tab: when the church has a published class, when
+        # this member is in a private one, or in the owner's preview
+        # (member_portal_classes).
         import member_portal_classes as mcl
-        mcl.TAB.set(preview or await asyncio.to_thread(mcl.classes_on, biz["id"]))
+        mcl.TAB.set(preview or await asyncio.to_thread(mcl.tab_on, biz["id"], me))
     # The member directory (member_directory.py): served only while the
     # church has it on, and only in Church (never in Youth or Kids, even
     # for an adult leader who switched there).

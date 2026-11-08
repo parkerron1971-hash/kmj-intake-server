@@ -41,7 +41,7 @@ SEND_WITHIN = timedelta(days=14)    # the teacher can still ask from Course Stud
 BATCH = 50
 RETRY_WAITS = (2, 6)                # seconds before trying a failed email again
 SESSION_FIELDS = ("id,course_id,title,starts_at,started_at,ended_at,send_missed,missed_sent_at,counted_at,"
-                  "academy_lessons(title),academy_courses!inner(title,business_id)")
+                  "academy_lessons(title),academy_courses!inner(title,business_id,private)")
 
 
 def _q(v: Any) -> str:
@@ -128,10 +128,13 @@ async def sweep_tick(now: Optional[datetime] = None) -> Dict[str, int]:
 
 def _count(business: Dict[str, Any], n: Dict[str, Any]) -> int:
     """Mark the night counted; at a church, as its own occasion with who
-    came. The number checked in (0 when not a church, or none came)."""
+    came. The number checked in (0 when not a church, or none came). A private
+    class makes no occasion: Services & Events is the office's room, and the
+    night would put the class's name and who came in front of them."""
     import church_follow_up
     entry: Optional[str] = None
-    if church_follow_up.is_church(business):
+    private = bool((n.get("academy_courses") or {}).get("private"))
+    if church_follow_up.is_church(business) and not private:
         ok, entry = _occasion(business, n)
         if not ok:
             return 0  # an unread room or clock: tried again next tick

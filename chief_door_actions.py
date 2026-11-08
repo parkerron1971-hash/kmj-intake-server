@@ -268,7 +268,7 @@ async def handle_publish_course(client, biz, action) -> Dict[str, Any]:
     wanted = str(action.get("course") or action.get("title") or action.get("course_id") or "").strip()
     rows = await sb_clients.sb_as_current_context(
         client, "GET", f"/academy_courses?business_id=eq.{biz['id']}"
-        "&select=id,title,description,status&order=updated_at.desc&limit=50")
+        "&select=id,title,description,status,private&order=updated_at.desc&limit=50")
     if rows is None:
         return _fail(kind, "I couldn't read your courses just now. Try again.")
     course = next((r for r in rows if str(r.get("id")) == wanted), None) \
@@ -292,12 +292,15 @@ async def handle_publish_course(client, biz, action) -> Dict[str, Any]:
         return _fail(kind, "That change didn't save. Please try again.")
     _forget_doors(biz["id"])
     url = (await asyncio.to_thread(_site_origin, biz["id"])) + f"/academy/{course['id']}"
+    hidden = bool(course.get("private"))  # no public page to point at
     return {"type": kind,
-            "result": (f"'{course['title']}' is published at {url}. The site's Courses link "
+            "result": (f"'{course['title']}' is published and private: it isn't on your website or in the "
+                       "member app, and only the people you add can open it." if publish and hidden
+                       else f"'{course['title']}' is published at {url}. The site's Courses link "
                        "opens your courses." if publish
                        else f"'{course['title']}' is back to a draft; students can't open it."),
             "label": f"🎓 Published {course['title']}" if publish else f"🎓 Unpublished {course['title']}",
-            "url": url, "nav": {"tab": "build", "page": "course-studio"},
+            "url": None if hidden else url, "nav": {"tab": "build", "page": "course-studio"},
             "frontend_event": {"name": "solutionist-course-updated",
                                "detail": {"business_id": biz["id"], "course_id": course["id"]}}}
 

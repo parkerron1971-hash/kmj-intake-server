@@ -149,7 +149,7 @@ def db(monkeypatch):
                              _role(TASHA, "team_leader", "Hospitality Team"), _role(ROBERT, "welcome_lead")],
         church_follow_ups=[], church_follow_up_notes=[], events=[], church_role_defs=[], church_role_settings=[],
         ministry_care_requests=[], academy_enrollments=[],
-        academy_courses=[{"id": COURSE, "business_id": BIZ, "title": "The Making: Leaders", "status": "published"}],
+        academy_courses=[{"id": COURSE, "business_id": BIZ, "title": "The Making: Leaders", "status": "published", "private": False}],
         intake_forms=[dict(f, business_id=BIZ) for f in (BAPTISM, SERVE, VISIT, TRIP)],
         businesses=[{"id": BIZ, "name": "Love City Church", "type": "ministry", "owner_id": OWNER}],
         business_sites=[{"business_id": BIZ, "slug": "love-city-church", "html_content": "<h1>Love City Church</h1>",
