@@ -7483,13 +7483,15 @@ _RANGE_RE = re.compile(r"^bytes=(\d*)-(\d*)$")
 _RANGE_CHUNK = 64 * 1024
 
 
-def _brand_file_ranged(request: Request, name: str, media_type: str):
+def _brand_file_ranged(request: Request, name: str, media_type: str, base=None):
     """Same as _brand_file, but honours a single byte range.
 
     Multi-range requests (`bytes=0-99,200-299`) fall through to the whole
     file rather than being answered wrongly: they are vanishingly rare
-    from media elements, and a bad multipart body is worse than a 200."""
-    fp = _STATIC_BRAND / name
+    from media elements, and a bad multipart body is worse than a 200.
+    `base` is the folder (static/brand unless a caller that has already
+    checked the name says otherwise)."""
+    fp = (base or _STATIC_BRAND) / name
     if not fp.exists():
         raise HTTPException(404, f"asset not found: {name}")
 
@@ -7594,8 +7596,12 @@ async def asset_mark_png():
 # practitioners in Who it's for and the scenes beside them. Stock photos,
 # served off disk from static/home/. The name is pattern-checked and must
 # resolve inside that folder, so the path can never leave it.
+# The church page (2026-11-08) adds its hero window film, the film itself and the
+# rooms tour's screens here too: .mp4 is served with byte ranges (a phone will not
+# play a <video> whose server ignores Range), .webp and .jpg whole.
 _STATIC_HOME = _pathlib.Path(__file__).resolve().parent / "static" / "home"
-_HOME_ASSET_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}\.jpg$")
+_HOME_ASSET_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}\.(?:jpg|webp|mp4)$")
+_HOME_ASSET_TYPES = {"jpg": "image/jpeg", "webp": "image/webp", "mp4": "video/mp4"}
 
 
 def _home_asset_path(name: str) -> Optional[_pathlib.Path]:
@@ -7610,11 +7616,14 @@ def _home_asset_path(name: str) -> Optional[_pathlib.Path]:
 
 
 @router.get("/assets/home/{name}", include_in_schema=False)
-async def asset_home_photo(name: str):
+async def asset_home_photo(name: str, request: Request):
     fp = _home_asset_path(name)
     if fp is None:
         raise HTTPException(404, "asset not found")
-    return _FileResponse(str(fp), media_type="image/jpeg", headers=_BRAND_CACHE_HEADERS)
+    kind = _HOME_ASSET_TYPES[name.rsplit(".", 1)[1]]
+    if kind == "video/mp4":
+        return _brand_file_ranged(request, fp.name, kind, base=_STATIC_HOME)
+    return _FileResponse(str(fp), media_type=kind, headers=_BRAND_CACHE_HEADERS)
 
 
 @router.get("/assets/film.mp4", include_in_schema=False)
