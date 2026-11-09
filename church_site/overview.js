@@ -647,6 +647,18 @@
   document.addEventListener('visibilitychange', schedule);
   if ('IntersectionObserver' in window) new IntersectionObserver(function (es) { inView = es[0].isIntersecting; schedule(); }, { threshold: 0.45 }).observe(stage);
   show(0); schedule();
+  // The Member App and Office live in the tour now. #app and #office (the menu, and every room page's
+  // "Member app" link) land on the tour with that room open, chosen, so it doesn't walk on.
+  var KEYS = ROOMS.map(function (r) { return r.k; });
+  function fromHash() {
+    var n = KEYS.indexOf({ '#app': 'app', '#office': 'office' }[location.hash] || '');
+    if (n < 0) return false;
+    show(n, true);
+    sec.scrollIntoView({ block: 'start' });   // the browser's own jump can land short while the page above still loads
+    return true;
+  }
+  addEventListener('hashchange', fromHash);
+  if (fromHash()) addEventListener('load', function () { if (scrollY < sec.offsetTop + sec.offsetHeight) sec.scrollIntoView({ block: 'start' }); });
 })();
 
 /* ===== The week in seven windows: it walks the days by itself until someone opens one ===== */
