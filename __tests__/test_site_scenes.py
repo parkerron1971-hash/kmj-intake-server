@@ -75,6 +75,9 @@ def test_poster_lines_fit_the_screen_whatever_the_font():
     assert "aw/Math.max(1,wide)" in o.js and "ah/(n*1.02)" in o.js
     # phones are where most visitors are: a line may break so the words go bigger
     assert "sxo-tall" in o.css and "if(vh>vw){el.classList.add('sxo-tall')" in o.js
+    # without this a grid quietly widens the line to its longest word, and the
+    # overflow check never fires (found by the browser stress test)
+    assert ".sxo-tall .sxo-scl-pin{grid-template-columns:minmax(0,1fr)}" in o.css
     # a line too long to be a poster stays the plain stack, never tiny type
     assert "if(fs<28){el.classList.remove('sxo-live')" in o.js
 

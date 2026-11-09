@@ -85,7 +85,8 @@ SCENES: List[Dict[str, Any]] = [
 .sxo-scl.sxo-live{height:calc(100vh + var(--n,3)*70vh);height:calc(100svh + var(--n,3)*70svh)}
 .sxo-scl.sxo-live .sxo-scl-pin{position:sticky;top:0;height:100vh;height:100svh;min-height:0;overflow:hidden}
 .sxo-scl.sxo-live .sxo-scl-line{width:max-content;max-width:none;white-space:nowrap;overflow-wrap:normal}
-.sxo-scl.sxo-live.sxo-tall .sxo-scl-line{width:auto;white-space:normal}
+.sxo-scl.sxo-live.sxo-tall .sxo-scl-pin{grid-template-columns:minmax(0,1fr)}
+.sxo-scl.sxo-live.sxo-tall .sxo-scl-line{width:auto;min-width:0;white-space:normal}
 .sxo-scl.sxo-live .sxo-scl-line{-webkit-text-fill-color:transparent;-webkit-background-clip:text;background-clip:text;
   background-image:linear-gradient(90deg,currentColor 0 calc(var(--f,0)*100%),color-mix(in srgb,currentColor 16%,transparent) calc(var(--f,0)*100%) 100%)}
 .sxo-scl.sxo-live .sxo-scl-line:nth-last-child(2){color:var(--_accent)}
