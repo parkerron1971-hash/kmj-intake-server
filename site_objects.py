@@ -1682,6 +1682,11 @@ _add(_o(
 ))
 
 
+# ── THE SCENES (2026-11-08): held in site_scenes, same contract ──
+import site_scenes
+for _scene in site_scenes.SCENES:
+    _add(_o(**_scene))
+
 OBJECT_KEYS: List[str] = list(OBJECTS)
 
 _ALIAS_INDEX: List[Tuple[str, str]] = sorted(
@@ -1699,11 +1704,14 @@ def object_names_in(spec_text: str) -> List[str]:
     copy, not a commitment. Longest alias first, so "id card" beats
     "card"; order follows the blueprint."""
     found: List[str] = []
+    scenes_on = site_scenes.scenes_enabled()
     for m in _OBJECTS_LINE_RE.finditer(spec_text or ""):
         line = m.group(1).lower()
         hits: List[Tuple[int, str]] = []
         taken: List[Tuple[int, int]] = []
         for alias, key in _ALIAS_INDEX:
+            if key in site_scenes.SCENE_KEYS and not scenes_on:
+                continue            # off means no blueprint can name one
             for am in re.finditer(r"(?<![a-z])" + re.escape(alias) + r"(?![a-z])", line):
                 span = (am.start(), am.end())
                 if any(a < span[1] and span[0] < b for a, b in taken):
@@ -1736,8 +1744,13 @@ def director_block() -> str:
         "ground choose paper (light objects) or glow. Name only objects whose "
         "content the data can fill.",
     ]
+    scenes_on = site_scenes.scenes_enabled()
     for key, o in OBJECTS.items():
+        if key in site_scenes.SCENE_KEYS and not scenes_on:
+            continue
         lines.append(f"- {key}: {o.intent}. USE FOR: {o.use_when}")
+    if scenes_on:
+        lines.append(site_scenes.DIRECTOR_RULE)
     lines.append("An object that is not on this list cannot be built; describe "
                  "what you want with an object that is.")
     return "\n".join(lines)

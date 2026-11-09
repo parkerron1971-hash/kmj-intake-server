@@ -15,8 +15,8 @@ from site_objects import OBJECTS, OBJECT_KEYS
 
 # ─── 1. the contract every object keeps ──────────────────────────────
 
-def test_there_are_forty_six_objects_each_with_every_part():
-    assert len(OBJECTS) == 46
+def test_there_are_forty_nine_objects_each_with_every_part():
+    assert len(OBJECTS) == 49
     for key, o in OBJECTS.items():
         assert o.key == key
         assert o.intent.strip() and o.use_when.strip() and o.phone.strip(), key
@@ -139,7 +139,8 @@ def test_page_objects_reads_a_built_page():
 def test_the_director_catalog_lists_every_object():
     block = so.director_block()
     for key in OBJECT_KEYS:
-        assert f"- {key}:" in block, key
+        if key not in so.site_scenes.SCENE_KEYS:      # scenes wait on their switch
+            assert f"- {key}:" in block, key
     assert "finish" in block and "metal" in block and "glow" in block
 
 
