@@ -52,3 +52,55 @@ def test_readiness_never_raises_on_a_bare_context():
     r = br.spec_readiness({})
     assert r["photos"] == 0 and r["notes"] and r["gaps"] == []
     assert br.spec_readiness(None)["offerings"] == 0
+
+
+# ─── PHOTOS FIRST (2026-11-08) ───────────────────────────────────
+
+def _church(photos=0, **over):
+    base = {"business": {"name": "Grace Chapel", "type": "church"},
+            "gallery": [{"url": f"https://x/{i}.jpg"} for i in range(photos)],
+            "offerings": [], "testimonials": [], "settings": {}, "site": {"site_config": {}}}
+    base.update(over)
+    return base
+
+
+def test_the_photo_stop_waits_for_its_switch(monkeypatch):
+    monkeypatch.delenv("SITE_PHOTOS_FIRST", raising=False)
+    assert br.spec_readiness(_church())["photo_stop"] is None
+
+
+def test_a_church_short_of_photos_gets_the_stop(monkeypatch):
+    monkeypatch.setenv("SITE_PHOTOS_FIRST", "on")
+    assert br.spec_readiness(_church())["photo_stop"] == {"have": 0, "want": 6}
+    assert br.spec_readiness(_church(5))["photo_stop"] == {"have": 5, "want": 6}
+    assert br.spec_readiness(_church(6))["photo_stop"] is None
+
+
+def test_a_salon_gets_the_stop_and_a_law_firm_never_does(monkeypatch):
+    monkeypatch.setenv("SITE_PHOTOS_FIRST", "on")
+    salon = _church(business={"name": "Fade", "type": "hair salon"})
+    assert br.spec_readiness(salon)["photo_stop"] == {"have": 0, "want": 6}
+    law = _church(business={"name": "Whitlock Law", "type": "law firm"})
+    assert br.spec_readiness(law)["photo_stop"] is None
+
+
+def test_a_trade_whose_proof_is_not_a_picture_gets_no_stop(monkeypatch):
+    monkeypatch.setenv("SITE_PHOTOS_FIRST", "on")
+    coach = _church(business={"name": "Vertical", "type": "career coach"})
+    assert br.spec_readiness(coach)["photo_stop"] is None
+
+
+def test_an_owner_who_chose_plain_gets_no_stop(monkeypatch):
+    monkeypatch.setenv("SITE_PHOTOS_FIRST", "on")
+    ctx = _church(site={"site_config": {"discovery_dossier": {"taste": {"concept": {"value": "plain"}}}}})
+    assert br.spec_readiness(ctx)["photo_stop"] is None
+
+
+def test_a_bad_read_never_blocks_the_card(monkeypatch):
+    import site_concept
+    monkeypatch.setenv("SITE_PHOTOS_FIRST", "on")
+
+    def boom(ctx):
+        raise ValueError("no")
+    monkeypatch.setattr(site_concept, "resolve", boom)
+    assert br.spec_readiness(_church())["photo_stop"] is None
