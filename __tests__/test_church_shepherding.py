@@ -570,3 +570,38 @@ def test_a_redirect_never_leaves_the_lead_pages():
     fid = str(uuid.uuid4())
     assert mpl._go(f"/my/lead/family/{fid}").headers["location"] == f"/my/lead/family/{fid}"
     assert mpl._go("/my/lead/family/../../evil").headers["location"] == "/my/lead"
+
+
+def test_shepherd_emails_go_on_history_with_counts_never_families(db, mail, monkeypatch):
+    """History (any seat reads it) says who was asked to shepherd and how
+    many families, never which."""
+    import audit_log
+    lines = []
+    monkeypatch.setattr(audit_log, "record", lambda biz, **kw: lines.append(kw) or True)
+    carters, _ = _setup_families(db)
+    shep.propose(BUSINESS, OWNER)
+    out = shep.approve(BUSINESS, OWNER)
+    asyncio.run(shep.tell_shepherds(BUSINESS, out["gained"], out["ctx"], "stamp"))
+    assert len(lines) == len(mail) > 0
+    assert all(x["verb"] == "church:shepherd_email" and x["actor_type"] == "chief" for x in lines)
+    assert any(x["summary"].startswith("Emailed Marcus Grant: asked to shepherd ") for x in lines)
+    moved = shep.move(BUSINESS, carters, TANYA, OWNER)
+    asyncio.run(shep.tell_new_shepherd(BUSINESS, moved["shepherd"], moved["name"], moved["ctx"]))
+    assert lines[-1]["summary"] == "Emailed Tanya Brooks: asked to shepherd a family"
+    families = {h["name"] for h in db.t["households"] if "family" in h["name"]}  # a family of one is named for its person
+    assert families and not any(f in x["summary"] for x in lines for f in families)
+    assert "Carter" not in repr(lines)
+
+
+def test_a_shepherds_ask_for_a_pastor_goes_on_history_as_a_note_passed_on(lead, db, mail, monkeypatch):
+    """It went to the Lead Pastor only, and any seat reads History: the line says a shepherd's note was
+    passed to the pastor, never that a pastor was asked for, which family, or what the note said."""
+    import audit_log
+    lines = []
+    monkeypatch.setattr(audit_log, "record", lambda biz, **kw: lines.append(kw) or True)
+    carters = _given(db)
+    _touch(lead, carters, kind="visit", note="Calvin's job moved to Sundays.", needs_pastor="yes")
+    assert [m["to"] for m in mail] == ["kevin@example.com"]
+    assert [(x["verb"], x["summary"]) for x in lines] == [("church:shepherd_email", "Passed a shepherd's note to Kevin McCloud")]
+    said = repr(lines)
+    assert "Carter" not in said and "Calvin" not in said and "pastor for" not in said
