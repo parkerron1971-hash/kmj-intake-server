@@ -472,6 +472,6 @@ def test_each_shepherd_email_goes_on_history_never_the_family_or_the_words(db, m
     lines.clear()
     _card(db, CALVIN, "My mother is in the hospital after SURGERY")
     _run(datetime(2026, 10, 21, 15, 0, tzinfo=timezone.utc))
-    assert [x["summary"] for x in lines] == ["Emailed Marcus Grant: a care need in a family they shepherd is in hand"]
+    assert [x["summary"] for x in lines] == ["Sent Marcus Grant a note about a family they shepherd"]
     assert all(x["verb"] == "church:shepherd_email" and x["actor_type"] == "chief" for x in lines)
     assert "Carter" not in repr(lines) and "SURGERY" not in repr(lines)

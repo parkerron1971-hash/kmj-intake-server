@@ -1156,6 +1156,7 @@ async def tell_pastor(biz: Dict[str, Any], me: Dict[str, Any], logged: Dict[str,
                             cfu._mail_html(lines, "", ""),
                             f"shep-pastor-{biz['id']}-{fam['household_id']}-{_iso(_now())[:19]}"):
             told += 1
-            # History names the pastor told, never the family or the note
-            await _history(biz, f"Emailed {_plain(h.get('name')) or 'the Lead Pastor'}: a shepherd asked for a pastor for a family")
+            # Any seat reads History, and this went to the Lead Pastor only: the line says a note was
+            # passed on, never that a pastor was asked for, which family, or the note
+            await _history(biz, f"Passed a shepherd's note to {_plain(h.get('name')) or 'the Lead Pastor'}")
     return told

@@ -702,7 +702,7 @@ def care_plan(biz: Dict[str, Any], now: datetime) -> Optional[List[Dict[str, Any
             who = _holder_words(f, titles, names)
             line = f"{who} has a care need for {_the(u['name'])}. It’s in hand; the card’s words stay with them."
             out.append({"key": f"care-{f['id']}", "to": s["email"], "name": s["name"],
-                        "history": f"Emailed {s['name']}: a care need in a family they shepherd is in hand",
+                        "history": f"Sent {s['name']} a note about a family they shepherd",
                         "subject": f"A care need in {_the(u['name'])}",
                         "body": cfu._mail_html([f"{html.escape(_first(s['name']))}, {html.escape(line)}",
                                                 "You don’t need to do anything about the need itself. A call to say "
