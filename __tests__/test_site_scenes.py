@@ -161,3 +161,73 @@ def test_the_eyes_are_told_a_scene_part_way_is_not_a_defect(monkeypatch):
         assert seen["content"], "the eyes were never called"
         text = " ".join(b.get("text", "") for b in seen["content"] if isinstance(b, dict))
         assert ("THIS PAGE HOLDS A SCENE" in text) is told
+
+
+# ─── found by the first real build (2026-11-09) ───────────────────
+
+_HOSTILE = (".wrap{max-width:900px}\n#people .sxo-scw{height:auto}\n"
+            "#people .sxo-scw-wall{display:grid;grid-template-columns:repeat(5,1fr)}\n"
+            "@media (max-width:600px){.sxo-scw-line{background:red}}\n"
+            ".keep,.sxo-scr-frame{margin:0}\n.sxo-scl-line:hover,.sxo-scl{color:red}")
+
+
+def _hostile_page():
+    return ("<html><head><style>" + _HOSTILE + "</style></head><body>"
+            + so.OBJECTS["scene-wall"].html + "</body></html>")
+
+
+def test_the_server_takes_off_what_a_page_wrote_over_a_scene():
+    page, removed = ss.strip_page_overrides(_hostile_page())
+    assert removed == 6
+    style = page.split("</style>")[0]
+    assert ".wrap{max-width:900px}" in style and ".keep{margin:0}" in style
+    assert "sxo-sc" not in style
+
+
+def test_a_page_with_no_scene_is_left_alone():
+    page = "<html><head><style>.sxo-scw{color:red}</style></head><body></body></html>"
+    assert ss.strip_page_overrides(page) == (page, 0)
+
+
+def test_the_builder_is_told_and_the_build_removes_it(monkeypatch):
+    monkeypatch.setenv("SITE_SCENES", "on")
+    assert "A SCENE STYLES ITSELF" in so.builder_block(["scene-wall"])
+    assert "A SCENE STYLES ITSELF" not in so.builder_block(["letter"])
+    scene = so.OBJECTS["scene-lines"].html
+    doc = _doc(f'<section id="moment">{scene}</section>').replace(
+        "<style>body{margin:0}", "<style>body{margin:0}#moment .sxo-scl-pin{padding:0}")
+    monkeypatch.setattr(v2, "_call", lambda system, user, business_id, spend=None: doc)
+    monkeypatch.setattr(v2, "assemble_real_data", lambda ctx, b: "BUSINESS: Studio")
+    monkeypatch.setattr(v2, "contact_endpoint", lambda b: "https://api.example/contact/biz-1")
+    monkeypatch.setattr(v2, "eyes_enabled", lambda: False)
+    out = v2.run_builder_v2("SPEC", {}, "biz-1")
+    assert "#moment .sxo-scl-pin" not in out["html"]
+    assert out["report"]["mechanical"]["scene_rules_removed"] == 1
+
+
+def test_a_scene_stands_down_rather_than_ever_scroll_blank():
+    for key in ss.SCENE_KEYS:
+        js = so.OBJECTS[key].js
+        assert "position==='sticky'" in js and "classList.remove('sxo-live')" in js, key
+
+
+def test_the_wall_counts_photos_and_has_no_holes():
+    o = so.OBJECTS["scene-wall"]
+    assert "querySelectorAll('figure')" in o.js, "a line inside the wall is not a tile"
+    assert "pin.appendChild(ln)" in o.js, "a line inside the wall would scale with it"
+    assert "flex:1 1 calc(100%/var(--cols,3)" in o.css, "the last row stretches to fill"
+
+
+def test_the_structure_a_scene_needs_cannot_be_written_over():
+    for key in ss.SCENE_KEYS:
+        assert "position:sticky!important" in so.OBJECTS[key].css, key
+
+
+def test_a_pages_fade_in_never_hides_a_scene():
+    """The page's own reveal script hid every tile until it reached where the
+    tile would sit, which during the pull-back is a screen of black."""
+    wall = so.OBJECTS["scene-wall"].css
+    rule = next(r for r in wall.split("}") if ".sxo-scw-wall figure{flex" in r)
+    assert "opacity:1!important" in rule and "transform:none!important" in rule
+    assert "opacity:1!important" in so.OBJECTS["scene-reveal"].css
+    assert "opacity:1!important" in so.OBJECTS["scene-lines"].css
