@@ -346,6 +346,16 @@ def _strip_library(doc: str) -> str:
         return doc or ""
 
 
+def _strip_scene_rules(doc: str) -> Tuple[str, int]:
+    """A scene styles itself: rules the page wrote for it come off, free."""
+    try:
+        import site_scenes
+        return site_scenes.strip_page_overrides(doc)
+    except Exception as e:
+        logger.info(f"[v2] scene rule strip skipped: {e}")
+        return doc, 0
+
+
 def _wear_library(doc: str) -> str:
     """Step 2 of the build-cost plan: the library's styles and script for
     the objects on the page, added by the server, never retyped."""
@@ -1740,7 +1750,8 @@ def inspect_with_eyes(doc: str, spec_text: str, business_id: str,
                             "holds still while words fill in and photos open as the "
                             "visitor scrolls. In a part-way frame, faint unfilled words, "
                             "a small window of a photo or a line partly off the screen "
-                            "are the scene working, not defects."})
+                            "are the scene working, not defects. A blank screen with "
+                            "no photo and no words is always a defect."})
         for label, shot in shots:
             content.append({"type": "text", "text": f"View — {label}:"})
             content.append({"type": "image", "source": {
@@ -2297,6 +2308,7 @@ def refine_section_doc(doc: str, spec_text: str, ctx: Dict[str, Any],
 
     def _mechanical(d: str) -> str:
         d = _strip_library(d)
+        d, _scene_rules = _strip_scene_rules(d)
         d, dropped = armor_scripts(d, allowed_fetch=endpoint)
         d, _stripped = armor_external(d)
         d, _typeset = _craft().typographer(d)
@@ -2509,6 +2521,7 @@ def run_builder_v2(spec_text: str, ctx: Dict[str, Any], business_id: str,
 
     def _mechanical(d: str) -> str:
         d = _strip_library(d)
+        d, scene_rules = _strip_scene_rules(d)
         d, dropped = armor_scripts(d, allowed_fetch=endpoint)
         d, stripped = armor_external(d)
         d, typeset = _craft().typographer(d)
@@ -2516,7 +2529,8 @@ def run_builder_v2(spec_text: str, ctx: Dict[str, Any], business_id: str,
         report["mechanical"] = {"scripts_dropped": dropped,
                                 "externals_stripped": stripped,
                                 "typography_fixes": typeset,
-                                "override_targets_added": added}
+                                "override_targets_added": added,
+                                "scene_rules_removed": scene_rules}
         return _wear_library(d)
 
     def _soft(d: str) -> List[str]:

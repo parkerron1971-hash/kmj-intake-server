@@ -1789,6 +1789,8 @@ def builder_block(keys: Iterable[str]) -> str:
         lines.append(o.html)
         if o.phone:
             lines.append(f"ON A PHONE: {o.phone}.")
+        if key in site_scenes.SCENE_KEYS:
+            lines.append(site_scenes.BUILDER_RULE)
         lines.append("")
     return "\n".join(lines).rstrip()
 
