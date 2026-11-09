@@ -13,7 +13,45 @@ This is the "before you approve" pass: a pure read of the composer
 context into plain lines a practitioner can act on, plus revision chips
 that prefill the Blueprint's revise notes. No model call, no writes.
 """
-from typing import Any, Dict, List
+import os
+from typing import Any, Dict, List, Optional
+
+
+# PHOTOS FIRST (2026-11-08). Real photos are the one number that separates both
+# hand-built pages (14 and 4) from both builder pages (0 and 0) we measured. The
+# Coach asks once and the card lists the gap, and a busy owner skips both, so a
+# trade whose people or work are its proof gets one real stop at Build it. It is
+# a stop, never a wall: building without photos stays one tap away.
+PHOTOS_WANTED = 6
+
+
+def photos_first_on() -> bool:
+    return (os.environ.get("SITE_PHOTOS_FIRST") or "off").strip().lower() in ("on", "1", "true", "yes")
+
+
+def _proof_is_visible(btype: str) -> bool:
+    import site_layouts as sl
+    return any(rx.search(btype or "") for rx in (
+        sl._VISUAL_TRADE_RE, sl._PLACE_TRADE_RE, sl._GATHERING_TRADE_RE, sl._APPOINTMENT_TRADE_RE))
+
+
+def photo_stop(ctx: Dict[str, Any], photos: int) -> Optional[Dict[str, int]]:
+    """{have, want} when this build should stop and ask for photos, else None.
+    Plain pages never stop: a law firm's page doesn't turn on its photos."""
+    if not photos_first_on() or photos >= PHOTOS_WANTED:
+        return None
+    try:
+        import site_concept
+        # a failed read hides the owner's Plain choice, and it reads as empty
+        site = ctx.get("site") if isinstance(ctx.get("site"), dict) else {}
+        if not site_concept.enabled() or not isinstance(site.get("site_config"), dict):
+            return None
+        if site_concept.resolve(ctx).get("intensity") == "plain":
+            return None
+        btype = str((ctx.get("business") or {}).get("type") or "")
+        return {"have": photos, "want": PHOTOS_WANTED} if _proof_is_visible(btype) else None
+    except Exception:
+        return None             # the card still lists the gap in words
 
 
 def _n(xs: Any) -> int:
@@ -104,7 +142,8 @@ def spec_readiness(ctx: Dict[str, Any]) -> Dict[str, Any]:
                      "is drafted from your business profile alone. Finish "
                      "the session with the Coach for a page that sounds "
                      "like you.")
-    return {"photos": photos, "brand_mark": brand_mark, "portrait": portrait,
+    return {"photos": photos, "photo_stop": photo_stop(ctx, photos),
+            "brand_mark": brand_mark, "portrait": portrait,
             "offerings": offerings, "testimonials": testimonials,
             "store_items": store_items, "session_done": session_done,
             "gaps": gaps, "notes": notes[:6], "chips": chips[:4]}
