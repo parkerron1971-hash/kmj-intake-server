@@ -3,11 +3,11 @@ title: The scene library, three pinned scroll scenes the builder can place
 date: 2026-11-08
 agent: Claude Code (Claude Opus 5.5)
 asked: "you can work on what is missing and need upgrading"
-status: shipped
-prs: []
+status: waiting on Kevin
+prs: [kmj-intake-server#1772]
 migrations: []
 left_undone:
-  - "SITE_SCENES is off. Kevin's rule: features switch on on a Thursday."
+  - "Merged but switched off: SITE_SCENES waits for Kevin's judgment on the proof page and a Thursday."
   - "No real build has run with a scene. It needs one (about $2 to $4) to see what a Director and builder do with them."
   - "The sameness guard does not count scenes yet, so a house style is the risk to watch."
   - "About three more scenes are planned once these three prove themselves."

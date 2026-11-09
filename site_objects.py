@@ -1704,11 +1704,14 @@ def object_names_in(spec_text: str) -> List[str]:
     copy, not a commitment. Longest alias first, so "id card" beats
     "card"; order follows the blueprint."""
     found: List[str] = []
+    scenes_on = site_scenes.scenes_enabled()
     for m in _OBJECTS_LINE_RE.finditer(spec_text or ""):
         line = m.group(1).lower()
         hits: List[Tuple[int, str]] = []
         taken: List[Tuple[int, int]] = []
         for alias, key in _ALIAS_INDEX:
+            if key in site_scenes.SCENE_KEYS and not scenes_on:
+                continue            # off means no blueprint can name one
             for am in re.finditer(r"(?<![a-z])" + re.escape(alias) + r"(?![a-z])", line):
                 span = (am.start(), am.end())
                 if any(a < span[1] and span[0] < b for a, b in taken):

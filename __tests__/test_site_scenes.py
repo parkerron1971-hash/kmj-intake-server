@@ -32,7 +32,17 @@ def test_scenes_stay_out_of_the_catalog_until_switched_on(monkeypatch):
     assert "AT MOST ONE scene" in block and "never on PLAIN" in block
 
 
-def test_the_builder_gets_a_named_scene_and_never_writes_its_code():
+def test_with_the_switch_off_no_blueprint_can_name_a_scene(monkeypatch):
+    monkeypatch.delenv("SITE_SCENES", raising=False)
+    for phrase in ("scene wall", "wall of photos", "window scene", "pinned lines", "scene lines"):
+        assert so.object_names_in(f"OBJECTS: {phrase}, a ticket") == ["ticket"], phrase
+    # a page built while it was on keeps working after it goes off
+    page = so.inject_library(f"<html><head></head><body>{so.OBJECTS['scene-lines'].html}</body></html>")
+    assert ".sxo-scl.sxo-live" in page and "querySelectorAll('.sxo-scl')" in page
+
+
+def test_the_builder_gets_a_named_scene_and_never_writes_its_code(monkeypatch):
+    monkeypatch.setenv("SITE_SCENES", "on")
     keys = so.object_names_in("OBJECTS: scene wall")
     assert keys == ["scene-wall"]
     block = so.builder_block(keys)
@@ -40,7 +50,8 @@ def test_the_builder_gets_a_named_scene_and_never_writes_its_code():
     assert so.OBJECTS["scene-wall"].js not in block and ".sxo-live" not in block
 
 
-def test_everyday_words_never_name_a_scene():
+def test_everyday_words_never_name_a_scene(monkeypatch):
+    monkeypatch.setenv("SITE_SCENES", "on")
     line = "OBJECTS: a letter on the wall, a ticket by the window, lines of type"
     assert so.object_names_in(line) == ["letter", "ticket"]
 
@@ -54,6 +65,16 @@ def test_scenes_load_nothing_from_anywhere():
         for banned in ("gsap", "scrolltrigger", "lenis", "locomotive", "fetch(", "xmlhttprequest",
                        "eval(", "localstorage", "import(", "http://", "https://", "url("):
             assert banned not in code, f"{key}: {banned}"
+
+
+def test_poster_lines_fit_the_screen_whatever_the_font():
+    """Found on real material: a wide font wrapped the lines, they ran off the
+    pinned screen, and the closing line was cut. The script now fits them."""
+    o = so.OBJECTS["scene-lines"]
+    assert "white-space:nowrap" in o.css and "width:max-content" in o.css
+    assert "aw/Math.max(1,wide)" in o.js and "ah/(n*1.02)" in o.js
+    # a line too long to be a poster stays the plain stack, never tiny type
+    assert "if(fs<28){el.classList.remove('sxo-live')" in o.js
 
 
 def test_the_script_stands_down_where_a_pin_would_fail():
@@ -90,6 +111,7 @@ def _doc(extra):
 
 
 def test_a_page_with_a_scene_passes_the_laws_and_wears_its_code(monkeypatch):
+    monkeypatch.setenv("SITE_SCENES", "on")
     calls = []
     scene = so.OBJECTS["scene-lines"].html.replace('<p class="sxo-scl-end">', '<p class="sxo-scl-end">Thank you. ')
 
@@ -130,10 +152,7 @@ def test_the_eyes_are_told_a_scene_part_way_is_not_a_defect(monkeypatch):
                         lambda fn, **k: (fn(k.get("model"), k.get("max_tokens"), 90.0), k.get("model")))
     for page, told in ((_doc(so.OBJECTS["scene-lines"].html), True), (_doc(""), False)):
         seen.clear()
-        try:
-            v2.inspect_with_eyes(page, "SPEC", "biz-1")
-        except Exception:
-            pass
-        text = " ".join(b.get("text", "") for b in seen.get("content") or [] if isinstance(b, dict))
-        if seen.get("content"):
-            assert ("THIS PAGE HOLDS A SCENE" in text) is told
+        v2.inspect_with_eyes(page, "SPEC", "biz-1")
+        assert seen["content"], "the eyes were never called"
+        text = " ".join(b.get("text", "") for b in seen["content"] if isinstance(b, dict))
+        assert ("THIS PAGE HOLDS A SCENE" in text) is told

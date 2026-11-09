@@ -66,7 +66,8 @@ SCENES: List[Dict[str, Any]] = [
         intent="the page holds still while the owner's own short lines fill in, one after another, at poster size",
         use_when=("the opening or the turning point of a page with NO photos to spare: two to four "
                   "short lines in the owner's own words, about three words each, no word over ten "
-                  "letters, plus one plain closing sentence. Make the first line the page's h1 when "
+                  "letters, plus one plain closing sentence. The lines size themselves to fill the "
+                  "screen, so the longest line sets the size. Make the first line the page's h1 when "
                   "this is the opening. Not for a long sentence, and not for a list of services."),
         aliases=("poster lines scene", "pinned lines", "scene lines"),
         html="""<div class="sxo sxo-scl" data-sx-object="scene-lines" data-overlap-ok>
@@ -83,6 +84,7 @@ SCENES: List[Dict[str, Any]] = [
 .sxo-scl-end{margin:clamp(1rem,3vh,2rem) 0 0;max-width:46ch;font-size:clamp(1.05rem,1.6vw,1.35rem);line-height:1.45}
 .sxo-scl.sxo-live{height:calc(100vh + var(--n,3)*70vh);height:calc(100svh + var(--n,3)*70svh)}
 .sxo-scl.sxo-live .sxo-scl-pin{position:sticky;top:0;height:100vh;height:100svh;min-height:0;overflow:hidden}
+.sxo-scl.sxo-live .sxo-scl-line{width:max-content;max-width:none;white-space:nowrap;overflow-wrap:normal}
 .sxo-scl.sxo-live .sxo-scl-line{-webkit-text-fill-color:transparent;-webkit-background-clip:text;background-clip:text;
   background-image:linear-gradient(90deg,currentColor 0 calc(var(--f,0)*100%),color-mix(in srgb,currentColor 16%,transparent) calc(var(--f,0)*100%) 100%)}
 .sxo-scl.sxo-live .sxo-scl-line:nth-last-child(2){color:var(--_accent)}
@@ -91,6 +93,18 @@ SCENES: List[Dict[str, Any]] = [
         js=_scene_js(
             ".sxo-scl",
             "var ls=el.querySelectorAll('.sxo-scl-line'),n=ls.length||1;el.style.setProperty('--n',n);"
+            # the poster fit: the longest line fills the width, and the whole
+            # block fits the screen, whatever font and word lengths it gets
+            "var size=vw+'x'+vh;if(el._fit!==size&&ls.length){el._fit=size;"
+            "var pin=el.querySelector('.sxo-scl-pin'),cs=getComputedStyle(pin),en=el.querySelector('.sxo-scl-end');"
+            "var aw=pin.clientWidth-parseFloat(cs.paddingLeft)-parseFloat(cs.paddingRight);"
+            "var ah=pin.clientHeight-parseFloat(cs.paddingTop)-parseFloat(cs.paddingBottom)-(en?en.offsetHeight+28:0);"
+            "var j,wide=0;for(j=0;j<ls.length;j++){ls[j].style.fontSize='100px';wide=Math.max(wide,ls[j].offsetWidth)}"
+            "var fs=Math.floor(Math.min(aw/Math.max(1,wide)*100,ah/(n*1.02)));"
+            # too long to be a poster: stay the plain stack, never tiny type
+            "if(fs<28){el.classList.remove('sxo-live');el.style.removeProperty('--n');"
+            "for(j=0;j<ls.length;j++){ls[j].style.fontSize=''}return}"
+            "for(j=0;j<ls.length;j++){ls[j].style.fontSize=fs+'px'}}"
             "for(var i=0;i<ls.length;i++){var a=i/n*.84,b=(i+1)/n*.84;"
             "ls[i].style.setProperty('--f',c((p-a)/(b-a)).toFixed(3))}"
             "el.style.setProperty('--e',c((p-.86)/.1).toFixed(3));"),
