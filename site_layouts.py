@@ -156,8 +156,10 @@ def _fit_split(s: Signals) -> Points:
 
 def _fit_editorial(s: Signals) -> Points:
     p: Points = []
-    if s["story_beats"] >= 3:
+    if s["story_beats"] >= 4:
         p.append((3, "your story carries the site"))
+    if s.get("ask_menu"):
+        p.append((-2, "a list of prices gets lost inside an essay"))
     if s["photos"] <= 2:
         p.append((2, "it needs no photos to look finished"))
     if s["action"] in ("call", "book"):
@@ -194,6 +196,8 @@ def _fit_fullscreen(s: Signals) -> Points:
 
 def _fit_statement(s: Signals) -> Points:
     p: Points = []
+    if s.get("ask_menu"):
+        p.append((-2, "huge words leave no room for the prices you want seen"))
     if s["photos"] == 0:
         p.append((4, "the words do the work, so no photos are needed"))
     elif s["photos"] <= 2:
@@ -225,6 +229,8 @@ def _fit_grid(s: Signals) -> Points:
         p.append((2, "people browse what you sell"))
     if s["action"] == "buy":
         p.append((1, "a grid gets people to the thing they want to buy"))
+    if s.get("ask_menu"):
+        p.append((3, "every item shows its price, so nobody has to ask"))
     if s["photos"] >= 4:
         p.append((1, "there are photos for the tiles"))
     if _IDEA_WORDS["grid"].search(s["idea"]):
@@ -314,7 +320,7 @@ def _fit_sidebar(s: Signals) -> Points:
 def _fit_minimal(s: Signals) -> Points:
     p: Points = []
     if s.get("ask_simple"):
-        p.append((2, "you asked to keep it simple"))
+        p.append((4, "you asked to keep it simple"))
     if s["story_beats"] <= 1 and s["offerings"] <= 2 and s["photos"] <= 1:
         p.append((4, "it looks finished with very little on file"))
     if s["calm_trade"]:
@@ -355,7 +361,7 @@ def _fit_booking(s: Signals) -> Points:
         p.append((3, "people come to book, so booking runs down the page"))
     if s["booking_live"]:
         p.append((2, "your booking page is live, so every service books in one tap"))
-    elif s["action"] == "book":
+    elif s["action"] == "book" or s["appointment_trade"]:
         p.append((-1, "booking is not switched on yet (Chief can set it up)"))
     else:
         p.append((-4, "visitors do not book with you online"))

@@ -91,6 +91,30 @@ def test_nothing_fancy_keeps_the_longest_page_off_the_shortlist():
     assert rows[0]["key"] != "story"
 
 
+def test_asking_to_stop_the_price_questions_gets_a_page_that_shows_prices():
+    dossier = {**_ask("need a site so ppl stop dm'ing me for prices"),
+               "truth": {"offers": [{"name": "Knotless", "price": "$180"},
+                                    {"name": "Boho", "price": "$220"},
+                                    {"name": "Cornrows", "price": "$90"}]}}
+    rows = sl.rank(sl.signals(_ctx(btype="hair braiding", dossier=dossier, offerings=0)))
+    assert rows[0]["key"] == "booking"
+    assert "every service shows its price" in sl.reason_line(rows[0]).lower()
+    assert rows[0]["against"] == ["booking is not switched on yet (Chief can set it up)"]
+
+
+def test_a_basic_site_with_little_on_file_gets_the_small_layout():
+    rows = _rank(btype="lawn care", dossier=_ask("idk just a basic site"), offerings=1)
+    assert rows[0]["key"] == "minimal"
+    assert "you asked to keep it simple" in sl.reason_line(rows[0]).lower()
+
+
+def test_three_thin_answers_do_not_carry_an_essay():
+    dossier = {"story": {"proof": _v("they just say thanks a lot"), "voice": _v("people say never misses a week")},
+               "world": {"room": _v("stripes and cut grass out front")}}
+    rows = {r["key"]: r for r in _rank(btype="lawn care", dossier=dossier)}
+    assert "your story carries the site" not in rows["editorial"]["why"]
+
+
 def test_the_owners_own_pick_still_leads():
     dossier = {**THIN, **_ask(FIND_AND_BOOK), "taste": {"layout": _v("story")}}
     assert _rank(dossier=dossier)[0]["key"] == "story"
