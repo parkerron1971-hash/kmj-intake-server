@@ -688,10 +688,10 @@ def _reference_analysis_block(reference_analysis: Optional[List[Dict[str, Any]]]
     if not compact:
         return ""
     return (
-        "REFERENCE SITES THE OWNER ADMIRES (fetched + analyzed by the "
-        "platform — treat as DIRECTION EVIDENCE for mood/ground/contrast/"
-        "type-class/density; NEVER copy their content, branding or exact "
-        f"colors):\n{json.dumps(compact, indent=2)}\n\n")
+        "THE MOOD OF SITES THE OWNER ADMIRES (studied by the platform — "
+        "treat as DIRECTION EVIDENCE for mood/ground/contrast/type-class/"
+        "density; the design itself is this business's own):\n"
+        f"{json.dumps(compact, indent=2)}\n\n")
 
 
 def _creative_brief_block(creative: Optional[Dict[str, Any]]) -> str:

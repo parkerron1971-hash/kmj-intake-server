@@ -1078,9 +1078,6 @@ def _assemble_intake_text(ctx: Dict[str, Any]) -> str:
         pref_lines.append(f"Inspiration: {prefs['inspiration']}")
     if prefs.get("type_personality"):
         pref_lines.append(f"Type voice the owner chose: {prefs['type_personality']}")
-    if prefs.get("inspiration_urls"):
-        pref_lines.append("Sites I admire: "
-                          + ", ".join(str(u) for u in prefs["inspiration_urls"][:3]))
     # Interview v3 (B1) — the verbs can literally become the hero headline;
     # the inspiration "what specifically" rides verbatim so the signal pass
     # sees it (never appended into `notes`).
@@ -1197,7 +1194,8 @@ def _assemble_intake_text(ctx: Dict[str, Any]) -> str:
 
     # Arc 5 — the platform's deterministic study of the reference sites the
     # owner named. DIRECTION EVIDENCE (mood/type-class/density), never a
-    # copy source; the analyzer extracted these with no LLM involved.
+    # copy source; the analyzer extracted these with no LLM involved. The
+    # sites' addresses and their own words stay out (reference_analyzer).
     ra = prefs.get("reference_analysis") if isinstance(prefs.get("reference_analysis"), dict) else {}
     ok_results = [r for r in (ra.get("results") or [])
                   if isinstance(r, dict) and r.get("ok")]
@@ -1213,15 +1211,12 @@ def _assemble_intake_text(ctx: Dict[str, Any]) -> str:
                 bits.append("type is " + "/".join(classes))
             if dens:
                 bits.append(f"layout feels {dens}")
-            desc = (r.get("description") or r.get("title") or "").strip()
-            if desc:
-                bits.append(f'describes itself as "{desc[:160]}"')
-            ref_lines.append(f"- {r.get('url')}: " + "; ".join(bits))
-        segments.append("REFERENCE SITES THE OWNER ADMIRES (fetched + analyzed):\n"
+            ref_lines.append("- " + "; ".join(bits))
+        segments.append("THE MOOD OF SITES THE OWNER ADMIRES (studied by the platform):\n"
                         + "\n".join(ref_lines)
                         + "\n(Direction evidence only — echo the mood, contrast, type "
-                          "feel and pacing they imply. NEVER copy their content, "
-                          "branding or exact colors.)")
+                          "feel and pacing they imply. The design itself is this "
+                          "business's own.)")
     segments.append(base_text)
     return "\n\n".join(segments)
 
