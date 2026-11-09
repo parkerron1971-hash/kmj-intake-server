@@ -129,7 +129,7 @@ def test_what_they_told_the_coach_counts_as_on_file():
 def test_a_barbershop_with_no_address_or_hours_is_told_those_are_missing():
     known = _known(offerings=[{"name": "Fade", "current_price": 35}])
     missing = known.split("STILL MISSING FOR THIS SITE")[1].split("\n")[0]
-    assert "where they are" in missing and "days and hours" in missing
+    assert "where they are" in missing and "days and times" in missing
 
 
 def test_an_online_coach_is_not_asked_for_an_address():
@@ -239,6 +239,25 @@ def test_the_upload_card_comes_back_when_they_name_the_place():
         assert not dc._should_ask_photos("b1", _say("my pics are on my Insta"), turn)
     finally:
         dc._PHOTO_STATE.pop("b1", None)
+
+
+def test_the_phone_is_where_the_card_works_not_somewhere_else():
+    dc._PHOTO_STATE["b1"] = {"photos": 0, "asked": True}
+    try:
+        with mock.patch.object(dc, "_known_context", return_value="BUSINESS: X"):
+            lead = dc.build_turn_prompt("b1", _say("my pics are on my phone"), mode="quick")[0]["content"]
+        assert "THEIR PHOTOS ARE ON THEIR PHONE" in lead
+        assert "Never say you can't reach them" in lead
+        assert "Nobody here can reach them there" not in lead
+        assert dc._should_ask_photos("b1", _say("my pics are on my phone"), {"stage": "story"})
+    finally:
+        dc._PHOTO_STATE.pop("b1", None)
+
+
+def test_the_facts_come_before_the_pictures():
+    quick = dc.QUICK_SESSION
+    assert quick.index("One TRUTH question") < quick.index("The LOOKS gallery")
+    assert quick.count("One TRUTH question") == 1
 
 
 def test_the_turn_is_told_it_cannot_reach_them():

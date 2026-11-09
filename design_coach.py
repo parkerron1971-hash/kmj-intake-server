@@ -101,7 +101,7 @@ Every turn, extract anything learned into "saves". Use these dossier sections/fi
 - signature: moment (their words), sharpened (your one-line phrasing of it)
 - taste (THE CONCEPT PICK): concept (the card KEY they tapped: plain, signature, world-offer or world-site), concept_idea (the idea in one line, your pitch or their correction of it), concept_offer (when world-offer: the offer's name, from KNOWN CONTEXT or their words). Save all that apply the same turn they tap.
 - truth: proven_stats (value is a list of {label, value, proof} objects); offers (what they sell, a list of {name, price, duration, note} objects, each only as they said it: never a price or a length they did not say); hours (when they are open, one line in their words)
-- truth (WHERE THEY ARE): address (where people come to, as they said it), phone (the number people call, only as they said it)
+- truth (WHERE THEY ARE): address (only the address itself, as they said it, with no other words), phone (only the number, with no other words)
 - capabilities: booking, store (value "on" or "off" — the owner's answer to whether the SITE carries that door)
 Save the practitioner's OWN PHRASING in values — verbatim quotes are design material. Only save what THIS turn established. Empty saves list is fine.
 
@@ -467,7 +467,7 @@ def _ask_and_facts(business_id: str, biz: Optional[Dict[str, Any]],
         missing.append("where they are (the address, or the neighborhood if "
                        "they would rather not post it)")
     if door and not hours:
-        missing.append("the days and hours they are open")
+        missing.append("the days and times they are open or meet")
     if not any(o.get("current_price") or o.get("price") for o in offers):
         missing.append("what people buy from them and what it costs")
 
@@ -609,17 +609,18 @@ QUICK_SESSION = (
     "- One STORY question: the work they are proudest of, or what clients "
     "say walking out. When the context says NO PHOTOS YET, this is the turn "
     "that asks for photos (\"ask\": \"photos\").\n"
-    "- The LOOKS gallery.\n"
-    "- The PAGE gallery (kind \"page\": the first three LAYOUTS THAT FIT THIS "
-    "BUSINESS), right after the look: how the whole site is put together.\n"
-    "- The CONCEPT gallery, right after the page layout.\n"
-    "- One question about what they would never want (save it as bans).\n"
     "- One TRUTH question: whatever STILL MISSING lists in the KNOWN CONTEXT, "
     "together, as one natural question (\"Where's the shop, and what days are "
     "you open?\"). Save what they say as truth address, truth offers and truth "
     "hours, in their words. Skip it when nothing is STILL MISSING. Never ask "
     "for what ON FILE lists; a service marked no price is the one thing there "
-    "you may ask about.\n"
+    "you may ask about. It comes before the galleries: the layouts are ranked "
+    "from what they tell you here, and a busy owner may leave after the pictures.\n"
+    "- The LOOKS gallery.\n"
+    "- The PAGE gallery (kind \"page\": the first three LAYOUTS THAT FIT THIS "
+    "BUSINESS), right after the look: how the whole site is put together.\n"
+    "- The CONCEPT gallery, right after the page layout.\n"
+    "- One question about what they would never want (save it as bans).\n"
     "Skip any of these the KNOWN CONTEXT already answers, and never pad to "
     "reach five. No this-or-that pairs, hero shapes or motion in a quick "
     "session unless they ask for more. If they want to go deeper, follow "
@@ -656,10 +657,15 @@ def build_turn_prompt(business_id: str,
     known = _known_context(business_id)
     elsewhere = _photos_elsewhere(messages)
     if elsewhere and (_PHOTO_STATE.get(business_id) or {}).get("photos", 1) == 0:
-        known += (f"\n\nTHEY JUST SAID THEIR PHOTOS ARE ON: {elsewhere}. Nobody here "
-                  "can reach them there. Say so plainly in this reply, ask them to "
-                  "save a few to their phone and add them here, and never offer to "
-                  "use them from there.")
+        if re.search(r"phone|camera roll", elsewhere, re.IGNORECASE):
+            known += ("\n\nTHEY JUST SAID THEIR PHOTOS ARE ON THEIR PHONE. That is "
+                      "exactly where the upload card reads from, so they can add a few "
+                      "right now or later. Never say you can't reach them.")
+        else:
+            known += (f"\n\nTHEY JUST SAID THEIR PHOTOS ARE ON: {elsewhere}. Nobody here "
+                      "can reach them there. Say so plainly in this reply, ask them to "
+                      "save a few to their phone and add them here, and never offer to "
+                      "use them from there.")
     quick = ("\n\n" + QUICK_SESSION) if session_mode(mode) == "quick" else ""
     lead = ("KNOWN CONTEXT (the platform already knows this — never "
             "re-ask any of it):\n" + known + quick
