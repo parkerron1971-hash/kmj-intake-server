@@ -104,3 +104,15 @@ def test_a_bad_read_never_blocks_the_card(monkeypatch):
         raise ValueError("no")
     monkeypatch.setattr(site_concept, "resolve", boom)
     assert br.spec_readiness(_church())["photo_stop"] is None
+
+
+def test_a_failed_site_read_cannot_hide_a_plain_choice(monkeypatch):
+    monkeypatch.setenv("SITE_PHOTOS_FIRST", "on")
+    assert br.spec_readiness(_church(site={}))["photo_stop"] is None
+    assert br.spec_readiness(_church(site=None))["photo_stop"] is None
+
+
+def test_with_the_concept_layer_off_everything_is_plain(monkeypatch):
+    monkeypatch.setenv("SITE_PHOTOS_FIRST", "on")
+    monkeypatch.setenv("SITE_CONCEPT", "off")
+    assert br.spec_readiness(_church())["photo_stop"] is None

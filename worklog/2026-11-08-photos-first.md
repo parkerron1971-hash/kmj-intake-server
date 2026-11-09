@@ -3,11 +3,11 @@ title: A real stop for photos at Build it
 date: 2026-11-08
 agent: Claude Code (Claude Opus 5.5)
 asked: "you can work on what is missing and need upgrading"
-status: shipped
-prs: []
+status: waiting on Kevin
+prs: [kmj-intake-server#1774, solutionist-studio#1496]
 migrations: []
 left_undone:
-  - "SITE_PHOTOS_FIRST is off. Kevin's rule: features switch on on a Thursday."
+  - "Merged but switched off: SITE_PHOTOS_FIRST waits for a Thursday. The What's New entry ships with the switch."
   - "The stop is on Chief's blueprint card only. The Studio's own Build button still shows the gap as a note."
   - "How many live sites have real photos is unmeasured: the production read was blocked. The last count was 3 of 19 published pages, from 2026-10-03."
 decisions:

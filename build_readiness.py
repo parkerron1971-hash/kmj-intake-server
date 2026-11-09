@@ -42,6 +42,10 @@ def photo_stop(ctx: Dict[str, Any], photos: int) -> Optional[Dict[str, int]]:
         return None
     try:
         import site_concept
+        # a failed read hides the owner's Plain choice, and it reads as empty
+        site = ctx.get("site") if isinstance(ctx.get("site"), dict) else {}
+        if not site_concept.enabled() or not isinstance(site.get("site_config"), dict):
+            return None
         if site_concept.resolve(ctx).get("intensity") == "plain":
             return None
         btype = str((ctx.get("business") or {}).get("type") or "")
