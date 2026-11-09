@@ -32,6 +32,7 @@ import logging
 import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlsplit
 
 logger = logging.getLogger("discovery")
 
@@ -581,6 +582,22 @@ def derive_taste(business_id: str) -> Optional[Dict[str, Any]]:
 
 # ─── the Director's view ─────────────────────────────────────────────
 
+def _reference_for_designer(ref: Dict[str, Any]) -> Dict[str, Any]:
+    """What a designer may read about a site the owner pointed at: the
+    disciplines and the taste, not which site it was. The digest also feeds
+    the builder's real data, whose web addresses are what its look tool may
+    open, so an address here would put that site's screenshot in front of
+    the model writing the page."""
+    host = (urlsplit(str(ref.get("url") or "")).hostname or "").lower()
+    name = host.removeprefix("www.").split(".")[0]
+    out = {k: v for k, v in ref.items() if k != "url"}
+    if len(name) >= 4:
+        for key in ("rules", "bans"):
+            if isinstance(out.get(key), list):
+                out[key] = [x for x in out[key] if name not in str(x).lower()]
+    return out
+
+
 def dossier_digest(dossier: Optional[Dict[str, Any]]) -> str:
     """Compact JSON for the spec author's prompt. '' when nothing
     useful exists. Screenshots don't ride (rules/taste text does)."""
@@ -597,4 +614,7 @@ def dossier_digest(dossier: Optional[Dict[str, Any]]) -> str:
         # recon-only artifact lists already ride the inventory — don't
         # duplicate them into a second section for nothing
         return ""
+    if refs:
+        slim["artifacts"] = dict(slim["artifacts"], references=[
+            _reference_for_designer(r) if isinstance(r, dict) else r for r in refs])
     return json.dumps(slim, ensure_ascii=False, indent=1)[:8000]

@@ -14,7 +14,7 @@ decided upstream, in words.
 
 This module gives the same builder a small, real toolset and a budget:
 
-  look(url)             see a photo, the brand mark, a reference page
+  look(url)             see a photo, the brand mark, a page the real data names
   render(html, width)   render its own draft and get the screenshots back,
                         plus the builder's deterministic laws and stand-in
                         findings — WHILE building
@@ -67,8 +67,8 @@ def max_tools() -> int:
 TOOLS: List[Dict[str, Any]] = [
     {"name": "look",
      "description": "See an image from the real data (a gallery piece, the "
-                    "brand mark, an owner upload) or a reference page the "
-                    "owner loved. Use it to read the palette, the density, "
+                    "brand mark, an owner upload) or a page the real data "
+                    "names. Use it to read the palette, the density, "
                     "the typography personality that already exists in their "
                     "work before you commit to yours.",
      "input_schema": {"type": "object",
@@ -170,14 +170,15 @@ class ToolBox:
     def look(self, url: str) -> List[Dict[str, Any]]:
         self.looks += 1
         u = (url or "").strip().rstrip(").,")
-        # Only what the real data names (an owner's image or reference) —
-        # the builder reads the owner's world, it does not browse.
+        # Only what the real data names — the builder reads the owner's
+        # world, it does not browse. Sites the owner admires are not in
+        # there (discovery.dossier_digest), so it cannot open one.
         if not any(u == a.rstrip(").,") for a in self.allowed_urls):
             return [{"type": "text", "text": f"{u} is not in the real data — "
-                                             "look only at the owner's images and references."}]
+                                             "look only at what the real data names."}]
         if _is_image_url(u):
             return [{"type": "text", "text": f"IMAGE — exact url: {u}"}, _image_block(u)]
-        # A web page (a reference site the owner loved) is not an image:
+        # A web page is not an image:
         # sent as one, the API refused the whole request and the loop
         # ended (2026-09-22). Look at it the way a person would.
         try:
