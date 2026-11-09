@@ -356,3 +356,9 @@ def test_the_rail_makes_room_and_reads_on_the_page_ground():
 
 def test_the_edge_steps_down():
     assert '.sxo-edge[data-edge="steps"]' in OBJECTS["edge"].css and "steps" in OBJECTS["edge"].intent
+
+
+def test_a_marked_phrase_wraps_on_a_phone():
+    """A real build marked "Both of them good" and it ran off the phone's edge."""
+    css = OBJECTS["marker"].css
+    assert '@media (max-width:640px){.sxo-mark[data-mark="underline"]{white-space:normal}' in css

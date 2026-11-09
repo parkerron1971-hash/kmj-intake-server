@@ -63,7 +63,7 @@ def test_the_coach_s_offer_and_hours_saves_reach_the_dossier(monkeypatch):
 def test_the_coach_is_taught_to_save_offers_and_ask_the_truth_question():
     assert "offers (what they sell, a list of {name, price, duration, note}" in dc._SYSTEM
     assert "never a price or a length they did not say" in dc._SYSTEM
-    assert "One TRUTH question" in dc.QUICK_SESSION and "when they are open" in dc.QUICK_SESSION
+    assert "One TRUTH question" in dc.QUICK_SESSION and "whatever STILL MISSING lists" in dc.QUICK_SESSION
 
 
 def test_the_server_asks_for_photos_once_when_there_are_none(monkeypatch):

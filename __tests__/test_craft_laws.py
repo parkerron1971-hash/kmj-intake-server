@@ -137,3 +137,51 @@ def test_a_headline_far_down_the_phone_screen_is_named():
 def test_render_js_is_one_function():
     js = cl.RENDER_JS.strip()
     assert js.startswith("() =>") and "small_text" in js and "control_font" in js
+
+
+# ─── words past the side of the screen (2026-11-09, a real build) ─
+
+def test_words_off_the_side_of_the_screen_are_a_finding():
+    found = cl.render_findings({"390": {"past_edge": [
+        {"label": 'span.sxo-mark "Both of them good"', "left": 24, "right": 429}]}})
+    assert any("runs off the side of the screen" in f and "Both of them good" in f for f in found)
+    assert not any("runs off" in f for f in cl.render_findings({"390": {"past_edge": []}}))
+
+
+def test_things_meant_to_run_off_are_not_measured():
+    js = cl.RENDER_JS
+    for meant in ('[data-sx-object="marquee"]', "nav,header", "animationName", "cs.transform", "overflowX", "position === 'fixed'"):
+        assert meant in js, meant
+    assert "box.left < vw" in js and "box.right > 0" in js, "wholly off screen is a hiding trick, not a cut"
+
+
+def _past_edge(body, css=""):
+    import pytest
+    pw = pytest.importorskip("playwright.sync_api")
+    try:
+        driver = pw.sync_playwright().start()
+        browser = driver.chromium.launch()
+    except Exception as e:
+        pytest.skip(f"no browser here: {e}")
+    try:
+        page = browser.new_context(viewport={"width": 390, "height": 844}).new_page()
+        page.set_content(f"<!DOCTYPE html><html><head><style>body{{margin:0;overflow-x:hidden}}{css}</style></head><body>{body}</body></html>")
+        return page.evaluate(cl.RENDER_JS)["past_edge"]
+    finally:
+        browser.close()
+        driver.stop()
+
+
+def test_a_heading_off_the_phone_is_found_once_in_a_real_browser():
+    found = _past_edge('<h2 style="white-space:nowrap;font-size:60px">Both of them <span>good and also very sharp</span></h2>')
+    assert len(found) == 1 and found[0]["right"] > 390
+
+
+def test_what_is_meant_to_run_off_stays_quiet_in_a_real_browser():
+    assert _past_edge(
+        '<p style="position:absolute;left:-9999px">hidden for readers only</p>'
+        '<div style="overflow-x:auto"><p style="width:900px">a swipe strip here</p></div>'
+        '<div class="m"><p style="width:900px;white-space:nowrap">a moving marquee band</p></div>'
+        '<nav><a style="position:absolute;left:380px;width:300px">an off-canvas link</a></nav>'
+        '<p style="transform:translateX(200px);width:300px">moved on purpose by a script</p>',
+        ".m{animation:go 9s linear infinite}@keyframes go{to{transform:translateX(-50%)}}") == []

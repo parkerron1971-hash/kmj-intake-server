@@ -64,6 +64,21 @@ HOW YOU TALK (the coaching craft):
 - YOUR LANE IS THE BRAND, NOT THE BUSINESS PLAN (the owner's ruling: people must FEEL the difference from the strategy coach). The strategy coach owns audience, offers, pricing, and goals — you NEVER ask those. Every question you ask is about what things LOOK, SOUND, and FEEL like: rooms, light, materials, textures, the colors they reach for, what plays in the background, the piece of work they'd frame, what clients SAY out loud. When a business fact matters, pull it from KNOWN CONTEXT and react to it like a director ("you work with barbers and churches — so chrome, neon, and stained-glass light are already in your world"). The test: if a question could appear in a business-plan interview, it is the wrong question — ask the sensory version instead ("who's your audience?" becomes "when your favorite client walks in, what do they see first?").
 - Warm, direct, a little playful. Celebrate specific answers ("THAT — 'installed once, worn for years' — that's a headline"). Push politely past vague ones ("'professional' tells me nothing about YOU — what would your best client say?").
 
+READ THE ASK BEFORE YOU ASK ANYTHING:
+People describe the result they want, rarely a design, and they usually say less than they mean. When KNOWN CONTEXT carries WHAT THEY ASKED CHIEF FOR, work out what the site has to do for them first, then ask only what would change the page. How to read what people say:
+- "find me", "where I am", "people can't find us": being found is the first job. The address, the hours and a way to call belong near the top, so you need the address.
+- "book", "appointments", "stop texting me for times": booking is the main action and every section leads to it. Save it as identity primary_action. "sell", "order", "buy" work the same way for buying.
+- "nothing fancy", "simple", "just a basic site": they don't want a long process, or a site that isn't them. It is NOT a request for a worse page and it does not mean the Plain setting. Fewer questions, the same craft.
+- "professional", "clean", "modern", "nice": these mean nothing yet. Ask who needs to trust them, or for a site they liked and what they liked about it.
+- "like [some site]": ask what they like about it, in their words. Never offer to copy it.
+- "it's just a [trade]": modesty, not a lack of material. Ask for one time a client reacted.
+- "I don't know", "you decide", "whatever you think": stop asking that way. Offer two concrete things to react to (the "pair" field), or make the call and say you made it.
+- A short answer is not a refusal. After one, ask something easier. After two in a row, move on.
+Say it back: your first line names what they asked for, in their words, so they know they were heard. Keep it to the end: the first reflect_back line of the brief says what the site has to do for them.
+
+WHAT NOBODY HERE CAN DO:
+Nobody here can reach into Instagram, Facebook, Google, TikTok or another website to collect photos or reviews for the page. Never say or imply that you or the designer can pull, grab, use or work from what is on those accounts, and never write a reflect_back line saying the photos come from them. A photo is on the page only when it is in their library. If their photos live somewhere else, say plainly that you can't reach them there, and ask them to save a few to their phone and add them here, or to add them later.
+
 THE OPENING (the first turn of a session — there is no transcript yet):
 Greet them like a person walking into your studio, BY NAME when the known context carries one (the business owner's first name; the business name otherwise). One warm line that proves you already know them ("I've seen the Glow Up work — you don't design small"). Then set the frame in one sentence: this is a conversation, not a form; they talk, you listen, and their site gets designed from what they say. Then ONE soft opening question about their world. Never open with a list, a menu of options, or "how can I help".
 
@@ -86,6 +101,7 @@ Every turn, extract anything learned into "saves". Use these dossier sections/fi
 - signature: moment (their words), sharpened (your one-line phrasing of it)
 - taste (THE CONCEPT PICK): concept (the card KEY they tapped: plain, signature, world-offer or world-site), concept_idea (the idea in one line, your pitch or their correction of it), concept_offer (when world-offer: the offer's name, from KNOWN CONTEXT or their words). Save all that apply the same turn they tap.
 - truth: proven_stats (value is a list of {label, value, proof} objects); offers (what they sell, a list of {name, price, duration, note} objects, each only as they said it: never a price or a length they did not say); hours (when they are open, one line in their words)
+- truth (WHERE THEY ARE): address (only the address itself, as they said it, with no other words), phone (only the number, with no other words)
 - capabilities: booking, store (value "on" or "off" — the owner's answer to whether the SITE carries that door)
 Save the practitioner's OWN PHRASING in values — verbatim quotes are design material. Only save what THIS turn established. Empty saves list is fine.
 
@@ -236,13 +252,43 @@ def _photo_context(settings: Dict[str, Any]) -> List[str]:
 _PHOTO_STATE: Dict[str, Dict[str, Any]] = {}
 
 
+# THEIR PHOTOS ARE SOMEWHERE ELSE (2026-11-09, the front-end test). An owner
+# said "they're on my Instagram" and the Coach said the designer could pull
+# them from there. Nothing can, so the site came out with no photos after a
+# promise that it would have them. When they name the place, the Coach is
+# told again that it can't reach it, and the upload card comes back.
+_PHOTOS_ELSEWHERE_RE = re.compile(
+    r"\b(instagram|insta|ig|facebook|fb|tiktok|google photos|camera roll|my phone)\b",
+    re.IGNORECASE)
+_PHOTO_TALK_RE = re.compile(r"\b(photos?|pictures?|pics?|shots?|images?|cuts?|posts?|posted)\b",
+                            re.IGNORECASE)
+
+
+def _photos_elsewhere(messages: List[Dict[str, str]]) -> str:
+    """Where the latest answer says their photos live, or ''. Naming the place
+    only counts in talk about photos: "find me on Instagram" is not that."""
+    msgs = [m for m in (messages or []) if str(m.get("content") or "").strip()]
+    if not msgs or msgs[-1].get("role") == "assistant":
+        return ""
+    last = str(msgs[-1].get("content") or "")
+    where = _PHOTOS_ELSEWHERE_RE.search(last)
+    if not where:
+        return ""
+    before = str(msgs[-2].get("content") or "") if len(msgs) > 1 else ""
+    return where.group(0) if _PHOTO_TALK_RE.search(f"{last} {before}") else ""
+
+
 def _should_ask_photos(business_id: str, messages: List[Dict[str, str]],
                        turn: Dict[str, Any]) -> bool:
     st = _PHOTO_STATE.get(business_id)
-    if not st or st.get("photos", 1) > 0 or st.get("asked"):
+    if not st or st.get("photos", 1) > 0:
         return False
     if turn.get("ask") == "photos" or turn.get("done") or turn.get("gallery") \
             or turn.get("stage") == "brief":
+        return False
+    if _photos_elsewhere(messages):
+        return True
+    if st.get("asked"):
         return False
     # The first turn after they have said anything (2026-10-03, the second
     # live test): a returning owner's session was two answers long, a
@@ -347,6 +393,96 @@ def _finish_page_gallery(gallery: Dict[str, Any], business_id: str) -> None:
     gallery["recommended"] = min(opts, key=lambda o: order[o])
 
 
+def _fact(value: Any) -> str:
+    value = value.get("value") if isinstance(value, dict) else value
+    return str(value or "").strip()
+
+
+def _offer_line(offer: Dict[str, Any]) -> str:
+    name = str(offer.get("name") or "").strip()
+    if not name:
+        return ""
+    price = offer.get("current_price") or offer.get("price")
+    if not price:
+        bits = ["no price"]
+    else:
+        try:
+            bits = [f"${float(price):g}"]
+        except (TypeError, ValueError):
+            bits = [str(price)[:40]]
+    length = offer.get("duration_min")
+    if length:
+        bits.append(f"{length} min")
+    elif offer.get("duration"):
+        bits.append(str(offer["duration"])[:40])
+    return f"{name} ({', '.join(bits)})"
+
+
+def _ask_and_facts(business_id: str, biz: Optional[Dict[str, Any]],
+                   dossier: Optional[Dict[str, Any]]) -> List[str]:
+    """THE OWNER'S WORDS, AND WHAT THE PAGE STILL NEEDS (2026-11-09, talking
+    to Chief as a test shop). "Nothing fancy, I just want people to find me
+    and book" never reached the Coach. It asked again for services it had on
+    file (they were not in its context), and never asked where the shop was
+    (nothing told it that mattered), so the page was drafted with no address
+    for an owner whose whole ask was to be found."""
+    import discovery
+    st = (biz or {}).get("settings") if isinstance((biz or {}).get("settings"), dict) else {}
+    link = st.get("link_page") if isinstance(st.get("link_page"), dict) else {}
+    d = dossier if isinstance(dossier, dict) else {}
+    truth = d.get("truth") if isinstance(d.get("truth"), dict) else {}
+    ask = discovery.current_ask(d)
+    booking = st.get("booking") if isinstance(st.get("booking"), dict) else {}
+    window = booking.get("hours") if isinstance(booking.get("hours"), dict) else {}
+
+    address = _fact(st.get("address")) or _fact(link.get("address")) or _fact(truth.get("address"))
+    phone = _fact(st.get("contact_phone")) or _fact(link.get("phone")) or _fact(truth.get("phone"))
+    hours = _fact(truth.get("hours"))
+    if not hours and window.get("start") and window.get("end"):
+        hours = f"{window['start']}-{window['end']}"
+    try:
+        import sb_clients
+        rows = sb_clients.sb_get_as_service(
+            f"/offerings?business_id=eq.{business_id}&is_active=eq.true"
+            "&select=name,current_price,duration_min&limit=12") or []
+    except Exception:
+        rows = []
+    stated = truth.get("offers") if isinstance(truth.get("offers"), list) else []
+    offers = [o for o in list(rows) + stated if isinstance(o, dict) and o.get("name")]
+
+    on_file = []
+    if address:
+        on_file.append(f"- Address: {address}")
+    if phone:
+        on_file.append(f"- Phone: {phone}")
+    if hours:
+        on_file.append(f"- Hours: {hours}")
+    if offers:
+        on_file.append("- Services: " + "; ".join(_offer_line(o) for o in offers))
+
+    door = bool(_site_layouts and _site_layouts.has_a_door(
+        str((biz or {}).get("business_type") or ""), ask))
+    missing = []
+    if door and not address:
+        missing.append("where they are (the address, or the neighborhood if "
+                       "they would rather not post it)")
+    if door and not hours:
+        missing.append("the days and times they are open or meet")
+    if not any(o.get("current_price") or o.get("price") for o in offers):
+        missing.append("what people buy from them and what it costs")
+
+    blocks = []
+    if ask:
+        blocks.append("WHAT THEY ASKED CHIEF FOR (their own words, and the reason "
+                      f"this session exists; read it first):\n\"{ask}\"")
+    if on_file:
+        blocks.append("ON FILE ALREADY (never ask for these again):\n" + "\n".join(on_file))
+    if missing:
+        blocks.append("STILL MISSING FOR THIS SITE (the page never invents these; if "
+                      "they skip one, move on): " + "; ".join(missing))
+    return blocks
+
+
 def _known_context(business_id: str) -> str:
     parts: List[str] = []
     _biz_row: Optional[Dict[str, Any]] = None
@@ -417,6 +553,11 @@ def _known_context(business_id: str) -> str:
                          "never re-ask):\n" + digest[:2400])
     except Exception as e:
         logger.info(f"[coach] dossier context skipped: {e}")
+    try:
+        # right after the business line: this is what the session is for
+        parts[1:1] = _ask_and_facts(business_id, _biz_row, _dossier)
+    except Exception as e:
+        logger.info(f"[coach] ask and facts skipped: {e}")
     # THE WIRED-SITE CONTRACT (2026-07-26): mirror the platform's truth
     # about which doors are actually live, so the coach CONFIRMS the
     # site connections instead of asking blind — and never offers a
@@ -468,15 +609,18 @@ QUICK_SESSION = (
     "- One STORY question: the work they are proudest of, or what clients "
     "say walking out. When the context says NO PHOTOS YET, this is the turn "
     "that asks for photos (\"ask\": \"photos\").\n"
+    "- One TRUTH question: whatever STILL MISSING lists in the KNOWN CONTEXT, "
+    "together, as one natural question (\"Where's the shop, and what days are "
+    "you open?\"). Save what they say as truth address, truth offers and truth "
+    "hours, in their words. Skip it when nothing is STILL MISSING. Never ask "
+    "for what ON FILE lists; a service marked no price is the one thing there "
+    "you may ask about. It comes before the galleries: the layouts are ranked "
+    "from what they tell you here, and a busy owner may leave after the pictures.\n"
     "- The LOOKS gallery.\n"
     "- The PAGE gallery (kind \"page\": the first three LAYOUTS THAT FIT THIS "
     "BUSINESS), right after the look: how the whole site is put together.\n"
     "- The CONCEPT gallery, right after the page layout.\n"
     "- One question about what they would never want (save it as bans).\n"
-    "- One TRUTH question: what people buy from them, what each costs, and "
-    "when they are open. Save what they say as truth offers and truth hours, "
-    "in their words. Skip it when the KNOWN CONTEXT already lists their "
-    "offers with prices.\n"
     "Skip any of these the KNOWN CONTEXT already answers, and never pad to "
     "reach five. No this-or-that pairs, hero shapes or motion in a quick "
     "session unless they ask for more. If they want to go deeper, follow "
@@ -511,6 +655,17 @@ def build_turn_prompt(business_id: str,
         if str(m.get("content") or "").strip()
     ]
     known = _known_context(business_id)
+    elsewhere = _photos_elsewhere(messages)
+    if elsewhere and (_PHOTO_STATE.get(business_id) or {}).get("photos", 1) == 0:
+        if re.search(r"phone|camera roll", elsewhere, re.IGNORECASE):
+            known += ("\n\nTHEY JUST SAID THEIR PHOTOS ARE ON THEIR PHONE. That is "
+                      "exactly where the upload card reads from, so they can add a few "
+                      "right now or later. Never say you can't reach them.")
+        else:
+            known += (f"\n\nTHEY JUST SAID THEIR PHOTOS ARE ON: {elsewhere}. Nobody here "
+                      "can reach them there. Say so plainly in this reply, ask them to "
+                      "save a few to their phone and add them here, and never offer to "
+                      "use them from there.")
     quick = ("\n\n" + QUICK_SESSION) if session_mode(mode) == "quick" else ""
     lead = ("KNOWN CONTEXT (the platform already knows this — never "
             "re-ask any of it):\n" + known + quick
@@ -726,8 +881,8 @@ def apply_saves(business_id: str, saves: List[Dict[str, Any]]) -> int:
             vals = s["value"] if isinstance(s["value"], list) else [s["value"]]
             patch.setdefault("truth", {}).setdefault("offers", []).extend(
                 v for v in vals if isinstance(v, (dict, str)))
-        elif s["section"] == "truth" and s["field"] == "hours":
-            patch.setdefault("truth", {})["hours"] = str(s["value"])
+        elif s["section"] == "truth" and s["field"] in ("hours", "address", "phone"):
+            patch.setdefault("truth", {})[s["field"]] = str(s["value"])
         else:
             patch.setdefault(s["section"], {})[s["field"]] = {
                 "value": s["value"], "source": "asked"}

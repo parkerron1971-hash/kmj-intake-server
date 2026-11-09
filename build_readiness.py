@@ -107,6 +107,21 @@ def spec_readiness(ctx: Dict[str, Any]) -> Dict[str, Any]:
         notes.append("No logo on file — the header will carry a typographic "
                      "wordmark. Add your mark in Brand to change that.")
         chips.append("Give the wordmark real presence in the header")
+    # A SITE THAT CAN'T SAY WHERE IT IS (2026-11-09): only when the context
+    # says what is on file; a caller with no contact block doesn't know.
+    contact = ctx.get("contact")
+    if isinstance(contact, dict) and not str(contact.get("address") or "").strip():
+        try:
+            import discovery
+            import site_layouts
+            biz = ctx.get("business") if isinstance(ctx.get("business"), dict) else {}
+            btype = str(biz.get("type") or biz.get("business_type") or "")
+            if site_layouts.has_a_door(btype, discovery.current_ask(dossier)):
+                notes.append("No address on file, so the page can't say where you "
+                             "are. Tap Change something and give it, and it goes on "
+                             "the page.")
+        except Exception:
+            pass
     if offerings == 0 and stated_offers:
         named = ", ".join(str(o["name"]) for o in stated_offers[:3])
         # (2026-10-04, Kevin: "what about booking?") the line used to end
