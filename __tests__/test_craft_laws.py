@@ -137,3 +137,19 @@ def test_a_headline_far_down_the_phone_screen_is_named():
 def test_render_js_is_one_function():
     js = cl.RENDER_JS.strip()
     assert js.startswith("() =>") and "small_text" in js and "control_font" in js
+
+
+# ─── words past the side of the screen (2026-11-09, a real build) ─
+
+def test_words_off_the_side_of_the_screen_are_a_finding():
+    found = cl.render_findings({"390": {"past_edge": [
+        {"label": 'span.sxo-mark "Both of them good"', "left": 24, "right": 429}]}})
+    assert any("runs off the side of the screen" in f and "Both of them good" in f for f in found)
+    assert not any("runs off" in f for f in cl.render_findings({"390": {"past_edge": []}}))
+
+
+def test_things_meant_to_run_off_are_not_measured():
+    js = cl.RENDER_JS
+    for meant in ('[data-sx-object="marquee"]', "nav,header", "animationName", "cs.transform", "overflowX", "position === 'fixed'"):
+        assert meant in js, meant
+    assert "box.left < vw" in js and "box.right > 0" in js, "wholly off screen is a hiding trick, not a cut"

@@ -880,3 +880,9 @@ def test_a_page_that_ignores_its_concept_earns_the_repair(monkeypatch):
     assert len(calls) == 2 and "CONCEPT:" in calls[1]
     assert "ticket" in calls[1] and "letterboard" in calls[1]
     assert "THEIR STRUCTURE" in calls[0], "the named objects arrived with the author's brief"
+
+
+def test_the_eyes_have_room_to_finish_a_verdict():
+    """On Opus 5.5 reasoning used all of 4,000 tokens on both looks at a real
+    page: the verdict came back cut off, and the page shipped unseen."""
+    assert v2.INSPECTOR_MAX_TOKENS >= 8000
