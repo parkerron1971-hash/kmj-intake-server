@@ -281,7 +281,7 @@ RENDER_JS = r"""
 () => {
   const vh = window.innerHeight, vw = window.innerWidth;
   const out = { width: vw, small_text: [], tiny_text: [], centered_long: [],
-                control_font: null, h1: null, opening_px: 0, opening: null };
+                control_font: null, h1: null, opening_px: 0, opening: null, past_edge: [] };
   const label = el => el.tagName.toLowerCase()
     + (typeof el.className === 'string' && el.className.trim() ? '.' + el.className.trim().split(/\s+/)[0] : '')
     + ' "' + (el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 40) + '"';
@@ -313,6 +313,29 @@ RENDER_JS = r"""
     if (isNaN(lh)) lh = parseFloat(cs.fontSize) * 1.2;
     const lines = Math.round(el.getBoundingClientRect().height / lh);
     if (lines > 3 && out.centered_long.length < 4) out.centered_long.push({ label: label(el), lines });
+  }
+  // WORDS PAST THE SIDE OF THE SCREEN. A page that hides sideways scroll looks
+  // fine to a width check and still cuts the words off. Things meant to run off
+  // are skipped: marquees, swipe strips, off-canvas menus, anything animating or moved.
+  const meantToRun = el => {
+    if (el.closest('nav,header,[role="dialog"],[data-sx-object="marquee"],[data-sx-object^="scene-"],.sr-only,.sxo-sr')) return true;
+    for (let p = el, i = 0; p && p !== document.body && i < 8; p = p.parentElement, i++) {
+      const cs = getComputedStyle(p);
+      if (cs.animationName !== 'none' || cs.transform !== 'none' || cs.position === 'fixed' || /auto|scroll/.test(cs.overflowX)) return true;
+    }
+    return false;
+  };
+  const cutEls = [];
+  for (const el of document.body.querySelectorAll('h1,h2,h3,h4,p,li,a,span,strong,em,b,button')) {
+    if (own(el).length < 3 || skip(el) || !visible(el)) continue;
+    const box = el.getBoundingClientRect();
+    // only words partly on screen are cut off; wholly off screen is a hiding trick
+    const cut = (box.right > vw + 2 && box.left < vw) || (box.left < -2 && box.right > 0);
+    // a heading and the span inside it are one problem, not two
+    if (cut && !meantToRun(el) && out.past_edge.length < 3 && !cutEls.some(c => c.contains(el) || el.contains(c))) {
+      cutEls.push(el);
+      out.past_edge.push({ label: label(el), left: Math.round(box.left), right: Math.round(box.right) });
+    }
   }
   // THE OPENING: the biggest words on the first screen. A ghost word is
   // aria-hidden and doesn't count; a library object's big name does.
@@ -414,6 +437,10 @@ def render_findings(measures: Optional[Dict[str, Any]]) -> List[str]:
             ex = "; ".join(f"{c.get('label')} ({c.get('lines')} lines)" for c in cent[:2])
             out.append(f"at {width}px long paragraphs are centered ({ex}). Center "
                        "three lines at most; set longer copy flush left.")
+        for e in (m.get("past_edge") or [])[:2]:
+            out.append(f"at {width}px {e.get('label')} runs off the side of the screen "
+                       f"(it spans {e.get('left')}px to {e.get('right')}px), so its words "
+                       "are cut off. Let it wrap or set it smaller.")
         ctl = m.get("control_font")
         if ctl and not control_said:
             control_said = True
