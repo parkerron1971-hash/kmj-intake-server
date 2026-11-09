@@ -85,6 +85,7 @@ SCENES: List[Dict[str, Any]] = [
 .sxo-scl.sxo-live{height:calc(100vh + var(--n,3)*70vh);height:calc(100svh + var(--n,3)*70svh)}
 .sxo-scl.sxo-live .sxo-scl-pin{position:sticky;top:0;height:100vh;height:100svh;min-height:0;overflow:hidden}
 .sxo-scl.sxo-live .sxo-scl-line{width:max-content;max-width:none;white-space:nowrap;overflow-wrap:normal}
+.sxo-scl.sxo-live.sxo-tall .sxo-scl-line{width:auto;white-space:normal}
 .sxo-scl.sxo-live .sxo-scl-line{-webkit-text-fill-color:transparent;-webkit-background-clip:text;background-clip:text;
   background-image:linear-gradient(90deg,currentColor 0 calc(var(--f,0)*100%),color-mix(in srgb,currentColor 16%,transparent) calc(var(--f,0)*100%) 100%)}
 .sxo-scl.sxo-live .sxo-scl-line:nth-last-child(2){color:var(--_accent)}
@@ -101,6 +102,13 @@ SCENES: List[Dict[str, Any]] = [
             "var ah=pin.clientHeight-parseFloat(cs.paddingTop)-parseFloat(cs.paddingBottom)-(en?en.offsetHeight+28:0);"
             "var j,wide=0;for(j=0;j<ls.length;j++){ls[j].style.fontSize='100px';wide=Math.max(wide,ls[j].offsetWidth)}"
             "var fs=Math.floor(Math.min(aw/Math.max(1,wide)*100,ah/(n*1.02)));"
+            # on a tall screen a line may break between words, so the words can
+            # go bigger: take the largest size where no word runs off and it all fits
+            "if(vh>vw){el.classList.add('sxo-tall');var big=Math.floor(Math.min(vw*.24,ah/n));"
+            "for(;big>fs;big-=2){var tall=0,over=false;"
+            "for(j=0;j<ls.length;j++){ls[j].style.fontSize=big+'px';tall+=ls[j].offsetHeight;if(ls[j].scrollWidth>ls[j].clientWidth+1)over=true}"
+            "if(!over&&tall<=ah)break}"
+            "if(big>fs)fs=big;else el.classList.remove('sxo-tall')}else{el.classList.remove('sxo-tall')}"
             # too long to be a poster: stay the plain stack, never tiny type
             "if(fs<28){el.classList.remove('sxo-live');el.style.removeProperty('--n');"
             "for(j=0;j<ls.length;j++){ls[j].style.fontSize=''}return}"
@@ -108,7 +116,7 @@ SCENES: List[Dict[str, Any]] = [
             "for(var i=0;i<ls.length;i++){var a=i/n*.84,b=(i+1)/n*.84;"
             "ls[i].style.setProperty('--f',c((p-a)/(b-a)).toFixed(3))}"
             "el.style.setProperty('--e',c((p-.86)/.1).toFixed(3));"),
-        phone="the lines stay big and fill the screen, stacked; the pin is a little shorter",
+        phone="the lines break between words so they can go bigger, and they fill the screen",
     ),
     dict(
         key="scene-reveal",

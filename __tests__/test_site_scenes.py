@@ -73,6 +73,8 @@ def test_poster_lines_fit_the_screen_whatever_the_font():
     o = so.OBJECTS["scene-lines"]
     assert "white-space:nowrap" in o.css and "width:max-content" in o.css
     assert "aw/Math.max(1,wide)" in o.js and "ah/(n*1.02)" in o.js
+    # phones are where most visitors are: a line may break so the words go bigger
+    assert "sxo-tall" in o.css and "if(vh>vw){el.classList.add('sxo-tall')" in o.js
     # a line too long to be a poster stays the plain stack, never tiny type
     assert "if(fs<28){el.classList.remove('sxo-live')" in o.js
 
