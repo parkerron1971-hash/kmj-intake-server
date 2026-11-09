@@ -65,3 +65,17 @@ def test_the_measure_ignores_ghost_words_and_counts_library_names():
     assert """el.closest('[aria-hidden="true"]') && !el.closest('[data-sx-object]')""" in js
     # measured against the page, so a walk that scrolled still reads the first screen
     assert "box.top + window.scrollY" in js
+
+
+def test_an_opening_scene_answers_for_itself(monkeypatch):
+    """scene-lines fits its type to the screen, so a repair could not move it."""
+    monkeypatch.setenv("SITE_BOLD_OPENING", "on")
+    m = {"390": {"opening_px": 38, "opening_scene": True}, "1440": {"opening_px": 146, "opening_scene": True}}
+    assert cl.opening_findings(m, "signature") == []
+
+
+def test_only_the_home_page_is_told_since_only_it_is_measured(monkeypatch):
+    monkeypatch.setenv("SITE_BOLD_OPENING", "on")
+    spec = "0. THE CONCEPT\nINTENSITY: World\nIDEA: x\n"
+    assert "THE OPENING (measured" in v2.build_user_prompt(spec, "BUSINESS: Studio")
+    assert "THE OPENING (measured" not in v2.build_user_prompt(spec, "BUSINESS: Studio", page_brief="THE OFFER PAGE")

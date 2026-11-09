@@ -325,6 +325,9 @@ RENDER_JS = r"""
     const px = parseFloat(getComputedStyle(el).fontSize);
     if (px > out.opening_px) { out.opening_px = Math.round(px); out.opening = label(el); }
   }
+  // a library scene sizes its own type to the screen, so it answers for itself
+  out.opening_scene = Array.from(document.querySelectorAll('[data-sx-object^="scene-"]'))
+    .some(el => el.getBoundingClientRect().top + window.scrollY < vh);
   const fam = el => (getComputedStyle(el).fontFamily || '').split(',')[0].replace(/["']/g, '').trim().toLowerCase();
   const pageFams = new Set([fam(document.body)]);
   for (const el of Array.from(document.querySelectorAll('h1,h2,h3,p,a,li')).slice(0, 60)) pageFams.add(fam(el));
@@ -378,7 +381,7 @@ def opening_findings(measures: Optional[Dict[str, Any]], intensity: Optional[str
         return []
     out: List[str] = []
     for width, m in sorted((measures or {}).items(), key=lambda kv: int(kv[0])):
-        if not isinstance(m, dict) or not m.get("opening_px"):
+        if not isinstance(m, dict) or not m.get("opening_px") or m.get("opening_scene"):
             continue
         w = int(width)
         floor = (OPENING_FLOOR_PHONE if w <= 480 else OPENING_FLOOR_COMPUTER if w >= 1000 else 0) * w

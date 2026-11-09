@@ -478,7 +478,8 @@ def build_user_prompt(spec_text: str, real_data: str,
     if objects:
         parts += [objects, ""]
     # THE OPENING (2026-11-08): held to a bar on Signature and World pages.
-    opening = _craft().opening_block(_concept_sheet(spec_text).get("intensity"))
+    # Home only: that is the page the render measures it on.
+    opening = "" if page_brief else _craft().opening_block(_concept_sheet(spec_text).get("intensity"))
     if opening:
         parts += [opening, ""]
     # THE LAYOUT (2026-10-03, the hand-build plan): the architecture the
