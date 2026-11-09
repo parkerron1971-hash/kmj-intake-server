@@ -70,6 +70,18 @@ _APPOINTMENT_TRADE_RE = re.compile(
     r"chiro|physio|acupunct|dental|dentist|clinic|therap|counsel|tutor|lesson|"
     r"personal train|photo session|portrait session",
     re.IGNORECASE)
+# Trades people come to in person, so a site that can't say where they are
+# has failed at its first job. A therapist or tutor may well work online, so
+# they are not here; the owner's own words can still say so (has_a_door).
+_DOOR_TRADE_RE = re.compile(
+    r"hair|barber|salon|braid|loc(s|tician)\b|nail|lash|brow|wax|spa\b|massage|"
+    r"esthetic|tattoo|piercing|groom|detail(ing)?\b|chiro|dental|dentist|clinic|"
+    r"bake|bakery|shop\b|store\b|boutique|florist|auto\b|mechanic|repair",
+    re.IGNORECASE)
+_FIND_ME_RE = re.compile(
+    r"\bfind (me|us|my|our|the)\b|\bwhere (i|we) (am|are)\b|\blocations?\b|"
+    r"\bdirections\b|\bcome in\b|\bwalk[- ]?ins?\b|\bstop by\b|\bvisit (me|us)\b",
+    re.IGNORECASE)
 # A future feel: software, AI, trading, anything digital-first, or a
 # brand idea that reaches forward (Kevin: "when my business have future
 # feel to it").
@@ -711,6 +723,17 @@ def _photo_count(ctx: Dict[str, Any]) -> int:
                     and str(rec.get("custom_url") or "").strip():
                 urls.add(rec["custom_url"].strip())
     return len(urls)
+
+
+def has_a_door(btype: str = "", ask: str = "") -> bool:
+    """Do people come to this business in person? Then the site must say
+    where it is. The trade says so, or the owner's own words do."""
+    btype = str(btype or "")
+    if _FIND_ME_RE.search(str(ask or "")):
+        return True
+    if re.search(r"\bonline\b|e-?commerce|digital", btype, re.IGNORECASE):
+        return False
+    return bool(_PLACE_TRADE_RE.search(btype) or _DOOR_TRADE_RE.search(btype))
 
 
 def _story_beats(dossier: Dict[str, Any]) -> int:

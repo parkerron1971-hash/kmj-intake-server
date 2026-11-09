@@ -472,6 +472,17 @@ def _platform_sms_capable() -> bool:
         return False
 
 
+def _told_coach(site: Any, fact: str) -> str:
+    """A fact the owner gave the Design Coach, for when their settings have
+    none: they said it once and the page should not lose it (2026-11-09)."""
+    cfg = site.get("site_config") if isinstance(site, dict) else None
+    dossier = cfg.get("discovery_dossier") if isinstance(cfg, dict) else None
+    truth = dossier.get("truth") if isinstance(dossier, dict) else None
+    value = truth.get(fact) if isinstance(truth, dict) else None
+    value = value.get("value") if isinstance(value, dict) else value
+    return value.strip() if isinstance(value, str) else ""
+
+
 def gather_context(business_id: str) -> Dict[str, Any]:
     import brand_engine
     bundle = brand_engine.get_bundle(business_id) or {}
@@ -607,10 +618,10 @@ def gather_context(business_id: str) -> Dict[str, Any]:
     contact = {
         "email": (settings.get("contact_email")
                   or (bundle.get("practitioner") or {}).get("email") or ""),
-        "phone": settings.get("contact_phone") or link_page.get("phone") or "",
-        "address": settings.get("address") or link_page.get("address") or "",
+        "phone": settings.get("contact_phone") or link_page.get("phone") or _told_coach(site, "phone"),
+        "address": settings.get("address") or link_page.get("address") or _told_coach(site, "address"),
         "hours": (f"{hours_cfg.get('start')}–{hours_cfg.get('end')}"
-                  if hours_cfg.get("start") and hours_cfg.get("end") else ""),
+                  if hours_cfg.get("start") and hours_cfg.get("end") else _told_coach(site, "hours")),
         "social": {k: v for k, v in (link_page.get("social_profiles") or {}).items() if v},
         "submit_url": f"{RAILWAY_BASE}/sites/{business_id}/contact-submit",
         # A2P compliance (Arc 1): the contact module renders the SMS

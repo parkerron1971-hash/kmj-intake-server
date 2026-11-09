@@ -239,6 +239,14 @@ async def handle_start_design_session(client, biz, action) -> Dict[str, Any]:
                 "result": f"Not opened — {block}. Use edit_site_text for copy, "
                           "check_site to look at it",
                 "label": "Site is hand-built — no design session", "nav": None}
+    # THE COACH HEARS THE ASK (2026-11-09): saved here, not sent from the
+    # front end, so it reaches every turn, a resumed session and the voice
+    # door alike. It must not cost them the session if it can't be saved.
+    try:
+        import discovery
+        await asyncio.to_thread(discovery.save_ask, biz["id"], brief)
+    except Exception as e:
+        logger.info(f"[design session] ask not saved: {e}")
     # WHAT WAS HANDED OVER, ON THE RECEIPT (2026-10-03, the second live
     # test): Chief told the owner "the only thing I passed along is what
     # you told me", the answer check had nothing to check it against, and
