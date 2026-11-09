@@ -213,6 +213,24 @@ def test_the_tour_says_what_each_room_page_says(by_size):
         assert f'class="tour-more" href="/churches/{slug}"' in html, slug
 
 
+def test_the_member_app_and_the_office_live_in_the_tour(by_size):
+    """The Member App and Office sections repeated the tour's rooms, so they were folded in (Kevin,
+    2026-11-09). #app and #office still land: the menu and every room page's "Member app" link go to
+    the tour, and the tour opens that room."""
+    html = cs.render("")
+    assert '<section id="app"' not in html and '<section id="office"' not in html
+    tour = html[html.index('<section id="products" class="tour"'):]
+    tour = tour[:tour.index("</section>")]
+    assert 'id="app"' in tour and 'id="office"' in tour
+    assert 'href="#app"' in html, "the menu's Member app link"
+    assert "/churches#app" in cs.render("giving"), "the room pages' Member app link"
+    src = (cs.DIR / "overview.js").read_text(encoding="utf-8")
+    assert "'#app': 'app', '#office': 'office'" in src and "addEventListener('hashchange', fromHash)" in src
+    for gone in ('class="ma', 'class="oa', '@keyframes toast'):
+        assert gone not in html, gone
+    assert not re.search(r"(^|[\s,}])\.(ma|oa)(-[\w-]+)?[\s{:,.]", html), "no member-app or office mock rules left"
+
+
 def test_the_window_film_and_the_tour_screens_are_served(by_size):
     """Every file the hero and the tour ask for is on disk and served from /assets/home/: the films with
     byte ranges (a phone won't play a video whose server ignores Range), the screens as webp. A name
