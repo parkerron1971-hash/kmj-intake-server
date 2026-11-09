@@ -995,6 +995,61 @@ def _photo_name(url: str) -> str:
     return tail[:48]
 
 
+# ─── too close to a site the owner admires (2026-11-08) ───────────────
+# The designers only hear the mood of those sites now, so this is the net
+# under that rule: a sentence that still came out word for word costs the
+# repair round. Soft tier: never a fallback, and what survives is reported.
+
+def _reference_word_sets(ctx: Dict[str, Any]) -> List[Any]:
+    """Once per build: the home and offer pages share this ctx, and those
+    sites' words don't change between them."""
+    if "_reference_words" in ctx:
+        return ctx["_reference_words"]
+    words: List[Any] = []
+    try:
+        import reference_analyzer as ra
+        prefs = ctx.get("site_prefs") if isinstance(ctx.get("site_prefs"), dict) else {}
+        urls = prefs.get("inspiration_urls") or []
+        if urls and ra.closeness_enabled():
+            words = ra.reference_word_sets(urls)
+    except Exception as e:
+        print(f"[refcheck] skipped: {type(e).__name__}: {e}", flush=True)
+    ctx["_reference_words"] = words
+    return words
+
+
+def check_reference_wording(html: str, word_sets: List[Any], real_data: str) -> List[str]:
+    if not word_sets:
+        return []
+    import reference_analyzer as ra
+    return [f'TOO CLOSE TO A SITE THE OWNER ADMIRES: "{q}" is word for word from that '
+            "site. Rewrite it in this business's own words from the real data. If it "
+            "is scripture or another public text, keep it as an attributed quotation."
+            for q in ra.shared_wording(html, word_sets, real_data)]
+
+
+def _reference_closeness(html: str, ctx: Dict[str, Any], word_sets: List[Any],
+                         real_data: str) -> Dict[str, Any]:
+    """What is still close on the page that ships, for the build report."""
+    try:
+        import reference_analyzer as ra
+        prefs = ctx.get("site_prefs") if isinstance(ctx.get("site_prefs"), dict) else {}
+        stored = prefs.get("reference_analysis")
+        results = stored.get("results") if isinstance(stored, dict) else None
+        if not prefs.get("inspiration_urls") or not ra.closeness_enabled():
+            return {}
+        out = {"sites_compared": len(word_sets),
+               "shared_wording": ra.shared_wording(html, word_sets, real_data),
+               "look": ra.look_matches(html, results or [])}
+        if out["shared_wording"] or out["look"]:
+            print(f"[refcheck] still close after the build: "
+                  f"{len(out['shared_wording'])} wording, {len(out['look'])} look", flush=True)
+        return out
+    except Exception as e:
+        print(f"[refcheck] report skipped: {type(e).__name__}: {e}", flush=True)
+        return {}
+
+
 def check_repeated_photos(html: str) -> List[str]:
     """Deterministic: a real photo used more than once on the visible page.
     Counts every <img src> and inline style url() outside a hidden host
@@ -2385,6 +2440,7 @@ def run_builder_v2(spec_text: str, ctx: Dict[str, Any], business_id: str,
             pass
 
     real_data = assemble_real_data(ctx, business_id)
+    reference_words = _reference_word_sets(ctx)
     sheet = _concept_sheet(spec_text)
     offer = ctx.get("offer_page") if isinstance(ctx.get("offer_page"), dict) else {}
     page_brief = ""
@@ -2454,6 +2510,7 @@ def run_builder_v2(spec_text: str, ctx: Dict[str, Any], business_id: str,
         # held to its concept sheet (objects, the plain-word rule).
         out = (check_stand_ins(d) + check_repeated_photos(d)
                + check_unfilled(d)
+               + check_reference_wording(d, reference_words, real_data)
                + _craft().check_html(d, real_data)
                + _concept_findings(d, sheet))
         if page == "home":
@@ -2685,4 +2742,7 @@ def run_builder_v2(spec_text: str, ctx: Dict[str, Any], business_id: str,
             else:
                 break                                  # a round that changed nothing ends the loop
         report["vision"]["looks"] = len(report["vision"]["rounds"])
+    closeness = _reference_closeness(doc, ctx, reference_words, real_data)
+    if closeness:
+        report["reference_closeness"] = closeness
     return {"html": doc, "report": report}

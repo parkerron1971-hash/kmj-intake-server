@@ -8,6 +8,16 @@ and how the site describes itself — with NO LLM involved. The result
 feeds the DRL intake text and the DRO authoring prompt as DIRECTION
 EVIDENCE (mood / contrast / type feel), never as a copy source.
 
+WHAT REACHES A MODEL (2026-11-08): mood words only. The hexes, font names,
+self-description and address of the site stay out of every design prompt,
+because a rule saying "never copy these" is weaker than never handing them
+over. `compact_summary` is the only shape prompts get.
+
+THE CHECK AFTER THE BUILD: `shared_wording` finds sentences on a finished
+page that are word for word from a site the owner admires, and `look_matches`
+records a page wearing that site's lead font and colors. The reference's text
+is fetched at build time, compared in memory and never stored.
+
 Security stance (these are owner-supplied URLs fetched server-side, so
 SSRF is the threat model):
   - http/https only, default ports only (80/443), no raw-IP hosts
@@ -25,11 +35,14 @@ FAIL SOFT everywhere: a dead / hostile / non-HTML URL yields
 from __future__ import annotations
 
 import ipaddress
+import html as _html_mod
 import logging
+import os
 import re
 import socket
+import time
 from collections import Counter
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 from urllib.parse import urljoin, urlparse
 
 import httpx
@@ -422,8 +435,18 @@ def analyze_references(urls: List[str]) -> List[Dict[str, Any]]:
     return results
 
 
+def _color_temperature(hexes: List[Dict[str, Any]]) -> str:
+    """One mood word for a palette, so the hexes can stay out of prompts."""
+    warm = sum(h.get("count") or 0 for h in hexes if h.get("warmth") == "warm")
+    cool = sum(h.get("count") or 0 for h in hexes if h.get("warmth") == "cool")
+    if not warm and not cool:
+        return "neutral"
+    return "warm" if warm >= cool else "cool"
+
+
 def compact_summary(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """The trimmed shape prompts consume — direction evidence only."""
+    """The shape prompts consume: mood words only. No address, hexes, font
+    names or the site's own description, see the module docstring."""
     out: List[Dict[str, Any]] = []
     for r in results or []:
         if not (isinstance(r, dict) and r.get("ok")):
@@ -431,14 +454,132 @@ def compact_summary(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         pal = r.get("palette") or {}
         fonts = r.get("fonts") or []
         out.append({
-            "url": str(r.get("url") or "")[:120],
             "palette_read": pal.get("read") or "unknown",
-            "top_colors": [h.get("hex") for h in (pal.get("hexes") or [])[:4]],
+            "color_temperature": _color_temperature(pal.get("hexes") or []),
             "font_classes": sorted({f.get("class") for f in fonts if f.get("class")}),
-            "font_families": [f.get("family") for f in fonts[:4]],
             "density": (r.get("density") or {}).get("label") or "unknown",
-            "describes_itself_as": (r.get("description") or r.get("title") or "")[:200],
         })
         if len(out) >= MAX_URLS:
             break
+    return out
+
+
+# ─── The check after the build ────────────────────────────────────────
+
+MIN_SHARED_WORDS = 12          # shorter runs are ordinary phrasing
+_NGRAM_WORDS = 6
+CLOSENESS_BUDGET_S = 15.0
+_NOT_COMPARED_RE = re.compile(
+    r"<(head|nav|footer|form|blockquote|cite|q|noscript|template)\b[^>]*>.*?</\1\s*>",
+    re.I | re.S)
+_WORD_RE = re.compile(r"[^\W_]+(?:['’][^\W_]+)*")
+# Two churches quoting the same verse is not copying each other. Real book
+# names only: "Sunday 10:30" beside a copied paragraph must not excuse it.
+_SCRIPTURE_RE = re.compile(
+    r"\b(?:[1-3]\s?)?(?:Genesis|Exodus|Leviticus|Numbers|Deuteronomy|Joshua|Judges|Ruth"
+    r"|Samuel|Kings|Chronicles|Ezra|Nehemiah|Esther|Job|Psalms?|Proverbs|Ecclesiastes"
+    r"|Song of Solomon|Isaiah|Jeremiah|Lamentations|Ezekiel|Daniel|Hosea|Joel|Amos|Obadiah"
+    r"|Jonah|Micah|Nahum|Habakkuk|Zephaniah|Haggai|Zechariah|Malachi|Matthew|Mark|Luke|John"
+    r"|Acts|Romans|Corinthians|Galatians|Ephesians|Philippians|Colossians|Thessalonians"
+    r"|Timothy|Titus|Philemon|Hebrews|James|Peter|Jude|Revelation)\.?\s+\d{1,3}:\d{1,3}\b")
+_CITATION_REACH = 40           # characters either side: the citation touches the run
+
+
+def closeness_enabled() -> bool:
+    return (os.environ.get("REFERENCE_CLOSENESS") or "on").strip().lower() not in (
+        "off", "0", "false", "no")
+
+
+def _compared_text(html: str) -> str:
+    """The page's own running text. Menus, footers, forms and set-off
+    quotations are left out: they repeat across unrelated sites."""
+    body = _SCRIPT_RE.sub(" ", html or "")
+    body = _STYLE_BLOCK_RE.sub(" ", body)
+    body = _NOT_COMPARED_RE.sub(" ", body)
+    return _html_mod.unescape(_TAG_RE.sub(" ", body))
+
+
+def _norm(word: str) -> str:
+    return word.lower().replace("’", "'")
+
+
+def _ngrams(words: List[str]) -> Set[Tuple[str, ...]]:
+    return {tuple(words[i:i + _NGRAM_WORDS])
+            for i in range(len(words) - _NGRAM_WORDS + 1)}
+
+
+def reference_word_sets(urls: List[str]) -> List[Set[Tuple[str, ...]]]:
+    """Fetch each reference under the same guards and keep its word runs in
+    memory for this build. Fail-soft and time-boxed: a site that will not
+    open is simply not compared."""
+    out: List[Set[Tuple[str, ...]]] = []
+    deadline = time.monotonic() + CLOSENESS_BUDGET_S
+    with httpx.Client(timeout=FETCH_TIMEOUT_S, follow_redirects=False) as client:
+        for url in [str(u).strip() for u in (urls or []) if str(u or "").strip()][:MAX_URLS]:
+            if time.monotonic() >= deadline:
+                break
+            try:
+                _final, html = _fetch_capped(client, url, want="html")
+                words = [_norm(w) for w in _WORD_RE.findall(_compared_text(html))]
+                if len(words) >= _NGRAM_WORDS:
+                    out.append(_ngrams(words))
+            except Exception as e:
+                print(f"[refcheck] {url[:100]} not compared: {type(e).__name__}", flush=True)
+    return out
+
+
+def shared_wording(html: str, word_sets: List[Set[Tuple[str, ...]]],
+                   owner_text: str = "") -> List[str]:
+    """Runs of MIN_SHARED_WORDS or more on this page that are word for word
+    from a reference, at most three. The owner's own words never count, so
+    naming your own old site is safe, and a run beside a scripture citation
+    is a shared quotation."""
+    text = _compared_text(html)
+    tokens = list(_WORD_RE.finditer(text))
+    words = [_norm(m.group(0)) for m in tokens]
+    owner = _ngrams([_norm(w) for w in _WORD_RE.findall(owner_text or "")])
+    found: List[str] = []
+    for grams in word_sets or []:
+        theirs = grams - owner
+        i = 0
+        while i + _NGRAM_WORDS <= len(words):
+            if tuple(words[i:i + _NGRAM_WORDS]) not in theirs:
+                i += 1
+                continue
+            end = i + _NGRAM_WORDS
+            while end < len(words) and tuple(words[end - _NGRAM_WORDS + 1:end + 1]) in theirs:
+                end += 1
+            if end - i >= MIN_SHARED_WORDS:
+                start_at, end_at = tokens[i].start(), tokens[end - 1].end()
+                nearby = text[max(0, start_at - _CITATION_REACH):end_at + _CITATION_REACH]
+                if not _SCRIPTURE_RE.search(nearby):
+                    quote = " ".join(text[start_at:end_at].split())[:240]
+                    if quote not in found:
+                        found.append(quote)
+            i = end
+    return found[:3]
+
+
+def look_matches(html: str, results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """A page wearing a reference's lead font AND two or more of its
+    distinctive colors. Recorded for a person to read, never repaired: the
+    blueprint's colors are law to the builder, and the match may be the
+    owner's own brand."""
+    css = _collect_css_text(html or "", "", None)
+    page_fonts = {f["family"].lower() for f in extract_fonts(html or "", css)[:2]}
+    page_colors = {_bucket(_hex_to_rgb(h["hex"]))
+                   for h in extract_palette(css).get("hexes") or []
+                   if h.get("saturation") != "low"}
+    out: List[Dict[str, Any]] = []
+    for r in results or []:
+        if not (isinstance(r, dict) and r.get("ok")):
+            continue
+        fonts = {str(f.get("family") or "").lower() for f in (r.get("fonts") or [])[:2]}
+        colors = {_bucket(_hex_to_rgb(h["hex"]))
+                  for h in ((r.get("palette") or {}).get("hexes") or [])
+                  if h.get("hex") and h.get("saturation") != "low"}
+        shared = len(colors & page_colors)
+        if (fonts & page_fonts) and shared >= 2:
+            out.append({"url": str(r.get("url") or "")[:120],
+                        "fonts": sorted(fonts & page_fonts), "shared_colors": shared})
     return out

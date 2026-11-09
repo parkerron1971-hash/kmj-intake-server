@@ -303,7 +303,9 @@ def build_user_prompt(dossier: str, spec_plan: List[Dict[str, Any]],
             "confirmed taste — provenance matters: 'asked' and 'flipped' "
             "values are their words and outrank 'inferred-confirmed', "
             "which outranks 'recon'; reference `rules` are transferable "
-            "disciplines to learn from, `bans` are hard bans) ==",
+            "disciplines to learn from, `bans` are hard bans. If the owner's "
+            "words name a brand or site they admire, take its discipline and "
+            "never its look, words or identity: this page is their own) ==",
             discovery.strip(),
             "",
         ]
