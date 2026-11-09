@@ -31,7 +31,7 @@ import llm_call
 import logging
 import os
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlsplit
 
@@ -445,6 +445,13 @@ def apply_practitioner_patch(existing: Dict[str, Any],
     hv = hours.get("value") if isinstance(hours, dict) else hours
     if isinstance(hv, str) and hv.strip():
         out.setdefault("truth", {})["hours"] = {"value": hv.strip()[:160], "source": "asked"}
+    # WHERE THEY ARE (2026-11-09): an owner who wants to be found says so to
+    # the Coach, so the address and phone have a home next to the hours.
+    for fact, cap in (("address", 200), ("phone", 40)):
+        fv = truth.get(fact)
+        fv = fv.get("value") if isinstance(fv, dict) else fv
+        if isinstance(fv, str) and fv.strip():
+            out.setdefault("truth", {})[fact] = {"value": fv.strip()[:cap], "source": "asked"}
     if isinstance(truth.get("colors_avoid"), list):
         keep = [a for a in (out.get("truth", {}).get("colors_avoid") or [])
                 if _src_of(a) == "recon"]
@@ -608,6 +615,46 @@ def _reference_for_designer(ref: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
+# THE OWNER'S ASK (2026-11-09, talking to Chief from the front end). What
+# they asked Chief for used to reach the Director at the very end and never
+# the Coach, so the session between could not know why they came. A month
+# on, an unfinished ask is history, not a brief.
+ASK_FRESH_DAYS = 30
+
+
+def save_ask(business_id: str, words: str) -> bool:
+    """What they asked Chief for, in their words, for this session. No words
+    clears the last one: a new session must not inherit an old ask."""
+    words = str(words or "").strip()[:800]
+    d = get_dossier(business_id)
+    if not words and not (d or {}).get("the_ask"):
+        return True
+    d = d if isinstance(d, dict) else _empty_dossier()
+    if words:
+        d["the_ask"] = {"words": words,
+                        "at": datetime.now(timezone.utc).isoformat()}
+    else:
+        d.pop("the_ask", None)
+    return save_dossier(business_id, d)
+
+
+def current_ask(dossier: Optional[Dict[str, Any]]) -> str:
+    """Their words, or '' when nothing was asked or it was long ago."""
+    ask = dossier.get("the_ask") if isinstance(dossier, dict) else None
+    if not isinstance(ask, dict):
+        return ""
+    words = str(ask.get("words") or "").strip()
+    try:
+        at = datetime.fromisoformat(str(ask.get("at")))
+        if at.tzinfo is None:
+            at = at.replace(tzinfo=timezone.utc)
+    except ValueError:
+        return ""
+    if datetime.now(timezone.utc) - at > timedelta(days=ASK_FRESH_DAYS):
+        return ""
+    return words
+
+
 def dossier_digest(dossier: Optional[Dict[str, Any]]) -> str:
     """Compact JSON for the spec author's prompt. '' when nothing
     useful exists. Screenshots don't ride (rules/taste text does)."""
@@ -627,4 +674,8 @@ def dossier_digest(dossier: Optional[Dict[str, Any]]) -> str:
     if refs:
         slim["artifacts"] = dict(slim["artifacts"], references=[
             _reference_for_designer(r) if isinstance(r, dict) else r for r in refs])
+    ask = current_ask(dossier)
+    if ask:
+        # first, so the digest's cap can never be what drops it
+        slim = {"owners_ask": ask, **slim}
     return json.dumps(slim, ensure_ascii=False, indent=1)[:8000]
