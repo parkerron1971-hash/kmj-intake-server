@@ -7,7 +7,7 @@ status: shipped
 prs: [kmj-intake-server (this PR)]
 migrations: []
 left_undone:
-  - "About 130 one-line style rules in church_site/overview.html were already unused on main (the old bento, ribbon, kiosk and member-app mocks from earlier editions). Only the 46 this fold orphaned were removed; the rest are a separate tidy-up"
+  - "About 130 one-line style rules in church_site/overview.html were already unused on main (the old bento, ribbon, kiosk and member-app mocks from earlier editions). Only the 46 this fold orphaned were removed, plus two older office-mock rules (.oa-row, .oa-pill) the review caught; the rest are a separate tidy-up"
   - "Lanes say features switch on on Thursdays; this is a page change Kevin asked for on a Monday, live on merge like #1739 and #1769. Rollback for the home: HOME_EDITION=v3 or CHURCH_SITE=off"
 decisions:
   - "The two sections are gone from the overview; the tour's Member app and Office rooms carry each room's headline, three facts, screens and link to its page, as the other rooms do"

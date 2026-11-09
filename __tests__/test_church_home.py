@@ -226,8 +226,9 @@ def test_the_member_app_and_the_office_live_in_the_tour(by_size):
     assert "/churches#app" in cs.render("giving"), "the room pages' Member app link"
     src = (cs.DIR / "overview.js").read_text(encoding="utf-8")
     assert "'#app': 'app', '#office': 'office'" in src and "addEventListener('hashchange', fromHash)" in src
-    for gone in ('class="ma-', 'class="oa', '.ma-hero{', '.oa-side{', '@keyframes toast'):
+    for gone in ('class="ma', 'class="oa', '@keyframes toast'):
         assert gone not in html, gone
+    assert not re.search(r"(^|[\s,}])\.(ma|oa)(-[\w-]+)?[\s{:,.]", html), "no member-app or office mock rules left"
 
 
 def test_the_window_film_and_the_tour_screens_are_served(by_size):
