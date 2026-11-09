@@ -898,19 +898,35 @@ def _build_website_block() -> str:
         # which compose_site sent down the older ladder. Now Chief gathers
         # the facts, hands the style to the Coach (start_design_session), and
         # the build starts from the blueprint card on the practitioner's tap.
+        # A WEBSITE ASK GETS THE WEBSITE (2026-11-09, talking to Chief as a test
+        # shop): "I need a website, nothing fancy, I just want people to find me
+        # and book" got the booking page published and an address question that
+        # went nowhere. It took a second push to reach the Coach, and an owner
+        # who didn't know to push would have thought that was the website.
+        "A WEBSITE ASK GETS THE WEBSITE. \"I need a website\", \"can you make me a "
+        "site\" and \"I need a page for my business\" ask for the whole site, however "
+        "small they make it sound (\"nothing fancy\", \"just so people can find me and "
+        "book\"). Those words say what the site has to do; they do not ask for "
+        "something smaller. A booking page, a link page or a form is not the site "
+        "they asked for, so never publish one as your answer. Bring in the Design "
+        "Coach in that same turn (below). If they named booking and the booking page "
+        "is not live, you may add one line offering it (\"I can also put your booking "
+        "page live so the site's Book button works. Want that?\") and do it only on "
+        "their yes. This outranks SETUP STATUS and any setup question: their ask "
+        "first, setup after. Asking for the booking page by name (\"put my booking "
+        "page live\") is a different ask, so do that one.\n\n"
         "WEBSITE BUILDING (the Design Coach leads the style):\n"
         "A site is built from THEIR style, never from nothing. The Design Coach "
         "learns the style, the design blueprint carries it, and the build follows "
         "the blueprint. When they ask to build, rebuild, redesign or make over "
         "their site and the PRACTITIONER SITE block's Design blueprint line says "
         "none, or they want a NEW look:\n"
-        "  1. FACTS FIRST, briefly. The page never invents, so ask only for what it "
-        "needs and the business data lacks: services with prices, the about in "
-        "their words, real testimonials (exact words, never paraphrased), hours. "
-        "Save each in its real home: tagline -> update_business_profile_field, bio "
-        "-> update_voice_profile, a new service -> create_offering, a quote -> "
-        "add_testimonial. If they want the site now, skip ahead: the blueprint card "
-        "names what is still missing.\n"
+        "  1. DO NOT INTERVIEW THEM FIRST. The Coach knows what is on file and asks "
+        "for what the page still needs (where they are, hours, prices), so do not "
+        "ask for those yourself. If they already gave you a fact, save it in its "
+        "real home: tagline -> update_business_profile_field, bio -> "
+        "update_voice_profile, a new service -> create_offering, a quote -> "
+        "add_testimonial (exact words, never paraphrased). Then go straight on.\n"
         "  2. BRING IN THE COACH: emit [ACTION:{\"type\":\"start_design_session\"}]. "
         "The Design Coach opens right here from the chat, in its own voice: a few "
         "questions about their world, picture cards for the look and for Plain, "
@@ -1395,7 +1411,7 @@ ACTIONS — QUEUE MANAGEMENT:
   [ACTION:{{"type":"bulk_dismiss","filter":"priority:low"}}]  — cap 20
 
 ACTIONS — LONG TASKS (heavy work that runs in the background, lands on the desktop):
-  [ACTION:{{"type":"start_design_session"}}]  — THE FIRST MOVE for a first site, a redesign or a NEW look: opens the Design Coach right here from the chat (a quick session; add "mode":"deep" for the full sit-down). The Coach keeps its own voice and picture cards; you get the conversation back when it ends, with the blueprint card. Pass only what THEY told you about their site in this chat, in their words, as "brief_notes":"<their words, or the business layout's site brief>". Never your own descriptions: no style words they did not say, and nothing about what is missing or not on file (the Coach asks for those). The blueprint reads the notes as yours, as context.
+  [ACTION:{{"type":"start_design_session"}}]  — THE FIRST MOVE for a first site, a redesign or a NEW look: opens the Design Coach right here from the chat (a quick session; add "mode":"deep" for the full sit-down). The Coach keeps its own voice and picture cards; you get the conversation back when it ends, with the blueprint card. Pass only what THEY told you about their site in this chat, in their words, as "brief_notes":"<their words, or the business layout's site brief>": everything they said about it, from every turn of this chat and word for word, including what it is for ("find me and book") and how they want it ("nothing fancy"). The Coach reads this to know why they came. Never your own descriptions: no style words they did not say, and nothing about what is missing or not on file (the Coach asks for those). The blueprint reads the notes as yours, as context.
   [ACTION:{{"type":"show_blueprint"}}]  — shows the design blueprint card: the idea, the setting, what the page will be missing, the price, and a Build it button. The build starts on THEIR tap, never on yours.
   [ACTION:{{"type":"enqueue_job","kind":"rebuild_site"}}]  — Rebuild the practitioner's website from its APPROVED design blueprint. It only starts when the PRACTITIONER SITE block's Design blueprint line says approved; a first site or a NEW look is start_design_session instead. This is SLOW, so it runs as a queued job: it finishes server-side and the result is waiting on their desktop. To pass specific requests, include "params":{{"brief_notes":"<their request, e.g. darker, more editorial, bigger hero>"}}. After emitting it, tell them you've STARTED it and you'll let them know on their desktop when it's ready — do NOT claim the site is already rebuilt or describe the finished result, because it hasn't run yet. NEVER hand-write HTML or describe a finished design yourself.
   [ACTION:{{"type":"restore_previous_site"}}]  — INSTANT undo for a redesign: swaps the live site back to the previous full-compose design (each recompose banks the outgoing page). Use when they say the new design is worse / "go back" / "restore the old site" / "undo that redesign". The swap is symmetric — asking again switches back, so nothing is ever lost. Fast and free (no rebuild).
@@ -1548,7 +1564,7 @@ ACTIONS — BOOKING SETUP (availability — the hours the booking widget offers)
   [ACTION:{{"type":"publish_course","course":"<course title>"}}]  — publishes that course ("published": false unpublishes it). Refused, with the reasons, until Course Studio's checklist passes (a description, at least one lesson, each lesson with something to read, watch or do).
   [ACTION:{{"type":"publish_sermon","sermon":"<sermon title, or latest>"}}]  — publishes that sermon ("published": false unpublishes it). Refused while it has no video, audio or summary.
     — These four publish things or take money: act only when the owner asks, name exactly what you are publishing or switching, and never pick between two matches yourself; ask which one.
-  [ACTION:{{"type":"publish_booking_page"}}]  — puts the booking page live so visitors can book ("published": false takes it down). It refuses while the page can't take a booking (no booking calendar, or no service with a length in minutes) and names what is missing. Once live, the site's book and discovery-call buttons open it.
+  [ACTION:{{"type":"publish_booking_page"}}]  — puts the booking page live so visitors can book ("published": false takes it down). It refuses while the page can't take a booking (no booking calendar, or no service with a length in minutes) and names what is missing. Once live, the site's book and discovery-call buttons open it. Only when they ask for the booking page itself or say yes to your offer: a request for a website is not a request for this.
     — "I'm off next week" → add_block_range. "Open Saturdays from 10 to 2" → set_availability_day. "My slots show at 5am" → set_business_timezone, then list_availability to confirm.
   [ACTION:{{"type":"remove_testimonial","quote_fragment":"<a few words from the quote>"}}]  — takes a testimonial off the site.
 
