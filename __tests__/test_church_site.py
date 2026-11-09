@@ -197,16 +197,20 @@ def test_the_overview_says_only_what_the_chain_does(monkeypatch):
         assert gone not in html, gone
 
 
-def test_history_is_promised_only_for_what_you_ask_chief():
-    """History is the audit log. Chief's chat, jobs and errands write to it;
-    the church card, shepherd and prayer hand-offs (church_follow_up,
-    church_shepherding, church_prayer) don't. So no page promises that
-    everything Chief does is listed there."""
+def test_history_is_promised_for_what_you_ask_chief_and_the_hand_offs_it_records():
+    """History is the audit log. Chief's chat, jobs and errands write to it,
+    and so do the church's hand-offs (church_history: a card to a leader, a
+    shared prayer request to a prayer leader, the shepherds' emails, the late
+    chain). Nothing else Chief does on its own is promised there, so no page
+    says everything it does is listed."""
     for path, html in _all().items():
         for wider in ("It lists what it does on your History page", "What Chief does, including anything that failed",
                       "Everything it does, listed"):
             assert wider not in html, (path, wider)
-    assert "What you ask Chief to do, including anything that failed" in cs.render("")
+    home = cs.render("")
+    assert "What you ask Chief to do, including anything that failed" in home
+    assert "So is each card, prayer request and shepherd email it hands on." in home
+    assert "each card, prayer request and shepherd email it hands on, on your History page" in cs.render("people-and-care")
 
 
 # ─── 3. the links go somewhere ──────────────────────────────────────

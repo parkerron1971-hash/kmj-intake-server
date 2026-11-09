@@ -98,7 +98,11 @@ def vocabulary() -> Dict[str, Dict[str, Any]]:
                  # feature's own rows landed with verb_registered=false
                  # — the vocabulary out of sync on ship day, with itself.
                  "ledger:searched", "ledger:link_minted",
-                 "ledger:link_revoked", "ledger:viewed_by_auditor"):
+                 "ledger:link_revoked", "ledger:viewed_by_auditor",
+                 # Chief's church hand-offs (church_history.VERBS; pinned
+                 # equal by test_church_history).
+                 "church:card_handed", "church:leader_told", "church:follow_up_late",
+                 "church:prayer_handed", "church:prayer_late", "church:shepherd_email"):
         out.setdefault(verb, {"verb": verb, "namespace": verb.split(":")[0],
                               "effect": "write"})
     # MUST match the trigger list in APPLY-2026-08-03-ledger-coverage.sql.

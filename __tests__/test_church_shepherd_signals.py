@@ -451,3 +451,27 @@ def test_the_sweep_runs_each_church_and_one_failing_never_stops_it(db, mail, mon
     monkeypatch.setattr(sig, "run_church", flaky)
     stats = asyncio.run(sig.sweep(NOW))
     assert stats["churches"] == 2 and stats["drifting"] == 1
+
+
+def test_each_shepherd_email_goes_on_history_never_the_family_or_the_words(db, mail, monkeypatch):
+    """History (any seat reads it) gets one line per email Chief sent: who
+    was told and how many families, never which family or a card's words."""
+    import audit_log
+    lines = []
+    monkeypatch.setattr(audit_log, "record", lambda biz, **kw: lines.append(kw) or True)
+    hid = _drifting_carters(db)
+    _run()
+    said = [x["summary"] for x in lines]
+    assert len(lines) == len(mail)
+    assert "Sent Marcus Grant their Monday shepherding email: a family needs them this week" in said
+    assert any(s.startswith("Sent Kevin McCloud the Monday shepherding brief") for s in said)
+    lines.clear()
+    _open_signal(db, hid)
+    _run(NOW + timedelta(days=7))
+    assert any(s["summary"].endswith("a family in their shepherding chain hasn’t been reached in a week") for s in lines)
+    lines.clear()
+    _card(db, CALVIN, "My mother is in the hospital after SURGERY")
+    _run(datetime(2026, 10, 21, 15, 0, tzinfo=timezone.utc))
+    assert [x["summary"] for x in lines] == ["Emailed Marcus Grant: a care need in a family they shepherd is in hand"]
+    assert all(x["verb"] == "church:shepherd_email" and x["actor_type"] == "chief" for x in lines)
+    assert "Carter" not in repr(lines) and "SURGERY" not in repr(lines)

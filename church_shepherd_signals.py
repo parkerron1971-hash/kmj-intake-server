@@ -554,7 +554,11 @@ def monday_plan(biz: Dict[str, Any], now: datetime, rule: Tuple[ZoneInfo, int]) 
         if d["birthdays"]:
             lines.append("Birthdays this week: " + " ".join(html.escape(x) for x in d["birthdays"]))
         lines.append("Drifting is judged on Sundays alone. Their giving is never part of it, and never shown to you.")
+        n = len(d["new"] + d["still"])
         emails.append({"key": f"digest-{sid}-{stamp}", "to": s["email"], "name": s["name"],
+                       "history": f"Sent {s['name']} their Monday shepherding email: "
+                                  + (f"{'a family needs' if n == 1 else f'{n} families need'} them this week" if n
+                                     else "birthdays this week"),
                        "subject": ("One of your families needs you this week" if len(d["new"] + d["still"]) == 1
                                    else f"{len(d['new'] + d['still'])} of your families need you this week")
                        if d["new"] or d["still"] else "Birthdays in your families this week",
@@ -567,7 +571,11 @@ def monday_plan(biz: Dict[str, Any], now: datetime, rule: Tuple[ZoneInfo, int]) 
         lines += [html.escape(x) for x in slot["lines"]]
         lines.append("Please check in with their shepherd, or reach the family yourself. Drifting is judged on "
                      "Sundays alone; giving is never part of it.")
+        k = len(slot["lines"])
         emails.append({"key": f"up-{cid}-{stamp}", "to": p["email"], "name": _plain(p.get("name")),
+                       "history": f"Emailed {_plain(p.get('name'))}: "
+                                  + (f"a family in their shepherding chain hasn’t" if k == 1
+                                     else f"{k} families in their shepherding chain haven’t") + " been reached in a week",
                        "subject": (f"{_plain(slot['lines'][0].split(' (')[0])} hasn’t been reached in a week"
                                    if len(slot["lines"]) == 1 else f"{len(slot['lines'])} families haven’t been reached in a week"),
                        "body": cfu._mail_html(lines, "", "")})
@@ -582,6 +590,7 @@ def monday_plan(biz: Dict[str, Any], now: datetime, rule: Tuple[ZoneInfo, int]) 
                 lines = [f"{html.escape(_first(_plain(h.get('name'))))}, your Monday brief on shepherding at "
                          f"{html.escape(church)}."] + [html.escape(x) for x in brief]
                 emails.append({"key": f"brief-{h['contact_id']}-{stamp}", "to": h["email"], "name": _plain(h.get("name")),
+                               "history": f"Sent {_plain(h.get('name'))} the Monday shepherding brief",
                                "subject": "Your Monday brief: shepherding",
                                "body": cfu._mail_html(lines, OFFICE_LINK, "Open Shepherding")})
     return {"new": new, "climb": climb, "resolve": resolve, "seen_update": seen_update, "emails": emails,
@@ -693,6 +702,7 @@ def care_plan(biz: Dict[str, Any], now: datetime) -> Optional[List[Dict[str, Any
             who = _holder_words(f, titles, names)
             line = f"{who} has a care need for {_the(u['name'])}. It’s in hand; the card’s words stay with them."
             out.append({"key": f"care-{f['id']}", "to": s["email"], "name": s["name"],
+                        "history": f"Emailed {s['name']}: a care need in a family they shepherd is in hand",
                         "subject": f"A care need in {_the(u['name'])}",
                         "body": cfu._mail_html([f"{html.escape(_first(s['name']))}, {html.escape(line)}",
                                                 "You don’t need to do anything about the need itself. A call to say "
@@ -704,6 +714,13 @@ def care_plan(biz: Dict[str, Any], now: datetime) -> Optional[List[Dict[str, Any
 
 # ─── the hourly job ───────────────────────────────────────────────────
 
+async def _history(b: str, m: Dict[str, Any]) -> None:
+    """The email's History line: who was told and how many, never which family."""
+    import church_history
+    if m.get("history"):
+        await asyncio.to_thread(church_history.note, b, "church:shepherd_email", m["history"])
+
+
 async def run_church(biz: Dict[str, Any], now: datetime, stats: Dict[str, int]) -> None:
     import church_follow_up as cfu
     b = str(biz["id"])
@@ -711,6 +728,7 @@ async def run_church(biz: Dict[str, Any], now: datetime, stats: Dict[str, int]) 
     for m in cares or []:
         if await cfu._email(biz, m["to"], m["name"], m["subject"], m["body"], f"shep-{b}-{m['key']}"):
             await asyncio.to_thread(_mark, b, m["key"])
+            await _history(b, m)
             stats["care"] += 1
     rule = await asyncio.to_thread(sunday_rule, biz)
     if rule is None:
@@ -731,6 +749,7 @@ async def run_church(biz: Dict[str, Any], now: datetime, stats: Dict[str, int]) 
             continue
         if await cfu._email(biz, m["to"], m["name"], m["subject"], m["body"], f"shep-{b}-{m['key']}"):
             await asyncio.to_thread(_mark, b, m["key"])
+            await _history(b, m)
             stats["emails"] += 1
     done = await asyncio.to_thread(_apply, b, plan, now)
     for k, v in done.items():
