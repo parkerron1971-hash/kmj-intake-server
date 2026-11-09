@@ -330,3 +330,35 @@ def test_a_prayer_rung_climbs_only_when_the_pastor_was_emailed(prayer, monkeypat
     down["on"] = False
     asyncio.run(cp.sweep(due + timedelta(days=1, hours=2)))
     assert saved["leader_late_level"] == 2
+
+
+def test_prayer_hand_offs_go_on_history_without_the_words_or_who_asked(prayer, monkeypatch):
+    """History is the audit log, which any seat reads: it says a shared
+    request went to a prayer leader and who was told, never the request or
+    the person. A request kept for the pastors is handed to no one, so it
+    writes nothing."""
+    import audit_log
+    lines = []
+    monkeypatch.setattr(audit_log, "record", lambda biz, **kw: lines.append(kw) or True)
+
+    async def ok(*a, **k):
+        return True
+    monkeypatch.setattr(cfu, "_email", ok)
+    monkeypatch.setattr(cfu, "_office_alert", ok)
+    monkeypatch.setattr(cfu, "site_origin", lambda b: "")
+    assert cp.on_new(BIZ, _request(prayer, share=False)) is None and lines == []
+    row = cp.on_new(BIZ, _request(prayer))
+    asyncio.run(cp.sweep())
+    due = cfu._parse(row["leader_due_at"])
+    for days in (0, 1, 3):
+        asyncio.run(cp.sweep(due + timedelta(days=days, hours=1)))
+    assert [(x["verb"], x["summary"]) for x in lines] == [
+        ("church:prayer_handed", "Handed a shared prayer request to Dana Rivers"),
+        ("church:leader_told", "Emailed Dana Rivers: a shared prayer request is theirs to pray over"),
+        ("church:prayer_late", "Nudged Dana Rivers: a shared prayer request is due today"),
+        ("church:prayer_late", "A shared prayer request has waited a day with Dana Rivers. Told Kevin McCloud"),
+        ("church:prayer_late", "A shared prayer request has waited three days with Dana Rivers. "
+                               "Told Kevin McCloud, and asked the office to hand it on"),
+    ]
+    assert all(x["actor_type"] == "chief" and x["target_id"] == row["id"] for x in lines)
+    assert "Ann" not in repr(lines) and "surgery" not in repr(lines)

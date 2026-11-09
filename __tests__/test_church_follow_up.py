@@ -635,3 +635,56 @@ def test_the_new_routes_are_guarded_by_business_access():
     assert {"follow_ups", "follow_up_reassign", "follow_up_note", "follow_up_step", "follow_up_close",
             "leaders", "leader_add", "leader_remove"} <= mine
     assert [h["fn"] for h in swept["unguarded"] if h["file"] == "church_router.py"] == []
+
+
+# ─── History: what Chief did, never whom it's about ───────────────────
+
+@pytest.fixture
+def history(monkeypatch):
+    import audit_log
+    lines = []
+    monkeypatch.setattr(audit_log, "record", lambda biz, **kw: lines.append(dict(kw, business_id=biz)) or True)
+    return lines
+
+
+def test_each_hand_off_and_rung_goes_on_history_as_chief_without_the_person(db, outbox, history):
+    """History is the audit log, which any seat reads. The hand-off, the
+    email telling the leader and each late rung go there as Chief, naming
+    the leader and the card, never the person or what they wrote."""
+    import church_roles
+    church_roles.ensure_library({"id": BIZ, "name": "Love City Church"})
+    f = _open(db)
+    asyncio.run(cfu.sweep())
+    due = cfu._parse(db.t["church_follow_ups"][0]["due_at"])
+    for days in (0, 1, 3):
+        asyncio.run(cfu.sweep(now=due + timedelta(days=days, hours=1)))
+    assert [(h["verb"], h["summary"]) for h in history] == [
+        ("church:card_handed", "Handed a Serve with us card to Tasha Williams"),
+        ("church:leader_told", "Emailed Tasha Williams: a Serve with us card is theirs to follow up"),
+        ("church:follow_up_late", "Nudged Tasha Williams: a follow-up step is due today"),
+        ("church:follow_up_late", "A follow-up is a day late. Told Robert Hayes"),
+        ("church:follow_up_late", "A follow-up is three days late. Told Kevin McCloud, and asked the office to hand it on"),
+    ]
+    assert all(h["actor_type"] == "chief" and h["business_id"] == BIZ and h["target_id"] == f["id"] for h in history)
+    assert "Dana" not in repr(history), "never whom the card is about"
+
+
+def test_a_card_with_no_one_says_so_on_history(db, outbox, history):
+    db.t["church_leader_roles"] = [r for r in db.t["church_leader_roles"] if r["role"] != "pastor"]
+    _open(db, SERVE, ANDRE, team="Graphic and web design")
+    asyncio.run(cfu.sweep())
+    assert [h["summary"] for h in history] == ["A Serve with us card is with the office: no leader holds it yet",
+                                               "Told the office: a Serve with us card has no one yet"]
+    assert "Andre" not in repr(history) and "Graphic" not in repr(history)
+
+
+def test_a_history_line_that_fails_never_stops_a_hand_off(db, outbox, monkeypatch):
+    import audit_log
+
+    def down(*a, **k):
+        raise RuntimeError("ledger down")
+    monkeypatch.setattr(audit_log, "record", down)
+    f = _open(db)
+    assert f and f["leader_contact_id"] == TASHA
+    asyncio.run(cfu.sweep())
+    assert len(outbox["email"]) == 1 and db.t["church_follow_ups"][0].get("leader_told_at")
