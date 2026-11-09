@@ -3,8 +3,8 @@ title: A site the owner admires gives the designers its mood, not its identity
 date: 2026-11-08
 agent: Claude Code (Claude Opus 5.5)
 asked: "yes make the reference-site fix as its own PR"
-status: in progress
-prs: []
+status: shipped
+prs: [kmj-intake-server#1771]
 migrations: []
 left_undone:
   - "A look match is only recorded in the build report (canvas_report.reference_closeness); no screen shows it yet."
