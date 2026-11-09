@@ -385,7 +385,7 @@ _add(_o(
   stroke-dasharray:1;stroke-dashoffset:0;transition:stroke-dashoffset .9s cubic-bezier(.6,0,.3,1) .25s}
 .js .reveal:not(.in) .sxo-mark-ink path{stroke-dashoffset:1}
 @media (prefers-reduced-motion:reduce){.sxo-mark-ink path{transition:none;stroke-dashoffset:0!important}}
-@media (max-width:640px){.sxo-mark{white-space:normal}
+@media (max-width:640px){.sxo-mark[data-mark="underline"]{white-space:normal}
   .sxo-mark[data-mark="underline"] .sxo-mark-ink{top:auto;bottom:-.12em;height:.32em}}""",
     phone="a phrase may wrap; the mark scales with the words",
 ))

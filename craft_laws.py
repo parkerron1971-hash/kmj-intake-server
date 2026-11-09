@@ -325,12 +325,15 @@ RENDER_JS = r"""
     }
     return false;
   };
+  const cutEls = [];
   for (const el of document.body.querySelectorAll('h1,h2,h3,h4,p,li,a,span,strong,em,b,button')) {
     if (own(el).length < 3 || skip(el) || !visible(el)) continue;
     const box = el.getBoundingClientRect();
     // only words partly on screen are cut off; wholly off screen is a hiding trick
     const cut = (box.right > vw + 2 && box.left < vw) || (box.left < -2 && box.right > 0);
-    if (cut && !meantToRun(el) && out.past_edge.length < 3) {
+    // a heading and the span inside it are one problem, not two
+    if (cut && !meantToRun(el) && out.past_edge.length < 3 && !cutEls.some(c => c.contains(el) || el.contains(c))) {
+      cutEls.push(el);
       out.past_edge.push({ label: label(el), left: Math.round(box.left), right: Math.round(box.right) });
     }
   }

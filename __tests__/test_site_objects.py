@@ -361,4 +361,4 @@ def test_the_edge_steps_down():
 def test_a_marked_phrase_wraps_on_a_phone():
     """A real build marked "Both of them good" and it ran off the phone's edge."""
     css = OBJECTS["marker"].css
-    assert "@media (max-width:640px){.sxo-mark{white-space:normal}" in css
+    assert '@media (max-width:640px){.sxo-mark[data-mark="underline"]{white-space:normal}' in css
