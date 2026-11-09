@@ -1001,14 +1001,21 @@ def _photo_name(url: str) -> str:
 # repair round. Soft tier: never a fallback, and what survives is reported.
 
 def _reference_word_sets(ctx: Dict[str, Any]) -> List[Any]:
+    """Once per build: the home and offer pages share this ctx, and those
+    sites' words don't change between them."""
+    if "_reference_words" in ctx:
+        return ctx["_reference_words"]
+    words: List[Any] = []
     try:
         import reference_analyzer as ra
         prefs = ctx.get("site_prefs") if isinstance(ctx.get("site_prefs"), dict) else {}
         urls = prefs.get("inspiration_urls") or []
-        return ra.reference_word_sets(urls) if urls and ra.closeness_enabled() else []
+        if urls and ra.closeness_enabled():
+            words = ra.reference_word_sets(urls)
     except Exception as e:
         print(f"[refcheck] skipped: {type(e).__name__}: {e}", flush=True)
-        return []
+    ctx["_reference_words"] = words
+    return words
 
 
 def check_reference_wording(html: str, word_sets: List[Any], real_data: str) -> List[str]:

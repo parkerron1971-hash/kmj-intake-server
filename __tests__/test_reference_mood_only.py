@@ -86,6 +86,24 @@ def test_the_digest_keeps_the_lesson_and_drops_which_site():
     assert len(d["artifacts"]["references"][0]["rules"]) == 2
 
 
+def test_the_owners_reason_stays_without_the_name():
+    ref = {"url": "https://www.apple.com/", "why": "I like how Apple gives each thing room",
+           "rules": [], "taste": {"ground": {"value": "light", "confidence": 0.9},
+                                  "era": {"value": "like apple", "confidence": 0.2}}}
+    out = discovery._reference_for_designer(ref)
+    assert out["why"] == "I like how that site gives each thing room"
+    assert out["taste"] == {"ground": {"value": "light", "confidence": 0.9}}
+    assert ref["why"].startswith("I like how Apple")
+
+
+def test_a_short_site_name_is_removed_but_not_inside_other_words():
+    out = discovery._reference_for_designer({
+        "url": "https://cnn.com/", "why": "CNN feels urgent",
+        "rules": ["like CNN, one lead story", "acnne is not a word; keep this rule"]})
+    assert out["why"] == "that site feels urgent"
+    assert out["rules"] == ["acnne is not a word; keep this rule"]
+
+
 def test_the_builder_cannot_open_an_admired_site(monkeypatch):
     digest = discovery.dossier_digest(_dossier())
     box = bl.ToolBox({}, "biz-1", f"DISCOVERY DOSSIER:\n{digest}", "")
@@ -130,6 +148,18 @@ def test_shared_scripture_is_not_copying():
     theirs = _sets(f"<p>{verse}</p>")
     assert ra.shared_wording(f"<p>{verse} John 3:16</p>", theirs) == []
     assert ra.shared_wording(f"<blockquote>{verse}</blockquote>", theirs) == []
+
+
+def test_a_service_time_does_not_excuse_a_copied_paragraph():
+    theirs = _sets(f"<p>{_COPIED}</p>")
+    for beside in ("Sunday 10:30", "Service 9:00", "Doors 6:30"):
+        assert ra.shared_wording(f"<p>{beside}. {_COPIED}</p>", theirs) == [_COPIED]
+
+
+def test_a_citation_far_from_the_run_does_not_excuse_it():
+    theirs = _sets(f"<p>{_COPIED}</p>")
+    far = "Our verse this year is Romans 8:28 and we hold to it in everything we do here at the church."
+    assert ra.shared_wording(f"<p>{far}</p><p>{_COPIED}</p>", theirs) == [_COPIED]
 
 
 def test_menus_footers_and_forms_repeat_across_sites():
@@ -195,7 +225,7 @@ _CTX = {"site_prefs": {"inspiration_urls": [_STUDY["url"]],
 def test_a_copied_sentence_costs_the_repair_round(monkeypatch):
     monkeypatch.setattr(ra, "reference_word_sets", lambda urls: _sets(f"<p>{_COPIED}</p>"))
     out, calls = _build(monkeypatch, _law_passing(f"<p>{_COPIED}</p>"),
-                        _law_passing("<p>Our own words.</p>"), _CTX)
+                        _law_passing("<p>Our own words.</p>"), dict(_CTX))
     assert len(calls) == 2 and "TOO CLOSE TO A SITE THE OWNER ADMIRES" in calls[1]
     assert _STUDY["url"] not in calls[1]
     assert out["html"] and not out["report"]["fallbacks"]
@@ -204,10 +234,19 @@ def test_a_copied_sentence_costs_the_repair_round(monkeypatch):
 def test_a_sentence_that_survives_ships_and_is_reported(monkeypatch):
     monkeypatch.setattr(ra, "reference_word_sets", lambda urls: _sets(f"<p>{_COPIED}</p>"))
     page = _law_passing(f"<p>{_COPIED}</p>")
-    out, _calls = _build(monkeypatch, page, page, _CTX)
+    out, _calls = _build(monkeypatch, page, page, dict(_CTX))
     assert out["html"] and _COPIED in out["html"] and not out["report"]["fallbacks"]
     closeness = out["report"]["reference_closeness"]
     assert closeness["sites_compared"] == 1 and closeness["shared_wording"] == [_COPIED]
+
+
+def test_each_build_fetches_those_sites_once(monkeypatch):
+    fetches = []
+    monkeypatch.setattr(ra, "reference_word_sets", lambda urls: fetches.append(urls) or [])
+    ctx = {"site_prefs": dict(_CTX["site_prefs"])}
+    _build(monkeypatch, _law_passing(), ctx=ctx)
+    _build(monkeypatch, _law_passing(), ctx=ctx)          # the offer page, same ctx
+    assert len(fetches) == 1
 
 
 def test_no_admired_site_means_no_fetch_and_no_report_line(monkeypatch):
@@ -219,7 +258,7 @@ def test_no_admired_site_means_no_fetch_and_no_report_line(monkeypatch):
 def test_the_switch_turns_the_check_off(monkeypatch):
     monkeypatch.setenv("REFERENCE_CLOSENESS", "off")
     monkeypatch.setattr(ra, "reference_word_sets", lambda urls: (_ for _ in ()).throw(AssertionError("fetched")))
-    out, calls = _build(monkeypatch, _law_passing(f"<p>{_COPIED}</p>"), ctx=_CTX)
+    out, calls = _build(monkeypatch, _law_passing(f"<p>{_COPIED}</p>"), ctx=dict(_CTX))
     assert len(calls) == 1 and "reference_closeness" not in out["report"]
 
 
@@ -227,6 +266,6 @@ def test_a_site_that_will_not_open_never_stops_a_build(monkeypatch):
     def boom(urls):
         raise OSError("down")
     monkeypatch.setattr(ra, "reference_word_sets", boom)
-    out, calls = _build(monkeypatch, _law_passing(), ctx=_CTX)
+    out, calls = _build(monkeypatch, _law_passing(), ctx=dict(_CTX))
     assert out["html"] and len(calls) == 1
     assert out["report"]["reference_closeness"]["sites_compared"] == 0

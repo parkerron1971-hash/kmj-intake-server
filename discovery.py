@@ -30,6 +30,7 @@ import json
 import llm_call
 import logging
 import os
+import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlsplit
@@ -591,10 +592,19 @@ def _reference_for_designer(ref: Dict[str, Any]) -> Dict[str, Any]:
     host = (urlsplit(str(ref.get("url") or "")).hostname or "").lower()
     name = host.removeprefix("www.").split(".")[0]
     out = {k: v for k, v in ref.items() if k != "url"}
-    if len(name) >= 4:
-        for key in ("rules", "bans"):
-            if isinstance(out.get(key), list):
-                out[key] = [x for x in out[key] if name not in str(x).lower()]
+    if len(name) < 3:
+        return out
+    named = re.compile(rf"\b{re.escape(name)}\b", re.IGNORECASE)
+    for key in ("rules", "bans"):
+        if isinstance(out.get(key), list):
+            out[key] = [x for x in out[key] if not named.search(str(x))]
+    # the owner's reasons are worth keeping, so only the name goes
+    for key in ("why", "error"):
+        if isinstance(out.get(key), str):
+            out[key] = named.sub("that site", out[key])
+    if isinstance(out.get("taste"), dict):
+        out["taste"] = {k: v for k, v in out["taste"].items()
+                        if not named.search(str(v.get("value") if isinstance(v, dict) else v))}
     return out
 
 

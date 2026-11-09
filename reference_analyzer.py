@@ -473,8 +473,16 @@ _NOT_COMPARED_RE = re.compile(
     r"<(head|nav|footer|form|blockquote|cite|q|noscript|template)\b[^>]*>.*?</\1\s*>",
     re.I | re.S)
 _WORD_RE = re.compile(r"[^\W_]+(?:['’][^\W_]+)*")
-# Two churches quoting the same verse is not copying each other.
-_SCRIPTURE_RE = re.compile(r"\b(?:[1-3]\s?)?[A-Z][a-z]+\.?\s+\d{1,3}:\d{1,3}\b")
+# Two churches quoting the same verse is not copying each other. Real book
+# names only: "Sunday 10:30" beside a copied paragraph must not excuse it.
+_SCRIPTURE_RE = re.compile(
+    r"\b(?:[1-3]\s?)?(?:Genesis|Exodus|Leviticus|Numbers|Deuteronomy|Joshua|Judges|Ruth"
+    r"|Samuel|Kings|Chronicles|Ezra|Nehemiah|Esther|Job|Psalms?|Proverbs|Ecclesiastes"
+    r"|Song of Solomon|Isaiah|Jeremiah|Lamentations|Ezekiel|Daniel|Hosea|Joel|Amos|Obadiah"
+    r"|Jonah|Micah|Nahum|Habakkuk|Zephaniah|Haggai|Zechariah|Malachi|Matthew|Mark|Luke|John"
+    r"|Acts|Romans|Corinthians|Galatians|Ephesians|Philippians|Colossians|Thessalonians"
+    r"|Timothy|Titus|Philemon|Hebrews|James|Peter|Jude|Revelation)\.?\s+\d{1,3}:\d{1,3}\b")
+_CITATION_REACH = 40           # characters either side: the citation touches the run
 
 
 def closeness_enabled() -> bool:
@@ -543,7 +551,8 @@ def shared_wording(html: str, word_sets: List[Set[Tuple[str, ...]]],
                 end += 1
             if end - i >= MIN_SHARED_WORDS:
                 start_at, end_at = tokens[i].start(), tokens[end - 1].end()
-                if not _SCRIPTURE_RE.search(text[max(0, start_at - 80):end_at + 80]):
+                nearby = text[max(0, start_at - _CITATION_REACH):end_at + _CITATION_REACH]
+                if not _SCRIPTURE_RE.search(nearby):
                     quote = " ".join(text[start_at:end_at].split())[:240]
                     if quote not in found:
                         found.append(quote)
