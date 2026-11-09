@@ -1670,6 +1670,14 @@ def inspect_with_eyes(doc: str, spec_text: str, business_id: str,
         if outline:
             content.append({"type": "text", "text": "SECTIONS ON THE PAGE (id: "
                             "heading), top to bottom:\n" + outline})
+        # a scene photographed part-way looks unfinished: without this the
+        # eyes pay for a repair of faint words that are about to fill in
+        if 'data-sx-object="scene-' in doc:
+            content.append({"type": "text", "text": "THIS PAGE HOLDS A SCENE: the page "
+                            "holds still while words fill in and photos open as the "
+                            "visitor scrolls. In a part-way frame, faint unfilled words, "
+                            "a small window of a photo or a line partly off the screen "
+                            "are the scene working, not defects."})
         for label, shot in shots:
             content.append({"type": "text", "text": f"View — {label}:"})
             content.append({"type": "image", "source": {
