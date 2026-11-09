@@ -1461,7 +1461,10 @@ VISION_SETTLE_MS = 1600
 # THE INSPECTOR'S CAP: Opus 5 answered the checklist in more than 1200
 # tokens (it reasons inside its budget), came back cut mid-JSON, and the
 # eyes silently reported "did not run". Room to finish a six-item verdict.
-INSPECTOR_MAX_TOKENS = 4000
+# 2026-11-09, a real build: on Opus 5.5 its reasoning used all of 4,000 on both
+# looks at a barbershop page, so the page shipped unseen with a heading off the
+# side of the phone. A verdict is about 1,500 tokens; the rest is thinking room.
+INSPECTOR_MAX_TOKENS = 8000
 
 
 # THE MEASURED RENDER (2026-10-01, the concept-layer plan): site_check
