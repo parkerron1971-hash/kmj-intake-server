@@ -76,7 +76,9 @@ _APPOINTMENT_TRADE_RE = re.compile(
 _DOOR_TRADE_RE = re.compile(
     r"hair|barber|salon|braid|loc(s|tician)\b|nail|lash|brow|wax|spa\b|massage|"
     r"esthetic|tattoo|piercing|groom|detail(ing)?\b|chiro|dental|dentist|clinic|"
-    r"bake|bakery|shop\b|store\b|boutique|florist|auto\b|mechanic|repair",
+    r"bake|bakery|shop\b|store\b|boutique|florist|auto\b|mechanic|repair|"
+    r"daycare|day care|child ?care|preschool|dance|karate|martial|vet\b|veterinar|"
+    r"optomet|pharmacy|laundr|cleaners\b|tailor|school\b|academy",
     re.IGNORECASE)
 _FIND_ME_RE = re.compile(
     r"\bfind (me|us|my|our|the)\b|\bwhere (i|we) (am|are)\b|\blocations?\b|"
