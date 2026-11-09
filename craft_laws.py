@@ -31,6 +31,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -280,7 +281,7 @@ RENDER_JS = r"""
 () => {
   const vh = window.innerHeight, vw = window.innerWidth;
   const out = { width: vw, small_text: [], tiny_text: [], centered_long: [],
-                control_font: null, h1: null };
+                control_font: null, h1: null, opening_px: 0, opening: null };
   const label = el => el.tagName.toLowerCase()
     + (typeof el.className === 'string' && el.className.trim() ? '.' + el.className.trim().split(/\s+/)[0] : '')
     + ' "' + (el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 40) + '"';
@@ -313,6 +314,17 @@ RENDER_JS = r"""
     const lines = Math.round(el.getBoundingClientRect().height / lh);
     if (lines > 3 && out.centered_long.length < 4) out.centered_long.push({ label: label(el), lines });
   }
+  // THE OPENING: the biggest words on the first screen. A ghost word is
+  // aria-hidden and doesn't count; a library object's big name does.
+  for (const el of document.body.querySelectorAll('h1,h2,h3,p,span,div,a,strong,em,b')) {
+    if (own(el).length < 2 || !visible(el)) continue;
+    if (el.closest('.sx-drop,noscript,svg,[data-craft-ok]')) continue;
+    if (el.closest('[aria-hidden="true"]') && !el.closest('[data-sx-object]')) continue;
+    const box = el.getBoundingClientRect(), top = box.top + window.scrollY;
+    if (top >= vh || top + box.height <= 0) continue;
+    const px = parseFloat(getComputedStyle(el).fontSize);
+    if (px > out.opening_px) { out.opening_px = Math.round(px); out.opening = label(el); }
+  }
   const fam = el => (getComputedStyle(el).fontFamily || '').split(',')[0].replace(/["']/g, '').trim().toLowerCase();
   const pageFams = new Set([fam(document.body)]);
   for (const el of Array.from(document.querySelectorAll('h1,h2,h3,p,a,li')).slice(0, 60)) pageFams.add(fam(el));
@@ -326,6 +338,55 @@ RENDER_JS = r"""
   return out;
 }
 """
+
+
+# ─── THE OPENING (2026-11-08) ────────────────────────────────────────
+# Measured on four live pages, the biggest words on the first screen on a
+# computer: 201px and 196px on the two hand-built pages, 72px and 95px on the
+# two builder pages. On a phone: 52px and 64px against 44px and 48px. The type
+# floor only ever set minimums for reading, so nothing asked for a bold opening.
+# SITE_BOLD_OPENING=on holds Signature and World pages to a bar between them.
+# Plain pages stay calm: a law firm's first screen is not a poster.
+
+OPENING_FLOOR_COMPUTER = 0.08      # of the screen's width: about 115px at 1440
+OPENING_FLOOR_PHONE = 0.12         # about 47px at 390
+
+
+def bold_opening_on() -> bool:
+    return (os.environ.get("SITE_BOLD_OPENING") or "off").strip().lower() in ("on", "1", "true", "yes")
+
+
+def _bold(intensity: Optional[str]) -> bool:
+    return bold_opening_on() and str(intensity or "").lower() in ("signature", "world")
+
+
+def opening_block(intensity: Optional[str]) -> str:
+    """What the builder is told, or '' when this page isn't held to it."""
+    if not _bold(intensity):
+        return ""
+    return ("THE OPENING (measured on the render; a miss costs a repair): the first "
+            "screen is a poster. The biggest words on it are at least 8vw on a computer "
+            "(about 115px at 1440) and at least 12vw on a phone (about 47px at 390). Use "
+            "one short line from the owner's own words, set with clamp(). A long sentence "
+            "cannot carry this size, so set the words that can and let the rest follow "
+            "smaller. No word may run off the screen, and a ghost word does not count.")
+
+
+def opening_findings(measures: Optional[Dict[str, Any]], intensity: Optional[str]) -> List[str]:
+    """A first screen under the bar, in the builder's words."""
+    if not _bold(intensity):
+        return []
+    out: List[str] = []
+    for width, m in sorted((measures or {}).items(), key=lambda kv: int(kv[0])):
+        if not isinstance(m, dict) or not m.get("opening_px"):
+            continue
+        w = int(width)
+        floor = (OPENING_FLOOR_PHONE if w <= 480 else OPENING_FLOOR_COMPUTER if w >= 1000 else 0) * w
+        if floor and m["opening_px"] < floor:
+            out.append(f"at {w}px the biggest words on the first screen are {m['opening_px']}px "
+                       f"({m.get('opening')}). This page's opening is at least {round(floor)}px "
+                       "there: set the line bigger with clamp(), keeping its words.")
+    return out
 
 
 def render_findings(measures: Optional[Dict[str, Any]]) -> List[str]:

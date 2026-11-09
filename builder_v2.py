@@ -477,6 +477,10 @@ def build_user_prompt(spec_text: str, real_data: str,
         objects = ""
     if objects:
         parts += [objects, ""]
+    # THE OPENING (2026-11-08): held to a bar on Signature and World pages.
+    opening = _craft().opening_block(_concept_sheet(spec_text).get("intensity"))
+    if opening:
+        parts += [opening, ""]
     # THE LAYOUT (2026-10-03, the hand-build plan): the architecture the
     # blueprint's concept sheet chose, with its working recipe.
     layout = layout_block_for(spec_text)
@@ -2564,6 +2568,7 @@ def run_builder_v2(spec_text: str, ctx: Dict[str, Any], business_id: str,
             measured = render_findings(_m) + _craft().render_findings(_m)
             if page == "home":
                 measured += layout_findings(spec_text, _m)
+                measured += _craft().opening_findings(_m, sheet.get("intensity"))
             walk = visitor_walk_findings(_m)
             weakest = (verdict or {}).get("weakest") if verdict else None
             rec: Dict[str, Any] = {
