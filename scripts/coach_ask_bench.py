@@ -389,8 +389,8 @@ def main():
             print(f"{o['key']}: known context {len(ctx)} chars")
         print("dry run: no model calls")
         return
-    from anthropic import Anthropic
-    client = Anthropic(api_key=keep, timeout=60.0, max_retries=2)
+    import llm_call
+    client = llm_call.sdk_client(key=keep, timeout=60.0, max_retries=2)
     out = Path(ARGS.out) if ARGS.out else Path(os.environ.get("TEMP") or "/tmp") / "coach-ask-bench"
     out.mkdir(parents=True, exist_ok=True)
 
