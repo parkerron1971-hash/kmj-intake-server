@@ -50,10 +50,11 @@ def _scene_js(selector: str, frame: str) -> str:
         "for(;p&&p!==b&&p!==h;p=p.parentElement){if(cuts(p))return true}"
         "return cuts(b)&&cuts(h)};"
         "els=els.filter(function(el){return !clipped(el)});if(!els.length)return;"
+        "var stand=function(el){el.classList.remove('sxo-live','sxo-tall');el.style.width='';el.style.marginLeft='';el.style.removeProperty('--n')};"
         # turn on, and if anything stops the pin holding, stay the plain stack:
         # a blank scroll is the one thing a scene must never do
         "els=els.filter(function(el){el.classList.add('sxo-live');var pin=el.firstElementChild;"
-        "var ok=pin&&getComputedStyle(pin).position==='sticky';if(!ok)el.classList.remove('sxo-live');return ok});"
+        "var ok=pin&&getComputedStyle(pin).position==='sticky';if(!ok)stand(el);return ok});"
         "if(!els.length)return;"
         # the whole screen, whatever container the builder put it in
         "var span=function(el,vw){if(el._vw===vw)return;el._vw=vw;el.style.width=vw+'px';el.style.marginLeft='0px';"
@@ -62,6 +63,8 @@ def _scene_js(selector: str, frame: str) -> str:
         "function draw(){busy=false;var vh=innerHeight,vw=document.documentElement.clientWidth;"
         "els.forEach(function(el){if(!el.classList.contains('sxo-live'))return;span(el,vw);"
         "var r=el.getBoundingClientRect();if(r.bottom<-50||r.top>vh+50)return;"
+        # the real test: mid-scene the pin sits at the top of the screen, or it isn't holding
+        "if(r.top<-2&&r.bottom>vh+2&&Math.abs(el.firstElementChild.getBoundingClientRect().top)>2){stand(el);return}"
         "var p=c(-r.top/Math.max(1,r.height-vh));" + frame + "})}"
         "addEventListener('scroll',function(){if(!busy){busy=true;requestAnimationFrame(draw)}},{passive:true});"
         "addEventListener('resize',draw);addEventListener('load',draw);draw()})();"
@@ -121,8 +124,7 @@ SCENES: List[Dict[str, Any]] = [
             "if(!over&&tall<=ah)break}"
             "if(big>fs)fs=big;else el.classList.remove('sxo-tall')}else{el.classList.remove('sxo-tall')}"
             # too long to be a poster: stay the plain stack, never tiny type
-            "if(fs<28){el.classList.remove('sxo-live');el.style.removeProperty('--n');el.style.width='';el.style.marginLeft='';"
-            "for(j=0;j<ls.length;j++){ls[j].style.fontSize=''}return}"
+            "if(fs<28){stand(el);for(j=0;j<ls.length;j++){ls[j].style.fontSize=''}return}"
             "for(j=0;j<ls.length;j++){ls[j].style.fontSize=fs+'px'}}"
             "for(var i=0;i<ls.length;i++){var a=i/n*.84,b=(i+1)/n*.84;"
             "ls[i].style.setProperty('--f',c((p-a)/(b-a)).toFixed(3))}"
@@ -211,7 +213,7 @@ SCENES: List[Dict[str, Any]] = [
             "var w=el.querySelector('.sxo-scw-wall'),pin=el.querySelector('.sxo-scw-pin'),ln=el.querySelector('.sxo-scw-line'),en=el.querySelector('.sxo-scw-end');"
             # a line placed inside the wall would scale with it
             "if(ln&&ln.parentNode!==pin)pin.appendChild(ln);if(en&&en.parentNode!==pin)pin.appendChild(en);"
-            "var ks=w.querySelectorAll('figure'),n=ks.length;if(!n)return;var cols=vw<=640?(n>8?3:2):(n>9?4:3);"
+            "var ks=w.querySelectorAll('figure'),n=ks.length;if(!n){stand(el);return}var cols=vw<=640?(n>8?3:2):(n>9?4:3);"
             "el.style.setProperty('--cols',cols);el.style.setProperty('--rows',Math.ceil(n/cols));"
             "var k=ks[Math.floor((n-1)/2)],cx=k.offsetLeft+k.offsetWidth/2,cy=k.offsetTop+k.offsetHeight/2;"
             "var q=1-Math.pow(1-c((p-.04)/.7),3),m=1-q;"
