@@ -592,6 +592,8 @@ def test_the_director_is_taught_the_concept_law_and_the_object_catalog():
     assert "{CONCEPT_LAW}" not in s and "{OBJECT_CATALOG}" not in s
     assert "THE CONCEPT LAW" in s and "PLAIN-WORD RULE" in s
     for key in site_objects.OBJECT_KEYS:
+        if key in site_objects.site_scenes.SCENE_KEYS:      # scenes wait on SITE_SCENES
+            continue
         assert f"- {key}:" in s, f"the Director cannot name {key}"
     assert "0. THE CONCEPT" in s and "6. THE OFFER PAGE" in s
     assert s.index("0. THE CONCEPT") < s.index("1. OVERVIEW")
