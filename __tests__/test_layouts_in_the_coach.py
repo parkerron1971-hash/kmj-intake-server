@@ -13,7 +13,8 @@ import blueprint_card
 import design_coach as dc
 import site_layouts as sl
 
-_STORY = {k: {"value": "x", "source": "asked"} for k in ("proof", "voice", "origin", "atmosphere")}
+_STORY = {k: {"value": "a real answer with some words", "source": "asked"}
+          for k in ("proof", "voice", "origin", "atmosphere")}
 
 
 def _turn(**over):

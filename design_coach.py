@@ -323,10 +323,11 @@ _LAYOUT_RANK_TTL_S = 600
 
 
 def _layout_rank(business_id: str, biz: Optional[Dict[str, Any]],
-                 dossier: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+                 dossier: Optional[Dict[str, Any]],
+                 booking_on: bool = False) -> List[Dict[str, Any]]:
     """site_layouts.rank for this business from a light context: its trade,
-    its photos, its live offerings and products, and the dossier. Two small
-    reads; fail-open to []."""
+    its photos, its live offerings and products, whether booking is live, and
+    the dossier. Two small reads; fail-open to []."""
     if _site_layouts is None:
         return []
     import time
@@ -336,7 +337,7 @@ def _layout_rank(business_id: str, biz: Optional[Dict[str, Any]],
     try:
         offerings = sb_clients.sb_get_as_service(
             f"/offerings?business_id=eq.{business_id}&is_active=eq.true"
-            "&select=id&limit=40") or []
+            "&select=id,duration_min&limit=40") or []
     except Exception:
         offerings = []
     try:
@@ -349,6 +350,9 @@ def _layout_rank(business_id: str, biz: Optional[Dict[str, Any]],
     ctx = {"business": {"type": str((biz or {}).get("business_type") or "")},
            "gallery": [g for g in gal if isinstance(g, dict)],
            "offerings": offerings if isinstance(offerings, list) else [],
+           # (2026-11-09) never passed before, so the booking layout told a
+           # shop with booking live that "visitors do not book with you online"
+           "booking": {"enabled": bool(booking_on)},
            "testimonials": testimonials if isinstance(testimonials, list) else [],
            "store": {"enabled": bool(products), "items": products if isinstance(products, list) else []},
            "site": {"site_config": {"discovery_dossier": dossier or {}}}}
@@ -558,6 +562,7 @@ def _known_context(business_id: str) -> str:
         parts[1:1] = _ask_and_facts(business_id, _biz_row, _dossier)
     except Exception as e:
         logger.info(f"[coach] ask and facts skipped: {e}")
+    _booking_on = False
     # THE WIRED-SITE CONTRACT (2026-07-26): mirror the platform's truth
     # about which doors are actually live, so the coach CONFIRMS the
     # site connections instead of asking blind — and never offers a
@@ -566,6 +571,7 @@ def _known_context(business_id: str) -> str:
         import offering_profiles
         state = offering_profiles.business_state(business_id)
         doors: List[str] = []
+        _booking_on = bool(state.get("booking_enabled") and state.get("booking_url"))
         if state.get("booking_enabled") and state.get("booking_url"):
             doors.append("BOOKING is LIVE — customers can book at "
                          + state["booking_url"])
@@ -585,7 +591,7 @@ def _known_context(business_id: str) -> str:
     except Exception as e:
         logger.info(f"[coach] connected-systems context skipped: {e}")
     try:
-        block = layouts_that_fit_block(_layout_rank(business_id, _biz_row, _dossier))
+        block = layouts_that_fit_block(_layout_rank(business_id, _biz_row, _dossier, _booking_on))
         if block:
             parts.append(block)
     except Exception as e:
