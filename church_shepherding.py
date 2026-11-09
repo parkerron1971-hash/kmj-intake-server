@@ -55,6 +55,7 @@ from urllib.parse import quote
 from fastapi import HTTPException
 
 import church_families as cf
+import church_history
 import sb_clients
 
 logger = logging.getLogger("church_shepherding")
@@ -1109,7 +1110,14 @@ async def tell_shepherds(biz: Dict[str, Any], gained: Dict[str, List[str]], ctx:
         body = cfu._mail_html(lines, f"{origin}/my/lead/families" if origin else "", "Open your families")
         if await cfu._email(biz, s["email"], s["name"], subject, body, f"shep-{biz['id']}-{sid}-{stamp}"):
             told += 1
+            # History: who was asked and how many families, never which
+            await _history(biz, f"Emailed {s['name']}: asked to shepherd {'a family' if n == 1 else f'{n} families'}")
     return told
+
+
+async def _history(biz: Dict[str, Any], line: str) -> None:
+    import asyncio
+    await asyncio.to_thread(church_history.note, str(biz["id"]), "church:shepherd_email", line)
 
 
 async def tell_new_shepherd(biz: Dict[str, Any], shepherd: Dict[str, Any], family: str, ctx: Dict[str, Any]) -> bool:
@@ -1124,8 +1132,11 @@ async def tell_new_shepherd(biz: Dict[str, Any], shepherd: Dict[str, Any], famil
              "When they miss three Sundays, you’ll hear first.",
              "Their giving and their private prayer requests are never shown to you."]
     body = cfu._mail_html(lines, f"{origin}/my/lead/families" if origin else "", "Open your families")
-    return await cfu._email(biz, shepherd["email"], shepherd["name"], f"{asker} asked you to shepherd {_the(family)}",
+    sent = await cfu._email(biz, shepherd["email"], shepherd["name"], f"{asker} asked you to shepherd {_the(family)}",
                             body, f"shep-move-{biz['id']}-{shepherd['contact_id']}-{family}-{_iso(_now())[:16]}")
+    if sent:
+        await _history(biz, f"Emailed {shepherd['name']}: asked to shepherd a family")
+    return sent
 
 
 async def tell_pastor(biz: Dict[str, Any], me: Dict[str, Any], logged: Dict[str, Any]) -> int:
@@ -1145,4 +1156,7 @@ async def tell_pastor(biz: Dict[str, Any], me: Dict[str, Any], logged: Dict[str,
                             cfu._mail_html(lines, "", ""),
                             f"shep-pastor-{biz['id']}-{fam['household_id']}-{_iso(_now())[:19]}"):
             told += 1
+            # Any seat reads History, and this went to the Lead Pastor only: the line says a note was
+            # passed on, never that a pastor was asked for, which family, or the note
+            await _history(biz, f"Passed a shepherd's note to {_plain(h.get('name')) or 'the Lead Pastor'}")
     return told

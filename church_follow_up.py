@@ -43,6 +43,7 @@ from urllib.parse import quote
 
 from fastapi import HTTPException
 
+import church_history
 import sb_clients
 
 logger = logging.getLogger(__name__)
@@ -579,6 +580,11 @@ def start(business_id: str, contact_id: str, *, card_key: str, card_name: str, k
         row = rows[0]
         _note(biz, str(row["id"]), "chief", "assigned",
               (f"Handed to {leader.get('name')}. " if leader else "") + pick["reason"])
+        card = church_history.card_words(card_name)
+        church_history.note(biz, "church:card_handed",
+                            f"Handed {card} to {leader.get('name')}" if leader
+                            else f"A{card[1:]} is with the office: no leader holds it yet",
+                            target_type="church_follow_up", target_id=row["id"], payload={"role": pick["role"]})
         return row
     except Exception:
         logger.warning("church follow-up not started for business %s", biz[:8], exc_info=True)
@@ -1335,7 +1341,9 @@ async def _sweep_church(biz_id: str, items: List[Dict[str, Any]], now: datetime,
         # went out, or — with no leader, or none we can email — when the
         # office's alert was raised. A failed send is tried again next sweep.
         if not r.get("leader_told_at"):
+            card = church_history.card_words(r.get("card_name"))
             if leader and leader.get("email"):
+                told_line = f"Emailed {leader['name']}: {card} is theirs to follow up"
                 told = await _email(biz, leader["email"], leader["name"],
                                     f"{pname} is yours to follow up",
                                     _mail_html([f"Hi {html.escape(first_name(leader['name']))},",
@@ -1347,18 +1355,22 @@ async def _sweep_church(biz_id: str, items: List[Dict[str, Any]], now: datetime,
                                     f"cfu-told-{fid}")
                 stats["told"] += int(told)
             elif leader:
+                told_line = f"Told the office: {leader['name']} has {card} and no email on file"
                 told = await _office_alert(biz_id, f"Tell {leader['name']} about {pname}",
                                            f"Chief handed {pname} ({r.get('card_name') or 'a card'}) to {leader['name']}, "
                                            "who has no email on file, so they haven’t been told.",
                                            f"church-fu-noemail-{fid}", pid)
                 stats["office"] += int(told)
             else:
+                told_line = f"Told the office: {card} has no one yet"
                 told = await _office_alert(biz_id, f"{pname} has no one yet",
                                            f"{r.get('card_name') or 'A card'}: {r.get('reason') or ''}",
                                            f"church-fu-none-{fid}", pid)
                 stats["office"] += int(told)
             if told:
                 await asyncio.to_thread(_patch, biz_id, fid, {"leader_told_at": _iso(now)})
+                await asyncio.to_thread(church_history.note, biz_id, "church:leader_told", told_line,
+                                        target_type="church_follow_up", target_id=fid)
         rung = late_step(r, now)
         if not rung:
             continue
@@ -1435,4 +1447,12 @@ async def _sweep_church(biz_id: str, items: List[Dict[str, Any]], now: datetime,
             "overseer_told": f"A day late. Told {told_names or 'the office'}.",
             "next_up": f"Three days late. Told {told_names or 'the office'}, and asked the office to hand them on.",
         }[kind])
+        # History: the same words, without whom the card is about
+        nudged = (f"Nudged {leader['name']}: a follow-up step is due today" if leader and leader.get("email")
+                  else "Told the office: a follow-up step is due today")
+        await asyncio.to_thread(church_history.note, biz_id, "church:follow_up_late", {
+            "nudged": nudged,
+            "overseer_told": f"A follow-up is a day late. Told {told_names or 'the office'}",
+            "next_up": f"A follow-up is three days late. Told {told_names or 'the office'}, and asked the office to hand it on",
+        }[kind], target_type="church_follow_up", target_id=fid)
         stats[kind] = stats.get(kind, 0) + 1

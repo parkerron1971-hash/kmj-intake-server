@@ -37,6 +37,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import HTTPException
 
+import church_history
 import sb_clients
 
 logger = logging.getLogger(__name__)
@@ -156,7 +157,12 @@ def on_new(business_id: str, row: Optional[Dict[str, Any]]) -> Optional[Dict[str
             f"/ministry_care_requests?id=eq.{_q(row['id'])}&business_id=eq.{_q(biz)}&leader_contact_id=is.null",
             {"leader_contact_id": pick["contact_id"], "leader_role": pick["role"], "leader_assigned_at": _iso(now),
              "leader_due_at": _iso(now + timedelta(days=DUE_DAYS)), "leader_late_level": 0, "updated_at": _iso(now)})
-        return out[0] if isinstance(out, list) and out else None
+        if not (isinstance(out, list) and out):
+            return None
+        # History never carries the request, nor who asked
+        church_history.note(biz, "church:prayer_handed", f"Handed a shared prayer request to {pick['name']}",
+                            target_type="care_request", target_id=row["id"])
+        return out[0]
     except Exception:
         logger.warning("prayer hand-off failed for business %s", str(business_id)[:8], exc_info=True)
         return None
@@ -415,6 +421,7 @@ async def _sweep_church(biz_id: str, items: List[Dict[str, Any]], now: datetime,
         if not r.get("leader_told_at"):
             told = False
             if leader and leader.get("email"):
+                told_line = f"Emailed {leader['name']}: a shared prayer request is theirs to pray over"
                 told = await cfu._email(biz, leader["email"], leader["name"], "A prayer request is waiting for you",
                                         cfu._mail_html([f"Hi {html.escape(first_name(leader['name']))},",
                                                         f"{html.escape(who)} asked {html.escape(church)} for prayer and "
@@ -422,6 +429,8 @@ async def _sweep_church(biz_id: str, items: List[Dict[str, Any]], now: datetime,
                                                         "today."], link, "Open your Lead tab"),
                                         f"prayer-told-{rid}-{r.get('leader_assigned_at')}")
             else:
+                told_line = (f"Told the office: {leader['name'] if leader else 'a prayer leader'} has a shared "
+                             "prayer request and no email on file")
                 told = await cfu._office_alert(biz_id, "A prayer leader has no email",
                                                f"A shared prayer request went to {leader['name'] if leader else 'a prayer leader'}, "
                                                "who has no email on file, so they haven’t been told.",
@@ -430,6 +439,8 @@ async def _sweep_church(biz_id: str, items: List[Dict[str, Any]], now: datetime,
                 await asyncio.to_thread(sb_clients.sb_patch_as_service,
                                         f"/ministry_care_requests?id=eq.{_q(rid)}&business_id=eq.{_q(biz_id)}",
                                         {"leader_told_at": _iso(now)})
+                await asyncio.to_thread(church_history.note, biz_id, "church:leader_told", told_line,
+                                        target_type="care_request", target_id=rid)
                 stats["told"] += 1
         rung = late_step(r, now)
         if not rung:
@@ -441,6 +452,7 @@ async def _sweep_church(biz_id: str, items: List[Dict[str, Any]], now: datetime,
         # (church_map.chain_for): their department, or who they answer to.
         above = (church_map.chain_for(mp, defs, held, lid, role, skip={lid}) if mp
                  else cr.chain_above(role, defs, held, skip={lid}))
+        line = ""  # what History says, when something went out
         if kind == "nudged":
             if leader and leader.get("email"):
                 delivered = await cfu._email(biz, leader["email"], leader["name"], f"{who}’s prayer request is due today",
@@ -448,6 +460,7 @@ async def _sweep_church(biz_id: str, items: List[Dict[str, Any]], now: datetime,
                                                              f"{html.escape(who)}’s prayer request is waiting. When you’ve "
                                                              "prayed, tap “I prayed” on your Lead tab."], link, "Open your Lead tab"),
                                              f"prayer-nudge-{rid}-{r.get('leader_due_at')}")
+                line = f"Nudged {leader['name']}: a shared prayer request is due today"
             else:
                 delivered = True
         else:
@@ -480,9 +493,15 @@ async def _sweep_church(biz_id: str, items: List[Dict[str, Any]], now: datetime,
                 f"Told: {names}{' (' + target_role['title'] + ')' if target_role else ''}.",
                 f"prayer-{kind}-{rid}-{r.get('leader_due_at')}", None)
             delivered = bool(alerted and sent_any)
+            line = (f"A shared prayer request has waited {late} with {leader['name'] if leader else 'the prayer team'}. "
+                    f"Told {', '.join(p['name'] for p in target) or 'the office'}"
+                    + (", and asked the office to hand it on" if kind == "next_up" else ""))
         if not delivered:
             continue
         await asyncio.to_thread(sb_clients.sb_patch_as_service,
                                 f"/ministry_care_requests?id=eq.{_q(rid)}&business_id=eq.{_q(biz_id)}",
                                 {"leader_late_level": level})
+        if line:
+            await asyncio.to_thread(church_history.note, biz_id, "church:prayer_late", line,
+                                    target_type="care_request", target_id=rid)
         stats[kind] += 1
