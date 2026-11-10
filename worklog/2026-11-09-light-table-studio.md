@@ -4,9 +4,9 @@ date: 2026-11-09
 agent: Claude Code (Claude Opus 5.5)
 asked: "this design is good. let's go with it."
 status: in progress
-prs: [kmj-intake-server#1784]
+prs: [kmj-intake-server#1784, kmj-intake-server#1785, solutionist-studio#1502]
 migrations: []
-left_undone: ["The app's Light Table screen (solutionist-studio, next PR)", "Free word fixes: the Director leaves room and the composer sets date, place and last line (step 3)", "Three looks: three Medium sketches before the full drawing (step 4)", "Every size and the Series shelf (step 5)", "The ~$6 engine test was offered, not run", "Turn STUDIO_LIGHT_TABLE on, on a Thursday, once the screen is in"]
+left_undone: ["Free word fixes: the Director leaves room and the composer sets date, place and last line (step 3)", "Three looks: three Medium sketches before the full drawing (step 4)", "Every size and the Series shelf (step 5)", "The ~$6 engine test was offered, not run", "Turn STUDIO_LIGHT_TABLE on, on a Thursday, once the screen is in"]
 decisions: ["Kevin approved the Light Table canvas https://claude.ai/artifact/Vcma193TFunxdNoUnEKwLv", "The Studio's brief goes through Chief's own design_flyer path, so credits, the daily limit, the owner check and the replay guard are the same", "STUDIO_LIGHT_TABLE off | owner | on, default owner, like CHURCH_AREAS", "The calendar suggestion skips services and private occasions and invents nothing"]
 related: [2026-10-05-creative-director-every-business.md, 2026-11-07-packs-say-flyers.md]
 ---
@@ -25,3 +25,13 @@ likeness check.
 Before building more here: the canvas's build order is engine test, this screen,
 free word fixes, three looks, then sizes and Series. Prices on the canvas (three more
 looks 10 credits, a new size 10 credits) are proposals Kevin has not set.
+
+2026-11-10, after #1784 deployed: every `GET /ai/images/studio/{biz}` answered 422.
+`image_studio` registers `GET /ai/images/{business_id}/{image_id}` earlier, so it
+caught the Light Table's status read and refused "studio" as a business id. The app
+treats a failed read as closed, so the owner saw the older Studio; nothing was
+charged. #1785 registers the Light Table router before `image_studio`, and
+`__tests__/test_studio_light_table_routes.py` walks the real app's route table in
+order to check both Light Table calls reach their own handlers and image reads still
+reach `image_studio`. A new `/ai/images/<word>/{id}` route has to sit before
+`image_studio` too; a test that mounts one router alone can't see the clash.
