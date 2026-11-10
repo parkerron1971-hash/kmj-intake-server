@@ -4,7 +4,7 @@ date: 2026-11-09
 agent: Claude Code (Claude Opus 5.5)
 asked: "this design is good. let's go with it."
 status: in progress
-prs: [kmj-intake-server#light-table-studio]
+prs: [kmj-intake-server#1784]
 migrations: []
 left_undone: ["The app's Light Table screen (solutionist-studio, next PR)", "Free word fixes: the Director leaves room and the composer sets date, place and last line (step 3)", "Three looks: three Medium sketches before the full drawing (step 4)", "Every size and the Series shelf (step 5)", "The ~$6 engine test was offered, not run", "Turn STUDIO_LIGHT_TABLE on, on a Thursday, once the screen is in"]
 decisions: ["Kevin approved the Light Table canvas https://claude.ai/artifact/Vcma193TFunxdNoUnEKwLv", "The Studio's brief goes through Chief's own design_flyer path, so credits, the daily limit, the owner check and the replay guard are the same", "STUDIO_LIGHT_TABLE off | owner | on, default owner, like CHURCH_AREAS", "The calendar suggestion skips services and private occasions and invents nothing"]
