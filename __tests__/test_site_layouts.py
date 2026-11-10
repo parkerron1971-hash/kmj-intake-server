@@ -34,7 +34,7 @@ def _ctx(btype, photos=0, offerings=0, story=None, stats=0, action="", idea="",
             "site": {"site_config": cfg}}
 
 
-_RICH_STORY = {k: {"value": "x", "source": "asked"}
+_RICH_STORY = {k: {"value": "a real answer with some words", "source": "asked"}
                for k in ("proof", "voice", "origin", "atmosphere")}
 
 
