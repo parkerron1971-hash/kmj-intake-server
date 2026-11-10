@@ -409,6 +409,9 @@ def apply_practitioner_patch(existing: Dict[str, Any],
                     "capabilities", "meta"):
         for k, v in (patch.get(section) or {}).items():
             if _valid_leaf(v):
+                if section == "taste" and k == "layout":
+                    # dated, so a pick made before a later ask can be told apart
+                    v = {**v, "at": datetime.now(timezone.utc).isoformat()}
                 out.setdefault(section, {})[k] = v
     truth = patch.get("truth") or {}
     if isinstance(truth.get("proven_stats"), list):
@@ -653,6 +656,33 @@ def current_ask(dossier: Optional[Dict[str, Any]]) -> str:
     if datetime.now(timezone.utc) - at > timedelta(days=ASK_FRESH_DAYS):
         return ""
     return words
+
+
+def _when(value: Any) -> Optional[datetime]:
+    try:
+        at = datetime.fromisoformat(str(value))
+    except ValueError:
+        return None
+    return at if at.tzinfo else at.replace(tzinfo=timezone.utc)
+
+
+def layout_picked_before_ask(dossier: Optional[Dict[str, Any]]) -> str:
+    """The owner's layout pick, as saved, when they made it before what they
+    asked for this time; '' when there is no pick, no fresh ask, or the pick
+    came after it (2026-11-10, the live test: a Long-scroll story tapped a day
+    earlier, under the old ranking, kept leading an owner who now asked to be
+    found and booked). A pick saved before picks were dated counts as earlier."""
+    if not current_ask(dossier):
+        return ""
+    raw = ((dossier or {}).get("taste") or {}).get("layout")
+    value = raw.get("value") if isinstance(raw, dict) else raw
+    if not str(value or "").strip():
+        return ""
+    ask_at = _when(((dossier or {}).get("the_ask") or {}).get("at"))
+    pick_at = _when(raw.get("at")) if isinstance(raw, dict) and raw.get("at") else None
+    if ask_at is None or (pick_at is not None and pick_at >= ask_at):
+        return ""
+    return str(value).strip()
 
 
 def dossier_digest(dossier: Optional[Dict[str, Any]]) -> str:
