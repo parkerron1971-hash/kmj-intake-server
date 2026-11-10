@@ -571,7 +571,11 @@ def review_verdict(review, spec):
         if not getattr(review, field) and not review.issues: issues.append(issue)
     passed = all((review.reference_match, review.readable, review.composition_coherent, review.brand_assets_clean,
                   review.likeness_match)) and not issues
-    return {'passed': passed, 'issues': issues[:12], 'observed_text': review.observed_text,
+    # Each check on its own, so the Studio's proof can show what was checked
+    # and what passed (the Light Table, 2026-11-09), not only one verdict.
+    checks = {'words': not missing, 'readable': bool(review.readable), 'layout': bool(review.composition_coherent),
+              'brand': bool(review.brand_assets_clean), 'likeness': bool(review.likeness_match)}
+    return {'passed': passed, 'issues': issues[:12], 'observed_text': review.observed_text, 'checks': checks,
         'repair_instruction': review.repair_instruction, 'checked_at': datetime.now(timezone.utc).isoformat()}
 
 
@@ -655,6 +659,8 @@ def judge_likeness(verdict, score):
     verdict = dict(verdict, likeness=round(score, 3))
     if score < LIKENESS_MIN:
         verdict['passed'] = False
+        if isinstance(verdict.get('checks'), dict):
+            verdict['checks'] = dict(verdict['checks'], likeness=False)
         verdict['issues'] = (list(verdict.get('issues') or []) + [
             f'{LIKENESS_ISSUE} (likeness {score:.2f}, needs {LIKENESS_MIN:.2f}): redraw the face and hair '
             'from the close-up photos exactly.'])[:12]
@@ -741,7 +747,8 @@ def public_state(spec):
     verdict = spec.get('review') or {}
     return {'phase': spec.get('phase', 'queued'), 'attempts': spec.get('attempts', 0),
         'max_renders': spec.get('max_renders', 2), 'review_passed': verdict.get('passed'),
-        'issues': verdict.get('issues', []), 'warning': spec.get('warning'), 'likeness': verdict.get('likeness')}
+        'issues': verdict.get('issues', []), 'warning': spec.get('warning'), 'likeness': verdict.get('likeness'),
+        'checks': verdict.get('checks')}
 
 
 async def local_context(owner):
