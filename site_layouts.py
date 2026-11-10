@@ -156,8 +156,10 @@ def _fit_split(s: Signals) -> Points:
 
 def _fit_editorial(s: Signals) -> Points:
     p: Points = []
-    if s["story_beats"] >= 3:
+    if s["story_beats"] >= 4:
         p.append((3, "your story carries the site"))
+    if s.get("ask_menu"):
+        p.append((-2, "a list of prices gets lost inside an essay"))
     if s["photos"] <= 2:
         p.append((2, "it needs no photos to look finished"))
     if s["action"] in ("call", "book"):
@@ -194,6 +196,8 @@ def _fit_fullscreen(s: Signals) -> Points:
 
 def _fit_statement(s: Signals) -> Points:
     p: Points = []
+    if s.get("ask_menu"):
+        p.append((-2, "huge words leave no room for the prices you want seen"))
     if s["photos"] == 0:
         p.append((4, "the words do the work, so no photos are needed"))
     elif s["photos"] <= 2:
@@ -225,6 +229,8 @@ def _fit_grid(s: Signals) -> Points:
         p.append((2, "people browse what you sell"))
     if s["action"] == "buy":
         p.append((1, "a grid gets people to the thing they want to buy"))
+    if s.get("ask_menu"):
+        p.append((3, "every item shows its price, so nobody has to ask"))
     if s["photos"] >= 4:
         p.append((1, "there are photos for the tiles"))
     if _IDEA_WORDS["grid"].search(s["idea"]):
@@ -274,6 +280,8 @@ def _fit_showcase(s: Signals) -> Points:
 
 def _fit_story(s: Signals) -> Points:
     p: Points = []
+    if s.get("ask_simple"):
+        p.append((-3, "you asked to keep it simple, and this is the longest page there is"))
     if s["story_beats"] >= 4:
         p.append((4, "your story has enough beats to unfold chapter by chapter"))
     elif s["story_beats"] < 3:
@@ -311,6 +319,8 @@ def _fit_sidebar(s: Signals) -> Points:
 
 def _fit_minimal(s: Signals) -> Points:
     p: Points = []
+    if s.get("ask_simple"):
+        p.append((4, "you asked to keep it simple"))
     if s["story_beats"] <= 1 and s["offerings"] <= 2 and s["photos"] <= 1:
         p.append((4, "it looks finished with very little on file"))
     if s["calm_trade"]:
@@ -343,11 +353,15 @@ def _fit_bulletin(s: Signals) -> Points:
 
 def _fit_booking(s: Signals) -> Points:
     p: Points = []
+    if s.get("ask_book"):
+        p.append((6, "you asked for people to be able to book"))
+    if s.get("ask_menu"):
+        p.append((3, "every service shows its price, so nobody has to ask"))
     if s["action"] == "book":
         p.append((3, "people come to book, so booking runs down the page"))
     if s["booking_live"]:
         p.append((2, "your booking page is live, so every service books in one tap"))
-    elif s["action"] == "book":
+    elif s["action"] == "book" or s["appointment_trade"]:
         p.append((-1, "booking is not switched on yet (Chief can set it up)"))
     else:
         p.append((-4, "visitors do not book with you online"))
@@ -738,18 +752,61 @@ def has_a_door(btype: str = "", ask: str = "") -> bool:
     return bool(_PLACE_TRADE_RE.search(btype) or _DOOR_TRADE_RE.search(btype))
 
 
+def _beat(value: Any) -> bool:
+    """Something told. "Just a barbershop" and "mostly fades" answer a question
+    but can't carry a chapter of a page."""
+    return len(_leaf(value).split()) >= 4
+
+
 def _story_beats(dossier: Dict[str, Any]) -> int:
-    """How much story the owner has told: filled fields in the sections the
-    Coach asks about (each answered question is one beat)."""
+    """How much story the owner has told (2026-11-09: this used to count every
+    filled field, the Coach's own sharpening of their line included, so a shop
+    that had said almost nothing was told "your story has enough beats" and
+    recommended the longest page there is). The room and the signature moment
+    are one beat each, however many fields they fill."""
     n = 0
-    for sec in ("story", "world", "signature"):
+    story = dossier.get("story")
+    if isinstance(story, dict):
+        n += sum(1 for v in story.values() if _beat(v))
+    for sec in ("world", "signature"):
         block = dossier.get(sec)
-        if isinstance(block, dict):
-            n += sum(1 for v in block.values() if _has(v))
+        if isinstance(block, dict) and any(_beat(v) for v in block.values()):
+            n += 1
     one = ((dossier.get("identity") or {}).get("one_liner")) if isinstance(dossier.get("identity"), dict) else None
-    if _has(one):
+    if _beat(one):
         n += 1
     return n
+
+
+# WHAT THE OWNER ASKED FOR (2026-11-09): the job they named comes before any
+# trade rule. Only their words count here, never a guess from the business.
+_ASK_BOOK_RE = re.compile(r"\bbook(ing|ed)?\b|\bappointments?\b|\bschedul|\breserv", re.IGNORECASE)
+_ASK_MENU_RE = re.compile(r"\bprices?\b|\bpricing\b|\brates\b|\bmenu\b|\bhow much\b", re.IGNORECASE)
+_ASK_BUY_RE = re.compile(r"\b(buy|order|sell|purchase)\b|\bonline store\b", re.IGNORECASE)
+_ASK_CALL_RE = re.compile(r"\b(call|text|email) me\b|\bget (me )?(more )?(clients|leads|customers)\b", re.IGNORECASE)
+_ASK_SIMPLE_RE = re.compile(
+    r"\bnothing fancy\b|\bsimple\b|\bbasic\b|\bno frills\b|\bone page\b|\bnot trying to win\b",
+    re.IGNORECASE)
+
+
+def _the_ask(dossier: Dict[str, Any]) -> str:
+    try:
+        import discovery
+        return discovery.current_ask(dossier)
+    except Exception:
+        return ""
+
+
+def _action_asked_for(ask: str) -> str:
+    if _ASK_BOOK_RE.search(ask):
+        return "book"
+    if _ASK_BUY_RE.search(ask):
+        return "buy"
+    if _FIND_ME_RE.search(ask):
+        return "visit"
+    if _ASK_CALL_RE.search(ask):
+        return "call"
+    return ""
 
 
 def _action(dossier: Dict[str, Any], ctx: Dict[str, Any]) -> str:
@@ -763,6 +820,9 @@ def _action(dossier: Dict[str, Any], ctx: Dict[str, Any]) -> str:
         return "buy"
     if re.search(r"\bvisit|come in|stop by|join us|attend", raw):
         return "visit"
+    asked = _action_asked_for(_the_ask(dossier))
+    if asked:
+        return asked
     if (ctx.get("booking") or {}).get("enabled"):
         return "book"
     return "call" if raw else ""
@@ -805,8 +865,12 @@ def signals(ctx: Dict[str, Any], recent: Optional[List[str]] = None) -> Signals:
     booking = ctx.get("booking") if isinstance(ctx.get("booking"), dict) else {}
     events = ctx.get("events_door") if isinstance(ctx.get("events_door"), dict) else {}
     taste_text = " ".join(_leaf(v) for v in taste.values() if not isinstance(v, list))
+    ask = _the_ask(dossier)
     return {
         "photos": _photo_count(ctx),
+        "ask_book": bool(_ASK_BOOK_RE.search(ask)),
+        "ask_simple": bool(_ASK_SIMPLE_RE.search(ask)),
+        "ask_menu": bool(_ASK_MENU_RE.search(ask)),
         "offerings": offerings,
         "store_items": store_items,
         "retail": bool(store.get("enabled")) and store_items > 0,
