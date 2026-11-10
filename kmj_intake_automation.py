@@ -327,6 +327,12 @@ app.include_router(strategy_router)
 app.include_router(restricted_router)
 app.include_router(workflow_router)
 app.include_router(growth_objective_router)
+# The Light Table (2026-11-09): the Studio's brief -> the Director's flyer.
+# Registered BEFORE image_studio: its GET /ai/images/{business_id}/{image_id}
+# would otherwise catch GET /ai/images/studio/{business_id} and refuse
+# "studio" as a business id (422), so the app never opened the Light Table.
+from studio_light_table import router as studio_light_table_router
+app.include_router(studio_light_table_router)
 from image_studio import router as image_studio_router
 app.include_router(image_studio_router)
 app.include_router(growth_intelligence_router)
@@ -965,9 +971,6 @@ app.include_router(chief_local_work_router)
 from creative_director import router as creative_director_router, business_router as creative_director_business_router
 app.include_router(creative_director_router)
 app.include_router(creative_director_business_router)
-# The Light Table (2026-11-09): the Studio's brief -> the Director's flyer.
-from studio_light_table import router as studio_light_table_router
-app.include_router(studio_light_table_router)
 # The fix queue (2026-09-02) — support tickets ranked, dispatched into dev
 # tasks, walked back when the fix ships, and answered by email.
 # /platform/support/* (owner JWT) + /dev-bridge/tickets* (device token, so
