@@ -43,7 +43,7 @@ router = APIRouter(prefix='/ai/images/studio', tags=['studio'])
 # Where the flyer goes -> the Director's canvas. All three are sizes the
 # 2.5 models draw (image_studio.SIZES).
 SIZES = {'post': '1088x1360', 'story': '1088x1920', 'wide': '1920x1088'}
-KINDS = {'event': 'an event', 'series': 'a sermon series', 'announcement': 'an announcement', 'offer': 'an offer'}
+KINDS = {'event': 'an event', 'series': 'a series', 'announcement': 'an announcement', 'offer': 'an offer'}
 # How far ahead the calendar is read for an occasion to start from.
 LOOKAHEAD_DAYS = 60
 
