@@ -426,10 +426,11 @@
   var reduce = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
   var phone = function () { return innerWidth <= 760; };
   var intro = document.getElementById('hxIntro'), hold = document.getElementById('hxHold');
+  // while the product leads the hero (HOME_EDIT, overview_edit.css) the window is not in the picture: don't fetch or play its film
+  var lineup = document.documentElement.classList.contains('ep-prod');
   var kind = phone() ? 'square' : 'wide', size = phone() ? 720 : (innerWidth * (devicePixelRatio || 1) > 1500 ? 1920 : 1280);
   var base = '/assets/home/hero3-' + kind + '-';
-  hold.poster = base + 'poster.jpg';
-  hold.src = base + 'hold-' + size + '.mp4';
+  if (!lineup) { hold.poster = base + 'poster.jpg'; hold.src = base + 'hold-' + size + '.mp4'; }
   function play(v) { var p = v.play(); if (p && p.catch) p.catch(function () {}); }
   var still = document.getElementById('slStill'), stillIn = document.getElementById('slStillIn');
   function fit() {
@@ -445,7 +446,7 @@
     notes.forEach(function (li, i) { setTimeout(function () { li.classList.add('on'); }, now ? 0 : 1100 + i * 420); });
     if (tiles) setTimeout(function () { tiles.classList.add('on'); }, now ? 0 : 2400);
   }
-  if (reduce) { intro.remove(); intro = null; arrive(true); }
+  if (lineup || reduce) { intro.remove(); intro = null; arrive(true); }
   else {
     intro.src = base + 'intro-' + size + '.mp4';
     hold.load();
@@ -456,7 +457,7 @@
     setTimeout(function () { if (!started) { intro.style.opacity = '0'; play(hold); arrive(true); started = true; } }, 4500);
     play(intro);
   }
-  if ('IntersectionObserver' in window && !reduce) new IntersectionObserver(function (e) {
+  if ('IntersectionObserver' in window && !reduce && !lineup) new IntersectionObserver(function (e) {
     if (intro && !intro.ended && intro.style.opacity !== '0') return;
     if (e[0].isIntersecting) play(hold); else hold.pause();
   }).observe(hold);
@@ -534,7 +535,8 @@
   // the walk only runs while the window is on screen (the browser already rests it in a hidden tab)
   var heroOn = true, ticking = false;
   function startTick() { if (!ticking) { ticking = true; requestAnimationFrame(tick); } }
-  if (!reduce) {
+  if (lineup) { /* no window to walk */ }
+  else if (!reduce) {
     startTick();
     if ('IntersectionObserver' in window) new IntersectionObserver(function (e) { heroOn = e[0].isIntersecting; if (heroOn) startTick(); }).observe(media);
   }

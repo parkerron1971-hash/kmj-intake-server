@@ -18,6 +18,10 @@ Holds:
      come from the dials; the move's offer from church_offer(); the hero says "priced by the size of your
      Sunday" only while the plans by size are on sale, and the picker only shows then.
   4. THE SCRIPT RUNS: the overview's own script parses, and holds no template marker.
+  5. THE EDIT (2026-11-10, claude.ai/artifact/R4urMgT3cttrinQTBybFp5, "hero product is it! i like that one."):
+     one layer over the page, on unless HOME_EDIT=off, which sends the page exactly as it was. While it is on
+     the product leads the hero as eight real screens and the window's film is not fetched. The layer adds no
+     claim the page did not already make, and none of the mock's compare bar.
 """
 from __future__ import annotations
 
@@ -43,6 +47,7 @@ def _defaults(monkeypatch):
     import stripe_billing
     monkeypatch.setenv("CHURCH_SITE", "on")
     monkeypatch.delenv("HOME_EDITION", raising=False)
+    monkeypatch.delenv("HOME_EDIT", raising=False)
     monkeypatch.delenv("CHURCHSAVVY_URL", raising=False)
     monkeypatch.delenv("PLAN_CHURCH_OFFERED", raising=False)
     monkeypatch.delenv("CHURCH_OFFERED", raising=False)
@@ -339,3 +344,86 @@ def test_the_overview_script_parses_and_is_plain(by_size):
         pytest.skip("node is not installed")
     res = subprocess.run(["node", "--check", "-"], input=js, capture_output=True, encoding="utf-8", timeout=30)
     assert res.returncode == 0, res.stderr
+
+
+# ─── 5. the edit: one layer, and a way back ─────────────────────────
+
+EDIT_SCREENS = ("chief", "website", "giving", "people", "app", "groups", "office", "kids")
+
+
+def test_the_edit_is_on_and_one_value_takes_it_all_back(by_size, monkeypatch):
+    on = cs.render("")
+    assert '<html lang="en" class="ep ep-prod">' in on
+    assert "pf-stage" in on and "html.ep.ep-prod .hx-media" in on
+    assert "{{EDIT" not in on
+    for off_value in ("off", "0", "false", "no", " OFF "):
+        monkeypatch.setenv("HOME_EDIT", off_value)
+        off = cs.render("")
+        assert '<html lang="en">' in off and "{{EDIT" not in off
+        for gone in ('class="ep ep-prod"', "pf-stage", "pfStage", "ep-closerose", "Moving sheet"):
+            assert gone not in off, (off_value, gone)
+    # the way back is the same page: the layer is two blocks and one attribute, nothing else moves
+    layer = "<style>\n" + cs._read("overview_edit.css") + "\n</style>"
+    script = "<script>\n" + cs._read("overview_edit.js") + "\n</script>"
+    assert on.replace(' class="ep ep-prod"', "", 1).replace(layer, "", 1).replace(script, "", 1) == off
+
+
+def test_the_edit_changes_nothing_unless_its_class_is_on_the_page():
+    """Every rule that restyles the page sits under html.ep, so the style sheet alone moves nothing."""
+    css = re.sub(r"/\*.*?\*/", "", cs._read("overview_edit.css"), flags=re.S)
+    bare = []
+    for sel in re.findall(r"(?:^|[{}])\s*([^{}@]+?)\s*\{", css):
+        for one in sel.split(","):
+            one = one.strip()
+            if not one or one in ("from", "to") or one.endswith("%"):
+                continue
+            # the layer's own parts (ep-, pf-, cx-, ms-) only exist once its script has run under html.ep
+            if not (one.startswith(("html.ep", "html:not(.ep)", ":root", ".ep-", ".pf-", ".cx", ".ms-"))):
+                bare.append(one)
+    assert not bare, bare[:8]
+
+
+def test_the_edits_script_parses_and_only_runs_under_its_class():
+    js = cs._read("overview_edit.js")
+    assert "{{" not in js and "}}" not in js
+    assert "if (!root.classList.contains('ep')) return;" in js
+    if not shutil.which("node"):
+        pytest.skip("node is not installed")
+    res = subprocess.run(["node", "--check", "-"], input=js, capture_output=True, encoding="utf-8", timeout=30)
+    assert res.returncode == 0, res.stderr
+
+
+def test_the_eight_screens_are_on_disk_and_served(by_size):
+    js = cs._read("overview_edit.js")
+    assert "'/assets/home/pf-' + o.k + '.webp'" in js
+    for k in EDIT_SCREENS:
+        assert f"k: '{k}'" in js, k
+        assert (cs.DIR.parent / "static" / "home" / f"pf-{k}.webp").is_file(), k
+    try:
+        import public_site as ps
+    except ImportError as e:
+        pytest.skip(f"public_site needs {e.name}")
+    for k in EDIT_SCREENS:
+        assert ps._home_asset_path(f"pf-{k}.webp") is not None, k
+    assert ps._home_asset_path("hero3-square-poster.jpg") is not None, "the light on the floor and the closing rose"
+
+
+def test_the_window_film_is_not_fetched_while_the_product_leads():
+    js = cs._read("overview.js")
+    assert "var lineup = document.documentElement.classList.contains('ep-prod');" in js
+    assert "if (!lineup) { hold.poster = base + 'poster.jpg'; hold.src = base + 'hold-' + size + '.mp4'; }" in js
+    assert "if (lineup || reduce) { intro.remove(); intro = null; arrive(true); }" in js
+
+
+def test_the_edit_says_nothing_the_page_did_not(by_size):
+    """The layer's own words are labels and samples. Its two lines that read as claims are the page's:
+    the move's step three, and the tour's line about History."""
+    html = cs.render("")
+    js = cs._read("overview_edit.js")
+    assert "You see the counts before anything is final." in html, "the move's step three, already on the page"
+    assert "Sample counts. You see yours before anything is final." in js
+    assert "<span>What you ask of it, listed in plain words</span>" in html, "the tour's Chief room"
+    assert "What you ask of it, listed in plain words." in js
+    for gone in ("Drafted a welcome note to both guests. Waiting for you.", "3,180 gifts", "epbar", "What changed", "Live now",
+                 "solEditPass", "solHero", "localStorage", "Edit pass", "Hero: <b>", "claude.ai"):
+        assert gone not in html, gone
