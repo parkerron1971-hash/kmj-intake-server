@@ -181,6 +181,57 @@ def doors_lines(doors: Optional[List[Dict[str, Any]]]) -> List[str]:
     return lines
 
 
+_TOLD_FACTS = (("address", "address", 200), ("phone", "phone", 40), ("hours", "hours", 160))
+
+
+def _told_coach(cfg: Dict[str, Any]) -> List[tuple]:
+    dossier = cfg.get("discovery_dossier") if isinstance(cfg.get("discovery_dossier"), dict) else {}
+    truth = dossier.get("truth") if isinstance(dossier.get("truth"), dict) else {}
+    out = []
+    for fact, label, cap in _TOLD_FACTS:
+        v = truth.get(fact)
+        v = v.get("value") if isinstance(v, dict) else v
+        v = " ".join(str(v or "").split())[:cap]
+        if v:
+            out.append((fact, label, v))
+    return out
+
+
+def _on_page(fact: str, value: str, html: str) -> bool:
+    """Whether the live page shows this fact: the street number and name for
+    an address, the digits for a phone, the first day named for hours."""
+    import re
+    low = " ".join(html.lower().split())
+    if fact == "address":
+        m = re.match(r"\s*(\d+)\s+([a-z]+)", value.lower())
+        return bool(m) and f"{m.group(1)} {m.group(2)}" in low
+    if fact == "phone":
+        digits = re.sub(r"\D", "", value)[-7:]
+        return len(digits) == 7 and digits in re.sub(r"\D", "", low)
+    m = re.search(r"mon|tue|wed|thu|fri|sat|sun", value.lower())
+    return bool(m) and m.group(0) in low
+
+
+def told_coach_lines(cfg: Dict[str, Any]) -> List[str]:
+    """What the owner told the Design Coach about where and when they are
+    (2026-11-10, the live test: the site editor's Chief asked for "the shop
+    address and hours" minutes after the owner gave the Coach both, because
+    those answers lived only in the design dossier)."""
+    facts = _told_coach(cfg)
+    if not facts:
+        return []
+    said = "; ".join(f'{label} "{v}"' for _, label, v in facts)
+    lines = [f"  What they told the Design Coach (their words; use them and never "
+             f"ask for them again): {said}."]
+    html = str(((cfg.get("canvas") or {}) if isinstance(cfg.get("canvas"), dict) else {}).get("html") or "")
+    if html:
+        missing = [label for fact, label, v in facts if not _on_page(fact, v, html)]
+        if missing:
+            lines.append(f"  Not on the live page yet: {', '.join(missing)}. Offer to put "
+                         "them on; never ask for them.")
+    return lines
+
+
 def site_design_lines(site: Optional[Dict[str, Any]],
                       settings: Optional[Dict[str, Any]],
                       modules: Optional[List[Dict[str, Any]]] = None,
@@ -205,6 +256,10 @@ def site_design_lines(site: Optional[Dict[str, Any]],
     else:
         lines.append("  Design blueprint: none yet. Any site build or redesign starts "
                      "with start_design_session (the Design Coach, in the chat).")
+    try:
+        lines.extend(told_coach_lines(cfg))
+    except Exception as e:
+        logger.info(f"[site-design] told-the-coach lines skipped: {e}")
     n = photos_not_on_site(settings or {}, cfg)
     if n:
         lines.append(
