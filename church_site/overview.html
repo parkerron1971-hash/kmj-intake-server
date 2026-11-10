@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en"{{EDIT_ATTR}}>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
@@ -323,13 +323,14 @@ footer nav a:hover{text-decoration-color:#C9CDD6 !important}
 <style>
 {{OVERVIEW_CSS}}
 </style>
+{{EDIT_STYLE}}
 {{PIXEL}}
 </head>
 <body>
 <div style="font-family: 'Inter', ui-sans-serif, system-ui, sans-serif; color: #F5F6F8; background: #07080B; line-height: 1.55; -webkit-font-smoothing: antialiased; overflow: hidden">
 
 <!-- The Solutionist frame: the church page is the front door, so the strip says who it's for and opens the coaches door -->
-<div style="position: relative; background: #000000; color: #C9CDD6; font-size: 13px; border-bottom: 1px solid #15171E">
+<div class="ep-strip" style="position: relative; background: #000000; color: #C9CDD6; font-size: 13px; border-bottom: 1px solid #15171E">
 <div style="max-width: 1240px; margin: 0 auto; padding: 9px 32px; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px 24px">
 <span style="display: flex; align-items: center; gap: 8px; color: #F5F6F8">
 <svg width="20" height="17" viewBox="8 36 496 424" aria-hidden="true"><defs><linearGradient id="mkg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#E040FB"></stop><stop offset=".55" stop-color="#7C5CFF"></stop><stop offset="1" stop-color="#22D3EE"></stop></linearGradient></defs><g fill="url(#mkg)" stroke="#fff" stroke-width="8" stroke-opacity=".92"><polygon points="18,46 175,232 237,231 133,98 376,99 356,131 412,167 494,49"></polygon><polygon points="205,138 338,241 232,391 274,449 435,221 319,137"></polygon><polygon points="264,274 149,279 201,359"></polygon></g></svg>
@@ -589,7 +590,7 @@ That's what a church is for. Our mission is to hold every part of church life to
 </section>
 
 <!-- ONE LIST OF PEOPLE -->
-<section class="spill" style="background: #FBF9F5; color: #16130F">
+<section class="spill ep-onelist" style="background: #FBF9F5; color: #16130F">
 <div style="max-width: 1240px; margin: 0 auto; padding: 120px 32px; display: flex; flex-direction: column; gap: 64px">
 <div style="display: flex; flex-direction: column; gap: 18px; max-width: 780px">
 <p class="eyebrow" style="margin: 0; color: #615B53">Why one system</p>
@@ -876,6 +877,7 @@ That's what a church is for. Our mission is to hold every part of church life to
 <script>
 {{OVERVIEW_JS}}
 </script>
+{{EDIT_SCRIPT}}
 {{ANALYTICS}}
 </body>
 </html>

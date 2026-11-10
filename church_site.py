@@ -134,6 +134,13 @@ def enabled() -> bool:
     return (os.environ.get("CHURCH_SITE") or "on").strip().lower() not in ("off", "0", "false", "no")
 
 
+def home_edit() -> bool:
+    """Whether the overview carries the 2026-11-10 edit (overview_edit.css and .js): the product leads
+    the hero, one window and one accent, fewer boxes. On unless HOME_EDIT=off, which gives back the page
+    as it was with no deploy. Kevin: "hero product is it! i like that one."""
+    return (os.environ.get("HOME_EDIT") or "on").strip().lower() not in ("off", "0", "false", "no")
+
+
 def is_home() -> bool:
     """Whether mysolutionist.app/ is the church overview: unless HOME_EDITION
     names one of the business homes (v3, v2), and while the section is on."""
@@ -620,6 +627,11 @@ def render(slug: str) -> str:
     if "{{OVERVIEW_CSS}}" in page:
         tokens["OVERVIEW_CSS"] = _read("overview.css")
         tokens["OVERVIEW_JS"] = _read("overview.js")
+        # the edit is one layer on top, and only its two root classes switch it on: HOME_EDIT=off sends neither
+        edit = home_edit()
+        tokens["EDIT_ATTR"] = ' class="ep ep-prod"' if edit else ""
+        tokens["EDIT_STYLE"] = "<style>\n" + _read("overview_edit.css") + "\n</style>" if edit else ""
+        tokens["EDIT_SCRIPT"] = "<script>\n" + _read("overview_edit.js") + "\n</script>" if edit else ""
     if "{{LIT_CSS}}" in page:
         # a lit room: the shared kit, then the room's own parts beside its template (giving.css, giving.js)
         room = meta["file"].rsplit(".", 1)[0]
