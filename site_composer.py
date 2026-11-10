@@ -6306,6 +6306,24 @@ def _run_builder_v2(ctx: Dict[str, Any], business_id: str,
     JS/external armor, truth + coverage, one scoped repair) runs after
     authorship. (html, report); html is None when the builder is off,
     falls back or crashes, and the ladder continues (canvas, modules)."""
+    # THE KIT (2026-11-10, Kevin: "make the kit available for it to be used"):
+    # when the blueprint's layout is one the kit has, the page is assembled
+    # from finished sections for cents; any miss and the builder writes it.
+    try:
+        import site_kit as _kit
+        _k_html, _k_rep = _kit.build(
+            ctx, business_id,
+            progress_cb=lambda pct, stage: _report_progress(progress_cb, pct, stage))
+        if _k_html:
+            logger.info(f"[composer] THE KIT assembled {business_id[:8]} "
+                        f"({(_k_rep or {}).get('layout')})")
+            return _k_html, _k_rep
+        if _k_rep:
+            logger.info(f"[composer] the kit stood down for {business_id[:8]}: "
+                        f"{(_k_rep or {}).get('fallbacks')}")
+    except Exception as _ke:
+        logger.warning(f"[composer] the kit crashed (the builder runs): "
+                       f"{type(_ke).__name__}: {_ke}")
     try:
         import builder_v2 as _bv2
         if not _bv2.enabled():

@@ -3,16 +3,17 @@ title: The kit test, pages assembled from finished sections
 date: 2026-11-10
 agent: Claude Code (Claude Opus 5.5)
 asked: "go, fix the two gaps first and make it happen"
-status: waiting on Kevin
+status: shipped
 prs: [kmj-intake-server#1788]
 migrations: []
 left_undone:
-  - "Nothing is wired in: no owner's build uses the kit. Wiring it means the builder's ladder trying the kit first for the Booking desk, behind a switch, off by default."
+  - "SITE_KIT defaults to owner: only the platform owner's businesses build from the kit. Turning it on for everyone (SITE_KIT=on) is Kevin's call, on a Thursday."
+  - "A kit page has no builder-only extras yet: the one-section rework and the revision round answer 'this page wasn't made by the site builder', the World offer page and the photo list are skipped. Re-assembling a kit page for free after an edit is the obvious next step."
+  - "Owners are charged the same credits for a kit build as a builder build; the platform's cost drops from about $2.70 to a few cents. Pricing is Kevin's call."
   - "Five of 17 layouts are in the kit (Booking desk, Poster, Bulletin, Leader, Magazine). Kevin: do all; the other 12 are next."
   - "Ministries and events render and are tested, but no graded page has had them: Love City's data has neither, and the only freely licensed church photos found showed identifiable public figures, so no made-up church got photos."
   - "Pages with no photos are the weak spot: the food truck's first screen scored 7 of 10 every round, and the grader's first note was always 'add real photography'."
   - "The custom section path works (safe every time, about 8 cents, about 20 seconds) but its layouts came out lopsided twice. A menu card is common enough to be a kit section instead."
-  - "Seven nested f-strings in site_kit.py need Python 3.12 (CI is 3.12); tidy them before production imports it."
   - "The grader moves a point or two between runs of the same kind of page: the barber scored 27, 29, 28, 30, 30 across the rounds."
 decisions:
   - "Facts are filled by code only. The words step can choose what the letterboard shows, but every row is checked against one record of the data at a time (fact_records)."
@@ -75,3 +76,22 @@ a colour the words leave out is worked out from the page's ground and ink.
 
 Spend for the church layouts: $2.29 (three blueprints at 46 to 53 cents, words and
 grading). The test's total is $3.44.
+
+## Wired in (same day)
+
+Kevin: "lets stop on the list and pick back up later. right now make the kit available
+for it to be used." `site_composer._run_builder_v2` asks the kit first:
+`site_kit.build(ctx, business_id)` reads the real build's context (`fx_from_ctx`),
+picks the layout from the approved blueprint, writes the words, assembles, then runs the
+builder's own armor (scripts, external links, editability targets) and the page laws
+(nav, footer, h1, a working inquiry form posting to the contact endpoint). Any miss, a
+layout the kit lacks, or any exception, and it stands down: the builder writes the page
+exactly as before. The stored page joins the same seam as a builder page, so overrides,
+the judge and the ratchet all apply.
+
+The inquiry form is new to the kit: a JSON post to the platform's contact endpoint, the
+one network call a page's script may make, so it passes `builder_v2.armor_scripts`.
+
+`SITE_KIT` = off | owner | on, default owner (the business's owner must be the platform
+owner, read the way church_checks does). The kit's files compile on Python 3.11 (the
+nested f-strings that needed 3.12 are gone).

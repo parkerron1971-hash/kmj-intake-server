@@ -60,7 +60,8 @@ def _font(value: Any, fallback: str) -> str:
 
 def _opt(tag: str, cls: str, text: Any) -> str:
     """<tag class="cls">text</tag>, or nothing when there is no text."""
-    return f'<{tag} class="{cls}">{e(text)}</{tag}>' if str(text or "").strip() else ""
+    klass = f' class="{cls}"' if cls else ""
+    return f'<{tag}{klass}>{e(text)}</{tag}>' if str(text or "").strip() else ""
 
 
 def _raw(tag: str, cls: str, markup: str, hidden: bool = False) -> str:
@@ -68,7 +69,8 @@ def _raw(tag: str, cls: str, markup: str, hidden: bool = False) -> str:
     if not str(markup or "").strip():
         return ""
     aria = ' aria-hidden="true"' if hidden else ""
-    return f'<{tag} class="{cls}"{aria}>{markup}</{tag}>'
+    klass = f' class="{cls}"' if cls else ""
+    return f'<{tag}{klass}{aria}>{markup}</{tag}>'
 
 
 def _money(price: Any) -> str:
@@ -379,6 +381,18 @@ a{color:inherit}
 .k-visit .sxo-hours{width:100%;max-width:none;margin:0}
 .k-visit-grid.solo{grid-template-columns:minmax(0,1fr);max-width:780px}
 .k-gather-card td small{display:block;color:var(--k-muted);font-size:14px}
+.k-form-wrap{display:grid;grid-template-columns:minmax(0,4fr) minmax(0,7fr);gap:clamp(24px,4vw,64px);
+  margin-top:clamp(56px,7vw,96px);padding-top:clamp(40px,5vw,64px);border-top:1px solid color-mix(in srgb,var(--k-ink-deep) 18%,transparent)}
+.k-form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px 18px}
+.k-form label{display:grid;gap:6px;min-width:0}
+.k-form label span{font:500 11.5px/1.3 var(--k-label);letter-spacing:.14em;text-transform:uppercase;color:var(--k-second-deep)}
+.k-form input,.k-form textarea{width:100%;font:400 16px/1.4 var(--k-body);color:var(--k-ink-deep);padding:13px 14px;
+  background:color-mix(in srgb,var(--k-ink-deep) 6%,transparent);border:1px solid color-mix(in srgb,var(--k-ink-deep) 24%,transparent);
+  border-radius:calc(var(--k-r) / 2)}
+.k-form input:focus,.k-form textarea:focus{outline:2px solid var(--k-accent);outline-offset:1px}
+.k-form-wide{grid-column:1/-1}
+.k-form-end{display:flex;align-items:center;gap:18px;flex-wrap:wrap}
+.k-form-status{margin:0;color:color-mix(in srgb,var(--k-ink-deep) 76%,var(--k-deep))}
 .k-visit .k-ctas{margin-top:34px}
 .k-map{font:500 12px/1 var(--k-label);letter-spacing:.14em;text-transform:uppercase;color:var(--k-second)}
 
@@ -407,7 +421,7 @@ a{color:inherit}
   .k-hero-photo{position:relative;width:100%;margin-top:26px;aspect-ratio:4/5;order:2}
   .k-hero-photo img{object-position:62% 28%}
   .k-hero-photo::before{background:linear-gradient(180deg,var(--k-bg) 0%,transparent 22%)}
-  .k-head,.k-desk-grid,.k-visit-grid,.k-proof-grid{grid-template-columns:minmax(0,1fr)}
+  .k-head,.k-desk-grid,.k-visit-grid,.k-proof-grid,.k-form-wrap,.k-form{grid-template-columns:minmax(0,1fr)}
   .k-stick{position:static}
   .k-row{grid-template-columns:minmax(0,1fr);padding:24px 0}
   .k-row .k-btn{grid-column:1;grid-row:auto;justify-self:start;margin-top:8px}
@@ -495,7 +509,7 @@ def _nav_raw(d, w) -> List[Dict[str, str]]:
 def nav(d, w) -> str:
     links = "".join(
         f'<li><a href="#{e(n["target"])}">{e(n["label"])}'
-        f'{f"<small>{e(n["sub"])}</small>" if n["sub"] else ""}</a></li>'
+        f'{_raw("small", "", e(n["sub"]))}</a></li>'
         for n in _nav_items(d, w))
     tel = (f'<a class="k-tel" href="tel:{e(re.sub(r"[^0-9+]", "", d["phone"]))}">{e(d["phone"])}</a>'
            if d.get("phone") else "")
@@ -503,7 +517,7 @@ def nav(d, w) -> str:
     mark = w.get("wordmark") or {}
     return (f'<header class="k-nav"><div class="k-wrap">'
             f'<a class="k-mark" href="#top"><b>{_wordmark(mark.get("main") or d["name"])}</b>'
-            f'{f"<span>{e(mark.get("sub"))}</span>" if mark.get("sub") else ""}</a>'
+            f'{_raw("span", "", e(mark.get("sub") or ""))}</a>'
             f'<nav aria-label="Sections"><ul class="k-links">{links}</ul></nav>'
             f'<div class="k-nav-end">{tel}{cta}</div></div></header>')
 
@@ -617,7 +631,7 @@ def board(d, w) -> str:
                f'{e(w["row_label"])} &rarr;</a>' if o.get("book_url") else "")
         rows.append(f'<li class="k-row"><div class="k-row-name"><h3 class="k-h3">{e(o["name"])}</h3>'
                     f'{_raw("span", "k-meta", meta)}</div>'
-                    f'{f"<p>{e(o["description"])}</p>" if o.get("description") else ""}{btn}</li>')
+                    f'{_raw("p", "", e(o.get("description") or ""))}{btn}</li>')
     head = (f'{_opt("p", "k-eyebrow", b.get("eyebrow"))}'
             f'<h2 class="k-h2">{e(b.get("headline") or "Prices")}</h2>')
     desk = f'<ul class="k-desk">{"".join(rows)}</ul>'
@@ -636,7 +650,7 @@ def work(d, w) -> str:
     k = w.get("work") or {}
     pics = d["photos"][1:3] if len(d["photos"]) > 2 else d["photos"][:2]
     figs = "".join(f'<figure><img src="{e(p["url"])}" alt="{e(p.get("alt"))}" loading="lazy">'
-                   f'{f"<figcaption>{e(p.get("caption"))}</figcaption>" if p.get("caption") else ""}</figure>'
+                   f'{_raw("figcaption", "", e(p.get("caption") or ""))}</figure>'
                    for p in pics)
     points = "".join(f"<li>{e(s)}</li>" for s in (k.get("statements") or [])[:3] if str(s).strip())
     ghost = f'<span class="k-ghost r" aria-hidden="true">{e(k.get("ghost"))}</span>' if k.get("ghost") else ""
@@ -697,7 +711,8 @@ def visit(d, w) -> str:
         rows.append(f'<div><dt class="sxo-label">Write</dt><dd><a href="mailto:{e(d["email"])}">{e(d["email"])}</a></dd></div>')
     if v.get("extra_label") and v.get("extra"):
         rows.append(f'<div><dt class="sxo-label">{e(v["extra_label"])}</dt><dd>{e(v["extra"])}</dd></div>')
-    if not rows and not d.get("hours_rows"):
+    form = contact_form(d, w)
+    if not rows and not d.get("hours_rows") and not d.get("gatherings") and not form:
         return ""
     details = f'<dl class="sxo sxo-details" data-sx-object="visit-details">{"".join(rows)}</dl>' if rows else ""
     mapl = (f'<a class="k-link k-map" href="https://maps.google.com/?q={quote_plus(d["address"])}" '
@@ -708,7 +723,46 @@ def visit(d, w) -> str:
             f'{_opt("p", "k-eyebrow", v.get("eyebrow"))}'
             f'<h2 class="k-h2">{e(v.get("headline") or "Visit")}</h2>'
             f'{_opt("p", "k-lead", v.get("intro"))}'
-            f'{details}<div class="k-ctas">{cta}{mapl}</div></div><div>{side}</div></div></div></section>')
+            f'{details}<div class="k-ctas">{cta}{mapl}</div></div><div>{side}</div></div>{form}</div></section>')
+
+
+_ENDPOINT_RE = re.compile(r"^https://[A-Za-z0-9.-]+/sites/[A-Za-z0-9-]+/contact-submit$")
+
+
+def contact_form(d, w) -> str:
+    """The working inquiry form every home page carries (the builder's coverage
+    law): a JSON post to the platform's own contact endpoint, the one network
+    call a page's script may make. No endpoint, no form."""
+    endpoint = str(d.get("form_endpoint") or "")
+    if not _ENDPOINT_RE.match(endpoint):
+        return ""
+    v = w.get("visit") or {}
+    head = v.get("form_headline") or "Send a message"
+    button = v.get("form_button") or "Send"
+    script = ("(function(){var f=document.getElementById('k-form');if(!f)return;var s=f.querySelector('.k-form-status');"
+              "f.addEventListener('submit',function(ev){ev.preventDefault();var b=f.querySelector('button');"
+              "function v(n){var x=f.elements[n];return x?String(x.value||'').trim():''}"
+              "var d={name:v('name'),email:v('email'),phone:v('phone'),message:v('message'),"
+              "submission_id:(window.crypto&&crypto.randomUUID)?crypto.randomUUID():String(Date.now())+String(Math.random())};"
+              "if(!d.name||!d.email){s.textContent='Please add your name and email.';return}"
+              "b.disabled=true;s.textContent='Sending...';"
+              f'fetch("{endpoint}",'
+              "{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(d)})"
+              ".then(function(r){return r.json().catch(function(){return {}}).then(function(j){"
+              "if(r.ok&&j.ok!==false){f.reset();s.textContent='Thank you. Your message is in.'}"
+              "else{s.textContent=(j&&j.error)||'That did not send. Please try again.'}})})"
+              ".catch(function(){s.textContent='That did not send. Please try again.'})"
+              ".then(function(){b.disabled=false})})})();")
+    return (f'<div class="k-form-wrap" id="contact"><div>{_opt("p", "k-eyebrow", v.get("form_eyebrow") or "Write to us")}'
+            f'<h3 class="k-h3">{e(head)}</h3>{_opt("p", "k-lead", v.get("form_intro"))}</div>'
+            f'<form class="k-form" id="k-form" novalidate>'
+            f'<label><span>Name</span><input name="name" autocomplete="name" required></label>'
+            f'<label><span>Email</span><input name="email" type="email" autocomplete="email" required></label>'
+            f'<label><span>Phone (optional)</span><input name="phone" type="tel" autocomplete="tel"></label>'
+            f'<label class="k-form-wide"><span>Message</span><textarea name="message" rows="4"></textarea></label>'
+            f'<div class="k-form-wide k-form-end"><button class="k-btn" type="submit">{e(button)}</button>'
+            f'<p class="k-form-status" role="status" aria-live="polite"></p></div></form>'
+            f'<script>{script}</script></div>')
 
 
 def gatherings_card(d, w) -> str:
@@ -728,7 +782,7 @@ def footer(d, w) -> str:
     mark = (w.get("wordmark") or {}).get("main") or d["name"]
     links = "".join(f'<a href="#{e(n["target"])}">{e(n["label"])}</a>' for n in _nav_items(d, w))
     return (f'<footer class="k-foot"><div class="k-wrap"><div><span class="k-mark"><b>{_wordmark(mark)}</b></span>'
-            f'{f"<p>{e(f.get("line"))}</p>" if f.get("line") else ""}</div><nav aria-label="Footer">{links}</nav>'
+            f'{_raw("p", "", e(f.get("line") or ""))}</div><nav aria-label="Footer">{links}</nav>'
             f'<small>&copy; {e(d.get("year") or "")} {e(d["name"])} &middot; Made with the Solutionist System</small>'
             f'</div></footer>')
 
@@ -788,7 +842,8 @@ def facts(fx: Dict[str, Any], w: Dict[str, Any]) -> Dict[str, Any]:
         if not isinstance(o, dict) or not str(o.get("name") or "").strip():
             continue
         mins = o.get("duration_min")
-        desk.append({"name": o["name"].strip(), "price": _money(o.get("price")) if o.get("price") not in (None, "") else "",
+        price = o.get("current_price") if o.get("current_price") not in (None, "") else o.get("price")
+        desk.append({"name": o["name"].strip(), "price": _money(price) if price not in (None, "") else "",
                      "minutes": f"{int(mins)} min" if isinstance(mins, (int, float)) and mins else "",
                      "description": str(o.get("description") or "").strip(), "book_url": booking})
     # The letterboard carries the menu they told the Coach (name and price),
@@ -826,6 +881,7 @@ def facts(fx: Dict[str, Any], w: Dict[str, Any]) -> Dict[str, Any]:
         "events": [x for x in (fx.get("events") or []) if isinstance(x, dict) and x.get("title")],
         "photo_urls": {ph["url"] for ph in photos},
         "map_url": f"https://maps.google.com/?q={quote_plus(address)}" if address else "",
+        "form_endpoint": str(fx.get("form_endpoint") or ""),
         "name": biz.get("name") or "", "type": biz.get("type") or "",
         "phone": contact.get("phone") or "", "email": contact.get("email") or "",
         "address": contact.get("address") or "",
@@ -1089,7 +1145,8 @@ WORDS_SHAPE = {
     "band": "",
     "proof": {"eyebrow": "", "headline": ""},
     "team": {"eyebrow": "", "headline": "", "ghost": "", "book_label": "Book with {first}"},
-    "visit": {"eyebrow": "", "headline": "", "intro": "", "hours_label": "", "extra_label": "", "extra": ""},
+    "visit": {"eyebrow": "", "headline": "", "intro": "", "hours_label": "", "extra_label": "", "extra": "",
+              "form_eyebrow": "", "form_headline": "", "form_intro": "", "form_button": ""},
     "footer": {"line": ""},
     "dock": {"cta": ""},
     "custom": [{"id": "", "after": "", "brief": ""}],
@@ -1280,3 +1337,140 @@ def write_custom(brief: Dict[str, str], w: Dict[str, Any], fx: Dict[str, Any], b
     out = _json_from(text)
     return {"id": cid, "after": str(brief.get("after") or "board"),
             "html": str(out.get("html") or ""), "css": str(out.get("css") or "")}
+
+
+# ─── wiring: the kit inside a real build ──────────────────────────────
+#
+# SITE_KIT = off | owner | on (default owner). The composer asks the kit first;
+# when the blueprint's layout isn't one the kit has, or anything fails, the kit
+# stands down and the builder writes the page as before.
+
+def mode() -> str:
+    import os
+    m = (os.environ.get("SITE_KIT") or "owner").strip().lower()
+    return m if m in ("off", "owner", "on") else "off"
+
+
+def enabled_for(business_id: str) -> bool:
+    m = mode()
+    if m == "on":
+        return True
+    if m != "owner":
+        return False
+    try:
+        import sb_clients
+        import church_checks
+        rows = sb_clients.sb_get_as_service(
+            f"/businesses?id=eq.{business_id}&select=owner_id&limit=1") or []
+        return bool(rows) and church_checks.is_platform_owner(rows[0].get("owner_id"))
+    except Exception:
+        return False
+
+
+def fx_from_ctx(ctx: Dict[str, Any], business_id: str) -> Dict[str, Any]:
+    """A real build's context, in the shape the kit reads."""
+    from datetime import datetime, timezone
+    biz = ctx.get("business") or {}
+    site = ctx.get("site") if isinstance(ctx.get("site"), dict) else {}
+    cfg = site.get("site_config") if isinstance(site.get("site_config"), dict) else {}
+    contact = ctx.get("contact") if isinstance(ctx.get("contact"), dict) else {}
+    booking = ctx.get("booking") if isinstance(ctx.get("booking"), dict) else {}
+    offers = []
+    for o in ctx.get("offerings") or []:
+        if isinstance(o, dict) and str(o.get("name") or "").strip():
+            offers.append({"name": o["name"], "price": o.get("current_price") if o.get("current_price") not in (None, "")
+                           else o.get("price"),
+                           "duration_min": o.get("duration_min") or o.get("duration_minutes"),
+                           "description": o.get("description") or ""})
+    quotes = []
+    for t in ctx.get("testimonials") or []:
+        if isinstance(t, dict):
+            q = str(t.get("quote") or t.get("text") or t.get("content") or "").strip()
+            if q:
+                quotes.append({"quote": q, "name": t.get("name") or t.get("author") or t.get("client_name") or "",
+                               "role": t.get("role") or t.get("title") or ""})
+    gallery = [{"url": g["url"], "alt": g.get("alt") or g.get("caption") or ""}
+               for g in ctx.get("gallery") or []
+               if isinstance(g, dict) and str(g.get("url") or "").startswith("https://")]
+    practitioner = ((ctx.get("bundle") or {}).get("practitioner") or {}).get("name") or ""
+    return {
+        "business": {"id": business_id, "name": biz.get("name") or "", "type": biz.get("type") or "",
+                     "slug": biz.get("slug") or ""},
+        "owner_brief": ctx.get("owner_brief") or cfg.get("owner_brief") or "",
+        "booking_url": str(booking.get("url") or "") if booking.get("enabled") else "",
+        "offerings": offers, "testimonials": quotes, "gallery": gallery,
+        "contact": {k: contact.get(k) or "" for k in ("email", "phone", "address", "hours")},
+        "discovery_dossier": cfg.get("discovery_dossier") if isinstance(cfg.get("discovery_dossier"), dict) else {},
+        "practitioner_name": practitioner,
+        "form_endpoint": str(contact.get("submit_url") or ""),
+        "year": str(datetime.now(timezone.utc).year),
+    }
+
+
+def page_laws(html: str, endpoint: str) -> List[str]:
+    """What every home page must carry, the builder's own coverage laws minus
+    'every photo on file' (the kit shows the photos its sections hold)."""
+    problems = []
+    if not re.search(r"<nav\b", html, re.I):
+        problems.append("no <nav>")
+    if not re.search(r"<footer\b", html, re.I):
+        problems.append("no <footer>")
+    if not re.search(r"<form\b", html, re.I):
+        problems.append("no working inquiry form")
+    if endpoint and f'fetch("{endpoint}"' not in html:
+        problems.append("the form doesn't post to the contact endpoint")
+    if not re.search(r"<h1\b", html, re.I):
+        problems.append("no <h1>")
+    return problems
+
+
+def build(ctx: Dict[str, Any], business_id: str, progress_cb=None) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
+    """A page from the kit for this build, or (None, report) and the builder
+    writes it. Never raises."""
+    spec = str(ctx.get("design_spec_text") or "")
+    if not spec.strip() or not enabled_for(business_id):
+        return None, None
+    fx = fx_from_ctx(ctx, business_id)
+    layout = kit_layout(spec, fx)
+    if not layout:
+        return None, None
+    report: Dict[str, Any] = {"engine": "site_kit", "layout": layout, "fallbacks": []}
+    try:
+        if progress_cb:
+            progress_cb(47, "Assembling your page")
+        if not fx["form_endpoint"]:
+            import builder_v2
+            fx["form_endpoint"] = builder_v2.contact_endpoint(business_id)
+        words = write_words(spec, fx, business_id, layout)
+        if not words or not isinstance(words, dict):
+            report["fallbacks"].append({"stage": "words", "detail": "no words sheet came back"})
+            return None, report
+        custom = []
+        for brief in [c for c in words.get("custom") or [] if isinstance(c, dict) and c.get("id") and c.get("brief")][:1]:
+            try:
+                c = write_custom(brief, words, fx, business_id)
+                ok, why = custom_ok(c.get("html", ""), c.get("css", ""))
+                report.setdefault("custom", []).append({"id": c.get("id"), "ok": ok, "why": why})
+                if ok:
+                    custom.append(c)
+            except Exception as ce:
+                report.setdefault("custom", []).append({"id": brief.get("id"), "ok": False, "why": str(ce)[:120]})
+        if progress_cb:
+            progress_cb(80, "Checking the page")
+        html = assemble(fx, words, custom, layout)
+        import builder_v2
+        doc = site_objects.strip_library(html)
+        doc, dropped = builder_v2.armor_scripts(doc, allowed_fetch=fx["form_endpoint"])
+        doc, stripped = builder_v2.armor_external(doc)
+        doc, added = builder_v2.annotate_editability(doc)
+        doc = site_objects.inject_library(doc)
+        report["mechanical"] = {"scripts_dropped": dropped, "externals_stripped": stripped,
+                                "override_targets_added": added}
+        problems = page_laws(doc, fx["form_endpoint"]) + [f"script removed: {x}" for x in dropped]
+        if problems:
+            report["fallbacks"].append({"stage": "laws", "detail": problems})
+            return None, report
+        return doc, report
+    except Exception as ex:
+        report["fallbacks"].append({"stage": "exception", "detail": f"{type(ex).__name__}: {str(ex)[:200]}"})
+        return None, report
