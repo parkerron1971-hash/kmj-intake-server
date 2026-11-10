@@ -163,6 +163,38 @@ def test_the_next_occasion_skips_services_private_and_past_ones(monkeypatch):
                    'where': 'Fellowship Hall', 'source': 'Services & Events'}
 
 
+def test_the_calendar_is_read_on_the_churchs_clock(monkeypatch):
+    import church_checkin
+    mod = {'id': 'm1', 'name': 'Services & Events', 'archetype_params': {}}
+    entries = [
+        {'id': 'started', 'module_id': 'm1', 'data': {'title': 'Morning Prayer', 'date': '2026-11-21T06:00'}},
+        {'id': 'today', 'module_id': 'm1', 'data': {'title': 'Food Drive', 'date': '2026-11-21'}},
+    ]
+    monkeypatch.setattr(church_checkin, '_roster', lambda biz: [mod])
+    monkeypatch.setattr(church_checkin, '_entries', lambda biz, ids: entries)
+    # 10 PM in Chicago: the 6 AM prayer is long over, the day-only drive still counts.
+    got = lt.next_occasion(BIZ, now=datetime(2026, 11, 21, 22, 0))
+    assert got['entry_id'] == 'today' and got['when'] == 'Sat, Nov 21'
+    assert lt.next_occasion(BIZ, now=datetime(2026, 11, 22, 0, 30)) is None
+    # Without a supplied now, the church's own zone decides, not the server's UTC.
+    seen = {}
+    real = lt.local_now
+    monkeypatch.setattr(lt, 'local_now', lambda zone: seen.setdefault('zone', zone) and real(zone))
+    lt.next_occasion(BIZ, zone='America/Chicago')
+    assert seen['zone'] == 'America/Chicago'
+    assert lt.local_now('Not/AZone').tzinfo is None
+
+
+def test_a_brief_never_fails_on_size_when_the_model_changes(monkeypatch):
+    monkeypatch.setattr(images, 'configured_model', lambda: 'gpt-image-2.5-sunburst')
+    assert [lt.size_for(f) for f in ('post', 'story', 'wide')] == ['1088x1360', '1088x1920', '1920x1088']
+    monkeypatch.setattr(images, 'configured_model', lambda: 'gpt-image-2')
+    assert [lt.size_for(f) for f in ('post', 'story', 'wide')] == ['1024x1536', '1024x1536', '1536x1024']
+    assert lt.brief_action(lt.Brief(**brief(format='wide')))['size'] == '1536x1024'
+    monkeypatch.setattr(images, 'configured_model', lambda: (_ for _ in ()).throw(HTTPException(503, 'bad model')))
+    assert lt.size_for('post') == '1088x1360'
+
+
 def test_no_calendar_or_an_unreadable_one_starts_the_brief_empty(monkeypatch):
     import church_checkin
     monkeypatch.setattr(church_checkin, '_roster', lambda biz: [])

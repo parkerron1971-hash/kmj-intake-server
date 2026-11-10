@@ -43,6 +43,9 @@ router = APIRouter(prefix='/ai/images/studio', tags=['studio'])
 # Where the flyer goes -> the Director's canvas. All three are sizes the
 # 2.5 models draw (image_studio.SIZES).
 SIZES = {'post': '1088x1360', 'story': '1088x1920', 'wide': '1920x1088'}
+# The closest shapes gpt-image-2 draws, if OPENAI_IMAGE_MODEL is ever set back
+# to it: a filled-in brief must never fail on its size.
+FALLBACK_SIZES = {'post': '1024x1536', 'story': '1024x1536', 'wide': '1536x1024'}
 KINDS = {'event': 'an event', 'series': 'a series', 'announcement': 'an announcement', 'offer': 'an offer'}
 # How far ahead the calendar is read for an occasion to start from.
 LOOKAHEAD_DAYS = 60
@@ -87,6 +90,16 @@ def brief_copy(brief: Brief) -> List[str]:
     return [s.strip() for s in (brief.headline, brief.sub, brief.when, brief.where, brief.last) if s and s.strip()]
 
 
+def size_for(fmt: str) -> str:
+    """The canvas for where the flyer goes, on the model that will draw it."""
+    want = SIZES[fmt]
+    try:
+        allowed = images.model_sizes(images.configured_model())
+    except Exception:  # a misconfigured model is refused later, with its own message
+        return want
+    return want if want in allowed else FALLBACK_SIZES[fmt]
+
+
 def brief_action(brief: Brief) -> Dict[str, Any]:
     """The brief as the design_flyer action Chief would send."""
     headline = brief.headline.strip()
@@ -96,7 +109,7 @@ def brief_action(brief: Brief) -> Dict[str, Any]:
     return {
         'goal': f'A flyer for {kind}: {headline}.',
         'exact_copy': brief_copy(brief),
-        'size': SIZES[brief.format],
+        'size': size_for(brief.format),
         # A photo the owner adds is drawn from, never pasted; their saved
         # logo is added by the Director itself (settle_references).
         'references': [{'id': str(i), 'role': 'subject', 'use': 'A photo the owner added for this flyer'}
@@ -141,12 +154,25 @@ def _first_sentence(text: Any, limit: int = 140) -> str:
     return first if len(first) <= limit else ''
 
 
-def next_occasion(business_id: str, *, now: Optional[datetime] = None) -> Optional[Dict[str, str]]:
+def local_now(zone_name: Optional[str]) -> datetime:
+    """Now on the church's own clock, as a plain local time: occasions are
+    saved in local time, and the server runs on UTC."""
+    from zoneinfo import ZoneInfo
+    try:
+        zone = ZoneInfo(zone_name) if zone_name else ZoneInfo('America/New_York')
+    except Exception:
+        zone = ZoneInfo('America/New_York')
+    return datetime.now(zone).replace(tzinfo=None)
+
+
+def next_occasion(business_id: str, *, now: Optional[datetime] = None,
+                  zone: Optional[str] = None) -> Optional[Dict[str, str]]:
     """The next occasion in Services & Events (any event_roster room) to
     start a flyer from: its own title, time, place and first sentence.
     Services (the weekly worship occasions check-in makes) and private
-    occasions are skipped. None when nothing is coming up or it can't be
-    read: the brief then starts empty."""
+    occasions are skipped. "Now" is the church's clock (zone); a dated
+    occasion with no time counts until its day is over. None when nothing
+    is coming up or it can't be read: the brief then starts empty."""
     from church_checkin import _entries, _roster
     from events_rsvp_router import resolve_fields
     try:
@@ -158,16 +184,21 @@ def next_occasion(business_id: str, *, now: Optional[datetime] = None) -> Option
     except Exception as e:  # a read we can't make leaves the brief empty
         print(f'[studio] next occasion unreadable for {business_id}: {e}')
         return None
-    now = now or datetime.now()
+    now = now or local_now(zone)
     soonest = None
     for entry in entries:
         f = fields.get(str(entry.get('module_id')))
         data = entry.get('data') or {}
         if not f or str(data.get('type') or '') == 'service' or data.get('private') is True:
             continue
-        when = _parse(data.get(f['date_field']))
+        raw = data.get(f['date_field'])
+        when = _parse(raw)
         title = str(data.get(f['title_field']) or '').strip()
-        if not title or when is None or when < now - timedelta(hours=6) or when > now + timedelta(days=LOOKAHEAD_DAYS):
+        if not title or when is None or when > now + timedelta(days=LOOKAHEAD_DAYS):
+            continue
+        # Over: a timed occasion two hours after it starts, a day-only one when its day ends.
+        over = when + (timedelta(days=1) if len(str(raw).strip()) <= 10 else timedelta(hours=2))
+        if over <= now:
             continue
         if soonest is None or when < soonest[0]:
             soonest = (when, entry, f, title)
@@ -191,12 +222,14 @@ def next_occasion(business_id: str, *, now: Optional[datetime] = None) -> Option
 @router.get('/{business_id}')
 async def studio_status(business_id: UUID, session: UserSession = Depends(sb_clients.authed_request)):
     async with httpx.AsyncClient(timeout=30) as client:
-        await images.business(client, business_id)  # this business's owner only
+        biz = await images.business(client, business_id)  # this business's owner only
     if not open_to(session.user):
         return {'light_table': False}
     import credit_ledger
+    from church_checkin import church_zone_name
+    zone = church_zone_name(biz or {})
     return {'light_table': True, 'flyer_credits': credit_ledger.flyer_credits(), 'formats': list(SIZES),
-            'suggestion': await asyncio.to_thread(next_occasion, str(business_id))}
+            'suggestion': await asyncio.to_thread(lambda: next_occasion(str(business_id), zone=zone))}
 
 
 @router.post('/{business_id}/design')
