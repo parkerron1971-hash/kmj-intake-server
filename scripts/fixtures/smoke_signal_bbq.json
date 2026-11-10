@@ -1,0 +1,91 @@
+{
+ "_about": "A made-up food truck for the kit test (2026-11-10). No photos: the owner's are on Instagram. It moves around, so the page needs this week's stops, which the kit has no section for: the one custom section the hybrid writes.",
+ "business": {
+  "id": "00000000-0000-4000-8000-0000000bb901",
+  "name": "Smoke Signal BBQ",
+  "type": "food truck",
+  "slug": "smoke-signal-bbq"
+ },
+ "founded_year": 2023,
+ "practitioner_name": "Dana Ruiz",
+ "owner_brief": "ok so me and my husband started a food truck 3 yrs ago, we do bbq, and we move around so people always ask where we are. i want something that shows where we'll be this week but i also want it to look really nice like a real restaurant, not cheap. also we do catering which is where the money is",
+ "booking_url": "https://mysolutionist.app/book/smoke-signal-bbq",
+ "store_url": "",
+ "offerings": [
+  {
+   "id": "c1",
+   "name": "Backyard Feed",
+   "price": 18,
+   "description": "Brisket, pulled pork, two sides and rolls for 25 to 60 people. Priced per guest. Book a call and we'll plan it."
+  },
+  {
+   "id": "c2",
+   "name": "Office Lunch",
+   "price": 15,
+   "description": "Sandwich boxes or a hot line for 15 to 40. Priced per guest, delivered hot."
+  },
+  {
+   "id": "c3",
+   "name": "The Big Day",
+   "price": 28,
+   "description": "Weddings and reunions: the smoker comes with us and we carve on site. Three sides and dessert. Priced per guest, 50 guests and up."
+  }
+ ],
+ "testimonials": [
+  {
+   "id": "t1",
+   "name": "Keisha M.",
+   "quote": "We hired them for my dad's 70th. Ninety people, everybody went back for seconds, and the brisket was gone before the cake came out."
+  }
+ ],
+ "gallery": [],
+ "contact": {
+  "email": "hello@smokesignalbbq.com",
+  "phone": "(512) 555-0182",
+  "address": "",
+  "hours": "",
+  "social": {
+   "instagram": "https://instagram.com/smokesignalbbq"
+  },
+  "sms_capable": false
+ },
+ "discovery_dossier": {
+  "the_ask": {
+   "words": "i want something that shows where we'll be this week but i also want it to look really nice like a real restaurant, not cheap. also we do catering which is where the money is",
+   "at": "2026-11-10T20:00:00+00:00"
+  },
+  "identity": {
+   "team": [
+    {"name": "Dana Ruiz", "role": "Pitmaster. Runs the smoker, starts the brisket the night before.", "provenance": "asked"},
+    {"name": "Marco Ruiz", "role": "Runs the window and the catering.", "provenance": "asked"}
+   ]
+  },
+  "taste": {
+   "visual_style": {"value": "look really nice like a real restaurant, not cheap", "provenance": "asked"},
+   "layout": {"value": "booking", "source": "asked", "at": "2026-11-10T20:05:00+00:00"},
+   "bans": {"value": ["cartoon flames", "cheap", "clip art pigs"], "provenance": "asked"}
+  },
+  "signature": {
+   "differentiator": {"value": "Brisket is the thing. Catering is where the money is.", "provenance": "asked"},
+   "must_show": {"value": "where we'll be this week; the catering", "provenance": "asked"}
+  },
+  "capabilities": {
+   "booking": {"value": "on", "provenance": "asked"},
+   "store": {"value": "off", "provenance": "asked"}
+  },
+  "truth": {
+   "offers": [
+    {"name": "Brisket plate", "price": "$16", "source": "asked"},
+    {"name": "Pulled pork sandwich", "price": "$11", "source": "asked"},
+    {"name": "Half rack of ribs", "price": "$19", "source": "asked"},
+    {"name": "Burnt ends", "price": "$14", "source": "asked"},
+    {"name": "Mac and cheese", "price": "$5", "source": "asked"},
+    {"name": "Banana pudding", "price": "$5", "source": "asked"}
+   ],
+   "hours": {"value": "This week: Tuesday 4 to 9 pm at Ironworks Brewery, 1200 E 6th St. Friday 11 am to 2 pm downtown at 3rd and Main. Saturday 12 to 8 pm at the Mueller Farmers Market.", "source": "asked"},
+   "proven_stats": [],
+   "colors_must": [],
+   "colors_avoid": []
+  }
+ }
+}
