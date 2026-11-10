@@ -797,6 +797,15 @@ def _the_ask(dossier: Dict[str, Any]) -> str:
         return ""
 
 
+def pick_before_ask(dossier: Optional[Dict[str, Any]]) -> str:
+    """The layout key the owner picked before this ask, or ''."""
+    try:
+        import discovery
+        return normalize(discovery.layout_picked_before_ask(dossier)) or ""
+    except Exception:
+        return ""
+
+
 def _action_asked_for(ask: str) -> str:
     if _ASK_BOOK_RE.search(ask):
         return "book"
@@ -937,6 +946,8 @@ def reason_line(row: Dict[str, Any]) -> str:
     why = [w for w in (row.get("why") or []) if w][:2]
     if row.get("picked"):
         why = ["you picked it"] + why[:1]
+    elif row.get("earlier"):
+        why = ["you picked it last time"] + why[:1]
     if not why:
         return LAYOUTS[row["key"]]["line"]
     s = why[0] if len(why) == 1 else f"{why[0]}, and {why[1]}"
