@@ -122,6 +122,7 @@ DEFAULT_TOKENS = {
     "band": "#7e3a2a", "line": "#3a322d",
     "display_font": "Big Shoulders Display", "display_weight": 800, "display_upper": True,
     "body_font": "Work Sans", "label_font": "IBM Plex Mono", "glow": True, "dark": True,
+    "script_font": "", "radius": 0, "pill": False,
 }
 
 
@@ -146,20 +147,41 @@ def ink_for(ground: str, *candidates: str, need: float = 4.5) -> str:
     return max(("#ffffff", "#111111"), key=lambda c: contrast(c, ground))
 
 
+def _mix(a: str, b: str, share_b: float) -> str:
+    """a with share_b of b mixed in, as #rrggbb."""
+    pa = [int(a[i:i + 2], 16) for i in (1, 3, 5)]
+    pb = [int(b[i:i + 2], 16) for i in (1, 3, 5)]
+    return "#" + "".join(f"{round(x + (y - x) * share_b):02x}" for x, y in zip(pa, pb))
+
+
 def tokens(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     raw = raw if isinstance(raw, dict) else {}
     t = dict(DEFAULT_TOKENS)
-    for k in ("bg", "surface", "deep", "text", "muted", "accent", "on_accent", "second", "band", "line"):
-        t[k] = _hex(raw.get(k), DEFAULT_TOKENS[k])
+    t["bg"] = _hex(raw.get("bg"), DEFAULT_TOKENS["bg"])
+    t["text"] = _hex(raw.get("text"), DEFAULT_TOKENS["text"] if _lum(t["bg"]) < .2 else "#1a1714")
+    # (a missing colour once fell back to the dark look's own, on a light page)
+    derived = {"surface": _mix(t["bg"], t["text"], .05), "line": _mix(t["bg"], t["text"], .16),
+               "muted": _mix(t["text"], t["bg"], .32), "second": _mix(t["text"], t["bg"], .25),
+               "deep": _mix(t["text"], "#000000", .15) if _lum(t["bg"]) > .2 else _mix(t["bg"], "#000000", .35)}
+    derived["band"] = derived["deep"]
+    for k in ("surface", "deep", "muted", "second", "band", "line"):
+        t[k] = _hex(raw.get(k), derived[k])
+    t["accent"] = _hex(raw.get("accent"), DEFAULT_TOKENS["accent"])
+    t["on_accent"] = _hex(raw.get("on_accent"), t["bg"])
     for k in ("display_font", "body_font", "label_font"):
         t[k] = _font(raw.get(k), DEFAULT_TOKENS[k])
     try:
         t["display_weight"] = max(300, min(900, int(raw.get("display_weight") or 800) // 100 * 100))
     except (TypeError, ValueError):
         pass
-    for k in ("display_upper", "glow", "dark"):
+    for k in ("display_upper", "glow", "dark", "pill"):
         if isinstance(raw.get(k), bool):
             t[k] = raw[k]
+    t["script_font"] = _font(raw.get("script_font"), "") if raw.get("script_font") else ""
+    try:
+        t["radius"] = max(0, min(32, int(raw.get("radius") or 0)))
+    except (TypeError, ValueError):
+        t["radius"] = 0
     # (round 1: a light look's dark chapters kept dark text, and its band line
     # vanished) every ground gets an ink that reads on it
     t["on_accent"] = ink_for(t["accent"], t["on_accent"], t["bg"], t["text"])
@@ -167,18 +189,22 @@ def tokens(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     t["second_deep"] = t["second"] if contrast(t["second"], t["deep"]) >= 3 else t["ink_deep"]
     t["ink_band"] = ink_for(t["band"], t["text"], t["bg"])
     t["text"] = ink_for(t["bg"], t["text"])
+    t["muted"] = ink_for(t["bg"], t["muted"], t["text"])
+    t["second"] = ink_for(t["bg"], t["second"], t["muted"], t["text"])
     return t
 
 
 def fonts_link(t: Dict[str, Any]) -> str:
     fams = [(t["display_font"], f"wght@{t['display_weight']}"),
             (t["body_font"], "wght@400;500;600"), (t["label_font"], "wght@400;500")]
+    if t.get("script_font"):
+        fams.append((t["script_font"], ""))
     seen, parts = set(), []
     for name, axis in fams:
         if name in seen:
             continue
         seen.add(name)
-        parts.append(f"family={quote_plus(name)}:{axis}")
+        parts.append(f"family={quote_plus(name)}" + (f":{axis}" if axis else ""))
     return ('<link rel="preconnect" href="https://fonts.googleapis.com">'
             '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'
             f'<link rel="stylesheet" href="https://fonts.googleapis.com/css2?{"&".join(parts)}&display=swap">')
@@ -193,6 +219,8 @@ def root_css(t: Dict[str, Any]) -> str:
   --k-display:'{t['display_font']}',Impact,'Arial Narrow',sans-serif;--k-body:'{t['body_font']}',system-ui,sans-serif;
   --k-label:'{t['label_font']}',ui-monospace,monospace;--k-dw:{t['display_weight']};
   --k-case:{'uppercase' if t['display_upper'] else 'none'};
+  --k-script:'{t.get('script_font') or t['body_font']}',cursive;--k-r:{t.get('radius', 0)}px;
+  --k-r2:{min(32, round(t.get('radius', 0) * 1.3))}px;--k-btn-r:{'999px' if t.get('pill') else '2px'};
   --k-lh1:{'.92' if t['display_upper'] else '1.02'};--k-lh2:{'.95' if t['display_upper'] else '1.08'};
   --obj-paper:var(--k-surface);--obj-ink:var(--k-text);--obj-accent:var(--k-accent);
   --obj-line:var(--k-line);--obj-display:var(--k-display);--obj-body:var(--k-body);--obj-label:var(--k-label);
@@ -224,7 +252,7 @@ a{color:inherit}
 .k-lead{font-size:clamp(17px,1.35vw,19px);color:var(--k-muted);max-width:38ch;margin:26px 0 0}
 .k-intro{color:var(--k-muted);max-width:52ch;margin:0}
 .k-btn{display:inline-flex;align-items:center;gap:.6em;font:500 13px/1 var(--k-label);letter-spacing:.14em;
-  text-transform:uppercase;text-decoration:none;padding:17px 24px;border-radius:2px;
+  text-transform:uppercase;text-decoration:none;padding:17px 24px;border-radius:var(--k-btn-r);
   background:var(--k-accent);color:var(--k-on-accent);transition:transform .2s ease,box-shadow .2s ease;white-space:nowrap}
 .k-btn:hover{transform:translateY(-1px);box-shadow:0 8px 28px -10px var(--k-accent)}
 .k-link{font:500 13px/1 var(--k-label);letter-spacing:.14em;text-transform:uppercase;color:var(--k-second);
@@ -266,6 +294,7 @@ a{color:inherit}
 .k-ctas{display:flex;flex-wrap:wrap;align-items:center;gap:14px 26px}
 .k-hero-photo{position:absolute;top:0;right:0;bottom:0;width:58%;z-index:0}
 .k-hero-photo img{width:100%;height:100%;object-fit:cover;filter:saturate(.9) contrast(1.04)}
+.k-photos img,.k-person{border-radius:var(--k-r)}
 .k-hero-photo::before{content:"";position:absolute;inset:0;z-index:1;
   background:linear-gradient(90deg,var(--k-bg) 0%,color-mix(in srgb,var(--k-bg) 72%,transparent) 18%,color-mix(in srgb,var(--k-bg) 30%,transparent) 42%,transparent 70%),
              linear-gradient(0deg,var(--k-bg) 0%,transparent 26%)}
@@ -290,7 +319,7 @@ a{color:inherit}
 .k-head{display:grid;grid-template-columns:minmax(0,6fr) minmax(0,5fr);gap:clamp(24px,5vw,80px);align-items:end;margin-bottom:clamp(44px,6vw,80px)}
 .k-desk-grid{display:grid;grid-template-columns:minmax(0,5fr) minmax(0,7fr);gap:clamp(28px,4.5vw,64px);align-items:start}
 .k-stick{position:sticky;top:96px}
-.sxo-board-row span:first-child{min-width:0;overflow-wrap:anywhere}
+.sxo-board-row span:first-child{min-width:0;overflow-wrap:break-word}
 .sxo-board-row.k-board-sub{justify-content:flex-start;padding-left:1.4em;opacity:.8}
 .sxo-board-row.k-board-sub span{white-space:normal!important}
 .k-stick .sxo{max-width:100%}
@@ -348,6 +377,8 @@ a{color:inherit}
 .k-visit-grid{display:grid;grid-template-columns:minmax(0,6fr) minmax(0,5fr);gap:clamp(28px,5vw,80px);align-items:start}
 .k-visit .sxo-details{margin-top:34px}
 .k-visit .sxo-hours{width:100%;max-width:none;margin:0}
+.k-visit-grid.solo{grid-template-columns:minmax(0,1fr);max-width:780px}
+.k-gather-card td small{display:block;color:var(--k-muted);font-size:14px}
 .k-visit .k-ctas{margin-top:34px}
 .k-map{font:500 12px/1 var(--k-label);letter-spacing:.14em;text-transform:uppercase;color:var(--k-second)}
 
@@ -361,11 +392,11 @@ a{color:inherit}
 .k-foot nav a{font:500 12px/1 var(--k-label);letter-spacing:.14em;text-transform:uppercase;text-decoration:none;color:var(--k-second)}
 
 /* PHONE */
-@media (max-width:980px){
+@media (max-width:1100px){.k-links{gap:20px}.k-links small{display:none}.k-tel{display:none}}
+@media (max-width:860px){
   .k-links{display:none}
 }
 @media (max-width:760px){
-  body{padding-bottom:86px}
   .k-nav{height:62px}
   .k-mark b{font-size:21px}
   .k-tel{display:none}
@@ -432,11 +463,40 @@ def _wordmark(main: str) -> str:
     return e(main)
 
 
+_TARGET_ALIASES = {"people": "album", "photos": "album", "gallery": "album", "pastors": "leaders",
+                   "leader": "leaders", "about": "story", "schedule": "times", "gather": "times",
+                   "prices": "board", "services": "board", "barbers": "team", "contact": "visit",
+                   "ministry": "ministries", "calendar": "events", "topic": "topics", "talks": "topics"}
+
+
+def _target(raw: Any, present: set) -> str:
+    t = str(raw or "").strip().lstrip("#").lower()
+    t = t if t in present else _TARGET_ALIASES.get(t, t)
+    return t if t in present else ""
+
+
+def _nav_items(d, w) -> List[Dict[str, str]]:
+    out = _nav_raw(d, w)
+    if sum(1 for n in out if n["sub"]) * 2 < len(out):
+        out = [dict(n, sub="") for n in out]
+    return out
+
+
+def _nav_raw(d, w) -> List[Dict[str, str]]:
+    out, seen = [], set()
+    for n in w.get("nav") or []:
+        t = _target(n.get("target"), d["_present"])
+        if t and t not in seen:
+            seen.add(t)
+            out.append({"label": n.get("label") or t.title(), "sub": n.get("sub") or "", "target": t})
+    return out
+
+
 def nav(d, w) -> str:
     links = "".join(
-        f'<li><a href="#{e(n.get("target"))}">{e(n.get("label"))}'
-        f'{f"<small>{e(n.get("sub"))}</small>" if n.get("sub") else ""}</a></li>'
-        for n in w.get("nav") or [] if n.get("target") in d["_present"])
+        f'<li><a href="#{e(n["target"])}">{e(n["label"])}'
+        f'{f"<small>{e(n["sub"])}</small>" if n["sub"] else ""}</a></li>'
+        for n in _nav_items(d, w))
     tel = (f'<a class="k-tel" href="tel:{e(re.sub(r"[^0-9+]", "", d["phone"]))}">{e(d["phone"])}</a>'
            if d.get("phone") else "")
     cta = f'<a class="k-btn" href="{e(d["action_url"])}">{e(w["action_label"])}</a>' if d.get("action_url") else ""
@@ -507,12 +567,12 @@ def _board_title(d, w) -> str:
     return t
 
 
-def board_object(d, w) -> str:
+def board_object(d, w, split_over: int = 30) -> str:
     b = w.get("board") or {}
     rows = [f'<p class="sxo-board-row sxo-board-title">{e(_board_title(d, w))}</p>',
             '<p class="sxo-board-row sxo-board-gap" aria-hidden="true"></p>']
     for left, right in d["board_rows"][:9]:
-        if len(left) + len(right) > 30:
+        if len(left) + len(right) > split_over:
             rows.append(f'<p class="sxo-board-row"><span>{e(left)}</span></p>')
             rows.append(f'<p class="sxo-board-row k-board-sub"><span>{e(right)}</span></p>')
         else:
@@ -643,19 +703,30 @@ def visit(d, w) -> str:
     mapl = (f'<a class="k-link k-map" href="https://maps.google.com/?q={quote_plus(d["address"])}" '
             f'rel="noopener" target="_blank">Directions &rarr;</a>' if d.get("address") else "")
     cta = f'<a class="k-btn" href="{e(d["action_url"])}">{e(w["action_label"])}</a>' if d.get("action_url") else ""
-    side = hours_object(d, w) if d.get("hours_rows") else ""
-    return (f'<section class="k-section k-visit" id="visit"><div class="k-wrap"><div class="k-visit-grid"><div>'
+    side = hours_object(d, w) if d.get("hours_rows") else gatherings_card(d, w)
+    return (f'<section class="k-section k-visit" id="visit"><div class="k-wrap"><div class="k-visit-grid{"" if side else " solo"}"><div>'
             f'{_opt("p", "k-eyebrow", v.get("eyebrow"))}'
             f'<h2 class="k-h2">{e(v.get("headline") or "Visit")}</h2>'
             f'{_opt("p", "k-lead", v.get("intro"))}'
             f'{details}<div class="k-ctas">{cta}{mapl}</div></div><div>{side}</div></div></div></section>')
 
 
+def gatherings_card(d, w) -> str:
+    """When they gather, on the visit section's side, for a church with no opening hours."""
+    if not d.get("gatherings"):
+        return ""
+    label = e((w.get("visit") or {}).get("hours_label") or "When we gather")
+    rows = "".join(f'<tr><th scope="row">{e(g["day_label"])}s</th><td>{e(g["time_label"])}'
+                   f'<small>{e(g["label"])}</small></td></tr>' for g in d["gatherings"])
+    return (f'<div class="sxo sxo-hours sxo-paper k-gather-card" data-sx-object="hours-card">'
+            f'<p class="sxo-hours-head"><span class="sxo-label">{label}</span></p>'
+            f'<table class="sxo-hours-table"><caption class="sxo-sr">{label}</caption><tbody>{rows}</tbody></table></div>')
+
+
 def footer(d, w) -> str:
     f = w.get("footer") or {}
     mark = (w.get("wordmark") or {}).get("main") or d["name"]
-    links = "".join(f'<a href="#{e(n.get("target"))}">{e(n.get("label"))}</a>'
-                    for n in w.get("nav") or [] if n.get("target") in d["_present"])
+    links = "".join(f'<a href="#{e(n["target"])}">{e(n["label"])}</a>' for n in _nav_items(d, w))
     return (f'<footer class="k-foot"><div class="k-wrap"><div><span class="k-mark"><b>{_wordmark(mark)}</b></span>'
             f'{f"<p>{e(f.get("line"))}</p>" if f.get("line") else ""}</div><nav aria-label="Footer">{links}</nav>'
             f'<small>&copy; {e(d.get("year") or "")} {e(d["name"])} &middot; Made with the Solutionist System</small>'
@@ -675,7 +746,13 @@ def dock(d, w) -> str:
             prices.append(float(str(o.get("price") or "").replace("$", "").replace(",", "")))
         except ValueError:
             pass
-    fact = f"From {_money(min(prices))}" if prices else (d.get("hours_text") or "")[:48]
+    if d.get("gatherings"):
+        g = d["gatherings"][0]
+        fact = f'{g["day_label"]}s {g["time_label"]}'
+    elif prices:
+        fact = f"From {_money(min(prices))}"
+    else:
+        fact = (d.get("hours_text") or "")[:48]
     mark = (w.get("wordmark") or {}).get("main") or d["name"]
     return (f'<div class="k-dock" aria-label="{e(w["action_label"])}"><p><b>{e(mark)}</b>'
             f'{_opt("span", "", fact)}</p><a class="k-btn" href="{e(d["action_url"])}">'
@@ -736,7 +813,19 @@ def facts(fx: Dict[str, Any], w: Dict[str, Any]) -> Dict[str, Any]:
     action = booking or (w.get("action_url") if str(w.get("action_url") or "").startswith(("https://", "#", "tel:", "mailto:")) else "")
     truth_hours = truth.get("hours")
     truth_hours = truth_hours.get("value") if isinstance(truth_hours, dict) else truth_hours
+    records = fact_records(fx)
+    leaders = [{"name": p["name"], "role": p.get("role") or ""} for p in team_rows
+               if isinstance(p, dict) and str(p.get("name") or "").strip()]
+    if not leaders and fx.get("practitioner_name"):
+        leaders = [{"name": fx["practitioner_name"], "role": ""}]
+    address = contact.get("address") or ""
     return {
+        "gatherings": clean_gatherings(w.get("gatherings"), records),
+        "leaders": leaders,
+        "ministries": [m for m in (fx.get("ministries") or []) if isinstance(m, dict) and m.get("name")],
+        "events": [x for x in (fx.get("events") or []) if isinstance(x, dict) and x.get("title")],
+        "photo_urls": {ph["url"] for ph in photos},
+        "map_url": f"https://maps.google.com/?q={quote_plus(address)}" if address else "",
         "name": biz.get("name") or "", "type": biz.get("type") or "",
         "phone": contact.get("phone") or "", "email": contact.get("email") or "",
         "address": contact.get("address") or "",
@@ -771,7 +860,53 @@ def fact_records(fx: Dict[str, Any]) -> List[str]:
     for p in ((dossier.get("identity") or {}).get("team")) or []:
         if isinstance(p, dict):
             out.append(f"{p.get('name') or ''} {p.get('role') or ''}")
+    for x in fx.get("events") or []:
+        if isinstance(x, dict):
+            out.append(" ".join(str(x.get(k) or "") for k in ("title", "date", "time", "place", "note")))
+    for m in fx.get("ministries") or []:
+        if isinstance(m, dict):
+            out.append(" ".join(str(m.get(k) or "") for k in ("name", "when", "who", "description")))
     return [r for r in out if r.strip()]
+
+
+_GATHER_WORDS = {"service", "services", "worship", "gathering", "study", "bible", "prayer", "class", "classes",
+                 "meeting", "night", "morning", "evening", "sunday", "midweek", "practice", "open"}
+
+
+def clean_gatherings(rows: Any, records: List[str]) -> List[Dict[str, Any]]:
+    """Weekly gatherings, kept only when one record of the data holds the day and
+    the hour together ("Sundays 11am"), and the label's words are the data's own
+    or plain words for a gathering. Sunday first, then the week in order."""
+    out = []
+    low = [r.lower() for r in records]
+    every = " ".join(low)
+    for g in rows if isinstance(rows, list) else []:
+        if not isinstance(g, dict):
+            continue
+        try:
+            day = int(g.get("day"))
+        except (TypeError, ValueError):
+            continue
+        t = str(g.get("time") or "")
+        if not (0 <= day <= 6 and re.match(r"^\d{2}:\d{2}$", t)):
+            continue
+        h = int(t[:2])
+        h12 = str(h % 12 or 12)
+        name = DAYS[day].lower()
+        if not any((name in r or name[:3] in r) and re.search(rf"(?<!\d){h12}(?!\d)", r) for r in low):
+            continue
+        label = " ".join(str(g.get("label") or "").split())[:60]
+        words = re.findall(r"[a-z]{4,}", label.lower())
+        if words and sum(1 for x in words if x in every or x in _GATHER_WORDS) < len(words):
+            label = ""
+        out.append({"day": day, "time": t, "label": label or "Gathering", "day_label": DAYS[day],
+                    "time_label": _clock(t)})
+    seen, uniq = set(), []
+    for g in sorted(out, key=lambda g: (g["day"], g["time"])):
+        if (g["day"], g["time"]) not in seen:
+            seen.add((g["day"], g["time"]))
+            uniq.append(g)
+    return uniq[:6]
 
 
 def rows_are_facts(rows: List[List[Any]], data: Any) -> bool:
@@ -816,13 +951,54 @@ def custom_ok(html: str, css: str) -> Tuple[bool, str]:
     return True, ""
 
 
-def assemble(fx: Dict[str, Any], w: Dict[str, Any], custom: Optional[List[Dict[str, str]]] = None) -> str:
+def layout_sections(layout: str) -> Tuple[List[Tuple[str, Any]], Any, str]:
+    """(sections, footer, extra css) for a kit layout."""
+    if layout == "booking":
+        return list(SECTIONS), footer, ""
+    import site_kit_church as church
+    return church.LAYOUTS[layout], church.FOOTERS[layout], church.CSS
+
+
+def kit_layout(spec: str, fx: Optional[Dict[str, Any]] = None) -> str:
+    """The layout the blueprint decided, when the kit has it; '' when it doesn't."""
+    m = re.search(r"^\s*LAYOUT:\s*([A-Za-z -]+?)(?:\s*[-.(:,]|$)", spec or "", re.M)
+    raw = m.group(1) if m else ""
+    if not raw and fx:
+        lay = (((fx.get("discovery_dossier") or {}).get("taste") or {}).get("layout")) or {}
+        raw = lay.get("value") if isinstance(lay, dict) else str(lay or "")
+    try:
+        import site_layouts
+        key = site_layouts.normalize(raw) or ""
+    except Exception:
+        key = str(raw or "").strip().lower()
+    return key if key in kit_layouts() else ""
+
+
+def kit_layouts() -> Tuple[str, ...]:
+    import site_kit_church as church
+    return ("booking",) + tuple(church.LAYOUTS)
+
+
+def assemble(fx: Dict[str, Any], w: Dict[str, Any], custom: Optional[List[Dict[str, str]]] = None,
+             layout: Optional[str] = None) -> str:
     d = facts(fx, w)
     w = dict(w)
-    w.setdefault("action_label", "Book now" if d.get("booking_url") else "Get in touch")
+    layout = layout or str(w.get("layout") or "") or "booking"
+    if layout not in kit_layouts():
+        layout = "booking"
+    if d.get("booking_url"):
+        default_label = "Book now"
+    elif d.get("gatherings"):
+        default_label = "Plan a visit"
+    else:
+        default_label = "Get in touch"
+    w.setdefault("action_label", default_label)
+    if not d.get("action_url") and d.get("gatherings"):
+        d["action_url"] = "#visit"
     w.setdefault("row_label", "Book")
-    order = [k for k, _ in SECTIONS]
-    built = {k: fn for k, fn in SECTIONS}
+    sections, foot, extra_css = layout_sections(layout)
+    order = [k for k, _ in sections]
+    built = {k: fn for k, fn in sections}
     # which sections will exist, so nav links never point at nothing
     d["_present"] = set()
     parts: Dict[str, str] = {}
@@ -836,7 +1012,7 @@ def assemble(fx: Dict[str, Any], w: Dict[str, Any], custom: Optional[List[Dict[s
         if ok and c.get("html"):
             customs.append(c)
             d["_present"].add(c.get("id") or "custom")
-    parts["hero"] = hero(d, w)
+    parts["hero"] = built["hero"](d, w)
     body = []
     for key in order:
         if parts.get(key):
@@ -844,7 +1020,7 @@ def assemble(fx: Dict[str, Any], w: Dict[str, Any], custom: Optional[List[Dict[s
         for c in customs:
             if c.get("after") == key:
                 body.append(c["html"])
-    page_css = root_css(d["tokens"]) + BASE_CSS + "".join(c.get("css", "") for c in customs)
+    page_css = root_css(d["tokens"]) + BASE_CSS + extra_css + "".join(c.get("css", "") for c in customs)
     title = f"{d['name']} | {(w.get('hero') or {}).get('title_tail') or d['type'].title()}"
     desc = (w.get("hero") or {}).get("subhead") or ""
     doc = (f'<!doctype html><html lang="{e(w.get("lang") or "en")}"><head><meta charset="utf-8">'
@@ -852,7 +1028,7 @@ def assemble(fx: Dict[str, Any], w: Dict[str, Any], custom: Optional[List[Dict[s
            f'<title>{e(title)}</title><meta name="description" content="{e(desc)}">'
            f'{fonts_link(d["tokens"])}<style>{page_css}</style></head>'
            f'<body><div class="k-grain" aria-hidden="true"></div>{nav(d, w)}<main>{"".join(body)}</main>'
-           f'{footer(d, w)}{dock(d, w)}<script>{STATUS_JS}</script></body></html>')
+           f'{foot(d, w)}{dock(d, w)}<script>{STATUS_JS}</script></body></html>')
     return site_objects.inject_library(doc)
 
 
@@ -920,6 +1096,75 @@ WORDS_SHAPE = {
 }
 
 
+LAYOUT_SECTIONS = {
+    "booking": "a fixed nav, a hero with one photo, the board + desk (the price list, every service "
+               "bookable), the work (photos), a one-line band, a testimonial, the team, the visit section",
+    "poster": "a fixed nav, a POSTER hero (the owner's own three or four short lines at poster size, up to "
+              "two of their photos set inside the words, the when-and-where card beside the subhead), the "
+              "weekly gatherings strip, a band of the owner's own phrases drifting by, an album of their "
+              "photos, the leaders, the story with polaroids, a testimonial, a closing ceremony band (one "
+              "line, one underlined word), the visit section with first-time steps",
+    "bulletin": "a fixed nav, a BULLETIN hero (headline beside this week's gatherings on a felt board, one "
+                "wide photo under it), the gatherings strip, events, ministries, the leaders, the album, a "
+                "testimonial, a closing ceremony band, the visit section with first-time steps",
+    "magazine": "a fixed nav, a MAGAZINE cover hero (masthead, one lead photo, the cover line, a rail of "
+                "what's inside), ministries as departments, the gatherings strip, the story, the leaders, "
+                "events, the album, a testimonial, a closing ceremony band, the visit section",
+    "leader": "a fixed nav, a LEADER hero (the person's name at billboard size beside their portrait, one "
+              "line under it), their story, what they offer (topics, talks, sessions, from their "
+              "offerings), a testimonial, the album, events, a closing band, the contact section",
+}
+
+LAYOUT_SHAPES = {
+    "poster": {"hero": {"eyebrow": "", "lines": ["", "", ""], "accent_word": "", "inset_photos": ["<photo url>"],
+                        "subhead": "", "hand_line": "", "secondary": "", "secondary_target": "times", "ghost": ""},
+               "times": {"eyebrow": "", "headline": "", "strip_label": "", "note": ""},
+               "marquee": ["", "", ""],
+               "album": {"eyebrow": "", "headline": "", "captions": {"<photo url>": ""}},
+               "leaders": {"head": "", "head_script": "", "role_label": "", "body": "", "photo": "<photo url>",
+                           "link_label": "", "link_target": "visit"},
+               "story": {"eyebrow": "", "headline": "", "paragraphs": ["", ""],
+                         "polaroids": [{"url": "<photo url>", "caption": ""}], "ghost": ""},
+               "proof": {"eyebrow": "", "headline": ""},
+               "ceremony": {"line": "", "accent_word": "", "sub": ""}},
+}
+LAYOUT_SHAPES["bulletin"] = {**{k: v for k, v in LAYOUT_SHAPES["poster"].items() if k not in ("story", "marquee")},
+                             "hero": {"eyebrow": "", "lines": ["", ""], "accent_word": "", "subhead": "",
+                                      "board_title": "", "secondary": "", "secondary_target": "visit"},
+                             "events": {"eyebrow": "", "headline": ""},
+                             "ministries": {"eyebrow": "", "headline": "", "intro": ""}}
+LAYOUT_SHAPES["magazine"] = {**LAYOUT_SHAPES["bulletin"],
+                             "hero": {"eyebrow": "", "lines": ["", ""], "accent_word": "", "subhead": "",
+                                      "issue_line": "", "rail_title": "", "secondary": "", "secondary_target": "visit"},
+                             "ministries": {"eyebrow": "", "headline": "", "intro": "", "kicker": ""},
+                             "story": LAYOUT_SHAPES["poster"]["story"]}
+LAYOUT_SHAPES["leader"] = {"hero": {"eyebrow": "", "subhead": "", "portrait": "<photo url>", "secondary": "",
+                                    "secondary_target": "story"},
+                           "story": LAYOUT_SHAPES["poster"]["story"],
+                           "topics": {"eyebrow": "", "headline": "", "intro": ""},
+                           "album": LAYOUT_SHAPES["poster"]["album"],
+                           "events": {"eyebrow": "", "headline": ""},
+                           "proof": {"eyebrow": "", "headline": ""},
+                           "ceremony": LAYOUT_SHAPES["poster"]["ceremony"]}
+_COMMON = ("lang", "tz", "hours_rows", "action_label", "row_label", "tokens", "wordmark", "nav", "footer",
+           "dock", "custom", "visit")
+
+
+def shape_for(layout: str) -> Dict[str, Any]:
+    if layout == "booking" or layout not in LAYOUT_SHAPES:
+        return WORDS_SHAPE
+    shape = {k: WORDS_SHAPE[k] for k in _COMMON if k in WORDS_SHAPE}
+    shape["layout"] = layout
+    shape["gatherings"] = [{"day": 0, "time": "11:00", "label": ""}]
+    shape["visit"] = {**WORDS_SHAPE["visit"], "steps": ["", "", ""]}
+    shape["tokens"] = {**WORDS_SHAPE["tokens"], "script_font": "", "radius": 0, "pill": False}
+    shape.update(LAYOUT_SHAPES[layout])
+    import site_kit_church as church
+    targets = "|".join(k for k, _ in church.LAYOUTS[layout] if k != "hero")
+    shape["nav"] = [{"label": "", "sub": "", "target": targets}]
+    return shape
+
+
 def data_digest(fx: Dict[str, Any]) -> str:
     contact = fx.get("contact") or {}
     truth = ((fx.get("discovery_dossier") or {}).get("truth")) or {}
@@ -932,8 +1177,10 @@ def data_digest(fx: Dict[str, Any]) -> str:
         "offerings": [o.get("name") for o in fx.get("offerings") or []],
         "menu_told_the_coach": truth.get("offers") or [],
         "people": [p.get("name") for p in ((fx.get("discovery_dossier") or {}).get("identity") or {}).get("team") or []],
-        "photos": [g.get("url") for g in fx.get("gallery") or []],
+        "photos": [{"url": g.get("url"), "alt": g.get("alt")} for g in fx.get("gallery") or []],
         "testimonials": len(fx.get("testimonials") or []),
+        "events": fx.get("events") or [], "ministries": fx.get("ministries") or [],
+        "owner_words": (fx.get("owner_brief") or "")[:1200],
     }, ensure_ascii=False)
 
 
@@ -958,16 +1205,38 @@ WORDS_MODEL = "claude-sonnet-5-5"
 CUSTOM_MODEL = "claude-opus-5-5"
 
 
-def write_words(spec: str, fx: Dict[str, Any], business_id: str = "") -> Dict[str, Any]:
+def write_words(spec: str, fx: Dict[str, Any], business_id: str = "", layout: str = "booking") -> Dict[str, Any]:
     import llm_call
     client = llm_call.sdk_client(timeout=120.0, max_retries=2)
+    system = WORDS_SYSTEM.replace("for the BOOKING DESK layout: a fixed\nnav, a hero, the board + desk (the price list, every service bookable), the work\n(photos), a one-line band, a testimonial, the team, the visit section, a footer and a\nphone dock.",
+                                  f"for the {layout.upper()} layout: {LAYOUT_SECTIONS.get(layout, '')}, a footer and a phone dock.")
+    if layout != "booking":
+        system += GATHERING_RULES
     msg = (f"THE BLUEPRINT:\n{spec[:60000]}\n\nTHE DATA (facts the code fills):\n{data_digest(fx)}\n\n"
-           f"THE SHEET TO FILL (this shape, every key):\n{json.dumps(WORDS_SHAPE, ensure_ascii=False)}")
-    resp = client.messages.create(model=WORDS_MODEL, max_tokens=10000, system=WORDS_SYSTEM,
+           f"THE SHEET TO FILL (this shape, every key):\n{json.dumps(shape_for(layout), ensure_ascii=False)}")
+    resp = client.messages.create(model=WORDS_MODEL, max_tokens=12000, system=system,
                                   messages=[{"role": "user", "content": msg}])
     _usage(resp, WORDS_MODEL, "site_kit_words", business_id)
     text = "".join(b.text for b in resp.content if getattr(b, "type", "") == "text")
     return _json_from(text)
+
+
+GATHERING_RULES = """
+
+For this layout also:
+- gatherings: the weekly gatherings exactly as THE DATA states them (day 0 Sunday to 6
+  Saturday, 24-hour "HH:MM", the label in the data's own words). The code drops any that
+  the data doesn't state.
+- Photos: only urls from THE DATA's photos. inset_photos, the leaders' photo, the
+  portrait and polaroids each name one; captions describe what the photo shows. The
+  leaders' photo and the portrait must SHOW that person (its alt says so: "The pastor
+  preaching"); leave them empty when no photo does.
+- story paragraphs: the owner's own sentences from THE DATA where it has them, lightly
+  joined; never a claim, number or event the data doesn't hold.
+- marquee: the owner's own short phrases (their motto, values, the words on their wall).
+- ceremony: one short line a visitor remembers, with one word underlined.
+- visit steps: two to four plain first-time steps built only from the data (when, where,
+  who to look for)."""
 
 
 CUSTOM_SYSTEM = """You write ONE section for a page assembled from a finished kit.

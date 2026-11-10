@@ -34,6 +34,7 @@ parser.add_argument("names", nargs="*")
 parser.add_argument("--dry", action="store_true", help="no model calls: assemble from saved sheets or a stub")
 parser.add_argument("--out", default=str(Path(os.environ.get("TEMP") or "/tmp") / "site-kit-bench"))
 parser.add_argument("--barber-spec", default="", help="the builder test's saved blueprint for the barber")
+parser.add_argument("--testbuild", default="", help="the builder test's folder: its fixtures and blueprints are reused")
 parser.add_argument("--regrade", action="store_true")
 parser.add_argument("--no-grade", action="store_true")
 parser.add_argument("--cap-cents", type=float, default=400)
@@ -71,7 +72,18 @@ ROWS = api_usage_logger.capture_in_memory()
 FIXTURES = {
     "barber": TREE / "scripts/fixtures/marrow_and_steel.json",
     "foodtruck": TREE / "scripts/fixtures/smoke_signal_bbq.json",
+    "lovecity": TREE / "scripts/fixtures/marrow_and_steel.json",      # replaced from --testbuild
+    "gracepoint": TREE / "scripts/fixtures/gracepoint_church.json",
+    "harborlight": TREE / "scripts/fixtures/harbor_light_church.json",
+    "speaker": TREE / "scripts/fixtures/renee_okafor_speaker.json",
+    "lc_bulletin": TREE / "scripts/fixtures/marrow_and_steel.json",   # replaced from --testbuild
+    "lc_leader": TREE / "scripts/fixtures/marrow_and_steel.json",     # replaced from --testbuild
+    "lc_magazine": TREE / "scripts/fixtures/marrow_and_steel.json",   # replaced from --testbuild
 }
+# the builder test (11-09) saved these, so their blueprints are free and their pages compare
+SAVED = {"barber": ("barber_two_photos.json", "barber_two_photos"), "lovecity": ("love_city.json", "love_city"),
+         "lc_bulletin": ("love_city_bulletin.json", ""), "lc_leader": ("love_city_leader.json", ""),
+         "lc_magazine": ("love_city_magazine.json", "")}
 OUT = Path(ARGS.out)
 
 
@@ -88,6 +100,8 @@ def by_task() -> dict:
 
 
 def load_fixture(name: str) -> dict:
+    if ARGS.testbuild and name in SAVED:
+        return json.loads((Path(ARGS.testbuild) / SAVED[name][0]).read_text(encoding="utf-8"))
     fx = json.loads(FIXTURES[name].read_text(encoding="utf-8"))
     if name == "barber":
         # the builder test's barber had two photos, not the bench's full gallery
@@ -105,11 +119,15 @@ def blueprint(name: str, fx: dict, out: Path) -> str:
         spec = Path(ARGS.barber_spec).read_text(encoding="utf-8")
         f.write_text(spec, encoding="utf-8")
         return spec
+    if ARGS.testbuild and SAVED.get(name, ("", ""))[1]:
+        spec = (Path(ARGS.testbuild) / "out" / SAVED[name][1] / "spec.txt").read_text(encoding="utf-8")
+        f.write_text(spec, encoding="utf-8")
+        return spec
     if ARGS.dry:
         return ""
     import site_bench
     import spec_author
-    fx2 = site_bench.load_fixture(str(FIXTURES[name]))
+    fx2 = json.loads(json.dumps(fx)) if (ARGS.testbuild and name in SAVED) else site_bench.load_fixture(str(FIXTURES[name]))
     site_bench._patch_for_fixture(fx2)
     ctx = site_bench.ctx_from_fixture(fx2)
     t = time.time()
@@ -166,6 +184,10 @@ def run(name: str) -> None:
     bid = (fx.get("business") or {}).get("id") or ""
     print(f"\n=== {name}: {fx['business']['name']} ({fx['business']['type']}), photos={len(fx.get('gallery') or [])}")
     spec = blueprint(name, fx, out)
+    layout = site_kit.kit_layout(spec, fx) or ("booking" if not spec else "")
+    print(f"  layout: {layout or 'NOT IN THE KIT'}")
+    if not layout:
+        return
     wf = out / "words.json"
     if wf.exists():
         words = json.loads(wf.read_text(encoding="utf-8"))
@@ -174,7 +196,7 @@ def run(name: str) -> None:
         print("  words: a stub (dry run)")
     else:
         t = time.time()
-        words = site_kit.write_words(spec, fx, bid)
+        words = site_kit.write_words(spec, fx, bid, layout)
         wf.write_text(json.dumps(words, indent=1, ensure_ascii=False), encoding="utf-8")
         print(f"  words: {time.time() - t:.0f}s, ${spent() / 100:.2f} so far; custom asked: "
               f"{[c.get('id') for c in words.get('custom') or [] if c.get('id')]}", flush=True)
@@ -194,7 +216,7 @@ def run(name: str) -> None:
             custom.append(c)
         cf.write_text(json.dumps(custom, indent=1, ensure_ascii=False), encoding="utf-8")
     t = time.time()
-    html = site_kit.assemble(fx, words, custom)
+    html = site_kit.assemble(fx, words, custom, layout)
     ms = (time.time() - t) * 1000
     page = out / "page.html"
     page.write_text(html, encoding="utf-8")
@@ -227,7 +249,7 @@ def main() -> None:
         return
     except OSError as e:
         print("socket guard holds:", e)
-    for name in ARGS.names or list(FIXTURES):
+    for name in ARGS.names or ["barber", "foodtruck"]:
         try:
             run(name)
         except Exception as e:

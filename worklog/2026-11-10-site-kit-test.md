@@ -8,7 +8,8 @@ prs: [kmj-intake-server#1788]
 migrations: []
 left_undone:
   - "Nothing is wired in: no owner's build uses the kit. Wiring it means the builder's ladder trying the kit first for the Booking desk, behind a switch, off by default."
-  - "One layout so far (the Booking desk). The other 16 need their own finished sections; each one is design work, not model spend."
+  - "Five of 17 layouts are in the kit (Booking desk, Poster, Bulletin, Leader, Magazine). Kevin: do all; the other 12 are next."
+  - "Ministries and events render and are tested, but no graded page has had them: Love City's data has neither, and the only freely licensed church photos found showed identifiable public figures, so no made-up church got photos."
   - "Pages with no photos are the weak spot: the food truck's first screen scored 7 of 10 every round, and the grader's first note was always 'add real photography'."
   - "The custom section path works (safe every time, about 8 cents, about 20 seconds) but its layouts came out lopsided twice. A menu card is common enough to be a kit section instead."
   - "Seven nested f-strings in site_kit.py need Python 3.12 (CI is 3.12); tidy them before production imports it."
@@ -47,3 +48,30 @@ chapters kept dark text; three-line headlines ran seven deep; the library dock r
 a tall phone hero; the letterboard clipped long rows; and the blueprint's own board
 (this week's stops) lost to a hard-coded price list. My own eyes caught one the grader
 didn't: a 40-character cap cut "1200 E 6TH ST" to "1200 E 6".
+
+## The church layouts (same day)
+
+Kevin: "do all but start on these ones" (Bulletin, Magazine, Leader, Poster). The kit
+became layouts made of shared sections (site_kit_church.py): poster, bulletin, magazine
+cover and leader openings; the gatherings strip; the owner's phrases band; album;
+leaders; story with polaroids; ministries; events; topics; a closing ceremony band; the
+visit section with first-time steps; the sign-off. The layout comes from the
+blueprint's LAYOUT line (kit_layout); the words sheet is shaped per layout.
+
+Tested on Love City's public facts and photos (the builder test's fixture), the owner's
+layout pick set per run, so the Director wrote a fresh blueprint in each layout:
+
+| Layout | Grade | Broken | Notes |
+|---|---|---|---|
+| Poster | 30/40 | no | the builder's Love City page, same blueprint: 30/40 |
+| Bulletin | 30/40 | no | 23 on the first try |
+| Leader | 29/40 | no | one grade at 18 was the grader failing to load the photos |
+| Magazine | 28/40 | no | 24 before the cover line moved onto the photo |
+
+New facts rules: a gathering shows only when one record of the data holds its day and
+hour together; a leader's photo must show them (its description names them or their
+role). Labels and secondary ink are forced readable whatever colour the words pick, and
+a colour the words leave out is worked out from the page's ground and ink.
+
+Spend for the church layouts: $2.29 (three blueprints at 46 to 53 cents, words and
+grading). The test's total is $3.44.
