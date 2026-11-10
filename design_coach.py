@@ -361,7 +361,16 @@ def _layout_rank(business_id: str, biz: Optional[Dict[str, Any]],
         recent = site_concept.recent_layouts(business_id)
     except Exception:
         recent = []
-    rows = _site_layouts.rank(_site_layouts.signals(ctx, recent))
+    sig = _site_layouts.signals(ctx, recent)
+    rows = _site_layouts.rank(sig)
+    # A pick made before this ask still binds the build, but the cards rank
+    # without it, so the owner sees what fits what they asked for now and
+    # chooses again (2026-11-10, the live test).
+    earlier = _site_layouts.pick_before_ask(dossier)
+    if earlier:
+        fresh = _site_layouts.rank({**sig, "owner_pick": ""})
+        if fresh and fresh[0]["key"] != earlier:
+            rows = [{**r, "earlier": r["key"] == earlier} for r in fresh]
     _LAYOUT_RANK[business_id] = (time.monotonic(), rows)
     return rows
 
@@ -372,8 +381,22 @@ def layouts_that_fit_block(rows: List[Dict[str, Any]], n: int = 6) -> str:
     lines = ["LAYOUTS THAT FIT THIS BUSINESS (the page's structure, ranked by the platform "
              "from what it actually has; offer the first three as gallery kind \"page\", "
              "in this order):"]
-    for r in rows[:n]:
+    earlier = next((r for r in rows if r.get("earlier")), None)
+    listed = rows[:n] + ([earlier] if earlier and earlier not in rows[:n] else [])
+    for r in listed:
         lines.append(f"- page-{r['key']}: {r['name']}. {_site_layouts.reason_line(r)}")
+    if earlier:
+        best = rows[0]
+        third = next((r for r in rows[1:] if not r.get("earlier")), None)
+        opts = [f"page-{best['key']}", f"page-{earlier['key']}"] + ([f"page-{third['key']}"] if third else [])
+        lines += ["", "A LAYOUT PICKED BEFORE THIS ASK: they picked the "
+                  f"{earlier['name']} in an earlier session, before they asked for this. "
+                  f"For what they asked, the {best['name']} fits better: "
+                  f"{_site_layouts.reason_line(best)} Before the summary, show the page "
+                  f"gallery ONCE with {', '.join(opts)} in that order, and say in one "
+                  "sentence why the first fits what they asked. Save the one they tap. "
+                  "If they keep their pick, it stays, and never switch it for them. "
+                  "Until they choose, the summary names their pick, not this one."]
     return "\n".join(lines)
 
 

@@ -136,7 +136,8 @@ def test_a_layout_pick_on_the_card_is_saved_as_the_owner_s_answer(monkeypatch):
     monkeypatch.setattr(discovery, "get_dossier", lambda b: {"taste": {"look": {"value": "hearth", "source": "asked"}}})
     monkeypatch.setattr(discovery, "save_dossier", lambda b, d: saved.update(b=b, d=d) or True)
     assert chief_jobs.save_layout_pick("biz", "Long-scroll story") == "story"
-    assert saved["d"]["taste"]["layout"] == {"value": "story", "source": "asked"}
+    assert {k: v for k, v in saved["d"]["taste"]["layout"].items() if k != "at"} == {"value": "story", "source": "asked"}
+    assert saved["d"]["taste"]["layout"]["at"]                        # dated: a later ask can tell
     assert saved["d"]["taste"]["look"]["value"] == "hearth"           # nothing else touched
     # the rubric then leads with the owner's pick
     ctx = {"business": {"type": "coach"}, "site": {"site_config": {"discovery_dossier": saved["d"]}}}
