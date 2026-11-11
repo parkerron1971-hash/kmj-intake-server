@@ -362,6 +362,32 @@ def test_one_logins_failed_read_is_a_503_for_its_row_alone(app, team, monkeypatc
     assert rows[MARCUS_SEAT]["ok"] and rows[MARCUS_SEAT]["tasks"]["late"] == 1
 
 
+def test_the_logins_are_read_side_by_side_and_the_page_says_the_same(app, monkeypatch):
+    """Each login is a dozen reads; one after another, five logins took the
+    page ten seconds and more (seen on a church's Home, 2026-11-11). Every
+    row must be in flight at once, and the page must read as it did."""
+    import threading
+    from fastapi import HTTPException
+    _as(app, OWNER)
+    before = _team(app)
+    assert len(before["team"]) == 3
+    together = threading.Barrier(3, timeout=5)
+    real = ctw.row
+
+    def row(*a, **k):
+        together.wait()                         # breaks unless all three logins are being read at once
+        return real(*a, **k)
+
+    monkeypatch.setattr(ctw, "row", row)
+    assert _team(app) == before, "the same rows, in the same order"
+
+    def refused(*a, **k):
+        raise HTTPException(403, "Not this login's.")
+
+    monkeypatch.setattr(ctw, "row", refused)
+    assert app.get(f"/church/my-week/team?business_id={BIZ}").status_code == 403, "only a 503 becomes an unread row"
+
+
 def test_the_page_is_a_503_when_the_seats_cant_be_read(app, team, monkeypatch):
     real = team.get
     monkeypatch.setattr(sb_clients, "sb_get_as_service",
