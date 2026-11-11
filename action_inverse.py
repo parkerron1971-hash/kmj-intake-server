@@ -292,6 +292,14 @@ INVERSES: Dict[str, Inverse] = {
                       if r.get("created_ids") else None)),
     # A church duty moved (chief_duties): its undo is the duties page's own,
     # and only while that move is still the last change to the duty.
+    # A draft Chief saved into a move-in item (chief_move_in): the item's
+    # lines as they were before it. A draft either way; nothing is handed in.
+    "fill_move_in": Inverse(
+        "undo_move_in_fill",
+        "put that move-in item back the way it was",
+        lambda a, r: ({"type": "undo_move_in_fill", "item": r["item"], "answers": r["before"]}
+                      if r.get("changed") and isinstance(r.get("item"), str)
+                      and isinstance(r.get("before"), dict) else None)),
     "move_duty": Inverse(
         "undo_duty",
         "put that duty back the way it was",

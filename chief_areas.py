@@ -123,7 +123,9 @@ VERBS: Dict[str, Tuple[str, ...]] = {
     **{v: OFFICE for v in (
         "sms_status", "email_setup_status", "set_availability_day", "set_availability_override",
         "add_block_range", "remove_block_range", "set_slot_granularity", "set_lead_time", "draft_contract",
-        "contract_pdf", "save_email_template", "compose_template", "adjust_template", "draft_church_role")},
+        "contract_pdf", "save_email_template", "compose_template", "adjust_template", "draft_church_role",
+        # A new church's move (chief_move_in): the office's, as the Move-in room is.
+        "move_in_status", "fill_move_in", "undo_move_in_fill")},
     # Giving & money: gifts, invoices, payments, the books, prices and stock.
     **{v: MONEY for v in (
         "giving_statement", "giving_statements_run", "growth_report", "save_growth_record", "create_invoice",

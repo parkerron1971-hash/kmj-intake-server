@@ -628,7 +628,7 @@ async def _tell_owner(me: Dict[str, Any], item: Dict[str, Any], room: Dict[str, 
         if me.get("email"):
             lines.append(f"Handed in by {me['email']}.")
         p = room["progress"]
-        lines.append(f"{p['settled']} of {p['total']} are in.")
+        lines.append(f"{p['settled']} of {p['total']} are in. Open it in Mission Control, under Customers, Move-ins.")
         await send_via_resend(
             to_email=to, to_name=None,
             from_email=os.environ.get("RESEND_FROM_EMAIL") or "noreply@mysolutionist.app",

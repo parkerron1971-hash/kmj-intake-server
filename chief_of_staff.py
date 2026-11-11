@@ -260,6 +260,7 @@ from giving_deposits import (handle_giving_deposits, handle_match_giving_deposit
     handle_unmatch_giving_deposits)
 from chief_bills import handle_bills, handle_add_bill, handle_remove_bill
 from chief_duties import handle_list_duties, handle_move_duty, handle_undo_duty
+from chief_move_in import handle_move_in_status, handle_fill_move_in, handle_undo_move_in_fill
 from chief_map import (handle_list_map, handle_change_map, handle_draft_map, handle_undo_map_change,
     handle_apply_map_change, handle_discard_map_change, handle_search_templates, handle_adopt_template)
 from church_map_asks import (handle_my_work, handle_confirm_my_work, handle_suggest_work_change, handle_note_gap,
@@ -404,6 +405,9 @@ _ACTION_PHRASES = {
     "giving_deposits": "checking the deposits against the gifts",
     "bills": "reading your bills",
     "add_bill": "adding the bill",
+    "move_in_status": "reading where the move stands",
+    "fill_move_in": "saving that as a draft",
+    "undo_move_in_fill": "putting that item back",
     "list_duties": "reading who does what",
     "move_duty": "moving the duty",
     "undo_duty": "putting the duty back",
@@ -12240,6 +12244,10 @@ ACTION_HANDLERS = {
     "bills":                 handle_bills,
     "add_bill":              handle_add_bill,
     "remove_bill":           handle_remove_bill,
+    # A new church's move (chief_move_in): where it stands, a draft into one item, and its undo.
+    "move_in_status":        handle_move_in_status,
+    "fill_move_in":          handle_fill_move_in,
+    "undo_move_in_fill":     handle_undo_move_in_fill,
     "list_duties":           handle_list_duties,
     "move_duty":             handle_move_duty,
     "undo_duty":             handle_undo_duty,
