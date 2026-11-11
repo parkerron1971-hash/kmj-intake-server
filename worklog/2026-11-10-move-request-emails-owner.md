@@ -2,9 +2,9 @@
 title: A church's move request emails the platform owner
 date: 2026-11-10
 agent: Claude Code (Claude Fable 5.2)
-asked: "yes to all" (the first paying church's rollout plan; fix 4 of 4)
+asked: "yes to all, on the first paying church's rollout plan (fix 4 of 4)"
 status: shipped
-prs: [kmj-intake-server (this PR)]
+prs: [kmj-intake-server#1791]
 migrations: []
 left_undone:
   - "No state after requested/paid exists for a move (in progress, done). The ticket is still closed by hand in Mission Control."
