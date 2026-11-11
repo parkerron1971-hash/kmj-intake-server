@@ -144,9 +144,15 @@ def test_detect_provider(ns, key):
     assert out["guide_url"].startswith("https://")
 
 
-def _stub_resolver(monkeypatch, txt, mx, ns):
+def _stub_resolver(monkeypatch, txt, mx, ns, cname=None):
+    cname = cname or {}
+
     async def _txt(name):
         return txt.get(name, [])
+
+    async def _cname(name):
+        return cname.get(name, [])
+    monkeypatch.setattr(edd, "lookup_cname", _cname)
 
     async def _mx(name):
         return mx.get(name, [])
