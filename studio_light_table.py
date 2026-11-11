@@ -327,10 +327,10 @@ def people_line(people: People) -> str:
     """What the designer is told about anyone it draws."""
     described = re.sub(r'\s+', ' ', people.describe).strip()
     if people.mode == 'describe' and described:
-        return (f'When the artwork shows people, show people like this church describes itself: "{described}". '
+        return (f'When the artwork shows people, show people the way the owner describes their own: "{described}". '
                 'Keep them natural and real, never stereotyped or posed like stock photography.')
-    return ('When the artwork shows people, show a natural mix of ages and backgrounds, the way a real church looks '
-            'on a Sunday: kids to grandparents, many skin tones, never one single type of person. Natural and real, '
+    return ('When the artwork shows people, show a natural mix of ages and backgrounds, the way real people look when '
+            'they gather: kids to grandparents, many skin tones, never one single type of person. Natural and real, '
             'never posed like stock photography.')
 
 
@@ -438,8 +438,13 @@ def director_extra(brief: Brief, *, event: Optional[Dict[str, Any]], people: Peo
     them. Never read from an action, so a chat can't carry it."""
     style = answer(brief.answers, brief.kind, 'style')
     facts: Dict[str, Any] = {
-        # The owner typed every printed line into their own brief: they are
-        # the authority on their flyer's words.
+        # Intended (review on #1793): copy_concerns exists so an AI-written
+        # claim never reaches a flyer unchecked. Here nothing printed is
+        # AI-written: every line was typed into the brief by the owner, or is
+        # their own words from "Tell me about it" (said() checks each one), so
+        # their claims about their own event are not second-guessed, the way
+        # a designer sets a client's copy. Facts the site publishes still
+        # contradict a typed line, and the review still checks every word.
         'the_owner_typed_these_words_for_the_flyer': brief_copy(brief),
     }
     if event:
@@ -613,7 +618,9 @@ def brand_logo_url(biz: Dict[str, Any]) -> Optional[str]:
     (the only address the server fetches, so a pasted link is never read)."""
     import brand_mark
     try:
-        url = brand_mark.mark_url({'business': biz}, str(biz.get('id') or ''))
+        # From the settings already read (no business id, so brand_mark never
+        # falls back to a blocking read on the event loop).
+        url = brand_mark.mark_url({'business': biz}, '')
     except Exception:
         return None
     if not url:
@@ -640,8 +647,10 @@ async def brand_logo_image(client, biz) -> Optional[str]:
         return None
     iid = str(uuid5(UUID(str(biz['id'])), f'brand-logo:{url}'))
     rows = await images.db(client, 'GET', f"/image_artworks?id=eq.{iid}&business_id=eq.{UUID(str(biz['id']))}")
-    if rows and rows[0].get('status') == 'ready':
-        return iid
+    if rows:
+        # Imported before. A row that never became ready is left alone: this
+        # flyer goes without the logo rather than failing on a second insert.
+        return iid if rows[0].get('status') == 'ready' else None
     try:
         got = await client.get(url, timeout=20, follow_redirects=False)
         if not got.is_success or len(got.content) > images.MAX_BYTES:

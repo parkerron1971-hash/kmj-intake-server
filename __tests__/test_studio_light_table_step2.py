@@ -143,6 +143,8 @@ def test_just_the_words_and_one_symbol_leave_people_out():
 
 def test_the_churchs_people_setting_is_what_the_designer_draws():
     assert 'many skin tones' in lt.people_line(lt.People())
+    # Neutral for any business: the Light Table isn't only a church's.
+    assert 'church' not in lt.people_line(lt.People()).lower()
     described = lt.People(mode='describe', describe='Young families, lots of kids, many Spanish speakers')
     assert '"Young families, lots of kids, many Spanish speakers"' in lt.people_line(described)
     assert 'never stereotyped' in lt.people_line(described)
@@ -323,6 +325,23 @@ def test_the_same_logo_is_always_the_same_image(monkeypatch):
     monkeypatch.setattr(images, 'db', AsyncMock(return_value=[{'id': iid, 'status': 'ready'}]))
     client = SimpleNamespace(get=AsyncMock(side_effect=AssertionError('fetched again')))
     assert asyncio_run(lt.brand_logo_image(client, {'id': BIZ, 'owner_id': USER})) == iid
+
+
+def test_a_logo_import_that_never_finished_is_skipped_not_retried(monkeypatch):
+    url = 'https://abc.supabase.co/storage/v1/object/public/b/logo.png'
+    monkeypatch.setattr(lt, 'brand_logo_url', lambda biz: url)
+    monkeypatch.setattr(images, 'db', AsyncMock(return_value=[{'id': 'x', 'status': 'queued'}]))
+    client = SimpleNamespace(get=AsyncMock(side_effect=AssertionError('fetched again')))
+    assert asyncio_run(lt.brand_logo_image(client, {'id': BIZ, 'owner_id': USER})) is None
+
+
+def test_the_logo_is_read_from_the_settings_in_hand(monkeypatch):
+    import brand_mark
+    seen = {}
+    monkeypatch.setattr(sb_clients, 'sb_url', lambda: 'https://abc.supabase.co')
+    monkeypatch.setattr(brand_mark, 'mark_url', lambda ctx, biz: seen.setdefault('biz', biz) or None)
+    lt.brand_logo_url({'id': BIZ, 'settings': {}})
+    assert seen['biz'] == ''
 
 
 def test_a_logo_that_isnt_an_image_is_left_off(monkeypatch):
