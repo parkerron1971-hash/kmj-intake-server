@@ -2,9 +2,9 @@
 title: Giving can't be switched on until Stripe has approved the church
 date: 2026-11-10
 agent: Claude Code (Claude Fable 5.2)
-asked: "yes to all" (the first paying church's rollout plan; fix 3 of 4)
+asked: "yes to all, on the first paying church's rollout plan (fix 3 of 4)"
 status: shipped
-prs: [kmj-intake-server (this PR)]
+prs: [kmj-intake-server#1790]
 migrations: []
 left_undone:
   - "giving_is_active still doesn't read charges_enabled: a church already switched on whose Stripe account later loses charges keeps a live give page. Left alone on purpose, so no live church's page could go dark from a stale flag."
