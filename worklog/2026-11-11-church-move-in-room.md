@@ -4,10 +4,10 @@ date: 2026-11-11
 agent: Claude Code (Claude Fable 5.2)
 asked: "create upload areas of the information that they need to hand into the system and I don't directly have to load it"
 status: in progress
-prs: [kmj-intake-server#1792]
-migrations: [supabase/APPLY-2026-11-11-church-move-in.sql (not applied)]
+prs: [kmj-intake-server#1792, solutionist-studio#1513]
+migrations: [supabase/APPLY-2026-11-11-church-move-in.sql (applied 2026-11-11)]
 left_undone:
-  - "The office-app page and the Mission Control view are a frontend PR, not built when this was written."
+  - "The office-app page is solutionist-studio#1513, a draft waiting for Kevin to see it. The Mission Control view of what was handed in isn't built."
   - "Nothing handed in is loaded automatically yet: services, kids rooms, groups, office logins and safety officers are read and set up by hand from the room."
   - "A church isn't told when we ask for a change; it sees the note the next time it opens the room."
   - "No ready-for-Sunday check (how many people on file can sign in)."
