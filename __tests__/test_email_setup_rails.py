@@ -153,9 +153,14 @@ def _stub_resolver(monkeypatch, txt, mx, ns):
 
     async def _ns(domain):
         return ns
+
+    async def _zone(domain):
+        return domain
     monkeypatch.setattr(edd, "lookup_txt", _txt)
     monkeypatch.setattr(edd, "lookup_mx", _mx)
+    monkeypatch.setattr(edd, "lookup_apex_mx", _mx)
     monkeypatch.setattr(edd, "lookup_ns", _ns)
+    monkeypatch.setattr(edd, "lookup_zone", _zone)
 
 
 def test_check_records_required_vs_optional(monkeypatch):
