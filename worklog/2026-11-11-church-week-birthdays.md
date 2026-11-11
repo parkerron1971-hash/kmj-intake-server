@@ -2,7 +2,7 @@
 title: The week's birthdays, read alone (for the pastor's band on a church's Home)
 date: 2026-11-11
 agent: Claude Code (Claude Fable 5.2)
-asked: "make the fix" (to: the pastor's band said no birthdays this week while People showed two)
+asked: "make the fix"
 status: shipped
 prs: [kmj-intake-server (this PR)]
 migrations: []
