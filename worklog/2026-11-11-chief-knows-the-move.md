@@ -4,7 +4,7 @@ date: 2026-11-11
 agent: Claude Code (Claude Fable 5.2)
 asked: "should this be a process that chief does ... yes. and you can allow chief to fill items as well"
 status: in review
-prs: [kmj-intake-server#1792, solutionist-studio#1513]
+prs: [kmj-intake-server#1797]
 migrations: []
 left_undone:
   - "Chief isn't told about the move on every turn: it reads it when asked (move_in_status). A line in the turn's context for a church that is mid-move would cost every church turn; not added."
