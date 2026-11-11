@@ -55,12 +55,13 @@ OWNER_EMAIL = "kevin@example.com"
 
 
 class RollDB(SigDB):
-    """SigDB plus the two things the roll reads with: paging (offset) and a
-    uuid[] containing one id (cs.{id})."""
+    """SigDB plus the three things the roll reads with: paging (offset), a
+    uuid[] containing one id (cs.{id}), and a column that isn't empty
+    (not.is.null)."""
 
     def get(self, path, **kw):
         table, _, qs = path.lstrip("/").partition("?")
-        keep, offset, cs = [], 0, []
+        keep, offset, cs, filled = [], 0, [], []
         for part in qs.split("&") if qs else []:
             k, _, v = part.partition("=")
             if k == "offset":
@@ -70,11 +71,15 @@ class RollDB(SigDB):
             if vv.startswith("cs.{"):
                 cs.append((k, vv[4:-1]))
                 continue
+            if vv == "not.is.null":
+                filled.append(k)
+                continue
             keep.append(part)
         if table in self.broken:
             return None
         rows = super().get("/" + table + ("?" + "&".join(keep) if keep else ""), **kw)
         rows = [r for r in rows if all(val in [str(x) for x in (r.get(col) or [])] for col, val in cs)]
+        rows = [r for r in rows if all(r.get(col) is not None for col in filled)]
         return rows[offset:]
 
 
@@ -273,6 +278,61 @@ def test_birthdays_this_week_on_the_churchs_clock_and_feb_29(db):
     assert cr._birthday_on(date(2000, 2, 29), 2027) == date(2027, 2, 28)
 
 
+def _week(db):
+    rows = {p["id"]: p for p in db.t["contacts"]}
+    for r in rows.values():
+        r["birthdate"] = None
+    rows[CALVIN]["birthdate"] = "1980-11-04"                # Wednesday
+    rows[DANA]["birthdate"] = "1982-11-01"                  # today
+    rows[TANYA]["birthdate"] = "1975-11-08"                 # a day past the week
+    rows[PAUL]["birthdate"] = "1970-11-03"                  # this week, but inactive
+    rows[PAUL]["status"] = "inactive"
+    return rows
+
+
+def test_the_weeks_birthdays_alone_say_what_the_roll_says(db):
+    """Home asks for the week's birthdays without the roll: the same people,
+    by name and day, soonest first; nobody inactive; a child's day from its
+    child record; a child is marked, so nobody drafts a text to one."""
+    _every_sunday(db)
+    rows = _week(db)
+    _home(db, "The Carter family", [CALVIN, DANA], [JAYLEN])
+    next(k for k in db.t["children"] if k["contact_id"] == JAYLEN)["birthdate"] = "2017-11-07"   # Saturday, no date of his own
+    rows[AVA]["birthdate"] = "2020-11-02"                   # a child with her own date and no family on file
+    got = cr.birthdays(dict(BUSINESS))
+    assert (got["today"], got["from"], got["to"], got["n"]) == ("2026-11-01", "2026-11-01", "2026-11-07", 4)
+    assert got["people"] == [
+        {"id": DANA, "name": "Dana Carter", "day": "2026-11-01", "minor": False},
+        {"id": AVA, "name": "Ava Carter", "day": "2026-11-02", "minor": True},
+        {"id": CALVIN, "name": "Calvin Carter", "day": "2026-11-04", "minor": False},
+        {"id": JAYLEN, "name": "Jaylen Carter", "day": "2026-11-07", "minor": True},
+    ]
+    # The roll, read whole, counts the same four.
+    cr._cache.clear()
+    v = _roll(db)
+    assert v["week"]["birthdays"]["n"] == got["n"]
+    assert {p["id"] for p in v["people"] if p["status"] != "inactive" and p["birthday"] in
+            {d[5:] for d in ("2026-11-01", "2026-11-02", "2026-11-03", "2026-11-04", "2026-11-05", "2026-11-06", "2026-11-07")}
+            } == {p["id"] for p in got["people"]}
+
+
+def test_the_weeks_birthdays_across_a_new_year_and_a_failed_read(db, monkeypatch):
+    rows = _week(db)
+    rows[GRACE]["birthdate"] = "1990-01-02"
+    monkeypatch.setattr(cr, "_now", lambda: datetime(2026, 12, 29, 18, 0, tzinfo=timezone.utc))
+    got = cr.birthdays(dict(BUSINESS))
+    assert got["people"] == [{"id": GRACE, "name": "Grace Nguyen", "day": "2027-01-02", "minor": False}]
+    db.broken = {"contacts"}
+    with pytest.raises(HTTPException) as e:
+        cr.birthdays(dict(BUSINESS))
+    assert e.value.status_code == 503                       # never "no birthdays"
+    db.broken = {"children"}
+    _home(db, "The Carter family", [CALVIN, DANA], [JAYLEN])
+    with pytest.raises(HTTPException) as e:
+        cr.birthdays(dict(BUSINESS))
+    assert e.value.status_code == 503
+
+
 def test_the_next_baptism_sunday_from_the_register(db):
     _every_sunday(db)
     db.t["church_register_entries"] = [
@@ -403,6 +463,8 @@ def test_the_routes_for_staff_with_care_and_money_flags(db, monkeypatch):
     owner = _client(monkeypatch, role="owner")
     monkeypatch.setattr(church_keys, "is_open", lambda b, u, area: True)
     assert owner.get("/church/roll", params={"business_id": BIZ}).json()["can_give"] is True
+    week = owner.get("/church/roll/birthdays", params={"business_id": BIZ})
+    assert week.status_code == 200 and set(week.json()) == {"today", "from", "to", "n", "people"}
 
 
 def test_the_switch_a_seat_below_staff_and_the_areas(db, monkeypatch):
@@ -414,11 +476,13 @@ def test_the_switch_a_seat_below_staff_and_the_areas(db, monkeypatch):
     assert _client(monkeypatch).get("/church/roll", params=q).status_code == 200
     monkeypatch.setenv("CHURCH_ROLL", "off")
     assert _client(monkeypatch).get("/church/roll", params=q).status_code == 404
+    assert _client(monkeypatch).get("/church/roll/birthdays", params=q).status_code == 404
     monkeypatch.setenv("CHURCH_ROLL", "on")
     import church_areas
     monkeypatch.setenv("CHURCH_AREAS", "on")
     monkeypatch.setattr(church_areas, "my_areas", lambda b, u, r: {"areas": ["worship"], "by": "picked"})
     assert _client(monkeypatch).get("/church/roll", params=q).status_code == 403
+    assert _client(monkeypatch).get("/church/roll/birthdays", params=q).status_code == 403
     monkeypatch.setattr(church_areas, "my_areas", lambda b, u, r: {"areas": ["office"], "by": "picked"})
     assert _client(monkeypatch).get("/church/roll", params=q).status_code == 200
     monkeypatch.setattr(church_areas, "my_areas", lambda b, u, r: None)
