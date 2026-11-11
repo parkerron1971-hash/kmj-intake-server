@@ -346,7 +346,24 @@ def patch_giving_config(
     cfg = dict(giving_settings(settings))
 
     if "enabled" in body:
-        cfg["enabled"] = bool(body["enabled"])
+        want_on = bool(body["enabled"])
+        # Switching giving ON waits for Stripe (2026-11-10). A church that
+        # started Stripe but isn't approved yet has an account id, so the
+        # give page went live and the gift failed in front of the giver
+        # ("we couldn't start the payment"). Chief's set_giving already
+        # refused this; the Settings switch did not. Only an explicit "can't
+        # charge" from Stripe blocks (payments_core.can_charge): an account
+        # Stripe hasn't reported on yet is let through, as everywhere else.
+        # A church with no Stripe at all is unchanged: giving_is_active keeps
+        # its page off until it connects. Switching OFF is never refused, and
+        # neither is a church that is already on.
+        if want_on and not cfg.get("enabled") and biz.get("stripe_account_id"):
+            import payments_core
+            if not payments_core.can_charge(biz):
+                raise HTTPException(409, "Stripe hasn't finished approving your church yet, so a gift "
+                                         "couldn't go through. Finish the Stripe setup in Settings, "
+                                         "Payments, then switch giving on.")
+        cfg["enabled"] = want_on
 
     if "funds" in body:
         raw = body.get("funds")

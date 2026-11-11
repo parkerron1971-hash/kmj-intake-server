@@ -534,6 +534,53 @@ def test_patch_funds_validation(monkeypatch):
             BIZ, {"preset_amounts": [0]}, user)
 
 
+def _switch(monkeypatch, **church):
+    fake = FakeSB(business=_church(owner_id="u1", **church))
+    monkeypatch.setattr(giving_router, "sb_clients", fake)
+    monkeypatch.setattr(giving_router, "ensure_business_site",
+                        lambda biz: ({"slug": "first-light"}, False))
+    return SimpleNamespace(id="u1", email="pastor@example.com")
+
+
+def test_giving_waits_for_stripe_to_approve_the_church(monkeypatch):
+    """A church that started Stripe but can't take a card yet can't switch
+    giving on: the page would go live and the gift would fail."""
+    settings = {"giving": {"enabled": False}, "stripe": {"charges_enabled": False}}
+    user = _switch(monkeypatch, settings=settings)
+    with pytest.raises(HTTPException) as exc:
+        giving_router.patch_giving_config(BIZ, {"enabled": True}, user)
+    assert exc.value.status_code == 409
+    assert "Stripe" in exc.value.detail
+    # everything else about giving can still be set up while it waits
+    out = giving_router.patch_giving_config(BIZ, {"funds": ["General", "Building"]}, user)
+    assert out["funds"] == ["General", "Building"]
+
+
+@pytest.mark.parametrize("stripe_flags", [
+    {"charges_enabled": True},      # Stripe approved the church
+    {},                             # Stripe hasn't reported yet: let through
+    None,
+])
+def test_giving_switches_on_once_stripe_can_charge(monkeypatch, stripe_flags):
+    settings = {"giving": {"enabled": False}}
+    if stripe_flags is not None:
+        settings["stripe"] = stripe_flags
+    user = _switch(monkeypatch, settings=settings)
+    out = giving_router.patch_giving_config(BIZ, {"enabled": True}, user)
+    assert out["enabled"] is True
+
+
+def test_switching_giving_off_is_never_refused(monkeypatch):
+    settings = {"giving": {"enabled": True}, "stripe": {"charges_enabled": False}}
+    user = _switch(monkeypatch, settings=settings)
+    out = giving_router.patch_giving_config(BIZ, {"enabled": False}, user)
+    assert out["enabled"] is False
+    # and a church already on that saves its funds isn't turned away either
+    user = _switch(monkeypatch, settings=settings)
+    out = giving_router.patch_giving_config(BIZ, {"enabled": True, "funds": ["General"]}, user)
+    assert out["enabled"] is True
+
+
 def test_patch_refused_outside_nonprofit_family(monkeypatch):
     fake = FakeSB(business=_church(owner_id="u1", type="coaching"))
     monkeypatch.setattr(giving_router, "sb_clients", fake)
