@@ -375,3 +375,68 @@ def test_the_move_card_learns_what_is_due(trial):
     assert out["first_payment_cents"] == fg.pricing_config.church_price_cents()["church_growing"]
     state["biz"] = {**state["biz"], "subscription_status": "active"}
     assert asyncio.run(cb.move_status(BIZ, user=USER))["first_payment_due"] is False
+
+
+# ─── 5. the owner hears about a move ─────────────────────────────────
+
+@pytest.fixture
+def mail(monkeypatch):
+    import email_sender
+    sent = []
+
+    async def send(**kw):
+        sent.append(kw)
+        return {"id": "em_1"}
+    monkeypatch.setattr(email_sender, "send_via_resend", send)
+    monkeypatch.setenv("PLATFORM_OWNER_EMAIL", "owner@example.test")
+    monkeypatch.setattr(cb, "_ticket", lambda biz, rec: None)
+    return sent
+
+
+def test_a_founding_move_emails_the_owner_once(stripe, mail, monkeypatch):
+    monkeypatch.setattr(cb, "_founding_taken", lambda: 0)
+    assert _move(moving_from="Planning Center")["founding"] is True
+    [m] = mail
+    assert m["to_email"] == "owner@example.test" and "Grace Fellowship" in m["subject"]
+    assert "Planning Center" in m["body"] and "Founding church" in m["body"] and "Mission Control" in m["body"]
+    assert m["idempotency_key"] == f"church-move-{BIZ}-founding"
+    _move()                                   # asking twice: the first ask stands, no second email
+    assert len(mail) == 1
+
+
+def test_a_paid_move_emails_the_owner_with_what_was_paid(stripe, mail):
+    session = {"id": "cs_7", "payment_status": "paid", "amount_total": 59700,
+               "metadata": {"plan": "church_growing", "moving_from": "Subsplash"}}
+    assert asyncio.run(cb.record_paid_move(BIZ, session)) is None
+    assert asyncio.run(cb.record_paid_move(BIZ, session)) is None      # Stripe redelivers
+    [m] = mail
+    assert "Paid $597" in m["body"] and m["idempotency_key"] == f"church-move-{BIZ}-cs_7"
+
+
+def test_a_church_name_never_becomes_markup(stripe, mail, monkeypatch):
+    _calls, state = stripe
+    state["biz"]["name"] = "Grace <b>Fellowship</b>"
+    monkeypatch.setattr(cb, "_founding_taken", lambda: 0)
+    _move()
+    assert "<b>" not in mail[0]["body"] and "&lt;b&gt;" in mail[0]["body"]
+
+
+def test_a_failed_email_never_fails_the_move(stripe, monkeypatch):
+    import email_sender
+    _calls, state = stripe
+
+    async def boom(**kw):
+        raise RuntimeError("resend is down")
+    monkeypatch.setattr(email_sender, "send_via_resend", boom)
+    monkeypatch.setenv("PLATFORM_OWNER_EMAIL", "owner@example.test")
+    monkeypatch.setattr(cb, "_ticket", lambda biz, rec: None)
+    monkeypatch.setattr(cb, "_founding_taken", lambda: 0)
+    assert _move()["founding"] is True
+    assert state["biz"]["settings"]["church_move"]["state"] == "requested"
+
+
+def test_no_owner_address_means_no_email(stripe, mail, monkeypatch):
+    monkeypatch.delenv("PLATFORM_OWNER_EMAIL")
+    monkeypatch.setattr(cb, "_founding_taken", lambda: 0)
+    _move()
+    assert mail == []
