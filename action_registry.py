@@ -525,6 +525,14 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
     # Kevin, 2026-11-01: "give chief the ability to make adjustment and help the churches make
     # adjustments like these": a church's duties (chief_duties). Each needs the signed-in person
     # (an owner or an admin moves one), so Chief's alone: an outside agent carries no turn.
+    "move_in_status": {**_r("reads a new church's move: the eleven things it hands in, where each stands, what "
+                            "each still needs and what its people typed (names, emails, numbers); the signed-in "
+                            "person's own room, so Chief's alone", sensitive=True), "chief_only": True},
+    "fill_move_in": {**_w("A", "saves what someone at the church said into one move-in item as a draft, through "
+                          "the room's own cleaning and write; never hands it in; undo_move_in_fill puts the "
+                          "item's lines back"), "chief_only": True},
+    "undo_move_in_fill": {**_w("A", "puts one move-in item's lines back the way they were before the last "
+                               "fill; a draft either way"), "chief_only": True},
     "list_duties": {**_r("reads who does each of a church's office duties, by lane: following the lanes or moved "
                          "to named logins, which need someone, and the office logins by name; no money amounts. "
                          "Staff names, read for the signed-in person, so never an outside agent's",

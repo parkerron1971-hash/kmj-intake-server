@@ -224,6 +224,8 @@ def read_tool_definitions() -> List[Dict[str, Any]]:
     out += [chief_giving_counts.TOOL]  # the service counts (giving by service): the same
     import chief_duties
     out += [chief_duties.TOOL]  # a church's duties: needs the signed-in person, so Chief's alone
+    import chief_move_in
+    out += [chief_move_in.TOOL]  # a new church's move: the same
     import chief_map
     out += [chief_map.LIST_TOOL, chief_map.SEARCH_TOOL]  # a church's leaders map and the ready-mades: the same
     import church_map_asks
@@ -416,7 +418,8 @@ def _shrink(result: Any) -> str:
     if isinstance(result, dict) and result.get('type') == 'responsibility_status':
         from chief_responsibilities import REPORT_MAX_RESULT_CHARS
         limit = REPORT_MAX_RESULT_CHARS
-    if isinstance(result, dict) and result.get('type') in ('list_duties', 'list_map', 'my_work', 'list_asks'):
+    if isinstance(result, dict) and result.get('type') in ('list_duties', 'list_map', 'my_work', 'list_asks',
+                                                           'move_in_status'):
         # Every duty and who does it (every department and role); cut short,
         # the model would guess at whose job the missing ones are.
         limit = 12000
@@ -469,7 +472,8 @@ async def execute_tool_use(client, biz: Dict[str, Any],
                                               "find_fund_payments", "bank_history", "bank_to_file",
                                               "giving_deposits", "expense_categories", "bills",
                                               "giving_counts", "list_duties", "list_map",
-                                              "search_templates", "my_work", "list_asks")):
+                                              "search_templates", "my_work", "list_asks",
+                                              "move_in_status")):
         return True, (f"'{name}' is not a mid-turn lookup. Reads only here; "
                       f"operations go through [ACTION:] tags in your reply.")
     if effect != action_registry.READ:

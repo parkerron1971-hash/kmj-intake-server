@@ -144,18 +144,29 @@ def test_detect_provider(ns, key):
     assert out["guide_url"].startswith("https://")
 
 
-def _stub_resolver(monkeypatch, txt, mx, ns):
+def _stub_resolver(monkeypatch, txt, mx, ns, cname=None):
+    cname = cname or {}
+
     async def _txt(name):
         return txt.get(name, [])
+
+    async def _cname(name):
+        return cname.get(name, [])
+    monkeypatch.setattr(edd, "lookup_cname", _cname)
 
     async def _mx(name):
         return mx.get(name, [])
 
     async def _ns(domain):
         return ns
+
+    async def _zone(domain):
+        return domain
     monkeypatch.setattr(edd, "lookup_txt", _txt)
     monkeypatch.setattr(edd, "lookup_mx", _mx)
+    monkeypatch.setattr(edd, "lookup_apex_mx", _mx)
     monkeypatch.setattr(edd, "lookup_ns", _ns)
+    monkeypatch.setattr(edd, "lookup_zone", _zone)
 
 
 def test_check_records_required_vs_optional(monkeypatch):

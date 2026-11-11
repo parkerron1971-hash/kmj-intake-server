@@ -62,7 +62,7 @@ def test_the_switch_opens_for_the_owner_first(monkeypatch):
 
 def test_closed_the_app_keeps_the_old_studio_and_design_is_not_there(monkeypatch):
     client = app_with(owner_session('pastor@church.org'))
-    monkeypatch.setattr(lt, 'next_occasion', lambda *a, **k: (_ for _ in ()).throw(AssertionError('read while closed')))
+    monkeypatch.setattr(lt, 'upcoming', lambda *a, **k: (_ for _ in ()).throw(AssertionError('read while closed')))
     assert client.get(f'/ai/images/studio/{BIZ}').json() == {'light_table': False}
     assert client.post(f'/ai/images/studio/{BIZ}/design', json=brief()).status_code == 404
 
@@ -80,25 +80,38 @@ def test_open_the_studio_says_what_a_flyer_costs_and_where_to_start(monkeypatch)
     import credit_ledger
     monkeypatch.setattr(credit_ledger, 'flyer_credits', lambda: 30)
     seen = {}
-    def occasion(business_id, **k):
+    def occasions(business_id, **k):
         seen['biz'] = business_id
-        return {'headline': 'Harvest Night', 'when': 'Sat, Nov 21 · 6 PM'}
-    monkeypatch.setattr(lt, 'next_occasion', occasion)
+        return [{'entry_id': 'e1', 'headline': 'Harvest Night', 'when': 'Sat, Nov 21 · 6 PM'},
+                {'entry_id': 'e2', 'headline': 'Fall Retreat', 'when': 'Fri, Dec 4 · 5 PM'}]
+    monkeypatch.setattr(lt, 'upcoming', occasions)
+    monkeypatch.setattr(lt, 'with_signups', lambda biz, occ: [dict(occ[0]), dict(occ[1], join='pay', prices='Adult $25 · Child $10')])
+    monkeypatch.setattr(lt, 'has_saved_logo', AsyncMock(return_value=False))
+    monkeypatch.setattr(lt, 'brand_logo_url', lambda biz: 'https://x.supabase.co/storage/v1/object/public/brand/logo.png')
     body = app_with(owner_session()).get(f'/ai/images/studio/{BIZ}').json()
     assert body['light_table'] is True and body['flyer_credits'] == 30
     assert body['formats'] == ['post', 'story', 'wide']
     assert body['suggestion']['headline'] == 'Harvest Night' and seen['biz'] == BIZ
+    # Every coming event to attach, with its own sign-up prices.
+    assert [e['headline'] for e in body['events']] == ['Harvest Night', 'Fall Retreat']
+    assert body['events'][1]['prices'] == 'Adult $25 · Child $10'
+    # The set list, the styles and the church's people setting come from the server.
+    assert [q['id'] for q in body['questions']] == [q['id'] for q in lt.QUESTIONS]
+    assert body['order']['event'][0] == 'audience' and body['styles'][0]['key'] == 'designer'
+    assert body['people'] == {'mode': 'mix', 'describe': '', 'photos_first': True}
+    assert body['logo'] == {'available': True, 'url': 'https://x.supabase.co/storage/v1/object/public/brand/logo.png'}
 
 
 # ── The brief becomes Chief's flyer request ──────────────────────────
 
 def test_the_brief_is_the_same_flyer_chief_makes(monkeypatch):
     seen = {}
-    async def handle(client, biz, action):
+    async def handle(client, biz, action, **kw):
         seen['biz'], seen['action'] = biz, action
         seen['turn'], seen['index'] = images.turn_id.get(), images.turn_image_index.get()
         return {'type': 'design_flyer', 'result': 'Designing', 'label': 'Designing your flyer', 'image': {'id': 'x'}}
     monkeypatch.setattr(d, 'handle_design_flyer', handle)
+    monkeypatch.setattr(lt, 'has_saved_logo', AsyncMock(return_value=True))
     body = brief(format='story')
     out = app_with(owner_session()).post(f'/ai/images/studio/{BIZ}/design', json=body)
     assert out.status_code == 200 and out.json()['image'] == {'id': 'x'}
@@ -160,7 +173,9 @@ def test_the_next_occasion_skips_services_private_and_past_ones(monkeypatch):
     got = lt.next_occasion(BIZ, now=datetime(2026, 11, 9, 9, 0))
     assert got == {'entry_id': 'next', 'kind': 'event', 'headline': 'Harvest Night',
                    'sub': 'Food, music and a fire pit.', 'when': 'Sat, Nov 21 · 6 PM',
-                   'where': 'Fellowship Hall', 'source': 'Services & Events'}
+                   'where': 'Fellowship Hall', 'date': '2026-11-21', 'source': 'Services & Events'}
+    # The list to attach from: soonest first, private, services and past ones left off.
+    assert [o['entry_id'] for o in lt.upcoming(BIZ, now=datetime(2026, 11, 9, 9, 0))] == ['next', 'later']
 
 
 def test_the_calendar_is_read_on_the_churchs_clock(monkeypatch):

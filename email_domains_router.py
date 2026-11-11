@@ -30,7 +30,12 @@ THE GAP THIS CLOSES
 
       { domain, from_local_part, from_name, resend_domain_id,
         status: pending|verified|failed, records: [...],
-        connected_at, verified_at }
+        connected_at, verified_at,
+        mail_before: {mx: [[priority, host]], spf, seen_at} }
+
+  `mail_before` is the operator's own inbound mail at the zone apex the
+  first time dns-check looked, kept so a Namecheap Mail Settings switch
+  that deletes it can be undone from our screen (email_domain_dns).
 
   The resolution seam that CONSUMES this state is
   email_sender.resolve_from_address — business-originated sends switch
@@ -51,6 +56,7 @@ DISCIPLINE
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
@@ -420,17 +426,52 @@ async def dns_check(business_id: str,
     Resend's status says whether IT is satisfied. This says what the
     operator's DNS actually contains right now, so "pending" can become
     "we found a different value at resend._domainkey". Cheap enough to
-    poll every 30s from an open setup screen; nothing is written."""
+    poll every 30s from an open setup screen.
+
+    It also reads the operator's OWN mail at the zone apex (`mail`) and,
+    on Namecheap, the Mail Settings steps (`mail_note`): see
+    email_domain_dns, "The operator's own mail". The one write is the
+    first sight of that mail (`mail_before`), stored once so the screen
+    can still list it after a Mail Settings switch has deleted it."""
     biz = _require_owner_biz(business_id, user)
     cfg = _require_connected(biz)
-    records = email_domain_dns.with_dmarc(cfg.get("records") or [], cfg.get("domain") or "")
-    checked = await email_domain_dns.check_records(cfg.get("domain") or "", records)
+    domain = cfg.get("domain") or ""
+    records = email_domain_dns.with_dmarc(cfg.get("records") or [], domain)
+    checked, mail = await asyncio.gather(
+        email_domain_dns.check_records(domain, records),
+        email_domain_dns.check_mail(domain, cfg.get("mail_before")))
+    snapshot = mail.pop("snapshot", None)
+    if snapshot:
+        _remember_mail(business_id, snapshot)
+    note = email_domain_dns.namecheap_note(
+        (checked.get("provider") or {}).get("key"), mail, records)
     return {
         "ok": True,
         "domain": cfg.get("domain"),
         "status": cfg.get("status"),
         **checked,
+        "mail": mail,
+        "mail_note": note,
     }
+
+
+def _remember_mail(business_id: str, snapshot: Dict[str, Any]) -> None:
+    """Store the apex mail snapshot as settings.email_domain.mail_before.
+    Best effort: a failed write costs the next poll another try, never
+    the dns-check answer. Re-reads the row first so a settings change
+    made while DNS was resolving isn't written over."""
+    try:
+        rows = sb_clients.sb_get_as_service(
+            f"/businesses?id=eq.{business_id}&select=id,settings&limit=1") or []
+        if not rows:
+            return
+        cfg = email_domain_settings(rows[0].get("settings"))
+        if not cfg.get("resend_domain_id"):
+            return
+        _write_settings(rows[0], {**cfg, "mail_before": snapshot})
+    except Exception as e:
+        logger.info(f"[email-domain] mail snapshot not saved biz={business_id[:8]}: "
+                    f"{type(e).__name__}")
 
 
 def _test_subject(biz: Dict[str, Any]) -> str:
@@ -656,11 +697,26 @@ async def share_records(business_id: str, body: ShareRecordsBody,
     biz_name = biz.get("name") or "a Solutionist business"
     owner_email = (getattr(user, "email", None) or "").strip()
     note = (body.note or "").strip()[:500]
+    # The same Namecheap steps the owner sees. A web person following the
+    # bare list would hit the hidden MX, or switch Mail Settings and stop
+    # the business's own email without knowing.
+    provider_steps = ""
+    try:
+        domain = cfg.get("domain") or ""
+        records = email_domain_dns.with_dmarc(cfg.get("records") or [], domain)
+        provider = email_domain_dns.detect_provider(await email_domain_dns.lookup_ns(domain))
+        if provider.get("key") == "namecheap":
+            mail = await email_domain_dns.check_mail(domain, cfg.get("mail_before"))
+            provider_steps = email_domain_dns.note_as_text(
+                email_domain_dns.namecheap_note("namecheap", mail, records))
+    except Exception as e:
+        logger.info(f"[email-domain] share-records provider steps skipped: {type(e).__name__}")
     text = (
         f"{biz_name} is setting up email sending from {cfg.get('domain')}.\n"
         f"Please add these DNS records at the domain's DNS provider:\n\n"
         f"{_records_as_text(cfg)}\n\n"
-        f"Values must be added exactly as shown (no extra quotes or spaces). "
+        + (f"{provider_steps}\n\n" if provider_steps else "")
+        + f"Values must be added exactly as shown (no extra quotes or spaces). "
         f"Records usually take a few minutes to propagate, occasionally up to an hour.\n"
         + (f"\nNote from {owner_email or 'the owner'}: {note}\n" if note else "")
         + f"\nQuestions? Reply to this email and it reaches {owner_email or 'the owner'}."
