@@ -11,8 +11,8 @@ left_undone:
   - "Nothing handed in is loaded automatically yet: services, kids rooms, groups, office logins and safety officers are read and set up by hand from the room."
   - "A church isn't told when we ask for a change; it sees the note the next time it opens the room."
   - "No ready-for-Sunday check (how many people on file can sign in)."
-  - "CHURCH_MOVE_IN is unset in production (the platform's own church only). Switch on a Thursday."
 decisions:
+  - "Switched on for every church on 2026-11-11, a Wednesday, on Kevin's word ('switch it on for every church'): CHURCH_MOVE_IN=on on kmj-intake-server and kmj-intake-worker."
   - "Its own two tables, not businesses.settings: a room saved item by item would race every other settings write."
   - "Files go to the private business-documents bucket under the church's folder; the church never gets a link back, the platform owner gets 15-minute links."
   - "Giving has no hand-in: its state is Stripe's."
