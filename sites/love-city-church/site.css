@@ -991,6 +991,9 @@ dl, dd { margin: 0; }
 .live-watch { padding-top: 0; }
 .live-grid { display: grid; gap: 48px; align-items: start; }
 .live-latest .embed { aspect-ratio: 16 / 9; margin-bottom: 14px; }
+.live-wait { margin: 0 0 14px; color: var(--muted); }
+.live-links { gap: 12px 28px; }
+.live-latest [hidden] { display: none; }
 @media (min-width: 900px) { .live-grid { grid-template-columns: 5fr 7fr; gap: 64px; } }
 
 /* ---------- Footer ---------- */

@@ -26,6 +26,8 @@ SERVE_TIME_TOKENS = {"BUSINESS_EMAIL", "PRODUCTS_SECTION", "GALLERY_SECTION", "T
 EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}")
 OLD_RECIPIENTS = ("cityofloveoutreach@gmail.com", "lovecitychurchmi@gmail.com",
                   "colmprayer@gmail.com", "kmccloudjrministries@gmail.com")
+# The church's YouTube channel's live player (@lovecitychurch).
+LIVE_EMBED = "https://www.youtube-nocookie.com/embed/live_stream?channel=UCb5vWtszeeCfdI98_mZFSrg"
 
 
 def _load_build():
@@ -243,6 +245,24 @@ def test_thursday_is_never_tied_to_the_church_address(pages):
     thursday = next(line for line in js.splitlines() if "day: 4" in line)
     assert "Allen" not in thursday and "where: ''" in thursday, thursday
     assert "' at 1084 Allen Ave'" not in js.split("'Happening now: '")[1].split(";")[0]
+
+
+def test_watch_plays_the_churchs_youtube_live_and_links_both_streams(build, pages):
+    """Love City streams to YouTube (@lovecitychurch) and Facebook. The
+    Watch page holds the channel's live player (privacy-enhanced, by channel
+    id, so it plays whatever is live), links to both, and no longer says
+    Facebook is the only place to catch the service live. Every page's
+    footer links the channel."""
+    watch = pages["watch"]
+    assert build.LINKS["YOUTUBE_LIVE_EMBED"] == LIVE_EMBED
+    assert f'data-live-src="{LIVE_EMBED}"' in watch
+    assert 'href="https://www.youtube.com/@lovecitychurch/live"' in watch
+    assert f'href="{build.LINKS["FACEBOOK_URL"]}"' in watch
+    assert "Follow Love City Church on Facebook to catch us live" not in watch
+    # One id per page: the live section is labelled by its own heading.
+    assert watch.count('id="watch-title"') == 1 and 'aria-labelledby="watch-live-title"' in watch
+    for name, page in pages.items():
+        assert 'href="https://www.youtube.com/@lovecitychurch">YouTube</a>' in page, name
 
 
 def _contrast(a, b):
@@ -744,4 +764,47 @@ def test_form_submission_without_random_uuid(browser, pages, missing):
     _send_prayer(page, failed)
     assert page.evaluate("window.__sent.at(-1).body.submission_id") != key
     assert not errors
+    ctx.close()
+
+
+def _watch_at(browser, pages, when):
+    from datetime import datetime, timezone
+    ctx = _context(browser, pages, viewport={"width": 1440, "height": 900}, reduced_motion="reduce")
+    page = ctx.new_page()
+    page.clock.set_fixed_time(datetime.fromisoformat(when).astimezone(timezone.utc))
+    page.goto(ORIGIN + "watch")
+    state = page.evaluate("""() => {
+        const p = document.querySelector('[data-live-player]');
+        return {src: p.querySelector('iframe').getAttribute('src'),
+                title: p.querySelector('iframe').title,
+                label: p.querySelector('[data-live-label]').textContent,
+                wait: !p.querySelector('[data-live-wait]').hidden,
+                open: getComputedStyle(p.querySelector('[data-live-open]')).display !== 'none'};
+    }""")
+    return ctx, page, state
+
+
+@pytest.mark.parametrize("when", ["2026-10-18T11:30:00-04:00",   # Sunday service
+                                  "2026-10-18T10:45:00-04:00",   # 15 minutes before
+                                  "2026-10-22T18:10:00-04:00"])  # Thursday Bible study
+def test_during_a_gathering_the_watch_page_plays_the_live_stream(browser, pages, when):
+    ctx, _, state = _watch_at(browser, pages, when)
+    assert state["src"] == LIVE_EMBED and state["title"] == "Love City Church live stream"
+    assert state["label"] == "Live from Love City" and state["wait"] and not state["open"]
+    ctx.close()
+
+
+@pytest.mark.parametrize("when", ["2026-10-20T12:00:00-04:00",   # a Tuesday
+                                  "2026-10-18T13:31:00-04:00",   # after Sunday service
+                                  "2026-10-18T10:44:00-04:00"])  # too early
+def test_between_gatherings_it_shows_the_latest_message_until_asked(browser, pages, build, when):
+    """The live player has nothing to show between services, so the
+    latest message stays; "Open the live player" swaps it in on the page
+    (a special service) without leaving for YouTube."""
+    ctx, page, state = _watch_at(browser, pages, when)
+    assert state["src"] == build.LINKS["SUBSPLASH_LATEST"] and state["open"] and not state["wait"]
+    page.click("[data-live-open]")
+    assert page.url == ORIGIN + "watch"
+    assert page.evaluate("document.querySelector('[data-live-player] iframe').getAttribute('src')") == LIVE_EMBED
+    assert page.evaluate("getComputedStyle(document.querySelector('[data-live-open]')).display") == "none"
     ctx.close()
