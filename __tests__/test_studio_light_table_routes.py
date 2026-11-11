@@ -39,6 +39,8 @@ def first_handler(method: str, path: str):
 @pytest.mark.parametrize('method,path,handler', [
     ('GET', f'/ai/images/studio/{BIZ}', studio_light_table.studio_status),
     ('POST', f'/ai/images/studio/{BIZ}/design', studio_light_table.studio_design),
+    ('POST', f'/ai/images/studio/{BIZ}/read', studio_light_table.studio_read),
+    ('PUT', f'/ai/images/studio/{BIZ}/people', studio_light_table.studio_people),
 ])
 def test_the_light_table_answers_its_own_routes(method, path, handler):
     assert first_handler(method, path) is handler
