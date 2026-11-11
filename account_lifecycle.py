@@ -208,6 +208,10 @@ BUSINESS_CHILD_TABLES: List[str] = [
     # expense, so it goes before contacts and expenses. The limit and the
     # budget lines name nothing by id.
     "church_check_requests", "church_check_settings",
+    # The Move-in room (church_move_in.py): what a new church handed in. A
+    # file's row before its item; neither names anything else by id. The
+    # files themselves are in business-documents under the church's folder.
+    "church_move_files", "church_move_items",
     # The church register (church_register.py): each entry cites its people
     # and its Prayer & care ask by id, so it goes before both.
     "church_register_entries",
@@ -718,6 +722,7 @@ async def _erase_ledger(client: httpx.AsyncClient, business_id: str,
 # exists, or PostgREST answers 400 and the delete is skipped as "missing".
 _DELETE_SELECT = {
     "marketing_desks": "business_id",       # keyed by the business
+    "church_move_items": "business_id",     # keyed by (business_id, item)
     "marketing_link_clicks": "post_id",     # keyed by (post_id, day)
     "marketing_link_hits": "link_id",       # keyed by (link_id, day)
 }
@@ -963,6 +968,10 @@ _IMPORT_SKIP = {
     # A sheet photo cites its count and the file under the old business's
     # storage prefix; the export keeps the rows.
     "giving_count_photos",
+    # A file handed in at move-in names its file under the old business's
+    # storage prefix; the export keeps the rows. (The items and their answers
+    # come back.)
+    "church_move_files",
     # A check request cites its person and its expense by id; same reason.
     # The export keeps them; a restored church keeps its limit and budget
     # lines. (Receipts live in business-documents under the church's own
