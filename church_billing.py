@@ -252,7 +252,8 @@ async def _tell_owner(biz: Dict[str, Any], record: Dict[str, Any]) -> bool:
         from email_sender import send_via_resend
         name = str(biz.get("name") or "A church")
         plan = feature_gates.plan_of(biz) or record.get("plan") or ""
-        paid = "Founding church, no charge for the move." if record.get("founding") else             f"Paid ${int(record.get('amount_cents') or 0) // 100:,} for the move."
+        paid = ("Founding church, no charge for the move." if record.get("founding")
+                else f"Paid ${int(record.get('amount_cents') or 0) // 100:,} for the move.")
         lines = [f"{name} asked to be moved over.",
                  f"Plan: {billing_limits.PLAN_DISPLAY.get(plan, plan) or 'not known'}.",
                  f"Moving from: {record.get('moving_from') or 'not said'}.",
