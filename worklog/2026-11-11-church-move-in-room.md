@@ -4,15 +4,15 @@ date: 2026-11-11
 agent: Claude Code (Claude Fable 5.2)
 asked: "create upload areas of the information that they need to hand into the system and I don't directly have to load it"
 status: in progress
-prs: [kmj-intake-server#1792]
-migrations: [supabase/APPLY-2026-11-11-church-move-in.sql (not applied)]
+prs: [kmj-intake-server#1792, solutionist-studio#1513]
+migrations: [supabase/APPLY-2026-11-11-church-move-in.sql (applied 2026-11-11)]
 left_undone:
-  - "The office-app page and the Mission Control view are a frontend PR, not built when this was written."
+  - "The office-app page is solutionist-studio#1513, a draft waiting for Kevin to see it. The Mission Control view of what was handed in isn't built."
   - "Nothing handed in is loaded automatically yet: services, kids rooms, groups, office logins and safety officers are read and set up by hand from the room."
   - "A church isn't told when we ask for a change; it sees the note the next time it opens the room."
   - "No ready-for-Sunday check (how many people on file can sign in)."
-  - "CHURCH_MOVE_IN is unset in production (the platform's own church only). Switch on a Thursday."
 decisions:
+  - "Switched on for every church on 2026-11-11, a Wednesday, on Kevin's word ('switch it on for every church'): CHURCH_MOVE_IN=on on kmj-intake-server and kmj-intake-worker."
   - "Its own two tables, not businesses.settings: a room saved item by item would race every other settings write."
   - "Files go to the private business-documents bucket under the church's folder; the church never gets a link back, the platform owner gets 15-minute links."
   - "Giving has no hand-in: its state is Stripe's."
