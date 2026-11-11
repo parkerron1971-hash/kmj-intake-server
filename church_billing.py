@@ -236,6 +236,41 @@ def _ticket(biz: Dict[str, Any], record: Dict[str, Any]) -> None:
     })
 
 
+async def _tell_owner(biz: Dict[str, Any], record: Dict[str, Any]) -> bool:
+    """One plain email to the platform owner the moment a church asks for its
+    move (2026-11-10). The ticket sat in Mission Control until someone opened
+    Today, and a move starts a clock: the church's first Sunday. Best effort:
+    the ticket is the record, so a send that fails never fails the request.
+    One email per ask (Stripe redelivers a paid session; Resend drops the
+    repeat by its key)."""
+    to = (os.environ.get("PLATFORM_OWNER_EMAIL") or "").strip()
+    if not to:
+        return False
+    try:
+        import html
+        import billing_limits
+        from email_sender import send_via_resend
+        name = str(biz.get("name") or "A church")
+        plan = feature_gates.plan_of(biz) or record.get("plan") or ""
+        paid = "Founding church, no charge for the move." if record.get("founding") else             f"Paid ${int(record.get('amount_cents') or 0) // 100:,} for the move."
+        lines = [f"{name} asked to be moved over.",
+                 f"Plan: {billing_limits.PLAN_DISPLAY.get(plan, plan) or 'not known'}.",
+                 f"Moving from: {record.get('moving_from') or 'not said'}.",
+                 paid,
+                 "The ticket is in Mission Control, under Today."]
+        await send_via_resend(
+            to_email=to, to_name=None,
+            from_email=os.environ.get("RESEND_FROM_EMAIL") or "noreply@mysolutionist.app",
+            from_name="Solutionist", subject=f"A church asked for its move: {name}"[:150],
+            # Plain text only: a church's name never becomes email markup.
+            body="".join(f"<p>{html.escape(x)}</p>" for x in lines), reply_to=None,
+            idempotency_key=f"church-move-{biz.get('id')}-{record.get('session_id') or 'founding'}"[:200])
+        return True
+    except Exception as e:
+        logger.warning("church move: the owner's email didn't send for %s: %s", biz.get("id"), e)
+        return False
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -283,6 +318,7 @@ async def request_move(body: MoveBody, user: AuthedUser = Depends(require_user))
                   "moving_from": moving_from, "requested_at": _now()}
         await _merge_setting(str(biz["id"]), MOVE, record)
         await asyncio.to_thread(_ticket, biz, record)
+        await _tell_owner(biz, record)
         return {"ok": True, "move": record, "founding": True}
     cents = _move_cents(plan)
     import billing_limits
@@ -321,4 +357,5 @@ async def record_paid_move(business_id: str, session: Dict[str, Any]) -> Optiona
         await asyncio.to_thread(_ticket, biz, record)
     except Exception as e:
         return f"move ticket failed: {e}"
+    await _tell_owner(biz, record)
     return None
