@@ -40,6 +40,9 @@ _LIMITS: Dict[str, Tuple[int, int]] = {
     # A photo of a paper count sheet read by Claude (giving_sheets.py), per
     # church: a Sunday has a sheet or two; this stops a retake loop.
     "giving_sheet_read": (int(os.environ.get("RL_GIVING_SHEET_READ_PER_HOUR", "20")), 3600),
+    # The Light Table's "Tell me about it" (studio_light_table.py), per
+    # church: a flyer takes a message or three; this stops a send loop.
+    "studio_read": (int(os.environ.get("RL_STUDIO_READ_PER_HOUR", "40")), 3600),
     # The agent-facing MCP surface. Tighter than the practitioner buckets
     # and checked with allow_strict() — an external agent that loops is a
     # different problem from a person clicking twice.

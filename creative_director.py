@@ -141,7 +141,7 @@ async def owned_reference(client, biz, ref):
     return iid, carried
 
 
-async def settle_references(client, biz, saved, refs, inherited):
+async def settle_references(client, biz, saved, refs, inherited, *, logo=True):
     explicit_roles = {r['role'] for r in refs}
     for ref in inherited:
         if ref['role'] in explicit_roles or ref['id'] in {r['id'] for r in refs}: continue
@@ -150,8 +150,9 @@ async def settle_references(client, biz, saved, refs, inherited):
         await images.original(client, await images.artwork(client, biz['id'], ref['id']))
         refs.append(ref)
     # Explicit current logo always overrides remembered assets. Never add an
-    # unrelated style benchmark to a current reference.
-    if not any(r['role'] == 'logo' for r in refs) and saved.get('logo_id') and len(refs) < 4:
+    # unrelated style benchmark to a current reference. An owner who turned
+    # the logo off for this design (the Light Table's "Your logo") gets none.
+    if logo and not any(r['role'] == 'logo' for r in refs) and saved.get('logo_id') and len(refs) < 4:
         iid = str(UUID(saved['logo_id']))
         await images.original(client, await images.artwork(client, biz['id'], iid))
         refs.append({'id': iid, 'role': 'logo', 'use': 'Previously owner-approved original logo'})
@@ -195,10 +196,14 @@ def business_facts(business_id):
     return out
 
 
-async def prepare_for_business(client, biz, req, *, owner_request, owner_context='', clip_id=None):
+async def prepare_for_business(client, biz, req, *, owner_request, owner_context='', clip_id=None, extra=None, logo=True):
     """The Director for a practitioner's own business. References are images
     already in its gallery; facts are what the business publishes. Spend is
-    held to this business's own daily limit and credits, not the platform's."""
+    held to this business's own daily limit and credits, not the platform's.
+
+    `extra` (server code only): an art direction the owner picked from
+    DIRECTIONS, who appears when people are drawn, each printed line's role,
+    and facts the server read itself (an event's own sign-up prices)."""
     check_copy(req.exact_copy)
     biz = await images.business(client, biz['id'])
     saved = await profile(client, biz)
@@ -210,12 +215,25 @@ async def prepare_for_business(client, biz, req, *, owner_request, owner_context
         inherited.extend(carried)
         if iid not in {r['id'] for r in refs}:
             refs.append({'id': iid, 'role': ref.role, 'use': ref.use})
-    refs = await settle_references(client, biz, saved, refs, inherited)
+    refs = await settle_references(client, biz, saved, refs, inherited, logo=logo)
     facts = await asyncio.to_thread(business_facts, biz['id'])
+    extra = extra or {}
+    if isinstance(extra.get('facts'), dict):
+        facts = {**facts, **extra['facts']}
     spec = {'version': VERSION, 'scope': 'business', 'goal': req.goal, 'copy': req.exact_copy, 'references': refs,
         'owner_request': owner_request[:5000], 'owner_context': owner_context[-5000:],
         'facts': facts, 'preferences': saved, 'max_renders': 2,
         'phase': 'queued', 'attempts': 0, 'review': None}
+    from chief_flyer_direction import DIRECTIONS
+    if extra.get('direction') in DIRECTIONS:
+        spec['direction'] = extra['direction']
+    if isinstance(extra.get('people'), str) and extra['people'].strip():
+        spec['people'] = extra['people'].strip()[:600]
+    roles = extra.get('copy_roles')
+    if isinstance(roles, list):
+        kept = [[str(r[0])[:40], str(r[1])] for r in roles if isinstance(r, (list, tuple)) and len(r) == 2 and str(r[1]) in req.exact_copy]
+        if kept:
+            spec['copy_roles'] = kept
     if clip_id:
         # A clip's cover says which clip it belongs to. The clip itself cannot
         # carry the link: preserve_media_review makes its configuration permanent.
@@ -248,13 +266,14 @@ def flyer_request(action):
         raise HTTPException(422, 'Describe the flyer and the words it should say, with at most four saved images.') from None
 
 
-async def handle_design_flyer(client, biz, action):
+async def handle_design_flyer(client, biz, action, *, extra=None, logo=True):
     """Chief's flyer for a practitioner: planned, drawn, checked, repaired once.
 
     The request identity is generate_image's, so a replayed turn, or a build
     checking its own step, finds this one row instead of paying twice.
     What people read names what they asked for (a thumbnail, a cover...);
-    the verb and the machinery stay design_flyer."""
+    the verb and the machinery stay design_flyer. `extra` and `logo` come
+    from server code (the Light Table's brief), never from the action."""
     from chief_code import design_noun
     noun = design_noun(action.get('goal') or action.get('prompt'), action.get('size'), action.get('owner_request'))
     identity = images.turn_id.get() or str(uuid4())
@@ -278,7 +297,7 @@ async def handle_design_flyer(client, biz, action):
             {'id': iid, 'role': role[0], 'use': role[1]} for iid, role in found if role]
     req = flyer_request(action)
     spec = await prepare_for_business(client, biz, req, owner_request=str(action.get('owner_request') or req.goal),
-        owner_context=str(action.get('owner_context') or ''), clip_id=action.get('clip_id'))
+        owner_context=str(action.get('owner_context') or ''), clip_id=action.get('clip_id'), extra=extra, logo=logo)
     result = await images.create(images.CreateImage(business_id=biz['id'], request_id=request_id, prompt=req.goal,
         quality=req.quality, size=req.size, reference_ids=[r['id'] for r in spec['references']]), client, director=spec)
     return {'type': 'design_flyer', 'label': f'Designing your {noun}', 'image': result, 'nav': None,
@@ -417,7 +436,8 @@ def validate_plan(plan, spec):
 
 async def make_plan(client, row, spec, loaded):
     content = [{'type': 'text', 'text': json.dumps({k: spec[k] for k in
-        ('goal', 'copy', 'references', 'owner_request', 'owner_context', 'facts', 'preferences')}, ensure_ascii=False)}]
+        ('goal', 'copy', 'copy_roles', 'references', 'owner_request', 'owner_context', 'facts', 'preferences', 'people')
+        if k in spec}, ensure_ascii=False)}]
     for ref in spec['references']:
         content.extend([{'type': 'text', 'text': f"Reference {ref['id']} — {ref['role']}: {ref['use']}"}, vision(loaded[ref['id']])])
     instruction = WORKFLOW + '''
@@ -479,6 +499,17 @@ def direction_brief(spec):
     owner's own direction and wins; a remembered style shapes the one chosen."""
     if any(r['role'] in ('style', 'edit_target') for r in spec['references']):
         return ''
+    from chief_flyer_direction import DIRECTIONS
+    chosen = spec.get('direction')
+    if chosen in DIRECTIONS:
+        # The owner picked this style for this design (the Light Table's
+        # "Pick a style"): their current choice, so it outranks a saved style.
+        return f"""
+ART DIRECTION (the owner picked this style for this design; it overrides any remembered style).
+Use this direction and commit to it fully; name it at the start of concept:
+- {chosen}: {DIRECTIONS[chosen]}
+Remembered owner preferences, when present, may set the palette inside it, never a different look.
+""" + QUALITY_BAR
     saved = spec.get('preferences') or {}
     if saved.get('concept') or saved.get('typography'):
         # Remember this style: a series (a sermon's clip covers, a month of
@@ -489,20 +520,22 @@ this piece reads as part of the same set: the same kind of concept, the same typ
 materials and light given in preferences. Change only what this brief needs: the subject, the words
 and the layout that fits them. Do not drift to a different look, and do not settle for a plain one.
 """
-    from chief_flyer_direction import DIRECTIONS
     options = '\n'.join(f'- {key}: {text}' for key, text in DIRECTIONS.items())
     return ("""
 ART DIRECTION (no style reference was supplied). Choose the ONE direction below that best fits
 this message and commit to it fully; name it at the start of concept. Remembered owner
 preferences, when present, set the palette and type character inside that direction.
-""" + options + """
+""" + options + QUALITY_BAR)
+
+
+QUALITY_BAR = """
 The result must look like a poster from a strong design studio, never a template: one dominant
 idea, a clear focal point, oversized expressive typography with real hierarchy and scale contrast,
 a deliberate limited palette with strong contrast, and photographic or material depth. Brand
 colours are a palette to use with intent, not a reason to be quiet. Never settle for a centred
 stack of plain text on a flat or gradient field, generic circles or arcs, stock leaves or
 plants as decoration, clip-art icons, or soft corporate calm.
-""")
+"""
 
 
 # Kevin, 2026-10-06: "my shirt words are not complete on there". His shirt
@@ -523,6 +556,9 @@ LIKENESS = ('LIKENESS FIRST: the person in the subject photos must be recognisab
 def render_prompt(plan, spec, repair=''):
     return ('Create the artwork for this production plan.\n' + json.dumps(plan.model_dump(mode='json'), ensure_ascii=False)
         + '\nONLY VISIBLE COPY (verbatim):\n' + json.dumps(spec['copy'], ensure_ascii=False)
+        + (('\nEach line\'s role, for the hierarchy (the words are only those above; never print the role names): '
+            + json.dumps(spec['copy_roles'], ensure_ascii=False)) if spec.get('copy_roles') else '')
+        + (('\nPEOPLE: ' + spec['people']) if spec.get('people') else '')
         + '\nImage reference roles in input order: ' + json.dumps([r for r in spec['references'] if r['role'] not in ('logo', 'product')])
         + '\nProtected logos/product images will be placed afterward at the specified bounds. Leave those areas as '
         'continuous background, not white panels, blank rectangles, placeholder labels or invented assets. Do not draw any logo or UI. '
