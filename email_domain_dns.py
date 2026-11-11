@@ -146,17 +146,34 @@ def compare_mx(expected_host: str, expected_priority: Any,
     return {"found": bool(found), "match": match}
 
 
+def compare_cname(expected_target: str, found: List[str]) -> Dict[str, Any]:
+    """A CNAME matches when the host points at the expected target.
+    Hostnames compare without case or a trailing dot."""
+    exp = (expected_target or "").strip().lower().rstrip(".")
+    hits = [f for f in found or [] if (f or "").strip().lower().rstrip(".") == exp]
+    return {"found": bool(found), "match": bool(exp) and bool(hits)}
+
+
 def evaluate_record(rec: Dict[str, Any], found_txt: List[str],
-                    found_mx: List[Tuple[int, str]]) -> Dict[str, Any]:
+                    found_mx: List[Tuple[int, str]],
+                    found_cname: Optional[List[str]] = None) -> Dict[str, Any]:
     """One record + what DNS returned for its host → the UI's verdict.
 
     `found_values` is what we saw, rendered for a human, so the screen
-    can show "found: p=MIGfMA0…tYpo" next to the value we asked for."""
+    can show "found: p=MIGfMA0…tYpo" next to the value we asked for.
+
+    CNAME rows (Resend's Forge return path, e.g. `rsend` →
+    send.forge.rmta.net, seen on lovecityc.com 2026-11-11) are compared
+    by where the host points. A TXT lookup would follow the CNAME and
+    report the TARGET's SPF as "a different value" on a correct record."""
     kind = (rec.get("record") or "").upper()
     rtype = (rec.get("type") or "").upper()
     if rtype == "MX":
         verdict = compare_mx(rec.get("value") or "", rec.get("priority"), found_mx)
         shown = [f"{p} {h}" for p, h in (found_mx or [])]
+    elif rtype == "CNAME":
+        verdict = compare_cname(rec.get("value") or "", found_cname or [])
+        shown = list(found_cname or [])
     elif kind == "DMARC":
         verdict = compare_dmarc(found_txt)
         shown = list(found_txt or [])
@@ -374,7 +391,7 @@ def namecheap_note(provider_key: Optional[str], mail: Dict[str, Any],
         steps.append(f"{zone} doesn't receive email today, so there's nothing else to keep.")
     steps.append(
         "Add the MX record from the records list under Custom MX too. Namecheap's "
-        "priority box is the unlabeled one after Value. The TXT records from the "
+        "priority box is the unlabeled one after Value. The other records from the "
         "list go in Host Records as usual.")
     if keep and spf:
         steps.append(
@@ -465,6 +482,19 @@ def _mx_sync(name: str, strict: bool = False) -> List[Tuple[int, str]]:
     return [(int(r.preference), str(r.exchange).rstrip(".")) for r in answers]
 
 
+def _cname_sync(name: str) -> List[str]:
+    """Where `name` points, one hop. Empty when it isn't a CNAME."""
+    import dns.resolver
+    try:
+        answers = _resolver().resolve(name, "CNAME")
+    except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer):
+        return []
+    except Exception as e:
+        logger.info(f"CNAME lookup {name} failed: {type(e).__name__}")
+        return []
+    return [str(r.target).rstrip(".") for r in answers]
+
+
 def _ns_zone_sync(domain: str) -> Tuple[str, List[str]]:
     """(zone, nameservers) for the domain, walking up one label when the
     exact name has none (a `mail.studiok.com` sending domain still lives
@@ -506,6 +536,10 @@ async def lookup_ns(domain: str) -> List[str]:
     return await _in_thread(_ns_sync, domain)
 
 
+async def lookup_cname(name: str) -> List[str]:
+    return await _in_thread(_cname_sync, name)
+
+
 async def lookup_apex_mx(zone: str) -> List[Tuple[int, str]]:
     """The zone's own MX. Raises when the lookup itself failed."""
     return await _in_thread(_mx_sync, zone, True)
@@ -528,9 +562,12 @@ async def check_records(domain: str, records: List[Dict[str, Any]]) -> Dict[str,
     fqdns = [fqdn_for(r.get("name"), domain) for r in recs]
 
     async def _one(rec: Dict[str, Any], host: str):
-        if (rec.get("type") or "").upper() == "MX":
-            return [], await lookup_mx(host)
-        return await lookup_txt(host), []
+        rtype = (rec.get("type") or "").upper()
+        if rtype == "MX":
+            return [], await lookup_mx(host), []
+        if rtype == "CNAME":
+            return [], [], await lookup_cname(host)
+        return await lookup_txt(host), [], []
 
     results = await asyncio.gather(
         *[_one(r, h) for r, h in zip(recs, fqdns)],
@@ -544,10 +581,10 @@ async def check_records(domain: str, records: List[Dict[str, Any]]) -> Dict[str,
     all_ok = True
     for rec, host, res in zip(recs, fqdns, results[:-1]):
         if isinstance(res, Exception):
-            found_txt, found_mx = [], []
+            found_txt, found_mx, found_cname = [], [], []
         else:
-            found_txt, found_mx = res
-        verdict = evaluate_record(rec, found_txt, found_mx)
+            found_txt, found_mx, found_cname = res
+        verdict = evaluate_record(rec, found_txt, found_mx, found_cname)
         row = {**rec, "fqdn": host, "dns": verdict}
         out.append(row)
         if not verdict["match"]:
