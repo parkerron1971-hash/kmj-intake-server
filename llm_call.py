@@ -94,6 +94,7 @@ _SELF_METERING = frozenset({
     "errand_driver",  # logs each browser-toolset turn under task=errand
     "chief_fast_track",  # the two-track reply's Haiku calls (/chief/opener …)
     "chief_site_view",  # view_website's written look at a screenshot, endpoint=view_website
+    "site_kit",  # the kit's words + custom section, endpoint=site_kit
 })
 
 # Frames to walk past when deciding who the caller is. model_ladder
