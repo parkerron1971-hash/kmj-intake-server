@@ -391,6 +391,10 @@ app.include_router(church_help_router)
 # (2026-10-27; CHURCH_CHECKS off | owner | on).
 from church_checks import router as church_checks_router
 app.include_router(church_checks_router)
+# The Move-in room: what a new church hands in, and the platform owner's look at it.
+from church_move_in import router as church_move_in_router, platform_router as church_move_in_platform_router
+app.include_router(church_move_in_router)
+app.include_router(church_move_in_platform_router)
 # The church register: baptisms, dedications, weddings, funerals and
 # membership, with certificates (2026-10-27; CHURCH_REGISTER off | owner | on).
 from church_register import router as church_register_router
