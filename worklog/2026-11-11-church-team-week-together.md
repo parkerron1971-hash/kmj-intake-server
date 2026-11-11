@@ -2,7 +2,7 @@
 title: The office team page reads its logins side by side
 date: 2026-11-11
 agent: Claude Code (Claude Fable 5.2)
-asked: "make the fix" (to: the pastor's band on a church's Home took about 30 seconds to fill in on a fresh load, mostly waiting on the office team)
+asked: "make the fix"
 status: shipped
 prs: [kmj-intake-server (this PR)]
 migrations: []
