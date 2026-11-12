@@ -473,7 +473,7 @@ def revoke(member_id: str, biz: str,
     saved = sb_clients.sb_patch_as_service(
         f"/business_users?id=eq.{quote(str(member_id), safe='')}&business_id=eq.{quote(str(biz), safe='')}",
         {"status": "revoked", "revoked_at": _now_iso()})
-    if not isinstance(saved, list) or not saved:
+    if not isinstance(saved, list):  # None = the write failed
         raise HTTPException(503, "That didn't save. Try again.")
     return {"ok": True, **hand_back_login(biz, target[0].get("user_id"))}
 
