@@ -13,6 +13,11 @@ now do too, from the same hourly sweep:
                  marked told, nothing sent. The email failing lets the claim
                  go, so the next sweep tries again; the push alone never
                  holds a claim (most phones have no subscription yet).
+                 Where church assignments are open for the church
+                 (church_over.church_open), several new hand-offs to one
+                 login in one sweep (a first assignment is 5 to 9 at once)
+                 are one email and one push, naming who handed them out
+                 ("Jessica gave you 7 things for your first four weeks").
   Late ......... in the church's morning (church_leader_tasks.LATE_FROM to
                  LATE_UNTIL, its own clock): an open task past its due date,
                  told before today, goes up once (seat_late_told_at) to whoever
@@ -171,10 +176,10 @@ def render(biz: Dict[str, Any], text: str, preheader: str, link: str = "", label
         footer_note="Sent by your church office")
 
 
-def _push(user_id: str, biz_id: str, title: str, body: str, tag: str) -> None:
+def _push(user_id: str, biz_id: str, title: str, body: str, tag: str, nav: str = NAV) -> None:
     try:
         import push_notifications
-        push_notifications.send_to_user(user_id, title=title[:80], body=body[:160], nav=NAV, tag=tag[:60],
+        push_notifications.send_to_user(user_id, title=title[:80], body=body[:160], nav=nav, tag=tag[:60],
                                         business_id=biz_id)
     except Exception:
         logger.info("office tasks: a push didn't go (business %s)", biz_id[:8], exc_info=True)
@@ -192,39 +197,103 @@ def _claim(biz_id: str, t: Dict[str, Any], column: str, stamp: str) -> bool:
 
 
 def tell_new(biz: Dict[str, Any], rows: List[Dict[str, Any]], now: datetime, stats: Dict[str, int]) -> None:
+    """Each new hand-off to a login, told once. Where church assignments are
+    open for the church (church_over.church_open), a login handed several in
+    one sweep (a first assignment is 5 to 9 at once) gets one email and one
+    push for all of them, naming who handed them out; one alone is told as
+    before."""
     clt = _clt()
     b = str(biz["id"])
-    church = clt._plain(biz.get("name")) or "Your church"
     tz = clt.zone(biz)
-    today = now.astimezone(tz).date() if tz else None
-    names = clt.handers(biz, {str(r.get("assigned_to")) for r in rows} | {str(r.get("handed_by") or "") for r in rows})
-    link = _link(b)
-    reply_to = clt._office_email(biz)
+    w = {"church": clt._plain(biz.get("name")) or "Your church", "today": now.astimezone(tz).date() if tz else None,
+         "names": clt.handers(biz, {str(r.get("assigned_to")) for r in rows} | {str(r.get("handed_by") or "") for r in rows}),
+         "link": _link(b), "reply_to": clt._office_email(biz)}
+    import church_over
+    grouped = church_over.church_open(b)
+    by_login: Dict[str, List[Dict[str, Any]]] = {}
     for t in rows:
-        tid, uid = str(t["id"]), str(t.get("assigned_to") or "")
-        stamp = _iso(now)
-        if not uid or not _claim(b, t, "seat_told_at", stamp):
+        by_login.setdefault(str(t.get("assigned_to") or ""), []).append(t)
+    for uid, tasks in by_login.items():
+        if not uid:
             continue
-        if str(t.get("handed_by") or "") == uid:
-            stats["office_self"] += 1
+        if grouped and len(tasks) > 1:
+            _tell_group(biz, uid, tasks, now, stats, w)
             continue
-        who = person(biz, uid, names)
-        if not who["email"]:
-            stats["office_no_email"] += 1
-            continue
-        by = names.get(str(t.get("handed_by") or ""), "")
-        title = clt._plain(t.get("title")) or "A task"
-        try:
-            html = render(biz, handed_text(who["name"], t, today, by), title[:80], link, "Open your tasks")
-            clt.deliver(biz, who["email"], who["name"], f"{church}: a task for you", html,
-                        f"office-task-{tid}-{uid}", reply_to=reply_to)
-        except Exception:
-            logger.warning("office tasks: a hand-off email failed (task %s)", tid[:8], exc_info=True)
-            clt._release(b, tid, "seat_told_at", stamp)
-            stats["office_unsent"] += 1
-            continue
-        _push(uid, b, "A task for you", f"{by + ': ' if by else ''}{title}", f"task-{tid}")
-        stats["office_told"] += 1
+        for t in tasks:
+            stamp = _iso(now)
+            if not _claim(b, t, "seat_told_at", stamp):
+                continue
+            if str(t.get("handed_by") or "") == uid:
+                stats["office_self"] += 1
+                continue
+            _tell_one(biz, uid, t, stamp, stats, w)
+
+
+def _tell_one(biz: Dict[str, Any], uid: str, t: Dict[str, Any], stamp: str, stats: Dict[str, int],
+              w: Dict[str, Any]) -> None:
+    """One claimed hand-off: its email and push, as the sweep always sent it."""
+    clt = _clt()
+    b, tid = str(biz["id"]), str(t["id"])
+    names = w["names"]
+    who = person(biz, uid, names)
+    if not who["email"]:
+        stats["office_no_email"] += 1
+        return
+    by = names.get(str(t.get("handed_by") or ""), "")
+    title = clt._plain(t.get("title")) or "A task"
+    try:
+        html = render(biz, handed_text(who["name"], t, w["today"], by), title[:80], w["link"], "Open your tasks")
+        clt.deliver(biz, who["email"], who["name"], f"{w['church']}: a task for you", html,
+                    f"office-task-{tid}-{uid}", reply_to=w["reply_to"])
+    except Exception:
+        logger.warning("office tasks: a hand-off email failed (task %s)", tid[:8], exc_info=True)
+        clt._release(b, tid, "seat_told_at", stamp)
+        stats["office_unsent"] += 1
+        return
+    _push(uid, b, "A task for you", f"{by + ': ' if by else ''}{title}", f"task-{tid}")
+    stats["office_told"] += 1
+
+
+def _tell_group(biz: Dict[str, Any], uid: str, tasks: List[Dict[str, Any]], now: datetime, stats: Dict[str, int],
+                w: Dict[str, Any]) -> None:
+    """Several new hand-offs to one login in one sweep: each claimed, then
+    one email and one push for all of them ("Jessica gave you 7 things for
+    your first four weeks"). Handed to yourself: told, nothing sent. The
+    email failing lets every claim it carried go, so the next sweep tries
+    again."""
+    import church_assignments as cas
+    clt = _clt()
+    b = str(biz["id"])
+    stamp = _iso(now)
+    claimed = [t for t in tasks if _claim(b, t, "seat_told_at", stamp)]
+    send = [t for t in claimed if str(t.get("handed_by") or "") != uid]
+    stats["office_self"] += len(claimed) - len(send)
+    if len(send) <= 1:
+        for t in send:
+            _tell_one(biz, uid, t, stamp, stats, w)
+        return
+    who = person(biz, uid, w["names"])
+    if not who["email"]:
+        stats["office_no_email"] += len(send)
+        return
+    startup = cas.startup_of(b, [t["id"] for t in send])
+    first = all(str(t["id"]) in startup for t in send)
+    by = [w["names"].get(h, "") for h in dict.fromkeys(str(t.get("handed_by") or "") for t in send)]
+    what, text, push = cas.grouped_text(who["name"], by, send, w["today"], first,
+                                        "They’re on your My week. Mark each one done there when it’s finished.")
+    key = cas.digest(t["id"] for t in send)
+    try:
+        html = render(biz, text, what[:80], w["link"], "Open My week")
+        clt.deliver(biz, who["email"], who["name"], f"{w['church']}: {what}", html, f"office-tasks-{key}-{uid}",
+                    reply_to=w["reply_to"])
+    except Exception:
+        logger.warning("office tasks: a grouped hand-off email failed (business %s)", b[:8], exc_info=True)
+        for t in send:
+            clt._release(b, str(t["id"]), "seat_told_at", stamp)
+        stats["office_unsent"] += len(send)
+        return
+    _push(uid, b, "Your first assignment" if first else "Tasks for you", push, f"tasks-{key}", nav="operate:my-week")
+    stats["office_told"] += len(send)
 
 
 def tell_late(biz: Dict[str, Any], rows: List[Dict[str, Any]], now: datetime, stats: Dict[str, int]) -> None:

@@ -9,7 +9,11 @@ an area to a line; a login that works some areas sees only those.
 
     GET /church/my-week?business_id=          the page (any office login), with
                                               `rhythm`: How your week goes, from
-                                              the duties the login holds (below)
+                                              the duties the login holds (below),
+                                              each on the day the login picked
+                                              where church assignments are open
+                                              (church_assignments), and what's
+                                              stuck and was sent up to them
     GET /church/my-week/status?business_id=   whether this app shows it
     GET /church/my-week/people?business_id=   who a task can be handed to (and
                                               the church's leaders: church_leader_tasks)
@@ -243,6 +247,22 @@ def build(business: Dict[str, Any], user_id: str, email: str, role: str) -> Dict
                       "title": (t.get("title") or "A task").strip(),
                       "detail": "A task handed to you · " + (_due(due, today) if due else "no date"),
                       "door": DOOR["tasks"]})
+    # What's stuck and was sent up to them (church_assignments), until it's
+    # done or no longer stuck, while its switch is open for the church. A read
+    # that fails leaves these lines out; the week stands.
+    import church_over
+    if church_over.church_open(biz):
+        up = sb_clients.sb_get_as_service(
+            f"/tasks?business_id=eq.{_q(biz)}&raised_to=eq.{_q(user_id)}&status=neq.done&stuck_at=not.is.null"
+            "&select=id,title,stuck_note&order=raised_at.desc&limit=20")
+        if isinstance(up, list):
+            for t in up:
+                note = " ".join(str(t.get("stuck_note") or "").split())
+                needs.append({"kind": "raised", "late": True, "area": "office",
+                              "title": f"“{(t.get('title') or 'An assignment').strip()}” is stuck and was sent up to you.",
+                              "detail": note or "Sent up to you", "door": DOOR["tasks"]})
+        else:
+            print(f"[church_my_week] {biz[:8]}: what was sent up wasn't read", flush=True)
     # The whole church: follow-ups with no one, and late ones.
     if whole:
         open_rows = _need(f"/church_follow_ups?business_id=eq.{_q(biz)}&status=in.(open,handed_back)"
@@ -279,7 +299,8 @@ def build(business: Dict[str, Any], user_id: str, email: str, role: str) -> Dict
         needs.append(report)
 
     handed = _handed(biz, now, whole, set(mine_areas))
-    order = {"follow_up": 0, "no_one": 1, "care": 2, "task": 3, "report": 3, "gap": 4, "late": 5, "logins": 6}
+    order = {"raised": 0, "follow_up": 0, "no_one": 1, "care": 2, "task": 3, "report": 3, "gap": 4, "late": 5,
+             "logins": 6}
     needs.sort(key=lambda n: (not n["late"], order.get(n["kind"], 9)))
     return {
         "me": {"role": role, "areas": view["areas"], "by": view["by"], "why": view["why"], "name": me_name},
@@ -524,17 +545,28 @@ def rhythm(business: Dict[str, Any], user_id: str, role: str, now: Optional[date
     import church_monthly_report as cmr
     first_monday = cmr.first_monday(date(today.year, today.month, 1))
     done = _done(business, held, today, now, tz)
+    # The days this login picked (church_assignments, where its switch is
+    # open for the church): each stands in for the catalog's.
+    import church_assignments as cas
+    import church_over
+    assign = church_over.church_open(business)
+    picks = cas.days_for(business, [user_id]).get(str(user_id), {}) if assign else {}
     groups: Dict[str, List[Dict[str, Any]]] = {g: [] for g in GROUP_ORDER}
     for key, d in church_duties.CATALOG.items():
         if key not in held:
             continue
-        group, days, said = placed(d["day"])
+        pick = picks.get(key)
+        group, days, said = placed(cas.day_with(d["day"], pick) if pick else d["day"])
         if group == MONTH:
             is_today = d["day"].strip().lower() == "first monday" and today == first_monday
         else:
             is_today = key_today in days
         item = {"key": key, "label": d["label"], "does": d["does"], "area": d["area"], "when": said, "days": days,
                 "door": DOOR.get(key), "today": is_today}
+        if assign:
+            item["movable"] = cas.movable(key)
+        if pick:
+            item.update(picked=pick, usual=placed(d["day"])[2])
         if key in done:
             item["done"] = done[key]
         for g in (days if group in WEEKDAYS else [group]):

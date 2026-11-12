@@ -29,7 +29,9 @@ fall retreat by Nov 15" couldn't be handed to the youth pastor. Now it can
                  claimed before the send, so two replicas never both send,
                  and let go when the send fails. No email on file: told
                  anyway; the Lead tab still shows it. No member push: no
-                 member_push kind fits a task.
+                 member_push kind fits a task. Where church assignments
+                 are open for the church, several new hand-offs to one
+                 leader in one sweep are one email (church_assignments).
   Late ......... the same sweep, in the church's morning (8 to noon on its
                  own clock): an open task whose due date has passed, and
                  whose leader was told before today, goes up once to whoever
@@ -545,25 +547,79 @@ def tell_new(biz: Dict[str, Any], rows: List[Dict[str, Any]], now: datetime, sta
     tz = zone(biz)
     today = now.astimezone(tz).date() if tz else None
     by = handers(biz, (r.get("handed_by") for r in rows))
+    # Where church assignments are open for the church, a leader handed
+    # several in one sweep (a first assignment is several at once) gets one
+    # email for all of them; one alone is told as before.
+    import church_over
+    grouped = church_over.church_open(b)
+    by_leader: Dict[str, List[Dict[str, Any]]] = {}
     for t in rows:
-        tid, cid = str(t["id"]), str(t.get("assigned_contact_id") or "")
-        stamp = _iso(now)
-        if not cid or not _claim(b, t, "leader_told_at", stamp):
+        by_leader.setdefault(str(t.get("assigned_contact_id") or ""), []).append(t)
+    for cid, tasks in by_leader.items():
+        if not cid:
             continue
-        who = people.get(cid)
-        if not who or not who["email"]:
-            stats["no_email"] += 1
+        if grouped and len(tasks) > 1:
+            _tell_group(biz, cid, tasks, now, stats, people.get(cid), by, today, link, reply_to, church)
             continue
-        try:
-            html = render_email(biz, handed_text(who["name"], t, today, by.get(str(t.get("handed_by") or ""), "")),
-                                f"{_plain(t.get('title'))[:80]}", link, "Open your tasks")
-            deliver(biz, who["email"], who["name"], f"{church}: a task for you", html,
-                    f"leader-task-{tid}-{cid}", reply_to=reply_to)
-            stats["told"] += 1
-        except Exception:
-            logger.warning("leader tasks: a hand-off email failed (task %s)", tid[:8], exc_info=True)
-            _release(b, tid, "leader_told_at", stamp)
-            stats["unsent"] += 1
+        for t in tasks:
+            tid = str(t["id"])
+            stamp = _iso(now)
+            if not _claim(b, t, "leader_told_at", stamp):
+                continue
+            who = people.get(cid)
+            if not who or not who["email"]:
+                stats["no_email"] += 1
+                continue
+            try:
+                html = render_email(biz, handed_text(who["name"], t, today, by.get(str(t.get("handed_by") or ""), "")),
+                                    f"{_plain(t.get('title'))[:80]}", link, "Open your tasks")
+                deliver(biz, who["email"], who["name"], f"{church}: a task for you", html,
+                        f"leader-task-{tid}-{cid}", reply_to=reply_to)
+                stats["told"] += 1
+            except Exception:
+                logger.warning("leader tasks: a hand-off email failed (task %s)", tid[:8], exc_info=True)
+                _release(b, tid, "leader_told_at", stamp)
+                stats["unsent"] += 1
+
+
+def _tell_group(biz: Dict[str, Any], cid: str, tasks: List[Dict[str, Any]], now: datetime, stats: Dict[str, int],
+                who: Optional[Dict[str, str]], by: Dict[str, str], today: Optional[date], link: str,
+                reply_to: Optional[str], church: str) -> None:
+    """Several new hand-offs to one leader in one sweep: each claimed, then
+    one email for all of them, naming who handed them out. No email on file:
+    told anyway (the Lead tab shows them). The email failing lets every claim
+    go, so the next sweep tries again."""
+    import church_assignments as cas
+    b = str(biz["id"])
+    stamp = _iso(now)
+    claimed = [t for t in tasks if _claim(b, t, "leader_told_at", stamp)]
+    if not claimed:
+        return
+    if not who or not who["email"]:
+        stats["no_email"] += len(claimed)
+        return
+    if len(claimed) == 1:
+        t = claimed[0]
+        text = handed_text(who["name"], t, today, by.get(str(t.get("handed_by") or ""), ""))
+        what, key, subject = _plain(t.get("title"))[:80], f"leader-task-{t['id']}-{cid}", f"{church}: a task for you"
+    else:
+        startup = cas.startup_of(b, [t["id"] for t in claimed])
+        first = all(str(t["id"]) in startup for t in claimed)
+        names = [by.get(h, "") for h in dict.fromkeys(str(t.get("handed_by") or "") for t in claimed)]
+        what, text, _push = cas.grouped_text(
+            who["name"], names, claimed, today, first,
+            f"They’re on your {_tab_word()} tab in the church’s app, under Tasks. When each is done, tap Done "
+            "there and the office will see it.")
+        key, subject = f"leader-tasks-{cas.digest(t['id'] for t in claimed)}-{cid}", f"{church}: {what}"
+    try:
+        deliver(biz, who["email"], who["name"], subject, render_email(biz, text, what[:80], link, "Open your tasks"),
+                key, reply_to=reply_to)
+        stats["told"] += len(claimed)
+    except Exception:
+        logger.warning("leader tasks: a grouped hand-off email failed (business %s)", b[:8], exc_info=True)
+        for t in claimed:
+            _release(b, str(t["id"]), "leader_told_at", stamp)
+        stats["unsent"] += len(claimed)
 
 
 def overseer(leader_id: str, all_roles: List[Dict[str, Any]], defs: List[Dict[str, Any]], m: Any = None

@@ -18,7 +18,8 @@ view, without the monthly report (its own PR).
                      late (the church's day); the follow-ups and the prayer and
                      care requests handed to it that are still open, as counts;
                      and what's due this week from its duties (each duty's day
-                     in the catalog: "Wed: The weekly text"). No money, and
+                     in the catalog: "Wed: The weekly text", or the day the
+                     login picked, church_assignments). No money, and
                      nothing behind a keeper wall: no names of the people in
                      follow-up, nothing of what a care request asked, and the
                      follow-up and care counts only for an overseer who works
@@ -216,18 +217,27 @@ def _zone(biz: Dict[str, Any]):
 
 # ─── What's due this week ─────────────────────────────────────────────
 
-def due_this_week(duties: Iterable[str], monday: date) -> List[Dict[str, Any]]:
+def due_this_week(duties: Iterable[str], monday: date, picked: Optional[Dict[str, str]] = None
+                  ) -> List[Dict[str, Any]]:
     """Each duty's day in the catalog, for the week that starts `monday`:
     [{duty, label, days, text}], by the first day, catalog order within it.
     "first Monday" is this week's only when this Monday is the month's first;
-    "weekly", "monthly" and "as needed" name no day. Never a money duty."""
+    "weekly", "monthly" and "as needed" name no day. A day the login picked
+    (`picked`, church_assignments: duty -> day) stands in for the catalog's,
+    and a weekly or as-needed job with one has that day. Never a money duty."""
+    import church_assignments as cas
     have = set(duties)
     out = []
     for key, d in cd.CATALOG.items():
         if key not in have or d["money"]:
             continue
+        day = str(d.get("day") or "")
+        toks = [t.strip() for t in day.split(",")]
+        once_a_month = "monthly" in toks and not any(t in WEEKDAYS for t in toks)
+        if (picked or {}).get(key) and cas.movable(key) and not once_a_month:
+            day = cas.day_with(day, picked[key])      # a job once a month stays out of the week
         days: List[str] = []
-        for tok in (t.strip() for t in str(d.get("day") or "").split(",")):
+        for tok in (t.strip() for t in str(day or "").split(",")):
             if tok in WEEKDAYS and tok not in days:
                 days.append(tok)
             elif tok.lower() == "first monday" and monday.day <= 7 and "Mon" not in days:
@@ -277,10 +287,11 @@ def _person_ids(biz: str, seat: Dict[str, Any]) -> List[str]:
 
 
 def row(biz: Dict[str, Any], seat: Dict[str, Any], name: str, now: datetime, today: date,
-        monday: date, care: bool = True) -> Dict[str, Any]:
+        monday: date, care: bool = True, picked: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
     """One Manager login's week, in counts. Raises a 503 when a read fails.
     `care` False (an overseer whose areas leave People & care out): no
-    follow-up or care counts, and nothing is read for them."""
+    follow-up or care counts, and nothing is read for them. `picked`: the
+    days this login picked for its duties (read once for the team)."""
     b, uid = str(biz["id"]), str(seat["user_id"])
     s = cd.standing(b, uid)
     clt = _clt()
@@ -291,7 +302,7 @@ def row(biz: Dict[str, Any], seat: Dict[str, Any], name: str, now: datetime, tod
         items.append({"title": _plain(t.get("title"))[:200] or "A task", "due": due or None,
                       "due_text": clt.due_words(due, today)["text"], "late": bool(due and due < today.isoformat())})
     items.sort(key=lambda i: (not i["late"], i["due"] or "9999-12-31"))
-    week = due_this_week(s["duties"], monday)
+    week = due_this_week(s["duties"], monday, picked)
     late = sum(1 for i in items if i["late"])
     out = {"user_id": uid, "name": name, "lane": _lane_words(s["lanes"]), "lanes": list(s["lanes"]),
            "ok": True, "status": 200,
@@ -345,11 +356,14 @@ def team(biz: Dict[str, Any], now: Optional[datetime] = None, exclude: Optional[
     today = now.astimezone(tz).date()
     monday = monday_of(today)
     seats = [s for s in cd._seats(b) if s.get("role") == "manager" and str(s["user_id"]) != str(exclude or "")]
+    # The days each login picked (church_assignments), one read for the team.
+    import church_assignments as cas
+    picks = cas.days_for(biz, [s["user_id"] for s in seats])
 
     def one(s: Dict[str, Any]) -> Dict[str, Any]:
         name = seat_name(b, s)
         try:
-            return row(biz, s, name, now, today, monday, care)
+            return row(biz, s, name, now, today, monday, care, picks.get(str(s["user_id"])))
         except HTTPException as e:
             if e.status_code != 503:
                 raise
