@@ -103,6 +103,7 @@ EXPORT_EXCLUDED: Dict[str, str] = {
     "church_duty_holders": "who a church moved each office duty to (church_duties.py): sign-in user ids that can't mean anything in another business; a restored church follows its lanes' defaults until it moves its duties again; cascade on business and login deletion",
     "church_duty_changes": "the log of those moves, from and to as sign-in user ids (church_duties.py): meaningless in another business, and nothing to restore once the moves are gone; cascade on business deletion",
     "church_duty_days": "the day each office login picked for one of its duties (church_assignments.py): keyed by sign-in user ids that can't mean anything in another business; a restored church's logins pick their days again, and until they do each duty falls on its catalog day; cascade on business and login deletion",
+    "church_job_description_changes": "the log of changes to a church's job descriptions (church_job_descriptions.py): who changed each as a sign-in user id that can't mean anything in another business, and an undo a restore must not offer; the descriptions themselves are exported; cascade on business and person deletion",
     "church_handovers": "what the office sent a leader for their area (church_handovers.py): the sender a sign-in user id that can't mean anything in another business, and seen and told marks a restore must not claim; never a task, nothing to restore; cascade on business and person deletion",
     "church_check_approvals": "each yes a check request has, at its step (church_money_levels.py): sign-in user ids that can't mean anything in another business; the export keeps the requests and where they stand; cascade with the request and on business deletion",
     "church_check_approval_codes": "the one-time codes a board member is emailed to give a yes from the member app (church_money_levels.py): hashed, over in minutes; nothing to restore; cascade with the request, the person and on business deletion",
@@ -293,6 +294,9 @@ BUSINESS_CHILD_TABLES: List[str] = [
     # title, job and chain) and its settings name no contact.
     "church_follow_up_notes", "church_follow_ups", "church_leader_roles",
     "church_role_defs", "church_role_settings",
+    # A church's job descriptions (church_job_descriptions.py): each cites
+    # its person by contact id (or a login by user id); before contacts.
+    "church_job_descriptions",
     # The map (church_areas): which area the church put a role or a team in.
     # It names no contact and cites role keys and team names, not ids, so
     # it restores as it is.
@@ -913,6 +917,10 @@ _IMPORT_SKIP = {
     # church's library fills again the first time Leaders & roles opens.
     "church_follow_up_notes", "church_follow_ups", "church_leader_roles",
     "church_role_defs", "church_role_settings",
+    # A job description cites its person by contact id, or a login by user
+    # id; same reason. The export keeps the church's words; a restored
+    # church saves them again (Chief drafts from what it does).
+    "church_job_descriptions",
     # The leaders map's departments cite their leader and overseer by
     # contact id, and their units cite groups, roles, boards and ministries
     # by id; same reason. A restored church draws its map again.

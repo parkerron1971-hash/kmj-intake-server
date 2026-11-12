@@ -67,6 +67,11 @@ NOT APPLIED until Kevin applies it by hand (docs/MIGRATIONS.md).
   none), after jsonb null (null = cleared), by uuid, at timestamptz default
   now(), undone_at timestamptz null
 
+Export (account_lifecycle): the descriptions go with the church's export,
+before the people they cite, and an import skips them (they cite people by
+id; a restored church saves them again). The change log is excluded: its
+writers are sign-in user ids and its undo means nothing in another business.
+
 A login's person is church_over.Church.login_person: the seat's tied record,
 else the one person its sign-in email names (business_users_router.
 seat_person's rule, read once for the whole church instead of once a login;

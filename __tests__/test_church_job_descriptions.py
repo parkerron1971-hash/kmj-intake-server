@@ -278,3 +278,11 @@ def test_words_drop_stop_words_and_stem_lightly():
     assert cjd._hit("month", "monthly") and cjd._hit("pray", "prayer") and not cjd._hit("kid", "kit")
     assert not cjd.has_pay("Manages the $5k youth budget and the benefit dinner")
     assert cjd.has_pay("Salary: $40k") and cjd.has_pay("$20/hr") and cjd.has_pay("paid hourly")
+
+
+def test_the_descriptions_go_with_the_church_and_their_log_stays_behind():
+    import account_lifecycle as al
+    order = {t: i for i, t in enumerate(al.BUSINESS_CHILD_TABLES)}
+    assert order["church_job_descriptions"] < order["contacts"], "exported, before the people they cite"
+    assert "church_job_descriptions" in al._IMPORT_SKIP, "they cite people by id: a restored church saves them again"
+    assert "church_job_description_changes" in al.EXPORT_EXCLUDED
