@@ -260,6 +260,7 @@ from giving_deposits import (handle_giving_deposits, handle_match_giving_deposit
     handle_unmatch_giving_deposits)
 from chief_bills import handle_bills, handle_add_bill, handle_remove_bill
 from chief_duties import handle_list_duties, handle_move_duty, handle_undo_duty
+import chief_church_assignments as _church_assign  # church assignments: whoever is over people (PR D)
 from chief_move_in import handle_move_in_status, handle_fill_move_in, handle_undo_move_in_fill
 from chief_map import (handle_list_map, handle_change_map, handle_draft_map, handle_undo_map_change,
     handle_apply_map_change, handle_discard_map_change, handle_search_templates, handle_adopt_template)
@@ -409,6 +410,7 @@ _ACTION_PHRASES = {
     "fill_move_in": "saving that as a draft",
     "undo_move_in_fill": "putting that item back",
     "list_duties": "reading who does what",
+    **_church_assign.PROGRESS,
     "move_duty": "moving the duty",
     "undo_duty": "putting the duty back",
     "list_map": "reading the leaders map",
@@ -12249,6 +12251,7 @@ ACTION_HANDLERS = {
     "fill_move_in":          handle_fill_move_in,
     "undo_move_in_fill":     handle_undo_move_in_fill,
     "list_duties":           handle_list_duties,
+    **_church_assign.HANDLERS,
     "move_duty":             handle_move_duty,
     "undo_duty":             handle_undo_duty,
     "list_map":              handle_list_map,
@@ -15649,6 +15652,10 @@ async def chief_chat(
             if _asks_read is not None:
                 _asks_text, _asks_told = _asks_read
                 _login_block += _asks_text
+            # Church assignments (chief_church_assignments): a short block only where they're open for the
+            # church and this login has an office seat; a read that fails adds nothing.
+            if _cfu.is_church(biz):
+                _login_block += await asyncio.to_thread(_church_assign.turn_line, biz, str(user_session.user.id))
             if _login_block:
                 growth_turn_block = _login_block + "\n" + growth_turn_block
             system = _build_system_prompt(

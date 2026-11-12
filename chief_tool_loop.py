@@ -224,6 +224,8 @@ def read_tool_definitions() -> List[Dict[str, Any]]:
     out += [chief_giving_counts.TOOL]  # the service counts (giving by service): the same
     import chief_duties
     out += [chief_duties.TOOL]  # a church's duties: needs the signed-in person, so Chief's alone
+    import chief_church_assignments
+    out += list(chief_church_assignments.TOOLS)  # who is under me, someone's assignments, a one-on-one: the same
     import chief_move_in
     out += [chief_move_in.TOOL]  # a new church's move: the same
     import chief_map
