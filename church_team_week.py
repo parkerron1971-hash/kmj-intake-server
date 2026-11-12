@@ -50,6 +50,7 @@ import logging
 import os
 import re
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional
 from urllib.parse import quote
@@ -73,6 +74,7 @@ WEEKDAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 TASKS_READ = 500                     # a login's open tasks, read at once
 TASKS_SHOWN = 5                      # on its row, late first
 LATE_NAMED = 5                       # the email names this many late tasks a login, then "and N more"
+TEAM_WORKERS = 6                     # logins read side by side on the team page
 NOT_CHURCH = "The team page is for churches"
 
 
@@ -333,23 +335,32 @@ def team(biz: Dict[str, Any], now: Optional[datetime] = None, exclude: Optional[
     clock must answer (a 503 for the page); one login's own reads failing is
     a 503 for its row alone. A name that can't be read is the part of the
     login's email before the @. `care` False leaves out the follow-up and
-    care counts (an overseer whose own areas leave People & care out)."""
+    care counts (an overseer whose own areas leave People & care out).
+    The logins are read side by side (TEAM_WORKERS at a time): each is a
+    dozen reads of its own, and one after another a team of five took the
+    page ten seconds and more."""
     now = now or _now()
     b = str(biz["id"])
     tz = _zone(biz)
     today = now.astimezone(tz).date()
     monday = monday_of(today)
     seats = [s for s in cd._seats(b) if s.get("role") == "manager" and str(s["user_id"]) != str(exclude or "")]
-    rows = []
-    for s in seats:
+
+    def one(s: Dict[str, Any]) -> Dict[str, Any]:
         name = seat_name(b, s)
         try:
-            rows.append(row(biz, s, name, now, today, monday, care))
+            return row(biz, s, name, now, today, monday, care)
         except HTTPException as e:
             if e.status_code != 503:
                 raise
             print(f"[church_team_week] {b[:8]}: a login's week couldn't be read")
-            rows.append(unread_row(s, name, e))
+            return unread_row(s, name, e)
+
+    if len(seats) > 1:
+        with ThreadPoolExecutor(max_workers=min(TEAM_WORKERS, len(seats)), thread_name_prefix="church-team") as pool:
+            rows = list(pool.map(one, seats))      # in the seats' order; a refusal that isn't a 503 still raises
+    else:
+        rows = [one(s) for s in seats]
     rows.sort(key=lambda r: (cd.EXEC not in r["lanes"], r["name"].lower()))
     return {
         "church": _plain(biz.get("name")) or "Your church",
