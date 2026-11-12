@@ -4,7 +4,7 @@ date: 2026-11-11
 agent: Claude Code (Claude Opus 5.5)
 asked: "do a setup for all roles to be done that way so if a person is removed automatically the emails etc is as well with no problems"
 status: in progress
-prs: [kmj-intake-server#TBD]
+prs: [kmj-intake-server#1800]
 migrations: []
 left_undone:
   - "Church email per role (prayer@ follows the prayer leader) is scoped, not built: https://claude.ai/artifact/WYc8oLMAerrqDkCBa5Dq2t. Its role addresses must resolve live from church_leader_roles, the same rule as here."
