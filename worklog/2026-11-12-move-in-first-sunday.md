@@ -4,7 +4,7 @@ date: 2026-11-12
 agent: Claude Code (Claude Fable 5.2)
 asked: "I like everything so lets build this right"
 status: in review
-prs: [kmj-intake-server#PRNUM]
+prs: [kmj-intake-server#1803]
 migrations: []
 left_undone:
   - "Nothing reads the date yet: no countdown on Home, no day-by-day plan. It is kept so those can be built on it."
