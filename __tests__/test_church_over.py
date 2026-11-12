@@ -83,8 +83,10 @@ def test_the_owner_and_an_admin_are_over_every_office_login_but_their_own(db):
     assert firsts(db, [r for r in owner if r["kind"] == co.LOGIN]) == [
         "Jessica", "Laquesha", "Minnie", "Naiya", "Shapretta", "Tiara"]
     minnie = under(db, LOVE_CITY, login(db, LOVE_CITY, "minnie"))
+    # Jessica's person is the Executive Pastor, who shepherds: an Admin's
+    # office standing never reaches her login (Kevin, 2026-11-12).
     assert firsts(db, [r for r in minnie if r["kind"] == co.LOGIN]) == [
-        "Jessica", "Laquesha", "Naiya", "Shapretta", "Tiara"]
+        "Laquesha", "Naiya", "Shapretta", "Tiara"]
 
 
 def test_a_lane_manager_is_over_no_one(db):
@@ -320,10 +322,123 @@ def test_closed_the_owner_admins_and_the_lanes_overseer_are_over_every_leader(mo
     assert under(db, LOVE_CITY, person(db, LOVE_CITY, "andre")) == [], "the map decides nothing while it's closed"
     jess = under(db, LOVE_CITY, login(db, LOVE_CITY, "jessica"))
     people = {db.label[r["id"]] for r in jess if r["kind"] == co.PERSON}
-    assert {"Andre", "Yolanda", "Tyrone", "Ruth", "Marcus"} <= people
+    assert {"Yolanda", "Tyrone", "Ruth", "Paul", "Eve"} <= people
+    assert not {"Andre", "Marcus", "Tanya"} & people, "the pastors and elders: the owner's alone, closed"
+    owner = under(db, LOVE_CITY, login(db, LOVE_CITY, "owner"))
+    assert {"Andre", "Marcus", "Tanya"} <= {db.label[r["id"]] for r in owner}
     assert "Kevin" not in people, "never the owner's own person"
     assert not {"Naiya", "Jessica", "Minnie"} & people, "an office login is its login"
     assert under(db, LOVE_CITY, login(db, LOVE_CITY, "naiya")) == []
+
+
+
+# ─── Pastors and elders: no office standing over them ─────────────────
+# Kevin, 2026-11-12: "admins can not give work to elders and pastors but
+# they can give them things that is related to their area that they need for
+# them to have." Who shepherds is each role's own switch, never a title.
+
+def _labels(db, rows, kind=co.PERSON):
+    return {db.label[r["id"]] for r in rows if r["kind"] == kind}
+
+
+def test_love_city_an_admin_is_over_no_pastor_or_elder_and_every_other_leader_as_before(db):
+    c = ch(db, LOVE_CITY)
+    w = db.who[LOVE_CITY]
+    assert c.shepherds == {w[h] for h in ("jessica", "andre", "marcus", "tanya")}, \
+        "the Prophets' switch is off and the Ministers setting is off"
+    minnie = under(db, LOVE_CITY, login(db, LOVE_CITY, "minnie"))
+    assert not {"Andre", "Marcus", "Tanya", "Jessica", "Kevin"} & _labels(db, minnie)
+    assert {"Yolanda", "Tyrone", "Ruth", "Iris", "Ivy", "Paul", "Eve", "Tasha", "Cora", "Angela"} <= _labels(db, minnie)
+    assert not co.is_over(c, login(db, LOVE_CITY, "minnie"), person(db, LOVE_CITY, "marcus"))
+    owner = under(db, LOVE_CITY, login(db, LOVE_CITY, "owner"))
+    assert {"Andre", "Marcus", "Tanya"} <= _labels(db, owner) and "Jessica" in _labels(db, owner, co.LOGIN)
+
+
+def test_love_city_the_map_still_counts_through_a_seats_own_person(db):
+    """Marcus (an elder) answers to Jessica on the map: her login is over him
+    through her person, not through her seat."""
+    jess = under(db, LOVE_CITY, login(db, LOVE_CITY, "jessica"))
+    assert [(db.label[r["id"]], r["why"]) for r in jess if r["kind"] == co.PERSON] == [("Marcus", "Answers to you")]
+    # An Admin whose own person an elder answers to is over that elder, the
+    # same way, and still over no other.
+    w = db.who[LOVE_CITY]
+    db.t["church_leader_roles"].append({
+        "id": db.nid("church_leader_roles"), "business_id": LOVE_CITY, "contact_id": w["minnie"], "role": "ministers",
+        "scope": "", "status": "active", "invited_at": "2026-10-01T00:00:00+00:00", "answered_at": None,
+        "answers_to_contact_id": None})
+    for h in db.t["church_leader_roles"]:
+        if h["business_id"] == LOVE_CITY and h["contact_id"] == w["tanya"]:
+            h["answers_to_contact_id"] = w["minnie"]
+    minnie = under(db, LOVE_CITY, login(db, LOVE_CITY, "minnie"))
+    assert ("Tanya", "Answers to you") in [(db.label[r["id"]], r["why"]) for r in minnie]
+    assert not {"Andre", "Marcus"} & _labels(db, minnie)
+
+
+def test_love_city_a_role_that_follows_the_ministers_setting_shepherds_by_it(db):
+    assert "Angela" in _labels(db, under(db, LOVE_CITY, login(db, LOVE_CITY, "minnie")))
+    db.t.setdefault("church_shepherd_settings", []).append({"business_id": LOVE_CITY, "ministers": True})
+    assert "Angela" not in _labels(db, under(db, LOVE_CITY, login(db, LOVE_CITY, "minnie")))
+
+
+def test_grace_its_deacons_shepherd_by_their_switch_so_the_admin_is_over_its_youth_minister_only(db):
+    c = ch(db, GRACE)
+    w = db.who[GRACE]
+    deacons = {w[h] for h in ("daniel", "doris", "dwight", "della")}
+    assert c.shepherds == deacons, "a care job whose switch the church turned on"
+    thelma = under(db, GRACE, login(db, GRACE, "thelma"))
+    assert not deacons & {r["id"] for r in thelma} and "Yvette" in _labels(db, thelma)
+    assert deacons <= {r["id"] for r in under(db, GRACE, login(db, GRACE, "owner"))}
+
+
+def test_grace_with_the_map_closed_the_lanes_overseer_is_over_its_leaders_but_no_deacon(monkeypatch):
+    monkeypatch.setenv("CHURCH_ASSIGNMENTS", "on")
+    db = c3.build(monkeypatch, map_on=False)
+    sharon = under(db, GRACE, login(db, GRACE, "sharon"))
+    assert "Yvette" in _labels(db, sharon)
+    assert not {"Daniel", "Doris", "Dwight", "Della", "Samuel"} & _labels(db, sharon)
+
+
+def test_new_hope_an_admin_is_over_no_associate_pastor_or_elder_nor_an_elders_login(db):
+    nh, w = NEW_HOPE, db.who[NEW_HOPE]
+    pastors = {w[h] for h in ("abel", "amara", "asher", "elena", "elliot", "esther", "ezra", "eden")}
+    assert ch(db, nh).shepherds == pastors
+    tessa = under(db, nh, login(db, nh, "tessa"))
+    assert not pastors & {r["id"] for r in tessa}
+    assert {"Yusuf", "Wren", "Kara", "Celia"} <= _labels(db, tessa) and "Owen" in _labels(db, tessa, co.LOGIN)
+    # The ministry chain is as it was: Amara is over the elder who answers to her.
+    amara = under(db, nh, person(db, nh, "amara"))
+    assert ("Elena", "Answers to you") in [(db.label[r["id"]], r["why"]) for r in amara]
+    # An elder with a Manager seat: no Admin's or lanes overseer's office
+    # standing reaches it; the owner's does.
+    elena = "3a000000-0000-4000-8000-000000000098"
+    db.t["business_users"].append({"business_id": nh, "user_id": elena, "role": "manager",
+                                   "invited_email": "elena@newhope.church", "lane": None, "areas": ["people_care"],
+                                   "contact_id": w["elena"], "name": "Elena Ruiz", "status": "active"})
+    db.label[elena] = "Elena"
+    for h in ("tessa", "owen"):
+        assert elena not in {r["id"] for r in under(db, nh, login(db, nh, h))}, h
+    assert elena in {r["id"] for r in under(db, nh, login(db, nh, "owner"))}
+
+
+def test_riverside_with_nobody_set_up_guards_no_one_and_an_admin_is_over_no_one(db):
+    c = ch(db, RIVERSIDE)
+    assert c.guarded == set()
+    clerk = "4a000000-0000-4000-8000-000000000097"
+    db.t["business_users"].append({"business_id": RIVERSIDE, "user_id": clerk, "role": "admin",
+                                   "invited_email": "clerk@riversideame.org", "lane": None, "areas": None,
+                                   "contact_id": None, "name": "Church Clerk", "status": "active"})
+    assert under(db, RIVERSIDE, co.who(co.LOGIN, clerk)) == []
+
+
+def test_a_failed_read_of_the_ministers_setting_is_a_503_never_a_yes(db, monkeypatch):
+    real = db.get
+    monkeypatch.setattr(sb_clients, "sb_get_as_service",
+                        lambda path, **kw: None if path.startswith("/church_shepherd_settings") else real(path, **kw))
+    with pytest.raises(HTTPException) as e:
+        under(db, LOVE_CITY, login(db, LOVE_CITY, "minnie"))
+    assert e.value.status_code == 503
+    # The owner's standing needs no guard, so it never reads it.
+    assert "Andre" in _labels(db, under(db, LOVE_CITY, login(db, LOVE_CITY, "owner")))
 
 
 # ─── is_over, above ───────────────────────────────────────────────────

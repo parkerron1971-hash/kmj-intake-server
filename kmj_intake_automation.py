@@ -442,6 +442,8 @@ app.include_router(church_team_week_router)
 # days its weekly jobs fall on (2026-11-12; CHURCH_ASSIGNMENTS off | owner | on).
 from church_assignments import router as church_assignments_router
 app.include_router(church_assignments_router)
+from church_handovers import router as church_handovers_router
+app.include_router(church_handovers_router)
 # Sermons from ChurchSavvy, for the team's Media part (no seat needed).
 from worship_sermons import router as worship_sermons_router
 app.include_router(worship_sermons_router)
@@ -1950,6 +1952,15 @@ async def startup():
                           id="church_assignments_sweep")
     except Exception as e:
         print(f"   [warn] assignments sweep not scheduled: {e}")
+    # From the office (2026-11-12): what the office sent a leader is told by
+    # one email a person a sweep (church_handovers.sweep_tick;
+    # CHURCH_ASSIGNMENTS, read here on the worker too).
+    try:
+        import church_handovers as _cho
+        scheduler.add_job(g("church_handovers_sweep", _cho.sweep_tick), "interval", hours=1,
+                          id="church_handovers_sweep")
+    except Exception as e:
+        print(f"   [warn] hand-overs sweep not scheduled: {e}")
     # Homework files nothing points at any more (a deleted homework, student
     # or class; an attach that never landed) leave the private bucket once a
     # day (academy_work.sweep_tick).

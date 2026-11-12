@@ -241,20 +241,25 @@ def compose_trailers(body: str, settings: Optional[Dict[str, Any]]) -> str:
 # ─── Body ───────────────────────────────────────────────────────────
 
 
-def _linkify(escaped: str) -> str:
-    return _URL_RE.sub(lambda m: f'<a href="{m.group(1)}" style="color:inherit;">{m.group(1)}</a>', escaped)
+_HTTPS_RE = re.compile(r"(https://[^\s<>\"']+)")
 
 
-def paragraphs_html(text: str) -> str:
+def _linkify(escaped: str, https_only: bool = False) -> str:
+    rx = _HTTPS_RE if https_only else _URL_RE
+    return rx.sub(lambda m: f'<a href="{m.group(1)}" style="color:inherit;">{m.group(1)}</a>', escaped)
+
+
+def paragraphs_html(text: str, https_only: bool = False) -> str:
     """Blank line → new paragraph; single newline → line break. URLs
-    become links. Everything is escaped first — the body is the
+    become links (`https_only`: only https:// ones; an http:// address
+    stays plain text). Everything is escaped first — the body is the
     practitioner's words, not markup."""
     text = (text or "").replace("\r\n", "\n").strip()
     if not text:
         return ""
     out = []
     for block in re.split(r"\n\s*\n", text):
-        lines = [_linkify(_html.escape(l.rstrip())) for l in block.split("\n")]
+        lines = [_linkify(_html.escape(l.rstrip()), https_only) for l in block.split("\n")]
         out.append(
             '<p style="margin:0 0 16px;font-size:16px;line-height:1.6;color:#1f2937;">'
             + "<br />".join(lines) + "</p>")
@@ -289,7 +294,7 @@ def render_html(message: str, *, business_name: str, brand: Dict[str, Any],
                 sig: Optional[Dict[str, Any]] = None, disclaimer: str = "",
                 unsubscribe_url: Optional[str] = None, preheader: str = "",
                 cta: Optional[Tuple[str, str]] = None, after_cta: str = "",
-                unsubscribe_label: str = "Unsubscribe", footer_note: str = "") -> str:
+                unsubscribe_label: str = "Unsubscribe", footer_note: str = "", https_only: bool = False) -> str:
     """The email. One 600px column, the brand colour as a rule at the
     top and on links, the logo or a wordmark, the message in real
     paragraphs, the signature as the block the practitioner designed,
@@ -332,7 +337,7 @@ def render_html(message: str, *, business_name: str, brand: Dict[str, Any],
 <tr><td style="height:5px;background:{e(primary)};font-size:0;line-height:0;">&nbsp;</td></tr>
 <tr><td style="padding:28px 36px 8px;font-family:Arial,Helvetica,sans-serif;">{header_inner}</td></tr>
 <tr><td style="padding:16px 36px 8px;font-family:Arial,Helvetica,sans-serif;">
-{paragraphs_html(message)}
+{paragraphs_html(message, https_only)}
 {cta_html(cta[0], cta[1], primary) if cta else ""}
 {after_cta}
 {sig_block}

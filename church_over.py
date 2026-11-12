@@ -43,6 +43,20 @@ it from the church's own data, never from names or title words:
                      under the owner only, never walked through, so the owner
                      can hand an elder work and no Admin, Manager or Member
                      seat ever can
+  the shepherds .... every holder of an active role that shepherds (its own
+                     switch, church_map.can: the church's pastors and elders,
+                     never a title word; a role that follows the Ministers
+                     setting, by that setting). Kevin, 2026-11-12: "admins can
+                     not give work to elders and pastors but they can give
+                     them things that is related to their area that they need
+                     for them to have" (church_handovers). No office standing
+                     is over a shepherd or a senior (an Admin's, a Manager's,
+                     the login over the lanes', the closed map's everyone),
+                     nor over a login whose person is one: only the owner, or
+                     the ministry chain the map says (answers-to, their
+                     department's overseer), walked from a login's own
+                     person, as anyone's. A leader who doesn't shepherd is
+                     as before
 
     under(ch, me) ..... [{kind, id, name, why}], the office first
     is_over(ch, me, t)  every write checks it
@@ -378,6 +392,12 @@ class Church:
         Admin, Manager or Member seat is ever over them, and no walk goes
         through them. At a church whose elders share the top ("Elders
         (Shepherds)"), every elder is one."""
+        keys = self._senior_keys
+        return self._got("seniors", lambda: {str(h["contact_id"]) for h in self.holders
+                                             if h.get("role") in keys} - self.top)
+
+    @property
+    def _senior_keys(self) -> Set[str]:
         def load() -> Set[str]:
             import church_roles as cr
             have = {str(d.get("key")) for d in self.defs}
@@ -387,8 +407,56 @@ class Church:
             if m:
                 import church_map
                 keys |= set(church_map.picked(m, "pastor_yes_roles") or [])
-            return {str(h["contact_id"]) for h in self.holders if h.get("role") in keys} - self.top
-        return self._got("seniors", load)
+            return keys
+        return self._got("senior_keys", load)
+
+    @property
+    def shepherds(self) -> Set[str]:
+        """Every holder of an active role that shepherds, who isn't the
+        owner's own identity: the role's own switch (church_map.can, the
+        map's row, else the role's own or its job's), and a role that
+        follows the church's Ministers setting by that setting (read only
+        then; a failed read is a 503). Never a title word."""
+        keys = self._shepherd_keys
+        return self._got("shepherds", lambda: {str(h["contact_id"]) for h in self.holders
+                                               if h.get("role") in keys} - self.top)
+
+    @property
+    def _shepherd_keys(self) -> Set[str]:
+        def load() -> Set[str]:
+            import church_map
+            m = self.map or None
+            said: Dict[str, Any] = {}
+            for h in self.holders:
+                k = str(h.get("role") or "")
+                if k not in said:
+                    d = self.def_of(key_=k)
+                    said[k] = church_map.can(m, d)["shepherd"] if d else False
+            ministers = False
+            if any(v is None for v in said.values()):
+                import church_shepherding
+                st = church_shepherding.settings(self.b)
+                if st is None:
+                    raise HTTPException(503, UNREAD)
+                ministers = bool(st.get("ministers"))
+            return {k for k, v in said.items() if v is True or (v is None and ministers)}
+        return self._got("shepherd_keys", load)
+
+    @property
+    def owner_guarded(self) -> bool:
+        """Whether the owner's own person holds a role that shepherds or a
+        senior one (at Love City the owner is the senior pastor). The owner
+        is never under anyone either way; this only says whether the Hand to
+        list offers the owner to the office (#1804 review)."""
+        p = self.owner_person
+        keys = self._shepherd_keys | self._senior_keys
+        return bool(p) and any(str(h.get("contact_id")) == p and h.get("role") in keys for h in self.holders)
+
+    @property
+    def guarded(self) -> Set[str]:
+        """The people no office standing is over (the shepherds and the
+        seniors): only the owner, or the map's own chain."""
+        return self.shepherds | self.seniors
 
     def persons_of(self, me: Dict[str, Any]) -> Set[str]:
         if me["kind"] == PERSON:
@@ -605,12 +673,19 @@ def _under(ch: Church, me: Dict[str, Any]) -> List[Tuple[str, str, str]]:
 
     role = ch.role(me["id"]) if me["kind"] == LOGIN else None
     lanes = me["kind"] == LOGIN and role in ("owner", "admin", "manager") and ch.over_lanes(str(me["id"]))
+    # No office standing but the owner's is over a shepherd or a senior, nor
+    # over a login whose person is one (Kevin, 2026-11-12: "admins can not
+    # give work to elders and pastors"); the map's own chain, walked from my
+    # person below, still is.
+    guard: Set[str] = ch.guarded if role in OFFICE_ROLES else set()
+    lp = ch.login_person if guard else {}
     if role in KEEPS_ALL:
         for uid in ch.office:
-            add(LOGIN, uid, _login_why(ch, uid))
+            if lp.get(uid) not in guard:
+                add(LOGIN, uid, _login_why(ch, uid))
     elif role == "manager" and lanes:
         for uid in ch.office:
-            if ch.role(uid) == "manager":
+            if ch.role(uid) == "manager" and lp.get(uid) not in guard:
                 add(LOGIN, uid, _login_why(ch, uid))
     off = ch.person_login
     # The owner's own identity is never under anyone; the senior and the
@@ -621,9 +696,10 @@ def _under(ch: Church, me: Dict[str, Any]) -> List[Tuple[str, str, str]]:
     m = ch.map
     if role in KEEPS_ALL or (not m and lanes):
         for cid in _everyone(ch):
-            if cid not in skip and cid not in off:
+            if cid not in skip and cid not in off and cid not in guard:
                 add(PERSON, cid, _what(ch, cid))
-        return list(out.values())
+        if role == "owner" or not guard:
+            return list(out.values())
     if not m or not mine:
         return list(out.values())
     for t, why, via in _walk(ch, mine, stop):

@@ -140,7 +140,12 @@ def within(week: Dict[str, Any], areas: Optional[List[str]]) -> Dict[str, Any]:
     whole church: the week as it is. A task handed to the login is its own,
     whatever area it's filed under, so it always shows; people in follow-up
     and care handed to them are People & care's; a first check-in is Kids &
-    youth's too; each area's line and gaps are that area's."""
+    youth's too; each area's line and gaps are that area's. What the office
+    sent the login's person (`from_office`) is theirs alone: never in
+    another's view of their week, whatever areas (#1804 review)."""
+    week = {k: v for k, v in week.items() if k != "from_office"}
+    if isinstance(week.get("counts"), dict):
+        week["counts"] = {k: v for k, v in week["counts"].items() if k != "from_office"}
     if areas is None:
         return week
     mine = set(areas)
