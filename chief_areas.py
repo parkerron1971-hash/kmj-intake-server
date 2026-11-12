@@ -91,7 +91,13 @@ VERBS: Dict[str, Tuple[str, ...]] = {
         "list_duties", "list_map", "search_templates",
         # Is this right? An office login's own work, its check and its suggestions (church_map_asks): the
         # handlers keep them to a Manager or an Admin seat, and nothing they say makes anything.
-        "my_work", "confirm_my_work", "suggest_work_change", "note_gap")},
+        "my_work", "confirm_my_work", "suggest_work_change", "note_gap",
+        # Church assignments (chief_church_assignments): every office login's own and the people under it.
+        # The handlers call church_over and church_assignments, so who may act for whom (no office seat over
+        # a pastor or an elder, a money job's day only the owner's or an admin's) is the engine's, never an
+        # area's; a lane never widens it.
+        "people_under", "assignments_of", "one_on_one", "give_assignment", "start_first_assignment",
+        "mark_assignment", "mark_stuck", "send_up_assignment", "set_my_day", "send_handover")},
     # People & care: the church's people, their care and their follow-up.
     **{v: PEOPLE for v in (
         "create_contact", "update_contact", "update_contact_status", "update_contact_health", "delete_contact",

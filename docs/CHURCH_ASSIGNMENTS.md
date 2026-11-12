@@ -754,9 +754,64 @@ sweep's own reads fail first and it does nothing.
 - Member app (`member_portal_lead`): a leader's Lead tab shows their assignments with done/stuck;
   a leader who is over others gets "Your people": the same board on a phone. A mock goes to Kevin
   before this part is built.
-- Chief (later PR): `give_assignment`, `start_first_assignment`, `mark_stuck`,
-  `send_up_assignment`, `set_my_day`, `people_under` (a read); each placed in `chief_areas`
-  VERBS/OWNERS; every handler returns `{result, label}`.
+- Chief (PR D, `chief_church_assignments.py`; not `chief_assignments.py`, which is Chief's own
+  outcomes): see "Chief" below.
+
+## Chief (PR D)
+
+Kevin's words: Jessica says "give Naiya the lock-in room by the 20th", "start Tiara's first
+assignment", "how is Laquesha doing?"; an admin says "move my weekly text to Thursday", "I'm stuck
+on the policy, waiting on Pastor's copy", "mark the rooms one done"; an office login says "send
+Minister Ray the retreat sign-up list for Youth".
+
+| Verb | Kind | Calls | Example |
+|---|---|---|---|
+| `people_under` | read (mid-turn) | `church_assignments.board` | "who's under me?" |
+| `assignments_of` | read (mid-turn) | `church_assignments.theirs` | "what's on Naiya's list?" |
+| `one_on_one` | read (mid-turn) | `church_assignments.one_on_one` | "how is Laquesha doing?" |
+| `give_assignment` | write, A | `church_assignments.give` | "give Naiya the lock-in room by the 20th" |
+| `start_first_assignment` | write, A | `church_startup.start` | "start Tiara's first assignment" |
+| `mark_assignment` | write, A | `church_assignments.change` (done) | "mark the rooms one done" |
+| `mark_stuck` | write, A | `church_assignments.change` (stuck) | "I'm stuck on the policy, waiting on Pastor's copy" |
+| `send_up_assignment` | write, A | `church_assignments.raise_up` | "send Tom's coffee budget up" |
+| `set_my_day` | write, A | `church_assignments.pick_day` | "move my weekly text to Thursday" |
+| `send_handover` | write, C | `church_handovers.leaders`, `send` | "send Minister Ray the retreat sign-up list for Youth" |
+
+- Every verb calls the routes' own functions with `me` as the signed-in login, after the routes'
+  own checks (`_allowed`, `_ready`), so Kevin's rules hold exactly as on screen: no office seat is
+  over a pastor or an elder (a hand-over goes instead), what's sent up can't be cleared by its
+  assignee, a money job's day only by the owner or an Admin. Chief never widens anything.
+- People are named in words and looked up on the server among who this login may act for
+  (`church_over.under`, or `church_handovers.leaders` for a hand-over): a whole name, a first name
+  only one of them has, or a word of what they do with a word of their name ("Minister Angela",
+  "Deacon Daniel": the role's title counts). An assignment by words of its title among that
+  person's ("the rooms one", "the policy": plural endings match). None or several changes nothing
+  and says who or what it could be. Ids never reach the screen.
+- Each receipt is a whole line: who, what, when, where it lands and who hears ("Gave Naiya Clark
+  “Book a room for the youth lock-in”, due Friday, Nov 20; done when: … It's on their My week, and
+  they'll get an email about it within the hour.").
+- The gate: signed in, never unattended, CHURCH_ASSIGNMENTS open for the person or the church, an
+  office seat (owner, Admin, Manager, Member as itself). A write on a turn whose context held
+  instruction-shaped text Chief read (`chief_of_staff.untrusted_taint`) is held, class A or C,
+  until the person says it again; `send_handover` is class C, so the chat gate holds it too.
+- Tags, not native tools: `mcp_server.WRITE_TOOL_SCHEMAS` is also the outside agent's list and
+  carries no signed-in person; each verb needs one (registry `chief_only`), as `chief_duties` and
+  `chief_map`. All ten are in `chief_areas.VERBS` as everyone's own work (`ALL`): who may act for
+  whom is the engine's, never a lane's.
+- The turn's tail carries a short CHURCH ASSIGNMENTS block only where the switch is open for the
+  church and the login has an office seat there (`turn_line`).
+- **Other people's words taint the turn** (#1806 review). A title, what done means and notes are
+  written by whoever handed an assignment, a stuck note by whoever is stuck (a leader in the member
+  app too), and `untrusted_text`'s shapes don't catch every way such words could address Chief. So
+  a read that brings any of them in (`people_under`, `one_on_one`, someone else's `assignments_of`,
+  or an item on my own list whose words aren't mine or a ready-made's as it came) raises the turn's
+  taint through `chief_of_staff`'s own sink, and every write after it in that turn is held until
+  the person says it again. A read of only my own words doesn't. Scoped to these verbs;
+  `untrusted_text` is unchanged.
+- **Receipts say only what happened.** A first assignment that lands in part says what's on their
+  list now and that asking again makes only the rest, never "Nothing changed". An email is promised
+  only when they have one on file (a login's sign-in email, a person's on their record); else
+  "it's on their page".
 
 ## PRs
 
@@ -770,5 +825,5 @@ sweep's own reads fail first and it does nothing.
 - **C2 (backend, member app):** the Lead tab's assignments, sent up to you, From the office and
   "Your people", per the phone mock Kevin approved (2026-11-12: "phone view idea is good. we can
   move forward with that.").
-- **D (backend):** the Chief verbs.
+- **D (backend):** the Chief verbs (`chief_church_assignments.py`).
 - **F1 / F2 (frontend):** My week + day picker; the board.

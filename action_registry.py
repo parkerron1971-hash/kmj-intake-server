@@ -533,6 +533,29 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
                           "item's lines back"), "chief_only": True},
     "undo_move_in_fill": {**_w("A", "puts one move-in item's lines back the way they were before the last "
                                "fill; a draft either way"), "chief_only": True},
+    # Church assignments (chief_church_assignments, PR D): whoever is over people hands them work through
+    # Chief, by the same functions the routes use. Each needs the signed-in person, so Chief's alone.
+    "people_under": {**_r("reads who is under the signed-in person at a church, with their assignments in counts and "
+                          "what's stuck; staff and leaders by name", sensitive=True), "chief_only": True},
+    "assignments_of": {**_r("reads one person's church assignments (theirs, or someone they're over): due, done when, "
+                            "stuck, who gave it", sensitive=True), "chief_only": True},
+    "one_on_one": {**_r("reads a one-on-one with someone the signed-in person is over: finished, stuck, late, next, "
+                        "this week's jobs", sensitive=True), "chief_only": True},
+    "give_assignment": {**_w("A", "hands one assignment to someone the signed-in person is over (or to themselves) "
+                                  "through church_assignments.give; taken back from the board"), "chief_only": True},
+    "start_first_assignment": {**_w("A", "makes the missing items of someone's first assignment through "
+                                         "church_startup.start, once per item"), "chief_only": True},
+    "mark_assignment": {**_w("A", "marks one assignment done or not done (theirs, or someone's they're over); "
+                                  "the other value puts it back"), "chief_only": True},
+    "mark_stuck": {**_w("A", "marks one assignment stuck with a note, or not stuck, by the sent-up rules "
+                             "(church_assignments.change)"), "chief_only": True},
+    "send_up_assignment": {**_w("A", "sends a stuck assignment of someone under them up to whoever is over the "
+                                     "signed-in person (church_assignments.raise_up); not stuck clears it"),
+                           "chief_only": True},
+    "set_my_day": {**_w("A", "picks the day a login's weekly job falls on (church_assignments.pick_day); none "
+                             "puts it back"), "chief_only": True},
+    "send_handover": {**_w("C", "sends one of the church's leaders something for their area "
+                                "(church_handovers.send): an email within the hour, no recall"), "chief_only": True},
     "list_duties": {**_r("reads who does each of a church's office duties, by lane: following the lanes or moved "
                          "to named logins, which need someone, and the office logins by name; no money amounts. "
                          "Staff names, read for the signed-in person, so never an outside agent's",
