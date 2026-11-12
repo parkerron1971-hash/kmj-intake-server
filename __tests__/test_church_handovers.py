@@ -73,7 +73,8 @@ def db(monkeypatch):
     def deliver(biz, to, name, subject, html, key, reply_to=None):
         if to in d.fail_to:
             raise RuntimeError("Resend said no")
-        d.sent.append({"to": to, "name": name, "subject": subject, "html": html, "key": key, "biz": biz["id"]})
+        d.sent.append({"to": to, "name": name, "subject": subject, "html": html, "key": key, "biz": biz["id"],
+                       "reply_to": reply_to})
     monkeypatch.setattr(clt, "deliver", deliver)
     return d
 
@@ -217,7 +218,7 @@ def test_the_hand_to_list_offers_no_pastor_or_elder_to_anyone_but_the_owner(app,
         return ({db.label.get(p["user_id"], p["name"]) for p in got["people"]},
                 {db.label[x["contact_id"]] for x in got.get("leaders") or []})
     logins, leaders_ = hand_to("minnie")
-    assert "Jessica" not in logins and {"Naiya", "owner", "Minnie"} <= logins
+    assert not {"Jessica", "owner"} & logins and {"Naiya", "Minnie"} <= logins, "the owner is the senior pastor here"
     assert not {"Andre", "Marcus", "Tanya"} & leaders_ and {"Yolanda", "Ruth"} <= leaders_
     logins, leaders_ = hand_to("jessica")
     assert "Jessica" in logins, "a task to yourself stays"
@@ -343,7 +344,8 @@ def test_a_leaders_list_is_what_they_havent_seen_then_two_weeks_of_what_they_hav
 def test_one_email_a_person_a_sweep_from_the_church_naming_who_sent_each(app, db):
     for h in ("jessica", "minnie"):
         as_(app, LOVE_CITY, h)
-        assert send(app, LOVE_CITY, "yolanda", title=f"From {h}", for_date="2026-11-20").status_code == 200
+        assert send(app, LOVE_CITY, "yolanda", title=f"From {h}", for_date="2026-11-20", note=f"{h}'s note",
+                    link=f"https://example.org/{h}").status_code == 200
     as_(app, LOVE_CITY, "tiara")
     assert send(app, LOVE_CITY, "ruth", title="The prayer room key", note="Under the mat.",
                 link="https://example.org/key").status_code == 200
@@ -352,10 +354,19 @@ def test_one_email_a_person_a_sweep_from_the_church_naming_who_sent_each(app, db
     by = {m["name"]: m for m in db.sent}
     y = by["Yolanda Reed"]
     assert y["subject"] == "Love City Church: Jessica McCloud and Minnie Tatum sent you 2 things"
-    assert "From jessica" in y["html"] and "From minnie" in y["html"] and "Friday, Nov 20" in y["html"]
+    # Grouped, each one in full (#1804 review): its title, who, its day, its note, its link.
+    for h, who in (("jessica", "Jessica McCloud"), ("minnie", "Minnie Tatum")):
+        assert f"“From {h}”, from {who}, for Friday, Nov 20" in y["html"]
+        assert f"{h}&#x27;s note" in y["html"] and f'href="https://example.org/{h}"' in y["html"]
+    assert y["reply_to"] is None or "@" in y["reply_to"], "two senders: the church office answers"
+    assert "Reply to this email to answer the church office." in y["html"]
     r = by["Ruth Okafor"]
     assert r["subject"] == "Love City Church: Tiara Adams sent you something"
-    assert "Under the mat." in r["html"] and "https://example.org/key" in r["html"] and "Got it" in r["html"]
+    assert "Under the mat." in r["html"] and 'href="https://example.org/key"' in r["html"]
+    tiara_email = next(s["invited_email"] for s in db.t["business_users"] if s["user_id"] == uid(db, LOVE_CITY, "tiara"))
+    assert r["reply_to"] == tiara_email and "Reply to this email to answer Tiara." in r["html"]
+    for m in (y, r):
+        assert "Got it" not in m["html"] and "Lead tab" not in m["html"], "no Lead tab until the member app ships it"
     assert all(h["told_at"] for h in db.t["church_handovers"])
     assert cho.sweep_tick(NOW + timedelta(hours=1))["emails"] == 0, "never again once told"
     assert not [t for t in db.t["tasks"] if t["title"].startswith("From ")], "never a task"
@@ -366,6 +377,70 @@ def test_the_owners_person_is_told_its_on_my_week(app, db):
     send(app, LOVE_CITY, "kevin", title="The insurance renewal")
     cho.sweep_tick(NOW)
     assert len(db.sent) == 1 and "My week" in db.sent[0]["html"]
+
+
+def test_only_an_https_address_in_a_note_is_a_link(app, db):
+    as_(app, LOVE_CITY, "tiara")
+    send(app, LOVE_CITY, "ruth", title="Two places", note="New: https://example.org/new\nOld: http://example.org/old")
+    cho.sweep_tick(NOW)
+    html = db.sent[0]["html"]
+    assert 'href="https://example.org/new"' in html
+    assert "http://example.org/old" in html and 'href="http://example.org/old"' not in html
+
+
+def test_an_upper_case_https_link_is_saved_lower_case_never_a_failed_insert_for_good(app, db):
+    """The table's check is case-sensitive (church_handovers_db.mjs pins
+    that HTTPS:// is refused there), so the app saves the scheme lower case."""
+    as_(app, LOVE_CITY, "owner")
+    r = send(app, LOVE_CITY, "andre", title="Plan", link="HTTPS://Example.org/Plan")
+    assert r.status_code == 200 and r.json()["saved"]["link"] == "https://Example.org/Plan"
+    assert db.t["church_handovers"][0]["link"] == "https://Example.org/Plan"
+
+
+def test_see_as_never_shows_what_the_office_sent_the_one_seen(app, db):
+    """#1804 review: Jessica, over the lanes, opening See as Tiara read the
+    owner's care hand-over to Tiara. What the office sends a person is
+    theirs alone: never in another's view of their week, whatever areas."""
+    db.t["church_leader_roles"].append({"id": db.nid("church_leader_roles"), "business_id": LOVE_CITY,
+                                        "contact_id": db.who[LOVE_CITY]["tiara"], "role": "intercessors", "scope": "",
+                                        "status": "active", "invited_at": "2026-10-01T00:00:00+00:00",
+                                        "answered_at": None, "answers_to_contact_id": None})
+    as_(app, LOVE_CITY, "owner")
+    r = send(app, LOVE_CITY, "tiara", title="The Owens family", note="Calvin is in St. Mary's, room 412")
+    assert r.status_code == 200, r.text
+    tiara = uid(db, LOVE_CITY, "tiara")
+    for areas in (["office"], None):
+        seat = next(s for s in db.t["business_users"] if s["user_id"] == uid(db, LOVE_CITY, "jessica"))
+        seat["areas"] = areas
+        as_(app, LOVE_CITY, "jessica")
+        w = app.get(f"/church/my-week?business_id={LOVE_CITY}&as_user={tiara}")
+        assert w.status_code == 200, w.text
+        assert "from_office" not in w.json() and "from_office" not in w.json()["counts"], areas
+        assert "St. Mary" not in w.text
+    as_(app, LOVE_CITY, "owner")
+    w = app.get(f"/church/my-week?business_id={LOVE_CITY}&as_user={tiara}")
+    assert "from_office" not in w.json() and "St. Mary" not in w.text, "the owner's See as too"
+    as_(app, LOVE_CITY, "tiara")
+    w = app.get(f"/church/my-week?business_id={LOVE_CITY}")
+    assert [x["title"] for x in w.json()["from_office"]] == ["The Owens family"], "her own week has it"
+
+
+def test_the_owner_is_off_an_admins_hand_to_list_only_when_the_owners_person_is_a_pastor(app, db, monkeypatch):
+    monkeypatch.setenv("CHURCH_LEADER_TASKS", "on")
+
+    def hand_to():
+        as_(app, LOVE_CITY, "minnie")
+        r = app.get(f"/church/my-week/people?business_id={LOVE_CITY}")
+        assert r.status_code == 200, r.text
+        return [p["role"] for p in r.json()["people"]]
+    assert "owner" not in hand_to(), "Love City's owner is its senior pastor"
+    # A church whose owner holds no pastor's or elder's role keeps the owner on the list.
+    db.t["church_leader_roles"] = [h for h in db.t["church_leader_roles"]
+                                   if not (h["business_id"] == LOVE_CITY and h["contact_id"] == db.who[LOVE_CITY]["kevin"])]
+    assert "owner" in hand_to()
+    # Hand-overs to the owner's person still go.
+    as_(app, LOVE_CITY, "minnie")
+    assert send(app, LOVE_CITY, "kevin", title="The insurance renewal").status_code == 200
 
 
 def test_a_send_that_fails_is_let_go_and_goes_next_hour(app, db):

@@ -163,7 +163,9 @@ def _link(v: Any) -> Optional[str]:
     if (len(s) > LINK_MAX or any(c.isspace() for c in s) or u.scheme != "https" or not u.hostname
             or u.username or u.password):
         raise HTTPException(400, "A link starts with https://")
-    return s
+    # urlparse reads the scheme in any case; the table holds it lower case
+    # (its check is case-sensitive: HTTPS:// would fail the insert for good).
+    return "https" + s[len(u.scheme):] if s[:len(u.scheme)] != "https" else s
 
 
 def _for_date(v: Any) -> Optional[str]:
@@ -463,38 +465,55 @@ def handovers_seen(handover_id: str, body: Dict[str, Any], session: UserSession 
 TOLD_FIELDS = "id,business_id,contact_id,sent_by,title,note,link,for_date,department_id,created_at,told_at"
 
 
+def _item_text(r: Dict[str, Any], senders: Dict[str, str], depts: Dict[str, str], many: bool) -> str:
+    """One hand-over, in full: what it is, who sent it (when several did),
+    its department and day, the note, the link."""
+    bits = []
+    if many:
+        bits.append(f"from {senders.get(str(r.get('sent_by') or '')) or OFFICE}")
+    dept = depts.get(str(r.get("department_id") or ""))
+    if dept:
+        bits.append(f"for {dept}")
+    d = _day(r.get("for_date"))
+    if d:
+        bits.append(f"for {day_words(d)}")
+    lines = [f"“{_plain(r.get('title'))}”" + (", " + ", ".join(bits) if bits else "")]
+    note = str(r.get("note") or "").replace("\r\n", "\n").strip()
+    if note:
+        lines.append(note)
+    if str(r.get("link") or "").startswith("https://"):
+        lines.append(str(r["link"]))
+    return "\n".join(lines)
+
+
 def told_text(name: str, rows: List[Dict[str, Any]], senders: Dict[str, str], depts: Dict[str, str],
               where: str) -> Tuple[str, str]:
-    """(subject end, the email's words) for what arrived for one person."""
+    """(subject end, the email's words) for what arrived for one person:
+    every hand-over in full, one after another (#1804 review: a grouped
+    email never drops a note or a link), then `where`."""
     import church_leader_tasks as clt
     by = [senders.get(str(r.get("sent_by") or "")) or OFFICE for r in rows]
     who = _join(by)
-    lines = [f"Hi {clt.first_name(name) or 'there'},"]
-    if len(rows) == 1:
-        r = rows[0]
-        dept = depts.get(str(r.get("department_id") or ""))
-        what = f"“{_plain(r.get('title'))}”"
-        lines.append(f"{who} sent you something{' for ' + dept if dept else ''}: {what}.")
-        d = _day(r.get("for_date"))
-        if d:
-            lines.append(f"It’s for {day_words(d)}.")
-        note = str(r.get("note") or "").strip()
-        if note:
-            lines.append(note)
-        if r.get("link"):
-            lines.append(f"Link: {r['link']}")
-        subject = f"{who} sent you something"
-    else:
-        lines.append(f"{who} sent you {len(rows)} things:")
-        said = []
-        for r in rows:
-            d = _day(r.get("for_date"))
-            said.append(f"“{_plain(r.get('title'))}”" + (f", for {day_words(d)}" if d else "")
-                        + (f", from {senders.get(str(r.get('sent_by') or '')) or OFFICE}" if len(set(by)) > 1 else ""))
-        lines[-1] += "\n" + "\n".join(said)
-        subject = f"{who} sent you {len(rows)} things"
-    lines.append(where)
-    return subject, "\n\n".join(lines)
+    many = len(set(by)) > 1
+    n = len(rows)
+    intro = f"{who} sent you something:" if n == 1 else f"{who} sent you {n} things:"
+    parts = [f"Hi {clt.first_name(name) or 'there'},", intro]
+    parts += [_item_text(r, senders, depts, many) for r in rows]
+    if where:
+        parts.append(where)
+    return (f"{who} sent you something" if n == 1 else f"{who} sent you {n} things"), "\n\n".join(parts)
+
+
+def _render(biz: Dict[str, Any], text: str, preheader: str, link: str = "", label: str = "") -> str:
+    """The email, from the church, with only https:// addresses made into
+    links (an http:// one stays plain text)."""
+    import email_layout
+    settings = biz.get("settings") if isinstance(biz.get("settings"), dict) else {}
+    church = _plain(biz.get("name")) or "Your church"
+    return email_layout.render_html(
+        text, business_name=church, brand=email_layout.brand_of(settings), sig=None, preheader=preheader[:90],
+        cta=(label, link) if link and label else None, https_only=True,
+        disclaimer=f"You’re getting this because you lead at {church}.", footer_note="Sent by your church office")
 
 
 def _join(names: List[str]) -> str:
@@ -518,12 +537,6 @@ def _release(b: str, ids: List[str], stamp: str) -> None:
             {"told_at": None})
     except Exception:
         logger.warning("handovers: a claim wasn't let go (business %s)", b[:8], exc_info=True)
-
-
-def _lead_link(b: str) -> str:
-    import church_follow_up as cfu
-    origin = cfu.site_origin(b)
-    return f"{origin}/my/lead" if origin else ""
 
 
 def tell(biz: Dict[str, Any], rows: List[Dict[str, Any]], now: datetime, stats: Dict[str, int]) -> None:
@@ -556,17 +569,28 @@ def tell(biz: Dict[str, Any], rows: List[Dict[str, Any]], now: datetime, stats: 
         stats["unread"] += len(rows)
         print(f"[church_handovers] {b[:8]}: who sent them wasn't read; next sweep", flush=True)
         return
-    reply_to = clt._office_email(biz)
+    office_reply = clt._office_email(biz)
+    sender_email: Dict[str, Optional[str]] = {}
+    for u in senders:
+        got = cas._login_email(ch, u)
+        sender_email[u] = got or None          # '' (none) or None (unread): the church office answers instead
     for cid, mine in by_person.items():
         mine.sort(key=lambda r: str(r.get("created_at") or ""))
         p = people.get(cid) or {}
         email, name = p.get("email", ""), p.get("name", "")
+        # A reply goes to whoever sent it, when one login sent everything
+        # and their address is known; else to the church office.
+        sent_by = {str(r.get("sent_by") or "") for r in mine}
+        one = next(iter(sent_by)) if len(sent_by) == 1 else ""
+        reply_to = (sender_email.get(one) if one else None) or office_reply
+        answer = (f"Reply to this email to answer {senders[one].split(' ')[0]}." if one and sender_email.get(one)
+                  and senders.get(one) else "Reply to this email to answer the church office.")
         if cid in office_people:
-            where = "It’s on your My week in the church’s app."
-            link, label, render = cot._link(b), "Open My week", cot.render
+            where = f"It’s on your My week in the church’s app. {answer}"
+            link, label = cot._link(b), "Open My week"
         else:
-            where = f"It’s on your {clt._tab_word()} tab in the church’s app, under From the office. Tap Got it there."
-            link, label, render = _lead_link(b), f"Open your {clt._tab_word()} tab", clt.render_email
+            # No Lead tab line until the member app's part ships (PR C2).
+            where, link, label = answer, "", ""
         ids = [str(r["id"]) for r in mine]
         stamp = _iso(now)
         claimed = _claim(b, cid, ids, stamp)
@@ -579,7 +603,7 @@ def tell(biz: Dict[str, Any], rows: List[Dict[str, Any]], now: datetime, stats: 
             continue
         subject_end, text = told_text(name, mine, senders, depts, where)
         try:
-            html = render(biz, text, _plain(mine[0].get("title"))[:80], link, label)
+            html = _render(biz, text, _plain(mine[0].get("title"))[:80], link, label)
             clt.deliver(biz, email, name, f"{church}: {subject_end}", html,
                         f"handover-{cas.digest(r['id'] for r in mine)}", reply_to=reply_to)
         except Exception:

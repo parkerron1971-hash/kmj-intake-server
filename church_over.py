@@ -392,6 +392,12 @@ class Church:
         Admin, Manager or Member seat is ever over them, and no walk goes
         through them. At a church whose elders share the top ("Elders
         (Shepherds)"), every elder is one."""
+        keys = self._senior_keys
+        return self._got("seniors", lambda: {str(h["contact_id"]) for h in self.holders
+                                             if h.get("role") in keys} - self.top)
+
+    @property
+    def _senior_keys(self) -> Set[str]:
         def load() -> Set[str]:
             import church_roles as cr
             have = {str(d.get("key")) for d in self.defs}
@@ -401,8 +407,8 @@ class Church:
             if m:
                 import church_map
                 keys |= set(church_map.picked(m, "pastor_yes_roles") or [])
-            return {str(h["contact_id"]) for h in self.holders if h.get("role") in keys} - self.top
-        return self._got("seniors", load)
+            return keys
+        return self._got("senior_keys", load)
 
     @property
     def shepherds(self) -> Set[str]:
@@ -411,6 +417,12 @@ class Church:
         map's row, else the role's own or its job's), and a role that
         follows the church's Ministers setting by that setting (read only
         then; a failed read is a 503). Never a title word."""
+        keys = self._shepherd_keys
+        return self._got("shepherds", lambda: {str(h["contact_id"]) for h in self.holders
+                                               if h.get("role") in keys} - self.top)
+
+    @property
+    def _shepherd_keys(self) -> Set[str]:
         def load() -> Set[str]:
             import church_map
             m = self.map or None
@@ -427,9 +439,18 @@ class Church:
                 if st is None:
                     raise HTTPException(503, UNREAD)
                 ministers = bool(st.get("ministers"))
-            keys = {k for k, v in said.items() if v is True or (v is None and ministers)}
-            return {str(h["contact_id"]) for h in self.holders if h.get("role") in keys} - self.top
-        return self._got("shepherds", load)
+            return {k for k, v in said.items() if v is True or (v is None and ministers)}
+        return self._got("shepherd_keys", load)
+
+    @property
+    def owner_guarded(self) -> bool:
+        """Whether the owner's own person holds a role that shepherds or a
+        senior one (at Love City the owner is the senior pastor). The owner
+        is never under anyone either way; this only says whether the Hand to
+        list offers the owner to the office (#1804 review)."""
+        p = self.owner_person
+        keys = self._shepherd_keys | self._senior_keys
+        return bool(p) and any(str(h.get("contact_id")) == p and h.get("role") in keys for h in self.holders)
 
     @property
     def guarded(self) -> Set[str]:

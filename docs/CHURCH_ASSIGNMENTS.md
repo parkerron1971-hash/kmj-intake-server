@@ -426,13 +426,20 @@ No office standing but the owner's is over a **shepherd** or a **senior**:
 - **The old Hand to list** (Tasks, `GET /church/my-week/people`: the office logins and, with My
   tasks for leaders, the church's leaders) follows it too, while assignments are open for the
   church: for any seat but the owner it offers no shepherd and no senior, nor an office login
-  whose person is one (`church_my_week.without_guarded`); a task to yourself stays. Who is guarded
-  that can't be read is a 503, never an unfiltered list.
-- **Known limit:** the office writes those tasks straight to the database (`tasks`, through the
-  browser's own session and RLS), and the database doesn't refuse one for a pastor or an elder.
-  A trigger would have to repeat who shepherds in SQL (each role's switch, the legacy and job
-  fallbacks, the Ministers setting, the seniors and the owner's identity), which isn't simple
-  enough to be safe, so the rule holds where the list is offered and in every server route.
+  whose person is one (`church_my_week.without_guarded`); a task to yourself stays. The owner is
+  off it too where the owner's own person is a pastor or an elder (`Church.owner_guarded`: Love
+  City's owner is its senior pastor); a church whose owner isn't one keeps the owner on the list
+  (the coordinator's decision in the #1804 review). Hand-overs and Send up to the owner still go.
+  Who is guarded that can't be read is a 503, never an unfiltered list.
+- **Known limit, direct writes:** the office writes those tasks straight to the database
+  (`tasks`, through the browser's own session and RLS), and the database doesn't refuse one for a
+  pastor or an elder. A trigger would have to repeat who shepherds in SQL (each role's switch, the
+  legacy and job fallbacks, the Ministers setting, the seniors and the owner's identity), which
+  isn't simple enough to be safe, so the rule holds where the list is offered and in every server
+  route.
+- **Known limit, the board:** `church_board.make_tasks` still hands a pastor or an elder the
+  follow-ups the board decided. That's the board's decision, recorded by the office, not the
+  office giving work, so it stays as it is.
 
 `Church.shepherds`, `Church.guarded` (shepherds | seniors); `_under` leaves `guarded` out of the
 office part and the everyone part, then walks the map from the login's person for an Admin or a
@@ -471,17 +478,24 @@ Routes (prefix /church, the assignment routes' gate: a church, the switch, then 
 A sent item: `{id, to: {contact_id, name}, title, note, link, for_date, for_date_text, department,
 sent_at, from, seen, seen_at, seen_text}`.
 
-Where it's read: My week's `from_office` (a login whose own person it's for, the owner's included:
+Where it's read (and only by the one it's for: See as, another login's week, never reads or shows
+it, and `church_team_week.within` drops it, #1804 review): My week's `from_office` (a login whose
+own person it's for, the owner's included:
 `[{id, title, note, link, for_date, for_date_text, department, from, sent_at, seen}]`, what they
 haven't seen and then two weeks of what they have; `counts.from_office` is what they haven't
 seen; `null` when it couldn't be read, and the week stands), and the member app's Lead tab (PR C2).
 
 Told: the hourly sweep (`church_handovers.sweep_tick`, on the worker) sends each person one email
 for what arrived since the last sweep, from the church, naming who sent each ("Jessica McCloud and
-Minnie Tatum sent you 2 things"), with the note and the link when it's one. Claimed before the
-send (`told_at`), let go when it fails; no email on file, told anyway; one older than a week never
-told is left untold. A person with an office login (the owner's too) is told it's on My week;
-anyone else, their Lead tab.
+Minnie Tatum sent you 2 things"). Every hand-over is in it in full, grouped or not: its title, who
+sent it (when several did), its department and day, its note and its link (#1804 review). Only an
+https:// address becomes a link (`email_layout.render_html(https_only=True)`); an http:// one in a
+note stays plain text. A reply goes to the one login that sent everything in it, when its address
+is known, else to the church office, and the email says which. A person with an office login (the
+owner's too) is told it's on My week; anyone else isn't pointed anywhere until the member app's
+part ships (PR C2). Claimed before the send (`told_at`), let go when it fails; no email on file,
+told anyway; one older than a week never told is left untold. A link's scheme is saved lower case
+(`HTTPS://` would fail the table's case-sensitive check for good).
 
 The table: `supabase/APPLY-2026-11-12-church-handovers.sql` (`church_handovers`, server-only;
 the person and the department are its own church's by trigger; PGlite check

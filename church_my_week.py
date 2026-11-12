@@ -187,7 +187,10 @@ def _area_line(area: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def build(business: Dict[str, Any], user_id: str, email: str, role: str) -> Dict[str, Any]:
+def build(business: Dict[str, Any], user_id: str, email: str, role: str, *, own: bool = True) -> Dict[str, Any]:
+    """`own`: the login reading its own week. See as (another login's week)
+    passes False: what the office sent a person is theirs alone, so it's
+    never read or shown there (#1804 review)."""
     biz = str(business["id"])
     now = _now()
     view = church_areas.view_for(biz, user_id, role)
@@ -279,7 +282,7 @@ def build(business: Dict[str, Any], user_id: str, email: str, role: str) -> Dict
     # person included). A read that fails is None, said in the log; the week
     # stands.
     from_office: Optional[List[Dict[str, Any]]] = []
-    if church_over.church_open(biz):
+    if own and church_over.church_open(biz):
         import church_handovers
         try:
             from_office = church_handovers.for_login(business, user_id, now)
@@ -325,16 +328,18 @@ def build(business: Dict[str, Any], user_id: str, email: str, role: str) -> Dict
     order = {"raised": 0, "follow_up": 0, "no_one": 1, "care": 2, "task": 3, "report": 3, "raised_done": 3,
              "gap": 4, "late": 5, "logins": 6}
     needs.sort(key=lambda n: (not n["late"], order.get(n["kind"], 9)))
-    return {
+    out = {
         "me": {"role": role, "areas": view["areas"], "by": view["by"], "why": view["why"], "name": me_name},
         "next": needs[0] if needs else None,
         "needs": needs[1:SHOWN + 1],
         "areas": areas,
         "handed": handed,
-        "from_office": from_office,
-        "counts": {"needs": len(needs), "areas": len(areas), "handed": len(handed),
-                   "from_office": sum(1 for x in from_office or [] if not x["seen"])},
+        "counts": {"needs": len(needs), "areas": len(areas), "handed": len(handed)},
     }
+    if own:
+        out["from_office"] = from_office
+        out["counts"]["from_office"] = sum(1 for x in from_office or [] if not x["seen"])
+    return out
 
 
 def _clock(business: Dict[str, Any]) -> Tuple[Any, bool]:
@@ -835,8 +840,9 @@ def without_guarded(biz: Dict[str, Any], uid: str, out: Dict[str, Any]) -> Dict[
     For any seat but the owner, while church assignments are open for the
     church (church_over.church_open), the Hand to list offers no shepherd
     and no senior (church_over.Church.guarded: by each role's own switch),
-    nor an office login whose person is one; the caller themselves stays
-    (a task to yourself). Who is guarded that can't be read is a 503, never
+    nor an office login whose person is one, nor the owner when the owner's
+    own person is a pastor or an elder; the caller themselves stays (a task
+    to yourself). Who is guarded that can't be read is a 503, never
     an unfiltered list. The database itself doesn't refuse such a task (the
     office writes tasks straight to it): that's the known limit, said in
     docs/CHURCH_ASSIGNMENTS.md."""
@@ -849,8 +855,13 @@ def without_guarded(biz: Dict[str, Any], uid: str, out: Dict[str, Any]) -> Dict[
         return out
     lp = ch.login_person
     out = dict(out)
+    # The owner stays, but where the owner's own person is a pastor or an
+    # elder (Love City's owner is its senior pastor): then not for this seat
+    # either (#1804 review; hand-overs and Send up to the owner still go).
+    keep_owner = not ch.owner_guarded
     out["people"] = [p for p in out.get("people") or []
-                     if p.get("you") or p.get("role") == "owner" or lp.get(str(p.get("user_id"))) not in guard]
+                     if p.get("you") or (keep_owner if p.get("role") == "owner"
+                                         else lp.get(str(p.get("user_id"))) not in guard)]
     if "leaders" in out:
         out["leaders"] = [x for x in out["leaders"] or [] if str(x.get("contact_id")) not in guard]
     return out
@@ -890,7 +901,7 @@ def my_week(business_id: str, as_user: Optional[str] = None, session: UserSessio
             raise HTTPException(404, "That login isn't on this church")
         if overseer and seat[0].get("role") != "manager":
             raise HTTPException(403, OVERSEER_ONLY)
-        out = build(biz, uid, seat[0].get("invited_email") or "", seat[0].get("role") or "viewer")
+        out = build(biz, uid, seat[0].get("invited_email") or "", seat[0].get("role") or "viewer", own=False)
         view: Optional[List[str]] = None
         if overseer:
             # A duty never widens what a login sees: the overseer reads the

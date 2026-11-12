@@ -65,7 +65,10 @@ await refuses(send, [b1, c1, u1, '   ', null, null, null], /check constraint/);
 await refuses(send, [b1, c1, u1, 'a'.repeat(141), null, null, null], /check constraint/);
 await ok(send, [b1, c1, u1, 'a'.repeat(140), 'n'.repeat(1000), null, null]);
 await refuses(send, [b1, c1, u1, 'x', 'n'.repeat(1001), null, null], /check constraint/);
-for (const bad of ['http://example.org', 'javascript:alert(1)', 'https://exa mple.org', 'https://' + 'a'.repeat(500)]) {
+// The check is case-sensitive: HTTPS:// is refused here, so the app saves the
+// scheme lower case (church_handovers._link; #1804 review).
+for (const bad of ['http://example.org', 'javascript:alert(1)', 'https://exa mple.org', 'https://' + 'a'.repeat(500),
+                   'HTTPS://example.org/plan']) {
   await refuses(send, [b1, c1, u1, 'x', null, bad, null], /check constraint/);
 }
 
