@@ -458,13 +458,47 @@ def accept(body: AcceptBody, user: AuthedUser = Depends(require_user)) -> Dict[s
 def revoke(member_id: str, biz: str,
            user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     caller = require_role(biz, str(user.id), "manager")
-    # A manager can't revoke an admin (rank discipline).
+    # A manager can't revoke an admin (rank discipline). A read that failed
+    # is a 503, never a pass: it used to read as "no such login" and let the
+    # revoke through unranked.
     target = sb_clients.sb_get_as_service(
-        f"/business_users?id=eq.{member_id}&business_id=eq.{biz}&select=role&limit=1") or []
-    if target and _ROLE_RANK.get(target[0].get("role"), 0) >= _ROLE_RANK.get(caller, 0) \
-            and caller != "owner":
+        f"/business_users?id=eq.{quote(str(member_id), safe='')}&business_id=eq.{quote(str(biz), safe='')}"
+        "&select=role,user_id&limit=1")
+    if target is None:
+        raise HTTPException(503, "That couldn't be checked. Try again in a moment.")
+    if not target:
+        raise HTTPException(404, "That login isn't on this team")
+    if _ROLE_RANK.get(target[0].get("role"), 0) >= _ROLE_RANK.get(caller, 0) and caller != "owner":
         raise HTTPException(403, "you can only remove roles below your own")
-    sb_clients.sb_patch_as_service(
-        f"/business_users?id=eq.{member_id}&business_id=eq.{biz}",
+    saved = sb_clients.sb_patch_as_service(
+        f"/business_users?id=eq.{quote(str(member_id), safe='')}&business_id=eq.{quote(str(biz), safe='')}",
         {"status": "revoked", "revoked_at": _now_iso()})
-    return {"ok": True}
+    if not isinstance(saved, list) or not saved:
+        raise HTTPException(503, "That didn't save. Try again.")
+    return {"ok": True, **hand_back_login(biz, target[0].get("user_id"))}
+
+
+def hand_back_login(biz: str, user_id: Any) -> Dict[str, int]:
+    """A login taken off the team leaves nothing with it (Kevin, 2026-11-11:
+    "if a person is removed automatically the emails etc is as well with no
+    problems"). Its access ends with the revoke, since every gate reads the
+    seat live. Its open tasks go back to the office's list, and a care request
+    the owner handed it goes back to Prayer & care. Its duties need no move:
+    a duty moved only to logins who've left shows "needs someone" on the
+    duties page, and the owner and Admins hold every duty meanwhile. A write
+    that didn't save is counted, never hidden."""
+    out = {"tasks_returned": 0, "care_returned": 0, "failed": 0}
+    if not user_id:
+        return out  # an invite never accepted: nothing was ever theirs
+    b, u = quote(str(biz), safe=""), quote(str(user_id), safe="")
+    for table, key, open_only, body in (
+            ("tasks", "tasks_returned", "status=neq.done", {"assigned_to": None}),
+            ("ministry_care_requests", "care_returned", "status=neq.closed",
+             {"assigned_to": None, "assigned_at": None})):
+        saved = sb_clients.sb_patch_as_service(f"/{table}?business_id=eq.{b}&assigned_to=eq.{u}&{open_only}", body)
+        if isinstance(saved, list):
+            out[key] = len(saved)
+        else:
+            out["failed"] += 1
+            logger.warning("revoke: %s still with a removed login on %s", table, str(biz)[:8])
+    return out

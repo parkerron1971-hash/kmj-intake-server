@@ -983,40 +983,97 @@ async def send_invite(business: Dict[str, Any], role_row: Dict[str, Any]) -> boo
 
 
 def remove_role(business_id: str, role_id: str) -> Dict[str, Any]:
-    """Take a role away. Someone who no longer leads anything can't open
-    their Lead tab, so the people handed to them go back to the office
-    (the sweep alerts it), never left with a leader who can't reach them."""
+    """Take a role away. What was handed to them through that role goes back
+    at once: follow-ups to the office (the sweep alerts it), prayer they
+    hadn't prayed over to Prayer & care. Someone who no longer leads anything
+    can't open their Lead tab, so everything handed to them goes back, and
+    their open tasks go back to whoever handed them out. Nobody is left with
+    something they can no longer reach, and a role taken away takes its work
+    with it even when they still hold another one (Kevin, 2026-11-11: "if a
+    person is removed automatically the emails etc is as well with no
+    problems"). A write that didn't save is left for the sweep
+    (_sweep_handed), never counted as returned."""
     biz, rid = _uid(business_id, "business"), _uid(role_id, "role")
-    row = _rows(f"/church_leader_roles?id=eq.{_q(rid)}&business_id=eq.{_q(biz)}&select=contact_id&limit=1")
+    row = _rows(f"/church_leader_roles?id=eq.{_q(rid)}&business_id=eq.{_q(biz)}&select=contact_id,role&limit=1")
     if row is None:
         raise HTTPException(503, "That couldn’t be checked. Try again in a moment.")
     if not sb_clients.sb_delete_as_service(f"/church_leader_roles?id=eq.{_q(rid)}&business_id=eq.{_q(biz)}"):
         raise HTTPException(503, "That didn’t save. Try again.")
+    out = {"returned": 0, "prayer_returned": 0, "tasks_returned": 0, "failed": 0}
     if not row:
-        return {"returned": 0}
-    lid = str(row[0]["contact_id"])
-    still = _rows(f"/church_leader_roles?business_id=eq.{_q(biz)}&contact_id=eq.{_q(lid)}&status=eq.active&select=id&limit=1")
-    if still is None or still:
-        return {"returned": 0}
-    mine = _rows(f"/church_follow_ups?business_id=eq.{_q(biz)}&leader_contact_id=eq.{_q(lid)}"
-                 "&status=in.(open,handed_back)&select=id") or []
+        return out
+    lid, role = str(row[0]["contact_id"]), str(row[0].get("role") or "")
+    still = _rows(f"/church_leader_roles?business_id=eq.{_q(biz)}&contact_id=eq.{_q(lid)}&status=eq.active"
+                  "&select=role&limit=100")
+    if still is None:
+        out["failed"] += 1  # the sweep finds what's left with them
+        return out
     people = _contacts(biz, [lid]) or {}
     who = (people.get(lid) or {}).get("name") or "Their leader"
-    for f in mine:
-        sb_clients.sb_patch_as_service(
-            f"/church_follow_ups?id=eq.{_q(f['id'])}&business_id=eq.{_q(biz)}",
+    if not still:
+        out.update(_return_handed(biz, lid, who, None))
+        got = _return_tasks(biz, lid)
+        out["tasks_returned"], out["failed"] = got["returned"], out["failed"] + got["failed"]
+    elif role and role not in {str(s.get("role") or "") for s in still}:
+        # Another team under the same role key keeps its work: what came
+        # through a role is told apart by its key, not its team.
+        out.update(_return_handed(biz, lid, who, role))
+    return out
+
+
+def _gone_words(biz: str, who: str, role: Optional[str]) -> Tuple[str, str]:
+    """(the reason the office sees, the note on the follow-up)."""
+    if role is None:
+        return f"{who} no longer leads, so they’re with the office.", f"{who} no longer leads. Back with the office."
+    import church_roles as cr
+    title = cr.title_of(role, cr.defs(biz) or []) or "that role"
+    return (f"{who} is no longer {title}, so they’re with the office.",
+            f"{who} is no longer {title}. Back with the office.")
+
+
+def _return_handed(biz: str, lid: str, who: str, role: Optional[str]) -> Dict[str, int]:
+    """Follow-ups and unprayed prayer handed to `lid` through `role` (every
+    role when None) go back: follow-ups to the office, prayer to Prayer &
+    care. Each write is checked and only moves a row still theirs; one that
+    didn't save is counted as failed and left for the sweep."""
+    out = {"returned": 0, "prayer_returned": 0, "failed": 0}
+    only = "" if role is None else f"&leader_role=eq.{_q(role)}"
+    theirs = f"business_id=eq.{_q(biz)}&leader_contact_id=eq.{_q(lid)}"
+    mine = _rows(f"/church_follow_ups?{theirs}{only}&status=in.(open,handed_back)&select=id")
+    prayers = _rows(f"/ministry_care_requests?{theirs}{only}&leader_prayed_at=is.null&select=id")
+    out["failed"] += (mine is None) + (prayers is None)
+    reason, said = _gone_words(biz, who, role) if mine else ("", "")
+    for f in mine or []:
+        saved = sb_clients.sb_patch_as_service(
+            f"/church_follow_ups?id=eq.{_q(f['id'])}&{theirs}",
             {"leader_contact_id": None, "leader_role": "", "leader_told_at": None, "status": "open",
-             "reason": f"{who} no longer leads, so they’re with the office.", "updated_at": _iso(_now())})
-        _note(biz, str(f["id"]), "chief", "reassigned", f"{who} no longer leads. Back with the office.")
-    # Prayer they hadn't prayed over yet goes back to Prayer & care too.
-    prayers = _rows(f"/ministry_care_requests?business_id=eq.{_q(biz)}&leader_contact_id=eq.{_q(lid)}"
-                    "&leader_prayed_at=is.null&select=id") or []
-    for p in prayers:
-        sb_clients.sb_patch_as_service(
-            f"/ministry_care_requests?id=eq.{_q(p['id'])}&business_id=eq.{_q(biz)}",
+             "reason": reason, "updated_at": _iso(_now())})
+        if isinstance(saved, list) and saved:
+            out["returned"] += 1
+            _note(biz, str(f["id"]), "chief", "reassigned", said)
+        else:
+            out["failed"] += 1
+    for p in prayers or []:
+        saved = sb_clients.sb_patch_as_service(
+            f"/ministry_care_requests?id=eq.{_q(p['id'])}&{theirs}",
             {"leader_contact_id": None, "leader_role": "", "leader_told_at": None, "leader_due_at": None,
              "leader_late_level": 0, "updated_at": _iso(_now())})
-    return {"returned": len(mine), "prayer_returned": len(prayers)}
+        if isinstance(saved, list) and saved:
+            out["prayer_returned"] += 1
+        else:
+            out["failed"] += 1
+    if out["failed"]:
+        logger.warning("church hand-back: %d left with a former leader on %s for the sweep", out["failed"], biz[:8])
+    return out
+
+
+def _return_tasks(biz: str, lid: str) -> Dict[str, int]:
+    """Someone no longer in the leaders room can't be handed a task or open
+    their Lead tab: their open tasks go back to whoever handed them out (the
+    office list when no one is named). Still in the room (a group leader):
+    they keep them."""
+    import church_leader_tasks as clt
+    return clt.return_tasks(biz, [lid])
 
 
 # ─── The leader (their member page) ───────────────────────────────────
@@ -1245,11 +1302,57 @@ async def sweep(now: Optional[datetime] = None) -> Dict[str, int]:
     except Exception:
         logger.warning("church role terms sweep failed", exc_info=True)
     try:
+        stats["handed_back"] = await _sweep_handed()
+    except Exception:
+        logger.warning("church hand-back sweep failed", exc_info=True)
+    try:
         import church_prayer
         stats["prayer"] = await church_prayer.sweep(now)
     except Exception:
         logger.warning("church prayer sweep failed", exc_info=True)
     return stats
+
+
+async def _sweep_handed() -> int:
+    """Whatever took a role away (Leaders & roles, a member's record gone, a
+    hand-back that didn't save), nothing stays with someone through a role
+    they no longer hold: an open follow-up or an unprayed prayer whose leader
+    doesn't hold the role it came through goes back, as remove_role sends it.
+    Every hand-off stamps the holder's role key (choose, pass_on, the office's
+    hand-on), so a key they no longer hold is a role they lost. A row with no
+    key stays while its leader holds any role. A church whose roles couldn't
+    be read is passed over: a failed read never means "nobody holds anything"."""
+    import asyncio
+    fups = await asyncio.to_thread(
+        _rows, "/church_follow_ups?status=in.(open,handed_back)&leader_contact_id=not.is.null"
+               "&select=id,business_id,leader_contact_id,leader_role&limit=2000")
+    prayers = await asyncio.to_thread(
+        _rows, "/ministry_care_requests?leader_contact_id=not.is.null&leader_prayed_at=is.null"
+               "&select=id,business_id,leader_contact_id,leader_role&limit=2000")
+    by_biz: Dict[str, List[Dict[str, Any]]] = {}
+    for r in (fups or []) + (prayers or []):
+        by_biz.setdefault(str(r["business_id"]), []).append(r)
+    n = 0
+    for biz, items in by_biz.items():
+        held = await asyncio.to_thread(
+            _rows, f"/church_leader_roles?business_id=eq.{_q(biz)}&status=eq.active&select=contact_id,role&limit=5000")
+        if held is None:
+            continue
+        pairs = {(str(h["contact_id"]), str(h.get("role") or "")) for h in held}
+        anyone = {str(h["contact_id"]) for h in held}
+        gone = set()
+        for r in items:
+            lid, role = str(r["leader_contact_id"]), str(r.get("leader_role") or "")
+            if role and (lid, role) not in pairs:
+                gone.add((lid, role if lid in anyone else None))
+            elif not role and lid not in anyone:
+                gone.add((lid, None))
+        for lid, role in sorted(gone, key=lambda g: (g[0], g[1] or "")):
+            people = await asyncio.to_thread(_contacts, biz, [lid]) or {}
+            who = (people.get(lid) or {}).get("name") or "Their leader"
+            got = await asyncio.to_thread(_return_handed, biz, lid, who, role)
+            n += got["returned"] + got["prayer_returned"]
+    return n
 
 
 async def _sweep_terms(now: datetime) -> int:
