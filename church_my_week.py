@@ -323,11 +323,23 @@ def build(business: Dict[str, Any], user_id: str, email: str, role: str) -> Dict
     }
 
 
-def _today(business: Dict[str, Any], now: datetime) -> date:
-    """The church's own date, on the one clock every week page reads
-    (church_work_checks.church_zone). A clock that can't be read is a 503."""
+def _clock(business: Dict[str, Any]) -> Tuple[Any, bool]:
+    """(the clock, whether it's the church's own): the one clock every week
+    page reads (church_work_checks.church_zone); one that can't be read is
+    the platform's default for My week's own lines, said in the log, and
+    never a 503 for the first page (the team page and the one-on-one 503)."""
     import church_work_checks as cw
-    return now.astimezone(cw.church_zone(business)).date()
+    try:
+        return cw.church_zone(business), True
+    except HTTPException:
+        print(f"[church_my_week] {str(business.get('id'))[:8]}: the church's clock wasn't read; "
+              "My week uses the platform's for now and judges nothing", flush=True)
+        return cw.platform_zone(), False
+
+
+def _today(business: Dict[str, Any], now: datetime) -> date:
+    """The church's own date (_clock)."""
+    return now.astimezone(_clock(business)[0]).date()
 
 
 def _due(day: str, today: date) -> str:
@@ -688,7 +700,9 @@ def rhythm(business: Dict[str, Any], user_id: str, role: str, now: Optional[date
     line, its door and whether it's today on the church's own day (an Each
     week job is never today: its day isn't said). `every_job`: the owner
     or an Admin, who holds every duty. None for a business that isn't a
-    church, and when the duties can't be read (My week stands without it)."""
+    church, and when the duties can't be read (My week stands without it).
+    A church clock that can't be read: the platform's for the days, and
+    nothing judged (`judged` false, with `judged_text`)."""
     import church_duties
     import church_follow_up as cfu
     if not cfu.is_church(business):
@@ -700,8 +714,9 @@ def rhythm(business: Dict[str, Any], user_id: str, role: str, now: Optional[date
     except HTTPException:
         print(f"[church_my_week] {biz[:8]}: a login's duties weren't read; no rhythm")
         return None
-    import church_work_checks as cw
-    tz = cw.church_zone(business)          # the team page's clock: a 503 when it can't be read, never UTC
+    # The church's one clock; one that can't be read is the platform's for
+    # the days, and nothing is judged on it (no done, not yet or late).
+    tz, clock_ok = _clock(business)
     today = now.astimezone(tz).date()
     key_today = WEEKDAYS[today.weekday()]
     import church_monthly_report as cmr
@@ -713,7 +728,7 @@ def rhythm(business: Dict[str, Any], user_id: str, role: str, now: Optional[date
     import church_over
     assign = church_over.church_open(business)
     picks = cas.days_for(business, [user_id]).get(str(user_id), {}) if assign else {}
-    judged = _done_full(business, held, today, now, tz, picks=picks)
+    judged = _done_full(business, held, today, now, tz, picks=picks) if clock_ok else {}
     done = {k: v["done"] for k, v in judged.items()}
     monday = today - timedelta(days=today.weekday())
     groups: Dict[str, List[Dict[str, Any]]] = {g: [] for g in GROUP_ORDER}
@@ -741,12 +756,16 @@ def rhythm(business: Dict[str, Any], user_id: str, role: str, now: Optional[date
             groups[g].append(item)
     out_days = [{"key": g, "label": GROUP_LABEL[g], "today": g == key_today or (g == MONTH and any(i["today"] for i in groups[g])),
                  "items": groups[g]} for g in GROUP_ORDER if groups[g]]
-    return {
+    out = {
         "every_job": role in church_duties.KEEPS_ALL,
         "today": {"key": key_today, "label": DAY_NAMES[key_today], "date": today.isoformat()},
         "days": out_days,
         "count": sum(1 for k in church_duties.CATALOG if k in held),
+        "judged": clock_ok,
     }
+    if not clock_ok:
+        out["judged_text"] = "Done, not yet and late couldn't be checked just now."
+    return out
 
 
 def _with_rhythm(week: Dict[str, Any], business: Dict[str, Any], user_id: str, role: str) -> Dict[str, Any]:

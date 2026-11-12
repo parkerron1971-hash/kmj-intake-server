@@ -391,18 +391,36 @@ def test_my_week_and_the_team_page_read_one_clock(db, monkeypatch):
     assert mw._today(c3.church(db, LOVE_CITY), mon_evening) == date(2026, 11, 9)
 
 
-def test_a_clock_that_cant_be_read_is_a_503_everywhere(app, db, monkeypatch):
+def test_a_clock_that_cant_be_read_is_a_503_on_the_team_page_and_the_one_on_one(app, db, monkeypatch):
     from fastapi import HTTPException
     import church_leader_tasks as clt
     monkeypatch.setattr(clt, "zone", lambda b: None)
-    for fn in (lambda: ctw.team(c3.church(db, LOVE_CITY), NOW),
-               lambda: mw.rhythm(c3.church(db, LOVE_CITY), uid(db, LOVE_CITY, "tiara"), "manager", NOW)):
-        with pytest.raises(HTTPException) as e:
-            fn()
-        assert e.value.status_code == 503
+    with pytest.raises(HTTPException) as e:
+        ctw.team(c3.church(db, LOVE_CITY), NOW)
+    assert e.value.status_code == 503
     as_(app, LOVE_CITY, "jessica")
     assert one_on_one(app, login(db, LOVE_CITY, "naiya")).status_code == 503
     assert app.get(f"/church/assignments/people?business_id={LOVE_CITY}").status_code == 503
+
+
+def test_my_week_never_fails_on_the_clock_it_judges_nothing_instead(db, monkeypatch):
+    """#1802 review, round 2: the first page of every church's office logins
+    stands; its days use the platform's clock and nothing is judged."""
+    import church_leader_tasks as clt
+    _waiting(db, "fu-1", at(MONDAY, 13))
+    monkeypatch.setattr(clt, "zone", lambda b: None)
+    monkeypatch.setenv("PLATFORM_DEFAULT_TZ", "America/New_York")
+    r = mw.rhythm(c3.church(db, LOVE_CITY), uid(db, LOVE_CITY, "tiara"), "manager", NOW)
+    assert r["judged"] is False and r["judged_text"] == "Done, not yet and late couldn't be checked just now."
+    items = [i for d in r["days"] for i in d["items"]]
+    assert items and not [i for i in items if "state" in i or "done" in i or "detail" in i]
+    assert r["today"]["date"] == "2026-11-12"
+    late_night = datetime(2026, 11, 13, 4, 30, tzinfo=timezone.utc)          # Thursday 11:30 PM in New York
+    assert mw._today(c3.church(db, LOVE_CITY), late_night) == date(2026, 11, 12), "the platform's clock"
+    week = mw.build(c3.church(db, LOVE_CITY), uid(db, LOVE_CITY, "tiara"), "tiara@lovecity.org", "manager")
+    assert "needs" in week, "the page stands"
+    monkeypatch.setattr(clt, "zone", lambda b: c3.ZoneInfo("America/Detroit"))
+    assert mw.rhythm(c3.church(db, LOVE_CITY), uid(db, LOVE_CITY, "tiara"), "manager", NOW)["judged"] is True
 
 
 def _service_entry(db, eid, day):
@@ -501,3 +519,64 @@ def test_the_team_pages_reads_dont_grow_with_its_logins(db, monkeypatch):
     nine = reads(4)
     assert five == nine, (five, nine)
     assert all(n <= 1 for n in nine.values()), nine
+
+
+# ─── The #1802 review, round 2: a false "missed" never ────────────────
+
+MON_ROLLUP = datetime(2026, 11, 9, 13, 30, tzinfo=timezone.utc)      # Monday 8:30 AM in Detroit
+
+
+def _last_week(db, duties, now=MON_ROLLUP):
+    c = cw.Ctx(c3.church(db, LOVE_CITY), now)
+    return mw.last_week(c3.church(db, LOVE_CITY), frozenset(duties), c.today, now, c.tz, ctx=c)
+
+
+def _checkin(db, aid, eid, at_):
+    db.t["attendance"].append({"id": aid, "business_id": LOVE_CITY, "entry_id": eid, "contact_id": None,
+                               "checked_in_at": at_})
+
+
+def test_a_service_dated_under_its_rooms_own_field_counts(db):
+    db.t.setdefault("custom_modules", []).append({"id": "mod-when", "business_id": LOVE_CITY, "name": "Services",
+                                                  "archetype": "event_roster", "is_active": True,
+                                                  "archetype_params": {"date_field": "when"}})
+    db.t["module_entries"].append({"id": "e-occ", "business_id": LOVE_CITY, "module_id": "mod-when",
+                                   "data": {"when": "2026-11-08T11:00", "type": "service"}})
+    _checkin(db, "a-occ", "e-occ", "2026-11-08T16:10:00+00:00")
+    assert _last_week(db, {"attendance"})["text"] == "Last week: 1 of 1 done"
+
+
+def test_a_check_in_on_an_entry_with_no_day_counts_on_the_day_it_landed(db):
+    db.t["module_entries"].append({"id": "e-plain", "business_id": LOVE_CITY, "data": {"title": "Sunday"}})
+    _checkin(db, "a-plain", "e-plain", "2026-11-08T16:10:00+00:00")
+    assert _last_week(db, {"attendance"})["done"] == 1
+    late = datetime(2026, 11, 9, 4, 30, tzinfo=timezone.utc)                    # Sunday 11:30 PM in Detroit
+    db.t["module_entries"].append({"id": "e-sun", "business_id": LOVE_CITY, "data": {"_checkin_day": "2026-11-08"}})
+    _checkin(db, "a-late", "e-sun", late.isoformat())
+    assert _last_week(db, {"attendance"})["done"] == 1, "before the day was out"
+
+
+def test_a_class_night_is_no_service(db):
+    db.t["module_entries"].append({"id": "e-class", "business_id": LOVE_CITY,
+                                   "data": {"_class_session": True, "_checkin_day": "2026-11-08"}})
+    _checkin(db, "a-class", "e-class", "2026-11-08T16:10:00+00:00")
+    assert _last_week(db, {"attendance"})["missed"] == ["Sunday attendance"]
+
+
+def test_a_headcount_that_might_be_sundays_is_never_said_missed(db):
+    db.t["module_entries"].append({"id": "e-nodate", "business_id": LOVE_CITY, "data": {"title": "Sunday"}})
+    db.t.setdefault("attendance_headcounts", []).append({"id": "h-n", "business_id": LOVE_CITY, "entry_id": "e-nodate",
+                                                         "area": "Main", "count": 120,
+                                                         "updated_at": "2026-11-08T18:00:00+00:00"})
+    got = _last_week(db, {"attendance"})
+    assert got["missed"] == [] and got["unread"] == ["Sunday attendance"]
+
+
+def test_an_entries_read_that_fails_is_unread_never_missed(db, monkeypatch):
+    db.t["module_entries"].append({"id": "e-sun2", "business_id": LOVE_CITY, "data": {"_checkin_day": "2026-11-08"}})
+    _checkin(db, "a-2", "e-sun2", "2026-11-08T16:00:00+00:00")
+    real = db.get
+    monkeypatch.setattr(sb_clients, "sb_get_as_service",
+                        lambda path, **kw: None if path.startswith("/module_entries") else real(path, **kw))
+    got = _last_week(db, {"attendance"})
+    assert got["missed"] == [] and got["unread"] == ["Sunday attendance"]

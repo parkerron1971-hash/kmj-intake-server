@@ -81,6 +81,19 @@ def church_zone(business: Dict[str, Any]):
     return tz
 
 
+def platform_zone():
+    """The platform's default clock (PLATFORM_DEFAULT_TZ, else UTC): what My
+    week falls back to for its own lines when a church's clock can't be
+    read, so the first page never fails on it."""
+    import os
+    from zoneinfo import ZoneInfo
+    name = (os.environ.get("PLATFORM_DEFAULT_TZ") or "").strip()
+    try:
+        return ZoneInfo(name) if name else ZoneInfo("UTC")
+    except Exception:
+        return ZoneInfo("UTC")
+
+
 def _q(v: Any) -> str:
     return quote(str(v), safe="")
 
@@ -435,56 +448,87 @@ def sunday_spots(ctx: Ctx, day: date) -> Optional[tuple]:
     return ctx.once(("spots", day), read)
 
 
-def _entry_day(data: Dict[str, Any]) -> Optional[date]:
+CLASS_NIGHT = "class night"
+
+
+def _entry_day(data: Dict[str, Any], date_field: str = "date") -> Any:
     """The day a service's own entry (module_entries) is for: a check-in
-    occasion's `_checkin_day`, else an occasion's date. A class night is
-    no service's."""
+    occasion's `_checkin_day`, else the date its room keeps it under (the
+    room's own date_field, events_rsvp_router.resolve_fields, as
+    church_checkin reads it). None when it carries no day; CLASS_NIGHT for a
+    class night, which is no service's."""
     if data.get("_class_session"):
-        return None
-    for k in ("_checkin_day", "date"):
-        try:
-            return date.fromisoformat(str(data.get(k) or "")[:10])
-        except ValueError:
-            continue
+        return CLASS_NIGHT
+    from events_rsvp_router import _parse_day
+    for v in (data.get("_checkin_day"), data.get(date_field)):
+        d = _parse_day(v) if isinstance(v, str) else None
+        if d:
+            return d
     return None
 
 
 def counts(ctx: Ctx) -> Dict[str, Any]:
     """The named check-ins (attendance) and the headcounts above zero
     (attendance_headcounts) recorded since last week's Sunday, each on the
-    service it was for (its entry's own day, as the check-in screen keeps it;
-    a check-in with no dated entry, the day it landed; a headcount with no
-    dated entry, nowhere): {"checkins": [(service day, when)], "headcounts":
-    {service day}}. A headcount corrected today stays on its own Sunday."""
+    service it was for: its entry's own day (its `_checkin_day`, else the
+    date under its room's own date field); a check-in on an entry with no
+    day, the day it landed (as church_shepherd_signals._entry_days); a class
+    night, never. {"checkins": [(service day, when)], "headcounts": {service
+    day}, "undated": [when a headcount on an entry with no day was last
+    saved]}. A headcount corrected today stays on its own Sunday."""
     def read() -> Dict[str, Any]:
         since = _q(_since_last_sunday(ctx).isoformat())
         ins = ctx.rows(f"/attendance?business_id=eq.{_q(ctx.b)}&checked_in_at=gte.{since}"
                        "&select=entry_id,checked_in_at&limit=20000")
         heads = ctx.rows(f"/attendance_headcounts?business_id=eq.{_q(ctx.b)}&updated_at=gte.{since}&count=gt.0"
-                         "&select=entry_id&limit=2000")
+                         "&select=entry_id,updated_at&limit=2000")
         ids = sorted({str(r["entry_id"]) for r in ins + heads if r.get("entry_id")})
-        days: Dict[str, Optional[date]] = {}
+        entries: List[Dict[str, Any]] = []
         for i in range(0, len(ids), 100):
-            for e in ctx.rows(f"/module_entries?business_id=eq.{_q(ctx.b)}&id=in.({','.join(_q(x) for x in ids[i:i + 100])})"
-                              "&select=id,data&limit=200"):
-                days[str(e["id"])] = _entry_day(e.get("data") if isinstance(e.get("data"), dict) else {})
+            entries += ctx.rows(f"/module_entries?business_id=eq.{_q(ctx.b)}"
+                                f"&id=in.({','.join(_q(x) for x in ids[i:i + 100])})&select=id,module_id,data&limit=200")
+        rooms = sorted({str(e["module_id"]) for e in entries if e.get("module_id")})
+        fields: Dict[str, str] = {}
+        if rooms:
+            from events_rsvp_router import resolve_fields
+            for m in ctx.rows(f"/custom_modules?business_id=eq.{_q(ctx.b)}&id=in.({','.join(_q(x) for x in rooms)})"
+                              "&select=id,archetype_params&limit=100"):
+                fields[str(m["id"])] = resolve_fields(m.get("archetype_params"))["date_field"]
+        days: Dict[str, Any] = {
+            str(e["id"]): _entry_day(e.get("data") if isinstance(e.get("data"), dict) else {},
+                                     fields.get(str(e.get("module_id") or ""), "date")) for e in entries}
         checkins = []
         for r in ins:
             at = _at(r.get("checked_in_at"))
-            eid = str(r.get("entry_id") or "")
-            day = days.get(eid) if eid in days else (at.astimezone(ctx.tz).date() if at else None)
-            if day and at:
-                checkins.append((day, at))
-        return {"checkins": checkins, "headcounts": {days.get(str(r.get("entry_id") or "")) for r in heads} - {None}}
+            day = days.get(str(r.get("entry_id") or ""))
+            if day == CLASS_NIGHT or not at:
+                continue
+            checkins.append((day or at.astimezone(ctx.tz).date(), at))          # no day: the day it landed
+        headcounts, undated = set(), []
+        for r in heads:
+            day = days.get(str(r.get("entry_id") or ""))
+            if day == CLASS_NIGHT:
+                continue
+            if day:
+                headcounts.add(day)
+            elif _at(r.get("updated_at")):
+                undated.append(_at(r.get("updated_at")))
+        return {"checkins": checkins, "headcounts": headcounts, "undated": undated}
     return ctx.once("counts", read)
 
 
 def sunday_counted(ctx: Ctx, day: date, until: datetime) -> bool:
     """Whether that Sunday's service has a count: a check-in for it made by
     `until`, or a headcount for it (a headcount keeps no first-entered time,
-    so one entered later still counts)."""
+    so one entered later still counts). A headcount on an entry that carries
+    no day, saved since that Sunday began, might be that Sunday's: then
+    nothing can be said (Unread), never "missed"."""
     got = counts(ctx)
-    return any(d == day and at < until for d, at in got["checkins"]) or day in got["headcounts"]
+    if any(d == day and at < until for d, at in got["checkins"]) or day in got["headcounts"]:
+        return True
+    if any(at >= ctx.bounds(day, day)[0] for at in got["undated"]):
+        raise Unread("a headcount whose service has no day")
+    return False
 
 
 def signals(ctx: Ctx) -> List[Dict[str, Any]]:

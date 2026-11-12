@@ -292,7 +292,7 @@ thing):
 | `serve_schedule` (Wed) | every place on the volunteers' Serve teams (`serve_teams` owner volunteers, the team's group active, its active positions, each `needed` times) has a `yes` (`serve_assignments`) for every service planned this week's Sunday. Nothing planned that Sunday, or no volunteer places: nothing to count, it claims nothing. ChurchSavvy's teams are `production_schedule`'s, never counted here | the calendar's Sunday plans, `serve_teams`, `groups`, `serve_positions`, `serve_assignments` |
 | `calendar` (Fri) | next week (the Monday to Sunday after this one) has at least one service or event on the calendar (the Sunday plans, or a Services & Events occasion), and every occasion in it names its place. Nothing next week: not done | `worship_services` and Services & Events, read where the leaders note reads them (the same reader as `calendar_8_weeks`) |
 | `sermons` (Mon) | last Sunday (the day before this week's Monday) has a published sermon preached that day; its notes aren't counted | `sermons` (the same reader as `sermons_6`) |
-| `attendance` (Sun) | this week's Sunday service has a count: a named check-in (`attendance`) or a headcount above zero (`attendance_headcounts`) **for that Sunday's service**, dated by the service's own entry (`module_entries`: its `_checkin_day`, else an occasion's `date`; a check-in with no dated entry, the day it landed; a headcount with no dated entry counts nowhere; a class night is no service). So correcting last Sunday's count on this Sunday never marks this Sunday done (#1802 review). Before that Sunday it is not yet, and nothing is read. A Sunday is a week's last day, so this job is never late within its week | `attendance` and `attendance_headcounts` since last week's Sunday, and their entries |
+| `attendance` (Sun) | this week's Sunday service has a count: a named check-in (`attendance`) or a headcount above zero (`attendance_headcounts`) **for that Sunday's service**, dated by the service's own entry (`module_entries`: its `_checkin_day`, else the date under its room's own date field, `events_rsvp_router.resolve_fields`, as `church_checkin` reads it; a check-in on an entry with no day, the day it landed, as `church_shepherd_signals._entry_days`; a class night is no service). So correcting last Sunday's count on this Sunday never marks this Sunday done (#1802 review). A headcount on an entry with no day, saved since that Sunday began, might be that Sunday's: then it can't be said either way (couldn't be read), never "missed" (#1802 review, round 2). Before that Sunday it is not yet, and nothing is read. A Sunday is a week's last day, so this job is never late within its week | `attendance` and `attendance_headcounts` since last week's Sunday, and their entries |
 | `shepherding` (Thu) | every family drifting **by the end of the job's day** (a drift signal made by then, `church_shepherd_signals`' own rule, still open) has a touch logged since that week's Monday (a call, visit, text or seen at church: `church_shepherd_touches`). A family that starts drifting after the job's day is the next week's job (#1802 review). No family drifting: done. The groups who missed weeks aren't counted | `church_shepherd_signals` open or closed since last week's Monday, `church_shepherd_touches` since then |
 
 The three it already knew are unchanged: the leaders note sent this week, last month's report sent,
@@ -301,8 +301,12 @@ a text announcement that reached someone since Monday (now read through the shar
 **One clock** (#1802 review): every place that judges a church's week (My week's rhythm and its tasks'
 days, the team page, the Monday roll-up, the one-on-one, the checks) reads
 `church_work_checks.church_zone`: `church_leader_tasks.zone`, the business's availability zone, else
-its owner's profile, else the platform's. One that can't be read is a 503 everywhere (My week, the
-team page, the one-on-one, the board), never a quiet UTC; the roll-up and the sweep skip the hour.
+its owner's profile, else the platform's. One that can't be read is a 503 on the team page, the
+one-on-one and the board, never a quiet UTC; the roll-up and the sweep skip the hour. My week, every
+church's office logins' first page, never fails on it (round 2): its own lines use the platform's
+default clock (`PLATFORM_DEFAULT_TZ`, else UTC), its rhythm carries no done, not yet or late
+(`"judged": false`, `"judged_text": "Done, not yet and late couldn't be checked just now."`), and the
+log says so.
 My week used `chief_assignments._tz_for` (availability, else UTC) before: at a church whose clock is
 on the owner's profile, Monday 9 PM in Detroit was already Tuesday on My week. The tests now give each
 church its clock as data and patch no clock reader, so two that disagree can't hide.
@@ -315,7 +319,8 @@ never late. Every reader reads its table once per `church_work_checks.Ctx`.
 
 Where it shows:
 - My week's rhythm: each judged item has `done` (as before) and, where the switch is open, `state`,
-  `state_text` and `detail` (the test's words).
+  `state_text` and `detail` (the test's words). The rhythm carries `judged` (false only when the
+  church's clock couldn't be read, with `judged_text`).
 - The team page (`church_team_week.team` → `judge_week`): after every row is read, one `Ctx` judges
   every login's jobs, so each table is read once for the church however many logins there are (a
   test holds a team of five and of nine to the same reads). Each `this_week` entry a test judged gets
