@@ -4,7 +4,7 @@ date: 2026-11-12
 agent: Claude Code (Claude Opus 5.5)
 asked: 'lets build what is missing (PR B of docs/CHURCH_ASSIGNMENTS.md, started after #1801 merged)'
 status: in progress
-prs: []
+prs: ["kmj-intake-server#1802"]
 migrations: []
 left_undone: ["The Monday roll-up says this week's states; on a Monday morning nearly everything is not yet. Last week's results in the roll-up are not built", "The one-on-one's frontend (solutionist-studio) isn't built", "PR C (the member app's Lead tab, after Kevin sees the mock) and PR D (the Chief verbs)", "Kevin hasn't been asked about the rule Claude decided in the #1801 review: senior-job and pastor's-yes holders are under the owner only"]
 decisions: ["Six weekly jobs judged, each test written out in docs/CHURCH_ASSIGNMENTS.md (PR B): first_guests, serve_schedule, calendar, sermons, attendance, shepherding", "done / not yet / late by the login's picked day else the catalog's; a read that fails, a job no test judges, or nothing to count claims nothing", "Judged only where CHURCH_ASSIGNMENTS is open for the church; closed, My week and the team page read nothing new", "The team page judges every login on one church_work_checks.Ctx after the rows are read: each table once for the church", "The one-on-one reads and records nothing: no check ticks anything off there", "Wording: the 'senior holders are under the owner only' rule is said to be Claude's decision (2026-11-12), not Kevin's, in church_over, the doc and the work logs"]
