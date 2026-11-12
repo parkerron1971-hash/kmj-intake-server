@@ -179,7 +179,11 @@ ITEMS: List[Dict[str, Any]] = [
         "key": "sunday",
         "title": "Your Sunday details",
         "ask": "Service times, kids rooms with ages, and your groups with each leader.",
-        "fields": [_rows("services", "Services", [("day", "Day"), ("time", "Time"), ("name", "What it's called")],
+        # The first Sunday the church gathers with us. The welcome briefing asks it
+        # ("When is your first Sunday with us?") and saves it here, as a draft like
+        # any other line; the office can change it in the room.
+        "fields": [_text("first_sunday", "Your first Sunday with us", "The date, like Sunday, November 22"),
+                   _rows("services", "Services", [("day", "Day"), ("time", "Time"), ("name", "What it's called")],
                          "Add a service", 12),
                    _rows("kids_rooms", "Kids rooms", [("room", "Room"), ("ages", "Ages")], "Add a room", 20),
                    _rows("groups", "Groups and classes",
