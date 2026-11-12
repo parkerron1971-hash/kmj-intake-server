@@ -4,7 +4,7 @@ date: 2026-11-12
 agent: Claude Code (Claude Fable 5.2)
 asked: "we need to reorder the move in section. that should be under the home section until everything for move in is complete and then it disappears when finished"
 status: in review
-prs: [kmj-intake-server#PENDING]
+prs: [kmj-intake-server#1808]
 migrations: []
 left_undone:
   - "Chief is not told the move is finished in any new way: move_in_status already reads each thing's state."
