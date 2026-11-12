@@ -800,6 +800,18 @@ Minister Ray the retreat sign-up list for Youth".
   whom is the engine's, never a lane's.
 - The turn's tail carries a short CHURCH ASSIGNMENTS block only where the switch is open for the
   church and the login has an office seat there (`turn_line`).
+- **Other people's words taint the turn** (#1806 review). A title, what done means and notes are
+  written by whoever handed an assignment, a stuck note by whoever is stuck (a leader in the member
+  app too), and `untrusted_text`'s shapes don't catch every way such words could address Chief. So
+  a read that brings any of them in (`people_under`, `one_on_one`, someone else's `assignments_of`,
+  or an item on my own list whose words aren't mine or a ready-made's as it came) raises the turn's
+  taint through `chief_of_staff`'s own sink, and every write after it in that turn is held until
+  the person says it again. A read of only my own words doesn't. Scoped to these verbs;
+  `untrusted_text` is unchanged.
+- **Receipts say only what happened.** A first assignment that lands in part says what's on their
+  list now and that asking again makes only the rest, never "Nothing changed". An email is promised
+  only when they have one on file (a login's sign-in email, a person's on their record); else
+  "it's on their page".
 
 ## PRs
 

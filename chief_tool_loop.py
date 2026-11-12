@@ -475,7 +475,8 @@ async def execute_tool_use(client, biz: Dict[str, Any],
                                               "giving_deposits", "expense_categories", "bills",
                                               "giving_counts", "list_duties", "list_map",
                                               "search_templates", "my_work", "list_asks",
-                                              "move_in_status")):
+                                              "move_in_status", "people_under", "assignments_of",
+                                              "one_on_one")):
         return True, (f"'{name}' is not a mid-turn lookup. Reads only here; "
                       f"operations go through [ACTION:] tags in your reply.")
     if effect != action_registry.READ:

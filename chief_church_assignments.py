@@ -43,6 +43,16 @@ itself). A write on a turn whose context held instruction-shaped text from
 something Chief read (chief_of_staff.untrusted_taint) is held: it runs only
 when the person says it again.
 
+Other people's words: an assignment's title, what done means and its notes
+are written by whoever handed it, a stuck note by whoever is stuck (a leader
+in the member app too). A read that brings any of them into the turn
+(people_under, one_on_one, someone else's assignments_of, or one of my own
+whose words aren't mine or a ready-made's) raises the turn's taint
+(chief_of_staff's _UNTRUSTED_TAINT, through its sink), so every write later
+in that turn is held until the person says it again (#1806 review). A read of
+only my own words (what I wrote, the ready-made start-up items as they come)
+doesn't.
+
 Action tags, never native write tools: mcp_server.WRITE_TOOL_SCHEMAS is also
 the outside agent's list and carries no signed-in person, and each of these
 needs one (registry chief_only), as chief_duties and chief_map. The three
@@ -213,7 +223,8 @@ def _run(atype: str, biz: Any, action: Any, body) -> Dict[str, Any]:
     except HTTPException as e:
         said = _plain(e.detail)
         said = said[:1].lower() + said[1:] if said[:2] not in ("I ", "I'") else said
-        return _fail(atype, f"{said.rstrip('.')}. Nothing changed." if atype in WRITES else said)
+        made = bool(re.search(r"\bmade\b", said))         # a write that landed in part never "changed nothing"
+        return _fail(atype, f"{said.rstrip('.')}. Nothing changed." if atype in WRITES and not made else said)
 
 
 # ─── Naming people and assignments ────────────────────────────────────
@@ -300,6 +311,25 @@ def _task_of(ch: co.Church, me: Dict[str, str], target: Dict[str, str], raw: Any
     raise HTTPException(400, f"“{_plain(raw)}” isn't one of {whose} open assignments: {_join(said)}")
 
 
+def _has_email(ch: co.Church, target: Dict[str, str]) -> bool:
+    """Whether the hand-off email can reach them: a login's sign-in email, a
+    person's on their record. Unread is never a yes."""
+    import church_assignments as cas
+    import church_leader_tasks as clt
+    try:
+        if target["kind"] == co.LOGIN:
+            return bool(cas._login_email(ch, target["id"]))
+        got = clt._contacts(ch.b, [target["id"]])
+        return bool(got and (got.get(str(target["id"])) or {}).get("email"))
+    except HTTPException:
+        return False
+
+
+def _told(ch: co.Church, target: Dict[str, str], what: str = "an email about it") -> str:
+    return (f", and they'll get {what} within the hour" if _has_email(ch, target)
+            else "; there's no email on file for them, so it's on their page")
+
+
 def _where(target: Dict[str, str]) -> str:
     return ("on their My week" if target["kind"] == co.LOGIN
             else "on their Lead tab in the church's app, under Assignments")
@@ -329,8 +359,10 @@ def _people(ch: co.Church, me: Dict[str, str], action: Dict[str, Any]) -> Dict[s
     if not rows:
         return {"result": "Nobody is under you here, so there's no one to hand work to.", "label": "Nobody under you",
                 "people": []}
+    foreign = any(_foreign_item(i, False, "") for p in rows for i in (p.get("stuck_items") or []) +
+                  (p.get("next") or []))
     return {"result": f"{len(rows)} under you:\n" + "\n".join(_person_line(p) for p in rows),
-            "label": f"{len(rows)} under you", "people": [p["name"] for p in rows]}
+            "label": f"{len(rows)} under you", "people": [p["name"] for p in rows], "_foreign": foreign}
 
 
 def _item_line(i: Dict[str, Any]) -> str:
@@ -367,8 +399,11 @@ def _assignments(ch: co.Church, me: Dict[str, str], action: Dict[str, Any]) -> D
             f"“{r['title']}” ({_first(r.get('whose') or '')}'s" + (f", sent up by {r['sent_up_by']}"
                                                                   if r.get("sent_up_by") else "") + ")"
             for r in up) + ".")
+    mine = co.same(me, target)
+    my_name = ch.login_name(me["id"])
+    foreign = any(_foreign_item(i, mine, my_name) for i in items + done) or bool(up)
     return {"result": f"{whose} assignments:\n" + "\n".join(lines), "label": f"{whose} assignments"[:80],
-            "open": len(items)}
+            "open": len(items), "_foreign": foreign}
 
 
 def _one_on_one(ch: co.Church, me: Dict[str, str], action: Dict[str, Any]) -> Dict[str, Any]:
@@ -379,7 +414,9 @@ def _one_on_one(ch: co.Church, me: Dict[str, str], action: Dict[str, Any]) -> Di
     got = cas.one_on_one(ch, target, areas=ctw.view_of(ch.b, me["id"], ch.role(me["id"])))
     lines = got.get("lines") or []
     text = "\n".join(lines) if isinstance(lines, list) else str(lines)
-    return {"result": f"One-on-one with {row['name']}:\n{text}", "label": f"One-on-one: {row['name']}"[:80]}
+    foreign = any(_foreign_item(i, False, "") for k in ("finished", "stuck", "late", "next") for i in got.get(k) or [])
+    return {"result": f"One-on-one with {row['name']}:\n{text}", "label": f"One-on-one: {row['name']}"[:80],
+            "_foreign": foreign}
 
 
 # ─── The writes ───────────────────────────────────────────────────────
@@ -400,7 +437,7 @@ def _give(ch: co.Church, me: Dict[str, str], action: Dict[str, Any]) -> Dict[str
         line += f", due {_day_words(saved['due_date'])}"
     if saved.get("done_when"):
         line += f"; done when: {_plain(saved['done_when'])}"
-    line += f". It's {_where(target)}" + ("" if mine else ", and they'll get an email about it within the hour") + "."
+    line += f". It's {_where(target)}" + ("" if mine else _told(ch, target)) + "."
     return {"result": line, "label": f"Gave {_first(who)} “{title}”"[:80], "assignment": title, "who": who}
 
 
@@ -411,7 +448,21 @@ def _start(ch: co.Church, me: Dict[str, str], action: Dict[str, Any]) -> Dict[st
     target, row = _target(ch, me, action.get("who"), self_ok=False)
     cas._allowed(ch, me, target, self_ok=False)
     cas._ready(ch)
-    got = cs.start(ch, me, target, cw.Ctx(ch.business, cas._now(), ch.tz).today)
+    try:
+        got = cs.start(ch, me, target, cw.Ctx(ch.business, cas._now(), ch.tz).today)
+    except HTTPException as e:
+        if e.status_code != 503 or "made" not in str(e.detail):
+            raise
+        # Some landed and the rest didn't: say what's on their list now, and
+        # that asking again makes only the rest (#1806 review).
+        have = cs.made_keys(ch.b, target)
+        of = len(cs.for_who(ch, target))
+        titles = [cs.BY_KEY[k]["title"] for k in have if k in cs.BY_KEY]
+        return {"result": f"Started part of {row['name']}'s first assignment: {len(have)} of {of} things are on "
+                          f"their list now ({'; '.join(f'“{t}”' for t in titles)}). The rest didn't save; asking "
+                          "again makes only those.",
+                "label": f"Part of {_first(row['name'])}'s first assignment"[:80], "made": len(have),
+                "partial": True}
     made = sorted(got["made"], key=lambda t: (str(t.get("due_date") or ""), _plain(t.get("title"))))
     if not got["of"]:
         return {"result": f"{row['name']} has no first assignment to start: nothing they do here has one.",
@@ -422,7 +473,7 @@ def _start(ch: co.Church, me: Dict[str, str], action: Dict[str, Any]) -> Dict[st
     things = "; ".join(f"“{_plain(t.get('title'))}” (due {_day_words(t.get('due_date'))})" for t in made)
     tail = f" {got['skipped']} were already on their list." if got["skipped"] else ""
     return {"result": f"Started {row['name']}'s first assignment: {len(made)} things: {things}.{tail} They're "
-                      f"{_where(target)}, and they'll get one email about them within the hour.",
+                      f"{_where(target)}{_told(ch, target, 'one email about them')}.",
             "label": f"Started {_first(row['name'])}'s first assignment"[:80], "made": len(made)}
 
 
@@ -532,8 +583,13 @@ def _handover(ch: co.Church, me: Dict[str, str], action: Dict[str, Any]) -> Dict
         line += f" for {saved['department']}"
     if saved.get("for_date_text"):
         line += f", for {saved['for_date_text']}"
-    line += (". It reaches them by email within the hour, with the note and the link, and waits on their page "
-             "until they tap Got it; you'll see Seen then. It isn't an assignment: nothing is due or judged.")
+    if _has_email(ch, co.who(co.PERSON, row["contact_id"])):
+        line += (". It reaches them by email within the hour, with the note and the link, and waits on their page "
+                 "until they tap Got it; you'll see Seen then.")
+    else:
+        line += (". There's no email on file for them, so it's on their page until they tap Got it; you'll see Seen "
+                 "then.")
+    line += " It isn't an assignment: nothing is due or judged."
     return {"result": line, "label": f"Sent {_first(row['name'])} “{saved['title']}”"[:80], "to": row["name"]}
 
 
@@ -541,9 +597,45 @@ def _handover(ch: co.Church, me: Dict[str, str], action: Dict[str, Any]) -> Dict
 
 def _handler(atype: str, body):
     async def handle(client, biz, action) -> Dict[str, Any]:
-        return await asyncio.to_thread(_run, atype, biz, action or {}, body)
+        out = await asyncio.to_thread(_run, atype, biz, action or {}, body)
+        # Raised here, on the turn's own context (a thread's copy would be
+        # lost): every write after this in the turn holds.
+        if out.pop("_foreign", False):
+            _taint()
+        return out
     handle.__name__ = f"handle_{atype}"
     return handle
+
+
+def _taint() -> None:
+    """Raise the turn's taint, as untrusted_text's sink does for an inbox."""
+    try:
+        from chief_of_staff import _bump_taint
+        _bump_taint(1)
+    except Exception:  # noqa: BLE001 — a taint that can't be raised is said in the log
+        print("[chief_church_assignments] the turn's taint wasn't raised", flush=True)
+
+
+def _template_words() -> set:
+    import church_startup as cs
+    return {_norm(t["title"]) for t in cs.TEMPLATES}
+
+
+def _foreign_item(i: Dict[str, Any], mine: bool, my_name: str) -> bool:
+    """Whether an item read back carries words someone other than me wrote:
+    its stuck note (unless it's mine), its title, done when or notes (unless
+    I handed it, or it's a ready-made start-up item as it came)."""
+    note = (i.get("stuck") or {}).get("note") if isinstance(i.get("stuck"), dict) else i.get("note")
+    if _plain(note) and not mine:
+        return True
+    if mine and i.get("from") and _norm(i.get("from")) == _norm(my_name):
+        return False
+    if i.get("startup") is not None or "done_when" in i:
+        import church_startup as cs
+        tpl = next((t for t in cs.TEMPLATES if _norm(t["title"]) == _norm(i.get("title"))), None)
+        return not (tpl and (not i.get("done_when") or _norm(i.get("done_when")) == _norm(tpl["done_when"]))
+                    and not _plain(i.get("notes")))
+    return _norm(i.get("title")) not in _template_words()
 
 
 handle_people_under = _handler("people_under", _people)
