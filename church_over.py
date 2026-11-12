@@ -360,8 +360,9 @@ class Church:
 
     @property
     def seniors(self) -> Set[str]:
-        """Under the owner only (Kevin's call, #1801 review round 2): every
-        holder of a role whose job is the senior one (church_roles: the top of
+        """Under the owner only. This is Claude's decision (2026-11-12, made in
+        the #1801 review, round 2), not Kevin's: he hasn't been asked yet.
+        Every holder of a role whose job is the senior one (church_roles: the top of
         every chain, a job and never a title) or, where the map names them, of
         a role that gives the pastor's yes (pastor_yes_roles), who isn't the
         owner's own identity. The owner can hand them work and start them; no

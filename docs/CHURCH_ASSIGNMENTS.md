@@ -162,8 +162,9 @@ the owner's sign-in email (`messaging_router.owner_email_read`, which tells a fa
 email") is a 503, never "the owner is nobody"; a good read is kept ten minutes per replica. In
 `above()`, a step that is the owner's identity is the owner's login.
 
-**The senior holders are under the owner only** (Kevin's call, #1801 review round 2;
-`Church.seniors`): every holder of a role whose *job* is the senior one (`church_roles`: the top of
+**The senior holders are under the owner only** (`Church.seniors`). This was Claude's decision,
+made on 2026-11-12 in the #1801 review (round 2), not Kevin's: he hasn't been asked yet, and it is
+his to confirm or change. The rule: every holder of a role whose *job* is the senior one (`church_roles`: the top of
 every chain; a job, never a title) or, where the map names them, of a role that gives the pastor's
 yes (`pastor_yes_roles`), who isn't the owner's identity. The owner can hand them work and start
 them; no Admin, Manager or Member seat is ever over them, whatever the map says (an answers-to row
@@ -276,6 +277,85 @@ Extend `church_my_week._done` with first_guests, serve_schedule, calendar, sermo
 shepherding, each "by" the person's picked day, else the catalog's. The team page and the Monday
 roll-up then say done / not yet / late for each job due this week instead of only its day.
 
+### As built in PR B
+
+`church_my_week._done_full(business, duties, today, now, tz, picks=, ctx=)` answers `{duty: {done,
+text}}`; `_done` is the same without the words. The week is the one the church's own clock is in,
+Monday to Sunday. The six jobs are judged only where `CHURCH_ASSIGNMENTS` is open for the church
+(closed: the three it already knew, and nothing else is read). Each test, exactly
+(`church_work_checks.WEEKLY`, each reader shared with the start-up checks where they count the same
+thing):
+
+| job (catalog day) | done when | reads |
+|---|---|---|
+| `first_guests` (Mon) | nobody who came into follow-up by the end of the job's day is waiting with no one (handed back, or never handed). It counts everyone in follow-up, as the leaders note and My week do (the board marks no first-time guest beyond a first check-in), and a card that came in after the day is next week's | `church_follow_ups` open or handed back (the same reader as `follow_up_no_one`) |
+| `serve_schedule` (Wed) | every place on the volunteers' Serve teams (`serve_teams` owner volunteers, the team's group active, its active positions, each `needed` times) has a `yes` (`serve_assignments`) for every service planned this week's Sunday. Nothing planned that Sunday, or no volunteer places: nothing to count, it claims nothing. ChurchSavvy's teams are `production_schedule`'s, never counted here | the calendar's Sunday plans, `serve_teams`, `groups`, `serve_positions`, `serve_assignments` |
+| `calendar` (Fri) | next week (the Monday to Sunday after this one) has at least one service or event on the calendar (the Sunday plans, or a Services & Events occasion), and every occasion in it names its place. Nothing next week: not done | `worship_services` and Services & Events, read where the leaders note reads them (the same reader as `calendar_8_weeks`) |
+| `sermons` (Mon) | last Sunday (the day before this week's Monday) has a published sermon preached that day; its notes aren't counted | `sermons` (the same reader as `sermons_6`) |
+| `attendance` (Sun) | this week's Sunday has a count recorded that day on the church's clock: a named check-in (`attendance.checked_in_at`) or a headcount above zero (`attendance_headcounts.updated_at`). Before that Sunday it is not yet, and nothing is read. A Sunday is a week's last day, so this job is never late within its week | `attendance`, `attendance_headcounts`, one row each at most |
+| `shepherding` (Thu) | every family drifting now (an open drift signal, `church_shepherd_signals`' own rule) has a touch logged since this week's Monday (a call, visit, text or seen at church: `church_shepherd_touches`). No family drifting: done. The groups who missed weeks aren't counted | `church_shepherd_signals`, `church_shepherd_touches` |
+
+The three it already knew are unchanged: the leaders note sent this week, last month's report sent,
+a text announcement that reached someone since Monday.
+
+**done / not yet / late** (`church_my_week.job_state`): done when its test passes; otherwise late
+once the job's day is over (the day the login picked, `church_duty_days`, else the catalog's last
+weekday; the monthly report, the first Monday of today's month), not yet until then. A job no test
+judges, a test with nothing to count, and a read that fails all claim nothing: no state, never done,
+never late. Every reader reads its table once per `church_work_checks.Ctx`.
+
+Where it shows:
+- My week's rhythm: each judged item has `done` (as before) and, where the switch is open, `state`,
+  `state_text` and `detail` (the test's words).
+- The team page (`church_team_week.team` → `judge_week`): after every row is read, one `Ctx` judges
+  every login's jobs, so each table is read once for the church however many logins there are. Each
+  `this_week` entry a test judged gets `state`, `state_text`, `detail` and `due`; each row gets
+  `this_week_counts`; the page's `counts` get `late_jobs`. `this_week_text` (the days only) stays as
+  it was.
+- The Monday roll-up: each login's lines say "Late on the week: …" when a job is late, and "This
+  week:" carries each job's state ("Mon: First-time guests and welcome calls (late) · Wed: The weekly
+  text and email (not yet)"). On a Monday morning nearly everything this week is not yet: last
+  week's results aren't in the roll-up (not built; see the work log).
+
+```json
+"this_week": [
+  {"duty": "first_guests", "label": "First-time guests and welcome calls", "days": ["Mon"],
+   "text": "Mon: First-time guests and welcome calls",
+   "state": "late", "state_text": "Late", "detail": "1 person in follow-up by Monday has no one",
+   "due": "2026-11-09"},
+  {"duty": "care_visits", "label": "Care and visits", "days": ["Tue"], "text": "Tue: Care and visits"}
+],
+"this_week_counts": {"done": 1, "not_yet": 0, "late": 1}
+```
+and on the page: `"counts": {"logins": 5, "late_tasks": 0, "unread": 0, "late_jobs": 8}`.
+`state` is one of `done`, `not_yet`, `late`; an entry without it is named by its day only.
+
+### The one-on-one (PR B)
+
+`GET /church/assignments/one-on-one?business_id=&for=login:<id>|person:<id>`, for anyone over them
+(never yourself), gated like every assignment route (a church, the switch, `is_over`). It reads and
+records nothing: no check ticks anything off here.
+
+```json
+{"for": "login:<uuid>", "kind": "login", "id": "<uuid>", "name": "Tiara Adams", "today": "2026-11-12",
+ "finished": [{"id": "<uuid>", "title": "…", "on": "Tuesday", "checked": false}],
+ "stuck": [{"id": "<uuid>", "title": "…", "note": "Need the family list",
+            "since": "2026-11-06T15:00:00+00:00", "days": 6, "sent_up": true, "sent_up_to": "Pastor Kevin"}],
+ "late": [{"id": "<uuid>", "title": "…", "due": "2026-11-10", "due_text": "2 days late"}],
+ "next": [{"id": "<uuid>", "title": "…", "due": "2026-11-19", "due_text": "Due Thursday, Nov 19"}],
+ "jobs": [THIS_WEEK entries, as on the team page],
+ "lines": ["Finished in the last week: “…” and “…”.",
+           "Stuck: “…” for 6 days, sent up to Pastor Kevin.",
+           "Late: “…”, 2 days late.",
+           "Next: “…”, due Thursday, Nov 19; …",
+           "This week's jobs: The front desk, Mon; The Monday leaders note, late; …"]}
+```
+
+`finished`: done in the last 7 days, newest first. `stuck`: longest first; `days` since it was
+marked stuck. `late` and `next` leave stuck ones out; `next` is the next five by due date (no date
+last). `jobs`: a login's jobs due this week (empty for a person, who holds no office duty). The
+`Late:` line only when something is late; `This week's jobs:` only when there are jobs.
+
 ## Days
 
 `GET /church/duty-days?business_id=&user_id=` (default me): each duty the login holds with its
@@ -314,7 +394,7 @@ with what it saved; a failed write is a 503, never a 200.
 | `DELETE /church/assignments/{task_id}?business_id=` | whoever handed it, or anyone over them; once sent up, whoever sent it up, whoever it went to, or anyone over them | take it back |
 | `POST /church/assignments/{task_id}/raise` | anyone over them | `{business_id, note?}` send a stuck item up to `above(me)` |
 | `POST /church/assignments/start` | anyone over them | `{business_id, for}` make their first assignment |
-| `GET /church/assignments/one-on-one?business_id=&for=` | anyone over them | finished in the last 7 days, stuck, the next five due, late, and this week's jobs done or not; plain lines, nothing recorded (second PR) |
+| `GET /church/assignments/one-on-one?business_id=&for=` | anyone over them | finished in the last 7 days, stuck, the next five due, late, and this week's jobs done or not; plain lines, nothing recorded (built in PR B; below) |
 
 The task is only the church's own: every task id is read with its `business_id` and its person
 before any change.
@@ -330,7 +410,8 @@ DELETE removes the task (logged). Raise marks it stuck if it wasn't, and answers
 description) can come with a hand-out. A money duty is refused for anyone but the owner or an Admin
 login.
 
-**Once it's been sent up** (Kevin's call, #1801 review: the person over them is in control), the
+**Once it's been sent up** (a decision Claude made in the #1801 review on 2026-11-12, from Kevin's
+wish that the person over them be in control; Kevin hasn't ruled on this rule itself), the
 assignee can no longer clear its stuck mark, rewrite its note or clear its sent-up record (403).
 Only whoever sent it up, whoever it went to, or anyone over the assignee can; clearing it clears the
 sent-up record too. Marking it **done** still works for the assignee, and closes it: done is the

@@ -38,6 +38,11 @@ someone else, and reads each task with its church and its person first.
                                                      is over me (anyone over them)
   POST   /church/assignments/start                   make their first assignment
                                                      (anyone over them)
+  GET    /church/assignments/one-on-one?business_id=&for=
+                                                     a one-on-one (anyone over
+                                                     them): finished, stuck, late,
+                                                     next, this week's jobs; plain
+                                                     lines; nothing recorded
   GET    /church/duty-days?business_id=&user_id=     each duty a login holds, its
                                                      catalog day, its picked day
   PUT    /church/duty-days                           pick one (the login, or anyone
@@ -498,6 +503,121 @@ def assignments_list(business_id: str, for_: str = Query("", alias="for"),
     return theirs(ch, me, target, over)
 
 
+# ─── The one-on-one ───────────────────────────────────────────────────
+
+ONE_ON_ONE_DAYS = 7
+NEXT_SHOWN_1on1 = 5
+
+
+def _quoted(titles: List[str]) -> str:
+    return _join([f"“{t}”" for t in titles])
+
+
+def _lower_first(s: str) -> str:
+    return s[:1].lower() + s[1:] if s else s
+
+
+def one_on_one(ch: co.Church, target: Dict[str, Any], now: Optional[datetime] = None) -> Dict[str, Any]:
+    """What a one-on-one with them goes over, read and never recorded: what
+    they finished in the last 7 days; what's stuck, how long, and whether it
+    was sent up; what's late; the next five due; and (a login) this week's
+    jobs, done, not yet or late. Plain lines too, to read out as they are.
+    Nothing is written: no check ticks anything off here."""
+    import church_my_week as mw
+    import church_team_week as ctw
+    now = now or _now()
+    ctx = cw.Ctx(ch.business, now)
+    today = ctx.today
+    q = f"/tasks?business_id=eq.{_q(ch.b)}&{cs.column(target)}=eq.{_q(target['id'])}"
+    open_rows = _need(f"{q}&status=neq.done&select={FIELDS}&order=due_date.asc.nullslast&limit={READ_MAX}")
+    done_rows = _need(f"{q}&status=eq.done&completed_at=gte.{_since_day(now, ONE_ON_ONE_DAYS)}&select={FIELDS}"
+                      f"&order=completed_at.desc&limit={READ_MAX}")
+    theirs_ = lambda r: str(r.get("business_id")) == ch.b and co.same(_target_of(r) or {}, target)  # noqa: E731
+    open_rows = [r for r in open_rows if theirs_(r) and r.get("status") != "done"]
+    cut = _iso(now - timedelta(days=ONE_ON_ONE_DAYS))
+    done_rows = [r for r in done_rows if theirs_(r) and r.get("status") == "done" and str(r.get("completed_at") or "") >= cut]
+    logins = _names_by_login(ch, [r.get("raised_to") for r in open_rows])
+    people = ch.names([r.get("raised_to_contact_id") for r in open_rows if r.get("raised_to_contact_id")])
+    clt = _clt()
+    tz = ctx.tz
+
+    def local(v: Any) -> Optional[date]:
+        return cw._local_day(v, tz) if v else None
+
+    finished = [{"id": str(r["id"]), "title": _plain(r.get("title")) or "An assignment",
+                 "on": f"{local(r.get('completed_at')):%A}" if local(r.get("completed_at")) else "",
+                 "checked": bool(r.get("checked_at"))} for r in done_rows]
+    stuck, late, nxt = [], [], []
+    for r in open_rows:
+        title = _plain(r.get("title")) or "An assignment"
+        due = str(r.get("due_date") or "")[:10]
+        words = clt.due_words(due, today)
+        if r.get("stuck_at"):
+            since = local(r.get("stuck_at"))
+            to = (logins.get(str(r.get("raised_to") or "")) or people.get(str(r.get("raised_to_contact_id") or ""))
+                  or "") if r.get("raised_at") else ""
+            stuck.append({"id": str(r["id"]), "title": title, "note": _plain(r.get("stuck_note")),
+                          "since": r.get("stuck_at"), "days": max(0, (today - since).days) if since else 0,
+                          "sent_up": bool(r.get("raised_at")), "sent_up_to": to})
+        elif words["state"] == "late":
+            late.append({"id": str(r["id"]), "title": title, "due": due, "due_text": words["text"]})
+        else:
+            nxt.append({"id": str(r["id"]), "title": title, "due": due or None, "due_text": words["text"]})
+    stuck.sort(key=lambda s: -s["days"])
+    nxt.sort(key=lambda i: i["due"] or "9999-12-31")
+    nxt = nxt[:NEXT_SHOWN_1on1]
+    jobs: List[Dict[str, Any]] = []
+    if target["kind"] == co.LOGIN:
+        held = ch.held(target["id"])
+        picks = days_for(ch.business, [target["id"]]).get(target["id"], {})
+        monday = today - timedelta(days=today.weekday())
+        jobs = ctw.due_this_week(held, monday, picks)
+        judged = mw._done_full(ch.business, frozenset(w["duty"] for w in jobs), today, now, tz, picks=picks, ctx=ctx) \
+            if co.church_open(ch.b) else {}
+        for w in jobs:
+            got = judged.get(w["duty"])
+            due = mw.due_day(w["duty"], monday, picks.get(w["duty"]), today)
+            state = mw.job_state(got["done"], due, today) if got else None
+            if state:
+                w.update(state=state, state_text=mw.STATE_TEXT[state], detail=got["text"], due=due.isoformat())
+    lines = [f"Finished in the last week: {_quoted([f['title'] for f in finished])}." if finished
+             else "Nothing finished in the last week."]
+    if stuck:
+        said = []
+        for s in stuck:
+            how = f"for {s['days']} day{'s' if s['days'] != 1 else ''}" if s["days"] else "since today"
+            said.append(f"“{s['title']}” {how}" + (f", sent up to {s['sent_up_to']}" if s["sent_up_to"] else
+                                                   ", sent up" if s["sent_up"] else ""))
+        lines.append("Stuck: " + "; ".join(said) + ".")
+    else:
+        lines.append("Nothing stuck.")
+    if late:
+        lines.append("Late: " + "; ".join(f"“{i['title']}”, {i['due_text']}" for i in late) + ".")
+    lines.append("Next: " + "; ".join(f"“{i['title']}”, {_lower_first(i['due_text'])}" for i in nxt) + "."
+                 if nxt else "Nothing else is due.")
+    if jobs:
+        lines.append("This week's jobs: " + "; ".join(
+            f"{w['label']}, {w['state_text'].lower()}" if w.get("state") else f"{w['label']}, {', '.join(w['days'])}"
+            for w in jobs) + ".")
+    return {"for": co.key(target), "kind": target["kind"], "id": target["id"], "name": _name_of(ch, target),
+            "today": today.isoformat(), "finished": finished, "stuck": stuck, "late": late, "next": nxt,
+            "jobs": jobs, "lines": lines}
+
+
+@router.get("/assignments/one-on-one")
+def assignments_one_on_one(business_id: str, for_: str = Query(..., alias="for"),
+                           session: UserSession = Depends(sb_clients.authed_request),
+                           biz: Dict[str, Any] = Depends(business_access.business_access("member"))):
+    """A one-on-one with someone you're over: finished in the last 7 days,
+    stuck (how long, and whether sent up), late, the next five due, and this
+    week's jobs done or not yet; plain lines too. Nothing is recorded."""
+    ch = _church(session, biz)
+    me = _me(session)
+    target = co.parse_for(for_)
+    _allowed(ch, me, target, self_ok=False)
+    return one_on_one(ch, target)
+
+
 # ─── Handing one out ──────────────────────────────────────────────────
 
 def _duty_ok(target: Dict[str, Any], ch: co.Church, duty: Any) -> Optional[str]:
@@ -573,7 +693,8 @@ def _now_sent_up(t: Dict[str, Any]) -> bool:
 
 def change(ch: co.Church, me: Dict[str, Any], t: Dict[str, Any], body: Dict[str, Any],
            now: Optional[datetime] = None) -> Dict[str, Any]:
-    """Who changes what (Kevin wants the one over them in control): done, by
+    """Who changes what (Claude's rule from the #1801 review, after Kevin's
+    wish that the one over them be in control): done, by
     them or anyone over them; stuck, by them too until it's been sent up, and
     from then on only by whoever sent it up, whoever it went to, or anyone
     over them (the assignee can still mark it done, which closes it, and

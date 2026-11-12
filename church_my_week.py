@@ -489,44 +489,129 @@ def _held(biz: str, uid: str, role: str) -> FrozenSet[str]:
     return frozenset(church_duties.standing(biz, uid)["duties"])
 
 
-def _done(business: Dict[str, Any], keys: FrozenSet[str], today: date, now: datetime, tz) -> Dict[str, bool]:
-    """Whether this week's (or this month's) job is already done, where a
-    cheap read the job already keeps tells: the leaders note sent this week
-    (its own last send, on its own clock), last month's report sent (or
-    sending) this month, a text announcement that reached someone since
-    Monday. Any other duty isn't here. A read that fails leaves its duty
-    out, never a guess: the week stands."""
+def _done(business: Dict[str, Any], keys: FrozenSet[str], today: date, now: datetime, tz, *,
+          picks: Optional[Dict[str, str]] = None, ctx: Any = None) -> Dict[str, bool]:
+    """Whether this week's (or this month's) job is already done (_done_full,
+    without its words)."""
+    return {k: v["done"] for k, v in _done_full(business, keys, today, now, tz, picks=picks, ctx=ctx).items()}
+
+
+# The weekly jobs church_work_checks judges (docs/CHURCH_ASSIGNMENTS.md, PR B),
+# read only where church assignments are open for the church.
+WEEK_JOBS: Tuple[str, ...] = ("first_guests", "serve_schedule", "calendar", "sermons", "attendance",
+                              "shepherding")
+STATE_TEXT = {"done": "Done", "not_yet": "Not yet", "late": "Late"}
+
+
+def due_day(duty: str, monday: date, picked: Optional[str] = None, today: Optional[date] = None) -> Optional[date]:
+    """The day this week (the one starting `monday`) a duty falls on: the day
+    the login picked (church_assignments), else its catalog's last weekday
+    ("Sat, Sun": Sunday); the first-Monday report, the first Monday of
+    today's month (the report it judges is last month's). None for a duty
+    that names no day."""
+    import church_assignments as cas
+    import church_duties
+    d = church_duties.CATALOG.get(duty)
+    if not d:
+        return None
+    day = cas.day_with(d["day"], picked) if picked and cas.movable(duty) else d["day"]
+    toks = [t.strip() for t in str(day or "").split(",")]
+    if "first monday" in {t.lower() for t in toks}:
+        import church_monthly_report as cmr
+        t = today or monday
+        return cmr.first_monday(date(t.year, t.month, 1))
+    days = [t for t in toks if t in WEEKDAYS]
+    return monday + timedelta(days=WEEKDAYS.index(days[-1])) if days else None
+
+
+def job_state(done: Optional[bool], due: Optional[date], today: date) -> Optional[str]:
+    """done / not_yet / late for a job judged this week: late once its day
+    is over and it isn't done. None when it wasn't judged (no check, nothing
+    to count, or a read that failed): it claims nothing."""
+    if done is None or due is None:
+        return None
+    if done:
+        return "done"
+    return "late" if today > due else "not_yet"
+
+
+def _done_full(business: Dict[str, Any], keys: FrozenSet[str], today: date, now: datetime, tz, *,
+               picks: Optional[Dict[str, str]] = None, ctx: Any = None) -> Dict[str, Dict[str, Any]]:
+    """Whether this week's (or this month's) job is already done, with what
+    says so: {duty: {done, text}}. Where a cheap read the job already keeps
+    tells: the leaders note sent this week (its own last send, on its own
+    clock), last month's report sent (or sending) this month, a text
+    announcement that reached someone since Monday; and, where church
+    assignments are open for the church, the six weekly jobs
+    church_work_checks judges (WEEK_JOBS), each by the day the login picked
+    (`picks`), else the catalog's. Any other duty isn't here. A read that
+    fails leaves its duty out, never a guess: the week stands. `ctx` (a
+    church_work_checks.Ctx) shares every read between logins: the team page
+    reads each table once."""
+    import church_work_checks as cw
     biz = str(business["id"])
-    out: Dict[str, bool] = {}
+    ctx = ctx or cw.Ctx(business, now, tz)
+    out: Dict[str, Dict[str, Any]] = {}
+
+    def fact(key: str, fn, yes: str, no: str, unread: str) -> None:
+        def safe() -> bool:
+            try:
+                return fn()
+            except cw.Unread:
+                raise
+            except Exception:           # any failure is a read that didn't answer: the week stands
+                raise cw.Unread(key)
+        try:
+            got = ctx.once(("done", key), safe)
+        except cw.Unread:
+            print(f"[church_my_week] {biz[:8]}: {unread}")
+            return
+        out[key] = {"done": bool(got), "text": yes if got else no}
+
     if "leaders_note" in keys:
-        try:
+        def note() -> bool:
             import church_leaders_note as ln
-            monday = ln.monday_of(now.astimezone(ln._zone(business)).date())
+            try:
+                monday = ln.monday_of(now.astimezone(ln._zone(business)).date())
+            except HTTPException:
+                raise cw.Unread("leaders note clock")
             last = ln.last_of(business)
-            out["leaders_note"] = bool(last and last.get("week") == monday.isoformat())
-        except Exception:
-            print(f"[church_my_week] {biz[:8]}: the leaders note's last send wasn't read for the rhythm")
+            return bool(last and last.get("week") == monday.isoformat())
+        fact("leaders_note", note, "Sent this week", "Not sent yet this week",
+             "the leaders note's last send wasn't read for the rhythm")
     if "monthly_report" in keys:
-        try:
+        def report() -> bool:
             import church_monthly_report as cmr
             first = cmr.prev_month(date(today.year, today.month, 1))
-            row = cmr._row(biz, first.strftime("%Y-%m"))
-            out["monthly_report"] = bool((row or {}).get("send_id"))
-        except Exception:
-            print(f"[church_my_week] {biz[:8]}: the monthly report's row wasn't read for the rhythm")
+            try:
+                row = cmr._row(biz, first.strftime("%Y-%m"))
+            except Exception:
+                raise cw.Unread("monthly report")
+            return bool((row or {}).get("send_id"))
+        fact("monthly_report", report, "Last month's report is sent", "Last month's report isn't sent yet",
+             "the monthly report's row wasn't read for the rhythm")
     if "weekly_text" in keys:
-        try:
+        def texts() -> bool:
             import chief_assignments
             since, _ = chief_assignments.day_bounds(today - timedelta(days=today.weekday()), today, tz)
             rows = sb_clients.sb_get_as_service(
                 f"/events?business_id=eq.{_q(biz)}&event_type=eq.sms_broadcast&created_at=gte.{_q(since.isoformat())}"
                 "&select=data,created_at&order=created_at.desc&limit=20")
             if not isinstance(rows, list):
-                raise RuntimeError("events unread")
-            out["weekly_text"] = any(int(((r.get("data") or {}) if isinstance(r.get("data"), dict) else {})
-                                         .get("sent") or 0) > 0 for r in rows)
-        except Exception:
-            print(f"[church_my_week] {biz[:8]}: this week's announcements weren't read for the rhythm")
+                raise cw.Unread("events")
+            return any(int(((r.get("data") or {}) if isinstance(r.get("data"), dict) else {}).get("sent") or 0) > 0
+                       for r in rows)
+        fact("weekly_text", texts, "This week's text went out", "This week's text hasn't gone out yet",
+             "this week's announcements weren't read for the rhythm")
+    jobs = [k for k in WEEK_JOBS if k in keys]
+    if jobs:
+        import church_over
+        if church_over.church_open(business):
+            monday = today - timedelta(days=today.weekday())
+            for k in jobs:
+                ans = cw.week_job(ctx, k, due_day(k, monday, (picks or {}).get(k), today) or monday)
+                if ans and ans.get("done") is not None and not ans.get("unread"):
+                    out[k] = {"done": bool(ans["done"]), "text": ans["text"]}
     return out
 
 
@@ -555,13 +640,16 @@ def rhythm(business: Dict[str, Any], user_id: str, role: str, now: Optional[date
     key_today = WEEKDAYS[today.weekday()]
     import church_monthly_report as cmr
     first_monday = cmr.first_monday(date(today.year, today.month, 1))
-    done = _done(business, held, today, now, tz)
     # The days this login picked (church_assignments, where its switch is
-    # open for the church): each stands in for the catalog's.
+    # open for the church): each stands in for the catalog's, and each
+    # weekly job is judged by it.
     import church_assignments as cas
     import church_over
     assign = church_over.church_open(business)
     picks = cas.days_for(business, [user_id]).get(str(user_id), {}) if assign else {}
+    judged = _done_full(business, held, today, now, tz, picks=picks)
+    done = {k: v["done"] for k, v in judged.items()}
+    monday = today - timedelta(days=today.weekday())
     groups: Dict[str, List[Dict[str, Any]]] = {g: [] for g in GROUP_ORDER}
     for key, d in church_duties.CATALOG.items():
         if key not in held:
@@ -580,6 +668,9 @@ def rhythm(business: Dict[str, Any], user_id: str, role: str, now: Optional[date
             item.update(picked=pick, usual=placed(d["day"])[2])
         if key in done:
             item["done"] = done[key]
+            state = job_state(done[key], due_day(key, monday, pick, today), today) if assign else None
+            if state:
+                item.update(state=state, state_text=STATE_TEXT[state], detail=judged[key]["text"])
         for g in (days if group in WEEKDAYS else [group]):
             groups[g].append(item)
     out_days = [{"key": g, "label": GROUP_LABEL[g], "today": g == key_today or (g == MONTH and any(i["today"] for i in groups[g])),
