@@ -266,7 +266,7 @@ def test_a_first_assignment_is_made_from_the_jobs_they_hold_once(app, db):
 def test_the_executive_pastors_own_is_two_never_the_whole_office_and_a_money_lane_has_none(app, db):
     as_(app, LOVE_CITY, "owner")
     jess = start(app, LOVE_CITY, login(db, LOVE_CITY, "jessica")).json()
-    assert sorted(t["title"] for t in jess["made"]) == ["A first one-on-one with each",
+    assert sorted(t["title"] for t in jess["made"]) == ["A first one-on-one with each person you're over",
                                                          "Start each office login's first assignment"]
     minnie = start(app, LOVE_CITY, login(db, LOVE_CITY, "minnie")).json()
     assert minnie["of"] == 0 and minnie["made"] == []

@@ -210,11 +210,13 @@ all four churches), so the board doesn't read a dozen tables a login.
   the system", "The next 8 weeks on the calendar", "Every volunteer team has a leader",
   "ChurchSavvy's team has joined", and so on. One to three items per duty, about 5-9 per lane.
   Duties with nothing to gather have none. The Executive Pastor's lane gets "Start each office
-  login's first assignment" and "A first one-on-one with each".
-- Leader items, keyed by the person's role switches (church_map.can): `can_lead` → their team or
-  group with its people, the day and time it meets, its room, its first need; `can_oversee` →
-  meet each leader under you, and each has started their first assignment. Words only from
-  the switches, never title words (`test_church_no_title_words.py`).
+  login's first assignment" and "A first one-on-one with each person you're over".
+- Leader items, keyed by the person's role switches (church_map.can): `can_lead` → "Who's on your
+  team or group", "When you meet: the day and time", "The room you meet in", "What you need
+  first"; `can_oversee` → "Meet each leader under you", "Each leader under you has started their
+  first assignment". Each title reads alone, as it does on the board (reworded in PR C2; the
+  `startup_key`s are unchanged, so items already made keep working). Words only from the
+  switches, never title words (`test_church_no_title_words.py`).
 
 `start(biz, by, target)`: for the duties the target login does of its own, or the target person's
 role switches (a role with `can_lead`, or a group they lead; a role with `can_oversee`), makes the
@@ -501,6 +503,52 @@ The table: `supabase/APPLY-2026-11-12-church-handovers.sql` (`church_handovers`,
 the person and the department are its own church's by trigger; PGlite check
 `__tests__/church_handovers_db.mjs`). Excluded from the export: the sender is a sign-in id, and
 a restore must not claim anything was seen or told.
+
+## The member app's Lead tab (PR C2)
+
+Kevin, 2026-11-12, on the phone mock: "phone view idea is good. we can move forward with that."
+Leaders don't get office logins, so the Lead tab carries the board for one of the church's people
+(`member_portal_assign.py`; `me` is `church_over.who('person', contact id)`). While
+CHURCH_ASSIGNMENTS is open for the church, `/my/lead/tasks` is this page and the section switcher
+says "Assignments · n" (n: what's open and handed to them, what's stuck and sent up to them, what
+the office sent that they haven't seen). Closed, the tasks page is as it was.
+
+- **Your people** (a leader over others, `church_assignments.board`): each person, why ("Leads
+  Youth", "Answers to you"), their first assignment n of m, what's stuck (with **Send up to**
+  whoever is over me, `church_over.above`) and what's next; **Give an assignment** (what, by when,
+  done when); **Start their first assignment** while it has items to make.
+- **Your assignments** (`church_assignments.theirs`): each one's due words, done when, what the
+  check counts so far, and who it's from; **Done**; **Stuck** with a note; **Not stuck** until it's
+  been sent up (then "Sent up to …, they'll say when it's no longer stuck"; Done still works).
+- **Sent up to you**: what's stuck and was sent up to them (`raised_to_contact_id`), with
+  **No longer stuck**; once done, "Done now" for two weeks.
+- **From the office** (`church_handovers.for_people`): who sent it, its department and day, the
+  note, an https link (opened in a new tab, `noopener noreferrer`), **Got it**, then Seen.
+
+Writes (each the engine's own, checking the church, the person and who is over whom):
+
+    POST /my/lead/assignments/{id}/done | stuck {note} | unstuck | raise
+    POST /my/lead/assignments/give      {for, title, due_date?, done_when?}
+    POST /my/lead/assignments/start     {for}
+    POST /my/lead/handovers/{id}/seen
+
+Each takes `member_portal_church._signed_in` (a cross-site POST is a 403; Origin: null passes only
+with the browser's own `Sec-Fetch-Site: same-origin`), never writes in the owner's preview, takes
+the per-person rate limit, and answers with a redirect back and a short code. No ids and no office
+words on the screen. Phone first; on a computer (`_shell(wide=True)`) your people and your
+assignments sit beside what was sent up and what the office sent.
+
+Who did it, as a person: `handed_by` and `raised_by` name logins (`auth.users`), so the member
+app writes `tasks.handed_by_contact_id` and `tasks.raised_by_contact_id` instead
+(`supabase/APPLY-2026-11-12-church-lead-assignments.sql`, the coordinator's yes 2026-11-12; each
+the task's own church's by trigger, set null when the person goes). The page says "From Andre
+Wallace"; the hand-off email ("Andre Wallace gave you 4 things for your first two weeks") and the
+sent-up email name them (`church_leader_tasks.person_handers`, read on its own so a database
+without the column just names no one). A login's own hand is read first. `church_assignments.change`
+and the take-back read "sent up by me / to me" for a person by `raised_by_contact_id` and
+`raised_to_contact_id`. The hand-over email now points a leader without an office login at the
+Lead tab ("open Assignments, and it's under From the office. Tap Got it once you have it."), shipped
+with the page in the same deploy.
 
 ## Days
 

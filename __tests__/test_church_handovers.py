@@ -365,8 +365,8 @@ def test_one_email_a_person_a_sweep_from_the_church_naming_who_sent_each(app, db
     assert "Under the mat." in r["html"] and 'href="https://example.org/key"' in r["html"]
     tiara_email = next(s["invited_email"] for s in db.t["business_users"] if s["user_id"] == uid(db, LOVE_CITY, "tiara"))
     assert r["reply_to"] == tiara_email and "Reply to this email to answer Tiara." in r["html"]
-    for m in (y, r):
-        assert "Got it" not in m["html"] and "Lead tab" not in m["html"], "no Lead tab until the member app ships it"
+    for m in (y, r):                    # the member app's Lead tab (PR C2)
+        assert "open Assignments, and it’s under From the office. Tap Got it once you have it." in m["html"]
     assert all(h["told_at"] for h in db.t["church_handovers"])
     assert cho.sweep_tick(NOW + timedelta(hours=1))["emails"] == 0, "never again once told"
     assert not [t for t in db.t["tasks"] if t["title"].startswith("From ")], "never a task"

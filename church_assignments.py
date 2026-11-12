@@ -90,7 +90,7 @@ router = APIRouter(prefix="/church", tags=["church"])
 
 FIELDS = ("id,business_id,title,description,status,due_date,assigned_to,assigned_contact_id,handed_by,created_at,"
           "completed_at,duty,done_when,check_key,startup_key,stuck_note,stuck_at,raised_at,raised_to,"
-          "raised_to_contact_id,raised_by,raised_told_at,checked_at")
+          "raised_to_contact_id,raised_by,raised_told_at,checked_at,handed_by_contact_id,raised_by_contact_id")
 DONE_DAYS = 14             # a person's list shows what was done in the last two weeks
 BOARD_DONE_DAYS = 7        # the board counts the last week's
 READ_MAX = 1000
@@ -256,7 +256,8 @@ def item(t: Dict[str, Any], today: date, logins: Dict[str, str], people: Dict[st
         "check": {"done": check.get("done"), "text": check.get("text")} if check else None,
         "stuck": {"note": _plain(t.get("stuck_note")), "since": t.get("stuck_at")} if stuck else None,
         "raised": {"at": t.get("raised_at"), "to": raised_to} if stuck and t.get("raised_at") else None,
-        "from": logins.get(str(t.get("handed_by") or "")) or "the church office",
+        "from": (logins.get(str(t.get("handed_by") or "")) or people.get(str(t.get("handed_by_contact_id") or ""))
+                 or "the church office"),
         "completed_at": t.get("completed_at") if done else None, "checked": bool(done and t.get("checked_at")),
     }
 
@@ -363,7 +364,8 @@ def _one(ch: co.Church, t: Dict[str, Any], ctx: Optional[cw.Ctx] = None) -> Dict
     ctx = ctx or cw.Ctx(ch.business, _now(), ch.tz)
     check = cw.run(ctx, t["check_key"]) if t.get("check_key") and t.get("status") != "done" else None
     logins = _after(lambda: _names_by_login(ch, [t.get("handed_by"), t.get("raised_to")]), {})
-    people = _after(lambda: ch.names([t.get("raised_to_contact_id")]), {}) if t.get("raised_to_contact_id") else {}
+    who = [t.get(k) for k in ("raised_to_contact_id", "handed_by_contact_id") if t.get(k)]
+    people = _after(lambda: ch.names(who), {}) if who else {}
     return item(t, ctx.today, logins, people, check)
 
 
@@ -456,20 +458,23 @@ def theirs(ch: co.Church, me: Dict[str, Any], target: Dict[str, Any], over: bool
     open_ = [r for r in mine if r.get("status") != "done"]
     checks = _checks(ctx, open_)
     raised: List[Dict[str, Any]] = []
-    if co.same(me, target) and target["kind"] == co.LOGIN:
-        # What was sent up to me: still stuck, or done in the last two weeks
-        # (resolved: it never vanishes without a word).
+    if co.same(me, target):
+        # What was sent up to me (a login, or one of the church's people):
+        # still stuck, or done in the last two weeks (resolved: it never
+        # vanishes without a word).
+        col = "raised_to" if target["kind"] == co.LOGIN else "raised_to_contact_id"
         raised = [r for r in _need(
-            f"/tasks?business_id=eq.{_q(ch.b)}&raised_to=eq.{_q(target['id'])}&raised_at=not.is.null"
+            f"/tasks?business_id=eq.{_q(ch.b)}&{col}=eq.{_q(target['id'])}&raised_at=not.is.null"
             f"&or=(status.neq.done,completed_at.gte.{_since_day(now, DONE_DAYS)})&select={FIELDS}"
             "&order=raised_at.desc&limit=50")
-            if str(r.get("business_id")) == ch.b and str(r.get("raised_to") or "") == target["id"]
+            if str(r.get("business_id")) == ch.b and str(r.get(col) or "") == target["id"]
             and (r.get("stuck_at") if r.get("status") != "done" else str(r.get("completed_at") or "") >= since)]
-    logins = _names_by_login(ch, [r.get(k) for r in mine + raised for k in ("handed_by", "raised_to")])
-    people = ch.names([r.get("raised_to_contact_id") for r in mine if r.get("raised_to_contact_id")])
+    logins = _names_by_login(ch, [r.get(k) for r in mine + raised for k in ("handed_by", "raised_to", "raised_by")])
+    people = ch.names([r.get(k) for r in mine for k in ("raised_to_contact_id", "handed_by_contact_id")
+                       if r.get(k)])
     items = [item(r, ctx.today, logins, people, checks.get(str(r["id"]))) for r in mine]
     whose = {**_names_by_login(ch, [r.get("assigned_to") for r in raised]),
-             **ch.names([r.get("assigned_contact_id") for r in raised if r.get("assigned_contact_id")])}
+             **ch.names([r.get(k) for r in raised for k in ("assigned_contact_id", "raised_by_contact_id") if r.get(k)])}
     open_items = sorted((i for i in items if i["status"] == "open"), key=lambda i: (not i["late"], i["due"] or "9999-12-31"))
     done_items = sorted((i for i in items if i["status"] == "done" and str(i["completed_at"] or "") >= since),
                         key=lambda i: str(i["completed_at"] or ""), reverse=True)
@@ -482,7 +487,9 @@ def theirs(ch: co.Church, me: Dict[str, Any], target: Dict[str, Any], over: bool
         "done": done_items,
         "raised_to_you": [{**item(r, ctx.today, logins, {}),
                            "whose": whose.get(str(r.get("assigned_to") or r.get("assigned_contact_id") or ""), ""),
-                           "sent_up_at": r.get("raised_at"), "resolved": r.get("status") == "done"}
+                           "sent_up_at": r.get("raised_at"), "resolved": r.get("status") == "done",
+                           "sent_up_by": (logins.get(str(r.get("raised_by") or ""))
+                                          or whose.get(str(r.get("raised_by_contact_id") or ""), ""))}
                           for r in raised],
     }
 
@@ -658,7 +665,8 @@ def give(ch: co.Church, me: Dict[str, Any], target: Dict[str, Any], body: Dict[s
            "due_date": _day(body.get("due_date")),
            "assigned_to": target["id"] if target["kind"] == co.LOGIN else None,
            "assigned_contact_id": target["id"] if target["kind"] == co.PERSON else None,
-           "handed_by": str(me["id"]), "duty": _duty_ok(target, ch, body.get("duty")),
+           "handed_by": _login_id(me), "handed_by_contact_id": _person_id(me),
+           "duty": _duty_ok(target, ch, body.get("duty")),
            "done_when": _text(body.get("done_when"), DONE_WHEN_MAX, "done when"), "check_key": None,
            "startup_key": None}
     saved = sb_clients.sb_post_as_service("/tasks", row)
@@ -692,6 +700,29 @@ SENT_UP_STAYS = ("It was sent up, so it stays until whoever sent it up, whoever 
                  "them takes it back.")
 
 
+def _login_id(me: Dict[str, Any]) -> Optional[str]:
+    """`me`'s id where a column names a login (handed_by, raised_by): one of
+    the church's people (the member app's Lead tab) has none."""
+    return str(me["id"]) if me["kind"] == co.LOGIN else None
+
+
+def _person_id(me: Dict[str, Any]) -> Optional[str]:
+    """`me`'s id where a column names one of the church's people
+    (handed_by_contact_id, raised_by_contact_id): a login has none."""
+    return str(me["id"]) if me["kind"] == co.PERSON else None
+
+
+def _up_side(t: Dict[str, Any], me: Dict[str, Any]) -> bool:
+    """Whether `me` sent this one up or it went to `me`: a login by
+    raised_by and raised_to, a person by raised_by_contact_id and
+    raised_to_contact_id."""
+    if not t.get("raised_at"):
+        return False
+    if me["kind"] == co.LOGIN:
+        return str(me["id"]) in {str(t.get("raised_by") or ""), str(t.get("raised_to") or "")}
+    return str(me["id"]) in {str(t.get("raised_by_contact_id") or ""), str(t.get("raised_to_contact_id") or "")}
+
+
 def _now_sent_up(t: Dict[str, Any]) -> bool:
     """Whether this task has been sent up since it was read (a guarded write
     that changed nothing): read again."""
@@ -714,12 +745,12 @@ def change(ch: co.Church, me: Dict[str, Any], t: Dict[str, Any], body: Dict[str,
     mine = co.same(me, target)
     over = False if mine else co.is_over(ch, me, target)
     sent = bool(t.get("raised_at"))
-    up_side = sent and str(me["id"]) in {str(t.get("raised_by") or ""), str(t.get("raised_to") or "")}
+    up_side = _up_side(t, me)
     if not (mine or over or up_side):
         raise HTTPException(403, NOT_OVER)
     patch: Dict[str, Any] = {}
     if any(k in body for k in ("due_date", "title", "done_when")):
-        if not (over or str(t.get("handed_by") or "") == str(me["id"])):
+        if not (over or (me["kind"] == co.LOGIN and str(t.get("handed_by") or "") == str(me["id"]))):
             raise HTTPException(403, "Only whoever is over them changes the date, the title or what done means.")
         if "title" in body:
             patch["title"] = _text(body.get("title"), TITLE_MAX, "title", need=True)
@@ -734,7 +765,7 @@ def change(ch: co.Church, me: Dict[str, Any], t: Dict[str, Any], body: Dict[str,
     if "stuck" in body:
         if body["stuck"] is None:
             patch.update(stuck_note=None, stuck_at=None, raised_at=None, raised_to=None, raised_to_contact_id=None,
-                         raised_by=None, raised_told_at=None)
+                         raised_by=None, raised_by_contact_id=None, raised_told_at=None)
         else:
             if not isinstance(body["stuck"], str):
                 raise HTTPException(400, "Say why it's stuck, or null when it isn't")
@@ -789,7 +820,7 @@ def assignments_take_back(task_id: str, business_id: str, session: UserSession =
     target = _target_of(t)
     guard = ""
     if t.get("raised_at"):
-        up_side = str(me["id"]) in {str(t.get("raised_by") or ""), str(t.get("raised_to") or "")}
+        up_side = _up_side(t, me)
         if not up_side and (co.same(me, target) or not co.is_over(ch, me, target)):
             raise HTTPException(403, SENT_UP_STAYS)
     elif str(t.get("handed_by") or "") == str(me["id"]):
@@ -820,7 +851,8 @@ def raise_up(ch: co.Church, me: Dict[str, Any], t: Dict[str, Any], note: Any,
         raise HTTPException(409, "Nobody is over you here, so there's no one to send it up to.")
     to = up[0]
     stamp = _iso(now)
-    patch = {"raised_at": stamp, "raised_by": str(me["id"]), "raised_told_at": None,
+    patch = {"raised_at": stamp, "raised_by": _login_id(me), "raised_by_contact_id": _person_id(me),
+             "raised_told_at": None,
              "raised_to": to["id"] if to["kind"] == co.LOGIN else None,
              "raised_to_contact_id": to["id"] if to["kind"] == co.PERSON else None}
     said = _text(note, STUCK_MAX, "note") if note is not None else None
@@ -861,7 +893,7 @@ def assignments_start(body: Dict[str, Any], session: UserSession = Depends(sb_cl
     _allowed(ch, me, target, self_ok=False)
     _ready(ch)
     ctx = cw.Ctx(ch.business, _now(), ch.tz)
-    got = cs.start(ch, str(me["id"]), target, ctx.today)
+    got = cs.start(ch, me, target, ctx.today)
     logins = _after(lambda: _names_by_login(ch, [me["id"]]), {})
     return {"for": co.key(target), "name": _after(lambda: _name_of(ch, target), ""), "of": got["of"],
             "skipped": got["skipped"],
@@ -1006,7 +1038,7 @@ def grouped_text(name: str, by: List[str], tasks: List[Dict[str, Any]], today: O
 # ─── The hourly sweep: sent up, and checks that tick ──────────────────
 
 RAISED_FIELDS = ("id,business_id,title,stuck_note,stuck_at,status,assigned_to,assigned_contact_id,raised_at,"
-                 "raised_to,raised_to_contact_id,raised_by,raised_told_at")
+                 "raised_to,raised_to_contact_id,raised_by,raised_by_contact_id,raised_told_at")
 
 
 def _claim_raised(t: Dict[str, Any], stamp: str) -> bool:
@@ -1028,9 +1060,9 @@ def _release_raised(t: Dict[str, Any], stamp: str) -> None:
 def raised_text(name: str, by: str, whose: str, t: Dict[str, Any], where: str) -> str:
     clt = _clt()
     title = _plain(t.get("title")) or "An assignment"
-    lines = [f"Hi {clt.first_name(name) or 'there'},",
-             f"{by or 'Someone in the office'} sent up something that's stuck: “{title}”"
-             + (f", {whose}’s." if whose else ".")]
+    said = (f"{by} sent up something that's stuck: “{title}”" if by else
+            f"Something that's stuck was sent up to you: “{title}”")     # a leader in the member app has no login
+    lines = [f"Hi {clt.first_name(name) or 'there'},", said + (f", {whose}’s." if whose else ".")]
     note = _plain(t.get("stuck_note"))
     if note:
         lines.append(f"What’s stuck: {note}")
@@ -1065,7 +1097,8 @@ def tell_raised(biz: Dict[str, Any], rows: List[Dict[str, Any]], now: datetime, 
     church = _plain(biz.get("name")) or "Your church"
     reply_to = clt._office_email(biz)
     people = clt._contacts(b, [r.get("raised_to_contact_id") for r in rows] +
-                           [r.get("assigned_contact_id") for r in rows])
+                           [r.get("assigned_contact_id") for r in rows] +
+                           [r.get("raised_by_contact_id") for r in rows])
     if people is None:
         stats["raised_unread"] += len(rows)
         print(f"[church_assignments] {b[:8]}: the people for what was sent up weren't read; next sweep", flush=True)
@@ -1083,7 +1116,7 @@ def tell_raised(biz: Dict[str, Any], rows: List[Dict[str, Any]], now: datetime, 
             continue
         # Everything the email says is read before the claim: a claim taken
         # and never sent would leave them untold for good.
-        by = login(t.get("raised_by"))
+        by = login(t.get("raised_by")) or (people.get(str(t.get("raised_by_contact_id") or "")) or {}).get("name", "")
         whose = (login(t["assigned_to"]) if t.get("assigned_to")
                  else (people.get(str(t.get("assigned_contact_id") or "")) or {}).get("name", ""))
         subject = f"{church}: something stuck was sent up to you"

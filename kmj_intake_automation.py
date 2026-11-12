@@ -573,6 +573,10 @@ app.include_router(member_portal_lead_router)
 # A Sunday team's leader schedules their team (Lead → Sundays; ChurchSavvy Planning).
 from member_portal_leading import router as member_portal_leading_router
 app.include_router(member_portal_leading_router)
+# A leader's assignments on the Lead tab (member_portal_assign.py): done,
+# stuck, send up, give, start, and Got it on what the office sent.
+from member_portal_assign import router as member_portal_assign_router
+app.include_router(member_portal_assign_router)
 # The Safety room on a pastoral leader's Lead tab (member_portal_safety.py):
 # safety officers picked from the church's Pastors and Elders.
 from member_portal_safety import router as member_portal_safety_router
