@@ -350,11 +350,22 @@ def test_the_checks_count_what_the_church_keeps(db):
     ctx = lambda: cw.Ctx(c3.church(db, LOVE_CITY), NOW)  # noqa: E731
     assert cw.run(ctx(), "departments_led") == {"key": "departments_led", "done": True,
                                                 "text": "3 of 3 departments have a leader"}
-    assert cw.run(ctx(), "kids_checked")["done"] is None, "nothing to count yet claims nothing"
-    db.t["space_leaders"] = [{"business_id": LOVE_CITY, "contact_id": "k1", "background_check_on": None},
-                             {"business_id": LOVE_CITY, "contact_id": "k2", "background_check_on": "2026-09-01"}]
-    assert cw.run(ctx(), "kids_checked") == {"key": "kids_checked", "done": False,
-                                             "text": "1 kids worker has no background check date"}
+    assert cw.run(ctx(), "kids_checked") == {"key": "kids_checked", "done": None,
+                                             "text": "No kids leaders approved yet"}
+    # Every approved kids leader has a date by the table's own rule, and a youth
+    # leader isn't a kids worker: it's evidence, never a tick (#1801 review).
+    db.t["space_leaders"] = [{"business_id": LOVE_CITY, "contact_id": "k1", "space": "kids",
+                              "background_check_on": "2026-01-01"},
+                             {"business_id": LOVE_CITY, "contact_id": "k2", "space": "kids",
+                              "background_check_on": "2026-09-01"},
+                             {"business_id": LOVE_CITY, "contact_id": "y1", "space": "youth",
+                              "background_check_on": "2026-09-01"},
+                             {"business_id": GRACE, "contact_id": "g1", "space": "kids",
+                              "background_check_on": "2026-09-01"}]
+    assert cw.run(ctx(), "kids_checked") == {"key": "kids_checked", "done": None,
+                                             "text": "2 kids leaders approved with a background check date"}
+    assert cw.run(cw.Ctx(c3.church(db, GRACE), NOW), "kids_checked")["done"] is None
+    assert "kids_checked" in cw.EVIDENCE and "rooms_listed" in cw.EVIDENCE and "kids_checked" not in cw.PASSABLE
     db.t["worship_team"] = [{"business_id": LOVE_CITY, "status": "active"}, {"business_id": LOVE_CITY, "status": "invited"}]
     assert cw.run(ctx(), "churchsavvy_joined")["text"] == "1 joined, 1 still invited"
     db.t["worship_team"][1]["status"] = "active"
@@ -400,7 +411,7 @@ def patch(app, tid, biz, **body):
     return app.patch(f"/church/assignments/{tid}", json={"business_id": biz, **body})
 
 
-def test_stuck_sent_up_told_once_and_cleared(app, db):
+def test_stuck_and_sent_up_is_told_once(app, db):
     t = _rooms_item(app, db)
     as_(app, LOVE_CITY, "naiya")
     r = patch(app, t["id"], LOVE_CITY, stuck="Waiting on the floor plan")
@@ -425,17 +436,71 @@ def test_stuck_sent_up_told_once_and_cleared(app, db):
     assert len([m for m in db.sent if m["key"].startswith("assignment-raised-")]) == 1, "told once"
     as_(app, LOVE_CITY, "owner")
     up = mine(app, LOVE_CITY)["raised_to_you"]
-    assert [(i["title"], i["whose"]) for i in up] == [("Every room in the system", "Naiya Clark")]
+    assert [(i["title"], i["whose"], i["resolved"]) for i in up] == [("Every room in the system", "Naiya Clark", False)]
     r = app.post(f"/church/assignments/{t['id']}/raise", json={"business_id": LOVE_CITY})
     assert r.status_code == 409, "nobody is over the owner"
+
+
+def _sent_up(app, db):
+    t = _rooms_item(app, db)
+    r = app.post(f"/church/assignments/{t['id']}/raise", json={"business_id": LOVE_CITY, "note": "Floor plan"})
+    assert r.status_code == 200, r.text
+    return t
+
+
+def test_before_its_sent_up_the_assignee_marks_and_clears_stuck(app, db):
+    t = _rooms_item(app, db)
     as_(app, LOVE_CITY, "naiya")
+    assert patch(app, t["id"], LOVE_CITY, stuck="Waiting").json()["saved"]["status"] == "stuck"
     cleared = patch(app, t["id"], LOVE_CITY, stuck=None).json()["saved"]
-    assert cleared["status"] == "open" and cleared["stuck"] is None and cleared["raised"] is None
-    assert task(db, t["id"])["raised_to"] is None
-    assert patch(app, t["id"], LOVE_CITY, done=True).json()["saved"]["status"] == "done"
-    assert task(db, t["id"])["completed_at"]
-    assert patch(app, t["id"], LOVE_CITY, done=False).json()["saved"]["status"] == "open"
+    assert cleared["status"] == "open" and cleared["stuck"] is None
     assert patch(app, t["id"], LOVE_CITY, done="yes").status_code == 400
+
+
+def test_once_its_sent_up_the_assignee_cant_clear_it_and_the_one_over_them_can(app, db):
+    """Kevin's call (#1801 review): the person over them is in control."""
+    t = _sent_up(app, db)
+    as_(app, LOVE_CITY, "naiya")
+    r = patch(app, t["id"], LOVE_CITY, stuck=None)
+    assert r.status_code == 403 and r.json()["detail"] == cas.SENT_UP
+    assert patch(app, t["id"], LOVE_CITY, stuck="It's fine now").status_code == 403, "nor rewrite the note"
+    row = task(db, t["id"])
+    assert row["stuck_at"] and row["raised_to"] == c3.LC_OWNER and row["stuck_note"] == "Floor plan"
+    as_(app, LOVE_CITY, "jessica")                                   # sent it up, and over her
+    cleared = patch(app, t["id"], LOVE_CITY, stuck=None).json()["saved"]
+    assert cleared["status"] == "open" and cleared["raised"] is None and task(db, t["id"])["raised_at"] is None
+
+
+def test_whoever_it_went_to_can_clear_it(app, db):
+    t = _sent_up(app, db)
+    as_(app, LOVE_CITY, "owner")
+    assert patch(app, t["id"], LOVE_CITY, stuck=None).json()["saved"]["status"] == "open"
+
+
+def test_done_still_works_for_the_assignee_and_whoever_it_went_to_sees_it_resolved(app, db):
+    t = _sent_up(app, db)
+    as_(app, LOVE_CITY, "naiya")
+    assert patch(app, t["id"], LOVE_CITY, done=True).json()["saved"]["status"] == "done"
+    row = task(db, t["id"])
+    assert row["completed_at"] and row["raised_to"] == c3.LC_OWNER, "done closes it; the record stays"
+    as_(app, LOVE_CITY, "owner")
+    [up] = mine(app, LOVE_CITY)["raised_to_you"]
+    assert (up["title"], up["status"], up["resolved"], up["whose"]) == (
+        "Every room in the system", "done", True, "Naiya Clark")
+    week = mw.build(c3.church(db, LOVE_CITY), c3.LC_OWNER, c3.PLATFORM, "owner")
+    lines = [n for n in [week["next"]] + week["needs"] if n and n["kind"].startswith("raised")]
+    assert [(n["kind"], n["title"]) for n in lines] == [
+        ("raised_done", "“Every room in the system” was sent up to you, and it's done now.")]
+    assert cas.sweep_tick(NOW)["raised_told"] == 0, "nothing to tell about a done one"
+    as_(app, LOVE_CITY, "naiya")
+    assert patch(app, t["id"], LOVE_CITY, done=False).json()["saved"]["status"] == "stuck", "reopened, still stuck"
+
+
+def test_someone_who_isnt_them_over_them_or_on_its_way_up_changes_nothing(app, db):
+    t = _sent_up(app, db)
+    as_(app, LOVE_CITY, "tiara")
+    for body in ({"done": True}, {"stuck": None}, {"title": "x"}):
+        assert patch(app, t["id"], LOVE_CITY, **body).status_code == 403, body
 
 
 def test_what_was_sent_up_shows_on_their_my_week(app, db):
@@ -512,17 +577,20 @@ def test_the_board_counts_each_person_and_their_first_assignment(app, db):
     assert app.get(f"/church/assignments/people?business_id={LOVE_CITY}").json()["people"] == [], "nobody under her"
 
 
-def test_the_board_reads_each_table_a_few_times_for_the_whole_church(app, db, monkeypatch):
+@pytest.mark.parametrize("biz,who,people", [(NEW_HOPE, "owner", 18), (LOVE_CITY, "jessica", 5),
+                                             (LOVE_CITY, "owner", 19)])
+def test_the_board_reads_each_table_a_few_times_for_the_whole_church(app, db, monkeypatch, biz, who, people):
     seen = []
     real = db.get
     monkeypatch.setattr(sb_clients, "sb_get_as_service", lambda path, **kw: (seen.append(path), real(path, **kw))[1])
-    as_(app, NEW_HOPE, "owner")
-    b = app.get(f"/church/assignments/people?business_id={NEW_HOPE}").json()
-    assert len(b["people"]) >= 18
+    as_(app, biz, who)
+    b = app.get(f"/church/assignments/people?business_id={biz}").json()
+    assert len(b["people"]) >= people
     count = lambda t: sum(1 for p in seen if p.lstrip("/").startswith(t + "?"))  # noqa: E731
     assert count("tasks") == 2, "every person's assignments in two reads"
     assert count("church_duty_holders") == 1 and count("church_leader_roles") <= 2
-    assert count("contacts") <= 3 and count("church_departments") == 1
+    assert count("contacts") <= 3 and count("church_departments") <= 1
+    assert len(seen) <= 25, sorted(p.split("?")[0] for p in seen)
 
 
 def test_a_failed_read_on_the_board_is_a_503(app, db, monkeypatch):
@@ -680,6 +748,11 @@ def test_the_migration_is_additive_and_says_what_each_column_is():
     assert re.search(r"create unique index if not exists tasks_startup_once\s+on public\.tasks "
                      r"\(business_id, coalesce\(assigned_to, assigned_contact_id\), startup_key\)\s+"
                      r"where startup_key is not null", body)
+    # Nothing old to check under the lock: the CHECKs and FKs are NOT VALID (#1801 review).
+    assert not re.search(r"add column if not exists \w+ uuid references", body), "no inline (validated) foreign key"
+    for name in ("tasks_raised_to_fkey", "tasks_raised_to_contact_id_fkey", "tasks_raised_by_fkey",
+                 "tasks_raised_to_one", "tasks_assignment_lengths"):
+        assert re.search(rf"add constraint {name}\b[^;]*\bnot valid;", body, re.S), name
     assert "create table if not exists public.church_duty_days" in body
     assert "enable row level security" in body and "create policy" not in body
     assert "revoke all on public.church_duty_days from anon, authenticated" in body
@@ -711,3 +784,175 @@ def test_the_templates_read_right_at_any_church():
         assert name not in words, name
     leaders = " ".join(t["title"] + " " + t["done_when"] for t in cs.TEMPLATES if t["duty"] in cs.SWITCH_LABEL)
     assert not re.search(r"pastor|elder|deacon|bishop|minister|director|overseer|executive", leaders, re.I)
+
+
+# ─── The #1801 review: who can reach an Admin, the top, the sweep ─────
+
+def _minnie_answers_to_jessica(db):
+    db.t["church_leader_roles"].append({
+        "id": db.nid("church_leader_roles"), "business_id": LOVE_CITY, "contact_id": db.who[LOVE_CITY]["minnie"],
+        "role": "ministers", "scope": "", "status": "active", "invited_at": "2026-10-01T00:00:00+00:00",
+        "answered_at": None, "answers_to_contact_id": db.who[LOVE_CITY]["jessica"]})
+
+
+def test_a_manager_the_map_puts_over_an_admin_reaches_none_of_the_admins_work(app, db):
+    _minnie_answers_to_jessica(db)
+    as_(app, LOVE_CITY, "owner")
+    r = give(app, LOVE_CITY, login(db, LOVE_CITY, "minnie"), title="Reconcile October",
+             notes="Bank shows 12,400.00; books 12,150.00", duty="books")
+    assert r.status_code == 200, r.text
+    tid = r.json()["saved"]["id"]
+    as_(app, LOVE_CITY, "jessica")
+    minnie = login(db, LOVE_CITY, "minnie")
+    assert app.get(f"/church/assignments?business_id={LOVE_CITY}&for={minnie}").status_code == 403
+    assert patch(app, tid, LOVE_CITY, title="Never mind", due_date="2027-06-01").status_code == 403
+    assert patch(app, tid, LOVE_CITY, done=True).status_code == 403
+    assert app.delete(f"/church/assignments/{tid}?business_id={LOVE_CITY}").status_code == 403
+    assert give(app, LOVE_CITY, minnie, title="x").status_code == 403
+    assert start(app, LOVE_CITY, minnie).status_code == 403
+    assert put_day(app, LOVE_CITY, "pay", "Sat", uid(db, LOVE_CITY, "minnie")).status_code == 403
+    row = task(db, tid)
+    assert (row["title"], row["status"]) == ("Reconcile October", "todo"), "nothing changed"
+    board = app.get(f"/church/assignments/people?business_id={LOVE_CITY}").json()
+    assert minnie not in {p["for"] for p in board["people"]}
+
+
+def test_a_member_seat_department_leader_reaches_none_of_the_treasurers_work(app, db):
+    nh = NEW_HOPE
+    db.t["church_leader_roles"].append({
+        "id": db.nid("church_leader_roles"), "business_id": nh, "contact_id": db.who[nh]["tessa"], "role": "deacons",
+        "scope": "", "status": "active", "invited_at": "2026-10-01T00:00:00+00:00", "answered_at": None,
+        "answers_to_contact_id": None})
+    celia = "3a000000-0000-4000-8000-000000000099"
+    db.t["business_users"].append({"business_id": nh, "user_id": celia, "role": "member",
+                                   "invited_email": "celia@newhope.church", "lane": None, "areas": None,
+                                   "contact_id": db.who[nh]["celia"], "name": "Celia Ward", "status": "active"})
+    as_(app, nh, "owner")
+    tid = give(app, nh, login(db, nh, "tessa"), title="Pay the roofer", notes="$8,450 by Friday").json()["saved"]["id"]
+    app.who.update(id=celia, email="celia@newhope.church")
+    assert app.get(f"/church/assignments?business_id={nh}&for={login(db, nh, 'tessa')}").status_code == 403
+    assert put_day(app, nh, "books", "Fri", uid(db, nh, "tessa")).status_code == 403
+    assert app.delete(f"/church/assignments/{tid}?business_id={nh}").status_code == 403
+    assert task(db, tid)["title"] == "Pay the roofer"
+    assert not [d for d in db.t.get("church_duty_days", []) if d["business_id"] == nh]
+
+
+def test_a_money_jobs_day_is_the_owners_or_an_admins_to_pick(app, db):
+    as_(app, LOVE_CITY, "owner")
+    assert put_day(app, LOVE_CITY, "pay", "Thu", uid(db, LOVE_CITY, "minnie")).status_code == 200
+    as_(app, LOVE_CITY, "minnie")
+    assert put_day(app, LOVE_CITY, "books", "Tue").status_code == 200
+    as_(app, LOVE_CITY, "jessica")
+    r = put_day(app, LOVE_CITY, "pay", "Fri", uid(db, LOVE_CITY, "naiya"))
+    assert r.status_code == 403 and "money job" in r.json()["detail"]
+
+
+def test_the_pastor_under_another_email_is_never_started_or_handed_work_by_an_admin(app, db):
+    kevin = next(c for c in db.t["contacts"] if c["id"] == db.who[LOVE_CITY]["kevin"])
+    kevin["email"] = "pastor@lovecity.org"
+    as_(app, LOVE_CITY, "minnie")
+    assert start(app, LOVE_CITY, person(db, LOVE_CITY, "kevin")).status_code == 403
+    assert give(app, LOVE_CITY, person(db, LOVE_CITY, "kevin"), title="x").status_code == 403
+    assert not [t for t in db.t["tasks"] if t.get("startup_key")]
+    names = {p["name"] for p in app.get(f"/church/assignments/people?business_id={LOVE_CITY}").json()["people"]}
+    assert "Kevin McCloud" not in names
+
+
+def test_a_failed_read_of_the_owners_email_is_a_503_on_the_board(app, db, monkeypatch):
+    import messaging_router
+    monkeypatch.setattr(messaging_router, "owner_email_read", lambda u: None)
+    as_(app, LOVE_CITY, "minnie")
+    assert app.get(f"/church/assignments/people?business_id={LOVE_CITY}").status_code == 503
+
+
+def test_a_failed_email_read_never_loses_a_raise(app, db, monkeypatch):
+    import messaging_router
+    t = _sent_up(app, db)
+    co._OWNER_EMAIL.clear()
+    monkeypatch.setattr(messaging_router, "owner_email_read", lambda u: None)       # Auth blips
+    s1 = cas.sweep_tick(NOW)
+    assert s1["raised_unread"] == 1 and s1["raised_no_email"] == 0 and not db.sent
+    assert task(db, t["id"]).get("raised_told_at") is None, "not claimed: the next sweep tries again"
+    monkeypatch.setattr(messaging_router, "owner_email_read", lambda u: c3.OWNER_EMAIL.get(str(u), ""))
+    s2 = cas.sweep_tick(NOW)
+    assert s2["raised_told"] == 1 and [m["to"] for m in db.sent] == [c3.PLATFORM]
+
+
+def test_a_failed_read_of_the_people_never_loses_a_raise(app, db, monkeypatch):
+    t = _sent_up(app, db)
+    real = clt._contacts
+    monkeypatch.setattr(clt, "_contacts", lambda b, ids: None)
+    assert cas.sweep_tick(NOW)["raised_unread"] == 1 and task(db, t["id"]).get("raised_told_at") is None
+    monkeypatch.setattr(clt, "_contacts", real)
+    assert cas.sweep_tick(NOW)["raised_told"] == 1
+
+
+def test_a_seat_with_no_email_is_told_with_nothing_sent(app, db):
+    t = _sent_up(app, db)
+    row = task(db, t["id"])
+    row["raised_to"] = uid(db, LOVE_CITY, "minnie")
+    next(s for s in db.t["business_users"] if s["user_id"] == row["raised_to"])["invited_email"] = ""
+    stats = cas.sweep_tick(NOW)
+    assert stats["raised_no_email"] == 1 and row["raised_told_at"], "claimed: on their page, nothing to send"
+
+
+def test_the_sweep_reads_only_what_it_can_use_page_by_page(app, db, monkeypatch):
+    as_(app, LOVE_CITY, "jessica")
+    start(app, LOVE_CITY, login(db, LOVE_CITY, "tiara"))           # two of hers pass at Love City
+    # 1,100 items no check will tick, all ahead of hers: they never crowd her out.
+    for n in range(1100):
+        db.t["tasks"].append({"id": f"00000000-0000-4000-8000-{n:012d}", "business_id": LOVE_CITY, "title": "x",
+                              "status": "todo", "check_key": "calendar_8_weeks",
+                              "assigned_to": uid(db, LOVE_CITY, "naiya"), "created_at": "2026-01-01T00:00:00+00:00"})
+    db.t["tasks"].append({"id": "00000001-0000-4000-8000-000000000000", "business_id": GRACE, "title": "grace",
+                          "status": "todo", "check_key": "groups_led", "assigned_to": uid(db, GRACE, "sharon"),
+                          "created_at": "2026-01-01T00:00:00+00:00"})
+    seen = []
+    real = db.get
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", lambda path, **kw: (seen.append(path), real(path, **kw))[1])
+    monkeypatch.setenv("CHURCH_ASSIGNMENTS", "owner")
+    monkeypatch.setattr(cas, "_platform_owner_id", lambda: c3.LC_OWNER)
+    import member_asks
+    monkeypatch.setattr(member_asks, "platform_church", lambda b: b == LOVE_CITY)
+    stats = cas.sweep_tick(NOW)
+    assert stats["ticked"] == 2 and stats["churches"] == 1
+    reads = [p for p in seen if p.startswith("/tasks?check_key=")]
+    assert len(reads) >= 2, "page by page"
+    assert all(f"business_id=in.({LOVE_CITY})" in p and "rooms_listed" not in p and "kids_checked" not in p
+               for p in reads), reads
+    assert next(t for t in db.t["tasks"] if t["title"] == "grace")["status"] == "todo", "a closed church: never read"
+
+
+def test_the_sweep_is_quiet_when_the_platforms_churches_cant_be_read(app, db, monkeypatch):
+    monkeypatch.setenv("CHURCH_ASSIGNMENTS", "owner")
+    monkeypatch.setattr(cas, "_platform_owner_id", lambda: c3.LC_OWNER)
+    real = db.get
+    monkeypatch.setattr(sb_clients, "sb_get_as_service",
+                        lambda path, **kw: None if path.startswith("/businesses?owner_id") else real(path, **kw))
+    assert cas.sweep_tick(NOW)["churches"] == 0
+
+
+def test_a_grouped_tell_before_the_migration_still_goes_and_says_tasks(app, db, monkeypatch):
+    """Owner is the default, so Love City's hand-offs group as soon as this
+    deploys; before the migration every read naming a new column fails, and
+    the grouped tell must still go, worded as tasks (#1801 review)."""
+    naiya, jess = uid(db, LOVE_CITY, "naiya"), uid(db, LOVE_CITY, "jessica")
+    for n, title in enumerate(("Book the hall", "Order the paper", "Print the bulletins")):
+        db.t["tasks"].append({"id": f"7a000000-0000-4000-8000-00000000000{n}", "business_id": LOVE_CITY,
+                              "title": title, "description": None, "status": "todo", "due_date": "2026-11-20",
+                              "assigned_to": naiya, "handed_by": jess, "created_at": NOW.isoformat(),
+                              "seat_told_at": None, "seat_late_told_at": None})
+    new = re.compile(r"\b(duty|done_when|check_key|startup_key|stuck_note|stuck_at|raised_\w+|checked_at)\b")
+    real = db.get
+    monkeypatch.setattr(sb_clients, "sb_get_as_service",
+                        lambda path, **kw: None if new.search(path) else real(path, **kw))
+    monkeypatch.setenv("CHURCH_ASSIGNMENTS", "owner")
+    import member_asks
+    monkeypatch.setattr(member_asks, "platform_church", lambda b: b == LOVE_CITY)
+    stats = cot.sweep_tick(NOW)
+    [mail] = [m for m in db.sent if m["to"] == "naiya@lovecity.org"]
+    assert stats["office_told"] == 3 and mail["subject"] == "Love City Church: 3 tasks"
+    assert all(t.get("seat_told_at") for t in db.t["tasks"] if t["id"].startswith("7a000000"))
+    monkeypatch.setattr(cas, "_platform_owner_id", lambda: c3.LC_OWNER)
+    quiet = cas.sweep_tick(NOW)
+    assert quiet["churches"] == 0 and quiet["raised_told"] == 0 and quiet["ticked"] == 0, "quiet before the migration"

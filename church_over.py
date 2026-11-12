@@ -30,7 +30,16 @@ it from the church's own data, never from names or title words:
                      one under them needs nothing
   a person with a login  is their login (an office seat: their work lands in
                      My week), as church_leader_tasks.leaders already keeps
-                     them out of the leaders list
+                     them out of the leaders list; and the map never hands
+                     anyone a login the office rule doesn't (an Admin's login
+                     is only the owner's and the Admins'; a Manager's, also
+                     whoever is over the lanes)
+  the top .......... never under anyone, and never walked through: every one
+                     of the church's people with the owner's sign-in email,
+                     the owner's person however found, and every holder of a
+                     senior-job role (or, where the map names them, of a role
+                     that gives the pastor's yes). A failed read of the
+                     owner's email is a 503
 
     under(ch, me) ..... [{kind, id, name, why}], the office first
     is_over(ch, me, t)  every write checks it
@@ -58,6 +67,7 @@ from __future__ import annotations
 
 import os
 import re
+import time
 import uuid
 from typing import Any, Dict, FrozenSet, Iterable, List, Optional, Set, Tuple
 from urllib.parse import quote
@@ -75,6 +85,11 @@ UNREAD = "Who is over whom couldn't be read just now. Try again."
 SEAT_FIELDS = "user_id,role,lane,areas,contact_id,invited_email,name"
 EMAILS_PER_READ = 20
 IDS_PER_READ = 100
+# The owner's sign-in email, kept ten minutes per replica once read (as
+# member_asks keeps whether a church is the platform's); a failed read is
+# never kept, so the next request asks again.
+OWNER_EMAIL_SECONDS = 600
+_OWNER_EMAIL: Dict[str, Tuple[float, str]] = {}
 
 
 # ─── The switch ───────────────────────────────────────────────────────
@@ -257,6 +272,42 @@ class Church:
 
     # Who each login is, as one of the church's people.
     @property
+    def owner_email(self) -> str:
+        """The owner's sign-in email ('' when the account has none). A read
+        that fails is a 503, never "the owner is nobody": who the owner is
+        decides who is never under anyone."""
+        def load() -> str:
+            if not self.owner:
+                return ""
+            hit = _OWNER_EMAIL.get(self.owner)
+            if hit and time.monotonic() - hit[0] < OWNER_EMAIL_SECONDS:
+                return hit[1]
+            import messaging_router
+            got = messaging_router.owner_email_read(self.owner)
+            if got is None:
+                raise HTTPException(503, UNREAD)
+            email = got.strip().lower()
+            _OWNER_EMAIL[self.owner] = (time.monotonic(), email)
+            return email
+        return self._got("owner_email", load)
+
+    @property
+    def _by_email(self) -> Dict[str, List[Dict[str, Any]]]:
+        """The church's people by email, for the owner's and each untied
+        seat's sign-in email: one read for them all."""
+        def load() -> Dict[str, List[Dict[str, Any]]]:
+            emails = {(s.get("invited_email") or "").strip().lower() for s in self.seats.values()
+                      if not s.get("contact_id")}
+            emails.add(self.owner_email)
+            found: Dict[str, List[Dict[str, Any]]] = {}
+            for part in _chunks((e for e in emails if "@" in e), EMAILS_PER_READ):
+                ors = ",".join(f"email.ilike.{_q(_escape_ilike(e))}" for e in part)
+                for c in _need(f"/contacts?business_id=eq.{_q(self.b)}&or=({ors})&select=id,name,email&limit=200"):
+                    found.setdefault((c.get("email") or "").strip().lower(), []).append(c)
+            return found
+        return self._got("by_email", load)
+
+    @property
     def login_person(self) -> Dict[str, str]:
         """user id -> contact id, for the owner and every seat: its tied
         record, else the one person its email names (with several, the one
@@ -268,19 +319,9 @@ class Church:
                 email = (s.get("invited_email") or "").strip().lower()
                 if u not in out and "@" in email:
                     want[u] = (email, _plain(s.get("name")))
-            if self.owner and self.owner not in out:
-                try:
-                    import messaging_router
-                    email = (messaging_router._owner_email(self.owner) or "").strip().lower()
-                except Exception:
-                    email = ""
-                if "@" in email:
-                    want[self.owner] = (email, "")
-            found: Dict[str, List[Dict[str, Any]]] = {}
-            for part in _chunks((e for e, _n in want.values()), EMAILS_PER_READ):
-                ors = ",".join(f"email.ilike.{_q(_escape_ilike(e))}" for e in part)
-                for c in _need(f"/contacts?business_id=eq.{_q(self.b)}&or=({ors})&select=id,name,email&limit=200"):
-                    found.setdefault((c.get("email") or "").strip().lower(), []).append(c)
+            if self.owner and self.owner not in out and "@" in self.owner_email:
+                want[self.owner] = (self.owner_email, "")
+            found = self._by_email
             for u, (email, name) in want.items():
                 rows = found.get(email) or []
                 if len(rows) > 1:
@@ -299,6 +340,33 @@ class Church:
     @property
     def owner_person(self) -> Optional[str]:
         return self.login_person.get(self.owner) if self.owner else None
+
+    @property
+    def top(self) -> Set[str]:
+        """The people at the top of every chain, never under anyone and never
+        walked through: every one of the church's people whose email is the
+        owner's sign-in email; the owner's person however it was found; and
+        every holder of a role whose job is the senior one (church_roles: the
+        top of every chain, a job and never a title) or, where the map names
+        them, of a role that gives the pastor's yes (pastor_yes_roles). So the
+        senior pastor is never under an Admin, even when his record carries
+        another email than the one he signs in with."""
+        def load() -> Set[str]:
+            out = {str(c["id"]) for c in self._by_email.get(self.owner_email, []) if c.get("id")} \
+                if "@" in self.owner_email else set()
+            if self.owner_person:
+                out.add(self.owner_person)
+            import church_roles as cr
+            have = {str(d.get("key")) for d in self.defs}
+            keys = {str(d.get("key")) for d in self.defs if d.get("job") == "senior" and d.get("key")}
+            keys |= {k for k, d in cr.LEGACY.items() if d.get("job") == "senior" and k not in have}
+            m = self.map
+            if m:
+                import church_map
+                keys |= set(church_map.picked(m, "pastor_yes_roles") or [])
+            out |= {str(h["contact_id"]) for h in self.holders if h.get("role") in keys}
+            return out
+        return self._got("top", load)
 
     def persons_of(self, me: Dict[str, Any]) -> Set[str]:
         if me["kind"] == PERSON:
@@ -471,10 +539,11 @@ def _direct(ch: Church, p: str) -> List[Tuple[str, str]]:
     return out
 
 
-def _walk(ch: Church, start: Set[str]) -> List[Tuple[str, str, str]]:
+def _walk(ch: Church, start: Set[str], stop: Set[str] = frozenset()) -> List[Tuple[str, str, str]]:
     """Every person below `start` on the map, nearest first, each once:
-    (person, why, the person they are directly under)."""
-    seen = set(start)
+    (person, why, the person they are directly under). Nobody in `stop` (the
+    top of every chain) is ever reached, nor anyone only through them."""
+    seen = set(start) | set(stop)
     queue = sorted(start)
     out: List[Tuple[str, str, str]] = []
     while queue:
@@ -522,7 +591,8 @@ def _under(ch: Church, me: Dict[str, Any]) -> List[Tuple[str, str, str]]:
             if ch.role(uid) == "manager":
                 add(LOGIN, uid, _login_why(ch, uid))
     off = ch.person_login
-    skip = mine | ({ch.owner_person} if ch.owner_person else set())
+    top = ch.top                    # never under anyone, whoever asks
+    skip = mine | top
     m = ch.map
     if role in KEEPS_ALL or (not m and lanes):
         for cid in _everyone(ch):
@@ -531,7 +601,7 @@ def _under(ch: Church, me: Dict[str, Any]) -> List[Tuple[str, str, str]]:
         return list(out.values())
     if not m or not mine:
         return list(out.values())
-    for t, why, via in _walk(ch, mine):
+    for t, why, via in _walk(ch, mine, top):
         if t in skip:
             continue
         name = ch.names([via]).get(via, "") if via not in mine else ""
@@ -540,7 +610,13 @@ def _under(ch: Church, me: Dict[str, Any]) -> List[Tuple[str, str, str]]:
         else:
             said = why if via in mine else f"{why} · under {_first(name)}"
         if t in off:
-            add(LOGIN, off[t], said)
+            # A person with an office login is their login, and the map never
+            # hands anyone a login the office rule doesn't: only the owner or
+            # an Admin (who have every login already), or someone over the
+            # lanes for a Manager seat. Never an Admin's, never the owner's.
+            uid = off[t]
+            if uid != ch.owner and (role in KEEPS_ALL or (lanes and ch.role(uid) == "manager")):
+                add(LOGIN, uid, said)
         else:
             add(PERSON, t, said)
     return list(out.values())
@@ -582,7 +658,7 @@ def above(ch: Church, who_: Dict[str, Any]) -> List[Dict[str, str]]:
 def _top(ch: Church, me: Dict[str, Any]) -> List[Tuple[str, str]]:
     if not ch.owner or (me["kind"] == LOGIN and str(me["id"]) == ch.owner):
         return []
-    if me["kind"] == PERSON and ch.owner_person and str(me["id"]) == ch.owner_person:
+    if me["kind"] == PERSON and str(me["id"]) in ch.top:
         return []
     return [(LOGIN, ch.owner)]
 
@@ -600,6 +676,8 @@ def _above(ch: Church, me: Dict[str, Any]) -> List[Tuple[str, str]]:
                 return [(LOGIN, u) for u in over]
         return _top(ch, me)
     cid = str(me["id"])
+    if cid in ch.top:
+        return []
     if cid in ch.person_login:
         return _above(ch, who(LOGIN, ch.person_login[cid]))
     import church_follow_up as cfu
@@ -622,8 +700,10 @@ def _above(ch: Church, me: Dict[str, Any]) -> List[Tuple[str, str]]:
         c = str(h.get("contact_id") or "")
         if not c or c == cid:
             continue
-        hit = (LOGIN, ch.person_login[c]) if c in ch.person_login else (
-            (LOGIN, ch.owner) if c == ch.owner_person else (PERSON, c))
+        # The top of every chain is the owner's login; an office person is
+        # their login; anyone else, their person.
+        hit = (LOGIN, ch.owner) if c in ch.top and ch.owner else (
+            (LOGIN, ch.person_login[c]) if c in ch.person_login else (PERSON, c))
         if hit not in out:
             out.append(hit)
     return out or _top(ch, me)

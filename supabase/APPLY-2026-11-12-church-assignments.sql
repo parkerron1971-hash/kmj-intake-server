@@ -40,6 +40,16 @@
 -- Additive, one transaction, safe to run twice, nothing dropped. Apply before
 -- the code that reads it: until then the routes answer 503 for the platform
 -- owner's church (the switch's default) and the sweep's reads fail quietly.
+--
+-- The lock: adding columns, constraints and indexes to tasks holds ACCESS
+-- EXCLUSIVE on it until commit, so the file keeps that short. Every new
+-- column is null on every row that exists, so there is nothing old to check:
+-- the two CHECKs and the three foreign keys are added NOT VALID (no scan of
+-- the table under the lock), and every row written from now on is still
+-- checked. Each can be validated later, under a lighter lock, with
+--   alter table public.tasks validate constraint <name>;
+-- The three indexes are built here as they are: tasks is small on this
+-- platform.
 begin;
 
 set local lock_timeout = '5s';
@@ -52,18 +62,36 @@ alter table public.tasks
   add column if not exists stuck_note text,
   add column if not exists stuck_at timestamptz,
   add column if not exists raised_at timestamptz,
-  add column if not exists raised_to uuid references auth.users(id) on delete set null,
-  add column if not exists raised_to_contact_id uuid references public.contacts(id) on delete set null,
-  add column if not exists raised_by uuid references auth.users(id) on delete set null,
+  add column if not exists raised_to uuid,
+  add column if not exists raised_to_contact_id uuid,
+  add column if not exists raised_by uuid,
   add column if not exists raised_told_at timestamptz,
   add column if not exists checked_at timestamptz;
 
 do $$
 begin
   if not exists (select 1 from pg_constraint
+                 where conname = 'tasks_raised_to_fkey' and conrelid = 'public.tasks'::regclass) then
+    alter table public.tasks
+      add constraint tasks_raised_to_fkey foreign key (raised_to)
+        references auth.users(id) on delete set null not valid;
+  end if;
+  if not exists (select 1 from pg_constraint
+                 where conname = 'tasks_raised_to_contact_id_fkey' and conrelid = 'public.tasks'::regclass) then
+    alter table public.tasks
+      add constraint tasks_raised_to_contact_id_fkey foreign key (raised_to_contact_id)
+        references public.contacts(id) on delete set null not valid;
+  end if;
+  if not exists (select 1 from pg_constraint
+                 where conname = 'tasks_raised_by_fkey' and conrelid = 'public.tasks'::regclass) then
+    alter table public.tasks
+      add constraint tasks_raised_by_fkey foreign key (raised_by)
+        references auth.users(id) on delete set null not valid;
+  end if;
+  if not exists (select 1 from pg_constraint
                  where conname = 'tasks_raised_to_one' and conrelid = 'public.tasks'::regclass) then
     alter table public.tasks
-      add constraint tasks_raised_to_one check (raised_to is null or raised_to_contact_id is null);
+      add constraint tasks_raised_to_one check (raised_to is null or raised_to_contact_id is null) not valid;
   end if;
   if not exists (select 1 from pg_constraint
                  where conname = 'tasks_assignment_lengths' and conrelid = 'public.tasks'::regclass) then
@@ -73,7 +101,7 @@ begin
         and (stuck_note is null or char_length(stuck_note) <= 500)
         and (duty is null or duty ~ '^[a-z][a-z0-9_]{1,39}$')
         and (check_key is null or check_key ~ '^[a-z][a-z0-9_]{1,39}$')
-        and (startup_key is null or startup_key ~ '^[a-z][a-z0-9_.]{1,79}$'));
+        and (startup_key is null or startup_key ~ '^[a-z][a-z0-9_.]{1,79}$')) not valid;
   end if;
 end $$;
 
@@ -168,6 +196,11 @@ commit;
 --   select count(*) from pg_indexes
 --    where schemaname = 'public' and indexname in ('tasks_startup_once','tasks_raised_untold','tasks_check_open');
 --   -- 3
+--   select conname, convalidated from pg_constraint
+--    where conrelid = 'public.tasks'::regclass
+--      and conname in ('tasks_raised_to_fkey','tasks_raised_to_contact_id_fkey','tasks_raised_by_fkey',
+--                      'tasks_raised_to_one','tasks_assignment_lengths');
+--   -- 5 rows, each convalidated false (NOT VALID: enforced on every new write)
 --   select c.relrowsecurity, (select count(*) from pg_policies p where p.schemaname = 'public'
 --                             and p.tablename = 'church_duty_days') as policies,
 --          has_table_privilege('authenticated', c.oid, 'select') as browser_reads

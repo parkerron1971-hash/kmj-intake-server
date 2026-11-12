@@ -159,11 +159,92 @@ def test_a_person_with_an_office_login_is_their_login(db):
                                    "invited_email": "yolanda@lovecity.org", "lane": None, "areas": ["kids_youth"],
                                    "contact_id": yolanda, "name": "Yolanda Reed", "status": "active"})
     db.label[uid] = "Yolanda"
+    # Her overseer on the map is over the people under her, but never her
+    # login: an office login is the office rule's alone (#1801 review).
     andre = under(db, LOVE_CITY, person(db, LOVE_CITY, "andre"))
-    assert [(r["kind"], r["id"]) for r in andre][0] == (co.LOGIN, uid)
-    assert db.label[andre[1]["id"]] == "Tyrone", "and those under her are still under him"
+    assert [(r["kind"], db.label[r["id"]], r["why"]) for r in andre] == [
+        (co.PERSON, "Tyrone", "Youth Ministry (YWD) leader · under Yolanda")]
     owner = under(db, LOVE_CITY, login(db, LOVE_CITY, "owner"))
     assert (co.PERSON, yolanda) not in {(r["kind"], r["id"]) for r in owner}
+    assert (co.LOGIN, uid) in {(r["kind"], r["id"]) for r in owner}
+    jess = under(db, LOVE_CITY, login(db, LOVE_CITY, "jessica"))
+    assert (co.LOGIN, uid) in {(r["kind"], r["id"]) for r in jess}, "over the lanes: every Manager login"
+
+
+def test_the_map_never_hands_a_manager_an_admins_login(db):
+    """Minnie (the Admin treasurer) holds a role that answers to Jessica's
+    person: on the map Jessica is over her, but an Admin's login is only the
+    owner's and the other Admins' (#1801 review, the reviewer's repro)."""
+    db.t["church_leader_roles"].append({
+        "id": db.nid("church_leader_roles"), "business_id": LOVE_CITY, "contact_id": db.who[LOVE_CITY]["minnie"],
+        "role": "ministers", "scope": "", "status": "active", "invited_at": "2026-10-01T00:00:00+00:00",
+        "answered_at": None, "answers_to_contact_id": db.who[LOVE_CITY]["jessica"]})
+    jess, minnie = login(db, LOVE_CITY, "jessica"), login(db, LOVE_CITY, "minnie")
+    ids = {r["id"] for r in under(db, LOVE_CITY, jess)}
+    assert minnie["id"] not in ids and db.who[LOVE_CITY]["minnie"] not in ids
+    assert not co.is_over(ch(db, LOVE_CITY), jess, minnie)
+
+
+def test_a_member_seat_department_leader_is_never_over_the_treasurer(db):
+    """New Hope: Tessa (Admin, treasurer) serves as a deacon; Celia leads
+    Care, whose units hold the deacons' role, and has only a Member seat."""
+    nh, w = NEW_HOPE, db.who[NEW_HOPE]
+    db.t["church_leader_roles"].append({
+        "id": db.nid("church_leader_roles"), "business_id": nh, "contact_id": w["tessa"], "role": "deacons",
+        "scope": "", "status": "active", "invited_at": "2026-10-01T00:00:00+00:00", "answered_at": None,
+        "answers_to_contact_id": None})
+    celia = "3a000000-0000-4000-8000-000000000099"
+    db.t["business_users"].append({"business_id": nh, "user_id": celia, "role": "member",
+                                   "invited_email": "celia@newhope.church", "lane": None, "areas": None,
+                                   "contact_id": w["celia"], "name": "Celia Ward", "status": "active"})
+    ids = {r["id"] for r in under(db, nh, co.who(co.LOGIN, celia))}
+    assert login(db, nh, "tessa")["id"] not in ids and w["tessa"] not in ids
+    assert under(db, nh, person(db, nh, "celia")) == []
+
+
+def test_the_senior_pastor_is_never_under_anyone_even_under_another_email(db):
+    """The owner signs in with one address and his record carries another
+    (#1801 review): he holds the senior role, the top of every chain."""
+    kevin = next(c for c in db.t["contacts"] if c["id"] == db.who[LOVE_CITY]["kevin"])
+    kevin["email"] = "pastor@lovecity.org"
+    for h in ("owner", "minnie", "jessica"):
+        assert db.who[LOVE_CITY]["kevin"] not in {r["id"] for r in under(db, LOVE_CITY, login(db, LOVE_CITY, h))}, h
+    assert db.who[LOVE_CITY]["kevin"] in ch(db, LOVE_CITY).top
+    up = co.above(ch(db, LOVE_CITY), person(db, LOVE_CITY, "andre"))
+    assert [(r["kind"], r["id"]) for r in up] == [(co.LOGIN, c3.LC_OWNER)], "the top is the owner's login"
+    assert co.above(ch(db, LOVE_CITY), person(db, LOVE_CITY, "kevin")) == []
+
+
+def test_the_senior_pastor_is_never_under_the_lanes_overseer_with_the_map_closed(monkeypatch):
+    monkeypatch.setenv("CHURCH_ASSIGNMENTS", "on")
+    db = c3.build(monkeypatch, map_on=False)
+    kevin = next(c for c in db.t["contacts"] if c["id"] == db.who[LOVE_CITY]["kevin"])
+    kevin["email"] = "pastor@lovecity.org"
+    for h in ("minnie", "jessica"):
+        assert db.who[LOVE_CITY]["kevin"] not in {r["id"] for r in under(db, LOVE_CITY, login(db, LOVE_CITY, h))}, h
+
+
+def test_everyone_with_the_owners_email_is_at_the_top(db):
+    """A family address the owner shares: whoever carries it is never under
+    anyone, whichever of them the owner is."""
+    junior = "1c000000-0000-4000-8000-000000000098"
+    db.t["contacts"].append({"id": junior, "business_id": LOVE_CITY, "name": "Kevin McCloud Jr", "status": "active",
+                             "metadata": {}, "phone": "", "email": c3.PLATFORM, "birthdate": None})
+    db.t["church_leader_roles"].append({
+        "id": db.nid("church_leader_roles"), "business_id": LOVE_CITY, "contact_id": junior, "role": "ministers",
+        "scope": "", "status": "active", "invited_at": "2026-10-01T00:00:00+00:00", "answered_at": None,
+        "answers_to_contact_id": None})
+    assert {junior, db.who[LOVE_CITY]["kevin"]} <= ch(db, LOVE_CITY).top
+    assert junior not in {r["id"] for r in under(db, LOVE_CITY, login(db, LOVE_CITY, "minnie"))}
+
+
+def test_a_failed_read_of_the_owners_email_is_a_503_never_nobody(db, monkeypatch):
+    import messaging_router
+    monkeypatch.setattr(messaging_router, "owner_email_read", lambda u: None)
+    with pytest.raises(HTTPException) as e:
+        under(db, LOVE_CITY, login(db, LOVE_CITY, "minnie"))
+    assert e.value.status_code == 503
+    assert c3.church(db, LOVE_CITY)["owner_id"] not in co._OWNER_EMAIL, "a failed read is never kept"
 
 
 def test_a_loop_ends_and_names_each_person_once(db):

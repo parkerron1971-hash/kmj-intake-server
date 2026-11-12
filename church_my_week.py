@@ -248,19 +248,30 @@ def build(business: Dict[str, Any], user_id: str, email: str, role: str) -> Dict
                       "detail": "A task handed to you · " + (_due(due, today) if due else "no date"),
                       "door": DOOR["tasks"]})
     # What's stuck and was sent up to them (church_assignments), until it's
-    # done or no longer stuck, while its switch is open for the church. A read
-    # that fails leaves these lines out; the week stands.
+    # no longer stuck; once it's done, a line that says so for a week (it
+    # never vanishes without a word). While its switch is open for the
+    # church. A read that fails leaves these lines out; the week stands.
     import church_over
     if church_over.church_open(biz):
+        week_ago = (now - timedelta(days=HANDED_DAYS + 1)).date().isoformat()
         up = sb_clients.sb_get_as_service(
-            f"/tasks?business_id=eq.{_q(biz)}&raised_to=eq.{_q(user_id)}&status=neq.done&stuck_at=not.is.null"
-            "&select=id,title,stuck_note&order=raised_at.desc&limit=20")
+            f"/tasks?business_id=eq.{_q(biz)}&raised_to=eq.{_q(user_id)}&raised_at=not.is.null"
+            f"&or=(status.neq.done,completed_at.gte.{week_ago})"
+            "&select=id,title,stuck_note,stuck_at,status,completed_at&order=raised_at.desc&limit=20")
         if isinstance(up, list):
+            cut = (now - timedelta(days=HANDED_DAYS)).isoformat()
             for t in up:
+                title = (t.get("title") or "An assignment").strip()
                 note = " ".join(str(t.get("stuck_note") or "").split())
-                needs.append({"kind": "raised", "late": True, "area": "office",
-                              "title": f"“{(t.get('title') or 'An assignment').strip()}” is stuck and was sent up to you.",
-                              "detail": note or "Sent up to you", "door": DOOR["tasks"]})
+                if t.get("status") == "done":
+                    if str(t.get("completed_at") or "") >= cut:
+                        needs.append({"kind": "raised_done", "late": False, "area": "office",
+                                      "title": f"“{title}” was sent up to you, and it's done now.",
+                                      "detail": f"Done {_when(t.get('completed_at'), now)}", "door": DOOR["tasks"]})
+                elif t.get("stuck_at"):
+                    needs.append({"kind": "raised", "late": True, "area": "office",
+                                  "title": f"“{title}” is stuck and was sent up to you.",
+                                  "detail": note or "Sent up to you", "door": DOOR["tasks"]})
         else:
             print(f"[church_my_week] {biz[:8]}: what was sent up wasn't read", flush=True)
     # The whole church: follow-ups with no one, and late ones.
@@ -299,8 +310,8 @@ def build(business: Dict[str, Any], user_id: str, email: str, role: str) -> Dict
         needs.append(report)
 
     handed = _handed(biz, now, whole, set(mine_areas))
-    order = {"raised": 0, "follow_up": 0, "no_one": 1, "care": 2, "task": 3, "report": 3, "gap": 4, "late": 5,
-             "logins": 6}
+    order = {"raised": 0, "follow_up": 0, "no_one": 1, "care": 2, "task": 3, "report": 3, "raised_done": 3,
+             "gap": 4, "late": 5, "logins": 6}
     needs.sort(key=lambda n: (not n["late"], order.get(n["kind"], 9)))
     return {
         "me": {"role": role, "areas": view["areas"], "by": view["by"], "why": view["why"], "name": me_name},

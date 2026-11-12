@@ -27,9 +27,11 @@ The checks, each a count the code already keeps or can keep plainly:
                           every one has one
     groups_led .......... active groups with a leader (church_areas' count):
                           done at none without
-    kids_checked ........ kids workers with a background check date
-                          (space_leaders, church_areas' count): done at none
-                          without
+    kids_checked ........ the kids leaders approved with a background check
+                          date (space_leaders, space kids): evidence only,
+                          since that table holds a date for every row by its
+                          own rule and is not the list of everyone who works
+                          with the kids
     follow_up_no_one .... people in follow-up with no one (the leaders note's
                           and My week's count): done at 0
     churchsavvy_joined .. ChurchSavvy's team (worship_team): done when nobody
@@ -150,13 +152,15 @@ def groups_led(ctx: Ctx) -> Dict[str, Any]:
 
 
 def kids_checked(ctx: Ctx) -> Dict[str, Any]:
-    rows = ctx.rows(f"/space_leaders?business_id=eq.{_q(ctx.b)}&select=contact_id,background_check_on&limit=500")
-    if not rows:
-        return {"done": None, "text": "No kids workers listed yet"}
-    without = sum(1 for r in rows if not r.get("background_check_on"))
-    if not without:
-        return {"done": True, "text": "Every kids worker has a background check date"}
-    return {"done": False, "text": f"{_n(without, 'kids worker has', 'kids workers have')} no background check date"}
+    """Evidence only. The kids leaders the office approved (space_leaders,
+    space kids) each carry a check date by the table's own rule
+    (background_check_on is not null), so "every one has a date" would
+    always pass; and who else works with the kids isn't a list the system
+    keeps. A person confirms."""
+    rows = ctx.rows(f"/space_leaders?business_id=eq.{_q(ctx.b)}&space=eq.kids&select=contact_id&limit=500")
+    n = len({str(r.get("contact_id")) for r in rows})
+    return {"done": None, "text": f"{_n(n, 'kids leader', 'kids leaders')} approved with a background check date"
+            if n else "No kids leaders approved yet"}
 
 
 def follow_up_no_one(ctx: Ctx) -> Dict[str, Any]:
@@ -229,6 +233,10 @@ CHECKS: Dict[str, Callable[[Ctx], Dict[str, Any]]] = {
     "sermons_6": sermons_6,
     "weekly_text": weekly_text,
 }
+# The checks that only ever give evidence never tick anything off, so the
+# hourly sweep never reads the items that name them (they'd fill its reads).
+EVIDENCE = frozenset({"rooms_listed", "kids_checked"})
+PASSABLE = frozenset(k for k in CHECKS if k not in EVIDENCE)
 
 
 def run(ctx: Ctx, key: str) -> Optional[Dict[str, Any]]:

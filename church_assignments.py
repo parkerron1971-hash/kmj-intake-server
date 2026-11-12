@@ -431,8 +431,14 @@ def theirs(ch: co.Church, me: Dict[str, Any], target: Dict[str, Any], over: bool
     checks = _checks(ctx, open_)
     raised: List[Dict[str, Any]] = []
     if co.same(me, target) and target["kind"] == co.LOGIN:
-        raised = _need(f"/tasks?business_id=eq.{_q(ch.b)}&raised_to=eq.{_q(target['id'])}&status=neq.done"
-                       f"&stuck_at=not.is.null&select={FIELDS}&order=raised_at.desc&limit=50")
+        # What was sent up to me: still stuck, or done in the last two weeks
+        # (resolved: it never vanishes without a word).
+        raised = [r for r in _need(
+            f"/tasks?business_id=eq.{_q(ch.b)}&raised_to=eq.{_q(target['id'])}&raised_at=not.is.null"
+            f"&or=(status.neq.done,completed_at.gte.{_since_day(now, DONE_DAYS)})&select={FIELDS}"
+            "&order=raised_at.desc&limit=50")
+            if str(r.get("business_id")) == ch.b and str(r.get("raised_to") or "") == target["id"]
+            and (r.get("stuck_at") if r.get("status") != "done" else str(r.get("completed_at") or "") >= since)]
     logins = _names_by_login(ch, [r.get("handed_by") for r in mine + raised] + [r.get("raised_to") for r in mine])
     people = ch.names([r.get("raised_to_contact_id") for r in mine if r.get("raised_to_contact_id")])
     items = [item(r, ctx.today, logins, people, checks.get(str(r["id"]))) for r in mine]
@@ -449,7 +455,8 @@ def theirs(ch: co.Church, me: Dict[str, Any], target: Dict[str, Any], over: bool
         "stuck": [i for i in items if i["status"] == "stuck"],
         "done": done_items,
         "raised_to_you": [{**item(r, ctx.today, logins, {}),
-                           "whose": whose.get(str(r.get("assigned_to") or r.get("assigned_contact_id") or ""), "")}
+                           "whose": whose.get(str(r.get("assigned_to") or r.get("assigned_contact_id") or ""), ""),
+                           "sent_up_at": r.get("raised_at"), "resolved": r.get("status") == "done"}
                           for r in raised],
     }
 
@@ -526,11 +533,26 @@ def assignments_give(body: Dict[str, Any], session: UserSession = Depends(sb_cli
 
 # ─── Changing one ─────────────────────────────────────────────────────
 
+SENT_UP = ("It was sent up, so whoever sent it up, whoever it went to, or whoever is over you says when it's no "
+           "longer stuck. Marking it done still works.")
+
+
 def change(ch: co.Church, me: Dict[str, Any], t: Dict[str, Any], body: Dict[str, Any],
            now: Optional[datetime] = None) -> Dict[str, Any]:
+    """Who changes what (Kevin wants the one over them in control): done, by
+    them or anyone over them; stuck, by them too until it's been sent up, and
+    from then on only by whoever sent it up, whoever it went to, or anyone
+    over them (the assignee can still mark it done, which closes it, and
+    whoever it went to sees it resolved); the date, the title and what done
+    means, by anyone over them or whoever handed it."""
     now = now or _now()
     target = _target_of(t)
-    over = _allowed(ch, me, target, self_ok=True)
+    mine = co.same(me, target)
+    over = False if mine else co.is_over(ch, me, target)
+    sent = bool(t.get("raised_at"))
+    up_side = sent and str(me["id"]) in {str(t.get("raised_by") or ""), str(t.get("raised_to") or "")}
+    if not (mine or over or up_side):
+        raise HTTPException(403, NOT_OVER)
     patch: Dict[str, Any] = {}
     if any(k in body for k in ("due_date", "title", "done_when")):
         if not (over or str(t.get("handed_by") or "") == str(me["id"])):
@@ -541,6 +563,10 @@ def change(ch: co.Church, me: Dict[str, Any], t: Dict[str, Any], body: Dict[str,
             patch["due_date"] = _day(body.get("due_date"))
         if "done_when" in body:
             patch["done_when"] = _text(body.get("done_when"), DONE_WHEN_MAX, "done when")
+    if "stuck" in body and sent and not (over or up_side):
+        raise HTTPException(403, SENT_UP)
+    if "done" in body and not (mine or over):
+        raise HTTPException(403, "Only they, or whoever is over them, mark it done.")
     if "stuck" in body:
         if body["stuck"] is None:
             patch.update(stuck_note=None, stuck_at=None, raised_at=None, raised_to=None, raised_to_contact_id=None,
@@ -567,9 +593,10 @@ def change(ch: co.Church, me: Dict[str, Any], t: Dict[str, Any], body: Dict[str,
 @router.patch("/assignments/{task_id}")
 def assignments_change(task_id: str, body: Dict[str, Any], session: UserSession = Depends(sb_clients.authed_request)):
     """{business_id, done?, stuck?: note | null, due_date?, title?, done_when?}:
-    done and stuck by them or anyone over them; the date, the title and what
-    done means by whoever is over them (or handed it). Answers with what it
-    saved."""
+    done by them or anyone over them; stuck by them until it's sent up, then
+    by whoever sent it up, whoever it went to, or anyone over them; the date,
+    the title and what done means by whoever is over them (or handed it).
+    Answers with what it saved."""
     body = body or {}
     ch = _church_from_body(session, body)
     t = _task(ch, task_id)
@@ -705,6 +732,10 @@ def pick_day(ch: co.Church, me: Dict[str, Any], target: Dict[str, str], duty: An
     duty = str(duty or "")
     if duty not in cd.CATALOG:
         raise HTTPException(400, "That isn't one of the church's jobs")
+    if cd.CATALOG[duty]["money"] and ch.role(me["id"]) not in co.KEEPS_ALL:
+        # A money job's day is the owner's or an Admin's to pick, whoever else is over the login.
+        raise HTTPException(403, f"“{cd.CATALOG[duty]['label']}” is a money job: only the owner or an admin picks "
+                                 "its day.")
     if duty not in _held(ch, target["id"]):
         raise HTTPException(400, f"“{cd.CATALOG[duty]['label']}” isn't one of their jobs here.")
     if not movable(duty):
@@ -791,7 +822,6 @@ def grouped_text(name: str, by: List[str], tasks: List[Dict[str, Any]], today: O
 
 RAISED_FIELDS = ("id,business_id,title,stuck_note,stuck_at,status,assigned_to,assigned_contact_id,raised_at,"
                  "raised_to,raised_to_contact_id,raised_by,raised_told_at")
-SWEEP_MAX = 500
 
 
 def _claim_raised(t: Dict[str, Any], stamp: str) -> bool:
@@ -823,11 +853,26 @@ def raised_text(name: str, by: str, whose: str, t: Dict[str, Any], where: str) -
     return "\n\n".join(lines)
 
 
+def _login_email(ch: co.Church, uid: str) -> Optional[str]:
+    """A login's sign-in email: the owner's from Auth, a seat's from the
+    church's seats; '' when it has none (or has left the office), None when
+    it couldn't be read."""
+    clt = _clt()
+    try:
+        if uid == ch.owner:
+            return clt._email_ok(ch.owner_email)
+        seat = ch.seats.get(uid)
+    except HTTPException:
+        return None
+    return clt._email_ok((seat or {}).get("invited_email")) if seat else ""
+
+
 def tell_raised(biz: Dict[str, Any], rows: List[Dict[str, Any]], now: datetime, stats: Dict[str, int]) -> None:
     """Each item newly sent up: claimed, then one email (and a push to a
     login) to whoever it was sent up to, from the church, with the item, its
     stuck note and who sent it up. No email on file: told anyway (it's on
-    their page)."""
+    their page). An address that couldn't be read is never "no email": that
+    item isn't claimed, and the next sweep tries again."""
     import church_office_tasks as cot
     clt = _clt()
     ch = co.Church(biz)
@@ -835,7 +880,12 @@ def tell_raised(biz: Dict[str, Any], rows: List[Dict[str, Any]], now: datetime, 
     church = _plain(biz.get("name")) or "Your church"
     reply_to = clt._office_email(biz)
     people = clt._contacts(b, [r.get("raised_to_contact_id") for r in rows] +
-                           [r.get("assigned_contact_id") for r in rows]) or {}
+                           [r.get("assigned_contact_id") for r in rows])
+    if people is None:
+        stats["raised_unread"] += len(rows)
+        print(f"[church_assignments] {b[:8]}: the people for what was sent up weren't read; next sweep", flush=True)
+        return
+
     def login(uid: Any) -> str:
         uid = str(uid or "")
         try:
@@ -854,7 +904,10 @@ def tell_raised(biz: Dict[str, Any], rows: List[Dict[str, Any]], now: datetime, 
         subject = f"{church}: something stuck was sent up to you"
         if t.get("raised_to"):
             uid = str(t["raised_to"])
-            email = clt.hander_email(biz, uid)
+            email = _login_email(ch, uid)
+            if email is None:
+                stats["raised_unread"] += 1        # not claimed: the next sweep tries again
+                continue
             name = login(uid)
             where = "It’s on your My week until it’s done or no longer stuck."
             link, label = cot._link(b), "Open My week"
@@ -891,23 +944,66 @@ def tell_raised(biz: Dict[str, Any], rows: List[Dict[str, Any]], now: datetime, 
         stats["raised_told"] += 1
 
 
+BIZ_FIELDS = "id,name,type,settings,owner_id"
+
+
+def _platform_owner_id() -> str:
+    """The platform owner's user id (chief_of_staff.PLATFORM_OWNER_ID, as
+    church_keys.platform_church reads it)."""
+    from chief_of_staff import PLATFORM_OWNER_ID
+    return str(PLATFORM_OWNER_ID)
+
+
+def _open_churches() -> Optional[List[Dict[str, Any]]]:
+    """The churches the sweep works for: None for every one (on); with
+    `owner`, the platform owner's own churches, each one church_open also
+    says yes to; [] when they can't be read (the next hour tries again)."""
+    import church_follow_up as cfu
+    if co.mode() == "on":
+        return None
+    rows = sb_clients.sb_get_as_service(f"/businesses?owner_id=eq.{_q(_platform_owner_id())}"
+                                        f"&select={BIZ_FIELDS}&limit=50")
+    if not isinstance(rows, list):
+        print("[church_assignments] the platform's churches weren't read; next sweep", flush=True)
+        return []
+    return [b for b in rows if cfu.is_church(b) and co.church_open(b["id"])]
+
+
+def _all(path: str, what: str) -> Optional[List[Dict[str, Any]]]:
+    """Every row, page by page in id order (sb_get_all_as_service), so rows a
+    sweep can't use never crowd out the ones it can. None when it can't be
+    read whole (the migration not applied, a page that failed): nothing of it
+    is acted on, and the next hour tries again."""
+    try:
+        return sb_clients.sb_get_all_as_service(path, key="id")
+    except sb_clients.PartialRead:
+        print(f"[church_assignments] {what} was read in part; next sweep", flush=True)
+        return None
+
+
 def sweep_tick(now: Optional[datetime] = None) -> Dict[str, int]:
     """Hourly, on the worker (kmj_intake_automation): what was sent up is told
-    once; open items whose check now passes are ticked off. A church that
-    fails never stops the others. Quiet with the switch off, and before the
-    migration (its reads fail and nothing happens)."""
-    stats = {"churches": 0, "raised_told": 0, "raised_no_email": 0, "raised_unsent": 0, "ticked": 0}
+    once; open items whose check can pass, and now does, are ticked off.
+    Only the churches the switch is open for (with `owner`, the platform
+    owner's own), every row of theirs page by page, so nothing waits behind
+    rows it can't use (an evidence-only check is never read: it never
+    ticks). A church that fails never stops the others. Quiet with the switch
+    off, and before the migration (its reads fail and nothing happens)."""
+    stats = {"churches": 0, "raised_told": 0, "raised_no_email": 0, "raised_unsent": 0, "raised_unread": 0,
+             "ticked": 0}
     if co.mode() == "off":
         return stats
     now = now or _now()
-    raised = sb_clients.sb_get_as_service(
-        f"/tasks?raised_at=not.is.null&raised_told_at=is.null&status=neq.done&stuck_at=not.is.null"
-        f"&select={RAISED_FIELDS}&order=raised_at.asc&limit={SWEEP_MAX}")
-    if not isinstance(raised, list):
+    churches = _open_churches()
+    if churches == []:
+        return stats
+    scope = "" if churches is None else f"&business_id=in.({','.join(_q(b['id']) for b in churches)})"
+    raised = _all(f"/tasks?raised_at=not.is.null&raised_told_at=is.null&status=neq.done&stuck_at=not.is.null"
+                  f"{scope}&select={RAISED_FIELDS}", "what was sent up")
+    if raised is None:
         return stats            # the migration isn't applied (or the read failed): next hour
-    checked = sb_clients.sb_get_as_service(
-        f"/tasks?check_key=not.is.null&status=neq.done&select=id,business_id,check_key,status"
-        f"&order=created_at.asc&limit={SWEEP_MAX * 4}") or []
+    checked = _all(f"/tasks?check_key=in.({','.join(sorted(cw.PASSABLE))})&status=neq.done{scope}"
+                   "&select=id,business_id,check_key,status", "the items a check can tick") or []
     work: Dict[str, Dict[str, List[Dict[str, Any]]]] = {}
     for kind, rows in (("raised", raised), ("checked", checked)):
         for r in rows:
@@ -915,10 +1011,10 @@ def sweep_tick(now: Optional[datetime] = None) -> Dict[str, int]:
     if not work:
         return stats
     clt = _clt()
-    bizs: Dict[str, Dict[str, Any]] = {}
-    for chunk in clt._chunks(work):
+    bizs: Dict[str, Dict[str, Any]] = {str(b["id"]): b for b in churches or []}
+    for chunk in clt._chunks(b for b in work if b not in bizs):
         for x in sb_clients.sb_get_as_service(f"/businesses?id=in.({','.join(_q(i) for i in chunk)})"
-                                              "&select=id,name,type,settings,owner_id&limit=100") or []:
+                                              f"&select={BIZ_FIELDS}&limit=100") or []:
             bizs[str(x["id"])] = x
     import church_follow_up as cfu
     for b, todo in work.items():

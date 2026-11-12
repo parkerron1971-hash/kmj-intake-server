@@ -90,6 +90,12 @@ lengths, and the shape of `duty`, `check_key`, `startup_key`); trigger `tasks_ra
 leader). `raised_to` and `raised_by` reference `auth.users` (set null on delete),
 `raised_to_contact_id` references `contacts` (set null on delete).
 
+The lock (#1801 review): the file holds ACCESS EXCLUSIVE on `tasks` until it commits, so it scans
+nothing it doesn't have to. Every new column is null on every row that exists, so the two CHECKs and
+the three foreign keys go in `NOT VALID`: nothing old is checked under the lock, and every row
+written from then on is. Each can be validated later under a lighter lock. The three indexes are
+built as they are (`tasks` is small on this platform). PGlite check: `__tests__/church_assignments_db.mjs`.
+
 Index: `tasks_startup_once` unique on `(business_id, coalesce(assigned_to, assigned_contact_id),
 startup_key) where startup_key is not null`, so a start-up item is made once per person.
 The board needs no `(business_id, handed_by)` index: it reads by church, status and assignee, which
@@ -141,8 +147,27 @@ answers-to while they hold any active role. The one under them needs nothing. (A
 leads Kids but her role doesn't lead: she is under Amara and over no one.)
 
 A person with an office login is their login (their work lands in My week), as
-`church_leader_tasks.leaders` keeps them out of the leaders list. "Everyone" never includes the
-owner's own person.
+`church_leader_tasks.leaders` keeps them out of the leaders list. **The map never hands anyone a
+login the office rule doesn't** (#1801 review): a person the walk reaches who has an office login is
+added as that login only when the caller is the owner or an Admin, or the caller is over the lanes
+and the login is a Manager seat; never an Admin's to anyone else, never the owner's. (Without this,
+a Manager or a Member seat whose person the map puts over an Admin's person could read, change and
+take back the Admin's tasks and move the Admin's money days.) The walk still goes on through them
+to the people under them, who are persons.
+
+**The top of every chain** is never under anyone, whoever asks, and the walk never goes through
+them: every one of the church's people whose email is the owner's sign-in email (all of them: a
+family address too), the owner's person however it was found, and every holder of a role whose
+*job* is the senior one (`church_roles`: the top of every chain; a job, never a title) or, where the
+map names them, of a role that gives the pastor's yes (`pastor_yes_roles`). So the senior pastor is
+never under an Admin even when his record carries another email than the one he signs in with. A
+failed read of the owner's sign-in email (`messaging_router.owner_email_read`, which tells a failed
+read from "no email") is a 503, never "the owner is nobody"; a good read is kept ten minutes per
+replica. The one case it can't catch: an owner whose record has neither his sign-in email nor a
+senior role; then he is an ordinary leader to it. In `above()`, a step at the top is the owner's
+login.
+
+A money duty's day is picked only by the owner or an Admin (403 otherwise, whoever is over the login).
 
 `above(who)`: for an office Manager login, whoever is over the lanes, else the owner; for a
 login over the lanes or an Admin, the owner; for a person, `church_leader_tasks.overseer`
@@ -210,7 +235,10 @@ evidence-only (`done: None`). The keys PR A ships:
   every one has one;
 - `groups_led`: active `groups` without a `group_members` leader (church_areas' count, read
   directly: `church_areas.build` fills the role library, a write); done at none without;
-- `kids_checked` (`space_leaders`, church_areas' count): done at none without a date;
+- `kids_checked` (`space_leaders`, space kids): **evidence only** (#1801 review). The table holds
+  a check date on every row by its own rule (`background_check_on` is not null), so "every one has a
+  date" could never fail, and it isn't the list of everyone who works with the kids (youth rows
+  aren't kids workers). "4 kids leaders approved with a background check date"; a person confirms;
 - `follow_up_no_one`: people in follow-up with no one (the leaders note's `_no_one`, My week's
   count). It counts everyone in follow-up, not only first-time guests; done at 0;
 - `churchsavvy_joined` (`worship_team`): done when nobody invited is still waiting and at least
@@ -220,8 +248,9 @@ evidence-only (`done: None`). The keys PR A ships:
 - `sermons_6` (`sermons`, published): the last six Sundays, each with its sermon; done at 6 of 6;
 - `weekly_text` (`church_my_week._done` weekly_text).
 
-Where there is nothing to count yet (no groups, no departments, no kids workers, no volunteer
-teams) a check says so and claims nothing (`done: None`): a person confirms.
+Where there is nothing to count yet (no groups, no departments, no volunteer teams) a check says so
+and claims nothing (`done: None`): a person confirms. The evidence-only keys (`rooms_listed`,
+`kids_checked`: `church_work_checks.EVIDENCE`) never tick, so the sweep never reads their items.
 
 A passed check ticks its open task off: on read (the board, a person's list) and in the hourly
 sweep, `status='done'`, `completed_at`, `checked_at` set, done by no one, filtered on its church,
@@ -282,10 +311,20 @@ through `business_access.assert_access`; then the church check (404), the switch
 (`church_over.office_open`: the church, or the platform owner's own login; 404 closed), and
 `church_over.is_over` (403 "They aren't someone you're over here."). `GET /church/assignments`
 without `for` is your own. PATCH: the date, title and done_when by whoever is over them or whoever
-handed it; done and stuck by them too. DELETE removes the task (logged). Raise marks it stuck if it
-wasn't, and answers 409 at the top (nobody over you). Start is for someone you're over, never
-yourself. `notes` (a task's description) can come with a hand-out. A money duty is refused for
-anyone but the owner or an Admin login.
+handed it; done by them or anyone over them; stuck by them too, until it's been sent up (below).
+DELETE removes the task (logged). Raise marks it stuck if it wasn't, and answers 409 at the top
+(nobody over you). Start is for someone you're over, never yourself. `notes` (a task's
+description) can come with a hand-out. A money duty is refused for anyone but the owner or an Admin
+login.
+
+**Once it's been sent up** (Kevin's call, #1801 review: the person over them is in control), the
+assignee can no longer clear its stuck mark, rewrite its note or clear its sent-up record (403).
+Only whoever sent it up, whoever it went to, or anyone over the assignee can; clearing it clears the
+sent-up record too. Marking it **done** still works for the assignee, and closes it: done is the
+truth. The sent-up record stays on a done item, so whoever it went to sees it **resolved**, not
+gone: `raised_to_you` keeps it for two weeks with `"resolved": true` (and `sent_up_at`), and their
+My week shows a `raised_done` line ("“…” was sent up to you, and it's done now.") for a week. Reopened
+(done: false), it is stuck and sent up again as it was.
 
 ### What the frontend builds against
 
@@ -327,7 +366,7 @@ first, then by date, never a stuck one). `first.to_make` is how many items a sta
   "open":  [ITEM, ...],
   "stuck": [ITEM, ...],
   "done":  [ITEM, ...],
-  "raised_to_you": [ITEM + {"whose": "Naiya Clark"}, ...]
+  "raised_to_you": [ITEM + {"whose": "Naiya Clark", "sent_up_at": "…", "resolved": false}, ...]
 }
 ```
 
@@ -387,7 +426,24 @@ start-up item (the start-up keys are read for those tasks only, where the switch
 only: no member push kind fits a task, as before, and the same holds for something sent up to a
 person. The raised tell runs in `church_assignments.sweep_tick` (hourly, on the worker), which
 also ticks off open items whose check now passes. My week shows what was sent up to a login as a
-`raised` line; the Lead tab's is PR C.
+`raised` line (a `raised_done` one for a week once it's done); the Lead tab's is PR C.
+
+The raised tell never loses an item to a failed read (#1801 review): a sign-in email that couldn't
+be read (the owner's from Auth, a seat's) or people who couldn't be read is not "no email on file";
+that item isn't claimed, and the next sweep tries again. Only a login that really has no email (or
+has left) is claimed and told with nothing sent.
+
+The sweep never starves (#1801 review): it reads only the churches the switch is open for (`on`:
+all; `owner`: the platform owner's own churches, each one `church_open` also says yes to), only the
+items a check can tick (`check_key` in `PASSABLE`: never an evidence-only one), and every row of
+them page by page in id order (`sb_clients.sb_get_all_as_service`), so items a church never meets
+can't crowd out the rest. A read that fails part-way acts on none of it, and the next hour tries
+again.
+
+Before the migration (#1801 review, checked by a test): with `owner`, the default, Love City's
+hand-offs group as soon as this deploys. The grouping reads no new column but `startup_key`, for
+those tasks only; that read fails before the migration and the email simply says "N tasks". The
+sweep's own reads fail first and it does nothing.
 
 ## Where it shows
 
