@@ -274,6 +274,18 @@ def build(business: Dict[str, Any], user_id: str, email: str, role: str) -> Dict
                                   "detail": note or "Sent up to you", "door": DOOR["tasks"]})
         else:
             print(f"[church_my_week] {biz[:8]}: what was sent up wasn't read", flush=True)
+    # What the office sent this login's own person for their area
+    # (church_handovers: never a task, so never one of the needs; the owner's
+    # person included). A read that fails is None, said in the log; the week
+    # stands.
+    from_office: Optional[List[Dict[str, Any]]] = []
+    if church_over.church_open(biz):
+        import church_handovers
+        try:
+            from_office = church_handovers.for_login(business, user_id, now)
+        except HTTPException:
+            from_office = None
+            print(f"[church_my_week] {biz[:8]}: what the office sent wasn't read", flush=True)
     # The whole church: follow-ups with no one, and late ones.
     if whole:
         open_rows = _need(f"/church_follow_ups?business_id=eq.{_q(biz)}&status=in.(open,handed_back)"
@@ -319,7 +331,9 @@ def build(business: Dict[str, Any], user_id: str, email: str, role: str) -> Dict
         "needs": needs[1:SHOWN + 1],
         "areas": areas,
         "handed": handed,
-        "counts": {"needs": len(needs), "areas": len(areas), "handed": len(handed)},
+        "from_office": from_office,
+        "counts": {"needs": len(needs), "areas": len(areas), "handed": len(handed),
+                   "from_office": sum(1 for x in from_office or [] if not x["seen"])},
     }
 
 

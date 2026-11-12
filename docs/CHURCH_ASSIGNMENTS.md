@@ -181,6 +181,10 @@ who holds no senior (or pastor's-yes) role can't be told from any other leader, 
 under an Admin (as a group's leader, say, or a role holder). The fix is data: put the owner's
 sign-in email on his record, or give him the church's senior role.
 
+**Pastors and elders (Kevin's rule, 2026-11-12):** no Admin's, lanes overseer's or closed-map
+standing is over anyone who holds a role that shepherds either, nor over a login whose person
+does; the owner and the map's own chain are. See "Pastors and elders, and From the office" below.
+
 A money duty's day is picked only by the owner or an Admin (403 otherwise, whoever is over the login).
 
 `above(who)`: for an office Manager login, whoever is over the lanes, else the owner; for a
@@ -392,6 +396,87 @@ marked stuck. `late` and `next` leave stuck ones out; `next` is the next five by
 last). `jobs`: a login's jobs due this week in the asker's own view (empty for a person, who holds
 no office duty; empty when none of theirs lies in the asker's areas). The `Late:` line only when
 something is late; `This week's jobs:` only when there are jobs.
+
+## Pastors and elders, and "From the office" (PR C1)
+
+Kevin, 2026-11-12: "admins can not give work to elders and pastors but they can give them
+things that is related to their area that they need for them to have."
+
+### The rule
+
+No office standing but the owner's is over a **shepherd** or a **senior**:
+
+- A shepherd holds an active role that shepherds: the role's own switch (`church_map.can`, the
+  map's row, else the role's own columns, else its job's), never a title word. A role whose switch
+  follows the Ministers setting (`can_shepherd` null) shepherds when that setting is on
+  (`church_shepherding.settings`, read only then; a failed read is a 503, never a yes). At Love
+  City: the Executive Pastor, the Associate Pastor and the elders (the Prophets' switch is off). At
+  Grace: its deacons, whose switch the church turned on. At New Hope: its associate pastors and
+  elders. At Riverside: nobody (nothing is set up).
+- A senior is as before (`church_over.Church.seniors`): under the owner only, never walked
+  through.
+- "Office standing" is an Admin's (every office login, every leader), a Manager's over the lanes
+  (every other Manager login), and the closed map's fallback (the Admins and the login over the
+  lanes over everyone). None of them reaches a shepherd or a senior, nor a login whose person is
+  one (Jessica's login, at Love City: she is the Executive Pastor, so an Admin isn't over it).
+- The ministry chain still counts, walked from a login's own person, as anyone's: Marcus (an
+  elder) answers to Jessica on the map, so her login is over him through her person, not her
+  seat. An Admin whose person an elder answers to is over that elder the same way.
+- The owner is over everyone as before. A leader who doesn't shepherd is as before.
+
+`Church.shepherds`, `Church.guarded` (shepherds | seniors); `_under` leaves `guarded` out of the
+office part and the everyone part, then walks the map from the login's person for an Admin or a
+lanes overseer whose church has someone guarded. Every route that asks `is_over` (hand one out,
+start, the one-on-one, send up, take back, the board) follows it.
+
+### From the office (`church_handovers.py`)
+
+Something an office login sends one of the church's leaders for their area: `title` (140),
+`note` (1000), `link` (https only, 500), `for_date`, `department_id`. **Never a task:** never late,
+never escalated, never judged, never on a list of work. The leader taps Got it (`seen_at`); the
+sender sees Seen or Not yet seen.
+
+| Sender | May send to | Why, as the list says it |
+|---|---|---|
+| The owner, an Admin | any leader: holders of an active role, leaders of active groups, each active department's leader and overseer, and the owner's own person (never yourself) | "Oversees Youth", else what they do ("Elders", "Lead Pastor") |
+| A Manager | the leader or overseer of an active department whose `support_duty` it holds (`Church.held`: its lanes, its moves, else its areas), or whose `area` is one of its areas (Who sees what; off, every area). The map closed: nobody | "Leads Youth · you help it as Youth and Teen Bible Study", "Leads Worship · it's in your Worship & media area" |
+| A Member seat | nobody (403) | |
+
+With `department_id`, a Manager may only name one it may send for; an Admin or the owner any
+active department of the church's.
+
+Routes (prefix /church, the assignment routes' gate: a church, the switch, then the role):
+
+    POST /church/handovers                    {business_id, contact_id, title, note?, link?,
+                                              for_date?, department_id?} -> {saved}
+    GET  /church/handovers?business_id=       {sent: [...], counts: {sent, seen, not_seen}}: the
+                                              last 90 days, newest first
+    GET  /church/handovers/leaders?business_id=
+                                              {leaders: [{contact_id, name, why, departments:
+                                              [{id, name}]}]}
+    POST /church/handovers/{id}/seen          {business_id} -> {saved: {id, seen, seen_at}}: Got
+                                              it from My week (the login's own person); once,
+                                              again answers with it as it is; anyone else's 404
+
+A sent item: `{id, to: {contact_id, name}, title, note, link, for_date, for_date_text, department,
+sent_at, from, seen, seen_at, seen_text}`.
+
+Where it's read: My week's `from_office` (a login whose own person it's for, the owner's included:
+`[{id, title, note, link, for_date, for_date_text, department, from, sent_at, seen}]`, what they
+haven't seen and then two weeks of what they have; `counts.from_office` is what they haven't
+seen; `null` when it couldn't be read, and the week stands), and the member app's Lead tab (PR C2).
+
+Told: the hourly sweep (`church_handovers.sweep_tick`, on the worker) sends each person one email
+for what arrived since the last sweep, from the church, naming who sent each ("Jessica McCloud and
+Minnie Tatum sent you 2 things"), with the note and the link when it's one. Claimed before the
+send (`told_at`), let go when it fails; no email on file, told anyway; one older than a week never
+told is left untold. A person with an office login (the owner's too) is told it's on My week;
+anyone else, their Lead tab.
+
+The table: `supabase/APPLY-2026-11-12-church-handovers.sql` (`church_handovers`, server-only;
+the person and the department are its own church's by trigger; PGlite check
+`__tests__/church_handovers_db.mjs`). Excluded from the export: the sender is a sign-in id, and
+a restore must not claim anything was seen or told.
 
 ## Days
 
@@ -608,6 +693,10 @@ sweep's own reads fail first and it does nothing.
   tell; checks that tick items off (the list above). Tests at all four fixture churches.
 - **B (backend):** weekly done for six jobs; the team page and roll-up say done / not yet / late;
   the one-on-one.
-- **C (backend, member app):** the Lead tab's assignments and "Your people", after Kevin sees the mock.
+- **C1 (backend):** pastors and elders under the owner and the map only; From the office (the
+  hand-overs, their table, routes and email).
+- **C2 (backend, member app):** the Lead tab's assignments, sent up to you, From the office and
+  "Your people", per the phone mock Kevin approved (2026-11-12: "phone view idea is good. we can
+  move forward with that.").
 - **D (backend):** the Chief verbs.
 - **F1 / F2 (frontend):** My week + day picker; the board.
