@@ -268,6 +268,17 @@ def test_rows_drop_empty_lines_and_keep_only_their_columns(db):
         "kids_rooms": [{"room": "Nursery", "ages": "0 to 2"}]}
 
 
+def test_the_first_sunday_is_a_line_of_the_sunday_item_and_is_not_what_makes_it_ready(db):
+    """The welcome briefing saves the date the church picked; the services are still
+    what the item needs before it can be handed in."""
+    got = save("owner", "sunday", {"first_sunday": "  Sunday, November 22, 2026 "})
+    assert got.status_code == 200, got.text
+    mine = item(got.json(), "sunday")
+    assert mine["answers"] == {"first_sunday": "Sunday, November 22, 2026"}
+    assert mine["hand_in"]["ready"] is False
+    assert mine["fields"][0]["key"] == "first_sunday"
+
+
 def test_a_number_that_isnt_one_and_too_many_rows_are_refused_by_name(db):
     got = save("owner", "monthly_givers", {"count": "about forty"})
     assert got.status_code == 400 and "People who give monthly" in got.json()["detail"]
