@@ -98,18 +98,24 @@ moves the login's row to the person.
 - **Read everyone's** (the roster, whose job): the office seats, Manager and up.
   A Member seat reads only its own job and those of anyone it's over; a Viewer
   reads nothing (the routes need a member seat; Chief refuses a viewer).
-- **Pay stays out.** Refused: a money amount in the same sentence as a pay
-  word (paid, pay, earns, salary, wage, stipend, honorarium, allowance,
-  compensated) or a pay period (per hour, an hour, per Sunday, a year,
-  annually, $52k/yr, $25/h), unless the sentence is about money the church
-  spends or raises (a budget, an offering, supplies, bills); and the words
-  salary, wage, stipend and pay rate on their own. "Pay stays out of job
-  descriptions; office seats can read them." Fine: "Office Admin/HR", "walks
-  the lot hourly", "workers' compensation claims", "housing benefits", "pays
-  the bills", "Pastor Payne", "payroll", "the benefit dinner", "manages the
-  $5k youth budget". Allowed on purpose: "a love offering" and "PTO" with no
-  amount, since a church's own duties name them ("collects the love offering",
-  "approves PTO requests").
+- **Pay stays out**, decided a sentence at a time. A sentence with a money
+  amount is pay when it has a word about a person's pay (salary, wage,
+  stipend, honorarium, compensation or comp, earns, paid or pay, an
+  allowance) or a pay period (hourly, weekly, monthly, each Sunday, per
+  annum, a year, every two weeks, $52k/yr, $25/h), unless it names what the
+  money is spent on or for (rent, a bill, an invoice, tuition, support,
+  supplies, a hall or room, a fee, a budget, an offering, a deposit, an order,
+  a subscription, an expense, money raised or given): then it's the church's
+  spending. Salary, wage(s), stipend and pay rate refuse on their own;
+  "minimum wage" never does. When it's unclear it's allowed: the message says
+  "Pay stays out of job descriptions; office seats can read them.", and a
+  church can reword. Fine: "Office Admin/HR", "walks the lot hourly",
+  "workers' compensation claims", "housing benefits", "pays the bills",
+  "Pastor Payne", "payroll", "the benefit dinner", "manages the $5k youth
+  budget", "pay the $1,200 rent", "the $200 monthly supply allowance", "the
+  hall at $50 an hour". Allowed on purpose: "a love offering" and "PTO" with
+  no amount, since a church's own duties name them ("collects the love
+  offering", "approves PTO requests").
 - Their words are data: the description and title are written by a person, so
   a read that brings someone else's written words into the turn raises the
   turn's taint (chief_church_assignments._taint pattern), and later writes in
@@ -142,7 +148,9 @@ moves the login's row to the person.
   title and about the first paragraph of the description (300 characters at
   most), never the whole.
 - `whose(...)`: rank everyone against the work's words (the first 500
-  characters of them; lower-case, stop words out, light stemming) across the description and title, duty labels + their
+  characters of them, which is also all Chief's answer echoes; lower-case,
+  accents folded so "oracion" finds "oración", any script's letters, stop
+  words out in English and the commonest Spanish ones, light stemming) across the description and title, duty labels + their
   training lines + areas, department names, role titles and definitions. Top 3
   with the words that matched, the lines of the description that carry them,
   who's over each, and whether the asker may hand them the work. A department
@@ -173,6 +181,10 @@ moves the login's row to the person.
   person's changes (by their person, or by their login while it had no
   person), never another person's that a login was once tied to. A put-back
   that failed and couldn't let its claim go is tried again by the next undo.
+  Whether a write landed is asked of its own row: a clear whose row is gone
+  did happen and is logged (even when the person still shows a login's
+  older row, or a save lands a moment later), and an insert or update whose
+  answer was lost is found as it was written and logged.
 - Routes (church_job_descriptions router, mounted before public_site_router):
   - GET  /church/jobs?business_id=                       roster
   - GET  /church/jobs/person?business_id=&contact_id=|user_id=   one job (the whole description)
@@ -193,9 +205,12 @@ moves the login's row to the person.
   nobody named (a task, a board follow-up, something a member reported).
 - `job_of` {who, from_line?}: mid-turn read. "What does Tiara do?", "what's
   Minister Ray's job?", and "what is my job?" for anyone (my_work stays for the
-  office check-it flow). The description comes last; one too long to fit says
-  "(continues: ask job_of for X with from_line N ...)", and from_line reads
-  only the description from there.
+  office check-it flow). The description comes last. It pages by line and,
+  inside a line too long for the room left (a one-paragraph description), by
+  character, cut at a word: every cut says "(continues: ask job_of for X with
+  from_line N [and from_char C] ...)", from_line/from_char read only the
+  description from there, and paging forward reaches the end with nothing
+  skipped.
 - Size: the three reads are on chief_tool_loop's 12,000-character list, and
   each is built to fit RESULT_BUDGET (10,000 characters of the result's JSON),
   so Chief never gets the tool loop's "Incomplete sample" cut. whose_job drops
@@ -206,10 +221,12 @@ moves the login's row to the person.
   person has (a first name, never the start of one: "Ann" is never "Annette"),
   with whole words of what they do ("Minister Angela", "Elder Marcus"). Among
   the people the asker may name: everyone's job for an office seat, whoever
-  they're over (church_over.under: a group's leader too), and for the owner
-  any of the church's people. None, or several, change nothing and say who it
-  could be. A write with no name and no key that parses asks "Who is this
-  for?"; the same for undo.
+  they're over (church_over.under: a group's leader too), themselves by
+  their own name, and for the owner any of the church's people: for the owner
+  a name is one person's only when it is across all of them (Ann Cole leads a
+  team and Ann Lee has no role yet: "Ann" asks which). None, or several,
+  change nothing and say who it could be. A write with no name and no key that
+  parses asks "Who is this for?"; the same for undo.
 - `draft_job_description` {who}: mid-turn read. Chief reads it back, the leader
   changes what's wrong, then set_job_description.
 - `set_job_description` {who, description, title?, source, clear?}: [ACTION]

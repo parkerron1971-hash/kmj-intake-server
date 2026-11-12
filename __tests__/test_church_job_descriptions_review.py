@@ -16,6 +16,15 @@
   F10 pasted or document words are someone else's on every read
   F11 a put-back that failed, whose release failed too, is retried
   whose reads the first 500 characters of the work
+
+The re-review (bf4956bb):
+  V2-A job_of pages inside a long line by character, says where every cut
+       continues, and paging forward reaches the end with nothing skipped
+  V2-B a clear or an insert that landed is logged, decided by its own row
+  V2-C pay a sentence at a time: what the church spends on is never pay
+  V2-D a name the owner says is one person's only across all the church's people
+  V2-E whose echoes the 500 characters it ranked
+  accents fold ("oracion" finds "oración"); a Member names itself by name
 """
 from __future__ import annotations
 
@@ -220,7 +229,8 @@ def test_f5_a_description_too_long_to_fit_says_where_it_continues_and_the_rest_c
     is_error, first = _mid_turn(db, LOVE_CITY, "owner", "job_of", {"who": "Naiya"})
     assert not is_error and '"truncated": true' not in first and len(first) <= ccj.RESULT_BUDGET
     import re
-    m = re.search(r"\(continues: ask job_of for Naiya Clark with from_line (\d+) for the rest", first)
+    m = re.search(r"\(continues: ask job_of for Naiya Clark with from_line (\d+)(?: and from_char \d+)? for the rest",
+                  first)
     assert m, first[-400:]
     import json
     shown = json.loads(first)["result"]
@@ -420,3 +430,199 @@ def test_whose_reads_the_first_500_characters_of_the_work(db):
     app.who.update(id=_owner(db), email=c3.PLATFORM)
     res = app.get("/church/jobs/whose", params={"business_id": LOVE_CITY, "q": work})
     assert res.status_code == 200 and len(res.json()["work"]) <= cjd.WORK_MAX
+
+
+# ─── V2-A: paging inside a long line ──────────────────────────────────
+
+SENTENCE = ("She’s the one who makes sure the church’s front desk doesn’t sit empty, that each guest’s card "
+            "gets a call, and that the pastor’s week isn’t a surprise to anyone. ")
+PARAGRAPH = (SENTENCE * 47).strip()                  # one English paragraph, no line breaks, ~7,660 characters
+ES = ("Se encarga de la recepción, la oración del miércoles, la música, la limpieza del salón y la atención "
+      "a los niños pequeños. ")
+PARRAFO = (ES * 64).strip()                          # one Spanish paragraph, ~7,700 characters
+
+
+def _pages(db, who="Naiya"):
+    """Every page job_of gives, followed from its own "(continues: ...)" lines, joined back as Chief would."""
+    import json
+    import re
+    whole, args, pages = "", {"who": who}, 0
+    while True:
+        is_error, seen = _mid_turn(db, LOVE_CITY, "owner", "job_of", args)
+        assert not is_error and '"truncated"' not in seen and len(seen) <= ccj.RESULT_BUDGET, len(seen)
+        result = json.loads(seen)["result"]
+        text = result.split(":\n“", 1)[1]
+        more = re.search(r"\n\(continues: ask job_of for [^)]* with from_line (\d+)(?: and from_char (\d+))? ", text)
+        if more:
+            text = text[:more.start()]
+        else:
+            assert text.endswith("”") and "continues" not in text, "the end, and nothing says there's more"
+            text = text[:-1]
+        mid_line = args.get("from_char", 1) > 1
+        whole = whole + text if mid_line or not whole else whole + "\n" + text
+        pages += 1
+        assert pages < 12
+        if not more:
+            return whole, pages
+        args = {"who": who, "from_line": int(more.group(1)), "from_char": int(more.group(2) or 1)}
+
+
+def _as_read(db, text):
+    row = T.row_of(db, LOVE_CITY, "naiya")
+    return "\n".join(ccj._said(row, _owner(db), ln) if ln.strip() else "" for ln in text.split("\n"))
+
+
+@pytest.mark.parametrize("text,source", [(PARAGRAPH, "pasted"), (PARRAFO, "said"),
+                                         ("Resumen\n" + PARRAFO + "\nEl domingo\n8:30 llega.\n12:30 cierra.", "said")])
+def test_v2a_a_long_line_pages_by_character_and_every_word_arrives(db, text, source):
+    T.ok(T.run(db, LOVE_CITY, "jessica", "set_job_description", who="Naiya", description=text, source=source))
+    whole, pages = _pages(db)
+    assert pages >= 2, "too long for one page, so it pages"
+    assert whole == _as_read(db, T.row_of(db, LOVE_CITY, "naiya")["description"]), "nothing skipped, nothing added"
+
+
+def test_v2a_a_cut_line_always_says_it_continues(db):
+    T.ok(T.run(db, LOVE_CITY, "jessica", "set_job_description", who="Naiya", description=PARAGRAPH, source="pasted"))
+    first = T.ok(T.run(db, LOVE_CITY, "owner", "job_of", who="Naiya"))
+    assert "(continues: ask job_of for Naiya Clark with from_line 1 and from_char " in first
+    assert not first.rstrip().endswith("”")
+    bad = T.run(db, LOVE_CITY, "owner", "job_of", who="Naiya", from_char=5)
+    assert bad["failed"] and "from_char goes with from_line" in bad["result"]
+
+
+# ─── V2-B: a clear or insert that landed is logged ────────────────────
+
+LONE = "1a000000-0000-4000-8000-000000000333"
+MORGAN = "1c000000-0000-4000-8000-000000000333"
+
+
+def _J(db):
+    return cjd.Jobs(co.Church(c3.church(db, LOVE_CITY)))
+
+
+def test_v2b_a_clear_beside_a_login_row_it_shadowed_is_a_clear_and_is_logged(db):
+    T.seat(db, LONE, "manager", "nobody-here@example.org", name="Morgan Vale")
+    J = _J(db)
+    cjd.set_description(J, _owner(db), cjd.person(J, user_id=LONE), {"description": "Login: sets up the chairs."})
+    db.t["contacts"].append({"id": MORGAN, "business_id": LOVE_CITY, "name": "Morgan Vale", "email": "mv@home.org",
+                             "status": "active", "metadata": {}, "phone": "", "birthdate": None})
+    J = _J(db)
+    cjd.set_description(J, _owner(db), cjd.person(J, contact_id=MORGAN), {"description": "Person: chairs and sound."})
+    next(s for s in db.t["business_users"] if s["user_id"] == LONE)["contact_id"] = MORGAN
+    logs = len(db.t["church_job_description_changes"])
+    said = T.ok(T.run(db, LOVE_CITY, "owner", "set_job_description", who="Morgan Vale", clear=True))
+    assert said.startswith("Cleared Morgan Vale's job description.")
+    assert not [r for r in T.rows(db) if r.get("contact_id") == MORGAN]
+    assert len(db.t["church_job_description_changes"]) == logs + 1
+    assert db.t["church_job_description_changes"][-1]["before"]["description"] == "Person: chairs and sound."
+
+
+def test_v2b_a_clear_raced_by_a_first_write_still_logs_what_it_cleared(db, monkeypatch):
+    T.ok(T.run(db, LOVE_CITY, "jessica", "set_job_description", who="Naiya", description="Jessica's words."))
+    real = sb_clients.sb_delete_as_service
+
+    def delete(path):
+        ok = real(path)
+        if path.startswith("/church_job_descriptions?"):         # the owner's save lands right after, elsewhere
+            J = _J(db)
+            cjd.set_description(J, _owner(db), cjd.person(J, contact_id=db.who[LOVE_CITY]["naiya"]),
+                                {"description": "Owner's."})
+        return ok
+    monkeypatch.setattr(sb_clients, "sb_delete_as_service", delete)
+    said = T.ok(T.run(db, LOVE_CITY, "jessica", "set_job_description", who="Naiya", clear=True))
+    assert said.startswith("Cleared Naiya Clark's job description.")
+    assert any((c["before"] or {}).get("description") == "Jessica's words."
+               for c in db.t["church_job_description_changes"]), "her words are in a log: an undo can find them"
+
+
+def test_v2b_an_insert_whose_answer_was_lost_is_saved_and_logged(db, monkeypatch):
+    real = sb_clients.sb_post_as_service
+
+    def post(path, body, prefer=None, **kw):
+        got = real(path, body, prefer, **kw)
+        return None if path.startswith("/church_job_descriptions") else got     # it landed; the answer didn't
+    monkeypatch.setattr(sb_clients, "sb_post_as_service", post)
+    said = T.ok(T.run(db, LOVE_CITY, "jessica", "set_job_description", who="Naiya", description="Runs the front desk."))
+    assert said.startswith("Saved Naiya Clark's job description")
+    assert len(db.t["church_job_description_changes"]) == 1
+
+
+# ─── V2-C: pay a sentence at a time ───────────────────────────────────
+
+SPENDING = ["Makes sure we pay the $1,200 rent on the 1st.", "Makes sure the $300 water bill is paid by the 5th.",
+            "Approves expenses up to $500 and makes sure every invoice gets paid.",
+            "Keeps the $40 a month Zoom subscription paid.", "Manages the $200 monthly supply allowance.",
+            "Books the fellowship hall for outside groups at $50 an hour.", "Collects the $25 a week preschool tuition.",
+            "Sends the $150 a month missionary support check.",
+            "Answers minimum wage questions from the daycare's families.",
+            "Raises $10k a year for missions.", "Pays the $300 electric bill.",
+            "Receives a love offering monthly and 2 weeks PTO."]
+PAY_PERIODS = ["Sound tech, $25 hourly.", "Nursery worker, $300 weekly.", "Gets $2,000 monthly for housing.",
+               "Musician: receives $250 each Sunday.", "Associate pastor, $48,000 per annum.",
+               "Paid out $600 every two weeks.", "Gets $600 every two weeks.", "Comp: $45k."]
+
+
+@pytest.mark.parametrize("text", SPENDING)
+def test_v2c_what_the_church_spends_is_not_pay(text):
+    assert not cjd.has_pay(text)
+
+
+@pytest.mark.parametrize("text", PAY_PERIODS)
+def test_v2c_pay_by_the_period_is_refused(text):
+    assert cjd.has_pay(text)
+
+
+# ─── V2-D: one person's name across everyone the owner may name ───────
+
+ANN_LEE, ANN_COLE = "1c000000-0000-4000-8000-000000000911", "1c000000-0000-4000-8000-000000000912"
+
+
+def test_v2d_ann_asks_which_when_two_of_the_churchs_people_are_ann(db):
+    for cid, name, email in ((ANN_LEE, "Ann Lee", "ann.lee@lovecity.org"),
+                             (ANN_COLE, "Ann Cole", "ann.cole@lovecity.org")):
+        db.t["contacts"].append({"id": cid, "business_id": LOVE_CITY, "name": name, "email": email,
+                                 "status": "active", "metadata": {}, "phone": "", "birthdate": None})
+    db.t["church_leader_roles"].append({"id": "r-cole", "business_id": LOVE_CITY, "contact_id": ANN_COLE,
+                                        "role": "team_leader", "scope": "Greeters", "status": "active",
+                                        "invited_at": "2026-10-01T00:00:00+00:00", "answered_at": None,
+                                        "answers_to_contact_id": None})
+    got = T.run(db, LOVE_CITY, "owner", "set_job_description", who="Ann", description="Runs the nursery.")
+    assert got["failed"] and "could be" in got["result"] and "Ann Lee" in got["result"] and "Ann Cole" in got["result"]
+    assert T.rows(db) == []
+    assert T.ok(T.run(db, LOVE_CITY, "owner", "job_of", who="Ann Lee")).startswith("Ann Lee:")
+
+
+def test_v2d_a_member_names_itself_by_its_own_name(db):
+    T.seat(db, PAUL_LOGIN, "member", "paul@lovecity.org", name="Paul Mensah")
+    assert T.ok(T.run(db, LOVE_CITY, PAUL_LOGIN, "job_of", who="Paul Mensah")).startswith("Paul Mensah:")
+    got = T.run(db, LOVE_CITY, PAUL_LOGIN, "job_of", who="Jessica")
+    assert got["failed"] and "isn't anyone whose job you can read here" in got["result"]
+
+
+# ─── V2-E: whose echoes what it ranked ────────────────────────────────
+
+EMAIL = ("Hi all, quick note from the facilities walk-through this morning: the fire extinguishers in the "
+         "fellowship hall are past their inspection date and the side door keeps sticking. ") * 80
+
+
+def test_v2e_a_pasted_email_as_the_work_reaches_chief_whole(db):
+    assert len(EMAIL) > 12000
+    direct = T.ok(T.run(db, LOVE_CITY, "owner", "whose_job", work=EMAIL))
+    assert len(direct.splitlines()[0]) < cjd.WORK_MAX + 40
+    is_error, seen = _mid_turn(db, LOVE_CITY, "owner", "whose_job", {"work": EMAIL})
+    assert not is_error and '"truncated"' not in seen and "Everyone's job" in seen
+
+
+# ─── Accents ──────────────────────────────────────────────────────────
+
+def test_accents_fold_and_any_script_counts():
+    assert [st for _w, st in cjd.terms("la oración de los niños")] == ["oracion", "nino"]
+    assert [st for _w, st in cjd.terms("Ñoño")] == ["nono"]
+    assert [w for w, _st in cjd.terms("교회 청소")] == ["교회", "청소"]
+
+
+def test_accents_oracion_finds_oracion(db):
+    T.ok(T.run(db, LOVE_CITY, "owner", "set_job_description", who="Laquesha",
+               description="Dirige la música y la oración del miércoles."))
+    got = T.run(db, LOVE_CITY, "owner", "whose_job", work="musica miercoles")
+    assert T.ok(got) and got["who"][0] == "Laquesha Bailey-Smith"

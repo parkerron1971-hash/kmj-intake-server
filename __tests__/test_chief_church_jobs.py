@@ -474,7 +474,7 @@ def test_a_member_reads_nobody_elses_and_a_viewer_nothing(db):
     assert got["failed"] and "office seats" in got["result"]
     got = run(db, LOVE_CITY, MEMBER, "job_of", who="Naiya")
     assert got["failed"] and "isn't anyone whose job you can read here" in got["result"]
-    assert "They are" not in got["result"] and "Jessica" not in got["result"], "names nobody else"
+    assert "Jessica" not in got["result"] and got["result"].endswith("They are: Mo Member"), "names only itself"
     assert run(db, LOVE_CITY, MEMBER, "draft_job_description", who="Jessica")["failed"]
     ok(run(db, LOVE_CITY, MEMBER, "job_of", who="me")), "their own job is theirs to read"
     for verb, action in (("whose_job", {"work": "x"}), ("job_of", {"who": "me"}), ("job_of", {"who": "Naiya"})):

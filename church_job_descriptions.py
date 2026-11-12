@@ -78,6 +78,7 @@ is a 503, never a yes.
 from __future__ import annotations
 
 import re
+import unicodedata
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
@@ -121,26 +122,35 @@ NOT_YOURS = "Their job is read by the people over them and the church's office s
 PAY = "Pay stays out of job descriptions; office seats can read them."
 CHANGED_NOW = "{name}'s job description changed just now. Read it again, then try again."
 
-# Pay, never budgets (#1807 review, F4): a money amount in the same sentence
-# as a pay word (paid, pay, earns, salary, wage, stipend, honorarium,
-# allowance, compensated, pay rate), or as a pay period (per hour, an hour, a
-# year, annually, $52k/yr), unless the sentence is about money the church
-# spends or raises ("manages the $5k youth budget"); and the words salary,
-# wage, stipend and pay rate on their own. Everything else is fine: "Office
-# Admin/HR", "walks the lot hourly", "workers' compensation claims", "housing
-# benefits", "pays the bills", "Pastor Payne", "payroll", "the benefit dinner".
+# Pay, never what the church spends (#1807 review F4, re-review V2-C), decided
+# a sentence at a time. A sentence with a money amount is pay when it has a
+# word about a person's pay (salary, wage, stipend, honorarium, compensation
+# or comp, earns, paid or pay, an allowance) or a pay period (hourly, weekly,
+# monthly, each Sunday, per annum, a year, every two weeks, $52k/yr), unless
+# it names what the money is spent on or for (rent, a bill, an invoice,
+# tuition, support, supplies, a hall or room, a fee, a budget, an offering, a
+# deposit, an order, a subscription...): then it's the church's spending. The
+# words salary, wage(s), stipend and pay rate refuse on their own ("minimum
+# wage" never does). When it's unclear it's allowed: the message says pay
+# stays out, and a church can reword. Fine: "Office Admin/HR", "walks the lot
+# hourly", "workers' compensation claims", "housing benefits", "pays the
+# bills", "Pastor Payne", "payroll", "the benefit dinner", "pay the $1,200
+# rent", "the $200 monthly supply allowance".
 _AMOUNT = (r"(?:\$\s?\d[\d,]*(?:\.\d+)?(?:\s?[km]\b)?|\b\d[\d,]*(?:\.\d+)?\s?k\b|"
            r"\b\d[\d,]*(?:\.\d+)?\s?(?:dollars|usd)\b)")
 AMOUNT = re.compile(_AMOUNT, re.I)
 PER_UNIT = re.compile(_AMOUNT + r"\s?/\s?(?:hr|hour|h|wk|week|mo|month|yr|year|annum)\b", re.I)
+MINIMUM_WAGE = re.compile(r"\bminimum[\s-]+wages?\b", re.I)
 PAY_ALONE = re.compile(r"\b(?:salar(?:y|ies|ied)|wages?|stipends?|pay[\s-]*rates?|rates?\s+of\s+pay)\b", re.I)
 PAY_WORD = re.compile(r"\b(?:paid|pay|earn(?:s|ed|ing)?|salar\w*|wages?|stipends?|honorari(?:um|ums|a)|allowances?|"
-                      r"compensat\w*)\b", re.I)
-PAY_TIME = re.compile(r"\b(?:per\s+(?:hour|hr|week|wk|month|year|yr|sunday|service)|an\s+hour|"
-                      r"a\s+(?:week|month|year|sunday)(?![-\w])|annually|yearly)\b", re.I)
-NOT_PAY = re.compile(r"\b(?:budgets?|funds?|fundrais\w*|rais(?:e|es|ed|ing)|giving|gifts?|offerings?|spend\w*|"
-                     r"costs?|tithes?|pledges?|donat\w*|supplies|orders?|purchases?|bills?|rent|deposits?|"
-                     r"expenses?|invoices?)\b", re.I)
+                      r"compensat\w*|comp)\b", re.I)
+PAY_TIME = re.compile(r"\b(?:hourly|weekly|monthly|yearly|annually|bi-?weekly|per\s+annum|"
+                      r"(?:per|each|every|a|an)\s+(?:hour|hr|week|wk|month|year|yr|sunday|service|session)(?![-\w])|"
+                      r"every\s+(?:two|other|2)\s+weeks)\b", re.I)
+SPENT_ON = re.compile(r"\b(?:rents?|rental\w*|bills?|invoices?|tuition|support|suppl(?:y|ies)|halls?|rooms?|fees?|"
+                      r"budgets?|offerings?|deposits?|orders?|purchases?|subscriptions?|expenses?|costs?|utilities|"
+                      r"rais(?:e|es|ed|ing)|giving|gifts?|donat\w*|pledges?|tithes?|funds?|fundrais\w*|"
+                      r"spend\w*)\b", re.I)
 
 
 # ─── Small things ─────────────────────────────────────────────────────
@@ -222,7 +232,9 @@ STOP = frozenset((
     "needed should would could can will shall may might must do does did done doing get gets got make makes made "
     "have has had i me my mine we us our you your they them their he him his she her hers please also just than "
     "then so if not no yes up down out off before after during next each every all any some more most very much "
-    "many one ones else whoever handle handles handling take takes look looks someone's").split())
+    "many one ones else whoever handle handles handling take takes look looks someone's "
+    # The commonest Spanish ones, so a description written in Spanish ranks by what it says.
+    "el la los las un una unos unas de del al en con por para que se su sus lo le les es son y o").split())
 
 
 def _stem(w: str) -> str:
@@ -243,11 +255,18 @@ def _stem(w: str) -> str:
     return w
 
 
+def fold(text: Any) -> str:
+    """Lower case with its accents taken off ("Oración" is "oracion", "Ñoño"
+    "nono"), any script's letters kept."""
+    t = unicodedata.normalize("NFKD", _plain(text).casefold().replace("’", "'"))
+    return unicodedata.normalize("NFC", "".join(ch for ch in t if not unicodedata.combining(ch)))
+
+
 def terms(text: Any) -> List[Tuple[str, str]]:
     """(the word as said, its stem) for each word that carries meaning, once
-    each: lower case, stop words and bare numbers out."""
+    each: lower case, accents folded, stop words and bare numbers out."""
     out: Dict[str, str] = {}
-    for w in re.findall(r"[a-z0-9][a-z0-9']*", _plain(text).casefold().replace("’", "'")):
+    for w in re.findall(r"[^\W_][\w']*", fold(text)):
         w = w.strip("'")
         if len(w) < 2 or w in STOP or w.isdigit():
             continue
@@ -861,15 +880,13 @@ def _description(v: Any) -> str:
 
 def has_pay(*texts: Any) -> bool:
     for t in texts:
-        t = str(t or "")
+        t = MINIMUM_WAGE.sub(" ", str(t or ""))
         if PAY_ALONE.search(t):
             return True
         for sentence in re.split(r"(?<=[.!?;])\s+|\n+", t):
-            if not AMOUNT.search(sentence):
-                continue
-            if PAY_WORD.search(sentence):
-                return True
-            if not NOT_PAY.search(sentence) and (PER_UNIT.search(sentence) or PAY_TIME.search(sentence)):
+            if not AMOUNT.search(sentence) or SPENT_ON.search(sentence):
+                continue                          # no amount, or money the church spends: not a person's pay
+            if PAY_WORD.search(sentence) or PAY_TIME.search(sentence) or PER_UNIT.search(sentence):
                 return True
     return False
 
@@ -921,36 +938,62 @@ def _version(row: Optional[Dict[str, Any]]) -> int:
         return 1
 
 
+def _by_id(J: Jobs, row_id: Any) -> Optional[Dict[str, Any]]:
+    rows = _need(f"/{TABLE}?id=eq.{_q(row_id)}&business_id=eq.{_q(J.ch.b)}&select={COLS}&limit=1")
+    return rows[0] if rows else None
+
+
+def _is(row: Optional[Dict[str, Any]], fields: Dict[str, Any], version: int) -> bool:
+    """Whether `row` is the one these fields made (a write whose answer was lost)."""
+    return bool(row) and _version(row) == version and all(
+        str(row.get(k) if row.get(k) is not None else "") == str(v if v is not None else "")
+        for k, v in fields.items() if k not in ("written_at", "updated_at"))
+
+
 def _cas_patch(J: Jobs, row: Dict[str, Any], fields: Dict[str, Any]) -> Dict[str, Any]:
     """Write `fields` onto `row` only while it is still the version read
-    (#1807 review F9); a miss raises _Changed, a failed write 503s."""
+    (#1807 review F9); a miss raises _Changed. A write whose answer is lost is
+    looked up by its row: if it landed, it's the answer (#1807 re-review V2-B),
+    else a 503."""
     got = sb_clients.sb_patch_as_service(
         f"/{TABLE}?id=eq.{_q(row['id'])}&business_id=eq.{_q(J.ch.b)}&version=eq.{_version(row)}",
         {**fields, "version": _version(row) + 1})
-    if not isinstance(got, list):
-        raise HTTPException(503, UNSAVED)
-    if not got:
-        raise _Changed()
-    return got[0]
+    if isinstance(got, list):
+        if not got:
+            raise _Changed()
+        return got[0]
+    now = _by_id(J, row["id"])
+    if _is(now, fields, _version(row) + 1):
+        return now
+    raise HTTPException(503, UNSAVED)
 
 
 def _cas_insert(J: Jobs, e: Dict[str, Any], fields: Dict[str, Any]) -> Dict[str, Any]:
     """A first row for them; one that lands at the same moment wins (the
-    unique index refuses the second), said as changed just now."""
+    unique index refuses the second), said as changed just now. An insert whose
+    answer is lost, found as it was written, is the answer (V2-B)."""
     got = sb_clients.sb_post_as_service(f"/{TABLE}", {
         "business_id": J.ch.b, "contact_id": e["contact_id"], "user_id": e["user_id"], **fields, "version": 1})
     if isinstance(got, list) and got:
         return got[0]
-    if fresh(J, e) is not None:
+    now = fresh(J, e)
+    if _is(now, fields, 1):
+        return now
+    if now is not None:
         raise _Changed()
     raise HTTPException(503, UNSAVED)
 
 
 def _cas_delete(J: Jobs, e: Dict[str, Any], row: Dict[str, Any]) -> None:
+    """Delete `row` while it is still the version read. Whether it landed is
+    asked of that row itself, never of whatever row the person has now (a
+    login's row they had before, or a save a moment later): the row gone is a
+    delete that happened, and the caller logs it (V2-B); the row still there
+    changed first, so nothing was deleted."""
     if not sb_clients.sb_delete_as_service(
             f"/{TABLE}?id=eq.{_q(row['id'])}&business_id=eq.{_q(J.ch.b)}&version=eq.{_version(row)}"):
         raise HTTPException(503, UNSAVED)
-    if fresh(J, e) is not None:                     # it changed first: the delete matched nothing
+    if _by_id(J, row["id"]) is not None:            # it changed first: the delete matched nothing
         raise _Changed()
 
 

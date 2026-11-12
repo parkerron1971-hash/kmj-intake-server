@@ -49,6 +49,9 @@ on the tool loop's 12,000-character list, and each is built to fit inside
 RESULT_BUDGET of JSON (#1807 review F5): past it, whose_job drops excerpts and
 then counts the rest, job_of says where its description continues (from_line),
 and a draft leaves out what each duty covers, each saying so in a plain line.
+job_of pages by line and, inside a line too long for the room, by character
+at a word boundary (from_line, from_char): every cut says where it continues,
+and paging forward reaches the end with nothing skipped (#1807 re-review V2-A).
 
 Naming (#1807 review F6): "me" only when they said it; a whole name, or one
 name word only one person has (a first name, never the start of one: "Ann" is
@@ -101,7 +104,10 @@ TOOLS = [
                                                                "description": "A name, or me"},
                                                        "from_line": {"type": "integer", "minimum": 1,
                                                                      "description": "Only their job description, "
-                                                                                    "from this line on"}},
+                                                                                    "from this line on"},
+                                                       "from_char": {"type": "integer", "minimum": 1,
+                                                                     "description": "With from_line: from this "
+                                                                                    "character of that line on"}},
                       "required": ["who"]}},
     {"name": "draft_job_description",
      "description": ("Church job descriptions: a starting job description for one person, built only from what the "
@@ -244,6 +250,10 @@ def _candidates(J: cjd.Jobs, uid: str) -> List[Dict[str, Any]]:
     people = J.everyone() if ch.role(uid) in cjd.READ_ALL else []
     keys = {e["key"] for e in people}
     more = []
+    me = J.entry(None, uid)                          # themselves, by their own name too
+    if me["key"] not in keys:
+        keys.add(me["key"])
+        more.append(me)
     for r in co.under(ch, co.who(co.LOGIN, uid)):
         e = J.entry(r["id"], None) if r["kind"] == co.PERSON else J.entry(None, r["id"])
         if e["key"] not in keys:
@@ -256,7 +266,7 @@ def _candidates(J: cjd.Jobs, uid: str) -> List[Dict[str, Any]]:
 def _words(v: Any) -> List[str]:
     """Whole words, lower case, a plural ending off (church_job_descriptions'
     light stem), never a prefix."""
-    return [cjd._stem(w) for w in re.findall(r"[\w']+", _norm(v).replace("-", " ")) if w]
+    return [cjd._stem(w) for w in re.findall(r"[\w']+", cjd.fold(v).replace("-", " ")) if w]
 
 
 def _what_words(ch: co.Church, e: Dict[str, Any]) -> set:
@@ -267,8 +277,8 @@ def _what_words(ch: co.Church, e: Dict[str, Any]) -> set:
 def _one(rows: List[Dict[str, Any]], raw: Any, ch: co.Church) -> List[Dict[str, Any]]:
     """The people `raw` names: the whole name; else every word one of their
     name's words or of what they do, at least one of them a name word."""
-    said = _norm(raw)
-    whole = [e for e in rows if _norm(e["name"]) == said]
+    said = cjd.fold(raw)
+    whole = [e for e in rows if cjd.fold(e["name"]) == said]
     if whole:
         return whole
     import chief_church_assignments as cca
@@ -319,8 +329,12 @@ def _pick(J: cjd.Jobs, uid: str, raw: Any) -> Dict[str, Any]:
         return e
     rows = _candidates(J, uid)
     hits = _one(rows, raw, J.ch)
-    if not hits and J.ch.role(uid) == "owner":
-        hits = _any_contact(J, raw)
+    if J.ch.role(uid) == "owner":
+        # The owner may name any of the church's people, so a name is only one person's when it is across all
+        # of them, not only among the ones with a job (#1807 re-review V2-D: Ann Cole leads a team, Ann Lee has
+        # no role yet; "Ann" asks which).
+        seen = {e["key"] for e in hits}
+        hits += [e for e in _any_contact(J, raw) if e["key"] not in seen]
     if len(hits) == 1:
         return hits[0]
     if hits:
@@ -352,6 +366,7 @@ def _whose(J: cjd.Jobs, uid: str, action: Dict[str, Any]) -> Dict[str, Any]:
     work = _plain(action.get("work") or action.get("q"))
     got = cjd.whose(J, uid, work)
     foreign = False
+    work = got["work"]                               # the first WORK_MAX characters: what was ranked, and echoed
     lines = [f"Whose job is “{_own(work)}”:"]
 
     def say(m: Dict[str, Any], n: Optional[int]) -> str:
@@ -420,40 +435,64 @@ def _whose(J: cjd.Jobs, uid: str, action: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
-def _from_line(v: Any) -> Optional[int]:
+def _number(v: Any, what: str) -> Optional[int]:
     if v in (None, ""):
         return None
     try:
         n = int(v)
     except (TypeError, ValueError):
-        raise HTTPException(400, "from_line is a line number, 1 or more.")
+        raise HTTPException(400, f"{what} is a number, 1 or more.")
     if n < 1:
-        raise HTTPException(400, "from_line is a line number, 1 or more.")
+        raise HTTPException(400, f"{what} is a number, 1 or more.")
     return n
 
 
-def _paged(out: Dict[str, Any], lines: List[str], desc: List[str], start: int, name: str) -> None:
-    """Their description's lines from `start` (1-based) into `out`, as many as
-    fit RESULT_BUDGET with the lines before them, then a plain "(continues:
-    ...)" with the line to ask from. Never the tool loop's sample cut."""
-    budget = RESULT_BUDGET - _size("job_of", {**out, "result": "\n".join(lines)}) - 200
-    shown: List[str] = []
-    n = start
-    for ln in desc[start - 1:]:
-        if _jlen(ln) > budget:
-            break
-        budget -= _jlen(ln)
-        shown.append(ln)
-        n += 1
-    if not shown and start <= len(desc):            # one line longer than the room: its start, said so
-        shown.append(_cut(desc[start - 1], max(200, budget // 7)))
-        n = start + 1
-    text = "\n".join(shown)
-    lines.append(f"“{text}”" if start == 1 and n > len(desc) else f"“{text}")
-    if n <= len(desc):
-        lines.append(f"(continues: ask job_of for {name} with from_line {n} for the rest, lines {n} to {len(desc)}.)")
-    elif start > 1:
-        lines[-1] += "”"
+def _fits(text: str, budget: int) -> int:
+    """How many characters of `text` fit `budget` JSON characters, cut back to
+    the end of a word when there is one; at least one character."""
+    lo, hi = 0, len(text)
+    while lo < hi:                                   # the longest prefix that fits
+        mid = (lo + hi + 1) // 2
+        if _jlen(text[:mid]) <= budget:
+            lo = mid
+        else:
+            hi = mid - 1
+    if lo < len(text):
+        space = text.rfind(" ", 0, lo + 1)
+        if space > lo // 2:
+            lo = space + 1                           # the space stays with what's shown
+    return max(1, lo)
+
+
+def _paged(out: Dict[str, Any], lines: List[str], desc: List[str], line: int, char: int, name: str) -> None:
+    """Their description from line `line`, character `char` (both 1-based)
+    into `out`: whole lines while they fit RESULT_BUDGET with what comes
+    before, then, of a line too long for the room left, as much as fits, cut
+    at a word. Any cut is followed by "(continues: ...)" naming exactly where
+    the rest starts, so paging forward reaches the end with nothing skipped
+    (#1807 re-review V2-A). Never the tool loop's sample cut."""
+    budget = RESULT_BUDGET - _size("job_of", {**out, "result": "\n".join(lines)}) - 260
+    pieces: List[str] = []
+    li, ci = line, char - 1
+    while li <= len(desc):
+        rest = desc[li - 1][ci:]
+        if _jlen(rest) <= budget:
+            pieces.append(rest)
+            budget -= _jlen(rest)
+            li, ci = li + 1, 0
+            continue
+        take = _fits(rest, budget) if budget > 40 or not pieces else 0
+        if take:
+            pieces.append(rest[:take])
+            ci += take
+        break
+    done = li > len(desc)
+    lines.append("“" + "\n".join(pieces) + ("”" if done else ""))
+    if not done:
+        where = f"from_line {li}" + (f" and from_char {ci + 1}" if ci else "")
+        lines.append(f"(continues: ask job_of for {name} with {where} for the rest"
+                     + (f", line {li} of {len(desc)}" if not ci else f", the rest of line {li} of {len(desc)}")
+                     + ".)")
 
 
 def _job(J: cjd.Jobs, uid: str, action: Dict[str, Any]) -> Dict[str, Any]:
@@ -462,7 +501,10 @@ def _job(J: cjd.Jobs, uid: str, action: Dict[str, Any]) -> Dict[str, Any]:
     under = cjd.under_keys(ch, co.who(co.LOGIN, uid))
     if not cjd.can_read(ch, uid, e, under):
         raise HTTPException(403, cjd.NOT_YOURS)
-    start = _from_line(action.get("from_line"))
+    start = _number(action.get("from_line"), "from_line")
+    char = _number(action.get("from_char"), "from_char") or 1
+    if char > 1 and not start:
+        raise HTTPException(400, "from_char goes with from_line.")
     row = e["row"]
     title, written = cjd.title_of(ch, e)
     me = cjd.is_self(ch, uid, e)
@@ -476,8 +518,12 @@ def _job(J: cjd.Jobs, uid: str, action: Dict[str, Any]) -> Dict[str, Any]:
             raise HTTPException(400, f"{e['name']} has no written job description yet.")
         if start > len(desc):
             raise HTTPException(400, f"{e['name']}'s job description has {len(desc)} lines.")
-        lines = [f"{e['name']}'s job description, from line {start} of {len(desc)}:"]
-        _paged(out, lines, desc, start, e["name"])
+        if char > max(1, len(desc[start - 1])):
+            raise HTTPException(400, f"Line {start} of {e['name']}'s job description has {len(desc[start - 1])} "
+                                     "characters.")
+        lines = [f"{e['name']}'s job description, from line {start} of {len(desc)}"
+                 + (f", character {char}" if char > 1 else "") + ":"]
+        _paged(out, lines, desc, start, char, e["name"])
         out.update(result="\n".join(lines), label=f"{e['name']}'s job description, from line {start}"[:80])
         return out
     j = cjd.job(J, uid, e, under)
@@ -515,7 +561,7 @@ def _job(J: cjd.Jobs, uid: str, action: Dict[str, Any]) -> Dict[str, Any]:
         lines.append(f"Job description (written by {j['updated_by']}, {cjd._day(row.get('updated_at'))}"
                      + (f"; the title by {j['title_by']}" if j.get("title_by") and j["title_by"] != j["updated_by"]
                         else "") + "):")
-        _paged(out, lines, desc, 1, e["name"])
+        _paged(out, lines, desc, 1, 1, e["name"])
     else:
         lines.append("No written job description yet: Chief can draft one from what they already do "
                      "(draft_job_description).")
