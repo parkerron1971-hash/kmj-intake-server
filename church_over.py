@@ -34,12 +34,15 @@ it from the church's own data, never from names or title words:
                      anyone a login the office rule doesn't (an Admin's login
                      is only the owner's and the Admins'; a Manager's, also
                      whoever is over the lanes)
-  the top .......... never under anyone, and never walked through: every one
-                     of the church's people with the owner's sign-in email,
-                     the owner's person however found, and every holder of a
-                     senior-job role (or, where the map names them, of a role
-                     that gives the pastor's yes). A failed read of the
-                     owner's email is a 503
+  the top .......... the owner's own identity (every one of the church's
+                     people with the owner's sign-in email, the owner's
+                     person however found): never under anyone, never walked
+                     through. A failed read of the owner's email is a 503
+  the seniors ...... every holder of a senior-job role (or, where the map
+                     names them, of a role that gives the pastor's yes):
+                     under the owner only, never walked through, so the owner
+                     can hand an elder work and no Admin, Manager or Member
+                     seat ever can
 
     under(ch, me) ..... [{kind, id, name, why}], the office first
     is_over(ch, me, t)  every write checks it
@@ -343,19 +346,29 @@ class Church:
 
     @property
     def top(self) -> Set[str]:
-        """The people at the top of every chain, never under anyone and never
-        walked through: every one of the church's people whose email is the
-        owner's sign-in email; the owner's person however it was found; and
-        every holder of a role whose job is the senior one (church_roles: the
-        top of every chain, a job and never a title) or, where the map names
-        them, of a role that gives the pastor's yes (pastor_yes_roles). So the
-        senior pastor is never under an Admin, even when his record carries
-        another email than the one he signs in with."""
+        """The owner's own identity, never under anyone and never walked
+        through: every one of the church's people whose email is the owner's
+        sign-in email (a family address too), and the owner's person however
+        it was found."""
         def load() -> Set[str]:
             out = {str(c["id"]) for c in self._by_email.get(self.owner_email, []) if c.get("id")} \
                 if "@" in self.owner_email else set()
             if self.owner_person:
                 out.add(self.owner_person)
+            return out
+        return self._got("top", load)
+
+    @property
+    def seniors(self) -> Set[str]:
+        """Under the owner only (Kevin's call, #1801 review round 2): every
+        holder of a role whose job is the senior one (church_roles: the top of
+        every chain, a job and never a title) or, where the map names them, of
+        a role that gives the pastor's yes (pastor_yes_roles), who isn't the
+        owner's own identity. The owner can hand them work and start them; no
+        Admin, Manager or Member seat is ever over them, and no walk goes
+        through them. At a church whose elders share the top ("Elders
+        (Shepherds)"), every elder is one."""
+        def load() -> Set[str]:
             import church_roles as cr
             have = {str(d.get("key")) for d in self.defs}
             keys = {str(d.get("key")) for d in self.defs if d.get("job") == "senior" and d.get("key")}
@@ -364,9 +377,8 @@ class Church:
             if m:
                 import church_map
                 keys |= set(church_map.picked(m, "pastor_yes_roles") or [])
-            out |= {str(h["contact_id"]) for h in self.holders if h.get("role") in keys}
-            return out
-        return self._got("top", load)
+            return {str(h["contact_id"]) for h in self.holders if h.get("role") in keys} - self.top
+        return self._got("seniors", load)
 
     def persons_of(self, me: Dict[str, Any]) -> Set[str]:
         if me["kind"] == PERSON:
@@ -591,8 +603,11 @@ def _under(ch: Church, me: Dict[str, Any]) -> List[Tuple[str, str, str]]:
             if ch.role(uid) == "manager":
                 add(LOGIN, uid, _login_why(ch, uid))
     off = ch.person_login
-    top = ch.top                    # never under anyone, whoever asks
-    skip = mine | top
+    # The owner's own identity is never under anyone; the senior and the
+    # pastor's-yes holders are under the owner only, and no walk goes through
+    # either.
+    stop = ch.top | ch.seniors
+    skip = mine | (ch.top if role == "owner" else stop)
     m = ch.map
     if role in KEEPS_ALL or (not m and lanes):
         for cid in _everyone(ch):
@@ -601,7 +616,7 @@ def _under(ch: Church, me: Dict[str, Any]) -> List[Tuple[str, str, str]]:
         return list(out.values())
     if not m or not mine:
         return list(out.values())
-    for t, why, via in _walk(ch, mine, top):
+    for t, why, via in _walk(ch, mine, stop):
         if t in skip:
             continue
         name = ch.names([via]).get(via, "") if via not in mine else ""
@@ -678,6 +693,8 @@ def _above(ch: Church, me: Dict[str, Any]) -> List[Tuple[str, str]]:
     cid = str(me["id"])
     if cid in ch.top:
         return []
+    if cid in ch.seniors:
+        return _top(ch, me)             # under the owner only
     if cid in ch.person_login:
         return _above(ch, who(LOGIN, ch.person_login[cid]))
     import church_follow_up as cfu
@@ -700,8 +717,8 @@ def _above(ch: Church, me: Dict[str, Any]) -> List[Tuple[str, str]]:
         c = str(h.get("contact_id") or "")
         if not c or c == cid:
             continue
-        # The top of every chain is the owner's login; an office person is
-        # their login; anyone else, their person.
+        # The owner's own identity is the owner's login; an office person is
+        # their login; anyone else (a senior holder too), their person.
         hit = (LOGIN, ch.owner) if c in ch.top and ch.owner else (
             (LOGIN, ch.person_login[c]) if c in ch.person_login else (PERSON, c))
         if hit not in out:

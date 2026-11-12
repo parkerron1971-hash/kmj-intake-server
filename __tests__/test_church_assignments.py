@@ -436,7 +436,8 @@ def test_stuck_and_sent_up_is_told_once(app, db):
     assert len([m for m in db.sent if m["key"].startswith("assignment-raised-")]) == 1, "told once"
     as_(app, LOVE_CITY, "owner")
     up = mine(app, LOVE_CITY)["raised_to_you"]
-    assert [(i["title"], i["whose"], i["resolved"]) for i in up] == [("Every room in the system", "Naiya Clark", False)]
+    assert [(i["title"], i["whose"], i["resolved"], i["raised"]["to"]) for i in up] == [
+        ("Every room in the system", "Naiya Clark", False, "Pastor Kevin")]
     r = app.post(f"/church/assignments/{t['id']}/raise", json={"business_id": LOVE_CITY})
     assert r.status_code == 409, "nobody is over the owner"
 
@@ -956,3 +957,108 @@ def test_a_grouped_tell_before_the_migration_still_goes_and_says_tasks(app, db, 
     monkeypatch.setattr(cas, "_platform_owner_id", lambda: c3.LC_OWNER)
     quiet = cas.sweep_tick(NOW)
     assert quiet["churches"] == 0 and quiet["raised_told"] == 0 and quiet["ticked"] == 0, "quiet before the migration"
+
+
+# ─── The #1801 review, round 2 ────────────────────────────────────────
+
+def _self_handed_sent_up(app, db):
+    as_(app, LOVE_CITY, "naiya")
+    tid = give(app, LOVE_CITY, login(db, LOVE_CITY, "naiya"), title="My own").json()["saved"]["id"]
+    assert patch(app, tid, LOVE_CITY, stuck="blocked").status_code == 200
+    as_(app, LOVE_CITY, "jessica")
+    assert app.post(f"/church/assignments/{tid}/raise", json={"business_id": LOVE_CITY}).status_code == 200
+    return tid
+
+
+def test_once_its_sent_up_the_assignee_cant_take_back_even_what_she_handed_herself(app, db):
+    tid = _self_handed_sent_up(app, db)
+    as_(app, LOVE_CITY, "naiya")
+    r = app.delete(f"/church/assignments/{tid}?business_id={LOVE_CITY}")
+    assert r.status_code == 403 and r.json()["detail"] == cas.SENT_UP_STAYS
+    as_(app, LOVE_CITY, "owner")
+    assert [i["title"] for i in mine(app, LOVE_CITY)["raised_to_you"]] == ["My own"], "still on the receiver's list"
+    as_(app, LOVE_CITY, "tiara")
+    assert app.delete(f"/church/assignments/{tid}?business_id={LOVE_CITY}").status_code == 403
+    as_(app, LOVE_CITY, "owner")                                         # whoever it went to
+    assert app.delete(f"/church/assignments/{tid}?business_id={LOVE_CITY}").status_code == 200
+
+
+def test_whoever_sent_it_up_can_take_it_back(app, db):
+    tid = _self_handed_sent_up(app, db)
+    as_(app, LOVE_CITY, "jessica")
+    assert app.delete(f"/church/assignments/{tid}?business_id={LOVE_CITY}").status_code == 200
+
+
+def test_before_its_sent_up_the_assignee_takes_back_what_she_handed_herself(app, db):
+    as_(app, LOVE_CITY, "naiya")
+    tid = give(app, LOVE_CITY, login(db, LOVE_CITY, "naiya"), title="My own").json()["saved"]["id"]
+    assert app.delete(f"/church/assignments/{tid}?business_id={LOVE_CITY}").status_code == 200
+
+
+def test_a_take_back_that_races_a_send_up_loses_it(app, db, monkeypatch):
+    """Read before it was sent up, deleted after: the database's own filter
+    (raised_at is null) keeps it, and the answer is a 409."""
+    as_(app, LOVE_CITY, "naiya")
+    tid = give(app, LOVE_CITY, login(db, LOVE_CITY, "naiya"), title="My own").json()["saved"]["id"]
+    stale = dict(task(db, tid))
+    task(db, tid).update(raised_at=NOW.isoformat(), raised_to=c3.LC_OWNER, stuck_at=NOW.isoformat())
+    monkeypatch.setattr(cas, "_task", lambda ch, task_id: dict(stale))
+    r = app.delete(f"/church/assignments/{tid}?business_id={LOVE_CITY}")
+    assert r.status_code == 409 and task(db, tid)["title"] == "My own"
+
+
+def test_the_assignees_unstuck_that_races_a_send_up_loses_it(app, db, monkeypatch):
+    t = _rooms_item(app, db)
+    as_(app, LOVE_CITY, "naiya")
+    patch(app, t["id"], LOVE_CITY, stuck="Floor plan")
+    stale = dict(task(db, t["id"]))
+    task(db, t["id"]).update(raised_at=NOW.isoformat(), raised_to=c3.LC_OWNER,
+                             raised_by=uid(db, LOVE_CITY, "jessica"))   # sent up after she read it
+    monkeypatch.setattr(cas, "_task", lambda ch, task_id: dict(stale))
+    r = patch(app, t["id"], LOVE_CITY, stuck=None)
+    assert r.status_code == 409 and r.json()["detail"] == cas.JUST_SENT_UP
+    row = task(db, t["id"])
+    assert row["stuck_at"] and row["raised_to"] == c3.LC_OWNER, "the database held the rule"
+
+
+def test_a_cold_auth_read_fails_before_the_write_never_after(app, db, monkeypatch):
+    import messaging_router
+    co._OWNER_EMAIL.clear()
+    monkeypatch.setattr(messaging_router, "owner_email_read", lambda u: None)
+    as_(app, LOVE_CITY, "naiya")
+    before = len(db.t["tasks"])
+    for _ in range(2):                                             # a retry makes no second copy
+        assert give(app, LOVE_CITY, login(db, LOVE_CITY, "naiya"), title="Call the plumber").status_code == 503
+    assert len(db.t["tasks"]) == before, "nothing saved on a 503"
+    monkeypatch.setattr(messaging_router, "owner_email_read", lambda u: c3.OWNER_EMAIL.get(str(u), ""))
+    assert give(app, LOVE_CITY, login(db, LOVE_CITY, "naiya"), title="Call the plumber").status_code == 200
+    assert len(db.t["tasks"]) == before + 1
+
+
+def test_a_name_read_that_fails_after_a_saved_write_still_answers_with_what_it_saved(app, db, monkeypatch):
+    from fastapi import HTTPException
+    as_(app, LOVE_CITY, "jessica")
+
+    def blip(*a, **k):
+        raise HTTPException(503, "names unread")
+    monkeypatch.setattr(cas, "_names_by_login", blip)
+    r = give(app, LOVE_CITY, login(db, LOVE_CITY, "naiya"), title="Book the hall")
+    assert r.status_code == 200 and r.json()["saved"]["from"] == "the church office"
+    assert len([t for t in db.t["tasks"] if t.get("title") == "Book the hall"]) == 1
+    got = start(app, LOVE_CITY, login(db, LOVE_CITY, "naiya"))
+    assert got.status_code == 200 and len(got.json()["made"]) == 6
+
+
+def test_at_an_elders_church_the_owner_starts_an_elder_and_an_admin_cant(app, db):
+    from test_church_over import _elders_church
+    from church_three import RIVERSIDE
+    bernice, _odell = _elders_church(db)
+    henry = f"person:{db.who[RIVERSIDE]['henry']}"
+    as_(app, RIVERSIDE, "owner")
+    r = start(app, RIVERSIDE, henry)
+    assert r.status_code == 200 and r.json()["made"], r.text
+    assert give(app, RIVERSIDE, henry, title="Visit the Blands").status_code == 200
+    app.who.update(id=bernice, email="bernice@riversideame.org")
+    assert give(app, RIVERSIDE, henry, title="x").status_code == 403
+    assert start(app, RIVERSIDE, f"person:{db.who[RIVERSIDE]['lois']}").status_code == 403
+    assert app.get(f"/church/assignments?business_id={RIVERSIDE}&for={henry}").status_code == 403

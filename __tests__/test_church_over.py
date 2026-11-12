@@ -202,17 +202,72 @@ def test_a_member_seat_department_leader_is_never_over_the_treasurer(db):
     assert under(db, nh, person(db, nh, "celia")) == []
 
 
-def test_the_senior_pastor_is_never_under_anyone_even_under_another_email(db):
+def test_the_senior_pastor_is_never_under_an_admin_even_under_another_email(db):
     """The owner signs in with one address and his record carries another
-    (#1801 review): he holds the senior role, the top of every chain."""
-    kevin = next(c for c in db.t["contacts"] if c["id"] == db.who[LOVE_CITY]["kevin"])
-    kevin["email"] = "pastor@lovecity.org"
-    for h in ("owner", "minnie", "jessica"):
-        assert db.who[LOVE_CITY]["kevin"] not in {r["id"] for r in under(db, LOVE_CITY, login(db, LOVE_CITY, h))}, h
-    assert db.who[LOVE_CITY]["kevin"] in ch(db, LOVE_CITY).top
+    (#1801 review): he holds the senior role, so only the owner is over him
+    (round 2: the senior role's holders are under the owner only; here the
+    owner can't tell that person is himself)."""
+    kevin = db.who[LOVE_CITY]["kevin"]
+    next(c for c in db.t["contacts"] if c["id"] == kevin)["email"] = "pastor@lovecity.org"
+    for h in ("minnie", "jessica"):
+        assert kevin not in {r["id"] for r in under(db, LOVE_CITY, login(db, LOVE_CITY, h))}, h
+    assert kevin in {r["id"] for r in under(db, LOVE_CITY, login(db, LOVE_CITY, "owner"))}
+    c = ch(db, LOVE_CITY)
+    assert kevin in c.seniors and kevin not in c.top
     up = co.above(ch(db, LOVE_CITY), person(db, LOVE_CITY, "andre"))
-    assert [(r["kind"], r["id"]) for r in up] == [(co.LOGIN, c3.LC_OWNER)], "the top is the owner's login"
+    assert [(r["kind"], r["id"]) for r in up] == [(co.PERSON, kevin)], "the chain's own top step"
+    assert [(r["kind"], r["id"]) for r in co.above(ch(db, LOVE_CITY), person(db, LOVE_CITY, "kevin"))] == [
+        (co.LOGIN, c3.LC_OWNER)], "a senior holder is under the owner only"
+
+
+def test_the_owners_own_person_is_never_under_anyone_not_even_the_owner(db):
+    kevin = db.who[LOVE_CITY]["kevin"]                      # his record carries his sign-in email
+    c = ch(db, LOVE_CITY)
+    assert kevin in c.top and kevin not in c.seniors
+    for h in ("owner", "minnie", "jessica"):
+        assert kevin not in {r["id"] for r in under(db, LOVE_CITY, login(db, LOVE_CITY, h))}, h
     assert co.above(ch(db, LOVE_CITY), person(db, LOVE_CITY, "kevin")) == []
+
+
+def _elders_church(db):
+    """Riverside, as a Church of Christ: the library's senior role is
+    "Elders (Shepherds)" and three people share it. The owner (Clara, its
+    secretary) holds the preaching minister's role; Bernice is an Admin
+    login; Odell a Manager login who serves as a deacon, and one elder's row
+    (wrongly) says he answers to Odell."""
+    import church_roles as cr
+    biz = next(b for b in db.t["businesses"] if b["id"] == RIVERSIDE)
+    biz["name"] = "Westside Church of Christ"
+    assert cr.ensure_library(biz)["church_type"] == "coc"
+    elders = next(d for d in db.t["church_role_defs"] if d["business_id"] == RIVERSIDE and d["job"] == "senior")
+    assert elders["title"] == "Elders (Shepherds)"
+    c = c3._Church(db, RIVERSIDE, 4, "riversideame.org")
+    c.hold(elders["key"], "henry", "lois", "walter")
+    c.hold("preaching_minister", "clara")
+    c.hold("deacons", "odell")
+    bernice = c.login(1, "bernice", "admin")
+    odell = c.login(2, "odell", "manager", tie=True)
+    for h in db.t["church_leader_roles"]:
+        if h["business_id"] == RIVERSIDE and h["contact_id"] == db.who[RIVERSIDE]["henry"]:
+            h["answers_to_contact_id"] = db.who[RIVERSIDE]["odell"]
+    return bernice, odell
+
+
+def test_at_an_elders_church_the_owner_is_over_the_elders_and_no_one_else_is(db):
+    bernice, odell = _elders_church(db)
+    w = db.who[RIVERSIDE]
+    elders = {w["henry"], w["lois"], w["walter"]}
+    owner = under(db, RIVERSIDE, login(db, RIVERSIDE, "owner"))
+    assert elders <= {r["id"] for r in owner}
+    assert {r["why"] for r in owner if r["id"] in elders} == {"Elders (Shepherds)"}
+    assert w["clara"] not in {r["id"] for r in owner}, "never the owner's own person"
+    for uid in (bernice, odell):
+        assert not elders & {r["id"] for r in under(db, RIVERSIDE, co.who(co.LOGIN, uid))}, uid
+    assert not elders & {r["id"] for r in under(db, RIVERSIDE, person(db, RIVERSIDE, "odell"))}, "answers-to or not"
+    c = ch(db, RIVERSIDE)
+    assert elders == c.seniors and co.is_over(c, login(db, RIVERSIDE, "owner"), person(db, RIVERSIDE, "henry"))
+    assert [(r["kind"], r["id"]) for r in co.above(ch(db, RIVERSIDE), person(db, RIVERSIDE, "lois"))] == [
+        (co.LOGIN, c3.R_OWNER)]
 
 
 def test_the_senior_pastor_is_never_under_the_lanes_overseer_with_the_map_closed(monkeypatch):

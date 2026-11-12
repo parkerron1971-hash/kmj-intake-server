@@ -155,17 +155,30 @@ a Manager or a Member seat whose person the map puts over an Admin's person coul
 take back the Admin's tasks and move the Admin's money days.) The walk still goes on through them
 to the people under them, who are persons.
 
-**The top of every chain** is never under anyone, whoever asks, and the walk never goes through
-them: every one of the church's people whose email is the owner's sign-in email (all of them: a
-family address too), the owner's person however it was found, and every holder of a role whose
-*job* is the senior one (`church_roles`: the top of every chain; a job, never a title) or, where the
-map names them, of a role that gives the pastor's yes (`pastor_yes_roles`). So the senior pastor is
-never under an Admin even when his record carries another email than the one he signs in with. A
-failed read of the owner's sign-in email (`messaging_router.owner_email_read`, which tells a failed
-read from "no email") is a 503, never "the owner is nobody"; a good read is kept ten minutes per
-replica. The one case it can't catch: an owner whose record has neither his sign-in email nor a
-senior role; then he is an ordinary leader to it. In `above()`, a step at the top is the owner's
-login.
+**The owner's own identity** (`Church.top`) is never under anyone, not even the owner, and the walk
+never goes through it: every one of the church's people whose email is the owner's sign-in email
+(all of them: a family address too) and the owner's person however it was found. A failed read of
+the owner's sign-in email (`messaging_router.owner_email_read`, which tells a failed read from "no
+email") is a 503, never "the owner is nobody"; a good read is kept ten minutes per replica. In
+`above()`, a step that is the owner's identity is the owner's login.
+
+**The senior holders are under the owner only** (Kevin's call, #1801 review round 2;
+`Church.seniors`): every holder of a role whose *job* is the senior one (`church_roles`: the top of
+every chain; a job, never a title) or, where the map names them, of a role that gives the pastor's
+yes (`pastor_yes_roles`), who isn't the owner's identity. The owner can hand them work and start
+them; no Admin, Manager or Member seat is ever over them, whatever the map says (an answers-to row
+naming someone below them included), and no walk goes through them. So at a church on the Church of
+Christ template, where "Elders (Shepherds)" is the senior role and several elders share the top,
+the owner can start each elder and hand them work, and nobody else can (tested at Riverside set up
+on that template). A senior holder's own stuck item goes up to the owner; a stuck item whose chain
+ends at the senior role goes to that holder (their person; their login if they have an office
+seat). So the senior pastor is never under an Admin even when his record carries another email than
+the one he signs in with (he is then under the owner, who can't tell that person is himself).
+
+**Known limit:** an owner whose contact record carries another email than his sign-in email *and*
+who holds no senior (or pastor's-yes) role can't be told from any other leader, so he can still show
+under an Admin (as a group's leader, say, or a role holder). The fix is data: put the owner's
+sign-in email on his record, or give him the church's senior role.
 
 A money duty's day is picked only by the owner or an Admin (403 otherwise, whoever is over the login).
 
@@ -298,7 +311,7 @@ with what it saved; a failed write is a 503, never a 200.
 | `GET /church/assignments?business_id=&for=login:<id>\|person:<id>` | them, or anyone over them | their assignments (open, stuck, recently done) with each check's text |
 | `POST /church/assignments` | anyone over them (or yourself) | `{business_id, for, title, due_date?, done_when?, duty?}` hand one out |
 | `PATCH /church/assignments/{task_id}` | them, or anyone over them | `{business_id, done?: bool, stuck?: note \| null, due_date?, title?, done_when?}`; only the one over them changes the date, title and done_when |
-| `DELETE /church/assignments/{task_id}?business_id=` | whoever handed it, or anyone over them | take it back |
+| `DELETE /church/assignments/{task_id}?business_id=` | whoever handed it, or anyone over them; once sent up, whoever sent it up, whoever it went to, or anyone over them | take it back |
 | `POST /church/assignments/{task_id}/raise` | anyone over them | `{business_id, note?}` send a stuck item up to `above(me)` |
 | `POST /church/assignments/start` | anyone over them | `{business_id, for}` make their first assignment |
 | `GET /church/assignments/one-on-one?business_id=&for=` | anyone over them | finished in the last 7 days, stuck, the next five due, late, and this week's jobs done or not; plain lines, nothing recorded (second PR) |
@@ -325,6 +338,18 @@ truth. The sent-up record stays on a done item, so whoever it went to sees it **
 gone: `raised_to_you` keeps it for two weeks with `"resolved": true` (and `sent_up_at`), and their
 My week shows a `raised_done` line ("“…” was sent up to you, and it's done now.") for a week. Reopened
 (done: false), it is stuck and sent up again as it was.
+
+Nor can the assignee **take it back** once it's been sent up (round 2: 403, even one she handed to
+herself), so it never vanishes from the list of whoever it went to: only whoever sent it up, whoever
+it went to, or anyone over the assignee. Both rules hold in the database too, not only against the
+row as it was read: the assignee's own stuck change and a take-back allowed because you handed it
+carry `raised_at=is.null` in their filter, and a send-up that landed in between wins (409).
+
+**A write answers with what it saved, and nothing after it can fail** (round 2): everything that
+answer needs and that could fail to read (the seats, who each login is, the owner's sign-in email,
+the top and the seniors) is read before the write; a read that fails then is a 503 with nothing
+saved, so a retry never makes a second copy. A name read after the write that still fails is
+answered without the name (logged), never a 503 for a write that saved.
 
 ### What the frontend builds against
 

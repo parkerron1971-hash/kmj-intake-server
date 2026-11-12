@@ -333,11 +333,32 @@ def _saved(got: Any) -> Dict[str, Any]:
     return got[0]
 
 
+def _ready(ch: co.Church) -> None:
+    """Before a write: read everything answering with what it saved will
+    need (the seats, who each login is, the owner's sign-in email, the top
+    and the seniors). A read that fails then is a 503 with nothing saved, and
+    nothing after the write can fail on it (#1801 review: a self-handed task
+    saved, answered 503 on a cold Auth read, and a retry made a second copy)."""
+    _ = (ch.seats, ch.login_person, ch.top, ch.seniors)
+
+
+def _after(fn, default):
+    """A name read after a write that already saved: one that fails falls
+    back to `default` and is said in the log, never a 503 for a saved write."""
+    try:
+        return fn()
+    except HTTPException:
+        print("[church_assignments] a name after a saved write wasn't read; answered without it", flush=True)
+        return default
+
+
 def _one(ch: co.Church, t: Dict[str, Any], ctx: Optional[cw.Ctx] = None) -> Dict[str, Any]:
+    """A saved row as the app shows it. Never fails on a read: it answers
+    writes that already saved (`check` runs catch their own failures)."""
     ctx = ctx or cw.Ctx(ch.business, _now())
     check = cw.run(ctx, t["check_key"]) if t.get("check_key") and t.get("status") != "done" else None
-    logins = _names_by_login(ch, [t.get("handed_by"), t.get("raised_to")])
-    people = ch.names([t.get("raised_to_contact_id")]) if t.get("raised_to_contact_id") else {}
+    logins = _after(lambda: _names_by_login(ch, [t.get("handed_by"), t.get("raised_to")]), {})
+    people = _after(lambda: ch.names([t.get("raised_to_contact_id")]), {}) if t.get("raised_to_contact_id") else {}
     return item(t, ctx.today, logins, people, check)
 
 
@@ -439,7 +460,7 @@ def theirs(ch: co.Church, me: Dict[str, Any], target: Dict[str, Any], over: bool
             "&order=raised_at.desc&limit=50")
             if str(r.get("business_id")) == ch.b and str(r.get("raised_to") or "") == target["id"]
             and (r.get("stuck_at") if r.get("status") != "done" else str(r.get("completed_at") or "") >= since)]
-    logins = _names_by_login(ch, [r.get("handed_by") for r in mine + raised] + [r.get("raised_to") for r in mine])
+    logins = _names_by_login(ch, [r.get(k) for r in mine + raised for k in ("handed_by", "raised_to")])
     people = ch.names([r.get("raised_to_contact_id") for r in mine if r.get("raised_to_contact_id")])
     items = [item(r, ctx.today, logins, people, checks.get(str(r["id"]))) for r in mine]
     whose = {**_names_by_login(ch, [r.get("assigned_to") for r in raised]),
@@ -527,6 +548,7 @@ def assignments_give(body: Dict[str, Any], session: UserSession = Depends(sb_cli
     me = _me(session)
     target = co.parse_for(body.get("for"))
     _allowed(ch, me, target, self_ok=True)
+    _ready(ch)
     saved = give(ch, me, target, body)
     return {"saved": _one(ch, saved)}
 
@@ -535,6 +557,18 @@ def assignments_give(body: Dict[str, Any], session: UserSession = Depends(sb_cli
 
 SENT_UP = ("It was sent up, so whoever sent it up, whoever it went to, or whoever is over you says when it's no "
            "longer stuck. Marking it done still works.")
+JUST_SENT_UP = ("It was just sent up, so whoever sent it up, whoever it went to, or whoever is over you says when "
+                "it's no longer stuck. Open it again.")
+SENT_UP_STAYS = ("It was sent up, so it stays until whoever sent it up, whoever it went to, or whoever is over "
+                 "them takes it back.")
+
+
+def _now_sent_up(t: Dict[str, Any]) -> bool:
+    """Whether this task has been sent up since it was read (a guarded write
+    that changed nothing): read again."""
+    rows = sb_clients.sb_get_as_service(f"/tasks?id=eq.{_q(t['id'])}&business_id=eq.{_q(t['business_id'])}"
+                                        "&select=id,raised_at&limit=1")
+    return isinstance(rows, list) and bool(rows) and bool(rows[0].get("raised_at"))
 
 
 def change(ch: co.Church, me: Dict[str, Any], t: Dict[str, Any], body: Dict[str, Any],
@@ -587,7 +621,13 @@ def change(ch: co.Church, me: Dict[str, Any], t: Dict[str, Any], body: Dict[str,
             patch.update(status="todo", completed_at=None, checked_at=None)
     if not patch:
         return t
-    return _saved(sb_clients.sb_patch_as_service(_theirs(t, target), patch))
+    # The assignee's own say on stuck holds only while it hasn't been sent up:
+    # the database holds that too, so a send-up in between wins (409).
+    guard = "&raised_at=is.null" if "stuck" in body and not (over or up_side) else ""
+    got = sb_clients.sb_patch_as_service(_theirs(t, target) + guard, patch)
+    if guard and isinstance(got, list) and not got and _now_sent_up(t):
+        raise HTTPException(409, JUST_SENT_UP)
+    return _saved(got)
 
 
 @router.patch("/assignments/{task_id}")
@@ -600,6 +640,7 @@ def assignments_change(task_id: str, body: Dict[str, Any], session: UserSession 
     body = body or {}
     ch = _church_from_body(session, body)
     t = _task(ch, task_id)
+    _ready(ch)
     saved = change(ch, _me(session), t, body)
     return {"saved": _one(ch, saved)}
 
@@ -607,18 +648,29 @@ def assignments_change(task_id: str, body: Dict[str, Any], session: UserSession 
 @router.delete("/assignments/{task_id}")
 def assignments_take_back(task_id: str, business_id: str, session: UserSession = Depends(sb_clients.authed_request),
                           biz: Dict[str, Any] = Depends(business_access.business_access("member"))):
-    """Take one back: whoever handed it, or anyone over them. Answers with
-    what was taken back."""
+    """Take one back: whoever handed it, or anyone over them. Once it's been
+    sent up, only whoever sent it up, whoever it went to, or anyone over them
+    (never the assignee, even one who handed it to herself), so it never
+    vanishes from the list of whoever it went to. Answers with what was taken
+    back."""
     ch = _church(session, biz)
     me = _me(session)
     t = _task(ch, task_id)
     target = _target_of(t)
-    if str(t.get("handed_by") or "") != str(me["id"]):
+    guard = ""
+    if t.get("raised_at"):
+        up_side = str(me["id"]) in {str(t.get("raised_by") or ""), str(t.get("raised_to") or "")}
+        if not up_side and (co.same(me, target) or not co.is_over(ch, me, target)):
+            raise HTTPException(403, SENT_UP_STAYS)
+    elif str(t.get("handed_by") or "") == str(me["id"]):
+        guard = "&raised_at=is.null"      # whoever handed it, only while it hasn't been sent up
+    else:
         _allowed(ch, me, target, self_ok=False)
-    if not sb_clients.sb_delete_as_service(_theirs(t, target)):
+    if not sb_clients.sb_delete_as_service(_theirs(t, target) + guard):
         raise HTTPException(503, UNSAVED)
-    if _need(f"/tasks?id=eq.{_q(t['id'])}&business_id=eq.{_q(ch.b)}&select=id&limit=1"):
-        raise HTTPException(503, UNSAVED)
+    left = _need(f"/tasks?id=eq.{_q(t['id'])}&business_id=eq.{_q(ch.b)}&select=id,raised_at&limit=1")
+    if left:
+        raise HTTPException(409, SENT_UP_STAYS) if guard and left[0].get("raised_at") else HTTPException(503, UNSAVED)
     print(f"[church_assignments] {ch.b[:8]}: {me['id'][:8]} took back {t['id']} ({_plain(t.get('title'))[:60]!r})",
           flush=True)
     return {"taken_back": {"id": str(t["id"]), "title": _plain(t.get("title")), "for": co.key(target)}}
@@ -659,6 +711,7 @@ def assignments_raise(task_id: str, body: Dict[str, Any], session: UserSession =
     body = body or {}
     ch = _church_from_body(session, body)
     t = _task(ch, task_id)
+    _ready(ch)
     saved, to = raise_up(ch, _me(session), t, body.get("note"))
     return {"saved": _one(ch, saved), "to": to}
 
@@ -676,10 +729,12 @@ def assignments_start(body: Dict[str, Any], session: UserSession = Depends(sb_cl
     me = _me(session)
     target = co.parse_for(body.get("for"))
     _allowed(ch, me, target, self_ok=False)
+    _ready(ch)
     ctx = cw.Ctx(ch.business, _now())
     got = cs.start(ch, str(me["id"]), target, ctx.today)
-    logins = _names_by_login(ch, [me["id"]])
-    return {"for": co.key(target), "name": _name_of(ch, target), "of": got["of"], "skipped": got["skipped"],
+    logins = _after(lambda: _names_by_login(ch, [me["id"]]), {})
+    return {"for": co.key(target), "name": _after(lambda: _name_of(ch, target), ""), "of": got["of"],
+            "skipped": got["skipped"],
             "made": [item(r, ctx.today, logins, {}) for r in got["made"]]}
 
 
