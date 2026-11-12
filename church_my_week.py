@@ -827,6 +827,32 @@ def my_week_people(business_id: str, session: UserSession = Depends(sb_clients.a
     leaders = church_leader_tasks.hand_list(biz, session.user)
     if leaders is not None:
         out["leaders"] = leaders
+    return without_guarded(biz, str(session.user.id), out)
+
+
+def without_guarded(biz: Dict[str, Any], uid: str, out: Dict[str, Any]) -> Dict[str, Any]:
+    """Kevin, 2026-11-12: "admins can not give work to elders and pastors."
+    For any seat but the owner, while church assignments are open for the
+    church (church_over.church_open), the Hand to list offers no shepherd
+    and no senior (church_over.Church.guarded: by each role's own switch),
+    nor an office login whose person is one; the caller themselves stays
+    (a task to yourself). Who is guarded that can't be read is a 503, never
+    an unfiltered list. The database itself doesn't refuse such a task (the
+    office writes tasks straight to it): that's the known limit, said in
+    docs/CHURCH_ASSIGNMENTS.md."""
+    import church_over
+    if str(biz.get("owner_id") or "") == uid or not church_over.church_open(biz):
+        return out
+    ch = church_over.Church(biz)
+    guard = ch.guarded
+    if not guard:
+        return out
+    lp = ch.login_person
+    out = dict(out)
+    out["people"] = [p for p in out.get("people") or []
+                     if p.get("you") or p.get("role") == "owner" or lp.get(str(p.get("user_id"))) not in guard]
+    if "leaders" in out:
+        out["leaders"] = [x for x in out["leaders"] or [] if str(x.get("contact_id")) not in guard]
     return out
 
 

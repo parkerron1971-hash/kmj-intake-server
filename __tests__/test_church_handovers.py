@@ -85,6 +85,7 @@ def app(db):
     a = FastAPI()
     a.include_router(cho.router)
     a.include_router(cas.router)
+    a.include_router(mw.router)
     who = {"id": None, "email": None}
     a.dependency_overrides[sb_clients.authed_request] = (
         lambda: SimpleNamespace(user=SimpleNamespace(id=who["id"], email=who["email"], user_metadata={})))
@@ -200,6 +201,40 @@ def test_an_admin_cant_hand_an_elder_an_assignment_but_can_send_him_what_he_need
     r = app.post("/church/assignments", json={"business_id": LOVE_CITY, "for": f"person:{db.who[LOVE_CITY]['marcus']}",
                                               "title": "Call the lodge"})
     assert r.status_code == 200, "he answers to her person on the map"
+
+
+def test_the_hand_to_list_offers_no_pastor_or_elder_to_anyone_but_the_owner(app, db, monkeypatch):
+    """The office writes tasks straight to the database, so the list is
+    where the rule holds (the database itself doesn't refuse: the known
+    limit)."""
+    monkeypatch.setenv("CHURCH_LEADER_TASKS", "on")
+
+    def hand_to(handle):
+        as_(app, LOVE_CITY, handle)
+        r = app.get(f"/church/my-week/people?business_id={LOVE_CITY}")
+        assert r.status_code == 200, r.text
+        got = r.json()
+        return ({db.label.get(p["user_id"], p["name"]) for p in got["people"]},
+                {db.label[x["contact_id"]] for x in got.get("leaders") or []})
+    logins, leaders_ = hand_to("minnie")
+    assert "Jessica" not in logins and {"Naiya", "owner", "Minnie"} <= logins
+    assert not {"Andre", "Marcus", "Tanya"} & leaders_ and {"Yolanda", "Ruth"} <= leaders_
+    logins, leaders_ = hand_to("jessica")
+    assert "Jessica" in logins, "a task to yourself stays"
+    logins, leaders_ = hand_to("owner")
+    assert "Jessica" in logins and {"Andre", "Marcus", "Tanya"} <= leaders_
+    monkeypatch.setenv("CHURCH_ASSIGNMENTS", "off")
+    logins, leaders_ = hand_to("minnie")
+    assert "Jessica" in logins and "Andre" in leaders_, "closed, the list is as it was"
+
+
+def test_a_hand_to_list_whose_guard_cant_be_read_is_a_503_never_unfiltered(app, db, monkeypatch):
+    monkeypatch.setenv("CHURCH_LEADER_TASKS", "on")
+    real = db.get
+    monkeypatch.setattr(sb_clients, "sb_get_as_service",
+                        lambda path, **kw: None if path.startswith("/church_shepherd_settings") else real(path, **kw))
+    as_(app, LOVE_CITY, "minnie")
+    assert app.get(f"/church/my-week/people?business_id={LOVE_CITY}").status_code == 503
 
 
 # ─── What a hand-over says ────────────────────────────────────────────

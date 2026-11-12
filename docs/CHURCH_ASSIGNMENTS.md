@@ -423,6 +423,16 @@ No office standing but the owner's is over a **shepherd** or a **senior**:
   elder) answers to Jessica on the map, so her login is over him through her person, not her
   seat. An Admin whose person an elder answers to is over that elder the same way.
 - The owner is over everyone as before. A leader who doesn't shepherd is as before.
+- **The old Hand to list** (Tasks, `GET /church/my-week/people`: the office logins and, with My
+  tasks for leaders, the church's leaders) follows it too, while assignments are open for the
+  church: for any seat but the owner it offers no shepherd and no senior, nor an office login
+  whose person is one (`church_my_week.without_guarded`); a task to yourself stays. Who is guarded
+  that can't be read is a 503, never an unfiltered list.
+- **Known limit:** the office writes those tasks straight to the database (`tasks`, through the
+  browser's own session and RLS), and the database doesn't refuse one for a pastor or an elder.
+  A trigger would have to repeat who shepherds in SQL (each role's switch, the legacy and job
+  fallbacks, the Ministers setting, the seniors and the owner's identity), which isn't simple
+  enough to be safe, so the rule holds where the list is offered and in every server route.
 
 `Church.shepherds`, `Church.guarded` (shepherds | seniors); `_under` leaves `guarded` out of the
 office part and the everyone part, then walks the map from the login's person for an Admin or a
