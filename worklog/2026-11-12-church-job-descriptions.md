@@ -1,0 +1,21 @@
+---
+title: Church job descriptions — Chief knows everyone's job and whose job new work is
+date: 2026-11-12
+agent: Claude Code (Claude Opus 5.5)
+asked: "I need to make sure chief is able to learn job descriptions for everyone ... when a job is created and the leader is unaware, Chief should know Jobs of each person"; then "give more depth to description, define how it looks on Sundays as well"
+status: in progress
+prs: []
+migrations: [supabase/APPLY-2026-11-12-church-job-descriptions.sql (NOT applied; Kevin applies it by hand)]
+left_undone: ["Apply the migration (until then every job route is a 503 'isn't ready' and Chief's five verbs say so)", "The screen (roster, one person's job, edit, draft) waits for Kevin's yes on a mock; no frontend in this PR", "The live Chief prompt and turn block were not exercised against the model: only the handlers, the tool loop dispatch and the wiring are tested"]
+decisions: ["Spec is docs/CHURCH_JOB_DESCRIPTIONS.md (committed here, updated to the code and to Kevin's 8,000-character / Sunday ask)", "Two server-only tables, the church_duty_days pattern; CHECKs and foreign keys past businesses added by name, NOT VALID; user_id has no foreign key", "A login's person is church_over.Church.login_person (seat_person's rule read once; the owner's by sign-in email); a login with no person is keyed by user_id and its row moves to the person on the next write", "Write: the owner or someone over them (church_over.is_over), so no office seat writes a pastor's or an elder's; nobody writes their own but the owner", "Read one: the person, anyone over them, Manager and up; read everyone (roster, whose): Manager and up; a Member only its own and those it's over; a Viewer nothing", "Pay words refused in the title and description; budgets fine", "Clearing is explicit (clear: true), never an empty description; a save without a title keeps the written one", "Roster and whose carry the title and about the first paragraph (300 characters) plus the matched lines; only job_of / GET /church/jobs/person (and a write's own answer) carry the whole description", "The draft is four plain sections: Summary, What they own, Their week (church_my_week placement with picked days), On Sunday (and a line that the church fills in the times)", "Someone else's written words in a read raise the turn's taint (the chief_church_assignments sink), so later writes that turn hold; system lines and the asker's own words don't", "people_under and one_on_one get the system-held title and written yes/no, never the written title, so those reads (which come before give_assignment in the same turn) don't start holding writes", "whose ranks everyone; a department's name is in its leader's and overseer's words, so the spec's department step is the ranking itself; nobody: the oversee_lanes holder, else the owner", "Undo puts back only the last change, with the earlier writer's name; action_inverse carries the change id so an old 'undo that' can't undo a later change", "Switched with CHURCH_ASSIGNMENTS"]
+related: [2026-11-12-chief-assignments.md, 2026-11-12-church-assignments.md, 2026-11-12-church-handovers.md]
+---
+Built `church_job_descriptions.py` (job, roster, whose, draft, set_description, undo; six routes under
+/church/jobs, mounted before public_site_router) and `chief_church_jobs.py` (whose_job, job_of,
+draft_job_description as mid-turn reads; set_job_description and undo_job_description as action tags),
+wired into chief_of_staff, action_registry, action_inverse, chief_areas, chief_tool_loop and the prompt's
+church section; people_under and one_on_one say each person's job title and whether a description is
+written. The migration is NOT applied. Tests: `__tests__/test_chief_church_jobs.py`,
+`__tests__/test_church_job_descriptions.py`, and the PGlite run `__tests__/church_job_descriptions_db.mjs`
+(added to CI). Checked before building: no earlier job-description work in this repo's worklog; the frontend
+checkout here isn't a git repo, so its worklog wasn't read.

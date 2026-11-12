@@ -97,7 +97,10 @@ VERBS: Dict[str, Tuple[str, ...]] = {
         # a pastor or an elder, a money job's day only the owner's or an admin's) is the engine's, never an
         # area's; a lane never widens it.
         "people_under", "assignments_of", "one_on_one", "give_assignment", "start_first_assignment",
-        "mark_assignment", "mark_stuck", "send_up_assignment", "set_my_day", "send_handover")},
+        "mark_assignment", "mark_stuck", "send_up_assignment", "set_my_day", "send_handover",
+        # Church job descriptions (chief_church_jobs): whose job something is, someone's job, a draft, and
+        # writing one. Who may read or write whose is church_over's, never an area's.
+        "whose_job", "job_of", "draft_job_description", "set_job_description", "undo_job_description")},
     # People & care: the church's people, their care and their follow-up.
     **{v: PEOPLE for v in (
         "create_contact", "update_contact", "update_contact_status", "update_contact_health", "delete_contact",

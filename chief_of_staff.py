@@ -261,6 +261,7 @@ from giving_deposits import (handle_giving_deposits, handle_match_giving_deposit
 from chief_bills import handle_bills, handle_add_bill, handle_remove_bill
 from chief_duties import handle_list_duties, handle_move_duty, handle_undo_duty
 import chief_church_assignments as _church_assign  # church assignments: whoever is over people (PR D)
+import chief_church_jobs as _church_jobs  # church job descriptions: everyone's job, and whose job new work is
 from chief_move_in import handle_move_in_status, handle_fill_move_in, handle_undo_move_in_fill
 from chief_map import (handle_list_map, handle_change_map, handle_draft_map, handle_undo_map_change,
     handle_apply_map_change, handle_discard_map_change, handle_search_templates, handle_adopt_template)
@@ -411,6 +412,7 @@ _ACTION_PHRASES = {
     "undo_move_in_fill": "putting that item back",
     "list_duties": "reading who does what",
     **_church_assign.PROGRESS,
+    **_church_jobs.PROGRESS,
     "move_duty": "moving the duty",
     "undo_duty": "putting the duty back",
     "list_map": "reading the leaders map",
@@ -12252,6 +12254,7 @@ ACTION_HANDLERS = {
     "undo_move_in_fill":     handle_undo_move_in_fill,
     "list_duties":           handle_list_duties,
     **_church_assign.HANDLERS,
+    **_church_jobs.HANDLERS,
     "move_duty":             handle_move_duty,
     "undo_duty":             handle_undo_duty,
     "list_map":              handle_list_map,

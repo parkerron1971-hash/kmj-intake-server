@@ -556,6 +556,24 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
                              "puts it back"), "chief_only": True},
     "send_handover": {**_w("C", "sends one of the church's leaders something for their area "
                                 "(church_handovers.send): an email within the hour, no recall"), "chief_only": True},
+    # Church job descriptions (chief_church_jobs): everyone's job, in the church's own words, and whose job new
+    # work is. Each needs the signed-in person (who may read or write whose is church_over's), so Chief's alone.
+    "whose_job": {**_r("reads every person's job at a church (written job descriptions and titles, duties, "
+                       "departments, roles) ranked against new work: whose it is and who is over them; staff and "
+                       "leaders by name", sensitive=True), "chief_only": True},
+    "job_of": {**_r("reads one person's whole job at a church: title, written job description and who wrote it, "
+                    "duties, departments, roles, who they answer to and who is over them", sensitive=True),
+               "chief_only": True},
+    "draft_job_description": {**_r("drafts a starting job description for one person from what the system already "
+                                   "holds (duties, departments, roles); saves nothing", sensitive=True),
+                              "chief_only": True},
+    "set_job_description": {**_w("A", "saves (or clears) one person's written job description through "
+                                      "church_job_descriptions.set_description (the owner or someone over them; never "
+                                      "pay); logged, and undo_job_description puts the last change back"),
+                            "chief_only": True},
+    "undo_job_description": {**_w("A", "puts the last change to one person's job description back from its log "
+                                       "(the owner or someone over them); only the last change"),
+                             "chief_only": True},
     "list_duties": {**_r("reads who does each of a church's office duties, by lane: following the lanes or moved "
                          "to named logins, which need someone, and the office logins by name; no money amounts. "
                          "Staff names, read for the signed-in person, so never an outside agent's",

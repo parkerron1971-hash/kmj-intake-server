@@ -237,6 +237,7 @@ jobs:
           node __tests__/task_handed_by_db.mjs
           node __tests__/church_duties_db.mjs
           node __tests__/church_assignments_db.mjs
+          node __tests__/church_job_descriptions_db.mjs
           node __tests__/serve_team_owner_db.mjs
           node __tests__/church_map_db.mjs
           node __tests__/church_map_step2_db.mjs
