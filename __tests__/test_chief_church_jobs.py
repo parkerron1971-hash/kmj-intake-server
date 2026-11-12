@@ -88,7 +88,7 @@ def signed_in(uid):
 
 
 def uid(db, biz, handle):
-    if handle in (MEMBER, VIEWER):
+    if "-" in handle:                       # a login made in the test, by its id
         return handle
     return c3.church(db, biz)["owner_id"] if handle == "owner" else db.who[biz][handle + "@"]
 
@@ -526,3 +526,19 @@ def test_the_owner_and_an_admin_have_jobs_too(db):
     minnie = ok(run(db, LOVE_CITY, "jessica", "job_of", who="Minnie"))
     assert "Duties (4): The Sunday deposit (Sundays and Mondays); The books" in minnie, "money duties are her job"
     assert "You can't write their job description" in minnie, "an Admin is the owner's or another Admin's"
+
+
+def test_a_member_seat_with_a_person_finds_the_row_its_login_kept(db):
+    member = "1a000000-0000-4000-8000-000000000666"
+    seat(db, member, "member", "gloria@lovecity.org", name="Gloria Hunt")       # Gloria's own email: her person
+    db.t["church_job_descriptions"].append({
+        "id": "9a000000-0000-4000-8000-000000000001", "business_id": LOVE_CITY, "contact_id": None,
+        "user_id": member, "title": None, "description": "Leads Sisters in the City.", "source": "said",
+        "written_by": c3.LC_OWNER, "written_at": "2026-11-12T12:00:00+00:00", "updated_by": c3.LC_OWNER,
+        "updated_at": "2026-11-12T12:00:00+00:00"})
+    said = ok(run(db, LOVE_CITY, member, "job_of", who="me"))
+    assert said.startswith("Gloria Hunt: ") and "Leads Sisters in the City." in said
+    ok(run(db, LOVE_CITY, "owner", "set_job_description", who="Gloria Hunt", description="Leads Sisters in the City "
+                                                                                       "and the women's retreat."))
+    mine = [r for r in rows(db) if r.get("user_id") == member or r.get("contact_id") == db.who[LOVE_CITY]["gloria"]]
+    assert len(mine) == 1 and mine[0]["contact_id"] == db.who[LOVE_CITY]["gloria"], "one row, moved to her person"

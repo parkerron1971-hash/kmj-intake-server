@@ -326,7 +326,9 @@ class Jobs:
         return None
 
     def login_of(self, cid: Optional[str]) -> Optional[str]:
-        """The login a person is: their office login, or the owner's."""
+        """The login a person is: their office login, the owner's, else any
+        seat whose person they are (a Member seat: still their person to
+        church_over, but its row may be kept by the login)."""
         ch = self.ch
         if not cid:
             return None
@@ -334,7 +336,7 @@ class Jobs:
             return ch.person_login[cid]
         if ch.owner and cid == ch.owner_person:
             return ch.owner
-        return None
+        return next((u for u, c in sorted(ch.login_person.items()) if c == cid and u in ch.seats), None)
 
     def entry(self, cid: Optional[str], uid: Optional[str], *, full: bool = True) -> Dict[str, Any]:
         """One person, or one login with no person, as everything here takes
