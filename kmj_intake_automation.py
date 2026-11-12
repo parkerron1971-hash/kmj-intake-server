@@ -437,6 +437,11 @@ app.include_router(church_my_week_router)
 # week in counts, for whoever is over the lanes (2026-11-02; CHURCH_TEAM_ROLLUP).
 from church_team_week import router as church_team_week_router
 app.include_router(church_team_week_router)
+# Church assignments (/church/assignments*, /church/duty-days): whoever is over
+# people starts them, hands them work and sees it move; each login picks the
+# days its weekly jobs fall on (2026-11-12; CHURCH_ASSIGNMENTS off | owner | on).
+from church_assignments import router as church_assignments_router
+app.include_router(church_assignments_router)
 # Sermons from ChurchSavvy, for the team's Media part (no seat needed).
 from worship_sermons import router as worship_sermons_router
 app.include_router(worship_sermons_router)
@@ -1935,6 +1940,16 @@ async def startup():
                           id="church_team_rollup")
     except Exception as e:
         print(f"   [warn] team roll-up not scheduled: {e}")
+    # Church assignments (2026-11-12): a stuck item sent up is told once to
+    # whoever it went to, and an open item whose check now passes is ticked
+    # off (church_assignments.sweep_tick; CHURCH_ASSIGNMENTS, read here on the
+    # worker too).
+    try:
+        import church_assignments as _cas
+        scheduler.add_job(g("church_assignments_sweep", _cas.sweep_tick), "interval", hours=1,
+                          id="church_assignments_sweep")
+    except Exception as e:
+        print(f"   [warn] assignments sweep not scheduled: {e}")
     # Homework files nothing points at any more (a deleted homework, student
     # or class; an attach that never landed) leave the private bucket once a
     # day (academy_work.sweep_tick).
