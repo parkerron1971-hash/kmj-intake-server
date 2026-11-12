@@ -33,7 +33,9 @@ already lives somewhere; this module only gathers it, read-only:
     NEW GUESTS .. church_reads.first_time_guests: a first visit in the last
                   30 days that nobody has reached since (a check-in is not
                   reaching out)
-    BIRTHDAYS ... contacts.birthdate, this week on the church's clock
+    BIRTHDAYS ... contacts.birthdate, this week on the church's clock. The
+                  week's birthdays can be asked for alone (GET
+                  /church/roll/birthdays: a church's Home, for the pastor)
     BAPTISMS .... planned baptisms in the church register, today or later
 
 Care and giving stay with the logins that hold them: the roll says only
@@ -594,6 +596,63 @@ def week(ctx: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+BIRTHDAYS_SHOWN = 60            # more than a week holds in a church this is built for
+
+
+def birthdays(biz: Dict[str, Any], *, now: Optional[datetime] = None) -> Dict[str, Any]:
+    """This week's birthdays alone, by the roll's own rule (week(): today and
+    the six days after on the church's clock, nobody inactive, a child's day
+    from its child record when its own record has none), without reading the
+    whole roll: the people with a birthdate, and the children's records.
+    A church's Home asks this for the pastor (the band names who to reach),
+    so it must say what People says. Raises 503 when a read failed: a short
+    read is never fewer birthdays."""
+    import church_shepherd_signals as sig
+    now = now or _now()
+    b = str(biz["id"])
+    rule = sig.sunday_rule(biz)
+    if rule is None:
+        raise HTTPException(503, "Birthdays couldn't be read just now. Try again.")
+    today = now.astimezone(rule[0]).date()
+    order = [today + timedelta(days=i) for i in range(7)]
+    cols = "id,name,status,birthdate,last_name:metadata->>last_name"
+    people = {str(c["id"]): c for c in _all(f"/contacts?business_id=eq.{_q(b)}&birthdate=not.is.null&select={cols}")
+              if c.get("id")}
+    # A child whose own record has no birthdate takes the child record's.
+    homes = {str(h["id"]) for h in _all(f"/households?business_id=eq.{_q(b)}&select=id") if h.get("id")}
+    kids = _all(f"/children?business_id=eq.{_q(b)}&select=id,household_id,birthdate,active,contact_id") if homes else []
+    from_child: Dict[str, Any] = {}
+    for k in kids:
+        cid = str(k.get("contact_id") or "")
+        if k.get("active") is False or str(k.get("household_id") or "") not in homes or not cid:
+            continue
+        if cid not in people:
+            from_child[cid] = k.get("birthdate")
+    for ids in _chunks(from_child):
+        for c in _need(f"/contacts?business_id=eq.{_q(b)}&id=in.({','.join(_q(i) for i in ids)})"
+                       f"&select={cols}&limit={PAGE}"):
+            if c.get("id") and not c.get("birthdate"):
+                people[str(c["id"])] = {**c, "birthdate": from_child.get(str(c["id"]))}
+    found = []
+    for cid, c in people.items():
+        name = _plain(c.get("name"))
+        born = _day(c.get("birthdate"))
+        if not name or not born or _status(c) == "inactive":
+            continue
+        on = next((d for d in order if d == _birthday_on(born, d.year)), None)
+        if not on:
+            continue
+        age = _age(born, today)
+        found.append({"id": cid, "name": name, "day": on.isoformat(), "minor": age is not None and age < 18,
+                      "_last": last_name(name, _meta(c, "last_name")).lower()})
+    found.sort(key=lambda p: (p["day"], p["_last"]))
+    return {
+        "today": today.isoformat(), "from": today.isoformat(), "to": order[-1].isoformat(),
+        "n": len(found),
+        "people": [{k: v for k, v in p.items() if not k.startswith("_")} for p in found[:BIRTHDAYS_SHOWN]],
+    }
+
+
 def roll_view(ctx: Dict[str, Any], *, can_care: bool, can_give: bool) -> Dict[str, Any]:
     public = [{k: v for k, v in p.items() if not k.startswith("_")} for p in ctx["people"]]
     return {
@@ -878,6 +937,16 @@ def roll(business_id: str = Query(...),
     b, user, role = _gate(biz, session)
     ctx = _cached(biz, fresh=True)
     return roll_view(ctx, can_care=_may_care(b, user), can_give=_may_give(b, user, role))
+
+
+@router.get("/birthdays")
+def week_birthdays(business_id: str = Query(...),
+                   biz: Dict[str, Any] = Depends(business_access(MIN_ROLE)),
+                   session: UserSession = Depends(sb_clients.authed_request)):
+    """This week's birthdays, by name and day: the roll's own count, without
+    the roll. The same gate as the roll."""
+    _gate(biz, session)
+    return birthdays(biz)
 
 
 @router.get("/person/{contact_id}")
