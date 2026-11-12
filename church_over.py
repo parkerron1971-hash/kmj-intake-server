@@ -269,6 +269,15 @@ class Church:
         return sorted(out, key=lambda k: (k != cd.EXEC, cd.LANE_KEYS.index(k) if k in cd.LANE_KEYS else 99))
 
     @property
+    def tz(self):
+        """The church's clock: the one every page that judges its week reads
+        (church_work_checks.church_zone); a 503 when it can't be read."""
+        def load():
+            import church_work_checks as cw
+            return cw.church_zone(self.business)
+        return self._got("tz", load)
+
+    @property
     def moved(self) -> Dict[str, List[str]]:
         import church_duties as cd
         return self._got("moved", lambda: cd._moved(self.b))

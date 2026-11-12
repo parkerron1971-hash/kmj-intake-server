@@ -292,11 +292,20 @@ thing):
 | `serve_schedule` (Wed) | every place on the volunteers' Serve teams (`serve_teams` owner volunteers, the team's group active, its active positions, each `needed` times) has a `yes` (`serve_assignments`) for every service planned this week's Sunday. Nothing planned that Sunday, or no volunteer places: nothing to count, it claims nothing. ChurchSavvy's teams are `production_schedule`'s, never counted here | the calendar's Sunday plans, `serve_teams`, `groups`, `serve_positions`, `serve_assignments` |
 | `calendar` (Fri) | next week (the Monday to Sunday after this one) has at least one service or event on the calendar (the Sunday plans, or a Services & Events occasion), and every occasion in it names its place. Nothing next week: not done | `worship_services` and Services & Events, read where the leaders note reads them (the same reader as `calendar_8_weeks`) |
 | `sermons` (Mon) | last Sunday (the day before this week's Monday) has a published sermon preached that day; its notes aren't counted | `sermons` (the same reader as `sermons_6`) |
-| `attendance` (Sun) | this week's Sunday has a count recorded that day on the church's clock: a named check-in (`attendance.checked_in_at`) or a headcount above zero (`attendance_headcounts.updated_at`). Before that Sunday it is not yet, and nothing is read. A Sunday is a week's last day, so this job is never late within its week | `attendance`, `attendance_headcounts`, one row each at most |
-| `shepherding` (Thu) | every family drifting now (an open drift signal, `church_shepherd_signals`' own rule) has a touch logged since this week's Monday (a call, visit, text or seen at church: `church_shepherd_touches`). No family drifting: done. The groups who missed weeks aren't counted | `church_shepherd_signals`, `church_shepherd_touches` |
+| `attendance` (Sun) | this week's Sunday service has a count: a named check-in (`attendance`) or a headcount above zero (`attendance_headcounts`) **for that Sunday's service**, dated by the service's own entry (`module_entries`: its `_checkin_day`, else an occasion's `date`; a check-in with no dated entry, the day it landed; a headcount with no dated entry counts nowhere; a class night is no service). So correcting last Sunday's count on this Sunday never marks this Sunday done (#1802 review). Before that Sunday it is not yet, and nothing is read. A Sunday is a week's last day, so this job is never late within its week | `attendance` and `attendance_headcounts` since last week's Sunday, and their entries |
+| `shepherding` (Thu) | every family drifting **by the end of the job's day** (a drift signal made by then, `church_shepherd_signals`' own rule, still open) has a touch logged since that week's Monday (a call, visit, text or seen at church: `church_shepherd_touches`). A family that starts drifting after the job's day is the next week's job (#1802 review). No family drifting: done. The groups who missed weeks aren't counted | `church_shepherd_signals` open or closed since last week's Monday, `church_shepherd_touches` since then |
 
 The three it already knew are unchanged: the leaders note sent this week, last month's report sent,
-a text announcement that reached someone since Monday.
+a text announcement that reached someone since Monday (now read through the shared `texts` reader).
+
+**One clock** (#1802 review): every place that judges a church's week (My week's rhythm and its tasks'
+days, the team page, the Monday roll-up, the one-on-one, the checks) reads
+`church_work_checks.church_zone`: `church_leader_tasks.zone`, the business's availability zone, else
+its owner's profile, else the platform's. One that can't be read is a 503 everywhere (My week, the
+team page, the one-on-one, the board), never a quiet UTC; the roll-up and the sweep skip the hour.
+My week used `chief_assignments._tz_for` (availability, else UTC) before: at a church whose clock is
+on the owner's profile, Monday 9 PM in Detroit was already Tuesday on My week. The tests now give each
+church its clock as data and patch no clock reader, so two that disagree can't hide.
 
 **done / not yet / late** (`church_my_week.job_state`): done when its test passes; otherwise late
 once the job's day is over (the day the login picked, `church_duty_days`, else the catalog's last
@@ -308,14 +317,33 @@ Where it shows:
 - My week's rhythm: each judged item has `done` (as before) and, where the switch is open, `state`,
   `state_text` and `detail` (the test's words).
 - The team page (`church_team_week.team` → `judge_week`): after every row is read, one `Ctx` judges
-  every login's jobs, so each table is read once for the church however many logins there are. Each
-  `this_week` entry a test judged gets `state`, `state_text`, `detail` and `due`; each row gets
-  `this_week_counts`; the page's `counts` get `late_jobs`. `this_week_text` (the days only) stays as
-  it was.
-- The Monday roll-up: each login's lines say "Late on the week: …" when a job is late, and "This
-  week:" carries each job's state ("Mon: First-time guests and welcome calls (late) · Wed: The weekly
-  text and email (not yet)"). On a Monday morning nearly everything this week is not yet: last
-  week's results aren't in the roll-up (not built; see the work log).
+  every login's jobs, so each table is read once for the church however many logins there are (a
+  test holds a team of five and of nine to the same reads). Each `this_week` entry a test judged gets
+  `state`, `state_text`, `detail` and `due`; each row gets `this_week_counts` and `last_week`; the
+  page's `counts` get `late_jobs`. `this_week_text` (the days only) stays as it was.
+- **The keeper wall** (#1802 review): for an overseer who doesn't work People & care (`care` False),
+  a judged job in People & care, Kids & youth or Groups & classes keeps its done / not yet / late
+  (it is the login's own work) and never its `detail` (a count of people in follow-up, of drifting
+  families). The roll-up cuts each holder's copy the same way (`without_care`). The one-on-one cuts
+  its jobs to the asker's own view (`church_team_week.view_of`), as See as cuts a rhythm
+  (`rhythm_within`): a job outside it isn't there at all; their assignments are their own, whatever
+  area.
+- The Monday roll-up: each login's lines say "Late on the week: …" when a job is late, "This week:"
+  carries each job's state ("Mon: First-time guests and welcome calls (late) · Wed: The weekly text
+  and email (not yet)"), and **"Last week: 6 of 7 done; missed: The church calendar."**
+
+**Last week** (`church_my_week.last_week`; Claude's decision in the #1802 review, not Kevin's, since a
+Monday morning can never say "late" about this week): each job that fell last week and that a check
+judges, judged the same way at the end of its own day (the day the login picks now, else the
+catalog's). Judged as of then: the weekly text (one that reached someone from that Monday to the end
+of its day), shepherding (signals made by then, touches by then), attendance (check-ins by then; a
+headcount keeps no first-entered time, so one entered later still counts), the monthly report (sent
+by then). Judged as things stand now, since nothing keeps their history: first-time guests (those in
+follow-up by the day who have no one now), who serves when (the answers now), the calendar (the next
+week as it is now), sermon up. The leaders note: done when its last record is that week's, missed
+when it's older; a newer one replaced it, so it's said as couldn't be read. A read that failed is
+said as couldn't be read, never as missed; a job with nothing to count isn't in it. It is on the team
+page too, on the same reads (`last_week` on each row: `{done, of, missed, unread, text}`).
 
 ```json
 "this_week": [
@@ -325,8 +353,11 @@ Where it shows:
    "due": "2026-11-09"},
   {"duty": "care_visits", "label": "Care and visits", "days": ["Tue"], "text": "Tue: Care and visits"}
 ],
-"this_week_counts": {"done": 1, "not_yet": 0, "late": 1}
+"this_week_counts": {"done": 1, "not_yet": 0, "late": 1},
+"last_week": {"done": 1, "of": 2, "missed": ["First-time guests and welcome calls"], "unread": [],
+              "text": "Last week: 1 of 2 done; missed: First-time guests and welcome calls"}
 ```
+`last_week` is absent when nothing of theirs was judged last week (or the switch is closed).
 and on the page: `"counts": {"logins": 5, "late_tasks": 0, "unread": 0, "late_jobs": 8}`.
 `state` is one of `done`, `not_yet`, `late`; an entry without it is named by its day only.
 
@@ -353,8 +384,9 @@ records nothing: no check ticks anything off here.
 
 `finished`: done in the last 7 days, newest first. `stuck`: longest first; `days` since it was
 marked stuck. `late` and `next` leave stuck ones out; `next` is the next five by due date (no date
-last). `jobs`: a login's jobs due this week (empty for a person, who holds no office duty). The
-`Late:` line only when something is late; `This week's jobs:` only when there are jobs.
+last). `jobs`: a login's jobs due this week in the asker's own view (empty for a person, who holds
+no office duty; empty when none of theirs lies in the asker's areas). The `Late:` line only when
+something is late; `This week's jobs:` only when there are jobs.
 
 ## Days
 

@@ -6,8 +6,8 @@ asked: 'lets build what is missing (PR B of docs/CHURCH_ASSIGNMENTS.md, started 
 status: in progress
 prs: ["kmj-intake-server#1802"]
 migrations: []
-left_undone: ["The Monday roll-up says this week's states; on a Monday morning nearly everything is not yet. Last week's results in the roll-up are not built", "The one-on-one's frontend (solutionist-studio) isn't built", "PR C (the member app's Lead tab, after Kevin sees the mock) and PR D (the Chief verbs)", "Kevin hasn't been asked about the rule Claude decided in the #1801 review: senior-job and pastor's-yes holders are under the owner only"]
-decisions: ["Six weekly jobs judged, each test written out in docs/CHURCH_ASSIGNMENTS.md (PR B): first_guests, serve_schedule, calendar, sermons, attendance, shepherding", "done / not yet / late by the login's picked day else the catalog's; a read that fails, a job no test judges, or nothing to count claims nothing", "Judged only where CHURCH_ASSIGNMENTS is open for the church; closed, My week and the team page read nothing new", "The team page judges every login on one church_work_checks.Ctx after the rows are read: each table once for the church", "The one-on-one reads and records nothing: no check ticks anything off there", "Wording: the 'senior holders are under the owner only' rule is said to be Claude's decision (2026-11-12), not Kevin's, in church_over, the doc and the work logs"]
+left_undone: ["Last week is judged as things stand now for four jobs (first-time guests, who serves when, the calendar, sermon up): nothing keeps their history", "The one-on-one's frontend (solutionist-studio) isn't built", "PR C (the member app's Lead tab, after Kevin sees the mock) and PR D (the Chief verbs)", "Kevin hasn't been asked about the rule Claude decided in the #1801 review: senior-job and pastor's-yes holders are under the owner only"]
+decisions: ["Six weekly jobs judged, each test written out in docs/CHURCH_ASSIGNMENTS.md (PR B): first_guests, serve_schedule, calendar, sermons, attendance, shepherding", "done / not yet / late by the login's picked day else the catalog's; a read that fails, a job no test judges, or nothing to count claims nothing", "Judged only where CHURCH_ASSIGNMENTS is open for the church; closed, My week and the team page read nothing new", "The team page judges every login on one church_work_checks.Ctx after the rows are read: each table once for the church", "The one-on-one reads and records nothing: no check ticks anything off there", "Wording: the 'senior holders are under the owner only' rule is said to be Claude's decision (2026-11-12), not Kevin's, in church_over, the doc and the work logs", "Review round 1 (#1802): the keeper wall holds on the team page, the roll-up and the one-on-one (a walled job keeps its state, never its words; the one-on-one shows only the asker's own areas)", "One clock for every page that judges the week (church_work_checks.church_zone: availability, else the owner's profile); a clock that can't be read is a 503 everywhere; the test fixtures give the clock as data and patch no reader", "Attendance counts a service by its own day (its entry), never by when a headcount was edited; shepherding is cut at the job's day", "Last week (Claude's decision in the review, not Kevin's): the roll-up and each team page row say last week's result, judged at the end of each job's day; unread is never missed"]
 related: [2026-11-12-church-assignments.md, 2026-11-11-church-team-week-together.md]
 ---
 PR B of `docs/CHURCH_ASSIGNMENTS.md`, after PR A (#1801) merged and its frontend (solutionist-studio
@@ -19,6 +19,11 @@ Built: `church_work_checks` readers shared between the start-up checks and the w
 `church_team_week.judge_week` (the team page's `this_week` entries, `this_week_counts`, the page's
 `late_jobs`) and the roll-up's "Late on the week" and "This week" lines with each state; and
 `GET /church/assignments/one-on-one`.
+
+Review round 1 on #1802: the keeper wall (a walled job's words reached an overseer outside People
+& care, and the one-on-one had no area cut), one clock for every page that judges the week,
+attendance by the service's own day, shepherding cut at the job's day, and last week's result in
+the roll-up and on each team page row.
 
 Also corrected: the rule that senior holders are under the owner only was written as Kevin's call
 in #1801. It was Claude's decision in that review, and Kevin hasn't been asked yet. church_over, the

@@ -275,6 +275,12 @@ def test_the_one_on_one_says_finished_stuck_late_next_and_the_weeks_jobs(app, db
     task(db, rooms["id"])["stuck_at"] = at(date(2026, 11, 6))                    # stuck since last Friday
     as_(app, LOVE_CITY, "jessica")
     app.post(f"/church/assignments/{rooms['id']}/raise", json={"business_id": LOVE_CITY})
+    # Jessica's own view is People & care (the fixture's guess from her role):
+    # Naiya's jobs are the office's, so none of them crosses to her one-on-one.
+    mine = one_on_one(app, login(db, LOVE_CITY, "naiya")).json()
+    assert mine["jobs"] == [] and not [x for x in mine["lines"] if x.startswith("This week's jobs")]
+    assert mine["stuck"] and mine["late"], "her assignments are her own, whatever area"
+    as_(app, LOVE_CITY, "owner")                                  # the whole church
     writes = len(db.writes)
     r = one_on_one(app, login(db, LOVE_CITY, "naiya"))
     assert r.status_code == 200, r.text
@@ -322,3 +328,176 @@ def test_the_one_on_one_is_gated_like_every_assignment_route(app, db, monkeypatc
     assert app.get(f"/church/assignments/one-on-one?business_id={LOVE_CITY}").status_code == 422
     monkeypatch.setenv("CHURCH_ASSIGNMENTS", "off")
     assert one_on_one(app, login(db, LOVE_CITY, "naiya")).status_code == 404
+
+
+# ─── The #1802 review ─────────────────────────────────────────────────
+
+def _waiting(db, fid, created):
+    db.t["church_follow_ups"].append({"id": fid, "business_id": LOVE_CITY, "status": "open",
+                                      "leader_contact_id": None, "created_at": created})
+
+
+def test_the_keeper_wall_keeps_a_walled_jobs_state_and_never_its_words(db):
+    _waiting(db, "fu-1", at(MONDAY, 13))
+    page = ctw.team(c3.church(db, LOVE_CITY), NOW, care=False)
+    tiara = next(r for r in page["team"] if r["user_id"] == uid(db, LOVE_CITY, "tiara"))
+    jobs = {w["duty"]: w for w in tiara["this_week"]}
+    assert jobs["first_guests"]["state"] == "late" and "detail" not in jobs["first_guests"]
+    assert jobs["shepherding"]["state"] == "done" and "detail" not in jobs["shepherding"]
+    assert "follow_ups" not in tiara and "in follow-up" not in str(page)
+    naiya = next(r for r in page["team"] if r["user_id"] == uid(db, LOVE_CITY, "naiya"))
+    assert next(w for w in naiya["this_week"] if w["duty"] == "calendar").get("detail"), "the office's words stay"
+    # The roll-up reads the team with People & care and cuts it per holder (without_care).
+    full = ctw.team(c3.church(db, LOVE_CITY), NOW)
+    cut = ctw.without_care(full["team"])
+    assert "in follow-up" in str(full) and "in follow-up" not in str(cut)
+    assert "in follow-up" not in "\n".join(ctw._line(r) for r in cut)
+
+
+def test_the_one_on_one_shows_only_the_jobs_in_the_askers_own_view(app, db):
+    _waiting(db, "fu-1", at(MONDAY, 13))
+    as_(app, LOVE_CITY, "jessica")                                 # her view: People & care (Chief's guess)
+    tiara = one_on_one(app, login(db, LOVE_CITY, "tiara")).json()
+    jobs = {w["duty"]: w for w in tiara["jobs"]}
+    assert jobs["first_guests"]["detail"] == "1 person in follow-up by Monday has no one", "she works it"
+    assert "kids" not in jobs, "Kids & youth is outside her view"
+    seat = next(s for s in db.t["business_users"] if s["user_id"] == uid(db, LOVE_CITY, "jessica"))
+    seat["areas"] = ["office"]                                      # the church picks her the office
+    import church_areas
+    church_areas._MY_CACHE.clear()
+    cut = one_on_one(app, login(db, LOVE_CITY, "tiara")).json()
+    assert cut["jobs"] == [] and "in follow-up" not in str(cut)
+
+
+def _profile_clock_only(db, monkeypatch):
+    """Love City keeps its clock on the owner's profile, not its own
+    settings: the real chain reads it (availability, else the profile)."""
+    for b in db.t["businesses"]:
+        b["settings"] = {k: v for k, v in b["settings"].items() if k not in ("availability", "timezone")}
+    db.t.setdefault("practitioner_profiles", []).append({"owner_id": c3.LC_OWNER, "timezone": "America/Detroit"})
+
+
+def test_my_week_and_the_team_page_read_one_clock(db, monkeypatch):
+    _profile_clock_only(db, monkeypatch)
+    _waiting(db, "fu-1", at(MONDAY, 13))
+    mon_evening = datetime(2026, 11, 10, 2, 0, tzinfo=timezone.utc)             # Monday 9 PM in Detroit
+    page = ctw.team(c3.church(db, LOVE_CITY), mon_evening)
+    team_job = next(w for r in page["team"] if r["user_id"] == uid(db, LOVE_CITY, "tiara")
+                    for w in r["this_week"] if w["duty"] == "first_guests")
+    rh = mw.rhythm(c3.church(db, LOVE_CITY), uid(db, LOVE_CITY, "tiara"), "manager", mon_evening)
+    mine = next(i for d in rh["days"] for i in d["items"] if i["key"] == "first_guests")
+    assert page["today"] == rh["today"]["date"] == "2026-11-09"
+    assert team_job["state"] == mine["state"] == "not_yet", "Monday isn't over in Detroit"
+    assert mw._today(c3.church(db, LOVE_CITY), mon_evening) == date(2026, 11, 9)
+
+
+def test_a_clock_that_cant_be_read_is_a_503_everywhere(app, db, monkeypatch):
+    from fastapi import HTTPException
+    import church_leader_tasks as clt
+    monkeypatch.setattr(clt, "zone", lambda b: None)
+    for fn in (lambda: ctw.team(c3.church(db, LOVE_CITY), NOW),
+               lambda: mw.rhythm(c3.church(db, LOVE_CITY), uid(db, LOVE_CITY, "tiara"), "manager", NOW)):
+        with pytest.raises(HTTPException) as e:
+            fn()
+        assert e.value.status_code == 503
+    as_(app, LOVE_CITY, "jessica")
+    assert one_on_one(app, login(db, LOVE_CITY, "naiya")).status_code == 503
+    assert app.get(f"/church/assignments/people?business_id={LOVE_CITY}").status_code == 503
+
+
+def _service_entry(db, eid, day):
+    db.t["module_entries"].append({"id": eid, "business_id": LOVE_CITY, "data": {"_checkin_day": day.isoformat()}})
+
+
+def test_attendance_counts_a_service_by_its_own_day_never_by_when_it_was_edited(db):
+    sunday_noon = datetime(2026, 11, 15, 17, tzinfo=timezone.utc)
+    _service_entry(db, "e-last", LAST_SUNDAY)
+    db.t.setdefault("attendance_headcounts", []).append({"id": "h1", "business_id": LOVE_CITY, "entry_id": "e-last",
+                                                         "area": "Main", "count": 140, "updated_at": at(SUNDAY, 14)})
+    assert job(db, "attendance", SUNDAY, sunday_noon)["done"] is False, "last week's count, corrected today"
+    _service_entry(db, "e-now", SUNDAY)
+    db.t["attendance_headcounts"].append({"id": "h2", "business_id": LOVE_CITY, "entry_id": "e-now", "area": "Main",
+                                          "count": 0, "updated_at": at(SUNDAY, 15)})
+    assert job(db, "attendance", SUNDAY, sunday_noon)["done"] is False, "a count of zero isn't a count"
+    db.t["attendance"].append({"id": "a-9", "business_id": LOVE_CITY, "contact_id": db.who[LOVE_CITY]["kevin"],
+                               "entry_id": "e-last", "method": "self", "checked_in_at": at(SUNDAY, 15)})
+    assert job(db, "attendance", SUNDAY, sunday_noon)["done"] is False, "a late check-in to last week's service"
+    db.t["attendance"].append({"id": "a-10", "business_id": LOVE_CITY, "contact_id": db.who[LOVE_CITY]["kevin"],
+                               "entry_id": "e-now", "method": "self", "checked_in_at": at(SUNDAY, 15)})
+    assert job(db, "attendance", SUNDAY, sunday_noon) == {"done": True, "text": "Sunday's count is in"}
+
+
+def test_shepherding_is_cut_at_the_jobs_day(db):
+    saturday = datetime(2026, 11, 14, 17, tzinfo=timezone.utc)
+    thursday = date(2026, 11, 12)
+    fam = db.who[LOVE_CITY]["family"]
+    db.t["church_shepherd_signals"].append({"id": "sig-fri", "business_id": LOVE_CITY, "household_id": fam,
+                                            "kind": "drift", "resolved_at": None,
+                                            "created_at": at(date(2026, 11, 13))})
+    assert job(db, "shepherding", thursday, saturday) == {"done": True, "text": "No family is drifting"}, \
+        "Friday's drifting family is the next week's"
+    db.t["church_shepherd_signals"][-1]["created_at"] = at(date(2026, 11, 11))
+    assert job(db, "shepherding", thursday, saturday)["done"] is False
+
+
+def test_last_week_is_judged_at_the_end_of_each_jobs_day(db):
+    _waiting(db, "fu-old", at(date(2026, 11, 1)))                        # in follow-up since last Sunday, no one
+    tiara = cw.Ctx(c3.church(db, LOVE_CITY), NOW)
+    got = mw.last_week(c3.church(db, LOVE_CITY), frozenset({"first_guests", "shepherding", "care_visits"}), TODAY,
+                       NOW, tiara.tz, ctx=tiara)
+    assert got == {"done": 1, "of": 2, "missed": ["First-time guests and welcome calls"], "unread": [],
+                   "text": "Last week: 1 of 2 done; missed: First-time guests and welcome calls"}
+    # Last week's text went out Thursday: after its Wednesday, so it's missed; on Tuesday it's done.
+    db.t["events"] = [{"business_id": LOVE_CITY, "event_type": "sms_broadcast", "created_at": at(date(2026, 11, 5)),
+                       "data": {"sent": 40}}]
+    assert mw.last_week(c3.church(db, LOVE_CITY), frozenset({"weekly_text"}), TODAY, NOW, tiara.tz)["missed"] == [
+        "The weekly text and email"]
+    db.t["events"][0]["created_at"] = at(date(2026, 11, 3))
+    assert mw.last_week(c3.church(db, LOVE_CITY), frozenset({"weekly_text"}), TODAY, NOW, tiara.tz)["done"] == 1
+
+
+def test_last_week_says_unread_never_missed(db, monkeypatch):
+    church = next(b for b in db.t["businesses"] if b["id"] == LOVE_CITY)
+    church["settings"]["church_leaders_note"] = {"id": "n1", "week": "2026-11-09"}     # this week's replaced last week's
+    real = db.get
+    monkeypatch.setattr(sb_clients, "sb_get_as_service",
+                        lambda path, **kw: None if path.startswith("/church_shepherd_signals") else real(path, **kw))
+    got = mw.last_week(c3.church(db, LOVE_CITY), frozenset({"leaders_note", "shepherding", "first_guests"}), TODAY,
+                       NOW, cw.Ctx(c3.church(db, LOVE_CITY), NOW).tz)
+    assert got["missed"] == [] and set(got["unread"]) == {"The Monday leaders note", "Shepherding"}
+    assert got["text"] == "Last week: 1 of 1 done; couldn't be read: The Monday leaders note, Shepherding"
+
+
+def test_the_roll_up_and_the_team_page_say_last_week(db):
+    _waiting(db, "fu-old", at(date(2026, 11, 1)))
+    page = ctw.team(c3.church(db, LOVE_CITY), NOW)
+    tiara = next(r for r in page["team"] if r["user_id"] == uid(db, LOVE_CITY, "tiara"))
+    assert tiara["last_week"]["text"].startswith("Last week: ") and "First-time guests" in tiara["last_week"]["text"]
+    assert tiara["last_week"]["text"] + "." in ctw._line(tiara)
+    assert "_duties" not in tiara, "nothing private leaves the page"
+
+
+def test_the_team_pages_reads_dont_grow_with_its_logins(db, monkeypatch):
+    def reads(extra):
+        for i in range(extra):
+            u, cid = f"a9000000-0000-4000-8000-{i:012d}", f"c9000000-0000-4000-8000-{i:012d}"
+            db.t["contacts"].append({"id": cid, "business_id": LOVE_CITY, "name": f"Extra {i}", "status": "active",
+                                     "email": f"extra{i}@lovecity.org", "metadata": {}, "phone": "", "birthdate": None})
+            db.t["business_users"].append({"business_id": LOVE_CITY, "user_id": u, "role": "manager",
+                                           "invited_email": f"extra{i}@lovecity.org", "lane": "people_care",
+                                           "areas": ["people_care"], "contact_id": cid, "name": f"Extra {i}",
+                                           "status": "active"})
+        seen = []
+        real = db.get
+        monkeypatch.setattr(sb_clients, "sb_get_as_service", lambda path, **kw: (seen.append(path), real(path, **kw))[1])
+        ctw.team(c3.church(db, LOVE_CITY), NOW)
+        monkeypatch.setattr(sb_clients, "sb_get_as_service", real)
+        weekly = ("worship_services?", "custom_modules?", "sermons?", "church_shepherd_signals?",
+                  "church_shepherd_touches?", "events?", "attendance?", "attendance_headcounts?", "serve_teams?",
+                  "church_monthly_reports?")
+        return {t: sum(1 for p in seen if p.lstrip("/").startswith(t)) for t in weekly} | {
+            "waiting": sum(1 for p in seen if "status=in.(open,handed_back)" in p)}
+    five = reads(0)
+    nine = reads(4)
+    assert five == nine, (five, nine)
+    assert all(n <= 1 for n in nine.values()), nine

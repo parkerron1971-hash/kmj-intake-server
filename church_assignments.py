@@ -344,7 +344,7 @@ def _ready(ch: co.Church) -> None:
     and the seniors). A read that fails then is a 503 with nothing saved, and
     nothing after the write can fail on it (#1801 review: a self-handed task
     saved, answered 503 on a cold Auth read, and a retry made a second copy)."""
-    _ = (ch.seats, ch.login_person, ch.top, ch.seniors)
+    _ = (ch.seats, ch.login_person, ch.top, ch.seniors, ch.tz)
 
 
 def _after(fn, default):
@@ -360,7 +360,7 @@ def _after(fn, default):
 def _one(ch: co.Church, t: Dict[str, Any], ctx: Optional[cw.Ctx] = None) -> Dict[str, Any]:
     """A saved row as the app shows it. Never fails on a read: it answers
     writes that already saved (`check` runs catch their own failures)."""
-    ctx = ctx or cw.Ctx(ch.business, _now())
+    ctx = ctx or cw.Ctx(ch.business, _now(), ch.tz)
     check = cw.run(ctx, t["check_key"]) if t.get("check_key") and t.get("status") != "done" else None
     logins = _after(lambda: _names_by_login(ch, [t.get("handed_by"), t.get("raised_to")]), {})
     people = _after(lambda: ch.names([t.get("raised_to_contact_id")]), {}) if t.get("raised_to_contact_id") else {}
@@ -394,7 +394,7 @@ def _handed(ch: co.Church, now: datetime) -> List[Dict[str, Any]]:
 
 def board(ch: co.Church, me: Dict[str, Any], now: Optional[datetime] = None) -> Dict[str, Any]:
     now = now or _now()
-    ctx = cw.Ctx(ch.business, now)
+    ctx = cw.Ctx(ch.business, now, ch.tz)
     today = ctx.today
     people = co.under(ch, me)
     out_people: List[Dict[str, Any]] = []
@@ -445,7 +445,7 @@ def assignments_people(business_id: str, session: UserSession = Depends(sb_clien
 def theirs(ch: co.Church, me: Dict[str, Any], target: Dict[str, Any], over: bool,
            now: Optional[datetime] = None) -> Dict[str, Any]:
     now = now or _now()
-    ctx = cw.Ctx(ch.business, now)
+    ctx = cw.Ctx(ch.business, now, ch.tz)
     q = f"/tasks?business_id=eq.{_q(ch.b)}&{cs.column(target)}=eq.{_q(target['id'])}"
     open_rows = _need(f"{q}&status=neq.done&select={FIELDS}&order=due_date.asc.nullslast&limit={READ_MAX}")
     since = _iso(now - timedelta(days=DONE_DAYS))
@@ -517,16 +517,21 @@ def _lower_first(s: str) -> str:
     return s[:1].lower() + s[1:] if s else s
 
 
-def one_on_one(ch: co.Church, target: Dict[str, Any], now: Optional[datetime] = None) -> Dict[str, Any]:
+def one_on_one(ch: co.Church, target: Dict[str, Any], now: Optional[datetime] = None,
+               areas: Optional[List[str]] = None) -> Dict[str, Any]:
     """What a one-on-one with them goes over, read and never recorded: what
     they finished in the last 7 days; what's stuck, how long, and whether it
     was sent up; what's late; the next five due; and (a login) this week's
     jobs, done, not yet or late. Plain lines too, to read out as they are.
-    Nothing is written: no check ticks anything off here."""
+    Nothing is written: no check ticks anything off here. `areas` (the
+    asker's own view, church_team_week.view_of; None is the whole church):
+    only their jobs in those areas, as See as cuts a rhythm (rhythm_within),
+    so a job's words never cross a wall the asker doesn't work behind.
+    Their assignments are their own, whatever area they're filed under."""
     import church_my_week as mw
     import church_team_week as ctw
     now = now or _now()
-    ctx = cw.Ctx(ch.business, now)
+    ctx = cw.Ctx(ch.business, now, ch.tz)
     today = ctx.today
     q = f"/tasks?business_id=eq.{_q(ch.b)}&{cs.column(target)}=eq.{_q(target['id'])}"
     open_rows = _need(f"{q}&status=neq.done&select={FIELDS}&order=due_date.asc.nullslast&limit={READ_MAX}")
@@ -572,6 +577,9 @@ def one_on_one(ch: co.Church, target: Dict[str, Any], now: Optional[datetime] = 
         picks = days_for(ch.business, [target["id"]]).get(target["id"], {})
         monday = today - timedelta(days=today.weekday())
         jobs = ctw.due_this_week(held, monday, picks)
+        if areas is not None:
+            import church_duties as cd
+            jobs = [w for w in jobs if cd.CATALOG[w["duty"]]["area"] in set(areas)]
         judged = mw._done_full(ch.business, frozenset(w["duty"] for w in jobs), today, now, tz, picks=picks, ctx=ctx) \
             if co.church_open(ch.b) else {}
         for w in jobs:
@@ -615,7 +623,8 @@ def assignments_one_on_one(business_id: str, for_: str = Query(..., alias="for")
     me = _me(session)
     target = co.parse_for(for_)
     _allowed(ch, me, target, self_ok=False)
-    return one_on_one(ch, target)
+    import church_team_week as ctw
+    return one_on_one(ch, target, areas=ctw.view_of(ch.b, me["id"], ch.role(me["id"])))
 
 
 # ─── Handing one out ──────────────────────────────────────────────────
@@ -851,7 +860,7 @@ def assignments_start(body: Dict[str, Any], session: UserSession = Depends(sb_cl
     target = co.parse_for(body.get("for"))
     _allowed(ch, me, target, self_ok=False)
     _ready(ch)
-    ctx = cw.Ctx(ch.business, _now())
+    ctx = cw.Ctx(ch.business, _now(), ch.tz)
     got = cs.start(ch, str(me["id"]), target, ctx.today)
     logins = _after(lambda: _names_by_login(ch, [me["id"]]), {})
     return {"for": co.key(target), "name": _after(lambda: _name_of(ch, target), ""), "of": got["of"],

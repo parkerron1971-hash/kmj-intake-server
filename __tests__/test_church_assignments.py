@@ -92,12 +92,17 @@ def db(monkeypatch):
         return real_post(path, body, prefer, **kw)
     monkeypatch.setattr(sb_clients, "sb_post_as_service", post)
     d.post = post
-    monkeypatch.setattr(clt, "zone", lambda b: ZoneInfo(((b or {}).get("settings") or {}).get("timezone") or "UTC"))
+    # Each church's clock is its own data, read by the real chain
+    # (church_work_checks.church_zone: availability, else the owner's
+    # profile): no clock reader is patched, so two that disagree can't hide
+    # behind one fake (#1802 review).
+    for b in d.t["businesses"]:
+        tz = (b.get("settings") or {}).get("timezone")
+        if tz:
+            b["settings"] = {**b["settings"], "availability": {"timezone": tz}}
+    monkeypatch.delenv("PLATFORM_DEFAULT_TZ", raising=False)
     monkeypatch.setattr(cas, "_now", lambda: NOW)
     monkeypatch.setattr(mw, "_now", lambda: NOW)
-    import chief_assignments
-    monkeypatch.setattr(chief_assignments, "_tz_for", lambda b: ZoneInfo(
-        next(x for x in d.t["businesses"] if x["id"] == b)["settings"]["timezone"]))
     d.sent, d.pushes, d.fail_to = [], [], set()
 
     def deliver(biz, to, name, subject, html, key, reply_to=None):
