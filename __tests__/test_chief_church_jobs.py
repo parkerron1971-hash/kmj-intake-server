@@ -114,6 +114,11 @@ def turn(db, biz, handle, *calls):
         return asyncio.run(go())
 
 
+def drafted(got):
+    """The draft's own text inside the read's result (it comes once, after its Title line)."""
+    return got["result"].split("\nTitle: ", 1)[1].split("\n", 1)[1].split("\nYou can't save it:")[0]
+
+
 def ok(got):
     assert not got.get("failed"), got["result"]
     assert got["result"] and got["label"], got
@@ -243,8 +248,9 @@ def test_a_church_with_no_map_still_has_its_office_logins_and_their_duties(monke
 
 def test_job_of_says_their_title_duties_roles_and_whos_over_them(db):
     said = ok(run(db, LOVE_CITY, "owner", "job_of", who="Jessica"))
-    assert said.startswith("Jessica McCloud: Executive Pastor.\nNo written job description yet: Chief can draft one "
-                           "from what they already do (draft_job_description).")
+    assert said.startswith("Jessica McCloud: Executive Pastor.\nDuties (2):")
+    assert said.endswith("\nNo written job description yet: Chief can draft one from what they already do "
+                         "(draft_job_description).")
     assert "Duties (2): The monthly report (The first Monday of the month); Over the lanes (Mondays)." in said
     assert "Covers any lane's work" in said and "Role: Executive Pastor:" in said
     assert "Over Jessica: Pastor Kevin." in said and "You may write or change their job description" in said
@@ -260,7 +266,8 @@ def test_a_draft_is_four_plain_sections_from_what_the_system_holds_and_saves_not
     said = ok(got)
     assert said.startswith("A starting job description for Naiya Clark, from what the system already holds (nothing "
                            "is saved):\nTitle: Office & Leadership\n")
-    text = got["draft"]["description"]
+    text = drafted(got)
+    assert "draft" not in got, "the draft comes once"
     sections = text.split("\n\n")
     assert [s.split("\n")[0] for s in sections] == ["Summary", "What they own", "Their week", "On Sunday"]
     assert sections[0] == "Summary\nOffice & Leadership. Answers to Jessica McCloud."
@@ -274,12 +281,12 @@ def test_a_draft_is_four_plain_sections_from_what_the_system_holds_and_saves_not
     assert not any(ln.lstrip().startswith(("#", "*", "- ", "**")) for ln in text.split("\n")), "no marks shown raw"
     assert rows(db) == [] and db.t["church_job_description_changes"] == []
     # Sunday duties, and who they support as the office.
-    laq = run(db, LOVE_CITY, "jessica", "draft_job_description", who="Laquesha")["draft"]["description"]
+    laq = drafted(run(db, LOVE_CITY, "jessica", "draft_job_description", who="Laquesha"))
     assert "Sunday: Sunday attendance" in laq and ("On Sunday\nSunday attendance.\n" + cjd.SUNDAY_TIMES) in laq
-    tiara = run(db, LOVE_CITY, "jessica", "draft_job_description", who="Tiara")["draft"]["description"]
+    tiara = drafted(run(db, LOVE_CITY, "jessica", "draft_job_description", who="Tiara"))
     assert "Supports, as the office: Prayer (Prayer), Outreach & Welcome (First-time guests and welcome calls) and " \
            "Youth (Youth and Teen Bible Study)." in tiara
-    elder = run(db, LOVE_CITY, "jessica", "draft_job_description", who="Marcus")["draft"]["description"]
+    elder = drafted(run(db, LOVE_CITY, "jessica", "draft_job_description", who="Marcus"))
     assert elder.startswith("Summary\nElders. Answers to Jessica McCloud.\nThe Elders pray for the church and watch "
                             "over it with the pastor.\n\nWhat they own\nNothing in the system names a duty")
     # A draft saved as it is keeps its sections.
@@ -346,8 +353,8 @@ def test_an_office_seat_writing_a_pastors_or_an_elders_description_is_refused(db
     (None, "Runs the front desk. Salary $40,000 a year."),
     (None, "Front desk, 20 hours a week at $15 per hour."),
     (None, "Front desk; her stipend comes from the general fund."),
-    ("Office Manager (hourly)", "Runs the front desk."),
-    (None, "Runs the front desk. Benefits after 90 days."),
+    ("Front desk ($15/hr)", "Runs the front desk."),
+    (None, "Associate pastor. Housing allowance $1,800 a month."),
 ])
 def test_pay_words_are_refused(db, title, description):
     got = run(db, LOVE_CITY, "jessica", "set_job_description", who="Naiya", description=description,
@@ -512,7 +519,7 @@ def test_before_the_file_is_applied_every_verb_says_it_isnt_ready_and_assignment
 
 def test_a_write_names_someone_and_never_another_churchs_person(db):
     got = run(db, LOVE_CITY, "owner", "set_job_description", description="Shepherds the whole church.")
-    assert got["failed"] and "Say whose job description" in got["result"] and rows(db) == []
+    assert got["failed"] and "Who is this for?" in got["result"] and rows(db) == []
     grace_person = c3.pid(2, 2)                                   # one of Grace's people
     for verb, action in (("set_job_description", {"description": "x"}), ("undo_job_description", {})):
         got = run(db, LOVE_CITY, "owner", verb, person=f"person:{grace_person}", **action)
@@ -535,7 +542,7 @@ def test_a_member_seat_with_a_person_finds_the_row_its_login_kept(db):
         "id": "9a000000-0000-4000-8000-000000000001", "business_id": LOVE_CITY, "contact_id": None,
         "user_id": member, "title": None, "description": "Leads Sisters in the City.", "source": "said",
         "written_by": c3.LC_OWNER, "written_at": "2026-11-12T12:00:00+00:00", "updated_by": c3.LC_OWNER,
-        "updated_at": "2026-11-12T12:00:00+00:00"})
+        "updated_at": "2026-11-12T12:00:00+00:00", "title_by": None, "version": 1})
     said = ok(run(db, LOVE_CITY, member, "job_of", who="me"))
     assert said.startswith("Gloria Hunt: ") and "Leads Sisters in the City." in said
     ok(run(db, LOVE_CITY, "owner", "set_job_description", who="Gloria Hunt", description="Leads Sisters in the City "

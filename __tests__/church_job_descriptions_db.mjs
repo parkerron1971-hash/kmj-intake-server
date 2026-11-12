@@ -2,7 +2,8 @@
 // supabase/APPLY-2026-11-12-church-job-descriptions.sql. Running it twice
 // changes nothing; one description a person, one a login with no person; a
 // description's person is its own church's; the words keep their shapes (title
-// 80, description 1-4000, a known source; someone named); both tables are
+// 80, description 1-8000, a known source, a version of 1 and up; someone
+// named); both tables are
 // server-only; a login deleted leaves the row, a person or a church deleted
 // takes theirs; the log takes before/after as jsonb, null for none; a
 // description keeps its line breaks.
@@ -94,13 +95,30 @@ for (const t of ['church_job_descriptions', 'church_job_description_changes']) {
   assert.deepEqual(s, { rls: true, policies: 0, browser: false, anon: false }, t); checks++;
 }
 
-// The constraints the file's own check names: 10, the two businesses keys valid, the rest NOT VALID.
+// The constraints the file's own check names: 11, the two businesses keys valid, the rest NOT VALID.
 const cons = (await db.query(`SELECT conname, convalidated FROM pg_constraint
   WHERE conrelid IN ('public.church_job_descriptions'::regclass, 'public.church_job_description_changes'::regclass)
     AND contype IN ('c', 'f') ORDER BY conname`)).rows;
-assert.equal(cons.length, 10); checks++;
+assert.equal(cons.length, 11); checks++;
 assert.deepEqual(cons.filter(c => c.convalidated).map(c => c.conname).sort(),
   ['church_job_description_changes_business_id_fkey', 'church_job_descriptions_business_id_fkey']); checks++;
+
+// The title is its own writer's, and goes null with their account; a version is 1 and up.
+const u3 = 'aaaaaaaa-3333-4333-8333-333333333333';
+await db.query('INSERT INTO auth.users VALUES ($1)', [u3]);
+await ok(`UPDATE church_job_descriptions SET title = 'Calendar keeper', title_by = $1 WHERE contact_id = $2`, [u3, c3]);
+await refuses(`UPDATE church_job_descriptions SET version = 0 WHERE contact_id = $1`, [c3], /church_job_descriptions_words/);
+await ok(`UPDATE church_job_descriptions SET version = version + 1 WHERE contact_id = $1 AND version = 1`, [c3]);
+assert.equal((await one(`SELECT version FROM church_job_descriptions WHERE contact_id = $1`, [c3])).version, 2); checks++;
+await ok(`DELETE FROM auth.users WHERE id = $1`, [u3]);
+assert.equal((await one(`SELECT title_by FROM church_job_descriptions WHERE contact_id = $1`, [c3])).title_by, null);
+checks++;
+// An undo that puts back a writer whose account is gone fails its key; with null in their place it saves (#1807
+// review F8: the server puts null for a writer who is no longer the church's).
+await refuses(`UPDATE church_job_descriptions SET written_by = $1, updated_by = $1, title_by = $1 WHERE contact_id = $2`,
+  [u3, c3], /foreign key/);
+await ok(`UPDATE church_job_descriptions SET written_by = NULL, updated_by = NULL, title_by = NULL,
+  description = 'The calendar.' WHERE contact_id = $1`, [c3]);
 
 // A login deleted leaves the row (its writer said as nobody); a person deleted takes theirs and its log; a church
 // deleted takes everything.

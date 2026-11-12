@@ -423,9 +423,12 @@ def _shrink(result: Any) -> str:
         from chief_responsibilities import REPORT_MAX_RESULT_CHARS
         limit = REPORT_MAX_RESULT_CHARS
     if isinstance(result, dict) and result.get('type') in ('list_duties', 'list_map', 'my_work', 'list_asks',
-                                                           'move_in_status'):
+                                                           'move_in_status', 'whose_job', 'job_of',
+                                                           'draft_job_description'):
         # Every duty and who does it (every department and role); cut short,
-        # the model would guess at whose job the missing ones are.
+        # the model would guess at whose job the missing ones are. The job
+        # reads fit themselves inside it (chief_church_jobs.RESULT_BUDGET) and
+        # say plainly where they continue, never this sample cut.
         limit = 12000
     if isinstance(result, dict) and result.get('view') == 'transactions':
         # 25 bank rows and the totals; cut short, the model would see a

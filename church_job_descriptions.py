@@ -58,6 +58,11 @@ Who (every route and Chief verb: someone signed in with a seat at the church):
   pay .......... a title or description with pay words (PAY_WORDS) isn't saved;
                  a budget is fine
 
+Whose words (the taint, mine()): someone else's unless the description's last
+writer and the title's writer (title_by) are the asker and the text wasn't
+pasted in or taken from a document. Every write and undo is compare-and-set on
+the row's version: a miss is a 409, "changed just now", and changes nothing.
+
 A person is keyed by their contact; a login with no person behind it by its
 user id. A login's person is church_over.Church.login_person (the seat's tied
 record, else the one person its sign-in email names: business_users_router.
@@ -89,9 +94,13 @@ router = APIRouter(prefix="/church", tags=["church"])
 
 TABLE = "church_job_descriptions"
 LOG = "church_job_description_changes"
-COLS = "id,business_id,contact_id,user_id,title,description,source,written_by,written_at,updated_by,updated_at"
+COLS = ("id,business_id,contact_id,user_id,title,title_by,description,source,written_by,written_at,updated_by,"
+        "updated_at,version")
 LOG_COLS = "id,business_id,contact_id,user_id,before,after,by,at,undone_at"
-IMAGE = ("title", "description", "source", "written_by", "written_at", "updated_by", "updated_at")
+IMAGE = ("title", "title_by", "description", "source", "written_by", "written_at", "updated_by", "updated_at")
+WRITERS = ("title_by", "written_by", "updated_by")
+SOMEONE_ELSES = ("pasted", "document")      # words that came from somewhere else, whoever saved them
+WORK_MAX = 500                              # whose: the first 500 characters of the work are plenty
 TITLE_MAX, DESCRIPTION_MAX = 80, 8000
 EXCERPT_MAX = 300          # a person's description in the roster and whose: about its first paragraph
 MATCHED_LINES, LINE_MAX = 3, 240
@@ -110,10 +119,28 @@ OFFICE_ONLY = "Job descriptions are for the church's office logins."
 ALL_ONLY = "Everyone's jobs are for the church's office seats: a Manager and up."
 NOT_YOURS = "Their job is read by the people over them and the church's office seats."
 PAY = "Pay stays out of job descriptions; office seats can read them."
+CHANGED_NOW = "{name}'s job description changed just now. Read it again, then try again."
 
-# Pay, never budgets: "manages the $5k youth budget" is fine.
-PAY_WORDS = re.compile(r"\b(?:salar(?:y|ies|ied)|wages?|compensation|hourly|stipends?|pay\s*rates?|rates?\s+of\s+pay|"
-                       r"per\s+hour|benefits)\b|/\s*(?:hr|hour)\b", re.I)
+# Pay, never budgets (#1807 review, F4): a money amount in the same sentence
+# as a pay word (paid, pay, earns, salary, wage, stipend, honorarium,
+# allowance, compensated, pay rate), or as a pay period (per hour, an hour, a
+# year, annually, $52k/yr), unless the sentence is about money the church
+# spends or raises ("manages the $5k youth budget"); and the words salary,
+# wage, stipend and pay rate on their own. Everything else is fine: "Office
+# Admin/HR", "walks the lot hourly", "workers' compensation claims", "housing
+# benefits", "pays the bills", "Pastor Payne", "payroll", "the benefit dinner".
+_AMOUNT = (r"(?:\$\s?\d[\d,]*(?:\.\d+)?(?:\s?[km]\b)?|\b\d[\d,]*(?:\.\d+)?\s?k\b|"
+           r"\b\d[\d,]*(?:\.\d+)?\s?(?:dollars|usd)\b)")
+AMOUNT = re.compile(_AMOUNT, re.I)
+PER_UNIT = re.compile(_AMOUNT + r"\s?/\s?(?:hr|hour|h|wk|week|mo|month|yr|year|annum)\b", re.I)
+PAY_ALONE = re.compile(r"\b(?:salar(?:y|ies|ied)|wages?|stipends?|pay[\s-]*rates?|rates?\s+of\s+pay)\b", re.I)
+PAY_WORD = re.compile(r"\b(?:paid|pay|earn(?:s|ed|ing)?|salar\w*|wages?|stipends?|honorari(?:um|ums|a)|allowances?|"
+                      r"compensat\w*)\b", re.I)
+PAY_TIME = re.compile(r"\b(?:per\s+(?:hour|hr|week|wk|month|year|yr|sunday|service)|an\s+hour|"
+                      r"a\s+(?:week|month|year|sunday)(?![-\w])|annually|yearly)\b", re.I)
+NOT_PAY = re.compile(r"\b(?:budgets?|funds?|fundrais\w*|rais(?:e|es|ed|ing)|giving|gifts?|offerings?|spend\w*|"
+                     r"costs?|tithes?|pledges?|donat\w*|supplies|orders?|purchases?|bills?|rent|deposits?|"
+                     r"expenses?|invoices?)\b", re.I)
 
 
 # ─── Small things ─────────────────────────────────────────────────────
@@ -476,8 +503,21 @@ def can_write(ch: co.Church, uid: str, e: Dict[str, Any], under: Set[str]) -> bo
 
 
 def mine(row: Optional[Dict[str, Any]], uid: str) -> bool:
-    """Whether the words saved now are this login's own."""
-    return bool(row) and str(row.get("updated_by") or "") == str(uid)
+    """Whether every written word of theirs saved now is this login's own: the
+    description's (its last writer, and never words pasted in or taken from a
+    document: those came from someone else, whoever saved them) and the
+    title's (its own writer, title_by: a title kept from an earlier writer is
+    theirs). A writer no one knows any more (null) is someone else."""
+    me = str(uid or "")
+    if not row or not me or str(row.get("updated_by") or "") != me:
+        return False
+    if str(row.get("source") or "") in SOMEONE_ELSES:
+        return False
+    return not _plain(row.get("title")) or str(row.get("title_by") or "") == me
+
+
+def title_mine(row: Optional[Dict[str, Any]], uid: str) -> bool:
+    return bool(row) and bool(uid) and str(row.get("title_by") or "") == str(uid)
 
 
 def line(J: Jobs, e: Dict[str, Any], *, words: bool, fence=None) -> str:
@@ -570,6 +610,7 @@ def view(J: Jobs, e: Dict[str, Any], *, full: bool = False) -> Dict[str, Any]:
             "written": bool(e["row"]), "excerpt": excerpt(row.get("description")) if row else None,
             **({"description": row.get("description") if row else None} if full else {}),
             "source": row.get("source") if row else None,
+            "title_by": J.writer(row.get("title_by")) if row and _plain(row.get("title")) else None,
             "written_by": J.writer(row.get("written_by")) if row else None, "written_at": row.get("written_at"),
             "updated_by": J.writer(row.get("updated_by")) if row else None, "updated_at": row.get("updated_at")}
 
@@ -652,6 +693,7 @@ def whose(J: Jobs, uid: str, text: Any) -> Dict[str, Any]:
     each with the words that matched and where, who is over them, and whether
     `uid` may hand them work; the fallback when nobody matches; everyone."""
     ch = J.ch
+    text = str(text or "")[:WORK_MAX]            # a pasted email is its first lines: enough to rank by
     want = terms(text)
     if not want:
         raise HTTPException(400, "Say what the work is, in a few words.")
@@ -757,11 +799,11 @@ def week_of(keys: List[str], picks: Dict[str, str]) -> Tuple[List[str], List[str
     return [f"{names[g]}: {'; '.join(by[g])}" for g in order if by.get(g)], sunday
 
 
-def draft(J: Jobs, e: Dict[str, Any]) -> Dict[str, Any]:
+def draft(J: Jobs, e: Dict[str, Any], *, training: bool = True) -> Dict[str, Any]:
     """A starting description from what the system holds only, never their
     written words, in plain sections (headings on their own line, no marks the
     app would show raw): Summary, What they own, Their week, On Sunday. Nothing
-    is saved."""
+    is saved. `training` False: the duties without their training lines."""
     import church_duties as cd
     ch = J.ch
     title = system_title(ch, e)
@@ -790,7 +832,7 @@ def draft(J: Jobs, e: Dict[str, Any]) -> Dict[str, Any]:
                   SUNDAY_TIMES]]
         return "\n\n".join("\n".join(p) for p in parts)
 
-    text = build(True)
+    text = build(training)
     if len(text) > DESCRIPTION_MAX:                       # a long list: the duties without their training lines
         text = build(False)
     return {"for": e["key"], "name": e["name"], "title": title[:TITLE_MAX],
@@ -818,7 +860,18 @@ def _description(v: Any) -> str:
 
 
 def has_pay(*texts: Any) -> bool:
-    return any(PAY_WORDS.search(str(t or "")) for t in texts)
+    for t in texts:
+        t = str(t or "")
+        if PAY_ALONE.search(t):
+            return True
+        for sentence in re.split(r"(?<=[.!?;])\s+|\n+", t):
+            if not AMOUNT.search(sentence):
+                continue
+            if PAY_WORD.search(sentence):
+                return True
+            if not NOT_PAY.search(sentence) and (PER_UNIT.search(sentence) or PAY_TIME.search(sentence)):
+                return True
+    return False
 
 
 def _image(row: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
@@ -849,39 +902,95 @@ def _log(J: Jobs, e: Dict[str, Any], before: Optional[Dict[str, Any]], after: Op
     return None
 
 
+class _Changed(Exception):
+    """A compare-and-set missed: the row changed between the read and the write."""
+
+
+def _alive(J: Jobs, uid: Any) -> Optional[str]:
+    """A writer's id as a restore may put it back: kept while it is the owner
+    or one of the church's seats; else None (a deleted login's id would fail
+    its foreign key, #1807 review F8), and None is someone else's words."""
+    uid = str(uid or "")
+    return uid if uid and (uid == J.ch.owner or uid in J.ch.seats) else None
+
+
+def _version(row: Optional[Dict[str, Any]]) -> int:
+    try:
+        return int((row or {}).get("version") or 1)
+    except (TypeError, ValueError):
+        return 1
+
+
+def _cas_patch(J: Jobs, row: Dict[str, Any], fields: Dict[str, Any]) -> Dict[str, Any]:
+    """Write `fields` onto `row` only while it is still the version read
+    (#1807 review F9); a miss raises _Changed, a failed write 503s."""
+    got = sb_clients.sb_patch_as_service(
+        f"/{TABLE}?id=eq.{_q(row['id'])}&business_id=eq.{_q(J.ch.b)}&version=eq.{_version(row)}",
+        {**fields, "version": _version(row) + 1})
+    if not isinstance(got, list):
+        raise HTTPException(503, UNSAVED)
+    if not got:
+        raise _Changed()
+    return got[0]
+
+
+def _cas_insert(J: Jobs, e: Dict[str, Any], fields: Dict[str, Any]) -> Dict[str, Any]:
+    """A first row for them; one that lands at the same moment wins (the
+    unique index refuses the second), said as changed just now."""
+    got = sb_clients.sb_post_as_service(f"/{TABLE}", {
+        "business_id": J.ch.b, "contact_id": e["contact_id"], "user_id": e["user_id"], **fields, "version": 1})
+    if isinstance(got, list) and got:
+        return got[0]
+    if fresh(J, e) is not None:
+        raise _Changed()
+    raise HTTPException(503, UNSAVED)
+
+
+def _cas_delete(J: Jobs, e: Dict[str, Any], row: Dict[str, Any]) -> None:
+    if not sb_clients.sb_delete_as_service(
+            f"/{TABLE}?id=eq.{_q(row['id'])}&business_id=eq.{_q(J.ch.b)}&version=eq.{_version(row)}"):
+        raise HTTPException(503, UNSAVED)
+    if fresh(J, e) is not None:                     # it changed first: the delete matched nothing
+        raise _Changed()
+
+
 def set_description(J: Jobs, uid: str, e: Dict[str, Any], body: Dict[str, Any]) -> Dict[str, Any]:
     """Write (or, with clear: true, clear) one person's description, then log
-    it. Whoever calls this checked can_write. A failed write is a 503 with
-    nothing saved; a log that fails after a saved write leaves it without an
-    undo (said: change_id None), never a 503 for a saved write."""
-    b = J.ch.b
+    it. Whoever calls this checked can_write. The write lands only on the row
+    as it was read (its version), so the log's `before` is what it replaced;
+    a miss is a 409, "changed just now". A failed write is a 503 with nothing
+    saved; a log that fails after a saved write leaves it without an undo
+    (said: change_id None), never a 503 for a saved write."""
     old = fresh(J, e)
     at = _iso(_now())
-    if body.get("clear") is True:
-        if not old:
-            raise HTTPException(400, f"{e['name']} has no written job description to clear.")
-        if not sb_clients.sb_delete_as_service(f"/{TABLE}?id=eq.{_q(old['id'])}&business_id=eq.{_q(b)}"):
-            raise HTTPException(503, UNSAVED)
-        return {"saved": None, "before": old, "change_id": _log(J, e, old, None, uid, at), "cleared": True}
-    title = _title(body["title"]) if "title" in body else (_plain((old or {}).get("title")) or None)
-    text = _description(body.get("description"))
-    source = str(body.get("source") or "said").strip().lower()
-    if source not in SOURCES:
-        raise HTTPException(400, "Where it came from is one of: said, pasted, document, drafted.")
-    if has_pay(title, text):
-        raise HTTPException(400, PAY)
-    fields = {"title": title, "description": text, "source": source, "updated_by": uid, "updated_at": at}
-    if old:
-        if e["contact_id"] and not old.get("contact_id"):          # the login has a person now: it moves to them
-            fields["contact_id"] = e["contact_id"]
-        got = sb_clients.sb_patch_as_service(f"/{TABLE}?id=eq.{_q(old['id'])}&business_id=eq.{_q(b)}", fields)
-    else:
-        got = sb_clients.sb_post_as_service(f"/{TABLE}", {
-            "business_id": b, "contact_id": e["contact_id"], "user_id": e["user_id"], "written_by": uid,
-            "written_at": at, **fields})
-    if not isinstance(got, list) or not got:
-        raise HTTPException(503, UNSAVED)
-    saved = got[0]
+    try:
+        if body.get("clear") is True:
+            if not old:
+                raise HTTPException(400, f"{e['name']} has no written job description to clear.")
+            _cas_delete(J, e, old)
+            return {"saved": None, "before": old, "change_id": _log(J, e, old, None, uid, at), "cleared": True}
+        if "title" in body:
+            title = _title(body["title"])
+            title_by = uid if title else None
+        else:                                        # left out: the written title stays, and stays its writer's
+            title = _plain((old or {}).get("title")) or None
+            title_by = (old or {}).get("title_by") if title else None
+        text = _description(body.get("description"))
+        source = str(body.get("source") or "said").strip().lower()
+        if source not in SOURCES:
+            raise HTTPException(400, "Where it came from is one of: said, pasted, document, drafted.")
+        if has_pay(title, text):
+            raise HTTPException(400, PAY)
+        fields = {"title": title, "title_by": title_by, "description": text, "source": source, "updated_by": uid,
+                  "updated_at": at}
+        if old:
+            if e["contact_id"] and not old.get("contact_id"):          # the login has a person now: it moves to them
+                fields["contact_id"] = e["contact_id"]
+            saved = _cas_patch(J, old, fields)
+        else:
+            saved = _cas_insert(J, e, {"written_by": uid, "written_at": at, **fields})
+    except _Changed:
+        raise HTTPException(409, CHANGED_NOW.format(name=e["name"]))
     return {"saved": saved, "before": old, "change_id": _log(J, e, old, saved, uid, at), "cleared": False}
 
 
@@ -892,55 +1001,82 @@ def _same(row: Optional[Dict[str, Any]], image: Optional[Dict[str, Any]]) -> boo
             and str(row.get("description") or "") == str(image.get("description") or ""))
 
 
-def undo(J: Jobs, uid: str, e: Dict[str, Any], change_id: Any = None) -> Dict[str, Any]:
-    """Put the last change to their description back, only the last: its
-    `before` (with the earlier writer's name), or no description when there
-    was none. Claimed first (undone_at), so two at once put it back once;
-    let go if the put-back fails. Whoever calls this checked can_write."""
+def last_change(J: Jobs, e: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Their last change: by their person, else, while it was kept by a login
+    with no person, by that login with no person. Never a change of another
+    person the login was once tied to (#1807 review F1)."""
     b = _q(J.ch.b)
     seen: Dict[str, Dict[str, Any]] = {}
     if e["contact_id"]:
         for r in _need(f"/{LOG}?business_id=eq.{b}&contact_id=eq.{_q(e['contact_id'])}&select={LOG_COLS}"
                        "&order=at.desc&limit=1"):
-            seen[str(r["id"])] = r
+            if str(r.get("contact_id") or "") == e["contact_id"]:
+                seen[str(r["id"])] = r
     if e["user_id"]:
-        for r in _need(f"/{LOG}?business_id=eq.{b}&user_id=eq.{_q(e['user_id'])}&select={LOG_COLS}"
-                       "&order=at.desc&limit=1"):
-            seen[str(r["id"])] = r
-    last = max(seen.values(), key=lambda r: str(r.get("at") or ""), default=None)
+        for r in _need(f"/{LOG}?business_id=eq.{b}&user_id=eq.{_q(e['user_id'])}&contact_id=is.null"
+                       f"&select={LOG_COLS}&order=at.desc&limit=1"):
+            if not r.get("contact_id") and str(r.get("user_id") or "") == e["user_id"]:
+                seen[str(r["id"])] = r
+    return max(seen.values(), key=lambda r: str(r.get("at") or ""), default=None)
+
+
+def undo(J: Jobs, uid: str, e: Dict[str, Any], change_id: Any = None) -> Dict[str, Any]:
+    """Put the last change to their description back, only the last: its
+    `before` (with the earlier writer's name, while that login is still the
+    church's), or no description when there was none. Claimed first
+    (undone_at), so two at once put it back once; the put-back lands only on
+    the row as it was read, and a miss lets the claim go and says "changed just
+    now". A claim whose put-back never landed (the words are still the
+    change's own) is tried again, so a failed put-back whose release failed too
+    never leaves the change marked put back (#1807 review F11). Whoever calls
+    this checked can_write."""
+    b = _q(J.ch.b)
+    last = last_change(J, e)
     if not last:
         raise HTTPException(400, f"There's no change to {e['name']}'s job description to put back.")
-    if last.get("undone_at"):
-        raise HTTPException(400, f"The last change to {e['name']}'s job description was already put back; only the "
-                                 "last change can be.")
     if change_id and str(last["id"]) != str(change_id):
         raise HTTPException(409, f"{e['name']}'s job description changed again since, so that change can't be put "
                                  "back by itself; only the last change can be.")
     current = fresh(J, e)
-    if not _same(current, last.get("after")):
+    retry = False
+    if last.get("undone_at"):
+        retry = _same(current, last.get("after")) and not _same(current, last.get("before"))
+        if not retry:
+            raise HTTPException(400, f"The last change to {e['name']}'s job description was already put back; only "
+                                     "the last change can be.")
+    elif not _same(current, last.get("after")):
         raise HTTPException(409, f"{e['name']}'s job description changed since, so nothing was put back.")
-    at = _iso(_now())
-    claimed = sb_clients.sb_patch_as_service(f"/{LOG}?id=eq.{_q(last['id'])}&business_id=eq.{b}&undone_at=is.null",
-                                             {"undone_at": at})
-    if not isinstance(claimed, list):
-        raise HTTPException(503, UNSAVED)
-    if not claimed:
-        raise HTTPException(409, "That was just put back.")
+    log_row = f"/{LOG}?id=eq.{_q(last['id'])}&business_id=eq.{b}"
+    if not retry:
+        claimed = sb_clients.sb_patch_as_service(f"{log_row}&undone_at=is.null", {"undone_at": _iso(_now())})
+        if not isinstance(claimed, list):
+            raise HTTPException(503, UNSAVED)
+        if not claimed:
+            raise HTTPException(409, "That was just put back.")
+
+    def release() -> None:
+        try:
+            sb_clients.sb_patch_as_service(log_row, {"undone_at": None})
+        except Exception:  # noqa: BLE001 — a claim that stays is retried by the next undo (above)
+            print(f"[church_job_descriptions] {J.ch.b[:8]}: an undo's claim wasn't let go", flush=True)
+
     before = last.get("before")
     restored: Optional[Dict[str, Any]] = None
-    if before is None:
-        done = sb_clients.sb_delete_as_service(f"/{TABLE}?id=eq.{_q(current['id'])}&business_id=eq.{b}") \
-            if current else True
-    else:
-        fields = {k: before.get(k) for k in IMAGE}
-        got = sb_clients.sb_patch_as_service(f"/{TABLE}?id=eq.{_q(current['id'])}&business_id=eq.{b}", fields) \
-            if current else sb_clients.sb_post_as_service(f"/{TABLE}", {
-                "business_id": J.ch.b, "contact_id": e["contact_id"], "user_id": e["user_id"], **fields})
-        done = isinstance(got, list) and bool(got)
-        restored = got[0] if done else None
-    if not done:
-        sb_clients.sb_patch_as_service(f"/{LOG}?id=eq.{_q(last['id'])}&business_id=eq.{b}", {"undone_at": None})
-        raise HTTPException(503, UNSAVED)
+    try:
+        if before is None:
+            if current:
+                _cas_delete(J, e, current)
+        else:
+            fields = {k: before.get(k) for k in IMAGE}
+            for k in WRITERS:
+                fields[k] = _alive(J, fields.get(k))
+            restored = _cas_patch(J, current, fields) if current else _cas_insert(J, e, fields)
+    except _Changed:
+        release()
+        raise HTTPException(409, CHANGED_NOW.format(name=e["name"]))
+    except HTTPException:
+        release()
+        raise
     return {"restored": restored, "before": before, "after": last.get("after"), "undone": str(last["id"])}
 
 

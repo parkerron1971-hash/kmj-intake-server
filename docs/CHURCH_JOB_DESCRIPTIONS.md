@@ -49,13 +49,17 @@ NOT APPLIED until Kevin applies it by hand (docs/MIGRATIONS.md).
 - user_id uuid null (a login with no person behind it; kept beside contact_id
   when the person is a login). No foreign key: a row of a login that left
   stays, and no reader shows it once the seat is gone
-- title text (1 to 80, or null), description text not null (1 to 8000 after
-  trimming; line breaks kept)
+- title text (1 to 80, or null), title_by uuid (who wrote the title: a save
+  that leaves the title out keeps it, and it stays its writer's words),
+  description text not null (1 to 8000 after trimming; line breaks kept)
 - source text in ('said','pasted','document','drafted'), default 'said'
 - written_by uuid, written_at timestamptz default now() (who first wrote one
   for this person), updated_by uuid, updated_at timestamptz default now() (who
   wrote the words saved now); the user columns reference auth.users on delete
   set null
+- version integer not null default 1: one more with every write. Every write
+  and undo lands only on the version it read (compare-and-set); a miss says
+  "changed just now, try again" and changes nothing
 - check (contact_id is not null or user_id is not null)
 - unique (business_id, contact_id) where contact_id is not null;
   unique (business_id, user_id) where contact_id is null
@@ -94,17 +98,27 @@ moves the login's row to the person.
 - **Read everyone's** (the roster, whose job): the office seats, Manager and up.
   A Member seat reads only its own job and those of anyone it's over; a Viewer
   reads nothing (the routes need a member seat; Chief refuses a viewer).
-- **Pay stays out.** A title or description with pay words (salary, salaried,
-  wage, compensation, hourly, stipend, pay rate, rate of pay, per hour,
-  benefits, /hr) isn't saved: "Pay stays out of job descriptions; office seats
-  can read them." Budgets ("manages the $5k youth budget") are fine, and so is
-  "the benefit dinner".
+- **Pay stays out.** Refused: a money amount in the same sentence as a pay
+  word (paid, pay, earns, salary, wage, stipend, honorarium, allowance,
+  compensated) or a pay period (per hour, an hour, per Sunday, a year,
+  annually, $52k/yr, $25/h), unless the sentence is about money the church
+  spends or raises (a budget, an offering, supplies, bills); and the words
+  salary, wage, stipend and pay rate on their own. "Pay stays out of job
+  descriptions; office seats can read them." Fine: "Office Admin/HR", "walks
+  the lot hourly", "workers' compensation claims", "housing benefits", "pays
+  the bills", "Pastor Payne", "payroll", "the benefit dinner", "manages the
+  $5k youth budget". Allowed on purpose: "a love offering" and "PTO" with no
+  amount, since a church's own duties name them ("collects the love offering",
+  "approves PTO requests").
 - Their words are data: the description and title are written by a person, so
   a read that brings someone else's written words into the turn raises the
   turn's taint (chief_church_assignments._taint pattern), and later writes in
-  that turn are held until the person says it again. A read of only
-  system-built lines (duties, map, role definitions, a draft) doesn't, and
-  neither does a read of the asker's own words.
+  that turn are held until the person says it again. Someone else's means: the
+  description's last writer isn't the asker, or the title's writer (title_by)
+  isn't, or the text was pasted in or taken from a document (those words came
+  from someone else, whoever saved them), or the writer is no longer known. A
+  read of only system-built lines (duties, map, role definitions, a draft)
+  doesn't, and neither does a read of the asker's own words.
 
 ## The pieces (module church_job_descriptions.py)
 
@@ -127,17 +141,15 @@ moves the login's row to the person.
   plus anyone with a written description. Cap 80. One compact line each: the
   title and about the first paragraph of the description (300 characters at
   most), never the whole.
-- `whose(...)`: rank everyone against the work's words (lower-case, stop words
-  out, light stemming) across the description and title, duty labels + their
+- `whose(...)`: rank everyone against the work's words (the first 500
+  characters of them; lower-case, stop words out, light stemming) across the description and title, duty labels + their
   training lines + areas, department names, role titles and definitions. Top 3
   with the words that matched, the lines of the description that carry them,
   who's over each, and whether the asker may hand them the work. A department
   whose name matches is in its leader's and overseer's words, so they rank.
   Nobody matches: the person who oversees the office (oversee_lanes holder);
   else the owner. Also return the roster lines (title plus first paragraph) so
-  the model can judge better than the word match. Chief's result stays under
-  about 2,500 tokens: past that, lines drop their excerpt, then the rest are
-  counted.
+  the model can judge better than the word match.
 - `draft(...)`: a starting description built only from what the system holds,
   in plain sections (a heading on its own line, no marks the app would show
   raw), at every church:
@@ -153,9 +165,14 @@ moves the login's row to the person.
     service, and when they leave).
   Never saved by itself.
 - `set_description(...)`, `undo(...)`: write, log, undo (the last change only;
-  it puts back the earlier writer's words with their name). A save that leaves
-  the title out keeps the written one. Clearing is explicit (`clear: true`),
-  never an empty description, so a missing field can't wipe someone's.
+  it puts back the earlier writer's words with their name, or null for a
+  writer whose login is no longer the church's, since a deleted account's id
+  would fail its key). A save that leaves the title out keeps the written one,
+  and its writer. Clearing is explicit (`clear: true`), never an empty
+  description, so a missing field can't wipe someone's. Undo reads only this
+  person's changes (by their person, or by their login while it had no
+  person), never another person's that a login was once tied to. A put-back
+  that failed and couldn't let its claim go is tried again by the next undo.
 - Routes (church_job_descriptions router, mounted before public_site_router):
   - GET  /church/jobs?business_id=                       roster
   - GET  /church/jobs/person?business_id=&contact_id=|user_id=   one job (the whole description)
@@ -174,14 +191,34 @@ moves the login's row to the person.
 - `whose_job` {work}: mid-turn read. "Whose job is …?", and BEFORE handing out
   work when the leader didn't say who, and whenever new work comes up with
   nobody named (a task, a board follow-up, something a member reported).
-- `job_of` {who}: mid-turn read. "What does Tiara do?", "what's Minister Ray's
-  job?", and "what is my job?" for anyone (my_work stays for the office
-  check-it flow).
+- `job_of` {who, from_line?}: mid-turn read. "What does Tiara do?", "what's
+  Minister Ray's job?", and "what is my job?" for anyone (my_work stays for the
+  office check-it flow). The description comes last; one too long to fit says
+  "(continues: ask job_of for X with from_line N ...)", and from_line reads
+  only the description from there.
+- Size: the three reads are on chief_tool_loop's 12,000-character list, and
+  each is built to fit RESULT_BUDGET (10,000 characters of the result's JSON),
+  so Chief never gets the tool loop's "Incomplete sample" cut. whose_job drops
+  a line's excerpt past the budget, then says how many more ("continues"); a
+  draft comes once (never twice) and, if it can't fit, leaves out what each
+  duty covers and says so.
+- Naming: "me" only when they said it. A whole name, or one name word only one
+  person has (a first name, never the start of one: "Ann" is never "Annette"),
+  with whole words of what they do ("Minister Angela", "Elder Marcus"). Among
+  the people the asker may name: everyone's job for an office seat, whoever
+  they're over (church_over.under: a group's leader too), and for the owner
+  any of the church's people. None, or several, change nothing and say who it
+  could be. A write with no name and no key that parses asks "Who is this
+  for?"; the same for undo.
 - `draft_job_description` {who}: mid-turn read. Chief reads it back, the leader
   changes what's wrong, then set_job_description.
 - `set_job_description` {who, description, title?, source, clear?}: [ACTION]
   tag write. Reads back what it saved (its first 1,500 characters, line breaks
-  kept), who wrote it, and that undo puts it back.
+  kept), who wrote it, and that undo puts it back. A title kept from another
+  writer is read back fenced, named as theirs, and raises the turn's taint.
+  Pasted or document text isn't read back (its size and source are): the
+  leader approved those words before the save, and reading them back would
+  hold every save after it in the turn.
 - `undo_job_description` {who}: [ACTION] tag write; its inverse is registered
   in action_inverse so "undo that" works, carrying the change it undoes (a
   later change since means nothing is put back).
@@ -218,7 +255,9 @@ and their duties.
 
 FakeSB tests like test_chief_church_assignments (__tests__/
 test_chief_church_jobs.py, __tests__/test_church_job_descriptions.py) and a
-PGlite run of the file (__tests__/church_job_descriptions_db.mjs): whose_job
+PGlite run of the file (__tests__/church_job_descriptions_db.mjs), and the
+#1807 review's findings as regression tests (__tests__/
+test_church_job_descriptions_review.py): whose_job
 routes "monthly report" to the Executive Pastor's holder, "weekly text" to its
 holder, "fire extinguishers" to a facilities description; an office seat
 writing a pastor's description is refused; pay words refused; someone else's

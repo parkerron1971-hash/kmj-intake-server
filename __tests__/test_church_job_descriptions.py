@@ -277,7 +277,7 @@ def test_words_drop_stop_words_and_stem_lightly():
     assert stems == {"inspecting": "inspect", "policies": "policy", "rooms": "room", "boxes": "box"}
     assert cjd._hit("month", "monthly") and cjd._hit("pray", "prayer") and not cjd._hit("kid", "kit")
     assert not cjd.has_pay("Manages the $5k youth budget and the benefit dinner")
-    assert cjd.has_pay("Salary: $40k") and cjd.has_pay("$20/hr") and cjd.has_pay("paid hourly")
+    assert cjd.has_pay("Salary: $40k") and cjd.has_pay("$20/hr") and cjd.has_pay("Paid $18 an hour")
 
 
 def test_the_descriptions_go_with_the_church_and_their_log_stays_behind():

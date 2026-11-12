@@ -15,12 +15,16 @@
 --                  key: a login that leaves leaves its row, which no reader
 --                  shows once the seat is gone
 --   title          80 at most; null = none written
+--   title_by       who wrote the title (a save that leaves the title out
+--                  keeps it, and keeps it its writer's words)
 --   description    1 to 8000, never empty (clearing deletes the row); line
 --                  breaks kept as written (sections such as "On Sunday")
 --   source         said | pasted | document | drafted
 --   written_by/at  who first wrote one for this person, and when
 --   updated_by/at  who wrote the words saved now, and when (an undo puts
 --                  back the earlier writer's words with their name)
+--   version        1, then one more with every write: each write and undo
+--                  lands only on the version it read (compare-and-set)
 -- One row a person (church_job_descriptions_person), else one a login with no
 -- person (church_job_descriptions_login).
 --
@@ -54,12 +58,14 @@ create table if not exists public.church_job_descriptions(
   contact_id uuid,
   user_id uuid,
   title text,
+  title_by uuid,
   description text not null,
   source text not null default 'said',
   written_by uuid,
   written_at timestamptz not null default now(),
   updated_by uuid,
-  updated_at timestamptz not null default now()
+  updated_at timestamptz not null default now(),
+  version integer not null default 1
 );
 
 create table if not exists public.church_job_description_changes(
@@ -94,6 +100,12 @@ begin
       add constraint church_job_descriptions_updated_by_fkey foreign key (updated_by)
         references auth.users(id) on delete set null not valid;
   end if;
+  if not exists (select 1 from pg_constraint where conname = 'church_job_descriptions_title_by_fkey'
+                 and conrelid = 'public.church_job_descriptions'::regclass) then
+    alter table public.church_job_descriptions
+      add constraint church_job_descriptions_title_by_fkey foreign key (title_by)
+        references auth.users(id) on delete set null not valid;
+  end if;
   if not exists (select 1 from pg_constraint where conname = 'church_job_descriptions_someone'
                  and conrelid = 'public.church_job_descriptions'::regclass) then
     alter table public.church_job_descriptions
@@ -105,7 +117,8 @@ begin
       add constraint church_job_descriptions_words check (
         (title is null or char_length(title) between 1 and 80)
         and char_length(btrim(description)) between 1 and 8000
-        and source in ('said', 'pasted', 'document', 'drafted')) not valid;
+        and source in ('said', 'pasted', 'document', 'drafted')
+        and version >= 1) not valid;
   end if;
   if not exists (select 1 from pg_constraint where conname = 'church_job_description_changes_contact_id_fkey'
                  and conrelid = 'public.church_job_description_changes'::regclass) then
@@ -174,6 +187,10 @@ comment on table public.church_job_descriptions is
   'Church job descriptions (church_job_descriptions.py): one person''s job in the church''s own words. Server-only (RLS on, no policies). Pay never goes in one (the server refuses it).';
 comment on column public.church_job_descriptions.user_id is
   'The login, for a login with no person behind it (kept beside contact_id when the person is a login). No foreign key: a row of a login that left is shown by no reader.';
+comment on column public.church_job_descriptions.title_by is
+  'Who wrote the title. A save that leaves the title out keeps it, and it stays this writer''s words.';
+comment on column public.church_job_descriptions.version is
+  'One more with every write; each write and undo lands only on the version it read (compare-and-set).';
 comment on column public.church_job_descriptions.updated_by is
   'Who wrote the words saved now. An undo puts back the earlier writer''s words with their name.';
 comment on table public.church_job_description_changes is
@@ -197,7 +214,7 @@ commit;
 --   select conname, convalidated from pg_constraint
 --    where conrelid in ('public.church_job_descriptions'::regclass, 'public.church_job_description_changes'::regclass)
 --      and contype in ('c', 'f') order by conname;
---   -- 10 rows: the two businesses foreign keys convalidated true; the other 8 false (NOT VALID: enforced on
+--   -- 11 rows: the two businesses foreign keys convalidated true; the other 9 false (NOT VALID: enforced on
 --   -- every new write)
 --   select count(*) from pg_trigger where tgname = 'church_job_descriptions_same_business' and not tgisinternal;
 --   -- 1
