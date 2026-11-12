@@ -254,6 +254,35 @@ def handers(business: Dict[str, Any], ids: Iterable[Any]) -> Dict[str, str]:
             if str(p.get("user_id")) in want and _plain(p.get("name")) and p.get("name") not in _NO_NAME}
 
 
+def person_handers(business: Dict[str, Any], rows: Iterable[Dict[str, Any]]) -> Dict[str, str]:
+    """task id -> the name of the person who handed it out from the member
+    app (tasks.handed_by_contact_id, church assignments: a leader over
+    others has no login), for the tasks no login handed. Read on its own, so
+    a church whose database doesn't have the column yet (or a read that
+    fails) is {} and everything else stands."""
+    want = [str(r["id"]) for r in rows if r.get("id") and not r.get("handed_by")]
+    if not want:
+        return {}
+    b = str(business["id"])
+    by_task: Dict[str, str] = {}
+    for chunk in _chunks(want):
+        got = _rows(f"/tasks?business_id=eq.{_q(b)}&id=in.({','.join(_q(i) for i in chunk)})"
+                    "&handed_by_contact_id=not.is.null&select=id,handed_by_contact_id&limit=200")
+        if got is None:
+            return {}
+        by_task.update({str(r["id"]): str(r["handed_by_contact_id"]) for r in got if r.get("handed_by_contact_id")})
+    people = _contacts(b, by_task.values()) if by_task else {}
+    return {t: people[c]["name"] for t, c in by_task.items() if people and c in people}
+
+
+def _by_task(business: Dict[str, Any], rows: List[Dict[str, Any]]) -> Dict[str, str]:
+    """task id -> who handed it out, by name: the login (handers), else the
+    person (person_handers); '' when neither can be said."""
+    logins = handers(business, (r.get("handed_by") for r in rows))
+    people = person_handers(business, rows)
+    return {str(r["id"]): logins.get(str(r.get("handed_by") or ""), "") or people.get(str(r["id"]), "") for r in rows}
+
+
 def hander_email(biz: Dict[str, Any], user_id: str) -> str:
     """The sign-in email of whoever handed a task out: the owner's from
     Auth, a login's from its seat. "" when they've left or it can't be read."""
@@ -482,8 +511,10 @@ def deliver(biz: Dict[str, Any], to_email: str, to_name: str, subject: str, html
         business_id=str(biz["id"]), idempotency_key=key[:120]))
 
 
-def handed_text(name: str, task: Dict[str, Any], today: Optional[date], by: str = "") -> str:
-    """The leader's email, in plain words. `by`: who handed it, by name."""
+def handed_text(name: str, task: Dict[str, Any], today: Optional[date], by: str = "", section: str = "Tasks") -> str:
+    """The leader's email, in plain words. `by`: who handed it, by name;
+    `section`: where it sits on the Lead tab (Assignments, while church
+    assignments are open for the church)."""
     title = _plain(task.get("title")) or "A task"
     lines = [f"Hi {first_name(name)},", f"{by or 'The church office'} handed you a task: {title}."]
     d = _day(task.get("due_date"))
@@ -493,8 +524,8 @@ def handed_text(name: str, task: Dict[str, Any], today: Optional[date], by: str 
     notes = str(task.get("description") or "").replace("\r\n", "\n").strip()[:NOTES_MAX]
     if notes:
         lines.append(f"Notes from the office:\n{notes}")
-    lines.append(f"It’s on your {_tab_word()} tab in the church’s app, under Tasks. When it’s done, tap Done "
-                 "there and the office will see it.")
+    lines.append(f"It’s on your {_tab_word()} tab in the church’s app, under {section}. When it’s done, tap Done "
+                 f"there and {'whoever gave it to you' if section == 'Assignments' else 'the office'} will see it.")
     return "\n\n".join(lines)
 
 
@@ -546,7 +577,7 @@ def tell_new(biz: Dict[str, Any], rows: List[Dict[str, Any]], now: datetime, sta
     reply_to = _office_email(biz)
     tz = zone(biz)
     today = now.astimezone(tz).date() if tz else None
-    by = handers(biz, (r.get("handed_by") for r in rows))
+    by = _by_task(biz, rows)
     # Where church assignments are open for the church, a leader handed
     # several in one sweep (a first assignment is several at once) gets one
     # email for all of them; one alone is told as before.
@@ -571,7 +602,8 @@ def tell_new(biz: Dict[str, Any], rows: List[Dict[str, Any]], now: datetime, sta
                 stats["no_email"] += 1
                 continue
             try:
-                html = render_email(biz, handed_text(who["name"], t, today, by.get(str(t.get("handed_by") or ""), "")),
+                html = render_email(biz, handed_text(who["name"], t, today, by.get(tid, ""),
+                                                     "Assignments" if grouped else "Tasks"),
                                     f"{_plain(t.get('title'))[:80]}", link, "Open your tasks")
                 deliver(biz, who["email"], who["name"], f"{church}: a task for you", html,
                         f"leader-task-{tid}-{cid}", reply_to=reply_to)
@@ -600,16 +632,16 @@ def _tell_group(biz: Dict[str, Any], cid: str, tasks: List[Dict[str, Any]], now:
         return
     if len(claimed) == 1:
         t = claimed[0]
-        text = handed_text(who["name"], t, today, by.get(str(t.get("handed_by") or ""), ""))
+        text = handed_text(who["name"], t, today, by.get(str(t["id"]), ""), "Assignments")
         what, key, subject = _plain(t.get("title"))[:80], f"leader-task-{t['id']}-{cid}", f"{church}: a task for you"
     else:
         startup = cas.startup_of(b, [t["id"] for t in claimed])
         first = all(str(t["id"]) in startup for t in claimed)
-        names = [by.get(h, "") for h in dict.fromkeys(str(t.get("handed_by") or "") for t in claimed)]
+        names = list(dict.fromkeys(by.get(str(t["id"]), "") for t in claimed))
         what, text, _push = cas.grouped_text(
             who["name"], names, claimed, today, first,
-            f"They’re on your {_tab_word()} tab in the church’s app, under Tasks. When each is done, tap Done "
-            "there and the office will see it.")
+            f"They’re on your {_tab_word()} tab in the church’s app, under Assignments. When each is done, tap "
+            "Done there and whoever gave it to you will see it.")
         key, subject = f"leader-tasks-{cas.digest(t['id'] for t in claimed)}-{cid}", f"{church}: {what}"
     try:
         deliver(biz, who["email"], who["name"], subject, render_email(biz, text, what[:80], link, "Open your tasks"),

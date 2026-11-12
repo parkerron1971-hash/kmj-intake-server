@@ -104,17 +104,19 @@ TEMPLATES: List[Dict[str, Any]] = [
     # Over the lanes
     _t("oversee_lanes.start_each", "oversee_lanes", 1, "Start each office login's first assignment",
        "Every office login you're over has their first assignment, with its dates agreed with them."),
-    _t("oversee_lanes.one_on_one", "oversee_lanes", 1, "A first one-on-one with each",
+    _t("oversee_lanes.one_on_one", "oversee_lanes", 1, "A first one-on-one with each person you're over",
        "You've sat down with each of them: what's finished, what's stuck, what's next."),
-    # A role that leads (or a group they lead)
-    _t("lead.people", LEAD, 1, "Your team or group and its people",
-       "Your team or group is in the system with everyone on it."),
-    _t("lead.meets", LEAD, 1, "The day and time it meets",
-       "Its day and time are set, so everyone can see when it meets."),
-    _t("lead.room", LEAD, 2, "Its room",
-       "It has its room, booked through a room request."),
-    _t("lead.first_need", LEAD, 2, "Its first need",
-       "You've said the one thing it needs first, and who can help."),
+    # A role that leads (or a group they lead). Each title reads alone, as
+    # it does on the board and in a list of someone's things (the keys stay:
+    # items already made keep working).
+    _t("lead.people", LEAD, 1, "Who's on your team or group",
+       "Everyone on your team or group is in the system."),
+    _t("lead.meets", LEAD, 1, "When you meet: the day and time",
+       "Your team or group's day and time are set, so everyone can see when you meet."),
+    _t("lead.room", LEAD, 2, "The room you meet in",
+       "Your team or group has its room, booked through a room request."),
+    _t("lead.first_need", LEAD, 2, "What you need first",
+       "You've said the one thing your team or group needs first, and who can help."),
     # A role that oversees
     _t("oversee.meet_each", OVERSEE, 1, "Meet each leader under you",
        "You've met each leader under you."),
@@ -218,18 +220,21 @@ def made_keys(biz: str, target: Dict[str, Any]) -> Dict[str, str]:
     return {str(r["startup_key"]): str(r["id"]) for r in rows if r.get("startup_key")}
 
 
-def row_for(biz: str, target: Dict[str, Any], by: str, t: Dict[str, Any], today: date) -> Dict[str, Any]:
+def row_for(biz: str, target: Dict[str, Any], by: Dict[str, Any], t: Dict[str, Any], today: date) -> Dict[str, Any]:
     """One start-up item as a task. Every row carries the same keys (a bulk
-    insert whose rows differ loses the chunk)."""
+    insert whose rows differ loses the chunk). `by` is who starts it: a
+    login (handed_by) or one of the church's people, from the member app
+    (handed_by_contact_id)."""
     return {"business_id": biz, "title": t["title"][:200], "description": None, "status": "todo",
             "priority": "medium", "due_date": (today + timedelta(days=7 * int(t["week"]))).isoformat(),
             "assigned_to": target["id"] if target["kind"] == co.LOGIN else None,
             "assigned_contact_id": target["id"] if target["kind"] == co.PERSON else None,
-            "handed_by": str(by), "duty": t["duty"], "done_when": t["done_when"][:300], "check_key": t["check"],
+            "handed_by": str(by["id"]) if by["kind"] == co.LOGIN else None,
+            "handed_by_contact_id": str(by["id"]) if by["kind"] == co.PERSON else None, "duty": t["duty"], "done_when": t["done_when"][:300], "check_key": t["check"],
             "startup_key": t["key"]}
 
 
-def start(ch: co.Church, by: str, target: Dict[str, Any], today: date) -> Dict[str, Any]:
+def start(ch: co.Church, by: Dict[str, Any], target: Dict[str, Any], today: date) -> Dict[str, Any]:
     """Make the missing items of `target`'s first assignment, handed by
     `by`. {made: [task rows], skipped: n, of: m}. The caller checked that
     `by` is over them. A save that fails is a 503; one the unique index

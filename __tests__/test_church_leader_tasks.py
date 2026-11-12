@@ -136,6 +136,9 @@ def db(monkeypatch):
     for name in ("get", "post", "patch", "delete"):
         monkeypatch.setattr(sb_clients, f"sb_{name}_as_service", getattr(fake, name))
     monkeypatch.setenv("CHURCH_LEADER_TASKS", "on")
+    # The tasks page as it is wherever church assignments are closed; open,
+    # the same place is Assignments (test_member_portal_assign).
+    monkeypatch.setenv("CHURCH_ASSIGNMENTS", "off")
     monkeypatch.delenv("PLATFORM_OWNER_EMAIL", raising=False)
     monkeypatch.setattr(clt, "_now", lambda: NOW)
     monkeypatch.setattr(member_asks, "platform_church", lambda b: str(b) == BIZ)

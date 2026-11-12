@@ -539,6 +539,12 @@ def _release(b: str, ids: List[str], stamp: str) -> None:
         logger.warning("handovers: a claim wasn't let go (business %s)", b[:8], exc_info=True)
 
 
+def _lead_link(b: str) -> str:
+    import church_follow_up as cfu
+    origin = cfu.site_origin(b)
+    return f"{origin}/my/lead/tasks" if origin else ""
+
+
 def tell(biz: Dict[str, Any], rows: List[Dict[str, Any]], now: datetime, stats: Dict[str, int]) -> None:
     """One church's untold hand-overs: one email a person. Everything the
     email says is read before the claim; what can't be read waits for the
@@ -589,8 +595,11 @@ def tell(biz: Dict[str, Any], rows: List[Dict[str, Any]], now: datetime, stats: 
             where = f"It’s on your My week in the church’s app. {answer}"
             link, label = cot._link(b), "Open My week"
         else:
-            # No Lead tab line until the member app's part ships (PR C2).
-            where, link, label = answer, "", ""
+            # The member app's Lead tab (member_portal_assign, PR C2).
+            tab = clt._tab_word()
+            where = (f"It’s on your {tab} tab in the church’s app: open Assignments, and it’s under From the "
+                     f"office. Tap Got it once you have it. {answer}")
+            link, label = _lead_link(b), f"Open your {tab} tab"
         ids = [str(r["id"]) for r in mine]
         stamp = _iso(now)
         claimed = _claim(b, cid, ids, stamp)

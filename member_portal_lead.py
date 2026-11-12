@@ -70,6 +70,10 @@ PAID_BACK: ContextVar[str] = ContextVar("lead_paid_back", default="")
 # this member has tasks the office handed them, read once per request in
 # serve(), so every page's section switcher can offer Tasks; None when not.
 TASKS: ContextVar[Optional[Dict[str, int]]] = ContextVar("lead_tasks", default=None)
+# Church assignments (member_portal_assign, 2026-11-12): while they're open
+# for the church, Tasks is Assignments (theirs, their people's, what was sent
+# up to them and what the office sent them), read once per request.
+ASSIGN: ContextVar[bool] = ContextVar("lead_assign", default=False)
 
 
 def _word() -> str:
@@ -644,6 +648,13 @@ async def _context(request: Request, biz: Dict[str, Any], me: Dict[str, Any]) ->
     import member_portal_board as mpb
     PAID_BACK.set(mpb.serve_door() + await mpck.door_async(request, biz))
     TASKS.set(await asyncio.to_thread(clt.section, biz, str(me["id"])))
+    # Church assignments (member_portal_assign): while they're open for the
+    # church, the same place is Assignments, for every leader.
+    import member_portal_assign as mpa
+    got = await asyncio.to_thread(mpa.section, biz, str(me["id"]))
+    ASSIGN.set(got is not None)
+    if got is not None:
+        TASKS.set(got)
 
 
 async def serve(request: Request, biz: Dict[str, Any], site, me: Dict[str, Any], sub: str):
@@ -654,6 +665,9 @@ async def serve(request: Request, biz: Dict[str, Any], site, me: Dict[str, Any],
     await _context(request, biz, me)
     # The tasks the office handed them (church_leader_tasks).
     if selected == "tasks":
+        if ASSIGN.get():
+            import member_portal_assign
+            return await member_portal_assign.serve(request, biz, site, me)
         return await serve_tasks(request, biz, site, me)
     # A Sunday team's leader: their team's Sundays (member_portal_leading).
     if selected == "sundays":
@@ -823,7 +837,8 @@ def _seg(tab: str, people: bool, prays: bool, waiting: int, fams: int, groups: i
         tabs.append(("prayer", "/my/lead/prayer", f"Prayer · {waiting}" if waiting else "Prayer"))
     tasks = TASKS.get()
     if tasks is not None:
-        tabs.append(("tasks", "/my/lead/tasks", f"Tasks · {tasks['open']}" if tasks.get("open") else "Tasks"))
+        word = "Assignments" if ASSIGN.get() else "Tasks"
+        tabs.append(("tasks", "/my/lead/tasks", f"{word} · {tasks['open']}" if tasks.get("open") else word))
     if fams:
         tabs.append(("families", "/my/lead/families", f"Families · {fams}"))
     p = PARTS.get()
