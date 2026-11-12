@@ -19,7 +19,9 @@ view, without the monthly report (its own PR).
                      care requests handed to it that are still open, as counts;
                      and what's due this week from its duties (each duty's day
                      in the catalog: "Wed: The weekly text", or the day the
-                     login picked, church_assignments). No money, and
+                     login picked, church_assignments), each a check judges
+                     done / not yet / late where church assignments are open
+                     (judge_week: one read a table for the church). No money, and
                      nothing behind a keeper wall: no names of the people in
                      follow-up, nothing of what a care request asked, and the
                      follow-up and care counts only for an overseer who works
@@ -29,7 +31,8 @@ view, without the monthly report (its own PR).
                      church's morning (its own clock, church_leader_tasks'
                      LATE_FROM to LATE_UNTIL), one email to each Manager over
                      the lanes, from the church, with the team in plain words
-                     (who's late on what, what's due this week), and a push to
+                     (who's late on what, what's due this week and, where a
+                     check judges it, done / not yet / late), and a push to
                      My week. The owner and the admins don't get it (the owner
                      has chief_week). Claimed once per church per ISO week in
                      businesses.settings.church_team_rollup, swapped only when
@@ -305,6 +308,7 @@ def row(biz: Dict[str, Any], seat: Dict[str, Any], name: str, now: datetime, tod
     week = due_this_week(s["duties"], monday, picked)
     late = sum(1 for i in items if i["late"])
     out = {"user_id": uid, "name": name, "lane": _lane_words(s["lanes"]), "lanes": list(s["lanes"]),
+           "_duties": frozenset(s["duties"]),
            "ok": True, "status": 200,
            "tasks": {"open": len(items), "late": late, "items": items[:TASKS_SHOWN],
                      "late_items": [i for i in items if i["late"]][:LATE_NAMED]},
@@ -324,9 +328,29 @@ def row(biz: Dict[str, Any], seat: Dict[str, Any], name: str, now: datetime, tod
     return out
 
 
+# The areas behind the keeper wall for an overseer who doesn't work People &
+# care: a judged job in one keeps its done / not yet / late, never its words
+# (a count of people in follow-up, of drifting families).
+WALLED = ("people_care", "kids_youth", "groups_classes")
+
+
+def walled(w: Dict[str, Any]) -> Dict[str, Any]:
+    """One job due this week without its check's words when it's in a walled area."""
+    if w.get("detail") is not None and (cd.CATALOG.get(w.get("duty")) or {}).get("area") in WALLED:
+        return {k: v for k, v in w.items() if k != "detail"}
+    return w
+
+
 def without_care(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """The rows without their follow-up and care counts (People & care's)."""
-    return [{k: v for k, v in r.items() if k not in ("follow_ups", "care")} for r in rows]
+    """The rows without their follow-up and care counts (People & care's),
+    and without the words of any judged job in a walled area."""
+    out = []
+    for r in rows:
+        r = {k: v for k, v in r.items() if k not in ("follow_ups", "care")}
+        if r.get("this_week"):
+            r["this_week"] = [walled(w) for w in r["this_week"]]
+        out.append(r)
+    return out
 
 
 def unread_row(seat: Dict[str, Any], name: str, err: HTTPException) -> Dict[str, Any]:
@@ -376,7 +400,7 @@ def team(biz: Dict[str, Any], now: Optional[datetime] = None, exclude: Optional[
     else:
         rows = [one(s) for s in seats]
     rows.sort(key=lambda r: (cd.EXEC not in r["lanes"], r["name"].lower()))
-    return {
+    page = {
         "church": _plain(biz.get("name")) or "Your church",
         "today": today.isoformat(),
         "week": {"monday": monday.isoformat(), "words": f"the week of {monday:%B} {monday.day}"},
@@ -385,6 +409,50 @@ def team(biz: Dict[str, Any], now: Optional[datetime] = None, exclude: Optional[
         "counts": {"logins": len(rows), "late_tasks": sum(r["tasks"]["late"] for r in rows if r["ok"]),
                    "unread": sum(1 for r in rows if not r["ok"])},
     }
+    import church_over
+    if church_over.church_open(b):
+        judge_week(biz, rows, now, today, tz, picks, care)
+        page["counts"]["late_jobs"] = sum(r.get("this_week_counts", {}).get("late", 0) for r in rows if r["ok"])
+    for r in rows:
+        r.pop("_duties", None)
+    return page
+
+
+def judge_week(biz: Dict[str, Any], rows: List[Dict[str, Any]], now: datetime, today: date, tz,
+               picks: Dict[str, Dict[str, str]], care: bool = True) -> None:
+    """Each row's jobs due this week, judged (church_my_week._done_full):
+    `state` done / not_yet / late, `state_text`, `detail` (what the check
+    counted) and `due` on each one a check judges, `this_week_counts`, and
+    `last_week` (church_my_week.last_week: last week's result, judged at the
+    end of each job's day). One church_work_checks.Ctx for the whole team,
+    after the rows are read, so each table is read once for the church,
+    never once a login. A job no check judges, or one whose read failed,
+    keeps only its day. `care` False (an overseer who doesn't work People &
+    care): a job in a walled area keeps its state and never its words."""
+    import church_my_week as mw
+    import church_work_checks as cw
+    ctx = cw.Ctx(biz, now, tz)
+    monday = monday_of(today)
+    for r in rows:
+        if not r.get("ok"):
+            continue
+        mine = picks.get(str(r["user_id"])) or {}
+        judged = mw._done_full(biz, frozenset(w["duty"] for w in r["this_week"]), today, now, tz,
+                               picks=mine, ctx=ctx)
+        counts = {"done": 0, "not_yet": 0, "late": 0}
+        for w in r["this_week"]:
+            due = mw.due_day(w["duty"], monday, mine.get(w["duty"]), today)
+            got = judged.get(w["duty"])
+            state = mw.job_state(got["done"], due, today) if got else None
+            if state:
+                w.update(state=state, state_text=mw.STATE_TEXT[state], detail=got["text"], due=due.isoformat())
+                counts[state] += 1
+        if not care:
+            r["this_week"] = [walled(w) for w in r["this_week"]]
+        r["this_week_counts"] = counts
+        last = mw.last_week(biz, r.get("_duties") or frozenset(), today, now, tz, picks=mine, ctx=ctx)
+        if last:
+            r["last_week"] = last
 
 
 @router.get("/my-week/team")
@@ -441,8 +509,21 @@ def _line(r: Dict[str, Any]) -> str:
     else:
         lines.append("Nothing handed to them is open.")
     if r["this_week"]:
-        lines.append("This week: " + r["this_week_text"])
+        late_jobs = [w["label"] for w in r["this_week"] if w.get("state") == "late"]
+        if late_jobs:
+            lines.append("Late on the week: " + ", ".join(late_jobs) + ".")
+        lines.append("This week: " + week_said(r))
+    if r.get("last_week"):
+        lines.append(r["last_week"]["text"] + ".")
     return "\n".join(lines)
+
+
+def week_said(r: Dict[str, Any]) -> str:
+    """A row's jobs due this week, each with its day and, where a check
+    judged it, done / not yet / late: "Mon: First-time guests and welcome
+    calls (late) · Wed: The weekly text and email (not yet)"."""
+    return " · ".join(w["text"] + (f" ({w['state_text'].lower()})" if w.get("state") else "")
+                      for w in r.get("this_week") or [])
 
 
 def rollup_text(name: str, page: Dict[str, Any], rows: List[Dict[str, Any]]) -> str:
