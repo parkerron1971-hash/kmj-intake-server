@@ -4,7 +4,7 @@ date: 2026-11-13
 agent: Claude Code (Claude Opus 5.5)
 asked: 'this is good build it (the Email room mock, artifact HuNVNSzCydvvzJ4vE5iu88)'
 status: in progress
-prs: []
+prs: ["kmj-intake-server#1817", "solutionist-studio#1532"]
 migrations: [supabase/APPLY-2026-11-13-church-mail-room.sql]
 left_undone:
   - "Sending from the room is plain text with a signature: no attachments yet (received files open by a fresh link from the mail service while it keeps them)."
