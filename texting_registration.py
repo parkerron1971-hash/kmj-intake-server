@@ -193,12 +193,91 @@ def offers_box(name: str) -> str:
             "varies. Msg & data rates may apply. Reply STOP to opt out.")
 
 
-def campaign_words(name: str, origin: str, *, offer_code: str = "FALL10") -> Dict[str, Any]:
+# A church (Kevin, 2026-11-13: "finish setting up the text structure" so
+# churches can send text alerts). A church takes no bookings and sends no
+# offers: its texts are announcements, events, reminders for the people
+# serving, and replies. Registered with the booking words above, its
+# campaign would describe traffic it never sends and send the reviewers to
+# a /book page it doesn't have, which is a rejection and two weeks lost. So
+# a church gets its own words, pages and readiness, and a sign-up page on
+# its own site (SIGNUP_PATH) that it can put in the bulletin and that the
+# message flow quotes word for word.
+
+SIGNUP_PATH = "/texts"
+SIGNUP_SOURCE = "texts_page"            # sms_consents.source for a yes given there
+
+
+def is_church(business: Optional[Dict[str, Any]]) -> bool:
+    """A ministry business (church_follow_up.is_church). Never raises."""
+    try:
+        import church_follow_up
+        return church_follow_up.is_church(business or {})
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def church_box(name: str) -> str:
+    """The sign-up page's checkbox, in the church's own name."""
+    return (f"I agree to receive text messages from {name}: service times and changes, events, and reminders "
+            "when I'm serving. Not required to attend or take part. Msg frequency varies. Msg & data rates may "
+            "apply. Reply STOP to opt out, HELP for help.")
+
+
+CHURCH_CONFIRM = ("You're signed up for texts from us: service times, events and reminders. Msg frequency varies. "
+                  "Msg & data rates may apply. Reply HELP for help, STOP to opt out.")
+
+
+def church_campaign_words(name: str, origin: str) -> Dict[str, Any]:
+    """The campaign as Twilio's reviewers will read it, for a church. The
+    same keys and rules as the booking words: who sends, who receives and
+    why; the opt-in quoted word for word at a page the reviewer can open;
+    samples that name the church; links only to the church's own site."""
+    signup = f"{origin}{SIGNUP_PATH}"
+    return {
+        "use_case": USE_CASE,
+        "description": (f"{name} is a church. It texts the people who signed up for its texts on its website "
+                        "or in its member app: church announcements (service times and changes, events, "
+                        "closings), reminders to volunteers about when they are serving, and replies to people "
+                        f"who text the church. The messages are from {name} about its own services and events. "
+                        "No offers and nothing from third parties."),
+        "message_flow": (f"People opt in on {name}'s texts sign-up page ({signup}): they enter their name and "
+                         "mobile number and check an unchecked box that reads: "
+                         f"\"{church_box(name)}\" The box is never required, and the page links the texting "
+                         f"terms ({origin}{TERMS_PATH}) and privacy policy ({origin}{PRIVACY_PATH}). After "
+                         f"signing up they get one text confirming it: \"{name}: {CHURCH_CONFIRM}\" Members "
+                         "signed in to the church's app can also turn on \"Text me important news\", shown with "
+                         "the same rates, STOP and HELP words and links. People who text the church first get "
+                         "replies to their own messages."),
+        "samples": [
+            f"{name}: Sunday service starts at 10:00 AM this week. See you there! Reply STOP to opt out.",
+            f"{name}: Because of the snow, tonight's Bible study is online. Details: {origin} Reply STOP to opt out.",
+            f"Reminder from {name}: you're serving on the greeting team this Sunday at 9:30 AM. "
+            "Reply STOP to opt out.",
+            f"{name}: Family movie night is Friday at 7 PM. Sign up: {origin}/events Reply STOP to opt out.",
+        ],
+        "opt_in_keywords": ["START", "YES", "UNSTOP"],
+        "opt_in_message": f"{name}: {CHURCH_CONFIRM}",
+        "opt_out_keywords": ["STOP", "STOPALL", "UNSUBSCRIBE", "CANCEL", "END", "QUIT"],
+        "opt_out_message": f"{name}: You're unsubscribed and won't get more texts from us. Reply START to resubscribe.",
+        "help_keywords": ["HELP", "INFO"],
+        "help_message": (f"{name}: For help, reply to this message or visit {origin}{TERMS_PATH}. "
+                         "Msg & data rates may apply. Reply STOP to opt out."),
+        "has_embedded_links": True,
+        "has_embedded_phone": False,
+        "terms_url": f"{origin}{TERMS_PATH}",
+        "privacy_url": f"{origin}{PRIVACY_PATH}",
+    }
+
+
+def campaign_words(name: str, origin: str, *, offer_code: str = "FALL10", church: bool = False) -> Dict[str, Any]:
     """The campaign registration as Twilio's reviewers will read it, in the
     business's name. Follows Twilio's published rejection reasons: say who
     sends, who receives and why; samples that name the business; opt-in
     quoted word for word; marketing consent collected apart; no public URL
-    shorteners (links are the business's own site)."""
+    shorteners (links are the business's own site). A church's are its own
+    (church_campaign_words)."""
+    if church:
+        return church_campaign_words(name, origin)
     book = f"{origin}/book"
     return {
         "use_case": USE_CASE,
@@ -249,8 +328,11 @@ footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid var(--line);
 """
 
 
-def _page(title: str, name: str, body: str, origin: str) -> str:
+def _page(title: str, name: str, body: str, origin: str, *, church: bool = False) -> str:
     n = html.escape(name)
+    # A church has no booking page: its own home page instead.
+    last = (f'<a href="{html.escape(origin)}/">Home</a>' if church
+            else f'<a href="{html.escape(origin)}/book">Book</a>')
     return f"""<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -262,15 +344,33 @@ def _page(title: str, name: str, body: str, origin: str) -> str:
 {body}
 <footer class="muted"><a href="{html.escape(origin)}{TERMS_PATH}">Texting terms</a> ·
 <a href="{html.escape(origin)}{PRIVACY_PATH}">Texting privacy</a> ·
-<a href="{html.escape(origin)}/book">Book</a></footer>
+{last}</footer>
 </main></body></html>"""
 
 
-def terms_html(name: str, origin: str, contact_email: Optional[str] = None) -> str:
+def terms_html(name: str, origin: str, contact_email: Optional[str] = None, *, church: bool = False) -> str:
     """/texting-terms: the business's text messaging terms."""
     n = html.escape(name)
     contact = (f' or email <a href="mailto:{html.escape(contact_email)}">{html.escape(contact_email)}</a>'
                if contact_email else "")
+    if church:
+        body = f"""
+<p>{n} sends text messages to people who agree to receive them. These terms explain what you get and how to stop.</p>
+<h2>What we text</h2>
+<ul>
+<li><strong>Church news:</strong> service times and changes, events, and closings.</li>
+<li><strong>Serving reminders:</strong> when you're on a team, a reminder of when you're serving.</li>
+<li><strong>Replies:</strong> answers when you text us.</li>
+</ul>
+<p>You agree to these on our <a href="{html.escape(origin)}{SIGNUP_PATH}">texts sign-up page</a> or in our member app. Agreeing to texts is never required to attend, give, or take part in anything. We never text offers or messages from anyone else.</p>
+<h2>How often</h2>
+<p>Message frequency varies with what's happening at church. Message and data rates may apply.</p>
+<h2>How to stop or get help</h2>
+<p>Reply <strong>STOP</strong> to any text to stop all texts from {n}; you'll get one message confirming it. Reply <strong>START</strong> to sign up again. Reply <strong>HELP</strong> for help{contact}.</p>
+<p>Carriers are not liable for delayed or undelivered messages.</p>
+<h2>Privacy</h2>
+<p>{html.escape(PRIVACY_LINE)} See our <a href="{html.escape(origin)}{PRIVACY_PATH}">texting privacy policy</a>.</p>"""
+        return _page("Text messaging terms", name, body, origin, church=True)
     body = f"""
 <p>{n} sends text messages to clients who agree to receive them. These terms explain what you get and how to stop.</p>
 <h2>What we text</h2>
@@ -289,23 +389,82 @@ def terms_html(name: str, origin: str, contact_email: Optional[str] = None) -> s
     return _page("Text messaging terms", name, body, origin)
 
 
-def privacy_html(name: str, origin: str, contact_email: Optional[str] = None) -> str:
+def privacy_html(name: str, origin: str, contact_email: Optional[str] = None, *, church: bool = False) -> str:
     """/texting-privacy: the business's privacy policy for text messages."""
     n = html.escape(name)
     contact = (f' To ask about your information, email <a href="mailto:{html.escape(contact_email)}">'
                f'{html.escape(contact_email)}</a>.' if contact_email else "")
+    what = ("church news (service times and changes, events, closings), reminders when you're serving"
+            if church else "about your bookings and, if you chose, offers and openings")
+    software = "our church software" if church else "our booking software"
     body = f"""
 <p>This policy covers the mobile number and messages you share with {n} when you agree to receive texts.</p>
 <h2>What we collect</h2>
 <p>Your mobile number, your consent (when and where you gave it), and the messages we exchange.</p>
 <h2>How we use it</h2>
-<p>Only to send the texts you agreed to (about your bookings and, if you chose, offers and openings), to answer your messages, and to honor STOP and HELP.</p>
+<p>Only to send the texts you agreed to ({what}), to answer your messages, and to honor STOP and HELP.</p>
 <h2>Sharing</h2>
-<p><strong>{html.escape(PRIVACY_LINE)}</strong> We use service providers (our booking software and its text messaging provider) only to deliver our messages to you.</p>
+<p><strong>{html.escape(PRIVACY_LINE)}</strong> We use service providers ({software} and its text messaging provider) only to deliver our messages to you.</p>
 <h2>Your choices</h2>
 <p>Reply <strong>STOP</strong> to any text to stop all texts from {n}, or <strong>HELP</strong> for help.{contact}</p>
 <p>See our <a href="{html.escape(origin)}{TERMS_PATH}">text messaging terms</a>.</p>"""
-    return _page("Text messaging privacy policy", name, body, origin)
+    return _page("Text messaging privacy policy", name, body, origin, church=church)
+
+
+_SIGNUP_CSS = """
+form { margin: 24px 0 8px; display: grid; gap: 16px; }
+label.field { display: grid; gap: 6px; font-weight: 600; }
+input[type=text], input[type=tel] { font: inherit; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px;
+  background: var(--bg); color: var(--text); width: 100%; }
+label.agree { display: grid; grid-template-columns: 22px 1fr; gap: 10px; align-items: start; font-size: 15px; }
+label.agree input { width: 20px; height: 20px; margin: 2px 0 0; }
+button { font: inherit; font-weight: 600; padding: 12px 18px; border-radius: 10px; border: 0; background: var(--text);
+  color: var(--bg); cursor: pointer; justify-self: start; }
+.note { padding: 12px 14px; border-radius: 10px; border: 1px solid var(--line); }
+.hp { position: absolute; left: -10000px; width: 1px; height: 1px; overflow: hidden; }
+"""
+
+SIGNUP_NOTES = {
+    "done": "You're signed up. A text is on its way to confirm it.",
+    "again": "You're already signed up for our texts.",
+    "start": ("You asked us to stop texts earlier. To turn them back on, reply START to any text from us "
+              "or text START to the number our texts come from."),
+}
+SIGNUP_ERRORS = {
+    "name": "Add your name.",
+    "phone": "That number doesn't look like a US mobile number. Try again with the area code.",
+    "agree": "Check the box to agree to our texts.",
+    "busy": "Too many sign-ups from here just now. Try again in a minute.",
+    "error": "Your sign-up couldn't be saved just now. Try again in a minute.",
+}
+
+
+def signup_html(name: str, origin: str, business_id: str, *, note: Optional[str] = None) -> str:
+    """/texts: the church's texts sign-up page. A plain form (no script) that
+    posts to POST /texting/signup/{business_id} on the same site; the box is
+    unchecked and never required, with the terms and privacy links under it.
+    `note` is a key of SIGNUP_NOTES or SIGNUP_ERRORS, from the redirect."""
+    n = html.escape(name)
+    shown = ""
+    if note in SIGNUP_NOTES:
+        shown = f'<p class="note" role="status">{html.escape(SIGNUP_NOTES[note])}</p>'
+    elif note in SIGNUP_ERRORS:
+        shown = f'<p class="note" role="alert">{html.escape(SIGNUP_ERRORS[note])}</p>'
+    o = html.escape(origin)
+    body = f"""
+<p>Get texts from {n}: service times and changes, events, and reminders when you're serving.</p>
+{shown}
+<form method="post" action="/texting/signup/{html.escape(str(business_id))}">
+<label class="field">Your name<input type="text" name="name" autocomplete="name" maxlength="120" required></label>
+<label class="field">Mobile number<input type="tel" name="phone" autocomplete="tel" inputmode="tel" maxlength="20" required></label>
+<label class="agree"><input type="checkbox" name="agree" value="1"><span>{html.escape(church_box(name))}</span></label>
+<div class="hp" aria-hidden="true"><label>Leave this empty<input type="text" name="website" tabindex="-1" autocomplete="off"></label></div>
+<button type="submit">Sign me up</button>
+</form>
+<p class="muted"><a href="{o}{TERMS_PATH}">Texting terms</a> · <a href="{o}{PRIVACY_PATH}">Privacy</a></p>
+<p class="muted">{html.escape(PRIVACY_LINE)}</p>"""
+    page = _page("Sign up for texts", name, body, origin, church=True)
+    return page.replace("</style>", _SIGNUP_CSS + "</style>", 1)
 
 
 # ── the answers, the EIN and readiness ────────────────────────────────
@@ -451,12 +610,22 @@ def is_open(business_id: str) -> bool:
 def readiness(business: Dict[str, Any], *, answers: Optional[Dict[str, Any]], origin: Optional[str],
               bookable: Optional[bool], ein_on_file: Optional[bool] = None) -> List[Dict[str, Any]]:
     """What Twilio's reviewers look for, each {key, ok, label, fix}. A check
-    that couldn't be read is ok None (never a guess)."""
+    that couldn't be read is ok None (never a guess). A church is asked for
+    no booking page: people agree on its texts sign-up page, which goes up on
+    its own site the moment the registration is sent."""
+    church = is_church(business)
+    agree = (
+        {"key": "signup", "ok": bool(origin),
+         "label": "Your texts sign-up page" + (f" ({origin}{SIGNUP_PATH})" if origin else "")
+                  + ", up the moment you send this",
+         "fix": "It goes up with your website: people sign up there, and the reviewers read it."}
+        if church else
+        {"key": "booking", "ok": bookable, "label": "Your booking page takes bookings",
+         "fix": "Publish your booking page with at least one service: it's where clients agree to texts."})
     out = [
         {"key": "site", "ok": bool(origin), "label": "Your website is live",
          "fix": "Publish your site in Build, My Site: reviewers open it."},
-        {"key": "booking", "ok": bookable, "label": "Your booking page takes bookings",
-         "fix": "Publish your booking page with at least one service: it's where clients agree to texts."},
+        agree,
         {"key": "pages", "ok": bool(origin),
          "label": "Your texting terms and privacy pages are up" + (f" ({origin}{TERMS_PATH})" if origin else ""),
          "fix": "They go up with your website."},
@@ -510,12 +679,14 @@ async def overview(business: Dict[str, Any]) -> Dict[str, Any]:
     except Exception as e:
         logger.warning("texting registration: site unread for %s: %s", bid[:8], e)
         origin = None
+    church = is_church(business)
     bookable: Optional[bool] = None
-    try:
-        import business_marketing_links as links
-        bookable = await asyncio.to_thread(links.bookable, bid, business)
-    except Exception as e:
-        logger.warning("texting registration: booking unread for %s: %s", bid[:8], e)
+    if not church:                      # a church is asked for no booking page
+        try:
+            import business_marketing_links as links
+            bookable = await asyncio.to_thread(links.bookable, bid, business)
+        except Exception as e:
+            logger.warning("texting registration: booking unread for %s: %s", bid[:8], e)
     ein: Optional[str] = None
     ein_known = True
     try:
@@ -550,8 +721,11 @@ async def overview(business: Dict[str, Any]) -> Dict[str, Any]:
         "from_about": about,
         "brand_path": brand_path(answers),
         "readiness": checks,
-        "words": campaign_words(shown_name, origin) if origin else None,
-        "pages": {"terms": f"{origin}{TERMS_PATH}", "privacy": f"{origin}{PRIVACY_PATH}"} if origin else None,
+        "words": campaign_words(shown_name, origin, church=church) if origin else None,
+        "pages": ({"terms": f"{origin}{TERMS_PATH}", "privacy": f"{origin}{PRIVACY_PATH}",
+                   # A church's sign-up page, the link it shares: live once sent.
+                   **({"signup": f"{origin}{SIGNUP_PATH}"} if church else {})} if origin else None),
+        "signup_live": bool(church and origin and is_sent(row)),
         "business_types": BUSINESS_TYPES,
         "industries": INDUSTRIES,
         "ein": {"on_file": bool(ein), "last4": ein[-4:] if ein else None} if ein_known else None,
@@ -788,7 +962,7 @@ async def _send(business: Dict[str, Any], row: Dict[str, Any]) -> str:
         if not origin:
             raise texting_isv.NeedsFix(["Publish your website: the reviewers open it."])
         shown = str(business.get("name") or answers.get("legal_name"))
-        t.setdefault("campaign_words", campaign_words(shown, origin))
+        t.setdefault("campaign_words", campaign_words(shown, origin, church=is_church(business)))
         t.setdefault("sent_at", _now().isoformat())
         await asyncio.to_thread(
             texting_isv.send, t, business_id=bid, name=shown, answers=answers, ein=ein,
@@ -1007,12 +1181,16 @@ async def sweep_tick() -> Dict[str, Any]:
 
 # ── the public pages (public_site serves them on the business's site) ──
 
-async def page_for(business_id: str, kind: str) -> Optional[str]:
-    """The HTML for /texting-terms or /texting-privacy, or None when the
-    business can't be read."""
+async def page_for(business_id: str, kind: str, *, note: Optional[str] = None) -> Optional[str]:
+    """The HTML for /texting-terms, /texting-privacy or a church's /texts
+    (kind "signup"), or None when the business can't be read. The sign-up
+    page is only a church's, and only once its registration is sent: from
+    then on a yes given there is a yes to the church by name, so it counts
+    under the church's own registration (sms_routing.own_registration's
+    `since` is the moment it was sent)."""
     try:
         rows = await asyncio.to_thread(
-            _read, f"/businesses?id=eq.{UUID(str(business_id))}&select=id,name,settings&limit=1")
+            _read, f"/businesses?id=eq.{UUID(str(business_id))}&select=id,name,type,settings&limit=1")
         origin = await asyncio.to_thread(site_origin, str(business_id))
     except Exception as e:
         logger.warning("texting page unread for %s: %s", str(business_id)[:8], e)
@@ -1020,9 +1198,126 @@ async def page_for(business_id: str, kind: str) -> Optional[str]:
     if not rows or not origin:
         return None
     name = str(rows[0].get("name") or "This business")
+    church = is_church(rows[0])
+    if kind == "signup":
+        if not church:
+            return None
+        try:
+            if not is_sent(await asyncio.to_thread(registration, str(business_id))):
+                return None
+        except Exception as e:  # noqa: BLE001
+            logger.warning("texts sign-up unread for %s: %s", str(business_id)[:8], e)
+            return None
+        return signup_html(name, origin, str(business_id), note=note)
     try:
         import public_site
         email = public_site._business_public_email(rows[0].get("settings") or {}) or None
     except Exception:
         email = None
-    return terms_html(name, origin, email) if kind == "terms" else privacy_html(name, origin, email)
+    return (terms_html(name, origin, email, church=church) if kind == "terms"
+            else privacy_html(name, origin, email, church=church))
+
+
+# ── a church's texts sign-up (the form on /texts) ─────────────────────
+
+def _signup_back(note: str):
+    """Back to the page the form was on, on the same site (relative, so the
+    church's own domain and its mysolutionist.app address both work), with
+    only a note key in the address: never the name or the number."""
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(f"{SIGNUP_PATH}?note={note}", status_code=303)
+
+
+@router.post("/signup/{business_id}", include_in_schema=False)
+async def church_signup(business_id: str, request: Request):
+    """A person signs up for a church's texts on its /texts page.
+
+    Public, like the site's contact form, and guarded the same way: its
+    rate limit, a hidden field a person never fills, and a business that is
+    a church whose registration is sent (else 404, the page isn't there).
+    The person is found by their number among the church's people, or added
+    as a guest; their yes is kept in sms_consents (source texts_page, the
+    time, address and browser), the record carriers ask for. One text then
+    confirms it, unless they had already signed up here or had said STOP."""
+    import public_site
+    import rate_limit
+    if not public_site._check_contact_rate(rate_limit.trusted_client_ip(request)):
+        return _signup_back("busy")
+    try:
+        bid = str(UUID(str(business_id)))
+    except ValueError:
+        raise HTTPException(404, "Page not found")
+    form = await request.form()
+    if str(form.get("website") or "").strip():          # the hidden field: not a person
+        return _signup_back("done")
+    try:
+        rows = await asyncio.to_thread(_read, f"/businesses?id=eq.{bid}&select=id,name,type&limit=1")
+        row = await asyncio.to_thread(registration, bid) if rows and is_church(rows[0]) else None
+    except Exception as e:  # noqa: BLE001
+        logger.warning("texts sign-up: church unread for %s: %s", bid[:8], e)
+        return _signup_back("error")
+    if not rows or not is_church(rows[0]) or not is_sent(row):
+        raise HTTPException(404, "Page not found")
+    church_name = str(rows[0].get("name") or "")
+    from sms_service import normalize_phone
+    name = re.sub(r"\s+", " ", str(form.get("name") or "")).strip()[:120]
+    phone = normalize_phone(str(form.get("phone") or "")[:40])
+    if not name:
+        return _signup_back("name")
+    if not phone or not re.fullmatch(r"\+1[2-9]\d{9}", phone):
+        return _signup_back("phone")
+    if str(form.get("agree") or "") != "1":
+        return _signup_back("agree")
+
+    from urllib.parse import quote
+    try:
+        import lead_identity
+        person = await asyncio.to_thread(lambda: lead_identity.find(
+            bid, phone=phone, name=name, select="id,name,phone", strict=True))
+        if person:
+            contact_id = str(person["id"])
+        else:
+            made = await asyncio.to_thread(sb_clients.sb_post_as_service, "/contacts", {
+                "business_id": bid, "name": name, "phone": phone, "status": "lead",
+                "source": "texts_signup", "last_interaction": _now().isoformat()}, "return=representation")
+            if not isinstance(made, list) or not made:
+                raise RuntimeError("contact not saved")
+            contact_id = str(made[0]["id"])
+        before = await asyncio.to_thread(
+            _read, f"/sms_consents?business_id=eq.{bid}&phone=eq.{quote(phone, safe='')}"
+                   f"&source=eq.{SIGNUP_SOURCE}&select=id&limit=1")
+        if before:
+            return _signup_back("again")
+        saved = await asyncio.to_thread(sb_clients.sb_post_as_service, "/sms_consents", {
+            "phone": phone, "name": name, "source": SIGNUP_SOURCE, "business_id": bid,
+            "consented_at": _now().isoformat(),
+            # The hop our proxy added, not the first one (which the caller types).
+            "ip": (rate_limit.trusted_client_ip(request) or "")[:64],
+            "user_agent": (request.headers.get("user-agent") or "")[:300]}, "return=representation")
+        if not isinstance(saved, list) or not saved:
+            raise RuntimeError("consent not saved")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("texts sign-up not saved for %s: %s", bid[:8], e)
+        return _signup_back("error")
+
+    # The yes is kept. The confirming text is best-effort: a person who said
+    # STOP is told how to turn texts back on (Twilio blocks texts to them
+    # until they text START), and a failed send never undoes the sign-up.
+    import httpx
+    from sms_service import _store_sms, compose_outbound_body, is_opted_out
+    async with httpx.AsyncClient(timeout=20) as client:
+        try:
+            if await is_opted_out(client, phone, bid):
+                return _signup_back("start")
+        except Exception as e:  # noqa: BLE001
+            logger.warning("texts sign-up: STOP unread for %s: %s", bid[:8], e)
+            return _signup_back("done")
+        try:
+            from sms_routing import _send_platform_sms
+            body = compose_outbound_body(church_name, CHURCH_CONFIRM)
+            sid = await _send_platform_sms(phone, body, business_id=bid, client=client)
+            await _store_sms(client, business_id=bid, contact_id=contact_id, phone_number=phone, message=body,
+                             direction="outbound", telnyx_id=sid, status="sent", sent_by="system")
+        except Exception as e:  # noqa: BLE001
+            logger.warning("texts sign-up: confirming text not sent for %s: %s", bid[:8], e)
+    return _signup_back("done")

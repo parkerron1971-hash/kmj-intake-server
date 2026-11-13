@@ -498,7 +498,7 @@ def _rewrite_nav_for_preview(html: str, slug: str,
     return out
 # Sub-paths served by their own handlers — never 404, never in the
 # "unknown path" branch.
-_ALWAYS_WINS_PATHS = ("/book", "/give", "/events", "/store", "/texting-terms", "/texting-privacy")
+_ALWAYS_WINS_PATHS = ("/book", "/give", "/events", "/store", "/texting-terms", "/texting-privacy", "/texts")
 
 
 def _site_robots_txt(slug: str, custom_domain: Optional[str] = None) -> str:
@@ -7087,6 +7087,16 @@ async def _serve_site_by_slug(slug: str, path: str = "/", *, query: str = "") ->
             if page is None:
                 raise HTTPException(404, "Page not found")
             return HTMLResponse(page, headers={**_PUBLIC_SITE_EDGE_CACHE_HEADERS})
+        # A church's texts sign-up page (2026-11-13): there once its texting
+        # registration is sent. Never cached: it carries the form's note.
+        if normalized_path == "/texts":
+            import texting_registration
+            from urllib.parse import parse_qs
+            note = (parse_qs(query or "").get("note") or [None])[0]
+            page = await texting_registration.page_for(biz_id, "signup", note=note)
+            if page is None:
+                raise HTTPException(404, "Page not found")
+            return HTMLResponse(page, headers={**_PUBLIC_SITE_NO_STORE_HEADERS})
         # ─── Academy Phase 4 — /academy catalog + course pages ─────
         if normalized_path == "/academy" or normalized_path.startswith("/academy/"):
             return await _serve_academy(client, biz_id, normalized_path, standalone=False)
