@@ -2,7 +2,7 @@
 title: Church email — every admin and leader gets their own @churchdomain address
 date: 2026-11-13
 agent: Claude Code (Claude Opus 5.5)
-asked: "is the email setup ready? I was seeing about setting email for admin and chief doesn't know about it" / "can we muild what is needed so this can go live right away?"
+asked: 'is the email setup ready? I was seeing about setting email for admin and chief doesn''t know about it / can we muild what is needed so this can go live right away?'
 status: in progress
 prs: ["kmj-intake-server#1809"]
 migrations: [supabase/APPLY-2026-11-13-church-mail.sql]
