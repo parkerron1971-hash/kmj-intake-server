@@ -7221,6 +7221,18 @@ async def _send_queued_email(client, biz: Dict[str, Any], item: Dict[str, Any],
     from_name = chief_areas.sender(biz, (sig.get("name") or settings.get("practitioner_name") or biz.get("name")
                                          or "The Solutionist System").strip())
     reply_to = (sig.get("email") or settings.get("contact_email") or "").strip() or None
+    # A login with its own church address sends FROM it, and the reply comes
+    # back to it (church_mail: a copy at their own email, and their answer
+    # goes out as the church address again). Kevin, 2026-11-13: "I want
+    # everyone to send out emails today." Only the person talking to Chief
+    # now: an unattended send or one approved later goes as the church.
+    own = None
+    if _TURN_USER_ID.get():
+        try:
+            import church_mail
+            own = await asyncio.to_thread(church_mail.sender_box, biz, _TURN_USER_ID.get())
+        except Exception:  # noqa: BLE001 — the church's address, as before
+            own = None
 
     # Use the email_sender helper directly — no HTTP hop to ourselves.
     try:
@@ -7233,11 +7245,11 @@ async def _send_queued_email(client, biz: Dict[str, Any], item: Dict[str, Any],
         data = await send_via_resend(
             to_email=email,
             to_name=contact.get("name"),
-            from_email=_format_from_email(),
+            from_email=own["address"] if own else _format_from_email(),
             from_name=from_name,
             subject=_subject,
             body=composed_body,
-            reply_to=routed or reply_to,
+            reply_to=own["address"] if own else (routed or reply_to),
             # WHOSE NAME IS ON IT.
             #
             # send_via_resend swaps in a business's VERIFIED custom sending
