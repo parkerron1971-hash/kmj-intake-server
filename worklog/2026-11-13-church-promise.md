@@ -4,7 +4,7 @@ date: 2026-11-13
 agent: Claude Code (Claude Fable 5.2)
 asked: "yes that is a good promise i think. put it make sure it sounds good."
 status: in review
-prs: [kmj-intake-server (this PR)]
+prs: [kmj-intake-server#1830]
 migrations: []
 left_undone:
   - "Not in the app's billing screen: the promise is on the church pages and the pastor's handout."
