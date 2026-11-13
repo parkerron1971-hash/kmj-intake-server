@@ -198,10 +198,12 @@ def test_two_of_a_role_asks_which_and_none_says_so(db):
         "invited_at": "2026-10-01T00:00:00+00:00", "answered_at": None, "answers_to_contact_id": None})
     two = run(db, "take_off_role", {"who": "Tasha Williams", "role": "Team leader"})
     assert two["failed"] and "more than one" in two["result"] and len(rows(db, "tasha", "team_leader")) == 2
-    one = ok(run(db, "take_off_role", {"who": "Tasha Williams", "role": "Team leader",
-                                       "team": "Youth Ministry (YWD)"}))
+    # "hospitality" is the Hospitality Team, as the ask matches it; the role's work stays with her through
+    # the other team, so nothing went back, and the receipt doesn't say nothing was left (#1831 review).
+    one = ok(run(db, "take_off_role", {"who": "Tasha Williams", "role": "Team leader", "team": "hospitality"}))
     left = rows(db, "tasha", "team_leader")
-    assert one["was"] == "held" and [r["scope"] for r in left] == ["Hospitality Team"]
+    assert one["was"] == "held" and [r["scope"] for r in left] == ["Youth Ministry (YWD)"]
+    assert "Nothing went back." in one["result"] and "left with them" not in one["result"]
     none = run(db, "take_off_role", {"who": "Gloria Hunt", "role": "Deacons"})
     assert none["failed"] and "don't hold that role" in none["result"]
 
@@ -217,16 +219,67 @@ def test_a_manager_may_and_nobody_else_does(db):
     assert rows(db, "ruth", "intercessor_leader")
 
 
-def test_an_unattended_run_and_a_tainted_turn_change_nothing(db, monkeypatch):
-    import chief_of_staff as cos
+def test_an_unattended_run_changes_nothing(db):
     for verb in VERBS:
         out = run(db, verb, {"who": "Gloria Hunt", "role": "Worship Leader", "_unattended": True})
         assert out["failed"] and "only when someone at the church asks" in out["result"]
+    assert not rows(db, "gloria") and not db.sent
+
+
+def test_a_tainted_turn_is_the_gates_to_hold_naming_who_and_the_role(db, monkeypatch):
+    """The class C gate holds a tainted turn and reads back who and which role; its go-ahead releases this
+    exact action, so the handler must not hold it a second time (#1831 review: that made the go-ahead a dead
+    end)."""
+    import chief_of_staff as cos
     monkeypatch.setattr(cos, "untrusted_taint", lambda: True)
-    for verb in VERBS:
-        out = run(db, verb, {"who": "Ruth Okafor", "role": "Intercessor leader"})
-        assert out["failed"] and out.get("needs_confirmation") and "HELD" in out["result"]
-    assert not rows(db, "gloria") and rows(db, "ruth", "intercessor_leader") and not db.sent
+    action = {"type": "ask_into_role", "who": "Calvin Owens", "role": "Team leader", "team": "Hospitality Team"}
+    verdict, held = asyncio.run(cos._gate_class_c(None, {"id": LC}, "ask_into_role", dict(action), 0))
+    assert verdict == "handled" and held["needs_confirmation"]
+    assert "Calvin Owens" in held["label"] and "Team leader (Hospitality Team)" in held["label"]
+    out = ok(run(db, "ask_into_role", action))         # the go-ahead's run: the handler doesn't hold again
+    assert out["changed"] and rows(db, "calvin", "team_leader")
+    assert "Ruth Okafor · Intercessor leader" == cos._confirmation_subject(
+        {"type": "take_off_role", "who": "Ruth Okafor", "role": "Intercessor leader"})
+
+
+def test_a_first_name_two_people_share_asks_which_even_when_one_holds_a_role(db):
+    """Holders first would ask Ruth Okafor (she leads the intercessors) when the new Ruth was meant; an ask
+    counts everyone at once (#1831 review)."""
+    db.t["contacts"].append({"id": "9a000000-0000-4000-8000-0000000000a1", "business_id": LC, "name": "Ruth Jones",
+                             "status": "active", "birthdate": None, "metadata": {}, "phone": "",
+                             "email": "ruthj@lovecity.org"})
+    out = run(db, "ask_into_role", {"who": "Ruth", "role": "Worship Leader"})
+    assert out["failed"] and "could be Ruth Jones or Ruth Okafor" in out["result"], out["result"]
+    assert not db.sent and not rows(db, "ruth", "worship_leader")
+    # Taking someone off still finds the holder first: only Ruth Okafor holds a role.
+    ok(run(db, "take_off_role", {"who": "Ruth", "role": "Intercessor leader"}))
+    assert not rows(db, "ruth", "intercessor_leader")
+    ok(run(db, "ask_into_role", {"who": "Ruth Jones", "role": "Worship Leader"}))
+    assert [to for to, _k in db.sent] == ["ruthj@lovecity.org"] and not rows(db, "ruth", "worship_leader")
+
+
+def test_taking_back_an_ask_leaves_their_other_work_where_it_is(db):
+    """remove_role handed a volunteer's tasks back to the owner when only an ask was taken back (#1831 review);
+    an ask hands nothing, so nothing goes back. The page's Remove is the same function."""
+    cid = db.who[LC]["calvin"]
+    db.t["tasks"].append({"id": "9a000000-0000-4000-8000-0000000000b1", "business_id": LC, "status": "todo",
+                          "title": "Set up chairs", "description": None, "due_date": "2026-11-20",
+                          "assigned_contact_id": cid, "assigned_to": None, "leader_told_at": None,
+                          "late_told_at": None, "done_by_contact_id": None, "completed_at": None,
+                          "created_at": "2026-11-10T12:00:00+00:00", "handed_by": church(db, LC)["owner_id"]})
+    ok(run(db, "ask_into_role", {"who": "Calvin Owens", "role": "Worship Leader"}))
+    back = ok(run(db, "take_off_role", {"who": "Calvin Owens", "role": "Worship Leader", "only_if_asked": True}))
+    assert back["was"] == "asked" and "Also went back" not in back["result"]
+    task = next(t for t in db.t["tasks"] if t["id"] == "9a000000-0000-4000-8000-0000000000b1")
+    assert task["assigned_contact_id"] == cid and not rows(db, "calvin")
+
+
+def test_a_role_named_by_an_id_that_isnt_the_churchs_is_refused(db):
+    out = run(db, "take_off_role", {"who": "Ruth Okafor", "role": "9a000000-0000-4000-8000-0000000000ee"})
+    assert out["failed"] and "There’s no role called" in out["result"]
+    assert rows(db, "ruth", "intercessor_leader")
+    out = run(db, "ask_into_role", {"who": "Gloria Hunt", "role": "9a000000-0000-4000-8000-0000000000ee"})
+    assert out["failed"] and not rows(db, "gloria") and not db.sent
 
 
 def test_not_a_church(db):

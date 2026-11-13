@@ -994,13 +994,18 @@ def remove_role(business_id: str, role_id: str) -> Dict[str, Any]:
     problems"). A write that didn't save is left for the sweep
     (_sweep_handed), never counted as returned."""
     biz, rid = _uid(business_id, "business"), _uid(role_id, "role")
-    row = _rows(f"/church_leader_roles?id=eq.{_q(rid)}&business_id=eq.{_q(biz)}&select=contact_id,role&limit=1")
+    row = _rows(f"/church_leader_roles?id=eq.{_q(rid)}&business_id=eq.{_q(biz)}"
+                "&select=contact_id,role,status&limit=1")
     if row is None:
         raise HTTPException(503, "That couldn’t be checked. Try again in a moment.")
     if not sb_clients.sb_delete_as_service(f"/church_leader_roles?id=eq.{_q(rid)}&business_id=eq.{_q(biz)}"):
         raise HTTPException(503, "That didn’t save. Try again.")
     out = {"returned": 0, "prayer_returned": 0, "tasks_returned": 0, "failed": 0}
-    if not row:
+    if not row or row[0].get("status") == "invited":
+        # An ask they hadn't answered handed them nothing and opened no Lead
+        # tab, so taking it back leaves everything else of theirs where it is
+        # (#1831 review: a volunteer's tasks went back to the owner when an
+        # unanswered ask was taken back).
         return out
     lid, role = str(row[0]["contact_id"]), str(row[0].get("role") or "")
     still = _rows(f"/church_leader_roles?business_id=eq.{_q(biz)}&contact_id=eq.{_q(lid)}&status=eq.active"

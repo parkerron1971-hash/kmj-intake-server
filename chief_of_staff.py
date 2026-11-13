@@ -3680,6 +3680,13 @@ def _confirmation_subject(action: Dict[str, Any]) -> str:
         elif a.get('free_item'):
             bits.append(f"a free {a['free_item']}")
         bits.append('for ' + str(a.get('who') or 'anyone').replace('_', ' '))
+    if a.get('type') in ('ask_into_role', 'take_off_role'):
+        # Who, and which role: "ask into role" with no name or role couldn't
+        # be checked by ear (#1831 review).
+        if a.get('who') or a.get('person'):
+            bits.append(str(a.get('who') or a.get('person')))
+        if a.get('role'):
+            bits.append(str(a['role']) + (f" ({a['team']})" if a.get('team') else ''))
     if a.get('type') == 'change_offer':
         bits.append(' '.join(x for x in (str(a.get('code') or '').upper(), str(a.get('status') or '')) if x))
     if a.get('type') == 'set_refer_a_friend':
