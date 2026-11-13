@@ -84,6 +84,8 @@ DOOR = {
     "leaders_list": {"area": "operate", "id": "leaders", "label": "Open Leaders & roles"},
     "new_leaders": {"area": "operate", "id": "leaders", "label": "Open Leaders & roles"},
     "supplies": {"area": "operate", "id": "tasks", "label": "Open Tasks"},
+    # Addresses are given out through Chief; the domain and its mail live in Email Setup.
+    "church_email": {"area": "build", "id": "email-setup", "label": "Open Email Setup"},
     # People & Care. The member directory is one of the church's doors.
     "first_guests": {"area": "operate", "id": "follow-up", "label": "Open the Follow-up board"},
     "care_visits": {"area": "operate", "id": "care", "label": "Open Prayer & care"},

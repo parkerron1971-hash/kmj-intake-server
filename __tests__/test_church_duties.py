@@ -200,7 +200,7 @@ def test_each_lanes_starter_set_is_read_from_the_catalog():
     # Love City's office split into the real jobs each admin does (Kevin, 2026-11-02).
     assert cd.STARTER["office_leadership"] == ["front_desk", "leaders_note", "meetings", "decisions", "weekly_text",
                                                "calendar", "rooms", "building", "records", "chat_rules",
-                                               "leaders_list", "new_leaders", "supplies"]
+                                               "leaders_list", "new_leaders", "supplies", "church_email"]
     assert cd.STARTER["people_care"] == ["first_guests", "care_visits", "prayer", "help_requests", "shepherding",
                                          "groups", "member_records", "kids", "youth", "devotionals"]
     # The volunteers: rooms are the Office's alone, and ChurchSavvy's jobs Media's.
@@ -211,11 +211,11 @@ def test_each_lanes_starter_set_is_read_from_the_catalog():
                                          "stream", "sermons", "clips", "posts", "flyers", "website"]
     # Each lane's duties are its own: nothing is in two lanes now.
     lanes = ("office_leadership", "people_care", "sunday_serving", "media_comms", "treasurer")
-    assert [len(cd.STARTER[ln]) for ln in lanes] == [13, 10, 8, 10, 4]
+    assert [len(cd.STARTER[ln]) for ln in lanes] == [14, 10, 8, 10, 4]
     assert all(len(d["lanes"]) == 1 for d in cd.CATALOG.values())
     # The care board is the People & Care lane's jobs now, one by one.
     assert "care_board" not in cd.CATALOG and "sunday_ready" not in cd.CATALOG
-    assert len(cd.CATALOG) == 47
+    assert len(cd.CATALOG) == 48
     # The Executive Pastor covers any lane: every duty but money (the plan Kevin approved 10-27).
     assert cd.STARTER["executive_pastor"] == [k for k, d in cd.CATALOG.items() if not d["money"]]
     assert [k for k, d in cd.CATALOG.items() if d["lanes"] == ["executive_pastor"]] == ["monthly_report", "oversee_lanes"]

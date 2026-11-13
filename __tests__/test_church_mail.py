@@ -156,6 +156,14 @@ def db(monkeypatch):
     monkeypatch.setattr(church_mail, "receiving_live", lambda d: d == DOMAIN)
     monkeypatch.delenv("CHURCH_MAIL_SECRET", raising=False)
     monkeypatch.delenv("SUPABASE_SERVICE_ROLE_KEY", raising=False)
+    # Who holds the church email duty (church_duties): nobody but the owner and Admins until a test says.
+    import church_duties
+    fake.duty = set()
+    monkeypatch.setattr(church_duties, "standing",
+                        lambda biz, uid: {"duties": {"church_email"} if uid in fake.duty else set()})
+    monkeypatch.setattr(church_duties, "refusal",
+                        lambda biz, duty: "“Church email addresses” is Naiya's job here. The owner or an admin can "
+                                          "give it to you in Logins & areas.")
     church_mail._DOMAIN_CACHE.clear()
     church_mail._LIVE_CACHE.clear()
     return fake
@@ -389,12 +397,32 @@ def chief(db, resend, monkeypatch):
     return SimpleNamespace(run=run, live=live, notes=notes)
 
 
-def test_only_the_pastor_or_an_admin_gives_out_an_address(chief, db):
+def test_a_manager_without_the_church_email_duty_is_told_whose_job_it_is(chief, db):
     out = chief.run(chief_church_mail.handle_give_church_email, {"address": "tia", "to": f"login:{TIA}"}, as_uid=MANAGER)
-    assert out["failed"] and "pastor or an Admin" in out["result"] and not db.t["church_mailboxes"]
+    assert out["failed"] and "is Naiya's job here" in out["result"] and not db.t["church_mailboxes"]
+    out = chief.run(chief_church_mail.handle_take_back_church_email, {"address": "tia"}, as_uid=MANAGER)
+    assert out["failed"] and "is Naiya's job here" in out["result"]
+
+
+def test_an_admin_gives_out_addresses(chief, db):
     next(s for s in db.t["business_users"] if s["user_id"] == MANAGER)["role"] = "admin"
     out = chief.run(chief_church_mail.handle_give_church_email, {"address": "tia", "to": f"login:{TIA}"}, as_uid=MANAGER)
     assert not out.get("failed") and out["address"] == "tia@lovecityc.com"
+
+
+def test_the_churchs_main_admin_gives_them_out_with_the_duty(chief, db):
+    """Kevin, 2026-11-13: "Naiya would the one who gives out the emails to others" — a Manager in the
+    Office & Leadership lane holds the church email duty, so she gives out and takes back addresses."""
+    db.duty.add(MANAGER)
+    out = chief.run(chief_church_mail.handle_give_church_email, {"address": "tia", "to": "Tia"}, as_uid=MANAGER)
+    assert not out.get("failed") and db.t["church_mailboxes"][0]["created_by"] == MANAGER
+    listed = chief.run(chief_church_mail.handle_church_email, {}, as_uid=MANAGER)
+    assert listed["suggest"], "she sees who has no address yet, as the pastor does"
+    out = chief.run(chief_church_mail.handle_take_back_church_email, {"address": "tia"}, as_uid=MANAGER)
+    assert not out.get("failed") and db.t["church_mailboxes"][0]["status"] == "off"
+    # Switching the domain over stays the owner's.
+    out = chief.run(chief_church_mail.handle_switch_on_church_mail, {}, as_uid=MANAGER)
+    assert out["failed"] and "only the church's owner" in out["result"]
 
 
 def test_giving_by_name_and_the_note_waits_for_mail_to_reach_the_system(chief, db):
