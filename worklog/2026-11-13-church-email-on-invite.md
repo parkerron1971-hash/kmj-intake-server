@@ -4,7 +4,7 @@ date: 2026-11-13
 agent: Claude Code (Claude Opus 5.5)
 asked: 'build these (… Chief doesn''t yet offer an address automatically when you invite a new login …)'
 status: in progress
-prs: []
+prs: ["kmj-intake-server#1826"]
 migrations: []
 left_undone:
   - "Chief has no verb that invites a login (invites come from the Team page), so the address rides the invite itself rather than a Chief offer."
