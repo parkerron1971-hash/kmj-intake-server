@@ -4,7 +4,7 @@ date: 2026-11-13
 agent: Claude Code (Claude Fable 5.2)
 asked: "sounds good. let's build these with no problem! top tier experience with it."
 status: in review
-prs: [kmj-intake-server#1814]
+prs: [kmj-intake-server#1815]
 migrations: []
 left_undone: []
 decisions:
