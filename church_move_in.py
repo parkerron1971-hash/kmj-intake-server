@@ -26,6 +26,15 @@ STATES
   a note) -> handed_in again. A change to an item that was handed in
   takes it back to todo: what we checked is no longer what is there.
   Giving has no hand-in. Its state is Stripe's: todo, waiting, done.
+  Texting has none either (Kevin, 2026-11-13: "add the texting step to
+  move-in"). Its state is the church's texting registration's
+  (texting_registration.py): todo or started, waiting while the phone
+  companies review it, needs when they turned it down (their reason is the
+  note), done when approved. Sent is the church's part done, so waiting
+  counts as in and as finished: two weeks of review don't hold the move
+  open. It shows only where registration is open for the church
+  (TEXTING_REGISTRATION_OPEN) or already begun, so no church is handed a
+  step it can't take.
 
 WHO
   The church: the owner and admins, and any login that works the Office
@@ -77,8 +86,9 @@ KEEPS_ALL = ("owner", "admin")
 _PATH_NAME = re.compile(r"[0-9a-f]{32}\.[a-z0-9]{2,7}")
 
 
-# ─── The eleven ───────────────────────────────────────────────────────
-# The handout's list, in its order and its words. `need` names what has
+# ─── The list ─────────────────────────────────────────────────────────
+# The handout's eleven, in its order and its words, and texting (second,
+# beside giving: both wait on someone else's review). `need` names what has
 # to be there before the item can be handed in.
 
 def _text(key: str, label: str, hint: str = "") -> Dict[str, Any]:
@@ -107,6 +117,18 @@ ITEMS: List[Dict[str, Any]] = [
                "church before a gift can be given, and we don't control how long that takes. That's why "
                "this one comes first.",
         "door": {"label": "Open giving setup", "nav": {"tab": "operate", "sub": "payments"}},
+    },
+    {
+        "key": "texting", "urgent": True, "live": "texting",
+        "title": "Set up texting",
+        "ask": "Have ready the church's legal name, its EIN, its address and the person the phone companies "
+               "can contact. Only the account owner can send it.",
+        "why": "The phone companies ask every church that texts its people to be registered under its own "
+               "name. Once they approve it, your texts go out under your church's name, from its own number. "
+               "They review every church, usually in about two weeks, and we don't control how long that "
+               "takes. That's why it starts now. Your texts keep going out while you wait.",
+        "door": {"label": "Open texting setup",
+                 "nav": {"tab": "operate", "sub": "sms", "open": "texting-registration"}},
     },
     {
         "key": "people", "urgent": True, "live": "people",
@@ -238,9 +260,13 @@ ITEMS: List[Dict[str, Any]] = [
     },
 ]
 ITEM = {i["key"]: i for i in ITEMS}
+# The things whose state an outside company decides (Stripe, the phone
+# companies). Nothing to hand in or mark; the state is read, never written.
+FOLLOWS = ("giving", "texting")
 
 STATE_WORDS = {"todo": "Not started", "started": "Started", "handed_in": "Handed in", "checked": "Checked",
                "needs": "Needs a change", "waiting": "Waiting on Stripe", "done": "Done"}
+TEXTING_WAITING = "With the phone companies"
 SETTLED = ("handed_in", "checked", "done")
 # The move is FINISHED when we have checked every thing (giving: live with
 # Stripe). Handed in is not finished: a thing can still come back needing a
@@ -393,7 +419,44 @@ def _live(biz: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
     except Exception:  # noqa: BLE001
         on_file = None
     return {"giving": {"connected": connected, "ready": connected and bool(payments_core.can_charge(biz))},
-            "people": {"on_file": on_file if isinstance(on_file, int) else None}}
+            "people": {"on_file": on_file if isinstance(on_file, int) else None},
+            "texting": _texting_live(str(biz["id"]))}
+
+
+def _texting_live(biz_id: str) -> Dict[str, Any]:
+    """Where the church's texting registration stands. Never raises: a
+    registration that couldn't be read is status None (not known)."""
+    import texting_registration as tr
+    open_ = tr.is_open(biz_id)
+    try:
+        row = tr.registration(biz_id)
+    except Exception:  # noqa: BLE001
+        logger.info("move-in: texting registration unread for %s", biz_id, exc_info=True)
+        return {"open": open_, "status": None, "begun": False, "ready": False, "failure": None}
+    status = (row or {}).get("status") or "not_started"
+    if status == "draft" and not (row or {}).get("answers"):
+        status = "not_started"
+    return {"open": open_, "status": status, "begun": row is not None, "ready": status == "approved",
+            "failure": (row or {}).get("failure") if status == "failed" else None}
+
+
+def _shows(item: Dict[str, Any], live: Dict[str, Dict[str, Any]]) -> bool:
+    """Whether the church sees this item. Texting only where registration
+    is open for it or already begun; everything else always."""
+    if item.get("live") != "texting":
+        return True
+    t = live.get("texting") or {}
+    return bool(t.get("open") or t.get("begun"))
+
+
+def _settled(item: Dict[str, Any], state: str) -> bool:
+    """In, for the count. Texting is in once it's with the phone companies."""
+    return state in SETTLED or (item.get("live") == "texting" and state == "waiting")
+
+
+def _is_finished(item: Dict[str, Any], state: str) -> bool:
+    """Finished, for leaving Home. Texting is finished once it's sent."""
+    return state in FINISHED or (item.get("live") == "texting" and state == "waiting")
 
 
 def _filled(item: Dict[str, Any], answers: Dict[str, Any], key: str) -> bool:
@@ -431,6 +494,10 @@ def _state(item: Dict[str, Any], row: Optional[Dict[str, Any]], files: List[Dict
     if item.get("live") == "giving":
         g = live["giving"]
         return "done" if g["ready"] else ("waiting" if g["connected"] else "todo")
+    if item.get("live") == "texting":
+        status = (live.get("texting") or {}).get("status")
+        return {"approved": "done", "failed": "needs", "draft": "started", "submitted": "waiting",
+                "brand_pending": "waiting", "campaign_pending": "waiting"}.get(str(status), "todo")
     state = (row or {}).get("state") or "todo"
     if state not in ("handed_in", "checked", "needs"):
         return "started" if ((row or {}).get("answers") or files) else "todo"
@@ -442,13 +509,15 @@ def _finished(biz: Dict[str, Any]) -> bool:
     church's Home once it is (Kevin, 2026-11-12: "under the home section
     until everything for move in is complete and then it disappears"). The
     states only, so the menu's one question stays a small read."""
-    rows, live = _rows_of(str(biz["id"])), None
+    import payments_core
+    rows = _rows_of(str(biz["id"]))
+    live = {"giving": {"connected": bool(biz.get("stripe_account_id")),
+                       "ready": bool(biz.get("stripe_account_id")) and bool(payments_core.can_charge(biz))},
+            "texting": _texting_live(str(biz["id"]))}
     for it in ITEMS:
-        if it.get("live") == "giving":
-            import payments_core
-            live = {"giving": {"connected": bool(biz.get("stripe_account_id")),
-                               "ready": bool(biz.get("stripe_account_id")) and bool(payments_core.can_charge(biz))}}
-        if _state(it, rows.get(it["key"]), [], live or {}) not in FINISHED:
+        if not _shows(it, live):
+            continue
+        if not _is_finished(it, _state(it, rows.get(it["key"]), [], live)):
             return False
     return True
 
@@ -492,17 +561,22 @@ def _room(biz: Dict[str, Any], *, links: bool = False) -> Dict[str, Any]:
     rows, files, live = _rows_of(biz_id), _files_of(biz_id), _live(biz)
     items, settled = [], 0
     for it in ITEMS:
+        if not _shows(it, live):
+            continue
         row, mine = rows.get(it["key"]), files.get(it["key"], [])
         state = _state(it, row, mine, live)
-        settled += state in SETTLED
+        settled += _settled(it, state)
+        texting = it.get("live") == "texting"
+        note = ((live.get("texting") or {}).get("failure") if texting else (row or {}).get("note"))
         shown = {"key": it["key"], "title": it["title"], "ask": it["ask"], "why": it.get("why"),
-                 "urgent": bool(it.get("urgent")), "state": state, "state_words": STATE_WORDS[state],
-                 "note": (row or {}).get("note") if state == "needs" else None,
+                 "urgent": bool(it.get("urgent")), "state": state,
+                 "state_words": TEXTING_WAITING if texting and state == "waiting" else STATE_WORDS[state],
+                 "note": note if state == "needs" else None,
                  "fields": it.get("fields") or [], "answers": (row or {}).get("answers") or {},
                  "door": it.get("door"), "live": live.get(it.get("live") or ""),
                  "handed_in_at": (row or {}).get("handed_in_at"), "checked_at": (row or {}).get("checked_at"),
                  "hand_in": None, "files": None}
-        if it.get("live") != "giving":
+        if it.get("live") not in FOLLOWS:
             why_not = missing(it, shown["answers"], mine, live)
             shown["hand_in"] = {"ready": why_not is None and state not in ("handed_in", "checked"), "missing": why_not}
         if it.get("files"):
@@ -511,7 +585,7 @@ def _room(biz: Dict[str, Any], *, links: bool = False) -> Dict[str, Any]:
                               "list": [_file_with_link(biz_id, f) if links else _shown_file(f) for f in mine]}
         items.append(shown)
     return {"church": {"id": biz_id, "name": biz.get("name") or "Your church"},
-            "items": items, "progress": {"settled": settled, "total": len(ITEMS)}}
+            "items": items, "progress": {"settled": settled, "total": len(items)}}
 
 
 # ─── Answers ──────────────────────────────────────────────────────────
@@ -858,6 +932,9 @@ async def move_in_hand_in(key: str, body: Dict[str, Any], user: AuthedUser = Dep
     item = _item(key)
     if item.get("live") == "giving":
         raise HTTPException(400, "Giving is done when Stripe approves your church. There's nothing to hand in.")
+    if item.get("live") == "texting":
+        raise HTTPException(400, "Texting is done when the phone companies approve your church. "
+                                 "There's nothing to hand in.")
     biz_id = str(me["biz"]["id"])
 
     def hand_in() -> Tuple[Dict[str, Any], str, bool]:
@@ -898,11 +975,23 @@ def platform_move_ins(owner: AuthedUser = Depends(require_owner)):
                                                   "checked": 0, "needs": 0, "last_at": r.get("updated_at")})
         if r.get("state") in ("handed_in", "checked", "needs"):
             b[r["state"]] += 1
+    begun: set = set()
     if by:
         ids = ",".join(_q(k) for k in by)
         for biz in _need(f"/businesses?id=in.({ids})&select=id,name&limit=1000"):
             by[str(biz["id"])]["name"] = biz.get("name")
-    return {"churches": [{"name": "A church", **b, "total": len(ITEMS)} for b in by.values()]}
+        try:
+            got = sb_clients.sb_get_as_service(f"/texting_registrations?business_id=in.({ids})&select=business_id")
+            begun = {str(r.get("business_id")) for r in got} if isinstance(got, list) else set()
+        except Exception:  # noqa: BLE001
+            begun = set()
+    import texting_registration as tr
+
+    def total(bid: str) -> int:
+        # Texting is on a church's list only where it shows there (_shows).
+        return len(ITEMS) - (0 if tr.is_open(bid) or bid in begun else 1)
+
+    return {"churches": [{"name": "A church", **b, "total": total(b["business_id"])} for b in by.values()]}
 
 
 @platform_router.get("/{business_id}")
@@ -921,6 +1010,8 @@ def platform_move_in_mark(business_id: str, key: str, body: Dict[str, Any],
     item = _item(key)
     if item.get("live") == "giving":
         raise HTTPException(400, "Giving follows Stripe. There's nothing to mark.")
+    if item.get("live") == "texting":
+        raise HTTPException(400, "Texting follows the phone companies' review. There's nothing to mark.")
     state = str((body or {}).get("state") or "")
     if state not in ("checked", "needs"):
         raise HTTPException(400, "Mark it checked, or ask for a change.")

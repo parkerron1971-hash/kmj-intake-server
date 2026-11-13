@@ -48,11 +48,12 @@ CLOSED = "The Move-in room isn't open for this church."
 TOOL = {
     "name": "move_in_status",
     "description": (
-        "A new church's move: the eleven things it hands in (giving setup, its people, the move owner, the tools "
-        "it uses today, monthly givers, this year's giving, office logins, safety officers, Sunday details, its "
-        "look, the room), where each stands (not started, started, handed in, checked, needs a change, waiting "
-        "on Stripe), what each still needs, what's next, and each item's lines by key. Use it before saying "
-        "what's left or done on the move, and before fill_move_in so the item and its lines are real."),
+        "A new church's move: the things it hands in (giving setup, texting setup where it's open, its people, "
+        "the move owner, the tools it uses today, monthly givers, this year's giving, office logins, safety "
+        "officers, Sunday details, its look, the room), where each stands (not started, started, handed in, "
+        "checked, needs a change, waiting on Stripe, with the phone companies), what each still needs, what's "
+        "next, and each item's lines by key. Use it before saying what's left or done on the move, and before "
+        "fill_move_in so the item and its lines are real."),
     "input_schema": {"type": "object", "properties": {}},
 }
 
@@ -140,6 +141,15 @@ def _live_words(shown: Dict[str, Any]) -> str:
         if live.get("connected"):
             return "The Stripe account is started; Stripe hasn't approved the church yet."
         return "Stripe isn't started; only the account owner can set it up."
+    if shown["key"] == "texting":
+        status = live.get("status")
+        if status == "approved":
+            return "The phone companies approved the church; its texts go out under its own name."
+        if status in ("submitted", "brand_pending", "campaign_pending"):
+            return "Sent; the phone companies are reviewing it (usually about two weeks). Texts keep going out meanwhile."
+        if status == "failed":
+            return "The phone companies turned it down; the reason is the note. The owner fixes it and sends again."
+        return "Not sent yet; only the account owner can send it, from the texting setup page."
     n = live.get("on_file")
     return f"{n:,} people on file." if isinstance(n, int) else ""
 
@@ -188,7 +198,7 @@ def status_sync(business_id: str, action: Dict[str, Any]) -> Dict[str, Any]:
         # What the room itself says the thing is for, while it is still to
         # do: a pastor asks "what is a safety officer?" and the answer has
         # to be the room's, not a guess.
-        if shown["state"] not in mi.SETTLED:
+        if not mi._settled(item, shown["state"]):
             bits.append(f"What's asked: {item['ask']}")
             if item.get("why"):
                 bits.append(f"Why it's needed: {item['why']}")
@@ -227,6 +237,9 @@ def _save(atype: str, business_id: str, action: Dict[str, Any], *, whole: bool) 
             if item and item["key"] == "giving":
                 return _fail(atype, "giving is set up with Stripe by the account owner, on the page. "
                                     "There's nothing to type.")
+            if item and item["key"] == "texting":
+                return _fail(atype, "texting is set up by the account owner on the texting setup page, and the "
+                                    "phone companies approve it. There's nothing to type here.")
             if item:
                 return _fail(atype, f"“{item['title']}” takes files, which they add on the Move-in page. "
                                     "There's nothing to type.")
