@@ -50,7 +50,9 @@ def test_the_ladder_is_kevins():
     assert pricing_config.church_credits() == {SMALL: 3000, GROWING: 7500, ESTABLISHED: 15000, LARGE: 27500}
     assert pricing_config.church_offer() == {"extra_texts_cents_per_thousand": 2000, "extra_login_cents": 1500,
                                              "move_months": 3, "founding_moves": 5,
-                                             "multi_site_from_cents": 99900}
+                                             "multi_site_from_cents": 99900,
+                                             # no free days on a church plan (Kevin, 2026-11-13)
+                                             "free_week": 0}
 
 
 @pytest.mark.parametrize("plan", fg.CHURCH_PLANS)
