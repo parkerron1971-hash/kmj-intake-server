@@ -4,7 +4,7 @@ date: 2026-11-13
 agent: Claude Code (Claude Fable 5.2)
 asked: "they don't explain like safety officers and why they are needed well. even some of the other ones. can we make sure that is good?"
 status: in review
-prs: [kmj-intake-server (this PR)]
+prs: [kmj-intake-server#1816]
 migrations: []
 left_undone:
   - "The welcome briefing's recorded lines about each thing are unchanged (they are recordings with measured timings)."
