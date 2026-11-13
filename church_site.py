@@ -214,12 +214,16 @@ def _trial_tokens(church: bool = False) -> Dict[str, str]:
     # plan. Signing up is still free and takes no card while the no-card
     # start is on, so the Start buttons stay true; the "N days free" is gone.
     if church and not pricing_config.church_free_week():
+        # What stands where the free week stood is the promise (PROMISE):
+        # every church page ends on it, and the fine print under the plan
+        # cards says when the first month starts.
+        first = "your first month starts the day you choose your plan"
         if mp._no_card_trial_offered():
             return {"CTA_START": "Start free, no card",
-                    "TRIAL_LINE": "No card to sign up. Your first month starts the day you choose your plan.",
-                    "TRIAL_FINE": "No card to sign up"}
-        return {"CTA_START": "Get started", "TRIAL_LINE": "Month to month. Cancel any time.",
-                "TRIAL_FINE": "No setup fee"}
+                    "TRIAL_LINE": f"{PROMISE} No card to sign up.",
+                    "TRIAL_FINE": f"No card to sign up · {first}"}
+        return {"CTA_START": "Get started", "TRIAL_LINE": PROMISE,
+                "TRIAL_FINE": f"No setup fee · {first}"}
     free = mp._trial_free_phrase()
     if mp._no_card_trial_offered():
         return {"CTA_START": "Start free, no card", "TRIAL_LINE": f"{free}, no card needed.",
@@ -423,6 +427,30 @@ def _offer_line() -> str:
             '</div>')
 
 
+# The promise to a church, in the free week's place (Kevin, 2026-11-13: "yes
+# that is a good promise"). Every word of it has to be true of the product:
+#   · "No contract": church plans are month to month and cancelled from Billing.
+#   · "your records go with you": Settings → Export and delete downloads one
+#     file of everything the church has recorded (account_lifecycle.export_account,
+#     every table in BUSINESS_CHILD_TABLES). It says RECORDS, not "everything":
+#     uploaded files (photos, documents) are not in that file.
+#   · giving: a church's gifts run on its own Stripe account (stripe_connect).
+PROMISE = "No contract. Leave any time, and your records go with you."
+PROMISE_DETAIL = ("Your people, your giving history and everything you've recorded here download in one file, "
+                  "any day, from your own Settings. Giving runs on your church's own Stripe account, "
+                  "so that stays yours too.")
+
+
+def _promise_line() -> str:
+    """The promise under the plan cards, first of the lines there."""
+    return ('<div style="display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px 20px; padding: 18px 22px; '
+            'border-radius: 18px; background: #FFFFFF; border: 1px solid rgba(11,12,17,0.12)">'
+            '<b style="font-family: \'Inter Tight\', sans-serif; font-weight: 600; font-size: 15px">Our promise</b>'
+            '<span style="flex: 1 1 420px; min-width: 0; font-size: 14px; line-height: 1.55; color: #5A5E6B">'
+            f'<b style="color: #0B0C11">{PROMISE}</b> {PROMISE_DETAIL}</span>'
+            '</div>')
+
+
 def _founding_line() -> str:
     """The founding churches' price under the cards (Kevin, 2026-11-13: "yes
     founding prices"): the first ten churches that pay keep the price they
@@ -587,7 +615,7 @@ def _by_size() -> Dict[str, str]:
                          "and hands-off marketing. "
                          "Leaders, volunteers and members use the member app free, on every plan."),
         "PLAN_CARDS": _plan_cards(),
-        "FOUNDER": _offer_line() + _founding_line(),
+        "FOUNDER": _promise_line() + _offer_line() + _founding_line(),
         "CONV_LINE": _and(conv),
         # the product pages
         "PLAN_STRIP": _plan_strip(),
