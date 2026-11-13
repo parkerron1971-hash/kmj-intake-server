@@ -534,6 +534,9 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
                                "person a note naming it; take_back_church_email turns it off"), "chief_only": True},
     "take_back_church_email": {**_w("A", "turns one church address off (its mail goes to the office box, its "
                                     "history is kept); give_church_email makes it again"), "chief_only": True},
+    "switch_on_church_mail": {**_w("C", "turns on receiving for the church's verified domain at Resend and asks it "
+                                   "to check the MX record; mail only moves when the owner changes the MX at the "
+                                   "DNS host, and putting the old MX back moves it back"), "chief_only": True},
     "move_in_status": {**_r("reads a new church's move: the eleven things it hands in, where each stands, what "
                             "each still needs and what its people typed (names, emails, numbers); the signed-in "
                             "person's own room, so Chief's alone", sensitive=True), "chief_only": True},

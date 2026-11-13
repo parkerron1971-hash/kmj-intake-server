@@ -19,6 +19,13 @@ about it … can we build what is needed so this can go live right away?"
                                 their address once mail reaches the system.
     take_back_church_email .... write. Turn an address off; its mail goes to
                                 the office box and its history is kept.
+    switch_on_church_mail ..... write. The owner's: turn on receiving for the
+                                church's domain at the mail service (Resend,
+                                where Email Setup already put the domain) and
+                                name the one MX record left to add at the DNS
+                                host, with what it replaces. Asked again once
+                                the record is in, it asks the mail service to
+                                check it.
 
 Handlers return `result` AND `label` per the house contract.
 """
@@ -183,3 +190,85 @@ async def handle_take_back_church_email(client, biz, action) -> Dict[str, Any]:
             "result": (f"{got['address']} is off. Mail sent to it now goes to {got['now']}. Its old mail is kept."
                        f"{extra}"),
             "label": f"Took back {got['address']}", "nav": None}
+
+
+def _mx_words(rows) -> str:
+    return ", ".join(f"{h} (priority {p})" for p, h in rows)
+
+
+async def handle_switch_on_church_mail(client, biz, action) -> Dict[str, Any]:
+    """Receiving on at the mail service, and the one DNS record left. The
+    owner's alone: it changes where the church's mail goes."""
+    business_id = str(biz.get("id") or "")
+    if not business_id:
+        return _fail("switch_on_church_mail", "no business on record")
+    role = await asyncio.to_thread(_role, business_id, _caller())
+    if role != "owner":
+        return _fail("switch_on_church_mail", "only the church's owner can switch its mail over")
+    domain = church_mail.church_domain(biz)
+    import email_sender
+    did = str(email_sender.email_domain_settings(biz.get("settings")).get("resend_domain_id") or "")
+    if not domain or not did:
+        return _fail("switch_on_church_mail",
+                     "the church's email domain isn't verified yet (Build → Email Setup, step 1)")
+    import email_domains_router as edr
+    from fastapi import HTTPException
+    try:
+        await edr._resend("PATCH", f"/{did}", {"capabilities": {"receiving": "enabled"}})
+        dom = await edr._resend("GET", f"/{did}")
+    except HTTPException as e:
+        return _fail("switch_on_church_mail", f"the mail service didn't take it: {e.detail}")
+    if dom.get("__missing__"):
+        return _fail("switch_on_church_mail",
+                     "the mail service no longer has this domain; reconnect it in Email Setup")
+    rec = church_mail.receiving_record(dom)
+    if not rec or not rec["host"]:
+        return _fail("switch_on_church_mail", "receiving is on, but the mail service hasn't given its record "
+                                              "yet; ask me again in a minute")
+    now = await asyncio.to_thread(church_mail.apex_mx, domain)
+    live = await asyncio.to_thread(church_mail.receiving_live, domain)
+    want = f"MX at @ (the domain itself) → {rec['host']}, priority {rec['priority']}"
+    if live:
+        verified = rec["status"] == "verified"
+        if not verified:
+            try:
+                await edr._resend("POST", f"/{did}/verify")
+            except HTTPException:
+                pass
+        church_mail.forget_domain(domain)
+        church_mail._LIVE_CACHE.pop(domain, None)
+        text = (f"Mail to @{domain} now comes to the system ({want}). "
+                + ("The mail service has checked the record." if verified else
+                   "I asked the mail service to check the record; mail is accepted once it shows verified, "
+                   "usually within minutes.")
+                + " Church addresses take it from here; anything sent to an address with no box goes to the "
+                  "office box, or the pastor if there isn't one.")
+        return {"type": "switch_on_church_mail", "domain": domain, "live": True, "record": rec,
+                "result": text, "label": f"✉️ @{domain} mail is on", "nav": None}
+    if now:
+        before = f"Today @{domain}'s mail goes to {_mx_words(now)}."
+    elif now == []:
+        before = f"@{domain} receives no email today, so nothing is replaced."
+    else:
+        before = f"I couldn't look up where @{domain}'s mail goes today."
+    step = (f"At the domain's DNS host, the MX records for @{domain} become just one: {want}. Remove the others "
+            "in the same save (mail goes to the lowest priority number, so a second one splits it).")
+    try:
+        import email_domain_dns
+        ns = await email_domain_dns.lookup_ns(domain)
+        provider = email_domain_dns.detect_provider(ns).get("key")
+    except Exception:
+        provider = None
+    if provider == "namecheap":
+        step = (f"In Namecheap: Domain List → {domain} → Manage → Advanced DNS → Mail Settings, which should say "
+                f"Custom MX. Delete every MX row there and add one: host @, value {rec['host']}, priority "
+                f"{rec['priority']}. Then Save all changes.")
+    warn = ""
+    if now:
+        warn = (f" Once it's in, the old mail service stops getting @{domain} mail and church addresses take "
+                "over, so before you change it, every address people write to today should have a box here "
+                "(a forward for any that just went to someone's own email).")
+    return {"type": "switch_on_church_mail", "domain": domain, "live": False, "record": rec,
+            "result": (f"Receiving is on for @{domain} at the mail service. One record is left. {before} {step}"
+                       f"{warn} Tell me when it's in and I'll check it."),
+            "label": f"✉️ One record left for @{domain}", "nav": None}

@@ -477,3 +477,60 @@ def test_no_verified_domain_means_no_addresses_yet(chief, db):
     assert "no verified email domain yet" in out["result"]
     out = chief.run(chief_church_mail.handle_give_church_email, {"address": "tia", "to": "Tia"})
     assert out["failed"] and "isn't verified yet" in out["result"]
+
+
+# ─── Switching the church's mail on ──────────────────────────────────
+
+@pytest.fixture
+def switch(chief, db, monkeypatch):
+    import email_domain_dns
+    import email_domains_router as edr
+    db.t["businesses"][0]["settings"] = {**SETTINGS, "email_domain": {**SETTINGS["email_domain"],
+                                                                      "resend_domain_id": "dom-1"}}
+    calls = []
+    record = {"status": "pending"}
+
+    async def _resend(method, path, json_body=None):
+        calls.append((method, path, json_body))
+        if method == "GET":
+            return {"id": "dom-1", "capabilities": {"sending": "enabled", "receiving": "enabled"}, "records": [
+                {"record": "SPF", "name": "send", "type": "MX", "value": "feedback-smtp.us-east-1.amazonses.com",
+                 "priority": 10, "status": "verified"},
+                {"record": "Receiving", "name": "@", "type": "MX", "value": "inbound-smtp.us-east-1.amazonaws.com",
+                 "priority": 10, "status": record["status"]}]}
+        return {}
+
+    async def _ns(domain):
+        return ["dns1.registrar-servers.com", "dns2.registrar-servers.com"]
+    monkeypatch.setattr(edr, "_resend", _resend)
+    monkeypatch.setattr(email_domain_dns, "lookup_ns", _ns)
+    monkeypatch.setattr(church_mail, "apex_mx", lambda d: [(10, "eforward1.registrar-servers.com"),
+                                                           (15, "eforward4.registrar-servers.com")])
+    return SimpleNamespace(calls=calls, record=record)
+
+
+def test_switching_on_is_the_owners_alone(chief, switch, db):
+    next(s for s in db.t["business_users"] if s["user_id"] == MANAGER)["role"] = "admin"
+    out = chief.run(chief_church_mail.handle_switch_on_church_mail, {}, as_uid=MANAGER)
+    assert out["failed"] and "only the church's owner" in out["result"] and not switch.calls
+
+
+def test_switching_on_turns_on_receiving_and_names_the_one_record_left(chief, switch):
+    out = chief.run(chief_church_mail.handle_switch_on_church_mail, {})
+    assert switch.calls[0] == ("PATCH", "/dom-1", {"capabilities": {"receiving": "enabled"}})
+    text = out["result"]
+    assert out["live"] is False and "One record is left" in text
+    assert "Today @lovecityc.com's mail goes to eforward1.registrar-servers.com (priority 10)" in text
+    assert "In Namecheap" in text and "value inbound-smtp.us-east-1.amazonaws.com, priority 10" in text
+    assert "every address people write to today should have a box here" in text
+
+
+def test_once_the_record_is_in_it_asks_the_mail_service_to_check_it(chief, switch):
+    chief.live["on"] = True
+    out = chief.run(chief_church_mail.handle_switch_on_church_mail, {})
+    assert ("POST", "/dom-1/verify", None) in switch.calls and out["live"] is True
+    assert "now comes to the system" in out["result"] and "asked the mail service to check" in out["result"]
+    switch.record["status"] = "verified"
+    switch.calls.clear()
+    out = chief.run(chief_church_mail.handle_switch_on_church_mail, {})
+    assert not any(c[0] == "POST" for c in switch.calls) and "has checked the record" in out["result"]

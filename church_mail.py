@@ -715,6 +715,30 @@ def receiving_live(domain: str) -> Optional[bool]:
     return all(any(m in h for m in RECEIVING_MX) for h in best)
 
 
+def receiving_record(domain_payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The MX record Resend gives a domain for receiving (at the domain's
+    root, never the `send` sending record): {host, priority, status}."""
+    for rec in (domain_payload or {}).get("records") or []:
+        if not isinstance(rec, dict) or str(rec.get("type") or "").upper() != "MX":
+            continue
+        name = str(rec.get("name") or "").strip().lower()
+        kind = str(rec.get("record") or "").strip().lower()
+        if kind in ("receiving", "inbound") or not name.startswith("send"):
+            return {"host": str(rec.get("value") or "").strip().rstrip("."),
+                    "priority": rec.get("priority") if rec.get("priority") is not None else 10,
+                    "status": str(rec.get("status") or "").lower()}
+    return None
+
+
+def apex_mx(domain: str) -> Optional[List[Tuple[int, str]]]:
+    """The domain's MX records now, lowest first; None when the lookup failed."""
+    try:
+        import email_domain_dns
+        return sorted(email_domain_dns._mx_sync(domain, strict=True))
+    except Exception:
+        return None
+
+
 # ─── The directory, and giving out addresses (Chief) ──────────────────
 
 def describe(church: Church, box: Dict[str, Any], *, full: bool) -> Dict[str, Any]:
