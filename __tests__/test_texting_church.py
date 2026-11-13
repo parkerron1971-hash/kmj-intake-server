@@ -324,3 +324,57 @@ def test_a_failed_save_asks_them_to_try_again(signup, monkeypatch):
     monkeypatch.setattr(tr.sb_clients, "sb_post_as_service", lambda *a, **k: None)
     assert _note(client.post(f"/texting/signup/{BIZ}", data=GOOD_FORM)) == "error"
     assert state["texts"] == []
+
+
+# ── 6. the owner's updates and the screen, in a church's words ────────
+
+def test_a_church_is_told_in_a_churchs_words():
+    title, body = tr.update_words(CHURCH, "campaign_pending")
+    assert title == "Grace Chapel is verified"
+    assert "how Grace Chapel texts its people" in body and "clients" not in body
+    title, body = tr.update_words(CHURCH, "brand_pending")
+    assert "First your church is verified" in body and "business" not in body
+    # Every update a church can get is free of business words.
+    for status in tr.UPDATES:
+        words = " ".join(tr.update_words(CHURCH, status, ["x"], "+12315550142"))
+        assert "clients" not in words and "your business" not in words.lower(), status
+    assert "Grace Chapel can text under its own name" == tr.update_words(CHURCH, "approved")[0]
+    assert tr.update_words(CHURCH, "draft") is None                         # a status that isn't told
+
+
+def test_a_business_keeps_its_words():
+    assert "texts its clients" in tr.update_words(SHOP, "campaign_pending")[1]
+    assert "First your business is verified" in tr.update_words(SHOP, "brand_pending")[1]
+
+
+def test_the_screen_says_church_for_a_church():
+    steps = tr._stage("brand_pending", {}, church=True)
+    assert steps[0]["label"] == "Your church is verified (minutes to a few days)"
+    assert tr._stage("brand_pending", {})[0]["label"] == "Your business is verified (minutes to a few days)"
+    answers = {"has_ein": True, "business_type": "nonprofit"}
+    checks = {c["key"]: c for c in tr.readiness(CHURCH, answers=answers, origin=ORIGIN, bookable=None,
+                                                ein_on_file=False)}
+    assert checks["answers"]["label"] == "Your church details for the registration"
+    assert "church's legal details" in checks["ein"]["fix"]
+    shop = {c["key"]: c for c in tr.readiness(SHOP, answers=answers, origin=ORIGIN, bookable=True)}
+    assert shop["answers"]["label"] == "Your business details for the registration"
+
+
+def test_the_owner_is_told_through_update_words(monkeypatch):
+    sent = {}
+
+    def post(path, row, prefer=None):
+        sent["in_app"] = row
+        return [row]
+
+    monkeypatch.setattr(tr.sb_clients, "sb_post_as_service", post)
+    import push_notifications
+    monkeypatch.setattr(push_notifications, "send_to_business", lambda bid, **kw: sent.setdefault("push", kw) and 1)
+    import email_domain_monitor
+
+    async def no_owner(uid):
+        return None
+
+    monkeypatch.setattr(email_domain_monitor, "_owner_email", no_owner)
+    run(tr._tell_owner(CHURCH, "campaign_pending"))
+    assert "texts its people" in sent["in_app"]["body"] and sent["push"]["title"] == "Grace Chapel is verified"

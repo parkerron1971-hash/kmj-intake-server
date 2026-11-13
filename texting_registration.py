@@ -629,15 +629,18 @@ def readiness(business: Dict[str, Any], *, answers: Optional[Dict[str, Any]], or
         {"key": "pages", "ok": bool(origin),
          "label": "Your texting terms and privacy pages are up" + (f" ({origin}{TERMS_PATH})" if origin else ""),
          "fix": "They go up with your website."},
-        {"key": "answers", "ok": bool(answers), "label": "Your business details for the registration",
-         "fix": "Add your legal business name, address and the person the reviewers can contact."},
+        {"key": "answers", "ok": bool(answers),
+         "label": f"Your {'church' if church else 'business'} details for the registration",
+         "fix": f"Add your legal {'church' if church else 'business'} name, address and the person the reviewers "
+                "can contact."},
     ]
     if answers and answers.get("has_ein"):
         if answers.get("business_type") != "nonprofit":
             out.append({"key": "industry", "ok": answers.get("industry") in INDUSTRIES,
                         "label": "Your industry", "fix": "Choose the industry closest to your business."})
         out.append({"key": "ein", "ok": ein_on_file, "label": "Your EIN is on file",
-                    "fix": "Add your EIN below. It's kept with your business's legal details."})
+                    "fix": f"Add your EIN below. It's kept with your {'church' if church else 'business'}'s "
+                           "legal details."})
     elif answers:
         out.append({"key": "mobile", "ok": bool(answers.get("mobile_phone")),
                     "label": "Your own cell phone, for the verification text",
@@ -645,13 +648,13 @@ def readiness(business: Dict[str, Any], *, answers: Optional[Dict[str, Any]], or
     return out
 
 
-def _stage(status: str, twilio: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+def _stage(status: str, twilio: Optional[Dict[str, Any]] = None, *, church: bool = False) -> List[Dict[str, Any]]:
     """The steps the owner watches, each done / now / next. A sole proprietor
     has one more: replying YES to Twilio's text."""
     t = twilio or {}
     sole = texting_isv.sole_prop(t)
     order = ["business", "confirm", "campaign", "live"] if sole else ["business", "campaign", "live"]
-    labels = {"business": "Your business is verified (minutes to a few days)",
+    labels = {"business": f"Your {'church' if church else 'business'} is verified (minutes to a few days)",
               "confirm": "You reply YES to the verification text on your cell",
               "campaign": "The phone companies review how you text (usually about 2 weeks)",
               "live": "You text under your own name"}
@@ -731,7 +734,7 @@ async def overview(business: Dict[str, Any]) -> Dict[str, Any]:
         "ein": {"on_file": bool(ein), "last4": ein[-4:] if ein else None} if ein_known else None,
         "open": open_,
         "can_send": sendable,
-        "steps": _stage(status, twilio),
+        "steps": _stage(status, twilio, church=church),
         # A sole proprietor's YES text: where it went and from whom, and
         # whether a new one can be sent now.
         "confirm": {"waiting": True, "to_last4": mobile[-4:] or None, "from": texting_isv.OTP_FROM,
@@ -830,16 +833,40 @@ UPDATES = {
 }
 
 
+# A church's people aren't clients, and it isn't a business (Kevin,
+# 2026-11-13: "go ahead and fix the wording"). Only the lines that said so.
+CHURCH_UPDATES = {
+    "brand_pending": ("Your texting registration is sent",
+                      "Solutionist sent {name}'s registration. First your church is verified (minutes to a few "
+                      "days), then the phone companies review how you text (usually about 2 weeks). We'll tell you "
+                      "at each step."),
+    "campaign_pending": ("{name} is verified",
+                         "Next, the phone companies review how {name} texts its people. That usually takes about "
+                         "2 weeks."),
+}
+
+
+def update_words(business: Dict[str, Any], status: str, reasons: Optional[List[str]] = None,
+                 number: Optional[str] = None) -> Optional[tuple]:
+    """(title, body) the owner is told for this status, in a church's words
+    for a church; None for a status that isn't told."""
+    table = {**UPDATES, **CHURCH_UPDATES} if is_church(business) else UPDATES
+    if status not in table:
+        return None
+    name = str(business.get("name") or ("Your church" if is_church(business) else "Your business"))
+    return tuple(t.format(name=name, reasons=" ".join(reasons or []) or "It came back without a reason.",
+                          number=_pretty(number) if number else "Your number")
+                 for t in table[status])
+
+
 async def _tell_owner(business: Dict[str, Any], status: str, reasons: Optional[List[str]] = None,
                       number: Optional[str] = None) -> Dict[str, bool]:
     """In the app, by push and by email; each best-effort, none can undo the
     status change."""
-    if status not in UPDATES:
+    words = update_words(business, status, reasons, number)
+    if not words:
         return {}
-    name = str(business.get("name") or "Your business")
-    title, body = (s.format(name=name, reasons=" ".join(reasons or []) or "It came back without a reason.",
-                            number=_pretty(number) if number else "Your number")
-                   for s in UPDATES[status])
+    title, body = words
     out = {"in_app": False, "push": False, "email": False}
     bid = str(business.get("id"))
     try:
