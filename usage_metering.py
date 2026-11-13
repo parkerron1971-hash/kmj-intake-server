@@ -168,7 +168,17 @@ def weight_for_row(row: Optional[Dict[str, Any]]) -> int:
     column and for every action whose price really is flat.
 
     `units` of 0 is meaningful (build internals are deliberately free),
-    so this tests for None rather than truthiness."""
+    so this tests for None rather than truthiness.
+
+    A FAILED CALL COSTS NOTHING (2026-11-13, Kevin: "making sure the ai
+    credits are priced good"). A row logged ok=False with no price of its
+    own was still charged its endpoint's price. When Chief's main model
+    failed and the backup brain answered, one reply was charged twice:
+    12 credits for the failed /chief/backend attempt and 12 for the
+    backup's answer (4 failed attempts, 48 credits, in the 30 days to
+    2026-11-13). An explicit `units` still wins: that price was written
+    on purpose by the code that knew what was delivered. A row read
+    without `ok` (None) is priced as before."""
     if not row:
         return DEFAULT_WEIGHT
     u = row.get("units")
@@ -177,6 +187,8 @@ def weight_for_row(row: Optional[Dict[str, Any]]) -> int:
             return max(0, int(u))
         except (TypeError, ValueError):
             pass                      # malformed -> fall through to endpoint
+    if row.get("ok") is False:
+        return 0
     return weight_for(row.get("endpoint"))
 
 
@@ -198,7 +210,7 @@ def weighted_usage_since(business_id: str, since_iso: str) -> int:
         # PostgREST's 1,000-row window.
         rows = sb_clients.sb_get_as_service(
             f"/api_usage?business_id=eq.{business_id}"
-            f"&created_at=gte.{since_iso}&{sms_usage.NOT_SMS}&select=endpoint,units"
+            f"&created_at=gte.{since_iso}&{sms_usage.NOT_SMS}&select=endpoint,units,ok"
             f"&limit={page}&offset={offset}") or []
         total += sum(weight_for_row(r) for r in rows)
         if len(rows) < page:

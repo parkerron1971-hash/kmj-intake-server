@@ -7,8 +7,9 @@
 #   Both                  $29 a month   cs_both
 #
 # Only a church on ChurchSavvy alone (settings.churchsavvy_only) is held to
-# these. A Solutionist church opens everything as before (its $10 add-on for
-# the screens comes later). The plan comes from the subscription, or from
+# these. A Solutionist church opens everything, and pays nothing more for it
+# (Kevin, 2026-11-13: ChurchSavvy is included with Solutionist; the $10
+# add-on for the screens is dropped). The plan comes from the subscription, or from
 # the owner's comp (Mission Control), so a church that started before
 # checkout existed can be kept on.
 #

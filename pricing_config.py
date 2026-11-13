@@ -281,11 +281,11 @@ def church_move_months() -> int:
 
 
 def founding_church_moves() -> int:
-    """The first churches moved for free (the founding churches). The site
-    also promises they keep the price they start at, for as long as they stay
-    (church_site._kept_price). When a church price goes up, the new Stripe
-    price takes the lookup key and existing subscriptions stay where they
-    are: never move a founding church's subscription onto the new price."""
+    """The first churches moved for free. The price the first churches keep
+    is its own offer since 2026-11-13: the first ten that pay, not the five
+    that move free (church_founding.py, FOUNDING_CHURCH_SPOTS). When a church
+    price goes up, follow docs/FOUNDING_CHURCHES.md, and never move a
+    founding church's subscription onto the new price."""
     return _dial("FOUNDING_CHURCH_MOVES", "LIMIT_", 5)
 
 

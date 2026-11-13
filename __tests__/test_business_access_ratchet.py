@@ -103,7 +103,14 @@ RESIDUAL = [h for h in UNGUARDED
 # QUIETLY. It grew loudly: a hand-read entry in ownership_sweep, a reason
 # recorded there, and this number moved in the same commit. The residual
 # ceiling below — the one that is a bug list — stays at ZERO.
-MAX_UNGUARDED_TOTAL = 48
+#
+# 48 -> 49 (2026-11-13, churches send text alerts): texting_registration
+# gained POST /texting/signup/{business_id}, a church's /texts sign-up
+# form. A person signing up for a church's texts has no account, the same
+# door as the site's contact form, and it sits behind that form's limit.
+# Recorded as a (module, handler) pair in PUBLIC_BY_DESIGN with its
+# reason. The residual stays at ZERO; one deliberate public door.
+MAX_UNGUARDED_TOTAL = 49
 MAX_UNGUARDED_RESIDUAL = 0
 
 
@@ -171,7 +178,9 @@ def test_the_public_allowlist_does_not_grow_quietly():
     """PUBLIC_BY_DESIGN is where a judgement gets recorded. It is also
     the cheapest possible way to make this test pass while shipping an
     unguarded handler, so its size is pinned too."""
-    assert len(ownership_sweep.PUBLIC_BY_DESIGN) <= 15, (
+    # 15 -> 16 (2026-11-13): ("texting_registration", "church_signup"), a
+    # church's texts sign-up form; its reason is written beside it.
+    assert len(ownership_sweep.PUBLIC_BY_DESIGN) <= 16, (
         "the public-by-design allowlist grew — every entry must be a "
         "surface that a stranger is SUPPOSED to reach, not a handler that "
         "was inconvenient to guard")

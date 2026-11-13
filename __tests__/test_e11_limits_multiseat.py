@@ -301,6 +301,36 @@ def test_build_marker_weights(fake, monkeypatch):
         assert um.weight_for(internal) == 0, internal
 
 
+def test_a_failed_call_costs_nothing(fake):
+    """A Chief reply whose main model failed and whose backup answered is
+    charged once, not twice (2026-11-13). A failed row with no price of
+    its own costs 0; an explicit `units` still wins; a row read without
+    `ok` is priced as before."""
+    import usage_metering as um
+    import pricing_config as pc
+    fb = fake
+    _biz(fb, "b1", plan="price_starter")
+    now_iso = datetime.now(timezone.utc).replace(day=2).isoformat()
+    fb.rows("api_usage").extend([
+        {"id": "f1", "business_id": "b1", "created_at": now_iso,
+         "endpoint": "/chief/backend", "units": None, "ok": False},
+        {"id": "f2", "business_id": "b1", "created_at": now_iso,
+         "endpoint": "/chief/backend-fallback", "units": None, "ok": True},
+    ])
+    assert um.weighted_usage_this_month("b1") == pc.chat_price()
+    assert um.weight_for_row({"endpoint": "/chief/backend", "ok": False}) == 0
+    assert um.weight_for_row({"endpoint": "/chief/backend", "ok": True}) == pc.chat_price()
+    assert um.weight_for_row({"endpoint": "/chief/backend"}) == pc.chat_price()
+    assert um.weight_for_row({"endpoint": "/composer/compose", "units": 600, "ok": False}) == 600
+    # The fake hands back every column whatever the query selects, so hold
+    # the real reads to asking for `ok`: without it every row reads None
+    # and a failed call is charged again.
+    import inspect
+    import launch_access
+    assert "select=endpoint,units,ok" in inspect.getsource(um.weighted_usage_since)
+    assert "select=endpoint,units,ok" in inspect.getsource(launch_access)
+
+
 def test_row_units_override_the_endpoint_price(fake):
     """A row carrying explicit `units` is priced by that value, not by
     its endpoint — the mechanism that makes base+per-section, revamp,
