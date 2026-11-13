@@ -728,7 +728,7 @@ def billing_readiness(_owner=Depends(require_owner)) -> Dict[str, Any]:
     import sms_usage
     month_usage = sb_clients.sb_get_as_service(
         f"/api_usage?created_at=gte.{usage_metering._month_start_iso()}&{sms_usage.NOT_SMS}"
-        f"&select=endpoint,units&limit=10000") or []
+        f"&select=endpoint,units,ok&limit=10000") or []
     weighted = sum(usage_metering.weight_for_row(r) for r in month_usage)
 
     tiers_env = {p: bool((os.environ.get(f"STRIPE_PRICE_ID_{p.upper()}") or "").strip())
