@@ -55,6 +55,12 @@ def test_its_own_domain_answers_with_its_own_pages(client):
     # The tagline is "Every service, ready." (Kevin, 10/25): the Sunday one is gone everywhere.
     for path in ("/", "/pricing", "/solutionist"):
         assert "Every Sunday" not in _cs(client, path).text, path
+    # ChurchSavvy is included with Solutionist (Kevin, 2026-11-13): no page sells
+    # the old $10 add-on for the screens, and both pages say it comes with the plan.
+    for path in ("/pricing", "/solutionist"):
+        page = _cs(client, path).text
+        assert "$10" not in page, path
+        assert "come with every Solutionist church plan" in page, path
     assert _cs(client, "/www-only").status_code == 404
     assert client.get("/", headers={"Host": "www.churchsavvy.app"}).status_code == 200
 

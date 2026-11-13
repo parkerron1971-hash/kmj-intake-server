@@ -427,7 +427,7 @@ def render_pricing(base: str = "") -> str:
   <div class="wrap">
     {_plans_html(app)}
     <div class="card addon rv"><span class="sol" aria-hidden="true">S</span>
-      <div><p class="eyebrow" style="color:#1F63D6">Already on Solutionist?</p><p><b class="big">$10</b> a month adds ChurchSavvy’s screens to your Solutionist plan. Planning comes included.</p></div>
+      <div><p class="eyebrow" style="color:#1F63D6">Already on Solutionist?</p><p><b class="big">$0</b> more. ChurchSavvy’s screens and Planning both come with every Solutionist church plan.</p></div>
       <a class="btn btn-q" href="{_e(_href(base, 'solutionist'))}">How it works</a></div>
     <div class="cmp rv" role="table" aria-label="Compare the plans">{grid}</div>
   </div>
@@ -480,7 +480,7 @@ def render_solutionist(base: str = "") -> str:
     <div class="three">
       <article class="card pillar rv">{icon('bell')}<h3 class="h3">Asks reach phones</h3><p>Volunteers with the member app get asks as a notification. Everyone else still gets email.</p></article>
       <article class="card pillar rv">{icon('users')}<h3 class="h3">One list of people</h3><p>The members you care for and the people who serve are the same people. Add someone once.</p></article>
-      <article class="card pillar rv">{icon('card')}<h3 class="h3">One bill</h3><p>Planning is included with Solutionist, and ChurchSavvy’s screens are $10 a month on the same plan.</p></article>
+      <article class="card pillar rv">{icon('card')}<h3 class="h3">Nothing extra to pay</h3><p>ChurchSavvy’s screens and Planning both come with every Solutionist church plan, at no extra cost.</p></article>
     </div>
   </div>
 </section>
