@@ -9,11 +9,14 @@ Pastor's copy" or "mark the rooms one done"; an office login can say "send
 Minister Ray the retreat sign-up list for Youth".
 
     people_under ............ who is under me, each with their first assignment
-                              n of m, open, late, stuck (and what), next
+                              n of m, open, late, stuck (and what), next, and
+                              their job title and whether a job description is
+                              written (church_job_descriptions.marks)
     assignments_of .......... {who?}: someone's assignments (mine, or anyone's
                               I'm over), and what was sent up to me
     one_on_one .............. {who}: finished, stuck, late, next, this week's
-                              jobs, as the one-on-one sheet says them
+                              jobs, as the one-on-one sheet says them, and the
+                              same job line
     give_assignment ......... {who, title, due_date?, done_when?, notes?, duty?}
     start_first_assignment .. {who}
     mark_assignment ......... {assignment, who?, done: true | false}
@@ -353,6 +356,22 @@ def _person_line(p: Dict[str, Any]) -> str:
     return line + "."
 
 
+def _job_line(why: str, job: Optional[Dict[str, Any]]) -> str:
+    """Their job title (from what the system holds, so no one's written words
+    come in) unless `why` already says it, and whether a job description is
+    written (church_job_descriptions.marks); '' when that couldn't be read."""
+    if not job:
+        return ""
+    title = "" if _norm(job["title"]) in _norm(why) else f"Job: {job['title']}. "
+    return " " + title + ("Job description: written." if job["written"] else
+                          "No written job description yet: Chief can draft one from what they already do.")
+
+
+def _job_marks(ch: co.Church, targets: List[Dict[str, str]]) -> Dict[str, Dict[str, Any]]:
+    import church_job_descriptions as cjd
+    return cjd.marks(ch, targets) or {}
+
+
 def _people(ch: co.Church, me: Dict[str, str], action: Dict[str, Any]) -> Dict[str, Any]:
     import church_assignments as cas
     rows = cas.board(ch, me)["people"]
@@ -361,7 +380,9 @@ def _people(ch: co.Church, me: Dict[str, str], action: Dict[str, Any]) -> Dict[s
                 "people": []}
     foreign = any(_foreign_item(i, False, "") for p in rows for i in (p.get("stuck_items") or []) +
                   (p.get("next") or []))
-    return {"result": f"{len(rows)} under you:\n" + "\n".join(_person_line(p) for p in rows),
+    jobs = _job_marks(ch, [co.who(p["kind"], p["id"]) for p in rows])
+    return {"result": f"{len(rows)} under you:\n" + "\n".join(_person_line(p) + _job_line(p["why"], jobs.get(p["for"]))
+                                                             for p in rows),
             "label": f"{len(rows)} under you", "people": [p["name"] for p in rows], "_foreign": foreign}
 
 
@@ -414,6 +435,9 @@ def _one_on_one(ch: co.Church, me: Dict[str, str], action: Dict[str, Any]) -> Di
     got = cas.one_on_one(ch, target, areas=ctw.view_of(ch.b, me["id"], ch.role(me["id"])))
     lines = got.get("lines") or []
     text = "\n".join(lines) if isinstance(lines, list) else str(lines)
+    job = _job_line(row.get("why") or "", _job_marks(ch, [target]).get(co.key(target))).strip()
+    if job:
+        text += "\n" + job
     foreign = any(_foreign_item(i, False, "") for k in ("finished", "stuck", "late", "next") for i in got.get(k) or [])
     return {"result": f"One-on-one with {row['name']}:\n{text}", "label": f"One-on-one: {row['name']}"[:80],
             "_foreign": foreign}
@@ -671,7 +695,8 @@ BLOCK = ("CHURCH ASSIGNMENTS — on at this church. Whoever is over someone hand
          "people_under or assignments_of before you name anyone or anything; then give_assignment, "
          "start_first_assignment, mark_assignment, mark_stuck, send_up_assignment, set_my_day. Relay each "
          "receipt's whole line. Nobody but the owner, or the ministry chain on the leaders map, is over a pastor or "
-         "an elder: to get one of them something for their area, send_handover (never an assignment).")
+         "an elder: to get one of them something for their area, send_handover (never an assignment). New work and "
+         "nobody named: whose_job first; someone's job: job_of.")
 
 
 def turn_line(business: Dict[str, Any], user_id: Any) -> str:

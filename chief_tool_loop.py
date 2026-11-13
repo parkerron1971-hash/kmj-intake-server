@@ -226,6 +226,8 @@ def read_tool_definitions() -> List[Dict[str, Any]]:
     out += [chief_duties.TOOL]  # a church's duties: needs the signed-in person, so Chief's alone
     import chief_church_assignments
     out += list(chief_church_assignments.TOOLS)  # who is under me, someone's assignments, a one-on-one: the same
+    import chief_church_jobs
+    out += list(chief_church_jobs.TOOLS)  # whose job it is, someone's job, a draft: the same
     import chief_move_in
     out += [chief_move_in.TOOL]  # a new church's move: the same
     import chief_church_mail
@@ -423,9 +425,12 @@ def _shrink(result: Any) -> str:
         from chief_responsibilities import REPORT_MAX_RESULT_CHARS
         limit = REPORT_MAX_RESULT_CHARS
     if isinstance(result, dict) and result.get('type') in ('list_duties', 'list_map', 'my_work', 'list_asks',
-                                                           'move_in_status', 'church_email'):
+                                                           'move_in_status', 'church_email', 'whose_job', 'job_of',
+                                                           'draft_job_description'):
         # Every duty and who does it (every department and role); cut short,
-        # the model would guess at whose job the missing ones are.
+        # the model would guess at whose job the missing ones are. The job
+        # reads fit themselves inside it (chief_church_jobs.RESULT_BUDGET) and
+        # say plainly where they continue, never this sample cut.
         limit = 12000
     if isinstance(result, dict) and result.get('view') == 'transactions':
         # 25 bank rows and the totals; cut short, the model would see a
@@ -478,7 +483,8 @@ async def execute_tool_use(client, biz: Dict[str, Any],
                                               "giving_counts", "list_duties", "list_map",
                                               "search_templates", "my_work", "list_asks",
                                               "move_in_status", "people_under", "assignments_of", "church_email",
-                                              "one_on_one")):
+                                              "one_on_one", "whose_job", "job_of",
+                                              "draft_job_description")):
         return True, (f"'{name}' is not a mid-turn lookup. Reads only here; "
                       f"operations go through [ACTION:] tags in your reply.")
     if effect != action_registry.READ:
