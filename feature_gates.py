@@ -409,6 +409,17 @@ PRICE_ENV_TO_PLAN: Dict[str, str] = {
     "CHURCH_ESTABLISHED_ANNUAL": "church_established",
     "CHURCH_LARGE":              "church_large",
     "CHURCH_LARGE_ANNUAL":       "church_large",
+    # The founding churches' prices (church_founding.py, Kevin 2026-11-13):
+    # unset until a list price goes up, then the old price id lives here so
+    # the first churches keep both their price and their plan.
+    "CHURCH_SMALL_FOUNDING":              "church_small",
+    "CHURCH_SMALL_ANNUAL_FOUNDING":       "church_small",
+    "CHURCH_GROWING_FOUNDING":            "church_growing",
+    "CHURCH_GROWING_ANNUAL_FOUNDING":     "church_growing",
+    "CHURCH_ESTABLISHED_FOUNDING":        "church_established",
+    "CHURCH_ESTABLISHED_ANNUAL_FOUNDING": "church_established",
+    "CHURCH_LARGE_FOUNDING":              "church_large",
+    "CHURCH_LARGE_ANNUAL_FOUNDING":       "church_large",
     # ChurchSavvy on its own. Checkout (churchsavvy_billing) enforces churches only.
     "CS_SCREENS":          "cs_screens",
     "CS_PLANNING":         "cs_planning",
@@ -422,6 +433,13 @@ def price_to_plan() -> Dict[str, str]:
     for env_key, plan in PRICE_ENV_TO_PLAN.items():
         pid = (os.environ.get(f"STRIPE_PRICE_ID_{env_key}") or "").strip()
         if pid:
+            out[pid] = plan
+    # Retired prices that subscriptions still hold (docs/FOUNDING_CHURCHES.md):
+    # STRIPE_PRICE_IDS_KEPT="price_a=church_growing,price_b=church_large". A
+    # price that goes up keeps meaning its plan for the churches still on it.
+    for pair in (os.environ.get("STRIPE_PRICE_IDS_KEPT") or "").split(","):
+        pid, _, plan = (x.strip() for x in pair.partition("="))
+        if pid and plan in ALL_PLANS and pid not in out:
             out[pid] = plan
     # Legacy single-plan default maps to professional.
     default = (os.environ.get("STRIPE_PRICE_ID_DEFAULT") or "").strip()

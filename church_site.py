@@ -389,11 +389,12 @@ def _offer_line() -> str:
     top = max(h for (_low, h) in pricing_config.church_size_bands().values() if h is not None)
     months, moves = o["move_months"], o["founding_moves"]
     move = f"Moving from another system costs {_words(months)} month{'' if months == 1 else 's'} of your plan"
+    # The price the first churches keep is its own line now (_founding_line):
+    # ten churches keep their price, the first five who ask move free.
     if moves == 1:
-        move += ", and the first church moves free and keeps the price it starts at, for as long as it stays."
+        move += ", and the first church moves free."
     elif moves:
-        move += (f", and the first {_words(moves)} churches move free and keep the price they start at, "
-                 "for as long as they stay.")
+        move += f", and the first {_words(moves)} churches move free."
     else:
         move += "."
     text = (f"Over {top:,} people or more than one campus? Multi-site starts at "
@@ -404,6 +405,27 @@ def _offer_line() -> str:
             'border-radius: 18px; background: #FFFFFF; border: 1px solid rgba(11,12,17,0.12)">'
             '<b style="font-family: \'Inter Tight\', sans-serif; font-weight: 600; font-size: 15px">Good to know</b>'
             f'<span style="flex: 1 1 420px; min-width: 0; font-size: 14px; line-height: 1.55; color: #5A5E6B">{text}</span>'
+            '</div>')
+
+
+def _founding_line() -> str:
+    """The founding churches' price under the cards (Kevin, 2026-11-13: "yes
+    founding prices"): the first ten churches that pay keep the price they
+    start at, for as long as they stay, and how many places are left. Nothing
+    while the offer is off, the count can't be read, or the places are gone
+    (church_founding.public_state; the count may lag five minutes)."""
+    import church_founding
+    state = church_founding.public_state()
+    if not state or state["left"] <= 0:
+        return ""
+    total = state["spots"]
+    who = "The first church keeps the price it starts at, for as long as it stays." if total == 1 else \
+        f"The first {_words(total)} churches keep the price they start at, for as long as they stay."
+    return ('<div style="display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px 20px; padding: 18px 22px; '
+            'border-radius: 18px; background: #FFFFFF; border: 1px solid rgba(11,12,17,0.12)">'
+            '<b style="font-family: \'Inter Tight\', sans-serif; font-weight: 600; font-size: 15px">Founding price</b>'
+            '<span style="flex: 1 1 420px; min-width: 0; font-size: 14px; line-height: 1.55; color: #5A5E6B">'
+            f'{who} <b style="color: #0B0C11">{state["left"]:,}</b> of {total:,} left.</span>'
             '</div>')
 
 
@@ -502,31 +524,19 @@ def _picker() -> str:
         '</div>')
 
 
-def _kept_price(moves: int) -> str:
-    """The founding churches' price (Kevin, 2026-11-05): the first churches
-    keep the price they start at, for as long as they stay. Nothing has to
-    run for this to hold: when a price goes up, a new Stripe price takes the
-    lookup key and every subscription stays on the price it has (see
-    pricing_config.founding_church_moves). Empty with no founding churches."""
-    if not moves:
-        return ""
-    if moves == 1:
-        return "It also keeps the price it starts at, for as long as it stays. "
-    return "They also keep the price they start at, for as long as they stay. "
-
-
 def _move_tokens() -> Dict[str, str]:
     """The move's offer, in the moving-over section's words, from
     pricing_config.church_offer(): how many churches move free (one glass
-    pane each, up to five), that they keep their price, and what the move
-    costs after them."""
+    pane each, up to five) and what the move costs after them. The price the
+    first churches keep is said under the cards (_founding_line), since
+    2026-11-13 for the first ten that pay, not the five that move free."""
     import pricing_config
     o = pricing_config.church_offer()
     months, moves = o["move_months"], o["founding_moves"]
     cost = f"{_words(months)} month{'' if months == 1 else 's'} of your plan, paid once"
     if moves and months:
         free = "The first church moves free." if moves == 1 else f"The first {_words(moves)} churches move free."
-        after = f"{_kept_price(moves)}After that, the move is {cost}. Either way, people do it with you."
+        after = f"After that, the move is {cost}. Either way, people do it with you."
     elif months:
         free, after = f"The move is {cost}.", "People do it with you, by hand."
     else:
@@ -562,7 +572,7 @@ def _by_size() -> Dict[str, str]:
                          "and hands-off marketing. "
                          "Leaders, volunteers and members use the member app free, on every plan."),
         "PLAN_CARDS": _plan_cards(),
-        "FOUNDER": _offer_line(),
+        "FOUNDER": _offer_line() + _founding_line(),
         "CONV_LINE": _and(conv),
         # the product pages
         "PLAN_STRIP": _plan_strip(),
