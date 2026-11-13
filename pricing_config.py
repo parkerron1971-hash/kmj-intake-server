@@ -98,22 +98,31 @@ def starter_credits() -> int:
     return _dial("STARTER_CREDITS", "CREDITS_", 3000)
 
 
+# 2026-11-13 (Kevin: "do all three credit fixes"): Professional 7,500 -> 6,000
+# and The Solutionist 17,500 -> 12,500. Re-measured, a Chief credit costs
+# 0.90c (MEASURED_CHAT_COST_CENTS), so a fully spent tank cost 48% and 55% of
+# the price, over the forty-percent line; now 36% and 38%. Nobody paid for
+# either plan that day (24 comped businesses, none using more than ~3,000).
+
 def pro_credits() -> int:
-    return _dial("PRO_CREDITS", "CREDITS_", 7500)
+    return _dial("PRO_CREDITS", "CREDITS_", 6000)
 
 
 def practice_credits() -> int:
-    return _dial("PRACTICE_CREDITS", "CREDITS_", 17500)
+    return _dial("PRACTICE_CREDITS", "CREDITS_", 12500)
 
 
 def founder_credits() -> int:
     """The Founder seat's monthly tank (2026-09-04 ruling): Professional's
-    features at $99, locked for life, with 6,000 credits — under the
+    features at $99, locked for life, with its own tank, under the
     standard Professional grant on purpose. The seat's perk is the price;
     the tank is sized so its worst case (every credit on chat) stays under
-    the forty-percent line (6,000 / 12 x 7.37c = $36.85 against $99).
+    the forty-percent line. 6,000 did at 7.37c a turn; at the 2026-11-13
+    measure (10.78c) it was 54%, so 4,200: 4,200 / 12 x 10.78c = $37.73
+    against $99, 38%, and still the cheapest credit on the ladder
+    (2.357c), as the seat's perk. No founder seat had been sold.
     feature_gates.monthly_credits() is what reads it, off the price id."""
-    return _dial("FOUNDER_CREDITS", "CREDITS_", 6000)
+    return _dial("FOUNDER_CREDITS", "CREDITS_", 4200)
 
 
 def tier_credits() -> Dict[str, int]:
@@ -660,7 +669,15 @@ def no_card_free_workspace() -> bool:
 # input, and a price that silently re-derives itself from yesterday's
 # traffic is a price nobody can reason about. Re-measure deliberately
 # and move the number deliberately.
-MEASURED_CHAT_COST_CENTS = 7.37
+#
+# RE-MEASURED 2026-11-13 (Kevin: "making sure the ai credits are priced
+# good"): 275 Chief turns with a turn id over the 30 days to 11-13 cost
+# 20.3c and charged 22.6 credits each (the turn's every row, the answer
+# check included, priced by usage_metering.weight_for_row): 0.898c a
+# credit, so 10.78c for the 12 credits of chat_price. Up from 7.37c, mostly
+# the answer check (24% of all AI spend). The plan tanks and the packs
+# were re-sized against it the same day.
+MEASURED_CHAT_COST_CENTS = 10.78
 
 
 def chat_tank_economics(cost_cents: Optional[float] = None) -> Dict[str, Dict[str, float]]:
@@ -839,9 +856,9 @@ def tier_price_cents() -> Dict[str, int]:
     """Monthly list price per tier, in cents (2026-09-04 ladder: $79 /
     $149 / $299). `founder` is the launch cohort's seat: Professional's
     features at $99, locked for the subscription's life, with its own
-    tank (founder_credits). At 1.65c a credit it is the CHEAPEST
-    subscription credit on the platform and therefore the binding
-    constraint on how cheap a top-up pack may be."""
+    tank (founder_credits). At 2.357c a credit (4,200 credits since
+    2026-11-13) it is the CHEAPEST subscription credit on the platform and
+    therefore the binding constraint on how cheap a top-up pack may be."""
     return {
         "starter":      _dial("TIER_STARTER_CENTS", "PRICE_", 7900),
         "professional": _dial("TIER_PROFESSIONAL_CENTS", "PRICE_", 14900),
@@ -917,14 +934,24 @@ def tier_cents_per_credit() -> Dict[str, float]:
 # against credit_ledger — no purchase rows exist), so no customer is
 # holding a balance bought at the old rate.
 
+# REPRICED 2026-11-13 to $18 / 740, $35 / 1,450, $70 / 2,920 (2.432c /
+# 2.414c / 2.397c a credit; were $13 / $25 / $50 at about 1.75c). Two
+# reasons, both measured that day: a credit costs 0.90-0.95c, so a pack
+# credit at 1.75c spent 54% of its price on AI, over the forty-percent line;
+# and the business tanks were trimmed (Professional 6,000, The Solutionist
+# 12,500, Founder 4,200), which raised the cheapest subscription credit to
+# 2.357c (the Founder seat), so the old packs would have undercut every tier. The small pack
+# still covers a build plus an edit, and buying bigger still pays. Zero
+# packs had ever been sold (credit_ledger empty).
+
 def credit_packs() -> Dict[str, Dict[str, int]]:
     return {
-        "small":  {"cents": _dial("PACK_SMALL_CENTS", "PRICE_", 1300),
+        "small":  {"cents": _dial("PACK_SMALL_CENTS", "PRICE_", 1800),
                    "units": _dial("PACK_SMALL_UNITS", "PRICE_", 740)},
-        "medium": {"cents": _dial("PACK_MEDIUM_CENTS", "PRICE_", 2500),
-                   "units": _dial("PACK_MEDIUM_UNITS", "PRICE_", 1440)},
-        "large":  {"cents": _dial("PACK_LARGE_CENTS", "PRICE_", 5000),
-                   "units": _dial("PACK_LARGE_UNITS", "PRICE_", 2880)},
+        "medium": {"cents": _dial("PACK_MEDIUM_CENTS", "PRICE_", 3500),
+                   "units": _dial("PACK_MEDIUM_UNITS", "PRICE_", 1450)},
+        "large":  {"cents": _dial("PACK_LARGE_CENTS", "PRICE_", 7000),
+                   "units": _dial("PACK_LARGE_UNITS", "PRICE_", 2920)},
     }
 
 
@@ -935,7 +962,7 @@ def pack_economics() -> Dict[str, object]:
         Otherwise a heavy user rationally buys packs forever instead of
         upgrading, and the tier ladder stops meaning anything. The
         comparison is against the CHEAPEST tier rate — today the Founder
-        seat at $99 for 6,000 credits (1.650c/credit).
+        seat at $99 for 4,200 credits (2.357c/credit, since 2026-11-13).
 
     (2) EVERY PACK MUST COMPLETE AT LEAST ONE FULL ACTION AND HAVE
         SOMETHING LEFT. A pack that funds 90% of a build is a refund

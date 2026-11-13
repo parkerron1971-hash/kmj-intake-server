@@ -44,7 +44,7 @@ invoice line reads right):
 
 | Product name | Monthly price | Yearly price (optional) |
 |---|---|---|
-| Solutionist Professional — Founding Member | $99.00 / month (6,000 credits) | $990.00 / year |
+| Solutionist Professional — Founding Member | $99.00 / month (4,200 credits since 2026-11-13; was 6,000) | $990.00 / year |
 
 Every price: **Recurring**, USD. Copy each price id (`price_…`) as you go —
 8 ids total (6 if you skip the founder-annual and starter-annual variants;

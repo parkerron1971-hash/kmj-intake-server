@@ -96,9 +96,11 @@ def test_opening_defaults_are_kevins_ruling(monkeypatch):
                 "CHAT_DAILY_SOFT_CEILING"):
             monkeypatch.delenv(k, raising=False)
     pc = _reload_config()
-    assert pc.tier_credits() == {"starter": 3000, "professional": 7500,
-                                 "practice": 17500}
-    assert pc.founder_credits() == 6000
+    # Professional / The Solutionist / Founder re-sized 2026-11-13 against the
+    # re-measured cost of a credit (pricing_config.MEASURED_CHAT_COST_CENTS).
+    assert pc.tier_credits() == {"starter": 3000, "professional": 6000,
+                                 "practice": 12500}
+    assert pc.founder_credits() == 4200
     assert pc.build_base() == 600
     assert pc.build_per_section() == 100
     assert pc.revamp_price() == 300

@@ -257,7 +257,8 @@ def plan_limits() -> Dict[str, Dict[str, Optional[int]]]:
     and refine against real data once the meter works.
 
     Opening defaults 3,000 / 10,000 / 25,000 (7,500 / 17,500 for the two
-    bigger tiers since the 2026-09-04 ladder), up ~10x from the
+    bigger tiers since the 2026-09-04 ladder, 6,000 / 12,500 since
+    2026-11-13), up ~10x from the
     300/1000/3000 of the 2026-07-12 spec. That rescale is what makes
     per-action pricing expressible at all — a build priced at 600 is
     impossible against a 300 tank. Beyond the allowance, prepaid credits
