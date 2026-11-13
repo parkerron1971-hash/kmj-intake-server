@@ -220,6 +220,11 @@ SETTLED = ("handed_in", "checked", "done")
 # Stripe). Handed in is not finished: a thing can still come back needing a
 # change, and the church has to be able to see that in its room.
 FINISHED = ("checked", "done")
+# One row that is not on the list: the day the church first saw its move
+# finished (in `checked_at`). Home says "moved in" for a while from that
+# day, then lets it go. Every read of the list keeps to ITEM, so this row
+# is never taken for a thing to hand in.
+MOVED_IN = "_moved_in"
 
 
 # ─── The switch ───────────────────────────────────────────────────────
@@ -420,6 +425,35 @@ def _finished(biz: Dict[str, Any]) -> bool:
         if _state(it, rows.get(it["key"]), [], live or {}) not in FINISHED:
             return False
     return True
+
+
+def _moved_in_at(biz_id: str) -> Optional[str]:
+    """When this church first saw its move finished, kept the first time
+    the question is asked of a finished move. It starts on the church's
+    first look, not on our last check, so a pastor who was away a week
+    still gets the moment. None when it couldn't be read or kept; never
+    raises (the menu's answer does not hang on it)."""
+    where = f"/church_move_items?business_id=eq.{_q(biz_id)}&item=eq.{_q(MOVED_IN)}&select=checked_at&limit=1"
+    try:
+        rows = sb_clients.sb_get_as_service(where)
+        if not isinstance(rows, list):
+            return None
+        if rows and rows[0].get("checked_at"):
+            return rows[0]["checked_at"]
+        when = _now()
+        if rows:
+            sb_clients.sb_patch_as_service(where.split("&select=")[0], {"checked_at": when, "updated_at": when})
+            return when
+        made = sb_clients.sb_post_as_service("/church_move_items", {
+            "business_id": biz_id, "item": MOVED_IN, "state": "checked", "checked_at": when, "updated_at": when})
+        if isinstance(made, list) and made:
+            return when
+        # Two logins asked at once and the other kept it: read theirs.
+        rows = sb_clients.sb_get_as_service(where)
+        return rows[0].get("checked_at") if isinstance(rows, list) and rows else None
+    except Exception:  # noqa: BLE001
+        logger.info("move-in: the moved-in day couldn't be kept for %s", biz_id, exc_info=True)
+        return None
 
 
 def _shown_file(f: Dict[str, Any]) -> Dict[str, Any]:
@@ -689,7 +723,9 @@ def move_in_status(business_id: str, user: AuthedUser = Depends(require_user)):
     the menu offers it only where it opens. Quietly false for a closed
     switch, a business that isn't a church, a login that doesn't work the
     office, or tables not made yet. `finished` says the move is done, so
-    the menu can let the room go; its address still opens it."""
+    the menu can let the room go; its address still opens it. A finished
+    move also answers `finished_at`: the day this church first saw it
+    finished, which is how long Home says "moved in" (None if unknown)."""
     off = {"enabled": False, "write": False}
     try:
         me = _access(business_id, user)
@@ -703,7 +739,10 @@ def move_in_status(business_id: str, user: AuthedUser = Depends(require_user)):
         finished = _finished(me["biz"])
     except Exception:  # noqa: BLE001  (not knowing is "not finished": the room stays on the menu)
         finished = False
-    return {"enabled": True, "write": me["role"] in WRITERS, "finished": finished}
+    out: Dict[str, Any] = {"enabled": True, "write": me["role"] in WRITERS, "finished": finished}
+    if finished:
+        out["finished_at"] = _moved_in_at(str(me["biz"]["id"]))
+    return out
 
 
 @router.get("")
