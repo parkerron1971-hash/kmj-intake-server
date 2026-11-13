@@ -192,8 +192,31 @@ def test_tables_not_made_yet_are_a_quiet_no_and_a_503(db):
 
 def test_the_owner_admins_and_office_logins_get_in(db):
     for name in ("owner", "admin", "office"):
-        assert status(name) == {"enabled": True, "write": True}
-    assert status("viewer") == {"enabled": True, "write": False}
+        assert status(name) == {"enabled": True, "write": True, "finished": False}
+    assert status("viewer") == {"enabled": True, "write": False, "finished": False}
+
+
+def test_the_move_is_finished_when_every_thing_is_checked_and_giving_is_live(db):
+    """The menu lets the room go only then. Handed in is not finished: it
+    can still come back needing a change."""
+    keys = [i["key"] for i in mi.ITEMS if i.get("live") != "giving"]
+    for k in keys:
+        db.t["church_move_items"].append({"business_id": BIZ, "item": k, "state": "checked", "answers": {"x": "y"},
+                                          "note": None, "handed_in_at": "2026-11-12T00:00:00Z", "handed_in_by": None,
+                                          "checked_at": "2026-11-12T00:00:00Z", "updated_at": "2026-11-12T00:00:00Z"})
+    assert status("owner")["finished"] is False                              # giving isn't live yet
+    db.t["businesses"][0].update(stripe_account_id="acct_1", settings={"stripe": {"charges_enabled": True}})
+    assert status("owner")["finished"] is True
+    assert client("owner").get(f"/church/move-in?business_id={BIZ}").status_code == 200   # its address still opens
+    db.t["church_move_items"][0]["state"] = "handed_in"
+    assert status("owner")["finished"] is False
+    db.t["church_move_items"][0]["state"] = "needs"
+    assert status("owner")["finished"] is False
+
+
+def test_a_finished_question_that_cant_be_read_keeps_the_room_on_the_menu(db, monkeypatch):
+    monkeypatch.setattr(mi, "_finished", lambda biz: (_ for _ in ()).throw(RuntimeError("down")))
+    assert status("owner") == {"enabled": True, "write": True, "finished": False}
 
 
 def test_another_areas_login_and_a_stranger_do_not(db):
@@ -266,6 +289,17 @@ def test_rows_drop_empty_lines_and_keep_only_their_columns(db):
     assert item(got.json(), "sunday")["answers"] == {
         "services": [{"day": "Sunday", "time": "10:00 AM", "name": "Morning"}],
         "kids_rooms": [{"room": "Nursery", "ages": "0 to 2"}]}
+
+
+def test_the_first_sunday_is_a_line_of_the_sunday_item_and_is_not_what_makes_it_ready(db):
+    """The welcome briefing saves the date the church picked; the services are still
+    what the item needs before it can be handed in."""
+    got = save("owner", "sunday", {"first_sunday": "  Sunday, November 22, 2026 "})
+    assert got.status_code == 200, got.text
+    mine = item(got.json(), "sunday")
+    assert mine["answers"] == {"first_sunday": "Sunday, November 22, 2026"}
+    assert mine["hand_in"]["ready"] is False
+    assert mine["fields"][0]["key"] == "first_sunday"
 
 
 def test_a_number_that_isnt_one_and_too_many_rows_are_refused_by_name(db):

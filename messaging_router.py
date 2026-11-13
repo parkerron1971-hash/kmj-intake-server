@@ -88,16 +88,31 @@ PASTORAL_JOBS = ("senior", "pastoral")
 def _owner_email(owner_id: str) -> str:
     """Auth Admin lookup (the only place a login's email lives); '' when it
     can't be read."""
+    return owner_email_read(owner_id) or ""
+
+
+def owner_email_read(owner_id: str) -> Optional[str]:
+    """_owner_email, telling a failed read apart: the login's email
+    (lowercased), '' when there is no such login or it has no email, and None
+    when it couldn't be read (no Auth settings, a network error, any other
+    refusal). A caller that decides who someone is from it (church_over)
+    answers 503 on None instead of reading it as nobody."""
     import httpx
-    base, key = sb_clients.sb_url(), sb_clients.sb_service_role()
-    if not base or not key or not owner_id:
+    if not owner_id:
         return ""
+    base, key = sb_clients.sb_url(), sb_clients.sb_service_role()
+    if not base or not key:
+        return None
     try:
         with httpx.Client(timeout=10.0) as c:
             r = c.get(f"{base}/auth/v1/admin/users/{owner_id}", headers={"apikey": key, "Authorization": f"Bearer {key}"})
-        return str((r.json() or {}).get("email") or "").strip().lower() if r.status_code < 400 else ""
+        if r.status_code == 404:
+            return ""
+        if r.status_code >= 400:
+            return None
+        return str((r.json() or {}).get("email") or "").strip().lower()
     except Exception:
-        return ""
+        return None
 
 
 def eligible_leaders(business_id: str, owner_id: str) -> List[Dict[str, Any]]:

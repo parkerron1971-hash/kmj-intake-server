@@ -170,11 +170,12 @@ def test_a_task_handed_to_your_login_is_yours_late_first(client, week):
 
 
 def test_a_tasks_day_is_the_churchs_own(client, week, monkeypatch):
-    from zoneinfo import ZoneInfo
-    import chief_assignments
     evening = datetime(2026, 10, 27, 2, 0, tzinfo=timezone.utc)          # 9 PM on the 26th in Chicago
     monkeypatch.setattr(mw, "_now", lambda: evening)
-    monkeypatch.setattr(chief_assignments, "_tz_for", lambda biz: ZoneInfo("America/Chicago"))
+    # The church's own clock, read by the one chain every week page reads
+    # (church_work_checks.church_zone), never a patched reader (#1802 review).
+    biz = week.t["businesses"][0]
+    biz["settings"] = {**(biz.get("settings") or {}), "availability": {"timezone": "America/Chicago"}}
     week.t["tasks"] = [{"id": "t1", "business_id": BIZ, "title": "Lock the building", "status": "todo",
                         "due_date": "2026-10-26", "assigned_to": MARCUS_SEAT}]
     client.who.update(role="manager", id=MARCUS_SEAT, email="marcus@example.com")

@@ -224,6 +224,8 @@ def read_tool_definitions() -> List[Dict[str, Any]]:
     out += [chief_giving_counts.TOOL]  # the service counts (giving by service): the same
     import chief_duties
     out += [chief_duties.TOOL]  # a church's duties: needs the signed-in person, so Chief's alone
+    import chief_church_assignments
+    out += list(chief_church_assignments.TOOLS)  # who is under me, someone's assignments, a one-on-one: the same
     import chief_move_in
     out += [chief_move_in.TOOL]  # a new church's move: the same
     import chief_map
@@ -473,7 +475,8 @@ async def execute_tool_use(client, biz: Dict[str, Any],
                                               "giving_deposits", "expense_categories", "bills",
                                               "giving_counts", "list_duties", "list_map",
                                               "search_templates", "my_work", "list_asks",
-                                              "move_in_status")):
+                                              "move_in_status", "people_under", "assignments_of",
+                                              "one_on_one")):
         return True, (f"'{name}' is not a mid-turn lookup. Reads only here; "
                       f"operations go through [ACTION:] tags in your reply.")
     if effect != action_registry.READ:

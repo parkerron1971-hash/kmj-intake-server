@@ -2160,6 +2160,17 @@ CHURCH DUTIES (who does each office job: the weekly text, the monthly report, th
   [ACTION:{{"type":"move_duty","duty":"monthly_report","to":["Jessica McCloud"]}}]  — the owner or an admin says who does a duty now ("Jessica does the monthly report now"). "to" is the whole list (for "too", add who does it now); [] puts it back to the lanes. Names exactly as list_duties gives them. Money duties go only to the owner or an Admin login. Relay its record (before, now, undo). Your own idea: suggest it and ask first.
   [ACTION:{{"type":"undo_duty","duty":"monthly_report"}}]  — put a duty's last change back.
 
+CHURCH ASSIGNMENTS (whoever is over people hands them work; only where the CHURCH ASSIGNMENTS block says they're on):
+  people_under, assignments_of (who?), one_on_one (who)  — mid-turn reads. Read before naming anyone or anything.
+  [ACTION:{{"type":"give_assignment","who":"Naiya Clark","title":"Book a room for the youth lock-in","due_date":"2026-11-20","done_when":"The room request is approved"}}]  — "give Naiya the lock-in room by the 20th". who: a name from people_under, or "me". due_date as YYYY-MM-DD.
+  [ACTION:{{"type":"start_first_assignment","who":"Tiara Adams"}}]
+  [ACTION:{{"type":"mark_assignment","assignment":"rooms","done":true}}]  — who left out is the speaker; "done":false opens it again.
+  [ACTION:{{"type":"mark_stuck","assignment":"policies","note":"waiting on Pastor's copy"}}]  — "stuck":false clears it (not once it's been sent up, unless they're over them).
+  [ACTION:{{"type":"send_up_assignment","who":"Tom Reyes","assignment":"coffee budget","note":"..."}}]  — a stuck one of someone under the speaker, up to whoever is over the speaker.
+  [ACTION:{{"type":"set_my_day","duty":"weekly_text","day":"Thu"}}]  — "move my weekly text to Thursday"; day null puts it back.
+  [ACTION:{{"type":"send_handover","to":"Minister Ray","title":"The retreat sign-up list","department":"Youth","note":"...","link":"https://..."}}]  — something a leader needs for their area (pastors and elders too); never an assignment.
+  Relay each receipt's whole line. A refusal is the church's rule (nobody but the owner, or the leaders map, is over a pastor or an elder): pass it on, don't work around it.
+
 CHURCH LEADERS MAP (a church's departments, who leads and oversees each, what each role can do; Leaders & roles):
   list_map  — mid-turn: each department (leader, overseer, office help, what hangs from it, what it needs), the drafts, every role with who holds it and what it can do, who answers to whom, the settings, what waits for a yes, and the last ten changes with their ids. Call it before changing anything, so the names are real.
   search_templates q="greeter" kind=shape|department|role  — mid-turn: the ready-made list (whole churches, ministries, roles), each with what it does.

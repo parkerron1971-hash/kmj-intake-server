@@ -179,7 +179,11 @@ ITEMS: List[Dict[str, Any]] = [
         "key": "sunday",
         "title": "Your Sunday details",
         "ask": "Service times, kids rooms with ages, and your groups with each leader.",
-        "fields": [_rows("services", "Services", [("day", "Day"), ("time", "Time"), ("name", "What it's called")],
+        # The first Sunday the church gathers with us. The welcome briefing asks it
+        # ("When is your first Sunday with us?") and saves it here, as a draft like
+        # any other line; the office can change it in the room.
+        "fields": [_text("first_sunday", "Your first Sunday with us", "The date, like Sunday, November 22"),
+                   _rows("services", "Services", [("day", "Day"), ("time", "Time"), ("name", "What it's called")],
                          "Add a service", 12),
                    _rows("kids_rooms", "Kids rooms", [("room", "Room"), ("ages", "Ages")], "Add a room", 20),
                    _rows("groups", "Groups and classes",
@@ -212,6 +216,10 @@ ITEM = {i["key"]: i for i in ITEMS}
 STATE_WORDS = {"todo": "Not started", "started": "Started", "handed_in": "Handed in", "checked": "Checked",
                "needs": "Needs a change", "waiting": "Waiting on Stripe", "done": "Done"}
 SETTLED = ("handed_in", "checked", "done")
+# The move is FINISHED when we have checked every thing (giving: live with
+# Stripe). Handed in is not finished: a thing can still come back needing a
+# change, and the church has to be able to see that in its room.
+FINISHED = ("checked", "done")
 
 
 # ─── The switch ───────────────────────────────────────────────────────
@@ -396,6 +404,22 @@ def _state(item: Dict[str, Any], row: Optional[Dict[str, Any]], files: List[Dict
     if state not in ("handed_in", "checked", "needs"):
         return "started" if ((row or {}).get("answers") or files) else "todo"
     return state
+
+
+def _finished(biz: Dict[str, Any]) -> bool:
+    """Whether the whole move is done, for the menu: the room leaves the
+    church's Home once it is (Kevin, 2026-11-12: "under the home section
+    until everything for move in is complete and then it disappears"). The
+    states only, so the menu's one question stays a small read."""
+    rows, live = _rows_of(str(biz["id"])), None
+    for it in ITEMS:
+        if it.get("live") == "giving":
+            import payments_core
+            live = {"giving": {"connected": bool(biz.get("stripe_account_id")),
+                               "ready": bool(biz.get("stripe_account_id")) and bool(payments_core.can_charge(biz))}}
+        if _state(it, rows.get(it["key"]), [], live or {}) not in FINISHED:
+            return False
+    return True
 
 
 def _shown_file(f: Dict[str, Any]) -> Dict[str, Any]:
@@ -664,7 +688,8 @@ def move_in_status(business_id: str, user: AuthedUser = Depends(require_user)):
     """Whether this login's office shows the Move-in room, asked once so
     the menu offers it only where it opens. Quietly false for a closed
     switch, a business that isn't a church, a login that doesn't work the
-    office, or tables not made yet."""
+    office, or tables not made yet. `finished` says the move is done, so
+    the menu can let the room go; its address still opens it."""
     off = {"enabled": False, "write": False}
     try:
         me = _access(business_id, user)
@@ -674,7 +699,11 @@ def move_in_status(business_id: str, user: AuthedUser = Depends(require_user)):
         raise
     if not _ready(str(me["biz"]["id"])):
         return off
-    return {"enabled": True, "write": me["role"] in WRITERS}
+    try:
+        finished = _finished(me["biz"])
+    except Exception:  # noqa: BLE001  (not knowing is "not finished": the room stays on the menu)
+        finished = False
+    return {"enabled": True, "write": me["role"] in WRITERS, "finished": finished}
 
 
 @router.get("")

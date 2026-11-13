@@ -54,15 +54,17 @@ MONDAY_9AM = datetime(2026, 11, 2, 15, 0, tzinfo=timezone.utc)
 
 
 @pytest.fixture(autouse=True)
-def fresh(monkeypatch):
+def fresh(monkeypatch, db):
     """Each test reads its own duties (standing keeps a login's a minute),
-    on Chicago's clock, on the first Monday of November."""
+    on Chicago's clock, on the first Monday of November. The clock is the
+    church's own setting, read by the real chain every week page reads
+    (church_work_checks.church_zone): no clock reader is patched, so two that
+    disagree can't hide behind one fake (#1802 review)."""
     cd._CACHE.clear()
     cd._FAILED.clear()
-    import chief_assignments
-    import church_leaders_note
-    monkeypatch.setattr(chief_assignments, "_tz_for", lambda biz: CHICAGO)
-    monkeypatch.setattr(church_leaders_note, "_zone", lambda biz: CHICAGO)
+    for b in db.t["businesses"]:
+        b["settings"] = {**(b.get("settings") or {}), "availability": {"timezone": "America/Chicago"}}
+    monkeypatch.delenv("PLATFORM_DEFAULT_TZ", raising=False)
     monkeypatch.setattr(mw, "_now", lambda: MONDAY_9AM)
     yield
     cd._CACHE.clear()
