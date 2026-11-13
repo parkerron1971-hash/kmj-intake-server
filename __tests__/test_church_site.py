@@ -135,13 +135,33 @@ def test_a_church_plan_has_no_free_days_on_any_church_page(monkeypatch, no_card)
     for path, html in _all().items():
         low = html.lower()
         assert "days free" not in low and "trial ends" not in low and "free trial" not in low, path
+        # every church page ends on the promise that stands where the free week stood
+        assert cs.PROMISE in html, path
         if no_card:
             assert "Start free, no card" in html, path
-            assert "No card to sign up. Your first month starts the day you choose your plan." in html, path
+            assert f"{cs.PROMISE} No card to sign up." in html, path
         else:
-            assert "start free, no card" not in low and "Month to month. Cancel any time." in html, path
+            assert "start free, no card" not in low and "no card to sign up" not in low, path
     fine = "No card to sign up" if no_card else "No setup fee"
-    assert f"{fine} · month to month" in cs.render("")
+    assert f"{fine} · your first month starts the day you choose your plan · month to month" in cs.render("")
+
+
+def test_the_promise_is_under_the_plan_cards_and_says_only_what_is_true(monkeypatch):
+    monkeypatch.setenv("PLAN_CHURCH_OFFERED", "1")   # as it is live: the plans by size, and the lines under them
+    # Kevin, 2026-11-13: "yes that is a good promise". It stands first under the
+    # cards, and it promises RECORDS, because the one-file download
+    # (account_lifecycle.export_account) carries every table and no uploaded file.
+    import account_lifecycle
+    html = cs.render("")
+    assert cs.PROMISE == "No contract. Leave any time, and your records go with you."
+    assert ">Our promise</b>" in html and cs.PROMISE_DETAIL in html
+    assert html.index(">Our promise</b>") < html.index(">Good to know</b>")
+    for word in ("everything leaves", "all your files", "your photos", "money back", "refund"):
+        assert word not in (cs.PROMISE + " " + cs.PROMISE_DETAIL).lower(), word
+    # what the promise leans on is really there
+    for table in ("contacts", "households", "giving_counts"):
+        assert table in account_lifecycle.BUSINESS_CHILD_TABLES, table
+    assert "Storage FILES are not covered" in open(account_lifecycle.__file__, encoding="utf-8").read()
 
 
 @pytest.mark.parametrize("no_card,days", [(True, 7), (False, 7), (False, 0)])
