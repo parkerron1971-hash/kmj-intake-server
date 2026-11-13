@@ -108,8 +108,8 @@ def test_a_pack_is_said_in_flyers_off_the_live_price(fake, monkeypatch):
     assert um.credits_overview("b1")["flyer_credits"] == 30
     assert [cl.pack_name(p["units"]) for p in cl.credit_packs().values()] == [
         "740 Solutionist credits, about 24 flyers",
-        "1,440 Solutionist credits, about 48 flyers",
-        "2,880 Solutionist credits, about 96 flyers",
+        "1,450 Solutionist credits, about 48 flyers",
+        "2,920 Solutionist credits, about 97 flyers",
     ]
 
     monkeypatch.setenv("PRICE_IMAGE_HIGH", "60")

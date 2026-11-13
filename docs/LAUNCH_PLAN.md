@@ -18,8 +18,8 @@ paid beta; what remains is configuration, operations, and polish.
 
 **Model (docs/pricing_model.md):** subscription floor + metered overage.
 - Starter $79/mo → 3,000 credits (about 125 messages to Chief, at ~22 credits a message: pricing_config.credits_per_message)
-- Professional $149/mo (2026-09-04; was $199) → 7,500 credits
-- Solutionist (plan key `practice`) $299/mo (2026-09-04; was $399) → 17,500 credits
+- Professional $149/mo (2026-09-04; was $199) → 6,000 credits (2026-11-13; was 7,500)
+- Solutionist (plan key `practice`) $299/mo (2026-09-04; was $399) → 12,500 credits (2026-11-13; was 17,500)
 - 2× bill promise: overage can never exceed the tier price itself.
 - Weighted units: chat = 1, hero compose = 5, full site build = 25.
 

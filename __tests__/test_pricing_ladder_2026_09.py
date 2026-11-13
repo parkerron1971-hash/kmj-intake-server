@@ -1,5 +1,6 @@
 """The 2026-09-04 ladder: $79 / 3,000 · $149 / 7,500 · $299 / 17,500,
-a Founder seat at $99 / 6,000, and the read-only connector on every plan.
+a Founder seat at $99 / 6,000 (tanks re-sized 2026-11-13 to 6,000 / 12,500 /
+4,200 against the re-measured cost of a credit), and the read-only connector on every plan.
 
 Pins:
   * the defaults, the per-credit order (each tier's credit cheaper than
@@ -40,11 +41,11 @@ def prices(monkeypatch):
 def test_the_ladder_defaults(prices):
     assert pc.tier_price_cents() == {"starter": 7900, "professional": 14900,
                                      "practice": 29900, "founder": 9900}
-    assert pc.tier_credits() == {"starter": 3000, "professional": 7500, "practice": 17500}
-    assert pc.founder_credits() == 6000
+    assert pc.tier_credits() == {"starter": 3000, "professional": 6000, "practice": 12500}  # 2026-11-13
+    assert pc.founder_credits() == 4200
     r = pc.tier_cents_per_credit()
     assert r["starter"] > r["professional"] > r["practice"] > r["founder"]
-    assert r["founder"] == pytest.approx(1.65)
+    assert r["founder"] == pytest.approx(2.357, rel=1e-3)
     # worst case — every credit on chat — stays under 40% on every tier
     for plan, credits in list(pc.tier_credits().items()) + [("founder", pc.founder_credits())]:
         price = pc.tier_price_cents()[plan]
@@ -57,18 +58,18 @@ def test_the_founder_tank_is_read_off_the_price_id(prices):
     pro = {"id": "b", "subscription_status": "active", "subscription_plan": "price_pro"}
     assert fg.plan_of(founder) == "professional" and fg.plan_of(pro) == "professional"
     assert fg.is_founder_price(founder) and not fg.is_founder_price(pro)
-    assert fg.monthly_credits(founder) == 6000
-    assert fg.monthly_credits(pro) == 7500
-    assert fg.limit_for(founder, "chief_messages_monthly") == 6000
-    assert fg.limit_for(pro, "chief_messages_monthly") == 7500
+    assert fg.monthly_credits(founder) == 4200
+    assert fg.monthly_credits(pro) == 6000
+    assert fg.limit_for(founder, "chief_messages_monthly") == 4200
+    assert fg.limit_for(pro, "chief_messages_monthly") == 6000
     assert fg.limit_for(founder, "max_seats") == fg.limit_for(pro, "max_seats") == 3,         "everything but the tank is Professional's"
     annual = {**founder, "subscription_plan": "price_founder_annual"}
-    assert fg.monthly_credits(annual) == 6000
+    assert fg.monthly_credits(annual) == 4200
 
 
 def test_a_comped_business_is_never_on_the_founder_tank(prices):
     comped = {"id": "b", "comp_tier": "professional", "subscription_plan": "price_founder"}
-    assert fg.monthly_credits(comped) == 7500
+    assert fg.monthly_credits(comped) == 6000
     assert fg.monthly_credits({"id": "b"}) is None
 
 
@@ -83,7 +84,7 @@ def test_usage_summary_sees_the_founder_tank(prices, monkeypatch):
     row = {"id": "b", "owner_id": "o", "subscription_status": "active",
            "subscription_plan": "price_founder", "settings": {}}
     s = um.usage_summary("b", row)
-    assert s["allotment"] == 6000 and s["remaining"] == 5900
+    assert s["allotment"] == 4200 and s["remaining"] == 4100
 
 
 def test_minting_a_write_key_below_professional_is_a_402(prices, monkeypatch):
