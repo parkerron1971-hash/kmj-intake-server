@@ -11,11 +11,13 @@ church mail in the app, instead of only as a copy at their own email
                                            them), Sent, the addresses it may send
                                            from, Prayer's count, Held's count, and
                                            whether church mail is on
-    GET  /church-mail/list?tray=           one tray's mail (box:<id> | other | sent | held)
+    GET  /church-mail/list?tray=&before=   one tray's mail (box:<id> | other | sent | held), 100 at a
+                                           time; before= (the last one's time) for older
     GET  /church-mail/message?id=          one message, whole; opening it marks it read
     POST /church-mail/read                 {ids, read}: mark read or unread (per person)
     POST /church-mail/send                 {sender, to, to_name, subject, body, reply_to_id,
-                                           signature, idem}: send as a church box
+                                           signature, idem, files}: send as a church box, with
+                                           files (10 MB in all, never a program file)
     POST /church-mail/draft                {reply_to_id | to_name + subject, notes, sender}:
                                            a draft for the person to check, never sent
     GET  /church-mail/attachment?id=&n=    a fresh link to a received file
@@ -271,10 +273,10 @@ def _live(domain: str) -> Optional[bool]:
         return None
 
 
-def _inbox_path(room: Room, tray: Dict[str, Any], limit: int) -> str:
+def _inbox_path(room: Room, tray: Dict[str, Any], limit: int, before: str = "") -> str:
     c = room.church
     base = (f"/church_mail?business_id=eq.{_q(c.id)}&direction=eq.in&outcome=in.({','.join(INBOX)})"
-            f"&select={_ROW}&order=received_at.desc&limit={limit}")
+            f"&select={_ROW}&order=received_at.desc&limit={limit}{_older(before)}")
     active = [str(b["id"]) for b in c.boxes()]
     loose = f"mailbox_id.is.null,mailbox_id.not.in.({','.join(active)})" if active else ""
     if tray["id"] == "other":
@@ -283,6 +285,22 @@ def _inbox_path(room: Room, tray: Dict[str, Any], limit: int) -> str:
     if tray["catch_all"]:
         return base + f"&or=(mailbox_id.eq.{bid},{loose})"
     return base + f"&mailbox_id=eq.{bid}"
+
+
+def _before(v: str) -> str:
+    """An older-than cursor: the received time of the last message shown."""
+    v = v.strip() if isinstance(v, str) else ""
+    if not v:
+        return ""
+    try:
+        datetime.fromisoformat(v.replace("Z", "+00:00"))
+    except ValueError:
+        raise HTTPException(400, "That isn't a time to show mail before.")
+    return v
+
+
+def _older(before: str) -> str:
+    return f"&received_at=lt.{_q(before)}" if before else ""
 
 
 def _box_address(room: Room, mid: Any) -> str:
@@ -385,17 +403,22 @@ def get_room(business_id: str, biz: Dict[str, Any] = Depends(business_access()),
 
 
 @router.get("/list")
-def get_list(business_id: str, tray: str = Query(..., max_length=60),
+def get_list(business_id: str, tray: str = Query(..., max_length=60), before: str = Query("", max_length=40),
              biz: Dict[str, Any] = Depends(business_access()),
              session: UserSession = Depends(sb_clients.authed_request)):
+    """One tray's mail, newest first, MAX_LIST at a time; `before` (the last
+    shown message's time) gives the next older page."""
     room = _room(biz, session)
     c = room.church
+    cursor = _before(before)
+    older = _older(cursor)
     try:
         if tray == "held":
             if not room.may_give():
                 raise HTTPException(403, "Held mail is for the pastor and whoever gives out the church's email.")
             rows = _need(f"/church_mail?business_id=eq.{_q(c.id)}&outcome=eq.held&select={_ROW}"
-                         f"&order=received_at.desc&limit={MAX_LIST}")
+                         f"&order=received_at.desc&limit={MAX_LIST}{older}")
+            got = len(rows)
         elif tray == "sent":
             ors = [f"sent_by.eq.{_q(room.uid)}"]
             ids = room.box_ids()
@@ -404,15 +427,18 @@ def get_list(business_id: str, tray: str = Query(..., max_length=60),
             if room.owner:
                 ors.append("mailbox_id.is.null")
             rows = _need(f"/church_mail?business_id=eq.{_q(c.id)}&direction=eq.out&or=({','.join(ors)})"
-                         f"&select={_ROW}&order=received_at.desc&limit={MAX_LIST}")
+                         f"&select={_ROW}&order=received_at.desc&limit={MAX_LIST}{older}")
+            got = len(rows)
             rows = [r for r in rows if room.can_read(r)]
         else:
             t = room.tray(tray)
-            rows = [r for r in _need(_inbox_path(room, t, MAX_LIST)) if not _is_relay(r)]
+            rows = _need(_inbox_path(room, t, MAX_LIST, cursor))
+            got = len(rows)
+            rows = [r for r in rows if not _is_relay(r)]
     except cm.Unavailable:
         raise _unavailable()
     rows.sort(key=lambda r: str(r.get("received_at") or ""), reverse=True)
-    return {"tray": tray, "items": [_item(room, r, tray) for r in rows], "more": len(rows) >= MAX_LIST}
+    return {"tray": tray, "items": [_item(room, r, tray) for r in rows], "more": got >= MAX_LIST}
 
 
 def _row(room: Room, mid: str) -> Dict[str, Any]:
@@ -495,6 +521,19 @@ def post_read(body: ReadIn, business_id: str, biz: Dict[str, Any] = Depends(busi
 
 # ─── Sending as a church box ─────────────────────────────────────────
 
+MAX_SEND_FILES = 10
+MAX_SEND_BYTES = 10 * 1024 * 1024
+# Kinds no mail service lets through, and no church sends.
+BLOCKED_EXT = {"exe", "bat", "cmd", "com", "scr", "pif", "js", "jse", "vbs", "vbe", "wsf", "msi", "msp", "jar",
+               "ps1", "psm1", "sh", "apk", "app", "dll", "cpl", "hta", "lnk", "reg", "inf", "gadget"}
+
+
+class FileIn(BaseModel):
+    filename: str = Field(..., max_length=200)
+    content_type: str = Field("", max_length=100)
+    content: str = Field(..., max_length=14_500_000)  # base64
+
+
 class SendIn(BaseModel):
     sender: str = Field(..., max_length=60)
     to: str = Field(..., max_length=254)
@@ -504,6 +543,35 @@ class SendIn(BaseModel):
     reply_to_id: Optional[str] = Field(None, max_length=60)
     signature: bool = True
     idem: str = Field("", max_length=80)
+    files: List[FileIn] = Field(default_factory=list, max_length=MAX_SEND_FILES)
+
+
+def send_files(files: List[FileIn]) -> List[Dict[str, Any]]:
+    """The files for the mail service, checked: real base64, 10 MB in all,
+    no program files. Each is {filename, content, content_type, size}."""
+    import base64
+    import binascii
+    out: List[Dict[str, Any]] = []
+    total = 0
+    for f in files:
+        name = cm._plain(f.filename, 200).replace("/", "_").replace("\\", "_").strip(" .") or "file"
+        ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+        if ext in BLOCKED_EXT:
+            raise HTTPException(400, f"{name} can't be sent: mail services block program files like .{ext}.")
+        raw = f.content.split(",", 1)[1] if f.content.startswith("data:") else f.content
+        try:
+            size = len(base64.b64decode(raw, validate=True))
+        except (binascii.Error, ValueError):
+            raise HTTPException(400, f"{name} didn't come through whole. Attach it again.")
+        total += size
+        if total > MAX_SEND_BYTES:
+            raise HTTPException(400, "Files can be 10 MB in all. Send the big ones as a link instead.")
+        item: Dict[str, Any] = {"filename": name, "content": raw, "size": size}
+        ctype = cm._plain(f.content_type, 100)
+        if ctype:
+            item["content_type"] = ctype
+        out.append(item)
+    return out
 
 
 def signature_lines(room: Room, sender: Dict[str, Any]) -> List[str]:
@@ -565,6 +633,7 @@ async def post_send(body: SendIn, business_id: str, biz: Dict[str, Any] = Depend
     text = (body.body or "").replace("\r\n", "\n").strip()
     if not subject or not text:
         raise HTTPException(400, "Write a subject and a message first.")
+    files = send_files(body.files)
     if body.signature:
         text += "\n\n" + "\n".join(signature_lines(room, pick))
     if await email_sender.is_suppressed(to):
@@ -577,6 +646,8 @@ async def post_send(body: SendIn, business_id: str, biz: Dict[str, Any] = Depend
     }
     if orig and orig.get("message_id"):
         payload["headers"] = {"In-Reply-To": orig["message_id"], "References": orig["message_id"]}
+    if files:
+        payload["attachments"] = [{k: v for k, v in f.items() if k != "size"} for f in files]
     idem = re.sub(r"[^A-Za-z0-9_-]", "", body.idem or "")[:60] or uuid.uuid4().hex
     try:
         async with httpx.AsyncClient() as client:
@@ -594,6 +665,8 @@ async def post_send(body: SendIn, business_id: str, biz: Dict[str, Any] = Depend
         "direction": "out", "to_address": to, "from_email": pick["address"], "from_name": me[:200] or None,
         "subject": subject, "body_text": text[:100000], "email_id": email_id, "outcome": "sent",
         "why": f"sent from the Email room by {me}"[:300], "delivered": [{"email": to, "name": to_name}],
+        "attachments": [{"filename": f["filename"], "size": f["size"], "content_type": f.get("content_type") or ""}
+                        for f in files],
         "sent_by": room.uid, "read_by": [room.uid], "received_at": now,
     }
     if orig and orig.get("message_id"):
