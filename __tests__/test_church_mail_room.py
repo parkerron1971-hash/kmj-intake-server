@@ -306,3 +306,53 @@ def test_addresses_shows_who_has_none_and_gives_them(mail, resend):
     got = call(room.post_give, mail, OWNER, room.GiveIn(items=[room.GiveItem(to=tia["to"], address="tia")]))
     assert got["results"][0]["ok"] and got["results"][0]["address"] == "tia@lovecityc.com"
     assert "Yours" in [t["label"] for t in call(room.get_room, mail, TIA)["trays"]]
+
+
+# ─── Files, and older mail (Kevin, 2026-11-13: "build these") ─────────
+
+def test_a_send_carries_its_files_and_sent_keeps_their_names(mail, resend):
+    import base64
+    yours = _tray(call(room.get_room, mail, JESSICA), "Yours")["id"]
+    pdf = base64.b64encode(b"%PDF-1.4 the order of service").decode()
+    call(room.post_send, mail, JESSICA, room.SendIn(
+        sender=yours, to="sam@sender.example", subject="Sunday", body="Here it is.",
+        files=[room.FileIn(filename="Order of service.pdf", content_type="application/pdf",
+                           content=f"data:application/pdf;base64,{pdf}")]))
+    sent = resend.sent[-1]
+    assert sent["attachments"] == [{"filename": "Order of service.pdf", "content": pdf,
+                                    "content_type": "application/pdf"}]
+    kept = next(r for r in mail.t["church_mail"] if r.get("direction") == "out")
+    assert kept["attachments"] == [{"filename": "Order of service.pdf", "size": 29, "content_type": "application/pdf"}]
+    assert call(room.get_list, mail, JESSICA, tray="sent")["items"][0]["attachments"] == 1
+
+
+def test_program_files_and_too_much_are_refused_before_anything_goes(mail, resend, monkeypatch):
+    import base64
+    yours = _tray(call(room.get_room, mail, JESSICA), "Yours")["id"]
+    small = base64.b64encode(b"x" * 20).decode()
+    for files, word in (([room.FileIn(filename="setup.exe", content=small)], "program files"),
+                        ([room.FileIn(filename="a.pdf", content="not base64!")], "didn't come through")):
+        with pytest.raises(HTTPException) as e:
+            call(room.post_send, mail, JESSICA, room.SendIn(sender=yours, to="sam@sender.example", subject="Hi",
+                                                           body="Hello", files=files))
+        assert e.value.status_code == 400 and word in e.value.detail
+    monkeypatch.setattr(room, "MAX_SEND_BYTES", 30)
+    with pytest.raises(HTTPException) as e:
+        call(room.post_send, mail, JESSICA, room.SendIn(
+            sender=yours, to="sam@sender.example", subject="Hi", body="Hello",
+            files=[room.FileIn(filename="a.pdf", content=small), room.FileIn(filename="b.pdf", content=small)]))
+    assert "10 MB" in e.value.detail and not resend.sent
+
+
+def test_older_mail_comes_a_page_at_a_time(mail, resend, monkeypatch):
+    for i, at in enumerate(("2026-11-13T10:00:00+00:00", "2026-11-13T09:00:00+00:00", "2026-11-13T08:00:00+00:00")):
+        _arrive(resend, f"m{i}", "jessica@lovecityc.com", subject=f"Note {i}")
+        _row_for(mail, f"m{i}")["received_at"] = at
+    monkeypatch.setattr(room, "MAX_LIST", 2)
+    yours = _tray(call(room.get_room, mail, JESSICA), "Yours")["id"]
+    first = call(room.get_list, mail, JESSICA, tray=yours)
+    assert [i["subject"] for i in first["items"]] == ["Note 0", "Note 1"] and first["more"] is True
+    older = call(room.get_list, mail, JESSICA, tray=yours, before=first["items"][-1]["at"])
+    assert [i["subject"] for i in older["items"]] == ["Note 2"] and older["more"] is False
+    with pytest.raises(HTTPException):
+        call(room.get_list, mail, JESSICA, tray=yours, before="yesterday")
