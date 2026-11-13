@@ -263,12 +263,23 @@ async def handle_switch_on_church_mail(client, biz, action) -> Dict[str, Any]:
         step = (f"In Namecheap: Domain List → {domain} → Manage → Advanced DNS → Mail Settings, which should say "
                 f"Custom MX. Delete every MX row there and add one: host @, value {rec['host']}, priority "
                 f"{rec['priority']}. Then Save all changes.")
+    cname = await asyncio.to_thread(church_mail.apex_cname, domain)
+    first = ""
+    if cname:
+        # A website connected with "CNAME @" (kmjcreate.com, 11-13): mail records can't sit beside it.
+        first = (f"First: @{domain} itself is a CNAME (to {cname}), and mail records can't sit beside a CNAME. "
+                 + ("In Namecheap's Host Records, change the @ row's type from CNAME Record to ALIAS Record, same "
+                    "value, and save; the website keeps working. " if provider == "namecheap" else
+                    "At the DNS host, change the @ record from a CNAME to an ALIAS (some hosts call it ANAME or "
+                    "CNAME flattening) with the same value; the website keeps working. ")
+                 + "Then: ")
     warn = ""
     if now:
         warn = (f" Once it's in, the old mail service stops getting @{domain} mail and church addresses take "
                 "over, so before you change it, every address people write to today should have a box here "
                 "(a forward for any that just went to someone's own email).")
     return {"type": "switch_on_church_mail", "domain": domain, "live": False, "record": rec,
-            "result": (f"Receiving is on for @{domain} at the mail service. One record is left. {before} {step}"
-                       f"{warn} Tell me when it's in and I'll check it."),
+            "apex_cname": cname or None,
+            "result": (f"Receiving is on for @{domain} at the mail service. One record is left. {before} "
+                       f"{first}{step}{warn} Tell me when it's in and I'll check it."),
             "label": f"✉️ One record left for @{domain}", "nav": None}

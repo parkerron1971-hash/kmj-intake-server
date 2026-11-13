@@ -584,24 +584,162 @@ def _copy_attachments(links: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]]
     return out, dropped + (len(links) - len(usable))
 
 
-def _banner(address: str, from_name: str, from_email: str, dropped: int) -> Tuple[str, str]:
+def _banner(address: str, from_name: str, from_email: str, dropped: int, relayed: bool = False) -> Tuple[str, str]:
     who = f"{from_name} <{from_email}>" if from_name else from_email
     reply = _first(from_name) or from_email
     extra = ""
     if dropped:
         extra = (f" {dropped} attachments too large to copy are" if dropped != 1
                  else " 1 attachment too large to copy is") + " kept in the system."
-    text = f"Sent to {address} by {who}. Reply and it goes to {reply}.{extra}"
+    as_box = f" from {address}" if relayed else ""
+    text = f"Sent to {address} by {who}. Reply and it goes to {reply}{as_box}.{extra}"
     h = ('<div style="font:13px/1.45 -apple-system,Segoe UI,Arial,sans-serif;color:#555;border-bottom:1px solid '
          f'#ddd;padding:0 0 8px;margin:0 0 12px">{_html.escape(text)}</div>')
     return text, h
 
 
+# ─── Replying as the box ─────────────────────────────────────────────
+#
+# A copy's Reply-To is a one-message relay address at the church's own
+# domain: r<the message's id><a signature over the id and the person the
+# copy went to>@domain. Their reply from their own email comes back here and
+# goes on to the sender FROM THE BOX'S ADDRESS, threaded on the original.
+# Only from that person (the From the copy went to, proved by DMARC), only
+# that message, only to its sender: a leaked relay address can't send as the
+# church to anyone else, and one without a valid signature does nothing.
+
+RELAY_RE = re.compile(r"^r([0-9a-f]{32})([a-z2-7]{16})$")
+
+
+def _relay_secret() -> str:
+    return (os.environ.get("CHURCH_MAIL_SECRET") or os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or "").strip()
+
+
+def _relay_sig(row_id: str, email: str) -> str:
+    import base64
+    import hashlib
+    import hmac
+    sec = _relay_secret()
+    if not sec:
+        return ""
+    d = hmac.new(sec.encode(), f"church-mail-relay|{row_id}|{(email or '').strip().lower()}".encode(),
+                 hashlib.sha256).digest()
+    return base64.b32encode(d).decode().lower()[:16]
+
+
+def relay_address(row_id: Any, email: str, domain: str) -> Optional[str]:
+    sig = _relay_sig(str(row_id), email)
+    hexid = str(row_id or "").replace("-", "").lower()
+    if not sig or not domain or not re.fullmatch(r"[0-9a-f]{32}", hexid):
+        return None
+    return f"r{hexid}{sig}@{domain}"
+
+
+def _relay_find(church: Church, hexid: str, sig: str) -> Optional[Tuple[Dict[str, Any], str]]:
+    """(the original message's row, the person whose copy this relay was)."""
+    rid = f"{hexid[:8]}-{hexid[8:12]}-{hexid[12:16]}-{hexid[16:20]}-{hexid[20:]}"
+    rows = _rows(f"/church_mail?id=eq.{_q(rid)}&business_id=eq.{_q(church.id)}"
+                 "&select=id,to_address,from_email,from_name,subject,message_id,delivered&limit=1")
+    if not rows:
+        return None
+    import hmac
+    for d in rows[0].get("delivered") or []:
+        email = str((d or {}).get("email") or "").lower()
+        if email and hmac.compare_digest(_relay_sig(rid, email), sig):
+            return rows[0], email
+    return None
+
+
+def _relay_refusal(msg: Dict[str, Any], from_email: str, holder: str) -> Optional[str]:
+    if (from_email or "").lower() != holder:
+        return "it didn't come from the person the copy went to"
+    auth = msg.get("authentication") if isinstance(msg.get("authentication"), dict) else {}
+    if str(auth.get("dmarc") or "").lower() != "pass":
+        return "their email provider couldn't prove it was them"
+    return None
+
+
+async def relay_reply(client: httpx.AsyncClient, church: Church, address: str, hexid: str, sig: str,
+                      email_id: str, msg: Dict[str, Any], held: Optional[str]) -> Dict[str, Any]:
+    """A person's reply to a copy goes to the sender from the box's address."""
+    import email_sender
+    from_email = (_addresses(msg.get("from")) or [""])[0]
+    row = await asyncio.to_thread(_claim, church, None, address, email_id, msg, from_email, sender_name(msg))
+    if row is None:
+        return {"address": address, "outcome": "already"}
+    found = await asyncio.to_thread(_relay_find, church, hexid, sig)
+    if not found:
+        await asyncio.to_thread(_settle, row, "held", "a reply address that matches nothing sent", [])
+        return {"address": address, "outcome": "held"}
+    orig, holder = found
+    auto = _header(msg, "auto-submitted").strip().lower()
+    if auto and auto != "no":
+        # An out-of-office answering a copy never goes on as the church: two
+        # responders would answer each other.
+        await asyncio.to_thread(_settle, row, "held", "an automatic reply, not sent on", [])
+        return {"address": address, "outcome": "held", "why": "automatic reply"}
+    why = held or _relay_refusal(msg, from_email, holder)
+    box_addr = str(orig.get("to_address") or "").lower()
+    to = str(orig.get("from_email") or "").lower()
+    if not why and (not EMAIL_RE.match(to) or to == holder):
+        why = "there's no one to send it to"
+    if why:
+        await asyncio.to_thread(_settle, row, "held", f"reply not sent as {box_addr}: {why}", [])
+        if not held and from_email.lower() == holder:
+            await _tell_relay_failed(church, holder, box_addr, to, why)
+        return {"address": address, "outcome": "held", "why": why}
+    name = next((str(d.get("name") or "") for d in orig.get("delivered") or []
+                 if str((d or {}).get("email") or "").lower() == holder), "")
+    church_name = _plain(church.biz.get("name"), 80) or ""
+    sender = box_addr if church.domain and box_addr.endswith("@" + church.domain) else email_sender.DEFAULT_FROM_EMAIL
+    subject = _plain(msg.get("subject"), 900) or ("Re: " + _plain(orig.get("subject"), 880)).strip()
+    atts, _dropped = _copy_attachments(msg.get("attachment_links") or [])
+    headers: Dict[str, str] = {}
+    if orig.get("message_id"):
+        headers = {"In-Reply-To": orig["message_id"], "References": orig["message_id"]}
+    payload: Dict[str, Any] = {
+        "from": email_sender._format_address(sender, name or church_name or None),
+        "to": [to], "reply_to": [box_addr], "subject": subject,
+        "text": str(msg.get("text") or "") or _strip_html(str(msg.get("html") or "")),
+    }
+    if msg.get("html"):
+        payload["html"] = str(msg["html"])
+    if headers:
+        payload["headers"] = headers
+    if atts:
+        payload["attachments"] = atts
+    out = await _resend(client, "POST", "/emails", json=payload,
+                        headers={"Idempotency-Key": f"church-relay-{email_id}"[:256]})
+    if out is None:
+        await asyncio.to_thread(_settle, row, "failed", f"reply as {box_addr} refused by the mail service", [])
+        await _tell_relay_failed(church, holder, box_addr, to, "the mail service refused it")
+        return {"address": address, "outcome": "failed"}
+    await asyncio.to_thread(_settle, row, "copied", f"reply sent as {box_addr}",
+                            [{"email": to, "name": _plain(orig.get("from_name")), "why": f"the reply, as {box_addr}"}])
+    return {"address": address, "outcome": "replied"}
+
+
+async def _tell_relay_failed(church: Church, holder: str, box_addr: str, to: str, why: str) -> None:
+    """The person whose reply didn't go out hears so, with who to write."""
+    import email_sender
+    church_name = _plain(church.biz.get("name"), 80) or "your church"
+    body = (f"Your reply couldn't go out from {box_addr} because {why}.\n\n"
+            f"It hasn't been sent. You can write to {to} directly from your own email.\n\n{church_name}")
+    try:
+        await email_sender.send_via_resend(
+            to_email=holder, to_name=None, from_email=email_sender.DEFAULT_FROM_EMAIL, from_name=church_name,
+            subject=f"Your reply from {box_addr} wasn't sent", body=body, reply_to=None, business_id=church.id)
+    except Exception as e:
+        logger.warning("church mail: couldn't tell a person their reply failed: %s", type(e).__name__)
+
+
 async def send_copy(client: httpx.AsyncClient, church: Church, address: str, target: Dict[str, str],
-                    msg: Dict[str, Any], from_email: str, from_name: str, email_id: str) -> Optional[str]:
+                    msg: Dict[str, Any], from_email: str, from_name: str, email_id: str,
+                    row_id: Optional[str] = None) -> Optional[str]:
     """A copy of the message at the person's own email. None when sent,
     else why not. Never carries the platform's unsubscribe (it's their
-    mail, not a mailing)."""
+    mail, not a mailing). Its Reply-To is the relay address, so their
+    reply goes out from the box; with no relay, the sender."""
     import email_sender
     to = target["email"]
     if not EMAIL_RE.match(to or ""):
@@ -614,9 +752,11 @@ async def send_copy(client: httpx.AsyncClient, church: Church, address: str, tar
     except Exception:
         pass
     atts, dropped = _copy_attachments(msg.get("attachment_links") or [])
-    banner_text, banner_html = _banner(address, from_name, from_email, dropped)
-    sender = address if church.domain and address.endswith("@" + church.domain) else email_sender.DEFAULT_FROM_EMAIL
-    reply_to = _addresses(msg.get("reply_to")) or [from_email]
+    on_domain = bool(church.domain) and address.endswith("@" + church.domain)
+    relay = relay_address(row_id, to, church.domain) if row_id and on_domain else None
+    banner_text, banner_html = _banner(address, from_name, from_email, dropped, relayed=bool(relay))
+    sender = address if on_domain else email_sender.DEFAULT_FROM_EMAIL
+    reply_to = [relay] if relay else (_addresses(msg.get("reply_to")) or [from_email])
     church_name = _plain(church.biz.get("name"), 80) or "your church"
     payload: Dict[str, Any] = {
         "from": email_sender._format_address(sender, f"{from_name or from_email} via {church_name}"),
@@ -640,6 +780,9 @@ async def deliver(client: httpx.AsyncClient, biz: Dict[str, Any], local: str, ad
     """One church address on one message: claim it, then copy it, put it on
     the prayer list, or hold it."""
     church = Church(biz)
+    relay = RELAY_RE.match(local)
+    if relay:
+        return await relay_reply(client, church, address, relay.group(1), relay.group(2), email_id, msg, held)
     box = await asyncio.to_thread(church.box, local)
     from_email = (_addresses(msg.get("from")) or [""])[0]
     from_name = sender_name(msg)
@@ -667,7 +810,8 @@ async def deliver(client: httpx.AsyncClient, biz: Dict[str, Any], local: str, ad
         if auto_reply and t["email"] == from_email:
             skipped.append({"email": t["email"], "name": t.get("name") or "", "why": "their own automatic reply"})
             continue
-        why_not = await send_copy(client, church, address, t, msg, from_email, from_name, email_id)
+        why_not = await send_copy(client, church, address, t, msg, from_email, from_name, email_id,
+                                  row_id=str(row["id"]))
         (failed if why_not else delivered).append({"email": t["email"], "name": t.get("name") or "",
                                                    "why": why_not or t.get("why") or ""})
     outcome = "copied" if delivered else ("failed" if failed else "stored")
@@ -734,6 +878,18 @@ def receiving_record(domain_payload: Dict[str, Any]) -> Optional[Dict[str, Any]]
                     "priority": rec.get("priority") if rec.get("priority") is not None else 10,
                     "status": str(rec.get("status") or "").lower()}
     return None
+
+
+def apex_cname(domain: str) -> str:
+    """Where the domain's own name points when it's a CNAME ('' when it
+    isn't). Mail records can't sit beside a CNAME: a church whose website
+    was connected with "CNAME @" gets no mail until it becomes an ALIAS."""
+    try:
+        import email_domain_dns
+        got = email_domain_dns._cname_sync(domain)
+    except Exception:
+        return ""
+    return got[0] if got else ""
 
 
 def apex_mx(domain: str) -> Optional[List[Tuple[int, str]]]:

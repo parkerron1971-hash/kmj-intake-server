@@ -154,6 +154,8 @@ def db(monkeypatch):
     monkeypatch.setattr(email_sender, "is_suppressed", _not_suppressed)
     monkeypatch.setenv("INBOUND_EMAIL_DOMAIN", "mysolutionist.app")
     monkeypatch.setattr(church_mail, "receiving_live", lambda d: d == DOMAIN)
+    monkeypatch.delenv("CHURCH_MAIL_SECRET", raising=False)
+    monkeypatch.delenv("SUPABASE_SERVICE_ROLE_KEY", raising=False)
     church_mail._DOMAIN_CACHE.clear()
     church_mail._LIVE_CACHE.clear()
     return fake
@@ -506,6 +508,7 @@ def switch(chief, db, monkeypatch):
     monkeypatch.setattr(email_domain_dns, "lookup_ns", _ns)
     monkeypatch.setattr(church_mail, "apex_mx", lambda d: [(10, "eforward1.registrar-servers.com"),
                                                            (15, "eforward4.registrar-servers.com")])
+    monkeypatch.setattr(church_mail, "apex_cname", lambda d: "")
     return SimpleNamespace(calls=calls, record=record)
 
 
@@ -545,3 +548,66 @@ def test_a_persons_own_out_of_office_reply_isnt_copied_back_to_them(db, resend):
     _inbound(resend.add("m2", to=["tia@lovecityc.com"], frm="vendor@shop.example", name="Shop",
                         headers={"Auto-Submitted": "auto-replied"}))
     assert len(resend.sent) == 1, "someone else's out-of-office still reaches her"
+
+
+
+def test_a_website_connected_with_cname_at_the_root_is_told_to_make_it_an_alias(chief, switch, monkeypatch):
+    """kmjcreate.com, 11-13: "CNAME @" to the website hid every mail record."""
+    monkeypatch.setattr(church_mail, "apex_cname", lambda d: "saas-origin.mysolutionist.app")
+    out = chief.run(chief_church_mail.handle_switch_on_church_mail, {})
+    assert "First: @lovecityc.com itself is a CNAME (to saas-origin.mysolutionist.app)" in out["result"]
+    assert "change the @ row's type from CNAME Record to ALIAS Record" in out["result"]
+    assert out["apex_cname"] == "saas-origin.mysolutionist.app"
+
+
+# ─── Replying as the box ─────────────────────────────────────────────
+
+@pytest.fixture
+def relay(db, resend, monkeypatch):
+    monkeypatch.setenv("CHURCH_MAIL_SECRET", "test-secret")
+    notes = []
+
+    async def _send(**kw):
+        notes.append(kw)
+        return {"id": "n1"}
+    monkeypatch.setattr(email_sender, "send_via_resend", _send)
+    db.t["church_mailboxes"].append(_box("tia", "person", user_id=TIA))
+    _inbound(resend.add("m1", to=["tia@lovecityc.com"], subject="Thursday"))
+    copy = resend.sent[0]
+    return SimpleNamespace(addr=copy["reply_to"][0], copy=copy, notes=notes)
+
+
+def test_a_reply_to_a_copy_goes_to_the_sender_from_the_box(db, resend, relay):
+    assert re.fullmatch(r"r[0-9a-f]{32}[a-z2-7]{16}@lovecityc\.com", relay.addr)
+    assert "Reply and it goes to Sam from tia@lovecityc.com" in relay.copy["text"]
+    _inbound(resend.add("m2", to=[relay.addr], frm="tia@example.com", name="Tia Brown", subject="Re: Thursday",
+                        text="See you there!", html=""))
+    sent = resend.sent[-1]
+    assert sent["from"] == "Tia Brown <tia@lovecityc.com>" and sent["to"] == ["sam@sender.example"]
+    assert sent["reply_to"] == ["tia@lovecityc.com"] and sent["subject"] == "Re: Thursday"
+    assert sent["headers"] == {"In-Reply-To": "<m1@mail.example>", "References": "<m1@mail.example>"}
+    assert sent["text"] == "See you there!" and church_mail.COPY_HEADER not in sent.get("headers", {})
+    assert _rows(db, "church_mail")[-1]["why"] == "reply sent as tia@lovecityc.com"
+
+
+def test_a_relay_address_only_works_for_the_person_it_was_made_for(db, resend, relay):
+    _inbound(resend.add("m2", to=[relay.addr], frm="someone@else.example", text="send as the church"))
+    assert len(resend.sent) == 1 and "didn't come from the person" in _rows(db, "church_mail")[-1]["why"]
+    assert not relay.notes, "a stranger's try tells no one"
+
+
+def test_a_tampered_relay_address_does_nothing(db, resend, relay):
+    bad = relay.addr[:-len("@lovecityc.com") - 1] + ("a" if relay.addr[-len("@lovecityc.com") - 1] != "a" else "b")
+    _inbound(resend.add("m2", to=[bad + "@lovecityc.com"], frm="tia@example.com"))
+    assert len(resend.sent) == 1 and "matches nothing sent" in _rows(db, "church_mail")[-1]["why"]
+
+
+def test_a_reply_that_cant_be_proven_is_held_and_the_person_told(db, resend, relay):
+    _inbound(resend.add("m2", to=[relay.addr], frm="tia@example.com", auth=("pass", "pass", "none")))
+    assert len(resend.sent) == 1 and "couldn't prove it was them" in _rows(db, "church_mail")[-1]["why"]
+    assert relay.notes[0]["to_email"] == "tia@example.com" and "sam@sender.example" in relay.notes[0]["body"]
+
+
+def test_an_out_of_office_answering_a_copy_isnt_sent_on(db, resend, relay):
+    _inbound(resend.add("m2", to=[relay.addr], frm="tia@example.com", headers={"Auto-Submitted": "auto-replied"}))
+    assert len(resend.sent) == 1 and "automatic reply" in _rows(db, "church_mail")[-1]["why"]
