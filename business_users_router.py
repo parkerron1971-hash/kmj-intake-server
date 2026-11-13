@@ -315,20 +315,38 @@ async def invite(biz: str, body: InviteBody, request: Request,
     door = office_door.path_for(biz)
     accept_url = f"{_APP_BASE}{door or '/'}?team_invite={row.get('token')}"
 
+    # A church whose mail comes here gives the login its own address when
+    # they accept (church_mail.give_new_login); the invite names it when the
+    # church knows who they are.
+    church_email: Optional[Dict[str, Any]] = None
+    named = _person_of(person) if person else {}
+    try:
+        import church_mail
+        full = sb_clients.sb_get_as_service(
+            f"/businesses?id=eq.{biz}&select=id,name,type,owner_id,settings&limit=1") or []
+        if full and church_mail._live_church(full[0]):
+            church_email = {"address": church_mail.new_login_address(full[0], named.get("name") or "")}
+    except Exception as e:  # noqa: BLE001 — an invite never fails over its address
+        logger.warning(f"[team] church address not planned: {type(e).__name__}")
+
     email_sent = False
     try:
         from email_sender import send_via_resend
         biz_name = biz_row.get("name") or "a business"
-        named = _person_of(person) if person else {}
         hello = f"Hi {named['first_name']},\n\n" if named.get("first_name") else ""
         as_what = lane["label"] if lane else "a " + role
         if door:
             # From the church, about its office: no Solutionist sign-up pitch.
             sender = biz_name[:60]
             subject = f"Your {biz_name} office login"
+            also = ""
+            if church_email:
+                also = (f"When you accept, you also get your own church email address: {church_email['address']}.\n\n"
+                        if church_email.get("address") else
+                        "When you accept, you also get your own church email address.\n\n")
             text = (f"{hello}{biz_name} has set up your office login, in {as_what}.\n\n"
                     f"Open your invitation to make your account (or sign in if you have one):\n{accept_url}\n\n"
-                    f"— {biz_name}")
+                    f"{also}— {biz_name}")
         else:
             sender = "Solutionist System"
             subject = f"{biz_name} invited you to their team"
@@ -344,7 +362,8 @@ async def invite(biz: str, body: InviteBody, request: Request,
         logger.warning(f"[team] invite email not sent: {e}")
 
     return {"ok": True, "member": row, "email_sent": email_sent,
-            "accept_url": accept_url, "seats": cap, "lane": lane["key"] if lane else None}
+            "accept_url": accept_url, "seats": cap, "lane": lane["key"] if lane else None,
+            "church_email": church_email}
 
 
 @router.get("")
@@ -451,7 +470,29 @@ def accept(body: AcceptBody, user: AuthedUser = Depends(require_user)) -> Dict[s
     if tie:
         sb_clients.sb_patch_as_service(f"/business_users?id=eq.{inv['id']}", tie)
     return {"ok": True, "business_id": inv.get("business_id"), "role": inv.get("role"),
-            "me": _person_for_seat(biz, {**inv, **tie})}
+            "me": _person_for_seat(biz, {**inv, **tie}),
+            "church_email": _give_church_address(biz, str(user.id), str(inv.get("invited_by") or ""), name or "")}
+
+
+def _give_church_address(biz: str, uid: str, invited_by: str, name: str) -> Optional[str]:
+    """A login that just joined a church whose mail comes here gets its own
+    address, and the note naming it (Kevin, 2026-11-13). Best effort: the
+    login is in whatever happens here."""
+    try:
+        import asyncio
+        import church_mail
+        rows = sb_clients.sb_get_as_service(
+            f"/businesses?id=eq.{biz}&select=id,name,type,owner_id,settings&limit=1") or []
+        got = church_mail.give_new_login(rows[0], uid, caller=invited_by, name=name) if rows else None
+        if not got:
+            return None
+        box = got["box"]
+        if box.get("kind") == "person" and not box.get("told_at"):
+            asyncio.run(church_mail.welcome(rows[0], box))
+        return got["address"]
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[team] church address not given on accept: {type(e).__name__}")
+        return None
 
 
 @router.post("/{member_id}/revoke")
