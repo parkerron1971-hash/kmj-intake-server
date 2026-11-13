@@ -259,6 +259,7 @@ def _vertical_specific_reminders(bt: str, profile: Dict[str, Any]) -> list:
         return [
             "Giving is access-isolated, not transactional",
             "Children's ministry needs consent + RSVP",
+            "Its people are members (newcomers are guests), never clients, customers or leads",
         ]
     if bt == "fitness_wellness":
         return [

@@ -136,6 +136,9 @@ VERBS: Dict[str, Tuple[str, ...]] = {
         "sms_status", "email_setup_status", "set_availability_day", "set_availability_override",
         "add_block_range", "remove_block_range", "set_slot_granularity", "set_lead_time", "draft_contract",
         "contract_pdf", "save_email_template", "compose_template", "adjust_template", "draft_church_role",
+        # Asking one of the church's people into a role, and taking them off (chief_church_roles): the Office's,
+        # as drafting a role is; the handlers keep the Leaders & roles page's seat (a Manager and up).
+        "ask_into_role", "take_off_role",
         # A new church's move (chief_move_in): the office's, as the Move-in room is.
         "move_in_status", "fill_move_in", "undo_move_in_fill")},
     # Giving & money: gifts, invoices, payments, the books, prices and stock.

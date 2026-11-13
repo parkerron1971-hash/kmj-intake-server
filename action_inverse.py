@@ -434,6 +434,11 @@ NOT_UNDOABLE_REASON: Dict[str, str] = {
     # save_email_template UPSERTS by name: undoing an update needs the
     # previous subject/body, which nothing captures.
     "save_email_template": "Saving over a template loses the old version, and I don't keep those yet.",
+    # Asking someone into a church role emails them, and taking an ask back
+    # is take_off_role, class C (no inverse may be): Chief takes it back when
+    # asked in words, with the ask's row_id and only_if_asked.
+    "ask_into_role": ("The email asking them already went and can't be unsent. I can take the ask back while "
+                      "they haven't said yes: just say so."),
 }
 
 

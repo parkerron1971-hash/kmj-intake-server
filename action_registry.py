@@ -586,6 +586,17 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
     "undo_job_description": {**_w("A", "puts the last change to one person's job description back from its log "
                                        "(the owner or someone over them); only the last change"),
                              "chief_only": True},
+    # Church leader roles (chief_church_roles): ask one of the church's people into a role, or take them off,
+    # through the Leaders & roles routes' own functions. An ask emails them, and a role taken away sends its work
+    # back, so both are C: done when asked, never on Chief's own idea. Each needs the signed-in person.
+    "ask_into_role": {**_w("C", "asks one of a church's people into one of its roles through "
+                                "church_follow_up.add_role and send_invite (the Leaders & roles page's Ask): "
+                                "they get an email and say yes on their member page; no recall of the email"),
+                      "chief_only": True},
+    "take_off_role": {**_w("C", "takes someone off a church role, or takes back an unanswered ask, through "
+                                "church_follow_up.remove_role (the page's Remove): what the role handed them "
+                                "goes back; putting them back needs their yes again"),
+                      "chief_only": True},
     "list_duties": {**_r("reads who does each of a church's office duties, by lane: following the lanes or moved "
                          "to named logins, which need someone, and the office logins by name; no money amounts. "
                          "Staff names, read for the signed-in person, so never an outside agent's",
