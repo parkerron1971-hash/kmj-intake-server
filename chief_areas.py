@@ -89,8 +89,9 @@ VERBS: Dict[str, Tuple[str, ...]] = {
         # may ask (the handler keeps it to a Manager seat and above). The
         # leaders map and the ready-mades likewise (chief_map).
         "list_duties", "list_map", "search_templates",
-        # "What's my church email?": any login may ask (chief_church_mail keeps the rest to the pastor and Admins).
-        "church_email",
+        # "What's my church email?": any login may ask. Giving one out and taking one back: the handlers keep
+        # them to the owner, an Admin, or whoever holds the church email duty (church_duties), never a lane.
+        "church_email", "give_church_email", "take_back_church_email",
         # Is this right? An office login's own work, its check and its suggestions (church_map_asks): the
         # handlers keep them to a Manager or an Admin seat, and nothing they say makes anything.
         "my_work", "confirm_my_work", "suggest_work_change", "note_gap",
@@ -163,8 +164,8 @@ OWNERS = frozenset({
     # (chief_duties). Here rather than in the Office, so a lane's login is
     # told it's the owner's or an admin's, never "ask whoever has the Office".
     "move_duty", "undo_duty",
-    # Giving out and taking back church email addresses (chief_church_mail), the same.
-    "give_church_email", "take_back_church_email", "switch_on_church_mail",
+    # Switching a church's mail over (chief_church_mail): the owner's alone.
+    "switch_on_church_mail",
     # Changing a church's leaders map, its waiting changes and its ready-mades (chief_map), the same.
     "change_map", "draft_map", "undo_map_change", "apply_map_change", "discard_map_change", "adopt_template",
     # Reading and answering what the office suggested (church_map_asks), the same.
