@@ -43,7 +43,7 @@ import httpx
 
 import webhook_guard
 from fastapi import APIRouter, HTTPException, Request, Depends
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from auth_supabase import require_user, AuthedUser
 from pydantic import BaseModel
 import pii_mask
@@ -1039,6 +1039,12 @@ async def inbound_email(request: Request):
       4. Catch-all: anything still unresolved lands in platform_emails
          flagged catchall=true. Mail to the domain never dies silently.
 
+    Before all of them, church mail (church_mail.py): an address at a
+    church's own domain is sorted by that church and never reaches the
+    contact match or the platform catch-all. A read it needs that fails
+    answers 503 so Resend retries: church mail waits rather than going to
+    the wrong place.
+
     Always returns 200 so Resend doesn't retry; failures are logged.
     """
     raw_body = await request.body()
@@ -1064,6 +1070,19 @@ async def inbound_email(request: Request):
     routed = False
 
     async with httpx.AsyncClient() as client:
+        # ── 0. Church mail: sorted by the church before anything else ─
+        try:
+            import church_mail
+            church = await church_mail.handle_inbound(client, payload)
+        except Exception as e:  # church_mail.Unavailable, or anything else: retry, never misroute
+            logger.warning(f"[INBOUND] church mail not sorted, asking Resend to retry: {type(e).__name__}: {e}")
+            return JSONResponse(status_code=503, content={"status": "retry"})
+        if church is not None:
+            theirs = set(church.get("church") or [])
+            parsed["to_addresses"] = [a for a in parsed["to_addresses"] if a not in theirs]
+            if not parsed["to_addresses"]:
+                return {"status": "church_mail", "results": church.get("results") or []}
+
         # ── Fetch the actual body. Resend's email.received webhook
         #    only carries metadata; the body must be pulled via
         #    /emails/{id} on the Resend API. We fetch only when the

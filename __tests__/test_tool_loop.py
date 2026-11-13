@@ -68,7 +68,9 @@ def test_the_toolbox_is_the_mcp_read_surface_minus_display():
                                          "giving_counts", "list_duties", "list_map", "search_templates",
                                          "my_work", "list_asks", "move_in_status",
                                          # Church assignments (chief_church_assignments): staff and leaders by name.
-                                         "people_under", "assignments_of", "one_on_one"}
+                                         "people_under", "assignments_of", "one_on_one",
+                                         # A church's own addresses (chief_church_mail): names and forwards.
+                                         "church_email"}
     assert all(not action_registry.may_expose_to_agent(n) for n in chief_only)
     assert names == (exposed - {"show_view"}) | chief_only, (
         "The only extra reads are Chief's private ones: coordination tools (bots cannot see one "
