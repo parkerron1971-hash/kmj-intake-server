@@ -263,6 +263,18 @@ def church_plans_offered() -> bool:
     return _dial("CHURCH_OFFERED", "PLAN_", 0) != 0
 
 
+def church_free_week() -> bool:
+    """Whether a church plan starts with the free days every other plan
+    has (BILLING_TRIAL_DAYS). Off, as Kevin decided on 2026-11-13: a
+    church's first month is charged the day it chooses its plan. Its move
+    is done by hand and starts once that month is paid, and with a free
+    week the charge landed the day after the church's first Sunday. A
+    church still signs up without a card and looks around before it
+    chooses. PLAN_CHURCH_FREE_WEEK=1 brings the free week back with no
+    deploy; churches already on a trial keep the date they were given."""
+    return _dial("CHURCH_FREE_WEEK", "PLAN_", 0) != 0
+
+
 def extra_texts_cents_per_thousand() -> int:
     """Texts past a church plan's monthly count: $20 per 1,000, what Planning
     Center ($0.02 a text) and Tithely ($10 per 500) charge."""
@@ -300,7 +312,12 @@ def church_offer() -> Dict[str, int]:
             "extra_login_cents": extra_login_cents(),
             "move_months": church_move_months(),
             "founding_moves": founding_church_moves(),
-            "multi_site_from_cents": multi_site_from_cents()}
+            "multi_site_from_cents": multi_site_from_cents(),
+            # 1 when a church plan starts with free days, 0 when its first
+            # month is charged the day it is chosen (church_free_week). The
+            # app's billing screen and trial bar read it from /billing/plans,
+            # so "start free trial" is never said to a church that pays today.
+            "free_week": 1 if church_free_week() else 0}
 
 
 # ─── Action prices ───────────────────────────────────────────────────

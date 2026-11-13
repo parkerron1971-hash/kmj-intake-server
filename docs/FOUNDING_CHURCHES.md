@@ -7,7 +7,7 @@ stay. List prices go up later for new churches only.
 | | |
 |---|---|
 | Code | `church_founding.py` |
-| Who | The first paid month on a church plan (the Stripe webhook sees `active`) while a place is left. A trial holds no place; a comped church and the platform owner's own churches never take one. |
+| Who | The first paid month on a church plan (the Stripe webhook sees `active`) while a place is left. A trial holds no place; a comped church and the platform owner's own churches never take one. Since 2026-11-13 a church plan has no free days (`pricing_config.church_free_week`, off): checkout charges the first month, so the place is taken at checkout. A church that was already on a carded trial still takes its place when that trial's first charge lands. |
 | Record | `businesses.settings.founding_church = {n, at, plan, price_id}`, written once. Nothing releases a place: a founding church that cancels keeps its number. |
 | Places | `FOUNDING_CHURCH_SPOTS` (default 10) |
 | Switch | `FOUNDING_CHURCHES` = `on` (default) / `off`. Off hides the site line and stops open places getting the founding price. A church that already holds a place keeps its price either way. |

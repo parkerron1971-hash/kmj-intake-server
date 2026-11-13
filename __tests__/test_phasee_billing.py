@@ -94,6 +94,40 @@ def test_trial_only_for_first_subscription(monkeypatch):
     assert "trial_period_days" not in sb._subscription_data(fresh, _U())
 
 
+def test_a_church_plan_is_charged_the_day_it_is_chosen(monkeypatch):
+    # Kevin, 2026-11-13: "we should remove the 7 days for free". A church's
+    # move is done by hand and starts when the first month is paid, so a
+    # church plan's checkout has no free days. Every other plan keeps them.
+    monkeypatch.delenv("PLAN_CHURCH_FREE_WEEK", raising=False)
+    monkeypatch.delenv("CHURCH_FREE_WEEK", raising=False)
+    for plan in fg.CHURCH_PLANS:
+        assert sb._pays_today(plan) is True, plan
+    for plan in ("starter", "professional", "practice", None):
+        assert sb._pays_today(plan) is False, plan
+    assert sb._pays_today("starter", True) is True         # asked to pay today, any plan
+
+    class _U:
+        id = "u1"
+    fresh = {"id": "biz1", "stripe_subscription_id": None}
+    church = sb._subscription_data(fresh, _U(), skip_trial=sb._pays_today("church_growing"))
+    assert "trial_period_days" not in church and "trial_end" not in church
+    business = sb._subscription_data(fresh, _U(), skip_trial=sb._pays_today("professional"))
+    assert business.get("trial_period_days") == 7
+
+    # A church still looking around without a card: its first month starts
+    # the day it chooses, not on the date the look-around would have ended.
+    import no_card_trial
+    monkeypatch.setattr(no_card_trial, "checkout_trial", lambda biz: {"trial_end": 1900000000})
+    looking = sb._subscription_data(fresh, _U(), skip_trial=sb._pays_today("church_small"))
+    assert "trial_end" not in looking and "trial_period_days" not in looking
+    assert sb._subscription_data(fresh, _U(), skip_trial=sb._pays_today("starter"))["trial_end"] == 1900000000
+
+    # The switch brings the free week back with no deploy.
+    monkeypatch.setenv("PLAN_CHURCH_FREE_WEEK", "1")
+    assert sb._pays_today("church_growing") is False
+    assert sb._pays_today("church_growing", True) is True
+
+
 def test_entitlements_shape(monkeypatch):
     monkeypatch.setenv("STRIPE_PRICE_ID_PROFESSIONAL", "price_pro")
     biz = {"subscription_status": "active", "subscription_plan": "price_pro"}

@@ -123,8 +123,32 @@ def test_prices_and_ai_actions_come_from_the_dials(monkeypatch):
     assert "$81" in cs.render("giving") and "$79" not in cs.render("giving")
 
 
+@pytest.mark.parametrize("no_card", [True, False])
+def test_a_church_plan_has_no_free_days_on_any_church_page(monkeypatch, no_card):
+    # Kevin, 2026-11-13: "we should remove the 7 days for free". Checkout
+    # charges a church plan's first month the day it is chosen, so no church
+    # page may promise free days. Signing up without a card is still true.
+    monkeypatch.delenv("PLAN_CHURCH_FREE_WEEK", raising=False)
+    monkeypatch.delenv("CHURCH_FREE_WEEK", raising=False)
+    monkeypatch.setattr(mp, "_no_card_trial_offered", lambda: no_card)
+    monkeypatch.setattr(mp, "_trial_days", lambda: 7)
+    for path, html in _all().items():
+        low = html.lower()
+        assert "days free" not in low and "trial ends" not in low and "free trial" not in low, path
+        if no_card:
+            assert "Start free, no card" in html, path
+            assert "No card to sign up. Your first month starts the day you choose your plan." in html, path
+        else:
+            assert "start free, no card" not in low and "Month to month. Cancel any time." in html, path
+    fine = "No card to sign up" if no_card else "No setup fee"
+    assert f"{fine} · month to month" in cs.render("")
+
+
 @pytest.mark.parametrize("no_card,days", [(True, 7), (False, 7), (False, 0)])
 def test_the_trial_and_card_wording_follow_checkout(monkeypatch, no_card, days):
+    # The free week brought back (PLAN_CHURCH_FREE_WEEK=1): the pages say
+    # what checkout then grants, as they did before 2026-11-13.
+    monkeypatch.setenv("PLAN_CHURCH_FREE_WEEK", "1")
     monkeypatch.setattr(mp, "_no_card_trial_offered", lambda: no_card)
     monkeypatch.setattr(mp, "_trial_days", lambda: days)
     for path, html in _all().items():

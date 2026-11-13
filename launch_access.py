@@ -464,6 +464,10 @@ def access_open() -> Dict[str, Any]:
                    and feature_gates.enforcement_on())
     return {"ok": True, "invite_only": invite_only(), "trial_days": trial_days,
             "no_card_trial": no_card,
+            # A church plan has no free days unless this is true (Kevin,
+            # 2026-11-13; pricing_config.church_free_week): a church's
+            # sign-up screen says "no card to sign up", not "N days free".
+            "church_free_week": pricing_config.church_free_week(),
             **({"trial_credits": pricing_config.trial_credits_no_card()} if no_card else {})}
 
 

@@ -752,7 +752,7 @@ async def create_checkout(body: CheckoutBody, user: AuthedUser = Depends(require
         "cancel_url":  church_savvy["cancel_url"] if church_savvy else _cancel_url(),
         # Echo business_id in metadata so the webhook can resolve back
         # even if the customer object's metadata is missing it.
-        "subscription_data": _subscription_data(biz, user, skip_trial=bool(body.skip_trial)),
+        "subscription_data": _subscription_data(biz, user, skip_trial=_pays_today(resolved, body.skip_trial)),
         "metadata": _checkout_metadata(biz, user, price_id, is_founder),
     })
     return {"url": session.get("url"), "id": session.get("id")}
@@ -952,6 +952,22 @@ async def trial_preview_token(business_id: str,
         return {"ok": True, "needed": False, "token": None}
     return {"ok": True, "needed": needed, "token": token,
             "expires_in": no_card_trial.PREVIEW_TTL_SECONDS if needed else None}
+
+
+def _pays_today(plan, asked: bool = False) -> bool:
+    """Whether this checkout charges the first month now, with no free days.
+    Always when the person asked to pay today. And for a church plan (Kevin,
+    2026-11-13: "we should remove the 7 days for free"): a church's move is
+    done by hand and starts once the first month is paid, so choosing the
+    plan is the payment. That goes for a church that is still looking around
+    without a card too: its first month starts the day it chooses, not on
+    the date its look-around would have ended.
+    pricing_config.church_free_week() brings the free days back."""
+    if asked:
+        return True
+    import feature_gates
+    import pricing_config
+    return plan in feature_gates.CHURCH_PLANS and not pricing_config.church_free_week()
 
 
 def _subscription_data(biz, user, skip_trial: bool = False):

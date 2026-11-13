@@ -201,10 +201,25 @@ def _plan_tokens() -> Dict[str, str]:
     return out
 
 
-def _trial_tokens() -> Dict[str, str]:
+def _trial_tokens(church: bool = False) -> Dict[str, str]:
     """The trial and card wording, from what checkout actually grants:
-    "no card" only while signup really starts the trial without one."""
+    "no card" only while signup really starts the trial without one.
+    `church` is the church section's own pages; the coach section
+    (coach_site) fills its pages from here too, and its plans keep their
+    free days."""
     import marketing_pages as mp
+    import pricing_config
+    # A church plan has no free days (pricing_config.church_free_week, Kevin
+    # 2026-11-13): the first month is charged the day the church chooses its
+    # plan. Signing up is still free and takes no card while the no-card
+    # start is on, so the Start buttons stay true; the "N days free" is gone.
+    if church and not pricing_config.church_free_week():
+        if mp._no_card_trial_offered():
+            return {"CTA_START": "Start free, no card",
+                    "TRIAL_LINE": "No card to sign up. Your first month starts the day you choose your plan.",
+                    "TRIAL_FINE": "No card to sign up"}
+        return {"CTA_START": "Get started", "TRIAL_LINE": "Month to month. Cancel any time.",
+                "TRIAL_FINE": "No setup fee"}
     free = mp._trial_free_phrase()
     if mp._no_card_trial_offered():
         return {"CTA_START": "Start free, no card", "TRIAL_LINE": f"{free}, no card needed.",
@@ -630,7 +645,7 @@ def render(slug: str) -> str:
         "CHURCHSAVVY_URL": escape(partner),
         "CHURCH_CSS": _read("church.css"),
         **_plan_tokens(),
-        **_trial_tokens(),
+        **_trial_tokens(church=True),
     }
     if "{{FOUNDER_STRIP}}" in page:
         tokens["FOUNDER_STRIP"] = _founder_strip()
