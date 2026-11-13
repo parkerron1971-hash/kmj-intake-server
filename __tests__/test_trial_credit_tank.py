@@ -310,6 +310,9 @@ def test_charging_for_the_build_would_gut_the_tank():
 
 def test_the_trial_tank_is_far_below_every_tier_allowance():
     """If the trial tank ever reached a tier's monthly grant, the hole
-    this closed would be open again."""
-    for _plan, lim in fg.plan_limits().items():
-        assert pc.trial_credits() < lim["chief_messages_monthly"]
+    this closed would be open again. ChurchSavvy's own plans carry no AI
+    at all (0 credits, 2026-11-13), so there is no grant to stay below."""
+    for plan, lim in fg.plan_limits().items():
+        if plan in fg.CHURCHSAVVY_PLANS:
+            continue
+        assert pc.trial_credits() < lim["chief_messages_monthly"], plan

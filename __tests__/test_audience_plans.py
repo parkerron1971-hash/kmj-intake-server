@@ -94,9 +94,17 @@ def test_upgrade_prompt_stays_on_the_barber_ladder():
 # ─── 3. limits fail closed ────────────────────────────────────────────
 
 def test_every_plan_key_has_limits():
+    """Every plan lists its tank, so none reads as None (unlimited). Every
+    plan carries AI except ChurchSavvy's own, which grant exactly 0:
+    ChurchSavvy makes no AI calls (Kevin, 2026-11-13)."""
     limits = fg.plan_limits()
     for p in fg.ALL_PLANS:
-        assert limits[p]["chief_messages_monthly"], p
+        tank = limits[p]["chief_messages_monthly"]
+        assert isinstance(tank, int), p
+        if p in fg.CHURCHSAVVY_PLANS:
+            assert tank == 0, p
+        else:
+            assert tank > 0, p
 
 
 def test_a_plan_without_limits_gets_starter_not_unlimited(monkeypatch):

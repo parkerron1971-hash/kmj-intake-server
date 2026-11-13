@@ -307,10 +307,17 @@ def _church_limits() -> Dict[str, Dict[str, Optional[int]]]:
 
 def _churchsavvy_limits() -> Dict[str, Dict[str, Optional[int]]]:
     """ChurchSavvy on its own: one church, its owner the one seat (the
-    Sunday team is worship_team, never seats), and Starter's AI tank: what
-    these plans fell back to before they were listed (_limits_of)."""
-    credits = pricing_config.tier_credits()
-    return {p: {"max_businesses": 1, "chief_messages_monthly": credits["starter"],
+    Sunday team is worship_team, never seats), and NO AI tank.
+
+    ChurchSavvy makes no AI calls (the screens, Planning and the photo of a
+    song's words all run without one), and its app never reaches Chief. Its
+    plans carried Starter's 3,000 credits, what they fell back to before
+    they were listed, and at what a credit costs (about 0.95c, measured
+    2026-11-13) a spent tank cost more than the $15 to $29 the plan brings
+    in. Zero is an allowance of nothing, not "unlimited" (None is): the
+    meter holds the business like any spent tank, and a pack it buys still
+    works (Kevin, 2026-11-13: "making sure the ai credits are priced good")."""
+    return {p: {"max_businesses": 1, "chief_messages_monthly": 0,
                 "max_seats": 1, "plaid_connections": 0, "open_assignments": 0}
             for p in CHURCHSAVVY_PLANS}
 
