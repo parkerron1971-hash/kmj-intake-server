@@ -655,17 +655,23 @@ async def deliver(client: httpx.AsyncClient, biz: Dict[str, Any], local: str, ad
         why = "words about danger: with the pastor only" if got["needs_pastor"] else "on the prayer list"
         await asyncio.to_thread(_settle, row, "prayer", why, [{"care_request_id": got["id"]}])
         return {"address": address, "outcome": "prayer"}
-    delivered, failed = [], []
+    delivered, failed, skipped = [], [], []
     seen = set()
+    # An out-of-office reply to a copy comes back to the box it came from:
+    # never copy a person's own automatic reply back to them.
+    auto_reply = _header(msg, "auto-submitted").strip().lower().startswith("auto-replied")
     for t in where["to"]:
         if not t.get("email") or t["email"] in seen:
             continue
         seen.add(t["email"])
+        if auto_reply and t["email"] == from_email:
+            skipped.append({"email": t["email"], "name": t.get("name") or "", "why": "their own automatic reply"})
+            continue
         why_not = await send_copy(client, church, address, t, msg, from_email, from_name, email_id)
         (failed if why_not else delivered).append({"email": t["email"], "name": t.get("name") or "",
                                                    "why": why_not or t.get("why") or ""})
     outcome = "copied" if delivered else ("failed" if failed else "stored")
-    await asyncio.to_thread(_settle, row, outcome, where["path"], delivered + failed)
+    await asyncio.to_thread(_settle, row, outcome, where["path"], delivered + failed + skipped)
     return {"address": address, "outcome": outcome, "copies": len(delivered), "failed": len(failed)}
 
 

@@ -534,3 +534,14 @@ def test_once_the_record_is_in_it_asks_the_mail_service_to_check_it(chief, switc
     switch.calls.clear()
     out = chief.run(chief_church_mail.handle_switch_on_church_mail, {})
     assert not any(c[0] == "POST" for c in switch.calls) and "has checked the record" in out["result"]
+
+
+def test_a_persons_own_out_of_office_reply_isnt_copied_back_to_them(db, resend):
+    db.t["church_mailboxes"].append(_box("tia", "person", user_id=TIA))
+    _inbound(resend.add("m1", to=["tia@lovecityc.com"], frm="tia@example.com", name="Tia Brown",
+                        headers={"Auto-Submitted": "auto-replied"}))
+    row = _rows(db, "church_mail")[0]
+    assert row["outcome"] == "stored" and row["delivered"][0]["why"] == "their own automatic reply" and not resend.sent
+    _inbound(resend.add("m2", to=["tia@lovecityc.com"], frm="vendor@shop.example", name="Shop",
+                        headers={"Auto-Submitted": "auto-replied"}))
+    assert len(resend.sent) == 1, "someone else's out-of-office still reaches her"
