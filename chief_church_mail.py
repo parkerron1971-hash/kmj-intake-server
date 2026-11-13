@@ -142,8 +142,9 @@ async def handle_church_email(client, biz, action) -> Dict[str, Any]:
         if held:
             lines.append(f"{held} message(s) this week were kept but not copied because their sender couldn't be "
                          "checked or they looked like spam.")
-    lines.append("Until the Email room is built, each person gets a copy of their mail at their own email and "
-                 "replies from there. Mail to a prayer address goes on the prayer list, never into anyone's inbox.")
+    lines.append("Each person reads, answers and writes their church mail in the app under Email, and gets a copy at "
+                 "their own email too unless they turned copies off there. Mail to a prayer address goes on the "
+                 "prayer list, never into anyone's inbox.")
     return {"type": "church_email", "domain": domain, "receiving": live, "boxes": d["boxes"],
             "suggest": d["suggest"] if full else [], "result": "\n".join(lines),
             "label": f"✉️ {len(d['boxes'])} church address{'es' if len(d['boxes']) != 1 else ''}",

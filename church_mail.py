@@ -30,11 +30,14 @@ business's contact match or the platform's Mission Control inbox.
                              taken off the team or a leader out of every role:
                              their mail goes to the catch-all that moment. A
                              role nobody holds: the role it answers to.
-    where it goes .......... until the Email room is built (mock first), each
-                             person gets a COPY at their own email: sent from
-                             the box's address, Reply-To the sender, marked
-                             with which box it came to. Prayer mail is never
-                             copied: its words stay on the prayer list.
+    where it goes .......... into the Email room (church_mail_room), for
+                             whoever the box reaches now, and a COPY at each
+                             person's own email: sent from the box's address,
+                             its Reply-To a relay that answers as the box,
+                             marked with which box it came to. A person who
+                             turned copies off (church_mail_people) reads it
+                             in the room only. Prayer mail is never copied
+                             or shown: its words stay on the prayer list.
     what's held ............ mail that fails its sender checks (no SPF or
                              DKIM pass, DMARC fail, the spam or virus verdict)
                              and our own copies looping back are kept, never
@@ -178,6 +181,7 @@ class Church:
         self._defs: Optional[List[Dict[str, Any]]] = None
         self._seats: Optional[Dict[str, Dict[str, Any]]] = None
         self._emails: Dict[str, str] = {}
+        self._copies_off: Optional[set] = None
 
     def boxes(self) -> List[Dict[str, Any]]:
         if self._boxes is None:
@@ -262,7 +266,38 @@ class Church:
         return [h for h in self.roles() if h.get("role") == key]
 
     def owner_target(self, why: str) -> List[Dict[str, str]]:
-        return [{"email": self.login_email(self.owner_id), "name": self.login_name(self.owner_id), "why": why}]
+        return [{"email": self.login_email(self.owner_id), "name": self.login_name(self.owner_id), "why": why,
+                 "user_id": self.owner_id}]
+
+    def uid_for_contact(self, cid: str, email: str = "") -> str:
+        """The login that is this person, if any: the seat tied to them, else
+        the login whose email is theirs. '' when they have no login."""
+        if cid:
+            for uid, s in self.seats().items():
+                if str(s.get("contact_id") or "") == str(cid):
+                    return uid
+        email = (email or "").strip().lower()
+        if not email:
+            return ""
+        for uid, s in self.seats().items():
+            if str(s.get("invited_email") or "").strip().lower() == email:
+                return uid
+        try:
+            if self.owner_id and self.login_email(self.owner_id) == email:
+                return self.owner_id
+        except Unavailable:
+            pass
+        return ""
+
+    def copies_off(self) -> set:
+        """The logins that read their church mail in the Email room only (no
+        copy at their own email). A read that fails is nobody: a copy too
+        many, never mail that reaches no one."""
+        if self._copies_off is None:
+            rows = sb_clients.sb_get_as_service(f"/church_mail_people?business_id=eq.{_q(self.id)}"
+                                                "&copies=eq.false&select=user_id&limit=500")
+            self._copies_off = {str(r["user_id"]) for r in rows if r.get("user_id")} if isinstance(rows, list) else set()
+        return self._copies_off
 
 
 def _first(name: str) -> str:
@@ -291,7 +326,7 @@ def reach(church: Church, box: Optional[Dict[str, Any]], *, _depth: int = 0) -> 
         if uid and church.is_on_team(uid):
             name = church.login_name(uid)
             return {"prayer": False, "path": f"{name}'s own box",
-                    "to": [{"email": church.login_email(uid), "name": name, "why": "their own box"}]}
+                    "to": [{"email": church.login_email(uid), "name": name, "why": "their own box", "user_id": uid}]}
         if cid and not uid:
             leads = [h for h in church.roles() if h.get("contact_id") == cid]
             seat = next((s for s in church.seats().values() if str(s.get("contact_id") or "") == cid), None)
@@ -302,7 +337,8 @@ def reach(church: Church, box: Optional[Dict[str, Any]], *, _depth: int = 0) -> 
             if c and email:
                 name = _plain(c.get("name"))
                 return {"prayer": False, "path": f"{name}'s own box",
-                        "to": [{"email": email, "name": name, "why": "their own box"}]}
+                        "to": [{"email": email, "name": name, "why": "their own box",
+                                "user_id": str(seat["user_id"]) if seat else church.uid_for_contact(cid, email)}]}
         return _to_office(church, box, "the person it was for isn't on the team now", _depth)
     if kind == "role":
         key = str(box.get("role_key") or "")
@@ -311,12 +347,16 @@ def reach(church: Church, box: Optional[Dict[str, Any]], *, _depth: int = 0) -> 
         if people:
             return {"prayer": False, "path": f"the {title} ({', '.join(_plain(h.get('name')) for h in people)})",
                     "to": [{"email": str(h.get("email") or "").lower(), "name": _plain(h.get("name")),
-                            "why": f"holds {title}"} for h in people if h.get("email")]}
+                            "why": f"holds {title}",
+                            "user_id": church.uid_for_contact(str(h.get("contact_id") or ""), str(h.get("email") or ""))}
+                           for h in people if h.get("email")]}
         import church_roles as cr
         d = cr.by_key(church.defs()).get(key)
         for up, ups in cr.chain_above(d, church.defs(), cr.active_holders(church.roles())) if d else []:
             got = [{"email": str(h.get("email") or "").lower(), "name": _plain(h.get("name")),
-                    "why": f"nobody holds {title}, so {up['title']}"} for h in ups if h.get("email")]
+                    "why": f"nobody holds {title}, so {up['title']}",
+                    "user_id": church.uid_for_contact(str(h.get("contact_id") or ""), str(h.get("email") or ""))}
+                   for h in ups if h.get("email")]
             if got:
                 return {"prayer": False, "to": got,
                         "path": f"nobody holds {title}, so who it answers to: the {up['title']}"}
@@ -327,7 +367,7 @@ def reach(church: Church, box: Optional[Dict[str, Any]], *, _depth: int = 0) -> 
         if shared:
             names = [church.login_name(u) for u in shared]
             return {"prayer": False, "path": "the office: " + ", ".join(names),
-                    "to": [{"email": church.login_email(u), "name": n, "why": "shares the office box"}
+                    "to": [{"email": church.login_email(u), "name": n, "why": "shares the office box", "user_id": u}
                            for u, n in zip(shared, names)]}
         return {"prayer": False, "to": church.owner_target("the office box"), "path": "the office (the pastor)"}
     return _to_office(church, box, "it has no one", _depth)
@@ -639,7 +679,7 @@ def _relay_find(church: Church, hexid: str, sig: str) -> Optional[Tuple[Dict[str
     """(the original message's row, the person whose copy this relay was)."""
     rid = f"{hexid[:8]}-{hexid[8:12]}-{hexid[12:16]}-{hexid[16:20]}-{hexid[20:]}"
     rows = _rows(f"/church_mail?id=eq.{_q(rid)}&business_id=eq.{_q(church.id)}"
-                 "&select=id,to_address,from_email,from_name,subject,message_id,delivered&limit=1")
+                 "&select=id,mailbox_id,to_address,from_email,from_name,subject,message_id,delivered&limit=1")
     if not rows:
         return None
     import hmac
@@ -716,7 +756,22 @@ async def relay_reply(client: httpx.AsyncClient, church: Church, address: str, h
         return {"address": address, "outcome": "failed"}
     await asyncio.to_thread(_settle, row, "copied", f"reply sent as {box_addr}",
                             [{"email": to, "name": _plain(orig.get("from_name")), "why": f"the reply, as {box_addr}"}])
+    await asyncio.to_thread(_answered, church, orig, row, name or holder)
     return {"address": address, "outcome": "replied"}
+
+
+def _answered(church: Church, orig: Dict[str, Any], row: Dict[str, Any], who: str) -> None:
+    """A reply from someone's own email shows in the Email room: the message
+    is marked answered (so nobody on a shared box answers it twice) and the
+    reply sits in the box's Sent. Best effort: the reply already went."""
+    now = _now_iso()
+    a = sb_clients.sb_patch_as_service(f"/church_mail?id=eq.{_q(orig['id'])}&business_id=eq.{_q(church.id)}",
+                                       {"answered_at": now, "answered_name": _plain(who, 200) or None})
+    b = sb_clients.sb_patch_as_service(f"/church_mail?id=eq.{_q(row['id'])}&business_id=eq.{_q(church.id)}",
+                                       {"direction": "out", "mailbox_id": orig.get("mailbox_id"),
+                                        "from_name": _plain(who, 200) or None})
+    if not isinstance(a, list) or not isinstance(b, list):
+        logger.warning("church mail: a reply by email wasn't marked in the Email room")
 
 
 async def _tell_relay_failed(church: Church, holder: str, box_addr: str, to: str, why: str) -> None:
@@ -803,12 +858,18 @@ async def deliver(client: httpx.AsyncClient, biz: Dict[str, Any], local: str, ad
     # An out-of-office reply to a copy comes back to the box it came from:
     # never copy a person's own automatic reply back to them.
     auto_reply = _header(msg, "auto-submitted").strip().lower().startswith("auto-replied")
+    room_only = await asyncio.to_thread(church.copies_off) if any(t.get("user_id") for t in where["to"]) else set()
     for t in where["to"]:
         if not t.get("email") or t["email"] in seen:
             continue
         seen.add(t["email"])
         if auto_reply and t["email"] == from_email:
             skipped.append({"email": t["email"], "name": t.get("name") or "", "why": "their own automatic reply"})
+            continue
+        if t.get("user_id") and str(t["user_id"]) in room_only:
+            # They read church mail in the Email room only (Kevin, 2026-11-13,
+            # the approved Email room: "Copies to your own email" is theirs).
+            skipped.append({"email": t["email"], "name": t.get("name") or "", "why": "reads it in the Email room"})
             continue
         why_not = await send_copy(client, church, address, t, msg, from_email, from_name, email_id,
                                   row_id=str(row["id"]))
@@ -1182,6 +1243,8 @@ async def welcome(biz: Dict[str, Any], box: Dict[str, Any]) -> Optional[str]:
             f"Your church email is {address}.\n\n"
             f"Mail sent to {address} comes to this inbox as a copy, marked with who sent it. "
             f"Hit reply as you normally would and your answer goes straight back to them.\n\n"
+            f"You can also read, answer and write church mail in the app, under Email. Once you do, you can "
+            f"turn these copies off there.\n\n"
             f"{church_name}")
     import email_sender
     try:
