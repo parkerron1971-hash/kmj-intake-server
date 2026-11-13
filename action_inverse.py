@@ -300,6 +300,14 @@ INVERSES: Dict[str, Inverse] = {
         lambda a, r: ({"type": "undo_move_in_fill", "item": r["item"], "answers": r["before"]}
                       if r.get("changed") and isinstance(r.get("item"), str)
                       and isinstance(r.get("before"), dict) else None)),
+    # A person's job description (chief_church_jobs): its undo is the log's
+    # own, and only while that change is still the person's last.
+    "set_job_description": Inverse(
+        "undo_job_description",
+        "put that job description back the way it was",
+        lambda a, r: ({"type": "undo_job_description", "person": r["person"], "change_id": r["change_id"]}
+                      if r.get("changed") and isinstance(r.get("person"), str) and r["person"]
+                      and isinstance(r.get("change_id"), str) and r["change_id"] else None)),
     "move_duty": Inverse(
         "undo_duty",
         "put that duty back the way it was",

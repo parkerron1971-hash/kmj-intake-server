@@ -447,6 +447,8 @@ from church_assignments import router as church_assignments_router
 app.include_router(church_assignments_router)
 from church_handovers import router as church_handovers_router
 app.include_router(church_handovers_router)
+from church_job_descriptions import router as church_job_descriptions_router
+app.include_router(church_job_descriptions_router)
 # Sermons from ChurchSavvy, for the team's Media part (no seat needed).
 from worship_sermons import router as worship_sermons_router
 app.include_router(worship_sermons_router)
