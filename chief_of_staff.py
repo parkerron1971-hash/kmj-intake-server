@@ -262,6 +262,8 @@ from chief_bills import handle_bills, handle_add_bill, handle_remove_bill
 from chief_duties import handle_list_duties, handle_move_duty, handle_undo_duty
 import chief_church_assignments as _church_assign  # church assignments: whoever is over people (PR D)
 from chief_move_in import handle_move_in_status, handle_fill_move_in, handle_undo_move_in_fill
+from chief_church_mail import (handle_church_email, handle_give_church_email,
+                               handle_take_back_church_email)
 from chief_map import (handle_list_map, handle_change_map, handle_draft_map, handle_undo_map_change,
     handle_apply_map_change, handle_discard_map_change, handle_search_templates, handle_adopt_template)
 from church_map_asks import (handle_my_work, handle_confirm_my_work, handle_suggest_work_change, handle_note_gap,
@@ -407,6 +409,9 @@ _ACTION_PHRASES = {
     "bills": "reading your bills",
     "add_bill": "adding the bill",
     "move_in_status": "reading where the move stands",
+    "church_email": "reading the church's addresses",
+    "give_church_email": "setting up the address",
+    "take_back_church_email": "taking the address back",
     "fill_move_in": "saving that as a draft",
     "undo_move_in_fill": "putting that item back",
     "list_duties": "reading who does what",
@@ -12248,6 +12253,10 @@ ACTION_HANDLERS = {
     "remove_bill":           handle_remove_bill,
     # A new church's move (chief_move_in): where it stands, a draft into one item, and its undo.
     "move_in_status":        handle_move_in_status,
+    # Church email (chief_church_mail, 2026-11-13): every admin and leader's own @churchdomain address.
+    "church_email":          handle_church_email,
+    "give_church_email":     handle_give_church_email,
+    "take_back_church_email": handle_take_back_church_email,
     "fill_move_in":          handle_fill_move_in,
     "undo_move_in_fill":     handle_undo_move_in_fill,
     "list_duties":           handle_list_duties,
