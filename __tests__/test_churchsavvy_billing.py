@@ -358,3 +358,21 @@ def test_the_catalog_charges_what_the_page_shows():
     assert (csb.PRICES["cs_screens"], csb.PRICES["cs_planning"], csb.PRICES["cs_both"]) == (2000, 1500, 2900)
     # A ChurchSavvy plan carries none of Solutionist's features.
     assert all(feature_gates.plan_features(p) == frozenset() for p in feature_gates.CHURCHSAVVY_PLANS)
+
+
+def test_churchsavvy_alone_carries_no_ai_tank(monkeypatch):
+    """ChurchSavvy makes no AI calls, so its plans grant no credits (Kevin,
+    2026-11-13: "making sure the ai credits are priced good"). Zero, never
+    None: None is "unlimited" to the meter."""
+    monkeypatch.setenv("BILLING_ENFORCE", "on")
+    for plan in feature_gates.CHURCHSAVVY_PLANS:
+        price = f"price_{plan}"
+        monkeypatch.setenv(f"STRIPE_PRICE_ID_{plan.upper()}", price)
+        biz = {"subscription_status": "active", "subscription_plan": price}
+        assert feature_gates.plan_of(biz) == plan
+        assert feature_gates.monthly_credits(biz) == 0, plan
+        assert feature_gates.limit_for(biz, "chief_messages_monthly") == 0, plan
+    # A Solutionist church keeps its plan's tank.
+    monkeypatch.setenv("STRIPE_PRICE_ID_CHURCH_GROWING", "price_growing")
+    church = {"subscription_status": "active", "subscription_plan": "price_growing"}
+    assert feature_gates.limit_for(church, "chief_messages_monthly") > 0
