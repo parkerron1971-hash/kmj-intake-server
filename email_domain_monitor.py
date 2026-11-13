@@ -216,7 +216,8 @@ async def check_one(biz: Dict[str, Any]) -> Dict[str, Any]:
     if live.get("__missing__"):
         live_status = "missing"
     else:
-        live_status = _normalize_status(live.get("status"))
+        import email_domain_dns
+        live_status = email_domain_dns.sending_status(live)
 
     was_verified = cfg.get("status") == "verified"
     drifted_before = bool(cfg.get("drift_detected_at"))
