@@ -45,8 +45,11 @@ class TestShapeWwwRecords(unittest.TestCase):
         import cloudflare_saas as cf
         with mock.patch.dict(os.environ, CF_ENV):
             shaped = cf._shape(_ch("kmjcreate.com"))
-        cname = [d for d in shaped["dns"] if d["type"] == "CNAME"][0]
-        self.assertEqual(cname["host"], "@")
+        # The domain's own name is an ALIAS: a CNAME at @ stops its email.
+        self.assertFalse([d for d in shaped["dns"] if d["type"] == "CNAME" and d["host"] == "@"])
+        alias = [d for d in shaped["dns"] if d["type"] == "ALIAS"][0]
+        self.assertEqual(alias["host"], "@")
+        self.assertIn("stops the domain's email", alias["note"])
         txt = [d for d in shaped["dns"] if d["type"] == "TXT"][0]
         self.assertEqual(txt["host"], "_acme-challenge")
 

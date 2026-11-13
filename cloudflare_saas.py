@@ -111,9 +111,17 @@ def _shape(ch: Dict[str, Any], apex: Optional[str] = None) -> Dict[str, Any]:
     tgt = cname_target()
     if tgt:
         host = _short_host(hostname, base)
-        note = ("Points your domain at your site." if host == "@"
-                else f"Points {hostname} at your site.")
-        dns.append({"type": "CNAME", "host": host, "value": tgt, "note": note})
+        if host == "@":
+            # The domain's own name: an ALIAS, never a plain CNAME. Nothing can
+            # sit beside a CNAME, so "CNAME @" silently stopped the domain's
+            # email (kmjcreate.com, 2026-11-13: its church mail record did
+            # nothing until @ became an ALIAS with the same value).
+            dns.append({"type": "ALIAS", "host": "@", "value": tgt,
+                        "note": ("Points your domain at your site. Use an ALIAS record (ANAME at some hosts; "
+                                 "at Cloudflare a CNAME is fine, it flattens it). A plain CNAME at @ stops "
+                                 "the domain's email.")})
+        else:
+            dns.append({"type": "CNAME", "host": host, "value": tgt, "note": f"Points {hostname} at your site."})
     dns += _dcv_records(ssl, base)
     active = ch.get("status") == "active" and ssl.get("status") == "active"
     return {
