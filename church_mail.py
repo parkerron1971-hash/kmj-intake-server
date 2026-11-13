@@ -1130,6 +1130,28 @@ def take_back(biz: Dict[str, Any], address: str) -> Dict[str, Any]:
     return {"address": f"{box['local']}@{box['domain']}", "now": now, "was_catch_all": bool(box.get("catch_all"))}
 
 
+def sender_box(biz: Dict[str, Any], uid: str) -> Optional[Dict[str, str]]:
+    """The church address a login sends from: its own live box at the
+    church's verified domain, while that domain's mail comes here (so the
+    replies do too). None means the church's usual address, as before;
+    a read that fails is None too, never a held send (Kevin, 2026-11-13:
+    "I want everyone to send out emails today")."""
+    if not uid or not biz:
+        return None
+    try:
+        church = Church(biz)
+        if not church.domain or not church.is_on_team(str(uid)):
+            return None
+        box = next((b for b in church.boxes() if b.get("kind") == "person"
+                    and str(b.get("user_id") or "") == str(uid)), None)
+        if not box or box.get("domain") != church.domain or not mail_comes_here(church.domain):
+            return None
+        return {"address": f"{box['local']}@{box['domain']}", "name": church.login_name(str(uid))}
+    except Exception:  # noqa: BLE001 — never hold a send over this
+        logger.warning("church mail: couldn't read a login's own address; sending as the church")
+        return None
+
+
 def held_count(business_id: str, days: int = 7) -> Optional[int]:
     from datetime import timedelta
     since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()

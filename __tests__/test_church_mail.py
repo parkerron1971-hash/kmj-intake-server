@@ -639,3 +639,48 @@ def test_a_reply_that_cant_be_proven_is_held_and_the_person_told(db, resend, rel
 def test_an_out_of_office_answering_a_copy_isnt_sent_on(db, resend, relay):
     _inbound(resend.add("m2", to=[relay.addr], frm="tia@example.com", headers={"Auto-Submitted": "auto-replied"}))
     assert len(resend.sent) == 1 and "automatic reply" in _rows(db, "church_mail")[-1]["why"]
+
+
+# ─── Sending as yourself (Kevin, 2026-11-13: "I want everyone to send out emails today") ─────
+
+def test_a_login_with_its_own_address_sends_from_it(db):
+    db.t["church_mailboxes"].append(_box("tia", "person", user_id=TIA))
+    biz = db.t["businesses"][0]
+    assert church_mail.sender_box(biz, TIA) == {"address": "tia@lovecityc.com", "name": "Tia Brown"}
+    assert church_mail.sender_box(biz, JESSICA) is None, "no address of her own: the church's, as before"
+    next(s for s in db.t["business_users"] if s["user_id"] == TIA)["status"] = "revoked"
+    assert church_mail.sender_box(biz, TIA) is None, "off the team: never as the church again"
+
+
+def test_no_own_address_until_the_domains_mail_comes_here(db, monkeypatch):
+    db.t["church_mailboxes"].append(_box("tia", "person", user_id=TIA))
+    monkeypatch.setattr(church_mail, "receiving_live", lambda d: False)
+    church_mail._LIVE_CACHE.clear()
+    assert church_mail.sender_box(db.t["businesses"][0], TIA) is None, "replies would have nowhere to land"
+
+
+def test_chief_sends_a_logins_email_from_its_own_address(db, monkeypatch):
+    import chief_of_staff as cos
+    db.t["church_mailboxes"].append(_box("tia", "person", user_id=TIA))
+    biz = db.t["businesses"][0]
+    sent = []
+
+    async def _sb(client, method, path, body=None):
+        return [{"id": KEVIN_C, "name": "Pastor Ray", "email": "ray@example.org", "metadata": {}}]
+
+    async def _send(**kw):
+        sent.append(kw)
+        return {"id": "e1"}
+    monkeypatch.setattr(cos, "_sb", _sb)
+    monkeypatch.setattr(email_sender, "send_via_resend", _send)
+    monkeypatch.setenv("RESEND_API_KEY", "test")
+    item = {"id": "q1", "contact_id": KEVIN_C, "subject": "Thursday", "body": "See you Thursday."}
+    tok = cos._TURN_USER_ID.set(TIA)
+    try:
+        out = asyncio.run(cos._send_queued_email(None, biz, item))
+    finally:
+        cos._TURN_USER_ID.reset(tok)
+    assert out["sent"] and sent[0]["from_email"] == "tia@lovecityc.com" and sent[0]["reply_to"] == "tia@lovecityc.com"
+    # Unattended (no one talking): the church's address and the routed reply, as before.
+    asyncio.run(cos._send_queued_email(None, biz, item))
+    assert sent[1]["from_email"] != "tia@lovecityc.com" and sent[1]["reply_to"] != "tia@lovecityc.com"
