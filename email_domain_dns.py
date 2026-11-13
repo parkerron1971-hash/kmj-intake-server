@@ -129,6 +129,37 @@ def compare_dmarc(found: List[str]) -> Dict[str, Any]:
     return {"found": bool(found), "match": bool(valid)}
 
 
+def is_receiving_record(rec: Dict[str, Any]) -> bool:
+    """Resend's receiving record: an MX at the domain itself (the sending
+    MX sits on `send`). Turning receiving on adds it, pending, until the
+    church's MX points at it (church_mail.switch_on_church_mail)."""
+    if not isinstance(rec, dict) or str(rec.get("type") or "").upper() != "MX":
+        return False
+    kind = str(rec.get("record") or "").strip().lower()
+    name = str(rec.get("name") or "").strip().lower().rstrip(".")
+    return kind in ("receiving", "inbound") or not name.startswith("send")
+
+
+def sending_status(live: Optional[Dict[str, Any]]) -> str:
+    """'verified' | 'failed' | 'pending' for SENDING from Resend's domain
+    payload. Resend's own status covers receiving too: a domain whose
+    receiving record is still pending reads "partially_verified", and taken
+    at its word that flipped a church's sending to failed and its mail to the
+    platform address while the MX change was on its way (lovecityc.com,
+    2026-11-13, about 20 minutes). Every sending record verified is
+    verified, whatever the receiving record says."""
+    live = live or {}
+    raw = str(live.get("status") or "").strip().lower()
+    if raw == "verified":
+        return "verified"
+    sending = [r for r in live.get("records") or [] if isinstance(r, dict) and not is_receiving_record(r)]
+    if sending and all(str(r.get("status") or "").strip().lower() == "verified" for r in sending):
+        return "verified"
+    if raw in ("failed", "failure", "temporary_failure"):
+        return "failed"
+    return "pending"
+
+
 def compare_mx(expected_host: str, expected_priority: Any,
                found: List[Tuple[int, str]]) -> Dict[str, Any]:
     exp_host = (expected_host or "").strip().lower().rstrip(".")
