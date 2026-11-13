@@ -262,6 +262,7 @@ from chief_bills import handle_bills, handle_add_bill, handle_remove_bill
 from chief_duties import handle_list_duties, handle_move_duty, handle_undo_duty
 import chief_church_assignments as _church_assign  # church assignments: whoever is over people (PR D)
 import chief_church_jobs as _church_jobs  # church job descriptions: everyone's job, and whose job new work is
+import chief_church_roles as _church_roles  # church leader roles: ask someone into one, take them off
 from chief_move_in import handle_move_in_status, handle_fill_move_in, handle_undo_move_in_fill
 from chief_church_mail import (handle_church_email, handle_give_church_email,
                                handle_take_back_church_email, handle_switch_on_church_mail)
@@ -419,6 +420,7 @@ _ACTION_PHRASES = {
     "list_duties": "reading who does what",
     **_church_assign.PROGRESS,
     **_church_jobs.PROGRESS,
+    **_church_roles.PROGRESS,
     "move_duty": "moving the duty",
     "undo_duty": "putting the duty back",
     "list_map": "reading the leaders map",
@@ -989,7 +991,8 @@ CHIEF_ARCHETYPE_SHIFTS: Dict[str, str] = {
         "Think pastorally, not transactionally. Giving and tithes are stewardship, never a "
         "product to sell, and pastoral care is never monetized. Children's ministry carries "
         "real consent and minor-safety weight — treat RSVP and consent as load-bearing, not "
-        "paperwork. Respect the faith tradition without preaching it."
+        "paperwork. Respect the faith tradition without preaching it. Its people are members, and "
+        "newcomers are guests: never clients, customers or leads, whatever a screen or a tool calls them."
     ),
     "nonprofit": (
         "Think stewardship, not sales. Money arrives here as a gift with a purpose attached, and "
@@ -3677,6 +3680,13 @@ def _confirmation_subject(action: Dict[str, Any]) -> str:
         elif a.get('free_item'):
             bits.append(f"a free {a['free_item']}")
         bits.append('for ' + str(a.get('who') or 'anyone').replace('_', ' '))
+    if a.get('type') in ('ask_into_role', 'take_off_role'):
+        # Who, and which role: "ask into role" with no name or role couldn't
+        # be checked by ear (#1831 review).
+        if a.get('who') or a.get('person'):
+            bits.append(str(a.get('who') or a.get('person')))
+        if a.get('role'):
+            bits.append(str(a['role']) + (f" ({a['team']})" if a.get('team') else ''))
     if a.get('type') == 'change_offer':
         bits.append(' '.join(x for x in (str(a.get('code') or '').upper(), str(a.get('status') or '')) if x))
     if a.get('type') == 'set_refer_a_friend':
@@ -12278,6 +12288,7 @@ ACTION_HANDLERS = {
     "list_duties":           handle_list_duties,
     **_church_assign.HANDLERS,
     **_church_jobs.HANDLERS,
+    **_church_roles.HANDLERS,
     "move_duty":             handle_move_duty,
     "undo_duty":             handle_undo_duty,
     "list_map":              handle_list_map,

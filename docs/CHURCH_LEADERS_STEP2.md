@@ -620,7 +620,7 @@ Each PR is one change, not stacked, about 700 lines at most, and runs the three 
 | F3 | The department editor (~650) | | |
 | F4 | Ready-made browse, search and adopt (~550) | | |
 | B5 | Chief verbs except `ask_into_role`: registry, inverses, `chief_areas`, prompt lines on the chief_prompt.py:2127-2132 pattern (~650) | CHURCH_MAP, checked for the person in the turn | name ambiguity; refusals by seat; `{result, label}` |
-| B6 | `ask_into_role`, class C (~250) | CHURCH_MAP | draft, office and kids refusals |
+| B6 | `ask_into_role`, class C (~250). **Built 2026-11-13** in `chief_church_roles.py` with `take_off_role` (the page's Remove), no switch (the route it calls has none), no undo (no inverse may be class C) | CHURCH_MAP (as built: none, as Leaders & roles) | draft, office and kids refusals |
 | B7 | New-church drafts, confirm, type swap (~450) | CHURCH_SETUP | §6 |
 | F5 | The draft leaders section and Confirm (~300) | | |
 | B8 | `propose()`, `church_setup.py`, the setup routes, start from live, reopen (~600) | CHURCH_SETUP | Love City's proposal names no overseer |
