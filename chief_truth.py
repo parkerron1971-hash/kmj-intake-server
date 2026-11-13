@@ -767,6 +767,9 @@ def assess_review(raw: str, reply: str, sources: dict) -> tuple[str, list[str], 
             if claim['kind'] == 'reference':
                 # Addressed to the owner: a business fact, not a rule.
                 claim = {**claim, 'kind': 'fact'}
+            if claim['kind'] == 'action' and is_record_state(text_):
+                # What a saved record holds is a fact (see is_record_state).
+                claim = {**claim, 'kind': 'fact'}
             gap = claim.get('gap')
             # A statement that something did NOT happen ("the $10 invoice
             # was never created or sent", "nothing has gone out yet") is
@@ -1165,15 +1168,22 @@ def _clean_review_gaps(raw, reply, sources, gaps, references):
                 break
         draft = draft.replace(sentence, replacement, 1).strip()
         cuts += 1
+    # Each way the cleanup gives up is logged by name: a cleanup that gives
+    # up costs a repair and a second review, and the 2026-11-13 measurement
+    # could see THAT it gave up (10 of the week's 26 repairs) but not why.
     if not draft:
+        logger.info('reply review cleanup gave up: nothing left after %d cut(s)', cuts)
         return UNVERIFIED_REPLY, {'status': 'withheld', 'sources': [], 'gaps': gaps}
     remaining = [c for c in review.get('claims', []) if isinstance(c, dict)
                  and isinstance(c.get('text'), str) and _squash(c['text']) in _squash(draft)]
     verdict, cited, reason = assess_review(json.dumps({**review, 'claims': remaining}), draft, sources)
     refs = [r for r in references if _squash(r) in _squash(draft)]
     if verdict != 'supported' and not (refs and reason.startswith('general rule')):
+        logger.info('reply review cleanup gave up: the rest (%d claim(s) left) is %s (%s)',
+                    len(remaining), verdict, (reason or '')[:120])
         return UNVERIFIED_REPLY, {'status': 'withheld', 'sources': [], 'gaps': gaps, 'reason': reason}
     if has_completion_claim(draft) and not (verdict == 'supported' and wrote_anything(sources)):
+        logger.info('reply review cleanup gave up: the rest claims work no receipt backs')
         return UNVERIFIED_REPLY, {'status': 'withheld', 'sources': [], 'gaps': gaps}
     draft = re.sub(r'\n{3,}', '\n\n', draft).strip()
     notice = _reference_notice(refs, draft)
@@ -1605,6 +1615,38 @@ def read_anything(sources):
                for s in (sources or {}).values())
 
 
+# "Yes, both are in that answer.", "That's saved in your private business
+# knowledge", "The kids answer now has the Children's Church details": what
+# a saved record holds NOW. REVIEW_SYSTEM says that is a fact to cite and
+# quote; the reviewer still files it as an action now and then, and an
+# action with no write receipt withheld the whole answer for a repair and a
+# second check (the week to 2026-11-13). Read as a fact it still needs a
+# record and a quote that holds it, like any fact. Only a sentence with no
+# first person, no claim of work done and no word of delivery; "the invoice
+# is in their inbox", "it's on their calendar" or "the changes are in your
+# site" keeps the action rule.
+_RECORD_HOLDS = re.compile(
+    r"\b(?:is|are|['’]s)\s+(?:(?:now|already|still|both|all|also)\s+)*"
+    r"(?:saved|stored|on file|listed|drafted|in (?:that|the|this|your|its|it)\b)"
+    r"|\b(?:now|already|still)\s+(?:has|have|holds?|includes?|contains?|lists?)\b"
+    r"|^\W*(?:yes,?\s+)?(?:it|they|both|that|this|(?:the|your) \w+(?: \w+)?)\s+"
+    r"(?:has|have|holds?|includes?|contains?)\b",
+    re.I)
+_STATE_FIRST_PERSON = re.compile(r"\b(?:I|I['’]\w+|[Ww]e|[Ww]e['’]\w+|me|us|my|our|mine|ours)\b")
+_DELIVERY_WORD = re.compile(
+    r"\b(?:sent|send|sending|delivered|emailed|texted|messaged|posted|published|live|gone|went|out|"
+    r"through|paid|charged|refunded|booked|scheduled|cancell?ed|deleted|removed|called|been|"
+    r"inbox|mailbox|calendar|phone|way|their|his|her|site|website|page|pages|feed)\b", re.I)
+
+
+def is_record_state(text):
+    """Does this claim say what a saved record holds now, and nothing done?"""
+    t = (text or '').strip()
+    return (bool(t) and len(t) <= 200 and bool(_RECORD_HOLDS.search(t))
+            and not _STATE_FIRST_PERSON.search(t) and not _DELIVERY_WORD.search(t)
+            and not has_completion_claim(t))
+
+
 # Words that turn a completion phrase into an offer: "once you say go
 # ahead, I'll create the invoice" promises nothing done. The completion
 # detector's phrase list ("i'll create", "i'll add", ...) exists for the
@@ -1764,6 +1806,29 @@ def evidence_for_review(ctx, view_detail, taken):
         picture = chief.business_picture_lines(biz, (ctx or {}).get('site'))
         if picture:
             context.append(('business_picture', '\n'.join(picture)))
+        # The site record Chief's PRACTITIONER SITE block is written from:
+        # where it lives, published or draft, the custom domain, the pages.
+        # Only Chief read it, so "your site is live at <domain>" and "the
+        # booking page is wired in" were gaps in 8 reviews of the week to
+        # 2026-11-13, and a short status answer made of them was withheld,
+        # repaired and checked again (3 model calls). Only a site that is on
+        # file: no row may mean a read that failed, never "no site".
+        if isinstance((ctx or {}).get('site'), dict) and ctx['site'].get('slug'):
+            try:
+                context.append(('site', chief._format_site_info(ctx)))
+            except Exception as e:  # never let a block cost the review
+                logger.warning('review site block skipped: %s', type(e).__name__)
+    # Who is talking, when it is not the owner: the same lines Chief's
+    # prompt carries (chief_areas.block). An office login greeted by her own
+    # name ("Good morning, Laquesha.") was a gap, because the only name in
+    # the records was the owner's (2026-11-08).
+    try:
+        import chief_areas
+        login = chief_areas.block(chief_areas.TURN.get(), chief_areas.WHO.get(), biz)
+    except Exception:
+        login = ''
+    if login:
+        context.append(('login', login.strip()))
     if view_detail:
         context.append(('current_view', view_detail))
     # The author sees policy-filtered, bounded email text. Review exactly
@@ -1810,7 +1875,8 @@ def evidence_for_review(ctx, view_detail, taken):
             # sample exhaustive. Explicit scalar metadata is complete, and so
             # is a list whose read came back under its limit.
             exhaustive = name in whole or name in ('contacts_total', 'contacts_loaded', 'contacts_complete',
-                                                   'context_quality', 'business_identity', 'business_picture')
+                                                   'context_quality', 'business_identity', 'business_picture',
+                                                   'site', 'login')
             sources['context:' + name] = {'kind': 'context', 'text': text[:MAX_SOURCE_CHARS],
                                          'complete': exhaustive and len(text) <= MAX_SOURCE_CHARS,
                                          **({'unread': True} if name in unread else {})}
@@ -1890,7 +1956,10 @@ _REVIEW_PROSE = ('blueprint_block', 'playbook_block', 'voice_block', 'brand_bloc
 _REVIEW_ACTIVITY = ('events', 'queue', 'image_jobs', 'recent_queue_24h', 'auto_recent',
                     'notifications', 'insights', 'learning_lines', 'email_replies',
                     'mentor_active', 'habit_block', 'relationship_insights',
-                    'context_quality', 'voice_examples')
+                    'context_quality', 'voice_examples',
+                    # Differs by login (2026-11-13): an office login and the
+                    # owner on the same business must not re-write the steady group.
+                    'login')
 # What changes with every message, so it is never worth caching: the clock.
 # It sat in the steady group and re-wrote it on every review (the watch
 # named it on 7 Oct, 13:04 UTC). It now rides with the turn's own parts.
