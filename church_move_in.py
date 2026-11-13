@@ -102,8 +102,10 @@ ITEMS: List[Dict[str, Any]] = [
         "key": "giving", "urgent": True, "live": "giving",
         "title": "Set up giving",
         "ask": "Have ready the church's legal name, its EIN, the bank account and one leader's photo ID.",
-        "why": "Giving runs through Stripe, on an account that belongs to your church. Only the account "
-               "owner can set it up, and Stripe has to approve it before a gift can be given.",
+        "why": "Giving runs through Stripe, on an account that belongs to your church, so gifts go to your "
+               "church's own bank account. Only the account owner can set it up. Stripe looks over every "
+               "church before a gift can be given, and we don't control how long that takes. That's why "
+               "this one comes first.",
         "door": {"label": "Open giving setup", "nav": {"tab": "operate", "sub": "payments"}},
     },
     {
@@ -111,8 +113,9 @@ ITEMS: List[Dict[str, Any]] = [
         "title": "Bring your people in",
         "ask": "One row per person: name, email, mobile, household, member or guest, birthday, adult or "
                "child. Save the spreadsheet as CSV, then bring it in here and check the families it makes.",
-        "why": "The household column matters most. It's how families form and how children appear at "
-               "kids check-in. A member signs in with the email or mobile you have for them.",
+        "why": "This list becomes your members' app. The household column matters most: it's how "
+               "families form and how children appear at kids check-in. A member signs in with the email "
+               "or mobile you have for them, so anyone without one of their own can't sign in yet.",
         "door": {"label": "Bring in a spreadsheet", "import": "people"},
         "files": {**SHEETS, "max": 3, "label": "Stuck? Hand in the file as it is and we'll bring it in for you."},
         "need": "people",
@@ -120,8 +123,9 @@ ITEMS: List[Dict[str, Any]] = [
     {
         "key": "owner", "urgent": True,
         "title": "Name the person who owns the move",
-        "ask": "One person at your church we work with every day this week.",
-        "why": "Your move owner tells us what's right, and we do the work.",
+        "ask": "One person at your church we work with every day this week. It doesn't have to be the pastor.",
+        "why": "Questions come up during a move, like a family that looks wrong or a service time that's "
+               "missing. This is the one person we ask. They tell us what's right, and we do the work.",
         "fields": [_text("name", "Their name"), _text("mobile", "Mobile number"), _text("email", "Email"),
                    _text("best_time", "Best time to reach them")],
         "need": ["name"],
@@ -130,6 +134,9 @@ ITEMS: List[Dict[str, Any]] = [
         "key": "tools",
         "title": "What you use today, and when each one renews",
         "ask": "The name of each tool and its renewal date, so nothing renews by surprise.",
+        "why": "It tells us what each part of the system is replacing for your church, and the renewal "
+               "dates tell us what has to be working here first. Don't cancel anything yet. Keep each "
+               "tool until the part that replaces it is working for your church.",
         "fields": [_text("giving", "Giving", "Name and renewal date"),
                    _text("checkin", "Kids check-in", "Name and renewal date"),
                    _text("app", "Your app", "Name and renewal date"),
@@ -142,7 +149,8 @@ ITEMS: List[Dict[str, Any]] = [
         "key": "monthly_givers",
         "title": "How many people give monthly",
         "ask": "A close guess is fine.",
-        "why": "Each of them sets their gift up again, and we'll help you reach them.",
+        "why": "Card details can't be moved from one company to another, so each person who gives monthly "
+               "sets their gift up again here. The number tells us how many people we'll help you reach.",
         "fields": [{"key": "count", "label": "People who give monthly", "type": "number", "hint": ""},
                    _long("note", "Anything we should know")],
         "need": ["count"],
@@ -152,7 +160,8 @@ ITEMS: List[Dict[str, Any]] = [
         "title": "This year's giving",
         "ask": "Export it from the giving tool you use today: every gift this year with the giver, the "
                "date, the amount and the fund.",
-        "why": "It's needed for January statements.",
+        "why": "Each giver's year-end statement, in January, has to show the whole year, not only what they "
+               "give after your move. This export is where the earlier months come from.",
         "files": {**SHEETS, "max": 6, "label": "Add the export"},
         "need": "files",
     },
@@ -160,7 +169,9 @@ ITEMS: List[Dict[str, Any]] = [
         "key": "logins",
         "title": "Choose your office logins",
         "ask": "Who gets one, and what each person looks after.",
-        "why": "Each login is invited with the areas that person looks after, and nothing more.",
+        "why": "An office login is for someone who does the church's work in the system, like the person "
+               "who records giving or the one who runs kids check-in. Each login is invited with the areas "
+               "that person looks after, and nothing more. Members don't need one. They use the members' app.",
         "fields": [_rows("people", "Office logins",
                          [("name", "Name"), ("email", "Email"), ("looks_after", "Looks after")],
                          "Add a person", 35)],
@@ -169,8 +180,13 @@ ITEMS: List[Dict[str, Any]] = [
     {
         "key": "safety",
         "title": "Name two safety officers",
-        "ask": "Two people who will watch over member messaging.",
-        "why": "Member messaging only switches on with two named people watching over it.",
+        "ask": "Two trusted adults, such as a pastor, an elder or someone with an office login, who will "
+               "look at any member message the system holds back.",
+        "why": "In the app, members can message each other and chat in their groups. Every message is "
+               "checked before it's delivered, and one that looks harmful is held instead of sent. A safety "
+               "officer looks at each held or reported message and decides whether it's delivered or "
+               "removed. Staff don't read members' messages otherwise. Messaging stays off until two "
+               "officers are named, so a held message always has someone to look at it.",
         "fields": [_rows("officers", "Safety officers", [("name", "Name"), ("contact", "Email or mobile")],
                          "Add an officer", 2)],
         "need": ["officers:2"],
@@ -179,6 +195,10 @@ ITEMS: List[Dict[str, Any]] = [
         "key": "sunday",
         "title": "Your Sunday details",
         "ask": "Service times, kids rooms with ages, and your groups with each leader.",
+        "why": "Your first Sunday is the day the whole move works toward. Your services are what members "
+               "see coming up and what Sunday check-in is set up for. Kids rooms and their ages are how we "
+               "put each child in the right room for kids check-in. Your groups and their leaders become "
+               "the groups in the members' app.",
         # The first Sunday the church gathers with us. The welcome briefing asks it
         # ("When is your first Sunday with us?") and saves it here, as a draft like
         # any other line; the office can change it in the room.
@@ -194,7 +214,9 @@ ITEMS: List[Dict[str, Any]] = [
         "key": "look",
         "title": "Your look",
         "ask": "Your logo, your church colour, 10 to 15 photos and a link to your sermons.",
-        "why": "It's how the app and the giving page become yours.",
+        "why": "Your logo and colour go on your members' app and your giving page, so they look like your "
+               "church. Your photos are for your website, which follows after your first Sunday. The "
+               "sermons link is how your recent messages get into the app.",
         "fields": [_text("colour", "Church colour", "A colour name or a code like #1D4ED8"),
                    _text("sermons", "Where your sermons are", "A YouTube, Vimeo or Facebook link")],
         "files": {**PICTURES, "max": 20, "label": "Add your logo and photos"},
@@ -204,6 +226,10 @@ ITEMS: List[Dict[str, Any]] = [
         "key": "room",
         "title": "About the room",
         "ask": "What we'll find on Saturday when we rehearse.",
+        "why": "On your first Sunday the church signs in on their phones from a code on the screen, so the "
+               "Wi-Fi has to reach the seats and the screen has to be one everyone can see. Kids check-in "
+               "needs a tablet and a label printer for name tags. Knowing this now leaves time to fix a gap "
+               "before Saturday.",
         "fields": [_long("wifi", "Wi-Fi in the sanctuary", "Is there Wi-Fi, and does it reach the seats?"),
                    _text("screen", "The screen", "A projector, TVs, or none"),
                    _text("tablet", "A tablet for kids check-in", "What you have, or that you need one"),

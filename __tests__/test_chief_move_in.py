@@ -153,6 +153,23 @@ def test_the_status_names_every_item_and_whats_next(db, as_):
     assert "press Hand in themselves" in got["note_for_chief"]
 
 
+def test_every_thing_says_why_and_chief_is_told_while_it_is_still_to_do(db, as_):
+    # Kevin, 2026-11-13: the list didn't explain things like safety officers.
+    # Every one of the eleven carries a why, and Chief reads the room's own
+    # words for a thing that is still to do; one handed in is not explained again.
+    for it in mi.ITEMS:
+        assert len(it.get("why") or "") > 60, it["key"]
+    assert "held" in mi.ITEM["safety"]["why"] and "two officers" in mi.ITEM["safety"]["why"]
+    text = status()["result"]
+    assert f"Why it's needed: {mi.ITEM['safety']['why']}" in text
+    assert f"What's asked: {mi.ITEM['safety']['ask']}" in text
+    fill("owner", {"name": "Ada Hill"})
+    hand_in("owner", "owner")
+    owner_line = next(l for l in status()["result"].splitlines() if "(owner):" in l)
+    assert "Handed in." in owner_line and "Why it's needed" not in owner_line
+    assert "Why it's needed" in status()["note_for_chief"]
+
+
 def test_the_status_shows_a_change_we_asked_for_first(db, as_):
     fill("owner", {"name": "Ada Hill"})
     hand_in("owner", "owner")
