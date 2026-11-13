@@ -192,6 +192,13 @@ PUBLIC_BY_DESIGN = frozenset({
     # about who can use it; whether it applies is decided at booking, from
     # the business's own records (offers.evaluate). It writes nothing.
     ("offers", "public_offer"),
+    # A church's texts sign-up form (/texts, 2026-11-13): a stranger
+    # signing up for a church's texts has no session, the same door as the
+    # site's contact form. It answers 404 unless the business is a church
+    # whose texting registration is sent, sits behind the contact form's
+    # per-address limit and a hidden field, writes only that person's own
+    # contact and yes (sms_consents texts_page), and reads nothing back.
+    ("texting_registration", "church_signup"),
 })
 
 

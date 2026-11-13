@@ -215,4 +215,6 @@ def test_only_explicit_from_imports_are_followed():
 def test_the_exemption_list_stays_readable():
     """A list that grows without argument is a list nobody reads. Modules
     and pairs are counted together — the cap is on judgements, not rows."""
-    assert len(ownership_sweep.PUBLIC_BY_DESIGN) <= 15
+    # 15 -> 16 (2026-11-13): ("texting_registration", "church_signup"), a
+    # church's texts sign-up form, argued beside its entry.
+    assert len(ownership_sweep.PUBLIC_BY_DESIGN) <= 16
