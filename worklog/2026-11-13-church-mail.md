@@ -4,7 +4,7 @@ date: 2026-11-13
 agent: Claude Code (Claude Opus 5.5)
 asked: "is the email setup ready? I was seeing about setting email for admin and chief doesn't know about it" / "can we muild what is needed so this can go live right away?"
 status: in progress
-prs: []
+prs: ["kmj-intake-server#1809"]
 migrations: [supabase/APPLY-2026-11-13-church-mail.sql]
 left_undone:
   - "The Email room (read and send in the app, as yourself) waits on a mock and Kevin's yes. Until then each person gets a copy at their own email and replies from there, so a reply comes from their own address, not the church's."
