@@ -4,7 +4,7 @@ date: 2026-11-13
 agent: Claude Code (Claude Fable 5.2)
 asked: "I am thinking we should remove the 7 days for free. thoughts ... yes build."
 status: in review
-prs: [kmj-intake-server (this PR)]
+prs: [kmj-intake-server#1824]
 migrations: []
 left_undone:
   - "A church still signs up without a card and has the same days and credits to look around with as any new business (no_card_trial). Only the free week AFTER a plan is chosen is gone. Taking the look-around away too would put a paywall in front of Chief's welcome and the Move-in list; that is a separate decision."
