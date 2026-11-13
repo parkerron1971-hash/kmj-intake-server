@@ -164,6 +164,14 @@ CATALOG: Dict[str, Dict[str, Any]] = {
         "Supplies", "office", ["office_leadership"], "as needed",
         "What's low gets counted and ordered, tracked in Tasks.",
         ["Tasks for supplies"]),
+    # Kevin, 2026-11-13: "have it where the admins can give them out whoever
+    # the church consider there main admin … Naiya would the one who gives out
+    # the emails to others". The owner and every Admin hold it too.
+    "church_email": _duty(
+        "Church email addresses", "office", ["office_leadership"], "as needed",
+        "Give each new admin and leader their church email address through Chief, point role addresses like "
+        "prayer@ at the right role, and take one back when someone leaves.",
+        ["Church email addresses, through Chief", "Email Setup"]),
     # People & Care
     "first_guests": _duty(
         "First-time guests and welcome calls", "people_care", ["people_care"], "Mon",

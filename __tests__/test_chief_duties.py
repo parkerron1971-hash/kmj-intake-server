@@ -322,7 +322,8 @@ def test_a_church_login_is_told_its_jobs(church, monkeypatch):
     assert line.startswith("Their jobs here: The front desk; The Monday leaders note; Meetings and minutes; "
                            "Decisions to done; The weekly text and email; The church calendar; Rooms; "
                            "The building and safety; Records, files and policies; Chat rules; "
-                           "The leaders list and department sheet; Welcoming new leaders; Supplies. "
+                           "The leaders list and department sheet; Welcoming new leaders; Supplies; "
+                           "Church email addresses. "
                            "Any other duty is someone else's")
     for uid in (OWNER, ADMIN, STRANGER):
         assert chd.jobs_line(BIZ, uid) is None, uid

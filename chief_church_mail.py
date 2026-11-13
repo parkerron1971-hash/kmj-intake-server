@@ -14,9 +14,13 @@ about it … can we build what is needed so this can go live right away?"
     give_church_email ......... write. Make an address or point one somewhere
                                 new: a login, a leader, a role (it follows
                                 whoever holds it), the prayer list, the office
-                                box, or an outside address. The owner or an
-                                Admin only. The person gets one note naming
-                                their address once mail reaches the system.
+                                box, or an outside address. The owner, an
+                                Admin, or whoever holds the church's "Church
+                                email addresses" duty (church_duties; the
+                                Office & Leadership lane's by default, so
+                                Love City's main admin, Naiya). The person gets
+                                one note naming their address once mail
+                                reaches the system.
     take_back_church_email .... write. Turn an address off; its mail goes to
                                 the office box and its history is kept.
     switch_on_church_mail ..... write. The owner's: turn on receiving for the
@@ -67,6 +71,28 @@ def _role(business_id: str, uid: str) -> Optional[str]:
     return role_of(business_id, uid)
 
 
+DUTY = "church_email"
+
+
+def _may_give(business_id: str, uid: str) -> Optional[str]:
+    """None when this login may give out and take back addresses, else what
+    to tell them: the owner and Admins always, a Manager when it holds the
+    church email duty (Kevin, 2026-11-13: "whoever the church consider there
+    main admin"). A failed read is a no, said plainly."""
+    role = _role(business_id, uid)
+    if role in _GIVERS:
+        return None
+    if role != "manager":
+        return "only the pastor, an Admin, or whoever gives out the church's email can do that"
+    try:
+        import church_duties
+        if DUTY in church_duties.standing(business_id, uid)["duties"]:
+            return None
+        return church_duties.refusal(business_id, DUTY)
+    except Exception:  # noqa: BLE001 — a failed read is never a yes
+        return "who gives out the church's email couldn't be checked just now; try again in a moment"
+
+
 def _switch_line(domain: str, live: Optional[bool]) -> str:
     if live:
         return f"Mail to @{domain} reaches the system now."
@@ -84,7 +110,7 @@ async def handle_church_email(client, biz, action) -> Dict[str, Any]:
     role = await asyncio.to_thread(_role, business_id, uid)
     if role is None:
         return _fail("church_email", "church email is read for a signed-in login of this church")
-    full = role in _GIVERS
+    full = role in _GIVERS or (await asyncio.to_thread(_may_give, business_id, uid)) is None
     try:
         d = await asyncio.to_thread(church_mail.directory, biz, full=full)
     except church_mail.Unavailable:
@@ -129,9 +155,9 @@ async def handle_give_church_email(client, biz, action) -> Dict[str, Any]:
     if not business_id:
         return _fail("give_church_email", "no business on record")
     uid = _caller()
-    role = await asyncio.to_thread(_role, business_id, uid)
-    if role not in _GIVERS:
-        return _fail("give_church_email", "only the pastor or an Admin can give out church email addresses")
+    why = await asyncio.to_thread(_may_give, business_id, uid)
+    if why:
+        return _fail("give_church_email", why)
     address = str(action.get("address") or "")
     to = str(action.get("to") or action.get("for") or "")
     share = action.get("share_with") or []
@@ -175,9 +201,9 @@ async def handle_take_back_church_email(client, biz, action) -> Dict[str, Any]:
     business_id = str(biz.get("id") or "")
     if not business_id:
         return _fail("take_back_church_email", "no business on record")
-    role = await asyncio.to_thread(_role, business_id, _caller())
-    if role not in _GIVERS:
-        return _fail("take_back_church_email", "only the pastor or an Admin can take back a church address")
+    why = await asyncio.to_thread(_may_give, business_id, _caller())
+    if why:
+        return _fail("take_back_church_email", why)
     try:
         got = await asyncio.to_thread(church_mail.take_back, biz, str(action.get("address") or ""))
     except ValueError as e:
