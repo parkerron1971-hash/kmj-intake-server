@@ -185,6 +185,13 @@ def status_sync(business_id: str, action: Dict[str, Any]) -> Dict[str, Any]:
             bits.append(f"Lines: {_lines_of(item)}.")
         if item.get("files"):
             bits.append("Takes files, which they add on the page.")
+        # What the room itself says the thing is for, while it is still to
+        # do: a pastor asks "what is a safety officer?" and the answer has
+        # to be the room's, not a guess.
+        if shown["state"] not in mi.SETTLED:
+            bits.append(f"What's asked: {item['ask']}")
+            if item.get("why"):
+                bits.append(f"Why it's needed: {item['why']}")
         lines.append(" ".join(bits))
     nxt = _next(room["items"])
     lines.append(f"Next: {nxt['title']}." if nxt else "Everything is in. We look each one over and mark it checked.")
@@ -195,7 +202,9 @@ def status_sync(business_id: str, action: Dict[str, Any]) -> Dict[str, Any]:
                 "Say where the move stands from this, by each item's name, and what's next"
                 + (f" ({left} still to do)" if left else "") + ". To save what they tell you, fill_move_in with "
                 "the item's key and its lines by key. It saves a draft: they open Move-in, read it over and press "
-                "Hand in themselves. You can't hand in, add a file, or set up giving; say so and open the page.")}
+                "Hand in themselves. You can't hand in, add a file, or set up giving; say so and open the page. "
+                "If they ask what a thing is or why it's needed, answer from its \"Why it's needed\" line, in "
+                "your own words, and promise nothing it doesn't say.")}
 
 
 async def handle_move_in_status(client, biz, action) -> Dict[str, Any]:
