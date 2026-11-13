@@ -649,3 +649,42 @@ def test_names_that_cant_be_read_fall_back_to_the_church_office(db, monkeypatch)
     monkeypatch.setattr(church_my_week, "people", down)
     _t(db, T_SOON)["handed_by"] = SARAH
     assert {i["from"] for i in clt.mine(CHURCH, RAY, NOW)["open"]} == {"the church office"}
+
+
+# ─── Someone who no longer leads (Kevin, 2026-11-11) ──────────────────
+
+def _drop_roles(db, who):
+    db.t["church_leader_roles"] = [r for r in db.t["church_leader_roles"] if r["contact_id"] != who]
+
+
+def test_a_leader_out_of_the_room_gets_their_open_tasks_sent_back_to_whoever_handed_them(db):
+    _t(db, T_SOON)["handed_by"] = OWNER
+    _drop_roles(db, RAY)
+    out = clt.return_tasks(BIZ, [RAY])
+    assert out == {"returned": 3, "failed": 0}
+    assert _t(db, T_SOON)["assigned_contact_id"] is None and _t(db, T_SOON)["assigned_to"] == OWNER
+    assert _t(db, T_LATE)["assigned_contact_id"] is None and _t(db, T_LATE)["assigned_to"] is None
+    assert _t(db, T_DONE)["assigned_contact_id"] == RAY, "a done task stays their record"
+    assert _t(db, T_OTHER)["assigned_contact_id"] == RAY, "another church's task is never touched"
+
+
+def test_someone_still_in_the_room_keeps_their_tasks(db):
+    assert clt.return_tasks(BIZ, [RAY, TASHA]) == {"returned": 0, "failed": 0}, "a role, and a group they lead"
+    assert _t(db, T_TASHA)["assigned_contact_id"] == TASHA
+
+
+def test_a_room_that_cannot_be_read_moves_nothing(db, monkeypatch):
+    import member_portal_messaging as mpm
+    _drop_roles(db, RAY)
+    monkeypatch.setattr(mpm, "leaders_room_people", lambda b: None)
+    assert clt.return_tasks(BIZ, [RAY]) == {"returned": 0, "failed": 1}
+    assert _t(db, T_SOON)["assigned_contact_id"] == RAY
+
+
+def test_the_hourly_sweep_sends_back_a_former_leaders_tasks_however_they_lost_the_role(db):
+    _drop_roles(db, RAY)
+    stats = clt.sweep_tick(NOW)
+    # Three at Love City, and the made-up Grace Chapel task: Ray leads nothing there either.
+    assert stats["returned"] == 4 and stats["late"] == 0, "nothing goes up for a task no longer theirs"
+    assert _t(db, T_TASHA)["assigned_contact_id"] == TASHA
+    assert clt.sweep_tick(NOW)["returned"] == 0, "once"
