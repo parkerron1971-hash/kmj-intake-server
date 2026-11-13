@@ -123,8 +123,19 @@ jobs:
           name: design-acceptance-report
           path: acceptance-report.json
 
-  test:
+  # The suite runs as four parts side by side (Kevin, 2026-11-13: agents were
+  # waiting on each other's 20-minute runs to merge). scripts/shard_tests.py
+  # gives each part its test files, each file in exactly one part, weighed by
+  # its number of tests. The database checks run beside them. The job named
+  # `test` below is the one the main branch's rule requires: it passes only
+  # when every part and the database checks passed.
+  test-part:
+    name: test part ${{ matrix.part }} of 4
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        part: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v4
 
@@ -139,17 +150,28 @@ jobs:
           pip install -r requirements.txt
 
       - name: Byte-compile all modules (fast syntax gate)
+        if: matrix.part == 1
         run: python -m compileall -q . -x '(\.bak|__pycache__)'
 
-      - name: Run test suite
+      - name: Run this part of the test suite
         # Controller fixtures use real Chromium with local route responses only.
         # No supplier, model or paid service is contacted.
         # One worker per core; each test file stays on one worker, so its
         # module fixtures build once and its tests keep their order.
         run: |
+          python scripts/shard_tests.py --check
           python -m playwright install --with-deps chromium
-          pytest -q -n auto --dist loadfile __tests__ agents --maxfail=10 --durations=10
-          python scripts/chief_computer_sabotage.py
+          pytest -q -n auto --dist loadfile $(python scripts/shard_tests.py ${{ matrix.part }} 4) --maxfail=10 --durations=10
+
+      - name: Chief computer sabotage check
+        if: matrix.part == 1
+        run: python scripts/chief_computer_sabotage.py
+
+  test-db:
+    name: test database checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
@@ -243,3 +265,17 @@ jobs:
           node __tests__/church_map_step2_db.mjs
           node __tests__/church_map_asks_db.mjs
           node __tests__/church_map_asks_cap_db.mjs
+
+  # The check the main branch's rule requires. It waits for every part and
+  # the database checks, and passes only when all of them passed: a part
+  # that failed, was cancelled or never ran fails it.
+  test:
+    needs: [test-part, test-db]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every part and the database checks passed
+        run: |
+          echo "test parts: ${{ needs.test-part.result }} · database checks: ${{ needs.test-db.result }}"
+          test "${{ needs.test-part.result }}" = "success"
+          test "${{ needs.test-db.result }}" = "success"
