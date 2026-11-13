@@ -141,7 +141,8 @@ def test_the_status_names_every_item_and_whats_next(db, as_):
     assert not got.get("failed") and got["label"] == "The move · 0 of 11 in"
     text = got["result"]
     assert text.startswith("Grace Hill Church's move: 0 of 11 are in")
-    for n, it in enumerate(mi.ITEMS, start=1):
+    # Texting is off the list while registration is closed for the church.
+    for n, it in enumerate([i for i in mi.ITEMS if i["key"] != "texting"], start=1):
         assert f"{n}. {it['title']} ({it['key']}):" in text
     assert "(owner): Started. Has: Their name: Ada Hill." in text
     assert "Before it can be handed in: Fill in at least one line first." in text
@@ -264,3 +265,16 @@ def test_the_undo_puts_the_items_lines_back(db, as_):
     # Back to nothing at all is a real undo too.
     first = run(cmi.handle_undo_move_in_fill, {"item": "owner", "answers": {}})
     assert not first.get("failed") and item(room(), "owner")["answers"] == {}
+
+
+def test_chief_reads_where_texting_stands_and_never_types_into_it(db, as_, monkeypatch):
+    as_("office")
+    monkeypatch.setenv("TEXTING_REGISTRATION_OPEN", BIZ)
+    text = status()["result"]
+    assert "2. Set up texting (texting): Not started." in text
+    assert "Not sent yet; only the account owner can send it" in text
+    db.t["texting_registrations"].append({"business_id": BIZ, "answers": {"legal_name": "Grace Hill"},
+                                          "status": "campaign_pending", "twilio": {}, "failure": None})
+    text = status()["result"]
+    assert "(texting): With the phone companies." in text and "Texts keep going out meanwhile." in text
+    assert "phone companies approve it" in fill("texting", {"x": 1})["result"]

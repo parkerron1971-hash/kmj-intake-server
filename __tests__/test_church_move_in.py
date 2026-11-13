@@ -48,6 +48,8 @@ from test_church_roles import FakeDB  # noqa: E402
 BIZ = "11111111-1111-4111-8111-111111111111"
 OTHER = "22222222-2222-4222-8222-222222222222"
 SALON = "33333333-3333-4333-8333-333333333333"
+# What a church sees while texting registration is closed for it: the eleven.
+SHOWN = [i["key"] for i in mi.ITEMS if i["key"] != "texting"]
 NAMES = ("owner", "admin", "office", "singer", "viewer", "stranger", "other_owner", "kevin")
 PEOPLE = {n: AuthedUser(id=f"00000000-0000-4000-8000-{i:012d}", email=f"{n}@gracehill.org", role="authenticated")
           for i, n in enumerate(NAMES, start=1)}
@@ -100,6 +102,7 @@ def db(monkeypatch):
                         for n, r in (("admin", "admin"), ("office", "member"), ("singer", "member"),
                                      ("viewer", "viewer"))],
         business_collaborators=[], contacts=[], church_move_items=[], church_move_files=[], support_tickets=[],
+        texting_registrations=[],
     )
     fake.missing = False
     for name in ("get", "post", "patch"):
@@ -107,6 +110,7 @@ def db(monkeypatch):
     monkeypatch.setattr(sb_clients, "sb_delete_as_service", fake.remove)
     monkeypatch.setattr(sb_clients, "sb_count_as_service", lambda path: len(fake.get(path)))
     monkeypatch.setenv("CHURCH_MOVE_IN", "on")
+    monkeypatch.delenv("TEXTING_REGISTRATION_OPEN", raising=False)   # texting hidden unless a test opens it
     monkeypatch.setenv("CHURCH_AREAS", "on")
     monkeypatch.setenv("PLATFORM_OWNER_EMAIL", "kevin@solutionist.test")
     monkeypatch.setattr(lead_admin, "PLATFORM_OWNER_EMAIL", "kevin@solutionist.test")
@@ -199,7 +203,7 @@ def test_the_owner_admins_and_office_logins_get_in(db):
 def test_the_move_is_finished_when_every_thing_is_checked_and_giving_is_live(db):
     """The menu lets the room go only then. Handed in is not finished: it
     can still come back needing a change."""
-    keys = [i["key"] for i in mi.ITEMS if i.get("live") != "giving"]
+    keys = [i["key"] for i in mi.ITEMS if i.get("live") not in mi.FOLLOWS]
     for k in keys:
         db.t["church_move_items"].append({"business_id": BIZ, "item": k, "state": "checked", "answers": {"x": "y"},
                                           "note": None, "handed_in_at": "2026-11-12T00:00:00Z", "handed_in_by": None,
@@ -215,7 +219,7 @@ def test_the_move_is_finished_when_every_thing_is_checked_and_giving_is_live(db)
 
 
 def _finish(db):
-    for k in [i["key"] for i in mi.ITEMS if i.get("live") != "giving"]:
+    for k in [i["key"] for i in mi.ITEMS if i.get("live") not in mi.FOLLOWS]:
         db.t["church_move_items"].append({"business_id": BIZ, "item": k, "state": "checked", "answers": {"x": "y"},
                                           "note": None, "handed_in_at": "2026-11-12T00:00:00Z", "handed_in_by": None,
                                           "checked_at": "2026-11-12T00:00:00Z", "updated_at": "2026-11-12T00:00:00Z"})
@@ -234,8 +238,8 @@ def test_a_finished_move_remembers_the_day_the_church_first_saw_it(db, monkeypat
     kept = [r for r in db.t["church_move_items"] if r["item"] == mi.MOVED_IN]
     assert len(kept) == 1
     # The row is not a thing to hand in: the list is still the eleven, and the platform's count is unmoved.
-    assert [i["key"] for i in room("owner")["items"]] == [i["key"] for i in mi.ITEMS]
-    assert room("owner")["progress"] == {"settled": len(mi.ITEMS), "total": len(mi.ITEMS)}
+    assert [i["key"] for i in room("owner")["items"]] == SHOWN
+    assert room("owner")["progress"] == {"settled": len(SHOWN), "total": len(SHOWN)}
     assert client("owner").post(f"/church/move-in/{mi.MOVED_IN}/hand-in", json={"business_id": BIZ}).status_code == 404
 
 
@@ -299,7 +303,7 @@ def test_every_need_names_a_field_the_item_has():
         elif need == "any":
             assert keys, it["key"]
         else:
-            assert it.get("live") == "giving", it["key"]
+            assert it.get("live") in mi.FOLLOWS, it["key"]
 
 
 # ─── 4. answers ───────────────────────────────────────────────────────
@@ -542,7 +546,7 @@ def test_the_last_hand_in_opens_one_ticket_with_nothing_private_in_it(db):
     save("owner", "sunday", {"services": [{"day": "Sunday", "time": "10:00 AM"}]})
     upload("owner", "look", "logo.png", picture())
     save("owner", "room", {"wifi": "Yes, it reaches the seats."})
-    keys = [k for k in mi.ITEM if k != "giving"]
+    keys = [k for k in mi.ITEM if mi.ITEM[k].get("live") not in mi.FOLLOWS]
     for key in keys[:-1]:
         assert hand_in("owner", key).status_code == 200, key
     assert db.t["support_tickets"] == []
@@ -552,3 +556,88 @@ def test_the_last_hand_in_opens_one_ticket_with_nothing_private_in_it(db):
     assert ticket["subject"] == "MOVE-IN: Grace Hill Church has handed in everything"
     assert ticket["context"] == {"kind": "church_move_in"} and "Ada" not in ticket["message"]
     assert len(db.mail) == len(keys)
+
+
+# ─── texting (2026-11-13) ─────────────────────────────────────────────
+
+def _reg(db, **row):
+    db.t["texting_registrations"][:] = [{"business_id": BIZ, "answers": {}, "status": "draft", "twilio": {},
+                                         "failure": None, **row}]
+
+
+def test_texting_shows_second_only_where_registration_is_open(db, monkeypatch):
+    assert "texting" not in [i["key"] for i in room()["items"]]               # closed: no step it can't take
+    monkeypatch.setenv("TEXTING_REGISTRATION_OPEN", BIZ)
+    page = room()
+    assert [i["key"] for i in page["items"]][:3] == ["giving", "texting", "people"]
+    assert page["progress"] == {"settled": 0, "total": 12}
+    t = item(page, "texting")
+    assert t["urgent"] and t["state"] == "todo" and t["state_words"] == "Not started"
+    assert t["hand_in"] is None and t["fields"] == [] and t["files"] is None
+    assert t["door"] == {"label": "Open texting setup",
+                         "nav": {"tab": "operate", "sub": "sms", "open": "texting-registration"}}
+    assert "Only the account owner can send it." in t["ask"] and "two weeks" in t["why"]
+    monkeypatch.setenv("TEXTING_REGISTRATION_OPEN", OTHER)                    # open for another church only
+    assert "texting" not in [i["key"] for i in room()["items"]]
+    _reg(db, status="submitted")                                              # begun: it stays on the list
+    assert item(room(), "texting")["state"] == "waiting"
+
+
+def test_texting_follows_the_registration(db, monkeypatch):
+    monkeypatch.setenv("TEXTING_REGISTRATION_OPEN", "*")
+    _reg(db)                                                                  # a row with nothing in it
+    assert item(room(), "texting")["state"] == "todo"
+    _reg(db, answers={"legal_name": "Grace Hill Church"})
+    assert item(room(), "texting")["state"] == "started"
+    for status_ in ("submitted", "brand_pending", "campaign_pending"):
+        _reg(db, status=status_)
+        page = room()
+        t = item(page, "texting")
+        assert t["state"] == "waiting" and t["state_words"] == "With the phone companies", status_
+        assert page["progress"]["settled"] == 1                               # sent is the church's part done
+    _reg(db, status="failed", failure="The sample texts must name the church.")
+    t = item(room(), "texting")
+    assert t["state"] == "needs" and t["note"] == "The sample texts must name the church."
+    _reg(db, status="approved")
+    t = item(room(), "texting")
+    assert t["state"] == "done" and t["state_words"] == "Done" and t["live"]["ready"] is True
+
+
+def test_texting_has_nothing_to_hand_in_or_mark(db, monkeypatch):
+    monkeypatch.setenv("TEXTING_REGISTRATION_OPEN", "*")
+    got = hand_in("owner", "texting")
+    assert got.status_code == 400 and "phone companies approve" in got.json()["detail"]
+    got = client("kevin").post(f"/platform/move-in/{BIZ}/texting", json={"state": "checked"})
+    assert got.status_code == 400 and "phone companies" in got.json()["detail"]
+    assert [r for r in db.t["church_move_items"] if r["item"] == "texting"] == []
+
+
+def test_waiting_on_the_phone_companies_doesnt_hold_the_move_open(db, monkeypatch):
+    _finish(db)
+    assert status("owner")["finished"] is True                                # closed: texting isn't on the list
+    monkeypatch.setenv("TEXTING_REGISTRATION_OPEN", BIZ)
+    assert status("owner")["finished"] is False                               # open and not sent: still to do
+    _reg(db, status="campaign_pending")
+    assert status("owner")["finished"] is True                                # sent: the church's part is done
+    _reg(db, status="failed", failure="x")
+    assert status("owner")["finished"] is False
+
+
+def test_a_registration_that_cant_be_read_is_never_a_guess(db, monkeypatch):
+    def broken(bid):
+        raise RuntimeError("read failed")
+    import texting_registration
+    monkeypatch.setattr(texting_registration, "registration", broken)
+    assert "texting" not in [i["key"] for i in room()["items"]]               # closed and unknown: hidden
+    monkeypatch.setenv("TEXTING_REGISTRATION_OPEN", BIZ)
+    t = item(room(), "texting")
+    assert t["state"] == "todo" and t["live"]["status"] is None               # open: shown, never "done"
+
+
+def test_the_platform_list_counts_texting_where_it_shows(db, monkeypatch):
+    save("owner", "owner", {"name": "Ada Hill"})
+    hand_in("owner", "owner")
+    total = lambda: client("kevin").get("/platform/move-in").json()["churches"][0]["total"]  # noqa: E731
+    assert total() == 11
+    monkeypatch.setenv("TEXTING_REGISTRATION_OPEN", BIZ)
+    assert total() == 12
