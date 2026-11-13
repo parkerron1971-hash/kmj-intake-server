@@ -464,6 +464,51 @@ def mark_done(business_id: Any, contact_id: Any, task_id: Any, now: Optional[dat
     raise HTTPException(404, NOT_YOURS)
 
 
+# ─── Someone who no longer leads ──────────────────────────────────────
+
+def return_tasks(business_id: Any, contact_ids: Iterable[Any]) -> Dict[str, int]:
+    """Open tasks handed to these people go back to whoever handed them out
+    (tasks.handed_by; the office's list when no one is named) once they're
+    out of the All group leaders room: someone outside it can't be handed a
+    task or reach a Lead tab, so a task left with them would sit unseen
+    (Kevin, 2026-11-11: "if a person is removed automatically the emails etc
+    is as well with no problems"). Still in the room, a group leader say,
+    they keep them. A room that couldn't be read moves nothing; each write
+    moves a task only while it is still theirs, and one that didn't save is
+    counted as failed for the next sweep."""
+    b = str(business_id)
+    out = {"returned": 0, "failed": 0}
+    ids = sorted({str(c) for c in contact_ids if c})
+    if not ids:
+        return out
+    import member_portal_messaging as mpm
+    room = mpm.leaders_room_people(b)
+    if room is None:
+        out["failed"] += 1
+        return out
+    inside = {str(p.get("contact_id")) for p in room if p.get("contact_id")}
+    away = [c for c in ids if c not in inside]
+    for chunk in _chunks(away):
+        rows = _rows(f"/tasks?business_id=eq.{_q(b)}&assigned_contact_id=in.({','.join(_q(i) for i in chunk)})"
+                     f"&status=neq.done&select=id,assigned_contact_id,handed_by&limit={SWEEP_MAX}")
+        if rows is None:
+            out["failed"] += 1
+            continue
+        for t in rows:
+            saved = sb_clients.sb_patch_as_service(
+                f"/tasks?id=eq.{_q(t['id'])}&business_id=eq.{_q(b)}"
+                f"&assigned_contact_id=eq.{_q(t['assigned_contact_id'])}&status=neq.done",
+                {"assigned_contact_id": None, "assigned_to": t.get("handed_by") or None})
+            if isinstance(saved, list) and saved:
+                out["returned"] += 1
+            else:
+                out["failed"] += 1
+    if out["returned"] or out["failed"]:
+        logger.info("leader tasks: %d back from a former leader, %d left for the sweep (business %s)",
+                    out["returned"], out["failed"], b[:8])
+    return out
+
+
 # ─── Telling people: the hourly sweep ─────────────────────────────────
 
 def _tasks_link(biz_id: str) -> str:
@@ -829,14 +874,29 @@ def sweep_tick(now: Optional[datetime] = None) -> Dict[str, int]:
     for kind, rows in (("fresh", fresh), ("late", late)):
         for r in rows:
             work.setdefault(str(r.get("business_id")), {"fresh": [], "late": []})[kind].append(r)
-    if not work:
+    # Every open leader task's leader, so one who has left the leaders room
+    # (their last role taken away, however it went) gets nothing stuck.
+    held: Dict[str, set] = {}
+    for r in _rows(f"/tasks?assigned_contact_id=not.is.null&status=neq.done"
+                   f"&select=business_id,assigned_contact_id&limit={SWEEP_MAX}") or []:
+        held.setdefault(str(r.get("business_id")), set()).add(str(r.get("assigned_contact_id")))
+    stats["returned"] = 0
+    if not work and not held:
         return stats
     bizs: Dict[str, Dict[str, Any]] = {}
-    for chunk in _chunks(work):
+    for chunk in _chunks(set(work) | set(held)):
         for x in _rows(f"/businesses?id=in.({','.join(_q(i) for i in chunk)})"
                        "&select=id,name,type,settings,owner_id&limit=100") or []:
             bizs[str(x["id"])] = x
     import church_follow_up as cfu
+    for b in held:
+        biz = bizs.get(b)
+        if not biz or not cfu.is_church(biz) or not church_open(b):
+            continue
+        try:
+            stats["returned"] += return_tasks(b, held[b])["returned"]
+        except Exception:
+            logger.warning("leader tasks: hand-back sweep failed for business %s", b[:8], exc_info=True)
     for b, todo in work.items():
         biz = bizs.get(b)
         if not biz or not cfu.is_church(biz) or not church_open(b):

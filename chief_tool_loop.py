@@ -230,6 +230,8 @@ def read_tool_definitions() -> List[Dict[str, Any]]:
     out += list(chief_church_jobs.TOOLS)  # whose job it is, someone's job, a draft: the same
     import chief_move_in
     out += [chief_move_in.TOOL]  # a new church's move: the same
+    import chief_church_mail
+    out += [chief_church_mail.TOOL]  # a church's own addresses: the same
     import chief_map
     out += [chief_map.LIST_TOOL, chief_map.SEARCH_TOOL]  # a church's leaders map and the ready-mades: the same
     import church_map_asks
@@ -423,7 +425,7 @@ def _shrink(result: Any) -> str:
         from chief_responsibilities import REPORT_MAX_RESULT_CHARS
         limit = REPORT_MAX_RESULT_CHARS
     if isinstance(result, dict) and result.get('type') in ('list_duties', 'list_map', 'my_work', 'list_asks',
-                                                           'move_in_status', 'whose_job', 'job_of',
+                                                           'move_in_status', 'church_email', 'whose_job', 'job_of',
                                                            'draft_job_description'):
         # Every duty and who does it (every department and role); cut short,
         # the model would guess at whose job the missing ones are. The job
@@ -480,7 +482,7 @@ async def execute_tool_use(client, biz: Dict[str, Any],
                                               "giving_deposits", "expense_categories", "bills",
                                               "giving_counts", "list_duties", "list_map",
                                               "search_templates", "my_work", "list_asks",
-                                              "move_in_status", "people_under", "assignments_of",
+                                              "move_in_status", "people_under", "assignments_of", "church_email",
                                               "one_on_one", "whose_job", "job_of",
                                               "draft_job_description")):
         return True, (f"'{name}' is not a mid-turn lookup. Reads only here; "

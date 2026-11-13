@@ -201,7 +201,8 @@ def test_the_owner_does_every_job_by_day(client):
     assert _item(r, "meetings")["when"] == "Once a month, on a Tuesday"
     assert _item(r, "monthly_report")["when"] == "The first Monday of the month"
     assert [i["key"] for i in _day(r, "any")["items"]] == [
-        "chat_rules", "leaders_list", "new_leaders", "supplies", "help_requests", "member_records", "new_volunteers",
+        "chat_rules", "leaders_list", "new_leaders", "supplies", "church_email", "help_requests", "member_records",
+        "new_volunteers",
         "churchsavvy_team", "website", "store"]
     one = _item(r, "rooms")
     assert one["label"] == "Rooms" and one["does"] == cd.CATALOG["rooms"]["does"] and one["door"]["id"] == "spaces"

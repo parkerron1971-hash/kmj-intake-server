@@ -525,6 +525,18 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
     # Kevin, 2026-11-01: "give chief the ability to make adjustment and help the churches make
     # adjustments like these": a church's duties (chief_duties). Each needs the signed-in person
     # (an owner or an admin moves one), so Chief's alone: an outside agent carries no turn.
+    # Church email (chief_church_mail, Kevin 2026-11-11/13): a church's own @domain addresses. Each needs
+    # the signed-in person (the pastor or an Admin gives them out), so Chief's alone.
+    "church_email": {**_r("reads the church's own email addresses and who each reaches now (names; for the "
+                          "pastor or an Admin, forward addresses and who has none yet); never a message",
+                          sensitive=True), "chief_only": True},
+    "give_church_email": {**_w("C", "makes or re-points one church address (church_mailboxes) and may email the "
+                               "person a note naming it; take_back_church_email turns it off"), "chief_only": True},
+    "take_back_church_email": {**_w("A", "turns one church address off (its mail goes to the office box, its "
+                                    "history is kept); give_church_email makes it again"), "chief_only": True},
+    "switch_on_church_mail": {**_w("C", "turns on receiving for the church's verified domain at Resend and asks it "
+                                   "to check the MX record; mail only moves when the owner changes the MX at the "
+                                   "DNS host, and putting the old MX back moves it back"), "chief_only": True},
     "move_in_status": {**_r("reads a new church's move: the eleven things it hands in, where each stands, what "
                             "each still needs and what its people typed (names, emails, numbers); the signed-in "
                             "person's own room, so Chief's alone", sensitive=True), "chief_only": True},

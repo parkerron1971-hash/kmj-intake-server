@@ -73,6 +73,9 @@ def _split(s: str):
 
 
 def _cmp(row, col, op, val):
+    if op == "not":
+        sub_op, _, sub_val = val.partition(".")
+        return not _cmp(row, col, sub_op, sub_val)
     v = row.get(col)
     if op == "is":
         return v is None if val == "null" else str(v).lower() == val
@@ -540,7 +543,7 @@ def test_a_sweep_that_cannot_read_the_roles_sends_nothing(db, outbox, monkeypatc
 def test_removing_a_leaders_last_role_returns_their_people_to_the_office(db, outbox):
     f = _open(db)
     tasha_role = next(r for r in db.t["church_leader_roles"] if r["contact_id"] == TASHA)
-    assert cfu.remove_role(BIZ, tasha_role["id"]) == {"returned": 1, "prayer_returned": 0}
+    assert cfu.remove_role(BIZ, tasha_role["id"]) == {"returned": 1, "prayer_returned": 0, "tasks_returned": 0, "failed": 0}
     row = cfu._one(BIZ, f["id"])
     assert row["leader_contact_id"] is None and row["leader_told_at"] is None
     assert "no longer leads" in row["reason"]
@@ -688,3 +691,88 @@ def test_a_history_line_that_fails_never_stops_a_hand_off(db, outbox, monkeypatc
     assert f and f["leader_contact_id"] == TASHA
     asyncio.run(cfu.sweep())
     assert len(outbox["email"]) == 1 and db.t["church_follow_ups"][0].get("leader_told_at")
+
+
+# ─── A role taken away takes its work with it (Kevin, 2026-11-11) ─────
+
+def _prayer(db, leader, role, prayed=False):
+    row = {"id": str(uuid.uuid4()), "business_id": BIZ, "contact_id": DANA, "prayer_team": True,
+           "needs_pastor": False, "leader_contact_id": leader, "leader_role": role,
+           "leader_prayed_at": "2026-11-10T12:00:00+00:00" if prayed else None,
+           "leader_told_at": "2026-11-10T12:00:00+00:00", "leader_due_at": "2026-11-11T12:00:00+00:00",
+           "leader_late_level": 0}
+    db.t.setdefault("ministry_care_requests", []).append(row)
+    return row
+
+
+def test_a_role_taken_away_takes_its_prayer_even_while_they_lead_something_else(db, outbox):
+    f = _open(db)                                            # Tasha's, through team_leader
+    db.t["church_leader_roles"].append(_role(TASHA, "intercessor_leader"))
+    p = _prayer(db, TASHA, "intercessor_leader")
+    done = _prayer(db, TASHA, "intercessor_leader", prayed=True)
+    held = next(r for r in db.t["church_leader_roles"] if r["contact_id"] == TASHA and r["role"] == "intercessor_leader")
+    out = cfu.remove_role(BIZ, held["id"])
+    assert out == {"returned": 0, "prayer_returned": 1, "tasks_returned": 0, "failed": 0}
+    assert p["leader_contact_id"] is None and p["leader_role"] == "" and p["leader_due_at"] is None
+    assert done["leader_contact_id"] == TASHA, "a prayer she already prayed over stays her record"
+    assert cfu._one(BIZ, f["id"])["leader_contact_id"] == TASHA, "her team's card stays with her"
+
+
+def test_the_same_role_on_another_team_keeps_its_work(db, outbox):
+    f = _open(db)
+    db.t["church_leader_roles"].append(_role(TASHA, "team_leader", "Youth Ministry (YWD)"))
+    youth = next(r for r in db.t["church_leader_roles"] if r["scope"] == "Youth Ministry (YWD)")
+    assert cfu.remove_role(BIZ, youth["id"])["returned"] == 0
+    assert cfu._one(BIZ, f["id"])["leader_contact_id"] == TASHA, "work is told apart by role, not team"
+
+
+def test_a_last_role_taken_away_sends_back_their_tasks_too(db, outbox, monkeypatch):
+    import church_leader_tasks as clt
+    asked = []
+    monkeypatch.setattr(clt, "return_tasks", lambda b, ids: asked.append((b, list(ids))) or {"returned": 2, "failed": 0})
+    tasha_role = next(r for r in db.t["church_leader_roles"] if r["contact_id"] == TASHA)
+    assert cfu.remove_role(BIZ, tasha_role["id"])["tasks_returned"] == 2
+    assert asked == [(BIZ, [TASHA])]
+    db.t["church_leader_roles"].append(_role(TASHA, "team_leader", "Hospitality Team"))
+    db.t["church_leader_roles"].append(_role(TASHA, "intercessor_leader"))
+    asked.clear()
+    held = next(r for r in db.t["church_leader_roles"] if r["contact_id"] == TASHA and r["role"] == "intercessor_leader")
+    cfu.remove_role(BIZ, held["id"])
+    assert asked == [], "still leading a team: her tasks stay"
+
+
+def test_a_hand_back_that_didnt_save_is_never_counted_and_the_sweep_finishes_it(db, outbox, monkeypatch):
+    f = _open(db)
+    real = db.patch
+    monkeypatch.setattr(sb_clients, "sb_patch_as_service",
+                        lambda path, body, **kw: None if path.startswith("/church_follow_ups") else real(path, body, **kw))
+    tasha_role = next(r for r in db.t["church_leader_roles"] if r["contact_id"] == TASHA)
+    out = cfu.remove_role(BIZ, tasha_role["id"])
+    assert out["returned"] == 0 and out["failed"] == 1
+    assert cfu._one(BIZ, f["id"])["leader_contact_id"] == TASHA
+    monkeypatch.setattr(sb_clients, "sb_patch_as_service", real)
+    asyncio.run(cfu.sweep())
+    row = cfu._one(BIZ, f["id"])
+    assert row["leader_contact_id"] is None and "no longer leads" in row["reason"]
+
+
+def test_the_sweep_returns_whatever_a_former_leader_still_holds_however_they_lost_it(db, outbox):
+    f = _open(db)
+    visit = _open(db, VISIT, MARCUS, sunday="Nov 15")         # Robert's, through welcome_lead
+    stray = _prayer(db, ROBERT, "intercessor_leader")         # a role Robert doesn't hold
+    # Tasha's record went another way than Leaders & roles: her role row is simply gone.
+    db.t["church_leader_roles"] = [r for r in db.t["church_leader_roles"] if r["contact_id"] != TASHA]
+    asyncio.run(cfu.sweep())
+    assert cfu._one(BIZ, f["id"])["leader_contact_id"] is None
+    assert stray["leader_contact_id"] is None, "prayer through a role he doesn't hold goes back"
+    assert cfu._one(BIZ, visit["id"])["leader_contact_id"] == ROBERT, "his welcome card stays"
+
+
+def test_a_sweep_that_cannot_read_a_churchs_roles_returns_nothing(db, outbox, monkeypatch):
+    f = _open(db)
+    db.t["church_leader_roles"] = [r for r in db.t["church_leader_roles"] if r["contact_id"] != TASHA]
+    real = db.get
+    monkeypatch.setattr(sb_clients, "sb_get_as_service",
+                        lambda path, **kw: None if path.startswith("/church_leader_roles") else real(path, **kw))
+    assert asyncio.run(cfu._sweep_handed()) == 0
+    assert cfu._one(BIZ, f["id"])["leader_contact_id"] == TASHA, "a failed read is never 'nobody holds anything'"
