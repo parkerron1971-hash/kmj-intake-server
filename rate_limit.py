@@ -30,6 +30,10 @@ _LIMITS: Dict[str, Tuple[int, int]] = {
     "business_marketing_engine": (int(os.environ.get("RL_BUSINESS_MARKETING_ENGINE_PER_HOUR", "6")), 3600),
     "business_learning": (int(os.environ.get("RL_BUSINESS_LEARNING_PER_HOUR", "24")), 3600),
     "chief":  (int(os.environ.get("RL_CHIEF_PER_MIN", "30")), 60),
+    # Church mail from the Email room (church_mail_room.py), per login: a busy
+    # office day is a few dozen; this stops a send loop or a stolen session.
+    "church_mail_send": (int(os.environ.get("RL_CHURCH_MAIL_SEND_PER_HOUR", "60")), 3600),
+    "church_mail_draft": (int(os.environ.get("RL_CHURCH_MAIL_DRAFT_PER_HOUR", "60")), 3600),
     "voice":  (int(os.environ.get("RL_VOICE_PER_MIN", "40")), 60),
     "proxy":  (int(os.environ.get("RL_PROXY_PER_MIN", "60")), 60),
     # Interview v3 (B3) — the follow-up probe's per-business hourly budget.

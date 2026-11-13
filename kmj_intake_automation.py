@@ -364,6 +364,9 @@ app.include_router(worship_team_router)
 # The map: every part of a church's system in one area, and who reaches it.
 from church_areas import router as church_areas_router
 app.include_router(church_areas_router)
+# Church mail in the Email room (Kevin, 2026-11-13: "this is good build it").
+from church_mail_room import router as church_mail_room_router
+app.include_router(church_mail_room_router)
 from church_keys import router as church_keys_router
 app.include_router(church_keys_router)
 # What each office login does, one duty at a time (2026-11-01; CHURCH_DUTIES
