@@ -214,6 +214,37 @@ def test_the_move_is_finished_when_every_thing_is_checked_and_giving_is_live(db)
     assert status("owner")["finished"] is False
 
 
+def _finish(db):
+    for k in [i["key"] for i in mi.ITEMS if i.get("live") != "giving"]:
+        db.t["church_move_items"].append({"business_id": BIZ, "item": k, "state": "checked", "answers": {"x": "y"},
+                                          "note": None, "handed_in_at": "2026-11-12T00:00:00Z", "handed_in_by": None,
+                                          "checked_at": "2026-11-12T00:00:00Z", "updated_at": "2026-11-12T00:00:00Z"})
+    db.t["businesses"][0].update(stripe_account_id="acct_1", settings={"stripe": {"charges_enabled": True}})
+
+
+def test_a_finished_move_remembers_the_day_the_church_first_saw_it(db, monkeypatch):
+    """Home says "moved in" for a while from that day. It is kept once, on
+    the church's first look, and every login gets the same day after."""
+    assert "finished_at" not in status("owner")                              # not finished: nothing to remember
+    _finish(db)
+    monkeypatch.setattr(mi, "_now", lambda: "2026-11-20T15:00:00+00:00")
+    assert status("owner")["finished_at"] == "2026-11-20T15:00:00+00:00"
+    monkeypatch.setattr(mi, "_now", lambda: "2026-12-01T09:00:00+00:00")
+    assert status("office")["finished_at"] == "2026-11-20T15:00:00+00:00"     # the first look stands
+    kept = [r for r in db.t["church_move_items"] if r["item"] == mi.MOVED_IN]
+    assert len(kept) == 1
+    # The row is not a thing to hand in: the list is still the eleven, and the platform's count is unmoved.
+    assert [i["key"] for i in room("owner")["items"]] == [i["key"] for i in mi.ITEMS]
+    assert room("owner")["progress"] == {"settled": len(mi.ITEMS), "total": len(mi.ITEMS)}
+    assert client("owner").post(f"/church/move-in/{mi.MOVED_IN}/hand-in", json={"business_id": BIZ}).status_code == 404
+
+
+def test_a_day_that_cant_be_kept_still_says_finished(db, monkeypatch):
+    _finish(db)
+    monkeypatch.setattr(mi.sb_clients, "sb_post_as_service", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("down")))
+    assert status("owner") == {"enabled": True, "write": True, "finished": True, "finished_at": None}
+
+
 def test_a_finished_question_that_cant_be_read_keeps_the_room_on_the_menu(db, monkeypatch):
     monkeypatch.setattr(mi, "_finished", lambda biz: (_ for _ in ()).throw(RuntimeError("down")))
     assert status("owner") == {"enabled": True, "write": True, "finished": False}
