@@ -285,9 +285,16 @@ async def move_status(business_id: str, user: AuthedUser = Depends(require_user)
     plan = feature_gates.plan_of(biz)
     taken = await asyncio.to_thread(_founding_taken)
     left = None if taken is None else max(0, pricing_config.founding_church_moves() - taken)
+    import church_founding
+    price = await asyncio.to_thread(church_founding.public_state)
     return {"ok": True, "move": _settings(biz).get(MOVE),
             "on_church_plan": plan in feature_gates.CHURCH_PLANS,
             "founding_left": left,
+            # The founding churches' price (church_founding): this church's
+            # place, when it holds one, and how many places are left.
+            "founding_church": church_founding.record(biz),
+            "founding_price": {"on": price is not None, "spots": church_founding.spots(),
+                               "left": price["left"] if price else None},
             "price_cents": _move_cents(plan) if plan in feature_gates.CHURCH_PLANS else None,
             "first_payment_due": _first_payment_due(biz),
             "first_payment_cents": _first_payment_cents(plan)}

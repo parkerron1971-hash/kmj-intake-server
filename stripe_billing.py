@@ -495,15 +495,24 @@ async def billing_plans(for_type: Optional[str] = None):
     # once offered, and the numbers around it: texts past the plan, one more
     # login, the move, and where a Multi-site quote starts.
     church_offer = None
+    church_founding_state = None
     if any(p in fg.CHURCH_PLANS for p in audience_keys):
+        import asyncio
+        import church_founding
         import pricing_config
         church_offer = {**pricing_config.church_offer(),
                         "names": {p: _plan_display(p) for p in fg.CHURCH_PLANS}}
+        # The founding churches' price: how many places are left (None while
+        # the offer is off or the count can't be read: nothing is promised).
+        founding = await asyncio.to_thread(church_founding.public_state)
+        church_founding_state = {"on": founding is not None, "spots": church_founding.spots(),
+                                 "left": founding["left"] if founding else None}
 
     any_configured = any(e["configured"] for e in out)
     return {"ok": True, "plans": out, "founder": founder,
             "audience_plans": audience,
             "church_offer": church_offer,
+            "church_founding": church_founding_state,
             "features_by_plan": features_by_plan,
             "marketing_by_plan": marketing_by_plan,
             "plan_details": plan_details,
@@ -684,6 +693,14 @@ async def create_checkout(body: CheckoutBody, user: AuthedUser = Depends(require
     church_plan = resolved in feature_gates.CHURCH_PLANS
     if church_plan and body.promotion_code:
         raise HTTPException(409, "Church plans don't take discount codes; the price is set by your church's size.")
+    # The founding churches (church_founding, Kevin 2026-11-13): the first
+    # churches keep the price they start at, so a founding church, or one
+    # taking an open place, pays the founding price once a list price has
+    # gone up. Unset, it is the list price. Before the switch below, so a
+    # change of size moves to the same price.
+    if church_plan:
+        import church_founding
+        price_id = await church_founding.checkout_price(biz, resolved, price_id)
     # ChurchSavvy on its own: churches on ChurchSavvy alone, once the
     # switch opens it, back to ChurchSavvy's own page (churchsavvy_billing).
     church_savvy = None
@@ -1449,6 +1466,15 @@ async def _apply_subscription_state(event_type: str, sub_obj: Dict[str, Any], bu
     import church_billing
     if plan_key in fg.CHURCH_PLANS or church_billing.extra_login_quantity(items):
         await church_billing.sync_extra_logins(business_id, items, status_value)
+    # Its first paid month on a church plan takes a founding place while one
+    # is left (church_founding). Never fails the webhook: the patch above is
+    # what it exists for, and every renewal tries again.
+    if plan_key in fg.CHURCH_PLANS and status_value == "active":
+        try:
+            import church_founding
+            await church_founding.claim(business_id, plan_key, price_id)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"founding place for {business_id} not taken this time: {e}")
     # A card arrived: a no-card trial's "coming soon" lifts now, not when
     # this process's cache expires (other replicas follow within a minute).
     try:

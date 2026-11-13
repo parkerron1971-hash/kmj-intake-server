@@ -429,8 +429,9 @@ def test_the_move_takes_the_founding_seats_place(by_size, monkeypatch):
     assert ("Over 1,500 people or more than one campus? Multi-site starts at $999 a month. Extra texts are $20 per "
             "1,000. A text is up to 160 characters; a longer one counts as 2 or more. "
             "One more office login is $15 a month. Moving from another system costs three months of your "
-            "plan, and the first five churches move free and keep the price they start at, for as long as "
-            "they stay.") in html
+            "plan, and the first five churches move free.") in html
+    # the price the first churches keep is its own line (church_founding), not the move's
+    assert "keep the price they start at" not in html                     # count unreadable here: no line
     assert "On every plan</b>" in html                                      # the strip stays
     assert "no cut of giving" in html                                       # and the fine print
 
@@ -469,7 +470,7 @@ def test_moving_a_dial_moves_the_page(by_size, monkeypatch):
     assert "<span>Clips from 1 hour of sermons a month</span>" in cards[3]
     assert "<b>35,000</b>" in cards[3] and 'style="width: 43%"' in cards[2]  # 15,000 of 35,000
     assert "Multi-site starts at $1,200 a month" in html and "One more office login is $12.50 a month" in html
-    assert "and the first church moves free and keeps the price it starts at, for as long as it stays." in html
+    assert "and the first church moves free." in html
     assert "$159" in cs.render("giving") and "9 office logins" in cs.render("member-app")
 
 
