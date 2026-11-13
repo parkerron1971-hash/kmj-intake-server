@@ -684,3 +684,69 @@ def test_chief_sends_a_logins_email_from_its_own_address(db, monkeypatch):
     # Unattended (no one talking): the church's address and the routed reply, as before.
     asyncio.run(cos._send_queued_email(None, biz, item))
     assert sent[1]["from_email"] != "tia@lovecityc.com" and sent[1]["reply_to"] != "tia@lovecityc.com"
+
+
+# ─── A new office login gets its address (Kevin, 2026-11-13) ──────────
+
+def test_an_invite_names_the_address_the_login_will_get(db):
+    biz = db.t["businesses"][0]
+    db.t["church_mailboxes"].append(_box("tia", "person", user_id=TIA))
+    assert church_mail.new_login_address(biz, "Renee Watts") == "renee@lovecityc.com"
+    assert church_mail.new_login_address(biz, "Tia Moore") == "tia.moore@lovecityc.com", "tia@ is taken"
+    assert church_mail.new_login_address(biz, "") is None
+
+
+def test_no_address_is_planned_before_mail_comes_here_or_for_a_business(db, monkeypatch):
+    biz = db.t["businesses"][0]
+    monkeypatch.setattr(church_mail, "receiving_live", lambda d: False)
+    church_mail._LIVE_CACHE.clear()
+    assert church_mail.new_login_address(biz, "Renee Watts") is None
+    church_mail._LIVE_CACHE.clear()
+    monkeypatch.setattr(church_mail, "receiving_live", lambda d: True)
+    assert church_mail.new_login_address({**biz, "type": "coaching"}, "Renee Watts") is None
+
+
+def test_a_login_that_joins_gets_its_own_address_once(db):
+    biz = db.t["businesses"][0]
+    got = church_mail.give_new_login(biz, TIA, caller=OWNER)
+    assert got["address"] == "tia@lovecityc.com"
+    box = _rows(db, "church_mailboxes")[-1]
+    assert box["kind"] == "person" and box["user_id"] == TIA and box["created_by"] == OWNER
+    assert church_mail.give_new_login(biz, TIA, caller=OWNER) is None, "never a second box"
+    # Jessica's seat is tied to her person record, which already has a box.
+    db.t["church_mailboxes"].append(_box("jess", "person", contact_id=JESS_C))
+    assert church_mail.give_new_login(biz, JESSICA) is None
+
+
+def test_accepting_an_invite_gives_the_address_and_the_note(db, monkeypatch):
+    import business_users_router as bur
+    notes = []
+
+    async def _send(**kw):
+        notes.append(kw)
+        return {"id": "n1"}
+    monkeypatch.setattr(email_sender, "send_via_resend", _send)
+    new = "55555555-5555-4555-8555-000000000001"
+    EMAILS[new] = "renee@example.com"
+    db.t["business_users"].append({"id": str(uuid.uuid4()), "business_id": BIZ, "user_id": None, "role": "manager",
+                                   "status": "invited", "name": None, "contact_id": None,
+                                   "invited_email": "renee@example.com", "token": "tok-1", "invited_by": OWNER})
+    try:
+        out = bur.accept(bur.AcceptBody(token="tok-1", name="Renee Watts"),
+                         user=SimpleNamespace(id=new, email="renee@example.com"))
+    finally:
+        EMAILS.pop(new, None)
+    assert out["church_email"] == "renee@lovecityc.com"
+    assert notes and notes[0]["to_email"] == "renee@example.com" and "renee@lovecityc.com" in notes[0]["body"]
+
+
+def test_a_login_joins_even_when_its_address_cant_be_made(db, monkeypatch):
+    import business_users_router as bur
+    monkeypatch.setattr(church_mail, "give", lambda *a, **k: (_ for _ in ()).throw(church_mail.Unavailable("x")))
+    db.t["business_users"].append({"id": str(uuid.uuid4()), "business_id": BIZ, "user_id": None, "role": "manager",
+                                   "status": "invited", "name": None, "contact_id": None,
+                                   "invited_email": "sam@example.com", "token": "tok-2", "invited_by": OWNER})
+    out = bur.accept(bur.AcceptBody(token="tok-2", name="Sam Lee"), user=SimpleNamespace(id=str(uuid.uuid4()),
+                                                                                         email="sam@example.com"))
+    assert out["ok"] and out["church_email"] is None
+    assert next(s for s in db.t["business_users"] if s.get("token") == "tok-2")["status"] == "active"

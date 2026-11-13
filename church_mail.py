@@ -1213,6 +1213,69 @@ def sender_box(biz: Dict[str, Any], uid: str) -> Optional[Dict[str, str]]:
         return None
 
 
+# ─── A new office login gets its address (Kevin, 2026-11-13) ──────────
+#
+# A church whose mail comes here gives every office login its own address
+# the moment the login is accepted: the invite says which one, and the
+# person gets the welcome note naming it. The pastor, an Admin or the church
+# email duty can change or take it back in Email → Addresses.
+
+def _live_church(biz: Dict[str, Any]) -> Optional["Church"]:
+    """The church, when it is a church whose own domain's mail comes here."""
+    import church_follow_up as cfu
+    if not biz or not cfu.is_church(biz):
+        return None
+    church = Church(biz)
+    if not church.domain:
+        return None
+    try:
+        return church if mail_comes_here(church.domain) else None
+    except Unavailable:
+        return None
+
+
+def new_login_address(biz: Dict[str, Any], name: str) -> Optional[str]:
+    """The address an invited login will get when it accepts (from the name
+    the church knows them by), or None: not a church whose mail comes here,
+    no name to make one from, or a read failed. Never raises."""
+    try:
+        church = _live_church(biz)
+        if not church or not _plain(name):
+            return None
+        local = _suggest_local(name, {b["local"] for b in church.boxes()})
+        return f"{local}@{church.domain}" if local else None
+    except Exception:  # noqa: BLE001 — an invite never fails over this
+        logger.warning("church mail: couldn't plan a new login's address")
+        return None
+
+
+def give_new_login(biz: Dict[str, Any], uid: str, *, caller: str = "", name: str = "") -> Optional[Dict[str, Any]]:
+    """Give a login that just joined its own address, once. None when it
+    isn't a church whose mail comes here, the login already has a box (its
+    own, or one for the person it is), there's no name to make one from, or
+    anything failed: a login's joining never waits on its address."""
+    try:
+        church = _live_church(biz)
+        uid = str(uid or "")
+        if not church or not church.is_on_team(uid):
+            return None
+        seat = church.seats().get(uid) or {}
+        cid = str(seat.get("contact_id") or "")
+        if any(b.get("kind") == "person" and (str(b.get("user_id") or "") == uid
+                                             or (cid and str(b.get("contact_id") or "") == cid))
+               for b in church.boxes()):
+            return None
+        known = church.login_name(uid)
+        who = known if known not in ("the pastor", "an office login") else _plain(name)
+        local = _suggest_local(who, {b["local"] for b in church.boxes()})
+        if not local:
+            return None
+        return give(biz, caller or church.owner_id, local, f"login:{uid}")
+    except Exception as e:  # noqa: BLE001 — never hold a joining login
+        logger.warning("church mail: a new login's address wasn't made: %s", type(e).__name__)
+        return None
+
+
 def held_count(business_id: str, days: int = 7) -> Optional[int]:
     from datetime import timedelta
     since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
