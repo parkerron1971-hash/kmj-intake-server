@@ -322,7 +322,7 @@ async def domain_status(business_id: str,
     records = _records_from(live)
     if records:
         cfg = {**cfg, "records": records}
-    live_status = _normalize_status(live.get("status"))
+    live_status = email_domain_dns.sending_status(live)
     if live_status == "verified" and cfg.get("status") != "verified":
         # Resend verified the records on its own (the operator pasted
         # them and never pressed Verify, or the setup room's auto-verify
@@ -360,7 +360,7 @@ async def verify_domain(business_id: str,
         raise HTTPException(502, "Email provider error: that domain no longer "
                                  "exists — disconnect and reconnect it.")
 
-    status = _normalize_status(live.get("status"))
+    status = email_domain_dns.sending_status(live)
     records = _records_from(live) or cfg.get("records") or []
     new_cfg = {**cfg, "records": records, "status": status}
     if status == "verified" and not cfg.get("verified_at"):
@@ -655,7 +655,7 @@ async def domain_health(business_id: str,
     records = _records_from(live)
     if records:
         cfg = {**cfg, "records": records}
-    return {**_payload(cfg, biz, live_status=_normalize_status(live.get("status"))),
+    return {**_payload(cfg, biz, live_status=email_domain_dns.sending_status(live)),
             "stats": stats}
 
 

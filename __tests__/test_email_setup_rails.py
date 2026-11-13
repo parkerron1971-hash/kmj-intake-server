@@ -479,3 +479,35 @@ def test_monitor_one_bad_row_does_not_stop_the_rest(fake, watched, monkeypatch):
     out = asyncio.run(edm.monitor_tick())
     assert out["errors"] == 1 and out["drift"] == 1
     assert fake.rows("businesses")[1]["settings"]["email_domain"]["status"] == "failed"
+
+
+
+# ─── Receiving on doesn't take sending down (2026-11-13) ─────────────
+
+_SENDING_OK = [
+    {"record": "DKIM", "name": "resend._domainkey", "type": "TXT", "status": "verified"},
+    {"record": "SPF", "name": "send", "type": "MX", "value": "feedback-smtp.us-east-1.amazonses.com", "status": "verified"},
+    {"record": "SPF", "name": "send", "type": "TXT", "status": "verified"},
+]
+
+
+def test_a_pending_receiving_record_is_not_a_sending_failure():
+    import email_domain_dns as edd
+    receiving = {"record": "Receiving", "name": "@", "type": "MX", "value": "receive.forge.rmta.net", "status": "pending"}
+    assert edd.sending_status({"status": "partially_verified", "records": _SENDING_OK + [receiving]}) == "verified"
+    # A sending record that isn't verified is still not verified.
+    broken = [dict(_SENDING_OK[0], status="failed")] + _SENDING_OK[1:] + [receiving]
+    assert edd.sending_status({"status": "partially_verified", "records": broken}) == "pending"
+    assert edd.sending_status({"status": "failed"}) == "failed"
+    assert edd.sending_status({"status": "verified"}) == "verified"
+    assert edd.is_receiving_record(receiving) and not edd.is_receiving_record(_SENDING_OK[1])
+
+
+def test_monitor_leaves_a_domain_alone_while_its_receiving_record_waits(fake, watched, monkeypatch):
+    """lovecityc.com, 2026-11-13: receiving switched on, the MX change still coming, and the monitor
+    flipped its sending to failed for about 20 minutes and told the owner it had stopped verifying."""
+    _live(monkeypatch, {"id": "dom_1", "status": "partially_verified", "records": _SENDING_OK + [
+        {"record": "Receiving", "name": "@", "type": "MX", "value": "receive.forge.rmta.net", "status": "pending"}]})
+    before = dict(_cfg(fake))
+    out = asyncio.run(edm.monitor_tick())
+    assert out["drift"] == 0 and _cfg(fake) == before and watched == []
