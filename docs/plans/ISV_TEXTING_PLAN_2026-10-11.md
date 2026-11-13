@@ -171,3 +171,17 @@ exception) and replies for businesses not yet approved.
   the business's legal details (owner and the business's team can read it,
   as for 1099s); the registration screen shows the last four; the rest is
   the owner's own data, service-role only (RLS on).
+
+## Churches (2026-11-13)
+
+Kevin, 2026-11-13: "finish setting up the text structure" so churches can
+send text alerts. The words, pages and readiness above are a booking
+business's. A church sends announcements, events, serving reminders and
+replies, and it has no /book page. So a church (vertical `ministry`) gets its
+own campaign words, terms and privacy pages, and readiness. Its opt-in is a
+sign-up page on its own site, `/texts`: name, mobile, and an unchecked box
+naming the church, quoted word for word in the message flow. The page goes up
+when the registration is sent, so every yes given there counts under the
+church's own registration. The sign-up keeps the yes (sms_consents source
+`texts_page`), adds the person as a guest if they're new, and sends one
+confirming text.
