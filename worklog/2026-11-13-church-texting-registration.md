@@ -3,8 +3,8 @@ title: A church registers for texting as a church, with a /texts sign-up page
 date: 2026-11-13
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-11-13, after the text-alert cost questions: "I need the text alert structure with twilio to be set for churches to have the ability to send text alerts", then "let''s finish setting up the text structure so that is done."'
-status: in review
-prs: [kmj-intake-server (this PR)]
+status: shipped
+prs: [kmj-intake-server#1818, solutionist-studio#1533, kmj-intake-server (church words in the owner's updates)]
 migrations: []
 left_undone:
   - "Going live is still gated on Twilio relabeling our primary profile 'ISV Reseller or Partner' (ticket #29903903, filed 2026-10-11; status unknown to this session), then TEXTING_REGISTRATION_OPEN naming the pilot church. TEXTING_REGISTRATION_OPEN is unset on kmj-intake-server (checked 11-13, names only)"
@@ -37,3 +37,10 @@ readiness and overview for a church, `page_for(kind="signup", note=)`, and
 Tests: `__tests__/test_texting_church.py` (23). 619 passed across the texting,
 SMS, news-reach, announcement and church-texts files, and 470 across the files
 that touch the site's paths and the booking/contact boxes.
+
+Later the same day (Kevin: "go ahead and fix the wording"): the owner's
+updates said a church "texts its clients" and that "your business is
+verified". A church now gets CHURCH_UPDATES for those two, through one picker
+(`update_words`, which `_tell_owner` uses for the app, the push and the
+email), and the screen's step and readiness labels say church. Businesses keep
+their words. Tests: 4 more in `test_texting_church.py`.
