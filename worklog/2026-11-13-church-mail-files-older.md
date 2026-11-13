@@ -4,7 +4,7 @@ date: 2026-11-13
 agent: Claude Code (Claude Opus 5.5)
 asked: 'build these (attaching files when you send from the room; lists show the newest 100 per box, with no paging)'
 status: in progress
-prs: []
+prs: ["kmj-intake-server#1827"]
 migrations: []
 left_undone:
   - "A sent file's contents aren't kept: Sent shows its name and size, and the person who got it has the file."
