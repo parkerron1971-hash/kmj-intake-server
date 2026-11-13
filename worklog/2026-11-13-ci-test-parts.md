@@ -4,7 +4,7 @@ date: 2026-11-13
 agent: Claude Code (Claude Opus 5.5)
 asked: 'is it possible to have more than one way to merge through github because it''s like agents are waiting on another to push through therefore the process seems to take much longer / yes do it'
 status: in progress
-prs: []
+prs: ["kmj-intake-server#1819"]
 migrations: []
 left_undone:
   - "The parts are weighed by how many tests each file defines, not by how long they take. If one part keeps finishing last, weigh by the --durations output instead."
