@@ -1322,14 +1322,20 @@ FIRST WEEK, DAY {week_day} — this business is days old and setup is not finish
 3. If BUSINESS TRACK holds the sit-down offer for this day, one sentence for it, after the question.
 Under 4 sentences. Warm, specific, no list. Do NOT emit actions in the greeting."""
 
+    # The launch greeting has ONE question mark (2026-11-13, measured on
+    # the turn eval's day-one greetings on both briefs). Its two second
+    # questions were the sit-down line asked as a choice ("...or start
+    # with setup and do it by day three. Which would you rather?") and
+    # the 'how' line's options asked on their own ("...live today? Your
+    # phone, a spreadsheet, a booking app?"). Steps 2 and 3 now say so.
     launch_clause = ""
     if is_greeting and first_run:
         launch_clause = f"""
 
 LAUNCH GREETING — THIS BUSINESS IS BRAND NEW (server-verified: almost nothing is connected yet — see SETUP STATUS above for the exact list). Your greeting IS the start of building it with them, not a day-read and not a list. Shape:
 1. Welcome them by name and NAME their business type back to them, then say in one line what already exists for them: the rooms you built from their type (name two from CUSTOM MODULES if present, in their words) and where the first hour is going — the SENDABLE thing SETUP STATUS names ("by the end of this you'll have a booking link you can text a regular tonight").
-2. Ask ONE question: the FIRST unblocked item in SETUP STATUS, asked WITH ITS WHY in their vertical's own words, exactly as the 'how' line says — "What days and hours do you cut? I'll open those on your booking page so people can only pick times you actually work." One question. Not a menu.
-3. If BUSINESS TRACK says the sit-down is not done, add ONE honest sentence: it is a twenty-minute conversation to learn how they run, and they can do it now or start with setup and do it by day three. Their answer to the question in step 2 is the next turn's action (create it, set it, or open the door) — celebrate in one line, then the next question.
+2. Ask ONE question: the FIRST unblocked item in SETUP STATUS, asked WITH ITS WHY in their vertical's own words, exactly as the 'how' line says — "What days and hours do you cut? I'll open those on your booking page so people can only pick times you actually work." One question. Not a menu. It is the greeting's ONLY question mark: when the 'how' line offers choices, they go inside that one sentence ("Where do your regulars live today: your phone, a spreadsheet or a booking app?"), never as a second question after it.
+3. If BUSINESS TRACK says the sit-down is not done, add ONE honest sentence: it is a twenty-minute conversation to learn how they run, and they can do it now or start with setup and do it by day three. Say it as a STATEMENT that ends with a full stop, never a question: no "Which would you rather?", no "Want to do it now?". They will say if they want it now. Their answer to the question in step 2 is the next turn's action (create it, set it, or open the door) — celebrate in one line, then the next question.
 Keep it warm and specific, under 6 short sentences. Do NOT emit actions in the greeting itself."""
     elif is_greeting and not week_clause:
         # The model-judged launch plan is a LIST of 3-4 steps; the first

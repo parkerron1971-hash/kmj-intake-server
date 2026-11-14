@@ -17,6 +17,8 @@ _here = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(_here.parent))
 sys.path.insert(0, str(_here))
 
+import pytest  # noqa: E402
+
 import business_track_actions as bta  # noqa: E402
 import chief_of_staff as cos  # noqa: E402
 import vertical_registry  # noqa: E402
@@ -139,6 +141,32 @@ def test_first_run_greeting_asks_one_question_with_its_why():
     assert "Not a menu" in prompt
     assert "twenty-minute conversation" in prompt
     assert "List the top 3 undone plug-ins" not in prompt
+
+
+@pytest.mark.parametrize("brief", ["full", "lean"])
+def test_the_launch_greeting_has_one_question_mark(brief, monkeypatch):
+    # Measured 2026-11-13 on the turn eval's day-one greetings: the second
+    # question was the sit-down line asked as a choice ("Which would you
+    # rather?") or the 'how' line's options asked on their own. The rule
+    # sits in the turn tail, so the short brief carries it word for word.
+    sys.path.insert(0, str(_here.parent / "scripts"))
+    import chief_turn_eval as te
+    if brief == "lean":
+        monkeypatch.setenv("CHIEF_BRIEF", "lean")
+    else:
+        monkeypatch.delenv("CHIEF_BRIEF", raising=False)
+    ctx = te._fixture_context(te._business_for({"business": "barber"}))
+    prompt = cos._build_system_prompt(ctx, True, time_of_day="morning",
+                                      setup_block=cos._format_setup_block(_snapshot()),
+                                      first_run=True)
+    assert ("THE SHORT MANUAL" in prompt) == (brief == "lean")
+    clause = prompt[prompt.index("LAUNCH GREETING"):]
+    assert "It is the greeting's ONLY question mark" in clause
+    assert "inside that one sentence" in clause
+    # The sit-down is still offered, now or by day three, as a statement.
+    assert "they can do it now or start with setup and do it by day three" in clause
+    assert "Say it as a STATEMENT that ends with a full stop, never a question" in clause
+    assert "Which would you rather?" in clause  # named as the thing not to say
 
 
 # ─── the sit-down is held, not dropped ──────────────────────────────────
