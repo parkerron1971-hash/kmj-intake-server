@@ -297,7 +297,8 @@ VERTICAL_SETUP = ("vertical-aware setup (being built, no PR yet): the offerings 
 _DAY_ONE_GREETING = {
     "message": GREETING, "expect": [], "route": "full",
     "must_not": ["navigate", "create_contact", "approve_draft", "run_agent"],
-    "reply_checks": ["one_question", "no_list", "no_draft_pointer", "no_unverified"],
+    "reply_checks": ["one_question", "no_list", "no_draft_pointer", "no_unverified",
+                     "first_name_only"],
     "pending": {"reply:no_draft_pointer": PR_1053},
     "encoding": "tag",
 }
@@ -424,7 +425,7 @@ DAY_ONE_CASES: List[Dict[str, Any]] = [
     # ── a ministry ───────────────────────────────────────────────────
     _row(_DAY_ONE_GREETING, id="nb_ministry_greeting", business="ministry",
          reply_checks=["one_question", "no_list", "no_draft_pointer", "no_unverified",
-                       "no_price_question"],
+                       "no_price_question", "first_name_only"],
          reply="Good morning, James. Grace Street Fellowship is set up as a ministry, and "
                "by the end of this first hour you'll have a giving page you can share. "
                "Who's one member I should add first? A name and an email or phone is "
@@ -532,6 +533,9 @@ REPLY_CHECKS: Dict[str, Any] = {
                                            for q in _question_sentences(r)),
     "about_the_product": lambda r: sum(bool(re.search(p, r or "", re.I))
                                        for p in _CAPABILITY_AREAS) >= 3,
+    # "Good morning, Dre", not "Good morning, Dre Carter" (2026-11-14).
+    "first_name_only": lambda r: not any(spec["practitioner"] in (r or "")
+                                         for spec in NEW_BUSINESSES.values()),
 }
 
 

@@ -169,6 +169,42 @@ def test_the_launch_greeting_has_one_question_mark(brief, monkeypatch):
     assert "Which would you rather?" in clause  # named as the thing not to say
 
 
+@pytest.mark.parametrize("brief", ["full", "lean"])
+def test_the_greeting_says_the_first_name(brief, monkeypatch):
+    # Measured 2026-11-13: the short brief greeted "Good morning, Dre
+    # Carter" most runs. The line it followed was the prompt's own
+    # "Start with 'Good morning, Dre Carter.'", which said the whole name
+    # beside the FIRST NAME rule. Every greeting line now says "Dre".
+    sys.path.insert(0, str(_here.parent / "scripts"))
+    import chief_turn_eval as te
+    if brief == "lean":
+        monkeypatch.setenv("CHIEF_BRIEF", "lean")
+    else:
+        monkeypatch.delenv("CHIEF_BRIEF", raising=False)
+    ctx = te._fixture_context(te._business_for({"business": "barber"}))
+    prompt = cos._build_system_prompt(ctx, True, time_of_day="morning",
+                                      setup_block=cos._format_setup_block(_snapshot()),
+                                      first_run=True)
+    greeting = prompt[prompt.index("OPENING GREETING MODE"):]
+    assert "Start with 'Good morning, Dre.'" in greeting
+    assert "Address the practitioner as Dre (their first name)" in greeting
+    assert "Welcome them by first name (Dre)" in greeting
+    assert "Good morning, Dre Carter" not in prompt
+    # The rule names the full name only to forbid it.
+    assert greeting.count("Dre Carter") == 1
+    assert "never by the full name Dre Carter" in greeting
+
+
+def test_a_greeting_name_keeps_a_title_with_the_name():
+    import chief_prompt
+    assert chief_prompt.greeting_name("Dre Carter") == "Dre"
+    assert chief_prompt.greeting_name("Pastor Kevin McCloud") == "Pastor Kevin"
+    assert chief_prompt.greeting_name("Dr. Maya Lin") == "Dr. Maya"
+    assert chief_prompt.greeting_name("Tasha") == "Tasha"
+    assert chief_prompt.greeting_name("") == ""
+    assert chief_prompt.greeting_name(None) == ""
+
+
 # ─── the sit-down is held, not dropped ──────────────────────────────────
 
 def test_a_young_business_that_never_opened_the_sit_down_still_gets_the_offer():
