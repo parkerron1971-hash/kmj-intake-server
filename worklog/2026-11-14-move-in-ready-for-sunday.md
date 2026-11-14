@@ -4,7 +4,7 @@ date: 2026-11-14
 agent: Claude Code (Claude Fable 5.2)
 asked: "ok got it. we need to finish up this preparation"
 status: in review
-prs: [kmj-intake-server#1841]
+prs: [kmj-intake-server#1843]
 migrations: []
 left_undone:
   - "Only the platform owner sees it (Mission Control, Move-ins). The church has no such list on its own Home; that is a design change and wants a mock first."
