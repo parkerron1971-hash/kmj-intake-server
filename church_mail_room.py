@@ -22,6 +22,7 @@ church mail in the app, instead of only as a copy at their own email
                                            a draft for the person to check, never sent
     GET  /church-mail/attachment?id=&n=    a fresh link to a received file
     PUT  /church-mail/copies               {on}: a copy at my own email, or the room only
+    PUT  /church-mail/signature            {text}: my own signature (null = the standard one)
     POST /church-mail/held/release         {id}: let a held message through
     POST /church-mail/held/delete          {id}: delete a held message for good
     GET  /church-mail/addresses            who has which address, and who has none
@@ -132,6 +133,7 @@ class Room:
         self._trays: Optional[List[Dict[str, Any]]] = None
         self._may_give: Optional[bool] = None
         self._readers: Dict[str, set] = {}
+        self._signature: Optional[List[str]] = None
 
     @property
     def owner(self) -> bool:
@@ -246,6 +248,18 @@ class Room:
     def copies(self) -> bool:
         return self.uid not in self.church.copies_off()
 
+    def signature(self) -> Optional[str]:
+        """This login's own signature for church mail, or None for the
+        standard one. A read that fails (the column not there yet, a blip)
+        is the standard one: a send never fails over a signature."""
+        if self._signature is None:
+            rows = sb_clients.sb_get_as_service(
+                f"/church_mail_people?business_id=eq.{_q(self.church.id)}&user_id=eq.{_q(self.uid)}"
+                "&select=signature&limit=1")
+            got = rows[0].get("signature") if isinstance(rows, list) and rows and isinstance(rows[0], dict) else None
+            self._signature = [clean_signature(got) or ""]
+        return self._signature[0] or None
+
     def chief_mail(self) -> bool:
         """Does this login see Chief's mail (the trays the room had before)?
         Whoever could open the room before: the owner, Admins, and logins
@@ -342,7 +356,7 @@ def room_view(room: Room) -> Dict[str, Any]:
     import church_follow_up as cfu
     is_church = cfu.is_church(room.biz)
     me = {"user_id": room.uid, "role": room.role, "owner": room.owner, "name": room.name(), "address": None,
-          "copies": True, "may_give": False, "chief_mail": room.chief_mail()}
+          "copies": True, "may_give": False, "chief_mail": room.chief_mail(), "signature": None}
     out: Dict[str, Any] = {"church": is_church, "domain": c.domain, "on": False, "me": me, "trays": [],
                            "senders": [], "prayer": None, "held": None, "missing": None}
     if not c.domain:
@@ -354,6 +368,7 @@ def room_view(room: Room) -> Dict[str, Any]:
     try:
         trays = room.trays()
         me["copies"] = room.copies()
+        me["signature"] = room.signature()
         own = next((t for t in trays if t["own"]), None)
         me["address"] = own["address"] if own else None
         counts: Dict[str, List[int]] = {t["id"]: [0, 0] for t in trays}
@@ -574,7 +589,38 @@ def send_files(files: List[FileIn]) -> List[Dict[str, Any]]:
     return out
 
 
+SIG_LINES, SIG_LINE, SIG_MAX = 8, 120, 600
+
+
+def clean_signature(text: Any) -> Optional[str]:
+    """A signature as the person typed it, kept to 8 lines of 120 characters
+    and 600 in all, no control characters, no blank lines at either end and
+    never two in a row. None when nothing is left (the standard one)."""
+    if not isinstance(text, str):
+        return None
+    out: List[str] = []
+    for raw in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        line = cm._plain(raw, SIG_LINE)
+        if not line and (not out or not out[-1]):
+            continue
+        out.append(line)
+    kept: List[str] = []
+    for line in out[:SIG_LINES]:
+        if len("\n".join(kept + [line])) > SIG_MAX:
+            break  # whole lines only: never half a line
+        kept.append(line)
+    while kept and not kept[-1]:
+        kept.pop()
+    return "\n".join(kept) or None
+
+
 def signature_lines(room: Room, sender: Dict[str, Any]) -> List[str]:
+    """The lines under a church email: the person's own signature when
+    they wrote one (Kevin, 2026-11-14: "add where the signature can be
+    edited"), else their name, the church and the address it goes from."""
+    own = room.signature()
+    if own:
+        return own.split("\n")
     church_name = cm._plain(room.biz.get("name"), 80)
     lines = [room.name()]
     if church_name:
@@ -849,6 +895,26 @@ def put_copies(body: CopiesIn, business_id: str, biz: Dict[str, Any] = Depends(b
     if not isinstance(got, list):
         raise HTTPException(503, "That couldn't be saved just now. Try again in a moment.")
     return {"ok": True, "copies": bool(body.on)}
+
+
+class SignatureIn(BaseModel):
+    text: Optional[str] = Field(None, max_length=4000)
+
+
+@router.put("/signature")
+def put_signature(body: SignatureIn, business_id: str, biz: Dict[str, Any] = Depends(business_access()),
+                  session: UserSession = Depends(sb_clients.authed_request)):
+    """My own signature under the church mail I send. Empty: back to the
+    standard one (name, church, the address it goes from)."""
+    room = _room(biz, session)
+    text = clean_signature(body.text)
+    got = sb_clients.sb_post_as_service(
+        "/church_mail_people?on_conflict=business_id,user_id",
+        {"business_id": room.church.id, "user_id": room.uid, "signature": text, "updated_at": cm._now_iso()},
+        prefer="resolution=merge-duplicates,return=representation")
+    if not isinstance(got, list):
+        raise HTTPException(503, "Your signature couldn't be saved just now. Try again in a moment.")
+    return {"ok": True, "signature": text}
 
 
 # ─── Held mail ───────────────────────────────────────────────────────
