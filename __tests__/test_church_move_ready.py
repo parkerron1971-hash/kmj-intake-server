@@ -158,7 +158,7 @@ def test_whats_coming_up_is_the_calendar_not_the_form(db, monkeypatch):
     monkeypatch.setattr(live_router, "occasions", lambda biz: [
         {"id": "e1", "title": "Sunday Worship", "when": "2026-11-22"}, {"id": "e2", "title": "Youth", "when": "2026-11-25"}])
     assert line(church(), "calendar") == (
-        "ready", "2 services and events on the calendar from today on. Next: Sunday Worship, 2026-11-22.")
+        "ready", "2 services and events on the calendar from today on. Next: Sunday Worship, Sunday, November 22.")
     monkeypatch.setattr(live_router, "occasions", lambda biz: None)
     assert line(church(), "calendar")[0] == "unknown"
 

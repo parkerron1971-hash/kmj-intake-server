@@ -176,9 +176,12 @@ def _calendar(biz: Dict[str, Any]) -> Tuple[str, str]:
         raise Unread("occasions")
     if not coming:
         return NOT_YET, "Nothing is on the calendar from today on, so members see nothing coming up."
+    from events_rsvp_router import _parse_day
     first = coming[0]
+    day = _parse_day(first.get("when"))
+    when = f"{day.strftime('%A, %B')} {day.day}" if day else str(first.get("when") or "")
     return READY, (f"{_n(len(coming), 'service or event', 'services and events')} on the calendar from today on. "
-                   f"Next: {first['title']}, {first['when']}.")
+                   f"Next: {first['title']}, {when}.")
 
 
 def _checkin(biz: Dict[str, Any]) -> Tuple[str, str]:
