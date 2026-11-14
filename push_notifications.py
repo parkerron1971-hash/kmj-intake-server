@@ -113,7 +113,7 @@ def send_test(user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     sent = send_to_user(
         user.id,
         title="Solutionist",
-        body="Push notifications are live on this device. ✦",
+        body="Alerts are on for this device. New mail and updates show up just like this.",
         nav="home",
     )
     return {"ok": True, "enabled": True, "sent": sent}

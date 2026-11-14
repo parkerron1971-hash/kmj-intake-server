@@ -52,14 +52,15 @@ def _ids(view):
 
 def test_new_mail_alerts_whoever_the_box_reaches(mail, resend, pushes):
     _arrive(resend, "a1", "jessica@lovecityc.com", subject="Keys")
-    assert [(u, k["title"]) for u, k in pushes] == [(JESSICA, "Sam Sender → you")]
+    assert [(u, k["title"]) for u, k in pushes] == [(JESSICA, "Sam Sender")], "their own box: just who it's from"
     assert pushes[0][1]["nav"] == "operate:email" and pushes[0][1]["data"]["mail"] == _row_for(mail, "a1")["id"]
     assert pushes[0][1]["data"]["biz"] == BIZ and "business_id" not in pushes[0][1],         "every device the person turned on, whatever business it signed up from"
-    assert pushes[0][1]["body"].startswith("Keys")
+    assert pushes[0][1]["body"].split("\n")[0] == "Keys", "the subject, then the first line on its own line"
+    assert pushes[0][1]["tag"] == f"church-mail-{_row_for(mail, 'a1')['id']}", "one email, one alert"
     pushes.clear()
     _arrive(resend, "a2", "office@lovecityc.com", subject="The hall")
     assert sorted(u for u, _ in pushes) == sorted([JESSICA, TIA])
-    assert {k["title"] for _, k in pushes} == {"Sam Sender → Office"}
+    assert {k["title"] for _, k in pushes} == {"Sam Sender · Office"}
     row = _row_for(mail, "a2")
     assert row["alert_at"] and row["alerted_at"]
 
@@ -88,8 +89,9 @@ def test_quiet_hours_hold_alerts_until_they_end_then_one_per_box(mail, resend, p
     assert pushes == [], "still quiet"
     monkeypatch.setattr(cma, "quiet_now", lambda biz: False)
     cma.sweep()
-    assert sorted((u, k["title"]) for u, k in pushes) == [(JESSICA, "Office · 2 new"), (TIA, "Office · 2 new")]
-    assert "and 1 more" in pushes[0][1]["body"]
+    assert sorted((u, k["title"]) for u, k in pushes) == [(JESSICA, "Office · 2 new emails"), (TIA, "Office · 2 new emails")]
+    assert sorted(pushes[0][1]["body"].split("\n")) == ["Sam Sender: One", "Sam Sender: Two"]
+    assert pushes[0][1]["tag"].startswith("church-mail-box:")
     cma.sweep()
     assert len(pushes) == 2, "never twice"
 
@@ -193,3 +195,13 @@ def test_the_bell_lists_my_new_mail_and_an_answer_clears_it(mail, resend, pushes
     assert [i["subject"] for i in call(room.get_alerts, mail, JESSICA)["items"]] == ["Keys"]
     call(room.put_alerts, mail, TIA, room.AlertsIn(mode="all", bell=False))
     assert call(room.get_alerts, mail, TIA)["items"] == []
+
+
+def test_the_alert_reads_like_a_mail_app(mail, resend, pushes):
+    reply = ("Yes, I'll be there at 9:30 with the welcome table signs and the sign-in sheets for the new families, "
+             "plus the extra name tags.\n\nOn Thu, Nov 13, 2026 at 4:00 PM Office <office@lovecityc.com> wrote:\n> Can you come early?")
+    _arrive(resend, "w1", "jessica@lovecityc.com", subject="Re: Sunday", text=reply)
+    body = pushes[0][1]["body"]
+    subject, preview = body.split("\n")
+    assert subject == "Re: Sunday"
+    assert preview.endswith("…") and len(preview) <= 112 and "wrote:" not in preview, "the quoted email left out, cut at a word"

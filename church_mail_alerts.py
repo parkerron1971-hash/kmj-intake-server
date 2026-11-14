@@ -144,21 +144,38 @@ def _who(row: Dict[str, Any]) -> str:
     return cm._plain(row.get("from_name"), 80) or cm._plain(row.get("from_email"), 120) or "Someone"
 
 
-def _snippet(row: Dict[str, Any], n: int = 120) -> str:
-    return " ".join(str(row.get("body_text") or "").split())[:n]
+def _snippet(row: Dict[str, Any], n: int = 110) -> str:
+    """The first words they wrote: the quoted email under a reply left out,
+    on one line, cut at a word."""
+    text = str(row.get("body_text") or "")
+    try:
+        import email_sender
+        text = email_sender._strip_quoted_reply(text) or text
+    except Exception:  # noqa: BLE001
+        pass
+    one = " ".join(text.split())
+    if len(one) <= n:
+        return one
+    cut = one[:n].rsplit(" ", 1)[0] or one[:n]
+    return cut.rstrip(",.;:-") + "…"
 
 
 def words(rows: List[Dict[str, Any]], label: str, own: bool) -> Tuple[str, str]:
-    """The alert's title and body: one message, or several from one box."""
+    """The alert as a phone shows it (Kevin, 2026-11-14: "make sure the
+    notification briefly looks right"). One message reads like any mail
+    app's: who it's from (and the shared box, when it's not their own), then
+    the subject, then the first line they wrote. Several from one box (after
+    quiet hours) list who and what, three at most."""
     first = rows[0]
-    subject = cm._plain(first.get("subject"), 120) or "(no subject)"
     if len(rows) == 1:
-        title = f"{_who(first)} → {'you' if own else label}"
+        subject = cm._plain(first.get("subject"), 120) or "(no subject)"
+        title = _who(first) if own else f"{_who(first)} · {label}"
         snip = _snippet(first)
-        return title, f"{subject} · {snip}" if snip else subject
-    name = "Your church email" if own else label
-    more = len(rows) - 1
-    return f"{name} · {len(rows)} new", f"{_who(first)}: {subject} · and {more} more"
+        return title, f"{subject}\n{snip}" if snip else subject
+    lines = [f"{_who(r)}: {cm._plain(r.get('subject'), 80) or '(no subject)'}" for r in rows[:3]]
+    if len(rows) > 3:
+        lines.append(f"and {len(rows) - 3} more")
+    return f"{label} · {len(rows)} new emails", "\n".join(lines)
 
 
 def send(church: cm.Church, rows: List[Dict[str, Any]]) -> int:
@@ -200,6 +217,9 @@ def send(church: cm.Church, rows: List[Dict[str, Any]]) -> int:
             continue
         rs = sorted(g["rows"], key=lambda x: str(x.get("alert_at") or ""), reverse=True)
         title, body = words(rs, box_label(g["box"]), own)
+        # One email, one alert (each makes its sound); several at once share
+        # the box's, and a newer group replaces it.
+        tag = f"church-mail-{rs[0]['id']}" if len(rs) == 1 else f"church-mail-{tray}"
         # The church it's from rides along: a tap opens that church's Email on
         # the message, whichever business the device was last signed up from.
         data = {"tray": tray, "biz": church.id}
@@ -211,7 +231,7 @@ def send(church: cm.Church, rows: List[Dict[str, Any]]) -> int:
             # owner of two would otherwise hear one church's mail on none of
             # them: Kevin, 2026-11-14, "it didn't pop up on my phone").
             sent += push_notifications.send_to_user(uid, title=title, body=body, nav="operate:email",
-                                                    tag=f"church-mail-{tray}", data=data)
+                                                    tag=tag, data=data)
         except Exception as e:  # noqa: BLE001 — the mail is in Email either way
             logger.warning("church mail alert to %s failed: %s", uid[:8], e)
     return sent
