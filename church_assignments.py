@@ -806,17 +806,13 @@ def assignments_change(task_id: str, body: Dict[str, Any], session: UserSession 
     return {"saved": _one(ch, saved)}
 
 
-@router.delete("/assignments/{task_id}")
-def assignments_take_back(task_id: str, business_id: str, session: UserSession = Depends(sb_clients.authed_request),
-                          biz: Dict[str, Any] = Depends(business_access.business_access("member"))):
+def take_back(ch: co.Church, me: Dict[str, Any], t: Dict[str, Any]) -> Dict[str, Any]:
     """Take one back: whoever handed it, or anyone over them. Once it's been
     sent up, only whoever sent it up, whoever it went to, or anyone over them
     (never the assignee, even one who handed it to herself), so it never
     vanishes from the list of whoever it went to. Answers with what was taken
-    back."""
-    ch = _church(session, biz)
-    me = _me(session)
-    t = _task(ch, task_id)
+    back. The route's rules and Chief's (take_back_assignment) are this one
+    function."""
     target = _target_of(t)
     guard = ""
     if t.get("raised_at"):
@@ -834,7 +830,15 @@ def assignments_take_back(task_id: str, business_id: str, session: UserSession =
         raise HTTPException(409, SENT_UP_STAYS) if guard and left[0].get("raised_at") else HTTPException(503, UNSAVED)
     print(f"[church_assignments] {ch.b[:8]}: {me['id'][:8]} took back {t['id']} ({_plain(t.get('title'))[:60]!r})",
           flush=True)
-    return {"taken_back": {"id": str(t["id"]), "title": _plain(t.get("title")), "for": co.key(target)}}
+    return {"id": str(t["id"]), "title": _plain(t.get("title")), "for": co.key(target)}
+
+
+@router.delete("/assignments/{task_id}")
+def assignments_take_back(task_id: str, business_id: str, session: UserSession = Depends(sb_clients.authed_request),
+                          biz: Dict[str, Any] = Depends(business_access.business_access("member"))):
+    """Take one back (take_back's rules). Answers with what was taken back."""
+    ch = _church(session, biz)
+    return {"taken_back": take_back(ch, _me(session), _task(ch, task_id))}
 
 
 # ─── Sending one up ───────────────────────────────────────────────────

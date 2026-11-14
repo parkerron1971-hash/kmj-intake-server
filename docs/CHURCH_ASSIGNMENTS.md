@@ -115,6 +115,8 @@ user ids mean nothing in another business; a restored church's logins pick their
 under(biz, me) -> list of {kind: 'login'|'person', id, name, why}
 is_over(biz, me, target) -> bool        # every write checks this
 above(biz, who) -> list of the same     # who a stuck item goes up to
+is_guarded(ch, target) -> bool          # a pastor or an elder: no office seat hands them work
+may_hand(ch, me, *targets) -> bool      # a hand-off that isn't an assignment's (a board's follow-up)
 ```
 
 `me` / `who` is a login (user id plus its seat) or one of the church's people (contact id; a
@@ -439,14 +441,29 @@ No office standing but the owner's is over a **shepherd** or a **senior**:
   legacy and job fallbacks, the Ministers setting, the seniors and the owner's identity), which
   isn't simple enough to be safe, so the rule holds where the list is offered and in every server
   route.
-- **Known limit, the board:** `church_board.make_tasks` still hands a pastor or an elder the
-  follow-ups the board decided. That's the board's decision, recorded by the office, not the
-  office giving work, so it stays as it is.
+- **A board's follow-ups follow it too** (2026-11-14; until then a known limit, and a way around
+  the rule: an office seat pressed "make tasks" and a pastor or an elder was handed one).
+  `church_board.make_tasks` asks `church_over.may_hand(ch, me, the member's login and record)`
+  for each follow-up before it makes anything: the owner hands every one out; anyone hands
+  themselves their own; someone who isn't a pastor or an elder is handed theirs as before; a
+  pastor or an elder (`is_guarded`: a shepherd or a senior, a login whose person is one, and the
+  owner where the owner's own person is one, as the Hand to list reads it) only by a login that
+  is over them (`is_over`: the ministry chain on the map). A follow-up the login may not hand
+  out is **still made**, so the board's decision isn't lost and a second press makes nothing
+  twice, but handed to no one: the person's name goes in its title ("Plan the elders' retreat
+  (Marcus Taylor)", as a member with no login is already named), its notes say why, and the
+  answer lists it. The owner hands it out from Tasks. The route's answer keeps its shape and
+  adds two keys: `not_handed: [{item_id, title, name}]` and `not_handed_text` (one line to show,
+  "" when everything was handed out). Like the Hand to list, it follows the rule only while
+  assignments are open for the church (`church_over.church_open`); closed, nothing more is read
+  and the board hands them out as before. Who is a pastor that can't be read is a 503 with
+  nothing made.
 
 `Church.shepherds`, `Church.guarded` (shepherds | seniors); `_under` leaves `guarded` out of the
 office part and the everyone part, then walks the map from the login's person for an Admin or a
 lanes overseer whose church has someone guarded. Every route that asks `is_over` (hand one out,
-start, the one-on-one, send up, take back, the board) follows it.
+start, the one-on-one, send up, take back, the board) follows it, and so does a board's "make
+tasks" through `may_hand`.
 
 ### From the office (`church_handovers.py`)
 
@@ -472,10 +489,17 @@ Routes (prefix /church, the assignment routes' gate: a church, the switch, then 
                                               last 90 days, newest first
     GET  /church/handovers/leaders?business_id=
                                               {leaders: [{contact_id, name, why, departments:
-                                              [{id, name}]}]}
+                                              [{id, name}]}], all_departments: [{id, name}]}
     POST /church/handovers/{id}/seen          {business_id} -> {saved: {id, seen, seen_at}}: Got
                                               it from My week (the login's own person); once,
                                               again answers with it as it is; anyone else's 404
+
+**Which departments the picker offers** (2026-11-14): each leader's `departments` is their own
+(the ones they lead or oversee; for a Manager, only those it may send for), unchanged.
+`all_departments` is every active department of the church's, in the map's order, for the owner
+and an Admin, who may name any of them for any leader (`send` always allowed it; the list never
+carried them, so the screen couldn't offer them). For a Manager it is `[]`: its choice stays the
+leader's own `departments`, and `send` still refuses any other (403). The map closed: `[]`.
 
 A sent item: `{id, to: {contact_id, name}, title, note, link, for_date, for_date_text, department,
 sent_at, from, seen, seen_at, seen_text}`.
@@ -774,6 +798,7 @@ Minister Ray the retreat sign-up list for Youth".
 | `mark_assignment` | write, A | `church_assignments.change` (done) | "mark the rooms one done" |
 | `mark_stuck` | write, A | `church_assignments.change` (stuck) | "I'm stuck on the policy, waiting on Pastor's copy" |
 | `send_up_assignment` | write, A | `church_assignments.raise_up` | "send Tom's coffee budget up" |
+| `take_back_assignment` | write, C | `church_assignments.take_back` | "take the lock-in room back from Naiya" |
 | `set_my_day` | write, A | `church_assignments.pick_day` | "move my weekly text to Thursday" |
 | `send_handover` | write, C | `church_handovers.leaders`, `send` | "send Minister Ray the retreat sign-up list for Youth" |
 
@@ -796,8 +821,20 @@ Minister Ray the retreat sign-up list for Youth".
   until the person says it again; `send_handover` is class C, so the chat gate holds it too.
 - Tags, not native tools: `mcp_server.WRITE_TOOL_SCHEMAS` is also the outside agent's list and
   carries no signed-in person; each verb needs one (registry `chief_only`), as `chief_duties` and
-  `chief_map`. All ten are in `chief_areas.VERBS` as everyone's own work (`ALL`): who may act for
+  `chief_map`. All eleven are in `chief_areas.VERBS` as everyone's own work (`ALL`): who may act for
   whom is the engine's, never a lane's.
+- **Taking one back** (2026-11-14; until then only the board could). `take_back_assignment
+  {assignment, who?}` names the person among who this login is over (or themselves, `who` left
+  out) and the assignment by words of its title among their open and stuck ones, then calls
+  `church_assignments.take_back`, the function the DELETE route is: whoever handed it, or anyone
+  over them; once it's been sent up, whoever sent it up, whoever it went to, or anyone over them.
+  A refusal is the route's own words ("They aren't someone you're over here.", "It was sent up,
+  so it stays until …"). The receipt says where it's gone from and that nobody is told. It is
+  **class C**: the task is removed for good (its stuck note and what was done on it too), so it
+  runs when someone asks and never on Chief's own idea, a spoken turn reads it back first, and
+  undo never reaches it (`action_inverse`: no inverse may be class C). So "undo that" after a
+  `give_assignment` is a take-back in words; `action_inverse.NOT_UNDOABLE_REASON` says so. A done
+  one isn't named by this verb (the board can still remove it).
 - The turn's tail carries a short CHURCH ASSIGNMENTS block only where the switch is open for the
   church and the login has an office seat there (`turn_line`).
 - **Other people's words taint the turn** (#1806 review). A title, what done means and notes are
@@ -826,4 +863,7 @@ Minister Ray the retreat sign-up list for Youth".
   "Your people", per the phone mock Kevin approved (2026-11-12: "phone view idea is good. we can
   move forward with that.").
 - **D (backend):** the Chief verbs (`chief_church_assignments.py`).
+- **Fixes before it opens to every church (backend, 2026-11-14):** Chief takes an assignment back
+  (`take_back_assignment`); a board's follow-ups follow the pastors-and-elders rule
+  (`church_over.may_hand`); the hand-over picker's `all_departments` for the owner and an Admin.
 - **F1 / F2 (frontend):** My week + day picker; the board.

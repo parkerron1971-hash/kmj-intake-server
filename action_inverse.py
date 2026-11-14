@@ -439,6 +439,11 @@ NOT_UNDOABLE_REASON: Dict[str, str] = {
     # asked in words, with the same who and role and only_if_asked.
     "ask_into_role": ("The email asking them already went and can't be unsent. I can take the ask back while "
                       "they haven't said yes: just say so."),
+    # Taking a church assignment back is take_back_assignment, class C (it
+    # removes the task for good; no inverse may be): Chief takes it back when
+    # asked in words, with the same who and the assignment's title.
+    "give_assignment": ("Undo doesn't reach an assignment, and they may have had the email about it already. "
+                        "I can take it back: just say so."),
 }
 
 

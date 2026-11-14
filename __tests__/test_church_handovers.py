@@ -8,6 +8,9 @@ Pins, at the four test churches (church_three), through the real routes:
     own person too, never yourself); a Manager to the leader or overseer of a
     department whose support duty it holds or whose area is one of its own,
     each with why; a Member seat, nobody; Riverside, nobody set up
+  * for a leader: the owner and an Admin are offered every active department
+    (all_departments) for any leader; a Manager none, and send still refuses
+    one that isn't the leader's own
   * the rule beside it: an Admin can't hand an elder an assignment, and can
     send that elder something for their area
   * what a hand-over says: a title (140), a note (1000), an https link only,
@@ -181,6 +184,55 @@ def test_a_member_seat_sends_nothing(app, db):
     assert app.get(f"/church/handovers/leaders?business_id={NEW_HOPE}").status_code == 403
     assert send(app, NEW_HOPE, "kara", title="x").status_code == 403
     assert app.get(f"/church/handovers?business_id={NEW_HOPE}").status_code == 403
+
+
+# ─── For a leader: which departments the picker can offer ─────────────
+
+def _page(app, biz):
+    r = app.get(f"/church/handovers/leaders?business_id={biz}")
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+@pytest.mark.parametrize("handle", ["owner", "minnie"])
+def test_the_owner_and_an_admin_are_offered_every_department_for_any_leader(app, db, handle):
+    as_(app, LOVE_CITY, handle)
+    got = _page(app, LOVE_CITY)
+    assert [d["name"] for d in got["all_departments"]] == ["Prayer", "Outreach & Welcome", "Youth"], "the map's order"
+    assert all(set(d) == {"id", "name"} for d in got["all_departments"])
+    by = {db.label[x["contact_id"]]: x for x in got["leaders"]}
+    assert by["Marcus"]["departments"] == [], "an elder leads no department: his own list is as it was"
+    assert [d["name"] for d in by["Andre"]["departments"]] == ["Youth"], "a leader's own are as they were"
+    youth = next(d["id"] for d in got["all_departments"] if d["name"] == "Youth")
+    r = send(app, LOVE_CITY, "marcus", title="The youth calendar", department_id=youth)
+    assert r.status_code == 200 and r.json()["saved"]["department"] == "Youth", "what's offered, send takes"
+
+
+def test_a_department_no_longer_active_isnt_offered(app, db):
+    next(d for d in db.t["church_departments"] if d["id"] == dept(db, LOVE_CITY, "Prayer"))["status"] = "archived"
+    as_(app, LOVE_CITY, "minnie")
+    assert [d["name"] for d in _page(app, LOVE_CITY)["all_departments"]] == ["Outreach & Welcome", "Youth"]
+
+
+def test_a_manager_is_offered_no_other_department_and_send_still_refuses_one(app, db):
+    as_(app, LOVE_CITY, "tiara")
+    got = _page(app, LOVE_CITY)
+    assert got["all_departments"] == [], "a Manager's list stays what it may send for"
+    by = {db.label[x["contact_id"]]: x for x in got["leaders"]}
+    assert [d["name"] for d in by["Yolanda"]["departments"]] == ["Youth"]
+    r = send(app, LOVE_CITY, "yolanda", title="x", department_id=dept(db, LOVE_CITY, "Prayer"))
+    assert r.status_code == 403 and r.json()["detail"] == "That department isn't one you can send for."
+    as_(app, LOVE_CITY, "naiya")
+    assert _page(app, LOVE_CITY) == {"leaders": [], "all_departments": []}, "a Manager with no one to send to"
+
+
+def test_all_departments_is_empty_where_no_map_is_set_up_or_the_map_is_closed(app, db, monkeypatch):
+    as_(app, RIVERSIDE, "owner")
+    assert _page(app, RIVERSIDE) == {"leaders": [], "all_departments": []}
+    monkeypatch.setenv("CHURCH_MAP", "off")
+    as_(app, LOVE_CITY, "minnie")
+    got = _page(app, LOVE_CITY)
+    assert got["all_departments"] == [] and got["leaders"], "the map closed: leaders by role, no departments"
 
 
 # ─── The rule beside it ───────────────────────────────────────────────
