@@ -154,6 +154,8 @@ TICKS = {
     "welcome_retry": "lifecycle_emails:welcome_retry_tick",
     "signup_reminders": "lifecycle_emails:signup_reminders_tick",
     "week_beats": "lifecycle_emails:week_beats_tick",
+    # BE-5: the day-3 note reads HOMES only (is_sample=is.false), never a sample.
+    "sample_follow_up": "lifecycle_emails:sample_follow_up_tick",
     "devotional_daily_texts": "devotional_daily:sweep_tick",
     "devotional_daily_morning": "devotional_daily:morning_tick",
     "sample_church_cleanup": "sample_church:cleanup_tick",

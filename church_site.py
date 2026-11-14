@@ -201,6 +201,22 @@ def _plan_tokens() -> Dict[str, str]:
     return out
 
 
+# What a church does first while every new church gets a sample church
+# (sample_church.py; BE-5). Only with CHURCH_SAMPLE=on: in test mode the
+# testers alone get one, so the public pages keep today's words.
+SAMPLE_LINE = "Look around a sample church first"
+
+
+def _sample_open() -> bool:
+    """sample_church.open_to_all(): the switch on, billing enforced, the
+    columns there. Fails to False (today's words)."""
+    try:
+        import sample_church
+        return bool(sample_church.open_to_all())
+    except Exception:
+        return False
+
+
 def _trial_tokens(church: bool = False) -> Dict[str, str]:
     """The trial and card wording, from what checkout actually grants:
     "no card" only while signup really starts the trial without one.
@@ -209,6 +225,19 @@ def _trial_tokens(church: bool = False) -> Dict[str, str]:
     free days."""
     import marketing_pages as mp
     import pricing_config
+    if church and _sample_open():
+        # Every new church looks around a sample church first (CHURCH_SAMPLE=on,
+        # sample_church.open_to_all): no card and no trial, and its plan starts
+        # the day it chooses one (or after the free week, while that is back).
+        # The Start buttons stay "Start free": looking around costs nothing.
+        if pricing_config.church_free_week() and mp._trial_days():
+            start = f"{mp._trial_free_phrase()} once you choose your plan"     # "7 days free once …"
+            then = f"{start}."
+        else:
+            start, then = "your first month starts the day you choose your plan", PROMISE
+        return {"CTA_START": "Start free, no card",
+                "TRIAL_LINE": f"{SAMPLE_LINE}, no card needed. {then}",
+                "TRIAL_FINE": f"{SAMPLE_LINE}, no card needed · {start}"}
     # A church plan has no free days (pricing_config.church_free_week, Kevin
     # 2026-11-13): the first month is charged the day the church chooses its
     # plan. Signing up is still free and takes no card while the no-card

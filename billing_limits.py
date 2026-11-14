@@ -46,7 +46,11 @@ def require_feature(business_id: str, feature: str) -> None:
     raises. Grandfathered owners always pass. Fails OPEN on lookup
     errors — a billing hiccup must never take a feature down. The 402
     payload shape is the contract the frontend's upgrade prompt reads:
-    {error: "feature_locked", feature, required_plan, message}."""
+    {error: "feature_locked", feature, required_plan, message}.
+
+    A sample church passes for the Growing church plan's features
+    (feature_gates.opens_feature, BE-5): its rooms and reports open for
+    looking around. It still has no plan, no allowance and no sends."""
     import usage_metering
     try:
         if not feature_gates.enforcement_on():
@@ -54,7 +58,7 @@ def require_feature(business_id: str, feature: str) -> None:
         biz_row = usage_metering._biz_row(business_id)
         if usage_metering.is_grandfathered_business(business_id, biz_row):
             return
-        if feature_gates.has_feature(biz_row, feature):
+        if feature_gates.opens_feature(biz_row, feature):
             return
     except Exception as e:
         logger.warning(f"require_feature({feature}) failed open: {e}")
