@@ -254,62 +254,28 @@ class InviteBody(BaseModel):
     contact_id: Optional[str] = None
 
 
-@router.post("/invite")
-async def invite(biz: str, body: InviteBody, request: Request,
-                 user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
-    # STEP-UP on the GRANT only. Revoking is the emergency brake and
-    # must never have friction in front of it.
-    ledger_unlock.require_unlock(request, str(user.id), ledger_unlock.SCOPE_ACCESS)
-    inviter_role = require_role(biz, str(user.id), "manager")
-    lane = None
-    if body.lane:
-        import church_areas
-        lane = church_areas.lane_for_invite(biz, body.lane)
-    role = lane["role"] if lane else body.role
-    if role == "admin" and _ROLE_RANK[inviter_role] < _ROLE_RANK["admin"]:
-        raise HTTPException(403, "only an admin or the owner can invite admins")
-    # comp_tier in the select (flip-test class, 2026-08-22): without it a
-    # comped business resolves to NO plan and the seat cap reads 1 —
-    # blocking the very accounts comp_tier exists to unblock.
-    rows = sb_clients.sb_get_as_service(
-        f"/businesses?id=eq.{biz}&select=id,name,owner_id,subscription_status,"
-        f"subscription_plan,comp_tier&limit=1") or []
-    biz_row = rows[0] if rows else {}
-    if role not in _ROLES:
-        raise HTTPException(400, f"role must be one of {_ROLES}")
-    email = (body.email or "").strip().lower()
-    if not email or "@" not in email:
-        raise HTTPException(400, "valid email required")
-
-    # Seat cap (gate-ready; enforced only with BILLING_ENFORCE=on).
-    cap = billing_limits.can_add_seat(biz, biz_row)
-    if cap["enforce"] and not cap["allowed"]:
-        raise HTTPException(402, {
-            "error": "seat_cap_reached",
-            "message": f"Your plan includes {cap['limit']} seat(s) — this business "
-                       f"is using {cap['count']}. Upgrade to add more teammates.",
-            **{k: cap[k] for k in ("count", "limit")}})
-
-    existing = sb_clients.sb_get_as_service(
-        f"/business_users?business_id=eq.{biz}&invited_email=eq.{email}"
-        f"&status=in.(invited,active)&select=id&limit=1") or []
-    if existing:
-        raise HTTPException(409, "this person is already invited or active")
-    person = _contact(biz, body.contact_id) if body.contact_id else match_contact(biz, email)
-    if body.contact_id and not person:
-        raise HTTPException(404, "that person isn't in this business's records")
-
+def make_invite_row(biz: str, *, email: str, role: str, lane: Optional[Dict[str, Any]],
+                    person: Optional[Dict[str, Any]], invited_by: str) -> Optional[Dict[str, Any]]:
+    """The invitation itself: one invited seat, in its lane when it has
+    one, tied to the person the church knows by that email. None when it
+    didn't save. The route checks who may invite and the seat cap before
+    it; church_move_setup does the same for a church's Move-in logins."""
     res = sb_clients.sb_post_as_service("/business_users", {
         "business_id": biz, "invited_email": email, "role": role,
-        "status": "invited", "invited_by": str(user.id),
+        "status": "invited", "invited_by": invited_by,
         "invited_at": _now_iso(),
         **({"areas": lane["areas"]} if lane and lane["areas"] else {}),
         **({"lane": lane["key"]} if lane else {}),
         **({"contact_id": str(person["id"])} if person else {}),
     })
     row = (res or [None])[0] if isinstance(res, list) else res
-    if not row:
-        raise HTTPException(500, "invite insert failed")
+    return row or None
+
+
+async def send_invite_email(biz: str, biz_row: Dict[str, Any], row: Dict[str, Any], *, email: str, role: str,
+                            lane: Optional[Dict[str, Any]], person: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """The invitation's email, best effort: {email_sent, accept_url,
+    church_email}. A church's opens at its own office door."""
     # A church's invite opens at its own office door (office_door).
     import office_door
     door = office_door.path_for(biz)
@@ -361,9 +327,61 @@ async def invite(biz: str, body: InviteBody, request: Request,
     except Exception as e:
         logger.warning(f"[team] invite email not sent: {e}")
 
-    return {"ok": True, "member": row, "email_sent": email_sent,
-            "accept_url": accept_url, "seats": cap, "lane": lane["key"] if lane else None,
-            "church_email": church_email}
+    return {"email_sent": email_sent, "accept_url": accept_url, "church_email": church_email}
+
+
+@router.post("/invite")
+async def invite(biz: str, body: InviteBody, request: Request,
+                 user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+    # STEP-UP on the GRANT only. Revoking is the emergency brake and
+    # must never have friction in front of it.
+    ledger_unlock.require_unlock(request, str(user.id), ledger_unlock.SCOPE_ACCESS)
+    inviter_role = require_role(biz, str(user.id), "manager")
+    lane = None
+    if body.lane:
+        import church_areas
+        lane = church_areas.lane_for_invite(biz, body.lane)
+    role = lane["role"] if lane else body.role
+    if role == "admin" and _ROLE_RANK[inviter_role] < _ROLE_RANK["admin"]:
+        raise HTTPException(403, "only an admin or the owner can invite admins")
+    # comp_tier in the select (flip-test class, 2026-08-22): without it a
+    # comped business resolves to NO plan and the seat cap reads 1 —
+    # blocking the very accounts comp_tier exists to unblock.
+    rows = sb_clients.sb_get_as_service(
+        f"/businesses?id=eq.{biz}&select=id,name,owner_id,subscription_status,"
+        f"subscription_plan,comp_tier&limit=1") or []
+    biz_row = rows[0] if rows else {}
+    if role not in _ROLES:
+        raise HTTPException(400, f"role must be one of {_ROLES}")
+    email = (body.email or "").strip().lower()
+    if not email or "@" not in email:
+        raise HTTPException(400, "valid email required")
+
+    # Seat cap (gate-ready; enforced only with BILLING_ENFORCE=on).
+    cap = billing_limits.can_add_seat(biz, biz_row)
+    if cap["enforce"] and not cap["allowed"]:
+        raise HTTPException(402, {
+            "error": "seat_cap_reached",
+            "message": f"Your plan includes {cap['limit']} seat(s) — this business "
+                       f"is using {cap['count']}. Upgrade to add more teammates.",
+            **{k: cap[k] for k in ("count", "limit")}})
+
+    existing = sb_clients.sb_get_as_service(
+        f"/business_users?business_id=eq.{biz}&invited_email=eq.{email}"
+        f"&status=in.(invited,active)&select=id&limit=1") or []
+    if existing:
+        raise HTTPException(409, "this person is already invited or active")
+    person = _contact(biz, body.contact_id) if body.contact_id else match_contact(biz, email)
+    if body.contact_id and not person:
+        raise HTTPException(404, "that person isn't in this business's records")
+
+    row = make_invite_row(biz, email=email, role=role, lane=lane, person=person, invited_by=str(user.id))
+    if not row:
+        raise HTTPException(500, "invite insert failed")
+    sent = await send_invite_email(biz, biz_row, row, email=email, role=role, lane=lane, person=person)
+    return {"ok": True, "member": row, "email_sent": sent["email_sent"],
+            "accept_url": sent["accept_url"], "seats": cap, "lane": lane["key"] if lane else None,
+            "church_email": sent["church_email"]}
 
 
 @router.get("")
