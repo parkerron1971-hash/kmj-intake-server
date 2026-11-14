@@ -4,7 +4,7 @@ date: 2026-11-15
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-11-14, approved the sample church signup: "top tier, no cut corners". BE-3 of the plan: the send and spend guards, the sweeps, the no-sends test and the daily cleanup.'
 status: in review
-prs: [kmj-intake-server#PRNUM]
+prs: [kmj-intake-server#1855]
 migrations: []
 left_undone:
   - "A visitor really owns their sample, so their own login can still write its child tables (contacts, events and so on) straight through PostgREST. The app never does: its guard (solutionist-studio #1561) refuses every Supabase write not in read_posts, and nothing written there can be sent (the seams) or acted on (the sweeps). A database wall would be a restrictive policy through a SECURITY DEFINER is_sample_business(b) helper (docs/RLS_MODEL.md rule 2), a migration for Kevin to apply. Not built."
@@ -13,7 +13,7 @@ left_undone:
   - "exclude() keeps samples out of a sweep's query by id. Past EXCLUDE_MAX (150) samples it says nothing (logged) and drop_samples alone filters, so a limited query could again fill with samples' rows. Raise it, or move the filter into the database, before there are that many."
 decisions:
   - "Three layers, each enough for what it covers: the provider seams refuse (twilio_sms.send_sms, email_sender.send_via_resend, church_mail's direct Resend post, public_site's contact form, push send_to_business and send_to_user with a business, member_push, llm_call); the sweeps pass a sample by; a write guard answers 409 to every write request that names one."
-  - "For everyone, not only samples: no text to a number set aside for fiction (+1 NXX 555-01xx) and no mail to a reserved domain (example.com/.net/.org and their subdomains, *.example, *.test, *.invalid, *.localhost). A made-up record that ever leaked out of a sample still reaches nobody."
+  - "For everyone, not only samples: no text to a number set aside for fiction (+1 NXX 555-01xx) and no mail to a reserved domain (example.com/.net/.org and their subdomains, *.example, *.test, *.invalid, *.localhost). A made-up record that ever leaked out of a sample still reaches nobody. MADE_UP_RECIPIENT_GUARD=off is its kill switch; the test suite's conftest sets it, because tests address their fake mail to example.com, and the sample church's tests turn it back on."
   - "A refused send raises sample_church.SendRefused (a RuntimeError), which every caller already treats as a failed send. A refused AI call is a synthetic 403 Response (llm_call.post, post_with, apost, post_lane), a refused stream a context holding that 403, and sdk_client() raises SampleSpendRefused; all before the call, so nothing is spent or metered."
   - "The spend refusal sits at the front of the llm_call seam, not in _meter, which runs after the call is paid for. It reads the call's business_id or billing_context.current(), and lets through only a task inside sample_church.allow_sample_chief() (the contextvar BE-4 sets)."
   - "Sweeps: drop_samples, drop_sample_map and skip_id after one batched prime() (every answer kept for good, both ways), plus exclude() in the query of every row-driven sweep whose skipped rows would stay due (follow-ups, prayer, leader terms, scheduled group posts, event holds, campaigns, drafts, cases, assignments, workflow runs), so N identical seeded samples can never crowd real churches out of a limit."
