@@ -623,6 +623,9 @@ app.include_router(devotional_daily_router)
 # church's own pages; this router holds the card's POST and /new-here/*.
 from new_here import router as new_here_router
 app.include_router(new_here_router)
+# A church's own texting hours, quiet hours and alert limit (texting_hours.py).
+from texting_hours import router as texting_hours_router
+app.include_router(texting_hours_router)
 # Church, Youth and Kids spaces (member_spaces.py): leaders' posts and the
 # office's leader approvals. BEFORE public_site_router.
 from member_spaces import router as member_spaces_router

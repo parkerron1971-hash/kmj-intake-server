@@ -139,7 +139,12 @@ def clean_switches(raw: Any) -> Dict[str, bool]:
     return out
 
 
-def is_quiet_hour(hour: int) -> bool:
+def is_quiet_hour(hour: int, business: Optional[Dict[str, Any]] = None) -> bool:
+    """Inside quiet hours: the church's own (texting_hours, Text → Texting
+    hours) when the church is known, else 9 PM to 7 AM."""
+    if business is not None:
+        import texting_hours
+        return texting_hours.is_quiet(business, hour)
     return hour >= QUIET_FROM or hour < QUIET_TO
 
 
@@ -160,7 +165,7 @@ def quiet_hour(business: Dict[str, Any], now: Optional[datetime] = None) -> bool
         zone = business_marketing.business_tz(row)
     except Exception:
         return False
-    return is_quiet_hour((now or datetime.now(timezone.utc)).astimezone(zone).hour)
+    return is_quiet_hour((now or datetime.now(timezone.utc)).astimezone(zone).hour, row)
 
 
 def ready() -> bool:
@@ -647,8 +652,10 @@ def announce(business_id: str, body: Dict[str, Any], user: AuthedUser = Depends(
         f"&created_at=gte.{quote(since, safe='')}&select=id&limit=10")
     if recent is None:
         raise HTTPException(503, "Couldn't check today's notes. Please try again.")
-    if len(recent) >= DAILY_ANNOUNCEMENTS:
-        raise HTTPException(429, f"That's {DAILY_ANNOUNCEMENTS} notes in a day. Try again tomorrow.")
+    import texting_hours
+    cap = texting_hours.alerts_per_day(biz)        # the church's own, 3 unless it picked another
+    if len(recent) >= cap:
+        raise HTTPException(429, f"That's {cap} notes in a day. Try again tomorrow.")
     import uuid
     reached = send(biz, "announcements", title=title, body=text, url=_safe_url(body.get("url")),
                    ref_id=str(uuid.uuid4()), sent_by=str(user.id))

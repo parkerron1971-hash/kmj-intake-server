@@ -249,7 +249,7 @@ def test_a_scheduled_text_reads_everything_again(sender, db):
     assert "STOP" in run(nh.run_scheduled(CHURCH, action("monday")))[1] and sender["texts"] == []
     sender["stopped"] = False
     sender["now"] = at(2026, 11, 16, 21)
-    assert "Quiet hours" in run(nh.run_scheduled(CHURCH, action("monday")))[1] and sender["texts"] == []
+    assert "texting hours" in run(nh.run_scheduled(CHURCH, action("monday")))[1] and sender["texts"] == []
     sender["now"] = at(2026, 11, 19, 18)
     db["attendance"] = [{"id": "a1"}]
     assert "came back" in run(nh.run_scheduled(CHURCH, action("invite")))[1] and sender["texts"] == []

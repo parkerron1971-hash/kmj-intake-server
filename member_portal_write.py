@@ -520,7 +520,7 @@ async def serve_write(request: Request, biz: Dict[str, Any], site, me: Dict[str,
     import news_alerts as na
     alerts = None
     if na.church_on(biz):
-        alerts = {"on": True, "sent_today": await asyncio.to_thread(na.sent_today, biz) or 0, "max": na.daily_max()}
+        alerts = {"on": True, "sent_today": await asyncio.to_thread(na.sent_today, biz) or 0, "max": na.daily_max(biz)}
     return render_write(biz, site, request, me, rights, auds, occ, sermons, editing=editing or None, alerts=alerts)
 
 
