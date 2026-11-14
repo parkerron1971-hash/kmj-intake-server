@@ -4,7 +4,7 @@ date: 2026-11-14
 agent: Claude Code (Claude Fable 5.2)
 asked: "ok got it. we need to finish up this preparation"
 status: in review
-prs: []
+prs: [kmj-intake-server#1844]
 migrations: []
 left_undone:
   - "Frontend (solutionist-studio) not touched: the For a leader picker doesn't read all_departments yet, and the board's screen doesn't show not_handed_text. Until it does, a follow-up left for the owner shows only as a task with the person's name in its title."
