@@ -43,7 +43,10 @@ WHO
   The platform owner: /platform/move-in reads every church's room with
   time-limited links to the files, and marks an item checked or asks for
   a change. Each hand-in emails the platform owner; the last one opens a
-  ticket in Mission Control.
+  ticket in Mission Control. Asking for a change emails the church: the
+  login that handed the item in and the church's owner, with the note and
+  the way back to the room (_tell_church). Checked sends nothing; the
+  church sees it on Home.
 
 SWITCH
   CHURCH_MOVE_IN = off | owner | on. Unset is "owner": the platform's own
@@ -799,6 +802,59 @@ async def _tell_owner(me: Dict[str, Any], item: Dict[str, Any], room: Dict[str, 
         return False
 
 
+def _login_email(uid: Any) -> str:
+    """A login's sign-in email, from Auth; '' when there is none or it
+    couldn't be read (the note still waits in the room)."""
+    import messaging_router
+    return messaging_router.owner_email_read(str(uid or "")) or ""
+
+
+def _church_side(biz: Dict[str, Any], had: Dict[str, Any]) -> List[str]:
+    """Who hears that a change is asked: the login that handed the item
+    in, and the church's owner. Each address once."""
+    out: List[str] = []
+    for uid in (had.get("handed_in_by"), biz.get("owner_id")):
+        e = _login_email(uid) if uid else ""
+        if e and e not in out:
+            out.append(e)
+    return out
+
+
+async def _tell_church(biz: Dict[str, Any], item: Dict[str, Any], note: str, to: List[str], when: str) -> List[str]:
+    """One plain email to each of the church's side when we ask for a
+    change (Kevin, 2026-11-14: the church wasn't told; the note only waited
+    in the room). Best effort: the room is the record, so a failed email
+    never fails the mark. Answers the addresses it reached."""
+    reached: List[str] = []
+    if not to:
+        return reached
+    try:
+        from app_base import app_base_url
+        from email_sender import send_via_resend
+        name = str(biz.get("name") or "Your church")
+        link = f"{app_base_url()}/#/operate/move-in"
+        body = (f"<p>We looked over <b>{html.escape(item['title'])}</b> on {html.escape(name)}'s Move-in list. "
+                "It needs one change before we can check it off.</p>"
+                + "".join(f"<p>{html.escape(x)}</p>" for x in note.split("\n") if x.strip())
+                + f'<p><a href="{html.escape(link)}">Open Move-in</a>, under Home, make the change, '
+                  "and hand it in again. We'll look at it as soon as it comes back.</p>")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("move-in: the church's email couldn't be written for %s: %s", biz.get("id"), e)
+        return reached
+    for address in to:
+        try:
+            await send_via_resend(
+                to_email=address, to_name=None,
+                from_email=os.environ.get("RESEND_FROM_EMAIL") or "noreply@mysolutionist.app",
+                from_name="Solutionist", subject=f"One change needed: {item['title']}"[:150],
+                body=body, reply_to=None,
+                idempotency_key=f"move-in-needs-{biz['id']}-{item['key']}-{when}-{address}"[:200])
+            reached.append(address)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("move-in: the church's email didn't send for %s: %s", biz.get("id"), e)
+    return reached
+
+
 def _ticket_all_in(biz: Dict[str, Any]) -> None:
     """Everything is in: one line in Mission Control's Today. The church
     can read its own tickets, so nothing private goes in this one."""
@@ -1002,12 +1058,29 @@ def platform_move_in_room(business_id: str, owner: AuthedUser = Depends(require_
 
 
 @platform_router.post("/{business_id}/{key}")
-def platform_move_in_mark(business_id: str, key: str, body: Dict[str, Any],
-                          owner: AuthedUser = Depends(require_owner)):
+async def platform_move_in_mark(business_id: str, key: str, body: Dict[str, Any],
+                                owner: AuthedUser = Depends(require_owner)):
     """Mark an item checked, or ask the church for a change (with a note
-    the church reads in its room)."""
-    biz = _business(_uuid(business_id, "church"))
+    the church reads in its room). A change is also emailed to the church;
+    `told` answers the addresses it reached, so Mission Control can say who
+    heard."""
+    import asyncio
     item = _item(key)
+
+    def mark() -> Tuple[Dict[str, Any], Dict[str, Any], str, List[str], str]:
+        return _mark(business_id, item, body)
+
+    room, biz, note, to, when = await asyncio.to_thread(mark)
+    told = await _tell_church(biz, item, note, to, when) if note else []
+    return {**room, "told": told}
+
+
+def _mark(business_id: str, item: Dict[str, Any], body: Dict[str, Any]
+          ) -> Tuple[Dict[str, Any], Dict[str, Any], str, List[str], str]:
+    """The mark itself: the room after it, the church, and (for a change)
+    the note, who to tell and when."""
+    key = item["key"]
+    biz = _business(_uuid(business_id, "church"))
     if item.get("live") == "giving":
         raise HTTPException(400, "Giving follows Stripe. There's nothing to mark.")
     if item.get("live") == "texting":
@@ -1022,6 +1095,8 @@ def platform_move_in_mark(business_id: str, key: str, body: Dict[str, Any],
     had = _rows_of(biz_id).get(key)
     if had is None or had.get("state") not in ("handed_in", "checked", "needs"):
         raise HTTPException(409, "The church hasn't handed this one in yet.")
+    when = _now()
     _write(biz_id, key, had, {"state": state, "note": note if state == "needs" else None,
-                              "checked_at": _now() if state == "checked" else None})
-    return _room(biz, links=True)
+                              "checked_at": when if state == "checked" else None})
+    asked = state == "needs"
+    return _room(biz, links=True), biz, (note if asked else ""), (_church_side(biz, had) if asked else []), when
