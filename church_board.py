@@ -69,7 +69,10 @@ members never see a board or its minutes.
   GET    /church/board/decisions?business_id=&q=&board_id=&year=   the decisions log
   POST   /church/board/meetings/{id}/send             email the draft minutes to the board's members
   POST   /church/board/meetings/{id}/approve          {business_id, in_meeting_id?}
-  POST   /church/board/meetings/{id}/tasks            make Tasks from the follow-ups
+  POST   /church/board/meetings/{id}/tasks            make Tasks from the follow-ups: {made, not_handed,
+                                                       not_handed_text, the meeting}; one for a pastor or an
+                                                       elder this login may not hand work is made, handed to
+                                                       no one, and listed in not_handed
 
 Switched by CHURCH_BOARD: off | owner | on (owner until a Thursday). Until
 supabase/APPLY-2026-10-27-church-board.sql is applied the status says
@@ -1337,38 +1340,92 @@ def approve(me: Dict[str, Any], meeting_id: str, in_meeting_id: Any = None) -> D
     return meeting_page(me, got[0])
 
 
+WHO_HANDS = "Only the owner, or whoever is over them on the leaders map, gives a pastor or an elder work."
+NOT_HANDED = "The board named {name} for this. It isn't handed to them yet. " + WHO_HANDS
+
+
+def _not_handed(me: Dict[str, Any], items: List[Dict[str, Any]], members: Dict[str, Dict[str, Any]]) -> Set[str]:
+    """The follow-ups this login may not hand to who the board named (Kevin,
+    2026-11-12: "admins can not give work to elders and pastors"): the ones
+    for a pastor or an elder, unless the login is the church's owner, is that
+    person, or is over them on the leaders map (church_over.may_hand, the
+    decision the assignment routes make). Only while church assignments are
+    open for the church, as the Hand to list follows the rule
+    (church_my_week.without_guarded); closed, nothing is read and the board
+    hands them out as before. Read before any task is made: a read that
+    fails is a 503 with nothing made."""
+    import church_map
+    import church_over as co
+    if me["uid"] == str(me["biz"].get("owner_id") or "") or not co.church_open(me["biz"]):
+        return set()
+    ch, asker = co.Church(me["biz"]), co.who(co.LOGIN, me["uid"])
+    out: Set[str] = set()
+    with church_map.once():
+        for i in items:
+            who = members.get(str(i.get("follow_up_member") or "")) or {}
+            ids = [co.who(kind, who[col]) for kind, col in ((co.LOGIN, "user_id"), (co.PERSON, "contact_id"))
+                   if who.get(col)]
+            if ids and not co.may_hand(ch, asker, *ids):
+                out.add(str(i["id"]))
+    return out
+
+
+def _not_handed_text(left: List[Dict[str, str]]) -> str:
+    """One line for the screen: which follow-ups wait for the owner, and why."""
+    if not left:
+        return ""
+    if len(left) == 1:
+        return (f"“{left[0]['title']}” is in Tasks with {left[0]['name']}'s name on it, but it isn't handed to "
+                f"them. {WHO_HANDS}")
+    said = [f"“{x['title']}” ({x['name']})" for x in left]
+    return (f"{len(left)} follow-ups are in Tasks with a name on each, but they aren't handed out: "
+            f"{', '.join(said[:-1])} and {said[-1]}. {WHO_HANDS}")
+
+
 def make_tasks(me: Dict[str, Any], meeting_id: str) -> Dict[str, Any]:
     """Each follow-up without a task becomes one, through the app's own tasks
     (Office › Tasks): handed to the member's login where they have one, due
     when the follow-up is. A member with no login who is one of the church's
     people is handed it as a leader (My tasks for leaders, church_leader_tasks:
     while its switch is open to this login and its migration is in), so it
-    reaches their Lead tab. Twice makes each once."""
+    reaches their Lead tab. Twice makes each once.
+
+    A follow-up for a pastor or an elder that this login may not hand them
+    (_not_handed) is still made, so the board's decision isn't lost, but
+    handed to no one: their name goes in its title, its notes say why, and
+    the answer lists it in `not_handed` (with `not_handed_text`, a line to
+    show) for the church's owner to hand out from Tasks."""
     m = _meeting(me, meeting_id)
     _writes(me, m["board_id"])
     biz = str(me["biz"]["id"])
     items = [i for i in _items(biz, [str(m["id"])]) if i.get("status") == "follow_up" and not i.get("task_id")]
     if not items:
-        return {"made": 0, **meeting_page(me, m)}
+        return {"made": 0, "not_handed": [], "not_handed_text": "", **meeting_page(me, m)}
     board = _board(me, m["board_id"])
     members = {str(x["id"]): x for x in _members(biz, [str(board["id"])], everyone=True)}
+    kept = _not_handed(me, items, members)
     zone = _zone(me)
     day = when_words(m["starts_at"], zone).split(" at ")[0]
     import church_leader_tasks
     by_contact = (any(x.get("contact_id") and not x.get("user_id") for x in members.values())
                   and church_leader_tasks.open_to(me["user"]) and church_leader_tasks.ready(biz))
     made = 0
+    left: List[Dict[str, str]] = []
     for i in items:
         who = members.get(str(i.get("follow_up_member") or "")) or {}
         title = i.get("title") or "A follow-up"
-        leader = str(who.get("contact_id") or "") if by_contact and who and not who.get("user_id") else ""
-        if who and not who.get("user_id") and not leader:
+        keep = str(i["id"]) in kept              # a pastor or an elder this login may not hand work
+        login = None if keep else (who.get("user_id") or None)
+        leader = str(who.get("contact_id") or "") if by_contact and who and not who.get("user_id") and not keep else ""
+        if who and not login and not leader:
             title = f"{title} ({who.get('name')})"
         desc = f"A follow-up from the {board['name']} meeting of {day}."
+        if keep:
+            desc += " " + NOT_HANDED.format(name=who.get("name") or "someone")
         if i.get("minutes"):
             desc += f"\n\n{i['minutes'][:1500]}"
         row = {"business_id": biz, "title": title[:200], "description": desc, "status": "todo", "priority": "medium",
-               "due_date": i.get("follow_up_due"), "assigned_to": who.get("user_id") or None}
+               "due_date": i.get("follow_up_due"), "assigned_to": login}
         if leader:
             # Who handed it (the database keeps a server write's own value):
             # late, with no one above the leader, it comes back to them.
@@ -1385,7 +1442,10 @@ def make_tasks(me: Dict[str, Any], meeting_id: str) -> Dict[str, Any]:
             sb_clients.sb_delete_as_service(f"/tasks?id=eq.{_q(tid)}&business_id=eq.{_q(biz)}")
             continue
         made += 1
-    return {"made": made, **meeting_page(me, m)}
+        if keep:
+            left.append({"item_id": str(i["id"]), "title": i.get("title") or "A follow-up",
+                         "name": who.get("name") or "someone"})
+    return {"made": made, "not_handed": left, "not_handed_text": _not_handed_text(left), **meeting_page(me, m)}
 
 
 # ─── Routes ───────────────────────────────────────────────────────────

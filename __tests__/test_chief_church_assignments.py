@@ -41,7 +41,7 @@ from church_three import GRACE, LOVE_CITY, NEW_HOPE, RIVERSIDE  # noqa: E402
 
 NOW = datetime(2026, 11, 12, 15, 0, tzinfo=timezone.utc)      # Thursday, 10 AM in Detroit
 VERBS = ("people_under", "assignments_of", "one_on_one", "give_assignment", "start_first_assignment",
-         "mark_assignment", "mark_stuck", "send_up_assignment", "set_my_day", "send_handover")
+         "mark_assignment", "mark_stuck", "send_up_assignment", "take_back_assignment", "set_my_day", "send_handover")
 
 
 @pytest.fixture
@@ -132,6 +132,8 @@ def test_the_verbs_are_wired_classified_placed_and_in_the_prompt():
                  "set_my_day"):
         assert ar.reversibility(verb) == "A" and not ar.is_bulk(verb), verb
     assert ar.reversibility("send_handover") == "C", "an email to a person, no recall"
+    assert ar.reversibility("take_back_assignment") == "C" and not ar.is_bulk("take_back_assignment"), \
+        "it removes the task for good: when asked, never on Chief's own idea"
     assert {"people_under", "assignments_of", "one_on_one"} <= {t["name"] for t in ctl.read_tool_definitions()}
     ctl.reset_turn(writes_allowed=True)
     assert not set(VERBS) & {t["name"] for t in ctl.write_tool_definitions()}
@@ -210,6 +212,91 @@ def test_mark_the_rooms_one_done_and_open_again(db):
     assert mine(db, LOVE_CITY, "Every room in the system")["status"] == "done"
     back = ok(run(db, LOVE_CITY, "naiya", "mark_assignment", assignment="rooms", done=False))
     assert back == "Marked “Every room in the system” not done: it's open again."
+
+
+# ─── Taking one back ──────────────────────────────────────────────────
+
+LOCK_IN = "Book a room for the youth lock-in"
+
+
+def test_take_the_lock_in_room_back_from_naiya(db):
+    ok(run(db, LOVE_CITY, "jessica", "give_assignment", who="Naiya", title=LOCK_IN, due_date="2026-11-20"))
+    got = run(db, LOVE_CITY, "jessica", "take_back_assignment", who="Naiya", assignment="the lock-in room")
+    assert ok(got) == (f"Took “{LOCK_IN}” back from Naiya Clark. It's no longer on their My week. They aren't told, "
+                       "so let them know if they had started on it.")
+    assert got["label"] == f"Took back: “{LOCK_IN}”" and got["who"] == "Naiya Clark"
+    assert not [t for t in db.t["tasks"] if t["title"] == LOCK_IN], "the board's own take it back: the task is gone"
+
+
+def test_take_back_one_i_gave_myself_and_one_i_gave_an_elder_under_me(db):
+    ok(run(db, LOVE_CITY, "naiya", "give_assignment", who="me", title="Tidy the supply closet"))
+    assert ok(run(db, LOVE_CITY, "naiya", "take_back_assignment", assignment="supply closet")) == \
+        "Took “Tidy the supply closet” back. It's off your list."
+    ok(run(db, LOVE_CITY, "jessica", "give_assignment", who="Marcus", title="Call the lodge"))
+    said = ok(run(db, LOVE_CITY, "jessica", "take_back_assignment", who="Elder Marcus", assignment="lodge"))
+    assert said.startswith("Took “Call the lodge” back from Marcus Taylor. It's no longer on their Lead tab in the "
+                           "church's app, under Assignments.")
+    assert not [t for t in db.t["tasks"] if t["title"] in ("Tidy the supply closet", "Call the lodge")]
+
+
+def test_take_back_refuses_in_the_boards_own_words_and_changes_nothing(db):
+    ok(run(db, LOVE_CITY, "jessica", "give_assignment", who="Naiya", title=LOCK_IN))
+    # One on my list that someone else handed me: the route's own refusal.
+    mine_ = run(db, LOVE_CITY, "naiya", "take_back_assignment", assignment="lock-in")
+    assert mine_["failed"] and mine_["label"]
+    assert mine_["result"] == f"Failed: {cas.NOT_OVER[0].lower()}{cas.NOT_OVER[1:].rstrip('.')}. Nothing changed."
+    # Someone I'm not over is nobody I can name: an admin and an elder, a lane manager and anyone.
+    for handle, who in (("minnie", "Marcus"), ("laquesha", "Naiya")):
+        got = run(db, LOVE_CITY, handle, "take_back_assignment", who=who, assignment="lock-in")
+        assert got["failed"] and got["result"].endswith("Nothing changed."), (handle, got["result"])
+    # Words that name none of theirs, and no name at all.
+    none = run(db, LOVE_CITY, "jessica", "take_back_assignment", who="Naiya", assignment="the van")
+    assert none["failed"] and "isn't one of Naiya's open assignments" in none["result"] and LOCK_IN in none["result"]
+    assert run(db, LOVE_CITY, "jessica", "take_back_assignment", who="Zelda", assignment="lock-in")["failed"]
+    assert mine(db, LOVE_CITY, LOCK_IN), "still on her list"
+
+
+def test_once_its_sent_up_the_assignee_cant_take_it_back_and_whoever_sent_it_up_can(db):
+    ok(run(db, LOVE_CITY, "naiya", "give_assignment", who="me", title="Order the new chairs"))
+    ok(run(db, LOVE_CITY, "jessica", "send_up_assignment", who="Naiya", assignment="chairs", note="No budget yet"))
+    refused = run(db, LOVE_CITY, "naiya", "take_back_assignment", assignment="chairs")
+    assert refused["failed"] and refused["result"] == (
+        f"Failed: {cas.SENT_UP_STAYS[0].lower()}{cas.SENT_UP_STAYS[1:].rstrip('.')}. Nothing changed.")
+    assert mine(db, LOVE_CITY, "Order the new chairs")["raised_at"], "it never vanishes from whoever it went to"
+    ok(run(db, LOVE_CITY, "jessica", "take_back_assignment", who="Naiya", assignment="chairs"))
+    assert not [t for t in db.t["tasks"] if t["title"] == "Order the new chairs"]
+
+
+def test_take_back_is_held_on_a_tainted_turn_refused_unattended_and_says_when_it_didnt_save(db, monkeypatch):
+    import chief_of_staff as cos
+    ok(run(db, LOVE_CITY, "jessica", "give_assignment", who="Naiya", title=LOCK_IN))
+    assert run(db, LOVE_CITY, "jessica", "take_back_assignment", who="Naiya", assignment="lock-in",
+               _unattended=True)["failed"]
+    monkeypatch.setattr(sb_clients, "sb_delete_as_service", lambda path, **kw: None)
+    unsaved = run(db, LOVE_CITY, "jessica", "take_back_assignment", who="Naiya", assignment="lock-in")
+    assert unsaved["failed"] and unsaved["result"] == "Failed: that didn't save. Try again. Nothing changed."
+    monkeypatch.setattr(cos, "untrusted_taint", lambda: 1)
+    held = run(db, LOVE_CITY, "jessica", "take_back_assignment", who="Naiya", assignment="lock-in")
+    assert held["failed"] and "HELD" in held["result"] and held.get("needs_confirmation")
+    assert mine(db, LOVE_CITY, LOCK_IN)
+
+
+def test_a_take_back_whose_check_cant_be_read_never_says_nothing_changed(db, monkeypatch):
+    ok(run(db, LOVE_CITY, "jessica", "give_assignment", who="Naiya", title=LOCK_IN))
+    real = sb_clients.sb_get_as_service
+    monkeypatch.setattr(sb_clients, "sb_get_as_service",
+                        lambda path, **kw: None if "select=id,raised_at" in path else real(path, **kw))
+    got = run(db, LOVE_CITY, "jessica", "take_back_assignment", who="Naiya", assignment="lock-in")
+    assert got["failed"] and got["label"] and "Nothing changed" not in got["result"]
+    assert got["result"] == (f"Failed: “{LOCK_IN}” may have been taken back, but that couldn't be checked just now. "
+                             "Read the list again before trying once more.")
+    assert not [t for t in db.t["tasks"] if t["title"] == LOCK_IN], "it was removed before the check"
+
+
+def test_undo_doesnt_reach_an_assignment_and_says_to_ask_for_it_back():
+    import action_inverse as ai
+    assert not ai.can_undo("give_assignment") and "take_back_assignment" not in {i.verb for i in ai.INVERSES.values()}
+    assert "take it back" in ai.why_not("give_assignment")
 
 
 # ─── The rules hold as on screen ──────────────────────────────────────

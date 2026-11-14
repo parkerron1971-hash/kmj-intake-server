@@ -60,6 +60,9 @@ it from the church's own data, never from names or title words:
 
     under(ch, me) ..... [{kind, id, name, why}], the office first
     is_over(ch, me, t)  every write checks it
+    may_hand(ch, me, *t)  a hand-off that isn't an assignment's (a board's
+                        follow-up): anyone who isn't a pastor or an elder
+                        (is_guarded) as before; one who is, only is_over
     above(ch, who) .... who a stuck item goes up to: for a Manager login,
                         whoever is over the lanes, else the owner; for a login
                         over the lanes or an Admin, the owner; for a person,
@@ -743,6 +746,43 @@ def is_over(ch: Church, me: Dict[str, Any], target: Dict[str, Any]) -> bool:
     import church_map
     with church_map.once():
         return any(k == target["kind"] and i == str(target["id"]) for k, i, _w in _under(ch, me))
+
+
+def is_guarded(ch: Church, target: Dict[str, Any]) -> bool:
+    """Whether `target` is someone no office seat hands work (Kevin,
+    2026-11-12: "admins can not give work to elders and pastors"): a
+    shepherd or a senior, a login whose person is one, and the owner's own
+    login and identity where the owner's own person is a pastor or an elder
+    (owner_guarded), as the Hand to list reads it
+    (church_my_week.without_guarded)."""
+    if target["kind"] == PERSON:
+        cid = str(target["id"])
+        return cid in ch.guarded or (cid in ch.top and ch.owner_guarded)
+    uid = str(target["id"])
+    if uid == ch.owner:
+        return ch.owner_guarded
+    return ch.login_person.get(uid) in ch.guarded
+
+
+def may_hand(ch: Church, me: Dict[str, Any], *targets: Dict[str, Any]) -> bool:
+    """Whether `me` may hand work to the one person `targets` name (their
+    login, their record among the church's people, or both) where the work
+    isn't an assignment route's own: a board's follow-up
+    (church_board.make_tasks). The owner always, and yourself. Anyone who
+    isn't a pastor or an elder (is_guarded), as before the rule. A pastor or
+    an elder only when `me` is over them (is_over: the ministry chain on the
+    map, walked from my own person), the decision every assignment route
+    makes. A read that fails is a 503, never a yes."""
+    if me["kind"] == LOGIN and str(me["id"]) == ch.owner:
+        return True
+    import church_map
+    with church_map.once():
+        if not any(is_guarded(ch, t) for t in targets):
+            return True
+        mine = ch.persons_of(me)
+        if any(same(me, t) or (t["kind"] == PERSON and str(t["id"]) in mine) for t in targets):
+            return True
+        return any(is_over(ch, me, t) for t in targets)
 
 
 def above(ch: Church, who_: Dict[str, Any]) -> List[Dict[str, str]]:
