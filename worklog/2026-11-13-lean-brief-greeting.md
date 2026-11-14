@@ -4,7 +4,7 @@ date: 2026-11-13
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-11-13: "Let''s make the build to test the block 45,000 tokens so it could save money."'
 status: shipped, switch still off
-prs: [kmj-intake-server#PRNUM]
+prs: [kmj-intake-server#1833]
 migrations: []
 left_undone:
   - "Turning the short brief on is Kevin's call: CHIEF_BRIEF=lean on the kmj-intake-server web service, on a Thursday. Then watch `railway logs --filter \"cache rewrite\"` (a cold message should write ~65-70k tokens, not ~120k)"
