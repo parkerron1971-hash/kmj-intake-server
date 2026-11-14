@@ -71,6 +71,9 @@ it from the church's own data, never from names or title words:
     may_hand(ch, me, *t)  a hand-off that isn't an assignment's (a board's
                         follow-up): anyone who isn't a pastor or an elder
                         (is_guarded) as before; one who is, only is_over
+    wrong_hands(biz, tasks, column)  the hourly sweeps ask may_hand for a
+                        hand-off written straight to the database, before
+                        anyone is told (church_leader_tasks.take_back)
     above(ch, who) .... who a stuck item goes up to: for a Manager login,
                         whoever is over the lanes, else the owner; for a login
                         over the lanes or an Admin, the owner; for a person,
@@ -845,6 +848,64 @@ def may_hand(ch: Church, me: Dict[str, Any], *targets: Dict[str, Any]) -> bool:
         if any(same(me, t) or (t["kind"] == PERSON and str(t["id"]) in mine) for t in targets):
             return True
         return any(is_over(ch, me, t) for t in targets)
+
+
+# ─── A hand-off that wasn't theirs to make ────────────────────────────
+
+# What a task says when it is kept but handed to no one. The board's
+# follow-ups say NOT_HANDED (church_board.make_tasks); a hand-off the hourly
+# sweeps take back says TAKEN_BACK (church_leader_tasks.take_back). Both end
+# with who does hand a pastor or an elder work, in the same words.
+WHO_HANDS = "Only the owner, or whoever is over them on the leaders map, gives a pastor or an elder work."
+NOT_HANDED = "The board named {name} for this. It isn't handed to them yet. " + WHO_HANDS
+TAKEN_BACK = "This was handed to {name}, then taken back. " + WHO_HANDS
+HAND_COLUMNS = {"assigned_to": LOGIN, "assigned_contact_id": PERSON}
+
+
+def asks_rule(biz: Dict[str, Any], task: Dict[str, Any], column: str) -> bool:
+    """Whether a sweep must ask the rule about this hand-off before it tells
+    anyone: a login handed it (tasks.handed_by, stamped by the database), and
+    that login isn't the church's owner (who always may) nor the login it is
+    handed to (a task to yourself). One the server made with no login behind
+    it (no handed_by) is left alone. Nothing is read."""
+    by, to = str(task.get("handed_by") or ""), str(task.get(column) or "")
+    return bool(by and to) and by != str(biz.get("owner_id") or "") and by != to
+
+
+def hand_name(ch: Church, target: Dict[str, Any]) -> str:
+    """The one a task was handed to, by the name a title carries: a person by
+    their name on the church's list; a login by its person's name, else the
+    name the login goes by (login_name)."""
+    if target["kind"] == PERSON:
+        return ch.names([target["id"]])[str(target["id"])]
+    uid = str(target["id"])
+    cid = ch.login_person.get(uid)
+    name = ch.names([cid]).get(cid, "") if cid else ""
+    return name if name and name != "Someone" else ch.login_name(uid)
+
+
+def wrong_hands(biz: Dict[str, Any], tasks: Iterable[Dict[str, Any]], column: str) -> Dict[str, str]:
+    """For the hourly sweeps, before anyone is told a task is theirs: task id
+    -> the name of the one it was handed to, for each of `tasks` (the ones
+    asks_rule picked) whose login may not hand that person work. The decision
+    is may_hand's, as church_board._not_handed asks it: the login in
+    handed_by, and the one person the task names (their login and their
+    record among the church's people, where they have both). `column` is
+    assigned_to (a login) or assigned_contact_id (one of the church's
+    people). A read that fails is a 503, never a yes or a no: the caller
+    leaves every one of them as it is for the next sweep."""
+    import church_map
+    kind = HAND_COLUMNS[column]
+    ch = Church(biz)
+    out: Dict[str, str] = {}
+    with church_map.once():
+        for t in tasks:
+            to = who(kind, t[column])
+            also = ch.login_person.get(to["id"]) if kind == LOGIN else ch.person_login.get(to["id"])
+            targets = [to] + ([who(PERSON if kind == LOGIN else LOGIN, also)] if also else [])
+            if not may_hand(ch, who(LOGIN, t["handed_by"]), *targets):
+                out[str(t["id"])] = hand_name(ch, to)
+    return out
 
 
 def above(ch: Church, who_: Dict[str, Any]) -> List[Dict[str, str]]:

@@ -32,6 +32,11 @@ fall retreat by Nov 15" couldn't be handed to the youth pastor. Now it can
                  member_push kind fits a task. Where church assignments
                  are open for the church, several new hand-offs to one
                  leader in one sweep are one email (church_assignments).
+  Taken back ... there too, before anyone is told: a hand-off to a pastor
+                 or an elder that its login may not make (an office seat's,
+                 written straight to the database) is un-handed as the board
+                 leaves one, and the login is told why (take_back, for this
+                 sweep and the office logins': church_over.may_hand).
   Late ......... the same sweep, in the church's morning (8 to noon on its
                  own clock): an open task whose due date has passed, and
                  whose leader was told before today, goes up once to whoever
@@ -610,10 +615,92 @@ def _claim(biz_id: str, t: Dict[str, Any], column: str, stamp: str) -> bool:
     return isinstance(got, list) and bool(got)
 
 
+def take_back(biz: Dict[str, Any], rows: List[Dict[str, Any]], column: str, told: str, stats: Dict[str, int],
+              prefix: str = "") -> List[Dict[str, Any]]:
+    """Before a sweep tells anyone a new task is theirs: a hand-off its login
+    may not make is taken back. Kevin, 2026-11-12: "admins can not give work
+    to elders and pastors": only the church's owner, or the ministry chain on
+    the leaders map, can. Every server route asks that already; the office's
+    Tasks screen writes `tasks` straight to the database, so a request made
+    by hand lands, and this sweep is where the server first sees it
+    (docs/CHURCH_ASSIGNMENTS.md, "Every path that hands someone a task").
+
+    The decision is church_over.may_hand's (church_over.wrong_hands), as the
+    board asks it. One the login may not hand is un-handed the way the board
+    leaves one (church_board.make_tasks): the task stays, handed to no one
+    (`column`, assigned_to or assigned_contact_id, cleared), the person's
+    name goes in its title, its notes say why, and nobody is told it is
+    theirs. The login that handed it is told once (church_office_tasks.
+    tell_taken_back). The write is the claim: it takes the task only while
+    it is still that person's, still open and not yet told (`told`), so two
+    replicas take it back once, and one taken back is never read again (the
+    sweep reads only what is handed to someone).
+
+    Only for a church, and only while church assignments are open for it
+    (church_over.church_open); closed, nothing is read and every row is told
+    as before. The owner's hand-offs, a task to yourself and one no login
+    handed (no handed_by) are never asked about. When who is a pastor can't
+    be read, every hand-off that had to be asked about is left exactly as it
+    is, un-handed by no guess and told to no one, for the next sweep.
+
+    Returns the rows still to tell. Counts `taken_back` and `rule_unread`
+    (with the sweep's `prefix`)."""
+    import church_follow_up as cfu
+    import church_over as co
+    if not rows or not cfu.is_church(biz) or not co.church_open(biz):
+        return rows
+    ask = [t for t in rows if co.asks_rule(biz, t, column)]
+    if not ask:
+        return rows
+    b = str(biz["id"])
+    try:
+        wrong = co.wrong_hands(biz, ask, column)
+    except Exception:
+        logger.warning("task hand-offs: who may hand whom couldn't be read (business %s); %d left for the next sweep",
+                       b[:8], len(ask), exc_info=True)
+        stats[prefix + "rule_unread"] = stats.get(prefix + "rule_unread", 0) + len(ask)
+        held = {str(t["id"]) for t in ask}
+        return [t for t in rows if str(t["id"]) not in held]
+    if not wrong:
+        return rows
+    back: Dict[str, List[Dict[str, str]]] = {}
+    for t in ask:
+        tid = str(t["id"])
+        if tid not in wrong:
+            continue
+        name = wrong[tid]
+        title = _plain(t.get("title")) or "A task"
+        tail = f" ({name})"
+        note = co.TAKEN_BACK.format(name=name)
+        notes = str(t.get("description") or "").strip()
+        got = sb_clients.sb_patch_as_service(
+            f"/tasks?id=eq.{_q(tid)}&business_id=eq.{_q(b)}&{column}=eq.{_q(t[column])}&{told}=is.null"
+            "&status=neq.done",
+            {column: None,
+             # Its title and notes carry the name and why once, however often it is handed out again.
+             "title": title if title.endswith(tail) else f"{title[:200 - len(tail)]}{tail}",
+             "description": notes if note in notes else (f"{notes}\n\n{note}" if notes else note)})
+        if isinstance(got, list) and got:
+            stats[prefix + "taken_back"] = stats.get(prefix + "taken_back", 0) + 1
+            back.setdefault(str(t["handed_by"]), []).append({"id": tid, "title": title, "name": name})
+    if back:
+        try:
+            import church_office_tasks
+            church_office_tasks.tell_taken_back(biz, back)
+        except Exception:
+            logger.warning("task hand-offs: the login that handed them wasn't told (business %s)", b[:8], exc_info=True)
+    return [t for t in rows if str(t["id"]) not in wrong]
+
+
 def tell_new(biz: Dict[str, Any], rows: List[Dict[str, Any]], now: datetime, stats: Dict[str, int]) -> None:
     """Each task newly handed to a leader: claimed, then one email to the
-    leader. No email on file: it stays told (the Lead tab shows it)."""
+    leader. No email on file: it stays told (the Lead tab shows it). First,
+    a hand-off its login may not make (a pastor's or an elder's, from an
+    office seat) is taken back, and nobody is told it is theirs (take_back)."""
     b = str(biz["id"])
+    rows = take_back(biz, rows, "assigned_contact_id", "leader_told_at", stats)
+    if not rows:
+        return
     people = _contacts(b, (r.get("assigned_contact_id") for r in rows))
     if people is None:
         return
@@ -855,9 +942,13 @@ def sweep_tick(now: Optional[datetime] = None) -> Dict[str, int]:
     """Hourly, on the leader replica (kmj_intake_automation): new hand-offs
     are told to their leaders; in each church's morning, late ones go up. A
     church that fails never stops the others. Quiet with the switch off or
-    before the migration."""
+    before the migration. `taken_back`: hand-offs to a pastor or an elder
+    that weren't the login's to make, un-handed before anyone was told;
+    `rule_unread`: ones left for the next sweep because who is a pastor
+    couldn't be read (take_back)."""
     stats = {"churches": 0, "told": 0, "no_email": 0, "unsent": 0,
-             "late": 0, "late_no_one": 0, "late_no_email": 0, "late_unsent": 0}
+             "late": 0, "late_no_one": 0, "late_no_email": 0, "late_unsent": 0,
+             "taken_back": 0, "rule_unread": 0}
     if mode() == "off":
         return stats
     now = now or _now()

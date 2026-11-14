@@ -12,7 +12,11 @@ as the assignment routes do).
 
 What this can't see: the office's Tasks screen writes `tasks` straight to the
 database from the browser, with the login's own session. No server code is in
-that path. It is the open limit, said in the doc.
+that path, so a request made by hand can still land. The hourly sweeps that
+tell someone a task is theirs ask the rule first and take such a hand-off back
+(church_leader_tasks.take_back, since 2026-11-14), so nobody is told about it.
+Until that sweep runs, for up to an hour, the task can show on that person's
+My week or Lead tab. That is the limit left, said in the doc.
 """
 from __future__ import annotations
 
@@ -41,7 +45,8 @@ AUDITED = {
                          "app's Lead tab, each after is_over",
     "church_board.py": "a board's follow-ups: church_over.may_hand for each one (_not_handed, PR #1844)",
     "church_leader_tasks.py": "return_tasks: a task whose leader left goes back to the login that handed it out "
-                              "(tasks.handed_by, stamped by the database); it never names anyone new",
+                              "(tasks.handed_by, stamped by the database); it never names anyone new. take_back "
+                              "(both hourly sweeps): only ever un-hands, after church_over.may_hand says no",
     "business_users_router.py": "hand_back_login: a removed login's open tasks are un-handed (assigned_to null)",
 }
 
@@ -70,6 +75,22 @@ def test_the_guarded_ones_still_ask_the_rule():
     # A leader's task goes back only to whoever handed it out; a removed login's is handed to no one.
     assert '{"assigned_contact_id": None, "assigned_to": t.get("handed_by") or None}' in by["church_leader_tasks.py"]
     assert '("tasks", "tasks_returned", "status=neq.done", {"assigned_to": None})' in by["business_users_router.py"]
+
+
+def test_both_sweeps_ask_the_rule_before_anyone_is_told():
+    """The one path no route guards (the Tasks screen's own write) reaches
+    server code in the hourly sweeps: each asks before it claims or tells
+    (behaviour: test_church_task_sweep_rule.py)."""
+    by = dict(_modules())
+    office, leaders = by["church_office_tasks.py"], by["church_leader_tasks.py"]
+    asked = 'rows = clt.take_back(biz, rows, "assigned_to", "seat_told_at", stats, "office_")'
+    assert asked in office and office.index(asked) < office.index('_claim(b, t, "seat_told_at", stamp)')
+    asked = 'rows = take_back(biz, rows, "assigned_contact_id", "leader_told_at", stats)'
+    assert asked in leaders and leaders.index(asked) < leaders.index('_claim(b, t, "leader_told_at", stamp)')
+    assert "wrong = co.wrong_hands(biz, ask, column)" in leaders
+    assert 'may_hand(ch, who(LOGIN, t["handed_by"]), *targets)' in by["church_over.py"]
+    # It only ever un-hands: the one column it writes is set to no one.
+    assert "{column: None," in leaders
 
 
 def test_chief_and_the_automations_make_tasks_handed_to_no_one():

@@ -472,8 +472,10 @@ No office standing but the owner's is over a **shepherd** or a **senior**:
   pastor or an elder. A trigger would have to repeat who shepherds in SQL (each role's switch, the
   legacy and job fallbacks, the Ministers setting, the seniors and the owner's identity), which
   isn't simple enough to be safe, so the rule holds where the list is offered and in every server
-  route. "Every path that hands someone a task" below is the audit, and what closing this would
-  take.
+  route. A request made by hand can still land. Since 2026-11-14 the next hourly sweep takes it
+  back before anyone is told (`church_leader_tasks.take_back`); for up to an hour the task can
+  show on that person's My week. "Every path that hands someone a task" below is the audit, and
+  how the sweep takes one back.
 - **A board's follow-ups follow it too** (2026-11-14; until then a known limit, and a way around
   the rule: an office seat pressed "make tasks" and a pastor or an elder was handed one).
   `church_board.make_tasks` asks `church_over.may_hand(ch, me, the member's login and record)`
@@ -512,23 +514,72 @@ it to hand a pastor or an elder work around the rule:
 | `church_leader_tasks.return_tasks` | a task whose leader left the leaders room goes back to the login that handed it out | not a way around: it only ever goes back to `tasks.handed_by`, which the database stamps with the login that made the hand-off; it never names anyone new |
 | `business_users_router.hand_back_login` | a removed login's open tasks | un-hands only (`assigned_to` null) |
 | Chief's `create_task` (the tag and the native tool, `mcp_server`), `rules_engine._exec_create_task`, `site_photo_list` | make a task | can't name who it's for: none of them writes either column. `contact_id` on Chief's task is who the task is about, not who does it |
-| `church_work_checks`, `church_office_tasks`, the sweeps | tick off, claim a telling | never change who it's handed to |
+| `church_work_checks`, the checks' sweep | tick off | never change who it's handed to |
+| `church_office_tasks.tell_new`, `church_leader_tasks.tell_new` (the hourly sweeps) | tell someone a new task is theirs | ask `may_hand` first and only ever un-hand (`church_leader_tasks.take_back`, below) |
 
 There is no general tasks route on the server, and Chief has no verb that hands a plain task to
-someone. So the server has nothing left to guard, and `__tests__/test_church_task_hand_paths.py`
+someone. So the server has no route left to guard, and `__tests__/test_church_task_hand_paths.py`
 pins the list: a new module that writes either column fails it until it asks the rule.
 
-**What is still open: the Tasks screen.** The office's Tasks screen (the frontend's
+**The Tasks screen: a hand-made write still lands, and the next sweep takes it back.** The
+office's Tasks screen (the frontend's
 `TasksPanel`, `taskHandTo`) inserts and updates `tasks` straight from the browser with the
 login's own session (`tenant_writer_write`, the policy every writer seat has on `tasks`). No
 server code runs, so no server guard can refuse it. The Hand to list doesn't offer a pastor or an
 elder to an office seat, so the app never sends such a write; a request made by hand still lands.
+
+**The sweep takes it back (built 2026-11-14, option 3 below).** The hourly sweeps that tell
+someone a new task is theirs are where the server first sees such a write. Before either one
+claims or tells anything, `church_leader_tasks.take_back` asks the rule:
+
+- **Who is asked about.** A new, open, untold task that a login handed (`tasks.handed_by`, stamped
+  by the database, so it can't be forged), where that login isn't the church's owner and isn't the
+  login it is handed to (`church_over.asks_rule`). The owner's hand-offs, a task to yourself and a
+  task no login handed (the server's own, no `handed_by`) are never asked about.
+- **The decision** is `church_over.may_hand(ch, the login in handed_by, who it's handed to)`, as
+  the board asks it (`church_over.wrong_hands`): the one person the task names is their login and
+  their record among the church's people, where they have both. Someone who isn't a pastor or an
+  elder is told as before. A pastor or an elder is told only when the login is over them on the
+  map (the ministry chain), or is them.
+- **Taken back, as the board leaves one.** The task stays, handed to no one (`assigned_to` or
+  `assigned_contact_id` cleared). The person's name goes in its title ("Plan the elders' retreat
+  (Marcus Taylor)"). Its notes gain "This was handed to Marcus Taylor, then taken back." and the
+  board's own sentence about who gives a pastor or an elder work (`church_over.TAKEN_BACK`, ending
+  in `WHO_HANDS`; the board's `NOT_HANDED` and `WHO_HANDS` moved to `church_over` with their words
+  unchanged). Nobody is told it is theirs: no email, no push, no told stamp.
+- **The login that handed it is told once**, in one email to their sign-in address and one push,
+  for everything that sweep took back from them (`church_office_tasks.tell_taken_back`): what it
+  was, who it was for, why, and that it is still in Tasks for the owner to hand out. The write
+  that takes the task back is the claim, so this is sent once and not tried again. If the email
+  fails, or the login has no address, the note on the task still says why.
+- **Only where the rule is on.** Only for a church, and only while assignments are open for it
+  (`church_over.church_open`). Closed, nothing more is read and every hand-off is told as before.
+  The sweeps themselves run only where My tasks for leaders is on for the church
+  (`CHURCH_LEADER_TASKS`), so a church with that switch closed has no sweep and nothing is taken
+  back there.
+- **A read that fails changes nothing.** When who is a pastor can't be read, every hand-off that
+  had to be asked about is left exactly as it is, not un-handed and not told, and the next sweep
+  asks again (`rule_unread`). The owner's hand-offs in that sweep are still told.
+- **Once.** The write takes the task only while it is still that person's, still open and still
+  untold, so two replicas take it back once. A task handed to no one is never read by the sweeps
+  again. Handed to the same person again, it is taken back again and the name and the note stay
+  on it once.
+- **Counts.** Each sweep's stats keep their shape and gain two: `office_taken_back` and
+  `office_rule_unread` (`church_office_tasks.sweep_tick`), `taken_back` and `rule_unread`
+  (`church_leader_tasks.sweep_tick`).
+
+**The limit that is left.** The write still lands. Until the next sweep, for up to an hour, the
+task can show on that person's My week (a login) or their Lead tab (one of the church's people).
+Nobody is told about it in that time. A task they mark done inside that hour stays done and
+theirs: the sweeps read open tasks only. A task that was already told before this shipped is not
+looked at again. Closing the hour takes option 2 below.
+
 Two things that aren't tasks were looked at and left as they are: a prayer or care request
 (`ministry_care_requests.assigned_to`) is handed only by the church's owner, and a duty moved to
 a login (`PUT /church/duties/{duty}`, Chief's `move_duty`) is the owner's or an Admin's to move
 and does not ask whether the login's person is a pastor.
 
-What closing it would take (none of it built; Kevin's to choose):
+The three ways to close it, as they were written up (option 3 is built; 1 and 2 are not):
 
 1. **The database refuses it.** A trigger on `tasks` would have to know who is a pastor or an
    elder, and who is over whom: each role's switch with its legacy and job fallbacks, the
@@ -541,14 +592,13 @@ What closing it would take (none of it built; Kevin's to choose):
    trigger that refuses a browser session's change to either column on a church's task (no rule
    in SQL at all). Sound, but the trigger must not be applied before the screen ships, or Hand to
    stops working for everyone.
-3. **The server takes it back.** `tasks.handed_by` is stamped by the database with the login that
-   made a browser hand-off and can't be forged, so the hourly sweeps that tell someone a task is
-   theirs (`church_office_tasks.tell_new`, `church_leader_tasks.tell_new`) could ask
-   `may_hand(the login in handed_by, who it's handed to)` first, and un-hand the task as the
-   board does (handed to no one, the name in its title, why in its notes) before anyone is told.
-   No migration and no frontend change. The task would still show on the pastor's My week or
-   Lead tab for up to an hour, and the office login that handed it isn't told unless that is
-   built too.
+3. **The server takes it back. Built 2026-11-14, as above.** `tasks.handed_by` is stamped by the
+   database with the login that made a browser hand-off and can't be forged, so the hourly sweeps
+   that tell someone a task is theirs (`church_office_tasks.tell_new`,
+   `church_leader_tasks.tell_new`) ask `may_hand(the login in handed_by, who it's handed to)`
+   first, and un-hand the task as the board does (handed to no one, the name in its title, why in
+   its notes) before anyone is told. No migration and no frontend change. The task can still show
+   on the pastor's My week or Lead tab for up to an hour. The office login that handed it is told.
 
 ### From the office (`church_handovers.py`)
 
@@ -969,5 +1019,10 @@ Minister Ray the retreat sign-up list for Youth".
 - **The two gaps left (backend, 2026-11-14):** the church says which person its owner is
   (`settings.church_owner_contact_id`, `GET`/`PUT /church/owner-person`); every server path that
   hands someone a task audited and pinned by a test. The Tasks screen's own write to the database
-  is still open: three ways to close it are written under "Every path that hands someone a task".
+  was left open then: three ways to close it are written under "Every path that hands someone a
+  task".
+- **The sweep takes it back (backend, 2026-11-14):** the third of those ways. Both hourly sweeps
+  ask `church_over.may_hand` before anyone is told a task is theirs, and un-hand one an office
+  seat may not make (`church_leader_tasks.take_back`); the login that handed it is told why. A
+  hand-made write can still land, and can show on that person's My week for up to an hour.
 - **F1 / F2 (frontend):** My week + day picker; the board.
