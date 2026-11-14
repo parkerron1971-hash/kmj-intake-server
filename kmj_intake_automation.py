@@ -1982,6 +1982,18 @@ async def startup():
                           id="church_handovers_sweep")
     except Exception as e:
         print(f"   [warn] hand-overs sweep not scheduled: {e}")
+    # Church mail (2026-11-14, Kevin on the mock: "I love the design. lets
+    # build it"): new-mail alerts that waited out a church's quiet hours (or
+    # missed the at-once send), every 2 minutes; Trash older than 30 days,
+    # every 6 hours (church_mail_alerts).
+    try:
+        import church_mail_alerts as _cma
+        scheduler.add_job(g("church_mail_alert_sweep", _cma.sweep), "interval", minutes=2,
+                          id="church_mail_alert_sweep")
+        scheduler.add_job(g("church_mail_trash_sweep", _cma.trash_sweep), "interval", hours=6,
+                          id="church_mail_trash_sweep")
+    except Exception as e:
+        print(f"   [warn] church mail sweeps not scheduled: {e}")
     # Homework files nothing points at any more (a deleted homework, student
     # or class; an attach that never landed) leave the private bucket once a
     # day (academy_work.sweep_tick).
