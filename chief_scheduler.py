@@ -140,9 +140,13 @@ async def _execute_row(row: Dict[str, Any]) -> None:
     # again at send time that they still can. It skips the verb registry,
     # which knows only Chief's verbs (and would refuse it as unknown).
     announcement = atype == "sms_announcement"
-    if announcement:
+    # A New here text (new_here.KIND) is the same: the church wrote it and
+    # turned it on, a guest asked for it by texting the church's word, and
+    # its runner reads all of that again at send time.
+    new_here_text = atype == "new_here_text"
+    if announcement or new_here_text:
         authorized_by = "practitioner_scheduled"
-    if atype not in CLIENT_ONLY_OR_NESTING and not announcement:
+    if atype not in CLIENT_ONLY_OR_NESTING and not announcement and not new_here_text:
         try:
             import policy_engine
             verdict = policy_engine.evaluate(
@@ -167,6 +171,12 @@ async def _execute_row(row: Dict[str, Any]) -> None:
             ok, detail = await sms_routing.run_scheduled_announcement(biz, action)
         except Exception as e:
             ok, detail = False, f"announcement raised: {e}"
+    elif new_here_text:
+        try:
+            import new_here
+            ok, detail = await new_here.run_scheduled(biz, action)
+        except Exception as e:
+            ok, detail = False, f"New here text raised: {e}"
     elif atype in CLIENT_ONLY_OR_NESTING:
         detail = f"'{atype}' can't run server-side"
     else:

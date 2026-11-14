@@ -425,6 +425,23 @@ async def route_inbound(
                         provider_id=provider_id, media=media, business_id=business_id,
                     )
                     return {"action": "daily_join", "business_id": business_id, "reply": reply}
+            # New here (new_here.py): the church's word for a first-time
+            # guest, NEW unless it picked another. Like GIVE and DAILY, only
+            # on the church's own number; not its word, or not on: an
+            # ordinary text. on_text makes them a guest and schedules the
+            # thank-you and the week's texts; the welcome goes back here.
+            import new_here
+            hit = await asyncio.to_thread(new_here.on_text, business_id, phone, body)
+            if hit:
+                own_name = await own_registration(client, business_id)
+                reply = (f"{hit['name']}: " if own_name else f"{sender_brand()} for {hit['name']}: ") + hit["text"]
+                logger.info(f"[ROUTE] New here from {phone} on biz {business_id[:8]}'s own number")
+                await _bind(client, phone, business_id)
+                await record_inbound_sms(
+                    client, from_number=phone, text=body,
+                    provider_id=provider_id, media=media, business_id=business_id,
+                )
+                return {"action": "new_here", "business_id": business_id, "reply": reply}
             logger.info(f"[ROUTE] own-number {phone} → biz {business_id[:8]} (direct)")
             await _bind(client, phone, business_id)
             await _ensure_contact(client, business_id, phone)

@@ -81,6 +81,9 @@ _LIMITS: Dict[str, Tuple[int, int]] = {
     # A church's /daily sign-up (devotional_daily.py): anonymous, and a
     # sign-up can send a welcome text, so strict and per IP like the above.
     "daily_join": (int(os.environ.get("RL_DAILY_JOIN_PER_HOUR", "10")), 3600),
+    # A church's New here card (new_here.py): anonymous, behind a code a
+    # guest was texted; strict and per IP like the sign-ups above.
+    "new_here_card": (int(os.environ.get("RL_NEW_HERE_CARD_PER_HOUR", "10")), 3600),
     # The no-card trial's phone check (no_card_trial.py). Sending a code
     # costs a text and is the classic SMS-pumping target, so few per
     # business per hour; checking a code is the brute-force target for a
