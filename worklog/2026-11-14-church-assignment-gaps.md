@@ -4,7 +4,7 @@ date: 2026-11-14
 agent: Claude Code (Claude Fable 5.2)
 asked: "do the not built section because that allows for it to be setup before this pastor gets it"
 status: in review
-prs: [kmj-intake-server#0000]
+prs: [kmj-intake-server#1847]
 migrations: []
 left_undone:
   - "The Tasks screen still writes tasks straight to the database from the browser, so a request made by hand can hand a pastor or an elder a task. No server code is in that path and no migration was written (a trigger would be church_over a second time in SQL). Three ways to close it are in docs/CHURCH_ASSIGNMENTS.md under 'Every path that hands someone a task'. The cheapest is the hourly sweep taking such a task back before anyone is told (tasks.handed_by says who handed it). Kevin's to choose."
