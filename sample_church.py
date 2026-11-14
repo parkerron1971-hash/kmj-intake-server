@@ -153,6 +153,14 @@ def testers() -> frozenset:
                      if e.strip() and "@" in e)
 
 
+def anyone() -> bool:
+    """Whether the switch lets anybody into a sample at all: on, or test with
+    a tester listed. Reads nothing, so a sweep (the day-3 note, BE-5) asks
+    it before it reads any business."""
+    m = mode()
+    return m == "on" or (m == "test" and bool(testers()))
+
+
 def _columns_ready() -> bool:
     """Has the migration been applied? The shared cached probe; without the
     columns everything here behaves as if the switch were off."""
@@ -239,7 +247,7 @@ def applies(home_row: Optional[Dict[str, Any]], owner_email: Optional[str] = Non
     raises: an error answers False, which is today's behaviour."""
     try:
         m = mode()
-        if m == "off" or (m == "test" and not testers()):
+        if not anyone():
             return False
         import feature_gates
         if not feature_gates.enforcement_on():

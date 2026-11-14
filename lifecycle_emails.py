@@ -7,6 +7,7 @@ LIFECYCLE_EMAILS and the shared suppression gate.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from datetime import datetime, timedelta, timezone
@@ -111,6 +112,154 @@ def welcome_body(*, business_name: str, first_name: str) -> str:
         f"   {app}/\n\n"
         f"{trial_line}Reply to this email if anything is unclear. A person "
         f"reads it.\n\n"
+        f"The Solutionist System\n"
+        f"{_support_email()}"
+    )
+
+
+# ─── The sample church (BE-5, 2026-11-15) ───────────────────────────
+# A church that signs up while CHURCH_SAMPLE lets it in (sample_church.
+# applies) gets no trial: it looks around Grace Street Fellowship, a made-up
+# church, and starts its own by choosing a plan. Its welcome says that, and
+# one note on day 3 (Kevin's pick) asks it to start. Church words only:
+# never "business" or "clients", no free days (a church plan's first month
+# is charged the day it is chosen), nothing a sample can't do. The founding
+# line only while church_founding has a place open. Every line here is
+# pinned by __tests__/test_sample_church_be5.py.
+
+# chief_prompt.greeting_name's titles (a test holds the two together).
+# Copied, not imported: chief_prompt can't be imported before chief_of_staff.
+_GREETING_TITLES = frozenset({"pastor", "elder", "minister", "deacon", "bishop", "rev", "reverend",
+                              "dr", "apostle", "evangelist", "prophet", "mother", "brother", "sister",
+                              "mr", "mrs", "ms", "miss", "prof", "coach"})
+
+
+def _greeting(name: Optional[str]) -> str:
+    """The first name, and a title keeps the name after it ('Pastor Sam
+    Lee' -> 'Pastor Sam', as Chief greets), so a pastor is never 'Hi Pastor,'."""
+    words = (name or "").split()
+    if not words:
+        return "there"
+    if len(words) > 1 and words[0].lower().rstrip(".") in _GREETING_TITLES:
+        return f"{words[0]} {words[1]}"
+    return words[0]
+
+
+def _sample_name() -> str:
+    try:
+        import sample_church
+        return sample_church.NAME
+    except Exception:
+        return "Grace Street Fellowship"
+
+
+def _questions_of() -> int:
+    try:
+        import sample_church
+        return int(sample_church.questions_of())
+    except Exception:
+        return 10
+
+
+def _promise() -> str:
+    try:
+        import church_site
+        return church_site.PROMISE
+    except Exception:
+        return "No contract. Leave any time, and your records go with you."
+
+
+def founding_line() -> str:
+    """'The first ten churches keep the founding price for as long as they
+    stay, until January 31.' Only while the founding offer has a place open
+    (church_founding.public_state); '' when it is off, past its date, full or
+    unreadable, so nothing is promised that checkout won't keep."""
+    try:
+        import church_founding
+        import church_site
+        state = church_founding.public_state()
+        if not state or int(state.get("left") or 0) <= 0:
+            return ""
+        total = int(state.get("spots") or 0)
+        if total <= 0:
+            return ""
+        who = ("The first church keeps the founding price for as long as it stays"
+               if total == 1 else
+               f"The first {church_site._words(total)} churches keep the founding price "
+               f"for as long as they stay")
+        ends = church_founding.ends_words() if state.get("ends") else ""
+        return who + (f", until {ends}." if ends else ".")
+    except Exception as e:  # noqa: BLE001 - the mail goes without the line
+        logger.warning(f"[lifecycle] founding line skipped: {type(e).__name__}")
+        return ""
+
+
+def _start_block(*, church: str, founding: str) -> str:
+    """How a church starts (the sample's bar, FE-2's "Start your church"),
+    the founding line while it is true, and the promise."""
+    app = app_base_url()
+    return (f"When you're ready, press \"Start your church\" at the top of the screen "
+            f"and choose your plan. {church} starts that day, ready for your own people "
+            f"and records.\n"
+            f"   {app}/\n\n"
+            + (f"{founding}\n\n" if founding else "")
+            + f"{_promise()}\n\n")
+
+
+def sample_welcome_subject(church_name: str) -> str:
+    return f"Welcome. Look around a sample church before {church_name} starts"
+
+
+def sample_welcome_body(*, church_name: str, first_name: str,
+                        founding: Optional[str] = None) -> str:
+    """The welcome for a church that looks around a sample church first."""
+    founding = founding_line() if founding is None else founding
+    return (
+        f"Hi {first_name},\n\n"
+        f"Your account is ready. Before {church_name} starts, you can look around "
+        f"{_sample_name()}, a sample church that is already set up: its people and "
+        f"families, its Sundays, giving, groups, sermons and website. It's made up, "
+        f"so nothing you do there is saved or sent.\n\n"
+        f"Chief answers {_questions_of()} questions about it. Ask who has missed the "
+        f"last few Sundays, how giving is doing this month, or for a note to a family "
+        f"that visited, and see what Chief would do in a real week.\n\n"
+        + _start_block(church=church_name, founding=founding)
+        + f"Reply to this email if anything is unclear. A person reads it.\n\n"
+        f"The Solutionist System\n"
+        f"{_support_email()}"
+    )
+
+
+def _questions_sentence(left: Optional[int]) -> str:
+    of = _questions_of()
+    if left is None:
+        return f"Chief answers {of} questions about it."
+    left = max(0, min(int(left), of))
+    if left >= of:
+        return f"Chief still has all {of} of your questions to answer about it."
+    if left == 0:
+        return f"You've asked Chief all {of} of your questions. In your own church, Chief keeps going."
+    return f"Chief has {left} of your {of} questions left to answer about it."
+
+
+def sample_follow_up_subject(church_name: str) -> str:
+    return f"Ready to start {church_name}?"
+
+
+def sample_follow_up_body(*, church_name: str, first_name: str,
+                          questions_left: Optional[int],
+                          founding: Optional[str] = None) -> str:
+    """Day 3: the one note to a church still looking around its sample."""
+    founding = founding_line() if founding is None else founding
+    return (
+        f"Hi {first_name},\n\n"
+        f"{_sample_name()}, the sample church, is still there for you to look around: "
+        f"last Sunday's attendance, the families who visited and came back, giving by "
+        f"fund, and the follow-ups that keep a church's week moving. Nothing there is "
+        f"saved or sent.\n\n"
+        f"{_questions_sentence(questions_left)}\n\n"
+        + _start_block(church=church_name, founding=founding)
+        + f"If something is holding you back, reply and tell us. A person reads it.\n\n"
         f"The Solutionist System\n"
         f"{_support_email()}"
     )
@@ -272,12 +421,32 @@ def _tank_spent(row: Dict[str, Any]) -> bool:
 
 # ─── Welcome (door 1: business creation) ─────────────────────────────
 
+def _in_sample(business: Dict[str, Any], to_email: Optional[str],
+               church_sample: Optional[bool]) -> bool:
+    """Is this a church looking around a sample church (sample_church.
+    applies)? The signup passes its own answer; the retry asks. applies()
+    answers False before any read while the switch lets nobody in."""
+    if church_sample is not None:
+        return bool(church_sample)
+    try:
+        import sample_church
+        return bool(sample_church.applies(business, to_email))
+    except Exception:
+        return False
+
+
 async def send_welcome(business: Dict[str, Any], to_email: Optional[str],
-                       user_name: Optional[str] = None) -> Dict[str, Any]:
+                       user_name: Optional[str] = None, *,
+                       church_sample: Optional[bool] = None) -> Dict[str, Any]:
     """Called from launch_access.create_business as a background task.
 
     Sends once, for the owner's FIRST business only. A second or third
-    business is not a new arrival and gets no welcome. Never raises."""
+    business is not a new arrival and gets no welcome. Never raises.
+
+    A church that signed up into a sample church (`church_sample`, the
+    signup's sample_church.applies(); None asks it, as the retry does) gets
+    the sample's welcome instead (sample_welcome_body): it has no trial and
+    nothing set up to point at yet. Same key, same stamp: one welcome."""
     biz_id = str(business.get("id") or "")
     try:
         if not enabled():
@@ -295,16 +464,22 @@ async def send_welcome(business: Dict[str, Any], to_email: Optional[str],
                 raise RuntimeError("Could not establish first business")
             if not first or str(first[0].get("id")) != biz_id:
                 return {"sent": False, "reason": "not_first_business"}
-        name = (business.get("name") or "Your business").strip()
+        sample = await asyncio.to_thread(_in_sample, business, to_email, church_sample)
+        if sample:
+            name = (business.get("name") or "").strip() or "your church"
+            subject = sample_welcome_subject(name)
+            body = sample_welcome_body(church_name=name, first_name=_greeting(user_name))
+        else:
+            name = (business.get("name") or "Your business").strip()
+            subject = f"{name} is set up. Three moves for your first week"
+            body = welcome_body(business_name=name, first_name=_first_name(user_name))
         await _send(
             delivery_key=f"business/{biz_id}/welcome",
             to_email=to_email, to_name=user_name or None,
-            subject=f"{name} is set up. Three moves for your first week",
-            body=welcome_body(business_name=name,
-                              first_name=_first_name(user_name)))
+            subject=subject, body=body)
         _stamp(biz_id, "welcome_at")
-        logger.info(f"[lifecycle] welcome sent biz={biz_id}")
-        return {"sent": True}
+        logger.info(f"[lifecycle] welcome sent biz={biz_id}{' (sample church)' if sample else ''}")
+        return {"sent": True, **({"kind": "sample_church"} if sample else {})}
     except Exception as e:
         logger.warning(f"[lifecycle] welcome not sent biz={biz_id}: {e}")
         return {"sent": False, "reason": "error", "error": str(e)[:200]}
@@ -655,6 +830,138 @@ async def week_beats_tick() -> Dict[str, Any]:
             out["failed"] += 1
             logger.warning(f"[lifecycle] week beat failed biz={row.get('id')}: {e}")
     logger.info(f"[lifecycle] week beats scanned={out['scanned']} sent={out['sent']} "
+                f"failed={out['failed']}")
+    return out
+
+
+# ─── The sample church's day-3 note (BE-5, 2026-11-15) ──────────────
+#
+# Kevin chose "one note on day 3": a church that signed up into a sample
+# church (sample_church.applies) and hasn't started three days later gets
+# ONE short note asking it to start. Exactly once: the durable delivery key
+# business/<home>/sample_follow_up, and settings.lifecycle_emails.
+# sample_follow_up_at on the HOME, read fresh before the send. Never for a
+# church that started (applies() is false the moment it has a subscription,
+# a trial or a comp), never once it or its sample is gone or ending, never
+# for anything but a church, never for a grandfathered owner (applies
+# again), and in test mode only for CHURCH_SAMPLE_TESTERS. Opt-outs are the
+# lifecycle ones: LIFECYCLE_EMAILS=off, and send_via_resend's suppression
+# list and List-Unsubscribe. The sample's own row is never read as a
+# candidate (is_sample=is.false), so nothing is ever sent FROM a sample.
+
+SAMPLE_FOLLOW_UP_KEY = "sample_follow_up_at"
+SAMPLE_FOLLOW_UP_FROM = 3.0     # days since the church signed up
+SAMPLE_FOLLOW_UP_UNTIL = 6.0    # a missed hour still sends; an older signup never does
+_HOME_SELECT = _BIZ_SELECT + ",is_active,is_sample"
+
+
+def _classify_sample_follow_up(row: Dict[str, Any], now: datetime) -> bool:
+    """Is this home's day-3 note due? Pure over the row and the clock (the
+    applies() and sample checks come after, in the tick)."""
+    if row.get("is_sample") is not False or row.get("is_active") is not True:
+        return False
+    if _stamps(row).get(SAMPLE_FOLLOW_UP_KEY):
+        return False
+    age = _age_days(row, now)
+    return age is not None and SAMPLE_FOLLOW_UP_FROM <= age < SAMPLE_FOLLOW_UP_UNTIL
+
+
+def _fresh_home(business_id: str) -> Optional[Dict[str, Any]]:
+    rows = sb_clients.sb_get_as_service(
+        f"/businesses?id=eq.{business_id}&select={_HOME_SELECT}&limit=1")
+    if rows is None:
+        raise RuntimeError("home unreadable")
+    return rows[0] if rows else None
+
+
+def _sample_open(home_id: str) -> bool:
+    """The home's sample is there, was seeded, and isn't ending."""
+    import sample_church
+    sample = sample_church.sample_for(home_id)
+    if not sample or sample.get("is_sample") is not True:
+        return False
+    marker = ((sample.get("settings") or {}).get(sample_church.SETTINGS_KEY) or {})
+    if not isinstance(marker, dict) or not marker.get("seeded_at"):
+        return False
+    return str(marker.get("status") or "") != "ending"
+
+
+def _questions_left(owner_id: Any) -> Optional[int]:
+    """The person's questions left (sample_church.questions_left), or None:
+    the note goes with the plain sentence when it can't be read."""
+    try:
+        import sample_church
+        return sample_church.questions_left(owner_id)
+    except Exception:
+        return None
+
+
+async def sample_follow_up_tick(now: Optional[datetime] = None) -> Dict[str, Any]:
+    """Hourly. The day-3 note to every church still looking around its
+    sample. Never raises; logs counts and ids only."""
+    out: Dict[str, Any] = {"ok": True, "scanned": 0, "sent": 0, "skipped": 0, "failed": 0}
+    if not enabled():
+        return dict(out, ok=False, reason="disabled")
+    try:
+        import feature_gates
+        import sample_church
+        if not sample_church.anyone():
+            return dict(out, ok=False, reason="switch_off")     # nothing read
+        if not feature_gates.enforcement_on():
+            return dict(out, ok=False, reason="enforcement_off")
+        if not await asyncio.to_thread(sample_church._columns_ready):
+            return dict(out, ok=False, reason="columns_missing")
+        now = now or _now()
+        oldest = (now - timedelta(days=SAMPLE_FOLLOW_UP_UNTIL)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        newest = (now - timedelta(days=SAMPLE_FOLLOW_UP_FROM)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        # A home in a sample has no status, no subscription and no trial
+        # (applies); the filter keeps the read to those, and applies() is
+        # asked again of each, fresh.
+        rows = await asyncio.to_thread(
+            sb_clients.sb_get_as_service,
+            f"/businesses?select={_HOME_SELECT}&is_active=eq.true&is_sample=is.false"
+            f"&subscription_status=is.null&stripe_subscription_id=is.null&trial_ends_at=is.null"
+            f"&created_at=gte.{oldest}&created_at=lte.{newest}&order=created_at.asc&limit=500")
+        if rows is None:
+            raise RuntimeError("candidates unreadable")
+    except Exception as e:
+        logger.warning(f"[lifecycle] sample follow-up read failed: {type(e).__name__}")
+        return dict(out, ok=False, reason="read_failed")
+
+    for row in rows:
+        out["scanned"] += 1
+        bid = str(row.get("id") or "")
+        try:
+            if not bid or not _classify_sample_follow_up(row, now):
+                out["skipped"] += 1
+                continue
+            to = await _owner_email(str(row.get("owner_id") or ""))
+            if not to:
+                out["skipped"] += 1
+                continue
+            # Fresh, just before the send: a church that started a minute
+            # ago, or a note another run already stamped, sends nothing.
+            fresh = await asyncio.to_thread(_fresh_home, bid)
+            if (not fresh or not _classify_sample_follow_up(fresh, now)
+                    or not await asyncio.to_thread(sample_church.applies, fresh, to)
+                    or not await asyncio.to_thread(_sample_open, bid)):
+                out["skipped"] += 1
+                continue
+            name = (fresh.get("name") or "").strip() or "your church"
+            first = _greeting(((fresh.get("settings") or {}).get("practitioner_name")) or None)
+            left = await asyncio.to_thread(_questions_left, fresh.get("owner_id"))
+            await _send(
+                delivery_key=f"business/{bid}/sample_follow_up",
+                to_email=to, to_name=None,
+                subject=sample_follow_up_subject(name),
+                body=sample_follow_up_body(church_name=name, first_name=first,
+                                           questions_left=left))
+            await asyncio.to_thread(_stamp, bid, SAMPLE_FOLLOW_UP_KEY)
+            out["sent"] += 1
+        except Exception as e:
+            out["failed"] += 1
+            logger.warning(f"[lifecycle] sample follow-up failed biz={bid[:8]}: {type(e).__name__}")
+    logger.info(f"[lifecycle] sample follow-up scanned={out['scanned']} sent={out['sent']} "
                 f"failed={out['failed']}")
     return out
 

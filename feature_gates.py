@@ -578,7 +578,12 @@ def _access_state(business_row: Optional[Dict[str, Any]],
         return {"state": "full", "reason": "grandfathered"}
     row = business_row or {}
     comp = (row.get("comp_tier") or "").strip().lower()
-    if comp in PLANS:
+    # Any plan a comp can name (ALL_PLANS, the same set plan_of() and
+    # POST /access/business/{id}/tier accept), not only the public ladder:
+    # until 2026-11-15 this read PLANS, so a business comped on a church,
+    # barber or ChurchSavvy plan had the plan (plan_of) but read locked /
+    # no_subscription here, and met the paywall (sample church BE-1 found it).
+    if comp in ALL_PLANS:
         return {"state": "full", "reason": f"comp_{comp}"}
     status = (row.get("subscription_status") or "").strip().lower()
     if status == "active":
@@ -648,6 +653,54 @@ def has_feature(business_row: Optional[Dict[str, Any]], feature: str) -> bool:
     return feature in plan_features(plan)
 
 
+# ─── The sample church's rooms (BE-5, 2026-11-15) ────────────────────
+# A sample church (sample_church.py) has no plan and never gets one: it is
+# made up, and it is deleted the day its church starts. With billing
+# enforced, a room or report gated on a plan feature answered 402 there
+# (the Funds, Givers and Giver history reports, vertical_reports), so the
+# tour showed upgrade walls a church on a plan never sees. For LOOKING, a
+# sample reads as having the Growing church plan's features: the plan the
+# start sheet picks first, and every church feature but the audit trail,
+# the outside accountant and marketing autopilot.
+#
+# Only the read gates ask this (opens_feature): billing_limits.
+# require_feature (the 402 on a room or report) and entitlements()'
+# `allowed` (what the app's FeatureGate reads). Everything else keeps the
+# truth, that a sample has no plan:
+#   · plan_of() is None, so no allowance (usage_metering's allotment is 0,
+#     limit_for, monthly_credits), no seats, no texts, no Chief lane by
+#     plan, and nothing counts it as paying (MRR, the Money room's income,
+#     founding places, platform counts);
+#   · has_feature() is unchanged, so its direct callers (the website
+#     concierge, the outside-agent connector, connected AI) still say no;
+#   · plan_includes(), which guards money spent unasked (the marketing
+#     suite's drafts and flyers, standing permissions), still says no;
+#   · BE-3's refusals (the write guard, require_units, require_card,
+#     llm_call, every send seam) hold whatever this says.
+SAMPLE_TOUR_PLAN = "church_growing"
+
+
+def _is_sample_row(business_row: Optional[Dict[str, Any]]) -> bool:
+    """A sample church row: its own column when the row carries one, else
+    sample_church's cached read. Fails to False (the gate as before)."""
+    if not business_row:
+        return False
+    try:
+        import sample_church
+        return bool(sample_church.row_is_sample(business_row))
+    except Exception:
+        return False
+
+
+def opens_feature(business_row: Optional[Dict[str, Any]], feature: str) -> bool:
+    """Whether a screen or report gated on `feature` opens for this business:
+    has_feature(), or a sample church looking at a Growing church feature.
+    For display and read gates only; see the block above."""
+    if has_feature(business_row, feature):
+        return True
+    return feature in plan_features(SAMPLE_TOUR_PLAN) and _is_sample_row(business_row)
+
+
 def plan_includes(business_row: Optional[Dict[str, Any]], feature: str) -> bool:
     """Whether the business's actual plan includes `feature`, whatever
     BILLING_ENFORCE says. has_feature() lets everything through while
@@ -663,18 +716,26 @@ def entitlements(business_row: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     """Full entitlement picture for the frontend: what's allowed now, and
     what WOULD be allowed per tier once enforcement turns on. `min_plan`
     is the plan to upgrade to from HERE: inside the audience ladder for a
-    business on one, the public minimum otherwise."""
+    business on one, the public minimum otherwise.
+
+    `allowed` is what a screen opens (opens_feature: a sample church sees
+    the Growing church plan's rooms); `plan` and `included_in_plan` stay
+    the plan's truth, so a sample still reads as on no plan. A sample's
+    payload also says `sample_features_of`, the plan its rooms open as."""
     plan = plan_of(business_row)
     included = plan_features(plan)
-    return {
+    out = {
         "plan": plan,
         "subscription_status": (business_row or {}).get("subscription_status"),
         "enforce": enforcement_on(),
         "features": {
             f: {
-                "allowed": has_feature(business_row, f),
+                "allowed": opens_feature(business_row, f),
                 "min_plan": upgrade_plan_for(f, plan) or mp,
                 "included_in_plan": f in included,
             } for f, mp in FEATURE_MIN_PLAN.items()
         },
     }
+    if not plan and enforcement_on() and _is_sample_row(business_row):
+        out["sample_features_of"] = SAMPLE_TOUR_PLAN
+    return out

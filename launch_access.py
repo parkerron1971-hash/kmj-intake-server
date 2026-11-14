@@ -432,17 +432,19 @@ def create_business(body: CreateBusinessBody,
     # send_welcome decides for itself whether this is the owner's first
     # business and never raises; a signup must not fail on mail.
     #
-    # TODO(sample church, BE-4 + FE): a church in a sample gets the same
-    # welcome today. Its own words ("look around Grace Street Fellowship,
-    # then start your church") go in lifecycle_emails as a variant chosen on
-    # `church_sample` here; nothing else about the send changes.
+    # A church in a sample gets the sample's welcome (BE-5,
+    # lifecycle_emails.sample_welcome_body): it looks around Grace Street
+    # Fellowship, Chief answers its questions, a plan starts the church.
+    # Chosen on `church_sample`, decided once above; nothing else about the
+    # send changes (same key, same stamp, same first-business rule).
     try:
         import lifecycle_emails
         if background_tasks is not None:
             background_tasks.add_task(
                 lifecycle_emails.send_welcome, row,
                 getattr(user, "email", None),
-                (settings.get("practitioner_name") or None))
+                (settings.get("practitioner_name") or None),
+                church_sample=bool(church_sample))
     except Exception as e:
         logger.warning(f"[access] welcome email schedule failed: {e}")
 

@@ -2542,6 +2542,11 @@ async def startup():
         # The week (2026-09-02): day-three and day-seven beats, once each.
         scheduler.add_job(g("week_beats", _lifecycle.week_beats_tick),
                           "cron", minute=45, id="week_beats")
+        # The sample church's one note on day 3 (BE-5): a church still looking
+        # around its sample, once. Reads nothing while CHURCH_SAMPLE lets
+        # nobody in; never reads a sample row.
+        scheduler.add_job(g("sample_follow_up", _lifecycle.sample_follow_up_tick),
+                          "cron", minute=50, id="sample_follow_up")
     except Exception as e:
         print(f"   [warn] lifecycle email sweep not scheduled: {e}")
 
