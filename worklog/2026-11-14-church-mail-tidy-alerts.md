@@ -4,8 +4,8 @@ date: 2026-11-14
 agent: Claude Code (Claude Opus 5.5)
 asked: "yes do the mock for 1 and 2 (new-mail alerts; archive and delete) ... I love the design. lets build it"
 status: in progress
-prs: []
-migrations: [supabase/APPLY-2026-11-14-church-mail-tidy-alerts.sql]
+prs: ["kmj-intake-server#1845"]
+migrations: [supabase/APPLY-2026-11-14-church-mail-tidy-alerts.sql (applied 2026-11-14)]
 left_undone: []
 decisions:
   - "Built from the mock 1fGHqCVMe9fxwceAbjbaJZ. Alerts: church_mail.deliver marks an inbox row alert_at and church_mail_alerts.on_new sends at once (a thread off the webhook) unless it's the church's quiet hours (member_push.quiet_hour, the hours set under Text); the worker's sweep (2 min) sends what waited, several from one box as one ('Office · 3 new'), and anything a day late never alerts. Claiming alerted_at is null first means never twice."
