@@ -30,6 +30,13 @@ The switch, FOUNDING_CHURCHES = on | off (default on): off takes the line off
 the site and stops open spots getting the founding price. A church that
 already holds a place keeps its price either way: off is a rollback of the
 offer, never of a promise made.
+
+The end (Kevin, 2026-11-14: "go with board C, Jan 31, build it"): the offer
+closes when ten churches hold a place or at the end of FOUNDING_CHURCHES_UNTIL
+(default 2027-01-31, the end of that day in US Eastern time), whichever comes
+first. The site shows the regular price crossed out beside the founding price
+only while it is open, so the regular price is the one every church pays
+after it closes. Set FOUNDING_CHURCHES_UNTIL=none for no date.
 """
 from __future__ import annotations
 
@@ -37,7 +44,7 @@ import asyncio
 import logging
 import os
 import time
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, Optional, Set
 
 from fastapi import HTTPException
@@ -58,6 +65,48 @@ def spots() -> int:
         return max(0, int((os.environ.get("FOUNDING_CHURCH_SPOTS") or "10").strip()))
     except ValueError:
         return 10
+
+
+_UNTIL_DEFAULT = "2027-01-31"
+# The end of the last day in US Eastern time. January is standard time
+# (UTC-5) every year, so the offset is fixed rather than read from a zone.
+_EASTERN = timezone(timedelta(hours=-5))
+
+
+def until() -> Optional[date]:
+    """The offer's last day, or None for no end date (FOUNDING_CHURCHES_UNTIL=
+    none). A value that doesn't parse keeps the default, never 'no end'."""
+    raw = (os.environ.get("FOUNDING_CHURCHES_UNTIL") or _UNTIL_DEFAULT).strip()
+    if raw.lower() in ("none", "off", "no", "never"):
+        return None
+    try:
+        return date.fromisoformat(raw)
+    except ValueError:
+        logger.warning("FOUNDING_CHURCHES_UNTIL=%r doesn't parse; using %s", raw, _UNTIL_DEFAULT)
+        return date.fromisoformat(_UNTIL_DEFAULT)
+
+
+def closes_at() -> Optional[datetime]:
+    """When the offer closes: midnight Eastern at the end of until()."""
+    last = until()
+    if last is None:
+        return None
+    return datetime(last.year, last.month, last.day, tzinfo=_EASTERN) + timedelta(days=1)
+
+
+def open_now(now: Optional[datetime] = None) -> bool:
+    """The offer is on and its end date hasn't passed (the places left are
+    counted separately: left())."""
+    if not on():
+        return False
+    end = closes_at()
+    return end is None or (now or datetime.now(timezone.utc)) < end
+
+
+def ends_words(last: Optional[date] = None) -> str:
+    """'January 31' for the site and the cards; '' when there's no date."""
+    last = last or until()
+    return f"{last:%B} {last.day}" if last else ""
 
 
 def record(biz: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
@@ -83,10 +132,11 @@ def left() -> Optional[int]:
     return None if n is None else max(0, spots() - n)
 
 
-def public_state() -> Optional[Dict[str, int]]:
-    """For the site and the plan cards: {spots, left}, or None while the
-    offer is off or the count can't be read (then nothing is promised)."""
-    if not on() or not spots():
+def public_state() -> Optional[Dict[str, Any]]:
+    """For the site and the plan cards: {spots, left, ends}, or None while the
+    offer is off, past its end date, or the count can't be read (then nothing
+    is promised). `ends` is the last day as an ISO date, or None."""
+    if not open_now() or not spots():
         return None
     now = time.monotonic()
     if now - _public["at"] > _PUBLIC_TTL or _public["value"] is None:
@@ -94,7 +144,38 @@ def public_state() -> Optional[Dict[str, int]]:
         if n is None:
             return None
         _public.update(at=now, value=n)
-    return {"spots": spots(), "left": int(_public["value"])}
+    last = until()
+    return {"spots": spots(), "left": int(_public["value"]), "ends": last.isoformat() if last else None}
+
+
+def offer_prices() -> Optional[Dict[str, Dict[str, int]]]:
+    """The founding price per church plan, {plan: {month_cents, year_cents}},
+    while a place is open: None once the offer is off, past its date, full
+    or unreadable. Only a plan whose founding price is below its regular
+    price is in it, so nothing is shown crossed out that isn't a saving."""
+    import feature_gates
+    import marketing_pages as mp
+    import pricing_config
+    state = public_state()
+    if not state or state["left"] <= 0:
+        return None
+    founding = pricing_config.church_founding_price_cents()
+    regular = pricing_config.church_price_cents()
+    out = {p: {"month_cents": founding[p], "year_cents": founding[p] * mp.ANNUAL_MONTHS}
+           for p in feature_gates.CHURCH_PLANS if 0 < founding.get(p, 0) < regular.get(p, 0)}
+    return out or None
+
+
+def price_cents_for(biz: Optional[Dict[str, Any]], plan: Optional[str]) -> int:
+    """What this church pays a month for `plan`: the founding price for a
+    church holding a place (or already on a founding price), else the
+    regular price. For the first payment and the move (three months of it)."""
+    import pricing_config
+    regular = pricing_config.church_price_cents().get(plan or "", 0)
+    sub = str((biz or {}).get("subscription_plan") or "").strip()
+    if record(biz) is not None or (sub and sub in founding_price_ids()):
+        return pricing_config.church_founding_price_cents().get(plan or "", regular) or regular
+    return regular
 
 
 def forget() -> None:
@@ -130,7 +211,7 @@ async def checkout_price(biz: Dict[str, Any], plan: str, price_id: str) -> str:
     swapped."""
     annual = _is_annual(plan, price_id)
     eligible = record(biz) is not None
-    if not eligible and on():
+    if not eligible and open_now():
         n = await asyncio.to_thread(left)
         eligible = bool(n)
     if price_id in founding_price_ids() and not eligible:
@@ -167,6 +248,10 @@ async def claim(business_id: str, plan: Optional[str], price_id: Optional[str]) 
     if held:
         return held
     if (biz.get("comp_tier") or "").strip().lower() in feature_gates.ALL_PLANS:
+        return None
+    # Past the end date (or with the offer off) a place goes only to a church
+    # already paying a founding price: one that chose its plan in time.
+    if not open_now() and (price_id or "") not in founding_price_ids():
         return None
     owner = await asyncio.to_thread(_owner_is_platform, biz.get("owner_id"))
     if owner is not False:

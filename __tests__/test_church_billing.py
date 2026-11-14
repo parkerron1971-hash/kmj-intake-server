@@ -229,7 +229,9 @@ def test_after_five_the_move_is_three_months_of_the_plan(stripe, monkeypatch):
     out = _move(moving_from="Planning Center")
     [(_, path, data)] = [c for c in calls if c[0] == "post"]
     assert path == "/checkout/sessions" and data["mode"] == "payment"
-    assert data["line_items"][0]["price_data"]["unit_amount"] == 3 * 19900 == out["price_cents"]
+    # Three months of the plan at the price this church pays: the regular
+    # price for a church that holds no founding place.
+    assert data["line_items"][0]["price_data"]["unit_amount"] == 3 * 24900 == out["price_cents"]
     assert data["metadata"]["kind"] == "church_move" and data["metadata"]["plan"] == "church_growing"
     assert "church_move" not in state["biz"]["settings"]         # recorded only once it's paid
 

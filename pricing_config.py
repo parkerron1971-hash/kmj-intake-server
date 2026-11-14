@@ -189,22 +189,45 @@ def audience_plan_offered(plan: str) -> bool:
 # room for the deep lanes, which run on the top model and charge no credits.
 # Multi-site (1,500+, or two campuses) is a quote and waits for a campus
 # view, so it isn't a plan.
+#
+# The regular prices rose on 2026-11-14 (Kevin: "go with board C, Jan 31,
+# build it"; the canvas APP35gJRsgVKuEqFmZPERx): Small $99, Growing $249,
+# Established $499, Large $899. The old prices are the FOUNDING prices
+# (church_founding_price_cents): the first ten churches that pay get them,
+# for as long as they stay, until ten have joined or the offer ends
+# (church_founding.closes_at). The credits did NOT move (Kevin, same day:
+# "so people don't think they get higher credits cheaper"): one plan, two
+# prices, so the founding card's "Save $50 a month" is the same plan for
+# less. A full tank is about 36% of the founding price, 29% of the regular.
 CHURCH_PLAN_KEYS = ("church_small", "church_growing", "church_established", "church_large")
 
 
 def church_price_cents() -> Dict[str, int]:
-    """church plan key -> monthly list price, cents (annual = 10x)."""
+    """church plan key -> monthly REGULAR price, cents (annual = 10x)."""
     return {
-        "church_small":       _dial("TIER_CHURCH_SMALL_CENTS", "PRICE_", 7900),
-        "church_growing":     _dial("TIER_CHURCH_GROWING_CENTS", "PRICE_", 19900),
-        "church_established": _dial("TIER_CHURCH_ESTABLISHED_CENTS", "PRICE_", 39900),
-        "church_large":       _dial("TIER_CHURCH_LARGE_CENTS", "PRICE_", 69900),
+        "church_small":       _dial("TIER_CHURCH_SMALL_CENTS", "PRICE_", 9900),
+        "church_growing":     _dial("TIER_CHURCH_GROWING_CENTS", "PRICE_", 24900),
+        "church_established": _dial("TIER_CHURCH_ESTABLISHED_CENTS", "PRICE_", 49900),
+        "church_large":       _dial("TIER_CHURCH_LARGE_CENTS", "PRICE_", 89900),
+    }
+
+
+def church_founding_price_cents() -> Dict[str, int]:
+    """church plan key -> monthly FOUNDING price, cents (annual = 10x): what
+    the first ten churches pay (church_founding). These are the Stripe prices
+    in STRIPE_PRICE_ID_CHURCH_<SIZE>_FOUNDING; the two must say the same."""
+    return {
+        "church_small":       _dial("FOUNDING_CHURCH_SMALL_CENTS", "PRICE_", 7900),
+        "church_growing":     _dial("FOUNDING_CHURCH_GROWING_CENTS", "PRICE_", 19900),
+        "church_established": _dial("FOUNDING_CHURCH_ESTABLISHED_CENTS", "PRICE_", 39900),
+        "church_large":       _dial("FOUNDING_CHURCH_LARGE_CENTS", "PRICE_", 69900),
     }
 
 
 def church_credits() -> Dict[str, int]:
-    """church plan key -> monthly included credits (the public ladder's
-    3,000 / 7,500, then 15,000 and 27,500: about 38 credits a dollar on every church plan)."""
+    """church plan key -> monthly included credits (3,000 / 7,500, then 15,000
+    and 27,500), the same at the founding and the regular price: about 38
+    credits a dollar of the founding price, 30 of the regular."""
     return {
         "church_small":       _dial("CHURCH_SMALL_CREDITS", "CREDITS_", 3000),
         "church_growing":     _dial("CHURCH_GROWING_CREDITS", "CREDITS_", 7500),

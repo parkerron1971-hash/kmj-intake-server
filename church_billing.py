@@ -182,8 +182,10 @@ def _first_payment_due(biz: Dict[str, Any]) -> bool:
     return not comped and biz.get("subscription_status") == "trialing"
 
 
-def _first_payment_cents(plan: Optional[str]) -> int:
-    return pricing_config.church_price_cents().get(plan or "", 0)
+def _first_payment_cents(plan: Optional[str], biz: Optional[Dict[str, Any]] = None) -> int:
+    """The church's own month: the founding price on a founding price."""
+    import church_founding
+    return church_founding.price_cents_for(biz, plan)
 
 
 async def _pay_first_month(biz: Dict[str, Any]) -> None:
@@ -212,8 +214,10 @@ def _founding_taken() -> Optional[int]:
     return len(rows) if isinstance(rows, list) else None
 
 
-def _move_cents(plan: str) -> int:
-    return pricing_config.church_move_months() * pricing_config.church_price_cents().get(plan, 0)
+def _move_cents(plan: str, biz: Optional[Dict[str, Any]] = None) -> int:
+    """Three months of the plan, at the price this church pays for it."""
+    import church_founding
+    return pricing_config.church_move_months() * church_founding.price_cents_for(biz, plan)
 
 
 def _ticket(biz: Dict[str, Any], record: Dict[str, Any]) -> None:
@@ -294,10 +298,11 @@ async def move_status(business_id: str, user: AuthedUser = Depends(require_user)
             # place, when it holds one, and how many places are left.
             "founding_church": church_founding.record(biz),
             "founding_price": {"on": price is not None, "spots": church_founding.spots(),
-                               "left": price["left"] if price else None},
-            "price_cents": _move_cents(plan) if plan in feature_gates.CHURCH_PLANS else None,
+                               "left": price["left"] if price else None,
+                               "ends": price.get("ends") if price else None},
+            "price_cents": _move_cents(plan, biz) if plan in feature_gates.CHURCH_PLANS else None,
             "first_payment_due": _first_payment_due(biz),
-            "first_payment_cents": _first_payment_cents(plan)}
+            "first_payment_cents": _first_payment_cents(plan, biz)}
 
 
 @router.post("/move")
@@ -320,7 +325,7 @@ async def request_move(body: MoveBody, user: AuthedUser = Depends(require_user))
     if taken < pricing_config.founding_church_moves():
         if _first_payment_due(biz):
             if not body.pay_today:
-                return {"ok": True, "pay_first": True, "first_payment_cents": _first_payment_cents(plan)}
+                return {"ok": True, "pay_first": True, "first_payment_cents": _first_payment_cents(plan, biz)}
             await _pay_first_month(biz)
         record = {"state": "requested", "founding": True, "plan": plan,
                   "moving_from": moving_from, "requested_at": _now()}
@@ -328,7 +333,7 @@ async def request_move(body: MoveBody, user: AuthedUser = Depends(require_user))
         await asyncio.to_thread(_ticket, biz, record)
         await _tell_owner(biz, record)
         return {"ok": True, "move": record, "founding": True}
-    cents = _move_cents(plan)
+    cents = _move_cents(plan, biz)
     import billing_limits
     session = await sb._stripe_post("/checkout/sessions", {
         "mode": "payment",
