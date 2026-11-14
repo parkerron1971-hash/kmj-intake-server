@@ -20,6 +20,7 @@ decisions:
   - "Income: active and past_due subscriptions whose price id reads as a plan, at the real price (a church founding price id pays the founding price, the Founder seat its own, an annual price a twelfth of ten months). Comped businesses are counted and never priced; the platform owner's own are left out; one whose owner can't be checked is left out too (an info alert says how many), so income is never overstated. Aggregates only"
   - "Alerts: at most one a bill, keyed by the bill. A live bill on pace for over 1.5x last month and over $10 is running high (warn); a watched bill shows its note (warn, as in the contract's LiveKit example). Unread income is its own alert"
   - "The split always adds up to the cent: tax and reserve round down, pay takes the rest. plan_model.base_steps starts at the month's real costs rounded up to the next $50 when that's above $500, and the later steps never fall below it"
+  - "The app (solutionist-studio #1552) adds a bill with no key: the key is the vendor as a lower-case slug (a-z, 0-9, -), with -2, -3 on a collision (switched-off bills included, since the key is unique in the table; a key taken between the read and the insert moves to the next). A new bill with no sort goes after the others. PATCH writes only the fields sent; billing_day null clears it"
 related: [2026-11-14-founding-deal-cards.md]
 ---
 `platform_money.py` (new): `GET /platform/money/summary`, bills
@@ -37,10 +38,11 @@ URL, token, body or account id.
 
 `.env.example`: RAILWAY_API_TOKEN, DIGITALOCEAN_TOKEN, with what each fills.
 
-Tests: `__tests__/test_platform_money.py` (29): the owner gate on all seven
+Tests: `__tests__/test_platform_money.py` (32): the owner gate on all seven
 routes, the summary's contract shape with every reader faked, fail-soft
 fallbacks with every reader failing (and no secret in the logs), the cache,
 on-pace math, due-date clamping and roll-over, income pricing (founding,
 regular, annual, past due, trial, comped, the owner's own, unchecked), the
 split's rounding, base steps, alerts, bill and config validation, the
-pre-migration seed and its 503s.
+pre-migration seed and its 503s, and the app's exact shapes (an add with no
+key, a partial PATCH, whole-number percentages, the list and config reads).

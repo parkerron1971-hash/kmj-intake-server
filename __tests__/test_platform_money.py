@@ -50,6 +50,7 @@ class FakeDB:
         self.businesses = []
         self.usage_fails = False
         self.writes = []
+        self.raced = set()      # keys another writer takes between our read and our insert
         self.error = None
 
     def _fail(self, status=404, code="PGRST205"):
@@ -82,7 +83,7 @@ class FakeDB:
             return self._fail()
         self.writes.append(("POST", path, body, prefer))
         if path.startswith("/platform_money_bills"):
-            if any(b["key"] == body["key"] for b in self.bills):
+            if body["key"] in self.raced or any(b["key"] == body["key"] for b in self.bills):
                 return self._fail(409, "23505")
             self.bills.append(dict(body))
             return [dict(body)]
@@ -541,6 +542,68 @@ def test_delete_is_soft_and_patch_brings_it_back(env):
     assert any(b["key"] == "r2" for b in client.get("/platform/money/bills").json()["bills"])
     assert client.patch("/platform/money/bills/r2", json={"active": True}).json()["bill"]["active"] is True
     assert client.delete("/platform/money/bills/nope").status_code == 404
+
+
+# ─── The shapes the app sends (solutionist-studio #1552) ────────────────
+
+def test_app_adds_a_bill_without_a_key_and_the_key_is_made_unique(env):
+    client = _client()
+    new = {"vendor": "Supabase", "what": "A second project", "kind": "flat", "amount_cents": 2500, "billing_day": 3}
+    r = client.post("/platform/money/bills", json=new)
+    assert r.status_code == 200 and r.json()["ok"] is True
+    bill = r.json()["bill"]
+    assert bill["key"] == "supabase-2"
+    assert (bill["vendor"], bill["what"], bill["kind"], bill["amount_cents"], bill["billing_day"]) == \
+        ("Supabase", "A second project", "flat", 2500, 3)
+    assert bill["active"] is True and bill["sort"] == 140          # after the last seeded bill (130)
+    assert client.post("/platform/money/bills", json=new).json()["bill"]["key"] == "supabase-3"
+    r = client.post("/platform/money/bills", json={"vendor": "Google Workspace", "what": "", "kind": "usage",
+                                                   "amount_cents": 1400, "billing_day": None})
+    bill = r.json()["bill"]
+    assert (bill["key"], bill["what"], bill["kind"], bill["billing_day"]) == ("google-workspace", None, "usage", None)
+    assert client.post("/platform/money/bills", json={**new, "vendor": "!!!"}).json()["bill"]["key"] == "bill"
+    long = client.post("/platform/money/bills", json={**new, "vendor": "x" * 60}).json()["bill"]["key"]
+    assert long == "x" * 40
+    assert client.post("/platform/money/bills", json={**new, "vendor": "x" * 60}).json()["bill"]["key"] == "x" * 38 + "-2"
+    # Taken by someone else between the read and the insert: the next one.
+    env.raced.add("zoom")
+    assert client.post("/platform/money/bills", json={**new, "vendor": "Zoom"}).json()["bill"]["key"] == "zoom-2"
+    assert "supabase-2" in _costs(client.get("/platform/money/summary").json())
+
+
+def test_app_patch_changes_only_what_it_sends(env):
+    client = _client()
+    r = client.patch("/platform/money/bills/supabase", json={"amount_cents": 3700})
+    assert r.status_code == 200 and r.json()["ok"] is True
+    assert set(env.writes[-1][2]) == {"amount_cents", "updated_at"}
+    bill = r.json()["bill"]
+    assert (bill["vendor"], bill["what"], bill["amount_cents"], bill["billing_day"], bill["watch"]) == \
+        ("Supabase", "The database", 3700, 22, False)
+    r = client.patch("/platform/money/bills/supabase", json={"billing_day": None})
+    assert set(env.writes[-1][2]) == {"billing_day", "updated_at"}
+    assert (r.json()["bill"]["billing_day"], r.json()["bill"]["amount_cents"]) == (None, 3700)
+    r = client.patch("/platform/money/bills/resend", json={"note": "Now $35", "watch": False})
+    assert set(env.writes[-1][2]) == {"note", "watch", "updated_at"}
+    bill = r.json()["bill"]
+    assert (bill["note"], bill["watch"], bill["amount_cents"], bill["billing_day"]) == ("Now $35", False, 2000, 23)
+    r = client.patch("/platform/money/bills/claude", json={"amount_cents": 25000, "billing_day": 5,
+                                                           "note": None, "watch": True})
+    assert r.status_code == 200 and r.json()["bill"]["billing_day"] == 5
+
+
+def test_app_config_and_read_shapes(env):
+    client = _client()
+    r = client.put("/platform/money/config", json={"tax_pct": 25, "reserve_pct": 10, "pay_pct": 65,
+                                                   "reserve_goal_months": 4})
+    assert r.status_code == 200 and r.json()["ok"] is True
+    got = client.get("/platform/money/config").json()
+    assert got["ok"] is True
+    assert got["config"] == {"tax_pct": 25, "reserve_pct": 10, "pay_pct": 65, "reserve_goal_months": 4}
+    assert all(type(v) is int for v in got["config"].values())
+    bills = client.get("/platform/money/bills").json()
+    assert bills["ok"] is True and isinstance(bills["bills"], list) and bills["bills"]
+    assert {"key", "vendor", "what", "kind", "amount_cents", "billing_day", "live", "note", "watch",
+            "active", "sort"} <= set(bills["bills"][0])
 
 
 # ─── The split's settings ───────────────────────────────────────────────

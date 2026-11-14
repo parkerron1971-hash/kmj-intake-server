@@ -833,20 +833,69 @@ async def list_bills():
     return {"ok": True, "bills": bills, "setup_needed": seed}
 
 
+KEY_TRIES = 50
+
+
+def _with_suffix(base: str, n: int) -> str:
+    """'supabase', 2 → 'supabase-2', held to the key's 40 characters."""
+    if n <= 1:
+        return base
+    tail = f"-{n}"
+    return base[:40 - len(tail)].rstrip("-") + tail
+
+
+def _existing() -> Tuple[set, Optional[int]]:
+    """(every key in use, switched-off bills too, since a key is unique in
+    the table; the highest sort). Empty when unreadable: the insert's own
+    unique check still holds."""
+    rows = sb_clients.sb_get_as_service(f"{BILLS}?select=key,sort&limit=1000")
+    if not isinstance(rows, list):
+        return set(), None
+    sorts = [int(r["sort"]) for r in rows if isinstance(r.get("sort"), int)]
+    return {str(r.get("key")) for r in rows}, (max(sorts) if sorts else None)
+
+
+def _insert_bill(body: Dict[str, Any], explicit: bool, sort_given: bool = True) -> Any:
+    """Insert one bill. A key the owner chose is that key or a 409; a key made
+    from the vendor takes the next free -2, -3 … when it's in use. A new bill
+    with no sort of its own goes after the others."""
+    taken, top = _existing()
+    if not sort_given and top is not None:
+        body = {**body, "sort": min(10_000, top + 10)}
+    if explicit:
+        return _write(lambda: sb_clients.sb_post_as_service(BILLS, body))
+    base = body["key"]
+    for n in range(1, KEY_TRIES + 1):
+        key = _with_suffix(base, n)
+        if key in taken:
+            continue
+        rows = sb_clients.sb_post_as_service(BILLS, {**body, "key": key})
+        if rows is not None:
+            return rows
+        err = sb_clients.last_error()
+        if not (err and err.get("code") == "23505"):
+            return _write(lambda: None)   # the same 503s as every write
+        taken.add(key)                    # taken since the read: try the next
+    raise HTTPException(409, "Too many bills share that name. Give this one a different name.")
+
+
 @router.post("/bills")
 async def create_bill(req: BillIn):
-    key = (req.key or "").strip().lower() or _slug(req.vendor)
+    """The app sends {vendor, what, kind, amount_cents, billing_day} and no
+    key: the key is made from the vendor (a lower-case slug), unique."""
+    vendor = _clean(req.vendor)
+    if not vendor:
+        raise HTTPException(422, "A bill needs a vendor.")
+    explicit = (req.key or "").strip().lower()
+    key = explicit or _slug(vendor) or "bill"
     if not _KEY.match(key):
         raise HTTPException(422, "The key has to be lower-case letters, numbers, - or _.")
     if req.live is not None and req.live not in LIVE_KEYS:
         raise HTTPException(422, f"live has to be one of: {', '.join(LIVE_KEYS)}, or empty.")
-    vendor = _clean(req.vendor)
-    if not vendor:
-        raise HTTPException(422, "A bill needs a vendor.")
     body = {"key": key, "vendor": vendor, "what": _clean(req.what), "kind": req.kind,
             "amount_cents": req.amount_cents, "billing_day": req.billing_day, "live": req.live,
             "note": _clean(req.note), "watch": req.watch, "sort": req.sort, "active": True}
-    rows = await asyncio.to_thread(_write, lambda: sb_clients.sb_post_as_service(BILLS, body))
+    rows = await asyncio.to_thread(_insert_bill, body, bool(explicit), "sort" in req.model_fields_set)
     row = rows[0] if isinstance(rows, list) and rows else body
     return {"ok": True, "bill": _bill_out(row)}
 
