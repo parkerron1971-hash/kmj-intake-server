@@ -4,7 +4,7 @@ date: 2026-11-14
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-11-14: "go with board C, Jan 31, build it", then "show a reduction of credits ... so people don''t think they get higher credits cheaper"'
 status: shipped
-prs: [kmj-intake-server#TBD]
+prs: [kmj-intake-server#1836]
 migrations: []
 left_undone:
   - "The app's plan cards (solutionist-studio) show the deal from the new /billing/plans fields: a separate FE PR"
