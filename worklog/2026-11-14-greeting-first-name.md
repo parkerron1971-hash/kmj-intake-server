@@ -4,7 +4,7 @@ date: 2026-11-14
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-11-14: "yes fix the name and switch today."'
 status: shipped
-prs: [kmj-intake-server#TBD]
+prs: [kmj-intake-server#1834]
 migrations: []
 left_undone:
   - "Found 11-13, not fixed (answer check): on some greeting turns the repair cuts the reply to a sentence or two, on both briefs"
