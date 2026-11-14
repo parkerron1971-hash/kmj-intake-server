@@ -15174,11 +15174,30 @@ async def _log_chief_activity(client, *, user_id, business_id, source, taken):
         logger.warning(f"chief_activity log failed: {e}")
 
 
+async def _is_sample_turn(req: "ChatRequest") -> bool:
+    """Is this turn for a sample church (sample_church.py)? One cached read
+    per business per process, none once known. Fails open, as is_sample
+    does: an unreadable answer is "no", and BE-3's seams still refuse every
+    send and AI call billed to a sample on the normal path."""
+    try:
+        import sample_church
+        return await sample_church.is_sample_async(req.business_id)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[sample] chat divert check failed open: {type(e).__name__}")
+        return False
+
+
 @router.post("/agents/chief/chat")
 async def chief_chat(
     req: ChatRequest,
     user_session: UserSession = Depends(require_user_session),
 ):
+    # A sample church has its own Chief (sample_chief.py, BE-4): ten
+    # questions about a made-up church, nothing read, written, swept, sent
+    # or learned here. FIRST, before anything below runs.
+    if await _is_sample_turn(req):
+        import sample_chief
+        return await sample_chief.turn(req, user_session)
     # Pass RLS-readiness — bind the practitioner's JWT to the async context
     # so every _sb call inside this handler (and the ~30 helpers it invokes)
     # forwards the token automatically. PostgREST verifies the JWT, sets
@@ -16501,7 +16520,12 @@ async def chief_chat_stream(
     budget, as `delta` events with `lead` set. The turn's own deltas then
     continue them, and the final payload's `response` is the whole reply
     as it was shown. With no router in play this endpoint is unchanged.
+
+    A sample church streams from sample_chief.py (BE-4), decided first.
     """
+    if await _is_sample_turn(req):
+        import sample_chief
+        return await sample_chief.stream(req, user_session)
     q: "asyncio.Queue[str]" = asyncio.Queue()
 
     def _sink(piece: str) -> None:

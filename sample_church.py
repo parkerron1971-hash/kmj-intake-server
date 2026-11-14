@@ -577,6 +577,17 @@ async def refuse_async(business: Any, what: str = "this") -> None:
 
 # ─── What /billing/access tells the app ───────────────────────────────
 
+def questions_of() -> int:
+    """How many questions the sample's Chief answers a person (BE-4):
+    SAMPLE_CHIEF_QUESTIONS, else QUESTIONS_OF. 1..50 (the table's check);
+    anything else reads as the default."""
+    try:
+        n = int(str(os.environ.get("SAMPLE_CHIEF_QUESTIONS") or "").strip())
+    except ValueError:
+        return QUESTIONS_OF
+    return n if 1 <= n <= 50 else QUESTIONS_OF
+
+
 def questions_left(user_id: Any) -> Optional[int]:
     """Questions Chief has left to answer in this person's sample: ten less
     the ones asked (sample_church_questions, BE-4 writes it). Per PERSON, so a
@@ -588,7 +599,7 @@ def questions_left(user_id: Any) -> Optional[int]:
         f"/sample_church_questions?user_id=eq.{uid}&select=n&limit=50")
     if not isinstance(rows, list):
         return None
-    return max(0, QUESTIONS_OF - len(rows))
+    return max(0, questions_of() - len(rows))
 
 
 def free_moves_left() -> Optional[int]:
@@ -612,7 +623,7 @@ def access_block(*, home_id: Any, sample: Optional[Dict[str, Any]],
         "home_business_id": str(home_id) if home_id else None,
         "ready": ready(sample),
         "questions_left": questions_left(owner_id),
-        "questions_of": QUESTIONS_OF,
+        "questions_of": questions_of(),
         "read_posts": list(READ_POSTS),
         "promise": church_site.PROMISE,
         "free_moves_left": free_moves_left(),

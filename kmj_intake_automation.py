@@ -1024,6 +1024,11 @@ app.include_router(stripe_billing_router)
 # Church plans' extras (2026-11-03): one more office login, and the move.
 from church_billing import router as church_billing_router
 app.include_router(church_billing_router)
+# The sample church's Chief (sample_chief.py, BE-4): GET
+# /sample-church/questions (the sample's owner). Its chat turns come
+# through /agents/chief/chat and /stream, which hand a sample over first.
+from sample_chief import router as sample_chief_router
+app.include_router(sample_chief_router)
 from stripe_discounts import router as stripe_discounts_router
 app.include_router(stripe_discounts_router)
 # Campaigns Phase 1 (2026-07-21) — Chief-drafted marketing sequences
