@@ -98,6 +98,7 @@ HTTP_TIMEOUT = httpx.Timeout(connect=10.0, read=60.0, write=30.0, pool=10.0)
 # belong here with a reason.
 
 EXPORT_EXCLUDED: Dict[str, str] = {
+    "sample_church_questions": "the questions a person asked Chief about the made-up sample church before starting their own (sample_church.py): about Grace Street Fellowship, not their church, and counted per person so a restore must not hand back the ten; keyed by user_id, deleted with the person (USER_CHILD_TABLES), its business links set null when a business goes",
     "church_keepers": "who keeps a church's guarded areas (church_keys.py): sign-in user ids that can't mean anything in another business; a restored church names its keepers again, and until it does nothing is locked; cascade on business deletion",
     "church_area_keys": "asks for an hour's key to a guarded area and their answers: sign-in user ids and a hashed one-time code, over within a day; nothing to restore; cascade on business deletion",
     "church_duty_holders": "who a church moved each office duty to (church_duties.py): sign-in user ids that can't mean anything in another business; a restored church follows its lanes' defaults until it moves its duties again; cascade on business and login deletion",
@@ -579,6 +580,8 @@ BUSINESS_CHILD_TABLES: List[str] = [
 USER_CHILD_TABLES: List[str] = [
     "push_subscriptions",
     "user_profiles",
+    # The sample church's questions to Chief (sample_church.py): the person's.
+    "sample_church_questions",
 ]
 
 # Supabase Storage buckets holding business-scoped files (logos, brand,
@@ -763,7 +766,10 @@ async def export_account(user: AuthedUser = Depends(require_user)):
     frontend offers it as a file download. Portability first — pretty
     formats can come later; JSON is complete and machine-readable."""
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
-        businesses = await _owned_businesses(client, user.id)
+        # A sample church (sample_church.py) is a made-up church, never the
+        # practitioner's records: it is left out of their file.
+        businesses = [b for b in await _owned_businesses(client, user.id)
+                      if b.get("is_sample") is not True]
         out: Dict[str, Any] = {
             # 2 — rows are paginated rather than capped at 10,000, and
             # every bundle now carries row_counts plus an explicit
@@ -1314,6 +1320,17 @@ async def delete_business(business_id: str, request: Request,
         target = next((b for b in businesses if b["id"] == business_id), None)
         if not target:
             raise HTTPException(404, "Business not found or not yours")
+        # A church's sample church (sample_church.py) goes with it, first,
+        # while sample_of still points here (deleting the home nulls it).
+        # A failure is logged and the home's deletion goes on: the person
+        # asked for the home to go, and an orphaned sample (is_sample, no
+        # home) is the daily cleanup's to finish.
+        for sample in (b for b in businesses
+                       if b.get("is_sample") is True and b.get("sample_of") == business_id):
+            try:
+                await _delete_business(client, sample)
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"sample {str(sample['id'])[:8]} of {business_id} not deleted: {e}")
         logger.warning(f"DELETE business {business_id} ({target.get('name')}) by user={user.id}")
         counts = await _delete_business(client, target)
     return {"ok": True, "deleted_business": business_id, "rows_removed": counts}

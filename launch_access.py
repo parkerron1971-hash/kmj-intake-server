@@ -368,14 +368,32 @@ def create_business(body: CreateBusinessBody,
             background_tasks.add_task(seed_custom_business, row)
     except Exception as e:
         logger.warning(f"[access] seed schedule failed: {e}")
+    # A church that signs up into a sample church (sample_church.py,
+    # 2026-11-15) gets no trial: it looks around a private made-up church
+    # until it chooses a plan. Decided once here, from the row and the
+    # signer's own email. applies() never raises and answers False for
+    # every business and every church while the switch is off (or in test
+    # mode for anyone not listed), so this whole branch is today's path.
+    import sample_church
+    church_sample = sample_church.applies(row, getattr(user, "email", None),
+                                          grandfathered=grandfathered)
     # The trial starts here, without a card (no_card_trial.py, 2026-10-03).
     # Before this the app met a new business with the card paywall the
     # moment onboarding finished. Runs BEFORE the background seeding, so
     # its settings write cannot race theirs. Never raises: a business
     # that could not get the trial meets the paywall, as before.
     import no_card_trial
-    trial = no_card_trial.start(row, source="signup",
-                                email=getattr(user, "email", None))
+    trial = None if church_sample else no_card_trial.start(
+        row, source="signup", email=getattr(user, "email", None))
+    if church_sample:
+        # The sample's own row, after the response. Never fails a signup:
+        # GET /billing/access makes it on the app's first load if this
+        # didn't (ensure() is idempotent).
+        try:
+            if background_tasks is not None:
+                background_tasks.add_task(sample_church.ensure, row)
+        except Exception as e:
+            logger.warning(f"[access] sample church schedule failed (non-fatal): {e}")
     # Day one for everyone who never reaches Stripe. Comped, invited and
     # grandfathered accounts have no subscription and so no `trialing`
     # webhook ever fires — an arc that only opened from Stripe would skip
@@ -385,9 +403,14 @@ def create_business(body: CreateBusinessBody,
     # later, from the paywall) and the subscription then aligns the arc
     # to the real trial start. Best-effort: a practitioner whose business
     # was created must never see that fail because a side table did.
+    #
+    # A church in a sample has no first week yet: its day one is the day it
+    # chooses a plan, and the Stripe webhook opens the arc then
+    # (stripe_billing._apply_subscription_state, sample_church.end).
     try:
-        import first_run_arc
-        first_run_arc.begin(row.get("id"), source="signup")
+        if not church_sample:
+            import first_run_arc
+            first_run_arc.begin(row.get("id"), source="signup")
     except Exception as e:
         logger.warning(f"[access] first-run arc begin failed (non-fatal): {e}")
 
@@ -408,6 +431,11 @@ def create_business(body: CreateBusinessBody,
     # Lifecycle (2026-09-01) — the welcome email, after the response.
     # send_welcome decides for itself whether this is the owner's first
     # business and never raises; a signup must not fail on mail.
+    #
+    # TODO(sample church, BE-4 + FE): a church in a sample gets the same
+    # welcome today. Its own words ("look around Grace Street Fellowship,
+    # then start your church") go in lifecycle_emails as a variant chosen on
+    # `church_sample` here; nothing else about the send changes.
     try:
         import lifecycle_emails
         if background_tasks is not None:
@@ -418,7 +446,11 @@ def create_business(body: CreateBusinessBody,
     except Exception as e:
         logger.warning(f"[access] welcome email schedule failed: {e}")
 
-    return {"ok": True, "business": row, "trial": trial}
+    out = {"ok": True, "business": row, "trial": trial}
+    if church_sample:
+        # The app opens the sample once /billing/access says it is ready.
+        out["sample"] = {"pending": True}
+    return out
 
 
 @router.post("/onboarding-started")
@@ -468,7 +500,20 @@ def access_open() -> Dict[str, Any]:
             # 2026-11-13; pricing_config.church_free_week): a church's
             # sign-up screen says "no card to sign up", not "N days free".
             "church_free_week": pricing_config.church_free_week(),
+            # Every new church looks around a sample church instead of a
+            # trial (sample_church.py): true only while CHURCH_SAMPLE=on
+            # (test mode is for listed testers, so the public words stay).
+            "church_sample": _church_sample_open(),
             **({"trial_credits": pricing_config.trial_credits_no_card()} if no_card else {})}
+
+
+def _church_sample_open() -> bool:
+    try:
+        import sample_church
+        return bool(sample_church.open_to_all())
+    except Exception as e:
+        logger.warning(f"[access] church_sample flag read failed: {e}")
+        return False
 
 
 @router.get("/status")

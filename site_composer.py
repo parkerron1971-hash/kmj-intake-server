@@ -5785,6 +5785,10 @@ def connect_domain(body: DomainConnectBody,
     """Save a custom domain the practitioner owns as PENDING + return the DNS
     records they must add (an ownership TXT token + how to point the domain)."""
     _require_owner(body.business_id, session.user.id)
+    # A sample church claims no domain (sample_church.py): a domain is held
+    # by one site, so the sample's would be kept from the real church.
+    import sample_church
+    sample_church.refuse(body.business_id, "domain")
     domain = _normalize_domain(body.domain)
     if not domain or not _DOMAIN_RE.match(domain) or domain.endswith(_PLATFORM_DOMAIN):
         raise HTTPException(400, "Enter a valid domain you own, like yourbusiness.com")

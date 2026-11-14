@@ -247,6 +247,10 @@ def _write_settings(biz: Dict[str, Any], cfg: Optional[Dict[str, Any]]) -> Dict[
 async def connect_domain(business_id: str, body: ConnectBody,
                          user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     biz = _require_owner_biz(business_id, user)
+    # A sample church sends no mail and claims no domain (sample_church.py):
+    # a domain connected here would be held from the real church.
+    import sample_church
+    await sample_church.refuse_async(business_id, "domain")
 
     domain = (body.domain or "").strip().lower().rstrip(".")
     domain = re.sub(r"^https?://", "", domain).split("/")[0]

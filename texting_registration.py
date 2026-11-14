@@ -1093,6 +1093,10 @@ async def send_registration(business_id: str, biz: dict = Depends(business_acces
     """Send the registration to Twilio. Owner only, once: the status turns
     `submitted` before anything leaves, so a second press is refused."""
     bid = str(UUID(str(biz["id"])))
+    # A sample church registers nothing with the carriers (sample_church.py):
+    # it costs a fee, and leads to a number bought on our account.
+    import sample_church
+    await sample_church.refuse_async(bid, "texting_registration")
     view = await overview(biz)
     if not view["open"]:
         raise HTTPException(409, "Registration isn't open for your business yet. We'll tell you when it is.")

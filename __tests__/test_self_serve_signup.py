@@ -266,10 +266,15 @@ def test_open_is_public(client):
     # Only public facts: the doors, the trial length, and whether (and with
     # how many credits) the trial starts without a card (no_card_trial.py),
     # and whether a church plan has free days at all (it doesn't: Kevin,
-    # 2026-11-13, pricing_config.church_free_week), which is on the price page.
-    assert {"ok", "invite_only", "trial_days", "no_card_trial", "church_free_week"} <= set(body)
-    assert set(body) <= {"ok", "invite_only", "trial_days", "no_card_trial", "trial_credits", "church_free_week"}
+    # 2026-11-13, pricing_config.church_free_week), which is on the price page,
+    # and whether every new church looks around a sample church instead
+    # (sample_church.open_to_all, 2026-11-15), which the sign-up page will say.
+    assert {"ok", "invite_only", "trial_days", "no_card_trial", "church_free_week",
+            "church_sample"} <= set(body)
+    assert set(body) <= {"ok", "invite_only", "trial_days", "no_card_trial", "trial_credits",
+                         "church_free_week", "church_sample"}
     assert body["church_free_week"] is False
+    assert body["church_sample"] is False          # the shipped default: test, nobody listed
 
 
 def test_open_reports_the_doors(client, monkeypatch):

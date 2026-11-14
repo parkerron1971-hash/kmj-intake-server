@@ -102,3 +102,16 @@ def _fresh_close_checklist_probe():
         _bc._probe.update(at=_time.monotonic(), ok=False)
     except Exception:  # pragma: no cover
         pass
+
+
+# sample_church keeps "is this business a sample?" for good (ids are never
+# reused in production) and owners' emails for ten minutes. Test files share
+# business ids, so one file's fake sample would answer the next's: every test
+# starts with nothing remembered. Only a module already imported is cleared.
+@pytest.fixture(autouse=True)
+def _fresh_sample_church():
+    import sys as _sys
+    _sc = _sys.modules.get("sample_church")
+    if _sc is not None:
+        _sc._reset_for_tests()
+    yield
