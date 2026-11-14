@@ -88,7 +88,8 @@ def _work_list() -> List[Tuple[str, int]]:
             high[key] = seq
 
     behind: List[Tuple[str, int]] = []
-    for h in heads:
+    import sample_church   # a sample's ledger is never anchored: each is paid (BE-3)
+    for h in sample_church.drop_samples(heads):
         biz = str(h.get("business_id") or "")
         try:
             head = int(h.get("last_sequence") or 0)

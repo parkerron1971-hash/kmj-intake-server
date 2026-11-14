@@ -184,6 +184,11 @@ def send_to_user(user_id: str, *, title: str, body: str, nav: str = "home",
     business (someone on two businesses hears each one's notes on its own)."""
     if not push_enabled():
         return 0
+    # Nothing is sent on a sample church's behalf (sample_church.py, BE-3).
+    # A person-level note (no business_id) is its sweep's to skip.
+    import sample_church
+    if business_id and sample_church.skip_id(business_id):
+        return 0
     from urllib.parse import quote
     one = f"&business_id=eq.{quote(str(business_id), safe='')}" if business_id else ""
     rows = sb_clients.sb_get_as_service(
@@ -246,6 +251,10 @@ def send_to_business(business_id: str, *, title: str, body: str, nav: str = "hom
                      tag: Optional[str] = None) -> int:
     if not push_enabled():
         return 0
+    # Nothing is sent on a sample church's behalf (sample_church.py, BE-3).
+    import sample_church
+    if sample_church.skip_id(business_id):
+        return 0
     rows = sb_clients.sb_get_as_service(
         f"/push_subscriptions?business_id=eq.{business_id}&select=user_id,endpoint,subscription&limit=20"
     ) or []
@@ -278,6 +287,11 @@ async def morning_brief_tick() -> None:
                     f"/businesses?id=eq.{biz_id}&select=*"
                 ) or []
                 if not biz_rows:
+                    continue
+                # select=* carries is_sample: a sample church gets no brief
+                # and its people no notes (sample_church.py, BE-3).
+                import sample_church
+                if sample_church.skip(biz_rows[0]):
                     continue
                 settings = (biz_rows[0].get("settings") or {})
                 notif = settings.get("notifications") or {}

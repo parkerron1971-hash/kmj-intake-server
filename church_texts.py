@@ -574,6 +574,8 @@ async def bill_tick(now: Optional[datetime] = None) -> Dict[str, Any]:
         out["errors"] += 1
         return out
     stripe_ready = billing_on() and bool((os.environ.get("STRIPE_SECRET_KEY") or "").strip())
+    import sample_church
+    rows = sample_church.drop_samples(rows, "id")   # never billed (BE-3)
     for row in rows:
         bid = str(row.get("id") or "")
         if stripe_ready:

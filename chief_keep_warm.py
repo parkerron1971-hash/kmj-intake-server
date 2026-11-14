@@ -300,6 +300,11 @@ def remember(business_id: Optional[str], payload: Dict[str, Any],
     global _seq
     if not business_id or not enabled():
         return False
+    # A sample church keeps nothing warm: each ping is a paid call
+    # (sample_church.py, BE-3).
+    import sample_church
+    if sample_church.skip_id(business_id):
+        return False
     ping = ping_payload(payload)
     if ping is None:
         return False
@@ -437,6 +442,9 @@ async def _one(row: Dict[str, Any], now: datetime) -> str:
     b = str(row["business_id"])
     seen = row["touched_at"]
     why = verdict(row, now)
+    import sample_church
+    if why == "ping" and await sample_church.is_sample_async(b):
+        why = "sample_church"     # ended like any other chain, never pinged
     if why != "ping":
         if await asyncio.to_thread(_set, b, seen, {"stopped_at": _iso(now), "stopped_reason": why}) is None:
             logger.warning("keep-warm biz=%s: could not end the chain (%s); the next look tries again", b[:8], why)

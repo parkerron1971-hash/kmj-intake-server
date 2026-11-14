@@ -7582,6 +7582,9 @@ async def autopilot_sweep_tick() -> None:
         except Exception as e:  # pragma: no cover
             print(f"[Autopilot tick] business fetch failed: {e}", flush=True)
             return
+        # A sample church is never swept (sample_church.py, BE-3).
+        import sample_church
+        rows = await asyncio.to_thread(sample_church.drop_samples, rows or [], "id")
         for biz in rows or []:
             ap = ((biz.get("settings") or {}).get("autopilot") or {})
             levels = [ap.get("overall")] + list((ap.get("per_team") or {}).values())
@@ -16811,6 +16814,11 @@ async def chief_prewarm_endpoint(
     must look to the client exactly like one that wasn't worth doing —
     never like an error the practitioner should see.
     """
+    # A sample church warms nothing (sample_church.py, BE-3): its Chief is
+    # its own lane (BE-4), and nothing here should read on its behalf.
+    import sample_church
+    if await sample_church.is_sample_async(req.business_id):
+        return {"ok": True, "warmed": 0, "reason": "sample church"}
     _jwt_token = sb_clients.set_user_jwt(user_session.token)
     try:
         user_id = getattr(getattr(user_session, "user", None), "id", None)

@@ -1208,6 +1208,8 @@ def sweep_stale(business_id: Optional[str] = None) -> int:
         return 0
     now = datetime.now(timezone.utc)
     closed = 0
+    import sample_church
+    rows, owed = sample_church.drop_samples(rows), sample_church.drop_samples(owed)   # BE-3
     for s in rows + owed:
         if "last_seen_at" not in s:
             return 0

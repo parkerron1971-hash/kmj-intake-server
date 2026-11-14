@@ -194,6 +194,13 @@ async def handle_business(business_id: str, events: List[Dict[str, Any]]) -> Opt
         return None
     ids = [str(e.get("id")) for e in events if e.get("id")]
 
+    # A sample church's Chief never acts on its own: retired like a business
+    # that isn't opted in (sample_church.py, BE-3).
+    import sample_church
+    if await sample_church.is_sample_async(business_id):
+        await asyncio.to_thread(stamp_handled, ids)
+        return None
+
     if not business_enabled(biz):
         # Not opted in: retire the events so the queue never grows, and
         # say nothing — this business's Chief acts only when asked.

@@ -427,7 +427,8 @@ async def _email(business: Dict[str, Any], person: Dict[str, Any], posts: List[D
 def _churches() -> List[Dict[str, Any]]:
     rows = sb_clients.sb_get_as_service(
         "/businesses?settings->member_portal->notifications->>news=eq.true&select=id,name,settings,owner_id&limit=5000")
-    return rows or []
+    import sample_church
+    return sample_church.drop_samples(rows or [], "id")   # BE-3
 
 
 def sweep_tick(now: Optional[datetime] = None) -> Dict[str, int]:

@@ -370,6 +370,11 @@ def cfu_parse(ts: Any) -> Optional[datetime]:
     return cfu._parse(ts)
 
 
+def _sample_church():
+    import sample_church   # sample_church.py, BE-3
+    return sample_church
+
+
 async def sweep(now: Optional[datetime] = None) -> Dict[str, int]:
     """Across churches: tell a prayer leader once that a request is theirs,
     remind them on the day, and climb their chain when it waits. Emails
@@ -380,9 +385,11 @@ async def sweep(now: Optional[datetime] = None) -> Dict[str, int]:
     rows = await asyncio.to_thread(
         _rows, "/ministry_care_requests?leader_contact_id=not.is.null&leader_prayed_at=is.null&leader_late_level=lt.3"
                f"&or=(leader_told_at.is.null,leader_due_at.lt.{_q(_iso(now))})&select=business_id,{_SEL}"
-               "&order=leader_due_at.asc&limit=500")
+               "&order=leader_due_at.asc&limit=500" + _sample_church().exclude())
     if not rows:
         return stats
+    import sample_church
+    rows = await asyncio.to_thread(sample_church.drop_samples, rows)   # BE-3
     by_biz: Dict[str, List[Dict[str, Any]]] = {}
     for r in rows:
         by_biz.setdefault(str(r["business_id"]), []).append(r)

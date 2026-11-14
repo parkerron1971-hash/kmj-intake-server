@@ -614,7 +614,7 @@ def test_a_home_gets_its_sample_block_and_its_sample_made(access, db):
     assert block["home_business_id"] == HOME
     assert block["ready"] is False                         # BE-2 seeds it
     assert block["questions_left"] == 10 and block["questions_of"] == 10
-    assert block["read_posts"] == []
+    assert block["read_posts"] == list(sc.READ_POSTS)      # BE-3 named them
     assert block["promise"] == church_site.PROMISE
     assert block["free_moves_left"] == 3                   # 5 moves, 2 taken
     assert access["starts"] == []                          # no trial started

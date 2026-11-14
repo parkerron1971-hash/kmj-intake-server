@@ -249,7 +249,9 @@ def _sweep(now: datetime) -> int:
     if kinds is None:
         return 0
     churches = sorted(str(b["id"]) for b in kinds if church_follow_up.is_church(b))
-    rows = [r for r in rows if str(r["business_id"]) in churches]
+    # A sample church's visitors are made up (sample_church.py, BE-3).
+    import sample_church
+    rows = sample_church.drop_samples([r for r in rows if str(r["business_id"]) in churches])
     if not rows:
         return 0
     # Each person's family, and the first visits already handed on, in one

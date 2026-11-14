@@ -361,7 +361,9 @@ def due_rows(today: Optional[date] = None) -> List[Dict[str, Any]]:
     today = today or _now().date()
     rows = sb_clients.sb_get_as_service(
         f"{TABLE}?status=eq.open&check_on=lte.{today.isoformat()}&{_SELECT}"
-        f"&order=check_on.asc&limit=50")
+        f"&order=check_on.asc&limit=50" + _sample_church().exclude())
+    if isinstance(rows, list):
+        rows = _sample_church().drop_samples(rows)   # never a sample's (BE-3)
     if not isinstance(rows, list):
         # sb_clients logs the status; a missing table is the usual reason.
         logger.info(f"[cases] due read failed; if new, apply supabase/{MIGRATION}")
@@ -524,6 +526,11 @@ def _business(business_id: str) -> Dict[str, Any]:
         return rows[0] if rows else {}
     except Exception:
         return {}
+
+
+def _sample_church():
+    import sample_church
+    return sample_church
 
 
 async def check_one(row: Dict[str, Any]) -> Dict[str, Any]:

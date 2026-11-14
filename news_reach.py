@@ -411,7 +411,8 @@ def sweep_tick(now: Optional[datetime] = None) -> Dict[str, int]:
                                         f"&select=id,name,settings,owner_id&limit=500")
     if not isinstance(bizs, list):
         return out
-    by_id = {str(b["id"]): b for b in bizs}
+    import sample_church
+    by_id = sample_church.drop_sample_map({str(b["id"]): b for b in bizs})   # BE-3
     for p in due:
         biz = by_id.get(str(p["business_id"]))
         if not biz:

@@ -246,6 +246,12 @@ def send_sms(to: str, body: str, *, from_number: Optional[str] = None,
     that state, which is what keeps the old path safe."""
     global _warned_unpinned
     import sms_usage
+    # Nothing in a sample church is ever sent, and no text goes to a number
+    # set aside for fiction (555-01xx), whoever sends it (sample_church.py,
+    # BE-3). Raises before Twilio is touched; every caller treats a raise
+    # as a failed send, and no cost row is written.
+    import sample_church
+    sample_church.refuse_send("sms", business_id, phone=to)
     text = gsm_safe(body)
     sender = (from_number or "").strip() or platform_number()
     route = own_account_route(sender) if sender and sender != platform_number() else None

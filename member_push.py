@@ -290,8 +290,13 @@ def send(business: Dict[str, Any], kind: str, *, title: str, body: str = "", rin
 
 def _send(business, kind, *, title, body, url, contact_ids, ref_id, sent_by, tag=None, ring=False) -> int:
     import push_notifications as pn
+    import sample_church
     biz_id = str(business.get("id") or "")
     if kind not in KIND_KEYS or not biz_id or not ready():
+        return 0
+    # A sample church's members are made up: nothing is ever sent, held or
+    # logged for one (sample_church.py, BE-3).
+    if sample_church.skip(business):
         return 0
     if kind not in church_kinds(business.get("settings")):
         return 0
@@ -376,7 +381,8 @@ def sweep_held(now: Optional[datetime] = None) -> int:
         return 0
     stale = (now - timedelta(hours=HELD_MAX_HOURS)).isoformat()
     reached = 0
-    for biz in bizs:
+    import sample_church
+    for biz in sample_church.drop_samples(bizs, "id"):
         bid = str(biz["id"])
         if quiet_hour(biz, now):
             continue
@@ -1007,6 +1013,8 @@ def sweep_tick() -> Dict[str, int]:
         "settings->member_portal->notifications->>groups.eq.true,"
         "settings->member_portal->notifications->>messages.eq.true)"
         "&select=id,name,settings,owner_id&limit=500") or []
+    import sample_church
+    rows = sample_church.drop_samples(rows, "id")   # a sample's members are made up (BE-3)
     for biz in rows:
         kinds = church_kinds(biz.get("settings"))
         try:

@@ -132,7 +132,8 @@ def test_the_count_reads_the_settings_key(monkeypatch):
         return [{"id": "a"}, {"id": "b"}]
     monkeypatch.setattr(sb_clients, "sb_get_as_service", get)
     assert cf.taken() == 2 and cf.left() == 8
-    assert seen[0].startswith("/businesses?settings->founding_church=not.is.null&select=id")
+    # A sample church never holds a place (sample_church.py, BE-3).
+    assert seen[0].startswith("/businesses?settings->founding_church=not.is.null&is_sample=not.is.true&select=id")
     monkeypatch.setattr(sb_clients, "sb_get_as_service", lambda path: None)
     assert cf.taken() is None and cf.left() is None
 

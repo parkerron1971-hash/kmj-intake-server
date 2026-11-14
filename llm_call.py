@@ -259,6 +259,74 @@ def headers(extra: Optional[Mapping[str, str]] = None,
     return h
 
 
+# ─── A sample church spends nothing (sample_church.py, BE-3) ─────────
+# A sample is a made-up church: no AI call is billed to one, except the
+# sample's own Chief lane (BE-4), which wraps its turn in
+# sample_church.allow_sample_chief(). The business is the call's explicit
+# business_id or the task's billing_context. Refused BEFORE the call, in the
+# same seam _meter bills from, with a synthetic 403 every caller already
+# handles as a failed call (and _meter skips: status >= 400). Fails open.
+
+class SampleSpendRefused(RuntimeError):
+    """sdk_client() for a sample church's task (it returns no Response)."""
+
+
+def _billed_ids(business_id: Optional[str]) -> list:
+    import billing_context
+    return [b for b in (business_id, billing_context.current()) if b]
+
+
+def _sample_refused(business_id: Optional[str]) -> bool:
+    try:
+        import sample_church
+        if sample_church.sample_chief_allowed():
+            return False
+        return any(sample_church.spend_refused(b) for b in _billed_ids(business_id))
+    except Exception:  # noqa: BLE001 - a guard read never costs a call
+        return False
+
+
+async def _sample_refused_async(business_id: Optional[str]) -> bool:
+    try:
+        import sample_church
+        if sample_church.sample_chief_allowed():
+            return False
+        for b in _billed_ids(business_id):
+            if await sample_church.is_sample_async(b):
+                return True
+        return False
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _refused_response() -> httpx.Response:
+    print("[llm_call] refused: a sample church spends nothing", flush=True)
+    return httpx.Response(
+        403, json={"type": "error", "error": {
+            "type": "permission_error",
+            "message": "sample church: nothing here is spent (sample_church.py)"}},
+        request=httpx.Request("POST", messages_url()))
+
+
+class _RefusedStream:
+    """astream()'s refusal: the same context-manager shape, holding the 403."""
+
+    def __init__(self):
+        self._resp = _refused_response()
+
+    async def __aenter__(self):
+        return self._resp
+
+    async def __aexit__(self, *exc):
+        return False
+
+    def __enter__(self):
+        return self._resp
+
+    def __exit__(self, *exc):
+        return False
+
+
 def _route(task: Optional[str]) -> None:
     """Extension point for Section 8. Today: deliberately a no-op, so the
     seam can land with provably zero behavior change. Later: the single
@@ -291,6 +359,8 @@ async def apost(client: httpx.AsyncClient,
     pass them when the caller knows whose work this is; both are
     ignored for self-metering callers."""
     _route(task)
+    if await _sample_refused_async(business_id):
+        return _refused_response()
     body = {"content": content} if content is not None else {"json": payload}
     caller, started = _caller_module(), time.time()
     operation = client.post(
@@ -320,6 +390,8 @@ def post_with(client: httpx.Client,
     """POST on a caller-owned SYNCHRONOUS client — the `with httpx.Client(
     timeout=…) as client` shape. Same client-default rule as `apost`."""
     _route(task)
+    if _sample_refused(business_id):
+        return _refused_response()
     body = {"content": content} if content is not None else {"json": payload}
     caller, started = _caller_module(), time.time()
     resp = client.post(
@@ -344,6 +416,8 @@ def post(payload: Optional[Dict[str, Any]] = None,
     """Synchronous one-shot POST (httpx opens and closes its own client),
     for the modules that were already calling httpx.post directly."""
     _route(task)
+    if _sample_refused(business_id):
+        return _refused_response()
     body = {"content": content} if content is not None else {"json": payload}
     caller, started = _caller_module(), time.time()
     resp = httpx.post(
@@ -448,6 +522,8 @@ def post_lane(lane: str,
     falls back to the lane's Claude model on any failure, and a call that
     uses Anthropic-only features never leaves Claude. Metered either way."""
     import lane_registry
+    if _sample_refused(business_id):
+        return _refused_response()
     route = lane_registry.route_for(lane, plan)
     payload = dict(payload or {})
     if not route.is_anthropic:
@@ -481,6 +557,8 @@ def astream(client: httpx.AsyncClient,
     """Streaming POST with content-free timing only for an active Chief trace.
     Response operations and SSE lines retain their original behavior."""
     _route(task)
+    if _sample_refused(None):
+        return _RefusedStream()
     context = client.stream(
         "POST",
         messages_url(),
@@ -515,6 +593,8 @@ def sdk_client(*,
     from anthropic import Anthropic
 
     _route(task)
+    if _sample_refused(None):
+        raise SampleSpendRefused("a sample church spends nothing (sample_church.py)")
     kwargs: Dict[str, Any] = {"api_key": key if key is not None else api_key()}
     override = os.environ.get("ANTHROPIC_BASE_URL")
     if override:

@@ -383,6 +383,10 @@ def on_event(business_id: str, event_type: str, payload: Dict[str, Any],
             f"/businesses?id=eq.{business_id}&select=id,settings&limit=1") or []
         if not biz_rows or business_paused(biz_rows[0]):
             return []
+        # A sample church runs no rules (sample_church.py, BE-3).
+        import sample_church
+        if sample_church.skip_id(business_id):
+            return []
         rules = sb_clients.sb_get_as_service(
             f"/practitioner_rules?business_id=eq.{business_id}"
             f"&enabled=is.true&trigger_type=eq.{event_type}"

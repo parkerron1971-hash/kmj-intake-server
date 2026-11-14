@@ -115,14 +115,21 @@ def _go_out(post: Dict[str, Any], now: datetime) -> bool:
     return True
 
 
+def _sample_church():
+    import sample_church   # sample_church.py, BE-3
+    return sample_church
+
+
 def sweep_tick(now: Optional[datetime] = None) -> int:
     """Every 5 minutes: scheduled posts whose time has come."""
     now = now or _now()
     rows = sb_clients.sb_get_as_service(
         f"/group_posts?publish_at=lte.{_q(now.isoformat())}&told_at=is.null&removed_at=is.null&group_id=not.is.null"
-        f"&select=id,business_id,group_id,title,body,pinned,posted_by,email_rest,publish_at&order=publish_at.asc&limit=200")
+        f"&select=id,business_id,group_id,title,body,pinned,posted_by,email_rest,publish_at&order=publish_at.asc&limit=200"
+        + _sample_church().exclude())
     if not isinstance(rows, list):
         return 0
+    rows = _sample_church().drop_samples(rows)   # a sample's posts go out to nobody (BE-3)
     sent = 0
     for p in rows:
         try:

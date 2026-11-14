@@ -586,6 +586,8 @@ def _run_trusted_sweep_sync() -> None:
         return
     businesses = sb_clients.sb_get_as_service(
         "/businesses?select=id,name,owner_id,settings&limit=500") or []
+    import sample_church
+    businesses = sample_church.drop_samples(businesses, "id")   # nothing sent from a sample (BE-3)
     for biz_row in businesses:
         trusted = _trusted_types(biz_row)
         if not trusted:

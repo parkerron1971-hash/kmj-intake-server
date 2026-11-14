@@ -498,6 +498,8 @@ def issue_paid(now: datetime) -> int:
     by_biz: Dict[str, List[Dict[str, Any]]] = {}
     for r in todo:
         by_biz.setdefault(str(r["business_id"]), []).append(r)
+    import sample_church
+    by_biz = sample_church.drop_sample_map(by_biz)   # BE-3
     made = 0
     for bid, entries in by_biz.items():
         try:
@@ -536,6 +538,8 @@ async def send_unsent(now: datetime) -> Dict[str, int]:
         return stats
     businesses = {str(b["id"]): b for b in await asyncio.to_thread(
         _read, f"/businesses?id=in.({_ids(r['business_id'] for r in rows)})&select=*")}
+    import sample_church   # select=* carries is_sample (BE-3)
+    businesses = {k: b for k, b in businesses.items() if not sample_church.skip(b)}
     async with httpx.AsyncClient(timeout=30.0) as client:
         for bid, business in businesses.items():
             mine = [r for r in rows if str(r["business_id"]) == bid]

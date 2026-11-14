@@ -1280,6 +1280,10 @@ def _open_churches() -> Optional[List[Dict[str, Any]]]:
     if not isinstance(rows, list):
         print("[church_assignments] the platform's churches weren't read; next sweep", flush=True)
         return []
+    # The platform owner owns their own sample church too (sample_church.py):
+    # it is never one the sweep works for (BE-3).
+    import sample_church
+    rows = sample_church.drop_samples(rows, "id")
     return [b for b in rows if cfu.is_church(b) and co.church_open(b["id"])]
 
 
@@ -1330,6 +1334,8 @@ def sweep_tick(now: Optional[datetime] = None) -> Dict[str, int]:
         for x in sb_clients.sb_get_as_service(f"/businesses?id=in.({','.join(_q(i) for i in chunk)})"
                                               f"&select={BIZ_FIELDS}&limit=100") or []:
             bizs[str(x["id"])] = x
+    import sample_church
+    bizs = sample_church.drop_sample_map(bizs)   # BE-3
     import church_follow_up as cfu
     for b, todo in work.items():
         biz = bizs.get(b)

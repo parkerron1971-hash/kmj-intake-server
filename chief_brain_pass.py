@@ -152,7 +152,10 @@ def active_businesses(since: datetime) -> List[str]:
                     seen.append(bid)
         except Exception as e:
             logger.warning(f"[brain-pass] activity read failed: {e}")
-    return seen
+    # A sample church is never reviewed: its Chief talk is about a made-up
+    # church, and nothing is learned from it (sample_church.py, BE-3).
+    import sample_church
+    return sample_church.drop_samples(seen)
 
 
 def _since_for(bid: str, now: datetime) -> datetime:
