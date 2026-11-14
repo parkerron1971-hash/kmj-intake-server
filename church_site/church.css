@@ -207,3 +207,9 @@ a{color:#F5F6F8}a:hover{color:var(--pl,#C9BCFF)}
 .pmenu-panel i{width:10px;height:10px;border-radius:3px;grid-row:span 2}
 .pmenu-panel b{font-weight:600;font-size:14.5px}
 .pmenu-panel span{grid-column:2;font-size:12.5px;color:#959BA8}
+
+/* the founding price on the product pages' plan strip (church_site._plan_strip) */
+.plan .preg{font:500 12px/1 'JetBrains Mono',monospace;letter-spacing:.04em;color:#5A5E6B}
+.plan .preg s{color:#3B3F4A;text-decoration-thickness:2px;text-decoration-color:#C2410C}
+.plan.mid .preg{color:#A3A9B6}
+.plan.mid .preg s{color:#D5D8DF;text-decoration-color:#FB923C}

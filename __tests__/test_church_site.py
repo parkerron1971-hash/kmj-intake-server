@@ -438,8 +438,10 @@ def test_the_overview_draws_four_plans_from_the_dials(by_size):
     assert [re.search(r'class="pname">([^<]+)<', c).group(1) for c in cards] == [
         "Small Church", "Growing Church", "Established Church", "Large Church"]
     assert [c.startswith('<div class="pc mid">') for c in cards] == [False, True, False, False]   # Growing is lit
-    for price, year in (("79", "790"), ("199", "1,990"), ("399", "3,990"), ("699", "6,990")):
+    # The founding offer is closed here (no count read), so the regular prices.
+    for price, year in (("99", "990"), ("249", "2,490"), ("499", "4,990"), ("899", "8,990")):
         assert f'data-m="{price}" data-y="{year}">{price}<' in html, price
+    assert 'class="fband"' not in html and "Regular price" not in html
     for card, size, logins, texts, hours in zip(cards, _SIZES, (3, 8, 15, 35), ("500", "1,500", "3,000", "8,000"),
                                                 (2, 5, 10, 20)):
         assert f'<div class="pds">{size}.</div>' in card
@@ -525,7 +527,7 @@ def test_the_product_pages_strips_follow(by_size):
         assert strip.startswith('<div class="planrow four">'), slug
         assert re.findall(r'<span class="pn">([^<]+)</span>', strip) == [
             "Small Church", "Growing Church", "Established Church", "Large Church"], slug
-        assert re.findall(r'<span class="pp">\$(\d+) <small>', strip) == ["79", "199", "399", "699"], slug
+        assert re.findall(r'<span class="pp">\$(\d+) <small>', strip) == ["99", "249", "499", "899"], slug
         for words in (*_SIZES, "3 office logins", "8 office logins", "15 office logins", "35 office logins",
                       "1,500 texts a month", "7,500 AI actions a month", "Clips from 20 hours of sermons a month"):
             assert words in strip, (slug, words)

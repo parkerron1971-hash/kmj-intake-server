@@ -9,8 +9,12 @@
      founding price once one is set, everyone else the list price, and
      refuses a founding price asked for without a place.
   4. A founding or kept price id still means its plan.
-  5. The site says it under the cards while places are left; the app reads
-     it from /billing/plans and /billing/church/move.
+  5. The site says it while places are left: a band above the cards and each
+     card's founding price under its regular price crossed out (board C,
+     Kevin 2026-11-14); the app reads it from /billing/plans and
+     /billing/church/move.
+  6. The offer ends on FOUNDING_CHURCHES_UNTIL (2027-01-31) or when the ten
+     places are taken: then the regular price alone, for everyone new.
 """
 from __future__ import annotations
 
@@ -41,6 +45,9 @@ SMALL, GROWING, ESTABLISHED, LARGE = fg.CHURCH_PLANS
 def _fresh(monkeypatch):
     for k in ("FOUNDING_CHURCHES", "FOUNDING_CHURCH_SPOTS", "STRIPE_PRICE_IDS_KEPT"):
         monkeypatch.delenv(k, raising=False)
+    # Far off, so these tests don't start failing on 2027-02-01; the end
+    # date's own tests set it.
+    monkeypatch.setenv("FOUNDING_CHURCHES_UNTIL", "2099-01-31")
     for plan in fg.CHURCH_PLANS:
         for annual in (False, True):
             monkeypatch.delenv(cf._env_key(plan, annual), raising=False)
@@ -310,11 +317,20 @@ def _line(monkeypatch, state):
     return cs._founding_line()
 
 
+def _no_saving(monkeypatch):
+    """Founding prices equal to the regular ones: nothing to cross out."""
+    import pricing_config
+    for plan, cents in pricing_config.church_price_cents().items():
+        monkeypatch.setenv(f"PRICE_FOUNDING_{plan.upper()}_CENTS", str(cents))
+
+
 def test_the_line_says_how_many_places_are_left(monkeypatch):
-    html = _line(monkeypatch, {"spots": 10, "left": 7})
+    # Only when no card can show a saving (the band says it otherwise).
+    _no_saving(monkeypatch)
+    html = _line(monkeypatch, {"spots": 10, "left": 7, "ends": "2099-01-31"})
     assert "Founding price</b>" in html
     assert ("The first ten churches keep the price they start at, for as long as they stay. "
-            '<b style="color: #0B0C11">7</b> of 10 left.') in html
+            'The offer ends January 31. <b style="color: #0B0C11">7</b> of 10 left.') in html
 
 
 @pytest.mark.parametrize("state", [None, {"spots": 10, "left": 0}])
@@ -322,25 +338,88 @@ def test_no_line_while_off_unread_or_gone(monkeypatch, state):
     assert _line(monkeypatch, state) == ""
 
 
-def test_the_line_is_in_the_solutionist_voice(monkeypatch):
-    import brand_voice
-    html = _line(monkeypatch, {"spots": 10, "left": 10})
-    assert html and brand_voice.offenses(f"<html><body>{html}</body></html>") == []
+def test_no_line_under_the_cards_while_the_band_says_it(monkeypatch):
+    assert _line(monkeypatch, {"spots": 10, "left": 7}) == ""
 
 
-def test_the_overview_carries_it_under_the_cards(monkeypatch):
+def _overview(monkeypatch, state):
     monkeypatch.setenv("PLAN_CHURCH_OFFERED", "1")
-    monkeypatch.setattr(cf, "public_state", lambda: {"spots": 10, "left": 9})
-    html = cs.render("")
-    assert html.index("Founding price</b>") > html.index("Good to know</b>") > html.index('<div class="plans four">')
-    assert "<b style=\"color: #0B0C11\">9</b> of 10 left." in html
+    monkeypatch.setattr(cf, "public_state", lambda: state)
+    return cs.render("")
+
+
+def test_the_band_says_what_the_first_ten_save_and_when_it_ends(monkeypatch):
+    html = _overview(monkeypatch, {"spots": 10, "left": 7, "ends": "2099-01-31"})
+    band = html[html.index('<div class="fband">'):html.index('<div class="plans four">')]
+    assert "Founding church offer" in band
+    # Large saves the most: ($899 - $699) x 12.
+    assert "The first ten churches save up to $2,400 a year, for as long as they stay." in band
+    assert ("The offer ends when ten churches have joined or on January 31, whichever comes first. "
+            "After that, every new church pays the regular price.") in band
+    assert "<b>7</b> of 10 founding places left" in band
+    assert band.count('<i class="on"></i>') == 7 and band.count("<i></i>") == 3
+    assert "Founding price</b>" not in html                       # not said twice
+
+
+def test_each_card_leads_with_its_founding_price_and_crosses_out_the_regular(monkeypatch):
+    html = _overview(monkeypatch, {"spots": 10, "left": 7, "ends": "2099-01-31"})
+    cards = html[html.index('<div class="plans four">'):]
+    assert cards.count('<span class="fchip">Founding price</span>') == 4
+    for reg, reg_y, fnd, fnd_y, save_m, save_y in (
+            ("99", "990", "79", "790", "Save $20 a month · $240 a year", "Save $200 a year"),
+            ("249", "2,490", "199", "1,990", "Save $50 a month · $600 a year", "Save $500 a year"),
+            ("499", "4,990", "399", "3,990", "Save $100 a month · $1,200 a year", "Save $1,000 a year"),
+            ("899", "8,990", "699", "6,990", "Save $200 a month · $2,400 a year", "Save $2,000 a year")):
+        assert (f'Regular price <s>$<span class="pnum" data-m="{reg}" data-y="{reg_y}">{reg}</span></s>') in cards
+        assert f'<b>$<span class="pnum" data-m="{fnd}" data-y="{fnd_y}">{fnd}</span></b>' in cards
+        assert f'data-m="{save_m}" data-y="{save_y}">{save_m}<' in cards
+    assert cards.count("Your price stays locked for as long as you stay.") == 4
+    assert cards.count(">Claim a founding place</a>") == 4
+    # One plan, two prices: the credits are the plan's at both.
+    assert "<b>7,500</b><span>AI actions a month</span>" in cards
+
+
+def test_the_strip_and_the_picker_say_the_founding_price(monkeypatch):
+    monkeypatch.setenv("PLAN_CHURCH_OFFERED", "1")
+    monkeypatch.setattr(cf, "public_state", lambda: {"spots": 10, "left": 7, "ends": "2099-01-31"})
+    strip = cs._plan_strip()
+    assert ('<span class="preg">Regular price <s>$249</s></span>'
+            '<span class="pp">$199 <small>a month, founding price</small></span>') in strip
+    grow = cs._picker_data()["plans"][1]
+    assert grow["m"] == "$199" and grow["y"] == "$1,990"
+    assert grow["items"][0] == "Founding price, regular $249 a month"
+
+
+def test_no_deal_once_the_places_are_gone_or_the_offer_is_off(monkeypatch):
+    for state in (None, {"spots": 10, "left": 0, "ends": "2099-01-31"}):
+        html = _overview(monkeypatch, state)
+        assert 'class="fband"' not in html and "Regular price" not in html and 'class="fchip"' not in html
+        assert 'data-m="249" data-y="2,490">249<' in html          # the regular price alone
+        assert "Claim a founding place" not in html
+
+
+def test_nothing_is_crossed_out_that_isnt_a_saving(monkeypatch):
+    _no_saving(monkeypatch)
+    html = _overview(monkeypatch, {"spots": 10, "left": 7, "ends": "2099-01-31"})
+    assert "Regular price" not in html and 'class="fband"' not in html
+    assert cf.offer_prices() is None
+
+
+def test_the_offer_is_in_the_solutionist_voice(monkeypatch):
+    import brand_voice
+    html = _overview(monkeypatch, {"spots": 10, "left": 10, "ends": "2099-01-31"})
+    band = html[html.index('<div class="fband">'):html.index('<div class="plans four">') + 4000]
+    assert brand_voice.offenses(f"<html><body>{band}</body></html>") == []
+    _no_saving(monkeypatch)
+    line = _line(monkeypatch, {"spots": 10, "left": 10, "ends": "2099-01-31"})
+    assert line and brand_voice.offenses(f"<html><body>{line}</body></html>") == []
 
 
 def test_public_state_follows_the_switch_and_caches(monkeypatch):
     calls = []
     monkeypatch.setattr(cf, "left", lambda: calls.append(1) or 6)
-    assert cf.public_state() == {"spots": 10, "left": 6}
-    assert cf.public_state() == {"spots": 10, "left": 6} and len(calls) == 1      # read once per five minutes
+    assert cf.public_state() == {"spots": 10, "left": 6, "ends": "2099-01-31"}
+    assert cf.public_state() == {"spots": 10, "left": 6, "ends": "2099-01-31"} and len(calls) == 1  # once per 5 min
     monkeypatch.setenv("FOUNDING_CHURCHES", "off")
     assert cf.public_state() is None
 
@@ -357,7 +436,12 @@ def test_the_plans_endpoint_and_the_move_status_carry_it(monkeypatch):
     assert asyncio.run(sb.billing_plans(for_type="church"))["church_founding"] is None     # not on sale yet
     monkeypatch.setenv("PLAN_CHURCH_OFFERED", "1")
     out = asyncio.run(sb.billing_plans(for_type="church"))
-    assert out["church_founding"] == {"on": True, "spots": 10, "left": 8}
+    assert out["church_founding"] == {
+        "on": True, "spots": 10, "left": 8, "ends": None,
+        "prices": {SMALL: {"month_cents": 7900, "year_cents": 79000},
+                   GROWING: {"month_cents": 19900, "year_cents": 199000},
+                   ESTABLISHED: {"month_cents": 39900, "year_cents": 399000},
+                   LARGE: {"month_cents": 69900, "year_cents": 699000}}}
     assert asyncio.run(sb.billing_plans(for_type="barber"))["church_founding"] is None
 
     async def load(bid):
@@ -367,4 +451,73 @@ def test_the_plans_endpoint_and_the_move_status_carry_it(monkeypatch):
     monkeypatch.setattr(cb, "_founding_taken", lambda: 1)
     status = asyncio.run(cb.move_status(BIZ, user=USER))
     assert status["founding_church"] == {"n": 2, "plan": GROWING}
-    assert status["founding_price"] == {"on": True, "spots": 10, "left": 8}
+    assert status["founding_price"] == {"on": True, "spots": 10, "left": 8, "ends": None}
+
+
+# ─── 6. the end date ─────────────────────────────────────────────────
+
+def test_it_ends_at_midnight_eastern_after_january_31(monkeypatch):
+    from datetime import datetime, timezone
+    monkeypatch.setenv("FOUNDING_CHURCHES_UNTIL", "2027-01-31")
+    assert cf.until().isoformat() == "2027-01-31" and cf.ends_words() == "January 31"
+    assert cf.closes_at() == datetime(2027, 2, 1, 5, 0, tzinfo=timezone.utc)
+    assert cf.open_now(datetime(2027, 2, 1, 4, 59, tzinfo=timezone.utc))        # 11:59 PM on the 31st, Eastern
+    assert not cf.open_now(datetime(2027, 2, 1, 5, 0, tzinfo=timezone.utc))
+    monkeypatch.setenv("FOUNDING_CHURCHES", "off")
+    assert not cf.open_now(datetime(2026, 12, 1, tzinfo=timezone.utc))
+
+
+def test_the_default_end_is_january_31_2027(monkeypatch):
+    monkeypatch.delenv("FOUNDING_CHURCHES_UNTIL")
+    assert cf.until().isoformat() == "2027-01-31"
+    monkeypatch.setenv("FOUNDING_CHURCHES_UNTIL", "not a date")
+    assert cf.until().isoformat() == "2027-01-31"                                 # never quietly "no end"
+    monkeypatch.setenv("FOUNDING_CHURCHES_UNTIL", "none")
+    assert cf.until() is None and cf.closes_at() is None and cf.open_now() and cf.ends_words() == ""
+
+
+def test_past_the_date_nothing_is_promised_and_new_churches_pay_the_regular_price(prices, monkeypatch):
+    monkeypatch.setenv("FOUNDING_CHURCHES_UNTIL", "2026-01-31")
+    monkeypatch.setattr(cf, "taken", lambda: 2)
+    assert cf.public_state() is None and cf.offer_prices() is None
+    assert _price({}, "price_grow_249") == "price_grow_249"
+    with pytest.raises(HTTPException):
+        _price({}, "price_grow_199")
+    # A church that holds a place keeps its price after the date.
+    assert _price({"settings": {"founding_church": {"n": 1}}}, "price_grow_249") == "price_grow_199"
+
+
+def test_past_the_date_a_place_goes_only_to_a_church_on_a_founding_price(church, monkeypatch):
+    monkeypatch.setenv("FOUNDING_CHURCHES_UNTIL", "2026-01-31")
+    monkeypatch.setenv("STRIPE_PRICE_ID_CHURCH_GROWING_FOUNDING", "price_grow_199")
+    assert _claim(price="price_grow_249") is None and church["writes"] == []
+    assert _claim(price="price_grow_199")["n"] == 4                 # chose its plan in time, paid now
+
+
+# ─── what a church pays, for its first month and its move ────────────
+
+def test_a_church_pays_its_own_price(monkeypatch):
+    monkeypatch.setenv("STRIPE_PRICE_ID_CHURCH_GROWING_FOUNDING", "price_grow_199")
+    assert cf.price_cents_for({}, GROWING) == 24900
+    assert cf.price_cents_for({"settings": {"founding_church": {"n": 1}}}, GROWING) == 19900
+    assert cf.price_cents_for({"subscription_plan": "price_grow_199"}, GROWING) == 19900
+    assert cb._move_cents(GROWING, {"settings": {"founding_church": {"n": 1}}}) == 3 * 19900
+    assert cb._first_payment_cents(GROWING, {}) == 24900
+
+
+# ─── Stripe: the catalog says what the dials say ─────────────────────
+
+def test_the_catalog_carries_the_regular_and_the_founding_prices():
+    import pricing_config
+    cat = {env: (lookup, cents, interval) for env, lookup, _name, cents, interval in sb.BOOTSTRAP_CATALOG}
+    regular, founding = pricing_config.church_price_cents(), pricing_config.church_founding_price_cents()
+    for plan in fg.CHURCH_PLANS:
+        key = f"STRIPE_PRICE_ID_{plan.upper()}"
+        assert cat[key][1:] == (regular[plan], "month") and cat[key + "_ANNUAL"][1:] == (regular[plan] * 10, "year")
+        assert cat[key][0].endswith("_monthly_2026_11")              # new keys: the old ones name old amounts
+        assert cat[key + "_FOUNDING"][1:] == (founding[plan], "month")
+        assert cat[key + "_ANNUAL_FOUNDING"][1:] == (founding[plan] * 10, "year")
+        # The founding prices are the 2026-11-03 prices, reused by their keys.
+        assert cat[key + "_FOUNDING"][0] == f"solutionist_{plan}_monthly"
+        assert cf._env_key(plan, False) == key + "_FOUNDING"
+        assert cf._env_key(plan, True) == key + "_ANNUAL_FOUNDING"

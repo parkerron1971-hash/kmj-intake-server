@@ -43,7 +43,13 @@ SMALL, GROWING, ESTABLISHED, LARGE = fg.CHURCH_PLANS
 
 def test_the_ladder_is_kevins():
     assert fg.CHURCH_PLANS == ("church_small", "church_growing", "church_established", "church_large")
-    assert pricing_config.church_price_cents() == {SMALL: 7900, GROWING: 19900, ESTABLISHED: 39900, LARGE: 69900}
+    # The regular prices since 2026-11-14 (board C); the 2026-11-03 prices are
+    # the founding prices the first ten churches pay. One plan, two prices:
+    # the credits are the same at both (Kevin: "so people don't think they
+    # get higher credits cheaper").
+    assert pricing_config.church_price_cents() == {SMALL: 9900, GROWING: 24900, ESTABLISHED: 49900, LARGE: 89900}
+    assert pricing_config.church_founding_price_cents() == {SMALL: 7900, GROWING: 19900, ESTABLISHED: 39900,
+                                                            LARGE: 69900}
     assert pricing_config.church_seats() == {SMALL: 3, GROWING: 8, ESTABLISHED: 15, LARGE: 35}
     assert pricing_config.church_texts_monthly() == {SMALL: 500, GROWING: 1500, ESTABLISHED: 3000, LARGE: 8000}
     assert pricing_config.church_clip_hours() == {SMALL: 2, GROWING: 5, ESTABLISHED: 10, LARGE: 20}

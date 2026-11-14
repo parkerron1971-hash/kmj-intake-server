@@ -849,3 +849,29 @@
   .lw.playing .lwp.on .lwp-bar { animation: none; }
 }
 
+
+/* The founding offer (board C, 2026-11-14): the band above the cards
+   and each card's founding price under its regular price, crossed out. Only
+   drawn while the offer is open (church_site._founding_offer). */
+.fband{display:flex;flex-wrap:wrap;align-items:center;gap:14px 28px;margin-bottom:22px;padding:22px 24px;border-radius:22px;background:#0B0D12;color:#F5F6F8}
+.fband .fb-l{display:flex;flex-direction:column;gap:8px;flex:1 1 520px;min-width:0}
+.fband .fb-k{font:600 10.5px/1 var(--f-mono);letter-spacing:.14em;text-transform:uppercase;color:#FDBA74}
+.fband .fb-h{font:600 24px/1.2 'Inter Tight',sans-serif;letter-spacing:-.02em}
+.fband .fb-p{font-size:14.5px;line-height:1.55;color:#C9CDD6}
+.fband .fb-r{display:flex;flex-direction:column;gap:10px;align-items:flex-start}
+.fband .fb-seats{display:flex;gap:6px}
+.fband .fb-seats i{width:14px;height:14px;border-radius:50%;box-sizing:border-box;border:2px solid rgba(255,255,255,.3)}
+.fband .fb-seats i.on{background:#7C5CFF;border-color:#7C5CFF}
+.fband .fb-n{font:500 12px/1 var(--f-mono);letter-spacing:.06em;color:#C9CDD6}
+.fband .fb-n b{color:#FFFFFF}
+.pc .fchip{font:600 10px/1 var(--f-mono);letter-spacing:.1em;text-transform:uppercase;padding:6px 9px;border-radius:999px;background:#EDE9FF;color:#3F27B8;white-space:nowrap}
+.pc.mid .fchip{background:#2A2150;color:#D9D0FF}
+.pc .preg{margin-top:22px;font:500 12px/1 var(--f-mono);letter-spacing:.04em;color:#5A5E6B}
+.pc .preg s{font-size:15px;color:#3B3F4A;text-decoration-thickness:2px;text-decoration-color:#C2410C}
+.pc.mid .preg{color:#A3A9B6}
+.pc.mid .preg s{color:#D5D8DF;text-decoration-color:#FB923C}
+.pc.fd .pz{margin-top:10px}
+.pc .psave{margin-top:14px;align-self:flex-start;padding:8px 11px;border-radius:12px;background:#FFF1E6;color:#7C2D12;font-size:13px;font-weight:600;line-height:1.35}
+.pc.mid .psave{background:#3A1F10;color:#FFD9BF}
+.pc .pkeep{margin-top:10px;font-size:13px;line-height:1.45;color:#3B3F4A}
+.pc.mid .pkeep{color:#C9CDD6}

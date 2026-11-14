@@ -505,8 +505,13 @@ async def billing_plans(for_type: Optional[str] = None):
         # The founding churches' price: how many places are left (None while
         # the offer is off or the count can't be read: nothing is promised).
         founding = await asyncio.to_thread(church_founding.public_state)
+        # While a place is open: the founding price per plan beside the regular
+        # one the plan entries carry, and the offer's last day.
+        prices = await asyncio.to_thread(church_founding.offer_prices) if founding else None
         church_founding_state = {"on": founding is not None, "spots": church_founding.spots(),
-                                 "left": founding["left"] if founding else None}
+                                 "left": founding["left"] if founding else None,
+                                 "ends": founding.get("ends") if founding else None,
+                                 "prices": prices}
 
     any_configured = any(e["configured"] for e in out)
     return {"ok": True, "plans": out, "founder": founder,
@@ -1655,16 +1660,30 @@ BOOTSTRAP_CATALOG = [
     ("STRIPE_PRICE_ID_CS_SCREENS",          "churchsavvy_screens_monthly",      "ChurchSavvy",               2000,   "month"),
     ("STRIPE_PRICE_ID_CS_PLANNING",         "churchsavvy_planning_monthly",     "ChurchSavvy Planning",      1500,   "month"),
     ("STRIPE_PRICE_ID_CS_BOTH",             "churchsavvy_both_monthly",         "ChurchSavvy and Planning",  2900,   "month"),
-    # Churches by size (2026-11-03). Creating them sells nothing: checkout
-    # refuses them until PLAN_CHURCH_OFFERED=1, and only to churches.
-    ("STRIPE_PRICE_ID_CHURCH_SMALL",              "solutionist_church_small_monthly",       "Solutionist Small Church",       7900,   "month"),
-    ("STRIPE_PRICE_ID_CHURCH_SMALL_ANNUAL",       "solutionist_church_small_annual",        "Solutionist Small Church",       79000,  "year"),
-    ("STRIPE_PRICE_ID_CHURCH_GROWING",            "solutionist_church_growing_monthly",     "Solutionist Growing Church",     19900,  "month"),
-    ("STRIPE_PRICE_ID_CHURCH_GROWING_ANNUAL",     "solutionist_church_growing_annual",      "Solutionist Growing Church",     199000, "year"),
-    ("STRIPE_PRICE_ID_CHURCH_ESTABLISHED",        "solutionist_church_established_monthly", "Solutionist Established Church", 39900,  "month"),
-    ("STRIPE_PRICE_ID_CHURCH_ESTABLISHED_ANNUAL", "solutionist_church_established_annual",  "Solutionist Established Church", 399000, "year"),
-    ("STRIPE_PRICE_ID_CHURCH_LARGE",              "solutionist_church_large_monthly",       "Solutionist Large Church",       69900,  "month"),
-    ("STRIPE_PRICE_ID_CHURCH_LARGE_ANNUAL",       "solutionist_church_large_annual",        "Solutionist Large Church",       699000, "year"),
+    # Churches by size. The regular prices since 2026-11-14 (Kevin: "go with
+    # board C, Jan 31, build it"), on new lookup keys: the 2026-11-03 keys
+    # still name the old amounts, which are the founding prices now, so their
+    # ids belong in the _FOUNDING vars (church_founding, docs/FOUNDING_CHURCHES.md).
+    # Creating them sells nothing: checkout refuses them until
+    # PLAN_CHURCH_OFFERED=1, and only to churches.
+    ("STRIPE_PRICE_ID_CHURCH_SMALL",              "solutionist_church_small_monthly_2026_11",       "Solutionist Small Church",       9900,   "month"),
+    ("STRIPE_PRICE_ID_CHURCH_SMALL_ANNUAL",       "solutionist_church_small_annual_2026_11",        "Solutionist Small Church",       99000,  "year"),
+    ("STRIPE_PRICE_ID_CHURCH_GROWING",            "solutionist_church_growing_monthly_2026_11",     "Solutionist Growing Church",     24900,  "month"),
+    ("STRIPE_PRICE_ID_CHURCH_GROWING_ANNUAL",     "solutionist_church_growing_annual_2026_11",      "Solutionist Growing Church",     249000, "year"),
+    ("STRIPE_PRICE_ID_CHURCH_ESTABLISHED",        "solutionist_church_established_monthly_2026_11", "Solutionist Established Church", 49900,  "month"),
+    ("STRIPE_PRICE_ID_CHURCH_ESTABLISHED_ANNUAL", "solutionist_church_established_annual_2026_11",  "Solutionist Established Church", 499000, "year"),
+    ("STRIPE_PRICE_ID_CHURCH_LARGE",              "solutionist_church_large_monthly_2026_11",       "Solutionist Large Church",       89900,  "month"),
+    ("STRIPE_PRICE_ID_CHURCH_LARGE_ANNUAL",       "solutionist_church_large_annual_2026_11",        "Solutionist Large Church",       899000, "year"),
+    # The founding prices: the 2026-11-03 prices, reused by their keys (a
+    # re-run hands back the same ids, never new ones).
+    ("STRIPE_PRICE_ID_CHURCH_SMALL_FOUNDING",              "solutionist_church_small_monthly",       "Solutionist Small Church",       7900,   "month"),
+    ("STRIPE_PRICE_ID_CHURCH_SMALL_ANNUAL_FOUNDING",       "solutionist_church_small_annual",        "Solutionist Small Church",       79000,  "year"),
+    ("STRIPE_PRICE_ID_CHURCH_GROWING_FOUNDING",            "solutionist_church_growing_monthly",     "Solutionist Growing Church",     19900,  "month"),
+    ("STRIPE_PRICE_ID_CHURCH_GROWING_ANNUAL_FOUNDING",     "solutionist_church_growing_annual",      "Solutionist Growing Church",     199000, "year"),
+    ("STRIPE_PRICE_ID_CHURCH_ESTABLISHED_FOUNDING",        "solutionist_church_established_monthly", "Solutionist Established Church", 39900,  "month"),
+    ("STRIPE_PRICE_ID_CHURCH_ESTABLISHED_ANNUAL_FOUNDING", "solutionist_church_established_annual",  "Solutionist Established Church", 399000, "year"),
+    ("STRIPE_PRICE_ID_CHURCH_LARGE_FOUNDING",              "solutionist_church_large_monthly",       "Solutionist Large Church",       69900,  "month"),
+    ("STRIPE_PRICE_ID_CHURCH_LARGE_ANNUAL_FOUNDING",       "solutionist_church_large_annual",        "Solutionist Large Church",       699000, "year"),
     # One more office login on a church plan, $15 a month each (church_billing).
     ("STRIPE_PRICE_ID_EXTRA_LOGIN",               "solutionist_extra_login_monthly",        "Solutionist extra office login", 1500,   "month"),
 ]

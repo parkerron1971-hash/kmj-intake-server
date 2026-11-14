@@ -350,10 +350,58 @@ def _includes(plan: str) -> List[str]:
     return out
 
 
+def _founding_offer() -> Dict[str, object]:
+    """The founding offer while a place is open and at least one plan's
+    founding price is below its regular price: {left, spots, ends (words),
+    prices: {plan: cents a month}}. Empty once it's off, past its date,
+    full or unreadable (church_founding.offer_prices), and then every card
+    shows the regular price alone."""
+    import church_founding
+    prices = church_founding.offer_prices()
+    state = church_founding.public_state() if prices else None
+    if not prices or not state:
+        return {}
+    return {"left": state["left"], "spots": state["spots"],
+            "ends": church_founding.ends_words(),
+            "prices": {p: v["month_cents"] for p, v in prices.items()}}
+
+
+def _founding_band(offer: Dict[str, object]) -> str:
+    """Above the cards while the offer is open (board C): what the first ten
+    save, when the offer ends, and the places left."""
+    import pricing_config
+    regular = pricing_config.church_price_cents()
+    best = max((regular[p] - c) * 12 for p, c in offer["prices"].items())
+    total, left = int(offer["spots"]), int(offer["left"])
+    first = "The first church saves" if total == 1 else f"The first {_words(total)} churches save"
+    joined = "one church has joined" if total == 1 else f"{_words(total)} churches have joined"
+    end = (f"The offer ends when {joined} or on {offer['ends']}, whichever comes first."
+           if offer["ends"] else f"The offer ends when {joined}.")
+    seats = "".join('<i class="on"></i>' if n < left else "<i></i>" for n in range(total))
+    return ('<div class="fband">\n'
+            '<div class="fb-l"><span class="fb-k">Founding church offer</span>'
+            f'<b class="fb-h">{first} up to ${_dollars(best)} a year, for as long as they stay.</b>'
+            f'<span class="fb-p">{end} After that, every new church pays the regular price.</span></div>\n'
+            f'<div class="fb-r"><div class="fb-seats" aria-hidden="true">{seats}</div>'
+            f'<span class="fb-n"><b>{left:,}</b> of {total:,} founding places left</span></div>\n'
+            '</div>\n')
+
+
+def _saving_words(regular: int, founding: int) -> Dict[str, str]:
+    """'Save $50 a month · $600 a year' monthly, 'Save $500 a year' yearly."""
+    import marketing_pages as mp
+    off = regular - founding
+    return {"m": f"Save ${_dollars(off)} a month · ${_dollars(off * 12)} a year",
+            "y": f"Save ${_dollars(off * mp.ANNUAL_MONTHS)} a year"}
+
+
 def _plan_cards() -> str:
     """The overview's four cards, in the markup of the three they replace.
     Growing is the lit card, where Professional sits on the public ladder;
-    the meters are measured against the four church plans."""
+    the meters are measured against the four church plans. While the
+    founding offer is open (_founding_offer) a band sits above them and each
+    card leads with its founding price, the regular price crossed out above
+    it (board C, Kevin 2026-11-14)."""
     import chief_models
     import feature_gates as fg
     import marketing_pages as mp
@@ -363,6 +411,8 @@ def _plan_cards() -> str:
     credits = pricing_config.church_credits()
     top = max(credits.values()) or 1
     per_turn = pricing_config.credits_per_message()
+    offer = _founding_offer()
+    founding = offer.get("prices") or {}
     cards = []
     for i, plan in enumerate(plans):
         lit = i == 1
@@ -375,22 +425,39 @@ def _plan_cards() -> str:
         line = _METER_LINES[min(i, len(_METER_LINES) - 1)]
         items = "\n".join(f"<li>{_TICK}<span>{escape(x, quote=False)}</span></li>" for x in _includes(plan))
         button = "background: #F5F6F8; color: #0B0C11" if lit else "border: 1px solid rgba(11,12,17,0.2); color: #0B0C11"
+        deal = plan in founding
+        if deal:
+            fm, fy = _dollars(founding[plan]), _dollars(founding[plan] * mp.ANNUAL_MONTHS)
+            save = _saving_words(prices[plan], founding[plan])
+            head = '<span class="fchip">Founding price</span>'
+            price = (f'<div class="preg">Regular price <s>$<span class="pnum" data-m="{month}" data-y="{year}">{month}</span></s></div>\n'
+                     f'<div class="pz"><b>$<span class="pnum" data-m="{fm}" data-y="{fy}">{fm}</span></b>'
+                     '<span class="pper">a month</span></div>\n'
+                     f'<div class="psave"><span class="pnum" data-m="{save["m"]}" data-y="{save["y"]}">{save["m"]}</span></div>\n'
+                     '<div class="pbl">Billed monthly · cancel anytime</div>\n'
+                     '<div class="pkeep">Your price stays locked for as long as you stay.</div>\n')
+            go = "Claim a founding place"
+        else:
+            head = ""
+            price = (f'<div class="pz"><b>$<span class="pnum" data-m="{month}" data-y="{year}">{month}</span></b>'
+                     '<span class="pper">a month</span></div>\n'
+                     '<div class="pbl">Billed monthly · cancel anytime</div>\n')
+            go = "Start free"
         cards.append(
-            f'<div class="pc{" mid" if lit else ""}">\n'
-            '<div style="display: flex; justify-content: space-between; align-items: center; min-height: 24px">'
-            f'<span class="pname">{escape(_name(plan))}</span></div>\n'
-            f'<div class="pz"><b>$<span class="pnum" data-m="{month}" data-y="{year}">{month}</span></b>'
-            '<span class="pper">a month</span></div>\n'
-            '<div class="pbl">Billed monthly · cancel anytime</div>\n'
+            f'<div class="pc{" mid" if lit else ""}{" fd" if deal else ""}">\n'
+            '<div style="display: flex; justify-content: space-between; align-items: center; gap: 8px; min-height: 24px">'
+            f'<span class="pname">{escape(_name(plan))}</span>{head}</div>\n'
+            f'{price}'
             f'<div class="pds">{_people(plan)}.</div>\n'
             f'<div class="mtr"><div class="mrow"><b>{credits[plan]:,}</b><span>AI actions a month</span></div>'
             f'<div class="mbar"><i style="width: {width}%"></i></div><small>About {conv} messages{line}</small></div>\n'
             f'<div class="dep"><span>Chief thinks <b>{escape(label)}</b></span><span class="dd">{dots}</span></div>\n'
             '<div class="pinc">Includes</div>\n'
             f'<ul>\n{items}\n</ul>\n'
-            f'<a href="{{{{HOME}}}}/start" class="pbtn" style="{button}">Start free</a>\n'
+            f'<a href="{{{{HOME}}}}/start" class="pbtn" style="{button}">{go}</a>\n'
             '</div>')
-    return '<div class="plans four">\n' + "\n\n".join(cards) + "\n</div>"
+    band = _founding_band(offer) if founding else ""
+    return band + '<div class="plans four">\n' + "\n\n".join(cards) + "\n</div>"
 
 
 def _offer_line() -> str:
@@ -459,11 +526,13 @@ def _founding_line() -> str:
     (church_founding.public_state; the count may lag five minutes)."""
     import church_founding
     state = church_founding.public_state()
-    if not state or state["left"] <= 0:
-        return ""
+    if not state or state["left"] <= 0 or _founding_offer():
+        return ""     # the band above the cards says it (_founding_band)
     total = state["spots"]
     who = "The first church keeps the price it starts at, for as long as it stays." if total == 1 else \
         f"The first {_words(total)} churches keep the price they start at, for as long as they stay."
+    if church_founding.ends_words():
+        who += f" The offer ends {church_founding.ends_words()}."
     return ('<div style="display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px 20px; padding: 18px 22px; '
             'border-radius: 18px; background: #FFFFFF; border: 1px solid rgba(11,12,17,0.12)">'
             '<b style="font-family: \'Inter Tight\', sans-serif; font-weight: 600; font-size: 15px">Founding price</b>'
@@ -480,14 +549,20 @@ def _plan_strip() -> str:
     prices = pricing_config.church_price_cents()
     credits = pricing_config.church_credits()
     lim = fg.plan_limits()
+    founding = _founding_offer().get("prices") or {}
     out = []
     for i, plan in enumerate(plans):
         lp = lim[plan]
         items = (_people(plan), _count(lp["max_seats"], "office login"), _count(lp["texts_monthly"], "text") + " a month",
                  f"{credits[plan]:,} AI actions a month", _clips(lp["clip_hours_monthly"]))
         lis = "\n".join(f"<li>{_TICK}{x}</li>" for x in items)
+        if plan in founding:
+            pp = (f'<span class="preg">Regular price <s>${_dollars(prices[plan])}</s></span>'
+                  f'<span class="pp">${_dollars(founding[plan])} <small>a month, founding price</small></span>')
+        else:
+            pp = f'<span class="pp">${_dollars(prices[plan])} <small>a month</small></span>'
         out.append(f'<div class="plan{" mid" if i == 1 else ""}"><span class="pn">{escape(_name(plan))}</span>'
-                   f'<span class="pp">${_dollars(prices[plan])} <small>a month</small></span><ul>\n{lis}\n</ul></div>')
+                   f'{pp}<ul>\n{lis}\n</ul></div>')
     return '<div class="planrow four">\n' + "\n".join(out) + "\n</div>"
 
 
@@ -514,18 +589,23 @@ def _picker_data() -> Dict[str, object]:
     top = max(h for (_low, h) in bands.values() if h is not None)
     n = len(plans)
     stops = [round(i * 1000 / n) for i in range(n)] + [980]
+    founding = _founding_offer().get("prices") or {}
     out, seg, marks = [], [], []
     for i, plan in enumerate(plans):
         low, high = bands[plan]
         high = high if high is not None else top
         lp = lim[plan]
         conv = f"{mp._about(credits[plan] // per_turn):,}"
+        pay = founding.get(plan, prices[plan])
+        items = [_count(lp["max_seats"], "office login"), _count(lp["texts_monthly"], "text") + " a month",
+                 f"About {conv} messages to Chief", _clips(lp["clip_hours_monthly"])]
+        if plan in founding:
+            items.insert(0, f"Founding price, regular ${_dollars(prices[plan])} a month")
         out.append({
             "name": _name(plan), "short": _short(plan), "max": high,
-            "m": f"${_dollars(prices[plan])}", "y": f"${_dollars(prices[plan] * mp.ANNUAL_MONTHS)}",
+            "m": f"${_dollars(pay)}", "y": f"${_dollars(pay * mp.ANNUAL_MONTHS)}",
             "col": _PICK_COLOURS[min(i, len(_PICK_COLOURS) - 1)],
-            "items": [_count(lp["max_seats"], "office login"), _count(lp["texts_monthly"], "text") + " a month",
-                      f"About {conv} messages to Chief", _clips(lp["clip_hours_monthly"])],
+            "items": items,
         })
         seg.append([stops[i], stops[i + 1], max(20, low) if i == 0 else low, high])
         marks.append(f"Up to {high:,}" if not low else f"{low:,} to {high:,}")
