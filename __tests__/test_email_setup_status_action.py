@@ -99,6 +99,7 @@ def test_verified_but_no_test_yet_names_step_four(fake, monkeypatch):
 
 
 def test_verified_without_inbox_names_step_three(fake, monkeypatch):
+    monkeypatch.setenv("GMAIL_CONNECT", "on")  # the Gmail connection, when it's switched back on
     _live(monkeypatch, "verified")
     out = run(_biz(VERIFIED))
     assert "no inbox connected" in out["result"]
@@ -146,6 +147,7 @@ def test_stale_inbox_is_not_reported_as_syncing(fake, monkeypatch):
 
 
 def test_mailbox_read_failure_is_non_fatal(fake, monkeypatch):
+    monkeypatch.setenv("GMAIL_CONNECT", "on")
     _live(monkeypatch, "verified")
 
     def _boom(path):
@@ -155,3 +157,12 @@ def test_mailbox_read_failure_is_non_fatal(fake, monkeypatch):
     out = run(_biz(VERIFIED))
     assert out["type"] == "email_setup_status" and out["result"]
     assert "no inbox connected" in out["result"]
+
+
+def test_with_gmail_retired_chief_never_offers_it_and_a_verified_domain_is_ready(fake, monkeypatch):
+    monkeypatch.delenv("GMAIL_CONNECT", raising=False)
+    _live(monkeypatch, "verified")
+    out = run(_biz(VERIFIED))
+    assert "retired" in out["result"] and "connect Gmail" not in out["result"]
+    assert "step 3" not in out["result"]
+    assert out["signal"]["ready"] is True and out["signal"]["verified"] is True

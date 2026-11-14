@@ -497,6 +497,8 @@ async def sync_tick() -> Dict[str, Any]:
     Never raises: a single bad mailbox must not take down the tick for
     every other business on the platform.
     """
+    if not google_oauth.connect_open():
+        return {"skipped": "gmail_connect_retired"}
     if not google_oauth._configured():
         return {"skipped": "google_oauth_not_configured"}
 
