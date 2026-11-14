@@ -49,6 +49,9 @@ WHO
   church sees it on Home.
   /platform/move-in/{church}/ready is the other half of the look: what
   is really set up for Sunday, read live (church_move_ready.py).
+  /platform/move-in/{church}/setup/{item} turns a hand-in into the
+  church's real records: GET plans it, POST does it
+  (church_move_setup.py).
 
 SWITCH
   CHURCH_MOVE_IN = off | owner | on. Unset is "owner": the platform's own
@@ -1072,6 +1075,47 @@ def platform_move_in_ready(business_id: str, owner: AuthedUser = Depends(require
         said = None
     return {"church": {"id": str(biz["id"]), "name": biz.get("name") or "A church"},
             "first_sunday": _plain(said) or None, **church_move_ready.ready(biz)}
+
+
+def _setup_of(business_id: str, key: str) -> Tuple[Dict[str, Any], Dict[str, Any], List[Dict[str, Any]]]:
+    """The church, the item's answers and its files, for a hand-in that can
+    be set up: 409 until the church has handed it in."""
+    biz = _business(_uuid(business_id, "church"))
+    item = _item(key)
+    biz_id = str(biz["id"])
+    row = _rows_of(biz_id).get(item["key"])
+    if row is None or row.get("state") not in ("handed_in", "checked"):
+        raise HTTPException(409, "The church hasn't handed this one in yet.")
+    return biz, row.get("answers") or {}, _files_of(biz_id).get(item["key"], [])
+
+
+@platform_router.get("/{business_id}/setup/{key}")
+def platform_move_in_setup_plan(business_id: str, key: str, owner: AuthedUser = Depends(require_owner)):
+    """What setting this hand-in up would do, step by step. Writes nothing."""
+    import church_move_setup
+    biz, answers, files = _setup_of(business_id, key)
+    return church_move_setup.run(biz, key, answers, files, False)[0]
+
+
+@platform_router.post("/{business_id}/setup/{key}")
+async def platform_move_in_setup(business_id: str, key: str, owner: AuthedUser = Depends(require_owner)):
+    """Set the hand-in up in the church's account: the plan's `will` steps,
+    each made once. Answers the steps as they went, and what is still to do
+    (the plan again, after)."""
+    import asyncio
+    import church_move_setup
+
+    def go():
+        biz, answers, files = _setup_of(business_id, key)
+        went, mail = church_move_setup.run(biz, key, answers, files, True)
+        return biz, answers, files, went, mail
+
+    biz, answers, files, went, mail = await asyncio.to_thread(go)
+    await church_move_setup.send_mail(biz, mail)
+    await asyncio.to_thread(church_move_setup.record, biz, key, went, str(owner.id))
+    fresh = await asyncio.to_thread(_business, str(biz["id"]))
+    after = await asyncio.to_thread(lambda: church_move_setup.run(fresh, key, answers, files, False)[0])
+    return {"went": went, "after": after}
 
 
 @platform_router.post("/{business_id}/{key}")
