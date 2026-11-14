@@ -4,8 +4,8 @@ date: 2026-11-14
 agent: Claude Code (Claude Opus 5.5)
 asked: 'when i went in to write an email, i noted a bug where the add my signature sits . you can't see it fully. check that out for me. also add where the signature can be edited. just incase they want to change up how it looks.'
 status: in progress
-prs: []
-migrations: [supabase/APPLY-2026-11-14-church-mail-signature.sql]
+prs: ["kmj-intake-server#1838"]
+migrations: [supabase/APPLY-2026-11-14-church-mail-signature.sql (applied 2026-11-14)]
 left_undone: []
 decisions:
   - "A church email's signature was fixed: the sender's name, the church, the address it goes from. Each login can now write their own (church_mail_people.signature); empty goes back to the standard one."
