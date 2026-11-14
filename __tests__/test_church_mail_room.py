@@ -356,3 +356,55 @@ def test_older_mail_comes_a_page_at_a_time(mail, resend, monkeypatch):
     assert [i["subject"] for i in older["items"]] == ["Note 2"] and older["more"] is False
     with pytest.raises(HTTPException):
         call(room.get_list, mail, JESSICA, tray=yours, before="yesterday")
+
+
+# ─── Each person's own signature ─────────────────────────────────────
+# Kevin, 2026-11-14: "add where the signature can be edited. just incase
+# they want to change up how it looks."
+
+def _send_hello(db, who, sender, idem):
+    call(room.post_send, db, who, room.SendIn(sender=sender, to="sam@sender.example", subject="Hi",
+                                             body="Hello.", idem=idem))
+
+
+def test_a_person_writes_their_own_signature_and_their_sends_carry_it(mail, resend):
+    yours = _tray(call(room.get_room, mail, JESSICA), "Yours")["id"]
+    out = call(room.put_signature, mail, JESSICA,
+               room.SignatureIn(text="  Jessica McCloud\r\nOffice Administrator\n\n\n\nLove City Church \u0007\n\n"))
+    assert out["signature"] == "Jessica McCloud\nOffice Administrator\n\nLove City Church"
+    assert call(room.get_room, mail, JESSICA)["me"]["signature"] == out["signature"]
+    _send_hello(mail, JESSICA, yours, "sig1")
+    assert resend.sent[-1]["text"] == "Hello.\n\nJessica McCloud\nOffice Administrator\n\nLove City Church"
+    assert call(room.get_room, mail, TIA)["me"]["signature"] is None, "Tia keeps the standard one"
+
+
+def test_an_empty_signature_is_the_standard_one_again_and_copies_stay_as_they_were(mail, resend):
+    call(room.put_copies, mail, JESSICA, room.CopiesIn(on=False))
+    call(room.put_signature, mail, JESSICA, room.SignatureIn(text="Jess"))
+    assert call(room.put_signature, mail, JESSICA, room.SignatureIn(text="  \n  "))["signature"] is None
+    view = call(room.get_room, mail, JESSICA)
+    assert view["me"]["signature"] is None and view["me"]["copies"] is False
+    _send_hello(mail, JESSICA, _tray(view, "Yours")["id"], "sig2")
+    assert resend.sent[-1]["text"] == "Hello.\n\nJessica McCloud\nLove City Church\njessica@lovecityc.com"
+
+
+def test_a_signature_is_kept_short_in_whole_lines(mail, resend):
+    many = "\n".join(f"Line {i}" for i in range(12))
+    assert call(room.put_signature, mail, JESSICA, room.SignatureIn(text=many))["signature"].split("\n") == \
+        [f"Line {i}" for i in range(8)], "eight lines at most"
+    long = "\n".join(f"Line {i} " + "x" * 200 for i in range(12))
+    sig = call(room.put_signature, mail, JESSICA, room.SignatureIn(text=long))["signature"]
+    lines = sig.split("\n")
+    assert len(sig) <= 600 and len(lines) == 4 and all(len(x) == 120 for x in lines), "600 in all, never half a line"
+
+
+def test_a_signature_that_cant_be_read_is_the_standard_one(mail, resend, monkeypatch):
+    call(room.put_signature, mail, JESSICA, room.SignatureIn(text="Jess"))
+    real = sb_clients.sb_get_as_service
+    monkeypatch.setattr(sb_clients, "sb_get_as_service",
+                        lambda path, *a, **k: {"message": "column church_mail_people.signature does not exist"}
+                        if "select=signature" in path else real(path, *a, **k))
+    view = call(room.get_room, mail, JESSICA)
+    assert view["me"]["signature"] is None
+    _send_hello(mail, JESSICA, _tray(view, "Yours")["id"], "sig3")
+    assert resend.sent[-1]["text"].endswith("Jessica McCloud\nLove City Church\njessica@lovecityc.com")
