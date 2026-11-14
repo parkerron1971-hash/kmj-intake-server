@@ -43,8 +43,8 @@ OWNER = "5a3b1e00-0000-4000-8000-00000000d005"
 TESTER = "pastor@church.test"
 OWNER_EMAILS = {OWNER: TESTER}
 FOUNDING_OPEN = {"spots": 10, "left": 7, "ends": "2027-01-31"}
-FOUNDING_WORDS = ("The first ten churches keep the founding price for as long as they stay, "
-                  "until January 31.")
+FOUNDING_WORDS = ("The first ten churches keep the founding price for as long as they stay. "
+                  "The offer ends January 31.")
 
 
 def _iso(dt: datetime) -> str:
@@ -338,7 +338,7 @@ def test_a_church_in_a_sample_gets_the_sample_welcome(world, mail, monkeypatch):
     ({"spots": 10, "left": 3, "ends": None},
      "The first ten churches keep the founding price for as long as they stay."),
     ({"spots": 1, "left": 1, "ends": "2027-01-31"},
-     "The first church keeps the founding price for as long as it stays, until January 31."),
+     "The first church keeps the founding price for as long as it stays. The offer ends January 31."),
     (FOUNDING_OPEN, FOUNDING_WORDS),
 ])
 def test_the_founding_line_only_while_a_place_is_open(monkeypatch, state, line):
@@ -355,7 +355,7 @@ def test_the_founding_line_reads_the_offers_own_end_day(monkeypatch):
     import church_founding
     monkeypatch.setenv("FOUNDING_CHURCHES_UNTIL", "2027-02-28")
     monkeypatch.setattr(church_founding, "public_state", lambda: dict(FOUNDING_OPEN))
-    assert le.founding_line().endswith("until February 28.")
+    assert le.founding_line().endswith("The offer ends February 28.")
 
 
 def test_the_retry_works_the_sample_out_itself(world, mail, monkeypatch):

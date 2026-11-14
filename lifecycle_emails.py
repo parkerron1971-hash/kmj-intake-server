@@ -171,7 +171,7 @@ def _promise() -> str:
 
 def founding_line() -> str:
     """'The first ten churches keep the founding price for as long as they
-    stay, until January 31.' Only while the founding offer has a place open
+    stay. The offer ends January 31.' Only while the founding offer has a place open
     (church_founding.public_state); '' when it is off, past its date, full or
     unreadable, so nothing is promised that checkout won't keep."""
     try:
@@ -188,7 +188,9 @@ def founding_line() -> str:
                f"The first {church_site._words(total)} churches keep the founding price "
                f"for as long as they stay")
         ends = church_founding.ends_words() if state.get("ends") else ""
-        return who + (f", until {ends}." if ends else ".")
+        # Two sentences, so the date reads as the offer's end, never the
+        # price's: a founding church keeps its price for good.
+        return who + "." + (f" The offer ends {ends}." if ends else "")
     except Exception as e:  # noqa: BLE001 - the mail goes without the line
         logger.warning(f"[lifecycle] founding line skipped: {type(e).__name__}")
         return ""
