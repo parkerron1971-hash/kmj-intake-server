@@ -965,15 +965,17 @@ async def stream(req, user_session) -> StreamingResponse:
 # ─── GET /sample-church/questions ─────────────────────────────────────
 
 @router.get("/sample-church/questions")
-async def sample_questions(business_id: str = Query(..., description="the sample church"),
-                           user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
+def sample_questions(business_id: str = Query(..., description="the sample church"),
+                     user: AuthedUser = Depends(require_user)) -> Dict[str, Any]:
     """The questions this person has had answered in their sample, oldest
     first, for the Chief thread's history. Owner of the sample only. `n` is
-    the question's place in that order (1..cap). Per PERSON, like the cap."""
+    the question's place in that order (1..cap). Per PERSON, like the cap.
+    A plain def: FastAPI runs it on a worker thread, so its two service
+    reads never hold the event loop, and owned_sample is called directly."""
     uid = str(user.id)
-    await asyncio.to_thread(owned_sample, business_id, uid)
+    owned_sample(business_id, uid)
     cap = sample_church.questions_of()
-    rows = await asyncio.to_thread(rows_of, uid)
+    rows = rows_of(uid)
     if rows is None:
         raise HTTPException(503, "Couldn't read the questions just now. Try again.")
     answered = [r for r in _in_order(rows) if r.get("answer")]
