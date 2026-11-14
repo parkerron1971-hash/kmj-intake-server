@@ -497,6 +497,11 @@ async def release_one(row: Dict[str, Any], now: Optional[datetime] = None) -> Di
     now = now or _now()
     qid = str(row.get("id") or "")
     bid = str(row.get("business_id") or "")
+    # A sample church sends nothing on a standing OK (sample_church.py, BE-3).
+    import sample_church
+    if await sample_church.is_sample_async(bid):
+        await asyncio.to_thread(_hold, qid, "a sample church sends nothing")
+        return {"id": qid, "did": "held", "why": "sample church"}
     spec = action_proposals.spec_from_body(row.get("body") or "")
     if not spec or not spec.get("standing"):
         return {"id": qid, "did": "skipped", "why": "not a standing send"}
@@ -584,6 +589,8 @@ def sweep_revocations(now: Optional[datetime] = None) -> List[str]:
     import outcome_ledger
     rows = sb_clients.sb_get_as_service(
         "/businesses?select=id,owner_id,settings&settings->autonomy->standing=not.is.null&limit=500") or []
+    import sample_church
+    rows = sample_church.drop_samples(rows if isinstance(rows, list) else [], "id")   # BE-3
     revoked: List[str] = []
     for biz in rows if isinstance(rows, list) else []:
         grants = granted(biz)

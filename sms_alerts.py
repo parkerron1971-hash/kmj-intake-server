@@ -437,6 +437,9 @@ async def reminder_sweep() -> Dict[str, int]:
                     client,
                     f"/businesses?id=in.({','.join(biz_ids)})&select=id,name,settings",
                 ) or []
+                # A sample church's sessions text nobody (sample_church.py, BE-3).
+                import sample_church
+                rows = await asyncio.to_thread(sample_church.drop_samples, rows, "id")
                 biz_map = {r["id"]: r for r in rows}
             contact_map: Dict[str, Dict[str, Any]] = {}
             if contact_ids:

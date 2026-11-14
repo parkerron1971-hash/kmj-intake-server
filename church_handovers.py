@@ -674,6 +674,8 @@ def sweep_tick(now: Optional[datetime] = None) -> Dict[str, int]:
         for x in sb_clients.sb_get_as_service(f"/businesses?id=in.({','.join(_q(i) for i in chunk)})"
                                               f"&select={cas.BIZ_FIELDS}&limit=100") or []:
             bizs[str(x["id"])] = x
+    import sample_church
+    bizs = sample_church.drop_sample_map(bizs)   # BE-3
     for b, todo in work.items():
         biz = bizs.get(b)
         if not biz or not cfu.is_church(biz) or not co.church_open(b):

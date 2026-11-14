@@ -364,7 +364,13 @@ _WHAT = {
 def card_message(what: str, row: Optional[Dict[str, Any]] = None) -> str:
     """The refusal, in the practitioner's words. While the trial is still
     running it says the true thing about adding a card: nothing is
-    charged before the end date, and the tank grows."""
+    charged before the end date, and the tank grows.
+
+    A sample church's row (blocks() marks it) is never told to add a card:
+    it hears the sample's own words (sample_church.MESSAGE)."""
+    if row is not None and row.get("is_sample") is True:
+        import sample_church
+        return sample_church.MESSAGE
     lead = _WHAT.get(what, "That turns on once there's a card on file.")
     action = {"rebuild": "To build again, add a card",
               "builds_full": "To build now, add a card",
@@ -393,16 +399,36 @@ def _row(business_id: str) -> Optional[Dict[str, Any]]:
     return usage_metering._biz_row(business_id)
 
 
+def _sample_row(business_id: str, r: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """The row, marked, when this business is a sample church (sample_church.py,
+    BE-3): a sample is held back everywhere a no-card trial is (its public
+    address shows "coming soon", its sends and builds wait), and worded as
+    a sample, never as a card (card_message)."""
+    import sample_church
+    if r is not None and "is_sample" in r:
+        sample = sample_church.row_is_sample(r)
+    else:
+        sample = sample_church.is_sample(business_id)
+    if not sample:
+        return None
+    return {**(r or {"id": business_id}), "is_sample": True}
+
+
 def blocks(business_id: Optional[str],
            row: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
     """The business row when it is a no-card trial (so the caller can word
     the refusal), else None. Fails OPEN — a lookup error never stops a
-    send — like every billing read in this codebase."""
+    send — like every billing read in this codebase.
+
+    A sample church blocks too (_sample_row), with is_sample set on the row
+    handed back so card_message words it as a sample."""
     if not business_id:
         return None
     try:
         r = row if row is not None and "settings" in row else _row(business_id)
-        return r if is_no_card(r) else None
+        if is_no_card(r):
+            return r
+        return _sample_row(str(business_id), r)
     except Exception as e:
         logger.warning(f"[no-card] gate read failed open for {str(business_id)[:8]}: {e}")
         return None
@@ -419,7 +445,12 @@ async def blocks_async(client, business_id: Optional[str]) -> Optional[Dict[str,
             f"&select=id,settings,subscription_status,stripe_subscription_id,"
             f"trial_ends_at,comp_tier&limit=1") or []
         r = rows[0] if rows else None
-        return r if is_no_card(r) else None
+        if is_no_card(r):
+            return r
+        import sample_church
+        if await sample_church.is_sample_async(business_id):
+            return {**(r or {"id": business_id}), "is_sample": True}
+        return None
     except Exception as e:
         logger.warning(f"[no-card] gate read failed open for {str(business_id)[:8]}: {e}")
         return None
@@ -670,8 +701,10 @@ def forget(business_id: Optional[str]) -> None:
 
 
 async def site_hidden(client, business_id: Optional[str]) -> bool:
-    """True while this business is a no-card trial: its public address
-    shows 'coming soon' instead of the site. Fails OPEN (shows the site)."""
+    """True while this business is a no-card trial, or always for a sample
+    church (blocks_async says both): its public address shows 'coming soon'
+    instead of the site, and the owner's preview needs the token
+    (preview_blocked). Fails OPEN (shows the site)."""
     import time
     if not business_id:
         return False

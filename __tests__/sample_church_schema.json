@@ -1,0 +1,1297 @@
+{
+ "_note": "Columns (name: type) of every table the sample church seed writes, from the production database's PostgREST description (read-only), 2026-11-15. 'required' is NOT NULL with no default, json and array columns left out (PostgREST does not report their defaults). test_sample_church_seed checks every seeded row against it; refresh it when a migration adds a column the seed writes.",
+ "tables": {
+  "attendance": {
+   "columns": {
+    "business_id": "uuid",
+    "checked_in_at": "timestamp with time zone",
+    "checked_in_by": "uuid",
+    "checked_out_at": "timestamp with time zone",
+    "contact_id": "uuid",
+    "created_at": "timestamp with time zone",
+    "entry_id": "uuid",
+    "first_time": "boolean",
+    "id": "uuid",
+    "method": "text",
+    "name": "text"
+   },
+   "required": [
+    "business_id",
+    "entry_id",
+    "name"
+   ]
+  },
+  "attendance_headcounts": {
+   "columns": {
+    "area": "text",
+    "business_id": "uuid",
+    "count": "integer",
+    "counted_by": "uuid",
+    "entry_id": "uuid",
+    "id": "uuid",
+    "updated_at": "timestamp with time zone"
+   },
+   "required": [
+    "area",
+    "business_id",
+    "entry_id"
+   ]
+  },
+  "business_sites": {
+   "columns": {
+    "business_id": "uuid",
+    "created_at": "timestamp with time zone",
+    "hero_composer_module": "text",
+    "html_content": "text",
+    "id": "uuid",
+    "published_at": "timestamp with time zone",
+    "site_config": "jsonb",
+    "slug": "text",
+    "status": "text",
+    "updated_at": "timestamp with time zone"
+   },
+   "required": [
+    "business_id"
+   ]
+  },
+  "checkin_stations": {
+   "columns": {
+    "business_id": "uuid",
+    "created_at": "timestamp with time zone",
+    "created_by": "uuid",
+    "id": "uuid",
+    "last_seen_at": "timestamp with time zone",
+    "mode": "text",
+    "name": "text",
+    "pair_code_hash": "text",
+    "pair_expires_at": "timestamp with time zone",
+    "paired_at": "timestamp with time zone",
+    "pin_hash": "text",
+    "revoked_at": "timestamp with time zone",
+    "token_hash": "text"
+   },
+   "required": [
+    "business_id",
+    "name",
+    "pin_hash"
+   ]
+  },
+  "chief_notifications": {
+   "columns": {
+    "action_payload": "jsonb",
+    "body": "text",
+    "business_id": "uuid",
+    "created_at": "timestamp with time zone",
+    "data": "jsonb",
+    "id": "uuid",
+    "priority": "text",
+    "read_at": "timestamp with time zone",
+    "related_contact_id": "uuid",
+    "related_module_id": "uuid",
+    "related_session_id": "uuid",
+    "scheduled_for": "timestamp with time zone",
+    "shown_at": "timestamp with time zone",
+    "status": "text",
+    "suggested_action": "text",
+    "title": "text",
+    "type": "text"
+   },
+   "required": [
+    "body",
+    "business_id",
+    "title",
+    "type"
+   ]
+  },
+  "child_care_notes": {
+   "columns": {
+    "allergies": "text",
+    "business_id": "uuid",
+    "child_id": "uuid",
+    "custody": "text",
+    "medical": "text",
+    "updated_at": "timestamp with time zone",
+    "updated_by": "uuid"
+   },
+   "required": [
+    "business_id",
+    "child_id"
+   ]
+  },
+  "child_checkins": {
+   "columns": {
+    "business_id": "uuid",
+    "checked_in_at": "timestamp with time zone",
+    "checked_in_by": "uuid",
+    "checked_out_at": "timestamp with time zone",
+    "checked_out_by": "uuid",
+    "child_id": "uuid",
+    "code": "text",
+    "dropped_off_by": "uuid",
+    "entry_id": "uuid",
+    "household_id": "uuid",
+    "id": "uuid",
+    "method": "text",
+    "released_by_contact": "uuid",
+    "released_to": "text",
+    "room": "text",
+    "station_id": "uuid"
+   },
+   "required": [
+    "business_id",
+    "child_id",
+    "code",
+    "entry_id",
+    "household_id"
+   ]
+  },
+  "children": {
+   "columns": {
+    "active": "boolean",
+    "birthdate": "date",
+    "business_id": "uuid",
+    "contact_id": "uuid",
+    "created_at": "timestamp with time zone",
+    "first_name": "text",
+    "grade": "text",
+    "household_id": "uuid",
+    "id": "uuid",
+    "last_name": "text",
+    "room": "text",
+    "updated_at": "timestamp with time zone"
+   },
+   "required": [
+    "business_id",
+    "first_name",
+    "household_id"
+   ]
+  },
+  "church_board_attendance": {
+   "columns": {
+    "business_id": "uuid",
+    "marked_at": "timestamp with time zone",
+    "marked_by": "uuid",
+    "meeting_id": "uuid",
+    "member_id": "uuid",
+    "status": "text"
+   },
+   "required": [
+    "business_id",
+    "meeting_id",
+    "member_id",
+    "status"
+   ]
+  },
+  "church_board_decisions": {
+   "columns": {
+    "board_id": "uuid",
+    "business_id": "uuid",
+    "created_at": "timestamp with time zone",
+    "created_by": "uuid",
+    "decided_on": "date",
+    "id": "uuid",
+    "item_id": "uuid",
+    "item_title": "text",
+    "meeting_id": "uuid",
+    "motion": "text",
+    "moved_by": "uuid",
+    "result": "text",
+    "seconded_by": "uuid",
+    "updated_at": "timestamp with time zone",
+    "votes_abstain": "integer",
+    "votes_against": "integer",
+    "votes_for": "integer"
+   },
+   "required": [
+    "board_id",
+    "business_id",
+    "decided_on",
+    "item_id",
+    "meeting_id",
+    "motion",
+    "result"
+   ]
+  },
+  "church_board_items": {
+   "columns": {
+    "business_id": "uuid",
+    "carried_from": "uuid",
+    "created_at": "timestamp with time zone",
+    "documents": "jsonb",
+    "follow_up_due": "date",
+    "follow_up_member": "uuid",
+    "id": "uuid",
+    "meeting_id": "uuid",
+    "minutes": "text",
+    "notes": "text",
+    "position": "integer",
+    "status": "text",
+    "task_id": "uuid",
+    "title": "text",
+    "updated_at": "timestamp with time zone"
+   },
+   "required": [
+    "business_id",
+    "meeting_id",
+    "title"
+   ]
+  },
+  "church_board_meetings": {
+   "columns": {
+    "approved_at": "timestamp with time zone",
+    "approved_by": "uuid",
+    "approved_in": "uuid",
+    "board_id": "uuid",
+    "business_id": "uuid",
+    "created_at": "timestamp with time zone",
+    "created_by": "uuid",
+    "id": "uuid",
+    "place": "text",
+    "sent_at": "timestamp with time zone",
+    "sent_by": "uuid",
+    "sent_count": "integer",
+    "starts_at": "timestamp with time zone",
+    "status": "text",
+    "title": "text",
+    "updated_at": "timestamp with time zone",
+    "video_url": "text"
+   },
+   "required": [
+    "board_id",
+    "business_id",
+    "starts_at"
+   ]
+  },
+  "church_board_members": {
+   "columns": {
+    "active": "boolean",
+    "board_id": "uuid",
+    "business_id": "uuid",
+    "contact_id": "uuid",
+    "created_at": "timestamp with time zone",
+    "id": "uuid",
+    "name": "text",
+    "title": "text",
+    "updated_at": "timestamp with time zone",
+    "user_id": "uuid"
+   },
+   "required": [
+    "board_id",
+    "business_id",
+    "name"
+   ]
+  },
+  "church_boards": {
+   "columns": {
+    "archived": "boolean",
+    "business_id": "uuid",
+    "created_at": "timestamp with time zone",
+    "created_by": "uuid",
+    "id": "uuid",
+    "name": "text",
+    "quorum_count": "integer",
+    "quorum_kind": "text",
+    "sort": "integer",
+    "updated_at": "timestamp with time zone"
+   },
+   "required": [
+    "business_id",
+    "name"
+   ]
+  },
+  "church_campaigns": {
+   "columns": {
+    "business_id": "uuid",
+    "created_at": "timestamp with time zone",
+    "created_by": "uuid",
+    "ends_on": "date",
+    "fund": "text",
+    "goal_cents": "bigint",
+    "id": "uuid",
+    "name": "text",
+    "note": "text",
+    "starts_on": "date",
+    "updated_at": "timestamp with time zone"
+   },
+   "required": [
+    "business_id",
+    "ends_on",
+    "fund",
+    "goal_cents",
+    "name",
+    "starts_on"
+   ]
+  },
+  "church_checkin_settings": {
+   "columns": {
+    "business_id": "uuid",
+    "closes_after_min": "smallint",
+    "enabled": "boolean",
+    "opens_before_min": "smallint",
+    "start_time": "text",
+    "timezone": "text",
+    "title": "text",
+    "updated_at": "timestamp with time zone",
+    "updated_by": "uuid",
+    "weekday": "smallint"
+   },
+   "required": [
+    "business_id"
+   ]
+  },
+  "church_follow_up_notes": {
+   "columns": {
+    "author_contact_id": "uuid",
+    "author_kind": "text",
+    "author_name": "text",
+    "author_user_id": "uuid",
+    "body": "text",
+    "business_id": "uuid",
+    "created_at": "timestamp with time zone",
+    "follow_up_id": "uuid",
+    "id": "uuid",
+    "kind": "text",
+    "pastors_only": "boolean"
+   },
+   "required": [
+    "author_kind",
+    "business_id",
+    "follow_up_id",
+    "kind"
+   ]
+  },
+  "church_follow_ups": {
+   "columns": {
+    "answers": "jsonb",
+    "assigned_at": "timestamp with time zone",
+    "assigned_by": "text",
+    "business_id": "uuid",
+    "card_key": "text",
+    "card_name": "text",
+    "contact_id": "uuid",
+    "created_at": "timestamp with time zone",
+    "done_at": "timestamp with time zone",
+    "due_at": "timestamp with time zone",
+    "id": "uuid",
+    "late_level": "integer",
+    "leader_contact_id": "uuid",
+    "leader_role": "text",
+    "leader_told_at": "timestamp with time zone",
+    "path_kind": "text",
+    "reason": "text",
+    "source_event": "text",
+    "status": "text",
+    "step": "integer",
+    "steps": "jsonb",
+    "updated_at": "timestamp with time zone"
+   },
+   "required": [
+    "business_id",
+    "card_key",
+    "contact_id",
+    "path_kind"
+   ]
+  },
+  "church_help_given": {
+   "columns": {
+    "amount_cents": "integer",
+    "business_id": "uuid",
+    "created_at": "timestamp with time zone",
+    "expense_id": "uuid",
+    "given_on": "date",
+    "how": "text",
+    "id": "uuid",
+    "note": "text",
+    "payee": "text",
+    "recorded_by": "uuid",
+    "request_id": "uuid"
+   },
+   "required": [
+    "business_id",
+    "given_on",
+    "how",
+    "request_id"
+   ]
+  },
+  "church_help_requests": {
+   "columns": {
+    "amount_cents": "integer",
+    "anonymous": "boolean",
+    "approved_cents": "integer",
+    "business_id": "uuid",
+    "care_request_id": "uuid",
+    "contact_id": "uuid",
+    "created_at": "timestamp with time zone",
+    "created_by": "uuid",
+    "decided_at": "timestamp with time zone",
+    "decided_by": "uuid",
+    "id": "uuid",
+    "name": "text",
+    "need": "text",
+    "notes": "text",
+    "pastors_only": "boolean",
+    "source": "text",
+    "status": "text",
+    "updated_at": "timestamp with time zone",
+    "wants_call": "boolean"
+   },
+   "required": [
+    "business_id",
+    "need"
+   ]
+  },
+  "church_help_settings": {
+   "columns": {
+    "business_id": "uuid",
+    "fund": "text",
+    "gift_limit_cents": "integer",
+    "monthly_budget_cents": "integer",
+    "updated_at": "timestamp with time zone",
+    "updated_by": "uuid"
+   },
+   "required": [
+    "business_id"
+   ]
+  },
+  "church_leader_roles": {
+   "columns": {
+    "answered_at": "timestamp with time zone",
+    "answers_to_contact_id": "uuid",
+    "business_id": "uuid",
+    "contact_id": "uuid",
+    "created_at": "timestamp with time zone",
+    "id": "uuid",
+    "invited_at": "timestamp with time zone",
+    "invited_by": "uuid",
+    "role": "text",
+    "scope": "text",
+    "status": "text",
+    "term_ends_at": "timestamp with time zone",
+    "term_told_at": "timestamp with time zone",
+    "updated_at": "timestamp with time zone"
+   },
+   "required": [
+    "business_id",
+    "contact_id",
+    "role"
+   ]
+  },
+  "church_pledges": {
+   "columns": {
+    "business_id": "uuid",
+    "campaign_id": "uuid",
+    "contact_id": "uuid",
+    "id": "uuid",
+    "note": "text",
+    "per_period_cents": "bigint",
+    "period": "text",
+    "periods": "integer",
+    "recorded_at": "timestamp with time zone",
+    "recorded_by": "uuid",
+    "request_id": "uuid",
+    "total_cents": "bigint"
+   },
+   "required": [
+    "business_id",
+    "campaign_id",
+    "contact_id",
+    "total_cents"
+   ]
+  },
+  "church_posts": {
+   "columns": {
+    "alerted_at": "timestamp with time zone",
+    "attach": "jsonb",
+    "author_label": "text",
+    "body": "text",
+    "business_id": "uuid",
+    "celebrate_on": "date",
+    "comments": "text",
+    "created_at": "timestamp with time zone",
+    "decided_at": "timestamp with time zone",
+    "decided_by": "text",
+    "group_id": "uuid",
+    "id": "uuid",
+    "important": "boolean",
+    "kind": "text",
+    "office_user": "uuid",
+    "partner_id": "uuid",
+    "person_id": "uuid",
+    "pinned_until": "timestamp with time zone",
+    "posted_by": "uuid",
+    "publish_at": "timestamp with time zone",
+    "reach": "jsonb",
+    "reached_at": "timestamp with time zone",
+    "removed_at": "timestamp with time zone",
+    "source": "text",
+    "status": "text",
+    "title": "text",
+    "told_at": "timestamp with time zone"
+   },
+   "required": [
+    "business_id"
+   ]
+  },
+  "church_register_entries": {
+   "columns": {
+    "business_id": "uuid",
+    "care_request_id": "uuid",
+    "contact_ids": "uuid[]",
+    "created_at": "timestamp with time zone",
+    "created_by": "uuid",
+    "event_on": "date",
+    "id": "uuid",
+    "import_key": "text",
+    "kind": "text",
+    "membership": "text",
+    "notes": "text",
+    "officiant": "text",
+    "other_church": "text",
+    "people": "jsonb",
+    "place": "text",
+    "removed_at": "timestamp with time zone",
+    "removed_by": "uuid",
+    "source": "text",
+    "status": "text",
+    "updated_at": "timestamp with time zone",
+    "updated_by": "uuid"
+   },
+   "required": [
+    "business_id",
+    "event_on",
+    "kind"
+   ]
+  },
+  "church_role_defs": {
+   "columns": {
+    "business_id": "uuid",
+    "can_board_yes": "boolean",
+    "can_lead": "boolean",
+    "can_oversee": "boolean",
+    "can_see_all": "boolean",
+    "can_shepherd": "boolean",
+    "catalog_key": "text",
+    "covers": "text",
+    "created_at": "timestamp with time zone",
+    "created_by": "uuid",
+    "definition": "text",
+    "handles": "text[]",
+    "id": "uuid",
+    "job": "text",
+    "key": "text",
+    "made_for": "text[]",
+    "needs_class": "uuid",
+    "oversees_teams": "text[]",
+    "reports_to": "uuid",
+    "sees": "text[]",
+    "sort": "integer",
+    "source": "text",
+    "status": "text",
+    "template_key": "text",
+    "template_version": "smallint",
+    "term_months": "integer",
+    "title": "text",
+    "updated_at": "timestamp with time zone"
+   },
+   "required": [
+    "business_id",
+    "job",
+    "key",
+    "title"
+   ]
+  },
+  "church_role_settings": {
+   "columns": {
+    "board_over_cents": "integer",
+    "business_id": "uuid",
+    "church_type": "text",
+    "confirmed_at": "timestamp with time zone",
+    "created_at": "timestamp with time zone",
+    "guess_reason": "text",
+    "guessed_type": "text",
+    "map_at": "timestamp with time zone",
+    "map_by": "uuid",
+    "office_overseer_roles": "uuid[]",
+    "pastor_from_cents": "integer",
+    "pastor_yes_roles": "uuid[]",
+    "seeded_as": "text",
+    "seeded_at": "timestamp with time zone",
+    "set_at": "timestamp with time zone",
+    "set_by": "text",
+    "shape_key": "text",
+    "shape_version": "smallint",
+    "updated_at": "timestamp with time zone"
+   },
+   "required": [
+    "business_id"
+   ]
+  },
+  "church_shepherd_notices": {
+   "columns": {
+    "business_id": "uuid",
+    "key": "text",
+    "sent_at": "timestamp with time zone"
+   },
+   "required": [
+    "business_id",
+    "key"
+   ]
+  },
+  "church_shepherd_settings": {
+   "columns": {
+    "business_id": "uuid",
+    "cap": "smallint",
+    "lead_cap": "smallint",
+    "ministers": "boolean",
+    "rhythm_days": "smallint",
+    "updated_at": "timestamp with time zone",
+    "updated_by": "uuid"
+   },
+   "required": [
+    "business_id"
+   ]
+  },
+  "church_shepherd_signals": {
+   "columns": {
+    "business_id": "uuid",
+    "created_at": "timestamp with time zone",
+    "household_id": "uuid",
+    "id": "uuid",
+    "kind": "text",
+    "last_seen": "date",
+    "level": "smallint",
+    "resolved_at": "timestamp with time zone",
+    "started_on": "date",
+    "told_at": "timestamp with time zone"
+   },
+   "required": [
+    "business_id",
+    "household_id",
+    "started_on"
+   ]
+  },
+  "church_shepherd_touches": {
+   "columns": {
+    "business_id": "uuid",
+    "created_at": "timestamp with time zone",
+    "household_id": "uuid",
+    "id": "uuid",
+    "kind": "text",
+    "needs_pastor": "boolean",
+    "note": "text",
+    "shepherd_contact_id": "uuid"
+   },
+   "required": [
+    "business_id",
+    "household_id",
+    "kind"
+   ]
+  },
+  "church_shepherds": {
+   "columns": {
+    "assigned_at": "timestamp with time zone",
+    "assigned_by": "uuid",
+    "business_id": "uuid",
+    "household_id": "uuid",
+    "reason": "text",
+    "shepherd_contact_id": "uuid"
+   },
+   "required": [
+    "business_id",
+    "household_id",
+    "shepherd_contact_id"
+   ]
+  },
+  "contacts": {
+   "columns": {
+    "attribution": "jsonb",
+    "birthdate": "date",
+    "business_id": "uuid",
+    "created_at": "timestamp with time zone",
+    "email": "text",
+    "first_response_at": "timestamp with time zone",
+    "health_score": "integer",
+    "id": "uuid",
+    "last_interaction": "timestamp with time zone",
+    "lead_score": "integer",
+    "metadata": "jsonb",
+    "name": "text",
+    "phone": "text",
+    "role": "text",
+    "source": "text",
+    "source_detail": "text",
+    "status": "text",
+    "tags": "text[]",
+    "updated_at": "timestamp with time zone"
+   },
+   "required": [
+    "business_id",
+    "name"
+   ]
+  },
+  "custom_modules": {
+   "columns": {
+    "agent_config": "jsonb",
+    "archetype": "text",
+    "archetype_fallback_reason": "text",
+    "archetype_params": "jsonb",
+    "business_id": "uuid",
+    "created_at": "timestamp with time zone",
+    "description": "text",
+    "icon": "text",
+    "id": "uuid",
+    "is_active": "boolean",
+    "name": "text",
+    "presentation": "jsonb",
+    "public_display": "jsonb",
+    "restricted_min_role": "text",
+    "schema": "jsonb",
+    "slug": "text",
+    "sort_order": "integer",
+    "updated_at": "timestamp with time zone"
+   },
+   "required": [
+    "business_id",
+    "name",
+    "slug"
+   ]
+  },
+  "devotionals": {
+   "columns": {
+    "about": "text",
+    "audio": "jsonb",
+    "author": "text",
+    "business_id": "uuid",
+    "created_at": "timestamp with time zone",
+    "day_count": "integer",
+    "days": "jsonb",
+    "id": "uuid",
+    "kind": "text",
+    "practices": "jsonb",
+    "published_at": "timestamp with time zone",
+    "starts_on": "date",
+    "status": "text",
+    "title": "text",
+    "updated_at": "timestamp with time zone",
+    "voice": "text"
+   },
+   "required": [
+    "business_id",
+    "title"
+   ]
+  },
+  "events": {
+   "columns": {
+    "agent_handled_at": "timestamp with time zone",
+    "business_id": "uuid",
+    "contact_id": "uuid",
+    "created_at": "timestamp with time zone",
+    "data": "jsonb",
+    "event_type": "text",
+    "id": "uuid",
+    "provider_event_id": "text",
+    "source": "text"
+   },
+   "required": [
+    "business_id",
+    "event_type"
+   ]
+  },
+  "giving_counts": {
+   "columns": {
+    "business_id": "uuid",
+    "closed_at": "timestamp with time zone",
+    "closed_by": "uuid",
+    "collects_online": "boolean",
+    "counted_cash_cents": "bigint",
+    "counted_checks_cents": "bigint",
+    "counters": "text[]",
+    "created_at": "timestamp with time zone",
+    "id": "uuid",
+    "name": "text",
+    "note": "text",
+    "service_date": "date",
+    "service_id": "uuid",
+    "starts_at": "timestamp with time zone",
+    "status": "text",
+    "updated_at": "timestamp with time zone"
+   },
+   "required": [
+    "business_id",
+    "name",
+    "service_date",
+    "starts_at"
+   ]
+  },
+  "giving_services": {
+   "columns": {
+    "archived_at": "timestamp with time zone",
+    "business_id": "uuid",
+    "collects_online": "boolean",
+    "created_at": "timestamp with time zone",
+    "id": "uuid",
+    "kind": "text",
+    "name": "text",
+    "on_date": "date",
+    "start_time": "time without time zone",
+    "updated_at": "timestamp with time zone",
+    "weekday": "smallint"
+   },
+   "required": [
+    "business_id",
+    "kind",
+    "name",
+    "start_time"
+   ]
+  },
+  "group_meeting_attendance": {
+   "columns": {
+    "business_id": "uuid",
+    "contact_id": "uuid",
+    "how": "text",
+    "meeting_id": "uuid"
+   },
+   "required": [
+    "business_id",
+    "contact_id",
+    "meeting_id"
+   ]
+  },
+  "group_meetings": {
+   "columns": {
+    "business_id": "uuid",
+    "created_at": "timestamp with time zone",
+    "created_by": "uuid",
+    "group_id": "uuid",
+    "id": "uuid",
+    "met_on": "date",
+    "notes": "text",
+    "updated_at": "timestamp with time zone",
+    "visitors": "integer"
+   },
+   "required": [
+    "business_id",
+    "group_id",
+    "met_on"
+   ]
+  },
+  "group_members": {
+   "columns": {
+    "business_id": "uuid",
+    "can_host_live": "boolean",
+    "contact_id": "uuid",
+    "created_at": "timestamp with time zone",
+    "group_id": "uuid",
+    "joined_on": "date",
+    "role": "text"
+   },
+   "required": [
+    "business_id",
+    "contact_id",
+    "group_id"
+   ]
+  },
+  "groups": {
+   "columns": {
+    "active": "boolean",
+    "business_id": "uuid",
+    "capacity": "integer",
+    "chat_extras": "boolean",
+    "chat_on": "boolean",
+    "chat_writers": "text",
+    "created_at": "timestamp with time zone",
+    "description": "text",
+    "id": "uuid",
+    "join_mode": "text",
+    "kind": "text",
+    "location": "text",
+    "meet_address": "text",
+    "meet_day": "smallint",
+    "meet_every": "smallint",
+    "meet_from": "date",
+    "meet_note": "text",
+    "meet_nth": "smallint",
+    "meet_skips": "date[]",
+    "meet_time": "time without time zone",
+    "meets": "text",
+    "name": "text",
+    "name_display": "text",
+    "open_to_join": "boolean",
+    "study_on": "boolean",
+    "updated_at": "timestamp with time zone",
+    "youth": "boolean"
+   },
+   "required": [
+    "business_id",
+    "name"
+   ]
+  },
+  "household_adults": {
+   "columns": {
+    "business_id": "uuid",
+    "contact_id": "uuid",
+    "created_at": "timestamp with time zone",
+    "household_id": "uuid",
+    "relationship": "text"
+   },
+   "required": [
+    "business_id",
+    "contact_id",
+    "household_id"
+   ]
+  },
+  "household_pickups": {
+   "columns": {
+    "business_id": "uuid",
+    "created_at": "timestamp with time zone",
+    "household_id": "uuid",
+    "id": "uuid",
+    "name": "text",
+    "phone": "text",
+    "relationship": "text"
+   },
+   "required": [
+    "business_id",
+    "household_id",
+    "name"
+   ]
+  },
+  "households": {
+   "columns": {
+    "business_id": "uuid",
+    "created_at": "timestamp with time zone",
+    "id": "uuid",
+    "name": "text",
+    "updated_at": "timestamp with time zone"
+   },
+   "required": [
+    "business_id",
+    "name"
+   ]
+  },
+  "invoices": {
+   "columns": {
+    "archived_at": "timestamp with time zone",
+    "business_id": "uuid",
+    "category": "text",
+    "contact_id": "uuid",
+    "created_at": "timestamp with time zone",
+    "currency": "text",
+    "due_date": "date",
+    "gift_fund": "text",
+    "giving_count_id": "uuid",
+    "id": "uuid",
+    "invoice_number": "text",
+    "is_gift": "boolean",
+    "is_recurring": "boolean",
+    "items": "jsonb",
+    "module_entry_id": "uuid",
+    "notes": "text",
+    "paid_at": "timestamp with time zone",
+    "payment_method": "text",
+    "recurrence_auto_send": "boolean",
+    "recurrence_end_type": "text",
+    "recurrence_end_value": "text",
+    "recurrence_frequency": "text",
+    "recurrence_index": "integer",
+    "recurrence_parent_id": "uuid",
+    "recurrence_paused": "boolean",
+    "recurrence_start": "date",
+    "refund_amount_cents": "integer",
+    "refunded_at": "timestamp with time zone",
+    "sent_at": "timestamp with time zone",
+    "status": "text",
+    "stock_applied_at": "timestamp with time zone",
+    "stripe_payment_intent_id": "text",
+    "stripe_payment_state": "jsonb",
+    "stripe_payment_url": "text",
+    "subtotal": "numeric",
+    "summary": "text",
+    "tax_amount": "numeric",
+    "tax_rate": "numeric",
+    "total": "numeric",
+    "updated_at": "timestamp with time zone",
+    "viewed_at": "timestamp with time zone"
+   },
+   "required": [
+    "business_id",
+    "invoice_number"
+   ]
+  },
+  "ministry_care_notes": {
+   "columns": {
+    "author_id": "uuid",
+    "body": "text",
+    "business_id": "uuid",
+    "created_at": "timestamp with time zone",
+    "id": "uuid",
+    "request_id": "uuid"
+   },
+   "required": [
+    "body",
+    "business_id",
+    "request_id"
+   ]
+  },
+  "ministry_care_requests": {
+   "columns": {
+    "assigned_at": "timestamp with time zone",
+    "assigned_by": "uuid",
+    "assigned_to": "uuid",
+    "business_id": "uuid",
+    "contact_id": "uuid",
+    "created_at": "timestamp with time zone",
+    "form_id": "uuid",
+    "id": "uuid",
+    "leader_assigned_at": "timestamp with time zone",
+    "leader_contact_id": "uuid",
+    "leader_due_at": "timestamp with time zone",
+    "leader_late_level": "integer",
+    "leader_noted_at": "timestamp with time zone",
+    "leader_prayed_at": "timestamp with time zone",
+    "leader_role": "text",
+    "leader_told_at": "timestamp with time zone",
+    "legacy_source": "text",
+    "needs_pastor": "boolean",
+    "prayed_at": "timestamp with time zone",
+    "prayer_team": "boolean",
+    "status": "text",
+    "status_changed_at": "timestamp with time zone",
+    "submission": "jsonb",
+    "updated_at": "timestamp with time zone",
+    "wants_call": "boolean"
+   },
+   "required": [
+    "business_id"
+   ]
+  },
+  "module_entries": {
+   "columns": {
+    "appointment_at": "timestamp with time zone",
+    "business_id": "uuid",
+    "created_at": "timestamp with time zone",
+    "created_by": "text",
+    "data": "jsonb",
+    "duration_min_at_booking": "integer",
+    "id": "uuid",
+    "module_id": "uuid",
+    "paid_at": "timestamp with time zone",
+    "source": "text",
+    "source_form_id": "uuid",
+    "status": "text",
+    "stripe_charge_id": "text",
+    "stripe_payment_intent_id": "text",
+    "updated_at": "timestamp with time zone"
+   },
+   "required": [
+    "business_id",
+    "module_id"
+   ]
+  },
+  "sermon_series": {
+   "columns": {
+    "business_id": "uuid",
+    "created_at": "timestamp with time zone",
+    "description": "text",
+    "id": "uuid",
+    "title": "text",
+    "updated_at": "timestamp with time zone"
+   },
+   "required": [
+    "business_id",
+    "title"
+   ]
+  },
+  "sermons": {
+   "columns": {
+    "audio_url": "text",
+    "business_id": "uuid",
+    "created_at": "timestamp with time zone",
+    "id": "uuid",
+    "preached_on": "date",
+    "published": "boolean",
+    "questions": "text",
+    "scripture": "text",
+    "series_id": "uuid",
+    "speaker": "text",
+    "summary": "text",
+    "title": "text",
+    "updated_at": "timestamp with time zone",
+    "video_url": "text"
+   },
+   "required": [
+    "business_id",
+    "preached_on",
+    "title"
+   ]
+  },
+  "serve_assignments": {
+   "columns": {
+    "answered_at": "timestamp with time zone",
+    "asked_at": "timestamp with time zone",
+    "asked_by": "text",
+    "business_id": "uuid",
+    "contact_id": "uuid",
+    "day_sent_at": "timestamp with time zone",
+    "here_at": "timestamp with time zone",
+    "id": "uuid",
+    "leader_told_at": "timestamp with time zone",
+    "morning_sent_at": "timestamp with time zone",
+    "note": "text",
+    "notified_at": "timestamp with time zone",
+    "nudged_at": "timestamp with time zone",
+    "position_id": "uuid",
+    "service_id": "uuid",
+    "slot": "smallint",
+    "status": "text",
+    "swap_asked_at": "timestamp with time zone",
+    "swap_to": "uuid",
+    "swap_told_at": "timestamp with time zone",
+    "week_sent_at": "timestamp with time zone"
+   },
+   "required": [
+    "business_id",
+    "position_id",
+    "service_id"
+   ]
+  },
+  "serve_positions": {
+   "columns": {
+    "active": "boolean",
+    "business_id": "uuid",
+    "created_at": "timestamp with time zone",
+    "group_id": "uuid",
+    "id": "uuid",
+    "name": "text",
+    "needed": "smallint",
+    "note": "text",
+    "sort": "smallint"
+   },
+   "required": [
+    "business_id",
+    "group_id",
+    "name"
+   ]
+  },
+  "serve_teams": {
+   "columns": {
+    "business_id": "uuid",
+    "call_time": "time without time zone",
+    "created_at": "timestamp with time zone",
+    "families": "boolean",
+    "group_id": "uuid",
+    "max_month": "smallint",
+    "owner": "text",
+    "sort": "smallint",
+    "swap_needs_ok": "boolean",
+    "updated_at": "timestamp with time zone"
+   },
+   "required": [
+    "business_id",
+    "group_id"
+   ]
+  },
+  "serve_trained": {
+   "columns": {
+    "business_id": "uuid",
+    "contact_id": "uuid",
+    "created_at": "timestamp with time zone",
+    "level": "text",
+    "position_id": "uuid"
+   },
+   "required": [
+    "business_id",
+    "contact_id",
+    "position_id"
+   ]
+  },
+  "tasks": {
+   "columns": {
+    "assigned_contact_id": "uuid",
+    "assigned_to": "uuid",
+    "business_id": "uuid",
+    "check_key": "text",
+    "checked_at": "timestamp with time zone",
+    "completed_at": "timestamp with time zone",
+    "contact_id": "uuid",
+    "created_at": "timestamp with time zone",
+    "description": "text",
+    "done_by_contact_id": "uuid",
+    "done_when": "text",
+    "due_date": "date",
+    "duty": "text",
+    "handed_by": "uuid",
+    "handed_by_contact_id": "uuid",
+    "id": "uuid",
+    "late_told_at": "timestamp with time zone",
+    "leader_told_at": "timestamp with time zone",
+    "priority": "text",
+    "project_id": "uuid",
+    "raised_at": "timestamp with time zone",
+    "raised_by": "uuid",
+    "raised_by_contact_id": "uuid",
+    "raised_to": "uuid",
+    "raised_to_contact_id": "uuid",
+    "raised_told_at": "timestamp with time zone",
+    "seat_late_told_at": "timestamp with time zone",
+    "seat_told_at": "timestamp with time zone",
+    "startup_key": "text",
+    "status": "text",
+    "stuck_at": "timestamp with time zone",
+    "stuck_note": "text",
+    "title": "text",
+    "updated_at": "timestamp with time zone"
+   },
+   "required": [
+    "business_id",
+    "title"
+   ]
+  },
+  "worship_services": {
+   "columns": {
+    "archived_at": "timestamp with time zone",
+    "business_id": "uuid",
+    "created_at": "timestamp with time zone",
+    "id": "uuid",
+    "is_template": "boolean",
+    "items": "jsonb",
+    "notes": "text",
+    "starts_at": "timestamp with time zone",
+    "title": "text",
+    "updated_at": "timestamp with time zone"
+   },
+   "required": [
+    "business_id"
+   ]
+  },
+  "worship_songs": {
+   "columns": {
+    "archived_at": "timestamp with time zone",
+    "arrangements": "jsonb",
+    "authors": "text",
+    "business_id": "uuid",
+    "ccli_number": "text",
+    "copyright": "text",
+    "created_at": "timestamp with time zone",
+    "has_words": "boolean",
+    "id": "uuid",
+    "last_sung": "date",
+    "lines_per_slide": "integer",
+    "needs_title": "boolean",
+    "public_domain": "boolean",
+    "sections": "jsonb",
+    "song_key": "text",
+    "source": "text",
+    "source_ref": "text",
+    "tempo": "integer",
+    "times_sung": "jsonb",
+    "title": "text",
+    "updated_at": "timestamp with time zone"
+   },
+   "required": [
+    "business_id",
+    "title"
+   ]
+  }
+ }
+}

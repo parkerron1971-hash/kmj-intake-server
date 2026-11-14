@@ -298,7 +298,8 @@ def _churches() -> List[Dict[str, Any]]:
                 f"/businesses?{where}&select=id,name,settings,owner_id,{csb.BILLING_FIELDS}&limit=5000") or []:
             if not csb.lapsed(b, "planning"):
                 out[str(b["id"])] = b
-    return list(out.values())
+    import sample_church
+    return list(sample_church.drop_sample_map(out).values())   # BE-3
 
 
 def church_tick(biz: Dict[str, Any], now: Optional[datetime] = None) -> Dict[str, int]:

@@ -113,6 +113,10 @@ async def sweep_tick(now: Optional[datetime] = None) -> Dict[str, int]:
             rows = await asyncio.to_thread(sb_clients.sb_get_as_service,
                                            f"/businesses?id=eq.{_q(biz)}&select=id,name,type,settings,owner_id&limit=1")
             businesses[biz] = rows[0] if isinstance(rows, list) and rows else None
+            # A sample church's class nights are made up (sample_church.py, BE-3).
+            import sample_church
+            if businesses[biz] and await sample_church.is_sample_async(biz):
+                businesses[biz] = None
         business = businesses[biz]
         if not business:
             continue  # tried again next tick

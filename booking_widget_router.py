@@ -1608,6 +1608,10 @@ async def booking_session_sync_tick() -> None:
         mods = sb_clients.sb_get_as_service(
             "/custom_modules?archetype=eq.booking_calendar&is_active=eq.true"
             "&select=id,business_id&limit=500") or []
+        # A sample church's bookings make no sessions, which the reminder
+        # sweep would then text (sample_church.py, BE-3).
+        import sample_church
+        mods = sample_church.drop_samples(mods)
         for m in mods:
             mid, biz_id = m.get("id"), m.get("business_id")
             if not mid or not biz_id:

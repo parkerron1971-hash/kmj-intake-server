@@ -311,6 +311,8 @@ def tick(limit: int = MAX_PER_TICK) -> int:
         return 0
     rows = sb_clients.sb_get_as_service(
         "/businesses?select=id,name,type,settings&limit=500") or []
+    import sample_church
+    rows = sample_church.drop_samples(rows, "id")   # nothing learned from a sample (BE-3)
     due = [b for b in rows if _due(b)]
     written = 0
     for biz in due[:limit]:

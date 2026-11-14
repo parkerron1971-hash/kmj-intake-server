@@ -130,6 +130,15 @@ def contributes(business: Dict[str, Any]) -> bool:
     defensively — a malformed settings blob means the default for the
     business's type, and an explicit value always wins."""
     business = business or {}
+    # A sample church never contributes (sample_church.py, BE-3): every
+    # sample is the same made-up church, so N of them would pass the
+    # k-anonymity floor together and teach Chief fake norms.
+    try:
+        import sample_church
+        if business.get("id") and sample_church.row_is_sample(business):
+            return False
+    except Exception:  # noqa: BLE001 - the switch below still decides
+        pass
     default = default_contributes(business.get("type"))
     settings = business.get("settings") or {}
     if not isinstance(settings, dict):
@@ -244,6 +253,8 @@ def _businesses_by_vertical() -> Dict[str, List[str]]:
     alias = reg.alias_to_canonical()
 
     out: Dict[str, List[str]] = defaultdict(list)
+    import sample_church
+    sample_church.prime(b.get("id") for b in rows)   # one read; contributes() asks it
     for b in rows:
         if not contributes(b):
             continue

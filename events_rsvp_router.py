@@ -402,6 +402,10 @@ async def public_event_rsvp(
         raise HTTPException(404, "not found")
     biz = biz_rows[0]
     business_id = str(biz["id"])
+    # A sample church takes no sign-ups: it is made up (sample_church.py, BE-3).
+    import sample_church
+    if await sample_church.is_sample_async(business_id):
+        raise HTTPException(404, "not found")
 
     # ── The gate — same rubric as the page ──
     modules = roster_modules_for(business_id)

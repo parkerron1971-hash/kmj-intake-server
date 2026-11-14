@@ -282,6 +282,10 @@ def work_once():
             except Exception:log.warning('Video heartbeat could not renew')
     thread=threading.Thread(target=heartbeat,daemon=True);thread.start()
     try:
+        # A sample church makes no videos (sample_church.py, BE-3).
+        import sample_church
+        if sample_church.skip_id(job.get('business_id')):
+            raise RuntimeError('This is a sample church, so nothing here is made.')
         with tempfile.TemporaryDirectory(prefix='solutionist-video-') as tmp:
             folder=Path(tmp);(folder/'assets').mkdir()
             if job['kind']=='plan':plan(job,folder)

@@ -610,6 +610,10 @@ def screen_from_token(token: str) -> Dict[str, Any]:
         raise HTTPException(503, "The screen couldn't be reached. It tries again by itself.")
     if not rows:
         raise HTTPException(404, "This screen's link was changed or removed")
+    # A sample church's screens show nothing to anyone (sample_church.py, BE-3).
+    import sample_church
+    if sample_church.skip_id(rows[0].get("business_id")):
+        raise HTTPException(404, "This screen's link was changed or removed")
     return rows[0]
 
 

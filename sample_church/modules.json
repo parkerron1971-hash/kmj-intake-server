@@ -1,0 +1,143 @@
+{
+ "_note": "The custom_modules a new church is given at signup (business_type_module_blueprint, ministry, tier core, maturity launching; giving is restricted and never auto-made). Copied 2026-11-15 so the sample church has the same rooms; the seed writes them with the sample as owner.",
+ "modules": [
+  {
+   "module_slug": "members",
+   "module_name": "Members",
+   "icon": "🕊️",
+   "description": "Pastoral record — spiritual journey + family, not a business contact",
+   "schema": {
+    "views": [
+     "list",
+     "board"
+    ],
+    "fields": [
+     {
+      "name": "name",
+      "type": "text",
+      "label": "Name",
+      "required": true
+     },
+     {
+      "name": "contact_id",
+      "type": "contact_link",
+      "label": "Contact"
+     },
+     {
+      "name": "family",
+      "type": "textarea",
+      "label": "Family / household linkage"
+     },
+     {
+      "name": "previous_church_home",
+      "type": "text",
+      "label": "Previous church home"
+     },
+     {
+      "name": "baptism_status",
+      "type": "select",
+      "label": "Baptism",
+      "options": [
+       "yes",
+       "no",
+       "scheduled",
+       "unknown"
+      ]
+     },
+     {
+      "name": "salvation_status",
+      "type": "select",
+      "label": "Salvation",
+      "options": [
+       "professed",
+       "seeking",
+       "unknown"
+      ]
+     },
+     {
+      "name": "spiritual_journey",
+      "type": "textarea",
+      "label": "Spiritual journey"
+     },
+     {
+      "name": "status",
+      "type": "select",
+      "label": "Status",
+      "options": [
+       "visitor",
+       "regular",
+       "member",
+       "inactive"
+      ]
+     }
+    ],
+    "board_column": "status",
+    "default_sort": "created_at",
+    "default_view": "list"
+   },
+   "agent_config": {
+    "enabled": true,
+    "triggers": []
+   },
+   "public_display": {},
+   "sort_order": 1,
+   "archetype": null,
+   "archetype_params": null
+  },
+  {
+   "module_slug": "services-events",
+   "module_name": "Services & Events",
+   "icon": "⛪",
+   "description": "Services, events, scheduling",
+   "schema": {
+    "views": [
+     "list"
+    ],
+    "fields": [
+     {
+      "name": "title",
+      "type": "text",
+      "label": "Title",
+      "required": true
+     },
+     {
+      "name": "type",
+      "type": "select",
+      "label": "Type",
+      "options": [
+       "service",
+       "event",
+       "class",
+       "special"
+      ]
+     },
+     {
+      "name": "date",
+      "type": "date",
+      "label": "Date"
+     },
+     {
+      "name": "location",
+      "type": "text",
+      "label": "Location"
+     },
+     {
+      "name": "notes",
+      "type": "textarea",
+      "label": "Notes"
+     }
+    ],
+    "default_sort": "date",
+    "default_view": "list"
+   },
+   "agent_config": {
+    "enabled": true,
+    "triggers": []
+   },
+   "public_display": {},
+   "sort_order": 3,
+   "archetype": "event_roster",
+   "archetype_params": null
+  }
+ ]
+}

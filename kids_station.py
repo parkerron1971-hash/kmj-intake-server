@@ -249,6 +249,11 @@ def station_from_token(x_station_token: Optional[str]) -> Dict[str, Any]:
     if not rows:
         raise HTTPException(401, "This station was removed or paired again. Ask a manager for a new pairing code.")
     st = rows[0]
+    # A sample church has no working station: its children and families are
+    # made up, and a pickup code would be a text (sample_church.py, BE-3).
+    import sample_church
+    if sample_church.skip_id(st.get("business_id")):
+        raise HTTPException(401, "This station isn't paired. Ask a manager for a pairing code.")
     seen = str(st.get("last_seen_at") or "")
     if not seen or seen < (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat():
         sb_clients.sb_patch_as_service(f"/checkin_stations?id=eq.{st['id']}", {"last_seen_at": _now()})

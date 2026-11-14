@@ -392,7 +392,7 @@ def test_ensure_makes_one_quiet_inactive_row(db):
     assert r["type"] == "church" and r["owner_id"] == OWNER
     assert r["is_active"] is False and r["is_sample"] is True and r["sample_of"] == HOME
     s = r["settings"]
-    assert s["sample_church"]["version"] == 0 and s["sample_church"]["status"] == "pending"
+    assert s["sample_church"]["version"] == sc.SEED_VERSION and s["sample_church"]["status"] == "pending"
     # Every send the system already knows how to switch off, off.
     assert s["automations_paused"] is True
     assert s["autonomy"]["client_facing_autonomy"] == "disabled"
@@ -457,8 +457,10 @@ def test_ensure_hands_a_pending_sample_to_the_seed(db, monkeypatch):
     monkeypatch.setattr(sc, "seed_hook", lambda sample, home: seen.append((sample["id"], home["id"])))
     made = sc.ensure(_home())
     assert seen == [(made["id"], HOME)]
-    # A ready sample is not seeded again.
-    made["settings"]["sample_church"]["status"] = "ready"
+    # A ready sample, seeded by this version a moment ago, is not seeded
+    # again (BE-2: a stale one is; test_sample_church_seed pins when).
+    made["settings"]["sample_church"].update(
+        status="ready", version=sc.SEED_VERSION, seeded_at=datetime.now(timezone.utc).isoformat())
     sc.ensure(_home())
     assert len(seen) == 1
 
@@ -614,7 +616,7 @@ def test_a_home_gets_its_sample_block_and_its_sample_made(access, db):
     assert block["home_business_id"] == HOME
     assert block["ready"] is False                         # BE-2 seeds it
     assert block["questions_left"] == 10 and block["questions_of"] == 10
-    assert block["read_posts"] == []
+    assert block["read_posts"] == list(sc.READ_POSTS)      # BE-3 named them
     assert block["promise"] == church_site.PROMISE
     assert block["free_moves_left"] == 3                   # 5 moves, 2 taken
     assert access["starts"] == []                          # no trial started

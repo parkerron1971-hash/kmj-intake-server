@@ -48,6 +48,11 @@ def _secret() -> str:
 
 
 def mint(business_id: str, user_id: str) -> str:
+    # A sample church connects nothing (sample_church.py, BE-3): no Google,
+    # Meta, social or QuickBooks account is ever linked to a made-up church.
+    # Every connect start mints here first, so one refusal covers them all.
+    import sample_church
+    sample_church.refuse(business_id, "connect")
     payload = {"b": str(business_id), "u": str(user_id), "ts": int(time.time())}
     raw = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
     body = base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")

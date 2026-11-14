@@ -153,8 +153,9 @@ def sweep_tick(today: Optional[date] = None) -> int:
         f"&order=preached_on.desc,created_at.desc&limit=1000")
     if not isinstance(sermons, list):
         return 0
+    import sample_church
     newest: Dict[str, Dict[str, Any]] = {}
-    for s in sermons:
+    for s in sample_church.drop_samples(sermons):   # no AI drafts for a sample (BE-3)
         newest.setdefault(str(s["business_id"]), s)
     made = 0
     for biz_id, s in newest.items():

@@ -643,6 +643,8 @@ def _plan(on: date, *, morning: bool = False) -> List[Dict[str, Any]]:
     by_biz: Dict[str, List[Dict[str, Any]]] = {}
     for r in rows:
         by_biz.setdefault(r["business_id"], []).append(r)
+    import sample_church
+    by_biz = sample_church.drop_sample_map(by_biz)   # a sample's people get no texts (BE-3)
     out = []
     for biz_id, people in by_biz.items():
         if not enabled_for(biz_id):

@@ -269,6 +269,8 @@ def sweep() -> Dict[str, Any]:
             stale += 1
             continue
         by_church.setdefault(str(r["business_id"]), []).append(r)
+    import sample_church
+    by_church = sample_church.drop_sample_map(by_church)   # a sample's mail alerts nobody (BE-3)
     sent = held = 0
     for church_id, rs in by_church.items():
         try:

@@ -152,6 +152,13 @@ async def proposals_tick(now: Optional[datetime] = None) -> Dict[str, Any]:
     return {"expired": expired, "reminded": reminded}
 
 
+def _no_samples() -> str:
+    """A sample church's drafts are never expired, reminded or told about
+    (sample_church.py, BE-3): left out of the query itself."""
+    import sample_church
+    return sample_church.exclude()
+
+
 def _businesses(ids: List[str]) -> Dict[str, Dict[str, Any]]:
     if not ids:
         return {}
@@ -166,9 +173,11 @@ def expire_due(now: Optional[datetime] = None) -> List[str]:
     rows = sb_clients.sb_get_as_service(
         f"/agent_queue?channel=eq.action&status=eq.draft&expires_at=lte.{_z(now)}"
         f"&select=id,business_id,subject,contact_id,expires_at&order=expires_at.asc"
-        f"&limit={MAX_PER_SWEEP}") or []
+        f"&limit={MAX_PER_SWEEP}" + _no_samples()) or []
     if not isinstance(rows, list) or not rows:
         return []
+    import sample_church
+    rows = sample_church.drop_samples(rows)
     owners = _businesses([str(r.get("business_id")) for r in rows])
     done: List[str] = []
     for r in rows:
@@ -233,9 +242,11 @@ def remind_due(now: Optional[datetime] = None) -> List[str]:
     rows = sb_clients.sb_get_as_service(
         f"/agent_queue?channel=eq.action&status=eq.draft&reminded_at=is.null"
         f"&created_at=lte.{since}&or=(expires_at.is.null,expires_at.gt.{_z(now)})"
-        f"&select=id,business_id,subject&order=created_at.asc&limit={MAX_PER_SWEEP * 2}") or []
+        f"&select=id,business_id,subject&order=created_at.asc&limit={MAX_PER_SWEEP * 2}" + _no_samples()) or []
     if not isinstance(rows, list) or not rows:
         return []
+    import sample_church
+    rows = sample_church.drop_samples(rows)
     by_biz: Dict[str, List[Dict[str, Any]]] = {}
     for r in rows:
         bid = str(r.get("business_id") or "")

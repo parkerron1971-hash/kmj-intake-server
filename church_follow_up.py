@@ -1268,6 +1268,13 @@ async def _office_alert(biz_id: str, title: str, body: str, key: str, person_id:
         return False
 
 
+def _no_samples() -> str:
+    """Keeps sample churches' rows out of a sweep's query (sample_church.py,
+    BE-3): skipped, they'd stay due and crowd real churches out of a limit."""
+    import sample_church
+    return sample_church.exclude()
+
+
 async def sweep(now: Optional[datetime] = None) -> Dict[str, int]:
     """Every few minutes, across churches:
       · the office's First time check-ins become welcome follow-ups
@@ -1293,7 +1300,12 @@ async def sweep(now: Optional[datetime] = None) -> Dict[str, int]:
         print(f"[church_follow_up] first-visit sweep skipped ({type(e).__name__})", flush=True)
     rows = await asyncio.to_thread(
         _rows, "/church_follow_ups?status=eq.open"
-               f"&or=(leader_told_at.is.null,due_at.lt.{_q(_iso(now))},step.eq.0)&select=*&limit=500")
+               f"&or=(leader_told_at.is.null,due_at.lt.{_q(_iso(now))},step.eq.0)&select=*&limit=500"
+               + _no_samples())
+    # A sample church's follow-ups are made up: nobody is told, nudged or
+    # moved on (sample_church.py, BE-3). Every row set below drops them too.
+    import sample_church
+    rows = await asyncio.to_thread(sample_church.drop_samples, rows or [])
     by_biz: Dict[str, List[Dict[str, Any]]] = {}
     for r in rows or []:
         by_biz.setdefault(str(r["business_id"]), []).append(r)
@@ -1334,8 +1346,9 @@ async def _sweep_handed() -> int:
     prayers = await asyncio.to_thread(
         _rows, "/ministry_care_requests?leader_contact_id=not.is.null&leader_prayed_at=is.null"
                "&select=id,business_id,leader_contact_id,leader_role&limit=2000")
+    import sample_church
     by_biz: Dict[str, List[Dict[str, Any]]] = {}
-    for r in (fups or []) + (prayers or []):
+    for r in sample_church.drop_samples((fups or []) + (prayers or [])):
         by_biz.setdefault(str(r["business_id"]), []).append(r)
     n = 0
     for biz, items in by_biz.items():
@@ -1367,7 +1380,9 @@ async def _sweep_terms(now: datetime) -> int:
     import church_roles as cr
     rows = await asyncio.to_thread(
         _rows, f"/church_leader_roles?status=eq.active&term_ends_at=lt.{_q(_iso(now))}&term_told_at=is.null"
-               "&select=id,business_id,contact_id,role,scope&limit=200") or []
+               "&select=id,business_id,contact_id,role,scope&limit=200" + _no_samples()) or []
+    import sample_church
+    rows = await asyncio.to_thread(sample_church.drop_samples, rows)
     n = 0
     for r in rows:
         biz_id = str(r["business_id"])

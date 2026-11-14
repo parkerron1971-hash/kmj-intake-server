@@ -1,0 +1,73 @@
+{
+ "_note": "The sample church's website (sample_church_seed.site_html): the site kit's 'bulletin' layout, filled with these words and facts. Grace Street Fellowship is made up: every phone is 555-01NN, every address is @example.org, the street and town are invented (ZIP 00000). Photos are licensed stock from Unsplash (Unsplash License, free to use; credit is asked for and given in the footer). Each one is loaded from static/sample_church/<name>.jpg and served at /assets/sample-church/<name>.jpg; a photo whose file is not there is simply left out, so the site renders whole with none. The files are added separately (2026-11-15: the parent session gets Kevin's OK first). Never download them in code.",
+ "layout": "bulletin",
+ "facts": {
+  "contact": {
+   "phone": "(312) 555-0100",
+   "email": "hello@example.org",
+   "address": "1400 Grace Street, Riverton 00000",
+   "hours": "Sunday worship 9:00 AM and 11:00 AM; Wednesday Bible study 7:00 PM; Friday youth night 7:00 PM; Saturday food pantry 9:00 AM"
+  },
+  "events": [
+   {"title": "Food pantry", "date": "Saturdays", "time": "9:00 AM", "place": "Fellowship hall", "note": "Groceries for anyone who needs them. Volunteers from 8:30."},
+   {"title": "Bible study", "date": "Wednesdays", "time": "7:00 PM", "place": "Fellowship hall", "note": "Teaching and discussion, coffee from 6:45."},
+   {"title": "Youth night", "date": "Fridays", "time": "7:00 PM", "place": "Youth room", "note": "Grades 6 to 12. Games, worship, small groups."},
+   {"title": "Baptism Sunday", "date": "Coming soon", "time": "12:30 PM", "place": "Sanctuary", "note": "After the 11:00 service. Ask any pastor."}
+  ],
+  "ministries": [
+   {"name": "Kids", "when": "Sundays 9:00 and 11:00", "who": "Nursery to fifth grade", "description": "Safe check-in, trained volunteers, and a lesson your kids will tell you about."},
+   {"name": "Youth", "when": "Fridays 7:00 PM", "who": "Grades 6 to 12", "description": "A place to belong, ask hard questions and bring friends."},
+   {"name": "Groups", "when": "All week", "who": "Everyone", "description": "Young adults, parents of little ones, men, women, seniors, and a group en español."},
+   {"name": "Food pantry", "when": "Saturdays 9:00 AM", "who": "Our neighbors", "description": "Groceries and a warm welcome, no questions asked."},
+   {"name": "Prayer and care", "when": "Any time", "who": "Anyone who asks", "description": "Send a prayer request or ask for a call. A pastor or the prayer team will follow up."}
+  ],
+  "team": [
+   {"name": "Pastor Jordan Daniels", "role": "Lead Pastor"}
+  ]
+ },
+ "words": {
+  "lang": "en",
+  "action_label": "Plan a visit",
+  "row_label": "Join us",
+  "tokens": {"bg": "#0f1115", "surface": "#171a21", "deep": "#0a0b0e", "text": "#f3efe6", "muted": "#b9b2a5", "accent": "#d9a84e", "on_accent": "#14110b", "second": "#8fb3c9", "band": "#d9a84e", "line": "#2a2e37", "display_font": "Fraunces", "display_weight": 600, "display_upper": false, "body_font": "Inter", "label_font": "Inter", "glow": true, "dark": true, "script_font": "", "radius": 14, "pill": true},
+  "wordmark": {"main": "Grace Street", "sub": "Fellowship"},
+  "nav": [
+   {"label": "Times", "sub": "", "target": "times"},
+   {"label": "This week", "sub": "", "target": "events"},
+   {"label": "Ministries", "sub": "", "target": "ministries"},
+   {"label": "Visit", "sub": "", "target": "visit"}
+  ],
+  "gatherings": [
+   {"day": 6, "time": "09:00", "label": "Sunday worship"},
+   {"day": 6, "time": "11:00", "label": "Sunday worship"},
+   {"day": 2, "time": "19:00", "label": "Bible study"},
+   {"day": 4, "time": "19:00", "label": "Youth night"}
+  ],
+  "hero": {"eyebrow": "A church for the whole neighborhood", "lines": ["Come as you are.", "Stay for the family."], "accent_word": "family", "subhead": "Sundays at 9:00 and 11:00, in the room or online. Kids and youth every week.", "board_title": "This week", "secondary": "Plan a visit", "secondary_target": "visit"},
+  "times": {"eyebrow": "Every week", "headline": "When we gather", "strip_label": "", "note": "The 11:00 is streamed for anyone who can't be in the room."},
+  "events": {"eyebrow": "Coming up", "headline": "Around Grace Street"},
+  "ministries": {"eyebrow": "Find your people", "headline": "Something for every age", "intro": "Groups, kids, youth and care: there's a seat for you."},
+  "leaders": {"head": "Pastor Jordan Daniels", "head_script": "", "role_label": "Lead Pastor", "body": "Jordan has served Grace Street for eleven years. Ask him about the food pantry, his family's terrible board games, or anything on your mind.", "photo": "", "link_label": "Plan a visit", "link_target": "visit"},
+  "album": {"eyebrow": "Life together", "headline": "A glimpse of Sundays and the week", "captions": {}},
+  "proof": {"eyebrow": "", "headline": ""},
+  "ceremony": {"line": "There's a seat saved for you.", "accent_word": "seat", "sub": "First time? We'll meet you at the door and show you around."},
+  "visit": {"eyebrow": "Your first Sunday", "headline": "Plan a visit", "intro": "Park on Grace Street or in the lot behind the building. Greeters at the main doors will show you the kids rooms and save you a seat.", "hours_label": "", "extra_label": "Kids", "extra": "Check in at the kids desk by the main doors.", "steps": ["Come at 8:50 or 10:50 and park out back.", "Check the kids in at the kids desk.", "Grab a coffee and find a seat."], "form_eyebrow": "", "form_headline": "", "form_intro": "", "form_button": ""},
+  "footer": {"line": "A made-up sample church in the Solutionist System. Nothing here is real."},
+  "dock": {"cta": "Plan a visit"},
+  "custom": []
+ },
+ "photos": [
+  {"name": "hero", "slot": "hero", "alt": "A congregation standing together during Sunday worship", "photographer": "Stephanie Hernandez", "profile": "https://unsplash.com/@whitecanvascreative", "unsplash_id": "h8hAGzjyFlc", "page": "https://unsplash.com/photos/h8hAGzjyFlc", "caption": "Sunday morning"},
+  {"name": "welcome", "slot": "welcome", "alt": "Two greeters with name badges welcoming people at the main entrance", "photographer": "Kristina Paparo", "profile": "https://unsplash.com/@krispaparo", "unsplash_id": "IIY5YxY8WKY", "page": "https://unsplash.com/photos/IIY5YxY8WKY", "caption": "Greeters at the door"},
+  {"name": "kids", "slot": "kids", "alt": "A teacher helping young children draw at a small table", "photographer": "Rewired Digital", "profile": "https://unsplash.com/@rewired41", "unsplash_id": "kPkRpy6pIIg", "page": "https://unsplash.com/photos/kPkRpy6pIIg", "caption": "Kids on Sunday"},
+  {"name": "small-group", "slot": "small_group", "alt": "Five adults talking around a patio table at a small group", "photographer": "Small Group Network", "profile": "https://unsplash.com/@smallgroupnetwork", "unsplash_id": "hRScHZGXkTA", "page": "https://unsplash.com/photos/hRScHZGXkTA", "caption": "A small group"},
+  {"name": "prayer", "slot": "prayer", "alt": "Women with heads bowed, praying together for a friend", "photographer": "Rosie Sun", "profile": "https://unsplash.com/@rosiesun", "unsplash_id": "rTwhmFSoXC8", "page": "https://unsplash.com/photos/rTwhmFSoXC8", "caption": "Praying together"},
+  {"name": "pantry", "slot": "serving", "alt": "Volunteers sorting canned food and fruit at a long table", "photographer": "Joel Muniz", "profile": "https://unsplash.com/@jmuniz", "unsplash_id": "3k3l2brxmwQ", "page": "https://unsplash.com/photos/3k3l2brxmwQ", "caption": "Saturday food pantry"},
+  {"name": "youth", "slot": "youth", "alt": "Four young people laughing together outdoors", "photographer": "Crosby Hinze", "profile": "https://unsplash.com/@crosbyhinze", "unsplash_id": "EU-Oc9VQHRg", "page": "https://unsplash.com/photos/EU-Oc9VQHRg", "caption": "Youth and young adults"},
+  {"name": "worship-team", "slot": "worship_team", "alt": "A small worship band with two singers, a cajon and a guitar", "photographer": "AMONWAT DUMKRUT", "profile": "https://unsplash.com/@amonwatdumkrut", "unsplash_id": "F1Pm7V8WyZA", "page": "https://unsplash.com/photos/F1Pm7V8WyZA", "caption": "The worship team"},
+  {"name": "fellowship", "slot": "fellowship", "alt": "Four adults laughing over coffee at a wooden table", "photographer": "Vitaly Gariev", "profile": "https://unsplash.com/@silverkblack", "unsplash_id": "abO-HcdXyiA", "page": "https://unsplash.com/photos/abO-HcdXyiA", "caption": "Coffee after church"},
+  {"name": "family", "slot": "family", "alt": "Four generations of a family together on a porch", "photographer": "Rajiv Perera", "profile": "https://unsplash.com/@rajivperera", "unsplash_id": "NjtUbWjri_Y", "page": "https://unsplash.com/photos/NjtUbWjri_Y", "caption": "Families of every size"},
+  {"name": "seniors", "slot": "seniors", "alt": "Two older women standing arm in arm, smiling in the sun", "photographer": "Leiada Krözjhen", "profile": "https://unsplash.com/@leiadakrozjhen", "unsplash_id": "LTgaxUAGNUk", "page": "https://unsplash.com/photos/LTgaxUAGNUk", "caption": "Golden Years"},
+  {"name": "outreach", "slot": "outreach", "alt": "Volunteers in blue T-shirts picking up litter in a park", "photographer": "Vitaly Gariev", "profile": "https://unsplash.com/@silverkblack", "unsplash_id": "U20gjfPjtuI", "page": "https://unsplash.com/photos/U20gjfPjtuI", "caption": "Out in the neighborhood"}
+ ]
+}

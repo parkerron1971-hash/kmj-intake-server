@@ -441,7 +441,8 @@ def _announce_retirements(now: datetime) -> List[str]:
     if not isinstance(rows, list):
         return []
     told: List[str] = []
-    for bid in sorted({str(r.get("business_id")) for r in rows if r.get("business_id")}):
+    import sample_church   # a sample's moves teach nothing and tell nobody (BE-3)
+    for bid in sample_church.drop_samples(sorted({str(r.get("business_id")) for r in rows if r.get("business_id")})):
         try:
             retired = retired_verbs(recent_moves(bid, RETIRE_WINDOW_DAYS), now)
         except Exception:

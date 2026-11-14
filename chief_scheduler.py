@@ -110,6 +110,16 @@ async def _execute_row(row: Dict[str, Any]) -> None:
             {"status": "failed", "last_error": "business not found",
              "last_run_at": _now().isoformat()})
         return
+    # A sample church's scheduled moves never run: nothing in it is sent or
+    # done for real, and its owner is not told about it (sample_church.py,
+    # BE-3). Closed, so it isn't picked up again every minute.
+    import sample_church
+    if await sample_church.is_sample_async(biz.get("id")):
+        await asyncio.to_thread(sb_clients.sb_patch_as_service,
+            f"/chief_scheduled_actions?id=eq.{rid}",
+            {"status": "failed", "last_error": "sample church",
+             "last_run_at": _now().isoformat()})
+        return
 
     recurrence_raw = str(row.get("recurrence") or "").strip().lower()
 

@@ -668,6 +668,8 @@ async def cover_tick():
     if not clip_finder.enabled():
         return
     runs = await asyncio.to_thread(runs_wanting_covers)
+    import sample_church
+    runs = await asyncio.to_thread(sample_church.drop_samples, runs or [])   # BE-3
     if not runs:
         return
     async with httpx.AsyncClient(timeout=60) as client:

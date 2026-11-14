@@ -281,6 +281,9 @@ async def monitor_tick() -> Dict[str, Any]:
         logger.warning(f"[domain-monitor] listing failed: {e}")
         summary["errors"] += 1
         return summary
+    import asyncio
+    import sample_church
+    rows = await asyncio.to_thread(sample_church.drop_samples, rows, "id")   # BE-3
     for biz in rows:
         try:
             res = await check_one(biz)

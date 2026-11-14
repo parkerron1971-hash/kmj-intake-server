@@ -66,7 +66,7 @@ def test_the_church_and_its_site_are_one_read(monkeypatch):
     monkeypatch.setattr(sb_clients, "sb_get_as_service", get)
     church = mp._church_for_request(_request())
     assert len(asked) == 1 and asked[0].startswith("/business_sites?slug=eq.first-light")
-    assert "business:businesses(id,name,type,settings,stripe_account_id)" in asked[0]
+    assert "business:businesses(id,name,type,settings,stripe_account_id,is_sample)" in asked[0]
     assert church == {"business": BUSINESS, "site": {"slug": "first-light", "business_id": BIZ, "site_config": {}}}
 
 

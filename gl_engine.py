@@ -1072,6 +1072,24 @@ def _biz_type(biz: str) -> Optional[str]:
     return rows[0].get("type") if rows else None
 
 
+def _is_sample_business(business_id: str) -> bool:
+    """A sample church? Never raises; an unreadable answer is "no", so a
+    real church's gifts are never skipped by a failed read."""
+    try:
+        import sample_church
+        return sample_church.is_sample(business_id)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _mark_processed(ids: List[str]) -> bool:
+    for i in range(0, len(ids), 80):
+        page = ",".join(str(x) for x in ids[i:i + 80])
+        if sb_clients.sb_patch_as_service(f"/gl_sync_queue?id=in.({page})", {"processed_at": _now_iso()}) is None:
+            return False
+    return True
+
+
 def process_queue(business_id: Optional[str] = None, *, limit: int = 500) -> Dict[str, Any]:
     """Drain unprocessed gl_sync_queue rows → converge each source → mark
     processed. Idempotent. Prunes processed rows older than 7 days.
@@ -1121,6 +1139,16 @@ def process_queue(business_id: Optional[str] = None, *, limit: int = 500) -> Dic
 
     processed = 0
     failed = 0
+    for biz, biz_rows in list(by_biz.items()):
+        # The sample church (sample_church.py) is made up and keeps no books:
+        # its seeded gifts queue here like any gift (the invoices trigger),
+        # and are marked done without a chart of accounts or a journal entry.
+        if _is_sample_business(biz):
+            if _mark_processed([r["id"] for r in biz_rows]):
+                processed += len(biz_rows)
+            else:
+                failed += len(biz_rows)
+            del by_biz[biz]
     for biz, biz_rows in by_biz.items():
         # One business's failure must not abort the rest of the drain.
         try:

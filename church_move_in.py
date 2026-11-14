@@ -296,12 +296,18 @@ def mode() -> str:
 
 def switched_on(business_id: Any) -> bool:
     m = mode()
+    if m == "off":
+        return False
+    # The sample church (sample_church.py) is a made-up church that is
+    # already set up: it never moves in, so its Home shows an established
+    # church, not "Your move starts here". Read once per process, kept.
+    import sample_church
+    if sample_church.is_sample(business_id):
+        return False
     if m == "on":
         return True
-    if m == "owner":
-        import member_asks
-        return member_asks.platform_church(business_id)
-    return False
+    import member_asks
+    return member_asks.platform_church(business_id)
 
 
 # ─── Small things ─────────────────────────────────────────────────────

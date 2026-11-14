@@ -210,7 +210,7 @@ def _founding_taken() -> Optional[int]:
     """How many churches have had a founding (free) move; None when unreadable."""
     import sb_clients
     rows = sb_clients.sb_get_all_as_service(
-        f"/businesses?settings->{MOVE}->>founding=eq.true&select=id")
+        f"/businesses?settings->{MOVE}->>founding=eq.true&is_sample=not.is.true&select=id")
     return len(rows) if isinstance(rows, list) else None
 
 

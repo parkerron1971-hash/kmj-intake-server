@@ -564,11 +564,14 @@ async def journeys_tick(now: Optional[datetime] = None) -> Dict[str, int]:
         return stats
     budget = TICK_BUDGET
     import rules_engine
+    import sample_church
     for business in rows:
         if budget <= 0:
             break
         try:
-            if rules_engine.business_paused(business):
+            # select=* carries is_sample: a sample church's journeys reach
+            # nobody (sample_church.py, BE-3).
+            if sample_church.skip(business) or rules_engine.business_paused(business):
                 continue
             got = await run_business(business, now=now, budget=budget)
         except Exception as e:

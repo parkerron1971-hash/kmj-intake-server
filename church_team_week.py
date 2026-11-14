@@ -690,7 +690,8 @@ def rollup_tick(now: Optional[datetime] = None) -> Dict[str, int]:
     seats = _rows("/business_users?role=eq.manager&status=eq.active&select=business_id&limit=20000")
     if seats is None:
         return stats
-    ids = sorted({str(s["business_id"]) for s in seats if s.get("business_id")})
+    import sample_church
+    ids = sample_church.drop_samples(sorted({str(s["business_id"]) for s in seats if s.get("business_id")}))   # BE-3
     import church_follow_up as cfu
     for chunk in _clt()._chunks(ids):
         for biz in _rows(f"/businesses?id=in.({','.join(_q(i) for i in chunk)})"

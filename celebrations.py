@@ -234,7 +234,10 @@ def _churches() -> List[str]:
         rows = sb_clients.sb_get_as_service(path)
         for r in rows or []:
             ids.add(str(r.get("business_id") or r.get("id")))
-    return sorted(i for i in ids if i)
+    # A sample church's people are made up: no celebration posts (which
+    # news_alerts would then send) are made for one (sample_church.py, BE-3).
+    import sample_church
+    return sample_church.drop_samples(sorted(i for i in ids if i))
 
 
 def make_today(business: Dict[str, Any], now: Optional[datetime] = None) -> int:

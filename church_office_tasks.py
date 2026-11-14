@@ -475,6 +475,8 @@ def sweep_tick(now: Optional[datetime] = None) -> Dict[str, int]:
         for x in _rows(f"/businesses?id=in.({','.join(_q(i) for i in chunk)})"
                        "&select=id,name,type,settings,owner_id&limit=100") or []:
             bizs[str(x["id"])] = x
+    import sample_church
+    bizs = sample_church.drop_sample_map(bizs)   # a sample's tasks tell nobody (BE-3)
     import church_follow_up as cfu
     for b, todo in work.items():
         biz = bizs.get(b)

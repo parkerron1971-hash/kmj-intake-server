@@ -351,6 +351,13 @@ def desk_on_for(business_id: Any, row: Any = None) -> bool:
     return _named(business_id) and not platform_suite.kept_out(business_id, row)
 
 
+def _sweep_on(business_id: Any, row: Any = None) -> bool:
+    """desk_on_for, for the sweeps: never a sample church, whose posts are
+    made up and go nowhere (sample_church.py, BE-3)."""
+    import sample_church
+    return desk_on_for(business_id, row) and not sample_church.skip_id(business_id)
+
+
 def own_desk(business_id: Any) -> bool:
     """Solutionist's own business, on a desk MARKETING_DESK would switch on,
     while its desk is not on the suite: a manual run here is refused in plain
@@ -527,6 +534,9 @@ def eligibility(row: Dict[str, Any], *, scheduled: bool, kind: str = KIND) -> Op
     bid = str(row.get('id') or '')
     if not desk_on_for(bid, row):
         return NOT_SWITCHED_ON
+    import sample_church
+    if sample_church.skip(row):
+        return sample_church.MESSAGE      # nothing is planned or posted (BE-3)
     if not post_for_me.allowed_for(bid):
         return NO_POSTING
     problem = (week_problem(row) if kind == WEEK_KIND else openings_problem(row) if kind == OPENINGS_KIND
@@ -1972,14 +1982,14 @@ async def marketing_design_tick(now: Optional[datetime] = None) -> Dict[str, Any
                                  f'&select={POST_DESIGN_COLUMNS}&order=created_at.asc&limit={DESIGN_BATCH}')
     except store.StoreError:
         return {'skipped': 'storage'}
-    tally = await settle_designs([p for p in posts if desk_on_for(p.get('business_id'))], at)
+    tally = await settle_designs([p for p in posts if _sweep_on(p.get('business_id'))], at)
     try:
         runs = await store.rows(f'/marketing_runs?kind=eq.{WEEK_KIND}&status=eq.succeeded&design->>tell=eq.pending{only}'
                                 f'&select={WEEK_RUN_COLUMNS}&order=created_at.asc&limit={TELL_BATCH}')
     except store.StoreError:
         return {**tally, 'skipped': 'storage'}
     for run in runs:
-        if not desk_on_for(run.get('business_id')):
+        if not _sweep_on(run.get('business_id')):
             continue
         try:
             tally[f"week_{await tell_week(run, at)}"] += 1
@@ -1992,7 +2002,7 @@ async def marketing_design_tick(now: Optional[datetime] = None) -> Dict[str, Any
     # automations paused) go back to waiting for the owner at once.
     try:
         import business_marketing_standing as standing
-        tally.update(await standing.lapse_sweep(only=only, on_for=desk_on_for))
+        tally.update(await standing.lapse_sweep(only=only, on_for=_sweep_on))
     except Exception:
         log.warning('marketing planner: the standing sweep failed', exc_info=True)
     return dict(tally)
@@ -2487,7 +2497,7 @@ async def openings_watch_tick(now: Optional[datetime] = None) -> Dict[str, Any]:
             f'{only}&select={openings.WATCH_COLUMNS}&order=run_at.asc&limit={openings.WATCH_LIMIT}')
     except store.StoreError:
         return {'skipped': 'storage'}
-    tally = await openings.watch([p for p in posts if desk_on_for(p.get('business_id'))], at)
+    tally = await openings.watch([p for p in posts if _sweep_on(p.get('business_id'))], at)
     try:
         tally['told'] += await openings.tell_pulled(at, only)
     except Exception:
@@ -2649,6 +2659,8 @@ async def manual_tick(now: Optional[datetime] = None) -> Dict[str, Any]:
         return {'skipped': 'storage'}
     tally: Counter = Counter()
     room: Optional[int] = None
+    import sample_church
+    queued = await asyncio.to_thread(sample_church.drop_samples, queued)   # BE-3
     for run in queued:
         bid = str(run.get('business_id'))
         week = run.get('kind') == WEEK_KIND

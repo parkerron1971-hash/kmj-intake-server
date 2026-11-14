@@ -2548,6 +2548,12 @@ async def contact_submit_endpoint(business_id: str, body: Dict[str, Any], reques
 
     if not _check_contact_rate(rate_limit.trusted_client_ip(request)):
         return failure(429, "Too many submissions. Please try again later.")
+    # A sample church (sample_church.py) takes no submissions: nothing in it
+    # is real, so nothing is stored, alerted or mailed. The write guard
+    # refuses this first; this holds if a route ever slips past it.
+    import sample_church
+    if await sample_church.is_sample_async(business_id):
+        return failure(409, sample_church.MESSAGE)
     try:
         data = website_forms.validate(body or {})
     except ValueError as exc:
@@ -2659,6 +2665,9 @@ async def contact_submit_endpoint(business_id: str, body: Dict[str, Any], reques
         target_email = _business_public_email(church_business.get("settings"))
 
     if not target_email:
+        return notification_failed
+    # Never to an address reserved for examples (sample_church.py, BE-3).
+    if sample_church.reserved_email(target_email):
         return notification_failed
 
     resend_api_key = os.environ.get("RESEND_API_KEY")
@@ -7643,6 +7652,34 @@ async def asset_home_photo(name: str, request: Request):
     if kind == "video/mp4":
         return _brand_file_ranged(request, fp.name, kind, base=_STATIC_HOME)
     return _FileResponse(str(fp), media_type=kind, headers=_BRAND_CACHE_HEADERS)
+
+
+# The sample church's website photos (sample_church_seed.site_html,
+# 2026-11-15): licensed Unsplash stock in static/sample_church/<name>.jpg,
+# credited in that site's footer. Same rules as the home page's: the name
+# is pattern-checked and must resolve inside the folder. A photo not on
+# disk is a 404, and the site never links one that isn't there.
+_STATIC_SAMPLE = _pathlib.Path(__file__).resolve().parent / "static" / "sample_church"
+_SAMPLE_ASSET_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,40}\.jpg$")
+
+
+def _sample_asset_path(name: str) -> Optional[_pathlib.Path]:
+    if not _SAMPLE_ASSET_RE.match(name or ""):
+        return None
+    fp = _STATIC_SAMPLE / name
+    try:
+        fp.resolve().relative_to(_STATIC_SAMPLE.resolve())
+    except ValueError:
+        return None
+    return fp if fp.is_file() else None
+
+
+@router.get("/assets/sample-church/{name}", include_in_schema=False)
+async def asset_sample_church_photo(name: str):
+    fp = _sample_asset_path(name)
+    if fp is None:
+        raise HTTPException(404, "asset not found")
+    return _FileResponse(str(fp), media_type="image/jpeg", headers=_BRAND_CACHE_HEADERS)
 
 
 @router.get("/assets/film.mp4", include_in_schema=False)

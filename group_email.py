@@ -190,6 +190,8 @@ async def sweep_tick(now: Optional[datetime] = None) -> Dict[str, int]:
         f"&select=id,business_id,group_id,title,body,posted_by,created_at&order=created_at.asc&limit=200")
     if not isinstance(due, list):
         return out
+    import sample_church
+    due = await asyncio.to_thread(sample_church.drop_samples, due)   # BE-3
     for post in due:
         claimed = await asyncio.to_thread(
             sb_clients.sb_patch_as_service,

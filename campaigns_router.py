@@ -556,8 +556,11 @@ async def campaigns_tick() -> Dict[str, int]:
     if not campaigns_enabled():
         return stats
     try:
-        running = sb_clients.sb_get_as_service(
-            "/campaigns?status=eq.running&select=*&limit=100") or []
+        # Never a sample church's campaign (sample_church.py, BE-3): left out
+        # of the query, so they can't crowd real ones out, and dropped again.
+        import sample_church
+        running = sample_church.drop_samples(sb_clients.sb_get_as_service(
+            "/campaigns?status=eq.running&select=*&limit=100" + sample_church.exclude()) or [])
     except Exception as e:
         logger.warning(f"campaigns_tick list failed: {e}")
         return stats

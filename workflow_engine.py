@@ -447,6 +447,11 @@ async def advance_run(client, run: Dict[str, Any]) -> Dict[str, Any]:
     biz = biz_rows[0] if isinstance(biz_rows, list) and biz_rows else None
     if not biz:
         return {"ok": False, "error": "business unavailable"}
+    # A sample church runs nothing (sample_church.py, BE-3): select=* carries
+    # is_sample, so this costs no read.
+    import sample_church
+    if sample_church.skip(biz):
+        return {"ok": False, "error": "sample church"}
 
     ctx = dict(run.get("context") or {})
     log = list(run.get("log") or [])
@@ -621,6 +626,13 @@ def _now() -> str:
 # Scan tick (the drain) + confirmation resume
 # ──────────────────────────────────────────────────────────────
 
+def _no_samples() -> str:
+    """A sample church's runs never advance (sample_church.py, BE-3); left
+    out of the scan so they can't crowd real ones out of the batch."""
+    import sample_church
+    return sample_church.exclude()
+
+
 async def drain_tick(limit: int = DRAIN_BATCH) -> Dict[str, Any]:
     """One scan tick: pick up pending/running runs and advance each. Called by
     a Railway cron (Fork 7) — never a frontend heartbeat for money paths.
@@ -629,7 +641,7 @@ async def drain_tick(limit: int = DRAIN_BATCH) -> Dict[str, Any]:
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
         code, runs = await _sb(client, "GET",
             f"/workflow_runs?status=in.(pending,running)"
-            f"&order=created_at.asc&limit={limit}&select=*")
+            f"&order=created_at.asc&limit={limit}&select=*" + _no_samples())
         if not isinstance(runs, list):
             return report
         for run in runs:

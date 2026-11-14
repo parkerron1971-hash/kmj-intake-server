@@ -1555,18 +1555,23 @@ async def _resolve_business(client: httpx.AsyncClient,
     or a header — so a cross-business request is not blocked, it is
     unrepresentable.
     """
+    # A sample church is never reached by an outside agent (sample_church.py,
+    # BE-3): a token naming one resolves to nothing, and an owner's own
+    # business is never their sample (select=* carries is_sample).
+    import sample_church
     if caller.business_id:
-        return await _business_by_id(client, caller.business_id)
+        biz = await _business_by_id(client, caller.business_id)
+        return None if biz and sample_church.skip(biz) else biz
 
     import sb_clients
     rows = await client.get(
         f"{sb_clients.sb_url()}/rest/v1/businesses",
         headers=sb_clients.sb_headers_service(),
         params={"owner_id": f"eq.{caller.user_id}", "select": "*",
-                "order": "created_at.asc", "limit": "1"})
+                "order": "created_at.asc", "limit": "5"})
     if rows.status_code >= 400:
         return None
-    data = rows.json() or []
+    data = [b for b in (rows.json() or []) if not sample_church.skip(b)]
     return data[0] if data else None
 
 

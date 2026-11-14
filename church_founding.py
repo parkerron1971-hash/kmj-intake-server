@@ -120,7 +120,9 @@ def taken() -> Optional[int]:
     """How many churches hold a founding place; None when unreadable."""
     import sb_clients
     try:
-        rows = sb_clients.sb_get_all_as_service(f"/businesses?settings->{FOUNDING}=not.is.null&select=id")
+        # A sample church never holds a founding place (sample_church.py, BE-3).
+        rows = sb_clients.sb_get_all_as_service(
+            f"/businesses?settings->{FOUNDING}=not.is.null&is_sample=not.is.true&select=id")
     except Exception as e:  # noqa: BLE001 — a partial read is unread, never a count
         logger.warning("founding churches: count unreadable: %s", e)
         return None

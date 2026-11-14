@@ -512,6 +512,8 @@ def sweep_tick(now: Optional[datetime] = None) -> Dict[str, int]:
     for m in rows:
         if academy_join.valid_email(str(m.get("leader_email") or "")):
             by_church.setdefault(str(m["business_id"]), []).append(m)
+    import sample_church
+    by_church = sample_church.drop_sample_map(by_church)   # BE-3
     now = now or datetime.now(timezone.utc)
     for biz_id, ministries in by_church.items():
         try:

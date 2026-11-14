@@ -162,6 +162,13 @@ app = FastAPI(
 _cors_origins = [
     o.strip() for o in os.environ.get("CORS_ALLOWED_ORIGINS", "*").split(",") if o.strip()
 ] or ["*"]
+# The sample church's write guard (sample_church_guard.py, BE-3): a write
+# that names a sample church is answered 409 sample_church before any route
+# runs. Added BEFORE CORSMiddleware so it sits INSIDE it: the 409 carries
+# the CORS headers the app needs to read it, and a preflight never reaches
+# it. Pure ASGI; it never wraps a response it lets through.
+from sample_church_guard import SampleChurchGuard
+app.add_middleware(SampleChurchGuard)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
@@ -1017,6 +1024,11 @@ app.include_router(stripe_billing_router)
 # Church plans' extras (2026-11-03): one more office login, and the move.
 from church_billing import router as church_billing_router
 app.include_router(church_billing_router)
+# The sample church's Chief (sample_chief.py, BE-4): GET
+# /sample-church/questions (the sample's owner). Its chat turns come
+# through /agents/chief/chat and /stream, which hand a sample over first.
+from sample_chief import router as sample_chief_router
+app.include_router(sample_chief_router)
 from stripe_discounts import router as stripe_discounts_router
 app.include_router(stripe_discounts_router)
 # Campaigns Phase 1 (2026-07-21) — Chief-drafted marketing sequences
@@ -2550,6 +2562,18 @@ async def startup():
                           misfire_grace_time=240, coalesce=True, id="devotional_daily_morning")
     except Exception as e:
         print(f"   [warn] devotional evening texts not scheduled: {e}")
+
+    # The sample church's daily cleanup (sample_church.py, BE-3): deletes the
+    # samples whose home now pays or is gone, the ones a deploy left
+    # "ending", and the ones idle 60 days. Counts only in the log.
+    # Kill switch: SAMPLE_CHURCH_CLEANUP=off.
+    try:
+        import sample_church as _sample_church
+        scheduler.add_job(g("sample_church_cleanup", _sample_church.cleanup_tick),
+                          "cron", hour=8, minute=20, coalesce=True,
+                          misfire_grace_time=3600, id="sample_church_cleanup")
+    except Exception as e:
+        print(f"   [warn] sample church cleanup not scheduled: {e}")
 
     _staggered = stagger_long_interval_first_runs(scheduler)
     if _staggered:

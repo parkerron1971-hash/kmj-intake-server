@@ -419,6 +419,10 @@ async def insights_tick() -> None:
     def _tick_sync() -> None:
         rows = sb_clients.sb_get_as_service(
             "/businesses?select=id,name,type,settings,owner_id&limit=500") or []
+        # A sample church is never studied: no insight, memory or AI call is
+        # made from made-up records (sample_church.py, BE-3).
+        import sample_church
+        rows = sample_church.drop_samples(rows, "id")
         due = [b for b in rows if _due(b)]
         for biz in due[:MAX_PER_TICK]:
             try:

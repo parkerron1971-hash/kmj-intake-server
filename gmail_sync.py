@@ -511,6 +511,9 @@ async def sync_tick() -> Dict[str, Any]:
 
     stored = 0
     results: List[Dict[str, Any]] = []
+    import asyncio
+    import sample_church
+    mailboxes = await asyncio.to_thread(sample_church.drop_samples, mailboxes or [])
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
         for mailbox in mailboxes:
             try:

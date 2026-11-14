@@ -766,7 +766,9 @@ async def sweep(now: Optional[datetime] = None) -> Dict[str, int]:
     now = now or _now()
     stats = {"churches": 0, "care": 0, "emails": 0, "drifting": 0, "climbed": 0, "resolved": 0}
     rows = await asyncio.to_thread(_rows, "/church_shepherds?select=business_id&limit=50000")
-    ids = sorted({str(r["business_id"]) for r in rows or []})
+    import sample_church
+    ids = await asyncio.to_thread(sample_church.drop_samples,
+                                  sorted({str(r["business_id"]) for r in rows or []}))   # BE-3
     for chunk in _chunks(ids):
         bizs = await asyncio.to_thread(
             _rows, f"/businesses?id=in.({','.join(_q(i) for i in chunk)})&select=id,name,type,settings&limit={_CHUNK}")

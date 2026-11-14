@@ -1063,6 +1063,11 @@ async def advance(business_id: str) -> Optional[str]:
         return None
     if not row or not business:
         return None
+    # A sample church registers nothing with the carriers and buys no number
+    # (sample_church.py, BE-3; BE-1 refuses the send that would start one).
+    import sample_church
+    if await sample_church.is_sample_async(business_id):
+        return None
     status = row.get("status")
     if status == "submitted":
         # Every step a send takes saves the row, so updated_at is its heartbeat.

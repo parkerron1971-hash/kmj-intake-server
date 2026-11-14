@@ -817,6 +817,8 @@ async def tell_pulled(at: datetime, only: str = '') -> int:
     rows = await store.rows(
         f'/marketing_posts?source=eq.opening&status=eq.pulled&updated_at=gte.{_query_time(at - TELL_BACK)}{only}'
         f'&select=id,business_id,revision,opening&order=updated_at.desc&limit={TELL_LIMIT}')
+    import sample_church
+    rows = await asyncio.to_thread(sample_church.drop_samples, rows or [])   # BE-3
     if not rows:
         return 0
     owners = await asyncio.to_thread(_owners, sorted({str(UUID(str(r['business_id']))) for r in rows}))

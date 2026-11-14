@@ -73,6 +73,12 @@ def match(business_id: str, query_text: str,
     Rows: {id, content, category, importance, similarity}."""
     if not business_id:
         return []
+    # A sample church's memories are never embedded or searched (each is a
+    # paid embedding), except by the sample's own Chief lane
+    # (sample_church.py, BE-3).
+    import sample_church
+    if sample_church.spend_refused(business_id):
+        return []
     emb = embed(query_text)
     if not emb:
         return []
@@ -104,10 +110,12 @@ def backfill_tick(limit: int = 100) -> int:
     try:
         rows = sb_clients.sb_get_as_service(
             f"/chief_memories?embedding=is.null&is_active=eq.true"
-            f"&select=id,content&limit={limit}") or []
+            f"&select=id,content,business_id&limit={limit}") or []
     except Exception as e:
         logger.warning(f"[semantic] backfill fetch failed: {e}")
         return 0
+    import sample_church
+    rows = sample_church.drop_samples(rows)   # never a sample's (BE-3)
     done = 0
     for row in rows:
         if store_embedding(row.get("id"), row.get("content") or ""):

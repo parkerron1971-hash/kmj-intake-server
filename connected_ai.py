@@ -195,6 +195,11 @@ def claim(payload: ClaimRequest):
     business = _rows(f"/businesses?id=eq.{UUID(row['business_id'])}&select=*&limit=1")
     if not business or str(business[0]['owner_id']) != str(row['owner_id']):
         raise HTTPException(409, 'pairing_expired')
+    # A sample church pairs no device (sample_church.py, BE-3); select=*
+    # carries is_sample.
+    import sample_church
+    if sample_church.skip(business[0]):
+        raise HTTPException(409, 'pairing_expired')
     _require_enabled(business[0])
     token = 'sol_device_' + secrets.token_urlsafe(32)
     device = transition('claim', row['business_id'], row['owner_id'],

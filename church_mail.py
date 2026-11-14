@@ -453,7 +453,27 @@ def church_recipients(addrs: Iterable[str]) -> List[Tuple[Dict[str, Any], str, s
     return out
 
 
+async def _send_refusal(business_id: Any, to: Any) -> Optional[str]:
+    """Why a copy or a reply must not go (sample_church.py, BE-3): the church
+    is a sample, or the address is at a domain reserved for examples. None
+    when it may."""
+    import sample_church
+    try:
+        await sample_church.refuse_send_async("email", business_id, email=to)
+    except sample_church.SendRefused as e:
+        return e.why
+    return None
+
+
 async def _resend(client: httpx.AsyncClient, method: str, path: str, **kw) -> Optional[Dict[str, Any]]:
+    if method.upper() == "POST" and path.split("?")[0].rstrip("/") == "/emails":
+        # The last wall before a send: never to a reserved address
+        # (sample_church.py). The callers check the church itself.
+        import sample_church
+        to = (kw.get("json") or {}).get("to")
+        if sample_church.send_refusal(None, email=to):
+            logger.info("church mail: a send to a reserved address was refused")
+            return None
     key = os.environ.get("RESEND_API_KEY")
     if not key:
         raise Unavailable("RESEND_API_KEY")
@@ -723,6 +743,8 @@ async def relay_reply(client: httpx.AsyncClient, church: Church, address: str, h
     to = str(orig.get("from_email") or "").lower()
     if not why and (not EMAIL_RE.match(to) or to == holder):
         why = "there's no one to send it to"
+    if not why:
+        why = await _send_refusal(church.id, to)
     if why:
         await asyncio.to_thread(_settle, row, "held", f"reply not sent as {box_addr}: {why}", [])
         if not held and from_email.lower() == holder:
@@ -801,6 +823,9 @@ async def send_copy(client: httpx.AsyncClient, church: Church, address: str, tar
         return "no email on record"
     if _ours(to):
         return "their email is at the church's own domain"
+    refused = await _send_refusal(church.id, to)
+    if refused:
+        return refused
     try:
         if await email_sender.is_suppressed(to):
             return "their email bounced before"
