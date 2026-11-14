@@ -22,6 +22,7 @@ import sb_clients  # noqa: E402
 
 
 def test_reconnect_upsert_names_the_unique_columns(monkeypatch):
+    monkeypatch.setenv("GMAIL_CONNECT", "on")  # retired by default since 2026-11-14; this pins the reconnect when on
     posted = {}
 
     monkeypatch.setattr(oauth_connect_ticket, "verify",

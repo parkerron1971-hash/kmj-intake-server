@@ -121,6 +121,21 @@ def _configured() -> bool:
     return bool(_client_id() and _client_secret())
 
 
+RETIRED = ("Connecting a Gmail inbox has been retired. Church email brings your mail into Email "
+           "instead, and replies to what you send already come back there.")
+
+
+def connect_open() -> bool:
+    """Kevin, 2026-11-14: "yes retire the gmail for now". Reading a Gmail
+    inbox needs Google's yearly security review (CASA, about $540 a year
+    and up) to leave its unverified-app warning and 100-person cap, and
+    church email does the job without it. Only one inbox was ever
+    connected (the platform owner's own test, already revoked). Off unless
+    GMAIL_CONNECT=on: nothing new connects and the worker syncs nothing.
+    The code stays, so it can come back."""
+    return (os.environ.get("GMAIL_CONNECT") or "").strip().lower() == "on"
+
+
 # ─── Ownership ───────────────────────────────────────────────────────
 
 def _require_owner(business_id: str, user: AuthedUser) -> None:
@@ -220,6 +235,7 @@ async def google_health():
         "client_secret_configured": bool(_client_secret()),
         "redirect_uri": _redirect_uri(),
         "scopes": GOOGLE_SCOPES,
+        "connect_open": connect_open(),
     }
 
 
@@ -230,6 +246,8 @@ async def google_connect_start(business_id: str,
     on purpose: the frontend prefixes the API base itself (see
     oauthConnect.ts), and returning an absolute URL here would let a
     future bug redirect a popup anywhere."""
+    if not connect_open():
+        raise HTTPException(status_code=410, detail=RETIRED)
     if not _configured():
         raise HTTPException(status_code=503, detail="google connect is not configured")
     _require_owner(business_id, user)
@@ -251,6 +269,8 @@ async def google_connect(ticket: str = ""):
         ticket, max_age_s=STATE_MAX_AGE_SECONDS) if ticket else (None, None))
     if not business_id:
         raise HTTPException(400, "this connect link expired — start again from the app")
+    if not connect_open():
+        raise HTTPException(410, RETIRED)
     if not _configured():
         raise HTTPException(503, "google connect is not configured")
 
@@ -315,6 +335,8 @@ async def google_callback(code: Optional[str] = None,
       3. getProfile → which mailbox this actually is
       4. Upsert one row per (business, mailbox)
     """
+    if not connect_open():
+        return _result_html(False, RETIRED)
     if error:
         # access_denied is a user saying no, not a fault. Say so plainly.
         if error == "access_denied":
