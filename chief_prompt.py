@@ -462,12 +462,29 @@ def _format_priorities_block(priorities: List[str]) -> str:
     )
 
 
+_GREETING_TITLES = {"pastor", "elder", "minister", "deacon", "bishop", "rev", "reverend",
+                    "dr", "apostle", "evangelist", "prophet", "mother", "brother", "sister",
+                    "mr", "mrs", "ms", "miss", "prof", "coach"}
+
+
+def greeting_name(name: Optional[str]) -> str:
+    """The name a greeting says: the first name ("Dre Carter" → "Dre"),
+    and a title keeps the name after it ("Pastor Kevin McCloud" → "Pastor
+    Kevin", not "Pastor")."""
+    words = (name or "").split()
+    if not words:
+        return ""
+    if len(words) > 1 and words[0].lower().rstrip(".") in _GREETING_TITLES:
+        return f"{words[0]} {words[1]}"
+    return words[0]
+
+
 def _build_assistant_name_block(biz: Dict[str, Any]) -> str:
     prefs = (biz.get("settings") or {}).get("chief_preferences") or {}
     name = (prefs.get("assistant_name") or "").strip()
     import chief_areas   # an office login is greeted as itself (chief_areas.speaker)
     practitioner = chief_areas.speaker(biz, "", short=True) or ""
-    first_name = practitioner.split()[0] if practitioner else ""
+    first_name = greeting_name(practitioner)
     if name:
         return (
             f"YOUR NAME:\n"
@@ -1187,8 +1204,13 @@ def _build_system_prompt(ctx: Dict[str, Any], is_greeting: bool,
     # the owner's (chief_areas.speaker).
     import chief_areas
     practitioner = chief_areas.speaker(biz, "the practitioner", short=True)
-    _hello = f", {practitioner}" if practitioner else ""
-    _hey = f" {practitioner}" if practitioner else " there"
+    # The greeting says the first name. It used to put the owner's whole
+    # practitioner_name in "Start with 'Good morning, Dre Carter.'", and
+    # the model followed that line over the FIRST NAME rule beside it
+    # (measured 2026-11-13: the short brief greeted "Dre Carter" most runs).
+    greet_name = greeting_name(practitioner)
+    _hello = f", {greet_name}" if greet_name else ""
+    _hey = f" {greet_name}" if greet_name else " there"
     if not practitioner and chief_areas.WHO.get() is not None:
         practitioner = "this team member"
     voice = biz.get("voice_profile") or {}
@@ -1301,8 +1323,12 @@ Pick up naturally — don't re-introduce yourself. If they reference something f
         greeting_style_guidance = "Lead with up to 3 priorities (use the TODAY'S PRIORITIES list above). Be specific — name names, cite numbers, reference dates. End with ONE question."
     # "Good morning, Kevin McCloud" is how a form letter opens. The
     # practitioner's first name is how a chief of staff does.
-    greeting_style_guidance += (" Address the practitioner by FIRST NAME only (the first word of the "
-                                "Practitioner name in context), never the full name.")
+    if greet_name and greet_name != practitioner:
+        greeting_style_guidance += (f" Address the practitioner as {greet_name} (their first name), "
+                                    f"never by the full name {practitioner}.")
+    else:
+        greeting_style_guidance += (" Address the practitioner by FIRST NAME only (the first word of the "
+                                    "Practitioner name in context), never the full name.")
 
     # First-run launch greeting. When the server has MEASURED that this
     # business is brand new (setup snapshot: nearly nothing connected,
@@ -1333,7 +1359,7 @@ Under 4 sentences. Warm, specific, no list. Do NOT emit actions in the greeting.
         launch_clause = f"""
 
 LAUNCH GREETING — THIS BUSINESS IS BRAND NEW (server-verified: almost nothing is connected yet — see SETUP STATUS above for the exact list). Your greeting IS the start of building it with them, not a day-read and not a list. Shape:
-1. Welcome them by name and NAME their business type back to them, then say in one line what already exists for them: the rooms you built from their type (name two from CUSTOM MODULES if present, in their words) and where the first hour is going — the SENDABLE thing SETUP STATUS names ("by the end of this you'll have a booking link you can text a regular tonight").
+1. Welcome them by first name{(' (' + greet_name + ')') if greet_name else ''} and NAME their business type back to them, then say in one line what already exists for them: the rooms you built from their type (name two from CUSTOM MODULES if present, in their words) and where the first hour is going — the SENDABLE thing SETUP STATUS names ("by the end of this you'll have a booking link you can text a regular tonight").
 2. Ask ONE question: the FIRST unblocked item in SETUP STATUS, asked WITH ITS WHY in their vertical's own words, exactly as the 'how' line says — "What days and hours do you cut? I'll open those on your booking page so people can only pick times you actually work." One question. Not a menu. It is the greeting's ONLY question mark: when the 'how' line offers choices, they go inside that one sentence ("Where do your regulars live today: your phone, a spreadsheet or a booking app?"), never as a second question after it.
 3. If BUSINESS TRACK says the sit-down is not done, add ONE honest sentence: it is a twenty-minute conversation to learn how they run, and they can do it now or start with setup and do it by day three. Say it as a STATEMENT that ends with a full stop, never a question: no "Which would you rather?", no "Want to do it now?". They will say if they want it now. Their answer to the question in step 2 is the next turn's action (create it, set it, or open the door) — celebrate in one line, then the next question.
 Keep it warm and specific, under 6 short sentences. Do NOT emit actions in the greeting itself."""
@@ -1373,7 +1399,7 @@ This is your first turn in a fresh conversation. {greeting_style_guidance}{tod_g
 
 ADVISOR VOICE — frame the day like a trusted advisor, not a dashboard reading numbers:
 - WRONG (data dump): "You have 3 sessions today, 2 overdue invoices, and 47 contacts."
-- RIGHT (advisor voice): "Good morning, {practitioner}. Busy day — three sessions, starting with Marcus at nine. Quick heads up: two invoices are overdue, and Sandra still hasn't responded to your check-in. Want me to handle the reminders while you prep for Marcus?"
+- RIGHT (advisor voice): "Good morning{_hello}. Busy day — three sessions, starting with Marcus at nine. Quick heads up: two invoices are overdue, and Sandra still hasn't responded to your check-in. Want me to handle the reminders while you prep for Marcus?"
 RULES:
 - Lead with the most actionable item
 - Offer to handle things proactively
