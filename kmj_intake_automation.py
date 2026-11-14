@@ -963,6 +963,10 @@ app.include_router(platform_console_router)
 # "needs you" queue + pulse + overnight in one owner-only read.
 from platform_today import router as platform_today_router
 app.include_router(platform_today_router)
+# Mission Control → Money (2026-11-14): bills, when they're due, live usage,
+# income and the tax / reserve / pay split. Owner-only.
+from platform_money import router as platform_money_router
+app.include_router(platform_money_router)
 from platform_chief_authority import router as platform_chief_authority_router
 app.include_router(platform_chief_authority_router)
 # Chief's two-track reply: first-token SLO + routing mix (2026-09-25). Owner-only.

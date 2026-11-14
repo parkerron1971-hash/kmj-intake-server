@@ -140,7 +140,21 @@ async def handle_email_setup_status(client, biz, action) -> Dict[str, Any]:
     except Exception as e:
         logger.warning(f"[email-setup] mailbox read failed (non-fatal): {e}")
         boxes = []
-    if not boxes:
+    gmail_retired = False
+    try:
+        import google_oauth
+        gmail_retired = not google_oauth.connect_open()
+    except Exception:  # noqa: BLE001
+        pass
+    if not boxes and gmail_retired:
+        # Retired 2026-11-14 (Kevin: "yes retire the gmail for now"): never
+        # offer a Gmail connection. Church email is how mail to their own
+        # addresses reaches the app; replies to what they send come back
+        # regardless.
+        lines.append("Gmail inboxes are no longer connected (retired). Replies to what they send "
+                     "come back into Email; mail to the church's own addresses comes in once "
+                     "church email is on (the church_email read says whether it is)")
+    elif not boxes:
         lines.append("no inbox connected — mail sent straight to their address is "
                      "invisible to you")
         if verified and not next_step:
@@ -167,7 +181,8 @@ async def handle_email_setup_status(client, biz, action) -> Dict[str, Any]:
         if not next_step:
             next_step = "send a test in Build → Email Setup, step 4 to prove it lands"
 
-    ready = verified and bool(boxes)
+    # With Gmail retired there is no inbox to wait on: a verified domain is ready.
+    ready = verified and (bool(boxes) or gmail_retired)
     result = "; ".join(lines)
     if next_step:
         result += f". Next: {next_step}"

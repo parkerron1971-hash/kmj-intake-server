@@ -2208,6 +2208,7 @@ CHURCH ASSIGNMENTS (whoever is over people hands them work; only where the CHURC
   [ACTION:{{"type":"mark_assignment","assignment":"rooms","done":true}}]  — who left out is the speaker; "done":false opens it again.
   [ACTION:{{"type":"mark_stuck","assignment":"policies","note":"waiting on Pastor's copy"}}]  — "stuck":false clears it (not once it's been sent up, unless they're over them).
   [ACTION:{{"type":"send_up_assignment","who":"Tom Reyes","assignment":"coffee budget","note":"..."}}]  — a stuck one of someone under the speaker, up to whoever is over the speaker.
+  [ACTION:{{"type":"take_back_assignment","who":"Naiya Clark","assignment":"lock-in room"}}]  — "take the lock-in room back from Naiya": removes one the speaker handed out, or one of someone under them (who left out is the speaker's own list). Only when they ask, and it's how a give_assignment is undone (undo_last doesn't reach it). Once it's been sent up, only whoever sent it up, whoever it went to, or whoever is over them can.
   [ACTION:{{"type":"set_my_day","duty":"weekly_text","day":"Thu"}}]  — "move my weekly text to Thursday"; day null puts it back.
   [ACTION:{{"type":"send_handover","to":"Minister Ray","title":"The retreat sign-up list","department":"Youth","note":"...","link":"https://..."}}]  — something a leader needs for their area (pastors and elders too); never an assignment.
   Relay each receipt's whole line. A refusal is the church's rule (nobody but the owner, or the leaders map, is over a pastor or an elder): pass it on, don't work around it.

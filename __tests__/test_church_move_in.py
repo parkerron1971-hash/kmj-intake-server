@@ -128,6 +128,9 @@ def db(monkeypatch):
         fake.mail.append(kw)
         return {"id": "em_1"}
     monkeypatch.setattr(email_sender, "send_via_resend", send)
+    # A login's sign-in email comes from Auth; here every login has one at its church.
+    names = {v: k for k, v in ID.items()}
+    monkeypatch.setattr(mi, "_login_email", lambda uid: f"{names[str(uid)]}@gracehill.org" if str(uid) in names else "")
     return fake
 
 
@@ -531,7 +534,50 @@ def test_checked_and_a_change_with_a_note_the_church_then_sees(db):
     assert item(room(), "owner")["state"] == "needs"
     again = item(hand_in("owner", "owner").json(), "owner")
     assert again["state"] == "handed_in" and again["note"] is None
-    assert len(db.mail) == 2
+    assert [m["to_email"] for m in db.mail] == ["kevin@solutionist.test", "owner@gracehill.org",
+                                               "kevin@solutionist.test"]
+
+
+def test_asking_for_a_change_tells_the_one_who_handed_it_in_and_the_owner(db):
+    # Kevin's list, 2026-11-14: "The church isn't told when you ask for a change."
+    save("office", "owner", {"name": "Ada Hill"})
+    hand_in("office", "owner")
+    db.mail.clear()
+    mark = lambda body: client("kevin").post(f"/platform/move-in/{BIZ}/owner", json=body)  # noqa: E731
+    got = mark({"state": "needs", "note": "We need a mobile number for Ada.\nA best time helps too."}).json()
+    assert got["told"] == ["office@gracehill.org", "owner@gracehill.org"]
+    assert [m["to_email"] for m in db.mail] == got["told"]
+    first = db.mail[0]
+    assert first["subject"] == "One change needed: Name the person who owns the move"
+    assert "We need a mobile number for Ada." in first["body"] and "A best time helps too." in first["body"]
+    assert "Grace Hill Church" in first["body"] and "/#/operate/move-in" in first["body"]
+    assert first["idempotency_key"] != db.mail[1]["idempotency_key"]
+    # Checked sends nothing: the church sees it on Home.
+    db.mail.clear()
+    save("office", "owner", {"name": "Ada Hill", "mobile": "555-0100"})
+    hand_in("office", "owner")
+    db.mail.clear()
+    assert mark({"state": "checked"}).json()["told"] == [] and db.mail == []
+
+
+def test_a_note_is_escaped_and_a_failed_email_never_fails_the_ask(db, monkeypatch):
+    save("owner", "owner", {"name": "Ada Hill"})
+    hand_in("owner", "owner")
+    db.mail.clear()
+    mark = lambda body: client("kevin").post(f"/platform/move-in/{BIZ}/owner", json=body)  # noqa: E731
+    got = mark({"state": "needs", "note": "Use <b>one</b> name & one number."}).json()
+    assert got["told"] == ["owner@gracehill.org"]                        # the owner handed it in: told once
+    assert "&lt;b&gt;one&lt;/b&gt; name &amp; one number." in db.mail[0]["body"]
+
+    async def boom(**kw):
+        raise RuntimeError("resend is down")
+    monkeypatch.setattr(email_sender, "send_via_resend", boom)
+    again = mark({"state": "needs", "note": "Still one number."})
+    assert again.status_code == 200 and again.json()["told"] == []
+    assert item(room(), "owner")["note"] == "Still one number."
+    # A login whose address couldn't be read is skipped; the note still waits in the room.
+    monkeypatch.setattr(mi, "_login_email", lambda uid: "")
+    assert mark({"state": "needs", "note": "And again."}).json()["told"] == []
 
 
 def test_the_last_hand_in_opens_one_ticket_with_nothing_private_in_it(db):

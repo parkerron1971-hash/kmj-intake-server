@@ -554,7 +554,8 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
     "one_on_one": {**_r("reads a one-on-one with someone the signed-in person is over: finished, stuck, late, next, "
                         "this week's jobs", sensitive=True), "chief_only": True},
     "give_assignment": {**_w("A", "hands one assignment to someone the signed-in person is over (or to themselves) "
-                                  "through church_assignments.give; taken back from the board"), "chief_only": True},
+                                  "through church_assignments.give; taken back with take_back_assignment or "
+                                  "from the board"), "chief_only": True},
     "start_first_assignment": {**_w("A", "makes the missing items of someone's first assignment through "
                                          "church_startup.start, once per item"), "chief_only": True},
     "mark_assignment": {**_w("A", "marks one assignment done or not done (theirs, or someone's they're over); "
@@ -564,6 +565,11 @@ REGISTRY: Dict[str, Dict[str, Any]] = {
     "send_up_assignment": {**_w("A", "sends a stuck assignment of someone under them up to whoever is over the "
                                      "signed-in person (church_assignments.raise_up); not stuck clears it"),
                            "chief_only": True},
+    # C, not A: it removes the task for good (a hard delete, its stuck note and what was done on it too), so
+    # it runs when someone asks and never on Chief's own idea; undo never reaches it (action_inverse).
+    "take_back_assignment": {**_w("C", "takes one church assignment back through church_assignments.take_back "
+                                       "(the board's own Take it back, by its rules): the task is removed for "
+                                       "good; giving it again makes a new one"), "chief_only": True},
     "set_my_day": {**_w("A", "picks the day a login's weekly job falls on (church_assignments.pick_day); none "
                              "puts it back"), "chief_only": True},
     "send_handover": {**_w("C", "sends one of the church's leaders something for their area "

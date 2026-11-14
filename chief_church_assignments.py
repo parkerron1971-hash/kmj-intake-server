@@ -22,15 +22,18 @@ Minister Ray the retreat sign-up list for Youth".
     mark_assignment ......... {assignment, who?, done: true | false}
     mark_stuck .............. {assignment, who?, note?, stuck: true | false}
     send_up_assignment ...... {assignment, who, note?}
+    take_back_assignment .... {assignment, who?}: remove one I handed out, or
+                              one of someone I'm over (the board's own take it
+                              back, church_assignments.take_back)
     set_my_day .............. {duty, day | null, who?}
     send_handover ........... {to, title, note?, link?, for_date?, department?}
 
 Every verb calls the same functions the routes do (church_over.is_over and
-under, church_assignments' give, change, raise_up, pick_day, board, theirs and
-one_on_one, church_startup.start, church_handovers' leaders and send), so the
-rules hold in Chief exactly as on screen: no office seat is over a pastor or
-an elder; once something is sent up, its assignee can't clear it; a money
-job's day only by the owner or an Admin. Chief never widens anything.
+under, church_assignments' give, change, raise_up, take_back, pick_day, board,
+theirs and one_on_one, church_startup.start, church_handovers' leaders and
+send), so the rules hold in Chief exactly as on screen: no office seat is over
+a pastor or an elder; once something is sent up, its assignee can't clear it;
+a money job's day only by the owner or an Admin. Chief never widens anything.
 
 People and assignments are named in words and looked up here: a person by
 their whole name, a first name only one of them has, or a word of what they
@@ -79,7 +82,7 @@ NAV = {"tab": "operate", "sub": "my-week"}
 NOT_ON = "Assignments aren't switched on here yet, so Chief can't read or hand them out."
 OFFICE_SEATS = ("owner", "admin", "manager", "member")
 WRITES = frozenset({"give_assignment", "start_first_assignment", "mark_assignment", "mark_stuck",
-                    "send_up_assignment", "set_my_day", "send_handover"})
+                    "send_up_assignment", "take_back_assignment", "set_my_day", "send_handover"})
 FILLER = frozenset({"the", "a", "an", "one", "my", "our", "that", "this", "on", "of", "for", "to", "assignment",
                     "task", "item", "job", "thing", "about", "it"})
 DAYS = {"mon": "Mon", "monday": "Mon", "tue": "Tue", "tues": "Tue", "tuesday": "Tue", "wed": "Wed",
@@ -553,6 +556,35 @@ def _send_up(ch: co.Church, me: Dict[str, str], action: Dict[str, Any]) -> Dict[
             "label": f"Sent up: “{title}”"[:80], "to": to["name"]}
 
 
+def _take_back(ch: co.Church, me: Dict[str, str], action: Dict[str, Any]) -> Dict[str, Any]:
+    """Take one back, by the board's own rules (church_assignments.take_back:
+    whoever handed it, or anyone over them; once it's sent up, whoever sent it
+    up, whoever it went to, or anyone over them). The task is removed, and
+    nobody is told."""
+    import church_assignments as cas
+    target, row = _target(ch, me, action.get("who"), self_ok=True)
+    t = _task_of(ch, me, target, action.get("assignment"))
+    cas._ready(ch)
+    title = _plain(t.get("title"))
+    try:
+        cas.take_back(ch, me, t)
+    except HTTPException as e:
+        if e.status_code != 503 or e.detail != cas.UNREAD:
+            raise
+        # The task was removed and the check after it couldn't be read (the
+        # only read in take_back that says this): it may be gone, so never
+        # "Nothing changed".
+        msg = (f"“{title}” may have been taken back, but that couldn't be checked just now. Read the list again "
+               "before trying once more.")
+        return {"result": f"Failed: {msg}", "label": f"Couldn't check: “{title}”"[:80], "failed": True}
+    if co.same(me, target):
+        return {"result": f"Took “{title}” back. It's off your list.", "label": f"Took back: “{title}”"[:80],
+                "assignment": title, "who": "yourself"}
+    return {"result": f"Took “{title}” back from {row['name']}. It's no longer {_where(target)}. They aren't told, "
+                      "so let them know if they had started on it.",
+            "label": f"Took back: “{title}”"[:80], "assignment": title, "who": row["name"]}
+
+
 def _day(ch: co.Church, me: Dict[str, str], action: Dict[str, Any]) -> Dict[str, Any]:
     import church_assignments as cas
     from chief_duties import find_duty
@@ -670,6 +702,7 @@ handle_start_first_assignment = _handler("start_first_assignment", _start)
 handle_mark_assignment = _handler("mark_assignment", _mark)
 handle_mark_stuck = _handler("mark_stuck", _stuck)
 handle_send_up_assignment = _handler("send_up_assignment", _send_up)
+handle_take_back_assignment = _handler("take_back_assignment", _take_back)
 handle_set_my_day = _handler("set_my_day", _day)
 handle_send_handover = _handler("send_handover", _handover)
 
@@ -677,14 +710,15 @@ HANDLERS = {
     "people_under": handle_people_under, "assignments_of": handle_assignments_of, "one_on_one": handle_one_on_one,
     "give_assignment": handle_give_assignment, "start_first_assignment": handle_start_first_assignment,
     "mark_assignment": handle_mark_assignment, "mark_stuck": handle_mark_stuck,
-    "send_up_assignment": handle_send_up_assignment, "set_my_day": handle_set_my_day,
-    "send_handover": handle_send_handover,
+    "send_up_assignment": handle_send_up_assignment, "take_back_assignment": handle_take_back_assignment,
+    "set_my_day": handle_set_my_day, "send_handover": handle_send_handover,
 }
 PROGRESS = {
     "people_under": "reading who is under you", "assignments_of": "reading the assignments",
     "one_on_one": "reading the one-on-one", "give_assignment": "handing out the assignment",
     "start_first_assignment": "starting the first assignment", "mark_assignment": "marking the assignment",
-    "mark_stuck": "marking it stuck", "send_up_assignment": "sending it up", "set_my_day": "moving the day",
+    "mark_stuck": "marking it stuck", "send_up_assignment": "sending it up",
+    "take_back_assignment": "taking it back", "set_my_day": "moving the day",
     "send_handover": "sending it to the leader",
 }
 
@@ -693,7 +727,8 @@ PROGRESS = {
 
 BLOCK = ("CHURCH ASSIGNMENTS — on at this church. Whoever is over someone hands them work and sees it move. Read "
          "people_under or assignments_of before you name anyone or anything; then give_assignment, "
-         "start_first_assignment, mark_assignment, mark_stuck, send_up_assignment, set_my_day. Relay each "
+         "start_first_assignment, mark_assignment, mark_stuck, send_up_assignment, set_my_day; "
+         "take_back_assignment removes one, only when they ask. Relay each "
          "receipt's whole line. Nobody but the owner, or the ministry chain on the leaders map, is over a pastor or "
          "an elder: to get one of them something for their area, send_handover (never an assignment). New work and "
          "nobody named: whose_job first; someone's job: job_of.")

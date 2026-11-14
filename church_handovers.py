@@ -17,7 +17,9 @@ never judged, never on anyone's list of work. It's read, and "Got it" says so.
     GET  /church/handovers/leaders?business_id=
                                                the leaders I may send to, with
                                                why ("Leads Youth · you help it
-                                               as Rooms")
+                                               as Rooms"), and for the owner
+                                               and an Admin every department
+                                               (all_departments)
     POST /church/handovers/{id}/seen           Got it, from My week: the login
                                                whose own person it's for
 
@@ -267,6 +269,19 @@ def leaders(ch: co.Church, uid: str) -> List[Dict[str, Any]]:
     return sorted(out, key=lambda r: (r["name"].casefold(), r["contact_id"]))
 
 
+def all_departments(ch: co.Church, uid: str) -> List[Dict[str, Any]]:
+    """Every active department of the church's, for the owner and an Admin:
+    `send` lets them name any of them for any leader, so the picker can offer
+    the ones a leader's own `departments` doesn't carry. [{id, name}], in the
+    map's order. A Manager gets none: it sends only for a leader's own
+    departments it may send for, which that list already is. The map closed:
+    none. A read that fails is a 503."""
+    if _sender(ch, uid) not in co.KEEPS_ALL:
+        return []
+    m = ch.map
+    return [{"id": d["id"], "name": _plain(d.get("name")) or "A department"} for d in (m.active() if m else [])]
+
+
 # ─── Sending ──────────────────────────────────────────────────────────
 
 def send(ch: co.Church, uid: str, body: Dict[str, Any]) -> Dict[str, Any]:
@@ -431,9 +446,13 @@ def _gate(session: UserSession, biz: Dict[str, Any]) -> co.Church:
 @router.get("/handovers/leaders")
 def handovers_leaders(business_id: str, session: UserSession = Depends(sb_clients.authed_request),
                       biz: Dict[str, Any] = Depends(business_access.business_access("member"))):
-    """The leaders I may send to, each with why. Nobody is an empty list."""
+    """The leaders I may send to, each with why and the departments that are
+    their own. Nobody is an empty list. `all_departments`: for the owner and
+    an Admin, every active department (they may send for any of them); for a
+    Manager, an empty list."""
     ch = _gate(session, biz)
-    return {"leaders": leaders(ch, str(session.user.id))}
+    uid = str(session.user.id)
+    return {"leaders": leaders(ch, uid), "all_departments": all_departments(ch, uid)}
 
 
 @router.get("/handovers")
