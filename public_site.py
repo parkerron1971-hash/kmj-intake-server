@@ -7097,6 +7097,15 @@ async def _serve_site_by_slug(slug: str, path: str = "/", *, query: str = "") ->
             if page is None:
                 raise HTTPException(404, "Page not found")
             return HTMLResponse(page, headers={**_PUBLIC_SITE_NO_STORE_HEADERS})
+        # A church's New here card (new_here.py, 2026-11-14): /new and
+        # /new/<code>. Asked only after a hand-built page claimed the path;
+        # None means it isn't a church with New here, and the address is
+        # served as it would be anyway.
+        import new_here
+        if new_here.is_card_path(normalized_path):
+            got = await new_here.page_for(biz_id, normalized_path, query)
+            if got is not None:
+                return HTMLResponse(got[0], status_code=got[1], headers={**_PUBLIC_SITE_NO_STORE_HEADERS})
         # ─── Academy Phase 4 — /academy catalog + course pages ─────
         if normalized_path == "/academy" or normalized_path.startswith("/academy/"):
             return await _serve_academy(client, biz_id, normalized_path, standalone=False)

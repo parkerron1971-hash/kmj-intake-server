@@ -618,6 +618,11 @@ app.include_router(devotionals_router)
 # public_site_router; it answers only on a church's address.
 from devotional_daily import router as devotional_daily_router
 app.include_router(devotional_daily_router)
+# New here (new_here.py): a guest texts the church's word; the card and the
+# office's room. The card's pages are served by public_site after a
+# church's own pages; this router holds the card's POST and /new-here/*.
+from new_here import router as new_here_router
+app.include_router(new_here_router)
 # Church, Youth and Kids spaces (member_spaces.py): leaders' posts and the
 # office's leader approvals. BEFORE public_site_router.
 from member_spaces import router as member_spaces_router
