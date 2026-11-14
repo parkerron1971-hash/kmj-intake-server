@@ -66,8 +66,8 @@ the row's version: a miss is a 409, "changed just now", and changes nothing.
 A person is keyed by their contact; a login with no person behind it by its
 user id. A login's person is church_over.Church.login_person (the seat's tied
 record, else the one person its sign-in email names: business_users_router.
-seat_person's rule, read once for the whole church; the owner's by their
-sign-in email). A read looks for the person's row first, then the login's.
+seat_person's rule, read once for the whole church; the owner's is the
+person the church picked, else by their sign-in email). A read looks for the person's row first, then the login's.
 
 Server-only tables (supabase/APPLY-2026-11-12-church-job-descriptions.sql).
 Before the file is applied (ready()) every route answers 503 with "isn't

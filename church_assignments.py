@@ -47,6 +47,14 @@ someone else, and reads each task with its church and its person first.
                                                      catalog day, its picked day
   PUT    /church/duty-days                           pick one (the login, or anyone
                                                      over it); null puts it back
+  GET    /church/owner-person?business_id=           which of the church's people
+                                                     the owner is, and how that
+                                                     was found (the owner, an
+                                                     Admin)
+  PUT    /church/owner-person                        pick that person (the owner;
+                                                     an Admin only while no one
+                                                     is found); null goes back to
+                                                     the sign-in email
 
 `for` is login:<user id> or person:<contact id>. Every write answers with what
 it saved; a failed write is a 503, never a 200. Money never travels through
@@ -993,6 +1001,90 @@ def duty_days_pick(body: Dict[str, Any], session: UserSession = Depends(sb_clien
     if "day" not in body:
         raise HTTPException(400, "Say the day, or null to put it back")
     return pick_day(ch, me, target, body.get("duty"), body["day"])
+
+
+# ─── Which person the owner is ────────────────────────────────────────
+
+OWNER_PERSON_WHO = "Only the owner or an admin says which person the owner is."
+OWNER_PERSON_SET = "The owner is already matched to a person here. Only the owner changes that."
+OWNER_PERSON_GONE = "That person isn't on this church's list."
+OWNER_PERSON_CHILD = "Pick an adult's record. That one is a child's."
+
+
+def _owner_person_role(ch: co.Church, me: Dict[str, Any]) -> str:
+    role = ch.role(me["id"]) if me["kind"] == co.LOGIN else None
+    if role not in co.KEEPS_ALL:
+        raise HTTPException(403, OWNER_PERSON_WHO)
+    return role
+
+
+def owner_person_page(ch: co.Church, me: Dict[str, Any]) -> Dict[str, Any]:
+    """{contact_id, name, how, can_change}: which of the church's people its
+    owner is (church_over.Church.owner_person), so a screen can say "This is
+    you". `how` is 'picked' (the church said so), 'email' (found by the
+    owner's sign-in email, as before) or 'none'. `can_change`: the owner
+    always; an Admin only while no one is found, so an Admin can fill the
+    gap before the pastor signs in but never moves the owner off the record
+    the church already has (that would take a pastor out from under the
+    pastors rule). The owner and the Admins read it; anyone else is a 403."""
+    role = _owner_person_role(ch, me)
+    cid, how = ch.owner_person, ch.owner_how
+    return {"contact_id": cid, "name": ch.names([cid]).get(cid) if cid else None, "how": how,
+            "can_change": role == "owner" or how == co.NOT_FOUND}
+
+
+def pick_owner_person(ch: co.Church, me: Dict[str, Any], contact_id: Any) -> Dict[str, Any]:
+    """Say which of the church's people the owner is (businesses.settings.
+    church_owner_contact_id), or with None take the pick away so the sign-in
+    email answers again. The person is this church's own and an adult's
+    record (church_families.is_minor: on a family as a child, under 18 by
+    birthdate, or tagged so). The live settings are read fresh and merged,
+    so nothing else kept there is lost. Answers with the page as it now is."""
+    if not owner_person_page(ch, me)["can_change"]:
+        raise HTTPException(403, OWNER_PERSON_SET)
+    cid: Optional[str] = None
+    if contact_id is not None:
+        cid = _uuid(contact_id, "person")
+        rows = _need(f"/contacts?business_id=eq.{_q(ch.b)}&id=eq.{_q(cid)}&select=id,name,birthdate,tags&limit=1")
+        if not rows:
+            raise HTTPException(404, OWNER_PERSON_GONE)
+        import church_families as cf
+        minors = cf.minor_ids(ch.b)
+        if minors is None:
+            raise HTTPException(503, UNREAD)
+        if cf.is_minor(rows[0], minors):
+            raise HTTPException(400, OWNER_PERSON_CHILD)
+    live = _need(f"/businesses?id=eq.{_q(ch.b)}&select=id,settings&limit=1")
+    if not live:
+        raise HTTPException(404, "business not found")
+    settings = dict(live[0]["settings"]) if isinstance(live[0].get("settings"), dict) else {}
+    if cid is None:
+        settings.pop(co.OWNER_PERSON_KEY, None)
+    else:
+        settings[co.OWNER_PERSON_KEY] = cid
+    got = sb_clients.sb_patch_as_service(f"/businesses?id=eq.{_q(ch.b)}", {"settings": settings})
+    if not isinstance(got, list) or not got:
+        raise HTTPException(503, UNSAVED)
+    return owner_person_page(co.Church({**ch.business, "settings": settings}), me)
+
+
+@router.get("/owner-person")
+def owner_person(business_id: str, session: UserSession = Depends(sb_clients.authed_request),
+                 biz: Dict[str, Any] = Depends(business_access.business_access("member"))):
+    """Which of the church's people the owner is: {contact_id, name, how,
+    can_change}. The owner and the Admins; any other seat is a 403."""
+    return owner_person_page(_church(session, biz), _me(session))
+
+
+@router.put("/owner-person")
+def owner_person_pick(body: Dict[str, Any], session: UserSession = Depends(sb_clients.authed_request)):
+    """{business_id, contact_id | null}: the person the owner is; null goes
+    back to the sign-in email. Answers as the GET does."""
+    body = body or {}
+    ch = _church_from_body(session, body)
+    if "contact_id" not in body:
+        raise HTTPException(400, "Say the person, or null to go back to the sign-in email")
+    return pick_owner_person(ch, _me(session), body["contact_id"])
 
 
 # ─── Telling people: a first assignment in one email ──────────────────

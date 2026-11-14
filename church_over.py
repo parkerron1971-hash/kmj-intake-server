@@ -38,6 +38,14 @@ it from the church's own data, never from names or title words:
                      people with the owner's sign-in email, the owner's
                      person however found): never under anyone, never walked
                      through. A failed read of the owner's email is a 503
+  the owner's person  the one the church picked (businesses.settings.
+                     church_owner_contact_id, Church.owner_pick: set from
+                     PUT /church/owner-person) while it is still one of the
+                     church's people; else, as before, the one the owner's
+                     sign-in email names. A pastor whose record carries
+                     another email than he signs in with is found by the
+                     pick. Church.owner_person is the one place that says
+                     who the owner is; owner_how says how it was found
   the seniors ...... every holder of a senior-job role (or, where the map
                      names them, of a role that gives the pastor's yes):
                      under the owner only, never walked through, so the owner
@@ -73,7 +81,8 @@ it from the church's own data, never from names or title words:
 `me` and `who` are {kind: 'login', id: user id} or {kind: 'person', id:
 contact id} (a member signed in to the member app). A login's person is its
 business_users.contact_id, else the one contact its sign-in email names
-(business_users_router.match_contact's rule; the owner's by their Auth email).
+(business_users_router.match_contact's rule; the owner's is the church's
+pick, else by their Auth email).
 
 A read that fails is a 503, never "nobody is under you". Each table is read
 once per Church (one request); church_map.once() keeps the map to one read.
@@ -110,6 +119,11 @@ IDS_PER_READ = 100
 # never kept, so the next request asks again.
 OWNER_EMAIL_SECONDS = 600
 _OWNER_EMAIL: Dict[str, Tuple[float, str]] = {}
+# Which of the church's people its owner is, where the church said so
+# (businesses.settings): read before the sign-in email, which stays the
+# answer when this is unset or no longer one of the church's people.
+OWNER_PERSON_KEY = "church_owner_contact_id"
+PICKED, BY_EMAIL, NOT_FOUND = "picked", "email", "none"
 
 
 # ─── The switch ───────────────────────────────────────────────────────
@@ -337,12 +351,47 @@ class Church:
         return self._got("by_email", load)
 
     @property
+    def settings(self) -> Dict[str, Any]:
+        """The church's settings: the ones on the row this Church was made
+        from, else (a caller that read the church without them) read once.
+        A read that fails is a 503."""
+        def load() -> Dict[str, Any]:
+            if "settings" in self.business:
+                got = self.business.get("settings")
+            else:
+                rows = _need(f"/businesses?id=eq.{_q(self.b)}&select=settings&limit=1")
+                got = rows[0].get("settings") if rows else None
+            return got if isinstance(got, dict) else {}
+        return self._got("settings", load)
+
+    @property
+    def owner_pick(self) -> Optional[str]:
+        """The person the church said its owner is (settings.
+        church_owner_contact_id), while that record is still one of the
+        church's people. None when nothing is picked or the pick no longer
+        points at one of them: the sign-in email then answers, as before.
+        Read only where something is picked; a read that fails is a 503."""
+        def load() -> Optional[str]:
+            if not self.owner:
+                return None
+            try:
+                cid = str(uuid.UUID(str(self.settings.get(OWNER_PERSON_KEY) or "")))
+            except (ValueError, TypeError):
+                return None
+            rows = _need(f"/contacts?business_id=eq.{_q(self.b)}&id=eq.{_q(cid)}&select=id&limit=1")
+            return cid if rows else None
+        return self._got("owner_pick", load)
+
+    @property
     def login_person(self) -> Dict[str, str]:
         """user id -> contact id, for the owner and every seat: its tied
         record, else the one person its email names (with several, the one
-        whose first name the login gave)."""
+        whose first name the login gave). The owner's is the church's pick
+        first (owner_pick)."""
         def load() -> Dict[str, str]:
             out = {u: str(s["contact_id"]) for u, s in self.seats.items() if s.get("contact_id")}
+            if self.owner_pick:
+                out[self.owner] = self.owner_pick
             want: Dict[str, Tuple[str, str]] = {}
             for u, s in self.seats.items():
                 email = (s.get("invited_email") or "").strip().lower()
@@ -368,7 +417,20 @@ class Church:
 
     @property
     def owner_person(self) -> Optional[str]:
+        """Which of the church's people the owner is: the one place that
+        says so (the top, owner_guarded, the hand-overs and the job
+        descriptions all read it). The church's pick, else the one the
+        owner's sign-in email names, else no one."""
         return self.login_person.get(self.owner) if self.owner else None
+
+    @property
+    def owner_how(self) -> str:
+        """How owner_person was found: 'picked' (the church said so),
+        'email' (not picked: found as it always was, by the owner's sign-in
+        email) or 'none' (no one found)."""
+        if self.owner_pick:
+            return PICKED
+        return BY_EMAIL if self.owner_person else NOT_FOUND
 
     @property
     def top(self) -> Set[str]:
