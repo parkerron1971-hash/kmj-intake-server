@@ -194,12 +194,12 @@ def rdb(monkeypatch):
         groups=[{"id": "g1", "business_id": BIZ, "kind": "small_group", "active": True, "name": "Tuesday Women"},
                 {"id": "gt", "business_id": BIZ, "kind": "team", "active": True, "name": "Greeters"},
                 {"id": "gt2", "business_id": BIZ, "kind": "team", "active": True, "name": "Ushers"}],
-        group_members=[{"id": "gm1", "business_id": BIZ, "group_id": "g1", "contact_id": M1, "joined_on": "2026-01-01"},
-                       {"id": "gm2", "business_id": BIZ, "group_id": "g1", "contact_id": M2, "joined_on": "2026-01-01"},
-                       {"id": "gm3", "business_id": BIZ, "group_id": "gt", "contact_id": V1, "joined_on": "2026-10-07"},
-                       {"id": "gm4", "business_id": BIZ, "group_id": "gt", "contact_id": V2, "joined_on": "2026-03-01"},
-                       {"id": "gm5", "business_id": BIZ, "group_id": "gt", "contact_id": V3, "joined_on": "2026-10-09"},
-                       {"id": "gm6", "business_id": BIZ, "group_id": "gt2", "contact_id": V3, "joined_on": "2026-02-01"}],
+        group_members=[{"business_id": BIZ, "group_id": "g1", "contact_id": M1, "joined_on": "2026-01-01"},
+                       {"business_id": BIZ, "group_id": "g1", "contact_id": M2, "joined_on": "2026-01-01"},
+                       {"business_id": BIZ, "group_id": "gt", "contact_id": V1, "joined_on": "2026-10-07"},
+                       {"business_id": BIZ, "group_id": "gt", "contact_id": V2, "joined_on": "2026-03-01"},
+                       {"business_id": BIZ, "group_id": "gt", "contact_id": V3, "joined_on": "2026-10-09"},
+                       {"business_id": BIZ, "group_id": "gt2", "contact_id": V3, "joined_on": "2026-02-01"}],
         group_meetings=[{"id": f"mt{i}", "business_id": BIZ, "group_id": "g1", "met_on": d}
                         for i, d in enumerate(["2026-10-13", "2026-10-20", "2026-10-27"])],
         group_meeting_attendance=[{"business_id": BIZ, "meeting_id": f"mt{i}", "contact_id": M1} for i in range(3)],
@@ -569,3 +569,26 @@ def test_my_week_carries_the_line(monkeypatch):
     src = open(mw.__file__, encoding="utf-8").read()
     assert "church_monthly_report.week_item(business, user_id, role, today)" in src
     assert '"report": 3' in src
+
+
+def test_the_sunday_teams_read_asks_only_for_columns_group_members_has(app, monkeypatch):
+    # group_members' key is (group_id, contact_id); it has no id column. The
+    # read asked for one, PostgREST refused it, and every report said Sunday
+    # teams couldn't be read. The fake now holds the real table's columns.
+    import sb_clients
+    seen = []
+    real = sb_clients.sb_get_as_service
+
+    def spy(path, *a, **kw):
+        if path.startswith("/group_members"):
+            seen.append(path)
+        return real(path, *a, **kw)
+    monkeypatch.setattr(sb_clients, "sb_get_as_service", spy)
+    got = _lines(_get(app))
+    assert got["new_volunteers"] == 1
+    assert seen, "the Sunday teams read ran"
+    for path in seen:
+        select = path.split("select=")[1].split("&")[0]
+        assert set(select.split(",")) <= {"group_id", "contact_id", "joined_on", "role", "business_id", "created_at"}
+        if "offset=" in path:                    # a paged read needs a stable, real order
+            assert "order=group_id,contact_id" in path

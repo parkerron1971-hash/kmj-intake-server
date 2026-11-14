@@ -502,8 +502,12 @@ def sunday(ctx: Dict[str, Any]) -> Lines:
                 out.add("serving_filled", "Serving places filled", filled, f"Serving places filled: {filled}")
                 out.add("serving_open", "Serving places open", empty, f"Serving places open: {empty}")
             joined: Dict[str, date] = {}
-            for m in _all_in(f"/group_members?business_id=eq.{b}&select=id,contact_id,joined_on", "group_id", teams,
-                             "Sunday teams"):
+            # group_members has no id: its key is (group_id, contact_id), so
+            # that pair is the select and the stable paging order. Reading
+            # `id` made PostgREST refuse the read, and every church's report
+            # said Sunday teams couldn't be read.
+            for m in _all_in(f"/group_members?business_id=eq.{b}&select=group_id,contact_id,joined_on", "group_id",
+                             teams, "Sunday teams", order="group_id,contact_id"):
                 d, cid = _day(m.get("joined_on")), str(m.get("contact_id") or "")
                 if cid and d and (cid not in joined or d < joined[cid]):
                     joined[cid] = d
