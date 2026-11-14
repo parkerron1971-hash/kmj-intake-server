@@ -200,12 +200,18 @@ def send(church: cm.Church, rows: List[Dict[str, Any]]) -> int:
             continue
         rs = sorted(g["rows"], key=lambda x: str(x.get("alert_at") or ""), reverse=True)
         title, body = words(rs, box_label(g["box"]), own)
-        data = {"tray": tray}
+        # The church it's from rides along: a tap opens that church's Email on
+        # the message, whichever business the device was last signed up from.
+        data = {"tray": tray, "biz": church.id}
         if len(rs) == 1:
             data["mail"] = str(rs[0]["id"])
         try:
+            # Every device the person turned alerts on for, whatever business
+            # it was signed up from (a device keeps one business, and an
+            # owner of two would otherwise hear one church's mail on none of
+            # them: Kevin, 2026-11-14, "it didn't pop up on my phone").
             sent += push_notifications.send_to_user(uid, title=title, body=body, nav="operate:email",
-                                                    tag=f"church-mail-{tray}", data=data, business_id=church.id)
+                                                    tag=f"church-mail-{tray}", data=data)
         except Exception as e:  # noqa: BLE001 — the mail is in Email either way
             logger.warning("church mail alert to %s failed: %s", uid[:8], e)
     return sent
