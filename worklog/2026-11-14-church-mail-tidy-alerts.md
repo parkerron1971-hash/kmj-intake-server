@@ -19,3 +19,12 @@ Kevin approved the mock for new-mail alerts and archive/delete. The server now
 alerts each person's phone when church mail comes (by their choice, honouring
 quiet hours), feeds the bell from the mail itself, and keeps archive per person
 and a 30-day Trash per box.
+
+**Follow-up (same day, BE church-mail-alerts-every-device):** Kevin turned alerts
+on, sent a test, and nothing popped up. The row's alert went out at once
+(alert_at and alerted_at both 10:14:36 ET), but his login had one push device
+on file, from 2026-06-12, signed up under another business, and none for Love
+City: send_to_user(business_id=…) found no device. A device keeps one business
+(push_subscriptions is unique on endpoint), so church mail alerts now go to
+every device the person turned on, carrying data.biz so a tap opens that
+church's Email.

@@ -32,7 +32,7 @@ for p in (ROOT, HERE):
 import church_mail_alerts as cma  # noqa: E402
 import church_mail_room as room  # noqa: E402
 import push_notifications  # noqa: E402
-from test_church_mail import JESSICA, MANAGER, TIA, db, resend  # noqa: E402,F401
+from test_church_mail import BIZ, JESSICA, MANAGER, TIA, db, resend  # noqa: E402,F401
 from test_church_mail_room import _all_in, _arrive, _row_for, _tray, call, mail  # noqa: E402,F401
 
 
@@ -54,6 +54,7 @@ def test_new_mail_alerts_whoever_the_box_reaches(mail, resend, pushes):
     _arrive(resend, "a1", "jessica@lovecityc.com", subject="Keys")
     assert [(u, k["title"]) for u, k in pushes] == [(JESSICA, "Sam Sender → you")]
     assert pushes[0][1]["nav"] == "operate:email" and pushes[0][1]["data"]["mail"] == _row_for(mail, "a1")["id"]
+    assert pushes[0][1]["data"]["biz"] == BIZ and "business_id" not in pushes[0][1],         "every device the person turned on, whatever business it signed up from"
     assert pushes[0][1]["body"].startswith("Keys")
     pushes.clear()
     _arrive(resend, "a2", "office@lovecityc.com", subject="The hall")
