@@ -96,6 +96,7 @@ import business_access
 import sb_clients
 from auth_supabase import AuthedUser, require_user
 from church_duties import holds, refusal
+from church_over import NOT_HANDED, WHO_HANDS
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/church/board", tags=["church"])
@@ -1340,8 +1341,9 @@ def approve(me: Dict[str, Any], meeting_id: str, in_meeting_id: Any = None) -> D
     return meeting_page(me, got[0])
 
 
-WHO_HANDS = "Only the owner, or whoever is over them on the leaders map, gives a pastor or an elder work."
-NOT_HANDED = "The board named {name} for this. It isn't handed to them yet. " + WHO_HANDS
+# NOT_HANDED and WHO_HANDS, the words a follow-up left for the owner carries,
+# live with the rule (church_over, imported above): the hourly sweeps say
+# WHO_HANDS too. The names here stay for everything that already reads them.
 
 
 def _not_handed(me: Dict[str, Any], items: List[Dict[str, Any]], members: Dict[str, Dict[str, Any]]) -> Set[str]:

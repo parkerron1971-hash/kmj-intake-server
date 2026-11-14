@@ -18,6 +18,17 @@ now do too, from the same hourly sweep:
                  login in one sweep (a first assignment is 5 to 9 at once)
                  are one email and one push, naming who handed them out
                  ("Jessica gave you 7 things for your first four weeks").
+  Taken back ... there too, before anyone is told (Kevin, 2026-11-12:
+                 "admins can not give work to elders and pastors"): the
+                 Tasks screen writes tasks straight to the database, so a
+                 request made by hand can hand a pastor's or an elder's
+                 login a task. The sweep asks church_over.may_hand for the
+                 login in handed_by; one it may not make is un-handed as the
+                 board leaves one (church_leader_tasks.take_back: handed to
+                 no one, the name in its title, why in its notes), nobody is
+                 told it is theirs, and the login that handed it gets one
+                 email and one push saying why (tell_taken_back). Who is a
+                 pastor unread: left as it is for the next sweep.
   Late ......... in the church's morning (church_leader_tasks.LATE_FROM to
                  LATE_UNTIL, its own clock): an open task past its due date,
                  told before today, goes up once (seat_late_told_at) to whoever
@@ -201,9 +212,16 @@ def tell_new(biz: Dict[str, Any], rows: List[Dict[str, Any]], now: datetime, sta
     open for the church (church_over.church_open), a login handed several in
     one sweep (a first assignment is 5 to 9 at once) gets one email and one
     push for all of them, naming who handed them out; one alone is told as
-    before."""
+    before. There too, a hand-off to a pastor or an elder that its login may
+    not make is taken back before anyone is told
+    (church_leader_tasks.take_back)."""
     clt = _clt()
     b = str(biz["id"])
+    # First, a hand-off its login may not make (a pastor's or an elder's,
+    # from an office seat) is taken back, and nobody is told it is theirs.
+    rows = clt.take_back(biz, rows, "assigned_to", "seat_told_at", stats, "office_")
+    if not rows:
+        return
     tz = clt.zone(biz)
     w = {"church": clt._plain(biz.get("name")) or "Your church", "today": now.astimezone(tz).date() if tz else None,
          "names": clt.handers(biz, {str(r.get("assigned_to")) for r in rows} | {str(r.get("handed_by") or "") for r in rows}),
@@ -296,6 +314,60 @@ def _tell_group(biz: Dict[str, Any], uid: str, tasks: List[Dict[str, Any]], now:
     stats["office_told"] += len(send)
 
 
+def taken_back_text(name: str, items: List[Dict[str, str]]) -> str:
+    """The email to a login whose hand-off was taken back, in plain words:
+    what it was, who it was for, why, and where the task is now."""
+    import church_over
+    clt = _clt()
+    lines = [f"Hi {clt.first_name(name) or 'there'},"]
+    if len(items) == 1:
+        x = items[0]
+        lines.append(f"You handed {x['name']} a task: {x['title']}.")
+        lines.append(f"It was taken back, so it isn’t handed to them now. {church_over.WHO_HANDS}")
+        lines.append(f"The task is still in Tasks, with {x['name']}’s name on it, for the owner to hand out.")
+    else:
+        lines.append(f"You handed out {len(items)} tasks that were taken back:\n"
+                     + "\n".join(f"“{x['title']}” ({x['name']})" for x in items))
+        lines.append(f"They aren’t handed to anyone now. {church_over.WHO_HANDS}")
+        lines.append("They are still in Tasks, with a name on each, for the owner to hand out.")
+    return "\n\n".join(lines)
+
+
+def tell_taken_back(biz: Dict[str, Any], back: Dict[str, List[Dict[str, str]]]) -> int:
+    """Each login whose hand-off a sweep just took back
+    (church_leader_tasks.take_back), told once: one email to their sign-in
+    address and one push for everything this sweep took back from them.
+    `back` is {user id: [{id, title, name}]}. The take-back is done already
+    and is the claim, so this is sent once and never tried again: an email
+    that fails, or a login with no address, leaves the note on the task to
+    say why. Returns how many logins were told."""
+    clt = _clt()
+    b = str(biz["id"])
+    church = clt._plain(biz.get("name")) or "Your church"
+    names = clt.handers(biz, back)
+    link, reply_to = _link(b), clt._office_email(biz)
+    told = 0
+    for uid, items in back.items():
+        who = person(biz, uid, names)
+        if not who["email"] or not items:
+            continue
+        one = len(items) == 1
+        what = "a task was taken back" if one else f"{len(items)} tasks were taken back"
+        key = hashlib.sha1(",".join(sorted(x["id"] for x in items)).encode()).hexdigest()[:16]
+        try:
+            html = render(biz, taken_back_text(who["name"], items), what[:1].upper() + what[1:], link, "Open Tasks")
+            clt.deliver(biz, who["email"], who["name"], f"{church}: {what}", html, f"office-task-back-{key}-{uid}",
+                        reply_to=reply_to)
+        except Exception:
+            logger.warning("office tasks: a taken-back email failed (business %s)", b[:8], exc_info=True)
+            continue
+        _push(uid, b, "A task was taken back" if one else "Tasks were taken back",
+              f"{items[0]['title']} ({items[0]['name']})" if one else "They aren’t handed to anyone now. Open Tasks.",
+              f"task-back-{key}")
+        told += 1
+    return told
+
+
 def tell_late(biz: Dict[str, Any], rows: List[Dict[str, Any]], now: datetime, stats: Dict[str, int]) -> None:
     clt = _clt()
     tz = clt.zone(biz)
@@ -373,10 +445,14 @@ def sweep_tick(now: Optional[datetime] = None) -> Dict[str, int]:
     """Hourly, on the worker (kmj_intake_automation): new hand-offs to a
     login are told; in each church's morning, late ones go up. A church that
     fails never stops the others. Quiet with the switch off or before the
-    migration."""
+    migration. `office_taken_back`: hand-offs to a pastor's or an elder's
+    login that weren't the login's to make, un-handed before anyone was told;
+    `office_rule_unread`: ones left for the next sweep because who is a
+    pastor couldn't be read (church_leader_tasks.take_back)."""
     clt = _clt()
     stats = {"churches": 0, "office_told": 0, "office_self": 0, "office_no_email": 0, "office_unsent": 0,
-             "office_late": 0, "office_late_no_one": 0, "office_late_unsent": 0}
+             "office_late": 0, "office_late_no_one": 0, "office_late_unsent": 0,
+             "office_taken_back": 0, "office_rule_unread": 0}
     if clt.mode() == "off":
         return stats
     now = now or datetime.now(timezone.utc)

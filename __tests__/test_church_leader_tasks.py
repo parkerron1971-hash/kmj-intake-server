@@ -386,7 +386,8 @@ def test_a_done_task_and_another_churchs_closed_switch_are_never_told(db, monkey
     assert clt.sweep_tick(NOW)["told"] == 0 and not db.sent, "nothing at all for a church the switch hasn't reached"
     monkeypatch.setenv("CHURCH_LEADER_TASKS", "off")
     assert clt.sweep_tick(NOW) == {"churches": 0, "told": 0, "no_email": 0, "unsent": 0, "late": 0,
-                                   "late_no_one": 0, "late_no_email": 0, "late_unsent": 0}
+                                   "late_no_one": 0, "late_no_email": 0, "late_unsent": 0,
+                                   "taken_back": 0, "rule_unread": 0}
 
 
 def test_two_sweeps_at_once_send_once(db, monkeypatch):
