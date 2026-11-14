@@ -237,9 +237,13 @@ def tz_of(business: Dict[str, Any]) -> ZoneInfo:
         return FALLBACK_TZ
 
 
-def card_link(business_id: str, code: str) -> str:
+def _origin(business_id: str) -> str:
     import church_follow_up
-    return f"{church_follow_up.site_origin(business_id)}{CARD_PATH}/{code}"
+    return church_follow_up.site_origin(business_id)
+
+
+def card_link(business_id: str, code: str) -> str:
+    return f"{_origin(business_id)}{CARD_PATH}/{code}"
 
 
 def new_code() -> str:
@@ -486,10 +490,18 @@ def thanks_html(church_name: str, name: str) -> str:
                                            "Someone from our church will be in touch this week.</p>")
 
 
-def nothing_html(church_name: str, number: str) -> str:
-    how = (f"<p>New here? Text the word on the screen to {_e(pretty_phone(number))} and we'll send you a "
-           "card to fill in.</p>") if number else "<p>This link isn't working any more.</p>"
-    return _page(church_name or "Welcome", "Welcome", f"<h1>Welcome!</h1>{how}")
+def nothing_html(church_name: str, number: str, word: str = "") -> str:
+    """/new without a card: where the Sunday slide's QR code lands. One tap
+    starts the text, so a phone that scanned it is a Send away."""
+    if not number:
+        return _page(church_name or "Welcome", "Welcome", "<h1>Welcome!</h1><p>This link isn't working any more.</p>")
+    w = _e(word or DEFAULTS["word"])
+    tap = (f'<p><a href="sms:{_e(number)}?&amp;body={w}" style="display:inline-block;padding:14px 20px;'
+           f'border-radius:14px;background:var(--btn);color:var(--btnink);font-weight:700;text-decoration:none">'
+           f'Text {w} to {_e(pretty_phone(number))}</a></p>')
+    return _page(church_name or "Welcome", "Welcome",
+                 f"<h1>We're so glad you're here.</h1><p>Text <b>{w}</b> to {_e(pretty_phone(number))} and we'll "
+                 f"text you back a short card to fill in.</p>{tap}")
 
 
 def _church(request: Request) -> Optional[Dict[str, Any]]:
@@ -528,14 +540,14 @@ async def page_for(business_id: str, path: str, query: str = "") -> Optional[Tup
     code = path[len(CARD_PATH) + 1:].strip("/").upper() if path != CARD_PATH else ""
     if not code:
         number = await asyncio.to_thread(own_number, str(business_id))
-        return nothing_html(church_name, number), 200
+        return nothing_html(church_name, number, settings_of(business)["word"]), 200
     guest = await asyncio.to_thread(_by_code, str(business_id), code)
     if guest is None:
         return _page(church_name, "One moment", "<h1>One moment</h1><p>This page couldn't load just now. "
                                                 "Try again in a minute.</p>"), 503
     if not guest:
         number = await asyncio.to_thread(own_number, str(business_id))
-        return nothing_html(church_name, number), 404
+        return nothing_html(church_name, number, settings_of(business)["word"]), 404
     q = parse_qs(query or "")
     if (q.get("done") or [""])[0] == "1":
         return thanks_html(church_name, first_name(guest.get("name"))), 200
@@ -741,6 +753,11 @@ def overview(business: Dict[str, Any], *, can_edit: bool) -> Dict[str, Any]:
         "number": number,
         "number_pretty": pretty_phone(number) if number else "",
         "sms_link": f"sms:{number}?&body={settings['word']}" if number else "",
+        # The church's /new: where the Sunday slide's QR code points (the
+        # announcement board takes only https links), and a sample card link
+        # so the room can count the welcome's length as it will leave.
+        "card_home": f"{_origin(biz)}{CARD_PATH}",
+        "card_sample": f"{_origin(biz)}{CARD_PATH}/ABCD2345",
         "guests": guests,
         "counts": counts_of(business, guests or []),
         "texts_per_guest": 1 + sum(1 for s in STEPS if settings[s]["on"]),

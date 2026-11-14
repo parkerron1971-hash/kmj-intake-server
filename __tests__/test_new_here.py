@@ -144,7 +144,7 @@ def db(monkeypatch, eastern):
     monkeypatch.setattr(nh.sb_clients, "sb_post_as_service", post)
     monkeypatch.setattr(nh.sb_clients, "sb_patch_as_service", patch)
     monkeypatch.setattr(nh, "switched_on", lambda bid: state["switched"])
-    monkeypatch.setattr(nh, "card_link", lambda bid, code: f"https://gracehill.church/new/{code}")
+    monkeypatch.setattr(nh, "_origin", lambda bid: "https://gracehill.church")
     return state
 
 
@@ -322,6 +322,7 @@ def test_the_card_page(card, db):
     assert status == 404 and "(231) 555-0199" in lost
     home, status = run(nh.page_for(BIZ, "/new"))
     assert status == 200 and "(231) 555-0199" in home
+    assert 'href="sms:+12315550199?&amp;body=NEW"' in home                    # one tap starts the text
     db["switched"] = False
     assert run(nh.page_for(BIZ, "/new/ABCDEFGH")) is None                    # served as the site would anyway
 
@@ -403,6 +404,8 @@ def test_the_room_reads_and_saves(room, db):
     got = c.get(f"/new-here/{BIZ}").json()
     assert got["number_pretty"] == "(231) 555-0199" and got["sms_link"] == "sms:+12315550199?&body=NEW"
     assert got["can_edit"] is True and got["texts_per_guest"] == 4
+    assert got["card_home"] == "https://gracehill.church/new"
+    assert got["card_sample"] == "https://gracehill.church/new/ABCD2345"
     (g,) = got["guests"]
     assert g["name"] == "Dana Reyes" and g["phone_last4"] == "0142" and g["follow_up"]["reached"] is True
     r = c.put(f"/new-here/{BIZ}", json=_body().model_dump())
