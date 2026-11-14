@@ -2548,6 +2548,12 @@ async def contact_submit_endpoint(business_id: str, body: Dict[str, Any], reques
 
     if not _check_contact_rate(rate_limit.trusted_client_ip(request)):
         return failure(429, "Too many submissions. Please try again later.")
+    # A sample church (sample_church.py) takes no submissions: nothing in it
+    # is real, so nothing is stored, alerted or mailed. The write guard
+    # refuses this first; this holds if a route ever slips past it.
+    import sample_church
+    if await sample_church.is_sample_async(business_id):
+        return failure(409, sample_church.MESSAGE)
     try:
         data = website_forms.validate(body or {})
     except ValueError as exc:
@@ -2659,6 +2665,9 @@ async def contact_submit_endpoint(business_id: str, body: Dict[str, Any], reques
         target_email = _business_public_email(church_business.get("settings"))
 
     if not target_email:
+        return notification_failed
+    # Never to an address reserved for examples (sample_church.py, BE-3).
+    if sample_church.reserved_email(target_email):
         return notification_failed
 
     resend_api_key = os.environ.get("RESEND_API_KEY")

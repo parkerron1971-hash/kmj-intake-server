@@ -580,6 +580,12 @@ async def public_giving_checkout(
         raise HTTPException(404, "not found")
     biz = biz_rows[0]
 
+    # A sample church takes no gifts: nothing in it is real, and no money
+    # ever moves for one (sample_church.py, BE-3).
+    import sample_church
+    if await sample_church.is_sample_async(biz.get("id")):
+        raise HTTPException(404, "online giving isn't available here")
+
     if not giving_is_active(biz):
         raise HTTPException(404, "online giving isn't available here")
 

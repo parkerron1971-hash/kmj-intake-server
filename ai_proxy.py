@@ -228,6 +228,14 @@ async def ai_proxy(req: ProxyRequest, request: Request, user: AuthedUser = Depen
     # Phase E v1.1 — Chief message cap (dormant until BILLING_ENFORCE=on).
     _cap_biz = (req.metadata or {}).get("business_id") if hasattr(req, "metadata") else None
 
+    # A sample church spends nothing (sample_church.py, BE-3): the call is
+    # refused before it is attributed, rate-counted against the spend
+    # ceiling, or sent. The id sits in metadata, below what the write guard
+    # reads, so it is checked here.
+    if _cap_biz:
+        import sample_church
+        await sample_church.refuse_async(str(_cap_biz), "ai")
+
     # Whose bill this call lands on. The business id arrives in
     # req.metadata — caller-supplied, and unlike the Chief handler there
     # is no RLS-backed read here to corroborate it. So it is checked

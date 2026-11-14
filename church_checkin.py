@@ -457,6 +457,8 @@ async def sweep(now: Optional[datetime] = None) -> Dict[str, int]:
     import asyncio
     now = now or _now()
     rows = await asyncio.to_thread(_rows, "/church_checkin_settings?enabled=is.true&select=*&limit=1000")
+    import sample_church
+    rows = await asyncio.to_thread(sample_church.drop_samples, rows or [])   # BE-3
     made = 0
     for r in rows or []:
         try:

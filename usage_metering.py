@@ -776,7 +776,17 @@ def can_interact(business_id: str) -> bool:
     """The single AI-gate every Chief surface asks. True unless enforcement
     is on AND (allowance + credits exhausted, OR the practitioner's own
     hard cap reached). Failure of the metering read fails OPEN — metering
-    must never brick Chief."""
+    must never brick Chief.
+
+    A sample church (sample_church.py, BE-3) can never interact, whatever
+    enforcement says: nothing in it is spent. Its own ten questions are the
+    sample Chief lane's (BE-4), which does not ask this gate."""
+    try:
+        import sample_church
+        if sample_church.is_sample(business_id):
+            return False
+    except Exception as e:  # noqa: BLE001 - fails open like the rest
+        logger.warning(f"[metering] sample check failed open: {type(e).__name__}")
     try:
         if not feature_gates.enforcement_on():
             return True

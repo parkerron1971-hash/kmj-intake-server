@@ -786,6 +786,11 @@ def work_once():
     beat = threading.Thread(target=heartbeat, daemon=True)
     beat.start()
     try:
+        # A sample church makes no clips: the clip service is paid and its
+        # people are made up (sample_church.py, BE-3).
+        import sample_church
+        if sample_church.skip_id(run.get('business_id')):
+            raise RunFailed("This is a sample church, so nothing here is made.")
         drive(run)
         forget_job(run)
     except Cancelled:

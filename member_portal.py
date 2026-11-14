@@ -472,6 +472,18 @@ def _church_for_request(request: Request) -> Optional[Dict[str, Any]]:
     biz = site.pop("business", None)
     if not isinstance(biz, dict) or not biz.get("id"):
         return None
+    # A sample church (sample_church.py, BE-3) has no member app anyone can
+    # reach: nothing in it is real, and no sign-in code is ever sent. Only
+    # its owner's preview opens it (member_portal_preview.py): the one-time
+    # link being opened, or the preview cookie it set.
+    import sample_church
+    if sample_church.is_sample(biz["id"]):
+        import member_portal_preview as pv
+        opening = (request.url.path.rstrip("/") == "/my/preview"
+                   and bool(request.query_params.get("t")))
+        if not opening and not pv.read_session(
+                request.cookies.get(pv.PREVIEW_COOKIE) or "", biz["id"], epoch=_epoch(biz)):
+            return None
     return {"business": biz, "site": site}
 
 

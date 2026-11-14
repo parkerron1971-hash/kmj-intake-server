@@ -150,8 +150,10 @@ def _pack_revenue(days: int) -> Dict[str, Dict[str, float]]:
 def _businesses() -> List[Dict[str, Any]]:
     try:
         return sb_clients.sb_get_as_service(
+            # Never a sample church (sample_church.py, BE-3): made up, and
+            # one per church that signs up, so it would skew every margin.
             "/businesses?select=id,name,subscription_plan,subscription_status"
-            "&limit=10000") or []
+            "&is_sample=not.is.true&limit=10000") or []
     except Exception as e:
         logger.warning("[margin] businesses read failed: %s", e)
         return []

@@ -532,6 +532,7 @@ def read_income() -> Dict[str, Any]:
     import church_founding
     rows = sb_clients.sb_get_all_as_service(
         "/businesses?or=(subscription_status.in.(active,past_due),comp_tier.not.is.null)"
+        "&is_sample=not.is.true"   # a sample church never pays (sample_church.py, BE-3)
         "&select=id,owner_id,subscription_status,subscription_plan,comp_tier",
         key="id", strict=True, redact=True) or []
     return income_from_rows(rows, church_founding._owner_is_platform)

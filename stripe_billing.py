@@ -446,7 +446,8 @@ async def _sample_block(business: Dict[str, Any], church_sample: bool, *,
         logger.warning(f"/billing/access sample block failed: {type(e).__name__}: {e}")
         return {"business_id": None, "home_business_id": str(home_id) if home_id else None,
                 "ready": False, "questions_left": None,
-                "questions_of": sample_church.QUESTIONS_OF, "read_posts": [],
+                "questions_of": sample_church.QUESTIONS_OF,
+                "read_posts": list(sample_church.READ_POSTS),
                 "promise": None, "free_moves_left": None}
 
 

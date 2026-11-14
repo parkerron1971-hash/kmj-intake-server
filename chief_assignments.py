@@ -99,6 +99,12 @@ def enabled() -> bool:
     return (os.environ.get("CHIEF_ASSIGNMENTS") or "on").strip().lower() != "off"
 
 
+def _no_samples() -> str:
+    """A sample church's assignments are never worked (sample_church.py, BE-3)."""
+    import sample_church
+    return sample_church.exclude()
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -325,7 +331,7 @@ def due_rows(now: Optional[datetime] = None) -> List[Dict[str, Any]]:
     try:
         rows = sb_clients.sb_get_as_service(
             f"{TABLE}?status=eq.active&or=(next_check_at.is.null,next_check_at.lte.{_z(now)})"
-            f"&order=next_check_at.asc.nullsfirst&limit={MAX_PER_TICK}&{_SELECT}")
+            f"&order=next_check_at.asc.nullsfirst&limit={MAX_PER_TICK}&{_SELECT}" + _no_samples())
     except Exception as e:
         logger.warning(f"[assignments] fetch failed (table missing? apply {MIGRATION}): {e}")
         return []
@@ -485,6 +491,11 @@ async def check_one(row: Dict[str, Any], now: Optional[datetime] = None) -> Dict
     if not biz:
         await asyncio.to_thread(save, rid, {"next_check_at": _z(now + timedelta(minutes=CHECK_EVERY_MIN))})
         return {"did": "skipped", "why": "no business"}
+    # A sample church's Chief never works on its own (sample_church.py, BE-3).
+    import sample_church
+    if await sample_church.is_sample_async(bid):
+        await asyncio.to_thread(save, rid, {"next_check_at": _z(now + timedelta(days=1))})
+        return {"did": "skipped", "why": "sample church"}
 
     next_check = _z(now + timedelta(minutes=CHECK_EVERY_MIN))
     try:

@@ -395,6 +395,18 @@ async def send_via_resend(
     Suppression, List-Unsubscribe, and reply routing are identical either
     way — identity only changes the from line.
     """
+    # Nothing in a sample church is ever sent, and no mail goes to a domain
+    # reserved for examples and tests (example.com, *.test, *.invalid …),
+    # whoever sends it (sample_church.py, BE-3). First, before the key, so
+    # the refusal holds wherever this runs. A send with no business_id but a
+    # routed reply-to belongs to the business the reply-to names.
+    import sample_church
+    await sample_church.refuse_send_async("email", business_id, email=to_email)
+    if not business_id and _routed_reply_biz_prefix(reply_to):
+        _routed = await _business_row_for_send(None, reply_to)
+        if _routed and _routed.get("id"):
+            await sample_church.refuse_send_async("email", _routed["id"])
+
     key = os.environ.get("RESEND_API_KEY")
     if not key:
         raise RuntimeError("RESEND_API_KEY is not configured")

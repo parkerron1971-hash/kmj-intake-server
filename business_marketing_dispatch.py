@@ -575,7 +575,11 @@ async def due_tick(limit: int = CLAIM_LIMIT) -> Dict[str, Any]:
                     return {'skipped': 'storage'}
                 break
             claimed += len(rows)
-            sendable = [r for r in rows if post_for_me.allowed_for(str(r.get('business_id')))]
+            # A sample church posts nothing (sample_church.py, BE-3): held
+            # back exactly like a business outside the pilot.
+            import sample_church
+            real = await asyncio.to_thread(sample_church.drop_samples, rows)
+            sendable = [r for r in real if post_for_me.allowed_for(str(r.get('business_id')))]
             held += [r for r in rows if r not in sendable]
             for row in sendable:
                 try:
@@ -758,7 +762,8 @@ async def tell_owners(at: datetime) -> int:
                  and dedup_key(r) not in announced]
         if len(batch) < TELL_PAGE or len(rows) >= TELL_LIMIT:
             break
-    rows = rows[:TELL_LIMIT]
+    import sample_church
+    rows = (await asyncio.to_thread(sample_church.drop_samples, rows))[:TELL_LIMIT]   # BE-3
     if not rows:
         return 0
     owners = await asyncio.to_thread(_owners, sorted({str(UUID(str(r['business_id']))) for r in rows}))

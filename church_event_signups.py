@@ -881,6 +881,9 @@ def _public_church(slug: str) -> Tuple[Dict[str, Any], Dict[str, Any], List[Dict
     biz = _business(str(sites[0]["business_id"]))
     if not biz:
         raise HTTPException(404, "not found")
+    # A sample church takes no sign-ups (sample_church.py, BE-3).
+    if _sample_church().skip_id(biz["id"]):
+        raise HTTPException(404, "not found")
     modules = er.roster_modules_for(str(biz["id"]))
     if not er.events_public_is_active(biz, modules):
         raise HTTPException(404, "event signups aren't available here")
@@ -1262,15 +1265,21 @@ def record_refund(charge: Dict[str, Any], account_id: Any = ANY_ACCOUNT) -> Opti
     return biz_id
 
 
+def _sample_church():
+    import sample_church   # sample_church.py, BE-3
+    return sample_church
+
+
 def sweep_tick() -> int:
     """Every few minutes (the leader): holds and offers that ran out give
     their places back, and the waitlist moves. Quiet before the migration."""
     if mode() == "off":
         return 0
     rows = _rows(f"/church_event_registrations?status=in.(held,offered)&hold_expires_at=lt.{_q(_iso(_now()))}"
-                 "&select=business_id,entry_id&limit=500")
+                 "&select=business_id,entry_id&limit=500" + _sample_church().exclude())
     if not rows:
         return 0
+    rows = _sample_church().drop_samples(rows)   # BE-3
     pairs = sorted({(str(r["business_id"]), str(r["entry_id"])) for r in rows})
     n = 0
     for biz_id, entry_id in pairs:

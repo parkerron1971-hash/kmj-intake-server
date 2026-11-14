@@ -147,6 +147,9 @@ def consume_for_session(session: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     contact = session.get("contact_id")
     if not (sid and biz and contact):
         return None
+    import sample_church
+    if sample_church.skip_id(biz):   # a sample's balances are made up (BE-3)
+        return None
     if _already_consumed(str(sid)):
         return None
     kind = _session_balance_kind(str(biz), str(contact))
@@ -208,7 +211,8 @@ def warn_expiring() -> int:
         f"&delta=gt.0&select=id,business_id,contact_id,kind,unit,delta,expires_at"
         f"&order=expires_at.asc&limit=200") or []
     warned = 0
-    for g in grants:
+    import sample_church
+    for g in sample_church.drop_samples(grants):   # BE-3
         biz, contact = str(g.get("business_id")), str(g.get("contact_id"))
         gid = str(g.get("id"))
         try:
