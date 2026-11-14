@@ -538,3 +538,123 @@ async def csp_report(request: Request) -> Response:
     except Exception:
         pass                                    # a report must never become an error
     return Response(status_code=204)
+
+
+# ─── Startup reports (anonymous; log lines only) ─────────────────────
+#
+# 2026-11-14: Kevin's phone sat on the navy "Opening Solutionist" screen
+# and nothing reached this server: not one request from the phone. That
+# screen (the frontend's public/startup.js) runs before the app's code,
+# so a download that stalls or a module that throws never reaches the
+# client-error reporter, which needs the app AND a signed-in session.
+# The screen now retries once on its own, and says what happened here:
+#
+#   retry      the app had not opened; the screen is loading a fresh copy
+#   recovered  that fresh copy opened
+#   failed     the fresh copy did not open either; the person sees Reload
+#
+# Sent with navigator.sendBeacon before any sign-in exists, so the route
+# is anonymous: a per-IP courtesy bucket, always 204, nothing stored, and
+# every field cut to an allowlist. A page path can carry a classroom or
+# preview token, so only its first segment is logged; an error message
+# can carry a URL, so each URL is cut to host + file name.
+# Read them with: railway logs --filter "[startup]"
+
+_STARTUP_STAGES = frozenset({"retry", "recovered", "failed"})
+_STARTUP_BOOT = frozenset({"none", "entry", "main"})
+_STARTUP_MAX_BODY = 4096
+_STARTUP_URL = re.compile(r"https?://([A-Za-z0-9.-]{1,253})(?::\d{1,5})?(/[^\s?#'\")]*)?[^\s'\")]*")
+_STARTUP_SAFE = re.compile(r"[^A-Za-z0-9 .,:;_/()'\"=!?+-]")
+
+startup_logger = logging.getLogger("startup_report")
+if not startup_logger.handlers:
+    _startup_handler = logging.StreamHandler()
+    _startup_handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
+    startup_logger.addHandler(_startup_handler)
+    startup_logger.setLevel(logging.INFO)
+    startup_logger.propagate = False
+
+
+def _startup_page(value: Any) -> str:
+    """The page's first path segment: '/', '/my', '/classroom' …"""
+    v = str(value or "").strip().lower()
+    seg = re.split(r"[/?#]", v.lstrip("/"), maxsplit=1)[0]
+    if not seg:
+        return "/"
+    return f"/{seg}" if _CSP_SEGMENT.fullmatch(seg) else "/other"
+
+
+def _startup_ua(value: Any) -> str:
+    """'iOS 18.7 Safari 27.0', 'Android 14 Chrome 131', 'Windows Chrome 157' …"""
+    ua = str(value or "")[:400]
+    m = re.search(r"(?:iPhone|CPU) OS (\d+)[_.](\d+)", ua)
+    if m:
+        os_part = f"iOS {m.group(1)}.{m.group(2)}"
+    elif (m := re.search(r"Android (\d+(?:\.\d+)?)", ua)):
+        os_part = f"Android {m.group(1)}"
+    elif "Windows" in ua:
+        os_part = "Windows"
+    elif "Macintosh" in ua:
+        os_part = "Mac"
+    elif "Linux" in ua:
+        os_part = "Linux"
+    else:
+        os_part = "other"
+    for pat, name in ((r"CriOS/(\d+)", "Chrome"), (r"FxiOS/(\d+)", "Firefox"),
+                      (r"EdgiOS/(\d+)", "Edge"), (r"Edg/(\d+)", "Edge"),
+                      (r"Chrome/(\d+)", "Chrome"), (r"Firefox/(\d+)", "Firefox"),
+                      (r"Version/(\d+(?:\.\d+)?).*Safari", "Safari")):
+        m = re.search(pat, ua)
+        if m:
+            return f"{os_part} {name} {m.group(1)}"
+    return os_part
+
+
+def _startup_error(value: Any) -> str:
+    """One error, a URL cut to host + file name, unsafe characters dropped."""
+    def cut(m: "re.Match[str]") -> str:
+        name = (m.group(2) or "").rstrip("/").rsplit("/", 1)[-1]
+        return f"{m.group(1).lower()}/{name}" if name else m.group(1).lower()
+    text = _STARTUP_URL.sub(cut, str(value or "")[:600])
+    return _STARTUP_SAFE.sub("", " ".join(text.split()))[:140]
+
+
+def _startup_line(data: Any) -> Optional[str]:
+    if not isinstance(data, dict):
+        return None
+    stage = str(data.get("stage") or "").strip().lower()
+    if stage not in _STARTUP_STAGES:
+        return None
+    boot = str(data.get("boot") or "").strip().lower()
+    boot = boot if boot in _STARTUP_BOOT else "other"
+    try:
+        secs = max(0, min(600, int(float(data.get("secs") or 0))))
+    except (TypeError, ValueError):
+        secs = 0
+    app = "1" if data.get("standalone") is True else "0"
+    raw_errors = data.get("errors")
+    texts = [x for x in (raw_errors if isinstance(raw_errors, list) else [])[:3] if isinstance(x, str)]
+    errors = [e for e in (_startup_error(x) for x in texts) if e]
+    line = (f"[startup] {stage} boot={boot} secs={secs} app={app} "
+            f"page={_startup_page(data.get('page'))} ua={_startup_ua(data.get('ua'))}")
+    return line + (f" errors={' | '.join(errors)}" if errors else "")
+
+
+@telemetry_router.post("/startup", status_code=204)
+async def startup_report(request: Request) -> Response:
+    """The startup screen's own report — see the block above."""
+    try:
+        import rate_limit
+        if not rate_limit.allow("startup_report", rate_limit.trusted_client_ip(request)):
+            return Response(status_code=204)
+        raw = b""
+        async for chunk in request.stream():
+            raw += chunk
+            if len(raw) > _STARTUP_MAX_BODY:
+                return Response(status_code=204)
+        line = _startup_line(json.loads(raw or b"null"))
+        if line:
+            startup_logger.info("%s", line)
+    except Exception:
+        pass                                    # a report must never become an error
+    return Response(status_code=204)
