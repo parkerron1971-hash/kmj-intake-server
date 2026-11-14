@@ -35,6 +35,10 @@ os.environ.setdefault("MEMBER_QUIET_HOURS", "off")
 # production. Tests address their fake mail to exactly those domains, so it
 # is off here; the sample church's own tests turn it on with monkeypatch.
 os.environ.setdefault("MADE_UP_RECIPIENT_GUARD", "off")
+# The sample church's seed (sample_church_seed) runs on a background thread
+# when ensure() finds a sample due. Same rule as lead scoring: a detached
+# thread must never outlive a test's fakes. Its own tests call it directly.
+os.environ.setdefault("SAMPLE_CHURCH_SEED", "off")
 
 
 # Chief's per-turn state lives in contextvars that a real turn resets at

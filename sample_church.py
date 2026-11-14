@@ -66,7 +66,7 @@ logger = logging.getLogger("sample_church")
 
 NAME = "Grace Street Fellowship"
 SETTINGS_KEY = "sample_church"      # businesses.settings.sample_church on the SAMPLE row
-SEED_VERSION = 0                    # BE-2 raises it when the seed changes
+SEED_VERSION = 1                    # raised when the seed changes (sample_church_data); a ready sample re-seeds
 QUESTIONS_OF = 10                   # what Chief answers in a sample (BE-4)
 COLUMNS = ("is_sample", "sample_of")
 
@@ -117,10 +117,13 @@ READ_POSTS: Tuple[str, ...] = (
     "/rest/v1/rpc/academy_student_live",
 )
 
-# BE-2 fills this: seed_hook(sample_row, home_row) seeds the made-up church
-# and marks settings.sample_church.status "ready". ensure() calls it for a
-# sample still "pending". None here, so a sample stays an empty row.
+# The seed (BE-2, sample_church_seed, wired at the bottom of this file):
+# seed_hook(sample_row, home_row) seeds the made-up church and marks
+# settings.sample_church.status "ready"; seed_due(sample_row) says, from the
+# row in hand, whether it needs seeding (pending, a dead claim, a retry, or
+# a ready seed gone stale). ensure() hands it a sample that is due.
 seed_hook: Optional[Callable[[Dict[str, Any], Dict[str, Any]], Any]] = None
+seed_due: Optional[Callable[[Dict[str, Any]], Any]] = None
 
 _MODES = ("off", "test", "on")
 _EMAIL_TTL_S = 600.0
@@ -406,7 +409,10 @@ def _sample_settings(home: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _seed(sample: Dict[str, Any], home: Dict[str, Any]) -> None:
-    if seed_hook is None or status_of(sample) != "pending":
+    if seed_hook is None:
+        return
+    due = seed_due(sample) if seed_due is not None else status_of(sample) == "pending"
+    if not due:
         return
     try:
         seed_hook(sample, home)
@@ -882,8 +888,10 @@ def spend_refused(business_id: Any) -> bool:
 # /billing/access (access_block) stamps the sample's
 # settings.sample_church.last_seen_at whenever the app loads in sample mode
 # (the owner looking around), at most once every TOUCH_EVERY_S. Only a
-# READY sample is stamped: the seed (BE-2) writes settings only while
-# "pending", so a stamp can never write over the seed's "ready".
+# READY sample is stamped, and only while it still reads ready: the seed
+# (BE-2) also re-seeds a ready sample in place (status "seeding"), so the
+# stamp's PATCH names the status it read and never writes over a claim. The
+# seed keeps last_seen_at in every marker it writes.
 
 TOUCH_EVERY_S = 12 * 3600
 IDLE_DAYS = 60            # Kevin, 2026-11-14
@@ -928,7 +936,8 @@ def touch(sample_row: Optional[Dict[str, Any]], now: Optional[datetime] = None) 
         m["last_seen_at"] = now.isoformat()
         settings[SETTINGS_KEY] = m
         res = sb_clients.sb_patch_as_service(
-            f"/businesses?id=eq.{row['id']}&is_sample=is.true", {"settings": settings})
+            f"/businesses?id=eq.{row['id']}&is_sample=is.true&settings->{SETTINGS_KEY}->>status=eq.ready",
+            {"settings": settings})
         if res is None:
             return False
         row["settings"] = settings
@@ -1038,3 +1047,13 @@ def _reset_for_tests() -> None:
     _KIND.clear()
     _EMAILS.clear()
     _ALL.update(at=None, ids=frozenset())
+
+
+# ─── The seed (BE-2) ──────────────────────────────────────────────────
+# Wired last. sample_church_seed never imports this module at its top (it
+# reads SEED_VERSION when it needs it), so there is no import cycle.
+# SAMPLE_CHURCH_SEED=off keeps a sample pending.
+import sample_church_seed as _seed_module  # noqa: E402
+
+seed_hook = _seed_module.provision
+seed_due = _seed_module.due
