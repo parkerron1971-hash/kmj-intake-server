@@ -1403,7 +1403,7 @@ def _care(b: _B, world, holders) -> None:
             "status": status, "created_at": at, "legacy_source": None,
             "prayed_at": b.at(b.today - timedelta(days=back - 1), 9) if status != "new" else None,
             "status_changed_at": at if status == "new" else b.at(b.today - timedelta(days=back - 1), 9),
-            "updated_at": at, "assigned_to": None, "assigned_at": None, "assigned_by": None,
+            "updated_at": at, "assigned_at": None, "assigned_by": None,
             "prayer_team": team, "wants_call": call, "needs_pastor": pastor,
             # Never handed to a member who leads: the prayer sweep reads those.
             "leader_contact_id": None, "leader_role": "", "leader_assigned_at": None, "leader_due_at": None,
@@ -1568,7 +1568,9 @@ def _tasks(b: _B, holders) -> None:
             "id": b.id("task", i), "contact_id": None, "project_id": None, "title": title, "description": desc,
             "status": "done" if done else "todo", "priority": "medium", "due_date": due_d.isoformat(),
             "completed_at": b.at(due_d, 15) if done else None, "created_at": stamp, "updated_at": stamp,
-            "assigned_to": None, "assigned_contact_id": None, "leader_told_at": stamp, "late_told_at": stamp,
+            # No assignee (the columns are left to their null default): a
+            # made-up task is never handed to anyone (church_over's rule).
+            "leader_told_at": stamp, "late_told_at": stamp,
             "done_by_contact_id": None, "handed_by": None, "seat_told_at": stamp, "seat_late_told_at": stamp,
             "duty": None, "done_when": None, "check_key": None, "startup_key": None, "stuck_note": None,
             "stuck_at": None, "raised_at": None, "raised_to": None, "raised_to_contact_id": None, "raised_by": None,
