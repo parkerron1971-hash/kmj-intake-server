@@ -727,7 +727,7 @@ def _business(biz_id: str) -> Dict[str, Any]:
 def _alerts_view(business: Dict[str, Any]) -> Dict[str, Any]:
     import news_alerts as na
     import news_reach
-    return {"on": na.church_on(business), "sent_today": na.sent_today(business) or 0, "max": na.daily_max(),
+    return {"on": na.church_on(business), "sent_today": na.sent_today(business) or 0, "max": na.daily_max(business),
             "celebrations": "morning" if na.celebration_alerts(business) else "none",
             # Important posts reach the people without the app (news_reach).
             "reach": {"on": news_reach.church_on(business), "texts_month": news_reach.texts_used(business) or 0,

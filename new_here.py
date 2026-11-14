@@ -23,10 +23,12 @@ churches do on Sunday ("New here? Text NEW to ..."), done our way:
                the address carries: never a name or a number.
   THE TEXTS    three more, each the church's own words, each on or off:
                  thanks   after church, `hours` after their text (3 unless
-                          the church picks 1 to 6), never after 7:45 PM
-                 monday   the next Monday, 10 AM
+                          the church picks 1 to 6), never in the last 15
+                          minutes of its texting hours
+                 monday   the note: the next Monday, 10 AM
                  invite   the Thursday before the next Sunday, 6 PM, skipped
                           when they've checked in since
+               (days, times and hours are the church's own: texting_hours)
                each a chief_scheduled_actions row of type KIND, sent by
                chief_scheduler through run_scheduled(), which reads the
                church's words, the switch, STOP and the guest again at send
@@ -74,7 +76,6 @@ CODE_CHARS = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
 CODE_LEN = 8
 LIST_DAYS = 7                           # "this week's new guests"
 REVISIT_DAYS = 7                        # a second NEW inside this is the same visit
-EARLIEST, LATEST = time(9, 0), time(19, 45)   # inside texting's 9 AM to 8 PM
 FALLBACK_TZ = ZoneInfo("America/New_York")
 MAX_TEXT = 480
 FIRST_NAME = "{first name}"
@@ -253,10 +254,16 @@ def new_code() -> str:
 # ─── when the texts go ────────────────────────────────────────────────
 
 def plan_times(business: Dict[str, Any], texted_at: datetime, settings: Dict[str, Any]) -> Dict[str, datetime]:
-    """{step: when, in UTC} for each step that's on and has a time to go."""
+    """{step: when, in UTC} for each step that's on and has a time to go, on
+    the church's clock and inside its automatic-text hours (texting_hours:
+    9 AM to 8 PM, the note Monday 10 AM, the invite Thursday 6 PM, unless the
+    church picked others)."""
+    import texting_hours
+    hours = texting_hours.of(business)
     tz = tz_of(business)
     local = texted_at.astimezone(tz)
     day = local.date()
+    earliest, latest = time(hours["auto_from"], 0), time(hours["auto_until"] - 1, 45)
     out: Dict[str, datetime] = {}
 
     def at(d: date, t: time) -> datetime:
@@ -264,18 +271,20 @@ def plan_times(business: Dict[str, Any], texted_at: datetime, settings: Dict[str
 
     if settings["thanks"]["on"]:
         when = local + timedelta(hours=settings["thanks"]["hours"])
-        when = max(when, at(day, EARLIEST))
-        when = min(when, at(day, LATEST))
+        when = max(when, at(day, earliest))
+        when = min(when, at(day, latest))
         if when >= local + timedelta(minutes=30):       # texted too late in the day: no thank-you
             out["thanks"] = when
     if settings["monday"]["on"]:
-        ahead = (0 - local.weekday()) % 7 or 7          # the next Monday, never today
-        out["monday"] = at(day + timedelta(days=ahead), time(10, 0))
+        note = hours["note"]
+        ahead = (note["day"] - local.weekday()) % 7 or 7     # the next one, never today
+        out["monday"] = at(day + timedelta(days=ahead), time(note["hour"], 0))
     if settings["invite"]["on"]:
-        ahead = (3 - local.weekday()) % 7               # Thursday
-        if ahead < 2:
+        invite = hours["invite"]
+        ahead = (invite["day"] - local.weekday()) % 7
+        if ahead < 2:                                        # never the next day
             ahead += 7
-        out["invite"] = at(day + timedelta(days=ahead), time(18, 0))
+        out["invite"] = at(day + timedelta(days=ahead), time(invite["hour"], 0))
     return {k: v.astimezone(timezone.utc) for k, v in out.items()}
 
 
@@ -401,9 +410,10 @@ async def run_scheduled(business: Dict[str, Any], action: Dict[str, Any]) -> Tup
         return False, "The guest couldn't be read; not sent."
     if not people:
         return True, "The guest is no longer on the church's list; not sent."
+    import texting_hours
     local = _now().astimezone(tz_of(fresh))
-    if not (sms_alerts.QUIET_SEND_START_HOUR <= local.hour < sms_alerts.QUIET_SEND_END_HOUR):
-        return True, "Quiet hours at the church; not sent."
+    if not texting_hours.in_auto_window(fresh, local):
+        return True, "Outside the church's texting hours; not sent."
     if step == "invite" and await asyncio.to_thread(
             _came_back, biz_id, contact_id, _parse(action.get("texted_at"))):
         return True, "They came back; the invite isn't needed."
@@ -740,6 +750,16 @@ def counts_of(business: Dict[str, Any], guests: List[Dict[str, Any]]) -> Dict[st
             "month": len(month) if month is not None else len(guests)}
 
 
+def _hours(business: Dict[str, Any]) -> Dict[str, Any]:
+    import texting_hours as th
+    h = th.of(business)
+    return {**h, "words": {
+        "window": f"{th.hour_words(h['auto_from'])} to {th.hour_words(h['auto_until'])}",
+        "latest": f"{th.hour_words(h['auto_until'] - 1).split()[0]}:45 {th.hour_words(h['auto_until'] - 1).split()[-1]}",
+        "note": f"{th.DAY_NAMES[h['note']['day']]} at {th.hour_words(h['note']['hour'])}",
+        "invite": f"{th.DAY_NAMES[h['invite']['day']]} at {th.hour_words(h['invite']['hour'])}"}}
+
+
 def overview(business: Dict[str, Any], *, can_edit: bool) -> Dict[str, Any]:
     biz = str(business["id"])
     settings = settings_of(business)
@@ -761,6 +781,8 @@ def overview(business: Dict[str, Any], *, can_edit: bool) -> Dict[str, Any]:
         "guests": guests,
         "counts": counts_of(business, guests or []),
         "texts_per_guest": 1 + sum(1 for s in STEPS if settings[s]["on"]),
+        # When the texts go (Text → Texting hours): the room says it in words.
+        "hours": _hours(business),
     }
 
 

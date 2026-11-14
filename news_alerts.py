@@ -63,9 +63,14 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def daily_max() -> int:
+def daily_max(business: Optional[Dict[str, Any]] = None) -> int:
+    """App alerts a church sends everyone in a day: its own choice
+    (texting_hours, 1 to 5), else member_push.DAILY_ANNOUNCEMENTS."""
     import member_push
-    return member_push.DAILY_ANNOUNCEMENTS
+    if business is None:
+        return member_push.DAILY_ANNOUNCEMENTS
+    import texting_hours
+    return texting_hours.alerts_per_day(business)
 
 
 def church_on(business: Dict[str, Any]) -> bool:
@@ -210,7 +215,7 @@ def alert_post(business: Dict[str, Any], post: Dict[str, Any], now: Optional[dat
     claimed = _mark(biz_id, str(post["id"]))
     if not claimed:
         return {"rang": 0, "why": "old" if claimed == [] else "busy"}
-    if n >= daily_max():
+    if n >= daily_max(business):
         return {"rang": 0, "why": "full"}
     if not people:
         return {"rang": 0, "why": "nobody"}
@@ -270,7 +275,8 @@ def birthday_notes(business: Dict[str, Any], now: Optional[datetime] = None) -> 
     if not church_on(business) or not celebration_alerts(business):
         return 0
     here = cel.local_now(business, now)
-    if not (BIRTHDAY_HOUR <= here.hour < member_push.QUIET_FROM):
+    import texting_hours
+    if not (BIRTHDAY_HOUR <= here.hour < texting_hours.of(business)["quiet_from"]):
         return 0
     biz_id, today = str(business["id"]), here.date().isoformat()
     posts = sb_clients.sb_get_as_service(
