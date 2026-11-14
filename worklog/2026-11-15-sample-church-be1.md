@@ -4,7 +4,7 @@ date: 2026-11-15
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-11-14, approved the sample church signup and gave BE-1 a Build slot: "top tier, no cut corners"'
 status: in review
-prs: ["kmj-intake-server (this PR, sample-church-be1)"]
+prs: [kmj-intake-server#1851]
 migrations: [supabase/APPLY-2026-11-15-sample-church.sql (NOT APPLIED; the parent session applies it)]
 left_undone:
   - "BE-2, the seed: a generator and seeder for Grace Street Fellowship's records, and a site fixture with licensed stock photos (Kevin picked stock photos). It fills sample_church.seed_hook, which must be idempotent and refuse quickly while a seed is running (ensure() calls it on every /billing/access load of a pending sample), and sets settings.sample_church.status to ready."
