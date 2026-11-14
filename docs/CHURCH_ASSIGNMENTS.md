@@ -122,7 +122,8 @@ may_hand(ch, me, *targets) -> bool      # a hand-off that isn't an assignment's 
 `me` / `who` is a login (user id plus its seat) or one of the church's people (contact id; a
 member signed in to the member app). A login's person is its `business_users.contact_id`, else
 the one contact its sign-in email names (`business_users_router.match_contact`'s rule, read for
-every login at once; the owner's by their Auth email). `seat_person` is not used: it writes.
+every login at once; the owner's is the person the church picked, else by their Auth email: "The
+owner's own person" below). `seat_person` is not used: it writes.
 
 An office login is an Admin or Manager seat (a Member or Viewer login does no office jobs, as
 `church_duties` says, and `member_portal_messaging.office_contacts` counts the same two).
@@ -178,10 +179,41 @@ ends at the senior role goes to that holder (their person; their login if they h
 seat). So the senior pastor is never under an Admin even when his record carries another email than
 the one he signs in with (he is then under the owner, who can't tell that person is himself).
 
-**Known limit:** an owner whose contact record carries another email than his sign-in email *and*
-who holds no senior (or pastor's-yes) role can't be told from any other leader, so he can still show
-under an Admin (as a group's leader, say, or a role holder). The fix is data: put the owner's
-sign-in email on his record, or give him the church's senior role.
+**The owner's own person** (2026-11-14; until then a known limit: he was found only by matching
+his sign-in email to a record's email). A pastor whose record carries another email than he signs
+in with wasn't found, so `owner_guarded` read false: the Hand to list offered him to the office,
+an office seat could hand the owner's login work (a board's follow-up), the owner was listed as
+over his own person, and an owner who held no senior role could show under an Admin like any
+other leader. Now the church can say which of its people the owner is:
+
+- Kept in `businesses.settings.church_owner_contact_id` (no migration).
+- `Church.owner_pick` reads it first: the picked record, while it is still one of this church's
+  people. Unset, not an id, or no longer one of them (the record was removed, or it is another
+  church's): the email match answers exactly as before. Nothing picked reads nothing more; a pick
+  that can't be read is a 503, never "the owner is nobody". A church read without its settings
+  reads them once (`Church.settings`).
+- `Church.owner_person` is the one place that says who the owner is (`login_person` puts the pick
+  in for the owner's login; `top`, `owner_guarded`, `persons_of`, the hand-overs and the job
+  descriptions all read it). `Church.owner_how` says how: `picked`, `email` or `none`.
+- The top is as before plus the pick: everyone with the owner's sign-in email, and the picked
+  person. Nothing else about who is over whom changes.
+- `GET /church/owner-person?business_id=` answers `{contact_id, name, how, can_change}` for the
+  owner and an Admin (any other seat: 403), so a screen can say "This is you".
+  `PUT /church/owner-person` `{business_id, contact_id | null}` picks the person, or with null goes
+  back to the sign-in email, and answers the same shape. The person must be on this church's list
+  (404) and an adult's record (400: `church_families.is_minor`, a child on a family, under 18 by
+  birthdate, or tagged so; who is a child that can't be read is a 503 with nothing saved). The
+  live settings are read fresh and merged, so the rest of the settings are kept.
+- **Who may pick** (Claude's decision, 2026-11-14; Kevin's to confirm): the owner always. An Admin
+  only while no one is found (`how` is `none`), so the office can set it up before the pastor
+  signs in. An Admin can't move it once someone is found or picked (403, "The owner is already
+  matched to a person here. Only the owner changes that."): pointing the owner at someone who
+  isn't a pastor would turn `owner_guarded` off, and an office seat could then hand the pastor
+  work, which is the rule this is here to keep. `can_change` says which it is for the asker.
+
+**Still a limit:** until the owner's person is picked (or his sign-in email is on his record), an
+owner who holds no senior (or pastor's-yes) role can't be told from any other leader, so he can
+still show under an Admin. A screen that reads `how: "none"` should ask.
 
 **Pastors and elders (Kevin's rule, 2026-11-12):** no Admin's, lanes overseer's or closed-map
 standing is over anyone who holds a role that shepherds either, nor over a login whose person
@@ -440,7 +472,8 @@ No office standing but the owner's is over a **shepherd** or a **senior**:
   pastor or an elder. A trigger would have to repeat who shepherds in SQL (each role's switch, the
   legacy and job fallbacks, the Ministers setting, the seniors and the owner's identity), which
   isn't simple enough to be safe, so the rule holds where the list is offered and in every server
-  route.
+  route. "Every path that hands someone a task" below is the audit, and what closing this would
+  take.
 - **A board's follow-ups follow it too** (2026-11-14; until then a known limit, and a way around
   the rule: an office seat pressed "make tasks" and a pastor or an elder was handed one).
   `church_board.make_tasks` asks `church_over.may_hand(ch, me, the member's login and record)`
@@ -464,6 +497,58 @@ office part and the everyone part, then walks the map from the login's person fo
 lanes overseer whose church has someone guarded. Every route that asks `is_over` (hand one out,
 start, the one-on-one, send up, take back, the board) follows it, and so does a board's "make
 tasks" through `may_hand`.
+
+### Every path that hands someone a task (audited 2026-11-14)
+
+A task is handed by writing `tasks.assigned_to` (a login) or `tasks.assigned_contact_id` (one of
+the church's people). Every server module that writes either, and whether an office seat can use
+it to hand a pastor or an elder work around the rule:
+
+| path | what it does | outcome |
+|---|---|---|
+| `church_assignments.py` (`give`, the routes), Chief's `give_assignment`, the member app's Lead tab | hands one out | guarded already: `is_over` before every hand-off |
+| `church_startup.start` | a first assignment | only called from the three above, each after `is_over` |
+| `church_board.make_tasks` | a board's follow-ups | guarded: `may_hand` (PR #1844) |
+| `church_leader_tasks.return_tasks` | a task whose leader left the leaders room goes back to the login that handed it out | not a way around: it only ever goes back to `tasks.handed_by`, which the database stamps with the login that made the hand-off; it never names anyone new |
+| `business_users_router.hand_back_login` | a removed login's open tasks | un-hands only (`assigned_to` null) |
+| Chief's `create_task` (the tag and the native tool, `mcp_server`), `rules_engine._exec_create_task`, `site_photo_list` | make a task | can't name who it's for: none of them writes either column. `contact_id` on Chief's task is who the task is about, not who does it |
+| `church_work_checks`, `church_office_tasks`, the sweeps | tick off, claim a telling | never change who it's handed to |
+
+There is no general tasks route on the server, and Chief has no verb that hands a plain task to
+someone. So the server has nothing left to guard, and `__tests__/test_church_task_hand_paths.py`
+pins the list: a new module that writes either column fails it until it asks the rule.
+
+**What is still open: the Tasks screen.** The office's Tasks screen (the frontend's
+`TasksPanel`, `taskHandTo`) inserts and updates `tasks` straight from the browser with the
+login's own session (`tenant_writer_write`, the policy every writer seat has on `tasks`). No
+server code runs, so no server guard can refuse it. The Hand to list doesn't offer a pastor or an
+elder to an office seat, so the app never sends such a write; a request made by hand still lands.
+Two things that aren't tasks were looked at and left as they are: a prayer or care request
+(`ministry_care_requests.assigned_to`) is handed only by the church's owner, and a duty moved to
+a login (`PUT /church/duties/{duty}`, Chief's `move_duty`) is the owner's or an Admin's to move
+and does not ask whether the login's person is a pastor.
+
+What closing it would take (none of it built; Kevin's to choose):
+
+1. **The database refuses it.** A trigger on `tasks` would have to know who is a pastor or an
+   elder, and who is over whom: each role's switch with its legacy and job fallbacks, the
+   Ministers setting, the seniors and the pastor's-yes roles, the owner's person, and the walk
+   down the map. That is `church_over` written a second time in SQL, and the two would drift. It
+   also can't see `CHURCH_ASSIGNMENTS`, which is an environment switch. Not simple, so not safe:
+   no migration was written.
+2. **The hand-off moves to a server route.** A `POST /church/tasks/hand` that asks `may_hand`,
+   the Tasks screen calling it instead of writing the two columns itself, and then a small
+   trigger that refuses a browser session's change to either column on a church's task (no rule
+   in SQL at all). Sound, but the trigger must not be applied before the screen ships, or Hand to
+   stops working for everyone.
+3. **The server takes it back.** `tasks.handed_by` is stamped by the database with the login that
+   made a browser hand-off and can't be forged, so the hourly sweeps that tell someone a task is
+   theirs (`church_office_tasks.tell_new`, `church_leader_tasks.tell_new`) could ask
+   `may_hand(the login in handed_by, who it's handed to)` first, and un-hand the task as the
+   board does (handed to no one, the name in its title, why in its notes) before anyone is told.
+   No migration and no frontend change. The task would still show on the pastor's My week or
+   Lead tab for up to an hour, and the office login that handed it isn't told unless that is
+   built too.
 
 ### From the office (`church_handovers.py`)
 
@@ -613,6 +698,8 @@ with what it saved; a failed write is a 503, never a 200.
 | `POST /church/assignments/{task_id}/raise` | anyone over them | `{business_id, note?}` send a stuck item up to `above(me)` |
 | `POST /church/assignments/start` | anyone over them | `{business_id, for}` make their first assignment |
 | `GET /church/assignments/one-on-one?business_id=&for=` | anyone over them | finished in the last 7 days, stuck, the next five due, late, and this week's jobs done or not; plain lines, nothing recorded (built in PR B; below) |
+| `GET /church/owner-person?business_id=` | the owner, an Admin | which of the church's people the owner is, and how that was found (2026-11-14; "The owner's own person" above) |
+| `PUT /church/owner-person` | the owner; an Admin only while no one is found | `{business_id, contact_id \| null}` pick that person; null goes back to the sign-in email |
 
 The task is only the church's own: every task id is read with its `business_id` and its person
 before any change.
@@ -730,6 +817,19 @@ Every duty the login holds, in the catalog's order (the owner and an Admin: all 
 true when you're reading someone you're over. `PUT /church/duty-days` answers `{"saved":
 {"user_id", "duty", "label", "catalog_day", "picked", "when", "movable": true}}`; a duty that
 doesn't move, or isn't theirs, is a 400.
+
+`GET /church/owner-person?business_id=` (the owner or an Admin; any other seat: 403)
+
+```json
+{"contact_id": "<uuid>", "name": "Kevin McCloud", "how": "picked", "can_change": true}
+```
+
+`how` is `picked` (the church said so), `email` (found by the owner's sign-in email) or `none`
+(`contact_id` and `name` are then null: ask). `can_change`: the owner always; an Admin only while
+`how` is `none`. `PUT /church/owner-person` takes `{"business_id": "<uuid>", "contact_id":
+"<uuid>" | null}` and answers the same shape as it now is; null takes the pick away. 404 "That
+person isn't on this church's list.", 400 "Pick an adult's record. That one is a child's.", 403
+"The owner is already matched to a person here. Only the owner changes that."
 
 ## Telling people
 
@@ -866,4 +966,8 @@ Minister Ray the retreat sign-up list for Youth".
 - **Fixes before it opens to every church (backend, 2026-11-14):** Chief takes an assignment back
   (`take_back_assignment`); a board's follow-ups follow the pastors-and-elders rule
   (`church_over.may_hand`); the hand-over picker's `all_departments` for the owner and an Admin.
+- **The two gaps left (backend, 2026-11-14):** the church says which person its owner is
+  (`settings.church_owner_contact_id`, `GET`/`PUT /church/owner-person`); every server path that
+  hands someone a task audited and pinned by a test. The Tasks screen's own write to the database
+  is still open: three ways to close it are written under "Every path that hands someone a task".
 - **F1 / F2 (frontend):** My week + day picker; the board.

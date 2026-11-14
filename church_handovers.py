@@ -396,7 +396,8 @@ def for_people(biz: Dict[str, Any], contact_ids: Iterable[Any], now: Optional[da
 
 def persons_of_login(biz: Dict[str, Any], uid: Any) -> set:
     """A login's own person (church_over: its tied record, else the one its
-    sign-in email names; the owner's by their Auth email)."""
+    sign-in email names; the owner's is the person the church picked, else by
+    their Auth email)."""
     return co.Church(biz).persons_of(co.who(co.LOGIN, uid))
 
 
