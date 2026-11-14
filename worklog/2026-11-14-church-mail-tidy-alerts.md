@@ -28,3 +28,13 @@ City: send_to_user(business_id=…) found no device. A device keeps one business
 (push_subscriptions is unique on endpoint), so church mail alerts now go to
 every device the person turned on, carrying data.biz so a tap opens that
 church's Email.
+
+**Follow-up (same day, BE church-mail-alert-words):** Kevin: "upgrade the
+notification look … make sure the notification briefly looks right". An alert
+now reads like a mail app's: the sender (plus the shared box, "Jessica McCloud ·
+Office"), then the subject, then the first line they wrote on its own line (the
+quoted email under a reply left out, cut at a word). Several after quiet hours
+list "Name: Subject" three at most, titled "Office · 3 new emails". Each email
+has its own tag so each one sounds (a box-wide tag with renotify off replaced
+the last alert silently). The test alert says "Alerts are on for this device.
+New mail and updates show up just like this."
