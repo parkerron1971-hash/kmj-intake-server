@@ -47,6 +47,8 @@ WHO
   login that handed the item in and the church's owner, with the note and
   the way back to the room (_tell_church). Checked sends nothing; the
   church sees it on Home.
+  /platform/move-in/{church}/ready is the other half of the look: what
+  is really set up for Sunday, read live (church_move_ready.py).
 
 SWITCH
   CHURCH_MOVE_IN = off | owner | on. Unset is "owner": the platform's own
@@ -1055,6 +1057,21 @@ def platform_move_in_room(business_id: str, owner: AuthedUser = Depends(require_
     """One church's room, with a time-limited link to each file."""
     biz = _business(_uuid(business_id, "church"))
     return _room(biz, links=True)
+
+
+@platform_router.get("/{business_id}/ready")
+def platform_move_in_ready(business_id: str, owner: AuthedUser = Depends(require_owner)):
+    """Whether this church is ready for its first Sunday: what is really
+    set up in its account, not what it handed in (church_move_ready). With
+    the first Sunday as the church typed it, when it has."""
+    import church_move_ready
+    biz = _business(_uuid(business_id, "church"))
+    try:
+        said = ((_rows_of(str(biz["id"])).get("sunday") or {}).get("answers") or {}).get("first_sunday")
+    except HTTPException:
+        said = None
+    return {"church": {"id": str(biz["id"]), "name": biz.get("name") or "A church"},
+            "first_sunday": _plain(said) or None, **church_move_ready.ready(biz)}
 
 
 @platform_router.post("/{business_id}/{key}")
