@@ -73,7 +73,13 @@ def require_units(business_id: str) -> None:
     """The 402 gate for AI-action surfaces (compose, director, Chief).
     Delegates to the weighted metering gate — allowance first, then
     credits; grandfather, fail-open, and the BILLING_ENFORCE dormancy
-    all live inside usage_metering.can_interact()."""
+    all live inside usage_metering.can_interact().
+
+    A sample church is refused with a 409 sample_church first, before the
+    meter is asked: nothing in it is spent for real, whatever enforcement
+    says (its own ten questions are BE-4's lane, not this gate)."""
+    import sample_church
+    sample_church.refuse(business_id, "ai")
     if chief_can_send(business_id):
         return
     message = ("You're out of AI actions for this month. Top up "
@@ -85,7 +91,11 @@ def require_units(business_id: str) -> None:
         import usage_metering
         import no_card_trial
         row = usage_metering._biz_row(business_id)
-        if no_card_trial.is_no_card(row) and not no_card_trial.is_running(row):
+        if sample_church.applies(row):
+            # A church still looking around its sample: the answer is to
+            # start the church, not to top up.
+            message = _locked_message("church_sample", row)
+        elif no_card_trial.is_no_card(row) and not no_card_trial.is_running(row):
             message = _locked_message("free_workspace", row)
         elif usage_metering.trial_window_start(row) is not None:
             message = _locked_message("trial_credits_spent", row)
@@ -126,19 +136,28 @@ def require_live_access(business_id: str) -> None:
     """The 402 gate for a LOCKED subscription (canceled / trial expired).
     Until now access_state was advisory — the frontend showed the paywall
     while a valid JWT kept full API access. Grace passes (warn upstream,
-    don't block); dormant while BILLING_ENFORCE is off; fails open."""
+    don't block); dormant while BILLING_ENFORCE is off; fails open.
+
+    A sample church gets a 409 sample_church whatever enforcement says (a
+    402 opens the app's "Open Billing" toast; a sample has nothing to pay
+    for). A church still looking around one is 'sample', treated as
+    'locked': a 402 that says to start the church."""
     import usage_metering
+    import sample_church
+    sample_church.refuse(business_id, "live_access")
     try:
         if not feature_gates.enforcement_on():
             return
         biz_row = usage_metering._biz_row(business_id)
         gf = usage_metering.is_grandfathered_business(business_id, biz_row)
         spent = usage_metering.trial_credits_exhausted(business_id, biz_row)
-        state = feature_gates.access_state(biz_row, gf, spent)
+        state = feature_gates.access_state(
+            biz_row, gf, spent,
+            church_sample=sample_church.applies(biz_row, grandfathered=gf))
     except Exception as e:
         logger.warning(f"require_live_access failed open: {e}")
         return
-    if (state or {}).get("state") != "locked":
+    if (state or {}).get("state") not in feature_gates.LOCKED_STATES:
         return
     _reason = (state or {}).get("reason")
     raise HTTPException(status_code=402, detail={
@@ -150,6 +169,12 @@ def require_live_access(business_id: str) -> None:
 
 def _locked_message(reason: Optional[str], row: Optional[Dict[str, Any]]) -> str:
     import no_card_trial
+    if reason == "church_sample":
+        # A church that signed up into a sample church (sample_church.py):
+        # never "trial" words, since it never had one.
+        return ("Your church isn't started yet. Choose your plan in Settings → "
+                "Billing to start it. Until then the sample church is yours to "
+                "look around, and nothing in it is saved or sent.")
     if reason == "trial_credits_spent":
         if no_card_trial.is_running(row):
             # The no-card tank ran dry with days left: a card is the whole
@@ -201,8 +226,13 @@ def require_card(business_id: str, what: str) -> None:
     card arrives — they cost real money and ride shared reputation
     whether or not credits are being enforced. Fails open on a read
     error, like every gate here. The detail shape matches the other
-    402s: {error, what, message}."""
+    402s: {error, what, message}.
+
+    A sample church is refused first, with a 409 sample_church: nothing in
+    it is ever sent, and a card is not the answer."""
     import no_card_trial
+    import sample_church
+    sample_church.refuse(business_id, what)
     try:
         no_card_trial.check(business_id, what)
     except no_card_trial.CardRequired as e:

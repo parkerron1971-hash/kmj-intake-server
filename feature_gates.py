@@ -475,7 +475,8 @@ def plan_of(business_row: Optional[Dict[str, Any]]) -> Optional[str]:
 
 def access_state(business_row: Optional[Dict[str, Any]],
                  grandfathered: bool = False,
-                 trial_spent: bool = False) -> Dict[str, Any]:
+                 trial_spent: bool = False,
+                 church_sample: Optional[bool] = None) -> Dict[str, Any]:
     """Subscription access enforcement (2026-07-03, Kevin's ruling:
     'if no person paid then they lose access').
 
@@ -490,6 +491,17 @@ def access_state(business_row: Optional[Dict[str, Any]],
       'locked' — no live subscription, OR a trial that has run out of
                  credits; the frontend shows the paywall (data is never
                  deleted; export stays available)
+      'sample' — a sample church (reason 'sample_church'), or a church
+                 that looks around one instead of a trial (reason
+                 'church_sample', sample_church.py, 2026-11-15). Treated
+                 like 'locked' by every gate (LOCKED_STATES).
+
+    `church_sample` is the caller's sample_church.applies() for this row.
+    It is passed in, not worked out here, because applies() can read (the
+    owner's email in test mode, a narrow select's missing columns) and this
+    function stays pure. Left None, a church in a sample reads as what it
+    is underneath, locked / no_subscription — the same wall. A sample ROW
+    is known from its own is_sample column, without help.
 
     A trial ends on WHICHEVER COMES FIRST, the calendar or the tank
     (2026-08-24). `trial_spent` is the tank half — the caller passes
@@ -501,7 +513,35 @@ def access_state(business_row: Optional[Dict[str, Any]],
     Grandfathered users and comp_tier businesses never lock.
     """
     state = _access_state(business_row, grandfathered, trial_spent)
-    return _free_workspace(state, business_row)
+    return _sample_church(_free_workspace(state, business_row),
+                          business_row, church_sample)
+
+
+# The states every gate treats as "no live access". 'sample' is a sample
+# church or a church still looking around one: nothing to use for real yet.
+LOCKED_STATES = ("locked", "sample")
+
+
+def _sample_church(state: Dict[str, Any], row: Optional[Dict[str, Any]],
+                   church_sample: Optional[bool]) -> Dict[str, Any]:
+    """THE SAMPLE CHURCH (sample_church.py, 2026-11-15). A sample row is a
+    sample whatever enforcement says: nothing in it is ever real. A home
+    turns 'sample' only from the state applies() implies (no status, no
+    trial, no subscription: locked / no_subscription), so a caller's stale
+    or careless True can never lift a paying or trialing church into it."""
+    row = row or {}
+    if row.get("is_sample") is True:
+        return {"state": "sample", "reason": "sample_church"}
+    if (church_sample and state.get("state") == "locked"
+            and state.get("reason") == "no_subscription"
+            and not any(str(row.get(k) or "").strip() for k in _NOT_A_SAMPLE_HOME)):
+        return {"state": "sample", "reason": "church_sample"}
+    return state
+
+
+# What a church looking around a sample never has (sample_church.applies).
+_NOT_A_SAMPLE_HOME = ("comp_tier", "stripe_subscription_id", "trial_ends_at",
+                      "subscription_status")
 
 
 # The trial reasons a no-card trial softens from 'locked' to 'free'.

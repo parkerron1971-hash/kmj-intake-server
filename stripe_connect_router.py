@@ -167,6 +167,9 @@ def stripe_connect_start(
     if not business_id:
         raise HTTPException(400, "business_id required")
     biz = _require_owner(str(business_id), user)
+    # A sample church takes no payments (sample_church.py): nothing in it is real.
+    import sample_church
+    sample_church.refuse(str(business_id), "payments")
 
     from financial_policy import require_operational_write
     require_operational_write(str(business_id))
@@ -361,6 +364,8 @@ async def stripe_connect_create_account(
     if not business_id:
         raise HTTPException(400, "business_id required")
     biz = _require_owner(str(business_id), user)
+    import sample_church
+    await sample_church.refuse_async(str(business_id), "payments")
 
     from financial_policy import require_operational_write
     require_operational_write(str(business_id))
@@ -413,6 +418,8 @@ async def stripe_connect_account_session(
     if not business_id:
         raise HTTPException(400, "business_id required")
     biz = _require_owner(str(business_id), user)
+    import sample_church
+    await sample_church.refuse_async(str(business_id), "payments")
     acct = biz.get("stripe_account_id")
     if not acct:
         raise HTTPException(409, "set up or connect Stripe first")

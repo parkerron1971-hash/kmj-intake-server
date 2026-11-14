@@ -174,7 +174,7 @@ def rehearse_all(limit: int = 500) -> Dict[str, Any]:
     ok = [b for b in out if "error" not in b]
     summary = {
         "businesses": len(out),
-        "would_lock": sum(1 for b in ok if b["access"]["state"] == "locked"),
+        "would_lock": sum(1 for b in ok if b["access"]["state"] in feature_gates.LOCKED_STATES),
         "in_grace": sum(1 for b in ok if b["access"]["state"] == "grace"),
         "full": sum(1 for b in ok if b["access"]["state"] == "full"),
         "out_of_units": sum(1 for b in ok if b["units"]["out_of_units"]),
@@ -183,7 +183,8 @@ def rehearse_all(limit: int = 500) -> Dict[str, Any]:
         "over_business_cap": sum(1 for b in ok if b["businesses"]["over"]),
         "grandfathered": sum(1 for b in ok if b["grandfathered"]),
         "no_plan": sum(1 for b in ok if not b["plan"] and not b["grandfathered"]),
-        "lock_reasons": _count(b["access"]["reason"] for b in ok if b["access"]["state"] == "locked"),
+        "lock_reasons": _count(b["access"]["reason"] for b in ok
+                               if b["access"]["state"] in feature_gates.LOCKED_STATES),
         "errors": len(out) - len(ok),
     }
     return {"ok": True, "enforcement_on_now": feature_gates.enforcement_on(),
@@ -225,7 +226,7 @@ def render(report: Dict[str, Any]) -> str:
             lines.append(f"  ! {b.get('name')} ({str(b.get('id'))[:8]}): {b['error']}")
             continue
         a = b["access"]; u = b["units"]
-        flag = "LOCK " if a["state"] == "locked" else "grace" if a["state"] == "grace" else "  ok "
+        flag = "LOCK " if a["state"] in feature_gates.LOCKED_STATES else "grace" if a["state"] == "grace" else "  ok "
         lines.append(f"  {flag} {str(b.get('name') or '')[:28]:<28} {str(b['plan'] or '-'):<12} "
                      f"{a['reason']:<22} units {u['used']}/{u['allotment'] if u['allotment'] is not None else 'unlimited'}"
                      f"{' OUT' if u['out_of_units'] else ''}"

@@ -30,6 +30,10 @@ THE SHAPE
   · Until a card is on file: no texts, no phone numbers, no bulk email
     (billing_limits.require_card) and no second site build — the things
     that cost real money or put the shared sending reputation at risk.
+  · A church that signs up while sample_church.applies() holds gets a
+    sample church to look around instead of this trial (2026-11-15), and a
+    sample church itself never gets one: eligible() says "church_sample" /
+    "sample" before anything else.
 
 WHO GETS ONE — once per person: never a business that has had any
 subscription or trial, never if the owner has had one on another
@@ -164,6 +168,15 @@ def eligible(row: Optional[Dict[str, Any]], email: Optional[str] = None) -> Opti
     """None when this business may start a no-card trial now, otherwise
     the reason it may not (logged, never shown). `email` is the person
     starting it, when known."""
+    # A sample church never has a trial of its own, and a church that signs
+    # up into one (sample_church.applies) gets the sample instead of a trial.
+    # First, so both doors (signup and /billing/access) refuse them whatever
+    # the trial's own switches say.
+    import sample_church
+    if row and sample_church.row_is_sample(row):
+        return "sample"
+    if row and sample_church.applies(row, email):
+        return "church_sample"
     if not pricing_config.no_card_trial_enabled():
         return "disabled"
     if disposable_email(email):

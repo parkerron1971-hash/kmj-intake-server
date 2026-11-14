@@ -359,30 +359,43 @@ async def billing_access(business_id: str, user: AuthedUser = Depends(require_us
     any internal error — a billing read must never brick the app."""
     import feature_gates
     try:
+        import asyncio
         import usage_metering
         import no_card_trial
+        import sample_church
         business = await _load_business(business_id)
         grandfathered = usage_metering.is_grandfathered_user(
             str(business.get("owner_id") or ""))
-        # The no-card trial's second door. Signup starts it; a business
-        # that missed it there (created before it existed, or the start
-        # failed) gets it the first time the app shell asks. Only a
-        # business with no status at all can qualify, so every other
-        # load skips this without a read.
+        # The sample church (sample_church.py, 2026-11-15): a church that
+        # signed up into one looks around it instead of starting a trial.
+        # applies() answers False at once for everyone while the switch is
+        # off or nobody is listed to test it, so this is today's path.
+        church_sample = False
         if not grandfathered and not (business.get("subscription_status") or "").strip():
-            import asyncio
             # The email is only the owner's to vouch for: a team member
             # opening the app says nothing about who signed up.
             owner_email = (user.email if str(user.id) == str(business.get("owner_id") or "")
                            else None)
-            if await asyncio.to_thread(no_card_trial.start, business, "access", owner_email):
+            church_sample = await asyncio.to_thread(
+                sample_church.applies, business, owner_email, grandfathered=False)
+            # The no-card trial's second door. Signup starts it; a business
+            # that missed it there (created before it existed, or the start
+            # failed) gets it the first time the app shell asks. Only a
+            # business with no status at all can qualify, so every other
+            # load skips this without a read.
+            # A sample church never has a trial (eligible() says so too).
+            # The row is select=*, so its own column answers, with no read.
+            if (not church_sample and business.get("is_sample") is not True
+                    and await asyncio.to_thread(
+                        no_card_trial.start, business, "access", owner_email)):
                 business = await _load_business(business_id)
         # A trial ends on whichever runs out first, the calendar or the
         # tank. access_state is pure, so the tank half is read here.
         trial_spent = usage_metering.trial_credits_exhausted(
             business_id, business)
-        state = feature_gates.access_state(business, grandfathered, trial_spent)
-        return {
+        state = feature_gates.access_state(business, grandfathered, trial_spent,
+                                           church_sample=church_sample)
+        out = {
             "ok": True,
             **state,
             "subscription_status": business.get("subscription_status"),
@@ -391,11 +404,50 @@ async def billing_access(business_id: str, user: AuthedUser = Depends(require_us
             "enforce": feature_gates.enforcement_on(),
             **no_card_trial.describe(business),
         }
+        if state.get("state") == "sample":
+            out["sample"] = await _sample_block(
+                business, church_sample,
+                may_make=str(user.id) == str(business.get("owner_id") or ""))
+        return out
     except HTTPException:
         raise
     except Exception as e:
         logger.warning(f"/billing/access failed open: {e}")
         return {"ok": True, "state": "full", "reason": "error_fail_open"}
+
+
+async def _sample_block(business: Dict[str, Any], church_sample: bool, *,
+                        may_make: bool = False) -> Dict[str, Any]:
+    """The `sample` block of /billing/access, for a sample row or a church
+    looking around one: which business is the sample, whose it is, whether it
+    is seeded yet, Chief's questions left, and the promise. A home with no
+    sample yet gets it made here (idempotent), which covers a signup whose
+    background ensure() failed and churches that signed up before this.
+    Only the owner's own load makes one (`may_make`): any signed-in person
+    may ask this endpoint, and a write belongs to the business's owner; the
+    sample is theirs, and only they can open it. Anyone else reads.
+    Never raises: the app's shell must not fall open over this block."""
+    import asyncio
+    import sample_church
+    home_id = business.get("id")
+    try:
+        if not church_sample:
+            # The row itself is the sample.
+            home_id = business.get("sample_of")
+            sample: Optional[Dict[str, Any]] = business
+        elif may_make:
+            sample = await asyncio.to_thread(sample_church.ensure, business)
+        else:
+            sample = await asyncio.to_thread(sample_church.sample_for, home_id)
+        return await asyncio.to_thread(
+            sample_church.access_block, home_id=home_id, sample=sample,
+            owner_id=business.get("owner_id"))
+    except Exception as e:
+        logger.warning(f"/billing/access sample block failed: {type(e).__name__}: {e}")
+        return {"business_id": None, "home_business_id": str(home_id) if home_id else None,
+                "ready": False, "questions_left": None,
+                "questions_of": sample_church.QUESTIONS_OF, "read_posts": [],
+                "promise": None, "free_moves_left": None}
 
 
 async def _plan_entry(plan: str) -> Dict[str, Any]:
@@ -682,6 +734,10 @@ async def create_checkout(body: CheckoutBody, user: AuthedUser = Depends(require
 
     biz = await _load_business(body.business_id)
     _require_owner_of(user, biz)
+    # A sample church is never bought (sample_church.py): its home is, and
+    # choosing a plan there starts the church and ends the sample.
+    import sample_church
+    await sample_church.refuse_async(biz, "checkout")
 
     # Plans sold to one kind of business: only that kind may buy, and
     # only once the plan is offered. Checked on the RESOLVED plan, so a
@@ -807,6 +863,8 @@ async def create_credit_checkout(body: CreditCheckoutBody,
 
     biz = await _load_business(body.business_id)
     _require_owner_of(user, biz)
+    import sample_church
+    await sample_church.refuse_async(biz, "credits")
 
     pack = (body.pack or "").strip().lower()
     payload: Dict[str, Any] = {
@@ -1503,6 +1561,19 @@ async def _apply_subscription_state(event_type: str, sub_obj: Dict[str, Any], bu
         no_card_trial.forget(business_id)
     except Exception:
         pass
+    # The church started for real, so its sample church goes
+    # (sample_church.py, 2026-11-15). Any plan, active or trialing: either
+    # way the home has a subscription now and will never look around a
+    # sample again. end() marks it and deletes it in the background; a home
+    # with no sample (every business today) costs one read. Never fails the
+    # webhook.
+    ended_sample = None
+    if status_value in ("active", "trialing"):
+        try:
+            import sample_church
+            ended_sample = await sample_church.end(business_id)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"[sample] end for {business_id} failed (non-fatal): {e}")
 
     # Day one starts HERE. A subscription entering `trialing` is the only
     # place the system learns a trial has begun, and until now nothing
@@ -1517,7 +1588,13 @@ async def _apply_subscription_state(event_type: str, sub_obj: Dict[str, Any], bu
     # what this webhook exists for; losing a billing event over a day-one
     # nicety would be the wrong trade. first_run_arc is sync (sb_clients
     # uses a blocking client), so it must not run on the loop.
-    if status_value == "trialing":
+    #
+    # A church that looked around a sample church skipped the signup door
+    # (launch_access.create_business), and a church plan is paid at
+    # checkout, so it arrives `active`, never `trialing`. Its day one is
+    # this moment: the arc opens here for exactly the homes whose sample
+    # just ended. Every other active subscription still opens nothing.
+    if status_value == "trialing" or (ended_sample and status_value == "active"):
         try:
             import asyncio
             import first_run_arc
