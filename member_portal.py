@@ -465,7 +465,7 @@ def _church_for_request(request: Request) -> Optional[Dict[str, Any]]:
     sites = sb_clients.sb_get_as_service(
         f"/business_sites?{q}&order=updated_at.desc&limit=1"
         f"&select=slug,business_id,site_config,"
-        f"business:businesses(id,name,type,settings,stripe_account_id)") or []
+        f"business:businesses(id,name,type,settings,stripe_account_id,is_sample)") or []
     if not sites or (sites[0].get("site_config") or {}).get("offline"):
         return None
     site = dict(sites[0])
@@ -476,8 +476,8 @@ def _church_for_request(request: Request) -> Optional[Dict[str, Any]]:
     # reach: nothing in it is real, and no sign-in code is ever sent. Only
     # its owner's preview opens it (member_portal_preview.py): the one-time
     # link being opened, or the preview cookie it set.
-    import sample_church
-    if sample_church.is_sample(biz["id"]):
+    # The embedded row carries is_sample, so this costs no read.
+    if biz.get("is_sample") is True:
         import member_portal_preview as pv
         opening = (request.url.path.rstrip("/") == "/my/preview"
                    and bool(request.query_params.get("t")))

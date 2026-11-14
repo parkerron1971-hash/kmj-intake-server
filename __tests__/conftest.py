@@ -30,6 +30,12 @@ os.environ.setdefault("CHIEF_RAIL", "off")
 # quiet-hours tests turn it on with monkeypatch.setenv and a fixed clock.
 os.environ.setdefault("MEMBER_QUIET_HOURS", "off")
 
+# The sample church's made-up-recipient guard (sample_church.py, BE-3): no
+# text to 555-01xx and no mail to example.com, *.test … for any business in
+# production. Tests address their fake mail to exactly those domains, so it
+# is off here; the sample church's own tests turn it on with monkeypatch.
+os.environ.setdefault("MADE_UP_RECIPIENT_GUARD", "off")
+
 
 # Chief's per-turn state lives in contextvars that a real turn resets at
 # its start and that a test which calls the door or the tool loop
@@ -114,4 +120,15 @@ def _fresh_sample_church():
     _sc = _sys.modules.get("sample_church")
     if _sc is not None:
         _sc._reset_for_tests()
+    # BE-3: every test starts with the sample columns "not there yet", pinned
+    # in the shared probe's cache like the probes above, so a test file that
+    # set SUPABASE_URL can't make the next one's sweeps ask which of its fake
+    # businesses are samples (an extra read a read-counting test would see).
+    # The sample church's tests patch sample_church._columns_ready to True.
+    try:
+        import time as _time
+        import schema_probe as _sp
+        _sp._cache[_sp._key("businesses", ("is_sample", "sample_of"))] = (False, _time.monotonic())
+    except Exception:  # pragma: no cover
+        pass
     yield

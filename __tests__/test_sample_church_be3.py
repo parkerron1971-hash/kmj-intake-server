@@ -39,6 +39,13 @@ REAL = "5a3b1e00-0000-4000-8000-00000000c003"
 OWNER = "5a3b1e00-0000-4000-8000-00000000d004"
 
 
+@pytest.fixture(autouse=True)
+def _recipient_guard_on(monkeypatch):
+    """conftest turns the made-up-recipient guard off for the rest of the
+    suite; here it is the thing under test."""
+    monkeypatch.setenv("MADE_UP_RECIPIENT_GUARD", "on")
+
+
 class _DB(FakeSB):
     def __init__(self):
         super().__init__()

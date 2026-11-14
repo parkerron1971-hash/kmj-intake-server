@@ -304,6 +304,11 @@ async def is_sample_async(business_id: Any) -> bool:
     hit = _KIND.get(str(business_id or "").strip())
     if hit is not None:
         return hit
+    # BE-3: the seams ask this on every send and AI call, so a known "the
+    # columns aren't there" answers on the loop, with no thread hop.
+    import schema_probe
+    if schema_probe.cached("businesses", COLUMNS) is not None and not _columns_ready():
+        return False
     return await asyncio.to_thread(is_sample, business_id)
 
 
@@ -686,15 +691,24 @@ def _as_list(v: Any) -> list:
     return [v] if v else []
 
 
+def recipient_guard_on() -> bool:
+    """The made-up-recipient half of send_refusal, for every business. On
+    unless MADE_UP_RECIPIENT_GUARD=off: the test suite's conftest sets that,
+    because tests address their fake mail to example.com (it never leaves a
+    test), and the sample church's own tests turn it back on."""
+    return (os.environ.get("MADE_UP_RECIPIENT_GUARD") or "on").strip().lower() != "off"
+
+
 def send_refusal(business_id: Any = None, *, phone: Any = None, email: Any = None) -> Optional[str]:
     """Why this send must not go, or None. `phone`/`email` may be one or a
     list. Recipients are checked first (no read); the business last (cached)."""
-    for p in _as_list(phone):
-        if fictional_phone(p):
-            return "a made-up number"
-    for e in _as_list(email):
-        if reserved_email(e):
-            return "a made-up email address"
+    if recipient_guard_on():
+        for p in _as_list(phone):
+            if fictional_phone(p):
+                return "a made-up number"
+        for e in _as_list(email):
+            if reserved_email(e):
+                return "a made-up email address"
     if business_id and is_sample(business_id):
         return "a sample church sends nothing"
     return None
