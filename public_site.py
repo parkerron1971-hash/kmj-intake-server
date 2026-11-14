@@ -7654,6 +7654,34 @@ async def asset_home_photo(name: str, request: Request):
     return _FileResponse(str(fp), media_type=kind, headers=_BRAND_CACHE_HEADERS)
 
 
+# The sample church's website photos (sample_church_seed.site_html,
+# 2026-11-15): licensed Unsplash stock in static/sample_church/<name>.jpg,
+# credited in that site's footer. Same rules as the home page's: the name
+# is pattern-checked and must resolve inside the folder. A photo not on
+# disk is a 404, and the site never links one that isn't there.
+_STATIC_SAMPLE = _pathlib.Path(__file__).resolve().parent / "static" / "sample_church"
+_SAMPLE_ASSET_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,40}\.jpg$")
+
+
+def _sample_asset_path(name: str) -> Optional[_pathlib.Path]:
+    if not _SAMPLE_ASSET_RE.match(name or ""):
+        return None
+    fp = _STATIC_SAMPLE / name
+    try:
+        fp.resolve().relative_to(_STATIC_SAMPLE.resolve())
+    except ValueError:
+        return None
+    return fp if fp.is_file() else None
+
+
+@router.get("/assets/sample-church/{name}", include_in_schema=False)
+async def asset_sample_church_photo(name: str):
+    fp = _sample_asset_path(name)
+    if fp is None:
+        raise HTTPException(404, "asset not found")
+    return _FileResponse(str(fp), media_type="image/jpeg", headers=_BRAND_CACHE_HEADERS)
+
+
 @router.get("/assets/film.mp4", include_in_schema=False)
 async def asset_film(request: Request):
     return _brand_file_ranged(request, "solutionist-film.mp4", "video/mp4")
