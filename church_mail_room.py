@@ -11,8 +11,8 @@ church mail in the app, instead of only as a copy at their own email
                                            them), Sent, the addresses it may send
                                            from, Prayer's count, Held's count, and
                                            whether church mail is on
-    GET  /church-mail/list?tray=&before=   one tray's mail (box:<id> | other | sent | held), 100 at a
-                                           time; before= (the last one's time) for older
+    GET  /church-mail/list?tray=&before=   one tray's mail (box:<id> | other | sent | held | archive |
+                                           trash), 100 at a time; before= (the last one's time) for older
     GET  /church-mail/message?id=          one message, whole; opening it marks it read
     POST /church-mail/read                 {ids, read}: mark read or unread (per person)
     POST /church-mail/send                 {sender, to, to_name, subject, body, reply_to_id,
@@ -23,6 +23,12 @@ church mail in the app, instead of only as a copy at their own email
     GET  /church-mail/attachment?id=&n=    a fresh link to a received file
     PUT  /church-mail/copies               {on}: a copy at my own email, or the room only
     PUT  /church-mail/signature            {text}: my own signature (null = the standard one)
+    POST /church-mail/archive              {ids, archived}: put away (or back) for me alone
+    POST /church-mail/delete               {ids}: to the box's Trash, for everyone on it
+    POST /church-mail/restore              {ids}: out of Trash, back in the box
+    POST /church-mail/trash/empty          delete what's in my boxes' Trash for good
+    GET  /church-mail/alerts               my recent new mail, for the bell
+    PUT  /church-mail/alerts               {mode, push, bell}: how new mail lets me know
     POST /church-mail/held/release         {id}: let a held message through
     POST /church-mail/held/delete          {id}: delete a held message for good
     GET  /church-mail/addresses            who has which address, and who has none
@@ -46,7 +52,10 @@ Who reads what:
                       sent as the church's own address by its sender and
                       the pastor
 Read and answered are per message: read per person (a shared box), answered
-once for everyone (from the room, or by replying to the copy).
+once for everyone (from the room, or by replying to the copy). Archive is per
+person too (out of my list, in my Archive); delete is for the whole box (its
+Trash, with who deleted it, for 30 days; anyone on the box can put it back).
+Kevin, 2026-11-14, on the mock (1fGHqCVMe9fxwceAbjbaJZ): "lets build it".
 """
 from __future__ import annotations
 
@@ -77,7 +86,9 @@ SUMMARY_ROWS = 1000
 MAX_BODY = 50000
 MAX_DRAFT_CHARS = 6000
 _ROW = ("id,business_id,mailbox_id,direction,to_address,from_email,from_name,subject,body_text,attachments,"
-        "email_id,message_id,outcome,why,delivered,received_at,read_by,answered_at,answered_name,sent_by")
+        "email_id,message_id,outcome,why,delivered,received_at,read_by,answered_at,answered_name,sent_by,"
+        "archived_by,deleted_at,deleted_name,alert_at")
+TRASH_DAYS = 30
 
 
 def _q(v: Any) -> str:
@@ -339,6 +350,9 @@ def _item(room: Room, row: Dict[str, Any], tray_id: str) -> Dict[str, Any]:
                      if row.get("answered_at") else None),
         "attachments": len(row.get("attachments") or []),
         "outcome": row.get("outcome"),
+        "archived": room.uid in [str(u) for u in row.get("archived_by") or []],
+        "deleted": ({"name": row.get("deleted_name") or "", "at": row.get("deleted_at")}
+                    if row.get("deleted_at") else None),
         "why": str(row.get("why") or "") if row.get("outcome") == "held" else "",
         "can_release": row.get("outcome") == "held" and _releasable(row),
     }
@@ -349,6 +363,21 @@ def _releasable(row: Dict[str, Any]) -> bool:
     return not (_is_relay(row) or "virus" in why or "own copies" in why or "reply not sent" in why)
 
 
+def _put_away(room: Room, row: Dict[str, Any]) -> bool:
+    """Archived by this login, or in its box's Trash: not in the box's list."""
+    return bool(row.get("deleted_at")) or room.uid in [str(u) for u in row.get("archived_by") or []]
+
+
+def _trash_since() -> str:
+    return (datetime.now(timezone.utc) - timedelta(days=TRASH_DAYS)).isoformat()
+
+
+def _alert_prefs(room: Room) -> Dict[str, Any]:
+    import church_mail_alerts as cma
+    p = cma.prefs(room.church.id, [room.uid]).get(room.uid) or {"mode": "all", "push": True, "bell": True}
+    return {**p, "quiet": cma.quiet_words(room.biz)}
+
+
 # ─── The room ────────────────────────────────────────────────────────
 
 def room_view(room: Room) -> Dict[str, Any]:
@@ -356,9 +385,10 @@ def room_view(room: Room) -> Dict[str, Any]:
     import church_follow_up as cfu
     is_church = cfu.is_church(room.biz)
     me = {"user_id": room.uid, "role": room.role, "owner": room.owner, "name": room.name(), "address": None,
-          "copies": True, "may_give": False, "chief_mail": room.chief_mail(), "signature": None}
+          "copies": True, "may_give": False, "chief_mail": room.chief_mail(), "signature": None,
+          "alerts": {"mode": "all", "push": True, "bell": True, "quiet": ""}}
     out: Dict[str, Any] = {"church": is_church, "domain": c.domain, "on": False, "me": me, "trays": [],
-                           "senders": [], "prayer": None, "held": None, "missing": None}
+                           "senders": [], "prayer": None, "held": None, "missing": None, "archive": 0, "trash": 0}
     if not c.domain:
         return out
     live = _live(c.domain)
@@ -369,20 +399,30 @@ def room_view(room: Room) -> Dict[str, Any]:
         trays = room.trays()
         me["copies"] = room.copies()
         me["signature"] = room.signature()
+        me["alerts"] = _alert_prefs(room)
         own = next((t for t in trays if t["own"]), None)
         me["address"] = own["address"] if own else None
         counts: Dict[str, List[int]] = {t["id"]: [0, 0] for t in trays}
         if trays:
             rows = _need(f"/church_mail?business_id=eq.{_q(c.id)}&direction=eq.in&outcome=in.({','.join(INBOX)})"
-                         f"&select=id,mailbox_id,to_address,read_by&order=received_at.desc&limit={SUMMARY_ROWS}")
+                         f"&select=id,mailbox_id,to_address,read_by,archived_by,deleted_at"
+                         f"&order=received_at.desc&limit={SUMMARY_ROWS}")
+            since = _trash_since()
             for r in rows:
                 if _is_relay(r):
                     continue
                 k = room.tray_of(r)
-                if k in counts:
-                    counts[k][1] += 1
-                    if room.uid not in [str(u) for u in r.get("read_by") or []]:
-                        counts[k][0] += 1
+                if k not in counts:
+                    continue
+                if r.get("deleted_at"):
+                    out["trash"] += 1 if str(r["deleted_at"]) >= since else 0
+                    continue
+                if room.uid in [str(u) for u in r.get("archived_by") or []]:
+                    out["archive"] += 1
+                    continue
+                counts[k][1] += 1
+                if room.uid not in [str(u) for u in r.get("read_by") or []]:
+                    counts[k][0] += 1
         out["trays"] = [{**{k: t[k] for k in ("id", "label", "sub", "address", "kind", "own", "catch_all")},
                          "unread": counts[t["id"]][0], "total": counts[t["id"]][1]} for t in trays]
         out["senders"] = room.senders()
@@ -445,11 +485,21 @@ def get_list(business_id: str, tray: str = Query(..., max_length=60), before: st
                          f"&select={_ROW}&order=received_at.desc&limit={MAX_LIST}{older}")
             got = len(rows)
             rows = [r for r in rows if room.can_read(r)]
+        elif tray in ("archive", "trash"):
+            base = (f"/church_mail?business_id=eq.{_q(c.id)}&direction=eq.in&outcome=in.({','.join(INBOX)})"
+                    f"&select={_ROW}&order=received_at.desc&limit={MAX_LIST}{older}")
+            if tray == "archive":
+                base += f"&deleted_at=is.null&archived_by=cs.%7B{_q(room.uid)}%7D"
+            else:
+                base += f"&deleted_at=gte.{_q(_trash_since())}"
+            rows = _need(base)
+            got = len(rows)
+            rows = [r for r in rows if not _is_relay(r) and room.can_read(r)]
         else:
             t = room.tray(tray)
             rows = _need(_inbox_path(room, t, MAX_LIST, cursor))
             got = len(rows)
-            rows = [r for r in rows if not _is_relay(r)]
+            rows = [r for r in rows if not _is_relay(r) and not _put_away(room, r)]
     except cm.Unavailable:
         raise _unavailable()
     rows.sort(key=lambda r: str(r.get("received_at") or ""), reverse=True)
@@ -532,6 +582,174 @@ def post_read(body: ReadIn, business_id: str, biz: Dict[str, Any] = Depends(busi
                 raise _unavailable()
             changed += 1
     return {"ok": True, "changed": changed}
+
+
+# ─── Archive, delete, Trash ──────────────────────────────────────────
+
+class IdsIn(BaseModel):
+    ids: List[str] = Field(..., max_length=100)
+
+
+class ArchiveIn(IdsIn):
+    archived: bool = True
+
+
+def _mine(room: Room, ids: List[str], *, deleted: Optional[bool] = None) -> List[Dict[str, Any]]:
+    """The messages among `ids` this login reads now that came in to a box
+    (never held mail, Sent or a reply that went out as the box)."""
+    want = [_uuid(i) for i in ids][:100]
+    if not want:
+        return []
+    rows = _need(f"/church_mail?business_id=eq.{_q(room.church.id)}&id=in.({','.join(want)})"
+                 f"&select={_ROW}&limit=100")
+    try:
+        out = [r for r in rows if (r.get("direction") or "in") == "in" and r.get("outcome") in INBOX
+               and not _is_relay(r) and room.can_read(r)]
+    except cm.Unavailable:
+        raise _unavailable()
+    if deleted is not None:
+        out = [r for r in out if bool(r.get("deleted_at")) == deleted]
+    return out
+
+
+def _ids_path(room: Room, rows: List[Dict[str, Any]]) -> str:
+    return f"/church_mail?business_id=eq.{_q(room.church.id)}&id=in.({','.join(str(r['id']) for r in rows)})"
+
+
+@router.post("/archive")
+def post_archive(body: ArchiveIn, business_id: str, biz: Dict[str, Any] = Depends(business_access()),
+                 session: UserSession = Depends(sb_clients.authed_request)):
+    """Out of my list and into my Archive (or back): for me alone."""
+    room = _room(biz, session)
+    changed = 0
+    for r in _mine(room, body.ids, deleted=False):
+        have = [str(u) for u in r.get("archived_by") or []]
+        want = sorted(set(have) | {room.uid}) if body.archived else [u for u in have if u != room.uid]
+        if sorted(have) == sorted(want):
+            continue
+        got = sb_clients.sb_patch_as_service(f"/church_mail?id=eq.{_q(r['id'])}&business_id=eq.{_q(room.church.id)}",
+                                             {"archived_by": want})
+        if not isinstance(got, list):
+            raise _unavailable()
+        changed += 1
+    return {"ok": True, "changed": changed}
+
+
+@router.post("/delete")
+def post_delete_mail(body: IdsIn, business_id: str, biz: Dict[str, Any] = Depends(business_access()),
+                     session: UserSession = Depends(sb_clients.authed_request)):
+    """Into the box's Trash, for everyone on the box, with who did it. Gone
+    for good 30 days later (church_mail_alerts.trash_sweep)."""
+    room = _room(biz, session)
+    rows = _mine(room, body.ids, deleted=False)
+    if not rows:
+        return {"ok": True, "changed": 0}
+    got = sb_clients.sb_patch_as_service(_ids_path(room, rows), {
+        "deleted_at": datetime.now(timezone.utc).isoformat(), "deleted_by": room.uid,
+        "deleted_name": cm._plain(room.name(), 200) or None})
+    if not isinstance(got, list):
+        raise _unavailable()
+    return {"ok": True, "changed": len(rows)}
+
+
+@router.post("/restore")
+def post_restore(body: IdsIn, business_id: str, biz: Dict[str, Any] = Depends(business_access()),
+                 session: UserSession = Depends(sb_clients.authed_request)):
+    """Out of Trash, back in the box (and in Archive for whoever had it there)."""
+    room = _room(biz, session)
+    rows = _mine(room, body.ids, deleted=True)
+    if not rows:
+        return {"ok": True, "changed": 0}
+    got = sb_clients.sb_patch_as_service(_ids_path(room, rows),
+                                         {"deleted_at": None, "deleted_by": None, "deleted_name": None})
+    if not isinstance(got, list):
+        raise _unavailable()
+    return {"ok": True, "changed": len(rows)}
+
+
+@router.post("/trash/empty")
+def post_empty_trash(business_id: str, biz: Dict[str, Any] = Depends(business_access()),
+                     session: UserSession = Depends(sb_clients.authed_request)):
+    """Delete for good what's in the Trash of the boxes this login reads."""
+    room = _room(biz, session)
+    rows = _need(f"/church_mail?business_id=eq.{_q(room.church.id)}&direction=eq.in&deleted_at=not.is.null"
+                 f"&select={_ROW}&limit=500")
+    try:
+        rows = [r for r in rows if r.get("outcome") in INBOX and not _is_relay(r) and room.can_read(r)]
+    except cm.Unavailable:
+        raise _unavailable()
+    gone = 0
+    for i in range(0, len(rows), 100):
+        part = rows[i:i + 100]
+        if not sb_clients.sb_delete_as_service(_ids_path(room, part)):
+            raise _unavailable()
+        gone += len(part)
+    return {"ok": True, "deleted": gone}
+
+
+# ─── New-mail alerts ─────────────────────────────────────────────────
+
+class AlertsIn(BaseModel):
+    mode: str = Field("all", max_length=10)
+    push: bool = True
+    bell: bool = True
+
+
+@router.put("/alerts")
+def put_alerts(body: AlertsIn, business_id: str, biz: Dict[str, Any] = Depends(business_access()),
+               session: UserSession = Depends(sb_clients.authed_request)):
+    """How new church mail lets me know: all, mine (my own box) or off;
+    on my phone; in the bell."""
+    import church_mail_alerts as cma
+    room = _room(biz, session)
+    mode = cma.clean_mode(body.mode)
+    got = sb_clients.sb_post_as_service(
+        "/church_mail_people?on_conflict=business_id,user_id",
+        {"business_id": room.church.id, "user_id": room.uid, "alerts": mode, "alert_push": bool(body.push),
+         "alert_bell": bool(body.bell), "updated_at": cm._now_iso()},
+        prefer="resolution=merge-duplicates,return=representation")
+    if not isinstance(got, list):
+        raise HTTPException(503, "That couldn't be saved just now. Try again in a moment.")
+    return {"ok": True, "mode": mode, "push": bool(body.push), "bell": bool(body.bell),
+            "quiet": cma.quiet_words(room.biz)}
+
+
+@router.get("/alerts")
+def get_alerts(business_id: str, biz: Dict[str, Any] = Depends(business_access()),
+               session: UserSession = Depends(sb_clients.authed_request)):
+    """The bell's church mail: my new mail of the last week, straight from
+    the mail itself, so an answer on a shared box clears it for everyone."""
+    room = _room(biz, session)
+    prefs = _alert_prefs(room)
+    out: Dict[str, Any] = {"prefs": prefs, "items": [], "unread": 0}
+    if not room.church.domain or prefs["mode"] == "off" or not prefs["bell"]:
+        return out
+    since = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+    rows = _need(f"/church_mail?business_id=eq.{_q(room.church.id)}&direction=eq.in&outcome=in.({','.join(INBOX)})"
+                 f"&alert_at=not.is.null&deleted_at=is.null&received_at=gte.{_q(since)}"
+                 f"&select={_ROW}&order=received_at.desc&limit=100")
+    try:
+        trays = {t["id"]: t for t in room.trays()}
+        for r in rows:
+            if _is_relay(r) or _put_away(room, r):
+                continue
+            t = trays.get(room.tray_of(r))
+            if not t or (prefs["mode"] == "mine" and not t["own"]):
+                continue
+            answered = ({"name": r.get("answered_name") or "", "at": r.get("answered_at")}
+                        if r.get("answered_at") else None)
+            unread = room.uid not in [str(u) for u in r.get("read_by") or []]
+            out["items"].append({
+                "id": str(r["id"]), "tray": t["id"], "tray_label": t["label"], "own": t["own"],
+                "from_name": str(r.get("from_name") or ""), "from_email": str(r.get("from_email") or ""),
+                "subject": str(r.get("subject") or ""), "at": r.get("received_at"),
+                "unread": unread and not answered, "answered": answered,
+            })
+    except cm.Unavailable:
+        raise _unavailable()
+    out["items"] = out["items"][:20]
+    out["unread"] = sum(1 for i in out["items"] if i["unread"])
+    return out
 
 
 # ─── Sending as a church box ─────────────────────────────────────────

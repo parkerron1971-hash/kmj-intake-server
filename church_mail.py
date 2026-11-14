@@ -877,7 +877,25 @@ async def deliver(client: httpx.AsyncClient, biz: Dict[str, Any], local: str, ad
                                                    "why": why_not or t.get("why") or ""})
     outcome = "copied" if delivered else ("failed" if failed else "stored")
     await asyncio.to_thread(_settle, row, outcome, where["path"], delivered + failed + skipped)
+    _alert_soon(church, str(row["id"]))
     return {"address": address, "outcome": outcome, "copies": len(delivered), "failed": len(failed)}
+
+
+def _alert_soon(church: "Church", row_id: str) -> None:
+    """Tell whoever the box reaches that mail came (church_mail_alerts), off
+    the webhook's back: Resend gets its answer at once, and the worker's
+    sweep sends anything this misses."""
+    def run() -> None:
+        try:
+            import church_mail_alerts
+            church_mail_alerts.on_new(church, row_id)
+        except Exception as e:  # noqa: BLE001 — the mail is in Email either way
+            logger.warning("church mail: alert for %s not sent now: %s", row_id[:8], e)
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        run()  # in tests, in step, so what it does can be checked
+        return
+    import threading
+    threading.Thread(target=run, name="church-mail-alert", daemon=True).start()
 
 
 async def handle_inbound(client: httpx.AsyncClient, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:

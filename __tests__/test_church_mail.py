@@ -81,6 +81,11 @@ class DB(_Base):
                 continue
             col, op, val = f
             probe = {col: _path(row, col)}
+            if op == "cs":  # an array that holds every one of {a,b}
+                want = {x.strip('"') for x in val.strip("{}").split(",") if x}
+                if not want <= {str(x) for x in (_path(row, col) or [])}:
+                    return False
+                continue
             if op == "not":
                 op2, _, val2 = val.partition(".")
                 if _cmp(probe, col, op2, val2):
