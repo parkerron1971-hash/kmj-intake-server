@@ -100,6 +100,10 @@ _LIMITS: Dict[str, Tuple[int, int]] = {
     # preview iframe can raise dozens on one render, and past the budget the
     # rest are simply not counted.
     "csp_report": (int(os.environ.get("RL_CSP_REPORT_PER_HOUR", "300")), 3600),
+    # The startup screen's own report (platform_watchdog.startup_report):
+    # anonymous, sent before sign-in, at most two per page load (retry +
+    # recovered/failed). Per IP, fail-open; past the budget, not logged.
+    "startup_report": (int(os.environ.get("RL_STARTUP_REPORT_PER_HOUR", "30")), 3600),
     # The booking widget's three anonymous routes (2026-09-04): they had
     # their own 10/hour dict in booking_widget_router; they ride the
     # strict, shared path now with the same numbers.
