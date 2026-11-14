@@ -1033,7 +1033,8 @@ def test_the_migration_is_present_and_in_the_ledger():
     assert MIGRATION.exists()
     ledger = (ROOT / "docs" / "MIGRATIONS.md").read_text(encoding="utf-8")
     row = next(line for line in ledger.splitlines() if "APPLY-2026-11-15-sample-church.sql" in line)
-    assert "NOT APPLIED" in row
+    # NOT APPLIED until the SQL editor run, then APPLIED with the read-back.
+    assert "APPLIED" in row
 
 
 def test_the_migration_is_one_safe_transaction():
