@@ -556,6 +556,10 @@ DEFAULT_LOOK: Dict[str, Any] = {
     # and up to MAX_SERIES sermon series that wear a look of their own (see _clean_series).
     "fonts": None,
     "series": [],
+    # 2026-11-15 (the mock's "A soft shadow behind the words", Kevin: "yes add the shadow
+    # switch too"): on unless the church turns it off. On, songs keep the soft shadow they
+    # always had and passages and sermon points get the same; off, the words have none.
+    "shadow": True,
 }
 WORKSPACES = ("dark", "light", "split")
 LOOK_BG_KINDS = ("brand", "color", "image", "video", "design")
@@ -645,12 +649,17 @@ def clean_look(raw: Any) -> Dict[str, Any]:
     if logo not in (None, "") and (not isinstance(logo, str) or not _HTTPS.match(logo)):
         raise ValueError("The logo must be an https:// link")
     brand["logo_url"] = logo or None
+    shadow = raw.get("shadow")
+    if shadow is None:
+        shadow = True  # a look saved before the switch: on, as its songs always were
+    elif not isinstance(shadow, bool):
+        raise ValueError("The shadow behind the words is on or off")
     workspace = raw.get("workspace") or "dark"
     if workspace not in WORKSPACES:
         raise ValueError("Workspace colors are dark, light, or light to plan and dark to run")
     return {
         "background": background,
-        "size": size, "caps": bool(raw.get("caps")), "align": align, "font": font or None,
+        "size": size, "caps": bool(raw.get("caps")), "align": align, "font": font or None, "shadow": shadow,
         "translation": tr, "lower_third": {"style": style, "position": position},
         "brand": brand, "quick": clean_quick(raw.get("quick")), "workspace": workspace,
         "crawls": _clean_crawls(raw.get("crawls")),

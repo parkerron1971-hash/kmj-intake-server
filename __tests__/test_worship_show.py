@@ -554,6 +554,8 @@ def test_an_old_look_and_old_backgrounds_come_back_exactly_as_they_were():
     # The same background, key for key (no design key), the old font kept, nothing new switched on.
     assert look["background"] == {"kind": "image", "color": None, "url": PIC, "dim": 0.4}
     assert (look["font"], look["fonts"], look["series"]) == ("Playfair Display", None, [])
+    # Saved before the shadow switch (2026-11-15): on, as its songs always had it.
+    assert look["shadow"] is True
     for kind, extra in (("brand", {}), ("color", {"color": "#1C0B1F"}), ("video", {"url": PIC})):
         assert "design" not in wsh.clean_look({"background": {"kind": kind, **extra}})["background"]
     for bg in ({"kind": "color", "color": "#203040"}, {"kind": "image", "url": PIC, "dim": 0.3}, {"kind": "video", "url": PIC}):
@@ -661,3 +663,21 @@ def _dated(start, end, **kw):
 def test_what_a_series_look_cannot_be(raw, words):
     with pytest.raises(ValueError, match=words):
         wsh.clean_look({"series": raw})
+
+
+# ─── the soft shadow behind the words (2026-11-15) ───────────────────
+# Kevin: "yes add the shadow switch too" (the mock's "A soft shadow behind the words").
+
+def test_the_shadow_behind_the_words_is_on_unless_the_church_turns_it_off():
+    assert wsh.DEFAULT_LOOK["shadow"] is True
+    assert wsh.clean_look({})["shadow"] is True and wsh.clean_look({"shadow": None})["shadow"] is True
+    assert wsh.clean_look({"shadow": False})["shadow"] is False
+    assert wsh.clean_look({"shadow": True})["shadow"] is True
+    for bad in ("off", 0, 1, "", [], {}):
+        with pytest.raises(ValueError, match="shadow behind the words is on or off"):
+            wsh.clean_look({"shadow": bad})
+    # A series changes the fonts and the background only: the church's shadow rides along.
+    crossing = {"id": "crossing", "name": "Crossing Over", "from": "2026-11-01", "to": "2026-11-29", "fonts": "warm",
+                "background": {"kind": "design", "design": "linen"}}
+    look = wsh.clean_look({"shadow": False, "series": [crossing]})
+    assert wsh.look_on(look, date(2026, 11, 15))["shadow"] is False
