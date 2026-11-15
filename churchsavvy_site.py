@@ -405,7 +405,7 @@ def render_pricing(base: str = "") -> str:
         ("sec", "Sunday on the screens"),
         ("Plan each Sunday, in order and timed", y, n, y), ("Rehearse without going live", y, n, y),
         ("Run it live from the booth", y, n, y), ("Room, stage, stream and lobby screens", y, n, y),
-        ("Song library, Proclaim and song files", y, n, y), ("KJV and WEB Bibles", y, n, y),
+        ("Song library, Proclaim and song files", y, n, y), ("KJV, WEB, BSB and ASV Bibles", y, n, y),
         ("sec", "Your teams"),
         ("Teams, places and who serves when", n, y, y), ("Asks and reminders by email", n, y, y),
         ("Fill the month fairly", n, y, y), ("Order of service with team notes", n, y, y),

@@ -21,7 +21,7 @@ needs a better flow a mixed of how the bible app looks when selecting book
 of the bible . also old testament comes before new testment. and the
 ability to highlight and take notes."
 
-Public-domain KJV and WEB (bible_text.py). The reader's translation and
+The public-domain translations, KJV, WEB, BSB and ASV (bible_text.py). The reader's translation and
 the last chapters they read live in a cookie on their phone (`sol_bible`,
 path /my). Highlights, notes and bookmarks are the member's own, kept on
 the server so they follow them (member_bible_marks.py), and never shown in
@@ -75,7 +75,7 @@ def _remember(resp, tr: str, where: Optional[Tuple[str, int]], history: List[Tup
 def _verse_html(text: str, tr: str) -> str:
     from member_portal import _e
     t = _e(text.replace("¶", "").strip())
-    if tr == "kjv":   # the translators' supplied words, in italics
+    if tr in bt.SUPPLIED:   # the translators' supplied words, in italics (KJV, ASV)
         t = re.sub(r"\[([^\[\]]+)\]", r"<i>\1</i>", t)
     return t
 
@@ -91,8 +91,8 @@ def _marked(v: int, rng: Optional[Tuple[int, int]]) -> bool:
 
 def chapter_html(code: str, ch: int, tr: str, rng: Optional[Tuple[int, int]] = None,
                  only: Optional[Tuple[int, int]] = None, marks: Optional[Dict[int, Dict[str, Any]]] = None) -> str:
-    """A chapter as text. KJV keeps its ¶ paragraphs; WEB, which carries
-    none, sets a verse to a line. `rng` marks verses; `only` limits to them.
+    """A chapter as text. KJV keeps its ¶ paragraphs; the others, which carry
+    none, set a verse to a line. `rng` marks verses; `only` limits to them.
     `marks` (the reader): each verse is something to tap, in its highlight
     colour, with a mark where it has a note."""
     verses = bt.chapter(code, ch, tr) or []
@@ -100,7 +100,7 @@ def chapter_html(code: str, ch: int, tr: str, rng: Optional[Tuple[int, int]] = N
     for v, text in verses:
         if only and not only[0] <= v <= only[1]:
             continue
-        if paras[-1] and (tr != "kjv" or text.lstrip().startswith("¶")):
+        if paras[-1] and (tr not in bt.PARAGRAPHS or text.lstrip().startswith("¶")):
             paras.append([])
         num = f'<sup class="bb-n" id="v{v}">{v}</sup>'
         body = _verse_html(text, tr)
@@ -113,7 +113,7 @@ def chapter_html(code: str, ch: int, tr: str, rng: Optional[Tuple[int, int]] = N
             paras[-1].append(f'<mark class="bb-hl">{body}</mark>' if _marked(v, rng) else body)
             continue
         paras[-1].append(f'<mark class="bb-hl">{num}{body}</mark>' if _marked(v, rng) else f"{num}{body}")
-    cls = "bb-text" + (" bb-lines" if tr != "kjv" else "")
+    cls = "bb-text" + (" bb-lines" if tr not in bt.PARAGRAPHS else "")
     return f'<div class="{cls}">' + "".join(f"<p>{' '.join(p)}</p>" for p in paras if p) + "</div>"
 
 
@@ -204,7 +204,7 @@ def continue_row(where: Optional[Tuple[str, int]], tr: str) -> str:
 
 
 def _switch(tr: str, here: str) -> str:
-    """KJV | WEB — a plain link per translation, back to this page."""
+    """KJV | WEB | BSB | ASV — a plain link per translation, back to this page."""
     from member_portal import _e
     sep = "&" if "?" in here else "?"
     return ('<nav class="bb-tr" aria-label="Translation">' + "".join(

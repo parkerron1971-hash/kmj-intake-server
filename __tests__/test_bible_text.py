@@ -1,7 +1,7 @@
 # __tests__/test_bible_text.py
 #
 # The Bible text and the references read out of plain words
-# (bible_text.py). Pins: both translations carry all 66 books with the
+# (bible_text.py). Pins: all four translations carry all 66 books with the
 # right chapter counts; references people actually type become the right
 # passage; words that only look like books never do.
 
@@ -15,8 +15,8 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 import bible_text as bt
 
 
-@pytest.mark.parametrize("tr", ["kjv", "web"])
-def test_both_translations_have_the_66_books_and_their_chapters(tr):
+@pytest.mark.parametrize("tr", ["kjv", "web", "bsb", "asv"])
+def test_every_translation_has_the_66_books_and_their_chapters(tr):
     counts = {code: bt.chapter_count(code, tr) for code, _, _ in bt.BOOKS}
     assert len(counts) == 66 and all(counts.values())
     assert (counts["GEN"], counts["PSA"], counts["ISA"], counts["MAT"], counts["REV"]) == (50, 150, 66, 28, 22)
