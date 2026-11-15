@@ -117,6 +117,9 @@ def _name(item: Dict[str, Any], songs: Dict[str, Dict[str, Any]]) -> Dict[str, s
         return {"title": item.get("title") or "Welcome loop", "sub": "Loop"}
     if kind == "countdown":
         return {"title": item.get("title") or "Countdown", "sub": "Countdown"}
+    if kind == "third":
+        # A lower third (worship_show, 2026-11-15): its name line, and the line under it.
+        return {"title": item.get("name") or "Lower third", "sub": "Lower third" + (f" · {item['sub']}" if item.get("sub") else "")}
     return {"title": item.get("title") or "Words on screen", "sub": "Words"}
 
 

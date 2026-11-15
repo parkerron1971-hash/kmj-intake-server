@@ -268,6 +268,8 @@ def start_one(biz: str, t: Dict[str, Any], start: datetime, church: Dict[str, An
         return "bad"
     new["at"] = at
     wsh.carry_log(state, new, at)
+    # A lower third the booth left up stays over the countdown (2026-11-15).
+    wsh.carry_third(state, new)
     if not _claim(biz, t["id"], start.date().isoformat(), times, now):
         return "claimed"
     rev = _put_live(biz, new, live, now)

@@ -13,6 +13,7 @@
 #   announcement   {title, when, body, image_url, link}
 #   image / video  {url, title} / {url, loop}
 #   countdown      {to, title}                 counts down to a time
+#   third          {name, sub}                 a lower third: a name line and a smaller line under it
 #
 # Any slide may carry `bg`, a background of its own (a color, a picture or a
 # video, with how dark, or one of the designs drawn in the church's colors):
@@ -26,6 +27,14 @@
 # (a full slide in the room, a lower third on the stream, one wide line on
 # an LED wall, the band's or pastor's view on stage); the engine only
 # decides what the slides are.
+#
+# Lower thirds (2026-11-15; Kevin: "could we also have a way to place lower
+# thirds if we need to do lower thirds by itself"): a lower third item in the
+# plan (`third`: "Pastor Kevin McClain" over "Senior Pastor"); a song, a passage
+# or slides whose words run as lower thirds in the room too (`as_third` rides on
+# each slide); a lower third the booth puts up over whatever is showing (the live
+# state's `third`, with the church's saved ones in `look.thirds`); and the look's
+# lower third designs (LT_STYLES), the stream's bar and shadow exactly as before.
 from __future__ import annotations
 
 import re
@@ -36,7 +45,13 @@ import bible_text as bt
 import worship_lyrics as wl
 import worship_scripture as ws
 
-ITEM_KINDS = ("section", "song", "scripture", "text", "announcement", "media", "countdown", "loop")
+ITEM_KINDS = ("section", "song", "scripture", "text", "announcement", "media", "countdown", "loop", "third")
+# A lower third's two lines (2026-11-15): a name, a guest speaker or "Give at lovecity.church/give",
+# and the smaller line under it ("Senior Pastor"). Short enough to sit on one line over the camera.
+THIRD_NAME = 60
+THIRD_SUB = 80
+# The items whose words can run as lower thirds in the room too, not as full slides.
+AS_THIRD_KINDS = ("song", "scripture", "text")
 # A loop (canvas board 29): slides that play by themselves, each for its own seconds.
 MAX_LOOP_SLIDES = 40
 LOOP_UNTIL = ("press", "time")
@@ -99,7 +114,31 @@ def _url(raw: Dict[str, Any], key: str, label: str) -> str:
 # 2026-11-14: or one of the designs (BG_DESIGNS), so a song or a sermon point
 # can wear one: {kind: "design", design, color: None, url: None, dim}.
 BG_KINDS = ("color", "image", "video", "design")
-BG_ITEM_KINDS = ("song", "scripture", "text", "announcement")
+# 2026-11-15: a lower third item too, behind it on the room's screens (the stream keeps the camera).
+BG_ITEM_KINDS = ("song", "scripture", "text", "announcement", "third")
+
+
+def _line(raw: Dict[str, Any], key: str, limit: int, label: str) -> str:
+    """One line of words: spaces and line breaks run together, at most `limit` letters."""
+    v = raw.get(key)
+    if v is None:
+        return ""
+    if not isinstance(v, str):
+        raise ValueError(f"{label} should be text")
+    v = " ".join(v.split())
+    if len(v) > limit:
+        raise ValueError(f"{label} is too long (at most {limit} characters)")
+    return v
+
+
+def clean_third_words(raw: Any, label: str = "The lower third") -> Dict[str, str]:
+    """A lower third's two lines: the name line (needed) and the smaller line under it."""
+    if not isinstance(raw, dict):
+        raise ValueError(f"{label} needs its name line")
+    name = _line(raw, "name", THIRD_NAME, f"{label}'s name line")
+    if not name:
+        raise ValueError(f"{label} needs its name line")
+    return {"name": name, "sub": _line(raw, "sub", THIRD_SUB, f"{label}'s line under the name")}
 
 
 def clean_bg(raw: Any, label: str = "The background") -> Optional[Dict[str, Any]]:
@@ -298,10 +337,16 @@ def clean_item(raw: Any) -> Dict[str, Any]:
                 raise ValueError("The countdown needs a time to count to")
         out["to"] = to or None
         out.update(_clean_countdown(raw))
+    elif kind == "third":
+        out.update(clean_third_words(raw))
     if kind in BG_ITEM_KINDS and not out.get("from_board"):
         bg = clean_bg(raw.get("bg"))
         if bg:
             out["bg"] = bg
+    # Its words as lower thirds in the room too (2026-11-15). Only written when on, so an
+    # item saved before comes back key for key.
+    if kind in AS_THIRD_KINDS and raw.get("as_third") is True:
+        out["as_third"] = True
     return out
 
 
@@ -560,8 +605,70 @@ DEFAULT_LOOK: Dict[str, Any] = {
     # switch too"): on unless the church turns it off. On, songs keep the soft shadow they
     # always had and passages and sermon points get the same; off, the words have none.
     "shadow": True,
+    # 2026-11-15: the church's saved lower thirds, for one press in the booth: see _clean_thirds.
+    "thirds": [],
 }
 WORKSPACES = ("dark", "light", "split")
+
+# ─── lower thirds (2026-11-15) ───────────────────────────────────────
+# How a lower third is drawn, on the stream and on every room screen that shows
+# one. Bar and shadow are the stream's two from the start, drawn exactly as they
+# always were; the rest are drawn in the church's colors with its font pair (the
+# app's ShowSlideView and church-worship-show.css, which also keep the words
+# readable on each):
+#   bar      the words on a bar of the church's color
+#   shadow   the words alone, with a shadow
+#   glass    a frosted glass panel
+#   stripe   a dark panel with a stripe of the accent on its left
+#   tag      a name tag: the name in a pill of the accent, the line under it below
+#   band     a band of the church's main color, edge to edge
+LT_STYLES = ("bar", "shadow", "glass", "stripe", "tag", "band")
+LT_POSITIONS = ("bottom", "top")
+MAX_THIRDS = 10
+
+
+def _clean_lower_third(raw: Any) -> Dict[str, str]:
+    lt_raw = raw if isinstance(raw, dict) else {}
+    style = lt_raw.get("style") or "bar"
+    position = lt_raw.get("position") or "bottom"
+    if style not in LT_STYLES or position not in LT_POSITIONS:
+        raise ValueError("A lower third is one of the designs, at the bottom or the top")
+    return {"style": style, "position": position}
+
+
+def _clean_thirds(raw: Any) -> List[Dict[str, str]]:
+    """The church's saved lower thirds ({id, name, sub}), for one press in the booth."""
+    if raw in (None, ""):
+        return []
+    if not isinstance(raw, list) or len(raw) > MAX_THIRDS:
+        raise ValueError(f"Keep up to {MAX_THIRDS} saved lower thirds")
+    out: List[Dict[str, str]] = []
+    ids = set()
+    for t in raw:
+        if not isinstance(t, dict):
+            raise ValueError("That isn't a lower third")
+        tid = str(t.get("id") or "")
+        if not _ID.match(tid) or tid in ids:
+            raise ValueError("Each saved lower third needs its own id")
+        ids.add(tid)
+        out.append({"id": tid, **clean_third_words(t, "A saved lower third")})
+    return out
+
+
+# How a room screen draws words (2026-11-15; worship_screens.words): full slides as always,
+# or as lower thirds, over the church's background or on a see-through page (for a screen
+# a switcher or OBS lays over the camera). Only a room screen or an LED wall reads it.
+WORDS_AS = ("slides", "thirds", "see_through")
+WORDS_ROLES = ("room", "led")
+
+
+def clean_words(raw: Any) -> Dict[str, str]:
+    """A screen's words setting; anything left out (an older screen) is full slides."""
+    raw = raw if isinstance(raw, dict) else {}
+    how = raw.get("as") or "slides"
+    if how not in WORDS_AS:
+        raise ValueError("A screen shows words as full slides or as lower thirds")
+    return {"as": how}
 LOOK_BG_KINDS = ("brand", "color", "image", "video", "design")
 
 # ─── fonts (Kevin, 2026-11-14: "background and font choices would be a huge
@@ -633,11 +740,7 @@ def clean_look(raw: Any) -> Dict[str, Any]:
     tr = raw.get("translation") or bt.DEFAULT
     if tr not in bt.TRANSLATIONS:
         raise ValueError("That Bible version isn't here yet")
-    lt_raw = raw.get("lower_third") if isinstance(raw.get("lower_third"), dict) else {}
-    style = lt_raw.get("style") or "bar"
-    position = lt_raw.get("position") or "bottom"
-    if style not in ("bar", "shadow") or position not in ("bottom", "top"):
-        raise ValueError("The lower third is a bar or words with a shadow, at the bottom or the top")
+    lower_third = _clean_lower_third(raw.get("lower_third"))
     br_raw = raw.get("brand") if isinstance(raw.get("brand"), dict) else {}
     brand: Dict[str, Any] = {}
     for key in ("primary", "accent", "background"):
@@ -660,9 +763,10 @@ def clean_look(raw: Any) -> Dict[str, Any]:
     return {
         "background": background,
         "size": size, "caps": bool(raw.get("caps")), "align": align, "font": font or None, "shadow": shadow,
-        "translation": tr, "lower_third": {"style": style, "position": position},
+        "translation": tr, "lower_third": lower_third,
         "brand": brand, "quick": clean_quick(raw.get("quick")), "workspace": workspace,
         "crawls": _clean_crawls(raw.get("crawls")),
+        "thirds": _clean_thirds(raw.get("thirds")),
         "countdown": clean_count_look(raw.get("countdown")),
         "fonts": clean_fonts(raw.get("fonts")),
         "series": _clean_series(raw.get("series")),
@@ -997,6 +1101,11 @@ def compile_item(item: Dict[str, Any], songs: Dict[str, Dict[str, Any]], starts_
         body = {"title": item["title"], "slides": [{"kind": "announcement", "title": item["title"], "when": item.get("when") or "",
                                                      "body": item.get("body") or "", "image_url": item.get("image_url") or "",
                                                      "link": item.get("link") or ""}]}
+    elif kind == "third":
+        # A lower third (2026-11-15): over the camera on the stream, over the background in the
+        # room, one wide line on an LED wall, plainly on the stage (each screen decides).
+        name = item.get("name") or "Lower third"
+        body = {"title": name, "slides": [{"kind": "third", "name": name, "sub": item.get("sub") or ""}]}
     elif kind == "media":
         mk = item.get("media_kind") or "image"
         slide = {"kind": mk, "url": item["url"], "title": item.get("title") or ""}
@@ -1039,6 +1148,11 @@ def compile_item(item: Dict[str, Any], songs: Dict[str, Dict[str, Any]], starts_
             bg = item.get("bg")
             if bg and kind in BG_ITEM_KINDS and not body.get("from_board"):
                 s["bg"] = dict(bg)
+    # Its words as lower thirds in the room too (2026-11-15): every slide says so, so each
+    # screen and every thumbnail draws it the same way. The stream always draws them so.
+    if item.get("as_third") is True and kind in AS_THIRD_KINDS:
+        for s in body["slides"]:
+            s["as_third"] = True
     return {**base, **body}
 
 
@@ -1198,10 +1312,65 @@ def clean_live(raw: Any) -> Dict[str, Any]:
         if not (room or online):
             raise ValueError("The crawl goes on the room, online, or both")
         out["crawl"] = {"text": text, "room": room, "online": online, "times": times, "at": at}
+    third = raw.get("third")
+    if third is not None:
+        out["third"] = clean_live_third(third)
     ask = raw.get("ask")
     if ask is not None:
         out["ask"] = clean_ask(ask)
     return out
+
+
+# ─── a lower third from the booth, over anything (2026-11-15) ────────
+# Like the crawl, it rides in the live state on top of whatever slide is up: the
+# booth puts one up (one of the church's saved ones, or typed on the spot), on
+# every screen, the room's only or the stream's only, until it's taken down or for
+# some seconds from `at`. Every screen hears it with the slide, and a restart picks
+# it up from the saved row. Never on the stage.
+THIRD_SECONDS = (3, 600)
+
+
+def clean_live_third(raw: Any) -> Dict[str, Any]:
+    """The booth's lower third: its two lines, who sees it, when it went up, and the
+    seconds before it goes down by itself (None: until it's taken down)."""
+    if not isinstance(raw, dict):
+        raise ValueError("A lower third needs its name line")
+    words = clean_third_words(raw)
+    where = raw.get("show") or "all"
+    if where not in SHOW:
+        raise ValueError("A lower third shows to everyone, the room only, or online only")
+    at = raw.get("at")
+    if not isinstance(at, str) or len(at) > 40:
+        raise ValueError("That isn't a time")
+    try:
+        datetime.fromisoformat(at.replace("Z", "+00:00"))
+    except ValueError:
+        raise ValueError("That isn't a time")
+    secs = raw.get("seconds")
+    if secs in (None, 0):
+        secs = None
+    else:
+        lo, hi = THIRD_SECONDS
+        if isinstance(secs, float) and secs.is_integer():
+            secs = int(secs)
+        if type(secs) is not int or not lo <= secs <= hi:
+            raise ValueError(f"A lower third goes down by itself after {lo} to {hi} seconds, or stays until it's taken down")
+    tid = raw.get("id")
+    if tid in (None, ""):
+        tid = None
+    elif not isinstance(tid, str) or not _ID.match(tid):
+        raise ValueError("That isn't one of your saved lower thirds")
+    return {**words, "show": where, "at": at, "seconds": secs, "id": tid}
+
+
+def carry_third(prev: Optional[Dict[str, Any]], state: Dict[str, Any]) -> Dict[str, Any]:
+    """A press that says nothing of the booth's lower third (a booth opened before there were
+    any, the countdown that starts by itself) leaves the one up where it is. A press that
+    sends none takes it down; that's the caller's to tell (it calls this only when unsent)."""
+    old = (prev or {}).get("third")
+    if "third" not in state and isinstance(old, dict) and old.get("name"):
+        state["third"] = old
+    return state
 
 
 # ─── the preacher's ask, and the service's log (round 5, board 24) ────

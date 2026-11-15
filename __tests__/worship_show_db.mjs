@@ -1,5 +1,6 @@
 // Sundays on screens on a real Postgres (PGlite):
-// supabase/APPLY-2026-10-19-worship-show.sql (and -10-20-worship-stage.sql). Rows go through every check:
+// supabase/APPLY-2026-10-19-worship-show.sql (and -10-20-worship-stage.sql, -11-15-worship-screen-words.sql).
+// Rows go through every check:
 //   worship_services  a service and its items; a blank title, 81 items or
 //                     items that aren't a list are refused
 //   worship_screens   a screen and its link; a role that isn't one, a link
@@ -65,6 +66,18 @@ await db.query(`INSERT INTO worship_screens(business_id, name, role, stage, toke
 checks++;
 await refuses(`INSERT INTO worship_screens(business_id, name, stage, token) VALUES ($1, 'x', '[1]'::jsonb, $2)`, [b1, 'G'.repeat(43)], /check constraint/);
 await refuses(`INSERT INTO worship_screens(business_id, name, stage, token) VALUES ($1, 'x', $2::jsonb, $3)`, [b1, JSON.stringify({ pad: 'x'.repeat(1001) }), 'H'.repeat(43)], /check constraint/);
+
+// How a room screen draws words (APPLY-2026-11-15-worship-screen-words.sql): an object, kept small;
+// every screen there already gets {} (full slides, as before).
+await db.exec(await sql('APPLY-2026-11-15-worship-screen-words.sql'));
+await db.exec(await sql('APPLY-2026-11-15-worship-screen-words.sql'));   // idempotent
+assert.deepEqual((await db.query(`SELECT words FROM worship_screens WHERE token = $1`, [token])).rows[0].words, {}); checks++;
+await db.query(`INSERT INTO worship_screens(business_id, name, role, words, token) VALUES ($1, 'Side screen', 'room', $2::jsonb, $3)`,
+  [b1, JSON.stringify({ as: 'see_through' }), 'J'.repeat(43)]);
+assert.deepEqual((await db.query(`SELECT words FROM worship_screens WHERE token = $1`, ['J'.repeat(43)])).rows[0].words, { as: 'see_through' }); checks++;
+await refuses(`INSERT INTO worship_screens(business_id, name, words, token) VALUES ($1, 'x', '"thirds"'::jsonb, $2)`, [b1, 'K'.repeat(43)], /check constraint/);
+await refuses(`INSERT INTO worship_screens(business_id, name, words, token) VALUES ($1, 'x', $2::jsonb, $3)`, [b1, JSON.stringify({ as: 'x'.repeat(201) }), 'M'.repeat(43)], /check constraint/);
+await refuses(`INSERT INTO worship_screens(business_id, name, words, token) VALUES ($1, 'x', null, $2)`, [b1, 'P'.repeat(43)], /null value|not-null/);
 
 // One look, one live row a church: the upserts the router does.
 const upsertLook = `INSERT INTO worship_settings(business_id, look) VALUES ($1, $2::jsonb)
