@@ -156,13 +156,34 @@ def test_the_switch_opens_it_to_the_owner_first(api, monkeypatch):
     monkeypatch.setenv("WORSHIP_SONGS", "on")
     every = {k: True for k in ("plan", "songs", "media", "fix", "run", "setup", "live", "clips", "sermons", "serve")}
     assert as_("manager").get(f"/worship/status?business_id={BIZ}").json() == {
-        "enabled": True, "can_write": True, "can": every, "roles": ["planner", "worship", "booth", "media", "admin"]}
+        "enabled": True, "can_write": True, "can": every, "roles": ["planner", "worship", "booth", "media", "admin"],
+        "sunday_tools": False}
     # A member seat reads and changes nothing (a part on the team is how they would).
     assert as_("member").get(f"/worship/status?business_id={BIZ}").json() == {
-        "enabled": True, "can_write": False, "can": {k: False for k in every}, "roles": []}
+        "enabled": True, "can_write": False, "can": {k: False for k in every}, "roles": [], "sunday_tools": False}
     monkeypatch.setenv("WORSHIP_SONGS", "off")
     assert as_("owner").get(f"/worship/songs?business_id={BIZ}").status_code == 404
     assert as_("owner").get("/worship/scripture?q=rom 8 28").status_code == 404
+
+
+def test_the_sunday_tools_switch_opens_to_the_owner_first(api, monkeypatch):
+    db, as_ = api
+    monkeypatch.setenv("WORSHIP_SONGS", "on")
+    monkeypatch.delenv("CHURCHSAVVY_SUNDAY_TOOLS", raising=False)
+    tools = lambda who: as_(who).get(f"/worship/status?business_id={BIZ}").json()["sunday_tools"]
+    assert tools("owner") is True and tools("manager") is False
+    monkeypatch.setenv("CHURCHSAVVY_SUNDAY_TOOLS", "on")
+    assert tools("owner") is True and tools("manager") is True and tools("member") is True
+    # A typo reads as off, for the owner too.
+    monkeypatch.setenv("CHURCHSAVVY_SUNDAY_TOOLS", "on.")
+    assert tools("owner") is False
+    monkeypatch.setenv("CHURCHSAVVY_SUNDAY_TOOLS", "off")
+    assert tools("owner") is False
+    # ChurchSavvy itself off: nobody has the tools, whatever this switch says.
+    monkeypatch.setenv("CHURCHSAVVY_SUNDAY_TOOLS", "on")
+    monkeypatch.setenv("WORSHIP_SONGS", "off")
+    assert as_("owner").get(f"/worship/status?business_id={BIZ}").json() == {"enabled": False, "can_write": False}
+    assert wr.sunday_tools(PEOPLE["owner"]) is False
 
 
 def test_seats_read_and_staff_write(api, monkeypatch):
