@@ -40,9 +40,10 @@ import secrets
 import threading
 import time
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import quote
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -160,9 +161,39 @@ def _show(biz: str, service: Dict[str, Any]) -> Dict[str, Any]:
             logger.warning("worship show: the announcements board couldn't be read for %s", biz)
             board = []
     show = wsh.compile_show(service, _songs_for(biz, items), board)
-    show["look"] = _look(biz)
+    show["look"] = _worn(biz, _look(biz), service.get("starts_at"))
     show["church"] = _brand(biz, show["look"])
     return show
+
+
+def _church_zone(biz: str) -> ZoneInfo:
+    """The church's clock (business_marketing.business_tz). A read that fails is a 503:
+    a guess in UTC would put an evening service on the next day's look."""
+    rows = _read(f"/businesses?id=eq.{_q(biz)}&select=id,owner_id,settings&limit=1", "The church's clock")
+    if not rows:
+        return ZoneInfo("UTC")
+    import business_marketing
+    return business_marketing.business_tz(rows[0])
+
+
+def _church_today(biz: str) -> date:
+    """Today on the church's clock, read strictly (a 503 when it can't be read, see _church_zone)."""
+    return datetime.now(_church_zone(biz)).date()
+
+
+def _worn(biz: str, look: Dict[str, Any], starts_at: Optional[str]) -> Dict[str, Any]:
+    """The look a service wears (2026-11-14): a sermon series' when the service's day, on
+    the church's clock, falls inside one; else the church's own. A church with no series
+    reads nothing more, so its screens get exactly what they always did."""
+    if not look.get("series") or not starts_at:
+        return look
+    try:
+        at = datetime.fromisoformat(str(starts_at).replace("Z", "+00:00"))
+    except ValueError:
+        return look
+    if at.tzinfo is None:
+        at = at.replace(tzinfo=timezone.utc)
+    return wsh.look_on(look, at.astimezone(_church_zone(biz)).date())
 
 
 # ─── the live hub ────────────────────────────────────────────────────
@@ -536,7 +567,18 @@ def save_look(body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
     # (worship_count_auto); a save keeps it, whatever the page sent, so a page opened
     # before this morning's countdown can't put it up a second time.
     before = _read(f"/worship_settings?business_id=eq.{_q(biz)}&select=look&limit=1", "The look")
-    fired = ((before[0].get("look") or {}) if before and isinstance(before[0].get("look"), dict) else {}).get(wsh.FIRED_KEY)
+    was = (before[0].get("look") or {}) if before and isinstance(before[0].get("look"), dict) else {}
+    # A look worn for a sermon series (a Sunday's show, 2026-11-14) says so (`wearing`). A
+    # page that sends one back (the booth saving a crawl line or the countdown's times)
+    # changes what it changed; the church's own fonts and background stay, never the series'.
+    sent = body.get("look")
+    if isinstance(sent, dict) and sent.get(wsh.WEARING_KEY):
+        try:
+            own = wsh.clean_look(was)
+        except ValueError:
+            own = wsh.clean_look({})
+        look = {**look, "fonts": own["fonts"], "background": own["background"]}
+    fired = was.get(wsh.FIRED_KEY)
     stored = {**look, wsh.FIRED_KEY: fired} if isinstance(fired, dict) and fired else look
     rows = sb_clients.sb_post_as_service("/worship_settings?on_conflict=business_id&select=look",
                                          {"business_id": biz, "look": stored, "updated_at": _now()},
@@ -726,9 +768,14 @@ def screen_lobby(token: str):
     if screen.get("role") != "lobby":
         raise HTTPException(403, "Only a lobby screen runs on its own")
     biz = screen["business_id"]
-    look = _look(biz)
     from worship_announce_router import board_for, church_today, church_zone  # it imports this module's helpers
     zone = church_zone(biz)
+    look = _look(biz)
+    # Inside a sermon series' dates the lobby wears its look too, like that week's services. A
+    # series reads the church's day strictly, as the shows do (a 503, never UTC's date); without
+    # one the lobby keeps its own clock as it always has (a day off at midnight beats no board).
+    today = _church_today(biz) if look.get("series") else church_today(biz)
+    look = wsh.look_on(look, today)
     try:
         board = board_for(biz, None, "lobby")
     except HTTPException:
@@ -740,7 +787,7 @@ def screen_lobby(token: str):
     rows = _read(f"/worship_services?business_id=eq.{_q(biz)}&archived_at=is.null&is_template=eq.false"
                  f"&starts_at=gte.{_q(since)}&select=id,title,starts_at&order=starts_at.asc&limit=1", "The next service")
     nxt = {"id": rows[0]["id"], "title": rows[0].get("title") or "", "starts_at": rows[0].get("starts_at")} if rows else None
-    return {"lobby": _screen_out(screen, False)["lobby"], "slides": board, "verse": wsh.lobby_verse(church_today(biz)),
+    return {"lobby": _screen_out(screen, False)["lobby"], "slides": board, "verse": wsh.lobby_verse(today),
             "next": nxt, "zone": str(zone.key) if hasattr(zone, "key") else "UTC", "look": look, "church": _brand(biz, look)}
 
 

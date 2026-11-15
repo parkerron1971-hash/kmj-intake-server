@@ -14,9 +14,13 @@
 #     message to the stage
 #   * a background of its own: an item's, or one sermon point's, rides on
 #     its slides; nothing set (or "look") follows the church's look
+#   * 2026-11-14: a font pair, a design behind the words (the look's or a
+#     slide's own), and a sermon series' look on its days; an old look and
+#     old backgrounds come back key for key as they were
 
 import pathlib
 import sys
+from datetime import date
 
 import pytest
 
@@ -535,3 +539,125 @@ def _point(**kw):
 def test_what_sermon_notes_cannot_be(raw, words):
     with pytest.raises(ValueError, match=words):
         wsh.clean_item(raw)
+
+
+# ─── fonts, the background library and a look for a sermon series (2026-11-14) ───
+# Kevin: "background and font choices would be a huge help as well".
+
+OLD_LOOK = {"background": {"kind": "image", "url": PIC, "dim": 0.4}, "size": "big", "caps": True, "align": "left",
+            "font": "Playfair Display", "translation": "web", "lower_third": {"style": "shadow", "position": "top"},
+            "crawls": ["Lunch is in the hall."]}
+
+
+def test_an_old_look_and_old_backgrounds_come_back_exactly_as_they_were():
+    look = wsh.clean_look(OLD_LOOK)
+    # The same background, key for key (no design key), the old font kept, nothing new switched on.
+    assert look["background"] == {"kind": "image", "color": None, "url": PIC, "dim": 0.4}
+    assert (look["font"], look["fonts"], look["series"]) == ("Playfair Display", None, [])
+    for kind, extra in (("brand", {}), ("color", {"color": "#1C0B1F"}), ("video", {"url": PIC})):
+        assert "design" not in wsh.clean_look({"background": {"kind": kind, **extra}})["background"]
+    for bg in ({"kind": "color", "color": "#203040"}, {"kind": "image", "url": PIC, "dim": 0.3}, {"kind": "video", "url": PIC}):
+        assert set(wsh.clean_bg(bg)) == {"kind", "color", "url", "dim"}
+    # A look without series is the same dict on any day: a church that sets none gets what it always did.
+    assert wsh.look_on(look, None) is look
+    assert wsh.look_on(look, date(2026, 11, 15)) is look
+
+
+def test_the_fonts_are_one_of_eight_pairs():
+    assert wsh.FONT_PAIRS == ("clean", "modern", "poster", "classic", "warm", "quiet", "strong", "gentle")
+    for key in wsh.FONT_PAIRS:
+        assert wsh.clean_look({"fonts": key})["fonts"] == key
+    assert wsh.clean_look({"fonts": ""})["fonts"] is None and wsh.clean_look({})["fonts"] is None
+    # The brand's typeface (a look's old `font`) still rides along under a pair.
+    both = wsh.clean_look({"fonts": "warm", "font": "Archivo"})
+    assert (both["fonts"], both["font"]) == ("warm", "Archivo")
+    for bad in ("Comic Sans", "WARM", 3, ["warm"]):
+        with pytest.raises(ValueError, match="aren't one of the font pairs"):
+            wsh.clean_look({"fonts": bad})
+
+
+def test_a_design_behind_the_words_of_the_churchs_look():
+    assert wsh.BG_DESIGNS == ("glass", "linen", "stones", "night", "light", "haze", "drift", "water", "duo")
+    assert set(wsh.BG_DESIGNS) <= set(wsh.DESIGNS)
+    for key in wsh.BG_DESIGNS:
+        bg = wsh.clean_look({"background": {"kind": "design", "design": key}})["background"]
+        assert bg == {"kind": "design", "color": None, "url": None, "dim": 0.55, "design": key}
+    # A design picked before, then the brand again, stays in hand like a color does.
+    back = wsh.clean_look({"background": {"kind": "brand", "design": "linen", "color": "#203040"}})["background"]
+    assert back == {"kind": "brand", "color": "#203040", "url": None, "dim": 0.55, "design": "linen"}
+    for bad, words in [({"kind": "design"}, "Pick the background design"),
+                       ({"kind": "design", "design": "numbers"}, "isn't one of the backgrounds"),
+                       ({"kind": "design", "design": "ring"}, "isn't one of the backgrounds"),
+                       ({"kind": "brand", "design": "confetti"}, "isn't one of the backgrounds"),
+                       ({"kind": "pattern"}, "your brand, a design, a color")]:
+        with pytest.raises(ValueError, match=words):
+            wsh.clean_look({"background": bad})
+
+
+def test_a_song_or_a_sermon_point_can_wear_a_design():
+    song = wsh.clean_item(item("song", song_id=SONG_ID, bg={"kind": "design", "design": "water", "color": "#000000", "url": PIC}))
+    assert song["bg"] == {"kind": "design", "color": None, "url": None, "dim": 0.55, "design": "water"}
+    assert all(s["bg"]["design"] == "water" for s in wsh.compile_item(song, {SONG_ID: SONG})["slides"])
+    points = wsh.clean_item(item("text", bg={"kind": "design", "design": "glass"}, slides=[
+        {"kicker": "Point 1", "text": "Stop and pick up stones."},
+        {"kicker": "Point 2", "text": "Stones are for questions.", "bg": {"kind": "design", "design": "linen"}}]))
+    slides = wsh.compile_item(points, {})["slides"]
+    assert [s["bg"]["design"] for s in slides] == ["glass", "linen"]
+    for bad in ({"kind": "design"}, {"kind": "design", "design": "numbers"}, {"kind": "design", "design": "ring"}):
+        with pytest.raises(ValueError, match="pick one of the designs"):
+            wsh.clean_item(item("song", song_id=SONG_ID, bg=bad))
+
+
+def series(**kw):
+    return {"id": "crossing", "name": "Crossing Over", "from": "2026-11-01", "to": "2026-11-29", "fonts": "warm",
+            "background": {"kind": "design", "design": "glass"}, **kw}
+
+
+def test_a_sermon_series_wears_its_own_look_on_its_days():
+    advent = series(id="advent", name="Advent", fonts=None, background={"kind": "color", "color": "#0F5132"})
+    advent.update({"from": "2026-11-30", "to": "2026-12-24"})
+    look = wsh.clean_look({**OLD_LOOK, "fonts": "clean", "series": [series(), advent]})
+    assert look["series"][0] == {"id": "crossing", "name": "Crossing Over", "from": "2026-11-01", "to": "2026-11-29", "fonts": "warm",
+                                 "background": {"kind": "design", "color": None, "url": None, "dim": 0.55, "design": "glass"}}
+    # Its first and last days count; the rest of the year keeps the church's look.
+    for day in (date(2026, 11, 1), date(2026, 11, 15), date(2026, 11, 29)):
+        worn = wsh.look_on(look, day)
+        assert (worn["fonts"], worn["background"]["design"]) == ("warm", "glass")
+        assert worn["wearing"] == {"id": "crossing", "name": "Crossing Over", "from": "2026-11-01", "to": "2026-11-29"}
+        # Only the fonts and the background change: the rest is the church's, the series list too.
+        assert {k: v for k, v in worn.items() if k not in ("fonts", "background", "wearing")} == \
+            {k: v for k, v in look.items() if k not in ("fonts", "background")}
+    on = wsh.look_on(look, date(2026, 12, 6))
+    assert on["fonts"] is None and on["background"]["color"] == "#0F5132" and on["wearing"]["name"] == "Advent"
+    for day in (date(2026, 10, 31), date(2026, 12, 25)):
+        assert wsh.look_on(look, day) is look and "wearing" not in look
+    # What a page sends back never sticks as the church's: clean_look drops `wearing`.
+    assert "wearing" not in wsh.clean_look(wsh.look_on(look, date(2026, 11, 8)))
+
+
+def _dated(start, end, **kw):
+    s = series(**kw)
+    s.update({"from": start, "to": end})
+    return s
+
+
+@pytest.mark.parametrize("raw, words", [
+    ("crossing", "up to 12 series looks"),
+    ([_dated(f"2026-{k + 1:02d}-01", f"2026-{k + 1:02d}-10", id=f"s{k}") for k in range(12)] + [series(id="x")], "up to 12 series looks"),
+    (["Crossing Over"], "isn't a look for a series"),
+    ([series(id="Not ok")], "its own id"),
+    ([series(), _dated("2027-01-01", "2027-01-31")], "its own id"),
+    ([series(name="  ")], "Give the series a name"),
+    ([series(name="x" * 61)], "at most 60"),
+    ([_dated("Nov 1", "2026-11-29")], "Crossing Over's first day is a date"),
+    ([_dated("2026-11-01", "2026-11-31")], "Crossing Over's last day is a date"),
+    ([_dated("2026-11-29", "2026-11-01")], "last day comes before its first"),
+    ([_dated("2026-11-01", "2027-12-01")], "a year at most"),
+    ([series(), _dated("2026-11-29", "2026-12-24", id="advent", name="Advent")], "Advent and Crossing Over share some days"),
+    ([series(fonts="comic")], "Crossing Over: the fonts aren't one of the font pairs"),
+    ([series(background={"kind": "design", "design": "ring"})], "Crossing Over: that isn't one of the backgrounds"),
+    ([series(background={"kind": "image"})], "Crossing Over: pick the background photo"),
+])
+def test_what_a_series_look_cannot_be(raw, words):
+    with pytest.raises(ValueError, match=words):
+        wsh.clean_look({"series": raw})
