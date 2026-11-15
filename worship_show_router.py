@@ -13,6 +13,9 @@
 #   POST              /worship/screens/{id}/new-link     retire a screen's link
 #   GET/PUT           /worship/look                      the look every slide wears
 #   GET/POST          /worship/live                      what's on screen now
+#                                                        (2026-11-15: with the booth's lower third,
+#                                                        `third`, kept through a press that says
+#                                                        nothing of it)
 #
 # No sign-in; a screen's own link (its token) is the key, and it opens
 # only what that screen shows:
@@ -58,11 +61,49 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/worship", tags=["worship"])
 
 MAX_SCREENS = 20
+# worship_settings.look's own check (APPLY-2026-10-19-worship-show.sql): octet_length(look::text) <= 8000.
+LOOK_BYTES = 8000
 WAIT_SECONDS = 15.0
 PREAMBLE_BYTES = 16384
 _SONG_FIELDS = "id,title,song_key,authors,ccli_number,copyright,public_domain,sections,arrangements,lines_per_slide"
 _SERVICE_LIST = "id,title,starts_at,is_template,notes,updated_at,items"
 _SCREEN_FIELDS = "id,name,role,width,height,fit,led,stage,lobby,token,sort,updated_at"
+# 2026-11-15: how a room screen draws words (full slides or lower thirds) is worship_screens.words
+# (supabase/APPLY-2026-11-15-worship-screen-words.sql). Before that runs, asking for the column
+# makes PostgREST refuse the whole read, so a screen is read without it (it draws full slides,
+# exactly as before) once PostgREST says the column isn't there, and asked again a minute later.
+# Any other failed read is what it always was. (sunday_planning's serve_teams.owner, the same way.)
+_WORDS = "words"
+NO_WORDS_SECONDS = 60.0
+_NO_WORDS: Dict[str, float] = {"at": 0.0}
+
+
+def _words_missing() -> bool:
+    at = _NO_WORDS["at"]
+    return bool(at) and time.monotonic() - at < NO_WORDS_SECONDS
+
+
+def _screen_fields() -> str:
+    return _SCREEN_FIELDS if _words_missing() else f"{_SCREEN_FIELDS},{_WORDS}"
+
+
+def _words_refused() -> bool:
+    """Whether the call just made was refused for the words column alone (42703 when it's
+    selected, PGRST204 when it's written); then it's remembered for a minute."""
+    err = sb_clients.last_error() or {}
+    if err.get("code") in ("42703", "PGRST204") and _WORDS in (err.get("message") or ""):
+        _NO_WORDS["at"] = time.monotonic()
+        return True
+    return False
+
+
+def _screens_call(call: Any) -> Any:
+    """A screens read or write, given the select it should use: with the words column, and
+    once more without it when that column isn't there yet."""
+    out = call(_screen_fields())
+    if out is None and _words_refused():
+        out = call(_SCREEN_FIELDS)
+    return out
 
 
 # ─── helpers ─────────────────────────────────────────────────────────
@@ -441,6 +482,11 @@ def _clean_screen(body: Dict[str, Any], partial: bool) -> Dict[str, Any]:
     if "lobby" in body:
         # A lobby TV's own week (round 5, board 26).
         out["lobby"] = wsh.clean_lobby(body.get("lobby"))
+    if "words" in body:
+        # Words as lower thirds on a room screen or an LED wall (2026-11-15).
+        if _words_missing():
+            raise ValueError("Lower thirds on this screen aren't ready yet. Nothing changed; try again in a minute")
+        out["words"] = wsh.clean_words(body.get("words"))
     return out
 
 
@@ -452,6 +498,12 @@ def _screen_out(row: Dict[str, Any], with_link: bool) -> Dict[str, Any]:
     except ValueError:
         # A saved week that no longer passes (an older shape) follows the booth.
         out["lobby"] = wsh.clean_lobby({})
+    if _WORDS in row:
+        # Only once the column is there: the app shows the setting when the screen has it.
+        try:
+            out["words"] = wsh.clean_words(row.get(_WORDS))
+        except ValueError:
+            out["words"] = wsh.clean_words({})
     if with_link:
         out["token"] = row.get("token")
     return out
@@ -461,8 +513,10 @@ def _screen_out(row: Dict[str, Any], with_link: bool) -> Dict[str, Any]:
 def list_screens(business_id: str, user: AuthedUser = Depends(require_user)):
     biz = _uuid(business_id)
     roles = _seat(biz, user)
-    rows = _read(f"/worship_screens?business_id=eq.{_q(biz)}&archived_at=is.null&select={_SCREEN_FIELDS}"
-                 f"&order=sort.asc,created_at.asc", "Your screens")
+    rows = _screens_call(lambda f: sb_clients.sb_get_as_service(
+        f"/worship_screens?business_id=eq.{_q(biz)}&archived_at=is.null&select={f}&order=sort.asc,created_at.asc"))
+    if rows is None:
+        raise HTTPException(503, "Your screens couldn't be read. Try again.")
     # Only the setup ever sees a screen's link.
     setup = can(roles, "setup")
     return {"screens": [_screen_out(r, setup) for r in rows], "can_write": setup}
@@ -481,9 +535,9 @@ def create_screen(body: Dict[str, Any], user: AuthedUser = Depends(require_user)
     if len(have) >= MAX_SCREENS:
         raise HTTPException(400, f"A church has at most {MAX_SCREENS} screens")
     now = _now()
-    rows = sb_clients.sb_post_as_service("/worship_screens?select=" + _SCREEN_FIELDS, {
-        **fields, "business_id": biz, "token": secrets.token_urlsafe(32), "sort": fields.get("sort", len(have)),
-        "created_at": now, "updated_at": now})
+    row = {**fields, "business_id": biz, "token": secrets.token_urlsafe(32), "sort": fields.get("sort", len(have)),
+           "created_at": now, "updated_at": now}
+    rows = _screens_call(lambda f: sb_clients.sb_post_as_service("/worship_screens?select=" + f, row))
     if not isinstance(rows, list) or not rows:
         raise HTTPException(503, "That screen didn't save. Try again.")
     return {"ok": True, "screen": _screen_out(rows[0], True)}
@@ -508,8 +562,8 @@ def save_screen(screen_id: str, body: Dict[str, Any], user: AuthedUser = Depends
     except ValueError as e:
         raise HTTPException(400, str(e))
     fields["updated_at"] = _now()
-    rows = sb_clients.sb_patch_as_service(
-        f"/worship_screens?id=eq.{_q(sid)}&business_id=eq.{_q(biz)}&select={_SCREEN_FIELDS}", fields)
+    rows = _screens_call(lambda f: sb_clients.sb_patch_as_service(
+        f"/worship_screens?id=eq.{_q(sid)}&business_id=eq.{_q(biz)}&select={f}", fields))
     if not isinstance(rows, list) or not rows:
         raise HTTPException(503, "That didn't save. Nothing changed; try again.")
     return {"ok": True, "screen": _screen_out(rows[0], True)}
@@ -521,9 +575,9 @@ def new_screen_link(screen_id: str, body: Dict[str, Any], user: AuthedUser = Dep
     _staff(biz, user, "setup")
     sid = _uuid(screen_id, "screen")
     _own_screen(biz, sid)
-    rows = sb_clients.sb_patch_as_service(
-        f"/worship_screens?id=eq.{_q(sid)}&business_id=eq.{_q(biz)}&select={_SCREEN_FIELDS}",
-        {"token": secrets.token_urlsafe(32), "updated_at": _now()})
+    link = {"token": secrets.token_urlsafe(32), "updated_at": _now()}
+    rows = _screens_call(lambda f: sb_clients.sb_patch_as_service(
+        f"/worship_screens?id=eq.{_q(sid)}&business_id=eq.{_q(biz)}&select={f}", link))
     if not isinstance(rows, list) or not rows:
         raise HTTPException(503, "The new link didn't save. The old one still works; try again.")
     return {"ok": True, "screen": _screen_out(rows[0], True)}
@@ -580,6 +634,11 @@ def save_look(body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
         look = {**look, "fonts": own["fonts"], "background": own["background"]}
     fired = was.get(wsh.FIRED_KEY)
     stored = {**look, wsh.FIRED_KEY: fired} if isinstance(fired, dict) and fired else look
+    # The look's row holds at most LOOK_BYTES (worship_settings' own check): past it the database
+    # refuses the save, so say what to take out instead of "didn't save".
+    if len(json.dumps(stored, ensure_ascii=False).encode("utf-8")) > LOOK_BYTES:
+        raise HTTPException(400, "Your look is too full to save. Take out a saved lower third, a crawl line, "
+                                 "a quick screen or a series that has ended")
     rows = sb_clients.sb_post_as_service("/worship_settings?on_conflict=business_id&select=look",
                                          {"business_id": biz, "look": stored, "updated_at": _now()},
                                          prefer="resolution=merge-duplicates,return=representation")
@@ -633,12 +692,16 @@ def set_live(body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
         raise HTTPException(400, str(e))
     if len(json.dumps(state)) > 50000:
         raise HTTPException(400, "That passage is too long to put up at once. Show part of it.")
+    sent = body.get("state")
     with _church_lock(biz):
         state["at"] = _now()
         prev = _current(biz)
         # The preacher's ask and the service's log ride along from the state before (round 5, board 24).
         wsh.carry_ask(prev[1] if prev else None, state)
         wsh.carry_log(prev[1] if prev else None, state, state["at"])
+        # The booth's lower third stays up through a press that says nothing of it (2026-11-15).
+        if isinstance(sent, dict) and "third" not in sent:
+            wsh.carry_third(prev[1] if prev else None, state)
         rev, saved = _put_live(biz, state, prev)
     return {"ok": True, "rev": rev, "saved": saved}
 
@@ -674,9 +737,8 @@ def _put_live(biz: str, state: Dict[str, Any], prev: Optional[Tuple[int, Dict[st
 def screen_from_token(token: str) -> Dict[str, Any]:
     if mode() == "off" or not (32 <= len(token) <= 64) or not all(c.isalnum() or c in "-_" for c in token):
         raise HTTPException(404, "Not Found")
-    rows = sb_clients.sb_get_as_service(
-        f"/worship_screens?token=eq.{_q(token)}&archived_at=is.null&select=business_id,{_SCREEN_FIELDS}&limit=1",
-        redact=True)
+    rows = _screens_call(lambda f: sb_clients.sb_get_as_service(
+        f"/worship_screens?token=eq.{_q(token)}&archived_at=is.null&select=business_id,{f}&limit=1", redact=True))
     if rows is None:
         raise HTTPException(503, "The screen couldn't be reached. It tries again by itself.")
     if not rows:

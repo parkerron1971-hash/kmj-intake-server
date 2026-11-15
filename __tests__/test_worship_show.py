@@ -145,7 +145,7 @@ def test_the_look_defaults_and_refusals():
                        ({"background": {"dim": 0.95}}, "0 to 0.85"),
                        ({"size": "huge"}, "smaller, standard or larger"),
                        ({"font": "Comic</style>"}, "isn't a font"),
-                       ({"lower_third": {"style": "neon"}}, "bar or words with a shadow")]:
+                       ({"lower_third": {"style": "neon"}}, "one of the designs")]:
         with pytest.raises(ValueError, match=words):
             wsh.clean_look(bad)
 
