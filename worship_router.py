@@ -18,6 +18,13 @@
 # owner reaches any of this, and everyone else gets the same 404 as a route
 # that doesn't exist.
 #
+# The Sunday tools (canvas 3pdndYa6gYJCPy4W9EHRyi; Kevin 2026-11-14: "build
+# and merge everything"): a countdown that runs for minutes or starts by
+# itself, sermon notes typed as an outline, and fonts and backgrounds made
+# for screens. CHURCHSAVVY_SUNDAY_TOOLS = off | owner | on (default owner)
+# opens their editing; /status says `sunday_tools`. What they saved shows on
+# every screen whatever the switch, since only someone it let in made it.
+#
 # The team (worship_team.py): anyone on it, or with a seat at the church,
 # reads; a planner, the worship leader or an admin changes the library
 # (the owner, an admin or a manager of the church is an admin); the booth
@@ -72,6 +79,26 @@ def mode() -> str:
 
 def open_to(user: AuthedUser) -> bool:
     m = mode()
+    if m == "on":
+        return True
+    if m == "owner":
+        owner = (os.environ.get("PLATFORM_OWNER_EMAIL") or "kmjcreativesolution@gmail.com").strip().lower()
+        return (user.email or "").strip().lower() == owner
+    return False
+
+
+def sunday_tools_mode() -> str:
+    m = (os.environ.get("CHURCHSAVVY_SUNDAY_TOOLS") or "owner").strip().lower()
+    return m if m in ("off", "owner", "on") else "off"
+
+
+def sunday_tools(user: AuthedUser) -> bool:
+    """Whether this person edits with the Sunday tools: only where ChurchSavvy
+    itself is open to them, and then by CHURCHSAVVY_SUNDAY_TOOLS (owner: the
+    platform owner alone, until a Thursday). A typo'd value reads as off."""
+    if not open_to(user):
+        return False
+    m = sunday_tools_mode()
     if m == "on":
         return True
     if m == "owner":
@@ -268,7 +295,8 @@ def status(business_id: str, user: AuthedUser = Depends(require_user)):
     roles = roles_of(_uuid(business_id), user, part=None)
     allowed = can_all(roles)
     # can_write: the song library; `can` is each part of ChurchSavvy, `roles` the caller's parts.
-    return {"enabled": True, "can_write": allowed["songs"], "can": allowed, "roles": [r for r in ROLES if r in roles]}
+    return {"enabled": True, "can_write": allowed["songs"], "can": allowed, "roles": [r for r in ROLES if r in roles],
+            "sunday_tools": sunday_tools(user)}
 
 
 @router.post("/parse")
