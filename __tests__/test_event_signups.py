@@ -34,7 +34,7 @@ import json
 import os
 import sys
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 from fastapi import FastAPI
@@ -249,6 +249,15 @@ def db(monkeypatch):
     monkeypatch.setenv("CHURCH_AREAS", "off")
     monkeypatch.setenv("PLATFORM_OWNER_EMAIL", "owner@lovecity.org")
     monkeypatch.setattr(ces, "_now", lambda: fake.now)
+
+    class _Today(date):
+        # The member app's "is it past?" reads date.today(): held to the fake
+        # clock, or an event dated in this file goes past on the real calendar.
+        @classmethod
+        def today(cls):
+            return fake.now.astimezone(timezone.utc).date()
+
+    monkeypatch.setattr(mpc, "date", _Today)
     monkeypatch.setattr(ces, "_church_tz", lambda biz: "America/New_York")
     emails = {n: e.email for n, e in PEOPLE.items()}
     monkeypatch.setattr(ces, "_owner_email", lambda oid: next((emails[n] for n, i in ID.items() if i == oid), None))
