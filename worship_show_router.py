@@ -40,7 +40,7 @@ import secrets
 import threading
 import time
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
@@ -174,6 +174,11 @@ def _church_zone(biz: str) -> ZoneInfo:
         return ZoneInfo("UTC")
     import business_marketing
     return business_marketing.business_tz(rows[0])
+
+
+def _church_today(biz: str) -> date:
+    """Today on the church's clock, read strictly (a 503 when it can't be read, see _church_zone)."""
+    return datetime.now(_church_zone(biz)).date()
 
 
 def _worn(biz: str, look: Dict[str, Any], starts_at: Optional[str]) -> Dict[str, Any]:
@@ -765,9 +770,12 @@ def screen_lobby(token: str):
     biz = screen["business_id"]
     from worship_announce_router import board_for, church_today, church_zone  # it imports this module's helpers
     zone = church_zone(biz)
-    today = church_today(biz)
-    # Inside a sermon series' dates the lobby wears its look too, like that week's services.
-    look = wsh.look_on(_look(biz), today)
+    look = _look(biz)
+    # Inside a sermon series' dates the lobby wears its look too, like that week's services. A
+    # series reads the church's day strictly, as the shows do (a 503, never UTC's date); without
+    # one the lobby keeps its own clock as it always has (a day off at midnight beats no board).
+    today = _church_today(biz) if look.get("series") else church_today(biz)
+    look = wsh.look_on(look, today)
     try:
         board = board_for(biz, None, "lobby")
     except HTTPException:

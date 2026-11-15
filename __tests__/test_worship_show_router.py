@@ -563,13 +563,29 @@ def test_a_series_look_saved_back_from_a_page_keeps_the_churchs_own(api, monkeyp
 
 
 def test_the_lobby_wears_a_series_look_on_its_days(api, monkeypatch):
-    import worship_announce_router as war
     from datetime import date
     db, as_, _ = api
     monkeypatch.setenv("WORSHIP_SONGS", "on")
-    as_("owner").put("/worship/look", json={"business_id": BIZ, "look": {"series": [CROSSING]}})
     token = as_("owner").post("/worship/screens", json={"business_id": BIZ, "name": "Lobby TV", "role": "lobby"}).json()["screen"]["token"]
-    monkeypatch.setattr(war, "church_today", lambda biz: date(2026, 11, 20))
-    assert as_("stranger").get(f"/worship/screen/{token}/lobby").json()["look"]["wearing"]["name"] == "Crossing Over"
-    monkeypatch.setattr(war, "church_today", lambda biz: date(2026, 12, 20))
-    assert "wearing" not in as_("stranger").get(f"/worship/screen/{token}/lobby").json()["look"]
+    lobby = f"/worship/screen/{token}/lobby"
+    # No series: the lobby keeps its own clock, which never takes the TV down (as before).
+    db.fail.add("businesses")
+    assert as_("stranger").get(lobby).status_code == 200
+    db.fail.discard("businesses")
+    as_("owner").put("/worship/look", json={"business_id": BIZ, "look": {"series": [CROSSING]}})
+    monkeypatch.setattr(wsr, "_church_today", lambda biz: date(2026, 11, 20))
+    assert as_("stranger").get(lobby).json()["look"]["wearing"]["name"] == "Crossing Over"
+    monkeypatch.setattr(wsr, "_church_today", lambda biz: date(2026, 12, 20))
+    assert "wearing" not in as_("stranger").get(lobby).json()["look"]
+
+
+def test_with_a_series_the_lobby_reads_the_churchs_day_strictly(api, monkeypatch):
+    # The series' look follows the church's own day, like the shows: a clock that can't be read
+    # is a 503 (the TV tries again by itself), never UTC's date with the wrong series on it.
+    db, as_, _ = api
+    monkeypatch.setenv("WORSHIP_SONGS", "on")
+    token = as_("owner").post("/worship/screens", json={"business_id": BIZ, "name": "Lobby TV", "role": "lobby"}).json()["screen"]["token"]
+    as_("owner").put("/worship/look", json={"business_id": BIZ, "look": {"series": [CROSSING]}})
+    db.fail.add("businesses")
+    r = as_("stranger").get(f"/worship/screen/{token}/lobby")
+    assert r.status_code == 503 and "clock" in r.json()["detail"]
