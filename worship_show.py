@@ -8,6 +8,7 @@
 #
 #   lyric          {label, lines}              a song, a few lines at a time
 #   verse          {label, translation, verses: [{chapter, verse, text}]}
+#                  + {notice}                  pasted from the church's own Bible (NIV …): its copyright line
 #   text           {kicker, text}              a sermon point, a welcome line
 #                  + {lines, newest}           sermon notes: the statements under a point
 #   announcement   {title, when, body, image_url, link}
@@ -158,6 +159,9 @@ def _clean_point(raw: Dict[str, Any], name: str) -> Dict[str, Any]:
         if ln["kind"] == "verse":
             ref = _text(ln, "ref", 60, "The passage")
             tr = str(ln.get("translation") or bt.DEFAULT)
+            if tr in bt.LICENSED:
+                out.append(_clean_pasted_line(ln, ref, tr, note, br))
+                continue
             if tr not in bt.TRANSLATIONS:
                 raise ValueError("That Bible version isn't here yet")
             found = ws.lookup(ref, tr) if ref else None
@@ -170,6 +174,26 @@ def _clean_point(raw: Dict[str, Any], name: str) -> Dict[str, Any]:
                 raise ValueError(f"A line under {name} has no words")
             out.append({"kind": "statement", "text": text, "note": note, "br": br})
     return {"lines": out, "mode": mode}
+
+
+def _clean_pasted_line(ln: Dict[str, Any], ref: str, tr: str, note: str, br: bool) -> Dict[str, Any]:
+    """A passage in a version we don't have (2026-11-15: NIV, ESV …, bible_text.LICENSED):
+    the words the pastor pasted from their own Bible, tidied (worship_scripture.clean_pasted)
+    and held to MAX_PASTED letters. It's named the way the free versions find it."""
+    short = bt.LICENSED[tr]["short"]
+    found = ws.lookup(ref, bt.DEFAULT) if ref else None
+    if not found:
+        raise ValueError(f"“{ref}” isn't a passage we can find. Try John 3:16 or Psalm 23")
+    raw = ln.get("words")
+    if raw is not None and not isinstance(raw, str):
+        raise ValueError(f"The words pasted for {found.label()} should be text")
+    words = ws.clean_pasted(raw or "", short) if len(raw or "") <= ws.MAX_PASTED_RAW else None
+    if words is None or len(words) > ws.MAX_PASTED:
+        raise ValueError(f"{found.label()} ({short}) is too long to show: at most {ws.MAX_PASTED:,} letters a passage. "
+                         "Split it into two passages")
+    if not words:
+        raise ValueError(f"Paste {found.label()} from your {short}, or take {short} off the passage")
+    return {"kind": "verse", "ref": found.label(), "translation": tr, "words": words, "note": note, "br": br}
 
 
 def clean_item(raw: Any) -> Dict[str, Any]:
@@ -878,7 +902,11 @@ _OUTLINE_VERSE_OPTS = {"ref": True, "nums": True, "version": True, "size": None,
 
 
 def _outline_verses(line: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """A passage in the notes, as its verses: the slides a Scripture item of it would make."""
+    """A passage in the notes, as its verses: the slides a Scripture item of it would make.
+    One pasted from the church's own Bible splits the same way, and its last slide carries
+    the publisher's copyright notice, in small type on the screens."""
+    if line.get("translation") in bt.LICENSED:
+        return _pasted_verses(line)
     tr = line.get("translation") if line.get("translation") in bt.TRANSLATIONS else bt.DEFAULT
     ref = ws.lookup(line.get("ref") or "", tr)
     if not ref:
@@ -886,6 +914,19 @@ def _outline_verses(line: Dict[str, Any]) -> List[Dict[str, Any]]:
     short = bt.TRANSLATIONS[tr]["short"]
     return [{"kind": "verse", "label": s["label"], "translation": short, "verses": s["verses"], "opts": dict(_OUTLINE_VERSE_OPTS)}
             for s in ws.slides(ref, tr)]
+
+
+def _pasted_verses(line: Dict[str, Any]) -> List[Dict[str, Any]]:
+    v = bt.LICENSED[line["translation"]]
+    ref = ws.lookup(line.get("ref") or "", bt.DEFAULT)
+    if not ref:
+        return []
+    split, numbered = ws.pasted_slides(line.get("words") or "", ref)
+    out = [{"kind": "verse", "label": s["label"], "translation": v["short"], "verses": s["verses"],
+            "opts": {**_OUTLINE_VERSE_OPTS, "nums": numbered}} for s in split]
+    if out:
+        out[-1]["notice"] = v["notice"]
+    return out
 
 
 def _point_slides(point: Dict[str, Any], at: Optional[int] = None) -> List[Dict[str, Any]]:

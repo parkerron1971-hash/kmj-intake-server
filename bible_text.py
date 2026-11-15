@@ -2,16 +2,21 @@
 bible_text.py — the Bible text the member app reads, and scripture
 references read out of plain words ("Psalm 1:1-3", "1 Cor 13; 15:3-4").
 
-Two public-domain translations ship with the server (eBible.org's
+Four public-domain translations ship with the server (eBible.org's
 verse-per-line files, the 66 books; see bible_data/README.md):
 
   kjv   King James Version (1769). Words the translators supplied are
         marked [like this] and shown in italics; ¶ starts a paragraph.
   web   World English Bible.
+  bsb   Berean Standard Bible (public domain since April 30, 2023).
+  asv   American Standard Version (1901). Supplied words are marked
+        [like this], as the KJV's are.
 
 Licensed translations (NIV, ESV, NLT …) need a publisher's licence and
-are not here. The text is read once per translation, lazily, and kept in
-memory (about 10 MB each).
+are not here. LICENSED names the ones a church's own Bible may supply
+(sermon notes take a passage pasted from it, worship_show.py), each with
+its publisher's copyright notice. The text is read once per translation,
+lazily, and kept in memory (about 10 MB each).
 """
 from __future__ import annotations
 
@@ -26,8 +31,79 @@ DATA = Path(__file__).with_name("bible_data")
 TRANSLATIONS: Dict[str, Dict[str, str]] = {
     "kjv": {"name": "King James Version", "short": "KJV"},
     "web": {"name": "World English Bible", "short": "WEB"},
+    # 2026-11-15 (Kevin: "make sure to add the other free version of the bible").
+    "bsb": {"name": "Berean Standard Bible", "short": "BSB"},
+    "asv": {"name": "American Standard Version", "short": "ASV"},
 }
 DEFAULT = "kjv"
+# The translations that mark the words their translators supplied [like this]
+# (shown in italics), and the one whose ¶ marks start its paragraphs.
+SUPPLIED = frozenset({"kjv", "asv"})
+PARAGRAPHS = frozenset({"kjv"})
+
+# Licensed translations a church reads from its own Bible: the pastor pastes the
+# passage (worship_show.py keeps it), never fetched from anywhere. Each shows its
+# publisher's standard copyright notice, in their words, read 2026-11-15 from:
+#   NIV            Biblica's notice as Bible Gateway carries it (biblegateway.com/versions,
+#                  Copyright Information; biblica.com/permissions refused the read)
+#   ESV            crossway.org/permissions
+#   NKJV, NLT, MSG Bible Gateway's Copyright Information (thomasnelsonbibles.com and
+#                  tyndale.com/permissions refused the read)
+#   CSB, HCSB      Bible Gateway's Copyright Information (Holman Bible Publishers)
+#   NASB, AMP,     lockman.org/permission-to-quote-copyright-trademark-information
+#   AMPC           (AMPC: Lockman's form for the 1987 edition, with that printing's years)
+#   NRSV, NRSVUE,  friendshippress.org/bible-licensing (the National Council of Churches)
+#   RSV
+# For church screens most of these ask only for the initials after each quotation;
+# the full notice is what they print, and it is never wrong to show it.
+LICENSED: Dict[str, Dict[str, str]] = {
+    "niv": {"name": "New International Version", "short": "NIV", "notice":
+            "Scripture quotations taken from The Holy Bible, New International Version®, NIV®. Copyright © 1973, "
+            "1978, 1984, 2011 by Biblica, Inc.® Used by permission. All rights reserved worldwide."},
+    "esv": {"name": "English Standard Version", "short": "ESV", "notice":
+            "Scripture quotations are from the ESV® Bible (The Holy Bible, English Standard Version®), © 2001 by "
+            "Crossway, a publishing ministry of Good News Publishers. Used by permission. All rights reserved."},
+    "nkjv": {"name": "New King James Version", "short": "NKJV", "notice":
+             "Scripture taken from the New King James Version®. Copyright © 1982 by Thomas Nelson. Used by "
+             "permission. All rights reserved."},
+    "nlt": {"name": "New Living Translation", "short": "NLT", "notice":
+            "Scripture quotations are taken from the Holy Bible, New Living Translation, copyright © 1996, 2004, "
+            "2015 by Tyndale House Foundation. Used by permission of Tyndale House Publishers, Inc., Carol Stream, "
+            "Illinois 60188. All rights reserved."},
+    "csb": {"name": "Christian Standard Bible", "short": "CSB", "notice":
+            "The Christian Standard Bible. Copyright © 2017 by Holman Bible Publishers. Used by permission. "
+            "Christian Standard Bible®, and CSB® are federally registered trademarks of Holman Bible Publishers, "
+            "all rights reserved."},
+    "hcsb": {"name": "Holman Christian Standard Bible", "short": "HCSB", "notice":
+             "Scripture quotations marked HCSB are taken from the Holman Christian Standard Bible®, Copyright © "
+             "1999, 2000, 2002, 2003, 2009 by Holman Bible Publishers. Used by permission. Holman Christian "
+             "Standard Bible®, Holman CSB®, and HCSB® are federally registered trademarks of Holman Bible Publishers."},
+    "nasb": {"name": "New American Standard Bible", "short": "NASB", "notice":
+             "Scripture quotations taken from the (NASB®) New American Standard Bible®, Copyright © 1960, 1971, "
+             "1977, 1995, 2020 by The Lockman Foundation. Used by permission. All rights reserved. www.Lockman.org"},
+    "amp": {"name": "Amplified Bible", "short": "AMP", "notice":
+            "Scripture quotations taken from the Amplified® Bible (AMP), Copyright © 2015 by The Lockman "
+            "Foundation. Used by permission. www.Lockman.org"},
+    "ampc": {"name": "Amplified Bible, Classic Edition", "short": "AMPC", "notice":
+             "Scripture quotations taken from the Amplified® Bible (AMPC), Copyright © 1954, 1958, 1962, 1964, "
+             "1965, 1987 by The Lockman Foundation. Used by permission. www.Lockman.org"},
+    "msg": {"name": "The Message", "short": "MSG", "notice":
+            "Scripture quotations marked MSG are taken from THE MESSAGE, copyright © 1993, 2002, 2018 by Eugene H. "
+            "Peterson. Used by permission of NavPress. All rights reserved. Represented by Tyndale House "
+            "Publishers, Inc."},
+    "nrsv": {"name": "New Revised Standard Version", "short": "NRSV", "notice":
+             "Scripture quotations are from the New Revised Standard Version Bible, copyright © 1989 National "
+             "Council of the Churches of Christ in the United States of America. Used by permission. All rights "
+             "reserved worldwide."},
+    "nrsvue": {"name": "New Revised Standard Version Updated Edition", "short": "NRSVue", "notice":
+               "Scripture quotations are from the New Revised Standard Version Updated Edition. Copyright © 2021 "
+               "National Council of the Churches of Christ in the United States of America. Used by permission. "
+               "All rights reserved worldwide."},
+    "rsv": {"name": "Revised Standard Version", "short": "RSV", "notice":
+            "Scripture quotations are from the Revised Standard Version of the Bible, copyright © 1946, 1952, and "
+            "1971 National Council of the Churches of Christ in the United States of America. Used by permission. "
+            "All rights reserved worldwide."},
+}
 
 # (code in the data, name, extra spellings people write)
 BOOKS: List[Tuple[str, str, Tuple[str, ...]]] = [

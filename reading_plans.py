@@ -4,7 +4,7 @@ reading_plans.py — a church reads the Bible together, a day at a time.
 The Subsplash LCC app's dated reading plan was one of its best parts in
 the 9/30 walkthrough. Here the church's team picks a plan and a start
 date; every member sees today's reading on Home, reads it in the app's
-own Bible (KJV and WEB, both public domain, so no licence is involved),
+own Bible (KJV, WEB, BSB and ASV, all public domain, so no licence is involved),
 and ticks it off.
 
 Plans are COMPUTED from the Bible's own chapter list, never typed in, so
