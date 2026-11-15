@@ -225,9 +225,12 @@ ITEMS = {"song-1": {"id": "song-1", "kind": "song"}, "loop-1": {"id": "loop-1", 
 
 @pytest.mark.parametrize("live,why", [
     (None, None), ({}, None),
-    # Off air, the logo, black: nothing running.
+    # Off air, the logo: nothing running.
     ({"service_id": None, "item_id": None, "mode": "logo", "at": at(-1).isoformat()}, None),
-    (state(mode="logo", at=at(-1).isoformat()), None), (state(mode="black"), None),
+    (state(mode="logo", at=at(-1).isoformat()), None),
+    # Black is pressed on purpose (to hide something): the booth's for 30 minutes, then a forgotten screen.
+    (state(mode="black"), "pressed"), (state(mode="black", item_id=None, service_id=None), "pressed"),
+    (state(mode="black", item_id="loop-1"), "pressed"), (state(mode="black", at=at(-31).isoformat()), None),
     # A welcome loop waits for the countdown.
     (state(item_id="loop-1", at=at(-1).isoformat()), None),
     # A song pressed 5 minutes ago: the booth is running. Left up 31 minutes with no press: a forgotten screen.

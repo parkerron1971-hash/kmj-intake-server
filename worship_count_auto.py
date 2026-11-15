@@ -23,10 +23,10 @@
 # the claim (worship_show_router.save_look).
 #
 # NEVER OVER A BOOTH THAT IS RUNNING SOMETHING (busy): it goes up over nothing,
-# off air, the logo or black, a welcome loop, or a countdown that ended. It
-# leaves alone a countdown still counting or held, and anything else (a song,
-# a passage, a sermon point, a picture, words cleared) the booth pressed in the
-# last QUIET_MINUTES. The live row is written only if nobody pressed between
+# off air, the logo, a welcome loop, or a countdown that ended. It leaves alone
+# a countdown still counting or held, and anything else (a song, a passage, a
+# sermon point, a picture, words cleared, black: pressed on purpose, to hide
+# something) the booth pressed in the last QUIET_MINUTES. The live row is written only if nobody pressed between
 # the check and the write (a compare-and-set on its rev).
 #
 # Times are tried for WINDOW_MINUTES after they come (a late tick, a deploy);
@@ -99,10 +99,11 @@ def busy(state: Any, now: datetime, items: Optional[Dict[str, Dict[str, Any]]] =
     and `starts_at` its start (a planned countdown counts to it)."""
     if not isinstance(state, dict) or not state:
         return None
-    if (state.get("mode") or "show") in ("logo", "black"):
-        return None
+    mode = state.get("mode") or "show"
+    if mode == "logo":
+        return None  # the screens rest on the logo: waiting
     adhoc = state.get("adhoc") if isinstance(state.get("adhoc"), dict) and state["adhoc"].get("slides") else None
-    if not adhoc and not state.get("item_id"):
+    if not adhoc and not state.get("item_id") and mode != "black":
         return None  # nothing of a plan named: off air, or a fresh church
     item = None if adhoc else (items or {}).get(state.get("item_id"))
     count = state.get("count") if isinstance(state.get("count"), dict) else None
@@ -112,14 +113,14 @@ def busy(state: Any, now: datetime, items: Optional[Dict[str, Dict[str, Any]]] =
         countdown, slide_to = True, (adhoc["slides"][0] or {}).get("to")
     elif item and item.get("kind") == "countdown":
         countdown, slide_to = True, item.get("to") or starts_at
-    if countdown:
+    if countdown and mode != "black":
         if count and count.get("held") is not None:
             return "a countdown is up and held"
         to = _when((count or {}).get("to") or slide_to)
         if to is not None and to > now - timedelta(minutes=ENDED_MINUTES):
             return "a countdown is already counting"
         return None
-    if item and item.get("kind") == "loop":
+    if item and item.get("kind") == "loop" and mode != "black":
         return None  # a welcome loop waits for the countdown
     pressed = _when(state.get("at") or state.get("since"))
     if pressed and now - pressed < timedelta(minutes=QUIET_MINUTES):
