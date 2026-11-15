@@ -9,6 +9,7 @@
 #   lyric          {label, lines}              a song, a few lines at a time
 #   verse          {label, translation, verses: [{chapter, verse, text}]}
 #   text           {kicker, text}              a sermon point, a welcome line
+#                  + {lines, newest}           sermon notes: the statements under a point
 #   announcement   {title, when, body, image_url, link}
 #   image / video  {url, title} / {url, loop}
 #   countdown      {to, title}                 counts down to a time
@@ -50,6 +51,20 @@ STAGE_SHOWS = ("now", "next", "notes", "clock", "timer", "message", "parts", "ke
 STAGE_SIZES = ("small", "std", "big")
 MAX_ITEMS = 80
 MAX_TEXT_SLIDES = 30
+# Sermon notes typed as an outline (Kevin, 2026-11-14: "spots to place points
+# and different statements under that point", better than Proclaim's "--").
+# The app reads the typed outline into points; each point keeps its lines
+# (statements, and passages that come in as their verses) and how it shows:
+# build (the point stays, each press adds the next line), each (a slide a
+# line, the point above it) or all (the point and its lines at once). A line
+# can start a fresh slide (`br`, the "--"). The typed words ride along in
+# `outline` so the editor reopens them exactly as typed.
+POINT_MODES = ("build", "each", "all")
+LINE_KINDS = ("statement", "verse")
+MAX_OUTLINE = 20000
+MAX_POINT_LINES = 24
+MAX_OUTLINE_VERSES = 20
+MAX_OUTLINE_SLIDES = 150
 _ID = re.compile(r"^[a-z0-9-]{1,24}$")
 _UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 _HTTPS = re.compile(r"^https://[^\s\"'<>]{3,500}$")
@@ -108,6 +123,40 @@ def clean_bg(raw: Any, label: str = "The background") -> Optional[Dict[str, Any]
     if isinstance(dim, bool) or not isinstance(dim, (int, float)) or not 0 <= dim <= 0.85:
         raise ValueError(f"{label}: darkening is 0 to 0.85")
     return {"kind": kind, "color": color, "url": url, "dim": round(float(dim), 2)}
+
+
+def _clean_point(raw: Dict[str, Any], name: str) -> Dict[str, Any]:
+    """A point of sermon notes: the lines under it (a statement, or a passage
+    that comes in as its verses), each with an optional note for the pastor and
+    a fresh slide before it, and how the point shows. A passage is found when
+    it's planned, as a Scripture item's is, and kept by its full name."""
+    lines = raw.get("lines")
+    if not isinstance(lines, list) or len(lines) > MAX_POINT_LINES:
+        raise ValueError(f"{name} has at most {MAX_POINT_LINES} lines under it")
+    mode = raw.get("mode") or "build"
+    if mode not in POINT_MODES:
+        raise ValueError("A point builds up, shows one line each, or all at once")
+    out = []
+    for ln in lines:
+        if not isinstance(ln, dict) or ln.get("kind") not in LINE_KINDS:
+            raise ValueError(f"A line under {name} is a statement or a passage")
+        note = _text(ln, "note", 500, "A line's note")
+        br = ln.get("br") is True
+        if ln["kind"] == "verse":
+            ref = _text(ln, "ref", 60, "The passage")
+            tr = str(ln.get("translation") or bt.DEFAULT)
+            if tr not in bt.TRANSLATIONS:
+                raise ValueError("That Bible version isn't here yet")
+            found = ws.lookup(ref, tr) if ref else None
+            if not found:
+                raise ValueError(f"“{ref}” isn't a passage we can find. Try John 3:16 or Psalm 23")
+            out.append({"kind": "verse", "ref": found.label(), "translation": tr, "note": note, "br": br})
+        else:
+            text = _text(ln, "text", 400, "A line's words")
+            if not text:
+                raise ValueError(f"A line under {name} has no words")
+            out.append({"kind": "statement", "text": text, "note": note, "br": br})
+    return {"lines": out, "mode": mode}
 
 
 def clean_item(raw: Any) -> Dict[str, Any]:
@@ -173,11 +222,29 @@ def clean_item(raw: Any) -> Dict[str, Any]:
             point = {"kicker": _text(s, "kicker", 60, "A slide's small heading"), "text": text,
                      # The pastor's notes for this point: the confidence screen only.
                      "notes": _text(s, "notes", 1000, "A point's notes")}
+            if s.get("lines") is not None:
+                # A point of sermon notes: the lines under it and how it shows.
+                point.update(_clean_point(s, point["kicker"] or f"Slide {len(clean) + 1}"))
             own = clean_bg(s.get("bg"), f"Slide {len(clean) + 1}'s background")
             if own:
                 point["bg"] = own
             clean.append(point)
         out["slides"] = clean
+        outline = raw.get("outline")
+        if outline is not None:
+            if not isinstance(outline, str):
+                raise ValueError("The notes should be text")
+            if len(outline) > MAX_OUTLINE:
+                raise ValueError(f"The notes are too long (at most {MAX_OUTLINE:,} characters)")
+            # Exactly as typed (no trimming), so the editor reopens it the same.
+            out["outline"] = outline
+        passages = sum(1 for p in clean for ln in p.get("lines") or [] if ln["kind"] == "verse")
+        if passages > MAX_OUTLINE_VERSES:
+            raise ValueError(f"Sermon notes hold up to {MAX_OUTLINE_VERSES} passages. Put the rest in a Scripture item")
+        count = sum(len(_point_slides(p)) for p in clean)
+        if count > MAX_OUTLINE_SLIDES:
+            raise ValueError(f"These notes make {count} slides; at most {MAX_OUTLINE_SLIDES}. "
+                             "Split them into two items, or take out a long passage")
     elif kind == "announcement" and raw.get("from_board"):
         # From the announcements board (worship_announce): the spot fills itself
         # with the nearest few showing on the service's day.
@@ -551,6 +618,78 @@ def _scripture_slides(item: Dict[str, Any]) -> Dict[str, Any]:
     return {"title": f"{ref.label()} · {short}", "slides": slides}
 
 
+_OUTLINE_VERSE_OPTS = {"ref": True, "nums": True, "version": True, "size": None, "align": None}
+
+
+def _outline_verses(line: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """A passage in the notes, as its verses: the slides a Scripture item of it would make."""
+    tr = line.get("translation") if line.get("translation") in bt.TRANSLATIONS else bt.DEFAULT
+    ref = ws.lookup(line.get("ref") or "", tr)
+    if not ref:
+        return []
+    short = bt.TRANSLATIONS[tr]["short"]
+    return [{"kind": "verse", "label": s["label"], "translation": short, "verses": s["verses"], "opts": dict(_OUTLINE_VERSE_OPTS)}
+            for s in ws.slides(ref, tr)]
+
+
+def _point_slides(point: Dict[str, Any], at: Optional[int] = None) -> List[Dict[str, Any]]:
+    """One point of a text item as slides. A point typed on its own is one slide,
+    exactly as it always was. A point of sermon notes goes up the way its press
+    says (build, each or all), its passages as their verses; `newest` marks the
+    line a build just added, and `point` (its place among the numbered points)
+    tells the pastor's screen where the sermon is. Notes ride along for the
+    confidence screen; the screens' own links drop them."""
+    kicker, head, note = point.get("kicker") or "", point["text"], point.get("notes") or ""
+    lines = point.get("lines")
+    if lines is None:
+        return [{"kind": "text", "kicker": kicker, "text": head, "notes": note}]
+    mode = point.get("mode") or "build"
+    out: List[Dict[str, Any]] = []
+
+    def put(slide: Dict[str, Any]) -> None:
+        if at:
+            slide["point"] = at
+        out.append(slide)
+
+    def heading(**more: Any) -> Dict[str, Any]:
+        return {"kind": "text", "kicker": kicker, "text": head, "notes": note, **more}
+
+    says = [ln for ln in lines if ln["kind"] == "statement"]
+    if mode != "all" or not says:
+        put(heading())
+    shown: List[str] = []
+    group: List[Dict[str, Any]] = []
+
+    def flush() -> None:
+        if group:
+            notes = "\n".join(n for n in [note] + [ln["note"] for ln in group] if n)
+            put(heading(lines=[ln["text"] for ln in group], notes=notes))
+            group.clear()
+
+    for ln in lines:
+        if ln.get("br"):
+            if mode == "build":
+                shown = []
+            elif mode == "all":
+                flush()
+        if ln["kind"] == "verse":
+            if mode == "all":
+                flush()
+            for s in _outline_verses(ln):
+                if ln.get("note"):
+                    s["notes"] = ln["note"]
+                put(s)
+        elif mode == "build":
+            shown.append(ln["text"])
+            put(heading(lines=list(shown), newest=len(shown) - 1, notes=ln.get("note") or ""))
+        elif mode == "each":
+            put({"kind": "text", "kicker": f"{kicker} · {head}" if kicker else head, "text": ln["text"], "notes": ln.get("note") or ""})
+        else:
+            group.append(ln)
+    flush()
+    return out
+
+
 def _board_loop(item: Dict[str, Any], board: List[Dict[str, Any]], secs: int) -> List[Dict[str, Any]]:
     """The announcements board as loop slides, the church's logo between every few."""
     every = item.get("logo_every") or 0
@@ -577,9 +716,24 @@ def compile_item(item: Dict[str, Any], songs: Dict[str, Dict[str, Any]], starts_
     elif kind == "scripture":
         body = _scripture_slides(item)
     elif kind == "text":
-        body = {"title": item.get("title") or (item["slides"][0]["kicker"] if item.get("slides") else "") or "Slides",
-                "slides": [{"kind": "text", "kicker": s.get("kicker") or "", "text": s["text"], "notes": s.get("notes") or ""}
-                           for s in item.get("slides") or []]}
+        points = item.get("slides") or []
+        title = item.get("title") or (points[0]["kicker"] if points else "")
+        if not title and "outline" in item and points:
+            title = points[0]["text"][:80]  # sermon notes: their first line, the title
+        slides: List[Dict[str, Any]] = []
+        numbered = 0
+        for p in points:
+            at = None
+            if p.get("lines") is not None and p.get("kicker"):
+                numbered += 1
+                at = numbered
+            # A background of its own: the point's, else the item's, behind every slide it makes.
+            bg = p.get("bg") or item.get("bg")
+            for s in _point_slides(p, at):
+                if bg:
+                    s["bg"] = dict(bg)
+                slides.append(s)
+        body = {"title": title or "Slides", "slides": slides}
     elif kind == "announcement" and item.get("from_board"):
         body = {"title": item.get("title") or "This week", "slides": [dict(a) for a in (board or [])[:item.get("count") or 3]],
                 "from_board": True}
@@ -618,12 +772,13 @@ def compile_item(item: Dict[str, Any], songs: Dict[str, Dict[str, Any]], starts_
             if item.get(k) not in (None, ""):
                 slide[k] = item[k]
         body = {"title": item.get("title") or "Countdown", "slides": [slide]}
-    # A background of its own: a sermon point's, else the item's (the screen draws the look without one).
-    points = (item.get("slides") or []) if kind == "text" else []
-    for k, s in enumerate(body["slides"]):
-        bg = (points[k].get("bg") if k < len(points) else None) or item.get("bg")
-        if bg and kind in BG_ITEM_KINDS and not body.get("from_board"):
-            s["bg"] = dict(bg)
+    # A background of its own: the item's (the screen draws the look without one). A
+    # text item's slides already carry theirs, a sermon point's before the item's.
+    if kind != "text":
+        for s in body["slides"]:
+            bg = item.get("bg")
+            if bg and kind in BG_ITEM_KINDS and not body.get("from_board"):
+                s["bg"] = dict(bg)
     return {**base, **body}
 
 

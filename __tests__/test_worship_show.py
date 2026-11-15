@@ -374,3 +374,164 @@ def test_what_a_background_cannot_be(bg, words):
         wsh.clean_item(item("song", song_id=SONG_ID, bg=bg))
     with pytest.raises(ValueError, match="Slide 1's background"):
         wsh.clean_item(item("text", slides=[{"text": "Welcome", "bg": bg}]))
+
+
+# ─── sermon notes as an outline (Kevin, 2026-11-14) ───────────────────
+
+
+def _old_text_compile(item):
+    """compile_item for a text item as it was before sermon notes (main at 8edc0d7d), to hold old items to it."""
+    body = {"title": item.get("title") or (item["slides"][0]["kicker"] if item.get("slides") else "") or "Slides",
+            "slides": [{"kind": "text", "kicker": s.get("kicker") or "", "text": s["text"], "notes": s.get("notes") or ""}
+                       for s in item.get("slides") or []]}
+    points = item.get("slides") or []
+    for k, s in enumerate(body["slides"]):
+        bg = (points[k].get("bg") if k < len(points) else None) or item.get("bg")
+        if bg:
+            s["bg"] = dict(bg)
+    base = {k: item.get(k) for k in ("id", "kind", "show", "notes", "who", "minutes", "stage")}
+    return {**base, **body}
+
+
+@pytest.mark.parametrize("raw", [
+    item("text", slides=[{"text": "Welcome home"}]),
+    item("text", title="What Mean These Stones?", minutes=30, who="Pastor", stage="Slow down here", slides=[
+        {"kicker": "Point 1", "text": "Stop and pick up stones.", "notes": "The stone on my desk"},
+        {"kicker": "Point 2", "text": "Stones are for questions.", "bg": {"kind": "image", "url": PIC, "dim": 0.3}},
+        {"kicker": "", "text": "Your story is a stone."}]),
+    item("text", bg={"kind": "color", "color": "#1C0B1F"}, show="online", slides=[
+        {"kicker": "Watching from home?", "text": "Give in the app, under Give."},
+        {"kicker": "Point 2", "text": "Two", "bg": {"kind": "look"}}]),
+])
+def test_text_typed_slide_by_slide_compiles_exactly_as_before(raw):
+    cleaned = wsh.clean_item(raw)
+    # Nothing new is kept for a text item typed slide by slide.
+    assert "outline" not in cleaned and all(set(s) <= {"kicker", "text", "notes", "bg"} for s in cleaned["slides"])
+    assert wsh.compile_item(cleaned, {}) == _old_text_compile(cleaned)
+
+
+NOTES = ("Stones of Remembrance\n1. Stop and pick up stones\n- God stopped them in the middle of the river\n"
+         "Note: tell the story of the stone on my desk\n- Remembering is an act of obedience\nJoshua 4:6-7\n"
+         "2. Build where people can see\n- Your story is someone else’s stepping stone\n--\n- What will your children ask you?\n"
+         "3. Carry it to the next generation\n- Faith is caught before it is taught\n- Tell them what God did for you\n")
+
+
+def say(text, note="", br=False):
+    return {"kind": "statement", "text": text, "note": note, "br": br}
+
+
+def notes_item(modes=("build", "build", "each"), **kw):
+    """The mock's sermon, as the app sends it once it has read the outline (the title: a point with no number)."""
+    return item("text", id="sermon", outline=NOTES, minutes=30, **kw, slides=[
+        {"kicker": "", "text": "Stones of Remembrance", "lines": [], "mode": "build"},
+        {"kicker": "Point 1", "text": "Stop and pick up stones", "mode": modes[0], "lines": [
+            say("God stopped them in the middle of the river", "tell the story of the stone on my desk"),
+            say("Remembering is an act of obedience"),
+            {"kind": "verse", "ref": "josh 4 6-7", "translation": "kjv"}]},
+        {"kicker": "Point 2", "text": "Build where people can see", "mode": modes[1], "lines": [
+            say("Your story is someone else’s stepping stone"), say("What will your children ask you?", br=True)]},
+        {"kicker": "Point 3", "text": "Carry it to the next generation", "mode": modes[2], "lines": [
+            say("Faith is caught before it is taught"), say("Tell them what God did for you")]},
+    ])
+
+
+def test_sermon_notes_keep_their_points_lines_and_the_words_as_typed():
+    cleaned = wsh.clean_item(notes_item())
+    assert cleaned["outline"] == NOTES  # exactly as typed, the last newline too
+    title, p1, p2, p3 = cleaned["slides"]
+    assert title == {"kicker": "", "text": "Stones of Remembrance", "notes": "", "lines": [], "mode": "build"}
+    assert (p1["mode"], p3["mode"]) == ("build", "each")
+    assert p1["lines"][0] == say("God stopped them in the middle of the river", "tell the story of the stone on my desk")
+    # A passage is found when it's planned and kept by its full name, in the Bible version it was typed for.
+    assert p1["lines"][2] == {"kind": "verse", "ref": "Joshua 4:6-7", "translation": "kjv", "note": "", "br": False}
+    assert p2["lines"][1]["br"] is True
+    # A point with no mode builds up.
+    raw = notes_item()
+    del raw["slides"][1]["mode"]
+    assert wsh.clean_item(raw)["slides"][1]["mode"] == "build"
+
+
+def test_sermon_notes_go_up_the_way_each_point_says():
+    show = wsh.compile_item(wsh.clean_item(notes_item()), {})
+    s = show["slides"]
+    assert show["title"] == "Stones of Remembrance"
+    # The title slide, as words (no number, so no place among the points).
+    assert s[0] == {"kind": "text", "kicker": "", "text": "Stones of Remembrance", "notes": ""}
+    # Point 1 builds up: the point, then each press adds the next line, the newest marked.
+    assert s[1] == {"kind": "text", "kicker": "Point 1", "text": "Stop and pick up stones", "notes": "", "point": 1}
+    assert (s[2]["lines"], s[2]["newest"], s[2]["notes"]) == (["God stopped them in the middle of the river"], 0,
+                                                             "tell the story of the stone on my desk")
+    assert (s[3]["lines"], s[3]["newest"], s[3]["notes"]) == (
+        ["God stopped them in the middle of the river", "Remembering is an act of obedience"], 1, "")
+    # Its passage comes in as its verses, like a Scripture item's slides.
+    assert [(v["kind"], v["label"], v["translation"], v["point"]) for v in s[4:6]] == [
+        ("verse", "Joshua 4:6", "KJV", 1), ("verse", "Joshua 4:7", "KJV", 1)]
+    assert s[4]["opts"] == {"ref": True, "nums": True, "version": True, "size": None, "align": None}
+    # Point 2 builds up too, and "--" starts a fresh slide under the same point.
+    assert [(x.get("lines"), x.get("newest")) for x in s[6:9]] == [
+        (None, None), (["Your story is someone else’s stepping stone"], 0), (["What will your children ask you?"], 0)]
+    # Point 3, one line each: each statement its own slide, the point above it as the small heading.
+    assert s[9] == {"kind": "text", "kicker": "Point 3", "text": "Carry it to the next generation", "notes": "", "point": 3}
+    assert [(x["kicker"], x["text"]) for x in s[10:]] == [
+        ("Point 3 · Carry it to the next generation", "Faith is caught before it is taught"),
+        ("Point 3 · Carry it to the next generation", "Tell them what God did for you")]
+    assert all("lines" not in x for x in s[10:])
+    assert len(s) == 12
+
+
+def test_all_at_once_puts_the_point_and_its_lines_together_and_the_break_splits():
+    raw = item("text", outline="1. One\n- a\n- b\n--\n- c\nps 23:1", slides=[{
+        "kicker": "Point 1", "text": "One", "notes": "Breathe", "mode": "all", "lines": [
+            say("a", "say it slowly"), say("b"), say("c", br=True),
+            {"kind": "verse", "ref": "ps 23:1", "translation": "web", "note": "read it"}]}])
+    s = wsh.compile_item(wsh.clean_item(raw), {})["slides"]
+    # No point alone first: the point and its lines at once; the notes for the slide come together.
+    assert [(x["kind"], x.get("lines"), x.get("notes")) for x in s] == [
+        ("text", ["a", "b"], "Breathe\nsay it slowly"), ("text", ["c"], "Breathe"), ("verse", None, "read it")]
+    assert "newest" not in s[0] and s[2]["translation"] == "WEB"
+    # A point with no statements still shows, whatever its press.
+    for mode in wsh.POINT_MODES:
+        lone = wsh.compile_item(wsh.clean_item(item("text", outline="1. Alone", slides=[
+            {"kicker": "Point 1", "text": "Alone", "mode": mode, "lines": []}])), {})["slides"]
+        assert lone == [{"kind": "text", "kicker": "Point 1", "text": "Alone", "notes": "", "point": 1}]
+
+
+def test_only_numbered_points_count_and_a_point_keeps_its_own_background():
+    raw = item("text", bg={"kind": "color", "color": "#203040"}, outline="x", slides=[
+        {"kicker": "", "text": "Opening", "mode": "each", "lines": [say("Welcome")]},
+        {"kicker": "Point 1", "text": "First", "mode": "build", "bg": {"kind": "image", "url": PIC},
+         "lines": [say("a"), {"kind": "verse", "ref": "jn 3 16", "translation": "kjv"}]},
+        {"kicker": "Point 2", "text": "Second", "mode": "build", "lines": []}])
+    s = wsh.compile_item(wsh.clean_item(raw), {})["slides"]
+    assert [x.get("point") for x in s] == [None, None, 1, 1, 1, 2]
+    # A point's own background is behind every slide it makes, its verses too; the others take the item's.
+    assert [x["bg"]["kind"] for x in s] == ["color", "color", "image", "image", "image", "color"]
+    # Without a title of its own, sermon notes are named by their first line; text typed slide by slide is "Slides" as before.
+    assert wsh.compile_item(wsh.clean_item(raw), {})["title"] == "Opening"
+    assert wsh.compile_item(wsh.clean_item(item("text", slides=[{"text": "Welcome home"}])), {})["title"] == "Slides"
+
+
+def _point(**kw):
+    return {"kicker": "Point 1", "text": "One", "mode": "build", "lines": [say("a")], **kw}
+
+
+@pytest.mark.parametrize("raw, words", [
+    (item("text", slides=[_point(mode="slow")]), "builds up, shows one line each, or all at once"),
+    (item("text", slides=[_point(lines="a, b")]), "at most 24 lines"),
+    (item("text", slides=[_point(lines=[say(str(k)) for k in range(25)])]), "Point 1 has at most 24 lines"),
+    (item("text", slides=[_point(lines=[{"kind": "song", "text": "x"}])]), "a statement or a passage"),
+    (item("text", slides=[_point(lines=["just words"])]), "a statement or a passage"),
+    (item("text", slides=[_point(lines=[say(" ")])]), "A line under Point 1 has no words"),
+    (item("text", slides=[_point(lines=[say("x" * 401)])]), "at most 400"),
+    (item("text", slides=[_point(lines=[say("x", note="n" * 501)])]), "at most 500"),
+    (item("text", slides=[_point(lines=[{"kind": "verse", "ref": "hezekiah 4 1"}])]), "isn't a passage we can find"),
+    (item("text", slides=[_point(lines=[{"kind": "verse", "ref": ""}])]), "isn't a passage we can find"),
+    (item("text", slides=[_point(lines=[{"kind": "verse", "ref": "jn 3 16", "translation": "niv"}])]), "isn't here yet"),
+    (item("text", outline=["1. One"], slides=[_point()]), "notes should be text"),
+    (item("text", outline="x" * 20001, slides=[_point()]), "at most 20,000"),
+    (item("text", slides=[_point(lines=[{"kind": "verse", "ref": "jn 3 16"}] * 21)]), "up to 20 passages"),
+    (item("text", slides=[_point(lines=[{"kind": "verse", "ref": "psalm 119"}] * 3)]), "make 214 slides; at most 150"),
+])
+def test_what_sermon_notes_cannot_be(raw, words):
+    with pytest.raises(ValueError, match=words):
+        wsh.clean_item(raw)
