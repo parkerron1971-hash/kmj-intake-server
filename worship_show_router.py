@@ -668,15 +668,15 @@ def screen_show(token: str):
         if e.status_code == 404:
             return {"service": None, "items": [], "slide_count": 0, "missing": [], "look": _look(biz), "church": _brand(biz, _look(biz))}
         raise
-    # A screen never gets the booth's notes; only a stage screen gets the notes for the stage.
+    # A screen never gets the booth's notes; only a stage screen gets the notes for the stage
+    # and the pastor's (a sermon point's, a line's, a passage's in the notes).
     stage = screen.get("role") == "stage"
     for item in show["items"]:
         item.pop("notes", None)
         if not stage:
             item.pop("stage", None)
             for s in item.get("slides") or []:
-                if s.get("kind") == "text":
-                    s.pop("notes", None)
+                s.pop("notes", None)
     return show
 
 
