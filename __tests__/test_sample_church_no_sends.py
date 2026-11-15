@@ -94,6 +94,8 @@ TICKS = {
     "church_handovers_sweep": "church_handovers:sweep_tick",
     "church_mail_alert_sweep": "church_mail_alerts:sweep",
     "church_mail_trash_sweep": "church_mail_alerts:trash_sweep",
+    # ChurchSavvy's countdown that starts by itself: a sample's screens show nothing, so it skips the sample (skip_id).
+    "worship_count_auto": "worship_count_auto:sweep_tick",
     "academy_work_sweep": "academy_work:sweep_tick",
     "group_email_followup": "group_email:sweep_tick",
     "group_post_later": "group_post_later:sweep_tick",
