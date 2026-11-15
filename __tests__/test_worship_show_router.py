@@ -13,6 +13,9 @@
 #   * the booth's slide reaches waiting screens at once, `rev` only goes up,
 #     and the saved row brings a restarted server back to where Sunday was
 #   * a failed read is a 503, never an empty list
+#   * 2026-11-14: a service inside a sermon series (on the church's clock)
+#     wears its look on the booth, every screen and the lobby; a series look
+#     sent back from a page never replaces the church's own
 
 import asyncio
 import pathlib
@@ -487,3 +490,86 @@ def test_sermon_notes_save_and_their_notes_reach_only_the_stage(api, monkeypatch
         assert slides[1]["lines"] == ["Pick up stones"] and slides[1]["newest"] == 0
     slides = as_("stranger").get(f"/worship/screen/{stage['token']}/show").json()["items"][-1]["slides"]
     assert [s.get("notes") for s in slides] == ["Breathe", "my desk", "read it slowly"]
+
+
+# ─── 2026-11-14: a look for a sermon series ───────────────────────────
+# A service dated inside a series wears its fonts and background, on the church's
+# clock; the church's own look stays what Setup reads and saves.
+
+CROSSING = {"id": "crossing", "name": "Crossing Over", "from": "2026-11-01", "to": "2026-11-29", "fonts": "warm",
+            "background": {"kind": "design", "design": "glass"}}
+
+
+def _look_of(as_, sid):
+    return as_("member").get(f"/worship/services/{sid}/show?business_id={BIZ}").json()["look"]
+
+
+def test_a_service_inside_a_series_wears_its_look_on_every_screen(api, monkeypatch):
+    db, as_, _ = api
+    monkeypatch.setenv("WORSHIP_SONGS", "on")
+    db.t["businesses"][0]["settings"]["availability"] = {"timezone": "America/New_York"}
+    r = as_("owner").put("/worship/look", json={"business_id": BIZ, "look": {"fonts": "clean", "series": [CROSSING]}})
+    assert r.status_code == 200 and r.json()["look"]["series"][0]["fonts"] == "warm"
+    inside = plan(as_, starts_at="2026-11-15T15:00:00Z").json()["service"]["id"]
+    # 7:30 PM on Nov 29 in New York is Nov 30 in UTC: on the church's clock it's the series' last day.
+    evening = plan(as_, starts_at="2026-11-30T00:30:00Z").json()["service"]["id"]
+    after = plan(as_, starts_at="2026-12-06T15:00:00Z").json()["service"]["id"]
+    for sid in (inside, evening):
+        look = _look_of(as_, sid)
+        assert (look["fonts"], look["background"]["design"], look["wearing"]["name"]) == ("warm", "glass", "Crossing Over")
+        assert look["series"] == r.json()["look"]["series"]
+    out = _look_of(as_, after)
+    assert out["fonts"] == "clean" and out["background"]["kind"] == "brand" and "wearing" not in out
+    # A screen's own link gets the same look with the service that's up.
+    token = as_("owner").post("/worship/screens", json={"business_id": BIZ, "name": "Projector"}).json()["screen"]["token"]
+    as_("owner").post("/worship/live", json={"business_id": BIZ, "state": {"service_id": evening, "item_id": "well", "slide": 0}})
+    shown = as_("stranger").get(f"/worship/screen/{token}/show").json()["look"]
+    assert shown["fonts"] == "warm" and shown["wearing"]["id"] == "crossing"
+    # Setup reads the church's own look, never a series'.
+    assert "wearing" not in as_("owner").get(f"/worship/look?business_id={BIZ}").json()["look"]
+
+
+def test_the_churchs_clock_that_cant_be_read_is_a_503_and_only_with_a_series(api, monkeypatch):
+    db, as_, _ = api
+    monkeypatch.setenv("WORSHIP_SONGS", "on")
+    sid = plan(as_, starts_at="2026-11-15T15:00:00Z").json()["service"]["id"]
+    db.fail.add("businesses")
+    # No series: nothing more is read, and the show comes as it always has.
+    r = as_("owner").get(f"/worship/services/{sid}/show?business_id={BIZ}")
+    assert r.status_code == 200 and "wearing" not in r.json()["look"]
+    db.fail.discard("businesses")
+    as_("owner").put("/worship/look", json={"business_id": BIZ, "look": {"series": [CROSSING]}})
+    db.fail.add("businesses")
+    r = as_("owner").get(f"/worship/services/{sid}/show?business_id={BIZ}")
+    assert r.status_code == 503 and "clock" in r.json()["detail"]
+
+
+def test_a_series_look_saved_back_from_a_page_keeps_the_churchs_own(api, monkeypatch):
+    db, as_, _ = api
+    monkeypatch.setenv("WORSHIP_SONGS", "on")
+    own = {"fonts": "clean", "background": {"kind": "color", "color": "#1C0B1F"}, "series": [CROSSING]}
+    as_("owner").put("/worship/look", json={"business_id": BIZ, "look": own})
+    sid = plan(as_, starts_at="2026-11-15T15:00:00Z").json()["service"]["id"]
+    worn = _look_of(as_, sid)
+    assert worn["wearing"]["id"] == "crossing"
+    # The booth saves a crawl line on the look it has: that Sunday's, the series'.
+    r = as_("owner").put("/worship/look", json={"business_id": BIZ, "look": {**worn, "crawls": ["Lunch is in the hall."]}})
+    assert r.status_code == 200
+    got = as_("owner").get(f"/worship/look?business_id={BIZ}").json()["look"]
+    assert got["crawls"] == ["Lunch is in the hall."] and got["fonts"] == "clean"
+    assert got["background"] == {"kind": "color", "color": "#1C0B1F", "url": None, "dim": 0.55}
+    assert [s["name"] for s in got["series"]] == ["Crossing Over"]
+    assert "wearing" not in db.t["worship_settings"][0]["look"]
+
+
+def test_the_lobby_wears_a_series_look_on_its_days(api, monkeypatch):
+    import worship_announce_router as war
+    from datetime import date
+    db, as_, _ = api
+    monkeypatch.setenv("WORSHIP_SONGS", "on")
+    as_("owner").put("/worship/look", json={"business_id": BIZ, "look": {"series": [CROSSING]}})
+    token = as_("owner").post("/worship/screens", json={"business_id": BIZ, "name": "Lobby TV", "role": "lobby"}).json()["screen"]["token"]
+    monkeypatch.setattr(war, "church_today", lambda biz: date(2026, 11, 20))
+    assert as_("stranger").get(f"/worship/screen/{token}/lobby").json()["look"]["wearing"]["name"] == "Crossing Over"
+    monkeypatch.setattr(war, "church_today", lambda biz: date(2026, 12, 20))
+    assert "wearing" not in as_("stranger").get(f"/worship/screen/{token}/lobby").json()["look"]

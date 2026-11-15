@@ -15,8 +15,10 @@
 #   countdown      {to, title}                 counts down to a time
 #
 # Any slide may carry `bg`, a background of its own (a color, a picture or a
-# video, with how dark): the item's, or a sermon point's own. Without it the
-# screen draws the church's look.
+# video, with how dark, or one of the designs drawn in the church's colors):
+# the item's, or a sermon point's own. Without it the screen draws the
+# church's look. A sermon series may wear a look of its own (its fonts and
+# background) on the Sundays inside its dates: look_on.
 #
 # Who sees an item: `show` is "all" (each screen follows its own rules),
 # "room" (the people in the seats only; the stream keeps the camera) or
@@ -27,7 +29,7 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Dict, List, Optional
 
 import bible_text as bt
@@ -94,7 +96,9 @@ def _url(raw: Dict[str, Any], key: str, label: str) -> str:
 # A background of its own, for one item or one sermon point (Kevin, 2026-10-26:
 # "if there only want certain design background for certain slides it should
 # be able to happen"). The items whose words sit on the background have one.
-BG_KINDS = ("color", "image", "video")
+# 2026-11-14: or one of the designs (BG_DESIGNS), so a song or a sermon point
+# can wear one: {kind: "design", design, color: None, url: None, dim}.
+BG_KINDS = ("color", "image", "video", "design")
 BG_ITEM_KINDS = ("song", "scripture", "text", "announcement")
 
 
@@ -103,15 +107,21 @@ def clean_bg(raw: Any, label: str = "The background") -> Optional[Dict[str, Any]
     if raw in (None, "", {}):
         return None
     if not isinstance(raw, dict):
-        raise ValueError(f"{label} is a color, a picture or a video")
+        raise ValueError(f"{label} is a design, a color, a picture or a video")
     kind = raw.get("kind")
     if kind in (None, "", "look"):
         return None
     if kind not in BG_KINDS:
-        raise ValueError(f"{label} is a color, a picture or a video")
+        raise ValueError(f"{label} is a design, a color, a picture or a video")
     color = raw.get("color")
     url = raw.get("url")
-    if kind == "color":
+    design = None
+    if kind == "design":
+        design = raw.get("design")
+        if design not in BG_DESIGNS:
+            raise ValueError(f"{label}: pick one of the designs")
+        color = url = None
+    elif kind == "color":
         if not isinstance(color, str) or not _COLOR.match(color):
             raise ValueError(f"{label}: pick the color")
         url = None
@@ -122,7 +132,10 @@ def clean_bg(raw: Any, label: str = "The background") -> Optional[Dict[str, Any]
     dim = raw.get("dim", DEFAULT_LOOK["background"]["dim"])
     if isinstance(dim, bool) or not isinstance(dim, (int, float)) or not 0 <= dim <= 0.85:
         raise ValueError(f"{label}: darkening is 0 to 0.85")
-    return {"kind": kind, "color": color, "url": url, "dim": round(float(dim), 2)}
+    out = {"kind": kind, "color": color, "url": url, "dim": round(float(dim), 2)}
+    if design:
+        out["design"] = design  # only a design's: a color, picture or video saves exactly as before
+    return out
 
 
 def _clean_point(raw: Dict[str, Any], name: str) -> Dict[str, Any]:
@@ -310,7 +323,16 @@ COUNT_ZERO = ("next", "logo", "up")
 #   drift     Moving light: two soft glows that drift (slow; still for anyone
 #             whose device asks for less motion)
 #   night     Quiet night: a dark sky of small stars over the primary's glow
-DESIGNS = ("glass", "light", "numbers", "ring", "haze", "drift", "night")
+# 2026-11-14 (Kevin: "background and font choices would be a huge help"), the
+# background library, for the church's look and for any slide's own:
+#   linen     Linen: a warm light cloth with a touch of the accent (the one
+#             light design: the words on it turn dark by themselves)
+#   stones    River stones: smooth stones along the bottom, dark above
+#   water     Water: slow moving water (still for less motion, like drift)
+#   duo       Your two colors: the primary and the accent, corner to corner
+# Numbers and Ring are the countdown's own (BG_DESIGNS leaves them out).
+DESIGNS = ("glass", "light", "numbers", "ring", "haze", "drift", "night", "linen", "stones", "water", "duo")
+BG_DESIGNS = ("glass", "linen", "stones", "night", "light", "haze", "drift", "water", "duo")
 
 
 def clean_design(raw: Any, label: str = "The design") -> Optional[str]:
@@ -530,30 +552,71 @@ DEFAULT_LOOK: Dict[str, Any] = {
     # The church's own countdown (2026-11-14): see clean_count_look. What a countdown put
     # up on the spot wears when the plan has none, and the times it starts by itself.
     "countdown": {"design": "glass", "title": "We start soon", "welcome": "", "big_last": True, "times": []},
+    # 2026-11-14: one of FONT_PAIRS for the words (None: the brand's typeface, as before),
+    # and up to MAX_SERIES sermon series that wear a look of their own (see _clean_series).
+    "fonts": None,
+    "series": [],
 }
 WORKSPACES = ("dark", "light", "split")
+LOOK_BG_KINDS = ("brand", "color", "image", "video", "design")
+
+# ─── fonts (Kevin, 2026-11-14: "background and font choices would be a huge
+# help as well") ─────────────────────────────────────────────────────────
+# Eight pairs that read from the back row, each one face for the big words
+# (songs, sermon points, titles, the countdown) and one for the small words
+# (verses, small headings, labels). The screens know the faces (the app's
+# show/fonts); the server keeps the key. None is the brand's typeface, as before.
+#   clean    Inter Tight + Inter          classic  Playfair Display + Source Sans 3
+#   modern   Montserrat                   warm     Fraunces + Inter
+#   poster   Bebas Neue + Inter           quiet    DM Serif Display + DM Sans
+#   strong   Archivo Black + Archivo      gentle   Lora + Lato
+FONT_PAIRS = ("clean", "modern", "poster", "classic", "warm", "quiet", "strong", "gentle")
 
 
-def clean_look(raw: Any) -> Dict[str, Any]:
-    """A church's look, checked; anything missing takes the default."""
-    raw = raw if isinstance(raw, dict) else {}
-    bg_raw = raw.get("background") if isinstance(raw.get("background"), dict) else {}
+def clean_fonts(raw: Any, label: str = "The fonts") -> Optional[str]:
+    """One of FONT_PAIRS, or None (the brand's typeface)."""
+    if raw in (None, ""):
+        return None
+    if raw not in FONT_PAIRS:
+        raise ValueError(f"{label} aren't one of the font pairs")
+    return raw
+
+
+def _clean_look_bg(raw: Any) -> Dict[str, Any]:
+    """What's behind the words: the brand, a color, a photo, a moving photo, or a design
+    (BG_DESIGNS). A color or link kept from an earlier choice stays, as it always has."""
+    bg_raw = raw if isinstance(raw, dict) else {}
     kind = bg_raw.get("kind") or "brand"
-    if kind not in ("brand", "color", "image", "video"):
-        raise ValueError("The background is your brand, a color, a photo or a moving photo")
+    if kind not in LOOK_BG_KINDS:
+        raise ValueError("The background is your brand, a design, a color, a photo or a moving photo")
     color = bg_raw.get("color")
     if color is not None and (not isinstance(color, str) or not _COLOR.match(color)):
         raise ValueError("A color looks like #2E1A47")
     url = bg_raw.get("url")
     if url is not None and (not isinstance(url, str) or not _HTTPS.match(url)):
         raise ValueError("The background must be an https:// link")
+    design = bg_raw.get("design")
+    if design not in (None, "") and design not in BG_DESIGNS:
+        raise ValueError("That isn't one of the backgrounds")
     if kind == "color" and not color:
         raise ValueError("Pick the background color")
     if kind in ("image", "video") and not url:
         raise ValueError("Pick the background photo or video")
+    if kind == "design" and not design:
+        raise ValueError("Pick the background design")
     dim = bg_raw.get("dim", DEFAULT_LOOK["background"]["dim"])
     if not isinstance(dim, (int, float)) or not 0 <= dim <= 0.85:
         raise ValueError("Darkening is 0 to 0.85")
+    out = {"kind": kind, "color": color, "url": url, "dim": round(float(dim), 2)}
+    if design:
+        out["design"] = design  # a look that never picked a design saves exactly as before
+    return out
+
+
+def clean_look(raw: Any) -> Dict[str, Any]:
+    """A church's look, checked; anything missing takes the default."""
+    raw = raw if isinstance(raw, dict) else {}
+    background = _clean_look_bg(raw.get("background"))
     size = raw.get("size") or "std"
     if size not in ("small", "std", "big"):
         raise ValueError("Words are smaller, standard or larger")
@@ -586,13 +649,93 @@ def clean_look(raw: Any) -> Dict[str, Any]:
     if workspace not in WORKSPACES:
         raise ValueError("Workspace colors are dark, light, or light to plan and dark to run")
     return {
-        "background": {"kind": kind, "color": color, "url": url, "dim": round(float(dim), 2)},
+        "background": background,
         "size": size, "caps": bool(raw.get("caps")), "align": align, "font": font or None,
         "translation": tr, "lower_third": {"style": style, "position": position},
         "brand": brand, "quick": clean_quick(raw.get("quick")), "workspace": workspace,
         "crawls": _clean_crawls(raw.get("crawls")),
         "countdown": clean_count_look(raw.get("countdown")),
+        "fonts": clean_fonts(raw.get("fonts")),
+        "series": _clean_series(raw.get("series")),
     }
+
+
+# ─── a look for a sermon series (2026-11-14) ─────────────────────────
+# A series (Crossing Over, Nov 1 to Nov 29) wears its own fonts and background
+# on every service dated inside it, its first and last days included; the rest
+# of the year keeps the church's look. Everything else (the size, the Bible
+# version, the stream's lower third, the quick screens) is the church's.
+MAX_SERIES = 12
+SERIES_DAYS = 366
+# What a look worn for a series carries, so a page that saves it back (the booth's
+# crawl lines) keeps the church's own font and background: see worship_show_router.
+WEARING_KEY = "wearing"
+_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _date(v: Any, label: str) -> date:
+    if isinstance(v, str) and _DATE.match(v):
+        try:
+            return date.fromisoformat(v)
+        except ValueError:
+            pass
+    raise ValueError(f"{label} is a date")
+
+
+def _clean_series(raw: Any) -> List[Dict[str, Any]]:
+    """Up to MAX_SERIES series looks, {id, name, from, to (YYYY-MM-DD), fonts, background}.
+    fonts is a pair or None (the brand's typeface); the background is checked like the
+    look's. No two share a day, so a day wears one look."""
+    if raw in (None, ""):
+        return []
+    if not isinstance(raw, list) or len(raw) > MAX_SERIES:
+        raise ValueError(f"Keep up to {MAX_SERIES} series looks. Take out one that has ended")
+    out: List[Dict[str, Any]] = []
+    ids = set()
+    for s in raw:
+        if not isinstance(s, dict):
+            raise ValueError("That isn't a look for a series")
+        sid = str(s.get("id") or "")
+        if not _ID.match(sid) or sid in ids:
+            raise ValueError("Each series look needs its own id")
+        name = _text(s, "name", 60, "The series' name")
+        if not name:
+            raise ValueError("Give the series a name")
+        start, end = _date(s.get("from"), f"{name}'s first day"), _date(s.get("to"), f"{name}'s last day")
+        if end < start:
+            raise ValueError(f"{name}'s last day comes before its first")
+        if (end - start).days > SERIES_DAYS:
+            raise ValueError(f"{name} runs for a year at most")
+        for other in out:
+            if start <= date.fromisoformat(other["to"]) and date.fromisoformat(other["from"]) <= end:
+                raise ValueError(f"{name} and {other['name']} share some days. A day wears one series' look")
+        try:
+            fonts = clean_fonts(s.get("fonts"))
+            background = _clean_look_bg(s.get("background"))
+        except ValueError as e:
+            words = str(e)
+            raise ValueError(f"{name}: {words[:1].lower()}{words[1:]}")
+        ids.add(sid)
+        out.append({"id": sid, "name": name, "from": start.isoformat(), "to": end.isoformat(),
+                    "fonts": fonts, "background": background})
+    return out
+
+
+def look_on(look: Dict[str, Any], day: Optional[date]) -> Dict[str, Any]:
+    """The look a service on `day` wears: a series' fonts and background when the day is
+    inside one, marked `wearing` (the series' id, name and dates); else the church's own,
+    the same dict. The series list rides along either way."""
+    if day is None:
+        return look
+    for s in look.get("series") or []:
+        try:
+            inside = date.fromisoformat(s["from"]) <= day <= date.fromisoformat(s["to"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if inside:
+            return {**look, "fonts": s.get("fonts"), "background": dict(s["background"]),
+                    WEARING_KEY: {"id": s["id"], "name": s["name"], "from": s["from"], "to": s["to"]}}
+    return look
 
 
 # ─── the countdown that starts by itself (2026-11-14) ────────────────

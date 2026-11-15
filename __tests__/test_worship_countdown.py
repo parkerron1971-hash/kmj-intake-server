@@ -177,3 +177,13 @@ def test_the_churchs_own_countdown_and_its_times():
         wsh.clean_look({"countdown": {"design": "fireworks"}})
     # The day each time last went up is the server's: a look read back never carries it.
     assert wsh.FIRED_KEY not in wsh.clean_look({wsh.FIRED_KEY: {"sun": "2026-11-15"}})
+
+
+def test_the_design_list_grew_for_backgrounds_and_the_countdown_keeps_its_own():
+    # 2026-11-14 (fonts and backgrounds): Linen, River stones, Water and Your two colors join
+    # the one list; a countdown may wear any of them, and Numbers and Ring stay the countdown's.
+    assert wsh.DESIGNS[:7] == ("glass", "light", "numbers", "ring", "haze", "drift", "night")
+    for key in ("linen", "stones", "water", "duo"):
+        assert key in wsh.DESIGNS and key in wsh.BG_DESIGNS and count(design=key)["design"] == key
+    assert "numbers" not in wsh.BG_DESIGNS and "ring" not in wsh.BG_DESIGNS
+    assert wsh.clean_look({"countdown": {"design": "water"}})["countdown"]["design"] == "water"
