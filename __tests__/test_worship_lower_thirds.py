@@ -78,6 +78,13 @@ def test_a_lower_third_item_is_one_third_slide():
     assert show["slide_count"] == 2 and show["missing"] == []
 
 
+def test_sunday_plannings_order_names_a_lower_third():
+    import sunday_order
+    it = item("third", name="Pastor Kevin McClain", sub="Senior Pastor")
+    assert sunday_order._name(it, {}) == {"title": "Pastor Kevin McClain", "sub": "Lower third · Senior Pastor"}
+    assert sunday_order._name(item("third", name="Give online"), {}) == {"title": "Give online", "sub": "Lower third"}
+
+
 # ─── show as a lower third ────────────────────────────────────────────
 
 

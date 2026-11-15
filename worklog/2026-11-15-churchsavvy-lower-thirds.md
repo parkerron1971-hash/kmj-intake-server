@@ -16,8 +16,9 @@ slide), `AS_THIRD_KINDS` and `as_third`, `LT_STYLES` and `_clean_lower_third`, `
 (`WORDS_AS`). `worship_show_router.py`: the screens' tolerant reads and writes
 (`_screens_call`), `_clean_screen`/`_screen_out` `words`, `set_live` carries the lower third
 when a press doesn't send it, `save_look`'s size guard. `worship_count_auto.py` keeps a lower
-third over the countdown that starts by itself.
+third over the countdown that starts by itself. `sunday_order._name` calls a lower third item
+by its name line in Sunday Planning's order (not "Words on screen").
 
-Tests: `__tests__/test_worship_lower_thirds.py` (14), `__tests__/worship_show_db.mjs` (the
+Tests: `__tests__/test_worship_lower_thirds.py` (15), `__tests__/worship_show_db.mjs` (the
 column). Rehearsed red: without the carry in set_live, without the column fallback, and
 without the carry in the auto countdown, each fails.
