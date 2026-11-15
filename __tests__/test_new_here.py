@@ -105,6 +105,9 @@ def test_never_late_never_today_for_monday(eastern):
 
 @pytest.fixture
 def db(monkeypatch, eastern):
+    # A Sunday morning: on the real clock, a text after about 4:45 PM has no
+    # thank-you (it would land past 7:45 PM), and the plan below expects one.
+    monkeypatch.setattr(nh, "_now", lambda: at(2026, 11, 15, 10, 42).astimezone(timezone.utc))
     state = {"biz": dict(CHURCH), "contacts": [], "opt_outs": [], "posts": [], "patches": [], "switched": True}
 
     def rows(path):
