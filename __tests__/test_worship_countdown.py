@@ -96,3 +96,84 @@ def test_saved_crawl_lines_in_the_look():
         wsh.clean_look({"crawls": ["x"] * 11})
     with pytest.raises(ValueError, match="1 to 160"):
         wsh.clean_look({"crawls": [""]})
+
+
+# ─── 2026-11-14: designs, the last ten seconds, on the spot, and its own times ───
+
+
+def test_a_countdown_wears_a_design_in_the_churchs_colors():
+    for key in wsh.DESIGNS:
+        assert count(design=key)["design"] == key
+    assert count()["design"] is None and count(design="")["design"] is None
+    # A design draws its own background: a picture behind it isn't needed, and the look is big numbers.
+    glass = count(design="glass", look="picture")
+    assert glass["look"] == "big" and glass["design"] == "glass"
+    assert count(design="ring", look="plain")["look"] == "plain"
+    with pytest.raises(ValueError, match="isn't one of the designs"):
+        count(design="confetti")
+    # Big numbers for the last ten seconds: on only when it's said so.
+    assert count(big_last=True)["big_last"] is True
+    assert count()["big_last"] is False and count(big_last="yes")["big_last"] is False
+    slide = wsh.compile_item(count(design="drift", big_last=True), {}, STARTS)["slides"][0]
+    assert slide["design"] == "drift" and slide["big_last"] is True
+    # A saved countdown from before keeps drawing as it did: no design, no big last seconds.
+    before = wsh.compile_item(count(look="ring"), {}, STARTS)["slides"][0]
+    assert "design" not in before and "big_last" not in before and before["look"] == "ring"
+
+
+def test_a_countdown_goes_up_on_the_spot():
+    spot = {"kind": "countdown", "title": "Back in five", "show": "room",
+            "slides": [{"kind": "countdown", "to": "2026-11-01T16:10:00Z", "title": "Back in five", "design": "night",
+                        "big_last": True, "zero": "logo"}]}
+    live = wsh.clean_live({"adhoc": spot, "auto": {"id": "sun", "at": "10:15"}})
+    up = live["adhoc"]
+    assert up["kind"] == "countdown" and up["show"] == "room" and len(up["slides"]) == 1
+    slide = up["slides"][0]
+    assert (slide["to"], slide["title"], slide["design"], slide["big_last"], slide["zero"], slide["look"]) == (
+        "2026-11-01T16:10:00Z", "Back in five", "night", True, "logo", "big")
+    # Started by itself: the booth's line rides along with the countdown, and only with it.
+    assert live["auto"] == {"id": "sun", "at": "10:15"}
+    words = {"kind": "text", "title": "Hi", "slides": [{"kind": "text", "kicker": "", "text": "Hi"}]}
+    assert "auto" not in wsh.clean_live({"adhoc": words, "auto": {"id": "sun", "at": "10:15"}})
+    # Something on the spot from before says nothing of who sees it: everyone, as before.
+    assert wsh.clean_live({"adhoc": words})["adhoc"]["show"] == "all"
+    for bad, msg in [({"slides": []}, "1 to 60"),
+                     ({"slides": [spot["slides"][0], spot["slides"][0]]}, "one slide"),
+                     ({"slides": [{"kind": "countdown", "to": "soon"}]}, "a time to count to"),
+                     # A time with no zone can't mean the same moment on every screen.
+                     ({"slides": [{"kind": "countdown", "to": "2026-11-01T16:10:00"}]}, "a time to count to"),
+                     ({"slides": [{"kind": "countdown", "to": "2026-11-01T16:10:00Z", "design": "x"}]}, "designs"),
+                     ({"show": "lobby"}, "the room only"),
+                     ({"slides": [{"kind": "text", "text": "x"}]}, "don't match")]:
+        with pytest.raises(ValueError, match=msg):
+            wsh.clean_live({"adhoc": {**spot, **bad}})
+    for bad in ({"id": "sun"}, {"id": "Sun!", "at": "10:15"}, {"id": "sun", "at": "25:00"}, "10:15"):
+        with pytest.raises(ValueError, match="started by itself"):
+            wsh.clean_live({"adhoc": spot, "auto": bad})
+
+
+def sunday(**kw):
+    return {"id": "sun", "days": [0], "at": "10:15", "minutes": 15, "where": "all", **kw}
+
+
+def test_the_churchs_own_countdown_and_its_times():
+    plain = wsh.clean_look({})["countdown"]
+    assert plain == {"design": "glass", "title": "We start soon", "welcome": "", "big_last": True, "times": []}
+    cd = wsh.clean_look({"countdown": {"design": None, "title": "Service starts in", "big_last": False, "times": [
+        sunday(), {"id": "wed", "days": [3, 3], "at": "18:45", "minutes": 15.0, "where": "room", "on": False}]}})["countdown"]
+    assert cd["design"] is None and cd["title"] == "Service starts in" and cd["big_last"] is False
+    assert cd["times"] == [{"id": "sun", "on": True, "days": [0], "at": "10:15", "minutes": 15, "where": "all"},
+                           {"id": "wed", "on": False, "days": [3], "at": "18:45", "minutes": 15, "where": "room"}]
+    for bad, msg in [([sunday()] * 7, "up to 6"), ([sunday(), sunday()], "its own id"),
+                     ([sunday(), sunday(id="sun2", days=[0, 3])], "Two countdowns go up at 10:15"),
+                     ([sunday(days=[])], "Pick the days"), ([sunday(days=[7])], "Pick the days"),
+                     ([sunday(days=[True])], "Pick the days"), ([sunday(at="10:15 AM")], "time of day"),
+                     ([sunday(minutes=0)], "1 to 120"), ([sunday(minutes=121)], "1 to 120"),
+                     ([sunday(minutes=True)], "1 to 120"), ([sunday(minutes=2.5)], "1 to 120"),
+                     ([sunday(where="lobby")], "every screen"), ([sunday(id="")], "its own id")]:
+        with pytest.raises(ValueError, match=msg):
+            wsh.clean_look({"countdown": {"times": bad}})
+    with pytest.raises(ValueError, match="designs"):
+        wsh.clean_look({"countdown": {"design": "fireworks"}})
+    # The day each time last went up is the server's: a look read back never carries it.
+    assert wsh.FIRED_KEY not in wsh.clean_look({wsh.FIRED_KEY: {"sun": "2026-11-15"}})

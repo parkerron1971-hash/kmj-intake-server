@@ -228,15 +228,46 @@ def clean_item(raw: Any) -> Dict[str, Any]:
 COUNT_LOOKS = ("big", "picture", "ring", "plain")
 COUNT_ZERO = ("next", "logo", "up")
 
+# ─── designs (Kevin, 2026-11-14: "we should also be able to create different
+# background graphics for it") ───────────────────────────────────────────
+# Backgrounds drawn on the screen itself in the church's own colors (its brand
+# primary and accent), no picture needed, each with numbers that suit it. The
+# screens draw them (the app's show/designs); the server only knows their
+# keys. The countdown wears them now; the next build lets any slide wear one,
+# so this one list is the place to add a design.
+#   glass     Stained glass: panes of the church's colors, leaded, softly lit
+#   light     Morning light: a sunrise of warm light rising from the bottom
+#   numbers   Big numbers: the primary color, deepening; tall condensed numbers
+#   ring      Ring: a dark room and a ring in the accent that empties to zero
+#   haze      Stage lights: three beams of light from above, through haze
+#   drift     Moving light: two soft glows that drift (slow; still for anyone
+#             whose device asks for less motion)
+#   night     Quiet night: a dark sky of small stars over the primary's glow
+DESIGNS = ("glass", "light", "numbers", "ring", "haze", "drift", "night")
+
+
+def clean_design(raw: Any, label: str = "The design") -> Optional[str]:
+    """One of DESIGNS, or None (the church's own look, as before)."""
+    if raw in (None, ""):
+        return None
+    if raw not in DESIGNS:
+        raise ValueError(f"{label} isn't one of the designs")
+    return raw
+
 
 def _clean_countdown(raw: Dict[str, Any]) -> Dict[str, Any]:
     """A countdown's look (round 5, canvas board 22): big numbers, over a picture,
     a ring, or just the numbers; a welcome line; what happens at zero (the next
     item goes up, the logo, or it counts up on the stage only); a countdown video
-    that ends on the dot; and the call to the band on the stage."""
+    that ends on the dot; and the call to the band on the stage. 2026-11-14: a
+    design drawn in the church's colors (DESIGNS), and big numbers for the last
+    ten seconds."""
     look = raw.get("look") or "big"
     if look not in COUNT_LOOKS:
         raise ValueError("A countdown is big numbers, over a picture, a ring or just the numbers")
+    design = clean_design(raw.get("design"), "The countdown's design")
+    if design and look == "picture":
+        look = "big"  # a design draws its own background, so no picture is needed behind it
     zero = raw.get("zero") or "next"
     if zero not in COUNT_ZERO:
         raise ValueError("At zero: the next item, the logo, or counting up on the stage")
@@ -257,7 +288,8 @@ def _clean_countdown(raw: Dict[str, Any]) -> Dict[str, Any]:
         raise ValueError("The call to the stage comes 0 to 15 minutes before")
     return {"look": look, "zero": zero, "picture_url": picture, "welcome": _text(raw, "welcome", 80, "The welcome line"),
             "video_url": video, "video_seconds": round(float(secs), 1) if video else None,
-            "band_at": band_at, "band_text": _text(raw, "band_text", 40, "The call to the stage") or "Band to the stage"}
+            "band_at": band_at, "band_text": _text(raw, "band_text", 40, "The call to the stage") or "Band to the stage",
+            "design": design, "big_last": raw.get("big_last") is True}
 
 
 MAX_FIXES = 60
@@ -428,6 +460,9 @@ DEFAULT_LOOK: Dict[str, Any] = {
     "workspace": "dark",
     # The crawl's saved lines (round 5): see _clean_crawls.
     "crawls": [],
+    # The church's own countdown (2026-11-14): see clean_count_look. What a countdown put
+    # up on the spot wears when the plan has none, and the times it starts by itself.
+    "countdown": {"design": "glass", "title": "We start soon", "welcome": "", "big_last": True, "times": []},
 }
 WORKSPACES = ("dark", "light", "split")
 
@@ -489,7 +524,76 @@ def clean_look(raw: Any) -> Dict[str, Any]:
         "translation": tr, "lower_third": {"style": style, "position": position},
         "brand": brand, "quick": clean_quick(raw.get("quick")), "workspace": workspace,
         "crawls": _clean_crawls(raw.get("crawls")),
+        "countdown": clean_count_look(raw.get("countdown")),
     }
+
+
+# ─── the countdown that starts by itself (2026-11-14) ────────────────
+# Kevin: "countdown clock should be a clock that can be started either we start
+# or a pre service clock starts it that a person can set." A church keeps a few
+# times in its look; worship_count_auto puts the countdown up at each one, on the
+# church's own clock, even with nobody in the booth.
+
+MAX_COUNT_TIMES = 6
+COUNT_TIME_MINUTES = (1, 120)
+# The day each time last went up, kept in the look's row by the server alone
+# (worship_count_auto claims it; save_look carries it over; clean_look leaves it out).
+FIRED_KEY = "count_fired"
+
+
+def _clean_count_time(t: Any) -> Dict[str, Any]:
+    if not isinstance(t, dict):
+        raise ValueError("That isn't a time for the countdown")
+    tid = str(t.get("id") or "")
+    if not _ID.match(tid):
+        raise ValueError("Each countdown time needs its own id")
+    days = t.get("days")
+    # Days of the week as the screens count them: 0 is Sunday.
+    if not isinstance(days, list) or not days or any(type(d) is not int or not 0 <= d <= 6 for d in days):
+        raise ValueError("Pick the days the countdown goes up")
+    at = t.get("at")
+    if not isinstance(at, str) or not _HHMM.match(at):
+        raise ValueError("The countdown goes up at a time of day")
+    minutes = t.get("minutes")
+    if isinstance(minutes, float) and minutes.is_integer():
+        minutes = int(minutes)
+    lo, hi = COUNT_TIME_MINUTES
+    if type(minutes) is not int or not lo <= minutes <= hi:
+        raise ValueError(f"The countdown counts for {lo} to {hi} minutes")
+    where = t.get("where") or "all"
+    if where not in SHOW:
+        raise ValueError("The countdown goes on every screen, the room only, or online only")
+    return {"id": tid, "on": t.get("on") is not False, "days": sorted(set(days)), "at": at, "minutes": minutes,
+            "where": where}
+
+
+def clean_count_look(raw: Any) -> Dict[str, Any]:
+    """The church's own countdown: the design and words a countdown put up on the
+    spot wears when the day's plan has no countdown of its own, and up to six times
+    a week it goes up by itself ({id, on, days, at "HH:MM", minutes, where})."""
+    base = DEFAULT_LOOK["countdown"]
+    raw = raw if isinstance(raw, dict) else {}
+    design = clean_design(raw.get("design", base["design"]), "The countdown's design")
+    times_raw = raw.get("times")
+    if times_raw in (None, ""):
+        times_raw = []
+    if not isinstance(times_raw, list) or len(times_raw) > MAX_COUNT_TIMES:
+        raise ValueError(f"The countdown goes up by itself at up to {MAX_COUNT_TIMES} times a week")
+    times: List[Dict[str, Any]] = []
+    ids, slots = set(), set()
+    for t in times_raw:
+        one = _clean_count_time(t)
+        if one["id"] in ids:
+            raise ValueError("Each countdown time needs its own id")
+        mine = {(d, one["at"]) for d in one["days"]}
+        if mine & slots:
+            raise ValueError(f"Two countdowns go up at {one['at']} on the same day")
+        ids.add(one["id"])
+        slots |= mine
+        times.append(one)
+    return {"design": design, "title": _text(raw, "title", 60, "The countdown's words") or base["title"],
+            "welcome": _text(raw, "welcome", 80, "The welcome line"),
+            "big_last": raw.get("big_last", base["big_last"]) is not False, "times": times}
 
 
 MAX_CRAWLS = 10
@@ -614,9 +718,13 @@ def compile_item(item: Dict[str, Any], songs: Dict[str, Dict[str, Any]], starts_
     else:  # countdown
         slide = {"kind": "countdown", "to": item.get("to") or starts_at, "title": item.get("title") or "We start soon"}
         # Its look, what happens at zero, the video that lands on time, the call to the stage (round 5).
-        for k in ("look", "zero", "picture_url", "welcome", "video_url", "video_seconds", "band_at", "band_text"):
+        for k in ("look", "zero", "picture_url", "welcome", "video_url", "video_seconds", "band_at", "band_text",
+                  "design"):
             if item.get(k) not in (None, ""):
                 slide[k] = item[k]
+        # 2026-11-14: a design drawn in the church's colors, and the last ten seconds in big numbers.
+        if item.get("big_last") is True:
+            slide["big_last"] = True
         body = {"title": item.get("title") or "Countdown", "slides": [slide]}
     # A background of its own: a sermon point's, else the item's (the screen draws the look without one).
     points = (item.get("slides") or []) if kind == "text" else []
@@ -654,7 +762,23 @@ def song_ids(items: List[Dict[str, Any]]) -> List[str]:
 MODES = ("show", "black", "logo", "clear")
 # What may go up on the spot, and the kinds of slide each brings.
 # A quick screen of a church's own goes up on the spot too: its words, or its picture.
-ADHOC_KINDS = {"verse": ("verse",), "song": ("lyric",), "text": ("text",), "image": ("image",)}
+# A countdown goes up on the spot too (2026-11-14): for some minutes from the press, a
+# break or a youth night with nothing in the plan, or by itself before a service.
+ADHOC_KINDS = {"verse": ("verse",), "song": ("lyric",), "text": ("text",), "image": ("image",),
+               "countdown": ("countdown",)}
+
+
+def clean_count_slide(raw: Any) -> Dict[str, Any]:
+    """A countdown put up on the spot, as its one slide: the time it counts to (with
+    its zone), its words, and the same look a planned countdown has."""
+    if not isinstance(raw, dict):
+        raise ValueError("A countdown on the spot needs a time to count to")
+    try:
+        to = _iso(raw.get("to"))
+    except ValueError:
+        raise ValueError("A countdown on the spot needs a time to count to")
+    title = _text(raw, "title", 60, "The countdown's words") or "We start soon"
+    return {"kind": "countdown", "to": to, "title": title, **_clean_countdown(raw)}
 
 
 def clean_live(raw: Any) -> Dict[str, Any]:
@@ -688,7 +812,23 @@ def clean_live(raw: Any) -> Dict[str, Any]:
             raise ValueError("Those slides don't match what's going up")
         if adhoc["kind"] == "image" and any(not isinstance(sl.get("url"), str) or not _HTTPS.match(sl["url"]) for sl in slides):
             raise ValueError("A quick screen's picture must be an https:// link")
-        out["adhoc"] = {"kind": adhoc["kind"], "title": str(adhoc.get("title") or "")[:80], "slides": slides}
+        if adhoc["kind"] == "countdown":
+            if len(slides) != 1:
+                raise ValueError("A countdown on the spot is one slide")
+            slides = [clean_count_slide(slides[0])]
+        # Who sees it, like an item's (2026-11-14): every screen, the room only, or online only.
+        where = adhoc.get("show") or "all"
+        if where not in SHOW:
+            raise ValueError("Something on the spot shows to everyone, the room only, or online only")
+        out["adhoc"] = {"kind": adhoc["kind"], "title": str(adhoc.get("title") or "")[:80], "slides": slides, "show": where}
+        auto = raw.get("auto")
+        if auto is not None and adhoc["kind"] == "countdown":
+            # The countdown that started by itself (2026-11-14): which of the church's times, and
+            # its time of day, so the booth can say "Started by itself at 10:15". It goes with it.
+            if (not isinstance(auto, dict) or not _ID.match(str(auto.get("id") or ""))
+                    or not isinstance(auto.get("at"), str) or not _HHMM.match(auto["at"])):
+                raise ValueError("That isn't a countdown that started by itself")
+            out["auto"] = {"id": auto["id"], "at": auto["at"]}
     message = raw.get("message")
     if message is not None:
         if not isinstance(message, str) or len(message) > 120:
