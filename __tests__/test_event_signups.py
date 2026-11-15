@@ -258,6 +258,7 @@ def db(monkeypatch):
             return fake.now.astimezone(timezone.utc).date()
 
     monkeypatch.setattr(mpc, "date", _Today)
+    monkeypatch.setattr(er, "date", _Today)  # the upcoming list's "today" too
     monkeypatch.setattr(ces, "_church_tz", lambda biz: "America/New_York")
     emails = {n: e.email for n, e in PEOPLE.items()}
     monkeypatch.setattr(ces, "_owner_email", lambda oid: next((emails[n] for n, i in ID.items() if i == oid), None))
