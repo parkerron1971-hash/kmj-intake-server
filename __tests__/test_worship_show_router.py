@@ -412,3 +412,36 @@ def test_a_confidence_screen_gets_the_stage_notes_and_keeps_its_settings(api, mo
     assert well["stage"] == "Hold the last refrain" and "notes" not in well
     info = as_("stranger").get(f"/worship/screen/{screen['token']}").json()
     assert info["screen"]["stage"]["layout"] == "band"
+
+
+SERMON = {"id": "sermon", "kind": "text", "title": "Stones", "outline": "1. Stop\n- Pick up stones\nNote: my desk\nJoshua 4:6",
+          "slides": [{"kicker": "Point 1", "text": "Stop", "notes": "Breathe", "mode": "build", "lines": [
+              {"kind": "statement", "text": "Pick up stones", "note": "my desk", "br": False},
+              {"kind": "verse", "ref": "joshua 4:6", "translation": "kjv", "note": "read it slowly", "br": False}]}]}
+
+
+def test_sermon_notes_save_and_their_notes_reach_only_the_stage(api, monkeypatch):
+    db, as_, _ = api
+    monkeypatch.setenv("WORSHIP_SONGS", "on")
+    sid = plan(as_, items=ITEMS + [SERMON]).json()["service"]["id"]
+    saved = as_("manager").get(f"/worship/services/{sid}?business_id={BIZ}").json()["service"]["items"][-1]
+    # Kept as typed, the passage by its full name.
+    assert saved["outline"] == SERMON["outline"] and saved["slides"][0]["lines"][1]["ref"] == "Joshua 4:6"
+    # A passage in the notes that can't be found is refused like a Scripture item's, and nothing is saved.
+    bad = dict(SERMON, slides=[dict(SERMON["slides"][0], lines=[{"kind": "verse", "ref": "hezekiah 1:1"}])])
+    r = as_("owner").put(f"/worship/services/{sid}", json={"business_id": BIZ, "items": ITEMS + [bad]})
+    assert r.status_code == 400 and "isn't a passage we can find" in r.json()["detail"]
+    # The booth sees every slide with its notes.
+    booth = as_("owner").get(f"/worship/services/{sid}/show?business_id={BIZ}").json()["items"][-1]["slides"]
+    assert [(s["kind"], s.get("notes")) for s in booth] == [("text", "Breathe"), ("text", "my desk"), ("verse", "read it slowly")]
+    room = as_("owner").post("/worship/screens", json={"business_id": BIZ, "name": "Projector", "role": "room"}).json()["screen"]
+    online = as_("owner").post("/worship/screens", json={"business_id": BIZ, "name": "Stream", "role": "online"}).json()["screen"]
+    stage = as_("owner").post("/worship/screens", json={"business_id": BIZ, "name": "Stage TV", "role": "stage"}).json()["screen"]
+    as_("owner").post("/worship/live", json={"business_id": BIZ, "state": {"service_id": sid, "item_id": "sermon", "slide": 1}})
+    for screen in (room, online):
+        slides = as_("stranger").get(f"/worship/screen/{screen['token']}/show").json()["items"][-1]["slides"]
+        assert [s["kind"] for s in slides] == ["text", "text", "verse"]
+        assert all("notes" not in s for s in slides), "the pastor's notes never reach the room or the stream"
+        assert slides[1]["lines"] == ["Pick up stones"] and slides[1]["newest"] == 0
+    slides = as_("stranger").get(f"/worship/screen/{stage['token']}/show").json()["items"][-1]["slides"]
+    assert [s.get("notes") for s in slides] == ["Breathe", "my desk", "read it slowly"]
