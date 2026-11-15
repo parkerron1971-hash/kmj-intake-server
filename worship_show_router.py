@@ -532,8 +532,14 @@ def save_look(body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
         look = wsh.clean_look(body.get("look"))
     except ValueError as e:
         raise HTTPException(400, str(e))
+    # The day each of the countdown's times last went up by itself is the server's own
+    # (worship_count_auto); a save keeps it, whatever the page sent, so a page opened
+    # before this morning's countdown can't put it up a second time.
+    before = _read(f"/worship_settings?business_id=eq.{_q(biz)}&select=look&limit=1", "The look")
+    fired = ((before[0].get("look") or {}) if before and isinstance(before[0].get("look"), dict) else {}).get(wsh.FIRED_KEY)
+    stored = {**look, wsh.FIRED_KEY: fired} if isinstance(fired, dict) and fired else look
     rows = sb_clients.sb_post_as_service("/worship_settings?on_conflict=business_id&select=look",
-                                         {"business_id": biz, "look": look, "updated_at": _now()},
+                                         {"business_id": biz, "look": stored, "updated_at": _now()},
                                          prefer="resolution=merge-duplicates,return=representation")
     if not isinstance(rows, list) or not rows:
         raise HTTPException(503, "The look didn't save. Nothing changed; try again.")
@@ -547,8 +553,31 @@ def save_look(body: Dict[str, Any], user: AuthedUser = Depends(require_user)):
 def get_live(business_id: str, user: AuthedUser = Depends(require_user)):
     biz = _uuid(business_id)
     _seat(biz, user)
-    cur = _current(biz)
+    cur = _fresh(biz)
     return {"rev": cur[0] if cur else 0, "state": cur[1] if cur else None}
+
+
+ROW_CHECK_SECONDS = 5.0
+_ROW_CHECKED: Dict[str, float] = {}
+
+
+def _fresh(biz: str) -> Optional[Tuple[int, Dict[str, Any]]]:
+    """What the booth's poll reads: the hub's state, checked against the saved row
+    every few seconds, so a state written somewhere else (another copy of the server,
+    or the countdown that starts by itself, worship_count_auto) reaches the booth even
+    when no screen is waiting on this copy. Only a newer row replaces the hub's."""
+    cur = HUB.latest(biz)
+    if cur is None:
+        return _current(biz)
+    at = time.monotonic()
+    if at - _ROW_CHECKED.get(biz, 0.0) < ROW_CHECK_SECONDS:
+        return cur
+    _ROW_CHECKED[biz] = at
+    row = _live_row(biz)
+    if row and row[0] > cur[0]:
+        HUB.publish(biz, row[0], row[1])
+        return row
+    return cur
 
 
 @router.post("/live")

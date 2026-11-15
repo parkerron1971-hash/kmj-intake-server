@@ -1994,6 +1994,16 @@ async def startup():
                           id="church_handovers_sweep")
     except Exception as e:
         print(f"   [warn] hand-overs sweep not scheduled: {e}")
+    # ChurchSavvy's countdown that starts by itself (2026-11-14, Kevin: "a pre
+    # service clock starts it that a person can set"): every minute, each
+    # church's countdown times that have come go up on its screens, once a day,
+    # never over a booth that is running something (worship_count_auto).
+    try:
+        import worship_count_auto as _wca
+        scheduler.add_job(g("worship_count_auto", _wca.sweep_tick), "interval", minutes=1,
+                          id="worship_count_auto")
+    except Exception as e:
+        print(f"   [warn] ChurchSavvy countdown times not scheduled: {e}")
     # Church mail (2026-11-14, Kevin on the mock: "I love the design. lets
     # build it"): new-mail alerts that waited out a church's quiet hours (or
     # missed the at-once send), every 2 minutes; Trash older than 30 days,

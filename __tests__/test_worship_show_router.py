@@ -414,6 +414,48 @@ def test_a_confidence_screen_gets_the_stage_notes_and_keeps_its_settings(api, mo
     assert info["screen"]["stage"]["layout"] == "band"
 
 
+def test_the_countdowns_own_times_survive_a_look_saved_from_a_page(api, monkeypatch):
+    # 2026-11-14: the day each countdown time went up by itself is the server's
+    # (worship_count_auto). A page that read the look before this morning's
+    # countdown, saving it now, must not hand that time back for a second go.
+    db, as_, _ = api
+    monkeypatch.setenv("WORSHIP_SONGS", "on")
+    sun = {"id": "sun", "days": [0], "at": "10:15", "minutes": 15, "where": "all"}
+    r = as_("owner").put("/worship/look", json={"business_id": BIZ, "look": {"countdown": {"times": [sun]}}})
+    assert r.status_code == 200 and r.json()["look"]["countdown"]["times"][0]["on"] is True
+    db.t["worship_settings"][0]["look"]["count_fired"] = {"sun": "2026-11-15"}
+    # The page sends the look it has, with an old claim of its own: the server's stands.
+    stale = {**r.json()["look"], "size": "big", "count_fired": {"sun": "2026-11-08"}}
+    assert as_("owner").put("/worship/look", json={"business_id": BIZ, "look": stale}).status_code == 200
+    saved = db.t["worship_settings"][0]["look"]
+    assert saved["size"] == "big" and saved["count_fired"] == {"sun": "2026-11-15"}
+    # Nobody reading the look ever sees it.
+    assert "count_fired" not in as_("owner").get(f"/worship/look?business_id={BIZ}").json()["look"]
+    # A look that can't be read first doesn't save blind (the claim would be lost).
+    db.fail.add("worship_settings")
+    assert as_("owner").put("/worship/look", json={"business_id": BIZ, "look": stale}).status_code == 503
+
+
+def test_the_booth_hears_a_state_written_somewhere_else(api, monkeypatch):
+    # The countdown that starts by itself writes the live row from the scheduler's copy of the
+    # server. The booth's poll, on a copy whose hub has an older state and no screen waiting,
+    # still gets it within a few seconds: the row is checked, and only a newer one wins.
+    db, as_, _ = api
+    monkeypatch.setenv("WORSHIP_SONGS", "on")
+    as_("owner").post("/worship/live", json={"business_id": BIZ, "state": {"mode": "logo"}})
+    old = wsr.HUB.latest(BIZ)
+    db.t["worship_live"][0].update({"rev": old[0] + 10, "state": {"mode": "show", "auto": {"id": "sun", "at": "10:15"}}})
+    monkeypatch.setattr(wsr, "_ROW_CHECKED", {BIZ: wsr.time.monotonic()})
+    assert as_("member").get(f"/worship/live?business_id={BIZ}").json()["rev"] == old[0]  # checked a moment ago
+    monkeypatch.setattr(wsr, "_ROW_CHECKED", {})
+    got = as_("member").get(f"/worship/live?business_id={BIZ}").json()
+    assert got["rev"] == old[0] + 10 and got["state"]["auto"]["at"] == "10:15"
+    # An older row never takes the hub back.
+    db.t["worship_live"][0].update({"rev": 1, "state": {"mode": "black"}})
+    monkeypatch.setattr(wsr, "_ROW_CHECKED", {})
+    assert as_("member").get(f"/worship/live?business_id={BIZ}").json()["rev"] == old[0] + 10
+
+
 SERMON = {"id": "sermon", "kind": "text", "title": "Stones", "outline": "1. Stop\n- Pick up stones\nNote: my desk\nJoshua 4:6",
           "slides": [{"kicker": "Point 1", "text": "Stop", "notes": "Breathe", "mode": "build", "lines": [
               {"kind": "statement", "text": "Pick up stones", "note": "my desk", "br": False},
