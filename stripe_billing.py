@@ -452,8 +452,9 @@ async def _sample_block(business: Dict[str, Any], church_sample: bool, *,
 
 
 async def _plan_entry(plan: str) -> Dict[str, Any]:
-    """One plan card's price data: monthly price id + live display, and
-    the annual variant (2 months free; checkout takes plan='<tier>_annual')."""
+    """One plan card's price data: monthly price id + live display, the
+    annual variant (2 months free; checkout takes plan='<tier>_annual'), and
+    the three-month one once its price is set (plan='<tier>_quarterly')."""
     pid = (os.environ.get(f"STRIPE_PRICE_ID_{plan.upper()}") or "").strip()
     entry: Dict[str, Any] = {"plan": plan, "configured": bool(pid), "price_id": pid or None}
     display = await _price_display(pid)
@@ -465,13 +466,21 @@ async def _plan_entry(plan: str) -> Dict[str, Any]:
         annual_display = await _price_display(annual_pid)
         if annual_display:
             entry["annual_unit_amount"] = annual_display.get("unit_amount")
+    # Every three months: on the card only when its price exists AND Stripe
+    # can show the amount, so the page never offers a term with no figure.
+    quarterly_pid = (os.environ.get(f"STRIPE_PRICE_ID_{plan.upper()}_QUARTERLY") or "").strip()
+    if quarterly_pid:
+        quarterly_display = await _price_display(quarterly_pid)
+        if quarterly_display and quarterly_display.get("unit_amount") is not None:
+            entry["quarterly_price_id"] = quarterly_pid
+            entry["quarterly_unit_amount"] = quarterly_display.get("unit_amount")
     return entry
 
 
 def _price_plans() -> Dict[str, Dict[str, Optional[str]]]:
     """Every plan price id we hold: {price_id: {plan, every}}, `every` being
-    "month" or "year" (None for a retired price, whose term isn't written
-    down). Read from the names of the env vars, so it asks Stripe nothing.
+    "month", "quarter" (every three months) or "year" (None for a retired
+    price, whose term isn't written down). Read from the names of the env vars, so it asks Stripe nothing.
 
     The Billing page finds a business's own card by this. Without it the page
     knew only each plan's regular monthly and yearly ids, so a church on a
@@ -482,7 +491,8 @@ def _price_plans() -> Dict[str, Dict[str, Optional[str]]]:
     for env_key, plan in feature_gates.PRICE_ENV_TO_PLAN.items():
         pid = (os.environ.get(f"STRIPE_PRICE_ID_{env_key}") or "").strip()
         if pid:
-            out[pid] = {"plan": plan, "every": "year" if "_ANNUAL" in env_key else "month"}
+            out[pid] = {"plan": plan, "every": ("year" if "_ANNUAL" in env_key else
+                                                "quarter" if "_QUARTERLY" in env_key else "month")}
     for pid, plan in feature_gates.price_to_plan().items():
         out.setdefault(pid, {"plan": plan, "every": None})
     return out
@@ -577,6 +587,7 @@ async def billing_plans(for_type: Optional[str] = None):
         church_offer = {**pricing_config.church_offer(),
                         # One extra login on a plan paid by the year (church_billing).
                         "extra_login_year_cents": church_billing.extra_login_cents(church_billing.YEARLY),
+                        "extra_login_quarter_cents": church_billing.extra_login_cents(church_billing.QUARTERLY),
                         "names": {p: _plan_display(p) for p in fg.CHURCH_PLANS}}
         # The founding churches' price: how many places are left (None while
         # the offer is off or the count can't be read: nothing is promised).
@@ -787,7 +798,8 @@ async def create_checkout(body: CheckoutBody, user: AuthedUser = Depends(require
     the answer says `switched`."""
     import feature_gates
     requested = (body.plan or "").strip().lower()
-    requested_base = requested[:-len("_annual")] if requested.endswith("_annual") else requested
+    requested_base = next((requested[:-len(t)] for t in ("_annual", "_quarterly") if requested.endswith(t)),
+                          requested)
     if requested_base in feature_gates.AUDIENCE_PLANS or requested in feature_gates.CHURCHSAVVY_PLANS:
         # Strict: an audience plan resolves to ITS price or nothing.
         # _price_for_plan falls back to the default (Professional) price,
@@ -1861,7 +1873,34 @@ BOOTSTRAP_CATALOG = [
     # the plans are. Stripe holds one subscription to one billing term, so a
     # yearly church can't carry the monthly login price (2026-11-16).
     ("STRIPE_PRICE_ID_EXTRA_LOGIN_ANNUAL",        "solutionist_extra_login_annual",         "Solutionist extra office login", 15000,  "year"),
+    # Every three months (Kevin, 2026-11-16: "it would function like monthly
+    # payment just every three months"; no discount, "the price is already
+    # low for founding"). Three months' price, on the plans sold today: the
+    # public three and the churches, regular and founding. "quarter" here is
+    # Stripe's interval=month, interval_count=3 (_recurring). Creating them
+    # sells nothing: the Billing page offers the term only for a plan whose
+    # _QUARTERLY price id is set.
+    ("STRIPE_PRICE_ID_STARTER_QUARTERLY",                     "solutionist_starter_quarterly",                     "Solutionist Starter",            23700,  "quarter"),
+    ("STRIPE_PRICE_ID_PROFESSIONAL_QUARTERLY",                "solutionist_professional_quarterly",                "Solutionist Professional",       44700,  "quarter"),
+    ("STRIPE_PRICE_ID_PRACTICE_QUARTERLY",                    "solutionist_practice_quarterly",                    "The Solutionist",                89700,  "quarter"),
+    ("STRIPE_PRICE_ID_CHURCH_SMALL_QUARTERLY",                "solutionist_church_small_quarterly_2026_11",        "Solutionist Small Church",       29700,  "quarter"),
+    ("STRIPE_PRICE_ID_CHURCH_GROWING_QUARTERLY",              "solutionist_church_growing_quarterly_2026_11",      "Solutionist Growing Church",     74700,  "quarter"),
+    ("STRIPE_PRICE_ID_CHURCH_ESTABLISHED_QUARTERLY",          "solutionist_church_established_quarterly_2026_11",  "Solutionist Established Church", 149700, "quarter"),
+    ("STRIPE_PRICE_ID_CHURCH_LARGE_QUARTERLY",                "solutionist_church_large_quarterly_2026_11",        "Solutionist Large Church",       269700, "quarter"),
+    ("STRIPE_PRICE_ID_CHURCH_SMALL_QUARTERLY_FOUNDING",       "solutionist_church_small_quarterly_founding",       "Solutionist Small Church",       23700,  "quarter"),
+    ("STRIPE_PRICE_ID_CHURCH_GROWING_QUARTERLY_FOUNDING",     "solutionist_church_growing_quarterly_founding",     "Solutionist Growing Church",     59700,  "quarter"),
+    ("STRIPE_PRICE_ID_CHURCH_ESTABLISHED_QUARTERLY_FOUNDING", "solutionist_church_established_quarterly_founding", "Solutionist Established Church", 119700, "quarter"),
+    ("STRIPE_PRICE_ID_CHURCH_LARGE_QUARTERLY_FOUNDING",       "solutionist_church_large_quarterly_founding",       "Solutionist Large Church",       209700, "quarter"),
+    ("STRIPE_PRICE_ID_EXTRA_LOGIN_QUARTERLY",                 "solutionist_extra_login_quarterly",                 "Solutionist extra office login", 4500,   "quarter"),
 ]
+
+
+def _recurring(interval: str) -> Dict[str, Any]:
+    """The catalog's interval as Stripe's `recurring`: "quarter" is every
+    three months, which Stripe writes as interval=month, interval_count=3."""
+    if interval == "quarter":
+        return {"interval": "month", "interval_count": 3}
+    return {"interval": interval}
 
 
 async def _stripe_get(path: str, params: list) -> Dict[str, Any]:
@@ -1914,7 +1953,7 @@ async def bootstrap_prices(_owner=Depends(require_owner)):
     for env_key, lookup_key, product_name, amount, interval in BOOTSTRAP_CATALOG:
         price = existing.get(lookup_key)
         if price and (price.get("unit_amount") != amount
-                      or (price.get("recurring") or {}).get("interval") != interval):
+                      or _term_of(price) != _term_of({"recurring": _recurring(interval)})):
             # The key still names an OLD price (the ladder moved after it
             # was created). Pasting it would put every new checkout back
             # on that price, so it stays out of the block; the live env
@@ -1944,7 +1983,7 @@ async def bootstrap_prices(_owner=Depends(require_owner)):
             "product": product_id,
             "currency": "usd",
             "unit_amount": amount,
-            "recurring": {"interval": interval},
+            "recurring": _recurring(interval),
             "lookup_key": lookup_key,
             "nickname": lookup_key,
         })

@@ -49,8 +49,9 @@ def _fresh(monkeypatch):
     # date's own tests set it.
     monkeypatch.setenv("FOUNDING_CHURCHES_UNTIL", "2099-01-31")
     for plan in fg.CHURCH_PLANS:
-        for annual in (False, True):
-            monkeypatch.delenv(cf._env_key(plan, annual), raising=False)
+        for term in cf.TERMS:
+            monkeypatch.delenv(cf._env_key(plan, term), raising=False)
+            monkeypatch.delenv(f"STRIPE_PRICE_ID_{plan.upper()}{term}", raising=False)
     cf.forget()
     yield
     cf.forget()
@@ -439,10 +440,10 @@ def test_the_plans_endpoint_and_the_move_status_carry_it(monkeypatch):
     out = asyncio.run(sb.billing_plans(for_type="church"))
     assert out["church_founding"] == {
         "on": True, "spots": 10, "left": 8, "ends": None,
-        "prices": {SMALL: {"month_cents": 7900, "year_cents": 79000},
-                   GROWING: {"month_cents": 19900, "year_cents": 199000},
-                   ESTABLISHED: {"month_cents": 39900, "year_cents": 399000},
-                   LARGE: {"month_cents": 69900, "year_cents": 699000}}}
+        "prices": {SMALL: {"month_cents": 7900, "quarter_cents": 23700, "year_cents": 79000},
+                   GROWING: {"month_cents": 19900, "quarter_cents": 59700, "year_cents": 199000},
+                   ESTABLISHED: {"month_cents": 39900, "quarter_cents": 119700, "year_cents": 399000},
+                   LARGE: {"month_cents": 69900, "quarter_cents": 209700, "year_cents": 699000}}}
     assert asyncio.run(sb.billing_plans(for_type="barber"))["church_founding"] is None
 
     async def load(bid):
@@ -550,3 +551,92 @@ def test_billing_plans_names_the_plan_and_term_of_every_price(monkeypatch):
         return None
     monkeypatch.setattr(sb, "_price_display", no_display)
     assert asyncio.run(sb.billing_plans())["price_plans"]["price_grow_199"]["plan"] == "church_growing"
+
+
+# ─── every three months (Kevin, 2026-11-16) ───────────────────────────
+
+@pytest.fixture
+def quarterly(prices, monkeypatch):
+    monkeypatch.setenv("STRIPE_PRICE_ID_CHURCH_GROWING_QUARTERLY", "price_grow_q_747")
+    monkeypatch.setenv("STRIPE_PRICE_ID_CHURCH_GROWING_QUARTERLY_FOUNDING", "price_grow_q_597")
+    return prices
+
+
+def test_the_three_month_price_stays_three_months_at_the_founding_price(quarterly):
+    assert _price({}, "price_grow_q_747") == "price_grow_q_597"
+    assert _price({}, "price_grow_249") == "price_grow_199"                 # monthly stays monthly
+    assert _price({}, "price_grow_y_2490") == "price_grow_y_1990"           # and yearly yearly
+    quarterly["left"] = 0
+    assert _price({}, "price_grow_q_747") == "price_grow_q_747"             # no place: the list price
+    with pytest.raises(HTTPException) as e:
+        _price({}, "price_grow_q_597")                                      # never a quiet swap
+    assert e.value.status_code == 409
+    assert _price({"settings": {"founding_church": {"n": 2}}}, "price_grow_q_747") == "price_grow_q_597"
+
+
+def test_three_month_founding_prices_are_founding_prices_and_mean_their_plan(quarterly):
+    assert "price_grow_q_597" in cf.founding_price_ids() and "price_grow_q_747" not in cf.founding_price_ids()
+    p2p = fg.price_to_plan()
+    assert p2p["price_grow_q_747"] == p2p["price_grow_q_597"] == GROWING
+    for plan in fg.CHURCH_PLANS:
+        key = f"STRIPE_PRICE_ID_{plan.upper()}"
+        assert cf._env_key(plan, "_QUARTERLY") == key + "_QUARTERLY_FOUNDING"
+        assert fg.PRICE_ENV_TO_PLAN[f"{plan.upper()}_QUARTERLY"] == plan
+        assert fg.PRICE_ENV_TO_PLAN[f"{plan.upper()}_QUARTERLY_FOUNDING"] == plan
+    # The old yearly-or-not flag still reads as it did.
+    assert cf._env_key(GROWING, True).endswith("_ANNUAL_FOUNDING") and cf._env_key(GROWING, False).endswith("GROWING_FOUNDING")
+
+
+def test_checkout_takes_the_three_month_plan_key(checkout, quarterly):
+    posted, _, _ = checkout
+    _buy(plan=GROWING + "_quarterly")
+    [session] = [d for p, d in posted if p == "/checkout/sessions"]
+    assert session["line_items"] == [{"price": "price_grow_q_597", "quantity": 1}]
+
+
+def test_a_plan_with_no_three_month_price_is_not_open(checkout, prices):
+    with pytest.raises(HTTPException) as e:
+        _buy(plan=GROWING + "_quarterly")
+    assert e.value.status_code == 409
+
+
+def test_the_catalog_prices_three_months_at_three_months_with_no_discount():
+    import pricing_config
+    cat = {env: (cents, interval) for env, _lk, _n, cents, interval in sb.BOOTSTRAP_CATALOG}
+    regular, founding = pricing_config.church_price_cents(), pricing_config.church_founding_price_cents()
+    for plan in fg.CHURCH_PLANS:
+        key = f"STRIPE_PRICE_ID_{plan.upper()}"
+        assert cat[key + "_QUARTERLY"] == (regular[plan] * 3, "quarter")
+        assert cat[key + "_QUARTERLY_FOUNDING"] == (founding[plan] * 3, "quarter")
+    tiers = pricing_config.tier_price_cents()
+    for env, plan in (("STARTER", "starter"), ("PROFESSIONAL", "professional"), ("PRACTICE", "practice")):
+        assert cat[f"STRIPE_PRICE_ID_{env}_QUARTERLY"] == (tiers[plan] * 3, "quarter")
+    assert cat["STRIPE_PRICE_ID_EXTRA_LOGIN_QUARTERLY"] == (pricing_config.extra_login_cents() * 3, "quarter")
+    # Only the plans sold today: no founder seat, barber plan or ChurchSavvy price.
+    quarterly_envs = {e for e, (_c, i) in cat.items() if i == "quarter"}
+    assert not [e for e in quarterly_envs if any(x in e for x in ("FOUNDER", "SOLO", "BOOKED", "BOSS", "_CS_"))]
+    assert len(quarterly_envs) == 12
+    assert sb._recurring("quarter") == {"interval": "month", "interval_count": 3}
+    assert sb._recurring("year") == {"interval": "year"}
+
+
+def test_the_plans_answer_offers_three_months_only_where_a_price_and_its_amount_exist(quarterly, monkeypatch):
+    monkeypatch.setenv("PLAN_CHURCH_OFFERED", "1")
+    shown = {"price_grow_249": 24900, "price_grow_y_2490": 249000, "price_grow_q_747": 74700}
+
+    async def display(pid):
+        return {"unit_amount": shown[pid], "currency": "usd", "interval": "month"} if pid in shown else None
+    monkeypatch.setattr(sb, "_price_display", display)
+    out = asyncio.run(sb.billing_plans(for_type="church"))
+    grow = next(p for p in out["audience_plans"] if p["plan"] == GROWING)
+    assert grow["quarterly_price_id"] == "price_grow_q_747" and grow["quarterly_unit_amount"] == 74700
+    small = next(p for p in out["audience_plans"] if p["plan"] == SMALL)
+    assert "quarterly_price_id" not in small                               # no price set: not offered
+    assert out["price_plans"]["price_grow_q_597"] == {"plan": GROWING, "every": "quarter"}
+    assert out["price_plans"]["price_grow_q_747"]["every"] == "quarter"
+    assert out["church_founding"]["prices"][GROWING]["quarter_cents"] == 59700
+    assert out["church_offer"]["extra_login_quarter_cents"] == 4500
+    # Stripe can't show the amount: the term is left off the card.
+    del shown["price_grow_q_747"]
+    out = asyncio.run(sb.billing_plans(for_type="church"))
+    assert "quarterly_price_id" not in next(p for p in out["audience_plans"] if p["plan"] == GROWING)

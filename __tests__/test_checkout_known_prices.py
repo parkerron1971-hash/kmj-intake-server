@@ -154,3 +154,31 @@ def test_catalog_matches_the_live_ladder():
     for env_key, cents in by_env.items():
         if env_key.endswith("_ANNUAL"):
             assert cents == by_env[env_key[: -len("_ANNUAL")]] * 10, env_key
+
+
+# ─── every three months is Stripe's month x 3 ────────────────────────
+
+def test_a_three_month_price_is_created_as_three_months(monkeypatch):
+    _out, created = _run_bootstrap(monkeypatch, [])
+    made = {p["lookup_key"]: p for p in created}
+    quarter = made["solutionist_starter_quarterly"]
+    assert quarter["recurring"] == {"interval": "month", "interval_count": 3} and quarter["unit_amount"] == 23700
+    assert made["solutionist_starter_monthly"]["recurring"] == {"interval": "month"}
+    assert made["solutionist_starter_annual"]["recurring"] == {"interval": "year"}
+
+
+def test_a_monthly_price_under_a_three_month_key_is_stale(monkeypatch):
+    wrong = _price("solutionist_starter_quarterly", 23700, interval="month")        # billed monthly, not every 3
+    out, _ = _run_bootstrap(monkeypatch, [wrong])
+    assert "STRIPE_PRICE_ID_STARTER_QUARTERLY" not in out["env"]
+    assert out["mismatched"][0]["lookup_key"] == "solutionist_starter_quarterly"
+    right = dict(wrong, recurring={"interval": "month", "interval_count": 3}, id="price_q_ok")
+    out, _ = _run_bootstrap(monkeypatch, [right])
+    assert out["env"]["STRIPE_PRICE_ID_STARTER_QUARTERLY"] == "price_q_ok"
+
+
+def test_checkout_takes_a_public_plan_every_three_months(monkeypatch):
+    monkeypatch.setenv("STRIPE_PRICE_ID_STARTER_QUARTERLY", "price_starter_q")
+    assert sb._price_for_plan("starter_quarterly") == "price_starter_q"
+    import feature_gates
+    assert feature_gates.price_to_plan()["price_starter_q"] == "starter"

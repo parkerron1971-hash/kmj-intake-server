@@ -566,3 +566,19 @@ def test_the_app_is_told_the_yearly_login_price(monkeypatch):
     monkeypatch.setattr(sb, "_price_display", no_display)
     offer = asyncio.run(sb.billing_plans(for_type="church"))["church_offer"]
     assert offer["extra_login_cents"] == 1500 and offer["extra_login_year_cents"] == 15000
+
+
+def test_a_church_paying_every_three_months_buys_its_logins_that_way(stripe, monkeypatch):
+    calls, state = stripe
+    monkeypatch.setenv("STRIPE_PRICE_ID_CHURCH_GROWING_QUARTERLY", "price_grow_q")
+    monkeypatch.setenv("STRIPE_PRICE_ID_EXTRA_LOGIN_QUARTERLY", "price_login_q")
+    state["status"] = "active"
+    state["items"] = [{"id": "si_plan", "quantity": 1,
+                       "price": {"id": "price_grow_q", "recurring": {"interval": "month", "interval_count": 3}}}]
+    state["biz"]["subscription_plan"] = "price_grow_q"
+    assert cb.plan_term(state["items"]) == cb.QUARTERLY
+    out = _set(1)
+    assert ("post", "/subscription_items", {"subscription": "sub_1", "price": "price_login_q", "quantity": 1,
+                                            **PAID_TODAY}) in calls
+    assert out["cents_each"] == 4500 and out["every"] == "quarter"
+    assert cb.extra_login_cents(cb.QUARTERLY) == cb.extra_login_cents() * 3
