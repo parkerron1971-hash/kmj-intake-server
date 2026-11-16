@@ -366,3 +366,38 @@ def test_home_edition_v2_brings_the_second_edition_back(monkeypatch):
     assert 'id="room"' in html and 'id="cxTable"' not in html
     monkeypatch.setenv("HOME_EDITION", "")
     assert 'id="cxTable"' in mp.render_home()
+
+
+# ─── every three months on the pricing switch (Kevin, 2026-11-16) ─────
+
+def _quarterly(monkeypatch, plans):
+    for plan in ("starter", "professional", "practice"):
+        if plan in plans:
+            monkeypatch.setenv(f"STRIPE_PRICE_ID_{plan.upper()}_QUARTERLY", f"price_{plan}_q")
+        else:
+            monkeypatch.delenv(f"STRIPE_PRICE_ID_{plan.upper()}_QUARTERLY", raising=False)
+
+
+def test_three_months_is_not_on_the_cards_until_all_three_plans_sell_it(monkeypatch):
+    for plans in ((), ("starter", "professional")):
+        _quarterly(monkeypatch, plans)
+        html = v3.render_home_v3()
+        assert 'data-period="quarterly"' not in html and "data-quarterly" not in html and "{{QUARTER_BTN}}" not in html
+        assert "Every 3 months" not in html
+
+
+def test_three_months_sits_between_monthly_and_annual_at_three_months_price(monkeypatch):
+    import marketing_pages as mp
+    _quarterly(monkeypatch, ("starter", "professional", "practice"))
+    html = v3.render_home_v3()
+    assert html.count('data-period="quarterly"') == 1
+    assert html.index('data-period="monthly"') < html.index('data-period="quarterly"') < html.index('data-period="annual"')
+    switch = html[html.index('data-period="quarterly"'):html.index('data-period="annual"')]
+    assert ">Every 3 months</button>" in switch and "free" not in switch and "%" not in switch   # no saving is named
+    d = mp._tier_dials()
+    for plan in ("starter", "professional", "practice"):
+        dollars = int(d[plan]["price_num"])
+        assert f'data-quarterly="${dollars * 3:,} billed every 3 months"' in html, plan
+        # the figure a month is unchanged: three months is three months' price
+        assert f'data-monthly="{dollars}" data-annual="{dollars * mp.ANNUAL_MONTHS // 12}"' in html
+    assert "b.dataset.quarterly" in html and "setPeriod(b.dataset.period)" in html
