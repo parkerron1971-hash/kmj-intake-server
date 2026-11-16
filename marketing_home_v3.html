@@ -884,7 +884,8 @@ input[type=range]:focus-visible::-webkit-slider-thumb{box-shadow:0 0 0 3px var(-
 .pr-hd .h2{margin-top:20px}
 .pr-hd .lede{margin-top:18px}
 .pr-ctl{display:grid;gap:14px;justify-items:end}
-.toggle{display:inline-flex;padding:4px;border-radius:999px;background:var(--day-2);gap:2px}
+.toggle{display:inline-flex;flex-wrap:wrap;padding:4px;border-radius:999px;background:var(--day-2);gap:2px}
+@media (max-width:560px){.toggle{border-radius:24px}.toggle button{height:36px;padding:0 12px;font-size:13px}}
 .toggle button{height:40px;padding:0 18px;border-radius:999px;font-size:14px;font-weight:500;color:var(--mut-d);display:inline-flex;align-items:center;gap:8px}
 .toggle button[aria-pressed="true"]{background:var(--paper);color:var(--ink);box-shadow:0 2px 8px rgba(11,12,17,.12)}
 .toggle .sv{font:500 10.5px/1 var(--mono);padding:4px 7px;border-radius:999px;background:linear-gradient(135deg,rgba(224,64,251,.16),rgba(34,211,238,.16));color:#5B3FE0}
@@ -1412,7 +1413,7 @@ body{margin:0}
       <div><p class="eyebrow">Pricing</p><h2 class="h2" id="priceH">Every plan is <b>the whole product.</b></h2>
         <p class="lede">The tiers change how much Chief does for you each month, how deep it thinks, and the room for a team and the books.</p></div>
       <div class="pr-ctl">
-        <div class="toggle" role="group" aria-label="Billing period"><button type="button" data-period="monthly" aria-pressed="true">Monthly</button><button type="button" data-period="annual" aria-pressed="false">Annual <span class="sv">2 months free</span></button></div>
+        <div class="toggle" role="group" aria-label="Billing period"><button type="button" data-period="monthly" aria-pressed="true">Monthly</button>{{QUARTER_BTN}}<button type="button" data-period="annual" aria-pressed="false">Annual <span class="sv">2 months free</span></button></div>
         <p class="pr-for" id="prFor"></p>
       </div>
     </div>
@@ -2307,14 +2308,17 @@ function calc() {
 }
 
 /* ---------- seat + pricing ---------- */
-function setPeriod(a) {
+/* monthly, every 3 months or annual. Three months is three months' price, so the
+   figure a month stays; the line under it says the charge. */
+function setPeriod(p) {
+  const a = p === 'annual', q = p === 'quarterly';
   annual = a;
   $$('.pc-num').forEach((b) => { b.textContent = '$' + (a ? b.dataset.annual : b.dataset.monthly); });
-  $$('.price-billed').forEach((b) => { b.textContent = a ? b.dataset.annual : b.dataset.monthly; });
+  $$('.price-billed').forEach((b) => { b.textContent = a ? b.dataset.annual : q && b.dataset.quarterly ? b.dataset.quarterly : b.dataset.monthly; });
   $$('#cxTable .pp').forEach((b) => { b.textContent = '$' + (a ? b.dataset.annual : b.dataset.monthly) + '/mo'; });
-  $$('[data-period]').forEach((b) => b.setAttribute('aria-pressed', String((b.dataset.period === 'annual') === a)));
+  $$('[data-period]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.period === p)));
 }
-$$('[data-period]').forEach((b) => { b.onclick = () => setPeriod(b.dataset.period === 'annual'); });
+$$('[data-period]').forEach((b) => { b.onclick = () => setPeriod(b.dataset.period); });
 function renderPrFor() {
   const t = cur, a = /^[aeiou]/i.test(t.word) ? 'an' : 'a';
   $('#prFor').innerHTML = `<span>For ${a} ${esc(t.word)} like <b>${esc(t.biz)}</b>, most people start on Professional.</span>`;

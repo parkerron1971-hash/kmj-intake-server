@@ -145,6 +145,20 @@ def _banks_line(t: dict) -> str:
     return "Unlimited bank connections" if t["banks"] == "Unlimited" else f"{t['banks']} bank connections"
 
 
+# Every three months (Kevin, 2026-11-16: "do the business pricing cards
+# too"): three months' price, no discount. The cards' big figure is the price
+# a month, so it stays as it is; the line under it says the real charge. The
+# page offers the term only while all three plans have their 3-month Stripe
+# price set, so it never shows a way of paying that checkout would refuse.
+QUARTER_MONTHS = 3
+_QUARTER_BTN = '<button type="button" data-period="quarterly" aria-pressed="false">Every 3 months</button>'
+
+
+def _quarter_sold() -> bool:
+    import os
+    return all((os.environ.get(f"STRIPE_PRICE_ID_{plan.upper()}_QUARTERLY") or "").strip() for plan, _name in _PLANS)
+
+
 def _price_cards_html() -> str:
     """The three plan cards. Prices, annual twins, credits, the words under
     them, the analysis ladder, seats and bank connections come from the dials;
@@ -155,11 +169,13 @@ def _price_cards_html() -> str:
     credits_n = pricing_config.tier_credits()
     top = max(credits_n.values()) or 1
     cards, prev = [], None
+    quarter = _quarter_sold()
     for plan, name in _PLANS:
         t = d[plan]
         mid = plan == "professional"
         monthly = t["price_num"]
         annual_total = monthly * mp.ANNUAL_MONTHS
+        three = f' data-quarterly="${monthly * QUARTER_MONTHS:,} billed every 3 months"' if quarter else ""
         words = mp._credits_in_words(credits_n[plan], chief_works=(plan != "starter"),
                                      builds=(3 if plan == "practice" else 1))
         if plan == "practice":
@@ -181,7 +197,7 @@ def _price_cards_html() -> str:
       <div class="price-card{' is-mid' if mid else ''}">
         <div class="plan-top">{ribbon}<div class="price-name">{name}</div></div>
         <div class="pz"><b class="pc-num" data-monthly="{monthly}" data-annual="{annual_total // 12}" data-to="{monthly}" data-prefix="$">${monthly}</b><span>/month</span></div>
-        <div class="bl price-billed" data-monthly="Billed monthly" data-annual="${annual_total:,} a year, billed once">Billed monthly</div>
+        <div class="bl price-billed" data-monthly="Billed monthly" data-annual="${annual_total:,} a year, billed once"{three}>Billed monthly</div>
         <p class="ds">{_BLURB[plan]}</p>
         <div class="meter" role="img" aria-label="{t['credits']} AI actions a month"><div class="row"><b>{t['credits']}</b><span>AI actions a month</span></div><div class="bar"><i style="--w:{credits_n[plan] / top * 100:.1f}%"></i></div><small>{words}</small></div>{depth}
         <p class="inc">{_INCLUDES[plan]}</p>
@@ -418,6 +434,7 @@ def _render(edition) -> str:
             .replace("{{HERO_PROOF}}", proof)
             .replace("{{EDITION_JSON}}", ed_json)
             .replace("{{PRICE_CARDS}}", _price_cards_html())
+            .replace("{{QUARTER_BTN}}", _QUARTER_BTN if _quarter_sold() else "")
             .replace("{{COMPARE_TABLE}}", _compare_table_html())
             .replace("{{FOUNDER_STRIP}}", _founder_strip_html(founder))
             .replace("{{SEAT_SECTION}}", _seat_section_html(founder))
