@@ -39,8 +39,10 @@ NOW = datetime.now(timezone.utc)
 
 
 def _fresh(**over):
-    """A business the moment onboarding created it."""
-    row = {"id": "biz1", "owner_id": "u1", "settings": {"practitioner_name": "Ana"},
+    """A business the moment onboarding created it. Its `type` rides along,
+    as on both doors' real rows (a church never gets the trial, 2026-11-16)."""
+    row = {"id": "biz1", "owner_id": "u1", "type": "coach",
+           "settings": {"practitioner_name": "Ana"},
            "subscription_status": None, "stripe_subscription_id": None,
            "trial_ends_at": None, "comp_tier": None}
     row.update(over)

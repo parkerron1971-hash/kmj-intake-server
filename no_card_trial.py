@@ -34,6 +34,15 @@ THE SHAPE
     sample church to look around instead of this trial (2026-11-15), and a
     sample church itself never gets one: eligible() says "church_sample" /
     "sample" before anything else.
+  · No church ever gets this trial (Kevin, 2026-11-16, the day the first
+    real pastor signed up and was given one: "make sure trial is only for
+    business side not church side"). eligible() says "church" for any
+    business whose kind resolves to ministry (church_billing.is_church),
+    whatever CHURCH_SAMPLE says. A new church meets its plans on the first
+    screen (access locked / no_subscription, the app's AccessGate), and a
+    church plan's first month is charged the day it is chosen
+    (pricing_config.church_free_week). Churches already on a trial keep it:
+    only starting one is refused.
 
 WHO GETS ONE — once per person: never a business that has had any
 subscription or trial, never if the owner has had one on another
@@ -164,6 +173,24 @@ def disposable_email(email: Optional[str]) -> bool:
     return domain in _DISPOSABLE or domain in extra
 
 
+def _is_church(row: Dict[str, Any]) -> Optional[bool]:
+    """Is this business a church (its kind resolves to ministry, the same
+    test as church_billing.is_church)? The row's own `type` answers when it
+    carries one, which both doors' rows do (the signup's inserted row and
+    /billing/access's select=*). A row read without it costs one narrow
+    read; None when that read fails, so the caller can fail closed."""
+    import church_billing
+    if "type" in row:
+        return church_billing.is_church(row)
+    if not row.get("id"):
+        return False
+    rows = sb_clients.sb_get_as_service(
+        f"/businesses?id=eq.{row['id']}&select=type&limit=1")
+    if rows is None:
+        return None
+    return church_billing.is_church(rows[0] if rows else {})
+
+
 def eligible(row: Optional[Dict[str, Any]], email: Optional[str] = None) -> Optional[str]:
     """None when this business may start a no-card trial now, otherwise
     the reason it may not (logged, never shown). `email` is the person
@@ -177,6 +204,15 @@ def eligible(row: Optional[Dict[str, Any]], email: Optional[str] = None) -> Opti
         return "sample"
     if row and sample_church.applies(row, email):
         return "church_sample"
+    # No church, ever, in or out of the sample (Kevin, 2026-11-16): a church
+    # chooses its plan first. Before the trial's own switches, so the answer
+    # is the same whatever they say.
+    if row:
+        church = _is_church(row)
+        if church is None:
+            return "type_unreadable"          # fail closed: the plan screen stays
+        if church:
+            return "church"
     if not pricing_config.no_card_trial_enabled():
         return "disabled"
     if disposable_email(email):
@@ -232,6 +268,10 @@ def start(row: Optional[Dict[str, Any]], source: str = "signup",
         why = eligible(row, email)
         if why:
             logger.info(f"[no-card] not starting for {str((row or {}).get('id'))[:8]}: {why}")
+            if why in ("church", "type_unreadable"):
+                # Railway shows print() only: the first church signups after
+                # 2026-11-16 can be checked against this line.
+                print(f"[no-card] no trial for {str((row or {}).get('id'))[:8]}: {why}", flush=True)
             return None
         plan = _plan()
         now = datetime.now(timezone.utc)
@@ -253,6 +293,11 @@ def start(row: Optional[Dict[str, Any]], source: str = "signup",
         if res is None:
             # The tier mirror can trip an old CHECK (the Stripe webhook
             # has the same fallback); the trial is the part that matters.
+            # The trial's plan is always on the public ladder, which every
+            # version of businesses_tier_check allows, so this should only
+            # ever be a passing failure; said aloud so it is seen.
+            print(f"[no-card] trial write refused with tier={plan} for {row['id'][:8]}; "
+                  f"retrying without the tier mirror", flush=True)
             patch.pop("tier", None)
             res = sb_clients.sb_patch_as_service(where, patch)
         if not res:
