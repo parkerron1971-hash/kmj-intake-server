@@ -385,6 +385,9 @@ async def billing_access(business_id: str, user: AuthedUser = Depends(require_us
             # load skips this without a read.
             # A sample church never has a trial (eligible() says so too).
             # The row is select=*, so its own column answers, with no read.
+            # No church does either (eligible() says "church", 2026-11-16):
+            # it stays locked / no_subscription, which is the app's plan
+            # screen, and its own `type` answers that with no read.
             if (not church_sample and business.get("is_sample") is not True
                     and await asyncio.to_thread(
                         no_card_trial.start, business, "access", owner_email)):
@@ -1596,6 +1599,35 @@ def _ts_to_iso(ts: Optional[int]) -> Optional[str]:
     return datetime.fromtimestamp(int(ts), tz=timezone.utc).isoformat()
 
 
+async def _church_first_start(business_id: str, sub_id: Optional[str]) -> bool:
+    """Is this `active` event a church's FIRST subscription going live?
+
+    Asked of the row as it was before this event's patch:
+      · a church (church_billing.is_church, the kind of business), and
+      · no Stripe subscription yet (whatever its status: nothing, or a
+        no-card trial that ran or is running), or this very subscription
+        still at its first payment (`incomplete`, a card that needed a
+        second step).
+    A renewal, a plan change, a past-due payment recovering or a second
+    subscription after a cancelled one all answer False. Stripe can send
+    two events for one start at once; both may answer True, and
+    first_run_arc.begin() is idempotent, so one arc and at most one
+    re-stamp either way. Never raises: an unreadable row answers False."""
+    try:
+        before = await _load_business(business_id)
+    except Exception as e:  # noqa: BLE001 - a day-one nicety never fails the webhook
+        logger.warning(f"[first-run] church start check skipped for {business_id}: {e}")
+        return False
+    import church_billing
+    if not church_billing.is_church(before):
+        return False
+    held = str(before.get("stripe_subscription_id") or "").strip()
+    if not held:
+        return True
+    was = str(before.get("subscription_status") or "").strip().lower()
+    return held == str(sub_id or "").strip() and was in ("", "incomplete")
+
+
 async def _apply_subscription_state(event_type: str, sub_obj: Dict[str, Any], business_id: Optional[str]) -> None:
     """Map a Stripe subscription object onto our businesses row."""
     if not business_id:
@@ -1634,16 +1666,34 @@ async def _apply_subscription_state(event_type: str, sub_obj: Dict[str, Any], bu
     # subscriptions drop back to 'starter'. Requires the 2026-07-30
     # tier-vocab migration (the old CHECK only allowed starter|pro|
     # enterprise) — fails soft via retry-without-tier if unapplied.
+    #
+    # Every plan key in feature_gates.ALL_PLANS is the mirror's to write.
+    # Until supabase/APPLY-2026-11-16-tier-all-plans.sql the CHECK did not
+    # list the church plans, so a church's patch was refused, retried
+    # without `tier`, and the row kept whatever it held before (the first
+    # paying church kept the no-card trial's 'professional').
     plan_key = _plans.get(price_id or "")
     if status_value == "canceled":
         patch["tier"] = "starter"
     elif plan_key and status_value in ("trialing", "active"):
         patch["tier"] = plan_key
+    # A church's first start, read BEFORE the patch so the row still shows
+    # what it was before this event (see _church_first_start). Only an
+    # `active` event asks: `trialing` opens the arc for everyone below.
+    church_first_start = False
+    if status_value == "active":
+        church_first_start = await _church_first_start(business_id, sub_obj.get("id"))
     try:
         await _patch_business(business_id, patch)
     except Exception:
         # Unknown column / stale CHECK — ship the billing truth without
-        # the tier mirror rather than losing the webhook.
+        # the tier mirror rather than losing the webhook. Said aloud
+        # (Railway shows print() only): a plan the CHECK doesn't know
+        # needs its migration, and the silent fallback hid the church
+        # plans' missing one until the first church paid.
+        if "tier" in patch:
+            print(f"[billing] tier mirror refused for {str(business_id)[:8]} "
+                  f"(tier={patch['tier']}); saved without it", flush=True)
         patch.pop("tier", None)
         await _patch_business(business_id, patch)
     logger.info(f"Updated business {business_id} → {status_value} ({price_id})")
@@ -1695,12 +1745,23 @@ async def _apply_subscription_state(event_type: str, sub_obj: Dict[str, Any], bu
     # nicety would be the wrong trade. first_run_arc is sync (sb_clients
     # uses a blocking client), so it must not run on the loop.
     #
-    # A church that looked around a sample church skipped the signup door
-    # (launch_access.create_business), and a church plan is paid at
-    # checkout, so it arrives `active`, never `trialing`. Its day one is
-    # this moment: the arc opens here for exactly the homes whose sample
-    # just ended. Every other active subscription still opens nothing.
-    if status_value == "trialing" or (ended_sample and status_value == "active"):
+    # A church plan is paid at checkout, so a church arrives `active`, never
+    # `trialing`, and its day one is this moment: the day it chose its plan.
+    #   · A church that looked around a sample church skipped the signup
+    #     door (launch_access.create_business): the arc opens here for the
+    #     homes whose sample just ended.
+    #   · Every other church has had no trial since 2026-11-16 (no_card_trial
+    #     says "church"): it signed up, met its plans and paid, maybe days
+    #     later. Its signup-door arc moves to today (begin()'s one re-stamp,
+    #     before Chief's introduction, which a church can't have had while
+    #     its plans stood in front of Chief), or opens here if it has none.
+    #     Only on its FIRST subscription going live (_church_first_start):
+    #     a renewal, a plan change or a recovered payment never asks, so a
+    #     church that has been running for months can never be handed a
+    #     first week, even one with no arc row.
+    # Every other active subscription still opens nothing.
+    if status_value == "trialing" or (
+            status_value == "active" and (ended_sample or church_first_start)):
         try:
             import asyncio
             import first_run_arc

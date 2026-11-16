@@ -267,6 +267,94 @@ def sample_follow_up_body(*, church_name: str, first_name: str,
     )
 
 
+# ─── A church's welcome (2026-11-16) ────────────────────────────────
+# No church gets the no-card trial (no_card_trial.eligible says "church",
+# Kevin 2026-11-16: "make sure trial is only for business side not church
+# side"), so the ordinary welcome's "Your first 7 days on any plan are free"
+# and its three business moves are false for one. A church outside the
+# sample gets this instead: its plans come first, its first month starts the
+# day it chooses one, then Chief's welcome and the Move-in list. The
+# founding line only while a place is open, then the promise. A church that
+# already has its way in (a comp, a grandfathered owner, or a plan or trial
+# by the time a retry sends) gets the shorter version without the plans.
+# Pinned by __tests__/test_churches_no_trial.py.
+
+def _is_church(business: Dict[str, Any]) -> bool:
+    try:
+        import vertical_registry
+        return vertical_registry.resolve(str((business or {}).get("type") or "")) == "ministry"
+    except Exception:
+        return False
+
+
+def _church_needs_plan(business: Dict[str, Any]) -> bool:
+    """True while this church has no way in but choosing a plan: what the
+    app's gate says (access_state locked), with a grandfathered owner and a
+    comp never needing one. Sync (it can read); an error answers True, which
+    is every new church."""
+    try:
+        import feature_gates
+        if _is_grandfathered(str((business or {}).get("owner_id") or "") or None):
+            return False
+        state = feature_gates.access_state(business, False)
+        return state.get("state") in feature_gates.LOCKED_STATES
+    except Exception:
+        return True
+
+
+def _first_month_line() -> str:
+    """When a church plan starts charging, as checkout does it: the day it
+    is chosen (pricing_config.church_free_week off, since 2026-11-13), or
+    after the free week while that is back on."""
+    try:
+        import pricing_config
+        days = _trial_days()
+        if pricing_config.church_free_week() and days:
+            return (f"The first {days} days are free once you choose your plan, and your "
+                    f"first month starts after them.")
+    except Exception:
+        pass
+    return "Your first month starts the day you choose your plan."
+
+
+_MOVE_IN_SENTENCE = ("Chief is ready to welcome {who}, and the Move-in list walks you "
+                     "through bringing in your people, your Sundays and your giving, one "
+                     "step at a time.")
+
+
+def church_welcome_subject(church_name: str, *, needs_plan: bool = True) -> str:
+    if needs_plan:
+        return f"Welcome. {church_name} starts the day you choose its plan"
+    return f"Welcome. {church_name} is ready"
+
+
+def church_welcome_body(*, church_name: str, first_name: str, needs_plan: bool = True,
+                        founding: Optional[str] = None) -> str:
+    """The welcome for a church outside the sample church."""
+    app = app_base_url()
+    if not needs_plan:
+        middle = (f"{church_name} is set up. {_MOVE_IN_SENTENCE.format(who='you')}\n"
+                  f"   {app}/\n\n")
+    else:
+        founding = founding_line() if founding is None else founding
+        middle = (
+            f"Your account is ready. The next step is choosing a plan for {church_name}. "
+            f"The plans go by how many people come on a Sunday, and you'll see them as "
+            f"soon as you sign in.\n"
+            f"   {app}/\n\n"
+            f"{_first_month_line()} From then, {_MOVE_IN_SENTENCE.format(who=church_name)}\n\n"
+            + (f"{founding}\n\n" if founding else "")
+        )
+    return (
+        f"Hi {first_name},\n\n"
+        + middle
+        + f"{_promise()}\n\n"
+        f"Reply to this email if anything is unclear. A person reads it.\n\n"
+        f"The Solutionist System\n"
+        f"{_support_email()}"
+    )
+
+
 def trial_ending_body(*, business_name: str, first_name: str,
                       days_left: int, ends_at: datetime) -> str:
     app = app_base_url()
@@ -448,7 +536,9 @@ async def send_welcome(business: Dict[str, Any], to_email: Optional[str],
     A church that signed up into a sample church (`church_sample`, the
     signup's sample_church.applies(); None asks it, as the retry does) gets
     the sample's welcome instead (sample_welcome_body): it has no trial and
-    nothing set up to point at yet. Same key, same stamp: one welcome."""
+    nothing set up to point at yet. Any other church gets the church's
+    welcome (church_welcome_body, 2026-11-16): no trial either, its plans
+    first. Same key, same stamp: one welcome."""
     biz_id = str(business.get("id") or "")
     try:
         if not enabled():
@@ -467,10 +557,22 @@ async def send_welcome(business: Dict[str, Any], to_email: Optional[str],
             if not first or str(first[0].get("id")) != biz_id:
                 return {"sent": False, "reason": "not_first_business"}
         sample = await asyncio.to_thread(_in_sample, business, to_email, church_sample)
+        kind = None
         if sample:
+            kind = "sample_church"
             name = (business.get("name") or "").strip() or "your church"
             subject = sample_welcome_subject(name)
             body = sample_welcome_body(church_name=name, first_name=_greeting(user_name))
+        elif _is_church(business):
+            # A church outside the sample has no trial (2026-11-16): its
+            # plans come first, so the ordinary welcome's free days and
+            # business moves would be false.
+            kind = "church"
+            name = (business.get("name") or "").strip() or "your church"
+            needs_plan = await asyncio.to_thread(_church_needs_plan, business)
+            subject = church_welcome_subject(name, needs_plan=needs_plan)
+            body = church_welcome_body(church_name=name, first_name=_greeting(user_name),
+                                       needs_plan=needs_plan)
         else:
             name = (business.get("name") or "Your business").strip()
             subject = f"{name} is set up. Three moves for your first week"
@@ -480,8 +582,9 @@ async def send_welcome(business: Dict[str, Any], to_email: Optional[str],
             to_email=to_email, to_name=user_name or None,
             subject=subject, body=body)
         _stamp(biz_id, "welcome_at")
-        logger.info(f"[lifecycle] welcome sent biz={biz_id}{' (sample church)' if sample else ''}")
-        return {"sent": True, **({"kind": "sample_church"} if sample else {})}
+        logger.info(f"[lifecycle] welcome sent biz={biz_id}"
+                    f"{' (' + kind.replace('_', ' ') + ')' if kind else ''}")
+        return {"sent": True, **({"kind": kind} if kind else {})}
     except Exception as e:
         logger.warning(f"[lifecycle] welcome not sent biz={biz_id}: {e}")
         return {"sent": False, "reason": "error", "error": str(e)[:200]}

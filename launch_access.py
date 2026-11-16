@@ -382,6 +382,8 @@ def create_business(body: CreateBusinessBody,
     # moment onboarding finished. Runs BEFORE the background seeding, so
     # its settings write cannot race theirs. Never raises: a business
     # that could not get the trial meets the paywall, as before.
+    # A church never gets it (no_card_trial.eligible says "church",
+    # Kevin 2026-11-16): it meets its plans on the first screen.
     import no_card_trial
     trial = None if church_sample else no_card_trial.start(
         row, source="signup", email=getattr(user, "email", None))
@@ -407,6 +409,11 @@ def create_business(body: CreateBusinessBody,
     # A church in a sample has no first week yet: its day one is the day it
     # chooses a plan, and the Stripe webhook opens the arc then
     # (stripe_billing._apply_subscription_state, sample_church.end).
+    #
+    # Any other church opens its arc here like everyone (a church Kevin
+    # comps or grandfathers never reaches Stripe either), and its first paid
+    # subscription moves day one to the day it chose its plan
+    # (stripe_billing._church_first_start), as a trial's start does.
     try:
         if not church_sample:
             import first_run_arc
@@ -720,8 +727,16 @@ def set_comp_tier(business_id: str, body: TierBody,
     if tier is not None and tier not in feature_gates.ALL_PLANS:
         raise HTTPException(400, "comp_tier must be one of "
                                  + "|".join(feature_gates.ALL_PLANS) + "|null")
-    sb_clients.sb_patch_as_service(
+    saved = sb_clients.sb_patch_as_service(
         f"/businesses?id=eq.{business_id}", {"comp_tier": tier})
+    if saved is None:
+        # The write was refused. Until 2026-11-16 businesses_comp_tier_check
+        # did not list the church plans, and this answered ok anyway, so a
+        # church comp looked done and wasn't. Say so instead.
+        raise HTTPException(502, "The comp was not saved. If this plan is new, "
+                                 "apply supabase/APPLY-2026-11-16-tier-all-plans.sql.")
+    if not saved:
+        raise HTTPException(404, "No business with that id.")
     logger.info(f"[access] comp_tier={tier} business={business_id} reason={body.reason}")
     return {"ok": True, "business_id": business_id, "comp_tier": tier}
 
