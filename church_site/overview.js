@@ -205,7 +205,7 @@
     return 980;
   }
   function planOf(p) { for (var i = 0; i < PLANS.length; i++) if (p <= PLANS[i].max) return i; return -1; }
-  var range = PLANS.length ? document.getElementById('pk-range') : null, yearly = false, people = 160;
+  var range = PLANS.length ? document.getElementById('pk-range') : null, period = 'monthly', people = 160;
   var cards = range ? document.querySelectorAll('.plans.four .pc') : [];
   cards.forEach(function (c) { var s = document.createElement('span'); s.className = 'you'; s.textContent = 'Your size'; c.insertBefore(s, c.firstChild); });
   function showPlan() {
@@ -218,7 +218,7 @@
       go.hidden = true;
     } else {
       var P = PLANS[i];
-      nm.textContent = P.name; pr.textContent = yearly ? P.y : P.m; per.textContent = yearly ? 'a year' : 'a month';
+      nm.textContent = P.name; pr.textContent = period === 'yearly' ? P.y : period === 'quarterly' && P.q ? P.q : P.m; per.textContent = period === 'yearly' ? 'a year' : period === 'quarterly' && P.q ? 'every 3 months' : 'a month';
       fill(ul, P.items);
       go.hidden = false; go.textContent = 'Start free';
     }
@@ -233,7 +233,7 @@
     range.addEventListener('input', function () { people = peopleOf(+range.value); showPlan(); });
   }
   document.querySelectorAll('[data-billing] button[data-period]').forEach(function (b) {
-    b.addEventListener('click', function () { yearly = b.getAttribute('data-period') === 'yearly'; showPlan(); });
+    b.addEventListener('click', function () { period = b.getAttribute('data-period'); showPlan(); });
   });
 
   // the sanctuary, drawn as seats

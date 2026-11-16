@@ -614,3 +614,78 @@ def test_the_kids_cards_carry_their_own_dark_text():
     page = cs.render("kids-and-youth")
     assert re.search(r"\.k-card\{[^}]*background:#ffffff;color:#2b1d0e", page)
     assert re.search(r"\.ky-hold\{[^}]*background:#FFF1DA;color:#5c3d00", page)
+
+
+# ─── every three months on the pricing switch (Kevin, 2026-11-16) ─────
+
+def _sell_quarterly(monkeypatch, plans, founding=False):
+    for p in plans:
+        monkeypatch.setenv(f"STRIPE_PRICE_ID_{p.upper()}_QUARTERLY", f"price_{p}_q")
+        if founding:
+            monkeypatch.setenv(f"STRIPE_PRICE_ID_{p.upper()}_QUARTERLY_FOUNDING", f"price_{p}_qf")
+
+
+def test_three_months_is_not_on_the_page_until_it_is_sold(monkeypatch):
+    import feature_gates as fg
+    for p in fg.CHURCH_PLANS + ("starter", "professional", "practice"):
+        monkeypatch.delenv(f"STRIPE_PRICE_ID_{p.upper()}_QUARTERLY", raising=False)
+        monkeypatch.delenv(f"STRIPE_PRICE_ID_{p.upper()}_QUARTERLY_FOUNDING", raising=False)
+    for offered in ("0", "1"):
+        monkeypatch.setenv("PLAN_CHURCH_OFFERED", offered)
+        html = cs.render("")
+        assert 'data-period="quarterly"' not in html and "data-q=" not in html and "Every 3 months" not in html
+        assert "{{Q" not in html
+    # Half the prices is not sold: a church with no founding 3-month price would be refused at checkout.
+    _sell_quarterly(monkeypatch, fg.CHURCH_PLANS)
+    assert not cs._church_quarter() and 'data-period="quarterly"' not in cs.render("")
+
+
+def test_the_church_cards_and_the_picker_show_three_months_once_it_is_sold(monkeypatch):
+    import feature_gates as fg
+    import pricing_config
+    monkeypatch.setenv("PLAN_CHURCH_OFFERED", "1")
+    _sell_quarterly(monkeypatch, fg.CHURCH_PLANS, founding=True)
+    monkeypatch.setattr(cs, "_founding_offer", lambda: {})
+    html = cs.render("")
+    assert html.count('data-period="quarterly"') == 1 and ">Every 3 months</button>" in html
+    # Between Monthly and Yearly, and it names no discount.
+    assert html.index('data-period="monthly"') < html.index('data-period="quarterly"') < html.index('data-period="yearly"')
+    assert "% off" not in html[html.index('data-period="quarterly"'):html.index('data-period="yearly"')]
+    for plan, cents in pricing_config.church_price_cents().items():
+        month = cents // 100
+        assert f'data-q="{month * 3:,}" data-m="{month:,}"' in html, plan       # three months' price, no discount
+    assert "'Billed every 3 months · cancel anytime'" in html and "'every 3 months'" in html
+    picker = cs._picker_data()["plans"]
+    assert [p["q"] for p in picker] == [f"${c // 100 * 3:,}" for c in pricing_config.church_price_cents().values()]
+    assert "P.q" in cs._read("overview.js")
+
+
+def test_the_founding_cards_lead_with_the_founding_three_months(monkeypatch):
+    import feature_gates as fg
+    import pricing_config
+    monkeypatch.setenv("PLAN_CHURCH_OFFERED", "1")
+    _sell_quarterly(monkeypatch, fg.CHURCH_PLANS, founding=True)
+    founding = {p: c // 100 * 100 for p, c in pricing_config.church_founding_price_cents().items()}
+    monkeypatch.setattr(cs, "_founding_offer", lambda: {"prices": founding, "left": 6, "spots": 10, "ends": None})
+    html = cs._plan_cards()
+    regular = pricing_config.church_price_cents()
+    for plan in fg.CHURCH_PLANS:
+        f, r = founding[plan] // 100, regular[plan] // 100
+        assert f'data-q="{f * 3:,}" data-m="{f:,}"' in html, plan
+        assert f'data-q="{r * 3:,}" data-m="{r:,}"' in html, plan
+        assert f'data-q="Save ${(r - f) * 3:,} every 3 months"' in html, plan
+    assert cs._picker_data()["plans"][1]["q"] == f"${founding['church_growing'] // 100 * 3:,}"
+
+
+def test_the_public_three_show_three_months_only_when_all_three_are_sold(monkeypatch):
+    monkeypatch.setenv("PLAN_CHURCH_OFFERED", "0")
+    _sell_quarterly(monkeypatch, ("starter", "professional"))
+    monkeypatch.delenv("STRIPE_PRICE_ID_PRACTICE_QUARTERLY", raising=False)
+    assert 'data-period="quarterly"' not in cs.render("")
+    _sell_quarterly(monkeypatch, ("practice",))
+    html = cs.render("")
+    tokens = cs._plan_tokens()
+    assert 'data-period="quarterly"' in html
+    for key in ("STARTER", "PRO", "SOL"):
+        price = int(tokens[f"P_{key}"])
+        assert tokens[f"Q_{key}"] == f'data-q="{price * 3:,}" ' and tokens[f"Q_{key}"] in html
