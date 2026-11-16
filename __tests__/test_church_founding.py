@@ -522,3 +522,31 @@ def test_the_catalog_carries_the_regular_and_the_founding_prices():
         assert cat[key + "_FOUNDING"][0] == f"solutionist_{plan}_monthly"
         assert cf._env_key(plan, False) == key + "_FOUNDING"
         assert cf._env_key(plan, True) == key + "_ANNUAL_FOUNDING"
+
+
+# ─── the Billing page can find a founding church's own plan ───────────
+
+def test_billing_plans_names_the_plan_and_term_of_every_price(monkeypatch):
+    """A founding church's subscription holds the FOUNDING price id, which no
+    plan entry carries. /billing/plans says what every id is, so the page
+    shows the plan's name and marks its card, not a raw price id."""
+    import feature_gates
+    for key in feature_gates.PRICE_ENV_TO_PLAN:
+        monkeypatch.delenv(f"STRIPE_PRICE_ID_{key}", raising=False)
+    monkeypatch.setenv("STRIPE_PRICE_ID_CHURCH_GROWING", "price_grow_249")
+    monkeypatch.setenv("STRIPE_PRICE_ID_CHURCH_GROWING_FOUNDING", "price_grow_199")
+    monkeypatch.setenv("STRIPE_PRICE_ID_CHURCH_GROWING_ANNUAL_FOUNDING", "price_grow_1990")
+    monkeypatch.setenv("STRIPE_PRICE_ID_PROFESSIONAL_ANNUAL", "price_pro_year")
+    monkeypatch.setenv("STRIPE_PRICE_IDS_KEPT", "price_old=church_large")
+    assert sb._price_plans() == {
+        "price_grow_249": {"plan": "church_growing", "every": "month"},
+        "price_grow_199": {"plan": "church_growing", "every": "month"},
+        "price_grow_1990": {"plan": "church_growing", "every": "year"},
+        "price_pro_year": {"plan": "professional", "every": "year"},
+        "price_old": {"plan": "church_large", "every": None},
+    }
+
+    async def no_display(pid):
+        return None
+    monkeypatch.setattr(sb, "_price_display", no_display)
+    assert asyncio.run(sb.billing_plans())["price_plans"]["price_grow_199"]["plan"] == "church_growing"

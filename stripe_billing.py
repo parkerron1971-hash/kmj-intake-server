@@ -468,6 +468,26 @@ async def _plan_entry(plan: str) -> Dict[str, Any]:
     return entry
 
 
+def _price_plans() -> Dict[str, Dict[str, Optional[str]]]:
+    """Every plan price id we hold: {price_id: {plan, every}}, `every` being
+    "month" or "year" (None for a retired price, whose term isn't written
+    down). Read from the names of the env vars, so it asks Stripe nothing.
+
+    The Billing page finds a business's own card by this. Without it the page
+    knew only each plan's regular monthly and yearly ids, so a church on a
+    FOUNDING price (a different id, church_founding) was shown a raw price id
+    where its plan's name belongs and no card marked as its own."""
+    import feature_gates
+    out: Dict[str, Dict[str, Optional[str]]] = {}
+    for env_key, plan in feature_gates.PRICE_ENV_TO_PLAN.items():
+        pid = (os.environ.get(f"STRIPE_PRICE_ID_{env_key}") or "").strip()
+        if pid:
+            out[pid] = {"plan": plan, "every": "year" if "_ANNUAL" in env_key else "month"}
+    for pid, plan in feature_gates.price_to_plan().items():
+        out.setdefault(pid, {"plan": plan, "every": None})
+    return out
+
+
 def _plan_detail(fg, limits: Dict[str, Any], p: str) -> Dict[str, Any]:
     import chief_models
     lim = limits.get(p) or {}
@@ -553,7 +573,10 @@ async def billing_plans(for_type: Optional[str] = None):
         import asyncio
         import church_founding
         import pricing_config
+        import church_billing
         church_offer = {**pricing_config.church_offer(),
+                        # One extra login on a plan paid by the year (church_billing).
+                        "extra_login_year_cents": church_billing.extra_login_cents(church_billing.YEARLY),
                         "names": {p: _plan_display(p) for p in fg.CHURCH_PLANS}}
         # The founding churches' price: how many places are left (None while
         # the offer is off or the count can't be read: nothing is promised).
@@ -571,6 +594,7 @@ async def billing_plans(for_type: Optional[str] = None):
             "audience_plans": audience,
             "church_offer": church_offer,
             "church_founding": church_founding_state,
+            "price_plans": _price_plans(),
             "features_by_plan": features_by_plan,
             "marketing_by_plan": marketing_by_plan,
             "plan_details": plan_details,
@@ -654,12 +678,64 @@ def _held_subscription(biz: Dict[str, Any]) -> str:
     return sub_id if sub_id and biz.get("subscription_status") in HOLDS_A_SUBSCRIPTION else ""
 
 
+def _term_of(price: Optional[Dict[str, Any]]) -> tuple:
+    """How often a Stripe price bills: ("month", 1), ("year", 1), and
+    ("month", 3) for every three months. Twelve months is a year. ("", 1)
+    when the price carries no interval."""
+    rec = (price or {}).get("recurring") or {}
+    interval = str(rec.get("interval") or "")
+    try:
+        count = int(rec.get("interval_count") or 1)
+    except (TypeError, ValueError):
+        count = 1
+    if interval == "month" and count == 12:
+        return ("year", 1)
+    return (interval, count)
+
+
+async def _price(price_id: str) -> Optional[Dict[str, Any]]:
+    """A Stripe price as Stripe holds it (its amount and how often it bills),
+    or None when it can't be read: the caller then does what it did before it
+    could ask, so a read here never stops a plan change."""
+    try:
+        return await _stripe_get(f"/prices/{quote(price_id, safe='')}", [])
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"price {price_id} unreadable, switching without it: {type(e).__name__}: {e}")
+        return None
+
+
+# An upgrade is paid for the day it is taken (Kevin, 2026-11-16: "Yes build").
+# Stripe's own default puts the difference on the NEXT bill, and on a yearly
+# plan the next bill is the renewal: Starter to The Solutionist in month two
+# was ten months on the higher plan before a cent of the difference was owed,
+# and a cancel before that bill meant it never was. So a move to a dearer
+# price on the same billing term is invoiced now, and it only happens if the
+# card takes it (error_if_incomplete: Stripe answers 402 and changes nothing).
+# A move to a cheaper price still leaves its credit for the next bill, and a
+# change of term (monthly to yearly) is charged at once by Stripe already.
+PAID_TODAY = {"proration_behavior": "always_invoice", "payment_behavior": "error_if_incomplete"}
+CARD_REFUSED = ("Your card didn't take the charge, so nothing has changed. "
+                "Update your card under Manage Subscription and try again, "
+                "or write to us and we'll help.")
+
+
+def _costs_more(old: Optional[Dict[str, Any]], new: Optional[Dict[str, Any]]) -> bool:
+    try:
+        return int((new or {}).get("unit_amount") or 0) > int((old or {}).get("unit_amount") or 0)
+    except (TypeError, ValueError):
+        return False
+
+
 async def _switch_plan(biz: Dict[str, Any], sub_id: str, price_id: str,
                        plan: Optional[str]) -> Optional[Dict[str, Any]]:
     """Move the business's one subscription to this price. None when Stripe
     says that subscription has already ended, so the row was behind and
     Checkout is the right door after all. The webhook writes the change too;
-    this writes it now so the page shows it at once."""
+    this writes it now so the page shows it at once.
+
+    A dearer price on the same term is charged today (PAID_TODAY). A change
+    of term takes a church's extra office logins with it, because Stripe
+    holds one subscription to one billing term (church_billing.logins_for_term)."""
     import billing_limits
     import feature_gates
     path = f"/subscriptions/{quote(sub_id, safe='')}"
@@ -677,13 +753,30 @@ async def _switch_plan(biz: Dict[str, Any], sub_id: str, price_id: str,
     name = billing_limits.PLAN_DISPLAY.get(plan or "", (plan or "your new plan").title())
     if (item.get("price") or {}).get("id") == price_id:
         return {"switched": True, "changed": False, "plan": plan, "plan_name": name}
-    updated = await _stripe_post(path, {
+    old_price = item.get("price") or {}
+    new_price = await _price(price_id)
+    form: Dict[str, Any] = {
         "items": [{"id": item["id"], "price": price_id}],
         "proration_behavior": "create_prorations",
         "cancel_at_period_end": False,
-    })
+    }
+    charged_today = False
+    if new_price is not None and _term_of(new_price)[0]:
+        if _term_of(new_price) != _term_of(old_price):
+            import church_billing
+            form["items"] += church_billing.logins_for_term(items, _term_of(new_price))
+        elif sub.get("status") == "active" and _costs_more(old_price, new_price):
+            form.update(PAID_TODAY)
+            charged_today = True
+    try:
+        updated = await _stripe_post(path, form)
+    except HTTPException as e:
+        if charged_today and e.status_code == 402:
+            raise HTTPException(402, CARD_REFUSED)
+        raise
     await _apply_subscription_state("customer.subscription.updated", updated, biz["id"])
-    return {"switched": True, "changed": True, "plan": plan, "plan_name": name}
+    return {"switched": True, "changed": True, "plan": plan, "plan_name": name,
+            "charged_today": charged_today}
 
 
 @router.post("/checkout")
@@ -1764,6 +1857,10 @@ BOOTSTRAP_CATALOG = [
     ("STRIPE_PRICE_ID_CHURCH_LARGE_ANNUAL_FOUNDING",       "solutionist_church_large_annual",        "Solutionist Large Church",       699000, "year"),
     # One more office login on a church plan, $15 a month each (church_billing).
     ("STRIPE_PRICE_ID_EXTRA_LOGIN",               "solutionist_extra_login_monthly",        "Solutionist extra office login", 1500,   "month"),
+    # The same login on a church plan paid by the year: ten months' worth, as
+    # the plans are. Stripe holds one subscription to one billing term, so a
+    # yearly church can't carry the monthly login price (2026-11-16).
+    ("STRIPE_PRICE_ID_EXTRA_LOGIN_ANNUAL",        "solutionist_extra_login_annual",         "Solutionist extra office login", 15000,  "year"),
 ]
 
 

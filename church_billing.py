@@ -7,7 +7,10 @@ Pdg8hF4pB5n6efoFQmzd8d):
     for a church between sizes that doesn't want to move up a plan. It is a
     second item on the church's own subscription, so Stripe prorates it and
     the webhook keeps the count (businesses.settings.extra_logins), which
-    billing_limits.can_add_seat adds to the plan's logins.
+    billing_limits.can_add_seat adds to the plan's logins. Stripe holds one
+    subscription to one billing term, so the login has a price for each term
+    the plans are sold in (LOGIN_PRICE_ENVS): a church paying by the year
+    pays for its logins by the year. A login added is paid for that day.
   * The move from another system: three months of the plan
     (church_move_months), free for the first five churches that ask (the
     founding churches, founding_church_moves). Paid or free, the request
@@ -64,17 +67,69 @@ def is_church(biz: Optional[Dict[str, Any]]) -> bool:
     return vertical_registry.resolve((biz or {}).get("type") or "") == "ministry"
 
 
-def extra_login_price() -> str:
-    return (os.environ.get("STRIPE_PRICE_ID_EXTRA_LOGIN") or "").strip()
+# A term is how often a price bills, as stripe_billing._term_of reads it.
+MONTHLY = ("month", 1)
+YEARLY = ("year", 1)
+LOGIN_PRICE_ENVS = {MONTHLY: "STRIPE_PRICE_ID_EXTRA_LOGIN",
+                    YEARLY: "STRIPE_PRICE_ID_EXTRA_LOGIN_ANNUAL"}
+
+
+def extra_login_price(term: tuple = MONTHLY) -> str:
+    """The login's Stripe price for a plan billed on this term, or ""."""
+    env = LOGIN_PRICE_ENVS.get(tuple(term))
+    return (os.environ.get(env) or "").strip() if env else ""
+
+
+def extra_login_prices() -> set:
+    """Every login price that is set, whichever term it bills on."""
+    return {p for term in LOGIN_PRICE_ENVS if (p := extra_login_price(term))}
+
+
+def extra_login_cents(term: tuple = MONTHLY) -> int:
+    """What one extra login costs each time a plan on this term bills: the
+    monthly price, or ten months of it for a year, as the plans are."""
+    cents = pricing_config.extra_login_cents()
+    if tuple(term) == YEARLY:
+        import marketing_pages as mp
+        return cents * mp.ANNUAL_MONTHS
+    return cents
+
+
+def _price_id(item) -> Optional[str]:
+    return ((item or {}).get("price") or {}).get("id")
 
 
 def extra_login_quantity(items) -> int:
     """How many extra logins a subscription's items carry."""
-    price = extra_login_price()
-    if not price:
+    prices = extra_login_prices()
+    if not prices:
         return 0
-    return sum(int(it.get("quantity") or 0) for it in (items or [])
-               if ((it.get("price") or {}).get("id")) == price)
+    return sum(int(it.get("quantity") or 0) for it in (items or []) if _price_id(it) in prices)
+
+
+def plan_term(items) -> tuple:
+    """The term the church's plan bills on, from its subscription's items.
+    Monthly when it can't be told, which is what every plan was."""
+    import stripe_billing as sb
+    catalog = feature_gates.price_to_plan()
+    plan_item = next((it for it in (items or []) if _price_id(it) in catalog), None)
+    term = sb._term_of((plan_item or {}).get("price"))
+    return term if term[0] else MONTHLY
+
+
+def logins_for_term(items, term: tuple) -> list:
+    """A plan is changing term (monthly to yearly, or back): the item changes
+    that take its extra logins along, [] when it has none. Refused, before
+    Stripe is asked, when the logins have no price on the new term."""
+    prices = extra_login_prices()
+    held = [it for it in (items or []) if _price_id(it) in prices]
+    if not held:
+        return []
+    to = extra_login_price(term)
+    if not to:
+        raise HTTPException(409, "Your extra office logins can't follow that change from here yet. "
+                                 "Write to us and we'll switch you over.")
+    return [{"id": it["id"], "price": to} for it in held if _price_id(it) != to]
 
 
 async def _merge_setting(business_id: str, key: str, value: Any) -> None:
@@ -134,34 +189,49 @@ async def _stripe_delete(path: str) -> Dict[str, Any]:
 @router.post("/extra-logins")
 async def set_extra_logins(body: ExtraLoginsBody, user: AuthedUser = Depends(require_user)):
     """Set how many office logins the church buys on top of its plan. A second
-    item on its subscription at $15 a month each, prorated by Stripe."""
+    item on its subscription, priced for the term the plan bills on: $15 a
+    month each, or ten months of that for a year. More logins are paid for
+    today, for what is left of the term, and only added if the card takes it
+    (stripe_billing.PAID_TODAY); fewer leave a credit for the next bill."""
     import stripe_billing as sb
     biz = await _church_on_a_plan(body.business_id, user)
-    price = extra_login_price()
-    if not price:
+    held = extra_login_prices()
+    if not held:
         raise HTTPException(409, "Extra office logins aren't open yet.")
     sub_id = (biz.get("stripe_subscription_id") or "").strip()
     if not sub_id:
         raise HTTPException(409, "Extra office logins are added to a paid church plan.")
     sub = await sb._stripe_get(f"/subscriptions/{sub_id}", [])
     items = ((sub.get("items") or {}).get("data")) or []
-    item = next((it for it in items if ((it.get("price") or {}).get("id")) == price), None)
-    if item and body.count == 0:
-        await _stripe_delete(f"/subscription_items/{item['id']}")
-    elif item:
-        await sb._stripe_post(f"/subscription_items/{item['id']}",
-                              {"quantity": body.count, "proration_behavior": "create_prorations"})
-    elif body.count > 0:
-        await sb._stripe_post("/subscription_items", {"subscription": sub_id, "price": price,
-                                                     "quantity": body.count,
-                                                     "proration_behavior": "create_prorations"})
+    term = plan_term(items)
+    price = extra_login_price(term)
+    item = next((it for it in items if _price_id(it) in held), None)
+    had = int((item or {}).get("quantity") or 0)
+    if body.count > had and not price:
+        raise HTTPException(409, "Extra office logins aren't open on a plan paid this way yet. "
+                                 "Write to us and we'll add them for you.")
+    paid_today = body.count > had and sub.get("status") == "active"
+    how = dict(sb.PAID_TODAY) if paid_today else {"proration_behavior": "create_prorations"}
+    try:
+        if item and body.count == 0:
+            await _stripe_delete(f"/subscription_items/{item['id']}")
+        elif item:
+            await sb._stripe_post(f"/subscription_items/{item['id']}", {"quantity": body.count, **how})
+        elif body.count > 0:
+            await sb._stripe_post("/subscription_items", {"subscription": sub_id, "price": price,
+                                                         "quantity": body.count, **how})
+    except HTTPException as e:
+        if paid_today and e.status_code == 402:
+            raise HTTPException(402, sb.CARD_REFUSED)
+        raise
     # The webhook writes the same number when Stripe confirms; this makes the
     # new login usable now instead of a webhook later.
     await _merge_setting(str(biz["id"]), EXTRA_LOGINS, body.count or None)
     base = feature_gates._limits_of(feature_gates.plan_of(biz)).get("max_seats")
     return {"ok": True, "extra_logins": body.count,
             "max_seats": (base + body.count) if base is not None else None,
-            "cents_each": pricing_config.extra_login_cents()}
+            "cents_each": extra_login_cents(term), "every": term[0],
+            "charged_today": paid_today}
 
 
 # ─── The move ─────────────────────────────────────────────────────────
