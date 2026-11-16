@@ -298,6 +298,8 @@ footer nav a:hover{text-decoration-color:#C9CDD6 !important}
 }
 .bt[aria-pressed="true"]{background:#FFFFFF;color:#0B0C11;box-shadow:0 2px 8px rgba(11,12,17,.12)}
 .bt[aria-pressed="false"]{background:transparent;color:#5A5E6B}
+[data-billing]{flex-wrap:wrap;justify-content:flex-end}
+@media(max-width:560px){[data-billing]{border-radius:24px!important}.bt{height:36px!important;padding:0 12px!important;font-size:13px!important}}
 /* meet chief */
 .mc-aur{position:absolute;inset:0;pointer-events:none}
 .mc-aur i{position:absolute;border-radius:50%;mix-blend-mode:screen}
@@ -704,7 +706,7 @@ That's what a church is for. Our mission is to hold every part of church life to
 <div style="flex: 0.8 1 300px; min-width: 0; display: flex; flex-direction: column; gap: 14px; align-items: flex-end">
 <div role="group" aria-label="Billing period" data-billing style="display: inline-flex; padding: 4px; border-radius: 999px; background: #E5E5EB; gap: 2px">
 <button type="button" data-period="monthly" aria-pressed="true" class="bt" style="font-family: inherit; border: 0; cursor: pointer; height: 40px; padding: 0 18px; border-radius: 999px; font-size: 14px; font-weight: 500; display: inline-flex; align-items: center; gap: 8px; ">Monthly</button>
-<button type="button" data-period="yearly" aria-pressed="false" class="bt" style="font-family: inherit; border: 0; cursor: pointer; height: 40px; padding: 0 18px; border-radius: 999px; font-size: 14px; font-weight: 500; display: inline-flex; align-items: center; gap: 8px; ">Yearly <span class="mono" style="font-size: 10.5px; padding: 4px 7px; border-radius: 999px; background: linear-gradient(135deg, rgba(224,64,251,0.16), rgba(34,211,238,0.16)); color: #5B3FE0">2 months free</span></button>
+{{QUARTER_BUTTON}}<button type="button" data-period="yearly" aria-pressed="false" class="bt" style="font-family: inherit; border: 0; cursor: pointer; height: 40px; padding: 0 18px; border-radius: 999px; font-size: 14px; font-weight: 500; display: inline-flex; align-items: center; gap: 8px; ">Yearly <span class="mono" style="font-size: 10.5px; padding: 4px 7px; border-radius: 999px; background: linear-gradient(135deg, rgba(224,64,251,0.16), rgba(34,211,238,0.16)); color: #5B3FE0">2 months free</span></button>
 </div>
 <p style="margin: 0; display: flex; align-items: center; gap: 9px; font-size: 12px; color: #5A5E6B"><span style="width: 7px; height: 7px; border-radius: 2px; background: linear-gradient(135deg, #E040FB, #7C5CFF, #22D3EE)"></span><span>Prices for <b style="color: #0B0C11; font-weight: 500">churches and ministries</b>, in US dollars</span></p>
 </div>
@@ -714,7 +716,7 @@ That's what a church is for. Our mission is to hold every part of church life to
 {{#PLAN_CARDS}}<div class="plans">
 <div class="pc">
 <div style="display: flex; justify-content: space-between; align-items: center; min-height: 24px"><span class="pname">Starter</span></div>
-<div class="pz"><b>$<span class="pnum" data-m="{{P_STARTER}}" data-y="{{Y_STARTER}}">{{P_STARTER}}</span></b><span class="pper">a month</span></div>
+<div class="pz"><b>$<span class="pnum" {{Q_STARTER}}data-m="{{P_STARTER}}" data-y="{{Y_STARTER}}">{{P_STARTER}}</span></b><span class="pper">a month</span></div>
 <div class="pbl">Billed monthly · cancel anytime</div>
 <div class="pds">One person running the church office.</div>
 <div class="mtr"><div class="mrow"><b>{{C_STARTER}}</b><span>AI actions a month</span></div><div class="mbar"><i style="width: {{W_STARTER}}%"></i></div><small>About {{CONV_STARTER}} messages to Chief.</small></div>
@@ -732,7 +734,7 @@ That's what a church is for. Our mission is to hold every part of church life to
 
 <div class="pc mid">
 <div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 10px; min-height: 24px"><span class="pname">Professional</span><span class="prib">3 logins · your own number</span></div>
-<div class="pz"><b>$<span class="pnum" data-m="{{P_PRO}}" data-y="{{Y_PRO}}">{{P_PRO}}</span></b><span class="pper">a month</span></div>
+<div class="pz"><b>$<span class="pnum" {{Q_PRO}}data-m="{{P_PRO}}" data-y="{{Y_PRO}}">{{P_PRO}}</span></b><span class="pper">a month</span></div>
 <div class="pbl">Billed monthly · cancel anytime</div>
 <div class="pds">A pastor, an admin and a treasurer.</div>
 <div class="mtr"><div class="mrow"><b>{{C_PRO}}</b><span>AI actions a month</span></div><div class="mbar"><i style="width: {{W_PRO}}%"></i></div><small>About {{CONV_PRO}} messages, room to draft for every shepherd and leader.</small></div>
@@ -751,7 +753,7 @@ That's what a church is for. Our mission is to hold every part of church life to
 
 <div class="pc">
 <div style="display: flex; justify-content: space-between; align-items: center; min-height: 24px"><span class="pname">Solutionist</span></div>
-<div class="pz"><b>$<span class="pnum" data-m="{{P_SOL}}" data-y="{{Y_SOL}}">{{P_SOL}}</span></b><span class="pper">a month</span></div>
+<div class="pz"><b>$<span class="pnum" {{Q_SOL}}data-m="{{P_SOL}}" data-y="{{Y_SOL}}">{{P_SOL}}</span></b><span class="pper">a month</span></div>
 <div class="pbl">Billed monthly · cancel anytime</div>
 <div class="pds">A staffed church, with its accountant.</div>
 <div class="mtr"><div class="mrow"><b>{{C_SOL}}</b><span>AI actions a month</span></div><div class="mbar"><i style="width: {{W_SOL}}%"></i></div><small>About {{CONV_SOL}} messages, Chief across every ministry.</small></div>
@@ -860,18 +862,24 @@ That's what a church is for. Our mission is to hold every part of church life to
 </div>
 
 <script>
-/* the billing switch: monthly or yearly prices, from the numbers on each card */
+/* the billing switch: monthly, every 3 months or yearly prices, from the numbers on each card */
 (function () {
   var group = document.querySelector('[data-billing]');
   if (!group) return;
   var buttons = group.querySelectorAll('button[data-period]');
-  function show(yearly) {
-    buttons.forEach(function (b) { b.setAttribute('aria-pressed', String((b.getAttribute('data-period') === 'yearly') === yearly)); });
-    document.querySelectorAll('.pnum').forEach(function (n) { n.textContent = yearly ? n.getAttribute('data-y') : n.getAttribute('data-m'); });
-    document.querySelectorAll('.pper').forEach(function (n) { n.textContent = yearly ? 'a year' : 'a month'; });
-    document.querySelectorAll('.pbl').forEach(function (n) { n.textContent = yearly ? 'Billed yearly · 2 months free' : 'Billed monthly · cancel anytime'; });
+  var WORDS = {
+    monthly: ['m', 'a month', 'Billed monthly · cancel anytime'],
+    quarterly: ['q', 'every 3 months', 'Billed every 3 months · cancel anytime'],
+    yearly: ['y', 'a year', 'Billed yearly · 2 months free']
+  };
+  function show(period) {
+    var w = WORDS[period] || WORDS.monthly;
+    buttons.forEach(function (b) { b.setAttribute('aria-pressed', String(b.getAttribute('data-period') === period)); });
+    document.querySelectorAll('.pnum').forEach(function (n) { var v = n.getAttribute('data-' + w[0]); n.textContent = v != null ? v : n.getAttribute('data-m'); });
+    document.querySelectorAll('.pper').forEach(function (n) { n.textContent = w[1]; });
+    document.querySelectorAll('.pbl').forEach(function (n) { n.textContent = w[2]; });
   }
-  buttons.forEach(function (b) { b.addEventListener('click', function () { show(b.getAttribute('data-period') === 'yearly'); }); });
+  buttons.forEach(function (b) { b.addEventListener('click', function () { show(b.getAttribute('data-period')); }); });
 })();
 </script>
 <script>

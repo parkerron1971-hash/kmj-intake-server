@@ -176,6 +176,37 @@ def _read(name: str) -> str:
     return (DIR / name).read_text(encoding="utf-8")
 
 
+# Every three months (Kevin, 2026-11-16: "need to be on the site as well
+# because they may pay for three months"): three months' price, no discount.
+# The page offers the term only when checkout can sell it, which is when the
+# Stripe price is set, so it never shows a price that would be refused.
+QUARTER_MONTHS = 3
+_PUBLIC_THREE = ("starter", "professional", "practice")
+_QUARTER_BUTTON = (
+    '<button type="button" data-period="quarterly" aria-pressed="false" class="bt" style="font-family: inherit; '
+    'border: 0; cursor: pointer; height: 40px; padding: 0 18px; border-radius: 999px; font-size: 14px; '
+    'font-weight: 500; display: inline-flex; align-items: center; gap: 8px; ">Every 3 months</button>\n')
+
+
+def _quarter_sold(plans, founding: bool = False) -> bool:
+    """Whether every one of these plans has its three-month Stripe price set
+    (and, for the founding churches' prices, its founding one too)."""
+    ends = ("_QUARTERLY", "_QUARTERLY_FOUNDING") if founding else ("_QUARTERLY",)
+    return all((os.environ.get(f"STRIPE_PRICE_ID_{p.upper()}{end}") or "").strip() for p in plans for end in ends)
+
+
+def _church_quarter() -> bool:
+    """The four church cards show a three-month price: every size has one, at
+    the regular price and at the founding price the cards may be leading with."""
+    import feature_gates as fg
+    return _quarter_sold(fg.CHURCH_PLANS, founding=True)
+
+
+def _q(value: str, on: bool) -> str:
+    """The three-month figure on a price, for the switch; nothing when the term isn't sold."""
+    return f'data-q="{value}" ' if on else ""
+
+
 def _plan_tokens() -> Dict[str, str]:
     """Prices, yearly prices, AI actions, messages to Chief and meter widths,
     from the dials. Messages are credits over what a message charges on
@@ -195,6 +226,7 @@ def _plan_tokens() -> Dict[str, str]:
         price = int(dials[plan]["price_num"])
         out[f"P_{key}"] = str(price)
         out[f"Y_{key}"] = f"{price * mp.ANNUAL_MONTHS:,}"
+        out[f"Q_{key}"] = _q(f"{price * QUARTER_MONTHS:,}", _quarter_sold(_PUBLIC_THREE))
         out[f"C_{key}"] = dials[plan]["credits"]
         out[f"CONV_{key}"] = f"{mp._about(credits[plan] // per_turn):,}"
         out[f"W_{key}"] = str(max(4, round(credits[plan] / top * 100)))
@@ -417,10 +449,12 @@ def _founding_band(offer: Dict[str, object]) -> str:
 
 
 def _saving_words(regular: int, founding: int) -> Dict[str, str]:
-    """'Save $50 a month · $600 a year' monthly, 'Save $500 a year' yearly."""
+    """'Save $50 a month · $600 a year' monthly, 'Save $150 every 3 months',
+    'Save $500 a year' yearly."""
     import marketing_pages as mp
     off = regular - founding
     return {"m": f"Save ${_dollars(off)} a month · ${_dollars(off * 12)} a year",
+            "q": f"Save ${_dollars(off * QUARTER_MONTHS)} every 3 months",
             "y": f"Save ${_dollars(off * mp.ANNUAL_MONTHS)} a year"}
 
 
@@ -442,6 +476,7 @@ def _plan_cards() -> str:
     per_turn = pricing_config.credits_per_message()
     offer = _founding_offer()
     founding = offer.get("prices") or {}
+    quarter = _church_quarter()
     cards = []
     for i, plan in enumerate(plans):
         lit = i == 1
@@ -449,6 +484,7 @@ def _plan_cards() -> str:
         on = _DEPTH_DOTS.get(label, 1)
         dots = "".join('<i class="on"></i>' if n < on else "<i></i>" for n in range(3))
         month, year = _dollars(prices[plan]), _dollars(prices[plan] * mp.ANNUAL_MONTHS)
+        three = _q(_dollars(prices[plan] * QUARTER_MONTHS), quarter)
         conv = f"{mp._about(credits[plan] // per_turn):,}"
         width = max(4, round(credits[plan] / top * 100))
         line = _METER_LINES[min(i, len(_METER_LINES) - 1)]
@@ -458,17 +494,18 @@ def _plan_cards() -> str:
         if deal:
             fm, fy = _dollars(founding[plan]), _dollars(founding[plan] * mp.ANNUAL_MONTHS)
             save = _saving_words(prices[plan], founding[plan])
+            fq = _q(_dollars(founding[plan] * QUARTER_MONTHS), quarter)
             head = '<span class="fchip">Founding price</span>'
-            price = (f'<div class="preg">Regular price <s>$<span class="pnum" data-m="{month}" data-y="{year}">{month}</span></s></div>\n'
-                     f'<div class="pz"><b>$<span class="pnum" data-m="{fm}" data-y="{fy}">{fm}</span></b>'
+            price = (f'<div class="preg">Regular price <s>$<span class="pnum" {three}data-m="{month}" data-y="{year}">{month}</span></s></div>\n'
+                     f'<div class="pz"><b>$<span class="pnum" {fq}data-m="{fm}" data-y="{fy}">{fm}</span></b>'
                      '<span class="pper">a month</span></div>\n'
-                     f'<div class="psave"><span class="pnum" data-m="{save["m"]}" data-y="{save["y"]}">{save["m"]}</span></div>\n'
+                     f'<div class="psave"><span class="pnum" {_q(save["q"], quarter)}data-m="{save["m"]}" data-y="{save["y"]}">{save["m"]}</span></div>\n'
                      '<div class="pbl">Billed monthly · cancel anytime</div>\n'
                      '<div class="pkeep">Your price stays locked for as long as you stay.</div>\n')
             go = "Claim a founding place"
         else:
             head = ""
-            price = (f'<div class="pz"><b>$<span class="pnum" data-m="{month}" data-y="{year}">{month}</span></b>'
+            price = (f'<div class="pz"><b>$<span class="pnum" {three}data-m="{month}" data-y="{year}">{month}</span></b>'
                      '<span class="pper">a month</span></div>\n'
                      '<div class="pbl">Billed monthly · cancel anytime</div>\n')
             go = "Start free"
@@ -633,6 +670,8 @@ def _picker_data() -> Dict[str, object]:
         out.append({
             "name": _name(plan), "short": _short(plan), "max": high,
             "m": f"${_dollars(pay)}", "y": f"${_dollars(pay * mp.ANNUAL_MONTHS)}",
+            # every three months, only while it is sold (the picker falls back to monthly without it)
+            **({"q": f"${_dollars(pay * QUARTER_MONTHS)}"} if _church_quarter() else {}),
             "col": _PICK_COLOURS[min(i, len(_PICK_COLOURS) - 1)],
             "items": items,
         })
@@ -781,6 +820,8 @@ def render(slug: str) -> str:
         "APP_URL": mp.APP_URL,
         "CHURCHSAVVY_URL": escape(partner),
         "CHURCH_CSS": _read("church.css"),
+        # the switch's middle button: only for the cards this page draws, and only while they're sold that way
+        "QUARTER_BUTTON": _QUARTER_BUTTON if (_church_quarter() if plans_by_size() else _quarter_sold(_PUBLIC_THREE)) else "",
         **_plan_tokens(),
         **_trial_tokens(church=True),
     }
