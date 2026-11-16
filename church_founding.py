@@ -151,8 +151,8 @@ def public_state() -> Optional[Dict[str, Any]]:
 
 
 def offer_prices() -> Optional[Dict[str, Dict[str, int]]]:
-    """The founding price per church plan, {plan: {month_cents, year_cents}},
-    while a place is open: None once the offer is off, past its date, full
+    """The founding price per church plan, {plan: {month_cents, quarter_cents,
+    year_cents}}, while a place is open: None once the offer is off, past its date, full
     or unreadable. Only a plan whose founding price is below its regular
     price is in it, so nothing is shown crossed out that isn't a saving."""
     import feature_gates
@@ -163,7 +163,8 @@ def offer_prices() -> Optional[Dict[str, Dict[str, int]]]:
         return None
     founding = pricing_config.church_founding_price_cents()
     regular = pricing_config.church_price_cents()
-    out = {p: {"month_cents": founding[p], "year_cents": founding[p] * mp.ANNUAL_MONTHS}
+    out = {p: {"month_cents": founding[p], "quarter_cents": founding[p] * QUARTER_MONTHS,
+               "year_cents": founding[p] * mp.ANNUAL_MONTHS}
            for p in feature_gates.CHURCH_PLANS if 0 < founding.get(p, 0) < regular.get(p, 0)}
     return out or None
 
@@ -186,23 +187,47 @@ def forget() -> None:
 
 # ─── The founding prices ─────────────────────────────────────────────
 
-def _env_key(plan: str, annual: bool) -> str:
-    return f"STRIPE_PRICE_ID_{plan.upper()}{'_ANNUAL' if annual else ''}_FOUNDING"
+# A plan is sold by the month, every three months (three months' price, no
+# discount) and by the year. The term is part of the env var's name.
+QUARTER_MONTHS = 3
+TERMS = ("", "_QUARTERLY", "_ANNUAL")
 
 
-def founding_price_id(plan: str, annual: bool) -> str:
-    return (os.environ.get(_env_key(plan, annual)) or "").strip()
+def _suffix(term) -> str:
+    """"" (monthly), "_QUARTERLY" or "_ANNUAL". True and False are the old
+    yearly-or-not flag, still taken."""
+    if term is True:
+        return "_ANNUAL"
+    return term if term in TERMS else ""
+
+
+def _env_key(plan: str, term=False) -> str:
+    return f"STRIPE_PRICE_ID_{plan.upper()}{_suffix(term)}_FOUNDING"
+
+
+def founding_price_id(plan: str, term=False) -> str:
+    return (os.environ.get(_env_key(plan, term)) or "").strip()
 
 
 def founding_price_ids() -> Set[str]:
     import feature_gates
-    return {pid for plan in feature_gates.CHURCH_PLANS for annual in (False, True)
-            if (pid := founding_price_id(plan, annual))}
+    return {pid for plan in feature_gates.CHURCH_PLANS for term in TERMS
+            if (pid := founding_price_id(plan, term))}
+
+
+def _term_of_price(plan: str, price_id: str) -> str:
+    """Which term this price of `plan` bills on, as an env suffix: its list
+    price or its founding price for that term. "" (monthly) when it is
+    neither of the longer ones."""
+    for term in ("_ANNUAL", "_QUARTERLY"):
+        if price_id in {(os.environ.get(f"STRIPE_PRICE_ID_{plan.upper()}{term}") or "").strip(),
+                        founding_price_id(plan, term)} - {""}:
+            return term
+    return ""
 
 
 def _is_annual(plan: str, price_id: str) -> bool:
-    return price_id in {(os.environ.get(f"STRIPE_PRICE_ID_{plan.upper()}_ANNUAL") or "").strip(),
-                        founding_price_id(plan, True)} - {""}
+    return _term_of_price(plan, price_id) == "_ANNUAL"
 
 
 async def checkout_price(biz: Dict[str, Any], plan: str, price_id: str) -> str:
@@ -211,7 +236,7 @@ async def checkout_price(biz: Dict[str, Any], plan: str, price_id: str) -> str:
     gets the founding price when one is set; everyone else the list price.
     Asking for a founding price without a place is refused, never quietly
     swapped."""
-    annual = _is_annual(plan, price_id)
+    term = _term_of_price(plan, price_id)
     eligible = record(biz) is not None
     if not eligible and open_now():
         n = await asyncio.to_thread(left)
@@ -220,7 +245,7 @@ async def checkout_price(biz: Dict[str, Any], plan: str, price_id: str) -> str:
         raise HTTPException(409, "The founding price is for the first churches, and those places are taken. "
                                  "Your plan's price is the one on the page.")
     if eligible:
-        return founding_price_id(plan, annual) or price_id
+        return founding_price_id(plan, term) or price_id
     return price_id
 
 

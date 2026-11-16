@@ -51,7 +51,10 @@ the old price **loses its plan**. So, for each size and cadence you raise:
    - The first raise of a size (its `_FOUNDING` variable is empty): copy
      `STRIPE_PRICE_ID_CHURCH_<SIZE>[_ANNUAL]` into
      `STRIPE_PRICE_ID_CHURCH_<SIZE>[_ANNUAL]_FOUNDING`. That is the founding
-     churches' price from then on.
+     churches' price from then on. (The three-month prices, `_QUARTERLY`,
+     were made on 2026-11-16 with their own `_QUARTERLY_FOUNDING` ids from
+     the start, so there is nothing to copy for them; a later raise of a
+     three-month price follows "any later raise" below.)
    - Any later raise: **never overwrite `_FOUNDING`**. Add the outgoing id to
      `STRIPE_PRICE_IDS_KEPT` instead (`price_x=church_growing`, comma
      separated), so the churches who started between raises keep their plan.

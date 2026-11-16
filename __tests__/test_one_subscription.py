@@ -37,6 +37,7 @@ from auth_supabase import AuthedUser  # noqa: E402
 USER = AuthedUser(id="u-1", email="pastor@church.test", role="authenticated")
 SMALL, GROWING, LOGINS = "price_small", "price_growing", "price_logins"
 SMALL_YEAR, GROWING_YEAR, LOGINS_YEAR = "price_small_year", "price_growing_year", "price_logins_year"
+SMALL_Q, GROWING_Q, LOGINS_Q = "price_small_q", "price_growing_q", "price_logins_q"
 
 
 def _a_price(pid, cents, interval="month", count=1):
@@ -47,11 +48,13 @@ def _a_price(pid, cents, interval="month", count=1):
 PRICES = {p["id"]: p for p in (
     _a_price(SMALL, 7900), _a_price(GROWING, 19900), _a_price(LOGINS, 1500),
     _a_price(SMALL_YEAR, 79000, "year"), _a_price(GROWING_YEAR, 199000, "year"),
-    _a_price(LOGINS_YEAR, 15000, "year"))}
+    _a_price(LOGINS_YEAR, 15000, "year"),
+    _a_price(SMALL_Q, 23700, "month", 3), _a_price(GROWING_Q, 59700, "month", 3), _a_price(LOGINS_Q, 4500, "month", 3))}
 ITEM_LOGINS = {"id": "si_logins", "quantity": 2, "price": PRICES[LOGINS]}
 ITEM_SMALL = {"id": "si_plan", "quantity": 1, "price": PRICES[SMALL]}
 PLANS = {SMALL: "church_small", GROWING: "church_growing",
-         SMALL_YEAR: "church_small", GROWING_YEAR: "church_growing"}
+         SMALL_YEAR: "church_small", GROWING_YEAR: "church_growing",
+         SMALL_Q: "church_small", GROWING_Q: "church_growing"}
 
 
 def _sub(status="active", items=None):
@@ -96,6 +99,8 @@ def stripe(monkeypatch):
     monkeypatch.setenv("STRIPE_PRICE_ID_CHURCH_GROWING_ANNUAL", GROWING_YEAR)
     monkeypatch.setenv("STRIPE_PRICE_ID_EXTRA_LOGIN", LOGINS)
     monkeypatch.delenv("STRIPE_PRICE_ID_EXTRA_LOGIN_ANNUAL", raising=False)
+    monkeypatch.setenv("STRIPE_PRICE_ID_CHURCH_GROWING_QUARTERLY", GROWING_Q)
+    monkeypatch.delenv("STRIPE_PRICE_ID_EXTRA_LOGIN_QUARTERLY", raising=False)
     return world
 
 
@@ -278,3 +283,31 @@ def test_a_row_behind_stripe_goes_to_checkout(stripe):
     out = _checkout()
     assert out["url"].startswith("https://checkout")
     assert _writes(stripe, "/subscriptions/sub_1") == []
+
+
+# ─── 8. every three months is a term like the others ──────────────────
+
+def test_monthly_to_every_three_months_is_a_change_of_term(stripe):
+    out = _checkout(plan="church_growing_quarterly")
+    write = _writes(stripe, "/subscriptions/sub_1")[0]
+    assert write["items"] == [{"id": "si_plan", "price": GROWING_Q}]
+    assert write["proration_behavior"] == "create_prorations" and "payment_behavior" not in write
+    assert out["charged_today"] is False                   # Stripe charges the three months itself
+
+
+def test_a_dearer_plan_on_three_months_is_charged_today(stripe):
+    stripe["sub"] = _sub(items=[{"id": "si_plan", "quantity": 1, "price": PRICES[SMALL_Q]}])
+    out = _checkout(plan="church_growing_quarterly")
+    write = _writes(stripe, "/subscriptions/sub_1")[0]
+    assert write["proration_behavior"] == "always_invoice" and out["charged_today"] is True
+
+
+def test_extra_logins_follow_the_plan_to_three_months_or_it_is_refused(stripe, monkeypatch):
+    stripe["sub"] = _sub(items=[ITEM_LOGINS, ITEM_SMALL])
+    with pytest.raises(HTTPException) as e:
+        _checkout(plan="church_growing_quarterly")
+    assert e.value.status_code == 409 and stripe["posted"] == []
+    monkeypatch.setenv("STRIPE_PRICE_ID_EXTRA_LOGIN_QUARTERLY", LOGINS_Q)
+    _checkout(plan="church_growing_quarterly")
+    assert _writes(stripe, "/subscriptions/sub_1")[0]["items"] == [
+        {"id": "si_plan", "price": GROWING_Q}, {"id": "si_logins", "price": LOGINS_Q}]

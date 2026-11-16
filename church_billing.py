@@ -69,8 +69,10 @@ def is_church(biz: Optional[Dict[str, Any]]) -> bool:
 
 # A term is how often a price bills, as stripe_billing._term_of reads it.
 MONTHLY = ("month", 1)
+QUARTERLY = ("month", 3)
 YEARLY = ("year", 1)
 LOGIN_PRICE_ENVS = {MONTHLY: "STRIPE_PRICE_ID_EXTRA_LOGIN",
+                    QUARTERLY: "STRIPE_PRICE_ID_EXTRA_LOGIN_QUARTERLY",
                     YEARLY: "STRIPE_PRICE_ID_EXTRA_LOGIN_ANNUAL"}
 
 
@@ -87,11 +89,14 @@ def extra_login_prices() -> set:
 
 def extra_login_cents(term: tuple = MONTHLY) -> int:
     """What one extra login costs each time a plan on this term bills: the
-    monthly price, or ten months of it for a year, as the plans are."""
+    monthly price, three of it every three months, or ten months of it for
+    a year, as the plans are."""
     cents = pricing_config.extra_login_cents()
     if tuple(term) == YEARLY:
         import marketing_pages as mp
         return cents * mp.ANNUAL_MONTHS
+    if tuple(term) == QUARTERLY:
+        return cents * 3
     return cents
 
 
@@ -230,7 +235,8 @@ async def set_extra_logins(body: ExtraLoginsBody, user: AuthedUser = Depends(req
     base = feature_gates._limits_of(feature_gates.plan_of(biz)).get("max_seats")
     return {"ok": True, "extra_logins": body.count,
             "max_seats": (base + body.count) if base is not None else None,
-            "cents_each": extra_login_cents(term), "every": term[0],
+            "cents_each": extra_login_cents(term),
+            "every": "quarter" if term == QUARTERLY else term[0],
             "charged_today": paid_today}
 
 

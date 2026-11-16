@@ -399,6 +399,12 @@ PRICE_ENV_TO_PLAN: Dict[str, str] = {
     "STARTER_ANNUAL":      "starter",
     "PROFESSIONAL_ANNUAL": "professional",
     "PRACTICE_ANNUAL":     "practice",
+    # Every three months (Kevin, 2026-11-16: "it would function like monthly
+    # payment just every three months"): three months' price, no discount,
+    # on the plans sold today. *_QUARTERLY, as *_ANNUAL is the year.
+    "STARTER_QUARTERLY":      "starter",
+    "PROFESSIONAL_QUARTERLY": "professional",
+    "PRACTICE_QUARTERLY":     "practice",
     "FOUNDER":             "professional",
     "FOUNDER_ANNUAL":      "professional",
     # Audience plans (barbers and salons). Checkout enforces who may buy.
@@ -417,6 +423,10 @@ PRICE_ENV_TO_PLAN: Dict[str, str] = {
     "CHURCH_ESTABLISHED_ANNUAL": "church_established",
     "CHURCH_LARGE":              "church_large",
     "CHURCH_LARGE_ANNUAL":       "church_large",
+    "CHURCH_SMALL_QUARTERLY":       "church_small",
+    "CHURCH_GROWING_QUARTERLY":     "church_growing",
+    "CHURCH_ESTABLISHED_QUARTERLY": "church_established",
+    "CHURCH_LARGE_QUARTERLY":       "church_large",
     # The founding churches' prices (church_founding.py, Kevin 2026-11-13):
     # unset until a list price goes up, then the old price id lives here so
     # the first churches keep both their price and their plan.
@@ -428,6 +438,10 @@ PRICE_ENV_TO_PLAN: Dict[str, str] = {
     "CHURCH_ESTABLISHED_ANNUAL_FOUNDING": "church_established",
     "CHURCH_LARGE_FOUNDING":              "church_large",
     "CHURCH_LARGE_ANNUAL_FOUNDING":       "church_large",
+    "CHURCH_SMALL_QUARTERLY_FOUNDING":       "church_small",
+    "CHURCH_GROWING_QUARTERLY_FOUNDING":     "church_growing",
+    "CHURCH_ESTABLISHED_QUARTERLY_FOUNDING": "church_established",
+    "CHURCH_LARGE_QUARTERLY_FOUNDING":       "church_large",
     # ChurchSavvy on its own. Checkout (churchsavvy_billing) enforces churches only.
     "CS_SCREENS":          "cs_screens",
     "CS_PLANNING":         "cs_planning",
