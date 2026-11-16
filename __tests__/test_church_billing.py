@@ -11,6 +11,9 @@
   5. A founding place waits for the first payment: a church on its trial is
      told so and takes the place by paying today, and a card that fails takes
      nothing.
+  6. A login added is paid for that day and only added if the card takes it;
+     a church paying by the year buys its logins by the year, because Stripe
+     holds one subscription to one billing term (2026-11-16).
 """
 from __future__ import annotations
 
@@ -142,10 +145,12 @@ def stripe(monkeypatch):
 
     async def get(path, params):
         calls.append(("get", path))
-        return {"items": {"data": state["items"]}}
+        return {"status": state.get("status"), "items": {"data": state["items"]}}
 
     async def post(path, data):
         calls.append(("post", path, data))
+        if state.get("refuse"):
+            raise HTTPException(state["refuse"], "Stripe error: card_declined")
         return {"id": "cs_1", "url": "https://checkout.stripe.test/x"}
 
     async def delete(path):
@@ -442,3 +447,122 @@ def test_no_owner_address_means_no_email(stripe, mail, monkeypatch):
     monkeypatch.setattr(cb, "_founding_taken", lambda: 0)
     _move()
     assert mail == []
+
+
+# ─── 6. paid today, and by the year ───────────────────────────────────
+
+PAID_TODAY = {"proration_behavior": "always_invoice", "payment_behavior": "error_if_incomplete"}
+YEAR_PLAN = {"id": "si_plan", "quantity": 1,
+             "price": {"id": "price_grow_year", "unit_amount": 199000, "recurring": {"interval": "year"}}}
+
+
+@pytest.fixture
+def yearly(stripe, monkeypatch):
+    """A church on its plan by the year, with the yearly login price set."""
+    calls, state = stripe
+    monkeypatch.setenv("STRIPE_PRICE_ID_CHURCH_GROWING_ANNUAL", "price_grow_year")
+    monkeypatch.setenv("STRIPE_PRICE_ID_EXTRA_LOGIN_ANNUAL", "price_login_year")
+    state["status"] = "active"
+    state["items"] = [YEAR_PLAN]
+    state["biz"]["subscription_plan"] = "price_grow_year"
+    return calls, state
+
+
+def test_a_login_added_to_a_running_plan_is_paid_for_today(stripe):
+    calls, state = stripe
+    state["status"] = "active"
+    out = _set(1)
+    assert ("post", "/subscription_items", {"subscription": "sub_1", "price": "price_login", "quantity": 1,
+                                            **PAID_TODAY}) in calls
+    assert out["charged_today"] is True and out["cents_each"] == 1500 and out["every"] == "month"
+
+
+def test_more_logins_are_paid_today_and_fewer_leave_a_credit(stripe):
+    calls, state = stripe
+    state["status"] = "active"
+    state["items"] = [{"id": "si_9", "price": {"id": "price_login"}, "quantity": 2}]
+    assert _set(3)["charged_today"] is True
+    assert ("post", "/subscription_items/si_9", {"quantity": 3, **PAID_TODAY}) in calls
+    assert _set(1)["charged_today"] is False
+    assert ("post", "/subscription_items/si_9", {"quantity": 1, "proration_behavior": "create_prorations"}) in calls
+
+
+def test_a_trial_adds_a_login_with_nothing_charged(stripe):
+    calls, state = stripe
+    state["status"] = "trialing"
+    assert _set(1)["charged_today"] is False
+    assert ("post", "/subscription_items", {"subscription": "sub_1", "price": "price_login", "quantity": 1,
+                                            "proration_behavior": "create_prorations"}) in calls
+
+
+def test_a_refused_card_adds_no_login(stripe):
+    calls, state = stripe
+    state["status"], state["refuse"] = "active", 402
+    with pytest.raises(HTTPException) as e:
+        _set(1)
+    assert e.value.status_code == 402 and e.value.detail == sb.CARD_REFUSED
+    assert state["biz"]["settings"] == {} and not [c for c in calls if c[0] == "patch"]
+
+
+def test_a_yearly_church_buys_its_logins_by_the_year(yearly):
+    calls, state = yearly
+    out = _set(2)
+    assert ("post", "/subscription_items", {"subscription": "sub_1", "price": "price_login_year", "quantity": 2,
+                                            **PAID_TODAY}) in calls
+    assert out["cents_each"] == 15000 and out["every"] == "year" and out["max_seats"] == 10
+    assert state["biz"]["settings"] == {"extra_logins": 2}
+
+
+def test_a_yearly_church_is_told_to_write_in_until_the_yearly_price_exists(yearly, monkeypatch):
+    calls, state = yearly
+    monkeypatch.delenv("STRIPE_PRICE_ID_EXTRA_LOGIN_ANNUAL")
+    with pytest.raises(HTTPException) as e:
+        _set(1)
+    assert e.value.status_code == 409 and "Write to us" in e.value.detail
+    assert not [c for c in calls if c[0] in ("post", "delete", "patch")]
+
+
+def test_yearly_logins_are_counted_and_can_be_taken_off(yearly):
+    calls, state = yearly
+    login = {"id": "si_9", "price": {"id": "price_login_year"}, "quantity": 2}
+    state["items"] = [YEAR_PLAN, login]
+    assert cb.extra_login_quantity(state["items"]) == 2
+    _set(0)
+    assert ("delete", "/subscription_items/si_9") in calls
+
+
+def test_the_plans_term_is_read_from_its_own_item(yearly):
+    _calls, state = yearly
+    monthly_login = {"id": "si_9", "price": {"id": "price_login", "recurring": {"interval": "month"}}, "quantity": 1}
+    assert cb.plan_term([monthly_login, YEAR_PLAN]) == cb.YEARLY
+    assert cb.plan_term([monthly_login]) == cb.MONTHLY == cb.plan_term([])
+
+
+def test_the_yearly_login_is_ten_months_like_the_plans():
+    import marketing_pages as mp
+    cat = {env: (cents, interval) for env, _lk, _n, cents, interval in sb.BOOTSTRAP_CATALOG}
+    assert cat["STRIPE_PRICE_ID_EXTRA_LOGIN_ANNUAL"] == (cat["STRIPE_PRICE_ID_EXTRA_LOGIN"][0] * mp.ANNUAL_MONTHS, "year")
+    assert cb.extra_login_cents(cb.YEARLY) == cb.extra_login_cents() * mp.ANNUAL_MONTHS
+
+
+def test_logins_follow_a_change_of_term_or_refuse_it(monkeypatch):
+    monkeypatch.setenv("STRIPE_PRICE_ID_EXTRA_LOGIN", "price_login")
+    monkeypatch.delenv("STRIPE_PRICE_ID_EXTRA_LOGIN_ANNUAL", raising=False)
+    held = [{"id": "si_9", "price": {"id": "price_login"}, "quantity": 2}]
+    assert cb.logins_for_term([], cb.YEARLY) == []
+    assert cb.logins_for_term(held, cb.MONTHLY) == []                 # already there
+    with pytest.raises(HTTPException) as e:
+        cb.logins_for_term(held, cb.YEARLY)
+    assert e.value.status_code == 409
+    monkeypatch.setenv("STRIPE_PRICE_ID_EXTRA_LOGIN_ANNUAL", "price_login_year")
+    assert cb.logins_for_term(held, cb.YEARLY) == [{"id": "si_9", "price": "price_login_year"}]
+
+
+def test_the_app_is_told_the_yearly_login_price(monkeypatch):
+    monkeypatch.setenv("PLAN_CHURCH_OFFERED", "1")
+
+    async def no_display(pid):
+        return None
+    monkeypatch.setattr(sb, "_price_display", no_display)
+    offer = asyncio.run(sb.billing_plans(for_type="church"))["church_offer"]
+    assert offer["extra_login_cents"] == 1500 and offer["extra_login_year_cents"] == 15000
