@@ -4,7 +4,7 @@ date: 2026-11-16
 agent: Claude Code (Claude Opus 5.5)
 asked: 'Kevin, 2026-11-16, after the first real pastor signed up with Google and was handed the business trial: "make sure trial is only for business side not church side", "top tier, no cut corners"'
 status: in review
-prs: [kmj-intake-server (this PR)]
+prs: [kmj-intake-server#1875]
 migrations: [supabase/APPLY-2026-11-16-tier-all-plans.sql (NOT APPLIED; the parent session applies it)]
 left_undone:
   - "Apply supabase/APPLY-2026-11-16-tier-all-plans.sql (SQL editor). Step 2 re-mirrors tier for founding churches still on their founding price (1 row expected: the first church, professional -> church_growing). Any other stale mirror is fixed by its next Stripe event."
