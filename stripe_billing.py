@@ -1835,6 +1835,166 @@ async def _handle_invoice_payment_failed(inv: Dict[str, Any], business_id: Optio
     await _apply_invoice_outcome(inv, business_id, "past_due")
 
 
+# ─── Kevin hears about a new customer (2026-11-16) ────────────────────
+# Kevin, the day the first church paid: "build notification through
+# mission control that will let me know when someone new subscribes and
+# payment went through." One alert per new subscription, from invoice.paid:
+#   - its first money, paid straight away or when its free days end;
+#   - or, when it starts with nothing charged, that it started and when
+#     the first charge comes.
+# Renewals, upgrades and extra logins never alert. The alert rides the
+# owner alert inbox (dev_alerts, source "customers"): a push to Kevin's
+# phone that opens Subscriptions, his quiet hours, the inbox in Mission
+# Control, and Today shows it for three days (platform_today). Kevin turns
+# it off in the Dev Desk's alert settings ("New customers"). Best effort:
+# nothing here ever changes what the webhook does or answers.
+
+_owner_tasks: set = set()
+
+
+async def _event_recorded(event_id: Optional[str]) -> bool:
+    """Whether this Stripe event was handled before (a redelivery). An
+    unreadable table counts as not handled: the alert's own 30-minute
+    dedupe still holds."""
+    if not event_id:
+        return False
+    try:
+        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
+            r = await c.get(f"{SUPABASE_URL}/rest/v1/stripe_webhook_events",
+                            headers=_service_headers(),
+                            params={"id": f"eq.{event_id}", "select": "id", "limit": "1"})
+        return r.status_code < 400 and bool(r.json())
+    except Exception:
+        return False
+
+
+async def _paid_before(sub_id: str, invoice_id: Optional[str]) -> Optional[bool]:
+    """Whether the subscription had money paid on an earlier invoice. None
+    when Stripe can't be read: say nothing rather than call a renewal new."""
+    try:
+        got = await _stripe_get("/invoices", [("subscription", sub_id), ("status", "paid"),
+                                              ("limit", "100")])
+    except Exception as e:
+        logger.warning(f"new customer check: invoices for {sub_id} unreadable: {e}")
+        return None
+    return any(i.get("id") != invoice_id and int(i.get("amount_paid") or 0) > 0
+               for i in (got.get("data") or []))
+
+
+def _dollars(cents: int) -> str:
+    return f"${cents // 100:,}" if cents % 100 == 0 else f"${cents / 100:,.2f}"
+
+
+def _term_words(term: tuple) -> str:
+    interval, count = term
+    if interval == "year":
+        return "yearly"
+    if interval == "month" and count == 3:
+        return "every 3 months"
+    if interval == "month":
+        return "monthly"
+    return ""
+
+
+def _plan_item(sub: Dict[str, Any]) -> tuple:
+    """(plan key, price) of the subscription's plan, not its extra logins."""
+    import feature_gates
+    plans = feature_gates.price_to_plan()
+    items = ((sub.get("items") or {}).get("data")) or []
+    for it in items:
+        price = it.get("price") or {}
+        if plans.get(price.get("id") or ""):
+            return plans[price["id"]], price
+    return None, (items[0].get("price") if items else None)
+
+
+def new_customer_words(kind: str, *, name: str, church: bool, plan_label: str,
+                       term: str, cents: int, first_charge: Optional[str]) -> tuple:
+    """The alert's (title, body), in Kevin's words. kind: "paid" (a new
+    subscription paid straight away), "first" (its first payment after free
+    days), "started" (nothing charged yet)."""
+    who = "church" if church else "customer"
+    name = (name or f"A new {who}")[:48]
+    plan = ", ".join(x for x in (f"{plan_label} plan" if plan_label else "", term) if x)
+    lead = f"{plan}. " if plan else ""
+    if kind == "paid":
+        return (f"New {who}: {name} paid {_dollars(cents)}",
+                f"{lead}They subscribed and the first payment went through.")
+    if kind == "first":
+        return (f"{name}'s first payment went through: {_dollars(cents)}",
+                f"{lead}Their free days are over and they are now paying.")
+    when = (f"The first charge is due {first_charge}." if first_charge
+            else "Nothing was charged (a full discount).")
+    return (f"New {who}: {name} subscribed", f"{lead}Nothing charged yet. {when}")
+
+
+async def tell_owner_new_customer(inv: Dict[str, Any], business_id: Optional[str]) -> Optional[str]:
+    """Raise the new-customer alert for this paid invoice, if it is one.
+    Returns how it was delivered, or None when it isn't a new customer."""
+    sub_id = _invoice_subscription_id(inv)
+    if not sub_id:
+        return None
+    cents = int(inv.get("amount_paid") or 0)
+    reason = inv.get("billing_reason") or ""
+    if cents > 0:
+        if reason == "subscription_create":
+            kind = "paid"
+        else:
+            earlier = await _paid_before(sub_id, inv.get("id"))
+            if earlier is not False:
+                return None
+            kind = "first"
+    elif reason == "subscription_create":
+        kind = "started"
+    else:
+        return None
+
+    import billing_limits
+    import dev_alerts
+    import feature_gates
+    biz: Dict[str, Any] = {}
+    if business_id:
+        try:
+            biz = await _load_business(business_id)
+        except Exception:
+            biz = {}
+    sub = await _current_subscription(sub_id) or {}
+    plan, price = _plan_item(sub)
+    plan = plan or feature_gates.plan_of(biz) or ""
+    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as c:
+        config = await dev_alerts.settings(c)
+        first_charge = None
+        if kind == "started" and sub.get("trial_end"):
+            from zoneinfo import ZoneInfo
+            from datetime import datetime as _dt
+            day = _dt.fromtimestamp(int(sub["trial_end"]), ZoneInfo(config.tz))
+            first_charge = f"{day:%a %b} {day.day}"
+        title, body = new_customer_words(
+            kind, name=str(biz.get("name") or inv.get("customer_name") or ""),
+            church=plan in feature_gates.CHURCH_PLANS,
+            plan_label=billing_limits.PLAN_DISPLAY.get(plan, ""),
+            term=_term_words(_term_of(price)), cents=cents, first_charge=first_charge)
+        return await dev_alerts.raise_alert(
+            c, source="customers", kind=kind, key=f"invoice:{inv.get('id') or sub_id}",
+            level="info", title=title, body=body, nav="studio:platform-subscriptions")
+
+
+async def _tell_owner_safely(inv: Dict[str, Any], business_id: Optional[str]) -> None:
+    try:
+        await tell_owner_new_customer(inv, business_id)
+    except Exception as e:
+        logger.warning(f"new customer alert failed for {inv.get('id')}: {e}")
+        print(f"[billing] new customer alert failed for {inv.get('id')}: {e}", flush=True)
+
+
+def _schedule_owner_alert(inv: Dict[str, Any], business_id: Optional[str]) -> None:
+    """In the background: Stripe's webhook answer never waits on a push."""
+    import asyncio
+    task = asyncio.create_task(_tell_owner_safely(inv, business_id))
+    _owner_tasks.add(task)
+    task.add_done_callback(_owner_tasks.discard)
+
+
 # ─── Phase E v1.1 — numeric-limit surfaces (gate-ready, dormant) ─────
 
 @router.get("/chief-usage")
@@ -2148,6 +2308,9 @@ async def stripe_webhook(request: Request, stripe_signature: Optional[str] = Hea
             # subscription's current state, never re-activating a
             # cancelled one.
             await _apply_invoice_outcome(obj, business_id, "active")
+            # A new customer tells Kevin (once: a redelivered event is skipped).
+            if not await _event_recorded(event.get("id")):
+                _schedule_owner_alert(obj, business_id)
         elif event_type == "checkout.session.completed":
             meta = obj.get("metadata") or {}
             if meta.get("kind") == "credit_pack":
