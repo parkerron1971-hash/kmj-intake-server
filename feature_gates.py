@@ -158,7 +158,7 @@ MARKETING_LADDER: Dict[str, str] = {
     "professional": MARKETING_WEEK_WORDS,
     "boss": MARKETING_OPENINGS_WORDS,
     "practice": MARKETING_AUTOPILOT_WORDS,
-    "church_small": MARKETING_WEEK_WORDS,
+    "church_small": MARKETING_SUGGEST_WORDS,
     "church_growing": MARKETING_WEEK_WORDS,
     "church_established": MARKETING_AUTOPILOT_WORDS,
     "church_large": MARKETING_AUTOPILOT_WORDS,
@@ -182,15 +182,21 @@ AUDIENCE_PLAN_FEATURES: Dict[str, frozenset] = {
                                    # (open chairs, work photos, three posts).
                                    "marketing_week"},
 }
-# Churches: every church feature on every plan. Small and Growing carry all
-# of Professional plus what a church needs at any size that sat higher: the
-# donors report (vertical_reports) and sermon clips, in fewer hours.
-# Established and Large carry everything, which adds the audit trail, the
-# outside accountant and marketing autopilot.
+# Churches. Growing carries all of Professional plus what a church needs at
+# any size that sat higher: the donors report (vertical_reports) and sermon
+# clips, in fewer hours. Established and Large carry everything, which adds
+# the audit trail, the outside accountant and marketing autopilot.
+# Small is Growing without Chief's weekly plan (Kevin 2026-11-17, "build",
+# the tier fences review TQh5DcQHroy1LN9UGgfZQV): the week's five flyers are
+# included work no credit pays for, so Small gets the one suggested post a
+# week (its flyer is the free composer one) and Chief still makes any post
+# or flyer the church asks for, from its credits. Its clips have no
+# included hours (pricing_config.church_clip_hours), so each hour charges
+# credits.
 _UP_TO_PROFESSIONAL = frozenset(f for f, mp in FEATURE_MIN_PLAN.items() if _PLAN_RANK[mp] <= 2)
 _EVERYTHING = frozenset(FEATURE_MIN_PLAN)
 AUDIENCE_PLAN_FEATURES.update({
-    "church_small":       _UP_TO_PROFESSIONAL | {"vertical_reports", "ai_clips"},
+    "church_small":       (_UP_TO_PROFESSIONAL - {"marketing_week"}) | {"vertical_reports", "ai_clips"},
     "church_growing":     _UP_TO_PROFESSIONAL | {"vertical_reports", "ai_clips"},
     "church_established": _EVERYTHING,
     "church_large":       _EVERYTHING,

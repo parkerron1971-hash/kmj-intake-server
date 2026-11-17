@@ -2,9 +2,10 @@
 
 Small $79 (up to 100 on a Sunday), Growing $199 (100-250), Established $399
 (250-500), Large $699 (500-1,500), sold only to churches and ministries.
-Every church feature on every plan; the plan sets the room: office logins
-3 / 8 / 15 / 35, texts 500 / 1,500 / 3,000 / 8,000, sermon clip hours
-2 / 5 / 10 / 20, Chief credits 3,000 / 7,500 / 15,000 / 27,500. Leaders,
+The plan sets the room: office logins 3 / 8 / 15 / 35, texts 500 / 1,500 /
+3,000 / 8,000, sermon clip hours 0 / 5 / 10 / 20, Chief credits 3,000 /
+7,500 / 15,000 / 27,500. Small has no weekly plan and no included clip hours
+(Kevin 2026-11-17, the tier fences review): its clips are paid from credits. Leaders,
 volunteers and members use the member app and never count as a login.
 Pinned here:
   1. Kevin's numbers, and the economics floor the public ladder holds.
@@ -52,7 +53,7 @@ def test_the_ladder_is_kevins():
                                                             LARGE: 69900}
     assert pricing_config.church_seats() == {SMALL: 3, GROWING: 8, ESTABLISHED: 15, LARGE: 35}
     assert pricing_config.church_texts_monthly() == {SMALL: 500, GROWING: 1500, ESTABLISHED: 3000, LARGE: 8000}
-    assert pricing_config.church_clip_hours() == {SMALL: 2, GROWING: 5, ESTABLISHED: 10, LARGE: 20}
+    assert pricing_config.church_clip_hours() == {SMALL: 0, GROWING: 5, ESTABLISHED: 10, LARGE: 20}
     assert pricing_config.church_credits() == {SMALL: 3000, GROWING: 7500, ESTABLISHED: 15000, LARGE: 27500}
     assert pricing_config.church_offer() == {"extra_texts_cents_per_thousand": 2000, "extra_login_cents": 1500,
                                              "move_months": 3, "founding_moves": 5,
@@ -111,15 +112,34 @@ def test_offering_churches_doesnt_open_the_barber_plans(monkeypatch):
 def test_every_church_plan_has_the_church_essentials():
     for plan in fg.CHURCH_PLANS:
         have = fg.plan_features(plan)
-        # Own texting number (text-to-give), budgets + full reports, the donors report, sermon clips.
+        # Own texting number (text-to-give), budgets + full reports, the donors report, sermon clips,
+        # and Chief's post suggestion.
         for key in ("dedicated_sms_number", "reports_full", "vertical_reports", "ai_clips", "multi_seat",
-                    "period_close", "marketing_week"):
+                    "period_close", "marketing_suggestion"):
             assert key in have, (plan, key)
 
 
-def test_small_and_growing_are_professional_plus_the_church_pieces():
-    for plan in (SMALL, GROWING):
-        assert fg.plan_features(plan) == fg.plan_features("professional") | {"vertical_reports", "ai_clips"}
+def test_growing_is_professional_plus_the_church_pieces():
+    assert fg.plan_features(GROWING) == fg.plan_features("professional") | {"vertical_reports", "ai_clips"}
+
+
+def test_small_is_growing_without_the_weekly_plan():
+    # Kevin 2026-11-17 ("build", the tier fences review TQh5DcQHroy1LN9UGgfZQV):
+    # the week's five flyers are included work no credit pays for.
+    assert fg.plan_features(SMALL) == fg.plan_features(GROWING) - {"marketing_week"}
+    assert "marketing_week" not in fg.plan_features(SMALL)
+    assert fg.MARKETING_LADDER[SMALL] == fg.MARKETING_SUGGEST_WORDS
+    assert fg.MARKETING_LADDER[GROWING] == fg.MARKETING_WEEK_WORDS
+    # The upgrade a Small church is pointed at is the next church plan.
+    assert fg.upgrade_plan_for("marketing_week", SMALL) == GROWING
+
+
+def test_a_small_church_gets_the_suggestion_not_the_week():
+    import business_marketing_planner as planner
+    row = {"comp_tier": SMALL, "type": "church"}
+    assert planner.level_problem(row) is None                 # the one suggestion a week
+    assert planner.week_problem(row) == planner.NOT_WEEK
+    assert "Professional" not in planner.NOT_WEEK              # no business plan named to a church
 
 
 def test_established_and_large_carry_everything():
@@ -133,7 +153,7 @@ def test_limits_are_the_size():
     lim = fg.plan_limits()
     assert [lim[p]["max_seats"] for p in fg.CHURCH_PLANS] == [3, 8, 15, 35]
     assert [lim[p]["texts_monthly"] for p in fg.CHURCH_PLANS] == [500, 1500, 3000, 8000]
-    assert [lim[p]["clip_hours_monthly"] for p in fg.CHURCH_PLANS] == [2, 5, 10, 20]
+    assert [lim[p]["clip_hours_monthly"] for p in fg.CHURCH_PLANS] == [0, 5, 10, 20]
     assert [lim[p]["chief_messages_monthly"] for p in fg.CHURCH_PLANS] == [3000, 7500, 15000, 27500]
     # No other plan is held to a text count.
     for plan in fg.PLANS + ("solo", "booked", "boss"):
@@ -300,7 +320,7 @@ def test_the_plans_endpoint_draws_the_church_ladder(monkeypatch):
 
 # ─── 7. sermon clip hours ─────────────────────────────────────────────
 
-@pytest.mark.parametrize("row,hours", [({"comp_tier": SMALL}, 2), ({"comp_tier": LARGE}, 20),
+@pytest.mark.parametrize("row,hours", [({"comp_tier": SMALL}, 0), ({"comp_tier": LARGE}, 20),
                                        ({"comp_tier": "practice"}, 10), (None, 10)])
 def test_clip_hours_follow_the_plan(monkeypatch, row, hours):
     import clip_finder
@@ -319,9 +339,19 @@ def test_a_lookup_error_keeps_the_ten_free_hours(monkeypatch):
     assert clip_finder.included_seconds("biz-1") == 10 * 3600
 
 
-def test_hours_past_a_small_churchs_two_cost_actions():
+def test_every_hour_a_small_church_clips_costs_actions():
     import clip_finder
-    two = 2 * 3600
-    assert clip_finder.extra_units(0, 3600, two) == 0
-    assert clip_finder.extra_units(two, 3600, two) == clip_finder.UNITS_PER_EXTRA_HOUR
+    assert clip_finder.extra_units(0, 3600, 0) == clip_finder.UNITS_PER_EXTRA_HOUR
+    assert clip_finder.extra_units(0, 1800, 0) == clip_finder.UNITS_PER_EXTRA_HOUR // 2 + 1   # rounded up
+    five = 5 * 3600                                       # Growing's included hours
+    assert clip_finder.extra_units(0, 3600, five) == 0
+    assert clip_finder.extra_units(five, 3600, five) == clip_finder.UNITS_PER_EXTRA_HOUR
     assert clip_finder.extra_units(0, 3600) == 0          # the ten-hour default is unchanged
+
+
+def test_the_clip_line_says_what_an_hour_costs_when_none_are_included():
+    import church_site
+    import clip_finder
+    assert church_site._clips(0) == f"Sermon clips for {clip_finder.UNITS_PER_EXTRA_HOUR} AI actions an hour"
+    assert church_site._clips(5) == "Clips from 5 hours of sermons a month"
+    assert "0 hours" not in " ".join(church_site._includes(SMALL))

@@ -262,7 +262,9 @@ def test_the_marketing_levels_follow_the_ladder():
     import feature_gates as fg
     for plan in ("starter", "solo", "booked", "boss", "professional", "practice"):
         assert "marketing_suggestion" in fg.plan_features(plan), plan
-    church = set(fg.CHURCH_PLANS)
+    # Small Church has the suggestion, not the week (Kevin 2026-11-17, the tier fences review).
+    church = set(fg.CHURCH_PLANS) - {"church_small"}
+    assert "marketing_suggestion" in fg.plan_features("church_small")
     assert {p for p in fg.ALL_PLANS if "marketing_week" in fg.plan_features(p)} == {"professional", "practice", "boss"} | church
     assert {p for p in fg.ALL_PLANS if "marketing_autopilot" in fg.plan_features(p)} == {"practice", "church_established", "church_large"}
     # Upgrade prompts stay inside the barber ladder.
