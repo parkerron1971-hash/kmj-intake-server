@@ -4958,23 +4958,55 @@
        "key": "build:strategy-track",
        "tab": "build",
        "sub": "strategy-track",
-       "name": "Solutionist Academy",
-       "sees": "every",
-       "what": "Work through an eight-course planning program with a coach, one session at a time.",
+       "name": "Church planning course",
+       "sees": [],
+       "what": "Write the church’s plan with a planning coach, one part at a time, down to the next 90 days.",
        "words": [
-        "academy",
-        "learn"
+        "plan",
+        "planning",
+        "planning course",
+        "course",
+        "vision",
+        "mission",
+        "strategic plan",
+        "strategy",
+        "90 days",
+        "academy"
        ],
        "answers": [
         {
          "id": "start-or-continue-a-course-session",
-         "q": "Start or continue a course session",
-         "a": "Find the course marked NOW STUDYING and press Enter the Lecture Hall. Each session is a conversation with the coach, and your progress is kept.",
+         "q": "Start or continue a planning session",
+         "a": "Press Start the first session, or Continue the session once you have begun. Each session is a conversation with the coach, and what you settle is kept as a page of the plan.",
          "words": [
           "academy",
-          "learn",
-          "training",
-          "coaching"
+          "planning course",
+          "coach",
+          "vision",
+          "mission statement",
+          "strategic plan"
+         ]
+        },
+        {
+         "id": "tick-off-a-step-in-the-next-90-days",
+         "q": "Tick off a step in the next 90 days",
+         "a": "Pick The next 90 days in the list of parts, open the week, and tick the step. Where a step names a page, the button beside it takes you there.",
+         "words": [
+          "90 day plan",
+          "action plan",
+          "mark a step done",
+          "what is next in the plan"
+         ]
+        },
+        {
+         "id": "print-the-churchs-plan",
+         "q": "Print the church’s plan",
+         "a": "Press Print the plan. Every part that is written opens as one document in a new tab, ready to print or save as a PDF.",
+         "words": [
+          "plan for the board",
+          "share the plan",
+          "plan as a pdf",
+          "download the plan"
          ]
         }
        ]
