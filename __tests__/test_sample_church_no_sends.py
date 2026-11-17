@@ -74,6 +74,8 @@ TICKS = {
     "rail_practice_retention": "chief_rail:prune_tick",
     "member_push_sweep": "member_push:sweep_tick",
     "stream_relay_sweep": "stream_relay_router:sweep_stale",
+    # A church plan's storage: the church rows and held recordings go through drop_samples.
+    "church_storage": "church_storage:storage_tick",
     "trial_expiry": "trial_expiry:expire_tick",
     "email_domain_monitor": "email_domain_monitor:monitor_tick",
     "sms_reminder_sweep": "sms_alerts:reminder_sweep",
@@ -344,7 +346,9 @@ def _install(monkeypatch, world: World, wire: Wire) -> None:
                  "DEVOTIONAL_DAILY_BUSINESSES": "*", "CHURCH_ASSIGNMENTS": "on",
                  "CHURCH_LEADER_TASKS": "on", "CHURCH_TEAM_ROLLUP": "on", "MARKETING_DESK": "*",
                  "POST_FOR_ME_BUSINESSES": "*", "CUSTOMER_TOKEN_SECRET": "secret-secret-secret-secret",
-                 "CHIEF_INSIGHTS": "on", "BILLING_ENFORCE": "off"}.items():
+                 "CHIEF_INSIGHTS": "on", "BILLING_ENFORCE": "off", "CHURCH_STORAGE": "on",
+                 "STREAM_R2_ENDPOINT": "https://acct.r2.example", "STREAM_R2_BUCKET": "media",
+                 "STREAM_R2_WRITE_ACCESS_KEY_ID": "AKW", "STREAM_R2_WRITE_SECRET_ACCESS_KEY": "w"}.items():
         monkeypatch.setenv(k, v)
     monkeypatch.setattr(sc, "_columns_ready", lambda: True)
     sc._reset_for_tests()
