@@ -102,7 +102,7 @@ API_REGISTRY: List[Dict[str, Any]] = [
     {"id": "openai",    "name": "OpenAI",          "envs": ["OPENAI_API_KEY"],
      "powers": "Chief voice (TTS), Whisper transcription, inference-gate embeddings",
      "touchpoints": "whisper_proxy.py (/ai/tts/speak, /ai/whisper), inference gate"},
-    {"id": "twilio",    "name": "Twilio",          "envs": ["TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN", "TWILIO_FROM_NUMBER"],
+    {"id": "twilio",    "name": "Twilio",          "envs": ["TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN", "TWILIO_PLATFORM_NUMBER"],
      "powers": "SMS rail — keywords, two-way texting, booking reminders",
      "touchpoints": "sms_service.py, sms_routing.py, sms_alerts.py"},
     {"id": "resend",    "name": "Resend",          "envs": ["RESEND_API_KEY"],
