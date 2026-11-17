@@ -664,9 +664,16 @@ def _shell(biz: Dict[str, Any], site: Optional[Dict[str, Any]], title: str,
     if own_bar and back and back[0] == "/my" and ui.in_church_bar(biz, tab):
         back = None
     import member_portal_messaging as mpm
-    chat = (f'<a class="mb-chat-link mp-noprint" href="/my/messages" aria-label="Messages">{ui.icon("chat", 19)}</a>'
-            if signed_in and mpm.turned_on(biz) and tab not in ("messages", "connect", "groups")
-            and not (own_bar and ui.in_church_bar(biz, "messages")) else "")
+    import member_portal_threads as mpt
+    # The one door to Messages: chats, and (church threads) the church's
+    # conversation and the groups' notes, with one unread count for all.
+    chat = ""
+    if (signed_in and tab not in ("messages", "connect", "groups")
+            and not (own_bar and ui.in_church_bar(biz, "messages")) and mpm.inbox_on(biz)):
+        unread = mpt.BADGE.get()
+        dot = f'<span class="mb-unread">{unread}</span>' if unread else ""
+        said = f"Messages, {unread} new" if unread else "Messages"
+        chat = f'<a class="mb-chat-link mp-noprint" href="/my/messages" aria-label="{said}">{ui.icon("chat", 19)}{dot}</a>'
     if signed_in and news_n is not None:
         badge = f'<span class="mb-unread">{news_n}</span>' if news_n else ""
         label = f"News, {news_n} new" if news_n else "News"
@@ -1067,9 +1074,8 @@ if(n){n.textContent='Saving your photo\u2026';}i.form.submit();});})();</script>
   {link('/my/events', 'calendar', 'Coming up', 'Say you&#x27;re coming, or sign up to serve')}
   {link('/my/serving', 'clock', 'My serving', 'Your Sundays, away dates and swaps') if serving else ''}
   {link('/my/groups', 'users', 'My groups', 'Your groups, and ones you can join')}
-  {link('/my/messages', 'chat', 'Messages', 'Your chats and group chats') if msgs_on else ''}
+  {link('/my/messages', 'chat', 'Messages', 'Your church, your groups and your chats' if inbox else 'Your chats and group chats') if msgs_on or inbox else ''}
   {link('/my/prayer', 'pray', 'Prayer', 'A private request to the pastors')}
-  {link('/my/inbox', 'chat', 'From your church', 'Notes from the church, and a way to write back') if inbox else ''}
   {link('/my/ask', 'send', 'Ask the church', _e(member_asks.me_sub(asks))) if asks else ''}
   {recurring}
   {link('/my/notifications', 'bell', 'Notifications', 'What this app tells you about') if notes_on else ''}
@@ -1164,13 +1170,19 @@ async def serve(request: Request, path: str) -> HTMLResponse:
         import church_follow_up as cfu
         import member_portal_board as mpb
         may_lead = not sess.get("preview") and cfu.is_church(biz) and not msp.is_youth(sess["me"])
-        ctx, lead, board = await asyncio.gather(
+        # What's unread in Messages, for the header's one count (church
+        # threads; never for a chat's or the live page's poll).
+        import member_portal_threads as mpt
+        counted = "/feed" not in sub and not sub.startswith("/my/photo/")
+        ctx, lead, board, unread = await asyncio.gather(
             msp.resolve_async(biz["id"], sess["me"], request.cookies.get(msp.COOKIE) or ""),
             _leads(biz["id"], str(sess["me"]["id"]), biz, sess["me"]) if may_lead else _nothing(),
-            mpb.on_board(biz, sess["me"]) if may_lead else _nothing())
+            mpb.on_board(biz, sess["me"]) if may_lead else _nothing(),
+            mpt.counts(biz, sess["me"]) if counted else _nothing())
         if may_lead and ctx.get("space", "church") == "church":
             ctx = dict(ctx, lead=lead, board=board)
         msp.CURRENT.set(ctx)
+        mpt.BADGE.set(int(unread["total"]) if unread and mpt._in_church(ctx) else None)
     resp = await _serve_page(request, church, sess, sub)
     if sess and sess.get("preview") and isinstance(resp, HTMLResponse):
         import member_portal_preview as pv
@@ -1306,9 +1318,9 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
         if isinstance(out, tuple):
             return _page(out[0], out[1])
         return out
-    # From your church (member_portal_threads.py, church_threads.py): the
-    # church's notes and the member's groups' notes, like texts, and a way
-    # to write back to the office. Only while CHURCH_THREADS is open here.
+    # The church's conversation and a group's notes (member_portal_threads,
+    # church_threads), inside Messages; /my/inbox itself goes to Messages.
+    # Only while CHURCH_THREADS is open here.
     if sub == "/my/inbox" or sub.startswith("/my/inbox/"):
         import member_portal_threads as mpt
         out = await mpt.serve(request, biz, site, me, sub, preview=preview)
@@ -1583,7 +1595,7 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
         asyncio.to_thread(mcl.home_asks, biz, me) if church_home and not preview else _nothing(),
         # Asks to serve waiting on this member (member_portal_serving).
         asyncio.to_thread(ssv.waiting, biz, str(me["id"])) if church_home else _nothing(),
-        # From your church, while something there is unread (member_portal_threads).
+        # Messages, while something there is unread (member_portal_threads).
         _inbox_card(biz, me) if church_home else _nothing())
     occ, groups, lib = fill(occ, "occasions"), fill(groups, "groups"), fill(lib, "library")
     devotional, own, own_done = extras
@@ -1622,15 +1634,16 @@ async def _serve_page(request: Request, church: Dict[str, Any], sess, sub: str):
 
 
 def _inbox_space() -> bool:
-    """From your church lives in Church: not in Kids, nor for an adult who
-    switched into Youth (member_asks' rule)."""
+    """The church's conversation lives in Church: not in Kids, nor for an
+    adult who switched into Youth (member_asks' rule)."""
     import member_spaces as msp
     ctx = msp.CURRENT.get() or {}
     return not (ctx.get("space", "church") == "kids" or (ctx.get("space") == "youth" and not ctx.get("youth")))
 
 
 async def _inbox_entry(biz: Dict[str, Any]) -> bool:
-    """Me's way into From your church (member_portal_threads)."""
+    """Whether Me's Messages line takes in the church's conversation and the
+    groups' notes (member_portal_threads)."""
     if not _inbox_space():
         return False
     try:
@@ -1642,11 +1655,12 @@ async def _inbox_entry(biz: Dict[str, Any]) -> bool:
 
 
 async def _inbox_card(biz: Dict[str, Any], me: Dict[str, Any]) -> str:
-    """Home's card while something in From your church is unread."""
+    """Home's "Messages" card while something there is unread (church
+    threads: the church, the groups' notes and chats)."""
     if not _inbox_space():
         return ""
     import member_portal_threads as mpt
-    return await asyncio.to_thread(mpt.home_card, biz, me)
+    return mpt.home_card(biz, await mpt.counts(biz, me))
 
 
 async def _ask_entry(biz: Dict[str, Any], me: Dict[str, Any]) -> List[str]:

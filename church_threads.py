@@ -215,12 +215,14 @@ def lock_screen(business: Dict[str, Any], thread: str, title: str, body: str) ->
     like a text. A church note: the church's name on top, then the note's
     own title and line ("Tomorrow: Picnic — You said you're coming."), the
     title left out when it is the church's name already. A group note keeps
-    its title (the group's name) and body. Never raises."""
+    its title (the group's name) and body, and opens straight into the
+    group's chat where its notes sit (member_portal_threads), or its notes
+    when the group has no chat. Never raises."""
     import member_push
     try:
         gid = group_of(thread)
         if gid:
-            return {"url": inbox_url(thread)}
+            return {"url": group_url(business, gid)}
         name = church_name(business)
         title, body = _plain(title, 200), _plain(body, 400)
         said = body if (not title or title.casefold() == name.casefold()) else (
@@ -230,6 +232,22 @@ def lock_screen(business: Dict[str, Any], thread: str, title: str, body: str) ->
     except Exception:
         logger.warning("church threads: the lock screen fell back", exc_info=True)
         return {}
+
+
+def group_url(business: Dict[str, Any], group_id: str) -> str:
+    """Where a group's note opens: its chat while the church's chats are on
+    and the group's chat is (the note sits in it); else the group's notes
+    (/my/inbox/group/<gid>, which also sends a member on to the chat)."""
+    gid = str(group_id).lower()
+    try:
+        import member_portal_messaging as mpm
+        if mpm.turned_on(business):
+            rows = _rows(f"/groups?business_id=eq.{_q(business.get('id') or '')}&id=eq.{_q(gid)}&select=chat_on&limit=1")
+            if rows and rows[0].get("chat_on") is not False:
+                return f"/my/groups/{gid}/chat"
+    except Exception:
+        logger.warning("church threads: a group's chat couldn't be checked", exc_info=True)
+    return inbox_url(f"group:{gid}")
 
 
 # ─── Recording (member_push._send) ────────────────────────────────────

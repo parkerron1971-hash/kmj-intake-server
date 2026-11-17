@@ -424,9 +424,10 @@ def sweep_held(now: Optional[datetime] = None) -> int:
                     for n in reversed(fresh):
                         if n["title"] not in names:
                             names.append(n["title"])
-                    # Notes kept in the inbox (church_threads) open it; any
+                    # Notes kept for the church's conversation and the
+                    # groups' notes (church_threads) open Messages; any
                     # other mix opens Groups, as it always did.
-                    many = "/my/inbox" if all(u.startswith("/my/inbox") for u in urls) else "/my/groups"
+                    many = "/my/messages" if all(u.startswith("/my/inbox") for u in urls) else "/my/groups"
                     payload = {"title": "While you were resting",
                                "body": " · ".join(names)[:BODY_MAX],
                                "url": urls.pop() if len(urls) == 1 else many, "tag": "quiet-morning"}
