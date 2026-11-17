@@ -6580,6 +6580,19 @@ async def handle_navigate(client, biz, action) -> Dict:
     if page: label_parts.append(page)
     label = " → ".join(label_parts)
 
+    # A church's page is named the way its menu names it (church_findway):
+    # "Opened Office › Money out › Check requests", never "OPERATE → checks".
+    # Chief repeats this label to the person, so the label is where the
+    # right words have to be (seen live, 2026-11-17: the page was right and
+    # the words were "under Operate, in the Checks section").
+    try:
+        import church_findway
+        place = church_findway.place_of(biz, tab, page or sub)
+    except Exception:  # noqa: BLE001 — the old label still says where
+        place = None
+    if place:
+        label = place
+
     if contact_id:
         rows = await _sb(client, "GET",
             f"/contacts?id=eq.{contact_id}&business_id=eq.{biz['id']}&limit=1&select=name")

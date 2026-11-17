@@ -83,6 +83,34 @@ def test_the_switch_turns_it_off(monkeypatch):
     assert way.turn_block(CHURCH, "how do I pay someone back") == ""
 
 
+# ─── What Chief says it opened ────────────────────────────────────────
+
+def test_a_church_page_is_opened_by_the_menus_name_for_it():
+    import asyncio
+    out = asyncio.run(chief.handle_navigate(None, CHURCH, {"type": "navigate", "tab": "operate", "sub": "checks"}))
+    assert out["result"] == "opened" and out["nav"] == {"tab": "operate", "sub": "checks"}
+    assert out["label"] == "Opened Office › Money out › Check requests"
+    home = asyncio.run(chief.handle_navigate(None, CHURCH, {"type": "navigate", "tab": "home"}))
+    assert home["label"] == "Opened Home"
+    web = asyncio.run(chief.handle_navigate(None, CHURCH, {"type": "navigate", "tab": "build", "page": "member-app"}))
+    assert web["label"] == "Opened Web › Member app › Member app"
+
+
+def test_a_business_keeps_the_label_it_had():
+    import asyncio
+    out = asyncio.run(chief.handle_navigate(None, COACH, {"type": "navigate", "tab": "operate", "sub": "invoices"}))
+    assert out["label"] == "Opened OPERATE → invoices"
+    assert way.place_of(COACH, "operate", "checks") is None
+    assert way.place_of(CHURCH, "operate", "not-on-the-map") is None
+
+
+def test_the_switch_also_puts_the_old_label_back(monkeypatch):
+    import asyncio
+    monkeypatch.setenv("CHIEF_FINDWAY", "off")
+    out = asyncio.run(chief.handle_navigate(None, CHURCH, {"type": "navigate", "tab": "operate", "sub": "checks"}))
+    assert out["label"] == "Opened OPERATE → checks"
+
+
 # ─── This turn's answers ──────────────────────────────────────────────
 
 def test_paying_a_deacon_back_is_a_check_request():
