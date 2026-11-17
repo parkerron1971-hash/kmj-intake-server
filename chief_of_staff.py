@@ -10195,9 +10195,11 @@ async def handle_send_invoice(client, biz, action) -> Dict:
 
     # Sentinel support: "latest" resolves to the most recent draft/sent
     # invoice for this business. Lets the Chief chain without UUIDs.
+    # Never a gift: a church's gifts are paid invoices too (is_gift), and
+    # the newest row at a church is almost always one.
     if invoice_id == "latest":
         latest = await _sb(client, "GET",
-            f"/invoices?business_id=eq.{biz['id']}&order=created_at.desc&limit=1&select=id")
+            f"/invoices?business_id=eq.{biz['id']}&is_gift=is.false&order=created_at.desc&limit=1&select=id")
         if not latest:
             print(f"[Chief] send_invoice — 'latest' but no invoices exist for business", flush=True)
             return _fail("send_invoice", "no invoices found")
@@ -10326,7 +10328,7 @@ async def handle_mark_invoice_paid(client, biz, action) -> Dict:
     # most recent invoice for this business.
     if invoice_id == "latest":
         latest = await _sb(client, "GET",
-            f"/invoices?business_id=eq.{biz['id']}&order=created_at.desc&limit=1&select=id")
+            f"/invoices?business_id=eq.{biz['id']}&is_gift=is.false&order=created_at.desc&limit=1&select=id")
         if not latest:
             return _fail("mark_invoice_paid", "no invoices found")
         invoice_id = latest[0]["id"]

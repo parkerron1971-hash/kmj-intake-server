@@ -300,3 +300,17 @@ def test_chief_is_told_to_say_bill_to_a_churchs_payer_and_nothing_is_told_to_a_b
     assert "call it a bill, never an invoice" in menu
     assert church_findway.menu_block(COACH) == ""
 
+
+
+def test_the_latest_invoice_is_never_a_gift():
+    # A church's gifts are paid invoices too (is_gift). "Send the latest
+    # invoice" picked the newest row by date, which at a church is a gift.
+    import inspect
+    import chief_invoice_sms
+    import chief_of_staff as cos
+    for fn in (cos.handle_send_invoice, cos.handle_mark_invoice_paid, chief_invoice_sms.send_invoice_sms):
+        src = inspect.getsource(fn)
+        assert "order=created_at.desc&limit=1" in src, fn.__name__
+        for line in src.splitlines():
+            if "order=created_at.desc&limit=1" in line and "/invoices?" in line:
+                assert "is_gift=is.false" in line, (fn.__name__, line.strip())

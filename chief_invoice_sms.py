@@ -56,7 +56,7 @@ async def send_invoice_sms(client, biz, action, *, preview=False):
         selected = dict(action)
         if selected.get('invoice_id') == 'latest':
             rows = await chief._sb(client, 'GET',
-                f'/invoices?business_id=eq.{owner}&order=created_at.desc&limit=1&select=id')
+                f'/invoices?business_id=eq.{owner}&is_gift=is.false&order=created_at.desc&limit=1&select=id')
             if not rows:
                 return fail('No invoice was found. Which invoice would you like me to text?')
             selected['invoice_id'] = rows[0]['id']
