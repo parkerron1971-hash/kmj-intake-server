@@ -15562,16 +15562,15 @@ async def chief_chat(
             view_task = preparation.start(_fetch_view_detail(client, req.business_id, req.current_context))
             # Is this right? (church_map_asks): this login's lines, read alongside the context and done with it,
             # so their time is the context stage's (a church's only).
-            # THE OFFICE (chief_office) rides the same gather: kept two minutes a replica, so most turns
+            # THE OFFICE (chief_office) is read beside them, and kept two minutes a replica, so most turns
             # read nothing for it.
             import church_follow_up as _cfu
             if biz_lite and _cfu.is_church(biz_lite):
                 import church_map_asks
-                ctx, view_detail, _asks_read, _office_roster = await asyncio.gather(
-                    ctx_task, view_task,
-                    asyncio.to_thread(church_map_asks.turn_lines, biz_lite, str(user_session.user.id),
-                                      chief_areas.WHO.get()),
-                    asyncio.to_thread(_church_office.text_for, biz_lite))
+                _office_task = preparation.start(asyncio.to_thread(_church_office.text_for, biz_lite))
+                ctx, view_detail, _asks_read = await asyncio.gather(ctx_task, view_task, asyncio.to_thread(
+                    church_map_asks.turn_lines, biz_lite, str(user_session.user.id), chief_areas.WHO.get()))
+                _office_roster = await _office_task
             else:
                 ctx, view_detail = await asyncio.gather(ctx_task, view_task)
             _t.mark("context")
