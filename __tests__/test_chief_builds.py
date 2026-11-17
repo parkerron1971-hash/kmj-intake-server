@@ -436,3 +436,14 @@ def test_a_finished_website_edit_that_said_no_gives_its_reason():
     checked=asyncio.run(a.verify(step,{},refused,{}))
     assert checked['outcome']=='failed' and checked['label']==runtime.SITE_LINK_REFUSED_LABEL
     assert 'validator' not in checked['label'] and not checked['verified']['ok']
+
+
+def test_builds_are_on_unless_switched_off(monkeypatch):
+    """CHIEF_BUILDS is on by the code's own default (2026-11-17; production
+    had it on through Railway). off is still the rollback."""
+    monkeypatch.delenv('CHIEF_BUILDS', raising=False)
+    assert runtime.enabled() is True
+    monkeypatch.setenv('CHIEF_BUILDS', 'off')
+    assert runtime.enabled() is False
+    monkeypatch.setenv('CHIEF_BUILDS', 'on')
+    assert runtime.enabled() is True

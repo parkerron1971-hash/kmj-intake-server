@@ -72,7 +72,9 @@ def door(monkeypatch):
 
 # ─── which tools ─────────────────────────────────────────────────────
 
-def test_write_tools_are_the_reviewed_class_a_surface():
+def test_write_tools_are_the_reviewed_class_a_surface(monkeypatch):
+    import chief_build_runtime
+    monkeypatch.delenv("CHIEF_BUILDS", raising=False)   # the code's default (conftest sets off)
     names = {t["name"] for t in ctl.write_tool_definitions()}
     expected = {v for v in mcp_server.WRITE_TOOL_SCHEMAS
                 if action_registry.may_expose_to_agent(v, allow_writes=True)
@@ -81,10 +83,15 @@ def test_write_tools_are_the_reviewed_class_a_surface():
     expected.add("delegate_to_agent")
     assert not action_registry.may_expose_to_agent("delegate_to_agent", allow_writes=True)
     assert "delegate_to_agent" not in mcp_server.exposed_tools(allow_writes=True)
-    assert names == expected and names
+    # Chief builds are on by default (CHIEF_BUILDS, 2026-11-17) and add the
+    # two work-order tools; CHIEF_BUILDS=off takes them away again.
+    builds = set(chief_build_runtime.BUILD_TOOLS)
+    assert names == expected | builds and names
     for n in names:
         assert action_registry.reversibility(n) == "A", n
         assert not action_registry.is_sensitive(n), n
+    monkeypatch.setenv("CHIEF_BUILDS", "off")
+    assert {t["name"] for t in ctl.write_tool_definitions()} == expected
 
 
 def test_write_tools_are_anthropic_shaped():
