@@ -4,7 +4,7 @@ date: 2026-11-17
 agent: Claude Code (Claude Fable 5.2)
 asked: 'Kevin, 2026-11-17: "let''s work on those changes as well" (the church pages still in business words; the Briefing page''s letter is written here)'
 status: in review
-prs: []
+prs: [kmj-intake-server#1890]
 migrations: []
 left_undone:
   - "Giving is not in a church's letter: the Briefing page opens to office logins that never see giving, and one letter is kept for the whole church. Kevin's call if the pastor wants giving in his own letter (it would need a letter per reader, or the page gated)."
