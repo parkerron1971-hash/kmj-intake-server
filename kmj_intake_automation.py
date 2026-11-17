@@ -2314,7 +2314,7 @@ async def startup():
     # Find my best clips (2026-10-05): follow one run on the clip service;
     # a run outlives an API restart (the next claim resumes it). The sweep
     # applies the storage rules (recordings 7 days after their clips,
-    # skipped clips after 30). Switch: CLIP_FINDER=on.
+    # skipped clips after 30). Switch: CLIP_FINDER (on unless =off).
     try:
         import clip_finder as _clip_finder
         scheduler.add_job(g("clip_finder", _clip_finder.tick),

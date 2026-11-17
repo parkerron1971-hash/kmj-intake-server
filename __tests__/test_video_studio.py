@@ -11,6 +11,20 @@ import video_studio_worker as worker
 from video_hyperframes import compile_project,RUNTIME
 
 def composition(**kw):return Composition(title='Studio test',scenes=[Scene(id='opening',title='A clear idea',seconds=6)],**kw)
+def test_planning_and_rendering_are_on_unless_switched_off(monkeypatch):
+    monkeypatch.delenv('VIDEO_STUDIO_ENABLED', raising=False)
+    monkeypatch.delenv('VIDEO_RENDER_ENABLED', raising=False)
+    c = service.configuration()
+    assert c['planning_available'] is True and c['rendering_available'] is True
+    monkeypatch.setenv('VIDEO_STUDIO_ENABLED', 'off')
+    monkeypatch.setenv('VIDEO_RENDER_ENABLED', 'off')
+    c = service.configuration()
+    assert c['planning_available'] is False and c['rendering_available'] is False
+    monkeypatch.setattr(worker, 'work_once', lambda: (_ for _ in ()).throw(AssertionError('ran while off')))
+    import asyncio
+    asyncio.run(worker.tick())
+
+
 def test_untrusted_fields_and_timings_rejected():
     for patch in [{'html':'<script/>'},{'accent':'red;url(https://evil)'},{'voice':'../../secret'}]:
         with pytest.raises(ValidationError):composition(**patch)

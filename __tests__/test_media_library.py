@@ -22,6 +22,16 @@ def clip(**changes):
                       caption='Synthetic recording', destination='Review account', **changes)
 
 
+def test_processing_is_on_unless_switched_off(monkeypatch):
+    monkeypatch.delenv('MEDIA_PROCESSING', raising=False)
+    assert media.processing_enabled() is True
+    monkeypatch.setenv('MEDIA_PROCESSING', 'off')
+    assert media.processing_enabled() is False
+    monkeypatch.setattr(media, 'work_once', lambda: (_ for _ in ()).throw(AssertionError('ran while off')))
+    import asyncio
+    asyncio.run(media.tick())
+
+
 @pytest.mark.parametrize('start,end', [(0, 4), (0, 91), (8, 2), (-1, 9), (float('nan'), 10), (0, float('inf'))])
 def test_clip_bounds_reject_invalid_segments(start, end):
     with pytest.raises(ValidationError):

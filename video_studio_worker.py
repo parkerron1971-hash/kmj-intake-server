@@ -307,6 +307,6 @@ if __name__=='__main__':
 
 
 async def tick():
-    if os.getenv('VIDEO_STUDIO_ENABLED')!='on':return
+    if not studio.studio_enabled():return
     import asyncio
     await asyncio.to_thread(work_once)
