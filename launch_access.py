@@ -203,6 +203,8 @@ class CreateBusinessBody(BaseModel):
     voice_profile: Dict[str, Any] = {}
     cdi_vocabulary: Optional[str] = None
     settings: Dict[str, Any] = {}
+    # Sent by the app ('starter') and ignored: the plan mirror is the
+    # server's (BIRTH_TIER below).
     tier: Optional[str] = None
     # Which door they walked in through — the app stashed campaign params
     # off its front-door URL at first visit (same stash-and-redeem as
@@ -277,6 +279,16 @@ def _seed_new_business(row: Dict[str, Any], business_type: str,
     except Exception as e:
         logger.warning(f"[access] autopilot seed failed for {biz_id}: {e}")
     return out
+
+
+# The plan mirror (businesses.tier) every business is born with: no plan yet.
+# The server's, not the client's: until 2026-11-17 create_business copied
+# body.tier as the service role, so a signup could be born showing any plan
+# the column allows. The app sends 'starter', so nothing it sees changes; the
+# Stripe webhook and the no-card trial move it from here, and trial_expiry
+# puts it back. The app's logins can't write the column at all
+# (APPLY-2026-11-17-businesses-server-columns.sql).
+BIRTH_TIER = "starter"
 
 
 def birth_settings(client_settings: Any, btype: str) -> Dict[str, Any]:
@@ -365,7 +377,7 @@ def create_business(body: CreateBusinessBody,
         "voice_profile": body.voice_profile or {},
         "cdi_vocabulary": body.cdi_vocabulary,
         "settings": settings,
-        **({"tier": body.tier} if body.tier else {}),
+        "tier": BIRTH_TIER,
         **({"attribution": attribution} if attribution else {}),
     })
     row = (res or [None])[0] if isinstance(res, list) else res
