@@ -132,8 +132,17 @@ def test_a_lane_is_never_pointed_at_a_page_it_does_not_have():
 
 
 def test_an_answer_that_lives_in_settings_opens_settings():
+    block = way.turn_block(CHURCH, "how do i change our plan or see the bill")
+    assert "Change our plan or see the bill — Settings › All settings (open with navigate build/settings)" in block
+
+
+def test_a_login_is_given_on_logins_and_areas_not_in_settings():
+    # A church's logins are invited, placed and removed in one place since
+    # 2026-11-17: Logins & areas, the Office logins tab.
     block = way.turn_block(CHURCH, "how do i give someone a login")
-    assert "Give someone a login — Settings › All settings (open with navigate build/settings)" in block
+    assert "Give someone a login — Settings › Logins & areas (open with navigate operate/areas)" in block
+    assert "Invite a login" in block
+    assert "then Team" not in block
 
 
 def test_a_page_asked_about_by_name_gets_its_sentence():

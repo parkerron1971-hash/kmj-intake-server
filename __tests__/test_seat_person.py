@@ -142,3 +142,12 @@ def test_the_team_list_shows_names(fb):
     by_email = {m["invited_email"]: m["person"] for m in members}
     assert by_email["minnie.t@yahoo.com"]["name"] == "Minnie Tatum"
     assert by_email["new@x.com"] is None
+
+
+def test_the_team_list_asks_for_each_seats_lane():
+    """Logins & areas shows an invitation still waiting with its lane. The
+    page read `lane` from this list, which never sent it."""
+    import inspect
+    src = inspect.getsource(bu.list_team)
+    select = src[src.index("&select=id,invited_email"):]
+    assert ",lane" in select.split('"')[0]

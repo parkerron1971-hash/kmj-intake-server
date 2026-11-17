@@ -1951,7 +1951,7 @@
         {
          "id": "give-a-leader-a-login",
          "q": "Give a leader a login",
-         "a": "Press Give a login on the Office logins row. It opens Settings, Team, where the church’s logins are set.",
+         "a": "Press Give a login on the Office logins row. It opens Logins & areas on the Office logins tab, where logins are invited.",
          "words": [
           "staff login",
           "add a user",
@@ -4634,9 +4634,34 @@
        ],
        "answers": [
         {
+         "id": "give-someone-a-login",
+         "q": "Give someone a login",
+         "a": "Open the Office logins tab and go to Invite a login under the list. Type their email, pick Their lane and press Send the invitation.",
+         "words": [
+          "invite staff",
+          "add a user",
+          "new office login",
+          "add the treasurer",
+          "add a staff member",
+          "invite the secretary",
+          "add an admin"
+         ]
+        },
+        {
+         "id": "remove-a-login",
+         "q": "Remove a login",
+         "a": "On the Office logins tab press Remove beside the person, then Remove the login. They can no longer sign in, and their open tasks go back to the office’s list.",
+         "words": [
+          "delete a user",
+          "take away access",
+          "staff member left",
+          "cancel an invitation"
+         ]
+        },
+        {
          "id": "see-a-new-login-after-inviting-them",
          "q": "See a new login after inviting them",
-         "a": "Logins are made in All settings: open Your church, then Team, type their email, pick Their lane or a role and press Invite. They then show here on the Office logins tab, where you set what they see.",
+         "a": "Invite them on the Office logins tab, under Invite a login. They show under Waiting to accept until they open their link, then in the list above, where you set what they see.",
          "words": [
           "add a staff member",
           "invite the secretary",
@@ -4712,7 +4737,7 @@
        "sees": [
         "office"
        ],
-       "what": "Connect the outside services the church uses: email, the bank, card payments and social accounts.",
+       "what": "Connect the outside services the church uses: social accounts, email, the bank and QuickBooks.",
        "words": [
         "integration",
         "integrations",
@@ -4737,6 +4762,19 @@
           "link bank account",
           "plaid",
           "bank feed"
+         ]
+        },
+        {
+         "id": "find-where-card-payments-are-connected",
+         "q": "Find where card payments are connected",
+         "a": "Online giving and card payments are not connected on this page. Press Open Payments at the top, or open Payments behind the Giving door, and connect Stripe there.",
+         "words": [
+          "payment providers",
+          "paypal",
+          "square",
+          "stripe link",
+          "pay link",
+          "payment settings"
          ]
         }
        ]
@@ -4821,7 +4859,7 @@
        "sub": "settings",
        "name": "All settings",
        "sees": "every",
-       "what": "Find any setting: logins, your plan and bill, the look, notifications and Chief.",
+       "what": "Find any setting: your plan and bill, the look, the words the app uses, notifications and Chief.",
        "words": [
         "settings",
         "preferences",
@@ -4844,7 +4882,7 @@
         {
          "id": "change-the-look-to-light-or-dark",
          "q": "Change the look to light or dark",
-         "a": "Open Look and feel, then Appearance. Under the design you like press Light or Dark.",
+         "a": "Open Look and words, then Appearance. Under the design you like press Light or Dark.",
          "words": [
           "dark mode",
           "light mode",
@@ -4852,18 +4890,6 @@
           "colors of the app"
          ],
          "settings": "appearance"
-        },
-        {
-         "id": "give-someone-a-login",
-         "q": "Give someone a login",
-         "a": "Open Your church, then Team, type their email, pick Their lane or a role and press Invite. Set what they see afterwards in Logins & areas.",
-         "words": [
-          "invite staff",
-          "add a user",
-          "new office login",
-          "add the treasurer"
-         ],
-         "settings": "team"
         },
         {
          "id": "find-a-setting",
@@ -4879,7 +4905,7 @@
         {
          "id": "change-the-words-the-app-uses",
          "q": "Change the words the app uses",
-         "a": "Open Your church, then Your words, and press Edit your words.",
+         "a": "Open Look and words, then Your words. The words open on their own page. Change one there and the app says it that way everywhere.",
          "words": [
           "rename members",
           "terminology",

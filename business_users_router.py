@@ -393,7 +393,9 @@ def list_team(biz: str, user: AuthedUser = Depends(require_user)) -> Dict[str, A
     rows = sb_clients.sb_get_as_service(
         f"/business_users?business_id=eq.{biz}&status=in.(invited,active)"
         f"&order=invited_at.desc&limit=200"
-        f"&select=id,invited_email,role,status,invited_at,joined_at,contact_id,name") or []
+        # `lane`: the office lane the invite carried, so an invitation still
+        # waiting reads "People & Care lane" on Logins & areas after a reload.
+        f"&select=id,invited_email,role,status,invited_at,joined_at,contact_id,name,lane") or []
     for r in rows:
         r["person"] = _person_for_seat(biz, r)
     return {"ok": True, "members": rows,
