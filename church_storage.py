@@ -22,8 +22,13 @@ and never raises.
 
 WHAT IS COUNTED (used)
 ----------------------
-  recordings  stream_sessions.bytes for the church's sessions not removed
-              (the media bucket, private).
+  recordings  what each of the church's sessions not removed keeps in the
+              media bucket (private), stored_bytes: stream_sessions.bytes
+              (the full-quality recording) plus copy_bytes (its smaller
+              copy, recording_copy.py) while the full recording is there,
+              only copy_bytes once full_removed_at is set. Before
+              APPLY-2026-11-17-recording-small-copy.sql there are no copy
+              columns and it is bytes alone.
   classes     academy_live_sessions.recording_bytes for the church's
               courses (the class recordings' own bucket). Shown as 0 when
               it can't be read.
@@ -112,6 +117,7 @@ ADD_STORAGE_SOLD = False
 
 SESSION_COLS = ("id,business_id,status,bytes,duration_s,started_at,ended_at,sermon_id,playlist_path,"
                 "removed_at,keep_until,warnings_sent,last_warned_at")
+COPY_COLS = "copy_state,copy_bytes,full_removed_at"
 _WATCH_RE = re.compile(r"/stream-relay/watch/([0-9a-fA-F-]{36})$")
 
 
@@ -223,12 +229,38 @@ def state_of(used: int, total: int) -> str:
 
 # ─── Reads ───────────────────────────────────────────────────────────
 
+def session_cols() -> Optional[str]:
+    """SESSION_COLS, with the smaller copy's columns once they exist (the
+    recording-small-copy migration), whatever its switch says: a copy made
+    while it was on is counted after it is turned off. None when whether
+    they exist couldn't be told (a failed read): the caller reads nothing,
+    so a recording whose full-quality segments are gone is never counted
+    at its full size on a guess."""
+    import recording_copy
+    there = recording_copy.copy_columns()
+    if there is None:
+        return None
+    return f"{SESSION_COLS},{COPY_COLS}" if there else SESSION_COLS
+
+
+def stored_bytes(s: Dict[str, Any]) -> int:
+    """What one recording keeps in the media bucket: the full-quality
+    recording (bytes) until full_removed_at, plus its smaller copy
+    (copy_bytes, set only once the copy is made and checked)."""
+    full = 0 if s.get("full_removed_at") else _int(s.get("bytes"))
+    return full + _int(s.get("copy_bytes"))
+
+
 def sessions_of(business_id: str) -> Optional[List[Dict[str, Any]]]:
     """Every stream session of the church, removed ones too (their size
     still says what a Sunday takes). None when any page failed."""
     try:
+        cols = session_cols()
+        if cols is None:
+            print("[church_storage] sessions not read: the copy columns couldn't be checked", flush=True)
+            return None
         return sb_clients.sb_get_all_as_service(
-            f"/stream_sessions?business_id=eq.{_q(business_id)}&select={SESSION_COLS}", key="id", strict=True)
+            f"/stream_sessions?business_id=eq.{_q(business_id)}&select={cols}", key="id", strict=True)
     except Exception as e:  # noqa: BLE001  (PartialRead included)
         print(f"[church_storage] sessions read failed: {type(e).__name__}", flush=True)
         return None
@@ -270,7 +302,9 @@ def files_bytes(business_id: str) -> Optional[int]:
 
 def sunday_bytes(sessions: List[Dict[str, Any]]) -> int:
     """What one service takes: the church's own average over its last
-    SUNDAY_SAMPLE ended services of at least 30 minutes, else 6 GB."""
+    SUNDAY_SAMPLE ended services of at least 30 minutes, else 6 GB. Their
+    full size (bytes), also once a smaller copy took its place: a new
+    Sunday is kept at full size for its first 14 days."""
     done = [s for s in sessions if s.get("status") == "ended"
             and _int(s.get("duration_s")) >= SUNDAY_MIN_S and _int(s.get("bytes")) > 0]
     done.sort(key=lambda s: str(s.get("started_at") or ""), reverse=True)
@@ -286,7 +320,7 @@ def measure(business_id: str, sessions: List[Dict[str, Any]], row: Optional[Dict
     recordings couldn't be read: the meter then counts them as 0 for the
     page, and nothing is held, released or removed from it."""
     allowance = allowance_bytes(row)
-    recordings = sum(_int(s.get("bytes")) for s in sessions if not s.get("removed_at"))
+    recordings = sum(stored_bytes(s) for s in sessions if not s.get("removed_at"))
     classes = class_bytes(business_id)
     files = files_bytes(business_id)
     used_now = recordings + (classes or 0) + (files or 0)
@@ -487,9 +521,10 @@ def _clear_drafts(business_id: str, sid: str, now: datetime) -> None:
 
 def remove_recording(business_id: str, s: Dict[str, Any], *, now: Optional[datetime] = None
                      ) -> Optional[Dict[str, Any]]:
-    """Delete one recording's files from the media bucket, then mark it
-    removed (removed_at, keep_until cleared). {"marked": this call marked
-    it, "freed_bytes": what the meter counted for it}; None when anything
+    """Delete one recording's files from the media bucket (its smaller copy
+    too: it sits in the same folder), then mark it removed (removed_at,
+    keep_until cleared). {"marked": this call marked it, "freed_bytes":
+    what the meter counted for it}; None when anything
     failed, and then nothing is marked, so it can be tried again (a retry
     finds fewer files, or none, and finishes). The caller has already
     checked it is the church's, ended and not a published sermon."""
@@ -512,8 +547,8 @@ def remove_recording(business_id: str, s: Dict[str, Any], *, now: Optional[datet
     _forget(sid)
     _clear_drafts(business_id, sid, stamp)
     print(f"[church_storage] removed recording {sid[:8]} of {str(business_id)[:8]}: "
-          f"{len(keys)} files, {_int(s.get('bytes'))} bytes", flush=True)
-    return {"marked": bool(got), "freed_bytes": _int(s.get("bytes")) if got else 0}
+          f"{len(keys)} files, {stored_bytes(s)} bytes", flush=True)
+    return {"marked": bool(got), "freed_bytes": stored_bytes(s) if got else 0}
 
 
 # ─── Telling the office ──────────────────────────────────────────────

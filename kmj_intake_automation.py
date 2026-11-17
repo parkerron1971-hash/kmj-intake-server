@@ -1856,6 +1856,14 @@ async def startup():
             import church_storage as _church_storage
             scheduler.add_job(g("church_storage", _church_storage.storage_tick), "cron",
                               hour=9, minute=40, id="church_storage")
+            # Each recording's smaller copy, which is also its download, and
+            # the full-quality recording's removal 14 days after the service
+            # (recording_copy.py). Made by the clip service, one at a time,
+            # never ahead of a clip run. Nothing while
+            # CHURCH_STORAGE_SMALL_COPY is off.
+            import recording_copy as _recording_copy
+            scheduler.add_job(g("recording_copy", _recording_copy.copy_tick), "interval",
+                              minutes=2, id="recording_copy", max_instances=1)
             # App-granted trials end on their own, like Stripe trials do.
             import trial_expiry as _trial_expiry
             scheduler.add_job(g("trial_expiry", _trial_expiry.expire_tick), "interval",

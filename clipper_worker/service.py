@@ -6,8 +6,16 @@ README.md), checks every finished clip for stretches with nobody on screen,
 and keeps the clips until the API collects them. It has no database or storage
 credentials, runs one job at a time, and forgets a job when the API deletes it
 or when it is RESULT_TTL seconds old.
+
+It also makes a service recording's smaller copy (POST /copies/<job>, the API's
+recording_copy.py): the API sends the recording's playlist with every segment
+signed and a signed upload link, and this service reads the segments, encodes
+one 720p MP4 and uploads it. Copies share the one-job rule, and a clip job
+always goes first: a clip job that arrives while a copy is being made stops
+the copy (job.yielded) and takes its turn.
 """
 import base64
+import hashlib
 import hmac
 import json
 import logging
@@ -41,6 +49,20 @@ MAX_SOURCE_BYTES = int(os.getenv('CLIPPER_MAX_SOURCE_BYTES', str(5 * 1024 ** 3))
 MAX_SOURCE_SECONDS = int(os.getenv('CLIPPER_MAX_SOURCE_SECONDS', '7200'))
 JOB_SECONDS = int(os.getenv('CLIPPER_JOB_SECONDS', '3600'))
 RESULT_TTL = int(os.getenv('CLIPPER_RESULT_TTL', '7200'))
+# The smaller copy of a service recording (POST /copies/<job>).
+COPY_SECONDS = int(os.getenv('CLIPPER_COPY_SECONDS', '10800'))
+COPY_MAX_SECONDS = int(os.getenv('CLIPPER_COPY_MAX_SECONDS', str(6 * 3600)))
+COPY_STALL_SECONDS = 600              # nothing new encoded this long: the reading stalled
+COPY_MAX_BYTES = 5 * 1024 ** 3        # one PUT
+COPY_PLAYLIST_CHARS = 8_000_000       # ~1 MB is a 2-hour service
+YIELD_WAIT_SECONDS = 30               # a copy stops within seconds when a clip job needs the service
+# About 720p, the aspect kept, never upscaled: a landscape picture fits in
+# 1280x720, a portrait one in 720x1280.
+COPY_SCALE = ("scale=w='if(gte(iw,ih),min(1280,iw),min(720,iw))':h='if(gte(iw,ih),min(720,ih),min(1280,ih))'"
+              ":force_original_aspect_ratio=decrease:force_divisible_by=2,format=yuv420p")
+# ffmpeg's HLS reader skips a segment it can't read and carries on (exit 0):
+# that is a copy with a hole in it, so it fails the job.
+SEGMENT_LOST = ('Failed to open segment', 'failed too many times', 'Failed to reload playlist')
 CAPTION_PRESETS = ('pop', 'spotlight', 'impact', 'glow', 'boxed', 'sweep', 'editorial', 'hype', 'punch', 'neon', 'headline', 'paper', 'subtle')
 FILE_NAME = re.compile(r'^clip_\d{2}(\.mp4|\.jpg|_frame\.jpg|_face\.jpg)$')
 # Only these reach the engine process; the service token never does.
@@ -53,6 +75,8 @@ lock = threading.Lock()
 FACE_SLOTS = 2
 face_slots = threading.BoundedSemaphore(FACE_SLOTS)
 jobs = {}
+# The job holding `lock` (its state), so a clip job can ask a copy to make way.
+holder = {'state': None}
 
 
 class Options(BaseModel):
@@ -81,6 +105,16 @@ class JobRequest(BaseModel):
     model_config = ConfigDict(extra='forbid')
     source_url: str = Field(max_length=4096)
     options: Options = Field(default_factory=Options)
+
+
+class CopyRequest(BaseModel):
+    """A service recording's smaller copy: its playlist with every segment a
+    signed https link, the signed link to upload the MP4 to, and how long the
+    recording is (for the progress)."""
+    model_config = ConfigDict(extra='forbid')
+    playlist: str = Field(min_length=8, max_length=COPY_PLAYLIST_CHARS)
+    upload_url: str = Field(max_length=4096)
+    seconds: float = Field(gt=0, le=COPY_MAX_SECONDS)
 
 
 class FaceRequest(BaseModel):
@@ -119,9 +153,12 @@ def authorized(authorization: str = Header(default='')):
         raise HTTPException(401, 'Unauthorized')
 
 
-def source_allowed(url):
-    """Signed links from our own storage only: https, an approved host, no credentials."""
-    hosts = {h.strip().lower() for h in os.getenv('CLIPPER_SOURCE_HOSTS', '').split(',') if h.strip()}
+def source_allowed(url, hosts_env='CLIPPER_SOURCE_HOSTS'):
+    """Signed links from our own storage only: https, an approved host, no
+    credentials. Clip jobs and close-ups read CLIPPER_SOURCE_HOSTS; a copy's
+    segments and its upload read CLIPPER_COPY_HOSTS (the media bucket's host
+    alone), so allowing copies never widens what a clip job may fetch."""
+    hosts = {h.strip().lower() for h in os.getenv(hosts_env, '').split(',') if h.strip()}
     try:
         parts = urlsplit(url)
         port = parts.port
@@ -184,8 +221,8 @@ def stage_for(percent):
 def check_cancel(state):
     if state['cancel'].is_set():
         raise Cancelled()
-    if time.monotonic() - state['started'] > JOB_SECONDS:
-        raise JobError('Finding clips took too long and was stopped.', state['stage'], 'job.timeout')
+    if time.monotonic() - state['started'] > state.get('limit', JOB_SECONDS):
+        raise JobError(state.get('too_long', 'Finding clips took too long and was stopped.'), state['stage'], 'job.timeout')
 
 
 def download(url, target, state, transport=None):
@@ -424,7 +461,205 @@ def work(job_id, request, state):
         elif state['status'] != 'completed':
             # Keep the status so the API can read why; the files are no use.
             shutil.rmtree(job_dir, ignore_errors=True)
-        lock.release()
+        release_lock()
+
+
+def release_lock():
+    holder['state'] = None
+    lock.release()
+
+
+def take_turn():
+    """A clip job's turn while a copy holds the service: the copy stops (the
+    API makes it again later, without counting it against the copy) and the
+    lock passes to the clip job. True when the caller now holds the lock."""
+    current = holder.get('state')
+    if not current or current.get('kind') != 'copy':
+        return False
+    current['yielded'] = True
+    current['cancel'].set()
+    print('[clipper] a clip job came in; the copy being made stops and is made later', flush=True)
+    return lock.acquire(timeout=YIELD_WAIT_SECONDS)
+
+
+# -- a service recording's smaller copy -----------------------------------
+
+def checked_playlist(text):
+    """The recording's playlist as ffmpeg will read it, or None. Every line
+    that isn't a tag must be a signed https link on CLIPPER_COPY_HOSTS; no tag
+    may point anywhere (keys, maps, other playlists). It always ends with
+    EXT-X-ENDLIST, so it is read from its start as a finished video, never
+    as a live stream."""
+    lines = [line.strip() for line in (text or '').splitlines() if line.strip()]
+    if not lines or lines[0] != '#EXTM3U':
+        return None
+    segments = 0
+    for line in lines[1:]:
+        if line.startswith('#'):
+            if 'URI=' in line.upper() or line.upper().startswith('#EXT-X-STREAM-INF'):
+                return None
+            continue
+        if not source_allowed(line, 'CLIPPER_COPY_HOSTS'):
+            return None
+        segments += 1
+    if not segments:
+        return None
+    if '#EXT-X-ENDLIST' not in lines:
+        lines.append('#EXT-X-ENDLIST')
+    return '\n'.join(lines) + '\n'
+
+
+def copy_cmd(playlist, target):
+    """H.264 about 720p at ~1.5 Mbps and AAC 96 kbps, ready to play while it
+    loads (+faststart). ffmpeg reads the local playlist, then only https."""
+    return ['ffmpeg', '-nostdin', '-hide_banner', '-v', 'warning', '-y',
+            '-protocol_whitelist', 'file,https,tls,tcp,crypto', '-seg_max_retry', '3',
+            '-i', str(playlist), '-map', '0:v:0', '-map', '0:a:0?', '-vf', COPY_SCALE,
+            '-c:v', 'libx264', '-preset', 'veryfast', '-profile:v', 'high',
+            '-b:v', '1500k', '-maxrate', '2000k', '-bufsize', '3000k', '-g', '120',
+            '-c:a', 'aac', '-b:a', '96k', '-ac', '2', '-movflags', '+faststart',
+            '-progress', 'pipe:1', '-nostats', str(target)]
+
+
+def run_copy(state, cmd, job_dir, seconds):
+    """Run ffmpeg and follow its -progress lines. Stops on a cancel, the job's
+    time limit, or COPY_STALL_SECONDS with nothing new encoded."""
+    lines = queue.Queue()
+    log_path = job_dir / 'ffmpeg.log'
+    with open(log_path, 'w', encoding='utf-8') as ffmpeg_log:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=ffmpeg_log, stdin=subprocess.DEVNULL,
+                                text=True, encoding='utf-8', errors='replace', start_new_session=os.name != 'nt')
+
+        def reader():
+            for line in proc.stdout:
+                lines.put(line)
+        follower = threading.Thread(target=reader, daemon=True)
+        follower.start()
+        moved, done_us = time.monotonic(), 0
+        try:
+            while True:
+                try:
+                    line = lines.get(timeout=0.5)
+                except queue.Empty:
+                    if not follower.is_alive() and lines.empty():
+                        break
+                    line = ''
+                name, _, value = line.strip().partition('=')
+                if name in ('out_time_us', 'out_time_ms') and value.isdigit() and int(value) > done_us:
+                    done_us, moved = int(value), time.monotonic()
+                    state['percent'] = round(min(89.0, 89 * done_us / 1e6 / seconds), 1)
+                check_cancel(state)
+                if time.monotonic() - moved > COPY_STALL_SECONDS:
+                    raise JobError('Reading the recording stalled. It will be tried again.', 'making', 'copy.stalled')
+            proc.wait(timeout=30)
+        finally:
+            stop(proc)
+    said = log_path.read_text(encoding='utf-8', errors='replace')
+    if proc.returncode != 0:
+        print(f'[clipper] copy: ffmpeg exited {proc.returncode}: {said[-1500:]}', flush=True)
+        raise JobError('The recording could not be read. It will be tried again.', 'making', 'copy.ffmpeg')
+    if any(words in said for words in SEGMENT_LOST):
+        print(f'[clipper] copy: part of the recording could not be read: {said[-1500:]}', flush=True)
+        raise JobError('Part of the recording could not be read. It will be tried again.', 'making', 'copy.segment')
+
+
+def probe_copy(path):
+    """(seconds, width, height, has audio) of the finished copy."""
+    try:
+        done = subprocess.run(['ffprobe', '-v', 'error', '-show_entries', 'format=duration:stream=codec_type,width,height',
+                               '-of', 'json', str(path)], capture_output=True, text=True, timeout=120)
+        data = json.loads(done.stdout or '{}')
+        seconds = float(data['format']['duration'])
+    except (subprocess.SubprocessError, ValueError, KeyError, TypeError):
+        raise JobError('The copy could not be checked.', 'checking', 'copy.unreadable') from None
+    video = next((s for s in data.get('streams', []) if s.get('codec_type') == 'video'), None)
+    if video is None or seconds <= 0:
+        raise JobError('The copy has no video in it.', 'checking', 'copy.no_video')
+    audio = any(s.get('codec_type') == 'audio' for s in data.get('streams', []))
+    return seconds, int(video.get('width') or 0), int(video.get('height') or 0), audio
+
+
+def upload(url, path, state, transport=None):
+    """One PUT of the finished copy to its signed link (a whole file, its
+    length declared: the bucket refuses a chunked upload). Returns the MD5,
+    checked against the ETag the bucket answers for a single PUT."""
+    size = path.stat().st_size
+    digest = hashlib.md5()
+
+    def chunks():
+        sent = 0
+        with open(path, 'rb') as content:
+            while True:
+                block = content.read(1024 * 1024)
+                if not block:
+                    return
+                digest.update(block)
+                sent += len(block)
+                state['percent'] = round(90 + 9 * sent / max(size, 1), 1)
+                check_cancel(state)
+                yield block
+    timeout = httpx.Timeout(60.0, write=300.0, read=300.0)
+    try:
+        with httpx.Client(timeout=timeout, follow_redirects=False, transport=transport) as client:
+            response = client.put(url, content=chunks(), headers={'Content-Length': str(size), 'Content-Type': 'video/mp4'})
+    except httpx.HTTPError as error:
+        raise JobError('The copy could not be saved. It will be tried again.', 'uploading', 'upload.failed') from error
+    if response.status_code != 200:
+        print(f'[clipper] copy upload answered {response.status_code}', flush=True)
+        raise JobError('The copy could not be saved. It will be tried again.', 'uploading', 'upload.status')
+    md5 = digest.hexdigest()
+    etag = (response.headers.get('etag') or '').strip('"').lower()
+    if etag and '-' not in etag and etag != md5:
+        raise JobError('The copy was not saved whole. It will be tried again.', 'uploading', 'upload.mismatch')
+    return md5
+
+
+def work_copy(job_id, request, state):
+    job_dir = state['dir']
+    try:
+        playlist = job_dir / 'recording.m3u8'
+        playlist.write_text(state.pop('playlist'), encoding='utf-8')
+        target = job_dir / 'copy.mp4'
+        run_copy(state, copy_cmd(playlist, target), job_dir, request.seconds)
+        state.update(stage='checking', percent=89.0)
+        seconds, width, height, audio = probe_copy(target)
+        size = target.stat().st_size
+        if not size or size >= COPY_MAX_BYTES:
+            raise JobError('The copy came out too large to save.', 'checking', 'copy.too_large')
+        state.update(stage='uploading', percent=90.0)
+        md5 = upload(request.upload_url, target, state)
+        result = {'seconds': round(seconds, 2), 'bytes': size, 'width': width, 'height': height, 'audio': audio,
+                  'md5': md5, 'timings': {'total': round(time.monotonic() - state['started'], 1)}}
+        state.update(status='completed', stage='done', percent=100.0, result=result)
+        print(f'[clipper] copy {job_id[:8]} saved: {size} bytes, {seconds:.0f} s, {width}x{height}, '
+              f'{result["timings"]["total"]:.0f} s to make', flush=True)
+    except Cancelled:
+        if state.get('yielded'):
+            state.update(status='cancelled', error={'message': 'Stopped so clips could be made; it is made again later.',
+                                                    'stage': state['stage'], 'code': 'job.yielded'})
+        else:
+            state.update(status='cancelled', error={'message': 'Stopped.', 'stage': state['stage'], 'code': 'job.cancelled'})
+    except JobError as error:
+        print(f'[clipper] copy {job_id[:8]} failed: {error.code}', flush=True)
+        state.update(status='failed', error={'message': error.message, 'stage': error.stage, 'code': error.code})
+    except Exception as error:  # Never surface raw provider or path text.
+        print(f'[clipper] copy {job_id[:8]} crashed ({type(error).__name__})', flush=True)
+        state.update(status='failed', error={'message': 'Making the copy failed. It will be tried again.',
+                                             'stage': state['stage'], 'code': 'job.crashed'})
+    finally:
+        state['finished'] = time.monotonic()
+        # Nothing is kept here: the copy is in the bucket, or there is none.
+        shutil.rmtree(job_dir, ignore_errors=True)
+        if state.get('deleted'):
+            jobs.pop(job_id, None)
+        release_lock()
+
+
+def public_copy(state):
+    view = {k: state.get(k) for k in ('status', 'stage', 'percent', 'error')}
+    if state['status'] == 'completed':
+        view['result'] = state['result']
+    return view
 
 
 def log_engine_tail(job_dir):
@@ -460,8 +695,12 @@ def public(state):
 
 @app.get('/health')
 def health():
+    current = holder.get('state') or {}
+    token = len(os.getenv('CLIPPER_TOKEN', '')) >= 32
     return {'ok': True, 'service': 'clipper', 'engine': ENGINE_COMMIT[:7], 'busy': lock.locked(),
-            'ready': len(os.getenv('CLIPPER_TOKEN', '')) >= 32 and bool(os.getenv('OPENROUTER_API_KEY'))}
+            'ready': token and bool(os.getenv('OPENROUTER_API_KEY')),
+            'copies': token and bool(os.getenv('CLIPPER_COPY_HOSTS', '').strip()),
+            'job': current.get('kind') if lock.locked() else None}
 
 
 @app.post('/jobs/{job_id}', status_code=202, dependencies=[Depends(authorized)])
@@ -473,21 +712,70 @@ def start(job_id: UUID, request: JobRequest):
     key = str(job_id)
     if key in jobs:
         raise HTTPException(409, 'Job already exists')
-    if not lock.acquire(blocking=False):
+    # Clips go first: a copy being made stops and gives up the service.
+    if not lock.acquire(blocking=False) and not take_turn():
         raise HTTPException(409, 'Clip service busy')
     try:
         job_dir = ROOT / key
         shutil.rmtree(job_dir, ignore_errors=True)
         job_dir.mkdir(parents=True)
         state = {'status': 'working', 'stage': 'downloading', 'percent': 0.0, 'clips_done': 0, 'clips_total': 0,
-                 'error': None, 'dir': job_dir, 'cancel': threading.Event(), 'started': time.monotonic()}
+                 'error': None, 'dir': job_dir, 'cancel': threading.Event(), 'started': time.monotonic(), 'kind': 'clips'}
         jobs[key] = state
+        holder['state'] = state
         threading.Thread(target=work, args=(key, request, state), daemon=True).start()
     except BaseException:
         jobs.pop(key, None)
-        lock.release()
+        release_lock()
         raise
     return {'accepted': True}
+
+
+@app.post('/copies/{job_id}', status_code=202, dependencies=[Depends(authorized)])
+def start_copy(job_id: UUID, request: CopyRequest):
+    """Make one recording's smaller copy and upload it. 422 for a segment or
+    an upload link off CLIPPER_COPY_HOSTS; 409 while any job runs (the API
+    tries later)."""
+    playlist = checked_playlist(request.playlist)
+    if playlist is None or not source_allowed(request.upload_url, 'CLIPPER_COPY_HOSTS'):
+        raise HTTPException(422, 'Source link not allowed')
+    key = str(job_id)
+    if key in jobs:
+        raise HTTPException(409, 'Job already exists')
+    if not lock.acquire(blocking=False):
+        raise HTTPException(409, 'Clip service busy')
+    try:
+        job_dir = ROOT / key
+        shutil.rmtree(job_dir, ignore_errors=True)
+        job_dir.mkdir(parents=True)
+        state = {'status': 'working', 'stage': 'making', 'percent': 0.0, 'error': None, 'dir': job_dir,
+                 'cancel': threading.Event(), 'started': time.monotonic(), 'kind': 'copy', 'playlist': playlist,
+                 'limit': COPY_SECONDS, 'too_long': 'Making the copy took too long and was stopped.'}
+        jobs[key] = state
+        holder['state'] = state
+        threading.Thread(target=work_copy, args=(key, request, state), daemon=True).start()
+    except BaseException:
+        jobs.pop(key, None)
+        release_lock()
+        raise
+    return {'accepted': True}
+
+
+@app.get('/copies/{job_id}', dependencies=[Depends(authorized)])
+def copy_status(job_id: UUID):
+    state = jobs.get(str(job_id))
+    if not state or state.get('kind') != 'copy':
+        raise HTTPException(404, 'Job not found')
+    return public_copy(state)
+
+
+@app.delete('/copies/{job_id}', dependencies=[Depends(authorized)])
+def copy_delete(job_id: UUID):
+    key = str(job_id)
+    state = jobs.get(key)
+    if state and state.get('kind') == 'copy':
+        drop(key, state)
+    return {'deleted': True}
 
 
 @app.post('/faces', dependencies=[Depends(authorized)])
@@ -564,9 +852,15 @@ def likeness_check(request: LikenessRequest):
     return {'score': score, 'scores': scores, 'face_found': score is not None}
 
 
+def clip_job(job_id):
+    """A clip job's state; a copy is never one (it has its own routes)."""
+    state = jobs.get(str(job_id))
+    return state if state and state.get('kind', 'clips') == 'clips' else None
+
+
 @app.get('/jobs/{job_id}', dependencies=[Depends(authorized)])
 def status(job_id: UUID):
-    state = jobs.get(str(job_id))
+    state = clip_job(job_id)
     if not state:
         raise HTTPException(404, 'Job not found')
     return public(state)
@@ -574,7 +868,7 @@ def status(job_id: UUID):
 
 @app.get('/jobs/{job_id}/files/{name}', dependencies=[Depends(authorized)])
 def file(job_id: UUID, name: str):
-    state = jobs.get(str(job_id))
+    state = clip_job(job_id)
     if not state or state['status'] != 'completed' or not FILE_NAME.match(name):
         raise HTTPException(404, 'File not found')
     path = state['clip_dir'] / name
@@ -583,15 +877,22 @@ def file(job_id: UUID, name: str):
     return FileResponse(path, media_type='video/mp4' if name.endswith('.mp4') else 'image/jpeg')
 
 
+def drop(key, state):
+    """Stop a running job (it forgets itself once stopped), or forget a
+    finished one and its files."""
+    if state['status'] == 'working':
+        state['deleted'] = True
+        state['cancel'].set()
+    else:
+        forget(key)
+
+
 @app.delete('/jobs/{job_id}', dependencies=[Depends(authorized)])
 def delete(job_id: UUID):
     key = str(job_id)
-    state = jobs.get(key)
-    if state and state['status'] == 'working':
-        state['deleted'] = True
-        state['cancel'].set()
-    elif state:
-        forget(key)
+    state = clip_job(key)
+    if state:
+        drop(key, state)
     return {'deleted': True}
 
 
