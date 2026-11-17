@@ -4377,6 +4377,61 @@
        ]
       },
       {
+       "key": "build:website-concierge",
+       "tab": "build",
+       "sub": "website-concierge",
+       "name": "Website assistant",
+       "sees": [
+        "website_outreach"
+       ],
+       "what": "Turn on the helper that answers visitors on the church website, and read what they asked.",
+       "words": [
+        "concierge",
+        "website concierge",
+        "assistant",
+        "chat on the site",
+        "site chat",
+        "website chat",
+        "chatbot"
+       ],
+       "answers": [
+        {
+         "id": "turn-on-the-website-assistant",
+         "q": "Turn on the website assistant",
+         "a": "Under On your website press the Off button so it reads On. It needs a published site first, and it answers only from your church’s details and the FAQ on this page.",
+         "words": [
+          "website concierge",
+          "chat on the website",
+          "chatbot",
+          "site chat",
+          "answer visitors"
+         ]
+        },
+        {
+         "id": "tell-the-assistant-what-to-answer",
+         "q": "Tell the assistant what to answer",
+         "a": "Under FAQ press Add a question, type the question and the answer, and press Save FAQ. The assistant treats those answers as the truth.",
+         "words": [
+          "add a faq",
+          "service times answer",
+          "what the chat says",
+          "teach the assistant"
+         ]
+        },
+        {
+         "id": "read-what-a-visitor-asked",
+         "q": "Read what a visitor asked",
+         "a": "Scroll to Recent conversations and press one to read it. One marked Passed to the office added the visitor to your people as a guest.",
+         "words": [
+          "website chats",
+          "visitor questions",
+          "conversation history",
+          "who chatted"
+         ]
+        }
+       ]
+      },
+      {
        "key": "build:link-page",
        "tab": "build",
        "sub": "link-page",
@@ -4737,7 +4792,7 @@
        "sees": [
         "office"
        ],
-       "what": "Connect the outside services the church uses: social accounts, email, the bank and QuickBooks.",
+       "what": "Connect the outside services the church uses: email, the bank and QuickBooks.",
        "words": [
         "integration",
         "integrations",
@@ -4775,6 +4830,17 @@
           "stripe link",
           "pay link",
           "payment settings"
+         ]
+        },
+        {
+         "id": "find-where-social-accounts-are-connected",
+         "q": "Find where Facebook and Instagram are connected",
+         "a": "Social accounts are not connected on this page. Press Open Social media at the top, or open Social media behind the Reach door, and connect the account under Your social accounts.",
+         "words": [
+          "connect facebook",
+          "social publishing",
+          "link instagram",
+          "facebook page"
          ]
         }
        ]

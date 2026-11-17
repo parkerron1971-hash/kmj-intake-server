@@ -321,3 +321,39 @@ def test_import_statuses_match_what_chief_accepts():
     import contacts_import_router as cir
     import chief_of_staff
     assert cir.VALID_STATUSES == set(chief_of_staff.VALID_CONTACT_STATUSES)
+
+
+# ─── The first-day steps open the page the thing is on (2026-11-17) ───
+
+def test_a_page_connected_through_post_for_me_finishes_the_facebook_step(monkeypatch):
+    asked = []
+
+    def exists(path):
+        asked.append(path)
+        return path.startswith("/social_connections")
+    monkeypatch.setattr(btr, "_exists", exists)
+    assert btr._done_meta({"id": "b1"}) is True
+    assert "provider=eq.post_for_me" in asked[0] and "status=eq.connected" in asked[0]
+    assert "platform=in.(facebook,instagram)" in asked[0]
+
+
+def test_a_page_connected_straight_to_facebook_still_counts(monkeypatch):
+    monkeypatch.setattr(btr, "_exists", lambda path: path.startswith("/social_accounts"))
+    assert btr._done_meta({"id": "b1"}) is True
+    monkeypatch.setattr(btr, "_exists", lambda path: False)
+    assert btr._done_meta({"id": "b1"}) is False
+
+
+def test_the_steps_open_payments_and_social_media_not_integrations():
+    import business_track_actions as bta
+    catalog = next(v for v in vars(bta).values()
+                   if isinstance(v, dict) and "payments" in v and "meta" in v and "nav" in (v.get("payments") or {}))
+    assert catalog["payments"]["nav"] == {"tab": "operate", "sub": "payments"}
+    assert "navigate operate/payments" in catalog["payments"]["chief"]
+    assert catalog["meta"]["nav"] == {"tab": "build", "page": "social-media"}
+    assert "navigate build/social-media" in catalog["meta"]["chief"]
+    church = bta.words_for("payments", "church")
+    assert "navigate operate/payments" in church["chief"]
+    assert "navigate build/website-concierge" in bta.words_for("concierge", "church")["chief"]
+    # The bank, QuickBooks and the sending address are still on Integrations.
+    assert catalog["bank"]["nav"] == {"tab": "build", "page": "integrations"}

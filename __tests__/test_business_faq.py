@@ -176,7 +176,9 @@ def test_the_receipt_carries_the_answer_and_says_where_it_shows(fake):
     out = _run(actions.handle_add_faq(None, _biz(fake), {
         "type": "add_faq", "question": KIDS["q"], "answer": KIDS["a"]}))
     assert out["answer"] == KIDS["a"] and out["question"] == KIDS["q"]
-    assert "Settings → Website concierge" in out["result"]
+    # The fixture is a church: its FAQ's page is on the Web door (2026-11-17).
+    assert "Website assistant, behind the Web door" in out["result"]
+    assert "Settings → Website concierge" not in out["result"]
     assert "website assistant is on" in out["result"]
     assert "Your website shows it." in out["result"]
 
@@ -429,3 +431,10 @@ def test_the_served_page_reads_the_list_each_time_and_a_failed_read_hides_the_se
 def test_both_ways_a_hand_built_page_is_served_fill_the_slot():
     """Miss one and the subdomain and the custom domain disagree."""
     assert inspect.getsource(public_site).count("await _fill_faq_slot(") == 2
+
+
+def test_a_business_is_still_told_its_faq_is_in_settings():
+    lines = business_faq.where_it_shows({"type": "consultant", "settings": {}}, None)
+    assert lines[0] == "Your FAQ is listed in Settings → Website concierge."
+    church = business_faq.where_it_shows({"type": "church", "settings": {}}, None)
+    assert church[0] == "Your FAQ is listed on Website assistant, behind the Web door."

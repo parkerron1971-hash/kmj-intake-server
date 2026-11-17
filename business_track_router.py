@@ -235,6 +235,12 @@ def _done_giving(biz: Dict[str, Any]) -> bool:
 
 
 def _done_meta(biz: Dict[str, Any]) -> bool:
+    """A Facebook or Instagram account this business can post to. Accounts
+    connect through Post for Me (social_connections); a Page connected
+    straight to Facebook the older way (social_accounts) still counts."""
+    if _exists(f"/social_connections?business_id=eq.{biz['id']}&provider=eq.post_for_me"
+               f"&status=eq.connected&platform=in.(facebook,instagram)&select=id&limit=1"):
+        return True
     return _exists(f"/social_accounts?business_id=eq.{biz['id']}"
                    f"&provider=eq.meta&status=eq.connected&select=page_id&limit=1")
 
