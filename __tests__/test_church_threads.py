@@ -90,6 +90,12 @@ def _one(row, key, op):
         return v is None
     if op == "not.is.null":
         return v is not None
+    if op.startswith("neq."):
+        return v is None or str(v) != op[4:]
+    if op in ("is.true", "is.false"):
+        return v is (op == "is.true")
+    if op.startswith("not.in.("):
+        return str(v) not in op[8:-1].split(",")
     if op.startswith(("gt.", "gte.", "lt.", "lte.")):
         name, want = op.split(".", 1)
         if v is None:
@@ -113,7 +119,7 @@ class Fake:
     TABLES = ("church_thread_notes", "church_thread_reads", "contacts", "group_members", "groups",
               "member_push_subscriptions", "member_push_prefs", "member_push_sends", "member_push_held",
               "business_users", "msg_safety_officers", "ministry_care_requests", "msg_members",
-              "sms_messages", "sms_consents")
+              "sms_messages", "sms_consents", "msg_threads", "msg_participants", "msg_messages")
 
     def __init__(self):
         self.t = {k: [] for k in self.TABLES}
@@ -236,6 +242,7 @@ def fake(monkeypatch):
     monkeypatch.setenv("MEMBER_QUIET_HOURS", "off")
     ct._READY.update(at=0.0, ok=None)
     ma._OWNER_CACHE.clear()
+    mpt._COUNTS.clear()
     monkeypatch.setattr(pn, "VAPID_PRIVATE_KEY", "priv")
     monkeypatch.setattr(pn, "VAPID_PUBLIC_KEY", "pub-key")
     f.pushed = []
@@ -446,7 +453,7 @@ def test_quiet_hours_hold_the_texted_note_and_the_morning_opens_the_inbox(fake, 
     for h in held:
         h["created_at"] = iso(NOW)
     assert member_push.sweep_held() == 1
-    assert fake.pushed[-1][1]["url"] == "/my/inbox" and fake.pushed[-1][1]["title"] == "While you were resting"
+    assert fake.pushed[-1][1]["url"] == "/my/messages" and fake.pushed[-1][1]["title"] == "While you were resting"
 
 
 # ─── 5. the member's pages ───────────────────────────────────────────
@@ -504,12 +511,15 @@ def _seed_conversation(fake):
               url=f"/my/groups/{GROUP2}/board", created_at=iso(NOW - timedelta(minutes=30)))
 
 
-def test_the_inbox_lists_the_church_first_then_my_groups(fake, monkeypatch):
+def test_the_old_inbox_is_messages_now_with_the_church_first_then_my_groups(fake, monkeypatch):
     _seed_conversation(fake)
-    page = _app(fake, monkeypatch, ANA).get("/my/inbox")
+    c = _app(fake, monkeypatch, ANA)
+    r = c.get("/my/inbox", follow_redirects=False)
+    assert r.status_code == 302 and r.headers["location"] == "/my/messages"
+    page = c.get("/my/messages")
     assert page.status_code == 200
     html = page.text
-    assert "From your church" in html
+    assert "Inbox" not in html and "From your church" not in html
     church_at, group_at = html.index('href="/my/inbox/church"'), html.index(f'href="/my/inbox/group/{GROUP}"')
     assert church_at < group_at
     assert "Love City Church" in html and "Tuesday Night Group" in html
@@ -542,7 +552,7 @@ def test_the_church_conversation(fake, monkeypatch):
     assert len(reads) == 1 and reads[0]["contact_id"] == ANA and reads[0]["thread"] == "church"
 
 
-def test_a_groups_conversation_is_for_its_members_only(fake, monkeypatch):
+def test_a_groups_notes_are_for_its_members_only(fake, monkeypatch):
     _seed_conversation(fake)
     ana = _app(fake, monkeypatch, ANA)
     page = ana.get(f"/my/inbox/group/{GROUP}")
@@ -551,53 +561,63 @@ def test_a_groups_conversation_is_for_its_members_only(fake, monkeypatch):
     # The chat link sits right under the notes: the list doesn't hold half a screen open.
     assert 'class="mb-chat ct-chat ct-group"' in page.text and ".mb-thread .ct-chat.ct-group{min-height:0;}" in mpt.THREAD_CSS
     assert "/my/inbox/church/send" not in page.text             # no box
-    # Messaging is off at this church: no chat link. On, with the group's chat on: there is.
+    assert 'href="/my/messages">' in page.text and "Inbox" not in page.text   # back to Messages
+    # Messaging is off at this church: no chat link.
     assert "Open the group chat" not in page.text
-    fake.biz[BIZ]["settings"]["messaging"] = {"enabled": True}
-    page = _app(fake, monkeypatch, ANA).get(f"/my/inbox/group/{GROUP}")
-    assert f'href="/my/groups/{GROUP}/chat"' in page.text and "Open the group chat" in page.text
     assert any(r["thread"] == f"group:{GROUP}" for r in fake.t["church_thread_reads"])
     # Not in the group: 404, and nothing is read out.
     assert ana.get(f"/my/inbox/group/{GROUP2}").status_code == 404
     fake.person(DEE, "Dee Lane")
     r = _app(fake, monkeypatch, DEE).get(f"/my/inbox/group/{GROUP}")
     assert r.status_code == 404 and "Bring a friend" not in r.text
+    assert "Bring a friend" not in _app(fake, monkeypatch, DEE).get("/my/messages").text
     assert _app(fake, monkeypatch, ANA).get("/my/inbox/group/not-a-uuid").status_code == 404
 
 
 def test_closed_or_kids_goes_back_to_my(fake, monkeypatch):
     monkeypatch.setenv("CHURCH_THREADS", "off")
-    for path in ("/my/inbox", "/my/inbox/church", f"/my/inbox/group/{GROUP}"):
+    r = _app(fake, monkeypatch, ANA).get("/my/inbox", follow_redirects=False)
+    assert r.status_code == 302 and r.headers["location"] == "/my/messages"
+    for path in ("/my/inbox/church", f"/my/inbox/group/{GROUP}"):
         r = _app(fake, monkeypatch, ANA).get(path, follow_redirects=False)
         assert r.status_code == 303 and r.headers["location"] == "/my", path
-    assert "From your church" not in _app(fake, monkeypatch, ANA).get("/my/me").text
+    me = _app(fake, monkeypatch, ANA).get("/my/me").text
+    assert 'href="/my/messages"' not in me and "From your church" not in me
+    # Messages is just as it was: the church's chats are off, so it says so.
+    page = _app(fake, monkeypatch, ANA).get("/my/messages").text
+    assert 'href="/my/inbox/church"' not in page
     monkeypatch.setenv("CHURCH_THREADS", "on")
     for space in ("kids", "youth"):
-        r = _app(fake, monkeypatch, ANA, space).get("/my/inbox", follow_redirects=False)
+        r = _app(fake, monkeypatch, ANA, space).get("/my/inbox/church", follow_redirects=False)
         assert r.status_code == 303 and r.headers["location"] == "/my", space
     # Missing tables: quiet too.
     fake.down.add("church_thread_notes")
     ct._READY.update(at=0.0, ok=None)
-    assert _app(fake, monkeypatch, ANA).get("/my/inbox", follow_redirects=False).headers["location"] == "/my"
+    assert _app(fake, monkeypatch, ANA).get("/my/inbox/church", follow_redirects=False).headers["location"] == "/my"
+    assert 'href="/my/inbox/church"' not in _app(fake, monkeypatch, ANA).get("/my/messages").text
 
 
-def test_me_has_the_line_and_home_has_the_card_while_something_is_new(fake, monkeypatch):
+def test_me_has_one_messages_line_and_home_has_the_card_while_something_is_new(fake, monkeypatch):
+    import asyncio
     me = _app(fake, monkeypatch, ANA).get("/my/me").text
-    assert 'href="/my/inbox"' in me and "From your church" in me
-    assert mpt.home_card(fake.business(), {"id": ANA, "name": "Ana Rivers"}) == ""     # nothing yet
+    assert 'href="/my/messages"' in me and "Your church, your groups and your chats" in me
+    assert "From your church" not in me and 'href="/my/inbox"' not in me
+    ana = {"id": ANA, "name": "Ana Rivers"}
+    assert mpt.home_card(fake.business(), asyncio.run(mpt.counts(fake.business(), ana))) == ""     # nothing yet
     _seed_conversation(fake)
-    card = mpt.home_card(fake.business(), {"id": ANA, "name": "Ana Rivers"})
-    assert 'href="/my/inbox"' in card and "<strong>From your church</strong>" in card
-    assert "Love City Church" not in card
+    mpt._COUNTS.clear()
+    card = mpt.home_card(fake.business(), asyncio.run(mpt.counts(fake.business(), ana)))
+    assert 'href="/my/messages"' in card and "<strong>Messages</strong>" in card
     # How many are new (live, picnic, reply, the group's post), and the newest
     # one as its conversation's: a group's note reads as the group's.
     assert "4 new · Tuesday Night Group: Cal posted: Bring a friend" in card
     for t in ("church", f"group:{GROUP}"):
         ct.mark_read(BIZ, ANA, t)
-    assert mpt.home_card(fake.business(), {"id": ANA, "name": "Ana Rivers"}) == ""
-    html = mp.render_home(fake.business(), {}, me={"id": ANA, "name": "Ana Rivers"}, occasions=[], groups=[],
-                          library=None, give_url="", inbox='<a class="ct-home" href="/my/inbox">x</a>')
-    assert 'class="ct-home" href="/my/inbox"' in html
+    mpt._COUNTS.clear()
+    assert mpt.home_card(fake.business(), asyncio.run(mpt.counts(fake.business(), ana))) == ""
+    html = mp.render_home(fake.business(), {}, me=ana, occasions=[], groups=[],
+                          library=None, give_url="", inbox='<a class="ct-home" href="/my/messages">x</a>')
+    assert 'class="ct-home" href="/my/messages"' in html
 
 
 def test_a_teen_can_write_to_the_church(fake, monkeypatch):
@@ -847,15 +867,18 @@ def test_the_routes_are_mounted_before_the_catch_all():
 
 
 def test_homes_card_names_the_church_when_the_newest_is_the_churchs(fake, monkeypatch):
+    import asyncio
     _seed_conversation(fake)
     ct.mark_read(BIZ, ANA, f"group:{GROUP}")
-    card = mpt.home_card(fake.business(), {"id": ANA, "name": "Ana Rivers"})
-    assert "<strong>From your church</strong>" in card
+    ana = {"id": ANA, "name": "Ana Rivers"}
+    card = mpt.home_card(fake.business(), asyncio.run(mpt.counts(fake.business(), ana)))
+    assert "<strong>Messages</strong>" in card
     assert "3 new · Love City Church: Maria: Of course! See you there." in card
     # A church note whose title is the church's name isn't said twice.
     fake.note(contact_id=ANA, kind="news", title="Love City Church", body="Important: Service at 10",
               url="/my/news/9", created_at=iso(NOW))
-    card = mpt.home_card(fake.business(), {"id": ANA, "name": "Ana Rivers"})
+    mpt._COUNTS.clear()
+    card = mpt.home_card(fake.business(), asyncio.run(mpt.counts(fake.business(), ana)))
     assert "4 new · Love City Church: Important: Service at 10" in card
 
 
@@ -882,3 +905,161 @@ def test_the_button_on_a_bubble_follows_its_url_not_its_kind(fake, monkeypatch):
     c = _app(fake, monkeypatch, ANA)
     assert 'href="/my/events">See the event' in c.get("/my/inbox/church").text
     assert f'href="/my/groups/{GROUP}/prayer">Open the prayer wall' in c.get(f"/my/inbox/group/{GROUP}").text
+
+
+# ─── 8. one messaging place (Kevin, 2026-11-17: "not two messaging chats") ─
+
+
+def _chats_on(fake, *people):
+    """The church's chats on, and these members let in (a birthdate, their
+    switch on, the guidelines agreed)."""
+    fake.biz[BIZ]["settings"]["messaging"] = {"enabled": True}
+    for c in people:
+        fake.add("msg_members", business_id=BIZ, contact_id=c, enabled=True, guidelines_at=iso(NOW - timedelta(days=30)))
+
+
+def _group_chat(fake, last_read=None):
+    """GROUP's chat: Ben wrote twice, Ana once; Ana last read it `last_read`."""
+    tid = cid(901)
+    fake.add("msg_threads", id=tid, business_id=BIZ, kind="group", group_id=GROUP, last_message_at=iso(NOW - timedelta(minutes=10)))
+    for i, (who, body, ago) in enumerate(((BEN, "Who's bringing snacks?", 50), (ANA, "I can!", 40),
+                                          (BEN, "Thank you, Ana", 10))):
+        fake.add("msg_messages", id=cid(910 + i), business_id=BIZ, thread_id=tid, sender_contact_id=who, body=body,
+                 status="delivered", flag=None, reply_to=None, after_hours=False, created_at=iso(NOW - timedelta(minutes=ago)))
+    if last_read:
+        fake.add("msg_participants", thread_id=tid, business_id=BIZ, contact_id=ANA, state="active", last_read_at=last_read)
+    return tid
+
+
+def _direct_chat(fake, other, state="active"):
+    tid = cid(920 + int(other[-2:]))
+    fake.add("msg_threads", id=tid, business_id=BIZ, kind="direct", direct_key=":".join(sorted([ANA, other])),
+             group_id=None, last_message_at=iso(NOW - timedelta(minutes=5)))
+    fake.add("msg_participants", thread_id=tid, business_id=BIZ, contact_id=ANA, state=state, last_read_at=None)
+    fake.add("msg_participants", thread_id=tid, business_id=BIZ, contact_id=other, state="active", last_read_at=None)
+    fake.add("msg_messages", id=cid(930 + int(other[-2:])), business_id=BIZ, thread_id=tid, sender_contact_id=other,
+             body=f"Hi from {other[-1]}", status="delivered", flag=None, reply_to=None, after_hours=False,
+             created_at=iso(NOW - timedelta(minutes=5)))
+    return tid
+
+
+def test_messages_is_one_place_church_requests_groups_then_chats(fake, monkeypatch):
+    _seed_conversation(fake)
+    _chats_on(fake, ANA, BEN, CAL)
+    _group_chat(fake, last_read=iso(NOW - timedelta(minutes=45)))        # Ben's second message is new
+    _direct_chat(fake, BEN)                                               # a private chat, one new
+    _direct_chat(fake, CAL, state="requested")                            # Cal asked to chat
+    html = _app(fake, monkeypatch, ANA).get("/my/messages").text
+    church = html.index('href="/my/inbox/church"')
+    requests, groups, chats = html.index("<h2>Requests</h2>"), html.index("<h2>Groups</h2>"), html.index("<h2>Chats</h2>")
+    assert church < requests < groups < chats
+    # One row per group: it opens the group's chat, and its count is the
+    # chat's new message plus the group's new note.
+    row = html[html.index(f'href="/my/groups/{GROUP}/chat"'):]
+    row = row[:row.index("</li>")]
+    assert "Tuesday Night Group" in row and 'aria-label="2 new"' in row
+    assert f'href="/my/inbox/group/{GROUP}"' not in html
+    assert html.index(f'href="/my/messages/{cid(920 + int(CAL[-2:]))}"') < groups   # the request
+    assert html.index(f'href="/my/messages/{cid(920 + int(BEN[-2:]))}"') > chats     # the private chat
+    assert "Inbox" not in html
+
+
+def test_with_the_churchs_chats_off_messages_is_the_church_and_the_groups(fake, monkeypatch):
+    _seed_conversation(fake)
+    _group_chat(fake)
+    direct = _direct_chat(fake, BEN)
+    html = _app(fake, monkeypatch, ANA).get("/my/messages").text
+    assert 'href="/my/inbox/church"' in html and f'href="/my/inbox/group/{GROUP}"' in html
+    assert "<h2>Requests</h2>" not in html and "<h2>Chats</h2>" not in html and "Start a chat" not in html
+    assert f'href="/my/groups/{GROUP}/chat"' not in html and f'href="/my/messages/{direct}"' not in html
+    # A member the church hasn't let into chats sees the same, and why.
+    _chats_on(fake)
+    html = _app(fake, monkeypatch, ANA).get("/my/messages").text
+    assert f'href="/my/inbox/group/{GROUP}"' in html and "turn on chats for you" in html
+
+
+def test_the_group_chat_carries_the_groups_notes_and_its_poll_counts_them(fake, monkeypatch):
+    _seed_conversation(fake)
+    _chats_on(fake, ANA, BEN, CAL)
+    tid = _group_chat(fake)
+    c = _app(fake, monkeypatch, ANA)
+    # The group's notes link opens the chat now.
+    r = c.get(f"/my/inbox/group/{GROUP}", follow_redirects=False)
+    assert r.status_code == 302 and r.headers["location"] == f"/my/groups/{GROUP}/chat"
+    html = c.get(f"/my/groups/{GROUP}/chat").text
+    assert 'class="gc-nc"' in html and "Cal posted: Bring a friend" in html
+    assert 'href="/my/groups/' + GROUP + '/board">Open the Board' in html
+    # At its time: posted an hour ago, before this afternoon's messages.
+    assert html.index('class="gc-nc"') < html.index("Who&#x27;s bringing snacks?") < html.index("Thank you, Ana")
+    assert "k=1;" in html.replace(" ", "") or "k=1," in html.replace(" ", "")
+    # Opening the chat reads the group's notes too.
+    assert any(r["thread"] == f"group:{GROUP}" and r["contact_id"] == ANA for r in fake.t["church_thread_reads"])
+    # The poll sees a new note without anyone reloading by hand.
+    feed = c.get(f"/my/messages/feed/{tid}").json()
+    assert feed == {"count": 3, "notes": 1}
+    fake.note(contact_id=ANA, thread=f"group:{GROUP}", kind="groups", title="Tuesday Night Group",
+              body="Tasha asked the group to pray", url=f"/my/groups/{GROUP}/prayer", created_at=iso(NOW))
+    assert c.get(f"/my/messages/feed/{tid}").json() == {"count": 3, "notes": 2}
+    # Closed: the chat is just the chat, and the poll has no notes in it.
+    monkeypatch.setenv("CHURCH_THREADS", "off")
+    html = _app(fake, monkeypatch, ANA).get(f"/my/groups/{GROUP}/chat").text
+    assert 'class="gc-nc"' not in html
+    assert _app(fake, monkeypatch, ANA).get(f"/my/messages/feed/{tid}").json().get("notes", 0) == 0
+
+
+def test_a_chat_not_open_to_the_member_still_shows_the_groups_notes(fake, monkeypatch):
+    _seed_conversation(fake)
+    fake.biz[BIZ]["settings"]["messaging"] = {"enabled": True}
+    fake.add("msg_members", business_id=BIZ, contact_id=ANA, enabled=True, guidelines_at=None)
+    c = _app(fake, monkeypatch, ANA)
+    # Guidelines not agreed: the group's link is the notes, with the chat's door.
+    r = c.get(f"/my/inbox/group/{GROUP}")
+    assert r.status_code == 200 and "Open the group chat" in r.text
+    # And the chat tab, asking them to agree first, shows the notes under it.
+    html = c.get(f"/my/groups/{GROUP}/chat").text
+    assert "Before you join the chat" in html and 'class="gc-nc"' in html
+    # Messages: church and groups, and a way to the guidelines.
+    page = c.get("/my/messages").text
+    assert 'href="/my/messages?join=1"' in page and f'href="/my/inbox/group/{GROUP}"' in page
+    assert "Before you start" in c.get("/my/messages?join=1").text
+
+
+def test_one_door_the_header_counts_church_groups_and_chats(fake, monkeypatch):
+    _seed_conversation(fake)
+    _chats_on(fake, ANA, BEN, CAL)
+    _group_chat(fake, last_read=iso(NOW - timedelta(minutes=45)))
+    _direct_chat(fake, BEN)
+    html = _app(fake, monkeypatch, ANA).get("/my/events").text
+    # live, picnic, reply and the group's note (4), the group chat's one and the private chat's one (2).
+    assert 'href="/my/messages" aria-label="Messages, 6 new"' in html and '<span class="mb-unread">6</span>' in html
+    # Closed: the door stays (chats are on), with no count.
+    monkeypatch.setenv("CHURCH_THREADS", "off")
+    mpt._COUNTS.clear()
+    html = _app(fake, monkeypatch, ANA).get("/my/events").text
+    assert 'href="/my/messages" aria-label="Messages"' in html
+
+
+def test_threads_open_with_chats_off_still_has_the_door(fake, monkeypatch):
+    _seed_conversation(fake)
+    html = _app(fake, monkeypatch, ANA).get("/my/events").text
+    assert 'href="/my/messages" aria-label="Messages, 4 new"' in html
+    groups = _app(fake, monkeypatch, ANA).get("/my/groups").text
+    assert 'href="/my/messages"' in groups                       # Connect's Messages tab
+    monkeypatch.setenv("CHURCH_THREADS", "off")
+    mpt._COUNTS.clear()
+    assert 'href="/my/messages"' not in _app(fake, monkeypatch, ANA).get("/my/events").text
+
+
+def test_a_groups_new_note_opens_straight_into_its_chat(fake):
+    for c in (ANA, BEN, CAL):
+        fake.add("member_push_subscriptions", **sub(c))
+    _chats_on(fake)
+    member_push._tell_group_post(fake.business(), {"id": GROUP, "name": "Tuesday Night Group"}, "post-9",
+                                 {"id": CAL, "name": "Cal Moss"}, title="Bring a friend")
+    assert {p["url"] for _, p, _ in fake.pushed} == {f"/my/groups/{GROUP}/chat"}
+    # A group whose chat is off: its notes.
+    fake.pushed.clear()
+    next(g for g in fake.t["groups"] if g["id"] == GROUP)["chat_on"] = False
+    member_push._tell_group_post(fake.business(), {"id": GROUP, "name": "Tuesday Night Group"}, "post-10",
+                                 {"id": CAL, "name": "Cal Moss"}, title="Bring a friend")
+    assert {p["url"] for _, p, _ in fake.pushed} == {f"/my/inbox/group/{GROUP}"}

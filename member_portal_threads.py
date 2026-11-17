@@ -1,16 +1,36 @@
 """
-member_portal_threads.py — "From your church": the member's inbox, drawn
-like a phone's Messages (church_threads.py keeps the records and the
-switch; Kevin, 2026-11-17).
+member_portal_threads.py — the church's conversation and its groups' notes
+inside Messages, drawn like a phone's Messages app (church_threads.py keeps
+the records and the switch; Kevin, 2026-11-17).
 
-  /my/inbox                    the conversations: the church first, then each
-                               group the member is in that has notes
+ONE MESSAGING PLACE (Kevin, 2026-11-17: "make sure that the section where
+the messages are in group chat are not two messaging chats in the system").
+While church threads are open for a church, /my/messages is the one inbox
+(member_portal_messaging.serve hands it to messages_page):
+
+  (a) the church's conversation, pinned first
+  (b) chat requests
+  (c) one row per group the member is in, newest first: its chat and its
+      notes together, one unread count
+  (d) private chats
+
+It works with the church's chats off too: then only (a) and (c). A group's
+row opens its chat when the chat is open to the member, and the group's
+notes (Board posts, prayer-wall requests) sit inside the chat as small
+cards (member_portal_groups); otherwise it opens the notes view.
+
+  /my/inbox                    302 to /my/messages (old links, lock screens)
   /my/inbox/church             the church's notes as bubbles, the office's
                                replies, what the member wrote, and a box to
                                write to the church office
-  /my/inbox/group/<gid>        a group's notes, for its members only (else
-                               404); no box: the group's chat is its own place
+  /my/inbox/group/<gid>        302 to the group's chat when it's open to the
+                               member, else the group's notes, for its members
+                               only (else 404)
   POST /my/inbox/church/send   the member writes to the church office
+
+The header's chat icon carries one unread count (church, groups and chats)
+and Home's "Messages" card shows while anything is unread; both only while
+threads are open here (counts()).
 
 Who and which church come from the session, never the form. The owner's
 preview reads, never writes (no read marks, no messages). Kids, and an
@@ -28,8 +48,10 @@ by first name, never their words.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import logging
 import re
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlencode
@@ -205,23 +227,109 @@ def thread_name(biz: Dict[str, Any], thread: str) -> str:
     return str((rows[0] if isinstance(rows, list) and rows else {}).get("name") or "").strip() or "Your group"
 
 
-def home_card(biz: Dict[str, Any], me: Dict[str, Any]) -> str:
-    """Home's card while anything is unread: "From your church", how many
-    are new, and the newest one as "<conversation>: <its line>", so a
-    group's note reads as the group's. '' otherwise. Never raises."""
+# ─── Unread: the header's count and Home's card ──────────────────────
+
+BADGE: contextvars.ContextVar[Optional[int]] = contextvars.ContextVar("messages_badge", default=None)
+_COUNTS: Dict[Tuple[str, str], Tuple[float, Dict[str, Any]]] = {}
+COUNTS_SECONDS = 15
+CHAT_WINDOW_DAYS = 60
+
+
+def forget(business_id: Any, contact_id: Any) -> None:
+    """Something was just read here: the next count is fresh."""
+    _COUNTS.pop((str(business_id), str(contact_id)), None)
+
+
+def may_chat(full: Optional[Dict[str, Any]]) -> bool:
+    """Messaging's own rules let this member into chats (a birthdate, their
+    switch on, the guidelines agreed)."""
+    import member_messaging_rules as rules
+    return bool(full) and not rules.why_not(full) and bool(full.get("guidelines_at"))
+
+
+def chat_unread(business_id: str, me_id: str, group_ids: List[str]) -> Optional[int]:
+    """Unread chat messages: another person's delivered messages since the
+    member last read each chat (theirs, and their groups'), at most 30 a
+    chat, as Messages counts them. None when a read failed."""
+    b, c = ct._q(business_id), ct._q(me_id)
+    mine = sb_clients.sb_get_as_service(
+        f"/msg_participants?business_id=eq.{b}&contact_id=eq.{c}&select=thread_id,state,last_read_at")
+    if not isinstance(mine, list):
+        return None
+    gthreads: List[Dict[str, Any]] = []
+    if group_ids:
+        got = sb_clients.sb_get_as_service(
+            f"/msg_threads?business_id=eq.{b}&kind=eq.group&group_id=in.({','.join(ct._q(g) for g in group_ids)})"
+            "&select=id")
+        if not isinstance(got, list):
+            return None
+        gthreads = got
+    declined = {str(p["thread_id"]) for p in mine if p.get("state") == "declined"}
+    read = {str(p["thread_id"]): str(p.get("last_read_at") or "") for p in mine}
+    tids = (set(read) | {str(t["id"]) for t in gthreads}) - declined
+    if not tids:
+        return 0
+    since = (datetime.now(timezone.utc) - timedelta(days=CHAT_WINDOW_DAYS)).isoformat()
+    rows = sb_clients.sb_get_as_service(
+        f"/msg_messages?business_id=eq.{b}&thread_id=in.({','.join(ct._q(t) for t in sorted(tids))})"
+        f"&status=eq.delivered&sender_contact_id=neq.{c}&created_at=gte.{ct._q(since)}"
+        "&select=thread_id,created_at&order=created_at.desc&limit=2000")
+    if not isinstance(rows, list):
+        return None
+    per: Dict[str, int] = {}
+    for m in rows:
+        t = str(m.get("thread_id"))
+        if str(m.get("created_at") or "") > read.get(t, "") and per.get(t, 0) < 30:
+            per[t] = per.get(t, 0) + 1
+    return sum(per.values())
+
+
+async def counts(biz: Dict[str, Any], me: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """What's unread in Messages, while church threads are open here:
+    {"notes": church_threads.summary, "chat": n, "total": n}. Kept
+    COUNTS_SECONDS per member per replica (reading something here forgets
+    it). None when threads aren't open or a read failed. Never raises."""
     try:
-        if not entry_open(biz):
-            return ""
-        gids = my_group_ids(str(biz["id"]), str(me["id"]))
+        if not await asyncio.to_thread(entry_open, biz):
+            return None
+        key = (str(biz["id"]), str(me["id"]))
+        hit = _COUNTS.get(key)
+        if hit and time.monotonic() - hit[0] < COUNTS_SECONDS:
+            return hit[1]
+        gids = await asyncio.to_thread(my_group_ids, key[0], key[1])
         if gids is None:
+            return None
+
+        async def chats() -> Optional[int]:
+            import member_portal_messaging as mpm
+            if not mpm.turned_on(biz):
+                return 0
+            full = await asyncio.to_thread(mpm._me_profile, key[0], me)
+            if not may_chat(full):
+                return 0
+            return await asyncio.to_thread(chat_unread, key[0], key[1], gids)
+        notes, chat = await asyncio.gather(asyncio.to_thread(ct.summary, key[0], key[1], gids), chats())
+        if notes is None:
+            return None
+        out = {"notes": notes, "chat": chat or 0,
+               "total": sum(t["unread"] for t in notes.values()) + (chat or 0)}
+        _COUNTS[key] = (time.monotonic(), out)
+        return out
+    except Exception:
+        logger.warning("church threads: unread counts were skipped", exc_info=True)
+        return None
+
+
+def home_card(biz: Dict[str, Any], got: Optional[Dict[str, Any]]) -> str:
+    """Home's "Messages" card while anything is unread: how many are new,
+    and the newest note as "<conversation>: <its line>", so a group's note
+    reads as the group's (chats alone: "New messages in your chats").
+    '' otherwise. Never raises."""
+    try:
+        if not got or not got.get("total"):
             return ""
-        got = ct.summary(str(biz["id"]), str(me["id"]), gids)
-        if not got:
-            return ""
-        n = sum(t["unread"] for t in got.values())
-        if not n:
-            return ""
-        newest = max((t["last"] for t in got.values() if t["unread"] and t.get("last")),
+        notes = got.get("notes") or {}
+        newest = max((t["last"] for t in notes.values() if t["unread"] and t.get("last")),
                      key=lambda r: str(r.get("created_at") or ""), default=None)
         import member_app_ui as ui
         line = ""
@@ -229,15 +337,17 @@ def home_card(biz: Dict[str, Any], me: Dict[str, Any]) -> str:
             name = thread_name(biz, str(newest.get("thread") or ct.CHURCH))
             said = preview(newest, name)
             line = f"{name}: {said}" if said else name
-        return (f'<a class="mb-row h-teal ct-home" href="/my/inbox"><span class="mb-row-ic ct-home-ic">{ui.icon("chat", 20)}</span>'
-                f'<span class="mb-row-t"><strong>From your church</strong><span>{n} new{" · " + _e(line) if line else ""}</span></span>'
+        elif got.get("chat"):
+            line = "New messages in your chats"
+        n = int(got["total"])
+        return (f'<a class="mb-row h-teal ct-home" href="/my/messages"><span class="mb-row-ic ct-home-ic">{ui.icon("chat", 20)}</span>'
+                f'<span class="mb-row-t"><strong>Messages</strong><span>{n} new{" · " + _e(line) if line else ""}</span></span>'
                 f'{ui.icon("chevron", 18)}</a>'
                 '<style>.ct-home-ic{background:var(--h-deep);color:var(--h-ink);}'
                 '.ct-home .mb-row-t span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}</style>')
     except Exception:
         logger.warning("church threads: Home's card was skipped", exc_info=True)
         return ""
-
 
 # ─── Pages ────────────────────────────────────────────────────────────
 
@@ -261,30 +371,218 @@ def _row(href: str, av: str, title: str, line: str, when: str, unread: int) -> s
             f'<span class="ct-side"><span class="ct-when">{_e(when)}</span>{badge}</span></a></li>')
 
 
-def render_inbox(biz: Dict[str, Any], site, me: Dict[str, Any], got: Dict[str, Dict[str, Any]],
-                 groups: Dict[str, Dict[str, Any]], zone) -> str:
+def _newest_first(items: List[Tuple[Optional[datetime], str, str]]) -> List[str]:
+    """Rows newest first; those with nothing in them yet after, by name."""
+    dated = sorted((i for i in items if i[0] is not None), key=lambda i: i[0], reverse=True)
+    rest = sorted((i for i in items if i[0] is None), key=lambda i: i[1].casefold())
+    return [i[2] for i in dated + rest]
+
+
+GATE_WORDS = {
+    "guidelines": "Agree to the chat guidelines to message your groups and other members.",
+    "no_birthdate": "Chats need your birthdate on your record. Ask the church office to add it.",
+    "not_enabled": "Ask the church office to turn on chats for you.",
+}
+
+
+def render_messages(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], *,
+                    got: Dict[str, Dict[str, Any]], groups: List[Dict[str, Any]], zone, gate: Optional[str] = None,
+                    chats: Optional[List[Dict[str, Any]]] = None, requests: Optional[List[Dict[str, Any]]] = None,
+                    start: Optional[List[Dict[str, Any]]] = None, family: Optional[List[Dict[str, Any]]] = None) -> str:
+    """Messages, the one inbox: the church's conversation pinned first,
+    chat requests, a row per group (its chat and its notes together, one
+    count), then private chats. `gate`: why the member's chats aren't open
+    ('off' when the church's chats are off); then only the church and the
+    groups, each group opening its notes."""
     import member_app_ui as ui
+    import member_portal_church as mpc
+    import member_portal_messaging as mpm
+    import member_spaces as msp
     from member_portal import _shell
     name = (biz.get("name") or "").strip() or "Your church"
     church = got.get(ct.CHURCH) or {"last": None, "unread": 0}
     last = church.get("last")
-    rows = [_row(CHURCH_PAGE, _church_av(biz, site), name, preview(last, name) or "Write to the church office",
-                 when_short((last or {}).get("created_at"), zone) if last else "", church["unread"])]
-    others = sorted(((t, v) for t, v in got.items() if t != ct.CHURCH and v.get("last")),
-                    key=lambda tv: str(tv[1]["last"].get("created_at") or ""), reverse=True)
-    for t, v in others:
-        gid = ct.group_of(t)
-        g = groups.get(gid)
-        if not g:
-            continue
-        av = f'<span class="ct-av" aria-hidden="true">{ui.icon("users", 20)}</span>'
-        rows.append(_row(ct.inbox_url(t), av, g.get("name") or "Your group", preview(v["last"], g.get("name") or ""),
-                         when_short(v["last"].get("created_at"), zone), v["unread"]))
-    body = (f'<style>{THREAD_CSS}</style><div class="mb-lt"><h1>From your church</h1></div>'
-            f'<p class="mb-sub">Notes from {_e(name)} and your groups, in one place. Write back to the church office any time.</p>'
-            f'<ul class="mb-list mb-cards ct-list" style="--inset:76px">{"".join(rows)}</ul>')
-    return _shell(biz, site, "From your church", body, tab="me", who=me, back=("/my", "Home"))
+    pinned = _row(CHURCH_PAGE, _church_av(biz, site), name, preview(last, name) or "Write to the church office",
+                  when_short((last or {}).get("created_at"), zone) if last else "", church["unread"])
+    open_chats = gate is None
+    chat_rows = (chats or []) if open_chats else []
+    by_group = {str(r.get("group_id") or "").lower(): r for r in chat_rows if r.get("kind") == "group"}
+    users = f'<span class="ct-av" aria-hidden="true">{ui.icon("users", 20)}</span>'
 
+    def when(at: Optional[datetime]) -> str:
+        return when_short(at.isoformat(), zone) if at else ""
+    items: List[Tuple[Optional[datetime], str, str]] = []
+    for g in groups:
+        gid = str(g["id"]).lower()
+        gname = str(g.get("name") or "Your group")
+        chat = by_group.get(gid) or {}
+        note = got.get(f"group:{gid}") or {}
+        nl = note.get("last")
+        chat_at = _at(chat.get("at"), zone) if chat.get("at") else None
+        note_at = _at(nl.get("created_at"), zone) if nl else None
+        if chat_at and (not note_at or chat_at >= note_at):
+            line, at = str(chat.get("preview") or ""), chat_at
+        elif note_at:
+            line, at = preview(nl, gname), note_at
+        else:
+            line, at = "No messages yet", None
+        href = (f"/my/groups/{gid}/chat" if open_chats and g.get("chat_on") is not False
+                else f"/my/inbox/group/{gid}")
+        unread = int(chat.get("unread") or 0) + int(note.get("unread") or 0)
+        items.append((at, gname, _row(href, users, gname, line, when(at), unread)))
+    for r in chat_rows:
+        if r.get("kind") == "leaders":
+            at = _at(r.get("at"), zone) if r.get("at") else None
+            items.append((at, r["title"], _row("/my/groups/leaders", users, r["title"], str(r.get("preview") or ""),
+                                               when(at), int(r.get("unread") or 0))))
+
+    def person(r: Dict[str, Any]) -> str:
+        face = (f'<img src="{_e(r["photo"])}" alt="" loading="lazy">' if r.get("photo") else _e(ui.initials(r["title"])))
+        at = _at(r.get("at"), zone) if r.get("at") else None
+        return _row(f"/my/messages/{r['id']}", f'<span class="ct-av" aria-hidden="true">{face}</span>', r["title"],
+                    str(r.get("preview") or ""), when(at), int(r.get("unread") or 0))
+    direct = [person(r) for r in chat_rows if r.get("kind") == "direct"]
+    asked = [person(r) for r in (requests or [])] if open_chats else []
+    youth = (msp.CURRENT.get() or {}).get("youth")
+    head = ('<div class="mb-lt"><h1>Chats</h1></div>' + msp.safety_banner() if youth else
+            f'<div class="mb-lt"><h1>Connect</h1></div>{mpc.connect_tabs(biz, "messages")}')
+    lists = '<ul class="mb-list mb-cards ct-list" style="--inset:76px">{}</ul>'
+    body = [f"<style>{THREAD_CSS}</style>{head}{mpc._flash(request)}", lists.format(pinned)]
+    if gate and gate != "off":
+        words = GATE_WORDS.get(gate, "Chats aren't open to you right now.")
+        go = ('<a class="mp-go" style="margin-top:12px" href="/my/messages?join=1">Read the guidelines</a>'
+              if gate == "guidelines" else "")
+        body.append(f'<div class="mp-card ct-gate" style="margin-top:14px"><p class="mp-muted" style="margin:0">{_e(words)}</p>{go}</div>')
+    if asked:
+        body.append(ui.section("Requests") + lists.format("".join(asked)))
+    if items:
+        body.append(ui.section("Groups") + lists.format("".join(_newest_first(items))))
+    if direct:
+        body.append(ui.section("Chats") + lists.format("".join(direct)))
+    if open_chats and start:
+        body.append(ui.section("Start a chat") + '<ul class="mb-list mb-cards">' + "".join(
+            f'<li><a href="/my/messages/to/{_e(p["id"])}"><span class="mb-thumb mb-chat-av">{_e(ui.initials(p["name"]))}</span>'
+            f'<span class="mb-list-text"><strong>{_e(mpm.first_and_initial(p["name"]))}</strong><span>{_e(p["why"])}</span></span>'
+            f'{ui.icon("chevron", 16)}</a></li>' for p in start) + '</ul>')
+    if open_chats and family:
+        body.append(ui.section("Your teens") + '<ul class="mb-list mb-cards">' + "".join(
+            f'<li><a href="/my/messages/family/{_e(t["id"])}"><span class="mb-thumb mb-chat-av">{mpm._teen_face(t)}</span>'
+            f'<span class="mb-list-text"><strong>{_e(t["name"])}</strong><span>Read their chats</span></span>{ui.icon("chevron", 16)}</a></li>'
+            for t in family) + '</ul>')
+    return _shell(biz, site, "Messages", "".join(body), tab="messages", who=me)
+
+
+def _active_groups(business_id: str, group_ids: List[str]) -> Optional[List[Dict[str, Any]]]:
+    if not group_ids:
+        return []
+    rows = sb_clients.sb_get_as_service(
+        f"/groups?business_id=eq.{ct._q(business_id)}&id=in.({','.join(ct._q(g) for g in group_ids)})"
+        "&select=id,name,chat_on,active")
+    return None if not isinstance(rows, list) else [r for r in rows if r.get("active") is not False]
+
+
+async def messages_page(request: Request, biz: Dict[str, Any], site, me: Dict[str, Any], *, gate: Optional[str] = None,
+                        chats: Optional[List[Dict[str, Any]]] = None, requests: Optional[List[Dict[str, Any]]] = None,
+                        start: Optional[List[Dict[str, Any]]] = None, family: Optional[List[Dict[str, Any]]] = None):
+    """Messages while threads are open here (member_portal_messaging.serve
+    calls it): (html, status)."""
+    biz_id, me_id = str(biz["id"]), str(me["id"])
+    gids = await asyncio.to_thread(my_group_ids, biz_id, me_id)
+    if gids is None:
+        return render_error(biz, site, me), 503
+    got, groups, zone = await asyncio.gather(asyncio.to_thread(ct.summary, biz_id, me_id, gids),
+                                             asyncio.to_thread(_active_groups, biz_id, gids),
+                                             asyncio.to_thread(_zone, biz))
+    if got is None or groups is None:
+        return render_error(biz, site, me), 503
+    return render_messages(biz, site, request, me, got=got, groups=groups, zone=zone, gate=gate, chats=chats,
+                           requests=requests, start=start, family=family), 200
+
+
+def here_open(biz: Dict[str, Any]) -> bool:
+    """Threads are open for this church and this member is in Church (or
+    is a teen): Messages brings in the church's conversation and the
+    groups' notes."""
+    import member_spaces as msp
+    return _in_church(msp.CURRENT.get() or {}) and entry_open(biz)
+
+
+# ─── A group's notes inside its chat (member_portal_groups) ──────────
+
+CHAT_NOTES_MAX = 30
+NOTE_KINDS = ((re.compile(rf"^/my/groups/{_GID}/board(/|$)"), "Board"),
+              (re.compile(rf"^/my/groups/{_GID}/prayer(/|$)"), "Prayer wall"),
+              (re.compile(rf"^/my/groups/{_GID}/meet(/|$)"), "Gathering"))
+
+
+def chat_notes(biz: Dict[str, Any], me_id: str, group_id: str, msgs: Optional[List[Dict[str, Any]]],
+               *, mark: bool = False) -> List[Dict[str, Any]]:
+    """The group's notes for this member, to sit in its chat: the newest
+    CHAT_NOTES_MAX and, when the chat shows a long run of messages, none
+    older than its oldest. The page and the chat's poll count them the same
+    way. `mark` marks them read. [] while threads are closed. Never raises."""
+    try:
+        if not entry_open(biz):
+            return []
+        biz_id, gid = str(biz["id"]), str(group_id).lower()
+        rows = ct.group_notes(biz_id, str(me_id), gid, limit=CHAT_NOTES_MAX) or []
+        msgs = msgs or []
+        import member_portal_messaging as mpm
+        if len(msgs) >= mpm.PAGE * 3 // 4:
+            oldest = str(msgs[0].get("created_at") or "")
+            rows = [r for r in rows if str(r.get("created_at") or "") >= oldest]
+        if mark:
+            ct.mark_read(biz_id, str(me_id), f"group:{gid}")
+            forget(biz_id, me_id)
+        return rows
+    except Exception:
+        logger.warning("church threads: a group's notes were left out of its chat", exc_info=True)
+        return []
+
+
+def note_card(r: Dict[str, Any], zone, group_name: str = "") -> str:
+    """One of the group's notes as a small card in its chat, at its time,
+    with the button to what it's about."""
+    import member_app_ui as ui
+    url = str(r.get("url") or "")
+    path = re.split(r"[?#]", url, maxsplit=1)[0]
+    kind = next((w for p, w in NOTE_KINDS if p.match(path)), "From the group")
+    t = str(r.get("title") or "")
+    if group_name and t.casefold() == group_name.casefold() and r.get("body"):
+        t = ""
+    when = when_short(r.get("created_at"), zone)
+    at = f'<span class="gc-nc-at">{_e(when)}</span>' if when else ""
+    link = (f'<a class="gc-nc-go" href="{_e(url)}">{_e(link_word(url))}{ui.icon("chevron", 14)}</a>'
+            if url.startswith("/my/") and not ct.is_inbox_url(url) else "")
+    title = f'<strong>{_e(t)}</strong>' if t else ""
+    body = f'<p>{_e(r.get("body") or "")}</p>' if r.get("body") else ""
+    return (f'<li class="gc-nc" id="n-{_e(r.get("id"))}"><div class="gc-nc-in"><span class="gc-nc-k"><span>{_e(kind)}</span>{at}</span>'
+            f'{title}{body}{link}</div></li>')
+
+
+NOTE_CSS = """
+.gc-nc{list-style:none;display:flex;justify-content:center;}
+.gc-nc-in{width:100%;max-width:420px;display:flex;flex-direction:column;gap:4px;padding:10px 14px 12px;border-radius:16px;
+  background:var(--s1);box-shadow:inset 0 0 0 1px var(--line);}
+.gc-nc-k{display:flex;justify-content:space-between;gap:8px;font-size:11.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;
+  color:var(--teal-ink,var(--acc));}
+.gc-nc-at{font-weight:600;letter-spacing:0;text-transform:none;color:var(--fg3);font-variant-numeric:tabular-nums;}
+.gc-nc-in strong{font-size:15px;font-weight:650;letter-spacing:-.01em;}
+.gc-nc-in p{margin:0;font-size:15px;line-height:1.38;color:var(--fg);white-space:pre-line;overflow-wrap:anywhere;}
+.gc-nc-go{display:inline-flex;align-items:center;gap:4px;align-self:flex-start;margin-top:4px;padding:6px 12px;border-radius:14px;
+  background:var(--s2);color:var(--acc);font-size:13.5px;font-weight:620;text-decoration:none;}
+.gc-nc-go .mb-ic{width:14px;height:14px;}
+"""
+
+
+def notes_section(rows: List[Dict[str, Any]], zone, group_name: str) -> str:
+    """The group's notes under a chat that isn't open to the member yet
+    (the guidelines to agree, or chats not turned on for them)."""
+    if not rows:
+        return ""
+    cards = "".join(note_card(r, zone, group_name) for r in rows)
+    return (f'<style>{NOTE_CSS}</style><section aria-label="Group news" style="margin-top:16px">'
+            f'<ul class="gc-list">{cards}</ul></section>')
 
 def _bubble(r: Dict[str, Any], zone, said_by: str = "") -> str:
     import member_app_ui as ui
@@ -354,7 +652,8 @@ def render_church(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any
                '<p class="ct-fine">Goes to the church office. It isn&#x27;t posted anywhere.</p>')
     body = (f'<style>{THREAD_CSS}</style><div class="mb-thread"><div class="mb-lt"><h1 style="font-size:28px">{_e(name)}</h1></div>'
             f'{_flash(request)}<ul class="mb-chat ct-chat" id="ct-chat" aria-label="Messages">{chat}</ul>{compose}</div>')
-    return _shell(biz, site, name, body, tab="me", who=me, bar=False, back=("/my/inbox", "Inbox"), script=SCROLL_JS)
+    return _shell(biz, site, name, body, tab="messages", who=me, bar=False, back=("/my/messages", "Messages"),
+                  script=SCROLL_JS)
 
 
 def render_group(biz: Dict[str, Any], site, me: Dict[str, Any], g: Dict[str, Any], rows: List[Dict[str, Any]],
@@ -367,22 +666,23 @@ def render_group(biz: Dict[str, Any], site, me: Dict[str, Any], g: Dict[str, Any
             'Open the group chat</a></div>' if chat_open else "")
     body = (f'<style>{THREAD_CSS}</style><div class="mb-thread"><div class="mb-lt"><h1 style="font-size:28px">{_e(name)}</h1></div>'
             f'<ul class="mb-chat ct-chat ct-group" id="ct-chat" aria-label="Notes">{chat}</ul>{link}</div>')
-    return _shell(biz, site, name, body, tab="me", who=me, bar=False, back=("/my/inbox", "Inbox"), script=SCROLL_JS)
+    return _shell(biz, site, name, body, tab="messages", who=me, bar=False, back=("/my/messages", "Messages"),
+                  script=SCROLL_JS)
 
 
 def render_missing(biz: Dict[str, Any], site, me: Dict[str, Any]) -> str:
     from member_portal import _shell
     body = ('<div class="mb-lt"><h1>Not here</h1></div>'
-            '<p class="mp-muted">This conversation is for the people in that group. Your conversations are in '
-            '<a href="/my/inbox">From your church</a>.</p>')
-    return _shell(biz, site, "Not here", body, tab="me", who=me, back=("/my/inbox", "Inbox"))
+            '<p class="mp-muted">This conversation is for the people in that group. Yours are in '
+            '<a href="/my/messages">Messages</a>.</p>')
+    return _shell(biz, site, "Not here", body, tab="messages", who=me, back=("/my/messages", "Messages"))
 
 
 def render_error(biz: Dict[str, Any], site, me: Dict[str, Any]) -> str:
     from member_portal import _shell
     body = ('<p class="mp-err" role="alert">Your messages couldn&#x27;t load just now. Please try again in a moment.</p>'
-            '<p><a href="/my/inbox">Try again</a></p>')
-    return _shell(biz, site, "From your church", body, tab="me", who=me, back=("/my", "Home"))
+            '<p><a href="/my/messages">Try again</a></p>')
+    return _shell(biz, site, "Messages", body, tab="messages", who=me, back=("/my", "Home"))
 
 
 def _in_church(space_ctx: Dict[str, Any]) -> bool:
@@ -392,41 +692,32 @@ def _in_church(space_ctx: Dict[str, Any]) -> bool:
 
 
 async def serve(request: Request, biz: Dict[str, Any], site, me: Dict[str, Any], sub: str, *, preview: bool = False):
-    """GET /my/inbox and its conversations (member_portal.serve). (html,
-    status), or a redirect."""
+    """GET /my/inbox/* (member_portal.serve): the church's conversation and
+    a group's notes; the old inbox goes to Messages. (html, status), or a
+    redirect."""
     import member_spaces as msp
     from member_portal import _SECURE_HEADERS
+    if sub == "/my/inbox":
+        return RedirectResponse("/my/messages", status_code=302, headers=_SECURE_HEADERS)
     home = RedirectResponse("/my", status_code=303, headers=_SECURE_HEADERS)
     if not _in_church(msp.CURRENT.get() or {}):
         return home
     if not await asyncio.to_thread(entry_open, biz):
         return home
     biz_id, me_id = str(biz["id"]), str(me["id"])
-    zone = await asyncio.to_thread(_zone, biz)
-    if sub == "/my/inbox":
-        gids = await asyncio.to_thread(my_group_ids, biz_id, me_id)
-        got = await asyncio.to_thread(ct.summary, biz_id, me_id, gids or []) if gids is not None else None
-        if got is None:
-            return render_error(biz, site, me), 503
-        groups: Dict[str, Dict[str, Any]] = {}
-        want = sorted(ct.group_of(t) for t in got if t != ct.CHURCH)
-        if want:
-            rows = await asyncio.to_thread(
-                sb_clients.sb_get_as_service,
-                f"/groups?business_id=eq.{ct._q(biz_id)}&id=in.({','.join(ct._q(g) for g in want)})&select=id,name")
-            if not isinstance(rows, list):
-                return render_error(biz, site, me), 503
-            groups = {str(r["id"]).lower(): r for r in rows}
-        return render_inbox(biz, site, me, got, groups, zone), 200
     if sub == CHURCH_PAGE:
-        rows = await asyncio.to_thread(ct.church_notes, biz_id, me_id)
+        rows, zone = await asyncio.gather(asyncio.to_thread(ct.church_notes, biz_id, me_id),
+                                          asyncio.to_thread(_zone, biz))
         if rows is None:
             return render_error(biz, site, me), 503
         if not preview:
             await asyncio.to_thread(ct.mark_read, biz_id, me_id, ct.CHURCH)
+            forget(biz_id, me_id)
         return render_church(biz, site, request, me, rows, zone), 200
     if sub.startswith("/my/inbox/group/"):
+        import member_messaging_rules as rules
         import member_portal_groups as mpg
+        import member_portal_messaging as mpm
         gid = sub[len("/my/inbox/group/"):].strip("/").lower()
         if not ct.UUID_RE.match(gid):
             return render_missing(biz, site, me), 404
@@ -436,16 +727,22 @@ async def serve(request: Request, biz: Dict[str, Any], site, me: Dict[str, Any],
             return render_error(biz, site, me), 503
         if not member or not g:
             return render_missing(biz, site, me), 404
-        rows = await asyncio.to_thread(ct.group_notes, biz_id, me_id, gid)
+        chat_on = mpm.turned_on(biz) and g.get("chat_on") is not False
+        full = await asyncio.to_thread(mpm._me_profile, biz_id, me) if chat_on else None
+        if chat_on and may_chat(full):
+            # One conversation per group: its notes are inside its chat.
+            return RedirectResponse(f"/my/groups/{gid}/chat", status_code=302, headers=_SECURE_HEADERS)
+        rows, zone = await asyncio.gather(asyncio.to_thread(ct.group_notes, biz_id, me_id, gid),
+                                          asyncio.to_thread(_zone, biz))
         if rows is None:
             return render_error(biz, site, me), 503
         if not preview:
             await asyncio.to_thread(ct.mark_read, biz_id, me_id, f"group:{gid}")
-        import member_portal_messaging as mpm
-        chat_open = mpm.turned_on(biz) and g.get("chat_on") is not False
-        return render_group(biz, site, me, g, rows, zone, chat_open), 200
-    return RedirectResponse("/my/inbox", status_code=303, headers=_SECURE_HEADERS)
-
+            forget(biz_id, me_id)
+        # The chat's door, where it opens to them once they agree to the guidelines.
+        link = bool(chat_on and full is not None and not rules.why_not(full))
+        return render_group(biz, site, me, g, rows, zone, link), 200
+    return RedirectResponse("/my/messages", status_code=302, headers=_SECURE_HEADERS)
 
 # ─── Writing to the church office ─────────────────────────────────────
 

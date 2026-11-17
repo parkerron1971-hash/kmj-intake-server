@@ -277,7 +277,7 @@ def _tab_ready(biz: Optional[Dict[str, Any]], key: str) -> bool:
     """Whether a tab's page is there for the church's members now."""
     if key == "messages":
         import member_portal_messaging as mpm
-        return mpm.turned_on(biz or {})
+        return mpm.inbox_on(biz or {})
     if key == "directory":
         import member_directory
         return member_directory.church_on(biz)

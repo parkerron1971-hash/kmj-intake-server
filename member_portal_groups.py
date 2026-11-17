@@ -985,7 +985,11 @@ def render(biz: Dict[str, Any], site, request: Request, me: Dict[str, Any], data
     size = len(people)
     script = ""
     if tab == "chat":
-        content, script = _chat_body(biz, request, me, g, data.get("chat") or {"state": "error"}, leader)
+        cvd = data.get("chat") or {"state": "error"}
+        content, script = _chat_body(biz, request, me, g, cvd, leader)
+        if cvd.get("state") in ("gate", "guidelines") and cvd.get("notes"):
+            import member_portal_threads as mpt
+            content += mpt.notes_section(cvd["notes"], cvd.get("notes_tz") or timezone.utc, g.get("name") or "")
     elif tab == "meet":
         import group_gatherings
         import group_study
@@ -1147,6 +1151,13 @@ async def serve(request: Request, biz: Dict[str, Any], site, me: Dict[str, Any],
     data = await asyncio.to_thread(space, str(biz["id"]), gid, me, tab=tab)
     if data and data.get("role") and tab == "chat":
         data["chat"] = await asyncio.to_thread(chat_view, biz, data["group"], me)
+        if (data["chat"] or {}).get("state") in ("gate", "guidelines"):
+            # Not open to them yet (the guidelines, or chats not turned on
+            # for them): the group's notes still show here (church threads).
+            import member_portal_threads as mpt
+            gn = await asyncio.to_thread(mpt.chat_notes, biz, str(me["id"]), gid, [], mark=True)
+            if gn:
+                data["chat"] = {**data["chat"], "notes": gn, "notes_tz": await asyncio.to_thread(mpt._zone, biz)}
     if data and data.get("role") and tab in ("", "meet"):
         import group_gatherings
         data["meet"] = await asyncio.to_thread(group_gatherings.view, biz, data["group"], str(me["id"]), data["people"])
@@ -1209,6 +1220,13 @@ def chat_view(biz: Dict[str, Any], g: Optional[Dict[str, Any]], me: Dict[str, An
     if polls is None or photos is None:
         return {"state": "error"}
     mpm.mark_read(biz_id, tid, str(me["id"]))
+    # One conversation per group (church threads, member_portal_threads):
+    # the group's notes sit in its chat, and opening it reads them too.
+    gnotes, ntz = [], None
+    if not room:
+        import member_portal_threads as mpt
+        gnotes = mpt.chat_notes(biz, str(me["id"]), str(g["id"]), msgs, mark=True)
+        ntz = mpt._zone(biz) if gnotes else None
     import group_chat_notify as gcn
     import member_push
     quiet = member_push.quiet_hour(biz)
@@ -1222,7 +1240,8 @@ def chat_view(biz: Dict[str, Any], g: Optional[Dict[str, Any]], me: Dict[str, An
         import group_gatherings
         tz = group_gatherings.zone(biz)
     return {"state": "ok", "tid": tid, "acc": acc, "msgs": msgs, "looks": looks, "rx": rx, "writers": writers,
-            "quiet": quiet, "notify": notify, "polls": polls, "photos": photos, "extras": extras, "tz": tz}
+            "quiet": quiet, "notify": notify, "polls": polls, "photos": photos, "extras": extras, "tz": tz,
+            "notes": gnotes, "notes_tz": ntz}
 
 
 def room_view(biz: Dict[str, Any], me: Dict[str, Any]) -> Dict[str, Any]:
@@ -1393,6 +1412,7 @@ def _chat_body(biz: Dict[str, Any], request: Request, me: Dict[str, Any], g: Dic
     pics_ok = bool(cv.get("extras")) and not acc.get("teen_in_chat") and not rules.is_teen(folks.get(me_id, {}))
     now = datetime.now(timezone.utc)
     items = []
+    stamps = []
     for m in msgs:
         sid = str(m.get("sender_contact_id") or "")
         mine = sid == me_id
@@ -1458,6 +1478,17 @@ def _chat_body(biz: Dict[str, Any], request: Request, me: Dict[str, Any], g: Dic
         rang = f'<span class="gc-ahs">{_ic("bell", 13)}After-hours alert</span>' if m.get("after_hours") else ""
         items.append(f'<li class="gc-m{" mine" if mine else ""}" id="m-{_e(m["id"])}">{face}<div class="gc-col">{who}{quote}'
                      f'{bubble}{rang}{held}{chips_html}</div></li>')
+        stamps.append(str(m.get("created_at") or ""))
+    # The group's notes (a leader's Board post, a prayer-wall request) at
+    # their time among the messages, each a small card with its button.
+    gnotes = cv.get("notes") or []
+    if gnotes:
+        import member_portal_threads as mpt
+        merged = sorted([(st, 1, h) for st, h in zip(stamps, items)] +
+                        [(str(n.get("created_at") or ""), 0, mpt.note_card(n, cv.get("notes_tz") or timezone.utc,
+                                                                            g.get("name") or "")) for n in gnotes],
+                        key=lambda x: (mpt._at(x[0], timezone.utc) or now, x[1]))
+        items = [h for _, _, h in merged]
     listing = "".join(items) or '<li class="gs-empty">No messages yet. Say hello to your group.</li>'
     notes_html = "".join(f'<p class="gc-note">{_ic(i, 14)}<span>{_e(n)}</span></p>' for i, n in notes)
     can_write = bool(acc.get("can_send")) and (cv.get("writers") != "leaders" or leader)
@@ -1501,11 +1532,15 @@ def _chat_body(biz: Dict[str, Any], request: Request, me: Dict[str, Any], g: Dic
                   "not_enabled": "Ask the church office to turn on messaging for you."}.get(acc.get("why"), "You can’t post here right now.")
         compose = f'<p class="gs-note">{_e(reason)}</p>'
     # New messages show up for everyone, readers of a leaders-only chat too.
-    script = _chat_script(tid, len(msgs))
+    script = _chat_script(tid, len(msgs), len(gnotes))
     # How you hear about it (group_chat_notify), when the church sends notes about messages.
     import group_chat_notify as gcn
     hear = gcn.control(tid, cv["notify"], here, _ic, _e) if cv.get("notify") else ""
-    return (f'<section class="gc" aria-label="Group chat"><div class="gc-notes">{notes_html}</div>'
+    style = ""
+    if gnotes:
+        import member_portal_threads as mpt
+        style = f"<style>{mpt.NOTE_CSS}</style>"
+    return (f'{style}<section class="gc" aria-label="Group chat"><div class="gc-notes">{notes_html}</div>'
             f'<ul class="gc-list" id="gc-list" aria-live="polite" aria-label="Messages">{listing}</ul>{compose}{hear}</section>'), script
 
 
@@ -1519,12 +1554,13 @@ def _alert_toggle(cv: Dict[str, Any]) -> str:
             f'One a night.</span></label>')
 
 
-def _chat_script(tid: str, count: int) -> str:
+def _chat_script(tid: str, count: int, notes: int = 0) -> str:
     """Send without leaving the page; reload when something new arrives
-    (messaging's own feed counts the messages this person can see), never
-    while they're typing or choosing; one message's picker open at a time."""
+    (messaging's own feed counts the messages this person can see, and the
+    group's notes in the chat), never while they're typing or choosing; one
+    message's picker open at a time."""
     import json
-    return f"""<script>(function(){{var f=document.getElementById('gc-compose'),err=document.getElementById('gc-err'),n={json.dumps(count)};
+    return f"""<script>(function(){{var f=document.getElementById('gc-compose'),err=document.getElementById('gc-err'),n={json.dumps(count)},k={json.dumps(notes)};
 var l=document.getElementById('gc-list');if(l&&!location.hash){{if(getComputedStyle(l).overflowY==='auto'){{l.scrollTop=l.scrollHeight;}}else{{window.scrollTo(0,document.documentElement.scrollHeight);}}}}
 document.addEventListener('toggle',function(e){{var d=e.target;if(!d.classList||!d.classList.contains('gc-d')||!d.open)return;
 document.querySelectorAll('details.gc-d[open]').forEach(function(o){{if(o!==d)o.open=false;}});}},true);
@@ -1532,7 +1568,7 @@ function poll(){{if(document.activeElement&&document.activeElement.id==='gc-say'
 if(document.getElementById('gc-pollform')||document.getElementById('gc-photoform'))return;
 if(document.querySelector('details.gc-d[open]'))return;
 fetch('/my/messages/feed/{tid}',{{credentials:'same-origin',headers:{{'Accept':'application/json'}}}})
-.then(function(r){{return r.json();}}).then(function(d){{if(d&&typeof d.count==='number'&&d.count!==n)location.replace(location.pathname);}}).catch(function(){{}});}}
+.then(function(r){{return r.json();}}).then(function(d){{if(d&&typeof d.count==='number'&&(d.count!==n||(typeof d.notes==='number'&&d.notes!==k)))location.replace(location.pathname);}}).catch(function(){{}});}}
 setInterval(poll,6000);
 if(f){{f.addEventListener('submit',function(e){{e.preventDefault();var i=document.getElementById('gc-say'),t=i.value.trim();if(!t)return;
 var b=f.querySelector('.gc-send');b.disabled=true;err.hidden=true;var body=new URLSearchParams(new FormData(f));

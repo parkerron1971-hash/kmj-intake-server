@@ -82,6 +82,19 @@ def turned_on(biz: Dict[str, Any]) -> bool:
     return bool(settings(biz).get("enabled"))
 
 
+def inbox_on(biz: Dict[str, Any]) -> bool:
+    """Messages is there for the church's members: its chats are on, or the
+    church's conversation and its groups' notes are (church threads,
+    member_portal_threads). The one door to both."""
+    if turned_on(biz):
+        return True
+    try:
+        import member_portal_threads as mpt
+        return mpt.entry_open(biz or {})
+    except Exception:
+        return False
+
+
 # ─── reads ───────────────────────────────────────────────────────────
 
 
@@ -710,7 +723,8 @@ def inbox_rows(business_id: str, me_id: str) -> Optional[Tuple[List[Dict[str, An
         other = folks.get(other_of.get(tid, "")) or {}
         photo = ph.src(other) if t["kind"] == "direct" and ph.shown_to_members(other) else ""
         row = {"id": tid, "kind": t["kind"], "title": title, "preview": preview, "unread": unread, "photo": photo,
-               "group_id": str(t.get("group_id") or "")}
+               "group_id": str(t.get("group_id") or ""),
+               "at": str((recent[0] if recent else {}).get("created_at") or "")}
         (requests if (read.get(tid) or {}).get("state") == "requested" else chats).append(row)
     return chats, requests
 
@@ -761,12 +775,19 @@ async def serve(request: Request, biz, site, me, sub: str):
     import asyncio
     from fastapi.responses import RedirectResponse
     from member_portal import _SECURE_HEADERS
+    rest = sub[len("/my/messages"):].strip("/")
+    # One messaging place (member_portal_threads): while church threads are
+    # open here, Messages is also the church's conversation and the groups'
+    # notes, with the church's chats off as well.
+    import member_portal_threads as mpt
+    together = not rest and await asyncio.to_thread(mpt.here_open, biz)
     if not turned_on(biz):
+        if together:
+            return await mpt.messages_page(request, biz, site, me, gate="off")
         return _gate(biz, site, me, "off"), 200
     full = await asyncio.to_thread(_me_profile, biz["id"], me)
     if full is None:
         return _gate(biz, site, me, "error"), 503
-    rest = sub[len("/my/messages"):].strip("/")
     # A linked parent's read-only view works even if the parent hasn't
     # turned messaging on for themselves.
     if rest.startswith("family/"):
@@ -776,8 +797,12 @@ async def serve(request: Request, biz, site, me, sub: str):
         return await asyncio.to_thread(_family_page, request, biz, site, full, teen_id)
     why = rules.why_not(full)
     if why:
+        if together:
+            return await mpt.messages_page(request, biz, site, full, gate=why)
         return _gate(biz, site, me, why), 200
     if not full.get("guidelines_at"):
+        if together and request.query_params.get("join") != "1":
+            return await mpt.messages_page(request, biz, site, full, gate="guidelines")
         return render_guidelines(biz, site, full), 200
     if not rest:
         rows, start, family = await asyncio.gather(
@@ -787,6 +812,9 @@ async def serve(request: Request, biz, site, me, sub: str):
         if rows is None or start is None or family is None:
             return _gate(biz, site, me, "error"), 503
         chats, requests = rows
+        if together:
+            return await mpt.messages_page(request, biz, site, full, chats=chats, requests=requests, start=start,
+                                           family=family)
         return render_inbox(biz, site, request, full, chats, requests, family, start), 200
     if rest.startswith("to/") or rest.startswith("group/"):
         kind, _, target = rest.partition("/")
@@ -806,7 +834,7 @@ async def serve(request: Request, biz, site, me, sub: str):
                                 status_code=303, headers=_SECURE_HEADERS)
     if rest.startswith("feed/"):
         tid = rest[len("feed/"):]
-        data = await asyncio.to_thread(_feed, biz["id"], str(me["id"]), tid)
+        data = await asyncio.to_thread(_feed, biz["id"], str(me["id"]), tid, biz)
         return JSONResponse(data, status_code=200 if "count" in data else 404, headers=_SECURE_HEADERS)
     if not UUID.match(rest):
         return RedirectResponse("/my/messages", status_code=303, headers=_SECURE_HEADERS)
@@ -931,7 +959,10 @@ def _family_page(request, biz, site, me, teen_id: str):
 <ul class="mb-list mb-cards">{items}</ul>""", tab="messages", who=me, back=("/my/messages", "Messages")), 200
 
 
-def _feed(business_id: str, me_id: str, tid: str) -> Dict[str, Any]:
+def _feed(business_id: str, me_id: str, tid: str, biz: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """The chat's poll: how many messages this person can see, and in a
+    group's chat how many of the group's notes sit in it (church threads,
+    member_portal_threads.chat_notes), so a new note shows up too."""
     if not UUID.match(tid):
         return {"error": "gone"}
     t = thread(business_id, tid)
@@ -941,7 +972,11 @@ def _feed(business_id: str, me_id: str, tid: str) -> Dict[str, Any]:
     if not acc or not acc["role"]:
         return {"error": "gone"}
     msgs = messages(business_id, tid, me_id, parent=acc["role"] == "parent")
-    return {"count": len(msgs or [])}
+    out: Dict[str, Any] = {"count": len(msgs or [])}
+    if biz and t.get("kind") == "group" and acc["role"] == "member" and t.get("group_id"):
+        import member_portal_threads as mpt
+        out["notes"] = len(mpt.chat_notes(biz, me_id, str(t["group_id"]), msgs or []))
+    return out
 
 
 # ─── POST ─────────────────────────────────────────────────────────────

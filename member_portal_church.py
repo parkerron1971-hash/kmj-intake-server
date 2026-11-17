@@ -1321,7 +1321,7 @@ async def groups(request: Request):
 def connect_tabs(biz, current: str) -> str:
     """Connect's pages under one title: Groups; Classes when the church has
     a published class (member_portal_classes.TAB, set for this request);
-    Messages when the church has messaging on; Directory when the church has
+    Messages when the church has messaging (or church threads) on; Directory when the church has
     its member directory on, in Church (never in Youth or Kids). '' when
     Groups is alone."""
     import member_app_ui as ui
@@ -1332,7 +1332,7 @@ def connect_tabs(biz, current: str) -> str:
     tabs = [("groups", "/my/groups", "Groups")]
     if mcl.TAB.get():
         tabs.append(("classes", "/my/classes", "Classes"))
-    if mpm.turned_on(biz):
+    if mpm.inbox_on(biz):
         tabs.append(("messages", "/my/messages", "Messages"))
     ctx = msp.CURRENT.get() or {}
     if member_directory.church_on(biz) and ctx.get("space", "church") == "church" and not ctx.get("youth"):
