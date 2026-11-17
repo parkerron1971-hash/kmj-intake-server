@@ -96,7 +96,7 @@ GAP_SECONDS = 5                   # never two from one member within this
 CHURCH_WIDE_DAYS = 60             # how far back the church-wide notes reach
 PERSON_NOTES = 200                # the office's view of one person
 CHUNK = 500                       # rows per bulk insert
-OFFICE_NAV = "operate:church-threads"   # where the office's phone alert opens (the frontend's page)
+OFFICE_NAV = "operate:sms"   # the office phone alert opens Text, where the App messages button sits (FE #1611)
 UUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 GROUP_URL_RE = re.compile(
     r"^/my/groups/([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})(?:[/?#]|$)")
