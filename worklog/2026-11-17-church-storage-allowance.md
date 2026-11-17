@@ -2,7 +2,7 @@
 title: A storage allowance per church plan (recordings, class recordings, files)
 date: 2026-11-17
 agent: Claude Code (Claude Opus 5.5)
-asked: "build" (Kevin, approving a storage allowance per church instead of keeping service recordings forever)
+asked: 'Kevin: "build" (a storage allowance per church instead of keeping service recordings forever)'
 status: waiting on Kevin
 prs: [kmj-intake-server#1903]
 migrations: [supabase/APPLY-2026-11-17-church-storage.sql (NOT applied)]
