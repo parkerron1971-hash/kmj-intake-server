@@ -4,7 +4,7 @@ date: 2026-11-16
 agent: Claude Code (Claude Fable 5.2)
 asked: "move certain access like gifts and money setting should be where gifts are located ... build and merge."
 status: shipped
-prs: [kmj-intake-server#PRNUM, solutionist-studio#1589]
+prs: [kmj-intake-server#1879, solutionist-studio#1589]
 migrations: []
 left_undone: ["Chief's instructions still list only the business rooms: it can open these pages when it names one, but nothing tells it they exist", "nothing in CI compares this list with the app's, so it can fall behind again; the new test only pins the pages known today", "navigate does not look at the kind of business or the login's areas"]
 decisions: ["copied the app's list as it stands rather than adding only Money controls, because the other 30 were the same fault"]
