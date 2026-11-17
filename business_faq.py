@@ -167,7 +167,15 @@ def where_it_shows(business: Any, site: Any) -> List[str]:
     """Plain sentences saying where this business's FAQ can be seen. `site`
     is None when it isn't known, and then the website goes unmentioned."""
     import site_concierge
-    lines = ["Your FAQ is listed in Settings → Website concierge.",
+    # A church's website assistant is a page on its Web door (2026-11-17);
+    # a business's concierge is still a section of Settings.
+    try:
+        import church_follow_up
+        church = bool(church_follow_up.is_church(business or {}))
+    except Exception:
+        church = False
+    lines = ["Your FAQ is listed on Website assistant, behind the Web door." if church else
+             "Your FAQ is listed in Settings → Website concierge.",
              "Your website assistant is on and answers visitors from it."
              if site_concierge.is_enabled(business) else
              "Your website assistant is off, so it isn't answering visitors yet."]

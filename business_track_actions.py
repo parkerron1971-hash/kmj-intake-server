@@ -556,10 +556,12 @@ PLUGIN_CATALOG: Dict[str, Dict[str, Any]] = {
         "weight": 94,
     },
     "payments": {
-        "chief": ('DOOR. navigate build/integrations, say what it unlocks (an invoice becomes money that arrives), and ask them to tell you when it is connected — you will see it on the next turn.'),
+        # Stripe is connected on the Payments page. This step opened
+        # Integrations, where it never was (2026-11-17).
+        "chief": ('DOOR. navigate operate/payments, say what it unlocks (an invoice becomes money that arrives), and ask them to tell you when it is connected — you will see it on the next turn.'),
         "title": "Connect how you get paid",
         "why": "Turns an invoice from a PDF into money that actually arrives.",
-        "nav": {"tab": "build", "page": "integrations"},
+        "nav": {"tab": "operate", "sub": "payments"},
         "verticals": "*",
         "needs": [],
         "weight": 90,
@@ -637,11 +639,14 @@ PLUGIN_CATALOG: Dict[str, Dict[str, Any]] = {
         "weight": 50,
     },
     "meta": {
-        "chief": ('DOOR. navigate build/integrations; posting from here reaches where their people already are.'),
+        # Accounts connect on the Social Media page, through Post for Me.
+        # The direct Facebook connection on Integrations needed Meta's app
+        # review and is not offered (Kevin, 2026-11-17).
+        "chief": ('DOOR. navigate build/social-media; they press the network under Connect an account and sign in on the network itself. Posting from here reaches where their people already are.'),
         "title": "Connect Facebook + Instagram",
         "why": "Post from here, and let what you publish reach where your "
                "people already are.",
-        "nav": {"tab": "build", "page": "integrations"},
+        "nav": {"tab": "build", "page": "social-media"},
         "verticals": "*",
         "needs": [],
         "weight": 40,
@@ -778,7 +783,7 @@ VERTICAL_WORDS: Dict[str, Dict[str, Dict[str, str]]] = {
             "title": "Connect Stripe for giving",
             "why": "Gifts given online need somewhere to land. Stripe pays them out to "
                    "the church's bank.",
-            "chief": ("DOOR. navigate build/integrations, say what it unlocks (gifts given "
+            "chief": ("DOOR. navigate operate/payments, say what it unlocks (gifts given "
                       "online reach the church's bank, and the giving page can go on), and "
                       "ask them to tell you when it is connected — you will see it on the "
                       "next turn."),
@@ -794,9 +799,9 @@ VERTICAL_WORDS: Dict[str, Dict[str, Dict[str, str]]] = {
             "title": "Turn on your website assistant",
             "why": "It answers visitors from your church's details and the FAQ you give "
                    "it, day or night, and passes a name and email to the office.",
-            "chief": ("DOOR. navigate build/settings to the Website concierge; it answers "
-                      "visitors from the church's details and FAQ, so ask them to fill those "
-                      "in. Only after the site is up."),
+            "chief": ("DOOR. navigate build/website-concierge (Website assistant, behind the "
+                      "Web door); it answers visitors from the church's details and FAQ, so ask "
+                      "them to fill those in. Only after the site is up."),
             "weight": 78,
         },
     },

@@ -78,7 +78,7 @@ def _snapshot(done=0):
         {"key": "availability", "title": "Set the hours you actually work", "why": "Booking needs hours.",
          "nav": {"tab": "build", "page": "booking"}, "done": False, "blocked_by": [] if done >= 1 else ["offerings"]},
         {"key": "payments", "title": "Connect how you get paid", "why": "Money that arrives.",
-         "nav": {"tab": "build", "page": "integrations"}, "done": False, "blocked_by": []},
+         "nav": {"tab": "operate", "sub": "payments"}, "done": False, "blocked_by": []},
     ]
     return {"items": items, "done": done, "total": 3,
             "artifact": bta.sendable_artifact_for("personal_services")}
@@ -94,7 +94,7 @@ def test_setup_block_asks_with_the_why_and_does_it_here():
     # each undone item carries its how-line from the catalog
     assert "how: DO IT HERE. Ask 'what is the one thing" in block
     assert "how: DO IT HERE. Ask the days and hours" in block
-    assert "how: DOOR. navigate build/integrations" in block
+    assert "how: DOOR. navigate operate/payments" in block  # Stripe is connected on Payments (2026-11-17)
 
 
 def test_setup_block_names_the_sendable_artifact():
